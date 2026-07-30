@@ -7,7 +7,6 @@ use hl_vulkan::service::record;
 use super::{CommandBuffer, ShimState};
 use crate::types::*;
 
-#[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn vkCmdPipelineBarrier(
     command_buffer: *mut c_void,
@@ -43,7 +42,6 @@ pub extern "C" fn vkCmdPipelineBarrier(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdPipelineBarrier2(
     command_buffer: *mut c_void,
     p_dependency_info: *const c_void,
@@ -76,7 +74,6 @@ pub extern "C" fn vkCmdPipelineBarrier2(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdPipelineBarrier2KHR(
     command_buffer: *mut c_void,
     p_dependency_info: *const c_void,

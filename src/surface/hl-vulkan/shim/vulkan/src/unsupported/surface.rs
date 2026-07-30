@@ -1,6 +1,5 @@
 use super::*;
 
-#[no_mangle]
 pub extern "C" fn vkCreateAndroidSurfaceKHR(
     instance: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -20,7 +19,6 @@ pub extern "C" fn vkCreateAndroidSurfaceKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateDirectFBSurfaceEXT(
     instance: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -40,7 +38,6 @@ pub extern "C" fn vkCreateDirectFBSurfaceEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateIOSSurfaceMVK(
     instance: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -60,7 +57,6 @@ pub extern "C" fn vkCreateIOSSurfaceMVK(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateImagePipeSurfaceFUCHSIA(
     instance: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -83,7 +79,6 @@ pub extern "C" fn vkCreateImagePipeSurfaceFUCHSIA(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateMacOSSurfaceMVK(
     instance: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -103,7 +98,6 @@ pub extern "C" fn vkCreateMacOSSurfaceMVK(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateMetalSurfaceEXT(
     instance: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -123,7 +117,6 @@ pub extern "C" fn vkCreateMetalSurfaceEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateStreamDescriptorSurfaceGGP(
     instance: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -146,7 +139,6 @@ pub extern "C" fn vkCreateStreamDescriptorSurfaceGGP(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateViSurfaceNN(
     instance: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -166,7 +158,6 @@ pub extern "C" fn vkCreateViSurfaceNN(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateWin32SurfaceKHR(
     instance: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -186,7 +177,6 @@ pub extern "C" fn vkCreateWin32SurfaceKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceSurfaceCapabilities2EXT(
     physicalDevice: *mut core::ffi::c_void,
     surface: u64,
@@ -202,7 +192,6 @@ pub extern "C" fn vkGetPhysicalDeviceSurfaceCapabilities2EXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceSurfaceCapabilities2KHR(
     physicalDevice: *mut core::ffi::c_void,
     pSurfaceInfo: *const core::ffi::c_void,
@@ -218,7 +207,6 @@ pub extern "C" fn vkGetPhysicalDeviceSurfaceCapabilities2KHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceSurfaceFormats2KHR(
     physicalDevice: *mut core::ffi::c_void,
     pSurfaceInfo: *const core::ffi::c_void,

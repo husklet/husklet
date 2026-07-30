@@ -4,7 +4,6 @@ use super::*;
 // instance
 // ==================================================================================================
 
-#[no_mangle]
 pub extern "C" fn vkCreateInstance(
     p_create_info: *const c_void,
     _p_allocator: *const c_void,
@@ -34,13 +33,11 @@ pub extern "C" fn vkCreateInstance(
     VK_SUCCESS
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyInstance(instance: *mut c_void, _p_allocator: *const c_void) {
     StateStore::with(|s| s.instance = None);
     unsafe { Dispatchable::<()>::free(instance) };
 }
 
-#[no_mangle]
 pub extern "C" fn vkEnumerateInstanceVersion(p_api_version: *mut u32) -> VkResult {
     if p_api_version.is_null() {
         return VK_ERROR_INITIALIZATION_FAILED;
@@ -53,7 +50,6 @@ pub extern "C" fn vkEnumerateInstanceVersion(p_api_version: *mut u32) -> VkResul
 /// `VK_KHR_surface` + `VK_KHR_get_physical_device_properties2` (the `...2` queries below). A real app
 /// gates its init on these being enumerated, so this is the key unblock. Sourced from
 /// [`capability::INSTANCE_EXTENSIONS`].
-#[no_mangle]
 pub extern "C" fn vkEnumerateInstanceExtensionProperties(
     _p_layer_name: *const c_char,
     p_property_count: *mut u32,
@@ -73,7 +69,6 @@ pub extern "C" fn vkEnumerateInstanceExtensionProperties(
 }
 
 /// The ICD exposes no layers (layers are discovered from layer manifests, never the driver).
-#[no_mangle]
 pub extern "C" fn vkEnumerateInstanceLayerProperties(
     p_property_count: *mut u32,
     p_properties: *mut c_void,

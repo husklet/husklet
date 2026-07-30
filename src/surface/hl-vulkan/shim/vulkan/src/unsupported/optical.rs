@@ -1,6 +1,5 @@
 use super::*;
 
-#[no_mangle]
 pub extern "C" fn vkBindOpticalFlowSessionImageNV(
     device: *mut core::ffi::c_void,
     session: u64,
@@ -20,7 +19,6 @@ pub extern "C" fn vkBindOpticalFlowSessionImageNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdOpticalFlowExecuteNV(
     commandBuffer: *mut core::ffi::c_void,
     session: u64,
@@ -32,7 +30,6 @@ pub extern "C" fn vkCmdOpticalFlowExecuteNV(
     crate::stub::Call::unsupported("vkCmdOpticalFlowExecuteNV", "extension family not modeled");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateOpticalFlowSessionNV(
     device: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -55,7 +52,6 @@ pub extern "C" fn vkCreateOpticalFlowSessionNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyOpticalFlowSessionNV(
     device: *mut core::ffi::c_void,
     session: u64,
@@ -70,7 +66,6 @@ pub extern "C" fn vkDestroyOpticalFlowSessionNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR(
     physicalDevice: *mut core::ffi::c_void,
     pPropertyCount: *mut core::ffi::c_void,
@@ -86,7 +81,6 @@ pub extern "C" fn vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceCooperativeMatrixPropertiesNV(
     physicalDevice: *mut core::ffi::c_void,
     pPropertyCount: *mut core::ffi::c_void,
@@ -102,7 +96,6 @@ pub extern "C" fn vkGetPhysicalDeviceCooperativeMatrixPropertiesNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceOpticalFlowImageFormatsNV(
     physicalDevice: *mut core::ffi::c_void,
     pOpticalFlowImageFormatInfo: *const core::ffi::c_void,

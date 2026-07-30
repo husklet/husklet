@@ -2,7 +2,6 @@ use super::*;
 
 const VK_DRIVER_ID_UNKNOWN: i32 = 0;
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceProperties2(
     physical_device: *mut c_void,
     p_properties: *mut c_void,
@@ -57,7 +56,6 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
 /// the `cmd_begin_rendering` lowering + the advertised `VK_KHR_dynamic_rendering` device extension). Every
 /// OTHER promoted-feature struct is left as the app zero-initialized it (`VK_FALSE`) — we advertise no
 /// feature we do not implement. The chain is preserved.
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceFeatures2(
     physical_device: *mut c_void,
     p_features: *mut c_void,
@@ -74,13 +72,19 @@ pub extern "C" fn vkGetPhysicalDeviceFeatures2(
             {
                 f.dynamic_rendering = VK_TRUE;
             }
+        } else if let Some(aggregate) =
+            crate::promoted_features::PromotedFeatures::matching(n.s_type)
+        {
+            // `VkPhysicalDeviceVulkan1{1,2,3,4}Features`: report the same answer the single-feature
+            // spelling gives. Leaving the aggregate untouched made the driver self-contradicting — a
+            // client at Vulkan 1.3+ reads `dynamicRendering` from here, not from the standalone struct.
+            unsafe { aggregate.report(node as *mut c_void) };
         }
         node = n.p_next;
     }
 }
 
 /// `vkGetPhysicalDeviceMemoryProperties2` — delegates to the 1.0 memory-properties fill.
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceMemoryProperties2(
     physical_device: *mut c_void,
     p_memory_properties: *mut c_void,
@@ -97,7 +101,6 @@ pub extern "C" fn vkGetPhysicalDeviceMemoryProperties2(
 }
 
 /// `vkGetPhysicalDeviceQueueFamilyProperties2` — delegates to the 1.0 queue-family fill.
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceQueueFamilyProperties2(
     physical_device: *mut c_void,
     p_queue_family_property_count: *mut u32,
@@ -130,7 +133,6 @@ pub extern "C" fn vkGetPhysicalDeviceQueueFamilyProperties2(
 }
 
 /// `vkGetPhysicalDeviceFormatProperties2` — delegates to the 1.0 per-format feature fill.
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceFormatProperties2(
     physical_device: *mut c_void,
     format: i32,
@@ -153,7 +155,6 @@ pub extern "C" fn vkGetPhysicalDeviceFormatProperties2(
 // loader that resolves the `KHR` spelling gets the same truthful answer as the core entry point.
 
 /// `vkGetPhysicalDeviceProperties2KHR` — alias of the core [`vkGetPhysicalDeviceProperties2`].
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceProperties2KHR(
     physical_device: *mut c_void,
     p_properties: *mut c_void,
@@ -162,7 +163,6 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2KHR(
 }
 
 /// `vkGetPhysicalDeviceFeatures2KHR` — alias of the core [`vkGetPhysicalDeviceFeatures2`].
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceFeatures2KHR(
     physical_device: *mut c_void,
     p_features: *mut c_void,
@@ -171,7 +171,6 @@ pub extern "C" fn vkGetPhysicalDeviceFeatures2KHR(
 }
 
 /// `vkGetPhysicalDeviceMemoryProperties2KHR` — alias of the core [`vkGetPhysicalDeviceMemoryProperties2`].
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceMemoryProperties2KHR(
     physical_device: *mut c_void,
     p_memory_properties: *mut c_void,
@@ -181,7 +180,6 @@ pub extern "C" fn vkGetPhysicalDeviceMemoryProperties2KHR(
 
 /// `vkGetPhysicalDeviceQueueFamilyProperties2KHR` — alias of the core
 /// [`vkGetPhysicalDeviceQueueFamilyProperties2`].
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceQueueFamilyProperties2KHR(
     physical_device: *mut c_void,
     p_queue_family_property_count: *mut u32,
@@ -195,7 +193,6 @@ pub extern "C" fn vkGetPhysicalDeviceQueueFamilyProperties2KHR(
 }
 
 /// `vkGetPhysicalDeviceFormatProperties2KHR` — alias of the core [`vkGetPhysicalDeviceFormatProperties2`].
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceFormatProperties2KHR(
     physical_device: *mut c_void,
     format: i32,

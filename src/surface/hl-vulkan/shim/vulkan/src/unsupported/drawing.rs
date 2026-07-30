@@ -1,4 +1,3 @@
-#[no_mangle]
 pub extern "C" fn vkCmdDrawMeshTasksEXT(
     commandBuffer: *mut core::ffi::c_void,
     groupCountX: u32,
@@ -12,7 +11,6 @@ pub extern "C" fn vkCmdDrawMeshTasksEXT(
     crate::stub::Call::unsupported("vkCmdDrawMeshTasksEXT", "extension family not modeled");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDrawMeshTasksIndirectCountEXT(
     commandBuffer: *mut core::ffi::c_void,
     buffer: u64,
@@ -35,7 +33,6 @@ pub extern "C" fn vkCmdDrawMeshTasksIndirectCountEXT(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDrawMeshTasksIndirectCountNV(
     commandBuffer: *mut core::ffi::c_void,
     buffer: u64,
@@ -58,7 +55,6 @@ pub extern "C" fn vkCmdDrawMeshTasksIndirectCountNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDrawMeshTasksIndirectEXT(
     commandBuffer: *mut core::ffi::c_void,
     buffer: u64,
@@ -77,7 +73,6 @@ pub extern "C" fn vkCmdDrawMeshTasksIndirectEXT(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDrawMeshTasksIndirectNV(
     commandBuffer: *mut core::ffi::c_void,
     buffer: u64,
@@ -96,7 +91,6 @@ pub extern "C" fn vkCmdDrawMeshTasksIndirectNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDrawMeshTasksNV(
     commandBuffer: *mut core::ffi::c_void,
     taskCount: u32,
@@ -108,7 +102,6 @@ pub extern "C" fn vkCmdDrawMeshTasksNV(
     crate::stub::Call::unsupported("vkCmdDrawMeshTasksNV", "extension family not modeled");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBeginConditionalRenderingEXT(
     commandBuffer: *mut core::ffi::c_void,
     pConditionalRenderingBegin: *const core::ffi::c_void,
@@ -121,7 +114,6 @@ pub extern "C" fn vkCmdBeginConditionalRenderingEXT(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBeginQueryIndexedEXT(
     commandBuffer: *mut core::ffi::c_void,
     queryPool: u64,
@@ -137,7 +129,6 @@ pub extern "C" fn vkCmdBeginQueryIndexedEXT(
     crate::stub::Call::unsupported("vkCmdBeginQueryIndexedEXT", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBeginTransformFeedbackEXT(
     commandBuffer: *mut core::ffi::c_void,
     firstCounterBuffer: u32,
@@ -153,7 +144,6 @@ pub extern "C" fn vkCmdBeginTransformFeedbackEXT(
     crate::stub::Call::unsupported("vkCmdBeginTransformFeedbackEXT", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDrawClusterHUAWEI(
     commandBuffer: *mut core::ffi::c_void,
     groupCountX: u32,
@@ -167,7 +157,6 @@ pub extern "C" fn vkCmdDrawClusterHUAWEI(
     crate::stub::Call::unsupported("vkCmdDrawClusterHUAWEI", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDrawClusterIndirectHUAWEI(
     commandBuffer: *mut core::ffi::c_void,
     buffer: u64,
@@ -179,7 +168,6 @@ pub extern "C" fn vkCmdDrawClusterIndirectHUAWEI(
     crate::stub::Call::unsupported("vkCmdDrawClusterIndirectHUAWEI", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDrawIndirectByteCountEXT(
     commandBuffer: *mut core::ffi::c_void,
     instanceCount: u32,
@@ -199,7 +187,6 @@ pub extern "C" fn vkCmdDrawIndirectByteCountEXT(
     crate::stub::Call::unsupported("vkCmdDrawIndirectByteCountEXT", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDrawMultiEXT(
     commandBuffer: *mut core::ffi::c_void,
     drawCount: u32,
@@ -217,7 +204,6 @@ pub extern "C" fn vkCmdDrawMultiEXT(
     crate::stub::Call::unsupported("vkCmdDrawMultiEXT", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDrawMultiIndexedEXT(
     commandBuffer: *mut core::ffi::c_void,
     drawCount: u32,
@@ -237,7 +223,6 @@ pub extern "C" fn vkCmdDrawMultiIndexedEXT(
     crate::stub::Call::unsupported("vkCmdDrawMultiIndexedEXT", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdEndConditionalRenderingEXT(commandBuffer: *mut core::ffi::c_void) {
     let _ = commandBuffer;
     crate::stub::Call::unsupported(
@@ -246,7 +231,6 @@ pub extern "C" fn vkCmdEndConditionalRenderingEXT(commandBuffer: *mut core::ffi:
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdEndQueryIndexedEXT(
     commandBuffer: *mut core::ffi::c_void,
     queryPool: u64,
@@ -260,7 +244,6 @@ pub extern "C" fn vkCmdEndQueryIndexedEXT(
     crate::stub::Call::unsupported("vkCmdEndQueryIndexedEXT", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdEndTransformFeedbackEXT(
     commandBuffer: *mut core::ffi::c_void,
     firstCounterBuffer: u32,

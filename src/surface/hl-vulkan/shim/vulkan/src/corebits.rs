@@ -53,7 +53,6 @@ impl ShimState {
 
 // ---- mapped-memory flush/invalidate (unified coherent memory → no-op success) ------------------
 
-#[no_mangle]
 pub extern "C" fn vkFlushMappedMemoryRanges(
     _device: *mut c_void,
     memory_range_count: u32,
@@ -87,7 +86,6 @@ pub extern "C" fn vkFlushMappedMemoryRanges(
 /// are refreshed with the bound buffer's CURRENT device contents via the device→host readback (the same
 /// path `vkMapMemory` and cuda's `cuMemcpyDtoH` use). Ranges over host-only (unbound) staging are the true
 /// no-op the coherent-memory contract promises.
-#[no_mangle]
 pub extern "C" fn vkInvalidateMappedMemoryRanges(
     _device: *mut c_void,
     memory_range_count: u32,
@@ -114,7 +112,6 @@ pub extern "C" fn vkInvalidateMappedMemoryRanges(
 
 /// `vkGetDeviceMemoryCommitment` — non-lazy allocations are fully committed, so report the allocation
 /// size (0 for an unknown handle).
-#[no_mangle]
 pub extern "C" fn vkGetDeviceMemoryCommitment(
     _device: *mut c_void,
     memory: u64,
@@ -130,7 +127,6 @@ pub extern "C" fn vkGetDeviceMemoryCommitment(
 
 // ---- render-area / rendering-area granularity (no tiling constraint → (1,1)) -------------------
 
-#[no_mangle]
 pub extern "C" fn vkGetRenderAreaGranularity(
     _device: *mut c_void,
     _render_pass: u64,
@@ -146,7 +142,6 @@ pub extern "C" fn vkGetRenderAreaGranularity(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetRenderingAreaGranularity(
     _device: *mut c_void,
     _p_rendering_area_info: *const c_void,
@@ -161,7 +156,6 @@ pub extern "C" fn vkGetRenderingAreaGranularity(
         };
     }
 }
-#[no_mangle]
 pub extern "C" fn vkGetRenderingAreaGranularityKHR(
     device: *mut c_void,
     p_rendering_area_info: *const c_void,
@@ -173,7 +167,6 @@ pub extern "C" fn vkGetRenderingAreaGranularityKHR(
 /// `vkGetDeviceImageSubresourceLayout(KHR)` — the software backend exposes no linear tiling layout, so
 /// the `VkSubresourceLayout` (five `VkDeviceSize` at byte offset 16 of the `VkSubresourceLayout2` output)
 /// is reported as all-zero (offset/size/pitches). Honest for a model with no addressable image bytes.
-#[no_mangle]
 pub extern "C" fn vkGetDeviceImageSubresourceLayout(
     _device: *mut c_void,
     _p_info: *const c_void,
@@ -188,7 +181,6 @@ pub extern "C" fn vkGetDeviceImageSubresourceLayout(
         }
     }
 }
-#[no_mangle]
 pub extern "C" fn vkGetDeviceImageSubresourceLayoutKHR(
     device: *mut c_void,
     p_info: *const c_void,
@@ -199,7 +191,6 @@ pub extern "C" fn vkGetDeviceImageSubresourceLayoutKHR(
 
 // ---- buffer views (pure host objects) ----------------------------------------------------------
 
-#[no_mangle]
 pub extern "C" fn vkCreateBufferView(
     _device: *mut c_void,
     _p_create_info: *const c_void,
@@ -218,7 +209,6 @@ pub extern "C" fn vkCreateBufferView(
     VK_SUCCESS
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyBufferView(
     _device: *mut c_void,
     buffer_view: u64,
@@ -231,7 +221,6 @@ pub extern "C" fn vkDestroyBufferView(
 
 // ---- descriptor pool free / reset --------------------------------------------------------------
 
-#[no_mangle]
 pub extern "C" fn vkFreeDescriptorSets(
     _device: *mut c_void,
     _descriptor_pool: u64,
@@ -254,7 +243,6 @@ pub extern "C" fn vkFreeDescriptorSets(
     VK_SUCCESS
 }
 
-#[no_mangle]
 pub extern "C" fn vkResetDescriptorPool(
     _device: *mut c_void,
     descriptor_pool: u64,
@@ -268,7 +256,6 @@ pub extern "C" fn vkResetDescriptorPool(
 
 // ---- sparse image format properties (no sparse support → empty) --------------------------------
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceSparseImageFormatProperties(
     _physical_device: *mut c_void,
     _format: i32,
@@ -284,7 +271,6 @@ pub extern "C" fn vkGetPhysicalDeviceSparseImageFormatProperties(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceSparseImageFormatProperties2(
     _physical_device: *mut c_void,
     _p_format_info: *const c_void,
@@ -295,7 +281,6 @@ pub extern "C" fn vkGetPhysicalDeviceSparseImageFormatProperties2(
         unsafe { *(p_property_count as *mut u32) = 0 };
     }
 }
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceSparseImageFormatProperties2KHR(
     physical_device: *mut c_void,
     p_format_info: *const c_void,
@@ -312,7 +297,6 @@ pub extern "C" fn vkGetPhysicalDeviceSparseImageFormatProperties2KHR(
 
 // ---- tool properties (no active tools) ---------------------------------------------------------
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceToolProperties(
     _physical_device: *mut c_void,
     p_tool_count: *mut c_void,
@@ -323,7 +307,6 @@ pub extern "C" fn vkGetPhysicalDeviceToolProperties(
     }
     VK_SUCCESS
 }
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceToolPropertiesEXT(
     physical_device: *mut c_void,
     p_tool_count: *mut c_void,
@@ -335,7 +318,6 @@ pub extern "C" fn vkGetPhysicalDeviceToolPropertiesEXT(
 /// `vkGetPhysicalDeviceMultisamplePropertiesEXT` — no programmable sample locations; report a
 /// `maxSampleLocationGridSize` of `(0,0)` (the "unsupported" answer) into the `VkMultisamplePropertiesEXT`
 /// (a `VkExtent2D` at byte offset 16).
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceMultisamplePropertiesEXT(
     _physical_device: *mut c_void,
     _samples: i32,

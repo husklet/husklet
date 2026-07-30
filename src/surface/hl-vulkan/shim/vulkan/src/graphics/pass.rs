@@ -14,7 +14,6 @@ impl AttachmentFormat {
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateRenderPass(
     _device: *mut c_void,
     p_create_info: *const c_void,
@@ -70,7 +69,6 @@ pub extern "C" fn vkCreateRenderPass(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyRenderPass(
     _device: *mut c_void,
     render_pass: u64,
@@ -81,7 +79,6 @@ pub extern "C" fn vkDestroyRenderPass(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateFramebuffer(
     _device: *mut c_void,
     p_create_info: *const c_void,
@@ -113,7 +110,6 @@ pub extern "C" fn vkCreateFramebuffer(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyFramebuffer(
     _device: *mut c_void,
     framebuffer: u64,
@@ -131,7 +127,6 @@ pub extern "C" fn vkDestroyFramebuffer(
 /// `vkCreateRenderPass2` — the `VkRenderPassCreateInfo2` create form. Records the same single-target
 /// bring-up bookkeeping (first color attachment's clear behaviour + format) as [`vkCreateRenderPass`],
 /// reading the `VkAttachmentDescription2` attachment table.
-#[no_mangle]
 pub extern "C" fn vkCreateRenderPass2(
     _device: *mut c_void,
     p_create_info: *const c_void,
@@ -186,7 +181,6 @@ pub extern "C" fn vkCreateRenderPass2(
 }
 
 /// `vkCreateRenderPass2KHR` — the `VK_KHR_create_renderpass2` alias.
-#[no_mangle]
 pub extern "C" fn vkCreateRenderPass2KHR(
     device: *mut c_void,
     p_create_info: *const c_void,
@@ -198,7 +192,6 @@ pub extern "C" fn vkCreateRenderPass2KHR(
 
 /// `vkCmdBeginRenderPass2` — the `VkRenderPassBeginInfo` is byte-identical to v1; the `VkSubpassBeginInfo`
 /// only carries the (unmodeled) subpass-contents mode, so this delegates to [`vkCmdBeginRenderPass`].
-#[no_mangle]
 pub extern "C" fn vkCmdBeginRenderPass2(
     command_buffer: *mut c_void,
     p_render_pass_begin: *const c_void,
@@ -208,7 +201,6 @@ pub extern "C" fn vkCmdBeginRenderPass2(
 }
 
 /// `vkCmdBeginRenderPass2KHR` — the `VK_KHR_create_renderpass2` alias.
-#[no_mangle]
 pub extern "C" fn vkCmdBeginRenderPass2KHR(
     command_buffer: *mut c_void,
     p_render_pass_begin: *const c_void,
@@ -218,7 +210,6 @@ pub extern "C" fn vkCmdBeginRenderPass2KHR(
 }
 
 /// `vkCmdEndRenderPass2` — delegates to [`vkCmdEndRenderPass`] (the `VkSubpassEndInfo` is unmodeled).
-#[no_mangle]
 pub extern "C" fn vkCmdEndRenderPass2(
     command_buffer: *mut c_void,
     _p_subpass_end_info: *const c_void,
@@ -227,7 +218,6 @@ pub extern "C" fn vkCmdEndRenderPass2(
 }
 
 /// `vkCmdEndRenderPass2KHR` — the `VK_KHR_create_renderpass2` alias.
-#[no_mangle]
 pub extern "C" fn vkCmdEndRenderPass2KHR(
     command_buffer: *mut c_void,
     p_subpass_end_info: *const c_void,
@@ -237,13 +227,11 @@ pub extern "C" fn vkCmdEndRenderPass2KHR(
 
 /// `vkCmdNextSubpass` — advance to the next subpass. The bring-up render-pass model is single-subpass, so
 /// this validates the command buffer and records nothing (a multi-subpass pass is not lowered).
-#[no_mangle]
 pub extern "C" fn vkCmdNextSubpass(command_buffer: *mut c_void, _contents: i32) {
     let _ = unsafe { CommandBuffer::handle(command_buffer) };
 }
 
 /// `vkCmdNextSubpass2` — the `VkSubpassBeginInfo`/`VkSubpassEndInfo` form (single-subpass model no-op).
-#[no_mangle]
 pub extern "C" fn vkCmdNextSubpass2(
     command_buffer: *mut c_void,
     _p_subpass_begin_info: *const c_void,
@@ -253,7 +241,6 @@ pub extern "C" fn vkCmdNextSubpass2(
 }
 
 /// `vkCmdNextSubpass2KHR` — the `VK_KHR_create_renderpass2` alias.
-#[no_mangle]
 pub extern "C" fn vkCmdNextSubpass2KHR(
     command_buffer: *mut c_void,
     p_subpass_begin_info: *const c_void,

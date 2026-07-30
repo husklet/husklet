@@ -58,7 +58,6 @@ impl MemoryAddress {
 
 // ---- vkGetBufferDeviceAddress (+ KHR/EXT aliases) ----------------------------------------------
 
-#[no_mangle]
 pub extern "C" fn vkGetBufferDeviceAddress(_device: *mut c_void, p_info: *const c_void) -> u64 {
     let Some(handle) = (unsafe { AddressInfo::handle(p_info) }) else {
         return 0;
@@ -70,11 +69,9 @@ pub extern "C" fn vkGetBufferDeviceAddress(_device: *mut c_void, p_info: *const 
             .unwrap_or(0)
     })
 }
-#[no_mangle]
 pub extern "C" fn vkGetBufferDeviceAddressKHR(device: *mut c_void, p_info: *const c_void) -> u64 {
     vkGetBufferDeviceAddress(device, p_info)
 }
-#[no_mangle]
 pub extern "C" fn vkGetBufferDeviceAddressEXT(device: *mut c_void, p_info: *const c_void) -> u64 {
     vkGetBufferDeviceAddress(device, p_info)
 }
@@ -83,7 +80,6 @@ pub extern "C" fn vkGetBufferDeviceAddressEXT(device: *mut c_void, p_info: *cons
 // The opaque capture address is a stable per-buffer token used for capture/replay; we return the same
 // stable modeled address as the device address (a valid, consistent choice for a single-device model).
 
-#[no_mangle]
 pub extern "C" fn vkGetBufferOpaqueCaptureAddress(
     _device: *mut c_void,
     p_info: *const c_void,
@@ -98,7 +94,6 @@ pub extern "C" fn vkGetBufferOpaqueCaptureAddress(
             .unwrap_or(0)
     })
 }
-#[no_mangle]
 pub extern "C" fn vkGetBufferOpaqueCaptureAddressKHR(
     device: *mut c_void,
     p_info: *const c_void,
@@ -108,7 +103,6 @@ pub extern "C" fn vkGetBufferOpaqueCaptureAddressKHR(
 
 // ---- vkGetDeviceMemoryOpaqueCaptureAddress (+ KHR) ---------------------------------------------
 
-#[no_mangle]
 pub extern "C" fn vkGetDeviceMemoryOpaqueCaptureAddress(
     _device: *mut c_void,
     p_info: *const c_void,
@@ -123,7 +117,6 @@ pub extern "C" fn vkGetDeviceMemoryOpaqueCaptureAddress(
             .unwrap_or(0)
     })
 }
-#[no_mangle]
 pub extern "C" fn vkGetDeviceMemoryOpaqueCaptureAddressKHR(
     device: *mut c_void,
     p_info: *const c_void,

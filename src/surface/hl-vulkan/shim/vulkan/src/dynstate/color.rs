@@ -4,19 +4,16 @@ use hl_vulkan::service::record;
 
 use super::support::{CommandBuffer, DynamicState, ShimState};
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetLogicOpEXT(command_buffer: *mut c_void, logic_op: i32) {
     DynamicState::record(command_buffer, |ds| ds.logic_op = logic_op);
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetLogicOpEnableEXT(command_buffer: *mut c_void, logic_op_enable: u32) {
     DynamicState::record(command_buffer, |ds| {
         ds.logic_op_enable = logic_op_enable != 0
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetColorBlendEnableEXT(
     command_buffer: *mut c_void,
     first_attachment: u32,
@@ -43,7 +40,6 @@ pub extern "C" fn vkCmdSetColorBlendEnableEXT(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetColorWriteMaskEXT(
     command_buffer: *mut c_void,
     first_attachment: u32,
@@ -67,7 +63,6 @@ pub extern "C" fn vkCmdSetColorWriteMaskEXT(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetColorWriteEnableEXT(
     command_buffer: *mut c_void,
     attachment_count: u32,
@@ -95,7 +90,6 @@ pub extern "C" fn vkCmdSetColorWriteEnableEXT(
 /// `vkCmdSetColorBlendEquationEXT` — the per-attachment blend equation is unmodeled fixed-function state
 /// (the color oracle does no blending). Record that the color-blend state was touched (mark the
 /// attachments as blend-enabled slots so the state is observable) with no encoder op.
-#[no_mangle]
 pub extern "C" fn vkCmdSetColorBlendEquationEXT(
     command_buffer: *mut c_void,
     first_attachment: u32,
@@ -119,7 +113,6 @@ pub extern "C" fn vkCmdSetColorBlendEquationEXT(
 
 /// `vkCmdSetColorBlendAdvancedEXT` — advanced blend (VK_EXT_blend_operation_advanced) is not modeled;
 /// record that the attachments were touched, no encoder op.
-#[no_mangle]
 pub extern "C" fn vkCmdSetColorBlendAdvancedEXT(
     command_buffer: *mut c_void,
     first_attachment: u32,

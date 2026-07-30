@@ -6,7 +6,6 @@ use hl_vulkan::result::VK_ERROR_OUT_OF_DATE_KHR;
 // WSI: swapchain + present
 // ==================================================================================================
 
-#[no_mangle]
 pub extern "C" fn vkCreateSwapchainKHR(
     _device: *mut c_void,
     p_create_info: *const c_void,
@@ -97,7 +96,6 @@ impl Swapchain {
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroySwapchainKHR(
     _device: *mut c_void,
     swapchain: u64,
@@ -117,7 +115,6 @@ pub extern "C" fn vkDestroySwapchainKHR(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetSwapchainImagesKHR(
     _device: *mut c_void,
     swapchain: u64,
@@ -154,7 +151,6 @@ pub extern "C" fn vkGetSwapchainImagesKHR(
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
 
-#[no_mangle]
 pub extern "C" fn vkAcquireNextImageKHR(
     _device: *mut c_void,
     swapchain: u64,
@@ -182,7 +178,6 @@ pub extern "C" fn vkAcquireNextImageKHR(
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
 
-#[no_mangle]
 pub extern "C" fn vkQueuePresentKHR(
     _queue: *mut c_void,
     p_present_info: *const c_void,

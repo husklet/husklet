@@ -369,7 +369,6 @@ impl Rasterization {
 /// default). Without this the write mask was DROPPED (`write_mask: 0xf` hardcoded in create.rs) and a
 /// channel-masked draw (e.g. a depth-prepass `colorWriteMask = 0`, or preserving destination alpha) wrote
 /// color it must have left untouched.
-#[no_mangle]
 pub extern "C" fn vkCreateGraphicsPipelines(
     _device: *mut c_void,
     _pipeline_cache: u64,

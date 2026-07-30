@@ -3,7 +3,6 @@ use hl_gpu::protocol::model::capability::binding_array;
 use hl_gpu::protocol::model::capability::gpu_feature;
 use hl_gpu::{CommandSink, FeatureRequest, WIRE_VERSION};
 
-#[no_mangle]
 pub extern "C" fn vkEnumeratePhysicalDevices(
     _instance: *mut c_void,
     p_physical_device_count: *mut u32,
@@ -29,7 +28,6 @@ pub extern "C" fn vkEnumeratePhysicalDevices(
     VK_SUCCESS
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceProperties(
     _physical_device: *mut c_void,
     p_properties: *mut c_void,
@@ -50,7 +48,6 @@ pub extern "C" fn vkGetPhysicalDeviceProperties(
     VK_SUCCESS
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceFeatures(
     _physical_device: *mut c_void,
     p_features: *mut c_void,
@@ -143,7 +140,6 @@ pub(crate) fn enable_binding_array_features(features: &mut VkPhysicalDeviceFeatu
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceMemoryProperties(
     _physical_device: *mut c_void,
     p_memory_properties: *mut c_void,
@@ -179,7 +175,6 @@ pub extern "C" fn vkGetPhysicalDeviceMemoryProperties(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceQueueFamilyProperties(
     _physical_device: *mut c_void,
     p_queue_family_property_count: *mut u32,
@@ -215,7 +210,6 @@ pub extern "C" fn vkGetPhysicalDeviceQueueFamilyProperties(
 
 /// Device extensions the ICD really backs: `VK_KHR_swapchain` (the present path). Nothing unbacked is
 /// advertised. Sourced from [`capability::DEVICE_EXTENSIONS`].
-#[no_mangle]
 pub extern "C" fn vkEnumerateDeviceExtensionProperties(
     _physical_device: *mut c_void,
     _p_layer_name: *const c_char,
@@ -236,7 +230,6 @@ pub extern "C" fn vkEnumerateDeviceExtensionProperties(
 }
 
 /// Deprecated device-layer enumeration — always empty (spec: return instance layers or none).
-#[no_mangle]
 pub extern "C" fn vkEnumerateDeviceLayerProperties(
     _physical_device: *mut c_void,
     p_property_count: *mut u32,

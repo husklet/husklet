@@ -11,6 +11,15 @@
 //! surface.
 //!
 //! The soname `libvk_hl.so.1` is baked by `build.rs` (Linux); the DT_SONAME is what the loader loads.
+//!
+//! EXPORTED SURFACE: only the three `vk_icd*` hooks carry `#[no_mangle]`. The `vk*` commands are
+//! deliberately NOT dynamically exported — the loader reaches them through `vk_icdGetInstanceProcAddr`
+//! -> [`dispatch_addr`], which resolves link-time addresses inside this object. Exporting them made the
+//! driver's definitions preempt the LOADER's own inside a process where both are in global scope; the
+//! loader's recursion guard then fired ("vkEnumerateInstanceExtensionProperties points to the loader")
+//! and DISCARDED this driver's instance-extension list, so `vkCreateInstance` failed with
+//! `VK_ERROR_EXTENSION_NOT_PRESENT` for extensions the driver does advertise. `-Wl,-Bsymbolic` cannot
+//! prevent that: it binds only our own references, not our definitions' visibility to others.
 
 // The generated + hand-written entry-point surface uses the Vulkan C names verbatim (vkCreateBuffer, …).
 #![allow(non_snake_case)]
@@ -27,6 +36,7 @@ pub mod hostcopy;
 pub mod icd;
 pub mod instance;
 pub mod maintenance;
+pub mod promoted_features;
 pub mod state;
 pub mod stub;
 pub mod surface;
@@ -35,7 +45,7 @@ pub mod transfer;
 pub mod types;
 pub mod unsupported;
 
-// Bring every hand-written `#[no_mangle]` entry point into crate-root scope so the generated
+// Bring every hand-written entry point into crate-root scope so the generated
 // `dispatch_addr` resolver (which references each command by its bare name) resolves them uniformly
 // alongside the generated stubs.
 #[allow(unused_imports)]

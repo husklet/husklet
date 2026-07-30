@@ -20,7 +20,6 @@ impl CommandBuffer {
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdClearDepthStencilImage(
     command_buffer: *mut c_void,
     image: u64,
@@ -61,7 +60,6 @@ pub extern "C" fn vkCmdClearDepthStencilImage(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdResolveImage(
     command_buffer: *mut c_void,
     src_image: u64,
@@ -102,7 +100,6 @@ pub extern "C" fn vkCmdResolveImage(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdResolveImage2(
     command_buffer: *mut c_void,
     p_resolve_image_info: *const c_void,
@@ -139,7 +136,6 @@ pub extern "C" fn vkCmdResolveImage2(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdResolveImage2KHR(
     command_buffer: *mut c_void,
     p_resolve_image_info: *const c_void,
@@ -147,7 +143,6 @@ pub extern "C" fn vkCmdResolveImage2KHR(
     vkCmdResolveImage2(command_buffer, p_resolve_image_info)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDrawIndirectCount(
     command_buffer: *mut c_void,
     buffer: u64,
@@ -174,7 +169,6 @@ pub extern "C" fn vkCmdDrawIndirectCount(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDrawIndirectCountKHR(
     command_buffer: *mut c_void,
     buffer: u64,
@@ -195,7 +189,6 @@ pub extern "C" fn vkCmdDrawIndirectCountKHR(
     )
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDrawIndirectCountAMD(
     command_buffer: *mut c_void,
     buffer: u64,
@@ -216,7 +209,6 @@ pub extern "C" fn vkCmdDrawIndirectCountAMD(
     )
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDrawIndexedIndirectCount(
     command_buffer: *mut c_void,
     buffer: u64,
@@ -243,7 +235,6 @@ pub extern "C" fn vkCmdDrawIndexedIndirectCount(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDrawIndexedIndirectCountKHR(
     command_buffer: *mut c_void,
     buffer: u64,
@@ -264,7 +255,6 @@ pub extern "C" fn vkCmdDrawIndexedIndirectCountKHR(
     )
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDrawIndexedIndirectCountAMD(
     command_buffer: *mut c_void,
     buffer: u64,
@@ -285,5 +275,4 @@ pub extern "C" fn vkCmdDrawIndexedIndirectCountAMD(
     )
 }
 
-#[no_mangle]
 pub extern "C" fn vkTrimCommandPoolKHR(_device: *mut c_void, _command_pool: u64, _flags: u32) {}

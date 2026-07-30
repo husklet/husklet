@@ -1,6 +1,5 @@
 use super::*;
 
-#[no_mangle]
 pub extern "C" fn vkBindAccelerationStructureMemoryNV(
     device: *mut core::ffi::c_void,
     bindInfoCount: u32,
@@ -16,7 +15,6 @@ pub extern "C" fn vkBindAccelerationStructureMemoryNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkBuildAccelerationStructuresKHR(
     device: *mut core::ffi::c_void,
     deferredOperation: u64,
@@ -36,7 +34,6 @@ pub extern "C" fn vkBuildAccelerationStructuresKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBuildAccelerationStructureNV(
     commandBuffer: *mut core::ffi::c_void,
     pInfo: *const core::ffi::c_void,
@@ -63,7 +60,6 @@ pub extern "C" fn vkCmdBuildAccelerationStructureNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBuildAccelerationStructuresIndirectKHR(
     commandBuffer: *mut core::ffi::c_void,
     infoCount: u32,
@@ -84,7 +80,6 @@ pub extern "C" fn vkCmdBuildAccelerationStructuresIndirectKHR(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBuildAccelerationStructuresKHR(
     commandBuffer: *mut core::ffi::c_void,
     infoCount: u32,
@@ -101,7 +96,6 @@ pub extern "C" fn vkCmdBuildAccelerationStructuresKHR(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCopyAccelerationStructureKHR(
     commandBuffer: *mut core::ffi::c_void,
     pInfo: *const core::ffi::c_void,
@@ -114,7 +108,6 @@ pub extern "C" fn vkCmdCopyAccelerationStructureKHR(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCopyAccelerationStructureNV(
     commandBuffer: *mut core::ffi::c_void,
     dst: u64,
@@ -131,7 +124,6 @@ pub extern "C" fn vkCmdCopyAccelerationStructureNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCopyAccelerationStructureToMemoryKHR(
     commandBuffer: *mut core::ffi::c_void,
     pInfo: *const core::ffi::c_void,
@@ -144,7 +136,6 @@ pub extern "C" fn vkCmdCopyAccelerationStructureToMemoryKHR(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCopyMemoryToAccelerationStructureKHR(
     commandBuffer: *mut core::ffi::c_void,
     pInfo: *const core::ffi::c_void,
@@ -157,7 +148,6 @@ pub extern "C" fn vkCmdCopyMemoryToAccelerationStructureKHR(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdWriteAccelerationStructuresPropertiesKHR(
     commandBuffer: *mut core::ffi::c_void,
     accelerationStructureCount: u32,
@@ -178,7 +168,6 @@ pub extern "C" fn vkCmdWriteAccelerationStructuresPropertiesKHR(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdWriteAccelerationStructuresPropertiesNV(
     commandBuffer: *mut core::ffi::c_void,
     accelerationStructureCount: u32,
@@ -199,7 +188,6 @@ pub extern "C" fn vkCmdWriteAccelerationStructuresPropertiesNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCopyAccelerationStructureKHR(
     device: *mut core::ffi::c_void,
     deferredOperation: u64,
@@ -215,7 +203,6 @@ pub extern "C" fn vkCopyAccelerationStructureKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCopyAccelerationStructureToMemoryKHR(
     device: *mut core::ffi::c_void,
     deferredOperation: u64,
@@ -231,7 +218,6 @@ pub extern "C" fn vkCopyAccelerationStructureToMemoryKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCopyMemoryToAccelerationStructureKHR(
     device: *mut core::ffi::c_void,
     deferredOperation: u64,
@@ -247,7 +233,6 @@ pub extern "C" fn vkCopyMemoryToAccelerationStructureKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateAccelerationStructureKHR(
     device: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -270,7 +255,6 @@ pub extern "C" fn vkCreateAccelerationStructureKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateAccelerationStructureNV(
     device: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -293,7 +277,6 @@ pub extern "C" fn vkCreateAccelerationStructureNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyAccelerationStructureKHR(
     device: *mut core::ffi::c_void,
     accelerationStructure: u64,
@@ -308,7 +291,6 @@ pub extern "C" fn vkDestroyAccelerationStructureKHR(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyAccelerationStructureNV(
     device: *mut core::ffi::c_void,
     accelerationStructure: u64,
@@ -323,7 +305,6 @@ pub extern "C" fn vkDestroyAccelerationStructureNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetAccelerationStructureBuildSizesKHR(
     device: *mut core::ffi::c_void,
     buildType: i32,
@@ -342,7 +323,6 @@ pub extern "C" fn vkGetAccelerationStructureBuildSizesKHR(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetAccelerationStructureDeviceAddressKHR(
     device: *mut core::ffi::c_void,
     pInfo: *const core::ffi::c_void,
@@ -356,7 +336,6 @@ pub extern "C" fn vkGetAccelerationStructureDeviceAddressKHR(
     0
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetAccelerationStructureHandleNV(
     device: *mut core::ffi::c_void,
     accelerationStructure: u64,
@@ -374,7 +353,6 @@ pub extern "C" fn vkGetAccelerationStructureHandleNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetAccelerationStructureMemoryRequirementsNV(
     device: *mut core::ffi::c_void,
     pInfo: *const core::ffi::c_void,
@@ -389,7 +367,6 @@ pub extern "C" fn vkGetAccelerationStructureMemoryRequirementsNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetAccelerationStructureOpaqueCaptureDescriptorDataEXT(
     device: *mut core::ffi::c_void,
     pInfo: *const core::ffi::c_void,
@@ -405,7 +382,6 @@ pub extern "C" fn vkGetAccelerationStructureOpaqueCaptureDescriptorDataEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetDeviceAccelerationStructureCompatibilityKHR(
     device: *mut core::ffi::c_void,
     pVersionInfo: *const core::ffi::c_void,
@@ -420,7 +396,6 @@ pub extern "C" fn vkGetDeviceAccelerationStructureCompatibilityKHR(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkWriteAccelerationStructuresPropertiesKHR(
     device: *mut core::ffi::c_void,
     accelerationStructureCount: u32,

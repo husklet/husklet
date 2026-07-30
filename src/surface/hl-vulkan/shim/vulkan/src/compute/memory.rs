@@ -4,7 +4,6 @@ use super::*;
 // memory + buffers
 // ==================================================================================================
 
-#[no_mangle]
 pub extern "C" fn vkCreateBuffer(
     _device: *mut c_void,
     p_create_info: *const c_void,
@@ -31,14 +30,12 @@ pub extern "C" fn vkCreateBuffer(
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyBuffer(_device: *mut c_void, buffer: u64, _p_allocator: *const c_void) {
     ShimState::with_sink(|dev, sink| {
         let _ = create::destroy_buffer(dev, sink, buffer);
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetBufferMemoryRequirements(
     _device: *mut c_void,
     buffer: u64,
@@ -57,7 +54,6 @@ pub extern "C" fn vkGetBufferMemoryRequirements(
     out.memory_type_bits = StateStore::with(|s| s.physical_device().all_memory_type_bits());
 }
 
-#[no_mangle]
 pub extern "C" fn vkAllocateMemory(
     _device: *mut c_void,
     p_allocate_info: *const c_void,
@@ -81,14 +77,12 @@ pub extern "C" fn vkAllocateMemory(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkFreeMemory(_device: *mut c_void, memory: u64, _p_allocator: *const c_void) {
     ShimState::with_sink(|dev, _| {
         dev.memories.remove(&memory);
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkBindBufferMemory(
     _device: *mut c_void,
     buffer: u64,
@@ -106,7 +100,6 @@ pub extern "C" fn vkBindBufferMemory(
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
 
-#[no_mangle]
 pub extern "C" fn vkMapMemory(
     _device: *mut c_void,
     memory: u64,
@@ -145,7 +138,6 @@ pub extern "C" fn vkMapMemory(
     r
 }
 
-#[no_mangle]
 pub extern "C" fn vkUnmapMemory(_device: *mut c_void, memory: u64) {
     ShimState::with_sink(|dev, _| dev.unmap_memory(memory));
 }
@@ -154,7 +146,6 @@ pub extern "C" fn vkUnmapMemory(_device: *mut c_void, memory: u64) {
 
 /// `vkBindBufferMemory2` — bind each `VkBindBufferMemoryInfo` via the v1 [`vkBindBufferMemory`] body.
 /// Returns the first binding error (else `VK_SUCCESS`).
-#[no_mangle]
 pub extern "C" fn vkBindBufferMemory2(
     device: *mut c_void,
     bind_info_count: u32,
@@ -180,7 +171,6 @@ pub extern "C" fn vkBindBufferMemory2(
 }
 
 /// `vkBindBufferMemory2KHR` — the `VK_KHR_bind_memory2` alias of [`vkBindBufferMemory2`].
-#[no_mangle]
 pub extern "C" fn vkBindBufferMemory2KHR(
     device: *mut c_void,
     bind_info_count: u32,
@@ -191,7 +181,6 @@ pub extern "C" fn vkBindBufferMemory2KHR(
 
 /// `vkGetBufferMemoryRequirements2` — read `VkBufferMemoryRequirementsInfo2` and fill the base
 /// `VkMemoryRequirements` via the v1 [`vkGetBufferMemoryRequirements`] body (chain preserved).
-#[no_mangle]
 pub extern "C" fn vkGetBufferMemoryRequirements2(
     device: *mut c_void,
     p_info: *const c_void,
@@ -213,7 +202,6 @@ pub extern "C" fn vkGetBufferMemoryRequirements2(
 }
 
 /// `vkGetBufferMemoryRequirements2KHR` — the `VK_KHR_get_memory_requirements2` alias.
-#[no_mangle]
 pub extern "C" fn vkGetBufferMemoryRequirements2KHR(
     device: *mut c_void,
     p_info: *const c_void,
@@ -223,7 +211,6 @@ pub extern "C" fn vkGetBufferMemoryRequirements2KHR(
 }
 
 /// `vkMapMemory2` reads the maintenance5 aggregate and delegates to `vkMapMemory`.
-#[no_mangle]
 pub extern "C" fn vkMapMemory2(
     device: *mut c_void,
     p_memory_map_info: *const c_void,
@@ -243,7 +230,6 @@ pub extern "C" fn vkMapMemory2(
 }
 
 /// `vkMapMemory2KHR` — the `VK_KHR_map_memory2` alias.
-#[no_mangle]
 pub extern "C" fn vkMapMemory2KHR(
     device: *mut c_void,
     p_memory_map_info: *const c_void,
@@ -253,7 +239,6 @@ pub extern "C" fn vkMapMemory2KHR(
 }
 
 /// `vkUnmapMemory2` (maintenance5) — read the `VkMemoryUnmapInfo` aggregate and delegate to `vkUnmapMemory`.
-#[no_mangle]
 pub extern "C" fn vkUnmapMemory2(
     device: *mut c_void,
     p_memory_unmap_info: *const c_void,
@@ -266,7 +251,6 @@ pub extern "C" fn vkUnmapMemory2(
 }
 
 /// `vkUnmapMemory2KHR` — the `VK_KHR_map_memory2` alias.
-#[no_mangle]
 pub extern "C" fn vkUnmapMemory2KHR(
     device: *mut c_void,
     p_memory_unmap_info: *const c_void,

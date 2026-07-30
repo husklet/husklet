@@ -1,36 +1,3 @@
-#[no_mangle]
-pub extern "C" fn vkCmdBindIndexBuffer2(
-    commandBuffer: *mut core::ffi::c_void,
-    buffer: u64,
-    offset: u64,
-    size: u64,
-    indexType: i32,
-) {
-    let _ = commandBuffer;
-    let _ = buffer;
-    let _ = offset;
-    let _ = size;
-    let _ = indexType;
-    crate::stub::Call::unsupported("vkCmdBindIndexBuffer2", "extension not advertised");
-}
-
-#[no_mangle]
-pub extern "C" fn vkCmdBindIndexBuffer2KHR(
-    commandBuffer: *mut core::ffi::c_void,
-    buffer: u64,
-    offset: u64,
-    size: u64,
-    indexType: i32,
-) {
-    let _ = commandBuffer;
-    let _ = buffer;
-    let _ = offset;
-    let _ = size;
-    let _ = indexType;
-    crate::stub::Call::unsupported("vkCmdBindIndexBuffer2KHR", "extension not advertised");
-}
-
-#[no_mangle]
 pub extern "C" fn vkCmdBindInvocationMaskHUAWEI(
     commandBuffer: *mut core::ffi::c_void,
     imageView: u64,
@@ -42,7 +9,6 @@ pub extern "C" fn vkCmdBindInvocationMaskHUAWEI(
     crate::stub::Call::unsupported("vkCmdBindInvocationMaskHUAWEI", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBindShadingRateImageNV(
     commandBuffer: *mut core::ffi::c_void,
     imageView: u64,
@@ -54,7 +20,6 @@ pub extern "C" fn vkCmdBindShadingRateImageNV(
     crate::stub::Call::unsupported("vkCmdBindShadingRateImageNV", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBindTransformFeedbackBuffersEXT(
     commandBuffer: *mut core::ffi::c_void,
     firstBinding: u32,
@@ -75,7 +40,6 @@ pub extern "C" fn vkCmdBindTransformFeedbackBuffersEXT(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetAttachmentFeedbackLoopEnableEXT(
     commandBuffer: *mut core::ffi::c_void,
     aspectMask: u32,
@@ -88,7 +52,6 @@ pub extern "C" fn vkCmdSetAttachmentFeedbackLoopEnableEXT(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetCoarseSampleOrderNV(
     commandBuffer: *mut core::ffi::c_void,
     sampleOrderType: i32,
@@ -102,7 +65,6 @@ pub extern "C" fn vkCmdSetCoarseSampleOrderNV(
     crate::stub::Call::unsupported("vkCmdSetCoarseSampleOrderNV", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetCoverageModulationModeNV(
     commandBuffer: *mut core::ffi::c_void,
     coverageModulationMode: i32,
@@ -115,7 +77,6 @@ pub extern "C" fn vkCmdSetCoverageModulationModeNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetCoverageModulationTableEnableNV(
     commandBuffer: *mut core::ffi::c_void,
     coverageModulationTableEnable: u32,
@@ -128,7 +89,6 @@ pub extern "C" fn vkCmdSetCoverageModulationTableEnableNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetCoverageModulationTableNV(
     commandBuffer: *mut core::ffi::c_void,
     coverageModulationTableCount: u32,
@@ -143,7 +103,6 @@ pub extern "C" fn vkCmdSetCoverageModulationTableNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetCoverageReductionModeNV(
     commandBuffer: *mut core::ffi::c_void,
     coverageReductionMode: i32,
@@ -156,7 +115,6 @@ pub extern "C" fn vkCmdSetCoverageReductionModeNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetCoverageToColorEnableNV(
     commandBuffer: *mut core::ffi::c_void,
     coverageToColorEnable: u32,
@@ -169,7 +127,6 @@ pub extern "C" fn vkCmdSetCoverageToColorEnableNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetCoverageToColorLocationNV(
     commandBuffer: *mut core::ffi::c_void,
     coverageToColorLocation: u32,
@@ -182,7 +139,6 @@ pub extern "C" fn vkCmdSetCoverageToColorLocationNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetDiscardRectangleEXT(
     commandBuffer: *mut core::ffi::c_void,
     firstDiscardRectangle: u32,
@@ -196,7 +152,6 @@ pub extern "C" fn vkCmdSetDiscardRectangleEXT(
     crate::stub::Call::unsupported("vkCmdSetDiscardRectangleEXT", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetDiscardRectangleEnableEXT(
     commandBuffer: *mut core::ffi::c_void,
     discardRectangleEnable: u32,
@@ -209,7 +164,6 @@ pub extern "C" fn vkCmdSetDiscardRectangleEnableEXT(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetDiscardRectangleModeEXT(
     commandBuffer: *mut core::ffi::c_void,
     discardRectangleMode: i32,
@@ -222,7 +176,6 @@ pub extern "C" fn vkCmdSetDiscardRectangleModeEXT(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetExclusiveScissorEnableNV(
     commandBuffer: *mut core::ffi::c_void,
     firstExclusiveScissor: u32,
@@ -239,7 +192,6 @@ pub extern "C" fn vkCmdSetExclusiveScissorEnableNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetExclusiveScissorNV(
     commandBuffer: *mut core::ffi::c_void,
     firstExclusiveScissor: u32,
@@ -253,7 +205,6 @@ pub extern "C" fn vkCmdSetExclusiveScissorNV(
     crate::stub::Call::unsupported("vkCmdSetExclusiveScissorNV", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetFragmentShadingRateEnumNV(
     commandBuffer: *mut core::ffi::c_void,
     shadingRate: i32,
@@ -268,7 +219,6 @@ pub extern "C" fn vkCmdSetFragmentShadingRateEnumNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetFragmentShadingRateKHR(
     commandBuffer: *mut core::ffi::c_void,
     pFragmentSize: *const core::ffi::c_void,
@@ -280,7 +230,6 @@ pub extern "C" fn vkCmdSetFragmentShadingRateKHR(
     crate::stub::Call::unsupported("vkCmdSetFragmentShadingRateKHR", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetRenderingAttachmentLocations(
     commandBuffer: *mut core::ffi::c_void,
     pLocationInfo: *const core::ffi::c_void,
@@ -293,7 +242,6 @@ pub extern "C" fn vkCmdSetRenderingAttachmentLocations(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetRenderingInputAttachmentIndices(
     commandBuffer: *mut core::ffi::c_void,
     pInputAttachmentIndexInfo: *const core::ffi::c_void,
@@ -306,7 +254,6 @@ pub extern "C" fn vkCmdSetRenderingInputAttachmentIndices(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetRepresentativeFragmentTestEnableNV(
     commandBuffer: *mut core::ffi::c_void,
     representativeFragmentTestEnable: u32,
@@ -319,7 +266,6 @@ pub extern "C" fn vkCmdSetRepresentativeFragmentTestEnableNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetSampleLocationsEXT(
     commandBuffer: *mut core::ffi::c_void,
     pSampleLocationsInfo: *const core::ffi::c_void,
@@ -329,7 +275,6 @@ pub extern "C" fn vkCmdSetSampleLocationsEXT(
     crate::stub::Call::unsupported("vkCmdSetSampleLocationsEXT", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetShadingRateImageEnableNV(
     commandBuffer: *mut core::ffi::c_void,
     shadingRateImageEnable: u32,
@@ -342,7 +287,6 @@ pub extern "C" fn vkCmdSetShadingRateImageEnableNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetViewportShadingRatePaletteNV(
     commandBuffer: *mut core::ffi::c_void,
     firstViewport: u32,
@@ -359,7 +303,6 @@ pub extern "C" fn vkCmdSetViewportShadingRatePaletteNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetViewportSwizzleNV(
     commandBuffer: *mut core::ffi::c_void,
     firstViewport: u32,
@@ -373,7 +316,6 @@ pub extern "C" fn vkCmdSetViewportSwizzleNV(
     crate::stub::Call::unsupported("vkCmdSetViewportSwizzleNV", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetViewportWScalingEnableNV(
     commandBuffer: *mut core::ffi::c_void,
     viewportWScalingEnable: u32,
@@ -386,7 +328,6 @@ pub extern "C" fn vkCmdSetViewportWScalingEnableNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetViewportWScalingNV(
     commandBuffer: *mut core::ffi::c_void,
     firstViewport: u32,

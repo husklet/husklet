@@ -40,7 +40,6 @@ const PRESENT_MODE_LOCAL: u32 = 0x1;
 
 /// `vkGetDeviceGroupPeerMemoryFeatures` — a single device is its own (only) peer, so every peer-memory
 /// feature is available. Writes the full feature set.
-#[no_mangle]
 pub extern "C" fn vkGetDeviceGroupPeerMemoryFeatures(
     _device: *mut c_void,
     _heap_index: u32,
@@ -52,7 +51,6 @@ pub extern "C" fn vkGetDeviceGroupPeerMemoryFeatures(
         unsafe { *(p_peer_memory_features as *mut u32) = PEER_MEMORY_FEATURE_ALL };
     }
 }
-#[no_mangle]
 pub extern "C" fn vkGetDeviceGroupPeerMemoryFeaturesKHR(
     device: *mut c_void,
     heap_index: u32,
@@ -71,18 +69,15 @@ pub extern "C" fn vkGetDeviceGroupPeerMemoryFeaturesKHR(
 
 /// `vkCmdSetDeviceMask` — a single-device group has exactly one valid mask (bit 0); recording it is a
 /// no-op (validate the command buffer is live).
-#[no_mangle]
 pub extern "C" fn vkCmdSetDeviceMask(command_buffer: *mut c_void, _device_mask: u32) {
     let _ = unsafe { CommandBuffer::handle(command_buffer) };
 }
-#[no_mangle]
 pub extern "C" fn vkCmdSetDeviceMaskKHR(command_buffer: *mut c_void, device_mask: u32) {
     vkCmdSetDeviceMask(command_buffer, device_mask)
 }
 
 /// `vkCmdDispatchBase` — with a single device the base workgroup is 0, so this is exactly `vkCmdDispatch`
 /// of the group counts. (A non-zero base offset is not modeled by the IR; the count dispatch is recorded.)
-#[no_mangle]
 pub extern "C" fn vkCmdDispatchBase(
     command_buffer: *mut c_void,
     _base_group_x: u32,
@@ -99,7 +94,6 @@ pub extern "C" fn vkCmdDispatchBase(
         let _ = record::cmd_dispatch(d, cb, group_count_x, group_count_y, group_count_z);
     });
 }
-#[no_mangle]
 pub extern "C" fn vkCmdDispatchBaseKHR(
     command_buffer: *mut c_void,
     base_group_x: u32,
@@ -134,7 +128,6 @@ struct VkDeviceGroupPresentCapabilitiesKHR {
     modes: u32,
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetDeviceGroupPresentCapabilitiesKHR(
     _device: *mut c_void,
     p_device_group_present_capabilities: *mut c_void,
@@ -150,7 +143,6 @@ pub extern "C" fn vkGetDeviceGroupPresentCapabilitiesKHR(
 }
 
 /// `vkGetDeviceGroupSurfacePresentModesKHR` — the single device presents locally.
-#[no_mangle]
 pub extern "C" fn vkGetDeviceGroupSurfacePresentModesKHR(
     _device: *mut c_void,
     _surface: u64,
@@ -163,7 +155,6 @@ pub extern "C" fn vkGetDeviceGroupSurfacePresentModesKHR(
 }
 
 /// `vkGetDeviceGroupSurfacePresentModes2EXT` (`VK_EXT_full_screen_exclusive`) — same local-present answer.
-#[no_mangle]
 pub extern "C" fn vkGetDeviceGroupSurfacePresentModes2EXT(
     _device: *mut c_void,
     _p_surface_info: *const c_void,
@@ -177,7 +168,6 @@ pub extern "C" fn vkGetDeviceGroupSurfacePresentModes2EXT(
 
 /// `vkGetPhysicalDevicePresentRectanglesKHR` — one present rectangle for the single device. Follows the
 /// two-call enumeration protocol.
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDevicePresentRectanglesKHR(
     _physical_device: *mut c_void,
     _surface: u64,
@@ -221,7 +211,6 @@ struct VkPhysicalDeviceGroupProperties {
     subset_allocation: u32,
 }
 
-#[no_mangle]
 pub extern "C" fn vkEnumeratePhysicalDeviceGroups(
     _instance: *mut c_void,
     p_physical_device_group_count: *mut c_void,
@@ -249,7 +238,6 @@ pub extern "C" fn vkEnumeratePhysicalDeviceGroups(
     }
     VK_SUCCESS
 }
-#[no_mangle]
 pub extern "C" fn vkEnumeratePhysicalDeviceGroupsKHR(
     instance: *mut c_void,
     p_physical_device_group_count: *mut c_void,
@@ -281,7 +269,6 @@ impl ExternalProperties {
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceExternalBufferProperties(
     _physical_device: *mut c_void,
     _p_external_buffer_info: *const c_void,
@@ -289,7 +276,6 @@ pub extern "C" fn vkGetPhysicalDeviceExternalBufferProperties(
 ) {
     unsafe { ExternalProperties::zero(p_external_buffer_properties) };
 }
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceExternalBufferPropertiesKHR(
     physical_device: *mut c_void,
     p_external_buffer_info: *const c_void,
@@ -302,7 +288,6 @@ pub extern "C" fn vkGetPhysicalDeviceExternalBufferPropertiesKHR(
     )
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceExternalFenceProperties(
     _physical_device: *mut c_void,
     _p_external_fence_info: *const c_void,
@@ -310,7 +295,6 @@ pub extern "C" fn vkGetPhysicalDeviceExternalFenceProperties(
 ) {
     unsafe { ExternalProperties::zero(p_external_fence_properties) };
 }
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceExternalFencePropertiesKHR(
     physical_device: *mut c_void,
     p_external_fence_info: *const c_void,
@@ -323,7 +307,6 @@ pub extern "C" fn vkGetPhysicalDeviceExternalFencePropertiesKHR(
     )
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceExternalSemaphoreProperties(
     _physical_device: *mut c_void,
     _p_external_semaphore_info: *const c_void,
@@ -331,7 +314,6 @@ pub extern "C" fn vkGetPhysicalDeviceExternalSemaphoreProperties(
 ) {
     unsafe { ExternalProperties::zero(p_external_semaphore_properties) };
 }
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceExternalSemaphorePropertiesKHR(
     physical_device: *mut c_void,
     p_external_semaphore_info: *const c_void,

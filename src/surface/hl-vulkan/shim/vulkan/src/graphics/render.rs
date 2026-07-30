@@ -4,7 +4,6 @@ use super::*;
 // render-pass command recording
 // ==================================================================================================
 
-#[no_mangle]
 pub extern "C" fn vkCmdBeginRenderPass(
     command_buffer: *mut c_void,
     p_render_pass_begin: *const c_void,
@@ -62,7 +61,6 @@ pub extern "C" fn vkCmdBeginRenderPass(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdEndRenderPass(command_buffer: *mut c_void) {
     let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
@@ -85,7 +83,6 @@ impl RenderingAttachment {
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBeginRendering(
     command_buffer: *mut c_void,
     p_rendering_info: *const c_void,
@@ -133,7 +130,6 @@ pub extern "C" fn vkCmdBeginRendering(
 }
 
 /// `vkCmdBeginRenderingKHR` — the `VK_KHR_dynamic_rendering` alias of the promoted-core body.
-#[no_mangle]
 pub extern "C" fn vkCmdBeginRenderingKHR(
     command_buffer: *mut c_void,
     p_rendering_info: *const c_void,
@@ -143,7 +139,6 @@ pub extern "C" fn vkCmdBeginRenderingKHR(
 
 /// `vkCmdEndRendering` — close the dynamic-rendering pass (identical to `vkCmdEndRenderPass`:
 /// `Enc::EndRenderPass`).
-#[no_mangle]
 pub extern "C" fn vkCmdEndRendering(command_buffer: *mut c_void) {
     let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
@@ -154,12 +149,10 @@ pub extern "C" fn vkCmdEndRendering(command_buffer: *mut c_void) {
 }
 
 /// `vkCmdEndRenderingKHR` — the `VK_KHR_dynamic_rendering` alias.
-#[no_mangle]
 pub extern "C" fn vkCmdEndRenderingKHR(command_buffer: *mut c_void) {
     vkCmdEndRendering(command_buffer)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBindVertexBuffers(
     command_buffer: *mut c_void,
     first_binding: u32,
@@ -188,7 +181,6 @@ pub extern "C" fn vkCmdBindVertexBuffers(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBindIndexBuffer(
     command_buffer: *mut c_void,
     buffer: u64,
@@ -203,7 +195,6 @@ pub extern "C" fn vkCmdBindIndexBuffer(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDraw(
     command_buffer: *mut c_void,
     vertex_count: u32,
@@ -226,7 +217,6 @@ pub extern "C" fn vkCmdDraw(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDrawIndexed(
     command_buffer: *mut c_void,
     index_count: u32,
@@ -249,4 +239,31 @@ pub extern "C" fn vkCmdDrawIndexed(
             first_instance,
         );
     });
+}
+
+/// `vkCmdBindIndexBuffer2` (core 1.4, promoted from `VK_KHR_maintenance5`) is `vkCmdBindIndexBuffer`
+/// plus an explicit `size`. This backend binds the index buffer whole and derives the index count from
+/// each draw, so `size` adds no state it can honour and the binding itself is identical — it forwards
+/// to the same `record::cmd_bind_index_buffer` lowering. It was previously a silent no-op, so an
+/// application using the 1.4 spelling drew with no index buffer bound and got wrong geometry with no
+/// error.
+pub extern "C" fn vkCmdBindIndexBuffer2(
+    command_buffer: *mut c_void,
+    buffer: u64,
+    offset: u64,
+    _size: u64,
+    index_type: i32,
+) {
+    vkCmdBindIndexBuffer(command_buffer, buffer, offset, index_type)
+}
+
+/// `vkCmdBindIndexBuffer2KHR` — the pre-promotion `VK_KHR_maintenance5` spelling of the same command.
+pub extern "C" fn vkCmdBindIndexBuffer2KHR(
+    command_buffer: *mut c_void,
+    buffer: u64,
+    offset: u64,
+    size: u64,
+    index_type: i32,
+) {
+    vkCmdBindIndexBuffer2(command_buffer, buffer, offset, size, index_type)
 }

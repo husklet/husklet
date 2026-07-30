@@ -1,6 +1,5 @@
 use super::*;
 
-#[no_mangle]
 pub extern "C" fn vkAcquireImageANDROID(
     device: *mut core::ffi::c_void,
     image: u64,
@@ -17,7 +16,6 @@ pub extern "C" fn vkAcquireImageANDROID(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateSharedSwapchainsKHR(
     device: *mut core::ffi::c_void,
     swapchainCount: u32,
@@ -39,7 +37,6 @@ pub extern "C" fn vkCreateSharedSwapchainsKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPastPresentationTimingGOOGLE(
     device: *mut core::ffi::c_void,
     swapchain: u64,
@@ -57,7 +54,6 @@ pub extern "C" fn vkGetPastPresentationTimingGOOGLE(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceDirectFBPresentationSupportEXT(
     physicalDevice: *mut core::ffi::c_void,
     queueFamilyIndex: u32,
@@ -73,7 +69,6 @@ pub extern "C" fn vkGetPhysicalDeviceDirectFBPresentationSupportEXT(
     0
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceScreenPresentationSupportQNX(
     physicalDevice: *mut core::ffi::c_void,
     queueFamilyIndex: u32,
@@ -89,7 +84,6 @@ pub extern "C" fn vkGetPhysicalDeviceScreenPresentationSupportQNX(
     0
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceSurfacePresentModes2EXT(
     physicalDevice: *mut core::ffi::c_void,
     pSurfaceInfo: *const core::ffi::c_void,
@@ -107,7 +101,6 @@ pub extern "C" fn vkGetPhysicalDeviceSurfacePresentModes2EXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceWin32PresentationSupportKHR(
     physicalDevice: *mut core::ffi::c_void,
     queueFamilyIndex: u32,
@@ -121,7 +114,6 @@ pub extern "C" fn vkGetPhysicalDeviceWin32PresentationSupportKHR(
     0
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetSwapchainCounterEXT(
     device: *mut core::ffi::c_void,
     swapchain: u64,
@@ -136,7 +128,6 @@ pub extern "C" fn vkGetSwapchainCounterEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetSwapchainGrallocUsage2ANDROID(
     device: *mut core::ffi::c_void,
     format: i32,
@@ -158,7 +149,6 @@ pub extern "C" fn vkGetSwapchainGrallocUsage2ANDROID(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetSwapchainGrallocUsageANDROID(
     device: *mut core::ffi::c_void,
     format: i32,
@@ -176,7 +166,6 @@ pub extern "C" fn vkGetSwapchainGrallocUsageANDROID(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetSwapchainStatusKHR(device: *mut core::ffi::c_void, swapchain: u64) -> i32 {
     let _ = device;
     let _ = swapchain;
@@ -184,7 +173,6 @@ pub extern "C" fn vkGetSwapchainStatusKHR(device: *mut core::ffi::c_void, swapch
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkQueueSignalReleaseImageANDROID(
     queue: *mut core::ffi::c_void,
     waitSemaphoreCount: u32,
@@ -204,7 +192,6 @@ pub extern "C" fn vkQueueSignalReleaseImageANDROID(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkReleaseSwapchainImagesEXT(
     device: *mut core::ffi::c_void,
     pReleaseInfo: *const core::ffi::c_void,
@@ -215,7 +202,6 @@ pub extern "C" fn vkReleaseSwapchainImagesEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkWaitForPresentKHR(
     device: *mut core::ffi::c_void,
     swapchain: u64,

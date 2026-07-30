@@ -1,6 +1,5 @@
 use super::*;
 
-#[no_mangle]
 pub extern "C" fn vkCreateBufferCollectionFUCHSIA(
     device: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -23,7 +22,6 @@ pub extern "C" fn vkCreateBufferCollectionFUCHSIA(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateSemaphoreSciSyncPoolNV(
     device: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -43,7 +41,6 @@ pub extern "C" fn vkCreateSemaphoreSciSyncPoolNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyBufferCollectionFUCHSIA(
     device: *mut core::ffi::c_void,
     collection: u64,
@@ -58,7 +55,6 @@ pub extern "C" fn vkDestroyBufferCollectionFUCHSIA(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroySemaphoreSciSyncPoolNV(
     device: *mut core::ffi::c_void,
     semaphorePool: u64,
@@ -73,7 +69,6 @@ pub extern "C" fn vkDestroySemaphoreSciSyncPoolNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkExportMetalObjectsEXT(
     device: *mut core::ffi::c_void,
     pMetalObjectsInfo: *mut core::ffi::c_void,
@@ -83,7 +78,6 @@ pub extern "C" fn vkExportMetalObjectsEXT(
     crate::stub::Call::unsupported("vkExportMetalObjectsEXT", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetAndroidHardwareBufferPropertiesANDROID(
     device: *mut core::ffi::c_void,
     buffer: *const core::ffi::c_void,
@@ -99,7 +93,6 @@ pub extern "C" fn vkGetAndroidHardwareBufferPropertiesANDROID(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetBufferCollectionPropertiesFUCHSIA(
     device: *mut core::ffi::c_void,
     collection: u64,
@@ -115,7 +108,6 @@ pub extern "C" fn vkGetBufferCollectionPropertiesFUCHSIA(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetFenceFdKHR(
     device: *mut core::ffi::c_void,
     pGetFdInfo: *const core::ffi::c_void,
@@ -128,7 +120,6 @@ pub extern "C" fn vkGetFenceFdKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetFenceSciSyncFenceNV(
     device: *mut core::ffi::c_void,
     pGetSciSyncHandleInfo: *const core::ffi::c_void,
@@ -141,7 +132,6 @@ pub extern "C" fn vkGetFenceSciSyncFenceNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetFenceSciSyncObjNV(
     device: *mut core::ffi::c_void,
     pGetSciSyncHandleInfo: *const core::ffi::c_void,
@@ -154,7 +144,6 @@ pub extern "C" fn vkGetFenceSciSyncObjNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetFenceWin32HandleKHR(
     device: *mut core::ffi::c_void,
     pGetWin32HandleInfo: *const core::ffi::c_void,
@@ -167,7 +156,6 @@ pub extern "C" fn vkGetFenceWin32HandleKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetMemoryAndroidHardwareBufferANDROID(
     device: *mut core::ffi::c_void,
     pInfo: *const core::ffi::c_void,
@@ -183,7 +171,6 @@ pub extern "C" fn vkGetMemoryAndroidHardwareBufferANDROID(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetMemoryFdKHR(
     device: *mut core::ffi::c_void,
     pGetFdInfo: *const core::ffi::c_void,
@@ -196,7 +183,6 @@ pub extern "C" fn vkGetMemoryFdKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetMemoryFdPropertiesKHR(
     device: *mut core::ffi::c_void,
     handleType: i32,
@@ -211,7 +197,6 @@ pub extern "C" fn vkGetMemoryFdPropertiesKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetMemorySciBufNV(
     device: *mut core::ffi::c_void,
     pGetSciBufInfo: *const core::ffi::c_void,
@@ -224,7 +209,6 @@ pub extern "C" fn vkGetMemorySciBufNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetMemoryWin32HandleKHR(
     device: *mut core::ffi::c_void,
     pGetWin32HandleInfo: *const core::ffi::c_void,
@@ -237,7 +221,6 @@ pub extern "C" fn vkGetMemoryWin32HandleKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetMemoryWin32HandleNV(
     device: *mut core::ffi::c_void,
     memory: u64,
@@ -252,7 +235,6 @@ pub extern "C" fn vkGetMemoryWin32HandleNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetMemoryZirconHandleFUCHSIA(
     device: *mut core::ffi::c_void,
     pGetZirconHandleInfo: *const core::ffi::c_void,
@@ -265,7 +247,6 @@ pub extern "C" fn vkGetMemoryZirconHandleFUCHSIA(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetMemoryZirconHandlePropertiesFUCHSIA(
     device: *mut core::ffi::c_void,
     handleType: i32,
@@ -283,7 +264,6 @@ pub extern "C" fn vkGetMemoryZirconHandlePropertiesFUCHSIA(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetSemaphoreFdKHR(
     device: *mut core::ffi::c_void,
     pGetFdInfo: *const core::ffi::c_void,
@@ -296,7 +276,6 @@ pub extern "C" fn vkGetSemaphoreFdKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetSemaphoreSciSyncObjNV(
     device: *mut core::ffi::c_void,
     pGetSciSyncInfo: *const core::ffi::c_void,
@@ -309,7 +288,6 @@ pub extern "C" fn vkGetSemaphoreSciSyncObjNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetSemaphoreWin32HandleKHR(
     device: *mut core::ffi::c_void,
     pGetWin32HandleInfo: *const core::ffi::c_void,
@@ -322,7 +300,6 @@ pub extern "C" fn vkGetSemaphoreWin32HandleKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetSemaphoreZirconHandleFUCHSIA(
     device: *mut core::ffi::c_void,
     pGetZirconHandleInfo: *const core::ffi::c_void,
@@ -338,7 +315,6 @@ pub extern "C" fn vkGetSemaphoreZirconHandleFUCHSIA(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkImportFenceFdKHR(
     device: *mut core::ffi::c_void,
     pImportFenceFdInfo: *const core::ffi::c_void,
@@ -349,7 +325,6 @@ pub extern "C" fn vkImportFenceFdKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkImportFenceSciSyncFenceNV(
     device: *mut core::ffi::c_void,
     pImportFenceSciSyncInfo: *const core::ffi::c_void,
@@ -360,7 +335,6 @@ pub extern "C" fn vkImportFenceSciSyncFenceNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkImportFenceSciSyncObjNV(
     device: *mut core::ffi::c_void,
     pImportFenceSciSyncInfo: *const core::ffi::c_void,
@@ -371,7 +345,6 @@ pub extern "C" fn vkImportFenceSciSyncObjNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkImportFenceWin32HandleKHR(
     device: *mut core::ffi::c_void,
     pImportFenceWin32HandleInfo: *const core::ffi::c_void,
@@ -382,7 +355,6 @@ pub extern "C" fn vkImportFenceWin32HandleKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkImportSemaphoreFdKHR(
     device: *mut core::ffi::c_void,
     pImportSemaphoreFdInfo: *const core::ffi::c_void,
@@ -393,7 +365,6 @@ pub extern "C" fn vkImportSemaphoreFdKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkImportSemaphoreSciSyncObjNV(
     device: *mut core::ffi::c_void,
     pImportSemaphoreSciSyncInfo: *const core::ffi::c_void,
@@ -404,7 +375,6 @@ pub extern "C" fn vkImportSemaphoreSciSyncObjNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkImportSemaphoreWin32HandleKHR(
     device: *mut core::ffi::c_void,
     pImportSemaphoreWin32HandleInfo: *const core::ffi::c_void,
@@ -418,7 +388,6 @@ pub extern "C" fn vkImportSemaphoreWin32HandleKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkImportSemaphoreZirconHandleFUCHSIA(
     device: *mut core::ffi::c_void,
     pImportSemaphoreZirconHandleInfo: *const core::ffi::c_void,
@@ -432,7 +401,6 @@ pub extern "C" fn vkImportSemaphoreZirconHandleFUCHSIA(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkSetBufferCollectionBufferConstraintsFUCHSIA(
     device: *mut core::ffi::c_void,
     collection: u64,
@@ -448,7 +416,6 @@ pub extern "C" fn vkSetBufferCollectionBufferConstraintsFUCHSIA(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkSetBufferCollectionImageConstraintsFUCHSIA(
     device: *mut core::ffi::c_void,
     collection: u64,

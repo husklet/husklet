@@ -7,7 +7,6 @@ use hl_vulkan::service::record;
 use super::{CommandBuffer, ShimState};
 use crate::types::*;
 
-#[no_mangle]
 pub extern "C" fn vkCmdCopyBuffer(
     command_buffer: *mut c_void,
     src_buffer: u64,
@@ -39,7 +38,6 @@ pub extern "C" fn vkCmdCopyBuffer(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCopyBufferToImage(
     command_buffer: *mut c_void,
     src_buffer: u64,
@@ -90,7 +88,6 @@ pub extern "C" fn vkCmdCopyBufferToImage(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCopyImageToBuffer(
     command_buffer: *mut c_void,
     src_image: u64,
@@ -141,7 +138,6 @@ pub extern "C" fn vkCmdCopyImageToBuffer(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCopyImage(
     command_buffer: *mut c_void,
     src_image: u64,
@@ -182,7 +178,6 @@ pub extern "C" fn vkCmdCopyImage(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBlitImage(
     command_buffer: *mut c_void,
     src_image: u64,

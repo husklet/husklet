@@ -1,6 +1,5 @@
 use super::*;
 
-#[no_mangle]
 pub extern "C" fn vkAcquireDrmDisplayEXT(
     physicalDevice: *mut core::ffi::c_void,
     drmFd: i32,
@@ -13,7 +12,6 @@ pub extern "C" fn vkAcquireDrmDisplayEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkAcquireFullScreenExclusiveModeEXT(
     device: *mut core::ffi::c_void,
     swapchain: u64,
@@ -27,7 +25,6 @@ pub extern "C" fn vkAcquireFullScreenExclusiveModeEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkAcquireWinrtDisplayNV(
     physicalDevice: *mut core::ffi::c_void,
     display: u64,
@@ -38,7 +35,6 @@ pub extern "C" fn vkAcquireWinrtDisplayNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkAcquireXlibDisplayEXT(
     physicalDevice: *mut core::ffi::c_void,
     dpy: *mut core::ffi::c_void,
@@ -51,7 +47,6 @@ pub extern "C" fn vkAcquireXlibDisplayEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateDisplayModeKHR(
     physicalDevice: *mut core::ffi::c_void,
     display: u64,
@@ -73,7 +68,6 @@ pub extern "C" fn vkCreateDisplayModeKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateDisplayPlaneSurfaceKHR(
     instance: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -93,7 +87,6 @@ pub extern "C" fn vkCreateDisplayPlaneSurfaceKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateScreenSurfaceQNX(
     instance: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -113,7 +106,6 @@ pub extern "C" fn vkCreateScreenSurfaceQNX(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkDisplayPowerControlEXT(
     device: *mut core::ffi::c_void,
     display: u64,
@@ -126,7 +118,6 @@ pub extern "C" fn vkDisplayPowerControlEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetDisplayModeProperties2KHR(
     physicalDevice: *mut core::ffi::c_void,
     display: u64,
@@ -141,7 +132,6 @@ pub extern "C" fn vkGetDisplayModeProperties2KHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetDisplayModePropertiesKHR(
     physicalDevice: *mut core::ffi::c_void,
     display: u64,
@@ -156,7 +146,6 @@ pub extern "C" fn vkGetDisplayModePropertiesKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetDisplayPlaneCapabilities2KHR(
     physicalDevice: *mut core::ffi::c_void,
     pDisplayPlaneInfo: *const core::ffi::c_void,
@@ -172,7 +161,6 @@ pub extern "C" fn vkGetDisplayPlaneCapabilities2KHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetDisplayPlaneCapabilitiesKHR(
     physicalDevice: *mut core::ffi::c_void,
     mode: u64,
@@ -190,7 +178,6 @@ pub extern "C" fn vkGetDisplayPlaneCapabilitiesKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetDisplayPlaneSupportedDisplaysKHR(
     physicalDevice: *mut core::ffi::c_void,
     planeIndex: u32,
@@ -208,7 +195,6 @@ pub extern "C" fn vkGetDisplayPlaneSupportedDisplaysKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetDrmDisplayEXT(
     physicalDevice: *mut core::ffi::c_void,
     drmFd: i32,
@@ -223,7 +209,6 @@ pub extern "C" fn vkGetDrmDisplayEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetImageDrmFormatModifierPropertiesEXT(
     device: *mut core::ffi::c_void,
     image: u64,
@@ -239,7 +224,6 @@ pub extern "C" fn vkGetImageDrmFormatModifierPropertiesEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceDisplayPlaneProperties2KHR(
     physicalDevice: *mut core::ffi::c_void,
     pPropertyCount: *mut core::ffi::c_void,
@@ -255,7 +239,6 @@ pub extern "C" fn vkGetPhysicalDeviceDisplayPlaneProperties2KHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceDisplayPlanePropertiesKHR(
     physicalDevice: *mut core::ffi::c_void,
     pPropertyCount: *mut core::ffi::c_void,
@@ -271,7 +254,6 @@ pub extern "C" fn vkGetPhysicalDeviceDisplayPlanePropertiesKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceDisplayProperties2KHR(
     physicalDevice: *mut core::ffi::c_void,
     pPropertyCount: *mut core::ffi::c_void,
@@ -287,7 +269,6 @@ pub extern "C" fn vkGetPhysicalDeviceDisplayProperties2KHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceDisplayPropertiesKHR(
     physicalDevice: *mut core::ffi::c_void,
     pPropertyCount: *mut core::ffi::c_void,
@@ -303,7 +284,6 @@ pub extern "C" fn vkGetPhysicalDeviceDisplayPropertiesKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetRandROutputDisplayEXT(
     physicalDevice: *mut core::ffi::c_void,
     dpy: *mut core::ffi::c_void,
@@ -318,7 +298,6 @@ pub extern "C" fn vkGetRandROutputDisplayEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetScreenBufferPropertiesQNX(
     device: *mut core::ffi::c_void,
     buffer: *const core::ffi::c_void,
@@ -331,7 +310,6 @@ pub extern "C" fn vkGetScreenBufferPropertiesQNX(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetWinrtDisplayNV(
     physicalDevice: *mut core::ffi::c_void,
     deviceRelativeId: u32,
@@ -344,7 +322,6 @@ pub extern "C" fn vkGetWinrtDisplayNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkRegisterDisplayEventEXT(
     device: *mut core::ffi::c_void,
     display: u64,
@@ -366,7 +343,6 @@ pub extern "C" fn vkRegisterDisplayEventEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkReleaseDisplayEXT(physicalDevice: *mut core::ffi::c_void, display: u64) -> i32 {
     let _ = physicalDevice;
     let _ = display;
@@ -374,7 +350,6 @@ pub extern "C" fn vkReleaseDisplayEXT(physicalDevice: *mut core::ffi::c_void, di
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkReleaseFullScreenExclusiveModeEXT(
     device: *mut core::ffi::c_void,
     swapchain: u64,

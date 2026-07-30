@@ -166,7 +166,9 @@ impl Instruction<'_> {
     fn without_interfaces(&self, remove: &[u32]) -> Vec<u32> {
         let ops = self.0;
         // Locate the end of the inline entry-point name (a NUL-terminated literal string).
-        let mut name_end = 3;
+        // Clamp the scan start to the instruction length: `OpEntryPoint` operands are application
+        // input, so a truncated instruction shorter than 3 words must not slice past its end.
+        let mut name_end = 3.min(ops.len());
         while name_end < ops.len() {
             let w = ops[name_end];
             name_end += 1;

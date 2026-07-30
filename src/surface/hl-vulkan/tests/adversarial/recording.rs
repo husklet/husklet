@@ -174,6 +174,35 @@ fn shader_module_rejects_malformed_spirv() {
     ));
 }
 
+/// A truncated `OpEntryPoint` (wordCount 1, so no operands at all) must be rejected or ignored, never
+/// crash. The point-size rewrite located the end of the inline entry-point name by scanning forward
+/// from word 3 without first clamping to the instruction length, so a 1-word `OpEntryPoint` sliced
+/// past the instruction. In the guest cdylib (`panic = "abort"`) that kills the application process
+/// with no `VkResult` — a malformed SPIR-V module is fully application-controlled input.
+#[test]
+fn shader_module_survives_a_truncated_entry_point_instruction() {
+    let mut d = dev();
+    let mut s = sink();
+    // Header, then `OpDecorate %99 BuiltIn PointSize` (makes the rewrite proceed past its early
+    // return), then `OpEntryPoint` with wordCount 1 and no operands.
+    let words: [u32; 10] = [
+        0x0723_0203,
+        0x0001_0000,
+        0,
+        0,
+        0,
+        (4 << 16) | 71,
+        99,
+        11,
+        1,
+        (1 << 16) | 15,
+    ];
+    let code: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+
+    // Either outcome is acceptable; aborting the process is not.
+    let _ = create::create_shader_module(&mut d, &mut s, &code);
+}
+
 // =====================================================================================================
 // pipelines: missing entry points, unknown modules
 // =====================================================================================================

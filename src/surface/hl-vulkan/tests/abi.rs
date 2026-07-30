@@ -1,11 +1,13 @@
 //! ABI conformance gate for the guest Vulkan ICD shim cdylib (`shim/vulkan` -> `libvk_hl.so.1`).
 //!
 //! This:
-//!   1. natively builds the aarch64 cdylib (the host arch — the build MUST succeed here), then
-//!   2. `nm -D`s its exported dynamic symbols and asserts the API surface EQUALS the committed golden
-//!      symbol list exactly (no missing, no extra) and the count matches (715), and
-//!   3. cross-checks the generator's source: the shim manifest's 712 `vk*` command names plus the 3
-//!      hand-written `vk_icd*` loader hooks equal the same golden.
+//!   1. natively builds the guest cdylib for the host architecture (the build MUST succeed here),
+//!   2. asserts the DISPATCH census — the manifest's 712 `vk*` command names plus the 3 hand-written
+//!      `vk_icd*` loader hooks — equals the committed golden list exactly (no missing, no extra, 715),
+//!      which is what guarantees no command silently disappears, and
+//!   3. asserts the cdylib's *exported dynamic symbols* are ONLY the 3 `vk_icd*` loader hooks. The
+//!      command surface must NOT be dynamically exported: see
+//!      [`shim_exports_only_the_icd_hooks`].
 //!
 //! The build shares the dedicated `target/shim-build` dir with `build.rs`, so after the crate's build
 //! script has staged the shim this is a cache hit. It sets the `HL_VULKAN_BUILDING_SHIM` recursion
@@ -138,7 +140,7 @@ fn exports(so: &Path) -> BTreeSet<String> {
 }
 
 #[test]
-fn shim_export_surface_matches_the_golden_abi() {
+fn shim_dispatch_census_matches_the_golden_abi() {
     let golden = read_golden(&manifest_dir().join(GOLDEN));
     assert_eq!(
         golden.len(),
@@ -146,28 +148,167 @@ fn shim_export_surface_matches_the_golden_abi() {
         "golden {GOLDEN} has an unexpected count"
     );
 
-    // (a) the generator's SOURCE: manifest command names + the 3 vk_icd* hooks == golden.
+    // The generator's SOURCE: manifest command names + the 3 vk_icd* hooks == golden. This is the
+    // census that must not drift; it is deliberately NOT the exported dynamic symbol set, because the
+    // command surface is reached through `vk_icdGetInstanceProcAddr` -> `dispatch_addr`, which resolves
+    // link-time addresses inside the cdylib rather than dynamic symbols.
     let surface = manifest_surface(&manifest_dir().join(MANIFEST));
     assert_eq!(
         surface, golden,
         "manifest+vk_icd names differ from the golden ABI surface"
     );
+}
 
-    // (b) the BUILT cdylib's exported dynamic symbols == golden, exactly.
+/// A Vulkan driver loaded into a process that also links the real loader must not define the loader's
+/// own `vk*` symbols with default visibility: ELF preemption makes the driver's definition satisfy the
+/// LOADER's internal references, the loader detects the resulting recursion
+/// ("vkEnumerateInstanceExtensionProperties points to the loader, this would lead to infinite
+/// recursion") and DISCARDS this driver's instance-extension list. The application then sees
+/// `vkCreateInstance` fail with `VK_ERROR_EXTENSION_NOT_PRESENT` for `VK_KHR_surface` even though the
+/// driver advertises it. `-Bsymbolic` does not prevent this: it binds only the driver's OWN references
+/// locally, not its definitions' visibility to others.
+///
+/// Only the 3 loader-facing `vk_icd*` hooks may be exported; the loader needs nothing else.
+#[test]
+fn shim_exports_only_the_icd_hooks() {
     let shim_target = manifest_dir().join("target").join("shim-build");
     let exports = exports(&built_shim(&shim_target));
-    let missing: Vec<_> = golden.difference(&exports).collect();
-    let extra: Vec<_> = exports.difference(&golden).collect();
+    let expected: BTreeSet<String> = VK_ICD_HOOKS.iter().map(|h| h.to_string()).collect();
+    let leaked: Vec<_> = exports.difference(&expected).collect();
     assert!(
-        missing.is_empty(),
-        "golden symbols missing from the .so: {missing:?}"
+        leaked.is_empty(),
+        "{} Vulkan command symbols are dynamically exported and will preempt the loader's own \
+         definitions; only the vk_icd* hooks may be exported. First few: {:?}",
+        leaked.len(),
+        leaked.iter().take(5).collect::<Vec<_>>()
     );
-    assert!(
-        extra.is_empty(),
-        ".so exports symbols not in the golden: {extra:?}"
+    assert_eq!(
+        exports, expected,
+        "the exported surface must be exactly the 3 vk_icd* loader hooks"
     );
-    assert_eq!(exports.len(), EXPECTED, "exported symbol count drifted");
 }
+
+/// End-to-end proof of the loader contract, run against the real built cdylib: `dlopen` it into the
+/// global scope exactly as the Vulkan loader does (NOT `RTLD_LOCAL`), then
+///   * assert a bare `dlsym("vkEnumerateInstanceExtensionProperties")` finds NOTHING, so the driver can
+///     never preempt the loader's own definition and trip its infinite-recursion guard, and
+///   * assert the very same command, resolved the way the loader really resolves it — through
+///     `vk_icdGetInstanceProcAddr` — still returns the driver's three advertised instance extensions.
+///
+/// Together these are the behaviour that was broken: with the commands exported, the loader discarded
+/// this driver's extension list and applications saw `vkCreateInstance` fail with
+/// `VK_ERROR_EXTENSION_NOT_PRESENT` for `VK_KHR_surface`. The probe is C because `dlopen` and calling a
+/// C function pointer require `unsafe`, which workspace crates forbid.
+///
+/// Skipped when the host cannot execute the guest library (a non-Linux or mismatched-arch host).
+#[test]
+fn icd_hook_resolves_instance_extensions_while_bare_symbols_stay_hidden() {
+    if !cfg!(target_os = "linux") {
+        eprintln!("skipping: the guest cdylib is only loadable on a Linux host");
+        return;
+    }
+    let shim_target = manifest_dir().join("target").join("shim-build");
+    let so = built_shim(&shim_target);
+
+    let out_dir = shim_target.join("loader-probe");
+    std::fs::create_dir_all(&out_dir).expect("create probe dir");
+    let source = out_dir.join("probe.c");
+    std::fs::write(&source, LOADER_PROBE).expect("write probe source");
+    let probe = out_dir.join("probe");
+    let compiled = Command::new("cc")
+        .arg("-o")
+        .arg(&probe)
+        .arg(&source)
+        .arg("-ldl")
+        .status();
+    match compiled {
+        Ok(status) if status.success() => {}
+        _ => {
+            eprintln!("skipping: no working C compiler to build the loader probe");
+            return;
+        }
+    }
+
+    let run = Command::new(&probe)
+        .arg(&so)
+        .output()
+        .unwrap_or_else(|e| panic!("run loader probe: {e}"));
+    let report = String::from_utf8_lossy(&run.stdout).into_owned();
+    assert!(
+        run.status.success(),
+        "loader probe failed on {}:\n{report}{}",
+        so.display(),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        report.contains("bare-dlsym=hidden"),
+        "the command surface must not be dynamically exported, or it preempts the loader's own \
+         definitions and its recursion guard discards this driver:\n{report}"
+    );
+    for extension in [
+        "VK_KHR_surface",
+        "VK_KHR_wayland_surface",
+        "VK_KHR_get_physical_device_properties2",
+    ] {
+        assert!(
+            report.contains(extension),
+            "{extension} must survive resolution through vk_icdGetInstanceProcAddr:\n{report}"
+        );
+    }
+}
+
+/// Loads the guest ICD the way the Vulkan loader does and prints what the loader would observe.
+const LOADER_PROBE: &str = r#"
+#include <dlfcn.h>
+#include <stdint.h>
+#include <stdio.h>
+
+typedef void (*pfn)(void);
+typedef int32_t (*negotiate)(uint32_t *);
+typedef pfn (*get_instance_proc_addr)(void *, const char *);
+typedef int32_t (*enumerate)(const char *, uint32_t *, void *);
+
+struct extension_properties {
+    char name[256];
+    uint32_t spec_version;
+};
+
+int main(int argc, char **argv) {
+    if (argc < 2) { printf("usage: probe <library>\n"); return 1; }
+    /* RTLD_GLOBAL, exactly as the loader loads a driver — this is what makes preemption possible. */
+    void *library = dlopen(argv[1], RTLD_NOW | RTLD_GLOBAL);
+    if (!library) { printf("dlopen failed: %s\n", dlerror()); return 1; }
+
+    printf("bare-dlsym=%s\n",
+           dlsym(library, "vkEnumerateInstanceExtensionProperties") ? "EXPORTED" : "hidden");
+
+    negotiate agree = (negotiate)dlsym(library, "vk_icdNegotiateLoaderICDInterfaceVersion");
+    if (!agree) { printf("vk_icdNegotiateLoaderICDInterfaceVersion missing\n"); return 2; }
+    uint32_t version = 7;
+    if (agree(&version) != 0) { printf("negotiation failed\n"); return 2; }
+    printf("negotiated-interface=%u\n", version);
+
+    get_instance_proc_addr resolve =
+        (get_instance_proc_addr)dlsym(library, "vk_icdGetInstanceProcAddr");
+    if (!resolve) { printf("vk_icdGetInstanceProcAddr missing\n"); return 2; }
+
+    enumerate list = (enumerate)resolve(NULL, "vkEnumerateInstanceExtensionProperties");
+    if (!list) { printf("vkEnumerateInstanceExtensionProperties did not resolve\n"); return 3; }
+
+    uint32_t count = 0;
+    if (list(NULL, &count, NULL) != 0) { printf("count query failed\n"); return 4; }
+    printf("instance-extension-count=%u\n", count);
+    if (count > 16) { printf("implausible count\n"); return 4; }
+
+    struct extension_properties properties[16];
+    uint32_t written = count;
+    if (list(NULL, &written, properties) != 0) { printf("fill query failed\n"); return 4; }
+    for (uint32_t i = 0; i < written; i++) {
+        printf("instance-extension=%s spec=%u\n", properties[i].name, properties[i].spec_version);
+    }
+    return 0;
+}
+"#;
 
 #[test]
 fn shim_entry_points_bind_to_the_icd_not_the_loader() {

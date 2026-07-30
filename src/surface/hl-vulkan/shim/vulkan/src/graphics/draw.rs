@@ -4,7 +4,6 @@ use super::*;
 // indirect draws (validated; the IR carries no indirect draw op — a documented bring-up limit)
 // ==================================================================================================
 
-#[no_mangle]
 pub extern "C" fn vkCmdDrawIndirect(
     command_buffer: *mut c_void,
     buffer: u64,
@@ -20,7 +19,6 @@ pub extern "C" fn vkCmdDrawIndirect(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDrawIndexedIndirect(
     command_buffer: *mut c_void,
     buffer: u64,

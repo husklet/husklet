@@ -4,7 +4,6 @@ use hl_vulkan::service::record;
 
 use super::support::{CommandBuffer, DynamicState, ShimState};
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetPrimitiveRestartEnable(
     command_buffer: *mut c_void,
     primitive_restart_enable: u32,
@@ -14,7 +13,6 @@ pub extern "C" fn vkCmdSetPrimitiveRestartEnable(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetPrimitiveRestartEnableEXT(
     command_buffer: *mut c_void,
     primitive_restart_enable: u32,
@@ -22,7 +20,6 @@ pub extern "C" fn vkCmdSetPrimitiveRestartEnableEXT(
     vkCmdSetPrimitiveRestartEnable(command_buffer, primitive_restart_enable)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetPatchControlPointsEXT(
     command_buffer: *mut c_void,
     patch_control_points: u32,
@@ -32,7 +29,6 @@ pub extern "C" fn vkCmdSetPatchControlPointsEXT(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetVertexInputEXT(
     command_buffer: *mut c_void,
     vertex_binding_description_count: u32,
@@ -45,7 +41,6 @@ pub extern "C" fn vkCmdSetVertexInputEXT(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBindVertexBuffers2(
     command_buffer: *mut c_void,
     first_binding: u32,
@@ -79,7 +74,6 @@ pub extern "C" fn vkCmdBindVertexBuffers2(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBindVertexBuffers2EXT(
     command_buffer: *mut c_void,
     first_binding: u32,
@@ -100,7 +94,6 @@ pub extern "C" fn vkCmdBindVertexBuffers2EXT(
     )
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetTessellationDomainOriginEXT(
     command_buffer: *mut c_void,
     domain_origin: i32,
@@ -110,7 +103,6 @@ pub extern "C" fn vkCmdSetTessellationDomainOriginEXT(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetProvokingVertexModeEXT(
     command_buffer: *mut c_void,
     provoking_vertex_mode: i32,

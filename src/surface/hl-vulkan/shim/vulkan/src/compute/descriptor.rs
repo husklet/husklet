@@ -4,7 +4,6 @@ use super::*;
 // descriptors
 // ==================================================================================================
 
-#[no_mangle]
 pub extern "C" fn vkCreateDescriptorSetLayout(
     _device: *mut c_void,
     p_create_info: *const c_void,
@@ -40,7 +39,6 @@ pub extern "C" fn vkCreateDescriptorSetLayout(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyDescriptorSetLayout(
     _device: *mut c_void,
     set_layout: u64,
@@ -51,7 +49,6 @@ pub extern "C" fn vkDestroyDescriptorSetLayout(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateDescriptorPool(
     _device: *mut c_void,
     p_create_info: *const c_void,
@@ -74,7 +71,6 @@ pub extern "C" fn vkCreateDescriptorPool(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyDescriptorPool(
     _device: *mut c_void,
     descriptor_pool: u64,
@@ -85,7 +81,6 @@ pub extern "C" fn vkDestroyDescriptorPool(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkAllocateDescriptorSets(
     _device: *mut c_void,
     p_allocate_info: *const c_void,
@@ -128,7 +123,6 @@ pub extern "C" fn vkAllocateDescriptorSets(
     VK_SUCCESS
 }
 
-#[no_mangle]
 pub extern "C" fn vkUpdateDescriptorSets(
     _device: *mut c_void,
     descriptor_write_count: u32,
@@ -251,7 +245,6 @@ pub extern "C" fn vkUpdateDescriptorSets(
 
 /// `vkCreateDescriptorUpdateTemplate` — retain the immutable entry table the app pushes descriptors
 /// through. Only the `DESCRIPTOR_SET` template type is modeled (see `create::create_descriptor_update_template`).
-#[no_mangle]
 pub extern "C" fn vkCreateDescriptorUpdateTemplate(
     _device: *mut c_void,
     p_create_info: *const c_void,
@@ -303,7 +296,6 @@ pub extern "C" fn vkCreateDescriptorUpdateTemplate(
 }
 
 /// `vkCreateDescriptorUpdateTemplateKHR` — the `VK_KHR_descriptor_update_template` alias.
-#[no_mangle]
 pub extern "C" fn vkCreateDescriptorUpdateTemplateKHR(
     device: *mut c_void,
     p_create_info: *const c_void,
@@ -318,7 +310,6 @@ pub extern "C" fn vkCreateDescriptorUpdateTemplateKHR(
     )
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyDescriptorUpdateTemplate(
     _device: *mut c_void,
     descriptor_update_template: u64,
@@ -329,7 +320,6 @@ pub extern "C" fn vkDestroyDescriptorUpdateTemplate(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyDescriptorUpdateTemplateKHR(
     device: *mut c_void,
     descriptor_update_template: u64,
@@ -342,7 +332,6 @@ pub extern "C" fn vkDestroyDescriptorUpdateTemplateKHR(
 /// `descriptorSet` (identical result to the equivalent `vkUpdateDescriptorSets`). The C API carries no
 /// `pData` size, so the shim bounds the raw pointer with the template's computed read extent
 /// (`create::descriptor_template_data_len`).
-#[no_mangle]
 pub extern "C" fn vkUpdateDescriptorSetWithTemplate(
     _device: *mut c_void,
     descriptor_set: u64,
@@ -371,7 +360,6 @@ pub extern "C" fn vkUpdateDescriptorSetWithTemplate(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkUpdateDescriptorSetWithTemplateKHR(
     device: *mut c_void,
     descriptor_set: u64,

@@ -4,7 +4,6 @@ use super::*;
 // images + image views + samplers
 // ==================================================================================================
 
-#[no_mangle]
 pub extern "C" fn vkCreateImage(
     _device: *mut c_void,
     p_create_info: *const c_void,
@@ -61,14 +60,12 @@ pub extern "C" fn vkCreateImage(
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyImage(_device: *mut c_void, image: u64, _p_allocator: *const c_void) {
     ShimState::with_device(|dev| {
         dev.images.remove(&image);
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetImageMemoryRequirements(
     _device: *mut c_void,
     image: u64,
@@ -114,7 +111,6 @@ pub extern "C" fn vkGetImageMemoryRequirements(
 /// `vkGetImageSubresourceLayout` — report the linear byte layout (offset/size/rowPitch) of `image`'s
 /// subresource. Modeled images are single-mip single-layer RGBA8 2D targets (rowPitch = width*4). Leaves
 /// the output zeroed on an unknown image (the caller must have queried a valid, linear-tiled image).
-#[no_mangle]
 pub extern "C" fn vkGetImageSubresourceLayout(
     _device: *mut c_void,
     image: u64,
@@ -134,7 +130,6 @@ pub extern "C" fn vkGetImageSubresourceLayout(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkBindImageMemory(
     _device: *mut c_void,
     _image: u64,
@@ -150,7 +145,6 @@ pub extern "C" fn vkBindImageMemory(
 
 /// `vkBindImageMemory2` — bind each `VkBindImageMemoryInfo` via the v1 [`vkBindImageMemory`] body (a
 /// host-owned render-target image binds as a no-op success). Returns the first error (else `VK_SUCCESS`).
-#[no_mangle]
 pub extern "C" fn vkBindImageMemory2(
     device: *mut c_void,
     bind_info_count: u32,
@@ -176,7 +170,6 @@ pub extern "C" fn vkBindImageMemory2(
 }
 
 /// `vkBindImageMemory2KHR` — the `VK_KHR_bind_memory2` alias of [`vkBindImageMemory2`].
-#[no_mangle]
 pub extern "C" fn vkBindImageMemory2KHR(
     device: *mut c_void,
     bind_info_count: u32,
@@ -187,7 +180,6 @@ pub extern "C" fn vkBindImageMemory2KHR(
 
 /// `vkGetImageMemoryRequirements2` — read `VkImageMemoryRequirementsInfo2` and fill the base
 /// `VkMemoryRequirements` via the v1 [`vkGetImageMemoryRequirements`] body (chain preserved).
-#[no_mangle]
 pub extern "C" fn vkGetImageMemoryRequirements2(
     device: *mut c_void,
     p_info: *const c_void,
@@ -208,7 +200,6 @@ pub extern "C" fn vkGetImageMemoryRequirements2(
 }
 
 /// `vkGetImageMemoryRequirements2KHR` — the `VK_KHR_get_memory_requirements2` alias.
-#[no_mangle]
 pub extern "C" fn vkGetImageMemoryRequirements2KHR(
     device: *mut c_void,
     p_info: *const c_void,
@@ -217,7 +208,6 @@ pub extern "C" fn vkGetImageMemoryRequirements2KHR(
     vkGetImageMemoryRequirements2(device, p_info, p_memory_requirements)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateImageView(
     _device: *mut c_void,
     p_create_info: *const c_void,
@@ -345,7 +335,6 @@ pub extern "C" fn vkCreateImageView(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyImageView(
     _device: *mut c_void,
     image_view: u64,
@@ -362,7 +351,6 @@ pub extern "C" fn vkDestroyImageView(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateSampler(
     _device: *mut c_void,
     p_create_info: *const c_void,
@@ -397,7 +385,6 @@ pub extern "C" fn vkCreateSampler(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroySampler(
     _device: *mut c_void,
     sampler: u64,

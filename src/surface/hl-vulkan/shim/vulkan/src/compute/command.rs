@@ -3,7 +3,6 @@ use super::*;
 // ==================================================================================================
 // command pool + buffers + recording + submit
 // ==================================================================================================
-#[no_mangle]
 pub extern "C" fn vkCreateCommandPool(
     _device: *mut c_void,
     _p_create_info: *const c_void,
@@ -24,7 +23,6 @@ pub extern "C" fn vkCreateCommandPool(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyCommandPool(
     _device: *mut c_void,
     _command_pool: u64,
@@ -32,7 +30,6 @@ pub extern "C" fn vkDestroyCommandPool(
 ) {
 }
 
-#[no_mangle]
 pub extern "C" fn vkAllocateCommandBuffers(
     _device: *mut c_void,
     p_allocate_info: *const c_void,
@@ -57,7 +54,6 @@ pub extern "C" fn vkAllocateCommandBuffers(
     VK_SUCCESS
 }
 
-#[no_mangle]
 pub extern "C" fn vkBeginCommandBuffer(
     command_buffer: *mut c_void,
     p_begin_info: *const c_void,
@@ -78,7 +74,6 @@ pub extern "C" fn vkBeginCommandBuffer(
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
 
-#[no_mangle]
 pub extern "C" fn vkEndCommandBuffer(command_buffer: *mut c_void) -> VkResult {
     let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
@@ -87,7 +82,6 @@ pub extern "C" fn vkEndCommandBuffer(command_buffer: *mut c_void) -> VkResult {
         .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBindPipeline(
     command_buffer: *mut c_void,
     _pipeline_bind_point: i32,
@@ -101,7 +95,6 @@ pub extern "C" fn vkCmdBindPipeline(
     });
 }
 
-#[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn vkCmdBindDescriptorSets(
     command_buffer: *mut c_void,
@@ -133,7 +126,6 @@ pub extern "C" fn vkCmdBindDescriptorSets(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDispatch(
     command_buffer: *mut c_void,
     group_count_x: u32,
@@ -151,7 +143,6 @@ pub extern "C" fn vkCmdDispatch(
 /// `vkCmdDispatchIndirect` — validate the indirect buffer, read its `VkDispatchIndirectCommand{x,y,z}`
 /// workgroup counts out of the host-visible backing, and lower to the same compute-pass `Dispatch{x,y,z}`
 /// the equivalent `vkCmdDispatch` would emit; erroring only on a bad buffer.
-#[no_mangle]
 pub extern "C" fn vkCmdDispatchIndirect(command_buffer: *mut c_void, buffer: u64, offset: u64) {
     let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
@@ -164,7 +155,6 @@ pub extern "C" fn vkCmdDispatchIndirect(command_buffer: *mut c_void, buffer: u64
 /// `vkCmdExecuteCommands` — replay recorded secondary command buffers into this primary (their encoder
 /// ops, deferred device ops, and inline buffer writes spliced in order). Every secondary must be a valid,
 /// `Executable` command buffer.
-#[no_mangle]
 pub extern "C" fn vkCmdExecuteCommands(
     command_buffer: *mut c_void,
     command_buffer_count: u32,

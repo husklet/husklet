@@ -98,7 +98,6 @@ pub extern "C" fn vk_icdGetPhysicalDeviceProcAddr(
 
 /// The public `vkGetInstanceProcAddr`. Resolves the whole generated `vk*` surface by name; returns
 /// itself for `"vkGetInstanceProcAddr"` (the loader bootstraps through this).
-#[no_mangle]
 pub extern "C" fn vkGetInstanceProcAddr(
     _instance: VkInstance,
     p_name: *const c_char,
@@ -115,7 +114,6 @@ pub extern "C" fn vkGetInstanceProcAddr(
 }
 
 /// The public `vkGetDeviceProcAddr`. Resolves device-level entry points by name from the same table.
-#[no_mangle]
 pub extern "C" fn vkGetDeviceProcAddr(
     _device: VkDevice,
     p_name: *const c_char,

@@ -15,13 +15,11 @@ use support::{CommandBuffer, MemoryRequirements, ShimState, SparseRequirements};
 
 /// `vkTrimCommandPool` — recycle a pool's unused command-buffer memory. The bring-up model pools no
 /// backing memory (command buffers are plain device-table records), so trimming is a truthful no-op.
-#[no_mangle]
 pub extern "C" fn vkTrimCommandPool(_device: *mut c_void, _command_pool: u64, _flags: u32) {}
 
 /// `vkResetCommandPool` — reset every command buffer the device owns back to `Initial` (the model does
 /// not scope buffers to a pool object, so a pool reset resets all — a superset that is spec-safe for the
 /// single-pool bring-up flow). Clears each recording.
-#[no_mangle]
 pub extern "C" fn vkResetCommandPool(
     _device: *mut c_void,
     _command_pool: u64,
@@ -38,7 +36,6 @@ pub extern "C" fn vkResetCommandPool(
 
 /// `vkResetCommandBuffer` — reset one command buffer to `Initial`, clearing its recording. Errors on an
 /// unknown handle.
-#[no_mangle]
 pub extern "C" fn vkResetCommandBuffer(command_buffer: *mut c_void, _flags: u32) -> VkResult {
     let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
@@ -55,7 +52,6 @@ pub extern "C" fn vkResetCommandBuffer(command_buffer: *mut c_void, _flags: u32)
 
 /// `vkFreeCommandBuffers` — drop each command buffer's device-table record and reclaim its dispatchable
 /// box. A null slot / unknown handle is skipped (spec: freeing `VK_NULL_HANDLE` is valid).
-#[no_mangle]
 pub extern "C" fn vkFreeCommandBuffers(
     _device: *mut c_void,
     _command_pool: u64,
@@ -84,7 +80,6 @@ pub extern "C" fn vkFreeCommandBuffers(
 
 /// `vkGetDescriptorSetLayoutSupport(KHR)` — report whether a set of the queried layout can be created.
 /// The bring-up model accepts any layout within the reported device limits, so `supported = VK_TRUE`.
-#[no_mangle]
 pub extern "C" fn vkGetDescriptorSetLayoutSupport(
     _device: *mut c_void,
     _p_create_info: *const c_void,
@@ -96,7 +91,6 @@ pub extern "C" fn vkGetDescriptorSetLayoutSupport(
 }
 
 /// `vkGetDescriptorSetLayoutSupportKHR` — the `VK_KHR_maintenance3` alias.
-#[no_mangle]
 pub extern "C" fn vkGetDescriptorSetLayoutSupportKHR(
     device: *mut c_void,
     p_create_info: *const c_void,
@@ -107,7 +101,6 @@ pub extern "C" fn vkGetDescriptorSetLayoutSupportKHR(
 
 /// `vkGetDeviceBufferMemoryRequirements(KHR)` — derive a buffer's requirements from its create info
 /// WITHOUT creating it: the size is the requested `VkBufferCreateInfo::size`, aligned like a real buffer.
-#[no_mangle]
 pub extern "C" fn vkGetDeviceBufferMemoryRequirements(
     _device: *mut c_void,
     p_info: *const c_void,
@@ -124,7 +117,6 @@ pub extern "C" fn vkGetDeviceBufferMemoryRequirements(
 }
 
 /// `vkGetDeviceBufferMemoryRequirementsKHR` — the `VK_KHR_maintenance4` alias.
-#[no_mangle]
 pub extern "C" fn vkGetDeviceBufferMemoryRequirementsKHR(
     device: *mut c_void,
     p_info: *const c_void,
@@ -138,7 +130,6 @@ pub extern "C" fn vkGetDeviceBufferMemoryRequirementsKHR(
 /// 1-byte R8 coverage atlas 4x, and once GPUI grows its glyph atlas that inflated requirement crosses
 /// gpu-alloc's 2 GiB max-allocation ceiling and spuriously OutOfMemory-device-losts wgpu (see the sibling
 /// `vkGetImageMemoryRequirements`).
-#[no_mangle]
 pub extern "C" fn vkGetDeviceImageMemoryRequirements(
     _device: *mut c_void,
     p_info: *const c_void,
@@ -158,7 +149,6 @@ pub extern "C" fn vkGetDeviceImageMemoryRequirements(
 }
 
 /// `vkGetDeviceImageMemoryRequirementsKHR` — the `VK_KHR_maintenance4` alias.
-#[no_mangle]
 pub extern "C" fn vkGetDeviceImageMemoryRequirementsKHR(
     device: *mut c_void,
     p_info: *const c_void,
@@ -167,7 +157,6 @@ pub extern "C" fn vkGetDeviceImageMemoryRequirementsKHR(
     vkGetDeviceImageMemoryRequirements(device, p_info, p_memory_requirements)
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetImageSparseMemoryRequirements(
     _device: *mut c_void,
     _image: u64,
@@ -177,7 +166,6 @@ pub extern "C" fn vkGetImageSparseMemoryRequirements(
     SparseRequirements::write_empty(p_sparse_memory_requirement_count);
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetImageSparseMemoryRequirements2(
     _device: *mut c_void,
     _p_info: *const c_void,
@@ -187,7 +175,6 @@ pub extern "C" fn vkGetImageSparseMemoryRequirements2(
     SparseRequirements::write_empty(p_sparse_memory_requirement_count);
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetImageSparseMemoryRequirements2KHR(
     device: *mut c_void,
     p_info: *const c_void,
@@ -202,7 +189,6 @@ pub extern "C" fn vkGetImageSparseMemoryRequirements2KHR(
     )
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetDeviceImageSparseMemoryRequirements(
     _device: *mut c_void,
     _p_info: *const c_void,
@@ -212,7 +198,6 @@ pub extern "C" fn vkGetDeviceImageSparseMemoryRequirements(
     SparseRequirements::write_empty(p_sparse_memory_requirement_count);
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetDeviceImageSparseMemoryRequirementsKHR(
     device: *mut c_void,
     p_info: *const c_void,
@@ -229,7 +214,6 @@ pub extern "C" fn vkGetDeviceImageSparseMemoryRequirementsKHR(
 
 // private data (VK_EXT_private_data / core 1.3) — a real per-object `u64` store
 
-#[no_mangle]
 pub extern "C" fn vkCreatePrivateDataSlot(
     _device: *mut c_void,
     _p_create_info: *const c_void,
@@ -252,7 +236,6 @@ pub extern "C" fn vkCreatePrivateDataSlot(
     })
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreatePrivateDataSlotEXT(
     device: *mut c_void,
     p_create_info: *const c_void,
@@ -262,7 +245,6 @@ pub extern "C" fn vkCreatePrivateDataSlotEXT(
     vkCreatePrivateDataSlot(device, p_create_info, p_allocator, p_private_data_slot)
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyPrivateDataSlot(
     _device: *mut c_void,
     private_data_slot: u64,
@@ -275,7 +257,6 @@ pub extern "C" fn vkDestroyPrivateDataSlot(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyPrivateDataSlotEXT(
     device: *mut c_void,
     private_data_slot: u64,
@@ -284,7 +265,6 @@ pub extern "C" fn vkDestroyPrivateDataSlotEXT(
     vkDestroyPrivateDataSlot(device, private_data_slot, p_allocator)
 }
 
-#[no_mangle]
 pub extern "C" fn vkSetPrivateData(
     _device: *mut c_void,
     object_type: i32,
@@ -302,7 +282,6 @@ pub extern "C" fn vkSetPrivateData(
     })
 }
 
-#[no_mangle]
 pub extern "C" fn vkSetPrivateDataEXT(
     device: *mut c_void,
     object_type: i32,
@@ -313,7 +292,6 @@ pub extern "C" fn vkSetPrivateDataEXT(
     vkSetPrivateData(device, object_type, object_handle, private_data_slot, data)
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPrivateData(
     _device: *mut c_void,
     object_type: i32,
@@ -332,7 +310,6 @@ pub extern "C" fn vkGetPrivateData(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPrivateDataEXT(
     device: *mut c_void,
     object_type: i32,
@@ -351,7 +328,6 @@ pub extern "C" fn vkGetPrivateDataEXT(
 
 // sampler ycbcr conversion (VK_KHR_sampler_ycbcr_conversion / core 1.1) — a real host object
 
-#[no_mangle]
 pub extern "C" fn vkCreateSamplerYcbcrConversion(
     _device: *mut c_void,
     p_create_info: *const c_void,
@@ -377,7 +353,6 @@ pub extern "C" fn vkCreateSamplerYcbcrConversion(
     })
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateSamplerYcbcrConversionKHR(
     device: *mut c_void,
     p_create_info: *const c_void,
@@ -387,7 +362,6 @@ pub extern "C" fn vkCreateSamplerYcbcrConversionKHR(
     vkCreateSamplerYcbcrConversion(device, p_create_info, p_allocator, p_ycbcr_conversion)
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroySamplerYcbcrConversion(
     _device: *mut c_void,
     ycbcr_conversion: u64,
@@ -398,7 +372,6 @@ pub extern "C" fn vkDestroySamplerYcbcrConversion(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroySamplerYcbcrConversionKHR(
     device: *mut c_void,
     ycbcr_conversion: u64,
@@ -411,7 +384,6 @@ pub extern "C" fn vkDestroySamplerYcbcrConversionKHR(
 
 /// `vkGetCalibratedTimestampsKHR` — write one host-monotonic serial per queried timestamp info and a
 /// zero max-deviation (the synchronous model has no sampling jitter). Errors on a null info/output array.
-#[no_mangle]
 pub extern "C" fn vkGetCalibratedTimestampsKHR(
     _device: *mut c_void,
     timestamp_count: u32,
@@ -436,7 +408,6 @@ pub extern "C" fn vkGetCalibratedTimestampsKHR(
 }
 
 /// `vkGetCalibratedTimestampsEXT` — the `VK_EXT_calibrated_timestamps` alias.
-#[no_mangle]
 pub extern "C" fn vkGetCalibratedTimestampsEXT(
     device: *mut c_void,
     timestamp_count: u32,
@@ -455,7 +426,6 @@ pub extern "C" fn vkGetCalibratedTimestampsEXT(
 
 /// `vkGetPhysicalDeviceCalibrateableTimeDomainsKHR` — the modeled device reports one calibrateable
 /// domain (`VK_TIME_DOMAIN_DEVICE_KHR`), via the standard two-call enumeration.
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceCalibrateableTimeDomainsKHR(
     _physical_device: *mut c_void,
     p_time_domain_count: *mut u32,
@@ -481,7 +451,6 @@ pub extern "C" fn vkGetPhysicalDeviceCalibrateableTimeDomainsKHR(
 }
 
 /// `vkGetPhysicalDeviceCalibrateableTimeDomainsEXT` — the `VK_EXT_calibrated_timestamps` alias.
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceCalibrateableTimeDomainsEXT(
     physical_device: *mut c_void,
     p_time_domain_count: *mut u32,

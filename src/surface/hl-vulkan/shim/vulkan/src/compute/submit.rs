@@ -1,6 +1,5 @@
 use super::*;
 
-#[no_mangle]
 pub extern "C" fn vkQueueSubmit(
     _queue: *mut c_void,
     submit_count: u32,
@@ -67,13 +66,11 @@ pub extern "C" fn vkQueueSubmit(
     r
 }
 
-#[no_mangle]
 pub extern "C" fn vkQueueWaitIdle(_queue: *mut c_void) -> VkResult {
     // The executor replays each submit synchronously, so the queue is idle on return.
     VK_SUCCESS
 }
 
-#[no_mangle]
 pub extern "C" fn vkDeviceWaitIdle(_device: *mut c_void) -> VkResult {
     VK_SUCCESS
 }
@@ -83,7 +80,6 @@ pub extern "C" fn vkDeviceWaitIdle(_device: *mut c_void) -> VkResult {
 /// `vkQueueSubmit2` — the sync2 submit form. Gathers every `VkCommandBufferSubmitInfo::commandBuffer`
 /// across the batch (unwrapping each dispatchable to its `u64` handle) and lowers exactly as
 /// `vkQueueSubmit`; the semaphore-info arrays are validated-then-ignored by the synchronous model.
-#[no_mangle]
 pub extern "C" fn vkQueueSubmit2(
     _queue: *mut c_void,
     submit_count: u32,
@@ -138,7 +134,6 @@ pub extern "C" fn vkQueueSubmit2(
 }
 
 /// `vkQueueSubmit2KHR` — the `VK_KHR_synchronization2` alias.
-#[no_mangle]
 pub extern "C" fn vkQueueSubmit2KHR(
     queue: *mut c_void,
     submit_count: u32,

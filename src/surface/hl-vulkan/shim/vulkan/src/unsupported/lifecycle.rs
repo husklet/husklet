@@ -1,6 +1,5 @@
 use super::*;
 
-#[no_mangle]
 pub extern "C" fn vkCreateCuFunctionNVX(
     device: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -20,7 +19,6 @@ pub extern "C" fn vkCreateCuFunctionNVX(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateCuModuleNVX(
     device: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -40,7 +38,6 @@ pub extern "C" fn vkCreateCuModuleNVX(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateCudaFunctionNV(
     device: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -60,7 +57,6 @@ pub extern "C" fn vkCreateCudaFunctionNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateCudaModuleNV(
     device: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -80,7 +76,6 @@ pub extern "C" fn vkCreateCudaModuleNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateDeferredOperationKHR(
     device: *mut core::ffi::c_void,
     pAllocator: *const core::ffi::c_void,
@@ -98,7 +93,6 @@ pub extern "C" fn vkCreateDeferredOperationKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateIndirectCommandsLayoutNV(
     device: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -121,7 +115,6 @@ pub extern "C" fn vkCreateIndirectCommandsLayoutNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateValidationCacheEXT(
     device: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -141,7 +134,6 @@ pub extern "C" fn vkCreateValidationCacheEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyCuFunctionNVX(
     device: *mut core::ffi::c_void,
     function: u64,
@@ -153,7 +145,6 @@ pub extern "C" fn vkDestroyCuFunctionNVX(
     crate::stub::Call::unsupported("vkDestroyCuFunctionNVX", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyCuModuleNVX(
     device: *mut core::ffi::c_void,
     module: u64,
@@ -165,7 +156,6 @@ pub extern "C" fn vkDestroyCuModuleNVX(
     crate::stub::Call::unsupported("vkDestroyCuModuleNVX", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyCudaFunctionNV(
     device: *mut core::ffi::c_void,
     function: u64,
@@ -177,7 +167,6 @@ pub extern "C" fn vkDestroyCudaFunctionNV(
     crate::stub::Call::unsupported("vkDestroyCudaFunctionNV", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyCudaModuleNV(
     device: *mut core::ffi::c_void,
     module: u64,
@@ -189,7 +178,6 @@ pub extern "C" fn vkDestroyCudaModuleNV(
     crate::stub::Call::unsupported("vkDestroyCudaModuleNV", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyDeferredOperationKHR(
     device: *mut core::ffi::c_void,
     operation: u64,
@@ -201,7 +189,6 @@ pub extern "C" fn vkDestroyDeferredOperationKHR(
     crate::stub::Call::unsupported("vkDestroyDeferredOperationKHR", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyIndirectCommandsLayoutNV(
     device: *mut core::ffi::c_void,
     indirectCommandsLayout: u64,
@@ -216,7 +203,6 @@ pub extern "C" fn vkDestroyIndirectCommandsLayoutNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyValidationCacheEXT(
     device: *mut core::ffi::c_void,
     validationCache: u64,

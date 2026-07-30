@@ -4,7 +4,6 @@ use super::*;
 // shaders + pipelines
 // ==================================================================================================
 
-#[no_mangle]
 pub extern "C" fn vkCreateShaderModule(
     _device: *mut c_void,
     p_create_info: *const c_void,
@@ -35,7 +34,6 @@ pub extern "C" fn vkCreateShaderModule(
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyShaderModule(
     _device: *mut c_void,
     shader_module: u64,
@@ -46,7 +44,6 @@ pub extern "C" fn vkDestroyShaderModule(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreatePipelineLayout(
     _device: *mut c_void,
     p_create_info: *const c_void,
@@ -75,7 +72,6 @@ pub extern "C" fn vkCreatePipelineLayout(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyPipelineLayout(
     _device: *mut c_void,
     pipeline_layout: u64,
@@ -86,7 +82,6 @@ pub extern "C" fn vkDestroyPipelineLayout(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateComputePipelines(
     _device: *mut c_void,
     _pipeline_cache: u64,
@@ -126,7 +121,6 @@ pub extern "C" fn vkCreateComputePipelines(
     result
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyPipeline(
     _device: *mut c_void,
     pipeline: u64,
@@ -141,7 +135,6 @@ pub extern "C" fn vkDestroyPipeline(
 // pipeline cache (modeled: a valid, versioned header; hl-GPU forwards SPIR-V, so no host binary)
 // ==================================================================================================
 
-#[no_mangle]
 pub extern "C" fn vkCreatePipelineCache(
     _device: *mut c_void,
     p_create_info: *const c_void,
@@ -170,7 +163,6 @@ pub extern "C" fn vkCreatePipelineCache(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyPipelineCache(
     _device: *mut c_void,
     pipeline_cache: u64,
@@ -179,7 +171,6 @@ pub extern "C" fn vkDestroyPipelineCache(
     ShimState::with_sink(|dev, _| create::PipelineCache::destroy(dev, pipeline_cache));
 }
 
-#[no_mangle]
 pub extern "C" fn vkMergePipelineCaches(
     _device: *mut c_void,
     dst_cache: u64,
@@ -200,7 +191,6 @@ pub extern "C" fn vkMergePipelineCaches(
 
 /// `vkGetPipelineCacheData` — write the serialized cache blob (a spec-valid header). The two-call size
 /// query (`pData` NULL) reports the length; a short buffer truncates with `VK_INCOMPLETE`.
-#[no_mangle]
 pub extern "C" fn vkGetPipelineCacheData(
     _device: *mut c_void,
     pipeline_cache: u64,

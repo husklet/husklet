@@ -4,26 +4,22 @@ use hl_vulkan::service::record;
 
 use super::support::{CommandBuffer, DynamicState, ShimState};
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetDepthTestEnable(command_buffer: *mut c_void, depth_test_enable: u32) {
     DynamicState::record(command_buffer, |ds| {
         ds.depth_test_enable = depth_test_enable != 0
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetDepthTestEnableEXT(command_buffer: *mut c_void, depth_test_enable: u32) {
     vkCmdSetDepthTestEnable(command_buffer, depth_test_enable)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetDepthWriteEnable(command_buffer: *mut c_void, depth_write_enable: u32) {
     DynamicState::record(command_buffer, |ds| {
         ds.depth_write_enable = depth_write_enable != 0
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetDepthWriteEnableEXT(
     command_buffer: *mut c_void,
     depth_write_enable: u32,
@@ -31,17 +27,14 @@ pub extern "C" fn vkCmdSetDepthWriteEnableEXT(
     vkCmdSetDepthWriteEnable(command_buffer, depth_write_enable)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetDepthCompareOp(command_buffer: *mut c_void, depth_compare_op: i32) {
     DynamicState::record(command_buffer, |ds| ds.depth_compare_op = depth_compare_op);
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetDepthCompareOpEXT(command_buffer: *mut c_void, depth_compare_op: i32) {
     vkCmdSetDepthCompareOp(command_buffer, depth_compare_op)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetDepthBoundsTestEnable(
     command_buffer: *mut c_void,
     depth_bounds_test_enable: u32,
@@ -51,7 +44,6 @@ pub extern "C" fn vkCmdSetDepthBoundsTestEnable(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetDepthBoundsTestEnableEXT(
     command_buffer: *mut c_void,
     depth_bounds_test_enable: u32,
@@ -59,14 +51,12 @@ pub extern "C" fn vkCmdSetDepthBoundsTestEnableEXT(
     vkCmdSetDepthBoundsTestEnable(command_buffer, depth_bounds_test_enable)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetStencilTestEnable(command_buffer: *mut c_void, stencil_test_enable: u32) {
     DynamicState::record(command_buffer, |ds| {
         ds.stencil_test_enable = stencil_test_enable != 0
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetStencilTestEnableEXT(
     command_buffer: *mut c_void,
     stencil_test_enable: u32,
@@ -74,7 +64,6 @@ pub extern "C" fn vkCmdSetStencilTestEnableEXT(
     vkCmdSetStencilTestEnable(command_buffer, stencil_test_enable)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetStencilOp(
     command_buffer: *mut c_void,
     face_mask: u32,
@@ -96,7 +85,6 @@ pub extern "C" fn vkCmdSetStencilOp(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetStencilOpEXT(
     command_buffer: *mut c_void,
     face_mask: u32,
@@ -115,7 +103,6 @@ pub extern "C" fn vkCmdSetStencilOpEXT(
     )
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetDepthBounds(
     command_buffer: *mut c_void,
     min_depth_bounds: f32,

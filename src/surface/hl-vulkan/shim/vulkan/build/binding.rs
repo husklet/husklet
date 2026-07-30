@@ -68,7 +68,7 @@ pub(super) fn emit_stub(
     };
     writeln!(
         out,
-        "#[no_mangle]\npub extern \"C\" fn {name}({sig}){arrow} {{ {body} }}\n"
+        "pub extern \"C\" fn {name}({sig}){arrow} {{ {body} }}\n"
     )
     .unwrap();
 }

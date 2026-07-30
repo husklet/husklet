@@ -1,6 +1,5 @@
 use super::*;
 
-#[no_mangle]
 pub extern "C" fn vkBuildMicromapsEXT(
     device: *mut core::ffi::c_void,
     deferredOperation: u64,
@@ -15,7 +14,6 @@ pub extern "C" fn vkBuildMicromapsEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBuildMicromapsEXT(
     commandBuffer: *mut core::ffi::c_void,
     infoCount: u32,
@@ -27,7 +25,6 @@ pub extern "C" fn vkCmdBuildMicromapsEXT(
     crate::stub::Call::unsupported("vkCmdBuildMicromapsEXT", "extension family not modeled");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCopyMemoryToMicromapEXT(
     commandBuffer: *mut core::ffi::c_void,
     pInfo: *const core::ffi::c_void,
@@ -40,7 +37,6 @@ pub extern "C" fn vkCmdCopyMemoryToMicromapEXT(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCopyMicromapEXT(
     commandBuffer: *mut core::ffi::c_void,
     pInfo: *const core::ffi::c_void,
@@ -50,7 +46,6 @@ pub extern "C" fn vkCmdCopyMicromapEXT(
     crate::stub::Call::unsupported("vkCmdCopyMicromapEXT", "extension family not modeled");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCopyMicromapToMemoryEXT(
     commandBuffer: *mut core::ffi::c_void,
     pInfo: *const core::ffi::c_void,
@@ -63,7 +58,6 @@ pub extern "C" fn vkCmdCopyMicromapToMemoryEXT(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdWriteMicromapsPropertiesEXT(
     commandBuffer: *mut core::ffi::c_void,
     micromapCount: u32,
@@ -84,7 +78,6 @@ pub extern "C" fn vkCmdWriteMicromapsPropertiesEXT(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCopyMemoryToMicromapEXT(
     device: *mut core::ffi::c_void,
     deferredOperation: u64,
@@ -97,7 +90,6 @@ pub extern "C" fn vkCopyMemoryToMicromapEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCopyMicromapEXT(
     device: *mut core::ffi::c_void,
     deferredOperation: u64,
@@ -110,7 +102,6 @@ pub extern "C" fn vkCopyMicromapEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCopyMicromapToMemoryEXT(
     device: *mut core::ffi::c_void,
     deferredOperation: u64,
@@ -123,7 +114,6 @@ pub extern "C" fn vkCopyMicromapToMemoryEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateMicromapEXT(
     device: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -143,7 +133,6 @@ pub extern "C" fn vkCreateMicromapEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyMicromapEXT(
     device: *mut core::ffi::c_void,
     micromap: u64,
@@ -155,7 +144,6 @@ pub extern "C" fn vkDestroyMicromapEXT(
     crate::stub::Call::unsupported("vkDestroyMicromapEXT", "extension family not modeled");
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetDeviceMicromapCompatibilityEXT(
     device: *mut core::ffi::c_void,
     pVersionInfo: *const core::ffi::c_void,
@@ -170,7 +158,6 @@ pub extern "C" fn vkGetDeviceMicromapCompatibilityEXT(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetMicromapBuildSizesEXT(
     device: *mut core::ffi::c_void,
     buildType: i32,
@@ -184,7 +171,6 @@ pub extern "C" fn vkGetMicromapBuildSizesEXT(
     crate::stub::Call::unsupported("vkGetMicromapBuildSizesEXT", "extension family not modeled");
 }
 
-#[no_mangle]
 pub extern "C" fn vkWriteMicromapsPropertiesEXT(
     device: *mut core::ffi::c_void,
     micromapCount: u32,

@@ -2,7 +2,6 @@ use core::ffi::c_void;
 
 use super::support::DynamicState;
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetRasterizationSamplesEXT(
     command_buffer: *mut c_void,
     rasterization_samples: u32,
@@ -12,7 +11,6 @@ pub extern "C" fn vkCmdSetRasterizationSamplesEXT(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetSampleMaskEXT(
     command_buffer: *mut c_void,
     _samples: u32,
@@ -26,7 +24,6 @@ pub extern "C" fn vkCmdSetSampleMaskEXT(
     DynamicState::record(command_buffer, |ds| ds.sample_mask = mask);
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetAlphaToCoverageEnableEXT(
     command_buffer: *mut c_void,
     alpha_to_coverage_enable: u32,
@@ -36,7 +33,6 @@ pub extern "C" fn vkCmdSetAlphaToCoverageEnableEXT(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetAlphaToOneEnableEXT(
     command_buffer: *mut c_void,
     alpha_to_one_enable: u32,
@@ -46,7 +42,6 @@ pub extern "C" fn vkCmdSetAlphaToOneEnableEXT(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetSampleLocationsEnableEXT(
     command_buffer: *mut c_void,
     sample_locations_enable: u32,

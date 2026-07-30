@@ -7,7 +7,6 @@ use hl_vulkan::service::record;
 use super::{CommandBuffer, ShimState};
 use crate::types::*;
 
-#[no_mangle]
 pub extern "C" fn vkCmdClearColorImage(
     command_buffer: *mut c_void,
     image: u64,
@@ -27,7 +26,6 @@ pub extern "C" fn vkCmdClearColorImage(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdClearAttachments(
     command_buffer: *mut c_void,
     attachment_count: u32,
@@ -70,7 +68,6 @@ pub extern "C" fn vkCmdClearAttachments(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdFillBuffer(
     command_buffer: *mut c_void,
     dst_buffer: u64,
@@ -86,7 +83,6 @@ pub extern "C" fn vkCmdFillBuffer(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdUpdateBuffer(
     command_buffer: *mut c_void,
     dst_buffer: u64,

@@ -4,7 +4,6 @@ use super::*;
 // fences
 // ==================================================================================================
 
-#[no_mangle]
 pub extern "C" fn vkCreateFence(
     _device: *mut c_void,
     p_create_info: *const c_void,
@@ -34,14 +33,12 @@ pub extern "C" fn vkCreateFence(
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyFence(_device: *mut c_void, fence: u64, _p_allocator: *const c_void) {
     ShimState::with_sink(|dev, _| {
         dev.fences.remove(&fence);
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkWaitForFences(
     _device: *mut c_void,
     fence_count: u32,
@@ -64,7 +61,6 @@ pub extern "C" fn vkWaitForFences(
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
 
-#[no_mangle]
 pub extern "C" fn vkResetFences(
     _device: *mut c_void,
     fence_count: u32,
@@ -85,7 +81,6 @@ pub extern "C" fn vkResetFences(
 
 /// `vkGetFenceStatus` — poll the fence's guest-side signaled state (`VK_SUCCESS` when signaled,
 /// `VK_NOT_READY` otherwise). Non-blocking, unlike `vkWaitForFences`. Errors on an unknown fence.
-#[no_mangle]
 pub extern "C" fn vkGetFenceStatus(_device: *mut c_void, fence: u64) -> VkResult {
     ShimState::with_sink(|dev, _| match dev.is_fence_signaled(fence) {
         Ok(true) => VK_SUCCESS,

@@ -6,34 +6,28 @@ use crate::types::*;
 
 use super::support::{CommandBuffer, DynamicState, ShimState};
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetCullMode(command_buffer: *mut c_void, cull_mode: u32) {
     DynamicState::record(command_buffer, |ds| ds.cull_mode = cull_mode);
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetCullModeEXT(command_buffer: *mut c_void, cull_mode: u32) {
     vkCmdSetCullMode(command_buffer, cull_mode)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetFrontFace(command_buffer: *mut c_void, front_face: i32) {
     DynamicState::record(command_buffer, |ds| ds.front_face = front_face);
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetFrontFaceEXT(command_buffer: *mut c_void, front_face: i32) {
     vkCmdSetFrontFace(command_buffer, front_face)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetPrimitiveTopology(command_buffer: *mut c_void, primitive_topology: i32) {
     DynamicState::record(command_buffer, |ds| {
         ds.primitive_topology = primitive_topology
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetPrimitiveTopologyEXT(
     command_buffer: *mut c_void,
     primitive_topology: i32,
@@ -41,7 +35,6 @@ pub extern "C" fn vkCmdSetPrimitiveTopologyEXT(
     vkCmdSetPrimitiveTopology(command_buffer, primitive_topology)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetViewportWithCount(
     command_buffer: *mut c_void,
     viewport_count: u32,
@@ -72,7 +65,6 @@ pub extern "C" fn vkCmdSetViewportWithCount(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetViewportWithCountEXT(
     command_buffer: *mut c_void,
     viewport_count: u32,
@@ -81,7 +73,6 @@ pub extern "C" fn vkCmdSetViewportWithCountEXT(
     vkCmdSetViewportWithCount(command_buffer, viewport_count, p_viewports)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetScissorWithCount(
     command_buffer: *mut c_void,
     scissor_count: u32,
@@ -110,7 +101,6 @@ pub extern "C" fn vkCmdSetScissorWithCount(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetScissorWithCountEXT(
     command_buffer: *mut c_void,
     scissor_count: u32,

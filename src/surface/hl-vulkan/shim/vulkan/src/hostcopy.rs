@@ -38,7 +38,6 @@ impl HostCopy {
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkCopyMemoryToImage(
     _device: *mut c_void,
     p_copy_memory_to_image_info: *const c_void,
@@ -46,7 +45,6 @@ pub extern "C" fn vkCopyMemoryToImage(
     HostCopy::unsupported("vkCopyMemoryToImage", p_copy_memory_to_image_info)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCopyMemoryToImageEXT(
     device: *mut c_void,
     p_copy_memory_to_image_info: *const c_void,
@@ -54,7 +52,6 @@ pub extern "C" fn vkCopyMemoryToImageEXT(
     vkCopyMemoryToImage(device, p_copy_memory_to_image_info)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCopyImageToMemory(
     _device: *mut c_void,
     p_copy_image_to_memory_info: *const c_void,
@@ -62,7 +59,6 @@ pub extern "C" fn vkCopyImageToMemory(
     HostCopy::unsupported("vkCopyImageToMemory", p_copy_image_to_memory_info)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCopyImageToMemoryEXT(
     device: *mut c_void,
     p_copy_image_to_memory_info: *const c_void,
@@ -70,7 +66,6 @@ pub extern "C" fn vkCopyImageToMemoryEXT(
     vkCopyImageToMemory(device, p_copy_image_to_memory_info)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCopyImageToImage(
     _device: *mut c_void,
     p_copy_image_to_image_info: *const c_void,
@@ -78,7 +73,6 @@ pub extern "C" fn vkCopyImageToImage(
     HostCopy::unsupported("vkCopyImageToImage", p_copy_image_to_image_info)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCopyImageToImageEXT(
     device: *mut c_void,
     p_copy_image_to_image_info: *const c_void,
@@ -86,7 +80,6 @@ pub extern "C" fn vkCopyImageToImageEXT(
     vkCopyImageToImage(device, p_copy_image_to_image_info)
 }
 
-#[no_mangle]
 pub extern "C" fn vkTransitionImageLayout(
     _device: *mut c_void,
     _transition_count: u32,
@@ -95,7 +88,6 @@ pub extern "C" fn vkTransitionImageLayout(
     HostCopy::unsupported("vkTransitionImageLayout", p_transitions)
 }
 
-#[no_mangle]
 pub extern "C" fn vkTransitionImageLayoutEXT(
     device: *mut c_void,
     transition_count: u32,
@@ -111,7 +103,6 @@ pub extern "C" fn vkTransitionImageLayoutEXT(
 /// `vkGetImageSubresourceLayout2(EXT/KHR)` — report the linear byte layout of `image`'s base subresource
 /// (the modeled images are single-mip 2D RGBA8 targets: `rowPitch = width*4`). Leaves the output zeroed on
 /// an unknown image. This is the promoted `...2` form of the implemented `vkGetImageSubresourceLayout`.
-#[no_mangle]
 pub extern "C" fn vkGetImageSubresourceLayout2(
     _device: *mut c_void,
     image: u64,
@@ -135,7 +126,6 @@ pub extern "C" fn vkGetImageSubresourceLayout2(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetImageSubresourceLayout2EXT(
     device: *mut c_void,
     image: u64,
@@ -145,7 +135,6 @@ pub extern "C" fn vkGetImageSubresourceLayout2EXT(
     vkGetImageSubresourceLayout2(device, image, p_subresource, p_layout)
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetImageSubresourceLayout2KHR(
     device: *mut c_void,
     image: u64,

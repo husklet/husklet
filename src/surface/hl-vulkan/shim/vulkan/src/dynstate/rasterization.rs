@@ -4,7 +4,6 @@ use hl_vulkan::service::record;
 
 use super::support::{CommandBuffer, DynamicState, ShimState};
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetRasterizerDiscardEnable(
     command_buffer: *mut c_void,
     rasterizer_discard_enable: u32,
@@ -14,7 +13,6 @@ pub extern "C" fn vkCmdSetRasterizerDiscardEnable(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetRasterizerDiscardEnableEXT(
     command_buffer: *mut c_void,
     rasterizer_discard_enable: u32,
@@ -22,19 +20,16 @@ pub extern "C" fn vkCmdSetRasterizerDiscardEnableEXT(
     vkCmdSetRasterizerDiscardEnable(command_buffer, rasterizer_discard_enable)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetDepthBiasEnable(command_buffer: *mut c_void, depth_bias_enable: u32) {
     DynamicState::record(command_buffer, |ds| {
         ds.depth_bias_enable = depth_bias_enable != 0
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetDepthBiasEnableEXT(command_buffer: *mut c_void, depth_bias_enable: u32) {
     vkCmdSetDepthBiasEnable(command_buffer, depth_bias_enable)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetLineStipple(
     command_buffer: *mut c_void,
     line_stipple_factor: u32,
@@ -45,7 +40,6 @@ pub extern "C" fn vkCmdSetLineStipple(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetLineStippleEXT(
     command_buffer: *mut c_void,
     line_stipple_factor: u32,
@@ -54,7 +48,6 @@ pub extern "C" fn vkCmdSetLineStippleEXT(
     vkCmdSetLineStipple(command_buffer, line_stipple_factor, line_stipple_pattern)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetLineStippleEnableEXT(
     command_buffer: *mut c_void,
     stippled_line_enable: u32,
@@ -76,7 +69,6 @@ struct VkDepthBiasInfoEXTHead {
     slope_factor: f32,
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetDepthBias2EXT(
     command_buffer: *mut c_void,
     p_depth_bias_info: *const c_void,
@@ -94,12 +86,10 @@ pub extern "C" fn vkCmdSetDepthBias2EXT(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetPolygonModeEXT(command_buffer: *mut c_void, polygon_mode: i32) {
     DynamicState::record(command_buffer, |ds| ds.polygon_mode = polygon_mode);
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetLineRasterizationModeEXT(
     command_buffer: *mut c_void,
     line_rasterization_mode: i32,
@@ -109,7 +99,6 @@ pub extern "C" fn vkCmdSetLineRasterizationModeEXT(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetDepthClampEnableEXT(
     command_buffer: *mut c_void,
     depth_clamp_enable: u32,
@@ -119,14 +108,12 @@ pub extern "C" fn vkCmdSetDepthClampEnableEXT(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetDepthClipEnableEXT(command_buffer: *mut c_void, depth_clip_enable: u32) {
     DynamicState::record(command_buffer, |ds| {
         ds.depth_clip_enable = depth_clip_enable != 0
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetDepthClipNegativeOneToOneEXT(
     command_buffer: *mut c_void,
     negative_one_to_one: u32,
@@ -136,14 +123,12 @@ pub extern "C" fn vkCmdSetDepthClipNegativeOneToOneEXT(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetConservativeRasterizationModeEXT(command_buffer: *mut c_void, mode: i32) {
     DynamicState::record(command_buffer, |ds| {
         ds.conservative_rasterization_mode = mode
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetExtraPrimitiveOverestimationSizeEXT(
     command_buffer: *mut c_void,
     size: f32,
@@ -153,7 +138,6 @@ pub extern "C" fn vkCmdSetExtraPrimitiveOverestimationSizeEXT(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetRasterizationStreamEXT(
     command_buffer: *mut c_void,
     rasterization_stream: u32,

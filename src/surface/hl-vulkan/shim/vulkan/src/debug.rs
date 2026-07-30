@@ -58,7 +58,6 @@ impl DebugName {
 // VK_EXT_debug_utils
 // ==================================================================================================
 
-#[no_mangle]
 pub extern "C" fn vkSetDebugUtilsObjectNameEXT(
     _device: *mut c_void,
     p_name_info: *const c_void,
@@ -78,7 +77,6 @@ pub extern "C" fn vkSetDebugUtilsObjectNameEXT(
     VK_SUCCESS
 }
 
-#[no_mangle]
 pub extern "C" fn vkSetDebugUtilsObjectTagEXT(
     _device: *mut c_void,
     _p_tag_info: *const c_void,
@@ -87,36 +85,29 @@ pub extern "C" fn vkSetDebugUtilsObjectTagEXT(
     VK_SUCCESS
 }
 
-#[no_mangle]
 pub extern "C" fn vkQueueBeginDebugUtilsLabelEXT(
     _queue: *mut c_void,
     _p_label_info: *const c_void,
 ) {
 }
-#[no_mangle]
 pub extern "C" fn vkQueueEndDebugUtilsLabelEXT(_queue: *mut c_void) {}
-#[no_mangle]
 pub extern "C" fn vkQueueInsertDebugUtilsLabelEXT(
     _queue: *mut c_void,
     _p_label_info: *const c_void,
 ) {
 }
-#[no_mangle]
 pub extern "C" fn vkCmdBeginDebugUtilsLabelEXT(
     _command_buffer: *mut c_void,
     _p_label_info: *const c_void,
 ) {
 }
-#[no_mangle]
 pub extern "C" fn vkCmdEndDebugUtilsLabelEXT(_command_buffer: *mut c_void) {}
-#[no_mangle]
 pub extern "C" fn vkCmdInsertDebugUtilsLabelEXT(
     _command_buffer: *mut c_void,
     _p_label_info: *const c_void,
 ) {
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateDebugUtilsMessengerEXT(
     _instance: *mut c_void,
     _p_create_info: *const c_void,
@@ -135,7 +126,6 @@ pub extern "C" fn vkCreateDebugUtilsMessengerEXT(
     VK_SUCCESS
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyDebugUtilsMessengerEXT(
     _instance: *mut c_void,
     messenger: u64,
@@ -146,7 +136,6 @@ pub extern "C" fn vkDestroyDebugUtilsMessengerEXT(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkSubmitDebugUtilsMessageEXT(
     _instance: *mut c_void,
     _message_severity: i32,
@@ -159,7 +148,6 @@ pub extern "C" fn vkSubmitDebugUtilsMessageEXT(
 // VK_EXT_debug_marker (device object naming/tagging + command-buffer markers)
 // ==================================================================================================
 
-#[no_mangle]
 pub extern "C" fn vkDebugMarkerSetObjectNameEXT(
     _device: *mut c_void,
     p_name_info: *const c_void,
@@ -179,7 +167,6 @@ pub extern "C" fn vkDebugMarkerSetObjectNameEXT(
     VK_SUCCESS
 }
 
-#[no_mangle]
 pub extern "C" fn vkDebugMarkerSetObjectTagEXT(
     _device: *mut c_void,
     _p_tag_info: *const c_void,
@@ -187,15 +174,12 @@ pub extern "C" fn vkDebugMarkerSetObjectTagEXT(
     VK_SUCCESS
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDebugMarkerBeginEXT(
     _command_buffer: *mut c_void,
     _p_marker_info: *const c_void,
 ) {
 }
-#[no_mangle]
 pub extern "C" fn vkCmdDebugMarkerEndEXT(_command_buffer: *mut c_void) {}
-#[no_mangle]
 pub extern "C" fn vkCmdDebugMarkerInsertEXT(
     _command_buffer: *mut c_void,
     _p_marker_info: *const c_void,
@@ -206,7 +190,6 @@ pub extern "C" fn vkCmdDebugMarkerInsertEXT(
 // VK_EXT_debug_report (deprecated instance-level callback)
 // ==================================================================================================
 
-#[no_mangle]
 pub extern "C" fn vkCreateDebugReportCallbackEXT(
     _instance: *mut c_void,
     _p_create_info: *const c_void,
@@ -225,7 +208,6 @@ pub extern "C" fn vkCreateDebugReportCallbackEXT(
     VK_SUCCESS
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyDebugReportCallbackEXT(
     _instance: *mut c_void,
     callback: u64,
@@ -236,7 +218,6 @@ pub extern "C" fn vkDestroyDebugReportCallbackEXT(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkDebugReportMessageEXT(
     _instance: *mut c_void,
     _flags: u32,

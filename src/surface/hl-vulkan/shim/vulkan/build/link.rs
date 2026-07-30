@@ -16,14 +16,13 @@ impl Directives {
         println!("cargo:rerun-if-changed=build.rs");
 
         // The ICD ships as a Linux guest library; GNU soname syntax is invalid on host platforms.
-        if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
-            println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,libvk_hl.so.1");
-            // Vulkan ICDs return pointers to their own entry points through
-            // vk_icdGetInstanceProcAddr. Bind those internal references locally: when the loader is
-            // already in the global ELF scope, normal symbol preemption could otherwise turn (for
-            // example) our vkEnumerateInstanceExtensionProperties pointer into the loader's wrapper,
-            // which the loader correctly rejects as recursive.
-            println!("cargo:rustc-cdylib-link-arg=-Wl,-Bsymbolic");
+        if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux") {
+            return;
         }
+        println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,libvk_hl.so.1");
+        // Vulkan ICDs return pointers to their own entry points through vk_icdGetInstanceProcAddr.
+        // Bind those internal references locally so a proc-address we hand the loader can never
+        // resolve back into libvulkan's wrapper.
+        println!("cargo:rustc-cdylib-link-arg=-Wl,-Bsymbolic");
     }
 }

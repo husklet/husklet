@@ -49,7 +49,6 @@ impl SemaphoreInfo {
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateSemaphore(
     _device: *mut c_void,
     p_create_info: *const c_void,
@@ -72,7 +71,6 @@ pub extern "C" fn vkCreateSemaphore(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroySemaphore(
     _device: *mut c_void,
     semaphore: u64,
@@ -85,7 +83,6 @@ pub extern "C" fn vkDestroySemaphore(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkSignalSemaphore(
     _device: *mut c_void,
     p_signal_info: *const c_void,
@@ -101,7 +98,6 @@ pub extern "C" fn vkSignalSemaphore(
     })
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetSemaphoreCounterValue(
     _device: *mut c_void,
     semaphore: u64,
@@ -118,7 +114,6 @@ pub extern "C" fn vkGetSemaphoreCounterValue(
     })
 }
 
-#[no_mangle]
 pub extern "C" fn vkWaitSemaphores(
     _device: *mut c_void,
     p_wait_info: *const c_void,
@@ -144,7 +139,6 @@ pub extern "C" fn vkWaitSemaphores(
     })
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetSemaphoreCounterValueKHR(
     device: *mut c_void,
     semaphore: u64,
@@ -153,7 +147,6 @@ pub extern "C" fn vkGetSemaphoreCounterValueKHR(
     vkGetSemaphoreCounterValue(device, semaphore, p_value)
 }
 
-#[no_mangle]
 pub extern "C" fn vkSignalSemaphoreKHR(
     device: *mut c_void,
     p_signal_info: *const c_void,
@@ -161,7 +154,6 @@ pub extern "C" fn vkSignalSemaphoreKHR(
     vkSignalSemaphore(device, p_signal_info)
 }
 
-#[no_mangle]
 pub extern "C" fn vkWaitSemaphoresKHR(
     device: *mut c_void,
     p_wait_info: *const c_void,

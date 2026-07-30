@@ -1,6 +1,5 @@
 use super::*;
 
-#[no_mangle]
 pub extern "C" fn vkAcquireNextImage2KHR(
     device: *mut core::ffi::c_void,
     pAcquireInfo: *const core::ffi::c_void,
@@ -13,7 +12,6 @@ pub extern "C" fn vkAcquireNextImage2KHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCompileDeferredNV(
     device: *mut core::ffi::c_void,
     pipeline: u64,
@@ -26,7 +24,6 @@ pub extern "C" fn vkCompileDeferredNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkDeferredOperationJoinKHR(
     device: *mut core::ffi::c_void,
     operation: u64,
@@ -37,7 +34,6 @@ pub extern "C" fn vkDeferredOperationJoinKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetCommandPoolMemoryConsumption(
     device: *mut core::ffi::c_void,
     commandPool: u64,
@@ -54,7 +50,6 @@ pub extern "C" fn vkGetCommandPoolMemoryConsumption(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetCudaModuleCacheNV(
     device: *mut core::ffi::c_void,
     module: u64,
@@ -69,7 +64,6 @@ pub extern "C" fn vkGetCudaModuleCacheNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetDeferredOperationMaxConcurrencyKHR(
     device: *mut core::ffi::c_void,
     operation: u64,
@@ -83,7 +77,6 @@ pub extern "C" fn vkGetDeferredOperationMaxConcurrencyKHR(
     0
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetDeferredOperationResultKHR(
     device: *mut core::ffi::c_void,
     operation: u64,
@@ -97,7 +90,6 @@ pub extern "C" fn vkGetDeferredOperationResultKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetDeviceSubpassShadingMaxWorkgroupSizeHUAWEI(
     device: *mut core::ffi::c_void,
     renderpass: u64,
@@ -113,7 +105,6 @@ pub extern "C" fn vkGetDeviceSubpassShadingMaxWorkgroupSizeHUAWEI(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetDynamicRenderingTilePropertiesQCOM(
     device: *mut core::ffi::c_void,
     pRenderingInfo: *const core::ffi::c_void,
@@ -129,7 +120,6 @@ pub extern "C" fn vkGetDynamicRenderingTilePropertiesQCOM(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetFramebufferTilePropertiesQCOM(
     device: *mut core::ffi::c_void,
     framebuffer: u64,
@@ -147,7 +137,6 @@ pub extern "C" fn vkGetFramebufferTilePropertiesQCOM(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetGeneratedCommandsMemoryRequirementsNV(
     device: *mut core::ffi::c_void,
     pInfo: *const core::ffi::c_void,
@@ -162,7 +151,6 @@ pub extern "C" fn vkGetGeneratedCommandsMemoryRequirementsNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetImageViewAddressNVX(
     device: *mut core::ffi::c_void,
     imageView: u64,
@@ -175,7 +163,6 @@ pub extern "C" fn vkGetImageViewAddressNVX(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetImageViewHandleNVX(
     device: *mut core::ffi::c_void,
     pInfo: *const core::ffi::c_void,
@@ -186,7 +173,6 @@ pub extern "C" fn vkGetImageViewHandleNVX(
     0
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetMemoryHostPointerPropertiesEXT(
     device: *mut core::ffi::c_void,
     handleType: i32,
@@ -204,7 +190,6 @@ pub extern "C" fn vkGetMemoryHostPointerPropertiesEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetMemoryRemoteAddressNV(
     device: *mut core::ffi::c_void,
     pMemoryGetRemoteAddressInfo: *const core::ffi::c_void,
@@ -217,7 +202,6 @@ pub extern "C" fn vkGetMemoryRemoteAddressNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceExternalImageFormatPropertiesNV(
     physicalDevice: *mut core::ffi::c_void,
     format: i32,
@@ -243,7 +227,6 @@ pub extern "C" fn vkGetPhysicalDeviceExternalImageFormatPropertiesNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceFragmentShadingRatesKHR(
     physicalDevice: *mut core::ffi::c_void,
     pFragmentShadingRateCount: *mut core::ffi::c_void,
@@ -259,7 +242,6 @@ pub extern "C" fn vkGetPhysicalDeviceFragmentShadingRatesKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceRefreshableObjectTypesKHR(
     physicalDevice: *mut core::ffi::c_void,
     pRefreshableObjectTypeCount: *mut core::ffi::c_void,
@@ -275,7 +257,6 @@ pub extern "C" fn vkGetPhysicalDeviceRefreshableObjectTypesKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceSupportedFramebufferMixedSamplesCombinationsNV(
     physicalDevice: *mut core::ffi::c_void,
     pCombinationCount: *mut core::ffi::c_void,
@@ -291,7 +272,6 @@ pub extern "C" fn vkGetPhysicalDeviceSupportedFramebufferMixedSamplesCombination
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetValidationCacheDataEXT(
     device: *mut core::ffi::c_void,
     validationCache: u64,
@@ -306,7 +286,6 @@ pub extern "C" fn vkGetValidationCacheDataEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkMergeValidationCachesEXT(
     device: *mut core::ffi::c_void,
     dstCache: u64,
@@ -321,7 +300,6 @@ pub extern "C" fn vkMergeValidationCachesEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkQueueBindSparse(
     queue: *mut core::ffi::c_void,
     bindInfoCount: u32,
@@ -336,7 +314,6 @@ pub extern "C" fn vkQueueBindSparse(
     VK_ERROR_FEATURE_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkQueueNotifyOutOfBandNV(
     queue: *mut core::ffi::c_void,
     pQueueTypeInfo: *const core::ffi::c_void,
@@ -346,7 +323,6 @@ pub extern "C" fn vkQueueNotifyOutOfBandNV(
     crate::stub::Call::unsupported("vkQueueNotifyOutOfBandNV", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkRegisterDeviceEventEXT(
     device: *mut core::ffi::c_void,
     pDeviceEventInfo: *const core::ffi::c_void,
@@ -366,7 +342,6 @@ pub extern "C" fn vkRegisterDeviceEventEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkSetDeviceMemoryPriorityEXT(
     device: *mut core::ffi::c_void,
     memory: u64,
@@ -378,7 +353,6 @@ pub extern "C" fn vkSetDeviceMemoryPriorityEXT(
     crate::stub::Call::unsupported("vkSetDeviceMemoryPriorityEXT", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkSetHdrMetadataEXT(
     device: *mut core::ffi::c_void,
     swapchainCount: u32,
@@ -392,7 +366,6 @@ pub extern "C" fn vkSetHdrMetadataEXT(
     crate::stub::Call::unsupported("vkSetHdrMetadataEXT", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkSetLocalDimmingAMD(
     device: *mut core::ffi::c_void,
     swapChain: u64,

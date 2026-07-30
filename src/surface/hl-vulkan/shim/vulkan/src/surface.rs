@@ -32,7 +32,6 @@ impl Surface {
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateXcbSurfaceKHR(
     _instance: *mut c_void,
     _p_create_info: *const c_void,
@@ -42,7 +41,6 @@ pub extern "C" fn vkCreateXcbSurfaceKHR(
     Surface::create(p_surface)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateXlibSurfaceKHR(
     _instance: *mut c_void,
     _p_create_info: *const c_void,
@@ -52,7 +50,6 @@ pub extern "C" fn vkCreateXlibSurfaceKHR(
     Surface::create(p_surface)
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateWaylandSurfaceKHR(
     _instance: *mut c_void,
     p_create_info: *const c_void,
@@ -82,7 +79,6 @@ pub extern "C" fn vkCreateWaylandSurfaceKHR(
     VK_SUCCESS
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateHeadlessSurfaceEXT(
     _instance: *mut c_void,
     _p_create_info: *const c_void,
@@ -92,7 +88,6 @@ pub extern "C" fn vkCreateHeadlessSurfaceEXT(
     Surface::create(p_surface)
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroySurfaceKHR(
     _instance: *mut c_void,
     surface: u64,
@@ -106,7 +101,6 @@ pub extern "C" fn vkDestroySurfaceKHR(
 
 // ---- physical-device presentation-support queries (the lone family presents) ---------------------
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceXcbPresentationSupportKHR(
     _physical_device: *mut c_void,
     queue_family_index: u32,
@@ -116,7 +110,6 @@ pub extern "C" fn vkGetPhysicalDeviceXcbPresentationSupportKHR(
     PresentationSupport::query(queue_family_index)
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceXlibPresentationSupportKHR(
     _physical_device: *mut c_void,
     queue_family_index: u32,
@@ -126,7 +119,6 @@ pub extern "C" fn vkGetPhysicalDeviceXlibPresentationSupportKHR(
     PresentationSupport::query(queue_family_index)
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceWaylandPresentationSupportKHR(
     _physical_device: *mut c_void,
     queue_family_index: u32,
@@ -148,7 +140,6 @@ impl PresentationSupport {
 
 // ---- physical-device surface queries -------------------------------------------------------------
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceSurfaceSupportKHR(
     _physical_device: *mut c_void,
     queue_family_index: u32,
@@ -169,7 +160,6 @@ pub extern "C" fn vkGetPhysicalDeviceSurfaceSupportKHR(
     VK_SUCCESS
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
     _physical_device: *mut c_void,
     surface: u64,
@@ -206,7 +196,6 @@ pub extern "C" fn vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
     VK_SUCCESS
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceSurfaceFormatsKHR(
     _physical_device: *mut c_void,
     surface: u64,
@@ -226,7 +215,6 @@ pub extern "C" fn vkGetPhysicalDeviceSurfaceFormatsKHR(
     unsafe { write_enumeration(&formats, p_surface_format_count, p_surface_formats) }
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceSurfacePresentModesKHR(
     _physical_device: *mut c_void,
     surface: u64,

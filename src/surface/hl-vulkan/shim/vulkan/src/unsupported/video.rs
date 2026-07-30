@@ -1,6 +1,5 @@
 use super::*;
 
-#[no_mangle]
 pub extern "C" fn vkBindVideoSessionMemoryKHR(
     device: *mut core::ffi::c_void,
     videoSession: u64,
@@ -18,7 +17,6 @@ pub extern "C" fn vkBindVideoSessionMemoryKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBeginVideoCodingKHR(
     commandBuffer: *mut core::ffi::c_void,
     pBeginInfo: *const core::ffi::c_void,
@@ -28,7 +26,6 @@ pub extern "C" fn vkCmdBeginVideoCodingKHR(
     crate::stub::Call::unsupported("vkCmdBeginVideoCodingKHR", "extension family not modeled");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdControlVideoCodingKHR(
     commandBuffer: *mut core::ffi::c_void,
     pCodingControlInfo: *const core::ffi::c_void,
@@ -38,7 +35,6 @@ pub extern "C" fn vkCmdControlVideoCodingKHR(
     crate::stub::Call::unsupported("vkCmdControlVideoCodingKHR", "extension family not modeled");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDecodeVideoKHR(
     commandBuffer: *mut core::ffi::c_void,
     pDecodeInfo: *const core::ffi::c_void,
@@ -48,7 +44,6 @@ pub extern "C" fn vkCmdDecodeVideoKHR(
     crate::stub::Call::unsupported("vkCmdDecodeVideoKHR", "extension family not modeled");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdEncodeVideoKHR(
     commandBuffer: *mut core::ffi::c_void,
     pEncodeInfo: *const core::ffi::c_void,
@@ -58,7 +53,6 @@ pub extern "C" fn vkCmdEncodeVideoKHR(
     crate::stub::Call::unsupported("vkCmdEncodeVideoKHR", "extension family not modeled");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdEndVideoCodingKHR(
     commandBuffer: *mut core::ffi::c_void,
     pEndCodingInfo: *const core::ffi::c_void,
@@ -68,7 +62,6 @@ pub extern "C" fn vkCmdEndVideoCodingKHR(
     crate::stub::Call::unsupported("vkCmdEndVideoCodingKHR", "extension family not modeled");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateVideoSessionKHR(
     device: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -88,7 +81,6 @@ pub extern "C" fn vkCreateVideoSessionKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateVideoSessionParametersKHR(
     device: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -111,7 +103,6 @@ pub extern "C" fn vkCreateVideoSessionParametersKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyVideoSessionKHR(
     device: *mut core::ffi::c_void,
     videoSession: u64,
@@ -123,7 +114,6 @@ pub extern "C" fn vkDestroyVideoSessionKHR(
     crate::stub::Call::unsupported("vkDestroyVideoSessionKHR", "extension family not modeled");
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyVideoSessionParametersKHR(
     device: *mut core::ffi::c_void,
     videoSessionParameters: u64,
@@ -138,7 +128,6 @@ pub extern "C" fn vkDestroyVideoSessionParametersKHR(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetEncodedVideoSessionParametersKHR(
     device: *mut core::ffi::c_void,
     pVideoSessionParametersInfo: *const core::ffi::c_void,
@@ -158,7 +147,6 @@ pub extern "C" fn vkGetEncodedVideoSessionParametersKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceVideoCapabilitiesKHR(
     physicalDevice: *mut core::ffi::c_void,
     pVideoProfile: *const core::ffi::c_void,
@@ -174,7 +162,6 @@ pub extern "C" fn vkGetPhysicalDeviceVideoCapabilitiesKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceVideoEncodeQualityLevelPropertiesKHR(
     physicalDevice: *mut core::ffi::c_void,
     pQualityLevelInfo: *const core::ffi::c_void,
@@ -190,7 +177,6 @@ pub extern "C" fn vkGetPhysicalDeviceVideoEncodeQualityLevelPropertiesKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceVideoFormatPropertiesKHR(
     physicalDevice: *mut core::ffi::c_void,
     pVideoFormatInfo: *const core::ffi::c_void,
@@ -208,7 +194,6 @@ pub extern "C" fn vkGetPhysicalDeviceVideoFormatPropertiesKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetVideoSessionMemoryRequirementsKHR(
     device: *mut core::ffi::c_void,
     videoSession: u64,
@@ -226,7 +211,6 @@ pub extern "C" fn vkGetVideoSessionMemoryRequirementsKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkUpdateVideoSessionParametersKHR(
     device: *mut core::ffi::c_void,
     videoSessionParameters: u64,

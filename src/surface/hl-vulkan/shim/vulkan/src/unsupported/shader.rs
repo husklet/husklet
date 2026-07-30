@@ -1,6 +1,5 @@
 use super::*;
 
-#[no_mangle]
 pub extern "C" fn vkCmdBindPipelineShaderGroupNV(
     commandBuffer: *mut core::ffi::c_void,
     pipelineBindPoint: i32,
@@ -14,7 +13,6 @@ pub extern "C" fn vkCmdBindPipelineShaderGroupNV(
     crate::stub::Call::unsupported("vkCmdBindPipelineShaderGroupNV", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBindShadersEXT(
     commandBuffer: *mut core::ffi::c_void,
     stageCount: u32,
@@ -28,7 +26,6 @@ pub extern "C" fn vkCmdBindShadersEXT(
     crate::stub::Call::unsupported("vkCmdBindShadersEXT", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdUpdatePipelineIndirectBufferNV(
     commandBuffer: *mut core::ffi::c_void,
     pipelineBindPoint: i32,
@@ -43,7 +40,6 @@ pub extern "C" fn vkCmdUpdatePipelineIndirectBufferNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateExecutionGraphPipelinesAMDX(
     device: *mut core::ffi::c_void,
     pipelineCache: u64,
@@ -70,7 +66,6 @@ pub extern "C" fn vkCreateExecutionGraphPipelinesAMDX(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateShadersEXT(
     device: *mut core::ffi::c_void,
     createInfoCount: u32,
@@ -92,7 +87,6 @@ pub extern "C" fn vkCreateShadersEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyShaderEXT(
     device: *mut core::ffi::c_void,
     shader: u64,
@@ -104,7 +98,6 @@ pub extern "C" fn vkDestroyShaderEXT(
     crate::stub::Call::unsupported("vkDestroyShaderEXT", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetExecutionGraphPipelineNodeIndexAMDX(
     device: *mut core::ffi::c_void,
     executionGraph: u64,
@@ -122,7 +115,6 @@ pub extern "C" fn vkGetExecutionGraphPipelineNodeIndexAMDX(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetExecutionGraphPipelineScratchSizeAMDX(
     device: *mut core::ffi::c_void,
     executionGraph: u64,
@@ -138,7 +130,6 @@ pub extern "C" fn vkGetExecutionGraphPipelineScratchSizeAMDX(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPipelineExecutableInternalRepresentationsKHR(
     device: *mut core::ffi::c_void,
     pExecutableInfo: *const core::ffi::c_void,
@@ -156,7 +147,6 @@ pub extern "C" fn vkGetPipelineExecutableInternalRepresentationsKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPipelineExecutablePropertiesKHR(
     device: *mut core::ffi::c_void,
     pPipelineInfo: *const core::ffi::c_void,
@@ -174,7 +164,6 @@ pub extern "C" fn vkGetPipelineExecutablePropertiesKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPipelineExecutableStatisticsKHR(
     device: *mut core::ffi::c_void,
     pExecutableInfo: *const core::ffi::c_void,
@@ -192,7 +181,6 @@ pub extern "C" fn vkGetPipelineExecutableStatisticsKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPipelineIndirectDeviceAddressNV(
     device: *mut core::ffi::c_void,
     pInfo: *const core::ffi::c_void,
@@ -206,7 +194,6 @@ pub extern "C" fn vkGetPipelineIndirectDeviceAddressNV(
     0
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPipelineIndirectMemoryRequirementsNV(
     device: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -221,7 +208,6 @@ pub extern "C" fn vkGetPipelineIndirectMemoryRequirementsNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetPipelinePropertiesEXT(
     device: *mut core::ffi::c_void,
     pPipelineInfo: *const core::ffi::c_void,
@@ -234,7 +220,6 @@ pub extern "C" fn vkGetPipelinePropertiesEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetShaderBinaryDataEXT(
     device: *mut core::ffi::c_void,
     shader: u64,
@@ -249,7 +234,6 @@ pub extern "C" fn vkGetShaderBinaryDataEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetShaderInfoAMD(
     device: *mut core::ffi::c_void,
     pipeline: u64,
@@ -268,7 +252,6 @@ pub extern "C" fn vkGetShaderInfoAMD(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetShaderModuleCreateInfoIdentifierEXT(
     device: *mut core::ffi::c_void,
     pCreateInfo: *const core::ffi::c_void,
@@ -283,7 +266,6 @@ pub extern "C" fn vkGetShaderModuleCreateInfoIdentifierEXT(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetShaderModuleIdentifierEXT(
     device: *mut core::ffi::c_void,
     shaderModule: u64,

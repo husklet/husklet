@@ -211,12 +211,10 @@ impl Transfer2 {
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCopyBuffer2(command_buffer: *mut c_void, p_copy_buffer_info: *const c_void) {
     Transfer2::copy_buffer(command_buffer, p_copy_buffer_info);
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCopyBuffer2KHR(
     command_buffer: *mut c_void,
     p_copy_buffer_info: *const c_void,
@@ -224,7 +222,6 @@ pub extern "C" fn vkCmdCopyBuffer2KHR(
     Transfer2::copy_buffer(command_buffer, p_copy_buffer_info);
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCopyBufferToImage2(
     command_buffer: *mut c_void,
     p_copy_buffer_to_image_info: *const c_void,
@@ -232,7 +229,6 @@ pub extern "C" fn vkCmdCopyBufferToImage2(
     Transfer2::copy_buffer_to_image(command_buffer, p_copy_buffer_to_image_info);
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCopyBufferToImage2KHR(
     command_buffer: *mut c_void,
     p_copy_buffer_to_image_info: *const c_void,
@@ -240,12 +236,10 @@ pub extern "C" fn vkCmdCopyBufferToImage2KHR(
     Transfer2::copy_buffer_to_image(command_buffer, p_copy_buffer_to_image_info);
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCopyImage2(command_buffer: *mut c_void, p_copy_image_info: *const c_void) {
     Transfer2::copy_image(command_buffer, p_copy_image_info);
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCopyImage2KHR(
     command_buffer: *mut c_void,
     p_copy_image_info: *const c_void,
@@ -253,7 +247,6 @@ pub extern "C" fn vkCmdCopyImage2KHR(
     Transfer2::copy_image(command_buffer, p_copy_image_info);
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCopyImageToBuffer2(
     command_buffer: *mut c_void,
     p_copy_image_to_buffer_info: *const c_void,
@@ -261,7 +254,6 @@ pub extern "C" fn vkCmdCopyImageToBuffer2(
     Transfer2::copy_image_to_buffer(command_buffer, p_copy_image_to_buffer_info);
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCopyImageToBuffer2KHR(
     command_buffer: *mut c_void,
     p_copy_image_to_buffer_info: *const c_void,
@@ -269,12 +261,10 @@ pub extern "C" fn vkCmdCopyImageToBuffer2KHR(
     Transfer2::copy_image_to_buffer(command_buffer, p_copy_image_to_buffer_info);
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBlitImage2(command_buffer: *mut c_void, p_blit_image_info: *const c_void) {
     Transfer2::blit_image(command_buffer, p_blit_image_info);
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBlitImage2KHR(
     command_buffer: *mut c_void,
     p_blit_image_info: *const c_void,

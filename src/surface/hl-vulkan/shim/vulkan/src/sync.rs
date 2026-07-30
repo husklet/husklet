@@ -45,7 +45,6 @@ impl CommandBuffer {
 // events
 // ==================================================================================================
 
-#[no_mangle]
 pub extern "C" fn vkCreateEvent(
     _device: *mut c_void,
     _p_create_info: *const c_void,
@@ -64,7 +63,6 @@ pub extern "C" fn vkCreateEvent(
     }
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyEvent(_device: *mut c_void, event: u64, _p_allocator: *const c_void) {
     StateStore::with(|s| {
         if let Some(d) = s.device.as_mut() {
@@ -74,7 +72,6 @@ pub extern "C" fn vkDestroyEvent(_device: *mut c_void, event: u64, _p_allocator:
 }
 
 /// `vkGetEventStatus` — `VK_EVENT_SET` (3) if signaled, `VK_EVENT_RESET` (4) if not.
-#[no_mangle]
 pub extern "C" fn vkGetEventStatus(_device: *mut c_void, event: u64) -> VkResult {
     ShimState::with_device_result(|d| match d.event_status(event) {
         Ok(true) => VK_EVENT_SET,
@@ -83,7 +80,6 @@ pub extern "C" fn vkGetEventStatus(_device: *mut c_void, event: u64) -> VkResult
     })
 }
 
-#[no_mangle]
 pub extern "C" fn vkSetEvent(_device: *mut c_void, event: u64) -> VkResult {
     ShimState::with_device_result(|d| match d.set_event(event, true) {
         Ok(()) => VK_SUCCESS,
@@ -91,7 +87,6 @@ pub extern "C" fn vkSetEvent(_device: *mut c_void, event: u64) -> VkResult {
     })
 }
 
-#[no_mangle]
 pub extern "C" fn vkResetEvent(_device: *mut c_void, event: u64) -> VkResult {
     ShimState::with_device_result(|d| match d.set_event(event, false) {
         Ok(()) => VK_SUCCESS,
@@ -99,7 +94,6 @@ pub extern "C" fn vkResetEvent(_device: *mut c_void, event: u64) -> VkResult {
     })
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetEvent(command_buffer: *mut c_void, event: u64, _stage_mask: u32) {
     let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
@@ -111,7 +105,6 @@ pub extern "C" fn vkCmdSetEvent(command_buffer: *mut c_void, event: u64, _stage_
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdResetEvent(command_buffer: *mut c_void, event: u64, _stage_mask: u32) {
     let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
@@ -123,7 +116,6 @@ pub extern "C" fn vkCmdResetEvent(command_buffer: *mut c_void, event: u64, _stag
     });
 }
 
-#[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn vkCmdWaitEvents(
     command_buffer: *mut c_void,
@@ -157,7 +149,6 @@ pub extern "C" fn vkCmdWaitEvents(
 // query pools
 // ==================================================================================================
 
-#[no_mangle]
 pub extern "C" fn vkCreateQueryPool(
     _device: *mut c_void,
     p_create_info: *const c_void,
@@ -183,7 +174,6 @@ pub extern "C" fn vkCreateQueryPool(
     })
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyQueryPool(
     _device: *mut c_void,
     query_pool: u64,
@@ -197,7 +187,6 @@ pub extern "C" fn vkDestroyQueryPool(
 }
 
 /// `vkGetQueryPoolResults` — copy the pool's results into the caller's buffer honouring the flag set.
-#[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn vkGetQueryPoolResults(
     _device: *mut c_void,
@@ -238,7 +227,6 @@ pub extern "C" fn vkGetQueryPoolResults(
 }
 
 /// `vkResetQueryPool` (Vulkan 1.2 / `VK_EXT_host_query_reset`) — host reset of a query-pool range.
-#[no_mangle]
 pub extern "C" fn vkResetQueryPool(
     _device: *mut c_void,
     query_pool: u64,
@@ -252,7 +240,6 @@ pub extern "C" fn vkResetQueryPool(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBeginQuery(
     command_buffer: *mut c_void,
     query_pool: u64,
@@ -269,7 +256,6 @@ pub extern "C" fn vkCmdBeginQuery(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdEndQuery(command_buffer: *mut c_void, query_pool: u64, query: u32) {
     let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
@@ -281,7 +267,6 @@ pub extern "C" fn vkCmdEndQuery(command_buffer: *mut c_void, query_pool: u64, qu
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdResetQueryPool(
     command_buffer: *mut c_void,
     query_pool: u64,
@@ -298,7 +283,6 @@ pub extern "C" fn vkCmdResetQueryPool(
     });
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdWriteTimestamp(
     command_buffer: *mut c_void,
     _pipeline_stage: u32,
@@ -320,7 +304,6 @@ pub extern "C" fn vkCmdWriteTimestamp(
 // ==================================================================================================
 
 /// `vkResetQueryPoolEXT` — the `VK_EXT_host_query_reset` alias.
-#[no_mangle]
 pub extern "C" fn vkResetQueryPoolEXT(
     device: *mut c_void,
     query_pool: u64,
@@ -336,7 +319,6 @@ pub extern "C" fn vkResetQueryPoolEXT(
 
 /// `vkCmdWriteTimestamp2` — record a timestamp write (the 64-bit `stage` is not modeled). Same lowering
 /// as `vkCmdWriteTimestamp`.
-#[no_mangle]
 pub extern "C" fn vkCmdWriteTimestamp2(
     command_buffer: *mut c_void,
     _stage: u64,
@@ -354,7 +336,6 @@ pub extern "C" fn vkCmdWriteTimestamp2(
 }
 
 /// `vkCmdWriteTimestamp2KHR` — the `VK_KHR_synchronization2` alias.
-#[no_mangle]
 pub extern "C" fn vkCmdWriteTimestamp2KHR(
     command_buffer: *mut c_void,
     stage: u64,
@@ -365,7 +346,6 @@ pub extern "C" fn vkCmdWriteTimestamp2KHR(
 }
 
 /// `vkCmdSetEvent2` — record a device set of `event` (the `VkDependencyInfo` scope is not modeled).
-#[no_mangle]
 pub extern "C" fn vkCmdSetEvent2(
     command_buffer: *mut c_void,
     event: u64,
@@ -382,7 +362,6 @@ pub extern "C" fn vkCmdSetEvent2(
 }
 
 /// `vkCmdSetEvent2KHR` — the `VK_KHR_synchronization2` alias.
-#[no_mangle]
 pub extern "C" fn vkCmdSetEvent2KHR(
     command_buffer: *mut c_void,
     event: u64,
@@ -392,7 +371,6 @@ pub extern "C" fn vkCmdSetEvent2KHR(
 }
 
 /// `vkCmdResetEvent2` — record a device reset of `event` (the 64-bit `stageMask` is not modeled).
-#[no_mangle]
 pub extern "C" fn vkCmdResetEvent2(command_buffer: *mut c_void, event: u64, _stage_mask: u64) {
     let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
@@ -405,14 +383,12 @@ pub extern "C" fn vkCmdResetEvent2(command_buffer: *mut c_void, event: u64, _sta
 }
 
 /// `vkCmdResetEvent2KHR` — the `VK_KHR_synchronization2` alias.
-#[no_mangle]
 pub extern "C" fn vkCmdResetEvent2KHR(command_buffer: *mut c_void, event: u64, stage_mask: u64) {
     vkCmdResetEvent2(command_buffer, event, stage_mask)
 }
 
 /// `vkCmdWaitEvents2` — validate the waited events (the per-event `VkDependencyInfo` array is not modeled).
 /// Same lowering as `vkCmdWaitEvents`.
-#[no_mangle]
 pub extern "C" fn vkCmdWaitEvents2(
     command_buffer: *mut c_void,
     event_count: u32,
@@ -435,7 +411,6 @@ pub extern "C" fn vkCmdWaitEvents2(
 }
 
 /// `vkCmdWaitEvents2KHR` — the `VK_KHR_synchronization2` alias.
-#[no_mangle]
 pub extern "C" fn vkCmdWaitEvents2KHR(
     command_buffer: *mut c_void,
     event_count: u32,
@@ -445,7 +420,6 @@ pub extern "C" fn vkCmdWaitEvents2KHR(
     vkCmdWaitEvents2(command_buffer, event_count, p_events, p_dependency_infos)
 }
 
-#[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn vkCmdCopyQueryPoolResults(
     command_buffer: *mut c_void,

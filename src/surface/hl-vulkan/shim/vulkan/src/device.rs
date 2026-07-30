@@ -11,6 +11,7 @@ use hl_gpu::{CommandSink, FeatureRequest, PresentKind, WIRE_VERSION};
 use hl_gpu::protocol::model::capability::{binding_array, gpu_feature};
 use hl_vulkan::Instance;
 
+use crate::promoted_features::PromotedFeatures;
 use crate::state::StateStore;
 use crate::types::*;
 
@@ -42,6 +43,14 @@ fn validates_features(create_info: &VkDeviceCreateInfo) -> bool {
             }
         } else if header.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES {
             // Dynamic rendering is the one pNext feature currently advertised and lowered.
+        } else if let Some(aggregate) = PromotedFeatures::matching(header.s_type) {
+            // A promoted feature enabled through `VkPhysicalDeviceVulkan1{1,2,3,4}Features`. Vulkan
+            // requires `VK_ERROR_FEATURE_NOT_PRESENT` here; ignoring the aggregate returned
+            // `VK_SUCCESS` for a feature that was then silently absent at draw time.
+            if let Some(member) = unsafe { aggregate.first_unimplemented_request(node) } {
+                crate::stub::Call::unsupported("vkCreateDevice", &member);
+                return false;
+            }
         }
         node = header.p_next;
     }
@@ -144,7 +153,6 @@ pub(crate) fn requested_gpu_features(create_info: Option<&VkDeviceCreateInfo>) -
     bits
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateDevice(
     _physical_device: *mut c_void,
     p_create_info: *const c_void,
@@ -200,12 +208,10 @@ pub extern "C" fn vkCreateDevice(
     VK_SUCCESS
 }
 
-#[no_mangle]
 pub extern "C" fn vkDestroyDevice(_device: *mut c_void, _p_allocator: *const c_void) {
     StateStore::with(|s| s.device = None);
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetDeviceQueue(
     _device: *mut c_void,
     _queue_family_index: u32,
@@ -222,7 +228,6 @@ pub extern "C" fn vkGetDeviceQueue(
 /// `vkGetDeviceQueue2` (Vulkan 1.1) — the `VkDeviceQueueInfo2`-parameterized retrieval. The device
 /// exposes exactly one queue (family 0, index 0), so this returns the same lone queue token as
 /// `vkGetDeviceQueue`; a request for any other `(family, index)` returns `VK_NULL_HANDLE`.
-#[no_mangle]
 pub extern "C" fn vkGetDeviceQueue2(
     _device: *mut c_void,
     p_queue_info: *const c_void,

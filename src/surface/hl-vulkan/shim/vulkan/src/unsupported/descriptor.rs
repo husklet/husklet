@@ -1,6 +1,5 @@
 use super::*;
 
-#[no_mangle]
 pub extern "C" fn vkCmdBindDescriptorBufferEmbeddedSamplers2EXT(
     commandBuffer: *mut core::ffi::c_void,
     pBindDescriptorBufferEmbeddedSamplersInfo: *const core::ffi::c_void,
@@ -13,7 +12,6 @@ pub extern "C" fn vkCmdBindDescriptorBufferEmbeddedSamplers2EXT(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBindDescriptorBufferEmbeddedSamplersEXT(
     commandBuffer: *mut core::ffi::c_void,
     pipelineBindPoint: i32,
@@ -30,7 +28,6 @@ pub extern "C" fn vkCmdBindDescriptorBufferEmbeddedSamplersEXT(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBindDescriptorBuffersEXT(
     commandBuffer: *mut core::ffi::c_void,
     bufferCount: u32,
@@ -42,7 +39,6 @@ pub extern "C" fn vkCmdBindDescriptorBuffersEXT(
     crate::stub::Call::unsupported("vkCmdBindDescriptorBuffersEXT", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBindDescriptorSets2(
     commandBuffer: *mut core::ffi::c_void,
     pBindDescriptorSetsInfo: *const core::ffi::c_void,
@@ -52,7 +48,6 @@ pub extern "C" fn vkCmdBindDescriptorSets2(
     crate::stub::Call::unsupported("vkCmdBindDescriptorSets2", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdBindDescriptorSets2KHR(
     commandBuffer: *mut core::ffi::c_void,
     pBindDescriptorSetsInfo: *const core::ffi::c_void,
@@ -62,27 +57,6 @@ pub extern "C" fn vkCmdBindDescriptorSets2KHR(
     crate::stub::Call::unsupported("vkCmdBindDescriptorSets2KHR", "extension not advertised");
 }
 
-#[no_mangle]
-pub extern "C" fn vkCmdPushConstants2(
-    commandBuffer: *mut core::ffi::c_void,
-    pPushConstantsInfo: *const core::ffi::c_void,
-) {
-    let _ = commandBuffer;
-    let _ = pPushConstantsInfo;
-    crate::stub::Call::unsupported("vkCmdPushConstants2", "extension not advertised");
-}
-
-#[no_mangle]
-pub extern "C" fn vkCmdPushConstants2KHR(
-    commandBuffer: *mut core::ffi::c_void,
-    pPushConstantsInfo: *const core::ffi::c_void,
-) {
-    let _ = commandBuffer;
-    let _ = pPushConstantsInfo;
-    crate::stub::Call::unsupported("vkCmdPushConstants2KHR", "extension not advertised");
-}
-
-#[no_mangle]
 pub extern "C" fn vkCmdPushDescriptorSet(
     commandBuffer: *mut core::ffi::c_void,
     pipelineBindPoint: i32,
@@ -100,7 +74,6 @@ pub extern "C" fn vkCmdPushDescriptorSet(
     crate::stub::Call::unsupported("vkCmdPushDescriptorSet", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdPushDescriptorSet2(
     commandBuffer: *mut core::ffi::c_void,
     pPushDescriptorSetInfo: *const core::ffi::c_void,
@@ -110,7 +83,6 @@ pub extern "C" fn vkCmdPushDescriptorSet2(
     crate::stub::Call::unsupported("vkCmdPushDescriptorSet2", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdPushDescriptorSet2KHR(
     commandBuffer: *mut core::ffi::c_void,
     pPushDescriptorSetInfo: *const core::ffi::c_void,
@@ -120,7 +92,6 @@ pub extern "C" fn vkCmdPushDescriptorSet2KHR(
     crate::stub::Call::unsupported("vkCmdPushDescriptorSet2KHR", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdPushDescriptorSetKHR(
     commandBuffer: *mut core::ffi::c_void,
     pipelineBindPoint: i32,
@@ -138,7 +109,6 @@ pub extern "C" fn vkCmdPushDescriptorSetKHR(
     crate::stub::Call::unsupported("vkCmdPushDescriptorSetKHR", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdPushDescriptorSetWithTemplate(
     commandBuffer: *mut core::ffi::c_void,
     descriptorUpdateTemplate: u64,
@@ -157,7 +127,6 @@ pub extern "C" fn vkCmdPushDescriptorSetWithTemplate(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdPushDescriptorSetWithTemplate2(
     commandBuffer: *mut core::ffi::c_void,
     pPushDescriptorSetWithTemplateInfo: *const core::ffi::c_void,
@@ -170,7 +139,6 @@ pub extern "C" fn vkCmdPushDescriptorSetWithTemplate2(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdPushDescriptorSetWithTemplate2KHR(
     commandBuffer: *mut core::ffi::c_void,
     pPushDescriptorSetWithTemplateInfo: *const core::ffi::c_void,
@@ -183,7 +151,6 @@ pub extern "C" fn vkCmdPushDescriptorSetWithTemplate2KHR(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdPushDescriptorSetWithTemplateKHR(
     commandBuffer: *mut core::ffi::c_void,
     descriptorUpdateTemplate: u64,
@@ -202,7 +169,6 @@ pub extern "C" fn vkCmdPushDescriptorSetWithTemplateKHR(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetDescriptorBufferOffsets2EXT(
     commandBuffer: *mut core::ffi::c_void,
     pSetDescriptorBufferOffsetsInfo: *const core::ffi::c_void,
@@ -215,7 +181,6 @@ pub extern "C" fn vkCmdSetDescriptorBufferOffsets2EXT(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetDescriptorBufferOffsetsEXT(
     commandBuffer: *mut core::ffi::c_void,
     pipelineBindPoint: i32,
@@ -238,7 +203,6 @@ pub extern "C" fn vkCmdSetDescriptorBufferOffsetsEXT(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetBufferOpaqueCaptureDescriptorDataEXT(
     device: *mut core::ffi::c_void,
     pInfo: *const core::ffi::c_void,
@@ -254,7 +218,6 @@ pub extern "C" fn vkGetBufferOpaqueCaptureDescriptorDataEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetDescriptorEXT(
     device: *mut core::ffi::c_void,
     pDescriptorInfo: *const core::ffi::c_void,
@@ -268,7 +231,6 @@ pub extern "C" fn vkGetDescriptorEXT(
     crate::stub::Call::unsupported("vkGetDescriptorEXT", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetDescriptorSetHostMappingVALVE(
     device: *mut core::ffi::c_void,
     descriptorSet: u64,
@@ -283,7 +245,6 @@ pub extern "C" fn vkGetDescriptorSetHostMappingVALVE(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetDescriptorSetLayoutBindingOffsetEXT(
     device: *mut core::ffi::c_void,
     layout: u64,
@@ -300,7 +261,6 @@ pub extern "C" fn vkGetDescriptorSetLayoutBindingOffsetEXT(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetDescriptorSetLayoutHostMappingInfoVALVE(
     device: *mut core::ffi::c_void,
     pBindingReference: *const core::ffi::c_void,
@@ -315,7 +275,6 @@ pub extern "C" fn vkGetDescriptorSetLayoutHostMappingInfoVALVE(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetDescriptorSetLayoutSizeEXT(
     device: *mut core::ffi::c_void,
     layout: u64,
@@ -330,7 +289,6 @@ pub extern "C" fn vkGetDescriptorSetLayoutSizeEXT(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetImageOpaqueCaptureDescriptorDataEXT(
     device: *mut core::ffi::c_void,
     pInfo: *const core::ffi::c_void,
@@ -346,7 +304,6 @@ pub extern "C" fn vkGetImageOpaqueCaptureDescriptorDataEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetImageViewOpaqueCaptureDescriptorDataEXT(
     device: *mut core::ffi::c_void,
     pInfo: *const core::ffi::c_void,
@@ -362,7 +319,6 @@ pub extern "C" fn vkGetImageViewOpaqueCaptureDescriptorDataEXT(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetSamplerOpaqueCaptureDescriptorDataEXT(
     device: *mut core::ffi::c_void,
     pInfo: *const core::ffi::c_void,

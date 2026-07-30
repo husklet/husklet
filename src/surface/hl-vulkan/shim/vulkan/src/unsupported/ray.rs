@@ -1,6 +1,5 @@
 use super::*;
 
-#[no_mangle]
 pub extern "C" fn vkCmdSetRayTracingPipelineStackSizeKHR(
     commandBuffer: *mut core::ffi::c_void,
     pipelineStackSize: u32,
@@ -13,7 +12,6 @@ pub extern "C" fn vkCmdSetRayTracingPipelineStackSizeKHR(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateRayTracingPipelinesKHR(
     device: *mut core::ffi::c_void,
     deferredOperation: u64,
@@ -42,7 +40,6 @@ pub extern "C" fn vkCreateRayTracingPipelinesKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkCreateRayTracingPipelinesNV(
     device: *mut core::ffi::c_void,
     pipelineCache: u64,
@@ -69,7 +66,6 @@ pub extern "C" fn vkCreateRayTracingPipelinesNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetRayTracingCaptureReplayShaderGroupHandlesKHR(
     device: *mut core::ffi::c_void,
     pipeline: u64,
@@ -91,7 +87,6 @@ pub extern "C" fn vkGetRayTracingCaptureReplayShaderGroupHandlesKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetRayTracingShaderGroupHandlesKHR(
     device: *mut core::ffi::c_void,
     pipeline: u64,
@@ -113,7 +108,6 @@ pub extern "C" fn vkGetRayTracingShaderGroupHandlesKHR(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetRayTracingShaderGroupHandlesNV(
     device: *mut core::ffi::c_void,
     pipeline: u64,
@@ -135,7 +129,6 @@ pub extern "C" fn vkGetRayTracingShaderGroupHandlesNV(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-#[no_mangle]
 pub extern "C" fn vkGetRayTracingShaderGroupStackSizeKHR(
     device: *mut core::ffi::c_void,
     pipeline: u64,

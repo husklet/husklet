@@ -1,4 +1,3 @@
-#[no_mangle]
 pub extern "C" fn vkCmdTraceRaysIndirect2KHR(
     commandBuffer: *mut core::ffi::c_void,
     indirectDeviceAddress: u64,
@@ -8,7 +7,6 @@ pub extern "C" fn vkCmdTraceRaysIndirect2KHR(
     crate::stub::Call::unsupported("vkCmdTraceRaysIndirect2KHR", "extension family not modeled");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdTraceRaysIndirectKHR(
     commandBuffer: *mut core::ffi::c_void,
     pRaygenShaderBindingTable: *const core::ffi::c_void,
@@ -26,7 +24,6 @@ pub extern "C" fn vkCmdTraceRaysIndirectKHR(
     crate::stub::Call::unsupported("vkCmdTraceRaysIndirectKHR", "extension family not modeled");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdTraceRaysKHR(
     commandBuffer: *mut core::ffi::c_void,
     pRaygenShaderBindingTable: *const core::ffi::c_void,
@@ -48,7 +45,6 @@ pub extern "C" fn vkCmdTraceRaysKHR(
     crate::stub::Call::unsupported("vkCmdTraceRaysKHR", "extension family not modeled");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdTraceRaysNV(
     commandBuffer: *mut core::ffi::c_void,
     raygenShaderBindingTableBuffer: u64,
@@ -84,7 +80,6 @@ pub extern "C" fn vkCmdTraceRaysNV(
     crate::stub::Call::unsupported("vkCmdTraceRaysNV", "extension family not modeled");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCopyMemoryIndirectNV(
     commandBuffer: *mut core::ffi::c_void,
     copyBufferAddress: u64,
@@ -98,7 +93,6 @@ pub extern "C" fn vkCmdCopyMemoryIndirectNV(
     crate::stub::Call::unsupported("vkCmdCopyMemoryIndirectNV", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCopyMemoryToImageIndirectNV(
     commandBuffer: *mut core::ffi::c_void,
     copyBufferAddress: u64,
@@ -121,7 +115,6 @@ pub extern "C" fn vkCmdCopyMemoryToImageIndirectNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCuLaunchKernelNVX(
     commandBuffer: *mut core::ffi::c_void,
     pLaunchInfo: *const core::ffi::c_void,
@@ -131,7 +124,6 @@ pub extern "C" fn vkCmdCuLaunchKernelNVX(
     crate::stub::Call::unsupported("vkCmdCuLaunchKernelNVX", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdCudaLaunchKernelNV(
     commandBuffer: *mut core::ffi::c_void,
     pLaunchInfo: *const core::ffi::c_void,
@@ -141,7 +133,6 @@ pub extern "C" fn vkCmdCudaLaunchKernelNV(
     crate::stub::Call::unsupported("vkCmdCudaLaunchKernelNV", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDecompressMemoryIndirectCountNV(
     commandBuffer: *mut core::ffi::c_void,
     indirectCommandsAddress: u64,
@@ -158,7 +149,6 @@ pub extern "C" fn vkCmdDecompressMemoryIndirectCountNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDecompressMemoryNV(
     commandBuffer: *mut core::ffi::c_void,
     decompressRegionCount: u32,
@@ -170,7 +160,6 @@ pub extern "C" fn vkCmdDecompressMemoryNV(
     crate::stub::Call::unsupported("vkCmdDecompressMemoryNV", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDispatchGraphAMDX(
     commandBuffer: *mut core::ffi::c_void,
     scratch: u64,
@@ -182,7 +171,6 @@ pub extern "C" fn vkCmdDispatchGraphAMDX(
     crate::stub::Call::unsupported("vkCmdDispatchGraphAMDX", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDispatchGraphIndirectAMDX(
     commandBuffer: *mut core::ffi::c_void,
     scratch: u64,
@@ -194,7 +182,6 @@ pub extern "C" fn vkCmdDispatchGraphIndirectAMDX(
     crate::stub::Call::unsupported("vkCmdDispatchGraphIndirectAMDX", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdDispatchGraphIndirectCountAMDX(
     commandBuffer: *mut core::ffi::c_void,
     scratch: u64,
@@ -209,7 +196,6 @@ pub extern "C" fn vkCmdDispatchGraphIndirectCountAMDX(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdExecuteGeneratedCommandsNV(
     commandBuffer: *mut core::ffi::c_void,
     isPreprocessed: u32,
@@ -224,7 +210,6 @@ pub extern "C" fn vkCmdExecuteGeneratedCommandsNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdInitializeGraphScratchMemoryAMDX(
     commandBuffer: *mut core::ffi::c_void,
     scratch: u64,
@@ -237,7 +222,6 @@ pub extern "C" fn vkCmdInitializeGraphScratchMemoryAMDX(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdPreprocessGeneratedCommandsNV(
     commandBuffer: *mut core::ffi::c_void,
     pGeneratedCommandsInfo: *const core::ffi::c_void,
@@ -250,7 +234,6 @@ pub extern "C" fn vkCmdPreprocessGeneratedCommandsNV(
     );
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdRefreshObjectsKHR(
     commandBuffer: *mut core::ffi::c_void,
     pRefreshObjects: *const core::ffi::c_void,
@@ -260,7 +243,6 @@ pub extern "C" fn vkCmdRefreshObjectsKHR(
     crate::stub::Call::unsupported("vkCmdRefreshObjectsKHR", "extension not advertised");
 }
 
-#[no_mangle]
 pub extern "C" fn vkCmdSubpassShadingHUAWEI(commandBuffer: *mut core::ffi::c_void) {
     let _ = commandBuffer;
     crate::stub::Call::unsupported("vkCmdSubpassShadingHUAWEI", "extension not advertised");

@@ -23,7 +23,6 @@ fn host_supports(format: i32) -> bool {
 
 /// color-attachment/blend/sampled/storage/blit/transfer; depth: depth-stencil-attachment/sampled/
 /// transfer; vertex float: vertex-buffer). Sourced from [`capability::format_features`].
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceFormatProperties(
     _physical_device: *mut c_void,
     format: i32,
@@ -45,7 +44,6 @@ pub extern "C" fn vkGetPhysicalDeviceFormatProperties(
 /// `vkGetPhysicalDeviceImageFormatProperties` — the creation limits for a `(format, type, tiling, …)`
 /// combination, or `VK_ERROR_FORMAT_NOT_SUPPORTED` when not creatable (spec §12.3). Reports the
 /// supported 2D-optimal color subset with the device limits; everything else is truthfully unsupported.
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
     _physical_device: *mut c_void,
     format: i32,
@@ -90,7 +88,6 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
 // ==================================================================================================
 
 /// `vkGetPhysicalDeviceProperties2` — the base properties + the pNext payloads apps read back
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties2(
     physical_device: *mut c_void,
     p_image_format_info: *const c_void,
@@ -118,7 +115,6 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties2(
 }
 
 /// `vkGetPhysicalDeviceImageFormatProperties2KHR` — the `VK_KHR_get_physical_device_properties2` alias.
-#[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties2KHR(
     physical_device: *mut c_void,
     p_image_format_info: *const c_void,
