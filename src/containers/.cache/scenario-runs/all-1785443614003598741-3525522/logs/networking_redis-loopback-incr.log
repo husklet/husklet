@@ -1,1 +1,0 @@
-image materialization failed: registry operation failed: Registry error: url https://index.docker.io/v2/library/redis/manifests/alpine, envelope: OCI API errors: [OCI API error: You have reached your unauthenticated pull rate limit. https://www.docker.com/increase-rate-limit]
