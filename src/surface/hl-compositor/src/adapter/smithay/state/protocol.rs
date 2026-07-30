@@ -154,7 +154,18 @@ impl SeatHandler for HlState {
         use smithay::input::pointer::CursorImageStatus;
         let named = match image {
             CursorImageStatus::Named(icon) => Some(icon.name().to_string()),
-            CursorImageStatus::Hidden | CursorImageStatus::Surface(_) => None,
+            CursorImageStatus::Hidden => None,
+            CursorImageStatus::Surface(cursor) => {
+                // A client-provided cursor image becomes a host cursor, never a window. Mark it with the
+                // scene's `Cursor` role so the commit path stops treating it as its own window root:
+                // roleless, it composes a stray frame per cursor update and — having no window to arm a
+                // repaint against — strands the surface's `wl_surface.frame` callbacks, stalling a client
+                // that animates its cursor.
+                if let Some(sid) = self.sid(&cursor) {
+                    self.engine.scene.set_role(sid, SurfaceRole::Cursor);
+                }
+                None
+            }
         };
         if let Some(name) = &named {
             hl_debug!(

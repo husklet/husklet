@@ -253,6 +253,23 @@ impl Surface {
             .map(|b| b.logical_size(&self.viewport, self.transform))
     }
 
+    /// Apply the committed `xdg_toplevel.set_min_size` / `set_max_size` limits. A maximum below the
+    /// minimum on an axis is not a satisfiable window bound — propagating it hands the host a native
+    /// window whose maximum content size is under its minimum — so that axis stays unconstrained.
+    pub fn set_size_limits(
+        &mut self,
+        min: (Option<i32>, Option<i32>),
+        max: (Option<i32>, Option<i32>),
+    ) {
+        self.min_size = min;
+        self.max_size = (
+            max.0
+                .filter(|limit| min.0.is_none_or(|floor| *limit >= floor)),
+            max.1
+                .filter(|limit| min.1.is_none_or(|floor| *limit >= floor)),
+        );
+    }
+
     /// Whether surface-local point `(x, y)` is input-sensitive: inside the surface bounds AND inside the
     /// input region (or no region set). Mirrors `logical_region_accepts` + the bounds check in
     /// `input_surface_at_offset`.
@@ -264,5 +281,34 @@ impl Surface {
             return false;
         }
         self.input_region.is_none_or(|r| r.contains_point(x, y))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Surface, SurfaceId};
+
+    #[test]
+    fn a_maximum_below_the_minimum_leaves_that_axis_unconstrained() {
+        // A client that commits set_min_size(400, 300) with set_max_size(100, 400) states a contradiction
+        // on width only. Width must not reach the host as max < min; height is a legal constraint.
+        let mut surface = Surface::new(SurfaceId(1));
+        surface.set_size_limits((Some(400), Some(300)), (Some(100), Some(400)));
+        assert_eq!(surface.min_size, (Some(400), Some(300)));
+        assert_eq!(surface.max_size, (None, Some(400)));
+    }
+
+    #[test]
+    fn equal_minimum_and_maximum_is_a_legal_fixed_size() {
+        let mut surface = Surface::new(SurfaceId(1));
+        surface.set_size_limits((Some(400), Some(300)), (Some(400), Some(300)));
+        assert_eq!(surface.max_size, (Some(400), Some(300)));
+    }
+
+    #[test]
+    fn an_unset_minimum_never_suppresses_a_maximum() {
+        let mut surface = Surface::new(SurfaceId(1));
+        surface.set_size_limits((None, None), (Some(100), Some(100)));
+        assert_eq!(surface.max_size, (Some(100), Some(100)));
     }
 }

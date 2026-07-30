@@ -110,10 +110,17 @@ impl Rect {
     }
 }
 
+/// Terminal bound on rects retained between presents. A surface whose tree cannot present (minimized,
+/// occluded, or a synchronized subsurface whose parent never commits again) keeps accumulating every
+/// `wl_surface.damage` / `damage_buffer` its client commits, so an unbounded list is guest-controlled
+/// memory growth. Past the bound the region collapses to its bounding box: a superset is always safe.
+const MAX_DAMAGE_RECTS: usize = 64;
+
 /// An accumulator for the changed regions of a surface across commits (the neutral analogue of the
 /// per-surface `wl_surface.damage` / `damage_buffer` accumulation Smithay extends and the compositor
-/// drains each commit in `ingest_buffer`). Rects are kept as a flat list; [`Self::bounding_box`]
-/// collapses them to the single upload hint carried on `SurfaceBuffer::damage`.
+/// drains each commit in `ingest_buffer`). Rects are kept as a flat list bounded by
+/// [`MAX_DAMAGE_RECTS`]; [`Self::bounding_box`] collapses them to the single upload hint carried on
+/// `SurfaceBuffer::damage`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DamageRegion {
     rects: Vec<Rect>,
@@ -125,10 +132,20 @@ impl DamageRegion {
     }
 
     /// Accumulate one damaged rect (empties are ignored so a bounding box never widens spuriously).
-    pub fn add(&mut self, rect: Rect) {
-        if !rect.is_empty() {
-            self.rects.push(rect);
+    /// At [`MAX_DAMAGE_RECTS`] the retained rects collapse into their bounding box first, so a client
+    /// that damages without ever presenting cannot grow this list without bound. Returns whether a
+    /// visible rect landed — the caller's proof that a damage-only commit changed something.
+    pub fn add(&mut self, rect: Rect) -> bool {
+        if rect.is_empty() {
+            return false;
         }
+        if self.rects.len() >= MAX_DAMAGE_RECTS {
+            let collapsed = self.bounding_box().unwrap_or_default();
+            self.rects.clear();
+            self.rects.push(collapsed);
+        }
+        self.rects.push(rect);
+        true
     }
 
     pub fn is_empty(&self) -> bool {
@@ -150,5 +167,40 @@ impl DamageRegion {
         let mut it = self.rects.iter().copied().filter(|r| !r.is_empty());
         let first = it.next()?;
         Some(it.fold(first, |acc, r| acc.union(&r)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DamageRegion, Rect};
+
+    /// An absolute retained-rect ceiling, stated independently of [`super::MAX_DAMAGE_RECTS`] so raising
+    /// the bound cannot silently satisfy the test it exists to pass.
+    const RETAINED_CEILING: usize = 256;
+
+    #[test]
+    fn accumulated_damage_is_bounded_and_still_covers_every_rect() {
+        // A surface whose tree never presents (minimized / occluded) keeps every committed damage rect.
+        // The retained list must stay bounded while the coverage it reports stays a superset.
+        let mut region = DamageRegion::new();
+        for i in 0..10_000 {
+            assert!(region.add(Rect::new(i, 2 * i, 3, 4)));
+            assert!(
+                region.rects().len() <= RETAINED_CEILING,
+                "retained damage grew to {} rects",
+                region.rects().len()
+            );
+        }
+        let bounds = region.bounding_box().expect("damage was accumulated");
+        assert!(bounds.contains(&Rect::new(0, 0, 3, 4)));
+        assert!(bounds.contains(&Rect::new(9_999, 19_998, 3, 4)));
+    }
+
+    #[test]
+    fn empty_rect_is_not_accumulated() {
+        let mut region = DamageRegion::new();
+        assert!(!region.add(Rect::new(0, 0, 0, 0)));
+        assert!(!region.add(Rect::new(5, 5, -3, 10)));
+        assert!(region.is_empty());
     }
 }

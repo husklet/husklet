@@ -255,6 +255,15 @@ impl HlState {
             ..commit
         };
 
+        // `wp_viewport.set_source` must lie inside the surface's content area; otherwise the protocol
+        // mandates `wp_viewport.error.out_of_buffer`. Smithay caches the crop but leaves the check to the
+        // compositor, and the presenter CLAMPS an out-of-range sample to the buffer edge — so unenforced,
+        // a client with a bad crop sees smeared pixels instead of the error it earned. The error kills the
+        // client, so this commit is abandoned rather than composited.
+        if !self.viewport_within_content(surface, sid, &commit, transform) {
+            return;
+        }
+
         #[cfg(feature = "macos-surface")]
         let association = self.take_commit_association(sid, external);
         #[cfg(feature = "macos-surface")]
@@ -318,6 +327,33 @@ impl HlState {
         self.finish_commit(sid, commit, was_mapped, min_size, max_size);
     }
 
+    /// Whether this commit's `wp_viewport` source crop lies inside the content area of the buffer the
+    /// surface will present. Posts `wp_viewport.error.out_of_buffer` (via Smithay, which owns the viewport
+    /// resource) and answers `false` when it does not. A surface with no committed buffer bounds nothing,
+    /// so the crop is accepted until content arrives.
+    fn viewport_within_content(
+        &self,
+        surface: &WlSurface,
+        sid: SurfaceId,
+        commit: &Commit,
+        transform: BufferTransform,
+    ) -> bool {
+        let buffer = match commit.buffer {
+            BufferChange::New(buffer) => Some(buffer),
+            BufferChange::Removed => None,
+            BufferChange::Keep => self.engine.scene.get(sid).and_then(|s| s.buffer),
+        };
+        let Some(buffer) = buffer else {
+            return true;
+        };
+        // The content area in surface-local logical coordinates — the buffer oriented by its transform,
+        // divided by its buffer scale. This is exactly the space `wp_viewport.set_source` speaks.
+        let scale = buffer.buffer_scale.max(1);
+        let (w, h) = transform.surface_size(buffer.tex_w, buffer.tex_h);
+        let content = Size::<i32, Logical>::from((w / scale, h / scale));
+        with_states(surface, |states| ensure_viewport_valid(states, content))
+    }
+
     #[cfg(feature = "macos-surface")]
     fn read_buffer(
         &mut self,
@@ -368,8 +404,7 @@ impl HlState {
                 surface.buffer.is_some() && matches!(surface.role, SurfaceRole::Toplevel)
             });
         if let Some(surface) = self.engine.scene.get_mut(sid) {
-            surface.min_size = min_size;
-            surface.max_size = max_size;
+            surface.set_size_limits(min_size, max_size);
         }
         if mapped_toplevel {
             self.set_keyboard_focus(Some(sid));

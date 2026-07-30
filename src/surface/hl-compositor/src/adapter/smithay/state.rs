@@ -42,7 +42,7 @@ use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource, WEnum, Weak,
 };
 use smithay::utils::Transform;
-use smithay::utils::{Logical, Point, SERIAL_COUNTER};
+use smithay::utils::{Logical, Point, Size, SERIAL_COUNTER};
 use smithay::wayland::{
     buffer::BufferHandler,
     compositor::Cacheable,
@@ -92,7 +92,7 @@ use smithay::wayland::{
         TabletToolHandle,
     },
     text_input::{TextInputManagerState, TextInputSeat},
-    viewporter::{ViewportCachedState, ViewporterState},
+    viewporter::{ensure_viewport_valid, ViewportCachedState, ViewporterState},
     xdg_activation::{
         XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
     },
@@ -151,7 +151,9 @@ use smithay::utils::{Rectangle, Serial};
 /// The zxdg-decoration mode the wire speaks (`ServerSide` / `ClientSide`).
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 /// The `xdg_toplevel` state enum (`Activated` / `Maximized` / `Fullscreen` / …) sent in a configure.
-use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgToplevelState;
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::{
+    State as XdgToplevelState, WmCapabilities,
+};
 
 use crate::scene::model::{
     Anchor, BufferState, BufferTransform, ConstraintAdjustment, Format, Gravity, Output, OutputId,
@@ -480,6 +482,8 @@ mod surface;
 mod tearing;
 mod xdg;
 
+#[cfg(test)]
+mod conformance;
 #[cfg(test)]
 mod tests;
 

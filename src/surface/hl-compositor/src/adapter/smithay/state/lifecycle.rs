@@ -6,7 +6,7 @@ fn surface_identity_version(native_frames: bool) -> Option<u32> {
 }
 use super::{
     buffer::DmabufAdapter, configuration::env_outputs, output::WaylandOutput,
-    tearing::TearingControlCachedState,
+    tearing::TearingControlCachedState, xdg::HONOURED_WM_CAPABILITIES,
 };
 impl HlState {
     /// Stand up the protocol globals and the neutral engine, seeded with one output.
@@ -41,7 +41,9 @@ impl HlState {
         // format table to probe — and a client that hands us a LINEAR dmabuf has it CPU-imported by
         // `pread` (a real fd import, no GPU). See [`new_dmabuf_state`].
         let dmabuf = DmabufAdapter::new(dh, native_frames).state();
-        let xdg_shell = XdgShellState::new::<HlState>(dh);
+        // Only the capabilities performed here; Smithay's default also claims window_menu.
+        let xdg_shell =
+            XdgShellState::new_with_capabilities::<HlState>(dh, HONOURED_WM_CAPABILITIES);
         // Advertise `zxdg_decoration_manager_v1` so CSD-vs-SSD negotiation resolves instead of hanging.
         let xdg_decoration = XdgDecorationState::new::<HlState>(dh);
         // Advertise `wl_data_device_manager` (clipboard / drag-and-drop). GDK4 (and Chrome/Qt) require

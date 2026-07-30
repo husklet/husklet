@@ -1,5 +1,17 @@
 use super::*;
 
+/// The `xdg_toplevel.wm_capabilities` (xdg-shell v5) this compositor actually performs: `maximize`
+/// ([`XdgShellHandler::maximize_request`]), `minimize` ([`XdgShellHandler::minimize_request`], forwarded to
+/// the host presenter) and `fullscreen` ([`XdgShellHandler::fullscreen_request`]). `window_menu` is
+/// deliberately absent: [`XdgShellHandler::show_window_menu`] draws nothing (this compositor has no
+/// server-side menu), and Smithay's default set claims it — which makes GTK/Qt offer a titlebar
+/// "window menu" entry whose request is silently dropped. Advertise only what is honoured.
+pub(super) const HONOURED_WM_CAPABILITIES: [WmCapabilities; 3] = [
+    WmCapabilities::Maximize,
+    WmCapabilities::Minimize,
+    WmCapabilities::Fullscreen,
+];
+
 /// Server-side handling of data-device state and XDG shell windows.
 impl DataDeviceHandler for HlState {
     fn data_device_state(&self) -> &DataDeviceState {
