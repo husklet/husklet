@@ -373,7 +373,12 @@ pub extern "C" fn eglQueryString(dpy: *mut c_void, name: i32) -> *const c_char {
         EGL_VERSION_Q => b"1.4 hl-gl\0".as_ptr() as *const c_char,
         EGL_CLIENT_APIS => b"OpenGL_ES\0".as_ptr() as *const c_char,
         EGL_EXTENSIONS_Q => Extensions::get(dpy.is_null()),
-        _ => b"\0".as_ptr() as *const c_char,
+        // EGL 1.4 §3.3: an unrecognized name is EGL_BAD_PARAMETER and returns NULL. The empty string told
+        // the caller the query succeeded and the answer was "nothing".
+        _ => {
+            GlobalState::access(|state| state.set_egl_error(EGL_BAD_PARAMETER));
+            core::ptr::null()
+        }
     }
 }
 

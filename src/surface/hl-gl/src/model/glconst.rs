@@ -208,6 +208,12 @@ pub const GL_ALIASED_LINE_WIDTH_RANGE: u32 = 0x846E;
 pub const GL_MAX_TEXTURE_LOD_BIAS: u32 = 0x84FD;
 pub const GL_COLOR_WRITEMASK: u32 = 0x0C23;
 pub const GL_DEPTH_WRITEMASK: u32 = 0x0B72;
+/// ES 2.0 table 6.19 — the depth range, two floats, fixed at `[0, 1]` by this driver's NDC mapping.
+pub const GL_DEPTH_RANGE: u32 = 0x0B70;
+
+// The always-accepted implementation-defined `glReadPixels` pair (ES 3.0 §4.3.2).
+pub const GL_IMPLEMENTATION_COLOR_READ_TYPE: u32 = 0x8B9A;
+pub const GL_IMPLEMENTATION_COLOR_READ_FORMAT: u32 = 0x8B9B;
 
 // glGetShaderiv / glGetProgramiv pnames.
 pub const GL_DELETE_STATUS: u32 = 0x8B80;

@@ -33,13 +33,13 @@ fn egl_query_string_returns_marshal() {
     );
     assert!(client_ext.is_ascii(), "the extension string is plain ASCII");
 
-    // An unrecognized name is the spec-legal empty (non-null, so an app's strlen/strstr is safe).
+    // EGL 1.4 §3.3: an unrecognized name returns NULL and generates EGL_BAD_PARAMETER. The empty string
+    // this used to return told the caller the query had succeeded and the answer was "nothing".
     let unknown = egl_query_string(nodpy, 0xBEEF);
     assert!(
-        !unknown.is_null(),
-        "an unknown eglQueryString name returns \"\" (non-null), never null"
+        unknown.is_null(),
+        "an unknown eglQueryString name returns NULL"
     );
-    assert_eq!(cstr(unknown), "");
 
     // A real (initialized) display => the per-DISPLAY set, which advertises the context extensions
     // (distinct from the client set — proving the string is keyed on the display argument, not constant).

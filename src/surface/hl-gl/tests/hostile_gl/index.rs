@@ -87,3 +87,24 @@ fn extreme_viewport_and_scissor_dims_do_not_panic() {
     record::viewport(&mut c, [0, 0, 320, 240]);
     assert_eq!(c.viewport(), [0, 0, 320, 240]);
 }
+
+#[test]
+fn a_client_array_draw_span_past_the_capture_bound_is_refused_not_read() {
+    let mut c = ctx();
+    // A client vertex array carries no length, so the driver reads the span the draw names out of guest
+    // memory. A maximal first/count over a 48-byte array names ~4 billion vertices: the span overflowed and
+    // the read walked off the array. Spec-undefined (Mesa faults identically), but a guest must not be able
+    // to kill the driver, so the span is refused instead.
+    let array = [0.0f32; 12];
+    record::enable_vertex_attrib(&mut c, 0);
+    record::vertex_attrib_pointer(&mut c, 0, 2, GL_FLOAT, false, 0, array.as_ptr() as usize);
+
+    record::draw_arrays(&mut c, GL_TRIANGLES, i32::MAX, i32::MAX);
+    assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
+    assert!(c.draws().is_empty(), "a refused draw records nothing");
+
+    // A span within the bound still records, so this narrows only what could not be served.
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 6);
+    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
+    assert_eq!(c.draws().len(), 1);
+}

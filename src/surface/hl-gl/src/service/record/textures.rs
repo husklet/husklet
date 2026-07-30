@@ -379,6 +379,10 @@ impl GlContext {
                 *u = 0;
             }
         }
+        // ES 3.0 §4.4.2.3: a deleted texture is detached from every attachment point of the bound
+        // framebuffer, as if glFramebufferTexture2D(..., 0, 0) had been called for it. Leaving it attached
+        // makes the framebuffer name a dead texture.
+        self.local.framebuffers.detach_color_texture(name);
         // Retire the texture's resident IR ids (sampled texture + FBO render target + depth), queued Destroy for
         // the next frame, so Chrome's fresh-tile churn does not climb the host residency ledger to its cap.
         self.retire_texture(name);

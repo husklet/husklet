@@ -59,4 +59,7 @@ pub struct Program {
     /// consumed by the frame builder's
     /// bind-group emission so the driver's texture/sampler bindings match the shader's live layout.
     pub samp_bindings: Vec<u32>,
+    /// `GL_DELETE_STATUS`. ES 3.0 §7.3: `glDeleteProgram` on the program that is still the current program
+    /// only flags it; it stays current and stays usable until `glUseProgram` moves away from it.
+    pub pending_delete: bool,
 }

@@ -66,7 +66,7 @@ unsafe fn read_client_attr(
     let comp = size.clamp(1, 4) as usize;
     let elem = comp * crate::model::glconst::GlType(kind).component_size();
     let st = if stride > 0 { stride as usize } else { elem };
-    let mut out = Vec::with_capacity(vert_end * elem);
+    let mut out = Vec::with_capacity(vert_end.saturating_mul(elem));
     for v in 0..vert_end {
         let src = (base + v * st) as *const u8;
         out.extend_from_slice(std::slice::from_raw_parts(src, elem));
@@ -78,11 +78,23 @@ unsafe fn read_client_attr(
 /// the draw's `client_vbufs`, each spanning `[0, vert_end)`. A null client pointer (`offset == 0`) is
 /// skipped (nothing to read). An all-VBO draw records nothing here, so it lowers unchanged.
 impl DrawCall {
-    pub(super) fn capture_client_vbufs(&mut self, vert_end: usize) {
-        if vert_end == 0 {
-            return;
-        }
+    /// `vert_end` is `None` when the draw's vertex span overflowed. Returns `false` when the draw names a
+    /// client-array span this driver refuses to read; an all-VBO draw captures nothing and always succeeds,
+    /// however wide its span, because no guest memory is dereferenced for it.
+    pub(super) fn capture_client_vbufs(&mut self, vert_end: Option<usize>) -> bool {
         let attrs = self.attrs;
+        if !attrs
+            .iter()
+            .any(|a| a.enabled && a.buffer == 0 && a.offset != 0)
+        {
+            return true;
+        }
+        let Some(vert_end) = vert_end.filter(|end| *end <= MAX_CLIENT_VERTS) else {
+            return false;
+        };
+        if vert_end == 0 {
+            return true;
+        }
         for (i, a) in attrs.iter().enumerate() {
             if !a.enabled || a.buffer != 0 || a.offset == 0 {
                 continue;
@@ -98,6 +110,7 @@ impl DrawCall {
                 divisor: a.divisor,
             });
         }
+        true
     }
 }
 
@@ -124,6 +137,15 @@ pub(super) fn index_at(bytes: &[u8], index_type: u32, k: usize) -> usize {
     }
 }
 
+/// The widest client-array vertex span this driver will read out of guest memory for one draw.
+///
+/// A client array carries no length: the application promises the memory behind the pointer it gave
+/// `glVertexAttribPointer`, and the specification leaves reading past it undefined (Mesa faults too). A
+/// guest must not be able to kill the driver regardless, so a draw whose vertex span exceeds this bound is
+/// refused with `GL_INVALID_OPERATION` and records nothing. The bound is the advertised
+/// `GL_MAX_ELEMENTS_VERTICES`, the largest vertex count the driver tells applications it wants per draw.
+const MAX_CLIENT_VERTS: usize = crate::service::query::MAX_ELEMENTS_VERTICES as usize;
+
 /// The indexed-draw capture: handle client-side vertex arrays and/or a client-side index array for a
 /// `glDrawElements*`. Covers all four combinations (pure-VBO returns immediately, leaving the draw
 /// unchanged):
@@ -141,21 +163,21 @@ pub(super) fn capture_indexed(
     index_type: u32,
     offset: usize,
     base_vertex: i32,
-) {
+) -> bool {
     let has_client_vbuf = d
         .attrs
         .iter()
         .any(|a| a.enabled && a.buffer == 0 && a.offset != 0);
     let client_index = d.elem_buf == 0;
     if !has_client_vbuf && !client_index {
-        return; // pure-VBO indexed draw — the existing VBO path handles everything.
+        return true; // pure-VBO indexed draw — the existing VBO path handles everything.
     }
     let isz = crate::model::glconst::GlType(index_type).component_size();
     let need = count.max(0) as usize * isz;
     // The raw index bytes: from the client pointer, or from the bound element-array-buffer at `offset`.
     let idx_bytes: Vec<u8> = if client_index {
         if offset == 0 || count <= 0 {
-            return;
+            return true;
         }
         unsafe { std::slice::from_raw_parts(offset as *const u8, need).to_vec() }
     } else {
@@ -165,7 +187,7 @@ pub(super) fn capture_indexed(
             .and_then(|b| b.data.get(offset..(offset + need).min(b.data.len())))
         {
             Some(s) => s.to_vec(),
-            None => return,
+            None => return true,
         }
     };
     // A client index array is promoted (u8→u16) into the final index-buffer encoding + type rewrite.
@@ -191,9 +213,14 @@ pub(super) fn capture_indexed(
                 max_idx = i;
             }
         }
-        let vert_end = max_idx + base_vertex.max(0) as usize + 1;
-        d.capture_client_vbufs(vert_end);
+        // The widest vertex the fetch reaches. A u32 index can name a span far past any array the
+        // application actually provided, so the capture bound applies here too.
+        let vert_end = max_idx
+            .saturating_add(base_vertex.max(0) as usize)
+            .saturating_add(1);
+        return d.capture_client_vbufs(Some(vert_end));
     }
+    true
 }
 
 /// The scissor-clipped sample footprint of one draw — its viewport rectangle intersected with the scissor
@@ -261,7 +288,12 @@ pub fn draw_arrays_instanced(
     d.count = count;
     d.instance_count = instances as u32;
     // Client-side vertex arrays span [0, first+count): the transient buffer is indexed by `first_vertex`.
-    d.capture_client_vbufs(first.max(0) as usize + count as usize);
+    // A span that overflows, or that runs past the transient capture bound, is refused rather than read:
+    // the client array is promised by the application and a guest must not be able to fault the driver.
+    if !d.capture_client_vbufs(first.checked_add(count).map(|end| end as usize)) {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
     ctx.accumulate_occlusion(&d);
     ctx.record_draw(d);
 }
@@ -301,7 +333,10 @@ pub fn draw_elements_instanced(
     d.index_offset = offset;
     d.instance_count = instances as u32;
     d.elem_buf = ctx.local.element_buffer;
-    capture_indexed(ctx, &mut d, count, index_type, offset, 0);
+    if !capture_indexed(ctx, &mut d, count, index_type, offset, 0) {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
     ctx.accumulate_occlusion(&d);
     ctx.record_draw(d);
 }
@@ -350,7 +385,10 @@ pub fn draw_elements_instanced_base_vertex(
     d.instance_count = instances as u32;
     d.base_vertex = base_vertex;
     d.elem_buf = ctx.local.element_buffer;
-    capture_indexed(ctx, &mut d, count, index_type, offset, base_vertex);
+    if !capture_indexed(ctx, &mut d, count, index_type, offset, base_vertex) {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
     ctx.accumulate_occlusion(&d);
     ctx.record_draw(d);
 }

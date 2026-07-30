@@ -98,6 +98,17 @@ impl Programs {
             .get(&cs)
             .and_then(|s| s.src.clone())
             .unwrap_or_default();
+        // ES 3.0 §7.3: a non-compute program links only when it has BOTH a vertex and a fragment shader
+        // whose source compiled. Linking one stage alone used to succeed and report GL_LINK_STATUS = 1,
+        // handing the app a program that can never draw.
+        if cs_src.is_empty() && (vs_src.is_empty() || fs_src.is_empty()) {
+            if let Some(p) = self.programs.get_mut(&program) {
+                p.linked = false;
+                p.link_error =
+                    "link requires both a vertex and a fragment shader with compiled source".into();
+            }
+            return false;
+        }
         if let Some(p) = self.programs.get_mut(&program) {
             p.linked = false;
             match p.link(vs_src, fs_src, cs_src) {
@@ -138,9 +149,10 @@ impl Programs {
         name != 0 && self.shaders.contains_key(&name)
     }
 
-    /// `glDeleteProgram(name)` — drop the program object (deleting `0` is a silent no-op; GL defines it
-    /// so). This model has no deferred-delete-while-current subtlety: the object is removed immediately.
-    /// Returns `false` for an unknown / zero name.
+    /// Remove the program object outright (deleting `0` is a silent no-op; GL defines it so). The
+    /// deferred-deletion rule of ES 3.0 §7.3 lives one layer up in
+    /// [`crate::model::context::GlContext::delete_program`]; this is the unconditional removal it calls once
+    /// the program is no longer current. Returns `false` for an unknown / zero name.
     pub fn delete(&mut self, name: u32) -> bool {
         if name == 0 {
             return false;
@@ -148,20 +160,63 @@ impl Programs {
         self.programs.remove(&name).is_some()
     }
 
-    /// `glDeleteShader(name)` — drop the shader object (deleting `0` is a silent no-op). Attachments hold
-    /// only the shader NAME (captured at link), so a delete does not disturb a linked program's reflected
-    /// IR. Returns `false` for an unknown / zero name.
+    /// Set `GL_DELETE_STATUS` on a program, leaving the object live (ES 3.0 §7.3). Returns `false` for an
+    /// unknown / zero name or one already flagged.
+    pub fn flag(&mut self, name: u32) -> bool {
+        match self.programs.get_mut(&name) {
+            Some(program) if !program.pending_delete => {
+                program.pending_delete = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// `GL_DELETE_STATUS` of a program.
+    pub fn flagged(&self, name: u32) -> bool {
+        self.programs
+            .get(&name)
+            .is_some_and(|program| program.pending_delete)
+    }
+
+    /// `GL_DELETE_STATUS` of a shader.
+    pub fn shader_flagged(&self, name: u32) -> bool {
+        self.shaders
+            .get(&name)
+            .is_some_and(|shader| shader.pending_delete)
+    }
+
+    /// True while any program still names `shader` in an attachment slot.
+    pub fn shader_attached(&self, shader: u32) -> bool {
+        shader != 0
+            && self
+                .programs
+                .values()
+                .any(|p| p.vs == shader || p.fs == shader || p.cs == shader)
+    }
+
+    /// `glDeleteShader(name)` — ES 3.0 §7.1: a shader still attached to a program is only FLAGGED for
+    /// deletion and keeps its source and compile status, so the program can still relink from it; an
+    /// unattached shader is removed at once. Deleting `0` is a silent no-op. Returns `false` for an
+    /// unknown / zero name.
     pub fn delete_shader(&mut self, name: u32) -> bool {
-        if name == 0 {
+        if name == 0 || !self.shaders.contains_key(&name) {
             return false;
+        }
+        if self.shader_attached(name) {
+            if let Some(shader) = self.shaders.get_mut(&name) {
+                shader.pending_delete = true;
+            }
+            return true;
         }
         self.shaders.remove(&name).is_some()
     }
 
-    /// `glDetachShader(program, shader)` — clear the matching attachment slot. Returns `false` if the
-    /// program is unknown or `shader` is not attached (the caller raises the spec error).
+    /// `glDetachShader(program, shader)` — clear the matching attachment slot, then reap the shader if that
+    /// was its last attachment and it was already flagged for deletion (ES 3.0 §7.1). Returns `false` if
+    /// the program is unknown or `shader` is not attached (the caller raises the spec error).
     pub fn detach(&mut self, program: u32, shader: u32) -> bool {
-        match self.programs.get_mut(&program) {
+        let detached = match self.programs.get_mut(&program) {
             Some(p) if p.vs == shader => {
                 p.vs = 0;
                 true
@@ -175,6 +230,10 @@ impl Programs {
                 true
             }
             _ => false,
+        };
+        if detached && self.shader_flagged(shader) && !self.shader_attached(shader) {
+            self.shaders.remove(&shader);
         }
+        detached
     }
 }

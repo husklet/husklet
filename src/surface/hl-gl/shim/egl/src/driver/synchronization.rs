@@ -182,6 +182,8 @@ pub extern "C" fn glBindBufferRange(
 /// pointer INTO its host storage (the app writes through it; `glUnmapBuffer` flushes). Null on error. The
 /// pointer stays valid until the buffer's storage reallocates (the reference shim's fragile contract).
 #[cfg_attr(gles_client, no_mangle)]
+/// PRECONDITION: a CURRENT context. Like every GL entry point this resolves against the calling thread's
+/// share group and answers its zero value — here a null pointer, with no GL error — when there is none.
 pub extern "C" fn glMapBufferRange(
     target: u32,
     offset: isize,

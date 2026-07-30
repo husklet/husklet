@@ -402,18 +402,12 @@ fn deleting_unknown_objects_returns_false_and_no_error() {
 }
 
 #[test]
-fn deleting_the_bound_program_and_texture_clears_the_binding() {
+fn deleting_the_bound_texture_clears_the_binding() {
     let mut c = ctx();
-    let p = record::create_program(&mut c);
-    record::use_program(&mut c, p);
-    assert_eq!(c.current_program(), p);
-    record::delete_program(&mut c, p);
-    assert_eq!(
-        c.current_program(),
-        0,
-        "deleting the current program unbinds it"
-    );
-
+    // The program half of this case previously asserted that deleting the CURRENT program unbinds it.
+    // That is the opposite of ES 3.0 §7.3, which flags a still-current program for deletion and keeps it
+    // current, so the assertion was pinning a defect in place. The specified behaviour is now pinned by
+    // `tests/gles_object_lifetime.rs::deleting_the_current_program_only_flags_it_and_it_stays_usable`.
     let t = c.textures.gen();
     c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, t);

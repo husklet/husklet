@@ -29,7 +29,8 @@ pub fn get_shaderiv(ctx: &GlContext, shader: u32, pname: u32) -> i32 {
         GL_INFO_LOG_LENGTH => 0,
         GL_SHADER_SOURCE_LENGTH => sh.src.as_ref().map(|s| s.len() as i32 + 1).unwrap_or(0),
         GL_SHADER_TYPE => sh.kind as i32,
-        GL_DELETE_STATUS => GL_FALSE as i32,
+        // ES 3.0 §7.1: GL_TRUE once glDeleteShader has flagged this shader.
+        GL_DELETE_STATUS => i32::from(sh.pending_delete),
         _ => 0,
     }
 }
@@ -66,7 +67,8 @@ pub fn get_programiv(ctx: &GlContext, program: u32, pname: u32) -> i32 {
                 p.link_error.len() as i32 + 1
             }
         }
-        GL_DELETE_STATUS => GL_FALSE as i32,
+        // ES 3.0 §7.3: GL_TRUE once glDeleteProgram has flagged this program.
+        GL_DELETE_STATUS => i32::from(p.pending_delete),
         GL_ATTACHED_SHADERS => (p.vs != 0) as i32 + (p.fs != 0) as i32,
         GL_ACTIVE_UNIFORMS => (p.unis.len() + p.samp_names.len()) as i32,
         GL_ACTIVE_UNIFORM_MAX_LENGTH => {

@@ -17,6 +17,8 @@ const EGL_NONE: i32 = 0x3038;
 const EGL_CONTEXT_CLIENT_VERSION: i32 = 0x3098;
 const GL_ARRAY_BUFFER: u32 = 0x8892;
 const GL_STATIC_DRAW: u32 = 0x88E4;
+const GL_MAP_READ_BIT: u32 = 0x0001;
+const GL_MAP_WRITE_BIT: u32 = 0x0002;
 const GL_WRITE_ONLY_OES: u32 = 0x88B9;
 const GL_BUFFER_MAP_POINTER: u32 = 0x88BD;
 const GL_NO_ERROR: u32 = 0;
@@ -127,6 +129,8 @@ fn oes_mapbuffer_maps_writes_and_reports_its_pointer() {
         unsafe { std::mem::transmute(resolve("glMapBufferOES")) };
     let unmap_buffer: extern "C" fn(u32) -> u8 =
         unsafe { std::mem::transmute(resolve("glUnmapBufferOES")) };
+    let map_range: extern "C" fn(u32, isize, isize, u32) -> *mut c_void =
+        unsafe { std::mem::transmute(sym(gles, "glMapBufferRange")) };
 
     let mut buffer = 0u32;
     gen_buffers(1, &mut buffer);
@@ -174,4 +178,21 @@ fn oes_mapbuffer_maps_writes_and_reports_its_pointer() {
     let mut after: *mut c_void = usize::MAX as *mut c_void;
     get_buffer_pointerv(GL_ARRAY_BUFFER, GL_BUFFER_MAP_POINTER, &mut after);
     assert!(after.is_null(), "an unmapped buffer reports a null pointer");
+
+    // The ES3 core map over the same buffer: a whole-buffer GL_MAP_READ_BIT|GL_MAP_WRITE_BIT range is a
+    // legal mapping and must hand back a pointer, not null. The one precondition is a CURRENT context —
+    // every GL entry point resolves against the calling thread's share group and answers its zero value
+    // when there is none, which is what makes this call look like it returns null on its own.
+    let mapped_range = map_range(
+        GL_ARRAY_BUFFER,
+        0,
+        source.len() as isize,
+        GL_MAP_READ_BIT | GL_MAP_WRITE_BIT,
+    );
+    assert!(
+        !mapped_range.is_null(),
+        "glMapBufferRange over the whole buffer with READ|WRITE returns a pointer"
+    );
+    assert_eq!(get_error(), GL_NO_ERROR);
+    let _ = unmap_buffer(GL_ARRAY_BUFFER);
 }

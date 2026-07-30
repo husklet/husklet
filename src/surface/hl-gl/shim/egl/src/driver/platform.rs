@@ -2,8 +2,10 @@ use super::*;
 
 mod fence;
 mod image;
+mod query;
 pub use fence::*;
 pub use image::*;
+pub use query::*;
 // ==================================================================================================
 // EGL: the remaining lifecycle / query / sync / image / surface-creation entry points
 // ==================================================================================================
@@ -314,84 +316,6 @@ pub extern "C" fn eglCopyBuffers(
         Err(error) => surface_failure(error),
         Ok(()) => surface_failure(EGL_BAD_NATIVE_PIXMAP),
     }
-}
-/// `eglQueryContext(dpy, ctx, attribute, value)` — report a context attribute. This driver serves exactly
-/// one client API (OpenGL ES), so `EGL_CONTEXT_CLIENT_TYPE` MUST answer `EGL_OPENGL_ES_API` — libepoxy's
-/// `epoxy_egl_get_current_gl_context_api()` queries this to classify the current context, and treats any
-/// value other than `EGL_OPENGL_API`/`EGL_OPENGL_ES_API` as "no EGL context" (aborting
-/// `epoxy_get_proc_address` with "Couldn't find current GLX or EGL context"). Other attributes report the
-/// truthful fixed values of the single back-buffered ES3 context this driver models; unknown attributes
-/// read `0` and still succeed.
-#[cfg_attr(not(gles_client), no_mangle)]
-pub extern "C" fn eglQueryContext(
-    dpy: *mut c_void,
-    ctx: *mut c_void,
-    attribute: i32,
-    value: *mut i32,
-) -> u32 {
-    if value.is_null() {
-        GlobalState::access(|s| s.set_egl_error(EGL_BAD_PARAMETER));
-        return EGL_FALSE;
-    }
-    if dpy as usize != DISPLAY_TOKEN {
-        GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
-        return EGL_FALSE;
-    }
-    let Some(attributes) = GlobalState::access(|s| s.context_attributes(ctx as usize)) else {
-        GlobalState::access(|s| s.set_egl_error(EGL_BAD_CONTEXT));
-        return EGL_FALSE;
-    };
-    let v = match attribute {
-        EGL_CONTEXT_CLIENT_TYPE => EGL_OPENGL_ES_API as i32,
-        EGL_CONTEXT_CLIENT_VERSION => attributes.client_version,
-        EGL_CONTEXT_MINOR_VERSION_KHR => attributes.minor_version,
-        EGL_CONTEXT_OPENGL_ROBUST_ACCESS_EXT => attributes.robust_access as i32,
-        EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT => attributes.reset_strategy,
-        EGL_CONTEXT_OPENGL_NO_ERROR_KHR => attributes.no_error as i32,
-        EGL_RENDER_BUFFER => EGL_BACK_BUFFER,
-        _ => {
-            GlobalState::access(|s| s.set_egl_error(EGL_BAD_ATTRIBUTE));
-            return EGL_FALSE;
-        }
-    };
-    unsafe { *value = v };
-    EGL_TRUE
-}
-/// `eglQuerySurface(dpy, surface, attribute, value)` — the surface geometry. `EGL_WIDTH`/`EGL_HEIGHT`
-/// report the live window-surface size (real); other attributes read `0`.
-#[cfg_attr(not(gles_client), no_mangle)]
-pub extern "C" fn eglQuerySurface(
-    dpy: *mut c_void,
-    surface: *mut c_void,
-    attribute: i32,
-    value: *mut i32,
-) -> u32 {
-    if value.is_null() {
-        GlobalState::access(|s| s.set_egl_error(EGL_BAD_PARAMETER));
-        return EGL_FALSE;
-    }
-    if dpy as usize != DISPLAY_TOKEN {
-        GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
-        return EGL_FALSE;
-    }
-    let Some(v) = GlobalState::access(|s| {
-        let surface = s.surface(surface as usize)?;
-        match attribute {
-            EGL_WIDTH => Some(surface.render.width as i32),
-            EGL_HEIGHT => Some(surface.render.height as i32),
-            _ => None,
-        }
-    }) else {
-        let error = if GlobalState::access(|s| s.has_surface(surface as usize)) {
-            EGL_BAD_ATTRIBUTE
-        } else {
-            EGL_BAD_SURFACE
-        };
-        GlobalState::access(|s| s.set_egl_error(error));
-        return EGL_FALSE;
-    };
-    unsafe { *value = v };
-    EGL_TRUE
 }
 /// The size an `eglCreatePbufferSurface` attribute list asks for.
 ///

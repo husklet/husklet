@@ -347,8 +347,12 @@ fn delete_and_detach_mutate_program_state() {
     let prog = linked_program(&mut c);
     assert!(c.programs.contains(prog));
 
-    // glDeleteProgram of the current program removes it and clears the binding.
+    // ES 3.0 §7.3: glDeleteProgram of the CURRENT program only flags it; it stays current and stays live
+    // until glUseProgram moves away. Pinned in full by tests/gles_object_lifetime.rs.
     record::delete_program(&mut c, prog);
+    assert!(c.programs.contains(prog));
+    assert_eq!(c.current_program(), prog);
+    record::use_program(&mut c, 0);
     assert!(!c.programs.contains(prog));
     assert_eq!(c.current_program(), 0);
 

@@ -278,7 +278,7 @@ impl GlContext {
             return false;
         }
         self.uniform_blocks.remove(&name);
-        self.delete_program(name);
+        self.destroy_program(name);
         true
     }
 

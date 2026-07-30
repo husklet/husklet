@@ -135,6 +135,12 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         GL_DEPTH_BITS => one(24),
         GL_STENCIL_BITS => one(8),
         GL_RED_BITS | GL_GREEN_BITS | GL_BLUE_BITS | GL_ALPHA_BITS => one(8),
+        // ES 3.0 §4.3.2: the second format/type pair glReadPixels always accepts. The presented surface is
+        // RGBA8, so the pair is GL_RGBA / GL_UNSIGNED_BYTE — a `0` here makes the caller pass format 0.
+        GL_IMPLEMENTATION_COLOR_READ_FORMAT => one(GL_RGBA as i32),
+        GL_IMPLEMENTATION_COLOR_READ_TYPE => one(GL_UNSIGNED_BYTE as i32),
+        // ES 2.0 §6.1.5: GL_TRUE on any implementation that accepts shader SOURCE, which this driver does.
+        GL_SHADER_COMPILER => one(GL_TRUE as i32),
         GL_CURRENT_PROGRAM => one(ctx.local.cur_prog as i32),
         GL_ACTIVE_TEXTURE => one((GL_TEXTURE0 + ctx.local.active_texture as u32) as i32),
         GL_ARRAY_BUFFER_BINDING => one(ctx.local.array_buffer as i32),
@@ -153,6 +159,13 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         GL_BLEND => one(ctx.local.pipeline.blend as i32),
         GL_CULL_FACE => one(ctx.local.pipeline.cull_enabled as i32),
         GL_SCISSOR_TEST => one(ctx.local.pipeline.scissor_enabled as i32),
+        // ES 3.0 §2.2.2: every state value must read back the same through each Get* variant.
+        GL_DEPTH_WRITEMASK => one(ctx.local.pipeline.depth_write as i32),
+        GL_DEPTH_RANGE => {
+            out[0] = 0;
+            out[1] = 1;
+            2
+        }
         GL_MAX_VIEWPORT_DIMS => {
             out[0] = VIEWPORT_DIM;
             out[1] = VIEWPORT_DIM;
@@ -242,6 +255,13 @@ pub fn get_floatv(ctx: &GlContext, pname: u32, out: &mut [f32; 4]) -> usize {
             out[0] = 2.0;
             1
         }
+        // ES 2.0 table 6.19: two floats. glDepthRangef is a no-op here (NDC depth maps directly), so the
+        // range is permanently the initial [0, 1].
+        GL_DEPTH_RANGE => {
+            out[0] = 0.0;
+            out[1] = 1.0;
+            2
+        }
         _ => {
             out[0] = 0.0;
             1
@@ -266,6 +286,7 @@ pub fn get_booleanv(ctx: &GlContext, pname: u32, out: &mut [u8; 4]) -> usize {
         GL_CULL_FACE => b(ctx.local.pipeline.cull_enabled),
         GL_SCISSOR_TEST => b(ctx.local.pipeline.scissor_enabled),
         GL_DEPTH_WRITEMASK => b(ctx.local.pipeline.depth_write),
+        GL_SHADER_COMPILER => b(true),
         _ => 0,
     };
     1

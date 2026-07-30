@@ -349,10 +349,17 @@ fn program_shaders_and_pipeline_created_once_across_n_frames_then_retired_on_del
         .expect("resident pipeline id");
 
     // ---- glDeleteProgram retires the cached shader modules + pipeline ----
+    // ES 3.0 §7.3: while the program is still current the deletion is only flagged, so its host residency
+    // must survive; the retirement happens when glUseProgram stops naming it.
     record::delete_program(&mut c, prog);
     assert!(
+        !c.has_pending_destroys(),
+        "a program flagged for deletion while current keeps its resident modules"
+    );
+    record::use_program(&mut c, 0);
+    assert!(
         c.has_pending_destroys(),
-        "glDeleteProgram queues the program's persistent destroys"
+        "releasing the flagged program queues its persistent destroys"
     );
 
     // A swap with nothing to draw returns false but still flushes the queued destroys.

@@ -314,7 +314,13 @@ impl GlContext {
             self.set_gl_error(GL_INVALID_VALUE);
             return;
         }
+        let outgoing = self.local.cur_prog;
         self.local.cur_prog = program;
+        // ES 3.0 §7.3: the program we just stopped using is no longer part of the current rendering state,
+        // so a deletion flagged while it was current takes effect now.
+        if outgoing != program && self.programs.flagged(outgoing) {
+            self.destroy_program(outgoing);
+        }
     }
 }
 
@@ -463,10 +469,26 @@ pub fn program_uniform_sampler(ctx: &mut GlContext, program: u32, location: usiz
 
 // ---- program / shader lifecycle (glDeleteProgram / glDeleteShader / glDetachShader) ---------------
 
-/// `glDeleteProgram(program)` — drop the program object; clears the current-program binding if it names
-/// the deleted program.
+/// `glDeleteProgram` / `glDeleteShader` — the two DIFFERENT deletion rules GLES defines for these objects.
 impl GlContext {
+    /// `glDeleteProgram(program)` — ES 3.0 §7.3: "If a program object is in use as the current program for
+    /// the current rendering context, it will be flagged for deletion, but it will not be deleted until it
+    /// is no longer part of the current rendering state." So the current program keeps its binding and keeps
+    /// working; `glUseProgram` moving away from it is what destroys it. An unreferenced program goes at once.
+    ///
+    /// The release-then-draw idiom depends on this: Skia, `QOpenGLShaderProgram`'s destructor and glmark2's
+    /// scene teardown all `glDeleteProgram` a program that is still current and then keep drawing with it.
     pub fn delete_program(&mut self, program: u32) {
+        if !self.programs.flag(program) {
+            return;
+        }
+        if self.local.cur_prog != program {
+            self.destroy_program(program);
+        }
+    }
+
+    /// Remove a program object and retire its host resources. Used once the program stops being current.
+    pub(crate) fn destroy_program(&mut self, program: u32) {
         if self.programs.delete(program) {
             // Retire the program's resident IR shader modules + render pipelines (queued Destroy for the next
             // frame), so a deleted Skia/GskGpu program stops holding host residency and a recycled GL program
@@ -478,7 +500,8 @@ impl GlContext {
         }
     }
 
-    /// `glDeleteShader(shader)` — drop the shader object (its source + compile state).
+    /// `glDeleteShader(shader)` — ES 3.0 §7.1: a shader still attached to a program is only flagged; its
+    /// source and compile status survive until the last `glDetachShader`.
     pub fn delete_shader(&mut self, shader: u32) {
         self.programs.delete_shader(shader);
     }
