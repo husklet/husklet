@@ -200,8 +200,24 @@ pub extern "C" fn cudaGetDeviceProperties_v2(prop: *mut c_void, device: i32) -> 
     p.texture_alignment = 512;
     p.texture_pitch_alignment = 32;
     p.max_texture_1d = 131072;
-    p.cooperative_launch = 1;
+    // `cooperative_launch` stays 0: the kernel IR has no grid-wide barrier, so a cooperative-groups
+    // `grid.sync()` could not be honoured. Advertising it would invite silently unsynchronised results,
+    // and it must agree with `CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH`, which also reports 0.
     CUDART_SUCCESS
+}
+
+/// Byte offsets into the filled `cudaDeviceProp` that the tests read back. Derived from the `#[repr(C)]`
+/// layout itself so an assertion can never drift from the struct it inspects.
+#[cfg(test)]
+pub(crate) struct DevicePropOffset;
+
+#[cfg(test)]
+impl DevicePropOffset {
+    pub(crate) const MAJOR: usize = core::mem::offset_of!(CudaDeviceProp, major);
+    pub(crate) const MINOR: usize = core::mem::offset_of!(CudaDeviceProp, minor);
+    pub(crate) const COOPERATIVE_LAUNCH: usize =
+        core::mem::offset_of!(CudaDeviceProp, cooperative_launch);
+    pub(crate) const SIZE: usize = core::mem::size_of::<CudaDeviceProp>();
 }
 
 /// `cudaGetDeviceProperties(prop, device)` — the unversioned alias; identical fill to the `_v2` form.

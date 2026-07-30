@@ -51,8 +51,15 @@ impl State {
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(8u64 << 30);
+        // The launcher-configured identity (`HL_CUDA_NAME` / `HL_CUDA_CC`), applied so the runtime API
+        // reports the SAME device as `libcuda` and `libnvidia-ml`.
+        let mut device = CudaDeviceDesc::apple_default(vram);
+        device.configure(
+            std::env::var("HL_CUDA_NAME").ok().as_deref(),
+            std::env::var("HL_CUDA_CC").ok().as_deref(),
+        );
         State {
-            ctx: CudaContext::new(CudaDeviceDesc::apple_default(vram)),
+            ctx: CudaContext::new(device),
             sink: RemoteCommandSink::new(
                 std::env::var("HL_GPU_EXEC").unwrap_or_else(|_| DEFAULT_EXEC_SOCK.to_owned()),
             ),

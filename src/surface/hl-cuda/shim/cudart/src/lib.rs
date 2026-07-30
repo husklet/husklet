@@ -120,6 +120,15 @@ mod tests {
             let num_regs = i32::from_le_bytes(ra[28..32].try_into().unwrap());
             assert!(num_regs > 0, "vecadd uses registers, got {num_regs}");
             assert_eq!(shared, 0, "vecadd declares no static shared memory");
+            // Dynamic shared memory is not
+            // expressible in the kernel IR (the PTX front-end rejects `.extern .shared`), so the opt-in
+            // maximum must be reported as 0 rather than advertising bytes no kernel can be given.
+            let at = crate::runtime::FuncAttrOffset::MAX_DYNAMIC_SHARED_SIZE_BYTES;
+            let max_dynamic = i32::from_le_bytes(ra[at..at + 4].try_into().unwrap());
+            assert_eq!(
+                max_dynamic, 0,
+                "dynamic shared memory must not be advertised"
+            );
 
             // __cudaRegisterVar binds a __device__/__constant__ global; hl's PTX model parses only kernel
             // entries, so it is an honest no-op (must not panic across the C ABI).
@@ -242,6 +251,42 @@ mod tests {
             __cudaPopCallConfiguration(&mut og, &mut ob, &mut oshm, core::ptr::null_mut()),
             9
         );
+    }
+
+    /// `cudaGetDeviceProperties` must report the launcher-configured identity (`HL_CUDA_NAME` /
+    /// `HL_CUDA_CC`) — the same device `libcuda` and `libnvidia-ml` describe — and must NOT advertise
+    /// `cooperativeLaunch`: the kernel IR has no grid-wide barrier, so a cooperative-groups `grid.sync()`
+    /// could not be honoured, and `CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH` reports 0 as well.
+    #[test]
+    fn device_properties_report_the_configured_identity_and_no_cooperative_launch() {
+        use crate::runtime::DevicePropOffset as Offset;
+
+        let _serial = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("HL_CUDA_NAME", "NVIDIA GeForce RTX 3060");
+        std::env::set_var("HL_CUDA_CC", "7.5");
+        crate::state::reset();
+
+        let mut buf = vec![0u8; Offset::SIZE];
+        assert_eq!(
+            cudaGetDeviceProperties(buf.as_mut_ptr() as *mut c_void, 0),
+            0
+        );
+        let name = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr() as *const c_char) }
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(name, "NVIDIA GeForce RTX 3060");
+        let read = |at: usize| i32::from_le_bytes(buf[at..at + 4].try_into().unwrap());
+        assert_eq!(read(Offset::MAJOR), 7);
+        assert_eq!(read(Offset::MINOR), 5);
+        assert_eq!(
+            read(Offset::COOPERATIVE_LAUNCH),
+            0,
+            "cooperativeLaunch must not be advertised: the IR has no grid-wide barrier"
+        );
+
+        std::env::remove_var("HL_CUDA_NAME");
+        std::env::remove_var("HL_CUDA_CC");
+        crate::state::reset();
     }
 
     // Local copies of the result codes the assertions above reference (kept crate-private).

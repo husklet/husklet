@@ -201,6 +201,11 @@ pub fn launch(
 ///
 /// This is a hard precondition: it runs before any `Cmd` is built, so an invalid launch surfaces an
 /// honest error and emits NOTHING to the sink.
+/// The per-axis launch geometry limits the modeled device advertises through
+/// `CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_*` / `MAX_GRID_DIM_*` and `cudaDeviceProp`.
+const MAX_BLOCK_DIM: [u32; 3] = [1024, 1024, 64];
+const MAX_GRID_DIM: [u32; 3] = [2147483647, 65535, 65535];
+
 fn validate_launch_dims(
     ctx: &CudaContext,
     grid: (u32, u32, u32),
@@ -213,6 +218,18 @@ fn validate_launch_dims(
     if block.0 == 0 || block.1 == 0 || block.2 == 0 {
         hl_log::hl_warn!(hl_log::tag::CUDA, "launch zero block dim {:?}", block);
         return Err(GpuError::Invalid("cuLaunchKernel: block dimension is zero"));
+    }
+    // Per-axis limits must match what `cuDeviceGetAttribute`/`cudaDeviceProp` advertise, or the driver
+    // would accept a grid/block the device it describes could never dispatch.
+    if block.0 > MAX_BLOCK_DIM[0] || block.1 > MAX_BLOCK_DIM[1] || block.2 > MAX_BLOCK_DIM[2] {
+        return Err(GpuError::Invalid(
+            "cuLaunchKernel: block dimension exceeds device maxThreadsDim",
+        ));
+    }
+    if grid.0 > MAX_GRID_DIM[0] || grid.1 > MAX_GRID_DIM[1] || grid.2 > MAX_GRID_DIM[2] {
+        return Err(GpuError::Invalid(
+            "cuLaunchKernel: grid dimension exceeds device maxGridSize",
+        ));
     }
     // Thread-count product in u64 so a `u32^3` block can never overflow past the comparison.
     let threads = (block.0 as u64) * (block.1 as u64) * (block.2 as u64);

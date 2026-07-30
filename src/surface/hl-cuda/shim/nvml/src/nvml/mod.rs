@@ -57,22 +57,12 @@ impl Nvml {
 
     /// Seed device identity from the launcher's `HL_CUDA_*` env (idempotent on repeat init).
     fn seed_from_env(&mut self) {
-        if let Ok(name) = std::env::var("HL_CUDA_NAME") {
-            if !name.is_empty() {
-                self.desc.name = name;
-            }
-        }
-        // Compute capability "maj.min" (HL_CUDA_CC), e.g. "8.6".
-        if let Ok(cc) = std::env::var("HL_CUDA_CC") {
-            let mut it = cc.split('.');
-            if let Some(maj) = it.next().and_then(|s| s.trim().parse::<u32>().ok()) {
-                let min = it
-                    .next()
-                    .and_then(|s| s.trim().parse::<u32>().ok())
-                    .unwrap_or(0);
-                self.desc.compute_capability = (maj, min);
-            }
-        }
+        // Name + compute capability "maj.min" — the SAME policy `libcuda`/`libcudart` apply, so all three
+        // guest libraries report one device identity.
+        self.desc.configure(
+            std::env::var("HL_CUDA_NAME").ok().as_deref(),
+            std::env::var("HL_CUDA_CC").ok().as_deref(),
+        );
         // Reported VRAM: prefer the launcher's byte-exact HL_CUDA_VRAM_BYTES, else the C-oracle's
         // HL_CUDA_VRAM (megabytes).
         if let Some(bytes) = std::env::var("HL_CUDA_VRAM_BYTES")

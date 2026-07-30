@@ -30,6 +30,16 @@ impl Ptx {
         let base = opcode.split('.').next().unwrap_or(opcode);
         let has = |m: &str| opcode.split('.').any(|x| x == m);
 
+        // A guard on anything but `bra` is a PREDICATED instruction. `Inst` carries a predicate only on
+        // `Bra`, so the guard cannot be honoured elsewhere; dropping it would execute the instruction
+        // unconditionally and return a plausible wrong result instead of the one the kernel asks for.
+        if guard.is_some() && base != "bra" {
+            return Err(Ptx::error(format!(
+                "predicated `{opcode}` unsupported (only `@p bra` is modeled): `{stmt}`"
+            )));
+        }
+        Ptx::reject_unmodeled_width(opcode, stmt)?;
+
         let reg = |i: &mut Interner, tok: &str| -> u16 { i.get(Ptx::strip_reg(tok)) };
 
         macro_rules! need {
@@ -183,6 +193,13 @@ impl Ptx {
             }
             "mul" => {
                 need!(3);
+                if !has("f32") && (has("hi") || ((has("s64") || has("u64")) && !has("wide"))) {
+                    // `Inst::IMul` computes either the low 32 bits or the 32×32→64 `wide` product; a
+                    // `.hi` or 64×64 multiply has no faithful form and must not fall through to `.lo`.
+                    return Err(Ptx::error(format!(
+                        "`{opcode}` unsupported (only 32-bit `.lo` and `mul.wide.[su]32` are modeled): `{stmt}`"
+                    )));
+                }
                 let d = reg(interner, &ops[0]);
                 if has("f32") {
                     Inst::FMul {
@@ -202,6 +219,13 @@ impl Ptx {
             }
             "mad" => {
                 need!(4);
+                if has("hi") || has("wide") || has("s64") || has("u64") {
+                    // `Inst::IMad` is the 32-bit `.lo` form only; `.hi`/`.wide`/64-bit would silently
+                    // report the low 32 bits of the wrong product.
+                    return Err(Ptx::error(format!(
+                        "`{opcode}` unsupported (only `mad.lo.[su]32` is modeled): `{stmt}`"
+                    )));
+                }
                 let d = reg(interner, &ops[0]);
                 Inst::IMad {
                     d,
@@ -222,6 +246,15 @@ impl Ptx {
             }
             "setp" => {
                 need!(3);
+                if has("f32") {
+                    // `Inst::Setp` compares 32-bit INTEGERS. An IEEE-754 f32 compare only coincides with
+                    // a signed-integer compare of the bit patterns while both operands are non-negative;
+                    // for a negative operand the ordering inverts. Rejecting is the only honest answer
+                    // until the IR gains a float compare.
+                    return Err(Ptx::error(format!(
+                        "floating-point `{opcode}` unsupported (the IR compares integers): `{stmt}`"
+                    )));
+                }
                 let d = reg(interner, &ops[0]);
                 let cmp = if has("eq") {
                     CMP_EQ
@@ -250,21 +283,15 @@ impl Ptx {
                 need!(2);
                 let d = reg(interner, &ops[0]);
                 let s = parse_op(&ops[1], interner, has("f32"), sregs)?;
-                let mods: Vec<&str> = opcode.split('.').skip(1).collect();
-                let tys: Vec<&str> = mods
-                    .into_iter()
-                    .filter(|m| m.starts_with('f') || m.starts_with('s') || m.starts_with('u'))
+                // Only the `.<dst>.<src>` type tokens matter; rounding/saturation modifiers (`rn`, `rzi`,
+                // `sat`, …) are filtered out by name, not by first letter — `sat` would otherwise be read
+                // as the destination type.
+                let tys: Vec<&str> = opcode
+                    .split('.')
+                    .skip(1)
+                    .filter(|m| Ptx::is_scalar_type(m))
                     .collect();
-                let kind = match (tys.first(), tys.get(1)) {
-                    (Some(&d), Some(&s)) if d.starts_with('f') && s.starts_with('s') => {
-                        CVT_F32_FROM_S32
-                    }
-                    (Some(&d), Some(&s)) if d == "s64" && s.starts_with('s') => CVT_S64_FROM_S32,
-                    (Some(&d), Some(&s)) if d.starts_with('s') && s.starts_with('f') => {
-                        CVT_S32_FROM_F32
-                    }
-                    _ => CVT_IDENTITY,
-                };
+                let kind = Ptx::cvt_kind(tys.first().copied(), tys.get(1).copied(), stmt)?;
                 Inst::Cvt { d, s, kind }
             }
             "shl" | "shr" => {
@@ -366,11 +393,91 @@ impl Ptx {
     }
 }
 
+/// Opcode type-suffix rules: which widths the 32-bit kernel IR can represent, and which `cvt` type pairs
+/// it actually performs.
+impl Ptx {
+    /// Is `token` a PTX scalar type suffix (as opposed to a rounding/saturation/space modifier)?
+    fn is_scalar_type(token: &str) -> bool {
+        matches!(
+            token,
+            "s8" | "s16"
+                | "s32"
+                | "s64"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "b8"
+                | "b16"
+                | "b32"
+                | "b64"
+                | "f16"
+                | "f32"
+                | "f64"
+                | "bf16"
+                | "pred"
+        )
+    }
+
+    /// Reject an opcode whose type suffix names a width the kernel IR cannot represent. The modeled ALU is
+    /// 32-bit integer plus f32 (`Inst` has no f64/f16 form), so a wider or narrower float operation has no
+    /// faithful lowering — falling through to the 32-bit form would compute on the wrong bits and hand the
+    /// application a plausible wrong number.
+    fn reject_unmodeled_width(opcode: &str, stmt: &str) -> Result<()> {
+        const UNMODELED: &[&str] = &[
+            "f64", "f16", "f16x2", "bf16", "bf16x2", "f32x2", "e4m3", "e5m2", "tf32",
+        ];
+        match opcode.split('.').find(|t| UNMODELED.contains(t)) {
+            Some(ty) => Err(Self::error(format!(
+                "`.{ty}` is outside the modeled 32-bit (s32/u32/f32) subset: `{stmt}`"
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    /// Map a `cvt.<dst>.<src>` type pair onto the `CVT_*` kind the executor performs. Only conversions the
+    /// IR really carries out are accepted; an unmodeled pair (`cvt.rn.f32.u32`, `cvt.rzi.u32.f32`,
+    /// `cvt.s32.s8`, …) is a typed error instead of `CVT_IDENTITY`, which would reinterpret the bits and
+    /// return a wrong number. `CVT_IDENTITY` stays reserved for a same-width integer reinterpretation,
+    /// where a bit-preserving move IS the conversion.
+    fn cvt_kind(dst: Option<&str>, src: Option<&str>, stmt: &str) -> Result<u8> {
+        let unsupported = || {
+            Self::error(format!(
+                "unsupported `cvt` conversion (modeled: f32<->s32, s64<-s32, same-width integer): `{stmt}`"
+            ))
+        };
+        let (dst, src) = (dst.ok_or_else(unsupported)?, src.ok_or_else(unsupported)?);
+        let width = |t: &str| match t {
+            "s8" | "u8" | "b8" => 8u32,
+            "s16" | "u16" | "b16" => 16,
+            "s32" | "u32" | "b32" | "f32" => 32,
+            "s64" | "u64" | "b64" => 64,
+            _ => 0,
+        };
+        Ok(match (dst, src) {
+            ("f32", "s32") => CVT_F32_FROM_S32,
+            ("s64", "s32") => CVT_S64_FROM_S32,
+            ("s32", "f32") => CVT_S32_FROM_F32,
+            (d, s) if d != "f32" && s != "f32" && width(d) == width(s) && width(d) != 0 => {
+                CVT_IDENTITY
+            }
+            _ => return Err(unsupported()),
+        })
+    }
+}
+
 /// Map an `atom.*`/`red.*` opcode to an `ATOM_*` code.
 impl Ptx {
     fn atom_op(opcode: &str) -> Result<u8> {
         let m = |x: &str| opcode.split('.').any(|t| t == x);
-        Ok(if m("add") || m("inc") {
+        if m("inc") || m("dec") {
+            // `atom.inc`/`atom.dec` wrap at the operand value; `ATOM_ADD` does not, so mapping them onto
+            // it silently changes the result once the counter reaches the wrap point.
+            return Err(Self::error(format!(
+                "`{opcode}` unsupported (wrapping increment is not modeled)"
+            )));
+        }
+        Ok(if m("add") {
             ATOM_ADD
         } else if m("min") {
             ATOM_MIN

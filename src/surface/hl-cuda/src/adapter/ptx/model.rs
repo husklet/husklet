@@ -3,11 +3,21 @@ use super::*;
 #[derive(Default)]
 pub(super) struct Interner {
     map: std::collections::HashMap<String, u16>,
+    /// Set once the kernel names more than `u16::MAX` distinct registers (see [`Interner::get`]).
+    overflowed: bool,
 }
 impl Interner {
+    /// Register indices are `u16` in the IR. A kernel that names more than `u16::MAX` distinct registers
+    /// cannot be represented: truncating `len()` would alias two registers onto one index (wrong results)
+    /// and make `count()` smaller than an already-issued index (an out-of-range register-table access).
+    /// `overflowed` records that so [`Ptx::parse_body`] can fail loudly instead.
     pub(super) fn get(&mut self, name: &str) -> u16 {
         if let Some(&i) = self.map.get(name) {
             return i;
+        }
+        if self.map.len() >= u16::MAX as usize {
+            self.overflowed = true;
+            return 0;
         }
         let i = self.map.len() as u16;
         self.map.insert(name.to_string(), i);
@@ -15,6 +25,9 @@ impl Interner {
     }
     pub(super) fn count(&self) -> u16 {
         self.map.len() as u16
+    }
+    pub(super) fn is_overflowed(&self) -> bool {
+        self.overflowed
     }
 }
 

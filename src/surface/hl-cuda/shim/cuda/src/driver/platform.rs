@@ -192,6 +192,9 @@ pub extern "C" fn cuDeviceGetAttribute(pi: *mut i32, attrib: i32, dev: i32) -> i
             CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS => 1,
             CU_DEVICE_ATTRIBUTE_DIRECT_MANAGED_MEM_ACCESS_FROM_HOST => 1,
             CU_DEVICE_ATTRIBUTE_MEMORY_POOLS_SUPPORTED => 0, // pools are unsupported
+            // No grid-wide barrier in the kernel IR → cooperative launch is genuinely absent, and
+            // `cuLaunchCooperativeKernel` / `cudaDeviceProp::cooperativeLaunch` must agree.
+            CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH => 0,
             _ => 0, // spec-faithful default for the unmodeled attribute tail
         }
     });

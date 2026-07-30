@@ -198,7 +198,6 @@ pub extern "C" fn cuFuncGetAttribute(pi: *mut i32, attrib: i32, f: *mut c_void) 
         let Some((num_regs, static_shared)) = FunctionResources::get(s, f) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
-        let dyn_shared = s.func_dyn_shared(f).unwrap_or(0);
         let cc = s.ctx.device.compute_capability;
         let arch = cc.0 as i32 * 10 + cc.1 as i32; // e.g. sm_86 → 86
         let val = match attrib {
@@ -210,7 +209,9 @@ pub extern "C" fn cuFuncGetAttribute(pi: *mut i32, attrib: i32, f: *mut c_void) 
             CU_FUNC_ATTRIBUTE_PTX_VERSION => arch,
             CU_FUNC_ATTRIBUTE_BINARY_VERSION => arch,
             CU_FUNC_ATTRIBUTE_CACHE_MODE_CA => 0,
-            CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES => dyn_shared,
+            // Dynamic shared memory is not expressible in the kernel IR (the PTX front-end
+            // rejects `.extern .shared`), so the opt-in maximum is truthfully 0.
+            CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES => 0,
             CU_FUNC_ATTRIBUTE_PREFERRED_SHARED_MEMORY_CARVEOUT => -1, // no preference
             _ => 0, // spec-faithful default for the unmodeled attribute tail
         };
@@ -219,21 +220,25 @@ pub extern "C" fn cuFuncGetAttribute(pi: *mut i32, attrib: i32, f: *mut c_void) 
     })
 }
 
-/// `cuFuncSetAttribute` — record `MAX_DYNAMIC_SHARED_SIZE_BYTES` (the one attribute the model honors);
-/// any other attribute is accepted as a no-op once the handle validates.
+/// `cuFuncSetAttribute` — raising `MAX_DYNAMIC_SHARED_SIZE_BYTES` above 0 is refused: dynamic
+/// (`extern __shared__`) shared memory is not expressible in the kernel IR, and the PTX front-end already
+/// rejects a `.extern .shared` declaration outright. Accepting the opt-in and echoing it back would
+/// promise a resource no kernel can ever be given. Setting it to 0 is the honest no-op; any other
+/// attribute is accepted as a no-op once the handle validates.
 #[no_mangle]
 pub extern "C" fn cuFuncSetAttribute(f: *mut c_void, attrib: i32, value: i32) -> i32 {
     ShimState::with(|s| {
-        let ok = if attrib == CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES {
-            s.set_func_dyn_shared(f, value)
-        } else {
-            s.func_dyn_shared(f).is_some() // validate the handle
-        };
-        if ok {
-            CUDA_SUCCESS
-        } else {
-            CUDA_ERROR_INVALID_HANDLE
+        if s.function(f).is_none() {
+            return CUDA_ERROR_INVALID_HANDLE;
         }
+        if attrib == CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES && value != 0 {
+            crate::stub::Call::unsupported(
+                "cuFuncSetAttribute",
+                "dynamic shared memory is not expressible in the kernel IR",
+            );
+            return CUDA_ERROR_INVALID_VALUE;
+        }
+        CUDA_SUCCESS
     })
 }
 

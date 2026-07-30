@@ -28,8 +28,9 @@ use hl_cuda::model::stream::Stream;
 use hl_cuda::service::{allocate, launch, load_module, transfer};
 use hl_cuda::{result, CudaContext, CudaDeviceDesc, DevicePtr, Function, KernelArg};
 
+use hl_gpu::protocol::model::command::etag;
 use hl_gpu::protocol::model::capability::{
-    shader_payload, Capabilities, ALL_COMMANDS, COLOR_FORMATS,
+    shader_payload, Capabilities, COLOR_FORMATS,
 };
 use hl_gpu::protocol::model::enums::TextureFormat;
 use hl_gpu::protocol::model::kernel::KernelDescriptor;
@@ -37,6 +38,18 @@ use hl_gpu::{
     BufferId, CommandSink, CpuExecutor, FeatureRequest, GpuError, InProcessCommandSink,
     WIRE_VERSION,
 };
+
+/// The encoder commands the CUDA lowering actually emits: a compute pass with a dispatch, plus the
+/// on-device buffer copy `cuMemcpyDtoD` lowers to. A CUDA driver encodes no render pass and no texture
+/// copy, so negotiating the full command set would claim a surface this driver never uses — and would be
+/// refused by any executor that honestly advertises less than everything.
+const CUDA_COMMANDS: &[u8] = &[
+    etag::BEGIN_COMPUTE_PASS,
+    etag::END_COMPUTE_PASS,
+    etag::DISPATCH,
+    etag::COPY_B2B,
+];
+
 
 // --------------------------------------------------------------------------------------------------
 // shared harness — identical wiring to tests/robustness_demo.rs (real CpuExecutor, so valid ops compute).
@@ -51,7 +64,7 @@ fn harness() -> InProcessCommandSink<CpuExecutor> {
     let req = FeatureRequest {
         wire_version: WIRE_VERSION,
         shader_payloads: shader_payload::KERNEL,
-        command_bits: Capabilities::command_bits(ALL_COMMANDS),
+        command_bits: Capabilities::command_bits(CUDA_COMMANDS),
         texture_formats: TextureFormat::bits(COLOR_FORMATS),
         ..FeatureRequest::default()
     };

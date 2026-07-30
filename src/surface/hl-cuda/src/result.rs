@@ -79,6 +79,9 @@ pub const CU_DEVICE_ATTRIBUTE_PCI_DOMAIN_ID: i32 = 50;
 pub const CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR: i32 = 75;
 pub const CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR: i32 = 76;
 pub const CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR: i32 = 81;
+/// Cooperative (grid-synchronizing) launch support. The kernel IR has no grid-wide barrier, so the
+/// modeled device reports this absent and `cuLaunchCooperativeKernel` is `CUDA_ERROR_NOT_SUPPORTED`.
+pub const CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH: i32 = 95;
 pub const CU_DEVICE_ATTRIBUTE_MANAGED_MEMORY: i32 = 83;
 pub const CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD: i32 = 84;
 pub const CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS: i32 = 89;

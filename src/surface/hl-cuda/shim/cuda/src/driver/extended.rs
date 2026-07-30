@@ -1,6 +1,11 @@
 use super::*;
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
+/// `cuLaunchCooperativeKernel(...)` — a cooperative launch guarantees every block is co-resident so the
+/// grid can synchronize (`grid.sync()`). The kernel IR has no grid-wide barrier, so that guarantee cannot
+/// be made: this is honestly `CUDA_ERROR_NOT_SUPPORTED`, agreeing with
+/// `CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH` / `cudaDeviceProp::cooperativeLaunch` (both 0). Running the
+/// kernel as an ordinary launch instead would silently drop every grid synchronization.
 pub extern "C" fn cuLaunchCooperativeKernel(
     f: *mut c_void,
     gx: u32,
@@ -13,19 +18,12 @@ pub extern "C" fn cuLaunchCooperativeKernel(
     stream: *mut c_void,
     kernel_params: *mut *mut c_void,
 ) -> i32 {
-    cuLaunchKernel(
-        f,
-        gx,
-        gy,
-        gz,
-        bx,
-        by,
-        bz,
-        shared_mem_bytes,
-        stream,
-        kernel_params,
-        core::ptr::null_mut(),
-    )
+    let _ = (f, gx, gy, gz, bx, by, bz, shared_mem_bytes, stream, kernel_params);
+    crate::stub::Call::unsupported(
+        "cuLaunchCooperativeKernel",
+        "no grid-wide barrier in the kernel IR",
+    );
+    CUDA_ERROR_NOT_SUPPORTED
 }
 
 /// `cuLaunchHostFunc(stream, fn, userData)` — enqueue a host callback in stream order. With the
@@ -164,8 +162,9 @@ pub extern "C" fn cuPointerSetAttribute(value: *const c_void, attr: i32, ptr: u6
 }
 
 /// `cuOccupancyAvailableDynamicSMemPerBlock(dynSmem, f, numBlocks, blockSize)` — the dynamic shared bytes
-/// still available per block if `numBlocks` blocks of the function co-reside on an SM: the SM's shared
-/// budget split across the blocks, minus the function's static shared use.
+/// available per block. Dynamic shared memory is not expressible in the kernel IR (the PTX front-end
+/// rejects `.extern .shared`) and `cuFuncSetAttribute` refuses to opt in to it, so the truthful answer is
+/// 0 rather than a share of the SM budget a kernel could never be given. The handle is still validated.
 #[no_mangle]
 pub extern "C" fn cuOccupancyAvailableDynamicSMemPerBlock(
     dyn_smem: *mut usize,
@@ -181,9 +180,8 @@ pub extern "C" fn cuOccupancyAvailableDynamicSMemPerBlock(
         let Some((_num_regs, static_shared)) = FunctionResources::get(s, f) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
-        let per_block = MAX_SHARED_PER_SM / num_blocks; // the SM shared budget divided among the blocks
-        let avail = per_block.saturating_sub(static_shared as i32).max(0);
-        unsafe { *dyn_smem = avail as usize };
+        let _ = static_shared;
+        unsafe { *dyn_smem = 0 };
         CUDA_SUCCESS
     })
 }

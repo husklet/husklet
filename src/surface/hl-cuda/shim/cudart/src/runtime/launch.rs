@@ -204,6 +204,17 @@ struct CudaFuncAttributes {
     reserved: [i32; 16],
 }
 
+/// Byte offsets into the filled `cudaFuncAttributes` that the tests read back, derived from the
+/// `#[repr(C)]` layout itself so an assertion can never drift from the struct it inspects.
+#[cfg(test)]
+pub(crate) struct FuncAttrOffset;
+
+#[cfg(test)]
+impl FuncAttrOffset {
+    pub(crate) const MAX_DYNAMIC_SHARED_SIZE_BYTES: usize =
+        core::mem::offset_of!(CudaFuncAttributes, max_dynamic_shared_size_bytes);
+}
+
 /// `cudaFuncGetAttributes(attr, func)` — the launch-relevant attributes of a device function. `func` is
 /// nvcc's host stub pointer; when it resolves through the runtime-API [`register::Registry`] to a real
 /// device entry, the register + static-shared figures are recovered from the module PTX by the SAME
@@ -237,7 +248,8 @@ pub extern "C" fn cudaFuncGetAttributes(attr: *mut c_void, func: *const c_void) 
         ptx_version: ptx_ver,
         binary_version: ptx_ver,
         cache_mode_ca: 0,
-        max_dynamic_shared_size_bytes: 49152,
+        // Dynamic shared memory is not expressible in the kernel IR, so the opt-in maximum is 0.
+        max_dynamic_shared_size_bytes: 0,
         preferred_shmem_carveout: -1,
         cluster_dim_must_be_set: 0,
         required_cluster_width: 0,

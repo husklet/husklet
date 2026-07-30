@@ -44,6 +44,33 @@ impl CudaDeviceDesc {
         }
     }
 
+    /// Apply the product-configured device identity (`HL_CUDA_NAME`, `HL_CUDA_CC` as `"major.minor"`).
+    /// Empty / unparsable input leaves the corresponding field at its default.
+    ///
+    /// All three guest libraries must apply this: `libcuda`/`libcudart` reporting a hardcoded name and
+    /// compute capability while `libnvidia-ml` reports the configured one makes the device
+    /// self-contradictory to any application that reads both (`nvidia-smi` versus
+    /// `cudaGetDeviceProperties`).
+    pub fn configure(&mut self, name: Option<&str>, compute_capability: Option<&str>) {
+        if let Some(name) = name.map(str::trim).filter(|n| !n.is_empty()) {
+            self.name = name.to_owned();
+        }
+        if let Some(capability) = compute_capability.and_then(Self::capability) {
+            self.compute_capability = capability;
+        }
+    }
+
+    /// Parse a `"major.minor"` compute capability (a bare `"8"` means `(8, 0)`).
+    fn capability(text: &str) -> Option<(u32, u32)> {
+        let mut parts = text.trim().split('.');
+        let major = parts.next()?.trim().parse::<u32>().ok()?;
+        let minor = parts
+            .next()
+            .and_then(|m| m.trim().parse::<u32>().ok())
+            .unwrap_or(0);
+        Some((major, minor))
+    }
+
     pub fn compute_capability_str(&self) -> String {
         format!(
             "{}.{}",

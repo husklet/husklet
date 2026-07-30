@@ -32,9 +32,6 @@ pub struct State {
 
     /// `CUfunction` table: an opaque handle is `index + 1`. Holds the resolved [`Function`] + entry name.
     functions: Vec<(Function, CString)>,
-    /// Parallel to `functions`: per-function dynamic-shared-memory bytes set via
-    /// `cuFuncSetAttribute(MAX_DYNAMIC_SHARED_SIZE_BYTES)` and read back by `cuFuncGetAttribute`.
-    func_dyn_shared: Vec<i32>,
     /// Parallel to `functions`: the per-function preferred cache config recorded by
     /// `cuFuncSetCacheConfig` (a hint the synchronous executor honors as a no-op, but reports faithfully).
     func_cache_config: Vec<i32>,
@@ -81,15 +78,21 @@ impl State {
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(8u64 << 30);
+        // The launcher-configured identity (`HL_CUDA_NAME` / `HL_CUDA_CC`), applied so the driver API
+        // reports the SAME device as `libnvidia-ml` and `libcudart`.
+        let mut device = CudaDeviceDesc::apple_default(vram);
+        device.configure(
+            std::env::var("HL_CUDA_NAME").ok().as_deref(),
+            std::env::var("HL_CUDA_CC").ok().as_deref(),
+        );
         State {
             inited: false,
-            ctx: CudaContext::new(CudaDeviceDesc::apple_default(vram)),
+            ctx: CudaContext::new(device),
             // Connect target from $HL_GPU_EXEC; the connection itself is opened lazily on first submit.
             sink: RemoteCommandSink::new(
                 std::env::var("HL_GPU_EXEC").unwrap_or_else(|_| DEFAULT_EXEC_SOCK.to_owned()),
             ),
             functions: Vec::new(),
-            func_dyn_shared: Vec::new(),
             func_cache_config: Vec::new(),
             modules: Vec::new(),
             streams: Vec::new(),
@@ -259,7 +262,6 @@ impl State {
     pub fn intern_function(&mut self, f: Function, name: &str) -> *mut c_void {
         self.functions
             .push((f, CString::new(name).unwrap_or_default()));
-        self.func_dyn_shared.push(0);
         self.func_cache_config.push(0);
         self.functions.len() as *mut c_void
     }
@@ -275,20 +277,6 @@ impl State {
     fn func_index(&self, h: *mut c_void) -> Option<usize> {
         let idx = h as usize;
         (idx != 0 && idx <= self.functions.len()).then_some(idx - 1)
-    }
-    /// Per-function dynamic-shared bytes (`cuFuncGetAttribute`); `None` for a bad handle.
-    pub fn func_dyn_shared(&self, h: *mut c_void) -> Option<i32> {
-        self.func_index(h).map(|i| self.func_dyn_shared[i])
-    }
-    /// Set per-function dynamic-shared bytes (`cuFuncSetAttribute`); `false` for a bad handle.
-    pub fn set_func_dyn_shared(&mut self, h: *mut c_void, v: i32) -> bool {
-        match self.func_index(h) {
-            Some(i) => {
-                self.func_dyn_shared[i] = v;
-                true
-            }
-            None => false,
-        }
     }
     /// Record a function's preferred cache config (`cuFuncSetCacheConfig`); `false` for a bad handle.
     pub fn set_func_cache_config(&mut self, h: *mut c_void, c: i32) -> bool {

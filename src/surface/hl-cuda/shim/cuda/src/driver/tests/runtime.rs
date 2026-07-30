@@ -316,19 +316,20 @@ fn stream_capture_priority_and_memory_hints() {
 fn available_dynamic_smem_is_sane() {
     let _g = guard();
     let f = load_vecadd();
-    // vecadd has no static shared, so the whole per-block SM budget is available as dynamic smem.
-    let mut smem = 0usize;
+    // Dynamic shared memory is not expressible in the kernel IR, so the available amount is truthfully 0
+    // for any block count — not a share of an SM budget a kernel could never be given.
+    let mut smem = 1usize;
     assert_eq!(
         cuOccupancyAvailableDynamicSMemPerBlock(&mut smem, f, 1, 256),
         CUDA_SUCCESS
     );
-    assert_eq!(smem, MAX_SHARED_PER_SM as usize);
-    // Splitting across 2 co-resident blocks halves it.
+    assert_eq!(smem, 0);
+    smem = 1;
     assert_eq!(
         cuOccupancyAvailableDynamicSMemPerBlock(&mut smem, f, 2, 256),
         CUDA_SUCCESS
     );
-    assert_eq!(smem, (MAX_SHARED_PER_SM / 2) as usize);
+    assert_eq!(smem, 0);
     // Invalid args / bad handle rejected honestly.
     assert_eq!(
         cuOccupancyAvailableDynamicSMemPerBlock(core::ptr::null_mut(), f, 1, 256),

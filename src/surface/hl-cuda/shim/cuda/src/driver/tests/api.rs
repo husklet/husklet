@@ -107,9 +107,16 @@ fn func_set_attribute_and_cache_config_round_trip() {
     let _g = guard();
     let f = load_vecadd();
 
-    // dynamic-shared bytes round-trip through get.
+    // Opting in to dynamic shared memory is REFUSED: `.extern .shared` is rejected by the PTX front-end,
+    // so no kernel can ever be handed the bytes. Accepting the opt-in and echoing it back would advertise
+    // a resource that does not exist.
     assert_eq!(
         cuFuncSetAttribute(f, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, 2048),
+        CUDA_ERROR_INVALID_VALUE
+    );
+    // Setting it to 0 (the modeled value) is the honest no-op, and the getter reports 0.
+    assert_eq!(
+        cuFuncSetAttribute(f, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, 0),
         CUDA_SUCCESS
     );
     let mut v = -1i32;
@@ -117,7 +124,7 @@ fn func_set_attribute_and_cache_config_round_trip() {
         cuFuncGetAttribute(&mut v, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, f),
         CUDA_SUCCESS
     );
-    assert_eq!(v, 2048);
+    assert_eq!(v, 0);
 
     // cache config records (no-op hint) for a valid handle; a bad handle is rejected.
     assert_eq!(cuFuncSetCacheConfig(f, 1), CUDA_SUCCESS);

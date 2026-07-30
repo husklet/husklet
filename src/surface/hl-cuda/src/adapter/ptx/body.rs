@@ -72,6 +72,12 @@ impl Ptx {
             insts.push(inst);
         }
 
+        if interner.is_overflowed() {
+            return Err(Ptx::error(
+                "kernel names more than 65535 registers — outside the modeled register file",
+            ));
+        }
+
         // Materialize operand-position special registers: emit their `MovSReg` prelude at the top of the
         // stream, then shift every branch target past it. Branch targets are instruction indices (== statement
         // ordinals here), so they move by the prelude length; `ld_param` seeds are register indices, unaffected.
