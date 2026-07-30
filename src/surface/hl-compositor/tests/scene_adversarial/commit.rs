@@ -92,7 +92,9 @@ fn region_and_title_only_commit_updates_state_without_dirtying() {
         Commit {
             buffer: BufferChange::Keep,
             opaque_region: Some(Some(Rect::new(0, 0, 50, 50))),
-            input_region: Some(Some(Rect::new(10, 10, 20, 20))),
+            input_region: Some(Some(Region::from_spans(vec![Span::Add(Rect::new(
+                10, 10, 20, 20,
+            ))]))),
             title: Some("hello".into()),
             ..Commit::default()
         },
@@ -101,7 +103,10 @@ fn region_and_title_only_commit_updates_state_without_dirtying() {
     assert!(!scene.is_dirty(id));
     let s = scene.get(id).unwrap();
     assert_eq!(s.opaque_region, Some(Rect::new(0, 0, 50, 50)));
-    assert_eq!(s.input_region, Some(Rect::new(10, 10, 20, 20)));
+    assert_eq!(
+        s.input_region.as_ref().and_then(Region::bounding_box),
+        Some(Rect::new(10, 10, 20, 20))
+    );
     assert_eq!(s.title, "hello");
 }
 

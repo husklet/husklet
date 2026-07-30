@@ -179,10 +179,29 @@ impl Default for PngPresenter {
 }
 
 impl Presenter for PngPresenter {
+    /// Capture EVERY presented layer, not just the base one: a frame carries the window root plus each
+    /// popup and subsurface at its resolved root-space offset, and a test can only assert a child's
+    /// placement or content if that child was captured. Pacing follows the BASE layer's outcome, as the
+    /// scene documents — a child that deposited no pixels does not fail the frame.
     fn present_frame(&mut self, frame: &PresentFrame) -> PresentationFeedback {
-        let Some(layer) = frame.layers.first() else {
-            return PresentationFeedback::offscreen();
-        };
+        let mut base = None;
+        for layer in &frame.layers {
+            let outcome = self.capture_layer(frame, layer);
+            if base.is_none() {
+                base = Some(outcome);
+            }
+        }
+        base.unwrap_or_else(PresentationFeedback::offscreen)
+    }
+}
+
+impl PngPresenter {
+    /// Rasterize and record one presented layer. Returns what that layer alone proves about the frame.
+    fn capture_layer(
+        &mut self,
+        frame: &PresentFrame,
+        layer: &crate::scene::port::PresentLayer,
+    ) -> PresentationFeedback {
         let output = frame.output;
         let image = &layer.image;
         let damage = layer.damage.as_slice();
@@ -195,14 +214,17 @@ impl Presenter for PngPresenter {
         self.serial += 1;
         let serial = self.serial;
         // Where this layer landed in root space: the top-left of its compose damage (which
-        // `service/compose::layer_damage` produced by translating the layer rect by its root offset). A
-        // clean layer carries no damage, so it reports `(0, 0)` — the base root's own origin.
+        // `service/compose::layer_damage` produced by translating the layer rect by its root offset). The
+        // layer keeps its damage as separate rectangles, so the origin is the top-left of their UNION —
+        // taking the first rectangle instead reports whichever one the client happened to damage first and
+        // omits anything above or left of it. A clean layer carries no damage and reports `(0, 0)` — the
+        // base root's own origin.
         let (x, y) = damage
             .iter()
-            .filter(|r| !r.is_empty())
-            .map(|r| (r.x, r.y))
-            .next()
-            .unwrap_or((0, 0));
+            .filter(|rect| !rect.is_empty())
+            .copied()
+            .reduce(|acc, rect| acc.union(&rect))
+            .map_or((0, 0), |bounds| (bounds.x, bounds.y));
         // The presented logical size — the destination a `wp_viewport` scales to, or `tex/buffer_scale`,
         // as resolved by the scene into `image.width`/`image.height`.
         let (logical_width, logical_height) = (image.width.max(1), image.height.max(1));

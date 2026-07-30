@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use smithay::reexports::wayland_server::Display;
 use wayland_client::protocol::{
-    wl_buffer::WlBuffer, wl_compositor::WlCompositor, wl_registry, wl_shm, wl_shm_pool::WlShmPool,
-    wl_surface::WlSurface,
+    wl_buffer::WlBuffer, wl_compositor::WlCompositor, wl_keyboard, wl_pointer, wl_region::WlRegion,
+    wl_registry, wl_seat, wl_shm, wl_shm_pool::WlShmPool, wl_surface::WlSurface,
 };
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
 use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
@@ -26,6 +26,14 @@ struct App {
     /// `xdg_toplevel.wm_capabilities`, decoded from the wire array of enum values.
     capabilities: Option<Vec<u32>>,
     configures: Vec<u32>,
+    /// `wl_seat.capabilities` — whether the seat claims a keyboard at all.
+    seat_capabilities: Option<u32>,
+    /// The `wl_keyboard.keymap` format and size the client was handed.
+    keymap: Option<(u32, u32)>,
+    /// Surfaces named by `wl_keyboard.enter`, in order.
+    keyboard_enters: Vec<u32>,
+    /// Surface-local `wl_pointer.enter` coordinates, in order.
+    pointer_enters: Vec<(f64, f64)>,
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for App {
@@ -99,6 +107,63 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for App {
     }
 }
 
+impl Dispatch<wl_seat::WlSeat, ()> for App {
+    fn event(
+        app: &mut App,
+        _seat: &wl_seat::WlSeat,
+        event: wl_seat::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<App>,
+    ) {
+        if let wl_seat::Event::Capabilities { capabilities } = event {
+            app.seat_capabilities = Some(capabilities.into());
+        }
+    }
+}
+
+impl Dispatch<wl_keyboard::WlKeyboard, ()> for App {
+    fn event(
+        app: &mut App,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        event: wl_keyboard::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<App>,
+    ) {
+        match event {
+            wl_keyboard::Event::Keymap { format, size, .. } => {
+                app.keymap = Some((format.into(), size));
+            }
+            wl_keyboard::Event::Enter { surface, .. } => {
+                app.keyboard_enters.push(surface.id().protocol_id());
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<wl_pointer::WlPointer, ()> for App {
+    fn event(
+        app: &mut App,
+        _pointer: &wl_pointer::WlPointer,
+        event: wl_pointer::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<App>,
+    ) {
+        if let wl_pointer::Event::Enter {
+            surface_x,
+            surface_y,
+            ..
+        } = event
+        {
+            app.pointer_enters.push((surface_x, surface_y));
+        }
+    }
+}
+
+wayland_client::delegate_noop!(App: ignore WlRegion);
 wayland_client::delegate_noop!(App: ignore WlCompositor);
 wayland_client::delegate_noop!(App: ignore WlSurface);
 wayland_client::delegate_noop!(App: ignore wl_shm::WlShm);
@@ -207,131 +272,5 @@ impl Fixture {
     }
 }
 
-#[test]
-fn a_toplevel_learns_the_window_management_operations_the_compositor_performs() {
-    // GTK4/Qt/Chrome read `wm_capabilities` to decide which window controls to offer. Claiming an
-    // operation the compositor drops (`window_menu`) gives the user a control that does nothing.
-    let mut fixture = Fixture::new();
-    let compositor: WlCompositor = fixture.bind(4);
-    let wm_base: xdg_wm_base::XdgWmBase = fixture.bind(5);
-    let surface = compositor.create_surface(&fixture.qh, ());
-    let xdg = wm_base.get_xdg_surface(&surface, &fixture.qh, ());
-    let _toplevel = xdg.get_toplevel(&fixture.qh, ());
-    surface.commit();
-    fixture.pump();
-
-    assert!(
-        !fixture.app.configures.is_empty(),
-        "the toplevel never received an xdg_surface.configure"
-    );
-    let capabilities = fixture
-        .app
-        .capabilities
-        .clone()
-        .expect("xdg_toplevel.wm_capabilities was never sent");
-    for honoured in [
-        xdg_toplevel::WmCapabilities::Maximize,
-        xdg_toplevel::WmCapabilities::Minimize,
-        xdg_toplevel::WmCapabilities::Fullscreen,
-    ] {
-        assert!(
-            capabilities.contains(&(honoured as u32)),
-            "{honoured:?} is honoured but was not advertised: {capabilities:?}"
-        );
-    }
-    assert!(
-        !capabilities.contains(&(xdg_toplevel::WmCapabilities::WindowMenu as u32)),
-        "window_menu is a no-op and must not be advertised: {capabilities:?}"
-    );
-}
-
-#[test]
-fn a_client_provided_cursor_surface_is_never_presented_as_a_window() {
-    // `wl_pointer.set_cursor` hands the compositor a surface to draw as the cursor. Left roleless it
-    // becomes its own window root: every cursor update composes a stray frame, and because a roleless
-    // surface has no window to arm a repaint against, its frame callbacks are never released — an
-    // animated cursor stalls.
-    use smithay::input::pointer::CursorImageStatus;
-    use smithay::input::SeatHandler;
-
-    let mut fixture = Fixture::new();
-    let compositor: WlCompositor = fixture.bind(4);
-    let _cursor = compositor.create_surface(&fixture.qh, ());
-    fixture.pump();
-
-    let sid = crate::scene::model::SurfaceId(1);
-    let wl = fixture
-        .state
-        .surfaces_by_id
-        .get(&sid)
-        .cloned()
-        .expect("the client's surface reached the scene");
-    let seat = fixture.state.seat.clone();
-    fixture
-        .state
-        .cursor_image(&seat, CursorImageStatus::Surface(wl));
-
-    assert_eq!(
-        fixture.state.engine.scene.get(sid).map(|s| s.role.clone()),
-        Some(crate::scene::model::SurfaceRole::Cursor)
-    );
-    assert!(
-        fixture.state.engine.complete_commit(sid, true).frame.is_none(),
-        "a cursor surface must not drive a window present"
-    );
-}
-
-#[test]
-fn a_viewport_source_outside_the_buffer_raises_out_of_buffer() {
-    // Unenforced, the presenter clamps the sample to the buffer edge and the client silently renders
-    // smeared pixels. The protocol requires the error on the wp_viewport object instead.
-    let mut fixture = Fixture::new();
-    let compositor: WlCompositor = fixture.bind(4);
-    let shm: wl_shm::WlShm = fixture.bind(1);
-    let viewporter: wp_viewporter::WpViewporter = fixture.bind(1);
-    let surface = compositor.create_surface(&fixture.qh, ());
-    let viewport = viewporter.get_viewport(&surface, &fixture.qh, ());
-    let buffer = fixture.buffer(&shm, 4, 4);
-
-    viewport.set_source(0.0, 0.0, 8.0, 8.0);
-    surface.attach(Some(&buffer), 0, 0);
-    surface.damage(0, 0, 4, 4);
-    surface.commit();
-    fixture.pump();
-
-    let error = fixture
-        .protocol_error()
-        .expect("an out-of-buffer source crop must raise a protocol error");
-    assert_eq!(error.object_interface, "wp_viewport");
-    assert_eq!(error.code, wp_viewport::Error::OutOfBuffer as u32);
-}
-
-#[test]
-fn a_viewport_source_inside_the_buffer_is_honoured() {
-    // The control for the check above: a legal crop+scale must survive untouched, and the scene must
-    // resolve the destination size the client asked for.
-    let mut fixture = Fixture::new();
-    let compositor: WlCompositor = fixture.bind(4);
-    let shm: wl_shm::WlShm = fixture.bind(1);
-    let viewporter: wp_viewporter::WpViewporter = fixture.bind(1);
-    let surface = compositor.create_surface(&fixture.qh, ());
-    let viewport = viewporter.get_viewport(&surface, &fixture.qh, ());
-    let buffer = fixture.buffer(&shm, 8, 8);
-
-    viewport.set_source(2.0, 2.0, 4.0, 4.0);
-    viewport.set_destination(16, 16);
-    surface.attach(Some(&buffer), 0, 0);
-    surface.damage(0, 0, 8, 8);
-    surface.commit();
-    fixture.pump();
-
-    assert!(fixture.protocol_error().is_none());
-    let sid = crate::scene::model::SurfaceId(1);
-    let logical = fixture
-        .state
-        .engine
-        .scene
-        .get(sid)
-        .and_then(|surface| surface.logical_size());
-    assert_eq!(logical, Some((16, 16)));
-}
+mod shell;
+mod surface;

@@ -26,10 +26,14 @@ fn input_region_single_rect_is_exact() {
     let region = RegionAttributes {
         rects: vec![add(100, 0, 100, 150)],
     };
-    assert_eq!(
-        Region::new(&Some(region)).input(),
-        Some(Rect::new(100, 0, 100, 150))
-    );
+    let mapped = Region::new(&Some(region))
+        .input()
+        .expect("a set region maps");
+    assert!(mapped.contains_point(100, 0));
+    assert!(mapped.contains_point(199, 149));
+    assert!(!mapped.contains_point(99, 0));
+    assert!(!mapped.contains_point(100, 150));
+    assert_eq!(mapped.bounding_box(), Some(Rect::new(100, 0, 100, 150)));
 }
 
 #[test]
@@ -37,7 +41,7 @@ fn input_region_empty_is_click_through() {
     // A region object with NO rects => the surface accepts input NOWHERE (click-through overlay).
     let mapped = Region::new(&Some(RegionAttributes { rects: vec![] }))
         .input()
-        .expect("a set region always maps to Some(rect)");
+        .expect("a set region always maps to Some(region)");
     assert!(
         mapped.is_empty(),
         "empty input region must reject all input"
@@ -46,15 +50,57 @@ fn input_region_empty_is_click_through() {
 }
 
 #[test]
-fn input_region_multi_rect_is_superset_bounding_box() {
-    // Two disjoint add rects reduce to their (safe, over-accepting) bounding box.
+fn input_region_of_disjoint_rects_rejects_the_gap_between_them() {
+    // Two disjoint add rects must NOT become their bounding box: a press in the gap belongs to whatever
+    // is behind this surface, and accepting it steals the click.
     let region = RegionAttributes {
         rects: vec![add(0, 0, 10, 10), add(90, 90, 10, 10)],
     };
-    assert_eq!(
-        Region::new(&Some(region)).input(),
-        Some(Rect::new(0, 0, 100, 100))
+    let mapped = Region::new(&Some(region))
+        .input()
+        .expect("a set region maps");
+    assert!(mapped.contains_point(5, 5));
+    assert!(mapped.contains_point(95, 95));
+    assert!(
+        !mapped.contains_point(50, 50),
+        "the gap between two disjoint input rects must not accept input"
     );
+}
+
+#[test]
+fn input_region_hole_rejects_input_inside_the_hole() {
+    // A shaped region — a rounded-corner window or an overlay with a cut-out — subtracts from its own
+    // rect. Input inside the subtracted hole must fall through, in issue order.
+    let region = RegionAttributes {
+        rects: vec![add(0, 0, 100, 100), subtract(40, 40, 20, 20)],
+    };
+    let mapped = Region::new(&Some(region))
+        .input()
+        .expect("a set region maps");
+    assert!(mapped.contains_point(10, 10));
+    assert!(mapped.contains_point(39, 39));
+    assert!(
+        !mapped.contains_point(45, 45),
+        "input inside a subtracted hole must not be accepted"
+    );
+    assert!(mapped.contains_point(60, 60));
+}
+
+#[test]
+fn input_region_re_adds_over_a_hole_in_issue_order() {
+    // add, subtract, then add again over the same pixels: the LAST operation covering a point wins.
+    let region = RegionAttributes {
+        rects: vec![
+            add(0, 0, 100, 100),
+            subtract(40, 40, 20, 20),
+            add(45, 45, 5, 5),
+        ],
+    };
+    let mapped = Region::new(&Some(region))
+        .input()
+        .expect("a set region maps");
+    assert!(mapped.contains_point(47, 47));
+    assert!(!mapped.contains_point(41, 41));
 }
 
 #[test]

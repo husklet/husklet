@@ -11,7 +11,7 @@ pub mod seat;
 pub mod surface;
 pub mod window;
 
-pub use damage::{DamageRegion, Rect};
+pub use damage::{DamageRegion, Rect, Region, Span};
 pub use output::{Output, OutputId};
 pub use scene::Scene;
 pub use seat::Seat;

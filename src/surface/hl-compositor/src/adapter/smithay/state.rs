@@ -157,7 +157,8 @@ use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::{
 
 use crate::scene::model::{
     Anchor, BufferState, BufferTransform, ConstraintAdjustment, Format, Gravity, Output, OutputId,
-    PopupState, Positioner, Rect, SubsurfaceState, SurfaceId, SurfaceRole, Viewport, Visibility,
+    PopupState, Positioner, Rect, Region as InputRegion, Span, SubsurfaceState, SurfaceId,
+    SurfaceRole, Viewport, Visibility,
 };
 use crate::scene::port::{Clipboard, Clock, Windows};
 use crate::scene::service::{surface_at, BufferChange, Commit};

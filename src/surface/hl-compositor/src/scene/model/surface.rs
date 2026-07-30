@@ -5,7 +5,7 @@
 //! `visibility`, opaque/input regions in `SurfaceAttributes`) and `hl-display`'s `SurfaceBuffer` value
 //! shape — flattened into one plain struct the scene owns, with NO Smithay `wl_surface`/`with_states`.
 
-use super::damage::{DamageRegion, Rect};
+use super::damage::{DamageRegion, Rect, Region};
 use super::window::{PopupPlacement, SurfaceRole};
 
 /// Compositor-global surface identity — the neutral analogue of `hl-compositor`'s monotonic host `sid`
@@ -207,8 +207,9 @@ pub struct Surface {
     /// `compose`'s `tree_dirty` (ported from `opaque_covers_root_rect`). A single rect is the neutral
     /// simplification of a full `wl_region` (a conservative subset is always safe).
     pub opaque_region: Option<Rect>,
-    /// `wl_surface.set_input_region`, surface-local. `None` ⇒ the whole surface accepts input.
-    pub input_region: Option<Rect>,
+    /// `wl_surface.set_input_region`, surface-local, held exactly (add/subtract in order). `None` ⇒ the
+    /// whole surface accepts input.
+    pub input_region: Option<Region>,
     /// Window title, mirrored for the presenter to label a native window (`HlState::titles`).
     pub title: String,
     /// Parent from `xdg_toplevel.set_parent`; popups keep their parent in [`SurfaceRole::Popup`].
@@ -280,7 +281,9 @@ impl Surface {
         if !Rect::new(0, 0, w, h).contains_point(x, y) {
             return false;
         }
-        self.input_region.is_none_or(|r| r.contains_point(x, y))
+        self.input_region
+            .as_ref()
+            .is_none_or(|region| region.contains_point(x, y))
     }
 }
 

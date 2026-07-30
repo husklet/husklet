@@ -8,7 +8,9 @@ fn hit_test_respects_input_region() {
         &mut scene,
         top,
         Commit {
-            input_region: Some(Some(Rect::new(50, 50, 100, 100))),
+            input_region: Some(Some(Region::from_spans(vec![Span::Add(Rect::new(
+                50, 50, 100, 100,
+            ))]))),
             ..Commit::attach(shm(300, 300))
         },
     );

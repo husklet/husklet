@@ -7,7 +7,7 @@
 //! Smithay `with_states` / `RepackCache` / GPU-import specifics are dropped — this is geometry + damage
 //! bookkeeping only.
 
-use crate::scene::model::{BufferState, BufferTransform, Rect, Scene, SurfaceId, Viewport};
+use crate::scene::model::{BufferState, BufferTransform, Rect, Region, Scene, SurfaceId, Viewport};
 
 /// What a commit does to the surface's attached buffer. Mirrors Smithay's `BufferAssignment` plus a
 /// "no change this commit" case (a frame-callback-only or region-only commit).
@@ -38,8 +38,8 @@ pub struct Commit {
     /// `wl_surface.set_opaque_region`: `Some(region)` replaces it (`None` inside = cleared); the outer
     /// `None` means the commit did not touch the opaque region.
     pub opaque_region: Option<Option<Rect>>,
-    /// `wl_surface.set_input_region`, same convention as `opaque_region`.
-    pub input_region: Option<Option<Rect>>,
+    /// `wl_surface.set_input_region`, same convention as `opaque_region`, held exactly.
+    pub input_region: Option<Option<Region>>,
     /// The commit requested a `wl_surface.frame` callback.
     pub frame_callback: bool,
     /// `xdg_toplevel.set_title` mirrored for the presenter, if the commit changed it.

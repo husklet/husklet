@@ -28,8 +28,8 @@ use std::sync::Mutex;
 
 use hl_compositor::scene::model::{
     Anchor, BufferState, BufferTransform, ConstraintAdjustment, DamageRegion, Format, Gravity,
-    Output, OutputId, PopupState, Positioner, Rect, Scene, SubsurfaceState, Surface, SurfaceId,
-    SurfaceRole, Viewport, Visibility,
+    Output, OutputId, PopupState, Positioner, Rect, Region, Scene, Span, SubsurfaceState, Surface,
+    SurfaceId, SurfaceRole, Viewport, Visibility,
 };
 use hl_compositor::scene::port::{
     Clock, PresentFrame, PresentOutcome, PresentTiming, PresentationFeedback, Presenter,

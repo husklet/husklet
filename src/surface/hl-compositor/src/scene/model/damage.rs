@@ -110,6 +110,84 @@ impl Rect {
     }
 }
 
+/// Terminal bound on the operations a [`Region`] keeps exactly. A client may `wl_region.add`/`subtract`
+/// without limit; past this the region degrades to the bounding box of its additive rects, which is the
+/// conservative approximation the protocol always permits a compositor to make.
+const MAX_REGION_SPANS: usize = 256;
+
+/// One `wl_region` operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Span {
+    Add(Rect),
+    Subtract(Rect),
+}
+
+impl Span {
+    /// The rect this operation covers, whichever way it acts.
+    pub fn rect(self) -> Rect {
+        match self {
+            Span::Add(rect) | Span::Subtract(rect) => rect,
+        }
+    }
+}
+
+/// A `wl_region` exactly as the protocol defines it: an ordered sequence of add/subtract operations,
+/// folded in order. Point containment is therefore exact — a client that carves a hole (rounded corners,
+/// a click-through cut-out) gets the region it asked for rather than a bounding box that over-accepts.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Region {
+    spans: Vec<Span>,
+}
+
+impl Region {
+    /// Build a region from its operations, in the order the client issued them. Beyond
+    /// [`MAX_REGION_SPANS`] the region collapses to the bounding box of its additive rects so an
+    /// unbounded client cannot make every hit-test walk an unbounded list.
+    pub fn from_spans(spans: Vec<Span>) -> Region {
+        if spans.len() <= MAX_REGION_SPANS {
+            return Region { spans };
+        }
+        let bounds = spans
+            .iter()
+            .filter_map(|span| match span {
+                Span::Add(rect) if !rect.is_empty() => Some(*rect),
+                _ => None,
+            })
+            .reduce(|acc, rect| acc.union(&rect));
+        Region {
+            spans: bounds.map(Span::Add).into_iter().collect(),
+        }
+    }
+
+    /// Whether `(x, y)` is inside the region: the last operation whose rect covers the point decides,
+    /// which is what applying add/subtract in order means.
+    pub fn contains_point(&self, x: i32, y: i32) -> bool {
+        let mut inside = false;
+        for span in &self.spans {
+            if span.rect().contains_point(x, y) {
+                inside = matches!(span, Span::Add(_));
+            }
+        }
+        inside
+    }
+
+    /// The bounding box of the additive rects — the conservative extent, for callers that need one rect.
+    pub fn bounding_box(&self) -> Option<Rect> {
+        self.spans
+            .iter()
+            .filter_map(|span| match span {
+                Span::Add(rect) if !rect.is_empty() => Some(*rect),
+                _ => None,
+            })
+            .reduce(|acc, rect| acc.union(&rect))
+    }
+
+    /// Whether the region covers nothing at all (a click-through surface).
+    pub fn is_empty(&self) -> bool {
+        self.bounding_box().is_none()
+    }
+}
+
 /// Terminal bound on rects retained between presents. A surface whose tree cannot present (minimized,
 /// occluded, or a synchronized subsurface whose parent never commits again) keeps accumulating every
 /// `wl_surface.damage` / `damage_buffer` its client commits, so an unbounded list is guest-controlled

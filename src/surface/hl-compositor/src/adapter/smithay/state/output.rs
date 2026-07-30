@@ -128,15 +128,13 @@ impl From<WireConstraint> for ConstraintAdjustment {
     }
 }
 
-/// Reduce a committed `wl_surface.set_input_region` into the neutral scene's single-[`Rect`] input region
-/// (which gates pointer hit-testing in `surface_at`/`accepts_input_at`). `None` — the client never set a
-/// region, or set it to null — means the WHOLE surface accepts input (the scene's `None`). A set region is
-/// reduced to the bounding box of its ADDITIVE rectangles: EXACT for the common single-rect region a
-/// toolkit sets (e.g. GTK excluding its CSD shadow from input), and a safe superset for a shaped one. An
-/// EMPTY region (a client making a surface click-through) has no additive rects and reduces to a zero-area
-/// `Rect`, which `accepts_input_at` rejects everywhere — so that surface correctly receives no pointer
-/// input. Without this the request would be silently dropped and every surface would accept input over its
-/// whole rectangle regardless of what the client requested.
+/// Translate a committed `wl_surface.set_input_region` into the neutral scene's [`InputRegion`], which
+/// gates pointer hit-testing in `surface_at`/`accepts_input_at`. `None` — the client never set a region,
+/// or set it to null — means the WHOLE surface accepts input (the scene's `None`). A set region is carried
+/// over EXACTLY, add and subtract in issue order, so a client that carves a hole (rounded corners, a
+/// click-through cut-out) receives input only where it asked: a bounding box would steal those clicks from
+/// whatever is behind. An EMPTY region (a fully click-through surface) carries over as a region containing
+/// nothing, which `accepts_input_at` rejects everywhere.
 pub(super) struct Region<'a> {
     attributes: &'a Option<RegionAttributes>,
 }
@@ -146,9 +144,21 @@ impl<'a> Region<'a> {
         Self { attributes }
     }
 
-    pub(super) fn input(&self) -> Option<Rect> {
+    pub(super) fn input(&self) -> Option<InputRegion> {
         let attrs = self.attributes.as_ref()?;
-        Some(Self::additive_bounds(attrs).unwrap_or(Rect::new(0, 0, 0, 0)))
+        let spans = attrs
+            .rects
+            .iter()
+            .filter(|(_, r)| r.size.w > 0 && r.size.h > 0)
+            .map(|(kind, r)| {
+                let rect = Rect::new(r.loc.x, r.loc.y, r.size.w, r.size.h);
+                match kind {
+                    RectangleKind::Add => Span::Add(rect),
+                    RectangleKind::Subtract => Span::Subtract(rect),
+                }
+            })
+            .collect();
+        Some(InputRegion::from_spans(spans))
     }
 
     /// Reduce a committed `wl_surface.set_opaque_region` into the neutral scene's single-[`Rect`] opaque region
@@ -166,26 +176,6 @@ impl<'a> Region<'a> {
             }
             _ => None,
         }
-    }
-
-    /// The bounding box of a region's ADDITIVE (`Add`) rectangles, or `None` if it has none. Subtract rects and
-    /// degenerate (zero-area) rects are ignored — a single `Rect` cannot model a hole, and the resulting
-    /// superset is the SAFE direction for an input region (over-accepting input is a hint, never a correctness
-    /// hazard, unlike over-claiming opacity — see [`map_input_region`] vs [`map_opaque_region`]).
-    pub(super) fn additive_bounds(attrs: &RegionAttributes) -> Option<Rect> {
-        // (min_x, min_y, max_right, max_bottom) accumulated over the additive rects.
-        let mut bounds: Option<(i32, i32, i32, i32)> = None;
-        for (kind, r) in &attrs.rects {
-            if !matches!(kind, RectangleKind::Add) || r.size.w <= 0 || r.size.h <= 0 {
-                continue;
-            }
-            let (x0, y0, x1, y1) = (r.loc.x, r.loc.y, r.loc.x + r.size.w, r.loc.y + r.size.h);
-            bounds = Some(match bounds {
-                Some((mx, my, mr, mb)) => (mx.min(x0), my.min(y0), mr.max(x1), mb.max(y1)),
-                None => (x0, y0, x1, y1),
-            });
-        }
-        bounds.map(|(mx, my, mr, mb)| Rect::new(mx, my, mr - mx, mb - my))
     }
 }
 
