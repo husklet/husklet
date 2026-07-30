@@ -10,12 +10,32 @@
 #[cfg(all(feature = "macos-surface", target_os = "macos"))]
 fn main() {
     use hl_compositor::scene::model::{
-        BufferTransform, Format, OutputId, PresentableImage, SurfaceId, Visibility, WindowKind,
-        WindowState,
+        BufferTransform, Format, OutputId, PresentableImage, Rect, SurfaceId, Visibility,
+        WindowKind, WindowState,
     };
     use hl_compositor::scene::port::{
-        HostEvents, PresentOutcome, PresentTiming, Presenter, Windows,
+        HostEvents, PresentFrame, PresentLayer, PresentOutcome, PresentTiming, Presenter, Windows,
     };
+
+    /// Build the one-role, one-layer frame the neutral presenter takes.
+    fn single_layer(
+        output: OutputId,
+        image: PresentableImage,
+        damage: &[Rect],
+        timing: PresentTiming,
+    ) -> PresentFrame {
+        PresentFrame {
+            output,
+            role: image.surface,
+            layers: vec![PresentLayer {
+                image,
+                x: 0,
+                y: 0,
+                damage: damage.to_vec(),
+            }],
+            timing,
+        }
+    }
     use hl_compositor::surface::macos::MacPresenter;
     use objc2_foundation::{MainThreadMarker, NSDate, NSRunLoop};
 
@@ -65,16 +85,11 @@ fn main() {
     for _ in 0..60 {
         presenter.poll_events();
         presenter.attach_bgra(sid, frame.clone(), w, h);
-        let fb = presenter.present(
-            OutputId(0),
-            &img,
-            &[],
-            PresentTiming {
+        let fb = presenter.present_frame(&single_layer(OutputId(0), img.clone(), &[], PresentTiming {
                 present_ns: 0,
                 refresh_ns: 0,
                 vsync: false,
-            },
-        );
+            }));
         if matches!(fb.outcome, PresentOutcome::Delivered { .. }) {
             delivered = true;
         }

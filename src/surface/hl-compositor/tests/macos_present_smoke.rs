@@ -15,7 +15,9 @@ use hl_compositor::scene::model::{
     BufferTransform, Format, OutputId, PresentableImage, Rect, SurfaceId, Visibility, WindowKind,
     WindowState,
 };
-use hl_compositor::scene::port::{PresentOutcome, PresentTiming, Presenter, Windows};
+use hl_compositor::scene::port::{
+    PresentFrame, PresentLayer, PresentOutcome, PresentTiming, Presenter, Windows,
+};
 use hl_compositor::surface::macos::MacPresenter;
 
 fn known_frame(w: u32, h: u32, bgra: [u8; 4]) -> Vec<u8> {
@@ -57,16 +59,11 @@ fn offscreen_present_roundtrips_known_color_on_real_metal() {
     let sid = SurfaceId(7);
     presenter.attach_bgra(sid, known_frame(w, h, [20, 130, 240, 255]), w, h);
 
-    let fb = presenter.present(
-        OutputId(0),
-        &image(sid, w as i32, h as i32),
-        &[],
-        PresentTiming {
+    let fb = presenter.present_frame(&single_layer(OutputId(0), image(sid, w as i32, h as i32), &[], PresentTiming {
             present_ns: 0,
             refresh_ns: 0,
             vsync: false,
-        },
-    );
+        }));
     // Headless: composited into the backing target but not shown on a screen.
     assert_eq!(
         fb.outcome,
@@ -101,16 +98,11 @@ fn argb_present_preserves_transparent_window_pixels_on_real_metal() {
 
     let sid = SurfaceId(8);
     presenter.attach_bgra(sid, known_frame(4, 4, [20, 130, 240, 37]), 4, 4);
-    presenter.present(
-        OutputId(0),
-        &image_with_format(sid, 4, 4, Format::Argb8888),
-        &[],
-        PresentTiming {
+    presenter.present_frame(&single_layer(OutputId(0), image_with_format(sid, 4, 4, Format::Argb8888), &[], PresentTiming {
             present_ns: 0,
             refresh_ns: 0,
             vsync: false,
-        },
-    );
+        }));
 
     let (_, _, rgba) = presenter.last_rgba(sid).expect("ARGB frame readback");
     assert_eq!(&rgba[..4], &[240, 130, 20, 37]);
@@ -125,16 +117,11 @@ fn xrgb_present_forces_opaque_window_pixels_on_real_metal() {
 
     let sid = SurfaceId(9);
     presenter.attach_bgra(sid, known_frame(4, 4, [20, 130, 240, 0]), 4, 4);
-    presenter.present(
-        OutputId(0),
-        &image(sid, 4, 4),
-        &[],
-        PresentTiming {
+    presenter.present_frame(&single_layer(OutputId(0), image(sid, 4, 4), &[], PresentTiming {
             present_ns: 0,
             refresh_ns: 0,
             vsync: false,
-        },
-    );
+        }));
 
     let (_, _, rgba) = presenter.last_rgba(sid).expect("XRGB frame readback");
     assert_eq!(&rgba[..4], &[240, 130, 20, 255]);
@@ -149,16 +136,11 @@ fn malformed_bgra_is_rejected_before_metal_reads_it() {
 
     let sid = SurfaceId(10);
     presenter.attach_bgra(sid, vec![0; 15], 2, 2);
-    let feedback = presenter.present(
-        OutputId(0),
-        &image(sid, 2, 2),
-        &[],
-        PresentTiming {
+    let feedback = presenter.present_frame(&single_layer(OutputId(0), image(sid, 2, 2), &[], PresentTiming {
             present_ns: 0,
             refresh_ns: 0,
             vsync: false,
-        },
-    );
+        }));
     assert_eq!(feedback.outcome, PresentOutcome::RetryableFailure);
     assert_eq!(presenter.frames, 0);
     assert!(presenter.last_rgba(sid).is_none());
@@ -181,17 +163,17 @@ fn requested_capture_writes_only_the_next_presented_frame() {
     };
 
     presenter.attach_bgra(sid, known_frame(2, 2, [1, 2, 3, 255]), 2, 2);
-    presenter.present(OutputId(0), &image(sid, 2, 2), &[], timing);
+    presenter.present_frame(&single_layer(OutputId(0), image(sid, 2, 2), &[], timing));
     let output = directory.join("surface-14.ppm");
     assert!(!output.exists(), "capture stays idle without a request");
 
     std::fs::write(directory.join("request"), []).unwrap();
     presenter.attach_bgra(sid, known_frame(2, 2, [4, 5, 6, 255]), 2, 2);
-    presenter.present(OutputId(0), &image(sid, 2, 2), &[], timing);
+    presenter.present_frame(&single_layer(OutputId(0), image(sid, 2, 2), &[], timing));
     let captured = std::fs::read(&output).unwrap();
 
     presenter.attach_bgra(sid, known_frame(2, 2, [7, 8, 9, 255]), 2, 2);
-    presenter.present(OutputId(0), &image(sid, 2, 2), &[], timing);
+    presenter.present_frame(&single_layer(OutputId(0), image(sid, 2, 2), &[], timing));
     assert_eq!(
         std::fs::read(&output).unwrap(),
         captured,
@@ -219,7 +201,7 @@ fn requested_capture_reads_the_latest_static_frame_during_event_poll() {
     };
 
     presenter.attach_bgra(sid, known_frame(2, 2, [11, 22, 33, 255]), 2, 2);
-    presenter.present(OutputId(0), &image(sid, 2, 2), &[], timing);
+    presenter.present_frame(&single_layer(OutputId(0), image(sid, 2, 2), &[], timing));
     std::fs::write(directory.join("request"), []).unwrap();
 
     presenter.poll_events();
@@ -245,13 +227,13 @@ fn rotating_upload_refreshes_the_selected_slot_completely() {
     };
     for color in [[10, 20, 30, 255], [40, 50, 60, 255], [70, 80, 90, 255]] {
         presenter.attach_bgra(sid, known_frame(4, 4, color), 4, 4);
-        presenter.present(OutputId(0), &image(sid, 4, 4), &[], timing);
+        presenter.present_frame(&single_layer(OutputId(0), image(sid, 4, 4), &[], timing));
     }
 
     let mut fourth = known_frame(4, 4, [70, 80, 90, 255]);
     fourth[..4].copy_from_slice(&[1, 2, 3, 255]);
     presenter.attach_bgra_damage(sid, fourth, 4, 4, Some(vec![Rect::new(0, 0, 1, 1)]));
-    presenter.present(OutputId(0), &image(sid, 4, 4), &[], timing);
+    presenter.present_frame(&single_layer(OutputId(0), image(sid, 4, 4), &[], timing));
 
     let (_, _, rgba) = presenter.last_rgba(sid).expect("damaged frame readback");
     assert_eq!(&rgba[..4], &[3, 2, 1, 255], "damaged pixel updated");
@@ -290,16 +272,11 @@ fn xdg_window_geometry_crops_client_shadow_margins() {
     presenter.attach_bgra(sid, frame, 4, 4);
     let mut image = image(sid, 4, 4);
     image.present_crop = Some((0.0, 0.0, 4.0, 4.0));
-    presenter.present(
-        OutputId(0),
-        &image,
-        &[],
-        PresentTiming {
+    presenter.present_frame(&single_layer(OutputId(0), image, &[], PresentTiming {
             present_ns: 0,
             refresh_ns: 0,
             vsync: false,
-        },
-    );
+        }));
     let (w, h, rgba) = presenter.last_rgba(sid).expect("cropped frame");
     assert_eq!((w, h), (2, 2));
     assert_eq!(&rgba[..4], &[240, 130, 20, 255]);
@@ -322,5 +299,25 @@ fn windowed_present_requires_main_thread() {
                 eprintln!("windowed presenter constructed on adapter: {}", p.device_name());
             }
         }
+    }
+}
+
+/// Build the one-role, one-layer frame the neutral presenter takes.
+fn single_layer(
+    output: OutputId,
+    image: PresentableImage,
+    damage: &[Rect],
+    timing: PresentTiming,
+) -> PresentFrame {
+    PresentFrame {
+        output,
+        role: image.surface,
+        layers: vec![PresentLayer {
+            image,
+            x: 0,
+            y: 0,
+            damage: damage.to_vec(),
+        }],
+        timing,
     }
 }

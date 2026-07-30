@@ -202,9 +202,31 @@ fn compose_present_crop_survives_huge_viewport_dst() {
 mod present_path {
     use hl_compositor::adapter::smithay::{PngPresenter, StoredBuffer};
     use hl_compositor::scene::model::{
-        BufferTransform, Format, OutputId, PresentableImage, SurfaceId,
+        BufferTransform, Format, OutputId, PresentableImage, Rect, SurfaceId,
     };
-    use hl_compositor::scene::port::{PresentOutcome, PresentTiming, Presenter};
+    use hl_compositor::scene::port::{
+        PresentFrame, PresentLayer, PresentOutcome, PresentTiming, Presenter,
+    };
+
+    /// Build the one-role, one-layer frame the neutral presenter takes.
+    fn single_layer(
+        output: OutputId,
+        image: PresentableImage,
+        damage: &[Rect],
+        timing: PresentTiming,
+    ) -> PresentFrame {
+        PresentFrame {
+            output,
+            role: image.surface,
+            layers: vec![PresentLayer {
+                image,
+                x: 0,
+                y: 0,
+                damage: damage.to_vec(),
+            }],
+            timing,
+        }
+    }
 
     fn img(
         surface: SurfaceId,
@@ -237,16 +259,11 @@ mod present_path {
 
     fn drive(p: &mut PngPresenter, buf: StoredBuffer, image: &PresentableImage) -> PresentOutcome {
         p.deposit(image.surface, buf);
-        p.present(
-            OutputId(1),
-            image,
-            &[],
-            PresentTiming {
+        p.present_frame(&single_layer(OutputId(1), image.clone(), &[], PresentTiming {
                 present_ns: 0,
                 refresh_ns: 0,
                 vsync: false,
-            },
-        )
+            }))
         .outcome
     }
 
