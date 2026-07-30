@@ -16,7 +16,7 @@ fn map_memory_reflects_device_output_end_to_end() {
     // Permissive caps so the lowering runs against the CPU oracle (as in the graphics test above).
     let exec = CpuExecutor::new();
     let session = Session::new(
-        Limits::from_capabilities(Capabilities::full("hl-cpu-mapreadback")),
+        Limits::from_capabilities(Capabilities::permissive_fixture("hl-cpu-mapreadback")),
         GlobalLedger::unbounded(),
         Box::new(FakeClock::new(0)),
     );
@@ -93,7 +93,7 @@ fn unmapped_host_write_reaches_the_device_end_to_end() {
 
     let exec = CpuExecutor::new();
     let session = Session::new(
-        Limits::from_capabilities(Capabilities::full("hl-cpu-unmapupload")),
+        Limits::from_capabilities(Capabilities::permissive_fixture("hl-cpu-unmapupload")),
         GlobalLedger::unbounded(),
         Box::new(FakeClock::new(0)),
     );
@@ -143,7 +143,7 @@ fn present_xrgb_readback_reorders_channels_end_to_end() {
 
     let exec = CpuExecutor::new();
     let session = Session::new(
-        Limits::from_capabilities(Capabilities::full("hl-cpu-xrgb")),
+        Limits::from_capabilities(Capabilities::permissive_fixture("hl-cpu-xrgb")),
         GlobalLedger::unbounded(),
         Box::new(FakeClock::new(0)),
     );

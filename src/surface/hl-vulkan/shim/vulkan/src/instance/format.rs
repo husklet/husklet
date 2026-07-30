@@ -2,23 +2,28 @@ use super::*;
 use hl_gpu::protocol::model::enums::TextureFormat;
 use hl_gpu::{CommandSink, FeatureRequest, WIRE_VERSION};
 
-fn host_supports(format: i32) -> bool {
-    let Some(wire) = hl_vulkan::model::memory::Format(format as u32).wire() else {
-        return false;
-    };
-    if wire.block_geometry().is_none() {
-        return true;
-    }
-    StateStore::with(|state| {
-        state
-            .sink
+use crate::state::State;
+
+/// Which formats this ICD may advertise. The answer depends on the host sink the state owns: a
+/// block-compressed format is materialised by the host executor and is advertised only if the sink
+/// negotiates it, while every other known format is produced by the driver itself. An unrecognised
+/// `VkFormat` is never advertised.
+impl State {
+    fn advertises(&mut self, format: Format) -> bool {
+        let Some(wire) = format.wire() else {
+            return false;
+        };
+        if wire.block_geometry().is_none() {
+            return true;
+        }
+        self.sink
             .negotiate(&FeatureRequest {
                 wire_version: WIRE_VERSION,
                 texture_formats: TextureFormat::bits(&[wire]),
                 ..FeatureRequest::default()
             })
             .is_ok()
-    })
+    }
 }
 
 /// color-attachment/blend/sampled/storage/blit/transfer; depth: depth-stencil-attachment/sampled/
@@ -31,7 +36,7 @@ pub extern "C" fn vkGetPhysicalDeviceFormatProperties(
     let Some(out) = (unsafe { (p_format_properties as *mut VkFormatProperties).as_mut() }) else {
         return;
     };
-    let ff = if host_supports(format) {
+    let ff = if StateStore::with(|state| state.advertises(Format(format as u32))) {
         Format(format as u32).features()
     } else {
         Default::default()
@@ -61,7 +66,7 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
     else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    if !host_supports(format)
+    if !StateStore::with(|state| state.advertises(Format(format as u32)))
         || !Format(format as u32).is_image_supported()
         || image_type != VK_IMAGE_TYPE_2D
         || tiling != VK_IMAGE_TILING_OPTIMAL

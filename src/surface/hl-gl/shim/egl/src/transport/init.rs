@@ -179,7 +179,7 @@ mod tests {
                         .ensure_with(&FeatureRequest::default(), move |_, _| {
                             calls.fetch_add(1, Ordering::SeqCst);
                             thread::sleep(Duration::from_millis(10));
-                            Ok(Capabilities::full("test"))
+                            Ok(Capabilities::permissive_fixture("test"))
                         })
                         .expect("ready")
                 })
@@ -238,7 +238,9 @@ mod tests {
         let display = display();
         let initial = FeatureRequest::default();
         display
-            .ensure_with(&initial, |_, _| Ok(Capabilities::full("test")))
+            .ensure_with(&initial, |_, _| {
+                Ok(Capabilities::permissive_fixture("test"))
+            })
             .expect("initial request");
         let different = FeatureRequest {
             wire_version: 1,
@@ -286,10 +288,14 @@ mod tests {
         let server = thread::spawn(move || {
             let (stream, _) = listener.accept().expect("accept");
             accepted_tx.send(()).expect("accepted");
-            serve_connection(&stream, &Capabilities::full("host"), move |_, batch| {
-                batch_tx.send(batch.to_vec()).expect("batch");
-                true
-            })
+            serve_connection(
+                &stream,
+                &Capabilities::permissive_fixture("host"),
+                move |_, batch| {
+                    batch_tx.send(batch.to_vec()).expect("batch");
+                    true
+                },
+            )
             .expect("serve connection");
         });
         let display = DisplayTransport::new(RemoteCommandSink::new(

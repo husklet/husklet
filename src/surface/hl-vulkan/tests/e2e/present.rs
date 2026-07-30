@@ -22,7 +22,7 @@ fn swapchain_present_loop_reads_back_the_presented_image_end_to_end() {
     const H: u32 = 8;
     let exec = CpuExecutor::new();
     let session = Session::new(
-        Limits::from_capabilities(Capabilities::full("hl-cpu-swapchain")),
+        Limits::from_capabilities(Capabilities::permissive_fixture("hl-cpu-swapchain")),
         GlobalLedger::unbounded(),
         Box::new(FakeClock::new(0)),
     );
@@ -132,7 +132,7 @@ fn vkcube_style_multiframe_fence_and_resubmit_loop() {
 
     let exec = CpuExecutor::new();
     let session = Session::new(
-        Limits::from_capabilities(Capabilities::full("hl-cpu-vkcube-loop")),
+        Limits::from_capabilities(Capabilities::permissive_fixture("hl-cpu-vkcube-loop")),
         GlobalLedger::unbounded(),
         Box::new(FakeClock::new(0)),
     );

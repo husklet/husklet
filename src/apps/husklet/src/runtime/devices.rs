@@ -54,23 +54,21 @@ impl hl_container::Device for Workspace {
             .iter_mut()
             .find(|extension| extension.provider.as_str() == "engine.namespace")
         {
-            namespace.required_features.insert(
-                hl_container::device::extension::Feature::new("unix-sockets")
-                    .map_err(|error| hl_container::Error::InvalidSpec(format!("{error:?}")))?,
-            );
+            namespace
+                .required_features
+                .insert(hl_container::device::extension::Feature::new(
+                    "unix-sockets",
+                )?);
             namespace.namespace.push(socket);
         } else {
             request
                 .extensions
                 .push(hl_container::device::extension::ExtensionSpec {
-                    provider: hl_container::device::extension::ProviderId::new("engine.namespace")
-                        .map_err(|error| hl_container::Error::InvalidSpec(format!("{error:?}")))?,
+                    provider: hl_container::device::extension::ProviderId::new("engine.namespace")?,
                     version: hl_container::device::Version::new(1, 0),
                     required: true,
                     required_features: BTreeSet::from([
-                        hl_container::device::extension::Feature::new("unix-sockets").map_err(
-                            |error| hl_container::Error::InvalidSpec(format!("{error:?}")),
-                        )?,
+                        hl_container::device::extension::Feature::new("unix-sockets")?,
                     ]),
                     optional_features: BTreeSet::new(),
                     config: hl_container::device::extension::ExtensionConfig::empty(

@@ -21,7 +21,7 @@
 //! is everything the CPU oracle can render; it does not (cannot) execute a real fragment shader. The
 //! SPIR-V shader modules are created + forwarded verbatim (the seam keystone) and referenced by the
 //! pipeline, but the CPU oracle never runs them. To let the permissive lowering create SPIR-V modules
-//! against the KERNEL-only oracle, the sink is built with a full (`Capabilities::full`) capability set
+//! against the KERNEL-only oracle, the sink is built with a full (`Capabilities::permissive_fixture`) capability set
 //! rather than negotiating the executor's own narrow advertisement.
 
 use hl_vulkan::adapter::spirv;

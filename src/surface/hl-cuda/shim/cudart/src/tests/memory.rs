@@ -20,7 +20,7 @@ fn memset_hostile_count_is_bounded_and_legal_memset_is_exact() {
     let server = std::thread::spawn(move || {
         use hl_gpu::GpuExecutor as _; // brings `capabilities()` into scope for `CpuExecutor`
         let (stream, _) = listener.accept().unwrap();
-        let caps = hl_gpu::Capabilities::full("host");
+        let caps = hl_gpu::Capabilities::permissive_fixture("host");
         let exec = hl_gpu::CpuExecutor::new();
         let limits = hl_gpu::Limits::from_capabilities(exec.capabilities());
         let session = hl_gpu::Session::new(

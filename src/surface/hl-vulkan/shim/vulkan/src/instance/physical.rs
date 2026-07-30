@@ -76,67 +76,71 @@ pub(crate) fn supported_features() -> VkPhysicalDeviceFeatures {
             })
             .ok()
     });
-    features_for(caps.as_ref())
+    VkPhysicalDeviceFeatures::advertised(caps.as_ref())
 }
 
-pub(crate) fn features_for(caps: Option<&hl_gpu::Capabilities>) -> VkPhysicalDeviceFeatures {
-    let mut features = VkPhysicalDeviceFeatures {
-        bits: [VK_FALSE; 55],
-    };
-    // The conservative feature subset guaranteed across every executor path (indices into the vk.xml
-    // `VkPhysicalDeviceFeatures` order): fullDrawIndexUint32(1), samplerAnisotropy(19), shaderInt16(41).
-    // Features whose implementation depends on the selected executor are enabled below from negotiation.
-    for i in [1usize, 19, 41] {
-        features.bits[i] = VK_TRUE;
+/// What this ICD advertises in `VkPhysicalDeviceFeatures`, built from the host sink's negotiated
+/// advertisement. The three operations share one invariant — a bit is set only where a negotiated
+/// capability backs it — so they belong to the structure being filled in, not to the entry point.
+impl VkPhysicalDeviceFeatures {
+    /// `caps` is `None` when the sink would not negotiate; only the driver's own baseline is then claimed.
+    pub(crate) fn advertised(caps: Option<&hl_gpu::Capabilities>) -> VkPhysicalDeviceFeatures {
+        let mut features = VkPhysicalDeviceFeatures {
+            bits: [VK_FALSE; 55],
+        };
+        // The conservative feature subset guaranteed across every executor path (indices into the vk.xml
+        // `VkPhysicalDeviceFeatures` order): fullDrawIndexUint32(1), samplerAnisotropy(19), shaderInt16(41).
+        // Features whose implementation depends on the selected executor are enabled below from negotiation.
+        for i in [1usize, 19, 41] {
+            features.bits[i] = VK_TRUE;
+        }
+        features.enable_binding_arrays(caps.map_or(0, |caps| caps.binding_arrays));
+        features.enable_shader_guarantees(caps.map_or(0, |caps| caps.gpu_features));
+        let required_bc = hl_gpu::protocol::model::enums::TextureFormat::bits(
+            hl_gpu::protocol::model::capability::BC_FORMATS,
+        );
+        if caps.is_some_and(|caps| caps.texture_formats & required_bc == required_bc) {
+            features.bits[22] = VK_TRUE;
+        }
+        features
     }
-    let arrays = caps.map_or(0, |caps| caps.binding_arrays);
-    enable_binding_array_features(&mut features, arrays);
-    let gpu_features = caps.map_or(0, |caps| caps.gpu_features);
-    enable_gpu_features(&mut features, gpu_features);
-    let required_bc = hl_gpu::protocol::model::enums::TextureFormat::bits(
-        hl_gpu::protocol::model::capability::BC_FORMATS,
-    );
-    if caps.is_some_and(|caps| caps.texture_formats & required_bc == required_bc) {
-        features.bits[22] = VK_TRUE;
-    }
-    features
-}
 
-pub(crate) fn enable_gpu_features(features: &mut VkPhysicalDeviceFeatures, gpu_features: u32) {
-    if gpu_features & gpu_feature::ROBUST_BUFFER_ACCESS != 0 {
-        features.bits[0] = VK_TRUE;
+    pub(crate) fn enable_shader_guarantees(&mut self, gpu_features: u32) {
+        if gpu_features & gpu_feature::ROBUST_BUFFER_ACCESS != 0 {
+            self.bits[0] = VK_TRUE;
+        }
+        if gpu_features & gpu_feature::FRAGMENT_STORES_ATOMICS != 0 {
+            self.bits[26] = VK_TRUE;
+        }
+        if gpu_features & gpu_feature::DEPTH_BIAS_CLAMP != 0 {
+            self.bits[12] = VK_TRUE;
+        }
+        if gpu_features & gpu_feature::IMAGE_CUBE_ARRAY != 0 {
+            self.bits[2] = VK_TRUE;
+        }
+        if gpu_features & gpu_feature::INDEPENDENT_BLEND != 0 {
+            self.bits[3] = VK_TRUE;
+        }
+        if gpu_features & gpu_feature::SAMPLE_RATE_SHADING != 0 {
+            self.bits[6] = VK_TRUE;
+        }
     }
-    if gpu_features & gpu_feature::FRAGMENT_STORES_ATOMICS != 0 {
-        features.bits[26] = VK_TRUE;
-    }
-    if gpu_features & gpu_feature::DEPTH_BIAS_CLAMP != 0 {
-        features.bits[12] = VK_TRUE;
-    }
-    if gpu_features & gpu_feature::IMAGE_CUBE_ARRAY != 0 {
-        features.bits[2] = VK_TRUE;
-    }
-    if gpu_features & gpu_feature::INDEPENDENT_BLEND != 0 {
-        features.bits[3] = VK_TRUE;
-    }
-    if gpu_features & gpu_feature::SAMPLE_RATE_SHADING != 0 {
-        features.bits[6] = VK_TRUE;
-    }
-}
 
-pub(crate) fn enable_binding_array_features(features: &mut VkPhysicalDeviceFeatures, arrays: u32) {
-    if arrays & binding_array::UNIFORM_BUFFER != 0 {
-        features.bits[33] = VK_TRUE; // shaderUniformBufferArrayDynamicIndexing
-    }
-    if arrays & binding_array::STORAGE_BUFFER != 0 {
-        features.bits[35] = VK_TRUE; // shaderStorageBufferArrayDynamicIndexing
-    }
-    if arrays & (binding_array::SAMPLED_TEXTURE | binding_array::SAMPLER)
-        == binding_array::SAMPLED_TEXTURE | binding_array::SAMPLER
-    {
-        features.bits[34] = VK_TRUE; // shaderSampledImageArrayDynamicIndexing
-    }
-    if arrays & binding_array::STORAGE_TEXTURE != 0 {
-        features.bits[36] = VK_TRUE; // shaderStorageImageArrayDynamicIndexing
+    pub(crate) fn enable_binding_arrays(&mut self, arrays: u32) {
+        if arrays & binding_array::UNIFORM_BUFFER != 0 {
+            self.bits[33] = VK_TRUE; // shaderUniformBufferArrayDynamicIndexing
+        }
+        if arrays & binding_array::STORAGE_BUFFER != 0 {
+            self.bits[35] = VK_TRUE; // shaderStorageBufferArrayDynamicIndexing
+        }
+        if arrays & (binding_array::SAMPLED_TEXTURE | binding_array::SAMPLER)
+            == binding_array::SAMPLED_TEXTURE | binding_array::SAMPLER
+        {
+            self.bits[34] = VK_TRUE; // shaderSampledImageArrayDynamicIndexing
+        }
+        if arrays & binding_array::STORAGE_TEXTURE != 0 {
+            self.bits[36] = VK_TRUE; // shaderStorageImageArrayDynamicIndexing
+        }
     }
 }
 

@@ -18,7 +18,7 @@ fn compute_path_end_to_end_over_socket() {
     let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
     let server = std::thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let caps = hl_gpu::Capabilities::full("host");
+        let caps = hl_gpu::Capabilities::permissive_fixture("host");
         let mut exec = hl_gpu::CpuExecutor::new();
         exec.set_kernel_compiler(|desc: &KernelDescriptor| {
             ptx::compile(&desc.ptx, &desc.entry, desc.block)

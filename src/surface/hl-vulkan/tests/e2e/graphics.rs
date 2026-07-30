@@ -21,9 +21,9 @@ fn clear_depth_stencil_image_occludes_a_depth_tested_draw_end_to_end() {
 
     // Render the frame with the depth image standalone-cleared to `clear_depth`; return the center pixel.
     let render_with_clear_depth = |clear_depth: f32| -> [u8; 4] {
-        // `Capabilities::full` advertises only color formats; add the depth format so the depth image
+        // `permissive_fixture` carries only color formats; add the depth format so the depth image
         // (and its depth-clear pass) validate against the runtime.
-        let mut caps = Capabilities::full("hl-cpu-depthclear");
+        let mut caps = Capabilities::permissive_fixture("hl-cpu-depthclear");
         caps.texture_formats |=
             TextureFormat::bits(hl_gpu::protocol::model::capability::DEPTH_FORMATS);
         let exec = CpuExecutor::new();
@@ -190,7 +190,7 @@ fn graphics_triangle_renders_end_to_end_and_reads_back_the_cleared_target_and_co
     // the CPU oracle. The oracle still only *rasterizes* (it never runs the shaders) — see the module doc.
     let exec = CpuExecutor::new();
     let session = Session::new(
-        Limits::from_capabilities(Capabilities::full("hl-cpu-graphics")),
+        Limits::from_capabilities(Capabilities::permissive_fixture("hl-cpu-graphics")),
         GlobalLedger::unbounded(),
         Box::new(FakeClock::new(0)),
     );

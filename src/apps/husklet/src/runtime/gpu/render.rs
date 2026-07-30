@@ -36,7 +36,7 @@ const DRM_SYNCOBJ_EVENTFD: u64 = 0xc018_64cf;
 pub(super) struct RenderNode;
 
 impl RenderNode {
-    pub(super) fn install(request: &mut DeviceRequest) -> std::io::Result<()> {
+    pub(super) fn install(request: &mut DeviceRequest) -> hl_container::Result<()> {
         let namespace = request
             .extensions
             .iter_mut()
@@ -44,24 +44,24 @@ impl RenderNode {
             .ok_or_else(|| std::io::Error::other("graphics namespace extension is missing"))?;
         namespace.namespace.extend(Self::topology());
         namespace.required_features.extend([
-            feature("directories")?,
-            feature("immutable-files")?,
-            feature("symlinks")?,
+            Feature::new("directories")?,
+            Feature::new("immutable-files")?,
+            Feature::new("symlinks")?,
         ]);
 
-        let provider = provider("engine.handles")?;
+        let provider = ProviderId::new("engine.handles")?;
         request.extensions.push(ExtensionSpec {
             provider: provider.clone(),
             version: hl_container::device::Version::new(1, 0),
             required: true,
             required_features: BTreeSet::from([
-                feature("devices")?,
-                feature("ioctl")?,
-                feature("metadata")?,
-                feature("poll")?,
-                feature("read")?,
-                feature("write")?,
-                feature("ofd-lifecycle")?,
+                Feature::new("devices")?,
+                Feature::new("ioctl")?,
+                Feature::new("metadata")?,
+                Feature::new("poll")?,
+                Feature::new("read")?,
+                Feature::new("write")?,
+                Feature::new("ofd-lifecycle")?,
             ]),
             optional_features: BTreeSet::new(),
             config: ExtensionConfig::empty("engine.handles/v1"),
@@ -412,18 +412,6 @@ impl Command {
             "DRM_SET_CLIENT_CAP is not permitted on a render node",
         ))
     }
-}
-
-fn provider(value: &str) -> std::io::Result<ProviderId> {
-    ProviderId::new(value).map_err(|error| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{error:?}"))
-    })
-}
-
-fn feature(value: &str) -> std::io::Result<Feature> {
-    Feature::new(value).map_err(|error| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{error:?}"))
-    })
 }
 
 fn linux(errno: i32, context: &str) -> LinuxError {

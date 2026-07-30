@@ -15,7 +15,7 @@ fn color_write_mask_red_only_leaves_green_and_blue_untouched_end_to_end() {
     let render = |write_mask: u32| -> [u8; 4] {
         let exec = CpuExecutor::new();
         let session = Session::new(
-            Limits::from_capabilities(Capabilities::full("hl-cpu-writemask")),
+            Limits::from_capabilities(Capabilities::permissive_fixture("hl-cpu-writemask")),
             GlobalLedger::unbounded(),
             Box::new(FakeClock::new(0)),
         );
@@ -142,7 +142,7 @@ fn cull_mode_and_front_face_select_the_triangle_facing_end_to_end() {
     let render = |cull: u32, front_face: u32| -> [u8; 4] {
         let exec = CpuExecutor::new();
         let session = Session::new(
-            Limits::from_capabilities(Capabilities::full("hl-cpu-cull")),
+            Limits::from_capabilities(Capabilities::permissive_fixture("hl-cpu-cull")),
             GlobalLedger::unbounded(),
             Box::new(FakeClock::new(0)),
         );

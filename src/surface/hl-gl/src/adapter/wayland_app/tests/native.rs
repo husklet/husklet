@@ -12,7 +12,7 @@ struct Sink {
 
 impl CommandSink for Sink {
     fn negotiate(&mut self, _request: &FeatureRequest) -> Result<Capabilities> {
-        Ok(Capabilities::full("native-presentation-test"))
+        Ok(Capabilities::permissive_fixture("native-presentation-test"))
     }
 
     fn submit(&mut self, batch: &[Cmd]) -> Result<()> {

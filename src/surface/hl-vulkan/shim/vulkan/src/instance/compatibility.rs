@@ -227,25 +227,12 @@ impl<'a> DawnBaseline<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::instance::{features_for, metal_limits};
-    use hl_gpu::protocol::model::capability::BC_FORMATS;
-    use hl_gpu::protocol::model::enums::TextureFormat;
-
-    /// The capability descriptor of a Metal-class executor: `Capabilities::full` advertises only the
-    /// shared COLOR formats by design, so a test that asks whether Dawn's baseline is met has to add the
-    /// BC formats the wgpu/Metal executor really advertises when the adapter reports
-    /// `TEXTURE_COMPRESSION_BC` (see `hl-gpu-wgpu`'s `capabilities`). Dawn requires
-    /// `textureCompressionBC`, so without them this asserts against a fixture that cannot pass.
-    fn metal_class_capabilities() -> hl_gpu::Capabilities {
-        let mut capabilities = hl_gpu::Capabilities::full("test");
-        capabilities.texture_formats |= TextureFormat::bits(BC_FORMATS);
-        capabilities
-    }
+    use crate::instance::metal_limits;
 
     #[test]
     fn current_full_capabilities_meet_chrome_150_dawn_baseline() {
-        let capabilities = metal_class_capabilities();
-        let features = features_for(Some(&capabilities));
+        let capabilities = hl_gpu::Capabilities::metal_class_fixture("test");
+        let features = VkPhysicalDeviceFeatures::advertised(Some(&capabilities));
         let limits = metal_limits();
 
         assert_eq!(
@@ -283,8 +270,8 @@ mod tests {
 
     #[test]
     fn reports_exact_limit_failures_without_enabling_features() {
-        let capabilities = metal_class_capabilities();
-        let features = features_for(Some(&capabilities));
+        let capabilities = hl_gpu::Capabilities::metal_class_fixture("test");
+        let features = VkPhysicalDeviceFeatures::advertised(Some(&capabilities));
         let mut limits = metal_limits();
         limits.max_image_dimension_2d = 4096;
         limits.min_storage_buffer_offset_alignment = 512;

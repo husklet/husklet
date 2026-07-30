@@ -175,7 +175,9 @@ pub struct Graphics {
 }
 
 impl Graphics {
-    pub fn for_workspace(workspace: &crate::config::WorkspaceConfig) -> io::Result<Option<Self>> {
+    pub fn for_workspace(
+        workspace: &crate::config::WorkspaceConfig,
+    ) -> hl_container::Result<Option<Self>> {
         let enabled = workspace.gui || workspace.cuda.is_some();
         if !enabled {
             return Ok(None);
@@ -267,18 +269,12 @@ impl Graphics {
                 ),
             ]);
         }
-        let provider = hl_container::device::extension::ProviderId::new("engine.namespace")
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, format!("{error:?}")))?;
-        let host_bind = hl_container::device::extension::Feature::new("host-bind-read-only")
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, format!("{error:?}")))?;
-        let sockets = hl_container::device::extension::Feature::new("unix-sockets")
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, format!("{error:?}")))?;
-        let symlinks = hl_container::device::extension::Feature::new("symlinks")
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, format!("{error:?}")))?;
-        let directories = hl_container::device::extension::Feature::new("directories")
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, format!("{error:?}")))?;
-        let immutable_files = hl_container::device::extension::Feature::new("immutable-files")
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, format!("{error:?}")))?;
+        let provider = hl_container::device::extension::ProviderId::new("engine.namespace")?;
+        let host_bind = hl_container::device::extension::Feature::new("host-bind-read-only")?;
+        let sockets = hl_container::device::extension::Feature::new("unix-sockets")?;
+        let symlinks = hl_container::device::extension::Feature::new("symlinks")?;
+        let directories = hl_container::device::extension::Feature::new("directories")?;
+        let immutable_files = hl_container::device::extension::Feature::new("immutable-files")?;
         request
             .extensions
             .push(hl_container::device::extension::ExtensionSpec {

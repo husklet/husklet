@@ -624,7 +624,7 @@ fn descriptor_array_features_are_advertised_independently() {
         let mut features = VkPhysicalDeviceFeatures {
             bits: [VK_FALSE; 55],
         };
-        crate::instance::enable_binding_array_features(&mut features, capability);
+        features.enable_binding_arrays(capability);
         for candidate in 33..=36 {
             assert_eq!(
                 features.bits[candidate] != VK_FALSE,
@@ -650,7 +650,7 @@ fn shader_execution_features_are_advertised_independently() {
         let mut features = VkPhysicalDeviceFeatures {
             bits: [VK_FALSE; 55],
         };
-        crate::instance::enable_gpu_features(&mut features, capability);
+        features.enable_shader_guarantees(capability);
         for candidate in [0usize, 2, 3, 6, 12, 26] {
             assert_eq!(
                 features.bits[candidate] != VK_FALSE,
@@ -665,18 +665,18 @@ fn shader_execution_features_are_advertised_independently() {
 fn physical_feature_query_uses_negotiated_shader_guarantees() {
     use hl_gpu::protocol::model::capability::gpu_feature;
 
-    let mut caps = hl_gpu::Capabilities::full("test");
+    let mut caps = hl_gpu::Capabilities::permissive_fixture("test");
     caps.gpu_features = gpu_feature::ROBUST_BUFFER_ACCESS;
-    let robust = crate::instance::features_for(Some(&caps));
+    let robust = VkPhysicalDeviceFeatures::advertised(Some(&caps));
     assert_ne!(robust.bits[0], VK_FALSE);
     assert_eq!(robust.bits[26], VK_FALSE);
 
     caps.gpu_features = gpu_feature::FRAGMENT_STORES_ATOMICS;
-    let fragment = crate::instance::features_for(Some(&caps));
+    let fragment = VkPhysicalDeviceFeatures::advertised(Some(&caps));
     assert_eq!(fragment.bits[0], VK_FALSE);
     assert_ne!(fragment.bits[26], VK_FALSE);
 
-    let unavailable = crate::instance::features_for(None);
+    let unavailable = VkPhysicalDeviceFeatures::advertised(None);
     assert_eq!(unavailable.bits[0], VK_FALSE);
     assert_eq!(unavailable.bits[26], VK_FALSE);
 }

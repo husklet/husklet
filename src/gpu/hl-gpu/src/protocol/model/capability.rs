@@ -307,13 +307,6 @@ impl Capabilities {
         present_kinds
     }
 
-    /// Deprecated alias for [`Capabilities::permissive_fixture`], kept only while the call sites outside
-    /// `hl-gpu`/`hl-gpu-wgpu` migrate. The name promised "everything" and does not deliver it (no
-    /// block-compressed and no depth/stencil formats), which has already cost red tests.
-    pub fn full(name: impl Into<String>) -> Capabilities {
-        Self::permissive_fixture(name)
-    }
-
     /// A TEST FIXTURE for sinks that accept anything the guest can encode: every encoder command, every
     /// COLOR format (no depth/stencil — see [`DEPTH_FORMATS`] — and no block-compressed format — see
     /// [`BC_FORMATS`]), all shader payloads, all present kinds, every binding-array kind and every
