@@ -18,19 +18,6 @@ mod fragment;
 pub(crate) use clear::{clear_depth_stencil_target, clear_rect, clear_target};
 pub(crate) use draw::{exec_draw, exec_draw_indexed};
 
-/// Hard ceiling on a draw's `instance_count` — the raster analogue of
-/// [`MAX_DISPATCH_BLOCKS`](crate::cpu::service::compute::MAX_DISPATCH_BLOCKS).
-///
-/// The instance loop re-rasterizes the whole primitive set once per instance, and `instance_count` is
-/// bounds-checked only when some vertex layout is per-instance; otherwise a maximal count means ~4 billion
-/// full-framebuffer rasterizations. That is a pure CPU-time denial of service — it grows no allocation, so
-/// no residency ceiling notices it.
-///
-/// It is a RUNTIME cap only — no wire bytes change — set far above any legitimate draw: the largest
-/// instance count anywhere in this workspace is 40, and browser-class instanced rendering runs to thousands,
-/// so `1 << 20` (1,048,576) leaves at least three orders of magnitude of headroom. Rejected in the
-/// pre-execution validation pass so an over-cap draw leaves no partial raster behind.
-pub(crate) const MAX_DRAW_INSTANCES: u32 = 1 << 20;
 use fragment::{barycentric, edge, ndc_to_fb, read_vertex, tri_bbox, write_fragment, DrawVertex};
 
 /// Rasterize one draw's assembled triangles into every bound color attachment, compositing with

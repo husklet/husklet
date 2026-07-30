@@ -29,6 +29,38 @@ pub struct Limits {
 }
 
 impl Limits {
+    /// Hard ceiling on a draw's `instance_count`.
+    ///
+    /// The instance loop re-runs the whole primitive set once per instance, and `instance_count` is
+    /// bounds-checked only when some vertex layout is per-instance; otherwise a maximal count means ~4
+    /// billion full-framebuffer rasterizations. That is a pure CPU-time denial of service — it grows no
+    /// allocation, so no residency ceiling notices it. Set far above any legitimate draw: the largest
+    /// instance count anywhere in this workspace is 40, and browser-class instanced rendering runs to
+    /// thousands.
+    pub const MAX_DRAW_INSTANCES: u32 = 1 << 20;
+
+    /// Hard ceiling on a single dispatch's total launch-block count (`grid_x * grid_y * grid_z`).
+    ///
+    /// A per-thread step cap bounds work WITHIN a block, but the block count was uncapped, so a validated
+    /// dispatch over a real kernel could iterate up to `u32::MAX^3` blocks. The largest real grid any
+    /// program here runs is ~262k blocks.
+    pub const MAX_DISPATCH_BLOCKS: u64 = 1 << 26;
+
+    /// Hard ceiling on a kernel's threads per block (`block_x * block_y * block_z`).
+    ///
+    /// Not an arbitrary safety number: it is CUDA's architectural `maxThreadsPerBlock` and WebGPU's
+    /// `maxComputeInvocationsPerWorkgroup`, so a kernel above it could not launch on real hardware either.
+    /// A guest front end derives the block shape from guest-supplied kernel source, so this is untrusted
+    /// input reaching an allocation.
+    pub const MAX_BLOCK_THREADS: u64 = 1024;
+
+    /// Hard ceiling on a kernel's per-block shared-memory allocation.
+    ///
+    /// Allocated fresh per block from a guest-declared size, so an uncapped value asks for up to 4 GiB per
+    /// block. Sits above CUDA's 48 KiB standard per-block limit and well above WebGPU's 16 KiB
+    /// workgroup-storage limit, so no launchable kernel is affected.
+    pub const MAX_SHARED_BYTES: u32 = 64 << 10;
+
     /// Default ceilings derived from a backend's advertised capabilities.
     ///
     /// The per-connection residency ceiling is a hostile-guest DoS guard — a single connection must never be

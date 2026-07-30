@@ -96,7 +96,7 @@ where
     if !st.in_render_pass {
         return Err(GpuError::Invalid("draw outside a render pass"));
     }
-    if instance_count > crate::cpu::service::raster::MAX_DRAW_INSTANCES {
+    if instance_count > crate::runtime::model::session::Limits::MAX_DRAW_INSTANCES {
         return Err(GpuError::ResourceLimit("draw instances"));
     }
     let pid = st

@@ -11,35 +11,7 @@ use crate::protocol::model::descriptor::{BindGroupDesc, BindResource};
 use crate::protocol::model::error::{GpuError, Result};
 use crate::protocol::model::kernel::KernelProgram;
 use crate::runtime::model::resources::SessionResources;
-
-/// Hard ceiling on the total launch-block count (grid_x * grid_y * grid_z) for a single dispatch over a
-/// REAL kernel program. The per-thread step cap (1M, in [`crate::cpu::interp`]) bounds work WITHIN a
-/// block, but the block COUNT was uncapped: a validated `Dispatch` with a huge grid over a real kernel
-/// would iterate blocks unbounded (up to `u32::MAX^3`), a compute-time DoS.
-///
-/// It is a RUNTIME cap only — no wire bytes change — and is set far above any legitimate dispatch: the
-/// largest real grid the oracle ever runs is ~262k blocks (a 1<<20-element vecadd with a 4-wide block),
-/// so this 1<<26 (67,108,864) ceiling is ~256x that headroom. Every valid dispatch runs unchanged; only
-/// a pathological grid is rejected — BEFORE any block iterates — with a typed `ResourceLimit`.
-pub(crate) const MAX_DISPATCH_BLOCKS: u64 = 1 << 26;
-
-/// Hard ceiling on the THREADS PER BLOCK (`block_x * block_y * block_z`) of a kernel program — the
-/// companion to [`MAX_DISPATCH_BLOCKS`], which bounds the grid but not the block. The interpreter
-/// materializes one register file and one program counter per thread of a block, so an uncapped block
-/// shape allocates per-thread state proportional to `u32::MAX^3` before running anything.
-///
-/// `1024` is not an arbitrary safety number: it is CUDA's architectural `maxThreadsPerBlock`, so a kernel
-/// above it could not launch on real hardware either, and WebGPU's `maxComputeInvocationsPerWorkgroup` is
-/// the same figure. The largest block any program here declares is 64 threads. A guest front end derives
-/// `block` from guest-supplied PTX, so this is untrusted input reaching an allocation.
-pub(crate) const MAX_BLOCK_THREADS: u64 = 1024;
-
-/// Hard ceiling on a kernel's per-block shared-memory allocation. `shared_bytes` comes from the `.shared`
-/// declarations in guest-supplied PTX and is allocated fresh per block, so an uncapped value asks for up to
-/// 4 GiB per block. `64 KiB` sits above CUDA's 48 KiB standard per-block shared-memory limit (and well
-/// above WebGPU's 16 KiB workgroup-storage limit), so no launchable kernel is affected; every program here
-/// declares `0`.
-pub(crate) const MAX_SHARED_BYTES: u32 = 64 << 10;
+use crate::runtime::model::session::Limits;
 
 /// Execute a compute `Dispatch`. A dispatch with no pipeline/bind group bound is a no-op (a malformed
 /// stream the validation pass already rejected); a SPIR-V (non-kernel) module is recorded but not run.
@@ -81,7 +53,7 @@ fn run_kernel(
         .checked_mul(grid.1.max(1) as u64)
         .and_then(|v| v.checked_mul(grid.2.max(1) as u64));
     match blocks {
-        Some(b) if b <= MAX_DISPATCH_BLOCKS => {}
+        Some(b) if b <= Limits::MAX_DISPATCH_BLOCKS => {}
         _ => return Err(GpuError::ResourceLimit("dispatch grid blocks")),
     }
     // Same reasoning one level down: the block SHAPE and its shared-memory request both size per-block
@@ -90,10 +62,10 @@ fn run_kernel(
         .checked_mul(prog.block[1].max(1) as u64)
         .and_then(|v| v.checked_mul(prog.block[2].max(1) as u64));
     match threads {
-        Some(t) if t <= MAX_BLOCK_THREADS => {}
+        Some(t) if t <= Limits::MAX_BLOCK_THREADS => {}
         _ => return Err(GpuError::ResourceLimit("kernel block threads")),
     }
-    if prog.shared_bytes > MAX_SHARED_BYTES {
+    if prog.shared_bytes > Limits::MAX_SHARED_BYTES {
         return Err(GpuError::ResourceLimit("kernel shared memory"));
     }
     // Gather the parameter blob (binding 0) and each pointer region (binding r+1 → region r).
