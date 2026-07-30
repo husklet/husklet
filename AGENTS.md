@@ -727,3 +727,20 @@ implementation, test seam, platform boundary, or stable contract.
   do not document the obvious to satisfy a quota.
 - Keep lint suppressions local and justified. Do not hide warnings at crate or workspace scope for convenience.
 - Search all callers before renaming. Do not shorten names when re-exports become ambiguous.
+
+# Comments
+
+Avoid excessive comments, short comments are fine, usually handy to tell what structure should do.
+Everytime you add new functionality ask if domain/folder is right what is correct approach to structure
+the api so its DX friendly.
+
+# Work
+
+keep your work in ../hl-work folder, for each expriment keep one folder or share the folder but concentrate all 
+builds and tmp and other things in one directory. 
+
+Keep eye on disk usage, and system, and dangerous sys opperations.
+
+If you run in orb (ususally will do) or any other vm, check for `mac` command to execute on host.
+Do not spread files randomly across the system. /tmp folder this not shared between vm and host.
+Use ../hl-work to provide shared artifacts.
