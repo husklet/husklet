@@ -1,0 +1,1 @@
+execution: status=Code(0) expected_exit=0 checks=[Contains("rc=0")] output="rc=143\nTerminated\n"

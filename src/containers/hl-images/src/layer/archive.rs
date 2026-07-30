@@ -74,7 +74,9 @@ impl HardLinks {
 struct Directories(Vec<Directory>);
 
 #[derive(Default)]
-struct Deferred {
+/// Work that only the complete layer can settle: directory modes a later entry may supersede, and hard
+/// links whose target has not been unpacked yet.
+struct Backlog {
     directories: Directories,
     hard_links: HardLinks,
 }
@@ -173,7 +175,7 @@ impl<R: Read> Layer<R> {
         let root = root.canonicalize()?;
         let mut archive = tar::Archive::new(&mut self.reader);
         let mut report = Report::default();
-        let mut deferred = Deferred::default();
+        let mut backlog = Backlog::default();
         for item in archive.entries()? {
             let mut entry = item?;
             let raw = entry.path()?;
@@ -195,7 +197,7 @@ impl<R: Read> Layer<R> {
             )?;
             let physical_path = Path::new(&physical)?;
             let destination = physical_path.destination(&root);
-            deferred.hard_links.supersede(&destination);
+            backlog.hard_links.supersede(&destination);
             let _parents = physical_path.prepare(&root)?;
             let kind = entry.header().entry_type();
             let ownership = Ownership::from_header(entry.header(), &path)?;
@@ -213,15 +215,15 @@ impl<R: Read> Layer<R> {
                 &destination,
                 &root,
                 names.as_deref_mut(),
-                &mut deferred,
+                &mut backlog,
             )?;
             if let Some(ownerships) = ownerships.as_deref_mut() {
                 ownerships.record(path.as_path(), ownership)?;
             }
             report.entries += 1;
         }
-        deferred.hard_links.finish()?;
-        deferred.directories.finish(ownerships)?;
+        backlog.hard_links.finish()?;
+        backlog.directories.finish(ownerships)?;
         Ok(report)
     }
 }
@@ -234,7 +236,7 @@ impl Path {
         destination: &FsPath,
         root: &FsPath,
         names: Option<&mut Names>,
-        deferred: &mut Deferred,
+        backlog: &mut Backlog,
     ) -> Result<()> {
         let path = self;
         match entry.header().entry_type() {
@@ -246,7 +248,7 @@ impl Path {
                 }
                 fs::create_dir_all(destination)
                     .map_err(|source| path.io("create directory", source))?;
-                deferred.directories.push(
+                backlog.directories.push(
                     path.clone(),
                     destination.to_owned(),
                     entry.header().mode()?,
@@ -307,7 +309,7 @@ impl Path {
                 match fs::hard_link(&target, destination) {
                     Ok(()) => {}
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                        deferred.hard_links.0.push(HardLink {
+                        backlog.hard_links.0.push(HardLink {
                             path: path.clone(),
                             target,
                             destination: destination.to_owned(),

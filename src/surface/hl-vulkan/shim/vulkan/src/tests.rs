@@ -707,7 +707,7 @@ fn device_request_forwards_enabled_shader_guarantees() {
         p_enabled_features: &features,
     };
     assert_eq!(
-        crate::device::requested_gpu_features(Some(&create)),
+        crate::device::Request::new(&create).gpu_features(),
         gpu_feature::ROBUST_BUFFER_ACCESS
             | gpu_feature::FRAGMENT_STORES_ATOMICS
             | gpu_feature::DEPTH_BIAS_CLAMP

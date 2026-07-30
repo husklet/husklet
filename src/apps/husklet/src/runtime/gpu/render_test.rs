@@ -46,7 +46,7 @@ fn version_matches_the_64_bit_drm_uapi_layout() {
         argument[pointer..pointer + 8].copy_from_slice(&address.to_ne_bytes());
     }
 
-    let result = version(argument).unwrap();
+    let result = Command::version(argument).unwrap();
 
     assert_eq!(
         i32::from_ne_bytes(result.argument[0..4].try_into().unwrap()),
@@ -82,7 +82,7 @@ fn version_respects_null_pointers_and_caller_capacities() {
     argument[24..32].copy_from_slice(&0x1000_u64.to_ne_bytes());
     argument[32..40].copy_from_slice(&32_u64.to_ne_bytes());
 
-    let result = version(argument).unwrap();
+    let result = Command::version(argument).unwrap();
 
     assert_eq!(result.writes.len(), 1);
     assert_eq!(result.writes[0].address, 0x1000);
@@ -100,18 +100,18 @@ fn version_respects_null_pointers_and_caller_capacities() {
 #[test]
 fn version_rejects_non_uapi_argument_lengths() {
     for length in [0, 63, 65] {
-        let error = version(vec![0; length]).unwrap_err();
+        let error = Command::version(vec![0; length]).unwrap_err();
         assert_eq!(error.errno, libc::EINVAL);
     }
 }
 
 #[test]
 fn render_only_capabilities_are_truthful() {
-    let monotonic = capability(get_cap(DRM_CAP_TIMESTAMP_MONOTONIC)).unwrap();
+    let monotonic = Command::capability(get_cap(DRM_CAP_TIMESTAMP_MONOTONIC)).unwrap();
     assert_eq!(value(&monotonic), 1);
 
     for cap in [DRM_CAP_PRIME, DRM_CAP_SYNCOBJ, DRM_CAP_SYNCOBJ_TIMELINE] {
-        let unsupported = capability(get_cap(cap)).unwrap();
+        let unsupported = Command::capability(get_cap(cap)).unwrap();
         assert_eq!(value(&unsupported), 0, "capability {cap:#x}");
     }
 }
@@ -125,7 +125,7 @@ fn kms_and_unknown_capabilities_are_not_fabricated() {
         DRM_CAP_ADDFB2_MODIFIERS,
         u64::MAX,
     ] {
-        let error = capability(get_cap(cap)).unwrap_err();
+        let error = Command::capability(get_cap(cap)).unwrap_err();
         assert_eq!(error.errno, libc::EOPNOTSUPP, "capability {cap:#x}");
     }
 }
@@ -133,18 +133,18 @@ fn kms_and_unknown_capabilities_are_not_fabricated() {
 #[test]
 fn capability_rejects_non_uapi_argument_lengths() {
     for length in [0, 15, 17] {
-        let error = capability(vec![0; length]).unwrap_err();
+        let error = Command::capability(vec![0; length]).unwrap_err();
         assert_eq!(error.errno, libc::EINVAL);
     }
 }
 
 #[test]
 fn render_node_rejects_all_set_client_capabilities() {
-    let error = client_capability(vec![0; 16]).unwrap_err();
+    let error = Command::client_capability(vec![0; 16]).unwrap_err();
     assert_eq!(error.errno, libc::EACCES);
 
     for length in [0, 15, 17] {
-        let error = client_capability(vec![0; length]).unwrap_err();
+        let error = Command::client_capability(vec![0; length]).unwrap_err();
         assert_eq!(error.errno, libc::EINVAL);
     }
 }
@@ -153,7 +153,7 @@ fn render_node_rejects_all_set_client_capabilities() {
 fn handle_metadata_matches_the_projected_device_permissions() {
     let actual = OpenHandle::metadata(&RenderHandle).unwrap();
 
-    assert_eq!(actual.metadata, metadata(0o666));
+    assert_eq!(actual.metadata, DEVICE);
     assert_eq!(actual.size, 0);
 }
 

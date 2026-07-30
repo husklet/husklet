@@ -67,7 +67,7 @@ impl RenderNode {
             config: ExtensionConfig::empty("engine.handles/v1"),
             namespace: vec![NamespaceEntry::Device(DeviceEntry {
                 path: "/dev/dri/renderD128".into(),
-                metadata: metadata(0o666),
+                metadata: DEVICE,
                 kind: DeviceKind::Character,
                 major: 226,
                 minor: 128,
@@ -95,70 +95,112 @@ impl RenderNode {
     }
 
     fn topology() -> Vec<NamespaceEntry> {
-        [
-            "/dev/dri",
-            "/sys",
-            "/sys/class",
-            "/sys/class/drm",
-            "/sys/dev",
-            "/sys/dev/char",
-            "/sys/devices",
-            "/sys/devices/platform",
-            "/sys/devices/platform/hl-gpu",
-            "/sys/devices/platform/hl-gpu/drm",
-            "/sys/devices/platform/hl-gpu/drm/renderD128",
-            "/sys/bus",
-            "/sys/bus/platform",
-        ]
-        .into_iter()
-        .map(|path| {
-            NamespaceEntry::Directory(hl_container::device::extension::DirectoryEntry {
-                path: path.into(),
-                metadata: metadata(0o755),
+        DIRECTORIES
+            .into_iter()
+            .map(|path| {
+                NamespaceEntry::Directory(hl_container::device::extension::DirectoryEntry {
+                    path: path.into(),
+                    metadata: DIRECTORY,
+                })
             })
-        })
-        .chain([
-            file(
-                "/sys/devices/platform/hl-gpu/drm/renderD128/dev",
-                b"226:128\n",
-            ),
-            file(
-                "/sys/devices/platform/hl-gpu/drm/renderD128/uevent",
-                b"MAJOR=226\nMINOR=128\nDEVNAME=dri/renderD128\n",
-            ),
-            file(
-                "/sys/devices/platform/hl-gpu/uevent",
-                b"DRIVER=hl_gpu\n\
-                  OF_NAME=gpu\n\
-                  OF_FULLNAME=/hl-gpu\n\
-                  OF_COMPATIBLE_N=1\n\
-                  OF_COMPATIBLE_0=husklet,gpu\n\
-                  MODALIAS=platform:hl-gpu\n",
-            ),
-            symlink(
-                "/sys/devices/platform/hl-gpu/subsystem",
-                "/sys/bus/platform",
-            ),
-            symlink(
-                "/sys/devices/platform/hl-gpu/drm/renderD128/device",
-                "../..",
-            ),
-            symlink(
-                "/sys/devices/platform/hl-gpu/drm/renderD128/subsystem",
-                "/sys/class/drm",
-            ),
-            symlink(
-                "/sys/class/drm/renderD128",
-                "/sys/devices/platform/hl-gpu/drm/renderD128",
-            ),
-            symlink(
-                "/sys/dev/char/226:128",
-                "/sys/devices/platform/hl-gpu/drm/renderD128",
-            ),
-        ])
-        .collect()
+            .chain(ATTRIBUTES.into_iter().map(|(path, bytes)| {
+                NamespaceEntry::File(FileEntry {
+                    path: path.into(),
+                    metadata: ATTRIBUTE,
+                    source: FileSource::Immutable(Arc::from(bytes)),
+                })
+            }))
+            .chain(LINKS.into_iter().map(|(path, target)| {
+                NamespaceEntry::Symlink(SymlinkEntry {
+                    path: path.into(),
+                    target: target.into(),
+                    uid: 0,
+                    gid: 0,
+                })
+            }))
+            .collect()
     }
 }
+
+/// The directories a DRM-aware client walks before it opens the render node.
+const DIRECTORIES: [&str; 13] = [
+    "/dev/dri",
+    "/sys",
+    "/sys/class",
+    "/sys/class/drm",
+    "/sys/dev",
+    "/sys/dev/char",
+    "/sys/devices",
+    "/sys/devices/platform",
+    "/sys/devices/platform/hl-gpu",
+    "/sys/devices/platform/hl-gpu/drm",
+    "/sys/devices/platform/hl-gpu/drm/renderD128",
+    "/sys/bus",
+    "/sys/bus/platform",
+];
+
+/// The sysfs attributes udev and libdrm read to identify the node, with their exact contents.
+const ATTRIBUTES: [(&str, &[u8]); 3] = [
+    (
+        "/sys/devices/platform/hl-gpu/drm/renderD128/dev",
+        b"226:128\n",
+    ),
+    (
+        "/sys/devices/platform/hl-gpu/drm/renderD128/uevent",
+        b"MAJOR=226\nMINOR=128\nDEVNAME=dri/renderD128\n",
+    ),
+    (
+        "/sys/devices/platform/hl-gpu/uevent",
+        b"DRIVER=hl_gpu\n\
+          OF_NAME=gpu\n\
+          OF_FULLNAME=/hl-gpu\n\
+          OF_COMPATIBLE_N=1\n\
+          OF_COMPATIBLE_0=husklet,gpu\n\
+          MODALIAS=platform:hl-gpu\n",
+    ),
+];
+
+/// The sysfs links that join the device, its subsystem, and its class views of one node.
+const LINKS: [(&str, &str); 5] = [
+    (
+        "/sys/devices/platform/hl-gpu/subsystem",
+        "/sys/bus/platform",
+    ),
+    (
+        "/sys/devices/platform/hl-gpu/drm/renderD128/device",
+        "../..",
+    ),
+    (
+        "/sys/devices/platform/hl-gpu/drm/renderD128/subsystem",
+        "/sys/class/drm",
+    ),
+    (
+        "/sys/class/drm/renderD128",
+        "/sys/devices/platform/hl-gpu/drm/renderD128",
+    ),
+    (
+        "/sys/dev/char/226:128",
+        "/sys/devices/platform/hl-gpu/drm/renderD128",
+    ),
+];
+
+/// Everything the projection owns is root-owned: only the render device itself is guest-writable, and
+/// sysfs attributes are read-only as Linux presents them.
+const DEVICE: Metadata = Metadata {
+    mode: 0o666,
+    uid: 0,
+    gid: 0,
+};
+const DIRECTORY: Metadata = Metadata {
+    mode: 0o755,
+    uid: 0,
+    gid: 0,
+};
+const ATTRIBUTE: Metadata = Metadata {
+    mode: 0o444,
+    uid: 0,
+    gid: 0,
+};
 
 impl Handles for RenderNode {
     fn open(&self, request: OpenRequest) -> Result<Box<dyn OpenHandle>, LinuxError> {
@@ -189,7 +231,7 @@ impl OpenHandle for RenderHandle {
 
     fn metadata(&self) -> Result<hl_container::device::extension::HandleMetadata, LinuxError> {
         Ok(hl_container::device::extension::HandleMetadata {
-            metadata: metadata(0o666),
+            metadata: DEVICE,
             size: 0,
         })
     }
@@ -203,29 +245,8 @@ impl OpenHandle for RenderHandle {
             command,
             request.argument.len()
         );
-        let result = match command {
-            DRM_VERSION => version(request.argument),
-            DRM_GET_CAP => capability(request.argument),
-            DRM_SET_CLIENT_CAP => client_capability(request.argument),
-            DRM_PRIME_HANDLE_TO_FD
-            | DRM_PRIME_FD_TO_HANDLE
-            | DRM_SYNCOBJ_CREATE
-            | DRM_SYNCOBJ_DESTROY
-            | DRM_SYNCOBJ_HANDLE_TO_FD
-            | DRM_SYNCOBJ_FD_TO_HANDLE
-            | DRM_SYNCOBJ_WAIT
-            | DRM_SYNCOBJ_RESET
-            | DRM_SYNCOBJ_SIGNAL
-            | DRM_SYNCOBJ_TIMELINE_WAIT
-            | DRM_SYNCOBJ_QUERY
-            | DRM_SYNCOBJ_TRANSFER
-            | DRM_SYNCOBJ_TIMELINE_SIGNAL
-            | DRM_SYNCOBJ_EVENTFD => Err(linux(
-                libc::EOPNOTSUPP,
-                "render-node sharing and synchronization are not implemented",
-            )),
-            _ => Err(linux(libc::ENOTTY, "unsupported render-node ioctl")),
-        };
+        let result =
+            Command::resolve(command).and_then(|command| command.perform(request.argument));
         hl_log::hl_log!(
             hl_log::tag::GPU,
             hl_log::Level::Debug,
@@ -252,122 +273,144 @@ impl OpenHandle for RenderHandle {
     fn close(self: Box<Self>) {}
 }
 
-fn version(mut argument: Vec<u8>) -> Result<IoctlResult, LinuxError> {
-    if argument.len() != 64 {
-        return Err(linux(libc::EINVAL, "DRM version argument must be 64 bytes"));
+/// A DRM ioctl this render node performs.
+///
+/// Resolving the request number into a closed set first keeps the performed commands visible in one
+/// place and preserves the distinction Linux draws between a capability this node does not implement
+/// (`EOPNOTSUPP`) and a request no DRM device answers (`ENOTTY`).
+enum Command {
+    Version,
+    Capability,
+    ClientCapability,
+}
+
+impl Command {
+    fn resolve(request: u64) -> Result<Self, LinuxError> {
+        match request {
+            DRM_VERSION => Ok(Self::Version),
+            DRM_GET_CAP => Ok(Self::Capability),
+            DRM_SET_CLIENT_CAP => Ok(Self::ClientCapability),
+            DRM_PRIME_HANDLE_TO_FD
+            | DRM_PRIME_FD_TO_HANDLE
+            | DRM_SYNCOBJ_CREATE
+            | DRM_SYNCOBJ_DESTROY
+            | DRM_SYNCOBJ_HANDLE_TO_FD
+            | DRM_SYNCOBJ_FD_TO_HANDLE
+            | DRM_SYNCOBJ_WAIT
+            | DRM_SYNCOBJ_RESET
+            | DRM_SYNCOBJ_SIGNAL
+            | DRM_SYNCOBJ_TIMELINE_WAIT
+            | DRM_SYNCOBJ_QUERY
+            | DRM_SYNCOBJ_TRANSFER
+            | DRM_SYNCOBJ_TIMELINE_SIGNAL
+            | DRM_SYNCOBJ_EVENTFD => Err(linux(
+                libc::EOPNOTSUPP,
+                "render-node sharing and synchronization are not implemented",
+            )),
+            _ => Err(linux(libc::ENOTTY, "unsupported render-node ioctl")),
+        }
     }
-    argument[0..4].copy_from_slice(&1_i32.to_ne_bytes());
-    argument[4..8].copy_from_slice(&0_i32.to_ne_bytes());
-    argument[8..12].copy_from_slice(&0_i32.to_ne_bytes());
-    let values = [
-        (16, 24, b"hl_gpu".as_slice()),
-        (32, 40, b"0".as_slice()),
-        (48, 56, b"Husklet projected render node".as_slice()),
-    ];
-    let mut writes = Vec::new();
-    for (length, pointer, value) in values {
-        let capacity = u64::from_ne_bytes(argument[length..length + 8].try_into().unwrap());
-        let address = u64::from_ne_bytes(argument[pointer..pointer + 8].try_into().unwrap());
+
+    fn perform(self, argument: Vec<u8>) -> Result<IoctlResult, LinuxError> {
+        match self {
+            Self::Version => Self::version(argument),
+            Self::Capability => Self::capability(argument),
+            Self::ClientCapability => Self::client_capability(argument),
+        }
+    }
+
+    fn version(mut argument: Vec<u8>) -> Result<IoctlResult, LinuxError> {
+        if argument.len() != 64 {
+            return Err(linux(libc::EINVAL, "DRM version argument must be 64 bytes"));
+        }
+        argument[0..4].copy_from_slice(&1_i32.to_ne_bytes());
+        argument[4..8].copy_from_slice(&0_i32.to_ne_bytes());
+        argument[8..12].copy_from_slice(&0_i32.to_ne_bytes());
+        let values = [
+            (16, 24, b"hl_gpu".as_slice()),
+            (32, 40, b"0".as_slice()),
+            (48, 56, b"Husklet projected render node".as_slice()),
+        ];
+        let mut writes = Vec::new();
+        for (length, pointer, value) in values {
+            let capacity = u64::from_ne_bytes(argument[length..length + 8].try_into().unwrap());
+            let address = u64::from_ne_bytes(argument[pointer..pointer + 8].try_into().unwrap());
+            hl_log::hl_log!(
+                hl_log::tag::GPU,
+                hl_log::Level::Debug,
+                "DRM_VERSION field length_offset={} capacity={} address=0x{:x} value_bytes={}",
+                length,
+                capacity,
+                address,
+                value.len()
+            );
+            argument[length..length + 8].copy_from_slice(&(value.len() as u64).to_ne_bytes());
+            if address != 0 && capacity != 0 {
+                writes.push(IoctlWrite {
+                    address,
+                    bytes: value[..value.len().min(capacity as usize)].to_vec(),
+                });
+            }
+        }
         hl_log::hl_log!(
             hl_log::tag::GPU,
             hl_log::Level::Debug,
-            "DRM_VERSION field length_offset={} capacity={} address=0x{:x} value_bytes={}",
-            length,
-            capacity,
-            address,
-            value.len()
+            "DRM_VERSION reply version=1.0.0 writes={:?}",
+            writes
+                .iter()
+                .map(|write| (write.address, write.bytes.len()))
+                .collect::<Vec<_>>()
         );
-        argument[length..length + 8].copy_from_slice(&(value.len() as u64).to_ne_bytes());
-        if address != 0 && capacity != 0 {
-            writes.push(IoctlWrite {
-                address,
-                bytes: value[..value.len().min(capacity as usize)].to_vec(),
-            });
-        }
+        Ok(IoctlResult {
+            value: 0,
+            argument,
+            writes,
+        })
     }
-    hl_log::hl_log!(
-        hl_log::tag::GPU,
-        hl_log::Level::Debug,
-        "DRM_VERSION reply version=1.0.0 writes={:?}",
-        writes
-            .iter()
-            .map(|write| (write.address, write.bytes.len()))
-            .collect::<Vec<_>>()
-    );
-    Ok(IoctlResult {
-        value: 0,
-        argument,
-        writes,
-    })
-}
 
-fn capability(mut argument: Vec<u8>) -> Result<IoctlResult, LinuxError> {
-    if argument.len() != 16 {
-        return Err(linux(
-            libc::EINVAL,
-            "DRM capability argument must be 16 bytes",
-        ));
-    }
-    let cap = u64::from_ne_bytes(argument[..8].try_into().unwrap());
-    let value: u64 = match cap {
-        // Linux DRM core answers this for render-only devices. It describes the clock used if an event
-        // carries a timestamp; it does not claim that this node implements vblank or page-flip events.
-        DRM_CAP_TIMESTAMP_MONOTONIC => 1,
-        // Husklet's GBM shim owns its buffers directly. This node implements neither PRIME conversion
-        // ioctl, so importing/exporting GEM handles must not be advertised.
-        DRM_CAP_PRIME | DRM_CAP_SYNCOBJ | DRM_CAP_SYNCOBJ_TIMELINE => 0,
-        // Every remaining core capability is either KMS-only or unknown. A Linux render-only DRM device
-        // rejects these before entering the KMS capability switch.
-        _ => {
+    fn capability(mut argument: Vec<u8>) -> Result<IoctlResult, LinuxError> {
+        if argument.len() != 16 {
             return Err(linux(
-                libc::EOPNOTSUPP,
-                "capability is unavailable on a render-only DRM device",
+                libc::EINVAL,
+                "DRM capability argument must be 16 bytes",
             ));
         }
-    };
-    argument[8..16].copy_from_slice(&value.to_ne_bytes());
-    Ok(IoctlResult {
-        value: 0,
-        argument,
-        writes: Vec::new(),
-    })
-}
-
-fn client_capability(argument: Vec<u8>) -> Result<IoctlResult, LinuxError> {
-    if argument.len() != 16 {
-        return Err(linux(
-            libc::EINVAL,
-            "DRM client capability argument must be 16 bytes",
-        ));
+        let cap = u64::from_ne_bytes(argument[..8].try_into().unwrap());
+        let value: u64 = match cap {
+            // Linux DRM core answers this for render-only devices. It describes the clock used if an event
+            // carries a timestamp; it does not claim that this node implements vblank or page-flip events.
+            DRM_CAP_TIMESTAMP_MONOTONIC => 1,
+            // Husklet's GBM shim owns its buffers directly. This node implements neither PRIME conversion
+            // ioctl, so importing/exporting GEM handles must not be advertised.
+            DRM_CAP_PRIME | DRM_CAP_SYNCOBJ | DRM_CAP_SYNCOBJ_TIMELINE => 0,
+            // Every remaining core capability is either KMS-only or unknown. A Linux render-only DRM device
+            // rejects these before entering the KMS capability switch.
+            _ => {
+                return Err(linux(
+                    libc::EOPNOTSUPP,
+                    "capability is unavailable on a render-only DRM device",
+                ));
+            }
+        };
+        argument[8..16].copy_from_slice(&value.to_ne_bytes());
+        Ok(IoctlResult {
+            value: 0,
+            argument,
+            writes: Vec::new(),
+        })
     }
-    Err(linux(
-        libc::EACCES,
-        "DRM_SET_CLIENT_CAP is not permitted on a render node",
-    ))
-}
 
-fn file(path: &str, bytes: &'static [u8]) -> NamespaceEntry {
-    NamespaceEntry::File(FileEntry {
-        path: path.into(),
-        metadata: metadata(0o444),
-        source: FileSource::Immutable(Arc::from(bytes)),
-    })
-}
-
-fn symlink(path: &str, target: &str) -> NamespaceEntry {
-    NamespaceEntry::Symlink(SymlinkEntry {
-        path: path.into(),
-        target: target.into(),
-        uid: 0,
-        gid: 0,
-    })
-}
-
-const fn metadata(mode: u32) -> Metadata {
-    Metadata {
-        mode,
-        uid: 0,
-        gid: 0,
+    fn client_capability(argument: Vec<u8>) -> Result<IoctlResult, LinuxError> {
+        if argument.len() != 16 {
+            return Err(linux(
+                libc::EINVAL,
+                "DRM client capability argument must be 16 bytes",
+            ));
+        }
+        Err(linux(
+            libc::EACCES,
+            "DRM_SET_CLIENT_CAP is not permitted on a render node",
+        ))
     }
 }
 

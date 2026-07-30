@@ -15,25 +15,26 @@ use crate::promoted_features::PromotedFeatures;
 use crate::state::StateStore;
 use crate::types::*;
 
-fn validates_features(create_info: &VkDeviceCreateInfo) -> bool {
-    let supported = crate::instance::supported_features();
-    if let Some(requested) = unsafe { create_info.p_enabled_features.as_ref() } {
-        if requested
-            .bits
-            .iter()
-            .zip(supported.bits)
-            .any(|(&requested, supported)| requested != VK_FALSE && supported == VK_FALSE)
-        {
-            return false;
-        }
+/// The guest's `vkCreateDevice` request, read against what this driver actually performs.
+///
+/// `vkCreateDevice` must refuse a feature or extension the driver cannot honour, and the same feature
+/// chain decides which GPU capabilities the session has to negotiate. Every one of those rules walks the
+/// one `pNext` chain under the same aliasing invariant, so they belong to the request rather than to the
+/// entry point that receives it.
+pub(crate) struct Request<'a> {
+    create_info: &'a VkDeviceCreateInfo,
+}
+
+impl<'a> Request<'a> {
+    pub(crate) fn new(create_info: &'a VkDeviceCreateInfo) -> Self {
+        Self { create_info }
     }
 
-    let mut node = create_info.p_next as *const VkBaseInStructure;
-    while let Some(header) = unsafe { node.as_ref() } {
-        if header.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 {
-            let features = unsafe { &*(node as *const VkPhysicalDeviceFeatures2) };
-            if features
-                .features
+    fn validates_features(&self) -> bool {
+        let create_info = self.create_info;
+        let supported = crate::instance::supported_features();
+        if let Some(requested) = unsafe { create_info.p_enabled_features.as_ref() } {
+            if requested
                 .bits
                 .iter()
                 .zip(supported.bits)
@@ -41,116 +42,130 @@ fn validates_features(create_info: &VkDeviceCreateInfo) -> bool {
             {
                 return false;
             }
-        } else if header.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES {
-            // Dynamic rendering is the one pNext feature currently advertised and lowered.
-        } else if let Some(aggregate) = PromotedFeatures::matching(header.s_type) {
-            // A promoted feature enabled through `VkPhysicalDeviceVulkan1{1,2,3,4}Features`. Vulkan
-            // requires `VK_ERROR_FEATURE_NOT_PRESENT` here; ignoring the aggregate returned
-            // `VK_SUCCESS` for a feature that was then silently absent at draw time.
-            if let Some(member) = unsafe { aggregate.first_unimplemented_request(node) } {
-                crate::stub::Call::unsupported("vkCreateDevice", &member);
+        }
+
+        let mut node = create_info.p_next as *const VkBaseInStructure;
+        while let Some(header) = unsafe { node.as_ref() } {
+            if header.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 {
+                let features = unsafe { &*(node as *const VkPhysicalDeviceFeatures2) };
+                if features
+                    .features
+                    .bits
+                    .iter()
+                    .zip(supported.bits)
+                    .any(|(&requested, supported)| requested != VK_FALSE && supported == VK_FALSE)
+                {
+                    return false;
+                }
+            } else if header.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES
+            {
+                // Dynamic rendering is the one pNext feature currently advertised and lowered.
+            } else if let Some(aggregate) = PromotedFeatures::matching(header.s_type) {
+                // A promoted feature enabled through `VkPhysicalDeviceVulkan1{1,2,3,4}Features`. Vulkan
+                // requires `VK_ERROR_FEATURE_NOT_PRESENT` here; ignoring the aggregate returned
+                // `VK_SUCCESS` for a feature that was then silently absent at draw time.
+                if let Some(member) = unsafe { aggregate.first_unimplemented_request(node) } {
+                    crate::stub::Call::unsupported("vkCreateDevice", &member);
+                    return false;
+                }
+            }
+            node = header.p_next;
+        }
+        true
+    }
+
+    fn validates_extensions(&self) -> bool {
+        let create_info = self.create_info;
+        if create_info.enabled_extension_count == 0 {
+            return true;
+        }
+        if create_info.pp_enabled_extension_names.is_null() {
+            return false;
+        }
+        let names = unsafe {
+            std::slice::from_raw_parts(
+                create_info.pp_enabled_extension_names,
+                create_info.enabled_extension_count as usize,
+            )
+        };
+        names.iter().all(|&name| {
+            if name.is_null() {
                 return false;
             }
-        }
-        node = header.p_next;
+            let Ok(name) = unsafe { CStr::from_ptr(name) }.to_str() else {
+                return false;
+            };
+            hl_vulkan::model::capability::DEVICE_EXTENSIONS
+                .iter()
+                .any(|extension| extension.name == name)
+        })
     }
-    true
-}
 
-fn validates_extensions(create_info: &VkDeviceCreateInfo) -> bool {
-    if create_info.enabled_extension_count == 0 {
-        return true;
-    }
-    if create_info.pp_enabled_extension_names.is_null() {
-        return false;
-    }
-    let names = unsafe {
-        std::slice::from_raw_parts(
-            create_info.pp_enabled_extension_names,
-            create_info.enabled_extension_count as usize,
-        )
-    };
-    names.iter().all(|&name| {
-        if name.is_null() {
-            return false;
-        }
-        let Ok(name) = unsafe { CStr::from_ptr(name) }.to_str() else {
-            return false;
+    fn binding_arrays(&self) -> u32 {
+        let create_info = self.create_info;
+        let mut bits = 0;
+        let mut include = |features: &VkPhysicalDeviceFeatures| {
+            if features.bits[33] != VK_FALSE {
+                bits |= binding_array::UNIFORM_BUFFER;
+            }
+            if features.bits[35] != VK_FALSE {
+                bits |= binding_array::STORAGE_BUFFER;
+            }
+            if features.bits[34] != VK_FALSE {
+                bits |= binding_array::SAMPLED_TEXTURE | binding_array::SAMPLER;
+            }
+            if features.bits[36] != VK_FALSE {
+                bits |= binding_array::STORAGE_TEXTURE;
+            }
         };
-        hl_vulkan::model::capability::DEVICE_EXTENSIONS
-            .iter()
-            .any(|extension| extension.name == name)
-    })
-}
+        if let Some(features) = unsafe { create_info.p_enabled_features.as_ref() } {
+            include(features);
+        }
+        let mut node = create_info.p_next as *const VkBaseInStructure;
+        while let Some(header) = unsafe { node.as_ref() } {
+            if header.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 {
+                include(&unsafe { &*(node as *const VkPhysicalDeviceFeatures2) }.features);
+            }
+            node = header.p_next;
+        }
+        bits
+    }
 
-fn requested_binding_arrays(create_info: Option<&VkDeviceCreateInfo>) -> u32 {
-    let Some(create_info) = create_info else {
-        return 0;
-    };
-    let mut bits = 0;
-    let mut include = |features: &VkPhysicalDeviceFeatures| {
-        if features.bits[33] != VK_FALSE {
-            bits |= binding_array::UNIFORM_BUFFER;
+    pub(crate) fn gpu_features(&self) -> u32 {
+        let create_info = self.create_info;
+        let mut bits = 0;
+        let mut include = |features: &VkPhysicalDeviceFeatures| {
+            if features.bits[0] != VK_FALSE {
+                bits |= gpu_feature::ROBUST_BUFFER_ACCESS;
+            }
+            if features.bits[26] != VK_FALSE {
+                bits |= gpu_feature::FRAGMENT_STORES_ATOMICS;
+            }
+            if features.bits[12] != VK_FALSE {
+                bits |= gpu_feature::DEPTH_BIAS_CLAMP;
+            }
+            if features.bits[2] != VK_FALSE {
+                bits |= gpu_feature::IMAGE_CUBE_ARRAY;
+            }
+            if features.bits[3] != VK_FALSE {
+                bits |= gpu_feature::INDEPENDENT_BLEND;
+            }
+            if features.bits[6] != VK_FALSE {
+                bits |= gpu_feature::SAMPLE_RATE_SHADING;
+            }
+        };
+        if let Some(features) = unsafe { create_info.p_enabled_features.as_ref() } {
+            include(features);
         }
-        if features.bits[35] != VK_FALSE {
-            bits |= binding_array::STORAGE_BUFFER;
+        let mut node = create_info.p_next as *const VkBaseInStructure;
+        while let Some(header) = unsafe { node.as_ref() } {
+            if header.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 {
+                include(&unsafe { &*(node as *const VkPhysicalDeviceFeatures2) }.features);
+            }
+            node = header.p_next;
         }
-        if features.bits[34] != VK_FALSE {
-            bits |= binding_array::SAMPLED_TEXTURE | binding_array::SAMPLER;
-        }
-        if features.bits[36] != VK_FALSE {
-            bits |= binding_array::STORAGE_TEXTURE;
-        }
-    };
-    if let Some(features) = unsafe { create_info.p_enabled_features.as_ref() } {
-        include(features);
+        bits
     }
-    let mut node = create_info.p_next as *const VkBaseInStructure;
-    while let Some(header) = unsafe { node.as_ref() } {
-        if header.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 {
-            include(&unsafe { &*(node as *const VkPhysicalDeviceFeatures2) }.features);
-        }
-        node = header.p_next;
-    }
-    bits
-}
-
-pub(crate) fn requested_gpu_features(create_info: Option<&VkDeviceCreateInfo>) -> u32 {
-    let Some(create_info) = create_info else {
-        return 0;
-    };
-    let mut bits = 0;
-    let mut include = |features: &VkPhysicalDeviceFeatures| {
-        if features.bits[0] != VK_FALSE {
-            bits |= gpu_feature::ROBUST_BUFFER_ACCESS;
-        }
-        if features.bits[26] != VK_FALSE {
-            bits |= gpu_feature::FRAGMENT_STORES_ATOMICS;
-        }
-        if features.bits[12] != VK_FALSE {
-            bits |= gpu_feature::DEPTH_BIAS_CLAMP;
-        }
-        if features.bits[2] != VK_FALSE {
-            bits |= gpu_feature::IMAGE_CUBE_ARRAY;
-        }
-        if features.bits[3] != VK_FALSE {
-            bits |= gpu_feature::INDEPENDENT_BLEND;
-        }
-        if features.bits[6] != VK_FALSE {
-            bits |= gpu_feature::SAMPLE_RATE_SHADING;
-        }
-    };
-    if let Some(features) = unsafe { create_info.p_enabled_features.as_ref() } {
-        include(features);
-    }
-    let mut node = create_info.p_next as *const VkBaseInStructure;
-    while let Some(header) = unsafe { node.as_ref() } {
-        if header.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 {
-            include(&unsafe { &*(node as *const VkPhysicalDeviceFeatures2) }.features);
-        }
-        node = header.p_next;
-    }
-    bits
 }
 
 pub extern "C" fn vkCreateDevice(
@@ -163,16 +178,20 @@ pub extern "C" fn vkCreateDevice(
         return VK_ERROR_INITIALIZATION_FAILED;
     }
     let create_info = unsafe { (p_create_info as *const VkDeviceCreateInfo).as_ref() };
-    if let Some(create_info) = create_info {
-        if !validates_extensions(create_info) {
-            return VK_ERROR_EXTENSION_NOT_PRESENT;
+    let (binding_arrays, gpu_features) = match create_info {
+        Some(create_info) => {
+            let request = Request::new(create_info);
+            if !request.validates_extensions() {
+                return VK_ERROR_EXTENSION_NOT_PRESENT;
+            }
+            if !request.validates_features() {
+                return VK_ERROR_FEATURE_NOT_PRESENT;
+            }
+            (request.binding_arrays(), request.gpu_features())
         }
-        if !validates_features(create_info) {
-            return VK_ERROR_FEATURE_NOT_PRESENT;
-        }
-    }
-    let binding_arrays = requested_binding_arrays(create_info);
-    let gpu_features = requested_gpu_features(create_info);
+        // Vulkan permits a null `pCreateInfo`; nothing is requested, so nothing is negotiated.
+        None => (0, 0),
+    };
     let token = StateStore::with(|s| {
         // Build the logical device over the instance's physical device (materialize a default instance
         // if a device is somehow requested before `vkCreateInstance`).

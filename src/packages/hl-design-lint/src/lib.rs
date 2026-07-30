@@ -832,6 +832,49 @@ const PROSE: &str = "mod misc {}";
     }
 
     #[test]
+    fn workspace_treats_test_gated_modules_as_test_support() {
+        let root = temporary("test-gated-modules");
+        fs::create_dir_all(root.join("src/suite/deep")).unwrap();
+        fs::write(
+            root.join("src/lib.rs"),
+            "mod feature;\n#[cfg(test)]\nmod suite;\n",
+        )
+        .unwrap();
+        // A gated module owning a directory gates every descendant with it.
+        fs::write(root.join("src/suite.rs"), "mod deep;\n").unwrap();
+        fs::write(root.join("src/suite/deep.rs"), "mod inner;\n").unwrap();
+        fs::write(
+            root.join("src/suite/deep/inner.rs"),
+            "fn helper(value: usize) -> usize { value }\n",
+        )
+        .unwrap();
+        // `#[path]` resolves against the directory holding the declaration, not the module directory.
+        fs::write(
+            root.join("src/feature.rs"),
+            "#[cfg(test)]\n#[path = \"feature_test.rs\"]\nmod tests;\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/feature_test.rs"),
+            "fn fixture(value: usize) -> usize { value }\n",
+        )
+        .unwrap();
+
+        let workspace = Workspace::load([root.join("src")]).unwrap();
+        let production = workspace
+            .production()
+            .map(|source| source.path.strip_prefix(&root).unwrap().to_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            production,
+            [PathBuf::from("src/feature.rs"), PathBuf::from("src/lib.rs"),]
+        );
+        assert!(FreeFunction.check(&workspace).unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn workspace_includes_the_linter_only_when_addressed_directly() {
         let root = temporary("self-exclusion");
         let linter = root.join("hl-design-lint");

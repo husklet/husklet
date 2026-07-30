@@ -95,11 +95,13 @@ impl Workspace {
         empty_directories.dedup();
         single_file_directories.sort();
         single_file_directories.dedup();
+        let mut sources = files
+            .into_iter()
+            .map(Source::load)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        mark_test_modules(&mut sources);
         Ok(Self {
-            sources: files
-                .into_iter()
-                .map(Source::load)
-                .collect::<std::result::Result<_, _>>()?,
+            sources,
             empty_directories,
             single_file_directories,
             paths,
@@ -376,4 +378,112 @@ fn is_test(path: &Path) -> bool {
                 Some("tests" | "test_support" | "benches")
             )
         })
+}
+
+/// Marks sources that only exist behind a `#[cfg(test)]` module declaration.
+///
+/// A file reached solely through `#[cfg(test)] mod name;` compiles only in test configuration, so its
+/// contents are test support regardless of how the file is named. Recognising the declaration keeps the
+/// repository's `name_test.rs` and gated-subdirectory conventions out of the production rules, which
+/// otherwise report test helpers as production design findings.
+fn mark_test_modules(sources: &mut [Source]) {
+    let mut files = std::collections::BTreeSet::new();
+    let mut directories = std::collections::BTreeSet::new();
+    for source in sources.iter() {
+        let Some(root) = module_root(&source.path) else {
+            continue;
+        };
+        let Some(directory) = source.path.parent() else {
+            continue;
+        };
+        collect_test_modules(
+            &source.syntax.items,
+            &root,
+            directory,
+            source.test,
+            &mut files,
+            &mut directories,
+        );
+    }
+    for source in sources.iter_mut() {
+        source.test |= files.contains(&source.path)
+            || directories
+                .iter()
+                .any(|directory| source.path.starts_with(directory));
+    }
+}
+
+/// The directory that `mod name;` declarations inside this file resolve against.
+fn module_root(path: &Path) -> Option<PathBuf> {
+    let parent = path.parent()?;
+    match path.file_stem()?.to_str()? {
+        "mod" | "lib" | "main" => Some(parent.to_owned()),
+        stem => Some(parent.join(stem)),
+    }
+}
+
+/// Collects the sources gated by `#[cfg(test)]` module declarations.
+///
+/// `root` resolves plain `mod name;` declarations, which live in the directory owned by the module.
+/// `overrides` resolves `#[path = "..."]`, which Rust reads relative to the directory of the file
+/// holding the declaration until an inline module moves it deeper.
+fn collect_test_modules(
+    items: &[syn::Item],
+    root: &Path,
+    overrides: &Path,
+    test_scope: bool,
+    files: &mut std::collections::BTreeSet<PathBuf>,
+    directories: &mut std::collections::BTreeSet<PathBuf>,
+) {
+    for item in items {
+        let syn::Item::Mod(module) = item else {
+            continue;
+        };
+        let gated = test_scope || requires_test(&module.attrs);
+        let name = module.ident.to_string();
+        match &module.content {
+            // An inline module nests further declarations one directory deeper.
+            Some((_, nested)) => {
+                let nested_root = root.join(&name);
+                collect_test_modules(
+                    nested,
+                    &nested_root,
+                    &nested_root,
+                    gated,
+                    files,
+                    directories,
+                );
+            }
+            None if gated => match module_path_attribute(&module.attrs) {
+                Some(relative) => {
+                    files.insert(overrides.join(relative));
+                }
+                None => {
+                    files.insert(root.join(format!("{name}.rs")));
+                    // A gated module owning a directory gates every descendant with it.
+                    directories.insert(root.join(name));
+                }
+            },
+            None => {}
+        }
+    }
+}
+
+/// The literal of an explicit `#[path = "..."]` module override.
+fn module_path_attribute(attributes: &[Attribute]) -> Option<String> {
+    attributes.iter().find_map(|attribute| {
+        if !attribute.path().is_ident("path") {
+            return None;
+        }
+        let Meta::NameValue(value) = &attribute.meta else {
+            return None;
+        };
+        let syn::Expr::Lit(literal) = &value.value else {
+            return None;
+        };
+        let syn::Lit::Str(text) = &literal.lit else {
+            return None;
+        };
+        Some(text.value())
+    })
 }

@@ -73,7 +73,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let containers = containers.build().await?;
     let failure = root.join("shutdown.error");
-    match std::fs::remove_file(&failure) {
+    match tokio::fs::remove_file(&failure).await {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
@@ -99,10 +99,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 if matches!(disposition, Disposition::Checkpoint) {
                     match &stopped {
                         Ok(()) => {
-                            let _ = std::fs::remove_file(&response);
+                            let _ = tokio::fs::remove_file(&response).await;
                         }
                         Err(error) => {
-                            let _ = std::fs::write(&response, error.to_string());
+                            let _ = tokio::fs::write(&response, error.to_string()).await;
                             continue;
                         }
                     }
@@ -120,7 +120,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .take()
         .ok_or("daemon cleanup did not run")?;
     if let Err(error) = stopped {
-        std::fs::write(&failure, error.to_string())?;
+        tokio::fs::write(&failure, error.to_string()).await?;
         return Err(error.into());
     }
     Ok(())
