@@ -75,20 +75,8 @@ impl ExecConfig {
         if !self.working_dir.is_empty() {
             process.working_dir = self.working_dir.clone().into();
         }
-        if !self.user.is_empty() {
-            let (uid, gid) = self
-                .user
-                .split_once(':')
-                .map_or((&*self.user, &*self.user), |values| values);
-            process.uid =
-                Some(uid.parse().map_err(|_| {
-                    "exec User currently requires a numeric UID or UID:GID".to_owned()
-                })?);
-            process.gid =
-                Some(gid.parse().map_err(|_| {
-                    "exec User currently requires a numeric UID or UID:GID".to_owned()
-                })?);
-        }
+        // `User` is resolved against the container's /etc/passwd and /etc/group by the container
+        // domain, which owns the root filesystem; the process inherits the parent identity until then.
         Ok(process)
     }
 }
@@ -282,6 +270,39 @@ mod tests {
             start.size().unwrap_err(),
             "unsupported exec start field FutureConsoleMode"
         );
+    }
+
+    /// Docker accepts `user`, `user:group`, `uid`, `uid:gid` and mixed forms. Resolving them needs the
+    /// container's account databases, so the transport must forward the field verbatim.
+    #[cfg(feature = "runtime")]
+    #[test]
+    fn exec_user_field_is_forwarded_for_container_side_resolution() {
+        let parent = hl_container::Process::new("/bin/true").user(11, 12);
+        for user in [
+            "root",
+            "ubuntu",
+            "ubuntu:sudo",
+            "1000:sudo",
+            "ubuntu:1000",
+            "0",
+            "1000:1000",
+            "definitely-not-a-user",
+            ":",
+        ] {
+            let config = ExecConfig {
+                command: vec!["/bin/true".into()],
+                user: user.to_owned(),
+                ..ExecConfig::default()
+            };
+            let process = config
+                .process(&parent)
+                .unwrap_or_else(|error| panic!("exec User {user:?} rejected at transport: {error}"));
+            assert_eq!(
+                (process.uid, process.gid),
+                (Some(11), Some(12)),
+                "transport must not decide identity for exec User {user:?}"
+            );
+        }
     }
 
     #[cfg(feature = "runtime")]
