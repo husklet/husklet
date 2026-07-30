@@ -223,6 +223,7 @@ impl HlState {
             last_injected_pointer: (0.0, 0.0),
             last_pointer_click_count: 1,
             host_fullscreen: HashSet::new(),
+            resize_grab: None,
             observations,
             clipboard_tx,
             clipboard_rx,

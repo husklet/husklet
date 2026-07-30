@@ -47,6 +47,9 @@ pub struct WindowState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowInteraction {
     Move,
+    /// A pointer-driven `xdg_toplevel.resize`. The compositor owns the size math; a native presenter uses
+    /// this only to mirror the interaction (e.g. suppress its own live-resize animation).
+    Resize,
 }
 
 /// What a surface is in the window tree.

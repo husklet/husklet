@@ -34,11 +34,43 @@ struct App {
     keymap: Option<(u32, u32)>,
     /// Surfaces named by `wl_keyboard.enter`, in order.
     keyboard_enters: Vec<u32>,
+    /// Surfaces named by `wl_keyboard.leave`, in order — the other half of a focus transfer.
+    keyboard_leaves: Vec<u32>,
+    /// `wl_keyboard.key(keycode, state)` in order; the keycode is EVDEV, as the protocol specifies.
+    keys: Vec<(u32, u32)>,
     /// Surface-local `wl_pointer.enter` coordinates, in order.
     pointer_enters: Vec<(f64, f64)>,
+    /// Every `wl_pointer` event in wire order — the ORDER is the contract: axis values and their source
+    /// must arrive inside one `frame`, and an `axis_stop` terminates the sequence.
+    pointer_events: Vec<PointerWire>,
+    /// `xdg_toplevel.configure(width, height, states)` in order, states decoded from the wire array.
+    toplevel_configures: Vec<(i32, i32, Vec<u32>)>,
+    /// The serial of the most recent `wl_pointer.button` — what a client quotes back on a request that
+    /// must be anchored to an input event (`xdg_toplevel.resize`, `move`, `xdg_popup.grab`).
+    last_button_serial: Option<u32>,
     /// Every `xdg_popup` event, in wire order — the order matters: `repositioned` must precede the
     /// configure that describes the new geometry.
     popup_events: Vec<PopupWire>,
+}
+
+/// A `wl_pointer` event as the client read it off the wire.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PointerWire {
+    Enter,
+    Leave,
+    Motion(f64, f64),
+    /// `wl_pointer.button(button, state)`.
+    Button(u32, u32),
+    /// `wl_pointer.axis(axis, value)` — a smooth scroll amount.
+    Axis(u32, f64),
+    /// `wl_pointer.axis_source(source)`.
+    Source(u32),
+    /// `wl_pointer.axis_value120(axis, steps)` — high-resolution discrete detents (v8+).
+    Value120(u32, i32),
+    /// `wl_pointer.axis_stop(axis)` — the scroll sequence on that axis ended.
+    Stop(u32),
+    /// `wl_pointer.frame` — everything since the previous frame is one atomic update.
+    Frame,
 }
 
 /// An `xdg_popup` event as the client read it off the wire.
@@ -126,15 +158,29 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for App {
         _conn: &Connection,
         _qh: &QueueHandle<App>,
     ) {
-        if let xdg_toplevel::Event::WmCapabilities { capabilities } = event {
-            app.capabilities = Some(
-                capabilities
-                    .chunks_exact(4)
-                    .map(|word| u32::from_ne_bytes([word[0], word[1], word[2], word[3]]))
-                    .collect(),
-            );
+        match event {
+            xdg_toplevel::Event::WmCapabilities { capabilities } => {
+                app.capabilities = Some(decode_enum_array(&capabilities));
+            }
+            xdg_toplevel::Event::Configure {
+                width,
+                height,
+                states,
+            } => {
+                app.toplevel_configures
+                    .push((width, height, decode_enum_array(&states)));
+            }
+            _ => {}
         }
     }
+}
+
+/// Decode a wire array of 32-bit protocol enum values (`wm_capabilities`, `xdg_toplevel.configure` states).
+fn decode_enum_array(bytes: &[u8]) -> Vec<u32> {
+    bytes
+        .chunks_exact(4)
+        .map(|word| u32::from_ne_bytes([word[0], word[1], word[2], word[3]]))
+        .collect()
 }
 
 impl Dispatch<wl_seat::WlSeat, ()> for App {
@@ -168,6 +214,12 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for App {
             wl_keyboard::Event::Enter { surface, .. } => {
                 app.keyboard_enters.push(surface.id().protocol_id());
             }
+            wl_keyboard::Event::Leave { surface, .. } => {
+                app.keyboard_leaves.push(surface.id().protocol_id());
+            }
+            wl_keyboard::Event::Key { key, state, .. } => {
+                app.keys.push((key, state.into()));
+            }
             _ => {}
         }
     }
@@ -190,6 +242,34 @@ impl Dispatch<wl_pointer::WlPointer, ()> for App {
         {
             app.pointer_enters.push((surface_x, surface_y));
         }
+        app.pointer_events.push(match event {
+            wl_pointer::Event::Enter { .. } => PointerWire::Enter,
+            wl_pointer::Event::Leave { .. } => PointerWire::Leave,
+            wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            } => PointerWire::Motion(surface_x, surface_y),
+            wl_pointer::Event::Button {
+                button,
+                state,
+                serial,
+                ..
+            } => {
+                app.last_button_serial = Some(serial);
+                PointerWire::Button(button, state.into())
+            }
+            wl_pointer::Event::Axis { axis, value, .. } => PointerWire::Axis(axis.into(), value),
+            wl_pointer::Event::AxisSource { axis_source } => {
+                PointerWire::Source(axis_source.into())
+            }
+            wl_pointer::Event::AxisValue120 { axis, value120 } => {
+                PointerWire::Value120(axis.into(), value120)
+            }
+            wl_pointer::Event::AxisStop { axis, .. } => PointerWire::Stop(axis.into()),
+            wl_pointer::Event::Frame => PointerWire::Frame,
+            _ => return,
+        });
     }
 }
 
@@ -332,6 +412,9 @@ impl Fixture {
     }
 }
 
+mod focus;
+mod input;
 mod popup;
+mod resize;
 mod shell;
 mod surface;

@@ -29,9 +29,22 @@ pub enum PresenterEvent {
         pressed: bool,
         click_count: u8,
     },
+    /// A scroll. `source` is `wl_pointer.axis_source`; `h120`/`v120` are high-resolution DISCRETE steps
+    /// (120 units = one wheel detent, the `wl_pointer` v8 `axis_value120` convention, `0` = none). Both are
+    /// part of the port because the compositor advertises `wl_pointer` v5+ and cannot invent either: a
+    /// smooth-only event makes every host scroll look like a continuous drag with no detents.
     PointerAxis {
         horizontal: f64,
         vertical: f64,
+        source: ScrollSource,
+        h120: i32,
+        v120: i32,
+    },
+    /// The scroll sequence ended on the named axes — `wl_pointer.axis_stop`. Required after a
+    /// [`ScrollSource::Finger`] scroll: a client implementing kinetic scrolling waits for it.
+    PointerAxisStop {
+        horizontal: bool,
+        vertical: bool,
     },
     Key {
         keycode: u32,
@@ -86,6 +99,15 @@ pub enum PresenterEvent {
     Repaint(SurfaceId),
     Focus(SurfaceId),
     Close(SurfaceId),
+}
+
+/// Where a scroll came from — `wl_pointer.axis_source`. A trackpad (`Finger`) scroll has a definite end
+/// (an `axis_stop`); a `Wheel` scroll does not, and each detent stands alone.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScrollSource {
+    Wheel,
+    Finger,
+    Continuous,
 }
 
 /// Stable identity of one asynchronous host-display submission.

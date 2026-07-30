@@ -49,6 +49,14 @@ impl HlState {
                 h120,
                 v120,
             } => self.inject_pointer_axis_discrete(horizontal, vertical, h120, v120),
+            InputCommand::PointerAxisFinger {
+                horizontal,
+                vertical,
+            } => self.inject_pointer_axis_finger(horizontal, vertical),
+            InputCommand::PointerAxisStop {
+                horizontal,
+                vertical,
+            } => self.inject_pointer_axis_stop(horizontal, vertical),
             InputCommand::MoveToplevelToPoint { index, x, y } => {
                 self.move_toplevel_to_point(index, x, y)
             }

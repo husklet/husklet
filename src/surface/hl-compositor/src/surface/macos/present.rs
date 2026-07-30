@@ -33,7 +33,7 @@ use crate::scene::model::{
 };
 use crate::scene::port::{
     Clipboard, CompletionOutcome, HostEvents, PresentOutcome, PresentTiming, PresentationFeedback,
-    PresentationId, Presenter, PresenterEvent, Wake, Windows,
+    PresentationId, Presenter, PresenterEvent, ScrollSource, Wake, Windows,
 };
 
 use super::capture::Capture;

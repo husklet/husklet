@@ -152,13 +152,13 @@ use smithay::utils::{Rectangle, Serial};
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 /// The `xdg_toplevel` state enum (`Activated` / `Maximized` / `Fullscreen` / …) sent in a configure.
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::{
-    State as XdgToplevelState, WmCapabilities,
+    ResizeEdge, State as XdgToplevelState, WmCapabilities,
 };
 
 use crate::scene::model::{
     Anchor, BufferState, BufferTransform, ConstraintAdjustment, Format, Gravity, Output, OutputId,
     PopupState, Positioner, Rect, Region as InputRegion, Span, SubsurfaceState, SurfaceId,
-    SurfaceRole, Viewport, Visibility,
+    SurfaceRole, Viewport, Visibility, WindowInteraction,
 };
 use crate::scene::port::{Clipboard, Clock, Windows};
 use crate::scene::service::{surface_at, BufferChange, Commit};
@@ -437,6 +437,10 @@ pub struct HlState {
     /// XDG maximized. GTK intentionally removes its client-side header in XDG fullscreen; keeping this
     /// separate lets the macOS full-screen control retain the application's header and controls.
     host_fullscreen: HashSet<SurfaceId>,
+    /// The live pointer-driven `xdg_toplevel.resize` grab, if a client is interactively resizing (see
+    /// [`resize::ResizeGrab`]). While it is set the pointer belongs to the grab: motion resizes the window
+    /// instead of reaching the surface, and the next button release ends it.
+    resize_grab: Option<resize::ResizeGrab>,
     /// Owns the `wp_cursor_shape_manager_v1` global (named cursor shapes). Chrome/Ozone and modern GTK/Qt
     /// set the pointer cursor by SHAPE NAME (`pointer`/`text`/`grab`/…) through this instead of attaching a
     /// pixel buffer. Smithay decodes `set_shape` and routes it through [`SeatHandler::cursor_image`] as
@@ -479,6 +483,8 @@ mod lifecycle;
 mod native;
 mod output;
 mod protocol;
+mod resize;
+mod scroll;
 mod surface;
 mod tearing;
 mod xdg;

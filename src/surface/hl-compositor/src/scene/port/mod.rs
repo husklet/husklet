@@ -11,5 +11,5 @@ pub use clock::Clock;
 pub use presenter::{
     Clipboard, CompletionOutcome, HostEvents, HostSurface, PresentFrame, PresentLayer,
     PresentOutcome, PresentTiming, PresentationCompletion, PresentationFeedback, PresentationId,
-    Presenter, PresenterEvent, Wake, Windows,
+    Presenter, PresenterEvent, ScrollSource, Wake, Windows,
 };

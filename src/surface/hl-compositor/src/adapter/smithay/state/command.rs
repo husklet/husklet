@@ -62,6 +62,20 @@ pub enum InputCommand {
         h120: i32,
         v120: i32,
     },
+    /// Scroll from a TRACKPAD — `wl_pointer.axis` tagged `axis_source(finger)`. Distinct from
+    /// [`Self::PointerAxis`] because the source is what tells a client whether to expect a terminating
+    /// [`Self::PointerAxisStop`] and therefore whether to apply momentum.
+    PointerAxisFinger {
+        horizontal: f64,
+        vertical: f64,
+    },
+    /// `wl_pointer.axis_stop` on the named axes — the fingers left the trackpad, ending the scroll sequence.
+    /// Required by `wl_pointer` v5 for a `finger`-source scroll; without it a client with kinetic scrolling
+    /// never stops.
+    PointerAxisStop {
+        horizontal: bool,
+        vertical: bool,
+    },
     /// Press/release a key by EVDEV keycode (Linux `input-event-codes`, e.g. `30` = KEY_A) — the same
     /// value the client receives on `wl_keyboard.key`.
     Key {

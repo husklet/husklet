@@ -156,10 +156,41 @@ impl MacPresenter {
                             consumed = true;
                         }
                         NSEventType::ScrollWheel => {
-                            self.events.push(PresenterEvent::PointerAxis {
-                                horizontal: -event.scrollingDeltaX(),
-                                vertical: -event.scrollingDeltaY(),
-                            });
+                            // Precise deltas mean a trackpad: a FINGER-source scroll, which `wl_pointer`
+                            // requires to end with an `axis_stop` (AppKit reports that as the ended /
+                            // cancelled phase). A classic wheel instead reports line-quantized
+                            // `deltaX`/`deltaY`, one detent per line — that is the `axis_value120` step
+                            // count a client needs to scroll by notches rather than by pixels.
+                            let (horizontal, vertical) =
+                                (-event.scrollingDeltaX(), -event.scrollingDeltaY());
+                            if event.hasPreciseScrollingDeltas() {
+                                if horizontal != 0.0 || vertical != 0.0 {
+                                    self.events.push(PresenterEvent::PointerAxis {
+                                        horizontal,
+                                        vertical,
+                                        source: ScrollSource::Finger,
+                                        h120: 0,
+                                        v120: 0,
+                                    });
+                                }
+                                if event
+                                    .phase()
+                                    .intersects(NSEventPhase::Ended | NSEventPhase::Cancelled)
+                                {
+                                    self.events.push(PresenterEvent::PointerAxisStop {
+                                        horizontal: true,
+                                        vertical: true,
+                                    });
+                                }
+                            } else {
+                                self.events.push(PresenterEvent::PointerAxis {
+                                    horizontal,
+                                    vertical,
+                                    source: ScrollSource::Wheel,
+                                    h120: (-event.deltaX() * 120.0).round() as i32,
+                                    v120: (-event.deltaY() * 120.0).round() as i32,
+                                });
+                            }
                             consumed = true;
                         }
                         NSEventType::KeyDown | NSEventType::KeyUp => {

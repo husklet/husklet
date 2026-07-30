@@ -40,7 +40,7 @@ impl PlatformPool {
 
 use super::present::AdapterPresenter;
 use super::state::{ClientState, HlState, InputCommand};
-use crate::scene::port::{Clock, HostEvents, PresenterEvent, Wake};
+use crate::scene::port::{Clock, HostEvents, PresenterEvent, ScrollSource, Wake};
 
 struct LoopWake(smithay::reexports::calloop::LoopSignal);
 
@@ -332,10 +332,38 @@ fn drive(
                         pressed,
                         click_count,
                     },
+                    // The port's axis event carries its source and its discrete steps; each maps onto the
+                    // matching `wl_pointer` axis shape rather than being flattened to a smooth wheel scroll.
                     PresenterEvent::PointerAxis {
                         horizontal,
                         vertical,
-                    } => InputCommand::PointerAxis {
+                        source,
+                        h120,
+                        v120,
+                    } => match source {
+                        ScrollSource::Wheel if h120 != 0 || v120 != 0 => {
+                            InputCommand::PointerAxisDiscrete {
+                                horizontal,
+                                vertical,
+                                h120,
+                                v120,
+                            }
+                        }
+                        ScrollSource::Wheel => InputCommand::PointerAxis {
+                            horizontal,
+                            vertical,
+                        },
+                        ScrollSource::Finger | ScrollSource::Continuous => {
+                            InputCommand::PointerAxisFinger {
+                                horizontal,
+                                vertical,
+                            }
+                        }
+                    },
+                    PresenterEvent::PointerAxisStop {
+                        horizontal,
+                        vertical,
+                    } => InputCommand::PointerAxisStop {
                         horizontal,
                         vertical,
                     },

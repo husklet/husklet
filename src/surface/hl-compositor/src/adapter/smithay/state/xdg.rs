@@ -175,17 +175,18 @@ impl XdgShellHandler for HlState {
     }
 
     /// `xdg_toplevel.resize` — the client asked to start an interactive, pointer-driven RESIZE (dragging a
-    /// window edge). HONEST INTENTIONAL NO-OP for the same reason as [`Self::move_request`]: an interactive
-    /// resize is driven by a live user drag the headless compositor has no input source for, and it carries
-    /// no reply event. (Programmatic sizing IS honored — `maximize_request` / `fullscreen_request` send real
-    /// `xdg_toplevel.configure`s with a new size.)
+    /// CSD window edge). Honoured by starting a resize grab: the pointer's travel from here becomes the
+    /// window size, delivered as `xdg_toplevel.configure`s carrying `resizing` until the button comes up
+    /// (see [`HlState::begin_resize`]). A client whose only resize affordance is a client-side-decoration
+    /// edge — GTK4, Qt with client decorations — has no other way to change its own size.
     fn resize_request(
         &mut self,
-        _surface: ToplevelSurface,
+        surface: ToplevelSurface,
         _seat: WlSeat,
         _serial: Serial,
-        _edges: smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge,
+        edges: ResizeEdge,
     ) {
+        self.begin_resize(&surface, edges);
     }
 
     /// Forward client-side minimize controls to the host presenter. Headless presenters intentionally

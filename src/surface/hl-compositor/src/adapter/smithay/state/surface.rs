@@ -42,6 +42,13 @@ impl HlState {
         let Some(pointer) = self.seat.get_pointer() else {
             return;
         };
+        // A live interactive resize OWNS the pointer: the motion becomes the window's new size and is not
+        // also delivered to the surface (xdg-shell's grab semantics).
+        if self.drive_resize(x, y) {
+            self.engine.scene.seat_mut().pointer_location = (x, y);
+            self.last_injected_pointer = (x, y);
+            return;
+        }
         let hit = window
             .and_then(|window| self.engine.scene.window_root(window))
             .and_then(|root| {
@@ -147,6 +154,9 @@ impl HlState {
             if self.press_outside_grab_chain(x, y) {
                 self.dismiss_popup_grabs();
             }
+        } else {
+            // The drag anchoring an interactive resize ended: clear `resizing` at the size reached.
+            self.finish_resize();
         }
         let Some(pointer) = self.seat.get_pointer() else {
             return;
