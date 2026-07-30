@@ -67,10 +67,10 @@ fn num_extensions_matches_the_extension_string() {
     let c = ctx_800x600();
     let mut buf = [0i32; 4];
     assert_eq!(query::get_integerv(&c, GL_NUM_EXTENSIONS, &mut buf), 1);
-    assert_eq!(buf[0], 13);
+    assert_eq!(buf[0], 14);
     assert_eq!(
         as_str(query::gl_string(GL_EXTENSIONS)),
-        "GL_KHR_debug GL_EXT_texture_format_BGRA8888 GL_EXT_read_format_bgra GL_ANGLE_robust_client_memory GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_copy_texture GL_ANGLE_client_arrays GL_ANGLE_webgl_compatibility GL_ANGLE_request_extension GL_OES_EGL_image GL_OES_EGL_sync GL_OES_rgb8_rgba8 GL_OES_depth24"
+        "GL_KHR_debug GL_EXT_texture_format_BGRA8888 GL_EXT_read_format_bgra GL_ANGLE_robust_client_memory GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_copy_texture GL_ANGLE_client_arrays GL_ANGLE_webgl_compatibility GL_ANGLE_request_extension GL_OES_EGL_image GL_OES_EGL_sync GL_OES_rgb8_rgba8 GL_OES_depth24 GL_OES_mapbuffer"
     );
     assert_eq!(
         as_str(query::string_i(GL_EXTENSIONS, 0).unwrap()),
@@ -98,13 +98,14 @@ fn num_extensions_matches_the_extension_string() {
         (10, "GL_OES_EGL_sync"),
         (11, "GL_OES_rgb8_rgba8"),
         (12, "GL_OES_depth24"),
+        (13, "GL_OES_mapbuffer"),
     ] {
         assert_eq!(
             as_str(query::string_i(GL_EXTENSIONS, index).unwrap()),
             expected
         );
     }
-    assert!(query::string_i(GL_EXTENSIONS, 13).is_none());
+    assert!(query::string_i(GL_EXTENSIONS, 14).is_none());
     query::get_integerv(&c, GL_NUM_REQUESTABLE_EXTENSIONS_ANGLE, &mut buf);
     assert_eq!(buf[0], 0);
     assert!(query::string_i(GL_REQUESTABLE_EXTENSIONS_ANGLE, 0).is_none());
@@ -566,7 +567,11 @@ fn get_stringi_is_consistent_with_num_extensions() {
         as_str(query::string_i(GL_EXTENSIONS, 12).unwrap()),
         "GL_OES_depth24"
     );
-    assert!(query::string_i(GL_EXTENSIONS, 13).is_none());
+    assert_eq!(
+        as_str(query::string_i(GL_EXTENSIONS, 13).unwrap()),
+        "GL_OES_mapbuffer"
+    );
+    assert!(query::string_i(GL_EXTENSIONS, 14).is_none());
     assert!(query::string_i(GL_VERSION, 0).is_none());
 }
 

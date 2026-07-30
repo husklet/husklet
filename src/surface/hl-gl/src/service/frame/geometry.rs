@@ -167,9 +167,23 @@ impl Frame {
                     draw_ops.extend(lowered.ops);
                 }
             }
-            // Not one geometry draw could be lowered (e.g. every program was unlinked) → present nothing.
+            // Not one geometry draw could be lowered (e.g. every program was unlinked). A `glClear` is
+            // program-independent and must still reach the framebuffer, so present the clear-only pass
+            // instead of dropping the frame: glmark2 does not check `GL_LINK_STATUS` and issues its draws
+            // anyway, and dropping the whole frame left its window with no content at all. With no clear
+            // recorded either there is genuinely nothing to show, so the frame is still skipped.
             if draw_ops.is_empty() {
-                return None;
+                if !draws.iter().any(|draw| draw.is_clear) {
+                    return None;
+                }
+                return Some(build_clear_frame_snapshot(
+                    ctx,
+                    fbo,
+                    snapshot,
+                    clear,
+                    cmds,
+                    draws.len(),
+                ));
             }
             let depth = depth_attachment_for(ctx, target_tex, tw, th, survivors, &mut cmds);
             let mut ops: Vec<Enc> = copies;

@@ -1,7 +1,5 @@
 use super::*;
 
-const ES31_CONTEXT: [i32; 5] = [EGL_CONTEXT_CLIENT_VERSION, 3, 0x30FB, 1, 0x3038];
-
 #[test]
 fn egl_owner_binding_selects_the_gles_client_context() {
     let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());

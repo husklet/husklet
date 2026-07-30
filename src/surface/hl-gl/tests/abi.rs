@@ -38,13 +38,12 @@ fn manifest_dir() -> PathBuf {
 /// The staged shim dir for the host arch, e.g. `~/.hl/gl/aarch64` — where `build.rs` installs the two
 /// cdylibs (the exact artifacts the guest e2e apps load via `LD_LIBRARY_PATH`).
 fn staged_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
     let arch = match std::env::consts::ARCH {
         "aarch64" => "aarch64",
         "x86_64" => "x86_64",
         other => panic!("unsupported host arch for the ABI test: {other}"),
     };
-    Path::new(&home).join(".hl").join("gl").join(arch)
+    PathBuf::from(env!("HL_GL_STAGE_GL")).join(arch)
 }
 
 fn read_golden(path: &Path) -> BTreeSet<String> {

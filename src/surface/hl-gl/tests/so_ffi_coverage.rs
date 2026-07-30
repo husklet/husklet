@@ -128,6 +128,8 @@ const EGL_WIDTH: i32 = 0x3057;
 const EGL_HEIGHT: i32 = 0x3056;
 const EGL_CONTEXT_CLIENT_TYPE: i32 = 0x3097;
 const EGL_CONTEXT_CLIENT_VERSION: i32 = 0x3098;
+/// ES 3.1 context attributes (`EGL_CONTEXT_MINOR_VERSION` 0x30FB, terminated by `EGL_NONE`).
+const ES31_CONTEXT: [i32; 5] = [EGL_CONTEXT_CLIENT_VERSION, 3, 0x30FB, 1, 0x3038];
 const EGL_RENDER_BUFFER: i32 = 0x3086;
 const EGL_BACK_BUFFER: i32 = 0x3084;
 const EGL_OPENGL_ES_API: u32 = 0x30A0;
@@ -137,13 +139,12 @@ const EGL_SYNC_FENCE: u32 = 0x30F9;
 // loader helpers
 // ==================================================================================================
 fn stage_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
     let arch = match std::env::consts::ARCH {
         "aarch64" => "aarch64",
         "x86_64" => "x86_64",
         other => panic!("unsupported host arch for the so-ffi test: {other}"),
     };
-    PathBuf::from(home).join(".hl/gl").join(arch)
+    PathBuf::from(env!("HL_GL_STAGE_GL")).join(arch)
 }
 
 fn dlopen_global(path: &PathBuf) -> *mut c_void {
@@ -187,6 +188,60 @@ struct Shim {
     egl: *mut c_void,
 }
 
+impl Shim {
+    /// Make a fresh ES3 context current on the CALLING thread.
+    ///
+    /// The current binding is per-thread TLS owned by libEGL (`hl_shim_current_ptr`), and every `gl*`
+    /// dispatch resolves its share group from it — with no context current, `GlobalState::context`
+    /// resolves no group and the call is a silent no-op that sets no GL error. The test harness runs each
+    /// `#[test]` on its own thread, so a `gl*` test must establish its own binding, exactly as a real
+    /// loader does before issuing GL.
+    fn activate(&self) {
+        let get_display = f!(
+            self.egl,
+            "eglGetDisplay",
+            extern "C" fn(*mut c_void) -> *mut c_void
+        );
+        let initialize = f!(
+            self.egl,
+            "eglInitialize",
+            extern "C" fn(*mut c_void, *mut i32, *mut i32) -> u32
+        );
+        let create_context = f!(
+            self.egl,
+            "eglCreateContext",
+            extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *const i32) -> *mut c_void
+        );
+        let make_current = f!(
+            self.egl,
+            "eglMakeCurrent",
+            extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void) -> u32
+        );
+        let dpy = get_display(core::ptr::null_mut());
+        assert!(!dpy.is_null(), "the default EGLDisplay is non-null");
+        assert_eq!(
+            initialize(dpy, &mut 0, &mut 0),
+            EGL_TRUE,
+            "eglInitialize succeeds"
+        );
+        // ES3.1, matching `egl.rs`'s `ES31_CONTEXT`: this file drives glGetStringi / glGetInteger64v /
+        // the indexed query families, and `identity.rs` pins GL_VERSION to the requested version.
+        let attributes = ES31_CONTEXT;
+        let ctx = create_context(
+            dpy,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            attributes.as_ptr(),
+        );
+        assert!(!ctx.is_null(), "eglCreateContext returns a context token");
+        assert_eq!(
+            make_current(dpy, core::ptr::null_mut(), core::ptr::null_mut(), ctx),
+            EGL_TRUE,
+            "eglMakeCurrent binds the context on this thread"
+        );
+    }
+}
+
 fn load() -> Option<Shim> {
     let dir = stage_dir();
     let egl_path = dir.join("libEGL.so.1");
@@ -204,6 +259,10 @@ fn load() -> Option<Shim> {
     // resolves from the global scope; then the gl* object.
     let egl = dlopen_global(&egl_path);
     let gles = dlopen_global(&gles_path);
+    let shim = Shim { gles, egl };
+    // Every `gl*` dispatch needs this thread's current binding; establish it before draining errors so
+    // any setup noise is drained too.
+    shim.activate();
     // The GL/EGL error registers live on the ONE process-global `State`. Tests are serialized (SERIAL),
     // but their run ORDER is nondeterministic, so drain both registers to a clean slate before each test
     // asserts on error state (glGetError / eglGetError are read-and-clear).
@@ -211,7 +270,7 @@ fn load() -> Option<Shim> {
     let egl_get_error = f!(egl, "eglGetError", extern "C" fn() -> i32);
     gl_get_error();
     egl_get_error();
-    Some(Shim { gles, egl })
+    Some(shim)
 }
 
 fn cstr(p: *const u8) -> String {

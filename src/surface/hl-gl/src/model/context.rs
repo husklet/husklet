@@ -76,6 +76,10 @@ pub struct GlContext {
     /// independently active contexts cannot publish colliding resource identifiers.
     allocator: Arc<IrAllocator>,
 
+    /// IR names allocated while lowering the current frame. A rejected batch publishes nothing (hl-gpu
+    /// rolls its id tables back), so these return to the allocator and the retry reissues them in order.
+    frame_ids: std::sync::Mutex<Vec<(allocator::Resource, u32)>>,
+
     /// The shared 1x1 placeholder sampled-texture + default-sampler IR ids (0 = not yet created). A
     /// GskGpu fragment program DECLARES + samples every one of its texture slots, so the executor's auto
     /// bind-group layout carries an entry for each; but for a given draw only some of those samplers have a
@@ -394,6 +398,6 @@ pub use state::ContextState;
 mod targets;
 mod types;
 
-pub use allocator::IrAllocator;
+pub use allocator::{IrAllocator, Resource};
 
 pub use types::*;

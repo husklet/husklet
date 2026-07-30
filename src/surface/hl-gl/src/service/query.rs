@@ -29,7 +29,7 @@ pub const IDENT_VERSION: &[u8] = b"OpenGL ES 3.1 hl-gl\0";
 pub const IDENT_GLSL_VERSION: &[u8] = b"OpenGL ES GLSL ES 3.10\0";
 /// The space-separated extension inventory returned by `glGetString(GL_EXTENSIONS)`.
 pub const IDENT_EXTENSIONS: &[u8] =
-    b"GL_KHR_debug GL_EXT_texture_format_BGRA8888 GL_EXT_read_format_bgra GL_ANGLE_robust_client_memory GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_copy_texture GL_ANGLE_client_arrays GL_ANGLE_webgl_compatibility GL_ANGLE_request_extension GL_OES_EGL_image GL_OES_EGL_sync GL_OES_rgb8_rgba8 GL_OES_depth24\0";
+    b"GL_KHR_debug GL_EXT_texture_format_BGRA8888 GL_EXT_read_format_bgra GL_ANGLE_robust_client_memory GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_copy_texture GL_ANGLE_client_arrays GL_ANGLE_webgl_compatibility GL_ANGLE_request_extension GL_OES_EGL_image GL_OES_EGL_sync GL_OES_rgb8_rgba8 GL_OES_depth24 GL_OES_mapbuffer\0";
 
 /// The advertised extension inventory, each entry a NUL-terminated name — the single source of truth for
 /// `glGetStringi` (indexed enumeration) and `GL_NUM_EXTENSIONS` (the count).
@@ -51,6 +51,12 @@ pub const EXTENSIONS: &[&[u8]] = &[
     // FBO (glmark2 `--off-screen`) needs them to pick 8-bit color + 24-bit depth over RGBA4/depth16.
     b"GL_OES_rgb8_rgba8\0",
     b"GL_OES_depth24\0",
+    // The GLES 2 buffer-mapping extension. `glMapBufferOES` is expressed as `glMapBufferRange` over
+    // `[0, size)` with `GL_MAP_WRITE_BIT` and accepts only `GL_WRITE_ONLY_OES`; `glUnmapBufferOES` shares
+    // the ES 3 `glUnmapBuffer` flush; `glGetBufferPointerv` reports the live mapping. Its two `*OES` entry
+    // points resolve through `eglGetProcAddress` only (they are not exported from the `.so`), which is how
+    // the GLES spec requires extension functions to be obtained.
+    b"GL_OES_mapbuffer\0",
 ];
 
 /// The GLES major/minor version the driver advertises (`glGetIntegerv(GL_MAJOR_VERSION/…)`), matching the

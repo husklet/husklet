@@ -35,13 +35,12 @@ const RTLD_NOW: c_int = 2;
 
 /// The staged shim directory for the host arch (`~/.hl/gl/<arch>/`), where `build.rs` installs the libs.
 fn stage_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
     let arch = match std::env::consts::ARCH {
         "aarch64" => "aarch64",
         "x86_64" => "x86_64",
         other => panic!("unsupported host arch for the wayland-egl test: {other}"),
     };
-    PathBuf::from(home).join(".hl/gl").join(arch)
+    PathBuf::from(env!("HL_GL_STAGE_GL")).join(arch)
 }
 
 /// `dlopen(path, RTLD_NOW)` or panic with the `dlerror()` reason.

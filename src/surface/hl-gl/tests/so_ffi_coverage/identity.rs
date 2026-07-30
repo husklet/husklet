@@ -31,7 +31,7 @@ fn gl_identity_and_scalar_state_queries_marshal() {
     );
     assert_eq!(
         cstr(gl_get_string(GL_EXTENSIONS)),
-        "GL_KHR_debug GL_EXT_texture_format_BGRA8888 GL_EXT_read_format_bgra GL_ANGLE_robust_client_memory GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_copy_texture GL_ANGLE_client_arrays GL_ANGLE_webgl_compatibility GL_ANGLE_request_extension GL_OES_EGL_image GL_OES_EGL_sync GL_OES_rgb8_rgba8 GL_OES_depth24"
+        "GL_KHR_debug GL_EXT_texture_format_BGRA8888 GL_EXT_read_format_bgra GL_ANGLE_robust_client_memory GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_copy_texture GL_ANGLE_client_arrays GL_ANGLE_webgl_compatibility GL_ANGLE_request_extension GL_OES_EGL_image GL_OES_EGL_sync GL_OES_rgb8_rgba8 GL_OES_depth24 GL_OES_mapbuffer"
     );
 
     // glGetIntegerv scalar limits — the truthful executor ceiling, never uninitialized garbage.
@@ -46,7 +46,7 @@ fn gl_identity_and_scalar_state_queries_marshal() {
     assert_eq!(getint(GL_MINOR_VERSION), 1);
     assert_eq!(
         getint(GL_NUM_EXTENSIONS),
-        13,
+        14,
         "matches the GL_EXTENSIONS inventory"
     );
     assert_eq!(getint(GL_DEPTH_BITS), 24);
@@ -77,15 +77,26 @@ fn gl_identity_and_scalar_state_queries_marshal() {
     gl_get_integer64v(GL_MAX_TEXTURE_SIZE, &mut v64);
     assert_eq!(v64, 8192);
 
-    // glGetStringi exposes the same inventory and rejects out-of-range indices.
-    assert_eq!(cstr(gl_get_stringi(GL_EXTENSIONS, 0)), "GL_KHR_debug");
+    // glGetStringi enumerates the SAME inventory the space-separated GL_EXTENSIONS string reports, in the
+    // same order, and rejects any index at or past GL_NUM_EXTENSIONS. Deriving the expectation from the
+    // string (rather than hardcoding positions) pins the invariant ANGLE relies on — the two sources of
+    // truth agree — and does not rot when the inventory grows.
+    let advertised = cstr(gl_get_string(GL_EXTENSIONS));
+    let names: Vec<&str> = advertised.split(' ').collect();
+    let count = getint(GL_NUM_EXTENSIONS);
     assert_eq!(
-        cstr(gl_get_stringi(GL_EXTENSIONS, 8)),
-        "GL_ANGLE_request_extension"
+        names.len() as i32,
+        count,
+        "GL_NUM_EXTENSIONS counts exactly the names in GL_EXTENSIONS"
     );
-    assert_eq!(cstr(gl_get_stringi(GL_EXTENSIONS, 9)), "GL_OES_EGL_image");
-    assert_eq!(cstr(gl_get_stringi(GL_EXTENSIONS, 10)), "GL_OES_EGL_sync");
-    assert!(gl_get_stringi(GL_EXTENSIONS, 11).is_null());
+    for (index, name) in names.iter().enumerate() {
+        assert_eq!(
+            &cstr(gl_get_stringi(GL_EXTENSIONS, index as u32)),
+            name,
+            "glGetStringi({index}) matches the GL_EXTENSIONS string at that position"
+        );
+    }
+    assert!(gl_get_stringi(GL_EXTENSIONS, count as u32).is_null());
     assert_eq!(
         gl_get_error(),
         GL_INVALID_VALUE,

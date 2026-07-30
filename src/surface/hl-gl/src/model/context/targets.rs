@@ -49,28 +49,41 @@ impl GlContext {
     }
 
     pub fn alloc_buffer_ir(&self) -> hl_gpu::Result<u32> {
-        self.allocator.buffer()
+        self.issued(Resource::Buffer, self.allocator.buffer())
     }
     pub fn alloc_texture_ir(&self) -> hl_gpu::Result<u32> {
-        self.allocator.texture()
+        self.issued(Resource::Texture, self.allocator.texture())
     }
     pub fn alloc_sampler_ir(&self) -> hl_gpu::Result<u32> {
-        self.allocator.sampler()
+        self.issued(Resource::Sampler, self.allocator.sampler())
     }
     pub fn alloc_shader_ir(&self) -> hl_gpu::Result<u32> {
-        self.allocator.shader()
+        self.issued(Resource::Shader, self.allocator.shader())
     }
     pub fn alloc_pipeline_ir(&self) -> hl_gpu::Result<u32> {
-        self.allocator.pipeline()
+        self.issued(Resource::Pipeline, self.allocator.pipeline())
     }
     pub fn alloc_bind_group_ir(&self) -> hl_gpu::Result<u32> {
-        self.allocator.bind_group()
+        self.issued(Resource::BindGroup, self.allocator.bind_group())
     }
     pub fn alloc_fence_ir(&self) -> hl_gpu::Result<u32> {
-        self.allocator.fence()
+        self.issued(Resource::Fence, self.allocator.fence())
     }
     pub fn alloc_frame_serial(&self) -> hl_gpu::Result<hl_gpu::FrameSerial> {
         self.allocator.frame()
+    }
+
+    /// The names issued while lowering the current frame.
+    pub(super) fn frame_ledger(&self) -> std::sync::MutexGuard<'_, Vec<(Resource, u32)>> {
+        self.frame_ids.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Record a freshly issued IR name against the frame being lowered, so a rejected batch can return it.
+    fn issued(&self, kind: Resource, id: hl_gpu::Result<u32>) -> hl_gpu::Result<u32> {
+        if let Ok(name) = id {
+            self.frame_ledger().push((kind, name));
+        }
+        id
     }
 
     /// Mint a fresh opaque sync-object token (non-zero, so a `GLsync` is never null).
@@ -106,7 +119,7 @@ impl GlContext {
         let created = target.texture == 0;
         if created {
             target.texture = self.alloc_texture_ir()?;
-            target.surface = self.allocator.surface()?;
+            target.surface = self.issued(Resource::Surface, self.allocator.surface())?;
             target.size = (w, h);
             target.token = self.local.present_token;
         }
@@ -183,7 +196,7 @@ impl GlContext {
                 return Ok((surface, texture, false));
             }
             let texture = self.alloc_texture_ir()?;
-            let surface = self.allocator.surface()?;
+            let surface = self.issued(Resource::Surface, self.allocator.surface())?;
             self.fbo_targets.insert(key, (surface, texture));
             Ok((surface, texture, true))
         }
@@ -204,7 +217,7 @@ impl GlContext {
             return Ok((surface, texture, create, false));
         }
         let texture = self.alloc_texture_ir()?;
-        let surface = self.allocator.surface()?;
+        let surface = self.issued(Resource::Surface, self.allocator.surface())?;
         Ok((surface, texture, true, true))
     }
 

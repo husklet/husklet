@@ -26,6 +26,7 @@ impl GlContext {
             syncs: HashMap::new(),
             next_sync_token: 1,
             allocator,
+            frame_ids: std::sync::Mutex::new(Vec::new()),
             default_placeholder_tex: 0,
             default_placeholder_samp: 0,
             fbo_targets: HashMap::new(),

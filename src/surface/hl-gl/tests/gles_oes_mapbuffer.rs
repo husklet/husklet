@@ -30,13 +30,12 @@ const RTLD_NOW: c_int = 2;
 const RTLD_GLOBAL: c_int = 0x100;
 
 fn stage_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
     let arch = match std::env::consts::ARCH {
         "aarch64" => "aarch64",
         "x86_64" => "x86_64",
         other => panic!("unsupported host arch for the mapbuffer test: {other}"),
     };
-    PathBuf::from(home).join(".hl/gl").join(arch)
+    PathBuf::from(env!("HL_GL_STAGE_GL")).join(arch)
 }
 
 fn open(path: &PathBuf) -> *mut c_void {

@@ -66,7 +66,18 @@ fn gl_buffer_upload_contents_marshal_through_map() {
         &expect[..],
         "glBufferData + glBufferSubData contents marshalled byte-for-byte"
     );
-    assert_ne!(gl_unmap_buffer(GL_ARRAY_BUFFER), 0);
+    // glUnmapBuffer flushes the mapped range as a real `WriteBuffer` submit, so it needs a live
+    // $HL_GPU_EXEC transport. With one it must report GL_TRUE; without one it must report GL_FALSE
+    // rather than faking a success it did not perform. Either way the u8 return marshalling is pinned.
+    let unmapped = gl_unmap_buffer(GL_ARRAY_BUFFER);
+    if std::env::var_os("HL_GPU_EXEC").is_some() {
+        assert_ne!(unmapped, 0, "a flushed unmap reports GL_TRUE");
+    } else {
+        assert_eq!(
+            unmapped, 0,
+            "with no host transport the flush cannot land, and unmap says so"
+        );
+    }
 
     // Error paths on the SAME entry point (out-of-range map + unbound target).
     let _ = gl_get_error();

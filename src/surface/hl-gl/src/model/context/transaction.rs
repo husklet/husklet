@@ -27,6 +27,9 @@ pub struct FrameState {
 impl GlContext {
     /// Snapshot the resource state that frame lowering may mutate.
     pub fn frame_state(&self) -> FrameState {
+        // A new frame starts a new allocation ledger: only names issued from here on belong to the batch
+        // this snapshot can roll back.
+        self.frame_ledger().clear();
         FrameState {
             default_targets: self.local.default_targets.clone(),
             external_targets: self.external_targets.clone(),
@@ -61,5 +64,12 @@ impl GlContext {
         self.prog_pipeline_cache = state.prog_pipeline_cache;
         self.sampler_ir_cache = state.sampler_ir_cache;
         self.pending_destroys = state.pending_destroys;
+        // Return every IR name this frame issued. hl-gpu rolls its own id tables back exactly to the
+        // pre-frame state on a NACK, so none of these reached a live host object; reissuing them lets the
+        // retry emit the identical resource-creation stream rather than leaking a name per rejection.
+        let released: Vec<_> = self.frame_ledger().drain(..).collect();
+        for (kind, id) in released {
+            self.allocator.release(kind, id);
+        }
     }
 }

@@ -16,6 +16,8 @@ const EGL_PLATFORM_SURFACELESS_MESA: u32 = 0x31DD;
 const EGL_TRUE: u32 = 1;
 const EGL_SUCCESS: i32 = 0x3000;
 const GL_VERSION: u32 = 0x1F02;
+const GL_MAJOR_VERSION: u32 = 0x821B;
+const GL_MINOR_VERSION: u32 = 0x821C;
 
 extern "C" {
     fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
@@ -26,13 +28,12 @@ const RTLD_NOW: c_int = 2;
 const RTLD_GLOBAL: c_int = 0x100;
 
 fn stage_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
     let arch = match std::env::consts::ARCH {
         "aarch64" => "aarch64",
         "x86_64" => "x86_64",
         other => panic!("unsupported host arch for the egl context default test: {other}"),
     };
-    PathBuf::from(home).join(".hl/gl").join(arch)
+    PathBuf::from(env!("HL_GL_STAGE_GL")).join(arch)
 }
 
 fn open(path: &PathBuf) -> *mut c_void {
@@ -101,6 +102,8 @@ fn create_context_accepts_a_null_and_an_empty_attribute_list() {
     let get_error: extern "C" fn() -> i32 = unsafe { std::mem::transmute(sym(egl, "eglGetError")) };
     let get_string: extern "C" fn(u32) -> *const c_char =
         unsafe { std::mem::transmute(sym(gles, "glGetString")) };
+    let get_integerv: extern "C" fn(u32, *mut i32) =
+        unsafe { std::mem::transmute(sym(gles, "glGetIntegerv")) };
 
     let get_platform_display: extern "C" fn(u32, *mut c_void, *const i32) -> *mut c_void = unsafe {
         let name = std::ffi::CString::new("eglGetPlatformDisplayEXT").unwrap();
@@ -137,7 +140,12 @@ fn create_context_accepts_a_null_and_an_empty_attribute_list() {
         get_error()
     );
 
-    // 3) The documented default version: ES 2.0, the lowest the config's EGL_RENDERABLE_TYPE claims.
+    // 3) The documented default version: ES 3.0 — the highest COMPLETE profile the driver serves, which is
+    //    what a client stating no version should get. This is the rung-0 probe a toolkit performs before any
+    //    rendering: a bare eglCreateContext plus glGetString(GL_VERSION). It must not report ES 2.0, or GTK4
+    //    concludes the driver cannot run GSK's GL renderer and silently falls back to Cairo over `wl_shm`.
+    //    It must not report 3.1 either — GL_MAX_IMAGE_UNITS is 0, so the ES 3.1 compute/image requirements
+    //    are unmet and 3.1 is served only on explicit request.
     assert_eq!(
         make_current(
             display,
@@ -150,9 +158,19 @@ fn create_context_accepts_a_null_and_an_empty_attribute_list() {
     let version = unsafe { std::ffi::CStr::from_ptr(get_string(GL_VERSION)) }
         .to_string_lossy()
         .into_owned();
-    assert!(
-        version.starts_with("OpenGL ES 2.0"),
-        "the default context is ES 2.0, got {version:?}"
+    assert_eq!(
+        version, "OpenGL ES 3.0 hl-gl",
+        "a bare eglCreateContext reports the driver's highest complete profile"
+    );
+    // The integer queries must agree with the string — a client may read either.
+    let mut major = -1;
+    let mut minor = -1;
+    get_integerv(GL_MAJOR_VERSION, &mut major);
+    get_integerv(GL_MINOR_VERSION, &mut minor);
+    assert_eq!(
+        (major, minor),
+        (3, 0),
+        "GL_MAJOR/MINOR_VERSION agree with GL_VERSION for the default context"
     );
 
     // 4) An explicit ES 3 request still wins over the default.

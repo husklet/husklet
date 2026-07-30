@@ -85,6 +85,7 @@ const EGL_WINDOW_BIT: i32 = 0x0004;
 const EGL_PBUFFER_BIT: i32 = 0x0001;
 const EGL_OPENGL_ES2_BIT: i32 = 0x0004;
 const EGL_OPENGL_ES3_BIT: i32 = 0x0040;
+const EGL_CONTEXT_CLIENT_VERSION: i32 = 0x3098;
 
 // EGL query-string names.
 const EGL_VENDOR_Q: i32 = 0x3053;
@@ -108,13 +109,12 @@ const EGL_PLATFORM_SURFACELESS_MESA: u32 = 0x31DD;
 // loader helpers (identical contract to so_ffi_coverage.rs)
 // ==================================================================================================
 fn stage_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
     let arch = match std::env::consts::ARCH {
         "aarch64" => "aarch64",
         "x86_64" => "x86_64",
         other => panic!("unsupported host arch for the so-ffi test: {other}"),
     };
-    PathBuf::from(home).join(".hl/gl").join(arch)
+    PathBuf::from(env!("HL_GL_STAGE_GL")).join(arch)
 }
 
 fn dlopen_global(path: &PathBuf) -> *mut c_void {
@@ -155,6 +155,42 @@ struct Shim {
     egl: *mut c_void,
 }
 
+impl Shim {
+    /// Make a fresh GLES2 context current on the CALLING thread.
+    ///
+    /// The current binding is per-thread TLS owned by libEGL (`hl_shim_current_ptr`), and every `gl*`
+    /// dispatch resolves its share group from it — with no context current, `GlobalState::context`
+    /// resolves no group and the call is a silent no-op that sets no GL error. The test harness runs each
+    /// `#[test]` on its own thread, so a `gl*` test must establish its own binding, exactly as a real
+    /// loader does before issuing GL.
+    fn activate(&self) {
+        let create_context = f!(
+            self.egl,
+            "eglCreateContext",
+            extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *const i32) -> *mut c_void
+        );
+        let make_current = f!(
+            self.egl,
+            "eglMakeCurrent",
+            extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void) -> u32
+        );
+        let dpy = surfaceless_display(self);
+        let attributes = [EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE];
+        let ctx = create_context(
+            dpy,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            attributes.as_ptr(),
+        );
+        assert!(!ctx.is_null(), "eglCreateContext returns a context token");
+        assert_eq!(
+            make_current(dpy, core::ptr::null_mut(), core::ptr::null_mut(), ctx),
+            EGL_TRUE,
+            "eglMakeCurrent binds the context on this thread"
+        );
+    }
+}
+
 fn load() -> Option<Shim> {
     let dir = stage_dir();
     let egl_path = dir.join("libEGL.so.1");
@@ -169,10 +205,14 @@ fn load() -> Option<Shim> {
     std::env::set_var("HL_GL_NO_WAYLAND", "1");
     let egl = dlopen_global(&egl_path);
     let gles = dlopen_global(&gles_path);
+    let shim = Shim { gles, egl };
+    // Every `gl*` dispatch needs this thread's current binding; establish it before draining errors so
+    // any setup noise is drained too.
+    shim.activate();
     // Drain both read-and-clear error registers to a clean slate (run order is nondeterministic).
     f!(gles, "glGetError", extern "C" fn() -> u32)();
     f!(egl, "eglGetError", extern "C" fn() -> i32)();
-    Some(Shim { gles, egl })
+    Some(shim)
 }
 
 fn cstr(p: *const c_char) -> String {

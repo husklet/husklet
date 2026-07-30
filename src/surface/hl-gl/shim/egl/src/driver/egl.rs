@@ -101,12 +101,21 @@ impl ContextAttributeList {
         //
         // EGL 1.5 §3.7.1 makes a NULL or immediately-`EGL_NONE` attribute list mean "all defaults", which is
         // legal and common (the spec's own default for `EGL_CONTEXT_MAJOR_VERSION` is 1). This driver ships
-        // no ES 1.x pipeline and its only config advertises `EGL_RENDERABLE_TYPE = ES2|ES3` — so an ES 1.x
-        // context would have to be refused with `EGL_BAD_MATCH` for lack of a matching config. The lowest
-        // version the config does support is the honest default: ES 2.0. An ES 3 app asks for 3 explicitly,
-        // as every real one does, and gets the ES 3 identity string from `driver/objects.rs`.
+        // no ES 1.x pipeline and its only config advertises `EGL_RENDERABLE_TYPE = ES2|ES3`, so an ES 1.x
+        // context would have to be refused with `EGL_BAD_MATCH` for lack of a matching config.
+        //
+        // A client that states no version has expressed no opinion, so it gets the highest COMPLETE profile
+        // this driver serves: ES 3.0. Not 2.0 — that answered "what is the lowest the config allows?", a
+        // different question, and it strands a toolkit that probes the default context and needs ES 3 (GTK4's
+        // GSK renderer refuses anything below ES 3.0 and falls back to Cairo over `wl_shm`). Not 3.1 either:
+        // `GL_MAX_IMAGE_UNITS` is 0 and `glBindImageTexture` is an honest no-op, so the ES 3.1 compute/image
+        // requirements are not met and 3.1 is only served to a client that explicitly asks for it.
+        //
+        // An EXPLICIT version request is still honoured exactly, so Chrome/ANGLE (which requests ES 2.0 and
+        // ES 3.0) and Dawn (ES 3.1) observe an unchanged identity — see
+        // `chrome_es30_es20_and_dawn_es31_requests_report_the_selected_profile`.
         let mut attributes = ContextAttributes {
-            client_version: 2,
+            client_version: 3,
             minor_version: 0,
             robust_access: false,
             reset_strategy: EGL_NO_RESET_NOTIFICATION_EXT,
