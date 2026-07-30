@@ -230,6 +230,25 @@ mod tests {
 
     #[cfg(feature = "runtime")]
     #[test]
+    fn exec_url_argument_round_trips_without_path_normalization() {
+        const URL: &str = "https://google.com";
+        let encoded = serde_json::to_vec(&ExecConfig {
+            command: vec!["google-chrome".into(), URL.into()],
+            ..ExecConfig::default()
+        })
+        .unwrap();
+        let decoded: ExecConfig = serde_json::from_slice(&encoded).unwrap();
+
+        assert_eq!(decoded.command, ["google-chrome", URL]);
+        let process = decoded
+            .process(&hl_container::Process::new("/bin/true"))
+            .unwrap();
+        assert_eq!(process.program, "google-chrome");
+        assert_eq!(process.args, [URL]);
+    }
+
+    #[cfg(feature = "runtime")]
+    #[test]
     fn rejects_meaningful_options_the_runtime_cannot_honor() {
         let parent = hl_container::Process::new("/bin/true");
         let mut config = ExecConfig {

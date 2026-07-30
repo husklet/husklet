@@ -4,6 +4,9 @@ use super::*;
 pub enum PipelineNative {
     Render {
         pipeline: wgpu::RenderPipeline,
+        /// Exact protocol layouts retained for draw-time range diagnostics. The native pipeline does not
+        /// expose this descriptor after creation.
+        vertex_buffers: Vec<VertexLayout>,
         /// The color-target formats the pipeline was built for — retained for draw-time attachment
         /// compatibility checks (the CPU oracle rejects a format mismatch); the frozen suite's single
         /// target already matches, so it is not yet consulted.
@@ -27,7 +30,11 @@ pub enum PipelineNative {
     /// from the pipeline itself via `get_bind_group_layout(index)`, which returns the explicit layout for
     /// the kernel path and the auto-derived one for the SPIR-V path — so a bind group built against it
     /// matches in both cases, and 2+ groups bind at their declared indices.
-    Compute { pipeline: wgpu::ComputePipeline },
+    Compute {
+        pipeline: wgpu::ComputePipeline,
+        /// Guest group-zero bindings were shifted to reserve the host viewport slot during shader lowering.
+        remap_group_zero: bool,
+    },
 }
 
 /// Downcast a live pipeline id to its native handle.

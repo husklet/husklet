@@ -133,17 +133,21 @@ pub extern "C" fn vkUpdateDescriptorSets(
     _device: *mut c_void,
     descriptor_write_count: u32,
     p_descriptor_writes: *const c_void,
-    _descriptor_copy_count: u32,
-    _p_descriptor_copies: *const c_void,
+    descriptor_copy_count: u32,
+    p_descriptor_copies: *const c_void,
 ) {
-    if p_descriptor_writes.is_null() {
+    if descriptor_write_count != 0 && p_descriptor_writes.is_null() {
         return;
     }
-    let writes = unsafe {
+    let writes = if descriptor_write_count == 0 {
+        &[]
+    } else {
+        unsafe {
         std::slice::from_raw_parts(
             p_descriptor_writes as *const VkWriteDescriptorSet,
             descriptor_write_count as usize,
         )
+        }
     };
     // The view→image mapping lives in the shim state (disjoint from the device), so borrow both fields.
     StateStore::with(|s| {
@@ -162,17 +166,23 @@ pub extern "C" fn vkUpdateDescriptorSets(
                 if w.p_buffer_info.is_null() {
                     continue;
                 }
-                // Bring-up: bind the first buffer descriptor at (dstBinding). Array elements collapse onto
-                // the binding (the model keys a set's resources by binding).
-                let bi = unsafe { &*w.p_buffer_info };
-                let _ = create::update_descriptor_buffer(
-                    dev,
-                    w.dst_set,
-                    w.dst_binding,
-                    bi.buffer,
-                    bi.offset,
-                    bi.range,
-                );
+                let infos = unsafe {
+                    std::slice::from_raw_parts(w.p_buffer_info, w.descriptor_count as usize)
+                };
+                for (index, bi) in infos.iter().enumerate() {
+                    let Some(element) = w.dst_array_element.checked_add(index as u32) else {
+                        break;
+                    };
+                    let _ = create::update_descriptor_buffer_element(
+                        dev,
+                        w.dst_set,
+                        w.dst_binding,
+                        element,
+                        bi.buffer,
+                        bi.offset,
+                        bi.range,
+                    );
+                }
             } else if descriptor_type.is_image() {
                 if w.p_image_info.is_null() {
                     continue;
@@ -180,21 +190,57 @@ pub extern "C" fn vkUpdateDescriptorSets(
                 // Read the first `VkDescriptorImageInfo`, resolving its `imageView`→`VkImage` (for the
                 // sampled classes) and taking its `sampler` (for the sampler classes). A COMBINED_IMAGE_SAMPLER
                 // carries both; a separate SAMPLED_IMAGE only the view; a separate SAMPLER only the sampler.
-                let ii = unsafe { &*(w.p_image_info as *const VkDescriptorImageInfo) };
-                let image = if descriptor_type.binds_image() {
-                    image_views.get(&ii.image_view).copied()
-                } else {
-                    None
+                let infos = unsafe {
+                    std::slice::from_raw_parts(
+                        w.p_image_info as *const VkDescriptorImageInfo,
+                        w.descriptor_count as usize,
+                    )
                 };
-                let sampler = if descriptor_type.binds_sampler() && ii.sampler != 0 {
-                    Some(ii.sampler)
-                } else {
-                    None
-                };
-                let _ =
-                    create::update_descriptor_image(dev, w.dst_set, w.dst_binding, image, sampler);
+                for (index, ii) in infos.iter().enumerate() {
+                    let Some(element) = w.dst_array_element.checked_add(index as u32) else {
+                        break;
+                    };
+                    let image = if descriptor_type.binds_image() {
+                        image_views.get(&ii.image_view).copied()
+                    } else {
+                        None
+                    };
+                    let sampler = if descriptor_type.binds_sampler() && ii.sampler != 0 {
+                        Some(ii.sampler)
+                    } else {
+                        None
+                    };
+                    let _ = create::update_descriptor_image_element(
+                        dev,
+                        w.dst_set,
+                        w.dst_binding,
+                        element,
+                        image,
+                        sampler,
+                    );
+                }
             }
-            // Other descriptor classes (storage image, texel buffers) are not modeled: a truthful no-op.
+            // Texel-buffer descriptor classes are not modeled and remain a truthful no-op.
+        }
+        if !p_descriptor_copies.is_null() {
+            let copies = unsafe {
+                std::slice::from_raw_parts(
+                    p_descriptor_copies as *const VkCopyDescriptorSet,
+                    descriptor_copy_count as usize,
+                )
+            };
+            for copy in copies {
+                let _ = create::copy_descriptors(
+                    dev,
+                    copy.src_set,
+                    copy.src_binding,
+                    copy.src_array_element,
+                    copy.dst_set,
+                    copy.dst_binding,
+                    copy.dst_array_element,
+                    copy.descriptor_count,
+                );
+            }
         }
     });
 }

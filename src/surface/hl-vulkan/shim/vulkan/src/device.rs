@@ -5,22 +5,166 @@
 //! handles are loader-magic'd dispatchable tokens.
 
 use core::ffi::c_void;
+use std::ffi::CStr;
 
+use hl_gpu::{CommandSink, FeatureRequest, PresentKind, WIRE_VERSION};
+use hl_gpu::protocol::model::capability::{binding_array, gpu_feature};
 use hl_vulkan::Instance;
 
 use crate::state::StateStore;
 use crate::types::*;
 
+fn validates_features(create_info: &VkDeviceCreateInfo) -> bool {
+    let supported = crate::instance::supported_features();
+    if let Some(requested) = unsafe { create_info.p_enabled_features.as_ref() } {
+        if requested
+            .bits
+            .iter()
+            .zip(supported.bits)
+            .any(|(&requested, supported)| requested != VK_FALSE && supported == VK_FALSE)
+        {
+            return false;
+        }
+    }
+
+    let mut node = create_info.p_next as *const VkBaseInStructure;
+    while let Some(header) = unsafe { node.as_ref() } {
+        if header.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 {
+            let features = unsafe { &*(node as *const VkPhysicalDeviceFeatures2) };
+            if features
+                .features
+                .bits
+                .iter()
+                .zip(supported.bits)
+                .any(|(&requested, supported)| requested != VK_FALSE && supported == VK_FALSE)
+            {
+                return false;
+            }
+        } else if header.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES {
+            // Dynamic rendering is the one pNext feature currently advertised and lowered.
+        }
+        node = header.p_next;
+    }
+    true
+}
+
+fn validates_extensions(create_info: &VkDeviceCreateInfo) -> bool {
+    if create_info.enabled_extension_count == 0 {
+        return true;
+    }
+    if create_info.pp_enabled_extension_names.is_null() {
+        return false;
+    }
+    let names = unsafe {
+        std::slice::from_raw_parts(
+            create_info.pp_enabled_extension_names,
+            create_info.enabled_extension_count as usize,
+        )
+    };
+    names.iter().all(|&name| {
+        if name.is_null() {
+            return false;
+        }
+        let Ok(name) = unsafe { CStr::from_ptr(name) }.to_str() else {
+            return false;
+        };
+        hl_vulkan::model::capability::DEVICE_EXTENSIONS
+            .iter()
+            .any(|extension| extension.name == name)
+    })
+}
+
+fn requested_binding_arrays(create_info: Option<&VkDeviceCreateInfo>) -> u32 {
+    let Some(create_info) = create_info else {
+        return 0;
+    };
+    let mut bits = 0;
+    let mut include = |features: &VkPhysicalDeviceFeatures| {
+        if features.bits[33] != VK_FALSE {
+            bits |= binding_array::UNIFORM_BUFFER;
+        }
+        if features.bits[35] != VK_FALSE {
+            bits |= binding_array::STORAGE_BUFFER;
+        }
+        if features.bits[34] != VK_FALSE {
+            bits |= binding_array::SAMPLED_TEXTURE | binding_array::SAMPLER;
+        }
+        if features.bits[36] != VK_FALSE {
+            bits |= binding_array::STORAGE_TEXTURE;
+        }
+    };
+    if let Some(features) = unsafe { create_info.p_enabled_features.as_ref() } {
+        include(features);
+    }
+    let mut node = create_info.p_next as *const VkBaseInStructure;
+    while let Some(header) = unsafe { node.as_ref() } {
+        if header.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 {
+            include(&unsafe { &*(node as *const VkPhysicalDeviceFeatures2) }.features);
+        }
+        node = header.p_next;
+    }
+    bits
+}
+
+pub(crate) fn requested_gpu_features(create_info: Option<&VkDeviceCreateInfo>) -> u32 {
+    let Some(create_info) = create_info else {
+        return 0;
+    };
+    let mut bits = 0;
+    let mut include = |features: &VkPhysicalDeviceFeatures| {
+        if features.bits[0] != VK_FALSE {
+            bits |= gpu_feature::ROBUST_BUFFER_ACCESS;
+        }
+        if features.bits[26] != VK_FALSE {
+            bits |= gpu_feature::FRAGMENT_STORES_ATOMICS;
+        }
+        if features.bits[12] != VK_FALSE {
+            bits |= gpu_feature::DEPTH_BIAS_CLAMP;
+        }
+        if features.bits[2] != VK_FALSE {
+            bits |= gpu_feature::IMAGE_CUBE_ARRAY;
+        }
+        if features.bits[3] != VK_FALSE {
+            bits |= gpu_feature::INDEPENDENT_BLEND;
+        }
+        if features.bits[6] != VK_FALSE {
+            bits |= gpu_feature::SAMPLE_RATE_SHADING;
+        }
+    };
+    if let Some(features) = unsafe { create_info.p_enabled_features.as_ref() } {
+        include(features);
+    }
+    let mut node = create_info.p_next as *const VkBaseInStructure;
+    while let Some(header) = unsafe { node.as_ref() } {
+        if header.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 {
+            include(&unsafe { &*(node as *const VkPhysicalDeviceFeatures2) }.features);
+        }
+        node = header.p_next;
+    }
+    bits
+}
+
 #[no_mangle]
 pub extern "C" fn vkCreateDevice(
     _physical_device: *mut c_void,
-    _p_create_info: *const c_void,
+    p_create_info: *const c_void,
     _p_allocator: *const c_void,
     p_device: *mut *mut c_void,
 ) -> VkResult {
     if p_device.is_null() {
         return VK_ERROR_INITIALIZATION_FAILED;
     }
+    let create_info = unsafe { (p_create_info as *const VkDeviceCreateInfo).as_ref() };
+    if let Some(create_info) = create_info {
+        if !validates_extensions(create_info) {
+            return VK_ERROR_EXTENSION_NOT_PRESENT;
+        }
+        if !validates_features(create_info) {
+            return VK_ERROR_FEATURE_NOT_PRESENT;
+        }
+    }
+    let binding_arrays = requested_binding_arrays(create_info);
+    let gpu_features = requested_gpu_features(create_info);
     let token = StateStore::with(|s| {
         // Build the logical device over the instance's physical device (materialize a default instance
         // if a device is somehow requested before `vkCreateInstance`).
@@ -28,9 +172,30 @@ pub extern "C" fn vkCreateDevice(
             .instance
             .get_or_insert_with(|| Instance::new(HL_API_VERSION))
             .clone();
+        let native_present =
+            if std::env::var_os("HL_GPU_EXEC").is_some()
+                || binding_arrays != 0
+                || gpu_features != 0
+            {
+                let Ok(capabilities) = s.sink.negotiate(&FeatureRequest {
+                    wire_version: WIRE_VERSION,
+                    binding_arrays,
+                    gpu_features,
+                    ..FeatureRequest::default()
+                }) else {
+                    return None;
+                };
+                capabilities.present_kinds.contains(&PresentKind::IoSurface)
+            } else {
+                s.native_present
+            };
         s.device = Some(inst.create_device());
-        s.device_token()
+        s.native_present = native_present;
+        Some(s.device_token())
     });
+    let Some(token) = token else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
     unsafe { *p_device = token };
     VK_SUCCESS
 }

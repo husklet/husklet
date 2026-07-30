@@ -13,10 +13,87 @@ impl Translator {
         let comments = Source::new(cs_in).comments_removed();
         let mut body = Source::new(&comments).without_version();
         NormalizedSource::new(&mut body).strip_precision();
+        offset_compute_uniform_blocks(&mut body);
         let mut out = String::new();
         out.push_str(GLSL_VERSION);
         out.push_str(&body);
         out
+    }
+}
+
+/// GL keeps uniform- and shader-storage-buffer binding indices in separate namespaces, while the host
+/// descriptor set uses one binding namespace. Reserve the slots after all legal SSBO bindings for UBOs.
+fn offset_compute_uniform_blocks(source: &mut String) {
+    let original = source.clone();
+    let bytes = original.as_bytes();
+    let mut replacements = Vec::new();
+    let mut cursor = 0;
+    while let Some(relative) = original[cursor..].find("uniform") {
+        let uniform = cursor + relative;
+        let before_word = uniform > 0 && Tokens::is_word(bytes[uniform - 1]);
+        let after_word = uniform + 7 < bytes.len() && Tokens::is_word(bytes[uniform + 7]);
+        cursor = uniform + 7;
+        if before_word || after_word {
+            continue;
+        }
+        let mut block = cursor;
+        while block < bytes.len() && Tokens::is_space(bytes[block]) {
+            block += 1;
+        }
+        while block < bytes.len() && Tokens::is_word(bytes[block]) {
+            block += 1;
+        }
+        while block < bytes.len() && Tokens::is_space(bytes[block]) {
+            block += 1;
+        }
+        if bytes.get(block) != Some(&b'{') {
+            continue;
+        }
+        let declaration_start = original[..uniform]
+            .rfind([';', '}'])
+            .map_or(0, |position| position + 1);
+        let prefix = &original[declaration_start..uniform];
+        let Some(layout_relative) = prefix.rfind("layout") else {
+            replacements.push((
+                uniform..uniform,
+                format!(
+                    "layout(binding = {}) ",
+                    crate::model::glconst::MAX_SHADER_STORAGE_BUFFER_BINDINGS
+                ),
+            ));
+            continue;
+        };
+        let layout = declaration_start + layout_relative;
+        let segment = &original[layout..uniform];
+        if let Some(binding_relative) = segment.find("binding") {
+            let after_binding = layout + binding_relative + "binding".len();
+            let digit_start = original[after_binding..uniform]
+                .find(|character: char| character.is_ascii_digit())
+                .map(|relative| after_binding + relative);
+            if let Some(digit_start) = digit_start {
+                let digit_end = original[digit_start..uniform]
+                    .find(|character: char| !character.is_ascii_digit())
+                    .map_or(uniform, |relative| digit_start + relative);
+                if let Ok(binding) = original[digit_start..digit_end].parse::<u32>() {
+                    replacements.push((
+                        digit_start..digit_end,
+                        (crate::model::glconst::MAX_SHADER_STORAGE_BUFFER_BINDINGS + binding)
+                            .to_string(),
+                    ));
+                }
+            }
+        } else if let Some(close) = segment.rfind(')') {
+            replacements.push((
+                layout + close..layout + close,
+                format!(
+                    ", binding = {}",
+                    crate::model::glconst::MAX_SHADER_STORAGE_BUFFER_BINDINGS
+                ),
+            ));
+        }
+    }
+    for (range, replacement) in replacements.into_iter().rev() {
+        source.replace_range(range, &replacement);
     }
 }
 
@@ -108,18 +185,21 @@ impl Declarations<'_> {
     /// [`crate::service::frame::build_frame_ir`] emits. The shader body recombines the pair at each use via
     /// [`rewrite_sampler_refs`].
     pub(super) fn emit_sampler_decls(out: &mut String, samps: &[Decl]) {
-        for (k, s) in samps.iter().enumerate() {
+        let mut k = 0usize;
+        for s in samps {
             let (tex_ty, smp_ty, _) = Self::split_sampler(&s.ty);
-            let tex_binding = 1 + 2 * k;
-            let smp_binding = 2 + 2 * k;
-            out.push_str(&format!(
-                "layout(binding = {tex_binding}) uniform {tex_ty} {}_hltex;\n",
-                s.name
-            ));
-            out.push_str(&format!(
-                "layout(binding = {smp_binding}) uniform {smp_ty} {}_hlsmp;\n",
-                s.name
-            ));
+            for element in 0..s.arr.max(1) {
+                let name = Self::sampler_element_name(s, element);
+                let tex_binding = 1 + 2 * k;
+                let smp_binding = 2 + 2 * k;
+                out.push_str(&format!(
+                    "layout(binding = {tex_binding}) uniform {tex_ty} {name}_hltex;\n"
+                ));
+                out.push_str(&format!(
+                    "layout(binding = {smp_binding}) uniform {smp_ty} {name}_hlsmp;\n"
+                ));
+                k += 1;
+            }
         }
     }
 
@@ -131,9 +211,108 @@ impl Declarations<'_> {
     pub(super) fn rewrite_sampler_refs(body: &mut String, samps: &[Decl]) {
         for s in samps {
             let (_, _, ctor) = Self::split_sampler(&s.ty);
-            let repl = format!("{ctor}({}_hltex, {}_hlsmp)", s.name, s.name);
-            wreplace(body, &s.name, &repl);
+            if s.arr > 0 {
+                for element in (0..s.arr).rev() {
+                    let source = format!("{}[{element}]", s.name);
+                    let name = Self::sampler_element_name(s, element);
+                    let replacement = format!("{ctor}({name}_hltex, {name}_hlsmp)");
+                    wreplace(body, &source, &replacement);
+                }
+            } else {
+                let repl = format!("{ctor}({}_hltex, {}_hlsmp)", s.name, s.name);
+                wreplace(body, &s.name, &repl);
+            }
         }
+    }
+
+    fn sampler_element_name(sampler: &Decl, element: u32) -> String {
+        if sampler.arr == 0 {
+            sampler.name.clone()
+        } else {
+            format!("{}_{}", sampler.name, element)
+        }
+    }
+}
+
+impl Source<'_> {
+    /// Expand sampler-array declarations into one separately-bound sampler per element and rewrite constant
+    /// element references. This is used after verbatim-stage preparation so the host bind-group model sees
+    /// the same flattened resources as GL reflection/lowering.
+    pub fn expand_sampler_arrays(self) -> String {
+        let declarations = Declarations::from_stages(self.text, "").uniforms().1;
+        let arrays = declarations
+            .into_iter()
+            .filter(|declaration| declaration.arr > 0 && declaration.array_literal)
+            .collect::<Vec<_>>();
+        if arrays.is_empty() {
+            return self.text.to_owned();
+        }
+
+        let bytes = self.text.as_bytes();
+        let mut edits = Vec::<(usize, usize, String)>::new();
+        let mut cursor = 0usize;
+        while let Some(at) = find_from(bytes, b"uniform", cursor) {
+            cursor = at + "uniform".len();
+            if (at > 0 && Tokens::is_word(bytes[at - 1]))
+                || (cursor < bytes.len() && Tokens::is_word(bytes[cursor]))
+            {
+                continue;
+            }
+            let mut q = cursor;
+            while q < bytes.len() && Tokens::is_space(bytes[q]) {
+                q += 1;
+            }
+            let word = |at: &mut usize| {
+                let start = *at;
+                while *at < bytes.len() && Tokens::is_word(bytes[*at]) {
+                    *at += 1;
+                }
+                &self.text[start..*at]
+            };
+            let mut ty = word(&mut q);
+            while TypeToken(ty).is_precision() {
+                while q < bytes.len() && Tokens::is_space(bytes[q]) {
+                    q += 1;
+                }
+                ty = word(&mut q);
+            }
+            while q < bytes.len() && Tokens::is_space(bytes[q]) {
+                q += 1;
+            }
+            let name = word(&mut q);
+            let Some(declaration) = arrays
+                .iter()
+                .find(|declaration| declaration.name == name && declaration.ty == ty)
+            else {
+                continue;
+            };
+            while q < bytes.len() && Tokens::is_space(bytes[q]) {
+                q += 1;
+            }
+            if q >= bytes.len() || bytes[q] != b'[' {
+                continue;
+            }
+            let Some(relative_end) = bytes[q..].iter().position(|&byte| byte == b';') else {
+                continue;
+            };
+            let end = q + relative_end + 1;
+            let mut replacement = String::new();
+            for element in 0..declaration.arr {
+                replacement.push_str(&format!(
+                    "uniform {} {}_{};\n",
+                    declaration.ty, declaration.name, element
+                ));
+            }
+            edits.push((at, end, replacement));
+            cursor = end;
+        }
+
+        let mut output = self.text.to_owned();
+        for (start, end, replacement) in edits.into_iter().rev() {
+            output.replace_range(start..end, &replacement);
+        }
+        Declarations::rewrite_sampler_refs(&mut output, &arrays);
+        output
     }
 }
 
@@ -213,6 +392,13 @@ impl Source<'_> {
 /// (see [`crate::model::program::Program::link`]); the render pipeline binds them as separate modules.
 impl StageSources<'_> {
     pub fn translate_render(self) -> (String, String) {
+        self.translate_render_with(&std::collections::BTreeMap::new())
+    }
+
+    pub fn translate_render_with(
+        self,
+        attribute_bindings: &std::collections::BTreeMap<String, u32>,
+    ) -> (String, String) {
         let vs = Source::new(self.vertex).comments_removed();
         let fs = Source::new(self.fragment).comments_removed();
 
@@ -262,8 +448,25 @@ impl StageSources<'_> {
             vs_out.push('\n');
         }
         vs_out.push_str(&rewrite(&vs_structs, &samps));
-        for (i, a) in attrs.iter().enumerate() {
-            vs_out.push_str(&format!("layout(location = {i}) in {} {};\n", a.ty, a.name));
+        let mut used = attribute_bindings
+            .values()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut next_location = 0u32;
+        for a in &attrs {
+            let location = attribute_bindings.get(&a.name).copied().unwrap_or_else(|| {
+                while used.contains(&next_location) {
+                    next_location += 1;
+                }
+                let location = next_location;
+                used.insert(location);
+                next_location += 1;
+                location
+            });
+            vs_out.push_str(&format!(
+                "layout(location = {location}) in {} {};\n",
+                a.ty, a.name
+            ));
         }
         for (j, v) in vary.iter().enumerate() {
             let flat = if v.requires_flat_interpolation() {
@@ -351,16 +554,142 @@ impl StageSources<'_> {
 /// convention to the host GPU's top-left convention. Uploaded texture planes retain their existing
 /// orientation; only samplers backed by a rendered FBO are named by the caller.
 impl Source<'_> {
-    pub(crate) fn flip_render_target_samplers(self, samplers: &[String]) -> String {
+    /// Convert OpenGL clip-space Y into the row orientation used by a directly-presented host texture.
+    ///
+    /// Offscreen framebuffer shaders must not use this conversion: their OpenGL texture orientation is
+    /// preserved at sampling time. The frame lowerer specializes vertex modules by target kind.
+    pub(crate) fn present_coordinates(self) -> String {
         let source = self.text;
-        if samplers.is_empty() {
+        let Some(main) = source.find("void main") else {
+            return source.to_owned();
+        };
+        let Some(open) = source[main..].find('{').map(|at| main + at) else {
+            return source.to_owned();
+        };
+        let mut depth = 0usize;
+        let mut close = None;
+        for (relative, byte) in source.as_bytes()[open..].iter().enumerate() {
+            match byte {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(open + relative);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(close) = close else {
+            return source.to_owned();
+        };
+        let mut rewritten = source.to_owned();
+        rewritten.insert_str(close, "\n gl_Position.y = -gl_Position.y;\n");
+        rewritten
+    }
+
+    /// Restore OpenGL fragment-coordinate semantics after Naga maps the fragment position builtin onto
+    /// WebGPU's top-left framebuffer coordinates.
+    pub(crate) fn fragment_coordinates(
+        self,
+        target_height: i32,
+        origin_upper_left: bool,
+        pixel_center_integer: bool,
+    ) -> String {
+        let source = self.text;
+        if !source.contains("gl_FragCoord")
+            || (origin_upper_left && !pixel_center_integer)
+            || target_height <= 0
+        {
             return source.to_string();
         }
+        let Some(main) = source.find("void main") else {
+            return source.to_string();
+        };
+        let Some(open) = source[main..].find('{').map(|at| main + at) else {
+            return source.to_string();
+        };
+
+        let mut rewritten = source.to_string();
+        wreplace(&mut rewritten, "gl_FragCoord", "hl_FragCoord");
+        let declaration = "vec4 hl_FragCoord;\n";
+        rewritten.insert_str(main, declaration);
+        let open = open + declaration.len();
+        let x = if pixel_center_integer {
+            "gl_FragCoord.x - 0.5"
+        } else {
+            "gl_FragCoord.x"
+        };
+        let y = match (origin_upper_left, pixel_center_integer) {
+            (true, true) => "gl_FragCoord.y - 0.5".to_string(),
+            (true, false) => "gl_FragCoord.y".to_string(),
+            (false, true) => {
+                format!("{target_height}.0 - gl_FragCoord.y - 0.5")
+            }
+            (false, false) => format!("{target_height}.0 - gl_FragCoord.y"),
+        };
+        rewritten.insert_str(
+            open + 1,
+            &format!("\n hl_FragCoord = vec4({x}, {y}, gl_FragCoord.z, gl_FragCoord.w);\n"),
+        );
+        rewritten
+    }
+
+    #[cfg(test)]
+    pub(crate) fn flip_render_target_samplers(self, samplers: &[String]) -> String {
+        let transforms = samplers
+            .iter()
+            .map(|sampler| {
+                (
+                    sampler.clone(),
+                    true,
+                    [
+                        crate::model::glconst::GL_RED,
+                        crate::model::glconst::GL_GREEN,
+                        crate::model::glconst::GL_BLUE,
+                        crate::model::glconst::GL_ALPHA,
+                    ],
+                )
+            })
+            .collect::<Vec<_>>();
+        self.transform_texture_samplers(&transforms)
+    }
+
+    /// Apply per-texture coordinate orientation and component swizzle to normalized sampler calls.
+    ///
+    /// WGPU texture views do not expose OpenGL's per-object component mapping, so the GL boundary lowers
+    /// non-identity mappings into a small fragment helper. The sampled value is evaluated once.
+    pub(crate) fn transform_texture_samplers(
+        self,
+        transforms: &[(String, bool, [u32; 4])],
+    ) -> String {
+        use crate::model::glconst::{GL_ALPHA, GL_BLUE, GL_GREEN, GL_ONE, GL_RED, GL_ZERO};
+
+        let source = self.text;
+        if transforms.is_empty() {
+            return source.to_string();
+        }
+        let identity = [GL_RED, GL_GREEN, GL_BLUE, GL_ALPHA];
+        let helper = |index: usize| format!("hl_swizzle_{index}");
+        let component = |value| match value {
+            GL_RED => "value.r",
+            GL_GREEN => "value.g",
+            GL_BLUE => "value.b",
+            GL_ALPHA => "value.a",
+            GL_ZERO => "0.0",
+            GL_ONE => "1.0",
+            _ => "0.0",
+        };
         let mut out = String::with_capacity(source.len());
         let mut cursor = 0;
-        while let Some(relative) = source[cursor..].find("texture(") {
+        while let Some((relative, function)) = ["texture(", "texture2D("]
+            .into_iter()
+            .filter_map(|function| source[cursor..].find(function).map(|at| (at, function)))
+            .min_by_key(|(at, _)| *at)
+        {
             let call = cursor + relative;
-            let open = call + "texture".len();
+            let open = call + function.len() - 1;
             out.push_str(&source[cursor..open + 1]);
 
             let mut depth = 1usize;
@@ -391,26 +720,171 @@ impl Source<'_> {
                 continue;
             };
             let sampler = source[open + 1..first_comma].trim();
-            if samplers
+            if let Some((index, (_, flip_y, swizzle))) = transforms
                 .iter()
-                .any(|name| sampler == name || sampler.contains(name))
+                .enumerate()
+                .find(|(_, (name, _, _))| Tokens(sampler).names_sampler(name))
             {
+                if *swizzle != identity {
+                    let prefix_len = function.len();
+                    out.truncate(out.len() - prefix_len);
+                    out.push_str(&helper(index));
+                    out.push('(');
+                    out.push_str(function);
+                }
                 let coord_end = commas.get(1).copied().unwrap_or(close);
                 let coord = source[first_comma + 1..coord_end].trim();
                 out.push_str(&source[open + 1..first_comma + 1]);
-                out.push_str(" vec2((");
-                out.push_str(coord);
-                out.push_str(").x, 1.0 - (");
-                out.push_str(coord);
-                out.push_str(").y)");
+                if *flip_y {
+                    out.push_str(" vec2((");
+                    out.push_str(coord);
+                    out.push_str(").x, 1.0 - (");
+                    out.push_str(coord);
+                    out.push_str(").y)");
+                } else {
+                    out.push_str(&source[first_comma + 1..coord_end]);
+                }
                 out.push_str(&source[coord_end..=close]);
+                if *swizzle != identity {
+                    out.push(')');
+                }
             } else {
                 out.push_str(&source[open + 1..=close]);
             }
             cursor = close + 1;
         }
         out.push_str(&source[cursor..]);
+
+        let mut helpers = String::new();
+        for (index, (_, _, swizzle)) in transforms.iter().enumerate() {
+            if *swizzle == identity {
+                continue;
+            }
+            helpers.push_str("vec4 ");
+            helpers.push_str(&helper(index));
+            helpers.push_str("(vec4 value) { return vec4(");
+            for (component_index, mapping) in swizzle.iter().enumerate() {
+                if component_index != 0 {
+                    helpers.push_str(", ");
+                }
+                helpers.push_str(component(*mapping));
+            }
+            helpers.push_str("); }\n");
+        }
+        if helpers.is_empty() {
+            return out;
+        }
+        if let Some(main) = out.find("void main") {
+            out.insert_str(main, &helpers);
+        } else {
+            out.push_str(&helpers);
+        }
         out
+    }
+}
+
+#[cfg(test)]
+mod orientation_tests {
+    use super::{Source, Translator};
+
+    #[test]
+    fn present_target_reflects_vertex_y_once() {
+        let source = "void main() { gl_Position = vec4(position.x, position.y, 0.0, 1.0); }\n";
+        let corrected = Source::new(source).present_coordinates();
+        assert!(corrected.contains(
+            "gl_Position = vec4(position.x, position.y, 0.0, 1.0); \n gl_Position.y = -gl_Position.y;"
+        ));
+        assert_eq!(
+            corrected.matches("gl_Position.y = -gl_Position.y;").count(),
+            1
+        );
+    }
+
+    #[test]
+    fn rendered_texture_flips_y_but_never_x_for_es2_and_es3_sampling() {
+        for function in ["texture", "texture2D"] {
+            let source = format!(
+                "void main() {{ vec2 uv = vec2(0.25, 0.75); color = {function}(atlas, uv); }}"
+            );
+            let rewritten =
+                Source::new(&source).flip_render_target_samplers(&["atlas".to_string()]);
+            assert!(
+                rewritten.contains(&format!("{function}(atlas, vec2((uv).x, 1.0 - (uv).y))")),
+                "{function} must map asymmetric (x,y)=(.25,.75) to (.25,.25), not (.75,.25)"
+            );
+        }
+    }
+
+    #[test]
+    fn uploaded_texture_sampler_keeps_its_original_orientation() {
+        let source = "void main() { color = texture2D(upload, uv) + texture2D(rendered, uv); }";
+        let rewritten = Source::new(source).flip_render_target_samplers(&["rendered".to_string()]);
+        assert!(rewritten.contains("texture2D(upload, uv)"));
+        assert!(rewritten.contains("texture2D(rendered, vec2((uv).x, 1.0 - (uv).y))"));
+    }
+
+    #[test]
+    fn overlapping_sampler_names_never_inherit_another_texture_orientation() {
+        let source = "void main(){ color = texture(image, uv) + texture(images, uv); }";
+        let rewritten = Source::new(source).transform_texture_samplers(&[
+            ("image".to_string(), true, [0x1903, 0x1904, 0x1905, 0x1906]),
+            (
+                "images".to_string(),
+                false,
+                [0x1903, 0x1904, 0x1905, 0x1906],
+            ),
+        ]);
+        assert!(rewritten.contains("texture(image, vec2((uv).x, 1.0 - (uv).y))"));
+        assert!(rewritten.contains("texture(images, uv)"));
+    }
+
+    #[test]
+    fn split_sampler_constructors_match_exact_scalar_and_array_bindings() {
+        let source = "void main(){ color = texture(sampler2D(images_0_hltex, images_0_hlsmp), uv) \
+                      + texture(sampler2D(image_hltex, image_hlsmp), uv); }";
+        let rewritten = Source::new(source).flip_render_target_samplers(&["images[0]".to_string()]);
+        assert!(rewritten.contains(
+            "texture(sampler2D(images_0_hltex, images_0_hlsmp), vec2((uv).x, 1.0 - (uv).y))"
+        ));
+        assert!(rewritten.contains("texture(sampler2D(image_hltex, image_hlsmp), uv)"));
+    }
+
+    #[test]
+    fn fragment_coordinates_restore_gl_origin_without_touching_upper_left() {
+        let source = "void main() { color = vec4(gl_FragCoord.xy, 0.0, 1.0); }";
+        let corrected = Source::new(source).fragment_coordinates(64, false, false);
+        assert!(corrected.contains("vec4 hl_FragCoord;"));
+        assert!(corrected.contains(
+            "hl_FragCoord = vec4(gl_FragCoord.x, 64.0 - gl_FragCoord.y, gl_FragCoord.z, gl_FragCoord.w)"
+        ));
+        assert!(corrected.contains("vec4(hl_FragCoord.xy, 0.0, 1.0)"));
+        assert_eq!(
+            Source::new(source).fragment_coordinates(64, true, false),
+            source
+        );
+    }
+
+    #[test]
+    fn integer_pixel_centers_shift_both_axes() {
+        let corrected = Source::new("void main(){ color = gl_FragCoord; }")
+            .fragment_coordinates(16, false, true);
+        assert!(corrected.contains("gl_FragCoord.x - 0.5"));
+        assert!(corrected.contains("16.0 - gl_FragCoord.y - 0.5"));
+    }
+
+    #[test]
+    fn compute_uniform_blocks_use_a_namespace_after_ssbos() {
+        let source = "#version 310 es
+layout(std430, binding = 0) buffer Values { uint values[]; };
+layout(std140, binding = 0) uniform Params { uint count; };
+layout(std140) uniform More { uint offset; };
+uniform uint plain;
+void main() {}";
+        let translated = Translator::compute(source);
+        assert!(translated.contains("layout(std430, binding = 0) buffer Values"));
+        assert!(translated.contains("layout(std140, binding = 8) uniform Params"));
+        assert!(translated.contains("layout(std140, binding = 8) uniform More"));
+        assert!(translated.contains("uniform uint plain"));
     }
 }
 

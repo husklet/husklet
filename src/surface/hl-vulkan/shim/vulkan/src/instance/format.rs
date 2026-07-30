@@ -1,4 +1,25 @@
 use super::*;
+use hl_gpu::protocol::model::enums::TextureFormat;
+use hl_gpu::{CommandSink, FeatureRequest, WIRE_VERSION};
+
+fn host_supports(format: i32) -> bool {
+    let Some(wire) = hl_vulkan::model::memory::Format(format as u32).wire() else {
+        return false;
+    };
+    if wire.block_geometry().is_none() {
+        return true;
+    }
+    StateStore::with(|state| {
+        state
+            .sink
+            .negotiate(&FeatureRequest {
+                wire_version: WIRE_VERSION,
+                texture_formats: TextureFormat::bits(&[wire]),
+                ..FeatureRequest::default()
+            })
+            .is_ok()
+    })
+}
 
 /// color-attachment/blend/sampled/storage/blit/transfer; depth: depth-stencil-attachment/sampled/
 /// transfer; vertex float: vertex-buffer). Sourced from [`capability::format_features`].
@@ -11,7 +32,11 @@ pub extern "C" fn vkGetPhysicalDeviceFormatProperties(
     let Some(out) = (unsafe { (p_format_properties as *mut VkFormatProperties).as_mut() }) else {
         return;
     };
-    let ff = Format(format as u32).features();
+    let ff = if host_supports(format) {
+        Format(format as u32).features()
+    } else {
+        Default::default()
+    };
     out.linear_tiling_features = ff.linear_tiling;
     out.optimal_tiling_features = ff.optimal_tiling;
     out.buffer_features = ff.buffer;
@@ -38,7 +63,8 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
     else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    if !Format(format as u32).is_image_supported()
+    if !host_supports(format)
+        || !Format(format as u32).is_image_supported()
         || image_type != VK_IMAGE_TYPE_2D
         || tiling != VK_IMAGE_TILING_OPTIMAL
     {

@@ -14,27 +14,37 @@ use crate::model::glconst::*;
 // ---- identity strings (glGetString) --------------------------------------------------------------
 //
 // NUL-terminated so the shim hands the guest a `const GLubyte *` straight from the byte slice. The
-// driver advertises a GLES **3.0** identity (the profile its real render path backs), consistent with
+// driver advertises a GLES **3.1** identity (the profile its render + compute paths back), consistent with
 // the existing `hl-gl` guest identity (`GL_VENDOR = "hl-gl"`, the EGL vendor string).
 
 pub const IDENT_VENDOR: &[u8] = b"hl-gl\0";
 pub const IDENT_RENDERER: &[u8] = b"hl-gl-metal\0";
-pub const IDENT_VERSION: &[u8] = b"OpenGL ES 3.0 hl-gl\0";
-pub const IDENT_GLSL_VERSION: &[u8] = b"OpenGL ES GLSL ES 3.00\0";
-/// No non-core extensions are advertised. `glGetString(GL_EXTENSIONS)` returns this (empty) space-
-/// separated list; the indexed `glGetStringi(GL_EXTENSIONS, i)` enumeration and `GL_NUM_EXTENSIONS`
-/// count both derive from [`EXTENSIONS`], so the three can never disagree. An empty list is the honest
-/// answer (this driver backs only core GLES3).
-pub const IDENT_EXTENSIONS: &[u8] = b"\0";
+pub const IDENT_VERSION: &[u8] = b"OpenGL ES 3.1 hl-gl\0";
+pub const IDENT_GLSL_VERSION: &[u8] = b"OpenGL ES GLSL ES 3.10\0";
+/// The space-separated extension inventory returned by `glGetString(GL_EXTENSIONS)`.
+pub const IDENT_EXTENSIONS: &[u8] =
+    b"GL_KHR_debug GL_EXT_texture_format_BGRA8888 GL_EXT_read_format_bgra GL_ANGLE_robust_client_memory GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_copy_texture GL_ANGLE_client_arrays GL_ANGLE_webgl_compatibility GL_ANGLE_request_extension GL_OES_EGL_image GL_OES_EGL_sync\0";
 
 /// The advertised extension inventory, each entry a NUL-terminated name — the single source of truth for
-/// `glGetStringi` (indexed enumeration) and `GL_NUM_EXTENSIONS` (the count). Currently empty.
-pub const EXTENSIONS: &[&[u8]] = &[];
+/// `glGetStringi` (indexed enumeration) and `GL_NUM_EXTENSIONS` (the count).
+pub const EXTENSIONS: &[&[u8]] = &[
+    b"GL_KHR_debug\0",
+    b"GL_EXT_texture_format_BGRA8888\0",
+    b"GL_EXT_read_format_bgra\0",
+    b"GL_ANGLE_robust_client_memory\0",
+    b"GL_CHROMIUM_bind_generates_resource\0",
+    b"GL_CHROMIUM_copy_texture\0",
+    b"GL_ANGLE_client_arrays\0",
+    b"GL_ANGLE_webgl_compatibility\0",
+    b"GL_ANGLE_request_extension\0",
+    b"GL_OES_EGL_image\0",
+    b"GL_OES_EGL_sync\0",
+];
 
 /// The GLES major/minor version the driver advertises (`glGetIntegerv(GL_MAJOR_VERSION/…)`), matching the
 /// `glGetString(GL_VERSION)` identity above.
 pub const ES_MAJOR: i32 = 3;
-pub const ES_MINOR: i32 = 0;
+pub const ES_MINOR: i32 = 1;
 
 // ---- advertised capability limits ----------------------------------------------------------------
 
@@ -42,11 +52,15 @@ pub const ES_MINOR: i32 = 0;
 /// `max_texture_2d` ceiling (`hl_gpu` `Capabilities::full` = 16384) so the guest-visible limit does not
 /// over- or under-promise what the executor will actually validate a texture against.
 pub const MAX_TEXTURE_SIZE: i32 = 16384;
+pub const MAX_3D_TEXTURE_SIZE: i32 = 2048;
+pub const MAX_ARRAY_TEXTURE_LAYERS: i32 = 256;
 pub const MAX_VERTEX_ATTRIBS: i32 = crate::model::program::MAX_ATTR as i32; // 16 (the modeled attr count)
 pub const MAX_TEXTURE_IMAGE_UNITS: i32 = 8; // the modeled `tex_unit` bank size
 pub const MAX_VERTEX_TEXTURE_IMAGE_UNITS: i32 = 4;
 pub const MAX_UNIFORM_VECTORS: i32 = 256;
 pub const MAX_VARYING_VECTORS: i32 = 15;
+pub const MAX_UNIFORM_COMPONENTS: i32 = MAX_UNIFORM_VECTORS * 4;
+pub const MAX_VARYING_COMPONENTS: i32 = MAX_VARYING_VECTORS * 4;
 pub const MAX_SAMPLES: i32 = 4;
 pub const VIEWPORT_DIM: i32 = 16384;
 /// GLES3 MRT ceilings — the spec minimum of 4 color attachments / draw buffers this model backs.
@@ -55,6 +69,26 @@ pub const MAX_DRAW_BUFFERS: i32 = 4;
 /// `glDrawRangeElements` batch hints (GLES3). Large enough that a toolkit never clamps its draw batches.
 pub const MAX_ELEMENTS_VERTICES: i32 = 1_048_576;
 pub const MAX_ELEMENTS_INDICES: i32 = 1_048_576;
+/// GLES3 transform-feedback and uniform-buffer limits backed by the context's indexed binding banks.
+pub const MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS: i32 = 4;
+pub const MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS: i32 = 64;
+pub const MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS: i32 =
+    crate::model::glconst::MAX_TRANSFORM_FEEDBACK_BUFFERS as i32;
+pub const MAX_VERTEX_UNIFORM_BLOCKS: i32 = 12;
+pub const MAX_FRAGMENT_UNIFORM_BLOCKS: i32 = 12;
+pub const MAX_COMBINED_UNIFORM_BLOCKS: i32 =
+    MAX_VERTEX_UNIFORM_BLOCKS + MAX_FRAGMENT_UNIFORM_BLOCKS;
+pub const MAX_UNIFORM_BUFFER_BINDINGS: i32 =
+    crate::model::glconst::MAX_UNIFORM_BUFFER_BINDINGS as i32;
+pub const MAX_UNIFORM_BLOCK_SIZE: i32 = 16 * 1024;
+pub const MAX_COMBINED_UNIFORM_COMPONENTS: i32 =
+    MAX_UNIFORM_COMPONENTS + crate::adapter::glsl::MAX_COMBINED_UNIFORM_BYTES as i32 / 4;
+pub const UNIFORM_BUFFER_OFFSET_ALIGNMENT: i32 = 256;
+pub const SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT: i32 = 256;
+pub const MAX_VERTEX_OUTPUT_COMPONENTS: i32 = 64;
+pub const MAX_FRAGMENT_INPUT_COMPONENTS: i32 = 60;
+pub const MIN_PROGRAM_TEXEL_OFFSET: i32 = -8;
+pub const MAX_PROGRAM_TEXEL_OFFSET: i32 = 7;
 
 /// The number of extensions advertised (`glGetIntegerv(GL_NUM_EXTENSIONS)`) — the length of the
 /// [`EXTENSIONS`] inventory `glGetStringi` enumerates, so the count and the indexed query agree.
@@ -64,14 +98,15 @@ pub const fn num_extensions() -> i32 {
 
 /// `glGetStringi(name, index)` — the indexed extension query (the ES3 enumeration path). Returns the
 /// `index`-th extension name (NUL-terminated) when `name == GL_EXTENSIONS` and `index` is in range, or
-/// `None` for a bad name / an out-of-range index. Consistent with [`num_extensions`]: with an empty
-/// [`EXTENSIONS`] list every index is out of range, so the caller returns a null pointer (never a
-/// dangling one) and raises the spec error — an app that honored the `GL_NUM_EXTENSIONS` count of `0`
-/// never reaches this.
+/// `None` for a bad name / an out-of-range index. The caller returns a null pointer (never a dangling
+/// one) and raises the spec error for either invalid case.
 pub struct DriverIdentity;
 
 impl DriverIdentity {
     pub fn indexed(name: u32, index: u32) -> Option<&'static [u8]> {
+        if name == GL_REQUESTABLE_EXTENSIONS_ANGLE {
+            return None;
+        }
         if name != GL_EXTENSIONS {
             return None;
         }
@@ -113,11 +148,17 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         GL_MAX_TEXTURE_SIZE | GL_MAX_CUBE_MAP_TEXTURE_SIZE | GL_MAX_RENDERBUFFER_SIZE => {
             one(MAX_TEXTURE_SIZE)
         }
+        GL_MAX_3D_TEXTURE_SIZE => one(MAX_3D_TEXTURE_SIZE),
+        GL_MAX_ARRAY_TEXTURE_LAYERS => one(MAX_ARRAY_TEXTURE_LAYERS),
         GL_MAX_VERTEX_ATTRIBS => one(MAX_VERTEX_ATTRIBS),
         GL_MAX_TEXTURE_IMAGE_UNITS | GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS => {
             one(MAX_TEXTURE_IMAGE_UNITS)
         }
         GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS => one(MAX_VERTEX_TEXTURE_IMAGE_UNITS),
+        GL_MAX_FRAGMENT_UNIFORM_COMPONENTS | GL_MAX_VERTEX_UNIFORM_COMPONENTS => {
+            one(MAX_UNIFORM_COMPONENTS)
+        }
+        GL_MAX_VARYING_COMPONENTS => one(MAX_VARYING_COMPONENTS),
         GL_MAX_FRAGMENT_UNIFORM_VECTORS | GL_MAX_VERTEX_UNIFORM_VECTORS => one(MAX_UNIFORM_VECTORS),
         GL_MAX_VARYING_VECTORS => one(MAX_VARYING_VECTORS),
         GL_MAX_SAMPLES => one(MAX_SAMPLES),
@@ -125,30 +166,53 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         GL_MAX_DRAW_BUFFERS => one(MAX_DRAW_BUFFERS),
         GL_MAX_ELEMENTS_VERTICES => one(MAX_ELEMENTS_VERTICES),
         GL_MAX_ELEMENTS_INDICES => one(MAX_ELEMENTS_INDICES),
+        GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS => {
+            one(MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS)
+        }
+        GL_MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS => {
+            one(MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS)
+        }
+        GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS => one(MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS),
+        GL_MAX_VERTEX_UNIFORM_BLOCKS => one(MAX_VERTEX_UNIFORM_BLOCKS),
+        GL_MAX_FRAGMENT_UNIFORM_BLOCKS => one(MAX_FRAGMENT_UNIFORM_BLOCKS),
+        GL_MAX_COMBINED_UNIFORM_BLOCKS => one(MAX_COMBINED_UNIFORM_BLOCKS),
+        GL_MAX_UNIFORM_BUFFER_BINDINGS => one(MAX_UNIFORM_BUFFER_BINDINGS),
+        GL_MAX_UNIFORM_BLOCK_SIZE => one(MAX_UNIFORM_BLOCK_SIZE),
+        GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS | GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS => {
+            one(MAX_COMBINED_UNIFORM_COMPONENTS)
+        }
+        GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT => one(UNIFORM_BUFFER_OFFSET_ALIGNMENT),
+        GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT => one(SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT),
+        GL_MAX_VERTEX_OUTPUT_COMPONENTS => one(MAX_VERTEX_OUTPUT_COMPONENTS),
+        GL_MAX_FRAGMENT_INPUT_COMPONENTS => one(MAX_FRAGMENT_INPUT_COMPONENTS),
+        GL_MIN_PROGRAM_TEXEL_OFFSET => one(MIN_PROGRAM_TEXEL_OFFSET),
+        GL_MAX_PROGRAM_TEXEL_OFFSET => one(MAX_PROGRAM_TEXEL_OFFSET),
         GL_NUM_COMPRESSED_TEXTURE_FORMATS | GL_SAMPLES => one(0),
-        GL_MAJOR_VERSION => one(ES_MAJOR),
-        GL_MINOR_VERSION => one(ES_MINOR),
+        GL_MAJOR_VERSION => one(ctx.local.client_major),
+        GL_MINOR_VERSION => one(ctx.local.client_minor),
         GL_NUM_EXTENSIONS => one(num_extensions()),
+        GL_NUM_REQUESTABLE_EXTENSIONS_ANGLE => one(0),
         GL_DEPTH_BITS => one(24),
         GL_STENCIL_BITS => one(8),
         GL_RED_BITS | GL_GREEN_BITS | GL_BLUE_BITS | GL_ALPHA_BITS => one(8),
-        GL_CURRENT_PROGRAM => one(ctx.cur_prog as i32),
-        GL_ACTIVE_TEXTURE => one((GL_TEXTURE0 + ctx.active_texture as u32) as i32),
-        GL_ARRAY_BUFFER_BINDING => one(ctx.array_buffer as i32),
-        GL_ELEMENT_ARRAY_BUFFER_BINDING => one(ctx.element_buffer as i32),
-        GL_TEXTURE_BINDING_2D => one(ctx.tex_unit[ctx.active_texture] as i32),
+        GL_CURRENT_PROGRAM => one(ctx.local.cur_prog as i32),
+        GL_ACTIVE_TEXTURE => one((GL_TEXTURE0 + ctx.local.active_texture as u32) as i32),
+        GL_ARRAY_BUFFER_BINDING => one(ctx.local.array_buffer as i32),
+        GL_ELEMENT_ARRAY_BUFFER_BINDING => one(ctx.local.element_buffer as i32),
+        GL_TEXTURE_BINDING_2D => one(ctx.local.tex_unit[ctx.local.active_texture] as i32),
         // GL_DRAW_FRAMEBUFFER_BINDING shares GL_FRAMEBUFFER_BINDING's enum value (0x8CA6).
-        GL_FRAMEBUFFER_BINDING => one(ctx.bound_fbo as i32),
-        GL_READ_FRAMEBUFFER_BINDING => one(ctx.read_fbo as i32),
-        GL_RENDERBUFFER_BINDING => one(ctx.bound_rbo as i32),
-        GL_UNPACK_ALIGNMENT => one(ctx.pixel_store.unpack_alignment),
-        GL_PACK_ALIGNMENT => one(ctx.pixel_store.pack_alignment),
+        GL_FRAMEBUFFER_BINDING => one(ctx.local.bound_fbo as i32),
+        GL_READ_FRAMEBUFFER_BINDING => one(ctx.local.read_fbo as i32),
+        GL_RENDERBUFFER_BINDING => one(ctx.local.bound_rbo as i32),
+        GL_UNPACK_ALIGNMENT => one(ctx.local.pixel_store.unpack_alignment),
+        GL_PACK_ALIGNMENT => one(ctx.local.pixel_store.pack_alignment),
         // Fixed-function caps read back as 1/0.
-        GL_DEPTH_TEST => one(ctx.depth as i32),
-        GL_STENCIL_TEST => one(ctx.stencil as i32),
-        GL_BLEND => one(ctx.blend as i32),
-        GL_CULL_FACE => one(ctx.cull_enabled as i32),
-        GL_SCISSOR_TEST => one(ctx.scissor_enabled as i32),
+        GL_DEPTH_TEST => one(ctx.local.pipeline.depth as i32),
+        GL_STENCIL_TEST => one(ctx.local.pipeline.stencil as i32),
+        GL_STENCIL_CLEAR_VALUE => one(ctx.local.pipeline.clear_stencil),
+        GL_BLEND => one(ctx.local.pipeline.blend as i32),
+        GL_CULL_FACE => one(ctx.local.pipeline.cull_enabled as i32),
+        GL_SCISSOR_TEST => one(ctx.local.pipeline.scissor_enabled as i32),
         GL_MAX_VIEWPORT_DIMS => {
             out[0] = VIEWPORT_DIM;
             out[1] = VIEWPORT_DIM;
@@ -158,22 +222,22 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
             // GL initializes the viewport to the surface size; report that when the app has not yet set
             // one (a fresh context's stored viewport is all-zero).
             let (sw, sh) = ctx.target_wh();
-            out[0] = ctx.viewport[0];
-            out[1] = ctx.viewport[1];
-            out[2] = if ctx.viewport[2] != 0 {
-                ctx.viewport[2]
+            out[0] = ctx.local.pipeline.viewport[0];
+            out[1] = ctx.local.pipeline.viewport[1];
+            out[2] = if ctx.local.pipeline.viewport[2] != 0 {
+                ctx.local.pipeline.viewport[2]
             } else {
                 sw
             };
-            out[3] = if ctx.viewport[3] != 0 {
-                ctx.viewport[3]
+            out[3] = if ctx.local.pipeline.viewport[3] != 0 {
+                ctx.local.pipeline.viewport[3]
             } else {
                 sh
             };
             4
         }
         GL_SCISSOR_BOX => {
-            out[..4].copy_from_slice(&ctx.scissor);
+            out[..4].copy_from_slice(&ctx.local.pipeline.scissor);
             4
         }
         _ => one(0),
@@ -195,6 +259,7 @@ pub fn get_integer_indexed(ctx: &GlContext, target: u32, index: u32) -> i64 {
     };
     if let Some(bt) = buffer_target {
         return ctx
+            .local
             .indexed_buffers
             .get(&(bt, index))
             .map(|b| b.buffer as i64)
@@ -214,15 +279,24 @@ pub fn get_integer_indexed(ctx: &GlContext, target: u32, index: u32) -> i64 {
 pub fn get_floatv(ctx: &GlContext, pname: u32, out: &mut [f32; 4]) -> usize {
     match pname {
         GL_COLOR_CLEAR_VALUE => {
-            out.copy_from_slice(&ctx.clear_color);
+            out.copy_from_slice(&ctx.local.pipeline.clear_color);
             4
         }
         GL_DEPTH_CLEAR_VALUE => {
-            out[0] = ctx.clear_depth;
+            out[0] = ctx.local.pipeline.clear_depth;
             1
         }
         GL_LINE_WIDTH => {
             out[0] = 1.0;
+            1
+        }
+        GL_ALIASED_POINT_SIZE_RANGE | GL_ALIASED_LINE_WIDTH_RANGE => {
+            out[0] = 1.0;
+            out[1] = 1.0;
+            2
+        }
+        GL_MAX_TEXTURE_LOD_BIAS => {
+            out[0] = 2.0;
             1
         }
         _ => {
@@ -236,13 +310,19 @@ pub fn get_floatv(ctx: &GlContext, pname: u32, out: &mut [f32; 4]) -> usize {
 /// Writes `GL_TRUE`/`GL_FALSE` (`1`/`0`) into `out` and returns the count; unknown `pname` writes `0`.
 pub fn get_booleanv(ctx: &GlContext, pname: u32, out: &mut [u8; 4]) -> usize {
     let b = |on: bool| if on { GL_TRUE as u8 } else { GL_FALSE as u8 };
+    if pname == GL_COLOR_WRITEMASK {
+        for (index, out) in out.iter_mut().enumerate() {
+            *out = b(ctx.local.pipeline.color_mask & (1 << index) != 0);
+        }
+        return 4;
+    }
     out[0] = match pname {
-        GL_DEPTH_TEST => b(ctx.depth),
-        GL_STENCIL_TEST => b(ctx.stencil),
-        GL_BLEND => b(ctx.blend),
-        GL_CULL_FACE => b(ctx.cull_enabled),
-        GL_SCISSOR_TEST => b(ctx.scissor_enabled),
-        GL_DEPTH_WRITEMASK => b(ctx.depth_write),
+        GL_DEPTH_TEST => b(ctx.local.pipeline.depth),
+        GL_STENCIL_TEST => b(ctx.local.pipeline.stencil),
+        GL_BLEND => b(ctx.local.pipeline.blend),
+        GL_CULL_FACE => b(ctx.local.pipeline.cull_enabled),
+        GL_SCISSOR_TEST => b(ctx.local.pipeline.scissor_enabled),
+        GL_DEPTH_WRITEMASK => b(ctx.local.pipeline.depth_write),
         _ => 0,
     };
     1
@@ -275,6 +355,14 @@ pub fn get_shaderiv(ctx: &GlContext, shader: u32, pname: u32) -> i32 {
     }
 }
 
+/// The actionable diagnostic retained by the most recent failed program link.
+pub fn program_info_log(ctx: &GlContext, program: u32) -> &str {
+    ctx.programs
+        .program(program)
+        .map(|program| program.link_error.as_str())
+        .unwrap_or("")
+}
+
 /// `glGetProgramiv(program, pname)` — the program object's link status + reflected counts.
 /// `GL_LINK_STATUS`/`GL_VALIDATE_STATUS` are `GL_TRUE` once linked; `GL_INFO_LOG_LENGTH` is `0`;
 /// `GL_ATTACHED_SHADERS`, `GL_ACTIVE_UNIFORMS`, and `GL_ACTIVE_ATTRIBUTES` come from the reflected
@@ -292,13 +380,38 @@ pub fn get_programiv(ctx: &GlContext, program: u32, pname: u32) -> i32 {
                 GL_FALSE as i32
             }
         }
-        GL_INFO_LOG_LENGTH => 0,
+        GL_INFO_LOG_LENGTH => {
+            if p.link_error.is_empty() {
+                0
+            } else {
+                p.link_error.len() as i32 + 1
+            }
+        }
         GL_DELETE_STATUS => GL_FALSE as i32,
         GL_ATTACHED_SHADERS => (p.vs != 0) as i32 + (p.fs != 0) as i32,
         GL_ACTIVE_UNIFORMS => (p.unis.len() + p.samp_names.len()) as i32,
+        GL_ACTIVE_UNIFORM_MAX_LENGTH => {
+            crate::adapter::glsl::StageSources::new(&p.vs_src, &p.fs_src)
+                .uniform_decls()
+                .into_iter()
+                .chain(
+                    crate::adapter::glsl::StageSources::new(&p.vs_src, &p.fs_src).sampler_decls(),
+                )
+                .map(|decl| {
+                    decl.name.len() as i32 + if decl.arr > 0 { "[0]".len() as i32 } else { 0 } + 1
+                })
+                .max()
+                .unwrap_or(0)
+        }
         GL_ACTIVE_ATTRIBUTES => crate::adapter::glsl::Source::new(&p.vs_src)
             .vertex_attrs()
             .len() as i32,
+        GL_ACTIVE_ATTRIBUTE_MAX_LENGTH => crate::adapter::glsl::Source::new(&p.vs_src)
+            .vertex_attrs()
+            .iter()
+            .map(|decl| decl.name.len() as i32 + 1)
+            .max()
+            .unwrap_or(0),
         _ => 0,
     }
 }
@@ -320,13 +433,13 @@ pub fn get_buffer_parameteriv(ctx: &GlContext, target: u32, pname: u32) -> i32 {
     }
 }
 
-/// `glGetTexParameteriv(target, pname)` — filter / wrap state of the bound texture (`gl_shim.c` parity).
+/// `glGetTexParameteriv(target, pname)` — scalar texture state of the bound texture.
 /// An unknown pname / no bound texture reads `0`.
 pub fn get_tex_parameteriv(ctx: &GlContext, target: u32, pname: u32) -> i32 {
     if target != GL_TEXTURE_2D {
         return 0;
     }
-    let name = ctx.tex_unit[ctx.active_texture];
+    let name = ctx.local.tex_unit[ctx.local.active_texture];
     let Some(t) = ctx.textures.get(name) else {
         return 0;
     };
@@ -335,6 +448,10 @@ pub fn get_tex_parameteriv(ctx: &GlContext, target: u32, pname: u32) -> i32 {
         GL_TEXTURE_MAG_FILTER => t.mag_filter as i32,
         GL_TEXTURE_WRAP_S => t.wrap_s as i32,
         GL_TEXTURE_WRAP_T => t.wrap_t as i32,
+        GL_TEXTURE_SWIZZLE_R => t.swizzle[0] as i32,
+        GL_TEXTURE_SWIZZLE_G => t.swizzle[1] as i32,
+        GL_TEXTURE_SWIZZLE_B => t.swizzle[2] as i32,
+        GL_TEXTURE_SWIZZLE_A => t.swizzle[3] as i32,
         _ => 0,
     }
 }
@@ -424,17 +541,25 @@ pub fn active_uniform(ctx: &GlContext, program: u32, index: u32) -> Option<Activ
     let i = index as usize;
     if let Some(d) = data.get(i) {
         return Some(ActiveVar {
-            name: d.name.clone(),
+            name: active_name(d),
             gl_type: gl_type_enum(&d.ty),
-            size: 1,
+            size: d.arr.max(1) as i32,
         });
     }
     let samps = crate::adapter::glsl::StageSources::new(&p.vs_src, &p.fs_src).sampler_decls();
     samps.get(i - data.len()).map(|d| ActiveVar {
-        name: d.name.clone(),
+        name: active_name(d),
         gl_type: gl_type_enum(&d.ty),
-        size: 1,
+        size: d.arr.max(1) as i32,
     })
+}
+
+fn active_name(declaration: &crate::adapter::glsl::Decl) -> String {
+    if declaration.arr > 0 {
+        format!("{}[0]", declaration.name)
+    } else {
+        declaration.name.clone()
+    }
 }
 
 /// `glGetActiveAttrib(program, index)` — the reflection of the `index`-th active vertex attribute, in

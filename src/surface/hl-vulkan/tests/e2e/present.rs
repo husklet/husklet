@@ -33,7 +33,7 @@ fn swapchain_present_loop_reads_back_the_presented_image_end_to_end() {
 
     // vkCreateSurfaceKHR + vkCreateSwapchainKHR (2 presentable images, real render-target textures).
     let surface =
-        present::create_surface(&mut d, &mut sink, W, H, vk_format::B8G8R8A8_UNORM, 0).unwrap();
+        present::create_surface(&mut d, &mut sink, W, H, vk_format::B8G8R8A8_UNORM, None).unwrap();
     let swapchain = present::create_swapchain(&mut d, &mut sink, surface, 2).unwrap();
 
     // vkGetSwapchainImagesKHR → the presentable images' VkImage handles.
@@ -77,7 +77,7 @@ fn swapchain_present_loop_reads_back_the_presented_image_end_to_end() {
 
         // vkQueuePresentKHR — presents the rendered image (Cmd::Present names its real texture id) and
         // returns it to the pool so the next acquire can advance.
-        present::queue_present(&mut d, &mut sink, swapchain, idx).unwrap();
+        present::queue_present(&mut d, &mut sink, swapchain, idx, None).unwrap();
 
         // Read the PRESENTED image back and assert it is exactly what THIS frame cleared into THIS image.
         let pixels = present::read_presented_image(&mut d, &mut sink, swapchain, idx).unwrap();
@@ -142,7 +142,7 @@ fn vkcube_style_multiframe_fence_and_resubmit_loop() {
     let mut d = inst.create_device();
 
     let surface =
-        present::create_surface(&mut d, &mut sink, W, H, vk_format::B8G8R8A8_UNORM, 0).unwrap();
+        present::create_surface(&mut d, &mut sink, W, H, vk_format::B8G8R8A8_UNORM, None).unwrap();
     let swapchain = present::create_swapchain(&mut d, &mut sink, surface, 2).unwrap();
     let images = d.swapchain_images(swapchain).unwrap();
 
@@ -200,6 +200,6 @@ fn vkcube_style_multiframe_fence_and_resubmit_loop() {
         );
 
         // vkQueuePresentKHR → present the rendered image; returns it to the pool for the next acquire.
-        present::queue_present(&mut d, &mut sink, swapchain, idx).unwrap();
+        present::queue_present(&mut d, &mut sink, swapchain, idx, None).unwrap();
     }
 }

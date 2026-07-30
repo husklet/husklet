@@ -119,6 +119,9 @@ fn depth_stencil(cmp: u32, pass: u32, write_mask: u32) -> DepthState {
         stencil_back: face(cmp, pass),
         stencil_read_mask: 0xFF,
         stencil_write_mask: write_mask,
+        bias_constant: 0,
+        bias_slope_scale: 0.0,
+        bias_clamp: 0.0,
     }
 }
 fn pipeline(id: u32, depth: DepthState) -> Cmd {

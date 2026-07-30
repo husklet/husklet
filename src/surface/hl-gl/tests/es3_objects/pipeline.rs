@@ -23,11 +23,11 @@ fn program_pipeline_stage_binding() {
     record::attach_shader(&mut c, prog, fs);
     assert!(record::link_program(&mut c, prog));
 
-    let pipe = c.program_pipelines.gen();
+    let pipe = c.gen_program_pipeline();
     assert_ne!(pipe, 0);
     c.bind_program_pipeline(pipe);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
-    assert!(c.program_pipelines.contains(pipe));
+    assert!(c.is_program_pipeline(pipe));
 
     es3::use_program_stages(
         &mut c,
@@ -61,13 +61,13 @@ fn program_pipeline_stage_binding() {
 #[test]
 fn delete_program_pipeline_object_makes_it_no_longer_a_pipeline() {
     let mut c = ctx();
-    let pipe = c.program_pipelines.gen();
+    let pipe = c.gen_program_pipeline();
     c.bind_program_pipeline(pipe);
-    assert!(c.program_pipelines.contains(pipe));
+    assert!(c.is_program_pipeline(pipe));
 
-    c.program_pipelines.delete(pipe);
+    c.delete_program_pipeline(pipe);
     assert!(
-        !c.program_pipelines.contains(pipe),
+        !c.is_program_pipeline(pipe),
         "glDeleteProgramPipelines drops the object"
     );
     // A getter on the deleted pipeline is GL_INVALID_OPERATION.

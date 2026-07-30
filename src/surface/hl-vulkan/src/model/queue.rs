@@ -52,6 +52,7 @@ impl FenceRec {
 // Ported from `hl-shim-vk/src/wsi.rs` (`SurfaceRec`, `SwapchainRec`, `SwapImage`). Kept with the queue
 // because `vkQueuePresentKHR` is a queue operation; the model file list has no separate WSI file.
 
+use hl_gpu::protocol::model::descriptor::SurfaceToken;
 use hl_gpu::protocol::model::enums::TextureFormat;
 
 /// A `VkSurfaceKHR`: the backing hl-GPU IR surface id ([`hl_gpu::Cmd::CreateSurface`]) + geometry.
@@ -59,6 +60,7 @@ use hl_gpu::protocol::model::enums::TextureFormat;
 #[derive(Clone, PartialEq, Debug)]
 pub struct SurfaceRec {
     pub ir_id: u32,
+    pub token: Option<SurfaceToken>,
     pub width: u32,
     pub height: u32,
     pub format: TextureFormat,

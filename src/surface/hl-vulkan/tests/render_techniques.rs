@@ -15,13 +15,9 @@
 //! the samples — while a single-sample resolve stays a same-extent content-moving COPY. See
 //! `msaa_resolve_pass_lowers_to_a_real_resolve` and `single_sample_resolve_still_lowers_to_a_copy`.
 //!
-//! One technique remains a DOCUMENTED LIMIT of the VK→IR lowering (not a bug, and not fixable here):
-//!   * Render-to-layer / render-to-mip — the IR `ColorAttachment`/`DepthAttachment` carry only a whole
-//!     `texture` id (no mip/layer subresource selector), and `vkCreateImage` models single-mip
-//!     (`mip_levels: 1`) single-layer (`depth: 1`) 2D images. Selecting a layer/mip as a render target is
-//!     therefore not expressible; the attachment always names the whole texture. The subresource-carrying
-//!     `ColorAttachment` lives in the protocol crate (concurrent-agent-owned), so this cannot be fixed in
-//!     `hl-vulkan`. See `render_to_layer_and_mip_is_a_documented_whole_texture_limit`.
+//! Typed texture-view resources carry the selected format, aspect, dimension, mip range, and layer range.
+//! Render attachments and descriptors name the view resource, so render-to-layer/mip and cube subviews keep
+//! their Vulkan semantics through the neutral IR.
 
 #[path = "render_techniques/deferred.rs"]
 mod deferred;

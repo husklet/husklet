@@ -132,6 +132,7 @@ fn every_sampler_enum_combination_round_trips() {
                     address_u: addr,
                     address_v: addr,
                     address_w: addr,
+                    ..SamplerDesc::default()
                 },
             )]);
         }

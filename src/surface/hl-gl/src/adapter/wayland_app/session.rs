@@ -9,6 +9,10 @@ pub struct WaylandAppPresenter {
     /// A wrapper of the app's `wl_surface` bound to OUR private queue (we marshal attach/commit on it).
     pub(super) surface_wrapper: *mut c_void,
     pub(super) surface_version: u32,
+    pub(super) identity: *mut c_void,
+    pub(super) identity_version: u32,
+    pub(super) token: Option<SurfaceToken>,
+    pub(super) next_serial: u64,
     /// The bound `wl_shm` (on our private queue).
     pub(super) shm: *mut c_void,
     pub(super) shm_version: u32,
@@ -59,6 +63,7 @@ impl WaylandAppPresenter {
         }
         let display_wrapper = abi.create_wrapper(display);
         if display_wrapper.is_null() {
+            abi.destroy_queue(queue);
             return Err(WlAppError::QueueSetup);
         }
         abi.set_queue(display_wrapper, queue);
@@ -67,32 +72,61 @@ impl WaylandAppPresenter {
         // The display wrapper is only needed to place get_registry on our queue.
         abi.wrapper_destroy(display_wrapper);
         if registry.is_null() {
+            abi.destroy_queue(queue);
             return Err(WlAppError::QueueSetup);
-        }
-
-        // Discover + bind wl_shm on our private queue.
-        let shm_res = abi.discover_shm(registry, display, queue);
-        let (shm_name, shm_version) = match shm_res {
-            Some(nv) => nv,
-            None => {
-                abi.destroy(registry);
-                return Err(WlAppError::NoShmGlobal);
-            }
-        };
-        let shm = abi.bind_shm(registry, shm_name, shm_version);
-        abi.destroy(registry); // no further registry events wanted
-        if shm.is_null() {
-            return Err(WlAppError::NoShmGlobal);
         }
 
         // A surface wrapper on our private queue: commits go to the app's surface object, but its events
         // (none from attach/commit) would land on our queue — we never disturb the app's own queue.
         let surface_wrapper = abi.create_wrapper(surface);
         if surface_wrapper.is_null() {
-            abi.destroy(shm);
+            abi.destroy(registry);
+            abi.destroy_queue(queue);
             return Err(WlAppError::QueueSetup);
         }
         abi.set_queue(surface_wrapper, queue);
+
+        let globals = match abi.discover_globals(registry, display, queue) {
+            Ok(globals) => globals,
+            Err(error) => {
+                abi.wrapper_destroy(surface_wrapper);
+                abi.destroy(registry);
+                abi.destroy_queue(queue);
+                return Err(error);
+            }
+        };
+        let (shm, shm_version) = globals
+            .shm
+            .map(|(name, version)| (abi.bind_shm(registry, name, version), version))
+            .unwrap_or((core::ptr::null_mut(), 0));
+        let (identity, identity_version, token) = if let Some((name, version)) = globals.identity {
+            let manager = abi.bind_identity_manager(registry, name, version.min(1));
+            if manager.is_null() {
+                (core::ptr::null_mut(), 0, None)
+            } else {
+                let identity = abi.identity_for_surface(manager, version.min(1), surface_wrapper);
+                abi.destroy(manager);
+                if identity.is_null() {
+                    (core::ptr::null_mut(), 0, None)
+                } else {
+                    match abi.identity_token(identity, display, queue) {
+                        Ok(token) => (identity, version.min(1), Some(token)),
+                        Err(_) => {
+                            abi.identity_destroy(identity, version.min(1));
+                            (core::ptr::null_mut(), 0, None)
+                        }
+                    }
+                }
+            }
+        } else {
+            (core::ptr::null_mut(), 0, None)
+        };
+        abi.destroy(registry);
+        if shm.is_null() && token.is_none() {
+            abi.wrapper_destroy(surface_wrapper);
+            abi.destroy_queue(queue);
+            return Err(WlAppError::NoShmGlobal);
+        }
 
         Ok(WaylandAppPresenter {
             abi,
@@ -100,6 +134,10 @@ impl WaylandAppPresenter {
             queue,
             surface_wrapper,
             surface_version,
+            identity,
+            identity_version,
+            token,
+            next_serial: 1,
             shm,
             shm_version,
             last_buffer: core::ptr::null_mut(),

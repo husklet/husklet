@@ -10,11 +10,10 @@
  * pass 2 (the DEFAULT framebuffer) samples it and composites into the WINDOW color target — and THAT window
  * target, at window dimensions, is what eglSwapBuffers/glReadPixels present + read back.
  *
- * The scene: pass 1 fills a 16x16 offscreen FBO solid RED (a flat shader). Pass 2 clears the 64x64 window
- * BLUE, then draws a fullscreen triangle whose fragment SAMPLES the offscreen texture — so the whole window
- * becomes RED. We glReadPixels the DEFAULT framebuffer at the full 64x64 and assert a WINDOW-corner pixel far
- * beyond the 16x16 offscreen extent is RED: proof the present target is the window (multi-FBO routing), not
- * the collapsed offscreen atlas. BEFORE the fix that corner reads back zero (the frame is 16x16). Prints
+ * The scene: pass 1 fills a 16x16 offscreen FBO with four asymmetric quadrants in GL coordinates:
+ * bottom-left RED, bottom-right BLUE, top-left GREEN, top-right YELLOW. Pass 2 samples that texture into the
+ * 64x64 default framebuffer. Exact quadrant checks prove both multi-FBO routing and orientation; the X
+ * sentinel prevents a 180-degree rotation from masquerading as a vertical flip. Prints
  * "GL_FBO_COMPOSITE_OK" on success.
  *
  * No hl-specific calls, no vendor headers: the GLES2/EGL ABI is self-declared, and LD_LIBRARY_PATH=~/.hl/gl
@@ -98,13 +97,20 @@ extern GLenum glGetError(void);
 #define AW 16
 #define AH 16
 
-/* Flat RED shader — fills the offscreen FBO. */
+/* Four asymmetric quadrants in GL framebuffer coordinates. */
 static const char *VS_FLAT =
     "attribute vec2 aPos;\n"
     "void main() { gl_Position = vec4(aPos, 0.0, 1.0); }\n";
 static const char *FS_FLAT =
     "precision mediump float;\n"
-    "void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }\n";
+    "void main() {\n"
+    "  bool left = gl_FragCoord.x < 8.0;\n"
+    "  bool bottom = gl_FragCoord.y < 8.0;\n"
+    "  if (bottom && left) gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);\n"
+    "  else if (bottom) gl_FragColor = vec4(0.0, 0.0, 1.0, 1.0);\n"
+    "  else if (left) gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0);\n"
+    "  else gl_FragColor = vec4(1.0, 1.0, 0.0, 1.0);\n"
+    "}\n";
 
 /* Textured shader — samples the offscreen texture for the default-framebuffer composite. */
 static const char *VS_TEX =
@@ -223,23 +229,36 @@ int main(void) {
     GLenum e = glGetError();
     if (e != GL_NO_ERROR) { printf("GL_FBO_COMPOSITE_READBACK_FAILED err=0x%x\n", e); free(px); return 2; }
 
-    unsigned char *center = &px[((H / 2) * W + (W / 2)) * 4];      /* (32,32) → composited RED */
-    unsigned char *corner = &px[((H - 4) * W + (W - 4)) * 4];      /* (60,60) → far beyond 16x16 */
-    printf("GL_FBO_COMPOSITE_CENTER: %u %u %u %u\n", center[0], center[1], center[2], center[3]);
-    printf("GL_FBO_COMPOSITE_CORNER: %u %u %u %u\n", corner[0], corner[1], corner[2], corner[3]);
+    unsigned char *bottom_left = &px[(8 * W + 8) * 4];
+    unsigned char *bottom_right = &px[(8 * W + 56) * 4];
+    unsigned char *top_left = &px[(56 * W + 8) * 4];
+    unsigned char *top_right = &px[(56 * W + 56) * 4];
+    printf("GL_FBO_COMPOSITE_BOTTOM_LEFT: %u %u %u %u\n",
+           bottom_left[0], bottom_left[1], bottom_left[2], bottom_left[3]);
+    printf("GL_FBO_COMPOSITE_BOTTOM_RIGHT: %u %u %u %u\n",
+           bottom_right[0], bottom_right[1], bottom_right[2], bottom_right[3]);
+    printf("GL_FBO_COMPOSITE_TOP_LEFT: %u %u %u %u\n",
+           top_left[0], top_left[1], top_left[2], top_left[3]);
+    printf("GL_FBO_COMPOSITE_TOP_RIGHT: %u %u %u %u\n",
+           top_right[0], top_right[1], top_right[2], top_right[3]);
 
-    /* The WINDOW-corner pixel (60,60) lies far outside the 16x16 offscreen extent. If the frame collapsed
-     * onto the offscreen target, this pixel would read back zero (out of the 16x16 plane). It reads RED only
-     * when the presented target is the WINDOW and the offscreen texture was sampled across passes. */
-    int ok = near(center[0], 255) && near(center[1], 0) && near(center[2], 0) && center[3] == 255
-          && near(corner[0], 255) && near(corner[1], 0) && near(corner[2], 0) && corner[3] == 255;
+    int ok = near(bottom_left[0], 255) && near(bottom_left[1], 0) && near(bottom_left[2], 0)
+          && near(bottom_right[0], 0) && near(bottom_right[1], 0) && near(bottom_right[2], 255)
+          && near(top_left[0], 0) && near(top_left[1], 255) && near(top_left[2], 0)
+          && near(top_right[0], 255) && near(top_right[1], 255) && near(top_right[2], 0)
+          && bottom_left[3] == 255 && bottom_right[3] == 255
+          && top_left[3] == 255 && top_right[3] == 255;
     if (ok) {
         printf("GL_FBO_COMPOSITE_OK\n");
         free(px);
         return 0;
     }
-    printf("GL_FBO_COMPOSITE_WRONG center=(%u,%u,%u,%u) corner=(%u,%u,%u,%u) want RED (255,0,0,255)\n",
-           center[0], center[1], center[2], center[3], corner[0], corner[1], corner[2], corner[3]);
+    printf("GL_FBO_COMPOSITE_WRONG bottom_left=(%u,%u,%u,%u) bottom_right=(%u,%u,%u,%u) "
+           "top_left=(%u,%u,%u,%u) top_right=(%u,%u,%u,%u)\n",
+           bottom_left[0], bottom_left[1], bottom_left[2], bottom_left[3],
+           bottom_right[0], bottom_right[1], bottom_right[2], bottom_right[3],
+           top_left[0], top_left[1], top_left[2], top_left[3],
+           top_right[0], top_right[1], top_right[2], top_right[3]);
     free(px);
     return 3;
 }

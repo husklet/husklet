@@ -92,6 +92,56 @@ fn texture_clear_fills_all_texels() {
 }
 
 #[test]
+fn texture_copy_observes_an_earlier_render_pass_in_the_same_command_buffer() {
+    let mut g = exec();
+    let s = run_batch(
+        &mut g,
+        &[
+            Cmd::CreateTexture(
+                1,
+                tex(
+                    1,
+                    1,
+                    TextureFormat::Rgba8Unorm,
+                    texture_usage::RENDER_TARGET | texture_usage::COPY_SRC,
+                ),
+            ),
+            Cmd::CreateBuffer(1, buf(4, buffer_usage::COPY_DST)),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginRenderPass {
+                        color: vec![ColorAttachment {
+                            texture: 1,
+                            load: LoadOp::Clear,
+                            clear: [1.0, 0.0, 0.0, 1.0],
+                            store: true,
+                        }],
+                        depth: None,
+                    },
+                    Enc::EndRenderPass,
+                    Enc::CopyTextureToBuffer {
+                        src: 1,
+                        mip: 0,
+                        width: 1,
+                        height: 1,
+                        dst: 1,
+                        dst_offset: 0,
+                        bytes_per_row: 4,
+                    },
+                ],
+                signal: None,
+            }),
+        ],
+    );
+
+    assert_eq!(
+        g.read_buffer(&s.resources, BufferId(1), 0, 4).unwrap(),
+        [255, 0, 0, 255],
+        "the copy must execute after the clear encoded before it"
+    );
+}
+
+#[test]
 fn texture_clear_midgray_rounds_to_128() {
     let mut g = exec();
     let s = run_batch(

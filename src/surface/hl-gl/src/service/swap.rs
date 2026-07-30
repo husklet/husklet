@@ -10,18 +10,122 @@
 //! (the frame is not reset) so the caller can surface an `EGL_CONTEXT_LOST` and the frame is not
 //! silently lost.
 
-use crate::model::context::GlContext;
-use crate::service::frame;
+use crate::model::context::{FrameOp, GlContext, SurfaceKind};
+use crate::service::frame::{self, FrameTarget};
 use hl_gpu::{Cmd, CommandSink, Result};
+use std::collections::HashSet;
 
 /// `eglSwapBuffers()` — lower + submit + present the recorded frame, then reset per-frame state. Returns
 /// `true` if a frame was presented, `false` if there was nothing (or nothing yet supported) to present
 /// (a no-op swap — matching the shim's behaviour on an uncovered frame shape).
 impl GlContext {
+    fn deferred_texture_ids(&self) -> HashSet<u32> {
+        self.local
+            .recording
+            .draws
+            .iter()
+            .flat_map(|draw| draw.textures.iter())
+            .flat_map(|snapshot| [snapshot.sampled_ir, snapshot.fbo_ir])
+            .chain(
+                self.local
+                    .recording
+                    .blits
+                    .iter()
+                    .flat_map(|blit| [blit.read_ir, blit.draw_ir]),
+            )
+            .flatten()
+            .collect()
+    }
+
+    /// Prune dead shared storage and submit its pending resource retirements.
+    pub fn flush_retirements(&mut self, sink: &mut dyn CommandSink) -> Result<usize> {
+        self.prune_shared_textures();
+        if !self.has_pending_destroys() {
+            return Ok(0);
+        }
+        // A partial window flush can transfer an ephemeral FBO target to a retained window draw. The
+        // transfer queues the target's eventual retirement, but imported-image capture also reaches this
+        // standalone cleanup boundary before the retained draw is swapped. Keep every texture named by a
+        // deferred draw alive until that draw and its tail destroy submit atomically; otherwise cleanup
+        // ACKs first and the following frame NACKs with `unknown/freed texture id`.
+        //
+        // Textures are deliberately the only resource kind pinned here. `TextureSnapshot::{sampled_ir,
+        // fbo_ir}` and a transferred `BlitOp::{read_ir,draw_ir}` are the only host IR ids stored in deferred
+        // work. Buffer snapshots own immutable bytes and re-resolve a fresh cached IR buffer after deletion;
+        // programs retain GL names and re-resolve shader/pipeline caches; sampler snapshots retain
+        // descriptors and re-resolve the persistent descriptor cache, while bind groups are frame-local. Surfaces, depth
+        // targets, and fences are resolved from current context caches rather than captured as host ids. If
+        // another host id is added to `DrawCall` or `FrameOp`, it must join this pin set.
+        let pinned = self.deferred_texture_ids();
+        let (ready, deferred): (Vec<_>, Vec<_>) =
+            self.pending_destroys().iter().cloned().partition(
+                |command| !matches!(command, Cmd::DestroyTexture(id) if pinned.contains(id)),
+            );
+        if ready.is_empty() {
+            return Ok(0);
+        }
+        sink.submit(&ready)?;
+        self.replace_pending_destroys(deferred);
+        Ok(ready.len())
+    }
+
+    /// Keep ephemeral render targets alive when an accepted frame makes them authoritative for a sibling.
+    pub fn retain_shared_targets(&self, frame: &mut frame::Frame) -> Vec<u32> {
+        let retained = frame
+            .targets
+            .iter()
+            .filter(|target| {
+                target
+                    .shared_storage
+                    .is_some_and(|storage| self.textures.shared_residency(storage).is_some())
+            })
+            .map(|target| target.texture)
+            .filter(|texture| {
+                frame
+                    .cmds
+                    .iter()
+                    .any(|command| matches!(command, Cmd::DestroyTexture(id) if id == texture))
+            })
+            .collect::<Vec<_>>();
+        frame
+            .cmds
+            .retain(|command| !matches!(command, Cmd::DestroyTexture(id) if retained.contains(id)));
+        retained
+    }
+
+    /// Commit render-target authority after a sink accepted the batch.
+    ///
+    /// Imported-image siblings then sample the accepted GPU target rather than an older CPU shadow. Callers
+    /// must not invoke this before submission succeeds; rejected batches restore their pre-lowering state.
+    pub fn accept_targets(&mut self, targets: &[FrameTarget]) {
+        for target in targets {
+            if let Some(storage) = target.shared_storage {
+                if let (Some(revision), Some((_, residency))) = (
+                    target.shared_revision,
+                    self.textures.shared_residency(storage),
+                ) {
+                    self.promote_shared_texture(
+                        storage,
+                        revision,
+                        target.width as u32,
+                        target.height as u32,
+                        target.texture,
+                        residency,
+                    );
+                } else {
+                    self.invalidate_shared_texture(storage);
+                }
+            }
+            self.textures.mark_rendered(target.name, target.generation);
+        }
+    }
+
     pub fn swap_buffers(&mut self, sink: &mut dyn CommandSink) -> Result<bool> {
         let ctx = self;
+        let frame_state = ctx.frame_state();
         let built = frame::Frame::build(ctx);
         let Some(mut f) = built else {
+            ctx.restore_frame_state(frame_state);
             // Nothing to present. A frame that ONLY deleted resources (all draws no-ops) can still carry queued
             // persistent `Destroy*` — submit them standalone so the freed residency is reclaimed, then clear the
             // (possibly empty / unsupported) draw-list so the next frame starts clean.
@@ -38,43 +142,47 @@ impl GlContext {
         // AFTER its `Submit`s (the GPU work referencing the freed ids has run) and BEFORE the `Present`, matching
         // the per-draw ephemeral cleanup order. See `GlContext::pending_destroys`.
         f.cmds.extend_from_slice(ctx.pending_destroys());
+        let retained_shared = ctx.retain_shared_targets(&mut f);
 
-        // Append the Present of the rendered default target to its surface.
+        // Native presentation is optional. The SHM compatibility path renders/readbacks without inventing
+        // a host surface capability.
         let (surface, texture) = f.present;
-        f.cmds.push(Cmd::Present { surface, texture });
+        if ctx.local.present_token.is_some() && surface != 0 {
+            f.cmds.push(Cmd::Present {
+                surface,
+                texture,
+                serial: ctx
+                    .local
+                    .present_serial
+                    .expect("native presentation carries a frame serial"),
+            });
+        }
 
         // TRANSACTIONAL: submit BEFORE resetting. On failure the draws (and the un-cleared pending destroys) are
         // retained and the error propagates; a rolled-back NACK re-emits the same destroys on the retry.
-        sink.submit(&f.cmds)?;
+        if let Err(error) = sink.submit(&f.cmds) {
+            ctx.restore_frame_state(frame_state);
+            return Err(error);
+        }
 
         ctx.clear_pending_destroys();
+        ctx.accept_targets(&f.targets);
+        ctx.own_shared_targets(&retained_shared);
         ctx.reset_frame();
+        ctx.prune_shared_textures();
         Ok(true)
     }
 
-    /// `glFlush`/`glFinish` incremental OFFSCREEN flush — the per-context bound on frame growth.
+    /// Execute pending work at `glFlush`/`glFinish` without consuming a window frame.
     ///
-    /// A deferred single-context GL model accumulates ALL recorded draws into one draw-list and lowers it only
-    /// at `eglSwapBuffers`. That is fine for a normal single-window app (one context, one swap per frame), but a
-    /// multi-context app like Chrome renders MANY offscreen FBO passes (gpu-raster worker contexts rasterize
-    /// compositor tiles into FBOs) that call `glFlush`/`glFinish` but NEVER `eglSwapBuffers`. Their draws would
-    /// otherwise pile monotonically into the single shared draw-list until the eventual swap frame is enormous
-    /// (observed cmds 729 → 34228, ~27 MiB) and the host executor NACKs the oversized frame.
-    ///
-    /// So on `glFlush`/`glFinish` we lower + submit the recorded draw-list as a BOUNDED frame and reset it —
-    /// but ONLY when the whole pending list is OFFSCREEN (no draw targets the default framebuffer `0`). A
-    /// pending default-framebuffer (window) draw means a normal frame is mid-flight: it is RETAINED for the swap
-    /// (so an app that flushes right before `eglSwapBuffers` keeps its window content, and a same-frame offscreen
-    /// atlas that the window pass samples stays grouped with it for the cross-pass lowering). The submitted
-    /// frame carries NO `Present` — the offscreen passes render into their persistent FBO render-target textures
-    /// (stable IR ids kept on the context), exactly what a later pass samples. Returns `Ok(true)` if a frame was
-    /// flushed, `Ok(false)` if there was nothing to flush (empty, or a window draw is pending → retained).
-    pub fn flush_offscreen(&mut self, sink: &mut dyn CommandSink) -> Result<bool> {
+    /// A default framebuffer means different things depending on the EGL surface. Pbuffer and surfaceless
+    /// contexts must execute framebuffer `0` at flush because they may never swap. A window context must retain
+    /// framebuffer `0` until `eglSwapBuffers`; consuming it here leaves the compositor with an empty frame.
+    /// Offscreen FBO work is submitted immediately in either case so Chrome's raster workers cannot accumulate
+    /// an unbounded command list.
+    pub fn flush(&mut self, sink: &mut dyn CommandSink) -> Result<bool> {
         let ctx = self;
-        if ctx.draws.is_empty() || !ctx.draws.iter().any(|d| d.fbo != 0) {
-            // Nothing OFFSCREEN to submit — leave the (window-only) draws for the swap. But a raster worker that
-            // `glFlush`es after deleting old tiles (no offscreen geometry pending) still queues persistent
-            // `Destroy*`; drain those standalone here so residency is reclaimed BETWEEN swaps, not only at swap.
+        if ctx.local.recording.draws.is_empty() {
             if ctx.has_pending_destroys() {
                 let destroys = ctx.pending_destroys().to_vec();
                 sink.submit(&destroys)?;
@@ -82,57 +190,209 @@ impl GlContext {
             }
             return Ok(false);
         }
-        // PARTITION the recorded draw-list: offscreen (`fbo != 0`) passes are EXECUTED now (submitted, no
-        // Present) so they render into their persistent FBO render-target textures; the default-framebuffer
-        // (`fbo == 0`, window) draws are RETAINED for `eglSwapBuffers`. This keeps the eventual swap frame
-        // BOUNDED — only the window draws, not the thousands of accumulated offscreen tile passes — while the
-        // offscreen tile content lands in stable IR textures a later window pass samples (see the persistent
-        // `fbo_targets` cross-pass path in `crate::service::frame::lower_draw_n`). Relative order is preserved
-        // within each partition; Chrome's compositor renders tiles (offscreen) BEFORE compositing them (window),
-        // so flushing all offscreen work first is order-consistent. The recorded blits are offscreen copy ops,
-        // so they ride with this flush.
-        let n_before = ctx.draws.len();
-        let (offscreen, window): (Vec<_>, Vec<_>) =
-            ctx.draws.iter().cloned().partition(|d| d.fbo != 0);
-        ctx.draws = offscreen;
+
+        if ctx.local.surface_kind == SurfaceKind::Window {
+            let draws = ctx.local.recording.draws.len();
+            let original_draws = ctx.local.recording.draws.clone();
+            let original_blits = ctx.local.recording.blits.clone();
+            let original_operations = ctx.local.recording.operations.clone();
+            let (offscreen, window): (Vec<_>, Vec<_>) = original_draws
+                .iter()
+                .cloned()
+                .partition(|draw| draw.fbo != 0);
+            if offscreen.is_empty() {
+                return Ok(false);
+            }
+
+            ctx.local.recording.draws = offscreen;
+            ctx.local.recording.operations = original_operations
+                .iter()
+                .filter(|operation| match operation {
+                    FrameOp::Draw(draw) => draw.fbo != 0,
+                    FrameOp::Blit(blit) => blit.read_fbo != 0 && blit.draw_fbo != 0,
+                })
+                .cloned()
+                .collect();
+            ctx.local.recording.blits = ctx
+                .local
+                .recording
+                .operations
+                .iter()
+                .filter_map(|operation| match operation {
+                    FrameOp::Blit(blit) => Some(*blit),
+                    FrameOp::Draw(_) => None,
+                })
+                .collect();
+            let frame_state = ctx.frame_state();
+            let built = frame::Frame::build(ctx);
+            ctx.local.recording.draws = window;
+            ctx.local.recording.operations = original_operations
+                .iter()
+                .filter(|operation| match operation {
+                    FrameOp::Draw(draw) => draw.fbo == 0,
+                    FrameOp::Blit(blit) => blit.read_fbo == 0 || blit.draw_fbo == 0,
+                })
+                .cloned()
+                .collect();
+            ctx.local.recording.blits = ctx
+                .local
+                .recording
+                .operations
+                .iter()
+                .filter_map(|operation| match operation {
+                    FrameOp::Blit(blit) => Some(*blit),
+                    FrameOp::Draw(_) => None,
+                })
+                .collect();
+            let Some(mut frame) = built else {
+                ctx.restore_frame_state(frame_state);
+                ctx.local.recording.draws = original_draws;
+                ctx.local.recording.blits = original_blits;
+                ctx.local.recording.operations = original_operations;
+                return Ok(false);
+            };
+            let retained_shared = ctx.retain_shared_targets(&mut frame);
+            let frame_owned = frame
+                .cmds
+                .iter()
+                .filter_map(|command| match command {
+                    Cmd::DestroyTexture(id) => Some(*id),
+                    _ => None,
+                })
+                .collect::<HashSet<_>>();
+            let mut transferred = HashSet::new();
+            let mut invalidated_shared = HashSet::new();
+            for target in &frame.targets {
+                for snapshot in ctx
+                    .local
+                    .recording
+                    .draws
+                    .iter_mut()
+                    .flat_map(|draw| draw.textures.iter_mut())
+                    .filter(|snapshot| {
+                        snapshot.name == target.name && snapshot.generation == target.generation
+                    })
+                {
+                    snapshot.fbo_ir = Some(target.texture);
+                    if let Some(storage) = snapshot.texture.shared_storage() {
+                        invalidated_shared.insert(storage);
+                    }
+                    snapshot.texture.gpu_authoritative = true;
+                    if frame_owned.contains(&target.texture) {
+                        transferred.insert(target.texture);
+                    }
+                }
+                for operation in &mut ctx.local.recording.operations {
+                    let FrameOp::Blit(blit) = operation else {
+                        continue;
+                    };
+                    if blit.read_target.is_some_and(|snapshot| {
+                        snapshot.texture == target.name && snapshot.generation == target.generation
+                    }) {
+                        blit.read_ir = Some(target.texture);
+                        if frame_owned.contains(&target.texture) {
+                            transferred.insert(target.texture);
+                        }
+                    }
+                    if blit.draw_target.is_some_and(|snapshot| {
+                        snapshot.texture == target.name && snapshot.generation == target.generation
+                    }) {
+                        blit.draw_ir = Some(target.texture);
+                        if frame_owned.contains(&target.texture) {
+                            transferred.insert(target.texture);
+                        }
+                    }
+                }
+            }
+            ctx.local.recording.blits = ctx
+                .local
+                .recording
+                .operations
+                .iter()
+                .filter_map(|operation| match operation {
+                    FrameOp::Blit(blit) => Some(*blit),
+                    FrameOp::Draw(_) => None,
+                })
+                .collect();
+            for storage in invalidated_shared {
+                ctx.invalidate_shared_texture(storage);
+            }
+            frame.cmds.retain(
+                |command| !matches!(command, Cmd::DestroyTexture(id) if transferred.contains(id)),
+            );
+            let pinned = ctx.deferred_texture_ids();
+            let (ready, deferred): (Vec<_>, Vec<_>) =
+                ctx.pending_destroys().iter().cloned().partition(
+                    |command| !matches!(command, Cmd::DestroyTexture(id) if pinned.contains(id)),
+                );
+            frame.cmds.extend(ready);
+            let commands = frame.cmds.len();
+            if let Err(error) = sink.submit(&frame.cmds) {
+                ctx.restore_frame_state(frame_state);
+                ctx.local.recording.draws = original_draws;
+                ctx.local.recording.blits = original_blits;
+                ctx.local.recording.operations = original_operations;
+                return Err(error);
+            }
+            ctx.replace_pending_destroys(deferred);
+            ctx.accept_targets(&frame.targets);
+            ctx.own_shared_targets(&retained_shared);
+            for texture in transferred {
+                if !retained_shared.contains(&texture) {
+                    ctx.queue_texture_destroy(texture);
+                }
+            }
+            hl_log::hl_debug!(
+                hl_log::tag::GL,
+                "flush submitted cmds={} offscreen_of={} retained_window={}",
+                commands,
+                draws,
+                ctx.local.recording.draws.len()
+            );
+            hl_log::hl_count!(hl_log::tag::GL, "offscreen_flushes");
+            drop(original_draws);
+            ctx.prune_shared_textures();
+            return Ok(true);
+        }
+
+        let draws = ctx.local.recording.draws.len();
+        let frame_state = ctx.frame_state();
         let built = frame::Frame::build(ctx);
-        // Restore the retained window draws for the swap; the blits were consumed with the offscreen flush.
-        ctx.draws = window;
-        ctx.blits.clear();
         let Some(mut f) = built else {
-            // No offscreen frame lowered, but a delete may still have queued persistent `Destroy*` — drain them.
+            ctx.restore_frame_state(frame_state);
             if ctx.has_pending_destroys() {
                 let destroys = ctx.pending_destroys().to_vec();
                 sink.submit(&destroys)?;
                 ctx.clear_pending_destroys();
             }
+            ctx.reset_frame();
             return Ok(false);
         };
-        // Flush queued persistent `Destroy*` at the tail of this offscreen frame (after its `Submit`s). A deleted
-        // GL name is already out of the residency caches, so the retained window draws re-resolve to fresh ids and
-        // never reference a destroyed one.
         f.cmds.extend_from_slice(ctx.pending_destroys());
-        // NO Present: offscreen passes render into their FBO render-target textures (persistent IR ids); a later
-        // window pass samples those by their stable ids. Submit is transactional (mirrors swap): on a sink error
-        // the window draws are already restored, and the error propagates so the caller registers it.
+        let retained_shared = ctx.retain_shared_targets(&mut f);
         let cmds = f.cmds.len();
-        sink.submit(&f.cmds)?;
+        if let Err(error) = sink.submit(&f.cmds) {
+            ctx.restore_frame_state(frame_state);
+            return Err(error);
+        }
         ctx.clear_pending_destroys();
+        ctx.accept_targets(&f.targets);
+        ctx.own_shared_targets(&retained_shared);
+        ctx.reset_frame();
+        ctx.prune_shared_textures();
         hl_log::hl_debug!(
             hl_log::tag::GL,
-            "flush_offscreen submitted cmds={} offscreen_of={} retained_window={}",
+            "flush submitted cmds={} offscreen_draws={}",
             cmds,
-            n_before,
-            ctx.draws.len()
+            draws
         );
-        hl_log::hl_count!(hl_log::tag::GL, "offscreen_flushes");
+        hl_log::hl_count!(hl_log::tag::GL, "flushes");
         Ok(true)
     }
 }
 
 pub const SWAP_BUFFERS: fn(&mut GlContext, &mut dyn CommandSink) -> Result<bool> =
     GlContext::swap_buffers;
-pub const FLUSH_OFFSCREEN: fn(&mut GlContext, &mut dyn CommandSink) -> Result<bool> =
-    GlContext::flush_offscreen;
-pub use FLUSH_OFFSCREEN as flush_offscreen;
+pub const FLUSH: fn(&mut GlContext, &mut dyn CommandSink) -> Result<bool> = GlContext::flush;
+pub use FLUSH as flush;
 pub use SWAP_BUFFERS as swap_buffers;

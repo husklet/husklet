@@ -9,14 +9,19 @@
 use std::io::{self, Read, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
+use std::path::Path;
+use std::time::Duration;
+use std::time::Instant;
 
 use crate::protocol::model::capability::Capabilities;
 use crate::transport::model::frame::Frame;
 use crate::transport::model::header::SubmitHeader;
-use crate::transport::model::readback::{ReadbackRequest, READBACK_MAGIC, READBACK_OK};
-
 mod doorbell;
 pub use doorbell::Doorbell;
+mod readback;
+pub use readback::ReadbackResponseError;
+mod write;
+pub use write::WriteFailure;
 
 #[cfg(test)]
 mod tests;
@@ -49,6 +54,48 @@ impl<'a> Connection<'a> {
         Self { stream }
     }
 
+    pub fn connect(path: &Path, timeout: Duration) -> io::Result<UnixStream> {
+        let socket = socket2::Socket::new(
+            socket2::Domain::UNIX,
+            socket2::Type::STREAM,
+            None,
+        )?;
+        let address = socket2::SockAddr::unix(path)?;
+        socket.connect_timeout(&address, timeout)?;
+        let descriptor: std::os::fd::OwnedFd = socket.into();
+        Ok(descriptor.into())
+    }
+
+    /// Observe a peer shutdown without consuming protocol bytes.
+    pub fn peer_closed(&self) -> io::Result<bool> {
+        let mut byte = 0u8;
+        // SAFETY: `byte` is valid for one byte and `stream` owns a live Unix file descriptor. `MSG_PEEK`
+        // preserves protocol data; `MSG_DONTWAIT` makes this observation bounded.
+        let result = unsafe {
+            libc::recv(
+                self.stream.as_raw_fd(),
+                (&mut byte as *mut u8).cast(),
+                1,
+                libc::MSG_PEEK | libc::MSG_DONTWAIT,
+            )
+        };
+        if result == 0 {
+            return Ok(true);
+        }
+        if result > 0 {
+            return Ok(false);
+        }
+        let error = io::Error::last_os_error();
+        if matches!(
+            error.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+        ) {
+            Ok(false)
+        } else {
+            Err(error)
+        }
+    }
+
     /// `write(2)` all of `buf`, retrying short writes and `EINTR` (the `write_full` of `gl_shim.c`).
     pub fn write_full(&self, buf: &[u8]) -> io::Result<()> {
         let stream = self.stream;
@@ -58,11 +105,27 @@ impl<'a> Connection<'a> {
 
     /// Write one submit frame (`[16-byte header][payload]`) over the connection.
     pub fn write_frame(&self, header: &SubmitHeader, payload: &[u8]) -> io::Result<()> {
-        let stream = self.stream;
-        let mut s = stream;
-        s.write_all(&header.to_bytes())?;
-        s.write_all(payload)?;
-        Ok(())
+        self.write_frame_tracked(header, payload)
+            .map_err(|failure| failure.error)
+    }
+
+    /// Write one frame while retaining whether the peer accepted any request bytes.
+    ///
+    /// Once one byte is accepted, a later failure has an ambiguous outcome: the peer may complete and act
+    /// on the request even though this process never observes its acknowledgement.
+    pub fn write_frame_tracked(
+        &self,
+        header: &SubmitHeader,
+        payload: &[u8],
+    ) -> Result<(), WriteFailure> {
+        let mut accepted = 0;
+        self.write_tracked(&header.to_bytes(), &mut accepted)?;
+        self.write_tracked(payload, &mut accepted)
+    }
+
+    fn write_tracked(&self, bytes: &[u8], accepted: &mut usize) -> Result<(), WriteFailure> {
+        let mut stream = self.stream;
+        write::tracked(&mut stream, bytes, accepted)
     }
 }
 
@@ -119,12 +182,20 @@ impl Connection<'_> {
     /// over-cap frame is left UNREAD (no allocation), and the caller MUST drain it (via [`drain_payload`]) before
     /// reading the next frame.
     pub fn read_frame_outcome(&self) -> io::Result<FrameOutcome> {
+        let diagnostics = hl_log::Logging::global().enabled(
+            hl_log::Tags::from(hl_log::tag::TRANSPORT),
+            hl_log::Level::Debug,
+        );
+        let header_started = diagnostics.then(Instant::now);
         let stream = self.stream;
         let mut s = stream;
         let header = match self.read_header()? {
             Some(h) => h,
             None => return Ok(FrameOutcome::Eof),
         };
+        let header_wait_us = header_started
+            .map(|started| started.elapsed().as_micros())
+            .unwrap_or_default();
         // Cap the declared payload length BEFORE allocating so an untrusted `u32` length cannot force a
         // multi-GB preallocation (a memory-exhaustion DoS) ahead of reading any body bytes. Report it as a
         // recoverable TooLarge rather than reading the body.
@@ -139,8 +210,19 @@ impl Connection<'_> {
             );
             return Ok(FrameOutcome::TooLarge(header));
         }
+        let payload_started = diagnostics.then(Instant::now);
         let mut payload = vec![0u8; header.len as usize];
         s.read_exact(&mut payload)?;
+        let payload_read_us = payload_started
+            .map(|started| started.elapsed().as_micros())
+            .unwrap_or_default();
+        hl_log::hl_debug!(
+            hl_log::tag::TRANSPORT,
+            "frame_read payload_bytes={} header_wait_us={} payload_read_us={}",
+            header.len,
+            header_wait_us,
+            payload_read_us
+        );
         hl_log::hl_count!(hl_log::tag::TRANSPORT, "frames");
         hl_log::hl_add!(hl_log::tag::TRANSPORT, "frame_bytes", header.len as u64);
         Ok(FrameOutcome::Frame(Frame { header, payload }))
@@ -205,56 +287,6 @@ impl Connection<'_> {
         let stream = self.stream;
         let mut s = stream;
         s.write_all(&[ack])
-    }
-
-    // ---------------------------------------------------------------------------------------------------
-    // readback IO (device→host buffer readback; additive, disjoint from the submit ack)
-    // ---------------------------------------------------------------------------------------------------
-
-    /// Write a device→host readback REQUEST as a submit frame whose header carries the reserved
-    /// [`READBACK_MAGIC`] sentinel in `surface_id` (so the server routes it to readback, never to submit) and
-    /// whose payload is the serialized [`ReadbackRequest`]. Reuses the exact submit-frame writer, keeping every
-    /// real submit byte-identical.
-    pub fn write_readback_request(&self, req: &ReadbackRequest) -> io::Result<()> {
-        let payload = req.to_bytes();
-        let header = SubmitHeader {
-            surface_id: READBACK_MAGIC,
-            width: 0,
-            height: 0,
-            len: payload.len() as u32,
-        };
-        self.write_frame(&header, &payload)
-    }
-
-    /// Write the host's readback RESPONSE: a status byte then a `u32` length-prefixed byte payload. On failure
-    /// `status` is [`READBACK_FAIL`](crate::transport::model::readback::READBACK_FAIL) and `bytes` must be
-    /// empty. This is deliberately NOT the 1-byte submit ack — only a peer that issued a readback request reads
-    /// this framing.
-    pub fn write_readback_response(&self, status: u8, bytes: &[u8]) -> io::Result<()> {
-        let mut out = Vec::with_capacity(1 + 4 + bytes.len());
-        out.push(status);
-        out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-        out.extend_from_slice(bytes);
-        self.write_full(&out)
-    }
-
-    /// Read a host readback RESPONSE written by [`write_readback_response`]. Returns the returned bytes on
-    /// success; a failure status maps to an `Other` IO error the caller surfaces as a typed
-    /// [`GpuError`](crate::protocol::model::error::GpuError).
-    pub fn read_readback_response(&self) -> io::Result<Vec<u8>> {
-        let stream = self.stream;
-        let mut s = stream;
-        let mut status = [0u8; 1];
-        s.read_exact(&mut status)?;
-        let mut len_bytes = [0u8; 4];
-        s.read_exact(&mut len_bytes)?;
-        let len = u32::from_le_bytes(len_bytes) as usize;
-        let mut body = vec![0u8; len];
-        s.read_exact(&mut body)?;
-        match status[0] {
-            READBACK_OK => Ok(body),
-            _ => Err(io::Error::other("host readback failed")),
-        }
     }
 
     // ---------------------------------------------------------------------------------------------------

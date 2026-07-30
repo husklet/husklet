@@ -10,8 +10,9 @@ mod reflection;
 mod shader;
 mod table;
 
-pub use draw::{Attr, BufferSnapshot, ClientArray, DrawCall, TargetSnapshot};
+pub use draw::{Attr, BufferSnapshot, ClientArray, DrawCall, TargetSnapshot, TextureSnapshot};
 pub use object::Program;
+pub use reflection::UniformLocation;
 pub use shader::Shader;
 pub use table::Programs;
 

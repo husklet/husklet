@@ -28,6 +28,15 @@ void main() {
     gl_Position = vec4(p[gl_VertexIndex], 0.0, 1.0);
 }
 "#;
+const HALF_VS: &str = r#"#version 460
+void main() {
+    vec2 p[6] = vec2[6](
+        vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(-1.0, 0.0),
+        vec2(-1.0, 0.0), vec2(1.0, -1.0), vec2(1.0, 0.0)
+    );
+    gl_Position = vec4(p[gl_VertexIndex], 0.0, 1.0);
+}
+"#;
 const FS: &str = r#"#version 460
 layout(location = 0) out vec4 o;
 void main() { o = vec4(230.0/255.0, 170.0/255.0, 40.0/255.0, 1.0); }
@@ -37,7 +46,11 @@ void main() { o = vec4(230.0/255.0, 170.0/255.0, 40.0/255.0, 1.0); }
 /// clears the target and draws the fullscreen triangle under `viewport`. Returns the submit result and, on
 /// success, the read-back plane. Skips (returns `None`) when no GPU adapter is reachable.
 #[allow(clippy::type_complexity)]
-fn run_with_viewport(viewport: Enc) -> Option<(hl_gpu::Result<()>, Vec<u8>)> {
+fn run_with_viewport(
+    viewport: Enc,
+    vertex: &str,
+    vertex_count: u32,
+) -> Option<(hl_gpu::Result<()>, Vec<u8>)> {
     let mut exec = WgpuExecutor::new(DeviceConfig::default()).ok()?;
     let mut s = new_session(&exec);
 
@@ -54,7 +67,7 @@ fn run_with_viewport(viewport: Enc) -> Option<(hl_gpu::Result<()>, Vec<u8>)> {
             Cmd::CreateShader {
                 id: 1,
                 kind: ShaderPayloadKind::Glsl,
-                spirv: glsl(glsl_stage::VERTEX, "vmain", VS),
+                spirv: glsl(glsl_stage::VERTEX, "vmain", vertex),
             },
             Cmd::CreateShader {
                 id: 2,
@@ -104,7 +117,7 @@ fn run_with_viewport(viewport: Enc) -> Option<(hl_gpu::Result<()>, Vec<u8>)> {
                 Enc::SetPipeline(1),
                 viewport,
                 Enc::Draw {
-                    vertex_count: 3,
+                    vertex_count,
                     instance_count: 1,
                     first_vertex: 0,
                     first_instance: 0,
@@ -125,14 +138,18 @@ fn run_with_viewport(viewport: Enc) -> Option<(hl_gpu::Result<()>, Vec<u8>)> {
 /// fills exactly rows `y ∈ [0,24)` (the visible part of the scrolled layer) and leaves `y ∈ [24,32)` clear.
 #[test]
 fn negative_and_oversized_viewport_clips_and_does_not_nack() {
-    let Some((result, img)) = run_with_viewport(Enc::SetViewport {
-        x: -8.0,
-        y: -16.0,
-        w: 48.0,
-        h: 40.0,
-        min_depth: 0.0,
-        max_depth: 1.0,
-    }) else {
+    let Some((result, img)) = run_with_viewport(
+        Enc::SetViewport {
+            x: -8.0,
+            y: -16.0,
+            w: 48.0,
+            h: 40.0,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        },
+        VS,
+        3,
+    ) else {
         return; // no adapter — skip like the rest of the wgpu suite
     };
     write_png("viewport_clamp_partial", W, H, &img);
@@ -163,18 +180,56 @@ fn negative_and_oversized_viewport_clips_and_does_not_nack() {
     );
 }
 
+/// A non-fullscreen primitive proves that clipping does not replace the original GL viewport transform.
+/// The lower half of NDC maps through wgpu's downward-Y viewport transform for `(0,-16,32,40)` to rows
+/// `[4,24)`. Applying the same primitive directly to the legal intersection `(0,0,32,24)` would wrongly
+/// fill `[12,24)` and is the distortion Chrome exhibited.
+#[test]
+fn clipped_viewport_preserves_original_transform() {
+    let Some((result, img)) = run_with_viewport(
+        Enc::SetViewport {
+            x: 0.0,
+            y: -16.0,
+            w: 32.0,
+            h: 40.0,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        },
+        HALF_VS,
+        6,
+    ) else {
+        return;
+    };
+    result.expect("the compensated viewport must submit without validation errors");
+
+    for py in 0..H {
+        for pxi in 0..W {
+            let got = px(&img, W, pxi, py);
+            let want = if (4..24).contains(&py) { FILL } else { CLEAR };
+            assert!(
+                near(got, want),
+                "px ({pxi},{py}): {got:?} != {want:?}; viewport transform was not preserved"
+            );
+        }
+    }
+}
+
 /// (b) A viewport entirely outside the target draws NOTHING and does not NACK: `x=100, y=100` into a 32×32
 /// target has an empty intersection, so the draw is dropped and the target keeps its clear color.
 #[test]
 fn wholly_out_of_bounds_viewport_draws_nothing_without_nack() {
-    let Some((result, img)) = run_with_viewport(Enc::SetViewport {
-        x: 100.0,
-        y: 100.0,
-        w: 32.0,
-        h: 32.0,
-        min_depth: 0.0,
-        max_depth: 1.0,
-    }) else {
+    let Some((result, img)) = run_with_viewport(
+        Enc::SetViewport {
+            x: 100.0,
+            y: 100.0,
+            w: 32.0,
+            h: 32.0,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        },
+        VS,
+        3,
+    ) else {
         return;
     };
     write_png("viewport_clamp_empty", W, H, &img);

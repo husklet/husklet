@@ -37,6 +37,19 @@ pub mod shader_payload {
     pub const KERNEL: u32 = 1 << 4;
 }
 
+/// Cross-API shader execution guarantees proved by an executor.
+pub mod gpu_feature {
+    /// Buffer accesses are confined to the bound resource. Out-of-bounds reads cannot expose another
+    /// resource and out-of-bounds writes cannot modify one.
+    pub const ROBUST_BUFFER_ACCESS: u32 = 1 << 0;
+    /// Fragment shaders may write and perform atomics on storage resources.
+    pub const FRAGMENT_STORES_ATOMICS: u32 = 1 << 1;
+    pub const DEPTH_BIAS_CLAMP: u32 = 1 << 2;
+    pub const IMAGE_CUBE_ARRAY: u32 = 1 << 3;
+    pub const INDEPENDENT_BLEND: u32 = 1 << 4;
+    pub const SAMPLE_RATE_SHADING: u32 = 1 << 5;
+}
+
 /// Present-kind bitset used by the serialized handshake (a `Vec<PresentKind>` is not wire-friendly).
 pub(crate) mod present_bit {
     pub const SHM: u32 = 1 << 0;
@@ -88,6 +101,23 @@ pub const COLOR_FORMATS: &[TextureFormat] = &[
 /// runs the per-fragment depth test against a `Depth32Float` plane).
 pub const DEPTH_FORMATS: &[TextureFormat] = &[TextureFormat::Depth32Float];
 
+pub const BC_FORMATS: &[TextureFormat] = &[
+    TextureFormat::Bc1RgbaUnorm,
+    TextureFormat::Bc1RgbaSrgb,
+    TextureFormat::Bc2RgbaUnorm,
+    TextureFormat::Bc2RgbaSrgb,
+    TextureFormat::Bc3RgbaUnorm,
+    TextureFormat::Bc3RgbaSrgb,
+    TextureFormat::Bc4RUnorm,
+    TextureFormat::Bc4RSnorm,
+    TextureFormat::Bc5RgUnorm,
+    TextureFormat::Bc5RgSnorm,
+    TextureFormat::Bc6hRgbUfloat,
+    TextureFormat::Bc6hRgbFloat,
+    TextureFormat::Bc7RgbaUnorm,
+    TextureFormat::Bc7RgbaSrgb,
+];
+
 /// Every encoder-op tag in the current IR (a backend that replays the whole set advertises this).
 pub const ALL_COMMANDS: &[u8] = &[
     etag::BEGIN_RENDER_PASS,
@@ -107,6 +137,8 @@ pub const ALL_COMMANDS: &[u8] = &[
     etag::COPY_B2B,
     etag::COPY_B2T,
     etag::COPY_T2B,
+    etag::COPY_B2T_REGION,
+    etag::COPY_T2B_REGION,
     etag::COPY_T2T,
     etag::BLIT_TEXTURE,
     etag::RESOLVE_TEXTURE,
@@ -149,6 +181,12 @@ pub struct Capabilities {
     /// Whether the backend implements a real external timeline-fence primitive (vs. emulating a fence
     /// with submission completion). Advertised truthfully so a guest cannot promise cross-process sync.
     pub supports_timeline_fences: bool,
+    /// Supported descriptor-array resource kinds ([`binding_array`]).
+    pub binding_arrays: u32,
+    /// Array resource kinds that permit dynamically non-uniform shader indices.
+    pub non_uniform_binding_arrays: u32,
+    /// Independently negotiated shader execution guarantees ([`gpu_feature`]).
+    pub gpu_features: u32,
 }
 
 /// A guest's required feature set, checked against a backend's [`Capabilities`] via
@@ -162,6 +200,20 @@ pub struct FeatureRequest {
     pub command_bits: u64,
     /// Required texture-format bits (use [`format_bits`]).
     pub texture_formats: u32,
+    pub binding_arrays: u32,
+    pub non_uniform_binding_arrays: u32,
+    pub gpu_features: u32,
+}
+
+pub mod binding_array {
+    pub const UNIFORM_BUFFER: u32 = 1 << 0;
+    pub const STORAGE_BUFFER: u32 = 1 << 1;
+    pub const SAMPLED_TEXTURE: u32 = 1 << 2;
+    pub const STORAGE_TEXTURE: u32 = 1 << 3;
+    pub const SAMPLER: u32 = 1 << 4;
+    pub const BUFFER: u32 = UNIFORM_BUFFER | STORAGE_BUFFER;
+    pub const TEXTURE: u32 = SAMPLED_TEXTURE | STORAGE_TEXTURE;
+    pub const ALL: u32 = BUFFER | TEXTURE | SAMPLER;
 }
 
 impl Capabilities {
@@ -199,6 +251,21 @@ impl Capabilities {
         if req.texture_formats & !self.texture_formats != 0 {
             return Err(GpuError::Unsupported(
                 "capability: texture format not supported",
+            ));
+        }
+        if req.binding_arrays & !self.binding_arrays != 0 {
+            return Err(GpuError::Unsupported(
+                "capability: binding array kind not supported",
+            ));
+        }
+        if req.non_uniform_binding_arrays & !self.non_uniform_binding_arrays != 0 {
+            return Err(GpuError::Unsupported(
+                "capability: non-uniform binding array indexing not supported",
+            ));
+        }
+        if req.gpu_features & !self.gpu_features != 0 {
+            return Err(GpuError::Unsupported(
+                "capability: GPU feature not supported",
             ));
         }
         Ok(())
@@ -262,6 +329,14 @@ impl Capabilities {
             max_buffer_bytes: 1 << 30,
             max_bind_groups: 8,
             supports_timeline_fences: true,
+            binding_arrays: binding_array::ALL,
+            non_uniform_binding_arrays: binding_array::ALL,
+            gpu_features: gpu_feature::ROBUST_BUFFER_ACCESS
+                | gpu_feature::FRAGMENT_STORES_ATOMICS
+                | gpu_feature::DEPTH_BIAS_CLAMP
+                | gpu_feature::IMAGE_CUBE_ARRAY
+                | gpu_feature::INDEPENDENT_BLEND
+                | gpu_feature::SAMPLE_RATE_SHADING,
         }
     }
 }

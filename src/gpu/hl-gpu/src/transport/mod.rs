@@ -23,6 +23,8 @@ pub use model::abi::{
     GpuAlloc, Surface, DEFAULT_EXEC_SOCK, DRM_FMT_XRGB8888, HL_DMABUF_MOD_MAGIC,
     HL_IOCTL_GPU_ALLOC, RENDER_NODE,
 };
+pub use model::config::{TransportConfig, TransportConfigError};
+pub use model::error::{TransportError, TransportPhase};
 pub use model::frame::Frame;
 pub use model::header::{SubmitHeader, ACK_FAIL, ACK_OK};
 pub use model::readback::{ReadbackRequest, READBACK_MAGIC, READBACK_VERSION};

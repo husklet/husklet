@@ -31,6 +31,10 @@ u32_enum!(
         Rgba8Unorm = 1, Bgra8Unorm = 2, Rgba8Srgb = 3, Bgra8Srgb = 4,
         R8Unorm = 5, Rg8Unorm = 6, Rgba16Float = 7, Rgba32Float = 8,
         R32Float = 9, Depth32Float = 10, Depth24PlusStencil8 = 11,
+        Bc1RgbaUnorm = 12, Bc1RgbaSrgb = 13, Bc2RgbaUnorm = 14, Bc2RgbaSrgb = 15,
+        Bc3RgbaUnorm = 16, Bc3RgbaSrgb = 17, Bc4RUnorm = 18, Bc4RSnorm = 19,
+        Bc5RgUnorm = 20, Bc5RgSnorm = 21, Bc6hRgbUfloat = 22, Bc6hRgbFloat = 23,
+        Bc7RgbaUnorm = 24, Bc7RgbaSrgb = 25,
     } "TextureFormat"
 );
 
@@ -49,7 +53,49 @@ impl TextureFormat {
             TextureFormat::Rgba32Float => 16,
             // depth/stencil are not plain-color; software backend won't clear-fill these
             TextureFormat::Depth32Float | TextureFormat::Depth24PlusStencil8 => return None,
+            TextureFormat::Bc1RgbaUnorm
+            | TextureFormat::Bc1RgbaSrgb
+            | TextureFormat::Bc2RgbaUnorm
+            | TextureFormat::Bc2RgbaSrgb
+            | TextureFormat::Bc3RgbaUnorm
+            | TextureFormat::Bc3RgbaSrgb
+            | TextureFormat::Bc4RUnorm
+            | TextureFormat::Bc4RSnorm
+            | TextureFormat::Bc5RgUnorm
+            | TextureFormat::Bc5RgSnorm
+            | TextureFormat::Bc6hRgbUfloat
+            | TextureFormat::Bc6hRgbFloat
+            | TextureFormat::Bc7RgbaUnorm
+            | TextureFormat::Bc7RgbaSrgb => return None,
         })
+    }
+
+    pub fn block_geometry(self) -> Option<(u32, u32, u32)> {
+        Some(match self {
+            TextureFormat::Bc1RgbaUnorm
+            | TextureFormat::Bc1RgbaSrgb
+            | TextureFormat::Bc4RUnorm
+            | TextureFormat::Bc4RSnorm => (4, 4, 8),
+            TextureFormat::Bc2RgbaUnorm
+            | TextureFormat::Bc2RgbaSrgb
+            | TextureFormat::Bc3RgbaUnorm
+            | TextureFormat::Bc3RgbaSrgb
+            | TextureFormat::Bc5RgUnorm
+            | TextureFormat::Bc5RgSnorm
+            | TextureFormat::Bc6hRgbUfloat
+            | TextureFormat::Bc6hRgbFloat
+            | TextureFormat::Bc7RgbaUnorm
+            | TextureFormat::Bc7RgbaSrgb => (4, 4, 16),
+            _ => return None,
+        })
+    }
+
+    pub fn copy_layout(self, width: u32, height: u32) -> Option<(u32, u32)> {
+        if let Some((bw, bh, bytes)) = self.block_geometry() {
+            Some((width.div_ceil(bw) * bytes, height.div_ceil(bh)))
+        } else {
+            Some((width.checked_mul(self.bytes_per_texel()? as u32)?, height))
+        }
     }
 }
 
@@ -153,6 +199,30 @@ pub mod stencil_op {
             _ => stored,
         }
     }
+}
+
+/// Fixed-function blend factors carried by
+/// [`super::descriptor::BlendState`]. The numbering is the neutral
+/// GL-to-host protocol vocabulary, not a backend enum. Keep this list in sync
+/// with every guest API adapter that lowers blend state.
+pub mod blend_factor {
+    pub const ZERO: u32 = 0;
+    pub const ONE: u32 = 1;
+    pub const SRC_COLOR: u32 = 2;
+    pub const ONE_MINUS_SRC_COLOR: u32 = 3;
+    pub const SRC_ALPHA: u32 = 4;
+    pub const ONE_MINUS_SRC_ALPHA: u32 = 5;
+    pub const DST_COLOR: u32 = 6;
+    pub const ONE_MINUS_DST_COLOR: u32 = 7;
+    pub const DST_ALPHA: u32 = 8;
+    pub const ONE_MINUS_DST_ALPHA: u32 = 9;
+    pub const SRC_ALPHA_SATURATE: u32 = 10;
+    pub const CONSTANT: u32 = 11;
+    pub const ONE_MINUS_CONSTANT: u32 = 12;
+    pub const SRC1_COLOR: u32 = 13;
+    pub const ONE_MINUS_SRC1_COLOR: u32 = 14;
+    pub const SRC1_ALPHA: u32 = 15;
+    pub const ONE_MINUS_SRC1_ALPHA: u32 = 16;
 }
 
 // ---------------------------------------------------------------------------------------------------

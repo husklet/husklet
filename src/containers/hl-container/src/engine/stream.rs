@@ -43,6 +43,17 @@ impl Engine {
                 match file.read(&mut buffer) {
                     Ok(0) | Err(_) => break,
                     Ok(length) => {
+                        if stream == Stream::Stderr {
+                            let text = String::from_utf8_lossy(&buffer[..length]);
+                            if text.contains("[hl:") {
+                                hl_log::hl_log!(
+                                    hl_log::tag::CPU,
+                                    hl_log::Level::Debug,
+                                    "engine {}",
+                                    text.trim_end()
+                                );
+                            }
+                        }
                         if sender
                             .send(LogChunk {
                                 stream,

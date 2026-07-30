@@ -133,6 +133,21 @@ impl<E: GpuExecutor> CommandSink for InProcessCommandSink<E> {
         dispatch::wait(&mut self.session, &mut self.exec, fence, value)
     }
 
+    fn poll_fence(&mut self, fence: FenceId, value: u64) -> Result<bool> {
+        self.ensure_open()?;
+        dispatch::poll_fence(&self.session, &mut self.exec, fence, value)
+    }
+
+    fn wait_timeout(
+        &mut self,
+        fence: FenceId,
+        value: u64,
+        timeout_ns: u64,
+    ) -> Result<crate::FenceWait> {
+        self.ensure_open()?;
+        dispatch::wait_timeout(&mut self.session, &mut self.exec, fence, value, timeout_ns)
+    }
+
     /// Read a buffer back straight off the runtime-owned resources via the injected executor — the
     /// socket-free half of the readback port. Works for ANY `GpuExecutor` that implements readback (the
     /// default returns `Unsupported`); the CPU reference executor serves it directly.

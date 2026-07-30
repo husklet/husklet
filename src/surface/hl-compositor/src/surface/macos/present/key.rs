@@ -1,4 +1,87 @@
+use std::ffi::c_void;
+
+use objc2_foundation::NSString;
+
 use super::{NSEventModifierFlags, PresenterEvent};
+
+#[link(name = "Carbon", kind = "framework")]
+unsafe extern "C" {
+    fn TISCopyCurrentKeyboardInputSource() -> *const c_void;
+    fn TISGetInputSourceProperty(source: *const c_void, property: *const c_void) -> *const c_void;
+    static kTISPropertyInputSourceID: *const c_void;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFRelease(value: *const c_void);
+}
+
+/// Translate AppKit's active input-source identifier to the XKB layout used by Wayland clients.
+///
+/// Native events describe physical keys. The compositor must publish the matching logical XKB map or
+/// punctuation and number-row symbols follow US positions instead of the user's selected macOS layout.
+pub(super) fn xkb_layout(source: &str) -> Option<&'static str> {
+    let name: String = source
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect();
+
+    [
+        ("belgian", "be"),
+        ("brazilian", "br"),
+        ("british", "gb"),
+        ("bulgarian", "bg"),
+        ("canadian", "ca"),
+        ("croatian", "hr"),
+        ("czech", "cz"),
+        ("danish", "dk"),
+        ("dutch", "nl"),
+        ("estonian", "ee"),
+        ("finnish", "fi"),
+        ("french", "fr"),
+        ("german", "de"),
+        ("greek", "gr"),
+        ("hungarian", "hu"),
+        ("icelandic", "is"),
+        ("irish", "ie"),
+        ("italian", "it"),
+        ("latvian", "lv"),
+        ("lithuanian", "lt"),
+        ("norwegian", "no"),
+        ("polish", "pl"),
+        ("portuguese", "pt"),
+        ("romanian", "ro"),
+        ("russian", "ru"),
+        ("slovak", "sk"),
+        ("slovenian", "si"),
+        ("spanish", "es"),
+        ("swedish", "se"),
+        ("swiss", "ch"),
+        ("turkish", "tr"),
+        ("ukrainian", "ua"),
+        ("us", "us"),
+        ("abc", "us"),
+    ]
+    .into_iter()
+    .find_map(|(input, layout)| name.ends_with(input).then_some(layout))
+}
+
+pub(super) fn current_xkb_layout() -> Option<&'static str> {
+    unsafe {
+        let source = TISCopyCurrentKeyboardInputSource();
+        if source.is_null() {
+            return None;
+        }
+        let property = TISGetInputSourceProperty(source, kTISPropertyInputSourceID);
+        let identifier = property
+            .cast::<NSString>()
+            .as_ref()
+            .map(ToString::to_string);
+        CFRelease(source);
+        identifier.as_deref().and_then(xkb_layout)
+    }
+}
 
 /// macOS virtual key code to Linux evdev. Covers ANSI, navigation, function, and numeric-keypad keys;
 /// unknown media/vendor keys are ignored instead of emitting the wrong key.
@@ -183,7 +266,15 @@ impl KeyCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{KeyCode, Modifiers, NSEventModifierFlags, PresenterEvent};
+    use super::{xkb_layout, KeyCode, Modifiers, NSEventModifierFlags, PresenterEvent};
+
+    #[test]
+    fn maps_macos_input_sources_to_xkb_layouts() {
+        assert_eq!(xkb_layout("com.apple.keylayout.Czech"), Some("cz"));
+        assert_eq!(xkb_layout("com.apple.keylayout.British"), Some("gb"));
+        assert_eq!(xkb_layout("com.apple.keylayout.ABC"), Some("us"));
+        assert_eq!(xkb_layout("third.party.input-method"), None);
+    }
 
     #[test]
     fn maps_every_standard_keyboard_region() {

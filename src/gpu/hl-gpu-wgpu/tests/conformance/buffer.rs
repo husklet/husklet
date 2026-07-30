@@ -95,6 +95,42 @@ fn buffer_partial_readback_window() {
     assert_eq!(out, [2, 3, 4]);
 }
 
+#[test]
+fn buffer_readback_truncates_tail_padding() {
+    let data = vec![1, 2, 3, 4, 5, 6];
+    let mut g = exec();
+    let s = run_batch(
+        &mut g,
+        &[
+            Cmd::CreateBuffer(1, buf(6, buffer_usage::COPY_DST)),
+            Cmd::WriteBuffer {
+                id: 1,
+                offset: 0,
+                data: data.clone(),
+            },
+        ],
+    );
+    let out = g.read_buffer(&s.resources, BufferId(1), 0, 6).unwrap();
+    assert_eq!(out, data);
+}
+
+#[test]
+fn buffer_empty_readback_is_empty_and_out_of_bounds_fails() {
+    let mut g = exec();
+    let s = run_batch(
+        &mut g,
+        &[Cmd::CreateBuffer(1, buf(6, buffer_usage::COPY_DST))],
+    );
+    assert!(g
+        .read_buffer(&s.resources, BufferId(1), 6, 0)
+        .unwrap()
+        .is_empty());
+    assert!(matches!(
+        g.read_buffer(&s.resources, BufferId(1), 4, 3),
+        Err(GpuError::OutOfBounds)
+    ));
+}
+
 // -------------------------------------------------------------------------------------------------
 // buffer -> buffer copy
 // -------------------------------------------------------------------------------------------------

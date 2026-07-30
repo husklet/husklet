@@ -35,7 +35,11 @@ pub fn egl_client_extensions() -> &'static str {
 /// `EGL_EXT_device_query` are DISPLAY extensions once a display is initialized (GDK's Wayland EGL
 /// bring-up requires one of that set to find `eglQueryDisplayAttribEXT`), so they are advertised here too.
 pub fn egl_display_extensions() -> &'static str {
-    "EGL_KHR_create_context EGL_KHR_surfaceless_context EGL_KHR_no_config_context \
+    "EGL_KHR_create_context EGL_KHR_create_context_no_error \
+     EGL_KHR_surfaceless_context EGL_KHR_no_config_context \
+     EGL_EXT_create_context_robustness EGL_KHR_fence_sync \
+     EGL_KHR_image_base \
+     EGL_EXT_image_dma_buf_import EGL_EXT_image_dma_buf_import_modifiers \
      EGL_EXT_platform_wayland EGL_KHR_platform_wayland \
      EGL_EXT_device_base EGL_EXT_device_query"
 }

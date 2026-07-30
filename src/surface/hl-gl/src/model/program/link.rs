@@ -2,6 +2,88 @@
 
 use super::Program;
 use crate::adapter::glsl;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+const MAX_LINK_DIAGNOSTICS: usize = 128;
+static LINK_DIAGNOSTICS: AtomicUsize = AtomicUsize::new(0);
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
+use std::sync::{Mutex, OnceLock};
+
+const SHADER_DIAGNOSTIC_LIMIT: usize = 64;
+const SHADER_SOURCE_DIAGNOSTIC_BYTES: usize = 4096;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct ShaderKey {
+    vertex: u64,
+    fragment: u64,
+}
+
+struct ShaderDiagnostics;
+
+impl ShaderDiagnostics {
+    fn hash(source: &str) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        source.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn prefix(source: &str) -> &str {
+        let mut end = source.len().min(SHADER_SOURCE_DIAGNOSTIC_BYTES);
+        while !source.is_char_boundary(end) {
+            end -= 1;
+        }
+        &source[..end]
+    }
+
+    fn log(verbatim: bool, vertex: &str, fragment: &str, samplers: &[String], bindings: &[u32]) {
+        let logging = hl_log::Logging::global();
+        let tags = hl_log::Tags::from(hl_log::tag::GL);
+        let debug = hl_log::VERBOSE_COMPILED && logging.enabled(tags, hl_log::Level::Debug);
+        let trace = hl_log::VERBOSE_COMPILED && logging.enabled(tags, hl_log::Level::Trace);
+        if !debug && !trace {
+            return;
+        }
+
+        static SHADERS: OnceLock<Mutex<HashSet<ShaderKey>>> = OnceLock::new();
+        let key = ShaderKey {
+            vertex: Self::hash(vertex),
+            fragment: Self::hash(fragment),
+        };
+        let shaders = SHADERS.get_or_init(|| Mutex::new(HashSet::new()));
+        let Ok(mut shaders) = shaders.lock() else {
+            return;
+        };
+        if shaders.len() >= SHADER_DIAGNOSTIC_LIMIT || !shaders.insert(key) {
+            return;
+        }
+        drop(shaders);
+
+        hl_log::hl_debug!(
+            hl_log::tag::GL,
+            "shader_link key={:016x}:{:016x} verbatim={} vertex_bytes={} fragment_bytes={} samplers={:?} bindings={:?}",
+            key.vertex,
+            key.fragment,
+            verbatim,
+            vertex.len(),
+            fragment.len(),
+            samplers,
+            bindings
+        );
+        hl_log::hl_trace!(
+            hl_log::tag::GL,
+            "shader_source key={:016x}:{:016x} vertex_bytes={} fragment_bytes={}\n--- vertex (first {} bytes) ---\n{}\n--- fragment (first {} bytes) ---\n{}\n--- end shader ---",
+            key.vertex,
+            key.fragment,
+            vertex.len(),
+            fragment.len(),
+            Self::prefix(vertex).len(),
+            Self::prefix(vertex),
+            Self::prefix(fragment).len(),
+            Self::prefix(fragment)
+        );
+    }
+}
 
 impl Program {
     /// `glLinkProgram` — translate the attached shaders to shader-IR and reflect the layout.
@@ -10,7 +92,12 @@ impl Program {
     /// (`shader_ir`) and reflects the uniform-block + sampler layout. A **compute** program (`cs_src`
     /// non-empty) translates the compute source to `compute_ir`, which `glDispatchCompute` lowers to a
     /// `CreateShader` + `CreateComputePipeline`.
-    pub fn link(&mut self, vs_src: String, fs_src: String, cs_src: String) {
+    pub fn link(
+        &mut self,
+        vs_src: String,
+        fs_src: String,
+        cs_src: String,
+    ) -> Result<(), glsl::UniformError> {
         use hl_gpu::protocol::model::kernel::{glsl_stage, GlslDescriptor};
         // A (re)link produces fresh shader IR + reflection; bump the generation so the frame builder's
         // program-keyed shader/pipeline cache invalidates any IR it created for the previous link.
@@ -27,10 +114,28 @@ impl Program {
             );
             self.cs_src = cs_src;
             self.linked = true;
-            return;
+            self.link_error.clear();
+            return Ok(());
         }
-        let (unis, ubuf_size) = glsl::StageSources::new(&vs_src, &fs_src).uniform_layout();
-        self.samp_names = glsl::StageSources::new(&vs_src, &fs_src).samplers();
+        glsl::StageSources::new(&vs_src, &fs_src).validate_sampler_array_uses()?;
+        let (unis, ubuf_size) = glsl::StageSources::new(&vs_src, &fs_src).uniform_layout()?;
+        let sampler_decls = glsl::StageSources::new(&vs_src, &fs_src).sampler_decls();
+        self.samp_names = sampler_decls
+            .iter()
+            .map(|declaration| declaration.name.clone())
+            .collect();
+        self.samp_arrays = sampler_decls
+            .iter()
+            .map(|declaration| declaration.arr.max(1))
+            .collect();
+        let sampler_elements = self
+            .samp_arrays
+            .iter()
+            .map(|&elements| elements as usize)
+            .sum::<usize>();
+        // GLES sampler uniforms are integer uniforms and therefore start at zero. Multiple untouched
+        // samplers consequently all refer to texture unit 0 until the application assigns another unit.
+        self.samp_units = vec![0; sampler_elements];
         // GskGpu (GTK4 "gl") / ANGLE (Chrome) source uses helper functions taking combined sampler
         // parameters and `gl_VertexID` vertex-pulling — constructs `translate_render`'s reflect-and-
         // regenerate would destroy (it keeps only `main` and reflects a flat ES2 interface). For such
@@ -40,7 +145,30 @@ impl Program {
         // `binding = 1+2k / 2+2k` scheme the executor emits. Simple ES2 shaders take `translate_render`.
         let verbatim = glsl::Source::new(&vs_src).is_forward_verbatim()
             || glsl::Source::new(&fs_src).is_forward_verbatim();
-        let (vs_glsl, fs_glsl) = if verbatim {
+        let active_attributes = glsl::Source::new(&vs_src)
+            .vertex_attrs()
+            .into_iter()
+            .map(|attribute| attribute.name)
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut attribute_bindings = self.attrib_bindings.clone();
+        attribute_bindings.retain(|name, _| active_attributes.contains(name));
+        // A shader's explicit location overrides a pre-link API binding.
+        attribute_bindings.extend(glsl::Source::new(&vs_src).vertex_locations());
+        let mut occupied = std::collections::BTreeMap::new();
+        for (name, &location) in &attribute_bindings {
+            if location as usize >= super::MAX_ATTR || occupied.insert(location, name).is_some() {
+                return Err(glsl::UniformError::AttributeLocation(name.clone()));
+            }
+        }
+        if !attribute_bindings.is_empty() {
+            let sample = attribute_bindings.iter().take(8).collect::<Vec<_>>();
+            hl_log::hl_debug!(
+                hl_log::tag::GL,
+                "link attribute bindings active={} sample={sample:?}",
+                attribute_bindings.len()
+            );
+        }
+        let (mut vs_glsl, mut fs_glsl) = if verbatim {
             hl_log::hl_debug!(
                 hl_log::tag::GL,
                 "link: GskGpu/ANGLE-shaped GLSL-ES → forward verbatim to host ES route"
@@ -58,18 +186,44 @@ impl Program {
             // vertex `out` to the fragment `in` varying). GskGpu's `IN()`/`PASS()` macro varyings already
             // carry a location, so its stages stay byte-identical.
             let combined = glsl::StageSources::new(&vs_src, &fs_src).uniform_decls();
-            glsl::prepare_verbatim_program(&vs_src, &fs_src, &combined)
+            glsl::prepare_verbatim_program_with(&vs_src, &fs_src, &combined, &attribute_bindings)
         } else {
-            glsl::StageSources::new(&vs_src, &fs_src).translate_render()
+            glsl::StageSources::new(&vs_src, &fs_src).translate_render_with(&attribute_bindings)
         };
+        if verbatim {
+            vs_glsl = glsl::Source::new(&vs_glsl).expand_sampler_arrays();
+            fs_glsl = glsl::Source::new(&fs_glsl).expand_sampler_arrays();
+        }
         // Bind-group binding index per sampler. The ES2 path EMITS its own `layout(binding=)` in declaration
         // order, so `k == index`; the verbatim path is numbered by the HOST across all preprocessor branches
         // (incl. inactive `samplerExternalOES` decls), so `k` is recovered from the forwarded fragment text.
         self.samp_bindings = if verbatim {
-            glsl::StageSources::new("", &fs_src).verbatim_sampler_bindings(&self.samp_names)
+            let flattened_names = self
+                .samp_names
+                .iter()
+                .zip(&self.samp_arrays)
+                .flat_map(|(name, &elements)| {
+                    (0..elements).map(move |element| {
+                        if elements == 1 {
+                            name.clone()
+                        } else {
+                            format!("{name}_{element}")
+                        }
+                    })
+                })
+                .collect::<Vec<_>>();
+            glsl::StageSources::new("", &fs_glsl).verbatim_sampler_bindings(&flattened_names)
         } else {
-            (0..self.samp_names.len() as u32).collect()
+            (0..sampler_elements as u32).collect()
         };
+        ShaderDiagnostics::log(
+            verbatim,
+            &vs_glsl,
+            &fs_glsl,
+            &self.samp_names,
+            &self.samp_bindings,
+        );
+        self.attrib_locations = glsl::Source::new(&vs_glsl).vertex_locations();
         self.vs_ir = Some(
             GlslDescriptor {
                 stage: glsl_stage::VERTEX,
@@ -89,9 +243,34 @@ impl Program {
         self.unis = unis;
         self.ubuf_size = ubuf_size;
         self.ubuf = vec![0u8; ubuf_size.max(0) as usize];
+        if LINK_DIAGNOSTICS.fetch_add(1, Ordering::Relaxed) < MAX_LINK_DIAGNOSTICS {
+            let fields = self
+                .unis
+                .iter()
+                .map(|uniform| {
+                    format!(
+                        "{}:{}[{}]@{}+{}",
+                        uniform.name,
+                        uniform.ty,
+                        uniform.arr.max(1),
+                        uniform.off,
+                        uniform.sz
+                    )
+                })
+                .collect::<Vec<_>>();
+            hl_log::hl_debug!(
+                hl_log::tag::GL,
+                "uniform_link verbatim={verbatim} bytes={} fields={fields:?} samplers={:?} bindings={:?}",
+                self.ubuf_size,
+                self.samp_names,
+                self.samp_bindings
+            );
+        }
         self.vs_src = vs_src;
         self.fs_src = fs_src;
         self.linked = true;
+        self.link_error.clear();
+        Ok(())
     }
 
     /// Is this a GLES3.1 compute program (a linked `GL_COMPUTE_SHADER`)?

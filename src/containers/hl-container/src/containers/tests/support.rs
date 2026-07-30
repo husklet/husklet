@@ -82,6 +82,8 @@ pub(super) struct FakeRuntime {
     pub(super) publishes: Arc<std::sync::Mutex<Vec<Vec<crate::Publication>>>>,
     pub(super) terminals: Arc<std::sync::Mutex<Vec<Option<crate::Size>>>>,
     pub(super) checkpoints: Arc<std::sync::Mutex<Vec<CheckpointLaunch>>>,
+    pub(super) domains: Arc<std::sync::Mutex<Vec<(hl_engine::Domain, bool)>>>,
+    pub(super) domain_reads: Arc<AtomicU64>,
     pub(super) resizes: Arc<std::sync::Mutex<Vec<crate::Size>>>,
     pub(super) health: std::sync::Mutex<Option<(Duration, std::collections::VecDeque<ExitStatus>)>>,
 }
@@ -107,6 +109,8 @@ impl FakeRuntime {
             publishes: Arc::new(std::sync::Mutex::new(Vec::new())),
             terminals: Arc::new(std::sync::Mutex::new(Vec::new())),
             checkpoints: Arc::new(std::sync::Mutex::new(Vec::new())),
+            domains: Arc::new(std::sync::Mutex::new(Vec::new())),
+            domain_reads: Arc::new(AtomicU64::new(0)),
             resizes: Arc::new(std::sync::Mutex::new(Vec::new())),
             health: std::sync::Mutex::new(None),
         }
@@ -124,6 +128,8 @@ struct FakeProcess {
     logs: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<crate::LogChunk>>>,
     _log_owner: Option<tokio::sync::mpsc::UnboundedSender<crate::LogChunk>>,
     checkpoint_armed: bool,
+    domain: hl_engine::Domain,
+    domain_reads: Arc<AtomicU64>,
 }
 
 #[async_trait]
@@ -131,8 +137,9 @@ impl Running for FakeProcess {
     fn id(&self) -> u64 {
         self.id
     }
-    fn domain(&self) -> Option<hl_engine::Domain> {
-        None
+    fn domain(&self) -> hl_engine::Domain {
+        self.domain_reads.fetch_add(1, Ordering::SeqCst);
+        self.domain
     }
     fn checkpointable(&self) -> bool {
         self.checkpoint_armed
@@ -178,6 +185,10 @@ impl Running for FakeProcess {
 impl Runtime for FakeRuntime {
     async fn start(&self, launch: ProcessConfig) -> Result<Arc<dyn Running>> {
         assert!(launch.rootfs.is_absolute());
+        let domain = launch.domain.unwrap_or(
+            hl_engine::Domain::new()
+                .map_err(|error| Error::Runtime(format!("domain allocation failed: {error}")))?,
+        );
         let is_health = launch.process.program == "/health"
             || launch
                 .process
@@ -196,6 +207,10 @@ impl Runtime for FakeRuntime {
                 .as_ref()
                 .map(|checkpoint| checkpoint.restore),
         );
+        self.domains
+            .lock()
+            .unwrap()
+            .push((domain, launch.domain_owner));
         self.mounts.lock().unwrap().push(
             launch
                 .mounts
@@ -240,6 +255,8 @@ impl Runtime for FakeRuntime {
             _log_owner: log_owner,
             checkpoint_armed: launch.checkpoint.is_some()
                 && self.checkpointable.load(Ordering::SeqCst),
+            domain,
+            domain_reads: Arc::clone(&self.domain_reads),
         }))
     }
 }
@@ -280,6 +297,7 @@ impl crate::Device for Clock {
                 optional_features: BTreeSet::default(),
                 config: hl_engine::extension::ExtensionConfig::empty("test.clock/v1"),
                 namespace: Vec::new(),
+                rules: Vec::new(),
                 services: Vec::new(),
                 memory: Vec::new(),
                 environment: Vec::new(),

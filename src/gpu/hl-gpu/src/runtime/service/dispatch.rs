@@ -72,6 +72,25 @@ pub fn wait(
     exec.wait(&mut session.resources, fence, value)
 }
 
+pub fn poll_fence(
+    session: &Session,
+    exec: &mut dyn GpuExecutor,
+    fence: FenceId,
+    value: u64,
+) -> Result<bool> {
+    exec.poll_fence(&session.resources, fence, value)
+}
+
+pub fn wait_timeout(
+    session: &mut Session,
+    exec: &mut dyn GpuExecutor,
+    fence: FenceId,
+    value: u64,
+    timeout_ns: u64,
+) -> Result<crate::FenceWait> {
+    exec.wait_timeout(&mut session.resources, fence, value, timeout_ns)
+}
+
 /// Service the device→host readback path: return `len` bytes of buffer `id` at `offset` from the executor
 /// over the runtime-owned resources. Not part of a command batch — an out-of-band query the transport layer
 /// forwards to answer a `CommandSink::read_buffer` / `cuMemcpyDtoH`.

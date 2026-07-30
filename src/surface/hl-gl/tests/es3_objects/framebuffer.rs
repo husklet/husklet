@@ -20,7 +20,7 @@ fn framebuffer_attachment_parameter_reflects_default_and_texture_attachment() {
     c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
     record::tex_image_2d(&mut c, 8, 8, &[0u8; 8 * 8 * 4]);
-    let fbo = c.framebuffers.gen();
+    let fbo = c.gen_framebuffer();
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
     record::framebuffer_texture_2d(
         &mut c,

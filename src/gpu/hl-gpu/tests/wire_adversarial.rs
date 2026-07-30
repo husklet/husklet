@@ -129,6 +129,26 @@ fn every_encoder_op() -> Vec<Enc> {
             dst_offset: 0,
             bytes_per_row: 16,
         },
+        Enc::CopyBufferToTextureRegion {
+            src: 1,
+            src_offset: 32,
+            bytes_per_row: 64,
+            rows_per_image: 8,
+            dst: 2,
+            dst_sub: sub,
+            dst_origin: org,
+            extent: ext,
+        },
+        Enc::CopyTextureToBufferRegion {
+            src: 2,
+            src_sub: sub,
+            src_origin: org,
+            extent: ext,
+            dst: 1,
+            dst_offset: 48,
+            bytes_per_row: 64,
+            rows_per_image: 8,
+        },
         Enc::CopyTextureToTexture {
             src: 2,
             src_sub: sub,
@@ -214,6 +234,19 @@ fn every_command() -> Vec<Cmd> {
                 label: "rt".into(),
             },
         ),
+        Cmd::CreateTextureView(
+            20,
+            TextureViewDesc {
+                texture: 2,
+                dim: TextureDim::D2,
+                format: TextureFormat::Bgra8Unorm,
+                aspect: TextureAspect::All,
+                base_mip: 0,
+                mip_count: 1,
+                base_layer: 0,
+                layer_count: 1,
+            },
+        ),
         Cmd::CreateSampler(
             3,
             SamplerDesc {
@@ -223,6 +256,7 @@ fn every_command() -> Vec<Cmd> {
                 address_u: AddressMode::Repeat,
                 address_v: AddressMode::ClampToEdge,
                 address_w: AddressMode::MirrorRepeat,
+                ..SamplerDesc::default()
             },
         ),
         Cmd::CreateShader {
@@ -296,6 +330,9 @@ fn every_command() -> Vec<Cmd> {
                     },
                     stencil_read_mask: 0x0000_00FF,
                     stencil_write_mask: 0x0000_007F,
+                    bias_constant: 7,
+                    bias_slope_scale: 1.25,
+                    bias_clamp: 0.5,
                 }),
                 topology: Topology::TriangleStrip,
                 cull: 2,
@@ -312,6 +349,54 @@ fn every_command() -> Vec<Cmd> {
                     entry: "k".into(),
                 },
                 label: "cp".into(),
+            },
+        ),
+        Cmd::CreateRenderPipelineLayout(
+            18,
+            RenderPipelineDesc {
+                vertex: ShaderRef {
+                    module: 4,
+                    entry: "vs".into(),
+                },
+                fragment: None,
+                vertex_buffers: Vec::new(),
+                color_targets: Vec::new(),
+                depth: None,
+                topology: Topology::TriangleList,
+                cull: 0,
+                front_face: 0,
+                sample_count: 1,
+                label: "layout-render".into(),
+            },
+            PipelineLayout {
+                bindings: vec![PipelineBinding {
+                    group: 0,
+                    binding: 0,
+                    count: 2,
+                    kind: PipelineBindingKind::UniformBuffer,
+                }],
+            },
+            RenderMultisample {
+                mask: 0x55aa,
+                sample_shading: true,
+            },
+        ),
+        Cmd::CreateComputePipelineLayout(
+            19,
+            ComputePipelineDesc {
+                compute: ShaderRef {
+                    module: 5,
+                    entry: "k".into(),
+                },
+                label: "layout-compute".into(),
+            },
+            PipelineLayout {
+                bindings: vec![PipelineBinding {
+                    group: 1,
+                    binding: 3,
+                    count: 4,
+                    kind: PipelineBindingKind::StorageBuffer,
+                }],
             },
         ),
         Cmd::CreateBindGroup(
@@ -344,7 +429,7 @@ fn every_command() -> Vec<Cmd> {
                 width: 4,
                 height: 4,
                 format: TextureFormat::Bgra8Unorm,
-                hlp_surface: 100,
+                token: hl_gpu::SurfaceToken::new(100).unwrap(),
             },
         ),
         Cmd::CreateFence(12),
@@ -356,12 +441,14 @@ fn every_command() -> Vec<Cmd> {
         Cmd::Present {
             surface: 11,
             texture: 2,
+            serial: hl_gpu::FrameSerial::new(13).unwrap(),
         },
         Cmd::DestroyBindGroup(10),
         Cmd::DestroyPipeline(8),
         Cmd::DestroyShader(4),
         Cmd::DestroySampler(3),
         Cmd::DestroySurface(11),
+        Cmd::DestroyTextureView(20),
         Cmd::DestroyTexture(2),
         Cmd::DestroyFence(12),
         Cmd::DestroyBuffer(1),

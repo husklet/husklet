@@ -1,7 +1,9 @@
 //! Immutable draw-time state snapshots.
 
 use super::MAX_ATTR;
+use crate::model::texture::GlTexture;
 use hl_gpu::protocol::model::enums::TextureFormat;
+use std::sync::Arc;
 
 /// One vertex-attribute pointer's bound state (`glVertexAttribPointer` + enable flag).
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
@@ -21,6 +23,9 @@ pub struct Attr {
     /// instance. This model has a single step rate per vertex-buffer slot, so a non-zero divisor marks
     /// the slot instance-stepped (the exact rate `N>1` is not modeled — see `service::frame`).
     pub divisor: u32,
+    /// Separate-format (`glVertexAttribFormat`) attributes fetch through this VAO binding index.
+    /// Legacy `glVertexAttribPointer` attributes keep fetching directly from `buffer`.
+    pub binding: Option<u32>,
 }
 
 /// A captured **client-side vertex array**: one enabled attribute drawn with NO vertex buffer object
@@ -54,7 +59,7 @@ pub struct ClientArray {
 pub struct BufferSnapshot {
     pub name: u32,
     pub generation: u64,
-    pub data: Vec<u8>,
+    pub data: Arc<Vec<u8>>,
 }
 
 /// Identity and shape of an offscreen framebuffer attachment when a draw was recorded. Framebuffer
@@ -64,9 +69,26 @@ pub struct BufferSnapshot {
 pub struct TargetSnapshot {
     pub texture: u32,
     pub generation: u64,
+    pub shared_storage: Option<u64>,
+    pub shared_revision: Option<u64>,
     pub width: i32,
     pub height: i32,
     pub format: TextureFormat,
+}
+
+/// The exact sampled texture generation visible when a draw was recorded.
+///
+/// GL object state remains mutable until the deferred frame boundary. Keeping the object plus any
+/// generation-matched resident resources here prevents a later upload, redefine, or delete from changing
+/// what an earlier draw samples. Texture pixels are shared copy-on-write, so taking this snapshot does not
+/// copy an atlas per draw.
+#[derive(Clone, PartialEq, Debug)]
+pub struct TextureSnapshot {
+    pub name: u32,
+    pub generation: u64,
+    pub texture: GlTexture,
+    pub sampled_ir: Option<u32>,
+    pub fbo_ir: Option<u32>,
 }
 
 /// An immutable snapshot of the bound draw state at the moment a draw (or clear) is recorded. The frame
@@ -97,17 +119,24 @@ pub struct DrawCall {
     pub elem_buf: u32,
     /// Per-location vertex-attribute snapshot.
     pub attrs: [Attr; MAX_ATTR],
+    /// Current generic values for disabled vertex arrays.
+    pub current_attrs: [[f32; 4]; MAX_ATTR],
+    pub current_attr_kinds: [u8; MAX_ATTR],
     /// Bound texture (GL name) per texture unit, at draw time.
     pub tex_units: [u32; 8],
     /// Content generation for each snapshotted texture-unit name.
     pub tex_generations: [u64; 8],
+    /// Exact object state and resident resources for the generations bound to this draw.
+    pub textures: Vec<TextureSnapshot>,
+    /// Texture component mappings captured with the draw.
+    pub tex_swizzles: [[u32; 4]; 8],
     /// The ES3 sampler OBJECT bound to each texture unit (`glBindSampler`), captured at draw time. A bound
     /// sampler object OVERRIDES the texture's own filter/wrap (ES 3.0 §3.8.13) — the frame builder lowers
     /// its params into the `SamplerDesc` instead of the texture's. `None` = no sampler object bound at the
     /// unit, so the texture parameters win (the byte-identical pre-sampler-object path).
     pub samp_objs: [Option<crate::model::es3::SamplerObj>; 8],
     /// Sampler-uniform index → texture unit, at draw time.
-    pub samp_units: [i32; 4],
+    pub samp_units: Vec<i32>,
     pub viewport: [i32; 4],
     pub scissor_enabled: bool,
     pub scissor: [i32; 4],
@@ -200,10 +229,19 @@ impl Default for DrawCall {
             target: None,
             elem_buf: 0,
             attrs: [Attr::default(); MAX_ATTR],
+            current_attrs: [[0.0, 0.0, 0.0, 1.0]; MAX_ATTR],
+            current_attr_kinds: [0; MAX_ATTR],
             tex_units: [0; 8],
             tex_generations: [0; 8],
+            textures: Vec::new(),
+            tex_swizzles: [[
+                crate::model::glconst::GL_RED,
+                crate::model::glconst::GL_GREEN,
+                crate::model::glconst::GL_BLUE,
+                crate::model::glconst::GL_ALPHA,
+            ]; 8],
             samp_objs: [None; 8],
-            samp_units: [-1; 4],
+            samp_units: Vec::new(),
             viewport: [0; 4],
             scissor_enabled: false,
             scissor: [0; 4],

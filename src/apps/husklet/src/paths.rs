@@ -36,7 +36,7 @@ impl DriverDirectory {
         std::env::current_exe()
             .ok()
             .and_then(|executable| Self::bundled(&executable))
-            .unwrap_or_else(hl_root)
+            .unwrap_or_else(Self::development)
     }
 
     fn bundled(executable: &std::path::Path) -> Option<PathBuf> {
@@ -46,6 +46,10 @@ impl DriverDirectory {
         }
         let directory = macos.parent()?.join("Resources/drivers");
         directory.is_dir().then_some(directory)
+    }
+
+    fn development() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/guest-drivers")
     }
 }
 
@@ -108,5 +112,12 @@ mod tests {
             DriverDirectory::bundled(Path::new("/usr/bin/husklet")),
             None
         );
+    }
+
+    #[test]
+    fn development_drivers_are_build_artifacts_not_mutable_user_state() {
+        let directory = DriverDirectory::development();
+        assert!(directory.ends_with("target/guest-drivers"));
+        assert!(!directory.ends_with(".hl"));
     }
 }

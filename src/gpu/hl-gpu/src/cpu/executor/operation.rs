@@ -262,6 +262,11 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
                     .len();
             copy::check_len(d_len, *dst_offset, dst_span)?;
         }
+        Enc::CopyBufferToTextureRegion { .. } | Enc::CopyTextureToBufferRegion { .. } => {
+            return Err(GpuError::Unsupported(
+                "software: layered or offset buffer-texture copy",
+            ));
+        }
         Enc::CopyTextureToTexture {
             src,
             src_sub,

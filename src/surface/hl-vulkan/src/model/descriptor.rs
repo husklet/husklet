@@ -13,6 +13,7 @@ pub mod vk_descriptor_type {
     pub const SAMPLER: i32 = 0;
     pub const COMBINED_IMAGE_SAMPLER: i32 = 1;
     pub const SAMPLED_IMAGE: i32 = 2;
+    pub const STORAGE_IMAGE: i32 = 3;
     pub const UNIFORM_BUFFER: i32 = 6;
     pub const STORAGE_BUFFER: i32 = 7;
     pub const UNIFORM_BUFFER_DYNAMIC: i32 = 8;
@@ -38,13 +39,19 @@ impl DescriptorType {
     /// Whether this is a sampled-image or sampler descriptor materialized in [`DsetRec::images`].
     pub fn is_image(self) -> bool {
         use vk_descriptor_type::*;
-        matches!(self.0, SAMPLER | COMBINED_IMAGE_SAMPLER | SAMPLED_IMAGE)
+        matches!(
+            self.0,
+            SAMPLER | COMBINED_IMAGE_SAMPLER | SAMPLED_IMAGE | STORAGE_IMAGE
+        )
     }
 
     /// Whether this descriptor consumes `pImageInfo.imageView`.
     pub fn binds_image(self) -> bool {
         use vk_descriptor_type::*;
-        matches!(self.0, COMBINED_IMAGE_SAMPLER | SAMPLED_IMAGE)
+        matches!(
+            self.0,
+            COMBINED_IMAGE_SAMPLER | SAMPLED_IMAGE | STORAGE_IMAGE
+        )
     }
 
     /// Whether this descriptor consumes `pImageInfo.sampler`.
@@ -120,16 +127,16 @@ pub struct SetLayoutRec {
 impl SetLayoutRec {
     /// The dynamic-buffer bindings (UNIFORM/STORAGE_BUFFER_DYNAMIC), in ascending binding order — the
     /// order `vkCmdBindDescriptorSets`'s `pDynamicOffsets` are consumed in.
-    pub fn dynamic_bindings(&self) -> Vec<u32> {
+    pub fn dynamic_elements(&self) -> Vec<(u32, u32)> {
         use vk_descriptor_type::{STORAGE_BUFFER_DYNAMIC, UNIFORM_BUFFER_DYNAMIC};
-        let mut v: Vec<u32> = self
+        let mut v: Vec<(u32, u32)> = self
             .bindings
             .iter()
             .filter(|b| {
                 b.descriptor_type == UNIFORM_BUFFER_DYNAMIC
                     || b.descriptor_type == STORAGE_BUFFER_DYNAMIC
             })
-            .map(|b| b.binding)
+            .flat_map(|b| (0..b.descriptor_count).map(move |element| (b.binding, element)))
             .collect();
         v.sort_unstable();
         v
@@ -165,9 +172,9 @@ pub struct DsetRec {
     pub layout: VkDescriptorSetLayout,
     pub pool: VkDescriptorPool,
     /// `binding -> (buffer handle, offset, range)`.
-    pub buffers: HashMap<u32, (VkBuffer, u64, u64)>,
+    pub buffers: HashMap<(u32, u32), (VkBuffer, u64, u64)>,
     /// `binding -> (image handle, sampler handle)` for sampled-image / sampler descriptors.
-    pub images: HashMap<u32, ImageBinding>,
+    pub images: HashMap<(u32, u32), ImageBinding>,
 }
 
 impl DsetRec {

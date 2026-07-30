@@ -30,7 +30,9 @@ fn uni_layout_computes_std140_style_offsets_and_padded_total() {
         "uniform float uScale;\nuniform vec3 uColor;\nuniform mat4 uMVP;\nattribute vec2 aPos;\n\
               void main(){ gl_Position = uMVP * vec4(aPos, 0.0, 1.0); }\n";
     let fs = "void main(){ gl_FragColor = vec4(1.0); }\n";
-    let (unis, total) = glsl::StageSources::new(vs, fs).uniform_layout();
+    let (unis, total) = glsl::StageSources::new(vs, fs)
+        .uniform_layout()
+        .expect("supported uniform layout");
     assert_eq!(unis.len(), 3);
     // float @0 sz4; vec3 aligns to 16 → @16 sz16; mat4 aligns to 16 → @32 sz64.
     assert_eq!(
@@ -55,7 +57,9 @@ fn uni_layout_separates_data_uniforms_from_samplers() {
     let fs = "uniform vec4 uTint;\nuniform sampler2D uTex;\nuniform samplerCube uEnv;\n\
               void main(){ gl_FragColor = uTint; }\n";
     // Samplers do NOT occupy uniform-block bytes.
-    let (unis, total) = glsl::StageSources::new(vs, fs).uniform_layout();
+    let (unis, total) = glsl::StageSources::new(vs, fs)
+        .uniform_layout()
+        .expect("supported uniform layout");
     assert_eq!(unis.len(), 1, "only the data uniform is in the block");
     assert_eq!(unis[0].name, "uTint");
     assert_eq!(total, 16);
@@ -81,7 +85,9 @@ fn uniform_interface_block_members_are_enumerated() {
     let vs = "uniform Matrices { mat4 uModel; mat4 uView; } mats;\nattribute vec3 aPos;\n\
               void main(){ gl_Position = uModel * uView * vec4(aPos, 1.0); }\n";
     let fs = "void main(){ gl_FragColor = vec4(1.0); }\n";
-    let (unis, _total) = glsl::StageSources::new(vs, fs).uniform_layout();
+    let (unis, _total) = glsl::StageSources::new(vs, fs)
+        .uniform_layout()
+        .expect("supported uniform layout");
     let names: Vec<_> = unis.iter().map(|u| u.name.as_str()).collect();
     assert_eq!(
         names,

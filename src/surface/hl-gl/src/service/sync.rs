@@ -14,12 +14,16 @@ use hl_gpu::{Cmd, CommandBuffer, CommandSink};
 
 impl GlContext {
     /// Ensure the context's backing IR fence exists.
-    fn ensure_fence(&mut self, commands: &mut Vec<Cmd>) -> u32 {
+    fn ensure_fence(&mut self, commands: &mut Vec<Cmd>) -> Option<u32> {
         if self.fence_ir == 0 {
-            self.fence_ir = self.alloc_fence_ir();
+            let Ok(fence) = self.alloc_fence_ir() else {
+                self.set_gl_error(crate::result::GL_OUT_OF_MEMORY);
+                return None;
+            };
+            self.fence_ir = fence;
             commands.push(Cmd::CreateFence(self.fence_ir));
         }
-        self.fence_ir
+        Some(self.fence_ir)
     }
 
     /// Drop a sync object, recording `GL_INVALID_VALUE` for an unknown token.
@@ -32,6 +36,14 @@ impl GlContext {
     /// Return whether `sync` names a live object.
     pub fn has_sync(&self, sync: usize) -> bool {
         self.syncs.contains_key(&sync)
+    }
+
+    pub fn sync_value(&self, sync: usize) -> Option<u64> {
+        self.syncs.get(&sync).copied()
+    }
+
+    pub fn mark_fence_signaled(&mut self, value: u64) {
+        self.fence_signaled_through = self.fence_signaled_through.max(value);
     }
 }
 
@@ -53,7 +65,7 @@ pub fn fence_sync(
         return None;
     }
     let mut cmds: Vec<Cmd> = Vec::new();
-    let fence = ctx.ensure_fence(&mut cmds);
+    let fence = ctx.ensure_fence(&mut cmds)?;
     let value = ctx.fence_next_value;
     ctx.fence_next_value += 1;
     cmds.push(Cmd::Submit(CommandBuffer {
@@ -92,11 +104,14 @@ pub fn client_wait_sync(
         return GL_ALREADY_SIGNALED;
     }
     if flags & GL_SYNC_FLUSH_COMMANDS_BIT != 0 || timeout != 0 {
-        if sink.wait(FenceId(ctx.fence_ir), value).is_err() {
-            return GL_WAIT_FAILED;
-        }
-        ctx.fence_signaled_through = ctx.fence_signaled_through.max(value);
-        return GL_CONDITION_SATISFIED;
+        return match sink.wait_timeout(FenceId(ctx.fence_ir), value, timeout) {
+            Ok(hl_gpu::FenceWait::Complete) => {
+                ctx.fence_signaled_through = ctx.fence_signaled_through.max(value);
+                GL_CONDITION_SATISFIED
+            }
+            Ok(hl_gpu::FenceWait::Timeout) => GL_TIMEOUT_EXPIRED,
+            Err(_) => GL_WAIT_FAILED,
+        };
     }
     GL_TIMEOUT_EXPIRED
 }
@@ -129,17 +144,31 @@ pub fn wait_sync(
 /// `GL_SIGNALED`/`GL_UNSIGNALED`, `GL_OBJECT_TYPE` → `GL_SYNC_FENCE`, `GL_SYNC_CONDITION` →
 /// `GL_SYNC_GPU_COMMANDS_COMPLETE`, `GL_SYNC_FLAGS` → `0`. Returns `None` (and sets the GL error) for an
 /// unknown sync (`GL_INVALID_VALUE`) or an unsupported `pname` (`GL_INVALID_ENUM`).
-pub fn get_synciv(ctx: &mut GlContext, sync: usize, pname: u32) -> Option<i32> {
+pub fn get_synciv(
+    ctx: &mut GlContext,
+    sink: &mut dyn CommandSink,
+    sync: usize,
+    pname: u32,
+) -> Option<i32> {
     let Some(&value) = ctx.syncs.get(&sync) else {
         ctx.set_gl_error(GL_INVALID_VALUE);
         return None;
     };
     match pname {
-        GL_SYNC_STATUS => Some(if ctx.fence_signaled_through >= value {
-            GL_SIGNALED as i32
-        } else {
-            GL_UNSIGNALED as i32
-        }),
+        GL_SYNC_STATUS => {
+            if ctx.fence_signaled_through < value
+                && sink
+                    .poll_fence(FenceId(ctx.fence_ir), value)
+                    .unwrap_or(false)
+            {
+                ctx.fence_signaled_through = value;
+            }
+            Some(if ctx.fence_signaled_through >= value {
+                GL_SIGNALED as i32
+            } else {
+                GL_UNSIGNALED as i32
+            })
+        }
         GL_OBJECT_TYPE => Some(GL_SYNC_FENCE as i32),
         GL_SYNC_CONDITION => Some(GL_SYNC_GPU_COMMANDS_COMPLETE as i32),
         GL_SYNC_FLAGS => Some(0),

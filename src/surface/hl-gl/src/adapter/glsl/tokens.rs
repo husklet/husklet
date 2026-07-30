@@ -9,6 +9,57 @@ impl<'a> Tokens<'a> {
             .next()
             .unwrap_or("")
     }
+
+    /// Whether a texture builtin's sampler expression names this exact reflected sampler.
+    ///
+    /// Translated GLES uses `sampler2D(name_hltex, name_hlsmp)` while verbatim desktop GLSL may retain the
+    /// direct name. Match those exact forms; substring matching confuses overlapping names such as `image`
+    /// and `images`, applying one texture object's orientation to another.
+    pub(super) fn names_sampler(&self, name: &str) -> bool {
+        let expression = self.0.trim();
+        if expression == name {
+            return true;
+        }
+        let binding = if let Some(open) = name.rfind('[') {
+            name.get(open + 1..name.len().saturating_sub(1))
+                .and_then(|element| {
+                    let base = &name[..open];
+                    (!base.is_empty()
+                        && !element.is_empty()
+                        && element.bytes().all(|byte| byte.is_ascii_digit()))
+                    .then(|| format!("{base}_{element}"))
+                })
+                .unwrap_or_else(|| name.to_string())
+        } else {
+            name.to_string()
+        };
+        let Some(open) = expression.find('(') else {
+            return expression == binding;
+        };
+        let constructor = expression[..open].trim();
+        if !constructor.starts_with("sampler") || !expression.ends_with(')') {
+            return false;
+        }
+        let arguments = &expression[open + 1..expression.len() - 1];
+        let mut depth = 0usize;
+        let comma = arguments.char_indices().find_map(|(at, ch)| match ch {
+            '(' | '[' | '{' => {
+                depth += 1;
+                None
+            }
+            ')' | ']' | '}' => {
+                depth = depth.saturating_sub(1);
+                None
+            }
+            ',' if depth == 0 => Some(at),
+            _ => None,
+        });
+        let Some(comma) = comma else {
+            return false;
+        };
+        arguments[..comma].trim() == format!("{binding}_hltex")
+            && arguments[comma + 1..].trim() == format!("{binding}_hlsmp")
+    }
 }
 
 /// A leading qualifier/keyword whose top-level unit is an INTERFACE declaration the translator REGENERATES
@@ -59,7 +110,7 @@ impl Source<'_> {
 /// cannot be smoothly interpolated. GLSL-ES declares these `flat`, but the reflection [`collect`] drops the
 /// qualifier, so the regenerated declaration must re-add it or the stage fails to compile.
 /// Collect uniforms from vs+fs (dedup by name), split into DATA uniforms and SAMPLER uniforms
-/// (gl_shim.c `collect_uniforms`). Returns `(data, samplers)` capped at 16 / 4.
+/// (gl_shim.c `collect_uniforms`).
 pub(super) struct Declarations<'a> {
     vertex: &'a str,
     fragment: &'a str,
@@ -71,11 +122,18 @@ impl<'a> Declarations<'a> {
     }
 
     pub(super) fn uniforms(self) -> (Vec<Decl>, Vec<Decl>) {
-        let mut all = Tokens(self.vertex).collect("uniform");
-        all.truncate(32);
-        for d in Tokens(self.fragment).collect("uniform") {
-            if all.len() >= 32 {
-                break;
+        let mut all: Vec<Decl> = Vec::new();
+        for d in Tokens(self.vertex)
+            .collect("uniform")
+            .into_iter()
+            .chain(Tokens(self.fragment).collect("uniform"))
+        {
+            // GskGpu emits an external-image declaration and a sampler2D fallback with the same name in
+            // opposite preprocessor branches. External images are not part of this GL model yet; the host
+            // preprocessor selects the ordinary sampler branch. Do not let the inactive declaration shadow
+            // that live fallback during source-level reflection.
+            if d.ty == "samplerExternalOES" {
+                continue;
             }
             if !all.iter().any(|x| x.name == d.name) {
                 all.push(d);
@@ -84,10 +142,8 @@ impl<'a> Declarations<'a> {
         let (mut data, mut samps) = (Vec::new(), Vec::new());
         for d in all {
             if d.is_sampler() {
-                if samps.len() < 4 {
-                    samps.push(d);
-                }
-            } else if data.len() < 16 {
+                samps.push(d);
+            } else {
                 data.push(d);
             }
         }
@@ -110,21 +166,25 @@ pub(super) fn append_decls_unique(dst: &mut Vec<Decl>, src: Vec<Decl>, max: usiz
 /// `collect_vertex_attrs`.
 /// MSL struct member (size, align) for a GLSL uniform type (gl_shim.c `msl_type_layout`).
 impl TypeToken<'_> {
-    pub(super) fn layout(&self) -> Option<(i32, i32)> {
+    /// `(std140 size, alignment, scalar components)`.
+    pub(super) fn layout(&self) -> Option<(usize, usize, usize)> {
         Some(match self.0 {
-            "float" | "int" | "uint" | "bool" => (4, 4),
-            "vec2" | "ivec2" | "uvec2" | "bvec2" => (8, 8),
-            "vec3" | "ivec3" | "uvec3" | "bvec3" => (16, 16),
-            "vec4" | "ivec4" | "uvec4" | "bvec4" => (16, 16),
-            "mat2" | "mat2x2" => (16, 8),
-            "mat3" | "mat3x3" => (48, 16),
-            "mat4" | "mat4x4" => (64, 16),
-            "mat2x3" => (32, 16),
-            "mat2x4" => (32, 16),
-            "mat3x2" => (24, 8),
-            "mat3x4" => (48, 16),
-            "mat4x2" => (32, 8),
-            "mat4x3" => (64, 16),
+            "float" | "int" | "uint" | "bool" => (4, 4, 1),
+            "vec2" | "ivec2" | "uvec2" | "bvec2" => (8, 8, 2),
+            // Keep vec3's occupied span at 16 bytes. This is conservative across std140 implementations and
+            // prevents a following member from aliasing the fourth lane.
+            "vec3" | "ivec3" | "uvec3" | "bvec3" => (16, 16, 3),
+            "vec4" | "ivec4" | "uvec4" | "bvec4" => (16, 16, 4),
+            // std140 matrices are arrays of column vectors; every column has a 16-byte stride.
+            "mat2" | "mat2x2" => (32, 16, 4),
+            "mat3" | "mat3x3" => (48, 16, 9),
+            "mat4" | "mat4x4" => (64, 16, 16),
+            "mat2x3" => (32, 16, 6),
+            "mat2x4" => (32, 16, 8),
+            "mat3x2" => (48, 16, 6),
+            "mat3x4" => (48, 16, 12),
+            "mat4x2" => (64, 16, 8),
+            "mat4x3" => (64, 16, 12),
             _ => return None,
         })
     }

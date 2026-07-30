@@ -204,6 +204,7 @@ fn combined_sampler_frag_samples_texture_through_the_split() {
                     address_u: AddressMode::ClampToEdge,
                     address_v: AddressMode::ClampToEdge,
                     address_w: AddressMode::ClampToEdge,
+                    ..SamplerDesc::default()
                 },
             ),
             Cmd::CreateRenderPipeline(

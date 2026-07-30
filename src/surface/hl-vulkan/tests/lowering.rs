@@ -16,7 +16,8 @@ use hl_vulkan::{Device, Instance};
 
 use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::descriptor::{
-    BindResource, Extent3d, Origin3d, TextureSubresource, VertexAttr, VertexLayout,
+    BindEntry, BindResource, Extent3d, FrameSerial, Origin3d, PipelineBinding, SurfaceToken,
+    TextureSubresource, VertexAttr, VertexLayout,
 };
 use hl_gpu::protocol::model::enums::{buffer_usage, Filter, IndexFormat, TextureFormat, Topology};
 use hl_gpu::{Cmd, FenceId, GpuError, RecordingSink, ShaderPayloadKind};

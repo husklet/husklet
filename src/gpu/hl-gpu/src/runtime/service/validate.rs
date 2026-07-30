@@ -8,6 +8,7 @@
 
 use crate::protocol::model::capability::shader_payload;
 use crate::protocol::model::command::{Cmd, Enc, ShaderPayloadKind};
+use crate::protocol::model::enums::compare;
 use crate::protocol::model::error::{GpuError, Result};
 use crate::runtime::model::session::Limits;
 
@@ -29,8 +30,18 @@ impl Enc {
                 src_offset,
                 bytes_per_row,
                 ..
+            }
+            | Enc::CopyBufferToTextureRegion {
+                src_offset,
+                bytes_per_row,
+                ..
             } => src_offset % a != 0 || !(*bytes_per_row as u64).is_multiple_of(a),
             Enc::CopyTextureToBuffer {
+                dst_offset,
+                bytes_per_row,
+                ..
+            }
+            | Enc::CopyTextureToBufferRegion {
                 dst_offset,
                 bytes_per_row,
                 ..
@@ -70,6 +81,21 @@ pub fn validate(limits: &Limits, frame_bytes: usize, cmds: &[Cmd]) -> Result<()>
                     return Err(GpuError::ResourceLimit("texture format"));
                 }
             }
+            Cmd::CreateSampler(_, descriptor) => {
+                if !descriptor.lod_min_clamp.is_finite()
+                    || !descriptor.lod_max_clamp.is_finite()
+                    || descriptor.lod_min_clamp < 0.0
+                    || descriptor.lod_max_clamp < descriptor.lod_min_clamp
+                {
+                    return Err(GpuError::Invalid("sampler LOD clamp"));
+                }
+                if descriptor
+                    .compare
+                    .is_some_and(|function| function > compare::ALWAYS)
+                {
+                    return Err(GpuError::Invalid("sampler comparison"));
+                }
+            }
             Cmd::CreateShader { kind, .. } => {
                 let bit = match kind {
                     ShaderPayloadKind::SpirV => shader_payload::SPIRV,
@@ -84,6 +110,34 @@ pub fn validate(limits: &Limits, frame_bytes: usize, cmds: &[Cmd]) -> Result<()>
             }
             Cmd::CreateBindGroup(_, d) if d.set >= caps.max_bind_groups => {
                 return Err(GpuError::ResourceLimit("bind groups"));
+            }
+            Cmd::CreateRenderPipelineLayout(_, _, layout, _)
+            | Cmd::CreateComputePipelineLayout(_, _, layout) => {
+                for binding in &layout.bindings {
+                    if binding.group >= caps.max_bind_groups {
+                        return Err(GpuError::ResourceLimit("bind groups"));
+                    }
+                    if binding.count == 0 || binding.count > 1_048_576 {
+                        return Err(GpuError::ResourceLimit("descriptor count"));
+                    }
+                    if binding.count > 1 {
+                        use crate::protocol::model::capability::binding_array;
+                        use crate::protocol::model::descriptor::PipelineBindingKind;
+                        let required = match binding.kind {
+                            PipelineBindingKind::UniformBuffer => binding_array::UNIFORM_BUFFER,
+                            PipelineBindingKind::StorageBuffer => binding_array::STORAGE_BUFFER,
+                            PipelineBindingKind::SampledTexture => binding_array::SAMPLED_TEXTURE,
+                            PipelineBindingKind::StorageTexture => binding_array::STORAGE_TEXTURE,
+                            PipelineBindingKind::Sampler => binding_array::SAMPLER,
+                            PipelineBindingKind::CombinedImageSampler => {
+                                binding_array::SAMPLED_TEXTURE | binding_array::SAMPLER
+                            }
+                        };
+                        if caps.binding_arrays & required != required {
+                            return Err(GpuError::Unsupported("binding array kind"));
+                        }
+                    }
+                }
             }
             Cmd::Submit(cb) => {
                 for op in &cb.encoder {

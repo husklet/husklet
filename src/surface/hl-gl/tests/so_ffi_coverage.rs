@@ -103,7 +103,9 @@ const GL_VALIDATE_STATUS: u32 = 0x8B83;
 const GL_SHADER_TYPE: u32 = 0x8B4F;
 const GL_SHADER_SOURCE_LENGTH: u32 = 0x8B88;
 const GL_ACTIVE_UNIFORMS: u32 = 0x8B86;
+const GL_ACTIVE_UNIFORM_MAX_LENGTH: u32 = 0x8B87;
 const GL_ACTIVE_ATTRIBUTES: u32 = 0x8B89;
+const GL_ACTIVE_ATTRIBUTE_MAX_LENGTH: u32 = 0x8B8A;
 const GL_ATTACHED_SHADERS: u32 = 0x8B85;
 const GL_INFO_LOG_LENGTH: u32 = 0x8B84;
 
@@ -129,7 +131,6 @@ const EGL_CONTEXT_CLIENT_VERSION: i32 = 0x3098;
 const EGL_RENDER_BUFFER: i32 = 0x3086;
 const EGL_BACK_BUFFER: i32 = 0x3084;
 const EGL_OPENGL_ES_API: u32 = 0x30A0;
-const EGL_CONDITION_SATISFIED: i32 = 0x30F6;
 const EGL_SYNC_FENCE: u32 = 0x30F9;
 
 // ==================================================================================================
@@ -231,6 +232,8 @@ fn cstr(p: *const u8) -> String {
 mod egl;
 #[path = "so_ffi_coverage/identity.rs"]
 mod identity;
+#[path = "so_ffi_coverage/image.rs"]
+mod image;
 #[path = "so_ffi_coverage/indexed.rs"]
 mod indexed;
 #[path = "so_ffi_coverage/lifetime.rs"]

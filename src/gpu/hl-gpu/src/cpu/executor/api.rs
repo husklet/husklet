@@ -24,6 +24,9 @@ impl GpuExecutor for CpuExecutor {
             max_bind_groups: 4,
             // Synchronous; a fence only reaches a value a submit signalled.
             supports_timeline_fences: false,
+            binding_arrays: 0,
+            non_uniform_binding_arrays: 0,
+            gpu_features: 0,
         }
     }
 
@@ -50,6 +53,25 @@ impl GpuExecutor for CpuExecutor {
                 Cmd::DestroyTexture(id) => {
                     res.textures.remove(*id)?;
                 }
+                Cmd::CreateTextureView(id, view) => {
+                    if view.base_mip != 0
+                        || view.mip_count != 1
+                        || view.base_layer != 0
+                        || view.layer_count != 1
+                    {
+                        return Err(GpuError::Unsupported("software: texture subresource views"));
+                    }
+                    let texture = texture(res, view.texture)?.clone();
+                    if view.format != texture.desc.format
+                        || view.aspect != crate::protocol::model::enums::TextureAspect::All
+                    {
+                        return Err(GpuError::Invalid("software: incompatible texture view"));
+                    }
+                    res.textures.insert(*id, Box::new(texture))?;
+                }
+                Cmd::DestroyTextureView(id) => {
+                    res.textures.remove(*id)?;
+                }
                 Cmd::CreateSampler(id, _) => res.samplers.insert(*id, Box::new(Sampler))?,
                 Cmd::DestroySampler(id) => {
                     res.samplers.remove(*id)?;
@@ -62,6 +84,12 @@ impl GpuExecutor for CpuExecutor {
                 }
                 Cmd::CreateRenderPipeline(id, d) => self.create_render_pipeline(res, *id, d)?,
                 Cmd::CreateComputePipeline(id, d) => self.create_compute_pipeline(res, *id, d)?,
+                Cmd::CreateRenderPipelineLayout(id, d, _, _) => {
+                    self.create_render_pipeline(res, *id, d)?
+                }
+                Cmd::CreateComputePipelineLayout(id, d, _) => {
+                    self.create_compute_pipeline(res, *id, d)?
+                }
                 Cmd::DestroyPipeline(id) => {
                     res.pipelines.remove(*id)?;
                 }
@@ -86,8 +114,12 @@ impl GpuExecutor for CpuExecutor {
                         ));
                     }
                 }
-                Cmd::Present { surface, texture } => {
-                    presents.push(self.present(res, *surface, *texture)?);
+                Cmd::Present {
+                    surface,
+                    texture,
+                    serial,
+                } => {
+                    presents.push(self.present(res, *surface, *texture, *serial)?);
                 }
             }
         }
@@ -107,6 +139,14 @@ impl GpuExecutor for CpuExecutor {
             ));
         }
         Ok(())
+    }
+
+    fn poll_fence(&mut self, res: &SessionResources, fence: FenceId, value: u64) -> Result<bool> {
+        Ok(res
+            .fences
+            .get(fence.0)?
+            .downcast_ref::<u64>()
+            .is_some_and(|signaled| *signaled >= value))
     }
 
     /// Serve the device→host readback port by allocating the output and delegating to the inherent

@@ -45,6 +45,14 @@ impl Framebuffers {
         name
     }
 
+    /// Materialize a non-zero name bound through `GL_CHROMIUM_bind_generates_resource`.
+    pub fn ensure(&mut self, name: u32) {
+        if name != 0 {
+            self.color.entry(name).or_insert(0);
+            self.next_name = self.next_name.max(name.saturating_add(1));
+        }
+    }
+
     /// `glFramebufferTexture2D(GL_COLOR_ATTACHMENT0, tex)` — attach `tex` as `fbo`'s color target.
     pub fn attach_color(&mut self, fbo: u32, tex: u32) {
         if fbo != 0 {
@@ -117,6 +125,12 @@ impl Framebuffers {
                 *v = 0;
             }
         }
+    }
+
+    pub(crate) fn references_texture(&self, texture: u32) -> bool {
+        texture != 0
+            && (self.color.values().any(|value| *value == texture)
+                || self.color_extra.values().any(|value| *value == texture))
     }
 
     /// `glDeleteFramebuffers` — drop the object. Returns `false` for an unknown name.

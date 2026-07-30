@@ -396,15 +396,17 @@ impl Cmd {
         Ok(match self {
             Cmd::CreateBuffer(id, d) => Some((KIND_BUFFER, *id, d.size)),
             Cmd::CreateTexture(id, d) => Some((KIND_TEXTURE, *id, d.residency_bytes()?)),
+            Cmd::CreateTextureView(id, _) => Some((KIND_TEXTURE, *id, 64)),
             Cmd::CreateSampler(id, _) => Some((KIND_SAMPLER, *id, 64)),
             Cmd::CreateShader { id, spirv, .. } => {
                 Some((KIND_SHADER, *id, (spirv.len() as u64).saturating_mul(4)))
             }
             // A pipeline's charge is its compiled-cache (PSO/AIR) footprint; the account service also meters
             // it against the negotiated per-connection compiled-cache ceiling.
-            Cmd::CreateRenderPipeline(id, _) | Cmd::CreateComputePipeline(id, _) => {
-                Some((KIND_PIPELINE, *id, 4096))
-            }
+            Cmd::CreateRenderPipeline(id, _)
+            | Cmd::CreateComputePipeline(id, _)
+            | Cmd::CreateRenderPipelineLayout(id, _, _, _)
+            | Cmd::CreateComputePipelineLayout(id, _, _) => Some((KIND_PIPELINE, *id, 4096)),
             Cmd::CreateBindGroup(id, d) => {
                 let referenced = d
                     .entries
@@ -433,6 +435,7 @@ impl Cmd {
         match self {
             Cmd::DestroyBuffer(id) => Some((KIND_BUFFER, *id)),
             Cmd::DestroyTexture(id) => Some((KIND_TEXTURE, *id)),
+            Cmd::DestroyTextureView(id) => Some((KIND_TEXTURE, *id)),
             Cmd::DestroySampler(id) => Some((KIND_SAMPLER, *id)),
             Cmd::DestroyShader(id) => Some((KIND_SHADER, *id)),
             Cmd::DestroyPipeline(id) => Some((KIND_PIPELINE, *id)),

@@ -22,11 +22,11 @@ const FS_U: &str =
 
 fn ctx_64() -> GlContext {
     let mut c = GlContext::new();
-    c.surf = GlSurface {
+    c.set_surface(GlSurface {
         have: true,
         width: 64,
         height: 64,
-    };
+    });
     c
 }
 
@@ -136,6 +136,9 @@ fn depth_test_lowers_to_pipeline_depth_state() {
 #[test]
 fn cull_face_lowers_to_pipeline_cull_and_winding() {
     let mut c = ctx_64();
+    // Exercise the direct fixed-function mapping. A presented window target deliberately reflects clip Y
+    // and reverses this winding once more to preserve the same visible GL face.
+    c.set_surface_kind(hl_gl::model::context::SurfaceKind::Offscreen);
     let mut sink = RecordingSink::with_full_caps();
     flat_program(&mut c, FS);
     tri_vbo(&mut c);

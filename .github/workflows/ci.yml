@@ -37,26 +37,41 @@ jobs:
       - name: Cache the Nix development environment
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
         with:
-          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('nix/flake.lock') }}
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Check formatting
-        run: nix develop "path:$PWD/nix" --command cargo fmt --all -- --check
+        run: nix develop . --command cargo fmt --all -- --check
 
       - name: Enforce Clippy warnings
-        run: nix develop "path:$PWD/nix" --command cargo clippy --workspace --all-targets -- -D warnings
+        run: |
+          set -o pipefail
+          log_file="$(mktemp)"
+          set +e
+          nix develop . --command \
+            cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tee "$log_file"
+          status="${PIPESTATUS[0]}"
+          set -e
+          if (( status != 0 )); then
+            diagnostic="$(tail -n 80 "$log_file" | awk '{ print substr($0, 1, 500) }')"
+            diagnostic="${diagnostic//'%'/'%25'}"
+            diagnostic="${diagnostic//$'\r'/'%0D'}"
+            diagnostic="${diagnostic//$'\n'/'%0A'}"
+            echo "::error title=Clippy failed (exit $status)::$diagnostic"
+          fi
+          exit "$status"
 
       - name: Test deterministic workspace targets
         run: |
-          nix develop "path:$PWD/nix" --command cargo test --workspace --exclude hl-daemon
-          nix develop "path:$PWD/nix" --command \
+          nix develop . --command cargo test --workspace --exclude hl-daemon
+          nix develop . --command \
             cargo test -p hl-daemon --lib --bin hl-daemon --test analyze --test report
 
       - name: Build the complete workspace
-        run: nix develop "path:$PWD/nix" --command cargo build --workspace
+        run: nix develop . --command cargo build --workspace
 
       - name: Build the runtime library
-        run: nix develop "path:$PWD/nix" --command cargo check -p husklet --features runtime --lib
+        run: nix develop . --command cargo check -p husklet --features runtime --lib
 
       - name: Build the macOS application
-        run: nix develop "path:$PWD/nix" --command cargo check -p husklet --bin husklet --features gui
+        run: nix develop . --command cargo check -p husklet --bin husklet --features gui

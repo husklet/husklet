@@ -8,6 +8,154 @@ use hl_gpu::protocol::model::descriptor::*;
 use hl_gpu::protocol::model::enums::*;
 use hl_gpu::GpuError;
 
+#[test]
+fn pipeline_layout_cardinality_roundtrips() {
+    let command = Cmd::CreateComputePipelineLayout(
+        7,
+        ComputePipelineDesc {
+            compute: ShaderRef {
+                module: 3,
+                entry: "main".into(),
+            },
+            label: "arrays".into(),
+        },
+        PipelineLayout {
+            bindings: vec![
+                PipelineBinding {
+                    group: 0,
+                    binding: 1,
+                    count: 2,
+                    kind: PipelineBindingKind::StorageBuffer,
+                },
+                PipelineBinding {
+                    group: 2,
+                    binding: 4,
+                    count: 17,
+                    kind: PipelineBindingKind::SampledTexture,
+                },
+            ],
+        },
+    );
+    let bytes = command.frame();
+    assert_eq!(
+        Cmd::decode_frame(&mut Decoder::new(&bytes)).unwrap(),
+        command
+    );
+}
+
+#[test]
+fn pipeline_layout_rejects_zero_and_duplicate_bindings() {
+    let encode = |bindings: &[(u32, u32, u32)]| {
+        let mut wire = Encoder::new();
+        wire.u8(tag::CREATE_COMPUTE_PIPELINE_LAYOUT);
+        wire.u32(1);
+        wire.u32(2);
+        wire.str("main");
+        wire.str("layout");
+        wire.u32(bindings.len() as u32);
+        for &(group, binding, count) in bindings {
+            wire.u32(group);
+            wire.u32(binding);
+            wire.u32(count);
+            wire.u32(PipelineBindingKind::UniformBuffer.to_u32());
+        }
+        wire.into_vec()
+    };
+    assert_eq!(
+        Cmd::decode(&mut Decoder::new(&encode(&[(0, 0, 0)]))),
+        Err(GpuError::Invalid("pipeline binding count must be non-zero"))
+    );
+    assert_eq!(
+        Cmd::decode(&mut Decoder::new(&encode(&[(0, 0, 1), (0, 0, 2)]))),
+        Err(GpuError::Invalid("duplicate pipeline binding"))
+    );
+}
+
+#[test]
+fn surface_token_rejects_zero_in_model_and_wire() {
+    assert_eq!(
+        SurfaceToken::new(0),
+        Err(GpuError::Invalid("surface token is zero"))
+    );
+
+    let mut wire = Encoder::new();
+    wire.u8(tag::CREATE_SURFACE);
+    wire.u32(7);
+    wire.u32(4);
+    wire.u32(3);
+    wire.u32(TextureFormat::Bgra8Unorm.to_u32());
+    wire.u64(0);
+    assert_eq!(
+        Cmd::decode(&mut Decoder::new(&wire.into_vec())),
+        Err(GpuError::Invalid("surface token is zero"))
+    );
+}
+
+#[test]
+fn presentation_token_and_serial_roundtrip_without_aliasing_resource_id() {
+    let commands = vec![
+        Cmd::CreateSurface(
+            7,
+            SurfaceDesc {
+                width: 4,
+                height: 3,
+                format: TextureFormat::Bgra8Unorm,
+                token: SurfaceToken::new(0xfedc_ba98_7654_3210).unwrap(),
+            },
+        ),
+        Cmd::Present {
+            surface: 7,
+            texture: 9,
+            serial: hl_gpu::FrameSerial::new(0x0123_4567_89ab_cdef).unwrap(),
+        },
+    ];
+    assert_eq!(
+        Decoder::stream(&Encoder::stream(&commands)).unwrap(),
+        commands
+    );
+}
+
+#[test]
+fn typed_binding_arrays_roundtrip_with_order_and_cardinality() {
+    let commands = vec![Cmd::CreateBindGroup(
+        9,
+        BindGroupDesc {
+            set: 1,
+            entries: vec![
+                BindEntry {
+                    binding: 2,
+                    resource: BindResource::BufferArray {
+                        elements: vec![
+                            BufferBinding {
+                                id: 10,
+                                offset: 0,
+                                size: 16,
+                            },
+                            BufferBinding {
+                                id: 11,
+                                offset: 32,
+                                size: 16,
+                            },
+                        ],
+                    },
+                },
+                BindEntry {
+                    binding: 3,
+                    resource: BindResource::TextureArray { ids: vec![20, 21] },
+                },
+                BindEntry {
+                    binding: 4,
+                    resource: BindResource::SamplerArray { ids: vec![30, 31] },
+                },
+            ],
+        },
+    )];
+    assert_eq!(
+        Decoder::stream(&Encoder::stream(&commands)).unwrap(),
+        commands
+    );
+}
+
 /// A representative stream touching every command family: buffer create/write, texture, sampler, both
 /// shader kinds, render + compute pipelines, bind group, surface, fence, a Submit command buffer with a
 /// clear + a texture-to-texture copy + a draw, a wait, a present, and destroys.
@@ -63,6 +211,9 @@ fn representative_stream() -> Vec<Cmd> {
                 address_u: AddressMode::Repeat,
                 address_v: AddressMode::ClampToEdge,
                 address_w: AddressMode::MirrorRepeat,
+                lod_min_clamp: 1.25,
+                lod_max_clamp: 9.5,
+                compare: Some(compare::GREATER_EQUAL),
             },
         ),
         Cmd::CreateShader {
@@ -161,7 +312,7 @@ fn representative_stream() -> Vec<Cmd> {
                 width: 64,
                 height: 32,
                 format: TextureFormat::Bgra8Unorm,
-                hlp_surface: 100,
+                token: hl_gpu::SurfaceToken::new(100).unwrap(),
             },
         ),
         Cmd::CreateFence(8),
@@ -304,6 +455,7 @@ fn representative_stream() -> Vec<Cmd> {
         Cmd::Present {
             surface: 7,
             texture: 2,
+            serial: hl_gpu::FrameSerial::new(101).unwrap(),
         },
         Cmd::DestroyBindGroup(6),
         Cmd::DestroyPipeline(5),

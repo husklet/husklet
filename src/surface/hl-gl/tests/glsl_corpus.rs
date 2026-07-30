@@ -275,11 +275,11 @@ struct Case {
 /// (vs, fs) GLSL payloads decoded from the `GlslDescriptor` IR words — exactly what the executor receives.
 fn link_and_forward(vs: &str, fs: &str) -> (String, String) {
     let mut c = GlContext::new();
-    c.surf = GlSurface {
+    c.set_surface(GlSurface {
         have: true,
         width: 64,
         height: 64,
-    };
+    });
     let vso = record::create_shader(&mut c, GL_VERTEX_SHADER);
     record::shader_source(&mut c, vso, vs);
     record::compile_shader(&mut c, vso);

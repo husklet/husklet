@@ -24,7 +24,7 @@ use document::{WorkspaceDocument, WorkspaceText};
 #[cfg(feature = "gui")]
 use hl_ws_term::config::{CursorShape, TermConfig};
 
-/// The kind of VPN/proxy a workspace routes its egress through (see [`VpnConfig`] / `docs/VPN.md`). Pure
+/// The kind of VPN/proxy a workspace routes its egress through. Pure
 /// data; the container domain applies the routing mechanism at launch.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum VpnKind {
@@ -32,7 +32,7 @@ pub enum VpnKind {
     Socks5,
     /// An HTTP CONNECT proxy `host:port` (modeled + persisted; needs a helper to front it as SOCKS5).
     Http,
-    /// A WireGuard `wg-quick` config path (needs the userspace-WG + SOCKS helper, per `docs/VPN.md` §4.1).
+    /// A WireGuard `wg-quick` config path.
     Wireguard,
     /// An OpenVPN config path (needs the userspace-OpenVPN + tun2socks helper).
     Openvpn,
@@ -63,7 +63,7 @@ impl VpnKind {
 /// A per-workspace VPN / proxy egress SETTING. `None` on a [`WorkspaceConfig`] = direct egress (default).
 /// When set, `hl` maps it to the engine's egress primitive at launch: for [`VpnKind::Socks5`] the SOCKS5
 /// `host:port` is passed straight through; the other kinds name a tunnel/config a userspace helper fronts
-/// as SOCKS5 (see `docs/VPN.md`).
+/// as SOCKS5.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct VpnConfig {
     pub kind: VpnKind,
@@ -136,7 +136,7 @@ impl VpnConfig {
 /// A per-workspace **simulated CUDA device** SETTING. `None` on a [`WorkspaceConfig`] = no GPU device
 /// presented. These fields are exactly what NVML / `cudaGetDeviceProperties` report — *presentation* data,
 /// not real hardware. The injection MECHANISM (NVML shim, `nvidia-smi`, command-forward to Metal) is an
-/// `hl-gpu` primitive that `hl` drives from these fields at launch (see `docs/ideas/CUDA_ON_METAL.md`).
+/// `hl-gpu` primitive that Husklet drives from these fields at launch.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CudaDevice {
     /// Reported device name, e.g. `"hl Metal (CUDA-sim) Device"`.

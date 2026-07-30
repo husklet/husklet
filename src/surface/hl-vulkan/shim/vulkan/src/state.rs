@@ -58,6 +58,73 @@ pub struct WaylandWindow {
     pub surface: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum PresenterId {
+    Wayland(usize),
+    Surface(u64),
+}
+
+/// Surface-owned Wayland presenters with swapchain leases.
+///
+/// Vulkan permits an old and replacement swapchain to overlap on one `VkSurfaceKHR`. The protocol
+/// identity therefore belongs to the surface, while swapchains only hold leases to it.
+pub struct Presenters {
+    surfaces: HashMap<PresenterId, Option<WaylandAppPresenter>>,
+    swapchains: HashMap<u64, PresenterId>,
+}
+
+impl Presenters {
+    pub(crate) fn new() -> Self {
+        Self {
+            surfaces: HashMap::new(),
+            swapchains: HashMap::new(),
+        }
+    }
+
+    pub fn ensure(
+        &mut self,
+        surface: PresenterId,
+        create: impl FnOnce() -> Option<WaylandAppPresenter>,
+    ) -> &mut Option<WaylandAppPresenter> {
+        self.surfaces.entry(surface).or_insert_with(create)
+    }
+
+    pub fn bind(&mut self, swapchain: u64, surface: PresenterId) {
+        self.swapchains.insert(swapchain, surface);
+    }
+
+    pub fn discard_unbound(&mut self, surface: PresenterId) {
+        if !self.swapchains.values().any(|owner| *owner == surface) {
+            self.surfaces.remove(&surface);
+        }
+    }
+
+    pub fn get_mut(&mut self, swapchain: u64) -> Option<&mut Option<WaylandAppPresenter>> {
+        let surface = *self.swapchains.get(&swapchain)?;
+        self.surfaces.get_mut(&surface)
+    }
+
+    pub fn surface(&self, swapchain: u64) -> Option<PresenterId> {
+        self.swapchains.get(&swapchain).copied()
+    }
+
+    pub fn swapchains(&self, surface: PresenterId) -> Vec<u64> {
+        self.swapchains
+            .iter()
+            .filter_map(|(swapchain, owner)| (*owner == surface).then_some(*swapchain))
+            .collect()
+    }
+
+    pub fn unbind(&mut self, swapchain: u64) {
+        let Some(surface) = self.swapchains.remove(&swapchain) else {
+            return;
+        };
+        if !self.swapchains.values().any(|owner| *owner == surface) {
+            self.surfaces.remove(&surface);
+        }
+    }
+}
+
 /// Everything the shim tracks between `vk*` calls.
 pub struct State {
     /// The current `VkInstance` (created by `vkCreateInstance`), holding the physical-device descriptor.
@@ -66,6 +133,8 @@ pub struct State {
     pub device: Option<Device>,
     /// The guest→host boundary: encodes each lowered batch and ships it framed over `$HL_GPU_EXEC`.
     pub sink: RemoteCommandSink,
+    /// Whether the negotiated host can import native IOSurface-backed presentation textures.
+    pub native_present: bool,
 
     /// `VkImageView` handle → the `VkImage` handle it views. The `hl_vulkan` model renders into images,
     /// so a view is a thin alias resolved back to its image at `vkCmdBeginRenderPass` (via a framebuffer).
@@ -87,13 +156,8 @@ pub struct State {
     /// `VkSurfaceKHR` → the app's captured wayland handles (only wayland surfaces; a wl `wl_surface*` of
     /// 0 or a non-wayland platform surface is simply absent). Populated by `vkCreateWaylandSurfaceKHR`.
     pub wayland_surfaces: HashMap<u64, WaylandWindow>,
-    /// `VkSwapchainKHR` → the app's wayland window, copied from the swapchain's `VkSurfaceKHR` at
-    /// `vkCreateSwapchainKHR`. Its presence is what routes `vkQueuePresentKHR`'s readback onto the app's
-    /// `wl_surface` (absent ⇒ a headless/offscreen present: the readback still runs, the attach is skipped).
-    pub swapchain_windows: HashMap<u64, WaylandWindow>,
-    /// `VkSwapchainKHR` → its live [`WaylandAppPresenter`], or `None` if bring-up hit a *soft* error
-    /// (libwayland/global absent) — cached so a soft-unavailable surface is not re-probed every frame.
-    pub presenters: HashMap<u64, Option<WaylandAppPresenter>>,
+    /// Surface-owned presenters plus swapchain leases. Overlapping recreation shares one identity.
+    pub presenters: Presenters,
 
     /// Live `VkPrivateDataSlot` handles (the `VK_EXT_private_data` / core-1.3 slot objects). A slot is a
     /// pure host object; the per-object data it stores lives in [`Self::private_data`].
@@ -128,6 +192,7 @@ pub struct State {
     queue_handle: usize,
 }
 
+
 impl State {
     fn new() -> Self {
         State {
@@ -137,14 +202,14 @@ impl State {
             sink: RemoteCommandSink::new(
                 std::env::var("HL_GPU_EXEC").unwrap_or_else(|_| DEFAULT_EXEC_SOCK.to_owned()),
             ),
+            native_present: false,
             image_views: HashMap::new(),
             render_passes: HashMap::new(),
             framebuffers: HashMap::new(),
             surfaces: std::collections::HashSet::new(),
             next_surface: 0,
             wayland_surfaces: HashMap::new(),
-            swapchain_windows: HashMap::new(),
-            presenters: HashMap::new(),
+            presenters: Presenters::new(),
             private_data_slots: std::collections::HashSet::new(),
             private_data: HashMap::new(),
             ycbcr_conversions: std::collections::HashSet::new(),
@@ -228,5 +293,29 @@ impl StateStore {
         let state = STATE.get_or_init(|| Mutex::new(State::new()));
         let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
         f(&mut state)
+    }
+}
+
+#[cfg(test)]
+mod presenter_tests {
+    use super::{PresenterId, Presenters};
+
+    #[test]
+    fn overlapping_swapchains_keep_one_surface_owner_until_the_last_destroy() {
+        let surface = PresenterId::Wayland(7);
+        let old = 11;
+        let new = 12;
+        let mut presenters = Presenters::new();
+        presenters.ensure(surface, || None);
+        presenters.bind(old, surface);
+        presenters.bind(new, surface);
+
+        presenters.unbind(old);
+        assert_eq!(presenters.surface(new), Some(surface));
+        assert!(matches!(presenters.get_mut(new), Some(None)));
+
+        presenters.unbind(new);
+        assert!(presenters.get_mut(new).is_none());
+        assert!(presenters.swapchains(surface).is_empty());
     }
 }

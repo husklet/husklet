@@ -29,6 +29,8 @@ pub struct Scene {
     /// Ordered (bottom → top) subsurface children per parent surface — the z-order Smithay keeps in
     /// `get_children`, made explicit.
     subsurface_children: HashMap<SurfaceId, Vec<SurfaceId>>,
+    /// Children ordered below their parent's content in the wl_subsurface stack.
+    subsurface_below: HashSet<SurfaceId>,
     /// Every live popup surface id (order-independent; placement order is derived by depth).
     popups: HashSet<SurfaceId>,
     outputs: Vec<Output>,
@@ -224,6 +226,7 @@ impl Scene {
                         }) if *next_parent == parent
                     );
                     if !keeps_parent {
+                        self.subsurface_below.remove(&id);
                         if let Some(children) = self.subsurface_children.get_mut(&parent) {
                             children.retain(|child| *child != id);
                         }
@@ -265,6 +268,7 @@ impl Scene {
         self.surface_outputs.remove(&id);
         self.popups.remove(&id);
         self.subsurface_children.remove(&id);
+        self.subsurface_below.remove(&id);
         for kids in self.subsurface_children.values_mut() {
             kids.retain(|k| *k != id);
         }

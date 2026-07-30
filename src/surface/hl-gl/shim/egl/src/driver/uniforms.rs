@@ -1,28 +1,96 @@
 use super::*;
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glVertexAttrib1f(_index: u32, _x: f32) {}
+pub extern "C" fn glVertexAttrib1f(index: u32, x: f32) {
+    GlobalState::context(|state| {
+        record::vertex_attrib(&mut state.gl, index as usize, [x, 0.0, 0.0, 1.0])
+    });
+}
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glVertexAttrib2f(_index: u32, _x: f32, _y: f32) {}
+pub extern "C" fn glVertexAttrib2f(index: u32, x: f32, y: f32) {
+    GlobalState::context(|state| {
+        record::vertex_attrib(&mut state.gl, index as usize, [x, y, 0.0, 1.0])
+    });
+}
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glVertexAttrib3f(_index: u32, _x: f32, _y: f32, _z: f32) {}
+pub extern "C" fn glVertexAttrib3f(index: u32, x: f32, y: f32, z: f32) {
+    GlobalState::context(|state| {
+        record::vertex_attrib(&mut state.gl, index as usize, [x, y, z, 1.0])
+    });
+}
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glVertexAttrib4f(_index: u32, _x: f32, _y: f32, _z: f32, _w: f32) {}
+pub extern "C" fn glVertexAttrib4f(index: u32, x: f32, y: f32, z: f32, w: f32) {
+    GlobalState::context(|state| {
+        record::vertex_attrib(&mut state.gl, index as usize, [x, y, z, w])
+    });
+}
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glVertexAttrib1fv(_index: u32, _v: *const f32) {}
+pub extern "C" fn glVertexAttrib1fv(index: u32, value: *const f32) {
+    if !value.is_null() {
+        glVertexAttrib1f(index, unsafe { *value });
+    }
+}
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glVertexAttrib2fv(_index: u32, _v: *const f32) {}
+pub extern "C" fn glVertexAttrib2fv(index: u32, value: *const f32) {
+    if !value.is_null() {
+        glVertexAttrib2f(index, unsafe { *value }, unsafe { *value.add(1) });
+    }
+}
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glVertexAttrib3fv(_index: u32, _v: *const f32) {}
+pub extern "C" fn glVertexAttrib3fv(index: u32, value: *const f32) {
+    if !value.is_null() {
+        glVertexAttrib3f(index, unsafe { *value }, unsafe { *value.add(1) }, unsafe {
+            *value.add(2)
+        });
+    }
+}
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glVertexAttrib4fv(_index: u32, _v: *const f32) {}
+pub extern "C" fn glVertexAttrib4fv(index: u32, value: *const f32) {
+    if !value.is_null() {
+        glVertexAttrib4f(
+            index,
+            unsafe { *value },
+            unsafe { *value.add(1) },
+            unsafe { *value.add(2) },
+            unsafe { *value.add(3) },
+        );
+    }
+}
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glVertexAttribI4i(_index: u32, _x: i32, _y: i32, _z: i32, _w: i32) {}
+pub extern "C" fn glVertexAttribI4i(index: u32, x: i32, y: i32, z: i32, w: i32) {
+    GlobalState::context(|state| {
+        record::vertex_attrib_i(&mut state.gl, index as usize, [x, y, z, w])
+    });
+}
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glVertexAttribI4ui(_index: u32, _x: u32, _y: u32, _z: u32, _w: u32) {}
+pub extern "C" fn glVertexAttribI4ui(index: u32, x: u32, y: u32, z: u32, w: u32) {
+    GlobalState::context(|state| {
+        record::vertex_attrib_ui(&mut state.gl, index as usize, [x, y, z, w])
+    });
+}
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glVertexAttribI4iv(_index: u32, _v: *const i32) {}
+pub extern "C" fn glVertexAttribI4iv(index: u32, v: *const i32) {
+    if !v.is_null() {
+        glVertexAttribI4i(
+            index,
+            unsafe { *v },
+            unsafe { *v.add(1) },
+            unsafe { *v.add(2) },
+            unsafe { *v.add(3) },
+        );
+    }
+}
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glVertexAttribI4uiv(_index: u32, _v: *const u32) {}
+pub extern "C" fn glVertexAttribI4uiv(index: u32, v: *const u32) {
+    if !v.is_null() {
+        glVertexAttribI4ui(
+            index,
+            unsafe { *v },
+            unsafe { *v.add(1) },
+            unsafe { *v.add(2) },
+            unsafe { *v.add(3) },
+        );
+    }
+}
 
 /// `glVertexAttribIPointer(index, size, type, stride, pointer)` — an integer vertex-attribute array;
 /// records into the same per-location attribute state as `glVertexAttribPointer` (marked integer, never
@@ -35,9 +103,9 @@ pub extern "C" fn glVertexAttribIPointer(
     stride: i32,
     pointer: *const c_void,
 ) {
-    GlobalState::access(|s| {
+    GlobalState::context(|s| {
         record::vertex_attrib_pointer(
-            &mut s.ctx,
+            &mut s.gl,
             index as usize,
             size,
             type_,
@@ -49,8 +117,7 @@ pub extern "C" fn glVertexAttribIPointer(
 }
 
 /// `glVertexAttribIFormat(attribindex, size, type, relativeoffset)` — the separate-format (VAO) integer
-/// attribute format; records size/type/offset into the attribute state (a no-op for the fields this model
-/// does not separately track).
+/// attribute format; buffer/stride/divisor come from the selected separate vertex binding.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glVertexAttribIFormat(
     attribindex: u32,
@@ -58,14 +125,14 @@ pub extern "C" fn glVertexAttribIFormat(
     type_: u32,
     relativeoffset: u32,
 ) {
-    GlobalState::access(|s| {
-        record::vertex_attrib_pointer(
-            &mut s.ctx,
+    GlobalState::context(|s| {
+        record::vertex_attrib_format(
+            &mut s.gl,
             attribindex as usize,
             size,
             type_,
             false,
-            0,
+            true,
             relativeoffset as usize,
         )
     });
@@ -105,15 +172,15 @@ pub extern "C" fn glInvalidateSubFramebuffer(
 /// pipeline's `DepthState` stencil faces + `Enc::SetStencilReference` (see `service::frame`).
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glStencilFuncSeparate(face: u32, func: u32, ref_: i32, mask: u32) {
-    GlobalState::access(|s| record::stencil_func_separate(&mut s.ctx, face, func, ref_, mask));
+    GlobalState::context(|s| record::stencil_func_separate(&mut s.gl, face, func, ref_, mask));
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glStencilMaskSeparate(face: u32, mask: u32) {
-    GlobalState::access(|s| record::stencil_mask_separate(&mut s.ctx, face, mask));
+    GlobalState::context(|s| record::stencil_mask_separate(&mut s.gl, face, mask));
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glStencilOpSeparate(face: u32, sfail: u32, dpfail: u32, dppass: u32) {
-    GlobalState::access(|s| record::stencil_op_separate(&mut s.ctx, face, sfail, dpfail, dppass));
+    GlobalState::context(|s| record::stencil_op_separate(&mut s.gl, face, sfail, dpfail, dppass));
 }
 
 // ==================================================================================================
@@ -138,17 +205,17 @@ pub(super) const EGL_CONTEXT_CLIENT_TYPE: i32 = 0x3097;
 pub(super) const EGL_CONTEXT_CLIENT_VERSION: i32 = 0x3098;
 pub(super) const EGL_RENDER_BUFFER: i32 = 0x3086;
 pub(super) const EGL_BACK_BUFFER: i32 = 0x3084;
-/// A fixed non-null opaque token for the EGL sync / image objects this driver hands back (their lifecycle
-/// is accepted but not separately tracked — one shared token keeps a `!= EGL_NO_SYNC` contract).
-pub(super) const EGL_OBJECT_TOKEN: usize = 0x5171;
-
-// ---- EGL_EXT_device_base / device_query / device_enumeration enums + the single software device ----
+// ---- EGL_EXT_device_base / device_query / device_enumeration enums + the hl-gl device ----------------
 /// `EGL_DEVICE_EXT` — the `eglQueryDisplayAttribEXT` attribute GDK asks for to learn the display's backing
 /// `EGLDeviceEXT` (and the `eglCreatePlatformDisplay(EGL_PLATFORM_DEVICE_EXT, …)` platform enum).
 pub(super) const EGL_DEVICE_EXT: i32 = 0x322C;
 /// `EGL_BAD_DEVICE_EXT` — the error for an `EGLDeviceEXT` handle we did not hand out.
 pub(super) const EGL_BAD_DEVICE_EXT: i32 = 0x322B;
-/// The single, truthful `EGLDeviceEXT` handle this driver reports: our software (hl-gl) renderer. Non-null
+/// `EGL_DRM_RENDER_NODE_FILE_EXT` — the render-node pathname exposed by
+/// `EGL_EXT_device_drm_render_node`.
+pub(super) const EGL_DRM_RENDER_NODE_FILE_EXT: i32 = 0x3377;
+/// The single, truthful `EGLDeviceEXT` handle this driver reports: the hl-gl renderer backed by Husklet's
+/// projected DRM render node. Non-null
 /// and distinct from the display/config/object tokens so `eglQueryDeviceStringEXT` et al. can validate it.
 pub(super) const DEVICE_TOKEN: usize = 0xDE71;
 
@@ -163,9 +230,9 @@ pub(super) unsafe fn slice_u32<'a>(value: *const u32, count: i32, n: usize) -> &
     }
 }
 
-/// Marshal a `cols`×`rows` GL matrix array into MSL `floatCxR` struct layout: `count` matrices, each
-/// `cols` columns of `rows` floats; every column is padded to 4 floats when `rows == 3` (MSL's 16-byte
-/// column stride). GL's source is column-major unless `transpose` (then row-major).
+/// Marshal a `cols`×`rows` GL matrix array into the tightly packed representation consumed by
+/// `hl_gl::adapter::glsl::Uni`. That model layer is the single owner of std140 column padding. Padding here
+/// too would make a three-row matrix's second column start with the first column's padding.
 pub(super) unsafe fn mat_bytes_cr(
     cols: usize,
     rows: usize,
@@ -177,8 +244,7 @@ pub(super) unsafe fn mat_bytes_cr(
         return Vec::new();
     }
     let src = std::slice::from_raw_parts(value, count as usize * cols * rows);
-    let col_floats = if rows == 3 { 4 } else { rows };
-    let mut out = Vec::with_capacity(count as usize * cols * col_floats * 4);
+    let mut out = Vec::with_capacity(count as usize * cols * rows * 4);
     for m in 0..count as usize {
         let base = m * cols * rows;
         for col in 0..cols {
@@ -189,9 +255,6 @@ pub(super) unsafe fn mat_bytes_cr(
                     src[base + col * rows + row]
                 };
                 out.extend_from_slice(&v.to_le_bytes());
-            }
-            for _ in rows..col_floats {
-                out.extend_from_slice(&0f32.to_le_bytes());
             }
         }
     }

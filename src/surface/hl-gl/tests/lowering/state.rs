@@ -6,7 +6,7 @@ fn swap_resets_frame_state() {
     let mut sink = RecordingSink::with_full_caps();
     record_textured_quad(&mut c);
     swap::swap_buffers(&mut c, &mut sink).unwrap();
-    assert!(c.draws.is_empty(), "draw-list reset after swap");
+    assert!(c.draws().is_empty(), "draw-list reset after swap");
     // a second, empty swap presents nothing.
     assert!(!swap::swap_buffers(&mut c, &mut sink).unwrap());
     assert_eq!(sink.batches.len(), 1);
@@ -32,25 +32,32 @@ fn vao_round_trips_the_attrib_and_element_buffer_state() {
     record::vertex_attrib_pointer(&mut c, 0, 2, GL_FLOAT, false, 8, 0);
     record::enable_vertex_attrib(&mut c, 0);
     record::bind_buffer(&mut c, GL_ELEMENT_ARRAY_BUFFER, 7);
-    assert!(c.attr[0].enabled);
-    assert_eq!(c.element_buffer, 7);
+    assert!(c.attributes()[0].enabled);
+    assert_eq!(c.buffer_for_target(GL_ELEMENT_ARRAY_BUFFER), 7);
 
     // Binding VAO B swaps in its (fresh, empty) state.
     record::bind_vertex_array(&mut c, vao_b);
-    assert!(!c.attr[0].enabled, "VAO B starts with no attribute arrays");
-    assert_eq!(c.element_buffer, 0, "VAO B starts with no element buffer");
+    assert!(
+        !c.attributes()[0].enabled,
+        "VAO B starts with no attribute arrays"
+    );
+    assert_eq!(
+        c.buffer_for_target(GL_ELEMENT_ARRAY_BUFFER),
+        0,
+        "VAO B starts with no element buffer"
+    );
 
     // Re-binding VAO A restores exactly what was captured.
     record::bind_vertex_array(&mut c, vao_a);
-    assert!(c.attr[0].enabled);
-    assert_eq!(c.attr[0].size, 2);
-    assert_eq!(c.attr[0].stride, 8);
-    assert_eq!(c.element_buffer, 7);
+    assert!(c.attributes()[0].enabled);
+    assert_eq!(c.attributes()[0].size, 2);
+    assert_eq!(c.attributes()[0].stride, 8);
+    assert_eq!(c.buffer_for_target(GL_ELEMENT_ARRAY_BUFFER), 7);
 
     // Deleting the bound VAO reverts to the default and drops the name.
     assert!(record::delete_vertex_array(&mut c, vao_a));
     assert!(!record::is_vertex_array(&c, vao_a));
-    assert_eq!(c.cur_vao, 0);
+    assert_eq!(c.current_vertex_array(), 0);
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -63,7 +70,7 @@ fn instanced_draw_records_the_instance_count_into_the_ir_draw() {
     let mut sink = RecordingSink::with_full_caps();
     record_textured_quad(&mut c);
     // Replace the trailing single-instance draw with an instanced one + a per-instance attribute.
-    c.draws.clear();
+    c.clear_recording();
     record::vertex_attrib_divisor(&mut c, 0, 1);
     record::draw_arrays_instanced(&mut c, GL_TRIANGLES, 0, 6, 4);
 
@@ -105,7 +112,7 @@ fn negative_instance_count_is_rejected_and_records_no_draw() {
     let mut c = ctx_640x480();
     record::draw_arrays_instanced(&mut c, GL_TRIANGLES, 0, 6, -1);
     assert!(
-        c.draws.is_empty(),
+        c.draws().is_empty(),
         "a negative instance count records nothing"
     );
     assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);

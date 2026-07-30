@@ -15,6 +15,11 @@ impl Capabilities {
         e.u64(self.command_bits);
         e.u32(self.shader_payloads);
         e.u32(self.texture_formats);
+        e.u32(self.binding_arrays);
+        e.u32(self.non_uniform_binding_arrays);
+        if self.wire_version >= 11 {
+            e.u32(self.gpu_features);
+        }
         e.u32(self.present_bits());
     }
 
@@ -76,6 +81,18 @@ impl GlslDescriptor {
             words.push(u32::from_le_bytes(b));
         }
         words
+    }
+}
+
+impl Encoder {
+    pub(crate) fn pipeline_layout(&mut self, layout: &PipelineLayout) {
+        self.u32(layout.bindings.len() as u32);
+        for binding in &layout.bindings {
+            self.u32(binding.group);
+            self.u32(binding.binding);
+            self.u32(binding.count);
+            self.u32(binding.kind.to_u32());
+        }
     }
 }
 use super::*;

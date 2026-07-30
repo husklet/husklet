@@ -34,24 +34,22 @@ fn present_unknown_swapchain_and_out_of_range_index() {
         Err(GpuError::Invalid(_))
     ));
     assert!(matches!(
-        present::queue_present(&mut d, &mut s, 0xdead, 0),
+        present::queue_present(&mut d, &mut s, 0xdead, 0, None),
         Err(GpuError::Invalid(_))
     ));
 
     let surf =
-        present::create_surface(&mut d, &mut s, 64, 64, vk_format::B8G8R8A8_UNORM, 7).unwrap();
+        present::create_surface(&mut d, &mut s, 64, 64, vk_format::B8G8R8A8_UNORM, None).unwrap();
     let sc = present::create_swapchain(&mut d, &mut s, surf, 2).unwrap();
     assert_eq!(d.acquire_next_image(sc).unwrap(), 0);
     // An image index past the swapchain image count is rejected.
     assert!(matches!(
-        present::queue_present(&mut d, &mut s, sc, 99),
+        present::queue_present(&mut d, &mut s, sc, 99, None),
         Err(GpuError::Invalid(_))
     ));
     // A valid present emits Cmd::Present naming the surface's ir + the presented image's REAL texture id.
-    present::queue_present(&mut d, &mut s, sc, 0).unwrap();
-    let surf_ir = d.surfaces.get(&surf).unwrap().ir_id;
-    let img0_ir = d.swapchains.get(&sc).unwrap().images[0].ir_texture_id;
-    assert!(s.commands().any(|c| matches!(c, Cmd::Present { surface, texture } if *surface == surf_ir && *texture == img0_ir)));
+    present::queue_present(&mut d, &mut s, sc, 0, None).unwrap();
+    assert!(!s.commands().any(|c| matches!(c, Cmd::Present { .. })));
 }
 
 #[test]
@@ -154,9 +152,10 @@ fn descriptor_template_array_stride_and_short_blob() {
     push_buffer_info(&mut data, b0, 0, 128);
     push_buffer_info(&mut data, b1, 8, 64);
     create::update_descriptor_set_with_template(&mut d, set, tmpl, &data).unwrap();
-    // Both array elements fold onto binding 0 (the model keys by binding); the LAST write wins → b1.
+    // Both array elements retain their descriptor-array identity.
     let rec = d.descriptor_sets.get(&set).unwrap();
-    assert_eq!(rec.buffers.get(&0), Some(&(b1, 8, 64)));
+    assert_eq!(rec.buffers.get(&(0, 0)), Some(&(b0, 0, 128)));
+    assert_eq!(rec.buffers.get(&(0, 1)), Some(&(b1, 8, 64)));
     let _ = (ir0, ir1);
 
     // A short blob (one struct missing its tail) is a truthful OutOfBounds, never a junk read.

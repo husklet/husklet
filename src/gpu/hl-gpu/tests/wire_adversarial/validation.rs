@@ -7,7 +7,7 @@ fn empty_stream_decodes_to_no_commands() {
 
 #[test]
 fn unknown_top_level_tag_is_bad_tag() {
-    for bad_tag in [0u8, 22, 100, 255] {
+    for bad_tag in [0u8, 26, 100, 255] {
         let err = hl_gpu::Decoder::stream(&[bad_tag]).unwrap_err();
         assert!(
             matches!(&err, GpuError::Decode(m) if m.contains(&format!("bad command/encoder tag {bad_tag}"))),
@@ -18,7 +18,7 @@ fn unknown_top_level_tag_is_bad_tag() {
 
 #[test]
 fn unknown_encoder_tag_inside_submit_is_bad_tag() {
-    for bad_etag in [0u8, 24, 99, 255] {
+    for bad_etag in [0u8, 26, 99, 255] {
         // Submit with one op whose etag byte is unknown.
         let mut e = Encoder::new();
         e.u8(tag::SUBMIT);
@@ -44,7 +44,7 @@ fn out_of_range_enums_are_typed_bad_enum() {
         })
     ));
     assert!(matches!(
-        TextureFormat::from_u32(12),
+        TextureFormat::from_u32(26),
         Err(GpuError::BadEnum { .. })
     ));
     for v in 1..=11 {

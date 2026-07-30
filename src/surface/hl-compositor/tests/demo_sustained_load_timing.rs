@@ -7,19 +7,14 @@
 //! that load:
 //!
 //!   * every feedback is eventually answered `presented` (none lost, none stuck) — all 150 resolve;
-//!   * the reported refresh is the exact 60 Hz interval on every one, and the vsync flag is set;
+//!   * the reported refresh is the exact 60 Hz interval on every one;
 //!   * timestamps are monotonic non-decreasing in delivery order (no backwards jitter under load);
-//!   * the SEQUENCE is a true per-vblank frame counter: the DISTINCT sequence numbers form a contiguous
-//!     run starting at 1 with NO gaps, and — the key correctness lock — every feedback released by the SAME
-//!     present carries the SAME sequence AND the SAME timestamp. Two feedbacks answered at one identical
-//!     instant MUST share one sequence number (one vblank = one number); giving them distinct sequences
-//!     would report several vblanks at a single instant, which no display can produce. This is exactly the
-//!     coalesced-burst case a flood forces, so this demo is the regression guard for that invariant.
+//!   * sequence is zero and `vsync` is absent because the backend has no native retrace evidence. This
+//!     prevents a coalesced content burst from being misreported as several consecutive display retraces.
 
 mod client_harness;
 use client_harness::*;
 
-use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
@@ -156,14 +151,18 @@ fn sustained_load_timing() {
         "all {FLOOD} flooded feedbacks were presented"
     );
 
-    // Per-frame field invariants: exact refresh, vsync set, nonzero timestamp.
+    // Per-frame field invariants: exact refresh, honest unknown retrace metadata, nonzero timestamp.
     for (i, p) in app.presented.iter().enumerate() {
         assert_eq!(
             p.refresh_ns, REFRESH_60HZ_NS,
             "feedback {i}: exact 60 Hz refresh, got {}",
             p.refresh_ns
         );
-        assert!(p.vsync, "feedback {i}: vsync flag set under load");
+        assert!(!p.vsync, "feedback {i}: unproven vsync is not claimed");
+        assert_eq!(
+            p.seq, 0,
+            "feedback {i}: unavailable output retrace sequence is zero"
+        );
         assert!(p.time_ns > 0, "feedback {i}: nonzero timestamp");
     }
 
@@ -176,66 +175,15 @@ fn sustained_load_timing() {
             app.presented[i].time_ns
         );
     }
-    // Sequence monotonic non-decreasing in delivery order (coalesced feedbacks repeat a seq, never drop).
-    for i in 1..app.presented.len() {
-        assert!(
-            app.presented[i].seq >= app.presented[i - 1].seq,
-            "feedback {i}: sequence never decreases, {} then {}",
-            app.presented[i - 1].seq,
-            app.presented[i].seq
-        );
-    }
-
-    // Distinct sequence numbers form a contiguous run starting at 1 — one number per actual present, no gaps.
-    let mut distinct: Vec<u64> = app.presented.iter().map(|p| p.seq).collect();
-    distinct.sort_unstable();
-    distinct.dedup();
-    assert_eq!(
-        *distinct.first().unwrap(),
-        1,
-        "distinct sequences start at 1"
-    );
-    for (k, &s) in distinct.iter().enumerate() {
-        assert_eq!(
-            s,
-            1 + k as u64,
-            "distinct sequences are contiguous (no gaps): want {}, got {s}",
-            1 + k as u64
-        );
-    }
-
-    // KEY LOCK: every feedback answered at one identical timestamp shares ONE sequence number (one vblank =
-    // one number), and — symmetrically — one sequence maps to one timestamp. A coalesced burst is exactly
-    // where a per-feedback counter would (wrongly) emit several sequences at a single instant.
-    let mut seq_by_time: BTreeMap<u128, u64> = BTreeMap::new();
-    let mut time_by_seq: BTreeMap<u64, u128> = BTreeMap::new();
-    for p in &app.presented {
-        if let Some(&s) = seq_by_time.get(&p.time_ns) {
-            assert_eq!(
-                s, p.seq,
-                "two feedbacks at the same instant {} carry different sequences ({s} vs {})",
-                p.time_ns, p.seq
-            );
-        } else {
-            seq_by_time.insert(p.time_ns, p.seq);
-        }
-        if let Some(&t) = time_by_seq.get(&p.seq) {
-            assert_eq!(
-                t, p.time_ns,
-                "sequence {} reported at two different timestamps ({t} vs {})",
-                p.seq, p.time_ns
-            );
-        } else {
-            time_by_seq.insert(p.seq, p.time_ns);
-        }
-    }
-
-    // The flood really did coalesce: fewer distinct presents than feedbacks, so the shared-seq path above
-    // was genuinely exercised (not a trivially-satisfied one-feedback-per-present run).
+    // The flood really did coalesce: fewer presentation instants than feedbacks, so the unknown-sequence
+    // path above was exercised for multi-feedback presents rather than a trivial one-at-a-time run.
+    let mut instants: Vec<u128> = app.presented.iter().map(|p| p.time_ns).collect();
+    instants.sort_unstable();
+    instants.dedup();
     assert!(
-        distinct.len() < FLOOD,
+        instants.len() < FLOOD,
         "flood coalesced: {} distinct presents for {FLOOD} feedbacks (multi-feedback presents exercised)",
-        distinct.len()
+        instants.len()
     );
 
     std::mem::forget(toplevel);

@@ -10,7 +10,7 @@
 //! reads only because it initiated the readback.
 //!
 //! The sub-protocol carries its own [`READBACK_VERSION`] in every request so it can evolve independently of
-//! the handshake's [`WIRE_VERSION`](crate::protocol::model::command::WIRE_VERSION) (currently 6): a readback
+//! the handshake's [`WIRE_VERSION`](crate::protocol::model::command::WIRE_VERSION): a readback
 //! change never forces a submit-interop-breaking wire-version bump.
 //!
 //! [`write_readback_response`]: super::super::adapter::unix::write_readback_response
@@ -33,6 +33,10 @@ pub const READBACK_FAIL: u8 = 0;
 pub mod readback_kind {
     /// Read back a GPU buffer's bytes.
     pub const BUFFER: u8 = 0;
+    /// Poll a timeline fence; response is exactly one byte (`0` pending, `1` complete).
+    pub const FENCE: u8 = 1;
+    /// Wait for a timeline fence for at most `len` nanoseconds.
+    pub const FENCE_WAIT: u8 = 2;
 }
 
 /// A device→host readback request: "return `len` bytes of resource `id` starting at `offset`". Serialized
@@ -64,6 +68,26 @@ impl ReadbackRequest {
             id,
             offset,
             len,
+        }
+    }
+
+    pub fn fence(id: u32, value: u64) -> Self {
+        Self {
+            version: READBACK_VERSION,
+            kind: readback_kind::FENCE,
+            id,
+            offset: value,
+            len: 0,
+        }
+    }
+
+    pub fn fence_wait(id: u32, value: u64, timeout_ns: u64) -> Self {
+        Self {
+            version: READBACK_VERSION,
+            kind: readback_kind::FENCE_WAIT,
+            id,
+            offset: value,
+            len: timeout_ns,
         }
     }
 

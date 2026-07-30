@@ -6,9 +6,9 @@
 //!
 //!   * a nonzero, MONOTONIC presentation timestamp (the second frame's is >= the first's) in the
 //!     `CLOCK_MONOTONIC` timeline `wp_presentation.clock_id` advertised;
-//!   * a strictly INCREASING presentation sequence (`seq` frame 2 > frame 1);
+//!   * sequence zero because the backend has no native vertical-retrace counter;
 //!   * a nonzero refresh interval (~16.6 ms for the 60 Hz output);
-//!   * the `vsync` flag set.
+//!   * no `vsync` claim until native presentation completion proves it.
 //!
 //! It also proves the `discarded` path: a feedback requested on a surface that is then destroyed without
 //! its content ever being shown is answered `discarded` (never `presented`).
@@ -148,19 +148,11 @@ fn presentation_time() {
         p0.time_ns,
         p1.time_ns
     );
-    // Strictly increasing sequence.
-    assert!(
-        p0.seq >= 1,
-        "frame 0 sequence is a real frame counter (>=1), got {}",
-        p0.seq
-    );
-    assert!(
-        p1.seq > p0.seq,
-        "presentation sequence strictly increases: {} then {}",
-        p0.seq,
-        p1.seq
-    );
-    // Nonzero refresh (~16.67 ms for 60 Hz) + vsync flag.
+    // The protocol requires an actual output retrace counter, or zero when unavailable. A local content
+    // counter would lie whenever a client presents less often than the display refreshes.
+    assert_eq!(p0.seq, 0, "unknown output retrace sequence is zero");
+    assert_eq!(p1.seq, 0, "unknown output retrace sequence stays zero");
+    // Nonzero refresh (~16.67 ms for 60 Hz), but no unsupported vsync claim.
     assert!(
         p0.refresh_ns > 0,
         "refresh interval is nonzero, got {}",
@@ -171,7 +163,8 @@ fn presentation_time() {
         "refresh matches the 60 Hz output interval, got {}",
         p0.refresh_ns
     );
-    assert!(p0.vsync, "presented carries the vsync flag");
+    assert!(!p0.vsync, "presented does not claim unproven vsync");
+    assert!(!p1.vsync, "presented does not claim unproven vsync");
 
     // ---- discarded path: feedback on a surface torn down without its content ever being shown ----
     // A bare wl_surface (no role, no buffer) requests feedback and commits, then is destroyed. Its content

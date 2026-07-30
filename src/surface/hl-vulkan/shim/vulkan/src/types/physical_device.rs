@@ -258,6 +258,8 @@ pub struct VkPhysicalDeviceProperties2 {
     pub properties: VkPhysicalDeviceProperties,
 }
 
+pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2: i32 = 1_000_059_000;
+
 #[repr(C)]
 pub struct VkPhysicalDeviceFeatures2 {
     pub s_type: i32,

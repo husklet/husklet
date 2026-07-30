@@ -31,6 +31,7 @@
 //! private-queue wrapper wiring + the dlsym-fallback path are unit-testable WITHOUT a live compositor.
 
 use core::ffi::{c_char, c_int, c_void};
+use hl_gpu::protocol::model::descriptor::{FrameSerial, SurfaceToken};
 
 use super::wayland::ShmBuffer;
 
@@ -80,6 +81,8 @@ pub enum WlAppError {
     QueueSetup,
     /// The compositor never advertised `wl_shm` on the app's registry — soft.
     NoShmGlobal,
+    /// The private native-presentation identity is unavailable. SHM presentation remains usable.
+    NoIdentity,
     /// The readback plane was smaller than `w*h*4` — hard.
     BadSize,
     /// Allocating / mapping the shm memfd failed — hard.
@@ -102,11 +105,24 @@ impl WlAppError {
                 | WlAppError::NoDisplay
                 | WlAppError::QueueSetup
                 | WlAppError::NoShmGlobal
+                | WlAppError::NoIdentity
         )
     }
 }
 
 pub type WlAppResult<T> = Result<T, WlAppError>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeFrame {
+    pub token: SurfaceToken,
+    pub serial: FrameSerial,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Globals {
+    pub shm: Option<(u32, u32)>,
+    pub identity: Option<(u32, u32)>,
+}
 
 /// The `libwayland-client` ABI surface the presenter needs, as a testable seam. The live [`SysWlAbi`]
 /// forwards to the `dlsym`'d functions; a recording backend (tests) captures every call.
@@ -132,20 +148,37 @@ pub(crate) unsafe trait WlAbi {
     fn set_queue(&self, proxy: *mut c_void, queue: *mut c_void);
     /// `wl_proxy_destroy(proxy)`.
     fn destroy(&self, proxy: *mut c_void);
+    /// Destroy the private queue created by [`Self::create_queue`].
+    fn destroy_queue(&self, queue: *mut c_void);
     /// `wl_display_flush(display)` — push queued requests to the compositor.
     fn flush(&self, display: *mut c_void) -> i32;
 
     /// `wl_display.get_registry` off `display_wrapper` (so the registry lands on our private queue).
     fn get_registry(&self, display_wrapper: *mut c_void, version: u32) -> *mut c_void;
     /// Add the registry listener + `roundtrip_queue` to discover the `wl_shm` global `(name, version)`.
-    fn discover_shm(
+    fn discover_globals(
         &self,
         registry: *mut c_void,
         display: *mut c_void,
         queue: *mut c_void,
-    ) -> Option<(u32, u32)>;
+    ) -> WlAppResult<Globals>;
     /// `wl_registry.bind(name, wl_shm, version)` → the bound `wl_shm` proxy (on our private queue).
     fn bind_shm(&self, registry: *mut c_void, name: u32, version: u32) -> *mut c_void;
+    fn bind_identity_manager(&self, registry: *mut c_void, name: u32, version: u32) -> *mut c_void;
+    fn identity_for_surface(
+        &self,
+        manager: *mut c_void,
+        version: u32,
+        surface: *mut c_void,
+    ) -> *mut c_void;
+    fn identity_token(
+        &self,
+        identity: *mut c_void,
+        display: *mut c_void,
+        queue: *mut c_void,
+    ) -> WlAppResult<SurfaceToken>;
+    fn identity_associate(&self, identity: *mut c_void, version: u32, serial: u64);
+    fn identity_destroy(&self, identity: *mut c_void, version: u32);
 
     /// `wl_shm.create_pool(fd, size)` → a `wl_shm_pool` proxy.
     fn shm_create_pool(&self, shm: *mut c_void, version: u32, fd: i32, size: i32) -> *mut c_void;

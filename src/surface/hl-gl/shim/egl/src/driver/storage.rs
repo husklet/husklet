@@ -1,4 +1,8 @@
 use super::*;
+
+mod external;
+use external::*;
+use std::sync::Arc;
 // ==================================================================================================
 // texture / renderbuffer extensions
 // ==================================================================================================
@@ -15,8 +19,10 @@ pub extern "C" fn glTexStorage2DMultisample(
     height: i32,
     _fixedsamplelocations: u8,
 ) {
-    GlobalState::access(|s| {
-        record::tex_storage_2d(&mut s.ctx, target, 1, internalformat, width, height)
+    GlobalState::context(|s| {
+        s.redefine_texture(|ctx| {
+            record::tex_storage_2d(ctx, target, 1, internalformat, width, height)
+        })
     });
 }
 /// `glTexStorage3DMultisample` — the 2D-array multisample form; `samples` ignored (single-sample plane).
@@ -30,7 +36,7 @@ pub extern "C" fn glTexStorage3DMultisample(
     depth: i32,
     _fixedsamplelocations: u8,
 ) {
-    GlobalState::access(|s| record::tex_storage_3d(&mut s.ctx, target, 1, width, height, depth));
+    GlobalState::context(|s| record::tex_storage_3d(&mut s.gl, target, 1, width, height, depth));
 }
 /// `glRenderbufferStorageMultisample` — a multisample renderbuffer; single-sample in this model, so the
 /// backing RGBA8 plane is sized (delegating to `glRenderbufferStorage`) and `samples` is ignored.
@@ -42,8 +48,10 @@ pub extern "C" fn glRenderbufferStorageMultisample(
     width: i32,
     height: i32,
 ) {
-    GlobalState::access(|s| {
-        record::renderbuffer_storage(&mut s.ctx, target, internalformat, width, height)
+    GlobalState::context(|s| {
+        s.redefine_renderbuffer(|ctx| {
+            record::renderbuffer_storage(ctx, target, internalformat, width, height)
+        })
     });
 }
 /// `glTexBuffer` / `glTexBufferRange` — buffer textures (sampling a buffer object as a 1D texel array).
@@ -60,23 +68,35 @@ pub extern "C" fn glTexBufferRange(
     _size: isize,
 ) {
 }
-/// `glTexParameterIiv` / `glTexParameterIuiv` — the integer (non-normalized) parameter vectors; reads
-/// `params[0]` into the same filter/wrap setter the scalar path uses.
+/// `glTexParameterIiv` / `glTexParameterIuiv` — integer parameter vectors.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glTexParameterIiv(_target: u32, pname: u32, params: *const i32) {
     if params.is_null() {
         return;
     }
-    let v = unsafe { *params };
-    GlobalState::access(|s| record::tex_parameter(&mut s.ctx, pname, v as u32));
+    let count = if pname == GL_TEXTURE_SWIZZLE_RGBA {
+        4
+    } else {
+        1
+    };
+    let values = unsafe { std::slice::from_raw_parts(params, count) }
+        .iter()
+        .map(|value| *value as u32)
+        .collect::<Vec<_>>();
+    GlobalState::context(|s| record::tex_parameter_vector(&mut s.gl, pname, &values));
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glTexParameterIuiv(_target: u32, pname: u32, params: *const u32) {
     if params.is_null() {
         return;
     }
-    let v = unsafe { *params };
-    GlobalState::access(|s| record::tex_parameter(&mut s.ctx, pname, v));
+    let count = if pname == GL_TEXTURE_SWIZZLE_RGBA {
+        4
+    } else {
+        1
+    };
+    let values = unsafe { std::slice::from_raw_parts(params, count) };
+    GlobalState::context(|s| record::tex_parameter_vector(&mut s.gl, pname, values));
 }
 /// `glCopyImageSubData(...)` — a direct image-to-image copy. Both a 2D source and destination texture with
 /// materialized RGBA8 pixels can be copied CPU-side (real); a mixed/renderbuffer/level-`>0` case is an
@@ -110,9 +130,10 @@ pub extern "C" fn glCopyImageSubData(
     if src_width <= 0 || src_height <= 0 || src_x < 0 || src_y < 0 || dst_x < 0 || dst_y < 0 {
         return;
     }
-    GlobalState::access(|s| {
+    GlobalState::context(|s| {
         // Read the source rect out (immutable borrow) …
-        let rows: Option<Vec<u8>> = s.ctx.textures.get(src_name).and_then(|st| {
+        let rows: Option<Vec<u8>> = s.gl.textures.get(src_name).cloned().and_then(|mut st| {
+            st.resolve_shared();
             let (sw, sh) = (st.w, st.h);
             if st.data.is_empty() || src_x + src_width > sw || src_y + src_height > sh {
                 return None;
@@ -133,9 +154,12 @@ pub extern "C" fn glCopyImageSubData(
         });
         // … then write it into the destination sub-rect (mutable borrow).
         if let Some(buf) = rows {
-            s.ctx
+            if s.gl
                 .textures
-                .sub_image_2d(dst_name, dst_x, dst_y, src_width, src_height, &buf);
+                .sub_image_2d(dst_name, dst_x, dst_y, src_width, src_height, &buf)
+            {
+                s.mark_linear_dirty(dst_name);
+            }
         }
     });
 }
@@ -169,14 +193,20 @@ pub extern "C" fn glVertexAttribFormat(
     normalized: u8,
     relativeoffset: u32,
 ) {
-    GlobalState::access(|s| {
-        record::vertex_attrib_pointer(
-            &mut s.ctx,
+    crate::stub::trace(
+        "glVertexAttribFormat",
+        &format!(
+            "attribute={attribindex} size={size} type={type_:#x} relative_offset={relativeoffset}"
+        ),
+    );
+    GlobalState::context(|s| {
+        record::vertex_attrib_format(
+            &mut s.gl,
             attribindex as usize,
             size,
             type_,
             normalized != 0,
-            0,
+            false,
             relativeoffset as usize,
         )
     });
@@ -185,22 +215,34 @@ pub extern "C" fn glVertexAttribFormat(
 /// slot. This model keys attributes to a single array-buffer binding, so the binding index is not
 /// separately tracked: an honest no-op.
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glVertexAttribBinding(_attribindex: u32, _bindingindex: u32) {}
+pub extern "C" fn glVertexAttribBinding(attribindex: u32, bindingindex: u32) {
+    crate::stub::trace(
+        "glVertexAttribBinding",
+        &format!("attribute={attribindex} binding={bindingindex}"),
+    );
+    GlobalState::context(|s| {
+        record::vertex_attrib_binding(&mut s.gl, attribindex as usize, bindingindex)
+    });
+}
 /// `glBindVertexBuffer(bindingindex, buffer, offset, stride)` — bind a buffer to a vertex-buffer slot. The
 /// separate binding slots are not modeled; binding slot 0 updates the array-buffer binding so a following
 /// `glVertexAttribFormat`-based draw still sources vertices, other slots are an honest no-op.
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glBindVertexBuffer(bindingindex: u32, buffer: u32, _offset: isize, _stride: i32) {
-    if bindingindex == 0 {
-        GlobalState::access(|s| record::bind_buffer(&mut s.ctx, GL_ARRAY_BUFFER, buffer));
-    }
+pub extern "C" fn glBindVertexBuffer(bindingindex: u32, buffer: u32, offset: isize, stride: i32) {
+    crate::stub::trace(
+        "glBindVertexBuffer",
+        &format!("binding={bindingindex} buffer={buffer} offset={offset} stride={stride}"),
+    );
+    GlobalState::context(|s| {
+        record::bind_vertex_buffer(&mut s.gl, bindingindex as usize, buffer, offset, stride)
+    });
 }
 /// `glVertexBindingDivisor(bindingindex, divisor)` — the instance-step divisor for a binding slot; applied
 /// to the attribute at that index (single-slot model).
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glVertexBindingDivisor(bindingindex: u32, divisor: u32) {
-    GlobalState::access(|s| {
-        record::vertex_attrib_divisor(&mut s.ctx, bindingindex as usize, divisor)
+    GlobalState::context(|s| {
+        record::vertex_binding_divisor(&mut s.gl, bindingindex as usize, divisor)
     });
 }
 /// `glFramebufferParameteri(target, pname, param)` — default-framebuffer parameters (default width/height/
@@ -212,15 +254,8 @@ pub extern "C" fn glFramebufferParameteri(_target: u32, _pname: u32, _param: i32
 /// path for `GL_COLOR_ATTACHMENT0`.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glFramebufferTexture(target: u32, attachment: u32, texture: u32, level: i32) {
-    GlobalState::access(|s| {
-        record::framebuffer_texture_2d(
-            &mut s.ctx,
-            target,
-            attachment,
-            GL_TEXTURE_2D,
-            texture,
-            level,
-        )
+    GlobalState::context(|s| {
+        record::framebuffer_texture_2d(&mut s.gl, target, attachment, GL_TEXTURE_2D, texture, level)
     });
 }
 /// `glFramebufferTextureLayer(target, attachment, texture, level, layer)` — attach one layer of an array/3D
@@ -234,60 +269,104 @@ pub extern "C" fn glFramebufferTextureLayer(
     level: i32,
     _layer: i32,
 ) {
-    GlobalState::access(|s| {
-        record::framebuffer_texture_2d(
-            &mut s.ctx,
-            target,
-            attachment,
-            GL_TEXTURE_2D,
-            texture,
-            level,
-        )
+    GlobalState::context(|s| {
+        record::framebuffer_texture_2d(&mut s.gl, target, attachment, GL_TEXTURE_2D, texture, level)
     });
 }
 
-// ==================================================================================================
-// submission ordering (glFlush / glFinish) over a process-global submission-serial pair
-// ==================================================================================================
-
-use core::sync::atomic::{AtomicU64, Ordering};
-/// Submission serials backing `glFlush`/`glFinish`: `SUBMIT` advances when work is handed off, `COMPLETE`
-/// tracks how far the host has finished. This deferred driver flushes real frames at `eglSwapBuffers`; the
-/// serials give `glFlush`/`glFinish` a distinct, observable contract in between.
-static SUBMIT_SERIAL: AtomicU64 = AtomicU64::new(0);
-static COMPLETE_SERIAL: AtomicU64 = AtomicU64::new(0);
-
-/// `glFlush` — NONBLOCKING: advance the submission serial, and incrementally flush any pending OFFSCREEN
-/// draw work (see [`swap::flush_offscreen`]) so a multi-context app (Chrome's gpu-raster workers render into
-/// FBOs and `glFlush` but never `eglSwapBuffers`) does not accumulate an unbounded draw-list into the
-/// eventual swap frame. Window (default-framebuffer) draws are retained for `eglSwapBuffers`.
-#[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glFlush() {
-    SUBMIT_SERIAL.fetch_add(1, Ordering::SeqCst);
-    GlobalState::access(|s| {
-        if let Err(e) = swap::flush_offscreen(&mut s.ctx, &mut s.sink) {
-            // A flush is best-effort ordering, not a frame boundary: register the GL error but do not abort
-            // (the retained draws surface again at the next flush/swap).
-            s.set_egl_error(egl_error_from_gpu_error(&e));
-        }
-    });
-}
-/// `glFinish` — BLOCKING: advance the submission serial, incrementally flush pending OFFSCREEN work (same as
-/// `glFlush` — bounds a multi-context app's draw-list), then catch completion up to the target (this deferred
-/// model completes synchronously — there is no in-flight host executor to wait on between swaps).
-#[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glFinish() {
-    let target = SUBMIT_SERIAL.fetch_add(1, Ordering::SeqCst) + 1;
-    GlobalState::access(|s| {
-        if let Err(e) = swap::flush_offscreen(&mut s.ctx, &mut s.sink) {
-            s.set_egl_error(egl_error_from_gpu_error(&e));
-        }
-    });
-    let mut done = COMPLETE_SERIAL.load(Ordering::SeqCst);
-    while done < target {
-        match COMPLETE_SERIAL.compare_exchange(done, target, Ordering::SeqCst, Ordering::SeqCst) {
-            Ok(_) => break,
-            Err(cur) => done = cur,
-        }
+pub(super) fn flush_pending(
+    group: &mut crate::state::GroupData,
+    sink: &mut dyn hl_gpu::CommandSink,
+    max_buffer_bytes: u64,
+) -> hl_gpu::Result<bool> {
+    match flush_imported_images(group, sink, max_buffer_bytes)? {
+        Some(captures) => Ok(captures > 0),
+        None => swap::flush(&mut group.gl, sink),
     }
 }
+
+/// `glFlush` submits all pending draw work (see [`swap::flush`]) so a
+/// multi-context app (Chrome's gpu-raster workers render into FBOs and `glFlush` but never
+/// `eglSwapBuffers`) does not accumulate an unbounded draw-list into the eventual swap frame. Window
+/// (default-framebuffer) draws are retained for `eglSwapBuffers`.
+///
+/// The command sink accepts the work synchronously. There is no separate process-local submission serial:
+/// one would neither make the sink asynchronous nor expose additional ordering to a GL caller.
+#[cfg_attr(gles_client, no_mangle)]
+pub extern "C" fn glFlush() {
+    crate::stub::trace("glFlush", "submitting pending offscreen work");
+    let max_buffer_bytes = GlobalState::access(|state| state.max_buffer_bytes);
+    let result = GlobalState::gpu_submit(move |group, sink| {
+        crate::stub::trace("glFlush.flush", "flushing offscreen work");
+        let debug = std::env::var_os("HL_SHIM_DEBUG").is_some();
+        let diagnostics = debug.then(|| {
+            let draws = group.gl.recording_counts().0;
+            let current_fbo = group.gl.bound_framebuffer();
+            let mut first_fbo = None;
+            let mut last_fbo = None;
+            let mut unique_fbos = Vec::new();
+            for fbo in group.gl.recorded_framebuffers() {
+                first_fbo.get_or_insert(fbo);
+                last_fbo = Some(fbo);
+                if !unique_fbos.contains(&fbo) {
+                    unique_fbos.push(fbo);
+                }
+            }
+            let imported_matches = unique_fbos
+                .iter()
+                .filter(|&&fbo| {
+                    fbo != 0
+                        && group
+                            .images
+                            .contains_key(&group.gl.framebuffer_color_attachment(fbo))
+                })
+                .count();
+            (
+                draws,
+                current_fbo,
+                first_fbo,
+                last_fbo,
+                unique_fbos.len(),
+                imported_matches,
+            )
+        });
+        let result = flush_pending(group, sink, max_buffer_bytes);
+        if let Some((draws, current_fbo, first_fbo, last_fbo, unique_fbos, imported_matches)) =
+            diagnostics
+        {
+            eprintln!(
+                "[hl-gl-shim] flush draws={draws} fbo=current:{current_fbo} first:{first_fbo:?} \
+                 last:{last_fbo:?} unique={unique_fbos} imported_matches={imported_matches} result={result:?}"
+            );
+        }
+        crate::stub::trace("glFlush.flushed", "offscreen flush returned");
+        result
+    });
+    if let Err(error) = result {
+        GlobalState::access(|state| state.set_egl_error(egl_error_from_gpu_error(&error)));
+    }
+    crate::stub::trace("glFlush.release", "driver state released");
+}
+/// `glFinish` incrementally submits pending OFFSCREEN work (same as `glFlush`) and returns after the
+/// synchronous command sink has accepted it. This deferred driver has no in-flight executor between
+/// swaps, so returning from the sink is the completion boundary.
+#[cfg_attr(gles_client, no_mangle)]
+pub extern "C" fn glFinish() {
+    crate::stub::trace("glFinish", "waiting for pending offscreen work");
+    let max_buffer_bytes = GlobalState::access(|state| state.max_buffer_bytes);
+    let result = GlobalState::gpu_submit(move |group, sink| {
+        crate::stub::trace("glFinish.flush", "flushing offscreen work");
+        let result = flush_pending(group, sink, max_buffer_bytes);
+        crate::stub::trace("glFinish.flushed", "offscreen flush returned");
+        result
+    });
+    if let Err(error) = result {
+        GlobalState::access(|state| state.set_egl_error(egl_error_from_gpu_error(&error)));
+    }
+    crate::stub::trace("glFinish.release", "driver state released");
+    crate::stub::trace("glFinish.complete", "completed");
+}
+
+#[cfg(test)]
+#[path = "storage/tests.rs"]
+mod capture_tests;

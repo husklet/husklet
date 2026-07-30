@@ -43,6 +43,7 @@ libc = { version = "0.2", optional = true }
 tokio = { version = "1", features = ["fs", "rt-multi-thread", "macros"], optional = true }
 serde_json = { version = "1", optional = true }
 sha2 = { workspace = true, optional = true }
+tar = { workspace = true, optional = true }
 gtk = { version = "0.9", package = "gtk4", features = ["v4_10"], optional = true }
 vte4 = { version = "0.8", features = ["v0_72"], optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
@@ -54,6 +55,9 @@ objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSWindow", "NSR
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[build-dependencies]
+sha2.workspace = true
 
 [features]
 # The default library is portable workspace configuration. The signed app enables its private runtime.
@@ -77,6 +81,7 @@ runtime = [
     "dep:tokio",
     "dep:serde_json",
     "dep:sha2",
+    "dep:tar",
 ]
 gui = [
     "runtime",

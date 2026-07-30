@@ -29,8 +29,8 @@ use hl_gl::service::{frame, readpixels, record};
 
 use hl_gpu::protocol::model::capability::shader_payload;
 use hl_gpu::{
-    Cmd, CommandSink, CpuExecutor, FakeClock, GlobalLedger, GpuExecutor, InProcessCommandSink,
-    Limits, Session, TextureId,
+    CommandSink, CpuExecutor, FakeClock, GlobalLedger, GpuExecutor, InProcessCommandSink, Limits,
+    Session, TextureId,
 };
 
 const VS: &str = "attribute vec2 aPos;\nvoid main(){ gl_Position = vec4(aPos, 0.0, 1.0); }\n";
@@ -96,12 +96,11 @@ fn record_triangle(c: &mut GlContext, color: [f32; 4]) {
     record::use_program(c, prog);
 }
 
-/// Lower the recorded frame, submit it + its `Present` through the sink (the `eglSwapBuffers` body), and
-/// return the presented render-target texture id.
+/// Lower and submit the recorded render commands, then return the target texture id. Native presentation
+/// is tested separately because an offscreen CPU oracle has no compositor-issued surface capability.
 fn present_frame(c: &mut GlContext, sink: &mut InProcessCommandSink<CpuExecutor>) -> u32 {
-    let mut f = frame::Frame::build(c).expect("a frame to present");
-    let (surface, texture) = f.present;
-    f.cmds.push(Cmd::Present { surface, texture });
+    let f = frame::Frame::build(c).expect("a frame to render");
+    let (_, texture) = f.present;
     sink.submit(&f.cmds)
         .expect("submit + execute the frame on the CPU executor");
     c.reset_frame();

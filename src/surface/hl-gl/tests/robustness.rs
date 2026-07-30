@@ -10,12 +10,94 @@ use hl_gpu::RecordingSink;
 
 fn ctx() -> GlContext {
     let mut c = GlContext::new();
-    c.surf = GlSurface {
+    c.set_surface(GlSurface {
         have: true,
         width: 320,
         height: 240,
-    };
+    });
     c
+}
+
+fn link_sources(context: &mut GlContext, vertex: &str, fragment: &str) -> u32 {
+    let vertex_shader = record::create_shader(context, GL_VERTEX_SHADER);
+    record::shader_source(context, vertex_shader, vertex);
+    record::compile_shader(context, vertex_shader);
+    let fragment_shader = record::create_shader(context, GL_FRAGMENT_SHADER);
+    record::shader_source(context, fragment_shader, fragment);
+    record::compile_shader(context, fragment_shader);
+    let program = record::create_program(context);
+    record::attach_shader(context, program, vertex_shader);
+    record::attach_shader(context, program, fragment_shader);
+    program
+}
+
+#[test]
+fn program_link_rejects_unrepresentable_uniform_interfaces_with_diagnostics() {
+    let mut context = ctx();
+    let unsupported = link_sources(
+        &mut context,
+        "void main(){ gl_Position = vec4(0.0); }",
+        "struct Material { vec4 color; };\nuniform Material material;\nvoid main(){}",
+    );
+    assert!(!record::link_program(&mut context, unsupported));
+    assert_eq!(
+        query::get_programiv(&context, unsupported, GL_LINK_STATUS),
+        GL_FALSE as i32
+    );
+    assert!(query::program_info_log(&context, unsupported).contains("Material"));
+
+    let oversized = link_sources(
+        &mut context,
+        "void main(){ gl_Position = vec4(0.0); }",
+        "uniform vec4 values[257];\nvoid main(){}",
+    );
+    assert!(!record::link_program(&mut context, oversized));
+    assert!(query::program_info_log(&context, oversized).contains("1028"));
+
+    let mut samplers = String::new();
+    for index in 0..9 {
+        samplers.push_str(&format!("uniform sampler2D texture{index};\n"));
+    }
+    samplers.push_str("void main(){}\n");
+    let too_many_samplers = link_sources(
+        &mut context,
+        "void main(){ gl_Position = vec4(0.0); }",
+        &samplers,
+    );
+    assert!(!record::link_program(&mut context, too_many_samplers));
+    assert!(query::program_info_log(&context, too_many_samplers).contains("9 samplers"));
+}
+
+#[test]
+fn binding_nonzero_names_materializes_resources() {
+    let mut c = ctx();
+    record::bind_buffer(&mut c, GL_ARRAY_BUFFER, 41);
+    record::bind_texture(&mut c, GL_TEXTURE_2D, 42);
+    record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, 43);
+    record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, 44);
+
+    assert!(c.buffers.get(41).is_some());
+    assert!(c.textures.get(42).is_some());
+    assert!(record::is_framebuffer(&c, 43));
+    assert!(record::is_renderbuffer(&c, 44));
+}
+
+#[test]
+fn chromium_texture_copy_preserves_pixels_and_applies_flip() {
+    let mut c = ctx();
+    c.textures.ensure(1);
+    c.textures.ensure(2);
+    c.textures.image_2d(
+        1,
+        1,
+        2,
+        &[255, 0, 0, 255, 0, 0, 255, 255],
+        hl_gpu::protocol::model::enums::TextureFormat::Rgba8Unorm,
+    );
+
+    assert!(c.textures.copy(1, 2, true, false, false));
+    let copied = c.textures.get(2).expect("copied texture");
+    assert_eq!(copied.data.as_slice(), [0, 0, 255, 255, 255, 0, 0, 255]);
 }
 
 // ===================================================================================================
@@ -150,6 +232,28 @@ fn indexed_buffer_binding_validates_target_and_index() {
 }
 
 #[test]
+fn indexed_buffer_range_requires_size_alignment_and_live_bounds() {
+    let mut c = ctx();
+    let b = c.buffers.gen();
+    record::bind_buffer(&mut c, GL_UNIFORM_BUFFER, b);
+    record::buffer_data(&mut c, GL_UNIFORM_BUFFER, &[0; 512], 0);
+
+    for (offset, size) in [(0, 0), (1, 16), (256, 257), (isize::MAX, 16)] {
+        record::bind_buffer_range(&mut c, GL_UNIFORM_BUFFER, 0, b, offset, size);
+        assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
+        assert!(record::indexed_buffer_binding(&c, GL_UNIFORM_BUFFER, 0).is_none());
+    }
+
+    record::bind_buffer_range(&mut c, GL_UNIFORM_BUFFER, 0, b, 256, 256);
+    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
+    assert_eq!(
+        record::indexed_buffer_binding(&c, GL_UNIFORM_BUFFER, 0)
+            .map(|binding| (binding.offset, binding.size)),
+        Some((256, 256))
+    );
+}
+
+#[test]
 fn draw_calls_reject_negative_counts_and_bad_ranges_recording_nothing() {
     let mut c = ctx();
     record::draw_elements_instanced(&mut c, GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0, -1);
@@ -159,17 +263,17 @@ fn draw_calls_reject_negative_counts_and_bad_ranges_recording_nothing() {
     // glDrawRangeElements with end < start.
     record::draw_range_elements(&mut c, GL_TRIANGLES, 10, 3, 6, GL_UNSIGNED_SHORT, 0, 0);
     assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
-    assert!(c.draws.is_empty(), "no invalid draw was recorded");
+    assert!(c.draws().is_empty(), "no invalid draw was recorded");
     // A zero count is a legal no-op (no error, no draw).
     record::draw_arrays_instanced(&mut c, GL_TRIANGLES, 0, 0, 4);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
-    assert!(c.draws.is_empty());
+    assert!(c.draws().is_empty());
 }
 
 #[test]
 fn framebuffer_texture_2d_error_matrix() {
     let mut c = ctx();
-    let fbo = c.framebuffers.gen();
+    let fbo = c.gen_framebuffer();
     let tex = c.textures.gen();
     // Bad target -> INVALID_ENUM (checked first).
     record::framebuffer_texture_2d(
@@ -212,7 +316,7 @@ fn framebuffer_texture_2d_error_matrix() {
         0,
     );
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
-    assert_eq!(c.framebuffers.color_attachment(fbo), tex);
+    assert_eq!(c.framebuffer_color_attachment(fbo), tex);
 }
 
 #[test]
@@ -233,7 +337,8 @@ fn pixel_store_rejects_bad_alignment_and_leaves_state_unchanged() {
     record::pixel_store(&mut c, GL_UNPACK_ALIGNMENT, 3); // not in {1,2,4,8}
     assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
     assert_eq!(
-        c.pixel_store.unpack_alignment, 4,
+        c.pixel_store_state().unpack_alignment,
+        4,
         "the default is unchanged after a rejected set"
     );
     // A negative row length is rejected.
@@ -242,7 +347,7 @@ fn pixel_store_rejects_bad_alignment_and_leaves_state_unchanged() {
     // A valid set sticks.
     record::pixel_store(&mut c, GL_PACK_ALIGNMENT, 8);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
-    assert_eq!(c.pixel_store.pack_alignment, 8);
+    assert_eq!(c.pixel_store_state().pack_alignment, 8);
 }
 
 #[test]
@@ -275,7 +380,7 @@ fn copy_buffer_sub_data_rejects_negative_and_no_ops_out_of_range() {
     // Out-of-range read is a silent no-op (no error), leaving the destination untouched.
     record::copy_buffer_sub_data(&mut c, GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 30, 0, 8);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
-    assert_eq!(c.buffers.get(dst).unwrap().data, vec![0u8; 32]);
+    assert_eq!(c.buffers.get(dst).unwrap().data.as_slice(), &[0u8; 32]);
     // A valid copy moves bytes.
     record::copy_buffer_sub_data(&mut c, GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 0, 0, 8);
     assert_eq!(&c.buffers.get(dst).unwrap().data[..8], &[1u8; 8]);
@@ -312,10 +417,11 @@ fn deleting_the_bound_program_and_texture_clears_the_binding() {
     let t = c.textures.gen();
     c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, t);
-    assert_eq!(c.tex_unit[0], t);
+    assert_eq!(c.texture_at(0), t);
     c.delete_texture(t);
     assert_eq!(
-        c.tex_unit[0], 0,
+        c.texture_at(0),
+        0,
         "deleting a bound texture clears the unit binding"
     );
 }
@@ -352,10 +458,10 @@ fn dispatch_compute_out_of_range_group_is_an_error_and_submits_nothing() {
 fn map_buffer_range_validates_range_and_binding() {
     let mut c = ctx();
     // Negative range.
-    assert!(map::map_buffer_range(&mut c, GL_ARRAY_BUFFER, -1, 4, 0).is_none());
+    assert!(map::map_buffer_range(&mut c, GL_ARRAY_BUFFER, -1, 4, GL_MAP_WRITE_BIT).is_none());
     assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
     // No bound buffer.
-    assert!(map::map_buffer_range(&mut c, GL_ARRAY_BUFFER, 0, 4, 0).is_none());
+    assert!(map::map_buffer_range(&mut c, GL_ARRAY_BUFFER, 0, 4, GL_MAP_WRITE_BIT).is_none());
     assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
 }
 

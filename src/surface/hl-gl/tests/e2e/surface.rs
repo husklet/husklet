@@ -7,11 +7,11 @@ use super::*;
 #[test]
 fn clear_and_triangle_render_to_the_default_surface() {
     let mut c = GlContext::new();
-    c.surf = GlSurface {
+    c.set_surface(GlSurface {
         have: true,
         width: W as u32,
         height: H as u32,
-    };
+    });
     let mut sink = cpu_sink();
 
     record::clear_color(&mut c, [0.0, 0.0, 1.0, 1.0]); // blue background

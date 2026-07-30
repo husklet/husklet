@@ -171,7 +171,11 @@ fn surfaceless_display_and_config_enumeration_end_to_end() {
         EGL_TRUE,
         "surfaceless display initializes"
     );
-    assert_eq!((major, minor), (1, 5), "advertises EGL 1.5");
+    assert_eq!(
+        (major, minor),
+        (1, 4),
+        "advertises the complete EGL core version it implements"
+    );
     assert_eq!(
         cstr(egl_query_string(dpy, EGL_VENDOR)),
         "hl-gl",

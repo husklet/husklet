@@ -4,15 +4,21 @@ use super::*;
 fn present_path_lowers_surface_and_present() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
-    let surface =
-        present::create_surface(&mut d, &mut sink, 1920, 1080, vk_format::B8G8R8A8_UNORM, 7)
-            .unwrap();
+    let surface = present::create_surface(
+        &mut d,
+        &mut sink,
+        1920,
+        1080,
+        vk_format::B8G8R8A8_UNORM,
+        SurfaceToken::new(7).ok(),
+    )
+    .unwrap();
     match &sink.batches[0][0] {
         Cmd::CreateSurface(id, desc) => {
             assert_eq!(*id, 1);
             assert_eq!((desc.width, desc.height), (1920, 1080));
             assert_eq!(desc.format, TextureFormat::Bgra8Unorm);
-            assert_eq!(desc.hlp_surface, 7);
+            assert_eq!(desc.token.get(), 7);
         }
         other => panic!("expected CreateSurface, got {other:?}"),
     }
@@ -30,16 +36,18 @@ fn present_path_lowers_surface_and_present() {
     )));
 
     let idx = d.acquire_next_image(sc).unwrap();
-    present::queue_present(&mut d, &mut sink, sc, idx).unwrap();
+    present::queue_present(&mut d, &mut sink, sc, idx, FrameSerial::new(1).ok()).unwrap();
 
     // the present names the surface's ir id + the presented image's REAL backing texture id.
     match sink.batches.last().unwrap().as_slice() {
         [Cmd::Present {
             surface: s,
             texture: t,
+            serial,
         }] => {
             assert_eq!(*s, 1); // the CreateSurface ir id
             assert_eq!(*t, img0_ir); // the presented swapchain image's real render-target texture
+            assert_eq!(serial.get(), 1);
         }
         other => panic!("expected Present, got {other:?}"),
     }
@@ -56,8 +64,15 @@ fn acquire_round_robins_across_swapchain_images() {
     const ITERS: usize = 7; // > N, so the cycle wraps twice + one
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
-    let surface =
-        present::create_surface(&mut d, &mut sink, 64, 64, vk_format::B8G8R8A8_UNORM, 0).unwrap();
+    let surface = present::create_surface(
+        &mut d,
+        &mut sink,
+        64,
+        64,
+        vk_format::B8G8R8A8_UNORM,
+        SurfaceToken::new(1).ok(),
+    )
+    .unwrap();
     let sc = present::create_swapchain(&mut d, &mut sink, surface, N).unwrap();
 
     // Each image's own backing texture id, so we can prove the present named the acquired image's texture.
@@ -74,7 +89,14 @@ fn acquire_round_robins_across_swapchain_images() {
     for _ in 0..ITERS {
         let idx = d.acquire_next_image(sc).unwrap();
         acquired.push(idx);
-        present::queue_present(&mut d, &mut sink, sc, idx).unwrap();
+        present::queue_present(
+            &mut d,
+            &mut sink,
+            sc,
+            idx,
+            FrameSerial::new((acquired.len()) as u64).ok(),
+        )
+        .unwrap();
         // The just-emitted Present names the acquired image's OWN texture (present == the acquired image).
         match sink.batches.last().unwrap().as_slice() {
             [Cmd::Present { texture: t, .. }] => {
@@ -99,4 +121,87 @@ fn acquire_round_robins_across_swapchain_images() {
         1,
         "the cursor persists across the loop"
     );
+}
+
+#[test]
+fn overlapping_swapchains_share_token_but_keep_independent_gpu_surfaces() {
+    let mut device = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let token = SurfaceToken::new(41).expect("token");
+    let old_surface = present::create_surface(
+        &mut device,
+        &mut sink,
+        64,
+        64,
+        vk_format::B8G8R8A8_UNORM,
+        Some(token),
+    )
+    .unwrap();
+    let old = present::create_swapchain(&mut device, &mut sink, old_surface, 2).unwrap();
+    let new_surface = present::create_surface(
+        &mut device,
+        &mut sink,
+        64,
+        64,
+        vk_format::B8G8R8A8_UNORM,
+        Some(token),
+    )
+    .unwrap();
+    let new = present::create_swapchain(&mut device, &mut sink, new_surface, 2).unwrap();
+
+    let old_index = device.acquire_next_image(old).unwrap();
+    present::queue_present(
+        &mut device,
+        &mut sink,
+        old,
+        old_index,
+        FrameSerial::new(1).ok(),
+    )
+    .unwrap();
+    let new_index = device.acquire_next_image(new).unwrap();
+    present::queue_present(
+        &mut device,
+        &mut sink,
+        new,
+        new_index,
+        FrameSerial::new(2).ok(),
+    )
+    .unwrap();
+
+    device.destroy_swapchain(&mut sink, old).unwrap();
+    let next = device.acquire_next_image(new).unwrap();
+    present::queue_present(&mut device, &mut sink, new, next, FrameSerial::new(3).ok()).unwrap();
+    assert_eq!(
+        device.surfaces.get(&new_surface).unwrap().token,
+        Some(token)
+    );
+    assert!(sink
+        .commands()
+        .any(|command| matches!(command, Cmd::Present { serial, .. } if serial.get() == 3)));
+}
+
+#[test]
+fn native_demotion_makes_the_next_frame_a_real_fallback() {
+    let mut device = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let surface = present::create_surface(
+        &mut device,
+        &mut sink,
+        64,
+        64,
+        vk_format::B8G8R8A8_UNORM,
+        SurfaceToken::new(9).ok(),
+    )
+    .unwrap();
+    let swapchain = present::create_swapchain(&mut device, &mut sink, surface, 2).unwrap();
+
+    present::demote_swapchain(&mut device, &mut sink, swapchain).unwrap();
+    let before = sink.commands().count();
+    let index = device.acquire_next_image(swapchain).unwrap();
+    present::queue_present(&mut device, &mut sink, swapchain, index, None).unwrap();
+    let after: Vec<_> = sink.commands().skip(before).collect();
+    assert!(!after
+        .iter()
+        .any(|command| matches!(command, Cmd::Present { .. })));
+    assert_eq!(device.surfaces.get(&surface).unwrap().token, None);
 }

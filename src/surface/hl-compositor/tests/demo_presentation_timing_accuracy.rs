@@ -8,18 +8,14 @@
 //!
 //!   * the reported REFRESH interval is byte-constant across every frame — exactly `16_666_666 ns`, the
 //!     60 Hz output's interval — with ZERO drift (no per-frame rounding wobble);
-//!   * the `vsync` flag is set on every frame;
+//!   * `vsync` is not claimed without native presentation-completion evidence;
 //!   * the presentation TIMESTAMP is monotonic non-decreasing across all 100 frames (never goes backwards);
-//!   * the presentation SEQUENCE is a true frame counter: it starts at 1 and increments by EXACTLY 1 per
-//!     presented frame, contiguous with NO gaps and NO duplicates, so `seq[last] - seq[first] == N - 1`
-//!     over the run (the deterministic per-frame increment — the modeled clock IS wall-time-driven, so the
-//!     timestamps are real host-monotonic readings rather than a synthetic exact-interval cadence, and the
-//!     exact per-frame invariant this run pins is the SEQUENCE, not the wall spacing; see the module note).
+//!   * presentation sequence remains zero because the backend has no actual output retrace counter.
 //!
 //! Why the sequence and not the wall spacing: the adapter stamps each present with `CLOCK_MONOTONIC`
 //! (`MonotonicClock` = real `Instant` elapsed), so the timestamp spacing tracks how fast the test drives
 //! commits, not a fixed 16.6 ms cadence. The DETERMINISTIC, drift-free quantities are therefore (a) the
-//! constant refresh the adapter reports and (b) the +1-per-frame sequence — both asserted exactly here.
+//! constant refresh the adapter reports and (b) honest unknown presentation metadata.
 
 mod client_harness;
 use client_harness::*;
@@ -167,7 +163,14 @@ fn presentation_timing_accuracy() {
             "frame {i}: refresh is the exact 60 Hz interval (no drift), got {}",
             p.refresh_ns
         );
-        assert!(p.vsync, "frame {i}: presented carries the vsync flag");
+        assert!(
+            !p.vsync,
+            "frame {i}: presented does not claim unproven vsync"
+        );
+        assert_eq!(
+            p.seq, 0,
+            "frame {i}: unavailable output retrace sequence is zero"
+        );
         assert!(
             p.time_ns > 0,
             "frame {i}: presentation timestamp is nonzero"
@@ -182,27 +185,6 @@ fn presentation_timing_accuracy() {
             "frame {i}: timestamp monotonic, {prev} then {cur}"
         );
     }
-
-    // Sequence is a true frame counter: starts at 1, +1 exactly per frame, contiguous, no gaps/dups.
-    assert_eq!(
-        app.presented[0].seq, 1,
-        "first presented frame is sequence 1"
-    );
-    for i in 0..app.presented.len() {
-        let expect = 1 + i as u64;
-        assert_eq!(
-            app.presented[i].seq, expect,
-            "frame {i}: sequence increments by exactly 1 per presented frame (want {expect}, got {})",
-            app.presented[i].seq
-        );
-    }
-    let first = app.presented.first().unwrap().seq;
-    let last = app.presented.last().unwrap().seq;
-    assert_eq!(
-        last - first,
-        (FRAMES - 1) as u64,
-        "no drift: last seq == first + (N-1) over {FRAMES} frames ({first}..{last})"
-    );
 
     std::mem::forget(toplevel);
     std::mem::forget(xdg);

@@ -13,6 +13,7 @@ use crate::scene::port::PresentOutcome;
 /// `RetryableFailure` (retain callbacks + feedback for retry), `TerminalFailure` (drop them).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FramePacing {
+    Pending,
     Presented,
     Skipped,
     RetryableFailure,
@@ -37,6 +38,12 @@ impl FramePacing {
     /// The policy for this pacing decision. Exact port of `FramePacing::policy`.
     pub fn policy(self) -> PacingPolicy {
         match self {
+            FramePacing::Pending => PacingPolicy {
+                complete_callbacks: false,
+                retain: true,
+                present_feedback: false,
+                terminal_cleanup: false,
+            },
             FramePacing::Presented => PacingPolicy {
                 complete_callbacks: true,
                 retain: false,
@@ -71,6 +78,7 @@ impl FramePacing {
 impl From<PresentOutcome> for FramePacing {
     fn from(outcome: PresentOutcome) -> Self {
         match outcome {
+            PresentOutcome::Pending { .. } => FramePacing::Pending,
             PresentOutcome::Delivered { .. } => FramePacing::Presented,
             PresentOutcome::Offscreen => FramePacing::RetryableFailure,
             PresentOutcome::RetryableFailure => FramePacing::RetryableFailure,

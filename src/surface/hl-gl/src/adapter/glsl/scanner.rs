@@ -64,7 +64,7 @@ impl Tokens<'_> {
             }
             let read_tok = |q: &mut usize| -> String {
                 let mut s = String::new();
-                while *q < b.len() && !Self::is_space(b[*q]) && b[*q] != b';' && s.len() < 15 {
+                while *q < b.len() && !Self::is_space(b[*q]) && b[*q] != b';' {
                     s.push(b[*q] as char);
                     *q += 1;
                 }
@@ -83,7 +83,7 @@ impl Tokens<'_> {
             // std140 interface block: `uniform Block { TYPE m; ... } [inst];` — enumerate the MEMBERS.
             if q < b.len() && b[q] == b'{' {
                 q += 1;
-                while out.len() < 32 {
+                loop {
                     while q < b.len() && Self::is_space(b[q]) {
                         q += 1;
                     }
@@ -101,11 +101,11 @@ impl Tokens<'_> {
                         q += 1;
                     }
                     let mut mnm = String::new();
-                    while q < b.len() && Self::is_word(b[q]) && mnm.len() < 31 {
+                    while q < b.len() && Self::is_word(b[q]) {
                         mnm.push(b[q] as char);
                         q += 1;
                     }
-                    let marr = Self::read_array_subscript(b, &mut q);
+                    let (marr, array_literal) = Self::read_array_subscript(b, &mut q);
                     while q < b.len() && b[q] != b';' && b[q] != b'}' {
                         q += 1; // skip to the member end
                     }
@@ -117,6 +117,7 @@ impl Tokens<'_> {
                             ty: mty,
                             name: mnm,
                             arr: marr,
+                            array_literal,
                         });
                     }
                 }
@@ -132,14 +133,34 @@ impl Tokens<'_> {
                 p = q;
                 continue;
             }
-            let mut nm = String::new();
-            while q < b.len() && Self::is_word(b[q]) && nm.len() < 31 {
-                nm.push(b[q] as char);
+            // One GLSL declaration may contain several declarators:
+            // `uniform float scale, bias[2], blend;`. The wrapper removes that whole statement, so every
+            // name must be reflected and regenerated or later names become unknown variables.
+            loop {
+                while q < b.len() && Self::is_space(b[q]) {
+                    q += 1;
+                }
+                let mut name = String::new();
+                while q < b.len() && Self::is_word(b[q]) {
+                    name.push(b[q] as char);
+                    q += 1;
+                }
+                let (arr, array_literal) = Self::read_array_subscript(b, &mut q);
+                if !ty.is_empty() && !name.is_empty() {
+                    out.push(Decl {
+                        ty: ty.clone(),
+                        name,
+                        arr,
+                        array_literal,
+                    });
+                }
+                while q < b.len() && Self::is_space(b[q]) {
+                    q += 1;
+                }
+                if q >= b.len() || b[q] != b',' {
+                    break;
+                }
                 q += 1;
-            }
-            let arr = Self::read_array_subscript(b, &mut q);
-            if !ty.is_empty() && !nm.is_empty() {
-                out.push(Decl { ty, name: nm, arr });
             }
             p = q;
         }
@@ -147,15 +168,15 @@ impl Tokens<'_> {
     }
 
     /// If the bytes at `*q` are an array subscript `[N]` (possibly with surrounding spaces), consume it and
-    /// return `N` (the element count); otherwise leave `*q` unchanged and return `0`. Only a plain integer size
-    /// is captured — a non-literal size (`[SOME_MACRO]`) yields `0` (treated as a scalar, best-effort).
-    pub(super) fn read_array_subscript(b: &[u8], q: &mut usize) -> u32 {
+    /// return `N` (the element count); otherwise leave `*q` unchanged and return `0`. A present but
+    /// non-literal/zero dimension returns `u32::MAX`, which link validation rejects explicitly.
+    pub(super) fn read_array_subscript(b: &[u8], q: &mut usize) -> (u32, bool) {
         let mut p = *q;
         while p < b.len() && Self::is_space(b[p]) {
             p += 1;
         }
         if p >= b.len() || b[p] != b'[' {
-            return 0;
+            return (0, true);
         }
         p += 1;
         while p < b.len() && Self::is_space(b[p]) {
@@ -172,10 +193,11 @@ impl Tokens<'_> {
         if p < b.len() && b[p] == b']' && !digits.is_empty() {
             if let Ok(n) = std::str::from_utf8(digits).unwrap_or("").parse::<u32>() {
                 *q = p + 1;
-                return n;
+                return (n, true);
             }
         }
-        0
+        *q = p;
+        (0, false)
     }
 }
 

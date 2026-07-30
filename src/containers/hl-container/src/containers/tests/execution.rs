@@ -220,6 +220,68 @@ async fn execution_signal_targets_only_the_exec_process() {
 }
 
 #[tokio::test]
+async fn execution_joins_the_container_domain_without_owning_it() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("exec-domain-parent")).await.unwrap();
+    containers.start("exec-domain-parent").await.unwrap();
+    let execution = containers
+        .executions()
+        .create("exec-domain-parent", ExecSpec::new(Process::new("fake")))
+        .await
+        .unwrap();
+
+    let _session = containers.executions().start(&execution.id).await.unwrap();
+
+    let domains = runtime.domains.lock().unwrap();
+    assert_eq!(domains.len(), 2);
+    assert_eq!(domains[0].0, domains[1].0);
+    assert!(domains[0].1);
+    assert!(!domains[1].1);
+    drop(domains);
+    assert_eq!(runtime.domain_reads.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn killing_an_execution_force_stops_it_without_stopping_the_container() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("exec-kill-parent")).await.unwrap();
+    containers.start("exec-kill-parent").await.unwrap();
+    let execution = containers
+        .executions()
+        .create("exec-kill-parent", ExecSpec::new(Process::new("fake")))
+        .await
+        .unwrap();
+    let _session = containers.executions().start(&execution.id).await.unwrap();
+
+    containers
+        .executions()
+        .signal(&execution.id, Signal::Kill)
+        .await
+        .unwrap();
+
+    assert_eq!(*runtime.signals.lock().unwrap(), [Signal::Kill]);
+    assert!(containers
+        .inspect("exec-kill-parent")
+        .await
+        .unwrap()
+        .state
+        .is_active());
+    let domains = runtime.domains.lock().unwrap();
+    assert_eq!(domains.len(), 2);
+    assert_eq!(domains[0].0, domains[1].0);
+    assert!(domains[0].1);
+    assert!(!domains[1].1);
+    drop(domains);
+    assert_eq!(runtime.domain_reads.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn completed_execution_can_be_removed_but_running_execution_cannot() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_millis(30);
@@ -246,7 +308,7 @@ async fn completed_execution_can_be_removed_but_running_execution_cannot() {
     assert!(containers.executions().list().await.unwrap().is_empty());
     assert!(matches!(
         containers.executions().inspect(&execution.id).await,
-        Err(Error::NotFound(_))
+        Err(Error::ExecNotFound(_))
     ));
 }
 

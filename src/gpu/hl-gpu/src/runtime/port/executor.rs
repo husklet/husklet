@@ -12,8 +12,10 @@
 
 use crate::protocol::model::capability::Capabilities;
 use crate::protocol::model::command::Cmd;
+use crate::protocol::model::descriptor::{FrameSerial, SurfaceToken};
 use crate::protocol::model::error::{GpuError, Result};
 use crate::protocol::model::id::{BufferId, FenceId, SurfaceId, TextureId};
+use crate::protocol::port::sink::FenceWait;
 use crate::runtime::model::resources::SessionResources;
 
 /// The outcome of a `Present` command executed within a batch: which surface presented which texture.
@@ -22,7 +24,9 @@ use crate::runtime::model::resources::SessionResources;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Presentation {
     pub surface: SurfaceId,
+    pub token: SurfaceToken,
     pub texture: TextureId,
+    pub serial: FrameSerial,
 }
 
 /// The host executor a runtime `Session` drives. Object-safe so the runtime holds `&mut dyn GpuExecutor`
@@ -51,6 +55,37 @@ pub trait GpuExecutor {
     /// out-of-band wait not carried inside a command batch); `resources` is passed so the executor can
     /// resolve the fence's native primitive.
     fn wait(&mut self, resources: &mut SessionResources, fence: FenceId, value: u64) -> Result<()>;
+
+    /// Poll fence completion without blocking.
+    fn poll_fence(
+        &mut self,
+        resources: &SessionResources,
+        fence: FenceId,
+        value: u64,
+    ) -> Result<bool> {
+        let _ = (resources, fence, value);
+        Err(GpuError::Unsupported("executor: poll_fence"))
+    }
+
+    fn wait_timeout(
+        &mut self,
+        resources: &mut SessionResources,
+        fence: FenceId,
+        value: u64,
+        timeout_ns: u64,
+    ) -> Result<FenceWait> {
+        if timeout_ns == 0 {
+            return self.poll_fence(resources, fence, value).map(|done| {
+                if done {
+                    FenceWait::Complete
+                } else {
+                    FenceWait::Timeout
+                }
+            });
+        }
+        self.wait(resources, fence, value)?;
+        Ok(FenceWait::Complete)
+    }
 
     /// Read `len` bytes back from buffer `id` at `offset` out of the runtime-owned `resources` — the
     /// host-side half of the device→host readback path (`CommandSink::read_buffer` /`cuMemcpyDtoH`).

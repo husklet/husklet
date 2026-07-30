@@ -17,11 +17,11 @@ const FS: &str = "void main(){ gl_FragColor = vec4(1.0); }\n";
 
 fn ctx() -> GlContext {
     let mut c = GlContext::new();
-    c.surf = GlSurface {
+    c.set_surface(GlSurface {
         have: true,
         width: 256,
         height: 256,
-    };
+    });
     c
 }
 

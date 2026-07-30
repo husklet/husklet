@@ -103,6 +103,28 @@ pub enum Enc {
         dst_offset: u64,
         bytes_per_row: u32,
     },
+    /// Buffer-to-texture copy with an explicit mip, array layer / depth origin, and layer count.
+    CopyBufferToTextureRegion {
+        src: u32,
+        src_offset: u64,
+        bytes_per_row: u32,
+        rows_per_image: u32,
+        dst: u32,
+        dst_sub: TextureSubresource,
+        dst_origin: Origin3d,
+        extent: Extent3d,
+    },
+    /// Texture-to-buffer copy with an explicit mip, array layer / depth origin, and layer count.
+    CopyTextureToBufferRegion {
+        src: u32,
+        src_sub: TextureSubresource,
+        src_origin: Origin3d,
+        extent: Extent3d,
+        dst: u32,
+        dst_offset: u64,
+        bytes_per_row: u32,
+        rows_per_image: u32,
+    },
     /// Exact-size texture→texture copy (no scaling): `extent` texels move from `src`'s
     /// `src_sub`/`src_origin` to `dst`'s `dst_sub`/`dst_origin`. Formats must be copy-compatible (equal
     /// bytes-per-texel). Wire tag 18 (added at [`WIRE_VERSION`] 2).
@@ -186,6 +208,8 @@ impl Enc {
             Self::CopyBufferToBuffer { .. } => etag::COPY_B2B,
             Self::CopyBufferToTexture { .. } => etag::COPY_B2T,
             Self::CopyTextureToBuffer { .. } => etag::COPY_T2B,
+            Self::CopyBufferToTextureRegion { .. } => etag::COPY_B2T_REGION,
+            Self::CopyTextureToBufferRegion { .. } => etag::COPY_T2B_REGION,
             Self::CopyTextureToTexture { .. } => etag::COPY_T2T,
             Self::BlitTexture { .. } => etag::BLIT_TEXTURE,
             Self::ResolveTexture { .. } => etag::RESOLVE_TEXTURE,
@@ -238,6 +262,8 @@ pub enum Cmd {
     },
     CreateTexture(u32, TextureDesc),
     DestroyTexture(u32),
+    CreateTextureView(u32, TextureViewDesc),
+    DestroyTextureView(u32),
     CreateSampler(u32, SamplerDesc),
     DestroySampler(u32),
     CreateShader {
@@ -248,6 +274,13 @@ pub enum Cmd {
     DestroyShader(u32),
     CreateRenderPipeline(u32, RenderPipelineDesc),
     CreateComputePipeline(u32, ComputePipelineDesc),
+    CreateRenderPipelineLayout(
+        u32,
+        RenderPipelineDesc,
+        PipelineLayout,
+        super::descriptor::RenderMultisample,
+    ),
+    CreateComputePipelineLayout(u32, ComputePipelineDesc, PipelineLayout),
     DestroyPipeline(u32),
     CreateBindGroup(u32, BindGroupDesc),
     DestroyBindGroup(u32),
@@ -263,6 +296,7 @@ pub enum Cmd {
     Present {
         surface: u32,
         texture: u32,
+        serial: super::descriptor::FrameSerial,
     },
 }
 
@@ -296,7 +330,12 @@ pub enum Cmd {
 ///   implemented) `ResolveTexture` op (etag 20). Purely additive: only a `CreateRenderPipeline`'s bytes
 ///   grow by the appended `u32`; a v7 decoder would mis-frame a v8 pipeline, so the negotiated version
 ///   gates it exactly as the v7 stencil append did.
-pub const WIRE_VERSION: u32 = 8;
+/// - v9: replaces the presentation-facing `SurfaceDesc` id with a validated non-zero 64-bit
+///   `SurfaceToken`, and adds a 64-bit frame serial to `Present`.
+// v12 adds render multisample mask + forced per-sample shading to layout-qualified render pipelines.
+// v14 extends `SamplerDesc` with LOD clamps and optional depth comparison. A v13 decoder would
+// mis-frame every command following `CreateSampler`, so negotiation must reject mixed versions.
+pub const WIRE_VERSION: u32 = 14;
 
 // tag constants (stable wire) --------------------------------------------------------------------
 /// Top-level [`Cmd`] tag numbers.
@@ -322,6 +361,10 @@ pub mod tag {
     pub const SUBMIT: u8 = 19;
     pub const WAIT_FENCE: u8 = 20;
     pub const PRESENT: u8 = 21;
+    pub const CREATE_RENDER_PIPELINE_LAYOUT: u8 = 22;
+    pub const CREATE_COMPUTE_PIPELINE_LAYOUT: u8 = 23;
+    pub const CREATE_TEXTURE_VIEW: u8 = 24;
+    pub const DESTROY_TEXTURE_VIEW: u8 = 25;
 }
 
 /// Encoder-op (command-buffer) tag numbers. Public so the capability handshake can build a per-backend
@@ -355,4 +398,7 @@ pub mod etag {
     pub const SET_STENCIL_REFERENCE: u8 = 22;
     // v8: dynamic blend constant.
     pub const SET_BLEND_CONSTANT: u8 = 23;
+    // v13: explicit mip/layer/origin buffer-texture copies.
+    pub const COPY_B2T_REGION: u8 = 24;
+    pub const COPY_T2B_REGION: u8 = 25;
 }

@@ -1,7 +1,7 @@
 //! ABI conformance gate for the guest GL/EGL shim objects — now SPLIT across the two staged cdylibs,
 //! matching real Mesa's library layout:
 //!
-//!   * `libGLESv2.so.2` exports the `gl*` core render set (358 entry points) in ITS OWN dynamic symbol
+//!   * `libGLESv2.so.2` exports the `gl*` core render set (364 entry points) in ITS OWN dynamic symbol
 //!     table — so libepoxy (GTK's GL loader) `dlsym`s core `gl*` directly from it, and
 //!   * `libEGL.so.1`   exports the `egl*` set (44) + the one shared-state accessor `hl_shim_state_ptr`
 //!     (and NO `gl*` — they are `local:`, hidden by the version script), so an EGL app binds its
@@ -9,7 +9,7 @@
 //!
 //! Together the two objects cover the whole `gl*`+`egl*` surface with no leakage and no duplication of
 //! the exported names. This test:
-//!   1. reads the two committed goldens (`abi_symbols_gl.txt` = 358, `abi_symbols_egl.txt` = 44),
+//!   1. reads the two committed goldens (`abi_symbols_gl.txt` = 364, `abi_symbols_egl.txt` = 44),
 //!   2. cross-checks the generator's SOURCE — the shim manifest's `GL`/`EGL` rows equal those goldens
 //!      (so the generated surface can't drift), and
 //!   3. `nm -D`s each STAGED `.so` (produced by this crate's `build.rs` during the test build) and asserts
@@ -17,7 +17,7 @@
 //!      libGLESv2 leaks NO `egl*`.
 //!
 //! ABI GOLDEN SPLIT (intentional, correct): the old single golden pinned `libEGL == 402` (`gl*`+`egl*`).
-//! It is now split `libEGL == 44` (`egl*`) + `libGLESv2 == 358` (`gl*`) — same union, distributed to
+//! It is now split `libEGL == 44` (`egl*`) + `libGLESv2 == 364` (`gl*`) — same union, distributed to
 //! match Mesa so libepoxy stops aborting.
 
 use std::collections::BTreeSet;
@@ -27,7 +27,8 @@ use std::process::Command;
 const GOLDEN_GL: &str = "shim/egl/tests/golden/abi_symbols_gl.txt";
 const GOLDEN_EGL: &str = "shim/egl/tests/golden/abi_symbols_egl.txt";
 const MANIFEST: &str = "shim/egl/registry/gles2_egl.manifest";
-const EXPECTED_GL: usize = 358;
+const GOLDEN_GBM: &str = "shim/gbm.symbols";
+const EXPECTED_GL: usize = 422;
 const EXPECTED_EGL: usize = 44;
 
 fn manifest_dir() -> PathBuf {
@@ -92,6 +93,46 @@ fn exports(so: &Path, pred: impl Fn(&str) -> bool) -> BTreeSet<String> {
         .collect()
 }
 
+fn needed(so: &Path) -> BTreeSet<String> {
+    let out = Command::new("readelf")
+        .args(["-d"])
+        .arg(so)
+        .output()
+        .unwrap_or_else(|e| panic!("run readelf on {}: {e}", so.display()));
+    assert!(
+        out.status.success(),
+        "readelf -d failed on {}",
+        so.display()
+    );
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|line| line.contains("(NEEDED)"))
+        .filter_map(|line| {
+            line.split_once('[')?
+                .1
+                .split_once(']')
+                .map(|(name, _)| name)
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+fn imports(so: &Path, symbol: &str) -> bool {
+    let out = Command::new("nm")
+        .args(["-D", "--undefined-only"])
+        .arg(so)
+        .output()
+        .unwrap_or_else(|e| panic!("run nm on {}: {e}", so.display()));
+    assert!(
+        out.status.success(),
+        "nm -D --undefined-only failed on {}",
+        so.display()
+    );
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .any(|line| line.split_whitespace().last() == Some(symbol))
+}
+
 /// Is `s` a core `gl*` name (and NOT an `egl*` name — `egl*` starts with `e`, so this never overlaps)?
 fn is_gl(s: &str) -> bool {
     s.starts_with("gl")
@@ -131,6 +172,28 @@ fn shim_export_surface_matches_the_split_golden_abi() {
     let dir = staged_dir();
     let libgles = dir.join("libGLESv2.so.2");
     let libegl = dir.join("libEGL.so.1");
+    let libgbm = dir.join("libgbm.so.1");
+    assert_eq!(
+        exports(&libegl, |symbol| symbol
+            == "hl_shim_external_buffers_enabled"),
+        ["hl_shim_external_buffers_enabled".to_owned()]
+            .into_iter()
+            .collect(),
+        "GBM capability gate must be dynamically visible from libEGL"
+    );
+    assert_eq!(
+        exports(&libgbm, |symbol| symbol.starts_with("gbm_")),
+        read_golden(&manifest_dir().join(GOLDEN_GBM)),
+        "libgbm.so.1 exported ABI differs from its golden"
+    );
+    assert!(
+        needed(&libgbm).contains("libEGL.so.1"),
+        "libgbm must load its capability owner before querying external-buffer support"
+    );
+    assert!(
+        imports(&libgbm, "hl_shim_external_buffers_enabled"),
+        "libgbm must bind the EGL-owned capability directly, not discover it opportunistically"
+    );
 
     // (b) libGLESv2.so.2 exports EXACTLY the gl* golden, and leaks NO egl*.
     let gles_gl = exports(&libgles, is_gl);

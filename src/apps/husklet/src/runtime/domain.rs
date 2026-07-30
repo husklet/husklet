@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 mod close;
 mod configuration;
+mod identity;
 mod lifecycle;
 mod publication;
 mod restore;
@@ -18,6 +19,7 @@ mod restore;
 use crate::runtime::process::Peer;
 use close::ResultFile;
 use configuration::Configuration;
+use identity::RuntimeIdentity;
 use lifecycle::{Disposition, Lease, Shutdown};
 use publication::{ConfigurationIdentity as PublishedConfiguration, Protocol as PublishedProtocol};
 use restore::RestoreSummary;
@@ -90,6 +92,9 @@ impl Domain {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::from(output))
             .stderr(std::process::Stdio::from(errors));
+        if let Some(capture) = crate::runtime::gpu::CaptureOptions::configured()? {
+            command.args(capture.worker_arguments()?);
+        }
         // SAFETY: the hook runs after `fork` and before `exec` in the child. It only invokes
         // the async-signal-safe `setsid` syscall and converts its errno into an I/O error.
         unsafe {
@@ -273,17 +278,24 @@ impl Runtime {
         containers: &Containers,
         docker: Option<&crate::runtime::resources::Daemon>,
     ) -> io::Result<()> {
-        containers
+        let executions = containers.executions();
+        executions
             .require_checkpointable()
             .await
             .map_err(io::Error::other)?;
         if let Some(daemon) = docker {
             daemon.close(crate::runtime::resources::Close::Checkpoint)?;
         }
-        let checkpoint = containers
+        let checkpoint = match executions
             .checkpoint_all(std::time::Duration::from_secs(30))
             .await
-            .map_err(io::Error::other);
+        {
+            Ok(()) => containers
+                .shutdown(std::time::Duration::from_secs(5))
+                .await
+                .map_err(io::Error::other),
+            Err(error) => Err(io::Error::other(error)),
+        };
         match checkpoint {
             Ok(()) => Ok(()),
             Err(checkpoint) => {
@@ -313,7 +325,10 @@ impl Runtime {
                 .map_err(io::Error::other)?,
         );
         let root = workspace_root.join("containers");
-        let containers = Containers::builder(Config::new(root))
+        // The engine's AArch64 persistent translation cache currently corrupts dynamic
+        // interpreter/exec relocations on a warm load. Keep execution correct until the engine
+        // regression is fixed; this is application-selected policy, not a container workaround.
+        let containers = Containers::builder(Config::new(&root))
             .images(images)
             .devices(devices)
             .checkpoints(checkpoints)
@@ -327,23 +342,28 @@ impl Runtime {
         containers: &Containers,
         workspace: &WorkspaceConfig,
     ) -> io::Result<()> {
-        let signature = Configuration::new(workspace).signature();
+        let signature = Configuration::new(workspace).signature()?;
         match containers.inspect(CONTAINER).await {
             Ok(container) => {
                 let stored = container.spec.labels.get(SIGNATURE);
-                if stored != Some(&signature) {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "workspace runtime configuration changed; reset its runtime before reopening",
-                    ));
+                let session = crate::runtime::session::Session::from_labels(&container.spec.labels);
+                if stored == Some(&signature) && session.is_ok() {
+                    if !container.state.is_active() {
+                        containers
+                            .start(CONTAINER)
+                            .await
+                            .map_err(io::Error::other)?;
+                    }
+                    return Ok(());
                 }
-                if !container.state.is_active() {
-                    containers
-                        .start(CONTAINER)
-                        .await
-                        .map_err(io::Error::other)?;
-                }
-                return Ok(());
+                hl_log::hl_info!(
+                    hl_log::tag::CONTAINER,
+                    "recreating incompatible workspace runtime container"
+                );
+                containers
+                    .remove_force(CONTAINER)
+                    .await
+                    .map_err(io::Error::other)?;
             }
             Err(hl_container::Error::NotFound(_)) => {}
             Err(error) => return Err(io::Error::other(error)),
@@ -360,6 +380,7 @@ impl Runtime {
                 .map_err(io::Error::other)?,
         };
         let unpacked = images.unpack(&image, &platform).map_err(io::Error::other)?;
+        let session = crate::runtime::session::Session::select(&images, &unpacked)?;
         let overrides = RuntimeOverrides {
             entrypoint: Some(vec!["/bin/sh".into()]),
             command: Some(vec![
@@ -372,10 +393,19 @@ impl Runtime {
         };
         containers
             .create_image(&unpacked, overrides, |spec| {
-                Configuration::new(workspace).container(spec, signature)
+                session.label(Configuration::new(workspace).container(spec, signature))
             })
             .await
             .map_err(io::Error::other)?;
+        if let Err(error) = session.provision(containers).await {
+            let removed = containers.remove_force(CONTAINER).await;
+            return match removed {
+                Ok(_) => Err(error),
+                Err(rollback) => Err(io::Error::other(format!(
+                    "{error}; workspace container rollback failed: {rollback}"
+                ))),
+            };
+        }
         containers.start(CONTAINER).await.map_err(io::Error::other)
     }
 

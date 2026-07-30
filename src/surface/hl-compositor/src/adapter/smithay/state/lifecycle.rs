@@ -1,6 +1,9 @@
 use super::*;
 
 const TABLET_TOOL_CAPABILITIES: TabletToolCapabilities = TabletToolCapabilities::PRESSURE;
+fn surface_identity_version(native_frames: bool) -> Option<u32> {
+    native_frames.then_some(hl_surface_protocol::VERSION)
+}
 use super::{
     buffer::DmabufAdapter, configuration::env_outputs, output::WaylandOutput,
     tearing::TearingControlCachedState,
@@ -8,7 +11,21 @@ use super::{
 impl HlState {
     /// Stand up the protocol globals and the neutral engine, seeded with one output.
     pub fn new(dh: &DisplayHandle, presenter: impl Into<AdapterPresenter>) -> HlState {
-        let presenter = presenter.into();
+        Self::build(dh, presenter.into(), false)
+    }
+
+    #[cfg(feature = "macos-surface")]
+    pub(crate) fn with_native_frames(
+        dh: &DisplayHandle,
+        presenter: AdapterPresenter,
+        frames: crate::adapter::smithay::native::NativeFrames,
+    ) -> HlState {
+        let mut state = Self::build(dh, presenter, true);
+        state.set_native_frames(frames);
+        state
+    }
+
+    fn build(dh: &DisplayHandle, presenter: AdapterPresenter, native_frames: bool) -> HlState {
         // Grab the presenter's shared observation handle BEFORE it moves into the engine, so the
         // idle-inhibit / content-type handlers below write exactly where a test reads (mirrors `captures`).
         let observations = presenter.observations();
@@ -23,7 +40,7 @@ impl HlState {
         // single LINEAR ARGB8888/XRGB8888 tranche, so GTK/Qt EGL + Chrome's ozone/GPU get a TRUTHFUL
         // format table to probe — and a client that hands us a LINEAR dmabuf has it CPU-imported by
         // `pread` (a real fd import, no GPU). See [`new_dmabuf_state`].
-        let dmabuf = DmabufAdapter::new(dh).state();
+        let dmabuf = DmabufAdapter::new(dh, native_frames).state();
         let xdg_shell = XdgShellState::new::<HlState>(dh);
         // Advertise `zxdg_decoration_manager_v1` so CSD-vs-SSD negotiation resolves instead of hanging.
         let xdg_decoration = XdgDecorationState::new::<HlState>(dh);
@@ -54,6 +71,8 @@ impl HlState {
         // surface object are dispatched by the hand-written `GlobalDispatch`/`Dispatch` impls below; the
         // per-surface hint is double-buffered and read at commit into `Observations`.
         let tearing_manager = dh.create_global::<HlState, WpTearingControlManagerV1, ()>(1, ());
+        let surface_identity_manager = surface_identity_version(native_frames)
+            .map(|version| dh.create_global::<HlState, HlSurfaceManagerV1, ()>(version, ()));
         // Advertise `zwp_relative_pointer_manager_v1` (unaccelerated relative motion deltas) and
         // `zwp_pointer_constraints_v1` (pointer lock / confinement) — the input protocols FPS games, 3D
         // viewports, and pointer-lock web content require. The seat's `wl_pointer` backs both.
@@ -170,6 +189,7 @@ impl HlState {
             _single_pixel_buffer: single_pixel_buffer,
             keyboard_shortcuts_inhibit,
             _tearing_manager: tearing_manager,
+            _surface_identity_manager: surface_identity_manager,
             _relative_pointer: relative_pointer,
             _pointer_constraints: pointer_constraints,
             _presentation: presentation,
@@ -183,15 +203,24 @@ impl HlState {
             engine,
             surface_ids: HashMap::new(),
             surfaces_by_id: HashMap::new(),
+            surface_tokens: HashMap::new(),
+            token_surfaces: HashMap::new(),
+            identity_surfaces: HashMap::new(),
+            pending_associations: HashMap::new(),
+            last_associations: HashMap::new(),
+            #[cfg(feature = "macos-surface")]
+            native: None,
+            #[cfg(feature = "macos-surface")]
+            native_buffers: HashMap::new(),
             popup_grabs: Vec::new(),
             pending_callbacks: HashMap::new(),
             pending_repaints: HashMap::new(),
             entered_outputs: HashMap::new(),
             pending_presentation: HashMap::new(),
+            pending_host_frames: HashMap::new(),
             last_injected_pointer: (0.0, 0.0),
             last_pointer_click_count: 1,
             host_fullscreen: HashSet::new(),
-            present_seq: 0,
             observations,
             clipboard_tx,
             clipboard_rx,
@@ -270,6 +299,14 @@ impl HlState {
         // grab), so drop it from the chain before the scene reference is gone.
         self.popup_grabs.retain(|p| p.wl_surface() != surface);
         if let Some(sid) = self.surface_ids.remove(&surface.id()) {
+            let cancelled_root = self.engine.scene.window_root(sid).unwrap_or(sid);
+            self.cancel_host_root(cancelled_root);
+            // External dmabuf commits are keyed by their buffer token, not necessarily this surface's
+            // protocol identity token. Cancel by surface before retiring that identity so destruction
+            // settles every deferred callback/feedback and releases its buffer lease.
+            #[cfg(feature = "macos-surface")]
+            self.cancel_native_commit(sid);
+            self.retire_surface_identity(sid);
             self.lock_surfaces.retain(|&s| s != sid);
             self.host_fullscreen.remove(&sid);
             // The window root this surface belonged to, resolved WHILE its tree links still exist. If the
@@ -347,8 +384,13 @@ impl HlState {
         // top, excluding the parent's self-entry). Map those to scene ids and reorder the scene's children.
         let order: Vec<SurfaceId> = get_children(&parent_wl)
             .iter()
-            .filter(|c| *c != &parent_wl)
-            .filter_map(|c| self.sid(c))
+            .filter_map(|child| {
+                if child == &parent_wl {
+                    Some(parent)
+                } else {
+                    self.sid(child)
+                }
+            })
             .collect();
         self.engine.scene.set_subsurface_order(parent, &order);
     }
@@ -452,11 +494,4 @@ impl HlState {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{TabletToolCapabilities, TABLET_TOOL_CAPABILITIES};
-
-    #[test]
-    fn tablet_advertises_only_axes_emitted_by_the_host_seam() {
-        assert_eq!(TABLET_TOOL_CAPABILITIES, TabletToolCapabilities::PRESSURE);
-    }
-}
+include!("lifetime.rs");

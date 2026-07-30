@@ -86,6 +86,7 @@ fn cuda_vecadd_runs_end_to_end_and_reads_back_the_elementwise_sum() {
         shader_payloads: shader_payload::KERNEL,
         command_bits: Capabilities::command_bits(ALL_COMMANDS),
         texture_formats: TextureFormat::bits(COLOR_FORMATS),
+        ..FeatureRequest::default()
     };
     let caps = sink.negotiate(&req).expect("negotiate against CpuExecutor");
     assert!(caps.supports_shader_payload(shader_payload::KERNEL));
@@ -176,6 +177,7 @@ fn cuda_runtime_api_vecadd_registers_and_launches_end_to_end() {
         shader_payloads: shader_payload::KERNEL,
         command_bits: Capabilities::command_bits(ALL_COMMANDS),
         texture_formats: TextureFormat::bits(COLOR_FORMATS),
+        ..FeatureRequest::default()
     };
     let caps = sink.negotiate(&req).expect("negotiate against CpuExecutor");
     assert!(caps.supports_shader_payload(shader_payload::KERNEL));
@@ -278,6 +280,7 @@ fn harness() -> InProcessCommandSink<CpuExecutor> {
         shader_payloads: shader_payload::KERNEL,
         command_bits: Capabilities::command_bits(ALL_COMMANDS),
         texture_formats: TextureFormat::bits(COLOR_FORMATS),
+        ..FeatureRequest::default()
     };
     sink.negotiate(&req).expect("negotiate against CpuExecutor");
     sink

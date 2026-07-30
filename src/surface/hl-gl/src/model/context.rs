@@ -11,18 +11,36 @@
 //! through a [`hl_gpu::CommandSink`].
 
 use super::buffer::Buffers;
-use super::es3::{ProgramPipelines, Queries, Samplers, TransformFeedbacks};
-use super::framebuffer::Framebuffers;
+use super::es3::Samplers;
 use super::glconst;
 use super::program::{Attr, DrawCall, Programs, MAX_ATTR};
 use super::renderbuffer::Renderbuffers;
 use super::texture::Textures;
+use hl_gpu::protocol::model::descriptor::SamplerDesc;
 use hl_gpu::Cmd;
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::sync::Arc;
+
+#[derive(Clone)]
+pub(super) struct SharedTextureResidency {
+    texture: u32,
+    storage: std::sync::Weak<crate::model::texture::SharedPixels>,
+}
+
+#[derive(Clone)]
+pub(super) struct SharedTargetResidency {
+    texture: u32,
+    revision: u64,
+    width: u32,
+    height: u32,
+    storage: std::sync::Weak<crate::model::texture::SharedPixels>,
+    owned: bool,
+}
 
 pub struct GlContext {
-    /// The default-framebuffer window surface.
-    pub surf: GlSurface,
+    /// State owned by the active EGL context rather than the share group.
+    pub(crate) local: LocalState,
 
     /// GL buffer objects (`glGenBuffers`/`glBufferData`).
     pub buffers: Buffers,
@@ -30,127 +48,15 @@ pub struct GlContext {
     pub textures: Textures,
     /// GL shader + program objects (`glCreateShader`/`glCreateProgram`/`glLinkProgram`).
     pub programs: Programs,
-    /// GL framebuffer objects (`glGenFramebuffers`/`glFramebufferTexture2D`) — offscreen render targets.
-    pub framebuffers: Framebuffers,
     /// GL renderbuffer objects (`glGenRenderbuffers`/`glRenderbufferStorage`) — texture-backed attachments.
     pub renderbuffers: Renderbuffers,
     /// ES3 sampler objects (`glGenSamplers`/`glSamplerParameter*`/`glBindSampler`). Client-side state.
     pub samplers: Samplers,
-    /// ES3 occlusion/transform-feedback query objects (`glGenQueries`/`glBeginQuery`/…). Client-side.
-    pub queries: Queries,
-    /// ES3 transform-feedback objects + per-program varying capture (`glBindTransformFeedback`/…).
-    pub transform_feedbacks: TransformFeedbacks,
-    /// Separate-shader program-pipeline objects (`glGenProgramPipelines`/`glUseProgramStages`/…).
-    pub program_pipelines: ProgramPipelines,
-
-    // ---- currently-bound GL state ----------------------------------------------------------------
-    /// The program bound by `glUseProgram`.
-    pub(crate) cur_prog: u32,
-    /// The buffer bound to `GL_ARRAY_BUFFER`.
-    pub array_buffer: u32,
-    /// The buffer bound to `GL_ELEMENT_ARRAY_BUFFER`.
-    pub element_buffer: u32,
-    /// The buffer bound to each non-array/element target (`GL_UNIFORM_BUFFER`, `GL_SHADER_STORAGE_BUFFER`,
-    /// `GL_PIXEL_PACK_BUFFER`, `GL_DISPATCH_INDIRECT_BUFFER`, …) by `glBindBuffer`. Used to resolve the
-    /// target of `glMapBufferRange`/`glDispatchComputeIndirect` for the long tail of ES3 buffer targets.
-    pub general_buffers: HashMap<u32, u32>,
-    /// The active texture unit index (`glActiveTexture` - `GL_TEXTURE0`).
-    pub active_texture: usize,
-    /// The GL texture bound to each texture unit (`glBindTexture`).
-    pub tex_unit: [u32; 8],
-    /// Per-location vertex-attribute pointer state.
-    pub attr: [Attr; MAX_ATTR],
-    pub(crate) clear_color: [f32; 4],
-    /// The depth-buffer clear value (`glClearDepthf`). Recorded for completeness; the default framebuffer
-    /// models no depth attachment, so it is not lowered to a pass clear (honest no-op — see `service::frame`).
-    pub(crate) clear_depth: f32,
-    pub(crate) viewport: [i32; 4],
-    pub scissor_enabled: bool,
-    pub(crate) scissor: [i32; 4],
-    /// `GL_BLEND` enabled + its factors/equations (`glBlendFunc`/`glBlendFuncSeparate`/`glBlendEquation`).
-    pub blend: bool,
-    pub blend_src_rgb: u32,
-    pub blend_dst_rgb: u32,
-    pub blend_src_alpha: u32,
-    pub blend_dst_alpha: u32,
-    pub blend_eq_rgb: u32,
-    pub blend_eq_alpha: u32,
-    pub blend_color: [f32; 4],
-    /// `GL_DEPTH_TEST` enabled + its compare func (`glDepthFunc`) and write mask (`glDepthMask`).
-    pub depth: bool,
-    pub(crate) depth_func: u32,
-    pub(crate) depth_write: bool,
-    /// `GL_STENCIL_TEST` enabled + the front/back stencil test state. Set by
-    /// `glStencilFunc`/`glStencilFuncSeparate` (compare func + reference + value read mask),
-    /// `glStencilOp`/`glStencilOpSeparate` (stencil-fail / depth-fail / depth-pass ops), and
-    /// `glStencilMask`/`glStencilMaskSeparate` (write mask). WebGPU carries a SINGLE reference value + a
-    /// single read/write mask for both faces (only the per-face compare + ops differ), so the front-face
-    /// reference/masks are the ones lowered — an honest partial for the rare per-face-mask app.
-    pub stencil: bool,
-    /// Per-face stencil compare function (`glStencilFunc*`), GL enum (`GL_ALWAYS`/`GL_EQUAL`/…).
-    pub stencil_func_front: u32,
-    pub stencil_func_back: u32,
-    /// Per-face stencil ops (`glStencilOp*`): stencil-fail / depth-fail / depth-pass, GL enums.
-    pub stencil_fail_front: u32,
-    pub stencil_zfail_front: u32,
-    pub stencil_zpass_front: u32,
-    pub stencil_fail_back: u32,
-    pub stencil_zfail_back: u32,
-    pub stencil_zpass_back: u32,
-    /// Front-face reference value (`glStencilFunc*`), the dynamic value the compare tests against and a
-    /// `GL_REPLACE` op writes — lowered to `Enc::SetStencilReference`.
-    pub stencil_ref: i32,
-    /// Front-face value read mask (`glStencilFunc*`) — WebGPU `stencilReadMask`.
-    pub stencil_read_mask: u32,
-    /// Front-face write mask (`glStencilMask*`) — WebGPU `stencilWriteMask`.
-    pub(crate) stencil_write_mask: u32,
-    /// The stencil-buffer clear value (`glClearStencil`), lowered to `DepthAttachment.clear_stencil`.
-    pub(crate) clear_stencil: i32,
-    /// `GL_CULL_FACE` enabled + the culled face (`glCullFace`) and front-face winding (`glFrontFace`).
-    pub cull_enabled: bool,
-    pub(crate) cull_face: u32,
-    pub(crate) front_face: u32,
-    /// `glColorMask` per-channel write enable, packed into the low 4 bits as `R<<0 | G<<1 | B<<2 | A<<3`
-    /// (the exact `ColorTargetState::write_mask` encoding). Default `0xf` (all channels written). A guest
-    /// that masks a channel — e.g. `glColorMask(1,1,1,0)` to leave the framebuffer alpha untouched, or an
-    /// all-false mask for a depth/stencil-only pass — lowers this into the pipeline's color-target write
-    /// mask instead of being silently dropped.
-    pub color_mask: u32,
-    /// The draw framebuffer bound by `glBindFramebuffer` (`GL_FRAMEBUFFER`/`GL_DRAW_FRAMEBUFFER`; `0` =
-    /// the default window framebuffer). A recorded draw's render target follows this binding.
-    pub bound_fbo: u32,
-    /// The read framebuffer bound by `glBindFramebuffer(GL_READ_FRAMEBUFFER, …)` (`GL_FRAMEBUFFER` binds
-    /// both). The `glReadPixels`/`glBlitFramebuffer` source; `0` = the default window framebuffer.
-    pub read_fbo: u32,
-    /// The renderbuffer bound by `glBindRenderbuffer` (`GL_RENDERBUFFER`; `0` = none). Names the target of
-    /// the next `glRenderbufferStorage`.
-    pub bound_rbo: u32,
-
-    /// The Vertex Array Object currently bound by `glBindVertexArray` (`0` = the default VAO).
-    pub cur_vao: u32,
-    /// The per-name captured VAO state (attrib array + element buffer). The live `attr`/`element_buffer`
-    /// fields hold `cur_vao`'s working copy; a bind snapshots the live copy here and loads the target's.
-    vaos: HashMap<u32, Vao>,
-    /// Monotonic VAO name counter (name `0` is the reserved default VAO, never minted).
-    next_vao: u32,
-
-    /// The pack/unpack pixel-store parameters (`glPixelStorei`).
-    pub pixel_store: PixelStore,
-
-    /// Indexed-buffer bindings (`glBindBufferBase`/`glBindBufferRange`), keyed by `(target, index)`.
-    /// The UBO/SSBO bindings feed a `glDispatchCompute`'s bind group (`crate::service::compute`).
-    pub indexed_buffers: HashMap<(u32, u32), IndexedBinding>,
 
     /// Per-program named uniform blocks (`glGetUniformBlockIndex` assigns a stable index by name;
     /// `glUniformBlockBinding` sets the binding point). Keyed by program GL name. Populated lazily on the
     /// first `glGetUniformBlockIndex`/reflection query — the same lazy scheme the reference shim uses.
     pub uniform_blocks: HashMap<u32, Vec<UniformBlock>>,
-
-    /// The MRT draw-buffer list (`glDrawBuffers`) + the read-buffer source (`glReadBuffer`). This model
-    /// renders a single color target, so the list is recorded for a faithful round-trip but only the
-    /// first attachment is materialized — an honest partial.
-    pub draw_buffers: Vec<u32>,
-    pub read_buffer_src: u32,
 
     // ---- sync objects (glFenceSync / glClientWaitSync / …) over the IR fence timeline ----------------
     /// The IR fence id backing every sync object (`0` = not yet created; minted + `CreateFence`d on the
@@ -166,38 +72,9 @@ pub struct GlContext {
     /// The opaque sync-token allocator (non-zero, so a `GLsync` is never null).
     next_sync_token: usize,
 
-    /// The last GL error (`glGetError` reads + clears it). GL keeps the FIRST error raised until read,
-    /// so [`Self::set_gl_error`] is first-error-wins.
-    pub gl_error: u32,
-
-    /// The recorded draw-list, replayed into IR at `eglSwapBuffers`.
-    pub draws: Vec<DrawCall>,
-
-    /// The recorded `glBlitFramebuffer` operations, in record order, applied AFTER the frame's render
-    /// passes (see [`crate::service::frame`]). Each copies a sub-rect from a read FBO's color attachment to
-    /// a draw FBO's — lowered to `Enc::CopyTextureToTexture` for the equal-size (non-scaling) case.
-    pub blits: Vec<BlitOp>,
-
-    // ---- IR id counters (mint monotonic ids for the emitted commands; mirrors cuda's context) -----
-    next_buffer: u32,
-    next_texture: u32,
-    next_sampler: u32,
-    next_shader: u32,
-    next_pipeline: u32,
-    next_bind_group: u32,
-    next_surface: u32,
-    next_fence: u32,
-
-    /// The default render-target texture + presentable surface IR ids, minted once and cached (0 =
-    /// not yet created). The frame builder emits their `CreateTexture`/`CreateSurface` on first use.
-    default_tex_ir: u32,
-    default_surface_ir: u32,
-    /// The `(width, height)` the cached default target was CREATED at. When the window surface later
-    /// resizes (Chrome negotiates its real window size a few frames in, after an initial tile-sized
-    /// surface), the cached texture is the WRONG size: draws/read-back use the new size while the texture
-    /// stays the old one, so the composited window is read back at a mismatched stride and SHEARS. On a
-    /// mismatch [`Self::default_target`] retires the stale target and mints a fresh one at the new size.
-    default_target_wh: (i32, i32),
+    /// Display-owned IR names. Every share group connected to one executor uses this allocator, so
+    /// independently active contexts cannot publish colliding resource identifiers.
+    allocator: Arc<IrAllocator>,
 
     /// The shared 1x1 placeholder sampled-texture + default-sampler IR ids (0 = not yet created). A
     /// GskGpu fragment program DECLARES + samples every one of its texture slots, so the executor's auto
@@ -214,6 +91,8 @@ pub struct GlContext {
     /// `(surface_ir, texture_ir)`. Minted + `CreateTexture`/`CreateSurface`d on first use and reused on
     /// later frames (so re-rendering the same FBO does not re-create the target).
     fbo_targets: HashMap<(u32, u64), (u32, u32)>,
+    /// Host-external identity for imported EGLImage texture generations.
+    external_targets: HashMap<(u32, u64), hl_gpu::protocol::model::descriptor::SurfaceToken>,
 
     /// Per-render-target depth-buffer IR ids, keyed by `(color-target texture IR, with_stencil)` → the
     /// depth texture IR. A depth-tested draw (`glEnable(GL_DEPTH_TEST)`) builds a pipeline with a
@@ -230,7 +109,13 @@ pub struct GlContext {
     /// generation) and re-referenced by its stable IR id on every later draw and frame. Without this a
     /// real toolkit frame (GskGL binds one glyph/mask atlas across hundreds of draws) re-uploads the whole
     /// atlas plane per draw — gigabytes of redundant `WriteBuffer` that blow the negotiated frame cap.
-    tex_ir_cache: HashMap<u32, (u32, u64)>,
+    tex_ir_cache: HashMap<u32, (u32, (u64, u64))>,
+    /// Resident CPU snapshots of imported linear-image storage, keyed by
+    /// `(storage, revision, width, height, format)`.
+    shared_tex_ir_cache: HashMap<(u64, u64, u32, u32, u32), SharedTextureResidency>,
+    /// Latest accepted GPU render target for each imported storage. This is separate from CPU snapshot
+    /// residency because its native target format need not match the normalized sampled-upload format.
+    shared_target_cache: HashMap<u64, SharedTargetResidency>,
     /// Residency cache for GL data buffers (vertex/index), keyed by `(GL buffer name, IR usage bits)` →
     /// `(buffer_ir, uploaded_gen)`. Same idea as [`Self::tex_ir_cache`]: a buffer whose bytes did not
     /// change is created + uploaded once and re-bound by id. Keyed on usage too so the rare GL buffer bound
@@ -253,6 +138,9 @@ pub struct GlContext {
     /// resident pipeline (no `CreateRenderPipeline`), while a genuinely new state variant creates one more.
     /// Invalidated on relink via `link_gen`. Mirrors [`Self::prog_shader_cache`].
     prog_pipeline_cache: HashMap<(u32, u64), (u32, u64)>,
+    /// Immutable GPU samplers keyed by their complete descriptor. GL sampler and texture parameter
+    /// mutations resolve to a different descriptor, so an existing resident sampler never changes.
+    sampler_ir_cache: Vec<(SamplerDesc, u32)>,
 
     /// Queued `Destroy*` IR for PERSISTENT resources the app has released — `glDeleteTextures`/`Buffers`/
     /// `Renderbuffers` retire the resident IR ids the deleted GL object owned (its cached sampled-texture /
@@ -268,23 +156,244 @@ pub struct GlContext {
     /// below, so any later reference re-resolves to a FRESH id — never the destroyed one. The #226 agent had
     /// to leave this un-retired only because NACK-retain corrupted ids; that is fixed.
     pending_destroys: Vec<Cmd>,
+    pending_texture_deletes: HashSet<u32>,
+    pending_buffer_deletes: HashSet<u32>,
+    pending_sampler_deletes: HashSet<u32>,
+    pending_program_deletes: HashSet<u32>,
 }
 
 impl GlContext {
     /// Returns the currently bound program name (`0` means no program).
     pub fn current_program(&self) -> u32 {
-        self.cur_prog
+        self.local.cur_prog
     }
 
     /// Returns the current GL viewport.
     pub fn viewport(&self) -> [i32; 4] {
-        self.viewport
+        self.local.pipeline.viewport
+    }
+
+    pub fn blend_enabled(&self) -> bool {
+        self.local.pipeline.blend
+    }
+
+    pub fn client_version(&self) -> (i32, i32) {
+        (self.local.client_major, self.local.client_minor)
+    }
+
+    pub fn surface(&self) -> GlSurface {
+        self.local.surf
+    }
+
+    pub fn surface_kind(&self) -> SurfaceKind {
+        self.local.surface_kind
+    }
+
+    pub fn read_surface(&self) -> GlSurface {
+        self.local.read_surf
+    }
+
+    pub fn read_surface_kind(&self) -> SurfaceKind {
+        self.local.read_surface_kind
+    }
+
+    pub fn set_surface_kind(&mut self, kind: SurfaceKind) {
+        self.local.surface_kind = kind;
+    }
+
+    pub fn set_surface_available(&mut self, available: bool) {
+        self.local.surf.have = available;
+    }
+
+    pub fn bind_surface(&mut self, surface: GlSurface, kind: SurfaceKind) {
+        self.local.surf = surface;
+        self.local.surface_kind = kind;
+        self.local.draw_surface_id = 0;
+        self.local.read_surf = surface;
+        self.local.read_surface_kind = kind;
+        self.local.read_surface_id = 0;
+    }
+
+    pub fn bind_surfaces(
+        &mut self,
+        draw_id: u64,
+        draw: GlSurface,
+        draw_kind: SurfaceKind,
+        read_id: u64,
+        read: GlSurface,
+        read_kind: SurfaceKind,
+    ) {
+        self.local.draw_surface_id = draw_id;
+        self.local.surf = draw;
+        self.local.surface_kind = draw_kind;
+        self.local.read_surface_id = read_id;
+        self.local.read_surf = read;
+        self.local.read_surface_kind = read_kind;
+    }
+
+    pub fn bind_draw_surface(&mut self, id: u64, surface: GlSurface, kind: SurfaceKind) {
+        self.local.draw_surface_id = id;
+        self.local.surf = surface;
+        self.local.surface_kind = kind;
+    }
+
+    pub fn default_surfaces_match(&self) -> bool {
+        self.local.draw_surface_id == self.local.read_surface_id
+    }
+
+    pub fn set_surface(&mut self, surface: GlSurface) {
+        self.local.surf = surface;
+    }
+
+    pub fn set_present_frame(
+        &mut self,
+        token: Option<hl_gpu::protocol::model::descriptor::SurfaceToken>,
+        serial: Option<hl_gpu::protocol::model::descriptor::FrameSerial>,
+    ) {
+        self.local.present_token = token;
+        self.local.present_serial = serial;
+    }
+
+    pub fn bound_framebuffer(&self) -> u32 {
+        self.local.bound_fbo
+    }
+
+    pub fn read_framebuffer(&self) -> u32 {
+        self.local.read_fbo
+    }
+
+    pub fn framebuffer_color_attachment(&self, framebuffer: u32) -> u32 {
+        self.local.framebuffers.color_attachment(framebuffer)
+    }
+
+    pub fn gen_framebuffer(&mut self) -> u32 {
+        self.local.framebuffers.gen()
+    }
+
+    pub fn recording_counts(&self) -> (usize, usize) {
+        (
+            self.local.recording.draws.len(),
+            self.local.recording.blits.len(),
+        )
+    }
+
+    pub fn draws(&self) -> &[DrawCall] {
+        &self.local.recording.draws
+    }
+
+    pub fn clear_recording(&mut self) {
+        self.local.recording.clear();
+    }
+
+    /// Replace the program snapshot on the most recently recorded draw while preserving recording order.
+    pub fn replace_last_recorded_program(&mut self, program: u32) -> bool {
+        self.local.recording.replace_last_draw_program(program)
+    }
+
+    pub fn recorded_framebuffers(&self) -> impl DoubleEndedIterator<Item = u32> + '_ {
+        self.local.recording.draws.iter().map(|draw| draw.fbo)
+    }
+
+    pub fn gen_query(&mut self) -> u32 {
+        self.local.queries.gen()
+    }
+
+    pub fn delete_query(&mut self, query: u32) {
+        self.local.queries.delete(query);
+    }
+
+    pub fn is_query(&self, query: u32) -> bool {
+        self.local.queries.contains(query)
+    }
+
+    pub fn gen_transform_feedback(&mut self) -> u32 {
+        self.local.transform_feedbacks.gen()
+    }
+
+    pub fn is_transform_feedback(&self, feedback: u32) -> bool {
+        self.local.transform_feedbacks.contains(feedback)
+    }
+
+    pub fn transform_feedback_state(&self) -> crate::model::es3::TransformFeedbackObj {
+        self.local.transform_feedbacks.bound_obj()
+    }
+
+    pub fn gen_program_pipeline(&mut self) -> u32 {
+        self.local.program_pipelines.gen()
+    }
+
+    pub fn delete_program_pipeline(&mut self, pipeline: u32) {
+        self.local.program_pipelines.delete(pipeline);
+    }
+
+    pub fn is_program_pipeline(&self, pipeline: u32) -> bool {
+        self.local.program_pipelines.contains(pipeline)
+    }
+
+    pub fn program_pipeline(&self, pipeline: u32) -> Option<&crate::model::es3::ProgramPipeline> {
+        self.local.program_pipelines.get(pipeline)
+    }
+
+    pub fn vertex_buffer_binding(&self, binding: usize) -> Option<VertexBinding> {
+        self.local.vertex_bindings.get(binding).copied()
+    }
+
+    pub fn pixel_store_state(&self) -> PixelStore {
+        self.local.pixel_store
+    }
+
+    pub fn bound_renderbuffer(&self) -> u32 {
+        self.local.bound_rbo
+    }
+
+    pub fn bound_texture(&self) -> u32 {
+        self.local.tex_unit[self.local.active_texture]
+    }
+
+    pub fn active_texture_unit(&self) -> usize {
+        self.local.active_texture
+    }
+
+    pub fn texture_at(&self, unit: usize) -> u32 {
+        self.local.tex_unit[unit]
+    }
+
+    pub fn attributes(&self) -> &[Attr; MAX_ATTR] {
+        &self.local.attr
+    }
+
+    pub fn current_vertex_array(&self) -> u32 {
+        self.local.cur_vao
+    }
+
+    pub fn draw_buffers(&self) -> &[u32] {
+        &self.local.draw_buffers
+    }
+
+    pub fn read_buffer_source(&self) -> u32 {
+        self.local.read_buffer_src
+    }
+
+    pub fn allocation_exhausted(&self) -> bool {
+        self.allocator.is_exhausted()
     }
 }
 
+mod allocator;
+mod local;
+pub use local::SurfaceTarget;
+use local::LocalState;
+mod pipeline;
+use pipeline::PipelineState;
+mod recording;
 mod resources;
+use recording::Recording;
 mod state;
+mod transaction;
+pub use state::ContextState;
 mod targets;
 mod types;
+
+pub use allocator::IrAllocator;
 
 pub use types::*;

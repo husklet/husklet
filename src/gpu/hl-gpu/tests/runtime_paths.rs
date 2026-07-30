@@ -90,6 +90,7 @@ fn every_resource_kind_creates_looks_up_and_destroys_through_the_runtime() {
                 address_u: AddressMode::Repeat,
                 address_v: AddressMode::Repeat,
                 address_w: AddressMode::Repeat,
+                ..SamplerDesc::default()
             },
         ),
         Cmd::CreateShader {
@@ -149,7 +150,7 @@ fn every_resource_kind_creates_looks_up_and_destroys_through_the_runtime() {
                 width: 4,
                 height: 4,
                 format: TextureFormat::Bgra8Unorm,
-                hlp_surface: 1,
+                token: hl_gpu::SurfaceToken::new(1).unwrap(),
             },
         ),
         Cmd::CreateFence(1),
@@ -384,6 +385,7 @@ fn negotiate_accepts_a_compatible_request() {
             TextureFormat::Rgba8Unorm,
             TextureFormat::Bgra8Unorm,
         ]),
+        ..FeatureRequest::default()
     };
     assert!(
         caps.negotiate(&req).is_ok(),
@@ -395,6 +397,7 @@ fn negotiate_accepts_a_compatible_request() {
         shader_payloads: caps.shader_payloads,
         command_bits: hl_gpu::Capabilities::command_bits(ALL_COMMANDS),
         texture_formats: TextureFormat::bits(COLOR_FORMATS),
+        ..FeatureRequest::default()
     };
     assert!(
         caps.negotiate(&full_req).is_ok(),
@@ -410,6 +413,7 @@ fn negotiate_rejects_each_incompatible_axis() {
         shader_payloads: 0,
         command_bits: 0,
         texture_formats: 0,
+        ..FeatureRequest::default()
     };
 
     // wire version mismatch.
@@ -449,6 +453,18 @@ fn negotiate_rejects_each_incompatible_axis() {
         .unwrap_err(),
         GpuError::Unsupported("capability: texture format not supported"),
     );
+    let mut no_gpu_features = caps.clone();
+    no_gpu_features.gpu_features = 0;
+    assert_eq!(
+        no_gpu_features
+            .negotiate(&FeatureRequest {
+                gpu_features:
+                    hl_gpu::protocol::model::capability::gpu_feature::ROBUST_BUFFER_ACCESS,
+                ..base
+            })
+            .unwrap_err(),
+        GpuError::Unsupported("capability: GPU feature not supported"),
+    );
 }
 
 #[test]
@@ -467,6 +483,7 @@ fn negotiate_through_the_runtime_service_records_or_rejects() {
         shader_payloads: shader_payload::KERNEL,
         command_bits: hl_gpu::Capabilities::command_bits(&[etag::DISPATCH]),
         texture_formats: 0,
+        ..FeatureRequest::default()
     };
     let negotiated =
         service::negotiate::negotiate(&mut s, &exec, &req).expect("compatible negotiate");
@@ -490,6 +507,7 @@ fn negotiate_through_the_runtime_service_records_or_rejects() {
         shader_payloads: shader_payload::SPIRV,
         command_bits: 0,
         texture_formats: 0,
+        ..FeatureRequest::default()
     };
     assert_eq!(
         service::negotiate::negotiate(&mut s2, &exec2, &bad).unwrap_err(),

@@ -34,6 +34,7 @@ pub const VK_ERROR_OUT_OF_DEVICE_MEMORY: VkResult = -2;
 pub const VK_ERROR_INITIALIZATION_FAILED: VkResult = -3;
 pub const VK_ERROR_DEVICE_LOST: VkResult = -4;
 pub const VK_ERROR_MEMORY_MAP_FAILED: VkResult = -5;
+pub const VK_ERROR_EXTENSION_NOT_PRESENT: VkResult = -7;
 pub const VK_ERROR_FEATURE_NOT_PRESENT: VkResult = -8;
 pub const VK_ERROR_INCOMPATIBLE_DRIVER: VkResult = -9;
 pub const VK_ERROR_UNKNOWN: VkResult = -13;

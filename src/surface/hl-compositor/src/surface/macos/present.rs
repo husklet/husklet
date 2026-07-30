@@ -10,12 +10,14 @@
 //! [`MacPresenter::attach_bgra`] / [`MacPresenter::attach_iosurface`] before `present()` runs — the same
 //! commit-then-compose split a Wayland compositor uses.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use hl_log::{hl_debug, hl_span, tag};
+use hl_log::{hl_debug, hl_span, tag, Level};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{
@@ -26,44 +28,136 @@ use objc2_foundation::{MainThreadMarker, NSDate, NSDefaultRunLoopMode, NSRunLoop
 use objc2_metal::{MTLRenderPipelineState, MTLTexture};
 
 use crate::scene::model::{
-    BufferTransform, OutputId, PresentableImage, Rect, SurfaceId, Visibility, WindowInteraction,
-    WindowKind, WindowState,
+    OutputId, PresentableImage, Rect, SurfaceId, Visibility, WindowInteraction, WindowKind,
+    WindowState,
 };
 use crate::scene::port::{
-    Clipboard, HostEvents, PresentOutcome, PresentTiming, PresentationFeedback, Presenter,
-    PresenterEvent, Windows,
+    Clipboard, CompletionOutcome, HostEvents, PresentOutcome, PresentTiming, PresentationFeedback,
+    PresentationId, Presenter, PresenterEvent, Wake, Windows,
 };
 
 use super::capture::Capture;
-use super::iosurface::IOSurface;
 use super::metal::{BgraFrame, MetalCtx};
+use super::transform::Sampling;
 use super::window::{DisplayConfig, MetalWindow, NativeApplication, ResizeDrag};
+use hl_iosurface::Surface as IOSurface;
 
+mod compose;
+mod damage;
 mod event;
 mod frame;
 mod gesture;
+mod host;
 mod key;
+pub(super) mod submission;
 mod tablet;
 mod window;
 
+use damage::Damage;
 use gesture::Gestures;
-use key::{KeyCode, Modifiers};
+use key::{current_xkb_layout, KeyCode, Modifiers};
+use submission::{NativePresent, PresentAttempt};
 use tablet::Tablet;
 
 /// The pixel source a surface last attached — resolved to an `MTLTexture` at present time.
 enum Content {
     /// A `wl_shm` BGRA buffer (tight `w*4` rows), uploaded to a texture each present.
-    Bgra {
-        bgra: Vec<u8>,
-        w: u32,
-        h: u32,
-        damage: Option<Vec<Rect>>,
-    },
-    /// A host `IOSurface` global id, wrapped zero-copy each present.
-    IoSurfaceId(u32),
+    Bgra { bgra: Vec<u8>, w: u32, h: u32 },
+    /// An IOSurface retained by the presenter.
+    IoSurface(IOSurface),
 }
 
 type TextureSlot = (u32, u32, Retained<ProtocolObject<dyn MTLTexture>>);
+
+const MAX_PRESENT_DIM: u32 = 1 << 14;
+const MAX_PRESENT_BYTES: u64 = 256 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PresentationKey {
+    transform: crate::scene::model::BufferTransform,
+    crop: Option<[u64; 4]>,
+    width: u32,
+    height: u32,
+    format: crate::scene::model::Format,
+}
+
+impl PresentationKey {
+    fn new(
+        image: &PresentableImage,
+        crop: Option<(f64, f64, f64, f64)>,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        Self {
+            transform: image.transform,
+            crop: crop.map(|(x, y, width, height)| {
+                [x.to_bits(), y.to_bits(), width.to_bits(), height.to_bits()]
+            }),
+            width,
+            height,
+            format: image.format,
+        }
+    }
+}
+
+fn destination_pixels(destination: (i32, i32), backing_scale: f64) -> Result<(u32, u32), String> {
+    if destination.0 <= 0 || destination.1 <= 0 {
+        return Err("present destination has a zero or negative dimension".to_string());
+    }
+    if !backing_scale.is_finite() || backing_scale < 1.0 {
+        return Err("native backing scale is invalid".to_string());
+    }
+    let width = f64::from(destination.0) * backing_scale;
+    let height = f64::from(destination.1) * backing_scale;
+    if !width.is_finite()
+        || !height.is_finite()
+        || width > f64::from(MAX_PRESENT_DIM)
+        || height > f64::from(MAX_PRESENT_DIM)
+    {
+        return Err(format!(
+            "present destination {}x{} at scale {backing_scale} exceeds {MAX_PRESENT_DIM}",
+            destination.0, destination.1
+        ));
+    }
+    let width = width.round().max(1.0) as u32;
+    let height = height.round().max(1.0) as u32;
+    let bytes = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| "present destination byte size overflow".to_string())?;
+    if bytes > MAX_PRESENT_BYTES {
+        return Err(format!(
+            "present destination {width}x{height} requires {bytes} bytes, limit is {MAX_PRESENT_BYTES}"
+        ));
+    }
+    Ok((width, height))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PixelStats {
+    min: u8,
+    max: u8,
+    nonzero: usize,
+}
+
+impl PixelStats {
+    fn from_bytes(bytes: &[u8]) -> Self {
+        let mut stats = Self {
+            min: u8::MAX,
+            max: u8::MIN,
+            nonzero: 0,
+        };
+        for &byte in bytes {
+            stats.min = stats.min.min(byte);
+            stats.max = stats.max.max(byte);
+            stats.nonzero += usize::from(byte != 0);
+        }
+        if bytes.is_empty() {
+            stats.min = 0;
+        }
+        stats
+    }
+}
 
 /// Per-surface presenter state: the attached content, the persistent composite target, and (windowed
 /// mode) the native window.
@@ -71,6 +165,10 @@ struct SurfState {
     content: Option<Content>,
     /// The last composited frame `(w, h, texture)` in device pixels — readable back for verification.
     composite: Option<TextureSlot>,
+    /// Authoritative native-role composition rebuilt from all current layers each submitted frame.
+    frame: Option<TextureSlot>,
+    native_presents: VecDeque<NativePresent>,
+    native_submission: Option<PresentationKey>,
     /// Three reusable upload textures for same-sized wl_shm frames. Rotating with the CAMetalLayer's
     /// drawable depth avoids overwriting shared storage while an earlier command buffer still reads it.
     uploads: Vec<TextureSlot>,
@@ -88,6 +186,7 @@ struct SurfState {
     native_resize_sent_at: Option<Instant>,
     native_resize_last_sent: Option<(u32, u32, bool, bool, bool)>,
     observed_native_fullscreen: Option<bool>,
+    observed_backing_scale: Option<u64>,
 }
 
 impl SurfState {
@@ -95,6 +194,9 @@ impl SurfState {
         SurfState {
             content: None,
             composite: None,
+            frame: None,
+            native_presents: VecDeque::new(),
+            native_submission: None,
             uploads: Vec::new(),
             upload_cursor: 0,
             window: None,
@@ -106,23 +208,37 @@ impl SurfState {
             native_resize_sent_at: None,
             native_resize_last_sent: None,
             observed_native_fullscreen: None,
+            observed_backing_scale: None,
         }
+    }
+
+    fn observe_backing_scale(&mut self, scale: f64) -> bool {
+        let scale = scale.max(1.0).to_bits();
+        let changed = self
+            .observed_backing_scale
+            .replace(scale)
+            .is_some_and(|previous| previous != scale);
+        if changed {
+            self.native_submission = None;
+        }
+        changed
     }
 }
 
 /// A [`Presenter`] that draws each composed frame to a real macOS window (Cocoa `NSWindow` +
 /// `CAMetalLayer` + Metal), or headless into an offscreen `MTLTexture` it can read back.
 pub struct MacPresenter {
+    _application: Option<NativeApplication>,
     ctx: MetalCtx,
     pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     surfaces: HashMap<SurfaceId, SurfState>,
+    retired_native_presents: VecDeque<(SurfaceId, NativePresent)>,
     /// `Some` ⇒ windowed mode (open real `NSWindow`s); `None` ⇒ headless offscreen mode.
     mtm: Option<MainThreadMarker>,
-    /// Monotonic per-frame pacing serial for delivered frames.
-    serial: u64,
     /// Total frames presented.
     pub frames: u32,
     capture: Option<Capture>,
+    requested_capture: Option<Capture>,
     events: Vec<PresenterEvent>,
     drag_event: Option<Retained<NSEvent>>,
     native_resize: Option<(SurfaceId, ResizeDrag)>,
@@ -130,9 +246,47 @@ pub struct MacPresenter {
     gestures: Gestures,
     tablet: Tablet,
     pasteboard_change: isize,
+    presentation_tx: Sender<PresenterEvent>,
+    presentation_rx: Receiver<PresenterEvent>,
+    next_submission: u64,
+    present_surfaces: HashMap<PresentationId, SurfaceId>,
+    wake: Option<Arc<dyn Wake>>,
 }
 
 impl MacPresenter {
+    fn backing_scale_for(&self, sid: SurfaceId) -> f64 {
+        let Some(marker) = self.mtm else {
+            return 1.0;
+        };
+        let state = self.surfaces.get(&sid);
+        if let Some(scale) = state
+            .and_then(|state| state.window.as_ref())
+            .map(MetalWindow::backing_scale)
+        {
+            return scale;
+        }
+        let parent = state
+            .and_then(|state| state.desired.as_ref())
+            .and_then(|window| match window.kind {
+                WindowKind::Toplevel { parent } => parent,
+                WindowKind::Popup { parent, .. } => Some(parent),
+            });
+        if let Some(scale) = parent
+            .and_then(|parent| self.surfaces.get(&parent))
+            .and_then(|state| state.window.as_ref())
+            .map(MetalWindow::backing_scale)
+        {
+            return scale;
+        }
+        DisplayConfig::new(marker).primary_scale()
+    }
+
+    /// XKB layout corresponding to the user's currently selected macOS keyboard input source.
+    pub fn xkb_layout_on_main_thread() -> Option<&'static str> {
+        MainThreadMarker::new()?;
+        current_xkb_layout()
+    }
+
     pub fn primary_output_spec_on_main_thread() -> Option<String> {
         DisplayConfig::new(MainThreadMarker::new()?).primary_spec()
     }
@@ -149,14 +303,17 @@ impl MacPresenter {
     pub fn new_offscreen() -> Option<MacPresenter> {
         let ctx = MetalCtx::new()?;
         let pipeline = ctx.make_composite_pipeline()?;
+        let (presentation_tx, presentation_rx) = mpsc::channel();
         Some(MacPresenter {
+            _application: None,
             ctx,
             pipeline,
             surfaces: HashMap::new(),
+            retired_native_presents: VecDeque::new(),
             mtm: None,
-            serial: 0,
             frames: 0,
             capture: None,
+            requested_capture: None,
             events: Vec::new(),
             drag_event: None,
             native_resize: None,
@@ -164,6 +321,11 @@ impl MacPresenter {
             gestures: Gestures::default(),
             tablet: Tablet::default(),
             pasteboard_change: unsafe { NSPasteboard::generalPasteboard().changeCount() },
+            presentation_tx,
+            presentation_rx,
+            next_submission: 1,
+            present_surfaces: HashMap::new(),
+            wake: None,
         })
     }
 
@@ -171,17 +333,20 @@ impl MacPresenter {
     /// main thread; a visible window additionally needs a GUI login session. `None` if Metal is
     /// unavailable / the pipeline fails.
     pub fn new_windowed(mtm: MainThreadMarker) -> Option<MacPresenter> {
-        NativeApplication::ensure(mtm);
+        let application = NativeApplication::ensure(mtm);
         let ctx = MetalCtx::new()?;
         let pipeline = ctx.make_composite_pipeline()?;
+        let (presentation_tx, presentation_rx) = mpsc::channel();
         let mut presenter = MacPresenter {
+            _application: Some(application),
             ctx,
             pipeline,
             surfaces: HashMap::new(),
+            retired_native_presents: VecDeque::new(),
             mtm: Some(mtm),
-            serial: 0,
             frames: 0,
             capture: None,
+            requested_capture: None,
             events: Vec::new(),
             drag_event: None,
             native_resize: None,
@@ -189,6 +354,11 @@ impl MacPresenter {
             gestures: Gestures::default(),
             tablet: Tablet::default(),
             pasteboard_change: unsafe { NSPasteboard::generalPasteboard().changeCount() },
+            presentation_tx,
+            presentation_rx,
+            next_submission: 1,
+            present_surfaces: HashMap::new(),
+            wake: None,
         };
         if let Some(directory) = std::env::var_os("HL_SURFACE_CAPTURE_DIR") {
             match Capture::new(PathBuf::from(directory)) {
@@ -205,6 +375,12 @@ impl MacPresenter {
         Ok(self)
     }
 
+    /// Capture the first presented frame after `request` appears in `directory`.
+    pub fn capture_once_to(mut self, directory: impl Into<PathBuf>) -> io::Result<Self> {
+        self.requested_capture = Some(Capture::requested(directory)?);
+        Ok(self)
+    }
+
     /// The Metal device (GPU/adapter) name the present runs on, e.g. "Apple M-series".
     pub fn device_name(&self) -> String {
         self.ctx.device_name()
@@ -216,27 +392,50 @@ impl MacPresenter {
         self.attach_bgra_damage(sid, bgra, w, h, None);
     }
 
-    /// Attach BGRA content with optional buffer-coordinate damage for incremental backend uploads.
+    /// Attach BGRA content with optional buffer-coordinate damage. The current three-slot Metal rotation
+    /// refreshes only its selected slot, but refreshes that slot completely because damage is relative to
+    /// the immediately preceding frame rather than the older contents of a rotated slot.
     pub fn attach_bgra_damage(
         &mut self,
         sid: SurfaceId,
         bgra: Vec<u8>,
         w: u32,
         h: u32,
-        damage: Option<Vec<Rect>>,
+        _damage: Option<Vec<Rect>>,
     ) {
-        self.surfaces
-            .entry(sid)
-            .or_insert_with(SurfState::new)
-            .content = Some(Content::Bgra { bgra, w, h, damage });
+        let state = self.surfaces.entry(sid).or_insert_with(SurfState::new);
+        state.content = Some(Content::Bgra { bgra, w, h });
+        state.native_submission = None;
     }
 
-    /// Attach a host `IOSurface` global id as surface `sid`'s content — wrapped zero-copy at present.
-    pub fn attach_iosurface(&mut self, sid: SurfaceId, id: u32) {
-        self.surfaces
-            .entry(sid)
-            .or_insert_with(SurfState::new)
-            .content = Some(Content::IoSurfaceId(id));
+    /// Attach an owned IOSurface lease as surface `sid`'s content.
+    pub fn attach_iosurface(&mut self, sid: SurfaceId, surface: IOSurface) {
+        let state = self.surfaces.entry(sid).or_insert_with(SurfState::new);
+        state.content = Some(Content::IoSurface(surface));
+        state.native_submission = None;
+    }
+
+    fn reap_native_presents(&mut self) {
+        let now = Instant::now();
+        self.retired_native_presents
+            .retain(|(_, present)| !present.poll(now));
+        for state in self.surfaces.values_mut() {
+            state.native_presents.retain(|present| !present.poll(now));
+        }
+        while let Ok(event) = self.presentation_rx.try_recv() {
+            if let PresenterEvent::Presentation(completion) = event {
+                let surface = self.present_surfaces.remove(&completion.id);
+                if completion.outcome == CompletionOutcome::TerminalFailure {
+                    if let Some(surface) = surface {
+                        if let Some(state) = self.surfaces.get_mut(&surface) {
+                            state.native_submission = None;
+                        }
+                        self.events.push(PresenterEvent::Repaint(surface));
+                    }
+                }
+            }
+            self.events.push(event);
+        }
     }
 
     fn sync_key_modifiers(&mut self, flags: NSEventModifierFlags) {
@@ -248,13 +447,21 @@ impl MacPresenter {
     pub fn forget(&mut self, sid: SurfaceId) {
         if let Some(state) = self.surfaces.get_mut(&sid) {
             state.content = None;
+            state.native_submission = None;
             state.composite = None;
+            state.frame = None;
             state.uploads.clear();
         }
     }
 
     fn destroy(&mut self, sid: SurfaceId) {
-        if let Some(state) = self.surfaces.remove(&sid) {
+        if let Some(mut state) = self.surfaces.remove(&sid) {
+            self.retired_native_presents.extend(
+                state
+                    .native_presents
+                    .drain(..)
+                    .map(|present| (sid, present)),
+            );
             if let Some(window) = state.window {
                 window.close();
             }
@@ -264,221 +471,21 @@ impl MacPresenter {
     /// Read surface `sid`'s last composited frame back as `(w, h, RGBA)` — the GUI-session-free proof of
     /// what the presenter put on (or would put on) screen.
     pub fn last_rgba(&self, sid: SurfaceId) -> Option<(u32, u32, Vec<u8>)> {
-        let (w, h, tex) = self.surfaces.get(&sid)?.composite.as_ref()?;
+        let state = self.surfaces.get(&sid)?;
+        let (w, h, tex) = state.frame.as_ref().or(state.composite.as_ref())?;
         let bgra = self.ctx.readback_bgra(tex, *w, *h);
         Some((*w, *h, BgraFrame::new(&bgra).rgba()))
     }
 
-    /// Compose surface `sid`'s attached content into its persistent target. Returns the composite
-    /// `(w, h)` on success, or an error string on device failure (unresolvable IOSurface, missing
-    /// content). Does not touch the window.
-    fn compose(&mut self, image: &PresentableImage) -> Result<(u32, u32), String> {
-        let sid = image.surface;
-        let format = image.format;
-        let st = self.surfaces.get_mut(&sid).ok_or("no state for surface")?;
-        let content = st.content.as_ref().ok_or("no content attached")?;
-
-        // Resolve the source texture (and its device-pixel size) from the attached content.
-        let (src, w, h) = match content {
-            Content::Bgra { bgra, w, h, damage } => {
-                let expected = usize::try_from(*w)
-                    .ok()
-                    .and_then(|width| {
-                        usize::try_from(*h)
-                            .ok()
-                            .and_then(|height| width.checked_mul(height))
-                    })
-                    .and_then(|pixels| pixels.checked_mul(4))
-                    .ok_or("BGRA dimensions overflow address space")?;
-                if *w == 0 || *h == 0 {
-                    return Err("BGRA content has a zero dimension".to_string());
-                }
-                if bgra.len() != expected {
-                    return Err(format!(
-                        "BGRA content length {} does not match {}x{}x4 ({expected})",
-                        bgra.len(),
-                        w,
-                        h
-                    ));
-                }
-                if st
-                    .uploads
-                    .first()
-                    .is_some_and(|(uw, uh, _)| (*uw, *uh) != (*w, *h))
-                {
-                    st.uploads.clear();
-                    st.upload_cursor = 0;
-                }
-                for (_, _, texture) in &st.uploads {
-                    match damage {
-                        Some(damage) => self.ctx.update_bgra_regions(texture, bgra, *w, *h, damage),
-                        None => self.ctx.update_bgra(texture, bgra, *w, *h),
-                    }
-                }
-                let tex = if st.uploads.len() < 3 {
-                    let tex = self.ctx.upload_bgra(bgra, *w, *h);
-                    st.uploads.push((*w, *h, tex.clone()));
-                    tex
-                } else {
-                    let index = st.upload_cursor % st.uploads.len();
-                    st.uploads[index].2.clone()
-                };
-                st.upload_cursor = (st.upload_cursor + 1) % 3;
-                (tex, *w, *h)
-            }
-            Content::IoSurfaceId(id) => {
-                let surface =
-                    IOSurface::lookup(*id).ok_or_else(|| format!("IOSurface id {id} not found"))?;
-                let (sw, sh, _) = surface.dimensions();
-                let tex = self
-                    .ctx
-                    .texture_from_iosurface(surface.as_ptr(), sw as u32, sh as u32);
-                (tex, sw as u32, sh as u32)
-            }
-        };
-
-        // Start with wp_viewport's buffer-pixel source rectangle, then map xdg window geometry from
-        // logical surface coordinates into that rectangle. This composition is essential on Retina GTK:
-        // its dst-only viewport describes the complete 2x buffer while xdg geometry removes client-side
-        // shadow margins. Ignoring either contract leaves a non-integral drawable that AppKit resamples.
-        let crop = st
-            .desired
-            .as_ref()
-            .and_then(|window| window.geometry.zip(window.logical_size))
-            .filter(|_| image.transform == BufferTransform::Normal)
-            .and_then(|(geometry, logical)| {
-                if geometry.w <= 0 || geometry.h <= 0 || logical.0 <= 0 || logical.1 <= 0 {
-                    return None;
-                }
-                let (base_x, base_y, base_w, base_h) =
-                    image.present_crop.unwrap_or((0.0, 0.0, w as f64, h as f64));
-                if base_w <= 0.0 || base_h <= 0.0 {
-                    return None;
-                }
-                let x0 = (base_x + geometry.x as f64 * base_w / logical.0 as f64)
-                    .round()
-                    .clamp(0.0, w as f64) as u32;
-                let y0 = (base_y + geometry.y as f64 * base_h / logical.1 as f64)
-                    .round()
-                    .clamp(0.0, h as f64) as u32;
-                let x1 = (base_x + (geometry.x + geometry.w) as f64 * base_w / logical.0 as f64)
-                    .round()
-                    .clamp(0.0, w as f64) as u32;
-                let y1 = (base_y + (geometry.y + geometry.h) as f64 * base_h / logical.1 as f64)
-                    .round()
-                    .clamp(0.0, h as f64) as u32;
-                (x1 > x0 && y1 > y0).then_some((x0, y0, x1 - x0, y1 - y0))
-            });
-        let (out_w, out_h, uv) = match crop {
-            Some((x, y, cw, ch)) => (
-                cw,
-                ch,
-                [
-                    x as f32 / w as f32,
-                    y as f32 / h as f32,
-                    (x + cw) as f32 / w as f32,
-                    (y + ch) as f32 / h as f32,
-                ],
-            ),
-            None => (w, h, [0.0, 0.0, 1.0, 1.0]),
-        };
-
-        // Reuse a persistent composite target sized to the visible source region.
-        let need_new = match &self.surfaces.get(&sid).unwrap().composite {
-            Some((cw, ch, _)) => *cw != out_w || *ch != out_h,
-            None => true,
-        };
-        if need_new {
-            let tex = self.ctx.new_bgra_texture(out_w, out_h);
-            self.surfaces.get_mut(&sid).unwrap().composite = Some((out_w, out_h, tex));
-        }
-        let dst = self
-            .surfaces
-            .get(&sid)
-            .unwrap()
-            .composite
-            .as_ref()
-            .unwrap()
-            .2
-            .clone();
-        self.ctx.compose_into(
-            &self.pipeline,
-            &src,
-            &dst,
-            uv,
-            format.is_opaque(),
-            // A native present enqueues its drawable blit on the same Metal command queue immediately
-            // after this render, so queue ordering is the required synchronization and a CPU fence only
-            // adds latency. Offscreen verification and diagnostic capture read pixels synchronously and
-            // therefore still require completion here.
-            self.mtm.is_none() || self.capture.is_some(),
-        );
-        Ok((out_w, out_h))
-    }
-}
-
-impl Clipboard for MacPresenter {
-    fn set_clipboard_text(&mut self, text: &str) {
-        let pasteboard = unsafe { NSPasteboard::generalPasteboard() };
-        unsafe {
-            pasteboard.clearContents();
-            pasteboard.setString_forType(&NSString::from_str(text), NSPasteboardTypeString);
-            self.pasteboard_change = pasteboard.changeCount();
-        }
-    }
-
-    fn take_clipboard_text(&mut self) -> Option<String> {
-        let pasteboard = unsafe { NSPasteboard::generalPasteboard() };
-        let change = unsafe { pasteboard.changeCount() };
-        if change == self.pasteboard_change {
+    #[cfg(test)]
+    fn attached_iosurface_bgra(&self, sid: SurfaceId) -> Option<(usize, usize, Vec<u8>)> {
+        let Content::IoSurface(surface) = self.surfaces.get(&sid)?.content.as_ref()? else {
             return None;
-        }
-        self.pasteboard_change = change;
-        unsafe { pasteboard.stringForType(NSPasteboardTypeString) }.map(|text| text.to_string())
+        };
+        let (width, height, _) = surface.dimensions();
+        Some((width, height, surface.read_bgra().ok()?))
     }
 }
 
-impl Windows for MacPresenter {
-    fn reconcile_window(&mut self, desired: &WindowState) {
-        self.reconcile_native_window(desired);
-    }
-
-    fn destroy_window(&mut self, surface: SurfaceId) {
-        self.destroy(surface);
-    }
-
-    fn begin_interaction(&mut self, surface: SurfaceId, interaction: WindowInteraction) {
-        if interaction == WindowInteraction::Move {
-            if let (Some(window), Some(event)) = (
-                self.surfaces
-                    .get(&surface)
-                    .and_then(|state| state.window.as_ref()),
-                self.drag_event.take(),
-            ) {
-                window.drag(&event);
-            }
-        }
-    }
-}
-
-impl HostEvents for MacPresenter {
-    fn poll_events(&mut self) {
-        self.poll_native_events();
-    }
-
-    fn take_events(&mut self) -> Vec<PresenterEvent> {
-        std::mem::take(&mut self.events)
-    }
-}
-
-impl Presenter for MacPresenter {
-    fn present(
-        &mut self,
-        output: OutputId,
-        image: &PresentableImage,
-        damage: &[Rect],
-        timing: PresentTiming,
-    ) -> PresentationFeedback {
-        self.present_native(output, image, damage, timing)
-    }
-}
+#[cfg(test)]
+include!("present/tests.rs");

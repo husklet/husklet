@@ -166,7 +166,7 @@ fn pipelined_burst_does_not_deadlock_under_backpressure() {
             .write_readback_request(&ReadbackRequest::buffer(1, 0, total as u64))
             .unwrap();
         let got = unix::Connection::new(&client)
-            .read_readback_response()
+            .read_readback_response(total)
             .expect("full-buffer readback after the burst");
         assert_eq!(
             got.len(),

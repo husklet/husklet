@@ -36,7 +36,7 @@ fn shader_without_main_yields_empty_body_not_a_crash() {
 }
 
 #[test]
-fn attribute_and_uniform_caps_are_enforced() {
+fn attribute_cap_is_enforced_without_truncating_uniforms() {
     // 20 attributes declared, but the model caps the vertex-attribute count at 16.
     let mut vs = String::new();
     for i in 0..20 {
@@ -46,16 +46,15 @@ fn attribute_and_uniform_caps_are_enforced() {
     let attrs = glsl::Source::new(&vs).vertex_attrs();
     assert_eq!(attrs.len(), 16, "attribute count is capped at 16");
 
-    // 20 data uniforms → capped at 16 in the block.
+    // Uniform reflection must preserve every declaration. The verbatim wrapper removes the original
+    // declarations and rebuilds them from this list, so truncation would leave later uses undeclared.
     let mut fs = String::from("");
     for i in 0..20 {
         fs.push_str(&format!("uniform float u{i};\n"));
     }
     fs.push_str("void main(){ gl_FragColor = vec4(u0); }\n");
-    let (unis, _) = glsl::StageSources::new("void main(){}", &fs).uniform_layout();
-    assert!(
-        unis.len() <= 16,
-        "data-uniform count capped at 16, got {}",
-        unis.len()
-    );
+    let (unis, _) = glsl::StageSources::new("void main(){}", &fs)
+        .uniform_layout()
+        .expect("supported uniform layout");
+    assert_eq!(unis.len(), 20, "all data uniforms are reflected");
 }

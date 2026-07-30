@@ -19,7 +19,9 @@ use crate::model::queue::{
 };
 use crate::*;
 use hl_gpu::protocol::model::command::Enc;
-use hl_gpu::protocol::model::descriptor::{BufferDesc, SurfaceDesc, TextureDesc};
+use hl_gpu::protocol::model::descriptor::{
+    BufferDesc, FrameSerial, SurfaceDesc, SurfaceToken, TextureDesc,
+};
 use hl_gpu::protocol::model::enums::{buffer_usage, texture_usage, TextureDim};
 use hl_gpu::{BufferId, Cmd, CommandBuffer, CommandSink, GpuError, Result};
 
@@ -86,24 +88,29 @@ pub fn create_surface(
     width: u32,
     height: u32,
     vk_format: u32,
-    hlp_surface: u32,
+    token: Option<SurfaceToken>,
 ) -> Result<VkSurfaceKHR> {
-    let format = Format(vk_format).wire();
+    let format = Format(vk_format)
+        .wire()
+        .ok_or(GpuError::Invalid("vkCreateSurface: unsupported VkFormat"))?;
     let ir_id = dev.alloc_ir();
     let handle = dev.alloc_handle();
-    sink.submit(&[Cmd::CreateSurface(
-        ir_id,
-        SurfaceDesc {
-            width,
-            height,
-            format,
-            hlp_surface,
-        },
-    )])?;
+    if let Some(token) = token {
+        sink.submit(&[Cmd::CreateSurface(
+            ir_id,
+            SurfaceDesc {
+                width,
+                height,
+                format,
+                token,
+            },
+        )])?;
+    }
     dev.surfaces.insert(
         handle,
         SurfaceRec {
             ir_id,
+            token,
             width,
             height,
             format,
@@ -157,6 +164,10 @@ pub fn create_swapchain(
                 ir_id: ir_texture_id,
                 width,
                 height,
+                depth: 1,
+                dim: TextureDim::D2,
+                layers: 1,
+                mip_levels: 1,
                 format,
                 usage,
                 sample_count: 1,
@@ -225,7 +236,9 @@ impl Device {
         // Retire the swapchain's own presentation surface (minted per-swapchain at create time — the app's
         // instance-level `VkSurfaceKHR` is a different object, retired separately by `vkDestroySurfaceKHR`).
         if let Some(surf) = self.surfaces.remove(&sc.surface) {
-            sink.submit(&[Cmd::DestroySurface(surf.ir_id)])?;
+            if surf.token.is_some() {
+                sink.submit(&[Cmd::DestroySurface(surf.ir_id)])?;
+            }
         }
         Ok(())
     }
@@ -281,6 +294,7 @@ pub fn queue_present(
     sink: &mut dyn CommandSink,
     swapchain: VkSwapchainKHR,
     image_index: u32,
+    serial: Option<FrameSerial>,
 ) -> Result<()> {
     let (surface_handle, texture) = {
         let sc = dev.swapchains.get(&swapchain).ok_or(GpuError::Invalid(
@@ -300,16 +314,28 @@ pub fn queue_present(
         .ok_or(GpuError::Invalid(
             "vkQueuePresentKHR: swapchain surface lost",
         ))?
-        .ir_id;
+        .clone();
     hl_log::hl_debug!(
         hl_log::tag::PRESENT,
         "present img={} surf={} tex={}",
         image_index,
-        surface,
+        surface.ir_id,
         texture
     );
     hl_log::hl_count!(hl_log::tag::PRESENT, "presents");
-    sink.submit(&[Cmd::Present { surface, texture }])?;
+    match (surface.token, serial) {
+        (Some(_), Some(serial)) => sink.submit(&[Cmd::Present {
+            surface: surface.ir_id,
+            texture,
+            serial,
+        }])?,
+        (None, None) => {}
+        _ => {
+            return Err(GpuError::Invalid(
+                "vkQueuePresentKHR: native surface and frame serial must agree",
+            ))
+        }
+    }
     // The present engine is done with this image (immediate headless present) — return it to the pool so a
     // future acquire can hand it out again. Index was range-checked above, so the image is present.
     if let Some(img) = dev
@@ -318,6 +344,30 @@ pub fn queue_present(
         .and_then(|sc| sc.images.get_mut(image_index as usize))
     {
         img.state = ImageState::Available;
+    }
+    Ok(())
+}
+
+/// Atomically switch one swapchain's GPU surface to compatibility presentation.
+///
+/// The effective mode is cleared before the native surface retirement is submitted, so even a transport
+/// failure cannot leave the model asking later fallback frames for a native serial.
+pub fn demote_swapchain(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    swapchain: VkSwapchainKHR,
+) -> Result<()> {
+    let surface = dev
+        .swapchains
+        .get(&swapchain)
+        .ok_or(GpuError::Invalid("demote: unknown VkSwapchainKHR"))?
+        .surface;
+    let record = dev
+        .surfaces
+        .get_mut(&surface)
+        .ok_or(GpuError::Invalid("demote: swapchain surface lost"))?;
+    if record.token.take().is_some() {
+        sink.submit(&[Cmd::DestroySurface(record.ir_id)])?;
     }
     Ok(())
 }

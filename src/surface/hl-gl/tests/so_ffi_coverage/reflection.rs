@@ -115,6 +115,8 @@ fn gl_program_reflection_marshals_real_values() {
     assert_eq!(getprog(GL_ATTACHED_SHADERS), 2);
     assert_eq!(getprog(GL_ACTIVE_ATTRIBUTES), 2, "aPos + aColor");
     assert_eq!(getprog(GL_ACTIVE_UNIFORMS), 3, "uTint + uScale + uTex");
+    assert_eq!(getprog(GL_ACTIVE_ATTRIBUTE_MAX_LENGTH), 7, "aColor + NUL");
+    assert_eq!(getprog(GL_ACTIVE_UNIFORM_MAX_LENGTH), 7, "uScale + NUL");
     assert_eq!(getprog(GL_INFO_LOG_LENGTH), 0);
 
     // glGetAttribLocation: declaration-order slots.
@@ -130,14 +132,13 @@ fn gl_program_reflection_marshals_real_values() {
         "unknown attribute -> -1"
     );
 
-    // glGetUniformLocation: data uniforms indexed first (uTint=0, uScale=1); the sampler uses a SEPARATE
-    // index space (uTex=0 among samplers — the shim's modeled location convention).
+    // glGetUniformLocation: one collision-free namespace, data uniforms first and then samplers.
     assert_eq!(loc(gl_get_uniform_location, "uTint"), 0);
     assert_eq!(loc(gl_get_uniform_location, "uScale"), 1);
     assert_eq!(
         loc(gl_get_uniform_location, "uTex"),
-        0,
-        "sampler location space is separate"
+        2,
+        "sampler follows both data locations"
     );
     assert_eq!(loc(gl_get_uniform_location, "nope"), -1);
 

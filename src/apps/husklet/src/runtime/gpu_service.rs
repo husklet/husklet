@@ -3,22 +3,50 @@
 use std::io;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use hl_gpu::protocol::model::kernel::{KernelDescriptor, KernelProgram};
 use hl_gpu::transport::{SubmitHeader, Verdict};
 use hl_gpu::{
-    BufferId, Cmd, ConnectionHandler, CpuExecutor, GlobalLedger, GpuExecutor, Limits,
-    ReadbackRequest, Session, SystemClock,
+    BufferId, Cmd, ConnectionHandler, FenceId, GlobalLedger, GpuExecutor, Limits, ReadbackRequest,
+    Session, SystemClock,
 };
+
+use super::capture;
+use super::executor::{Executor, Executors};
+#[cfg(target_os = "macos")]
+use crate::runtime::presentation::producer::Producer;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
     Cpu,
     Wgpu,
+}
+
+impl Backend {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cpu => "cpu",
+            Self::Wgpu => "wgpu",
+        }
+    }
+}
+
+impl FromStr for Backend {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "cpu" => Ok(Self::Cpu),
+            "wgpu" => Ok(Self::Wgpu),
+            _ => Err(format!(
+                "unsupported GPU backend {value:?}; expected cpu or wgpu"
+            )),
+        }
+    }
 }
 
 pub struct Configuration {
@@ -27,60 +55,53 @@ pub struct Configuration {
 }
 
 impl Configuration {
+    pub fn new(backend: Backend, trace: bool) -> Self {
+        Self { backend, trace }
+    }
+
+    pub fn backend(&self) -> Backend {
+        self.backend
+    }
+
+    pub fn trace(&self) -> bool {
+        self.trace
+    }
+
     pub fn configured() -> io::Result<Self> {
-        let backend = match std::env::var("HL_GPU_BACKEND").as_deref() {
-            Ok("cpu") => Ok(Backend::Cpu),
-            Ok("wgpu") | Err(std::env::VarError::NotPresent) => Ok(Backend::Wgpu),
+        let backend = match std::env::var("HL_GPU_BACKEND") {
+            Ok(value) => value
+                .parse()
+                .map_err(|error: String| io::Error::new(io::ErrorKind::InvalidInput, error)),
+            Err(std::env::VarError::NotPresent) => Ok(Backend::Wgpu),
             Err(std::env::VarError::NotUnicode(_)) => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "HL_GPU_BACKEND is not valid UTF-8",
             )),
-            Ok(value) => Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("unsupported HL_GPU_BACKEND {value:?}; expected cpu or wgpu"),
-            )),
         }?;
-        Ok(Self {
+        Ok(Self::new(
             backend,
-            trace: std::env::var_os("HL_GPU_TRACE").is_some(),
-        })
-    }
-}
-
-impl Backend {
-    fn executor(self) -> Result<Box<dyn GpuExecutor>, String> {
-        match self {
-            Self::Cpu => {
-                let mut executor = CpuExecutor::new();
-                executor.set_kernel_compiler(KernelCompiler::compile);
-                Ok(Box::new(executor))
-            }
-            Self::Wgpu => {
-                let mut executor = hl_gpu_wgpu::WgpuExecutor::new(Default::default())
-                    .map_err(|error| error.to_string())?;
-                executor.set_kernel_compiler(KernelCompiler::compile);
-                Ok(Box::new(executor))
-            }
-        }
-    }
-}
-
-struct KernelCompiler;
-
-impl KernelCompiler {
-    fn compile(descriptor: &KernelDescriptor) -> hl_gpu::Result<KernelProgram> {
-        hl_cuda::adapter::ptx::compile(&descriptor.ptx, &descriptor.entry, descriptor.block)
+            std::env::var_os("HL_GPU_TRACE").is_some(),
+        ))
     }
 }
 
 struct Connection {
     session: Session,
-    executor: Box<dyn GpuExecutor>,
+    executor: Executor,
+    submits: u64,
     trace: bool,
+    capture: Option<capture::Capture>,
+    #[cfg(target_os = "macos")]
+    presentations: Option<Producer>,
 }
 
 impl Connection {
-    fn new(executor: Box<dyn GpuExecutor>, trace: bool) -> Self {
+    fn new(
+        executor: Executor,
+        trace: bool,
+        capture: Option<capture::Capture>,
+        #[cfg(target_os = "macos")] presentations: Option<Producer>,
+    ) -> Self {
         let limits = Limits::from_capabilities(executor.capabilities());
         let session = Session::new(
             limits,
@@ -90,14 +111,34 @@ impl Connection {
         Self {
             session,
             executor,
+            submits: 0,
             trace,
+            capture,
+            #[cfg(target_os = "macos")]
+            presentations,
         }
     }
 }
 
 impl ConnectionHandler for Connection {
-    fn submit(&mut self, _header: &SubmitHeader, batch: &[Cmd]) -> Verdict {
-        let bytes = hl_gpu::Encoder::stream(batch).len();
+    fn submit(&mut self, header: &SubmitHeader, batch: &[Cmd]) -> Verdict {
+        self.submits = self.submits.saturating_add(1);
+        let submit = self.submits;
+        let encode_started = Instant::now();
+        let encoded = self
+            .capture
+            .as_ref()
+            .filter(|capture| capture.active())
+            .map(|_| hl_gpu::Encoder::stream(batch));
+        let bytes = header.len as usize;
+        let encode_elapsed = encode_started.elapsed();
+        let uploaded_bytes = batch
+            .iter()
+            .map(|command| match command {
+                Cmd::WriteBuffer { data, .. } => data.len(),
+                _ => 0,
+            })
+            .sum::<usize>();
         if self.trace {
             eprintln!(
                 "husklet gpu: submit begin commands={} encoded_bytes={}",
@@ -105,14 +146,59 @@ impl ConnectionHandler for Connection {
                 bytes
             );
         }
-        match hl_gpu::runtime::submit(&mut self.session, self.executor.as_mut(), bytes, batch) {
-            Ok(_) => {
+        #[cfg(target_os = "macos")]
+        let native_reservations = self
+            .presentations
+            .as_ref()
+            .map(|producer| producer.reservations(&self.session, batch))
+            .unwrap_or_default();
+        let execute_started = Instant::now();
+        match hl_gpu::runtime::submit(&mut self.session, &mut self.executor, bytes, batch) {
+            Ok(presentations) => {
+                if let (Some(capture), Some(encoded)) = (&mut self.capture, encoded.as_deref()) {
+                    capture.record(batch, encoded);
+                }
+                hl_log::hl_add!(
+                    hl_log::tag::PRESENT,
+                    "native_frames",
+                    presentations.len() as u64
+                );
+                #[cfg(target_os = "macos")]
+                if let Some(producer) = &mut self.presentations {
+                    producer.publish(&self.session, &self.executor, presentations);
+                }
+                hl_log::hl_log!(
+                    hl_log::tag::GPU,
+                    hl_log::Level::Debug,
+                    "submit commands={} sequence={} encoded_bytes={} uploaded_bytes={} capture_encode_us={} execute_us={} verdict=ack",
+                    batch.len(),
+                    submit,
+                    bytes,
+                    uploaded_bytes,
+                    encode_elapsed.as_micros(),
+                    execute_started.elapsed().as_micros()
+                );
                 if self.trace {
                     eprintln!("husklet gpu: submit ack");
                 }
                 Verdict::Ack
             }
             Err(error) => {
+                #[cfg(target_os = "macos")]
+                if let Some(producer) = &self.presentations {
+                    producer.cancel(&native_reservations);
+                }
+                hl_log::hl_log!(
+                    hl_log::tag::GPU,
+                    hl_log::Level::Warn,
+                    "submit commands={} sequence={} encoded_bytes={} uploaded_bytes={} capture_encode_us={} execute_us={} verdict=nack error={error}",
+                    batch.len(),
+                    submit,
+                    bytes,
+                    uploaded_bytes,
+                    encode_elapsed.as_micros(),
+                    execute_started.elapsed().as_micros()
+                );
                 eprintln!(
                     "husklet gpu: rejected submit (commands={}, encoded_bytes={}): {error}",
                     batch.len(),
@@ -124,6 +210,9 @@ impl ConnectionHandler for Connection {
     }
 
     fn read_buffer(&mut self, request: &ReadbackRequest) -> Option<Vec<u8>> {
+        let started = Instant::now();
+        hl_log::hl_count!(hl_log::tag::PRESENT, "host_readbacks");
+        hl_log::hl_add!(hl_log::tag::PRESENT, "host_readback_bytes", request.len);
         if self.trace {
             eprintln!(
                 "husklet gpu: readback begin buffer={} offset={} len={}",
@@ -132,18 +221,37 @@ impl ConnectionHandler for Connection {
         }
         match hl_gpu::runtime::service::dispatch::read_buffer(
             &self.session,
-            self.executor.as_ref(),
+            &self.executor,
             BufferId(request.id),
             request.offset,
             request.len as usize,
         ) {
             Ok(bytes) => {
+                hl_log::hl_log!(
+                    hl_log::tag::GPU,
+                    hl_log::Level::Debug,
+                    "readback buffer={} offset={} requested_bytes={} received_bytes={} elapsed_us={} verdict=ack",
+                    request.id,
+                    request.offset,
+                    request.len,
+                    bytes.len(),
+                    started.elapsed().as_micros()
+                );
                 if self.trace {
                     eprintln!("husklet gpu: readback complete bytes={}", bytes.len());
                 }
                 Some(bytes)
             }
             Err(error) => {
+                hl_log::hl_log!(
+                    hl_log::tag::GPU,
+                    hl_log::Level::Warn,
+                    "readback buffer={} offset={} requested_bytes={} elapsed_us={} verdict=nack error={error}",
+                    request.id,
+                    request.offset,
+                    request.len,
+                    started.elapsed().as_micros()
+                );
                 eprintln!(
                     "husklet gpu: readback failed (buffer={}, offset={}, len={}): {error}",
                     request.id, request.offset, request.len
@@ -151,6 +259,27 @@ impl ConnectionHandler for Connection {
                 None
             }
         }
+    }
+
+    fn poll_fence(&mut self, request: &ReadbackRequest) -> Option<bool> {
+        hl_gpu::runtime::service::dispatch::poll_fence(
+            &self.session,
+            &mut self.executor,
+            FenceId(request.id),
+            request.offset,
+        )
+        .ok()
+    }
+
+    fn wait_fence(&mut self, request: &ReadbackRequest) -> Option<hl_gpu::FenceWait> {
+        hl_gpu::runtime::service::dispatch::wait_timeout(
+            &mut self.session,
+            &mut self.executor,
+            FenceId(request.id),
+            request.offset,
+            request.len,
+        )
+        .ok()
     }
 }
 
@@ -163,23 +292,66 @@ pub struct Service {
 
 impl Service {
     pub fn start(socket: impl Into<PathBuf>, configuration: Configuration) -> io::Result<Self> {
-        let socket = socket.into();
+        Self::start_with_publisher(
+            socket.into(),
+            configuration,
+            #[cfg(target_os = "macos")]
+            None,
+        )
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn start_native(
+        socket: impl Into<PathBuf>,
+        configuration: Configuration,
+        presentations: hl_compositor::adapter::smithay::NativeFrameSender,
+    ) -> io::Result<Self> {
+        Self::start_with_publisher(socket.into(), configuration, Some(presentations))
+    }
+
+    fn start_with_publisher(
+        socket: PathBuf,
+        configuration: Configuration,
+        #[cfg(target_os = "macos")] presentations: Option<
+            hl_compositor::adapter::smithay::NativeFrameSender,
+        >,
+    ) -> io::Result<Self> {
         let Configuration { backend, trace } = configuration;
+        let capture = capture::Config::configured()?;
         if let Some(parent) = socket.parent() {
             std::fs::create_dir_all(parent)?;
         }
         Self::remove_socket(&socket)?;
 
-        // Fail before publishing the endpoint when the configured executor is unavailable.
-        backend
-            .executor()
-            .map_err(|error| io::Error::new(io::ErrorKind::NotFound, error))?;
+        // Acquire and retain the configured host device before publishing the endpoint. Each accepted
+        // connection receives isolated guest state while reusing this device and queue.
+        let executors = Executors::new(backend, {
+            #[cfg(target_os = "macos")]
+            {
+                presentations.is_some()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                false
+            }
+        })
+        .map_err(|error| io::Error::new(io::ErrorKind::NotFound, error))?;
 
         let listener = UnixListener::bind(&socket)?;
         listener.set_nonblocking(true)?;
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
-        let thread = thread::spawn(move || Endpoint::serve(listener, thread_stop, backend, trace));
+        let thread = thread::spawn(move || {
+            Endpoint::serve(
+                listener,
+                thread_stop,
+                executors,
+                trace,
+                capture,
+                #[cfg(target_os = "macos")]
+                presentations,
+            )
+        });
 
         Ok(Self {
             socket,
@@ -235,11 +407,26 @@ impl Drop for ConnectionLease {
 }
 
 impl Endpoint {
-    fn serve(listener: UnixListener, stop: Arc<AtomicBool>, backend: Backend, trace: bool) {
+    fn serve(
+        listener: UnixListener,
+        stop: Arc<AtomicBool>,
+        executors: Executors,
+        trace: bool,
+        capture: Option<capture::Config>,
+        #[cfg(target_os = "macos")] presentations: Option<
+            hl_compositor::adapter::smithay::NativeFrameSender,
+        >,
+    ) {
         let connections = Connections::new(256);
+        if trace {
+            eprintln!("husklet gpu: listener ready");
+        }
         while !stop.load(Ordering::Acquire) {
             match listener.accept() {
                 Ok((stream, _)) => {
+                    if trace {
+                        eprintln!("husklet gpu: connection accepted");
+                    }
                     let Some(lease) = connections.acquire() else {
                         hl_log::hl_error!(
                             hl_log::tag::GPU,
@@ -248,7 +435,15 @@ impl Endpoint {
                         );
                         continue;
                     };
-                    Self::serve_connection(stream, backend, trace, lease);
+                    Self::serve_connection(
+                        stream,
+                        executors.clone(),
+                        trace,
+                        capture.clone(),
+                        lease,
+                        #[cfg(target_os = "macos")]
+                        presentations.clone().map(Producer::new),
+                    );
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(5));
@@ -263,12 +458,17 @@ impl Endpoint {
 
     fn serve_connection(
         stream: std::os::unix::net::UnixStream,
-        backend: Backend,
+        executors: Executors,
         trace: bool,
+        capture: Option<capture::Config>,
         lease: ConnectionLease,
+        #[cfg(target_os = "macos")] presentations: Option<Producer>,
     ) {
         thread::spawn(move || {
             let _lease = lease;
+            if trace {
+                eprintln!("husklet gpu: connection handler begin");
+            }
             // BSD/macOS accepted sockets inherit O_NONBLOCK from the listener. The framed GPU protocol is
             // deliberately blocking per connection; leaving this inherited makes an idle read return
             // WouldBlock, closes the server side, and presents as BrokenPipe during client negotiation.
@@ -279,18 +479,35 @@ impl Endpoint {
                 );
                 return;
             }
-            let executor = match backend.executor() {
-                Ok(executor) => executor,
-                Err(error) => {
-                    hl_log::hl_error!(
-                        hl_log::tag::GPU,
-                        "GPU connection executor unavailable error={error}"
-                    );
-                    return;
-                }
-            };
+            let executor = executors.executor();
+            if trace {
+                eprintln!("husklet gpu: connection executor ready");
+            }
             let capabilities = executor.capabilities();
-            let mut connection = Connection::new(executor, trace);
+            static NEXT_CAPTURE: AtomicUsize = AtomicUsize::new(0);
+            let capture = capture.and_then(|configuration| {
+                let connection = NEXT_CAPTURE.fetch_add(1, Ordering::Relaxed) as u64;
+                match configuration.open(connection) {
+                    Ok(capture) => Some(capture),
+                    Err(error) => {
+                        hl_log::hl_warn!(
+                            hl_log::tag::GPU,
+                            "GPU capture open failed connection={connection} error={error}"
+                        );
+                        None
+                    }
+                }
+            });
+            let mut connection = Connection::new(
+                executor,
+                trace,
+                capture,
+                #[cfg(target_os = "macos")]
+                presentations,
+            );
+            if trace {
+                eprintln!("husklet gpu: connection protocol begin");
+            }
             if let Err(error) =
                 hl_gpu::serve_connection_with_handler(&stream, &capabilities, &mut connection)
             {
@@ -322,51 +539,5 @@ impl Drop for Service {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn service_publishes_and_removes_a_ready_endpoint() {
-        let path = std::env::temp_dir().join(format!("hl-gpu-service-{}.sock", std::process::id()));
-        let service = Service::start(
-            &path,
-            Configuration {
-                backend: Backend::Cpu,
-                trace: false,
-            },
-        )
-        .unwrap();
-        assert_eq!(service.socket(), path);
-        assert!(path.exists());
-
-        let mut sink = hl_gpu::RemoteCommandSink::new(path.to_string_lossy());
-        use hl_gpu::CommandSink as _;
-        sink.negotiate(&hl_gpu::FeatureRequest {
-            wire_version: hl_gpu::protocol::WIRE_VERSION,
-            shader_payloads: 0,
-            command_bits: 0,
-            texture_formats: 0,
-        })
-        .unwrap();
-        sink.submit(&[]).unwrap();
-
-        drop(service);
-        assert!(!path.exists());
-    }
-
-    #[test]
-    fn connection_capacity_is_bounded_and_released() {
-        let connections = Connections::new(2);
-        let first = connections.acquire().unwrap();
-        let second = connections.acquire().unwrap();
-        assert!(connections.acquire().is_none());
-
-        drop(first);
-        let replacement = connections.acquire().unwrap();
-        assert!(connections.acquire().is_none());
-
-        drop(second);
-        drop(replacement);
-        assert_eq!(connections.active.load(Ordering::Acquire), 0);
-    }
-}
+#[path = "gpu/service_test.rs"]
+mod tests;

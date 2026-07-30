@@ -144,3 +144,53 @@ fn client_side_index_array_lowers_a_transient_index_buffer() {
         .iter()
         .any(|o| matches!(o, Enc::DrawIndexed { index_count: 6, .. })));
 }
+
+#[test]
+fn bound_unsigned_byte_indices_are_promoted_before_webgpu_submission() {
+    let mut c = ctx_64();
+    let mut sink = RecordingSink::with_full_caps();
+    let _prog = flat_program(&mut c);
+    tri_vbo(&mut c, 8);
+
+    let ebo = c.buffers.gen();
+    record::bind_buffer(&mut c, GL_ELEMENT_ARRAY_BUFFER, ebo);
+    record::buffer_data(&mut c, GL_ELEMENT_ARRAY_BUFFER, &[0u8, 1, 2], 0x88E4);
+    record::draw_elements(&mut c, GL_TRIANGLES, 3, GL_UNSIGNED_BYTE, 0);
+
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let batch = &sink.batches[0];
+    let (index_id, data) = batch
+        .windows(2)
+        .find_map(|pair| match (&pair[0], &pair[1]) {
+            (
+                Cmd::CreateBuffer(id, desc),
+                Cmd::WriteBuffer {
+                    id: written,
+                    offset: 0,
+                    data,
+                },
+            ) if desc.usage == hl_gpu::protocol::model::enums::buffer_usage::INDEX
+                && id == written =>
+            {
+                Some((*id, data))
+            }
+            _ => None,
+        })
+        .expect("promoted transient index buffer");
+    assert_eq!(
+        data,
+        &[
+            0, 0, 0, 0, // u32(0)
+            1, 0, 0, 0, // u32(1)
+            2, 0, 0, 0, // u32(2)
+        ]
+    );
+    assert!(submit_ops(batch).iter().any(|op| matches!(
+        op,
+        Enc::SetIndexBuffer {
+            buffer,
+            offset: 0,
+            format: hl_gpu::protocol::model::enums::IndexFormat::U32,
+        } if *buffer == index_id
+    )));
+}

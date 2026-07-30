@@ -59,7 +59,7 @@ impl From<&GpuError> for EglError {
             | GpuError::Utf8
             | GpuError::ShortBuffer
             | GpuError::TrailingBytes => EGL_BAD_PARAMETER,
-            GpuError::Kernel(_) | GpuError::Decode(_) => EGL_CONTEXT_LOST,
+            GpuError::Kernel(_) | GpuError::Decode(_) | GpuError::Transport(_) => EGL_CONTEXT_LOST,
         })
     }
 }

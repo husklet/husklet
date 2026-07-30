@@ -1,4 +1,7 @@
 use super::*;
+use hl_gpu::protocol::model::capability::binding_array;
+use hl_gpu::protocol::model::capability::gpu_feature;
+use hl_gpu::{CommandSink, FeatureRequest, WIRE_VERSION};
 
 #[no_mangle]
 pub extern "C" fn vkEnumeratePhysicalDevices(
@@ -55,12 +58,88 @@ pub extern "C" fn vkGetPhysicalDeviceFeatures(
     let Some(f) = (unsafe { (p_features as *mut VkPhysicalDeviceFeatures).as_mut() }) else {
         return;
     };
-    f.bits = [VK_FALSE; 55];
+    *f = supported_features();
+    let missing = DawnBaseline::new(f, &metal_limits(), 2 << 30).missing();
+    if !missing.is_empty() {
+        hl_log::hl_warn!(
+            hl_log::tag::GPU,
+            "vulkan compatibility=dawn_chrome_150 missing={}",
+            missing.join(",")
+        );
+    }
+}
+
+pub(crate) fn supported_features() -> VkPhysicalDeviceFeatures {
+    let caps = StateStore::with(|state| {
+        state
+            .sink
+            .negotiate(&FeatureRequest {
+                wire_version: WIRE_VERSION,
+                ..FeatureRequest::default()
+            })
+            .ok()
+    });
+    features_for(caps.as_ref())
+}
+
+pub(crate) fn features_for(caps: Option<&hl_gpu::Capabilities>) -> VkPhysicalDeviceFeatures {
+    let mut features = VkPhysicalDeviceFeatures {
+        bits: [VK_FALSE; 55],
+    };
     // The conservative feature subset guaranteed across every executor path (indices into the vk.xml
-    // `VkPhysicalDeviceFeatures` order): fullDrawIndexUint32(1), imageCubeArray(2), independentBlend(3),
-    // samplerAnisotropy(19), textureCompressionBC(22), shaderInt16(41). Ported from `state.rs`.
-    for i in [1usize, 2, 3, 19, 22, 41] {
-        f.bits[i] = VK_TRUE;
+    // `VkPhysicalDeviceFeatures` order): fullDrawIndexUint32(1), samplerAnisotropy(19), shaderInt16(41).
+    // Features whose implementation depends on the selected executor are enabled below from negotiation.
+    for i in [1usize, 19, 41] {
+        features.bits[i] = VK_TRUE;
+    }
+    let arrays = caps.map_or(0, |caps| caps.binding_arrays);
+    enable_binding_array_features(&mut features, arrays);
+    let gpu_features = caps.map_or(0, |caps| caps.gpu_features);
+    enable_gpu_features(&mut features, gpu_features);
+    let required_bc = hl_gpu::protocol::model::enums::TextureFormat::bits(
+        hl_gpu::protocol::model::capability::BC_FORMATS,
+    );
+    if caps.is_some_and(|caps| caps.texture_formats & required_bc == required_bc) {
+        features.bits[22] = VK_TRUE;
+    }
+    features
+}
+
+pub(crate) fn enable_gpu_features(features: &mut VkPhysicalDeviceFeatures, gpu_features: u32) {
+    if gpu_features & gpu_feature::ROBUST_BUFFER_ACCESS != 0 {
+        features.bits[0] = VK_TRUE;
+    }
+    if gpu_features & gpu_feature::FRAGMENT_STORES_ATOMICS != 0 {
+        features.bits[26] = VK_TRUE;
+    }
+    if gpu_features & gpu_feature::DEPTH_BIAS_CLAMP != 0 {
+        features.bits[12] = VK_TRUE;
+    }
+    if gpu_features & gpu_feature::IMAGE_CUBE_ARRAY != 0 {
+        features.bits[2] = VK_TRUE;
+    }
+    if gpu_features & gpu_feature::INDEPENDENT_BLEND != 0 {
+        features.bits[3] = VK_TRUE;
+    }
+    if gpu_features & gpu_feature::SAMPLE_RATE_SHADING != 0 {
+        features.bits[6] = VK_TRUE;
+    }
+}
+
+pub(crate) fn enable_binding_array_features(features: &mut VkPhysicalDeviceFeatures, arrays: u32) {
+    if arrays & binding_array::UNIFORM_BUFFER != 0 {
+        features.bits[33] = VK_TRUE; // shaderUniformBufferArrayDynamicIndexing
+    }
+    if arrays & binding_array::STORAGE_BUFFER != 0 {
+        features.bits[35] = VK_TRUE; // shaderStorageBufferArrayDynamicIndexing
+    }
+    if arrays & (binding_array::SAMPLED_TEXTURE | binding_array::SAMPLER)
+        == binding_array::SAMPLED_TEXTURE | binding_array::SAMPLER
+    {
+        features.bits[34] = VK_TRUE; // shaderSampledImageArrayDynamicIndexing
+    }
+    if arrays & binding_array::STORAGE_TEXTURE != 0 {
+        features.bits[36] = VK_TRUE; // shaderStorageImageArrayDynamicIndexing
     }
 }
 

@@ -72,10 +72,11 @@ fn manifest_surface(path: &Path) -> BTreeSet<String> {
     set
 }
 
-/// Build the shim natively and return the exported dynamic symbols matching its API filter.
-fn built_exports(shim_target: &Path) -> BTreeSet<String> {
+/// Build the shim natively and return its Linux guest library.
+fn built_shim(shim_target: &Path) -> PathBuf {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let crate_manifest = manifest_dir().join(SHIM_DIR).join("Cargo.toml");
+    let vendor = manifest_dir().join("../../../vendor/rust/shim-deps");
     let triple = guest_triple();
     let linker =
         std::env::var("HL_AARCH64_LINUX_CC").unwrap_or_else(|_| "aarch64-linux-gnu-gcc".to_owned());
@@ -85,7 +86,16 @@ fn built_exports(shim_target: &Path) -> BTreeSet<String> {
     );
 
     let status = Command::new(&cargo)
-        .args(["build", "--release", "--offline", "--manifest-path"])
+        .args([
+            "build",
+            "--release",
+            "--offline",
+            "--config",
+            "source.crates-io.replace-with=\"vendored-sources\"",
+            "--config",
+        ])
+        .arg(format!("source.vendored-sources.directory={vendor:?}"))
+        .arg("--manifest-path")
         .arg(&crate_manifest)
         .args(["--target", triple, "--target-dir"])
         .arg(shim_target)
@@ -108,10 +118,13 @@ fn built_exports(shim_target: &Path) -> BTreeSet<String> {
         "expected built cdylib {} to exist",
         so.display()
     );
+    so
+}
 
+fn exports(so: &Path) -> BTreeSet<String> {
     let out = Command::new("nm")
         .args(["-D", "--defined-only"])
-        .arg(&so)
+        .arg(so)
         .output()
         .unwrap_or_else(|e| panic!("run nm on {}: {e}", so.display()));
     assert!(out.status.success(), "nm -D failed on {}", so.display());
@@ -142,7 +155,7 @@ fn shim_export_surface_matches_the_golden_abi() {
 
     // (b) the BUILT cdylib's exported dynamic symbols == golden, exactly.
     let shim_target = manifest_dir().join("target").join("shim-build");
-    let exports = built_exports(&shim_target);
+    let exports = exports(&built_shim(&shim_target));
     let missing: Vec<_> = golden.difference(&exports).collect();
     let extra: Vec<_> = exports.difference(&golden).collect();
     assert!(
@@ -154,4 +167,28 @@ fn shim_export_surface_matches_the_golden_abi() {
         ".so exports symbols not in the golden: {extra:?}"
     );
     assert_eq!(exports.len(), EXPECTED, "exported symbol count drifted");
+}
+
+#[test]
+fn shim_entry_points_bind_to_the_icd_not_the_loader() {
+    let shim_target = manifest_dir().join("target").join("shim-build");
+    let so = built_shim(&shim_target);
+    let out = Command::new("readelf")
+        .args(["-dW"])
+        .arg(&so)
+        .output()
+        .unwrap_or_else(|e| panic!("run readelf on {}: {e}", so.display()));
+    assert!(
+        out.status.success(),
+        "readelf -dW failed on {}",
+        so.display()
+    );
+    let dynamic = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        dynamic.lines().any(|line| {
+            line.contains("(FLAGS)") && line.split_whitespace().any(|field| field == "SYMBOLIC")
+        }),
+        "{} must carry DF_SYMBOLIC so its proc-address table cannot resolve back into libvulkan",
+        so.display()
+    );
 }

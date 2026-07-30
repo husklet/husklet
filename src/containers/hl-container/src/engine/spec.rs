@@ -14,6 +14,10 @@ impl TryFrom<&ProcessConfig> for Spec {
         Self::process(&mut spec, launch)?;
         Self::filesystem(&mut spec, launch)?;
         Self::resources(&mut spec, launch);
+        if let Some(directory) = &launch.translation_cache {
+            spec.cache.directory = Some(directory.clone());
+            spec.cache.policy = hl_engine::spec::CachePolicy::ReadWrite;
+        }
         Self::network(&mut spec, launch)?;
         spec.extensions.clone_from(&launch.extensions);
         Ok(Self(spec))
@@ -191,6 +195,7 @@ mod tests {
             overlay: None,
             owners: Vec::new(),
             filesystem_generation: "/generation".into(),
+            translation_cache: None,
             checkpoint: None,
             guest: crate::Guest::Aarch64,
             process: crate::Process::new("/bin/true"),
@@ -228,6 +233,20 @@ mod tests {
     }
 
     #[test]
+    fn application_selected_translation_cache_is_forwarded_to_engine() {
+        let mut launch = launch();
+        launch.translation_cache = Some("/state/cache/translation".into());
+
+        let spec = hl_engine::MachineSpec::from(Spec::try_from(&launch).unwrap());
+
+        assert_eq!(
+            spec.cache.directory.as_deref(),
+            Some(std::path::Path::new("/state/cache/translation"))
+        );
+        assert_eq!(spec.cache.policy, hl_engine::spec::CachePolicy::ReadWrite);
+    }
+
+    #[test]
     fn published_ports_use_the_private_namespace_without_an_explicit_bridge() {
         let mut launch = launch();
         launch
@@ -252,8 +271,8 @@ mod tests {
         let spec = hl_engine::MachineSpec::from(Spec::try_from(&launch()).unwrap());
 
         assert!(!spec.checkpoint.enabled);
-        assert!(spec.checkpoint.capture_directory.is_none());
-        assert!(spec.checkpoint.restore_directory.is_none());
+        assert!(!spec.checkpoint.capture);
+        assert!(!spec.checkpoint.restore);
     }
 
     #[test]
@@ -291,5 +310,22 @@ mod tests {
         assert_eq!(spec.resources.memory_bytes, Some(64 * 1024 * 1024));
         assert_eq!(spec.resources.process_limit, Some(32));
         assert_eq!(spec.resources.cpu_limit, Some(2));
+    }
+
+    #[test]
+    fn process_arguments_reach_the_engine_without_path_normalization() {
+        const URL: &str = "https://google.com";
+        let mut launch = launch();
+        launch.process = crate::Process::new("google-chrome").args([URL]);
+
+        let spec = hl_engine::MachineSpec::from(Spec::try_from(&launch).unwrap());
+
+        assert_eq!(
+            spec.process.argv,
+            [
+                std::ffi::OsString::from("google-chrome"),
+                std::ffi::OsString::from(URL)
+            ]
+        );
     }
 }

@@ -33,6 +33,20 @@ impl Format {
             TextureFormat::R32Float => W::R32Float,
             TextureFormat::Depth32Float => W::Depth32Float,
             TextureFormat::Depth24PlusStencil8 => W::Depth24PlusStencil8,
+            TextureFormat::Bc1RgbaUnorm => W::Bc1RgbaUnorm,
+            TextureFormat::Bc1RgbaSrgb => W::Bc1RgbaUnormSrgb,
+            TextureFormat::Bc2RgbaUnorm => W::Bc2RgbaUnorm,
+            TextureFormat::Bc2RgbaSrgb => W::Bc2RgbaUnormSrgb,
+            TextureFormat::Bc3RgbaUnorm => W::Bc3RgbaUnorm,
+            TextureFormat::Bc3RgbaSrgb => W::Bc3RgbaUnormSrgb,
+            TextureFormat::Bc4RUnorm => W::Bc4RUnorm,
+            TextureFormat::Bc4RSnorm => W::Bc4RSnorm,
+            TextureFormat::Bc5RgUnorm => W::Bc5RgUnorm,
+            TextureFormat::Bc5RgSnorm => W::Bc5RgSnorm,
+            TextureFormat::Bc6hRgbUfloat => W::Bc6hRgbUfloat,
+            TextureFormat::Bc6hRgbFloat => W::Bc6hRgbFloat,
+            TextureFormat::Bc7RgbaUnorm => W::Bc7RgbaUnorm,
+            TextureFormat::Bc7RgbaSrgb => W::Bc7RgbaUnormSrgb,
         }
     }
 
@@ -44,6 +58,12 @@ impl Format {
         self.0.bytes_per_texel().ok_or(GpuError::Unsupported(
             "wgpu: no packed texel layout for this format",
         ))
+    }
+
+    pub fn copy_layout(self, width: u32, height: u32) -> Result<(u32, u32)> {
+        self.0
+            .copy_layout(width, height)
+            .ok_or(GpuError::Unsupported("wgpu: texture copy layout"))
     }
 
     /// Pack a normalized clear color to a format's texel bytes (round-half-up), matching the CPU oracle's

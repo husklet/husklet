@@ -165,7 +165,75 @@ fn malformed_bgra_is_rejected_before_metal_reads_it() {
 }
 
 #[test]
-fn damaged_upload_keeps_all_rotating_textures_coherent() {
+fn requested_capture_writes_only_the_next_presented_frame() {
+    let Some(presenter) = MacPresenter::new_offscreen() else {
+        return;
+    };
+    let directory =
+        std::env::temp_dir().join(format!("hl-one-shot-present-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    let mut presenter = presenter.capture_once_to(&directory).unwrap();
+    let sid = SurfaceId(14);
+    let timing = PresentTiming {
+        present_ns: 0,
+        refresh_ns: 0,
+        vsync: false,
+    };
+
+    presenter.attach_bgra(sid, known_frame(2, 2, [1, 2, 3, 255]), 2, 2);
+    presenter.present(OutputId(0), &image(sid, 2, 2), &[], timing);
+    let output = directory.join("surface-14.ppm");
+    assert!(!output.exists(), "capture stays idle without a request");
+
+    std::fs::write(directory.join("request"), []).unwrap();
+    presenter.attach_bgra(sid, known_frame(2, 2, [4, 5, 6, 255]), 2, 2);
+    presenter.present(OutputId(0), &image(sid, 2, 2), &[], timing);
+    let captured = std::fs::read(&output).unwrap();
+
+    presenter.attach_bgra(sid, known_frame(2, 2, [7, 8, 9, 255]), 2, 2);
+    presenter.present(OutputId(0), &image(sid, 2, 2), &[], timing);
+    assert_eq!(
+        std::fs::read(&output).unwrap(),
+        captured,
+        "one request must not continuously overwrite captures"
+    );
+    assert!(directory.join("request.claimed").is_file());
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn requested_capture_reads_the_latest_static_frame_during_event_poll() {
+    use hl_compositor::scene::port::HostEvents;
+
+    let Some(presenter) = MacPresenter::new_offscreen() else {
+        return;
+    };
+    let directory = std::env::temp_dir().join(format!("hl-static-present-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    let mut presenter = presenter.capture_once_to(&directory).unwrap();
+    let sid = SurfaceId(15);
+    let timing = PresentTiming {
+        present_ns: 0,
+        refresh_ns: 0,
+        vsync: false,
+    };
+
+    presenter.attach_bgra(sid, known_frame(2, 2, [11, 22, 33, 255]), 2, 2);
+    presenter.present(OutputId(0), &image(sid, 2, 2), &[], timing);
+    std::fs::write(directory.join("request"), []).unwrap();
+
+    presenter.poll_events();
+
+    assert_eq!(
+        std::fs::read(directory.join("surface-15.ppm")).unwrap(),
+        b"P6\n2 2\n255\n\x21\x16\x0b\x21\x16\x0b\x21\x16\x0b\x21\x16\x0b"
+    );
+    assert!(directory.join("request.claimed").is_file());
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn rotating_upload_refreshes_the_selected_slot_completely() {
     let Some(mut presenter) = MacPresenter::new_offscreen() else {
         return;
     };
@@ -187,7 +255,11 @@ fn damaged_upload_keeps_all_rotating_textures_coherent() {
 
     let (_, _, rgba) = presenter.last_rgba(sid).expect("damaged frame readback");
     assert_eq!(&rgba[..4], &[3, 2, 1, 255], "damaged pixel updated");
-    assert_eq!(&rgba[4..8], &[90, 80, 70, 255], "undamaged pixel retained");
+    assert_eq!(
+        &rgba[4..8],
+        &[90, 80, 70, 255],
+        "the selected slot receives the complete current frame, not only damage relative to another slot"
+    );
 }
 
 #[test]

@@ -6,6 +6,47 @@
 //! `spirv_split.rs` FAIL-before/PASS-after proof, sourced from GLSL instead of app SPIR-V.
 use super::*;
 
+#[test]
+fn unknown_uniform_error_carries_bounded_original_and_normalized_context() {
+    let original = "#version 460\n\
+                    uniform float ublend_S3;\n\
+                    layout(location=0) out vec4 color;\n\
+                    void main() { color = vec4(ublend_S3); }\n";
+    let normalized = "#version 460\n\
+                      layout(location=0) out vec4 color;\n\
+                      void main() {\n\
+                          color = vec4(ublend_S3);\n\
+                      }\n";
+    let mut frontend = naga::front::glsl::Frontend::default();
+    let error = frontend
+        .parse(
+            &naga::front::glsl::Options::from(naga::ShaderStage::Fragment),
+            normalized,
+        )
+        .expect_err("the normalized shader deliberately lost its uniform declaration");
+
+    let message = Diagnostic::glsl_message(original, normalized, &error);
+
+    assert!(
+        message.contains("UnknownVariable(\"ublend_S3\")"),
+        "{message}"
+    );
+    assert!(
+        message.contains("original GLSL context:")
+            && message.contains("2 | uniform float ublend_S3;"),
+        "{message}"
+    );
+    assert!(
+        message.contains("normalized GLSL context:")
+            && message.contains("4 | color = vec4(ublend_S3);"),
+        "{message}"
+    );
+    assert!(
+        message.len() <= Diagnostic::GLSL_CONTEXT_LIMIT,
+        "NACK diagnostic exceeded its wire-safe context bound"
+    );
+}
+
 // A GskGpu-shaped vertex shader: computes position from `gl_VertexID` (no position attribute), reads a
 // `binding=0` push-constant-style UBO via `push.`, forwards a uv varying.
 const GSK_VERT: &str = r#"#version 320 es
@@ -69,7 +110,7 @@ fn gskgpu_pair_fails_naga_directly_but_compiles_through_glsl_to_wgsl() {
     assert!(vwgsl.contains("vmain"), "entry rename expected: {vwgsl}");
 
     // Fragment: the combined sampler became a SEPARATE texture_2d + sampler at the coordinated bindings
-    // (sampler 0 → texture @binding(1), sampler @binding(2)), so the driver's bind-group entries match.
+    // (sampler 0 → guest texture/sampler 1/2 → native 2/3 after the host viewport reservation).
     assert!(
         fwgsl.contains("texture_2d"),
         "expected a separate texture_2d: {fwgsl}"
@@ -79,12 +120,12 @@ fn gskgpu_pair_fails_naga_directly_but_compiles_through_glsl_to_wgsl() {
         "expected a separate sampler: {fwgsl}"
     );
     assert!(
-        fwgsl.contains("@binding(1)"),
-        "texture must reflect at binding 1: {fwgsl}"
+        fwgsl.contains("@binding(2)"),
+        "texture must reflect at native binding 2: {fwgsl}"
     );
     assert!(
-        fwgsl.contains("@binding(2)"),
-        "sampler must reflect at binding 2: {fwgsl}"
+        fwgsl.contains("@binding(3)"),
+        "sampler must reflect at native binding 3: {fwgsl}"
     );
     assert!(
         fwgsl.contains("textureSample"),

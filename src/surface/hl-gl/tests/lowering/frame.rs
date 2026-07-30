@@ -40,7 +40,13 @@ fn clear_only_frame_lowers_to_clear_pass_and_present() {
 
     // default render target + surface created once.
     assert!(matches!(batch[0], Cmd::CreateTexture(1, _)));
-    assert!(matches!(batch[1], Cmd::CreateSurface(1, _)));
+    assert!(matches!(
+        batch[1],
+        Cmd::CreateSurface(
+            1,
+            hl_gpu::protocol::model::descriptor::SurfaceDesc { token, .. }
+        ) if token.get() == 7
+    ));
 
     // the render pass clears the default target to the recorded color.
     let ops = submit_ops(batch);
@@ -61,9 +67,30 @@ fn clear_only_frame_lowers_to_clear_pass_and_present() {
         *batch.last().unwrap(),
         Cmd::Present {
             surface: 1,
-            texture: 1
+            texture: 1,
+            serial: hl_gpu::protocol::model::descriptor::FrameSerial::new(1).unwrap(),
         }
     );
+}
+
+#[test]
+fn shm_fallback_renders_without_surface_capability_or_native_present() {
+    let mut c = ctx_640x480();
+    c.set_present_frame(None, None);
+    let mut sink = RecordingSink::with_full_caps();
+    record::clear(&mut c);
+
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let batch = &sink.batches[0];
+    assert!(batch
+        .iter()
+        .any(|command| matches!(command, Cmd::CreateTexture(_, _))));
+    assert!(!batch
+        .iter()
+        .any(|command| matches!(command, Cmd::CreateSurface(_, _))));
+    assert!(!batch
+        .iter()
+        .any(|command| matches!(command, Cmd::Present { .. })));
 }
 
 // ---------------------------------------------------------------------------------------------------

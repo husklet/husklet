@@ -1,33 +1,197 @@
 use super::*;
 
 impl StageSources<'_> {
-    pub fn uniform_layout(self) -> (Vec<Uni>, i32) {
+    pub fn uniform_layout(self) -> Result<(Vec<Uni>, i32), UniformError> {
         let vs = Source::new(self.vertex).comments_removed();
         let fs = Source::new(self.fragment).comments_removed();
-        let (unis, _samps) = Declarations::from_stages(&vs, &fs).uniforms();
-        let mut cur = 0i32;
+        Self::validate_declaration_compatibility(&vs, &fs)?;
+        Self::validate_stage("vertex", &vs)?;
+        Self::validate_stage("fragment", &fs)?;
+        let vertex_data = Declarations::from_stages(&vs, "").uniforms().0;
+        let fragment_data = Declarations::from_stages(&fs, "").uniforms().0;
+        for vertex in &vertex_data {
+            if let Some(fragment) = fragment_data
+                .iter()
+                .find(|fragment| fragment.name == vertex.name)
+            {
+                if fragment.ty != vertex.ty || fragment.arr != vertex.arr {
+                    return Err(UniformError::ConflictingDeclaration(vertex.name.clone()));
+                }
+            }
+        }
+        let vertex_samplers = Declarations::from_stages(&vs, "").uniforms().1;
+        let fragment_samplers = Declarations::from_stages(&fs, "").uniforms().1;
+        for vertex in &vertex_samplers {
+            if let Some(fragment) = fragment_samplers
+                .iter()
+                .find(|fragment| fragment.name == vertex.name)
+            {
+                if fragment.ty != vertex.ty || fragment.arr != vertex.arr {
+                    return Err(UniformError::ConflictingDeclaration(vertex.name.clone()));
+                }
+            }
+        }
+        let (unis, samplers) = Declarations::from_stages(&vs, &fs).uniforms();
+        let samplers = sampler_elements(&samplers)?;
+        if samplers > MAX_COMBINED_SAMPLERS {
+            return Err(UniformError::Samplers(samplers));
+        }
+        let mut cur = 0usize;
         let mut out = Vec::new();
-        for d in unis.iter().take(16) {
-            let (esz, eal) = TypeToken(&d.ty).layout().unwrap_or((4, 4));
+        for d in &unis {
+            if !d.array_literal {
+                return Err(UniformError::NonLiteralArray(d.name.clone()));
+            }
+            let (esz, eal, _) = TypeToken(&d.ty)
+                .layout()
+                .ok_or_else(|| UniformError::UnsupportedType(d.ty.clone()))?;
             // std140: an ARRAY member rounds each element's stride UP to a vec4 (16 B) and aligns the member to
             // 16 B; a scalar/vector/matrix member keeps its natural size/alignment.
             let (sz, al) = if d.arr > 0 {
-                let stride = (esz + 15) & !15;
-                (stride * d.arr as i32, eal.max(16))
+                let stride = esz
+                    .checked_add(15)
+                    .ok_or(UniformError::ArithmeticOverflow)?
+                    & !15;
+                (
+                    stride
+                        .checked_mul(d.arr as usize)
+                        .ok_or(UniformError::ArithmeticOverflow)?,
+                    eal.max(16),
+                )
             } else {
                 (esz, eal)
             };
-            cur = (cur + al - 1) & !(al - 1);
+            cur = cur
+                .checked_add(al - 1)
+                .ok_or(UniformError::ArithmeticOverflow)?
+                & !(al - 1);
             out.push(Uni {
                 name: d.name.clone(),
-                off: cur,
-                sz,
+                off: i32::try_from(cur).map_err(|_| UniformError::ArithmeticOverflow)?,
+                sz: i32::try_from(sz).map_err(|_| UniformError::ArithmeticOverflow)?,
+                ty: d.ty.clone(),
+                arr: d.arr,
             });
-            cur += sz;
+            cur = cur
+                .checked_add(sz)
+                .ok_or(UniformError::ArithmeticOverflow)?;
         }
-        let total = (cur + 15) & !15;
-        (out, total)
+        let total = cur
+            .checked_add(15)
+            .ok_or(UniformError::ArithmeticOverflow)?
+            & !15;
+        if total > MAX_COMBINED_UNIFORM_BYTES {
+            return Err(UniformError::BlockBytes(total));
+        }
+        Ok((
+            out,
+            i32::try_from(total).map_err(|_| UniformError::ArithmeticOverflow)?,
+        ))
     }
+
+    fn validate_declaration_compatibility(
+        vertex: &str,
+        fragment: &str,
+    ) -> Result<(), UniformError> {
+        let declarations = Tokens(vertex)
+            .collect("uniform")
+            .into_iter()
+            .chain(Tokens(fragment).collect("uniform"))
+            .filter(|declaration| declaration.ty != "samplerExternalOES")
+            .collect::<Vec<_>>();
+        for (index, declaration) in declarations.iter().enumerate() {
+            if declarations[index + 1..].iter().any(|other| {
+                other.name == declaration.name
+                    && (other.ty != declaration.ty || other.arr != declaration.arr)
+            }) {
+                return Err(UniformError::ConflictingDeclaration(
+                    declaration.name.clone(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_stage(stage: &'static str, source: &str) -> Result<(), UniformError> {
+        let (data, samplers) = Declarations::from_stages(source, "").uniforms();
+        let samplers = sampler_elements(&samplers)?;
+        let sampler_limit = if stage == "vertex" {
+            MAX_VERTEX_SAMPLERS
+        } else {
+            MAX_FRAGMENT_SAMPLERS
+        };
+        if samplers > sampler_limit {
+            return Err(UniformError::Samplers(samplers));
+        }
+        let mut components = 0usize;
+        for declaration in data {
+            if !declaration.array_literal {
+                return Err(UniformError::NonLiteralArray(declaration.name));
+            }
+            let (_, _, element_components) = TypeToken(&declaration.ty)
+                .layout()
+                .ok_or_else(|| UniformError::UnsupportedType(declaration.ty.clone()))?;
+            let elements = if declaration.arr == 0 {
+                1
+            } else {
+                declaration.arr as usize
+            };
+            components = components
+                .checked_add(
+                    element_components
+                        .checked_mul(elements)
+                        .ok_or(UniformError::ArithmeticOverflow)?,
+                )
+                .ok_or(UniformError::ArithmeticOverflow)?;
+        }
+        if components > MAX_UNIFORM_COMPONENTS {
+            return Err(UniformError::StageComponents {
+                stage,
+                count: components,
+            });
+        }
+        Ok(())
+    }
+
+    pub fn validate_sampler_array_uses(self) -> Result<(), UniformError> {
+        let declarations = Declarations::from_stages(self.vertex, self.fragment)
+            .uniforms()
+            .1;
+        for declaration in declarations
+            .iter()
+            .filter(|declaration| declaration.arr > 1 && declaration.array_literal)
+        {
+            for source in [self.vertex, self.fragment] {
+                let source = Source::new(source).comments_removed();
+                let mut cursor = 0usize;
+                let needle = format!("{}[", declaration.name);
+                while let Some(relative) = source[cursor..].find(&needle) {
+                    let open = cursor + relative + declaration.name.len();
+                    let Some(close_relative) = source[open + 1..].find(']') else {
+                        return Err(UniformError::DynamicSamplerArray(declaration.name.clone()));
+                    };
+                    let close = open + 1 + close_relative;
+                    let index = source[open + 1..close].trim();
+                    if index.parse::<u32>().is_err() {
+                        return Err(UniformError::DynamicSamplerArray(declaration.name.clone()));
+                    }
+                    cursor = close + 1;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn sampler_elements(declarations: &[Decl]) -> Result<usize, UniformError> {
+    declarations.iter().try_fold(0usize, |total, declaration| {
+        if !declaration.array_literal {
+            return Err(UniformError::NonLiteralArray(declaration.name.clone()));
+        }
+        total
+            .checked_add(declaration.arr.max(1) as usize)
+            .ok_or(UniformError::ArithmeticOverflow)
+    })
 }
 
 /// One declared uniform BLOCK: its `layout(binding = N)` point + its ordered member declarations. Used by
@@ -107,7 +271,7 @@ impl Source<'_> {
             // Parse members `TYPE name;` until `}` (skipping precision/interpolation qualifiers before TYPE).
             q += 1; // past `{`
             let mut members = Vec::new();
-            while q < b.len() && b[q] != b'}' && members.len() < 32 {
+            while q < b.len() && b[q] != b'}' {
                 while q < b.len() && (Tokens::is_space(b[q]) || b[q] == b';') {
                     q += 1;
                 }
@@ -116,11 +280,7 @@ impl Source<'_> {
                 }
                 let read_tok = |q: &mut usize| -> String {
                     let mut s = String::new();
-                    while *q < b.len()
-                        && !Tokens::is_space(b[*q])
-                        && b[*q] != b';'
-                        && b[*q] != b'}'
-                        && s.len() < 31
+                    while *q < b.len() && !Tokens::is_space(b[*q]) && b[*q] != b';' && b[*q] != b'}'
                     {
                         s.push(b[*q] as char);
                         *q += 1;
@@ -138,9 +298,14 @@ impl Source<'_> {
                     q += 1;
                 }
                 let name = read_tok(&mut q);
-                let arr = Tokens::read_array_subscript(b, &mut q);
+                let (arr, array_literal) = Tokens::read_array_subscript(b, &mut q);
                 if !ty.is_empty() && !name.is_empty() {
-                    members.push(Decl { ty, name, arr });
+                    members.push(Decl {
+                        ty,
+                        name,
+                        arr,
+                        array_literal,
+                    });
                 }
             }
             out.push(UniformBlockDecl { binding, members });

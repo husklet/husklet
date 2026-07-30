@@ -2,16 +2,16 @@
 //!
 //! TWO independent Wayland clients (separate `Connection`s — separate compositor clients) each map a
 //! toplevel in a distinct color. The test moves keyboard focus A → B through the host seam and asserts,
-//! on the WIRE, the exact `wl_keyboard` focus protocol:
+//! on the WIRE, both the exact `wl_keyboard` focus protocol and matching XDG activation:
 //!
-//!   * focus A  →  A receives `wl_keyboard.enter` (naming A's surface), B receives nothing.
+//!   * focus A  →  A receives `wl_keyboard.enter` (naming A's surface), B receives `leave`.
 //!   * focus B  →  A receives `wl_keyboard.leave` (its enter is now balanced by a leave), B receives
 //!                 `wl_keyboard.enter`.
 //!   * inject a key while B holds focus  →  ONLY B receives `wl_keyboard.key` (evdev keycode + pressed);
 //!                 A's key log stays empty.
 //!
 //! Ordering is asserted, not just presence: A's event log is exactly `[Enter, Leave]` and B's is
-//! `[Enter, Key]`. Both toplevels' pixels are captured and composited into one PNG (each at a
+//! `[Leave, Enter, Key]`. Both toplevels' pixels are captured and composited into one PNG (each at a
 //! test-chosen on-screen slot — the neutral scene roots every toplevel at (0,0), so global placement is
 //! the viewer's, asserted per-surface by color).
 
@@ -36,7 +36,7 @@ use wayland_client::protocol::{
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};
 use wayland_protocols::xdg::shell::client::{
     xdg_surface::{self, XdgSurface},
-    xdg_toplevel::XdgToplevel,
+    xdg_toplevel::{self, XdgToplevel},
     xdg_wm_base::{self, XdgWmBase},
 };
 
@@ -60,6 +60,7 @@ struct Client {
     drawn: bool,
     frame_done: bool,
     kbd: Vec<KbdEv>,
+    activated: Vec<bool>,
 }
 
 impl Client {
@@ -106,6 +107,7 @@ fn spawn_client(
         drawn: false,
         frame_done: false,
         kbd: Vec::new(),
+        activated: Vec::new(),
     };
     let deadline = Instant::now() + Duration::from_secs(5);
     while !(app.drawn && app.frame_done) {
@@ -137,7 +139,15 @@ fn multi_window_keyboard_focus() {
     assert_eq!(fa.pixel(W / 2, H / 2).unwrap(), RED, "A is solid red");
     assert_eq!(fb.pixel(W / 2, H / 2).unwrap(), GREEN, "B is solid green");
 
-    // ---- focus A: A enters, B silent ----
+    // Mapping B activates it and deactivates A. This is distinct from wl_keyboard focus and must be
+    // represented by matching xdg_toplevel.configure states.
+    pump2(&mut qa, &mut a, &mut qb, &mut b, 5, |a, b| {
+        a.activated.last() == Some(&false) && b.activated.last() == Some(&true)
+    });
+    a.kbd.clear();
+    b.kbd.clear();
+
+    // ---- focus A: A enters, previously-focused B leaves ----
     h.input_tx
         .send(InputCommand::FocusToplevelIndex(0))
         .expect("focus A");
@@ -149,10 +159,16 @@ fn multi_window_keyboard_focus() {
         [KbdEv::Enter],
         "A received exactly wl_keyboard.enter on focus A"
     );
-    assert!(
-        b.kbd.is_empty(),
-        "B received nothing while A was focused, got {:?}",
-        b.kbd
+    assert_eq!(
+        b.kbd,
+        [KbdEv::Leave],
+        "B received exactly wl_keyboard.leave when focus moved to A"
+    );
+    assert_eq!(a.activated.last(), Some(&true), "focused A is activated");
+    assert_eq!(
+        b.activated.last(),
+        Some(&false),
+        "unfocused B is deactivated"
     );
 
     // ---- focus B: A leaves, B enters ----
@@ -160,14 +176,24 @@ fn multi_window_keyboard_focus() {
         .send(InputCommand::FocusToplevelIndex(1))
         .expect("focus B");
     pump2(&mut qa, &mut a, &mut qb, &mut b, 5, |a, b| {
-        a.kbd == [KbdEv::Enter, KbdEv::Leave] && b.kbd == [KbdEv::Enter]
+        a.kbd == [KbdEv::Enter, KbdEv::Leave] && b.kbd == [KbdEv::Leave, KbdEv::Enter]
     });
     assert_eq!(
         a.kbd,
         [KbdEv::Enter, KbdEv::Leave],
         "A got enter THEN leave (focus moved off it)"
     );
-    assert_eq!(b.kbd, [KbdEv::Enter], "B got exactly enter on focus B");
+    assert_eq!(
+        b.kbd,
+        [KbdEv::Leave, KbdEv::Enter],
+        "B got leave then enter as focus returned"
+    );
+    assert_eq!(
+        a.activated.last(),
+        Some(&false),
+        "unfocused A is deactivated"
+    );
+    assert_eq!(b.activated.last(), Some(&true), "focused B is activated");
 
     // ---- key while B focused: only B ----
     h.input_tx
@@ -196,8 +222,8 @@ fn multi_window_keyboard_focus() {
     );
     assert_eq!(
         b.kbd,
-        [KbdEv::Enter, KbdEv::Key(KEY_A, true)],
-        "B's log is exactly enter,key"
+        [KbdEv::Leave, KbdEv::Enter, KbdEv::Key(KEY_A, true)],
+        "B's log is exactly leave,enter,key"
     );
 
     // ---- viewer PNG: both windows side by side ----
@@ -324,6 +350,25 @@ impl Dispatch<WlKeyboard, ()> for Client {
     }
 }
 
+impl Dispatch<XdgToplevel, ()> for Client {
+    fn event(
+        app: &mut Self,
+        _: &XdgToplevel,
+        event: <XdgToplevel as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let xdg_toplevel::Event::Configure { states, .. } = event {
+            let activated = states.chunks_exact(4).any(|state| {
+                u32::from_ne_bytes([state[0], state[1], state[2], state[3]])
+                    == xdg_toplevel::State::Activated as u32
+            });
+            app.activated.push(activated);
+        }
+    }
+}
+
 macro_rules! ignore {
     ($($t:ty),*) => {$(
         impl Dispatch<$t, ()> for Client {
@@ -331,12 +376,4 @@ macro_rules! ignore {
         }
     )*};
 }
-ignore!(
-    WlCompositor,
-    WlSurface,
-    WlShm,
-    WlShmPool,
-    WlBuffer,
-    WlSeat,
-    XdgToplevel
-);
+ignore!(WlCompositor, WlSurface, WlShm, WlShmPool, WlBuffer, WlSeat);

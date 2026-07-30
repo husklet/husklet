@@ -45,8 +45,22 @@ impl Scene {
         y: i32,
         out: &mut Vec<(SurfaceId, i32, i32)>,
     ) {
+        let children = self.subsurface_children(surface);
+        for &child in children
+            .iter()
+            .filter(|child| self.subsurface_below.contains(child))
+        {
+            let (cx, cy) = match self.role(child) {
+                Some(SurfaceRole::Subsurface(s)) => (s.x, s.y),
+                _ => (0, 0),
+            };
+            self.collect_subtree_offsets(child, x.saturating_add(cx), y.saturating_add(cy), out);
+        }
         out.push((surface, x, y));
-        for &child in self.subsurface_children(surface) {
+        for &child in children
+            .iter()
+            .filter(|child| !self.subsurface_below.contains(child))
+        {
             if child == surface {
                 continue;
             }
@@ -96,20 +110,30 @@ impl Scene {
 
     /// Reorder `parent`'s subsurface children to match `order` (bottom to top).
     pub fn set_subsurface_order(&mut self, parent: SurfaceId, order: &[SurfaceId]) {
-        let Some(kids) = self.subsurface_children.get_mut(&parent) else {
+        let Some(existing) = self.subsurface_children.get(&parent).cloned() else {
             return;
         };
+        self.subsurface_below
+            .retain(|surface| !existing.contains(surface));
+        if let Some(parent_index) = order.iter().position(|surface| *surface == parent) {
+            self.subsurface_below.extend(
+                order[..parent_index]
+                    .iter()
+                    .copied()
+                    .filter(|surface| existing.contains(surface)),
+            );
+        }
         let mut reordered: Vec<SurfaceId> = order
             .iter()
             .copied()
-            .filter(|id| kids.contains(id))
+            .filter(|id| *id != parent && existing.contains(id))
             .collect();
-        for &kid in kids.iter() {
+        for &kid in &existing {
             if !reordered.contains(&kid) {
                 reordered.push(kid);
             }
         }
-        *kids = reordered;
+        self.subsurface_children.insert(parent, reordered);
     }
 
     /// Mutate a popup's resolved geometry in place.

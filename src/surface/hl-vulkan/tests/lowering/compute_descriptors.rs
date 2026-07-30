@@ -1,4 +1,267 @@
 use super::*;
+use hl_gpu::protocol::model::descriptor::PipelineBindingKind;
+
+#[test]
+fn compute_pipeline_carries_descriptor_layout_cardinality() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let shader = create::create_shader_module_words(
+        &mut d,
+        &mut sink,
+        spirv::Module::sample_compute("main"),
+    )
+    .unwrap();
+    let set_layout = d.create_descriptor_set_layout(vec![LayoutBinding {
+        binding: 3,
+        descriptor_type: vk_descriptor_type::STORAGE_BUFFER,
+        descriptor_count: 2,
+        stage_flags: 0,
+    }]);
+    let pipeline_layout = d.create_pipeline_layout(vec![set_layout]);
+    create::create_compute_pipeline_with_layout(
+        &mut d,
+        &mut sink,
+        shader,
+        "main",
+        Some(pipeline_layout),
+    )
+    .unwrap();
+
+    let Cmd::CreateComputePipelineLayout(_, _, layout) = &sink.batches.last().unwrap()[0] else {
+        panic!("expected layout-bearing compute pipeline");
+    };
+    assert_eq!(
+        layout.bindings,
+        vec![PipelineBinding {
+            group: 0,
+            binding: 3,
+            count: 2,
+            kind: PipelineBindingKind::StorageBuffer,
+        }]
+    );
+}
+
+#[test]
+fn two_storage_buffer_elements_lower_to_scalar_tail_bindings() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let first =
+        create::create_buffer(&mut d, &mut sink, vk_buffer_usage::STORAGE_BUFFER, 64).unwrap();
+    let second =
+        create::create_buffer(&mut d, &mut sink, vk_buffer_usage::STORAGE_BUFFER, 64).unwrap();
+    let layout = d.create_descriptor_set_layout(vec![LayoutBinding {
+        binding: 3,
+        descriptor_type: vk_descriptor_type::STORAGE_BUFFER,
+        descriptor_count: 2,
+        stage_flags: 0,
+    }]);
+    let pool = d.create_descriptor_pool(1);
+    let set = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
+    create::update_descriptor_buffer_element(&mut d, set, 3, 0, first, 0, 64).unwrap();
+    create::update_descriptor_buffer_element(&mut d, set, 3, 1, second, 8, 32).unwrap();
+    assert!(matches!(
+        create::update_descriptor_buffer_element(&mut d, set, 3, 2, second, 0, 64),
+        Err(GpuError::OutOfBounds)
+    ));
+
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    record::cmd_bind_descriptor_sets(&mut d, &mut sink, cb, 0, &[set], &[]).unwrap();
+
+    let Cmd::CreateBindGroup(_, group) = &sink.batches.last().unwrap()[0] else {
+        panic!("expected bind group");
+    };
+    assert_eq!(
+        group.entries,
+        vec![
+            BindEntry {
+                binding: 3,
+                resource: BindResource::Buffer {
+                    id: 1,
+                    offset: 0,
+                    size: 64,
+                },
+            },
+            BindEntry {
+                binding: 4,
+                resource: BindResource::Buffer {
+                    id: 2,
+                    offset: 8,
+                    size: 32,
+                },
+            },
+        ]
+    );
+}
+
+#[test]
+fn uniform_buffer_array_elements_lower_to_scalar_tail_bindings() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let first =
+        create::create_buffer(&mut d, &mut sink, vk_buffer_usage::UNIFORM_BUFFER, 64).unwrap();
+    let second =
+        create::create_buffer(&mut d, &mut sink, vk_buffer_usage::UNIFORM_BUFFER, 64).unwrap();
+    let layout = d.create_descriptor_set_layout(vec![
+        LayoutBinding {
+            binding: 1,
+            descriptor_type: vk_descriptor_type::UNIFORM_BUFFER,
+            descriptor_count: 2,
+            stage_flags: 0,
+        },
+        LayoutBinding {
+            binding: 4,
+            descriptor_type: vk_descriptor_type::STORAGE_BUFFER,
+            descriptor_count: 1,
+            stage_flags: 0,
+        },
+    ]);
+    let pool = d.create_descriptor_pool(1);
+    let set = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
+    create::update_descriptor_buffer_element(&mut d, set, 1, 0, first, 0, 64).unwrap();
+    create::update_descriptor_buffer_element(&mut d, set, 1, 1, second, 8, 32).unwrap();
+
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    record::cmd_bind_descriptor_sets(&mut d, &mut sink, cb, 0, &[set], &[]).unwrap();
+
+    let Cmd::CreateBindGroup(_, group) = &sink.batches.last().unwrap()[0] else {
+        panic!("expected bind group");
+    };
+    assert_eq!(
+        group.entries,
+        vec![
+            BindEntry {
+                binding: 1,
+                resource: BindResource::Buffer {
+                    id: 1,
+                    offset: 0,
+                    size: 64,
+                },
+            },
+            BindEntry {
+                // Greatest guest binding is 4, so the scalar tail begins at 5.
+                binding: 5,
+                resource: BindResource::Buffer {
+                    id: 2,
+                    offset: 8,
+                    size: 32,
+                },
+            },
+        ]
+    );
+}
+
+#[test]
+fn storage_image_array_elements_lower_to_scalar_tail_bindings() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let first = create::create_image(
+        &mut d,
+        &mut sink,
+        1,
+        1,
+        vk_format::R8G8B8A8_UNORM,
+        vk_image_usage::STORAGE,
+        1,
+    )
+    .unwrap();
+    let second = create::create_image(
+        &mut d,
+        &mut sink,
+        1,
+        1,
+        vk_format::R8G8B8A8_UNORM,
+        vk_image_usage::STORAGE,
+        1,
+    )
+    .unwrap();
+    let layout = d.create_descriptor_set_layout(vec![LayoutBinding {
+        binding: 2,
+        descriptor_type: vk_descriptor_type::STORAGE_IMAGE,
+        descriptor_count: 2,
+        stage_flags: 0,
+    }]);
+    let pool = d.create_descriptor_pool(1);
+    let set = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
+    create::update_descriptor_image_element(&mut d, set, 2, 0, Some(first), None).unwrap();
+    create::update_descriptor_image_element(&mut d, set, 2, 1, Some(second), None).unwrap();
+
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    record::cmd_bind_descriptor_sets(&mut d, &mut sink, cb, 0, &[set], &[]).unwrap();
+
+    let Cmd::CreateBindGroup(_, group) = &sink.batches.last().unwrap()[0] else {
+        panic!("expected bind group");
+    };
+    assert_eq!(
+        group.entries,
+        vec![
+            BindEntry {
+                binding: 2,
+                resource: BindResource::Texture {
+                    id: img_ir(&d, first),
+                },
+            },
+            BindEntry {
+                binding: 3,
+                resource: BindResource::Texture {
+                    id: img_ir(&d, second),
+                },
+            },
+        ]
+    );
+}
+
+#[test]
+fn descriptor_copy_preserves_array_elements_and_order() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let first =
+        create::create_buffer(&mut d, &mut sink, vk_buffer_usage::STORAGE_BUFFER, 64).unwrap();
+    let second =
+        create::create_buffer(&mut d, &mut sink, vk_buffer_usage::STORAGE_BUFFER, 64).unwrap();
+    let layout = d.create_descriptor_set_layout(vec![LayoutBinding {
+        binding: 0,
+        descriptor_type: vk_descriptor_type::STORAGE_BUFFER,
+        descriptor_count: 2,
+        stage_flags: 0,
+    }]);
+    let pool = d.create_descriptor_pool(2);
+    let source = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
+    let destination = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
+    create::update_descriptor_buffer_element(&mut d, source, 0, 0, first, 4, 12).unwrap();
+    create::update_descriptor_buffer_element(&mut d, source, 0, 1, second, 8, 16).unwrap();
+    create::copy_descriptors(&mut d, source, 0, 0, destination, 0, 0, 2).unwrap();
+
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    record::cmd_bind_descriptor_sets(&mut d, &mut sink, cb, 0, &[destination], &[]).unwrap();
+    let Cmd::CreateBindGroup(_, group) = &sink.batches.last().unwrap()[0] else {
+        panic!("expected copied bind group");
+    };
+    assert_eq!(
+        group.entries,
+        vec![
+            BindEntry {
+                binding: 0,
+                resource: BindResource::Buffer {
+                    id: 1,
+                    offset: 4,
+                    size: 12,
+                },
+            },
+            BindEntry {
+                binding: 1,
+                resource: BindResource::Buffer {
+                    id: 2,
+                    offset: 8,
+                    size: 16,
+                },
+            },
+        ]
+    );
+}
 
 #[test]
 fn full_compute_dispatch_lowers_to_expected_stream() {

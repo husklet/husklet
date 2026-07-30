@@ -24,11 +24,11 @@ use hl_gpu::RecordingSink;
 
 fn ctx() -> GlContext {
     let mut c = GlContext::new();
-    c.surf = GlSurface {
+    c.set_surface(GlSurface {
         have: true,
         width: 320,
         height: 240,
-    };
+    });
     c
 }
 

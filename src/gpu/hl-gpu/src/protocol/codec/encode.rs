@@ -43,6 +43,15 @@ impl Encoder {
         e.u32(s.address_u.to_u32());
         e.u32(s.address_v.to_u32());
         e.u32(s.address_w.to_u32());
+        e.f32(s.lod_min_clamp);
+        e.f32(s.lod_max_clamp);
+        match s.compare {
+            Some(compare) => {
+                e.bool(true);
+                e.u32(compare);
+            }
+            None => e.bool(false),
+        }
     }
 
     fn shader_ref(&mut self, s: &ShaderRef) {
@@ -119,6 +128,9 @@ impl Encoder {
                 e.stencil_face(&dp.stencil_back);
                 e.u32(dp.stencil_read_mask);
                 e.u32(dp.stencil_write_mask);
+                e.i32(dp.bias_constant);
+                e.f32(dp.bias_slope_scale);
+                e.f32(dp.bias_clamp);
             }
         }
         e.u32(p.topology.to_u32());
@@ -150,6 +162,29 @@ impl Encoder {
                 BindResource::Sampler { id } => {
                     e.u8(2);
                     e.u32(*id);
+                }
+                BindResource::BufferArray { elements } => {
+                    e.u8(3);
+                    e.u32(elements.len() as u32);
+                    for element in elements {
+                        e.u32(element.id);
+                        e.u64(element.offset);
+                        e.u64(element.size);
+                    }
+                }
+                BindResource::TextureArray { ids } => {
+                    e.u8(4);
+                    e.u32(ids.len() as u32);
+                    for id in ids {
+                        e.u32(*id);
+                    }
+                }
+                BindResource::SamplerArray { ids } => {
+                    e.u8(5);
+                    e.u32(ids.len() as u32);
+                    for id in ids {
+                        e.u32(*id);
+                    }
                 }
             }
         }
@@ -356,6 +391,46 @@ impl Encoder {
                 e.u32(*dst);
                 e.u64(*dst_offset);
                 e.u32(*bytes_per_row);
+            }
+            Enc::CopyBufferToTextureRegion {
+                src,
+                src_offset,
+                bytes_per_row,
+                rows_per_image,
+                dst,
+                dst_sub,
+                dst_origin,
+                extent,
+            } => {
+                e.u8(etag::COPY_B2T_REGION);
+                e.u32(*src);
+                e.u64(*src_offset);
+                e.u32(*bytes_per_row);
+                e.u32(*rows_per_image);
+                e.u32(*dst);
+                e.subresource(dst_sub);
+                e.origin(dst_origin);
+                e.extent(extent);
+            }
+            Enc::CopyTextureToBufferRegion {
+                src,
+                src_sub,
+                src_origin,
+                extent,
+                dst,
+                dst_offset,
+                bytes_per_row,
+                rows_per_image,
+            } => {
+                e.u8(etag::COPY_T2B_REGION);
+                e.u32(*src);
+                e.subresource(src_sub);
+                e.origin(src_origin);
+                e.extent(extent);
+                e.u32(*dst);
+                e.u64(*dst_offset);
+                e.u32(*bytes_per_row);
+                e.u32(*rows_per_image);
             }
             Enc::CopyTextureToTexture {
                 src,

@@ -1,19 +1,25 @@
 use super::*;
 use std::cell::RefCell;
+use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Rec {
+    GpuSubmit {
+        native_present: bool,
+    },
+    GpuRead,
     GetDisplay(usize),
     CreateQueue(usize),
     CreateWrapper(usize),
     WrapperDestroy(usize),
     SetQueue(usize, usize),
     Destroy(usize),
+    DestroyQueue(usize),
     Flush(usize),
     GetRegistry {
         on: usize,
     },
-    DiscoverShm {
+    DiscoverGlobals {
         registry: usize,
     },
     BindShm {
@@ -21,6 +27,16 @@ enum Rec {
         name: u32,
         version: u32,
     },
+    BindIdentity {
+        name: u32,
+        version: u32,
+    },
+    GetIdentity {
+        surface: usize,
+    },
+    IdentityToken,
+    Associate(u64),
+    DestroyIdentity,
     ShmCreatePool {
         shm: usize,
         fd_valid: bool,
@@ -52,10 +68,12 @@ enum Rec {
 /// A recording `WlAbi`: hands out fresh opaque pointer identities and logs every call so the request
 /// opcodes/args + private-queue wrapper wiring are assertable with no live compositor.
 struct Recorder {
-    log: RefCell<Vec<Rec>>,
+    log: Rc<RefCell<Vec<Rec>>>,
     next: RefCell<usize>,
     /// Whether `discover_shm` should report a wl_shm global (false models a compositor without shm).
     has_shm: bool,
+    has_identity: bool,
+    identity_token: u64,
     /// Force a constructor to return null (models a live marshal failure).
     fail_pool: bool,
 }
@@ -63,9 +81,11 @@ struct Recorder {
 impl Recorder {
     fn new() -> Self {
         Recorder {
-            log: RefCell::new(Vec::new()),
+            log: Rc::new(RefCell::new(Vec::new())),
             next: RefCell::new(0x1000),
             has_shm: true,
+            has_identity: true,
+            identity_token: 0x1234_5678_9abc_def0,
             fail_pool: false,
         }
     }
@@ -108,6 +128,9 @@ unsafe impl WlAbi for Recorder {
     fn destroy(&self, proxy: *mut c_void) {
         self.push(Rec::Destroy(proxy as usize));
     }
+    fn destroy_queue(&self, queue: *mut c_void) {
+        self.push(Rec::DestroyQueue(queue as usize));
+    }
     fn flush(&self, display: *mut c_void) -> i32 {
         self.push(Rec::Flush(display as usize));
         0
@@ -118,20 +141,19 @@ unsafe impl WlAbi for Recorder {
         });
         self.fresh()
     }
-    fn discover_shm(
+    fn discover_globals(
         &self,
         registry: *mut c_void,
         _display: *mut c_void,
         _queue: *mut c_void,
-    ) -> Option<(u32, u32)> {
-        self.push(Rec::DiscoverShm {
+    ) -> WlAppResult<Globals> {
+        self.push(Rec::DiscoverGlobals {
             registry: registry as usize,
         });
-        if self.has_shm {
-            Some((7, 1))
-        } else {
-            None
-        }
+        Ok(Globals {
+            shm: self.has_shm.then_some((7, 1)),
+            identity: self.has_identity.then_some((8, 1)),
+        })
     }
     fn bind_shm(&self, registry: *mut c_void, name: u32, version: u32) -> *mut c_void {
         self.push(Rec::BindShm {
@@ -140,6 +162,41 @@ unsafe impl WlAbi for Recorder {
             version,
         });
         self.fresh()
+    }
+    fn bind_identity_manager(
+        &self,
+        _registry: *mut c_void,
+        name: u32,
+        version: u32,
+    ) -> *mut c_void {
+        self.push(Rec::BindIdentity { name, version });
+        self.fresh()
+    }
+    fn identity_for_surface(
+        &self,
+        _manager: *mut c_void,
+        _version: u32,
+        surface: *mut c_void,
+    ) -> *mut c_void {
+        self.push(Rec::GetIdentity {
+            surface: surface as usize,
+        });
+        self.fresh()
+    }
+    fn identity_token(
+        &self,
+        _identity: *mut c_void,
+        _display: *mut c_void,
+        _queue: *mut c_void,
+    ) -> WlAppResult<SurfaceToken> {
+        self.push(Rec::IdentityToken);
+        SurfaceToken::new(self.identity_token).map_err(|_| WlAppError::NoIdentity)
+    }
+    fn identity_associate(&self, _identity: *mut c_void, _version: u32, serial: u64) {
+        self.push(Rec::Associate(serial));
+    }
+    fn identity_destroy(&self, _identity: *mut c_void, _version: u32) {
+        self.push(Rec::DestroyIdentity);
     }
     fn shm_create_pool(&self, shm: *mut c_void, _version: u32, fd: i32, size: i32) -> *mut c_void {
         self.push(Rec::ShmCreatePool {
@@ -222,7 +279,7 @@ fn bringup_derives_display_and_binds_shm_on_private_queue() {
     assert!(matches!(log[3], Rec::SetQueue(_, 0x0000_9EE0)));
     assert!(matches!(log[4], Rec::GetRegistry { .. }));
     // 4) wl_shm is discovered then bound with the DISCOVERED registry name (7) at the discovered version.
-    assert!(log.iter().any(|r| matches!(r, Rec::DiscoverShm { .. })));
+    assert!(log.iter().any(|r| matches!(r, Rec::DiscoverGlobals { .. })));
     assert!(log.iter().any(|r| matches!(
         r,
         Rec::BindShm {
@@ -321,6 +378,7 @@ fn second_frame_retires_the_previous_buffer() {
 fn missing_shm_global_is_a_soft_error() {
     let mut rec = Recorder::new();
     rec.has_shm = false;
+    rec.has_identity = false;
     let err = WaylandAppPresenter::with_abi(Box::new(rec), SURFACE)
         .err()
         .unwrap();
@@ -376,6 +434,7 @@ fn error_softness_classification() {
         WlAppError::NoDisplay,
         WlAppError::QueueSetup,
         WlAppError::NoShmGlobal,
+        WlAppError::NoIdentity,
     ] {
         assert!(e.is_unavailable(), "{e:?} must be soft");
     }
@@ -388,6 +447,8 @@ fn error_softness_classification() {
         assert!(!e.is_unavailable(), "{e:?} must be hard");
     }
 }
+
+mod native;
 
 /// The live `dlopen(RTLD_NOLOAD)` load path: with `libwayland-client` NOT mapped into this test
 /// process, `SysWlAbi::load()` returns a typed soft error (never a null-fn backend, never a fake up).

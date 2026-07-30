@@ -50,6 +50,7 @@ pub(crate) struct ProcessConfig {
     pub(crate) overlay: Option<OverlayConfig>,
     pub(crate) owners: Vec<(PathBuf, u32, u32)>,
     pub(crate) filesystem_generation: PathBuf,
+    pub(crate) translation_cache: Option<PathBuf>,
     pub(crate) checkpoint: Option<CheckpointConfig>,
     pub(crate) guest: Guest,
     pub(crate) process: Process,
@@ -86,7 +87,7 @@ impl std::fmt::Debug for CheckpointConfig {
 #[async_trait]
 pub(crate) trait Running: Send + Sync {
     fn id(&self) -> u64;
-    fn domain(&self) -> Option<hl_engine::Domain>;
+    fn domain(&self) -> hl_engine::Domain;
     fn checkpointable(&self) -> bool;
     async fn wait(self: Arc<Self>) -> Result<ExitStatus>;
     async fn signal(&self, signal: Signal) -> Result<()>;

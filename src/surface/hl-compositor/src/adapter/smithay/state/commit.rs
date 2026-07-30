@@ -1,12 +1,21 @@
 use super::*;
 use super::{buffer::BufferReader, output::Region};
 
+mod membership;
+#[cfg(feature = "macos-surface")]
+mod region;
+
 impl HlState {
     /// Translates committed Smithay state into the neutral scene and drives presentation/frame pacing.
     pub(super) fn on_commit(&mut self, surface: &WlSurface) {
         let Some(sid) = self.sid(surface) else {
             return;
         };
+        let was_mapped = self
+            .engine
+            .scene
+            .get(sid)
+            .is_some_and(|surface| surface.buffer.is_some());
 
         // Mirror Smithay's just-applied subsurface state (set_position offset, sync/desync, and the
         // place_above/place_below z-order) into the scene BEFORE the engine composes/paces this commit: a
@@ -127,6 +136,17 @@ impl HlState {
             )
         });
 
+        #[cfg(feature = "macos-surface")]
+        let mut external = None;
+        #[cfg(feature = "macos-surface")]
+        let mut native_buffer = None;
+        #[cfg(feature = "macos-surface")]
+        let mut native_external = None;
+        #[cfg(feature = "macos-surface")]
+        let mut native_metadata = None;
+        #[cfg(feature = "macos-surface")]
+        let replaces_buffer = assignment.is_some();
+
         // Build the neutral commit from the buffer assignment, depositing pixels for the presenter.
         let commit = match assignment {
             Some(BufferAssignment::NewBuffer(buffer)) => {
@@ -136,6 +156,53 @@ impl HlState {
                 // GENUINELY read from the client's fd (there is no GPU here), so the composited frame
                 // matches the buffer EXACTLY, just like shm.
                 let reader = BufferReader::new(&buffer);
+                #[cfg(feature = "macos-surface")]
+                match reader.external() {
+                    super::buffer::External::Pending(metadata)
+                    | super::buffer::External::Published(metadata)
+                        if self.native_frames_enabled() =>
+                    {
+                        external = Some((metadata.token, metadata.serial));
+                        native_buffer = Some(buffer.clone());
+                        native_external = get_dmabuf(&buffer).ok().cloned();
+                        native_metadata = Some(super::native::Metadata {
+                            width: metadata.width,
+                            height: metadata.height,
+                            stride: metadata.stride,
+                            format: metadata.format,
+                        });
+                        let mut commit = Commit::attach(BufferState {
+                            tex_w: metadata.width,
+                            tex_h: metadata.height,
+                            format: metadata.format,
+                            buffer_scale: scale,
+                            gpu: true,
+                        });
+                        commit.damage = buffer_damage
+                            .as_deref()
+                            .map(|damage| {
+                                region::surface(
+                                    damage,
+                                    metadata.width,
+                                    metadata.height,
+                                    scale,
+                                    transform,
+                                )
+                            })
+                            .unwrap_or_else(|| damage.clone());
+                        commit
+                    }
+                    super::buffer::External::Pending(_)
+                    | super::buffer::External::Published(_)
+                    | super::buffer::External::Malformed => {
+                        buffer.release();
+                        Commit::default()
+                    }
+                    super::buffer::External::Linear => {
+                        self.read_buffer(sid, &buffer, reader, buffer_damage, scale, &damage)
+                    }
+                }
+                #[cfg(not(feature = "macos-surface"))]
                 match reader
                     .shm_rgba()
                     .or_else(|| reader.dmabuf_rgba())
@@ -188,6 +255,46 @@ impl HlState {
             ..commit
         };
 
+        #[cfg(feature = "macos-surface")]
+        let association = self.take_commit_association(sid, external);
+        #[cfg(feature = "macos-surface")]
+        if replaces_buffer {
+            self.replace_native_commit(sid);
+        }
+        #[cfg(feature = "macos-surface")]
+        if let Some((token, serial)) = association {
+            if self.native_frames_enabled() {
+                if external.is_some() {
+                    hl_count!(tag::WAYLAND, "private_dmabuf_commits");
+                }
+                let deferred = super::native::Deferred {
+                    surface: sid,
+                    commit,
+                    was_mapped,
+                    min_size,
+                    max_size,
+                    frame_callbacks,
+                    feedbacks,
+                    buffer: native_buffer,
+                    external: native_external,
+                    metadata: native_metadata,
+                };
+                let result = if external.is_some() {
+                    self.defer_external_commit(token, serial, deferred)
+                } else {
+                    self.defer_native_commit(token, serial, deferred)
+                };
+                match result {
+                    super::native::Defer::Ready(ready) => self.finish_native(ready),
+                    super::native::Defer::Reuse(deferred) => self.reuse_native(deferred),
+                    super::native::Defer::Waiting => {}
+                }
+                return;
+            }
+        }
+        #[cfg(not(feature = "macos-surface"))]
+        let _association = self.take_surface_association(sid);
+
         // Hold this commit's `wl_surface.frame` callbacks until the frame they belong to actually reaches
         // the presenter. Firing them here — before the present decision — would tell the client "your
         // content is on screen, draw the next frame" even when the frame was throttled and NEVER shown,
@@ -208,12 +315,64 @@ impl HlState {
                 .extend(feedbacks);
         }
 
+        self.finish_commit(sid, commit, was_mapped, min_size, max_size);
+    }
+
+    #[cfg(feature = "macos-surface")]
+    fn read_buffer(
+        &mut self,
+        sid: SurfaceId,
+        buffer: &WlBuffer,
+        reader: BufferReader<'_>,
+        buffer_damage: Option<Vec<Rect>>,
+        scale: i32,
+        damage: &[Rect],
+    ) -> Commit {
+        match reader
+            .shm_rgba()
+            .or_else(|| reader.dmabuf_rgba())
+            .or_else(|| reader.single_pixel_rgba())
+        {
+            Some((mut stored, format)) => {
+                stored.damage = buffer_damage.filter(|damage| !damage.is_empty());
+                let state = BufferState {
+                    tex_w: stored.width,
+                    tex_h: stored.height,
+                    format,
+                    buffer_scale: scale,
+                    gpu: false,
+                };
+                self.engine.presenter_mut().deposit(sid, stored);
+                buffer.release();
+                let mut commit = Commit::attach(state);
+                commit.damage = damage.to_vec();
+                commit
+            }
+            None => Commit::default(),
+        }
+    }
+
+    pub(super) fn finish_commit(
+        &mut self,
+        sid: SurfaceId,
+        commit: Commit,
+        was_mapped: bool,
+        min_size: (Option<i32>, Option<i32>),
+        max_size: (Option<i32>, Option<i32>),
+    ) {
         // Drive the neutral policy: apply + (unless cursor / sync-subsurface) compose, present, pace.
         hl_count!(tag::WAYLAND, "commits");
         let changed = self.engine.apply_commit(sid, commit);
+        let mapped_toplevel = !was_mapped
+            && self.engine.scene.get(sid).is_some_and(|surface| {
+                surface.buffer.is_some() && matches!(surface.role, SurfaceRole::Toplevel)
+            });
         if let Some(surface) = self.engine.scene.get_mut(sid) {
             surface.min_size = min_size;
             surface.max_size = max_size;
+        }
+        if mapped_toplevel {
+            self.set_keyboard_focus(Some(sid));
         }
         self.reconcile_window(sid);
         let outcome = self.engine.complete_commit(sid, changed);
@@ -249,120 +408,5 @@ impl HlState {
         // the output (so a client learns which output — and thus scale — it is displayed on); one that
         // unmapped leaves it. Sent exactly once per map/unmap transition.
         self.update_output_membership(sid);
-    }
-
-    /// Emit `wl_surface.enter` / `wl_surface.leave` as the toplevel root owning `sid` maps (gains a
-    /// committed buffer), unmaps (loses it), or is routed to a different output. The target output is the
-    /// root's SELECTED output (its position-based route, else the primary — see
-    /// [`crate::scene::model::Scene::selected_output`]). Subsurfaces/popups follow their root, so only the
-    /// toplevel root is tracked. Sent exactly once per transition: a mapped surface whose selected output
-    /// changed gets a `leave` for the old `wl_output` and an `enter` for the new one; an unmapped surface
-    /// gets a `leave` for whichever it was on. A no-op when the client has not (yet) bound the target
-    /// `wl_output` beyond the bookkeeping — smithay re-sends `enter` for tracked surfaces on a later bind.
-    pub(super) fn update_output_membership(&mut self, sid: SurfaceId) {
-        let Some(root) = self.engine.scene.window_root(sid) else {
-            return;
-        };
-        if !matches!(
-            self.engine.scene.get(root).map(|s| &s.role),
-            Some(SurfaceRole::Toplevel)
-        ) {
-            return;
-        }
-        let Some(wl_surface) = self.surfaces_by_id.get(&root).cloned() else {
-            return;
-        };
-        let mapped = self.engine.scene.get(root).and_then(|s| s.buffer).is_some();
-        let current = self.entered_outputs.get(&root).copied();
-        let target = self.engine.scene.selected_output(root).map(|o| o.id);
-        if mapped {
-            let Some(target) = target else { return };
-            if current != Some(target) {
-                // Leave the output we were on (if any) before entering the new one, so a client observes a
-                // clean handoff (leave A, then enter B) rather than being on two outputs at once.
-                if let Some(cur) = current {
-                    if let Some(handle) = self.wl_output_handle(cur) {
-                        handle.leave(&wl_surface);
-                    }
-                }
-                if let Some(handle) = self.wl_output_handle(target) {
-                    handle.enter(&wl_surface);
-                }
-                self.entered_outputs.insert(root, target);
-            }
-        } else if let Some(cur) = current {
-            if let Some(handle) = self.wl_output_handle(cur) {
-                handle.leave(&wl_surface);
-            }
-            self.entered_outputs.remove(&root);
-        }
-    }
-
-    /// The smithay `wl_output` handle for a neutral [`OutputId`], if advertised.
-    pub(super) fn wl_output_handle(&self, id: OutputId) -> Option<&WlOutputHandle> {
-        self.outputs
-            .iter()
-            .find(|(oid, _)| *oid == id)
-            .map(|(_, h)| h)
-    }
-
-    /// The primary output's `wl_output` handle (the first advertised) — the fallback the presentation
-    /// feedback names when a surface has no resolvable selected output.
-    pub(super) fn primary_wl_output(&self) -> Option<&WlOutputHandle> {
-        self.outputs.first().map(|(_, h)| h)
-    }
-
-    /// The integer scale of the output surface `sid`'s window root is displayed on (its selected output,
-    /// else the primary). Sources the fractional-scale hint so a surface on a HiDPI output learns a larger
-    /// preferred scale than one on a scale-1 output.
-    pub(super) fn output_scale_for(&self, sid: SurfaceId) -> i32 {
-        let root = self.engine.scene.window_root(sid).unwrap_or(sid);
-        self.engine
-            .scene
-            .selected_output(root)
-            .map(|o| o.scale.max(1))
-            .unwrap_or(1)
-    }
-
-    /// (Re)send `wp_fractional_scale_v1.preferred_scale` for `sid` from its current output's scale. A no-op
-    /// if the client created no `wp_fractional_scale_v1` on the surface, or if the value is unchanged
-    /// (smithay's `set_preferred_scale` dedups) — so it is safe to call on every route change.
-    pub(super) fn send_preferred_fractional_scale(&self, sid: SurfaceId) {
-        let scale = self.output_scale_for(sid) as f64;
-        if let Some(surface) = self.surfaces_by_id.get(&sid) {
-            with_states(surface, |states| {
-                with_fractional_scale(states, |fractional| {
-                    fractional.set_preferred_scale(scale);
-                });
-            });
-        }
-    }
-
-    /// Route the toplevel at index `n` (ascending surface-id order) to the output whose logical rectangle
-    /// contains global logical point `(x, y)`, then emit the resulting `wl_surface.leave`/`enter` and
-    /// refresh its preferred fractional scale. The host/window-manager seam a multi-output demo drives to
-    /// "place" a window on a monitor: real position-based routing (the compositor decides which output a
-    /// window is on from where it sits), reduced to the smallest correct form — a point tested against each
-    /// output's `logical_rect`. A point outside every output, or an out-of-range index, is ignored.
-    pub(super) fn move_toplevel_to_point(&mut self, n: usize, x: i32, y: i32) {
-        let Some(root) = self.toplevel_at(n) else {
-            return;
-        };
-        let Some(output_id) = self.output_at_point(x, y) else {
-            return;
-        };
-        self.engine.scene.route_surface_to_output(root, output_id);
-        self.update_output_membership(root);
-        self.send_preferred_fractional_scale(root);
-    }
-
-    /// The neutral [`OutputId`] whose logical rectangle contains global logical point `(x, y)`, if any.
-    pub(super) fn output_at_point(&self, x: i32, y: i32) -> Option<OutputId> {
-        self.engine
-            .scene
-            .outputs()
-            .iter()
-            .find(|o| o.contains_point(x, y))
-            .map(|o| o.id)
     }
 }

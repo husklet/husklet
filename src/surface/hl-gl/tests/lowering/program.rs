@@ -1,5 +1,180 @@
 use super::*;
 
+#[test]
+fn seventeenth_uniform_reaches_the_draws_uploaded_uniform_buffer() {
+    let mut c = ctx_640x480();
+    let mut sink = RecordingSink::with_full_caps();
+    let vbo = c.buffers.gen();
+    record::bind_buffer(&mut c, GL_ARRAY_BUFFER, vbo);
+    record::buffer_data(&mut c, GL_ARRAY_BUFFER, &[0; 24], 0x88E4);
+    record::vertex_attrib_pointer(&mut c, 0, 2, GL_FLOAT, false, 8, 0);
+    record::enable_vertex_attrib(&mut c, 0);
+
+    let vs_source = "#version 300 es\n\
+         uniform vec4 sk_RTAdjust;\n\
+         uniform mat3 umatrix_S1_c0_c0_c1;\n\
+         in vec2 position;\n\
+         out vec2 coords;\n\
+         void main(){ coords = position; gl_Position = sk_RTAdjust + \
+             vec4((umatrix_S1_c0_c0_c1 * vec3(position, 1.0)).xy, 0.0, 1.0); }\n";
+    let fs_source = "#version 300 es\n\
+         precision mediump float;\n\
+         uniform vec2 u_skRTFlip;\n\
+         uniform vec4 uDstTextureCoords_S0;\n\
+         uniform vec4 uthresholds_S1_c0_c0_c0[2];\n\
+         uniform vec4 uscale_S1_c0_c0_c0[8];\n\
+         uniform vec4 ubias_S1_c0_c0_c0[8];\n\
+         uniform float ubias_S1_c0_c0_c1_c0;\n\
+         uniform float uscale_S1_c0_c0_c1_c0;\n\
+         uniform mat3 umatrix_S1_c0_c0_c1;\n\
+         uniform vec4 uleftBorderColor_S1_c0_c0;\n\
+         uniform vec4 urightBorderColor_S1_c0_c0;\n\
+         uniform mat3 umatrix_S1_c1;\n\
+         uniform float urange_S1;\n\
+         uniform vec4 uinnerRect_S2;\n\
+         uniform vec2 uscale_S2;\n\
+         uniform vec2 uinvRadiiXY_S2;\n\
+         uniform vec4 ublend_S3;\n\
+         in vec2 coords;\n\
+         out vec4 color;\n\
+         void main(){ color = ublend_S3 + vec4(coords, u_skRTFlip.x, urange_S1); }\n";
+    assert!(
+        !glsl::Source::new(vs_source).is_forward_verbatim()
+            && !glsl::Source::new(fs_source).is_forward_verbatim(),
+        "regression must exercise translate_render"
+    );
+
+    let vs = record::create_shader(&mut c, GL_VERTEX_SHADER);
+    record::shader_source(&mut c, vs, vs_source);
+    record::compile_shader(&mut c, vs);
+    let fs = record::create_shader(&mut c, GL_FRAGMENT_SHADER);
+    record::shader_source(&mut c, fs, fs_source);
+    record::compile_shader(&mut c, fs);
+    let program = record::create_program(&mut c);
+    record::attach_shader(&mut c, program, vs);
+    record::attach_shader(&mut c, program, fs);
+    assert!(record::link_program(&mut c, program));
+    record::use_program(&mut c, program);
+
+    let location = c
+        .programs
+        .program(program)
+        .expect("linked program")
+        .uniform_location("ublend_S3");
+    assert_eq!(
+        location, 31,
+        "array elements before the 17th declaration occupy GL locations"
+    );
+    let offset = c
+        .programs
+        .program(program)
+        .expect("linked program")
+        .unis
+        .iter()
+        .find(|uniform| uniform.name == "ublend_S3")
+        .expect("ublend_S3 layout")
+        .off as usize;
+    let value = 37.25f32.to_le_bytes();
+    record::uniform_at(&mut c, location as usize, &value);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+
+    let batch = &sink.batches[0];
+    let uniform_buffer = batch
+        .iter()
+        .find_map(|command| match command {
+            Cmd::CreateBuffer(id, descriptor) if descriptor.usage & buffer_usage::UNIFORM != 0 => {
+                Some(*id)
+            }
+            _ => None,
+        })
+        .expect("draw creates its uniform buffer");
+    let bytes = batch
+        .iter()
+        .find_map(|command| match command {
+            Cmd::WriteBuffer { id, data, .. } if *id == uniform_buffer => Some(data),
+            _ => None,
+        })
+        .expect("draw uploads the uniform buffer");
+    assert_eq!(
+        &bytes[offset..offset + value.len()],
+        &value,
+        "the 17th declaration occupies its exact std140 offset"
+    );
+
+    let fragment = batch
+        .iter()
+        .filter_map(|command| match command {
+            Cmd::CreateShader {
+                kind: ShaderPayloadKind::Glsl,
+                spirv,
+                ..
+            } => {
+                let descriptor = hl_gpu::protocol::model::kernel::GlslDescriptor::from_words(spirv)
+                    .expect("GLSL payload")
+                    .expect("valid GLSL descriptor");
+                (descriptor.stage == hl_gpu::protocol::model::kernel::glsl_stage::FRAGMENT)
+                    .then_some(descriptor.source)
+            }
+            _ => None,
+        })
+        .next()
+        .expect("fragment shader payload");
+    assert!(
+        fragment.contains("vec4 ublend_S3;") && fragment.contains("ublend_S3 +"),
+        "lowering must send the complete translated shader:\n{fragment}"
+    );
+}
+
+#[test]
+fn packed_matrix_and_array_updates_are_expanded_to_std140() {
+    let mut context = ctx_640x480();
+    let vertex = record::create_shader(&mut context, GL_VERTEX_SHADER);
+    record::shader_source(
+        &mut context,
+        vertex,
+        "uniform mat2 transform;\nuniform float weights[2];\n\
+         void main(){ gl_Position = vec4(transform[0] * weights[0], 0.0, 1.0); }\n",
+    );
+    record::compile_shader(&mut context, vertex);
+    let fragment = record::create_shader(&mut context, GL_FRAGMENT_SHADER);
+    record::shader_source(
+        &mut context,
+        fragment,
+        "void main(){ gl_FragColor = vec4(1.0); }\n",
+    );
+    record::compile_shader(&mut context, fragment);
+    let program = record::create_program(&mut context);
+    record::attach_shader(&mut context, program, vertex);
+    record::attach_shader(&mut context, program, fragment);
+    assert!(record::link_program(&mut context, program));
+    record::use_program(&mut context, program);
+
+    let matrix = [1.0f32, 2.0, 3.0, 4.0]
+        .into_iter()
+        .flat_map(f32::to_le_bytes)
+        .collect::<Vec<_>>();
+    record::uniform_at(&mut context, 0, &matrix);
+    let weights = [5.0f32, 6.0]
+        .into_iter()
+        .flat_map(f32::to_le_bytes)
+        .collect::<Vec<_>>();
+    record::uniform_at(&mut context, 1, &weights);
+
+    let bytes = &context
+        .programs
+        .program(program)
+        .expect("linked program")
+        .ubuf;
+    assert_eq!(&bytes[0..8], &matrix[0..8]);
+    assert_eq!(&bytes[8..16], &[0; 8]);
+    assert_eq!(&bytes[16..24], &matrix[8..16]);
+    assert_eq!(&bytes[24..32], &[0; 8]);
+    assert_eq!(&bytes[32..36], &weights[0..4]);
+    assert_eq!(&bytes[36..48], &[0; 12]);
+    assert_eq!(&bytes[48..52], &weights[4..8]);
+}
+
 /// A linked program's shader modules + render pipeline are created ONCE and re-referenced by their stable
 /// IR ids on every later frame/draw that reuses the program (the program-keyed residency cache), so a reused
 /// GskGpu program costs ZERO host shader compiles + pipeline builds after the first frame — the fix for the

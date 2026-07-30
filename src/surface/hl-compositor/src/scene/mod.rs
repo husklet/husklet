@@ -15,12 +15,15 @@ pub mod model;
 pub mod port;
 pub mod service;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use hl_log::{hl_count, hl_debug, hl_span, tag};
 
 use model::{Scene, SurfaceId, SurfaceRole};
-use port::{Clock, PresentOutcome, PresentTiming, Presenter};
+use port::{
+    Clock, CompletionOutcome, PresentOutcome, PresentTiming, PresentationCompletion,
+    PresentationId, Presenter,
+};
 use service::{commit_surface, schedule, Commit, FramePacing};
 
 /// Terminal bound on callbacks retained across failed presents (mirrors `MAX_RETAINED_CALLBACKS`): a
@@ -38,9 +41,19 @@ pub struct FrameOutcome {
     pub callbacks_fired: u32,
     /// The delivery serial, when the base frame was `Delivered`.
     pub serial: Option<u64>,
+    /// Asynchronous host-display submission still awaiting terminal presentation evidence.
+    pub submissions: Vec<PresentationId>,
     /// The frame was withheld by the vsync throttle (not yet due) — no present attempted, no callbacks
     /// fired. The retained frame still stands and will present on a later tick.
     pub throttled: bool,
+}
+
+struct PendingFrame {
+    root: SurfaceId,
+    submissions: HashSet<PresentationId>,
+    callbacks: HashMap<SurfaceId, u32>,
+    deliver: bool,
+    failed: bool,
 }
 
 /// The outcome of a `commit`: whether the surface's content changed, and the present it triggered (if
@@ -61,6 +74,9 @@ pub struct Compositor<P: Presenter, C: Clock> {
     last_present_ns: HashMap<SurfaceId, u64>,
     /// Per-surface count of frame callbacks retained across failed presents (bounded).
     retained_callbacks: HashMap<SurfaceId, u32>,
+    pending_frames: HashMap<SurfaceId, PendingFrame>,
+    pending_submissions: HashMap<PresentationId, SurfaceId>,
+    pending_roots: HashMap<SurfaceId, PresentationId>,
 }
 
 impl<P: Presenter, C: Clock> Compositor<P, C> {
@@ -71,6 +87,9 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
             clock,
             last_present_ns: HashMap::new(),
             retained_callbacks: HashMap::new(),
+            pending_frames: HashMap::new(),
+            pending_submissions: HashMap::new(),
+            pending_roots: HashMap::new(),
         }
     }
 
@@ -82,6 +101,9 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
             clock,
             last_present_ns: HashMap::new(),
             retained_callbacks: HashMap::new(),
+            pending_frames: HashMap::new(),
+            pending_submissions: HashMap::new(),
+            pending_roots: HashMap::new(),
         }
     }
 
@@ -93,6 +115,18 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
     }
     pub fn clock(&self) -> &C {
         &self.clock
+    }
+
+    /// Cancel an in-flight atomic frame and detach every completion route for it. Native resources may
+    /// finish asynchronously in the presenter, but late completion IDs can no longer affect this root.
+    pub fn cancel_root(&mut self, root: SurfaceId) {
+        if let Some(frame) = self.pending_frames.remove(&root) {
+            for submission in frame.submissions {
+                self.pending_submissions.remove(&submission);
+            }
+        }
+        self.pending_roots.remove(&root);
+        self.presenter.cancel(root);
     }
 
     /// Callbacks retained for `sid` across failed presents (test/diagnostic).
@@ -159,6 +193,16 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
     /// layer's outcome.
     pub fn present_root(&mut self, root: SurfaceId) -> FrameOutcome {
         let _span = hl_span!(tag::PRESENT, "present");
+        if let Some(&submission) = self.pending_roots.get(&root) {
+            return FrameOutcome {
+                pacing: FramePacing::Pending,
+                presented: Vec::new(),
+                callbacks_fired: 0,
+                serial: None,
+                submissions: vec![submission],
+                throttled: false,
+            };
+        }
         // A root with no output is unpresentable.
         let Some(output) = self.scene.selected_output(root).cloned() else {
             let fired = self.pace_tree(root, FramePacing::TerminalFailure);
@@ -167,6 +211,7 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
                 presented: Vec::new(),
                 callbacks_fired: fired,
                 serial: None,
+                submissions: Vec::new(),
                 throttled: false,
             };
         };
@@ -179,6 +224,7 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
                 presented: Vec::new(),
                 callbacks_fired: fired,
                 serial: None,
+                submissions: Vec::new(),
                 throttled: false,
             };
         }
@@ -192,6 +238,7 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
                 presented: Vec::new(),
                 callbacks_fired: fired,
                 serial: None,
+                submissions: Vec::new(),
                 throttled: false,
             };
         }
@@ -207,43 +254,102 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
                 presented: Vec::new(),
                 callbacks_fired: 0,
                 serial: None,
+                submissions: Vec::new(),
                 throttled: true,
             };
         }
 
         // Compose the ordered layers, then present each through the port (scene borrow released first).
-        let Some(frame) = self.scene.compose_frame(root) else {
+        let timing = PresentTiming::fallback(now, refresh);
+        let Some(frames) = self.scene.compose_present_frames(root, output.id, timing) else {
             let fired = self.pace_tree(root, FramePacing::TerminalFailure);
             return FrameOutcome {
                 pacing: FramePacing::TerminalFailure,
                 presented: Vec::new(),
                 callbacks_fired: fired,
                 serial: None,
+                submissions: Vec::new(),
                 throttled: false,
             };
         };
-        let timing = PresentTiming::fallback(now, refresh);
-
-        let output_id = output.id;
         let mut presented = Vec::new();
-        let mut base_outcome: Option<PresentOutcome> = None;
-        for item in &frame.items {
-            let feedback = self
-                .presenter
-                .present(output_id, &item.image, &item.damage, timing);
-            presented.push(item.image.surface);
-            base_outcome.get_or_insert(feedback.outcome);
+        let mut outcomes = Vec::with_capacity(frames.len());
+        for frame in &frames {
+            let feedback = self.presenter.present_frame(frame);
+            presented.push(frame.role);
+            outcomes.push(feedback.outcome);
         }
-
-        let pacing = base_outcome
-            .map(FramePacing::from)
-            .unwrap_or(FramePacing::TerminalFailure);
-        let serial = match base_outcome {
-            Some(PresentOutcome::Delivered { serial, .. }) => Some(serial),
+        let submissions = outcomes
+            .iter()
+            .filter_map(|outcome| match outcome {
+                PresentOutcome::Pending { id } => Some(*id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let unique_submissions = submissions.iter().copied().collect::<HashSet<_>>();
+        let submission_conflict = unique_submissions
+            .iter()
+            .any(|id| self.pending_submissions.contains_key(id));
+        if unique_submissions.len() != submissions.len() || submission_conflict {
+            for frame in &frames {
+                self.presenter.cancel(frame.role);
+            }
+            let fired = self.pace_tree(root, FramePacing::TerminalFailure);
+            return FrameOutcome {
+                pacing: FramePacing::TerminalFailure,
+                presented,
+                callbacks_fired: fired,
+                serial: None,
+                submissions: Vec::new(),
+                throttled: false,
+            };
+        }
+        let failed = outcomes.contains(&PresentOutcome::TerminalFailure);
+        let retry = outcomes.iter().any(|outcome| {
+            matches!(
+                outcome,
+                PresentOutcome::Offscreen | PresentOutcome::RetryableFailure
+            )
+        });
+        let serial = outcomes.iter().find_map(|outcome| match outcome {
+            PresentOutcome::Delivered { serial, .. } => Some(*serial),
             _ => None,
+        });
+        let pacing = if submissions.is_empty() {
+            if failed {
+                FramePacing::TerminalFailure
+            } else if retry {
+                FramePacing::RetryableFailure
+            } else if serial.is_some() {
+                FramePacing::Presented
+            } else {
+                FramePacing::TerminalFailure
+            }
+        } else {
+            FramePacing::Pending
         };
-
-        if pacing == FramePacing::Presented {
+        if !submissions.is_empty() {
+            let callbacks = self.take_submission_callbacks(root);
+            let deliver = !failed && !retry;
+            if deliver {
+                self.clear_tree_dirty(root);
+            }
+            let ids = unique_submissions;
+            for id in &ids {
+                self.pending_submissions.insert(*id, root);
+            }
+            self.pending_frames.insert(
+                root,
+                PendingFrame {
+                    root,
+                    submissions: ids,
+                    callbacks,
+                    deliver,
+                    failed,
+                },
+            );
+            self.pending_roots.insert(root, submissions[0]);
+        } else if pacing == FramePacing::Presented {
             hl_count!(tag::PRESENT, "presented");
             // Latency trace: stamp the host-monotonic time this frame actually reached the presenter (the
             // END of the input→present cycle). Pairs with the adapter's `input_dispatch … t_us=` line so a
@@ -258,14 +364,87 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
             self.clear_tree_dirty(root);
             self.last_present_ns.insert(root, now);
         }
-        let fired = self.pace_tree(root, pacing);
+        let fired = if !submissions.is_empty() {
+            0
+        } else {
+            self.pace_tree(root, pacing)
+        };
         FrameOutcome {
             pacing,
             presented,
             callbacks_fired: fired,
             serial,
+            submissions,
             throttled: false,
         }
+    }
+
+    /// Settle one asynchronous host presentation. Unknown or duplicate IDs are ignored.
+    pub fn complete_presentation(
+        &mut self,
+        completion: PresentationCompletion,
+    ) -> Option<(SurfaceId, FrameOutcome)> {
+        let root = self.pending_submissions.remove(&completion.id)?;
+        let pending = self.pending_frames.get_mut(&root)?;
+        pending.submissions.remove(&completion.id);
+        if completion.outcome == CompletionOutcome::TerminalFailure {
+            pending.failed = true;
+        }
+        if !pending.submissions.is_empty() {
+            return None;
+        }
+        let pending = self.pending_frames.remove(&root)?;
+        self.pending_roots.remove(&root);
+        let (pacing, serial, callbacks_fired) = match completion.outcome {
+            CompletionOutcome::Delivered {
+                serial: _,
+                timing: _,
+            } if pending.failed => (FramePacing::TerminalFailure, None, 0),
+            CompletionOutcome::Delivered {
+                serial: _,
+                timing: _,
+            } if !pending.deliver => (FramePacing::RetryableFailure, None, 0),
+            CompletionOutcome::Delivered { serial, timing: _ } => {
+                // The backend timestamp may use the host's boot-time epoch while this injected clock may
+                // use any fixed epoch. Pacing compares values only within the injected clock domain.
+                self.last_present_ns
+                    .insert(pending.root, self.clock.now_nanos());
+                (
+                    FramePacing::Presented,
+                    Some(serial),
+                    pending.callbacks.values().copied().sum(),
+                )
+            }
+            CompletionOutcome::TerminalFailure => (FramePacing::TerminalFailure, None, 0),
+        };
+        Some((
+            root,
+            FrameOutcome {
+                pacing,
+                presented: Vec::new(),
+                callbacks_fired,
+                serial,
+                submissions: vec![completion.id],
+                throttled: false,
+            },
+        ))
+    }
+
+    fn take_submission_callbacks(&mut self, root: SurfaceId) -> HashMap<SurfaceId, u32> {
+        let mut callbacks = HashMap::new();
+        for sid in self.present_tree_surfaces(root) {
+            let current = self
+                .scene
+                .get_mut(sid)
+                .map(|surface| std::mem::take(&mut surface.pending_callbacks))
+                .unwrap_or(0);
+            let retained = self.retained_callbacks.remove(&sid).unwrap_or(0);
+            let count = current.saturating_add(retained);
+            if count > 0 {
+                callbacks.insert(sid, count);
+            }
+        }
+        callbacks
     }
 
     /// Every surface in `root`'s presented tree (root + subsurface descendants + popups + their

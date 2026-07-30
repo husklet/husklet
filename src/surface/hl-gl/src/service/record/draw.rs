@@ -8,10 +8,10 @@ impl GlContext {
         let (w, h) = self.target_wh();
         let mut d = DrawCall {
             is_clear: true,
-            ..self.snapshot()
+            ..self.snapshot(false)
         };
         d.clear_rect = [0, 0, w, h];
-        self.draws.push(d);
+        self.record_draw(d);
     }
 }
 
@@ -224,7 +224,7 @@ impl DrawCall {
 /// geometry draw (never for a `glClear` — clears do not affect occlusion queries).
 impl GlContext {
     pub(super) fn accumulate_occlusion(&mut self, d: &DrawCall) {
-        self.queries.accumulate(d.coverage());
+        self.local.queries.accumulate(d.coverage());
     }
 }
 
@@ -235,8 +235,8 @@ pub fn draw_arrays(ctx: &mut GlContext, mode: u32, first: i32, count: i32) {
 
 /// `glDrawArraysInstanced(mode, first, count, instances)` — like [`draw_arrays`] with an explicit
 /// instance count, recorded onto the draw so the frame builder lowers a `Draw { instance_count }`. A
-/// negative instance count raises `GL_INVALID_VALUE` (first-error-wins) and records nothing; a zero
-/// count (or vertex count) is a legal no-op.
+/// negative first, count, or instance count raises `GL_INVALID_VALUE` (first-error-wins) and records
+/// nothing; a zero count (or vertex count) is a legal no-op.
 pub fn draw_arrays_instanced(
     ctx: &mut GlContext,
     mode: u32,
@@ -244,14 +244,18 @@ pub fn draw_arrays_instanced(
     count: i32,
     instances: i32,
 ) {
-    if instances < 0 || count < 0 {
+    if first < 0 || instances < 0 || count < 0 {
         ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    if ctx.draw_uses_mapped_buffer() {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
         return;
     }
     if count == 0 || instances == 0 {
         return;
     }
-    let mut d = ctx.snapshot();
+    let mut d = ctx.snapshot(true);
     d.mode = mode;
     d.first = first;
     d.count = count;
@@ -259,7 +263,7 @@ pub fn draw_arrays_instanced(
     // Client-side vertex arrays span [0, first+count): the transient buffer is indexed by `first_vertex`.
     d.capture_client_vbufs(first.max(0) as usize + count as usize);
     ctx.accumulate_occlusion(&d);
-    ctx.draws.push(d);
+    ctx.record_draw(d);
 }
 
 /// `glDrawElements(mode, count, index_type, offset)` — snapshot + append an indexed draw (one instance).
@@ -282,20 +286,24 @@ pub fn draw_elements_instanced(
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
+    if ctx.draw_uses_mapped_buffer() {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
     if count == 0 || instances == 0 {
         return;
     }
-    let mut d = ctx.snapshot();
+    let mut d = ctx.snapshot(true);
     d.mode = mode;
     d.count = count;
     d.indexed = true;
     d.index_type = index_type;
     d.index_offset = offset;
     d.instance_count = instances as u32;
-    d.elem_buf = ctx.element_buffer;
+    d.elem_buf = ctx.local.element_buffer;
     capture_indexed(ctx, &mut d, count, index_type, offset, 0);
     ctx.accumulate_occlusion(&d);
-    ctx.draws.push(d);
+    ctx.record_draw(d);
 }
 
 /// `glDrawElementsBaseVertex(mode, count, type, offset, basevertex)` — an indexed draw whose fetched
@@ -326,10 +334,14 @@ pub fn draw_elements_instanced_base_vertex(
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
+    if ctx.draw_uses_mapped_buffer() {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
     if count == 0 || instances == 0 {
         return;
     }
-    let mut d = ctx.snapshot();
+    let mut d = ctx.snapshot(true);
     d.mode = mode;
     d.count = count;
     d.indexed = true;
@@ -337,10 +349,10 @@ pub fn draw_elements_instanced_base_vertex(
     d.index_offset = offset;
     d.instance_count = instances as u32;
     d.base_vertex = base_vertex;
-    d.elem_buf = ctx.element_buffer;
+    d.elem_buf = ctx.local.element_buffer;
     capture_indexed(ctx, &mut d, count, index_type, offset, base_vertex);
     ctx.accumulate_occlusion(&d);
-    ctx.draws.push(d);
+    ctx.record_draw(d);
 }
 
 /// `glDrawRangeElements(mode, start, end, count, type, offset)` — a bounded indexed draw. `[start, end]`
@@ -379,6 +391,11 @@ pub(super) fn read_u32_at(ctx: &GlContext, target: u32, off: usize) -> Option<u3
 /// This model reads the CPU-side indirect struct and records the equivalent instanced array draw. A
 /// missing / too-short indirect buffer is an honest no-op (nothing drawn).
 pub fn draw_arrays_indirect(ctx: &mut GlContext, mode: u32, indirect: usize) {
+    let indirect_buffer = ctx.buffer_for_target(GL_DRAW_INDIRECT_BUFFER);
+    if ctx.buffers.is_mapped(indirect_buffer) {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
     let count = match read_u32_at(ctx, GL_DRAW_INDIRECT_BUFFER, indirect) {
         Some(v) => v as i32,
         None => return,
@@ -391,6 +408,11 @@ pub fn draw_arrays_indirect(ctx: &mut GlContext, mode: u32, indirect: usize) {
 /// `glDrawElementsIndirect(mode, type, indirect)` — the indexed indirect draw; reads `{count,
 /// instanceCount, firstIndex, baseVertex, baseInstance}` from the bound indirect buffer.
 pub fn draw_elements_indirect(ctx: &mut GlContext, mode: u32, index_type: u32, indirect: usize) {
+    let indirect_buffer = ctx.buffer_for_target(GL_DRAW_INDIRECT_BUFFER);
+    if ctx.buffers.is_mapped(indirect_buffer) {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
     let count = match read_u32_at(ctx, GL_DRAW_INDIRECT_BUFFER, indirect) {
         Some(v) => v as i32,
         None => return,

@@ -35,7 +35,7 @@ fn executor_nack_rolls_back_tables_and_ledger_then_connection_recovers() {
         width: 8,
         height: 8,
         format: TextureFormat::Rgba8Unorm,
-        hlp_surface: 1,
+        token: hl_gpu::SurfaceToken::new(1).unwrap(),
     };
     let swap = vec![
         texture(2, 8),
@@ -44,6 +44,7 @@ fn executor_nack_rolls_back_tables_and_ledger_then_connection_recovers() {
         Cmd::Present {
             surface: 30,
             texture: 2,
+            serial: hl_gpu::FrameSerial::new(1).unwrap(),
         },
     ];
     let err = hl_gpu::runtime::submit(&mut s, &mut exec, 256, &swap).unwrap_err();

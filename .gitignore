@@ -2,7 +2,6 @@
 **/target/
 /artifacts/
 *.o
-/website/docs/
 dd.sock
 **/.bench-cache/
 /target-mac/
@@ -14,6 +13,8 @@ dd.sock
 
 # maintainer/agent local dev helpers (never committed)
 .dev/
+docs/
+skills-lock.json
 target-*/
 /pclib_blob_*.bin
 

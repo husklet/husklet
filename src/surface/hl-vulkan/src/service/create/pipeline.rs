@@ -6,7 +6,8 @@ use crate::model::pipeline::{
 };
 use crate::*;
 use hl_gpu::protocol::model::descriptor::{
-    BlendState, ComputePipelineDesc, DepthState, RenderPipelineDesc, ShaderRef, VertexLayout,
+    BlendState, ComputePipelineDesc, DepthState, PipelineBinding, PipelineBindingKind,
+    PipelineLayout, RenderPipelineDesc, ShaderRef, VertexLayout,
 };
 use hl_gpu::protocol::model::enums::{TextureFormat, Topology};
 use hl_gpu::{Cmd, CommandSink, GpuError, Result};
@@ -63,6 +64,16 @@ pub fn create_compute_pipeline(
     shader: VkShaderModule,
     entry: &str,
 ) -> Result<VkPipeline> {
+    create_compute_pipeline_with_layout(dev, sink, shader, entry, None)
+}
+
+pub fn create_compute_pipeline_with_layout(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    shader: VkShaderModule,
+    entry: &str,
+    layout: Option<VkPipelineLayout>,
+) -> Result<VkPipeline> {
     let shader_ir = {
         let sh = dev.shaders.get(&shader).ok_or(GpuError::Invalid(
             "vkCreateComputePipelines: unknown VkShaderModule",
@@ -76,16 +87,20 @@ pub fn create_compute_pipeline(
     };
     let ir_id = dev.alloc_ir();
     let handle = dev.alloc_handle();
-    sink.submit(&[Cmd::CreateComputePipeline(
-        ir_id,
-        ComputePipelineDesc {
-            compute: ShaderRef {
-                module: shader_ir,
-                entry: entry.to_string(),
-            },
-            label: format!("vkcpipe{ir_id}"),
+    let desc = ComputePipelineDesc {
+        compute: ShaderRef {
+            module: shader_ir,
+            entry: entry.to_string(),
         },
-    )])?;
+        label: format!("vkcpipe{ir_id}"),
+    };
+    let command = match layout {
+        Some(layout) => {
+            Cmd::CreateComputePipelineLayout(ir_id, desc, pipeline_bindings(dev, layout)?)
+        }
+        None => Cmd::CreateComputePipeline(ir_id, desc),
+    };
+    sink.submit(&[command])?;
     hl_log::hl_debug!(
         hl_log::tag::VULKAN,
         "pipeline kind=compute ir={} shader={} entry={}",
@@ -158,7 +173,49 @@ pub fn create_graphics_pipeline(
     front_face: u32,
     color_write_mask: u32,
 ) -> Result<VkPipeline> {
-    use hl_gpu::protocol::model::descriptor::ColorTargetState;
+    let color_targets = color_formats
+        .into_iter()
+        .map(
+            |format| hl_gpu::protocol::model::descriptor::ColorTargetState {
+                format,
+                blend: blend.clone(),
+                write_mask: color_write_mask & 0xf,
+            },
+        )
+        .collect();
+    create_graphics_pipeline_with_layout(
+        dev,
+        sink,
+        vertex,
+        fragment,
+        vertex_layouts,
+        color_targets,
+        depth,
+        sample_count,
+        Default::default(),
+        topology,
+        cull,
+        front_face,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn create_graphics_pipeline_with_layout(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    vertex: (VkShaderModule, &str),
+    fragment: Option<(VkShaderModule, &str)>,
+    vertex_layouts: Vec<VertexLayout>,
+    color_targets: Vec<hl_gpu::protocol::model::descriptor::ColorTargetState>,
+    depth: Option<DepthState>,
+    sample_count: u32,
+    multisample: hl_gpu::protocol::model::descriptor::RenderMultisample,
+    topology: Topology,
+    cull: u32,
+    front_face: u32,
+    layout: Option<VkPipelineLayout>,
+) -> Result<VkPipeline> {
     let resolve = |dev: &Device, (module, entry): (VkShaderModule, &str)| -> Result<ShaderRef> {
         let sh = dev.shaders.get(&module).ok_or(GpuError::Invalid(
             "vkCreateGraphicsPipelines: unknown VkShaderModule",
@@ -175,33 +232,32 @@ pub fn create_graphics_pipeline(
     };
     let vertex_ref = resolve(dev, vertex)?;
     let fragment_ref = fragment.map(|f| resolve(dev, f)).transpose()?;
-    let color_targets = color_formats
-        .into_iter()
-        .map(|format| ColorTargetState {
-            format,
-            blend: blend.clone(),
-            write_mask: color_write_mask & 0xf,
-        })
-        .collect::<Vec<_>>();
     let _color_targets_len = color_targets.len();
     let _has_fragment = fragment_ref.is_some();
     let ir_id = dev.alloc_ir();
     let handle = dev.alloc_handle();
-    sink.submit(&[Cmd::CreateRenderPipeline(
-        ir_id,
-        RenderPipelineDesc {
-            vertex: vertex_ref,
-            fragment: fragment_ref,
-            vertex_buffers: vertex_layouts,
-            color_targets,
-            depth,
-            topology,
-            cull,
-            front_face,
-            sample_count: sample_count.max(1),
-            label: format!("vkgpipe{ir_id}"),
-        },
-    )])?;
+    let desc = RenderPipelineDesc {
+        vertex: vertex_ref,
+        fragment: fragment_ref,
+        vertex_buffers: vertex_layouts,
+        color_targets,
+        depth,
+        topology,
+        cull,
+        front_face,
+        sample_count: sample_count.max(1),
+        label: format!("vkgpipe{ir_id}"),
+    };
+    let command = match layout {
+        Some(layout) => Cmd::CreateRenderPipelineLayout(
+            ir_id,
+            desc,
+            pipeline_bindings(dev, layout)?,
+            multisample,
+        ),
+        None => Cmd::CreateRenderPipeline(ir_id, desc),
+    };
+    sink.submit(&[command])?;
     hl_log::hl_debug!(
         hl_log::tag::VULKAN,
         "pipeline kind=graphics ir={} frag={} targets={}",
@@ -217,6 +273,59 @@ pub fn create_graphics_pipeline(
         },
     );
     Ok(handle)
+}
+
+fn pipeline_bindings(dev: &Device, layout: VkPipelineLayout) -> Result<PipelineLayout> {
+    let layout = dev
+        .pipeline_layouts
+        .get(&layout)
+        .ok_or(GpuError::Invalid("unknown VkPipelineLayout"))?;
+    let mut bindings = Vec::new();
+    for (group, set_layout) in layout.set_layouts.iter().enumerate() {
+        let set_layout = dev.set_layouts.get(set_layout).ok_or(GpuError::Invalid(
+            "VkPipelineLayout contains unknown descriptor set layout",
+        ))?;
+        for binding in set_layout
+            .bindings
+            .iter()
+            .filter(|binding| binding.descriptor_count != 0)
+        {
+            let kind = match binding.descriptor_type {
+                crate::model::descriptor::vk_descriptor_type::UNIFORM_BUFFER
+                | crate::model::descriptor::vk_descriptor_type::UNIFORM_BUFFER_DYNAMIC => {
+                    PipelineBindingKind::UniformBuffer
+                }
+                crate::model::descriptor::vk_descriptor_type::STORAGE_BUFFER
+                | crate::model::descriptor::vk_descriptor_type::STORAGE_BUFFER_DYNAMIC => {
+                    PipelineBindingKind::StorageBuffer
+                }
+                crate::model::descriptor::vk_descriptor_type::SAMPLED_IMAGE => {
+                    PipelineBindingKind::SampledTexture
+                }
+                crate::model::descriptor::vk_descriptor_type::STORAGE_IMAGE => {
+                    PipelineBindingKind::StorageTexture
+                }
+                crate::model::descriptor::vk_descriptor_type::SAMPLER => {
+                    PipelineBindingKind::Sampler
+                }
+                crate::model::descriptor::vk_descriptor_type::COMBINED_IMAGE_SAMPLER => {
+                    PipelineBindingKind::CombinedImageSampler
+                }
+                _ => {
+                    return Err(GpuError::Unsupported(
+                        "pipeline layout descriptor kind is unsupported",
+                    ))
+                }
+            };
+            bindings.push(PipelineBinding {
+                group: group as u32,
+                binding: binding.binding,
+                count: binding.descriptor_count,
+                kind,
+            });
+        }
+    }
+    Ok(PipelineLayout { bindings })
 }
 
 /// `vkCreatePipelineLayout` — record the composed set-layouts. No IR (bindings arrive with the sets).

@@ -257,7 +257,6 @@ impl WgpuExecutor {
             });
         }
         self.gpu.queue.submit(Some(enc.finish()));
-        self.gpu.device.poll(wgpu::Maintain::Wait);
         Ok(())
     }
 }

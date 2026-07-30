@@ -3,54 +3,173 @@ use super::*;
 // GLES3.0: scoped buffer clears (glClearBuffer*)
 // ==================================================================================================
 
-/// `glClearBufferfv(buffer, drawbuffer, value)` — a `GL_COLOR` clear records a scoped full-surface clear
-/// at the float color; a `GL_DEPTH` clear is an honest no-op (no depth attachment is modeled).
-#[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glClearBufferfv(buffer: u32, _drawbuffer: i32, value: *const f32) {
-    if buffer == GL_COLOR && !value.is_null() {
-        let c = unsafe { std::slice::from_raw_parts(value, 4) };
-        GlobalState::access(|s| record::clear_buffer_color(&mut s.ctx, [c[0], c[1], c[2], c[3]]));
+fn clear_selector(ctx: &mut GlContext, buffer: u32, drawbuffer: i32, allowed: &[u32]) -> bool {
+    if !allowed.contains(&buffer) {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return false;
     }
+    let valid_drawbuffer = if buffer == GL_COLOR {
+        (0..query::MAX_DRAW_BUFFERS).contains(&drawbuffer)
+    } else {
+        drawbuffer == 0
+    };
+    if !valid_drawbuffer {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+    }
+    valid_drawbuffer
 }
 
-/// `glClearBufferiv(buffer, drawbuffer, value)` — an integer color-buffer clear; records the clear with
-/// the values cast to the model's float clear color (a `GL_STENCIL` clear is an honest no-op).
+fn null_clear_value(ctx: &mut GlContext) {
+    ctx.set_gl_error(GL_INVALID_VALUE);
+}
+
+/// `glClearBufferfv(buffer, drawbuffer, value)` — clears a floating-point color buffer or depth buffer.
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glClearBufferiv(buffer: u32, _drawbuffer: i32, value: *const i32) {
-    if buffer == GL_COLOR && !value.is_null() {
-        let c = unsafe { std::slice::from_raw_parts(value, 4) };
-        GlobalState::access(|s| {
-            record::clear_buffer_color(
-                &mut s.ctx,
-                [c[0] as f32, c[1] as f32, c[2] as f32, c[3] as f32],
-            )
-        });
-    }
+pub extern "C" fn glClearBufferfv(buffer: u32, drawbuffer: i32, value: *const f32) {
+    GlobalState::context(|s| {
+        if !clear_selector(&mut s.gl, buffer, drawbuffer, &[GL_COLOR, GL_DEPTH]) {
+            return;
+        }
+        if value.is_null() {
+            null_clear_value(&mut s.gl);
+            return;
+        }
+        if buffer == GL_COLOR {
+            // SAFETY: the GLES contract requires four color components and null was rejected above.
+            let c = unsafe { std::slice::from_raw_parts(value, 4) };
+            // This backend exposes one color attachment. Other valid draw-buffer selectors name absent
+            // attachments and therefore have no effect.
+            if drawbuffer == 0 {
+                record::clear_buffer_color(&mut s.gl, [c[0], c[1], c[2], c[3]]);
+            }
+        } else {
+            // SAFETY: GL_DEPTH consumes exactly one component and null was rejected above.
+            record::clear_depth(&mut s.gl, unsafe { *value });
+            record::clear(&mut s.gl);
+        }
+    });
+}
+
+/// `glClearBufferiv(buffer, drawbuffer, value)` — clears a signed-integer color buffer or stencil buffer.
+#[cfg_attr(gles_client, no_mangle)]
+pub extern "C" fn glClearBufferiv(buffer: u32, drawbuffer: i32, value: *const i32) {
+    GlobalState::context(|s| {
+        if !clear_selector(&mut s.gl, buffer, drawbuffer, &[GL_COLOR, GL_STENCIL]) {
+            return;
+        }
+        if value.is_null() {
+            null_clear_value(&mut s.gl);
+            return;
+        }
+        if buffer == GL_COLOR {
+            // SAFETY: the GLES contract requires four color components and null was rejected above.
+            let c = unsafe { std::slice::from_raw_parts(value, 4) };
+            if drawbuffer == 0 {
+                record::clear_buffer_color(
+                    &mut s.gl,
+                    [c[0] as f32, c[1] as f32, c[2] as f32, c[3] as f32],
+                );
+            }
+        } else {
+            // SAFETY: GL_STENCIL consumes exactly one component and null was rejected above.
+            record::clear_stencil(&mut s.gl, unsafe { *value });
+            record::clear(&mut s.gl);
+        }
+    });
 }
 
 /// `glClearBufferuiv(buffer, drawbuffer, value)` — the unsigned-integer color-buffer clear.
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glClearBufferuiv(buffer: u32, _drawbuffer: i32, value: *const u32) {
-    if buffer == GL_COLOR && !value.is_null() {
+pub extern "C" fn glClearBufferuiv(buffer: u32, drawbuffer: i32, value: *const u32) {
+    GlobalState::context(|s| {
+        if !clear_selector(&mut s.gl, buffer, drawbuffer, &[GL_COLOR]) {
+            return;
+        }
+        if value.is_null() {
+            null_clear_value(&mut s.gl);
+            return;
+        }
+        // SAFETY: the GLES contract requires four color components and null was rejected above.
         let c = unsafe { std::slice::from_raw_parts(value, 4) };
-        GlobalState::access(|s| {
+        if drawbuffer == 0 {
             record::clear_buffer_color(
-                &mut s.ctx,
+                &mut s.gl,
                 [c[0] as f32, c[1] as f32, c[2] as f32, c[3] as f32],
-            )
-        });
-    }
+            );
+        }
+    });
 }
 
 /// `glClearBufferfi(GL_DEPTH_STENCIL, drawbuffer, depth, stencil)` — a combined depth+stencil clear.
 /// Records both the depth-clear and stencil-clear values; a stencil-testing pass lowers the stencil value
 /// into its `Depth24PlusStencil8` attachment's clear (see `service::frame`).
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glClearBufferfi(_buffer: u32, _drawbuffer: i32, depth: f32, stencil: i32) {
-    GlobalState::access(|s| {
-        record::clear_depth(&mut s.ctx, depth);
-        record::clear_stencil(&mut s.ctx, stencil);
+pub extern "C" fn glClearBufferfi(buffer: u32, drawbuffer: i32, depth: f32, stencil: i32) {
+    GlobalState::context(|s| {
+        if !clear_selector(&mut s.gl, buffer, drawbuffer, &[GL_DEPTH_STENCIL]) {
+            return;
+        }
+        record::clear_depth(&mut s.gl, depth);
+        record::clear_stencil(&mut s.gl, stencil);
+        record::clear(&mut s.gl);
     });
+}
+
+#[cfg(test)]
+mod clear_tests {
+    use super::*;
+
+    #[test]
+    fn selectors_distinguish_enum_and_drawbuffer_errors() {
+        let mut context = GlContext::new();
+        assert!(!clear_selector(&mut context, 0xDEAD, 0, &[GL_COLOR]));
+        assert_eq!(context.take_gl_error(), GL_INVALID_ENUM);
+
+        assert!(!clear_selector(
+            &mut context,
+            GL_COLOR,
+            query::MAX_DRAW_BUFFERS,
+            &[GL_COLOR]
+        ));
+        assert_eq!(context.take_gl_error(), GL_INVALID_VALUE);
+
+        assert!(!clear_selector(&mut context, GL_DEPTH, 1, &[GL_DEPTH]));
+        assert_eq!(context.take_gl_error(), GL_INVALID_VALUE);
+        assert!(clear_selector(
+            &mut context,
+            GL_COLOR,
+            query::MAX_DRAW_BUFFERS - 1,
+            &[GL_COLOR]
+        ));
+    }
+
+    #[test]
+    fn depth_stencil_values_are_captured_by_one_scoped_clear() {
+        let mut context = GlContext::new();
+        record::clear_depth(&mut context, 0.25);
+        record::clear_stencil(&mut context, 7);
+        record::clear(&mut context);
+
+        assert_eq!(context.draws().len(), 1);
+        let mut depth = [0.0; 4];
+        query::get_floatv(&context, GL_DEPTH_CLEAR_VALUE, &mut depth);
+        assert_eq!(depth[0], 0.25);
+        let mut stencil = [0; 4];
+        query::get_integerv(&context, GL_STENCIL_CLEAR_VALUE, &mut stencil);
+        assert_eq!(stencil[0], 7);
+    }
+
+    #[test]
+    fn integer_color_conversion_preserves_signedness_before_format_clamping() {
+        let signed = [i32::MIN, -1, 1, i32::MAX].map(|value| value as f32);
+        let unsigned = [0, 1, u32::MAX - 1, u32::MAX].map(|value| value as f32);
+        assert!(signed[0].is_sign_negative());
+        assert_eq!(signed[1], -1.0);
+        assert_eq!(signed[2], 1.0);
+        assert_eq!(unsigned[0], 0.0);
+        assert_eq!(unsigned[1], 1.0);
+        assert!(unsigned[3] > i32::MAX as f32);
+    }
 }
 
 // ==================================================================================================
@@ -65,9 +184,9 @@ pub extern "C" fn glDrawElementsBaseVertex(
     indices: *const c_void,
     basevertex: i32,
 ) {
-    GlobalState::access(|s| {
+    GlobalState::context(|s| {
         record::draw_elements_base_vertex(
-            &mut s.ctx,
+            &mut s.gl,
             mode,
             count,
             type_,
@@ -85,9 +204,9 @@ pub extern "C" fn glDrawElementsInstancedBaseVertex(
     instancecount: i32,
     basevertex: i32,
 ) {
-    GlobalState::access(|s| {
+    GlobalState::context(|s| {
         record::draw_elements_instanced_base_vertex(
-            &mut s.ctx,
+            &mut s.gl,
             mode,
             count,
             type_,
@@ -106,9 +225,9 @@ pub extern "C" fn glDrawRangeElements(
     type_: u32,
     indices: *const c_void,
 ) {
-    GlobalState::access(|s| {
+    GlobalState::context(|s| {
         record::draw_range_elements(
-            &mut s.ctx,
+            &mut s.gl,
             mode,
             start,
             end,
@@ -129,9 +248,9 @@ pub extern "C" fn glDrawRangeElementsBaseVertex(
     indices: *const c_void,
     basevertex: i32,
 ) {
-    GlobalState::access(|s| {
+    GlobalState::context(|s| {
         record::draw_range_elements(
-            &mut s.ctx,
+            &mut s.gl,
             mode,
             start,
             end,
@@ -146,12 +265,12 @@ pub extern "C" fn glDrawRangeElementsBaseVertex(
 /// `GL_DRAW_INDIRECT_BUFFER` (a GLES3.1 draw always sources the indirect params from a buffer object).
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDrawArraysIndirect(mode: u32, indirect: *const c_void) {
-    GlobalState::access(|s| record::draw_arrays_indirect(&mut s.ctx, mode, indirect as usize));
+    GlobalState::context(|s| record::draw_arrays_indirect(&mut s.gl, mode, indirect as usize));
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDrawElementsIndirect(mode: u32, type_: u32, indirect: *const c_void) {
-    GlobalState::access(|s| {
-        record::draw_elements_indirect(&mut s.ctx, mode, type_, indirect as usize)
+    GlobalState::context(|s| {
+        record::draw_elements_indirect(&mut s.gl, mode, type_, indirect as usize)
     });
 }
 
@@ -161,53 +280,53 @@ pub extern "C" fn glDrawElementsIndirect(mode: u32, type_: u32, indirect: *const
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDeleteProgram(program: u32) {
-    GlobalState::access(|s| record::delete_program(&mut s.ctx, program));
+    GlobalState::context(|s| s.delete_program(program));
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDeleteShader(shader: u32) {
-    GlobalState::access(|s| record::delete_shader(&mut s.ctx, shader));
+    GlobalState::context(|s| record::delete_shader(&mut s.gl, shader));
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDetachShader(program: u32, shader: u32) {
-    GlobalState::access(|s| record::detach_shader(&mut s.ctx, program, shader));
+    GlobalState::context(|s| record::detach_shader(&mut s.gl, program, shader));
 }
 /// `glValidateProgram(program)` — a linked program validates clean in this model; an unknown program
 /// raises `GL_INVALID_VALUE` (the getter path already reports `GL_VALIDATE_STATUS` from the link state).
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glValidateProgram(program: u32) {
-    GlobalState::access(|s| {
-        if !s.ctx.programs.contains(program) {
-            s.ctx.set_gl_error(GL_INVALID_VALUE);
+    GlobalState::context(|s| {
+        if !s.gl.programs.contains(program) {
+            s.gl.set_gl_error(GL_INVALID_VALUE);
         }
     });
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsProgram(program: u32) -> u32 {
-    GlobalState::access(|s| s.ctx.programs.contains(program)) as u32
+    GlobalState::context(|s| s.gl.is_program_name(program)) as u32
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsShader(shader: u32) -> u32 {
-    GlobalState::access(|s| s.ctx.programs.shader_exists(shader)) as u32
+    GlobalState::context(|s| s.gl.programs.shader_exists(shader)) as u32
 }
 /// `glIsBuffer(buffer)` — true once `buffer` names a live buffer object (this model materializes the
 /// object at `glGenBuffers`, so a generated name reads back as a buffer).
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsBuffer(buffer: u32) -> u32 {
-    GlobalState::access(|s| buffer != 0 && s.ctx.buffers.get(buffer).is_some()) as u32
+    GlobalState::context(|s| s.gl.is_buffer_name(buffer)) as u32
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsTexture(texture: u32) -> u32 {
-    GlobalState::access(|s| texture != 0 && s.ctx.textures.get(texture).is_some()) as u32
+    GlobalState::context(|s| s.gl.is_texture_name(texture)) as u32
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsEnabled(cap: u32) -> u32 {
-    GlobalState::access(|s| s.ctx.is_enabled(cap)) as u32
+    GlobalState::context(|s| s.gl.is_enabled(cap)) as u32
 }
 /// `glIsEnabledi(target, index)` — this model tracks no per-index (indexed) enable state, so it reports
 /// the non-indexed capability's state (the honest answer for a single-target model).
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsEnabledi(target: u32, _index: u32) -> u32 {
-    GlobalState::access(|s| s.ctx.is_enabled(target)) as u32
+    GlobalState::context(|s| s.gl.is_enabled(target)) as u32
 }
 /// `glGetAttachedShaders(program, maxCount, count, shaders)` — the program's attached vertex/fragment/
 /// compute shader names (real reflection of the attachment slots).
@@ -218,9 +337,8 @@ pub extern "C" fn glGetAttachedShaders(
     count: *mut i32,
     shaders: *mut u32,
 ) {
-    let attached: Vec<u32> = GlobalState::access(|s| {
-        s.ctx
-            .programs
+    let attached: Vec<u32> = GlobalState::context(|s| {
+        s.gl.programs
             .program(program)
             .map(|p| [p.vs, p.fs, p.cs].into_iter().filter(|&x| x != 0).collect())
             .unwrap_or_default()
@@ -244,7 +362,7 @@ pub extern "C" fn glGetShaderSource(
     length: *mut i32,
     source: *mut c_char,
 ) {
-    let src = GlobalState::access(|s| s.ctx.get_shader_source(shader));
+    let src = GlobalState::context(|s| s.gl.get_shader_source(shader));
     unsafe { write_c_name(src.as_bytes(), buf_size, length, source) };
 }
 /// `glGetFragDataLocation(program, name)` — the fragment output's color index (real reflection).
@@ -254,7 +372,7 @@ pub extern "C" fn glGetFragDataLocation(program: u32, name: *const c_char) -> i3
         Some(n) => n,
         None => return -1,
     };
-    GlobalState::access(|s| intro::frag_data_location(&s.ctx, program, &want))
+    GlobalState::context(|s| intro::frag_data_location(&s.gl, program, &want))
 }
 
 // ==================================================================================================

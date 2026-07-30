@@ -22,6 +22,7 @@ fn gl_buffer_upload_contents_marshal_through_map() {
         "glMapBufferRange",
         extern "C" fn(u32, isize, isize, u32) -> *mut c_void
     );
+    let gl_unmap_buffer = f!(sh.gles, "glUnmapBuffer", extern "C" fn(u32) -> u8);
     let gl_get_error = f!(sh.gles, "glGetError", extern "C" fn() -> u32);
 
     let mut buf: u32 = 0;
@@ -65,6 +66,7 @@ fn gl_buffer_upload_contents_marshal_through_map() {
         &expect[..],
         "glBufferData + glBufferSubData contents marshalled byte-for-byte"
     );
+    assert_ne!(gl_unmap_buffer(GL_ARRAY_BUFFER), 0);
 
     // Error paths on the SAME entry point (out-of-range map + unbound target).
     let _ = gl_get_error();

@@ -1,6 +1,64 @@
 use super::*;
 
 #[test]
+fn eight_samplers_are_supported_and_a_ninth_is_rejected() {
+    let mut accepted = String::new();
+    for index in 0..8 {
+        accepted.push_str(&format!("uniform sampler2D texture{index};\n"));
+    }
+    accepted.push_str("void main(){}\n");
+    assert!(glsl::StageSources::new("void main(){}", &accepted)
+        .uniform_layout()
+        .is_ok());
+
+    accepted.insert_str(0, "uniform sampler2D overflow;\n");
+    assert!(matches!(
+        glsl::StageSources::new("void main(){}", &accepted).uniform_layout(),
+        Err(glsl::UniformError::Samplers(9))
+    ));
+}
+
+#[test]
+fn sampler_array_elements_consume_stage_and_combined_limits() {
+    let accepted =
+        "uniform sampler2D textures[8];\nvoid main(){gl_FragColor=texture2D(textures[7],vec2(0));}\n";
+    assert!(glsl::StageSources::new("void main(){}", accepted)
+        .uniform_layout()
+        .is_ok());
+
+    let fragment_overflow = accepted.replace("[8]", "[9]").replace("[7]", "[8]");
+    assert!(matches!(
+        glsl::StageSources::new("void main(){}", &fragment_overflow).uniform_layout(),
+        Err(glsl::UniformError::Samplers(9))
+    ));
+
+    let vertex_overflow =
+        "uniform sampler2D textures[5];\nvoid main(){gl_Position=texture2D(textures[4],vec2(0));}\n";
+    assert!(matches!(
+        glsl::StageSources::new(vertex_overflow, "void main(){}").uniform_layout(),
+        Err(glsl::UniformError::Samplers(5))
+    ));
+}
+
+#[test]
+fn sampler_array_emits_one_binding_pair_per_element() {
+    let vs = "attribute vec2 p;\nvoid main(){gl_Position=vec4(p,0,1);}";
+    let fs = "uniform sampler2D images[2];\nvoid main(){\
+              gl_FragColor=texture2D(images[0],vec2(0))+texture2D(images[1],vec2(0));}";
+    let (_, output) = glsl::StageSources::new(vs, fs).translate_render();
+    for expected in [
+        "layout(binding = 1) uniform texture2D images_0_hltex;",
+        "layout(binding = 2) uniform sampler images_0_hlsmp;",
+        "layout(binding = 3) uniform texture2D images_1_hltex;",
+        "layout(binding = 4) uniform sampler images_1_hlsmp;",
+        "sampler2D(images_0_hltex, images_0_hlsmp)",
+        "sampler2D(images_1_hltex, images_1_hlsmp)",
+    ] {
+        assert!(output.contains(expected), "missing {expected}:\n{output}");
+    }
+}
+
+#[test]
 fn multiple_samplers_get_distinct_texture_and_sampler_bindings() {
     let vs = "attribute vec2 aPos;\nvoid main(){ gl_Position = vec4(aPos,0.0,1.0); }\n";
     let fs = "varying vec2 vUV;\nuniform sampler2D uAlbedo;\nuniform sampler2D uNormal;\n\

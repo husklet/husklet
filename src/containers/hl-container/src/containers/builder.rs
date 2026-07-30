@@ -22,6 +22,7 @@ struct Assembly<S> {
     images: Option<hl_images::Images>,
     volume_root: std::path::PathBuf,
     runtime_root: std::path::PathBuf,
+    translation_cache: Option<std::path::PathBuf>,
     devices: crate::Devices,
     checkpoints: Arc<dyn crate::CheckpointImages>,
 }
@@ -49,6 +50,7 @@ impl<S: Storage + 'static> Assembly<S> {
             volumes: volumes.clone(),
             networks: networks.clone(),
             runtime_root: self.runtime_root,
+            translation_cache: self.translation_cache,
             devices: self.devices,
             checkpoints: self.checkpoints,
         }));
@@ -99,6 +101,11 @@ impl Builder {
     /// Returns storage initialization, recovery, or record-validation failures.
     pub async fn build(self) -> Result<Containers> {
         let root = self.config.root;
+        let translation_cache = self
+            .config
+            .translation_cache
+            .map(crate::config::TranslationCache::prepare)
+            .transpose()?;
         let devices = self.devices;
         let volume_root = root.join("volumes");
         let runtime_root = root.join("runtime");
@@ -122,6 +129,7 @@ impl Builder {
                     images: Some(images),
                     volume_root,
                     runtime_root,
+                    translation_cache,
                     devices,
                     checkpoints,
                 }
@@ -136,6 +144,7 @@ impl Builder {
                     images: Some(images),
                     volume_root,
                     runtime_root,
+                    translation_cache,
                     devices,
                     checkpoints,
                 }
@@ -166,6 +175,7 @@ pub(super) async fn build_with<S: Storage + 'static>(
         images,
         volume_root,
         runtime_root,
+        translation_cache: None,
         devices,
         checkpoints,
     }

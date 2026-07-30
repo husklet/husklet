@@ -1,10 +1,10 @@
 //! Guest cdylib source for BOTH GL/EGL shim objects — this ONE crate is cross-built TWICE (selected by
 //! `$HL_SHIM_ROLE`, see the crate `build.rs`), matching real Mesa's split:
-//!   * role `egl`  → `libEGL.so.1`   exports the `egl*` set (44) + the shared-state accessor
+//!   * role `egl`  → `libEGL.so.1` exports the `egl*` set (44) + the shared-state accessor
 //!     `hl_shim_state_ptr`; it OWNS the process-global [`GlContext`] ([`state`]).
-//!   * role `gles` → `libGLESv2.so.2` exports the `gl*` set (358) in its OWN dynsym; built
+//!   * role `gles` → `libGLESv2.so.2` exports the `gl*` set (422) in its OWN dynsym; built
 //!     `cfg(gles_client)`, it has NO state of its own and `DT_NEEDED`s libEGL to import the accessor.
-//! A version script pins each object's exported surface; the union covers the whole 402-entry set with no
+//! A version script pins each object's exported surface; the union covers the whole 466-entry set with no
 //! duplication. A GLES app links `-lEGL -lGLESv2` and gets its `egl*` from libEGL, its `gl*` from
 //! libGLESv2, and both drive the SAME context (glDraw records; eglSwapBuffers flushes).
 //!
@@ -19,8 +19,11 @@
 #![allow(non_snake_case)]
 
 pub mod driver;
+pub mod image;
 pub mod state;
 pub mod stub;
+#[allow(dead_code)] // Foundation for the pending State transport integration.
+mod transport;
 
 // The generated C-ABI export surface: every `egl*`/`gl*` entry point not hand-written in `driver`.
 include!(concat!(env!("OUT_DIR"), "/generated_entrypoints.rs"));
@@ -34,8 +37,11 @@ mod tests {
 
     #[test]
     fn surface_is_complete_and_matches_the_census() {
-        assert_eq!(TOTAL_ENTRYPOINTS, 402, "GLES2/EGL surface drifted from the golden 402");
-        assert_eq!(GLES2_ENTRYPOINTS, 358);
+        assert_eq!(
+            TOTAL_ENTRYPOINTS, 466,
+            "GLES2/EGL surface drifted from the golden 466"
+        );
+        assert_eq!(GLES2_ENTRYPOINTS, 422);
         assert_eq!(EGL_ENTRYPOINTS, 44);
         assert_eq!(GENERATED_STUBS + IMPLEMENTED_ENTRYPOINTS, TOTAL_ENTRYPOINTS);
     }

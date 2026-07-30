@@ -87,6 +87,13 @@ impl SamplerObj {
         }
     }
 
+    pub fn ir_mip_filter(&self) -> Filter {
+        match self.min_filter as u32 {
+            GL_NEAREST_MIPMAP_LINEAR | GL_LINEAR_MIPMAP_LINEAR => Filter::Linear,
+            _ => Filter::Nearest,
+        }
+    }
+
     /// The neutral S wrap (ClampToEdge / MirrorRepeat / else Repeat).
     pub fn ir_wrap_s(&self) -> AddressMode {
         Self::address_mode(self.wrap_s as u32)
@@ -95,6 +102,28 @@ impl SamplerObj {
     /// The neutral T wrap.
     pub fn ir_wrap_t(&self) -> AddressMode {
         Self::address_mode(self.wrap_t as u32)
+    }
+
+    pub fn ir_wrap_r(&self) -> AddressMode {
+        Self::address_mode(self.wrap_r as u32)
+    }
+
+    pub fn ir_compare(&self) -> Option<u32> {
+        if self.compare_mode as u32 == GL_NONE {
+            return None;
+        }
+        use hl_gpu::protocol::model::enums::compare;
+        Some(match self.compare_func as u32 {
+            GL_NEVER => compare::NEVER,
+            GL_LESS => compare::LESS,
+            GL_EQUAL => compare::EQUAL,
+            GL_LEQUAL => compare::LESS_EQUAL,
+            GL_GREATER => compare::GREATER,
+            GL_NOTEQUAL => compare::NOT_EQUAL,
+            GL_GEQUAL => compare::GREATER_EQUAL,
+            GL_ALWAYS => compare::ALWAYS,
+            _ => return None,
+        })
     }
 
     /// Read one parameter as `f32` (the int-typed getter rounds this to nearest). `None` for an unknown
@@ -189,6 +218,12 @@ impl Samplers {
         self.binding.get(&unit).copied().unwrap_or(0)
     }
 
+    /// Exchange only the per-context sampler-unit bindings while keeping sampler objects in their share
+    /// group. EGL context switches call this instead of moving the whole sampler table.
+    pub(crate) fn switch_bindings(&mut self, other: &mut Self) {
+        std::mem::swap(&mut self.binding, &mut other.binding);
+    }
+
     /// `glDeleteSamplers` (one name) — drop the object + reservation and unbind it from every unit.
     pub fn delete(&mut self, id: u32) {
         if id == 0 {
@@ -197,5 +232,13 @@ impl Samplers {
         self.objects.remove(&id);
         self.reserved.remove(&id);
         self.binding.retain(|_, v| *v != id);
+    }
+
+    pub(crate) fn unbind(&mut self, id: u32) {
+        self.binding.retain(|_, value| *value != id);
+    }
+
+    pub(crate) fn references(&self, id: u32) -> bool {
+        self.binding.values().any(|value| *value == id)
     }
 }

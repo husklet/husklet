@@ -3,24 +3,21 @@ use super::*;
 #[test]
 fn query_begin_end_lifecycle_and_result_round_trip() {
     let mut c = ctx();
-    let q = c.queries.gen();
+    let q = c.gen_query();
     assert_ne!(q, 0);
-    assert!(
-        !c.queries.contains(q),
-        "a reserved name is not yet a query object"
-    );
+    assert!(!c.is_query(q), "a reserved name is not yet a query object");
 
     // Begin makes it the active query for its target.
     es3::begin_query(&mut c, GL_ANY_SAMPLES_PASSED, q);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
-    assert!(c.queries.contains(q));
+    assert!(c.is_query(q));
     assert_eq!(
         es3::get_queryiv(&mut c, GL_ANY_SAMPLES_PASSED, GL_CURRENT_QUERY),
         Some(q as i32)
     );
 
     // A second begin on the same target while active is GL_INVALID_OPERATION.
-    let q2 = c.queries.gen();
+    let q2 = c.gen_query();
     es3::begin_query(&mut c, GL_ANY_SAMPLES_PASSED, q2);
     assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
 
@@ -63,17 +60,17 @@ fn query_rejects_bad_target_and_unknown_id() {
 #[test]
 fn delete_query_object_makes_it_no_longer_a_query() {
     let mut c = ctx();
-    let q = c.queries.gen();
+    let q = c.gen_query();
     es3::begin_query(&mut c, GL_ANY_SAMPLES_PASSED, q);
     c.end_query(GL_ANY_SAMPLES_PASSED);
-    assert!(c.queries.contains(q), "an instantiated query object");
+    assert!(c.is_query(q), "an instantiated query object");
 
-    c.queries.delete(q);
-    assert!(!c.queries.contains(q), "glDeleteQueries drops the object");
+    c.delete_query(q);
+    assert!(!c.is_query(q), "glDeleteQueries drops the object");
     // A deleted name is unknown again: begin on it is GL_INVALID_OPERATION.
     es3::begin_query(&mut c, GL_ANY_SAMPLES_PASSED, q);
     assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
     // Deleting 0 (and a never-generated name) is a silent no-op.
-    c.queries.delete(0);
+    c.delete_query(0);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
 }

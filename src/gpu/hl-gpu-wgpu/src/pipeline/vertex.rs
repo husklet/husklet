@@ -40,6 +40,7 @@ impl VertexState {
             // 16-bit float (x2 / x4 only)
             (7, 2) => F::Float16x2,
             (7, 4) => F::Float16x4,
+            (8, 4) if normalized => F::Unorm10_10_10_2,
             // 8-bit (x2 / x4 only), normalized → Unorm/Snorm else Uint/Sint
             (1, 2) => {
                 if normalized {

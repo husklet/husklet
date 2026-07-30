@@ -6,13 +6,14 @@ use super::*;
 /// `GL_FRAMEBUFFER` binds both; the split `GL_DRAW_FRAMEBUFFER`/`GL_READ_FRAMEBUFFER` bind one. A recorded
 /// draw's render target follows the draw binding; the read binding is the `glReadPixels`/blit source.
 pub fn bind_framebuffer(ctx: &mut GlContext, target: u32, name: u32) {
+    ctx.local.framebuffers.ensure(name);
     match target {
         GL_FRAMEBUFFER => {
-            ctx.bound_fbo = name;
-            ctx.read_fbo = name;
+            ctx.local.bound_fbo = name;
+            ctx.local.read_fbo = name;
         }
-        GL_DRAW_FRAMEBUFFER => ctx.bound_fbo = name,
-        GL_READ_FRAMEBUFFER => ctx.read_fbo = name,
+        GL_DRAW_FRAMEBUFFER => ctx.local.bound_fbo = name,
+        GL_READ_FRAMEBUFFER => ctx.local.read_fbo = name,
         _ => ctx.set_gl_error(GL_INVALID_ENUM),
     }
 }
@@ -38,9 +39,9 @@ pub fn framebuffer_texture_2d(
         return;
     }
     let fbo = if target == GL_READ_FRAMEBUFFER {
-        ctx.read_fbo
+        ctx.local.read_fbo
     } else {
-        ctx.bound_fbo
+        ctx.local.bound_fbo
     };
     // GL_COLOR_ATTACHMENT0..15 are all attachable (MRT); a non-color attachment / textarget / level is
     // unmodeled. The attachment index is `attachment - GL_COLOR_ATTACHMENT0`.
@@ -57,25 +58,26 @@ pub fn framebuffer_texture_2d(
         ctx.set_gl_error(GL_INVALID_OPERATION);
         return;
     }
-    ctx.framebuffers
+    ctx.local
+        .framebuffers
         .attach_color_index(fbo, attachment - GL_COLOR_ATTACHMENT0, tex);
 }
 
 /// `glDeleteFramebuffers` (one name). Deleting the bound draw/read FBO reverts that binding to the default.
 impl GlContext {
     pub fn delete_framebuffer(&mut self, name: u32) -> bool {
-        if self.bound_fbo == name {
-            self.bound_fbo = 0;
+        if self.local.bound_fbo == name {
+            self.local.bound_fbo = 0;
         }
-        if self.read_fbo == name {
-            self.read_fbo = 0;
+        if self.local.read_fbo == name {
+            self.local.read_fbo = 0;
         }
-        self.framebuffers.delete(name)
+        self.local.framebuffers.delete(name)
     }
 
     /// `glIsFramebuffer(name)` — true once `name` names a generated (non-default) framebuffer object.
     pub fn has_framebuffer(&self, name: u32) -> bool {
-        self.framebuffers.exists(name)
+        self.local.framebuffers.exists(name)
     }
 
     /// `glCheckFramebufferStatus(target)` — completeness of the bound draw/read framebuffer. Returns
@@ -85,8 +87,8 @@ impl GlContext {
     /// no `glRenderbufferStorage` yet). A bad `target` raises `GL_INVALID_ENUM` and returns `0`.
     pub fn check_framebuffer_status(&mut self, target: u32) -> u32 {
         let fbo = match target {
-            GL_FRAMEBUFFER | GL_DRAW_FRAMEBUFFER => self.bound_fbo,
-            GL_READ_FRAMEBUFFER => self.read_fbo,
+            GL_FRAMEBUFFER | GL_DRAW_FRAMEBUFFER => self.local.bound_fbo,
+            GL_READ_FRAMEBUFFER => self.local.read_fbo,
             _ => {
                 self.set_gl_error(GL_INVALID_ENUM);
                 return 0;
@@ -99,12 +101,16 @@ impl GlContext {
     /// is managed by EGL and is complete; a user FBO needs one sized, live color-texture attachment.
     pub(super) fn framebuffer_status(&self, fbo: u32) -> u32 {
         if fbo == 0 {
-            return GL_FRAMEBUFFER_COMPLETE;
+            return if self.local.surf.have {
+                GL_FRAMEBUFFER_COMPLETE
+            } else {
+                GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT
+            };
         }
-        if !self.framebuffers.exists(fbo) {
+        if !self.local.framebuffers.exists(fbo) {
             return GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
         }
-        let color = self.framebuffers.color_attachment(fbo);
+        let color = self.local.framebuffers.color_attachment(fbo);
         if color == 0 {
             return GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
         }
@@ -143,7 +149,8 @@ pub fn bind_renderbuffer(ctx: &mut GlContext, target: u32, name: u32) {
         ctx.set_gl_error(GL_INVALID_ENUM);
         return;
     }
-    ctx.bound_rbo = name;
+    ctx.renderbuffers.ensure(name);
+    ctx.local.bound_rbo = name;
 }
 
 /// `glRenderbufferStorage(GL_RENDERBUFFER, internalformat, w, h)` — size the bound renderbuffer's backing
@@ -161,7 +168,7 @@ pub fn renderbuffer_storage(
         ctx.set_gl_error(GL_INVALID_ENUM);
         return;
     }
-    let rbo = ctx.bound_rbo;
+    let rbo = ctx.local.bound_rbo;
     if rbo == 0 {
         ctx.set_gl_error(GL_INVALID_OPERATION);
         return;
@@ -190,12 +197,12 @@ pub fn renderbuffer_storage(
 /// the backing texture. Returns `false` for an unknown / zero name.
 impl GlContext {
     pub fn delete_renderbuffer(&mut self, name: u32) -> bool {
-        if self.bound_rbo == name {
-            self.bound_rbo = 0;
+        if self.local.bound_rbo == name {
+            self.local.bound_rbo = 0;
         }
         match self.renderbuffers.delete(name) {
             Some(rb) => {
-                self.framebuffers.detach_color_texture(rb.tex);
+                self.local.framebuffers.detach_color_texture(rb.tex);
                 // The renderbuffer's backing texture owns the offscreen render-target IR — retire it too.
                 self.retire_texture(rb.tex);
                 self.textures.delete(rb.tex);
@@ -239,9 +246,9 @@ pub fn framebuffer_renderbuffer(
         return;
     }
     let fbo = if target == GL_READ_FRAMEBUFFER {
-        ctx.read_fbo
+        ctx.local.read_fbo
     } else {
-        ctx.bound_fbo
+        ctx.local.bound_fbo
     };
     if fbo == 0 {
         ctx.set_gl_error(GL_INVALID_OPERATION);
@@ -255,7 +262,7 @@ pub fn framebuffer_renderbuffer(
         GL_COLOR_ATTACHMENT0 => {
             // The renderbuffer's texture-backed storage becomes the FBO's color target (`0` detaches).
             let tex = ctx.renderbuffers.backing_tex(rbo);
-            ctx.framebuffers.attach_color(fbo, tex);
+            ctx.local.framebuffers.attach_color(fbo, tex);
         }
         // No depth/stencil buffer is modeled — accept the attach as a no-op so a guest that attaches a
         // depth/stencil renderbuffer still runs (its color attachment is what this model renders).
@@ -291,8 +298,8 @@ pub fn blit_framebuffer(
     if mask & GL_COLOR_BUFFER_BIT == 0 {
         return;
     }
-    if ctx.framebuffer_status(ctx.read_fbo) != GL_FRAMEBUFFER_COMPLETE
-        || ctx.framebuffer_status(ctx.bound_fbo) != GL_FRAMEBUFFER_COMPLETE
+    if ctx.framebuffer_status(ctx.local.read_fbo) != GL_FRAMEBUFFER_COMPLETE
+        || ctx.framebuffer_status(ctx.local.bound_fbo) != GL_FRAMEBUFFER_COMPLETE
     {
         ctx.set_gl_error(GL_INVALID_FRAMEBUFFER_OPERATION);
         return;
@@ -303,9 +310,32 @@ pub fn blit_framebuffer(
     } else {
         hl_gpu::protocol::model::enums::Filter::Nearest
     };
-    ctx.blits.push(crate::model::context::BlitOp {
-        read_fbo: ctx.read_fbo,
-        draw_fbo: ctx.bound_fbo,
+    let target = |ctx: &GlContext, fbo| {
+        (fbo != 0).then(|| {
+            let texture = ctx.local.framebuffers.color_attachment(fbo);
+            ctx.textures
+                .get(texture)
+                .filter(|texture| texture.w > 0 && texture.h > 0)
+                .map(|texture| crate::model::program::TargetSnapshot {
+                    texture: ctx.local.framebuffers.color_attachment(fbo),
+                    generation: texture.gen,
+                    shared_storage: texture.shared_storage(),
+                    shared_revision: texture
+                        .shared_current_identity()
+                        .map(|(_, revision)| revision),
+                    width: texture.w,
+                    height: texture.h,
+                    format: texture.ir_format,
+                })
+        })?
+    };
+    ctx.record_blit(crate::model::context::BlitOp {
+        read_fbo: ctx.local.read_fbo,
+        draw_fbo: ctx.local.bound_fbo,
+        read_target: target(ctx, ctx.local.read_fbo),
+        draw_target: target(ctx, ctx.local.bound_fbo),
+        read_ir: None,
+        draw_ir: None,
         src: [src_x0, src_y0, src_x1, src_y1],
         dst: [dst_x0, dst_y0, dst_x1, dst_y1],
         filter,

@@ -14,6 +14,7 @@ fn feature_request() -> FeatureRequest {
         shader_payloads: shader_payload::SPIRV,
         command_bits: hl_gpu::Capabilities::command_bits(ALL_COMMANDS),
         texture_formats: TextureFormat::bits(COLOR_FORMATS),
+        ..FeatureRequest::default()
     }
 }
 

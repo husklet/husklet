@@ -3,26 +3,23 @@ use super::*;
 #[test]
 fn transform_feedback_state_machine_and_varyings() {
     let mut c = ctx();
-    let tf = c.transform_feedbacks.gen();
+    let tf = c.gen_transform_feedback();
     assert_ne!(tf, 0);
-    assert!(
-        !c.transform_feedbacks.contains(tf),
-        "reserved, not yet an object"
-    );
+    assert!(!c.is_transform_feedback(tf), "reserved, not yet an object");
 
     es3::bind_transform_feedback(&mut c, GL_TRANSFORM_FEEDBACK, tf);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
-    assert!(c.transform_feedbacks.contains(tf));
+    assert!(c.is_transform_feedback(tf));
 
     // begin → pause → resume → end, all valid transitions.
     c.begin_transform_feedback(GL_TRIANGLES);
-    assert!(c.transform_feedbacks.bound_obj().active);
+    assert!(c.transform_feedback_state().active);
     c.pause_transform_feedback();
-    assert!(c.transform_feedbacks.bound_obj().paused);
+    assert!(c.transform_feedback_state().paused);
     c.resume_transform_feedback();
-    assert!(!c.transform_feedbacks.bound_obj().paused);
+    assert!(!c.transform_feedback_state().paused);
     c.end_transform_feedback();
-    assert!(!c.transform_feedbacks.bound_obj().active);
+    assert!(!c.transform_feedback_state().active);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
 
     // A double-begin is GL_INVALID_OPERATION; a bad primitive mode is GL_INVALID_ENUM.
@@ -81,13 +78,13 @@ fn transform_feedback_varyings_round_trip() {
 #[test]
 fn delete_transform_feedback_object_makes_it_no_longer_a_tf() {
     let mut c = ctx();
-    let tf = c.transform_feedbacks.gen();
+    let tf = c.gen_transform_feedback();
     es3::bind_transform_feedback(&mut c, GL_TRANSFORM_FEEDBACK, tf);
-    assert!(c.transform_feedbacks.contains(tf));
+    assert!(c.is_transform_feedback(tf));
 
     c.delete_transform_feedback(tf);
     assert!(
-        !c.transform_feedbacks.contains(tf),
+        !c.is_transform_feedback(tf),
         "glDeleteTransformFeedbacks drops the object"
     );
     c.delete_transform_feedback(0);

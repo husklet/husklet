@@ -52,14 +52,13 @@ impl Transfer2 {
         ShimState::with_device(|device| {
             for region in regions {
                 if region.image_subresource.aspect_mask & VK_IMAGE_ASPECT_COLOR_BIT == 0
-                    || region.image_subresource.mip_level != 0
-                    || region.image_subresource.base_array_layer != 0
-                    || region.image_offset.x != 0
-                    || region.image_offset.y != 0
+                    || region.image_offset.x < 0
+                    || region.image_offset.y < 0
+                    || region.image_offset.z < 0
                 {
                     continue;
                 }
-                let _ = record::cmd_copy_buffer_to_image(
+                let _ = record::cmd_copy_buffer_to_image_region(
                     device,
                     command_buffer,
                     info.src_buffer,
@@ -67,8 +66,17 @@ impl Transfer2 {
                     region.buffer_offset,
                     region.buffer_row_length,
                     region.buffer_image_height,
+                    region.image_subresource.mip_level,
+                    region.image_subresource.base_array_layer,
+                    region.image_offset.x as u32,
+                    region.image_offset.y as u32,
+                    region.image_offset.z as u32,
                     region.image_extent.width,
                     region.image_extent.height.max(1),
+                    region
+                        .image_subresource
+                        .layer_count
+                        .max(region.image_extent.depth.max(1)),
                 );
             }
         });
@@ -123,14 +131,13 @@ impl Transfer2 {
         ShimState::with_device(|device| {
             for region in regions {
                 if region.image_subresource.aspect_mask & VK_IMAGE_ASPECT_COLOR_BIT == 0
-                    || region.image_subresource.mip_level != 0
-                    || region.image_subresource.base_array_layer != 0
-                    || region.image_offset.x != 0
-                    || region.image_offset.y != 0
+                    || region.image_offset.x < 0
+                    || region.image_offset.y < 0
+                    || region.image_offset.z < 0
                 {
                     continue;
                 }
-                let _ = record::cmd_copy_image_to_buffer(
+                let _ = record::cmd_copy_image_to_buffer_region(
                     device,
                     command_buffer,
                     info.src_image,
@@ -138,8 +145,17 @@ impl Transfer2 {
                     region.buffer_offset,
                     region.buffer_row_length,
                     region.buffer_image_height,
+                    region.image_subresource.mip_level,
+                    region.image_subresource.base_array_layer,
+                    region.image_offset.x as u32,
+                    region.image_offset.y as u32,
+                    region.image_offset.z as u32,
                     region.image_extent.width,
                     region.image_extent.height.max(1),
+                    region
+                        .image_subresource
+                        .layer_count
+                        .max(region.image_extent.depth.max(1)),
                 );
             }
         });

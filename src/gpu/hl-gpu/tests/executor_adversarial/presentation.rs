@@ -14,7 +14,7 @@ fn present_returns_the_presented_pair() {
                 width: 4,
                 height: 4,
                 format: TextureFormat::Bgra8Unorm,
-                hlp_surface: 1,
+                token: hl_gpu::SurfaceToken::new(1).unwrap(),
             },
         ),
     ]);
@@ -24,6 +24,7 @@ fn present_returns_the_presented_pair() {
             &[Cmd::Present {
                 surface: 1,
                 texture: 1,
+                serial: hl_gpu::FrameSerial::new(1).unwrap(),
             }],
         )
         .unwrap();

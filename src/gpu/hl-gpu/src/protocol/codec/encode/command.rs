@@ -26,6 +26,22 @@ impl Cmd {
                 e.u8(tag::DESTROY_TEXTURE);
                 e.u32(*id);
             }
+            Cmd::CreateTextureView(id, view) => {
+                e.u8(tag::CREATE_TEXTURE_VIEW);
+                e.u32(*id);
+                e.u32(view.texture);
+                e.u32(view.dim.to_u32());
+                e.u32(view.format.to_u32());
+                e.u32(view.aspect.to_u32());
+                e.u32(view.base_mip);
+                e.u32(view.mip_count);
+                e.u32(view.base_layer);
+                e.u32(view.layer_count);
+            }
+            Cmd::DestroyTextureView(id) => {
+                e.u8(tag::DESTROY_TEXTURE_VIEW);
+                e.u32(*id);
+            }
             Cmd::CreateSampler(id, d) => {
                 e.u8(tag::CREATE_SAMPLER);
                 e.u32(*id);
@@ -60,6 +76,21 @@ impl Cmd {
                 e.shader_ref(&d.compute);
                 e.str(&d.label);
             }
+            Cmd::CreateRenderPipelineLayout(id, d, layout, multisample) => {
+                e.u8(tag::CREATE_RENDER_PIPELINE_LAYOUT);
+                e.u32(*id);
+                e.render_pipeline(d);
+                e.pipeline_layout(layout);
+                e.u64(multisample.mask);
+                e.bool(multisample.sample_shading);
+            }
+            Cmd::CreateComputePipelineLayout(id, d, layout) => {
+                e.u8(tag::CREATE_COMPUTE_PIPELINE_LAYOUT);
+                e.u32(*id);
+                e.shader_ref(&d.compute);
+                e.str(&d.label);
+                e.pipeline_layout(layout);
+            }
             Cmd::DestroyPipeline(id) => {
                 e.u8(tag::DESTROY_PIPELINE);
                 e.u32(*id);
@@ -79,7 +110,7 @@ impl Cmd {
                 e.u32(d.width);
                 e.u32(d.height);
                 e.u32(d.format.to_u32());
-                e.u32(d.hlp_surface);
+                e.u64(d.token.get());
             }
             Cmd::DestroySurface(id) => {
                 e.u8(tag::DESTROY_SURFACE);
@@ -102,10 +133,15 @@ impl Cmd {
                 e.u32(*id);
                 e.u64(*value);
             }
-            Cmd::Present { surface, texture } => {
+            Cmd::Present {
+                surface,
+                texture,
+                serial,
+            } => {
                 e.u8(tag::PRESENT);
                 e.u32(*surface);
                 e.u32(*texture);
+                e.u64(serial.get());
             }
         }
     }

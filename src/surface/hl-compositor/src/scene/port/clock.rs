@@ -12,3 +12,32 @@ pub trait Clock {
     /// epoch is irrelevant — only monotonicity and resolution matter.
     fn now_nanos(&self) -> u64;
 }
+
+/// Absolute host `CLOCK_MONOTONIC`, suitable for the `wp_presentation` clock domain.
+#[cfg(unix)]
+pub fn monotonic_nanos() -> Option<u64> {
+    #[repr(C)]
+    struct Timespec {
+        seconds: i64,
+        nanos: i64,
+    }
+    extern "C" {
+        fn clock_gettime(clock: i32, value: *mut Timespec) -> i32;
+    }
+    #[cfg(target_os = "macos")]
+    const CLOCK_MONOTONIC: i32 = 6;
+    #[cfg(not(target_os = "macos"))]
+    const CLOCK_MONOTONIC: i32 = 1;
+
+    let mut value = Timespec {
+        seconds: 0,
+        nanos: 0,
+    };
+    // SAFETY: `value` is a valid writable timespec and CLOCK_MONOTONIC is supported on Unix hosts.
+    let result = unsafe { clock_gettime(CLOCK_MONOTONIC, &mut value) };
+    (result == 0 && value.seconds >= 0 && (0..1_000_000_000).contains(&value.nanos)).then(|| {
+        (value.seconds as u64)
+            .saturating_mul(1_000_000_000)
+            .saturating_add(value.nanos as u64)
+    })
+}

@@ -179,24 +179,20 @@ impl Vt {
                 let blank = self.blank();
                 self.grid.delete_cells(r, c, n, blank);
             }
-            b'L' => {
+            b'L' if r >= self.scroll_top && r <= self.scroll_bot => {
                 // IL: insert n blank lines at the cursor row within the scroll region.
-                if r >= self.scroll_top && r <= self.scroll_bot {
-                    let n = self.param(0, 1);
-                    let blank = self.blank();
-                    for _ in 0..n {
-                        self.grid.scroll_region_down(r, self.scroll_bot, blank);
-                    }
+                let n = self.param(0, 1);
+                let blank = self.blank();
+                for _ in 0..n {
+                    self.grid.scroll_region_down(r, self.scroll_bot, blank);
                 }
             }
-            b'M' => {
+            b'M' if r >= self.scroll_top && r <= self.scroll_bot => {
                 // DL: delete n lines at the cursor row within the scroll region.
-                if r >= self.scroll_top && r <= self.scroll_bot {
-                    let n = self.param(0, 1);
-                    let blank = self.blank();
-                    for _ in 0..n {
-                        self.grid.scroll_region_up(r, self.scroll_bot, blank);
-                    }
+                let n = self.param(0, 1);
+                let blank = self.blank();
+                for _ in 0..n {
+                    self.grid.scroll_region_up(r, self.scroll_bot, blank);
                 }
             }
             b'm' => self.sgr(),

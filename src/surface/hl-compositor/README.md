@@ -51,6 +51,28 @@ Per §7 these are adapter concerns and are deliberately absent:
 - **`adapter/cocoa`** (macOS) and **`adapter/drm`** (Linux) — concrete `scene::port::Presenter`
   implementations (Cocoa/Metal/IOSurface; DRM/GBM/KMS scanout).
 
+## Explicit synchronization
+
+Advertise `wp_linux_drm_syncobj_manager_v1` only after the whole contract works:
+
+- The virtual render node reports `DRM_CAP_SYNCOBJ` and `DRM_CAP_SYNCOBJ_TIMELINE` only when it implements
+  syncobj create/destroy, timeline wait/signal/query/transfer, fd import/export, and eventfd notification.
+- The engine's generic provider boundary can return a new guest descriptor from an ioctl, resolve a guest
+  descriptor passed into an ioctl, transfer the underlying object through `SCM_RIGHTS`, preserve open-file
+  description sharing across `dup`/fork, poll waits, and release objects on every close/disconnect path.
+- The compositor imports transferred timeline descriptors, snapshots acquire/release points with the
+  committed `wl_buffer`, waits for acquire before reading or presenting it, and signals release exactly once
+  after its final use—including replacement, rejection, surface destruction, and client disconnect.
+- GL and Vulkan submissions signal the acquire point only after writes complete. Buffer reuse waits for the
+  compositor's release point; Vulkan acquire/present semaphores and GL/EGL fences must not be bookkeeping-only
+  substitutes.
+- Tests cover malformed point pairs, non-dmabuf buffers, decreasing points, cross-client descriptor use,
+  buffer replacement/reuse, timeout and eventfd wakeup, process teardown, and no early or double release.
+
+The current projected render node truthfully reports both syncobj capabilities as unsupported. Smithay's
+`DrmSyncobjState` requires a real ioctl-capable `DrmDeviceFd`; use it only if the transferred descriptor
+provides that contract, otherwise keep the Wayland protocol behind a compositor-owned timeline port.
+
 ## Provenance
 
 The algorithms are ported (platform-neutral extraction) from `hl-compositor`'s `lib.rs`

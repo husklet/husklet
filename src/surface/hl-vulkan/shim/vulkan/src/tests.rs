@@ -369,6 +369,306 @@ fn private_data_round_trips_and_ycbcr_conversion_creates() {
 }
 
 #[test]
+fn instance_rejects_api_above_advertised_without_replacing_state() {
+    let _g = test_guard();
+    crate::state::StateStore::with(|state| {
+        state.instance = Some(hl_vulkan::Instance::new(make_api_version(0, 1, 0, 0)));
+    });
+    let application = VkApplicationInfo {
+        s_type: 0,
+        p_next: core::ptr::null(),
+        p_application_name: core::ptr::null(),
+        application_version: 0,
+        p_engine_name: core::ptr::null(),
+        engine_version: 0,
+        api_version: HL_API_VERSION + (1 << 12),
+    };
+    let create = VkInstanceCreateInfo {
+        s_type: 0,
+        p_next: core::ptr::null(),
+        flags: 0,
+        p_application_info: &application,
+        enabled_layer_count: 0,
+        pp_enabled_layer_names: core::ptr::null(),
+        enabled_extension_count: 0,
+        pp_enabled_extension_names: core::ptr::null(),
+    };
+    let mut output = core::ptr::null_mut();
+
+    assert_eq!(
+        crate::instance::vkCreateInstance(
+            &create as *const _ as *const c_void,
+            core::ptr::null(),
+            &mut output,
+        ),
+        VK_ERROR_INCOMPATIBLE_DRIVER
+    );
+    assert!(output.is_null());
+    assert_eq!(
+        crate::state::StateStore::with(|state| {
+            state.instance.as_ref().unwrap().app_api_version
+        }),
+        make_api_version(0, 1, 0, 0)
+    );
+}
+
+#[test]
+fn instance_accepts_newer_header_patch_for_advertised_api() {
+    let _g = test_guard();
+    let application = VkApplicationInfo {
+        s_type: 0,
+        p_next: core::ptr::null(),
+        p_application_name: core::ptr::null(),
+        application_version: 0,
+        p_engine_name: core::ptr::null(),
+        engine_version: 0,
+        api_version: HL_API_VERSION | 0x0fff,
+    };
+    let create = VkInstanceCreateInfo {
+        s_type: 0,
+        p_next: core::ptr::null(),
+        flags: 0,
+        p_application_info: &application,
+        enabled_layer_count: 0,
+        pp_enabled_layer_names: core::ptr::null(),
+        enabled_extension_count: 0,
+        pp_enabled_extension_names: core::ptr::null(),
+    };
+    let mut output = core::ptr::null_mut();
+
+    assert_eq!(
+        crate::instance::vkCreateInstance(
+            &create as *const _ as *const c_void,
+            core::ptr::null(),
+            &mut output,
+        ),
+        VK_SUCCESS
+    );
+    assert!(!output.is_null());
+    assert_eq!(
+        crate::state::StateStore::with(|state| {
+            state.instance.as_ref().unwrap().app_api_version
+        }),
+        application.api_version
+    );
+
+    crate::instance::vkDestroyInstance(output, core::ptr::null());
+}
+
+#[test]
+fn device_rejects_unknown_extension_without_creating_state() {
+    let _g = test_guard();
+    crate::state::StateStore::with(|state| state.device = None);
+    let unknown = std::ffi::CString::new("VK_HL_not_present").unwrap();
+    let names = [unknown.as_ptr()];
+    let create = VkDeviceCreateInfo {
+        s_type: 0,
+        p_next: core::ptr::null(),
+        flags: 0,
+        queue_create_info_count: 0,
+        p_queue_create_infos: core::ptr::null(),
+        enabled_layer_count: 0,
+        pp_enabled_layer_names: core::ptr::null(),
+        enabled_extension_count: 1,
+        pp_enabled_extension_names: names.as_ptr(),
+        p_enabled_features: core::ptr::null(),
+    };
+    let mut output = core::ptr::null_mut();
+
+    assert_eq!(
+        crate::device::vkCreateDevice(
+            core::ptr::null_mut(),
+            &create as *const _ as *const c_void,
+            core::ptr::null(),
+            &mut output,
+        ),
+        VK_ERROR_EXTENSION_NOT_PRESENT
+    );
+    assert!(output.is_null());
+    assert!(crate::state::StateStore::with(|state| state.device.is_none()));
+}
+
+#[test]
+fn device_rejects_unadvertised_base_feature_without_creating_state() {
+    let _g = test_guard();
+    crate::state::StateStore::with(|state| state.device = None);
+    let mut features = VkPhysicalDeviceFeatures {
+        bits: [VK_FALSE; 55],
+    };
+    features.bits[4] = VK_TRUE; // geometryShader is not advertised.
+    let create = VkDeviceCreateInfo {
+        s_type: 0,
+        p_next: core::ptr::null(),
+        flags: 0,
+        queue_create_info_count: 0,
+        p_queue_create_infos: core::ptr::null(),
+        enabled_layer_count: 0,
+        pp_enabled_layer_names: core::ptr::null(),
+        enabled_extension_count: 0,
+        pp_enabled_extension_names: core::ptr::null(),
+        p_enabled_features: &features,
+    };
+    let mut output = core::ptr::null_mut();
+
+    assert_eq!(
+        crate::device::vkCreateDevice(
+            core::ptr::null_mut(),
+            &create as *const _ as *const c_void,
+            core::ptr::null(),
+            &mut output,
+        ),
+        VK_ERROR_FEATURE_NOT_PRESENT
+    );
+    assert!(output.is_null());
+    assert!(crate::state::StateStore::with(|state| state.device.is_none()));
+}
+
+#[test]
+fn descriptor_array_features_are_advertised_independently() {
+    use hl_gpu::protocol::model::capability::binding_array;
+
+    for (capability, index) in [
+        (binding_array::UNIFORM_BUFFER, 33usize),
+        (binding_array::SAMPLED_TEXTURE | binding_array::SAMPLER, 34),
+        (binding_array::STORAGE_BUFFER, 35),
+        (binding_array::STORAGE_TEXTURE, 36),
+    ] {
+        let mut features = VkPhysicalDeviceFeatures {
+            bits: [VK_FALSE; 55],
+        };
+        crate::instance::enable_binding_array_features(&mut features, capability);
+        for candidate in 33..=36 {
+            assert_eq!(
+                features.bits[candidate] != VK_FALSE,
+                candidate == index,
+                "capability {capability:#x} leaked into feature index {candidate}"
+            );
+        }
+    }
+}
+
+#[test]
+fn shader_execution_features_are_advertised_independently() {
+    use hl_gpu::protocol::model::capability::gpu_feature;
+
+    for (capability, index) in [
+        (gpu_feature::ROBUST_BUFFER_ACCESS, 0usize),
+        (gpu_feature::FRAGMENT_STORES_ATOMICS, 26usize),
+        (gpu_feature::DEPTH_BIAS_CLAMP, 12usize),
+        (gpu_feature::IMAGE_CUBE_ARRAY, 2usize),
+        (gpu_feature::INDEPENDENT_BLEND, 3usize),
+        (gpu_feature::SAMPLE_RATE_SHADING, 6usize),
+    ] {
+        let mut features = VkPhysicalDeviceFeatures {
+            bits: [VK_FALSE; 55],
+        };
+        crate::instance::enable_gpu_features(&mut features, capability);
+        for candidate in [0usize, 2, 3, 6, 12, 26] {
+            assert_eq!(
+                features.bits[candidate] != VK_FALSE,
+                candidate == index,
+                "capability {capability:#x} leaked into feature index {candidate}"
+            );
+        }
+    }
+}
+
+#[test]
+fn physical_feature_query_uses_negotiated_shader_guarantees() {
+    use hl_gpu::protocol::model::capability::gpu_feature;
+
+    let mut caps = hl_gpu::Capabilities::full("test");
+    caps.gpu_features = gpu_feature::ROBUST_BUFFER_ACCESS;
+    let robust = crate::instance::features_for(Some(&caps));
+    assert_ne!(robust.bits[0], VK_FALSE);
+    assert_eq!(robust.bits[26], VK_FALSE);
+
+    caps.gpu_features = gpu_feature::FRAGMENT_STORES_ATOMICS;
+    let fragment = crate::instance::features_for(Some(&caps));
+    assert_eq!(fragment.bits[0], VK_FALSE);
+    assert_ne!(fragment.bits[26], VK_FALSE);
+
+    let unavailable = crate::instance::features_for(None);
+    assert_eq!(unavailable.bits[0], VK_FALSE);
+    assert_eq!(unavailable.bits[26], VK_FALSE);
+}
+
+#[test]
+fn device_request_forwards_enabled_shader_guarantees() {
+    use hl_gpu::protocol::model::capability::gpu_feature;
+
+    let mut features = VkPhysicalDeviceFeatures {
+        bits: [VK_FALSE; 55],
+    };
+    features.bits[0] = VK_TRUE;
+    features.bits[26] = VK_TRUE;
+    features.bits[12] = VK_TRUE;
+    features.bits[2] = VK_TRUE;
+    features.bits[3] = VK_TRUE;
+    features.bits[6] = VK_TRUE;
+    let create = VkDeviceCreateInfo {
+        s_type: 0,
+        p_next: core::ptr::null(),
+        flags: 0,
+        queue_create_info_count: 0,
+        p_queue_create_infos: core::ptr::null(),
+        enabled_layer_count: 0,
+        pp_enabled_layer_names: core::ptr::null(),
+        enabled_extension_count: 0,
+        pp_enabled_extension_names: core::ptr::null(),
+        p_enabled_features: &features,
+    };
+    assert_eq!(
+        crate::device::requested_gpu_features(Some(&create)),
+        gpu_feature::ROBUST_BUFFER_ACCESS
+            | gpu_feature::FRAGMENT_STORES_ATOMICS
+            | gpu_feature::DEPTH_BIAS_CLAMP
+            | gpu_feature::IMAGE_CUBE_ARRAY
+            | gpu_feature::INDEPENDENT_BLEND
+            | gpu_feature::SAMPLE_RATE_SHADING
+    );
+}
+
+#[test]
+fn device_rejects_unadvertised_features2_feature_without_creating_state() {
+    let _g = test_guard();
+    crate::state::StateStore::with(|state| state.device = None);
+    let mut requested = VkPhysicalDeviceFeatures2 {
+        s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+        p_next: core::ptr::null_mut(),
+        features: VkPhysicalDeviceFeatures {
+            bits: [VK_FALSE; 55],
+        },
+    };
+    requested.features.bits[4] = VK_TRUE;
+    let create = VkDeviceCreateInfo {
+        s_type: 0,
+        p_next: &requested as *const _ as *const c_void,
+        flags: 0,
+        queue_create_info_count: 0,
+        p_queue_create_infos: core::ptr::null(),
+        enabled_layer_count: 0,
+        pp_enabled_layer_names: core::ptr::null(),
+        enabled_extension_count: 0,
+        pp_enabled_extension_names: core::ptr::null(),
+        p_enabled_features: core::ptr::null(),
+    };
+    let mut output = core::ptr::null_mut();
+
+    assert_eq!(
+        crate::device::vkCreateDevice(
+            core::ptr::null_mut(),
+            &create as *const _ as *const c_void,
+            core::ptr::null(),
+            &mut output,
+        ),
+        VK_ERROR_FEATURE_NOT_PRESENT
+    );
+    assert!(output.is_null());
+    assert!(crate::state::StateStore::with(|state| state.device.is_none()));
+}
+
+#[test]
 fn ray_tracing_family_returns_extension_not_present() {
     // A wholesale-unmodeled extension command validates + returns the truthful, non-faked error.
     let mut pipe: u64 = 12345;

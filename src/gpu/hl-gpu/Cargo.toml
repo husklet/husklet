@@ -1,8 +1,4 @@
-# hl-gpu — v2-layered rewrite of the hl-gpu GPU core. The `protocol` module ported here is
-# wire-compatible with the shipping `hl-gpu` crate (same WIRE_VERSION, same tag numbers, same byte
-# layout). It carries an EMPTY `[workspace]` table so it is a standalone workspace root, excluded from
-# the shared repo workspace: codex's `cargo build` at the repo root never sees it. Build/test it with
-#   cargo test --manifest-path hl-gpu/Cargo.toml
+# Neutral GPU protocol, transport, runtime, and CPU reference executor.
 [package]
 name = "hl-gpu"
 version = "0.0.0"
@@ -18,6 +14,7 @@ path = "src/lib.rs"
 # Unix-socket / SCM_RIGHTS fd transfer / ioctl / eventfd / futex for the `transport` adapter. The rest of
 # the crate (protocol) stays dependency-free; libc is confined to `transport::adapter::unix`.
 libc = "0.2"
+socket2.workspace = true
 
 # Tag-based logging + counters + timing spans. Provably zero-cost when off (gated by HL_LOG /
 # HL_LOG_COUNTERS env), so instrumenting the hot path adds no runtime cost and no wire bytes.

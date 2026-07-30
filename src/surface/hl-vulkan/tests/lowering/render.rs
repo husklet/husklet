@@ -219,3 +219,31 @@ fn indexed_draw_lowers_set_index_buffer_and_draw_indexed() {
         other => panic!("expected Submit, got {other:?}"),
     }
 }
+
+#[test]
+fn uint32_index_buffer_preserves_the_full_index_format() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let ibuf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::INDEX_BUFFER, 12).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+
+    // VK_INDEX_TYPE_UINT32 = 1. This is the behavior behind
+    // VkPhysicalDeviceFeatures::fullDrawIndexUint32.
+    record::cmd_bind_index_buffer(&mut d, cb, ibuf, 0, 1).unwrap();
+    record::cmd_draw_indexed(&mut d, cb, 3, 1, 0, 0, 0).unwrap();
+    d.end_command_buffer(cb).unwrap();
+    submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
+
+    let [Cmd::Submit(commands)] = sink.batches.last().unwrap().as_slice() else {
+        panic!("expected one submitted command buffer");
+    };
+    assert_eq!(
+        commands.encoder.first(),
+        Some(&Enc::SetIndexBuffer {
+            buffer: 1,
+            offset: 0,
+            format: IndexFormat::U32,
+        })
+    );
+}

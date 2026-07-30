@@ -57,6 +57,49 @@ fn tex_sub_image_2d_writes_into_allocated_storage() {
 }
 
 #[test]
+fn tex_sub_image_2d_keeps_canonical_rgba_for_native_bgra_storage() {
+    let mut c = ctx();
+    let t = bound_texture(&mut c);
+    record::tex_image_2d_format(
+        &mut c,
+        1,
+        1,
+        &[0, 0, 0, 0xff],
+        hl_gpu::protocol::model::enums::TextureFormat::Bgra8Unorm,
+    );
+
+    record::tex_sub_image_2d(&mut c, GL_TEXTURE_2D, 0, 0, 0, 1, 1, &[0xff, 0, 0, 0xff]);
+
+    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
+    assert_eq!(
+        c.textures.get(t).unwrap().data.as_slice(),
+        [0xff, 0, 0, 0xff],
+        "the CPU shadow stays canonical RGBA; native BGRA is render-target metadata"
+    );
+}
+
+#[test]
+fn native_bgra_copy_preserves_logical_channels() {
+    let mut c = ctx();
+    let source = c.textures.gen();
+    let destination = c.textures.gen();
+    let format = hl_gpu::protocol::model::enums::TextureFormat::Bgra8Unorm;
+    c.textures
+        .image_2d(source, 1, 1, &[0xff, 0, 0, 0xff], format);
+    c.textures
+        .image_2d(destination, 1, 1, &[0, 0, 0, 0xff], format);
+
+    assert!(c
+        .textures
+        .copy_sub(source, destination, 0, 0, 0, 0, 1, 1, false, false, false,));
+    assert_eq!(
+        c.textures.get(destination).unwrap().data.as_slice(),
+        [0xff, 0, 0, 0xff],
+        "copying between native-BGRA targets preserves canonical RGBA shadows"
+    );
+}
+
+#[test]
 fn tex_storage_3d_sizes_and_seals_the_array_texture() {
     let mut c = ctx();
     let t = c.textures.gen();
@@ -141,5 +184,27 @@ fn get_tex_parameteriv_reports_bound_texture_filter_and_wrap() {
     assert_eq!(
         query::get_tex_parameteriv(&c, GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER),
         0
+    );
+}
+
+#[test]
+fn texture_swizzle_scalar_and_vector_forms_share_one_object_state() {
+    let mut context = ctx();
+    let texture = context.textures.gen();
+    context.active_texture(GL_TEXTURE0);
+    record::bind_texture(&mut context, GL_TEXTURE_2D, texture);
+
+    record::tex_parameter(&mut context, GL_TEXTURE_SWIZZLE_R, GL_ONE);
+    record::tex_parameter_vector(
+        &mut context,
+        GL_TEXTURE_SWIZZLE_RGBA,
+        &[GL_ONE, GL_ONE, GL_ONE, GL_RED],
+    );
+
+    let expected = [GL_ONE, GL_ONE, GL_ONE, GL_RED];
+    assert_eq!(context.textures.get(texture).unwrap().swizzle, expected);
+    assert_eq!(
+        query::get_tex_parameteriv(&context, GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_A),
+        GL_RED as i32
     );
 }

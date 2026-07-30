@@ -17,6 +17,7 @@ fn negotiate_then_submit_good_batch_executes_and_accounts() {
         shader_payloads: shader_payload::SPIRV,
         command_bits: hl_gpu::Capabilities::command_bits(ALL_COMMANDS),
         texture_formats: 0,
+        ..FeatureRequest::default()
     };
     let negotiated = service::negotiate::negotiate(&mut s, &exec, &req).expect("negotiate ok");
     assert_eq!(negotiated.name, "fake");
@@ -32,7 +33,7 @@ fn negotiate_then_submit_good_batch_executes_and_accounts() {
                 width: 4,
                 height: 4,
                 format: TextureFormat::Rgba8Unorm,
-                hlp_surface: 1,
+                token: hl_gpu::SurfaceToken::new(1).unwrap(),
             },
         ),
         Cmd::CreateFence(20),
@@ -50,6 +51,7 @@ fn negotiate_then_submit_good_batch_executes_and_accounts() {
         Cmd::Present {
             surface: 10,
             texture: 10,
+            serial: hl_gpu::FrameSerial::new(99).unwrap(),
         },
     ];
     let presents = hl_gpu::runtime::submit(&mut s, &mut exec, 512, &batch).expect("good batch");
@@ -58,7 +60,9 @@ fn negotiate_then_submit_good_batch_executes_and_accounts() {
         presents,
         vec![Presentation {
             surface: SurfaceId(10),
-            texture: TextureId(10)
+            token: hl_gpu::SurfaceToken::new(1).unwrap(),
+            texture: TextureId(10),
+            serial: hl_gpu::FrameSerial::new(99).unwrap(),
         }]
     );
     assert_eq!(

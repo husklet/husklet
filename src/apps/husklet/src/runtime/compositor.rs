@@ -13,6 +13,7 @@ use hl_compositor::adapter::smithay::{self, PngPresenter};
 
 pub struct Service {
     socket: PathBuf,
+    gpu_socket: Option<PathBuf>,
     stop: Arc<AtomicBool>,
     worker: Option<Worker>,
 }
@@ -65,6 +66,15 @@ impl Service {
         frames: impl Into<PathBuf>,
         presentation: Presentation,
     ) -> io::Result<Self> {
+        Self::start_configured(socket, frames, presentation, None)
+    }
+
+    pub fn start_configured(
+        socket: impl Into<PathBuf>,
+        frames: impl Into<PathBuf>,
+        presentation: Presentation,
+        native_gpu: Option<NativeGpuConfiguration>,
+    ) -> io::Result<Self> {
         let socket = socket.into();
         if let Some(parent) = socket.parent() {
             std::fs::create_dir_all(parent)?;
@@ -72,7 +82,21 @@ impl Service {
         Self::remove_socket(&socket)?;
 
         if presentation == Presentation::Native {
-            return Self::start_native(socket);
+            #[cfg(not(target_os = "macos"))]
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "native presentation is currently supported only on macOS",
+            ));
+
+            #[cfg(target_os = "macos")]
+            let native_gpu = native_gpu.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "native presentation requires a child-owned GPU service",
+                )
+            })?;
+            #[cfg(target_os = "macos")]
+            return Self::start_native(socket, native_gpu);
         }
 
         let stop = Arc::new(AtomicBool::new(false));
@@ -129,6 +153,7 @@ impl Service {
 
         Ok(Self {
             socket,
+            gpu_socket: None,
             stop,
             worker: Some(Worker::Thread(thread)),
         })
@@ -148,6 +173,10 @@ impl Service {
 
     fn is_up(path: &Path) -> bool {
         std::os::unix::net::UnixStream::connect(path).is_ok()
+    }
+
+    fn are_up(paths: &[&Path]) -> bool {
+        paths.iter().all(|path| Self::is_up(path))
     }
 
     #[cfg(target_os = "macos")]
@@ -198,14 +227,23 @@ impl Drop for Service {
                 self.socket.display()
             );
         }
+        if let Some(socket) = &self.gpu_socket {
+            if let Err(error) = Service::remove_socket(socket) {
+                hl_log::hl_error!(
+                    hl_log::tag::GPU,
+                    "native GPU socket cleanup failed path={} error={error}",
+                    socket.display()
+                );
+            }
+        }
     }
 }
 
 impl Service {
-    fn start_native(socket: PathBuf) -> io::Result<Service> {
+    fn start_native(socket: PathBuf, gpu: NativeGpuConfiguration) -> io::Result<Service> {
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = socket;
+            let _ = (socket, gpu);
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "native presentation is currently supported only on macOS",
@@ -219,6 +257,12 @@ impl Service {
                 .arg("__compositor")
                 .arg("--socket")
                 .arg(&socket)
+                .arg("--gpu-socket")
+                .arg(&gpu.socket)
+                .arg("--gpu-backend")
+                .arg(gpu.backend.as_str())
+                .arg("--gpu-trace")
+                .arg(if gpu.trace { "on" } else { "off" })
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
                 .spawn()?;
@@ -234,7 +278,7 @@ impl Service {
                 }
             };
             let deadline = Instant::now() + Duration::from_secs(2);
-            while !Self::is_up(&socket) {
+            while !Self::are_up(&[&socket, &gpu.socket]) {
                 match child.try_wait() {
                     Ok(Some(status)) => {
                         return Err(io::Error::new(
@@ -259,13 +303,14 @@ impl Service {
                     Self::stop_native(child, control, Duration::from_secs(2))?;
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
-                        "native compositor socket was not ready",
+                        "native compositor Wayland and GPU sockets were not ready",
                     ));
                 }
                 thread::sleep(Duration::from_millis(5));
             }
             Ok(Service {
                 socket,
+                gpu_socket: Some(gpu.socket),
                 stop: Arc::new(AtomicBool::new(false)),
                 worker: Some(Worker::Process { child, control }),
             })
@@ -276,6 +321,21 @@ impl Service {
     pub fn run_native(socket: &Path, configuration: NativeConfiguration) -> io::Result<()> {
         use hl_compositor::surface::macos::MacPresenter;
 
+        let (publisher, frames) =
+            hl_compositor::adapter::smithay::native_frames(3).map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("invalid native presentation channel: {error:?}"),
+                )
+            })?;
+        let _gpu = crate::runtime::gpu::Service::start_native(
+            &configuration.gpu.socket,
+            crate::runtime::gpu::Configuration::new(
+                configuration.gpu.backend,
+                configuration.gpu.trace,
+            ),
+            publisher,
+        )?;
         let mut presenter = MacPresenter::new_windowed_on_main_thread().ok_or(io::Error::new(
             io::ErrorKind::NotFound,
             "native compositor requires the process main thread and a Metal presentation device",
@@ -283,9 +343,12 @@ impl Service {
         if let Some(directory) = configuration.capture_directory {
             presenter = presenter.capture_to(directory)?;
         }
+        if let Some(directory) = configuration.capture_once_directory {
+            presenter = presenter.capture_once_to(directory)?;
+        }
         let stop = Arc::new(AtomicBool::new(false));
         NativeControl::watch(Arc::clone(&stop));
-        smithay::run(socket, presenter, stop)
+        smithay::run_with_native_frames(socket, presenter, stop, frames)
     }
 }
 
@@ -310,12 +373,14 @@ impl NativeControl {
 
 #[cfg(target_os = "macos")]
 pub struct NativeConfiguration {
+    gpu: NativeGpuConfiguration,
     capture_directory: Option<PathBuf>,
+    capture_once_directory: Option<PathBuf>,
 }
 
 #[cfg(target_os = "macos")]
 impl NativeConfiguration {
-    pub fn configured() -> Self {
+    pub fn configured(gpu: NativeGpuConfiguration) -> Self {
         use hl_compositor::surface::macos::MacPresenter;
 
         // Smithay reads these compatibility values while constructing its globals, so resolve the host
@@ -330,9 +395,45 @@ impl NativeConfiguration {
                 std::env::set_var("HL_OUTPUT_REFRESH_MHZ", refresh.to_string());
             }
         }
-        Self {
-            capture_directory: std::env::var_os("HL_NATIVE_CAPTURE_DIR").map(PathBuf::from),
+        if std::env::var_os("XKB_DEFAULT_LAYOUT").is_none() {
+            if let Some(layout) = MacPresenter::xkb_layout_on_main_thread() {
+                std::env::set_var("XKB_DEFAULT_LAYOUT", layout);
+            }
         }
+        Self {
+            gpu,
+            capture_directory: std::env::var_os("HL_NATIVE_CAPTURE_DIR").map(PathBuf::from),
+            capture_once_directory: std::env::var_os("HL_NATIVE_CAPTURE_ONCE_DIR")
+                .map(PathBuf::from),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct NativeGpuConfiguration {
+    socket: PathBuf,
+    backend: crate::runtime::gpu::Backend,
+    trace: bool,
+}
+
+impl NativeGpuConfiguration {
+    pub fn new(
+        socket: impl Into<PathBuf>,
+        backend: crate::runtime::gpu::Backend,
+        trace: bool,
+    ) -> io::Result<Self> {
+        let socket = socket.into();
+        if socket.as_os_str().is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "native GPU socket path is empty",
+            ));
+        }
+        Ok(Self {
+            socket,
+            backend,
+            trace,
+        })
     }
 }
 
@@ -351,6 +452,22 @@ mod tests {
         assert!(Service::is_up(&socket));
         drop(service);
         assert!(!socket.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn readiness_requires_every_socket() {
+        use std::os::unix::net::UnixListener;
+
+        let root =
+            std::env::temp_dir().join(format!("hl-compositor-readiness-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let wayland = root.join("wayland-0");
+        let gpu = root.join("gpu.sock");
+        let _wayland = UnixListener::bind(&wayland).unwrap();
+        assert!(!Service::are_up(&[&wayland, &gpu]));
+        let _gpu = UnixListener::bind(&gpu).unwrap();
+        assert!(Service::are_up(&[&wayland, &gpu]));
         let _ = std::fs::remove_dir_all(root);
     }
 

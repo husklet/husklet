@@ -1,6 +1,6 @@
 use super::{
     now_ms, Arc, Check, Container, ContainerId, ContainerState, Duration, ExitStatus, Healthcheck,
-    JournalId, Probe, ProcessConfig, Running, Service, Signal,
+    JournalId, Probe, ProcessConfig, Result, Running, Service, Signal,
 };
 
 impl Service {
@@ -32,79 +32,70 @@ impl Service {
                     );
                 }
             };
-            let network = match self
-                .networks
-                .launch(
-                    &container.id,
-                    container.spec.isolation,
-                    container.spec.network_mode,
-                )
-                .await
-            {
-                Ok(network) => network,
-                Err(error) => return Self::failed_probe(started_at_ms, error),
-            };
-            let mut process = Self::health_process(&container, check);
-            let mut requested_mounts = container.spec.mounts.clone();
-            let devices =
-                match self.devices(container.spec.guest, &mut process, &mut requested_mounts) {
-                    Ok(devices) => devices,
-                    Err(error) => return Self::failed_probe(started_at_ms, error),
-                };
-            let mut mounts = match self.volumes.resolve(&requested_mounts).await {
-                Ok(mounts) => mounts,
-                Err(error) => return Self::failed_probe(started_at_ms, error),
-            };
-            match self.identity.open(&container) {
-                Ok(identity) => mounts.extend(identity),
-                Err(error) => return Self::failed_probe(started_at_ms, error),
-            }
-            let (rootfs, overlay, owners) = match self.rootfs_launch(&container.spec.rootfs).await {
-                Ok(rootfs) => rootfs,
-                Err(error) => return Self::failed_probe(started_at_ms, error),
-            };
-            let filesystem_generation = match self.identity.generation(&container) {
-                Ok(generation) => generation.path().to_owned(),
-                Err(error) => return Self::failed_probe(started_at_ms, error),
-            };
-            let domain = self
-                .live
-                .lock()
-                .await
-                .get(&container.id)
-                .and_then(|run| run.process.domain());
-            match self
-                .runtime
-                .start(ProcessConfig {
-                    network_namespace: container.id.namespace(),
-                    rootfs,
-                    overlay,
-                    owners,
-                    filesystem_generation,
-                    checkpoint: None,
-                    guest: container.spec.guest,
-                    process,
-                    hostname: Some(container.hostname()),
-                    mounts,
-                    resources: container.spec.resources,
-                    isolation: container.spec.isolation,
-                    network_mode: container.spec.network_mode,
-                    networks: network,
-                    publish: Vec::new(),
-                    input: None,
-                    terminal: None,
-                    domain,
-                    domain_owner: false,
-                    extensions: devices.extensions,
-                    authorities: devices.authorities,
-                })
-                .await
-            {
+            match self.launch_probe(&container, check).await {
                 Ok(process) => process,
                 Err(error) => return Self::failed_probe(started_at_ms, error),
             }
         };
         Self::finish_probe(process, check, started_at_ms).await
+    }
+
+    async fn launch_probe(
+        &self,
+        container: &Container,
+        check: &Healthcheck,
+    ) -> Result<Arc<dyn Running>> {
+        let networks = self
+            .networks
+            .launch(
+                &container.id,
+                container.spec.isolation,
+                container.spec.network_mode,
+            )
+            .await?;
+        let mut process = Self::health_process(container, check);
+        let mut requested_mounts = container.spec.mounts.clone();
+        let (rootfs, overlay, owners) = self.rootfs_launch(&container.spec.rootfs).await?;
+        let devices = self.devices(
+            container.spec.guest,
+            &mut process,
+            &mut requested_mounts,
+            crate::device::FilesystemView::new(
+                &rootfs,
+                overlay.as_ref().map(|overlay| overlay.upper.as_path()),
+            ),
+        )?;
+        let mut mounts = self.volumes.resolve(&requested_mounts).await?;
+        mounts.extend(self.identity.open(container)?);
+        let filesystem_generation = self.identity.generation(container)?.path().to_owned();
+        let domain = self.process_domain(&container.id).await?;
+
+        self.runtime
+            .start(ProcessConfig {
+                network_namespace: container.id.namespace(),
+                rootfs,
+                overlay,
+                owners,
+                filesystem_generation,
+                translation_cache: self.translation_cache.clone(),
+                checkpoint: None,
+                guest: container.spec.guest,
+                process,
+                hostname: Some(container.hostname()),
+                mounts,
+                resources: container.spec.resources,
+                isolation: container.spec.isolation,
+                network_mode: container.spec.network_mode,
+                networks,
+                publish: Vec::new(),
+                input: None,
+                terminal: None,
+                domain: Some(domain),
+                domain_owner: false,
+                extensions: devices.extensions,
+                authorities: devices.authorities,
+            })
+            .await
     }
 
     async fn finish_probe(

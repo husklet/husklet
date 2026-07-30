@@ -14,6 +14,9 @@ impl Capabilities {
         let command_bits = d.u64()?;
         let shader_payloads = d.u32()?;
         let texture_formats = d.u32()?;
+        let binding_arrays = d.u32()?;
+        let non_uniform_binding_arrays = d.u32()?;
+        let gpu_features = if wire_version >= 11 { d.u32()? } else { 0 };
         let pbits = d.u32()?;
         Ok(Capabilities {
             name,
@@ -30,6 +33,9 @@ impl Capabilities {
             max_buffer_bytes,
             max_bind_groups,
             supports_timeline_fences,
+            binding_arrays,
+            non_uniform_binding_arrays,
+            gpu_features,
         })
     }
 
@@ -101,6 +107,36 @@ impl GlslDescriptor {
                 source,
             })
         })())
+    }
+}
+
+impl<'a> Decoder<'a> {
+    pub(crate) fn pipeline_layout(&mut self) -> Result<PipelineLayout> {
+        let count = self.u32()? as usize;
+        let count = self.cap_count(count, 16);
+        let mut bindings = Vec::with_capacity(count);
+        for _ in 0..count {
+            let group = self.u32()?;
+            let binding = self.u32()?;
+            let count = self.u32()?;
+            let kind = PipelineBindingKind::from_u32(self.u32()?)?;
+            if count == 0 {
+                return Err(GpuError::Invalid("pipeline binding count must be non-zero"));
+            }
+            if bindings
+                .iter()
+                .any(|item: &PipelineBinding| item.group == group && item.binding == binding)
+            {
+                return Err(GpuError::Invalid("duplicate pipeline binding"));
+            }
+            bindings.push(PipelineBinding {
+                group,
+                binding,
+                count,
+                kind,
+            });
+        }
+        Ok(PipelineLayout { bindings })
     }
 }
 use super::*;

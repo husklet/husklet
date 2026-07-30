@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="hl_surface_v1">
+  <copyright>
+    Copyright 2026 Husklet contributors
+
+    Permission to use, copy, modify, and distribute this software for any
+    purpose is hereby granted without fee.
+  </copyright>
+
+  <interface name="hl_surface_manager_v1" version="1">
+    <description summary="mint compositor-owned surface identities">
+      Creates an identity capability for a wl_surface. The capability is
+      scoped to this compositor connection and surface lifetime.
+    </description>
+
+    <request name="get_surface">
+      <arg name="id" type="new_id" interface="hl_surface_identity_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+  </interface>
+
+  <interface name="hl_surface_identity_v1" version="1">
+    <description summary="opaque surface identity and commit association">
+      Carries an opaque nonzero capability. Clients must not interpret it.
+      associate binds an increasing application frame serial to the next
+      wl_surface.commit. Multiple identity resources for one live wl_surface
+      receive the same capability. Destroying any one of them revokes that
+      capability and retires every sibling identity; a later get_surface
+      creates a fresh capability.
+    </description>
+
+    <enum name="error">
+      <entry name="invalid_serial" value="0" summary="serial is zero or not increasing"/>
+      <entry name="pending" value="1" summary="an association already awaits commit"/>
+      <entry name="retired" value="2" summary="the identity is no longer live"/>
+    </enum>
+
+    <event name="token">
+      <arg name="high" type="uint" summary="high 32 bits of opaque capability"/>
+      <arg name="low" type="uint" summary="low 32 bits of opaque capability"/>
+    </event>
+
+    <request name="associate">
+      <arg name="serial_high" type="uint"/>
+      <arg name="serial_low" type="uint"/>
+    </request>
+
+    <request name="destroy" type="destructor"/>
+  </interface>
+</protocol>

@@ -154,7 +154,7 @@ fn present_xrgb_readback_reorders_channels_end_to_end() {
 
     // An RGBA8 surface → the native readback is [R,G,B,A]; the XRGB convert must swap R↔B to [B,G,R,X].
     let surface =
-        present::create_surface(&mut d, &mut sink, W, H, vk_format::R8G8B8A8_UNORM, 0).unwrap();
+        present::create_surface(&mut d, &mut sink, W, H, vk_format::R8G8B8A8_UNORM, None).unwrap();
     let swapchain = present::create_swapchain(&mut d, &mut sink, surface, 2).unwrap();
     let images = d.swapchain_images(swapchain).unwrap();
 
@@ -172,7 +172,7 @@ fn present_xrgb_readback_reorders_channels_end_to_end() {
     d.end_render_pass(cb).unwrap();
     d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
-    present::queue_present(&mut d, &mut sink, swapchain, idx).unwrap();
+    present::queue_present(&mut d, &mut sink, swapchain, idx, None).unwrap();
 
     let (xrgb, w, h) = present::read_presented_xrgb(&mut d, &mut sink, swapchain, idx).unwrap();
     assert_eq!((w, h), (W, H));

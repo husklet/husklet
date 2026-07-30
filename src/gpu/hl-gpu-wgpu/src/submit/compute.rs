@@ -14,16 +14,22 @@ impl WgpuExecutor {
     /// `var<push_constant>` needs it only to CREATE (that is the wgpu-core validation pipeline Zed builds
     /// during device creation, which is never dispatched through this executor); reading push constants at
     /// a dispatch that the protocol never wrote is not reachable here.
-    pub(super) fn run_compute_pass(&mut self, res: &SessionResources, ops: &[Enc]) -> Result<()> {
+    pub(super) fn run_compute_pass(
+        &mut self,
+        res: &SessionResources,
+        ops: &[Enc],
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<()> {
         // As `run_render_pass`: wrap the pass in a validation scope so an over-large dispatch or other wgpu
         // rejection surfaces as a typed error instead of the panicking default handler.
-        self.with_validation_scope(|s| s.run_compute_pass_inner(res, ops))
+        self.with_validation_scope(|s| s.run_compute_pass_inner(res, ops, encoder))
     }
 
     pub(super) fn run_compute_pass_inner(
         &mut self,
         res: &SessionResources,
         ops: &[Enc],
+        enc: &mut wgpu::CommandEncoder,
     ) -> Result<()> {
         let _sp = hl_log::hl_span!(tag::EXEC, "submit");
         hl_log::hl_count!(tag::EXEC, "passes");
@@ -55,10 +61,14 @@ impl WgpuExecutor {
                     let mut groups = Vec::new();
                     for (idx, bound) in cur_groups.iter().enumerate() {
                         if let Some(g) = bound {
-                            let layout = match PipelineNative::get(res, pid)? {
-                                PipelineNative::Compute { pipeline } => {
-                                    pipeline.get_bind_group_layout(idx as u32)
-                                }
+                            let (layout, remap_group_zero) = match PipelineNative::get(res, pid)? {
+                                PipelineNative::Compute {
+                                    pipeline,
+                                    remap_group_zero,
+                                } => (
+                                    pipeline.get_bind_group_layout(idx as u32),
+                                    *remap_group_zero,
+                                ),
                                 PipelineNative::Render { .. } => unreachable!("checked above"),
                             };
                             // Compute bind groups already match their layout (the kernel path's explicit
@@ -67,6 +77,8 @@ impl WgpuExecutor {
                                 res,
                                 &layout,
                                 self.bind_group(res, *g)?,
+                                None,
+                                remap_group_zero,
                                 None,
                             )?;
                             groups.push((idx as u32, bg));
@@ -93,17 +105,13 @@ impl WgpuExecutor {
             }
         }
 
-        let mut enc = self
-            .gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
             let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("hl-compute-pass"),
                 timestamp_writes: None,
             });
             for (pid, groups, (x, y, z)) in &dispatches {
-                if let PipelineNative::Compute { pipeline } = PipelineNative::get(res, *pid)? {
+                if let PipelineNative::Compute { pipeline, .. } = PipelineNative::get(res, *pid)? {
                     pass.set_pipeline(pipeline);
                 }
                 for (idx, bg) in groups {
@@ -112,8 +120,6 @@ impl WgpuExecutor {
                 pass.dispatch_workgroups(*x, *y, *z);
             }
         }
-        self.gpu.queue.submit(Some(enc.finish()));
-        self.gpu.device.poll(wgpu::Maintain::Wait);
         Ok(())
     }
 }

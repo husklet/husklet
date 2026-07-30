@@ -1,6 +1,22 @@
 use super::*;
 
+pub(super) struct HostFrame {
+    root: SurfaceId,
+    callbacks: HashMap<SurfaceId, Vec<WlCallback>>,
+    feedbacks: HashMap<SurfaceId, Vec<PresentationFeedbackCallback>>,
+}
+
 impl HlState {
+    pub(super) fn cancel_host_root(&mut self, root: SurfaceId) {
+        self.engine.cancel_root(root);
+        self.pending_repaints.remove(&root);
+        if let Some(host) = self.pending_host_frames.remove(&root) {
+            for feedback in host.feedbacks.into_values().flatten() {
+                feedback.discarded();
+            }
+        }
+    }
+
     /// Act on the pacing outcome of a just-driven present for window root `root`: fire, retain, or drop
     /// the frame callbacks held for its tree, and arm/clear a repaint so a withheld frame still ships.
     ///
@@ -14,6 +30,37 @@ impl HlState {
                 root.0
             );
             self.arm_repaint(root);
+            return;
+        }
+        if frame.pacing == crate::scene::service::FramePacing::Pending {
+            if frame.submissions.is_empty() {
+                return;
+            }
+            // A later commit while A is in flight receives the same Pending snapshot from the scene.
+            // Its callbacks belong to B and must remain queued for the repaint after A completes.
+            if self.pending_host_frames.contains_key(&root) {
+                return;
+            }
+            self.pending_repaints.remove(&root);
+            let targets = self.tree_protocol_surfaces(root);
+            let mut callbacks = HashMap::new();
+            let mut feedbacks = HashMap::new();
+            for surface in targets {
+                if let Some(values) = self.pending_callbacks.remove(&surface) {
+                    callbacks.insert(surface, values);
+                }
+                if let Some(values) = self.pending_presentation.remove(&surface) {
+                    feedbacks.insert(surface, values);
+                }
+            }
+            self.pending_host_frames.insert(
+                root,
+                HostFrame {
+                    root,
+                    callbacks,
+                    feedbacks,
+                },
+            );
             return;
         }
         let policy = frame.pacing.policy();
@@ -45,6 +92,136 @@ impl HlState {
         }
     }
 
+    pub(crate) fn complete_host_presentation(
+        &mut self,
+        completion: crate::scene::port::PresentationCompletion,
+    ) {
+        let Some((root, frame)) = self.engine.complete_presentation(completion) else {
+            return;
+        };
+        let Some(host) = self.pending_host_frames.remove(&root) else {
+            return;
+        };
+        match frame.pacing {
+            crate::scene::service::FramePacing::Presented => {
+                let timing = match completion.outcome {
+                    crate::scene::port::CompletionOutcome::Delivered { timing, .. } => timing,
+                    crate::scene::port::CompletionOutcome::TerminalFailure => None,
+                };
+                let time_ns = timing
+                    .map(|timing| timing.present_ns)
+                    .or_else(crate::scene::port::clock::monotonic_nanos)
+                    .unwrap_or(0);
+                let time_ms = (time_ns / 1_000_000) as u32;
+                for callback in host.callbacks.into_values().flatten() {
+                    callback.done(time_ms);
+                }
+                self.answer_host_feedback(host.feedbacks, timing);
+                if self.engine.scene.is_tree_dirty(host.root) {
+                    self.arm_repaint(host.root);
+                }
+            }
+            crate::scene::service::FramePacing::RetryableFailure => {
+                for (surface, callbacks) in host.callbacks {
+                    self.pending_callbacks
+                        .entry(surface)
+                        .or_default()
+                        .extend(callbacks);
+                }
+                for (surface, feedbacks) in host.feedbacks {
+                    self.pending_presentation
+                        .entry(surface)
+                        .or_default()
+                        .extend(feedbacks);
+                }
+                self.repaint_surface(host.root);
+            }
+            crate::scene::service::FramePacing::TerminalFailure => {
+                for feedback in host.feedbacks.into_values().flatten() {
+                    feedback.discarded();
+                }
+                self.repaint_surface(host.root);
+            }
+            crate::scene::service::FramePacing::Pending
+            | crate::scene::service::FramePacing::Skipped => return,
+        }
+        hl_debug!(
+            tag::PRESENT,
+            "settle async root={} submission={} pacing={:?}",
+            host.root.0,
+            completion.id.0,
+            frame.pacing
+        );
+    }
+
+    fn tree_protocol_surfaces(&self, root: SurfaceId) -> Vec<SurfaceId> {
+        self.pending_callbacks
+            .keys()
+            .chain(self.pending_presentation.keys())
+            .copied()
+            .filter(|&surface| {
+                self.engine.scene.window_root(surface) == Some(root) || surface == root
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    fn answer_host_feedback(
+        &self,
+        feedbacks: HashMap<SurfaceId, Vec<PresentationFeedbackCallback>>,
+        timing: Option<crate::scene::port::PresentTiming>,
+    ) {
+        let present_ns = timing
+            .map(|timing| timing.present_ns)
+            .or_else(crate::scene::port::clock::monotonic_nanos);
+        let Some(present_ns) = present_ns else {
+            for feedback in feedbacks.into_values().flatten() {
+                feedback.discarded();
+            }
+            return;
+        };
+        let now = std::time::Duration::from_nanos(present_ns);
+        let refresh_ns = timing
+            .map(|timing| timing.refresh_ns)
+            .filter(|refresh| *refresh > 0)
+            .unwrap_or_else(|| {
+                self.engine
+                    .scene
+                    .primary_output()
+                    .map(|output| output.refresh_nanos())
+                    .unwrap_or(16_666_667)
+            });
+        let refresh = Refresh::fixed(std::time::Duration::from_nanos(refresh_ns));
+        for (surface, callbacks) in feedbacks {
+            let root = self.engine.scene.window_root(surface).unwrap_or(surface);
+            let output = self
+                .entered_outputs
+                .get(&root)
+                .copied()
+                .or_else(|| {
+                    self.engine
+                        .scene
+                        .selected_output(root)
+                        .map(|output| output.id)
+                })
+                .and_then(|id| self.wl_output_handle(id))
+                .or_else(|| self.primary_wl_output());
+            for feedback in callbacks {
+                if let Some(output) = output {
+                    let kind = timing
+                        .filter(|timing| timing.vsync)
+                        .map_or(wp_presentation_feedback::Kind::empty(), |_| {
+                            wp_presentation_feedback::Kind::Vsync
+                        });
+                    feedback.presented(output, now, refresh, 0, kind);
+                } else {
+                    feedback.discarded();
+                }
+            }
+        }
+    }
+
     /// Record that `root` owes a repaint at its next refresh boundary (or immediately, if it has never
     /// presented yet — a first present that failed retryably). Earlier deadlines win.
     pub(super) fn arm_repaint(&mut self, root: SurfaceId) {
@@ -52,14 +229,24 @@ impl HlState {
             self.pending_repaints.remove(&root);
             return;
         }
-        let due = self
+        let now = self.engine.clock().now_nanos();
+        let refresh = self
             .engine
-            .next_present_due_ns(root)
-            .unwrap_or_else(|| self.engine.clock().now_nanos());
+            .scene
+            .selected_output(root)
+            .map(|output| output.refresh_nanos())
+            .unwrap_or(16_666_667);
+        let due = repaint_deadline(now, self.engine.next_present_due_ns(root), refresh);
         self.pending_repaints
             .entry(root)
             .and_modify(|d| *d = (*d).min(due))
             .or_insert(due);
+    }
+
+    pub(crate) fn repaint_surface(&mut self, surface: SurfaceId) {
+        let root = self.engine.scene.window_root(surface).unwrap_or(surface);
+        self.engine.scene.mark_dirty(root);
+        self.arm_repaint(root);
     }
 
     /// The earliest host-monotonic deadline (ns) at which a repaint is owed, if any — the serve loop
@@ -74,16 +261,10 @@ impl HlState {
     /// tick rather than busy-looped.
     pub fn drive_due_repaints(&mut self) {
         let now = self.engine.clock().now_nanos();
-        let due: Vec<SurfaceId> = self
-            .pending_repaints
-            .iter()
-            .filter(|(_, &deadline)| now >= deadline)
-            .map(|(&root, _)| root)
-            .collect();
+        let due = take_due_repaints(&mut self.pending_repaints, now);
         for root in due {
             // Only surfaces that still exist and still root a window can present.
             if self.engine.scene.window_state(root).is_none() {
-                self.pending_repaints.remove(&root);
                 self.pending_callbacks.remove(&root);
                 continue;
             }
@@ -116,12 +297,15 @@ impl HlState {
         }
     }
 
-    /// Answer the `wp_presentation_feedback` callbacks held for `root`'s tree: `presented(now, refresh,
-    /// seq)` when `presented`, or `discarded` when the frame was torn down unshown. The timestamp is the
-    /// host-monotonic clock (`CLOCK_MONOTONIC`, the id `wp_presentation` advertised), the refresh is the
-    /// primary output's frame interval, and `seq` is the monotonic present counter — one increment per
-    /// PRESENT CYCLE (all feedbacks released by this one present share the frame's `seq` + `now`), so a
-    /// client sees a strictly increasing, contiguous sequence: one number per frame that reached the screen.
+    /// Answer the `wp_presentation_feedback` callbacks held for `root`'s tree: `presented(now, refresh)`
+    /// when `presented`, or `discarded` when the frame was torn down unshown. The timestamp is the best
+    /// monotonic approximation available at this boundary and the refresh is the primary output's interval.
+    ///
+    /// The protocol sequence is the output's actual vertical-retrace counter, not a compositor-local
+    /// content counter. Likewise `Kind::Vsync` promises evidence that the frame was shown at vertical
+    /// retrace. The current presenter only proves that a drawable was enqueued, so report sequence zero and
+    /// no flags until a native presented callback supplies the real timestamp, counter, and presentation
+    /// mode. Honest unknown values keep clients from deriving a false display phase.
     pub(super) fn answer_tree_feedback(&mut self, root: SurfaceId, presented: bool) {
         if self.pending_presentation.is_empty() {
             return;
@@ -146,19 +330,10 @@ impl HlState {
         let refresh = Refresh::fixed(std::time::Duration::from_nanos(
             1_000_000_000_000u64 / refresh_mhz as u64,
         ));
-        // ONE presentation sequence number for THIS present cycle. Every feedback answered in this call
-        // resolved against the SAME frame reaching the screen at the SAME timestamp `now` (a burst of
-        // commits coalesced by the vsync throttle accumulates several feedbacks that all release on this one
-        // present), so they must all carry the SAME `seq`: a `wp_presentation` sequence is a per-output
-        // vblank counter — one frame is one number. Stamping each feedback with a distinct `seq` would
-        // report several vblanks at one identical instant, which no real display can produce and which
-        // corrupts a client's (Chrome's) vsync-phase estimate. Allocated lazily so a cycle that only
-        // discards never advances the counter, which would otherwise leave a gap in the presented run.
-        let mut frame_seq: Option<u64> = None;
         for sid in targets {
             // Name the output this surface's frame presented on: its currently-entered output, else its
             // selected output, else the primary. Cloned (smithay's `Output` is an `Arc` handle) so the
-            // `present_seq` / `pending_presentation` mutations below don't conflict with the borrow.
+            // `pending_presentation` mutation below does not conflict with the output borrow.
             let root = self.engine.scene.window_root(sid).unwrap_or(sid);
             let output_handle = self
                 .entered_outputs
@@ -174,22 +349,12 @@ impl HlState {
             for feedback in feedbacks {
                 if presented {
                     if let Some(output_handle) = &output_handle {
-                        // Allocate this cycle's sequence number on first real present, then reuse it for
-                        // every remaining feedback in the cycle (same frame ⇒ same seq + same `now`).
-                        let seq = match frame_seq {
-                            Some(s) => s,
-                            None => {
-                                self.present_seq += 1;
-                                frame_seq = Some(self.present_seq);
-                                self.present_seq
-                            }
-                        };
                         feedback.presented(
                             output_handle,
                             now,
                             refresh,
-                            seq,
-                            wp_presentation_feedback::Kind::Vsync,
+                            0,
+                            wp_presentation_feedback::Kind::empty(),
                         );
                     } else {
                         feedback.discarded();
@@ -224,3 +389,32 @@ impl HlState {
         }
     }
 }
+
+/// Preserve an exact future throttle boundary, but pace a failed/offscreen retry no sooner than the next
+/// output refresh. A stale `last_present + refresh` deadline must not become a permanent due-now loop.
+fn repaint_deadline(now: u64, present_due: Option<u64>, refresh: u64) -> u64 {
+    match present_due {
+        Some(due) if due > now => due,
+        Some(_) | None => now.saturating_add(refresh.max(1)),
+    }
+}
+
+/// Drain exactly the roots whose repaint boundary has arrived. Consuming the old deadline before the
+/// present attempt lets a retryable result arm a new refresh boundary instead of preserving stale state.
+fn take_due_repaints(
+    pending: &mut std::collections::HashMap<SurfaceId, u64>,
+    now: u64,
+) -> Vec<SurfaceId> {
+    let due = pending
+        .iter()
+        .filter_map(|(&root, &deadline)| (deadline <= now).then_some(root))
+        .collect::<Vec<_>>();
+    for root in &due {
+        pending.remove(root);
+    }
+    due
+}
+
+#[cfg(test)]
+#[cfg(test)]
+include!("pacing.rs");

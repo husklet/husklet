@@ -7,7 +7,7 @@
 //!   through the container domain. GPU-rendered through GTK4's GSK renderer; VTE is the grid.
 //! * No onboarding, no popups — the app opens straight onto workspaces.
 //!
-//! Build + run on macOS: `nix develop ./nix -c cargo run -p husklet --features gui --bin husklet`.
+//! Build + run on macOS: `nix develop . -c cargo run -p husklet --features gui --bin husklet`.
 
 use gtk::gdk;
 use gtk::gio;

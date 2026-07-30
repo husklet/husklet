@@ -48,6 +48,8 @@ fn main() {
     // `src/` must restage the guest ICD or the staged `.so` goes stale (a real bug: an added instance
     // extension never reached the loader until the shim src happened to change).
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=HL_DRIVER_STAGE");
+    println!("cargo:rerun-if-env-changed=HL_DRIVER_ARCHES");
     println!("cargo:rerun-if-changed=Cargo.toml");
     println!(
         "cargo:rerun-if-changed={}",
@@ -60,6 +62,10 @@ fn main() {
     println!(
         "cargo:rerun-if-changed={}",
         manifest_dir.join(SHIM_DIR).join("registry").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_dir.join(SHIM_DIR).join("build").display()
     );
     println!(
         "cargo:rerun-if-changed={}",
@@ -76,15 +82,20 @@ fn main() {
 
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let shim_target = manifest_dir.join("target").join("shim-build");
-    let stage_root = stage_root();
+    let stage_root = stage_root(&manifest_dir);
     let sysroot = rustc_sysroot();
 
     for (triple, linker, arch_dir) in ARCHES {
-        let required = *arch_dir == "aarch64";
-        let linker = required
-            .then(|| std::env::var("HL_AARCH64_LINUX_CC").ok())
-            .flatten()
-            .unwrap_or_else(|| (*linker).to_owned());
+        if !BuildEnvironment::selected(arch_dir) {
+            continue;
+        }
+        let required = BuildEnvironment::mandatory(arch_dir);
+        let linker = match *arch_dir {
+            "aarch64" => std::env::var("HL_AARCH64_LINUX_CC").ok(),
+            "x86_64" => std::env::var("HL_X86_64_LINUX_CC").ok(),
+            _ => None,
+        }
+        .unwrap_or_else(|| (*linker).to_owned());
         if !BuildEnvironment::std_available(&sysroot, triple) {
             // aarch64 std is guaranteed on this host; a missing HOST std is a real, fail-loud error.
             if required {
@@ -186,7 +197,7 @@ fn build_shim(
 }
 
 fn vendor_dir(manifest_dir: &Path) -> PathBuf {
-    manifest_dir.join("../../../third_party/rust/shim-deps")
+    manifest_dir.join("../../../vendor/rust/shim-deps")
 }
 
 /// Install the built `.so` under `<stage_root>/vulkan/<arch>/<soname>` (+ an unversioned symlink) and
@@ -223,10 +234,12 @@ fn stage(
     Ok(())
 }
 
-/// `~/.hl` (or `/root/.hl` if `$HOME` is unset).
-fn stage_root() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-    Path::new(&home).join(".hl")
+/// Revision-scoped application staging when packaging, otherwise crate-local build output.
+fn stage_root(manifest_dir: &Path) -> PathBuf {
+    std::env::var_os("HL_DRIVER_STAGE").map_or_else(
+        || manifest_dir.join("../../../target/guest-drivers"),
+        PathBuf::from,
+    )
 }
 
 /// `rustc --print sysroot`.
@@ -243,6 +256,16 @@ fn rustc_sysroot() -> PathBuf {
 /// Is the rust std library for `triple` installed under `sysroot`?
 struct BuildEnvironment;
 impl BuildEnvironment {
+    fn selected(arch: &str) -> bool {
+        std::env::var("HL_DRIVER_ARCHES")
+            .map(|selected| selected.split(',').any(|value| value == arch))
+            .unwrap_or(true)
+    }
+
+    fn mandatory(arch: &str) -> bool {
+        arch == "aarch64" || std::env::var_os("HL_DRIVER_ARCHES").is_some()
+    }
+
     fn std_available(sysroot: &Path, triple: &str) -> bool {
         sysroot
             .join("lib")

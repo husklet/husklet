@@ -78,9 +78,22 @@ where
         let mmap_pool = match Pool::new(fd, NonZeroUsize::new(size).unwrap(), quota) {
             Ok(p) => p,
             Err(fd) => {
+                let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
+                let stat_result = unsafe { libc::fstat(fd.as_raw_fd(), stat.as_mut_ptr()) };
+                let backing_size = if stat_result == 0 {
+                    Some(unsafe { stat.assume_init() }.st_size)
+                } else {
+                    None
+                };
+                let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
+                let error = std::io::Error::last_os_error();
                 shm.post_error(
                     wl_shm::Error::InvalidFd,
-                    format!("Failed to mmap fd {}", fd.as_raw_fd()),
+                    format!(
+                        "Failed to mmap fd {}: requested={size}, backing={backing_size:?}, \
+                         flags={flags:#x}, error={error}",
+                        fd.as_raw_fd()
+                    ),
                 );
                 return;
             }

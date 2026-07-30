@@ -1,17 +1,23 @@
 use super::*;
 
-pub fn bind_buffer(ctx: &mut GlContext, target: u32, name: u32) {
+pub fn bind_buffer(ctx: &mut GlContext, target: u32, name: u32) -> bool {
+    if ctx.buffer_is_deleted(name) {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return false;
+    }
+    ctx.buffers.ensure(name);
     match target {
-        GL_ARRAY_BUFFER => ctx.array_buffer = name,
-        GL_ELEMENT_ARRAY_BUFFER => ctx.element_buffer = name,
+        GL_ARRAY_BUFFER => ctx.local.array_buffer = name,
+        GL_ELEMENT_ARRAY_BUFFER => ctx.local.element_buffer = name,
         t => {
             if name == 0 {
-                ctx.general_buffers.remove(&t);
+                ctx.local.general_buffers.remove(&t);
             } else {
-                ctx.general_buffers.insert(t, name);
+                ctx.local.general_buffers.insert(t, name);
             }
         }
     }
+    true
 }
 
 /// `glBufferData(target, data, usage)` — fills the buffer currently bound to `target`.
@@ -24,14 +30,16 @@ pub fn buffer_data(ctx: &mut GlContext, target: u32, data: &[u8], usage: u32) {
             data.len()
         );
     }
-    if name != 0 {
+    if ctx.buffers.is_mapped(name) {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+    } else if name != 0 {
         ctx.buffers.set_data(name, target, data, usage);
     }
 }
 
 /// `glBufferSubData(target, offset, data)`. A range that overflows or reaches beyond the bound buffer's
 /// current size is `GL_INVALID_VALUE` (real GL) — this also bounds the write so a hostile `offset` can
-/// never grow the buffer's `Vec` to an unbounded (or overflowing) size and panic/OOM.
+/// never grow the buffer's storage to an unbounded (or overflowing) size and panic/OOM.
 pub fn buffer_sub_data(ctx: &mut GlContext, target: u32, offset: usize, data: &[u8]) {
     let name = ctx.buffer_for_target(target);
     if (1..=9).contains(&name) {
@@ -41,7 +49,9 @@ pub fn buffer_sub_data(ctx: &mut GlContext, target: u32, offset: usize, data: &[
             data.len()
         );
     }
-    if name != 0 {
+    if ctx.buffers.is_mapped(name) {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+    } else if name != 0 {
         let size = ctx.buffers.get(name).map(|b| b.data.len()).unwrap_or(0);
         match offset.checked_add(data.len()) {
             Some(end) if end <= size => ctx.buffers.set_sub_data(name, offset, data),
@@ -53,11 +63,27 @@ pub fn buffer_sub_data(ctx: &mut GlContext, target: u32, offset: usize, data: &[
 /// `glDeleteBuffers` (one name).
 impl GlContext {
     pub fn delete_buffer(&mut self, name: u32) -> bool {
-        if self.array_buffer == name {
-            self.array_buffer = 0;
+        if self.local.array_buffer == name {
+            self.local.array_buffer = 0;
         }
-        if self.element_buffer == name {
-            self.element_buffer = 0;
+        if self.local.element_buffer == name {
+            self.local.element_buffer = 0;
+        }
+        self.local
+            .general_buffers
+            .retain(|_, buffer| *buffer != name);
+        self.local
+            .indexed_buffers
+            .retain(|_, binding| binding.buffer != name);
+        for attribute in &mut self.local.attr {
+            if attribute.buffer == name {
+                attribute.buffer = 0;
+            }
+        }
+        for binding in &mut self.local.vertex_bindings {
+            if binding.buffer == name {
+                binding.buffer = 0;
+            }
         }
         // Retire the buffer's resident IR ids (queued Destroy for the next frame) so its residency is reclaimed.
         self.retire_buffer(name);
@@ -85,6 +111,10 @@ pub fn copy_buffer_sub_data(
     hl_log::hl_debug!(hl_log::tag::GL, "[UBO_DUMP] glCopyBufferSubData rt={read_target:#x} wt={write_target:#x} rb={rb} wb={wb} ro={read_off} wo={write_off} size={size}");
     let (ro, wo, n) = (read_off as usize, write_off as usize, size as usize);
     if rb == 0 || wb == 0 {
+        return;
+    }
+    if ctx.buffers.is_mapped(rb) || ctx.buffers.is_mapped(wb) {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
         return;
     }
     let src = match ctx.buffers.range_bytes(rb, ro, n) {
@@ -124,7 +154,7 @@ impl IndexedBinding {
 /// `glBindBufferBase(target, index, buffer)` — bind the whole `buffer` to indexed slot `index` of `target`
 /// (and the generic target binding). A UBO/SSBO binding feeds a `glDispatchCompute` bind group.
 pub fn bind_buffer_base(ctx: &mut GlContext, target: u32, index: u32, buffer: u32) {
-    bind_buffer_range(ctx, target, index, buffer, 0, 0);
+    bind_indexed_buffer(ctx, target, index, buffer, 0, 0, true);
 }
 
 /// `glBindBufferRange(target, index, buffer, offset, size)` — bind `[offset, offset+size)` of `buffer` to
@@ -139,6 +169,18 @@ pub fn bind_buffer_range(
     offset: isize,
     size: isize,
 ) {
+    bind_indexed_buffer(ctx, target, index, buffer, offset, size, false);
+}
+
+fn bind_indexed_buffer(
+    ctx: &mut GlContext,
+    target: u32,
+    index: u32,
+    buffer: u32,
+    offset: isize,
+    size: isize,
+    base: bool,
+) {
     let Some(cap) = IndexedBinding::target_cap(target) else {
         ctx.set_gl_error(GL_INVALID_ENUM);
         return;
@@ -147,20 +189,41 @@ pub fn bind_buffer_range(
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
-    // glBindBufferRange (a non-zero buffer) requires a positive size + non-negative offset.
-    if buffer != 0 && size != 0 && (size < 0 || offset < 0) {
-        ctx.set_gl_error(GL_INVALID_VALUE);
-        return;
+    if buffer != 0 && !base {
+        let alignment = match target {
+            GL_UNIFORM_BUFFER => crate::service::query::UNIFORM_BUFFER_OFFSET_ALIGNMENT as usize,
+            GL_SHADER_STORAGE_BUFFER => {
+                crate::service::query::SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT as usize
+            }
+            _ => 4,
+        };
+        let valid_numbers = offset >= 0 && size > 0 && (offset as usize).is_multiple_of(alignment);
+        let in_bounds = valid_numbers
+            && ctx
+                .buffers
+                .get(buffer)
+                .and_then(|object| {
+                    (offset as usize)
+                        .checked_add(size as usize)
+                        .map(|end| end <= object.data.len())
+                })
+                .unwrap_or(false);
+        if !in_bounds {
+            ctx.set_gl_error(GL_INVALID_VALUE);
+            return;
+        }
     }
     if target == GL_UNIFORM_BUFFER {
         hl_log::hl_debug!(hl_log::tag::GL, "[UBO_DUMP] glBindBufferRange target={target:#x} index={index} buffer={buffer} offset={offset} size={size}");
     }
     // Bind the generic target too (GL binds both), so a later glBufferData(target, …) fills this buffer.
-    bind_buffer(ctx, target, buffer);
+    if !bind_buffer(ctx, target, buffer) {
+        return;
+    }
     if buffer == 0 {
-        ctx.indexed_buffers.remove(&(target, index));
+        ctx.local.indexed_buffers.remove(&(target, index));
     } else {
-        ctx.indexed_buffers.insert(
+        ctx.local.indexed_buffers.insert(
             (target, index),
             IndexedBinding {
                 buffer,
@@ -174,7 +237,7 @@ pub fn bind_buffer_range(
 /// The indexed-buffer binding at `(target, index)` (`glBindBufferBase`/`glBindBufferRange`), or `None` if
 /// nothing is bound there. Exposed for the lowering tests + the compute bind-group builder.
 pub fn indexed_buffer_binding(ctx: &GlContext, target: u32, index: u32) -> Option<IndexedBinding> {
-    ctx.indexed_buffers.get(&(target, index)).copied()
+    ctx.local.indexed_buffers.get(&(target, index)).copied()
 }
 
 // ---- MRT draw/read buffer selection (glDrawBuffers / glReadBuffer) --------------------------------
@@ -194,7 +257,7 @@ impl GlContext {
                 return;
             }
         }
-        self.draw_buffers = bufs.to_vec();
+        self.local.draw_buffers = bufs.to_vec();
     }
 
     /// `glReadBuffer(src)` — select the color buffer subsequent `glReadPixels`/blit reads from. `src` must be
@@ -207,7 +270,7 @@ impl GlContext {
             self.set_gl_error(GL_INVALID_ENUM);
             return;
         }
-        self.read_buffer_src = src;
+        self.local.read_buffer_src = src;
     }
 }
 

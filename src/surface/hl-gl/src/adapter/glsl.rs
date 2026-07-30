@@ -19,6 +19,7 @@ pub struct Decl {
     pub ty: String,
     pub name: String,
     pub arr: u32,
+    pub array_literal: bool,
 }
 
 impl Decl {
@@ -104,7 +105,161 @@ pub struct Uni {
     pub name: String,
     pub off: i32,
     pub sz: i32,
+    pub ty: String,
+    pub arr: u32,
 }
+
+impl Uni {
+    /// Copy packed `glUniform*` input into this member's std140 storage, inserting array/matrix column
+    /// padding rather than treating the caller's tightly packed bytes as already-std140.
+    pub fn write(&self, block: &mut [u8], bytes: &[u8]) {
+        self.write_from(block, 0, bytes);
+    }
+
+    pub fn write_from(&self, block: &mut [u8], first_element: usize, bytes: &[u8]) {
+        let offset = self.off.max(0) as usize;
+        let size = self.sz.max(0) as usize;
+        let Some(target) = block.get_mut(offset..offset.saturating_add(size)) else {
+            return;
+        };
+        let elements = if self.arr == 0 { 1 } else { self.arr as usize };
+        if first_element >= elements {
+            return;
+        }
+        let element_stride = size / elements.max(1);
+        if let Some((columns, rows)) = matrix_shape(&self.ty) {
+            let packed_element = columns * rows * 4;
+            for element in first_element..elements {
+                let source_base = (element - first_element) * packed_element;
+                let target_base = element * element_stride;
+                for column in 0..columns {
+                    let source = source_base + column * rows * 4;
+                    let target_offset = target_base + column * 16;
+                    let count = rows * 4;
+                    let (Some(input), Some(output)) = (
+                        bytes.get(source..source + count),
+                        target.get_mut(target_offset..target_offset + count),
+                    ) else {
+                        return;
+                    };
+                    output.copy_from_slice(input);
+                }
+            }
+            return;
+        }
+
+        let packed_element = TypeToken(&self.ty)
+            .layout()
+            .map(|(_, _, components)| components * 4)
+            .unwrap_or(0);
+        for element in first_element..elements {
+            let source = (element - first_element) * packed_element;
+            let target_offset = element * element_stride;
+            let count = packed_element
+                .min(bytes.len().saturating_sub(source))
+                .min(target.len().saturating_sub(target_offset));
+            if count == 0 {
+                break;
+            }
+            target[target_offset..target_offset + count]
+                .copy_from_slice(&bytes[source..source + count]);
+        }
+    }
+
+    pub fn read_element(&self, block: &[u8], element: usize) -> Option<Vec<u8>> {
+        let offset = self.off.max(0) as usize;
+        let size = self.sz.max(0) as usize;
+        let source = block.get(offset..offset.checked_add(size)?)?;
+        let elements = self.arr.max(1) as usize;
+        if element >= elements {
+            return None;
+        }
+        let stride = size / elements;
+        let source = source.get(element * stride..(element + 1) * stride)?;
+        if let Some((columns, rows)) = matrix_shape(&self.ty) {
+            let mut packed = Vec::with_capacity(columns * rows * 4);
+            for column in 0..columns {
+                packed.extend_from_slice(source.get(column * 16..column * 16 + rows * 4)?);
+            }
+            return Some(packed);
+        }
+        let bytes = TypeToken(&self.ty).layout()?.2 * 4;
+        Some(source.get(..bytes)?.to_vec())
+    }
+}
+
+fn matrix_shape(ty: &str) -> Option<(usize, usize)> {
+    Some(match ty {
+        "mat2" | "mat2x2" => (2, 2),
+        "mat3" | "mat3x3" => (3, 3),
+        "mat4" | "mat4x4" => (4, 4),
+        "mat2x3" => (2, 3),
+        "mat2x4" => (2, 4),
+        "mat3x2" => (3, 2),
+        "mat3x4" => (3, 4),
+        "mat4x2" => (4, 2),
+        "mat4x3" => (4, 3),
+        _ => return None,
+    })
+}
+
+/// Why a GLSL program cannot be represented by the modeled GLES uniform interface.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum UniformError {
+    UnsupportedType(String),
+    NonLiteralArray(String),
+    DynamicSamplerArray(String),
+    ArithmeticOverflow,
+    StageComponents { stage: &'static str, count: usize },
+    BlockBytes(usize),
+    Samplers(usize),
+    ConflictingDeclaration(String),
+    AttributeLocation(String),
+}
+
+impl std::fmt::Display for UniformError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsupportedType(ty) => write!(f, "unsupported uniform type `{ty}`"),
+            Self::NonLiteralArray(name) => {
+                write!(f, "uniform `{name}` has a non-literal array dimension")
+            }
+            Self::DynamicSamplerArray(name) => {
+                write!(f, "sampler array `{name}` uses a non-constant index")
+            }
+            Self::ArithmeticOverflow => write!(f, "uniform layout arithmetic overflow"),
+            Self::StageComponents { stage, count } => write!(
+                f,
+                "{stage} shader uses {count} uniform components; the limit is {MAX_UNIFORM_COMPONENTS}"
+            ),
+            Self::BlockBytes(bytes) => write!(
+                f,
+                "combined uniform block uses {bytes} bytes; the limit is {MAX_COMBINED_UNIFORM_BYTES}"
+            ),
+            Self::Samplers(count) => write!(
+                f,
+                "shader/program uses {count} samplers (counting array elements); the supported limit was exceeded"
+            ),
+            Self::ConflictingDeclaration(name) => {
+                write!(f, "uniform `{name}` has conflicting stage declarations")
+            }
+            Self::AttributeLocation(name) => {
+                write!(f, "attribute `{name}` has a conflicting or invalid location")
+            }
+        }
+    }
+}
+
+impl std::error::Error for UniformError {}
+
+/// Matches the values returned by the GLES capability queries.
+pub const MAX_UNIFORM_COMPONENTS: usize = 256 * 4;
+pub const MAX_VERTEX_SAMPLERS: usize = 4;
+pub const MAX_FRAGMENT_SAMPLERS: usize = 8;
+pub const MAX_COMBINED_SAMPLERS: usize = 8;
+/// Two independently valid stages are flattened into one internal std140 block. A scalar array is the
+/// worst-case std140 expansion: each component occupies one 16-byte array stride.
+pub const MAX_COMBINED_UNIFORM_BYTES: usize = 2 * MAX_UNIFORM_COMPONENTS * 16;
 
 /// One GLSL stage's source text.  Scanning and source-preserving rewrites live here so callers cannot
 /// accidentally mix comment-stripped offsets with the original byte stream.
@@ -155,7 +310,7 @@ mod tokens;
 mod translate;
 mod uniforms;
 
-pub use bindings::prepare_verbatim_program;
+pub use bindings::{prepare_verbatim_program, prepare_verbatim_program_with};
 pub use uniforms::UniformBlockDecl;
 
 use bindings::UniformBlockEdits;

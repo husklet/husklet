@@ -63,6 +63,7 @@ fn sample_batch() -> Vec<Cmd> {
         Cmd::Present {
             surface: 9,
             texture: 3,
+            serial: hl_gpu::FrameSerial::new(4).unwrap(),
         },
     ]
 }
@@ -73,6 +74,7 @@ fn feature_request() -> FeatureRequest {
         shader_payloads: shader_payload::SPIRV,
         command_bits: hl_gpu::Capabilities::command_bits(ALL_COMMANDS),
         texture_formats: TextureFormat::bits(COLOR_FORMATS),
+        ..FeatureRequest::default()
     }
 }
 
@@ -260,6 +262,7 @@ fn reconnect_replays_acknowledged_residency_once_before_new_work() {
         Cmd::Present {
             surface: 9,
             texture: 8,
+            serial: hl_gpu::FrameSerial::new(10).unwrap(),
         },
     ];
 

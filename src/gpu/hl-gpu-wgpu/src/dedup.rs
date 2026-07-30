@@ -9,17 +9,16 @@
 //! `(payload-kind, the exact payload words)`, a render pipeline on `(each stage's deduped shader identity +
 //! entry point, plus every fixed-function state field)` — so a create whose content matches a live backing
 //! ALIASES it: the new id gets a cheap clone of the shared `Arc`-backed wgpu handle and charges ~0
-//! incremental residency. A refcount of live alias ids per backing keeps the backing resident until the
-//! LAST alias is destroyed. Keys are compared by full value (exact `Vec<u32>` / derived `PartialEq`), never
-//! by a lossy hash, so two genuinely different sources/descriptors never falsely share.
+//! incremental residency. A refcount tracks live aliases. Released executor-local pipelines are dropped at
+//! commit; the device-level residency cache owns cross-batch reuse. Keys are compared by full value (exact
+//! `Vec<u32>` / derived `PartialEq`), never by a lossy hash, so distinct sources never falsely share.
 //!
 //! **Transaction-consistency.** The runtime dispatches every batch inside an all-tables transaction
 //! (`begin_txn` → `execute` → `commit_txn`/`rollback_txn`): if the executor's `execute` returns `Err` the
 //! id tables roll back to the pre-batch state. These caches live OUTSIDE `SessionResources`, so they journal
 //! every mutation within a batch and, on batch failure, replay the inverses — leaving the caches exactly as
 //! they were before the batch, in lock-step with the rolled-back id tables. On success the journal is
-//! cleared and any backing whose refcount reached zero is swept (its wgpu handle dropped, its residency
-//! already released).
+//! cleared and released executor-local backings are swept.
 
 use std::collections::HashMap;
 
@@ -66,6 +65,8 @@ pub struct RenderPipeKey {
     pub cull: u32,
     pub front_face: u32,
     pub sample_count: u32,
+    pub sample_mask: u64,
+    pub sample_shading: bool,
 }
 
 impl RenderPipeKey {
@@ -74,6 +75,7 @@ impl RenderPipeKey {
         desc: &RenderPipelineDesc,
         vertex_key: ShaderKey,
         fragment_key: Option<ShaderKey>,
+        multisample: hl_gpu::protocol::model::descriptor::RenderMultisample,
     ) -> Self {
         RenderPipeKey {
             vertex: (vertex_key, desc.vertex.entry.clone()),
@@ -89,6 +91,8 @@ impl RenderPipeKey {
             cull: desc.cull,
             front_face: desc.front_face,
             sample_count: desc.sample_count,
+            sample_mask: multisample.mask,
+            sample_shading: multisample.sample_shading,
         }
     }
 }
@@ -110,6 +114,7 @@ struct PipelineBacking {
     used_bindings: Vec<(u32, u32)>,
     bytes: u64,
     refcount: u32,
+    last_used: u64,
 }
 
 /// The inverse of one cache mutation, recorded for transactional rollback of a failed batch.
@@ -117,9 +122,9 @@ enum Undo {
     ShaderAcquire(ShaderKey),
     ShaderInstall(ShaderKey),
     ShaderRelease(ShaderKey),
-    PipelineAcquire(u64),
+    PipelineAcquire(u64, u64),
     PipelineInstall(u64),
-    PipelineRelease(u64),
+    PipelineRelease(u64, u64),
 }
 
 /// The executor's content-dedup state: the shader + pipeline backing caches, the running residency
@@ -129,6 +134,8 @@ pub struct DedupCaches {
     shaders: HashMap<ShaderKey, ShaderBacking>,
     pipelines: HashMap<u64, PipelineBacking>,
     next_pipeline_id: u64,
+    pipeline_clock: u64,
+    batch_pipeline_clock: u64,
     shader_bytes: u64,
     pipeline_bytes: u64,
     journal: Vec<Undo>,
@@ -143,8 +150,7 @@ impl DedupCaches {
         self.shader_bytes
     }
 
-    /// Bytes of render-pipeline-backing residency currently held (one backing's worth per UNIQUE live
-    /// descriptor, not per alias id).
+    /// Bytes of native render-pipeline backing residency currently held by live guest aliases.
     pub fn pipeline_resident_bytes(&self) -> u64 {
         self.pipeline_bytes
     }
@@ -159,9 +165,9 @@ impl DedupCaches {
         self.shaders.values().filter(|e| e.refcount > 0).count()
     }
 
-    /// Count of distinct live render-pipeline backings (unique compiled pipelines).
+    /// Count of distinct executor-local render-pipeline backings with live guest aliases.
     pub fn pipeline_backing_count(&self) -> usize {
-        self.pipelines.values().filter(|e| e.refcount > 0).count()
+        self.pipelines.len()
     }
 
     // ---- batch transaction hooks -------------------------------------------------------------------
@@ -170,14 +176,27 @@ impl DedupCaches {
     /// back).
     pub fn begin_batch(&mut self) {
         self.journal.clear();
+        self.batch_pipeline_clock = self.pipeline_clock;
     }
 
-    /// Commit the batch: drop the journal and sweep any backing whose last alias was destroyed this batch
-    /// (its residency was already released when the refcount hit zero).
+    /// Commit the batch: drop the journal and sweep released executor-local backings.
+    ///
+    /// Cross-batch pipeline reuse belongs to the device residency cache. Keeping another zero-reference
+    /// cache per executor multiplies native residency by the number of executors and retains losing
+    /// pipelines from concurrent exact misses.
     pub fn commit_batch(&mut self) {
         self.journal.clear();
         self.shaders.retain(|_, e| e.refcount > 0);
-        self.pipelines.retain(|_, e| e.refcount > 0);
+        let released: Vec<_> = self
+            .pipelines
+            .iter()
+            .filter_map(|(id, entry)| (entry.refcount == 0).then_some(*id))
+            .collect();
+        for id in released {
+            if let Some(entry) = self.pipelines.remove(&id) {
+                self.pipeline_bytes = self.pipeline_bytes.saturating_sub(entry.bytes);
+            }
+        }
     }
 
     /// Roll the batch back: replay every recorded inverse in reverse order, restoring the caches and the
@@ -210,33 +229,28 @@ impl DedupCaches {
                         e.refcount += 1;
                     }
                 }
-                Undo::PipelineAcquire(id) => {
+                Undo::PipelineAcquire(id, last_used) => {
                     if let Some(e) = self.pipelines.get_mut(&id) {
                         if e.refcount > 0 {
                             e.refcount -= 1;
-                            if e.refcount == 0 {
-                                self.pipeline_bytes = self.pipeline_bytes.saturating_sub(e.bytes);
-                            }
                         }
+                        e.last_used = last_used;
                     }
                 }
                 Undo::PipelineInstall(id) => {
                     if let Some(e) = self.pipelines.remove(&id) {
-                        if e.refcount > 0 {
-                            self.pipeline_bytes = self.pipeline_bytes.saturating_sub(e.bytes);
-                        }
+                        self.pipeline_bytes = self.pipeline_bytes.saturating_sub(e.bytes);
                     }
                 }
-                Undo::PipelineRelease(id) => {
+                Undo::PipelineRelease(id, last_used) => {
                     if let Some(e) = self.pipelines.get_mut(&id) {
-                        if e.refcount == 0 {
-                            self.pipeline_bytes = self.pipeline_bytes.saturating_add(e.bytes);
-                        }
                         e.refcount += 1;
+                        e.last_used = last_used;
                     }
                 }
             }
         }
+        self.pipeline_clock = self.batch_pipeline_clock;
     }
 
     // ---- shader cache ------------------------------------------------------------------------------
@@ -295,7 +309,8 @@ impl DedupCaches {
 
     // ---- pipeline cache ----------------------------------------------------------------------------
 
-    /// Look for a live render-pipeline backing whose descriptor matches `key` (exact full-value compare).
+    /// Look for a live executor-local render-pipeline backing whose descriptor matches `key` (exact
+    /// full-value compare).
     /// On a hit, register one more alias and return a cheap clone of the shared pipeline plus its cached
     /// draw-time metadata and the backing id (stored on the aliasing pipeline for release). On a miss,
     /// returns `None`.
@@ -312,17 +327,22 @@ impl DedupCaches {
         let id = self
             .pipelines
             .iter()
-            .find(|(_, e)| e.refcount > 0 && &e.key == key)
+            .find(|(_, e)| &e.key == key)
             .map(|(id, _)| *id)?;
+        let previous_last_used = self.pipelines.get(&id).expect("id just found").last_used;
+        self.pipeline_clock = self.pipeline_clock.saturating_add(1);
+        let last_used = self.pipeline_clock;
         let e = self.pipelines.get_mut(&id).expect("id just found");
         e.refcount += 1;
+        e.last_used = last_used;
         let out = (
             e.pipeline.clone(),
             e.color_formats.clone(),
             e.used_bindings.clone(),
             id,
         );
-        self.journal.push(Undo::PipelineAcquire(id));
+        self.journal
+            .push(Undo::PipelineAcquire(id, previous_last_used));
         Some(out)
     }
 
@@ -338,6 +358,7 @@ impl DedupCaches {
     ) -> u64 {
         let id = self.next_pipeline_id;
         self.next_pipeline_id = self.next_pipeline_id.wrapping_add(1);
+        self.pipeline_clock = self.pipeline_clock.saturating_add(1);
         self.pipeline_bytes = self.pipeline_bytes.saturating_add(bytes);
         self.pipelines.insert(
             id,
@@ -348,6 +369,7 @@ impl DedupCaches {
                 used_bindings,
                 bytes,
                 refcount: 1,
+                last_used: self.pipeline_clock,
             },
         );
         self.journal.push(Undo::PipelineInstall(id));
@@ -356,15 +378,17 @@ impl DedupCaches {
 
     /// Release one alias of a render-pipeline backing (a `DestroyPipeline` of a deduped render pipeline).
     pub fn pipeline_release(&mut self, backing_id: u64) {
+        self.pipeline_clock = self.pipeline_clock.saturating_add(1);
+        let last_used = self.pipeline_clock;
         if let Some(e) = self.pipelines.get_mut(&backing_id) {
             if e.refcount == 0 {
                 return;
             }
+            let previous_last_used = e.last_used;
             e.refcount -= 1;
-            if e.refcount == 0 {
-                self.pipeline_bytes = self.pipeline_bytes.saturating_sub(e.bytes);
-            }
-            self.journal.push(Undo::PipelineRelease(backing_id));
+            e.last_used = last_used;
+            self.journal
+                .push(Undo::PipelineRelease(backing_id, previous_last_used));
         }
     }
 }

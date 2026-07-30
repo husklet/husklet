@@ -40,6 +40,13 @@ fn platform_recognition_and_extensions() {
     assert!(egl_client_extensions().contains("EGL_EXT_platform_wayland"));
     assert!(egl_client_extensions().contains("EGL_KHR_platform_wayland"));
     assert!(egl_display_extensions().contains("EGL_KHR_platform_wayland"));
+    assert!(egl_display_extensions().contains("EGL_KHR_fence_sync"));
+    assert!(egl_display_extensions().contains("EGL_KHR_create_context_no_error"));
+    assert!(
+        egl_display_extensions().contains("EGL_EXT_create_context_robustness"),
+        "Dawn requires robust EGL context creation"
+    );
+    assert!(egl_display_extensions().contains("EGL_KHR_image_base"));
     // The device family GDK/epoxy require to find eglQueryDisplayAttribEXT — advertised on both
     // the client (EGL_NO_DISPLAY) and per-display strings, matching real Mesa.
     assert!(egl_client_extensions().contains("EGL_EXT_device_base"));

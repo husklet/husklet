@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeMap;
 
 pub(super) struct IoDecl {
     /// `true` for `in` (vertex attribute / fragment varying-in), `false` for `out` (vertex varying-out /
@@ -289,6 +290,13 @@ impl Declarations<'_> {
 /// (GskGpu/GTK4) is returned byte-identical.
 impl StageSources<'_> {
     pub fn inject_io_locations(self) -> (String, String) {
+        self.inject_io_locations_with(&BTreeMap::new())
+    }
+
+    pub fn inject_io_locations_with(
+        self,
+        attribute_bindings: &BTreeMap<String, u32>,
+    ) -> (String, String) {
         let vs = self.vertex;
         let fs = self.fragment;
         use std::collections::{BTreeMap, BTreeSet};
@@ -311,6 +319,7 @@ impl StageSources<'_> {
             .filter(|d| d.is_in)
             .filter_map(|d| d.explicit_loc.filter(|&l| l != u32::MAX))
             .collect();
+        attr_used.extend(attribute_bindings.values().copied());
         let mut fs_out_used: BTreeSet<u32> = fsd
             .iter()
             .filter(|d| !d.is_in)
@@ -357,7 +366,10 @@ impl StageSources<'_> {
                 continue;
             }
             let loc = if d.is_in {
-                take(&mut attr_used)
+                attribute_bindings
+                    .get(&d.name)
+                    .copied()
+                    .unwrap_or_else(|| take(&mut attr_used))
             } else {
                 varying_map[&d.name]
             };
@@ -379,6 +391,22 @@ impl StageSources<'_> {
             Edits::from(vs_edits).apply(vs),
             Edits::from(fs_edits).apply(fs),
         )
+    }
+}
+
+impl Source<'_> {
+    /// Explicit vertex-input locations present in this stage.
+    pub(crate) fn vertex_locations(self) -> BTreeMap<String, u32> {
+        Declarations::scan_io_decls(self.text)
+            .into_iter()
+            .filter(|declaration| declaration.is_in)
+            .filter_map(|declaration| {
+                declaration
+                    .explicit_loc
+                    .filter(|location| *location != u32::MAX)
+                    .map(|location| (declaration.name, location))
+            })
+            .collect()
     }
 }
 

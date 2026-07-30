@@ -1,23 +1,26 @@
-use core::ffi::c_void;
-
-use super::abi::{SysWlAbi, WlAbi};
-use super::present::{FramePlane, WlAppError, WlAppResult, WL_SHM_FORMAT_XRGB8888};
+use super::abi::SysWlAbi;
+use super::present::{FramePlane, WL_SHM_FORMAT_XRGB8888};
 use super::shared_memory::ShmBuffer;
+use super::*;
 
 /// Presents a readback frame onto the app's OWN `wl_surface`, marshalling through the app's
 /// `libwayland-client` on a private event queue.
 pub struct WaylandAppPresenter {
     pub(super) abi: Box<dyn WlAbi>,
-    display: *mut c_void,
-    queue: *mut c_void,
+    pub(super) display: *mut c_void,
+    pub(super) queue: *mut c_void,
     /// A wrapper of the app's `wl_surface` bound to OUR private queue (we marshal attach/commit on it).
     pub(super) surface_wrapper: *mut c_void,
-    surface_version: u32,
+    pub(super) surface_version: u32,
+    pub(super) identity: *mut c_void,
+    pub(super) identity_version: u32,
+    pub(super) token: Option<SurfaceToken>,
+    pub(super) next_serial: u64,
     /// The bound `wl_shm` (on our private queue).
-    shm: *mut c_void,
+    pub(super) shm: *mut c_void,
     pub(super) shm_version: u32,
     /// The previous frame's `wl_buffer`, destroyed when the next frame supersedes it (double-buffer safety).
-    last_buffer: *mut c_void,
+    pub(super) last_buffer: *mut c_void,
 }
 
 // The presenter is only ever touched under the shim's process-global state mutex (one entry point at a
@@ -26,6 +29,10 @@ pub struct WaylandAppPresenter {
 unsafe impl Send for WaylandAppPresenter {}
 
 impl WaylandAppPresenter {
+    pub fn native_token(&self) -> Option<SurfaceToken> {
+        self.token
+    }
+
     /// Bring up the presenter for the app's `wl_surface*` (`0` = not a wayland window) using the live
     /// `dlopen`/`dlsym` [`SysWlAbi`]. A missing library / symbol / global is a typed *soft* error so the
     /// caller keeps the readback-only present.
@@ -38,6 +45,48 @@ impl WaylandAppPresenter {
         }
         let abi = SysWlAbi::load()?;
         Self::with_abi(Box::new(abi), surface_ptr as *mut c_void)
+    }
+
+    pub fn reserve_native_frame(&mut self) -> Option<NativeFrame> {
+        let token = self.token?;
+        let serial = self.next_serial;
+        self.next_serial = self.next_serial.checked_add(1)?;
+        Some(NativeFrame {
+            token,
+            serial: FrameSerial::new(serial).ok()?,
+        })
+    }
+
+    /// Associate a successfully submitted native GPU frame with the next Wayland commit.
+    pub fn commit_native(&mut self, frame: NativeFrame, w: u32, h: u32) -> WlAppResult<()> {
+        if self.token != Some(frame.token) || self.identity.is_null() {
+            return Err(WlAppError::NoIdentity);
+        }
+        self.abi
+            .identity_associate(self.identity, self.identity_version, frame.serial.get());
+        self.abi.surface_damage(
+            self.surface_wrapper,
+            self.surface_version,
+            w.max(1) as i32,
+            h.max(1) as i32,
+        );
+        self.abi
+            .surface_commit(self.surface_wrapper, self.surface_version);
+        if self.abi.flush(self.display) < 0 {
+            return Err(WlAppError::Flush);
+        }
+        Ok(())
+    }
+
+    /// Retire only native pairing; the SHM compatibility path remains available.
+    pub fn retire_native(&mut self) {
+        if !self.identity.is_null() {
+            self.abi
+                .identity_destroy(self.identity, self.identity_version);
+            self.identity = core::ptr::null_mut();
+            self.identity_version = 0;
+            self.token = None;
+        }
     }
 
     /// Bring up the presenter over an explicit ABI backend (the seam the recording tests drive).
@@ -63,6 +112,7 @@ impl WaylandAppPresenter {
         }
         let display_wrapper = abi.create_wrapper(display);
         if display_wrapper.is_null() {
+            abi.destroy_queue(queue);
             return Err(WlAppError::QueueSetup);
         }
         abi.set_queue(display_wrapper, queue);
@@ -71,32 +121,61 @@ impl WaylandAppPresenter {
         // The display wrapper is only needed to place get_registry on our queue.
         abi.wrapper_destroy(display_wrapper);
         if registry.is_null() {
+            abi.destroy_queue(queue);
             return Err(WlAppError::QueueSetup);
-        }
-
-        // Discover + bind wl_shm on our private queue.
-        let shm_res = abi.discover_shm(registry, display, queue);
-        let (shm_name, shm_version) = match shm_res {
-            Some(nv) => nv,
-            None => {
-                abi.destroy(registry);
-                return Err(WlAppError::NoShmGlobal);
-            }
-        };
-        let shm = abi.bind_shm(registry, shm_name, shm_version);
-        abi.destroy(registry); // no further registry events wanted
-        if shm.is_null() {
-            return Err(WlAppError::NoShmGlobal);
         }
 
         // A surface wrapper on our private queue: commits go to the app's surface object, but its events
         // (none from attach/commit) would land on our queue — we never disturb the app's own queue.
         let surface_wrapper = abi.create_wrapper(surface);
         if surface_wrapper.is_null() {
-            abi.destroy(shm);
+            abi.destroy(registry);
+            abi.destroy_queue(queue);
             return Err(WlAppError::QueueSetup);
         }
         abi.set_queue(surface_wrapper, queue);
+
+        let globals = match abi.discover_globals(registry, display, queue) {
+            Ok(globals) => globals,
+            Err(error) => {
+                abi.wrapper_destroy(surface_wrapper);
+                abi.destroy(registry);
+                abi.destroy_queue(queue);
+                return Err(error);
+            }
+        };
+        let (shm, shm_version) = globals
+            .shm
+            .map(|(name, version)| (abi.bind_shm(registry, name, version), version))
+            .unwrap_or((core::ptr::null_mut(), 0));
+        let (identity, identity_version, token) = if let Some((name, version)) = globals.identity {
+            let manager = abi.bind_identity_manager(registry, name, version.min(1));
+            if manager.is_null() {
+                (core::ptr::null_mut(), 0, None)
+            } else {
+                let identity = abi.identity_for_surface(manager, version.min(1), surface_wrapper);
+                abi.destroy(manager);
+                if identity.is_null() {
+                    (core::ptr::null_mut(), 0, None)
+                } else {
+                    match abi.identity_token(identity, display, queue) {
+                        Ok(token) => (identity, version.min(1), Some(token)),
+                        Err(_) => {
+                            abi.identity_destroy(identity, version.min(1));
+                            (core::ptr::null_mut(), 0, None)
+                        }
+                    }
+                }
+            }
+        } else {
+            (core::ptr::null_mut(), 0, None)
+        };
+        abi.destroy(registry);
+        if shm.is_null() && token.is_none() {
+            abi.wrapper_destroy(surface_wrapper);
+            abi.destroy_queue(queue);
+            return Err(WlAppError::NoShmGlobal);
+        }
 
         Ok(WaylandAppPresenter {
             abi,
@@ -104,6 +183,10 @@ impl WaylandAppPresenter {
             queue,
             surface_wrapper,
             surface_version,
+            identity,
+            identity_version,
+            token,
+            next_serial: 1,
             shm,
             shm_version,
             last_buffer: core::ptr::null_mut(),
@@ -114,6 +197,9 @@ impl WaylandAppPresenter {
     /// `wl_surface`: wrap it in a fresh `wl_shm` pool+buffer, `attach`+`damage`+`commit`, then `flush`.
     /// Returns a typed *hard* error on any map/marshal/flush failure — never a silent present.
     pub fn present(&mut self, xrgb: &[u8], w: u32, h: u32) -> WlAppResult<()> {
+        if self.shm.is_null() {
+            return Err(WlAppError::NoShmGlobal);
+        }
         let (w, h) = (w.max(1), h.max(1));
         let stride = (w * 4) as i32;
         let size = (stride as usize) * h as usize;
@@ -173,12 +259,17 @@ impl Drop for WaylandAppPresenter {
         if !self.last_buffer.is_null() {
             self.abi.buffer_destroy(self.last_buffer, 1);
         }
+        if !self.identity.is_null() {
+            self.retire_native();
+        }
         if !self.surface_wrapper.is_null() {
             self.abi.wrapper_destroy(self.surface_wrapper);
         }
         if !self.shm.is_null() {
             self.abi.destroy(self.shm);
         }
-        let _ = (self.display, self.queue); // the display/queue belong to the app; we don't tear them down.
+        if !self.queue.is_null() {
+            self.abi.destroy_queue(self.queue);
+        }
     }
 }

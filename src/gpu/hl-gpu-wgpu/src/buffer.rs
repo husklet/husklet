@@ -6,6 +6,8 @@
 //! copy-offset and 256-byte row-stride alignment rules at the protocol boundary — it reproduces the byte-
 //! addressable semantics the CPU oracle guarantees, which the conformance suite's unaligned copies need.
 
+use std::sync::atomic::Ordering;
+
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
 
@@ -69,9 +71,22 @@ impl WgpuExecutor {
             return Ok(Vec::new());
         }
         let astart = offset & !3;
-        let window = self.read_span(&b.buffer, astart, WgpuBuffer::allocation_size(end) - astart);
+        let mut window =
+            self.read_span(&b.buffer, astart, WgpuBuffer::allocation_size(end) - astart);
         let lo = (offset - astart) as usize;
-        Ok(window[lo..lo + len].to_vec())
+        let hi = lo
+            .checked_add(len)
+            .filter(|hi| *hi <= window.len())
+            .ok_or(GpuError::OutOfBounds)?;
+        hl_log::hl_add!(hl_log::tag::PRESENT, "readback_logical_bytes", len as u64);
+        if lo != 0 {
+            hl_log::hl_count!(hl_log::tag::PRESENT, "readback_shifted");
+            window.copy_within(lo..hi, 0);
+        } else {
+            hl_log::hl_count!(hl_log::tag::PRESENT, "readback_aligned_reuse");
+        }
+        window.truncate(len);
+        Ok(window)
     }
 
     /// Copy `span` bytes at 4-aligned `astart` out of a wgpu buffer into a mapped staging buffer and return
@@ -93,10 +108,12 @@ impl WgpuExecutor {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         enc.copy_buffer_to_buffer(wbuf, astart, &staging, 0, span);
         self.gpu.queue.submit(Some(enc.finish()));
+        // A real queue submission also flushes every earlier `write_buffer` operation.
+        self.pending_writes.store(false, Ordering::Release);
 
         let slice = staging.slice(..);
         slice.map_async(wgpu::MapMode::Read, |_| {});
-        self.gpu.device.poll(wgpu::Maintain::Wait);
+        self.wait_for_completion();
         let mapped = slice.get_mapped_range();
         let out = mapped.to_vec();
         drop(mapped);
@@ -124,7 +141,7 @@ impl WgpuExecutor {
         }
         if offset.is_multiple_of(4) && data.len().is_multiple_of(4) {
             self.gpu.queue.write_buffer(&b.buffer, offset, data);
-            self.gpu.queue.submit(None::<wgpu::CommandBuffer>);
+            self.pending_writes.store(true, Ordering::Release);
             return Ok(());
         }
         // Unaligned: read the enclosing 4-aligned window (against the allocation, which may extend past

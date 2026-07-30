@@ -187,6 +187,163 @@ fn identical_pipelines_share_one_backing() {
     );
 }
 
+#[test]
+fn destroyed_pipeline_drops_local_backing_and_reuses_device_artifact() {
+    let Some(mut exec) = new_exec() else { return };
+    let mut s = session(&exec);
+    exec.enable_profile();
+    hl_gpu::runtime::submit(
+        &mut s,
+        &mut exec,
+        0,
+        &[
+            Cmd::CreateShader {
+                id: 1,
+                kind: ShaderPayloadKind::Glsl,
+                spirv: glsl(glsl_stage::VERTEX, "vmain", VS),
+            },
+            Cmd::CreateShader {
+                id: 2,
+                kind: ShaderPayloadKind::Glsl,
+                spirv: glsl(glsl_stage::FRAGMENT, "fmain", FS_RED),
+            },
+            Cmd::CreateRenderPipeline(1, pipeline_desc(1, 2)),
+        ],
+    )
+    .unwrap();
+    hl_gpu::runtime::submit(&mut s, &mut exec, 0, &[Cmd::DestroyPipeline(1)]).unwrap();
+    assert_eq!(
+        exec.pipeline_backing_resident_bytes(),
+        0,
+        "released executor-local pipeline backing must not remain resident"
+    );
+    assert_eq!(exec.pipeline_backing_count(), 0);
+    hl_gpu::runtime::submit(
+        &mut s,
+        &mut exec,
+        0,
+        &[Cmd::CreateRenderPipeline(2, pipeline_desc(1, 2))],
+    )
+    .unwrap();
+
+    assert_eq!(exec.profile().unwrap().render_pipeline_compilations, 1);
+}
+
+#[test]
+fn failed_alias_batch_restores_pipeline_cache_accounting() {
+    let Some(mut exec) = new_exec() else { return };
+    let mut s = session(&exec);
+    let commands = [
+        Cmd::CreateShader {
+            id: 1,
+            kind: ShaderPayloadKind::Glsl,
+            spirv: glsl(glsl_stage::VERTEX, "vmain", VS),
+        },
+        Cmd::CreateShader {
+            id: 2,
+            kind: ShaderPayloadKind::Glsl,
+            spirv: glsl(glsl_stage::FRAGMENT, "fmain", FS_RED),
+        },
+        Cmd::CreateRenderPipeline(1, pipeline_desc(1, 2)),
+    ];
+    hl_gpu::runtime::submit(&mut s, &mut exec, 0, &commands).unwrap();
+    let bytes = exec.pipeline_backing_resident_bytes();
+    let backings = exec.pipeline_backing_count();
+
+    let error = exec
+        .execute(
+            &mut s.resources,
+            &[Cmd::CreateRenderPipeline(1, pipeline_desc(1, 2))],
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        hl_gpu::GpuError::DuplicateId {
+            kind: "pipeline",
+            id: 1
+        }
+    ));
+    assert_eq!(exec.pipeline_backing_resident_bytes(), bytes);
+    assert_eq!(exec.pipeline_backing_count(), backings);
+
+    hl_gpu::runtime::submit(&mut s, &mut exec, 0, &[Cmd::DestroyPipeline(1)]).unwrap();
+    assert_eq!(exec.pipeline_backing_resident_bytes(), 0);
+    assert_eq!(exec.pipeline_backing_count(), 0);
+}
+
+#[test]
+fn device_pipeline_cache_is_bounded_without_local_released_residency() {
+    const CAPACITY: u32 = 128;
+    let Some(mut exec) = new_exec() else { return };
+    let mut s = session(&exec);
+    exec.enable_profile();
+    hl_gpu::runtime::submit(
+        &mut s,
+        &mut exec,
+        0,
+        &[Cmd::CreateShader {
+            id: 1,
+            kind: ShaderPayloadKind::Glsl,
+            spirv: glsl(glsl_stage::VERTEX, "vmain", VS),
+        }],
+    )
+    .unwrap();
+
+    let source = |index| format!("{FS_RED}\n// cache-key-{index}\n");
+    for index in 0..CAPACITY {
+        let shader = 1_000 + index;
+        let pipeline = 2_000 + index;
+        hl_gpu::runtime::submit(
+            &mut s,
+            &mut exec,
+            0,
+            &[
+                Cmd::CreateShader {
+                    id: shader,
+                    kind: ShaderPayloadKind::Glsl,
+                    spirv: glsl(glsl_stage::FRAGMENT, "fmain", &source(index)),
+                },
+                Cmd::CreateRenderPipeline(pipeline, pipeline_desc(1, shader)),
+                Cmd::DestroyPipeline(pipeline),
+                Cmd::DestroyShader(shader),
+            ],
+        )
+        .unwrap();
+    }
+    assert_eq!(exec.pipeline_backing_count(), 0);
+    assert_eq!(exec.pipeline_backing_resident_bytes(), 0);
+
+    let replay = |index, shader, pipeline| {
+        [
+            Cmd::CreateShader {
+                id: shader,
+                kind: ShaderPayloadKind::Glsl,
+                spirv: glsl(glsl_stage::FRAGMENT, "fmain", &source(index)),
+            },
+            Cmd::CreateRenderPipeline(pipeline, pipeline_desc(1, shader)),
+            Cmd::DestroyPipeline(pipeline),
+            Cmd::DestroyShader(shader),
+        ]
+    };
+    hl_gpu::runtime::submit(&mut s, &mut exec, 0, &replay(0, 4_000, 5_000)).unwrap();
+    hl_gpu::runtime::submit(&mut s, &mut exec, 0, &replay(CAPACITY, 4_001, 5_001)).unwrap();
+    let compilations = exec.profile().unwrap().render_pipeline_compilations;
+    hl_gpu::runtime::submit(&mut s, &mut exec, 0, &replay(0, 4_002, 5_002)).unwrap();
+    assert_eq!(
+        exec.profile().unwrap().render_pipeline_compilations,
+        compilations,
+        "recently used entry must survive capacity eviction"
+    );
+    hl_gpu::runtime::submit(&mut s, &mut exec, 0, &replay(1, 4_003, 5_003)).unwrap();
+    assert_eq!(
+        exec.profile().unwrap().render_pipeline_compilations,
+        compilations + 1,
+        "least-recently-used device artifact must be evicted"
+    );
+    assert_eq!(exec.pipeline_backing_count(), 0);
+    assert_eq!(exec.pipeline_backing_resident_bytes(), 0);
+}
+
 // The executor charges a flat per-pipeline backing footprint (mirrors the runtime's KIND_PIPELINE 4096);
 // duplicated here to avoid exposing the constant publicly.
 fn hl_gpu_wgpu_pipeline_backing_bytes() -> u64 {

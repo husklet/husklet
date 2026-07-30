@@ -8,6 +8,7 @@
 
 use std::io;
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::time::Instant;
 
 use crate::protocol::model::capability::Capabilities;
 use crate::protocol::model::command::Cmd;
@@ -15,7 +16,7 @@ use crate::transport::adapter::unix;
 use crate::transport::adapter::unix::FrameOutcome;
 use crate::transport::model::header::{SubmitHeader, ACK_FAIL, ACK_OK};
 use crate::transport::model::readback::{
-    ReadbackRequest, READBACK_FAIL, READBACK_MAGIC, READBACK_OK,
+    readback_kind, ReadbackRequest, READBACK_FAIL, READBACK_MAGIC, READBACK_OK,
 };
 
 /// A handler's verdict for one decoded frame, mapped straight to the wire ack.
@@ -58,6 +59,16 @@ pub trait ConnectionHandler {
     /// Serve a readback request, returning the bytes on success or `None` to fail the readback. Default:
     /// unsupported (fail).
     fn read_buffer(&mut self, req: &ReadbackRequest) -> Option<Vec<u8>> {
+        let _ = req;
+        None
+    }
+
+    fn poll_fence(&mut self, req: &ReadbackRequest) -> Option<bool> {
+        let _ = req;
+        None
+    }
+
+    fn wait_fence(&mut self, req: &ReadbackRequest) -> Option<crate::FenceWait> {
         let _ = req;
         None
     }
@@ -118,9 +129,26 @@ fn serve_loop<H: ConnectionHandler>(
             // Device→host readback: decode the fixed request, serve it, and reply with the disjoint
             // length-prefixed response (never the 1-byte submit ack). A panicking readback op is contained
             // and failed rather than allowed to unwind the connection thread.
+            let started = std::time::Instant::now();
             let bytes = ReadbackRequest::from_bytes(&frame.payload).and_then(|req| {
-                HandlerBoundary::call(|| handler.read_buffer(&req)).unwrap_or(None)
+                HandlerBoundary::call(|| match req.kind {
+                    readback_kind::BUFFER => handler.read_buffer(&req),
+                    readback_kind::FENCE => handler.poll_fence(&req).map(|done| vec![done as u8]),
+                    readback_kind::FENCE_WAIT => handler
+                        .wait_fence(&req)
+                        .map(|status| vec![matches!(status, crate::FenceWait::Complete) as u8]),
+                    _ => None,
+                })
+                .unwrap_or(None)
             });
+            hl_log::hl_debug!(
+                hl_log::tag::TRANSPORT,
+                "readback complete request_bytes={} response_bytes={} elapsed_us={} ok={}",
+                frame.payload.len(),
+                bytes.as_ref().map_or(0, Vec::len),
+                started.elapsed().as_micros(),
+                bytes.is_some()
+            );
             match bytes {
                 Some(bytes) => {
                     unix::Connection::new(stream).write_readback_response(READBACK_OK, &bytes)?
@@ -135,31 +163,61 @@ fn serve_loop<H: ConnectionHandler>(
         // handler); a handler that PANICS on some op is caught and NACKed rather than allowed to unwind the
         // connection thread (which would drop the socket = `Broken pipe` for every later frame). Either way
         // the connection stays alive and serves the next frame.
-        let verdict = match crate::protocol::codec::Decoder::stream(&frame.payload) {
-            Ok(batch) => {
-                hl_log::hl_debug!(
-                    hl_log::tag::TRANSPORT,
-                    "frame bytes={} cmds={}",
-                    frame.payload.len(),
-                    batch.len()
-                );
-                HandlerBoundary::call(|| handler.submit(&frame.header, &batch))
-                    .unwrap_or(Verdict::Nack)
-            }
-            Err(_error) => {
-                hl_log::hl_warn!(
-                    hl_log::tag::WIRE,
-                    "decode failed bytes={}: {}",
-                    frame.payload.len(),
-                    _error
-                );
-                Verdict::Nack
-            }
-        };
+        let diagnostics = hl_log::Logging::global().enabled(
+            hl_log::Tags::from(hl_log::tag::TRANSPORT),
+            hl_log::Level::Debug,
+        );
+        let total_started = diagnostics.then(Instant::now);
+        let decode_started = diagnostics.then(Instant::now);
+        let (verdict, commands, decode_us, handler_us) =
+            match crate::protocol::codec::Decoder::stream(&frame.payload) {
+                Ok(batch) => {
+                    let decode_us = decode_started
+                        .map(|started| started.elapsed().as_micros())
+                        .unwrap_or_default();
+                    let handler_started = diagnostics.then(Instant::now);
+                    let verdict = HandlerBoundary::call(|| handler.submit(&frame.header, &batch))
+                        .unwrap_or(Verdict::Nack);
+                    let handler_us = handler_started
+                        .map(|started| started.elapsed().as_micros())
+                        .unwrap_or_default();
+                    (verdict, batch.len(), decode_us, handler_us)
+                }
+                Err(_error) => {
+                    let decode_us = decode_started
+                        .map(|started| started.elapsed().as_micros())
+                        .unwrap_or_default();
+                    hl_log::hl_warn!(
+                        hl_log::tag::WIRE,
+                        "decode failed bytes={}: {}",
+                        frame.payload.len(),
+                        _error
+                    );
+                    (Verdict::Nack, 0, decode_us, 0)
+                }
+            };
         if matches!(verdict, Verdict::Nack) {
             hl_log::hl_count!(hl_log::tag::TRANSPORT, "nacks");
         }
-        unix::Connection::new(stream).write_ack(verdict.ack_byte())?;
+        let ack = verdict.ack_byte();
+        let ack_started = diagnostics.then(Instant::now);
+        unix::Connection::new(stream).write_ack(ack)?;
+        let ack_write_us = ack_started
+            .map(|started| started.elapsed().as_micros())
+            .unwrap_or_default();
+        hl_log::hl_debug!(
+            hl_log::tag::TRANSPORT,
+            "frame_complete payload_bytes={} commands={} decode_us={} handler_us={} ack_write_us={} total_us={} ack={}",
+            frame.payload.len(),
+            commands,
+            decode_us,
+            handler_us,
+            ack_write_us,
+            total_started
+                .map(|started| started.elapsed().as_micros())
+                .unwrap_or_default(),
+            ack
+        );
     }
 }
 
@@ -185,7 +243,9 @@ where
 }
 
 /// Serve one connection to completion driving a [`ConnectionHandler`], which serves BOTH submit and the
-/// additive device→host readback path. Otherwise identical to [`serve_connection`].
+/// additive device→host readback path. Otherwise identical to [`serve_connection`]. This call owns the
+/// protocol writer for `stream` until it returns and serializes every response in request order; callers
+/// must not write protocol bytes through another clone of the same socket concurrently.
 pub fn serve_connection_with_handler<H: ConnectionHandler>(
     stream: &UnixStream,
     caps: &Capabilities,

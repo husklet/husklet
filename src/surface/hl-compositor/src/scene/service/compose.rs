@@ -10,7 +10,10 @@
 
 use hl_log::{hl_debug, hl_span, tag};
 
-use crate::scene::model::{Format, PresentableImage, Rect, Scene, SurfaceId};
+use crate::scene::{
+    model::{Format, PresentableImage, Rect, Scene, SurfaceId},
+    port::{PresentFrame, PresentLayer, PresentTiming},
+};
 
 /// One layer of a composed frame: the presentable image, its offset within the present root, and the
 /// root-space damage attributable to it this cycle (empty when the layer is clean).
@@ -51,6 +54,47 @@ impl Frame {
 /// descendants, and every popup belonging to the root (and their descendants) — becomes one
 /// [`PresentItem`] at its accumulated root-relative offset, in composite order.
 impl Scene {
+    /// Build one submission batch per native-window role. Subsurfaces are composited into their owning
+    /// toplevel or popup; popups are never flattened into the toplevel drawable.
+    pub fn compose_present_frames(
+        &self,
+        root: SurfaceId,
+        output: crate::scene::model::OutputId,
+        timing: PresentTiming,
+    ) -> Option<Vec<PresentFrame>> {
+        self.get(root)?.buffer?;
+        let mut roles = vec![root];
+        roles.extend(
+            self.collect_popups_for_root(root)
+                .into_iter()
+                .map(|(popup, _, _)| popup),
+        );
+        roles
+            .into_iter()
+            .map(|role| {
+                let mut surfaces = Vec::new();
+                self.collect_subtree_offsets(role, 0, 0, &mut surfaces);
+                let layers = surfaces
+                    .into_iter()
+                    .filter_map(|(surface, x, y)| {
+                        self.present_item(surface, x, y).map(|item| PresentLayer {
+                            image: item.image,
+                            x,
+                            y,
+                            damage: item.damage,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                (!layers.is_empty()).then_some(PresentFrame {
+                    output,
+                    role,
+                    layers,
+                    timing,
+                })
+            })
+            .collect()
+    }
+
     pub fn compose_frame(&self, root: SurfaceId) -> Option<Frame> {
         let _span = hl_span!(tag::COMPOSITOR, "compose");
         // The root must have content; if not, there is nothing to present.
@@ -138,20 +182,23 @@ impl Scene {
         })
     }
 
-    /// The root-space damage a layer contributes this cycle: its accumulated damage bounding box (or its
-    /// whole rectangle when it is dirty but carries no rects — a fresh buffer / resize), translated by the
-    /// layer offset. A clean layer contributes nothing.
+    /// The root-space damage a layer contributes this cycle. Preserve separate rectangles so platform
+    /// presenters can restrict GPU work instead of expanding sparse updates to one large bounding box.
+    /// A fresh buffer or resize without explicit damage conservatively damages the complete layer.
     fn layer_damage(&self, sid: SurfaceId, x: i32, y: i32, w: i32, h: i32) -> Vec<Rect> {
         if !self.is_dirty(sid) {
             return Vec::new();
         }
         let surface = self.get(sid).expect("dirty surface exists");
-        let rect = surface
+        if surface.damage.is_empty() {
+            return vec![Rect::new(x, y, w, h)];
+        }
+        surface
             .damage
-            .bounding_box()
-            .unwrap_or(Rect::new(0, 0, w, h))
-            .translate(x, y);
-        vec![rect]
+            .rects()
+            .iter()
+            .map(|rect| rect.translate(x, y))
+            .collect()
     }
 
     /// Whether any surface in `root`'s presented tree has a change that is actually VISIBLE — the
@@ -218,5 +265,33 @@ fn opaque_covers(scene: &Scene, up: SurfaceId, ux: i32, uy: i32, rect: &Rect) ->
             None => false,
         },
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::model::{BufferState, Format};
+    use crate::scene::service::{commit_surface, Commit};
+
+    #[test]
+    fn composed_frame_preserves_sparse_damage_rectangles() {
+        let mut scene = Scene::new();
+        let surface = scene.create_surface();
+        let buffer = BufferState {
+            tex_w: 100,
+            tex_h: 80,
+            format: Format::Argb8888,
+            buffer_scale: 1,
+            gpu: true,
+        };
+        let mut commit = Commit::attach(buffer);
+        commit.damage = vec![Rect::new(1, 2, 3, 4), Rect::new(70, 60, 5, 6)];
+        assert!(commit_surface(&mut scene, surface, commit));
+
+        assert_eq!(
+            scene.compose_frame(surface).unwrap().items[0].damage,
+            vec![Rect::new(1, 2, 3, 4), Rect::new(70, 60, 5, 6)]
+        );
     }
 }

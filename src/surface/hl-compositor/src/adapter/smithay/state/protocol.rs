@@ -40,7 +40,15 @@ impl CompositorHandler for HlState {
 }
 
 impl BufferHandler for HlState {
-    fn buffer_destroyed(&mut self, _buffer: &WlBuffer) {}
+    fn buffer_destroyed(&mut self, _buffer: &WlBuffer) {
+        #[cfg(feature = "macos-surface")]
+        if let Ok(dmabuf) = get_dmabuf(_buffer) {
+            let external = dmabuf.weak();
+            if let Some(token) = self.native_buffers.remove(&external) {
+                self.destroy_native_buffer(token, &external);
+            }
+        }
+    }
 }
 
 impl ShmHandler for HlState {
@@ -68,14 +76,53 @@ impl DmabufHandler for HlState {
         notifier: ImportNotifier,
     ) {
         let fmt = dmabuf.format();
-        let importable = fmt.modifier == Modifier::Linear
-            && dmabuf.num_planes() == 1
+        let linear = dmabuf.num_planes() == 1
             && matches!(
                 fmt.code,
                 Fourcc::Argb8888 | Fourcc::Xrgb8888 | Fourcc::Abgr8888 | Fourcc::Xbgr8888
-            );
-        if importable {
-            let _ = notifier.successful::<HlState>();
+            )
+            && fmt.modifier == Modifier::Linear;
+        #[cfg(feature = "macos-surface")]
+        let external_token = (self.native_frames_enabled()
+            && dmabuf.num_planes() == 1
+            && matches!(fmt.code, Fourcc::Argb8888 | Fourcc::Xrgb8888)
+            && fmt.modifier == Modifier::from(hl_surface_protocol::buffer::MODIFIER))
+        .then(|| super::buffer::ExternalBuffer::token(&dmabuf))
+        .flatten();
+        #[cfg(feature = "macos-surface")]
+        let mut external_registration = None;
+        #[cfg(feature = "macos-surface")]
+        let external = external_token.is_some_and(|token| {
+            let external = dmabuf.weak();
+            // One Wayland resource owns one registration. Replacing an existing weak key would lose the
+            // earlier resource's unregister and desynchronize the token refcount.
+            if self.native_buffers.contains_key(&external) {
+                return false;
+            }
+            if !self.register_native_token(token) {
+                return false;
+            }
+            if self
+                .native_buffers
+                .insert(external.clone(), token)
+                .is_some()
+            {
+                self.unregister_native_token(token);
+                return false;
+            }
+            external_registration = Some((external, token));
+            true
+        });
+        #[cfg(not(feature = "macos-surface"))]
+        let external = false;
+        if linear || external {
+            if notifier.successful::<HlState>().is_err() {
+                #[cfg(feature = "macos-surface")]
+                if let Some((external, token)) = external_registration {
+                    self.native_buffers.remove(&external);
+                    self.unregister_native_token(token);
+                }
+            }
         } else {
             notifier.failed();
         }

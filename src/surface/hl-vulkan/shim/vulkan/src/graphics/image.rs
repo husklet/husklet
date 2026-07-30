@@ -18,11 +18,31 @@ pub extern "C" fn vkCreateImage(
         unsafe { *p_image = 0 };
     }
     ShimState::with_sink(|dev, sink| {
-        match create::create_image(
+        let cube = ci.flags & 0x10 != 0;
+        let dim = match ci.image_type {
+            1 => TextureDim::D2,
+            2 => TextureDim::D3,
+            _ => return VK_ERROR_INITIALIZATION_FAILED,
+        };
+        if ci.extent.depth == 0
+            || (dim == TextureDim::D3 && ci.array_layers != 1)
+            || (dim != TextureDim::D3 && ci.extent.depth != 1)
+            || (cube && dim != TextureDim::D2)
+        {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
+        if cube && (ci.array_layers < 6 || ci.array_layers % 6 != 0) {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
+        match create::create_image_geometry(
             dev,
             sink,
             ci.extent.width,
             ci.extent.height.max(1),
+            ci.extent.depth,
+            ci.array_layers.max(1),
+            ci.mip_levels.max(1),
+            if cube { TextureDim::Cube } else { dim },
             ci.format as u32,
             ci.usage,
             // `VkImageCreateInfo::samples` is a `VkSampleCountFlagBits` whose bit VALUE is the sample count.
@@ -67,7 +87,19 @@ pub extern "C" fn vkGetImageMemoryRequirements(
         dev.images
             .get(&image)
             .map(|i| {
-                i.width as u64 * i.height as u64 * i.format.bytes_per_texel().unwrap_or(4) as u64
+                let bytes = i.format.bytes_per_texel().unwrap_or(4) as u64;
+                (0..i.mip_levels).fold(0u64, |total, mip| {
+                    let width = (i.width >> mip).max(1) as u64;
+                    let height = (i.height >> mip).max(1) as u64;
+                    let depth = (i.depth >> mip).max(1) as u64;
+                    total.saturating_add(
+                        width
+                            .saturating_mul(height)
+                            .saturating_mul(depth)
+                            .saturating_mul(i.layers as u64)
+                            .saturating_mul(bytes),
+                    )
+                })
             })
             .unwrap_or(0)
     })
@@ -198,11 +230,108 @@ pub extern "C" fn vkCreateImageView(
     if !p_view.is_null() {
         unsafe { *p_view = 0 };
     }
-    // A view is a thin alias of its image (the hl model renders into images directly); record the
-    // view→image mapping so vkCmdBeginRenderPass can resolve a framebuffer attachment back to its image.
     let handle = StateStore::with(|s| {
-        let h = s.device.as_mut()?.alloc_handle();
-        s.image_views.insert(h, ci.image);
+        let (h, ir_id, mut image, view) = {
+            let dev = s.device.as_mut()?;
+            let image = dev.images.get(&ci.image)?.clone();
+            let base_mip = ci.subresource_range.base_mip_level;
+            let base_layer = ci.subresource_range.base_array_layer;
+            let mip_count = if ci.subresource_range.level_count == u32::MAX {
+                image.mip_levels.checked_sub(base_mip)?
+            } else {
+                ci.subresource_range.level_count
+            };
+            let layer_count = if ci.subresource_range.layer_count == u32::MAX {
+                image.layers.checked_sub(base_layer)?
+            } else {
+                ci.subresource_range.layer_count
+            };
+            if mip_count == 0
+                || layer_count == 0
+                || base_mip.checked_add(mip_count)? > image.mip_levels
+                || base_layer.checked_add(layer_count)? > image.layers
+            {
+                return None;
+            }
+            let dim = match ci.view_type {
+                1 if matches!(image.dim, TextureDim::D2 | TextureDim::Cube) && layer_count == 1 => {
+                    TextureDim::D2
+                }
+                5 if matches!(image.dim, TextureDim::D2 | TextureDim::Cube) => TextureDim::D2,
+                3 if image.dim == TextureDim::Cube && layer_count == 6 => TextureDim::Cube,
+                6 if image.dim == TextureDim::Cube => TextureDim::Cube,
+                2 if image.dim == TextureDim::D3 => TextureDim::D3,
+                _ => return None,
+            };
+            if image.dim == TextureDim::D3 && (base_layer != 0 || layer_count != 1) {
+                return None;
+            }
+            if matches!(dim, TextureDim::Cube)
+                && (layer_count < 6
+                    || !layer_count.is_multiple_of(6)
+                    || !base_layer.is_multiple_of(6))
+            {
+                return None;
+            }
+            let format = Format(ci.format as u32).wire()?;
+            if format != image.format {
+                return None;
+            }
+            let aspect = match (format, ci.subresource_range.aspect_mask) {
+                (TextureFormat::Depth32Float, 2) => TextureAspect::DepthOnly,
+                (TextureFormat::Depth24PlusStencil8, 2) => TextureAspect::DepthOnly,
+                (TextureFormat::Depth24PlusStencil8, 4) => TextureAspect::StencilOnly,
+                (TextureFormat::Depth24PlusStencil8, 6) => TextureAspect::All,
+                (TextureFormat::Depth32Float | TextureFormat::Depth24PlusStencil8, _) => {
+                    return None
+                }
+                (_, 1) => TextureAspect::All,
+                _ => return None,
+            };
+            let h = dev.alloc_handle();
+            let ir_id = dev.alloc_ir();
+            let view_layer_count = if image.dim == TextureDim::D3 {
+                (image.depth >> base_mip).max(1)
+            } else {
+                layer_count
+            };
+            (
+                h,
+                ir_id,
+                image,
+                TextureViewDesc {
+                    texture: dev.images.get(&ci.image)?.ir_id,
+                    dim,
+                    format,
+                    aspect,
+                    base_mip,
+                    mip_count,
+                    base_layer,
+                    layer_count: view_layer_count,
+                },
+            )
+        };
+        s.sink.submit(&[Cmd::CreateTextureView(ir_id, view)]).ok()?;
+        image.ir_id = ir_id;
+        image.width = (image.width >> ci.subresource_range.base_mip_level).max(1);
+        image.height = (image.height >> ci.subresource_range.base_mip_level).max(1);
+        image.depth = (image.depth >> ci.subresource_range.base_mip_level).max(1);
+        image.mip_levels = if ci.subresource_range.level_count == u32::MAX {
+            image
+                .mip_levels
+                .saturating_sub(ci.subresource_range.base_mip_level)
+        } else {
+            ci.subresource_range.level_count
+        };
+        image.layers = if ci.subresource_range.layer_count == u32::MAX {
+            image
+                .layers
+                .saturating_sub(ci.subresource_range.base_array_layer)
+        } else {
+            ci.subresource_range.layer_count
+        };
+        s.device.as_mut()?.images.insert(h, image);
+        s.image_views.insert(h, h);
         Some(h)
     });
     match handle {
@@ -223,7 +352,13 @@ pub extern "C" fn vkDestroyImageView(
     _p_allocator: *const c_void,
 ) {
     StateStore::with(|s| {
-        s.image_views.remove(&image_view);
+        let Some(alias) = s.image_views.remove(&image_view) else {
+            return;
+        };
+        let Some(image) = s.device.as_mut().and_then(|dev| dev.images.remove(&alias)) else {
+            return;
+        };
+        let _ = s.sink.submit(&[Cmd::DestroyTextureView(image.ir_id)]);
     });
 }
 

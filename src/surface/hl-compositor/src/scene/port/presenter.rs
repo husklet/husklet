@@ -10,11 +10,14 @@
 use crate::scene::model::{
     OutputId, PresentableImage, Rect, SurfaceId, WindowInteraction, WindowState,
 };
+use std::sync::Arc;
 
 /// Input/window intent emitted by a native presenter. Platform key codes are translated before crossing
 /// this seam, so the Wayland adapter receives Linux evdev codes and logical surface coordinates.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PresenterEvent {
+    /// An asynchronously submitted frame reached a terminal host-display outcome.
+    Presentation(PresentationCompletion),
     PointerMotion {
         window: SurfaceId,
         x: f64,
@@ -79,8 +82,31 @@ pub enum PresenterEvent {
     ResizeEnd {
         surface: SurfaceId,
     },
+    /// Host presentation properties changed without a guest commit. Re-present retained content.
+    Repaint(SurfaceId),
     Focus(SurfaceId),
     Close(SurfaceId),
+}
+
+/// Stable identity of one asynchronous host-display submission.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct PresentationId(pub u64);
+
+/// Terminal outcome reported after an asynchronous host-display submission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompletionOutcome {
+    Delivered {
+        serial: u64,
+        timing: Option<PresentTiming>,
+    },
+    TerminalFailure,
+}
+
+/// Completion of a previously returned [`PresentOutcome::Pending`] submission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PresentationCompletion {
+    pub id: PresentationId,
+    pub outcome: CompletionOutcome,
 }
 
 /// Presentation timing evidence for a delivered frame — host monotonic present time + the output's
@@ -110,6 +136,8 @@ impl PresentTiming {
 /// never advances frame pacing for a frame that did not actually reach the display.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PresentOutcome {
+    /// Accepted by an asynchronous display backend, but not yet known to be visible.
+    Pending { id: PresentationId },
     /// Visibly delivered to the display. `serial` is a monotonic per-frame pacing counter; `timing` is
     /// the optional hardware present-time evidence (`None` ⇒ fall back to the compositor's own clock).
     Delivered {
@@ -149,6 +177,8 @@ impl PresentationFeedback {
 
 /// Host-window event ingress.
 pub trait HostEvents {
+    /// Install an event-loop wakeup used by asynchronous platform callbacks.
+    fn set_wake(&mut self, _wake: Arc<dyn Wake>) {}
     /// Service platform-window events without presenting a frame. Most backends need no polling;
     /// main-thread window systems can use this hook from the host adapter's event loop.
     fn poll_events(&mut self) {}
@@ -157,6 +187,11 @@ pub trait HostEvents {
     fn take_events(&mut self) -> Vec<PresenterEvent> {
         Vec::new()
     }
+}
+
+/// Platform-neutral event-loop wakeup capability.
+pub trait Wake: Send + Sync {
+    fn wake(&self);
 }
 
 /// Host clipboard exchange.
@@ -183,18 +218,31 @@ pub trait Windows {
 }
 
 /// Finished-frame presentation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PresentLayer {
+    pub image: PresentableImage,
+    pub x: i32,
+    pub y: i32,
+    pub damage: Vec<Rect>,
+}
+
+/// One native-window role and every Wayland layer composited into it, bottom to top.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PresentFrame {
+    pub output: OutputId,
+    pub role: SurfaceId,
+    pub layers: Vec<PresentLayer>,
+    pub timing: PresentTiming,
+}
+
 pub trait Presenter {
-    /// Present one composed image to the named output, with its `damage` (root-space upload hint) and
-    /// `timing`. Returns a [`PresentationFeedback`] describing the fate of the frame. The scene calls
-    /// this in composite order (bottom → top) for each layer of a present root; the schedule service
-    /// advances frame pacing only for a `Delivered` outcome.
-    fn present(
-        &mut self,
-        output: OutputId,
-        image: &PresentableImage,
-        damage: &[Rect],
-        timing: PresentTiming,
-    ) -> PresentationFeedback;
+    /// Composite every layer into the persistent backing texture for `role`, then submit exactly one
+    /// native drawable. A popup is a distinct role; its subsurfaces remain layers of that popup.
+    fn present_frame(&mut self, frame: &PresentFrame) -> PresentationFeedback;
+
+    /// Cancel routing for a destroyed/recreated role. Already-submitted host resources may remain alive
+    /// until their native completion or timeout, but their completion must no longer settle scene state.
+    fn cancel(&mut self, _role: SurfaceId) {}
 }
 
 /// Complete host surface capability required by a platform adapter.

@@ -66,7 +66,7 @@ impl Status {
             GpuError::ResourceLimit(_) => VK_ERROR_OUT_OF_DEVICE_MEMORY,
             GpuError::OutOfBounds => VK_ERROR_MEMORY_MAP_FAILED,
             GpuError::Kernel(_) => VK_ERROR_UNKNOWN,
-            GpuError::Decode(_) => VK_ERROR_DEVICE_LOST,
+            GpuError::Decode(_) | GpuError::Transport(_) => VK_ERROR_DEVICE_LOST,
             GpuError::Invalid(_)
             | GpuError::BadEnum { .. }
             | GpuError::BadTag(_)
@@ -76,5 +76,20 @@ impl Status {
             | GpuError::ShortBuffer
             | GpuError::TrailingBytes => VK_ERROR_INITIALIZATION_FAILED,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Status, VK_ERROR_DEVICE_LOST};
+    use hl_gpu::{GpuError, TransportError};
+
+    #[test]
+    fn transport_loss_is_reported_as_device_loss() {
+        let error = GpuError::Transport(TransportError::ApiLost {
+            detail: "executor generation changed".into(),
+        });
+
+        assert_eq!(Status::from_error(&error), VK_ERROR_DEVICE_LOST);
     }
 }

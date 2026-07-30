@@ -24,15 +24,14 @@ fn gl_identity_and_scalar_state_queries_marshal() {
     // glGetString: the guest-visible GLES3 identity strings — exact values ANGLE parses.
     assert_eq!(cstr(gl_get_string(GL_VENDOR)), "hl-gl");
     assert_eq!(cstr(gl_get_string(GL_RENDERER)), "hl-gl-metal");
-    assert_eq!(cstr(gl_get_string(GL_VERSION)), "OpenGL ES 3.0 hl-gl");
+    assert_eq!(cstr(gl_get_string(GL_VERSION)), "OpenGL ES 3.1 hl-gl");
     assert_eq!(
         cstr(gl_get_string(GL_SHADING_LANGUAGE_VERSION)),
-        "OpenGL ES GLSL ES 3.00"
+        "OpenGL ES GLSL ES 3.10"
     );
     assert_eq!(
         cstr(gl_get_string(GL_EXTENSIONS)),
-        "",
-        "no non-core extensions are advertised"
+        "GL_KHR_debug GL_EXT_texture_format_BGRA8888 GL_EXT_read_format_bgra GL_ANGLE_robust_client_memory GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_copy_texture GL_ANGLE_client_arrays GL_ANGLE_webgl_compatibility GL_ANGLE_request_extension GL_OES_EGL_image GL_OES_EGL_sync"
     );
 
     // glGetIntegerv scalar limits — the truthful executor ceiling, never uninitialized garbage.
@@ -44,11 +43,11 @@ fn gl_identity_and_scalar_state_queries_marshal() {
     assert_eq!(getint(GL_MAX_TEXTURE_SIZE), 16384);
     assert_eq!(getint(GL_MAX_VERTEX_ATTRIBS), 16);
     assert_eq!(getint(GL_MAJOR_VERSION), 3);
-    assert_eq!(getint(GL_MINOR_VERSION), 0);
+    assert_eq!(getint(GL_MINOR_VERSION), 1);
     assert_eq!(
         getint(GL_NUM_EXTENSIONS),
-        0,
-        "matches the empty GL_EXTENSIONS list"
+        11,
+        "matches the GL_EXTENSIONS inventory"
     );
     assert_eq!(getint(GL_DEPTH_BITS), 24);
     assert_eq!(getint(GL_STENCIL_BITS), 8);
@@ -78,11 +77,15 @@ fn gl_identity_and_scalar_state_queries_marshal() {
     gl_get_integer64v(GL_MAX_TEXTURE_SIZE, &mut v64);
     assert_eq!(v64, 16384);
 
-    // glGetStringi: out-of-range index raises GL_INVALID_VALUE and returns null (never a dangling ptr).
-    assert!(
-        gl_get_stringi(GL_EXTENSIONS, 0).is_null(),
-        "no extension #0 in an empty inventory"
+    // glGetStringi exposes the same inventory and rejects out-of-range indices.
+    assert_eq!(cstr(gl_get_stringi(GL_EXTENSIONS, 0)), "GL_KHR_debug");
+    assert_eq!(
+        cstr(gl_get_stringi(GL_EXTENSIONS, 8)),
+        "GL_ANGLE_request_extension"
     );
+    assert_eq!(cstr(gl_get_stringi(GL_EXTENSIONS, 9)), "GL_OES_EGL_image");
+    assert_eq!(cstr(gl_get_stringi(GL_EXTENSIONS, 10)), "GL_OES_EGL_sync");
+    assert!(gl_get_stringi(GL_EXTENSIONS, 11).is_null());
     assert_eq!(
         gl_get_error(),
         GL_INVALID_VALUE,

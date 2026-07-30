@@ -118,6 +118,9 @@ impl Format {
     /// is truthfully `VK_ERROR_FORMAT_NOT_SUPPORTED`).
     pub fn is_image_supported(&self) -> bool {
         self.is_color()
+            || Format(self.0)
+                .wire()
+                .is_some_and(|format| format.block_geometry().is_some())
     }
 
     /// The truthful per-format `VkFormatProperties` feature masks. A color format advertises
@@ -131,6 +134,9 @@ impl Format {
         use format_feature as f;
         let color = self.is_color();
         let depth = self.is_depth();
+        let compressed = Format(vk_format)
+            .wire()
+            .is_some_and(|format| format.block_geometry().is_some());
         let optimal = if color {
             f::SAMPLED_IMAGE
                 | f::STORAGE_IMAGE
@@ -141,6 +147,8 @@ impl Format {
                 | f::SAMPLED_IMAGE_FILTER_LINEAR
                 | f::TRANSFER_SRC
                 | f::TRANSFER_DST
+        } else if compressed {
+            f::SAMPLED_IMAGE | f::SAMPLED_IMAGE_FILTER_LINEAR | f::TRANSFER_SRC | f::TRANSFER_DST
         } else if depth {
             f::SAMPLED_IMAGE | f::DEPTH_STENCIL_ATTACHMENT | f::TRANSFER_SRC | f::TRANSFER_DST
         } else {

@@ -14,9 +14,9 @@ use hl_gpu::protocol::model::descriptor::BufferDesc;
 use hl_gpu::protocol::model::enums::buffer_usage;
 use hl_gpu::transport::{SubmitHeader, Verdict};
 use hl_gpu::{
-    BufferId, Capabilities, Cmd, CommandSink, ConnectionHandler, CpuExecutor, FakeClock,
-    GlobalLedger, GpuExecutor, InProcessCommandSink, Limits, ReadbackRequest, RemoteCommandSink,
-    Session,
+    BufferId, Capabilities, Cmd, CommandBuffer, CommandSink, ConnectionHandler, CpuExecutor,
+    FakeClock, FenceId, GlobalLedger, GpuExecutor, InProcessCommandSink, Limits, ReadbackRequest,
+    RemoteCommandSink, Session,
 };
 
 /// A unique temp socket path for one test, removed on drop.
@@ -48,6 +48,23 @@ struct RuntimeHost {
     exec: CpuExecutor,
 }
 
+struct PendingFenceHost;
+
+impl ConnectionHandler for PendingFenceHost {
+    fn submit(&mut self, _header: &SubmitHeader, _batch: &[Cmd]) -> Verdict {
+        Verdict::Ack
+    }
+
+    fn poll_fence(&mut self, _req: &ReadbackRequest) -> Option<bool> {
+        Some(false)
+    }
+
+    fn wait_fence(&mut self, req: &ReadbackRequest) -> Option<hl_gpu::FenceWait> {
+        assert_eq!(req.len, 123_456, "wire preserves the requested timeout");
+        Some(hl_gpu::FenceWait::Timeout)
+    }
+}
+
 impl RuntimeHost {
     fn new() -> Self {
         let exec = CpuExecutor::new();
@@ -77,6 +94,27 @@ impl ConnectionHandler for RuntimeHost {
             BufferId(req.id),
             req.offset,
             req.len as usize,
+        )
+        .ok()
+    }
+
+    fn poll_fence(&mut self, req: &ReadbackRequest) -> Option<bool> {
+        hl_gpu::runtime::service::dispatch::poll_fence(
+            &self.session,
+            &mut self.exec,
+            FenceId(req.id),
+            req.offset,
+        )
+        .ok()
+    }
+
+    fn wait_fence(&mut self, req: &ReadbackRequest) -> Option<hl_gpu::FenceWait> {
+        hl_gpu::runtime::service::dispatch::wait_timeout(
+            &mut self.session,
+            &mut self.exec,
+            FenceId(req.id),
+            req.offset,
+            req.len,
         )
         .ok()
     }
@@ -130,6 +168,58 @@ fn remote_sink_reads_a_written_buffer_back_over_the_socket() {
         .read_buffer(BufferId(1), 2, 3)
         .expect("partial readback");
     assert_eq!(mid, &data[2..5]);
+
+    drop(sink);
+    server.join().unwrap();
+}
+
+#[test]
+fn remote_fence_poll_reports_real_host_completion() {
+    let sock = TempSock::new("fence-poll");
+    let listener = UnixListener::bind(&sock.0).unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let caps = Capabilities::full("host");
+        let mut host = RuntimeHost::new();
+        hl_gpu::serve_connection_with_handler(&stream, &caps, &mut host).unwrap();
+    });
+
+    let mut sink = RemoteCommandSink::new(sock.path());
+    sink.submit(&[
+        Cmd::CreateFence(7),
+        Cmd::Submit(CommandBuffer {
+            encoder: Vec::new(),
+            signal: Some((7, 3)),
+        }),
+    ])
+    .unwrap();
+    assert!(sink.poll_fence(FenceId(7), 3).unwrap());
+    assert!(!sink.poll_fence(FenceId(7), 4).unwrap());
+    assert_eq!(
+        sink.wait_timeout(FenceId(7), 3, 1).unwrap(),
+        hl_gpu::FenceWait::Complete
+    );
+
+    drop(sink);
+    server.join().unwrap();
+}
+
+#[test]
+fn remote_fence_wait_preserves_pending_and_bounded_timeout() {
+    let sock = TempSock::new("fence-timeout");
+    let listener = UnixListener::bind(&sock.0).unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let caps = Capabilities::full("host");
+        hl_gpu::serve_connection_with_handler(&stream, &caps, &mut PendingFenceHost).unwrap();
+    });
+
+    let mut sink = RemoteCommandSink::new(sock.path());
+    assert!(!sink.poll_fence(FenceId(9), 4).unwrap());
+    assert_eq!(
+        sink.wait_timeout(FenceId(9), 4, 123_456).unwrap(),
+        hl_gpu::FenceWait::Timeout
+    );
 
     drop(sink);
     server.join().unwrap();

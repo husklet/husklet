@@ -1,6 +1,8 @@
 use super::*;
+use hl_gpu::protocol::model::descriptor::{PipelineBinding, PipelineBindingKind, PipelineLayout};
 
 const SAMPLER_BINDING_OFFSET: u32 = 16;
+type BufferDescriptor = ((u32, u32), (VkBuffer, u64, u64));
 
 /// `vkCmdBindPipeline` — remember the bound hl-GPU pipeline id + kind for the next pass.
 pub fn cmd_bind_pipeline(
@@ -42,38 +44,132 @@ pub fn cmd_bind_descriptor_sets(
             continue;
         };
         let layout_handle = rec.layout;
-        let mut pairs: Vec<(u32, (VkBuffer, u64, u64))> =
-            rec.buffers.iter().map(|(b, v)| (*b, *v)).collect();
+        let mut pairs: Vec<BufferDescriptor> = rec.buffers.iter().map(|(b, v)| (*b, *v)).collect();
         pairs.sort_by_key(|(b, _)| *b);
         // Snapshot the set's sampled-image / sampler descriptors (binding-ascending; the borrow of
         // `rec` ends here so `dev` can be mutated below).
-        let mut img_pairs: Vec<(u32, crate::model::descriptor::ImageBinding)> =
+        let mut img_pairs: Vec<((u32, u32), crate::model::descriptor::ImageBinding)> =
             rec.images.iter().map(|(b, v)| (*b, *v)).collect();
         img_pairs.sort_by_key(|(b, _)| *b);
+        let expected_counts = dev
+            .set_layouts
+            .get(&layout_handle)
+            .map(|layout| {
+                layout
+                    .bindings
+                    .iter()
+                    .map(|binding| (binding.binding, binding.descriptor_count))
+                    .collect::<HashMap<_, _>>()
+            })
+            .unwrap_or_default();
+        let descriptor_types = dev
+            .set_layouts
+            .get(&layout_handle)
+            .map(|layout| {
+                layout
+                    .bindings
+                    .iter()
+                    .map(|binding| (binding.binding, binding.descriptor_type))
+                    .collect::<HashMap<_, _>>()
+            })
+            .unwrap_or_default();
+        let scalar_layout = PipelineLayout {
+            bindings: expected_counts
+                .iter()
+                .map(|(&binding, &count)| PipelineBinding {
+                    group: set_index,
+                    binding,
+                    count,
+                    // Scalar slot allocation depends only on group, binding and count.
+                    kind: PipelineBindingKind::UniformBuffer,
+                })
+                .collect(),
+        };
         // Consume this set's dynamic offsets (its layout's dynamic-buffer bindings, ascending).
         let dyn_bindings = dev
             .set_layouts
             .get(&layout_handle)
-            .map(|l| l.dynamic_bindings())
+            .map(|l| l.dynamic_elements())
             .unwrap_or_default();
-        let mut extra: HashMap<u32, u64> = HashMap::new();
-        for db in dyn_bindings {
+        let mut extra: HashMap<(u32, u32), u64> = HashMap::new();
+        for element in dyn_bindings {
             if dyn_cursor < dynamic_offsets.len() {
-                extra.insert(db, dynamic_offsets[dyn_cursor] as u64);
+                extra.insert(element, dynamic_offsets[dyn_cursor] as u64);
                 dyn_cursor += 1;
             }
         }
         // Resolve each binding's buffer handle to its hl-GPU id, applying the dynamic offset.
         let mut entries: Vec<BindEntry> = Vec::new();
-        for (binding, (buf_handle, offset, size)) in pairs {
-            if let Some(b) = dev.buffers.get(&buf_handle) {
+        let mut buffers = std::collections::BTreeMap::<u32, Vec<(u32, BufferBinding)>>::new();
+        for ((binding, element), (buf_handle, offset, size)) in pairs {
+            if let Some(buffer) = dev.buffers.get(&buf_handle) {
+                buffers.entry(binding).or_default().push((
+                    element,
+                    BufferBinding {
+                        id: buffer.ir_id,
+                        offset: offset + extra.get(&(binding, element)).copied().unwrap_or(0),
+                        size,
+                    },
+                ));
+            }
+        }
+        for (binding, mut elements) in buffers {
+            elements.sort_by_key(|(element, _)| *element);
+            if elements
+                .iter()
+                .enumerate()
+                .any(|(expected, (actual, _))| *actual != expected as u32)
+            {
+                return Err(GpuError::Invalid(
+                    "descriptor buffer array has an unbound element",
+                ));
+            }
+            if expected_counts.get(&binding).copied() != Some(elements.len() as u32) {
+                return Err(GpuError::Invalid(
+                    "descriptor buffer array is not fully bound",
+                ));
+            }
+            let values = elements
+                .into_iter()
+                .map(|(_, value)| value)
+                .collect::<Vec<_>>();
+            if values.len() == 1 {
+                let value = values[0];
                 entries.push(BindEntry {
                     binding,
                     resource: BindResource::Buffer {
-                        id: b.ir_id,
-                        offset: offset + extra.get(&binding).copied().unwrap_or(0),
-                        size,
+                        id: value.id,
+                        offset: value.offset,
+                        size: value.size,
                     },
+                });
+            } else if descriptor_types.get(&binding).is_some_and(|descriptor| {
+                matches!(
+                    *descriptor,
+                    crate::model::descriptor::vk_descriptor_type::UNIFORM_BUFFER
+                        | crate::model::descriptor::vk_descriptor_type::UNIFORM_BUFFER_DYNAMIC
+                        | crate::model::descriptor::vk_descriptor_type::STORAGE_BUFFER
+                        | crate::model::descriptor::vk_descriptor_type::STORAGE_BUFFER_DYNAMIC
+                )
+            }) {
+                for (element, value) in values.into_iter().enumerate() {
+                    entries.push(BindEntry {
+                        binding: scalar_layout.scalar_binding(
+                            set_index,
+                            binding,
+                            element as u32,
+                        )?,
+                        resource: BindResource::Buffer {
+                            id: value.id,
+                            offset: value.offset,
+                            size: value.size,
+                        },
+                    });
+                }
+            } else {
+                entries.push(BindEntry {
+                    binding,
+                    resource: BindResource::BufferArray { elements: values },
                 });
             }
         }
@@ -84,29 +180,102 @@ pub fn cmd_bind_descriptor_sets(
         // combined model): the image keeps binding `B`, the sampler moves to `B + SAMPLER_BINDING_OFFSET`,
         // matching `hl-gpu-wgpu::spirv_split`. A SEPARATE `SAMPLED_IMAGE`/`SAMPLER` keeps its own binding
         // (the shader already declares it separately). An unresolvable handle is skipped (never faked).
-        for (binding, img) in img_pairs {
+        let mut textures = std::collections::BTreeMap::<u32, Vec<(u32, u32)>>::new();
+        let mut samplers = std::collections::BTreeMap::<u32, Vec<(u32, u32, bool)>>::new();
+        for ((binding, element), img) in img_pairs {
             let combined = img.image.is_some() && img.sampler.is_some();
             if let Some(image) = img.image {
                 if let Some(i) = dev.images.get(&image) {
-                    entries.push(BindEntry {
-                        binding,
-                        resource: BindResource::Texture { id: i.ir_id },
-                    });
+                    textures
+                        .entry(binding)
+                        .or_default()
+                        .push((element, i.ir_id));
                 }
             }
             if let Some(sampler) = img.sampler {
                 if let Some(s) = dev.samplers.get(&sampler) {
-                    let sampler_binding = if combined {
-                        binding + SAMPLER_BINDING_OFFSET
-                    } else {
-                        binding
-                    };
-                    entries.push(BindEntry {
-                        binding: sampler_binding,
-                        resource: BindResource::Sampler { id: s.ir_id },
-                    });
+                    samplers
+                        .entry(binding)
+                        .or_default()
+                        .push((element, s.ir_id, combined));
                 }
             }
+        }
+        for (binding, mut elements) in textures {
+            elements.sort_by_key(|(element, _)| *element);
+            if elements
+                .iter()
+                .enumerate()
+                .any(|(expected, (actual, _))| *actual != expected as u32)
+            {
+                return Err(GpuError::Invalid(
+                    "descriptor texture array has an unbound element",
+                ));
+            }
+            if expected_counts.get(&binding).copied() != Some(elements.len() as u32) {
+                return Err(GpuError::Invalid(
+                    "descriptor texture array is not fully bound",
+                ));
+            }
+            let ids = elements.into_iter().map(|(_, id)| id).collect::<Vec<_>>();
+            if ids.len() > 1
+                && descriptor_types.get(&binding)
+                    == Some(&crate::model::descriptor::vk_descriptor_type::STORAGE_IMAGE)
+            {
+                for (element, id) in ids.into_iter().enumerate() {
+                    entries.push(BindEntry {
+                        binding: scalar_layout.scalar_binding(
+                            set_index,
+                            binding,
+                            element as u32,
+                        )?,
+                        resource: BindResource::Texture { id },
+                    });
+                }
+            } else {
+                entries.push(BindEntry {
+                    binding,
+                    resource: if ids.len() == 1 {
+                        BindResource::Texture { id: ids[0] }
+                    } else {
+                        BindResource::TextureArray { ids }
+                    },
+                });
+            }
+        }
+        for (binding, mut elements) in samplers {
+            elements.sort_by_key(|(element, _, _)| *element);
+            if elements
+                .iter()
+                .enumerate()
+                .any(|(expected, (actual, _, _))| *actual != expected as u32)
+            {
+                return Err(GpuError::Invalid(
+                    "descriptor sampler array has an unbound element",
+                ));
+            }
+            if expected_counts.get(&binding).copied() != Some(elements.len() as u32) {
+                return Err(GpuError::Invalid(
+                    "descriptor sampler array is not fully bound",
+                ));
+            }
+            let combined = elements.iter().all(|(_, _, combined)| *combined);
+            let ids = elements
+                .into_iter()
+                .map(|(_, id, _)| id)
+                .collect::<Vec<_>>();
+            entries.push(BindEntry {
+                binding: if combined {
+                    binding + SAMPLER_BINDING_OFFSET
+                } else {
+                    binding
+                },
+                resource: if ids.len() == 1 {
+                    BindResource::Sampler { id: ids[0] }
+                } else {
+                    BindResource::SamplerArray { ids }
+                },
+            });
         }
         let ir_id = dev.alloc_ir();
         hl_log::hl_debug!(

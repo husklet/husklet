@@ -1,3 +1,5 @@
+use crate::protocol::model::descriptor::FrameSerial;
+
 impl Cmd {
     /// Decode one command (tag + body) from `d`.
     pub fn decode(d: &mut Decoder) -> Result<Cmd> {
@@ -11,6 +13,20 @@ impl Cmd {
             },
             tag::CREATE_TEXTURE => Cmd::CreateTexture(d.u32()?, d.texture_desc()?),
             tag::DESTROY_TEXTURE => Cmd::DestroyTexture(d.u32()?),
+            tag::CREATE_TEXTURE_VIEW => Cmd::CreateTextureView(
+                d.u32()?,
+                TextureViewDesc {
+                    texture: d.u32()?,
+                    dim: TextureDim::from_u32(d.u32()?)?,
+                    format: TextureFormat::from_u32(d.u32()?)?,
+                    aspect: TextureAspect::from_u32(d.u32()?)?,
+                    base_mip: d.u32()?,
+                    mip_count: d.u32()?,
+                    base_layer: d.u32()?,
+                    layer_count: d.u32()?,
+                },
+            ),
+            tag::DESTROY_TEXTURE_VIEW => Cmd::DestroyTextureView(d.u32()?),
             tag::CREATE_SAMPLER => Cmd::CreateSampler(d.u32()?, d.sampler_desc()?),
             tag::DESTROY_SAMPLER => Cmd::DestroySampler(d.u32()?),
             tag::CREATE_SHADER => {
@@ -44,6 +60,25 @@ impl Cmd {
                 let label = d.str()?;
                 Cmd::CreateComputePipeline(id, ComputePipelineDesc { compute, label })
             }
+            tag::CREATE_RENDER_PIPELINE_LAYOUT => Cmd::CreateRenderPipelineLayout(
+                d.u32()?,
+                d.render_pipeline()?,
+                d.pipeline_layout()?,
+                RenderMultisample {
+                    mask: d.u64()?,
+                    sample_shading: d.bool()?,
+                },
+            ),
+            tag::CREATE_COMPUTE_PIPELINE_LAYOUT => {
+                let id = d.u32()?;
+                let compute = d.shader_ref()?;
+                let label = d.str()?;
+                Cmd::CreateComputePipelineLayout(
+                    id,
+                    ComputePipelineDesc { compute, label },
+                    d.pipeline_layout()?,
+                )
+            }
             tag::DESTROY_PIPELINE => Cmd::DestroyPipeline(d.u32()?),
             tag::CREATE_BIND_GROUP => Cmd::CreateBindGroup(d.u32()?, d.bind_group()?),
             tag::DESTROY_BIND_GROUP => Cmd::DestroyBindGroup(d.u32()?),
@@ -55,7 +90,7 @@ impl Cmd {
                         width: d.u32()?,
                         height: d.u32()?,
                         format: TextureFormat::from_u32(d.u32()?)?,
-                        hlp_surface: d.u32()?,
+                        token: SurfaceToken::new(d.u64()?)?,
                     },
                 )
             }
@@ -70,6 +105,7 @@ impl Cmd {
             tag::PRESENT => Cmd::Present {
                 surface: d.u32()?,
                 texture: d.u32()?,
+                serial: FrameSerial::new(d.u64()?)?,
             },
             t => return Err(GpuError::BadTag(t as u32)),
         })

@@ -8,19 +8,21 @@
 use std::cell::Cell;
 use std::sync::Mutex;
 
+use hl_compositor::scene::model::SurfaceId;
 use hl_compositor::scene::model::{
     Anchor, BufferState, ConstraintAdjustment, Format, Gravity, Output, OutputId, Positioner, Rect,
     Scene, SubsurfaceState, SurfaceRole, Visibility, WindowKind,
 };
-use hl_compositor::scene::model::{PresentableImage, SurfaceId};
 use hl_compositor::scene::port::{
-    Clock, PresentOutcome, PresentTiming, PresentationFeedback, Presenter,
+    Clock, PresentFrame, PresentOutcome, PresentTiming, PresentationFeedback, Presenter,
 };
 use hl_compositor::scene::service::{
     commit_surface, focus, schedule, BufferChange, Commit, FramePacing,
 };
 use hl_compositor::Compositor;
 
+#[path = "scene/async_present.rs"]
+mod async_present;
 #[path = "scene/composition.rs"]
 mod composition;
 #[path = "scene/focus.rs"]
@@ -96,27 +98,24 @@ impl FakePresenter {
     }
 }
 impl Presenter for FakePresenter {
-    fn present(
-        &mut self,
-        output: OutputId,
-        image: &PresentableImage,
-        damage: &[Rect],
-        timing: PresentTiming,
-    ) -> PresentationFeedback {
-        self.calls.lock().unwrap().push(PresentCall {
-            output,
-            surface: image.surface,
-            width: image.width,
-            height: image.height,
-            damage: damage.to_vec(),
-            timing,
-        });
+    fn present_frame(&mut self, frame: &PresentFrame) -> PresentationFeedback {
+        self.calls
+            .lock()
+            .unwrap()
+            .extend(frame.layers.iter().map(|layer| PresentCall {
+                output: frame.output,
+                surface: layer.image.surface,
+                width: layer.image.width,
+                height: layer.image.height,
+                damage: layer.damage.clone(),
+                timing: frame.timing,
+            }));
         let outcome = self.scripted.lock().unwrap().pop().unwrap_or_else(|| {
             let s = self.next_serial.get();
             self.next_serial.set(s + 1);
             PresentOutcome::Delivered {
                 serial: s,
-                timing: Some(timing),
+                timing: Some(frame.timing),
             }
         });
         PresentationFeedback { outcome }

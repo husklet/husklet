@@ -254,6 +254,7 @@ fn cleanup_on_drop() {
                 address_u: AddressMode::Repeat,
                 address_v: AddressMode::Repeat,
                 address_w: AddressMode::Repeat,
+                ..SamplerDesc::default()
             },
         ));
         batch.push(Cmd::CreateFence(300));

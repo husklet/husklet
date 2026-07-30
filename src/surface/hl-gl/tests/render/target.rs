@@ -25,7 +25,7 @@ fn offscreen_fbo_renders_into_the_attachment_texture_and_format() {
     c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
     record::tex_image_2d_format(&mut c, 32, 32, &[], TextureFormat::Rgba8Unorm);
-    let fbo = c.framebuffers.gen();
+    let fbo = c.gen_framebuffer();
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
     record::framebuffer_texture_2d(
         &mut c,
@@ -72,7 +72,7 @@ fn rebinding_default_framebuffer_returns_to_the_window_target() {
     // Binding FBO 0 restores the default framebuffer, so the next frame targets the window surface again.
     let mut c = ctx_64();
     let mut sink = RecordingSink::with_full_caps();
-    let fbo = c.framebuffers.gen();
+    let fbo = c.gen_framebuffer();
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, 0); // back to the default framebuffer
     record::clear(&mut c);

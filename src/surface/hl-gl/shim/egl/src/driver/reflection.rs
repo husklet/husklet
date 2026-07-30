@@ -10,7 +10,7 @@ unsafe fn read_uniform(program: u32, location: i32, out: *mut u8, elem: usize, m
     if out.is_null() {
         return;
     }
-    let bytes = GlobalState::access(|s| intro::get_uniform_bytes(&s.ctx, program, location));
+    let bytes = GlobalState::context(|s| intro::get_uniform_bytes(&s.gl, program, location));
     match bytes {
         Some(b) => {
             let n = b.len().min(max_bytes);
@@ -18,7 +18,7 @@ unsafe fn read_uniform(program: u32, location: i32, out: *mut u8, elem: usize, m
         }
         None => {
             // A sampler uniform reads back its bound texture unit (an integer); otherwise zero-fill one.
-            let unit = GlobalState::access(|s| intro::get_sampler_unit(&s.ctx, program, location));
+            let unit = GlobalState::context(|s| intro::get_sampler_unit(&s.gl, program, location));
             let v = unit.unwrap_or(0);
             let src = v.to_le_bytes();
             let n = elem.min(max_bytes).min(4);
@@ -97,7 +97,7 @@ pub extern "C" fn glGetUniformIndices(
             GL_INVALID_INDEX
         } else {
             match unsafe { Text::read(*uniform_names.offset(i)) } {
-                Some(name) => GlobalState::access(|s| intro::uniform_index(&s.ctx, program, &name)),
+                Some(name) => GlobalState::context(|s| intro::uniform_index(&s.gl, program, &name)),
                 None => GL_INVALID_INDEX,
             }
         };
@@ -120,7 +120,7 @@ pub extern "C" fn glGetActiveUniformsiv(
     }
     for i in 0..uniform_count as isize {
         let index = unsafe { *uniform_indices.offset(i) };
-        let v = GlobalState::access(|s| intro::active_uniformsiv(&s.ctx, program, index, pname))
+        let v = GlobalState::context(|s| intro::active_uniformsiv(&s.gl, program, index, pname))
             .unwrap_or(0);
         unsafe { *params.offset(i) = v };
     }
@@ -134,7 +134,7 @@ pub extern "C" fn glGetUniformBlockIndex(program: u32, uniform_block_name: *cons
         Some(n) => n,
         None => return GL_INVALID_INDEX,
     };
-    GlobalState::access(|s| intro::uniform_block_index(&mut s.ctx, program, &name))
+    GlobalState::context(|s| intro::uniform_block_index(&mut s.gl, program, &name))
 }
 
 /// `glUniformBlockBinding(program, blockIndex, binding)` — assign the block's binding point (real state).
@@ -144,9 +144,9 @@ pub extern "C" fn glUniformBlockBinding(
     uniform_block_index: u32,
     uniform_block_binding: u32,
 ) {
-    GlobalState::access(|s| {
+    GlobalState::context(|s| {
         intro::uniform_block_binding(
-            &mut s.ctx,
+            &mut s.gl,
             program,
             uniform_block_index,
             uniform_block_binding,
@@ -163,8 +163,8 @@ pub extern "C" fn glGetActiveUniformBlockiv(
     pname: u32,
     params: *mut i32,
 ) {
-    let v = GlobalState::access(|s| {
-        intro::active_uniform_blockiv(&mut s.ctx, program, uniform_block_index, pname)
+    let v = GlobalState::context(|s| {
+        intro::active_uniform_blockiv(&mut s.gl, program, uniform_block_index, pname)
     });
     match v {
         Some(v) => {
@@ -172,7 +172,7 @@ pub extern "C" fn glGetActiveUniformBlockiv(
                 unsafe { *params = v };
             }
         }
-        None => GlobalState::access(|s| s.ctx.set_gl_error(GL_INVALID_VALUE)),
+        None => GlobalState::context(|s| s.gl.set_gl_error(GL_INVALID_VALUE)),
     }
 }
 
@@ -185,13 +185,13 @@ pub extern "C" fn glGetActiveUniformBlockName(
     length: *mut i32,
     uniform_block_name: *mut c_char,
 ) {
-    let name = GlobalState::access(|s| {
-        intro::active_uniform_block_name(&mut s.ctx, program, uniform_block_index)
+    let name = GlobalState::context(|s| {
+        intro::active_uniform_block_name(&mut s.gl, program, uniform_block_index)
     });
     match name {
         Some(n) => unsafe { write_c_name(n.as_bytes(), buf_size, length, uniform_block_name) },
         None => {
-            GlobalState::access(|s| s.ctx.set_gl_error(GL_INVALID_VALUE));
+            GlobalState::context(|s| s.gl.set_gl_error(GL_INVALID_VALUE));
             unsafe { write_c_name(&[], buf_size, length, uniform_block_name) };
         }
     }
@@ -211,8 +211,8 @@ pub extern "C" fn glGetProgramInterfaceiv(
     if params.is_null() {
         return;
     }
-    let v = GlobalState::access(|s| {
-        intro::program_interfaceiv(&s.ctx, program, program_interface, pname)
+    let v = GlobalState::context(|s| {
+        intro::program_interfaceiv(&s.gl, program, program_interface, pname)
     })
     .unwrap_or(0);
     unsafe { *params = v };
@@ -228,8 +228,8 @@ pub extern "C" fn glGetProgramResourceIndex(
         Some(n) => n,
         None => return GL_INVALID_INDEX,
     };
-    GlobalState::access(|s| {
-        intro::program_resource_index(&s.ctx, program, program_interface, &want)
+    GlobalState::context(|s| {
+        intro::program_resource_index(&s.gl, program, program_interface, &want)
     })
 }
 
@@ -243,8 +243,8 @@ pub extern "C" fn glGetProgramResourceLocation(
         Some(n) => n,
         None => return -1,
     };
-    GlobalState::access(|s| {
-        intro::program_resource_location(&s.ctx, program, program_interface, &want)
+    GlobalState::context(|s| {
+        intro::program_resource_location(&s.gl, program, program_interface, &want)
     })
 }
 
@@ -257,13 +257,13 @@ pub extern "C" fn glGetProgramResourceName(
     length: *mut i32,
     name: *mut c_char,
 ) {
-    let n = GlobalState::access(|s| {
-        intro::program_resource_name(&s.ctx, program, program_interface, index)
+    let n = GlobalState::context(|s| {
+        intro::program_resource_name(&s.gl, program, program_interface, index)
     });
     match n {
         Some(n) => unsafe { write_c_name(n.as_bytes(), buf_size, length, name) },
         None => {
-            GlobalState::access(|s| s.ctx.set_gl_error(GL_INVALID_VALUE));
+            GlobalState::context(|s| s.gl.set_gl_error(GL_INVALID_VALUE));
             unsafe { write_c_name(&[], buf_size, length, name) };
         }
     }
@@ -293,8 +293,8 @@ pub extern "C" fn glGetProgramResourceiv(
     let mut written = 0usize;
     for i in 0..cap {
         let prop = unsafe { *props.add(i) };
-        let v = GlobalState::access(|s| {
-            intro::program_resourceiv(&s.ctx, program, program_interface, index, prop)
+        let v = GlobalState::context(|s| {
+            intro::program_resourceiv(&s.gl, program, program_interface, index, prop)
         })
         .unwrap_or(0);
         unsafe { *params.add(i) = v };

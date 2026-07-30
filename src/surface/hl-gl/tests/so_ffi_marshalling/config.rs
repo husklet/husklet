@@ -138,7 +138,7 @@ fn egl_choose_and_get_configs_marshal_arrays_and_count() {
         EGL_ALPHA_SIZE,
         8,
         EGL_RENDERABLE_TYPE,
-        EGL_OPENGL_ES3_BIT,
+        EGL_OPENGL_ES2_BIT | EGL_OPENGL_ES3_BIT,
         EGL_NONE,
     ];
 

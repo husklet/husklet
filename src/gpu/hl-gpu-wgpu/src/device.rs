@@ -54,6 +54,8 @@ pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub info: wgpu::AdapterInfo,
+    pub features: wgpu::Features,
+    pub downlevel: wgpu::DownlevelCapabilities,
 }
 
 impl Gpu {
@@ -80,6 +82,7 @@ impl Gpu {
         ))?;
 
         let info = adapter.get_info();
+        let downlevel = adapter.get_downlevel_capabilities();
         hl_log::hl_info!(
             hl_log::tag::WGPU,
             "adapter={} backend={:?} type={:?}",
@@ -104,7 +107,14 @@ impl Gpu {
         // `DUAL_SOURCE_BLENDING` capability when the device requested the feature, so a shader module using it
         // is rejected otherwise. Requesting it only when the adapter advertises it keeps the capability honest.
         let required_features = adapter.features()
-            & (wgpu::Features::PUSH_CONSTANTS | wgpu::Features::DUAL_SOURCE_BLENDING);
+            & (wgpu::Features::PUSH_CONSTANTS
+                | wgpu::Features::DUAL_SOURCE_BLENDING
+                | wgpu::Features::TEXTURE_BINDING_ARRAY
+                | wgpu::Features::BUFFER_BINDING_ARRAY
+                | wgpu::Features::STORAGE_RESOURCE_BINDING_ARRAY
+                | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+                | wgpu::Features::TEXTURE_COMPRESSION_BC
+                | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING);
 
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
@@ -123,6 +133,8 @@ impl Gpu {
             device,
             queue,
             info,
+            features: required_features,
+            downlevel,
         })
     }
 }

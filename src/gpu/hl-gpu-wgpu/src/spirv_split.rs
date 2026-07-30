@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn split_produces_texture_and_sampler_at_coordinated_bindings() {
-        // Combined at binding 0 → WGSL declares a texture_2d at @binding(0) and a sampler at @binding(16).
+        // Combined at guest binding 0 becomes texture 0 + sampler 16, then host reservation shifts both.
         let wgsl =
             crate::wgsl::spirv_to_wgsl(&combined_frag(0)).expect("spirv_to_wgsl through the split");
         assert!(
@@ -462,15 +462,15 @@ mod tests {
             "expected a separate sampler: {wgsl}"
         );
         assert!(
-            wgsl.contains("@binding(16)"),
-            "sampler must reflect at binding 0 + offset 16: {wgsl}"
+            wgsl.contains("@binding(17)"),
+            "sampler must reflect at guest binding 0 + split offset 16 + host offset 1: {wgsl}"
         );
 
-        // A combined descriptor at binding 3 pushes the sampler to binding 19 (3 + 16).
+        // A combined descriptor at guest binding 3 pushes the native sampler to binding 20.
         let wgsl3 = crate::wgsl::spirv_to_wgsl(&combined_frag(3)).unwrap();
         assert!(
-            wgsl3.contains("@binding(19)"),
-            "binding 3 + offset 16 = 19: {wgsl3}"
+            wgsl3.contains("@binding(20)"),
+            "guest binding 3 + split offset 16 + host offset 1 = 20: {wgsl3}"
         );
     }
 

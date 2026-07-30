@@ -1,6 +1,34 @@
 use super::*;
 
 #[test]
+fn requested_attribute_locations_override_declaration_order() {
+    let vs = "attribute vec2 position;\nattribute vec2 texcoord;\n\
+              void main(){ gl_Position = vec4(position + texcoord * 0.0, 0.0, 1.0); }\n";
+    let fs = "void main(){ gl_FragColor = vec4(1.0); }\n";
+    let bindings =
+        std::collections::BTreeMap::from([("position".to_owned(), 5), ("texcoord".to_owned(), 2)]);
+
+    let (vertex, _) = glsl::StageSources::new(vs, fs).translate_render_with(&bindings);
+
+    assert!(vertex.contains("layout(location = 5) in vec2 position;"));
+    assert!(vertex.contains("layout(location = 2) in vec2 texcoord;"));
+}
+
+#[test]
+fn requested_locations_apply_to_bare_verbatim_inputs() {
+    let vs = "#version 300 es\nin vec4 position;\nin vec2 texcoord;\n\
+              void main(){ gl_Position = position + vec4(texcoord * 0.0, 0.0, 0.0); }\n";
+    let fs = "#version 300 es\nout vec4 color;\nvoid main(){ color = vec4(1.0); }\n";
+    let bindings =
+        std::collections::BTreeMap::from([("position".to_owned(), 7), ("texcoord".to_owned(), 3)]);
+
+    let (vertex, _) = glsl::StageSources::new(vs, fs).inject_io_locations_with(&bindings);
+
+    assert!(vertex.contains("layout(location = 7) in vec4 position;"));
+    assert!(vertex.contains("layout(location = 3) in vec2 texcoord;"));
+}
+
+#[test]
 fn skia_bare_in_out_get_sequential_and_name_matched_locations() {
     // The real Chrome/Skia GPU-raster shape: BARE attributes/varyings/output (bound by name), no layout().
     let vs = "#version 300 es\nin highp vec4 fillBounds;\nin highp vec4 locations;\n\

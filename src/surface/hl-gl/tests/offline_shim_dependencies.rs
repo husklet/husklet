@@ -4,7 +4,7 @@ use std::process::Command;
 fn nested_shim_dependencies_resolve_offline_with_an_empty_cargo_home() {
     let gl = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root = gl.join("../../..");
-    let vendor = root.join("third_party/rust/shim-deps");
+    let vendor = root.join("vendor/rust/shim-deps");
     let cargo_home =
         std::env::temp_dir().join(format!("hl-offline-shim-cargo-home-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&cargo_home);

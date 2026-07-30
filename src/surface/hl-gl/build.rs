@@ -37,6 +37,7 @@ const SHIM_LIB: &str = "libhl_egl_guest.so";
 const EGL_SONAME: &str = "libEGL.so.1";
 const GLES_SONAME: &str = "libGLESv2.so.2";
 const WLEGL_SONAME: &str = "libwayland-egl.so.1";
+const GBM_SONAME: &str = "libgbm.so.1";
 
 /// (rust target triple, cross linker / C compiler, install-dir arch name).
 const ARCHES: &[(&str, &str, &str)] = &[
@@ -60,6 +61,8 @@ fn main() {
     // so a change to the lowering/translator (e.g. `src/adapter/glsl.rs`, `src/service/frame.rs`) must
     // restage the guest shim, or the staged `libGLESv2.so.2` the e2e loads keeps the OLD lowering.
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=HL_DRIVER_STAGE");
+    println!("cargo:rerun-if-env-changed=HL_DRIVER_ARCHES");
     println!(
         "cargo:rerun-if-changed={}",
         manifest_dir.join("src").display()
@@ -78,7 +81,15 @@ fn main() {
     );
     println!(
         "cargo:rerun-if-changed={}",
+        manifest_dir.join("../../gpu/hl-gpu/src").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
         manifest_dir.join("shim/wayland_egl.c").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_dir.join("shim/gbm.c").display()
     );
     println!(
         "cargo:rerun-if-changed={}",
@@ -87,16 +98,23 @@ fn main() {
 
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let shim_target = manifest_dir.join("target").join("shim-build");
-    let stage_root = stage_root();
+    let stage_root = stage_root(&manifest_dir);
     let sysroot = rustc_sysroot();
     let wlegl_c = manifest_dir.join("shim/wayland_egl.c");
+    let gbm_c = manifest_dir.join("shim/gbm.c");
+    let generated_include = generate_surface_header();
 
     for (triple, cc, arch_dir) in ARCHES {
-        let required = *arch_dir == "aarch64";
-        let cc = required
-            .then(|| std::env::var("HL_AARCH64_LINUX_CC").ok())
-            .flatten()
-            .unwrap_or_else(|| (*cc).to_owned());
+        if !BuildEnvironment::selected(arch_dir) {
+            continue;
+        }
+        let required = BuildEnvironment::mandatory(arch_dir);
+        let cc = match *arch_dir {
+            "aarch64" => std::env::var("HL_AARCH64_LINUX_CC").ok(),
+            "x86_64" => std::env::var("HL_X86_64_LINUX_CC").ok(),
+            _ => None,
+        }
+        .unwrap_or_else(|| (*cc).to_owned());
         if !BuildEnvironment::std_available(&sysroot, triple) {
             // aarch64 std is guaranteed on this host; a missing HOST std is a real, fail-loud error.
             if required {
@@ -177,6 +195,13 @@ fn main() {
                 panic!("generating {WLEGL_SONAME} for {triple}: {e}");
             }
             println!("cargo:warning=hl-gl: generating {WLEGL_SONAME} for {triple} failed: {e}");
+            continue;
+        }
+        if let Err(e) = generate_gbm(&cc, &gbm_c, &generated_include, &dst_dir) {
+            if required {
+                panic!("generating {GBM_SONAME} for {triple}: {e}");
+            }
+            println!("cargo:warning=hl-gl: generating {GBM_SONAME} for {triple} failed: {e}");
             continue;
         }
 
@@ -304,7 +329,7 @@ fn build_shim(
 }
 
 fn vendor_dir(manifest_dir: &Path) -> PathBuf {
-    manifest_dir.join("../../../third_party/rust/shim-deps")
+    manifest_dir.join("../../../vendor/rust/shim-deps")
 }
 
 /// Install the built `.so` as `<dst_dir>/<soname>` (+ an unversioned `lib*.so` symlink).
@@ -322,15 +347,54 @@ fn stage_lib(shim_target: &Path, triple: &str, dst_dir: &Path, soname: &str) -> 
 /// unversioned symlink). The app links `-lwayland-egl` and calls `wl_egl_window_create`; libEGL reads the
 /// resulting struct back in `eglCreateWindowSurface`.
 fn generate_wayland_egl(cc: &str, wlegl_c: &Path, dst_dir: &Path) -> Result<(), String> {
-    let out = dst_dir.join(WLEGL_SONAME);
+    generate_c_shim(cc, wlegl_c, dst_dir, WLEGL_SONAME)
+}
+
+fn generate_surface_header() -> PathBuf {
+    use hl_surface_protocol::buffer;
+
+    let include = PathBuf::from(BuildEnvironment::required("OUT_DIR"));
+    let magic = buffer::MAGIC
+        .iter()
+        .map(|byte| format!("0x{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let header = format!(
+        "#ifndef HL_SURFACE_BUFFER_H\n#define HL_SURFACE_BUFFER_H\n\
+         #define HL_SURFACE_MAGIC {{{magic}}}\n\
+         #define HL_SURFACE_VERSION {version}\n\
+         #define HL_SURFACE_HEADER_LEN {header_len}\n\
+         #define HL_SURFACE_PLANE_OFFSET {plane_offset}ULL\n\
+         #define HL_SURFACE_MODIFIER 0x{modifier:016x}ULL\n\
+         #endif\n",
+        version = buffer::VERSION,
+        header_len = buffer::HEADER_LEN,
+        plane_offset = buffer::PLANE_OFFSET,
+        modifier = buffer::MODIFIER,
+    );
+    std::fs::write(include.join("hl_surface_buffer.h"), header)
+        .expect("write generated surface-buffer C header");
+    include
+}
+
+fn generate_gbm(cc: &str, source: &Path, include: &Path, dst_dir: &Path) -> Result<(), String> {
+    let out = dst_dir.join(GBM_SONAME);
     let status = Command::new(cc)
         .arg("-shared")
         .arg("-fPIC")
         .arg("-O2")
         .arg("-o")
         .arg(&out)
-        .arg(wlegl_c)
-        .arg(format!("-Wl,-soname,{WLEGL_SONAME}"))
+        .arg(source)
+        .arg("-I")
+        .arg(include)
+        .arg("-L")
+        .arg(dst_dir)
+        .arg("-Wl,--no-as-needed")
+        .arg(format!("-l:{EGL_SONAME}"))
+        .arg("-Wl,--as-needed")
+        .arg("-Wl,-rpath,$ORIGIN")
+        .arg(format!("-Wl,-soname,{GBM_SONAME}"))
         .env_remove("NIX_LDFLAGS")
         .env_remove("NIX_CFLAGS_COMPILE")
         .status()
@@ -341,7 +405,31 @@ fn generate_wayland_egl(cc: &str, wlegl_c: &Path, dst_dir: &Path) -> Result<(), 
     if !out.exists() {
         return Err(format!("expected {} not produced", out.display()));
     }
-    StagedLibrary::link_unversioned(dst_dir, WLEGL_SONAME);
+    StagedLibrary::link_unversioned(dst_dir, GBM_SONAME);
+    Ok(())
+}
+
+fn generate_c_shim(cc: &str, source: &Path, dst_dir: &Path, soname: &str) -> Result<(), String> {
+    let out = dst_dir.join(soname);
+    let status = Command::new(cc)
+        .arg("-shared")
+        .arg("-fPIC")
+        .arg("-O2")
+        .arg("-o")
+        .arg(&out)
+        .arg(source)
+        .arg(format!("-Wl,-soname,{soname}"))
+        .env_remove("NIX_LDFLAGS")
+        .env_remove("NIX_CFLAGS_COMPILE")
+        .status()
+        .map_err(|e| format!("spawn {cc}: {e}"))?;
+    if !status.success() {
+        return Err(format!("{cc} link exited with {status}"));
+    }
+    if !out.exists() {
+        return Err(format!("expected {} not produced", out.display()));
+    }
+    StagedLibrary::link_unversioned(dst_dir, soname);
     Ok(())
 }
 
@@ -362,10 +450,12 @@ impl StagedLibrary {
     }
 }
 
-/// `~/.hl` (or `/root/.hl` if `$HOME` is unset).
-fn stage_root() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-    Path::new(&home).join(".hl")
+/// Revision-scoped application staging when packaging, otherwise crate-local build output.
+fn stage_root(manifest_dir: &Path) -> PathBuf {
+    std::env::var_os("HL_DRIVER_STAGE").map_or_else(
+        || manifest_dir.join("../../../target/guest-drivers"),
+        PathBuf::from,
+    )
 }
 
 /// `rustc --print sysroot`.
@@ -383,6 +473,16 @@ fn rustc_sysroot() -> PathBuf {
 /// Is the rust std library for `triple` installed under `sysroot`?
 struct BuildEnvironment;
 impl BuildEnvironment {
+    fn selected(arch: &str) -> bool {
+        std::env::var("HL_DRIVER_ARCHES")
+            .map(|selected| selected.split(',').any(|value| value == arch))
+            .unwrap_or(true)
+    }
+
+    fn mandatory(arch: &str) -> bool {
+        arch == "aarch64" || std::env::var_os("HL_DRIVER_ARCHES").is_some()
+    }
+
     fn std_available(sysroot: &Path, triple: &str) -> bool {
         sysroot
             .join("lib")

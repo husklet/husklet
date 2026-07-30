@@ -99,20 +99,20 @@ fn deferred_shading_mrt_gbuffer_then_lighting_samples_three_targets() {
                 resource: BindResource::Texture { id: a_ir }
             },
             hl_gpu::protocol::model::descriptor::BindEntry {
-                binding: 16,
-                resource: BindResource::Sampler { id: s }
-            },
-            hl_gpu::protocol::model::descriptor::BindEntry {
                 binding: 1,
                 resource: BindResource::Texture { id: n_ir }
             },
             hl_gpu::protocol::model::descriptor::BindEntry {
-                binding: 17,
+                binding: 2,
+                resource: BindResource::Texture { id: p_ir }
+            },
+            hl_gpu::protocol::model::descriptor::BindEntry {
+                binding: 16,
                 resource: BindResource::Sampler { id: s }
             },
             hl_gpu::protocol::model::descriptor::BindEntry {
-                binding: 2,
-                resource: BindResource::Texture { id: p_ir }
+                binding: 17,
+                resource: BindResource::Sampler { id: s }
             },
             hl_gpu::protocol::model::descriptor::BindEntry {
                 binding: 18,

@@ -29,5 +29,5 @@ fn a_draw_with_an_unlinked_program_presents_nothing() {
     assert!(!swap::swap_buffers(&mut c, &mut sink).unwrap());
     assert!(sink.batches.is_empty());
     // The frame state is still reset for the next frame.
-    assert!(c.draws.is_empty());
+    assert!(c.draws().is_empty());
 }

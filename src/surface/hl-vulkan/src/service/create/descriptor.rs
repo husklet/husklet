@@ -72,10 +72,24 @@ pub fn update_descriptor_buffer(
     offset: u64,
     range: u64,
 ) -> Result<()> {
+    update_descriptor_buffer_element(dev, set, binding, 0, buffer, offset, range)
+}
+
+pub fn update_descriptor_buffer_element(
+    dev: &mut Device,
+    set: VkDescriptorSet,
+    binding: u32,
+    array_element: u32,
+    buffer: VkBuffer,
+    offset: u64,
+    range: u64,
+) -> Result<()> {
+    validate_descriptor_element(dev, set, binding, array_element)?;
     let rec = dev.descriptor_sets.get_mut(&set).ok_or(GpuError::Invalid(
         "vkUpdateDescriptorSets: unknown VkDescriptorSet",
     ))?;
-    rec.buffers.insert(binding, (buffer, offset, range));
+    rec.buffers
+        .insert((binding, array_element), (buffer, offset, range));
     Ok(())
 }
 
@@ -92,15 +106,98 @@ pub fn update_descriptor_image(
     image: Option<VkImage>,
     sampler: Option<VkSampler>,
 ) -> Result<()> {
+    update_descriptor_image_element(dev, set, binding, 0, image, sampler)
+}
+
+pub fn update_descriptor_image_element(
+    dev: &mut Device,
+    set: VkDescriptorSet,
+    binding: u32,
+    array_element: u32,
+    image: Option<VkImage>,
+    sampler: Option<VkSampler>,
+) -> Result<()> {
+    validate_descriptor_element(dev, set, binding, array_element)?;
     let rec = dev.descriptor_sets.get_mut(&set).ok_or(GpuError::Invalid(
         "vkUpdateDescriptorSets: unknown VkDescriptorSet",
     ))?;
-    let entry = rec.images.entry(binding).or_default();
+    let entry = rec.images.entry((binding, array_element)).or_default();
     if image.is_some() {
         entry.image = image;
     }
     if sampler.is_some() {
         entry.sampler = sampler;
+    }
+    Ok(())
+}
+
+fn validate_descriptor_element(
+    dev: &Device,
+    set: VkDescriptorSet,
+    binding: u32,
+    array_element: u32,
+) -> Result<()> {
+    let set = dev.descriptor_sets.get(&set).ok_or(GpuError::Invalid(
+        "vkUpdateDescriptorSets: unknown VkDescriptorSet",
+    ))?;
+    let layout = dev.set_layouts.get(&set.layout).ok_or(GpuError::Invalid(
+        "vkUpdateDescriptorSets: unknown descriptor set layout",
+    ))?;
+    let binding = layout
+        .bindings
+        .iter()
+        .find(|candidate| candidate.binding == binding)
+        .ok_or(GpuError::Invalid(
+            "vkUpdateDescriptorSets: binding not declared by layout",
+        ))?;
+    if array_element >= binding.descriptor_count {
+        return Err(GpuError::OutOfBounds);
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn copy_descriptors(
+    dev: &mut Device,
+    source: VkDescriptorSet,
+    source_binding: u32,
+    source_element: u32,
+    destination: VkDescriptorSet,
+    destination_binding: u32,
+    destination_element: u32,
+    count: u32,
+) -> Result<()> {
+    let source = dev
+        .descriptor_sets
+        .get(&source)
+        .ok_or(GpuError::Invalid(
+            "vkUpdateDescriptorSets: unknown source set",
+        ))?
+        .clone();
+    let destination = dev
+        .descriptor_sets
+        .get_mut(&destination)
+        .ok_or(GpuError::Invalid(
+            "vkUpdateDescriptorSets: unknown destination set",
+        ))?;
+    for index in 0..count {
+        let source_element = source_element
+            .checked_add(index)
+            .ok_or(GpuError::OutOfBounds)?;
+        let destination_element = destination_element
+            .checked_add(index)
+            .ok_or(GpuError::OutOfBounds)?;
+        let source_key = (source_binding, source_element);
+        let destination_key = (destination_binding, destination_element);
+        if let Some(value) = source.buffers.get(&source_key) {
+            destination.buffers.insert(destination_key, *value);
+        } else if let Some(value) = source.images.get(&source_key) {
+            destination.images.insert(destination_key, *value);
+        } else {
+            return Err(GpuError::Invalid(
+                "vkUpdateDescriptorSets: source descriptor is unbound",
+            ));
+        }
     }
     Ok(())
 }
@@ -183,7 +280,17 @@ pub fn update_descriptor_set_with_template(
             let bi = unsafe {
                 core::ptr::read_unaligned(data.as_ptr().add(base) as *const TemplateBufferInfo)
             };
-            update_descriptor_buffer(dev, set, e.dst_binding, bi.buffer, bi.offset, bi.range)?;
+            update_descriptor_buffer_element(
+                dev,
+                set,
+                e.dst_binding,
+                e.dst_array_element
+                    .checked_add(i as u32)
+                    .ok_or(GpuError::OutOfBounds)?,
+                bi.buffer,
+                bi.offset,
+                bi.range,
+            )?;
         }
     }
     Ok(())

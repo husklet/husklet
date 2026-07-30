@@ -30,6 +30,7 @@ hl_gpu = { package = "hl-gpu", path = "../../gpu/hl-gpu" }
 # lowering services (submit/present/create/record) AND — via the shim crate's own copy of this dep — by
 # the guest ICD cdylib. Its symbols are NOT `#[no_mangle]`, so it adds no exports (the 715 ABI is intact).
 hl-log = { path = "../../packages/hl-log" }
+hl-surface-protocol = { path = "../hl-surface-protocol", default-features = false }
 
 [features]
 default = []

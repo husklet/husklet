@@ -24,14 +24,97 @@ use hl_gpu::protocol::model::kernel::{
 };
 use hl_gpu::{GpuError, Result};
 
+mod descriptor;
+pub(crate) mod viewport;
+
 #[hl_design::naming(reason = "diagnostic is the established noun for a shader compiler report")]
 struct Diagnostic;
 
 impl Diagnostic {
+    const GLSL_CONTEXT_LIMIT: usize = 4096;
+
     fn kernel(message: impl Into<String>) -> GpuError {
         // The kernel/shader lowering surfaces its failures as a typed, message-carrying error so a program
         // outside the supported subset is a clean diagnostic, never a silent wrong-shader substitution.
         GpuError::Kernel(message.into())
+    }
+
+    fn glsl(
+        stage: naga::ShaderStage,
+        entry: &str,
+        original: &str,
+        normalized: &str,
+        error: &naga::front::glsl::ParseErrors,
+    ) -> GpuError {
+        // Shader failures are rare and otherwise impossible to reproduce from naga's identifier-only
+        // diagnostic. Emit the original and exact post-normalization inputs only on failure; successful
+        // Chrome frames add no logging or formatting cost.
+        hl_log::hl_error!(
+            hl_log::tag::WGPU,
+            "GLSL translation failed stage={stage:?} entry={entry} error={error:?}\n\
+             --- original GLSL begin ---\n{original}\n--- original GLSL end ---\n\
+             --- normalized GLSL begin ---\n{normalized}\n--- normalized GLSL end ---"
+        );
+        Self::kernel(Self::glsl_message(original, normalized, error))
+    }
+
+    fn glsl_message(
+        original: &str,
+        normalized: &str,
+        error: &naga::front::glsl::ParseErrors,
+    ) -> String {
+        let mut message = String::new();
+        Self::push_bounded(&mut message, &format!("glsl-in: {error:?}"));
+        let names = error
+            .errors
+            .iter()
+            .filter_map(|error| match &error.kind {
+                naga::front::glsl::ErrorKind::UnknownVariable(name) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if names.is_empty() {
+            return message;
+        }
+        Self::source_matches(&mut message, "original", original, &names);
+        Self::source_matches(&mut message, "normalized", normalized, &names);
+        message
+    }
+
+    fn source_matches(output: &mut String, label: &str, source: &str, names: &[&str]) {
+        if output.len() >= Self::GLSL_CONTEXT_LIMIT {
+            return;
+        }
+        let lines = source.lines().collect::<Vec<_>>();
+        let mut selected = vec![false; lines.len()];
+        for (index, line) in lines.iter().enumerate() {
+            if names.iter().any(|name| line.contains(name)) {
+                let start = index.saturating_sub(1);
+                let end = (index + 2).min(lines.len());
+                selected[start..end].fill(true);
+            }
+        }
+        if !selected.iter().any(|selected| *selected) {
+            return;
+        }
+        Self::push_bounded(output, &format!("\n{label} GLSL context:"));
+        for (index, line) in lines.iter().enumerate() {
+            if selected[index] {
+                Self::push_bounded(output, &format!("\n{:>5} | {line}", index + 1));
+            }
+        }
+    }
+
+    fn push_bounded(output: &mut String, value: &str) {
+        let remaining = Self::GLSL_CONTEXT_LIMIT.saturating_sub(output.len());
+        if remaining == 0 {
+            return;
+        }
+        let mut end = remaining.min(value.len());
+        while !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        output.push_str(&value[..end]);
     }
 }
 
@@ -56,6 +139,28 @@ pub struct Spirv;
 
 impl Spirv {
     pub fn translate_reflect(words: &[u32]) -> Result<(String, crate::reflect::ModuleUsage)> {
+        Self::translate_reflect_layout(words, None)
+    }
+
+    pub fn translate_reflect_layout(
+        words: &[u32],
+        layout: Option<&hl_gpu::protocol::model::descriptor::PipelineLayout>,
+    ) -> Result<(String, crate::reflect::ModuleUsage)> {
+        Self::translate_reflect_options(words, layout, false)
+    }
+
+    pub fn translate_reflect_sample_shading(
+        words: &[u32],
+        layout: Option<&hl_gpu::protocol::model::descriptor::PipelineLayout>,
+    ) -> Result<(String, crate::reflect::ModuleUsage)> {
+        Self::translate_reflect_options(words, layout, true)
+    }
+
+    fn translate_reflect_options(
+        words: &[u32],
+        layout: Option<&hl_gpu::protocol::model::descriptor::PipelineLayout>,
+        sample_shading: bool,
+    ) -> Result<(String, crate::reflect::ModuleUsage)> {
         if words.first().copied() != Some(SPIRV_MAGIC) {
             return Err(GpuError::Invalid("wgpu: shader payload is not SPIR-V"));
         }
@@ -67,6 +172,79 @@ impl Spirv {
         let mut module =
             naga::front::spv::parse_u8_slice(bytes, &naga::front::spv::Options::default())
                 .map_err(|e| Diagnostic::kernel(format!("spirv-in: {e:?}")))?;
+        if let Some(layout) = layout {
+            for (_, variable) in module.global_variables.iter_mut() {
+                let Some(resource) = &variable.binding else {
+                    continue;
+                };
+                let Some(binding) = layout.bindings.iter().find(|binding| {
+                    binding.group == resource.group
+                        && binding.binding == resource.binding
+                        && binding.count > 1
+                }) else {
+                    continue;
+                };
+                let expected = naga::ArraySize::Constant(
+                    std::num::NonZeroU32::new(binding.count)
+                        .ok_or(GpuError::Invalid("zero descriptor count"))?,
+                );
+                let _base = match module.types[variable.ty].inner {
+                    naga::TypeInner::Array { base, size, .. } => {
+                        if size != expected {
+                            return Err(GpuError::Invalid(
+                                "SPIR-V descriptor array count differs from pipeline layout",
+                            ));
+                        }
+                        variable.ty = module.types.insert(
+                            naga::Type {
+                                name: None,
+                                inner: naga::TypeInner::BindingArray { base, size },
+                            },
+                            naga::Span::default(),
+                        );
+                        base
+                    }
+                    naga::TypeInner::BindingArray { base, size } => {
+                        if size != expected {
+                            return Err(GpuError::Invalid(
+                                "SPIR-V descriptor array count differs from pipeline layout",
+                            ));
+                        }
+                        base
+                    }
+                    _ => continue,
+                };
+            }
+        }
+        if sample_shading {
+            let sample_index = module.types.insert(
+                naga::Type {
+                    name: None,
+                    inner: naga::TypeInner::Scalar(naga::Scalar {
+                        kind: naga::ScalarKind::Uint,
+                        width: 4,
+                    }),
+                },
+                naga::Span::default(),
+            );
+            for entry in &mut module.entry_points {
+                if entry.stage == naga::ShaderStage::Fragment
+                    && !entry.function.arguments.iter().any(|argument| {
+                        argument.binding == Some(naga::Binding::BuiltIn(naga::BuiltIn::SampleIndex))
+                    })
+                {
+                    entry.function.arguments.push(naga::FunctionArgument {
+                        name: Some("_hl_sample_index".into()),
+                        ty: sample_index,
+                        binding: Some(naga::Binding::BuiltIn(naga::BuiltIn::SampleIndex)),
+                    });
+                }
+            }
+        }
+        if let Some(layout) = layout {
+            descriptor::ScalarArrays::lower(&mut module, layout)?;
+        }
+        viewport::Shader::prepare(&mut module)?;
         let reflected = crate::reflect::ModuleUsage::from_module(&module);
         Ok((ShaderModule::new(&mut module).wgsl()?, reflected))
     }
@@ -90,6 +268,7 @@ pub fn glsl_to_wgsl_reflect(
     stage: naga::ShaderStage,
     entry: &str,
 ) -> Result<(String, crate::reflect::ModuleUsage)> {
+    let original = src;
     // GskGpu (GTK4 "gl") and ANGLE (Chrome) emit GLSL-ES that naga's `glsl-in` rejects wholesale
     // (`#version … es`, `gl_VertexID`, combined `sampler2D` globals AND — the hard case — combined
     // `sampler2D` FUNCTION PARAMETERS). The host glslang/shaderc route that normally handles these is not
@@ -122,7 +301,7 @@ pub fn glsl_to_wgsl_reflect(
     let mut frontend = naga::front::glsl::Frontend::default();
     let mut module = frontend
         .parse(&naga::front::glsl::Options::from(stage), src)
-        .map_err(|e| Diagnostic::kernel(format!("glsl-in: {e:?}")))?;
+        .map_err(|error| Diagnostic::glsl(stage, entry, original, src, &error))?;
     if let Some(ep) = module.entry_points.first_mut() {
         ep.name = entry.to_string();
     }
@@ -143,6 +322,7 @@ pub fn glsl_to_wgsl_reflect(
     // marked each `index>=1` fragment output with `BLEND_SRC1_SUFFIX`. Flip `second_blend_source` on those
     // outputs (and strip the marker) so the two same-location outputs validate as the dual-source pair.
     shader.fix_dual_source_blend();
+    viewport::Shader::prepare(shader.module)?;
     let reflected = crate::reflect::ModuleUsage::from_module(shader.module);
     Ok((shader.wgsl()?, reflected))
 }

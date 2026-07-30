@@ -8,97 +8,66 @@ impl Default for GlContext {
 
 impl GlContext {
     pub fn new() -> Self {
+        Self::with_allocator(std::sync::Arc::new(IrAllocator::new()))
+    }
+
+    pub fn with_allocator(allocator: std::sync::Arc<IrAllocator>) -> Self {
         Self {
-            surf: GlSurface::default(),
+            local: LocalState::default(),
             buffers: Buffers::new(),
             textures: Textures::new(),
             programs: Programs::new(),
-            framebuffers: Framebuffers::new(),
             renderbuffers: Renderbuffers::new(),
             samplers: Samplers::new(),
-            queries: Queries::new(),
-            transform_feedbacks: TransformFeedbacks::new(),
-            program_pipelines: ProgramPipelines::new(),
-            cur_prog: 0,
-            array_buffer: 0,
-            element_buffer: 0,
-            general_buffers: HashMap::new(),
-            active_texture: 0,
-            tex_unit: [0; 8],
-            attr: [Attr::default(); MAX_ATTR],
-            clear_color: [0.0; 4],
-            clear_depth: 1.0,
-            viewport: [0; 4],
-            scissor_enabled: false,
-            scissor: [0; 4],
-            blend: false,
-            blend_src_rgb: glconst::GL_ONE,
-            blend_dst_rgb: glconst::GL_ZERO,
-            blend_src_alpha: glconst::GL_ONE,
-            blend_dst_alpha: glconst::GL_ZERO,
-            blend_eq_rgb: glconst::GL_FUNC_ADD,
-            blend_eq_alpha: glconst::GL_FUNC_ADD,
-            blend_color: [0.0; 4],
-            depth: false,
-            depth_func: glconst::GL_LESS,
-            depth_write: true,
-            stencil: false,
-            stencil_func_front: glconst::GL_ALWAYS,
-            stencil_func_back: glconst::GL_ALWAYS,
-            stencil_fail_front: glconst::GL_KEEP,
-            stencil_zfail_front: glconst::GL_KEEP,
-            stencil_zpass_front: glconst::GL_KEEP,
-            stencil_fail_back: glconst::GL_KEEP,
-            stencil_zfail_back: glconst::GL_KEEP,
-            stencil_zpass_back: glconst::GL_KEEP,
-            stencil_ref: 0,
-            stencil_read_mask: 0xffff_ffff,
-            stencil_write_mask: 0xffff_ffff,
-            clear_stencil: 0,
-            cull_enabled: false,
-            cull_face: glconst::GL_BACK,
-            front_face: glconst::GL_CCW,
-            color_mask: 0xf,
-            bound_fbo: 0,
-            read_fbo: 0,
-            bound_rbo: 0,
-            cur_vao: 0,
-            vaos: HashMap::new(),
-            next_vao: 1,
-            pixel_store: PixelStore::default(),
-            indexed_buffers: HashMap::new(),
             uniform_blocks: HashMap::new(),
-            draw_buffers: vec![glconst::GL_BACK],
-            read_buffer_src: glconst::GL_BACK,
             fence_ir: 0,
             fence_next_value: 1,
             fence_signaled_through: 0,
             syncs: HashMap::new(),
             next_sync_token: 1,
-            gl_error: glconst::GL_NO_ERROR,
-            draws: Vec::new(),
-            blits: Vec::new(),
-            next_buffer: 1,
-            next_texture: 1,
-            next_sampler: 1,
-            next_shader: 1,
-            next_pipeline: 1,
-            next_bind_group: 1,
-            next_surface: 1,
-            next_fence: 1,
-            default_tex_ir: 0,
-            default_surface_ir: 0,
-            default_target_wh: (0, 0),
+            allocator,
             default_placeholder_tex: 0,
             default_placeholder_samp: 0,
             fbo_targets: HashMap::new(),
+            external_targets: HashMap::new(),
             depth_targets: HashMap::new(),
             tex_ir_cache: HashMap::new(),
+            shared_tex_ir_cache: HashMap::new(),
+            shared_target_cache: HashMap::new(),
             buf_ir_cache: HashMap::new(),
             prog_shader_cache: HashMap::new(),
             prog_pipeline_cache: HashMap::new(),
+            sampler_ir_cache: Vec::new(),
             pending_destroys: Vec::new(),
+            pending_texture_deletes: HashSet::new(),
+            pending_buffer_deletes: HashSet::new(),
+            pending_sampler_deletes: HashSet::new(),
+            pending_program_deletes: HashSet::new(),
         }
+    }
+
+    /// Capture the exact texture generation currently named by `gl_name` for a deferred draw.
+    pub fn texture_snapshot(&self, gl_name: u32) -> Option<crate::model::program::TextureSnapshot> {
+        let texture = self.textures.get(gl_name)?.clone();
+        let generation = texture.gen;
+        let sampled_generation = texture.sampled_generation();
+        let sampled_ir = self
+            .tex_ir_cache
+            .get(&gl_name)
+            .and_then(|&(ir, resident_generation)| {
+                (resident_generation == sampled_generation).then_some(ir)
+            });
+        let fbo_ir = self
+            .fbo_targets
+            .get(&(gl_name, generation))
+            .map(|&(_, texture)| texture);
+        Some(crate::model::program::TextureSnapshot {
+            name: gl_name,
+            generation,
+            texture,
+            sampled_ir,
+            fbo_ir,
+        })
     }
 
     // ---- persistent-resource retirement (glDelete* / content change) -----------------------------
@@ -120,6 +89,15 @@ impl GlContext {
             .collect();
         for key in targets {
             let (surface, texture) = self.fbo_targets.remove(&key).unwrap();
+            let external = self.external_targets.remove(&key);
+            let still_live = external.is_some_and(|token| {
+                self.external_targets.iter().any(|(other, candidate)| {
+                    *candidate == token && self.fbo_targets.contains_key(other)
+                })
+            });
+            if still_live {
+                continue;
+            }
             // Any depth/stencil buffers minted for this color target die with it.
             let mut dead_depth: Vec<u32> = Vec::new();
             self.depth_targets.retain(|&(color, _), &mut depth| {
@@ -133,9 +111,24 @@ impl GlContext {
             for depth in dead_depth {
                 self.pending_destroys.push(Cmd::DestroyTexture(depth));
             }
-            self.pending_destroys.push(Cmd::DestroyTexture(texture));
-            self.pending_destroys.push(Cmd::DestroySurface(surface));
+            if external.is_some() {
+                self.pending_destroys.push(Cmd::DestroySurface(surface));
+            }
+            let mut transferred = false;
+            for residency in self
+                .shared_target_cache
+                .values_mut()
+                .filter(|residency| residency.texture == texture)
+            {
+                residency.owned = true;
+                transferred = true;
+            }
+            if !transferred {
+                self.pending_destroys.push(Cmd::DestroyTexture(texture));
+            }
         }
+        self.external_targets
+            .retain(|(name, _), _| *name != gl_name);
     }
 
     /// Retire GL data buffer `gl_name`'s resident IR buffers (`glDeleteBuffers`) — a buffer can be cached
@@ -219,6 +212,16 @@ impl GlContext {
         for (_gl_name, (ir, _gen)) in self.tex_ir_cache.drain() {
             self.pending_destroys.push(Cmd::DestroyTexture(ir));
         }
+        for (_identity, residency) in self.shared_tex_ir_cache.drain() {
+            self.pending_destroys
+                .push(Cmd::DestroyTexture(residency.texture));
+        }
+        for (_storage, residency) in self.shared_target_cache.drain() {
+            if residency.owned {
+                self.pending_destroys
+                    .push(Cmd::DestroyTexture(residency.texture));
+            }
+        }
         for (_key, (ir, _gen)) in self.buf_ir_cache.drain() {
             self.pending_destroys.push(Cmd::DestroyBuffer(ir));
         }
@@ -229,21 +232,32 @@ impl GlContext {
         for (_key, (ir, _gen)) in self.prog_pipeline_cache.drain() {
             self.pending_destroys.push(Cmd::DestroyPipeline(ir));
         }
-        for (_gl_tex, (surface, texture)) in self.fbo_targets.drain() {
-            self.pending_destroys.push(Cmd::DestroyTexture(texture));
-            self.pending_destroys.push(Cmd::DestroySurface(surface));
+        for (_descriptor, ir) in self.sampler_ir_cache.drain(..) {
+            self.pending_destroys.push(Cmd::DestroySampler(ir));
         }
+        let mut external_surfaces = std::collections::HashSet::new();
+        let mut target_textures = std::collections::HashSet::new();
+        for (key, (surface, texture)) in self.fbo_targets.drain() {
+            if self.external_targets.remove(&key).is_some() {
+                external_surfaces.insert(surface);
+            }
+            target_textures.insert(texture);
+        }
+        self.pending_destroys
+            .extend(target_textures.into_iter().map(Cmd::DestroyTexture));
+        self.pending_destroys
+            .extend(external_surfaces.into_iter().map(Cmd::DestroySurface));
+        self.external_targets.clear();
         for (_key, depth) in self.depth_targets.drain() {
             self.pending_destroys.push(Cmd::DestroyTexture(depth));
         }
-        if self.default_tex_ir != 0 {
+        for (_, target) in self.local.default_targets.drain() {
             self.pending_destroys
-                .push(Cmd::DestroyTexture(self.default_tex_ir));
-            self.pending_destroys
-                .push(Cmd::DestroySurface(self.default_surface_ir));
-            self.default_tex_ir = 0;
-            self.default_surface_ir = 0;
-            self.default_target_wh = (0, 0);
+                .push(Cmd::DestroyTexture(target.texture));
+            if target.token.is_some() {
+                self.pending_destroys
+                    .push(Cmd::DestroySurface(target.surface));
+            }
         }
         if self.default_placeholder_tex != 0 {
             self.pending_destroys
@@ -279,6 +293,24 @@ impl GlContext {
         self.pending_destroys.clear();
     }
 
+    /// Replace the retirement queue after a partial submission acknowledges only its unpinned subset.
+    pub fn replace_pending_destroys(&mut self, destroys: Vec<Cmd>) {
+        self.pending_destroys = destroys;
+    }
+
+    /// Queue a frame-local texture for retirement at the retained draw's accepted submission tail.
+    ///
+    /// Standalone cleanup boundaries keep queued textures pinned by deferred draws; see
+    /// [`GlContext::flush_retirements`].
+    pub fn queue_texture_destroy(&mut self, texture: u32) {
+        self.pending_destroys.push(Cmd::DestroyTexture(texture));
+    }
+
+    /// Retire a frame-local capture buffer at the next accepted cleanup boundary.
+    pub fn queue_buffer_destroy(&mut self, buffer: u32) {
+        self.pending_destroys.push(Cmd::DestroyBuffer(buffer));
+    }
+
     /// The shared placeholder sampler's IR id (`0` = not yet created). The frame builder must NOT free this
     /// among a frame's per-draw ephemeral samplers — it is created once and reused across every frame (see
     /// [`Self::default_placeholder`]).
@@ -286,24 +318,55 @@ impl GlContext {
         self.default_placeholder_samp
     }
 
+    /// Resolve an immutable sampler descriptor to one persistent IR sampler.
+    ///
+    /// GL texture/sampler mutation is naturally correct: the complete descriptor changes and receives
+    /// a different id, while draws that retain an older descriptor keep referring to its immutable sampler.
+    pub fn sampler_ir(
+        &mut self,
+        descriptor: &hl_gpu::protocol::model::descriptor::SamplerDesc,
+    ) -> hl_gpu::Result<(u32, bool)> {
+        if let Some((_, ir)) = self
+            .sampler_ir_cache
+            .iter()
+            .find(|(candidate, _)| candidate == descriptor)
+        {
+            return Ok((*ir, false));
+        }
+        let ir = self.alloc_sampler_ir()?;
+        self.sampler_ir_cache.push((descriptor.clone(), ir));
+        Ok((ir, true))
+    }
+
+    pub fn is_resident_sampler(&self, ir: u32) -> bool {
+        self.sampler_ir_cache
+            .iter()
+            .any(|(_, candidate)| *candidate == ir)
+    }
+
     /// The stable IR shader-module ids `(vs_shader_ir, fs_shader_ir)` a linked render program (`prog`) at
     /// link generation `gen` lowers to. Returns `(vs_ir, fs_ir, needs_create)`: `needs_create` is true on the
     /// first sight of this program (or after a relink bumped `gen`), so the frame builder emits the two
     /// `CreateShader`s exactly then and reuses the resident ids — emitting NOTHING and re-compiling NOTHING on
     /// every later draw+frame that reuses the program. Mirrors [`Self::sampled_texture_ir`].
-    pub fn program_shader_ir(&mut self, prog: u32, variant: u64, gen: u64) -> (u32, u32, bool) {
+    pub fn program_shader_ir(
+        &mut self,
+        prog: u32,
+        variant: u64,
+        gen: u64,
+    ) -> hl_gpu::Result<(u32, u32, bool)> {
         let key = (prog, variant);
         if let Some(&(vs, fs, g)) = self.prog_shader_cache.get(&key) {
             if g == gen {
                 hl_log::hl_count!(hl_log::tag::GL, "prog_shader_hit");
-                return (vs, fs, false);
+                return Ok((vs, fs, false));
             }
         }
         hl_log::hl_count!(hl_log::tag::GL, "prog_shader_compile");
-        let vs = self.alloc_shader_ir();
-        let fs = self.alloc_shader_ir();
+        let vs = self.alloc_shader_ir()?;
+        let fs = self.alloc_shader_ir()?;
         self.prog_shader_cache.insert(key, (vs, fs, gen));
-        (vs, fs, true)
+        Ok((vs, fs, true))
     }
 
     /// The stable IR render-pipeline id for a program (`prog`) drawn with pipeline-state signature
@@ -311,18 +374,23 @@ impl GlContext {
     /// `(program, state, link_gen)` and re-referenced by id thereafter — so a program re-drawn with the same
     /// fixed-function + vertex-layout state emits no new `CreateRenderPipeline`. Mirrors
     /// [`Self::program_shader_ir`].
-    pub fn program_pipeline_ir(&mut self, prog: u32, state_key: u64, gen: u64) -> (u32, bool) {
+    pub fn program_pipeline_ir(
+        &mut self,
+        prog: u32,
+        state_key: u64,
+        gen: u64,
+    ) -> hl_gpu::Result<(u32, bool)> {
         if let Some(&(ir, g)) = self.prog_pipeline_cache.get(&(prog, state_key)) {
             if g == gen {
                 hl_log::hl_count!(hl_log::tag::GL, "prog_pipeline_hit");
-                return (ir, false);
+                return Ok((ir, false));
             }
         }
         hl_log::hl_count!(hl_log::tag::GL, "prog_pipeline_create");
-        let ir = self.alloc_pipeline_ir();
+        let ir = self.alloc_pipeline_ir()?;
         self.prog_pipeline_cache
             .insert((prog, state_key), (ir, gen));
-        (ir, true)
+        Ok((ir, true))
     }
 
     /// The stable IR texture id a sampled GL texture (`gl_name`) at content generation `gen` lowers to.
@@ -330,11 +398,15 @@ impl GlContext {
     /// whenever its content generation changed since the last upload — the frame builder emits the
     /// `CreateTexture` + staging `WriteBuffer` + `CopyBufferToTexture` exactly then, and reuses the resident
     /// id (uploading nothing) on every later reference in this and subsequent frames.
-    pub fn sampled_texture_ir(&mut self, gl_name: u32, gen: u64) -> (u32, bool) {
+    pub fn sampled_texture_ir(
+        &mut self,
+        gl_name: u32,
+        generation: (u64, u64),
+    ) -> hl_gpu::Result<(u32, bool)> {
         if let Some(&(ir, up_gen)) = self.tex_ir_cache.get(&gl_name) {
-            if up_gen == gen {
+            if up_gen == generation {
                 hl_log::hl_count!(hl_log::tag::GL, "tex_cache_hit");
-                return (ir, false);
+                return Ok((ir, false));
             }
             // Content changed: a fresh id carries the new upload; the old resident id is RETIRED for destroy
             // (queued into the next frame's tail). Safe now that a NACKed frame rolls back atomically (#232):
@@ -343,38 +415,161 @@ impl GlContext {
             // this, a Chrome texture re-uploaded each frame leaks its prior generation's residency forever.
             hl_log::hl_count!(hl_log::tag::GL, "tex_upload");
             self.pending_destroys.push(Cmd::DestroyTexture(ir));
-            let ir = self.alloc_texture_ir();
-            self.tex_ir_cache.insert(gl_name, (ir, gen));
-            return (ir, true);
+            let ir = self.alloc_texture_ir()?;
+            self.tex_ir_cache.insert(gl_name, (ir, generation));
+            return Ok((ir, true));
         }
         hl_log::hl_count!(hl_log::tag::GL, "tex_upload");
-        let ir = self.alloc_texture_ir();
-        self.tex_ir_cache.insert(gl_name, (ir, gen));
-        (ir, true)
+        let ir = self.alloc_texture_ir()?;
+        self.tex_ir_cache.insert(gl_name, (ir, generation));
+        Ok((ir, true))
+    }
+
+    pub(crate) fn shared_texture_ir(
+        &mut self,
+        key: (u64, u64, u32, u32, u32),
+        residency: std::sync::Weak<crate::model::texture::SharedPixels>,
+    ) -> hl_gpu::Result<(u32, bool)> {
+        if let Some(target) = self.shared_target_cache.get(&key.0) {
+            if target.revision == key.1
+                && target.width == key.2
+                && target.height == key.3
+                && target.storage.upgrade().is_some()
+            {
+                hl_log::hl_count!(hl_log::tag::GL, "shared_target_cache_hit");
+                return Ok((target.texture, false));
+            }
+        }
+        if let Some(target) = self.shared_target_cache.remove(&key.0) {
+            if target.owned {
+                self.pending_destroys
+                    .push(Cmd::DestroyTexture(target.texture));
+            }
+        }
+        if let Some(residency) = self.shared_tex_ir_cache.get(&key) {
+            hl_log::hl_count!(hl_log::tag::GL, "shared_tex_cache_hit");
+            return Ok((residency.texture, false));
+        }
+        self.invalidate_shared_texture(key.0);
+        let texture = self.alloc_texture_ir()?;
+        self.shared_tex_ir_cache.insert(
+            key,
+            SharedTextureResidency {
+                texture,
+                storage: residency,
+            },
+        );
+        hl_log::hl_count!(hl_log::tag::GL, "shared_tex_upload");
+        Ok((texture, true))
+    }
+
+    pub(crate) fn promote_shared_texture(
+        &mut self,
+        storage: u64,
+        revision: u64,
+        width: u32,
+        height: u32,
+        texture: u32,
+        residency: std::sync::Weak<crate::model::texture::SharedPixels>,
+    ) {
+        let retired = self
+            .shared_tex_ir_cache
+            .extract_if(|(candidate, ..), _| *candidate == storage)
+            .map(|(_, resident)| resident.texture)
+            .collect::<Vec<_>>();
+        self.pending_destroys
+            .extend(retired.into_iter().map(Cmd::DestroyTexture));
+        if let Some(previous) = self.shared_target_cache.insert(
+            storage,
+            SharedTargetResidency {
+                texture,
+                revision,
+                width,
+                height,
+                storage: residency,
+                owned: false,
+            },
+        ) {
+            if previous.owned && previous.texture != texture {
+                self.pending_destroys
+                    .push(Cmd::DestroyTexture(previous.texture));
+            }
+        }
+    }
+
+    /// Transfer retained render targets from the removed GL/FBO owner to shared-storage residency.
+    pub fn own_shared_targets(&mut self, textures: &[u32]) {
+        for residency in self.shared_target_cache.values_mut() {
+            if textures.contains(&residency.texture) {
+                residency.owned = true;
+            }
+        }
+    }
+
+    /// Release imported-storage residency whose last storage owner disappeared.
+    ///
+    /// Call only after an accepted batch's deferred snapshots have been released. Destroy commands remain
+    /// pending until a sink accepts them, so a failed cleanup submission can be retried transactionally.
+    pub fn prune_shared_textures(&mut self) {
+        let retired = self
+            .shared_tex_ir_cache
+            .extract_if(|_, residency| residency.storage.upgrade().is_none())
+            .map(|(_, residency)| residency.texture)
+            .collect::<Vec<_>>();
+        self.pending_destroys
+            .extend(retired.into_iter().map(Cmd::DestroyTexture));
+        let retired = self
+            .shared_target_cache
+            .extract_if(|_, residency| residency.storage.upgrade().is_none())
+            .filter_map(|(_, residency)| residency.owned.then_some(residency.texture))
+            .collect::<Vec<_>>();
+        self.pending_destroys
+            .extend(retired.into_iter().map(Cmd::DestroyTexture));
+    }
+
+    pub(crate) fn invalidate_shared_texture(&mut self, storage: u64) {
+        let retired = self
+            .shared_tex_ir_cache
+            .extract_if(|(candidate, ..), _| *candidate == storage)
+            .map(|(_, residency)| residency.texture)
+            .collect::<Vec<_>>();
+        self.pending_destroys
+            .extend(retired.into_iter().map(Cmd::DestroyTexture));
+        if let Some(residency) = self.shared_target_cache.remove(&storage) {
+            if residency.owned {
+                self.pending_destroys
+                    .push(Cmd::DestroyTexture(residency.texture));
+            }
+        }
     }
 
     /// The stable IR buffer id a GL data buffer (`gl_name`) at content generation `gen` lowers to for the
     /// given IR `usage` bits (VERTEX/INDEX). Returns `(buffer_ir, needs_upload)`, mirroring
     /// [`Self::sampled_texture_ir`]: created + `WriteBuffer`d once per content generation, re-bound by id
     /// thereafter.
-    pub fn data_buffer_ir(&mut self, gl_name: u32, usage: u32, gen: u64) -> (u32, bool) {
+    pub fn data_buffer_ir(
+        &mut self,
+        gl_name: u32,
+        usage: u32,
+        gen: u64,
+    ) -> hl_gpu::Result<(u32, bool)> {
         if let Some(&(ir, up_gen)) = self.buf_ir_cache.get(&(gl_name, usage)) {
             if up_gen == gen {
                 hl_log::hl_count!(hl_log::tag::GL, "buf_cache_hit");
-                return (ir, false);
+                return Ok((ir, false));
             }
             // Content changed: retire the prior generation's IR buffer (queued for the next frame's tail) and
             // mint a fresh id for the new bytes — safe for the same reason as the texture path above.
             hl_log::hl_count!(hl_log::tag::GL, "buf_upload");
             self.pending_destroys.push(Cmd::DestroyBuffer(ir));
-            let ir = self.alloc_buffer_ir();
+            let ir = self.alloc_buffer_ir()?;
             self.buf_ir_cache.insert((gl_name, usage), (ir, gen));
-            return (ir, true);
+            return Ok((ir, true));
         }
         hl_log::hl_count!(hl_log::tag::GL, "buf_upload");
-        let ir = self.alloc_buffer_ir();
+        let ir = self.alloc_buffer_ir()?;
         self.buf_ir_cache.insert((gl_name, usage), (ir, gen));
-        (ir, true)
+        Ok((ir, true))
     }
 
     // ---- IR id minting ---------------------------------------------------------------------------

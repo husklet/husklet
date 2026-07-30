@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build a distributable .dmg from Husklet.app. Run after bundle.sh.
-#   nix develop "path:$PWD/nix" --command tools/make-dmg.sh   (Makefile `dmg` target)
+#   nix develop . --command src/apps/husklet/package/make-dmg.sh
 #
 # The .dmg is unsigned/ad-hoc like the app: on first launch users must right-click -> Open,
 # or run `xattr -dr com.apple.quarantine /Applications/Husklet.app`.

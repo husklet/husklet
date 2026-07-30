@@ -101,6 +101,7 @@ fn deep_multipass() {
                     address_u: AddressMode::ClampToEdge,
                     address_v: AddressMode::ClampToEdge,
                     address_w: AddressMode::ClampToEdge,
+                    ..SamplerDesc::default()
                 },
             ),
             Cmd::CreateShader {

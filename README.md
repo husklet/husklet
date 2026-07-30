@@ -1,76 +1,86 @@
-# Husklet
+<div align="center">
+  <a href="https://husklet.com">
+    <img src="assets/logo.svg" alt="Husklet" width="128">
+  </a>
 
-Husklet provides configurable Linux workspaces on macOS. A workspace combines an OCI image,
-terminal, mounts, environment, networking, optional container services, and optional GUI/GPU
-capabilities in one signed desktop application.
+  <h1>Husklet</h1>
 
-## Architecture
+  <p>Isolated, reproducible Linux workspaces.</p>
 
-The `husklet` application is the composition root. It translates workspace configuration into the
-typed container API from `src/containers`; `hl-container` lowers each launch into the Rust engine API
-from `../engine`. Product code does not invoke an engine binary or construct an engine-specific
-environment dialect.
+  <p>
+    <a href="https://husklet.com"><img alt="Website" src="https://img.shields.io/badge/website-husklet.com-111111"></a>
+    <a href="https://github.com/husklet/husklet/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/husklet/husklet?display_name=tag"></a>
+    <a href="https://github.com/husklet/husklet/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/husklet/husklet/actions/workflows/ci.yml/badge.svg"></a>
+    <a href="https://github.com/husklet/husklet/actions/workflows/release.yml"><img alt="Release" src="https://github.com/husklet/husklet/actions/workflows/release.yml/badge.svg"></a>
+  </p>
+</div>
 
-Graphics follows the same composition model:
+Husklet is an early-stage workspace application for isolated, reproducible Linux development environments.
+Each workspace combines a configured image, terminal, containers, networking, and project settings without
+installing project tools on the host. The goal is a practical environment for everyday development, including
+VPNs, graphical tools, and deeper workspace integrations.
 
-```text
-workspace configuration
-  -> husklet Graphics device
-  -> hl-container Device contract
-  -> hl-engine MachineSpec extensions and mounts
-  -> guest GL / CUDA / Vulkan shims
-  -> hl-gpu neutral IR
-  -> hl-gpu-wgpu host execution
-  -> hl-compositor
-  -> native macOS surface
+## Workspaces
+
+Every project and serious development often need runtimes that can conflict (libraries, system services, drivers and others). Husklet keeps those requirements inside a workspace while providing the terminal and controls needed to work with them. Workspace images are intended to make common projects useful immediately and reproducible across machines.
+
+In age of agents this work is even more important as you do not want agents to modify your host, leak env or tamper with system.
+
+## Containers
+
+Husklet is building lightweight Linux containers as an alternative to running a full virtual machine for
+each environment. Linux system calls cross an ABI boundary into the host instead of booting a separate guest
+kernel.
+
+```mermaid
+flowchart TB
+    ARM["ARM64 Linux application"]
+    AMD["AMD64 Linux application"]
+
+    ABI["Linux ABI"]
+    ENGINE["Husklet execution engine"]
+    HOST["Host services and hardware"]
+
+    MAC["macOS<br/>current"]
+    LINUX["Linux<br/>planned"]
+    WINDOWS["Windows<br/>eventual"]
+
+    ARM --> ABI
+    AMD --> ABI
+    ABI --> ENGINE
+    ENGINE --> HOST
+    HOST --> MAC
+    HOST --> LINUX
+    HOST --> WINDOWS
 ```
 
-Read-only guest libraries are projected through the engine's versioned `engine.namespace`
-extension. Live GPU and Wayland sockets remain typed writable container mounts until the engine
-supports writable socket projection. Backend selection and service lifetime stay in Husklet;
-container and engine crates remain GPU-neutral.
+The workspace sees Linux while Husklet translates execution, files, networking, and devices onto the host.
+This avoids the memory and startup cost of one complete virtual machine per workspace. macOS is the current
+host target; Linux and Windows are later portability goals.
 
-Repository crates are grouped under `src/`:
+## Docker
 
-```text
-src/
-  apps/husklet/          signed product and composition root
-  gpu/                   neutral GPU protocol and host backend
-  surface/               compositor and guest GL/CUDA/Vulkan libraries
-  workspaces/            workspace models, terminal, and generic GUI
-  packages/              reusable foundations
-```
+Husklet exposes a shared Docker-compatible API. Docker clients on the host can inspect and control containers
+across workspaces without entering a workspace first. Compatibility is under active development.
 
-The container and engine repositories are sibling dependencies:
+## Checkpointing
 
-```text
-src/containers/          images, container lifecycle, daemon, client
-../engine/               typed Linux execution engine
-```
+The engine controls Linux process execution, which makes saving process state and later restoring running
+commands possible. Husklet is integrating this into “continue later” workspace sessions; complete,
+failure-safe restoration remains in development.
 
-## Development
+## GPU and GUI applications
 
-Portable checks:
+The virtual GPU lowers guest GL, Vulkan, and CUDA operations into an intermediate representation for
+execution on host hardware. Together with Wayland and host surfaces, this is intended to let gui apps (editors,
+browsers etc) and their supporting tools run inside the same isolated workspace. GPU and GUI compatibility is
+still being expanded and hardened.
 
-```sh
-make test
-cargo check -p husklet --features runtime --lib
-cargo test -p hl-container
-```
+## Terminal
 
-The macOS GUI requires the pinned Nix development shell:
+Husklet includes a terminal attached directly to each workspace. The target is a responsive, native-feeling
+terminal with reliable session restoration.
 
-```sh
-nix develop "path:$PWD/nix" --command \
-  cargo check -p husklet --bin husklet --features gui
-```
+## Contact
 
-Build the signed application bundle with:
-
-```sh
-make app
-```
-
-See [AGENTS.md](AGENTS.md) for stable architecture and design rules, and
-[docs/ENGINE.md](docs/ENGINE.md) for the engine capabilities required to remove current runtime
-workarounds.
+Richard Hutta — huttarichard@gmail.com

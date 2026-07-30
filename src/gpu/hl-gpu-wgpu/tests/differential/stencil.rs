@@ -57,6 +57,9 @@ fn stencil_prog(seed: u64, category: &'static str, test_cmp: u32) -> Prog {
         stencil_back: stencil_face(compare::ALWAYS, stencil_op::REPLACE),
         stencil_read_mask: 0xFF,
         stencil_write_mask: 0xFF,
+        bias_constant: 0,
+        bias_slope_scale: 0.0,
+        bias_clamp: 0.0,
     };
     let test_depth = DepthState {
         format: ds,
@@ -66,6 +69,9 @@ fn stencil_prog(seed: u64, category: &'static str, test_cmp: u32) -> Prog {
         stencil_back: stencil_face(test_cmp, stencil_op::KEEP),
         stencil_read_mask: 0xFF,
         stencil_write_mask: 0x00,
+        bias_constant: 0,
+        bias_slope_scale: 0.0,
+        bias_clamp: 0.0,
     };
     let pipe = |id: u32, depth: DepthState| {
         Cmd::CreateRenderPipeline(

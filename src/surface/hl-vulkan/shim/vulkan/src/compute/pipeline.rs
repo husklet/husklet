@@ -111,7 +111,7 @@ pub extern "C" fn vkCreateComputePipelines(
         let module = ci.stage.module;
         let entry = unsafe { EntryPoint::read(ci.stage.p_name) };
         let r = ShimState::with_sink(|dev, sink| {
-            create::create_compute_pipeline(dev, sink, module, entry)
+            create::create_compute_pipeline_with_layout(dev, sink, module, entry, Some(ci.layout))
         })
         .unwrap_or(Err(hl_gpu::GpuError::Invalid(
             "vkCreateComputePipelines: no device",

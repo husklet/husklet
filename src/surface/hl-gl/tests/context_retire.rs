@@ -86,11 +86,15 @@ fn record_working_set(c: &mut GlContext) {
 #[test]
 fn retire_all_queues_destroy_for_the_whole_working_set() {
     let mut c = GlContext::new();
-    c.surf = GlSurface {
+    c.set_surface(GlSurface {
         have: true,
         width: 16,
         height: 16,
-    };
+    });
+    c.set_present_frame(
+        Some(hl_gpu::protocol::model::descriptor::SurfaceToken::new(7).unwrap()),
+        Some(hl_gpu::protocol::model::descriptor::FrameSerial::new(1).unwrap()),
+    );
     let mut sink = hl_gpu::RecordingSink::with_full_caps();
 
     record_working_set(&mut c);
@@ -152,6 +156,100 @@ fn retire_all_queues_destroy_for_the_whole_working_set() {
     );
 }
 
+#[test]
+fn external_fbo_surface_is_destroyed_exactly_once() {
+    let mut context = GlContext::new();
+    let generation = 3;
+    context.bind_external_target(
+        17,
+        generation,
+        hl_gpu::protocol::model::descriptor::SurfaceToken::new(19).unwrap(),
+    );
+    let (surface, texture, created) = context
+        .fbo_target(17, generation)
+        .expect("allocate FBO target");
+    assert!(created);
+
+    context.retire_texture(17);
+    assert_eq!(
+        context
+            .pending_destroys()
+            .iter()
+            .filter(|command| matches!(command, Cmd::DestroySurface(id) if *id == surface))
+            .count(),
+        1
+    );
+    assert!(context
+        .pending_destroys()
+        .iter()
+        .any(|command| matches!(command, Cmd::DestroyTexture(id) if *id == texture)));
+
+    context.clear_pending_destroys();
+    context.retire_texture(17);
+    assert!(context.pending_destroys().is_empty());
+}
+
+#[test]
+fn external_surface_token_shares_one_surface_across_live_texture_generations() {
+    let mut context = GlContext::new();
+    let token = hl_gpu::protocol::model::descriptor::SurfaceToken::new(23).unwrap();
+    context.bind_external_target(1, 1, token);
+    let (first_surface, _, first_create) =
+        context.fbo_target(1, 1).expect("allocate first target");
+    assert!(first_create);
+    context.bind_external_target(2, 1, token);
+    let (second_surface, _, second_create) =
+        context.fbo_target(2, 1).expect("allocate second target");
+    assert_eq!(second_surface, first_surface);
+    assert!(!second_create);
+    assert_eq!(
+        context.resident_fbo_target_tex(2, 1),
+        context.resident_fbo_target_tex(1, 1),
+        "a sibling binding samples the shared dma-buf's resident rendering"
+    );
+
+    context.retire_texture(1);
+    assert!(!context
+        .pending_destroys()
+        .iter()
+        .any(|command| matches!(command, Cmd::DestroySurface(_))));
+    context.clear_pending_destroys();
+    context.retire_texture(2);
+    assert_eq!(
+        context
+            .pending_destroys()
+            .iter()
+            .filter(|command| matches!(command, Cmd::DestroySurface(id) if *id == first_surface))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn external_surface_layout_is_validated_before_binding() {
+    use hl_gpu::protocol::model::enums::TextureFormat;
+
+    let mut context = GlContext::new();
+    let token = hl_gpu::protocol::model::descriptor::SurfaceToken::new(29).unwrap();
+    context
+        .textures
+        .external_image_2d(1, 32, 24, TextureFormat::Bgra8Unorm);
+    let generation = context.textures.get(1).unwrap().gen;
+    context.bind_external_target(1, generation, token);
+    assert!(context.validate_external_target(token, 32, 24).is_ok());
+    let pending = context.pending_destroys().to_vec();
+    assert!(matches!(
+        context.validate_external_target(token, 64, 24),
+        Err(hl_gpu::GpuError::Invalid(
+            "external surface token has an incompatible live layout"
+        ))
+    ));
+    assert_eq!(context.textures.get(1).unwrap().gen, generation);
+    assert_eq!(context.pending_destroys(), pending);
+
+    context.retire_texture(1);
+}
+
 fn is_destroy(c: &Cmd) -> bool {
     matches!(
         c,
@@ -173,11 +271,11 @@ fn is_destroy(c: &Cmd) -> bool {
 #[test]
 fn context_teardown_refunds_the_whole_residency_ledger() {
     let mut c = GlContext::new();
-    c.surf = GlSurface {
+    c.set_surface(GlSurface {
         have: true,
         width: 16,
         height: 16,
-    };
+    });
     let mut sink = cpu_sink();
 
     // Baseline: nothing resident.
@@ -229,11 +327,11 @@ fn repeated_recreate_teardown_cycles_do_not_accumulate() {
     // retirement the ledger would climb one working set per cycle; with it, it returns to zero every cycle.
     for cycle in 0..8 {
         let mut c = GlContext::new();
-        c.surf = GlSurface {
+        c.set_surface(GlSurface {
             have: true,
             width: 16,
             height: 16,
-        };
+        });
         record_working_set(&mut c);
         assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
         high_water = high_water.max(sink.session().residency_bytes());

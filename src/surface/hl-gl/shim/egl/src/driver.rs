@@ -13,17 +13,20 @@
 //! false success). The crate builds with `panic = "abort"` as a belt-and-braces second guarantee.
 
 mod barriers;
+mod chromium;
 mod commands;
 mod drawing;
 mod egl;
 mod objects;
 mod platform;
+mod present;
 mod program_uniforms;
 mod programs;
 mod queries;
 mod raster;
 mod reflection;
 mod resolver;
+mod robust;
 mod storage;
 mod synchronization;
 mod textures;
@@ -33,6 +36,7 @@ mod uniforms;
 mod tests;
 
 pub use barriers::*;
+pub use chromium::*;
 pub use commands::*;
 pub use drawing::*;
 pub use egl::*;
@@ -44,6 +48,7 @@ pub use queries::*;
 pub use raster::*;
 pub use reflection::*;
 pub use resolver::*;
+pub use robust::*;
 pub use storage::*;
 pub use synchronization::*;
 pub use textures::*;
@@ -51,30 +56,57 @@ pub use uniforms::*;
 
 use egl::WindowSurface;
 use platform::{
-    eglCreatePlatformPixmapSurfaceEXT, eglCreatePlatformWindowSurfaceEXT, eglGetPlatformDisplayEXT,
+    eglClientWaitSyncKHR, eglCreatePlatformPixmapSurfaceEXT, eglCreatePlatformWindowSurfaceEXT,
+    eglCreateSyncKHR, eglDestroySyncKHR, eglGetPlatformDisplayEXT, eglGetSyncAttribKHR,
     eglQueryDeviceAttribEXT, eglQueryDeviceStringEXT, eglQueryDevicesEXT, eglQueryDisplayAttribEXT,
+    eglWaitSyncKHR,
 };
 use programs::{slice_f32, slice_i32, write_empty_info_log, LittleEndian, Uniform};
 use queries::write_c_name;
 use uniforms::{
-    mat_bytes_cr, DEVICE_TOKEN, EGL_BACK_BUFFER, EGL_BAD_DEVICE_EXT, EGL_CONDITION_SATISFIED,
-    EGL_CONTEXT_CLIENT_TYPE, EGL_CONTEXT_CLIENT_VERSION, EGL_DEVICE_EXT, EGL_HEIGHT,
-    EGL_OBJECT_TOKEN, EGL_OPENGL_ES_API, EGL_RENDER_BUFFER, EGL_WIDTH,
+    mat_bytes_cr, DEVICE_TOKEN, EGL_BACK_BUFFER, EGL_BAD_DEVICE_EXT, EGL_CONTEXT_CLIENT_TYPE,
+    EGL_CONTEXT_CLIENT_VERSION, EGL_DEVICE_EXT, EGL_HEIGHT, EGL_OPENGL_ES_API, EGL_RENDER_BUFFER,
+    EGL_WIDTH,
 };
 
 use core::ffi::{c_char, c_void};
 
-use hl_gl::model::context::{GlContext, GlSurface};
+use hl_gl::model::context::GlContext;
 use hl_gl::model::glconst::*;
 use hl_gl::result::{
-    egl_error_from_gpu_error, EGL_BAD_ATTRIBUTE, EGL_BAD_CONFIG, EGL_BAD_PARAMETER, EGL_FALSE,
-    EGL_TRUE, GL_INVALID_ENUM, GL_INVALID_VALUE, GL_OUT_OF_MEMORY,
+    egl_error_from_gpu_error, EGL_BAD_ACCESS, EGL_BAD_ATTRIBUTE, EGL_BAD_CONFIG, EGL_BAD_CONTEXT,
+    EGL_BAD_DISPLAY, EGL_BAD_MATCH, EGL_BAD_PARAMETER, EGL_BAD_SURFACE, EGL_FALSE,
+    EGL_NOT_INITIALIZED, EGL_TRUE, GL_INVALID_ENUM, GL_INVALID_VALUE, GL_OUT_OF_MEMORY,
 };
 use hl_gl::service::{
     compute, config, es3, intro, map, query, readpixels, record, swap, sync, upload::Upload,
 };
+use hl_gpu::BufferId;
 
-use crate::state::{current, AppPresentOutcome, GlobalState, CONFIG_TOKEN, DISPLAY_TOKEN};
+use crate::state::{
+    current, AppPresentOutcome, ContextAttributes, GlobalState, MakeCurrentError, Observation,
+    CONFIG_TOKEN, DISPLAY_TOKEN,
+};
+
+fn gpu_read_pixels(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    format: u32,
+) -> hl_gpu::Result<Vec<u8>> {
+    let completed = GlobalState::gpu_io(std::time::Duration::from_secs(31), move |group, sink| {
+        readpixels::prepare_pixels(&mut group.gl, sink, x, y, width, height, format)
+    })?;
+    let raw = completed
+        .observations
+        .into_iter()
+        .find_map(|observation| match observation {
+            Observation::Read(bytes) => Some(bytes),
+            Observation::Wait | Observation::Timed(_) | Observation::Poll(_) => None,
+        });
+    Ok(completed.value.complete(raw))
+}
 
 // ---- EGL query enums the string getters key on (the GL_* query enums live in hl_gl::glconst) ------
 
@@ -82,6 +114,13 @@ const EGL_VENDOR: i32 = 0x3053;
 const EGL_VERSION_Q: i32 = 0x3054;
 const EGL_EXTENSIONS_Q: i32 = 0x3055;
 const EGL_CLIENT_APIS: i32 = 0x308D;
+const EGL_NONE: i32 = 0x3038;
+const EGL_CONTEXT_OPENGL_ROBUST_ACCESS_EXT: i32 = 0x30BF;
+const EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT: i32 = 0x3138;
+const EGL_CONTEXT_OPENGL_NO_ERROR_KHR: i32 = 0x31B3;
+const EGL_CONTEXT_MINOR_VERSION_KHR: i32 = 0x30FB;
+const EGL_NO_RESET_NOTIFICATION_EXT: i32 = 0x31BE;
+const EGL_LOSE_CONTEXT_ON_RESET_EXT: i32 = 0x31BF;
 
 // `eglGetCurrentSurface` selectors: which of the current binding's two surfaces to report.
 #[cfg(test)]
@@ -158,26 +197,76 @@ unsafe fn to_rgba8(
     h: i32,
     pixels: *const c_void,
 ) -> Vec<u8> {
-    let Some(upload) = Upload::new(format, type_, w, h, ctx.pixel_store) else {
+    match (format, type_) {
+        (GL_RED, GL_UNSIGNED_BYTE) => {
+            hl_log::hl_count!(hl_log::tag::GL, "upload_red_u8");
+        }
+        (GL_RG, GL_UNSIGNED_BYTE) => {
+            hl_log::hl_count!(hl_log::tag::GL, "upload_rg_u8");
+        }
+        (GL_RGB, GL_UNSIGNED_BYTE) => {
+            hl_log::hl_count!(hl_log::tag::GL, "upload_rgb_u8");
+        }
+        (GL_RGBA, GL_UNSIGNED_BYTE) => {
+            hl_log::hl_count!(hl_log::tag::GL, "upload_rgba_u8");
+        }
+        (GL_BGRA_EXT, GL_UNSIGNED_BYTE) => {
+            hl_log::hl_count!(hl_log::tag::GL, "upload_bgra_u8");
+        }
+        (GL_ALPHA | GL_LUMINANCE | GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE) => {
+            hl_log::hl_count!(hl_log::tag::GL, "upload_legacy_u8");
+        }
+        (GL_RGB, GL_UNSIGNED_SHORT_5_6_5) => {
+            hl_log::hl_count!(hl_log::tag::GL, "upload_rgb_565");
+        }
+        _ => {
+            hl_log::hl_count!(hl_log::tag::GL, "upload_unsupported");
+        }
+    }
+    let Some(upload) = Upload::new(format, type_, w, h, ctx.pixel_store_state()) else {
+        hl_log::hl_count!(hl_log::tag::GL, "upload_layout_rejected");
+        crate::stub::Diagnostics::upload(format, type_, crate::stub::UploadOutcome::Rejected);
         return Vec::new();
     };
     let span = upload.source_len();
+    hl_log::hl_add!(hl_log::tag::GL, "upload_source_bytes", span as u64);
     let unpack = ctx.buffer_for_target(GL_PIXEL_UNPACK_BUFFER);
     let owned;
     let src = if unpack != 0 {
         let offset = pixels as usize;
         owned = match ctx.buffers.range_bytes(unpack, offset, span) {
             Some(data) if data.len() == span => data,
-            _ => return Vec::new(),
+            _ => {
+                hl_log::hl_count!(hl_log::tag::GL, "upload_pbo_rejected");
+                crate::stub::Diagnostics::upload(
+                    format,
+                    type_,
+                    crate::stub::UploadOutcome::Rejected,
+                );
+                return Vec::new();
+            }
         };
         owned.as_slice()
     } else {
         if pixels.is_null() {
+            hl_log::hl_count!(hl_log::tag::GL, "upload_null_storage");
+            crate::stub::Diagnostics::upload(format, type_, crate::stub::UploadOutcome::Null);
             return Vec::new();
         }
         RawBytes::read(pixels, span as isize)
     };
-    upload.rgba8(src).unwrap_or_default()
+    match upload.rgba8(src) {
+        Some(rgba) => {
+            hl_log::hl_add!(hl_log::tag::GL, "upload_rgba_bytes", rgba.len() as u64);
+            crate::stub::Diagnostics::upload(format, type_, crate::stub::UploadOutcome::Converted);
+            rgba
+        }
+        None => {
+            hl_log::hl_count!(hl_log::tag::GL, "upload_decode_rejected");
+            crate::stub::Diagnostics::upload(format, type_, crate::stub::UploadOutcome::Rejected);
+            Vec::new()
+        }
+    }
 }
 
 /// Default window-surface dimensions (`$HL_GL_SURFACE_W` / `_H`; 1280x720 fallback). The native window
@@ -209,16 +298,31 @@ pub extern "C" fn eglGetDisplay(_display_id: *mut c_void) -> *mut c_void {
 
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglInitialize(_dpy: *mut c_void, major: *mut i32, minor: *mut i32) -> u32 {
-    crate::stub::trace("eglInitialize", "advertising EGL 1.5");
-    hl_log::hl_info!(hl_log::tag::EGL, "eglInitialize egl=1.5");
-    GlobalState::access(|s| s.inited = true);
-    // Advertise EGL 1.5.
+    crate::stub::trace("eglInitialize", "advertising EGL 1.4");
+    hl_log::hl_info!(hl_log::tag::EGL, "eglInitialize egl=1.4");
+    if GlobalState::access(|s| {
+        s.initialize().map_err(|error| {
+            hl_log::hl_error!(
+                hl_log::tag::EGL,
+                "eglInitialize could not open projected GPU endpoint: {}",
+                error
+            );
+            s.set_egl_error(EGL_NOT_INITIALIZED);
+        })
+    })
+    .is_err()
+    {
+        return EGL_FALSE;
+    }
+    // EGL 1.5 makes sync objects core. This driver cannot yet order an EGL fence after deferred
+    // default-framebuffer commands without presenting them, so advertise the last version whose complete
+    // core contract we implement. Platform entry points remain available through their KHR/EXT extensions.
     unsafe {
         if !major.is_null() {
             *major = 1;
         }
         if !minor.is_null() {
-            *minor = 5;
+            *minor = 4;
         }
     }
     EGL_TRUE
@@ -226,7 +330,7 @@ pub extern "C" fn eglInitialize(_dpy: *mut c_void, major: *mut i32, minor: *mut 
 
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglTerminate(_dpy: *mut c_void) -> u32 {
-    GlobalState::access(|s| s.inited = false);
+    GlobalState::access(|state| state.terminate());
     EGL_TRUE
 }
 
@@ -247,7 +351,7 @@ pub extern "C" fn eglQueryString(dpy: *mut c_void, name: i32) -> *const c_char {
     );
     match name {
         EGL_VENDOR => b"hl-gl\0".as_ptr() as *const c_char,
-        EGL_VERSION_Q => b"1.5 hl-gl\0".as_ptr() as *const c_char,
+        EGL_VERSION_Q => b"1.4 hl-gl\0".as_ptr() as *const c_char,
         EGL_CLIENT_APIS => b"OpenGL_ES\0".as_ptr() as *const c_char,
         EGL_EXTENSIONS_Q => Extensions::get(dpy.is_null()),
         _ => b"\0".as_ptr() as *const c_char,

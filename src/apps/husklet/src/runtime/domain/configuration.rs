@@ -1,4 +1,4 @@
-use super::{CONTAINER, SIGNATURE};
+use super::{RuntimeIdentity, CONTAINER, SIGNATURE};
 use crate::config::WorkspaceConfig;
 use hl_container::{ContainerSpec, Guest, Isolation, Mount, Resources, Sandbox};
 use hl_ws::Arch;
@@ -56,10 +56,17 @@ impl<'a> Configuration<'a> {
         values
     }
 
-    pub(super) fn signature(&self) -> String {
+    pub(super) fn signature(&self) -> std::io::Result<String> {
+        let runtime = RuntimeIdentity::current(self.0)?;
+        Ok(self.signature_for(runtime.as_str()))
+    }
+
+    pub(super) fn signature_for(&self, runtime: &str) -> String {
         use sha2::Digest as _;
 
-        let digest = sha2::Sha256::digest(self.identity().as_bytes());
+        let mut identity = self.identity();
+        Self::field(&mut identity, runtime);
+        let digest = sha2::Sha256::digest(identity.as_bytes());
         let mut signature = String::with_capacity(digest.len() * 2);
         for byte in digest {
             use std::fmt::Write as _;

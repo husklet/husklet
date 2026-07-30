@@ -25,7 +25,7 @@ fn present_size_mismatch_is_rejected() {
                 width: 8,
                 height: 8,
                 format: TextureFormat::Bgra8Unorm,
-                hlp_surface: 1,
+                token: hl_gpu::SurfaceToken::new(1).unwrap(),
             },
         ),
     ]);
@@ -35,6 +35,7 @@ fn present_size_mismatch_is_rejected() {
             &[Cmd::Present {
                 surface: 1,
                 texture: 1,
+                serial: hl_gpu::FrameSerial::new(1).unwrap(),
             }],
         )
         .unwrap_err();

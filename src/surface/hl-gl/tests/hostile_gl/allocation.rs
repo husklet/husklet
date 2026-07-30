@@ -54,7 +54,7 @@ fn buffer_sub_data_out_of_range_does_not_unbounded_alloc() {
     );
     assert_eq!(
         c.buffers.get(b).unwrap().data,
-        vec![7u8; 32],
+        vec![7u8; 32].into(),
         "bytes are untouched"
     );
 
@@ -89,7 +89,7 @@ fn map_buffer_range_out_of_range_does_not_unbounded_alloc() {
     );
 
     // An in-range map still works.
-    let mapped = map::map_buffer_range(&mut c, GL_ARRAY_BUFFER, 8, 4, 0);
+    let mapped = map::map_buffer_range(&mut c, GL_ARRAY_BUFFER, 8, 4, GL_MAP_WRITE_BIT);
     assert_eq!(mapped, Some((b, 8)));
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
 }

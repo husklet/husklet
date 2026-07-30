@@ -1,7 +1,7 @@
 use super::*;
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glCreateShader(type_: u32) -> u32 {
-    GlobalState::access(|s| record::create_shader(&mut s.ctx, type_))
+    GlobalState::context(|s| record::create_shader(&mut s.gl, type_))
 }
 
 #[cfg_attr(gles_client, no_mangle)]
@@ -12,34 +12,34 @@ pub extern "C" fn glShaderSource(
     length: *const i32,
 ) {
     let src = unsafe { join_source(count, string, length) };
-    GlobalState::access(|s| record::shader_source(&mut s.ctx, shader, &src));
+    GlobalState::context(|s| record::shader_source(&mut s.gl, shader, &src));
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glCompileShader(shader: u32) {
-    GlobalState::access(|s| record::compile_shader(&mut s.ctx, shader));
+    GlobalState::context(|s| record::compile_shader(&mut s.gl, shader));
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glCreateProgram() -> u32 {
-    GlobalState::access(|s| record::create_program(&mut s.ctx))
+    GlobalState::context(|s| record::create_program(&mut s.gl))
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glAttachShader(program: u32, shader: u32) {
-    GlobalState::access(|s| record::attach_shader(&mut s.ctx, program, shader));
+    GlobalState::context(|s| record::attach_shader(&mut s.gl, program, shader));
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glLinkProgram(program: u32) {
-    GlobalState::access(|s| {
-        let _ = record::link_program(&mut s.ctx, program);
+    GlobalState::context(|s| {
+        let _ = record::link_program(&mut s.gl, program);
     });
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUseProgram(program: u32) {
-    GlobalState::access(|s| record::use_program(&mut s.ctx, program));
+    GlobalState::context(|s| record::use_program(&mut s.gl, program));
 }
 
 // ---- shader / program introspection (glGet*iv / glGet*InfoLog / glGet*Location) -------------------
@@ -55,7 +55,7 @@ pub extern "C" fn glGetShaderiv(shader: u32, pname: u32, params: *mut i32) {
     if params.is_null() {
         return;
     }
-    let v = GlobalState::access(|s| query::get_shaderiv(&s.ctx, shader, pname));
+    let v = GlobalState::context(|s| query::get_shaderiv(&s.gl, shader, pname));
     unsafe { *params = v };
 }
 
@@ -66,7 +66,7 @@ pub extern "C" fn glGetProgramiv(program: u32, pname: u32, params: *mut i32) {
     if params.is_null() {
         return;
     }
-    let v = GlobalState::access(|s| query::get_programiv(&s.ctx, program, pname));
+    let v = GlobalState::context(|s| query::get_programiv(&s.gl, program, pname));
     unsafe { *params = v };
 }
 
@@ -86,23 +86,39 @@ pub extern "C" fn glGetShaderInfoLog(
 /// diagnostic log is empty (an empty NUL-terminated string, length 0).
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetProgramInfoLog(
-    _program: u32,
+    program: u32,
     buf_size: i32,
     length: *mut i32,
     info_log: *mut c_char,
 ) {
-    unsafe { write_empty_info_log(buf_size, length, info_log) };
+    let log = GlobalState::context(|s| query::program_info_log(&s.gl, program).to_owned());
+    unsafe { write_info_log(&log, buf_size, length, info_log) };
 }
 
 /// Emit an empty info log per the `glGet*InfoLog` contract: write a single NUL into `info_log` (when a
 /// buffer of at least one byte is given) and report a written length of `0` (the count excludes the
 /// terminator). Null-safe on every pointer.
 pub(super) unsafe fn write_empty_info_log(buf_size: i32, length: *mut i32, info_log: *mut c_char) {
-    if !info_log.is_null() && buf_size > 0 {
-        *info_log = 0;
-    }
+    write_info_log("", buf_size, length, info_log);
+}
+
+/// Copy a diagnostic into a caller-provided C buffer, always terminating it when capacity is non-zero.
+pub(super) unsafe fn write_info_log(
+    message: &str,
+    buf_size: i32,
+    length: *mut i32,
+    info_log: *mut c_char,
+) {
+    let written = if !info_log.is_null() && buf_size > 0 {
+        let count = message.len().min(buf_size.saturating_sub(1) as usize);
+        std::ptr::copy_nonoverlapping(message.as_ptr(), info_log.cast::<u8>(), count);
+        *info_log.add(count) = 0;
+        count
+    } else {
+        0
+    };
     if !length.is_null() {
-        *length = 0;
+        *length = written as i32;
     }
 }
 
@@ -114,7 +130,7 @@ pub extern "C" fn glGetUniformLocation(program: u32, name: *const c_char) -> i32
         Some(s) => s,
         None => return -1,
     };
-    GlobalState::access(|s| query::uniform_location(&s.ctx, program, &want))
+    GlobalState::context(|s| query::uniform_location(&s.gl, program, &want))
 }
 
 /// `glGetAttribLocation(program, name)` — the vertex attribute's declaration-order slot in the linked
@@ -125,14 +141,17 @@ pub extern "C" fn glGetAttribLocation(program: u32, name: *const c_char) -> i32 
         Some(s) => s,
         None => return -1,
     };
-    GlobalState::access(|s| query::attrib_location(&s.ctx, program, &want))
+    GlobalState::context(|s| query::attrib_location(&s.gl, program, &want))
 }
 
-/// `glBindAttribLocation(program, index, name)` — a no-op: the GLSL→MSL translator binds attributes by
-/// declaration order (`[[attribute(N)]]`), so an app-requested binding cannot be honored without
-/// re-linking. This matches the reference shim; `glGetAttribLocation` reports the declaration-order slot.
+/// `glBindAttribLocation(program, index, name)` — record a name binding for the next link.
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glBindAttribLocation(_program: u32, _index: u32, _name: *const c_char) {}
+pub extern "C" fn glBindAttribLocation(program: u32, index: u32, name: *const c_char) {
+    let Some(name) = (unsafe { Text::read(name) }) else {
+        return;
+    };
+    GlobalState::context(|s| record::bind_attrib(&mut s.gl, program, index, &name));
+}
 
 /// Write an active-variable reflection into the `glGetActive{Uniform,Attrib}` out-params: `size`, GL
 /// `type`, the NUL-terminated `name` truncated to `buf_size`, and `length` = chars written (excl. NUL).
@@ -181,7 +200,7 @@ pub extern "C" fn glGetActiveUniform(
     type_: *mut u32,
     name: *mut c_char,
 ) {
-    let var = GlobalState::access(|s| query::active_uniform(&s.ctx, program, index));
+    let var = GlobalState::context(|s| query::active_uniform(&s.gl, program, index));
     emit_active_var(var, buf_size, length, size, type_, name);
 }
 
@@ -198,7 +217,7 @@ pub extern "C" fn glGetActiveAttrib(
     type_: *mut u32,
     name: *mut c_char,
 ) {
-    let var = GlobalState::access(|s| query::active_attrib(&s.ctx, program, index));
+    let var = GlobalState::context(|s| query::active_attrib(&s.gl, program, index));
     emit_active_var(var, buf_size, length, size, type_, name);
 }
 
@@ -215,7 +234,7 @@ fn emit_active_var(
     match var {
         Some(v) => unsafe { write_active_var(&v, buf_size, length, size, type_, name) },
         None => {
-            GlobalState::access(|s| s.ctx.set_gl_error(GL_INVALID_VALUE));
+            GlobalState::context(|s| s.gl.set_gl_error(GL_INVALID_VALUE));
             let empty = query::ActiveVar {
                 name: String::new(),
                 gl_type: 0,
@@ -226,14 +245,14 @@ fn emit_active_var(
     }
 }
 
-/// `glUniform1i` — in this simplified model an integer uniform binds a sampler: `location` selects the
-/// sampler's declaration index, `v0` the texture unit (mirrors the lowering test's `uniform_sampler`).
+/// `glUniform1i` — update an integer/bool uniform or bind a sampler to a texture unit, according to the
+/// type associated with the collision-free location.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform1i(location: i32, v0: i32) {
     if location < 0 {
         return;
     }
-    GlobalState::access(|s| record::uniform_sampler(&mut s.ctx, location as usize, v0));
+    GlobalState::context(|s| record::uniform_i32_at(&mut s.gl, location, &[v0]));
 }
 
 // ---- data uniforms (record into the bound program's uniform block; shipped at binding 1 at draw) -----
@@ -250,7 +269,7 @@ impl Uniform {
         if location < 0 {
             return;
         }
-        GlobalState::access(|state| record::uniform_at(&mut state.ctx, location as usize, bytes));
+        GlobalState::context(|state| record::uniform_at(&mut state.gl, location as usize, bytes));
     }
 }
 
@@ -298,35 +317,6 @@ pub(super) unsafe fn slice_i32<'a>(value: *const i32, count: i32, n: usize) -> &
     } else {
         std::slice::from_raw_parts(value, count as usize * n)
     }
-}
-
-/// Marshal a column-major GL matrix array into MSL `floatNxN` struct layout: `count` matrices, each `n`
-/// columns; every column is padded to 4 floats for `n == 3` (MSL `float3x3` has a 16-byte column stride),
-/// else `n` floats. `transpose` swaps row/column when reading the GL source.
-unsafe fn mat_bytes(n: usize, count: i32, transpose: bool, value: *const f32) -> Vec<u8> {
-    if value.is_null() || count <= 0 {
-        return Vec::new();
-    }
-    let src = std::slice::from_raw_parts(value, count as usize * n * n);
-    let col_floats = if n == 3 { 4 } else { n };
-    let mut out = Vec::with_capacity(count as usize * n * col_floats * 4);
-    for m in 0..count as usize {
-        let base = m * n * n;
-        for col in 0..n {
-            for row in 0..n {
-                let v = if transpose {
-                    src[base + row * n + col]
-                } else {
-                    src[base + col * n + row]
-                };
-                out.extend_from_slice(&v.to_le_bytes());
-            }
-            for _ in n..col_floats {
-                out.extend_from_slice(&0f32.to_le_bytes());
-            }
-        }
-    }
-    out
 }
 
 #[cfg_attr(gles_client, no_mangle)]
@@ -390,10 +380,8 @@ pub extern "C" fn glUniform4fv(location: i32, count: i32, value: *const f32) {
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform1iv(location: i32, count: i32, value: *const i32) {
-    Uniform::set(
-        location,
-        &LittleEndian::encode(unsafe { slice_i32(value, count, 1) }),
-    );
+    let values = unsafe { slice_i32(value, count, 1) };
+    GlobalState::context(|state| record::uniform_i32_at(&mut state.gl, location, values));
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform2iv(location: i32, count: i32, value: *const i32) {
@@ -420,18 +408,18 @@ pub extern "C" fn glUniform4iv(location: i32, count: i32, value: *const i32) {
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniformMatrix2fv(location: i32, count: i32, transpose: u8, value: *const f32) {
     Uniform::set(location, &unsafe {
-        mat_bytes(2, count, transpose != 0, value)
+        mat_bytes_cr(2, 2, count, transpose != 0, value)
     });
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniformMatrix3fv(location: i32, count: i32, transpose: u8, value: *const f32) {
     Uniform::set(location, &unsafe {
-        mat_bytes(3, count, transpose != 0, value)
+        mat_bytes_cr(3, 3, count, transpose != 0, value)
     });
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniformMatrix4fv(location: i32, count: i32, transpose: u8, value: *const f32) {
     Uniform::set(location, &unsafe {
-        mat_bytes(4, count, transpose != 0, value)
+        mat_bytes_cr(4, 4, count, transpose != 0, value)
     });
 }

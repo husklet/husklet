@@ -52,6 +52,16 @@ async fn health_monitor_persists_success_and_inherits_process_context() {
         let values = runtime.isolations.lock().unwrap();
         assert_eq!(values[0], values[1]);
     }
+    {
+        let domains = runtime.domains.lock().unwrap();
+        assert!(domains.len() >= 2);
+        let parent = domains[0].0;
+        assert!(domains[0].1);
+        assert!(domains[1..]
+            .iter()
+            .all(|domain| domain.0 == parent && !domain.1));
+    }
+    assert!(runtime.domain_reads.load(Ordering::SeqCst) >= 1);
     containers.wait("healthy").await.unwrap();
 }
 

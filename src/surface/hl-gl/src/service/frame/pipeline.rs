@@ -18,23 +18,28 @@ pub(super) fn emit_viewport(d: &DrawCall, tw: i32, th: i32) -> Enc {
     }
 }
 
-/// `SetScissor` with the Y-flip + clamp (`gl_shim.c` `emit_scissor_h`), against a `tw`×`th` target.
-pub(super) fn emit_scissor(d: &DrawCall, tw: i32, th: i32) -> Enc {
-    let (mut x, mut y, mut w, mut h) = (0, 0, tw, th);
-    if d.scissor_enabled && d.scissor[2] > 0 && d.scissor[3] > 0 {
-        x = d.scissor[0];
-        y = th - d.scissor[1] - d.scissor[3];
-        w = d.scissor[2];
-        h = d.scissor[3];
-    }
-    x = x.clamp(0, tw);
-    y = y.clamp(0, th);
-    if x + w > tw {
-        w = tw - x;
-    }
-    if y + h > th {
-        h = th - y;
-    }
+/// `SetScissor` clamped against a `tw`×`th` target.
+///
+/// Ordinary FBO rows are converted from GL's bottom-left origin. Present targets already use the
+/// host-surface row specialization and retain their recorded row.
+pub(super) fn emit_scissor(d: &DrawCall, tw: i32, th: i32, present_target: bool) -> Enc {
+    let (x, y, w, h) = if d.scissor_enabled {
+        let left = d.scissor[0];
+        let top = if present_target {
+            d.scissor[1]
+        } else {
+            th.saturating_sub(d.scissor[1].saturating_add(d.scissor[3]))
+        };
+        let right = left.saturating_add(d.scissor[2]);
+        let bottom = top.saturating_add(d.scissor[3]);
+        let x0 = left.clamp(0, tw);
+        let y0 = top.clamp(0, th);
+        let x1 = right.clamp(0, tw);
+        let y1 = bottom.clamp(0, th);
+        (x0, y0, (x1 - x0).max(0), (y1 - y0).max(0))
+    } else {
+        (0, 0, tw, th)
+    };
     Enc::SetScissor {
         x: x as u32,
         y: y as u32,
@@ -258,6 +263,117 @@ impl PrimitiveAssembly {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(layouts: &[VertexLayout]) -> u64 {
+        pipeline_state_key(
+            layouts,
+            &[ColorTargetState {
+                format: TextureFormat::Rgba8Unorm,
+                blend: None,
+                write_mask: 0xf,
+            }],
+            &None,
+            Topology::TriangleList,
+            0,
+            0,
+            1,
+        )
+    }
+
+    #[test]
+    fn pipeline_identity_includes_complete_vertex_layout() {
+        let base = VertexLayout {
+            stride: 16,
+            step_mode: 0,
+            attrs: vec![VertexAttr {
+                location: 0,
+                format: vertex_format_wire(GL_FLOAT, 2, false, false),
+                offset: 0,
+            }],
+        };
+        let mut stride = base.clone();
+        stride.stride = 32;
+        let mut step = base.clone();
+        step.step_mode = 1;
+        let mut offset = base.clone();
+        offset.attrs[0].offset = 8;
+        let extra = vec![
+            base.clone(),
+            VertexLayout {
+                stride: 16,
+                step_mode: 0,
+                attrs: vec![VertexAttr {
+                    location: 1,
+                    format: vertex_format_wire(GL_FLOAT, 2, false, false),
+                    offset: 0,
+                }],
+            },
+        ];
+
+        assert_ne!(key(&[base.clone()]), key(&[stride]));
+        assert_ne!(key(&[base.clone()]), key(&[step]));
+        assert_ne!(key(&[base.clone()]), key(&[offset]));
+        assert_ne!(key(&[base]), key(&extra));
+    }
+
+    #[test]
+    fn enabled_zero_area_scissor_stays_empty() {
+        let draw = DrawCall {
+            scissor_enabled: true,
+            scissor: [4, 5, 0, 8],
+            ..DrawCall::default()
+        };
+        assert_eq!(
+            emit_scissor(&draw, 32, 24, false),
+            Enc::SetScissor {
+                x: 4,
+                y: 11,
+                w: 0,
+                h: 8,
+            }
+        );
+    }
+
+    #[test]
+    fn scissor_clips_both_edges_without_growing() {
+        let draw = DrawCall {
+            scissor_enabled: true,
+            scissor: [-5, -4, 12, 10],
+            ..DrawCall::default()
+        };
+        assert_eq!(
+            emit_scissor(&draw, 16, 16, false),
+            Enc::SetScissor {
+                x: 0,
+                y: 10,
+                w: 7,
+                h: 6,
+            }
+        );
+    }
+
+    #[test]
+    fn present_scissor_uses_host_surface_row_origin() {
+        let draw = DrawCall {
+            scissor_enabled: true,
+            scissor: [2, 3, 7, 5],
+            ..DrawCall::default()
+        };
+        assert_eq!(
+            emit_scissor(&draw, 16, 16, true),
+            Enc::SetScissor {
+                x: 2,
+                y: 3,
+                w: 7,
+                h: 5,
+            }
+        );
+    }
+}
+
 /// The MSAA sample count the pass's render pipeline must declare so a multisampled attachment resolves (the
 /// GL analogue of the Vulkan `sample_count` drop fixed earlier) — the count shared by the bound draw
 /// framebuffer's color (and depth) attachments.
@@ -290,6 +406,7 @@ pub(super) fn vertex_format_wire(
         GL_UNSIGNED_INT => 5,
         GL_INT => 6,
         GL_HALF_FLOAT => 7,
+        GL_UNSIGNED_INT_2_10_10_10_REV if normalized && comps == 4 => 8,
         _ => 0, // GL_FLOAT and unknown
     };
     comps | (kind << 8) | ((normalized as u32) << 16) | ((integer as u32) << 17)
@@ -309,39 +426,53 @@ impl Pipeline {
             Some(o) => SamplerDesc {
                 min_filter: o.ir_min_filter(),
                 mag_filter: o.ir_mag_filter(),
-                mip_filter: Filter::Nearest,
+                mip_filter: o.ir_mip_filter(),
                 address_u: o.ir_wrap_s(),
                 address_v: o.ir_wrap_t(),
-                address_w: AddressMode::ClampToEdge,
+                address_w: o.ir_wrap_r(),
+                // This backend currently exposes mip levels from base level zero. Negative GL clamps are
+                // therefore observationally identical to zero and are normalized before crossing into
+                // WebGPU, whose sampler contract rejects negative clamps.
+                lod_min_clamp: o.min_lod.max(0.0),
+                lod_max_clamp: o.max_lod.max(0.0),
+                compare: o.ir_compare(),
             },
             None => SamplerDesc {
                 min_filter: t.ir_min_filter(),
                 mag_filter: t.ir_mag_filter(),
-                mip_filter: Filter::Nearest,
+                mip_filter: t.ir_mip_filter(),
                 address_u: t.ir_wrap_s(),
                 address_v: t.ir_wrap_t(),
-                address_w: AddressMode::ClampToEdge,
+                address_w: AddressMode::Repeat,
+                lod_min_clamp: 0.0,
+                lod_max_clamp: 32.0,
+                compare: None,
             },
         }
     }
 
     /// GL blend factor enum → opaque WebGPU blend-factor wire value (`gl_shim.c` `blend_factor_wire`).
     pub(super) fn blend_factor(f: u32) -> u32 {
+        use hl_gpu::protocol::model::enums::blend_factor as wire;
         match f {
-            GL_ZERO => 0,
-            GL_ONE => 1,
-            GL_SRC_COLOR => 2,
-            GL_ONE_MINUS_SRC_COLOR => 3,
-            GL_SRC_ALPHA => 4,
-            GL_ONE_MINUS_SRC_ALPHA => 5,
-            GL_DST_COLOR => 6,
-            GL_ONE_MINUS_DST_COLOR => 7,
-            GL_DST_ALPHA => 8,
-            GL_ONE_MINUS_DST_ALPHA => 9,
-            GL_SRC_ALPHA_SATURATE => 10,
-            0x8001 | 0x8003 => 11, // GL_CONSTANT_COLOR / GL_CONSTANT_ALPHA
-            0x8002 | 0x8004 => 12, // GL_ONE_MINUS_CONSTANT_COLOR / _ALPHA
-            _ => 1,                // GL_ONE default for an unmodeled factor.
+            GL_ZERO => wire::ZERO,
+            GL_ONE => wire::ONE,
+            GL_SRC_COLOR => wire::SRC_COLOR,
+            GL_ONE_MINUS_SRC_COLOR => wire::ONE_MINUS_SRC_COLOR,
+            GL_SRC_ALPHA => wire::SRC_ALPHA,
+            GL_ONE_MINUS_SRC_ALPHA => wire::ONE_MINUS_SRC_ALPHA,
+            GL_DST_COLOR => wire::DST_COLOR,
+            GL_ONE_MINUS_DST_COLOR => wire::ONE_MINUS_DST_COLOR,
+            GL_DST_ALPHA => wire::DST_ALPHA,
+            GL_ONE_MINUS_DST_ALPHA => wire::ONE_MINUS_DST_ALPHA,
+            GL_SRC_ALPHA_SATURATE => wire::SRC_ALPHA_SATURATE,
+            0x8001 | 0x8003 => wire::CONSTANT, // GL_CONSTANT_COLOR / GL_CONSTANT_ALPHA
+            0x8002 | 0x8004 => wire::ONE_MINUS_CONSTANT, // GL_ONE_MINUS_CONSTANT_COLOR / _ALPHA
+            GL_SRC1_COLOR => wire::SRC1_COLOR,
+            GL_ONE_MINUS_SRC1_COLOR => wire::ONE_MINUS_SRC1_COLOR,
+            GL_SRC1_ALPHA => wire::SRC1_ALPHA,
+            GL_ONE_MINUS_SRC1_ALPHA => wire::ONE_MINUS_SRC1_ALPHA,
+            _ => wire::ONE, // GL_ONE default for an unmodeled factor.
         }
     }
 
@@ -420,6 +551,9 @@ impl Pipeline {
             stencil_back,
             stencil_read_mask: read_mask,
             stencil_write_mask: write_mask,
+            bias_constant: 0,
+            bias_slope_scale: 0.0,
+            bias_clamp: 0.0,
         }
     }
 

@@ -15,12 +15,22 @@
 //! Proven end-to-end headless in `tests/wayland_e2e.rs`: a real `wayland-client` commits a colored
 //! buffer and the test asserts the pixels arrive at the `PngPresenter`.
 
+#[cfg(feature = "macos-surface")]
+pub mod native;
 pub mod present;
 pub mod serve;
 pub mod state;
 
+#[cfg(feature = "macos-surface")]
+pub use native::{
+    native_frames, NativeFrame, NativeFrameCompletion, NativeFrameError, NativeFrameOutcome,
+    NativeFramePublishError, NativeFramePublishFailure, NativeFrameReceipt, NativeFrameSender,
+    NativeFrames,
+};
 pub use present::{
     AdapterPresenter, CapturedFrame, Observations, PngPresenter, StoredBuffer, SurfacePresenter,
 };
+#[cfg(feature = "macos-surface")]
+pub use serve::run_with_native_frames;
 pub use serve::{input_channel, run, run_auto, run_auto_with_input, InputChannel, InputSender};
 pub use state::{ClientState, HlState, InputCommand, MonotonicClock};

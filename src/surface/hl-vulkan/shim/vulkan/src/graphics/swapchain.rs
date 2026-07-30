@@ -1,4 +1,6 @@
 use super::*;
+use crate::state::PresenterId;
+use hl_vulkan::result::VK_ERROR_OUT_OF_DATE_KHR;
 
 // ==================================================================================================
 // WSI: swapchain + present
@@ -22,19 +24,49 @@ pub extern "C" fn vkCreateSwapchainKHR(
     // window (captured at `vkCreateWaylandSurfaceKHR` under `ci.surface`) onto the swapchain so a present
     // can marshal the readback onto the app's own `wl_surface`.
     StateStore::with(|s| {
+        let window = s.wayland_surfaces.get(&ci.surface).copied();
+        let presenter_id = window
+            .map(|window| PresenterId::Wayland(window.surface))
+            .unwrap_or(PresenterId::Surface(ci.surface));
+        let mut hard_error = None;
+        s.presenters.ensure(presenter_id, || {
+            let Some(window) = window else {
+                return None;
+            };
+            // SAFETY: the application owns this live wl_surface for the VkSurfaceKHR lifetime.
+            match unsafe { WaylandAppPresenter::new(window.surface) } {
+                Ok(presenter) => Some(presenter),
+                Err(error) if error.is_unavailable() => None,
+                Err(error) => {
+                    hard_error = Some(error);
+                    None
+                }
+            }
+        });
+        if let Some(error) = hard_error {
+            s.presenters.discard_unbound(presenter_id);
+            return error.to_vk_result();
+        }
+        let token = s
+            .native_present
+            .then(|| {
+                s.presenters
+                    .ensure(presenter_id, || None)
+                    .as_ref()
+                    .and_then(WaylandAppPresenter::native_token)
+            })
+            .flatten();
         let sink = &mut s.sink;
         let Some(dev) = s.device.as_mut() else {
             return VK_ERROR_INITIALIZATION_FAILED;
         };
         let r = (|| {
-            let surface = Swapchain::create_surface(dev, sink, ci)?;
+            let surface = Swapchain::create_surface(dev, sink, ci, token)?;
             present::create_swapchain(dev, sink, surface, ci.min_image_count)
         })();
         match r {
             Ok(h) => {
-                if let Some(win) = s.wayland_surfaces.get(&ci.surface).copied() {
-                    s.swapchain_windows.insert(h, win);
-                }
+                s.presenters.bind(h, presenter_id);
                 if !p_swapchain.is_null() {
                     unsafe { *p_swapchain = h };
                 }
@@ -52,6 +84,7 @@ impl Swapchain {
         dev: &mut Device,
         sink: &mut dyn CommandSink,
         ci: &VkSwapchainCreateInfoKHR,
+        token: Option<hl_gpu::protocol::model::descriptor::SurfaceToken>,
     ) -> hl_gpu::Result<u64> {
         present::create_surface(
             dev,
@@ -59,7 +92,7 @@ impl Swapchain {
             ci.image_extent.width,
             ci.image_extent.height,
             ci.image_format as u32,
-            0,
+            token,
         )
     }
 }
@@ -80,8 +113,7 @@ pub extern "C" fn vkDestroySwapchainKHR(
         }
         // Tear down the app-surface presenter + its window binding (drops the private queue wrappers +
         // the bound `wl_shm`, releasing the app's connection).
-        s.swapchain_windows.remove(&swapchain);
-        s.presenters.remove(&swapchain);
+        s.presenters.unbind(swapchain);
     });
 }
 
@@ -172,12 +204,47 @@ pub extern "C" fn vkQueuePresentKHR(
         };
         let mut res = VK_SUCCESS;
         for (&sc, &idx) in swapchains.iter().zip(indices) {
-            // 1) The present lowering (`Cmd::Present` names the surface + presented image).
-            if let Err(e) = present::queue_present(dev, sink, sc, idx) {
+            let native = if s.native_present {
+                s.presenters
+                    .get_mut(sc)
+                    .and_then(Option::as_mut)
+                    .and_then(WaylandAppPresenter::reserve_native_frame)
+            } else {
+                None
+            };
+            // Native presentation submits the real GPU present first. Fallback emits no fake Present.
+            if let Err(e) =
+                present::queue_present(dev, sink, sc, idx, native.map(|frame| frame.serial))
+            {
                 res = Status::from_error(&e);
                 continue;
             }
-            // 2) Read the presented image back + convert to the XRGB plane a `wl_shm` buffer wants.
+            if let Some(frame) = native {
+                let Some((w, h)) = dev.swapchains.get(&sc).map(|sc| (sc.width, sc.height)) else {
+                    res = VK_ERROR_OUT_OF_DATE_KHR;
+                    continue;
+                };
+                let commit = s
+                    .presenters
+                    .get_mut(sc)
+                    .and_then(Option::as_mut)
+                    .expect("native frame requires its presenter")
+                    .commit_native(frame, w, h);
+                if let Err(error) = commit {
+                    let owner = s.presenters.surface(sc);
+                    if let Some(surface) = owner {
+                        for swapchain in s.presenters.swapchains(surface) {
+                            let _ = present::demote_swapchain(dev, sink, swapchain);
+                        }
+                    }
+                    if let Some(Some(presenter)) = s.presenters.get_mut(sc) {
+                        presenter.retire_native();
+                    }
+                    res = error.to_vk_result();
+                }
+                continue;
+            }
+            // Compatibility path: synchronous readback + wl_shm.
             let plane = match present::read_presented_xrgb(dev, sink, sc, idx) {
                 Ok(p) => p,
                 Err(e) => {
@@ -187,12 +254,7 @@ pub extern "C" fn vkQueuePresentKHR(
             };
             // 3) Marshal that plane onto the app's OWN `wl_surface` (soft-unavailable ⇒ readback-only,
             //    still VK_SUCCESS; a hard marshal/flush failure ⇒ VK_ERROR_OUT_OF_DATE/SURFACE_LOST).
-            let vk = Presentation::frame_to_app_surface(
-                &mut s.presenters,
-                &s.swapchain_windows,
-                sc,
-                plane,
-            );
+            let vk = Presentation::frame_to_app_surface(&mut s.presenters, sc, plane);
             if vk != VK_SUCCESS {
                 hl_log::hl_warn!(hl_log::tag::PRESENT, "commit failed sc={sc:#x} -> {:?}", vk);
                 res = vk;
@@ -211,30 +273,12 @@ pub extern "C" fn vkQueuePresentKHR(
 struct Presentation;
 impl Presentation {
     fn frame_to_app_surface(
-        presenters: &mut std::collections::HashMap<u64, Option<WaylandAppPresenter>>,
-        windows: &std::collections::HashMap<u64, WaylandWindow>,
+        presenters: &mut crate::state::Presenters,
         swapchain: u64,
         plane: (Vec<u8>, u32, u32),
     ) -> VkResult {
         let (xrgb, w, h) = plane;
-        let Some(win) = windows.get(&swapchain) else {
-            return VK_SUCCESS; // no captured wl_surface: readback-only present
-        };
-        // Bring the presenter up once, caching a soft-unavailable outcome as `None`.
-        if !presenters.contains_key(&swapchain) {
-            // SAFETY: win.surface is the live wl_surface captured from VkWaylandSurfaceCreateInfoKHR;
-            // the presenter is owned by this swapchain state and dropped before the surface record.
-            match unsafe { WaylandAppPresenter::new(win.surface) } {
-                Ok(p) => {
-                    presenters.insert(swapchain, Some(p));
-                }
-                Err(e) if e.is_unavailable() => {
-                    presenters.insert(swapchain, None);
-                }
-                Err(e) => return e.to_vk_result(),
-            }
-        }
-        match presenters.get_mut(&swapchain) {
+        match presenters.get_mut(swapchain) {
             Some(Some(p)) => match p.present(&xrgb, w, h) {
                 Ok(()) => VK_SUCCESS,
                 Err(e) => e.to_vk_result(),
@@ -247,71 +291,45 @@ impl Presentation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     #[test]
     fn no_wayland_window_is_readback_only_vk_success() {
-        let mut presenters: HashMap<u64, Option<WaylandAppPresenter>> = HashMap::new();
-        let windows = HashMap::new();
+        let mut presenters = crate::state::Presenters::new();
         let plane = (vec![0xFFu8; 16], 2, 2);
 
         assert_eq!(
-            Presentation::frame_to_app_surface(&mut presenters, &windows, 0xABC, plane),
+            Presentation::frame_to_app_surface(&mut presenters, 0xABC, plane),
             VK_SUCCESS
         );
-        assert!(presenters.is_empty());
     }
 
     #[test]
     fn soft_unavailable_bringup_caches_none_and_returns_vk_success() {
         let swapchain = 0xBEEF;
-        let mut presenters = HashMap::new();
-        let mut windows = HashMap::new();
-        windows.insert(
-            swapchain,
-            WaylandWindow {
-                display: 0xD15,
-                surface: 0,
-            },
-        );
+        let surface = PresenterId::Wayland(0x515);
+        let mut presenters = crate::state::Presenters::new();
+        presenters.ensure(surface, || None);
+        presenters.bind(swapchain, surface);
 
-        let first = Presentation::frame_to_app_surface(
-            &mut presenters,
-            &windows,
-            swapchain,
-            (vec![0xFF; 16], 2, 2),
-        );
+        let first =
+            Presentation::frame_to_app_surface(&mut presenters, swapchain, (vec![0xFF; 16], 2, 2));
         assert_eq!(first, VK_SUCCESS);
-        assert!(matches!(presenters.get(&swapchain), Some(None)));
 
-        let second = Presentation::frame_to_app_surface(
-            &mut presenters,
-            &windows,
-            swapchain,
-            (vec![0xFF; 16], 2, 2),
-        );
+        let second =
+            Presentation::frame_to_app_surface(&mut presenters, swapchain, (vec![0xFF; 16], 2, 2));
         assert_eq!(second, VK_SUCCESS);
     }
 
     #[test]
     fn cached_soft_unavailable_is_vk_success() {
         let swapchain = 0x1234;
-        let mut presenters = HashMap::from([(swapchain, None)]);
-        let windows = HashMap::from([(
-            swapchain,
-            WaylandWindow {
-                display: 0xD15,
-                surface: 0xF00,
-            },
-        )]);
+        let surface = PresenterId::Wayland(0x515);
+        let mut presenters = crate::state::Presenters::new();
+        presenters.ensure(surface, || None);
+        presenters.bind(swapchain, surface);
 
         assert_eq!(
-            Presentation::frame_to_app_surface(
-                &mut presenters,
-                &windows,
-                swapchain,
-                (vec![0xFF; 16], 2, 2),
-            ),
+            Presentation::frame_to_app_surface(&mut presenters, swapchain, (vec![0xFF; 16], 2, 2),),
             VK_SUCCESS
         );
     }

@@ -95,6 +95,9 @@ fn ds_state(compare_op: u32, pass_op: u32) -> DepthState {
         stencil_back: face,
         stencil_read_mask: 0xff,
         stencil_write_mask: 0xff,
+        bias_constant: 0,
+        bias_slope_scale: 0.0,
+        bias_clamp: 0.0,
     }
 }
 

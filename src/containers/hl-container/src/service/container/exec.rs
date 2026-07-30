@@ -27,7 +27,7 @@ impl Service {
         self.execs
             .get(id)
             .await?
-            .ok_or_else(|| Error::NotFound(id.to_string()))
+            .ok_or_else(|| Error::ExecNotFound(id.clone()))
     }
 
     pub(crate) async fn wait_exec(&self, id: &ExecId) -> Result<ExitStatus> {
@@ -91,21 +91,20 @@ impl Service {
         let input = io.take_input().await?;
         let mut process_spec = exec.spec.process.clone();
         let mut requested_mounts = container.spec.mounts.clone();
+        let (rootfs, overlay, owners) = self.rootfs_launch(&container.spec.rootfs).await?;
         let devices = self.devices(
             container.spec.guest,
             &mut process_spec,
             &mut requested_mounts,
+            crate::device::FilesystemView::new(
+                &rootfs,
+                overlay.as_ref().map(|overlay| overlay.upper.as_path()),
+            ),
         )?;
         let mut mounts = self.volumes.resolve(&requested_mounts).await?;
         mounts.extend(self.identity.open(&container)?);
         let filesystem_generation = self.identity.generation(&container)?.path().to_owned();
-        let (rootfs, overlay, owners) = self.rootfs_launch(&container.spec.rootfs).await?;
-        let domain = self
-            .live
-            .lock()
-            .await
-            .get(&container.id)
-            .and_then(|run| run.process.domain());
+        let domain = Some(self.process_domain(&container.id).await?);
         let process = self
             .runtime
             .start(ProcessConfig {
@@ -114,6 +113,7 @@ impl Service {
                 overlay,
                 owners,
                 filesystem_generation,
+                translation_cache: self.translation_cache.clone(),
                 checkpoint: Some(CheckpointConfig {
                     image: self
                         .checkpoints

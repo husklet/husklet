@@ -53,6 +53,7 @@ fn harness() -> InProcessCommandSink<CpuExecutor> {
         shader_payloads: shader_payload::KERNEL,
         command_bits: Capabilities::command_bits(ALL_COMMANDS),
         texture_formats: TextureFormat::bits(COLOR_FORMATS),
+        ..FeatureRequest::default()
     };
     sink.negotiate(&req).expect("negotiate against CpuExecutor");
     sink

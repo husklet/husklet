@@ -32,6 +32,21 @@ fn assert_no_es_leaks(src: &str) {
     assert!(src.contains("void main()"), "entry point missing:\n{src}");
 }
 
+fn assert_naga_parses(src: &str, stage: naga::ShaderStage) {
+    let mut frontend = naga::front::glsl::Frontend::default();
+    let module = frontend
+        .parse(&naga::front::glsl::Options::from(stage), src)
+        .unwrap_or_else(|error| {
+            panic!("naga glsl-in rejected translated source: {error:?}\n{src}")
+        });
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .unwrap_or_else(|error| panic!("naga rejected translated module: {error:?}\n{src}"));
+}
+
 #[path = "glsl_translator/compute.rs"]
 mod compute;
 #[path = "glsl_translator/dialect.rs"]

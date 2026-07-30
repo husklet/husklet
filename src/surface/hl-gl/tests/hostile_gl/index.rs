@@ -17,7 +17,8 @@ fn out_of_range_indices_are_guarded_no_ops() {
     // A texture unit far past the modeled bank leaves the active unit unchanged.
     c.active_texture(GL_TEXTURE0 + 9999);
     assert_eq!(
-        c.active_texture, 0,
+        c.active_texture_unit(),
+        0,
         "an out-of-range unit does not move the active unit"
     );
     // A uniform write to a bogus location on a linked program is a no-op (not a slice panic).
@@ -42,7 +43,7 @@ fn out_of_range_indices_are_guarded_no_ops() {
     // A valid attribute index does take effect.
     record::vertex_attrib_pointer(&mut c, 0, 4, GL_FLOAT, false, 0, 0);
     record::enable_vertex_attrib(&mut c, 0);
-    assert!(c.attr[0].enabled);
+    assert!(c.attributes()[0].enabled);
 }
 
 /// A huge `glDrawArrays` / `glDrawElements` count (near `i32::MAX`) with only VBO-backed attributes must
@@ -55,11 +56,24 @@ fn huge_draw_counts_do_not_overflow_or_alloc() {
     record::draw_arrays(&mut c, GL_TRIANGLES, i32::MAX - 1, i32::MAX);
     record::draw_elements(&mut c, GL_TRIANGLES, i32::MAX, GL_UNSIGNED_SHORT, 0);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
-    assert_eq!(c.draws.len(), 2);
+    assert_eq!(c.draws().len(), 2);
     // A negative count is rejected, recording nothing.
     record::draw_arrays(&mut c, GL_TRIANGLES, 0, -5);
     assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
-    assert_eq!(c.draws.len(), 2);
+    assert_eq!(c.draws().len(), 2);
+}
+
+#[test]
+fn negative_array_first_is_invalid_and_records_nothing() {
+    let mut c = ctx();
+
+    record::draw_arrays(&mut c, GL_TRIANGLES, -1, 3);
+    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
+    assert!(c.draws().is_empty());
+
+    record::draw_arrays_instanced(&mut c, GL_TRIANGLES, -1, 3, 2);
+    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
+    assert!(c.draws().is_empty());
 }
 
 /// Negative / huge `glViewport` + `glScissor` dimensions are stored without panicking; a valid viewport

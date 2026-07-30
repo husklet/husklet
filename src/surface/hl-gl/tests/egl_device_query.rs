@@ -8,10 +8,11 @@
 //!     strings (GDK/epoxy check the string before resolving the entry points),
 //!   * `eglGetProcAddress` resolves all four device entry points non-null (a caller invokes the returned
 //!     pointer WITHOUT a null check — a null is a jump-through-null crash),
-//!   * `eglQueryDevicesEXT` reports our single software device (count-only + bounded copy, no OOB store),
+//!   * `eglQueryDevicesEXT` reports the single projected render-node device,
 //!   * `eglQueryDisplayAttribEXT(EGL_DEVICE_EXT)` yields that device handle,
+//!   * its device extension and render-node pathname are standards-correct and process-static,
 //!   * an unknown display attribute is `EGL_BAD_ATTRIBUTE` + `EGL_FALSE` (no deref / fabricated value),
-//!   * a foreign `EGLDeviceEXT` handle is `EGL_BAD_DEVICE_EXT` (no deref crash).
+//!   * null outputs, unknown names/attributes, and foreign devices report their specified EGL errors.
 
 #![cfg(target_os = "linux")]
 
@@ -25,8 +26,10 @@ const EGL_TRUE: u32 = 1;
 const EGL_FALSE: u32 = 0;
 const EGL_SUCCESS: i32 = 0x3000;
 const EGL_BAD_ATTRIBUTE: i32 = 0x3004;
+const EGL_BAD_PARAMETER: i32 = 0x300C;
 const EGL_BAD_DEVICE_EXT: i32 = 0x322B;
 const EGL_DEVICE_EXT: i32 = 0x322C;
+const EGL_DRM_RENDER_NODE_FILE_EXT: i32 = 0x3377;
 
 extern "C" {
     fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
@@ -121,6 +124,12 @@ fn device_query_extension_end_to_end() {
         client_ext.contains("EGL_EXT_device_base"),
         "client ext advertises device_base: {client_ext:?}"
     );
+    assert!(
+        !client_ext
+            .split_ascii_whitespace()
+            .any(|extension| extension == "EGL_EXT_device_drm_render_node"),
+        "device-only extensions do not leak into the client extension string"
+    );
 
     // 2) REGRESSION: every device entry point the advertised extensions promise MUST resolve non-null — a
     //    caller (libepoxy) calls the returned pointer without a null check.
@@ -164,6 +173,12 @@ fn device_query_extension_end_to_end() {
         display_ext.contains("EGL_EXT_device_base"),
         "display ext advertises device_base: {display_ext:?}"
     );
+    assert!(
+        !display_ext
+            .split_ascii_whitespace()
+            .any(|extension| extension == "EGL_EXT_device_drm_render_node"),
+        "device-only extensions do not leak into the display extension string"
+    );
 
     // 4) eglQueryDevicesEXT contract — null array reports the count, then a bounded copy fills the array.
     let egl_query_devices: extern "C" fn(i32, *mut *mut c_void, *mut i32) -> u32 =
@@ -193,6 +208,16 @@ fn device_query_extension_end_to_end() {
         EGL_FALSE,
         "max_devices 0 + array is rejected"
     );
+    assert_eq!(
+        egl_query_devices(0, core::ptr::null_mut(), core::ptr::null_mut()),
+        EGL_FALSE,
+        "num_devices is required even for a count-only query"
+    );
+    assert_eq!(
+        egl_get_error(),
+        EGL_BAD_PARAMETER,
+        "missing num_devices raises EGL_BAD_PARAMETER"
+    );
 
     // 5) eglQueryDisplayAttribEXT(EGL_DEVICE_EXT) yields exactly that device handle.
     let egl_query_display_attrib: extern "C" fn(*mut c_void, i32, *mut isize) -> u32 =
@@ -208,7 +233,7 @@ fn device_query_extension_end_to_end() {
         "the display's device == the enumerated device"
     );
 
-    // 6) An UNKNOWN display attribute is EGL_BAD_ATTRIBUTE + EGL_FALSE (never a fabricated value / a deref).
+    // 6) Null and unknown display-attribute queries fail without writing through invalid pointers.
     let _ = egl_get_error(); // drain the EGL_BAD_PARAMETER the step-4 rejection legitimately left pending
     assert_eq!(
         egl_get_error(),
@@ -226,14 +251,52 @@ fn device_query_extension_end_to_end() {
         EGL_BAD_ATTRIBUTE,
         "and raises EGL_BAD_ATTRIBUTE"
     );
+    assert_eq!(
+        egl_query_display_attrib(dpy, EGL_DEVICE_EXT, core::ptr::null_mut()),
+        EGL_FALSE,
+        "null display-attribute output is rejected"
+    );
+    assert_eq!(
+        egl_get_error(),
+        EGL_BAD_PARAMETER,
+        "null display-attribute output raises EGL_BAD_PARAMETER"
+    );
 
-    // 7) eglQueryDeviceStringEXT(EGL_EXTENSIONS) is a valid (possibly empty) string for our device; a
-    //    FOREIGN device handle is EGL_BAD_DEVICE_EXT + null (no deref crash).
+    // 7) Device extensions expose exactly the render-node query implemented by this device. The returned
+    //    render path identifies the same node projected into the guest; no primary-node extension is claimed.
     let egl_query_device_string: extern "C" fn(*mut c_void, i32) -> *const c_char =
         unsafe { std::mem::transmute(proc(egl_get_proc_address, "eglQueryDeviceStringEXT")) };
-    let s = egl_query_device_string(device, EGL_EXTENSIONS);
-    assert!(!s.is_null(), "device EGL_EXTENSIONS string is non-null");
-    let _ = cstr(s); // valid UTF-8-ish, NUL-terminated
+    let extensions = cstr(egl_query_device_string(device, EGL_EXTENSIONS));
+    assert_eq!(extensions, "EGL_EXT_device_drm_render_node");
+    assert!(
+        !extensions
+            .split_ascii_whitespace()
+            .any(|extension| extension == "EGL_EXT_device_drm"),
+        "the device does not claim a primary DRM node"
+    );
+    let first_path = egl_query_device_string(device, EGL_DRM_RENDER_NODE_FILE_EXT);
+    let second_path = egl_query_device_string(device, EGL_DRM_RENDER_NODE_FILE_EXT);
+    assert_eq!(
+        cstr(first_path),
+        "/dev/dri/renderD128",
+        "the EGL device names Husklet's projected render node"
+    );
+    assert_eq!(
+        first_path, second_path,
+        "the returned render-node string has process-static storage"
+    );
+
+    assert!(
+        egl_query_device_string(device, 0x0BAD_BEEFu32 as i32).is_null(),
+        "unknown device string name is null"
+    );
+    assert_eq!(
+        egl_get_error(),
+        EGL_BAD_PARAMETER,
+        "unknown device string name raises EGL_BAD_PARAMETER"
+    );
+
+    // 8) A foreign device handle is consistently EGL_BAD_DEVICE_EXT for string and attribute queries.
     let bogus = 0xDEAD_0000usize as *mut c_void;
     assert!(
         egl_query_device_string(bogus, EGL_EXTENSIONS).is_null(),
@@ -244,8 +307,16 @@ fn device_query_extension_end_to_end() {
         EGL_BAD_DEVICE_EXT,
         "foreign device raises EGL_BAD_DEVICE_EXT"
     );
+    assert!(
+        egl_query_device_string(core::ptr::null_mut(), EGL_EXTENSIONS).is_null(),
+        "EGL_NO_DEVICE_EXT is not a valid device"
+    );
+    assert_eq!(
+        egl_get_error(),
+        EGL_BAD_DEVICE_EXT,
+        "EGL_NO_DEVICE_EXT raises EGL_BAD_DEVICE_EXT"
+    );
 
-    // 8) eglQueryDeviceAttribEXT on a foreign device is EGL_BAD_DEVICE_EXT (no deref crash).
     let egl_query_device_attrib: extern "C" fn(*mut c_void, i32, *mut isize) -> u32 =
         unsafe { std::mem::transmute(proc(egl_get_proc_address, "eglQueryDeviceAttribEXT")) };
     let mut v: isize = 0;
@@ -258,5 +329,38 @@ fn device_query_extension_end_to_end() {
         egl_get_error(),
         EGL_BAD_DEVICE_EXT,
         "foreign device attrib raises EGL_BAD_DEVICE_EXT"
+    );
+    assert_eq!(
+        egl_query_device_attrib(core::ptr::null_mut(), EGL_DEVICE_EXT, &mut v),
+        EGL_FALSE,
+        "EGL_NO_DEVICE_EXT attribute query fails"
+    );
+    assert_eq!(
+        egl_get_error(),
+        EGL_BAD_DEVICE_EXT,
+        "EGL_NO_DEVICE_EXT attribute query raises EGL_BAD_DEVICE_EXT"
+    );
+
+    // 9) The valid device has no integer attributes. Unknown attributes and null outputs are rejected
+    //    without fabricating a vendor/device identity.
+    assert_eq!(
+        egl_query_device_attrib(device, EGL_DEVICE_EXT, &mut v),
+        EGL_FALSE,
+        "unsupported device integer attribute fails"
+    );
+    assert_eq!(
+        egl_get_error(),
+        EGL_BAD_ATTRIBUTE,
+        "unsupported device integer attribute raises EGL_BAD_ATTRIBUTE"
+    );
+    assert_eq!(
+        egl_query_device_attrib(device, EGL_DEVICE_EXT, core::ptr::null_mut()),
+        EGL_FALSE,
+        "null device-attribute output fails"
+    );
+    assert_eq!(
+        egl_get_error(),
+        EGL_BAD_PARAMETER,
+        "null device-attribute output raises EGL_BAD_PARAMETER"
     );
 }

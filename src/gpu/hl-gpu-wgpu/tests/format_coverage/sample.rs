@@ -57,6 +57,7 @@ fn sample_stored(exec: &mut WgpuExecutor, src_fmt: TextureFormat, stored: &[u8])
                     address_u: AddressMode::ClampToEdge,
                     address_v: AddressMode::ClampToEdge,
                     address_w: AddressMode::ClampToEdge,
+                    ..SamplerDesc::default()
                 },
             ),
             Cmd::CreateRenderPipeline(
@@ -173,6 +174,30 @@ fn bgra_swizzles_and_srgb_decodes_on_sample() {
 
     eprintln!(
         "sample: Bgra8Unorm swizzles B,G,R→R,G,B; Bgra8Srgb additionally decodes sRGB→linear"
+    );
+}
+
+#[test]
+fn coverage_formats_sample_missing_channels_with_gl_compatible_defaults() {
+    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    // Chrome/Skia glyph atlases commonly use one- or two-channel normalized textures. Their shader sees
+    // the stored channels plus WebGPU/OpenGL's defined defaults: absent color channels are zero and absent
+    // alpha is one. A wrong texture view, byte pitch, or format conversion makes text disappear while solid
+    // geometry continues to render, so assert the actual sampled pixel rather than only resource descriptors.
+    let red = sample_stored(&mut exec, TextureFormat::R8Unorm, &[96]);
+    assert!(
+        near_tol(red, [96, 0, 0, 255], 2),
+        "R8 coverage must sample as [R,0,0,1], got {red:?}"
+    );
+
+    let red_green = sample_stored(&mut exec, TextureFormat::Rg8Unorm, &[64, 192]);
+    assert!(
+        near_tol(red_green, [64, 192, 0, 255], 2),
+        "RG8 coverage must sample as [R,G,0,1], got {red_green:?}"
     );
 }
 

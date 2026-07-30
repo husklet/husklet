@@ -23,6 +23,7 @@ hl-design = { path = "../../packages/hl-design" }
 # The neutral hl-GPU protocol (Cmd/Enc, descriptors, kernel-IR, CommandSink). Package `hl_gpu`,
 # lib target `hl_gpu` — so code here reads `hl_gpu::protocol::…`.
 hl_gpu = { package = "hl-gpu", path = "../../gpu/hl-gpu" }
+hl-surface-protocol = { path = "../hl-surface-protocol", default-features = false }
 
 # Tag-based logging + counters + timing (std-only, zero-cost when off, its own workspace). Links from the
 # lib AND the guest cdylibs (it is NOT `#[no_mangle]`, so the 402/44/358 exported-ABI split is unaffected).
@@ -30,6 +31,9 @@ hl-log = { path = "../../packages/hl-log" }
 
 [features]
 default = []
+
+[build-dependencies]
+hl-surface-protocol = { path = "../hl-surface-protocol", default-features = false }
 
 # The GLSL corpus battery (`tests/glsl_corpus.rs`) compiles each translated shader through the SAME host
 # route the wgpu executor uses (naga `glsl-in` → validate → `wgsl-out`), so a translator gap surfaces as a

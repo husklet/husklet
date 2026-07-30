@@ -38,17 +38,14 @@ pub enum GpuError {
     Kernel(String),
     /// Higher-level decode context wrapped around a low-level wire error.
     Decode(String),
+    /// A typed failure at the remote command transport boundary.
+    Transport(crate::transport::model::error::TransportError),
 }
 
 impl GpuError {
     /// Construct an interpreter/kernel diagnostic while keeping its owned context.
     pub(crate) fn kernel(message: impl Into<String>) -> Self {
         Self::Kernel(message.into())
-    }
-
-    /// Convert a socket/framing failure at the transport boundary into the protocol error surface.
-    pub(crate) fn transport(error: std::io::Error) -> Self {
-        Self::Decode(format!("transport: {error}"))
     }
 }
 
@@ -70,6 +67,7 @@ impl std::fmt::Display for GpuError {
             GpuError::ResourceLimit(m) => write!(f, "executor resource limit: {m}"),
             GpuError::Kernel(m) => write!(f, "kernel: {m}"),
             GpuError::Decode(m) => write!(f, "decode: {m}"),
+            GpuError::Transport(error) => error.fmt(f),
         }
     }
 }

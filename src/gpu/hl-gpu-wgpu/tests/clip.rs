@@ -252,6 +252,7 @@ fn render_alpha_mask(exec: &mut WgpuExecutor) -> Vec<u8> {
                     address_u: AddressMode::ClampToEdge,
                     address_v: AddressMode::ClampToEdge,
                     address_w: AddressMode::ClampToEdge,
+                    ..SamplerDesc::default()
                 },
             ),
             Cmd::CreateRenderPipeline(

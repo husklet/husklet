@@ -3,6 +3,114 @@ use super::*;
 pub(super) struct RenderPasses;
 
 impl RenderPasses {
+    pub(super) fn build_ordered(ctx: &mut GlContext) -> Option<Frame> {
+        use crate::model::context::FrameOp;
+
+        let operations = ctx.local.recording.operations.clone();
+        let mut cmds = Vec::new();
+        let mut fbo_tex_ir = std::collections::HashMap::new();
+        let mut fbo_target = std::collections::HashMap::new();
+        let mut initialized = std::collections::HashSet::new();
+        let mut snapshots = SnapshotTextures::new();
+        let mut targets = Vec::new();
+        let mut present = None;
+        let mut last = None;
+        let mut index = 0;
+
+        while index < operations.len() {
+            match &operations[index] {
+                FrameOp::Draw(first) => {
+                    let fbo = first.fbo;
+                    let target = first.target;
+                    let start = index;
+                    index += 1;
+                    while index < operations.len() {
+                        match &operations[index] {
+                            FrameOp::Draw(draw) if draw.fbo == fbo && draw.target == target => {
+                                index += 1
+                            }
+                            _ => break,
+                        }
+                    }
+                    let run = operations[start..index]
+                        .iter()
+                        .filter_map(|operation| match operation {
+                            FrameOp::Draw(draw) => Some((**draw).clone()),
+                            FrameOp::Blit(_) => None,
+                        })
+                        .collect::<Vec<_>>();
+                    let target = lower_ordered_run(
+                        ctx,
+                        &run,
+                        &mut cmds,
+                        &mut fbo_tex_ir,
+                        &mut fbo_target,
+                        &mut initialized,
+                        &mut targets,
+                        &mut snapshots,
+                    )?;
+                    last = Some(target);
+                    if fbo == 0 {
+                        present = Some(target);
+                    }
+                }
+                FrameOp::Blit(blit) => {
+                    let src = resolve_ordered_target(
+                        ctx,
+                        blit.read_fbo,
+                        blit.read_target,
+                        blit.read_ir,
+                        &mut cmds,
+                        &mut fbo_target,
+                        &mut targets,
+                    );
+                    let dst = resolve_ordered_target(
+                        ctx,
+                        blit.draw_fbo,
+                        blit.draw_target,
+                        blit.draw_ir,
+                        &mut cmds,
+                        &mut fbo_target,
+                        &mut targets,
+                    );
+                    if let Some(copy) = blit_copy_enc(
+                        &blit.src,
+                        &blit.dst,
+                        src.1,
+                        src.3,
+                        src.4,
+                        dst.1,
+                        dst.3,
+                        dst.4,
+                        blit.filter,
+                    ) {
+                        cmds.push(Cmd::Submit(CommandBuffer {
+                            encoder: vec![copy],
+                            signal: None,
+                        }));
+                        initialized.insert(dst.1);
+                    }
+                    last = Some(dst);
+                    if blit.draw_fbo == 0 {
+                        present = Some(dst);
+                    }
+                    index += 1;
+                }
+            }
+        }
+
+        let (surface, texture, tw, th, fmt) = present.or(last)?;
+        Some(Frame {
+            cmds,
+            present: (surface, texture),
+            target_width: tw,
+            target_height: th,
+            target_format: fmt,
+            color_attachments: Vec::new(),
+            targets,
+        })
+    }
+
     pub(super) fn groups(draws: &[DrawCall]) -> Vec<(u32, usize, usize)> {
         let mut groups: Vec<(u32, usize, usize)> = Vec::new();
         for (i, d) in draws.iter().enumerate() {
@@ -27,8 +135,8 @@ impl RenderPasses {
         ctx: &mut GlContext,
         groups: &[(u32, usize, usize)],
     ) -> Option<Frame> {
-        let draws = ctx.draws.clone();
-        let blits = ctx.blits.clone();
+        let draws = ctx.local.recording.draws.clone();
+        let blits = ctx.local.recording.blits.clone();
         let mut cmds: Vec<Cmd> = Vec::new();
         // GL texture name of an FBO color attachment → the render-target texture IR a prior pass rendered into,
         // so a later pass sampling that attachment reads the rendered pixels rather than re-uploading its CPU
@@ -42,15 +150,32 @@ impl RenderPasses {
         // The default-framebuffer (window) target to present + read back; the last run's target is the fallback.
         let mut present: Option<(u32, u32, i32, i32, TextureFormat)> = None;
         let mut last: Option<(u32, u32, i32, i32, TextureFormat)> = None;
+        let mut targets: Vec<FrameTarget> = Vec::new();
+        let mut snapshots = SnapshotTextures::new();
 
         for &(fbo, start, end) in groups {
             let run = &draws[start..end];
             let (surface, target_tex, tw, th, fmt) =
                 resolve_target(ctx, fbo, run.first().and_then(|d| d.target), &mut cmds);
             fbo_target.insert(fbo, (surface, target_tex, tw, th, fmt));
+            if let Some(target) = frame_target(
+                ctx,
+                fbo,
+                run.first().and_then(|draw| draw.target),
+                target_tex,
+                tw,
+                th,
+                fmt,
+            ) {
+                push_final_target(&mut targets, target);
+            }
             // Register this run's offscreen attachment so a later run can sample its rendered pixels. Mirror
             // resolve_target's offscreen condition (a sized attachment) so `target_tex` is the offscreen target.
-            if let Some(target) = run.first().and_then(|d| d.target) {
+            if let Some(target) = run
+                .first()
+                .and_then(|d| d.target)
+                .filter(|target| target.texture != 0)
+            {
                 fbo_tex_ir.insert((target.texture, target.generation), target_tex);
             }
             // An unscissored full-framebuffer clear wipes the run's target, so the pass clear-loads with the LAST
@@ -63,8 +188,17 @@ impl RenderPasses {
             let mut copies: Vec<Enc> = Vec::new();
             let mut draw_ops: Vec<Enc> = Vec::new();
             for d in survivors.iter().filter(|d| !d.is_clear) {
-                if let Some(l) = lower_draw(ctx, d, fmt, depth_fmt, tw, th, &mut cmds, &fbo_tex_ir)
-                {
+                if let Some(l) = lower_draw(
+                    ctx,
+                    d,
+                    fmt,
+                    depth_fmt,
+                    tw,
+                    th,
+                    &mut cmds,
+                    &fbo_tex_ir,
+                    &mut snapshots,
+                ) {
                     copies.extend(l.copies);
                     draw_ops.extend(l.ops);
                 }
@@ -96,8 +230,9 @@ impl RenderPasses {
 
         // Apply the recorded `glBlitFramebuffer` copies AFTER the render passes. Each copies a sub-rect from the
         // read FBO's resolved render target into the draw FBO's, lowered to `Enc::CopyTextureToTexture` for the
-        // equal-size (non-scaling) case. The last blit's destination becomes the frame's present/read-back
-        // target so a `glReadPixels` after the blit observes the copied result.
+        // equal-size (non-scaling) case. A blit into framebuffer 0 updates the window target. Offscreen
+        // destinations must not replace a window target selected by an earlier pass; they become the fallback
+        // only for a frame that contains no default-framebuffer work.
         for b in &blits {
             // Resolve each side's render target (rendered/cleared by a pass above, or created on demand).
             let src = match fbo_target.get(&b.read_fbo).copied() {
@@ -116,6 +251,11 @@ impl RenderPasses {
                     t
                 }
             };
+            if let Some(target) =
+                frame_target(ctx, b.draw_fbo, None, dstt.1, dstt.2, dstt.3, dstt.4)
+            {
+                push_final_target(&mut targets, target);
+            }
             if let Some(copy) = blit_copy_enc(
                 &b.src, &b.dst, src.1, src.3, src.4, dstt.1, dstt.3, dstt.4, b.filter,
             ) {
@@ -124,7 +264,9 @@ impl RenderPasses {
                     signal: None,
                 }));
             }
-            present = Some(dstt);
+            if b.draw_fbo == 0 {
+                present = Some(dstt);
+            }
             last = Some(dstt);
         }
 
@@ -144,8 +286,138 @@ impl RenderPasses {
             target_height: th,
             target_format: fmt,
             color_attachments: Vec::new(),
+            targets,
         })
     }
+}
+
+type ResolvedTarget = (u32, u32, i32, i32, TextureFormat);
+
+fn resolve_ordered_target(
+    ctx: &mut GlContext,
+    fbo: u32,
+    snapshot: Option<crate::model::program::TargetSnapshot>,
+    transferred: Option<u32>,
+    cmds: &mut Vec<Cmd>,
+    fbo_target: &mut std::collections::HashMap<u32, ResolvedTarget>,
+    targets: &mut Vec<FrameTarget>,
+) -> ResolvedTarget {
+    if let (Some(texture), Some(snapshot)) = (transferred, snapshot) {
+        let target = (
+            ctx.fbo_surface(snapshot.texture, snapshot.generation)
+                .unwrap_or_default(),
+            texture,
+            snapshot.width,
+            snapshot.height,
+            snapshot.format,
+        );
+        fbo_target.insert(fbo, target);
+        if let Some(frame_target) = frame_target(
+            ctx,
+            fbo,
+            Some(snapshot),
+            texture,
+            target.2,
+            target.3,
+            target.4,
+        ) {
+            push_final_target(targets, frame_target);
+        }
+        return target;
+    }
+    if snapshot.is_none() {
+        if let Some(target) = fbo_target.get(&fbo).copied() {
+            return target;
+        }
+    }
+    let target = resolve_target(ctx, fbo, snapshot, cmds);
+    fbo_target.insert(fbo, target);
+    if let Some(frame_target) =
+        frame_target(ctx, fbo, snapshot, target.1, target.2, target.3, target.4)
+    {
+        push_final_target(targets, frame_target);
+    }
+    target
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_ordered_run(
+    ctx: &mut GlContext,
+    run: &[DrawCall],
+    cmds: &mut Vec<Cmd>,
+    fbo_tex_ir: &mut std::collections::HashMap<(u32, u64), u32>,
+    fbo_target: &mut std::collections::HashMap<u32, ResolvedTarget>,
+    initialized: &mut std::collections::HashSet<u32>,
+    targets: &mut Vec<FrameTarget>,
+    snapshots: &mut SnapshotTextures,
+) -> Option<ResolvedTarget> {
+    let first = run.first()?;
+    let fbo = first.fbo;
+    let target = resolve_target(ctx, fbo, first.target, cmds);
+    let present_target = presents(ctx, fbo, first.target);
+    fbo_target.insert(fbo, target);
+    if let Some(frame_target) = frame_target(
+        ctx,
+        fbo,
+        first.target,
+        target.1,
+        target.2,
+        target.3,
+        target.4,
+    ) {
+        push_final_target(targets, frame_target);
+    }
+    if let Some(snapshot) = first.target.filter(|target| target.texture != 0) {
+        fbo_tex_ir.insert((snapshot.texture, snapshot.generation), target.1);
+    }
+
+    let last_full = run
+        .iter()
+        .rposition(|draw| draw.is_clear && !draw.scissor_enabled);
+    let clear = last_full.map(|index| run[index].clear).unwrap_or([0.0; 4]);
+    let survivors = &run[last_full.map_or(0, |index| index + 1)..];
+    let mut load = if last_full.is_some() || !initialized.contains(&target.1) {
+        LoadOp::Clear
+    } else {
+        LoadOp::Load
+    };
+    let mut segment = Vec::new();
+    let mut ops = Vec::new();
+
+    for draw in survivors {
+        if draw.is_clear && draw.scissor_enabled {
+            if !segment.is_empty() || matches!(load, LoadOp::Clear) {
+                emit_segment_pass(
+                    ctx, cmds, &mut ops, &segment, target.1, target.4, target.2, target.3, clear,
+                    load, fbo_tex_ir, snapshots,
+                );
+                segment.clear();
+                load = LoadOp::Load;
+            }
+            if let Some(clear) =
+                scissored_clear_rect_enc(draw, target.1, target.2, target.3, present_target)
+            {
+                ops.push(clear);
+                initialized.insert(target.1);
+            }
+        } else if !draw.is_clear {
+            segment.push(draw.clone());
+        }
+    }
+    if !segment.is_empty() || matches!(load, LoadOp::Clear) {
+        emit_segment_pass(
+            ctx, cmds, &mut ops, &segment, target.1, target.4, target.2, target.3, clear, load,
+            fbo_tex_ir, snapshots,
+        );
+    }
+    if !ops.is_empty() {
+        cmds.push(Cmd::Submit(CommandBuffer {
+            encoder: ops,
+            signal: None,
+        }));
+        initialized.insert(target.1);
+    }
+    Some(target)
 }
 
 /// The render target + presentable surface for a frame whose draws target framebuffer `fbo`. Mints the
@@ -165,13 +437,15 @@ pub(super) fn resolve_target(
     // Try the FBO's color attachment; fall back to the default target if it is missing/unsized.
     if fbo != 0 {
         let target = snapshot.or_else(|| {
-            let texture = ctx.framebuffers.color_attachment(fbo);
+            let texture = ctx.local.framebuffers.color_attachment(fbo);
             ctx.textures
                 .get(texture)
                 .filter(|t| t.w > 0 && t.h > 0)
                 .map(|t| crate::model::program::TargetSnapshot {
                     texture,
                     generation: t.gen,
+                    shared_storage: t.shared_storage(),
+                    shared_revision: t.shared_current_identity().map(|(_, revision)| revision),
                     width: t.w,
                     height: t.h,
                     format: t.ir_format,
@@ -179,12 +453,27 @@ pub(super) fn resolve_target(
         });
         if let Some(target) = target {
             let (w, h, fmt) = (target.width, target.height, target.format);
-            let (surface, texture, needs_create) =
-                ctx.fbo_target(target.texture, target.generation);
+            let (surface, texture, needs_create, ephemeral) = ctx
+                .recorded_fbo_target(target.texture, target.generation)
+                .unwrap_or_default();
             if needs_create {
                 // Offscreen targets add SAMPLED: a later default-framebuffer pass samples them (the
                 // atlas/offscreen → window composite), which the CPU oracle's bind-group check requires.
-                push_target_creates(cmds, surface, texture, w, h, fmt, "offscreen-fbo", true);
+                push_target_creates(
+                    cmds,
+                    surface,
+                    texture,
+                    w,
+                    h,
+                    fmt,
+                    if ephemeral {
+                        "gl-retired-fbo"
+                    } else {
+                        "offscreen-fbo"
+                    },
+                    true,
+                    ctx.external_target(target.texture, target.generation),
+                );
             }
             return (surface, texture, w, h, fmt);
         }
@@ -193,9 +482,19 @@ pub(super) fn resolve_target(
     let fmt = TextureFormat::Bgra8Unorm;
     // Pass the current window size so a resize retires the stale-sized cached target and mints a fresh one
     // (a stale default target read back at the new size shears the whole composited frame).
-    let (surface, texture, needs_create) = ctx.default_target(w, h);
+    let (surface, texture, needs_create) = ctx.default_target(w, h).unwrap_or_default();
     if needs_create {
-        push_target_creates(cmds, surface, texture, w, h, fmt, "default-fbo", false);
+        push_target_creates(
+            cmds,
+            surface,
+            texture,
+            w,
+            h,
+            fmt,
+            "default-fbo",
+            false,
+            ctx.local.present_token,
+        );
     }
     (surface, texture, w, h, fmt)
 }
@@ -215,6 +514,7 @@ pub(super) fn push_target_creates(
     fmt: TextureFormat,
     label: &str,
     sampled: bool,
+    token: Option<hl_gpu::protocol::model::descriptor::SurfaceToken>,
 ) {
     let (w, h) = (w.max(1) as u32, h.max(1) as u32);
     // Offscreen FBO targets (`sampled`) additionally take COPY_DST so a `glBlitFramebuffer` can copy into
@@ -244,15 +544,17 @@ pub(super) fn push_target_creates(
             label: label.into(),
         },
     ));
-    cmds.push(Cmd::CreateSurface(
-        surface,
-        SurfaceDesc {
-            width: w,
-            height: h,
-            format: fmt,
-            hlp_surface: 0,
-        },
-    ));
+    if let Some(token) = token {
+        cmds.push(Cmd::CreateSurface(
+            surface,
+            SurfaceDesc {
+                width: w,
+                height: h,
+                format: fmt,
+                token,
+            },
+        ));
+    }
 }
 
 /// The depth(+stencil) attachment FORMAT a render pass needs, if any of `run`'s geometry draws is depth-
@@ -294,10 +596,10 @@ pub(super) fn depth_attachment_for(
 ) -> Option<DepthAttachment> {
     let format = RenderPasses::depth_format(draws)?;
     let with_stencil = matches!(format, TextureFormat::Depth24PlusStencil8);
-    let clear_depth = ctx.clear_depth;
+    let clear_depth = ctx.local.pipeline.clear_depth;
     // GL clears the stencil plane to `glClearStencil`'s value (default 0), masked to the 8-bit buffer.
-    let clear_stencil = (ctx.clear_stencil as u32) & 0xff;
-    let (depth_tex, needs_create) = ctx.depth_target(color_tex, with_stencil);
+    let clear_stencil = (ctx.local.pipeline.clear_stencil as u32) & 0xff;
+    let (depth_tex, needs_create) = ctx.depth_target(color_tex, with_stencil).ok()?;
     if needs_create {
         cmds.push(Cmd::CreateTexture(
             depth_tex,
@@ -360,8 +662,8 @@ impl RenderPasses {
 impl Frame {
     pub(super) fn build_clear(ctx: &mut GlContext) -> Frame {
         let cmds: Vec<Cmd> = Vec::new();
-        let fbo = ctx.draws.last().map(|d| d.fbo).unwrap_or(0);
-        let clear = RenderPasses::effective_clear(&ctx.draws).0;
+        let fbo = ctx.local.recording.draws.last().map(|d| d.fbo).unwrap_or(0);
+        let clear = RenderPasses::effective_clear(&ctx.local.recording.draws).0;
         build_clear_frame_color(ctx, fbo, clear, cmds)
     }
 }

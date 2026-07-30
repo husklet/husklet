@@ -153,7 +153,7 @@ impl DriverStatus<'_> {
             GpuError::UnknownId { .. } | GpuError::DuplicateId { .. } => CUDA_ERROR_INVALID_HANDLE,
             GpuError::OutOfBounds => CUDA_ERROR_INVALID_VALUE,
             GpuError::ResourceLimit(_) => CUDA_ERROR_OUT_OF_MEMORY,
-            GpuError::Decode(_) => CUDA_ERROR_UNKNOWN,
+            GpuError::Decode(_) | GpuError::Transport(_) => CUDA_ERROR_UNKNOWN,
             GpuError::Invalid(_)
             | GpuError::BadEnum { .. }
             | GpuError::BadTag(_)
@@ -191,5 +191,20 @@ impl RuntimeStatus<'_> {
         };
         hl_log::hl_warn!(hl_log::tag::SHIM, "cudart err={:?} -> {}", self.0, code);
         code
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DriverStatus, CUDA_ERROR_UNKNOWN};
+    use hl_gpu::{GpuError, TransportError};
+
+    #[test]
+    fn transport_loss_is_reported_as_driver_failure() {
+        let error = GpuError::Transport(TransportError::ApiLost {
+            detail: "executor generation changed".into(),
+        });
+
+        assert_eq!(DriverStatus::from(&error).code(), CUDA_ERROR_UNKNOWN);
     }
 }

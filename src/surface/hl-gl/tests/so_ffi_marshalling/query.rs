@@ -14,7 +14,7 @@ fn egl_query_string_returns_marshal() {
     // With EGL_NO_DISPLAY (null) the vendor/version/client-API identity strings are the driver's fixed ids.
     let nodpy = core::ptr::null_mut();
     assert_eq!(cstr(egl_query_string(nodpy, EGL_VENDOR_Q)), "hl-gl");
-    assert_eq!(cstr(egl_query_string(nodpy, EGL_VERSION_Q)), "1.5 hl-gl");
+    assert_eq!(cstr(egl_query_string(nodpy, EGL_VERSION_Q)), "1.4 hl-gl");
     assert_eq!(
         cstr(egl_query_string(nodpy, EGL_CLIENT_APIS_Q)),
         "OpenGL_ES"
@@ -48,6 +48,10 @@ fn egl_query_string_returns_marshal() {
     assert!(
         disp_ext.contains("EGL_KHR_create_context"),
         "display ext advertises create_context: {disp_ext:?}"
+    );
+    assert!(
+        disp_ext.contains("EGL_KHR_image_base"),
+        "display ext advertises the implemented KHR image entry points: {disp_ext:?}"
     );
     assert_ne!(
         disp_ext, client_ext,

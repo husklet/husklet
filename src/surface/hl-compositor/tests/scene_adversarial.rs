@@ -28,11 +28,11 @@ use std::sync::Mutex;
 
 use hl_compositor::scene::model::{
     Anchor, BufferState, BufferTransform, ConstraintAdjustment, DamageRegion, Format, Gravity,
-    Output, OutputId, PopupState, Positioner, PresentableImage, Rect, Scene, SubsurfaceState,
-    Surface, SurfaceId, SurfaceRole, Viewport, Visibility,
+    Output, OutputId, PopupState, Positioner, Rect, Scene, SubsurfaceState, Surface, SurfaceId,
+    SurfaceRole, Viewport, Visibility,
 };
 use hl_compositor::scene::port::{
-    Clock, PresentOutcome, PresentTiming, PresentationFeedback, Presenter,
+    Clock, PresentFrame, PresentOutcome, PresentTiming, PresentationFeedback, Presenter,
 };
 use hl_compositor::scene::service::{
     commit_surface, focus, schedule, BufferChange, Commit, FramePacing,
@@ -93,20 +93,17 @@ impl FakePresenter {
     }
 }
 impl Presenter for FakePresenter {
-    fn present(
-        &mut self,
-        output: OutputId,
-        image: &PresentableImage,
-        damage: &[Rect],
-        _timing: PresentTiming,
-    ) -> PresentationFeedback {
-        self.calls.lock().unwrap().push(PresentCall {
-            output,
-            surface: image.surface,
-            width: image.width,
-            height: image.height,
-            damage: damage.to_vec(),
-        });
+    fn present_frame(&mut self, frame: &PresentFrame) -> PresentationFeedback {
+        self.calls
+            .lock()
+            .unwrap()
+            .extend(frame.layers.iter().map(|layer| PresentCall {
+                output: frame.output,
+                surface: layer.image.surface,
+                width: layer.image.width,
+                height: layer.image.height,
+                damage: layer.damage.clone(),
+            }));
         let outcome = self.scripted.lock().unwrap().pop().unwrap_or_else(|| {
             let s = self.next_serial.get();
             self.next_serial.set(s + 1);

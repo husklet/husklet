@@ -17,11 +17,11 @@ const FS: &str = "#version 300 es\nprecision mediump float;\nin vec3 vColor;\nun
 
 fn ctx_800x600() -> GlContext {
     let mut c = GlContext::new();
-    c.surf = GlSurface {
+    c.set_surface(GlSurface {
         have: true,
         width: 800,
         height: 600,
-    };
+    });
     c
 }
 
@@ -203,13 +203,13 @@ fn program_uniform_sampler_binds_texture_unit_on_the_named_program() {
 #[test]
 fn clear_buffer_color_records_a_scoped_clear() {
     let mut c = ctx_800x600();
-    assert!(c.draws.is_empty());
+    assert!(c.draws().is_empty());
 
     record::clear_buffer_color(&mut c, [0.1, 0.2, 0.3, 0.4]);
 
     // Exactly one clear draw was recorded, carrying the requested color + a full-surface rect.
-    assert_eq!(c.draws.len(), 1);
-    let d = &c.draws[0];
+    assert_eq!(c.draws().len(), 1);
+    let d = &c.draws()[0];
     assert!(d.is_clear);
     assert_eq!(d.clear, [0.1, 0.2, 0.3, 0.4]);
     assert_eq!(d.clear_rect, [0, 0, 800, 600]);

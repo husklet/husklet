@@ -51,6 +51,7 @@ fn nearest_mip() -> SamplerDesc {
         address_u: AddressMode::ClampToEdge,
         address_v: AddressMode::ClampToEdge,
         address_w: AddressMode::ClampToEdge,
+        ..SamplerDesc::default()
     }
 }
 

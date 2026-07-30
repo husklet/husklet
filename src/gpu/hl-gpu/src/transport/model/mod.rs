@@ -6,6 +6,8 @@
 //! IS protocol and is delegated to it.
 
 pub mod abi;
+pub mod config;
+pub mod error;
 pub mod frame;
 pub mod handshake;
 pub mod header;

@@ -15,11 +15,11 @@ const FS: &str = "precision mediump float;\nvarying vec3 vColor;\nuniform vec4 u
 
 fn ctx_800x600() -> GlContext {
     let mut c = GlContext::new();
-    c.surf = GlSurface {
+    c.set_surface(GlSurface {
         have: true,
         width: 800,
         height: 600,
-    };
+    });
     c
 }
 
@@ -48,11 +48,11 @@ fn as_str(bytes: &[u8]) -> &str {
 
 #[test]
 fn get_string_advertises_gles3_identity() {
-    assert_eq!(as_str(query::gl_string(GL_VERSION)), "OpenGL ES 3.0 hl-gl");
-    assert!(as_str(query::gl_string(GL_VERSION)).contains("OpenGL ES 3.0"));
+    assert_eq!(as_str(query::gl_string(GL_VERSION)), "OpenGL ES 3.1 hl-gl");
+    assert!(as_str(query::gl_string(GL_VERSION)).contains("OpenGL ES 3.1"));
     assert_eq!(
         as_str(query::gl_string(GL_SHADING_LANGUAGE_VERSION)),
-        "OpenGL ES GLSL ES 3.00"
+        "OpenGL ES GLSL ES 3.10"
     );
     // Vendor / renderer are non-empty and NUL-terminated.
     assert!(!as_str(query::gl_string(GL_VENDOR)).is_empty());
@@ -63,13 +63,49 @@ fn get_string_advertises_gles3_identity() {
 
 #[test]
 fn num_extensions_matches_the_extension_string() {
-    // GL_NUM_EXTENSIONS must agree with the (empty) GL_EXTENSIONS list so an ES3 enumerator never walks
-    // off the end.
+    // The legacy string and indexed GLES3 extension inventory must agree.
     let c = ctx_800x600();
     let mut buf = [0i32; 4];
     assert_eq!(query::get_integerv(&c, GL_NUM_EXTENSIONS, &mut buf), 1);
+    assert_eq!(buf[0], 11);
+    assert_eq!(
+        as_str(query::gl_string(GL_EXTENSIONS)),
+        "GL_KHR_debug GL_EXT_texture_format_BGRA8888 GL_EXT_read_format_bgra GL_ANGLE_robust_client_memory GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_copy_texture GL_ANGLE_client_arrays GL_ANGLE_webgl_compatibility GL_ANGLE_request_extension GL_OES_EGL_image GL_OES_EGL_sync"
+    );
+    assert_eq!(
+        as_str(query::string_i(GL_EXTENSIONS, 0).unwrap()),
+        "GL_KHR_debug"
+    );
+    assert_eq!(
+        as_str(query::string_i(GL_EXTENSIONS, 1).unwrap()),
+        "GL_EXT_texture_format_BGRA8888"
+    );
+    assert_eq!(
+        as_str(query::string_i(GL_EXTENSIONS, 2).unwrap()),
+        "GL_EXT_read_format_bgra"
+    );
+    assert_eq!(
+        as_str(query::string_i(GL_EXTENSIONS, 3).unwrap()),
+        "GL_ANGLE_robust_client_memory"
+    );
+    for (index, expected) in [
+        (4, "GL_CHROMIUM_bind_generates_resource"),
+        (5, "GL_CHROMIUM_copy_texture"),
+        (6, "GL_ANGLE_client_arrays"),
+        (7, "GL_ANGLE_webgl_compatibility"),
+        (8, "GL_ANGLE_request_extension"),
+        (9, "GL_OES_EGL_image"),
+        (10, "GL_OES_EGL_sync"),
+    ] {
+        assert_eq!(
+            as_str(query::string_i(GL_EXTENSIONS, index).unwrap()),
+            expected
+        );
+    }
+    assert!(query::string_i(GL_EXTENSIONS, 11).is_none());
+    query::get_integerv(&c, GL_NUM_REQUESTABLE_EXTENSIONS_ANGLE, &mut buf);
     assert_eq!(buf[0], 0);
-    assert_eq!(as_str(query::gl_string(GL_EXTENSIONS)), "");
+    assert!(query::string_i(GL_REQUESTABLE_EXTENSIONS_ANGLE, 0).is_none());
 }
 
 // ---- glGetIntegerv -------------------------------------------------------------------------------
@@ -89,9 +125,9 @@ fn get_integerv_limits_are_positive_and_sane() {
     assert_eq!(b[0], 8);
 
     query::get_integerv(&c, GL_MAJOR_VERSION, &mut b);
-    assert_eq!(b[0], 3);
+    assert_eq!(b[0], query::ES_MAJOR);
     query::get_integerv(&c, GL_MINOR_VERSION, &mut b);
-    assert_eq!(b[0], 0);
+    assert_eq!(b[0], query::ES_MINOR);
 
     // GL_MAX_VIEWPORT_DIMS returns 2 values.
     assert_eq!(query::get_integerv(&c, GL_MAX_VIEWPORT_DIMS, &mut b), 2);
@@ -145,17 +181,56 @@ fn get_integerv_reports_truthful_executor_consistent_limits() {
         b[0]
     );
 
+    // Chromium rejects an ES3 context whose transform-feedback and uniform-buffer limits are below the
+    // GLES3 minima. These match the indexed binding state actually modeled by GlContext.
+    for (pname, minimum) in [
+        (GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS, 4),
+        (GL_MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS, 64),
+        (GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS, 4),
+        (GL_MAX_VERTEX_UNIFORM_BLOCKS, 12),
+        (GL_MAX_FRAGMENT_UNIFORM_BLOCKS, 12),
+        (GL_MAX_COMBINED_UNIFORM_BLOCKS, 24),
+        (GL_MAX_UNIFORM_BUFFER_BINDINGS, 24),
+    ] {
+        query::get_integerv(&c, pname, &mut b);
+        assert!(
+            b[0] >= minimum,
+            "limit {pname:#x} must be at least {minimum}, got {}",
+            b[0]
+        );
+    }
+    query::get_integerv(&c, GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &mut b);
+    assert_eq!(b[0], 256);
+    for (pname, expected) in [
+        (GL_MAX_3D_TEXTURE_SIZE, 2048),
+        (GL_MAX_ARRAY_TEXTURE_LAYERS, 256),
+        (GL_MAX_VERTEX_OUTPUT_COMPONENTS, 64),
+        (GL_MAX_FRAGMENT_INPUT_COMPONENTS, 60),
+        (GL_MIN_PROGRAM_TEXEL_OFFSET, -8),
+        (GL_MAX_PROGRAM_TEXEL_OFFSET, 7),
+    ] {
+        query::get_integerv(&c, pname, &mut b);
+        assert_eq!(b[0], expected, "unexpected limit for {pname:#x}");
+    }
+
     // The other GLES3 program limits epoxy caches are all positive (never uninitialized).
     for pname in [
         GL_MAX_VERTEX_UNIFORM_VECTORS,
         GL_MAX_FRAGMENT_UNIFORM_VECTORS,
         GL_MAX_VARYING_VECTORS,
+        GL_MAX_VERTEX_UNIFORM_COMPONENTS,
+        GL_MAX_FRAGMENT_UNIFORM_COMPONENTS,
+        GL_MAX_VARYING_COMPONENTS,
         GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS,
         GL_MAX_SAMPLES,
     ] {
         query::get_integerv(&c, pname, &mut b);
         assert!(b[0] > 0, "limit {pname:#x} must be > 0, got {}", b[0]);
     }
+
+    let mut f = [0.0; 4];
+    query::get_floatv(&c, GL_MAX_TEXTURE_LOD_BIAS, &mut f);
+    assert!(f[0] >= 2.0);
 }
 
 #[test]
@@ -204,6 +279,24 @@ fn get_floatv_and_booleanv_read_state() {
     record::enable(&mut c, GL_BLEND);
     query::get_booleanv(&c, GL_BLEND, &mut bl);
     assert_eq!(bl[0], 1);
+}
+
+#[test]
+fn webgl_range_and_color_mask_queries_have_complete_arity() {
+    let c = ctx_800x600();
+    let mut floats = [0.0; 4];
+    assert_eq!(
+        query::get_floatv(&c, GL_ALIASED_POINT_SIZE_RANGE, &mut floats),
+        2
+    );
+    assert_eq!(&floats[..2], &[1.0, 1.0]);
+
+    let mut booleans = [0; 4];
+    assert_eq!(
+        query::get_booleanv(&c, GL_COLOR_WRITEMASK, &mut booleans),
+        4
+    );
+    assert_eq!(booleans, [1, 1, 1, 1]);
 }
 
 // ---- glPixelStorei -------------------------------------------------------------------------------
@@ -265,6 +358,14 @@ fn shader_and_program_status_reflect_compile_and_link() {
     // Two active attributes (aPos, aColor) and two active uniforms (uTint data + uTex sampler).
     assert_eq!(query::get_programiv(&c, prog, GL_ACTIVE_ATTRIBUTES), 2);
     assert_eq!(query::get_programiv(&c, prog, GL_ACTIVE_UNIFORMS), 2);
+    assert_eq!(
+        query::get_programiv(&c, prog, GL_ACTIVE_ATTRIBUTE_MAX_LENGTH),
+        "aColor".len() as i32 + 1
+    );
+    assert_eq!(
+        query::get_programiv(&c, prog, GL_ACTIVE_UNIFORM_MAX_LENGTH),
+        "uTint".len().max("uTex".len()) as i32 + 1
+    );
 }
 
 #[test]
@@ -311,6 +412,53 @@ fn attrib_location_matches_declaration_order() {
     assert_eq!(query::attrib_location(&c, 4242, "aPos"), -1);
 }
 
+#[test]
+fn attrib_location_honors_pre_link_name_binding() {
+    let mut c = ctx_800x600();
+    let vs = record::create_shader(&mut c, GL_VERTEX_SHADER);
+    record::shader_source(&mut c, vs, VS);
+    record::compile_shader(&mut c, vs);
+    let fs = record::create_shader(&mut c, GL_FRAGMENT_SHADER);
+    record::shader_source(&mut c, fs, FS);
+    record::compile_shader(&mut c, fs);
+    let prog = record::create_program(&mut c);
+    record::attach_shader(&mut c, prog, vs);
+    record::attach_shader(&mut c, prog, fs);
+
+    // Deliberately disagree with declaration order: aPos=0/aColor=1 in source.
+    record::bind_attrib(&mut c, prog, 3, "aPos");
+    record::bind_attrib(&mut c, prog, 1, "aColor");
+    assert!(record::link_program(&mut c, prog));
+
+    assert_eq!(query::attrib_location(&c, prog, "aPos"), 3);
+    assert_eq!(query::attrib_location(&c, prog, "aColor"), 1);
+    assert_eq!(
+        c.programs
+            .program(prog)
+            .and_then(|program| program.vertex_attr_components(3)),
+        Some(2)
+    );
+}
+
+#[test]
+fn conflicting_attribute_bindings_fail_link() {
+    let mut c = ctx_800x600();
+    let vs = record::create_shader(&mut c, GL_VERTEX_SHADER);
+    record::shader_source(&mut c, vs, VS);
+    record::compile_shader(&mut c, vs);
+    let fs = record::create_shader(&mut c, GL_FRAGMENT_SHADER);
+    record::shader_source(&mut c, fs, FS);
+    record::compile_shader(&mut c, fs);
+    let prog = record::create_program(&mut c);
+    record::attach_shader(&mut c, prog, vs);
+    record::attach_shader(&mut c, prog, fs);
+    record::bind_attrib(&mut c, prog, 2, "aPos");
+    record::bind_attrib(&mut c, prog, 2, "aColor");
+
+    assert!(!record::link_program(&mut c, prog));
+    assert!(query::program_info_log(&c, prog).contains("attribute"));
+}
+
 // ---- glGetActiveUniform / glGetActiveAttrib ------------------------------------------------------
 
 #[test]
@@ -355,10 +503,53 @@ fn active_attrib_reflects_declared_name_and_type() {
 
 #[test]
 fn get_stringi_is_consistent_with_num_extensions() {
-    // With no extensions advertised, every index is out of range → None (the shim returns null), and a
-    // non-GL_EXTENSIONS name is also None. This agrees with GL_NUM_EXTENSIONS == 0.
-    assert_eq!(query::num_extensions(), 0);
-    assert!(query::string_i(GL_EXTENSIONS, 0).is_none());
+    assert_eq!(query::num_extensions(), query::EXTENSIONS.len() as i32);
+    assert_eq!(
+        as_str(query::string_i(GL_EXTENSIONS, 0).unwrap()),
+        "GL_KHR_debug"
+    );
+    // A non-GL_EXTENSIONS name and an out-of-range extension index are both rejected.
+    assert_eq!(
+        as_str(query::string_i(GL_EXTENSIONS, 1).unwrap()),
+        "GL_EXT_texture_format_BGRA8888"
+    );
+    assert_eq!(
+        as_str(query::string_i(GL_EXTENSIONS, 2).unwrap()),
+        "GL_EXT_read_format_bgra"
+    );
+    assert_eq!(
+        as_str(query::string_i(GL_EXTENSIONS, 3).unwrap()),
+        "GL_ANGLE_robust_client_memory"
+    );
+    assert_eq!(
+        as_str(query::string_i(GL_EXTENSIONS, 4).unwrap()),
+        "GL_CHROMIUM_bind_generates_resource"
+    );
+    assert_eq!(
+        as_str(query::string_i(GL_EXTENSIONS, 5).unwrap()),
+        "GL_CHROMIUM_copy_texture"
+    );
+    assert_eq!(
+        as_str(query::string_i(GL_EXTENSIONS, 6).unwrap()),
+        "GL_ANGLE_client_arrays"
+    );
+    assert_eq!(
+        as_str(query::string_i(GL_EXTENSIONS, 7).unwrap()),
+        "GL_ANGLE_webgl_compatibility"
+    );
+    assert_eq!(
+        as_str(query::string_i(GL_EXTENSIONS, 8).unwrap()),
+        "GL_ANGLE_request_extension"
+    );
+    assert_eq!(
+        as_str(query::string_i(GL_EXTENSIONS, 9).unwrap()),
+        "GL_OES_EGL_image"
+    );
+    assert_eq!(
+        as_str(query::string_i(GL_EXTENSIONS, 10).unwrap()),
+        "GL_OES_EGL_sync"
+    );
+    assert!(query::string_i(GL_EXTENSIONS, 11).is_none());
     assert!(query::string_i(GL_VERSION, 0).is_none());
 }
 

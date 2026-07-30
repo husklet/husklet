@@ -34,6 +34,11 @@ pub enum BindingKind {
         sample: TexSample,
         multi: bool,
     },
+    StorageTexture {
+        dim: TexDim,
+        format: naga::StorageFormat,
+        access: naga::StorageAccess,
+    },
     /// A `sampler` (WebGPU `Sampler`); `comparison` selects a comparison sampler (depth compare).
     Sampler { comparison: bool },
 }
@@ -67,6 +72,7 @@ pub struct Binding {
     pub group: u32,
     pub binding: u32,
     pub kind: BindingKind,
+    pub count: Option<std::num::NonZeroU32>,
 }
 
 /// One entry point's used resource bindings.
@@ -122,11 +128,12 @@ impl ModuleUsage {
                         if entry_info[handle].is_empty() {
                             return None;
                         }
-                        let kind = BindingKind::from_global(module, variable)?;
+                        let (kind, count) = BindingKind::from_global(module, variable)?;
                         Some(Binding {
                             group: resource.group,
                             binding: resource.binding,
                             kind,
+                            count,
                         })
                     })
                     .collect();
@@ -144,13 +151,28 @@ impl ModuleUsage {
 /// [`BindingKind`] a layout entry is built from. Returns `None` for a global in an address space that
 /// carries no bind-group entry (function/private/workgroup/push-constant locals).
 impl BindingKind {
-    fn from_global(module: &naga::Module, variable: &naga::GlobalVariable) -> Option<Self> {
+    fn from_global(
+        module: &naga::Module,
+        variable: &naga::GlobalVariable,
+    ) -> Option<(Self, Option<std::num::NonZeroU32>)> {
+        let (ty, count) = match &module.types[variable.ty].inner {
+            naga::TypeInner::BindingArray { base, size } => {
+                let naga::ArraySize::Constant(count) = size else {
+                    return None;
+                };
+                (*base, Some(*count))
+            }
+            _ => (variable.ty, None),
+        };
         match variable.space {
-            naga::AddressSpace::Uniform => Some(BindingKind::UniformBuffer),
-            naga::AddressSpace::Storage { access } => Some(BindingKind::StorageBuffer {
-                read_only: !access.contains(naga::StorageAccess::STORE),
-            }),
-            naga::AddressSpace::Handle => match &module.types[variable.ty].inner {
+            naga::AddressSpace::Uniform => Some((BindingKind::UniformBuffer, count)),
+            naga::AddressSpace::Storage { access } => Some((
+                BindingKind::StorageBuffer {
+                    read_only: !access.contains(naga::StorageAccess::STORE),
+                },
+                count,
+            )),
+            naga::AddressSpace::Handle => match &module.types[ty].inner {
                 naga::TypeInner::Image {
                     dim,
                     arrayed,
@@ -164,6 +186,16 @@ impl BindingKind {
                         (naga::ImageDimension::Cube, false) => TexDim::Cube,
                         (naga::ImageDimension::Cube, true) => TexDim::CubeArray,
                     };
+                    if let naga::ImageClass::Storage { format, access } = class {
+                        return Some((
+                            BindingKind::StorageTexture {
+                                dim,
+                                format: *format,
+                                access: *access,
+                            },
+                            count,
+                        ));
+                    }
                     let sample = match class {
                         naga::ImageClass::Sampled { kind, .. } => match kind {
                             naga::ScalarKind::Sint => TexSample::Sint,
@@ -172,21 +204,21 @@ impl BindingKind {
                             _ => TexSample::Float { filterable: true },
                         },
                         naga::ImageClass::Depth { .. } => TexSample::Depth,
-                        // A storage image is not a sampled texture; the render suite never binds one, so treat
-                        // it as a float texture for the layout entry rather than inventing a storage-texture
-                        // reflection this path never exercises.
-                        naga::ImageClass::Storage { .. } => TexSample::Float { filterable: true },
+                        naga::ImageClass::Storage { .. } => unreachable!(),
                     };
                     let multi = matches!(
                         class,
                         naga::ImageClass::Sampled { multi: true, .. }
                             | naga::ImageClass::Depth { multi: true }
                     );
-                    Some(BindingKind::Texture { dim, sample, multi })
+                    Some((BindingKind::Texture { dim, sample, multi }, count))
                 }
-                naga::TypeInner::Sampler { comparison } => Some(BindingKind::Sampler {
-                    comparison: *comparison,
-                }),
+                naga::TypeInner::Sampler { comparison } => Some((
+                    BindingKind::Sampler {
+                        comparison: *comparison,
+                    },
+                    count,
+                )),
                 _ => None,
             },
             _ => None,

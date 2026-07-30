@@ -11,8 +11,11 @@ pub(super) fn lower_draw(
     th: i32,
     cmds: &mut Vec<Cmd>,
     fbo_tex_ir: &std::collections::HashMap<(u32, u64), u32>,
+    snapshots: &mut SnapshotTextures,
 ) -> Option<DrawCommands> {
-    lower_draw_n(ctx, d, target_fmt, depth_fmt, 1, tw, th, cmds, fbo_tex_ir)
+    lower_draw_n(
+        ctx, d, target_fmt, depth_fmt, 1, tw, th, cmds, fbo_tex_ir, snapshots,
+    )
 }
 
 /// [`lower_draw`] with an explicit color-target count `n_color_targets` (≥ 1). One target is the ordinary
@@ -31,12 +34,45 @@ pub(super) fn lower_draw_n(
     th: i32,
     cmds: &mut Vec<Cmd>,
     fbo_tex_ir: &std::collections::HashMap<(u32, u64), u32>,
+    snapshots: &mut SnapshotTextures,
 ) -> Option<DrawCommands> {
     let d = d.clone();
-    let prog_name = if d.prog != 0 { d.prog } else { ctx.cur_prog };
-    let prog = ctx.programs.program(prog_name)?.clone();
-    let vs_ir = prog.vs_ir.clone()?;
-    let fs_ir = prog.fs_ir.clone()?;
+    let prog_name = if d.prog != 0 {
+        d.prog
+    } else {
+        ctx.local.cur_prog
+    };
+    let Some(prog) = ctx.programs.program(prog_name).cloned() else {
+        return None;
+    };
+    let Some(vs_ir) = prog.vs_ir.clone() else {
+        return None;
+    };
+    let Some(fs_ir) = prog.fs_ir.clone() else {
+        return None;
+    };
+    if d.indexed {
+        let has_index_source = if d.elem_buf == 0 {
+            !d.client_indices.is_empty()
+        } else {
+            d.buffers
+                .iter()
+                .find(|buffer| buffer.name == d.elem_buf)
+                .is_some_and(|buffer| !buffer.data.is_empty())
+                || ctx.buffers.has_data(d.elem_buf)
+        };
+        if !has_index_source {
+            hl_log::hl_warn!(
+                hl_log::tag::GL,
+                "dropping indexed draw without captured index data buffer={} offset={} count={} type={:#x}",
+                d.elem_buf,
+                d.index_offset,
+                d.count,
+                d.index_type
+            );
+            return None;
+        }
+    }
     let vdecl = crate::adapter::glsl::Source::new(&prog.vs_src).vertex_attrs();
     let ndecl = vdecl.len();
     let VertexLowering {
@@ -44,13 +80,14 @@ pub(super) fn lower_draw_n(
         slot_stride,
         slot_base,
         slot_ir,
+        slot_bytes,
         attr_slot,
         nvd,
         client_slots,
         expanded_indices,
         index_ir,
-    } = lower_vertices(ctx, &d, cmds);
-    let texbinds = lower_textures(ctx, &d, &prog, cmds, fbo_tex_ir);
+    } = lower_vertices(ctx, &prog, &d, cmds).ok()?;
+    let texbinds = lower_textures(ctx, &d, &prog, cmds, fbo_tex_ir, snapshots).ok()?;
     let has_u = prog.has_uniforms();
     let has_bg = has_u || !texbinds.is_empty();
 
@@ -64,36 +101,93 @@ pub(super) fn lower_draw_n(
     // program costs ZERO host naga compiles after the first sight. Before this cache the builder minted fresh
     // ids + re-emitted `CreateShader` for the SAME program on every draw (a GTK frame reuses ~11 programs
     // across ~260 draws → ~520 redundant compiles). See `GlContext::program_shader_ir`.
-    let flip_samplers: Vec<String> = texbinds
+    // Chrome's Wayland/GBM path does not render its scanout image through framebuffer 0 or
+    // `eglSwapBuffers`: it attaches an imported EGLImage to a non-zero FBO and publishes that image at
+    // `glFlush`. Such an external target has the same top-left host-surface row contract as the default
+    // window framebuffer, so it needs the same clip/sampler/winding specialization.
+    let present_target = presents(ctx, d.fbo, d.target);
+    let sample_transforms: Vec<(String, bool, [u32; 4])> = texbinds
         .iter()
-        .filter(|binding| binding.flip_y)
-        .map(|binding| binding.sampler.clone())
+        .filter(|binding| {
+            binding.flip_y
+                || binding.swizzle
+                    != [
+                        crate::model::glconst::GL_RED,
+                        crate::model::glconst::GL_GREEN,
+                        crate::model::glconst::GL_BLUE,
+                        crate::model::glconst::GL_ALPHA,
+                    ]
+        })
+        .map(|binding| (binding.sampler.clone(), binding.flip_y, binding.swizzle))
         .collect();
-    let flip_variant = flip_samplers
-        .iter()
-        .fold(0xcbf2_9ce4_8422_2325u64, |mut hash, name| {
+    let uses_frag_coord = prog.fs_src.contains("gl_FragCoord");
+    let origin_upper_left = prog.fs_src.contains("origin_upper_left");
+    let pixel_center_integer = prog.fs_src.contains("pixel_center_integer");
+    let correct_frag_coord =
+        uses_frag_coord && (!origin_upper_left || pixel_center_integer) && th > 0;
+    // A WGPU present texture exposes row zero at the host surface's top. OpenGL's default framebuffer
+    // exposes window coordinates from the bottom, so direct presentation draws require one clip-space
+    // reflection. This is independent from sampling a rendered FBO: that texture still needs its own
+    // bottom-left-to-top-left coordinate conversion even when the destination is presented.
+    let mut sample_variant = sample_transforms.iter().fold(
+        0xcbf2_9ce4_8422_2325u64,
+        |mut hash, (name, flip, swizzle)| {
             for byte in name.bytes() {
                 hash ^= byte as u64;
                 hash = hash.wrapping_mul(0x100_0000_01b3);
             }
+            hash ^= u64::from(*flip);
+            hash = hash.wrapping_mul(0x100_0000_01b3);
+            for component in swizzle {
+                hash ^= u64::from(*component);
+                hash = hash.wrapping_mul(0x100_0000_01b3);
+            }
             hash
-        });
-    let (vs_id, fs_id, shaders_new) = ctx.program_shader_ir(prog_name, flip_variant, prog.link_gen);
+        },
+    );
+    if correct_frag_coord {
+        sample_variant ^= th as u64;
+        sample_variant = sample_variant.wrapping_mul(0x100_0000_01b3);
+        sample_variant ^= u64::from(origin_upper_left);
+        sample_variant = sample_variant.wrapping_mul(0x100_0000_01b3);
+        sample_variant ^= u64::from(pixel_center_integer);
+    }
+    sample_variant ^= u64::from(present_target) << 63;
+    let (vs_id, fs_id, shaders_new) = ctx
+        .program_shader_ir(prog_name, sample_variant, prog.link_gen)
+        .ok()?;
     if shaders_new {
+        let vs_ir = if present_target {
+            use hl_gpu::protocol::model::kernel::GlslDescriptor;
+            let mut descriptor = GlslDescriptor::from_words(&vs_ir)
+                .and_then(|result| result.ok())
+                .expect("linked GL vertex shader is a GLSL descriptor");
+            descriptor.source =
+                crate::adapter::glsl::Source::new(&descriptor.source).present_coordinates();
+            descriptor.to_words()
+        } else {
+            vs_ir
+        };
         cmds.push(Cmd::CreateShader {
             id: vs_id,
             kind: ShaderPayloadKind::Glsl,
             spirv: vs_ir,
         });
-        let fs_ir = if flip_samplers.is_empty() {
+        let fs_ir = if sample_transforms.is_empty() && !correct_frag_coord {
             fs_ir
         } else {
             use hl_gpu::protocol::model::kernel::GlslDescriptor;
             let mut descriptor = GlslDescriptor::from_words(&fs_ir)
                 .and_then(|result| result.ok())
                 .expect("linked GL fragment shader is a GLSL descriptor");
-            descriptor.source = crate::adapter::glsl::Source::new(&descriptor.source)
-                .flip_render_target_samplers(&flip_samplers);
+            if !sample_transforms.is_empty() {
+                descriptor.source = crate::adapter::glsl::Source::new(&descriptor.source)
+                    .transform_texture_samplers(&sample_transforms);
+            }
+            if correct_frag_coord {
+                descriptor.source = crate::adapter::glsl::Source::new(&descriptor.source)
+                    .fragment_coordinates(th, origin_upper_left, pixel_center_integer);
+            }
             descriptor.to_words()
         };
         cmds.push(Cmd::CreateShader {
@@ -105,18 +199,16 @@ pub(super) fn lower_draw_n(
 
     // Locations fed by an appended client slot (see below) are NOT folded into a VBO slot's layout.
     let mut client_loc = [false; crate::model::program::MAX_ATTR];
-    for ca in &d.client_vbufs {
-        if ca.location < crate::model::program::MAX_ATTR {
-            client_loc[ca.location] = true;
+    for slot in &client_slots {
+        if (slot.location as usize) < crate::model::program::MAX_ATTR {
+            client_loc[slot.location as usize] = true;
         }
     }
-    // With client slots present, DON'T mint the phantom slot-0 (the `nslot == 0` fallback): the client
-    // slots ARE the vertex buffers. Without client slots this stays `nslot.max(1)` — byte-identical VBO path.
-    let nvb = if client_slots.is_empty() {
-        nslot.max(1)
-    } else {
-        nslot
-    };
+    // Declare exactly the vertex-buffer slots that the draw binds. In particular, a fullscreen
+    // `gl_VertexID`/`gl_InstanceID` draw has no vertex buffers: inventing an empty slot 0 makes wgpu require
+    // `SetVertexBuffer(0)` even though the shader consumes no vertex attributes, and rejects the pass with
+    // `MissingVertexBuffer`.
+    let nvb = nslot;
     let mut vbs: Vec<VertexLayout> = Vec::with_capacity(nvb + client_slots.len());
     for sl in 0..nvb {
         // The base offset hoisted into this slot's bind offset (see `slot_base`); subtracted from each
@@ -124,6 +216,9 @@ pub(super) fn lower_draw_n(
         let base = if sl < nslot { slot_base[sl] } else { 0 };
         let mut attrs = Vec::new();
         for l in 0..nvd {
+            if prog.vertex_attr_components(l).is_none() {
+                continue;
+            }
             if l < crate::model::program::MAX_ATTR && client_loc[l] {
                 continue; // fed by an appended client slot, not this VBO slot
             }
@@ -208,7 +303,7 @@ pub(super) fn lower_draw_n(
     // MSAA sample count the pipeline must declare so a multisampled attachment actually resolves (the GL
     // analogue of the Vulkan `sample_count` drop). Sourced from the bound draw framebuffer's attachments;
     // see `framebuffer_sample_count` for this model's (single-sampled-only) status.
-    let sample_count = ctx.framebuffers.sample_count(d.fbo);
+    let sample_count = ctx.local.framebuffers.sample_count(d.fbo);
     // One color target for the ordinary path; `n_color_targets` identical targets for a `glDrawBuffers` MRT
     // pass (each attachment shares the draw's format + blend). The fragment shader's `layout(location = k)`
     // outputs map onto target `k` (see `adapter::glsl::translate_render`).
@@ -224,7 +319,12 @@ pub(super) fn lower_draw_n(
     } else {
         0
     };
-    let front_face = Pipeline::front_face(d.front_face);
+    // Reflecting clip Y reverses triangle winding. Swap the declared front face for present-target
+    // pipelines so GL culling remains unchanged.
+    let mut front_face = Pipeline::front_face(d.front_face);
+    if present_target {
+        front_face ^= 1;
+    }
     // Program-keyed pipeline residency: the render pipeline depends on the program's shaders PLUS this draw's
     // fixed-function + vertex-layout state, so the cache key folds a signature of that state in. A program
     // re-drawn with the SAME state reuses its resident pipeline (no `CreateRenderPipeline`); a genuinely new
@@ -237,8 +337,36 @@ pub(super) fn lower_draw_n(
         cull,
         front_face,
         sample_count,
-    ) ^ flip_variant.rotate_left(17);
-    let (pipeline_ir, pipe_new) = ctx.program_pipeline_ir(prog_name, state_key, prog.link_gen);
+    ) ^ sample_variant.rotate_left(17);
+    let (pipeline_ir, pipe_new) = ctx
+        .program_pipeline_ir(prog_name, state_key, prog.link_gen)
+        .ok()?;
+    let mut vertex_bindings = slot_ir
+        .iter()
+        .zip(&slot_bytes)
+        .zip(&slot_base)
+        .map(|((&buffer, &bytes), &offset)| range::VertexBinding {
+            buffer,
+            bytes,
+            offset: u64::from(offset),
+        })
+        .collect::<Vec<_>>();
+    vertex_bindings.extend(client_slots.iter().map(|slot| range::VertexBinding {
+        buffer: slot.ir,
+        bytes: slot.bytes,
+        offset: 0,
+    }));
+    range::VertexDraw {
+        pipeline: pipeline_ir,
+        layouts: &vbs,
+        bindings: &vertex_bindings,
+        indexed: d.indexed,
+        first_vertex: d.first.max(0) as u32,
+        vertex_count: d.count.max(0) as u32,
+        first_instance: d.first_instance,
+        instance_count: d.instance_count,
+    }
+    .trace();
     if pipe_new {
         cmds.push(Cmd::CreateRenderPipeline(
             pipeline_ir,
@@ -305,7 +433,7 @@ pub(super) fn lower_draw_n(
     }
     let mut uniform_ir = 0u32;
     if has_u {
-        uniform_ir = ctx.alloc_buffer_ir();
+        uniform_ir = ctx.alloc_buffer_ir().ok()?;
         cmds.push(Cmd::CreateBuffer(
             uniform_ir,
             BufferDesc {
@@ -322,7 +450,7 @@ pub(super) fn lower_draw_n(
     }
     let mut bind_group_ir = 0u32;
     if has_bg {
-        bind_group_ir = ctx.alloc_bind_group_ir();
+        bind_group_ir = ctx.alloc_bind_group_ir().ok()?;
         // Binding scheme (single wgpu bind-group namespace, matching `adapter::glsl`'s emitted
         // `layout(binding=)` — naga derives the pipeline's bind-group layout from that GLSL, so these
         // MUST agree): the uniform block owns binding 0; sampler `k` (declaration index) owns TEXTURE
@@ -378,7 +506,7 @@ pub(super) fn lower_draw_n(
     let mut ops: Vec<Enc> = Vec::new();
     ops.push(Enc::SetPipeline(pipeline_ir));
     ops.push(emit_viewport(&d, tw, th));
-    ops.push(emit_scissor(&d, tw, th));
+    ops.push(emit_scissor(&d, tw, th, present_target));
     // Dynamic stencil reference — the value the pipeline's stencil compare tests against and a `GL_REPLACE`
     // op writes. Emitted per-draw inside the pass like viewport/scissor (the compare/ops/masks live
     // statically on the pipeline's `DepthState`), so two draws with different `glStencilFunc` references
@@ -459,6 +587,17 @@ pub(super) fn lower_draw_n(
             base_vertex,
             first_instance: d.first_instance,
         });
+    } else if d.indexed {
+        hl_log::hl_warn!(
+            hl_log::tag::GL,
+            "dropping indexed draw whose index source could not be lowered buffer={} offset={} count={} \
+             type={:#x}",
+            d.elem_buf,
+            d.index_offset,
+            d.count,
+            d.index_type
+        );
+        return None;
     } else {
         ops.push(Enc::Draw {
             vertex_count: d.count as u32,

@@ -54,7 +54,7 @@ impl GpuExecutor for FakeExecutor {
                 Cmd::DestroyBuffer(id) => {
                     res.buffers.remove(*id)?;
                 }
-                Cmd::CreateSurface(id, _) => res.surfaces.insert(*id, native())?,
+                Cmd::CreateSurface(id, desc) => res.surfaces.insert(*id, Box::new(desc.clone()))?,
                 Cmd::DestroySurface(id) => {
                     res.surfaces.remove(*id)?;
                 }
@@ -62,10 +62,24 @@ impl GpuExecutor for FakeExecutor {
                 Cmd::DestroyFence(id) => {
                     res.fences.remove(*id)?;
                 }
-                Cmd::Present { surface, texture } => presents.push(Presentation {
-                    surface: SurfaceId(*surface),
-                    texture: TextureId(*texture),
-                }),
+                Cmd::Present {
+                    surface,
+                    texture,
+                    serial,
+                } => {
+                    let token = res
+                        .surfaces
+                        .get(*surface)?
+                        .downcast_ref::<SurfaceDesc>()
+                        .expect("fake surface stores its descriptor")
+                        .token;
+                    presents.push(Presentation {
+                        surface: SurfaceId(*surface),
+                        token,
+                        texture: TextureId(*texture),
+                        serial: *serial,
+                    });
+                }
                 _ => {}
             }
         }

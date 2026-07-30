@@ -5,6 +5,7 @@
 //! (`VertexFormat`, blend factors, compare functions) are carried as raw `u32` exactly as on the wire.
 
 use super::enums::{AddressMode, Filter, TextureAspect, TextureDim, TextureFormat, Topology};
+use super::error::{GpuError, Result};
 
 // ---------------------------------------------------------------------------------------------------
 // resource descriptors
@@ -31,6 +32,19 @@ pub struct TextureDesc {
     pub label: String,
 }
 
+/// A typed view into an existing texture's mip and layer range.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TextureViewDesc {
+    pub texture: u32,
+    pub dim: TextureDim,
+    pub format: TextureFormat,
+    pub aspect: TextureAspect,
+    pub base_mip: u32,
+    pub mip_count: u32,
+    pub base_layer: u32,
+    pub layer_count: u32,
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct SamplerDesc {
     pub min_filter: Filter,
@@ -39,6 +53,26 @@ pub struct SamplerDesc {
     pub address_u: AddressMode,
     pub address_v: AddressMode,
     pub address_w: AddressMode,
+    pub lod_min_clamp: f32,
+    pub lod_max_clamp: f32,
+    /// Neutral [`super::enums::compare`] value. `None` creates a non-comparison sampler.
+    pub compare: Option<u32>,
+}
+
+impl Default for SamplerDesc {
+    fn default() -> Self {
+        Self {
+            min_filter: Filter::Nearest,
+            mag_filter: Filter::Nearest,
+            mip_filter: Filter::Nearest,
+            address_u: AddressMode::ClampToEdge,
+            address_v: AddressMode::ClampToEdge,
+            address_w: AddressMode::ClampToEdge,
+            lod_min_clamp: 0.0,
+            lod_max_clamp: 32.0,
+            compare: None,
+        }
+    }
 }
 
 /// A named shader entry point inside a module.
@@ -128,6 +162,11 @@ pub struct DepthState {
     pub stencil_read_mask: u32,
     /// Bits of the stencil value a pass/fail op may write (WebGPU `stencilWriteMask`).
     pub stencil_write_mask: u32,
+    /// Fixed depth bias. `constant` uses wgpu's integer depth-bias units; `slope_scale` scales the maximum
+    /// depth slope; `clamp` limits the resulting bias when the host supports depth-bias clamping.
+    pub bias_constant: i32,
+    pub bias_slope_scale: f32,
+    pub bias_clamp: f32,
 }
 
 impl DepthState {
@@ -143,6 +182,9 @@ impl DepthState {
             stencil_back: StencilFaceState::DISABLED,
             stencil_read_mask: 0xffff_ffff,
             stencil_write_mask: 0xffff_ffff,
+            bias_constant: 0,
+            bias_slope_scale: 0.0,
+            bias_clamp: 0.0,
         }
     }
 }
@@ -174,12 +216,128 @@ pub struct ComputePipelineDesc {
     pub label: String,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct RenderMultisample {
+    pub mask: u64,
+    /// Force full per-sample fragment execution. This safely satisfies any Vulkan `minSampleShading`
+    /// request because full rate is at least the requested minimum.
+    pub sample_shading: bool,
+}
+
+impl Default for RenderMultisample {
+    fn default() -> Self {
+        Self {
+            mask: u64::MAX,
+            sample_shading: false,
+        }
+    }
+}
+
+/// Authoritative descriptor cardinality from the API pipeline layout. Shader reflection still supplies
+/// binding kind and stage visibility; it cannot reliably recover Vulkan descriptor-array counts from
+/// SPIR-V because descriptor arrays and fixed-size buffer payload arrays share the same Naga shape.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct PipelineBinding {
+    pub group: u32,
+    pub binding: u32,
+    pub count: u32,
+    pub kind: PipelineBindingKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PipelineBindingKind {
+    UniformBuffer,
+    StorageBuffer,
+    SampledTexture,
+    StorageTexture,
+    Sampler,
+    CombinedImageSampler,
+}
+
+impl PipelineBindingKind {
+    pub fn to_u32(self) -> u32 {
+        self as u32
+    }
+
+    pub fn from_u32(value: u32) -> Result<Self> {
+        match value {
+            0 => Ok(Self::UniformBuffer),
+            1 => Ok(Self::StorageBuffer),
+            2 => Ok(Self::SampledTexture),
+            3 => Ok(Self::StorageTexture),
+            4 => Ok(Self::Sampler),
+            5 => Ok(Self::CombinedImageSampler),
+            _ => Err(GpuError::BadTag(value)),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct PipelineLayout {
+    pub bindings: Vec<PipelineBinding>,
+}
+
+impl PipelineLayout {
+    /// Native scalar binding for one element of a fixed-size descriptor array.
+    ///
+    /// Element zero retains the guest binding. Remaining elements occupy a deterministic,
+    /// collision-free tail after the group's greatest guest binding. The mapping depends on the
+    /// complete authoritative layout, so every shader stage and descriptor-set encoder derives the
+    /// same slots without extending the wire protocol.
+    pub fn scalar_binding(&self, group: u32, binding: u32, element: u32) -> Result<u32> {
+        let declared = self
+            .bindings
+            .iter()
+            .find(|item| item.group == group && item.binding == binding)
+            .ok_or(GpuError::Invalid(
+                "descriptor binding is absent from pipeline layout",
+            ))?;
+        if element >= declared.count {
+            return Err(GpuError::OutOfBounds);
+        }
+        if element == 0 {
+            return Ok(binding);
+        }
+        let tail = self
+            .bindings
+            .iter()
+            .filter(|item| item.group == group)
+            .map(|item| item.binding)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or(GpuError::OutOfBounds)?;
+        let preceding = self
+            .bindings
+            .iter()
+            .filter(|item| item.group == group && item.binding < binding && item.count > 1)
+            .try_fold(0u32, |total, item| {
+                total
+                    .checked_add(item.count - 1)
+                    .ok_or(GpuError::OutOfBounds)
+            })?;
+        tail.checked_add(preceding)
+            .and_then(|slot| slot.checked_add(element - 1))
+            .ok_or(GpuError::OutOfBounds)
+    }
+}
+
 /// A single binding within a bind group.
 #[derive(Clone, PartialEq, Debug)]
 pub enum BindResource {
     Buffer { id: u32, offset: u64, size: u64 },
     Texture { id: u32 },
     Sampler { id: u32 },
+    BufferArray { elements: Vec<BufferBinding> },
+    TextureArray { ids: Vec<u32> },
+    SamplerArray { ids: Vec<u32> },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BufferBinding {
+    pub id: u32,
+    pub offset: u64,
+    pub size: u64,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -195,13 +353,63 @@ pub struct BindGroupDesc {
     pub entries: Vec<BindEntry>,
 }
 
+/// Unguessable presentation-domain identity supplied by the host surface owner.
+///
+/// This is distinct from [`super::id::SurfaceId`], which names a guest GPU resource only.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct SurfaceToken(std::num::NonZeroU64);
+
+impl SurfaceToken {
+    pub fn new(value: u64) -> Result<Self> {
+        std::num::NonZeroU64::new(value)
+            .map(Self)
+            .ok_or(GpuError::Invalid("surface token is zero"))
+    }
+
+    pub fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+impl TryFrom<u64> for SurfaceToken {
+    type Error = GpuError;
+
+    fn try_from(value: u64) -> Result<Self> {
+        Self::new(value)
+    }
+}
+
+/// Nonzero presentation sequence used to pair a produced image with its compositor receipt.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct FrameSerial(std::num::NonZeroU64);
+
+impl FrameSerial {
+    pub fn new(value: u64) -> Result<Self> {
+        std::num::NonZeroU64::new(value)
+            .map(Self)
+            .ok_or(GpuError::Invalid("frame serial is zero"))
+    }
+
+    pub fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+impl TryFrom<u64> for FrameSerial {
+    type Error = GpuError;
+
+    fn try_from(value: u64) -> Result<Self> {
+        Self::new(value)
+    }
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct SurfaceDesc {
     pub width: u32,
     pub height: u32,
     pub format: TextureFormat,
-    /// HLP surface id this GPU surface presents through.
-    pub hlp_surface: u32,
+    /// Host presentation identity; independent from the guest resource id in `CreateSurface`.
+    pub token: SurfaceToken,
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -264,4 +472,52 @@ pub struct DepthAttachment {
     /// (`Depth24PlusStencil8`); ignored for a depth-only format. Defaults to `0` — the value the executor
     /// clears the stencil plane to for a pass that marks it (see the executor's `run_render_pass`).
     pub clear_stencil: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn descriptor_arrays_scalarize_after_guest_bindings_without_collisions() {
+        let layout = PipelineLayout {
+            bindings: vec![
+                PipelineBinding {
+                    group: 0,
+                    binding: 1,
+                    count: 3,
+                    kind: PipelineBindingKind::UniformBuffer,
+                },
+                PipelineBinding {
+                    group: 0,
+                    binding: 4,
+                    count: 1,
+                    kind: PipelineBindingKind::StorageBuffer,
+                },
+                PipelineBinding {
+                    group: 0,
+                    binding: 7,
+                    count: 2,
+                    kind: PipelineBindingKind::SampledTexture,
+                },
+                PipelineBinding {
+                    group: 1,
+                    binding: 1,
+                    count: 2,
+                    kind: PipelineBindingKind::Sampler,
+                },
+            ],
+        };
+
+        assert_eq!(layout.scalar_binding(0, 1, 0).unwrap(), 1);
+        assert_eq!(layout.scalar_binding(0, 1, 1).unwrap(), 8);
+        assert_eq!(layout.scalar_binding(0, 1, 2).unwrap(), 9);
+        assert_eq!(layout.scalar_binding(0, 7, 0).unwrap(), 7);
+        assert_eq!(layout.scalar_binding(0, 7, 1).unwrap(), 10);
+        assert_eq!(layout.scalar_binding(1, 1, 1).unwrap(), 2);
+        assert!(matches!(
+            layout.scalar_binding(0, 7, 2),
+            Err(GpuError::OutOfBounds)
+        ));
+    }
 }

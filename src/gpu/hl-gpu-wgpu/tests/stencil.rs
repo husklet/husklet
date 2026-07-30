@@ -149,6 +149,9 @@ fn run(exec: &mut WgpuExecutor, stencil_enabled: bool) -> Vec<u8> {
         stencil_back: face(compare::ALWAYS, stencil_op::REPLACE),
         stencil_read_mask: 0xFF,
         stencil_write_mask: 0xFF,
+        bias_constant: 0,
+        bias_slope_scale: 0.0,
+        bias_clamp: 0.0,
     };
     // Pass B pipeline: test EQUAL(ref) when enabled; fully disabled (IGNORE + zero masks) for the control.
     let test_depth = if stencil_enabled {
@@ -160,6 +163,9 @@ fn run(exec: &mut WgpuExecutor, stencil_enabled: bool) -> Vec<u8> {
             stencil_back: face(compare::EQUAL, stencil_op::KEEP),
             stencil_read_mask: 0xFF,
             stencil_write_mask: 0x00,
+            bias_constant: 0,
+            bias_slope_scale: 0.0,
+            bias_clamp: 0.0,
         }
     } else {
         DepthState {
@@ -170,6 +176,9 @@ fn run(exec: &mut WgpuExecutor, stencil_enabled: bool) -> Vec<u8> {
             stencil_back: StencilFaceState::DISABLED,
             stencil_read_mask: 0x00,
             stencil_write_mask: 0x00,
+            bias_constant: 0,
+            bias_slope_scale: 0.0,
+            bias_clamp: 0.0,
         }
     };
 

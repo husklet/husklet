@@ -1,4 +1,7 @@
 use super::*;
+use hl_gl::model::texture::SharedPixels;
+use hl_gpu::protocol::model::enums::{texture_usage, TextureFormat};
+use std::sync::Arc;
 
 #[test]
 fn textured_quad_encoder_sequence_and_present() {
@@ -66,6 +69,269 @@ fn textured_quad_bind_group_binds_texture_and_sampler() {
         .any(|e| matches!(e.resource, BindResource::Sampler { .. })));
 }
 
+#[test]
+fn draw_keeps_sampled_texture_generation_alive_until_deferred_lowering() {
+    let mut context = ctx_640x480();
+    let mut sink = RecordingSink::with_full_caps();
+    record_textured_quad(&mut context);
+
+    let texture = context.texture_at(0);
+    assert_ne!(texture, 0);
+    assert!(context.delete_texture(texture));
+
+    assert!(swap::swap_buffers(&mut context, &mut sink).unwrap());
+    let batch = &sink.batches[0];
+    let sampled = batch
+        .iter()
+        .filter_map(|command| match command {
+            Cmd::CreateTexture(_, descriptor) if descriptor.usage & texture_usage::SAMPLED != 0 => {
+                Some(descriptor)
+            }
+            _ => None,
+        })
+        .find(|descriptor| descriptor.width == 2 && descriptor.height == 2);
+
+    assert!(
+        sampled.is_some(),
+        "a draw must sample the texture generation bound when it was recorded, even if the GL name is \
+         deleted before the deferred frame is lowered"
+    );
+}
+
+#[test]
+fn draws_keep_pixels_and_sampler_state_from_each_recorded_texture_generation() {
+    let mut context = ctx_640x480();
+    let mut sink = RecordingSink::with_full_caps();
+    record_textured_quad(&mut context);
+
+    record::tex_sub_image_2d(&mut context, GL_TEXTURE_2D, 0, 0, 0, 2, 2, &[0xCD; 16]);
+    record::tex_parameter(&mut context, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    record::tex_parameter(&mut context, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    record::draw_arrays(&mut context, GL_TRIANGLES, 0, 6);
+
+    assert!(swap::swap_buffers(&mut context, &mut sink).unwrap());
+    let batch = &sink.batches[0];
+    let uploads = batch
+        .iter()
+        .filter_map(|command| match command {
+            Cmd::WriteBuffer { data, .. } if data.len() == 16 => Some(data.as_slice()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(uploads.contains(&[0xAB; 16].as_slice()));
+    assert!(uploads.contains(&[0xCD; 16].as_slice()));
+
+    let samplers = batch
+        .iter()
+        .filter_map(|command| match command {
+            Cmd::CreateSampler(_, descriptor) => Some(descriptor),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(samplers
+        .iter()
+        .any(|sampler| sampler.min_filter == hl_gpu::protocol::model::enums::Filter::Linear));
+    assert!(samplers
+        .iter()
+        .any(|sampler| sampler.min_filter == hl_gpu::protocol::model::enums::Filter::Nearest));
+}
+
+#[test]
+fn identical_cpu_subimage_reuses_the_retained_draw_upload() {
+    let mut context = ctx_640x480();
+    let mut sink = RecordingSink::with_full_caps();
+    record_textured_quad(&mut context);
+
+    let texture = context.texture_at(0);
+    let before = context.textures.get(texture).expect("texture");
+    let generation = before.gen;
+    let pixels = Arc::clone(&before.data);
+
+    record::tex_sub_image_2d(&mut context, GL_TEXTURE_2D, 0, 0, 0, 2, 2, &[0xAB; 16]);
+
+    let after = context.textures.get(texture).expect("texture");
+    assert_eq!(after.gen, generation);
+    assert!(Arc::ptr_eq(&after.data, &pixels));
+
+    record::draw_arrays(&mut context, GL_TRIANGLES, 0, 6);
+    assert!(swap::swap_buffers(&mut context, &mut sink).unwrap());
+    assert_eq!(
+        sink.batches[0]
+            .iter()
+            .filter(|command| {
+                matches!(command, Cmd::WriteBuffer { data, .. } if data == &[0xAB; 16])
+            })
+            .count(),
+        1,
+        "draws on both sides of an identical upload must share one texture residency upload"
+    );
+}
+
+#[test]
+fn identical_subimage_still_replaces_gpu_authority() {
+    let mut context = ctx_640x480();
+    record_textured_quad(&mut context);
+
+    let texture = context.texture_at(0);
+    let generation = context.textures.get(texture).expect("texture").gen;
+    context.textures.mark_rendered(texture, generation);
+    let pixels = Arc::clone(&context.textures.get(texture).expect("texture").data);
+
+    record::tex_sub_image_2d(&mut context, GL_TEXTURE_2D, 0, 0, 0, 2, 2, &[0xAB; 16]);
+
+    let updated = context.textures.get(texture).expect("texture");
+    assert_ne!(updated.gen, generation);
+    assert!(!Arc::ptr_eq(&updated.data, &pixels));
+    assert!(!updated.gpu_authoritative());
+}
+
+#[test]
+fn identical_shared_subimage_still_publishes_a_revision() {
+    let mut context = ctx_640x480();
+    record_textured_quad(&mut context);
+
+    let texture = context.texture_at(0);
+    let pixels = Arc::clone(&context.textures.get(texture).expect("texture").data);
+    let storage = Arc::new(SharedPixels::new(Arc::clone(&pixels)));
+    assert!(context.textures.bind_shared(texture, Arc::clone(&storage)));
+    let generation = context.textures.get(texture).expect("texture").gen;
+    let revision = storage.version();
+
+    record::tex_sub_image_2d(&mut context, GL_TEXTURE_2D, 0, 0, 0, 2, 2, &[0xAB; 16]);
+
+    assert_ne!(
+        context.textures.get(texture).expect("texture").gen,
+        generation
+    );
+    assert!(storage.version() > revision);
+}
+
+#[test]
+fn deleting_and_recreating_a_texture_name_preserves_both_recorded_objects() {
+    let mut context = ctx_640x480();
+    let mut sink = RecordingSink::with_full_caps();
+    record_textured_quad(&mut context);
+
+    let name = context.texture_at(0);
+    let old_generation = context.textures.get(name).unwrap().gen;
+    assert!(context.delete_texture(name));
+    record::bind_texture(&mut context, GL_TEXTURE_2D, name);
+    record::tex_image_2d(&mut context, 2, 2, &[0xEF; 16]);
+    let new_generation = context.textures.get(name).unwrap().gen;
+    assert_ne!(old_generation, new_generation);
+    record::draw_arrays(&mut context, GL_TRIANGLES, 0, 6);
+
+    assert!(swap::swap_buffers(&mut context, &mut sink).unwrap());
+    let uploads = sink.batches[0]
+        .iter()
+        .filter_map(|command| match command {
+            Cmd::WriteBuffer { data, .. } if data.len() == 16 => Some(data.as_slice()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(uploads.contains(&[0xAB; 16].as_slice()));
+    assert!(uploads.contains(&[0xEF; 16].as_slice()));
+}
+
+#[test]
+fn sampled_r8_shadow_uses_its_canonical_rgba_layout() {
+    let mut context = ctx_640x480();
+    let mut sink = RecordingSink::with_full_caps();
+    record_textured_quad(&mut context);
+
+    let texture = context.texture_at(0);
+    record::tex_image_2d_format(
+        &mut context,
+        2,
+        2,
+        &[10, 0, 0, 255, 20, 0, 0, 255, 30, 0, 0, 255, 40, 0, 0, 255],
+        TextureFormat::R8Unorm,
+    );
+    assert_eq!(context.texture_at(0), texture);
+    record::draw_arrays(&mut context, GL_TRIANGLES, 0, 6);
+
+    assert!(swap::swap_buffers(&mut context, &mut sink).unwrap());
+    let batch = &sink.batches[0];
+    let sampled = batch
+        .iter()
+        .filter_map(|command| match command {
+            Cmd::CreateTexture(_, descriptor)
+                if descriptor.usage & texture_usage::SAMPLED != 0
+                    && descriptor.width == 2
+                    && descriptor.height == 2 =>
+            {
+                Some(descriptor)
+            }
+            _ => None,
+        })
+        .last()
+        .expect("sampled texture");
+    assert_eq!(
+        sampled.format,
+        TextureFormat::Rgba8Unorm,
+        "the native format must match the canonical four-byte CPU shadow"
+    );
+    assert!(submit_ops(batch).iter().any(|operation| matches!(
+        operation,
+        Enc::CopyBufferToTexture {
+            bytes_per_row: 8,
+            width: 2,
+            height: 2,
+            ..
+        }
+    )));
+}
+
+#[test]
+fn unbound_sampler_uses_placeholder_texture_and_sampler() {
+    const VERTEX: &str = "attribute vec2 position;
+varying vec2 uv;
+void main() { uv = position; gl_Position = vec4(position, 0.0, 1.0); }";
+    const FRAGMENT: &str = "precision mediump float;
+varying vec2 uv;
+uniform sampler2D image;
+void main() { gl_FragColor = texture2D(image, uv); }";
+
+    let mut context = ctx_640x480();
+    let mut sink = RecordingSink::with_full_caps();
+    let vertex = record::create_shader(&mut context, GL_VERTEX_SHADER);
+    record::shader_source(&mut context, vertex, VERTEX);
+    record::compile_shader(&mut context, vertex);
+    let fragment = record::create_shader(&mut context, GL_FRAGMENT_SHADER);
+    record::shader_source(&mut context, fragment, FRAGMENT);
+    record::compile_shader(&mut context, fragment);
+    let program = record::create_program(&mut context);
+    record::attach_shader(&mut context, program, vertex);
+    record::attach_shader(&mut context, program, fragment);
+    assert!(record::link_program(&mut context, program));
+    record::use_program(&mut context, program);
+    let buffer = context.buffers.gen();
+    record::bind_buffer(&mut context, GL_ARRAY_BUFFER, buffer);
+    record::buffer_data(&mut context, GL_ARRAY_BUFFER, &[0; 24], 0x88E4);
+    record::vertex_attrib_pointer(&mut context, 0, 2, GL_FLOAT, false, 8, 0);
+    record::enable_vertex_attrib(&mut context, 0);
+    record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
+
+    assert!(swap::swap_buffers(&mut context, &mut sink).unwrap());
+    let bind_group = sink.batches[0]
+        .iter()
+        .find_map(|command| match command {
+            Cmd::CreateBindGroup(_, descriptor) => Some(descriptor),
+            _ => None,
+        })
+        .expect("bind group");
+
+    assert_eq!(bind_group.entries.len(), 2);
+    assert!(matches!(
+        bind_group.entries[0].resource,
+        BindResource::Texture { .. }
+    ));
+    assert!(matches!(
+        bind_group.entries[1].resource,
+        BindResource::Sampler { .. }
+    ));
+}
+
 // GskGpu forwards its GLSL-ES VERBATIM to the host executor's ES route, which numbers samplers by a
 // running `layout(binding=)` counter over EVERY host-recognized `uniform <samplerType> NAME;` in fragment
 // text order — INCLUDING the inactive `samplerExternalOES` declarations of GskGpu's
@@ -111,7 +377,11 @@ in vec2 vUV;\nout vec4 fragColor;\nvoid main(){ fragColor = texture(GSK_TEXTURE0
     let prog = record::create_program(&mut c);
     record::attach_shader(&mut c, prog, vs);
     record::attach_shader(&mut c, prog, fs);
-    assert!(record::link_program(&mut c, prog));
+    assert!(
+        record::link_program(&mut c, prog),
+        "{}",
+        hl_gl::service::query::program_info_log(&c, prog)
+    );
     record::use_program(&mut c, prog);
 
     // The driver reflects three sampler2D samplers (external skipped + deduped), but their HOST bindings
@@ -314,5 +584,185 @@ void main(){ gl_FragColor = texture2D(uTex0, vUV) + texture2D(uTex1, vUV) + text
     assert_eq!(
         placeholder_creates, 1,
         "the 1x1 placeholder texture is created exactly once"
+    );
+}
+
+#[test]
+fn untouched_sampler_uniforms_all_default_to_texture_unit_zero() {
+    const VERTEX: &str =
+        "attribute vec2 position;\nvoid main(){ gl_Position = vec4(position, 0.0, 1.0); }\n";
+    const FRAGMENT: &str = "precision mediump float;\n\
+uniform sampler2D first;\nuniform sampler2D second;\n\
+void main(){ gl_FragColor = texture2D(first, vec2(0.0)) + texture2D(second, vec2(0.0)); }\n";
+
+    let mut context = ctx_640x480();
+    let mut sink = RecordingSink::with_full_caps();
+    let vertex = record::create_shader(&mut context, GL_VERTEX_SHADER);
+    record::shader_source(&mut context, vertex, VERTEX);
+    record::compile_shader(&mut context, vertex);
+    let fragment = record::create_shader(&mut context, GL_FRAGMENT_SHADER);
+    record::shader_source(&mut context, fragment, FRAGMENT);
+    record::compile_shader(&mut context, fragment);
+    let program = record::create_program(&mut context);
+    record::attach_shader(&mut context, program, vertex);
+    record::attach_shader(&mut context, program, fragment);
+    assert!(record::link_program(&mut context, program));
+    record::use_program(&mut context, program);
+
+    assert_eq!(
+        context
+            .programs
+            .program(program)
+            .expect("linked program")
+            .samp_units,
+        vec![0, 0],
+        "GLES initializes every sampler uniform to texture unit zero"
+    );
+
+    let texture = context.textures.gen();
+    context.active_texture(GL_TEXTURE0);
+    record::bind_texture(&mut context, GL_TEXTURE_2D, texture);
+    record::tex_image_2d(&mut context, 1, 1, &[0xAB; 4]);
+    let vertex_buffer = context.buffers.gen();
+    record::bind_buffer(&mut context, GL_ARRAY_BUFFER, vertex_buffer);
+    record::buffer_data(&mut context, GL_ARRAY_BUFFER, &[0; 24], 0x88E4);
+    record::vertex_attrib_pointer(&mut context, 0, 2, GL_FLOAT, false, 8, 0);
+    record::enable_vertex_attrib(&mut context, 0);
+    record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
+
+    assert!(swap::swap_buffers(&mut context, &mut sink).unwrap());
+    let texture_ids: Vec<u32> = sink.batches[0]
+        .iter()
+        .find_map(|command| match command {
+            Cmd::CreateBindGroup(_, descriptor) => Some(&descriptor.entries),
+            _ => None,
+        })
+        .expect("sampler bind group")
+        .iter()
+        .filter_map(|entry| match entry.resource {
+            BindResource::Texture { id } => Some(id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texture_ids.len(), 2);
+    assert_eq!(
+        texture_ids[0], texture_ids[1],
+        "two untouched samplers legally bind the same texture from unit zero"
+    );
+}
+
+#[test]
+fn fifth_sampler_is_reflected_snapshotted_and_lowered() {
+    let mut context = ctx_640x480();
+    let mut sink = RecordingSink::with_full_caps();
+    let vertex = record::create_shader(&mut context, GL_VERTEX_SHADER);
+    record::shader_source(
+        &mut context,
+        vertex,
+        "attribute vec2 position;\nvoid main(){ gl_Position = vec4(position, 0.0, 1.0); }\n",
+    );
+    record::compile_shader(&mut context, vertex);
+    let fragment = record::create_shader(&mut context, GL_FRAGMENT_SHADER);
+    record::shader_source(
+        &mut context,
+        fragment,
+        "uniform sampler2D s0;\nuniform sampler2D s1;\nuniform sampler2D s2;\n\
+         uniform sampler2D s3;\nuniform sampler2D s4;\n\
+         void main(){ gl_FragColor = texture2D(s4, vec2(0.0)); }\n",
+    );
+    record::compile_shader(&mut context, fragment);
+    let program = record::create_program(&mut context);
+    record::attach_shader(&mut context, program, vertex);
+    record::attach_shader(&mut context, program, fragment);
+    assert!(record::link_program(&mut context, program));
+    record::use_program(&mut context, program);
+    for sampler in 0..5 {
+        record::uniform_sampler(&mut context, sampler, sampler as i32);
+    }
+
+    let vertex_buffer = context.buffers.gen();
+    record::bind_buffer(&mut context, GL_ARRAY_BUFFER, vertex_buffer);
+    record::buffer_data(&mut context, GL_ARRAY_BUFFER, &[0; 24], 0x88E4);
+    record::vertex_attrib_pointer(&mut context, 0, 2, GL_FLOAT, false, 8, 0);
+    record::enable_vertex_attrib(&mut context, 0);
+    record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut context, &mut sink).unwrap());
+
+    let entries = sink.batches[0]
+        .iter()
+        .find_map(|command| match command {
+            Cmd::CreateBindGroup(_, descriptor) => Some(&descriptor.entries),
+            _ => None,
+        })
+        .expect("sampler bind group");
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(entry.resource, BindResource::Texture { .. }))
+            .count(),
+        5
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(entry.resource, BindResource::Sampler { .. }))
+            .count(),
+        5
+    );
+}
+
+#[test]
+fn sampler_array_lowers_every_element_to_its_own_binding_pair() {
+    let mut context = ctx_640x480();
+    let mut sink = RecordingSink::with_full_caps();
+    let vertex = record::create_shader(&mut context, GL_VERTEX_SHADER);
+    record::shader_source(
+        &mut context,
+        vertex,
+        "attribute vec2 p;void main(){gl_Position=vec4(p,0,1);}",
+    );
+    record::compile_shader(&mut context, vertex);
+    let fragment = record::create_shader(&mut context, GL_FRAGMENT_SHADER);
+    record::shader_source(
+        &mut context,
+        fragment,
+        "uniform sampler2D images[2];void main(){gl_FragColor=\
+         texture2D(images[0],vec2(0))+texture2D(images[1],vec2(0));}",
+    );
+    record::compile_shader(&mut context, fragment);
+    let program = record::create_program(&mut context);
+    record::attach_shader(&mut context, program, vertex);
+    record::attach_shader(&mut context, program, fragment);
+    assert!(record::link_program(&mut context, program));
+    record::use_program(&mut context, program);
+    record::uniform_i32_at(&mut context, 0, &[0, 1]);
+
+    for unit in 0..2 {
+        let texture = context.textures.gen();
+        context.active_texture(GL_TEXTURE0 + unit);
+        record::bind_texture(&mut context, GL_TEXTURE_2D, texture);
+        record::tex_image_2d(&mut context, 1, 1, &[unit as u8; 4]);
+    }
+    let buffer = context.buffers.gen();
+    record::bind_buffer(&mut context, GL_ARRAY_BUFFER, buffer);
+    record::buffer_data(&mut context, GL_ARRAY_BUFFER, &[0; 24], 0x88E4);
+    record::vertex_attrib_pointer(&mut context, 0, 2, GL_FLOAT, false, 8, 0);
+    record::enable_vertex_attrib(&mut context, 0);
+    record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut context, &mut sink).unwrap());
+
+    let entries = sink.batches[0]
+        .iter()
+        .find_map(|command| match command {
+            Cmd::CreateBindGroup(_, descriptor) => Some(&descriptor.entries),
+            _ => None,
+        })
+        .expect("bind group");
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.binding)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3, 4]
     );
 }

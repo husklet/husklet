@@ -40,11 +40,11 @@ fn vertex(pos: [f32; 2], color: [f32; 4]) -> Vec<u8> {
 /// read back the presented default target. Returns the packed RGBA plane (bottom-left origin).
 fn render_triangle(vs: &str, fs: &str, color: [f32; 4]) -> Vec<u8> {
     let mut c = GlContext::new();
-    c.surf = GlSurface {
+    c.set_surface(GlSurface {
         have: true,
         width: W as u32,
         height: H as u32,
-    };
+    });
     let mut sink = cpu_sink();
 
     record::clear_color(&mut c, [0.0, 0.0, 1.0, 1.0]); // blue background

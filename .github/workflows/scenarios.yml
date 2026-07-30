@@ -38,17 +38,17 @@ jobs:
             }
           done
           HL_SCENARIO_IMAGE_CACHE="$HL_SCENARIO_CACHE_BASE/arm64" \
-            nix develop "path:$PWD/nix" --command \
+            nix develop . --command \
             cargo test -p hl-daemon --test scenarios -- cache-preflight arm64
           HL_SCENARIO_IMAGE_CACHE="$HL_SCENARIO_CACHE_BASE/amd64" \
-            nix develop "path:$PWD/nix" --command \
+            nix develop . --command \
             cargo test -p hl-daemon --test scenarios -- cache-preflight amd64
 
       - name: Run every registered arm64 scenario and workflow offline
         env:
           HL_SCENARIO_IMAGE_CACHE: /Users/Shared/husklet/oci-census/arm64
         run: >-
-          nix develop "path:$PWD/nix" --command
+          nix develop . --command
           cargo test -p hl-daemon --test scenarios --
           all --offline --jobs 8 --target arm64
 
@@ -56,6 +56,6 @@ jobs:
         env:
           HL_SCENARIO_IMAGE_CACHE: /Users/Shared/husklet/oci-census/amd64
         run: >-
-          nix develop "path:$PWD/nix" --command
+          nix develop . --command
           cargo test -p hl-daemon --test scenarios --
           all --offline --jobs 8 --target amd64

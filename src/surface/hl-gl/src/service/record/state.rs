@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::context::VertexBinding;
 
 // ---- fixed-function state ------------------------------------------------------------------------
 
@@ -13,15 +14,106 @@ pub fn vertex_attrib_pointer(
     stride: i32,
     offset: usize,
 ) {
-    if location < ctx.attr.len() {
-        let a = &mut ctx.attr[location];
+    if location < ctx.local.attr.len() {
+        let a = &mut ctx.local.attr[location];
         a.size = size;
         a.kind = kind;
         a.normalized = normalized;
         a.integer = false;
         a.stride = stride;
         a.offset = offset;
-        a.buffer = ctx.array_buffer;
+        a.buffer = ctx.local.array_buffer;
+        a.binding = None;
+    }
+}
+
+/// Describe one separate-format attribute. Its buffer, base offset, stride, and divisor come from the
+/// binding selected by [`vertex_attrib_binding`] when the draw is snapshotted.
+#[allow(clippy::too_many_arguments)]
+pub fn vertex_attrib_format(
+    ctx: &mut GlContext,
+    location: usize,
+    size: i32,
+    kind: u32,
+    normalized: bool,
+    integer: bool,
+    relative_offset: usize,
+) {
+    if location < ctx.local.attr.len() {
+        let attr = &mut ctx.local.attr[location];
+        attr.size = size;
+        attr.kind = kind;
+        attr.normalized = normalized;
+        attr.integer = integer;
+        attr.offset = relative_offset;
+        attr.binding.get_or_insert(location as u32);
+    }
+}
+
+pub fn vertex_attrib_binding(ctx: &mut GlContext, location: usize, binding: u32) {
+    if location < ctx.local.attr.len() && (binding as usize) < ctx.local.vertex_bindings.len() {
+        ctx.local.attr[location].binding = Some(binding);
+    } else {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+    }
+}
+
+pub fn bind_vertex_buffer(
+    ctx: &mut GlContext,
+    binding: usize,
+    buffer: u32,
+    offset: isize,
+    stride: i32,
+) {
+    if binding >= ctx.local.vertex_bindings.len() || offset < 0 || stride < 0 {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    if ctx.buffer_is_deleted(buffer) {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+    ctx.buffers.ensure(buffer);
+    ctx.local.vertex_bindings[binding] = VertexBinding {
+        buffer,
+        offset: offset as usize,
+        stride,
+        divisor: ctx.local.vertex_bindings[binding].divisor,
+    };
+}
+
+pub fn vertex_binding_divisor(ctx: &mut GlContext, binding: usize, divisor: u32) {
+    if let Some(slot) = ctx.local.vertex_bindings.get_mut(binding) {
+        slot.divisor = divisor;
+    } else {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+    }
+}
+
+pub fn vertex_attrib(ctx: &mut GlContext, location: usize, value: [f32; 4]) {
+    if let Some(current) = ctx.local.current_attr.get_mut(location) {
+        *current = value;
+        ctx.local.current_attr_kind[location] = 0;
+    } else {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+    }
+}
+
+pub fn vertex_attrib_i(ctx: &mut GlContext, location: usize, value: [i32; 4]) {
+    vertex_attrib(
+        ctx,
+        location,
+        value.map(|component| f32::from_bits(component as u32)),
+    );
+    if location < ctx.local.current_attr_kind.len() {
+        ctx.local.current_attr_kind[location] = 1;
+    }
+}
+
+pub fn vertex_attrib_ui(ctx: &mut GlContext, location: usize, value: [u32; 4]) {
+    vertex_attrib(ctx, location, value.map(f32::from_bits));
+    if location < ctx.local.current_attr_kind.len() {
+        ctx.local.current_attr_kind[location] = 2;
     }
 }
 
@@ -29,43 +121,43 @@ pub fn vertex_attrib_pointer(
 /// (`0` = per-vertex, `>0` = per-instance). Recorded per attribute; the frame builder marks a
 /// vertex-buffer slot instance-stepped when its attributes carry a non-zero divisor.
 pub fn vertex_attrib_divisor(ctx: &mut GlContext, index: usize, divisor: u32) {
-    if index < ctx.attr.len() {
-        ctx.attr[index].divisor = divisor;
+    if index < ctx.local.attr.len() {
+        ctx.local.attr[index].divisor = divisor;
     }
 }
 
 /// `glEnableVertexAttribArray(location)`.
 impl GlContext {
     pub fn enable_vertex_attrib(&mut self, location: usize) {
-        if location < self.attr.len() {
-            self.attr[location].enabled = true;
+        if location < self.local.attr.len() {
+            self.local.attr[location].enabled = true;
         }
     }
 
     /// `glDisableVertexAttribArray(location)`.
     pub fn disable_vertex_attrib(&mut self, location: usize) {
-        if location < self.attr.len() {
-            self.attr[location].enabled = false;
+        if location < self.local.attr.len() {
+            self.local.attr[location].enabled = false;
         }
     }
 
     /// `glClearColor(r, g, b, a)`.
     pub fn set_clear_color(&mut self, rgba: [f32; 4]) {
-        self.clear_color = rgba;
+        self.local.pipeline.clear_color = rgba;
     }
 
     /// `glClearDepthf(d)` — recorded for completeness (no depth attachment is modeled, so it is not lowered).
     pub fn set_clear_depth(&mut self, d: f32) {
-        self.clear_depth = d;
+        self.local.pipeline.clear_depth = d;
     }
 }
 
 /// `glBlendFunc(src, dst)` — set the same factor pair for RGB and alpha.
 pub fn blend_func(ctx: &mut GlContext, src: u32, dst: u32) {
-    ctx.blend_src_rgb = src;
-    ctx.blend_dst_rgb = dst;
-    ctx.blend_src_alpha = src;
-    ctx.blend_dst_alpha = dst;
+    ctx.local.pipeline.blend_src_rgb = src;
+    ctx.local.pipeline.blend_dst_rgb = dst;
+    ctx.local.pipeline.blend_src_alpha = src;
+    ctx.local.pipeline.blend_dst_alpha = dst;
 }
 
 /// `glBlendFuncSeparate(srcRGB, dstRGB, srcAlpha, dstAlpha)`.
@@ -76,40 +168,40 @@ pub fn blend_func_separate(
     src_a: u32,
     dst_a: u32,
 ) {
-    ctx.blend_src_rgb = src_rgb;
-    ctx.blend_dst_rgb = dst_rgb;
-    ctx.blend_src_alpha = src_a;
-    ctx.blend_dst_alpha = dst_a;
+    ctx.local.pipeline.blend_src_rgb = src_rgb;
+    ctx.local.pipeline.blend_dst_rgb = dst_rgb;
+    ctx.local.pipeline.blend_src_alpha = src_a;
+    ctx.local.pipeline.blend_dst_alpha = dst_a;
 }
 
 /// `glBlendColor` — set the constant color used by the CONSTANT blend factors. GLES clamps each channel.
 impl GlContext {
     pub fn set_blend_color(&mut self, color: [f32; 4]) {
-        self.blend_color = color.map(|value| value.clamp(0.0, 1.0));
+        self.local.pipeline.blend_color = color.map(|value| value.clamp(0.0, 1.0));
     }
 
     /// `glDepthFunc(func)` — set the depth-compare function.
     pub fn set_depth_func(&mut self, func: u32) {
-        self.depth_func = func;
+        self.local.pipeline.depth_func = func;
     }
 
     /// `glDepthMask(flag)` — enable/disable depth writes.
     pub fn set_depth_mask(&mut self, write: bool) {
-        self.depth_write = write;
+        self.local.pipeline.depth_write = write;
     }
 
     /// `glClearStencil(s)` — set the stencil-buffer clear value, lowered to `DepthAttachment.clear_stencil`.
     pub fn set_clear_stencil(&mut self, s: i32) {
-        self.clear_stencil = s;
+        self.local.pipeline.clear_stencil = s;
     }
 }
 
 /// `glStencilFunc(func, ref, mask)` — set the compare func + reference + value read mask for BOTH faces.
 pub fn stencil_func(ctx: &mut GlContext, func: u32, reference: i32, mask: u32) {
-    ctx.stencil_func_front = func;
-    ctx.stencil_func_back = func;
-    ctx.stencil_ref = reference;
-    ctx.stencil_read_mask = mask;
+    ctx.local.pipeline.stencil_func_front = func;
+    ctx.local.pipeline.stencil_func_back = func;
+    ctx.local.pipeline.stencil_ref = reference;
+    ctx.local.pipeline.stencil_read_mask = mask;
 }
 
 /// `glStencilFuncSeparate(face, func, ref, mask)` — set the compare func + reference + value read mask for
@@ -117,61 +209,61 @@ pub fn stencil_func(ctx: &mut GlContext, func: u32, reference: i32, mask: u32) {
 /// per-pass values on the wire, so setting them for either face updates the lowered value.
 pub fn stencil_func_separate(ctx: &mut GlContext, face: u32, func: u32, reference: i32, mask: u32) {
     if face == GL_FRONT || face == GL_FRONT_AND_BACK {
-        ctx.stencil_func_front = func;
+        ctx.local.pipeline.stencil_func_front = func;
     }
     if face == GL_BACK || face == GL_FRONT_AND_BACK {
-        ctx.stencil_func_back = func;
+        ctx.local.pipeline.stencil_func_back = func;
     }
-    ctx.stencil_ref = reference;
-    ctx.stencil_read_mask = mask;
+    ctx.local.pipeline.stencil_ref = reference;
+    ctx.local.pipeline.stencil_read_mask = mask;
 }
 
 /// `glStencilOp(sfail, dpfail, dppass)` — set the stencil-fail / depth-fail / depth-pass ops for BOTH faces.
 pub fn stencil_op(ctx: &mut GlContext, sfail: u32, dpfail: u32, dppass: u32) {
-    ctx.stencil_fail_front = sfail;
-    ctx.stencil_zfail_front = dpfail;
-    ctx.stencil_zpass_front = dppass;
-    ctx.stencil_fail_back = sfail;
-    ctx.stencil_zfail_back = dpfail;
-    ctx.stencil_zpass_back = dppass;
+    ctx.local.pipeline.stencil_fail_front = sfail;
+    ctx.local.pipeline.stencil_zfail_front = dpfail;
+    ctx.local.pipeline.stencil_zpass_front = dppass;
+    ctx.local.pipeline.stencil_fail_back = sfail;
+    ctx.local.pipeline.stencil_zfail_back = dpfail;
+    ctx.local.pipeline.stencil_zpass_back = dppass;
 }
 
 /// `glStencilOpSeparate(face, sfail, dpfail, dppass)` — set the three stencil ops for the selected face(s).
 pub fn stencil_op_separate(ctx: &mut GlContext, face: u32, sfail: u32, dpfail: u32, dppass: u32) {
     if face == GL_FRONT || face == GL_FRONT_AND_BACK {
-        ctx.stencil_fail_front = sfail;
-        ctx.stencil_zfail_front = dpfail;
-        ctx.stencil_zpass_front = dppass;
+        ctx.local.pipeline.stencil_fail_front = sfail;
+        ctx.local.pipeline.stencil_zfail_front = dpfail;
+        ctx.local.pipeline.stencil_zpass_front = dppass;
     }
     if face == GL_BACK || face == GL_FRONT_AND_BACK {
-        ctx.stencil_fail_back = sfail;
-        ctx.stencil_zfail_back = dpfail;
-        ctx.stencil_zpass_back = dppass;
+        ctx.local.pipeline.stencil_fail_back = sfail;
+        ctx.local.pipeline.stencil_zfail_back = dpfail;
+        ctx.local.pipeline.stencil_zpass_back = dppass;
     }
 }
 
 /// `glStencilMask(mask)` — set the stencil write mask for BOTH faces.
 impl GlContext {
     pub fn set_stencil_mask(&mut self, mask: u32) {
-        self.stencil_write_mask = mask;
+        self.local.pipeline.stencil_write_mask = mask;
     }
 }
 
 /// `glStencilMaskSeparate(face, mask)` — set the stencil write mask for the selected face(s). The wire
 /// carries a single write mask for both faces, so setting either face updates the lowered value.
 pub fn stencil_mask_separate(ctx: &mut GlContext, _face: u32, mask: u32) {
-    ctx.stencil_write_mask = mask;
+    ctx.local.pipeline.stencil_write_mask = mask;
 }
 
 /// `glCullFace(mode)` — select the culled face (`GL_FRONT` / `GL_BACK` / `GL_FRONT_AND_BACK`).
 impl GlContext {
     pub fn set_cull_face(&mut self, mode: u32) {
-        self.cull_face = mode;
+        self.local.pipeline.cull_face = mode;
     }
 
     /// `glFrontFace(mode)` — select the front-face winding (`GL_CW` / `GL_CCW`).
     pub fn set_front_face(&mut self, mode: u32) {
-        self.front_face = mode;
+        self.local.pipeline.front_face = mode;
     }
 }
 
@@ -179,13 +271,14 @@ impl GlContext {
 /// the low 4 bits (`R<<0 | G<<1 | B<<2 | A<<3`), the exact `ColorTargetState::write_mask` encoding, so a
 /// masked channel is dropped by the lowered pipeline instead of being silently written anyway.
 pub fn color_mask(ctx: &mut GlContext, r: bool, g: bool, b: bool, a: bool) {
-    ctx.color_mask = (r as u32) | ((g as u32) << 1) | ((b as u32) << 2) | ((a as u32) << 3);
+    ctx.local.pipeline.color_mask =
+        (r as u32) | ((g as u32) << 1) | ((b as u32) << 2) | ((a as u32) << 3);
 }
 
 /// `glViewport(x, y, w, h)`.
 impl GlContext {
     pub fn set_viewport(&mut self, vp: [i32; 4]) {
-        self.viewport = vp;
+        self.local.pipeline.viewport = vp;
     }
 }
 
@@ -194,7 +287,7 @@ impl GlContext {
 /// An out-of-range value raises `GL_INVALID_VALUE` (first-error-wins) and leaves the parameter unchanged;
 /// an unrecognized `pname` is ignored (the long tail of pack/unpack params this model does not track).
 pub fn pixel_store(ctx: &mut GlContext, pname: u32, value: i32) {
-    let ps = &mut ctx.pixel_store;
+    let ps = &mut ctx.local.pixel_store;
     let ok = match pname {
         GL_UNPACK_ALIGNMENT if matches!(value, 1 | 2 | 4 | 8) => {
             ps.unpack_alignment = value;
@@ -249,7 +342,7 @@ pub fn pixel_store(ctx: &mut GlContext, pname: u32, value: i32) {
 /// `glScissor(x, y, w, h)`.
 impl GlContext {
     pub fn set_scissor(&mut self, sc: [i32; 4]) {
-        self.scissor = sc;
+        self.local.pipeline.scissor = sc;
     }
 
     /// `glEnable(cap)`.
@@ -265,11 +358,11 @@ impl GlContext {
 
 pub(super) fn set_cap(ctx: &mut GlContext, cap: u32, on: bool) {
     match cap {
-        GL_BLEND => ctx.blend = on,
-        GL_DEPTH_TEST => ctx.depth = on,
-        GL_STENCIL_TEST => ctx.stencil = on,
-        GL_SCISSOR_TEST => ctx.scissor_enabled = on,
-        GL_CULL_FACE => ctx.cull_enabled = on,
+        GL_BLEND => ctx.local.pipeline.blend = on,
+        GL_DEPTH_TEST => ctx.local.pipeline.depth = on,
+        GL_STENCIL_TEST => ctx.local.pipeline.stencil = on,
+        GL_SCISSOR_TEST => ctx.local.pipeline.scissor_enabled = on,
+        GL_CULL_FACE => ctx.local.pipeline.cull_enabled = on,
         _ => {}
     }
 }
@@ -281,7 +374,7 @@ pub(super) fn set_cap(ctx: &mut GlContext, cap: u32, on: bool) {
 /// builder lowers a pass clear-load with this color.
 impl GlContext {
     pub fn clear_buffer_color(&mut self, rgba: [f32; 4]) {
-        self.clear_color = rgba;
+        self.local.pipeline.clear_color = rgba;
         self.record_clear();
     }
 
@@ -289,8 +382,8 @@ impl GlContext {
 
     /// `glBlendEquation(mode)` — set the same blend equation for RGB and alpha.
     pub fn set_blend_equation(&mut self, mode: u32) {
-        self.blend_eq_rgb = mode;
-        self.blend_eq_alpha = mode;
+        self.local.pipeline.blend_eq_rgb = mode;
+        self.local.pipeline.blend_eq_alpha = mode;
     }
 }
 
@@ -301,6 +394,6 @@ pub use CLEAR_BUFFER_COLOR as clear_buffer_color;
 
 /// `glBlendEquationSeparate(modeRGB, modeAlpha)`.
 pub fn blend_equation_separate(ctx: &mut GlContext, rgb: u32, alpha: u32) {
-    ctx.blend_eq_rgb = rgb;
-    ctx.blend_eq_alpha = alpha;
+    ctx.local.pipeline.blend_eq_rgb = rgb;
+    ctx.local.pipeline.blend_eq_alpha = alpha;
 }

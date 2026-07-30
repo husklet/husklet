@@ -40,7 +40,15 @@ impl PlatformPool {
 
 use super::present::AdapterPresenter;
 use super::state::{ClientState, HlState, InputCommand};
-use crate::scene::port::{Clock, HostEvents, PresenterEvent};
+use crate::scene::port::{Clock, HostEvents, PresenterEvent, Wake};
+
+struct LoopWake(smithay::reexports::calloop::LoopSignal);
+
+impl Wake for LoopWake {
+    fn wake(&self) {
+        self.0.wakeup();
+    }
+}
 
 /// The cross-thread sender half of an [`InputCommand`] channel. `Send` — a host/test on another thread
 /// injects input through it while the serve loop runs.
@@ -82,9 +90,40 @@ pub fn run(
     presenter: impl Into<AdapterPresenter>,
     stop: Arc<AtomicBool>,
 ) -> std::io::Result<()> {
+    run_inner(
+        socket_path,
+        presenter.into(),
+        stop,
+        #[cfg(feature = "macos-surface")]
+        None,
+    )
+}
+
+#[cfg(feature = "macos-surface")]
+pub fn run_with_native_frames(
+    socket_path: &Path,
+    presenter: impl Into<AdapterPresenter>,
+    stop: Arc<AtomicBool>,
+    frames: super::native::NativeFrames,
+) -> std::io::Result<()> {
+    run_inner(socket_path, presenter.into(), stop, Some(frames))
+}
+
+fn run_inner(
+    socket_path: &Path,
+    presenter: AdapterPresenter,
+    stop: Arc<AtomicBool>,
+    #[cfg(feature = "macos-surface")] frames: Option<super::native::NativeFrames>,
+) -> std::io::Result<()> {
     let display: Display<HlState> = Display::new()
         .map_err(|error| std::io::Error::other(format!("create Wayland display: {error}")))?;
     let dh = display.handle();
+    #[cfg(feature = "macos-surface")]
+    let state = match frames {
+        Some(frames) => HlState::with_native_frames(&dh, presenter, frames),
+        None => HlState::new(&dh, presenter),
+    };
+    #[cfg(not(feature = "macos-surface"))]
     let state = HlState::new(&dh, presenter);
 
     match std::fs::remove_file(socket_path) {
@@ -219,6 +258,10 @@ fn drive(
     mut data: LoopData,
     stop: Arc<AtomicBool>,
 ) -> std::io::Result<()> {
+    data.state
+        .engine
+        .presenter_mut()
+        .set_wake(Arc::new(LoopWake(event_loop.get_signal())));
     let handle = event_loop.handle();
 
     // Drive the wl_display fd so queued client requests dispatch into the handlers.
@@ -235,11 +278,10 @@ fn drive(
         )
         .map_err(|error| std::io::Error::other(format!("register Wayland display: {error}")))?;
 
-    // Native AppKit events are drained by `Presenter::poll_events` below rather than through a calloop
-    // source, so keep their worst-case input latency well below one ProMotion frame. Other targets retain
-    // the low-power 60 Hz fallback. Repaint deadlines still shorten either wait precisely.
+    // AppKit input still needs a bounded heartbeat; asynchronous drawable completions wake this loop
+    // directly through `LoopWake` rather than waiting for the fallback tick.
     #[cfg(target_os = "macos")]
-    const TICK: Duration = Duration::from_millis(1);
+    const TICK: Duration = Duration::from_millis(4);
     #[cfg(not(target_os = "macos"))]
     const TICK: Duration = Duration::from_millis(16);
 
@@ -257,9 +299,24 @@ fn drive(
             if let Err(e) = event_loop.dispatch(Some(wait), &mut data) {
                 eprintln!("hl-compositor: event loop dispatch error (continuing): {e}");
             }
+            #[cfg(feature = "macos-surface")]
+            data.state.drain_native_frames();
             data.state.engine.presenter_mut().poll_events();
             let host_events = data.state.engine.presenter_mut().take_events();
             for event in host_events {
+                hl_log::hl_log!(
+                    tag::COMPOSITOR,
+                    hl_log::Level::Trace,
+                    "host input event={event:?}"
+                );
+                if let PresenterEvent::Presentation(completion) = event {
+                    data.state.complete_host_presentation(completion);
+                    continue;
+                }
+                if let PresenterEvent::Repaint(surface) = event {
+                    data.state.repaint_surface(surface);
+                    continue;
+                }
                 let command = match event {
                     PresenterEvent::PointerMotion { window, x, y } => {
                         InputCommand::PointerMotionOn { window, x, y }
@@ -338,6 +395,10 @@ fn drive(
                     PresenterEvent::ResizeEnd { surface } => {
                         InputCommand::ResizeSurfaceEnd { surface }
                     }
+                    PresenterEvent::Presentation(_) => {
+                        unreachable!("handled before input translation")
+                    }
+                    PresenterEvent::Repaint(_) => unreachable!("handled before input translation"),
                     PresenterEvent::Focus(surface) => InputCommand::FocusSurface(surface),
                     PresenterEvent::Close(surface) => InputCommand::CloseSurface(surface),
                 };

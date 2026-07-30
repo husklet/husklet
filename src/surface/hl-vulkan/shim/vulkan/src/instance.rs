@@ -11,12 +11,14 @@ use hl_vulkan::Instance;
 use crate::state::StateStore;
 use crate::types::*;
 
+mod compatibility;
 mod format;
 mod lifecycle;
 mod limits;
 mod physical;
 mod properties;
 
+use compatibility::DawnBaseline;
 pub use format::*;
 pub use lifecycle::*;
 use limits::metal_limits;

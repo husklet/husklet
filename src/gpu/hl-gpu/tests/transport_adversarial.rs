@@ -186,7 +186,7 @@ fn readback_response_ok_round_trips() {
     Connection::new(&a)
         .write_readback_response(READBACK_OK, &[0xDE, 0xAD, 0xBE, 0xEF])
         .unwrap();
-    let got = Connection::new(&b).read_readback_response().unwrap();
+    let got = Connection::new(&b).read_readback_response(4).unwrap();
     assert_eq!(got, vec![0xDE, 0xAD, 0xBE, 0xEF]);
 }
 
@@ -199,9 +199,68 @@ fn readback_response_fail_is_a_typed_error_not_empty_bytes() {
         .write_readback_response(READBACK_FAIL, &[])
         .unwrap();
     assert!(
-        Connection::new(&b).read_readback_response().is_err(),
+        Connection::new(&b).read_readback_response(0).is_err(),
         "a FAIL readback response is an error"
     );
+}
+
+#[test]
+fn readback_response_empty_success_is_not_failure() {
+    let (a, b) = UnixStream::pair().unwrap();
+    Connection::new(&a)
+        .write_readback_response(READBACK_OK, &[])
+        .unwrap();
+    assert!(Connection::new(&b)
+        .read_readback_response(0)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn large_readback_response_round_trips_without_changing_framing() {
+    let (a, b) = UnixStream::pair().unwrap();
+    a.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+    b.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let expected = (0..8 * 1024 * 1024)
+        .map(|index| (index % 251) as u8)
+        .collect::<Vec<_>>();
+    let sent = expected.clone();
+    let writer = std::thread::spawn(move || {
+        Connection::new(&a)
+            .write_readback_response(READBACK_OK, &sent)
+            .unwrap();
+    });
+    let received = Connection::new(&b)
+        .read_readback_response(expected.len())
+        .unwrap();
+    writer.join().unwrap();
+    assert_eq!(received, expected);
+}
+
+#[test]
+fn readback_response_rejects_untrusted_header_before_allocating() {
+    for (status, declared_len, expected_len, label) in [
+        (READBACK_OK, u32::MAX, 4, "huge success length"),
+        (0x7f, 0, 0, "unknown status"),
+        (READBACK_FAIL, 1, 0, "failure carrying a body"),
+    ] {
+        let (mut writer, reader) = UnixStream::pair().unwrap();
+        writer.write_all(&[status]).unwrap();
+        writer.write_all(&declared_len.to_le_bytes()).unwrap();
+        if declared_len == 1 {
+            writer.write_all(&[0xaa]).unwrap();
+        }
+        let error = Connection::new(&reader)
+            .read_readback_response(expected_len)
+            .expect_err(label);
+        assert!(
+            matches!(
+                error,
+                hl_gpu::transport::adapter::unix::ReadbackResponseError::Malformed(_)
+            ),
+            "{label}: {error:?}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -330,7 +389,7 @@ fn readback_frame_routes_to_readback_never_to_submit() {
     Connection::new(&client)
         .write_readback_request(&ReadbackRequest::buffer(42, 0, 3))
         .unwrap();
-    let bytes = Connection::new(&client).read_readback_response().unwrap();
+    let bytes = Connection::new(&client).read_readback_response(3).unwrap();
     assert_eq!(
         bytes,
         vec![0x10, 0x20, 0x30],
@@ -342,7 +401,7 @@ fn readback_frame_routes_to_readback_never_to_submit() {
         .write_readback_request(&ReadbackRequest::buffer(7, 0, 3))
         .unwrap();
     assert!(
-        Connection::new(&client).read_readback_response().is_err(),
+        Connection::new(&client).read_readback_response(3).is_err(),
         "unknown-buffer readback fails cleanly"
     );
 

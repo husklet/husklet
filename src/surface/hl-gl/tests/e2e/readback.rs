@@ -8,11 +8,11 @@ use super::*;
 #[test]
 fn glreadpixels_reads_the_rendered_default_target_back() {
     let mut c = GlContext::new();
-    c.surf = GlSurface {
+    c.set_surface(GlSurface {
         have: true,
         width: W as u32,
         height: H as u32,
-    };
+    });
     let mut sink = cpu_sink();
 
     record::clear_color(&mut c, [0.0, 0.0, 1.0, 1.0]); // blue background
@@ -65,7 +65,7 @@ fn glreadpixels_reads_the_rendered_default_target_back() {
 
     // glReadPixels is not a frame boundary: the draw-list survives so a later eglSwapBuffers still presents.
     assert!(
-        !c.draws.is_empty(),
+        !c.draws().is_empty(),
         "readback left the recorded frame intact"
     );
 }
@@ -73,11 +73,11 @@ fn glreadpixels_reads_the_rendered_default_target_back() {
 #[test]
 fn glreadpixels_of_a_subrectangle_in_bgra() {
     let mut c = GlContext::new();
-    c.surf = GlSurface {
+    c.set_surface(GlSurface {
         have: true,
         width: W as u32,
         height: H as u32,
-    };
+    });
     let mut sink = cpu_sink();
 
     record::clear_color(&mut c, [0.0, 0.0, 1.0, 1.0]);

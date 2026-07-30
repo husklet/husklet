@@ -12,6 +12,21 @@ impl Environment {
             "LC_CTYPE",
             "TMPDIR",
             "SSH_AUTH_SOCK",
+            // Application-owned compositor diagnostics must cross the sanitized terminal worker so the
+            // workspace domain can pass them to its native compositor child.
+            "HL_NATIVE_CAPTURE_DIR",
+            "HL_NATIVE_CAPTURE_ONCE_DIR",
+            "HL_SURFACE_CAPTURE_DIR",
+            "HL_LOG",
+            "HL_LOG_LEVEL",
+            "HL_LOG_COUNTERS",
+            "HL_GPU_TRACE",
+            "HL_GPU_CAPTURE_DIR",
+            "HL_GPU_CAPTURE_BATCHES",
+            "HL_GPU_CAPTURE_BYTES",
+            "HL_GPU_CAPTURE_PRESENTS",
+            "HL_SHIM_DEBUG",
+            "HL_ENGINE_FS_TRACE",
         ];
         let mut values: Vec<(String, String)> = keys
             .into_iter()

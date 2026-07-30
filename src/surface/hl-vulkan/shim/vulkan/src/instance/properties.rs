@@ -1,5 +1,7 @@
 use super::*;
 
+const VK_DRIVER_ID_UNKNOWN: i32 = 0;
+
 #[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceProperties2(
     physical_device: *mut c_void,
@@ -16,12 +18,15 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
     while let Some(n) = unsafe { node.as_mut() } {
         if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES {
             if let Some(d) = unsafe { (node as *mut VkPhysicalDeviceDriverProperties).as_mut() } {
-                d.driver_id = 8; // VK_DRIVER_ID_MESA_LLVMPIPE — a valid id (hl has no registered one)
+                // No Khronos driver ID is assigned to hl. UNKNOWN is truthful; borrowing another
+                // implementation's ID can make clients classify this Metal-backed device as software.
+                d.driver_id = VK_DRIVER_ID_UNKNOWN;
                 Name::write(&mut d.driver_name, "hl");
                 Name::write(&mut d.driver_info, "hl Metal (Vulkan) 0.1");
+                // No Vulkan CTS conformance version has been assigned to this driver.
                 d.conformance_version = VkConformanceVersion {
-                    major: 1,
-                    minor: 4,
+                    major: 0,
+                    minor: 0,
                     subminor: 0,
                     patch: 0,
                 };
@@ -197,4 +202,29 @@ pub extern "C" fn vkGetPhysicalDeviceFormatProperties2KHR(
     p_format_properties: *mut c_void,
 ) {
     vkGetPhysicalDeviceFormatProperties2(physical_device, format, p_format_properties)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn driver_properties_do_not_claim_a_software_driver_identity() {
+        let mut driver: VkPhysicalDeviceDriverProperties = unsafe { core::mem::zeroed() };
+        driver.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+        let mut properties: VkPhysicalDeviceProperties2 = unsafe { core::mem::zeroed() };
+        properties.p_next = &mut driver as *mut _ as *mut c_void;
+
+        vkGetPhysicalDeviceProperties2(
+            core::ptr::null_mut(),
+            &mut properties as *mut _ as *mut c_void,
+        );
+
+        assert_eq!(driver.driver_id, VK_DRIVER_ID_UNKNOWN);
+        assert_ne!(driver.driver_id, 8, "must not claim Mesa LLVMPipe");
+        assert_eq!(driver.conformance_version.major, 0);
+        assert_eq!(driver.conformance_version.minor, 0);
+        assert_eq!(driver.conformance_version.subminor, 0);
+        assert_eq!(driver.conformance_version.patch, 0);
+    }
 }

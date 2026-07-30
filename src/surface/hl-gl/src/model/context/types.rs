@@ -10,12 +10,27 @@ pub struct BlitOp {
     /// The read (source) and draw (destination) framebuffer names bound when the blit was recorded.
     pub read_fbo: u32,
     pub draw_fbo: u32,
+    /// Color attachments captured when `glBlitFramebuffer` executed. FBO attachment state is mutable,
+    /// so replay at swap must not resolve these names against a later attachment.
+    pub read_target: Option<crate::model::program::TargetSnapshot>,
+    pub draw_target: Option<crate::model::program::TargetSnapshot>,
+    /// Resolved host targets transferred from an accepted partial flush. These keep a cross-boundary blit
+    /// attached to the exact producer generation even after its GL attachment was deleted.
+    pub read_ir: Option<u32>,
+    pub draw_ir: Option<u32>,
     /// Source rect `[x0, y0, x1, y1]` and destination rect, in GL bottom-left window coordinates.
     pub src: [i32; 4],
     pub dst: [i32; 4],
     /// The resampling filter for a SCALING blit (`glBlitFramebuffer`'s `filter` arg: `GL_LINEAR` →
     /// [`Filter::Linear`], `GL_NEAREST` → [`Filter::Nearest`]). Ignored for the equal-size copy path.
     pub filter: hl_gpu::protocol::model::enums::Filter,
+}
+
+/// One framebuffer-affecting GL operation in exact call order.
+#[derive(Clone, PartialEq, Debug)]
+pub enum FrameOp {
+    Draw(Box<crate::model::program::DrawCall>),
+    Blit(BlitOp),
 }
 
 /// The presented window surface (the default framebuffer). Ported from `hl-shim-gl`'s `Surface`.
@@ -25,6 +40,16 @@ pub struct GlSurface {
     pub have: bool,
     pub width: u32,
     pub height: u32,
+}
+
+/// The EGL surface contract governing framebuffer-0 submission.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum SurfaceKind {
+    /// A native window presents framebuffer `0` at `eglSwapBuffers`.
+    #[default]
+    Window,
+    /// Pbuffer and surfaceless contexts complete framebuffer `0` at `glFlush`/`glFinish`.
+    Offscreen,
 }
 
 /// The pixel-store pack/unpack parameters (`glPixelStorei`) an app sets before texture upload / readback.
@@ -48,6 +73,8 @@ pub struct PixelStore {
 pub struct Vao {
     /// The captured per-location vertex-attribute array (`glVertexAttribPointer` + enable + divisor).
     pub attrs: [Attr; MAX_ATTR],
+    /// Separate-format vertex-buffer bindings (`glBindVertexBuffer`), indexed by binding point.
+    pub vertex_bindings: [VertexBinding; MAX_ATTR],
     /// The captured `GL_ELEMENT_ARRAY_BUFFER` binding (element buffer is VAO state; array buffer is not).
     pub element_buffer: u32,
 }
@@ -56,9 +83,19 @@ impl Default for Vao {
     fn default() -> Self {
         Self {
             attrs: [Attr::default(); MAX_ATTR],
+            vertex_bindings: [VertexBinding::default(); MAX_ATTR],
             element_buffer: 0,
         }
     }
+}
+
+/// One VAO-owned separate-format vertex-buffer binding.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub struct VertexBinding {
+    pub buffer: u32,
+    pub offset: usize,
+    pub stride: i32,
+    pub divisor: u32,
 }
 
 /// One indexed-buffer binding point (`glBindBufferBase`/`glBindBufferRange`) for a UBO/SSBO/atomic-counter

@@ -77,6 +77,7 @@ impl hl_container::Device for Workspace {
                         "engine.namespace/v1",
                     ),
                     namespace: vec![socket],
+                    rules: Vec::new(),
                     services: Vec::new(),
                     memory: Vec::new(),
                     environment: Vec::new(),
@@ -97,11 +98,13 @@ mod tests {
             docker: Some("/host/docker.sock".into()),
         };
         let process = hl_container::Process::new("/bin/true");
+        let root = std::path::PathBuf::from("/");
         let request = hl_container::Device::request(
             &workspace,
             hl_container::DeviceContext {
                 guest: hl_container::Guest::Aarch64,
                 process: &process,
+                filesystem: hl_container::device::FilesystemView::new(&root, None),
             },
         )
         .unwrap();

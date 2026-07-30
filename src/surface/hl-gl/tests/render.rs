@@ -17,11 +17,15 @@ const FS: &str =
 
 fn ctx_64() -> GlContext {
     let mut c = GlContext::new();
-    c.surf = GlSurface {
+    c.set_surface(GlSurface {
         have: true,
         width: 64,
         height: 64,
-    };
+    });
+    c.set_present_frame(
+        Some(hl_gpu::protocol::model::descriptor::SurfaceToken::new(7).unwrap()),
+        Some(hl_gpu::protocol::model::descriptor::FrameSerial::new(1).unwrap()),
+    );
     c
 }
 
@@ -82,7 +86,15 @@ fn render_target_desc(batch: &[Cmd]) -> (u32, &hl_gpu::protocol::model::descript
 mod client;
 #[path = "render/graph.rs"]
 mod graph;
+#[path = "render/order.rs"]
+mod order;
 #[path = "render/pass.rs"]
 mod pass;
+#[path = "render/range.rs"]
+mod range;
 #[path = "render/target.rs"]
 mod target;
+#[path = "render/texture.rs"]
+mod texture;
+#[path = "render/transaction.rs"]
+mod transaction;

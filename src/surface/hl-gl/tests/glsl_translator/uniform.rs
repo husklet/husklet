@@ -56,6 +56,166 @@ fn skia_wrap_uses_combined_cross_stage_layout() {
 }
 
 #[test]
+fn translated_skia_program_preserves_and_compiles_its_seventeenth_uniform() {
+    // Reduced from the Chrome shader that produced `UnknownVariable("ublend_S3")`. Vertex declarations
+    // precede fragment declarations in the combined layout, and the matrix is shared across stages.
+    // Neither stage contains a verbatim-route trigger: this exercises `translate_render`.
+    let vs = "#version 300 es\n\
+              uniform highp vec4 sk_RTAdjust;\n\
+              uniform highp mat3 umatrix_S1_c0_c0_c1;\n\
+              in highp vec2 position;\n\
+              out highp vec2 coords;\n\
+              void main(){ coords = position; gl_Position = sk_RTAdjust + \
+                  vec4((umatrix_S1_c0_c0_c1 * vec3(position, 1.0)).xy, 0.0, 1.0); }\n";
+    let fs = "#version 300 es\n\
+              precision mediump float;\n\
+              uniform highp vec2 u_skRTFlip;\n\
+              uniform mediump vec4 uDstTextureCoords_S0;\n\
+              uniform highp vec4 uthresholds_S1_c0_c0_c0[2];\n\
+              uniform highp vec4 uscale_S1_c0_c0_c0[8];\n\
+              uniform highp vec4 ubias_S1_c0_c0_c0[8];\n\
+              uniform mediump float ubias_S1_c0_c0_c1_c0;\n\
+              uniform mediump float uscale_S1_c0_c0_c1_c0;\n\
+              uniform highp mat3 umatrix_S1_c0_c0_c1;\n\
+              uniform mediump vec4 uleftBorderColor_S1_c0_c0;\n\
+              uniform mediump vec4 urightBorderColor_S1_c0_c0;\n\
+              uniform highp mat3 umatrix_S1_c1;\n\
+              uniform mediump float urange_S1;\n\
+              uniform highp vec4 uinnerRect_S2;\n\
+              uniform mediump vec2 uscale_S2;\n\
+              uniform highp vec2 uinvRadiiXY_S2;\n\
+              uniform mediump vec4 ublend_S3;\n\
+              in highp vec2 coords;\n\
+              out mediump vec4 color;\n\
+              void main(){ color = ublend_S3 + vec4(coords, u_skRTFlip.x, urange_S1); }\n";
+
+    assert!(!glsl::Source::new(vs).is_forward_verbatim());
+    assert!(!glsl::Source::new(fs).is_forward_verbatim());
+    let combined = glsl::StageSources::new(vs, fs).uniform_decls();
+    let (layout, _) = glsl::StageSources::new(vs, fs)
+        .uniform_layout()
+        .expect("supported uniform layout");
+    let (vertex, fragment) = glsl::StageSources::new(vs, fs).translate_render();
+
+    assert_eq!(
+        combined.len(),
+        17,
+        "declaration reflection must not truncate"
+    );
+    assert_eq!(layout.len(), 17, "buffer layout must match declarations");
+    assert!(
+        fragment.contains("vec4 ublend_S3;"),
+        "the rebuilt uniform block dropped a live declaration:\n{fragment}"
+    );
+    assert!(
+        fragment.contains("ublend_S3 +"),
+        "the shader use must remain intact:\n{fragment}"
+    );
+    assert_naga_parses(&vertex, naga::ShaderStage::Vertex);
+    assert_naga_parses(&fragment, naga::ShaderStage::Fragment);
+}
+
+#[test]
+fn skia_wrap_preserves_every_comma_separated_uniform() {
+    // Chrome/Skia may group multiple default-block uniforms in one declaration. The wrapper removes the
+    // whole declaration, so reflection must rebuild every declarator—not only the first one—or naga reports
+    // `UnknownVariable` for a live trailing name such as the observed `ublend_S3`.
+    let vs = "#version 300 es\n\
+              uniform highp float uscale_S3, ubias_S3[2], ublend_S3;\n\
+              void main(){ gl_Position = vec4(uscale_S3 + ubias_S3[1] + ublend_S3) \
+                  + float(gl_VertexID); }\n";
+
+    let combined = glsl::StageSources::new(vs, "void main(){}").uniform_decls();
+    let (layout, _) = glsl::StageSources::new(vs, "void main(){}")
+        .uniform_layout()
+        .expect("supported uniform layout");
+    let out = glsl::Source::new(vs).prepare_verbatim_stage(&combined);
+
+    assert_eq!(
+        combined
+            .iter()
+            .map(|declaration| declaration.name.as_str())
+            .collect::<Vec<_>>(),
+        ["uscale_S3", "ubias_S3", "ublend_S3"],
+        "reflection must preserve declaration order"
+    );
+    assert_eq!(layout.len(), 3, "buffer layout must cover every declarator");
+    assert!(
+        out.contains("float uscale_S3;")
+            && out.contains("float ubias_S3[2];")
+            && out.contains("float ublend_S3;"),
+        "the rebuilt block dropped a comma-separated uniform:\n{out}"
+    );
+}
+
+#[test]
+fn conditional_first_uniform_cannot_hide_the_generated_block() {
+    let vertex = "#version 460\n\
+                  #if 0\n\
+                  uniform float inactive;\n\
+                  #endif\n\
+                  uniform vec4 ublend_S3;\n\
+                  void main(){ gl_Position = ublend_S3; }\n";
+    let combined = glsl::StageSources::new(vertex, "").uniform_decls();
+    let output = glsl::Source::new(vertex).prepare_verbatim_stage(&combined);
+
+    let block = output.find("uniform HlUniforms").expect("generated block");
+    let conditional = output.find("#if 0").expect("conditional preserved");
+    assert!(
+        block < conditional,
+        "the generated block must remain outside the inactive branch:\n{output}"
+    );
+    assert_eq!(
+        output.matches("vec4 ublend_S3;").count(),
+        1,
+        "only the unconditional block member remains:\n{output}"
+    );
+    assert_naga_parses(&output, naga::ShaderStage::Vertex);
+}
+
+#[test]
+fn conditional_grouped_duplicates_survive_program_prep_and_naga() {
+    let vertex = "#version 460\n\
+                  #extension GL_ARB_separate_shader_objects : enable\n\
+                  #define HL_SCALE 1.0\n\
+                  #ifdef HL_UNUSED_BRANCH\n\
+                  uniform vec4 branch_pad, branch_blend;\n\
+                  #else\n\
+                  uniform vec4 active_pad, ublend_S3;\n\
+                  #endif\n\
+                  in vec4 position;\n\
+                  out vec4 color;\n\
+                  void main(){ color = ublend_S3; gl_Position = position * HL_SCALE; }\n";
+    let fragment = "#version 460\n\
+                    #if 0\n\
+                    uniform vec4 fragment_pad;\n\
+                    #endif\n\
+                    in vec4 color;\n\
+                    out vec4 output_color;\n\
+                    void main(){ output_color = color + ublend_S3; }\n";
+    let combined = glsl::StageSources::new(vertex, fragment).uniform_decls();
+    let (vertex, fragment) = glsl::prepare_verbatim_program(vertex, fragment, &combined);
+
+    for (stage, source) in [("vertex", &vertex), ("fragment", &fragment)] {
+        assert_eq!(
+            source.matches("vec4 ublend_S3;").count(),
+            1,
+            "{stage} must carry one deduplicated unconditional member:\n{source}"
+        );
+        assert!(
+            source.find("uniform HlUniforms").expect("generated block")
+                < source
+                    .find("#ifdef")
+                    .or_else(|| source.find("#if"))
+                    .unwrap(),
+            "{stage} block inherited a conditional:\n{source}"
+        );
+    }
+    assert_naga_parses(&vertex, naga::ShaderStage::Vertex);
+    assert_naga_parses(&fragment, naga::ShaderStage::Fragment);
+}
+
+#[test]
 fn gskgpu_block_style_program_is_untouched_by_verbatim_prep() {
     // GskGpu keeps uniforms in an explicit bound block — no bare data uniforms, so no wrapping, and the
     // block already has binding=0 → byte-identical (no gtk4 regression).
@@ -89,7 +249,9 @@ fn default_block_array_uniform_keeps_its_dimension() {
         "array dimension preserved in block:\n{f}"
     );
     // std140 sizing: 8 * vec4 (16 B) = 128 B for the member.
-    let (unis, total) = glsl::StageSources::new(vs, fs).uniform_layout();
+    let (unis, total) = glsl::StageSources::new(vs, fs)
+        .uniform_layout()
+        .expect("supported uniform layout");
     let k = unis
         .iter()
         .find(|u| u.name == "uKernel")

@@ -271,7 +271,7 @@ async fn checkpoint_all_captures_running_and_paused_containers_for_later_restore
 }
 
 #[tokio::test]
-async fn checkpoint_all_restores_attached_exec_as_its_own_process_image() {
+async fn execution_checkpoint_restores_without_capturing_the_container_init() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_secs(1);
     let runtime = Arc::new(runtime);
@@ -292,9 +292,14 @@ async fn checkpoint_all_restores_attached_exec_as_its_own_process_image() {
     let _session = containers.executions().start(&exec.id).await.unwrap();
 
     containers
+        .executions()
         .checkpoint_all(Duration::from_secs(1))
         .await
         .unwrap();
+    assert!(matches!(
+        containers.inspect("workspace").await.unwrap().state,
+        ContainerState::Running { .. }
+    ));
     let checkpointed = containers.executions().inspect(&exec.id).await.unwrap();
     assert_eq!(checkpointed.state, ExecState::Created);
     assert_eq!(
@@ -305,6 +310,7 @@ async fn checkpoint_all_restores_attached_exec_as_its_own_process_image() {
         Some(format!("exec-{}", exec.id).as_str())
     );
 
+    containers.shutdown(Duration::from_secs(1)).await.unwrap();
     containers.start("workspace").await.unwrap();
     let _restored = containers.executions().start(&exec.id).await.unwrap();
     assert!(matches!(
@@ -318,7 +324,7 @@ async fn checkpoint_all_restores_attached_exec_as_its_own_process_image() {
     ));
     assert_eq!(
         runtime.checkpoints.lock().unwrap().as_slice(),
-        [Some(false), Some(false), Some(true), Some(true)]
+        [Some(false), Some(false), Some(false), Some(true)]
     );
 }
 

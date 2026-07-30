@@ -93,13 +93,13 @@ pub fn launch(
         .build()?;
     let socket = crate::runtime::domain::Domain::new(workspace).ensure(workspace)?;
     let client = hl_client::Client::unix(socket).map_err(LauncherError::io)?;
-    runtime
+    let session = runtime
         .block_on(WorkspaceContainer::ready(&client))
         .map_err(LauncherError::io)?;
     let start_dir = cwd
         .map(str::trim)
         .filter(|value| value.starts_with('/') && !value.is_empty())
-        .unwrap_or("/root");
+        .unwrap_or_else(|| session.home());
     let base = workspace
         .shell
         .as_deref()
@@ -122,9 +122,17 @@ pub fn launch(
             stderr: true,
         },
         tty: true,
-        env: slot.map(|slot| vec![format!("{PANE_SLOT}={slot}")]),
+        env: Some(
+            [
+                Some(format!("HOME={}", session.home())),
+                slot.map(|slot| format!("{PANE_SLOT}={slot}")),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+        ),
         command: vec!["/bin/sh".into(), "-c".into(), command],
-        user: "0:0".into(),
+        user: session.user().into(),
         working_dir: start_dir.into(),
         ..ExecConfig::default()
     };
@@ -230,26 +238,39 @@ pub fn launch(
 struct WorkspaceContainer;
 
 impl WorkspaceContainer {
-    async fn ready(client: &hl_client::Client) -> hl_client::Result<()> {
-        let container = client.containers().inspect("workspace").await?;
+    async fn ready(client: &hl_client::Client) -> io::Result<crate::runtime::session::Session> {
+        let container = client
+            .containers()
+            .inspect("workspace")
+            .await
+            .map_err(io::Error::other)?;
         if container.state.activity.running && !container.state.activity.paused {
-            return Ok(());
+            return crate::runtime::session::Session::from_labels(&container.config.labels);
         }
         match client.containers().start("workspace").await {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                let container = client
+                    .containers()
+                    .inspect("workspace")
+                    .await
+                    .map_err(io::Error::other)?;
+                crate::runtime::session::Session::from_labels(&container.config.labels)
+            }
             Err(hl_client::Error::Docker { status, .. })
                 if matches!(status.as_u16(), 304 | 409) =>
             {
-                let container = client.containers().inspect("workspace").await?;
+                let container = client
+                    .containers()
+                    .inspect("workspace")
+                    .await
+                    .map_err(io::Error::other)?;
                 if container.state.activity.running && !container.state.activity.paused {
-                    Ok(())
+                    crate::runtime::session::Session::from_labels(&container.config.labels)
                 } else {
-                    Err(hl_client::Error::Protocol(
-                        "workspace container did not become ready".into(),
-                    ))
+                    Err(io::Error::other("workspace container did not become ready"))
                 }
             }
-            Err(error) => Err(error),
+            Err(error) => Err(io::Error::other(error)),
         }
     }
 }

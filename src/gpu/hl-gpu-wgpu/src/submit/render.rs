@@ -1,4 +1,5 @@
 use super::*;
+use wgpu::util::DeviceExt;
 
 impl WgpuExecutor {
     /// Execute one render pass: begin with the color attachments (clear/load), replay any pipeline/bind/
@@ -16,11 +17,12 @@ impl WgpuExecutor {
         color: &[ColorAttachment],
         depth: Option<&DepthAttachment>,
         ops: &[Enc],
+        encoder: &mut wgpu::CommandEncoder,
     ) -> Result<()> {
         // Run the pass under a validation scope so a wgpu rejection at pass-end/submit (e.g. a draw whose
         // vertex/index count overruns the bound buffer, or a depth-tested pipeline drawn with no depth
         // attachment) is a typed error, not the panicking default handler — and the executor survives.
-        self.with_validation_scope(|s| s.run_render_pass_inner(res, color, depth, ops))
+        self.with_validation_scope(|s| s.run_render_pass_inner(res, color, depth, ops, encoder))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -30,6 +32,7 @@ impl WgpuExecutor {
         color: &[ColorAttachment],
         depth: Option<&DepthAttachment>,
         ops: &[Enc],
+        enc: &mut wgpu::CommandEncoder,
     ) -> Result<()> {
         let _sp = hl_log::hl_span!(tag::EXEC, "submit");
         hl_log::hl_count!(tag::EXEC, "passes");
@@ -93,7 +96,45 @@ impl WgpuExecutor {
         // (pipeline id, [(set index, bind group)]) per Draw, in order. An empty group list is the bindingless
         // fast path (e.g. the conformance triangle) — unlike compute, a draw with no bind group is legal.
         #[allow(clippy::type_complexity)]
-        let mut draws: Vec<(u32, Vec<(u32, wgpu::BindGroup)>)> = Vec::new();
+        let mut draws: Vec<(u32, Vec<(u32, wgpu::BindGroup, Vec<u32>)>)> = Vec::new();
+        let alignment = self
+            .gpu
+            .device
+            .limits()
+            .min_uniform_buffer_offset_alignment
+            .max(16) as usize;
+        let mut corrections = Vec::new();
+        let mut viewport = Viewport::full();
+        for op in ops {
+            match op {
+                Enc::SetViewport { x, y, w, h, .. } => {
+                    viewport = Viewport::new(*x, *y, *w, *h, target_w, target_h)
+                        .unwrap_or_else(Viewport::full);
+                }
+                Enc::Draw { .. } | Enc::DrawIndexed { .. } => corrections.push(viewport.correction),
+                _ => {}
+            }
+        }
+        let uniform_size = corrections
+            .len()
+            .checked_mul(alignment)
+            .ok_or(GpuError::OutOfBounds)?;
+        let mut uniform_bytes = vec![0; uniform_size];
+        for (index, correction) in corrections.iter().enumerate() {
+            let start = index.checked_mul(alignment).ok_or(GpuError::OutOfBounds)?;
+            let end = start.checked_add(16).ok_or(GpuError::OutOfBounds)?;
+            uniform_bytes[start..end].copy_from_slice(bytemuck::cast_slice(correction));
+        }
+        let viewport_buffer = (!uniform_bytes.is_empty()).then(|| {
+            self.gpu
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("hl-viewports"),
+                    contents: &uniform_bytes,
+                    usage: wgpu::BufferUsages::UNIFORM,
+                })
+        });
+        let mut draw_index = 0usize;
         for op in ops {
             match op {
                 Enc::SetPipeline(p) => cur_pipeline = Some(*p),
@@ -130,6 +171,14 @@ impl WgpuExecutor {
                         ));
                     }
                     let mut groups = Vec::new();
+                    let viewport_buffer = viewport_buffer
+                        .as_ref()
+                        .ok_or(GpuError::Invalid("draw has no viewport uniform buffer"))?;
+                    let dynamic_offset = draw_index
+                        .checked_mul(alignment)
+                        .and_then(|offset| u32::try_from(offset).ok())
+                        .ok_or(GpuError::OutOfBounds)?;
+                    draw_index += 1;
                     for (idx, bound) in cur_groups.iter().enumerate() {
                         if let Some(g) = bound {
                             let layout = pipeline.get_bind_group_layout(idx as u32);
@@ -142,9 +191,38 @@ impl WgpuExecutor {
                                 &layout,
                                 self.bind_group(res, *g)?,
                                 Some(used_bindings),
+                                true,
+                                (idx == 0).then_some(viewport_buffer),
                             )?;
-                            groups.push((idx as u32, bg));
+                            groups.push((
+                                idx as u32,
+                                bg,
+                                if idx == 0 {
+                                    vec![dynamic_offset]
+                                } else {
+                                    Vec::new()
+                                },
+                            ));
                         }
+                    }
+                    if cur_groups[0].is_none() {
+                        let layout = pipeline.get_bind_group_layout(0);
+                        let empty = hl_gpu::protocol::model::descriptor::BindGroupDesc {
+                            set: 0,
+                            entries: Vec::new(),
+                        };
+                        groups.push((
+                            0,
+                            self.build_bind_group(
+                                res,
+                                &layout,
+                                &empty,
+                                Some(used_bindings),
+                                true,
+                                Some(viewport_buffer),
+                            )?,
+                            vec![dynamic_offset],
+                        ));
                     }
                     draws.push((pid, groups));
                 }
@@ -152,10 +230,6 @@ impl WgpuExecutor {
             }
         }
 
-        let mut enc = self
-            .gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
             let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = views
                 .iter()
@@ -225,6 +299,9 @@ impl WgpuExecutor {
             // produce no pixels — exactly GL's result) instead of falling back to wgpu's default full-target
             // viewport, which would wrongly paint the geometry. Reset by the next in-bounds SetViewport.
             let mut vp_degenerate = false;
+            // Exact logical buffer bindings seen by wgpu. Kept beside the native pass state solely so a
+            // validation failure can name the offending pipeline/slot/buffer tuple.
+            let mut vertex_bindings = std::collections::BTreeMap::new();
             for op in ops {
                 match op {
                     Enc::SetViewport {
@@ -243,9 +320,10 @@ impl WgpuExecutor {
                         // `y=-386, h=642` into a 256-tall target) and orphaned its pass resources downstream.
                         // Intersect the GL rect with the render target so wgpu accepts it; drop the draws when
                         // the intersection is empty. See `clamp_viewport` for the fidelity note.
-                        match clamp_viewport(*x, *y, *w, *h, target_w, target_h) {
-                            Some((cx, cy, cw, ch)) => {
+                        match Viewport::new(*x, *y, *w, *h, target_w, target_h) {
+                            Some(viewport) => {
                                 vp_degenerate = false;
+                                let (cx, cy, cw, ch) = viewport.clipped;
                                 // Depth range is clamped into [0,1] so a stray out-of-range depth (which wgpu
                                 // also rejects) can't reintroduce the very NACK we're clearing.
                                 pass.set_viewport(
@@ -284,6 +362,14 @@ impl WgpuExecutor {
                         if *offset > vb.size {
                             return Err(GpuError::OutOfBounds);
                         }
+                        vertex_bindings.insert(
+                            *slot,
+                            vertex::Binding {
+                                buffer: *buffer,
+                                size: vb.size,
+                                offset: *offset,
+                            },
+                        );
                         pass.set_vertex_buffer(*slot, vb.buffer.slice(*offset..));
                     }
                     Enc::SetIndexBuffer {
@@ -309,13 +395,19 @@ impl WgpuExecutor {
                     } => {
                         let (pid, groups) = &draws[di];
                         di += 1;
-                        if let PipelineNative::Render { pipeline, .. } =
-                            PipelineNative::get(res, *pid)?
-                        {
-                            pass.set_pipeline(pipeline);
-                        }
-                        for (idx, bg) in groups {
-                            pass.set_bind_group(*idx, bg, &[]);
+                        let (pipeline, layouts) = match PipelineNative::get(res, *pid)? {
+                            PipelineNative::Render {
+                                pipeline,
+                                vertex_buffers,
+                                ..
+                            } => (pipeline, vertex_buffers),
+                            PipelineNative::Compute { .. } => {
+                                unreachable!("draw pipeline checked above")
+                            }
+                        };
+                        pass.set_pipeline(pipeline);
+                        for (idx, bg, offsets) in groups {
+                            pass.set_bind_group(*idx, bg, offsets);
                         }
                         // Build the vertex/instance ranges with wrapping-safe arithmetic: a hostile
                         // `first_vertex + vertex_count` (or instance) that overflows `u32` is a debug panic
@@ -326,6 +418,16 @@ impl WgpuExecutor {
                         let i_end = first_instance
                             .checked_add(*instance_count)
                             .ok_or(GpuError::Invalid("wgpu: draw instance range overflow"))?;
+                        vertex::Draw {
+                            pipeline: *pid,
+                            layouts,
+                            bindings: &vertex_bindings,
+                            first_vertex: *first_vertex,
+                            vertex_count: *vertex_count,
+                            first_instance: *first_instance,
+                            instance_count: *instance_count,
+                        }
+                        .log();
                         // A draw under a wholly-out-of-bounds viewport rasterizes nothing in GL; skip it
                         // (di/pipeline/binds already advanced) rather than draw through the default viewport.
                         if !vp_degenerate {
@@ -346,8 +448,8 @@ impl WgpuExecutor {
                         {
                             pass.set_pipeline(pipeline);
                         }
-                        for (idx, bg) in groups {
-                            pass.set_bind_group(*idx, bg, &[]);
+                        for (idx, bg, offsets) in groups {
+                            pass.set_bind_group(*idx, bg, offsets);
                         }
                         let idx_end = first_index
                             .checked_add(*index_count)
@@ -368,8 +470,6 @@ impl WgpuExecutor {
                 }
             }
         }
-        self.gpu.queue.submit(Some(enc.finish()));
-        self.gpu.device.poll(wgpu::Maintain::Wait);
         Ok(())
     }
 }

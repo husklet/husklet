@@ -20,11 +20,15 @@ const FS: &str = "precision mediump float;\nvarying vec2 vUV;\nuniform sampler2D
 
 fn ctx_640x480() -> GlContext {
     let mut c = GlContext::new();
-    c.surf = GlSurface {
+    c.set_surface(GlSurface {
         have: true,
         width: 640,
         height: 480,
-    };
+    });
+    c.set_present_frame(
+        Some(hl_gpu::protocol::model::descriptor::SurfaceToken::new(7).unwrap()),
+        Some(hl_gpu::protocol::model::descriptor::FrameSerial::new(1).unwrap()),
+    );
     c
 }
 

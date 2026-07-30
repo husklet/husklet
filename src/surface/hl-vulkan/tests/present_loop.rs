@@ -46,7 +46,7 @@ fn swapchain_create_and_images_tracks_real_render_targets() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
     let surface =
-        present::create_surface(&mut d, &mut sink, W, H, vk_format::B8G8R8A8_UNORM, 0).unwrap();
+        present::create_surface(&mut d, &mut sink, W, H, vk_format::B8G8R8A8_UNORM, None).unwrap();
     let sc = present::create_swapchain(&mut d, &mut sink, surface, N).unwrap();
 
     // vkGetSwapchainImagesKHR: exactly N handles, all live + distinct + non-null.
@@ -164,7 +164,7 @@ fn acquire_round_robin_present_sources_the_acquired_image() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
     let surface =
-        present::create_surface(&mut d, &mut sink, W, H, vk_format::B8G8R8A8_UNORM, 0).unwrap();
+        present::create_surface(&mut d, &mut sink, W, H, vk_format::B8G8R8A8_UNORM, None).unwrap();
     let sc = present::create_swapchain(&mut d, &mut sink, surface, N).unwrap();
     let images = d.swapchain_images(sc).unwrap();
     let texids: Vec<u32> = images.iter().map(|&h| tex_of(&d, h)).collect();
@@ -207,17 +207,13 @@ fn acquire_round_robin_present_sources_the_acquired_image() {
             "the frame renders into the acquired image"
         );
 
-        // Present it — the present must source the acquired image's texture.
-        present::queue_present(&mut d, &mut sink, sc, idx).unwrap();
-        match sink.batches.last().unwrap().as_slice() {
-            [Cmd::Present { texture, .. }] => {
-                assert_eq!(
-                    *texture, texids[idx as usize],
-                    "the present sources the acquired image's texture"
-                )
-            }
-            other => panic!("expected Present, got {other:?}"),
-        }
+        // Headless present advances ownership without inventing a native surface or frame token.
+        present::queue_present(&mut d, &mut sink, sc, idx, None).unwrap();
+        assert!(!sink
+            .batches
+            .iter()
+            .flatten()
+            .any(|command| matches!(command, Cmd::Present { .. })));
         // The headless present completes immediately, returning the image to the pool.
         assert_eq!(
             d.swapchains.get(&sc).unwrap().images[idx as usize].state,
@@ -256,7 +252,7 @@ fn multi_frame_resource_lifetime_reuses_transients_without_id_leak() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
     let surface =
-        present::create_surface(&mut d, &mut sink, W, H, vk_format::B8G8R8A8_UNORM, 0).unwrap();
+        present::create_surface(&mut d, &mut sink, W, H, vk_format::B8G8R8A8_UNORM, None).unwrap();
     let sc = present::create_swapchain(&mut d, &mut sink, surface, N).unwrap();
     let images = d.swapchain_images(sc).unwrap();
     let texids: Vec<u32> = images.iter().map(|&h| tex_of(&d, h)).collect();
@@ -317,16 +313,12 @@ fn multi_frame_resource_lifetime_reuses_transients_without_id_leak() {
             other => panic!("frame {frame}: expected a single Submit, got {other:?}"),
         }
 
-        present::queue_present(&mut d, &mut sink, sc, idx).unwrap();
-        match sink.batches.last().unwrap().as_slice() {
-            [Cmd::Present { texture, .. }] => {
-                assert_eq!(
-                    *texture, texids[idx as usize],
-                    "frame {frame}: presents the acquired image"
-                )
-            }
-            other => panic!("frame {frame}: expected Present, got {other:?}"),
-        }
+        present::queue_present(&mut d, &mut sink, sc, idx, None).unwrap();
+        assert!(!sink
+            .batches
+            .iter()
+            .flatten()
+            .any(|command| matches!(command, Cmd::Present { .. })));
 
         // Reuse the timeline semaphore: signal it to a fresh value each frame — its counter advances, but
         // it is the SAME object (never re-created).
@@ -393,7 +385,8 @@ fn swapchain_recreation_retires_old_images_without_leak() {
 
     // Original swapchain A over a 640x480 surface, double-buffered.
     let surf_a =
-        present::create_surface(&mut d, &mut sink, 640, 480, vk_format::B8G8R8A8_UNORM, 0).unwrap();
+        present::create_surface(&mut d, &mut sink, 640, 480, vk_format::B8G8R8A8_UNORM, None)
+            .unwrap();
     let sc_a = present::create_swapchain(&mut d, &mut sink, surf_a, 2).unwrap();
     let imgs_a = d.swapchain_images(sc_a).unwrap();
     let texs_a: Vec<u32> = imgs_a.iter().map(|&h| tex_of(&d, h)).collect();
@@ -403,7 +396,8 @@ fn swapchain_recreation_retires_old_images_without_leak() {
     // Resize: build the fresh swapchain B (new 800x600 surface, triple-buffered) BEFORE destroying A — the
     // real app resize order (oldSwapchain kept alive until the new one is ready).
     let surf_b =
-        present::create_surface(&mut d, &mut sink, 800, 600, vk_format::B8G8R8A8_UNORM, 0).unwrap();
+        present::create_surface(&mut d, &mut sink, 800, 600, vk_format::B8G8R8A8_UNORM, None)
+            .unwrap();
     let sc_b = present::create_swapchain(&mut d, &mut sink, surf_b, 3).unwrap();
     let imgs_b = d.swapchain_images(sc_b).unwrap();
     assert_eq!(
@@ -452,13 +446,11 @@ fn swapchain_recreation_retires_old_images_without_leak() {
         destroyed_texs, texs_a,
         "each of A's textures is freed on the host"
     );
-    assert!(
-        sink.batches
-            .iter()
-            .flatten()
-            .any(|c| matches!(c, Cmd::DestroySurface(id) if *id == surf_a_ir)),
-        "A's presentation surface is freed on the host"
-    );
+    assert!(!sink
+        .batches
+        .iter()
+        .flatten()
+        .any(|command| matches!(command, Cmd::DestroySurface(id) if *id == surf_a_ir)));
 
     // B — the LIVE swapchain — is untouched: its images all persist and it still presents.
     assert_eq!(
@@ -474,13 +466,13 @@ fn swapchain_recreation_retires_old_images_without_leak() {
     }
     let idx = d.acquire_next_image(sc_b).unwrap();
     assert!(
-        present::queue_present(&mut d, &mut sink, sc_b, idx).is_ok(),
+        present::queue_present(&mut d, &mut sink, sc_b, idx, None).is_ok(),
         "B still presents after A is gone"
     );
 
     // The destroyed swapchain is truly dead: a present against it is a truthful error, not a false success.
     assert!(
-        present::queue_present(&mut d, &mut sink, sc_a, 0).is_err(),
+        present::queue_present(&mut d, &mut sink, sc_a, 0, None).is_err(),
         "presenting a destroyed swapchain errors"
     );
 

@@ -23,7 +23,6 @@ use hl_vulkan::result::{self, Status};
 use hl_vulkan::service::{create, present, record, submit, sync};
 use hl_vulkan::{Device, Instance};
 
-use hl_gpu::protocol::model::enums::TextureFormat;
 use hl_gpu::{Cmd, GpuError, RecordingSink};
 
 fn dev() -> Device {

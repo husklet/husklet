@@ -368,8 +368,11 @@ pub struct VkPipelineMultisampleStateCreateInfo {
     pub p_next: *const c_void,
     pub flags: VkFlags,
     pub rasterization_samples: i32,
-    // Remaining fields (sampleShadingEnable, minSampleShading, pSampleMask, alphaToCoverageEnable,
-    // alphaToOneEnable) are NOT modeled and are never read through this pointer.
+    pub sample_shading_enable: VkBool32,
+    pub min_sample_shading: f32,
+    pub p_sample_mask: *const u32,
+    pub alpha_to_coverage_enable: VkBool32,
+    pub alpha_to_one_enable: VkBool32,
 }
 
 /// `VkPipelineRasterizationStateCreateInfo` — the rasterization fixed-function state of a graphics
@@ -390,8 +393,11 @@ pub struct VkPipelineRasterizationStateCreateInfo {
     pub cull_mode: VkFlags,
     /// `VkFrontFace` — 0 COUNTER_CLOCKWISE, 1 CLOCKWISE.
     pub front_face: i32,
-    // Remaining fields (depthBiasEnable, depthBiasConstantFactor, depthBiasClamp, depthBiasSlopeFactor,
-    // lineWidth) are NOT modeled and are never read through this pointer.
+    pub depth_bias_enable: VkBool32,
+    pub depth_bias_constant_factor: f32,
+    pub depth_bias_clamp: f32,
+    pub depth_bias_slope_factor: f32,
+    pub line_width: f32,
 }
 
 /// `VkPhysicalDeviceDynamicRenderingFeatures` — the feature pNext `vkGetPhysicalDeviceFeatures2` fills to

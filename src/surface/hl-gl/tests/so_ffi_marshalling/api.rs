@@ -71,6 +71,16 @@ fn egl_get_proc_address_returns_callable_pointers() {
         "glClear",
         "glDrawArrays",
         "glGetString",
+        "glDebugMessageCallbackKHR",
+        "glDebugMessageControlKHR",
+        "glDebugMessageInsertKHR",
+        "glGetDebugMessageLogKHR",
+        "glGetObjectLabelKHR",
+        "glGetObjectPtrLabelKHR",
+        "glObjectLabelKHR",
+        "glObjectPtrLabelKHR",
+        "glPopDebugGroupKHR",
+        "glPushDebugGroupKHR",
     ] {
         assert!(
             !get(name).is_null(),

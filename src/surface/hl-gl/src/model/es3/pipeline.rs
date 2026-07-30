@@ -84,4 +84,13 @@ impl ProgramPipelines {
             self.bound = 0;
         }
     }
+
+    pub(crate) fn references_program(&self, program: u32) -> bool {
+        self.objects.values().any(|pipeline| {
+            pipeline.vertex_program == program
+                || pipeline.fragment_program == program
+                || pipeline.compute_program == program
+                || pipeline.active_program == program
+        })
+    }
 }

@@ -81,6 +81,8 @@ pub enum WlAppError {
     QueueSetup,
     /// The compositor never advertised `wl_shm` on the app's registry — soft.
     NoShmGlobal,
+    /// Native surface identity is unavailable; SHM fallback remains valid.
+    NoIdentity,
     /// The readback plane was smaller than `w*h*4` (or all-zero) — hard.
     BadSize,
     /// Allocating / mapping the shm memfd failed — hard.
@@ -103,6 +105,7 @@ impl WlAppError {
                 | WlAppError::NoDisplay
                 | WlAppError::QueueSetup
                 | WlAppError::NoShmGlobal
+                | WlAppError::NoIdentity
         )
     }
 

@@ -36,3 +36,12 @@ bytemuck = "1"
 # Tag-based logging + counters + timing. Zero-cost when off (verbose levels + counters/spans compile to
 # `{}` in a default release build); instrumentation is gated at runtime by HL_LOG / HL_LOG_COUNTERS.
 hl-log = { path = "../../packages/hl-log" }
+
+[dev-dependencies]
+hl-gl = { path = "../../surface/hl-gl" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The native presentation adapter imports an IOSurface-backed MTLTexture into wgpu. These are target-gated:
+# the cross-platform executor and its SHM fallback do not carry Apple frameworks on other hosts.
+hl-iosurface = { path = "../../packages/hl-iosurface" }
+metal = "0.31"

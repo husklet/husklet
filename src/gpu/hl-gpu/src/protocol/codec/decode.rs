@@ -53,6 +53,9 @@ impl<'a> Decoder<'a> {
             address_u: AddressMode::from_u32(d.u32()?)?,
             address_v: AddressMode::from_u32(d.u32()?)?,
             address_w: AddressMode::from_u32(d.u32()?)?,
+            lod_min_clamp: d.f32_finite("sampler lod_min_clamp")?,
+            lod_max_clamp: d.f32_finite("sampler lod_max_clamp")?,
+            compare: if d.bool()? { Some(d.u32()?) } else { None },
         })
     }
 
@@ -147,6 +150,9 @@ impl<'a> Decoder<'a> {
                 stencil_back: d.stencil_face()?,
                 stencil_read_mask: d.u32()?,
                 stencil_write_mask: d.u32()?,
+                bias_constant: d.i32()?,
+                bias_slope_scale: d.f32_finite("depth bias slope scale")?,
+                bias_clamp: d.f32_finite("depth bias clamp")?,
             })
         } else {
             None
@@ -182,6 +188,43 @@ impl<'a> Decoder<'a> {
                 },
                 1 => BindResource::Texture { id: d.u32()? },
                 2 => BindResource::Sampler { id: d.u32()? },
+                3 => {
+                    let count = d.u32()? as usize;
+                    if count == 0 {
+                        return Err(GpuError::Invalid("empty buffer binding array"));
+                    }
+                    let mut elements = Vec::with_capacity(d.cap_count(count, 20));
+                    for _ in 0..count {
+                        elements.push(BufferBinding {
+                            id: d.u32()?,
+                            offset: d.u64()?,
+                            size: d.u64()?,
+                        });
+                    }
+                    BindResource::BufferArray { elements }
+                }
+                4 => {
+                    let count = d.u32()? as usize;
+                    if count == 0 {
+                        return Err(GpuError::Invalid("empty binding array"));
+                    }
+                    let mut ids = Vec::with_capacity(d.cap_count(count, 4));
+                    for _ in 0..count {
+                        ids.push(d.u32()?);
+                    }
+                    BindResource::TextureArray { ids }
+                }
+                5 => {
+                    let count = d.u32()? as usize;
+                    if count == 0 {
+                        return Err(GpuError::Invalid("empty binding array"));
+                    }
+                    let mut ids = Vec::with_capacity(d.cap_count(count, 4));
+                    for _ in 0..count {
+                        ids.push(d.u32()?);
+                    }
+                    BindResource::SamplerArray { ids }
+                }
                 t => {
                     return Err(GpuError::BadEnum {
                         what: "BindResource",
@@ -348,6 +391,26 @@ impl<'a> Decoder<'a> {
                 dst: d.u32()?,
                 dst_offset: d.u64()?,
                 bytes_per_row: d.u32()?,
+            },
+            etag::COPY_B2T_REGION => Enc::CopyBufferToTextureRegion {
+                src: d.u32()?,
+                src_offset: d.u64()?,
+                bytes_per_row: d.u32()?,
+                rows_per_image: d.u32()?,
+                dst: d.u32()?,
+                dst_sub: d.subresource()?,
+                dst_origin: d.origin()?,
+                extent: d.extent()?,
+            },
+            etag::COPY_T2B_REGION => Enc::CopyTextureToBufferRegion {
+                src: d.u32()?,
+                src_sub: d.subresource()?,
+                src_origin: d.origin()?,
+                extent: d.extent()?,
+                dst: d.u32()?,
+                dst_offset: d.u64()?,
+                bytes_per_row: d.u32()?,
+                rows_per_image: d.u32()?,
             },
             etag::COPY_T2T => Enc::CopyTextureToTexture {
                 src: d.u32()?,

@@ -178,14 +178,17 @@ fn is_unknown(e: &GpuError) -> bool {
     matches!(e, GpuError::UnknownId { .. })
 }
 fn is_invalid(e: &GpuError) -> bool {
-    matches!(e, GpuError::Invalid(_))
+    matches!(e, GpuError::Invalid(_) | GpuError::Kernel(_))
 }
 /// Some abuses are rejected by an upstream stage (validate) as a `ResourceLimit`, others by the backend —
 /// accept either "structurally rejected" shape.
 fn is_rejected(e: &GpuError) -> bool {
     matches!(
         e,
-        GpuError::Invalid(_) | GpuError::ResourceLimit(_) | GpuError::OutOfBounds
+        GpuError::Invalid(_)
+            | GpuError::Kernel(_)
+            | GpuError::ResourceLimit(_)
+            | GpuError::OutOfBounds
     )
 }
 

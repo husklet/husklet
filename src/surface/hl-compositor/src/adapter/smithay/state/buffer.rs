@@ -1,5 +1,85 @@
 use super::*;
 
+#[cfg(any(feature = "macos-surface", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ExternalBuffer {
+    pub(super) token: u64,
+    pub(super) serial: u64,
+    pub(super) width: i32,
+    pub(super) height: i32,
+    pub(super) stride: u32,
+    pub(super) format: Format,
+}
+
+#[cfg(feature = "macos-surface")]
+pub(super) enum External {
+    Linear,
+    Malformed,
+    Pending(ExternalBuffer),
+    Published(ExternalBuffer),
+}
+
+#[cfg(any(feature = "macos-surface", test))]
+impl ExternalBuffer {
+    pub(super) fn token(dmabuf: &Dmabuf) -> Option<u64> {
+        Some(Self::read(dmabuf)?.token)
+    }
+
+    pub(super) fn published(dmabuf: &Dmabuf) -> Option<Self> {
+        Self::read(dmabuf)
+    }
+
+    fn read(dmabuf: &Dmabuf) -> Option<Self> {
+        use std::os::unix::fs::FileExt;
+
+        let drm = dmabuf.format();
+        if drm.modifier != Modifier::from(hl_surface_protocol::buffer::MODIFIER)
+            || dmabuf.num_planes() != 1
+        {
+            return None;
+        }
+        let format = match drm.code {
+            Fourcc::Argb8888 => Format::Argb8888,
+            Fourcc::Xrgb8888 => Format::Xrgb8888,
+            _ => return None,
+        };
+        let width = dmabuf.width();
+        let height = dmabuf.height();
+        if width == 0 || height == 0 {
+            return None;
+        }
+        let stride = dmabuf.strides().next()?;
+        let offset = dmabuf.offsets().next()?;
+        let fd = dmabuf.handles().next()?;
+        let file = std::fs::File::from(fd.try_clone_to_owned().ok()?);
+        let header_offset = u64::from(stride)
+            .checked_mul(u64::from(height))?
+            .checked_add(u64::from(offset))?;
+        let mut bytes = [0; hl_surface_protocol::buffer::HEADER_LEN];
+        file.read_exact_at(&mut bytes, header_offset).ok()?;
+        let header = hl_surface_protocol::buffer::Header::decode(&bytes).ok()?;
+        let file_len = file.metadata().ok()?.len();
+        if header.width != width
+            || header.height != height
+            || header.fourcc != drm.code as u32
+            || header.stride != stride
+            || header.plane_offset != u64::from(offset)
+            || header.header_offset().ok()? != header_offset
+            || header.allocation_size != file_len
+        {
+            return None;
+        }
+        Some(Self {
+            token: header.token,
+            serial: header.serial,
+            width: i32::try_from(width).ok()?,
+            height: i32::try_from(height).ok()?,
+            stride,
+            format,
+        })
+    }
+}
+
 /// Reads committed Wayland buffers into the neutral compositor's stored RGBA representation.
 pub(super) struct BufferReader<'a> {
     buffer: &'a WlBuffer,
@@ -109,8 +189,8 @@ impl<'a> BufferReader<'a> {
 /// that needs those reads an empty tranche for them and falls back to `wl_shm`. The byte-swapped
 /// ABGR/XBGR fourccs are additionally ACCEPTED at import (mirroring the shm read path) but not advertised,
 /// since ARGB/XRGB is the universal pair GTK/Qt/Chrome negotiate.
-fn dmabuf_formats() -> [DrmFormat; 2] {
-    [
+fn dmabuf_formats(native: bool) -> Vec<DrmFormat> {
+    let mut formats = vec![
         DrmFormat {
             code: Fourcc::Argb8888,
             modifier: Modifier::Linear,
@@ -119,7 +199,14 @@ fn dmabuf_formats() -> [DrmFormat; 2] {
             code: Fourcc::Xrgb8888,
             modifier: Modifier::Linear,
         },
-    ]
+    ];
+    if native {
+        formats.extend([Fourcc::Argb8888, Fourcc::Xrgb8888].map(|code| DrmFormat {
+            code,
+            modifier: Modifier::from(hl_surface_protocol::buffer::MODIFIER),
+        }));
+    }
+    formats
 }
 
 /// The device advertised by dmabuf feedback is the virtual render node supplied by the composed Husklet
@@ -132,16 +219,18 @@ const HUSKLET_RENDER_NODE: DmabufDeviceId = DmabufDeviceId::from_linux_dev_t((22
 /// aligned with the engine wire contract is required for Chromium's Wayland buffer manager.
 pub(super) struct DmabufAdapter<'a> {
     display: &'a DisplayHandle,
+    native: bool,
 }
 
 impl<'a> DmabufAdapter<'a> {
-    pub(super) fn new(display: &'a DisplayHandle) -> Self {
-        Self { display }
+    pub(super) fn new(display: &'a DisplayHandle, native: bool) -> Self {
+        Self { display, native }
     }
 
     pub(super) fn state(&self) -> DmabufState {
         let mut state = DmabufState::new();
-        match DmabufFeedbackBuilder::new(HUSKLET_RENDER_NODE, dmabuf_formats()).build() {
+        let formats = dmabuf_formats(self.native);
+        match DmabufFeedbackBuilder::new(HUSKLET_RENDER_NODE, formats.clone()).build() {
             Ok(feedback) => {
                 let _global: DmabufGlobal =
                     state.create_global_with_default_feedback::<HlState>(self.display, &feedback);
@@ -149,9 +238,8 @@ impl<'a> DmabufAdapter<'a> {
             Err(error) => {
                 eprintln!(
                 "hl-compositor: dmabuf feedback unavailable ({error}); advertising the v3 linear-import contract"
-            );
-                let _global: DmabufGlobal =
-                    state.create_global::<HlState>(self.display, dmabuf_formats());
+                );
+                let _global: DmabufGlobal = state.create_global::<HlState>(self.display, formats);
             }
         }
         state
@@ -166,6 +254,21 @@ impl<'a> DmabufAdapter<'a> {
 /// / multi-plane / unsupported fourcc / malformed geometry / backing too small). The four fourcc channel
 /// orders map exactly as in [`read_shm_rgba`].
 impl<'a> BufferReader<'a> {
+    #[cfg(feature = "macos-surface")]
+    pub(super) fn external(&self) -> External {
+        let Ok(dmabuf) = get_dmabuf(self.buffer) else {
+            return External::Linear;
+        };
+        if dmabuf.format().modifier != Modifier::from(hl_surface_protocol::buffer::MODIFIER) {
+            return External::Linear;
+        }
+        match ExternalBuffer::published(dmabuf) {
+            Some(metadata) if metadata.serial == 0 => External::Pending(metadata),
+            Some(metadata) => External::Published(metadata),
+            None => External::Malformed,
+        }
+    }
+
     pub(super) fn dmabuf_rgba(&self) -> Option<(StoredBuffer, Format)> {
         use std::os::unix::fs::FileExt;
         let dmabuf = get_dmabuf(self.buffer).ok()?;
@@ -204,6 +307,7 @@ impl<'a> BufferReader<'a> {
         let read_len = (span - offset) as usize;
         let mut raw = vec![0u8; read_len];
         file.read_exact_at(&mut raw, offset as u64).ok()?;
+        hl_log::hl_add!(tag::WAYLAND, "linear_dmabuf_pread_bytes", read_len as u64);
         // `raw[0]` corresponds to file offset `offset`, so pixel (x, y) begins at `raw[y*stride + x*4]`.
         let mut rgba = vec![0u8; w as usize * h as usize * 4];
         for y in 0..h {
@@ -235,3 +339,6 @@ impl<'a> BufferReader<'a> {
         ))
     }
 }
+
+#[cfg(test)]
+include!("memory.rs");

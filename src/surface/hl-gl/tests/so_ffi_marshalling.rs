@@ -62,6 +62,10 @@ const GL_UNSIGNED_SHORT: u32 = 0x1403;
 const GL_UNSIGNED_BYTE: u32 = 0x1401;
 const GL_RGBA: u32 = 0x1908;
 const GL_VERTEX_ATTRIB_ARRAY_ENABLED: u32 = 0x8622;
+const GL_COLOR: u32 = 0x1800;
+const GL_DEPTH: u32 = 0x1801;
+const GL_STENCIL: u32 = 0x1802;
+const GL_DEPTH_STENCIL: u32 = 0x84F9;
 
 // EGL config attributes.
 const EGL_BUFFER_SIZE: i32 = 0x3020;
@@ -224,6 +228,8 @@ fn surfaceless_display(sh: &Shim) -> *mut c_void {
 mod api;
 #[path = "so_ffi_marshalling/buffer.rs"]
 mod buffer;
+#[path = "so_ffi_marshalling/clear.rs"]
+mod clear;
 #[path = "so_ffi_marshalling/config.rs"]
 mod config;
 #[path = "so_ffi_marshalling/draw.rs"]

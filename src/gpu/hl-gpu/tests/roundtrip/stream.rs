@@ -9,6 +9,22 @@ fn stream_round_trips_unchanged() {
 }
 
 #[test]
+fn present_rejects_zero_frame_serial() {
+    let mut bytes = Encoder::new();
+    bytes.u8(hl_gpu::protocol::model::command::tag::PRESENT);
+    bytes.u32(7);
+    bytes.u32(9);
+    bytes.u64(0);
+
+    let encoded = bytes.into_vec();
+    let mut decoder = Decoder::new(&encoded);
+    assert_eq!(
+        Cmd::decode(&mut decoder),
+        Err(hl_gpu::GpuError::Invalid("frame serial is zero"))
+    );
+}
+
+#[test]
 fn each_command_frame_round_trips() {
     for c in representative_stream() {
         let framed = c.frame();

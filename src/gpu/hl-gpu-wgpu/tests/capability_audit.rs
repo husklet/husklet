@@ -17,7 +17,7 @@
 //! Skips with no adapter.
 
 use hl_gpu::protocol::model::capability::{
-    shader_payload, PresentKind, ALL_COMMANDS, COLOR_FORMATS, DEPTH_FORMATS,
+    binding_array, shader_payload, PresentKind, ALL_COMMANDS, COLOR_FORMATS, DEPTH_FORMATS,
 };
 use hl_gpu::protocol::model::command::WIRE_VERSION;
 use hl_gpu::protocol::model::descriptor::TextureDesc;
@@ -67,6 +67,26 @@ fn advertised_wire_version_and_command_set_are_the_full_ir() {
         caps.max_bind_groups, 4,
         "advertised max_bind_groups pins the per-pass bind-group array size"
     );
+    assert_ne!(
+        caps.binding_arrays & binding_array::STORAGE_BUFFER,
+        0,
+        "storage-buffer arrays are scalarized into ordinary host bindings"
+    );
+    assert_ne!(
+        caps.non_uniform_binding_arrays & binding_array::STORAGE_BUFFER,
+        0,
+        "dynamic storage-buffer indexing is bounded and scalarized"
+    );
+    assert_ne!(
+        caps.binding_arrays & binding_array::STORAGE_TEXTURE,
+        0,
+        "storage-image arrays are scalarized into ordinary host bindings"
+    );
+    assert_ne!(
+        caps.non_uniform_binding_arrays & binding_array::STORAGE_TEXTURE,
+        0,
+        "dynamic storage-image indexing is bounded and scalarized"
+    );
     assert_eq!(
         caps.present_kinds,
         vec![PresentKind::Shm],
@@ -109,7 +129,9 @@ fn every_advertised_texture_format_is_really_creatable() {
     // The advertisement is exactly color ∪ depth ∪ combined-depth-stencil.
     let expect = TextureFormat::bits(COLOR_FORMATS)
         | TextureFormat::bits(DEPTH_FORMATS)
-        | TextureFormat::bits(&[TextureFormat::Depth24PlusStencil8]);
+        | TextureFormat::bits(&[TextureFormat::Depth24PlusStencil8])
+        | (caps.texture_formats
+            & TextureFormat::bits(hl_gpu::protocol::model::capability::BC_FORMATS));
     assert_eq!(
         caps.texture_formats, expect,
         "advertised texture formats must be exactly the backed union"
@@ -117,7 +139,7 @@ fn every_advertised_texture_format_is_really_creatable() {
 
     // Every format across the whole enum: if advertised it MUST allocate; the two depth formats are render
     // targets, the color formats are full-usage. This is the "no advertised-but-unallocatable format" check.
-    let all = [
+    let mut all = vec![
         TextureFormat::Rgba8Unorm,
         TextureFormat::Bgra8Unorm,
         TextureFormat::Rgba8Srgb,
@@ -130,6 +152,7 @@ fn every_advertised_texture_format_is_really_creatable() {
         TextureFormat::Depth32Float,
         TextureFormat::Depth24PlusStencil8,
     ];
+    all.extend_from_slice(hl_gpu::protocol::model::capability::BC_FORMATS);
     for fmt in all {
         if !caps.supports_format(fmt) {
             continue;
@@ -138,8 +161,11 @@ fn every_advertised_texture_format_is_really_creatable() {
             fmt,
             TextureFormat::Depth32Float | TextureFormat::Depth24PlusStencil8
         );
+        let compressed = fmt.block_geometry().is_some();
         let usage = if is_depth {
             texture_usage::RENDER_TARGET
+        } else if compressed {
+            texture_usage::SAMPLED | texture_usage::COPY_SRC | texture_usage::COPY_DST
         } else {
             texture_usage::SAMPLED
                 | texture_usage::COPY_SRC
@@ -148,8 +174,8 @@ fn every_advertised_texture_format_is_really_creatable() {
         };
         let mut s = session(&exec);
         let desc = TextureDesc {
-            width: 2,
-            height: 2,
+            width: if compressed { 4 } else { 2 },
+            height: if compressed { 4 } else { 2 },
             depth: 1,
             mip_levels: 1,
             sample_count: 1,

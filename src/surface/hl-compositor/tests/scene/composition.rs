@@ -159,7 +159,7 @@ fn compositor_presents_the_tree_layers_in_order_through_the_presenter() {
     commit_surface(&mut c.scene, popup, Commit::attach(shm(180, 240)));
 
     let out = c.present_root(top);
-    assert_eq!(out.presented, vec![top, sub, popup]);
+    assert_eq!(out.presented, vec![top, popup]);
     assert_eq!(
         c.presenter().present_order(),
         vec![top, sub, popup],
@@ -170,6 +170,40 @@ fn compositor_presents_the_tree_layers_in_order_through_the_presenter() {
     assert_eq!(base.output, OutputId(1));
     assert_eq!((base.width, base.height), (1000, 700));
     assert!(base.timing.vsync && base.timing.refresh_ns > 0);
+}
+
+#[test]
+fn subsurface_stack_preserves_children_below_and_above_parent() {
+    let mut c = compositor();
+    let parent = map_toplevel(&mut c.scene, 100, 100);
+    let below = c.scene.create_surface();
+    let above = c.scene.create_surface();
+    for (surface, x) in [(below, 2), (above, 4)] {
+        c.scene.set_role(
+            surface,
+            SurfaceRole::Subsurface(SubsurfaceState {
+                parent,
+                x,
+                y: x,
+                sync: false,
+            }),
+        );
+        commit_surface(&mut c.scene, surface, Commit::attach(shm(10, 10)));
+    }
+    c.scene
+        .set_subsurface_order(parent, &[below, parent, above]);
+    let frames = c
+        .scene
+        .compose_present_frames(parent, OutputId(1), PresentTiming::fallback(0, 16_666_667))
+        .unwrap();
+    assert_eq!(
+        frames[0]
+            .layers
+            .iter()
+            .map(|layer| layer.image.surface)
+            .collect::<Vec<_>>(),
+        vec![below, parent, above]
+    );
 }
 
 #[test]

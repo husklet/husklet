@@ -1,16 +1,37 @@
 //! Launch-scoped host capabilities contributed by composed device backends.
 
 use crate::{Guest, Mount, Process, Result};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 pub use hl_engine::extension;
 pub use hl_engine::spec::Version;
+
+/// Read-only view of the guest filesystem layers supplied to a device backend.
+#[derive(Clone, Copy, Debug)]
+pub struct FilesystemView<'launch> {
+    lower: &'launch Path,
+    upper: Option<&'launch Path>,
+}
+
+impl<'launch> FilesystemView<'launch> {
+    #[must_use]
+    pub fn new(lower: &'launch Path, upper: Option<&'launch Path>) -> Self {
+        Self { lower, upper }
+    }
+
+    /// Returns filesystem layers in guest precedence order.
+    #[must_use]
+    pub fn layers(self) -> impl DoubleEndedIterator<Item = &'launch Path> {
+        self.upper.into_iter().chain(std::iter::once(self.lower))
+    }
+}
 
 /// Read-only launch state supplied to a device backend.
 #[derive(Clone, Copy)]
 pub struct DeviceContext<'launch> {
     pub guest: Guest,
     pub process: &'launch Process,
+    pub filesystem: FilesystemView<'launch>,
 }
 
 /// Launch-scoped live ports granted to one engine extension provider.
@@ -188,6 +209,14 @@ mod tests {
         }
     }
 
+    fn context<'a>(process: &'a Process, root: &'a Path) -> DeviceContext<'a> {
+        DeviceContext {
+            guest: Guest::Aarch64,
+            process,
+            filesystem: FilesystemView::new(root, None),
+        }
+    }
+
     #[test]
     fn devices_compose_launch_requirements() {
         let request = DeviceRequest {
@@ -197,13 +226,9 @@ mod tests {
         };
         let devices = Devices::new().with(Graphics(request));
         let process = process();
+        let root = PathBuf::from("/");
 
-        let combined = devices
-            .request(DeviceContext {
-                guest: Guest::Aarch64,
-                process: &process,
-            })
-            .unwrap();
+        let combined = devices.request(context(&process, &root)).unwrap();
 
         assert_eq!(combined.mounts[0].target, PathBuf::from("/run/gpu.sock"));
         assert_eq!(combined.environment["GPU_SOCKET"], "/run/gpu.sock");
@@ -221,13 +246,9 @@ mod tests {
         };
         let devices = Devices::new().with(Graphics(first)).with(Graphics(second));
         let process = process();
+        let root = PathBuf::from("/");
 
-        let error = devices
-            .request(DeviceContext {
-                guest: Guest::Aarch64,
-                process: &process,
-            })
-            .unwrap_err();
+        let error = devices.request(context(&process, &root)).unwrap_err();
 
         assert!(error.to_string().contains("mount target is duplicated"));
     }

@@ -14,7 +14,7 @@ fn junk_enums_to_state_setters_never_panic_and_valid_still_works() {
     record::enable(&mut c, 0xDEAD_BEEF);
     record::disable(&mut c, 0x0000_0001);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
-    assert!(!c.blend);
+    assert!(!c.blend_enabled());
 
     // A bogus glBindTexture target + a junk texture name: no panic, no crash.
     c.active_texture(GL_TEXTURE0);
@@ -26,7 +26,7 @@ fn junk_enums_to_state_setters_never_panic_and_valid_still_works() {
 
     // A valid glEnable(GL_BLEND) still takes effect afterwards.
     record::enable(&mut c, GL_BLEND);
-    assert!(c.blend);
+    assert!(c.blend_enabled());
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
 }
 
@@ -41,7 +41,7 @@ fn draw_read_buffer_reject_bad_enum_then_valid_works() {
 
     record::draw_buffers(&mut c, &[GL_COLOR_ATTACHMENT0, GL_NONE]);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
-    assert_eq!(c.draw_buffers, vec![GL_COLOR_ATTACHMENT0, GL_NONE]);
+    assert_eq!(c.draw_buffers(), vec![GL_COLOR_ATTACHMENT0, GL_NONE]);
     record::read_buffer(&mut c, GL_COLOR_ATTACHMENT0);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
 }
@@ -53,7 +53,7 @@ fn draw_arrays_with_junk_mode_records_without_panicking() {
     let mut c = ctx();
     record::draw_arrays(&mut c, 0xDEAD_BEEF, 0, 3);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
-    assert_eq!(c.draws.len(), 1);
+    assert_eq!(c.draws().len(), 1);
     record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
-    assert_eq!(c.draws.len(), 2);
+    assert_eq!(c.draws().len(), 2);
 }

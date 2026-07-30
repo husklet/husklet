@@ -8,8 +8,8 @@ use crate::model::sync::DeferredOp;
 use crate::*;
 use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::descriptor::{
-    BindEntry, BindGroupDesc, BindResource, ColorAttachment, DepthAttachment, Extent3d, Origin3d,
-    TextureSubresource,
+    BindEntry, BindGroupDesc, BindResource, BufferBinding, ColorAttachment, DepthAttachment,
+    Extent3d, Origin3d, TextureSubresource,
 };
 use hl_gpu::protocol::model::enums::{
     buffer_usage, texture_usage, Filter, IndexFormat, LoadOp, TextureFormat,

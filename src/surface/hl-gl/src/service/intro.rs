@@ -33,12 +33,14 @@ pub fn get_uniform_bytes(ctx: &GlContext, program: u32, location: i32) -> Option
     if !p.linked {
         return None;
     }
-    let u = p.unis.get(location as usize)?;
-    let (off, sz) = (u.off as usize, u.sz as usize);
-    if off + sz > p.ubuf.len() {
+    let crate::model::program::UniformLocation::Data {
+        declaration,
+        element,
+    } = p.location(location)?
+    else {
         return None;
-    }
-    Some(p.ubuf[off..off + sz].to_vec())
+    };
+    p.unis.get(declaration)?.read_element(&p.ubuf, element)
 }
 
 /// The texture unit a sampler uniform (declaration index `location`) is bound to (`glUniform1i` writes
@@ -49,12 +51,10 @@ pub fn get_sampler_unit(ctx: &GlContext, program: u32, location: i32) -> Option<
         return None;
     }
     let p = ctx.programs.program(program)?;
-    let i = location as usize;
-    if i < p.samp_names.len() && i < p.samp_units.len() {
-        Some(p.samp_units[i])
-    } else {
-        None
-    }
+    let crate::model::program::UniformLocation::Sampler { element } = p.location(location)? else {
+        return None;
+    };
+    p.samp_units.get(element).copied()
 }
 
 // ==================================================================================================
@@ -267,11 +267,11 @@ pub fn frag_data_location(ctx: &GlContext, program: u32, name: &str) -> i32 {
 impl GlContext {
     pub fn is_enabled(&self, cap: u32) -> bool {
         match cap {
-            GL_DEPTH_TEST => self.depth,
-            GL_STENCIL_TEST => self.stencil,
-            GL_BLEND => self.blend,
-            GL_CULL_FACE => self.cull_enabled,
-            GL_SCISSOR_TEST => self.scissor_enabled,
+            GL_DEPTH_TEST => self.local.pipeline.depth,
+            GL_STENCIL_TEST => self.local.pipeline.stencil,
+            GL_BLEND => self.local.pipeline.blend,
+            GL_CULL_FACE => self.local.pipeline.cull_enabled,
+            GL_SCISSOR_TEST => self.local.pipeline.scissor_enabled,
             _ => false,
         }
     }
@@ -295,7 +295,7 @@ pub fn tex_level_parameter(ctx: &GlContext, target: u32, level: i32, pname: u32)
     if level != 0 || !matches!(target, GL_TEXTURE_2D | GL_TEXTURE_2D_ARRAY | GL_TEXTURE_3D) {
         return 0;
     }
-    let name = ctx.tex_unit[ctx.active_texture];
+    let name = ctx.local.tex_unit[ctx.local.active_texture];
     let Some(t) = ctx.textures.get(name) else {
         return 0;
     };
@@ -310,10 +310,13 @@ pub fn tex_level_parameter(ctx: &GlContext, target: u32, level: i32, pname: u32)
 /// `glGetRenderbufferParameteriv(target, pname)` — the bound renderbuffer's extent + internal format (this
 /// model materializes every renderbuffer as an RGBA8 plane). A bad target / no bound RBO reads `0`.
 pub fn renderbuffer_parameter(ctx: &GlContext, target: u32, pname: u32) -> i32 {
-    if target != GL_RENDERBUFFER || ctx.bound_rbo == 0 {
+    if target != GL_RENDERBUFFER || ctx.local.bound_rbo == 0 {
         return 0;
     }
-    let (w, h) = ctx.renderbuffers.dims(ctx.bound_rbo).unwrap_or((0, 0));
+    let (w, h) = ctx
+        .renderbuffers
+        .dims(ctx.local.bound_rbo)
+        .unwrap_or((0, 0));
     match pname {
         GL_RENDERBUFFER_WIDTH => w,
         GL_RENDERBUFFER_HEIGHT => h,
@@ -332,8 +335,8 @@ pub fn framebuffer_attachment_parameter(
     pname: u32,
 ) -> i32 {
     let fbo = match target {
-        GL_READ_FRAMEBUFFER => ctx.read_fbo,
-        _ => ctx.bound_fbo,
+        GL_READ_FRAMEBUFFER => ctx.local.read_fbo,
+        _ => ctx.local.bound_fbo,
     };
     if attachment != GL_COLOR_ATTACHMENT0 && !(fbo == 0 && attachment == GL_BACK) {
         // Only the color attachment is reflected; other attachments have no modeled object.
@@ -348,7 +351,7 @@ pub fn framebuffer_attachment_parameter(
             _ => 0,
         };
     }
-    let tex = ctx.framebuffers.color_attachment(fbo);
+    let tex = ctx.local.framebuffers.color_attachment(fbo);
     match pname {
         GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE => {
             if tex != 0 {

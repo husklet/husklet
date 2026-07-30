@@ -148,12 +148,9 @@ pub extern "C" fn vkGetDeviceImageMemoryRequirements(
         (p_info as *const VkDeviceImageMemoryRequirements)
             .as_ref()
             .and_then(|i| i.p_create_info.as_ref())
-            .map(|ci| {
-                let bpt = Format(ci.format as u32)
-                    .wire()
-                    .bytes_per_texel()
-                    .unwrap_or(4) as u64;
-                ci.extent.width as u64 * ci.extent.height.max(1) as u64 * bpt
+            .and_then(|ci| {
+                let bpt = Format(ci.format as u32).wire()?.bytes_per_texel()? as u64;
+                Some(ci.extent.width as u64 * ci.extent.height.max(1) as u64 * bpt)
             })
             .unwrap_or(0)
     };

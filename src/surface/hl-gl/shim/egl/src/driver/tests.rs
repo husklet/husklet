@@ -1,285 +1,274 @@
 use super::*;
-#[cfg(test)]
-mod current_binding_tests {
-    use super::*;
 
-    // Desktop OpenGL API enum — NOT served by this GLES-only driver (eglBindAPI must reject it).
-    const EGL_OPENGL_API: u32 = 0x30A2;
+#[test]
+fn matrix_marshalling_leaves_std140_padding_to_the_uniform_model() {
+    let values = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
+    let packed = unsafe { mat_bytes_cr(3, 3, 1, false, values.as_ptr()) };
+    assert_eq!(packed.len(), 9 * std::mem::size_of::<f32>());
 
-    /// eglMakeCurrent records (ctx, draw, read, display) as THIS thread's current binding, and the
-    /// eglGetCurrent* getters return exactly those; EGL_NO_CONTEXT (null) clears the whole binding.
-    #[test]
-    fn make_current_round_trips_and_no_context_clears() {
-        let dpy = 0x0D15 as *mut c_void;
-        let draw = 0xD8A as *mut c_void;
-        let read = 0x8EAD as *mut c_void;
-        let ctx = 0xC0FFEE as *mut c_void;
+    let (uniforms, size) = hl_gl::adapter::glsl::StageSources::new(
+        "uniform mat3 transform;\nvoid main(){gl_Position=vec4(0);}",
+        "void main(){gl_FragColor=vec4(1);}",
+    )
+    .uniform_layout()
+    .expect("mat3 layout");
+    let mut block = vec![0; size as usize];
+    uniforms[0].write(&mut block, &packed);
 
-        assert_eq!(eglMakeCurrent(dpy, draw, read, ctx), EGL_TRUE);
+    for (offset, expected) in [
+        (0, 1.0f32),
+        (4, 2.0),
+        (8, 3.0),
+        (16, 4.0),
+        (20, 5.0),
+        (24, 6.0),
+        (32, 7.0),
+        (36, 8.0),
+        (40, 9.0),
+    ] {
         assert_eq!(
-            eglGetCurrentContext(),
-            ctx,
-            "current context is the one just made current"
+            f32::from_le_bytes(block[offset..offset + 4].try_into().unwrap()),
+            expected
         );
-        assert_eq!(
-            eglGetCurrentDisplay(),
-            dpy,
-            "current display is the one passed to makeCurrent"
-        );
-        assert_eq!(
-            eglGetCurrentSurface(EGL_DRAW),
-            draw,
-            "EGL_DRAW surface round-trips"
-        );
-        assert_eq!(
-            eglGetCurrentSurface(EGL_READ),
-            read,
-            "EGL_READ surface round-trips"
-        );
+    }
+}
 
-        // EGL_NO_CONTEXT releases the binding: every getter returns null again.
+#[test]
+fn robust_es31_context_is_validated_and_queryable() {
+    let display = DISPLAY_TOKEN as *mut c_void;
+    let config = CONFIG_TOKEN as *mut c_void;
+    let attributes = [
+        EGL_CONTEXT_CLIENT_VERSION,
+        3,
+        EGL_CONTEXT_MINOR_VERSION_KHR,
+        1,
+        EGL_CONTEXT_OPENGL_ROBUST_ACCESS_EXT,
+        EGL_TRUE as i32,
+        EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT,
+        EGL_LOSE_CONTEXT_ON_RESET_EXT,
+        EGL_NONE,
+    ];
+    let context = eglCreateContext(display, config, core::ptr::null_mut(), attributes.as_ptr());
+    assert!(!context.is_null());
+
+    let mut value = 0;
+    assert_eq!(
+        eglQueryContext(
+            display,
+            context,
+            EGL_CONTEXT_OPENGL_ROBUST_ACCESS_EXT,
+            &mut value
+        ),
+        EGL_TRUE
+    );
+    assert_eq!(value, EGL_TRUE as i32);
+    assert_eq!(
+        eglQueryContext(display, context, EGL_CONTEXT_MINOR_VERSION_KHR, &mut value),
+        EGL_TRUE
+    );
+    assert_eq!(value, 1);
+    assert_eq!(
+        eglQueryContext(
+            display,
+            context,
+            EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT,
+            &mut value
+        ),
+        EGL_TRUE
+    );
+    assert_eq!(value, EGL_LOSE_CONTEXT_ON_RESET_EXT);
+
+    let bad_attributes = [0xDEAD, 1, EGL_NONE];
+    assert!(eglCreateContext(
+        display,
+        config,
+        core::ptr::null_mut(),
+        bad_attributes.as_ptr()
+    )
+    .is_null());
+    assert_eq!(eglGetError(), EGL_BAD_ATTRIBUTE);
+
+    let unsupported_version = [EGL_CONTEXT_CLIENT_VERSION, 1, EGL_NONE];
+    assert!(eglCreateContext(
+        display,
+        config,
+        core::ptr::null_mut(),
+        unsupported_version.as_ptr()
+    )
+    .is_null());
+    assert_eq!(eglGetError(), EGL_BAD_MATCH);
+
+    assert_eq!(eglDestroyContext(display, context), EGL_TRUE);
+}
+
+#[test]
+fn chrome_es30_es20_and_dawn_es31_requests_report_the_selected_profile() {
+    let display = DISPLAY_TOKEN as *mut c_void;
+    let config = CONFIG_TOKEN as *mut c_void;
+    for (major, minor, version, glsl) in [
+        (3, 0, "OpenGL ES 3.0 hl-gl", "OpenGL ES GLSL ES 3.00"),
+        (2, 0, "OpenGL ES 2.0 hl-gl", "OpenGL ES GLSL ES 1.00"),
+        (3, 1, "OpenGL ES 3.1 hl-gl", "OpenGL ES GLSL ES 3.10"),
+    ] {
+        let attributes = [
+            EGL_CONTEXT_CLIENT_VERSION,
+            major,
+            EGL_CONTEXT_MINOR_VERSION_KHR,
+            minor,
+            EGL_NONE,
+        ];
+        let context = eglCreateContext(display, config, core::ptr::null_mut(), attributes.as_ptr());
+        assert!(!context.is_null(), "ES {major}.{minor} context");
         assert_eq!(
             eglMakeCurrent(
-                dpy,
+                display,
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+                context
+            ),
+            EGL_TRUE
+        );
+        let mut reported_major = 0;
+        let mut reported_minor = 0;
+        glGetIntegerv(GL_MAJOR_VERSION, &mut reported_major);
+        glGetIntegerv(GL_MINOR_VERSION, &mut reported_minor);
+        assert_eq!((reported_major, reported_minor), (major, minor));
+        let version_ptr = glGetString(GL_VERSION) as *const c_char;
+        let glsl_ptr = glGetString(GL_SHADING_LANGUAGE_VERSION) as *const c_char;
+        assert_eq!(
+            unsafe { core::ffi::CStr::from_ptr(version_ptr) }.to_str(),
+            Ok(version)
+        );
+        assert_eq!(
+            unsafe { core::ffi::CStr::from_ptr(glsl_ptr) }.to_str(),
+            Ok(glsl)
+        );
+        assert_eq!(
+            eglMakeCurrent(
+                display,
                 core::ptr::null_mut(),
                 core::ptr::null_mut(),
                 core::ptr::null_mut()
             ),
             EGL_TRUE
         );
-        assert!(
-            eglGetCurrentContext().is_null(),
-            "EGL_NO_CONTEXT clears the current context"
-        );
-        assert!(
-            eglGetCurrentDisplay().is_null(),
-            "EGL_NO_CONTEXT clears the current display"
-        );
-        assert!(
-            eglGetCurrentSurface(EGL_DRAW).is_null(),
-            "EGL_NO_CONTEXT clears the draw surface"
-        );
-        assert!(
-            eglGetCurrentSurface(EGL_READ).is_null(),
-            "EGL_NO_CONTEXT clears the read surface"
-        );
+        assert_eq!(eglDestroyContext(display, context), EGL_TRUE);
     }
+}
 
-    /// A getter on a thread that never made a context current returns null (EGL_NO_*), and one thread's
-    /// current binding is INDEPENDENT of another's — the thread-local guarantee libepoxy relies on.
-    #[test]
-    fn current_binding_is_thread_local_and_independent() {
-        let ctx_a = 0xA11 as usize;
-        eglMakeCurrent(
-            0x1 as *mut c_void,
-            0x2 as *mut c_void,
-            0x2 as *mut c_void,
-            ctx_a as *mut c_void,
-        );
-        assert_eq!(eglGetCurrentContext() as usize, ctx_a);
+#[test]
+fn chrome_shared_no_error_context_has_context_local_error_semantics() {
+    let display = DISPLAY_TOKEN as *mut c_void;
+    let config = CONFIG_TOKEN as *mut c_void;
+    let regular_attributes = [
+        EGL_CONTEXT_CLIENT_VERSION,
+        3,
+        EGL_CONTEXT_MINOR_VERSION_KHR,
+        0,
+        EGL_NONE,
+    ];
+    let regular = eglCreateContext(
+        display,
+        config,
+        core::ptr::null_mut(),
+        regular_attributes.as_ptr(),
+    );
+    assert!(!regular.is_null());
 
-        let observed = std::thread::spawn(|| {
-            // A fresh thread has NO current context, regardless of the parent's binding.
-            let before = eglGetCurrentContext();
-            // It can make its OWN context current without disturbing the parent.
-            let ctx_b = 0xB22 as usize;
-            eglMakeCurrent(
-                0x1 as *mut c_void,
-                0x3 as *mut c_void,
-                0x3 as *mut c_void,
-                ctx_b as *mut c_void,
-            );
-            (before as usize, eglGetCurrentContext() as usize)
-        })
-        .join()
-        .unwrap();
+    let no_error_attributes = [
+        EGL_CONTEXT_OPENGL_NO_ERROR_KHR,
+        EGL_TRUE as i32,
+        EGL_CONTEXT_CLIENT_VERSION,
+        3,
+        EGL_CONTEXT_MINOR_VERSION_KHR,
+        0,
+        EGL_NONE,
+    ];
+    let shared = eglCreateContext(display, config, regular, no_error_attributes.as_ptr());
+    assert!(!shared.is_null());
 
-        assert_eq!(observed.0, 0, "a fresh thread starts with EGL_NO_CONTEXT");
-        assert_eq!(observed.1, 0xB22, "the child thread bound its own context");
-        // The parent's binding is untouched by the child.
-        assert_eq!(
-            eglGetCurrentContext() as usize,
-            ctx_a,
-            "the parent thread's current context is independent"
-        );
-        // Cleanup this thread's binding.
-        eglMakeCurrent(
-            core::ptr::null_mut(),
-            core::ptr::null_mut(),
-            core::ptr::null_mut(),
-            core::ptr::null_mut(),
-        );
-    }
-
-    /// A successful `eglMakeCurrent` resets the CALLING THREAD's EGL error to `EGL_SUCCESS` (EGL 1.5 §3.1).
-    /// REGRESSION (#144): a transient Wayland present failure records `EGL_BAD_SURFACE`/`EGL_CONTEXT_LOST`;
-    /// without this reset the stale error survived, and the next time Chrome polled `eglGetError` after
-    /// binding a perfectly valid context it read the old error as a freshly-lost context — losing every
-    /// shared context and rasterizing the whole page black. Binding a context must clear it.
-    #[test]
-    fn egl_make_current_clears_the_thread_egl_error() {
-        // A real failing EGL call leaves a pending error on this thread.
-        assert_eq!(eglBindAPI(EGL_OPENGL_API), EGL_FALSE);
-        let dpy = 0x1 as *mut c_void;
-        let ctx = 0x2 as *mut c_void;
-        assert_eq!(eglMakeCurrent(dpy, ctx, ctx, ctx), EGL_TRUE);
-        assert_eq!(
-            eglGetError(),
-            hl_gl::result::EGL_SUCCESS,
-            "a successful eglMakeCurrent must reset the thread's EGL error (no stale error survives)"
-        );
-        // Cleanup this thread's binding.
-        eglMakeCurrent(
-            core::ptr::null_mut(),
-            core::ptr::null_mut(),
-            core::ptr::null_mut(),
-            core::ptr::null_mut(),
-        );
-    }
-
-    /// EGL errors are scoped to the CALLING THREAD (EGL 1.5 §3.1). REGRESSION (#144): the error register was
-    /// a process-global, so a Wayland-commit failure on Chrome's compositor thread surfaced as a lost
-    /// context on its raster/GPU thread (they shared the cell) and collapsed the entire shared-context GPU
-    /// stack. A pending error on one thread must be invisible to another.
-    #[test]
-    fn egl_error_does_not_leak_across_threads() {
-        // Record a pending error on THIS thread via a real failing EGL call.
-        assert_eq!(eglBindAPI(EGL_OPENGL_API), EGL_FALSE);
-        // A different thread must observe EGL_SUCCESS — never this thread's error.
-        let child = std::thread::spawn(|| eglGetError()).join().unwrap();
-        assert_eq!(
-            child,
-            hl_gl::result::EGL_SUCCESS,
-            "a present failure on one thread must not poison another"
-        );
-        // This thread still holds its own error until it reads it.
-        assert_eq!(
-            eglGetError(),
-            EGL_BAD_PARAMETER,
-            "the setting thread keeps its own pending error"
-        );
-    }
-
-    /// eglQueryAPI defaults to EGL_OPENGL_ES_API and returns whatever eglBindAPI(EGL_OPENGL_ES_API) set;
-    /// a non-GLES API is rejected (EGL_BAD_PARAMETER) and does not change the queried API.
-    #[test]
-    fn bind_api_records_gles_and_rejects_other_apis() {
-        // Default (nothing bound on this fresh thread) is the GLES API epoxy expects.
-        assert_eq!(
-            eglQueryAPI(),
-            EGL_OPENGL_ES_API,
-            "the default bound API is EGL_OPENGL_ES_API"
-        );
-
-        assert_eq!(
-            eglBindAPI(EGL_OPENGL_ES_API),
-            EGL_TRUE,
-            "binding the GLES API succeeds"
-        );
-        assert_eq!(
-            eglQueryAPI(),
-            EGL_OPENGL_ES_API,
-            "eglQueryAPI reports the bound GLES API"
-        );
-
-        // A GLES-only driver rejects desktop GL; the queried API is unchanged.
-        assert_eq!(
-            eglBindAPI(EGL_OPENGL_API),
-            EGL_FALSE,
-            "binding desktop OpenGL is rejected"
-        );
-        assert_eq!(
-            eglGetError(),
-            EGL_BAD_PARAMETER,
-            "the rejected bind raised EGL_BAD_PARAMETER"
-        );
-        assert_eq!(
-            eglQueryAPI(),
-            EGL_OPENGL_ES_API,
-            "a rejected bind leaves the queried API as GLES"
-        );
-    }
-
-    /// eglQueryContext(EGL_CONTEXT_CLIENT_TYPE) MUST report EGL_OPENGL_ES_API. libepoxy's
-    /// `epoxy_egl_get_current_gl_context_api()` (dispatch_common.c) queries exactly this to classify the
-    /// current context; a `0`/EGL_NONE answer makes `epoxy_get_proc_address` abort with "Couldn't find
-    /// current GLX or EGL context" — which is what blocked GTK4's GskGL bring-up until this was fixed.
-    #[test]
-    fn query_context_reports_gles_client_type_for_epoxy() {
-        let dpy = 0x1 as *mut c_void;
-        let ctx = 0x2 as *mut c_void;
-
-        let mut client_type: i32 = -455_764_240; // garbage sentinel a correct getter overwrites
-        assert_eq!(
-            eglQueryContext(
-                dpy,
-                ctx,
-                EGL_CONTEXT_CLIENT_TYPE,
-                &mut client_type as *mut i32
-            ),
-            EGL_TRUE,
-            "eglQueryContext succeeds"
-        );
-        assert_eq!(
-            client_type as u32, EGL_OPENGL_ES_API,
-            "EGL_CONTEXT_CLIENT_TYPE is the GLES client API epoxy classifies on (not 0/garbage)"
-        );
-
-        // The client version this ES3 driver reports, and the back-buffered render buffer.
-        let mut version: i32 = -1;
+    let mut no_error = 0;
+    assert_eq!(
         eglQueryContext(
-            dpy,
-            ctx,
-            EGL_CONTEXT_CLIENT_VERSION,
-            &mut version as *mut i32,
-        );
-        assert_eq!(version, 3, "EGL_CONTEXT_CLIENT_VERSION reports ES3");
-        let mut rbuf: i32 = -1;
-        eglQueryContext(dpy, ctx, EGL_RENDER_BUFFER, &mut rbuf as *mut i32);
-        assert_eq!(
-            rbuf, EGL_BACK_BUFFER,
-            "EGL_RENDER_BUFFER reports the back buffer"
-        );
+            display,
+            shared,
+            EGL_CONTEXT_OPENGL_NO_ERROR_KHR,
+            &mut no_error
+        ),
+        EGL_TRUE
+    );
+    assert_eq!(no_error, EGL_TRUE as i32);
 
-        // A null out-param is rejected without a deref; an unknown attribute writes 0 and still succeeds.
-        assert_eq!(
-            eglQueryContext(dpy, ctx, EGL_CONTEXT_CLIENT_TYPE, core::ptr::null_mut()),
-            EGL_FALSE,
-            "a null value pointer is rejected"
-        );
-        let mut unknown: i32 = -455_764_240;
-        eglQueryContext(dpy, ctx, 0xBEEF, &mut unknown as *mut i32);
-        assert_eq!(
-            unknown, 0,
-            "an unknown attribute writes 0, never uninitialized memory"
-        );
-    }
+    assert_eq!(
+        eglMakeCurrent(
+            display,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            shared
+        ),
+        EGL_TRUE
+    );
+    glEGLImageTargetTexture2DOES(0xDEAD, core::ptr::null_mut());
+    assert_eq!(glGetError(), GL_NO_ERROR);
 
-    /// glGetIntegerv / glGetInteger64v ALWAYS write the out-param (never leave it as uninitialized
-    /// garbage): GL_MAX_TEXTURE_SIZE is the 16384 executor ceiling and an unknown pname writes 0.
-    #[test]
-    fn gl_get_integerv_always_writes_the_out_param() {
-        // Seed with a garbage sentinel; a correct getter overwrites it.
-        let mut v: i32 = -455_764_240;
-        glGetIntegerv(GL_MAX_TEXTURE_SIZE, &mut v as *mut i32);
-        assert_eq!(
-            v, 16384,
-            "GL_MAX_TEXTURE_SIZE is the truthful executor ceiling, not garbage"
-        );
+    assert_eq!(
+        eglMakeCurrent(
+            display,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            regular
+        ),
+        EGL_TRUE
+    );
+    glEGLImageTargetTexture2DOES(0xDEAD, core::ptr::null_mut());
+    assert_eq!(glGetError(), GL_INVALID_ENUM);
 
-        let mut v64: i64 = -1;
-        glGetInteger64v(GL_MAX_TEXTURE_SIZE, &mut v64 as *mut i64);
-        assert_eq!(
-            v64, 16384,
-            "glGetInteger64v writes the same truthful ceiling"
-        );
+    assert_eq!(
+        eglMakeCurrent(
+            display,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut()
+        ),
+        EGL_TRUE
+    );
+    assert_eq!(eglDestroyContext(display, shared), EGL_TRUE);
+    assert_eq!(eglDestroyContext(display, regular), EGL_TRUE);
+}
 
-        // An unhandled integer pname defaults to 0 — never the untouched garbage sentinel.
-        let mut u: i32 = -455_764_240;
-        glGetIntegerv(0xBEEF, &mut u as *mut i32);
-        assert_eq!(
-            u, 0,
-            "an unknown pname writes 0, never uninitialized memory"
+#[test]
+fn dawn_required_egl_procedures_all_resolve() {
+    for name in [
+        "eglBindAPI",
+        "eglChooseConfig",
+        "eglCreateContext",
+        "eglCreatePbufferSurface",
+        "eglDestroyContext",
+        "eglDestroySurface",
+        "eglGetConfigAttrib",
+        "eglGetCurrentContext",
+        "eglGetCurrentDisplay",
+        "eglGetCurrentSurface",
+        "eglGetDisplay",
+        "eglGetError",
+        "eglGetProcAddress",
+        "eglInitialize",
+        "eglMakeCurrent",
+        "eglQueryContext",
+        "eglQueryString",
+        "eglQuerySurface",
+        "eglSwapBuffers",
+        "eglTerminate",
+        "eglWaitClient",
+    ] {
+        let name = std::ffi::CString::new(name).unwrap();
+        assert!(
+            !eglGetProcAddress(name.as_ptr()).is_null(),
+            "{} must resolve for Dawn",
+            name.to_string_lossy()
         );
     }
 }
+
+#[path = "tests/current.rs"]
+mod current_binding_tests;

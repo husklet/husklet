@@ -9,6 +9,7 @@ members = [
     "src/gpu/hl-gpu",
     "src/gpu/hl-gpu-wgpu",
     "src/surface/hl-compositor",
+    "src/surface/hl-surface-protocol",
     "src/surface/hl-cuda",
     "src/surface/hl-gl",
     "src/surface/hl-vulkan",
@@ -17,6 +18,7 @@ members = [
     "src/workspaces/hl-ws",
     "src/packages/hl-log",
     "src/packages/hl-fs",
+    "src/packages/hl-iosurface",
     "src/packages/hl-design",
     "src/packages/hl-design-lint",
     "src/apps/husklet",
@@ -46,7 +48,7 @@ futures-util = "0.3"
 fs2 = "0.4"
 http = "1"
 http-body-util = "0.1"
-hl-engine = "0.1.28"
+hl-engine = "0.1.31"
 hyper = "1"
 hyper-util = "0.1"
 oci-client = { version = "0.17", default-features = false, features = ["rustls-tls"] }
@@ -58,6 +60,7 @@ serde = "1"
 serde_json = "1"
 serde_yaml = "0.9"
 sha2 = "0.11"
+socket2 = "0.6"
 tar = "0.4"
 tempfile = "3"
 thiserror = "2"
@@ -91,7 +94,9 @@ pedantic = "warn"
 # only a dependency of the macOS-only `hl-compositor` (kept out of default-members), so this patch is a
 # no-op for the Linux headless build — resolution reads the manifest but never compiles smithay there.
 [patch.crates-io]
+hl-engine = { path = "../engine/pkgs/rust" }
 smithay = { path = "vendor/smithay-0.7.0" }
+naga = { path = "vendor/rust/naga-24.0.0" }
 
 [profile.release]
 opt-level = 2

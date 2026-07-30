@@ -69,6 +69,7 @@ fn representative_streams() -> Vec<Vec<Cmd>> {
             Cmd::Present {
                 surface: 2,
                 texture: 2,
+                serial: hl_gpu::FrameSerial::new(3).unwrap(),
             },
             Cmd::DestroyTexture(2),
         ],

@@ -363,7 +363,6 @@ impl WgpuExecutor {
             pass.draw(0..3, 0..1);
         }
         queue.submit(Some(enc.finish()));
-        self.gpu.device.poll(wgpu::Maintain::Wait);
         Ok(())
     }
 }

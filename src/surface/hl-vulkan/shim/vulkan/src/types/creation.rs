@@ -24,6 +24,20 @@ pub struct VkInstanceCreateInfo {
 }
 
 #[repr(C)]
+pub struct VkDeviceCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub queue_create_info_count: u32,
+    pub p_queue_create_infos: *const c_void,
+    pub enabled_layer_count: u32,
+    pub pp_enabled_layer_names: *const *const c_char,
+    pub enabled_extension_count: u32,
+    pub pp_enabled_extension_names: *const *const c_char,
+    pub p_enabled_features: *const VkPhysicalDeviceFeatures,
+}
+
+#[repr(C)]
 pub struct VkBufferCreateInfo {
     pub s_type: i32,
     pub p_next: *const c_void,
@@ -117,6 +131,19 @@ pub struct VkWriteDescriptorSet {
     pub p_image_info: *const c_void,
     pub p_buffer_info: *const VkDescriptorBufferInfo,
     pub p_texel_buffer_view: *const c_void,
+}
+
+#[repr(C)]
+pub struct VkCopyDescriptorSet {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub src_set: u64,
+    pub src_binding: u32,
+    pub src_array_element: u32,
+    pub dst_set: u64,
+    pub dst_binding: u32,
+    pub dst_array_element: u32,
+    pub descriptor_count: u32,
 }
 
 #[repr(C)]

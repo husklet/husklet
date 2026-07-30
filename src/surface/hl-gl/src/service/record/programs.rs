@@ -9,6 +9,259 @@ impl GlContext {
     }
 }
 
+#[cfg(test)]
+mod buffer_snapshot_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn context_with_buffer() -> (GlContext, u32) {
+        let mut context = GlContext::new();
+        let name = context.buffers.gen();
+        context
+            .buffers
+            .set_data(name, GL_ARRAY_BUFFER, &[1, 2, 3, 4], 0);
+        context.local.array_buffer = name;
+        context.local.attr[0].enabled = true;
+        context.local.attr[0].buffer = name;
+        (context, name)
+    }
+
+    #[test]
+    fn repeated_draw_snapshots_share_unchanged_buffer_storage() {
+        let (mut context, _) = context_with_buffer();
+
+        crate::service::record::draw_arrays(&mut context, GL_TRIANGLES, 0, 1);
+        crate::service::record::draw_arrays(&mut context, GL_TRIANGLES, 0, 1);
+
+        assert!(Arc::ptr_eq(
+            &context.local.recording.draws[0].buffers[0].data,
+            &context.local.recording.draws[1].buffers[0].data
+        ));
+    }
+
+    #[test]
+    fn subdata_mutation_detaches_from_earlier_draw_snapshot() {
+        let (mut context, name) = context_with_buffer();
+        let before = context.snapshot(true);
+
+        context.buffers.set_sub_data(name, 1, &[9, 8]);
+        let after = context.snapshot(true);
+
+        assert_eq!(before.buffers[0].data.as_slice(), &[1, 2, 3, 4]);
+        assert_eq!(after.buffers[0].data.as_slice(), &[1, 9, 8, 4]);
+        assert!(!Arc::ptr_eq(
+            &before.buffers[0].data,
+            &after.buffers[0].data
+        ));
+    }
+
+    #[test]
+    fn mapped_mutation_detaches_from_earlier_draw_snapshot() {
+        let (mut context, name) = context_with_buffer();
+        let before = context.snapshot(true);
+
+        assert_eq!(
+            context.buffers.map_range(name, 1, 2, GL_MAP_WRITE_BIT),
+            Some(1)
+        );
+        let pointer = context.buffers.mapped_ptr(name, 1).unwrap();
+        // SAFETY: the pointer addresses the live mapped two-byte range and is used before unmap.
+        unsafe {
+            pointer.write(7);
+            pointer.add(1).write(6);
+        }
+        context.buffers.take_map(name).unwrap();
+        let after = context.snapshot(true);
+
+        assert_eq!(before.buffers[0].data.as_slice(), &[1, 2, 3, 4]);
+        assert_eq!(after.buffers[0].data.as_slice(), &[1, 7, 6, 4]);
+        assert!(!Arc::ptr_eq(
+            &before.buffers[0].data,
+            &after.buffers[0].data
+        ));
+    }
+
+    #[test]
+    fn mapped_buffer_draw_is_rejected_before_snapshot_and_pointer_stays_exclusive() {
+        let (mut context, name) = context_with_buffer();
+        assert_eq!(
+            context.buffers.map_range(name, 1, 2, GL_MAP_WRITE_BIT),
+            Some(1)
+        );
+        let pointer = context.buffers.mapped_ptr(name, 1).unwrap();
+
+        crate::service::record::draw_arrays(&mut context, GL_TRIANGLES, 0, 1);
+
+        assert_eq!(context.take_gl_error(), GL_INVALID_OPERATION);
+        assert!(context.local.recording.draws.is_empty());
+        // SAFETY: the rejected draw did not alter the live mapped allocation.
+        unsafe {
+            pointer.write(5);
+            pointer.add(1).write(6);
+        }
+        context.buffers.take_map(name).unwrap();
+        assert_eq!(
+            context.buffers.get(name).unwrap().data.as_slice(),
+            &[1, 5, 6, 4]
+        );
+    }
+
+    #[test]
+    fn clear_does_not_snapshot_a_mapped_vertex_buffer() {
+        let (mut context, name) = context_with_buffer();
+        assert_eq!(
+            context.buffers.map_range(name, 0, 4, GL_MAP_WRITE_BIT),
+            Some(0)
+        );
+        let pointer = context.buffers.mapped_ptr(name, 0).unwrap();
+
+        context.record_clear();
+
+        assert_eq!(context.take_gl_error(), GL_NO_ERROR);
+        assert_eq!(context.local.recording.draws.len(), 1);
+        assert!(context.local.recording.draws[0].is_clear);
+        assert!(context.local.recording.draws[0].buffers.is_empty());
+        // SAFETY: recording a clear did not snapshot or replace the mapped allocation.
+        unsafe { pointer.write(7) };
+    }
+
+    #[test]
+    fn mapped_separate_vertex_binding_rejects_draw() {
+        let (mut context, name) = context_with_buffer();
+        context.local.attr[0].buffer = 0;
+        context.local.attr[0].binding = Some(0);
+        context.local.vertex_bindings[0].buffer = name;
+        assert_eq!(
+            context.buffers.map_range(name, 0, 4, GL_MAP_WRITE_BIT),
+            Some(0)
+        );
+        let pointer = context.buffers.mapped_ptr(name, 0).unwrap();
+
+        crate::service::record::draw_arrays(&mut context, GL_TRIANGLES, 0, 1);
+
+        assert_eq!(context.take_gl_error(), GL_INVALID_OPERATION);
+        assert!(context.local.recording.draws.is_empty());
+        // SAFETY: the rejected draw left the mapped allocation unchanged.
+        unsafe { pointer.write(7) };
+    }
+
+    #[test]
+    fn buffer_data_cannot_replace_live_mapped_storage() {
+        let (mut context, name) = context_with_buffer();
+        assert_eq!(
+            context.buffers.map_range(name, 0, 4, GL_MAP_WRITE_BIT),
+            Some(0)
+        );
+        let pointer = context.buffers.mapped_ptr(name, 0).unwrap();
+
+        crate::service::record::buffer_data(&mut context, GL_ARRAY_BUFFER, &[9, 9], 0);
+
+        assert_eq!(context.take_gl_error(), GL_INVALID_OPERATION);
+        // SAFETY: rejected glBufferData preserved the live mapped allocation.
+        unsafe { pointer.write(7) };
+        assert_eq!(
+            context.buffers.get(name).unwrap().data.as_slice(),
+            &[7, 2, 3, 4]
+        );
+    }
+
+    #[test]
+    fn buffer_sub_data_cannot_mutate_live_mapped_storage() {
+        let (mut context, name) = context_with_buffer();
+        assert_eq!(
+            context.buffers.map_range(name, 0, 4, GL_MAP_WRITE_BIT),
+            Some(0)
+        );
+        let pointer = context.buffers.mapped_ptr(name, 0).unwrap();
+
+        crate::service::record::buffer_sub_data(&mut context, GL_ARRAY_BUFFER, 1, &[9, 9]);
+
+        assert_eq!(context.take_gl_error(), GL_INVALID_OPERATION);
+        // SAFETY: rejected glBufferSubData preserved the live mapped allocation.
+        unsafe { pointer.write(7) };
+        assert_eq!(
+            context.buffers.get(name).unwrap().data.as_slice(),
+            &[7, 2, 3, 4]
+        );
+    }
+
+    #[test]
+    fn copy_buffer_sub_data_rejects_a_mapped_source_or_destination() {
+        let (mut context, source) = context_with_buffer();
+        let destination = context.buffers.gen();
+        context
+            .buffers
+            .set_data(destination, GL_COPY_WRITE_BUFFER, &[0, 0, 0, 0], 0);
+        crate::service::record::bind_buffer(&mut context, GL_COPY_READ_BUFFER, source);
+        crate::service::record::bind_buffer(&mut context, GL_COPY_WRITE_BUFFER, destination);
+        assert_eq!(
+            context.buffers.map_range(source, 0, 4, GL_MAP_WRITE_BIT),
+            Some(0)
+        );
+        let pointer = context.buffers.mapped_ptr(source, 0).unwrap();
+
+        crate::service::record::copy_buffer_sub_data(
+            &mut context,
+            GL_COPY_READ_BUFFER,
+            GL_COPY_WRITE_BUFFER,
+            0,
+            0,
+            4,
+        );
+
+        assert_eq!(context.take_gl_error(), GL_INVALID_OPERATION);
+        // SAFETY: rejected copy preserved the live mapped source allocation.
+        unsafe { pointer.write(7) };
+        assert_eq!(
+            context.buffers.get(destination).unwrap().data.as_slice(),
+            &[0, 0, 0, 0]
+        );
+
+        context.buffers.take_map(source).unwrap();
+        assert_eq!(
+            context
+                .buffers
+                .map_range(destination, 0, 4, GL_MAP_WRITE_BIT),
+            Some(0)
+        );
+        let destination_pointer = context.buffers.mapped_ptr(destination, 0).unwrap();
+        crate::service::record::copy_buffer_sub_data(
+            &mut context,
+            GL_COPY_READ_BUFFER,
+            GL_COPY_WRITE_BUFFER,
+            0,
+            0,
+            4,
+        );
+        assert_eq!(context.take_gl_error(), GL_INVALID_OPERATION);
+        // SAFETY: rejected copy preserved the live mapped destination allocation.
+        unsafe { destination_pointer.write(8) };
+        assert_eq!(
+            context.buffers.get(destination).unwrap().data.as_slice(),
+            &[8, 0, 0, 0]
+        );
+    }
+
+    #[test]
+    fn deleting_a_mapped_buffer_retires_its_live_allocation() {
+        let (mut context, name) = context_with_buffer();
+        assert_eq!(
+            context.buffers.map_range(name, 0, 4, GL_MAP_WRITE_BIT),
+            Some(0)
+        );
+        let pointer = context.buffers.mapped_ptr(name, 0).unwrap();
+
+        assert!(context.delete_buffer(name));
+
+        assert_eq!(context.take_gl_error(), GL_NO_ERROR);
+        assert!(context.buffers.get(name).is_none());
+        assert_eq!(context.buffers.retired_mapping_count(), 1);
+        // SAFETY: GL invalidates the application pointer at delete, but the model deliberately retains its
+        // backing allocation until context teardown so an escaped FFI pointer can never dangle into Rust.
+        unsafe { pointer.write(7) };
+    }
+}
+
 /// `glShaderSource(shader, src)`.
 pub fn shader_source(ctx: &mut GlContext, shader: u32, src: &str) {
     ctx.programs.shader_source(shader, src);
@@ -33,6 +286,21 @@ pub fn attach_shader(ctx: &mut GlContext, program: u32, shader: u32) {
     ctx.programs.attach(program, shader);
 }
 
+/// `glBindAttribLocation(program, index, name)` — set the location used by the next program link.
+pub fn bind_attrib(ctx: &mut GlContext, program: u32, index: u32, name: &str) {
+    if index as usize >= crate::model::program::MAX_ATTR {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    if name.starts_with("gl_") {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if !ctx.programs.bind_attrib(program, index, name) {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+    }
+}
+
 /// `glLinkProgram(program)` — translate the attached GLSL-ES pair to shader-IR + reflect the layout.
 impl GlContext {
     pub fn link_program(&mut self, program: u32) -> bool {
@@ -41,7 +309,11 @@ impl GlContext {
 
     /// `glUseProgram(program)`.
     pub fn use_program(&mut self, program: u32) {
-        self.cur_prog = program;
+        if program != 0 && (self.program_is_deleted(program) || !self.programs.contains(program)) {
+            self.set_gl_error(GL_INVALID_VALUE);
+            return;
+        }
+        self.local.cur_prog = program;
     }
 }
 
@@ -59,7 +331,7 @@ pub use USE_PROGRAM as use_program;
 /// `glUniform1i(samplerLocation, unit)` — map a sampler uniform (by declaration index) to a texture
 /// unit. Simplified: `sampler_index` is the sampler's position in the program's `samp_names`.
 pub fn uniform_sampler(ctx: &mut GlContext, sampler_index: usize, unit: i32) {
-    if let Some(p) = ctx.programs.get_mut(ctx.cur_prog) {
+    if let Some(p) = ctx.programs.get_mut(ctx.local.cur_prog) {
         if sampler_index < p.samp_units.len() {
             p.samp_units[sampler_index] = unit;
         }
@@ -69,13 +341,9 @@ pub fn uniform_sampler(ctx: &mut GlContext, sampler_index: usize, unit: i32) {
 /// `glUniform*` for a data uniform — write `bytes` into the bound program's uniform-block buffer at the
 /// named member's offset. Simplified name-keyed write (real GL uses integer locations).
 pub fn uniform_data(ctx: &mut GlContext, name: &str, bytes: &[u8]) {
-    if let Some(p) = ctx.programs.get_mut(ctx.cur_prog) {
+    if let Some(p) = ctx.programs.get_mut(ctx.local.cur_prog) {
         if let Some(u) = p.unis.iter().find(|u| u.name == name) {
-            let off = u.off as usize;
-            let end = (off + bytes.len()).min(p.ubuf.len());
-            if off < p.ubuf.len() {
-                p.ubuf[off..end].copy_from_slice(&bytes[..end - off]);
-            }
+            u.write(&mut p.ubuf, bytes);
         }
     }
 }
@@ -86,17 +354,48 @@ pub fn uniform_data(ctx: &mut GlContext, name: &str, bytes: &[u8]) {
 /// [`uniform_sampler`]; the frame builder ships the resulting `ubuf` at binding 1 so the draw's shader
 /// reads the value. Out-of-range writes (bad location / oversized payload) are truncated to the slot.
 pub fn uniform_at(ctx: &mut GlContext, location: usize, bytes: &[u8]) {
-    if let Some(p) = ctx.programs.get_mut(ctx.cur_prog) {
-        let (off, sz) = match p.unis.get(location) {
-            Some(u) => (u.off as usize, u.sz as usize),
-            None => return,
-        };
-        if off >= p.ubuf.len() {
+    let resolved = ctx
+        .programs
+        .program(ctx.local.cur_prog)
+        .and_then(|program| program.location(location as i32));
+    if let Some(p) = ctx.programs.get_mut(ctx.local.cur_prog) {
+        let Some(crate::model::program::UniformLocation::Data {
+            declaration,
+            element,
+        }) = resolved
+        else {
             return;
+        };
+        let Some(uniform) = p.unis.get(declaration) else {
+            return;
+        };
+        uniform.write_from(&mut p.ubuf, element, bytes);
+    }
+}
+
+/// `glUniform1i[v]` dispatches by the linked uniform's type: sampler locations update texture units while
+/// integer/bool data locations update std140 bytes.
+pub fn uniform_i32_at(ctx: &mut GlContext, location: i32, values: &[i32]) {
+    let resolved = ctx
+        .programs
+        .program(ctx.local.cur_prog)
+        .and_then(|program| program.location(location));
+    match resolved {
+        Some(crate::model::program::UniformLocation::Sampler { element }) => {
+            if let Some(program) = ctx.programs.get_mut(ctx.local.cur_prog) {
+                for (unit, value) in program.samp_units[element..].iter_mut().zip(values) {
+                    *unit = *value;
+                }
+            }
         }
-        // Clamp to both the member's declared size and the block's byte length.
-        let n = bytes.len().min(sz).min(p.ubuf.len() - off);
-        p.ubuf[off..off + n].copy_from_slice(&bytes[..n]);
+        Some(crate::model::program::UniformLocation::Data { .. }) => {
+            let bytes = values
+                .iter()
+                .flat_map(|value| value.to_le_bytes())
+                .collect::<Vec<_>>();
+            uniform_at(ctx, location as usize, &bytes);
+        }
+        None => {}
     }
 }
 
@@ -109,27 +408,56 @@ pub fn program_uniform_at(ctx: &mut GlContext, program: u32, location: i32, byte
     if location < 0 {
         return;
     }
+    let resolved = ctx
+        .programs
+        .program(program)
+        .and_then(|program| program.location(location));
     if let Some(p) = ctx.programs.get_mut(program) {
-        let (off, sz) = match p.unis.get(location as usize) {
-            Some(u) => (u.off as usize, u.sz as usize),
-            None => return,
-        };
-        if off >= p.ubuf.len() {
+        let Some(crate::model::program::UniformLocation::Data {
+            declaration,
+            element,
+        }) = resolved
+        else {
             return;
-        }
-        let n = bytes.len().min(sz).min(p.ubuf.len() - off);
-        p.ubuf[off..off + n].copy_from_slice(&bytes[..n]);
+        };
+        let Some(uniform) = p.unis.get(declaration) else {
+            return;
+        };
+        uniform.write_from(&mut p.ubuf, element, bytes);
     }
 }
 
-/// `glProgramUniform1i(program, samplerLocation, unit)` — map `program`'s sampler uniform (declaration
-/// index) to a texture unit (the DSA form of [`uniform_sampler`]).
-pub fn program_uniform_sampler(ctx: &mut GlContext, program: u32, sampler_index: usize, unit: i32) {
-    if let Some(p) = ctx.programs.get_mut(program) {
-        if sampler_index < p.samp_units.len() {
-            p.samp_units[sampler_index] = unit;
+pub fn program_uniform_i32_at(ctx: &mut GlContext, program: u32, location: i32, values: &[i32]) {
+    let resolved = ctx
+        .programs
+        .program(program)
+        .and_then(|program| program.location(location));
+    match resolved {
+        Some(crate::model::program::UniformLocation::Sampler { element }) => {
+            if let Some(program) = ctx.programs.get_mut(program) {
+                for (unit, value) in program.samp_units[element..].iter_mut().zip(values) {
+                    *unit = *value;
+                }
+            }
         }
+        Some(crate::model::program::UniformLocation::Data { .. }) => {
+            let bytes = values
+                .iter()
+                .flat_map(|value| value.to_le_bytes())
+                .collect::<Vec<_>>();
+            program_uniform_at(ctx, program, location, &bytes);
+        }
+        None => {}
     }
+}
+
+/// `glProgramUniform1i(program, samplerLocation, unit)` — map the sampler at the program's public,
+/// collision-free uniform `location` to a texture unit.
+pub fn program_uniform_sampler(ctx: &mut GlContext, program: u32, location: usize, unit: i32) {
+    let Ok(location) = i32::try_from(location) else {
+        return;
+    };
+    program_uniform_i32_at(ctx, program, location, &[unit]);
 }
 
 // ---- program / shader lifecycle (glDeleteProgram / glDeleteShader / glDetachShader) ---------------
@@ -143,8 +471,8 @@ impl GlContext {
             // frame), so a deleted Skia/GskGpu program stops holding host residency and a recycled GL program
             // name cannot collide with the dead program's cached ids. See `GlContext::retire_program`.
             self.retire_program(program);
-            if self.cur_prog == program {
-                self.cur_prog = 0;
+            if self.local.cur_prog == program {
+                self.local.cur_prog = 0;
             }
         }
     }
@@ -174,7 +502,29 @@ pub fn detach_shader(ctx: &mut GlContext, program: u32, shader: u32) {
 
 /// Snapshot the currently-bound draw state into a fresh [`DrawCall`] (the immutable per-draw record).
 impl GlContext {
-    pub(super) fn snapshot(&self) -> DrawCall {
+    pub(super) fn draw_uses_mapped_buffer(&self) -> bool {
+        self.local.attr.iter().any(|attribute| {
+            if !attribute.enabled {
+                return false;
+            }
+            let buffer = attribute
+                .binding
+                .and_then(|binding| self.local.vertex_bindings.get(binding as usize))
+                .map(|binding| binding.buffer)
+                .filter(|buffer| *buffer != 0)
+                .unwrap_or(attribute.buffer);
+            buffer != 0 && self.buffers.is_mapped(buffer)
+        }) || (self.local.element_buffer != 0 && self.buffers.is_mapped(self.local.element_buffer))
+            || self
+                .local
+                .indexed_buffers
+                .iter()
+                .any(|(&(target, _), binding)| {
+                    target == GL_UNIFORM_BUFFER && self.buffers.is_mapped(binding.buffer)
+                })
+    }
+
+    pub(super) fn snapshot(&self, capture_buffers: bool) -> DrawCall {
         let ctx = self;
         // Capture the ES3 sampler OBJECT bound to each texture unit: a bound object overrides the texture's own
         // filter/wrap at lowering time (ES 3.0 §3.8.13). `None` where no object is bound (texture params win).
@@ -185,70 +535,86 @@ impl GlContext {
                 *slot = ctx.samplers.get(name).copied();
             }
         }
+        let mut attrs = ctx.local.attr;
+        for attr in &mut attrs {
+            let Some(binding) = attr.binding else {
+                continue;
+            };
+            let Some(slot) = ctx.local.vertex_bindings.get(binding as usize) else {
+                continue;
+            };
+            attr.buffer = slot.buffer;
+            attr.offset = slot.offset.saturating_add(attr.offset);
+            attr.stride = slot.stride;
+            attr.divisor = slot.divisor;
+        }
         let mut d = DrawCall {
-            prog: ctx.cur_prog,
-            fbo: ctx.bound_fbo,
-            attrs: ctx.attr,
-            tex_units: ctx.tex_unit,
+            prog: ctx.local.cur_prog,
+            fbo: ctx.local.bound_fbo,
+            attrs,
+            current_attrs: ctx.local.current_attr,
+            current_attr_kinds: ctx.local.current_attr_kind,
+            tex_units: ctx.local.tex_unit,
             samp_objs,
-            viewport: ctx.viewport,
-            scissor_enabled: ctx.scissor_enabled,
-            scissor: ctx.scissor,
-            blend: ctx.blend,
-            blend_src_rgb: ctx.blend_src_rgb,
-            blend_dst_rgb: ctx.blend_dst_rgb,
-            blend_src_alpha: ctx.blend_src_alpha,
-            blend_dst_alpha: ctx.blend_dst_alpha,
-            blend_eq_rgb: ctx.blend_eq_rgb,
-            blend_eq_alpha: ctx.blend_eq_alpha,
-            blend_color: ctx.blend_color,
-            depth: ctx.depth,
-            depth_func: ctx.depth_func,
-            depth_write: ctx.depth_write,
-            stencil: ctx.stencil,
-            stencil_func_front: ctx.stencil_func_front,
-            stencil_func_back: ctx.stencil_func_back,
-            stencil_fail_front: ctx.stencil_fail_front,
-            stencil_zfail_front: ctx.stencil_zfail_front,
-            stencil_zpass_front: ctx.stencil_zpass_front,
-            stencil_fail_back: ctx.stencil_fail_back,
-            stencil_zfail_back: ctx.stencil_zfail_back,
-            stencil_zpass_back: ctx.stencil_zpass_back,
-            stencil_ref: ctx.stencil_ref,
-            stencil_read_mask: ctx.stencil_read_mask,
-            stencil_write_mask: ctx.stencil_write_mask,
-            cull_enabled: ctx.cull_enabled,
-            cull_face: ctx.cull_face,
-            front_face: ctx.front_face,
-            color_mask: ctx.color_mask,
-            clear: ctx.clear_color,
-            elem_buf: ctx.element_buffer,
+            viewport: ctx.local.pipeline.viewport,
+            scissor_enabled: ctx.local.pipeline.scissor_enabled,
+            scissor: ctx.local.pipeline.scissor,
+            blend: ctx.local.pipeline.blend,
+            blend_src_rgb: ctx.local.pipeline.blend_src_rgb,
+            blend_dst_rgb: ctx.local.pipeline.blend_dst_rgb,
+            blend_src_alpha: ctx.local.pipeline.blend_src_alpha,
+            blend_dst_alpha: ctx.local.pipeline.blend_dst_alpha,
+            blend_eq_rgb: ctx.local.pipeline.blend_eq_rgb,
+            blend_eq_alpha: ctx.local.pipeline.blend_eq_alpha,
+            blend_color: ctx.local.pipeline.blend_color,
+            depth: ctx.local.pipeline.depth,
+            depth_func: ctx.local.pipeline.depth_func,
+            depth_write: ctx.local.pipeline.depth_write,
+            stencil: ctx.local.pipeline.stencil,
+            stencil_func_front: ctx.local.pipeline.stencil_func_front,
+            stencil_func_back: ctx.local.pipeline.stencil_func_back,
+            stencil_fail_front: ctx.local.pipeline.stencil_fail_front,
+            stencil_zfail_front: ctx.local.pipeline.stencil_zfail_front,
+            stencil_zpass_front: ctx.local.pipeline.stencil_zpass_front,
+            stencil_fail_back: ctx.local.pipeline.stencil_fail_back,
+            stencil_zfail_back: ctx.local.pipeline.stencil_zfail_back,
+            stencil_zpass_back: ctx.local.pipeline.stencil_zpass_back,
+            stencil_ref: ctx.local.pipeline.stencil_ref,
+            stencil_read_mask: ctx.local.pipeline.stencil_read_mask,
+            stencil_write_mask: ctx.local.pipeline.stencil_write_mask,
+            cull_enabled: ctx.local.pipeline.cull_enabled,
+            cull_face: ctx.local.pipeline.cull_face,
+            front_face: ctx.local.pipeline.front_face,
+            color_mask: ctx.local.pipeline.color_mask,
+            clear: ctx.local.pipeline.clear_color,
+            elem_buf: ctx.local.element_buffer,
             ..DrawCall::default()
         };
-        d.target = if ctx.bound_fbo == 0 {
+        d.target = if ctx.local.bound_fbo == 0 {
             None
         } else {
-            let texture = ctx.framebuffers.color_attachment(ctx.bound_fbo);
+            let texture = ctx.local.framebuffers.color_attachment(ctx.local.bound_fbo);
             ctx.textures
                 .get(texture)
                 .filter(|t| t.w > 0 && t.h > 0)
                 .map(|t| crate::model::program::TargetSnapshot {
                     texture,
                     generation: t.gen,
+                    shared_storage: t.shared_storage(),
+                    shared_revision: t.shared_current_identity().map(|(_, revision)| revision),
                     width: t.w,
                     height: t.h,
                     format: t.ir_format,
                 })
         };
         for unit in 0..d.tex_units.len() {
-            d.tex_generations[unit] = ctx
-                .textures
-                .get(d.tex_units[unit])
-                .map(|t| t.gen)
-                .unwrap_or(0);
+            if let Some(texture) = ctx.textures.get(d.tex_units[unit]) {
+                d.tex_generations[unit] = texture.gen;
+                d.tex_swizzles[unit] = texture.swizzle;
+            }
         }
-        if let Some(p) = ctx.programs.program(ctx.cur_prog) {
-            d.samp_units = p.samp_units;
+        if let Some(p) = ctx.programs.program(ctx.local.cur_prog) {
+            d.samp_units.clone_from(&p.samp_units);
             // Snapshot the default-block `glUniform*` bytes for THIS draw: `Program::ubuf` is mutable state,
             // so a later draw that changes a uniform must not retroactively alter this draw's bytes.
             let sz = p.ubuf_size.max(0) as usize;
@@ -256,7 +622,23 @@ impl GlContext {
                 d.ubuf_bytes = p.ubuf[..sz.min(p.ubuf.len())].to_vec();
             }
         }
-        d.ubo_bytes = self.resolve_block_ubo_bytes(ctx.cur_prog);
+        d.textures = d
+            .samp_units
+            .iter()
+            .copied()
+            .filter(|unit| (0..d.tex_units.len() as i32).contains(unit))
+            .map(|unit| d.tex_units[unit as usize])
+            .filter(|name| *name != 0)
+            .filter_map(|name| ctx.texture_snapshot(name))
+            .collect();
+        d.textures
+            .sort_unstable_by_key(|snapshot| (snapshot.name, snapshot.generation));
+        d.textures
+            .dedup_by_key(|snapshot| (snapshot.name, snapshot.generation));
+        if !capture_buffers {
+            return d;
+        }
+        d.ubo_bytes = self.resolve_block_ubo_bytes(ctx.local.cur_prog);
         let mut names: Vec<u32> = d
             .attrs
             .iter()
@@ -327,9 +709,9 @@ impl GlContext {
             hl_log::tag::GL,
             "[UBO_DUMP] prog={prog_name} has_uniforms=true ubuf_size={} bp={bp} indexed_keys={:?}",
             prog.ubuf_size,
-            ctx.indexed_buffers.keys().collect::<Vec<_>>()
+            ctx.local.indexed_buffers.keys().collect::<Vec<_>>()
         );
-        let ib = match ctx.indexed_buffers.get(&(GL_UNIFORM_BUFFER, bp)) {
+        let ib = match ctx.local.indexed_buffers.get(&(GL_UNIFORM_BUFFER, bp)) {
             Some(ib) => *ib,
             None => return Vec::new(),
         };
@@ -379,6 +761,7 @@ impl GlContext {
         let mut out: Vec<u8> = Vec::new();
         for blk in blocks {
             let bytes = ctx
+                .local
                 .indexed_buffers
                 .get(&(GL_UNIFORM_BUFFER, blk.binding))
                 .and_then(|ib| {

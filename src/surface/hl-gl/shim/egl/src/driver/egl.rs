@@ -107,29 +107,184 @@ pub extern "C" fn eglGetConfigAttrib(
 
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglCreateContext(
-    _dpy: *mut c_void,
-    _config: *mut c_void,
-    _share_context: *mut c_void,
-    _attrib_list: *const i32,
+    dpy: *mut c_void,
+    config: *mut c_void,
+    share_context: *mut c_void,
+    attrib_list: *const i32,
 ) -> *mut c_void {
     crate::stub::trace("eglCreateContext", "creating GLES context");
+    if dpy as usize != DISPLAY_TOKEN {
+        GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
+        return core::ptr::null_mut();
+    }
+    if !config.is_null() && config as usize != CONFIG_TOKEN {
+        GlobalState::access(|s| s.set_egl_error(EGL_BAD_CONFIG));
+        return core::ptr::null_mut();
+    }
+    let attributes = match ContextAttributeList::parse(attrib_list) {
+        Ok(attributes) => attributes,
+        Err(error @ ContextAttributeError::Malformed { .. }) => {
+            error.report();
+            GlobalState::access(|s| s.set_egl_error(EGL_BAD_ATTRIBUTE));
+            return core::ptr::null_mut();
+        }
+        Err(error @ ContextAttributeError::Unsupported { .. }) => {
+            error.report();
+            GlobalState::access(|s| s.set_egl_error(EGL_BAD_MATCH));
+            return core::ptr::null_mut();
+        }
+    };
     let ctx = GlobalState::access(|s| {
         let tok = s.mint_token();
-        s.create_context();
+        if !share_context.is_null() {
+            let Some(shared) = s.context_attributes(share_context as usize) else {
+                s.set_egl_error(EGL_BAD_CONTEXT);
+                return core::ptr::null_mut();
+            };
+            if shared.reset_strategy != attributes.reset_strategy {
+                s.set_egl_error(EGL_BAD_MATCH);
+                return core::ptr::null_mut();
+            }
+        }
         tok
     });
+    if ctx.is_null() {
+        return ctx;
+    }
+    let share = (!share_context.is_null()).then_some(share_context as usize);
+    if !GlobalState::register_context(ctx as usize, attributes, share) {
+        GlobalState::access(|state| state.set_egl_error(EGL_BAD_CONTEXT));
+        return core::ptr::null_mut();
+    }
     hl_log::hl_info!(hl_log::tag::EGL, "eglCreateContext ctx={}", ctx as usize);
     ctx
 }
 
+struct ContextAttributeList;
+enum ContextAttributeError {
+    Malformed {
+        reason: String,
+        pairs: Vec<(i32, i32)>,
+    },
+    Unsupported {
+        reason: String,
+        pairs: Vec<(i32, i32)>,
+    },
+}
+
+impl ContextAttributeError {
+    fn report(&self) {
+        let (reason, pairs) = match self {
+            Self::Malformed { reason, pairs } | Self::Unsupported { reason, pairs } => {
+                (reason.as_str(), pairs.as_slice())
+            }
+        };
+        crate::stub::Diagnostics::context_attributes(reason, pairs);
+    }
+}
+
+impl ContextAttributeList {
+    fn parse(attrib_list: *const i32) -> Result<ContextAttributes, ContextAttributeError> {
+        let mut attributes = ContextAttributes {
+            client_version: 1,
+            minor_version: 0,
+            robust_access: false,
+            reset_strategy: EGL_NO_RESET_NOTIFICATION_EXT,
+            no_error: false,
+        };
+        if attrib_list.is_null() {
+            return Err(ContextAttributeError::Unsupported {
+                reason: "null attribute list requests unsupported ES 1.0".into(),
+                pairs: Vec::new(),
+            });
+        }
+        let mut pairs = Vec::new();
+        for index in 0..32 {
+            let attribute = unsafe { *attrib_list.add(index * 2) };
+            if attribute == EGL_NONE {
+                return if matches!(
+                    (attributes.client_version, attributes.minor_version),
+                    (2, 0) | (3, 0) | (3, 1)
+                ) {
+                    Ok(attributes)
+                } else {
+                    Err(ContextAttributeError::Unsupported {
+                        reason: format!(
+                            "unsupported GLES version {}.{}",
+                            attributes.client_version, attributes.minor_version
+                        ),
+                        pairs,
+                    })
+                };
+            }
+            let value = unsafe { *attrib_list.add(index * 2 + 1) };
+            pairs.push((attribute, value));
+            match attribute {
+                EGL_CONTEXT_CLIENT_VERSION if matches!(value, 1..=3) => {
+                    attributes.client_version = value;
+                }
+                EGL_CONTEXT_MINOR_VERSION_KHR if matches!(value, 0..=1) => {
+                    attributes.minor_version = value;
+                }
+                EGL_CONTEXT_OPENGL_ROBUST_ACCESS_EXT if matches!(value, 0 | 1) => {
+                    attributes.robust_access = value == 1;
+                }
+                EGL_CONTEXT_OPENGL_NO_ERROR_KHR if matches!(value, 0 | 1) => {
+                    attributes.no_error = value == 1;
+                }
+                EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT
+                    if matches!(
+                        value,
+                        EGL_NO_RESET_NOTIFICATION_EXT | EGL_LOSE_CONTEXT_ON_RESET_EXT
+                    ) =>
+                {
+                    attributes.reset_strategy = value;
+                }
+                EGL_CONTEXT_CLIENT_VERSION | EGL_CONTEXT_MINOR_VERSION_KHR => {
+                    return Err(ContextAttributeError::Malformed {
+                        reason: format!(
+                            "invalid value 0x{value:04x} for attribute 0x{attribute:04x}"
+                        ),
+                        pairs,
+                    });
+                }
+                EGL_CONTEXT_OPENGL_ROBUST_ACCESS_EXT
+                | EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT
+                | EGL_CONTEXT_OPENGL_NO_ERROR_KHR => {
+                    return Err(ContextAttributeError::Malformed {
+                        reason: format!(
+                            "invalid value 0x{value:04x} for attribute 0x{attribute:04x}"
+                        ),
+                        pairs,
+                    });
+                }
+                _ => {
+                    return Err(ContextAttributeError::Malformed {
+                        reason: format!("unknown attribute 0x{attribute:04x}"),
+                        pairs,
+                    });
+                }
+            }
+        }
+        Err(ContextAttributeError::Malformed {
+            reason: "attribute list exceeds 32 pairs or lacks EGL_NONE".into(),
+            pairs,
+        })
+    }
+}
+
 #[cfg_attr(not(gles_client), no_mangle)]
-pub extern "C" fn eglDestroyContext(_dpy: *mut c_void, ctx: *mut c_void) -> u32 {
-    // If this context is current on the calling thread, releasing it drops the thread's binding.
-    current::Binding::release_if_context(ctx as usize);
-    // Account the teardown; destroying the LAST live context retires the shared model's whole working set so
-    // its host residency is refunded (the fix for Chrome's lost-context accumulation — see `destroy_context`).
-    GlobalState::access(|s| s.destroy_context());
-    EGL_TRUE
+pub extern "C" fn eglDestroyContext(dpy: *mut c_void, ctx: *mut c_void) -> u32 {
+    if dpy as usize != DISPLAY_TOKEN {
+        GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
+        return EGL_FALSE;
+    }
+    if GlobalState::remove_context(ctx as usize) {
+        EGL_TRUE
+    } else {
+        GlobalState::access(|state| state.set_egl_error(EGL_BAD_CONTEXT));
+        EGL_FALSE
+    }
 }
 
 /// `eglMakeCurrent(dpy, draw, read, ctx)` — bind `ctx` (+ its draw/read surfaces + display) as the
@@ -152,12 +307,45 @@ pub extern "C" fn eglMakeCurrent(
         draw as usize,
         read as usize
     );
+    if dpy as usize != DISPLAY_TOKEN {
+        GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
+        return EGL_FALSE;
+    }
+    let release = ctx.is_null() && draw.is_null() && read.is_null();
+    if ctx.is_null() && !release {
+        GlobalState::access(|s| s.set_egl_error(EGL_BAD_MATCH));
+        return EGL_FALSE;
+    }
+    if !ctx.is_null() && draw.is_null() != read.is_null() {
+        GlobalState::access(|s| s.set_egl_error(EGL_BAD_MATCH));
+        return EGL_FALSE;
+    }
+    let previous = current::context();
+    let previous_binding = (previous, current::draw_surface(), current::read_surface());
+    let result = {
+        match GlobalState::bind_current(
+            previous_binding,
+            (ctx as usize, draw as usize, read as usize),
+        ) {
+            Ok(()) => EGL_TRUE,
+            Err(MakeCurrentError::Context) => {
+                GlobalState::access(|s| s.set_egl_error(EGL_BAD_CONTEXT));
+                EGL_FALSE
+            }
+            Err(MakeCurrentError::Surface) => {
+                GlobalState::access(|s| s.set_egl_error(EGL_BAD_SURFACE));
+                EGL_FALSE
+            }
+            Err(MakeCurrentError::Access) => {
+                GlobalState::access(|s| s.set_egl_error(EGL_BAD_ACCESS));
+                EGL_FALSE
+            }
+        }
+    };
+    if result == EGL_FALSE {
+        return EGL_FALSE;
+    }
     current::make_current(dpy as usize, draw as usize, read as usize, ctx as usize);
-    // A successful eglMakeCurrent resets the calling thread's EGL error to EGL_SUCCESS (EGL 1.5 §3.1).
-    // Without this, a stale EGL_CONTEXT_LOST left by an earlier failed present would make Chrome treat a
-    // freshly-bound, valid context as lost the next time it polls eglGetError — collapsing every shared
-    // context and rasterizing the whole page black.
-    GlobalState::access(|s| s.clear_egl_error());
     EGL_TRUE
 }
 
@@ -170,12 +358,20 @@ pub extern "C" fn eglMakeCurrent(
 /// `eglSwapBuffers` shows the frame; otherwise the session stays `None` (present is skipped, never faked).
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglCreateWindowSurface(
-    _dpy: *mut c_void,
-    _config: *mut c_void,
+    dpy: *mut c_void,
+    config: *mut c_void,
     win: *mut c_void,
     _attrib_list: *const i32,
 ) -> *mut c_void {
     crate::stub::trace("eglCreateWindowSurface", "creating Wayland window surface");
+    if dpy as usize != DISPLAY_TOKEN {
+        GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
+        return core::ptr::null_mut();
+    }
+    if config as usize != CONFIG_TOKEN {
+        GlobalState::access(|s| s.set_egl_error(EGL_BAD_CONFIG));
+        return core::ptr::null_mut();
+    }
     WindowSurface::create(win)
 }
 
@@ -193,16 +389,6 @@ impl WindowSurface {
             (info.width, info.height)
         };
         GlobalState::access(|s| {
-            s.ctx.surf = GlSurface {
-                have: true,
-                width,
-                height,
-            };
-            s.current_is_wayland = info.wl_surface != 0;
-            s.wl_surface_ptr = info.wl_surface;
-            // The surface token is not "current" until eglMakeCurrent binds it (real EGL): the per-thread
-            // current-surface binding is set there, never here.
-            let tok = s.mint_token();
             // Compositor bring-up is DEFERRED so a real app window ends up with exactly ONE toplevel:
             //  * a real app `wl_surface` (wl_surface != 0) is presented onto the app's OWN surface at swap
             //    (via the app's libwayland-client) — so the shim must NOT stand up a competing self-owned
@@ -216,19 +402,40 @@ impl WindowSurface {
                 let geom = hl_gl::adapter::wayland::Geometry::backing(width, height);
                 s.wl = hl_gl::adapter::wayland::Wayland::connect_and_handshake(&geom);
             }
-            tok
+            s.create_surface(
+                hl_gl::model::context::SurfaceKind::Window,
+                width,
+                height,
+                info.wl_surface,
+                win as usize,
+            )
         })
     }
 }
 
 #[cfg_attr(not(gles_client), no_mangle)]
-pub extern "C" fn eglDestroySurface(_dpy: *mut c_void, surface: *mut c_void) -> u32 {
-    // Drop it from the calling thread's current binding (if it was the draw/read surface).
-    current::Binding::forget_surface(surface as usize);
-    GlobalState::access(|s| {
-        s.ctx.surf.have = false;
+pub extern "C" fn eglDestroySurface(dpy: *mut c_void, surface: *mut c_void) -> u32 {
+    if dpy as usize != DISPLAY_TOKEN {
+        GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
+        return EGL_FALSE;
+    }
+    let destroyed = GlobalState::access(|s| {
+        if s.destroy_surface(surface as usize) {
+            EGL_TRUE
+        } else {
+            s.set_egl_error(EGL_BAD_SURFACE);
+            EGL_FALSE
+        }
     });
-    EGL_TRUE
+    if destroyed == EGL_TRUE {
+        if let Err(error) = GlobalState::flush_surface_retirements() {
+            GlobalState::access(|state| {
+                state.set_egl_error(super::egl_error_from_gpu_error(&error))
+            });
+            return EGL_FALSE;
+        }
+    }
+    destroyed
 }
 
 /// `eglSwapBuffers` — the one sink-touching op: lower + submit + present the recorded frame. The
@@ -237,93 +444,11 @@ pub extern "C" fn eglDestroySurface(_dpy: *mut c_void, surface: *mut c_void) -> 
 /// self-owned toplevel) is a best-effort LOCAL display MIRROR of that present: a transient commit failure
 /// is logged but does NOT fail `eglSwapBuffers`. This matters because Chrome maps ANY swap failure to a
 /// LOST GL CONTEXT and tears down its whole shared-context GPU stack — so a mere present hiccup used to
-/// collapse raster and rasterize the entire page black. The read-back happens BEFORE the swap (which
-/// resets the draw-list).
+/// collapse raster and rasterize the entire page black. The compatibility readback and authoritative
+/// present are emitted in one submission so the recorded frame is never rendered twice.
 #[cfg_attr(not(gles_client), no_mangle)]
-pub extern "C" fn eglSwapBuffers(_dpy: *mut c_void, _surface: *mut c_void) -> u32 {
-    crate::stub::trace("eglSwapBuffers", "presenting frame");
-    GlobalState::access(|s| {
-        let _sp = hl_log::hl_span!(hl_log::tag::PRESENT, "swap");
-        hl_log::hl_debug!(
-            hl_log::tag::PRESENT,
-            "eglSwapBuffers {}x{}",
-            s.ctx.surf.width,
-            s.ctx.surf.height
-        );
-        // Two present targets share the SAME read-back frame:
-        //  * the app's OWN `wl_surface` (the real-window path) — when this is a Wayland window that
-        //    carried an app `wl_surface*`, or
-        //  * the shim's self-owned `wl_shm` toplevel (`s.wl`) — the fallback / headless path.
-        let is_app_surface = s.current_is_wayland && s.wl_surface_ptr != 0;
-        let want_readback = is_app_surface || s.wl.is_some();
-
-        // Read the rendered frame back (draws intact) BEFORE the swap resets the draw-list.
-        let wl_pixels = if want_readback {
-            let (w, h) = (s.ctx.surf.width as i32, s.ctx.surf.height as i32);
-            readpixels::read_pixels(&mut s.ctx, &mut s.sink, 0, 0, w, h, GL_RGBA)
-                .ok()
-                .map(|rgba| {
-                    hl_gl::adapter::wayland::rgba_to_xrgb8888(&rgba, w as usize, h as usize)
-                })
-        } else {
-            None
-        };
-
-        // The authoritative present: lower + submit the frame IR (+ Present) to the GPU-exec host.
-        if let Err(e) = swap::swap_buffers(&mut s.ctx, &mut s.sink) {
-            s.set_egl_error(egl_error_from_gpu_error(&e));
-            return EGL_FALSE;
-        }
-
-        // Commit the read-back frame to the compositor (a failure is surfaced, never a silent present).
-        if let Some(px) = wl_pixels {
-            let (w, h) = (s.ctx.surf.width, s.ctx.surf.height);
-
-            // Prefer presenting onto the app's OWN wl_surface (marshalled via the app's libwayland-client).
-            if is_app_surface {
-                match s.present_to_app_surface(&px, w, h) {
-                    AppPresentOutcome::Presented => return EGL_TRUE,
-                    // A commit/flush to the app's wl_surface failed. This is a display-delivery miss, NOT a
-                    // lost GL context: the authoritative present already happened above (`swap::swap_buffers`
-                    // submitted the frame IR to the GPU-exec host). Do NOT fail eglSwapBuffers — Chrome maps
-                    // ANY swap failure (EGL_FALSE, or a non-SUCCESS eglGetError) to a LOST GL CONTEXT and
-                    // tears down its whole shared-context GPU stack, after which every raster MakeCurrent
-                    // fails and the page rasterizes black. Log the miss and report success; the next swap
-                    // re-presents the (retained) frame.
-                    AppPresentOutcome::Failed => {
-                        hl_log::hl_warn!(hl_log::tag::PRESENT, "present-to-app-surface failed {}x{} — best-effort skip, authoritative present already done", w, h);
-                        return EGL_TRUE;
-                    }
-                    // Presenter unavailable (not a wayland app / libwayland or a symbol/global absent):
-                    // fall through to the self-owned present below.
-                    AppPresentOutcome::Unavailable => {}
-                }
-            }
-
-            // Fallback: the shim's self-owned `wl_shm` toplevel. For a deferred app surface whose presenter
-            // turned out unavailable, the self-owned session is brought up lazily now (a stock/headless
-            // window already brought one up in `eglCreateWindowSurface`).
-            if s.wl.is_none() && std::env::var_os("HL_GL_NO_WAYLAND").is_none() {
-                let geom = hl_gl::adapter::wayland::Geometry::backing(w, h);
-                s.wl = hl_gl::adapter::wayland::Wayland::connect_and_handshake(&geom);
-            }
-            let geom = hl_gl::adapter::wayland::Geometry::backing(w, h);
-            if let Some(wl) = s.wl.as_mut() {
-                if let Err(e) = wl.commit(&px, &geom) {
-                    // The self-owned wl_shm toplevel is a best-effort LOCAL MIRROR of the authoritative
-                    // present that already succeeded above (`swap::swap_buffers` submitted + presented the
-                    // frame IR to the GPU-exec host). A transient commit failure of this mirror (compositor
-                    // pacing, or a second surface racing the app's own wl_surface) must NOT fail
-                    // eglSwapBuffers: Chrome maps ANY swap failure to a LOST GL CONTEXT and tears down its
-                    // entire shared-context GPU stack, after which every raster MakeCurrent fails and the
-                    // whole page rasterizes black. Log the miss and report the swap as succeeded — the
-                    // authoritative GPU present did happen; only this dev-compositor mirror was skipped.
-                    hl_log::hl_warn!(hl_log::tag::PRESENT, "self-owned wl_shm mirror commit failed ({e:?}) — best-effort skip, authoritative present already done");
-                }
-            }
-        }
-        EGL_TRUE
-    })
+pub extern "C" fn eglSwapBuffers(dpy: *mut c_void, surface: *mut c_void) -> u32 {
+    present::swap(dpy as usize, surface as usize)
 }
 
 #[cfg_attr(not(gles_client), no_mangle)]

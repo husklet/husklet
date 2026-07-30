@@ -2,6 +2,11 @@ use super::*;
 
 impl MacPresenter {
     pub(super) fn poll_native_events(&mut self) {
+        // Momentum scrolling and pointer tracking can keep AppKit's queue non-empty indefinitely.
+        // Bound each drain so Wayland clients, frame callbacks, and the translated events below are
+        // dispatched before returning for another native batch.
+        const EVENT_BUDGET: usize = 256;
+
         let _span = hl_span!(tag::PRESENT, "macos_poll_events");
         let Some(mtm) = self.mtm else { return };
         let app = NSApplication::sharedApplication(mtm);
@@ -11,12 +16,15 @@ impl MacPresenter {
         // first surface can map). `distantPast` is AppKit's documented non-blocking poll deadline.
         let deadline = unsafe { NSDate::distantPast() };
         unsafe {
-            while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
-                NSEventMask::Any,
-                Some(&deadline),
-                NSDefaultRunLoopMode,
-                true,
-            ) {
+            for _ in 0..EVENT_BUDGET {
+                let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
+                    NSEventMask::Any,
+                    Some(&deadline),
+                    NSDefaultRunLoopMode,
+                    true,
+                ) else {
+                    break;
+                };
                 let mut consumed = false;
                 let event_type = event.r#type();
                 let window_number = event.windowNumber();
@@ -29,6 +37,12 @@ impl MacPresenter {
                         ))
                     })
                 });
+                hl_log::hl_log!(
+                    tag::PRESENT,
+                    Level::Trace,
+                    "native event type={event_type:?} window={window_number} matched={}",
+                    window.is_some()
+                );
                 if let Some((surface, window, input_origin)) = window {
                     match event_type {
                         NSEventType::MouseMoved
@@ -51,6 +65,7 @@ impl MacPresenter {
                                 x,
                                 y,
                             });
+                            consumed = true;
                         }
                         NSEventType::LeftMouseDown
                         | NSEventType::LeftMouseUp
@@ -70,7 +85,32 @@ impl MacPresenter {
                                     .as_ref()
                                     .is_some_and(|(resize_surface, _)| *resize_surface == surface)
                             {
+                                if let Some((_, drag)) = &self.native_resize {
+                                    window.update_resize(drag);
+                                }
                                 self.native_resize = None;
+                                let (width, height) = window.logical_size();
+                                let state = self.surfaces.get_mut(&surface).unwrap();
+                                let maximized = state
+                                    .desired
+                                    .as_ref()
+                                    .is_some_and(|desired| desired.maximized);
+                                let fullscreen = state.observed_native_fullscreen.unwrap_or(false);
+                                state.native_resize_pending =
+                                    Some((width, height, maximized, fullscreen, false));
+                                state.native_resize_changed_at = None;
+                                state.native_resize_sent_at = None;
+                                state.native_resize_last_sent =
+                                    Some((width, height, maximized, fullscreen, false));
+                                self.events.push(PresenterEvent::Resize {
+                                    surface,
+                                    width,
+                                    height,
+                                    maximized,
+                                    fullscreen,
+                                    resizing: false,
+                                });
+                                self.events.push(PresenterEvent::ResizeEnd { surface });
                                 continue;
                             }
                             // Focus the native window that produced this event before routing its pointer
@@ -79,6 +119,16 @@ impl MacPresenter {
                             let point = event.locationInWindow();
                             let (x, y) = window.wayland_point(point.x, point.y);
                             let (x, y) = (x + input_origin.0, y + input_origin.1);
+                            hl_log::hl_log!(
+                                tag::PRESENT,
+                                Level::Trace,
+                                "pointer button surface={} native=({:.1},{:.1}) origin=({:.1},{:.1}) wayland=({x:.1},{y:.1})",
+                                surface.0,
+                                point.x,
+                                point.y,
+                                input_origin.0,
+                                input_origin.1,
+                            );
                             self.events.push(PresenterEvent::PointerMotion {
                                 window: surface,
                                 x,
@@ -103,11 +153,15 @@ impl MacPresenter {
                             if !pressed {
                                 self.drag_event = None;
                             }
+                            consumed = true;
                         }
-                        NSEventType::ScrollWheel => self.events.push(PresenterEvent::PointerAxis {
-                            horizontal: -event.scrollingDeltaX(),
-                            vertical: -event.scrollingDeltaY(),
-                        }),
+                        NSEventType::ScrollWheel => {
+                            self.events.push(PresenterEvent::PointerAxis {
+                                horizontal: -event.scrollingDeltaX(),
+                                vertical: -event.scrollingDeltaY(),
+                            });
+                            consumed = true;
+                        }
                         NSEventType::KeyDown | NSEventType::KeyUp => {
                             self.sync_key_modifiers(event.modifierFlags());
                             if let Some(event) = KeyCode::from(event.keyCode()).event(
@@ -181,18 +235,37 @@ impl MacPresenter {
                     app.sendEvent(&event);
                 }
             }
-            // AppKit window operations are not event-only. Native full-screen transitions, animation,
-            // notifications, and Space hand-off also run through main-run-loop sources and timers. Give
-            // them a tightly bounded slice every compositor tick; without this `toggleFullScreen` creates
-            // transition windows but never completes. One millisecond keeps Wayland input/render latency
-            // bounded while allowing Cocoa to make forward progress.
-            let until = NSDate::dateWithTimeIntervalSinceNow(0.001);
-            NSRunLoop::mainRunLoop().runMode_beforeDate(NSDefaultRunLoopMode, &until);
+            // `NSRunLoop::runMode` dispatches queued mouse/key events through AppKit itself. Our plain
+            // Metal view does not own those events, so running it every tick races the manual drain above
+            // and turns the visible Wayland surface into an unresponsive image. AppKit needs a run-loop
+            // slice only while `toggleFullScreen` is performing its asynchronous Space transition.
+            let fullscreen_transition = self.surfaces.values().any(|state| {
+                let Some(window) = state.window.as_ref() else {
+                    return false;
+                };
+                state
+                    .desired
+                    .as_ref()
+                    .is_some_and(|desired| desired.fullscreen != window.native_fullscreen())
+            });
+            if fullscreen_transition {
+                let until = NSDate::dateWithTimeIntervalSinceNow(0.001);
+                NSRunLoop::mainRunLoop().runMode_beforeDate(NSDefaultRunLoopMode, &until);
+            }
         }
         for (&surface, state) in &mut self.surfaces {
-            let Some(window) = state.window.as_ref() else {
+            let Some(backing_scale) = state.window.as_ref().map(MetalWindow::backing_scale) else {
                 continue;
             };
+            if state.observe_backing_scale(backing_scale) {
+                hl_debug!(
+                    tag::PRESENT,
+                    "native backing scale changed surface={} scale={backing_scale}",
+                    surface.0
+                );
+                self.events.push(PresenterEvent::Repaint(surface));
+            }
+            let window = state.window.as_ref().expect("window checked above");
             if !matches!(
                 state.desired.as_ref().map(|window| window.kind),
                 Some(WindowKind::Toplevel { .. })
@@ -277,9 +350,13 @@ impl MacPresenter {
                     });
                 }
             }
-            if state
-                .native_resize_changed_at
-                .is_some_and(|changed| now.duration_since(changed) >= Duration::from_millis(75))
+            if self
+                .native_resize
+                .as_ref()
+                .is_none_or(|(resize_surface, _)| *resize_surface != surface)
+                && state
+                    .native_resize_changed_at
+                    .is_some_and(|changed| now.duration_since(changed) >= Duration::from_millis(75))
             {
                 state.native_resize_changed_at = None;
                 // If the drag ended between pacing slots, emit its exact final size before clearing the

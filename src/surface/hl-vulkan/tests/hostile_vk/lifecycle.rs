@@ -71,12 +71,21 @@ fn out_of_range_indices_and_offsets_do_not_panic_then_valid() {
     record::cmd_bind_vertex_buffer(&mut d, cb, 0, buf, u64::MAX).unwrap();
     record::cmd_bind_index_buffer(&mut d, cb, buf, u64::MAX, 1).unwrap();
     // A huge descriptor binding index is just a map key (no panic); the write is retained.
-    let layout = d.create_descriptor_set_layout(vec![]);
+    let layout = d.create_descriptor_set_layout(vec![LayoutBinding {
+        binding: u32::MAX,
+        descriptor_type: vk_descriptor_type::STORAGE_BUFFER,
+        descriptor_count: 1,
+        stage_flags: 0,
+    }]);
     let pool = d.create_descriptor_pool(1);
     let set = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
     create::update_descriptor_buffer(&mut d, set, u32::MAX, buf, 0, 16).unwrap();
     assert_eq!(
-        d.descriptor_sets.get(&set).unwrap().buffers.get(&u32::MAX),
+        d.descriptor_sets
+            .get(&set)
+            .unwrap()
+            .buffers
+            .get(&(u32::MAX, 0)),
         Some(&(buf, 0, 16))
     );
     // A valid, in-range bind still records against the real ir id.

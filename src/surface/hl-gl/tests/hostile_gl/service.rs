@@ -27,7 +27,7 @@ fn hostile_object_service_edges_never_panic() {
     // Program pipeline: use-stages on unknown pipeline → INVALID_OPERATION; bad stage bits → INVALID_VALUE.
     es3::use_program_stages(&mut c, 4242, GL_VERTEX_SHADER_BIT, 0);
     assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
-    let pp = c.program_pipelines.gen();
+    let pp = c.gen_program_pipeline();
     es3::use_program_stages(&mut c, pp, 0x8000_0000, 0);
     assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
 
@@ -42,7 +42,7 @@ fn hostile_object_service_edges_never_panic() {
     assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
     sync::wait_sync(&mut c, &mut sink, 555, 0, GL_TIMEOUT_IGNORED);
     assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
-    assert!(sync::get_synciv(&mut c, 555, GL_SYNC_STATUS).is_none());
+    assert!(sync::get_synciv(&mut c, &mut sink, 555, GL_SYNC_STATUS).is_none());
     assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
 
     // Transform feedback: bad varyings program → INVALID_VALUE; junk primitive mode → INVALID_ENUM.

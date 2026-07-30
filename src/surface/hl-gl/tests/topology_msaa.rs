@@ -31,11 +31,11 @@ const GL_TRIANGLE_FAN: u32 = 0x0006;
 
 fn ctx_64() -> GlContext {
     let mut c = GlContext::new();
-    c.surf = GlSurface {
+    c.set_surface(GlSurface {
         have: true,
         width: 64,
         height: 64,
-    };
+    });
     c
 }
 
@@ -221,7 +221,7 @@ fn plain_offscreen_fbo_draw_is_single_sampled() {
     c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
     record::tex_image_2d_format(&mut c, 32, 32, &[], TextureFormat::Rgba8Unorm);
-    let fbo = c.framebuffers.gen();
+    let fbo = c.gen_framebuffer();
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
     record::framebuffer_texture_2d(
         &mut c,

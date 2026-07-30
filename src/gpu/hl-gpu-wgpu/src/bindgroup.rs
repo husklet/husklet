@@ -43,6 +43,21 @@ impl WgpuExecutor {
                 BindResource::Sampler { id } => {
                     res.samplers.get(*id)?;
                 }
+                BindResource::BufferArray { elements } => {
+                    for element in elements {
+                        buffer::WgpuBuffer::get(res, element.id)?;
+                    }
+                }
+                BindResource::TextureArray { ids } => {
+                    for id in ids {
+                        texture::WgpuTexture::get(res, *id)?;
+                    }
+                }
+                BindResource::SamplerArray { ids } => {
+                    for id in ids {
+                        res.samplers.get(*id)?;
+                    }
+                }
             }
         }
         res.bind_groups.insert(id, Box::new(d.clone()))
@@ -63,27 +78,89 @@ impl WgpuExecutor {
         layout: &wgpu::BindGroupLayout,
         d: &BindGroupDesc,
         filter: Option<&[(u32, u32)]>,
+        remap_group_zero: bool,
+        internal: Option<&wgpu::Buffer>,
     ) -> Result<wgpu::BindGroup> {
-        let keep = |e: &hl_gpu::protocol::model::descriptor::BindEntry| {
-            filter.is_none_or(|f| f.contains(&(d.set, e.binding)))
+        let binding = |binding: u32| -> Result<u32> {
+            if remap_group_zero && d.set == 0 {
+                binding
+                    .checked_add(crate::wgsl::viewport::GUEST_OFFSET)
+                    .ok_or(GpuError::OutOfBounds)
+            } else {
+                Ok(binding)
+            }
         };
+        let mut kept = Vec::new();
+        for entry in &d.entries {
+            let native = binding(entry.binding)?;
+            if filter.is_none_or(|slots| slots.contains(&(d.set, native))) {
+                kept.push((entry, native));
+            }
+        }
         // The wgpu entries borrow the resolved views/samplers; collect those first so they outlive the
         // `BindGroupEntry` slice. Only resources for KEPT entries are resolved + bound, in order.
         let mut views = Vec::new();
         let mut samplers = Vec::new();
-        for e in d.entries.iter().filter(|e| keep(e)) {
+        let mut view_arrays = Vec::new();
+        let mut sampler_arrays = Vec::new();
+        let mut buffer_arrays = Vec::new();
+        for (e, _) in &kept {
             match &e.resource {
                 BindResource::Texture { id } => {
                     views.push(texture::WgpuTexture::get(res, *id)?.view.clone())
                 }
                 BindResource::Sampler { id } => samplers.push(self.sampler(res, *id)?.clone()),
                 BindResource::Buffer { .. } => {}
+                BindResource::TextureArray { ids } => view_arrays.push(
+                    ids.iter()
+                        .map(|id| Ok(texture::WgpuTexture::get(res, *id)?.view.clone()))
+                        .collect::<Result<Vec<_>>>()?,
+                ),
+                BindResource::SamplerArray { ids } => sampler_arrays.push(
+                    ids.iter()
+                        .map(|id| Ok(self.sampler(res, *id)?.clone()))
+                        .collect::<Result<Vec<_>>>()?,
+                ),
+                BindResource::BufferArray { elements } => buffer_arrays.push(
+                    elements
+                        .iter()
+                        .map(|element| {
+                            let buffer = buffer::WgpuBuffer::get(res, element.id)?;
+                            Ok(wgpu::BufferBinding {
+                                buffer: &buffer.buffer,
+                                offset: element.offset,
+                                size: NonZeroU64::new(element.size),
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                ),
             }
         }
+        let view_array_refs = view_arrays
+            .iter()
+            .map(|array| array.iter().collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        let sampler_array_refs = sampler_arrays
+            .iter()
+            .map(|array| array.iter().collect::<Vec<_>>())
+            .collect::<Vec<_>>();
         let mut vi = 0usize;
         let mut si = 0usize;
-        let mut entries = Vec::with_capacity(d.entries.len());
-        for e in d.entries.iter().filter(|e| keep(e)) {
+        let mut vai = 0usize;
+        let mut sai = 0usize;
+        let mut bai = 0usize;
+        let mut entries = Vec::with_capacity(d.entries.len() + usize::from(internal.is_some()));
+        if let Some(buffer) = internal {
+            entries.push(wgpu::BindGroupEntry {
+                binding: crate::wgsl::viewport::BINDING,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer,
+                    offset: 0,
+                    size: NonZeroU64::new(16),
+                }),
+            });
+        }
+        for (e, native) in kept {
             let resource = match &e.resource {
                 BindResource::Buffer { id, offset, size } => {
                     let b = buffer::WgpuBuffer::get(res, *id)?;
@@ -103,9 +180,24 @@ impl WgpuExecutor {
                     si += 1;
                     wgpu::BindingResource::Sampler(s)
                 }
+                BindResource::TextureArray { .. } => {
+                    let array = &view_array_refs[vai];
+                    vai += 1;
+                    wgpu::BindingResource::TextureViewArray(array)
+                }
+                BindResource::SamplerArray { .. } => {
+                    let array = &sampler_array_refs[sai];
+                    sai += 1;
+                    wgpu::BindingResource::SamplerArray(array)
+                }
+                BindResource::BufferArray { .. } => {
+                    let array = &buffer_arrays[bai];
+                    bai += 1;
+                    wgpu::BindingResource::BufferArray(array)
+                }
             };
             entries.push(wgpu::BindGroupEntry {
-                binding: e.binding,
+                binding: native,
                 resource,
             });
         }

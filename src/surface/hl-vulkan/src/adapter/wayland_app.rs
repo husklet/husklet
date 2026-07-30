@@ -34,12 +34,79 @@ mod present;
 mod session;
 mod shared_memory;
 
+use core::ffi::c_void;
+use hl_gpu::protocol::model::descriptor::{FrameSerial, SurfaceToken};
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Globals {
+    pub shm: Option<(u32, u32)>,
+    pub identity: Option<(u32, u32)>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeFrame {
+    pub token: SurfaceToken,
+    pub serial: FrameSerial,
+}
+
+/// The narrow dynamic `libwayland-client` boundary used by the presenter.
+///
+/// # Safety
+/// Implementations must preserve Wayland proxy, queue, listener-data, and object-lifetime rules.
+pub(crate) unsafe trait WlAbi {
+    fn get_display(&self, surface: *mut c_void) -> *mut c_void;
+    fn get_version(&self, proxy: *mut c_void) -> u32;
+    fn create_queue(&self, display: *mut c_void) -> *mut c_void;
+    fn create_wrapper(&self, proxy: *mut c_void) -> *mut c_void;
+    fn wrapper_destroy(&self, wrapper: *mut c_void);
+    fn set_queue(&self, proxy: *mut c_void, queue: *mut c_void);
+    fn destroy(&self, proxy: *mut c_void);
+    fn destroy_queue(&self, queue: *mut c_void);
+    fn flush(&self, display: *mut c_void) -> i32;
+    fn get_registry(&self, display_wrapper: *mut c_void, version: u32) -> *mut c_void;
+    fn discover_globals(
+        &self,
+        registry: *mut c_void,
+        display: *mut c_void,
+        queue: *mut c_void,
+    ) -> WlAppResult<Globals>;
+    fn bind_shm(&self, registry: *mut c_void, name: u32, version: u32) -> *mut c_void;
+    fn bind_identity_manager(&self, registry: *mut c_void, name: u32, version: u32) -> *mut c_void;
+    fn identity_for_surface(
+        &self,
+        manager: *mut c_void,
+        version: u32,
+        surface: *mut c_void,
+    ) -> *mut c_void;
+    fn identity_token(
+        &self,
+        identity: *mut c_void,
+        display: *mut c_void,
+        queue: *mut c_void,
+    ) -> WlAppResult<SurfaceToken>;
+    fn identity_associate(&self, identity: *mut c_void, version: u32, serial: u64);
+    fn identity_destroy(&self, identity: *mut c_void, version: u32);
+    fn shm_create_pool(&self, shm: *mut c_void, version: u32, fd: i32, size: i32) -> *mut c_void;
+    fn pool_create_buffer(
+        &self,
+        pool: *mut c_void,
+        version: u32,
+        w: i32,
+        h: i32,
+        stride: i32,
+        format: u32,
+    ) -> *mut c_void;
+    fn pool_destroy(&self, pool: *mut c_void, version: u32);
+    fn buffer_destroy(&self, buffer: *mut c_void, version: u32);
+    fn surface_attach(&self, surface: *mut c_void, version: u32, buffer: *mut c_void);
+    fn surface_damage(&self, surface: *mut c_void, version: u32, w: i32, h: i32);
+    fn surface_commit(&self, surface: *mut c_void, version: u32);
+}
+
 #[cfg(test)]
 use crate::result::{VK_ERROR_OUT_OF_DATE_KHR, VK_ERROR_SURFACE_LOST_KHR, VK_SUCCESS};
 #[cfg(test)]
-use abi::{SysWlAbi, WlAbi};
-#[cfg(test)]
-use core::ffi::c_void;
+use abi::SysWlAbi;
 #[cfg(test)]
 use present::FramePlane;
 pub use present::{pixels_to_xrgb8888, WlAppError, WlAppResult};
@@ -62,11 +129,12 @@ mod tests {
         WrapperDestroy(usize),
         SetQueue(usize, usize),
         Destroy(usize),
+        DestroyQueue(usize),
         Flush(usize),
         GetRegistry {
             on: usize,
         },
-        DiscoverShm {
+        DiscoverGlobals {
             registry: usize,
         },
         BindShm {
@@ -74,6 +142,20 @@ mod tests {
             name: u32,
             version: u32,
         },
+        BindIdentity {
+            registry: usize,
+            name: u32,
+            version: u32,
+        },
+        GetIdentity {
+            manager: usize,
+            surface: usize,
+        },
+        Associate {
+            identity: usize,
+            serial: u64,
+        },
+        DestroyIdentity(usize),
         ShmCreatePool {
             shm: usize,
             fd_valid: bool,
@@ -109,6 +191,7 @@ mod tests {
         next: RefCell<usize>,
         /// Whether `discover_shm` should report a wl_shm global (false models a compositor without shm).
         has_shm: bool,
+        has_identity: bool,
         /// Force a constructor to return null (models a live marshal failure).
         fail_pool: bool,
     }
@@ -119,6 +202,7 @@ mod tests {
                 log: RefCell::new(Vec::new()),
                 next: RefCell::new(0x1000),
                 has_shm: true,
+                has_identity: true,
                 fail_pool: false,
             }
         }
@@ -161,6 +245,9 @@ mod tests {
         fn destroy(&self, proxy: *mut c_void) {
             self.push(Rec::Destroy(proxy as usize));
         }
+        fn destroy_queue(&self, queue: *mut c_void) {
+            self.push(Rec::DestroyQueue(queue as usize));
+        }
         fn flush(&self, display: *mut c_void) -> i32 {
             self.push(Rec::Flush(display as usize));
             0
@@ -171,20 +258,19 @@ mod tests {
             });
             self.fresh()
         }
-        fn discover_shm(
+        fn discover_globals(
             &self,
             registry: *mut c_void,
             _display: *mut c_void,
             _queue: *mut c_void,
-        ) -> Option<(u32, u32)> {
-            self.push(Rec::DiscoverShm {
+        ) -> WlAppResult<Globals> {
+            self.push(Rec::DiscoverGlobals {
                 registry: registry as usize,
             });
-            if self.has_shm {
-                Some((7, 1))
-            } else {
-                None
-            }
+            Ok(Globals {
+                shm: self.has_shm.then_some((7, 1)),
+                identity: self.has_identity.then_some((8, 1)),
+            })
         }
         fn bind_shm(&self, registry: *mut c_void, name: u32, version: u32) -> *mut c_void {
             self.push(Rec::BindShm {
@@ -193,6 +279,48 @@ mod tests {
                 version,
             });
             self.fresh()
+        }
+        fn bind_identity_manager(
+            &self,
+            registry: *mut c_void,
+            name: u32,
+            version: u32,
+        ) -> *mut c_void {
+            self.push(Rec::BindIdentity {
+                registry: registry as usize,
+                name,
+                version,
+            });
+            self.fresh()
+        }
+        fn identity_for_surface(
+            &self,
+            manager: *mut c_void,
+            _version: u32,
+            surface: *mut c_void,
+        ) -> *mut c_void {
+            self.push(Rec::GetIdentity {
+                manager: manager as usize,
+                surface: surface as usize,
+            });
+            self.fresh()
+        }
+        fn identity_token(
+            &self,
+            _identity: *mut c_void,
+            _display: *mut c_void,
+            _queue: *mut c_void,
+        ) -> WlAppResult<SurfaceToken> {
+            SurfaceToken::new(17).map_err(|_| WlAppError::NoIdentity)
+        }
+        fn identity_associate(&self, identity: *mut c_void, _version: u32, serial: u64) {
+            self.push(Rec::Associate {
+                identity: identity as usize,
+                serial,
+            });
+        }
+        fn identity_destroy(&self, identity: *mut c_void, _version: u32) {
+            self.push(Rec::DestroyIdentity(identity as usize));
         }
         fn shm_create_pool(
             &self,
@@ -281,7 +409,7 @@ mod tests {
         assert!(matches!(log[3], Rec::SetQueue(_, 0x0000_9EE0)));
         assert!(matches!(log[4], Rec::GetRegistry { .. }));
         // 4) wl_shm is discovered then bound with the DISCOVERED registry name (7) at the discovered version.
-        assert!(log.iter().any(|r| matches!(r, Rec::DiscoverShm { .. })));
+        assert!(log.iter().any(|r| matches!(r, Rec::DiscoverGlobals { .. })));
         assert!(log.iter().any(|r| matches!(
             r,
             Rec::BindShm {
@@ -375,11 +503,12 @@ mod tests {
         );
     }
 
-    /// A compositor without wl_shm fails bring-up LOUDLY (soft error → readback-only present), never fakes it.
+    /// With neither native identity nor wl_shm, bring-up is softly unavailable.
     #[test]
     fn missing_shm_global_is_a_soft_error() {
         let mut rec = Recorder::new();
         rec.has_shm = false;
+        rec.has_identity = false;
         let err = WaylandAppPresenter::with_abi(Box::new(rec), SURFACE)
             .err()
             .unwrap();
@@ -389,6 +518,60 @@ mod tests {
             "a missing global must be a soft (readback-only) failure"
         );
         assert_eq!(err.to_vk_result(), VK_SUCCESS);
+    }
+
+    #[test]
+    fn native_frames_use_token_and_monotonic_serials_without_shm() {
+        let mut rec = Recorder::new();
+        rec.has_shm = false;
+        let mut presenter =
+            WaylandAppPresenter::with_abi(Box::new(rec), SURFACE).expect("native bring-up");
+
+        let first = presenter.reserve_native_frame().expect("frame one");
+        let second = presenter.reserve_native_frame().expect("frame two");
+        assert_eq!(first.token.get(), 17);
+        assert_eq!(first.serial.get(), 1);
+        assert_eq!(second.serial.get(), 2);
+        let reserved = unsafe { &*(std::ptr::addr_of!(*presenter.abi) as *const Recorder) }.log();
+        assert!(!reserved
+            .iter()
+            .any(|record| matches!(record, Rec::Associate { .. } | Rec::Commit { .. })));
+
+        presenter
+            .commit_native(first, 640, 480)
+            .expect("native commit");
+        let log = unsafe { &*(std::ptr::addr_of!(*presenter.abi) as *const Recorder) }.log();
+        let associate = log
+            .iter()
+            .position(|record| matches!(record, Rec::Associate { serial: 1, .. }))
+            .expect("associate");
+        let commit = log
+            .iter()
+            .position(|record| matches!(record, Rec::Commit { .. }))
+            .expect("commit");
+        assert!(associate < commit);
+        assert!(!log
+            .iter()
+            .any(|record| matches!(record, Rec::Attach { .. })));
+    }
+
+    #[test]
+    fn failed_gpu_frame_can_retire_identity_without_committing() {
+        let mut presenter =
+            WaylandAppPresenter::with_abi(Box::new(Recorder::new()), SURFACE).expect("bring-up");
+        let _reserved = presenter.reserve_native_frame().expect("reserved frame");
+
+        // This is the path taken when GPU submission fails: no association is made, and native pairing
+        // may be retired while the same presenter remains available for SHM fallback.
+        presenter.retire_native();
+        assert_eq!(presenter.native_token(), None);
+        let log = unsafe { &*(std::ptr::addr_of!(*presenter.abi) as *const Recorder) }.log();
+        assert!(log
+            .iter()
+            .any(|record| matches!(record, Rec::DestroyIdentity(_))));
+        assert!(!log
+            .iter()
+            .any(|record| matches!(record, Rec::Associate { .. } | Rec::Commit { .. })));
     }
 
     /// A null surface pointer (not a wayland app) is a soft NoSurface — the caller keeps its readback path.

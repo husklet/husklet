@@ -241,6 +241,11 @@ impl HlState {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
+        let sid = sid.and_then(|surface| self.engine.scene.window_root(surface));
+        let previous = self.engine.scene.seat().keyboard_focus;
+        if previous == sid {
+            return;
+        }
         let surface = sid.and_then(|s| self.surfaces_by_id.get(&s).cloned());
         // Follow the keyboard focus with the clipboard (data-device) focus so the newly focused client's
         // `wl_data_device` receives selection offers and its `set_selection` is honored — the standard
@@ -254,17 +259,43 @@ impl HlState {
         // `set_selection` is honored.
         set_primary_focus(&self.display, &self.seat, focus_client);
         // Mirror into the neutral seat so scene focus bookkeeping stays truthful.
-        let prev = self.engine.scene.seat().keyboard_focus;
         self.engine.scene.seat_mut().keyboard_focus = sid;
         let serial = SERIAL_COUNTER.next_serial();
         hl_debug!(
             tag::WAYLAND,
             "focus kbd from={:?} to={:?} serial={:?}",
-            prev.map(|s| s.0),
+            previous.map(|s| s.0),
             sid.map(|s| s.0),
             serial
         );
         keyboard.set_focus(self, surface, serial);
+        self.configure_activation(previous, sid);
+    }
+
+    /// Keep the XDG `activated` state in lockstep with keyboard focus.
+    ///
+    /// `wl_keyboard.enter` alone is not a toplevel activation transition. Toolkits use the XDG state to
+    /// select active-window rendering, occlusion, and frame scheduling, so leaving two windows activated
+    /// after native focus moves can strand the old window with an occlusion placeholder.
+    fn configure_activation(&mut self, previous: Option<SurfaceId>, current: Option<SurfaceId>) {
+        for (surface, activated) in [(previous, false), (current, true)] {
+            let Some(surface) = surface else { continue };
+            let toplevel = self
+                .xdg_shell
+                .toplevel_surfaces()
+                .iter()
+                .find(|toplevel| self.sid(toplevel.wl_surface()) == Some(surface))
+                .cloned();
+            let Some(toplevel) = toplevel else { continue };
+            toplevel.with_pending_state(|state| {
+                if activated {
+                    state.states.set(XdgToplevelState::Activated);
+                } else {
+                    state.states.unset(XdgToplevelState::Activated);
+                }
+            });
+            toplevel.send_configure();
+        }
     }
 
     /// Press or release a key by EVDEV keycode. smithay's keymap is keyed on X11 keycodes (evdev + 8),

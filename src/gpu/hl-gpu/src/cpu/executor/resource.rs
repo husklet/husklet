@@ -188,6 +188,13 @@ impl CpuExecutor {
                         gen: res.samplers.generation(*id).unwrap(),
                     });
                 }
+                BindResource::BufferArray { .. }
+                | BindResource::TextureArray { .. }
+                | BindResource::SamplerArray { .. } => {
+                    return Err(GpuError::Unsupported(
+                        "cpu executor: binding arrays are unsupported",
+                    ));
+                }
             }
         }
         res.bind_groups.insert(

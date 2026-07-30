@@ -54,12 +54,86 @@ impl BindingLayout {
                 },
                 multisampled: multi,
             },
+            BindingKind::StorageTexture {
+                dim,
+                format,
+                access,
+            } => wgpu::BindingType::StorageTexture {
+                access: match access {
+                    naga::StorageAccess::LOAD => wgpu::StorageTextureAccess::ReadOnly,
+                    naga::StorageAccess::STORE => wgpu::StorageTextureAccess::WriteOnly,
+                    access
+                        if access.contains(naga::StorageAccess::LOAD)
+                            && access.contains(naga::StorageAccess::STORE) =>
+                    {
+                        wgpu::StorageTextureAccess::ReadWrite
+                    }
+                    _ => wgpu::StorageTextureAccess::Atomic,
+                },
+                format: storage_format(format),
+                view_dimension: match dim {
+                    TexDim::D1 => wgpu::TextureViewDimension::D1,
+                    TexDim::D2 => wgpu::TextureViewDimension::D2,
+                    TexDim::D2Array => wgpu::TextureViewDimension::D2Array,
+                    TexDim::D3 => wgpu::TextureViewDimension::D3,
+                    TexDim::Cube => wgpu::TextureViewDimension::Cube,
+                    TexDim::CubeArray => wgpu::TextureViewDimension::CubeArray,
+                },
+            },
             BindingKind::Sampler { comparison } => wgpu::BindingType::Sampler(if comparison {
                 wgpu::SamplerBindingType::Comparison
             } else {
                 wgpu::SamplerBindingType::Filtering
             }),
         }
+    }
+}
+
+fn storage_format(format: naga::StorageFormat) -> wgpu::TextureFormat {
+    use naga::StorageFormat as S;
+    use wgpu::TextureFormat as T;
+    match format {
+        S::R8Unorm => T::R8Unorm,
+        S::R8Snorm => T::R8Snorm,
+        S::R8Uint => T::R8Uint,
+        S::R8Sint => T::R8Sint,
+        S::R16Uint => T::R16Uint,
+        S::R16Sint => T::R16Sint,
+        S::R16Float => T::R16Float,
+        S::Rg8Unorm => T::Rg8Unorm,
+        S::Rg8Snorm => T::Rg8Snorm,
+        S::Rg8Uint => T::Rg8Uint,
+        S::Rg8Sint => T::Rg8Sint,
+        S::R32Uint => T::R32Uint,
+        S::R32Sint => T::R32Sint,
+        S::R32Float => T::R32Float,
+        S::Rg16Uint => T::Rg16Uint,
+        S::Rg16Sint => T::Rg16Sint,
+        S::Rg16Float => T::Rg16Float,
+        S::Rgba8Unorm => T::Rgba8Unorm,
+        S::Rgba8Snorm => T::Rgba8Snorm,
+        S::Rgba8Uint => T::Rgba8Uint,
+        S::Rgba8Sint => T::Rgba8Sint,
+        S::Bgra8Unorm => T::Bgra8Unorm,
+        S::Rgb10a2Uint => T::Rgb10a2Uint,
+        S::Rgb10a2Unorm => T::Rgb10a2Unorm,
+        S::Rg11b10Ufloat => T::Rg11b10Ufloat,
+        S::R64Uint => T::R64Uint,
+        S::Rg32Uint => T::Rg32Uint,
+        S::Rg32Sint => T::Rg32Sint,
+        S::Rg32Float => T::Rg32Float,
+        S::Rgba16Uint => T::Rgba16Uint,
+        S::Rgba16Sint => T::Rgba16Sint,
+        S::Rgba16Float => T::Rgba16Float,
+        S::Rgba32Uint => T::Rgba32Uint,
+        S::Rgba32Sint => T::Rgba32Sint,
+        S::Rgba32Float => T::Rgba32Float,
+        S::R16Unorm => T::R16Unorm,
+        S::R16Snorm => T::R16Snorm,
+        S::Rg16Unorm => T::Rg16Unorm,
+        S::Rg16Snorm => T::Rg16Snorm,
+        S::Rgba16Unorm => T::Rgba16Unorm,
+        S::Rgba16Snorm => T::Rgba16Snorm,
     }
 }
 
@@ -120,27 +194,33 @@ impl StencilState {
 /// Decode a protocol blend-factor wire value into a `wgpu::BlendFactor`. The wire numbering is the neutral
 /// one the GL driver emits from `glBlendFunc`/`glBlendFuncSeparate` (`hl-gl` `blend_factor_wire`):
 /// 0=ZERO 1=ONE 2=SRC_COLOR 3=1-SRC_COLOR 4=SRC_ALPHA 5=1-SRC_ALPHA 6=DST_COLOR 7=1-DST_COLOR
-/// 8=DST_ALPHA 9=1-DST_ALPHA 10=SRC_ALPHA_SATURATE 11=CONSTANT 12=1-CONSTANT. Every value the protocol can carry maps to a concrete
-/// wgpu factor; an unmodeled code defaults to `One` (matching the GL driver's own fallback) rather than
-/// silently dropping the blend.
+/// 8=DST_ALPHA 9=1-DST_ALPHA 10=SRC_ALPHA_SATURATE 11=CONSTANT 12=1-CONSTANT
+/// 13=SRC1_COLOR 14=1-SRC1_COLOR 15=SRC1_ALPHA 16=1-SRC1_ALPHA. Every value the protocol can carry maps
+/// to a concrete wgpu factor; an unmodeled code defaults to `One` (matching the GL driver's own fallback)
+/// rather than silently dropping the blend.
 pub(super) struct BlendState;
 impl BlendState {
     pub(super) fn factor(code: u32) -> wgpu::BlendFactor {
+        use hl_gpu::protocol::model::enums::blend_factor;
         use wgpu::BlendFactor as F;
         match code {
-            0 => F::Zero,
-            1 => F::One,
-            2 => F::Src,
-            3 => F::OneMinusSrc,
-            4 => F::SrcAlpha,
-            5 => F::OneMinusSrcAlpha,
-            6 => F::Dst,
-            7 => F::OneMinusDst,
-            8 => F::DstAlpha,
-            9 => F::OneMinusDstAlpha,
-            10 => F::SrcAlphaSaturated,
-            11 => F::Constant,
-            12 => F::OneMinusConstant,
+            blend_factor::ZERO => F::Zero,
+            blend_factor::ONE => F::One,
+            blend_factor::SRC_COLOR => F::Src,
+            blend_factor::ONE_MINUS_SRC_COLOR => F::OneMinusSrc,
+            blend_factor::SRC_ALPHA => F::SrcAlpha,
+            blend_factor::ONE_MINUS_SRC_ALPHA => F::OneMinusSrcAlpha,
+            blend_factor::DST_COLOR => F::Dst,
+            blend_factor::ONE_MINUS_DST_COLOR => F::OneMinusDst,
+            blend_factor::DST_ALPHA => F::DstAlpha,
+            blend_factor::ONE_MINUS_DST_ALPHA => F::OneMinusDstAlpha,
+            blend_factor::SRC_ALPHA_SATURATE => F::SrcAlphaSaturated,
+            blend_factor::CONSTANT => F::Constant,
+            blend_factor::ONE_MINUS_CONSTANT => F::OneMinusConstant,
+            blend_factor::SRC1_COLOR => F::Src1,
+            blend_factor::ONE_MINUS_SRC1_COLOR => F::OneMinusSrc1,
+            blend_factor::SRC1_ALPHA => F::Src1Alpha,
+            blend_factor::ONE_MINUS_SRC1_ALPHA => F::OneMinusSrc1Alpha,
             _ => F::One,
         }
     }

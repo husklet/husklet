@@ -187,6 +187,9 @@ fn graphics_pipeline_preserves_stencil_state_into_the_ir() {
         stencil_back: face,
         stencil_read_mask: 0xff,
         stencil_write_mask: 0xff,
+        bias_constant: 0,
+        bias_slope_scale: 0.0,
+        bias_clamp: 0.0,
     };
     create::create_graphics_pipeline(
         &mut d,

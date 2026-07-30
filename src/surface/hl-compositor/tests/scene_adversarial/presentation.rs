@@ -55,15 +55,24 @@ fn desync_subsurface_commit_presents_the_toplevel_tree() {
         .expect("a desync child presents");
     assert_eq!(out.pacing, FramePacing::Presented);
     assert_eq!(
-        out.presented,
+        c.presenter()
+            .calls()
+            .into_iter()
+            .rev()
+            .take(2)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|call| call.surface)
+            .collect::<Vec<_>>(),
         vec![top, child],
-        "the whole toplevel tree presents"
+        "one role batch still contains the whole toplevel tree"
     );
 }
 
 #[test]
 fn present_carries_coalesced_damage_bounding_box() {
-    // Two damage rects within one interval coalesce; the present carries their bounding box.
+    // Two damage rects within one interval remain sparse upload hints.
     let mut c = compositor();
     let top = map_toplevel(&mut c.scene, 400, 400);
     c.present_root(top); // clears the fresh-attach damage
@@ -89,8 +98,8 @@ fn present_carries_coalesced_damage_bounding_box() {
     let call = c.presenter().calls().pop().unwrap();
     assert_eq!(
         call.damage,
-        vec![Rect::new(10, 10, 95, 95)],
-        "coalesced damage bounding box presented"
+        vec![Rect::new(10, 10, 20, 20), Rect::new(100, 100, 5, 5)],
+        "sparse damage reaches the role batch without inflating its upload area"
     );
 }
 

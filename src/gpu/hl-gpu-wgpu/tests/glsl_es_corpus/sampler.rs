@@ -69,6 +69,7 @@ void main() { o = texture(uTex, vec2(0.5, 0.5)); }
                     address_u: AddressMode::ClampToEdge,
                     address_v: AddressMode::ClampToEdge,
                     address_w: AddressMode::ClampToEdge,
+                    ..SamplerDesc::default()
                 },
             ),
             Cmd::CreateRenderPipeline(
@@ -150,6 +151,166 @@ void main() { o = texture(uTex, vec2(0.5, 0.5)); }
         assert!(
             approx(p, texel, 1),
             "ES combined-sampler fragment must sample {texel:?} end-to-end, got {p:?}"
+        );
+    }
+}
+
+#[test]
+fn inactive_external_sampler_branch_preserves_the_live_binding_and_texel() {
+    let mut guard = exec().expect(
+        "inactive sampler branch is an exact-pixel GPU test and requires a reachable WGPU adapter",
+    );
+    let executor = &mut *guard;
+    let texel = [19, 83, 211, 255];
+    let fragment = r#"#version 300 es
+precision highp float;
+#ifdef USE_EXTERNAL
+uniform samplerExternalOES atlas;
+#else
+uniform sampler2D atlas;
+#endif
+layout(location = 0) out vec4 color;
+void main() { color = texture(atlas, vec2(0.5)); }
+"#;
+    let mut session = new_sess(executor);
+    hl_gpu::runtime::submit(
+        &mut session,
+        executor,
+        0,
+        &[
+            Cmd::CreateTexture(1, rt(W, H)),
+            Cmd::CreateTexture(
+                2,
+                TextureDesc {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                    mip_levels: 1,
+                    sample_count: 1,
+                    dim: TextureDim::D2,
+                    format: TextureFormat::Rgba8Unorm,
+                    usage: texture_usage::SAMPLED | texture_usage::COPY_DST,
+                    label: String::new(),
+                },
+            ),
+            Cmd::CreateBuffer(
+                1,
+                BufferDesc {
+                    size: 4,
+                    usage: buffer_usage::COPY_SRC,
+                    label: String::new(),
+                },
+            ),
+            Cmd::WriteBuffer {
+                id: 1,
+                offset: 0,
+                data: texel.to_vec(),
+            },
+            Cmd::CreateShader {
+                id: 1,
+                kind: ShaderPayloadKind::Glsl,
+                spirv: glsl(glsl_stage::VERTEX, "vmain", DRAW_VS),
+            },
+            Cmd::CreateShader {
+                id: 2,
+                kind: ShaderPayloadKind::Glsl,
+                spirv: glsl(glsl_stage::FRAGMENT, "fmain", fragment),
+            },
+            Cmd::CreateSampler(
+                1,
+                SamplerDesc {
+                    min_filter: Filter::Nearest,
+                    mag_filter: Filter::Nearest,
+                    mip_filter: Filter::Nearest,
+                    address_u: AddressMode::ClampToEdge,
+                    address_v: AddressMode::ClampToEdge,
+                    address_w: AddressMode::ClampToEdge,
+                    ..SamplerDesc::default()
+                },
+            ),
+            Cmd::CreateRenderPipeline(
+                1,
+                RenderPipelineDesc {
+                    vertex: ShaderRef {
+                        module: 1,
+                        entry: "vmain".into(),
+                    },
+                    fragment: Some(ShaderRef {
+                        module: 2,
+                        entry: "fmain".into(),
+                    }),
+                    vertex_buffers: vec![],
+                    color_targets: vec![ct()],
+                    depth: None,
+                    topology: Topology::TriangleList,
+                    cull: 0,
+                    front_face: 0,
+                    sample_count: 1,
+                    label: String::new(),
+                },
+            ),
+            Cmd::CreateBindGroup(
+                1,
+                BindGroupDesc {
+                    set: 0,
+                    entries: vec![
+                        BindEntry {
+                            // The inactive external declaration consumes k=0 before preprocessing. The live
+                            // sampler therefore uses k=1: texture binding 3 and sampler binding 4.
+                            binding: 3,
+                            resource: BindResource::Texture { id: 2 },
+                        },
+                        BindEntry {
+                            binding: 4,
+                            resource: BindResource::Sampler { id: 1 },
+                        },
+                    ],
+                },
+            ),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::CopyBufferToTexture {
+                        src: 1,
+                        src_offset: 0,
+                        bytes_per_row: 4,
+                        dst: 2,
+                        mip: 0,
+                        width: 1,
+                        height: 1,
+                    },
+                    Enc::BeginRenderPass {
+                        color: vec![ColorAttachment {
+                            texture: 1,
+                            load: LoadOp::Clear,
+                            clear: [1.0, 0.0, 0.0, 1.0],
+                            store: true,
+                        }],
+                        depth: None,
+                    },
+                    Enc::SetPipeline(1),
+                    Enc::SetBindGroup { index: 0, group: 1 },
+                    Enc::Draw {
+                        vertex_count: 3,
+                        instance_count: 1,
+                        first_vertex: 0,
+                        first_instance: 0,
+                    },
+                    Enc::EndRenderPass,
+                ],
+                signal: None,
+            }),
+        ],
+    )
+    .expect("inactive sampler branch must not displace the live texture");
+
+    for pixel in executor
+        .read_texture(&session.resources, 1)
+        .unwrap()
+        .chunks_exact(4)
+    {
+        assert!(
+            approx(pixel.try_into().unwrap(), texel, 1),
+            "live sampler must return {texel:?}, got {pixel:?}"
         );
     }
 }

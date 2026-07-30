@@ -5,6 +5,8 @@ use crate::{ContainerId, ContainerState, ExecId, ExecState};
 pub enum Error {
     #[error(transparent)]
     Checkpoint(#[from] crate::CheckpointError),
+    #[error("invalid container configuration: {0}")]
+    TranslationCache(#[from] crate::config::TranslationCacheError),
     #[error("invalid container specification: {0}")]
     InvalidSpec(String),
     #[error("invalid volume: {0}")]
@@ -13,6 +15,8 @@ pub enum Error {
     InvalidNetwork(String),
     #[error("container {0} was not found")]
     NotFound(String),
+    #[error("exec {0} was not found")]
+    ExecNotFound(ExecId),
     #[error("container name {0:?} is already in use")]
     NameConflict(String),
     #[error("host TCP address {0}:{1} is already in use")]

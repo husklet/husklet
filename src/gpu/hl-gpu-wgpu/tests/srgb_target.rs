@@ -224,6 +224,7 @@ fn sample_stored(exec: &mut WgpuExecutor, src_fmt: TextureFormat, stored: [u8; 4
                     address_u: AddressMode::ClampToEdge,
                     address_v: AddressMode::ClampToEdge,
                     address_w: AddressMode::ClampToEdge,
+                    ..SamplerDesc::default()
                 },
             ),
             Cmd::CreateRenderPipeline(

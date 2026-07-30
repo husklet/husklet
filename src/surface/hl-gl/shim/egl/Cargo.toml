@@ -33,6 +33,7 @@ hl_gpu = { package = "hl-gpu", path = "../../../../gpu/hl-gpu" }
 # (macros are crate-root `#[macro_export]`; a transitive dep can't be reached by path). NOT `#[no_mangle]`,
 # so the exported `egl*`/`gl*` ABI surface is unchanged; verbose+counters compile out of the release cdylib.
 hl-log = { path = "../../../../packages/hl-log" }
+hl-surface-protocol = { path = "../../../hl-surface-protocol", default-features = false }
 
 [profile.release]
 # Injected .so: keep it small; abort-on-panic so a Rust panic can never unwind across the C-ABI seam.

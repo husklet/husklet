@@ -21,14 +21,34 @@ pub fn map_buffer_range(
     target: u32,
     offset: isize,
     length: isize,
-    _access: u32,
+    access: u32,
 ) -> Option<(u32, usize)> {
-    if offset < 0 || length < 0 {
+    const ACCESS_BITS: u32 = GL_MAP_READ_BIT
+        | GL_MAP_WRITE_BIT
+        | GL_MAP_INVALIDATE_RANGE_BIT
+        | GL_MAP_INVALIDATE_BUFFER_BIT
+        | GL_MAP_FLUSH_EXPLICIT_BIT
+        | GL_MAP_UNSYNCHRONIZED_BIT;
+    let reads = access & GL_MAP_READ_BIT != 0;
+    let writes = access & GL_MAP_WRITE_BIT != 0;
+    let read_incompatible =
+        GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT | GL_MAP_UNSYNCHRONIZED_BIT;
+    if offset < 0
+        || length <= 0
+        || access & !ACCESS_BITS != 0
+        || (!reads && !writes)
+        || (reads && access & read_incompatible != 0)
+        || (!writes && access & GL_MAP_FLUSH_EXPLICIT_BIT != 0)
+    {
         ctx.set_gl_error(GL_INVALID_VALUE);
         return None;
     }
     let name = ctx.buffer_for_target(target);
     if name == 0 {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return None;
+    }
+    if ctx.buffers.is_mapped(name) {
         ctx.set_gl_error(GL_INVALID_OPERATION);
         return None;
     }
@@ -48,7 +68,7 @@ pub fn map_buffer_range(
             return None;
         }
     }
-    match ctx.buffers.map_range(name, off, len) {
+    match ctx.buffers.map_range(name, off, len, access) {
         Some(off) => Some((name, off)),
         None => {
             ctx.set_gl_error(GL_INVALID_OPERATION);
@@ -66,11 +86,13 @@ pub fn unmap_buffer(ctx: &mut GlContext, sink: &mut dyn CommandSink, target: u32
         ctx.set_gl_error(GL_INVALID_OPERATION);
         return Ok(GL_FALSE as u8);
     }
-    let Some((offset, bytes)) = ctx.buffers.take_map(name) else {
+    let Some((offset, bytes, access)) = ctx.buffers.take_map(name) else {
         ctx.set_gl_error(GL_INVALID_OPERATION);
         return Ok(GL_FALSE as u8);
     };
-    flush_bytes(ctx, sink, name, offset, bytes)?;
+    if access & GL_MAP_WRITE_BIT != 0 {
+        flush_bytes(ctx, sink, name, offset, bytes)?;
+    }
     Ok(GL_TRUE as u8)
 }
 
@@ -89,17 +111,37 @@ pub fn flush_mapped_range(
         return Ok(());
     }
     let name = ctx.buffer_for_target(target);
-    let map_off = match ctx.buffers.get(name).and_then(|b| b.mapped) {
-        Some((o, _)) if name != 0 => o,
+    let (map_off, map_len) = match (
+        ctx.buffers.get(name).and_then(|buffer| buffer.mapped),
+        ctx.buffers.mapped_access(name),
+    ) {
+        (Some((offset, length)), Some(access))
+            if name != 0 && access & GL_MAP_FLUSH_EXPLICIT_BIT != 0 =>
+        {
+            (offset, length)
+        }
         _ => {
             ctx.set_gl_error(GL_INVALID_OPERATION);
             return Ok(());
         }
     };
-    let abs = map_off + offset as usize;
+    let relative_offset = offset as usize;
+    let relative_length = length as usize;
+    let Some(relative_end) = relative_offset.checked_add(relative_length) else {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return Ok(());
+    };
+    if relative_end > map_len {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return Ok(());
+    }
+    let Some(abs) = map_off.checked_add(relative_offset) else {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return Ok(());
+    };
     let bytes = ctx
         .buffers
-        .range_bytes(name, abs, length as usize)
+        .range_bytes(name, abs, relative_length)
         .unwrap_or_default();
     if !bytes.is_empty() {
         ctx.buffers.mark_changed(name);
@@ -125,7 +167,7 @@ fn flush_bytes(
         .get(name)
         .map(|b| b.data.len())
         .unwrap_or(data_offset + bytes.len()) as u64;
-    let ir = ctx.alloc_buffer_ir();
+    let ir = ctx.alloc_buffer_ir()?;
     let cmds = vec![
         Cmd::CreateBuffer(
             ir,
@@ -142,4 +184,86 @@ fn flush_bytes(
         },
     ];
     sink.submit(&cmds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::service::record;
+
+    fn buffer() -> GlContext {
+        let mut context = GlContext::new();
+        let name = context.buffers.gen();
+        record::bind_buffer(&mut context, GL_ARRAY_BUFFER, name);
+        record::buffer_data(&mut context, GL_ARRAY_BUFFER, &[0; 16], 0);
+        context
+    }
+
+    #[test]
+    fn map_rejects_zero_length_unknown_bits_and_invalid_access_combinations() {
+        let invalid = [
+            (0, 4, 0),
+            (0, 0, GL_MAP_WRITE_BIT),
+            (0, 4, 0x8000_0000),
+            (0, 4, GL_MAP_READ_BIT | GL_MAP_INVALIDATE_RANGE_BIT),
+            (0, 4, GL_MAP_READ_BIT | GL_MAP_INVALIDATE_BUFFER_BIT),
+            (0, 4, GL_MAP_READ_BIT | GL_MAP_UNSYNCHRONIZED_BIT),
+            (0, 4, GL_MAP_READ_BIT | GL_MAP_FLUSH_EXPLICIT_BIT),
+        ];
+        for (offset, length, access) in invalid {
+            let mut context = buffer();
+            assert_eq!(
+                map_buffer_range(&mut context, GL_ARRAY_BUFFER, offset, length, access),
+                None
+            );
+            assert_eq!(context.take_gl_error(), GL_INVALID_VALUE);
+        }
+    }
+
+    #[test]
+    fn map_rejects_an_already_mapped_buffer_without_replacing_its_pointer() {
+        let mut context = buffer();
+        let (name, offset) =
+            map_buffer_range(&mut context, GL_ARRAY_BUFFER, 0, 4, GL_MAP_WRITE_BIT).unwrap();
+        let pointer = context.buffers.mapped_ptr(name, offset).unwrap();
+
+        assert_eq!(
+            map_buffer_range(&mut context, GL_ARRAY_BUFFER, 4, 4, GL_MAP_WRITE_BIT),
+            None
+        );
+
+        assert_eq!(context.take_gl_error(), GL_INVALID_OPERATION);
+        // SAFETY: the rejected second mapping did not replace or resize the first mapped allocation.
+        unsafe { pointer.write(7) };
+        assert_eq!(context.buffers.get(name).unwrap().data[0], 7);
+    }
+
+    #[test]
+    fn flush_rejects_ranges_outside_the_mapping_without_submitting() {
+        let mut context = buffer();
+        map_buffer_range(
+            &mut context,
+            GL_ARRAY_BUFFER,
+            4,
+            8,
+            GL_MAP_WRITE_BIT | GL_MAP_FLUSH_EXPLICIT_BIT,
+        )
+        .unwrap();
+        let mut sink = hl_gpu::RecordingSink::with_full_caps();
+
+        flush_mapped_range(&mut context, &mut sink, GL_ARRAY_BUFFER, 7, 2).unwrap();
+        assert_eq!(context.take_gl_error(), GL_INVALID_VALUE);
+        assert!(sink.batches.is_empty());
+
+        flush_mapped_range(
+            &mut context,
+            &mut sink,
+            GL_ARRAY_BUFFER,
+            isize::MAX,
+            isize::MAX,
+        )
+        .unwrap();
+        assert_eq!(context.take_gl_error(), GL_INVALID_VALUE);
+        assert!(sink.batches.is_empty());
+    }
 }

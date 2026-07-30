@@ -99,8 +99,14 @@ impl Programs {
             .and_then(|s| s.src.clone())
             .unwrap_or_default();
         if let Some(p) = self.programs.get_mut(&program) {
-            p.link(vs_src, fs_src, cs_src);
-            true
+            p.linked = false;
+            match p.link(vs_src, fs_src, cs_src) {
+                Ok(()) => true,
+                Err(error) => {
+                    p.link_error = error.to_string();
+                    false
+                }
+            }
         } else {
             false
         }
@@ -112,6 +118,14 @@ impl Programs {
 
     pub fn get_mut(&mut self, name: u32) -> Option<&mut Program> {
         self.programs.get_mut(&name)
+    }
+
+    pub fn bind_attrib(&mut self, program: u32, index: u32, name: &str) -> bool {
+        let Some(program) = self.programs.get_mut(&program) else {
+            return false;
+        };
+        program.attrib_bindings.insert(name.to_owned(), index);
+        true
     }
 
     /// `glIsProgram(name)` — true once `name` names a live program object (`0` is never a program).

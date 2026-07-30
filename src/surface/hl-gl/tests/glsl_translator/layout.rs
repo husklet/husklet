@@ -5,7 +5,9 @@ fn int_and_matrix_uniform_types_layout_without_panicking() {
     // Exercise the full type table in uni_layout (ivec/uvec/matNxM) — must produce monotonic offsets.
     let fs = "uniform int uA;\nuniform ivec2 uB;\nuniform uvec3 uC;\nuniform mat3 uD;\nuniform mat2 uE;\n\
               void main(){ gl_FragColor = vec4(float(uA)); }\n";
-    let (unis, total) = glsl::StageSources::new("void main(){}", fs).uniform_layout();
+    let (unis, total) = glsl::StageSources::new("void main(){}", fs)
+        .uniform_layout()
+        .expect("supported uniform layout");
     assert_eq!(unis.len(), 5);
     // Offsets are non-decreasing and each member fits before the next.
     for w in unis.windows(2) {
@@ -17,6 +19,107 @@ fn int_and_matrix_uniform_types_layout_without_panicking() {
     }
     assert!(total >= unis.last().unwrap().off + unis.last().unwrap().sz);
     assert_eq!(total % 16, 0, "block total is 16-byte aligned");
+}
+
+#[test]
+fn std140_two_row_matrices_use_a_sixteen_byte_column_stride() {
+    let fs = "uniform mat2 a;\nuniform mat3x2 b;\nuniform mat4x2 c;\nvoid main(){}\n";
+    let (uniforms, total) = glsl::StageSources::new("void main(){}", fs)
+        .uniform_layout()
+        .expect("matrix types are supported");
+
+    assert_eq!(
+        uniforms
+            .iter()
+            .map(|uniform| (uniform.name.as_str(), uniform.off, uniform.sz))
+            .collect::<Vec<_>>(),
+        vec![("a", 0, 32), ("b", 32, 48), ("c", 80, 64)]
+    );
+    assert_eq!(total, 144);
+}
+
+#[test]
+fn unsupported_struct_uniform_is_rejected_instead_of_given_a_fake_scalar_layout() {
+    let fs = "struct Material { vec4 color; };\nuniform Material material;\nvoid main(){}\n";
+    let error = glsl::StageSources::new("void main(){}", fs)
+        .uniform_layout()
+        .expect_err("struct layout is not implemented");
+    assert!(matches!(
+        error,
+        glsl::UniformError::UnsupportedType(ref ty) if ty == "Material"
+    ));
+}
+
+#[test]
+fn conflicting_cross_stage_uniform_declarations_are_rejected() {
+    let error = glsl::StageSources::new(
+        "uniform float value;\nvoid main(){ gl_Position = vec4(value); }\n",
+        "uniform vec4 value;\nvoid main(){ gl_FragColor = value; }\n",
+    )
+    .uniform_layout()
+    .expect_err("one uniform name cannot have two layouts");
+    assert_eq!(
+        error,
+        glsl::UniformError::ConflictingDeclaration("value".into())
+    );
+}
+
+#[test]
+fn conflicting_conditional_uniform_declarations_are_rejected() {
+    let vertex = "#if defined(HL_VECTOR)\n\
+                  uniform vec4 value;\n\
+                  #else\n\
+                  uniform float value;\n\
+                  #endif\n\
+                  void main(){ gl_Position = vec4(value); }\n";
+    assert_eq!(
+        glsl::StageSources::new(vertex, "void main(){}").uniform_layout(),
+        Err(glsl::UniformError::ConflictingDeclaration("value".into()))
+    );
+}
+
+#[test]
+fn oversized_array_is_rejected_without_integer_wraparound() {
+    let fs = "uniform float hostile[4294967295];\nvoid main(){}\n";
+    let error = glsl::StageSources::new("void main(){}", fs)
+        .uniform_layout()
+        .expect_err("array exceeds the advertised component limit");
+    assert!(matches!(
+        error,
+        glsl::UniformError::StageComponents {
+            stage: "fragment",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn nonliteral_array_dimension_is_a_link_error() {
+    let fs = "#define COUNT 4\nuniform vec4 values[COUNT];\nvoid main(){}\n";
+    assert_eq!(
+        glsl::StageSources::new("void main(){}", fs).uniform_layout(),
+        Err(glsl::UniformError::NonLiteralArray("values".into()))
+    );
+}
+
+#[test]
+fn uniform_components_are_enforced_per_stage() {
+    let accepted = "uniform vec4 values[256];\nvoid main(){ gl_FragColor = values[255]; }\n";
+    assert!(
+        glsl::StageSources::new("void main(){}", accepted)
+            .uniform_layout()
+            .is_ok(),
+        "the advertised 256-vector limit must remain usable"
+    );
+
+    let rejected = "uniform vec4 values[257];\nvoid main(){ gl_FragColor = values[256]; }\n";
+    assert!(matches!(
+        glsl::StageSources::new("void main(){}", rejected).uniform_layout(),
+        Err(glsl::UniformError::StageComponents {
+            stage: "fragment",
+            ..
+        })
+    ));
 }
 
 // ---------------------------------------------------------------------------------------------------

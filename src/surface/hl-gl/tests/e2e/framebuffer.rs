@@ -14,11 +14,11 @@ const GL_RGBA8: u32 = 0x8058;
 #[test]
 fn guest_bound_texture_fbo_renders_and_glreadpixels_reads_it_back() {
     let mut c = GlContext::new();
-    c.surf = GlSurface {
+    c.set_surface(GlSurface {
         have: true,
         width: W as u32,
         height: H as u32,
-    };
+    });
     let mut sink = cpu_sink();
 
     // Guest FBO bring-up: an 8x8 Rgba8 color texture attached to a freshly-bound framebuffer, driven
@@ -33,7 +33,7 @@ fn guest_bound_texture_fbo_renders_and_glreadpixels_reads_it_back() {
         &[],
         hl_gpu::protocol::model::enums::TextureFormat::Rgba8Unorm,
     );
-    let fbo = c.framebuffers.gen();
+    let fbo = c.gen_framebuffer();
     assert!(
         record::is_framebuffer(&c, fbo),
         "generated name is a framebuffer object"
@@ -104,11 +104,11 @@ fn guest_bound_texture_fbo_renders_and_glreadpixels_reads_it_back() {
 #[test]
 fn guest_renderbuffer_backed_fbo_renders_and_glreadpixels_reads_it_back() {
     let mut c = GlContext::new();
-    c.surf = GlSurface {
+    c.set_surface(GlSurface {
         have: true,
         width: W as u32,
         height: H as u32,
-    };
+    });
     let mut sink = cpu_sink();
 
     // A renderbuffer color attachment, attached to the FBO BEFORE its storage is defined (the common
@@ -121,7 +121,7 @@ fn guest_renderbuffer_backed_fbo_renders_and_glreadpixels_reads_it_back() {
     );
     record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, rbo);
 
-    let fbo = c.framebuffers.gen();
+    let fbo = c.gen_framebuffer();
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
     record::framebuffer_renderbuffer(
         &mut c,
@@ -171,11 +171,11 @@ fn guest_renderbuffer_backed_fbo_renders_and_glreadpixels_reads_it_back() {
 #[test]
 fn framebuffer_status_and_object_lifecycle_are_honest() {
     let mut c = GlContext::new();
-    c.surf = GlSurface {
+    c.set_surface(GlSurface {
         have: true,
         width: W as u32,
         height: H as u32,
-    };
+    });
 
     // The default framebuffer (name 0) is always complete; an unknown name is not a framebuffer.
     assert_eq!(
@@ -188,7 +188,7 @@ fn framebuffer_status_and_object_lifecycle_are_honest() {
     );
 
     // A freshly-bound FBO with no attachment reports MISSING_ATTACHMENT.
-    let fbo = c.framebuffers.gen();
+    let fbo = c.gen_framebuffer();
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
     assert_eq!(
         record::check_framebuffer_status(&mut c, GL_FRAMEBUFFER),
@@ -206,7 +206,8 @@ fn framebuffer_status_and_object_lifecycle_are_honest() {
         "a deleted FBO is no longer a framebuffer"
     );
     assert_eq!(
-        c.bound_fbo, 0,
+        c.bound_framebuffer(),
+        0,
         "deleting the bound FBO reverts to the default framebuffer"
     );
     assert_eq!(

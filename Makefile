@@ -3,7 +3,7 @@
 
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
 VERSION ?= $(or $(TAG),0.0.0-dev)
-NIX_DEV = nix develop "path:$(CURDIR)/nix" --command
+NIX_DEV = nix develop . --command
 
 all: design-lint test
 

@@ -46,6 +46,14 @@ impl Renderbuffers {
         name
     }
 
+    /// Materialize a non-zero name bound through `GL_CHROMIUM_bind_generates_resource`.
+    pub fn ensure(&mut self, name: u32) {
+        if name != 0 {
+            self.map.entry(name).or_default();
+            self.next_name = self.next_name.max(name.saturating_add(1));
+        }
+    }
+
     /// `glIsRenderbuffer` — true once `name` names a generated (non-default) renderbuffer object.
     pub fn contains(&self, name: u32) -> bool {
         name != 0 && self.map.contains_key(&name)

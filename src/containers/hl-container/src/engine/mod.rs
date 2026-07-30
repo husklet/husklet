@@ -181,8 +181,8 @@ impl Running for Process {
     fn id(&self) -> u64 {
         self.id
     }
-    fn domain(&self) -> Option<hl_engine::Domain> {
-        Some(self.domain)
+    fn domain(&self) -> hl_engine::Domain {
+        self.domain
     }
     fn checkpointable(&self) -> bool {
         self.checkpointable
@@ -198,12 +198,12 @@ impl Running for Process {
                 .try_wait()
                 .map_err(|error| Error::Runtime(error.to_string()))?
             {
-                if self.domain_owner {
-                    self.domain
-                        .terminate()
-                        .map_err(|error| Error::Runtime(error.to_string()))?;
-                }
+                // `try_wait` consumed the native result. Drop the machine handle before domain cleanup so a
+                // cleanup failure cannot leave a consumed process stored as if it were still live.
                 child.take();
+                if self.domain_owner {
+                    self.terminate_domain()?;
+                }
                 return Ok(match exit {
                     hl_engine::Exit::Code(code) => ExitStatus::Code(code),
                     hl_engine::Exit::Signal(signal) => ExitStatus::Signal(signal),
@@ -219,17 +219,28 @@ impl Running for Process {
 
     async fn signal(&self, signal: Signal) -> Result<()> {
         if signal == Signal::Kill {
-            if let Some(child) = self.child.lock().await.as_mut() {
-                child
-                    .force_stop()
-                    .map_err(|error| Error::Runtime(error.to_string()))?;
-            }
+            let stopped = if let Some(child) = self.child.lock().await.as_mut() {
+                match child.force_stop() {
+                    Ok(()) => Ok(()),
+                    Err(hl_engine::Error::Engine { status, .. }) if status == nix::libc::ESRCH => {
+                        Ok(())
+                    }
+                    Err(error) => Err(Error::Runtime(error.to_string())),
+                }
+            } else {
+                Ok(())
+            };
             if self.domain_owner {
-                self.domain
-                    .terminate()
-                    .map_err(|error| Error::Runtime(error.to_string()))?;
+                let terminated = self.terminate_domain();
+                return match (stopped, terminated) {
+                    (Ok(()), Ok(())) => Ok(()),
+                    (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+                    (Err(process), Err(domain)) => Err(Error::Runtime(format!(
+                        "{process}; engine domain cleanup also failed: {domain}"
+                    ))),
+                };
             }
-            return Ok(());
+            return stopped;
         }
         let raw = match signal {
             Signal::Terminate => nix::sys::signal::Signal::SIGTERM,
@@ -281,17 +292,31 @@ impl Running for Process {
 }
 
 impl Process {
+    fn terminate_domain(&self) -> Result<()> {
+        match self.domain.terminate() {
+            Ok(()) => Ok(()),
+            Err(hl_engine::Error::Engine { status, .. }) if status == nix::libc::ESRCH => Ok(()),
+            Err(error) => Err(Error::Runtime(error.to_string())),
+        }
+    }
+
     fn send(&self, signal: nix::sys::signal::Signal) -> Result<()> {
-        let pid = i32::try_from(self.id)
+        Self::send_id(self.id, signal)
+    }
+
+    fn send_id(id: u64, signal: nix::sys::signal::Signal) -> Result<()> {
+        let pid = i32::try_from(id)
             .map_err(|_| Error::Runtime("process id exceeds host range".into()))?;
-        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), signal)
-            .map_err(|error| Error::Runtime(error.to_string()))
+        match nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), signal) {
+            Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
+            Err(error) => Err(Error::Runtime(error.to_string())),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Engine;
+    use super::{Engine, Process};
     use crate::service::ProcessConfig;
     use hl_engine::extension::{
         DeviceEntry, DeviceKind, ExtensionConfig, ExtensionSpec, Feature, Inheritance,
@@ -355,6 +380,7 @@ mod tests {
             overlay: None,
             owners: Vec::new(),
             filesystem_generation: "/generation".into(),
+            translation_cache: None,
             checkpoint: None,
             guest: crate::Guest::Aarch64,
             process: crate::Process::new("/bin/true"),
@@ -406,6 +432,18 @@ mod tests {
     }
 
     #[test]
+    fn signaling_an_already_reaped_process_is_idempotent() {
+        let mut child = std::process::Command::new("/usr/bin/true")
+            .spawn()
+            .expect("spawn short-lived process");
+        let id = u64::from(child.id());
+        child.wait().expect("reap short-lived process");
+
+        Process::send_id(id, nix::sys::signal::Signal::SIGTERM)
+            .expect("an already-gone process satisfies termination");
+    }
+
+    #[test]
     fn combined_provider_capabilities_cross_the_container_facade() {
         let directory = tempfile::tempdir().unwrap();
         let socket = directory.path().join("provider.sock");
@@ -425,6 +463,7 @@ mod tests {
                 path: "/run/provider.sock".into(),
                 host: socket,
             })],
+            rules: Vec::new(),
             services: Vec::new(),
             memory: Vec::new(),
             environment: Vec::new(),
@@ -463,6 +502,7 @@ mod tests {
                     service: Some(service),
                 }),
             ],
+            rules: Vec::new(),
             services: vec![ServiceRegistration {
                 id: service,
                 operations: BTreeSet::from([hl_engine::extension::HandleOperation::Read]),

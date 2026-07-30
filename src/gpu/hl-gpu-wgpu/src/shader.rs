@@ -16,6 +16,7 @@ use hl_gpu::{GpuError, Result};
 
 use crate::wgsl;
 use crate::WgpuExecutor;
+use std::time::Instant;
 
 /// The wgpu-native backing of one protocol shader module.
 pub enum ShaderNative {
@@ -127,8 +128,28 @@ impl WgpuExecutor {
                 }),
             );
         }
+        if let Some((module, reflected)) = self.modules.get(&key) {
+            res.shaders.insert(
+                id,
+                Box::new(ShaderNative::Module {
+                    module: module.clone(),
+                    reflected: reflected.clone(),
+                    key: key.clone(),
+                }),
+            )?;
+            self.module_journal
+                .push(crate::module::Mutation::Hit(key.clone()));
+            self.dedup
+                .shader_install(key, module, reflected, words.len() as u64 * 4);
+            hl_log::hl_count!(hl_log::tag::WGPU, "shader_device_hit");
+            return Ok(());
+        }
 
         // Cache miss: translate to WGSL and compile a fresh module, then charge one backing's residency.
+        let diagnostics = hl_log::Logging::global()
+            .enabled(hl_log::Tags::from(hl_log::tag::WGPU), hl_log::Level::Debug);
+        let total_started = diagnostics.then(Instant::now);
+        let translate_started = diagnostics.then(Instant::now);
         let (src, reflected, label) = match kind {
             ShaderPayloadKind::SpirV => {
                 let (src, reflected) = wgsl::Spirv::translate_reflect(words).map_err(|e| {
@@ -174,6 +195,10 @@ impl WgpuExecutor {
             // PtxKernel / Msl / DemoBuiltin already returned above.
             _ => unreachable!("kernel and non-WGSL kinds handled above"),
         };
+        let translate_us = translate_started
+            .map(|started| started.elapsed().as_micros())
+            .unwrap_or_default();
+        let module_started = diagnostics.then(Instant::now);
         let module = self
             .gpu
             .device
@@ -181,6 +206,9 @@ impl WgpuExecutor {
                 label: Some(label),
                 source: wgpu::ShaderSource::Wgsl(src.into()),
             });
+        let module_us = module_started
+            .map(|started| started.elapsed().as_micros())
+            .unwrap_or_default();
         let bytes = key.backing_bytes();
         // Insert the per-id native FIRST (it may reject a duplicate id); only register the shared backing
         // once the id is genuinely live, so a `DuplicateId` does not leave a phantom refcount.
@@ -192,7 +220,24 @@ impl WgpuExecutor {
                 key: key.clone(),
             }),
         )?;
+        self.module_journal.push(crate::module::Mutation::Install(
+            key.clone(),
+            module.clone(),
+            reflected.clone(),
+        ));
         self.dedup.shader_install(key, module, reflected, bytes);
+        hl_log::hl_debug!(
+            hl_log::tag::WGPU,
+            "shader_create_phase id={} kind={:?} words={} translate_us={} module_us={} total_us={}",
+            id,
+            kind,
+            words.len(),
+            translate_us,
+            module_us,
+            total_started
+                .map(|started| started.elapsed().as_micros())
+                .unwrap_or_default()
+        );
         Ok(())
     }
 

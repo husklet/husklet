@@ -69,6 +69,7 @@ fn container_dependency_can_negotiate_generic_namespace_projection() {
                 source: FileSource::Mutable(Arc::from(&b"initial"[..])),
             }),
         ],
+        rules: Vec::new(),
         services: Vec::new(),
         memory: Vec::new(),
         environment: Vec::new(),

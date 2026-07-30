@@ -6,17 +6,22 @@ use super::*;
 impl GlContext {
     pub fn active_texture(&mut self, texture: u32) {
         let unit = texture.wrapping_sub(GL_TEXTURE0) as usize;
-        if unit < self.tex_unit.len() {
-            self.active_texture = unit;
+        if unit < self.local.tex_unit.len() {
+            self.local.active_texture = unit;
         }
     }
 }
 
 /// `glBindTexture(GL_TEXTURE_2D, name)` — binds to the active texture unit.
 pub fn bind_texture(ctx: &mut GlContext, _target: u32, name: u32) {
-    let unit = ctx.active_texture;
-    if unit < ctx.tex_unit.len() {
-        ctx.tex_unit[unit] = name;
+    if ctx.texture_is_deleted(name) {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+    ctx.textures.ensure(name);
+    let unit = ctx.local.active_texture;
+    if unit < ctx.local.tex_unit.len() {
+        ctx.local.tex_unit[unit] = name;
     }
 }
 
@@ -47,7 +52,7 @@ pub fn tex_image_2d_format(
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
-    let name = ctx.tex_unit[ctx.active_texture];
+    let name = ctx.local.tex_unit[ctx.local.active_texture];
     if name != 0 {
         ctx.textures.image_2d(name, w, h, pixels, format);
     }
@@ -55,8 +60,25 @@ pub fn tex_image_2d_format(
 
 /// `glTexParameteri(GL_TEXTURE_2D, pname, value)` on the active unit's texture.
 pub fn tex_parameter(ctx: &mut GlContext, pname: u32, value: u32) {
-    let name = ctx.tex_unit[ctx.active_texture];
+    let name = ctx.local.tex_unit[ctx.local.active_texture];
     if name != 0 {
+        ctx.textures.set_param(name, pname, value);
+    }
+}
+
+/// Vector texture parameter setter. Only `GL_TEXTURE_SWIZZLE_RGBA` consumes four values.
+pub fn tex_parameter_vector(ctx: &mut GlContext, pname: u32, values: &[u32]) {
+    let name = ctx.local.tex_unit[ctx.local.active_texture];
+    if name == 0 {
+        return;
+    }
+    if pname == GL_TEXTURE_SWIZZLE_RGBA {
+        if let Ok(swizzle) = <[u32; 4]>::try_from(values) {
+            ctx.textures.set_swizzle(name, swizzle);
+        } else {
+            ctx.set_gl_error(GL_INVALID_VALUE);
+        }
+    } else if let Some(&value) = values.first() {
         ctx.textures.set_param(name, pname, value);
     }
 }
@@ -71,7 +93,7 @@ impl GlContext {
             self.set_gl_error(GL_INVALID_ENUM);
             return;
         }
-        if self.tex_unit[self.active_texture] == 0 {
+        if self.local.tex_unit[self.local.active_texture] == 0 {
             self.set_gl_error(GL_INVALID_OPERATION);
         }
     }
@@ -109,7 +131,7 @@ pub fn tex_storage_2d(
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
-    let name = ctx.tex_unit[ctx.active_texture];
+    let name = ctx.local.tex_unit[ctx.local.active_texture];
     match ctx.textures.get(name) {
         _ if name == 0 => {
             ctx.set_gl_error(GL_INVALID_OPERATION);
@@ -170,7 +192,7 @@ pub fn tex_storage_3d(ctx: &mut GlContext, target: u32, levels: i32, w: i32, h: 
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
-    let name = ctx.tex_unit[ctx.active_texture];
+    let name = ctx.local.tex_unit[ctx.local.active_texture];
     if name == 0 || ctx.textures.get(name).is_none() {
         ctx.set_gl_error(GL_INVALID_OPERATION);
         return;
@@ -200,7 +222,7 @@ pub fn tex_image_3d(
     if level != 0 || (target != GL_TEXTURE_2D_ARRAY && target != GL_TEXTURE_3D) {
         return;
     }
-    let name = ctx.tex_unit[ctx.active_texture];
+    let name = ctx.local.tex_unit[ctx.local.active_texture];
     if name == 0 || ctx.textures.get(name).is_none() {
         return;
     }
@@ -232,7 +254,7 @@ pub fn tex_sub_image_2d(
         ctx.set_gl_error(GL_INVALID_ENUM);
         return;
     }
-    let name = ctx.tex_unit[ctx.active_texture];
+    let name = ctx.local.tex_unit[ctx.local.active_texture];
     if level != 0 || w < 0 || h < 0 || xo < 0 || yo < 0 || name == 0 {
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
@@ -268,7 +290,7 @@ pub fn tex_sub_image_3d(
     {
         return;
     }
-    let name = ctx.tex_unit[ctx.active_texture];
+    let name = ctx.local.tex_unit[ctx.local.active_texture];
     if name == 0 {
         return;
     }
@@ -300,7 +322,7 @@ pub fn copy_tex_sub_image_2d(
         ctx.set_gl_error(GL_INVALID_ENUM);
         return;
     }
-    let dst = ctx.tex_unit[ctx.active_texture];
+    let dst = ctx.local.tex_unit[ctx.local.active_texture];
     if level != 0 || w < 0 || h < 0 || xo < 0 || yo < 0 || x < 0 || y < 0 || dst == 0 {
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
@@ -327,8 +349,8 @@ pub fn copy_tex_sub_image_2d(
     }
     // Source: the read framebuffer's color-attachment texture (if any). Copy the overlapping RGBA rows;
     // an absent/dataless source (default framebuffer, or an FBO not yet rendered) is the honest no-op.
-    let src = ctx.framebuffers.color_attachment(ctx.read_fbo);
-    let src_rows: Option<(Vec<u8>, usize)> = ctx.textures.get(src).and_then(|st| {
+    let src = ctx.local.framebuffers.color_attachment(ctx.local.read_fbo);
+    let src_rows: Option<Vec<u8>> = ctx.textures.get(src).and_then(|st| {
         if st.data.is_empty()
             || x as i64 + w as i64 > st.w as i64
             || y as i64 + h as i64 > st.h as i64
@@ -342,9 +364,9 @@ pub fn copy_tex_sub_image_2d(
             let base = ((y + row) * sw + x) * 4;
             buf.extend_from_slice(&st.data[base..base + w * 4]);
         }
-        Some((buf, w))
+        Some(buf)
     });
-    if let Some((buf, _)) = src_rows {
+    if let Some(buf) = src_rows {
         ctx.textures.sub_image_2d(dst, xo, yo, w, h, &buf);
     }
 }
@@ -352,7 +374,7 @@ pub fn copy_tex_sub_image_2d(
 /// `glDeleteTextures` (one name).
 impl GlContext {
     pub fn delete_texture(&mut self, name: u32) -> bool {
-        for u in self.tex_unit.iter_mut() {
+        for u in self.local.tex_unit.iter_mut() {
             if *u == name {
                 *u = 0;
             }

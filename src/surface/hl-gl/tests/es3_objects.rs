@@ -9,11 +9,11 @@ use hl_gl::service::{es3, intro, query, record};
 
 fn ctx() -> GlContext {
     let mut context = GlContext::new();
-    context.surf = GlSurface {
+    context.set_surface(GlSurface {
         have: true,
         width: 256,
         height: 128,
-    };
+    });
     context
 }
 

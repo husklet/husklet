@@ -4,9 +4,9 @@ pub extern "C" fn glGenQueries(n: i32, ids: *mut u32) {
     if ids.is_null() || n <= 0 {
         return;
     }
-    GlobalState::access(|s| unsafe {
+    GlobalState::context(|s| unsafe {
         for i in 0..n as isize {
-            *ids.offset(i) = s.ctx.queries.gen();
+            *ids.offset(i) = s.gl.gen_query();
         }
     });
 }
@@ -14,38 +14,38 @@ pub extern "C" fn glGenQueries(n: i32, ids: *mut u32) {
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDeleteQueries(n: i32, ids: *const u32) {
     if n < 0 {
-        GlobalState::access(|s| s.ctx.set_gl_error(GL_INVALID_VALUE));
+        GlobalState::context(|s| s.gl.set_gl_error(GL_INVALID_VALUE));
         return;
     }
     if ids.is_null() {
         return;
     }
-    GlobalState::access(|s| unsafe {
+    GlobalState::context(|s| unsafe {
         for i in 0..n as isize {
-            s.ctx.queries.delete(*ids.offset(i));
+            s.gl.delete_query(*ids.offset(i));
         }
     });
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBeginQuery(target: u32, id: u32) {
-    GlobalState::access(|s| es3::begin_query(&mut s.ctx, target, id));
+    GlobalState::context(|s| es3::begin_query(&mut s.gl, target, id));
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glEndQuery(target: u32) {
-    GlobalState::access(|s| s.ctx.end_query(target));
+    GlobalState::context(|s| s.gl.end_query(target));
 }
 
 /// `glIsQuery(id)` — `GLboolean` in the codegen's `u8` ABI.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsQuery(id: u32) -> u8 {
-    GlobalState::access(|s| s.ctx.queries.contains(id)) as u8
+    GlobalState::context(|s| s.gl.is_query(id)) as u8
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetQueryiv(target: u32, pname: u32, params: *mut i32) {
-    let v = GlobalState::access(|s| es3::get_queryiv(&mut s.ctx, target, pname));
+    let v = GlobalState::context(|s| es3::get_queryiv(&mut s.gl, target, pname));
     if let (Some(v), false) = (v, params.is_null()) {
         unsafe { *params = v };
     }
@@ -53,7 +53,7 @@ pub extern "C" fn glGetQueryiv(target: u32, pname: u32, params: *mut i32) {
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetQueryObjectuiv(id: u32, pname: u32, params: *mut u32) {
-    let v = GlobalState::access(|s| es3::get_query_objectuiv(&mut s.ctx, id, pname));
+    let v = GlobalState::context(|s| es3::get_query_objectuiv(&mut s.gl, id, pname));
     if let (Some(v), false) = (v, params.is_null()) {
         unsafe { *params = v };
     }
@@ -68,9 +68,9 @@ pub extern "C" fn glGenTransformFeedbacks(n: i32, ids: *mut u32) {
     if ids.is_null() || n <= 0 {
         return;
     }
-    GlobalState::access(|s| unsafe {
+    GlobalState::context(|s| unsafe {
         for i in 0..n as isize {
-            *ids.offset(i) = s.ctx.transform_feedbacks.gen();
+            *ids.offset(i) = s.gl.gen_transform_feedback();
         }
     });
 }
@@ -78,48 +78,48 @@ pub extern "C" fn glGenTransformFeedbacks(n: i32, ids: *mut u32) {
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDeleteTransformFeedbacks(n: i32, ids: *const u32) {
     if n < 0 {
-        GlobalState::access(|s| s.ctx.set_gl_error(GL_INVALID_VALUE));
+        GlobalState::context(|s| s.gl.set_gl_error(GL_INVALID_VALUE));
         return;
     }
     if ids.is_null() {
         return;
     }
-    GlobalState::access(|s| unsafe {
+    GlobalState::context(|s| unsafe {
         for i in 0..n as isize {
-            s.ctx.delete_transform_feedback(*ids.offset(i));
+            s.gl.delete_transform_feedback(*ids.offset(i));
         }
     });
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBindTransformFeedback(target: u32, id: u32) {
-    GlobalState::access(|s| es3::bind_transform_feedback(&mut s.ctx, target, id));
+    GlobalState::context(|s| es3::bind_transform_feedback(&mut s.gl, target, id));
 }
 
 /// `glIsTransformFeedback(id)` — `GLboolean` in the codegen's `u8` ABI.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsTransformFeedback(id: u32) -> u8 {
-    GlobalState::access(|s| s.ctx.transform_feedbacks.contains(id)) as u8
+    GlobalState::context(|s| s.gl.is_transform_feedback(id)) as u8
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBeginTransformFeedback(primitive_mode: u32) {
-    GlobalState::access(|s| s.ctx.begin_transform_feedback(primitive_mode));
+    GlobalState::context(|s| s.gl.begin_transform_feedback(primitive_mode));
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glEndTransformFeedback() {
-    GlobalState::access(|s| s.ctx.end_transform_feedback());
+    GlobalState::context(|s| s.gl.end_transform_feedback());
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glPauseTransformFeedback() {
-    GlobalState::access(|s| s.ctx.pause_transform_feedback());
+    GlobalState::context(|s| s.gl.pause_transform_feedback());
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glResumeTransformFeedback() {
-    GlobalState::access(|s| s.ctx.resume_transform_feedback());
+    GlobalState::context(|s| s.gl.resume_transform_feedback());
 }
 
 #[cfg_attr(gles_client, no_mangle)]
@@ -131,27 +131,27 @@ pub extern "C" fn glTransformFeedbackVaryings(
 ) {
     // Marshal the NUL-terminated name array up front (a null entry with count>0 is GL_INVALID_VALUE).
     if count < 0 {
-        GlobalState::access(|s| s.ctx.set_gl_error(GL_INVALID_VALUE));
+        GlobalState::context(|s| s.gl.set_gl_error(GL_INVALID_VALUE));
         return;
     }
     let mut names = Vec::with_capacity(count as usize);
     if count > 0 {
         if varyings.is_null() {
-            GlobalState::access(|s| s.ctx.set_gl_error(GL_INVALID_VALUE));
+            GlobalState::context(|s| s.gl.set_gl_error(GL_INVALID_VALUE));
             return;
         }
         for i in 0..count as isize {
             match unsafe { Text::read(*varyings.offset(i)) } {
                 Some(name) => names.push(name),
                 None => {
-                    GlobalState::access(|s| s.ctx.set_gl_error(GL_INVALID_VALUE));
+                    GlobalState::context(|s| s.gl.set_gl_error(GL_INVALID_VALUE));
                     return;
                 }
             }
         }
     }
-    GlobalState::access(|s| {
-        es3::transform_feedback_varyings(&mut s.ctx, program, names, buffer_mode)
+    GlobalState::context(|s| {
+        es3::transform_feedback_varyings(&mut s.gl, program, names, buffer_mode)
     });
 }
 
@@ -169,7 +169,7 @@ pub extern "C" fn glGetTransformFeedbackVarying(
     type_: *mut u32,
     name: *mut c_char,
 ) {
-    let varying = GlobalState::access(|s| es3::transform_feedback_varying(&s.ctx, program, index));
+    let varying = GlobalState::context(|s| es3::transform_feedback_varying(&s.gl, program, index));
     match varying {
         Some(vname) => unsafe {
             if !size.is_null() {
@@ -181,7 +181,7 @@ pub extern "C" fn glGetTransformFeedbackVarying(
             write_c_name(vname.as_bytes(), buf_size, length, name);
         },
         None => {
-            GlobalState::access(|s| s.ctx.set_gl_error(GL_INVALID_VALUE));
+            GlobalState::context(|s| s.gl.set_gl_error(GL_INVALID_VALUE));
             unsafe {
                 if !size.is_null() {
                     *size = 0;
@@ -222,9 +222,9 @@ pub extern "C" fn glGenProgramPipelines(n: i32, pipelines: *mut u32) {
     if pipelines.is_null() || n <= 0 {
         return;
     }
-    GlobalState::access(|s| unsafe {
+    GlobalState::context(|s| unsafe {
         for i in 0..n as isize {
-            *pipelines.offset(i) = s.ctx.program_pipelines.gen();
+            *pipelines.offset(i) = s.gl.gen_program_pipeline();
         }
     });
 }
@@ -232,38 +232,38 @@ pub extern "C" fn glGenProgramPipelines(n: i32, pipelines: *mut u32) {
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDeleteProgramPipelines(n: i32, pipelines: *const u32) {
     if n < 0 {
-        GlobalState::access(|s| s.ctx.set_gl_error(GL_INVALID_VALUE));
+        GlobalState::context(|s| s.gl.set_gl_error(GL_INVALID_VALUE));
         return;
     }
     if pipelines.is_null() {
         return;
     }
-    GlobalState::access(|s| unsafe {
+    GlobalState::context(|s| unsafe {
         for i in 0..n as isize {
-            s.ctx.program_pipelines.delete(*pipelines.offset(i));
+            s.gl.delete_program_pipeline(*pipelines.offset(i));
         }
     });
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBindProgramPipeline(pipeline: u32) {
-    GlobalState::access(|s| s.ctx.bind_program_pipeline(pipeline));
+    GlobalState::context(|s| s.gl.bind_program_pipeline(pipeline));
 }
 
 /// `glIsProgramPipeline(pipeline)` — `GLboolean` in the codegen's `u8` ABI.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsProgramPipeline(pipeline: u32) -> u8 {
-    GlobalState::access(|s| s.ctx.program_pipelines.contains(pipeline)) as u8
+    GlobalState::context(|s| s.gl.is_program_pipeline(pipeline)) as u8
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUseProgramStages(pipeline: u32, stages: u32, program: u32) {
-    GlobalState::access(|s| es3::use_program_stages(&mut s.ctx, pipeline, stages, program));
+    GlobalState::context(|s| es3::use_program_stages(&mut s.gl, pipeline, stages, program));
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glActiveShaderProgram(pipeline: u32, program: u32) {
-    GlobalState::access(|s| es3::active_shader_program(&mut s.ctx, pipeline, program));
+    GlobalState::context(|s| es3::active_shader_program(&mut s.gl, pipeline, program));
 }
 
 /// `glProgramParameteri(program, pname, value)` — only `GL_PROGRAM_SEPARABLE` is modeled (a linked
@@ -272,18 +272,18 @@ pub extern "C" fn glActiveShaderProgram(pipeline: u32, program: u32) {
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramParameteri(program: u32, pname: u32, value: i32) {
     let _ = value;
-    GlobalState::access(|s| {
-        if program == 0 || s.ctx.programs.program(program).is_none() {
-            s.ctx.set_gl_error(GL_INVALID_VALUE);
+    GlobalState::context(|s| {
+        if program == 0 || s.gl.programs.program(program).is_none() {
+            s.gl.set_gl_error(GL_INVALID_VALUE);
         } else if pname != GL_PROGRAM_SEPARABLE {
-            s.ctx.set_gl_error(GL_INVALID_ENUM);
+            s.gl.set_gl_error(GL_INVALID_ENUM);
         }
     });
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetProgramPipelineiv(pipeline: u32, pname: u32, params: *mut i32) {
-    let v = GlobalState::access(|s| es3::get_program_pipelineiv(&mut s.ctx, pipeline, pname));
+    let v = GlobalState::context(|s| es3::get_program_pipelineiv(&mut s.gl, pipeline, pname));
     if let (Some(v), false) = (v, params.is_null()) {
         unsafe { *params = v };
     }
@@ -305,8 +305,8 @@ pub extern "C" fn glGetProgramPipelineInfoLog(
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glValidateProgramPipeline(pipeline: u32) {
     // A known pipeline validates clean; an unknown one raises GL_INVALID_OPERATION (via the getter).
-    GlobalState::access(|s| {
-        let _ = es3::get_program_pipelineiv(&mut s.ctx, pipeline, GL_VALIDATE_STATUS);
+    GlobalState::context(|s| {
+        let _ = es3::get_program_pipelineiv(&mut s.gl, pipeline, GL_VALIDATE_STATUS);
     });
 }
 
@@ -323,17 +323,17 @@ pub extern "C" fn glCreateShaderProgramv(
         type_,
         GL_VERTEX_SHADER | GL_FRAGMENT_SHADER | GL_COMPUTE_SHADER
     ) {
-        GlobalState::access(|s| s.ctx.set_gl_error(GL_INVALID_ENUM));
+        GlobalState::context(|s| s.gl.set_gl_error(GL_INVALID_ENUM));
         return 0;
     }
     let src = unsafe { join_source(count, strings, core::ptr::null()) };
-    GlobalState::access(|s| {
-        let sh = record::create_shader(&mut s.ctx, type_);
-        record::shader_source(&mut s.ctx, sh, &src);
-        record::compile_shader(&mut s.ctx, sh);
-        let prog = record::create_program(&mut s.ctx);
-        record::attach_shader(&mut s.ctx, prog, sh);
-        let _ = record::link_program(&mut s.ctx, prog);
+    GlobalState::context(|s| {
+        let sh = record::create_shader(&mut s.gl, type_);
+        record::shader_source(&mut s.gl, sh, &src);
+        record::compile_shader(&mut s.gl, sh);
+        let prog = record::create_program(&mut s.gl);
+        record::attach_shader(&mut s.gl, prog, sh);
+        let _ = record::link_program(&mut s.gl, prog);
         prog
     })
 }

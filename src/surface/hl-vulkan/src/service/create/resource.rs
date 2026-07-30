@@ -7,7 +7,7 @@ use crate::model::memory::{
 use crate::model::queue::FenceRec;
 use crate::*;
 use hl_gpu::protocol::model::descriptor::{BufferDesc, SamplerDesc};
-use hl_gpu::protocol::model::enums::{AddressMode, Filter};
+use hl_gpu::protocol::model::enums::{AddressMode, Filter, TextureDim};
 use hl_gpu::{BufferId, Cmd, CommandSink, GpuError, Result};
 
 // ---- instance / device (pure object model — no IR) -----------------------------------------------
@@ -301,24 +301,90 @@ pub fn create_image(
     vk_usage: u32,
     vk_samples: u32,
 ) -> Result<VkImage> {
+    create_image_layers(
+        dev, sink, width, height, 1, 1, false, vk_format, vk_usage, vk_samples,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn create_image_layers(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    width: u32,
+    height: u32,
+    layers: u32,
+    mip_levels: u32,
+    cube: bool,
+    vk_format: u32,
+    vk_usage: u32,
+    vk_samples: u32,
+) -> Result<VkImage> {
+    create_image_geometry(
+        dev,
+        sink,
+        width,
+        height,
+        1,
+        layers,
+        mip_levels,
+        if cube {
+            TextureDim::Cube
+        } else {
+            TextureDim::D2
+        },
+        vk_format,
+        vk_usage,
+        vk_samples,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn create_image_geometry(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    width: u32,
+    height: u32,
+    depth: u32,
+    layers: u32,
+    mip_levels: u32,
+    dim: TextureDim,
+    vk_format: u32,
+    vk_usage: u32,
+    vk_samples: u32,
+) -> Result<VkImage> {
     use hl_gpu::protocol::model::descriptor::TextureDesc;
-    use hl_gpu::protocol::model::enums::TextureDim;
     // A zero extent is a spec violation (VUID-VkImageCreateInfo-extent), and an extent past the modeled
     // `maxImageDimension2D` cannot be created — both truthful usage errors, never a fake success.
-    if width == 0 || height == 0 {
+    if width == 0 || height == 0 || depth == 0 || layers == 0 {
         return Err(GpuError::Invalid(
-            "vkCreateImage: image extent width/height must be greater than 0",
+            "vkCreateImage: image extent and array layers must be greater than 0",
         ));
     }
-    let max_dim = dev.physical_device.limits.max_image_dimension_2d;
-    if width > max_dim || height > max_dim {
+    if dim == TextureDim::D3 && layers != 1 {
         return Err(GpuError::Invalid(
-            "vkCreateImage: image extent exceeds maxImageDimension2D",
+            "vkCreateImage: 3D images require arrayLayers == 1",
         ));
     }
+    if dim != TextureDim::D3 && depth != 1 {
+        return Err(GpuError::Invalid(
+            "vkCreateImage: non-3D images require extent.depth == 1",
+        ));
+    }
+    let max_dim = if dim == TextureDim::D3 {
+        dev.physical_device.limits.max_image_dimension_3d
+    } else {
+        dev.physical_device.limits.max_image_dimension_2d
+    };
+    if width > max_dim || height > max_dim || depth > max_dim {
+        return Err(GpuError::Invalid(
+            "vkCreateImage: image extent exceeds the dimension limit",
+        ));
+    }
+    let format = Format(vk_format)
+        .wire()
+        .ok_or(GpuError::Invalid("vkCreateImage: unsupported VkFormat"))?;
     let ir_id = dev.alloc_ir();
     let handle = dev.alloc_handle();
-    let format = Format(vk_format).wire();
     let usage = ImageUsage(vk_usage).wire();
     // `VkSampleCountFlagBits` encodes the count AS its bit value (1/2/4/8/16/32/64); an absent/`_1_BIT`
     // field is single-sample. Anything else threads through as the requested multisample count.
@@ -328,10 +394,10 @@ pub fn create_image(
         TextureDesc {
             width,
             height,
-            depth: 1,
-            mip_levels: 1,
+            depth: if dim == TextureDim::D3 { depth } else { layers },
+            mip_levels: mip_levels.max(1),
             sample_count,
-            dim: TextureDim::D2,
+            dim,
             format,
             usage,
             label: format!("vkimg{ir_id}"),
@@ -343,6 +409,10 @@ pub fn create_image(
             ir_id,
             width,
             height,
+            depth,
+            dim,
+            layers,
+            mip_levels: mip_levels.max(1),
             format,
             usage,
             sample_count,
@@ -369,6 +439,7 @@ pub fn create_sampler(
         address_u: SamplerAddress::from_vk(vk_address_uvw[0]),
         address_v: SamplerAddress::from_vk(vk_address_uvw[1]),
         address_w: SamplerAddress::from_vk(vk_address_uvw[2]),
+        ..SamplerDesc::default()
     };
     let ir_id = dev.alloc_ir();
     let handle = dev.alloc_handle();
@@ -405,9 +476,7 @@ impl SamplerAddress {
 
 // ---- image subresource layout --------------------------------------------------------------------
 
-/// A `VkSubresourceLayout` for one image subresource: byte `offset`/`size` of the subresource and the
-/// `row_pitch` (bytes per row). The bring-up images are single-mip, single-layer 2D RGBA8 targets, so
-/// array/depth pitch are 0. Values a linear-tiling app reads to `memcpy` into a mapped image.
+/// A `VkSubresourceLayout` for one tightly packed base image subresource.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct SubresourceLayout {
     pub offset: u64,
@@ -417,22 +486,23 @@ pub struct SubresourceLayout {
     pub depth_pitch: u64,
 }
 
-/// `vkGetImageSubresourceLayout` — report the linear layout of `image`'s base subresource. The modeled
-/// images are 4-byte-per-texel (RGBA8/BGRA8) single-mip 2D targets: `row_pitch = width*4`,
-/// `size = row_pitch*height`, tightly packed from offset 0. Errors on an unknown image. Ported (for the
-/// single-subresource model) from `hl-shim-vk`'s image-layout reporting.
+/// `vkGetImageSubresourceLayout` — report the tightly packed base-level layout. Depth slices and array
+/// layers are distinct axes, matching Vulkan's storage geometry.
 impl Device {
     pub fn image_subresource_layout(&self, image: VkImage) -> Result<SubresourceLayout> {
         let img = self.images.get(&image).ok_or(GpuError::Invalid(
             "vkGetImageSubresourceLayout: unknown VkImage",
         ))?;
-        let row_pitch = img.width as u64 * 4;
+        let bytes = img.format.bytes_per_texel().unwrap_or(4) as u64;
+        let row_pitch = img.width as u64 * bytes;
+        let depth_pitch = row_pitch * img.height as u64;
+        let array_pitch = depth_pitch * img.depth as u64;
         Ok(SubresourceLayout {
             offset: 0,
-            size: row_pitch * img.height as u64,
+            size: array_pitch * img.layers as u64,
             row_pitch,
-            array_pitch: 0,
-            depth_pitch: 0,
+            array_pitch,
+            depth_pitch,
         })
     }
 }

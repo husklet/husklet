@@ -165,21 +165,23 @@ fn create_image_zero_oversized_extent_bad_format_and_usage() {
         ),
         Err(GpuError::Invalid(_))
     ));
-    // A bad/unsupported VkFormat folds to Rgba8Unorm (documented bounded translation), no panic.
-    let img = create::create_image(
-        &mut d,
-        &mut s,
-        4,
-        4,
-        0xDEAD_BEEF,
-        vk_image_usage::SAMPLED,
-        1,
-    )
-    .unwrap();
-    assert_eq!(
-        d.images.get(&img).unwrap().format,
-        TextureFormat::Rgba8Unorm
-    );
+    // An unsupported format is rejected without allocating an image or emitting an IR command.
+    let images_before = d.images.len();
+    let batches_before = s.batches.len();
+    assert!(matches!(
+        create::create_image(
+            &mut d,
+            &mut s,
+            4,
+            4,
+            0xDEAD_BEEF,
+            vk_image_usage::SAMPLED,
+            1,
+        ),
+        Err(GpuError::Invalid("vkCreateImage: unsupported VkFormat"))
+    ));
+    assert_eq!(d.images.len(), images_before);
+    assert_eq!(s.batches.len(), batches_before);
     // Garbage usage bits: unknown bits are ignored (known bits translated), no panic.
     let img2 = create::create_image(
         &mut d,

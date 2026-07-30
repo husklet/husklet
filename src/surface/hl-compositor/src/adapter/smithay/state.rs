@@ -98,6 +98,8 @@ use smithay::wayland::{
     },
 };
 
+#[cfg(feature = "macos-surface")]
+use smithay::backend::allocator::dmabuf::WeakDmabuf;
 /// `zwp_linux_dmabuf_v1` server plumbing — the accelerated present path real toolkits + Chrome use.
 /// `DrmFormat`/`Fourcc`/`Modifier` name the DRM format+modifier pairs the global advertises and the
 /// importer validates; `Dmabuf` is the imported buffer (its `handles()`/`strides()`/`offsets()` are what
@@ -132,6 +134,10 @@ use smithay::reexports::wayland_protocols::wp::tearing_control::v1::server::{
     wp_tearing_control_v1::{self, PresentationHint, WpTearingControlV1},
 };
 
+use hl_surface_protocol::server::{
+    hl_surface_identity_v1::{self, HlSurfaceIdentityV1},
+    hl_surface_manager_v1::{self, HlSurfaceManagerV1},
+};
 /// The `xdg_positioner` anchor/gravity/constraint-adjustment wire enums — mapped onto the neutral
 /// [`crate::scene::model`] positioner value types so the scene's placement math (not Smithay's) resolves
 /// the popup geometry.
@@ -375,6 +381,16 @@ pub struct HlState {
     /// `WlSurface` focus (its `PointerTarget`/`KeyboardTarget` impls serialize the wire events). Kept in
     /// lockstep with `surface_ids` (registered/torn down together).
     surfaces_by_id: HashMap<SurfaceId, WlSurface>,
+    _surface_identity_manager: Option<GlobalId>,
+    surface_tokens: HashMap<SurfaceId, u64>,
+    token_surfaces: HashMap<u64, SurfaceId>,
+    identity_surfaces: HashMap<ObjectId, SurfaceId>,
+    pending_associations: HashMap<SurfaceId, u64>,
+    last_associations: HashMap<SurfaceId, u64>,
+    #[cfg(feature = "macos-surface")]
+    native: Option<native::NativeState>,
+    #[cfg(feature = "macos-surface")]
+    native_buffers: HashMap<WeakDmabuf, u64>,
     /// `wl_surface.frame` callbacks the client is owed but that have NOT yet been fired, keyed by the
     /// neutral surface they were requested on. A callback is held (not fired at commit) until the frame it
     /// belongs to actually reaches the presenter — so a throttled frame does not prematurely tell the
@@ -406,6 +422,8 @@ pub struct HlState {
     /// [`Self::fire_tree_callbacks`]) or, if the frame is torn down unshown, `discarded`
     /// ([`Self::drop_tree_callbacks`] / [`Self::teardown_surface`]).
     pending_presentation: HashMap<SurfaceId, Vec<PresentationFeedbackCallback>>,
+    /// Protocol objects captured with an asynchronous host-display submission.
+    pending_host_frames: HashMap<SurfaceId, frame::HostFrame>,
     /// The last RAW injected pointer position in root space — the reference `inject_pointer_motion` computes
     /// the relative-motion delta against. Distinct from the neutral seat's `pointer_location` (the delivered
     /// ABSOLUTE position, which freezes under a `zwp_locked_pointer_v1` lock): the raw position keeps
@@ -416,12 +434,6 @@ pub struct HlState {
     /// XDG maximized. GTK intentionally removes its client-side header in XDG fullscreen; keeping this
     /// separate lets the macOS full-screen control retain the application's header and controls.
     host_fullscreen: HashSet<SurfaceId>,
-    /// Monotonic presentation SEQUENCE counter — the `seq` a `wp_presentation_feedback.presented` carries
-    /// (a per-output vblank / frame counter). Incremented once per PRESENT CYCLE that answers feedback (not
-    /// once per feedback): every feedback released together by one present shares the frame's `seq` (and its
-    /// `now` timestamp), so a client sees a strictly increasing, contiguous, gap-free sequence — one number
-    /// per frame that actually reached the screen. See [`Self::answer_tree_feedback`].
-    present_seq: u64,
     /// Owns the `wp_cursor_shape_manager_v1` global (named cursor shapes). Chrome/Ozone and modern GTK/Qt
     /// set the pointer cursor by SHAPE NAME (`pointer`/`text`/`grab`/…) through this instead of attaching a
     /// pixel buffer. Smithay decodes `set_shape` and routes it through [`SeatHandler::cursor_image`] as
@@ -456,9 +468,12 @@ mod commit;
 mod configuration;
 mod extensions;
 mod frame;
+mod identity;
 mod input;
 mod interaction;
 mod lifecycle;
+#[cfg(feature = "macos-surface")]
+mod native;
 mod output;
 mod protocol;
 mod surface;

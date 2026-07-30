@@ -5,15 +5,34 @@ use super::{
 use crate::service::CheckpointConfig;
 
 impl Service {
+    pub(super) async fn process_domain(
+        &self,
+        container: &crate::ContainerId,
+    ) -> Result<hl_engine::Domain> {
+        self.live
+            .lock()
+            .await
+            .get(container)
+            .map(|run| run.process.domain())
+            .ok_or_else(|| {
+                crate::Error::Corrupt(format!(
+                    "running container {container} has no live process domain"
+                ))
+            })
+    }
+
     pub(super) fn devices(
         &self,
         guest: crate::Guest,
         process: &mut crate::Process,
         mounts: &mut Vec<crate::Mount>,
+        filesystem: crate::device::FilesystemView<'_>,
     ) -> Result<crate::DeviceRequest> {
-        let request = self
-            .devices
-            .request(crate::DeviceContext { guest, process })?;
+        let request = self.devices.request(crate::DeviceContext {
+            guest,
+            process,
+            filesystem,
+        })?;
         for device_mount in &request.mounts {
             if mounts
                 .iter()
@@ -62,10 +81,15 @@ impl Service {
         let input = io.take_input().await?;
         let mut process_spec = container.spec.process.clone();
         let mut requested_mounts = container.spec.mounts.clone();
+        let (rootfs, overlay, owners) = self.rootfs_launch(&container.spec.rootfs).await?;
         let devices = self.devices(
             container.spec.guest,
             &mut process_spec,
             &mut requested_mounts,
+            crate::device::FilesystemView::new(
+                &rootfs,
+                overlay.as_ref().map(|overlay| overlay.upper.as_path()),
+            ),
         )?;
         let mut mounts = self.volumes.resolve(&requested_mounts).await?;
         mounts.extend(self.identity.prepare(&container, &networks)?);
@@ -81,7 +105,6 @@ impl Service {
                 .map_err(|error| Error::Runtime(error.to_string()))?,
             restore: container.checkpoint.is_some(),
         });
-        let (rootfs, overlay, owners) = self.rootfs_launch(&container.spec.rootfs).await?;
         let process = self
             .runtime
             .start(ProcessConfig {
@@ -90,6 +113,7 @@ impl Service {
                 overlay,
                 owners,
                 filesystem_generation,
+                translation_cache: self.translation_cache.clone(),
                 checkpoint,
                 guest: container.spec.guest,
                 process: process_spec,

@@ -123,7 +123,7 @@ fn fragmented_frame_reassembles_through_the_serve_loop() {
             .write_readback_request(&ReadbackRequest::buffer(1, 0, data.len() as u64))
             .unwrap();
         let got = unix::Connection::new(&client)
-            .read_readback_response()
+            .read_readback_response(data.len())
             .expect("readback after fragmented submit");
         assert_eq!(
             got, data,

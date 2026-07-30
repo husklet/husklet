@@ -1,0 +1,65 @@
+use super::local::SurfaceTarget;
+use super::*;
+
+/// The IR residency state mutated while lowering one frame.
+///
+/// A command sink accepts a batch transactionally. Lowering must follow the same contract: if submission
+/// fails, every allocation and cache insertion made while assembling that batch is restored so a retry
+/// emits the resource-creation commands again instead of referencing host objects that never committed.
+#[derive(Clone)]
+pub struct FrameState {
+    default_targets: HashMap<u64, SurfaceTarget>,
+    external_targets: HashMap<(u32, u64), hl_gpu::SurfaceToken>,
+    default_placeholder_tex: u32,
+    default_placeholder_samp: u32,
+    fbo_targets: HashMap<(u32, u64), (u32, u32)>,
+    depth_targets: HashMap<(u32, bool), u32>,
+    tex_ir_cache: HashMap<u32, (u32, (u64, u64))>,
+    shared_tex_ir_cache: HashMap<(u64, u64, u32, u32, u32), SharedTextureResidency>,
+    shared_target_cache: HashMap<u64, SharedTargetResidency>,
+    buf_ir_cache: HashMap<(u32, u32), (u32, u64)>,
+    prog_shader_cache: HashMap<(u32, u64), (u32, u32, u64)>,
+    prog_pipeline_cache: HashMap<(u32, u64), (u32, u64)>,
+    sampler_ir_cache: Vec<(hl_gpu::protocol::model::descriptor::SamplerDesc, u32)>,
+    pending_destroys: Vec<Cmd>,
+}
+
+impl GlContext {
+    /// Snapshot the resource state that frame lowering may mutate.
+    pub fn frame_state(&self) -> FrameState {
+        FrameState {
+            default_targets: self.local.default_targets.clone(),
+            external_targets: self.external_targets.clone(),
+            default_placeholder_tex: self.default_placeholder_tex,
+            default_placeholder_samp: self.default_placeholder_samp,
+            fbo_targets: self.fbo_targets.clone(),
+            depth_targets: self.depth_targets.clone(),
+            tex_ir_cache: self.tex_ir_cache.clone(),
+            shared_tex_ir_cache: self.shared_tex_ir_cache.clone(),
+            shared_target_cache: self.shared_target_cache.clone(),
+            buf_ir_cache: self.buf_ir_cache.clone(),
+            prog_shader_cache: self.prog_shader_cache.clone(),
+            prog_pipeline_cache: self.prog_pipeline_cache.clone(),
+            sampler_ir_cache: self.sampler_ir_cache.clone(),
+            pending_destroys: self.pending_destroys.clone(),
+        }
+    }
+
+    /// Restore a pre-lowering resource snapshot after the sink rejects the generated batch.
+    pub fn restore_frame_state(&mut self, state: FrameState) {
+        self.local.default_targets = state.default_targets;
+        self.external_targets = state.external_targets;
+        self.default_placeholder_tex = state.default_placeholder_tex;
+        self.default_placeholder_samp = state.default_placeholder_samp;
+        self.fbo_targets = state.fbo_targets;
+        self.depth_targets = state.depth_targets;
+        self.tex_ir_cache = state.tex_ir_cache;
+        self.shared_tex_ir_cache = state.shared_tex_ir_cache;
+        self.shared_target_cache = state.shared_target_cache;
+        self.buf_ir_cache = state.buf_ir_cache;
+        self.prog_shader_cache = state.prog_shader_cache;
+        self.prog_pipeline_cache = state.prog_pipeline_cache;
+        self.sampler_ir_cache = state.sampler_ir_cache;
+        self.pending_destroys = state.pending_destroys;
+    }
+}

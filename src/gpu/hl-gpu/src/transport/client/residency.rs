@@ -122,11 +122,11 @@ impl ResidencyJournal {
         self.bytes = crate::protocol::codec::Encoder::stream(&self.cmds).len();
     }
 
-    pub(super) fn replay_bytes(&self) -> io::Result<Vec<u8>> {
+    pub(super) fn replay_bytes(&self) -> std::result::Result<Vec<u8>, TransportError> {
         if !self.replayable && !self.cmds.is_empty() {
-            return Err(RemoteCommandSink::api_loss(
-                "executor residency exceeded replay budget",
-            ));
+            return Err(TransportError::ApiLost {
+                detail: "executor residency exceeded replay budget".into(),
+            });
         }
         Ok(crate::protocol::codec::Encoder::stream(&self.cmds))
     }
@@ -139,6 +139,7 @@ impl Cmd {
             self,
             Cmd::DestroyBuffer(_)
                 | Cmd::DestroyTexture(_)
+                | Cmd::DestroyTextureView(_)
                 | Cmd::DestroySampler(_)
                 | Cmd::DestroyShader(_)
                 | Cmd::DestroyPipeline(_)
@@ -153,11 +154,13 @@ impl Cmd {
         Some(match self {
             Cmd::CreateBuffer(id, _) => (KIND_BUFFER, *id),
             Cmd::CreateTexture(id, _) => (KIND_TEXTURE, *id),
+            Cmd::CreateTextureView(id, _) => (KIND_TEXTURE, *id),
             Cmd::CreateSampler(id, _) => (KIND_SAMPLER, *id),
             Cmd::CreateShader { id, .. } => (KIND_SHADER, *id),
-            Cmd::CreateRenderPipeline(id, _) | Cmd::CreateComputePipeline(id, _) => {
-                (KIND_PIPELINE, *id)
-            }
+            Cmd::CreateRenderPipeline(id, _)
+            | Cmd::CreateComputePipeline(id, _)
+            | Cmd::CreateRenderPipelineLayout(id, _, _, _)
+            | Cmd::CreateComputePipelineLayout(id, _, _) => (KIND_PIPELINE, *id),
             Cmd::CreateBindGroup(id, _) => (KIND_BIND_GROUP, *id),
             Cmd::CreateSurface(id, _) => (KIND_SURFACE, *id),
             Cmd::CreateFence(id) => (KIND_FENCE, *id),
@@ -170,6 +173,7 @@ impl Cmd {
         Some(match self {
             Cmd::DestroyBuffer(id) => (KIND_BUFFER, *id),
             Cmd::DestroyTexture(id) => (KIND_TEXTURE, *id),
+            Cmd::DestroyTextureView(id) => (KIND_TEXTURE, *id),
             Cmd::DestroySampler(id) => (KIND_SAMPLER, *id),
             Cmd::DestroyShader(id) => (KIND_SHADER, *id),
             Cmd::DestroyPipeline(id) => (KIND_PIPELINE, *id),
@@ -191,6 +195,11 @@ impl Cmd {
             Cmd::CreateBuffer(id, _) | Cmd::DestroyBuffer(id) => refs.push((KIND_BUFFER, *id)),
             Cmd::WriteBuffer { id, .. } => refs.push((KIND_BUFFER, *id)),
             Cmd::CreateTexture(id, _) | Cmd::DestroyTexture(id) => refs.push((KIND_TEXTURE, *id)),
+            Cmd::CreateTextureView(id, view) => {
+                refs.push((KIND_TEXTURE, *id));
+                refs.push((KIND_TEXTURE, view.texture));
+            }
+            Cmd::DestroyTextureView(id) => refs.push((KIND_TEXTURE, *id)),
             Cmd::CreateSampler(id, _) | Cmd::DestroySampler(id) => refs.push((KIND_SAMPLER, *id)),
             Cmd::CreateShader { id, .. } | Cmd::DestroyShader(id) => refs.push((KIND_SHADER, *id)),
             Cmd::CreateRenderPipeline(id, d) => {
@@ -204,6 +213,17 @@ impl Cmd {
                 refs.push((KIND_PIPELINE, *id));
                 refs.push((KIND_SHADER, d.compute.module));
             }
+            Cmd::CreateRenderPipelineLayout(id, d, _, _) => {
+                refs.push((KIND_PIPELINE, *id));
+                refs.push((KIND_SHADER, d.vertex.module));
+                if let Some(fragment) = &d.fragment {
+                    refs.push((KIND_SHADER, fragment.module));
+                }
+            }
+            Cmd::CreateComputePipelineLayout(id, d, _) => {
+                refs.push((KIND_PIPELINE, *id));
+                refs.push((KIND_SHADER, d.compute.module));
+            }
             Cmd::DestroyPipeline(id) => refs.push((KIND_PIPELINE, *id)),
             Cmd::CreateBindGroup(id, d) => {
                 refs.push((KIND_BIND_GROUP, *id));
@@ -212,6 +232,15 @@ impl Cmd {
                         BindResource::Buffer { id, .. } => refs.push((KIND_BUFFER, id)),
                         BindResource::Texture { id } => refs.push((KIND_TEXTURE, id)),
                         BindResource::Sampler { id } => refs.push((KIND_SAMPLER, id)),
+                        BindResource::BufferArray { ref elements } => {
+                            refs.extend(elements.iter().map(|element| (KIND_BUFFER, element.id)));
+                        }
+                        BindResource::TextureArray { ref ids } => {
+                            refs.extend(ids.iter().map(|&id| (KIND_TEXTURE, id)));
+                        }
+                        BindResource::SamplerArray { ref ids } => {
+                            refs.extend(ids.iter().map(|&id| (KIND_SAMPLER, id)));
+                        }
                     }
                 }
             }
@@ -238,11 +267,13 @@ impl Cmd {
                             refs.push((KIND_BUFFER, *src));
                             refs.push((KIND_BUFFER, *dst));
                         }
-                        Enc::CopyBufferToTexture { src, dst, .. } => {
+                        Enc::CopyBufferToTexture { src, dst, .. }
+                        | Enc::CopyBufferToTextureRegion { src, dst, .. } => {
                             refs.push((KIND_BUFFER, *src));
                             refs.push((KIND_TEXTURE, *dst));
                         }
-                        Enc::CopyTextureToBuffer { src, dst, .. } => {
+                        Enc::CopyTextureToBuffer { src, dst, .. }
+                        | Enc::CopyTextureToBufferRegion { src, dst, .. } => {
                             refs.push((KIND_TEXTURE, *src));
                             refs.push((KIND_BUFFER, *dst));
                         }

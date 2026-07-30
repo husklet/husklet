@@ -89,6 +89,7 @@ fn sampler(address: AddressMode, mip: Filter) -> SamplerDesc {
         address_u: address,
         address_v: address,
         address_w: address,
+        ..SamplerDesc::default()
     }
 }
 
@@ -464,4 +465,41 @@ fn linear_mipmap_filter_blends_between_levels() {
         !near(linear, x, 6) && !near(linear, y, 6),
         "linear-mip result {linear:?} must differ from both levels"
     );
+}
+
+#[test]
+fn sampler_lod_and_comparison_state_is_validated_before_native_creation() {
+    let mut executor = match WgpuExecutor::new(DeviceConfig::default()) {
+        Ok(executor) => executor,
+        Err(_) => return,
+    };
+    let mut valid = session(&executor);
+    let descriptor = SamplerDesc {
+        lod_min_clamp: 1.0,
+        lod_max_clamp: 4.0,
+        compare: Some(hl_gpu::protocol::model::enums::compare::GREATER_EQUAL),
+        ..SamplerDesc::default()
+    };
+    hl_gpu::runtime::submit(
+        &mut valid,
+        &mut executor,
+        0,
+        &[Cmd::CreateSampler(1, descriptor)],
+    )
+    .expect("finite ordered LOD clamps and a known comparison function are supported");
+
+    let mut invalid = session(&executor);
+    let descriptor = SamplerDesc {
+        lod_min_clamp: 5.0,
+        lod_max_clamp: 4.0,
+        ..SamplerDesc::default()
+    };
+    let error = hl_gpu::runtime::submit(
+        &mut invalid,
+        &mut executor,
+        0,
+        &[Cmd::CreateSampler(1, descriptor)],
+    )
+    .unwrap_err();
+    assert_eq!(error, hl_gpu::GpuError::Invalid("sampler LOD clamp"));
 }

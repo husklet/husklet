@@ -67,6 +67,7 @@ impl ApiError {
         let message = error.to_string();
         let status = match error {
             ContainerError::NotFound(_)
+            | ContainerError::ExecNotFound(_)
             | ContainerError::VolumeNotFound(_)
             | ContainerError::NetworkNotFound(_) => StatusCode::NOT_FOUND,
             ContainerError::NameConflict(_)
@@ -90,6 +91,7 @@ impl ApiError {
             }
             ContainerError::Runtime(_)
             | ContainerError::Corrupt(_)
+            | ContainerError::TranslationCache(_)
             | ContainerError::Io(_)
             | ContainerError::Json(_)
             | ContainerError::Image(_)

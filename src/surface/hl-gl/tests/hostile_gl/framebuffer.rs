@@ -1,5 +1,36 @@
 use super::*;
 
+#[test]
+fn surfaceless_default_framebuffer_is_incomplete_but_user_fbo_works() {
+    let mut c = ctx();
+    c.set_surface_available(false);
+
+    assert_eq!(
+        record::check_framebuffer_status(&mut c, GL_FRAMEBUFFER),
+        GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT
+    );
+
+    let texture = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
+    record::bind_texture(&mut c, GL_TEXTURE_2D, texture);
+    record::tex_image_2d(&mut c, 4, 4, &[0; 64]);
+    let framebuffer = c.gen_framebuffer();
+    record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, framebuffer);
+    record::framebuffer_texture_2d(
+        &mut c,
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D,
+        texture,
+        0,
+    );
+
+    assert_eq!(
+        record::check_framebuffer_status(&mut c, GL_FRAMEBUFFER),
+        GL_FRAMEBUFFER_COMPLETE
+    );
+}
+
 // ===================================================================================================
 // draw with no program / incomplete framebuffer / mismatched attachment → GL error, no panic
 // ===================================================================================================
@@ -9,7 +40,7 @@ use super::*;
 #[test]
 fn incomplete_framebuffer_blit_and_draw_are_safe() {
     let mut c = ctx();
-    let fbo = c.framebuffers.gen();
+    let fbo = c.gen_framebuffer();
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
     // No color attachment yet → INCOMPLETE_MISSING_ATTACHMENT.
     assert_eq!(
@@ -34,7 +65,7 @@ fn incomplete_framebuffer_blit_and_draw_are_safe() {
     // Drawing with no program + an incomplete FBO bound just records the draw (dropped at lowering).
     record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
-    assert_eq!(c.draws.len(), 1);
+    assert_eq!(c.draws().len(), 1);
 
     // Attaching a real texture makes it complete.
     let tex = c.textures.gen();
@@ -60,7 +91,7 @@ fn incomplete_framebuffer_blit_and_draw_are_safe() {
 #[test]
 fn framebuffer_texture_2d_bad_attachment_and_dangling_texture() {
     let mut c = ctx();
-    let fbo = c.framebuffers.gen();
+    let fbo = c.gen_framebuffer();
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
     // A non-2D textarget is GL_INVALID_VALUE.
     record::framebuffer_texture_2d(
@@ -97,5 +128,5 @@ fn framebuffer_texture_2d_bad_attachment_and_dangling_texture() {
         0,
     );
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
-    assert_eq!(c.framebuffers.color_attachment(fbo), tex);
+    assert_eq!(c.framebuffer_color_attachment(fbo), tex);
 }

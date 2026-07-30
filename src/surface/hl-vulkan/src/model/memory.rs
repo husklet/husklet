@@ -7,7 +7,7 @@
 //! the record ids are minted by [`super::device::Device`], which owns the id counters.
 
 use crate::{VkBuffer, VkDeviceMemory};
-use hl_gpu::protocol::model::enums::TextureFormat;
+use hl_gpu::protocol::model::enums::{TextureDim, TextureFormat};
 
 /// One `VkBuffer`: its backing hl-GPU buffer id + size + (translated) usage, and the device memory it
 /// is bound to (`vkBindBufferMemory`), if any. Mirrors MoltenVK `MVKBuffer`.
@@ -56,6 +56,12 @@ pub struct ImageRec {
     pub ir_id: u32,
     pub width: u32,
     pub height: u32,
+    /// Base-level depth for a 3D image. Always one for 1D/2D images.
+    pub depth: u32,
+    /// Vulkan image geometry; array layers and depth are distinct axes.
+    pub dim: TextureDim,
+    pub layers: u32,
+    pub mip_levels: u32,
     pub format: TextureFormat,
     /// hl-GPU `texture_usage` bits (translated from `VkImageUsageFlags`).
     pub usage: u32,
@@ -109,6 +115,20 @@ pub mod vk_format {
     pub const D16_UNORM: u32 = 124;
     pub const D32_SFLOAT: u32 = 126;
     pub const D24_UNORM_S8_UINT: u32 = 129;
+    pub const BC1_RGBA_UNORM_BLOCK: u32 = 133;
+    pub const BC1_RGBA_SRGB_BLOCK: u32 = 134;
+    pub const BC2_UNORM_BLOCK: u32 = 135;
+    pub const BC2_SRGB_BLOCK: u32 = 136;
+    pub const BC3_UNORM_BLOCK: u32 = 137;
+    pub const BC3_SRGB_BLOCK: u32 = 138;
+    pub const BC4_UNORM_BLOCK: u32 = 139;
+    pub const BC4_SNORM_BLOCK: u32 = 140;
+    pub const BC5_UNORM_BLOCK: u32 = 141;
+    pub const BC5_SNORM_BLOCK: u32 = 142;
+    pub const BC6H_UFLOAT_BLOCK: u32 = 143;
+    pub const BC6H_SFLOAT_BLOCK: u32 = 144;
+    pub const BC7_UNORM_BLOCK: u32 = 145;
+    pub const BC7_SRGB_BLOCK: u32 = 146;
 }
 
 /// Translate `VkBufferUsageFlags` → hl-GPU `buffer_usage` bits. Ported from `memory.rs::buffer_usage`.
@@ -177,15 +197,17 @@ impl ImageUsage {
     }
 }
 
-/// Translate `VkFormat` → hl-GPU `TextureFormat` (the color/depth subset the bring-up render path
-/// needs). Ported from `memory.rs::tex_format`; an unmapped format folds to `Rgba8Unorm`.
+/// Translate a supported `VkFormat` into the neutral hl-GPU format.
+///
+/// Unknown formats stay unknown. Substituting RGBA8 would change texel layout while reporting success,
+/// causing callers to allocate and interpret a different image than the application requested.
 pub struct Format(pub u32);
 
 impl Format {
-    pub fn wire(&self) -> TextureFormat {
+    pub fn wire(&self) -> Option<TextureFormat> {
         let f = self.0;
         use TextureFormat as T;
-        match f {
+        Some(match f {
             vk_format::R8G8B8A8_UNORM => T::Rgba8Unorm,
             vk_format::R8G8B8A8_SRGB => T::Rgba8Srgb,
             vk_format::B8G8R8A8_UNORM => T::Bgra8Unorm,
@@ -201,7 +223,21 @@ impl Format {
             vk_format::D16_UNORM => T::Depth32Float,
             vk_format::D32_SFLOAT => T::Depth32Float,
             vk_format::D24_UNORM_S8_UINT => T::Depth24PlusStencil8,
-            _ => T::Rgba8Unorm,
-        }
+            vk_format::BC1_RGBA_UNORM_BLOCK => T::Bc1RgbaUnorm,
+            vk_format::BC1_RGBA_SRGB_BLOCK => T::Bc1RgbaSrgb,
+            vk_format::BC2_UNORM_BLOCK => T::Bc2RgbaUnorm,
+            vk_format::BC2_SRGB_BLOCK => T::Bc2RgbaSrgb,
+            vk_format::BC3_UNORM_BLOCK => T::Bc3RgbaUnorm,
+            vk_format::BC3_SRGB_BLOCK => T::Bc3RgbaSrgb,
+            vk_format::BC4_UNORM_BLOCK => T::Bc4RUnorm,
+            vk_format::BC4_SNORM_BLOCK => T::Bc4RSnorm,
+            vk_format::BC5_UNORM_BLOCK => T::Bc5RgUnorm,
+            vk_format::BC5_SNORM_BLOCK => T::Bc5RgSnorm,
+            vk_format::BC6H_UFLOAT_BLOCK => T::Bc6hRgbUfloat,
+            vk_format::BC6H_SFLOAT_BLOCK => T::Bc6hRgbFloat,
+            vk_format::BC7_UNORM_BLOCK => T::Bc7RgbaUnorm,
+            vk_format::BC7_SRGB_BLOCK => T::Bc7RgbaSrgb,
+            _ => return None,
+        })
     }
 }

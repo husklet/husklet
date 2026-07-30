@@ -12,10 +12,9 @@ impl XdgShellHandler for HlState {
         &mut self.xdg_shell
     }
 
-    /// A toplevel mapped: assign the scene `Toplevel` role, send the initial configure (a floating size +
-    /// `Activated` + output bounds) so the client draws its first frame. A headless single-window
-    /// compositor grants keyboard focus to whatever maps, so the mapped toplevel is `Activated` — GTK/Qt
-    /// gate their "focused" styling (and Chrome its window controls) on that state.
+    /// A toplevel was created: assign the scene `Toplevel` role and send the initial configure with a
+    /// floating size + output bounds. The new window is the pending activation target; when its first
+    /// buffer maps, `set_keyboard_focus` completes the transition and deactivates the previous toplevel.
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         if let Some(sid) = self.sid(surface.wl_surface()) {
             self.engine.scene.set_role(sid, SurfaceRole::Toplevel);

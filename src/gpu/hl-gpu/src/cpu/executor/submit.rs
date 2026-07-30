@@ -49,6 +49,7 @@ impl CpuExecutor {
         res: &SessionResources,
         surface_id: u32,
         texture_id: u32,
+        serial: crate::FrameSerial,
     ) -> Result<Presentation> {
         let sdesc = surface(res, surface_id)?.clone();
         let t = texture(res, texture_id)?;
@@ -64,7 +65,9 @@ impl CpuExecutor {
         }
         Ok(Presentation {
             surface: SurfaceId(surface_id),
+            token: sdesc.token,
             texture: TextureId(texture_id),
+            serial,
         })
     }
 

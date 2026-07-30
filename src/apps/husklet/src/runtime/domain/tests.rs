@@ -7,12 +7,19 @@ fn signatures_are_unambiguous_and_ignore_terminal_presentation() {
     let mut second = WorkspaceConfig::new("demo", "ubuntu:latest", Arch::Arm64);
     second.env.push(("A".into(), "BC".into()));
     assert_ne!(
-        Configuration::new(&first).signature(),
-        Configuration::new(&second).signature()
+        Configuration::new(&first).signature_for("runtime-a"),
+        Configuration::new(&second).signature_for("runtime-a")
     );
-    let signature = Configuration::new(&first).signature();
+    let signature = Configuration::new(&first).signature_for("runtime-a");
     first.terminal.font_size = Some(18);
-    assert_eq!(signature, Configuration::new(&first).signature());
+    assert_eq!(
+        signature,
+        Configuration::new(&first).signature_for("runtime-a")
+    );
+    assert_ne!(
+        signature,
+        Configuration::new(&first).signature_for("runtime-b")
+    );
     assert_eq!(signature.len(), 64);
     assert!(!signature.contains("ubuntu"));
     assert!(!signature.contains("AB"));

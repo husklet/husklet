@@ -160,8 +160,10 @@ impl Source<'_> {
 /// [`uni_layout`] lays out into `Program::ubuf`), so the emitted block carries the FULL combined member set
 /// in the FULL std140 layout the frame builder binds at binding 0 — a stage that references only a subset
 /// keeps its members at the shared offsets (an unused member is harmless). The bare declarations are removed
-/// and the block spliced in at the first removed site; a sampler global or a block member is never touched.
-/// Returns the source unchanged when the stage has no bare depth-0 data uniform.
+/// and the block is emitted in the unconditional directive prologue. It must never inherit a declaration's
+/// `#if`: the first textual uniform can be in an inactive ANGLE branch while a later active branch uses a
+/// different member. A sampler global or a block member is never touched. Returns the source unchanged when
+/// the stage has no bare depth-0 data uniform.
 impl Source<'_> {
     pub(super) fn wrap_default_block_uniforms(self, combined: &[Decl]) -> String {
         let src = self.text;
@@ -255,23 +257,90 @@ impl Source<'_> {
         if removals.is_empty() {
             return src.to_string();
         }
-        // Emit the combined std140 block once, at the first removed declaration's site.
+        // Emit the combined std140 block once in the unconditional prologue. Splicing it at the first removed
+        // declaration is unsound: that declaration may sit below `#if 0`, which preprocesses the replacement
+        // block away after every later bare declaration has already been removed.
         let mut block = String::new();
         Declarations::emit_uniform_block(&mut block, combined);
-        let insert_at = removals[0].0;
+        let insert_at = self.uniform_block_insertion();
+        debug_assert!(insert_at <= removals[0].0);
         let mut out = String::with_capacity(n + block.len());
-        let mut cursor = 0usize;
-        for (idx, (s, e)) in removals.iter().enumerate() {
+        out.push_str(&src[..insert_at]);
+        out.push_str(&block);
+        let mut cursor = insert_at;
+        for (s, e) in &removals {
             out.push_str(&src[cursor..*s]);
-            if idx == 0 {
-                // Splice the block where the first bare declaration was.
-                debug_assert_eq!(*s, insert_at);
-                out.push_str(&block);
-            }
             cursor = *e;
         }
         out.push_str(&src[cursor..]);
         out
+    }
+
+    /// Byte position after the stage's leading unconditional directive prologue. Conditional directives end
+    /// the prologue: inserting after `#if` would make the generated block conditional. Comments, blank lines,
+    /// `#version`, extensions, defines, pragmas, and continued directive lines remain before the block.
+    fn uniform_block_insertion(self) -> usize {
+        let bytes = self.text.as_bytes();
+        let mut offset = 0usize;
+        let mut block_comment = false;
+        let mut directive_continuation = false;
+
+        while offset < bytes.len() {
+            let line_end = bytes[offset..]
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(bytes.len(), |relative| offset + relative + 1);
+            let mut line = &self.text[offset..line_end];
+
+            if directive_continuation {
+                directive_continuation = line.trim_end().ends_with('\\');
+                offset = line_end;
+                continue;
+            }
+
+            loop {
+                line = line.trim_start();
+                if block_comment {
+                    let Some(end) = line.find("*/") else {
+                        offset = line_end;
+                        break;
+                    };
+                    line = &line[end + 2..];
+                    block_comment = false;
+                    continue;
+                }
+                if line.starts_with("/*") {
+                    block_comment = true;
+                    line = &line[2..];
+                    continue;
+                }
+                break;
+            }
+            if block_comment {
+                continue;
+            }
+
+            let trimmed = line.trim_start();
+            if trimmed.is_empty() || trimmed.starts_with("//") {
+                offset = line_end;
+                continue;
+            }
+            let Some(directive) = trimmed.strip_prefix('#') else {
+                break;
+            };
+            let name = directive
+                .trim_start()
+                .split(|character: char| character.is_whitespace() || character == '(')
+                .next()
+                .unwrap_or("");
+            if matches!(name, "if" | "ifdef" | "ifndef" | "elif" | "else" | "endif") {
+                break;
+            }
+            directive_continuation = trimmed.trim_end().ends_with('\\');
+            offset = line_end;
+        }
+
+        offset
     }
 }
 
@@ -285,9 +354,18 @@ impl Source<'_> {
 /// already carry `layout(location=)`) has no bare data uniform and no bare depth-0 `in`/`out`, so both steps
 /// return their stage byte-identical.
 pub fn prepare_verbatim_program(vs: &str, fs: &str, combined: &[Decl]) -> (String, String) {
+    prepare_verbatim_program_with(vs, fs, combined, &std::collections::BTreeMap::new())
+}
+
+pub fn prepare_verbatim_program_with(
+    vs: &str,
+    fs: &str,
+    combined: &[Decl],
+    attribute_bindings: &std::collections::BTreeMap<String, u32>,
+) -> (String, String) {
     let vs_u = Source::new(vs).prepare_verbatim_stage(combined);
     let fs_u = Source::new(fs).prepare_verbatim_stage(combined);
-    StageSources::new(&vs_u, &fs_u).inject_io_locations()
+    StageSources::new(&vs_u, &fs_u).inject_io_locations_with(attribute_bindings)
 }
 
 // A depth-0 `in`/`out` interface declaration found in a verbatim stage (an attribute, a varying, or a

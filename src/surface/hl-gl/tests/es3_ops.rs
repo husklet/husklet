@@ -11,15 +11,57 @@ use hl_gl::service::{compute, map, record, sync};
 use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::descriptor::BindResource;
 use hl_gpu::protocol::model::enums::buffer_usage;
-use hl_gpu::{Cmd, FenceId, RecordingSink};
+use hl_gpu::{
+    BufferId, Capabilities, Cmd, CommandSink, FeatureRequest, FenceId, RecordingSink, Result,
+};
+
+struct DelayedSink {
+    recording: RecordingSink,
+    complete: bool,
+}
+
+impl CommandSink for DelayedSink {
+    fn negotiate(&mut self, request: &FeatureRequest) -> Result<Capabilities> {
+        self.recording.negotiate(request)
+    }
+
+    fn submit(&mut self, batch: &[Cmd]) -> Result<()> {
+        self.recording.submit(batch)
+    }
+
+    fn wait(&mut self, fence: FenceId, value: u64) -> Result<()> {
+        self.recording.wait(fence, value)
+    }
+
+    fn poll_fence(&mut self, _fence: FenceId, _value: u64) -> Result<bool> {
+        Ok(self.complete)
+    }
+
+    fn wait_timeout(
+        &mut self,
+        _fence: FenceId,
+        _value: u64,
+        _timeout_ns: u64,
+    ) -> Result<hl_gpu::FenceWait> {
+        Ok(if self.complete {
+            hl_gpu::FenceWait::Complete
+        } else {
+            hl_gpu::FenceWait::Timeout
+        })
+    }
+
+    fn read_buffer(&mut self, id: BufferId, offset: u64, len: usize) -> Result<Vec<u8>> {
+        self.recording.read_buffer(id, offset, len)
+    }
+}
 
 fn ctx() -> GlContext {
     let mut c = GlContext::new();
-    c.surf = GlSurface {
+    c.set_surface(GlSurface {
         have: true,
         width: 320,
         height: 240,
-    };
+    });
     c
 }
 
@@ -36,7 +78,7 @@ fn submit_ops(batch: &[Cmd]) -> &[Enc] {
 const CS: &str = "#version 310 es\nlayout(local_size_x=1) in;\nlayout(std430, binding=0) buffer B { uint v[]; };\nvoid main(){ v[gl_GlobalInvocationID.x] += 1u; }\n";
 
 /// Build + bind a linked compute program with one SSBO at binding 0.
-fn setup_compute(c: &mut GlContext) {
+fn setup_compute(c: &mut GlContext) -> u32 {
     let cs = record::create_shader(c, GL_COMPUTE_SHADER);
     record::shader_source(c, cs, CS);
     record::compile_shader(c, cs);
@@ -54,6 +96,7 @@ fn setup_compute(c: &mut GlContext) {
     record::bind_buffer(c, GL_SHADER_STORAGE_BUFFER, ssbo);
     record::buffer_data(c, GL_SHADER_STORAGE_BUFFER, &[7u8; 32], 0x88E9);
     record::bind_buffer_base(c, GL_SHADER_STORAGE_BUFFER, 0, ssbo);
+    ssbo
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -69,8 +112,8 @@ fn dispatch_compute_emits_compute_pipeline_and_dispatch() {
     compute::dispatch_compute(&mut c, &mut sink, 4, 2, 1).unwrap();
     assert_eq!(
         sink.batches.len(),
-        1,
-        "a dispatch submits exactly one batch immediately"
+        2,
+        "a dispatch submits work then retires its transient resources"
     );
     let batch = &sink.batches[0];
 
@@ -120,6 +163,81 @@ fn dispatch_compute_emits_compute_pipeline_and_dispatch() {
         "the grid lowers into a Dispatch: {ops:?}"
     );
     assert!(matches!(ops.last(), Some(Enc::EndComputePass)));
+    assert_eq!(sink.reads.len(), 1, "the writable SSBO is read back");
+    assert!(sink.batches[1]
+        .iter()
+        .any(|command| matches!(command, Cmd::DestroyBuffer(_))));
+    assert!(sink.batches[1]
+        .iter()
+        .any(|command| matches!(command, Cmd::DestroyBindGroup(_))));
+    assert!(sink.batches[1]
+        .iter()
+        .any(|command| matches!(command, Cmd::DestroyPipeline(_))));
+    assert!(sink.batches[1]
+        .iter()
+        .any(|command| matches!(command, Cmd::DestroyShader(_))));
+}
+
+#[test]
+fn repeated_dispatch_starts_from_the_previous_ssbo_writeback() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    let ssbo = setup_compute(&mut c);
+
+    compute::dispatch_compute(&mut c, &mut sink, 1, 1, 1).unwrap();
+    assert_eq!(c.buffers.get(ssbo).unwrap().data.as_slice(), &[0; 32]);
+    c.buffers.set_sub_data(ssbo, 0, &[9; 32]);
+    compute::dispatch_compute(&mut c, &mut sink, 1, 1, 1).unwrap();
+
+    let second_work = &sink.batches[2];
+    assert!(second_work
+        .iter()
+        .any(|command| matches!(command, Cmd::WriteBuffer { data, .. } if data == &[9; 32])));
+    assert_eq!(sink.reads.len(), 2);
+}
+
+#[test]
+fn compute_writeback_is_visible_to_a_later_vertex_draw() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    let buffer = setup_compute(&mut c);
+
+    compute::dispatch_compute(&mut c, &mut sink, 1, 1, 1).unwrap();
+    record::bind_buffer(&mut c, GL_ARRAY_BUFFER, buffer);
+    record::vertex_attrib_pointer(&mut c, 0, 4, GL_FLOAT, false, 16, 0);
+    record::enable_vertex_attrib(&mut c, 0);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 2);
+
+    let snapshot = c.draws().last().unwrap().buffers.first().unwrap();
+    assert_eq!(snapshot.name, buffer);
+    assert_eq!(snapshot.data.as_slice(), &[0; 32]);
+}
+
+#[test]
+fn compute_ubo_and_ssbo_bindings_have_distinct_host_slots() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_compute(&mut c);
+    let ubo = c.buffers.gen();
+    record::bind_buffer(&mut c, GL_UNIFORM_BUFFER, ubo);
+    record::buffer_data(&mut c, GL_UNIFORM_BUFFER, &[3; 256], 0);
+    record::bind_buffer_base(&mut c, GL_UNIFORM_BUFFER, 0, ubo);
+
+    compute::dispatch_compute(&mut c, &mut sink, 1, 1, 1).unwrap();
+
+    let group = sink.batches[0]
+        .iter()
+        .find_map(|command| match command {
+            Cmd::CreateBindGroup(_, descriptor) => Some(descriptor),
+            _ => None,
+        })
+        .unwrap();
+    let bindings = group
+        .entries
+        .iter()
+        .map(|entry| entry.binding)
+        .collect::<Vec<_>>();
+    assert_eq!(bindings, vec![0, MAX_SHADER_STORAGE_BUFFER_BINDINGS]);
 }
 
 #[test]
@@ -160,12 +278,28 @@ fn fence_sync_signals_and_client_wait_waits_the_ir_fence() {
 
     // Before waiting the fence reads unsignaled.
     assert_eq!(
-        sync::get_synciv(&mut c, token, GL_SYNC_STATUS),
+        sync::get_synciv(&mut c, &mut sink, token, GL_SYNC_STATUS),
         Some(GL_UNSIGNALED as i32)
     );
+    assert!(
+        sink.waits.is_empty(),
+        "queue acceptance must not be mistaken for GPU completion"
+    );
+    assert_eq!(
+        sync::client_wait_sync(&mut c, &mut sink, token, 0, 0),
+        GL_TIMEOUT_EXPIRED,
+        "a zero-time poll remains unsignaled until the executor wait completes"
+    );
+    assert!(sink.waits.is_empty(), "polling must not block the executor");
 
     // A client wait (with the flush bit) blocks on that fence value + returns satisfied.
-    let r = sync::client_wait_sync(&mut c, &mut sink, token, GL_SYNC_FLUSH_COMMANDS_BIT, 0);
+    let r = sync::client_wait_sync(
+        &mut c,
+        &mut sink,
+        token,
+        GL_SYNC_FLUSH_COMMANDS_BIT,
+        u64::MAX,
+    );
     assert_eq!(r, GL_CONDITION_SATISFIED);
     assert_eq!(
         sink.waits,
@@ -175,7 +309,7 @@ fn fence_sync_signals_and_client_wait_waits_the_ir_fence() {
 
     // Now it reads signalled, and a second wait short-circuits to ALREADY_SIGNALED.
     assert_eq!(
-        sync::get_synciv(&mut c, token, GL_SYNC_STATUS),
+        sync::get_synciv(&mut c, &mut sink, token, GL_SYNC_STATUS),
         Some(GL_SIGNALED as i32)
     );
     assert_eq!(
@@ -188,6 +322,36 @@ fn fence_sync_signals_and_client_wait_waits_the_ir_fence() {
     assert!(!c.has_sync(token));
     assert!(sync::fence_sync(&mut c, &mut sink, 0, 0).is_none());
     assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
+}
+
+#[test]
+fn fence_status_becomes_signaled_from_nonblocking_executor_poll() {
+    let mut c = ctx();
+    let mut sink = DelayedSink {
+        recording: RecordingSink::with_full_caps(),
+        complete: false,
+    };
+    let token = sync::fence_sync(&mut c, &mut sink, GL_SYNC_GPU_COMMANDS_COMPLETE, 0).unwrap();
+
+    assert_eq!(
+        sync::get_synciv(&mut c, &mut sink, token, GL_SYNC_STATUS),
+        Some(GL_UNSIGNALED as i32)
+    );
+    assert!(sink.recording.waits.is_empty());
+    assert_eq!(
+        sync::client_wait_sync(&mut c, &mut sink, token, 0, 50_000),
+        GL_TIMEOUT_EXPIRED
+    );
+
+    sink.complete = true;
+    assert_eq!(
+        sync::get_synciv(&mut c, &mut sink, token, GL_SYNC_STATUS),
+        Some(GL_SIGNALED as i32)
+    );
+    assert!(
+        sink.recording.waits.is_empty(),
+        "status observation must never use the blocking wait path"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -207,10 +371,12 @@ fn bind_buffer_base_and_range_record_the_indexed_binding() {
         "base binds the whole buffer"
     );
 
-    record::bind_buffer_range(&mut c, GL_SHADER_STORAGE_BUFFER, 1, 9, 16, 64);
+    record::bind_buffer(&mut c, GL_SHADER_STORAGE_BUFFER, 9);
+    record::buffer_data(&mut c, GL_SHADER_STORAGE_BUFFER, &[0; 512], 0);
+    record::bind_buffer_range(&mut c, GL_SHADER_STORAGE_BUFFER, 1, 9, 256, 64);
     let b = record::indexed_buffer_binding(&c, GL_SHADER_STORAGE_BUFFER, 1)
         .expect("an SSBO range at index 1");
-    assert_eq!((b.buffer, b.offset, b.size), (9, 16, 64));
+    assert_eq!((b.buffer, b.offset, b.size), (9, 256, 64));
 
     // Unbinding (buffer 0) clears the slot.
     record::bind_buffer_base(&mut c, GL_UNIFORM_BUFFER, 2, 0);
@@ -237,10 +403,11 @@ fn map_write_unmap_flushes_a_write_buffer() {
     record::buffer_data(&mut c, GL_ARRAY_BUFFER, &[0u8; 32], 0x88E4);
 
     // Map [8, 8+4), write four bytes through the buffer's storage (as the app would via the pointer).
-    let (name, off) =
-        map::map_buffer_range(&mut c, GL_ARRAY_BUFFER, 8, 4, 0).expect("a mapped range");
+    let (name, off) = map::map_buffer_range(&mut c, GL_ARRAY_BUFFER, 8, 4, GL_MAP_WRITE_BIT)
+        .expect("a mapped range");
     assert_eq!((name, off), (buf, 8));
-    c.buffers.get_mut(buf).unwrap().data[off..off + 4].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+    std::sync::Arc::make_mut(&mut c.buffers.get_mut(buf).unwrap().data)[off..off + 4]
+        .copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
 
     // Unmap flushes the mapped range to the device as a WriteBuffer of the written bytes.
     assert_eq!(
@@ -281,17 +448,17 @@ fn draw_buffers_and_read_buffer_record_and_validate() {
         &[GL_COLOR_ATTACHMENT0, GL_NONE, GL_COLOR_ATTACHMENT1],
     );
     assert_eq!(
-        c.draw_buffers,
+        c.draw_buffers(),
         vec![GL_COLOR_ATTACHMENT0, GL_NONE, GL_COLOR_ATTACHMENT1]
     );
 
     record::read_buffer(&mut c, GL_COLOR_ATTACHMENT1);
-    assert_eq!(c.read_buffer_src, GL_COLOR_ATTACHMENT1);
+    assert_eq!(c.read_buffer_source(), GL_COLOR_ATTACHMENT1);
 
     // An invalid selector is GL_INVALID_ENUM and leaves state unchanged.
     record::read_buffer(&mut c, GL_ARRAY_BUFFER);
     assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
-    assert_eq!(c.read_buffer_src, GL_COLOR_ATTACHMENT1);
+    assert_eq!(c.read_buffer_source(), GL_COLOR_ATTACHMENT1);
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -308,10 +475,17 @@ fn flush_mapped_range_flushes_a_subrange_while_still_mapped() {
     record::buffer_data(&mut c, GL_ARRAY_BUFFER, &[0u8; 32], 0x88E4);
 
     // Map [4, 4+16) then write through the buffer's storage as the app would via the pointer.
-    let (name, off) =
-        map::map_buffer_range(&mut c, GL_ARRAY_BUFFER, 4, 16, 0).expect("a mapped range");
+    let (name, off) = map::map_buffer_range(
+        &mut c,
+        GL_ARRAY_BUFFER,
+        4,
+        16,
+        GL_MAP_WRITE_BIT | GL_MAP_FLUSH_EXPLICIT_BIT,
+    )
+    .expect("a mapped range");
     assert_eq!((name, off), (buf, 4));
-    c.buffers.get_mut(buf).unwrap().data[off..off + 8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+    std::sync::Arc::make_mut(&mut c.buffers.get_mut(buf).unwrap().data)[off..off + 8]
+        .copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
 
     // Flush the FIRST 8 bytes of the mapping (relative offset 0, length 8) — still mapped, no unmap.
     map::flush_mapped_range(&mut c, &mut sink, GL_ARRAY_BUFFER, 0, 8).unwrap();

@@ -1,0 +1,81 @@
+use crate::model::glconst;
+
+/// Fixed-function state captured when a draw or clear is recorded.
+///
+/// Keeping these values together prevents pipeline identity and command recording from observing
+/// different generations of logically atomic GL state.
+pub(crate) struct PipelineState {
+    pub(crate) clear_color: [f32; 4],
+    pub(crate) clear_depth: f32,
+    pub(crate) viewport: [i32; 4],
+    pub(crate) scissor_enabled: bool,
+    pub(crate) scissor: [i32; 4],
+    pub(crate) blend: bool,
+    pub(crate) blend_src_rgb: u32,
+    pub(crate) blend_dst_rgb: u32,
+    pub(crate) blend_src_alpha: u32,
+    pub(crate) blend_dst_alpha: u32,
+    pub(crate) blend_eq_rgb: u32,
+    pub(crate) blend_eq_alpha: u32,
+    pub(crate) blend_color: [f32; 4],
+    pub(crate) depth: bool,
+    pub(crate) depth_func: u32,
+    pub(crate) depth_write: bool,
+    pub(crate) stencil: bool,
+    pub(crate) stencil_func_front: u32,
+    pub(crate) stencil_func_back: u32,
+    pub(crate) stencil_fail_front: u32,
+    pub(crate) stencil_zfail_front: u32,
+    pub(crate) stencil_zpass_front: u32,
+    pub(crate) stencil_fail_back: u32,
+    pub(crate) stencil_zfail_back: u32,
+    pub(crate) stencil_zpass_back: u32,
+    pub(crate) stencil_ref: i32,
+    pub(crate) stencil_read_mask: u32,
+    pub(crate) stencil_write_mask: u32,
+    pub(crate) clear_stencil: i32,
+    pub(crate) cull_enabled: bool,
+    pub(crate) cull_face: u32,
+    pub(crate) front_face: u32,
+    pub(crate) color_mask: u32,
+}
+
+impl Default for PipelineState {
+    fn default() -> Self {
+        Self {
+            clear_color: [0.0; 4],
+            clear_depth: 1.0,
+            viewport: [0; 4],
+            scissor_enabled: false,
+            scissor: [0; 4],
+            blend: false,
+            blend_src_rgb: glconst::GL_ONE,
+            blend_dst_rgb: glconst::GL_ZERO,
+            blend_src_alpha: glconst::GL_ONE,
+            blend_dst_alpha: glconst::GL_ZERO,
+            blend_eq_rgb: glconst::GL_FUNC_ADD,
+            blend_eq_alpha: glconst::GL_FUNC_ADD,
+            blend_color: [0.0; 4],
+            depth: false,
+            depth_func: glconst::GL_LESS,
+            depth_write: true,
+            stencil: false,
+            stencil_func_front: glconst::GL_ALWAYS,
+            stencil_func_back: glconst::GL_ALWAYS,
+            stencil_fail_front: glconst::GL_KEEP,
+            stencil_zfail_front: glconst::GL_KEEP,
+            stencil_zpass_front: glconst::GL_KEEP,
+            stencil_fail_back: glconst::GL_KEEP,
+            stencil_zfail_back: glconst::GL_KEEP,
+            stencil_zpass_back: glconst::GL_KEEP,
+            stencil_ref: 0,
+            stencil_read_mask: u32::MAX,
+            stencil_write_mask: u32::MAX,
+            clear_stencil: 0,
+            cull_enabled: false,
+            cull_face: glconst::GL_BACK,
+            front_face: glconst::GL_CCW,
+            color_mask: 0xf,
+        }
+    }
+}

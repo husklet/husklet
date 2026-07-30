@@ -6,10 +6,10 @@
 use core::ffi::{c_char, c_void};
 
 use hl_gpu::protocol::model::descriptor::{
-    BlendState, DepthState, StencilFaceState, VertexAttr, VertexLayout,
+    BlendState, DepthState, StencilFaceState, TextureViewDesc, VertexAttr, VertexLayout,
 };
-use hl_gpu::protocol::model::enums::{compare, TextureFormat, Topology};
-use hl_gpu::CommandSink;
+use hl_gpu::protocol::model::enums::{compare, TextureAspect, TextureDim, TextureFormat, Topology};
+use hl_gpu::{Cmd, CommandSink};
 use hl_vulkan::adapter::wayland_app::WaylandAppPresenter;
 use hl_vulkan::model::memory::Format;
 use hl_vulkan::result::Status;
@@ -17,7 +17,7 @@ use hl_vulkan::service::record::{RenderingColorAttachment, RenderingDepthAttachm
 use hl_vulkan::service::{create, present, record};
 use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
 
-use crate::state::{RenderPassDepth, RenderPassRec, StateStore, WaylandWindow};
+use crate::state::{RenderPassDepth, RenderPassRec, StateStore};
 use crate::types::*;
 
 mod draw;

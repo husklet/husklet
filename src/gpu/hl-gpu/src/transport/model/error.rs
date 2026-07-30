@@ -1,0 +1,96 @@
+/// The transport phase that failed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransportPhase {
+    Connect,
+    Handshake,
+    FrameWrite,
+    Acknowledgement,
+    RequestWrite,
+    ResponseRead,
+}
+
+/// A typed remote transport failure.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TransportError {
+    /// No request bytes reached the peer, so a caller may retry on a fresh connection.
+    Unavailable {
+        phase: TransportPhase,
+        detail: String,
+    },
+    /// The configured phase deadline elapsed.
+    Timeout {
+        phase: TransportPhase,
+        /// The peer may already have acted on the request.
+        ambiguous: bool,
+    },
+    /// The peer may have acted on a request whose outcome could not be observed.
+    Ambiguous {
+        phase: TransportPhase,
+        detail: String,
+    },
+    /// The peer explicitly rejected a complete request.
+    Rejected {
+        phase: TransportPhase,
+        acknowledgement: u8,
+    },
+    /// The executor contract changed or can no longer reconstruct acknowledged residency.
+    ApiLost { detail: String },
+    /// An earlier ambiguous failure permanently retired this sink.
+    Poisoned { cause: String },
+}
+
+impl TransportError {
+    pub fn phase(&self) -> Option<TransportPhase> {
+        match self {
+            Self::Unavailable { phase, .. }
+            | Self::Timeout { phase, .. }
+            | Self::Ambiguous { phase, .. }
+            | Self::Rejected { phase, .. } => Some(*phase),
+            Self::ApiLost { .. } | Self::Poisoned { .. } => None,
+        }
+    }
+
+    pub fn retryable_before_request(&self) -> bool {
+        matches!(
+            self,
+            Self::Unavailable { .. }
+                | Self::Timeout {
+                    ambiguous: false,
+                    ..
+                }
+        )
+    }
+}
+
+impl std::fmt::Display for TransportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unavailable { phase, detail } => {
+                write!(f, "transport {phase:?} unavailable: {detail}")
+            }
+            Self::Timeout { phase, ambiguous } => {
+                write!(f, "transport {phase:?} timed out")?;
+                if *ambiguous {
+                    f.write_str(" with an ambiguous outcome")?;
+                }
+                Ok(())
+            }
+            Self::Ambiguous { phase, detail } => {
+                write!(f, "transport {phase:?} outcome is ambiguous: {detail}")
+            }
+            Self::Rejected {
+                phase,
+                acknowledgement,
+            } => {
+                write!(
+                    f,
+                    "host rejected request during {phase:?} (ack={acknowledgement})"
+                )
+            }
+            Self::ApiLost { detail } => write!(f, "GPU API lost: {detail}"),
+            Self::Poisoned { cause } => write!(f, "transport is lost: {cause}"),
+        }
+    }
+}
+
+impl std::error::Error for TransportError {}

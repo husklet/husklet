@@ -20,12 +20,13 @@ pub mod transport;
 pub use protocol::codec::{Decoder, Encoder};
 pub use protocol::model::capability::{Capabilities, FeatureRequest, PresentKind};
 pub use protocol::model::command::{Cmd, CommandBuffer, Enc, ShaderPayloadKind, WIRE_VERSION};
+pub use protocol::model::descriptor::{FrameSerial, SurfaceToken};
 pub use protocol::model::error::{GpuError, Result};
 pub use protocol::model::id::{
     BindGroupId, BufferId, FenceId, PipelineId, ResourceTable, SamplerId, ShaderId, SurfaceId,
     TextureId,
 };
-pub use protocol::port::sink::{CommandSink, RecordingSink};
+pub use protocol::port::sink::{CommandSink, FenceWait, RecordingSink};
 
 // Runtime layer: the per-connection Session that validates + accounts a decoded batch and dispatches it
 // to an injected GpuExecutor (built on top of `protocol`).
@@ -35,7 +36,8 @@ pub use runtime::{
 };
 pub use transport::{
     serve, serve_connection, serve_connection_with_handler, ConnectionHandler, GpuAlloc,
-    ReadbackRequest, RemoteCommandSink, Surface,
+    ReadbackRequest, RemoteCommandSink, Surface, TransportConfig, TransportConfigError,
+    TransportError, TransportPhase,
 };
 
 // The reference CPU executor (the semantic oracle): a pure, platform-free `GpuExecutor` a composition

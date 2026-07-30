@@ -1,4 +1,9 @@
 use super::*;
+
+mod fence;
+mod image;
+pub use fence::*;
+pub use image::*;
 // ==================================================================================================
 // EGL: the remaining lifecycle / query / sync / image / surface-creation entry points
 // ==================================================================================================
@@ -43,11 +48,19 @@ pub(super) extern "C" fn eglGetPlatformDisplayEXT(
 /// window-surface getter; `native_window` is the `wl_egl_window*`. Brings up the window surface exactly
 /// like the core `eglCreatePlatformWindowSurface`.
 pub(super) extern "C" fn eglCreatePlatformWindowSurfaceEXT(
-    _dpy: *mut c_void,
-    _config: *mut c_void,
+    dpy: *mut c_void,
+    config: *mut c_void,
     native_window: *mut c_void,
     _attrib_list: *const i32,
 ) -> *mut c_void {
+    if dpy as usize != DISPLAY_TOKEN {
+        GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
+        return core::ptr::null_mut();
+    }
+    if config as usize != CONFIG_TOKEN {
+        GlobalState::access(|s| s.set_egl_error(EGL_BAD_CONFIG));
+        return core::ptr::null_mut();
+    }
     WindowSurface::create(native_window)
 }
 /// `eglCreatePlatformPixmapSurfaceEXT(...)` — `EGL_EXT_platform_base` pixmap-surface getter; a fresh
@@ -69,7 +82,9 @@ pub(super) extern "C" fn eglCreatePlatformPixmapSurfaceEXT(
 // `EGL_EXT_device_base`/`device_query`/`EGL_KHR_display_reference`/`EGL_NV_stream_metadata` and then
 // calls `eglQueryDisplayAttribEXT` to learn the display's backing device.
 //
-// The model is one truthful software device ([`DEVICE_TOKEN`]) representing our hl-gl renderer. Every
+// The model is one truthful device ([`DEVICE_TOKEN`]) representing the hl-gl renderer backed by Husklet's
+// projected `/dev/dri/renderD128`. It advertises only `EGL_EXT_device_drm_render_node`: there is no primary
+// DRM node, physical vendor/device identity, or other native-device attribute to report. Every
 // body is panic-free across the C-ABI seam (raw pointers null-checked, unknown handles/attributes raise
 // the accurate `EGL_*` error and return `EGL_FALSE`/null — never a deref crash or fabricated value),
 // mirroring the `eglGetConfigAttrib` / `eglGetConfigs` contract discipline. Resolved only via
@@ -78,7 +93,7 @@ pub(super) extern "C" fn eglCreatePlatformPixmapSurfaceEXT(
 
 /// `eglQueryDisplayAttribEXT(dpy, attribute, value)` — a display attribute (`EGLAttrib`, i.e. `intptr_t`).
 /// GDK asks `EGL_DEVICE_EXT` to learn the display's backing `EGLDeviceEXT`; we answer with our single
-/// software device. A null `value` is `EGL_BAD_PARAMETER`; an attribute we do not model is
+/// hl-gl device. A null `value` is `EGL_BAD_PARAMETER`; an attribute we do not model is
 /// `EGL_BAD_ATTRIBUTE` — both `EGL_FALSE` WITHOUT writing / dereferencing `value`.
 pub(super) extern "C" fn eglQueryDisplayAttribEXT(
     _dpy: *mut c_void,
@@ -118,23 +133,25 @@ pub(super) extern "C" fn eglQueryDeviceAttribEXT(
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_PARAMETER));
         return EGL_FALSE;
     }
-    // No integer device attributes are modeled for a software device.
+    // No integer device attributes are modeled for the projected render-node device.
     GlobalState::access(|s| s.set_egl_error(EGL_BAD_ATTRIBUTE));
     EGL_FALSE
 }
 
 /// `eglQueryDeviceStringEXT(device, name)` — a string describing the `EGLDeviceEXT`. `EGL_EXTENSIONS`
-/// returns the device-level extension string (empty: our software device advertises no device extensions).
+/// reports `EGL_EXT_device_drm_render_node`; `EGL_DRM_RENDER_NODE_FILE_EXT` returns the projected render
+/// node backing hl-gl. We deliberately do not advertise `EGL_EXT_device_drm` or return a primary-node path.
 /// A foreign device handle is `EGL_BAD_DEVICE_EXT` + null; an unmodeled `name` is `EGL_BAD_PARAMETER` +
-/// null (never a dangling pointer). The returned pointer is process-static (valid for the app's lifetime).
+/// null (never a dangling pointer). Returned pointers are process-static (valid for the app's lifetime).
 pub(super) extern "C" fn eglQueryDeviceStringEXT(device: *mut c_void, name: i32) -> *const c_char {
     if device as usize != DEVICE_TOKEN {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_DEVICE_EXT));
         return core::ptr::null();
     }
     match name {
-        // The device's own extension string (client/display device extensions live on eglQueryString).
-        EGL_EXTENSIONS_Q => b"\0".as_ptr() as *const c_char,
+        // Device extensions are separate from the client/display extension strings.
+        EGL_EXTENSIONS_Q => b"EGL_EXT_device_drm_render_node\0".as_ptr() as *const c_char,
+        EGL_DRM_RENDER_NODE_FILE_EXT => b"/dev/dri/renderD128\0".as_ptr() as *const c_char,
         _ => {
             GlobalState::access(|s| s.set_egl_error(EGL_BAD_PARAMETER));
             core::ptr::null()
@@ -143,7 +160,7 @@ pub(super) extern "C" fn eglQueryDeviceStringEXT(device: *mut c_void, name: i32)
 }
 
 /// `eglQueryDevicesEXT(max_devices, devices, num_devices)` — enumerate the `EGLDeviceEXT`s. This driver
-/// reports its single software device. Same enumeration contract as `eglGetConfigs`: a null `devices`
+/// reports its single projected render-node device. Same enumeration contract as `eglGetConfigs`: a null `devices`
 /// array reports the count in `num_devices`; a real array copies up to `max_devices` handles (bounded, no
 /// OOB store) and `num_devices` reports how many were written. `num_devices` is required (`EGL_BAD_PARAMETER`
 /// if null); a non-null `devices` with `max_devices <= 0` is `EGL_BAD_PARAMETER` (spec).
@@ -156,7 +173,7 @@ pub(super) extern "C" fn eglQueryDevicesEXT(
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_PARAMETER));
         return EGL_FALSE;
     }
-    const AVAILABLE: i32 = 1; // our single software device
+    const AVAILABLE: i32 = 1;
     if devices.is_null() {
         // Count-only query.
         unsafe { *num_devices = AVAILABLE };
@@ -185,6 +202,11 @@ pub extern "C" fn eglQueryAPI() -> u32 {
 /// binding is dropped (the bound API resets to the `EGL_OPENGL_ES_API` default via the released cells).
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglReleaseThread() -> u32 {
+    let context = current::context();
+    if context != 0 {
+        let previous = (context, current::draw_surface(), current::read_surface());
+        let _ = GlobalState::bind_current(previous, (0, 0, 0));
+    }
     current::release();
     EGL_TRUE
 }
@@ -246,19 +268,35 @@ pub extern "C" fn eglCopyBuffers(
 /// read `0` and still succeed.
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglQueryContext(
-    _dpy: *mut c_void,
-    _ctx: *mut c_void,
+    dpy: *mut c_void,
+    ctx: *mut c_void,
     attribute: i32,
     value: *mut i32,
 ) -> u32 {
     if value.is_null() {
+        GlobalState::access(|s| s.set_egl_error(EGL_BAD_PARAMETER));
         return EGL_FALSE;
     }
+    if dpy as usize != DISPLAY_TOKEN {
+        GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
+        return EGL_FALSE;
+    }
+    let Some(attributes) = GlobalState::access(|s| s.context_attributes(ctx as usize)) else {
+        GlobalState::access(|s| s.set_egl_error(EGL_BAD_CONTEXT));
+        return EGL_FALSE;
+    };
     let v = match attribute {
         EGL_CONTEXT_CLIENT_TYPE => EGL_OPENGL_ES_API as i32,
-        EGL_CONTEXT_CLIENT_VERSION => 3,
+        EGL_CONTEXT_CLIENT_VERSION => attributes.client_version,
+        EGL_CONTEXT_MINOR_VERSION_KHR => attributes.minor_version,
+        EGL_CONTEXT_OPENGL_ROBUST_ACCESS_EXT => attributes.robust_access as i32,
+        EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT => attributes.reset_strategy,
+        EGL_CONTEXT_OPENGL_NO_ERROR_KHR => attributes.no_error as i32,
         EGL_RENDER_BUFFER => EGL_BACK_BUFFER,
-        _ => 0,
+        _ => {
+            GlobalState::access(|s| s.set_egl_error(EGL_BAD_ATTRIBUTE));
+            return EGL_FALSE;
+        }
     };
     unsafe { *value = v };
     EGL_TRUE
@@ -267,19 +305,35 @@ pub extern "C" fn eglQueryContext(
 /// report the live window-surface size (real); other attributes read `0`.
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglQuerySurface(
-    _dpy: *mut c_void,
-    _surface: *mut c_void,
+    dpy: *mut c_void,
+    surface: *mut c_void,
     attribute: i32,
     value: *mut i32,
 ) -> u32 {
     if value.is_null() {
+        GlobalState::access(|s| s.set_egl_error(EGL_BAD_PARAMETER));
         return EGL_FALSE;
     }
-    let v = GlobalState::access(|s| match attribute {
-        EGL_WIDTH => s.ctx.surf.width as i32,
-        EGL_HEIGHT => s.ctx.surf.height as i32,
-        _ => 0,
-    });
+    if dpy as usize != DISPLAY_TOKEN {
+        GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
+        return EGL_FALSE;
+    }
+    let Some(v) = GlobalState::access(|s| {
+        let surface = s.surface(surface as usize)?;
+        match attribute {
+            EGL_WIDTH => Some(surface.render.width as i32),
+            EGL_HEIGHT => Some(surface.render.height as i32),
+            _ => None,
+        }
+    }) else {
+        let error = if GlobalState::access(|s| s.has_surface(surface as usize)) {
+            EGL_BAD_ATTRIBUTE
+        } else {
+            EGL_BAD_SURFACE
+        };
+        GlobalState::access(|s| s.set_egl_error(error));
+        return EGL_FALSE;
+    };
     unsafe { *value = v };
     EGL_TRUE
 }
@@ -287,18 +341,27 @@ pub extern "C" fn eglQuerySurface(
 /// surface sized from the environment (the driver renders to one color target); returns a fresh token.
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglCreatePbufferSurface(
-    _dpy: *mut c_void,
-    _config: *mut c_void,
+    dpy: *mut c_void,
+    config: *mut c_void,
     _attrib_list: *const i32,
 ) -> *mut c_void {
+    if dpy as usize != DISPLAY_TOKEN {
+        GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
+        return core::ptr::null_mut();
+    }
+    if config as usize != CONFIG_TOKEN {
+        GlobalState::access(|s| s.set_egl_error(EGL_BAD_CONFIG));
+        return core::ptr::null_mut();
+    }
     let (width, height) = default_surface_wh();
     GlobalState::access(|s| {
-        s.ctx.surf = GlSurface {
-            have: true,
+        s.create_surface(
+            hl_gl::model::context::SurfaceKind::Offscreen,
             width,
             height,
-        };
-        s.mint_token()
+            0,
+            0,
+        )
     })
 }
 /// `eglCreatePixmapSurface(dpy, config, pixmap, attrib_list)` — a native-pixmap-backed surface; modeled as
@@ -329,11 +392,19 @@ pub extern "C" fn eglCreatePbufferFromClientBuffer(
 /// (size + Wayland present session) exactly like `eglCreateWindowSurface`.
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglCreatePlatformWindowSurface(
-    _dpy: *mut c_void,
-    _config: *mut c_void,
+    dpy: *mut c_void,
+    config: *mut c_void,
     native_window: *mut c_void,
     _attrib_list: *const isize,
 ) -> *mut c_void {
+    if dpy as usize != DISPLAY_TOKEN {
+        GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
+        return core::ptr::null_mut();
+    }
+    if config as usize != CONFIG_TOKEN {
+        GlobalState::access(|s| s.set_egl_error(EGL_BAD_CONFIG));
+        return core::ptr::null_mut();
+    }
     WindowSurface::create(native_window)
 }
 /// `eglCreatePlatformPixmapSurface(...)` — the EGL 1.5 pixmap-surface getter; a fresh surface token.
@@ -345,63 +416,4 @@ pub extern "C" fn eglCreatePlatformPixmapSurface(
     _attrib_list: *const isize,
 ) -> *mut c_void {
     GlobalState::access(|s| s.mint_token())
-}
-/// `eglCreateImage(...)` / `eglDestroyImage` — an `EGLImage` (a shareable image handle). No cross-API image
-/// sharing is modeled; a fixed non-null token is handed back so a `!= EGL_NO_IMAGE` check passes.
-#[cfg_attr(not(gles_client), no_mangle)]
-pub extern "C" fn eglCreateImage(
-    _dpy: *mut c_void,
-    _ctx: *mut c_void,
-    _target: u32,
-    _buffer: *mut c_void,
-    _attrib_list: *const isize,
-) -> *mut c_void {
-    EGL_OBJECT_TOKEN as *mut c_void
-}
-#[cfg_attr(not(gles_client), no_mangle)]
-pub extern "C" fn eglDestroyImage(_dpy: *mut c_void, _image: *mut c_void) -> u32 {
-    EGL_TRUE
-}
-/// `eglCreateSync(dpy, type, attrib_list)` — an `EGLSync`; a fixed non-null token (the GL fence timeline
-/// backs the actual GPU sync — `glFenceSync`). `eglClientWaitSync` reports it satisfied.
-#[cfg_attr(not(gles_client), no_mangle)]
-pub extern "C" fn eglCreateSync(
-    _dpy: *mut c_void,
-    _type_: u32,
-    _attrib_list: *const isize,
-) -> *mut c_void {
-    EGL_OBJECT_TOKEN as *mut c_void
-}
-#[cfg_attr(not(gles_client), no_mangle)]
-pub extern "C" fn eglDestroySync(_dpy: *mut c_void, _sync: *mut c_void) -> u32 {
-    EGL_TRUE
-}
-/// `eglClientWaitSync(dpy, sync, flags, timeout)` — the deferred model completes work synchronously at
-/// swap, so a sync is already signaled: report `EGL_CONDITION_SATISFIED`.
-#[cfg_attr(not(gles_client), no_mangle)]
-pub extern "C" fn eglClientWaitSync(
-    _dpy: *mut c_void,
-    _sync: *mut c_void,
-    _flags: i32,
-    _timeout: u64,
-) -> i32 {
-    EGL_CONDITION_SATISFIED
-}
-/// `eglWaitSync(dpy, sync, flags)` — a device-side wait; always succeeds (the fence is already reached).
-#[cfg_attr(not(gles_client), no_mangle)]
-pub extern "C" fn eglWaitSync(_dpy: *mut c_void, _sync: *mut c_void, _flags: i32) -> u32 {
-    EGL_TRUE
-}
-/// `eglGetSyncAttrib(dpy, sync, attribute, value)` — write the sync attribute (`0`) and succeed.
-#[cfg_attr(not(gles_client), no_mangle)]
-pub extern "C" fn eglGetSyncAttrib(
-    _dpy: *mut c_void,
-    _sync: *mut c_void,
-    _attribute: i32,
-    value: *mut isize,
-) -> u32 {
-    if !value.is_null() {
-        unsafe { *value = 0 };
-    }
-    EGL_TRUE
 }

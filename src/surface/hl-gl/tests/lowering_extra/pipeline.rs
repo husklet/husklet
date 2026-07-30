@@ -56,8 +56,39 @@ fn constant_blend_factors_emit_the_draw_time_blend_color() {
 }
 
 #[test]
+fn dual_source_blend_factors_keep_their_exact_protocol_meaning() {
+    use hl_gpu::protocol::model::enums::blend_factor;
+
+    let cases = [
+        (GL_SRC1_COLOR, blend_factor::SRC1_COLOR),
+        (GL_ONE_MINUS_SRC1_COLOR, blend_factor::ONE_MINUS_SRC1_COLOR),
+        (GL_SRC1_ALPHA, blend_factor::SRC1_ALPHA),
+        (GL_ONE_MINUS_SRC1_ALPHA, blend_factor::ONE_MINUS_SRC1_ALPHA),
+    ];
+
+    for (gl_factor, expected) in cases {
+        let mut c = ctx();
+        let mut sink = RecordingSink::with_full_caps();
+        setup_geometry(&mut c);
+        record::enable(&mut c, GL_BLEND);
+        record::blend_func(&mut c, gl_factor, GL_ZERO);
+        record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+
+        swap::swap_buffers(&mut c, &mut sink).unwrap();
+        let blend = pipeline_desc(&sink.batches[0]).color_targets[0]
+            .blend
+            .as_ref()
+            .expect("blend state");
+        assert_eq!(blend.src_color, expected, "GL factor {gl_factor:#x}");
+        assert_eq!(blend.src_alpha, expected, "GL factor {gl_factor:#x}");
+    }
+}
+
+#[test]
 fn cull_and_front_face_and_topology_lower_into_the_pipeline() {
     let mut c = ctx();
+    // Isolate fixed-function winding from the additional reflection used by presentation targets.
+    c.set_surface_kind(hl_gl::model::context::SurfaceKind::Offscreen);
     let mut sink = RecordingSink::with_full_caps();
     setup_geometry(&mut c);
     record::enable(&mut c, GL_CULL_FACE);

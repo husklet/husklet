@@ -26,8 +26,26 @@ fn residency_over_replay_budget_reports_clean_api_loss() {
     let err = journal
         .replay_bytes()
         .expect_err("over-budget residency must not silently truncate");
-    assert_eq!(err.kind(), ErrorKind::ConnectionAborted);
-    assert!(err.to_string().contains("API/device/context lost"));
+    assert!(matches!(err, TransportError::ApiLost { .. }));
+}
+
+#[test]
+fn residency_replay_loss_poison_is_stable() {
+    let (client, _server) = UnixStream::pair().unwrap();
+    let mut sink = RemoteCommandSink::new("unused");
+    sink.sock = Some(client);
+    sink.residency_reset = true;
+    sink.residency = ResidencyJournal::with_budget(1);
+    sink.residency.append(&[Cmd::CreateFence(1)]);
+
+    assert!(matches!(
+        sink.submit_ir(&[], &[], 0),
+        Err(GpuError::Transport(TransportError::ApiLost { .. }))
+    ));
+    assert!(matches!(
+        sink.submit_ir(&[], &[], 0),
+        Err(GpuError::Transport(TransportError::Poisoned { .. }))
+    ));
 }
 
 #[test]
@@ -42,8 +60,14 @@ fn capability_change_with_live_residency_is_typed_api_loss() {
     let err = conn
         .set_negotiated_capabilities(&changed)
         .expect_err("live profile change is loss");
-    assert_eq!(err.kind(), ErrorKind::ConnectionAborted);
-    assert!(err.to_string().contains("API/device/context lost"));
+    assert!(matches!(
+        err,
+        GpuError::Transport(TransportError::ApiLost { .. })
+    ));
+    assert!(matches!(
+        conn.connect(),
+        Err(GpuError::Transport(TransportError::Poisoned { .. }))
+    ));
 }
 
 #[test]
@@ -54,6 +78,7 @@ fn residency_skips_presents_and_waits() {
         Cmd::Present {
             surface: 1,
             texture: 2,
+            serial: crate::FrameSerial::new(3).unwrap(),
         },
         Cmd::WaitFence { id: 1, value: 3 },
     ]);

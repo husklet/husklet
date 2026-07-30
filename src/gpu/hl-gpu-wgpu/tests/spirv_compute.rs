@@ -14,9 +14,15 @@
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use hl_gpu::protocol::model::descriptor::{
-    BindEntry, BindGroupDesc, BindResource, BufferDesc, ComputePipelineDesc, ShaderRef,
+    BindEntry, BindGroupDesc, BindResource, BlendState, BufferDesc, ColorAttachment,
+    ColorTargetState, ComputePipelineDesc, DepthAttachment, DepthState, Extent3d, Origin3d,
+    PipelineBinding, PipelineBindingKind, PipelineLayout, RenderMultisample, RenderPipelineDesc,
+    SamplerDesc, ShaderRef, TextureDesc, TextureSubresource, TextureViewDesc,
 };
-use hl_gpu::protocol::model::enums::buffer_usage;
+use hl_gpu::protocol::model::enums::{
+    buffer_usage, compare, texture_usage, AddressMode, Filter, LoadOp, TextureDim, TextureFormat,
+    Topology,
+};
 use hl_gpu::{
     BufferId, Cmd, CommandBuffer, Enc, FakeClock, GlobalLedger, GpuExecutor, Limits, Session,
     ShaderPayloadKind,
@@ -179,6 +185,725 @@ fn spirv_compute_doubles_storage_buffer() {
     );
 }
 
+#[test]
+fn spirv_compute_dynamically_selects_second_storage_buffer() {
+    let seed = r#"
+        struct Item { value: u32 }
+        @group(0) @binding(0) var<storage, read_write> items: binding_array<Item, 2>;
+        @group(0) @binding(1) var<uniform> selected: vec4<u32>;
+        @compute @workgroup_size(1)
+        fn cs_main() {
+            items[selected.x].value = 99u;
+        }
+    "#;
+    let spirv = wgsl_to_spirv(seed);
+    let mut g = exec();
+    if g.capabilities().binding_arrays
+        & hl_gpu::protocol::model::capability::binding_array::STORAGE_BUFFER
+        == 0
+    {
+        return;
+    }
+    let s = run_batch(
+        &mut g,
+        &[
+            Cmd::CreateShader {
+                id: 1,
+                kind: ShaderPayloadKind::SpirV,
+                spirv,
+            },
+            Cmd::CreateComputePipelineLayout(
+                1,
+                ComputePipelineDesc {
+                    compute: ShaderRef {
+                        module: 1,
+                        entry: "cs_main".into(),
+                    },
+                    label: String::new(),
+                },
+                PipelineLayout {
+                    bindings: vec![
+                        PipelineBinding {
+                            group: 0,
+                            binding: 0,
+                            count: 2,
+                            kind: PipelineBindingKind::StorageBuffer,
+                        },
+                        PipelineBinding {
+                            group: 0,
+                            binding: 1,
+                            count: 1,
+                            kind: PipelineBindingKind::UniformBuffer,
+                        },
+                    ],
+                },
+            ),
+            Cmd::CreateBuffer(1, buf(4, buffer_usage::STORAGE | buffer_usage::COPY_SRC)),
+            Cmd::CreateBuffer(2, buf(4, buffer_usage::STORAGE | buffer_usage::COPY_SRC)),
+            Cmd::CreateBuffer(3, buf(16, buffer_usage::UNIFORM | buffer_usage::COPY_DST)),
+            Cmd::WriteBuffer {
+                id: 1,
+                offset: 0,
+                data: u32s(&[7]),
+            },
+            Cmd::WriteBuffer {
+                id: 2,
+                offset: 0,
+                data: u32s(&[8]),
+            },
+            Cmd::WriteBuffer {
+                id: 3,
+                offset: 0,
+                data: u32s(&[1, 0, 0, 0]),
+            },
+            Cmd::CreateBindGroup(
+                1,
+                BindGroupDesc {
+                    set: 0,
+                    entries: vec![
+                        BindEntry {
+                            binding: 0,
+                            resource: BindResource::Buffer {
+                                id: 1,
+                                offset: 0,
+                                size: 4,
+                            },
+                        },
+                        BindEntry {
+                            binding: 2,
+                            resource: BindResource::Buffer {
+                                id: 2,
+                                offset: 0,
+                                size: 4,
+                            },
+                        },
+                        BindEntry {
+                            binding: 1,
+                            resource: BindResource::Buffer {
+                                id: 3,
+                                offset: 0,
+                                size: 16,
+                            },
+                        },
+                    ],
+                },
+            ),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginComputePass,
+                    Enc::SetPipeline(1),
+                    Enc::SetBindGroup { index: 0, group: 1 },
+                    Enc::Dispatch { x: 1, y: 1, z: 1 },
+                    Enc::EndComputePass,
+                ],
+                signal: None,
+            }),
+            // Vulkan out-of-range descriptor indexing must not alias element zero.
+            Cmd::WriteBuffer {
+                id: 3,
+                offset: 0,
+                data: u32s(&[9, 0, 0, 0]),
+            },
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginComputePass,
+                    Enc::SetPipeline(1),
+                    Enc::SetBindGroup { index: 0, group: 1 },
+                    Enc::Dispatch { x: 1, y: 1, z: 1 },
+                    Enc::EndComputePass,
+                ],
+                signal: None,
+            }),
+        ],
+    );
+    assert_eq!(read_u32s(&g, &s, 1, 1), vec![7]);
+    assert_eq!(read_u32s(&g, &s, 2, 1), vec![99]);
+}
+
+#[test]
+fn spirv_compute_scalarizes_dynamic_uniform_buffer_array_reads() {
+    let seed = r#"
+        struct Item { value: vec4<u32> }
+        @group(0) @binding(0) var<uniform> items: binding_array<Item, 2>;
+        @group(0) @binding(1) var<uniform> selected: vec4<u32>;
+        @group(0) @binding(2) var<storage, read_write> output: array<u32>;
+        @compute @workgroup_size(1)
+        fn cs_main() {
+            output[0] = items[selected.x].value.x;
+        }
+    "#;
+    let spirv = wgsl_to_spirv(seed);
+    let mut g = exec();
+    let s = run_batch(
+        &mut g,
+        &[
+            Cmd::CreateShader {
+                id: 1,
+                kind: ShaderPayloadKind::SpirV,
+                spirv,
+            },
+            Cmd::CreateComputePipelineLayout(
+                1,
+                ComputePipelineDesc {
+                    compute: ShaderRef {
+                        module: 1,
+                        entry: "cs_main".into(),
+                    },
+                    label: String::new(),
+                },
+                PipelineLayout {
+                    bindings: vec![
+                        PipelineBinding {
+                            group: 0,
+                            binding: 0,
+                            count: 2,
+                            kind: PipelineBindingKind::UniformBuffer,
+                        },
+                        PipelineBinding {
+                            group: 0,
+                            binding: 1,
+                            count: 1,
+                            kind: PipelineBindingKind::UniformBuffer,
+                        },
+                        PipelineBinding {
+                            group: 0,
+                            binding: 2,
+                            count: 1,
+                            kind: PipelineBindingKind::StorageBuffer,
+                        },
+                    ],
+                },
+            ),
+            Cmd::CreateBuffer(1, buf(16, buffer_usage::UNIFORM)),
+            Cmd::CreateBuffer(2, buf(16, buffer_usage::UNIFORM)),
+            Cmd::CreateBuffer(3, buf(16, buffer_usage::UNIFORM)),
+            Cmd::CreateBuffer(4, buf(4, buffer_usage::STORAGE | buffer_usage::COPY_SRC)),
+            Cmd::WriteBuffer {
+                id: 1,
+                offset: 0,
+                data: u32s(&[17, 0, 0, 0]),
+            },
+            Cmd::WriteBuffer {
+                id: 2,
+                offset: 0,
+                data: u32s(&[29, 0, 0, 0]),
+            },
+            Cmd::WriteBuffer {
+                id: 3,
+                offset: 0,
+                data: u32s(&[1, 0, 0, 0]),
+            },
+            Cmd::CreateBindGroup(
+                1,
+                BindGroupDesc {
+                    set: 0,
+                    entries: vec![
+                        BindEntry {
+                            binding: 0,
+                            resource: BindResource::Buffer {
+                                id: 1,
+                                offset: 0,
+                                size: 16,
+                            },
+                        },
+                        BindEntry {
+                            // Scalar tail after guest bindings 0, 1 and 2.
+                            binding: 3,
+                            resource: BindResource::Buffer {
+                                id: 2,
+                                offset: 0,
+                                size: 16,
+                            },
+                        },
+                        BindEntry {
+                            binding: 1,
+                            resource: BindResource::Buffer {
+                                id: 3,
+                                offset: 0,
+                                size: 16,
+                            },
+                        },
+                        BindEntry {
+                            binding: 2,
+                            resource: BindResource::Buffer {
+                                id: 4,
+                                offset: 0,
+                                size: 4,
+                            },
+                        },
+                    ],
+                },
+            ),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginComputePass,
+                    Enc::SetPipeline(1),
+                    Enc::SetBindGroup { index: 0, group: 1 },
+                    Enc::Dispatch { x: 1, y: 1, z: 1 },
+                    Enc::EndComputePass,
+                ],
+                signal: None,
+            }),
+        ],
+    );
+    assert_eq!(read_u32s(&g, &s, 4, 1), vec![29]);
+}
+
+#[test]
+fn spirv_compute_dynamically_samples_second_texture() {
+    let source = r#"
+        @group(0) @binding(0) var images: binding_array<texture_2d<f32>, 2>;
+        @group(0) @binding(1) var<uniform> selected: vec4<u32>;
+        @group(0) @binding(2) var<storage, read_write> output: array<u32>;
+        @compute @workgroup_size(1)
+        fn cs_main() {
+            output[0] = u32(textureLoad(images[selected.x], vec2<i32>(0, 0), 0).x * 255.0);
+        }
+    "#;
+    let shader = wgsl_to_spirv(source);
+    let mut g = exec();
+    let required = hl_gpu::protocol::model::capability::binding_array::SAMPLED_TEXTURE;
+    if g.capabilities().binding_arrays & required == 0
+        || g.capabilities().non_uniform_binding_arrays & required == 0
+    {
+        return;
+    }
+    let texture = |label: &str| TextureDesc {
+        width: 1,
+        height: 1,
+        depth: 1,
+        mip_levels: 1,
+        sample_count: 1,
+        dim: TextureDim::D2,
+        format: TextureFormat::Rgba8Unorm,
+        usage: texture_usage::SAMPLED | texture_usage::COPY_DST,
+        label: label.into(),
+    };
+    let s = run_batch(
+        &mut g,
+        &[
+            Cmd::CreateShader {
+                id: 1,
+                kind: ShaderPayloadKind::SpirV,
+                spirv: shader,
+            },
+            Cmd::CreateComputePipelineLayout(
+                1,
+                ComputePipelineDesc {
+                    compute: ShaderRef {
+                        module: 1,
+                        entry: "cs_main".into(),
+                    },
+                    label: String::new(),
+                },
+                PipelineLayout {
+                    bindings: vec![
+                        PipelineBinding {
+                            group: 0,
+                            binding: 0,
+                            count: 2,
+                            kind: PipelineBindingKind::SampledTexture,
+                        },
+                        PipelineBinding {
+                            group: 0,
+                            binding: 1,
+                            count: 1,
+                            kind: PipelineBindingKind::UniformBuffer,
+                        },
+                        PipelineBinding {
+                            group: 0,
+                            binding: 2,
+                            count: 1,
+                            kind: PipelineBindingKind::StorageBuffer,
+                        },
+                    ],
+                },
+            ),
+            Cmd::CreateTexture(1, texture("first")),
+            Cmd::CreateTexture(2, texture("second")),
+            Cmd::CreateBuffer(1, buf(8, buffer_usage::COPY_SRC)),
+            Cmd::CreateBuffer(2, buf(16, buffer_usage::UNIFORM)),
+            Cmd::CreateBuffer(3, buf(4, buffer_usage::STORAGE | buffer_usage::COPY_SRC)),
+            Cmd::WriteBuffer {
+                id: 1,
+                offset: 0,
+                data: vec![17, 0, 0, 255, 231, 0, 0, 255],
+            },
+            Cmd::WriteBuffer {
+                id: 2,
+                offset: 0,
+                data: u32s(&[1, 0, 0, 0]),
+            },
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::CopyBufferToTexture {
+                        src: 1,
+                        src_offset: 0,
+                        bytes_per_row: 4,
+                        dst: 1,
+                        mip: 0,
+                        width: 1,
+                        height: 1,
+                    },
+                    Enc::CopyBufferToTexture {
+                        src: 1,
+                        src_offset: 4,
+                        bytes_per_row: 4,
+                        dst: 2,
+                        mip: 0,
+                        width: 1,
+                        height: 1,
+                    },
+                ],
+                signal: None,
+            }),
+            Cmd::CreateBindGroup(
+                1,
+                BindGroupDesc {
+                    set: 0,
+                    entries: vec![
+                        BindEntry {
+                            binding: 0,
+                            resource: BindResource::TextureArray { ids: vec![1, 2] },
+                        },
+                        BindEntry {
+                            binding: 1,
+                            resource: BindResource::Buffer {
+                                id: 2,
+                                offset: 0,
+                                size: 16,
+                            },
+                        },
+                        BindEntry {
+                            binding: 2,
+                            resource: BindResource::Buffer {
+                                id: 3,
+                                offset: 0,
+                                size: 4,
+                            },
+                        },
+                    ],
+                },
+            ),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginComputePass,
+                    Enc::SetPipeline(1),
+                    Enc::SetBindGroup { index: 0, group: 1 },
+                    Enc::Dispatch { x: 1, y: 1, z: 1 },
+                    Enc::EndComputePass,
+                ],
+                signal: None,
+            }),
+        ],
+    );
+    assert_eq!(read_u32s(&g, &s, 3, 1), vec![231]);
+}
+
+#[test]
+fn spirv_compute_dynamically_writes_second_storage_texture() {
+    let source = r#"
+        @group(0) @binding(0)
+        var images: binding_array<texture_storage_2d<rgba8unorm, write>, 2>;
+        @group(0) @binding(1) var<uniform> selected: vec4<u32>;
+        @compute @workgroup_size(1)
+        fn cs_main() {
+            textureStore(images[selected.x], vec2<i32>(0, 0), vec4<f32>(0.2, 0.4, 0.8, 1.0));
+        }
+    "#;
+    let shader = wgsl_to_spirv(source);
+    let mut g = exec();
+    let texture = |label: &str| TextureDesc {
+        width: 1,
+        height: 1,
+        depth: 1,
+        mip_levels: 1,
+        sample_count: 1,
+        dim: TextureDim::D2,
+        format: TextureFormat::Rgba8Unorm,
+        usage: texture_usage::STORAGE | texture_usage::COPY_SRC,
+        label: label.into(),
+    };
+    let s = run_batch(
+        &mut g,
+        &[
+            Cmd::CreateShader {
+                id: 1,
+                kind: ShaderPayloadKind::SpirV,
+                spirv: shader,
+            },
+            Cmd::CreateComputePipelineLayout(
+                1,
+                ComputePipelineDesc {
+                    compute: ShaderRef {
+                        module: 1,
+                        entry: "cs_main".into(),
+                    },
+                    label: String::new(),
+                },
+                PipelineLayout {
+                    bindings: vec![
+                        PipelineBinding {
+                            group: 0,
+                            binding: 0,
+                            count: 2,
+                            kind: PipelineBindingKind::StorageTexture,
+                        },
+                        PipelineBinding {
+                            group: 0,
+                            binding: 1,
+                            count: 1,
+                            kind: PipelineBindingKind::UniformBuffer,
+                        },
+                    ],
+                },
+            ),
+            Cmd::CreateTexture(1, texture("first")),
+            Cmd::CreateTexture(2, texture("second")),
+            Cmd::CreateBuffer(1, buf(16, buffer_usage::UNIFORM)),
+            Cmd::WriteBuffer {
+                id: 1,
+                offset: 0,
+                data: u32s(&[1, 0, 0, 0]),
+            },
+            Cmd::CreateBindGroup(
+                1,
+                BindGroupDesc {
+                    set: 0,
+                    entries: vec![
+                        BindEntry {
+                            binding: 0,
+                            resource: BindResource::Texture { id: 1 },
+                        },
+                        BindEntry {
+                            binding: 2,
+                            resource: BindResource::Texture { id: 2 },
+                        },
+                        BindEntry {
+                            binding: 1,
+                            resource: BindResource::Buffer {
+                                id: 1,
+                                offset: 0,
+                                size: 16,
+                            },
+                        },
+                    ],
+                },
+            ),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginComputePass,
+                    Enc::SetPipeline(1),
+                    Enc::SetBindGroup { index: 0, group: 1 },
+                    Enc::Dispatch { x: 1, y: 1, z: 1 },
+                    Enc::EndComputePass,
+                ],
+                signal: None,
+            }),
+            Cmd::WriteBuffer {
+                id: 1,
+                offset: 0,
+                data: u32s(&[9, 0, 0, 0]),
+            },
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginComputePass,
+                    Enc::SetPipeline(1),
+                    Enc::SetBindGroup { index: 0, group: 1 },
+                    Enc::Dispatch { x: 1, y: 1, z: 1 },
+                    Enc::EndComputePass,
+                ],
+                signal: None,
+            }),
+        ],
+    );
+    assert_eq!(g.read_texture(&s.resources, 1).unwrap(), vec![0, 0, 0, 0]);
+    assert_eq!(
+        g.read_texture(&s.resources, 2).unwrap(),
+        vec![51, 102, 204, 255]
+    );
+}
+
+#[test]
+fn spirv_compute_samples_native_bc1_and_bc3_uploads() {
+    let source = r#"
+        @group(0) @binding(0) var image: texture_2d<f32>;
+        @group(0) @binding(1) var<storage, read_write> output: array<u32>;
+        @compute @workgroup_size(1)
+        fn cs_main() {
+            let color = textureLoad(image, vec2<i32>(0, 0), 0);
+            output[0] = u32(color.r * 255.0);
+            output[1] = u32(color.g * 255.0);
+            output[2] = u32(color.b * 255.0);
+            output[3] = u32(color.a * 255.0);
+        }
+    "#;
+    let shader = wgsl_to_spirv(source);
+    let mut g = exec();
+    for (format, block) in [
+        (
+            TextureFormat::Bc1RgbaUnorm,
+            vec![0x00, 0xf8, 0x00, 0x00, 0, 0, 0, 0],
+        ),
+        (
+            TextureFormat::Bc3RgbaUnorm,
+            vec![
+                0xff, 0x00, 0, 0, 0, 0, 0, 0, 0x00, 0xf8, 0x00, 0x00, 0, 0, 0, 0,
+            ],
+        ),
+    ] {
+        if !g.capabilities().supports_format(format) {
+            continue;
+        }
+        let block_len = block.len() as u32;
+        let s = run_batch(
+            &mut g,
+            &[
+                Cmd::CreateShader {
+                    id: 1,
+                    kind: ShaderPayloadKind::SpirV,
+                    spirv: shader.clone(),
+                },
+                Cmd::CreateComputePipeline(
+                    1,
+                    ComputePipelineDesc {
+                        compute: ShaderRef {
+                            module: 1,
+                            entry: "cs_main".into(),
+                        },
+                        label: String::new(),
+                    },
+                ),
+                Cmd::CreateTexture(
+                    1,
+                    TextureDesc {
+                        width: 4,
+                        height: 4,
+                        depth: 1,
+                        mip_levels: 1,
+                        sample_count: 1,
+                        dim: TextureDim::D2,
+                        format,
+                        usage: texture_usage::SAMPLED | texture_usage::COPY_DST,
+                        label: "bc".into(),
+                    },
+                ),
+                Cmd::CreateBuffer(1, buf(block.len() as u64, buffer_usage::COPY_SRC)),
+                Cmd::CreateBuffer(2, buf(16, buffer_usage::STORAGE | buffer_usage::COPY_SRC)),
+                Cmd::WriteBuffer {
+                    id: 1,
+                    offset: 0,
+                    data: block,
+                },
+                Cmd::Submit(CommandBuffer {
+                    encoder: vec![Enc::CopyBufferToTexture {
+                        src: 1,
+                        src_offset: 0,
+                        bytes_per_row: block_len,
+                        dst: 1,
+                        mip: 0,
+                        width: 4,
+                        height: 4,
+                    }],
+                    signal: None,
+                }),
+                Cmd::CreateBindGroup(
+                    1,
+                    BindGroupDesc {
+                        set: 0,
+                        entries: vec![
+                            BindEntry {
+                                binding: 0,
+                                resource: BindResource::Texture { id: 1 },
+                            },
+                            BindEntry {
+                                binding: 1,
+                                resource: BindResource::Buffer {
+                                    id: 2,
+                                    offset: 0,
+                                    size: 16,
+                                },
+                            },
+                        ],
+                    },
+                ),
+                Cmd::Submit(CommandBuffer {
+                    encoder: vec![
+                        Enc::BeginComputePass,
+                        Enc::SetPipeline(1),
+                        Enc::SetBindGroup { index: 0, group: 1 },
+                        Enc::Dispatch { x: 1, y: 1, z: 1 },
+                        Enc::EndComputePass,
+                    ],
+                    signal: None,
+                }),
+            ],
+        );
+        assert_eq!(read_u32s(&g, &s, 2, 4), vec![255, 0, 0, 255], "{format:?}");
+    }
+}
+
+#[test]
+fn native_bc_family_upload_roundtrips_exact_blocks() {
+    let mut g = exec();
+    for (index, &format) in hl_gpu::protocol::model::capability::BC_FORMATS
+        .iter()
+        .enumerate()
+    {
+        if !g.capabilities().supports_format(format) {
+            continue;
+        }
+        let block_bytes = format.block_geometry().unwrap().2 as usize;
+        let block = (0..block_bytes)
+            .map(|byte| (byte as u8).wrapping_add(index as u8))
+            .collect::<Vec<_>>();
+        let s = run_batch(
+            &mut g,
+            &[
+                Cmd::CreateTexture(
+                    1,
+                    TextureDesc {
+                        width: 4,
+                        height: 4,
+                        depth: 1,
+                        mip_levels: 1,
+                        sample_count: 1,
+                        dim: TextureDim::D2,
+                        format,
+                        usage: texture_usage::SAMPLED
+                            | texture_usage::COPY_SRC
+                            | texture_usage::COPY_DST,
+                        label: format!("{format:?}"),
+                    },
+                ),
+                Cmd::CreateBuffer(1, buf(block_bytes as u64, buffer_usage::COPY_SRC)),
+                Cmd::WriteBuffer {
+                    id: 1,
+                    offset: 0,
+                    data: block.clone(),
+                },
+                Cmd::Submit(CommandBuffer {
+                    encoder: vec![Enc::CopyBufferToTexture {
+                        src: 1,
+                        src_offset: 0,
+                        bytes_per_row: block_bytes as u32,
+                        dst: 1,
+                        mip: 0,
+                        width: 4,
+                        height: 4,
+                    }],
+                    signal: None,
+                }),
+            ],
+        );
+        assert_eq!(
+            g.read_texture(&s.resources, 1).unwrap(),
+            block,
+            "{format:?}"
+        );
+    }
+}
+
 /// Two bind groups: group 0 the read-write storage data, group 1 a uniform scale factor. Each group binds
 /// at its declared set index against the pipeline's OWN auto-derived per-group layout
 /// (`get_bind_group_layout(index)`) — the multi-group shape wgpu-core's validation compute pipeline has.
@@ -318,5 +1043,881 @@ fn spirv_compute_pipeline_with_push_constant_creates() {
         r.is_ok(),
         "a SPIR-V compute pipeline with a push constant must CREATE (the Zed device-creation blocker): {:?}",
         r.err()
+    );
+}
+
+#[test]
+fn external_spirv_confines_out_of_bounds_uniform_and_storage_access() {
+    let seed = r#"
+        @group(0) @binding(0) var<uniform> uniform_values: array<vec4<u32>, 2>;
+        @group(0) @binding(1) var<storage, read_write> storage_values: array<u32>;
+        @group(0) @binding(2) var<storage, read_write> results: array<u32>;
+
+        @compute @workgroup_size(1)
+        fn cs_main() {
+            let index = results[0];
+            results[0] = uniform_values[index].x;
+            results[1] = storage_values[index];
+            storage_values[index] = 77u;
+            results[2] = 123u;
+        }
+    "#;
+    let spirv = wgsl_to_spirv(seed);
+    let mut g = exec();
+    assert_ne!(
+        g.capabilities().gpu_features
+            & hl_gpu::protocol::model::capability::gpu_feature::ROBUST_BUFFER_ACCESS,
+        0
+    );
+    let s = run_batch(
+        &mut g,
+        &[
+            Cmd::CreateShader {
+                id: 1,
+                kind: ShaderPayloadKind::SpirV,
+                spirv,
+            },
+            Cmd::CreateComputePipeline(
+                1,
+                ComputePipelineDesc {
+                    compute: ShaderRef {
+                        module: 1,
+                        entry: "cs_main".into(),
+                    },
+                    label: String::new(),
+                },
+            ),
+            Cmd::CreateBuffer(1, buf(32, buffer_usage::UNIFORM)),
+            Cmd::WriteBuffer {
+                id: 1,
+                offset: 0,
+                data: u32s(&[11, 0, 0, 0, 22, 0, 0, 0]),
+            },
+            Cmd::CreateBuffer(2, buf(8, buffer_usage::STORAGE | buffer_usage::COPY_SRC)),
+            Cmd::WriteBuffer {
+                id: 2,
+                offset: 0,
+                data: u32s(&[31, 32]),
+            },
+            Cmd::CreateBuffer(3, buf(16, buffer_usage::STORAGE | buffer_usage::COPY_SRC)),
+            Cmd::WriteBuffer {
+                id: 3,
+                offset: 0,
+                data: u32s(&[99, 0xdead_beef, 0, 0xcafe_babe]),
+            },
+            Cmd::CreateBindGroup(
+                1,
+                BindGroupDesc {
+                    set: 0,
+                    entries: vec![
+                        BindEntry {
+                            binding: 0,
+                            resource: BindResource::Buffer {
+                                id: 1,
+                                offset: 0,
+                                size: 32,
+                            },
+                        },
+                        BindEntry {
+                            binding: 1,
+                            resource: BindResource::Buffer {
+                                id: 2,
+                                offset: 0,
+                                size: 8,
+                            },
+                        },
+                        BindEntry {
+                            binding: 2,
+                            resource: BindResource::Buffer {
+                                id: 3,
+                                offset: 0,
+                                size: 16,
+                            },
+                        },
+                    ],
+                },
+            ),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginComputePass,
+                    Enc::SetPipeline(1),
+                    Enc::SetBindGroup { index: 0, group: 1 },
+                    Enc::Dispatch { x: 1, y: 1, z: 1 },
+                    Enc::EndComputePass,
+                ],
+                signal: None,
+            }),
+        ],
+    );
+    let results = read_u32s(&g, &s, 3, 4);
+    assert!(
+        [0, 11, 22].contains(&results[0]),
+        "OOB uniform read escaped its bound resource: {results:?}"
+    );
+    assert!(
+        [0, 31, 32].contains(&results[1]),
+        "OOB storage read escaped its bound resource: {results:?}"
+    );
+    assert_eq!(results[2], 123, "OOB access must not lose the invocation");
+    assert_eq!(
+        results[3], 0xcafe_babe,
+        "OOB storage write crossed into another binding"
+    );
+    let storage = read_u32s(&g, &s, 2, 2);
+    assert!(
+        matches!(storage.as_slice(), [31, 32] | [77, 32] | [31, 77]),
+        "robust storage write must remain within its bound resource: {storage:?}"
+    );
+}
+
+#[test]
+fn external_spirv_fragment_ssbo_atomic_renders_and_reads_back() {
+    let seed = r#"
+        @group(0) @binding(0) var<storage, read_write> hits: atomic<u32>;
+
+        @vertex
+        fn vs_main(@builtin(vertex_index) vertex: u32) -> @builtin(position) vec4<f32> {
+            var positions = array<vec2<f32>, 3>(
+                vec2<f32>(-1.0, -1.0),
+                vec2<f32>(3.0, -1.0),
+                vec2<f32>(-1.0, 3.0));
+            return vec4<f32>(positions[vertex], 0.0, 1.0);
+        }
+
+        @fragment
+        fn fs_main() -> @location(0) vec4<f32> {
+            _ = atomicAdd(&hits, 1u);
+            return vec4<f32>(0.0, 1.0, 0.0, 1.0);
+        }
+    "#;
+    let spirv = wgsl_to_spirv(seed);
+    let mut g = exec();
+    if g.capabilities().gpu_features
+        & hl_gpu::protocol::model::capability::gpu_feature::FRAGMENT_STORES_ATOMICS
+        == 0
+    {
+        return;
+    }
+    let s = run_batch(
+        &mut g,
+        &[
+            Cmd::CreateTexture(
+                1,
+                TextureDesc {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                    mip_levels: 1,
+                    sample_count: 1,
+                    dim: TextureDim::D2,
+                    format: TextureFormat::Rgba8Unorm,
+                    usage: texture_usage::RENDER_TARGET | texture_usage::COPY_SRC,
+                    label: String::new(),
+                },
+            ),
+            Cmd::CreateBuffer(1, buf(4, buffer_usage::STORAGE | buffer_usage::COPY_SRC)),
+            Cmd::CreateShader {
+                id: 1,
+                kind: ShaderPayloadKind::SpirV,
+                spirv,
+            },
+            Cmd::CreateRenderPipeline(
+                1,
+                RenderPipelineDesc {
+                    vertex: ShaderRef {
+                        module: 1,
+                        entry: "vs_main".into(),
+                    },
+                    fragment: Some(ShaderRef {
+                        module: 1,
+                        entry: "fs_main".into(),
+                    }),
+                    vertex_buffers: vec![],
+                    color_targets: vec![ColorTargetState {
+                        format: TextureFormat::Rgba8Unorm,
+                        blend: None,
+                        write_mask: 0xf,
+                    }],
+                    depth: None,
+                    topology: Topology::TriangleList,
+                    cull: 0,
+                    front_face: 0,
+                    sample_count: 1,
+                    label: String::new(),
+                },
+            ),
+            Cmd::CreateBindGroup(
+                1,
+                BindGroupDesc {
+                    set: 0,
+                    entries: vec![BindEntry {
+                        binding: 0,
+                        resource: BindResource::Buffer {
+                            id: 1,
+                            offset: 0,
+                            size: 4,
+                        },
+                    }],
+                },
+            ),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginRenderPass {
+                        color: vec![ColorAttachment {
+                            texture: 1,
+                            load: LoadOp::Clear,
+                            clear: [0.0, 0.0, 0.0, 1.0],
+                            store: true,
+                        }],
+                        depth: None,
+                    },
+                    Enc::SetPipeline(1),
+                    Enc::SetBindGroup { index: 0, group: 1 },
+                    Enc::Draw {
+                        vertex_count: 3,
+                        instance_count: 1,
+                        first_vertex: 0,
+                        first_instance: 0,
+                    },
+                    Enc::EndRenderPass,
+                ],
+                signal: None,
+            }),
+        ],
+    );
+    assert_eq!(read_u32s(&g, &s, 1, 1), vec![1]);
+    assert_eq!(
+        g.read_texture(&s.resources, 1).unwrap(),
+        vec![0, 255, 0, 255]
+    );
+}
+
+#[test]
+fn external_spirv_sample_shading_runs_once_per_enabled_sample() {
+    let seed = r#"
+        @group(0) @binding(0) var<storage, read_write> hits: atomic<u32>;
+
+        @vertex
+        fn vs_main(@builtin(vertex_index) vertex: u32) -> @builtin(position) vec4<f32> {
+            var positions = array<vec2<f32>, 3>(
+                vec2<f32>(-1.0, -1.0),
+                vec2<f32>(3.0, -1.0),
+                vec2<f32>(-1.0, 3.0));
+            return vec4<f32>(positions[vertex], 0.0, 1.0);
+        }
+
+        @fragment
+        fn fs_main() -> @location(0) vec4<f32> {
+            _ = atomicAdd(&hits, 1u);
+            return vec4<f32>(1.0, 0.0, 0.0, 1.0);
+        }
+    "#;
+    let spirv = wgsl_to_spirv(seed);
+    let mut g = exec();
+    let required = hl_gpu::protocol::model::capability::gpu_feature::FRAGMENT_STORES_ATOMICS
+        | hl_gpu::protocol::model::capability::gpu_feature::SAMPLE_RATE_SHADING;
+    if g.capabilities().gpu_features & required != required {
+        return;
+    }
+    let pipeline = RenderPipelineDesc {
+        vertex: ShaderRef {
+            module: 1,
+            entry: "vs_main".into(),
+        },
+        fragment: Some(ShaderRef {
+            module: 1,
+            entry: "fs_main".into(),
+        }),
+        vertex_buffers: vec![],
+        color_targets: vec![ColorTargetState {
+            format: TextureFormat::Rgba8Unorm,
+            blend: None,
+            write_mask: 0xf,
+        }],
+        depth: None,
+        topology: Topology::TriangleList,
+        cull: 0,
+        front_face: 0,
+        sample_count: 4,
+        label: String::new(),
+    };
+    let s = run_batch(
+        &mut g,
+        &[
+            Cmd::CreateTexture(
+                1,
+                TextureDesc {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                    mip_levels: 1,
+                    sample_count: 4,
+                    dim: TextureDim::D2,
+                    format: TextureFormat::Rgba8Unorm,
+                    usage: texture_usage::RENDER_TARGET,
+                    label: String::new(),
+                },
+            ),
+            Cmd::CreateTexture(
+                2,
+                TextureDesc {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                    mip_levels: 1,
+                    sample_count: 1,
+                    dim: TextureDim::D2,
+                    format: TextureFormat::Rgba8Unorm,
+                    usage: texture_usage::RENDER_TARGET | texture_usage::COPY_SRC,
+                    label: String::new(),
+                },
+            ),
+            Cmd::CreateBuffer(1, buf(4, buffer_usage::STORAGE | buffer_usage::COPY_SRC)),
+            Cmd::CreateShader {
+                id: 1,
+                kind: ShaderPayloadKind::SpirV,
+                spirv,
+            },
+            Cmd::CreateRenderPipelineLayout(
+                1,
+                pipeline,
+                PipelineLayout {
+                    bindings: vec![PipelineBinding {
+                        group: 0,
+                        binding: 0,
+                        count: 1,
+                        kind: PipelineBindingKind::StorageBuffer,
+                    }],
+                },
+                RenderMultisample {
+                    mask: 0b0101,
+                    sample_shading: true,
+                },
+            ),
+            Cmd::CreateBindGroup(
+                1,
+                BindGroupDesc {
+                    set: 0,
+                    entries: vec![BindEntry {
+                        binding: 0,
+                        resource: BindResource::Buffer {
+                            id: 1,
+                            offset: 0,
+                            size: 4,
+                        },
+                    }],
+                },
+            ),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginRenderPass {
+                        color: vec![ColorAttachment {
+                            texture: 1,
+                            load: LoadOp::Clear,
+                            clear: [0.0, 0.0, 0.0, 1.0],
+                            store: true,
+                        }],
+                        depth: None,
+                    },
+                    Enc::SetPipeline(1),
+                    Enc::SetBindGroup { index: 0, group: 1 },
+                    Enc::Draw {
+                        vertex_count: 3,
+                        instance_count: 1,
+                        first_vertex: 0,
+                        first_instance: 0,
+                    },
+                    Enc::EndRenderPass,
+                    Enc::ResolveTexture {
+                        src: 1,
+                        src_sub: TextureSubresource::base(),
+                        src_origin: Origin3d::default(),
+                        dst: 2,
+                        dst_sub: TextureSubresource::base(),
+                        dst_origin: Origin3d::default(),
+                        extent: Extent3d {
+                            width: 1,
+                            height: 1,
+                            depth: 1,
+                        },
+                    },
+                ],
+                signal: None,
+            }),
+        ],
+    );
+    assert_eq!(
+        read_u32s(&g, &s, 1, 1),
+        vec![2],
+        "the injected SampleIndex input must force one fragment invocation for each enabled sample"
+    );
+    assert_eq!(
+        g.read_texture(&s.resources, 2).unwrap(),
+        vec![128, 0, 0, 255],
+        "sample mask 0b0101 must resolve two red and two clear samples"
+    );
+}
+
+#[test]
+fn external_spirv_independent_targets_keep_distinct_blend_and_masks() {
+    let seed = r#"
+        struct Outputs {
+            @location(0) first: vec4<f32>,
+            @location(1) second: vec4<f32>,
+        }
+
+        @vertex
+        fn vs_main(@builtin(vertex_index) vertex: u32) -> @builtin(position) vec4<f32> {
+            var positions = array<vec2<f32>, 3>(
+                vec2<f32>(-1.0, -1.0),
+                vec2<f32>(3.0, -1.0),
+                vec2<f32>(-1.0, 3.0));
+            return vec4<f32>(positions[vertex], 0.0, 1.0);
+        }
+
+        @fragment
+        fn fs_main() -> Outputs {
+            return Outputs(
+                vec4<f32>(1.0, 0.0, 0.0, 0.5),
+                vec4<f32>(0.0, 1.0, 0.0, 1.0));
+        }
+    "#;
+    let spirv = wgsl_to_spirv(seed);
+    let mut g = exec();
+    if g.capabilities().gpu_features
+        & hl_gpu::protocol::model::capability::gpu_feature::INDEPENDENT_BLEND
+        == 0
+    {
+        return;
+    }
+    let texture = |id| {
+        Cmd::CreateTexture(
+            id,
+            TextureDesc {
+                width: 1,
+                height: 1,
+                depth: 1,
+                mip_levels: 1,
+                sample_count: 1,
+                dim: TextureDim::D2,
+                format: TextureFormat::Rgba8Unorm,
+                usage: texture_usage::RENDER_TARGET | texture_usage::COPY_SRC,
+                label: String::new(),
+            },
+        )
+    };
+    let s = run_batch(
+        &mut g,
+        &[
+            texture(1),
+            texture(2),
+            Cmd::CreateShader {
+                id: 1,
+                kind: ShaderPayloadKind::SpirV,
+                spirv,
+            },
+            Cmd::CreateRenderPipeline(
+                1,
+                RenderPipelineDesc {
+                    vertex: ShaderRef {
+                        module: 1,
+                        entry: "vs_main".into(),
+                    },
+                    fragment: Some(ShaderRef {
+                        module: 1,
+                        entry: "fs_main".into(),
+                    }),
+                    vertex_buffers: vec![],
+                    color_targets: vec![
+                        ColorTargetState {
+                            format: TextureFormat::Rgba8Unorm,
+                            blend: Some(BlendState {
+                                src_color: 4,
+                                dst_color: 5,
+                                op_color: 0,
+                                src_alpha: 1,
+                                dst_alpha: 0,
+                                op_alpha: 0,
+                            }),
+                            write_mask: 0xf,
+                        },
+                        ColorTargetState {
+                            format: TextureFormat::Rgba8Unorm,
+                            blend: None,
+                            write_mask: 0x1,
+                        },
+                    ],
+                    depth: None,
+                    topology: Topology::TriangleList,
+                    cull: 0,
+                    front_face: 0,
+                    sample_count: 1,
+                    label: String::new(),
+                },
+            ),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginRenderPass {
+                        color: vec![
+                            ColorAttachment {
+                                texture: 1,
+                                load: LoadOp::Clear,
+                                clear: [0.0, 0.0, 1.0, 1.0],
+                                store: true,
+                            },
+                            ColorAttachment {
+                                texture: 2,
+                                load: LoadOp::Clear,
+                                clear: [0.0, 0.0, 1.0, 1.0],
+                                store: true,
+                            },
+                        ],
+                        depth: None,
+                    },
+                    Enc::SetPipeline(1),
+                    Enc::Draw {
+                        vertex_count: 3,
+                        instance_count: 1,
+                        first_vertex: 0,
+                        first_instance: 0,
+                    },
+                    Enc::EndRenderPass,
+                ],
+                signal: None,
+            }),
+        ],
+    );
+    assert_eq!(
+        g.read_texture(&s.resources, 1).unwrap(),
+        vec![128, 0, 127, 128]
+    );
+    assert_eq!(
+        g.read_texture(&s.resources, 2).unwrap(),
+        vec![0, 0, 255, 255]
+    );
+}
+
+#[test]
+fn external_spirv_depth_bias_clamp_limits_a_large_positive_bias() {
+    let seed = r#"
+        @vertex
+        fn vs_main(@builtin(vertex_index) vertex: u32) -> @builtin(position) vec4<f32> {
+            var positions = array<vec2<f32>, 3>(
+                vec2<f32>(-1.0, -1.0),
+                vec2<f32>(3.0, -1.0),
+                vec2<f32>(-1.0, 3.0));
+            return vec4<f32>(positions[vertex], 0.4, 1.0);
+        }
+
+        @fragment
+        fn fs_main() -> @location(0) vec4<f32> {
+            return vec4<f32>(0.0, 1.0, 0.0, 1.0);
+        }
+    "#;
+    let spirv = wgsl_to_spirv(seed);
+    let mut g = exec();
+    if g.capabilities().gpu_features
+        & hl_gpu::protocol::model::capability::gpu_feature::DEPTH_BIAS_CLAMP
+        == 0
+    {
+        return;
+    }
+    let color = |id| {
+        Cmd::CreateTexture(
+            id,
+            TextureDesc {
+                width: 1,
+                height: 1,
+                depth: 1,
+                mip_levels: 1,
+                sample_count: 1,
+                dim: TextureDim::D2,
+                format: TextureFormat::Rgba8Unorm,
+                usage: texture_usage::RENDER_TARGET | texture_usage::COPY_SRC,
+                label: String::new(),
+            },
+        )
+    };
+    let depth = |id| {
+        Cmd::CreateTexture(
+            id,
+            TextureDesc {
+                width: 1,
+                height: 1,
+                depth: 1,
+                mip_levels: 1,
+                sample_count: 1,
+                dim: TextureDim::D2,
+                format: TextureFormat::Depth32Float,
+                usage: texture_usage::RENDER_TARGET,
+                label: String::new(),
+            },
+        )
+    };
+    let pipeline = |id, clamp| {
+        let mut depth =
+            DepthState::depth_only(TextureFormat::Depth32Float, false, compare::GREATER);
+        depth.bias_constant = i32::MAX;
+        depth.bias_clamp = clamp;
+        Cmd::CreateRenderPipeline(
+            id,
+            RenderPipelineDesc {
+                vertex: ShaderRef {
+                    module: 1,
+                    entry: "vs_main".into(),
+                },
+                fragment: Some(ShaderRef {
+                    module: 1,
+                    entry: "fs_main".into(),
+                }),
+                vertex_buffers: vec![],
+                color_targets: vec![ColorTargetState {
+                    format: TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: 0xf,
+                }],
+                depth: Some(depth),
+                topology: Topology::TriangleList,
+                cull: 0,
+                front_face: 0,
+                sample_count: 1,
+                label: String::new(),
+            },
+        )
+    };
+    let pass = |target, depth, pipeline| {
+        vec![
+            Enc::BeginRenderPass {
+                color: vec![ColorAttachment {
+                    texture: target,
+                    load: LoadOp::Clear,
+                    clear: [0.0, 0.0, 1.0, 1.0],
+                    store: true,
+                }],
+                depth: Some(DepthAttachment {
+                    texture: depth,
+                    load: LoadOp::Clear,
+                    clear_depth: 0.5,
+                    clear_stencil: 0,
+                }),
+            },
+            Enc::SetPipeline(pipeline),
+            Enc::Draw {
+                vertex_count: 3,
+                instance_count: 1,
+                first_vertex: 0,
+                first_instance: 0,
+            },
+            Enc::EndRenderPass,
+        ]
+    };
+    let mut encoder = pass(1, 3, 1);
+    encoder.extend(pass(2, 4, 2));
+    let s = run_batch(
+        &mut g,
+        &[
+            color(1),
+            color(2),
+            depth(3),
+            depth(4),
+            Cmd::CreateShader {
+                id: 1,
+                kind: ShaderPayloadKind::SpirV,
+                spirv,
+            },
+            pipeline(1, 0.01),
+            pipeline(2, 0.0),
+            Cmd::Submit(CommandBuffer {
+                encoder,
+                signal: None,
+            }),
+        ],
+    );
+    assert_eq!(
+        g.read_texture(&s.resources, 1).unwrap(),
+        vec![0, 0, 255, 255],
+        "clamping the huge positive bias to 0.01 must keep z=0.4 behind z=0.5"
+    );
+    assert_eq!(
+        g.read_texture(&s.resources, 2).unwrap(),
+        vec![0, 255, 0, 255],
+        "without a clamp the same huge positive bias must pass"
+    );
+}
+
+#[test]
+fn external_spirv_samples_second_cube_from_a_cube_array() {
+    let seed = r#"
+        @group(0) @binding(0) var image: texture_cube<f32>;
+        @group(0) @binding(1) var image_sampler: sampler;
+        @group(0) @binding(2) var<storage, read_write> output: array<u32>;
+
+        @compute @workgroup_size(1)
+        fn cs_main() {
+            let color = textureSampleLevel(
+                image, image_sampler, vec3<f32>(1.0, 0.0, 0.0), 0.0);
+            output[0] = u32(color.r * 255.0);
+            output[1] = u32(color.g * 255.0);
+            output[2] = u32(color.b * 255.0);
+            output[3] = u32(color.a * 255.0);
+        }
+    "#;
+    let spirv = wgsl_to_spirv(seed);
+    let mut g = exec();
+    if g.capabilities().gpu_features
+        & hl_gpu::protocol::model::capability::gpu_feature::IMAGE_CUBE_ARRAY
+        == 0
+    {
+        return;
+    }
+    let face = vec![17, 93, 201, 255];
+    let s = run_batch(
+        &mut g,
+        &[
+            Cmd::CreateShader {
+                id: 1,
+                kind: ShaderPayloadKind::SpirV,
+                spirv,
+            },
+            Cmd::CreateComputePipeline(
+                1,
+                ComputePipelineDesc {
+                    compute: ShaderRef {
+                        module: 1,
+                        entry: "cs_main".into(),
+                    },
+                    label: String::new(),
+                },
+            ),
+            Cmd::CreateTexture(
+                1,
+                TextureDesc {
+                    width: 2,
+                    height: 2,
+                    depth: 12,
+                    mip_levels: 2,
+                    sample_count: 1,
+                    dim: TextureDim::Cube,
+                    format: TextureFormat::Rgba8Unorm,
+                    usage: texture_usage::SAMPLED | texture_usage::COPY_DST,
+                    label: String::new(),
+                },
+            ),
+            Cmd::CreateSampler(
+                1,
+                SamplerDesc {
+                    min_filter: Filter::Nearest,
+                    mag_filter: Filter::Nearest,
+                    mip_filter: Filter::Nearest,
+                    address_u: AddressMode::ClampToEdge,
+                    address_v: AddressMode::ClampToEdge,
+                    address_w: AddressMode::ClampToEdge,
+                    ..SamplerDesc::default()
+                },
+            ),
+            Cmd::CreateTextureView(
+                2,
+                TextureViewDesc {
+                    texture: 1,
+                    dim: TextureDim::Cube,
+                    format: TextureFormat::Rgba8Unorm,
+                    aspect: hl_gpu::protocol::model::enums::TextureAspect::All,
+                    base_mip: 1,
+                    mip_count: 1,
+                    base_layer: 6,
+                    layer_count: 6,
+                },
+            ),
+            Cmd::CreateBuffer(1, buf(4, buffer_usage::COPY_SRC)),
+            Cmd::CreateBuffer(2, buf(16, buffer_usage::STORAGE | buffer_usage::COPY_SRC)),
+            Cmd::CreateBuffer(3, buf(4, buffer_usage::COPY_DST | buffer_usage::COPY_SRC)),
+            Cmd::WriteBuffer {
+                id: 1,
+                offset: 0,
+                data: face,
+            },
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::CopyBufferToTextureRegion {
+                        src: 1,
+                        src_offset: 0,
+                        bytes_per_row: 4,
+                        rows_per_image: 1,
+                        dst: 1,
+                        dst_sub: TextureSubresource {
+                            mip: 1,
+                            layer: 6,
+                            aspect: hl_gpu::protocol::model::enums::TextureAspect::All,
+                        },
+                        dst_origin: Origin3d::default(),
+                        extent: Extent3d {
+                            width: 1,
+                            height: 1,
+                            depth: 1,
+                        },
+                    },
+                    Enc::CopyTextureToBufferRegion {
+                        src: 1,
+                        src_sub: TextureSubresource {
+                            mip: 1,
+                            layer: 6,
+                            aspect: hl_gpu::protocol::model::enums::TextureAspect::All,
+                        },
+                        src_origin: Origin3d::default(),
+                        extent: Extent3d {
+                            width: 1,
+                            height: 1,
+                            depth: 1,
+                        },
+                        dst: 3,
+                        dst_offset: 0,
+                        bytes_per_row: 4,
+                        rows_per_image: 1,
+                    },
+                ],
+                signal: None,
+            }),
+            Cmd::CreateBindGroup(
+                1,
+                BindGroupDesc {
+                    set: 0,
+                    entries: vec![
+                        BindEntry {
+                            binding: 0,
+                            resource: BindResource::Texture { id: 2 },
+                        },
+                        BindEntry {
+                            binding: 1,
+                            resource: BindResource::Sampler { id: 1 },
+                        },
+                        BindEntry {
+                            binding: 2,
+                            resource: BindResource::Buffer {
+                                id: 2,
+                                offset: 0,
+                                size: 16,
+                            },
+                        },
+                    ],
+                },
+            ),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginComputePass,
+                    Enc::SetPipeline(1),
+                    Enc::SetBindGroup { index: 0, group: 1 },
+                    Enc::Dispatch { x: 1, y: 1, z: 1 },
+                    Enc::EndComputePass,
+                ],
+                signal: None,
+            }),
+            Cmd::DestroyBindGroup(1),
+            Cmd::DestroyTextureView(2),
+        ],
+    );
+    assert_eq!(read_u32s(&g, &s, 2, 4), vec![17, 93, 201, 255]);
+    assert_eq!(
+        g.read_buffer(&s.resources, BufferId(3), 0, 4).unwrap(),
+        vec![17, 93, 201, 255]
     );
 }

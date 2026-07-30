@@ -74,18 +74,19 @@ jobs:
           REGISTRY_PASSWORD: ${{ secrets.HL_REGISTRY_PASSWORD }}
         run: |
           set -euo pipefail
-          if [[ "$CACHE_HIT" == true ]]; then
-            echo "HL_SCENARIO_OFFLINE=1" >> "$GITHUB_ENV"
-            echo "using the exact cached OCI fixture; registry access is disabled"
-          elif [[ -n "$REGISTRY_USERNAME" && -n "$REGISTRY_PASSWORD" ]]; then
-            echo "exact OCI fixture cache missed; using authenticated registry access"
+          if [[ -n "$REGISTRY_USERNAME" && -n "$REGISTRY_PASSWORD" ]]; then
+            if [[ "$CACHE_HIT" == true ]]; then
+              echo "restored the exact OCI fixture cache; authenticated registry access can repair incomplete entries"
+            else
+              echo "exact OCI fixture cache missed; using authenticated registry access"
+            fi
           elif [[ -n "$REGISTRY_USERNAME" || -n "$REGISTRY_PASSWORD" ]]; then
             echo "both HL_REGISTRY_USERNAME and HL_REGISTRY_PASSWORD are required" >&2
             exit 1
+          elif [[ "$CACHE_HIT" == true ]]; then
+            echo "restored the exact OCI fixture cache; anonymous registry access can repair incomplete entries"
           else
-            echo "exact OCI fixture cache missed and registry credentials are unavailable" >&2
-            echo "populate this key from a trusted main run with HL_REGISTRY_* secrets" >&2
-            exit 1
+            echo "exact OCI fixture cache missed; using anonymous public registry access"
           fi
 
       - name: Install Nix
@@ -96,16 +97,29 @@ jobs:
       - name: Cache the Nix development environment
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
         with:
-          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('nix/flake.lock') }}
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Run the real image through the container runtime
         env:
           HL_REGISTRY_USERNAME: ${{ secrets.HL_REGISTRY_USERNAME }}
           HL_REGISTRY_PASSWORD: ${{ secrets.HL_REGISTRY_PASSWORD }}
-        run: >-
-          nix develop "path:$PWD/nix" --command
-          cargo test -p hl-daemon --test scenarios --
-          all --jobs 1 --category distros
-          --case "${{ matrix.case }}"
-          --target "${{ matrix.target }}"
+        run: |
+          set -o pipefail
+          log_file="$(mktemp)"
+          set +e
+          nix develop . --command \
+            cargo test -p hl-daemon --test scenarios -- \
+            all --jobs 1 --category distros \
+            --case "${{ matrix.case }}" \
+            --target "${{ matrix.target }}" 2>&1 | tee "$log_file"
+          status="${PIPESTATUS[0]}"
+          set -e
+          if (( status != 0 )); then
+            diagnostic="$(tail -n 120 "$log_file" | awk '{ print substr($0, 1, 500) }')"
+            diagnostic="${diagnostic//'%'/'%25'}"
+            diagnostic="${diagnostic//$'\r'/'%0D'}"
+            diagnostic="${diagnostic//$'\n'/'%0A'}"
+            echo "::error title=Real-image smoke failed (exit $status)::$diagnostic"
+          fi
+          exit "$status"

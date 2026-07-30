@@ -1,4 +1,6 @@
 use super::*;
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 // ==================================================================================================
 // Live `libwayland-client` backend (dlopen RTLD_NOLOAD + dlsym)
@@ -10,6 +12,7 @@ const RTLD_NOLOAD: c_int = 0x4;
 extern "C" {
     fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    fn dlclose(handle: *mut c_void) -> c_int;
 }
 
 /// The variadic `wl_proxy_marshal_flags` — the single marshalling primitive every request funnels through.
@@ -23,6 +26,7 @@ type CreateWrapperFn = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
 type WrapperDestroyFn = unsafe extern "C" fn(*mut c_void);
 type SetQueueFn = unsafe extern "C" fn(*mut c_void, *mut c_void);
 type DestroyFn = unsafe extern "C" fn(*mut c_void);
+type DestroyQueueFn = unsafe extern "C" fn(*mut c_void);
 type RoundtripQueueFn = unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int;
 type FlushFn = unsafe extern "C" fn(*mut c_void) -> c_int;
 type AddListenerFn = unsafe extern "C" fn(*mut c_void, *const c_void, *mut c_void) -> c_int;
@@ -37,6 +41,7 @@ pub(crate) struct SysWlAbi {
     wrapper_destroy: WrapperDestroyFn,
     set_queue: SetQueueFn,
     destroy: DestroyFn,
+    destroy_queue: DestroyQueueFn,
     roundtrip_queue: RoundtripQueueFn,
     flush: FlushFn,
     add_listener: AddListenerFn,
@@ -44,15 +49,23 @@ pub(crate) struct SysWlAbi {
     iface_shm: *const c_void,
     iface_shm_pool: *const c_void,
     iface_buffer: *const c_void,
+    protocol: hl_surface_protocol::raw::ClientInterfaces,
+    token_listeners: RefCell<HashMap<usize, Box<Token>>>,
+    _library: WaylandLibraryHandle,
 }
 
-/// The mutable data the registry listener writes the discovered `wl_shm` `(name, version)` into.
-struct ShmDiscovery {
-    name: Option<u32>,
-    version: u32,
+struct WaylandLibraryHandle(*mut c_void);
+
+impl Drop for WaylandLibraryHandle {
+    fn drop(&mut self) {
+        // SAFETY: this is the successful dlopen handle retained by SysWlAbi.
+        unsafe {
+            dlclose(self.0);
+        }
+    }
 }
 
-/// `wl_registry_listener.global` — record the `wl_shm` global's name+version (ignoring everything else).
+/// `wl_registry_listener.global` — record the globals this adapter can consume.
 extern "C" fn on_global(
     data: *mut c_void,
     _registry: *mut c_void,
@@ -63,20 +76,17 @@ extern "C" fn on_global(
     if data.is_null() || interface.is_null() {
         return;
     }
-    let st = unsafe { &mut *(data as *mut ShmDiscovery) };
-    // Compare the C string to "wl_shm" without pulling in std::ffi::CStr allocation semantics.
-    let want = b"wl_shm";
-    let mut ok = true;
-    for (i, &wc) in want.iter().enumerate() {
-        let c = unsafe { *interface.add(i) } as u8;
-        if c != wc {
-            ok = false;
-            break;
-        }
-    }
-    if ok && unsafe { *interface.add(want.len()) } == 0 {
-        st.name = Some(name);
-        st.version = version.max(1);
+    let st = unsafe { &mut *(data as *mut Globals) };
+    let matches = |want: &[u8]| {
+        want.iter()
+            .enumerate()
+            .all(|(index, want)| unsafe { *interface.add(index) as u8 == *want })
+            && unsafe { *interface.add(want.len()) == 0 }
+    };
+    if matches(b"wl_shm") {
+        st.shm = Some((name, version.max(1)));
+    } else if matches(b"hl_surface_manager_v1") {
+        st.identity = Some((name, version.min(1)));
     }
 }
 
@@ -95,6 +105,24 @@ static REGISTRY_LISTENER: RegistryListener = RegistryListener {
     global_remove: on_global_remove,
 };
 
+#[derive(Default)]
+struct Token {
+    value: Option<u64>,
+}
+
+extern "C" fn on_token(data: *mut c_void, _identity: *mut c_void, high: u32, low: u32) {
+    if let Some(token) = unsafe { (data as *mut Token).as_mut() } {
+        token.value = Some((u64::from(high) << 32) | u64::from(low));
+    }
+}
+
+#[repr(C)]
+struct IdentityListener {
+    token: extern "C" fn(*mut c_void, *mut c_void, u32, u32),
+}
+
+static IDENTITY_LISTENER: IdentityListener = IdentityListener { token: on_token };
+
 impl SysWlAbi {
     /// `dlopen(RTLD_NOLOAD)` the already-mapped `libwayland-client.so.0` and `dlsym` the whole ABI. A
     /// missing library or symbol is a typed *soft* error (so the caller falls back to the self-owned
@@ -104,8 +132,14 @@ impl SysWlAbi {
         if handle.is_null() {
             return Err(WlAppError::LibraryMissing);
         }
+        let library = WaylandLibraryHandle(handle);
         // # Safety: each symbol is transmuted to its known `libwayland-client` prototype.
         unsafe {
+            let iface_surface =
+                WaylandLibrary::symbol(handle, b"wl_surface_interface\0")? as *const c_void;
+            // SAFETY: the `_library` field retains this exact handle until after `protocol` drops.
+            let protocol = hl_surface_protocol::raw::ClientInterfaces::new(iface_surface)
+                .ok_or(WlAppError::SymbolMissing("wl_surface_interface"))?;
             Ok(SysWlAbi {
                 marshal: core::mem::transmute::<*mut c_void, MarshalFlags>(WaylandLibrary::symbol(
                     handle,
@@ -134,6 +168,9 @@ impl SysWlAbi {
                     handle,
                     b"wl_proxy_destroy\0",
                 )?),
+                destroy_queue: core::mem::transmute::<*mut c_void, DestroyQueueFn>(
+                    WaylandLibrary::symbol(handle, b"wl_event_queue_destroy\0")?,
+                ),
                 roundtrip_queue: core::mem::transmute::<*mut c_void, RoundtripQueueFn>(
                     WaylandLibrary::symbol(handle, b"wl_display_roundtrip_queue\0")?,
                 ),
@@ -151,6 +188,9 @@ impl SysWlAbi {
                     as *const c_void,
                 iface_buffer: WaylandLibrary::symbol(handle, b"wl_buffer_interface\0")?
                     as *const c_void,
+                protocol,
+                token_listeners: RefCell::new(HashMap::new()),
+                _library: library,
             })
         }
     }
@@ -200,6 +240,9 @@ unsafe impl WlAbi for SysWlAbi {
     fn destroy(&self, proxy: *mut c_void) {
         unsafe { (self.destroy)(proxy) }
     }
+    fn destroy_queue(&self, queue: *mut c_void) {
+        unsafe { (self.destroy_queue)(queue) }
+    }
     fn flush(&self, display: *mut c_void) -> i32 {
         unsafe { (self.flush)(display) }
     }
@@ -218,16 +261,13 @@ unsafe impl WlAbi for SysWlAbi {
         }
     }
 
-    fn discover_shm(
+    fn discover_globals(
         &self,
         registry: *mut c_void,
         display: *mut c_void,
         queue: *mut c_void,
-    ) -> Option<(u32, u32)> {
-        let mut st = ShmDiscovery {
-            name: None,
-            version: 1,
-        };
+    ) -> WlAppResult<Globals> {
+        let mut st = Globals::default();
         let rc = unsafe {
             (self.add_listener)(
                 registry,
@@ -236,13 +276,13 @@ unsafe impl WlAbi for SysWlAbi {
             )
         };
         if rc < 0 {
-            return None;
+            return Err(WlAppError::Marshal);
         }
         // One roundtrip on OUR queue delivers the initial global burst.
         if unsafe { (self.roundtrip_queue)(display, queue) } < 0 {
-            return None;
+            return Err(WlAppError::Flush);
         }
-        st.name.map(|n| (n, st.version))
+        Ok(st)
     }
 
     fn bind_shm(&self, registry: *mut c_void, name: u32, version: u32) -> *mut c_void {
@@ -261,6 +301,104 @@ unsafe impl WlAbi for SysWlAbi {
                 core::ptr::null::<c_void>(),
             )
         }
+    }
+
+    fn bind_identity_manager(&self, registry: *mut c_void, name: u32, version: u32) -> *mut c_void {
+        unsafe {
+            let interface = self.protocol.manager();
+            let ifname = WaylandLibrary::interface_name(interface);
+            (self.marshal)(
+                registry,
+                OP_REGISTRY_BIND,
+                interface,
+                version,
+                0,
+                name,
+                ifname,
+                version,
+                core::ptr::null::<c_void>(),
+            )
+        }
+    }
+
+    fn identity_for_surface(
+        &self,
+        manager: *mut c_void,
+        version: u32,
+        surface: *mut c_void,
+    ) -> *mut c_void {
+        unsafe {
+            (self.marshal)(
+                manager,
+                0,
+                self.protocol.identity(),
+                version,
+                0,
+                core::ptr::null::<c_void>(),
+                surface,
+            )
+        }
+    }
+
+    fn identity_token(
+        &self,
+        identity: *mut c_void,
+        display: *mut c_void,
+        queue: *mut c_void,
+    ) -> WlAppResult<SurfaceToken> {
+        let mut token = Box::new(Token::default());
+        let result = unsafe {
+            (self.add_listener)(
+                identity,
+                std::ptr::from_ref(&IDENTITY_LISTENER).cast(),
+                std::ptr::from_mut(token.as_mut()).cast(),
+            )
+        };
+        if result < 0 {
+            return Err(WlAppError::Marshal);
+        }
+        self.token_listeners
+            .borrow_mut()
+            .insert(identity as usize, token);
+        if unsafe { (self.roundtrip_queue)(display, queue) } < 0 {
+            return Err(WlAppError::Flush);
+        }
+        let value = self
+            .token_listeners
+            .borrow()
+            .get(&(identity as usize))
+            .and_then(|token| token.value)
+            .unwrap_or(0);
+        SurfaceToken::new(value).map_err(|_| WlAppError::NoIdentity)
+    }
+
+    fn identity_associate(&self, identity: *mut c_void, version: u32, serial: u64) {
+        unsafe {
+            (self.marshal)(
+                identity,
+                0,
+                core::ptr::null::<c_void>(),
+                version,
+                0,
+                (serial >> 32) as u32,
+                serial as u32,
+            );
+        }
+    }
+
+    fn identity_destroy(&self, identity: *mut c_void, version: u32) {
+        unsafe {
+            (self.marshal)(
+                identity,
+                1,
+                core::ptr::null::<c_void>(),
+                version,
+                WL_MARSHAL_FLAG_DESTROY,
+            );
+        }
+        self.token_listeners
+            .borrow_mut()
+            .remove(&(identity as usize));
     }
 
     fn shm_create_pool(&self, shm: *mut c_void, version: u32, fd: i32, size: i32) -> *mut c_void {

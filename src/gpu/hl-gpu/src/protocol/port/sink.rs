@@ -12,6 +12,12 @@ use crate::protocol::model::command::Cmd;
 use crate::protocol::model::error::{GpuError, Result};
 use crate::protocol::model::id::{BufferId, FenceId};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FenceWait {
+    Complete,
+    Timeout,
+}
+
 /// The contract a driver submits through. A batch is a slice of protocol [`Cmd`]s; the sink validates,
 /// transports, and (eventually) executes them — the driver neither knows nor cares which.
 pub trait CommandSink {
@@ -26,6 +32,26 @@ pub trait CommandSink {
 
     /// Block until fence `fence` reaches timeline `value`.
     fn wait(&mut self, fence: FenceId, value: u64) -> Result<()>;
+
+    fn wait_timeout(&mut self, fence: FenceId, value: u64, timeout_ns: u64) -> Result<FenceWait> {
+        if timeout_ns == 0 {
+            return self.poll_fence(fence, value).map(|complete| {
+                if complete {
+                    FenceWait::Complete
+                } else {
+                    FenceWait::Timeout
+                }
+            });
+        }
+        self.wait(fence, value)?;
+        Ok(FenceWait::Complete)
+    }
+
+    /// Nonblocking completion query for a timeline fence.
+    fn poll_fence(&mut self, fence: FenceId, value: u64) -> Result<bool> {
+        let _ = (fence, value);
+        Err(GpuError::Unsupported("command sink: poll_fence"))
+    }
 
     /// Read `len` bytes back from buffer `id` starting at `offset` — the device→host readback path that
     /// makes `cuMemcpyDtoH` / `glReadPixels`-style results available to a driver regardless of whether the
@@ -101,6 +127,10 @@ impl CommandSink for RecordingSink {
     fn wait(&mut self, fence: FenceId, value: u64) -> Result<()> {
         self.waits.push((fence, value));
         Ok(())
+    }
+
+    fn poll_fence(&mut self, _fence: FenceId, _value: u64) -> Result<bool> {
+        Ok(false)
     }
 
     /// Record the readback request and return a zero-filled buffer of the requested length (the test double

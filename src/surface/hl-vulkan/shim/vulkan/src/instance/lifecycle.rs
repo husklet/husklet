@@ -22,6 +22,12 @@ pub extern "C" fn vkCreateInstance(
             .filter(|&v| v != 0)
             .unwrap_or(HL_API_VERSION)
     };
+    // Vulkan patch versions describe header revisions, not additional core API capability.
+    // Chrome/Dawn requests the current header patch of the major/minor version we advertise.
+    // Reject only a newer variant/major/minor contract.
+    if app_api >> 12 > HL_API_VERSION >> 12 {
+        return VK_ERROR_INCOMPATIBLE_DRIVER;
+    }
     StateStore::with(|s| s.instance = Some(Instance::new(app_api)));
     let token = Dispatchable::new(());
     unsafe { *p_instance = token };

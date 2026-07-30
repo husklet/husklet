@@ -1,7 +1,9 @@
 use super::*;
+use crate::model::program::{Attr, Program};
 
 pub(super) struct ClientSlot {
     pub(super) ir: u32,
+    pub(super) bytes: usize,
     pub(super) stride: u32,
     pub(super) step_mode: u32,
     pub(super) location: u32,
@@ -13,6 +15,7 @@ pub(super) struct VertexLowering {
     pub(super) slot_stride: Vec<u32>,
     pub(super) slot_base: Vec<u32>,
     pub(super) slot_ir: Vec<u32>,
+    pub(super) slot_bytes: Vec<usize>,
     pub(super) attr_slot: [i32; crate::model::program::MAX_ATTR],
     pub(super) nvd: usize,
     pub(super) client_slots: Vec<ClientSlot>,
@@ -20,17 +23,74 @@ pub(super) struct VertexLowering {
     pub(super) index_ir: u32,
 }
 
+fn vertex_slot_bytes(
+    draw: &DrawCall,
+    attributes: &[Attr],
+    stride: u32,
+    base: u32,
+) -> Option<usize> {
+    let per_instance = attributes.iter().any(|attribute| attribute.divisor > 0);
+    let end = if per_instance {
+        draw.first_instance
+            .checked_add(draw.instance_count.max(1))?
+    } else if draw.indexed {
+        return None;
+    } else {
+        u32::try_from(draw.first.max(0))
+            .ok()?
+            .checked_add(u32::try_from(draw.count.max(0)).ok()?)?
+    };
+    if end == 0 {
+        return Some(base as usize);
+    }
+    let attribute_end = attributes
+        .iter()
+        .map(|attribute| {
+            let relative = (attribute.offset as u32).saturating_sub(base);
+            let element = attribute_element_size(attribute);
+            relative.saturating_add(element)
+        })
+        .max()
+        .unwrap_or(0);
+    usize::try_from(
+        base.checked_add(end.checked_sub(1)?.checked_mul(stride)?)?
+            .checked_add(attribute_end)?,
+    )
+    .ok()
+}
+
+fn attribute_stride(attribute: &Attr) -> u32 {
+    if attribute.stride > 0 {
+        attribute.stride as u32
+    } else {
+        attribute_element_size(attribute)
+    }
+}
+
+fn attribute_element_size(attribute: &Attr) -> u32 {
+    if attribute.kind == GL_UNSIGNED_INT_2_10_10_10_REV || attribute.kind == GL_INT_2_10_10_10_REV {
+        4
+    } else {
+        attribute.size.clamp(1, 4) as u32 * GlType(attribute.kind).component_size().max(1) as u32
+    }
+}
 pub(super) fn lower_vertices(
     ctx: &mut GlContext,
+    program: &Program,
     d: &DrawCall,
     cmds: &mut Vec<Cmd>,
-) -> VertexLowering {
+) -> hl_gpu::Result<VertexLowering> {
     let captured_buffer = |name: u32| d.buffers.iter().find(|buffer| buffer.name == name);
+    let has_data = |name: u32| {
+        captured_buffer(name)
+            .map(|buffer| !buffer.data.is_empty())
+            .unwrap_or_else(|| ctx.buffers.has_data(name))
+    };
     // ---- vertex-buffer slot analysis (dedup bound buffers into slots) ----
     let mut slot_gl_buf: Vec<u32> = Vec::new();
     let mut attr_slot = [-1i32; crate::model::program::MAX_ATTR];
     for (i, a) in d.attrs.iter().enumerate() {
-        if !a.enabled || a.buffer == 0 || !ctx.buffers.has_data(a.buffer) {
+        if !a.enabled || a.buffer == 0 || !has_data(a.buffer) {
             continue;
         }
         let sl = slot_gl_buf
@@ -43,16 +103,41 @@ pub(super) fn lower_vertices(
         attr_slot[i] = sl as i32;
     }
     let nslot = slot_gl_buf.len();
+    if d.attrs
+        .iter()
+        .any(|attr| attr.enabled && !has_data(attr.buffer))
+    {
+        let attributes = d
+            .attrs
+            .iter()
+            .enumerate()
+            .filter(|(_, attr)| attr.enabled)
+            .map(|(location, attr)| {
+                (
+                    location,
+                    attr.buffer,
+                    attr.binding,
+                    attr.offset,
+                    attr.stride,
+                    ctx.buffers
+                        .get(attr.buffer)
+                        .map(|buffer| buffer.data.len())
+                        .unwrap_or(0),
+                )
+            })
+            .collect::<Vec<_>>();
+        hl_log::hl_warn!(
+            hl_log::tag::GL,
+            "enabled vertex attributes include unpopulated buffers: {attributes:?}"
+        );
+    }
     let mut slot_stride = vec![0u32; nslot.max(1)];
     for (i, a) in d.attrs.iter().enumerate() {
         let sl = attr_slot[i];
         if sl < 0 {
             continue;
         }
-        let mut st = a.stride as u32;
-        if st == 0 {
-            st = a.size as u32 * 4;
-        }
+        let st = attribute_stride(a);
         if st > slot_stride[sl as usize] {
             slot_stride[sl as usize] = st;
         }
@@ -98,31 +183,90 @@ pub(super) fn lower_vertices(
     // Resolve the IR buffer id for each vertex slot, uploading its bytes ONLY on first sight / content
     // change (the residency cache): a VBO bound across many draws or frames is created + written once.
     let mut slot_ir: Vec<u32> = Vec::with_capacity(nslot);
-    for &gl_buf in &slot_gl_buf {
+    let mut slot_bytes: Vec<usize> = Vec::with_capacity(nslot);
+    for (slot, &gl_buf) in slot_gl_buf.iter().enumerate() {
         let captured = captured_buffer(gl_buf);
         let generation = captured
             .map(|buffer| buffer.generation)
             .or_else(|| ctx.buffers.get(gl_buf).map(|buffer| buffer.gen))
             .unwrap_or(0);
-        let (ir, needs_upload) = ctx.data_buffer_ir(gl_buf, buffer_usage::VERTEX, generation);
-        slot_ir.push(ir);
-        if needs_upload {
-            let data = captured_buffer(gl_buf)
-                .map(|buffer| buffer.data.clone())
-                .or_else(|| ctx.buffers.get(gl_buf).map(|buffer| buffer.data.clone()))
-                .unwrap_or_default();
+        let mut data = captured_buffer(gl_buf)
+            .map(|buffer| buffer.data.clone())
+            .or_else(|| ctx.buffers.get(gl_buf).map(|buffer| buffer.data.clone()))
+            .unwrap_or_default();
+        let attributes = d
+            .attrs
+            .iter()
+            .enumerate()
+            .filter(|(location, attribute)| {
+                attribute.enabled && attr_slot[*location] == slot as i32
+            })
+            .map(|(_, attribute)| *attribute)
+            .collect::<Vec<_>>();
+        let required =
+            vertex_slot_bytes(d, &attributes, slot_stride[slot], slot_base[slot]).unwrap_or(0);
+        if required > data.len() {
+            let shape = attributes
+                .iter()
+                .map(|attribute| {
+                    (
+                        attribute.offset,
+                        attribute.stride,
+                        attribute.size,
+                        attribute.kind,
+                        attribute.divisor,
+                    )
+                })
+                .collect::<Vec<_>>();
+            // A robust GL context permits an out-of-range vertex fetch and supplies zero for inaccessible
+            // components. WebGPU rejects the entire command buffer before execution instead. Preserve the
+            // GL behavior with a draw-local padded snapshot; valid buffers keep using the residency cache.
+            hl_log::hl_warn!(
+                hl_log::tag::GL,
+                "padding undersized lowered vertex slot kind=vbo slot={slot} gl_buffer={gl_buf} \
+                 bytes={} required={required} base={} stride={} step_mode={} first={} count={} attrs={shape:?}",
+                data.len(),
+                slot_base[slot],
+                slot_stride[slot],
+                attributes.iter().any(|attribute| attribute.divisor > 0) as u32,
+                d.first,
+                d.count
+            );
+            std::sync::Arc::make_mut(&mut data).resize(required, 0);
+            slot_bytes.push(data.len());
+            let ir = ctx.alloc_buffer_ir()?;
+            slot_ir.push(ir);
             cmds.push(Cmd::CreateBuffer(
                 ir,
                 BufferDesc {
                     size: data.len() as u64,
                     usage: buffer_usage::VERTEX,
-                    label: String::new(),
+                    label: format!("gl-padded-vertex:{gl_buf}:{generation}"),
                 },
             ));
             cmds.push(Cmd::WriteBuffer {
                 id: ir,
                 offset: 0,
-                data,
+                data: data.as_ref().clone(),
+            });
+            continue;
+        }
+        slot_bytes.push(data.len());
+        let (ir, needs_upload) = ctx.data_buffer_ir(gl_buf, buffer_usage::VERTEX, generation)?;
+        slot_ir.push(ir);
+        if needs_upload {
+            cmds.push(Cmd::CreateBuffer(
+                ir,
+                BufferDesc {
+                    size: data.len() as u64,
+                    usage: buffer_usage::VERTEX,
+                    label: format!("gl-bound-vertex:{gl_buf}:{generation}"),
+                },
+            ));
+            cmds.push(Cmd::WriteBuffer {
+                id: ir,
+                offset: 0,
+                data: data.as_ref().clone(),
             });
         }
     }
@@ -134,13 +278,13 @@ pub(super) fn lower_vertices(
     // interleaved and separate client arrays uniformly. EMPTY for a bound-VBO draw → that path is unchanged.
     let mut client_slots: Vec<ClientSlot> = Vec::with_capacity(d.client_vbufs.len());
     for ca in &d.client_vbufs {
-        let ir = ctx.alloc_buffer_ir();
+        let ir = ctx.alloc_buffer_ir()?;
         cmds.push(Cmd::CreateBuffer(
             ir,
             BufferDesc {
                 size: ca.data.len() as u64,
                 usage: buffer_usage::VERTEX,
-                label: String::new(),
+                label: "gl-client-vertex".to_owned(),
             },
         ));
         cmds.push(Cmd::WriteBuffer {
@@ -151,15 +295,97 @@ pub(super) fn lower_vertices(
         let elem = ca.size.clamp(1, 4) as u32 * GlType(ca.kind).component_size() as u32;
         client_slots.push(ClientSlot {
             ir,
+            bytes: ca.data.len(),
             stride: elem.max(1),
             step_mode: (ca.divisor > 0) as u32,
             location: ca.location as u32,
             format: vertex_format_wire(ca.kind, ca.size, ca.normalized, ca.integer),
         });
     }
+    // A disabled GL attribute array reads the context's current generic attribute value. WebGPU has no
+    // constant-attribute state, so materialize that value as a tiny instance-stepped buffer. Repeat it for
+    // every addressed instance so indexed/non-indexed vertex counts do not inflate the upload.
+    let constant_components = (0..d.attrs.len())
+        .map(|location| program.vertex_attr_components(location))
+        .collect::<Vec<_>>();
+    for (location, components) in constant_components.iter().copied().enumerate() {
+        if d.attrs[location].enabled {
+            continue;
+        }
+        let Some(size) = components else {
+            continue;
+        };
+        let repeats = d
+            .first_instance
+            .saturating_add(d.instance_count.max(1))
+            .max(1) as usize;
+        let components = size as usize;
+        let mut data = Vec::with_capacity(repeats * components * size_of::<f32>());
+        for _ in 0..repeats {
+            data.extend(
+                d.current_attrs[location][..components]
+                    .iter()
+                    .flat_map(|component| component.to_bits().to_le_bytes()),
+            );
+        }
+        let kind = match d.current_attr_kinds[location] {
+            1 => GL_INT,
+            2 => GL_UNSIGNED_INT,
+            _ => GL_FLOAT,
+        };
+        let ir = ctx.alloc_buffer_ir()?;
+        cmds.push(Cmd::CreateBuffer(
+            ir,
+            BufferDesc {
+                size: data.len() as u64,
+                usage: buffer_usage::VERTEX,
+                label: "gl-constant-vertex".to_owned(),
+            },
+        ));
+        cmds.push(Cmd::WriteBuffer {
+            id: ir,
+            offset: 0,
+            data,
+        });
+        client_slots.push(ClientSlot {
+            ir,
+            bytes: repeats * components * size_of::<f32>(),
+            stride: size as u32 * size_of::<f32>() as u32,
+            step_mode: 1,
+            location: location as u32,
+            format: vertex_format_wire(kind, size, false, kind != GL_FLOAT),
+        });
+    }
+
+    if !d.indexed {
+        let vertex_end = d.first.max(0).saturating_add(d.count.max(0)) as usize;
+        for (slot, client) in client_slots.iter().enumerate() {
+            if client.step_mode == 0 && client.bytes / (client.stride.max(1) as usize) < vertex_end
+            {
+                hl_log::hl_warn!(
+                    hl_log::tag::GL,
+                    "undersized lowered vertex slot kind=client slot={} ir={} bytes={} base=0 stride={} \
+                     step_mode={} location={} first={} count={} vertex_end={}",
+                    nslot + slot,
+                    client.ir,
+                    client.bytes,
+                    client.stride,
+                    client.step_mode,
+                    client.location,
+                    d.first,
+                    d.count,
+                    vertex_end
+                );
+            }
+        }
+    }
 
     // Primitive forms absent from the neutral topology enum are expanded into exact indexed lists.
-    let expanded_indices = if matches!(d.mode, 0x0002 | 0x0006) {
+    // WebGPU also has no u8 index format, so a bound GL_UNSIGNED_BYTE EBO is promoted here rather than
+    // being misread as pairs of u16 bytes.
+    let expand_primitive = matches!(d.mode, 0x0002 | 0x0006);
+    let promote_u8 = d.indexed && d.elem_buf != 0 && d.index_type == GL_UNSIGNED_BYTE;
+    let expanded_indices = if expand_primitive || promote_u8 {
         if d.indexed {
             let source = if d.elem_buf != 0 {
                 captured_buffer(d.elem_buf)
@@ -179,7 +405,13 @@ pub(super) fn lower_vertices(
                 .and_then(|bytes| {
                     PrimitiveAssembly::decode_indices(bytes, offset, d.index_type, d.count)
                 })
-                .map(|indices| PrimitiveAssembly::expand(d.mode, &indices))
+                .map(|indices| {
+                    if expand_primitive {
+                        PrimitiveAssembly::expand(d.mode, &indices)
+                    } else {
+                        indices
+                    }
+                })
         } else {
             PrimitiveAssembly::expanded_array_indices(d.mode, d.first, d.count)
         }
@@ -194,7 +426,7 @@ pub(super) fn lower_vertices(
         .as_ref()
         .filter(|indices| !indices.is_empty())
     {
-        index_ir = ctx.alloc_buffer_ir();
+        index_ir = ctx.alloc_buffer_ir()?;
         let data = indices
             .iter()
             .flat_map(|index| index.to_le_bytes())
@@ -204,7 +436,7 @@ pub(super) fn lower_vertices(
             BufferDesc {
                 size: data.len() as u64,
                 usage: buffer_usage::INDEX,
-                label: String::new(),
+                label: "gl-expanded-index".to_owned(),
             },
         ));
         cmds.push(Cmd::WriteBuffer {
@@ -212,13 +444,17 @@ pub(super) fn lower_vertices(
             offset: 0,
             data,
         });
-    } else if d.indexed && d.elem_buf != 0 && ctx.buffers.has_data(d.elem_buf) {
+    } else if d.indexed
+        && d.elem_buf != 0
+        && (captured_buffer(d.elem_buf).is_some_and(|buffer| !buffer.data.is_empty())
+            || ctx.buffers.has_data(d.elem_buf))
+    {
         let captured = captured_buffer(d.elem_buf);
         let generation = captured
             .map(|buffer| buffer.generation)
             .or_else(|| ctx.buffers.get(d.elem_buf).map(|buffer| buffer.gen))
             .unwrap_or(0);
-        let (ir, needs_upload) = ctx.data_buffer_ir(d.elem_buf, buffer_usage::INDEX, generation);
+        let (ir, needs_upload) = ctx.data_buffer_ir(d.elem_buf, buffer_usage::INDEX, generation)?;
         index_ir = ir;
         if needs_upload {
             let data = captured_buffer(d.elem_buf)
@@ -234,24 +470,24 @@ pub(super) fn lower_vertices(
                 BufferDesc {
                     size: data.len() as u64,
                     usage: buffer_usage::INDEX,
-                    label: String::new(),
+                    label: format!("gl-bound-index:{}:{generation}", d.elem_buf),
                 },
             ));
             cmds.push(Cmd::WriteBuffer {
                 id: index_ir,
                 offset: 0,
-                data,
+                data: data.as_ref().clone(),
             });
         }
     } else if d.indexed && !d.client_indices.is_empty() {
-        index_ir = ctx.alloc_buffer_ir();
+        index_ir = ctx.alloc_buffer_ir()?;
         let data = d.client_indices.clone();
         cmds.push(Cmd::CreateBuffer(
             index_ir,
             BufferDesc {
                 size: data.len() as u64,
                 usage: buffer_usage::INDEX,
-                label: String::new(),
+                label: "gl-client-index".to_owned(),
             },
         ));
         cmds.push(Cmd::WriteBuffer {
@@ -261,15 +497,120 @@ pub(super) fn lower_vertices(
         });
     }
 
-    VertexLowering {
+    Ok(VertexLowering {
         nslot,
         slot_stride,
         slot_base,
         slot_ir,
+        slot_bytes,
         attr_slot,
         nvd,
         client_slots,
         expanded_indices,
         index_ir,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vertex_range_includes_nonzero_first_vertex() {
+        let draw = DrawCall {
+            first: 50,
+            count: 40,
+            ..DrawCall::default()
+        };
+        let attribute = Attr {
+            enabled: true,
+            size: 2,
+            kind: GL_FLOAT,
+            stride: 16,
+            ..Attr::default()
+        };
+
+        assert_eq!(vertex_slot_bytes(&draw, &[attribute], 16, 0), Some(1432));
+    }
+
+    #[test]
+    fn vertex_range_includes_hoisted_binding_base() {
+        let draw = DrawCall {
+            first: 50,
+            count: 40,
+            ..DrawCall::default()
+        };
+        let attribute = Attr {
+            enabled: true,
+            size: 2,
+            kind: GL_FLOAT,
+            stride: 16,
+            offset: 4_808,
+            ..Attr::default()
+        };
+
+        assert_eq!(
+            vertex_slot_bytes(&draw, &[attribute], 16, 4_800),
+            Some(6_240)
+        );
+    }
+
+    #[test]
+    fn overflowing_vertex_range_is_not_sized_for_padding() {
+        let draw = DrawCall {
+            first: i32::MAX - 1,
+            count: i32::MAX,
+            ..DrawCall::default()
+        };
+        let attribute = Attr {
+            enabled: true,
+            size: 2,
+            kind: GL_FLOAT,
+            stride: 16,
+            ..Attr::default()
+        };
+
+        assert_eq!(vertex_slot_bytes(&draw, &[attribute], 16, 0), None);
+    }
+
+    #[test]
+    fn tightly_packed_unsigned_byte_attribute_uses_byte_stride() {
+        let attribute = Attr {
+            size: 4,
+            kind: GL_UNSIGNED_BYTE,
+            stride: 0,
+            ..Attr::default()
+        };
+
+        assert_eq!(attribute_stride(&attribute), 4);
+    }
+
+    #[test]
+    fn tightly_packed_unsigned_short_attribute_uses_short_stride() {
+        let attribute = Attr {
+            size: 2,
+            kind: GL_UNSIGNED_SHORT,
+            stride: 0,
+            ..Attr::default()
+        };
+
+        assert_eq!(attribute_stride(&attribute), 4);
+    }
+
+    #[test]
+    fn packed_2_10_10_10_attribute_is_one_four_byte_element() {
+        let attribute = Attr {
+            size: 4,
+            kind: GL_UNSIGNED_INT_2_10_10_10_REV,
+            normalized: true,
+            stride: 0,
+            ..Attr::default()
+        };
+
+        assert_eq!(attribute_stride(&attribute), 4);
+        assert_eq!(
+            vertex_format_wire(attribute.kind, 4, true, false),
+            4 | (8 << 8) | (1 << 16)
+        );
     }
 }

@@ -62,13 +62,13 @@ impl VertexLayouts {
 /// color formats (a valid depth-only or no-color pipeline).
 struct RenderingInfo;
 impl RenderingInfo {
-    fn color_formats(p_next: *const c_void) -> Vec<TextureFormat> {
+    fn color_formats(p_next: *const c_void) -> Option<Vec<TextureFormat>> {
         let mut node = p_next as *const VkBaseInStructure;
         while let Some(n) = unsafe { node.as_ref() } {
             if n.s_type == VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO {
                 let pr = unsafe { &*(node as *const VkPipelineRenderingCreateInfo) };
                 if pr.p_color_attachment_formats.is_null() || pr.color_attachment_count == 0 {
-                    return Vec::new();
+                    return Some(Vec::new());
                 }
                 let fmts = unsafe {
                     std::slice::from_raw_parts(
@@ -80,24 +80,27 @@ impl RenderingInfo {
             }
             node = n.p_next;
         }
-        Vec::new()
+        Some(Vec::new())
     }
 
     /// Walk a pNext chain for `VkPipelineRenderingCreateInfo` and read its `depthAttachmentFormat` — the depth
     /// format a dynamic-rendering (null `renderPass`) pipeline targets. `None` when the struct is absent or the
     /// format is `VK_FORMAT_UNDEFINED` (0), i.e. a color-only pipeline.
-    fn depth_format(p_next: *const c_void) -> Option<TextureFormat> {
+    fn depth_format(p_next: *const c_void) -> Option<Option<TextureFormat>> {
         let mut node = p_next as *const VkBaseInStructure;
         while let Some(n) = unsafe { node.as_ref() } {
             if n.s_type == VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO {
                 let pr = unsafe { &*(node as *const VkPipelineRenderingCreateInfo) };
                 // VK_FORMAT_UNDEFINED (0) => no depth attachment.
-                return (pr.depth_attachment_format != 0)
-                    .then(|| Format(pr.depth_attachment_format as u32).wire());
+                return if pr.depth_attachment_format == 0 {
+                    Some(None)
+                } else {
+                    Format(pr.depth_attachment_format as u32).wire().map(Some)
+                };
             }
             node = n.p_next;
         }
-        None
+        Some(None)
     }
 }
 
@@ -174,6 +177,9 @@ impl DepthStencil {
             stencil_back,
             stencil_read_mask: read_mask,
             stencil_write_mask: write_mask,
+            bias_constant: 0,
+            bias_slope_scale: 0.0,
+            bias_clamp: 0.0,
         })
     }
 }
@@ -221,25 +227,43 @@ impl Blend {
     /// list, or `blendEnable = VK_FALSE` — exactly the pipelines that must OVERWRITE (opaque replace) rather
     /// than composite. Without this the color-blend state was dropped (`blend: None` hardcoded) and a
     /// translucent draw overwrote the destination instead of alpha-compositing over it.
-    fn parse(p_color_blend_state: *const c_void) -> Option<BlendState> {
+    fn targets(
+        p_color_blend_state: *const c_void,
+        formats: &[TextureFormat],
+    ) -> Vec<hl_gpu::protocol::model::descriptor::ColorTargetState> {
         let cb = unsafe {
             (p_color_blend_state as *const VkPipelineColorBlendStateCreateInfo).as_ref()
-        }?;
-        if cb.attachment_count == 0 || cb.p_attachments.is_null() {
-            return None;
-        }
-        let att = unsafe { &*cb.p_attachments };
-        if att.blend_enable == 0 {
-            return None;
-        }
-        Some(BlendState {
-            src_color: Blend::factor(att.src_color_blend_factor),
-            dst_color: Blend::factor(att.dst_color_blend_factor),
-            op_color: Blend::operation(att.color_blend_op),
-            src_alpha: Blend::factor(att.src_alpha_blend_factor),
-            dst_alpha: Blend::factor(att.dst_alpha_blend_factor),
-            op_alpha: Blend::operation(att.alpha_blend_op),
-        })
+        };
+        let attachments = cb
+            .filter(|cb| cb.attachment_count != 0 && !cb.p_attachments.is_null())
+            .map(|cb| unsafe {
+                std::slice::from_raw_parts(cb.p_attachments, cb.attachment_count as usize)
+            })
+            .unwrap_or_default();
+        formats
+            .iter()
+            .enumerate()
+            .map(|(index, &format)| {
+                let attachment = attachments.get(index);
+                let blend = attachment
+                    .filter(|attachment| attachment.blend_enable != 0)
+                    .map(|attachment| BlendState {
+                        src_color: Blend::factor(attachment.src_color_blend_factor),
+                        dst_color: Blend::factor(attachment.dst_color_blend_factor),
+                        op_color: Blend::operation(attachment.color_blend_op),
+                        src_alpha: Blend::factor(attachment.src_alpha_blend_factor),
+                        dst_alpha: Blend::factor(attachment.dst_alpha_blend_factor),
+                        op_alpha: Blend::operation(attachment.alpha_blend_op),
+                    });
+                hl_gpu::protocol::model::descriptor::ColorTargetState {
+                    format,
+                    blend,
+                    write_mask: attachment.map_or(0xf, |attachment| {
+                        attachment.color_write_mask & 0xf
+                    }),
+                }
+            })
+            .collect()
     }
 }
 
@@ -251,13 +275,28 @@ impl Blend {
 /// the sample count was dropped (`sample_count: 1` hardcoded) and an MSAA pipeline rasterized single-sampled.
 struct Multisample;
 impl Multisample {
-    fn samples(p_multisample_state: *const c_void) -> u32 {
+    fn parse(
+        p_multisample_state: *const c_void,
+    ) -> (
+        u32,
+        hl_gpu::protocol::model::descriptor::RenderMultisample,
+    ) {
         let Some(ms) = (unsafe {
             (p_multisample_state as *const VkPipelineMultisampleStateCreateInfo).as_ref()
         }) else {
-            return 1;
+            return (1, Default::default());
         };
-        (ms.rasterization_samples as u32).max(1)
+        (
+            (ms.rasterization_samples as u32).max(1),
+            hl_gpu::protocol::model::descriptor::RenderMultisample {
+                mask: if ms.p_sample_mask.is_null() {
+                    u64::MAX
+                } else {
+                    (unsafe { *ms.p_sample_mask }) as u64
+                },
+                sample_shading: ms.sample_shading_enable != 0,
+            },
+        )
     }
 }
 
@@ -298,11 +337,11 @@ impl InputAssembly {
 /// triangles bleeding through the front.
 struct Rasterization;
 impl Rasterization {
-    fn parse(p_rasterization_state: *const c_void) -> (u32, u32) {
+    fn parse(p_rasterization_state: *const c_void) -> (u32, u32, i32, f32, f32) {
         let Some(rs) = (unsafe {
             (p_rasterization_state as *const VkPipelineRasterizationStateCreateInfo).as_ref()
         }) else {
-            return (0, 0);
+            return (0, 0, 0, 0.0, 0.0);
         };
         let cull = match rs.cull_mode {
             1 => 1,
@@ -310,7 +349,16 @@ impl Rasterization {
             _ => 0,
         };
         let front_face = if rs.front_face == 1 { 1 } else { 0 };
-        (cull, front_face)
+        let (constant, slope_scale, clamp) = if rs.depth_bias_enable != 0 {
+            (
+                rs.depth_bias_constant_factor.round() as i32,
+                rs.depth_bias_slope_factor,
+                rs.depth_bias_clamp,
+            )
+        } else {
+            (0, 0.0, 0.0)
+        };
+        (cull, front_face, constant, slope_scale, clamp)
     }
 }
 
@@ -321,21 +369,6 @@ impl Rasterization {
 /// default). Without this the write mask was DROPPED (`write_mask: 0xf` hardcoded in create.rs) and a
 /// channel-masked draw (e.g. a depth-prepass `colorWriteMask = 0`, or preserving destination alpha) wrote
 /// color it must have left untouched.
-struct ColorMask;
-impl ColorMask {
-    fn parse(p_color_blend_state: *const c_void) -> u32 {
-        let Some(cb) = (unsafe {
-            (p_color_blend_state as *const VkPipelineColorBlendStateCreateInfo).as_ref()
-        }) else {
-            return 0xf;
-        };
-        if cb.attachment_count == 0 || cb.p_attachments.is_null() {
-            return 0xf;
-        }
-        (unsafe { &*cb.p_attachments }.color_write_mask) & 0xf
-    }
-}
-
 #[no_mangle]
 pub extern "C" fn vkCreateGraphicsPipelines(
     _device: *mut c_void,
@@ -382,15 +415,19 @@ pub extern "C" fn vkCreateGraphicsPipelines(
         // The color-target formats: from the bound VkRenderPass's attachment in the classic path, or —
         // for a VK_KHR_dynamic_rendering pipeline (null renderPass) — from the
         // VkPipelineRenderingCreateInfo::pColorAttachmentFormats carried in the pNext chain.
-        let color_formats: Vec<TextureFormat> = if ci.render_pass == 0 {
+        let color_formats = if ci.render_pass == 0 {
             RenderingInfo::color_formats(ci.p_next)
         } else {
-            let fmt = StateStore::with(|s| {
+            StateStore::with(|s| {
                 s.render_passes
                     .get(&ci.render_pass)
-                    .map(|r| Format(r.color_format_vk).wire())
-            });
-            vec![fmt.unwrap_or(TextureFormat::Rgba8Unorm)]
+                    .and_then(|r| Format(r.color_format_vk).wire())
+                    .map(|format| vec![format])
+            })
+        };
+        let Some(color_formats) = color_formats else {
+            result = VK_ERROR_UNKNOWN;
+            continue;
         };
 
         // Depth-test state: the depth attachment format comes from the dynamic-rendering pNext
@@ -404,46 +441,56 @@ pub extern "C" fn vkCreateGraphicsPipelines(
             StateStore::with(|s| {
                 s.render_passes
                     .get(&ci.render_pass)
-                    .and_then(|r| r.depth)
-                    .map(|d| Format(d.format_vk).wire())
+                    .and_then(|r| match r.depth {
+                        Some(depth) => Format(depth.format_vk).wire().map(Some),
+                        None => Some(None),
+                    })
             })
         };
-        let depth = DepthStencil::parse(ci.p_depth_stencil_state, depth_format);
+        let Some(depth_format) = depth_format else {
+            result = VK_ERROR_UNKNOWN;
+            continue;
+        };
+        let mut depth = DepthStencil::parse(ci.p_depth_stencil_state, depth_format);
 
         // Color-blend state: the first attachment's blendEnable + factors/ops, mapped onto the neutral
         // blend wire numbering. A null pColorBlendState / blendEnable = VK_FALSE => None (opaque overwrite),
         // preserving the pre-blend behavior.
-        let blend = Blend::parse(ci.p_color_blend_state);
+        let color_targets = Blend::targets(ci.p_color_blend_state, &color_formats);
 
         // Multisample state: rasterizationSamples → the pipeline's MSAA count. Null / _1_BIT => single-sample.
-        let sample_count = Multisample::samples(ci.p_multisample_state);
+        let (sample_count, multisample) = Multisample::parse(ci.p_multisample_state);
 
         // Input-assembly topology: the real VkPrimitiveTopology (GPUI's quads are 4-vertex TRIANGLE_STRIP).
         let topology = InputAssembly::topology(ci.p_input_assembly_state);
 
         // Rasterization cull state: cullMode + frontFace (a back-face-culled solid mesh must not show its
         // interior). Null pRasterizationState => (none, CCW).
-        let (cull, front_face) = Rasterization::parse(ci.p_rasterization_state);
+        let (cull, front_face, bias_constant, bias_slope_scale, bias_clamp) =
+            Rasterization::parse(ci.p_rasterization_state);
+        if let Some(depth) = depth.as_mut() {
+            depth.bias_constant = bias_constant;
+            depth.bias_slope_scale = bias_slope_scale;
+            depth.bias_clamp = bias_clamp;
+        }
 
         // Per-attachment colorWriteMask (attachment 0, applied to every color target — the one-mask model).
-        let color_write_mask = ColorMask::parse(ci.p_color_blend_state);
-
         let r = ShimState::with_sink(|dev, sink| {
             let frag = fragment.as_ref().map(|(m, e)| (*m, e.as_str()));
-            create::create_graphics_pipeline(
+            create::create_graphics_pipeline_with_layout(
                 dev,
                 sink,
                 (vmod, ventry.as_str()),
                 frag,
                 layouts,
-                color_formats,
+                color_targets,
                 depth,
-                blend,
                 sample_count,
+                multisample,
                 topology,
                 cull,
                 front_face,
-                color_write_mask,
+                Some(ci.layout),
             )
         })
         .unwrap_or(Err(hl_gpu::GpuError::Invalid(
