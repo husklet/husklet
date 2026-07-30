@@ -24,10 +24,8 @@ use hl_cuda::service::register::{self, Registry};
 use hl_cuda::service::{allocate, launch, load_module, transfer};
 use hl_cuda::{CudaContext, CudaDeviceDesc, DevicePtr, KernelArg};
 
+use hl_gpu::protocol::model::capability::{shader_payload, Capabilities, COLOR_FORMATS};
 use hl_gpu::protocol::model::command::etag;
-use hl_gpu::protocol::model::capability::{
-    shader_payload, Capabilities, COLOR_FORMATS,
-};
 use hl_gpu::protocol::model::enums::TextureFormat;
 use hl_gpu::protocol::model::kernel::KernelDescriptor;
 use hl_gpu::{
@@ -44,7 +42,6 @@ const CUDA_COMMANDS: &[u8] = &[
     etag::DISPATCH,
     etag::COPY_B2B,
 ];
-
 
 fn f32s_to_bytes(v: &[f32]) -> Vec<u8> {
     v.iter().flat_map(|x| x.to_le_bytes()).collect()

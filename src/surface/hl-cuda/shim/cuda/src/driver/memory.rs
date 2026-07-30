@@ -115,31 +115,40 @@ pub extern "C" fn cuMemAlloc_v2(dptr: *mut u64, bytesize: usize) -> i32 {
     if dptr.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    ShimState::with(
-        |s| match allocate::mem_alloc(&mut s.ctx, &mut s.sink, bytesize as u64) {
+    ShimState::with(|s| {
+        if let Err(code) = s.require_init() {
+            return code;
+        }
+        match allocate::mem_alloc(&mut s.ctx, &mut s.sink, bytesize as u64) {
             Ok(p) => {
                 unsafe { *dptr = p.0 };
                 CUDA_SUCCESS
             }
             Err(e) => DriverStatus::from(&e).code(),
-        },
-    )
+        }
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn cuMemFree_v2(dptr: u64) -> i32 {
-    ShimState::with(
-        |s| match allocate::mem_free(&mut s.ctx, &mut s.sink, DevicePtr(dptr)) {
+    ShimState::with(|s| {
+        if let Err(code) = s.require_init() {
+            return code;
+        }
+        match allocate::mem_free(&mut s.ctx, &mut s.sink, DevicePtr(dptr)) {
             Ok(()) => CUDA_SUCCESS,
             Err(_) => CUDA_ERROR_INVALID_VALUE,
-        },
-    )
+        }
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn cuMemcpyHtoD_v2(dst: u64, src: *const c_void, n: usize) -> i32 {
     let host = unsafe { CInput::bytes(src, n) };
     ShimState::with(|s| {
+        if let Err(code) = s.require_init() {
+            return code;
+        }
         match transfer::memcpy_htod(&mut s.ctx, &mut s.sink, DevicePtr(dst), host) {
             Ok(()) => CUDA_SUCCESS,
             Err(_) => CUDA_ERROR_INVALID_VALUE,
@@ -150,6 +159,9 @@ pub extern "C" fn cuMemcpyHtoD_v2(dst: u64, src: *const c_void, n: usize) -> i32
 #[no_mangle]
 pub extern "C" fn cuMemcpyDtoD_v2(dst: u64, src: u64, n: usize) -> i32 {
     ShimState::with(|s| {
+        if let Err(code) = s.require_init() {
+            return code;
+        }
         match transfer::memcpy_dtod(
             &mut s.ctx,
             &mut s.sink,
@@ -171,8 +183,11 @@ pub extern "C" fn cuMemcpyDtoH_v2(dst: *mut c_void, src: u64, n: usize) -> i32 {
     if dst.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    ShimState::with(
-        |s| match transfer::read_dtoh(&s.ctx, &mut s.sink, DevicePtr(src), n) {
+    ShimState::with(|s| {
+        if let Err(code) = s.require_init() {
+            return code;
+        }
+        match transfer::read_dtoh(&s.ctx, &mut s.sink, DevicePtr(src), n) {
             Ok(bytes) => {
                 unsafe {
                     std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst as *mut u8, bytes.len())
@@ -180,8 +195,8 @@ pub extern "C" fn cuMemcpyDtoH_v2(dst: *mut c_void, src: u64, n: usize) -> i32 {
                 CUDA_SUCCESS
             }
             Err(_) => CUDA_ERROR_INVALID_VALUE,
-        },
-    )
+        }
+    })
 }
 
 // ==================================================================================================

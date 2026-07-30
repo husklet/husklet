@@ -28,10 +28,8 @@ use hl_cuda::model::texture::{CudaArray, FilterMode, SamplerDesc, TextureObject}
 use hl_cuda::service::{allocate, graph, launch, load_module, symbol, texture, transfer};
 use hl_cuda::{CudaContext, CudaDeviceDesc, DevicePtr, KernelArg};
 
+use hl_gpu::protocol::model::capability::{shader_payload, Capabilities, COLOR_FORMATS};
 use hl_gpu::protocol::model::command::etag;
-use hl_gpu::protocol::model::capability::{
-    shader_payload, Capabilities, COLOR_FORMATS,
-};
 use hl_gpu::protocol::model::enums::TextureFormat;
 use hl_gpu::protocol::model::kernel::KernelDescriptor;
 use hl_gpu::{
@@ -48,7 +46,6 @@ const CUDA_COMMANDS: &[u8] = &[
     etag::DISPATCH,
     etag::COPY_B2B,
 ];
-
 
 // --------------------------------------------------------------------------------------------------
 // shared harness — identical wiring to tests/compute_demo.rs.

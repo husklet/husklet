@@ -28,6 +28,50 @@ pub struct CudaDeviceDesc {
 }
 
 impl CudaDeviceDesc {
+    /// The `(lowest, highest)` compute capability this device may report.
+    ///
+    /// **What the reported capability means here, and why it is not the IR's real feature level.**
+    ///
+    /// The kernel IR the PTX front-end lowers onto is far smaller than any real compute capability. As of
+    /// today it covers: 32-bit integer ALU (`mov`/`add`/`sub`/`mul.lo`/`mul.wide.[su]32`/`mad.lo`/shifts/
+    /// bitwise), f32 `add`/`sub`/`mul`/`fma`, INTEGER `setp` only, `cvt` between f32 and s32 plus
+    /// `s64<-s32` and same-width integer reinterpretation, `ld`/`st` in `.global` and `.shared` through a
+    /// register address, integer `atom`/`red` including `cas`, `bar.sync`, and `bra` predicated on a
+    /// `setp` result. It has NO f64/f16/bf16, no floating-point compare, no warp intrinsics
+    /// (`vote`/`shfl`/`match`/`%laneid`/`%warpid`), no dynamic (`extern`) shared memory, no module-scope
+    /// `.global` variables, no `atom.inc`/`dec`, and `membar`/`fence` lowers to a no-op.
+    ///
+    /// Measured against the MANDATORY feature set of each capability level, the highest one this fully
+    /// covers is **1.1** — 1.2 already requires warp `vote` and 1.3 requires f64, neither of which exists
+    /// here. So there is no usable capability that is also a truthful feature claim.
+    ///
+    /// Clamping to 1.1 was rejected. It would make every application fail, including the ones that
+    /// compute correct results today: CUDA 12.2 (the version `cuDriverGetVersion` reports) has no PTX ISA
+    /// or `nvcc` target below 5.0, so a 1.1 device is refused by the toolchain before a single kernel is
+    /// examined. It would also contradict the rest of the device table — 1024 threads/block, 48 KiB shared
+    /// memory per block, unified addressing, managed memory — which no 1.1 part had.
+    ///
+    /// The decision is therefore: **the reported capability is a toolchain-compatibility contract, not a
+    /// feature claim.** It says which PTX/cubin variant an application should hand us, and the default
+    /// (8, 6) is a variant CUDA 12.2 emits. The actual feature gap is enforced where it is observable and
+    /// loud — the PTX front-end rejects every construct listed above, so `cuModuleLoadData`/`cuLaunchKernel`
+    /// return `CUDA_ERROR_INVALID_PTX` / `CUDA_ERROR_NOT_SUPPORTED` instead of a wrong number, and the
+    /// capability-derived attributes that would be lies are already reported as absent
+    /// (`CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH` = 0, `MAX_DYNAMIC_SHARED_SIZE_BYTES` = 0). A
+    /// capability-branching library that picks an sm_86 path it cannot be given fails at load, visibly.
+    ///
+    /// What this constant adds: the configured value must be one CUDA 12.2 can actually target. `5.0` is
+    /// the oldest architecture that toolchain supports and `9.0` (Hopper) the newest it emits, so an
+    /// `HL_CUDA_CC` outside that range is refused and the default is kept — rather than advertising a
+    /// capability for which no application could produce a kernel at all.
+    ///
+    /// The Ampere-class SM budget the occupancy math uses (2048 threads, 65536 registers and 102400
+    /// shared bytes per SM, 32 blocks per SM) deliberately stays fixed rather than tracking this value:
+    /// those are the numbers `cuDeviceGetAttribute`/`cudaGetDeviceProperties` report for the modeled
+    /// device, and deriving them from a configurable capability would only let occupancy disagree with the
+    /// attributes an application reads.
+    pub const SUPPORTED_CAPABILITY: ((u32, u32), (u32, u32)) = ((5, 0), (9, 0));
+
     /// A sensible default for an Apple-silicon host: presents as a mid-range Ampere-class device backed
     /// by unified memory. `vram_bytes` should be a slice of the machine's RAM the user allows.
     pub fn apple_default(vram_bytes: u64) -> Self {
@@ -60,7 +104,8 @@ impl CudaDeviceDesc {
         }
     }
 
-    /// Parse a `"major.minor"` compute capability (a bare `"8"` means `(8, 0)`).
+    /// Parse a `"major.minor"` compute capability (a bare `"8"` means `(8, 0)`), rejecting anything the
+    /// advertised driver could not honour — see [`Self::SUPPORTED_CAPABILITY`].
     fn capability(text: &str) -> Option<(u32, u32)> {
         let mut parts = text.trim().split('.');
         let major = parts.next()?.trim().parse::<u32>().ok()?;
@@ -68,7 +113,8 @@ impl CudaDeviceDesc {
             .next()
             .and_then(|m| m.trim().parse::<u32>().ok())
             .unwrap_or(0);
-        Some((major, minor))
+        let (low, high) = Self::SUPPORTED_CAPABILITY;
+        ((low..=high).contains(&(major, minor))).then_some((major, minor))
     }
 
     pub fn compute_capability_str(&self) -> String {
@@ -94,5 +140,39 @@ impl CudaDeviceDesc {
     /// The line `nvidia-smi -L` would print for this device (index `idx`).
     pub fn nvidia_smi_l_line(&self, idx: u32) -> String {
         format!("GPU {}: {} (UUID: {})", idx, self.name, self.uuid_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CudaDeviceDesc;
+
+    /// `HL_CUDA_CC` is a toolchain-compatibility contract (see
+    /// [`CudaDeviceDesc::SUPPORTED_CAPABILITY`]): a value CUDA 12.2 can target is honoured, and one it
+    /// cannot — the honest sm_11-class feature level of the kernel IR, or a made-up future one — is
+    /// refused so the device never advertises a capability no application could compile for.
+    #[test]
+    fn a_configured_capability_outside_the_cuda_12_range_is_refused() {
+        let mut device = CudaDeviceDesc::apple_default(1 << 30);
+        let default = device.compute_capability;
+        assert_eq!(default, (8, 6));
+
+        // Accepted: the range CUDA 12.2 emits, ends included.
+        for accepted in ["5.0", "7.5", "8.9", "9.0"] {
+            let mut d = CudaDeviceDesc::apple_default(1 << 30);
+            d.configure(None, Some(accepted));
+            let (major, minor) = d.compute_capability;
+            assert_eq!(format!("{major}.{minor}"), accepted);
+        }
+
+        // Refused, default kept: below the toolchain floor (including the IR's real 1.1 feature level),
+        // above what CUDA 12.2 emits, and unparsable text.
+        for refused in ["1.1", "2.0", "3.5", "4.9", "9.1", "99.99", "sm_86", ""] {
+            device.configure(None, Some(refused));
+            assert_eq!(
+                device.compute_capability, default,
+                "`{refused}` must not be reported as a compute capability"
+            );
+        }
     }
 }

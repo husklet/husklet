@@ -11,10 +11,8 @@ use hl_cuda::adapter::ptx;
 use hl_cuda::service::{allocate, launch, load_module, transfer};
 use hl_cuda::{CudaContext, CudaDeviceDesc, KernelArg};
 
+use hl_gpu::protocol::model::capability::{shader_payload, Capabilities, COLOR_FORMATS};
 use hl_gpu::protocol::model::command::etag;
-use hl_gpu::protocol::model::capability::{
-    shader_payload, Capabilities, COLOR_FORMATS,
-};
 use hl_gpu::protocol::model::enums::TextureFormat;
 use hl_gpu::protocol::model::kernel::KernelDescriptor;
 use hl_gpu::{
@@ -31,7 +29,6 @@ const CUDA_COMMANDS: &[u8] = &[
     etag::DISPATCH,
     etag::COPY_B2B,
 ];
-
 
 /// Wrap a kernel body in a one-entry PTX module and compile it.
 fn compile(body: &str) -> Result<(), GpuError> {
@@ -308,4 +305,35 @@ fn executes_the_modeled_equivalent_exactly() {
             "masked_scale[{i}]: got {got}, want {want}"
         );
     }
+}
+
+/// A module-scope `.global` variable (what nvcc emits for a `__device__`/`__constant__` global, bound by
+/// `__cudaRegisterVar`) is not part of hl's module model. A `.global` address operand naming such a symbol
+/// used to be interned as a fresh virtual register, so the kernel read zero and returned a plausible wrong
+/// number; it must be a typed `GpuError::Kernel` instead. The register-addressed neighbour still compiles,
+/// so the rejection is narrow.
+#[test]
+fn a_module_scope_global_symbol_is_rejected_and_a_register_address_still_compiles() {
+    for body in [
+        "ld.global.u32 %r1, [gCounter]; ret;",
+        "ld.global.u32 %r1, [gCounter+4]; ret;",
+        "st.global.u32 [gCounter], %r1; ret;",
+        "atom.global.add.u32 %r2, [gCounter], %r1; ret;",
+    ] {
+        match compile(body) {
+            Err(GpuError::Kernel(_)) => {}
+            other => panic!("`{body}` must be rejected, got {other:?}"),
+        }
+    }
+
+    // The valid neighbour: the same accesses through a register address are inside the subset.
+    compile(
+        "ld.param.u64 %rd1, [k_param_0];\n\
+         cvta.to.global.u64 %rd2, %rd1;\n\
+         ld.global.u32 %r1, [%rd2];\n\
+         st.global.u32 [%rd2+4], %r1;\n\
+         atom.global.add.u32 %r2, [%rd2], %r1;\n\
+         ret;",
+    )
+    .expect("register-addressed global access must still compile");
 }

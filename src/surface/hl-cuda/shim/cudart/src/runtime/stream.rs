@@ -38,14 +38,17 @@ pub extern "C" fn cudaStreamCreateWithFlags(p_stream: *mut *mut c_void, _flags: 
     cudaStreamCreate(p_stream)
 }
 
+/// `cudaStreamDestroy(stream)` — retire a created stream. A second destroy, an unknown token, and the
+/// reserved default-stream tokens (`NULL`/`cudaStreamLegacy`/`cudaStreamPerThread`, which an application
+/// may not destroy) are all `cudaErrorInvalidResourceHandle`.
 #[no_mangle]
 pub extern "C" fn cudaStreamDestroy(stream: *mut c_void) -> i32 {
-    ShimState::with(|s| match s.stream(stream) {
-        Some(st) => {
-            s.ctx.streams.destroy(st);
+    ShimState::with(|s| {
+        if s.destroy_stream(stream) {
             CUDART_SUCCESS
+        } else {
+            s.fail(CUDART_ERROR_INVALID_RESOURCE_HANDLE)
         }
-        None => s.fail(CUDART_ERROR_INVALID_VALUE),
     })
 }
 

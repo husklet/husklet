@@ -36,22 +36,18 @@ mod tests {
 
     #[test]
     fn surface_is_complete_and_matches_the_census() {
-        assert_eq!(CUDART_ENTRYPOINTS, 49, "CUDA runtime surface drifted from the golden 49");
+        assert_eq!(
+            CUDART_ENTRYPOINTS, 49,
+            "CUDA runtime surface drifted from the golden 49"
+        );
         assert_eq!(GENERATED_STUBS + IMPLEMENTED_ENTRYPOINTS, TOTAL_ENTRYPOINTS);
         // The whole surface has real hand-written bodies — no generated default stubs remain.
         assert_eq!(GENERATED_STUBS, 0, "cudart still has default stubs");
     }
 
-    // One serial test drives the sink-free entry points (device/props/events/streams/errors/config), so
-    // the process-global state is never raced across parallel tests.
-    /// Serializes the tests that drive the process-global [`crate::state`] (which is a single
-    /// `OnceLock<Mutex<State>>` shared across the whole test binary) so their `reset()` + `$HL_GPU_EXEC`
-    /// manipulation never interleave under the default parallel test runner.
-    static STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     #[test]
     fn runtime_entry_points_roundtrip() {
-        let _serial = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = crate::state::serial();
         crate::state::reset();
 
         // device enumeration
@@ -73,23 +69,38 @@ mod tests {
 
         // device properties: name at offset 0, major/minor readable at their fixed offsets
         let mut buf = vec![0u8; 4096];
-        assert_eq!(cudaGetDeviceProperties(buf.as_mut_ptr() as *mut c_void, 0), 0);
+        assert_eq!(
+            cudaGetDeviceProperties(buf.as_mut_ptr() as *mut c_void, 0),
+            0
+        );
         let name = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr() as *const c_char) }
             .to_string_lossy()
             .into_owned();
         assert!(name.contains("CUDA-sim"), "unexpected device name: {name}");
-        assert_eq!(cudaGetDeviceProperties(core::ptr::null_mut(), 0), CUDART_ERR_INVALID_DEVICE);
+        assert_eq!(
+            cudaGetDeviceProperties(core::ptr::null_mut(), 0),
+            CUDART_ERR_INVALID_DEVICE
+        );
 
         // PCI bus id
         let mut pci = [0 as c_char; 32];
         assert_eq!(cudaDeviceGetPCIBusId(pci.as_mut_ptr(), 32, 0), 0);
-        let pci_s = unsafe { std::ffi::CStr::from_ptr(pci.as_ptr()) }.to_string_lossy().into_owned();
+        let pci_s = unsafe { std::ffi::CStr::from_ptr(pci.as_ptr()) }
+            .to_string_lossy()
+            .into_owned();
         assert_eq!(pci_s, "0000:00:00.0");
 
-        // func attributes: an unregistered/null func falls back to the modeled defaults (success).
+        // func attributes: an unregistered/null func has no device entry to describe, so it is
+        // cudaErrorInvalidDeviceFunction — never plausible constants reported as success.
         let mut fattr = vec![0u8; 256];
-        assert_eq!(cudaFuncGetAttributes(fattr.as_mut_ptr() as *mut c_void, core::ptr::null()), 0);
-        assert_eq!(cudaFuncGetAttributes(core::ptr::null_mut(), core::ptr::null()), CUDART_ERR_INVALID_VALUE);
+        assert_eq!(
+            cudaFuncGetAttributes(fattr.as_mut_ptr() as *mut c_void, core::ptr::null()),
+            98 /* cudaErrorInvalidDeviceFunction */
+        );
+        assert_eq!(
+            cudaFuncGetAttributes(core::ptr::null_mut(), core::ptr::null()),
+            CUDART_ERR_INVALID_VALUE
+        );
 
         // A REGISTERED host stub resolves to its real device kernel, so cudaFuncGetAttributes reports the
         // kernel's TRUE register + static-shared figures (recovered from the module PTX by the same
@@ -114,7 +125,10 @@ mod tests {
                 core::ptr::null_mut(),
             );
             let mut ra = vec![0u8; 256];
-            assert_eq!(cudaFuncGetAttributes(ra.as_mut_ptr() as *mut c_void, host_fn), 0);
+            assert_eq!(
+                cudaFuncGetAttributes(ra.as_mut_ptr() as *mut c_void, host_fn),
+                0
+            );
             // CudaFuncAttributes #[repr(C)]: shared_size_bytes @0 (usize), num_regs @28 (i32).
             let shared = usize::from_le_bytes(ra[0..8].try_into().unwrap());
             let num_regs = i32::from_le_bytes(ra[28..32].try_into().unwrap());
@@ -151,23 +165,35 @@ mod tests {
 
         // cudaGetDeviceProperties_v2 fills the same struct as the unversioned alias: name @0, major/minor set.
         let mut p2 = vec![0u8; 4096];
-        assert_eq!(cudaGetDeviceProperties_v2(p2.as_mut_ptr() as *mut c_void, 0), 0);
+        assert_eq!(
+            cudaGetDeviceProperties_v2(p2.as_mut_ptr() as *mut c_void, 0),
+            0
+        );
         let n2 = unsafe { std::ffi::CStr::from_ptr(p2.as_ptr() as *const c_char) }
             .to_string_lossy()
             .into_owned();
         assert!(n2.contains("CUDA-sim"), "v2 name: {n2}");
-        assert_eq!(cudaGetDeviceProperties_v2(core::ptr::null_mut(), 0), CUDART_ERR_INVALID_DEVICE);
+        assert_eq!(
+            cudaGetDeviceProperties_v2(core::ptr::null_mut(), 0),
+            CUDART_ERR_INVALID_DEVICE
+        );
 
         // cudaStreamCreateWithFlags mints a usable stream (shares cudaStreamCreate's body).
         let mut sf: *mut c_void = core::ptr::null_mut();
-        assert_eq!(cudaStreamCreateWithFlags(&mut sf, 0x1 /* cudaStreamNonBlocking */), 0);
+        assert_eq!(
+            cudaStreamCreateWithFlags(&mut sf, 0x1 /* cudaStreamNonBlocking */),
+            0
+        );
         assert!(!sf.is_null());
         assert_eq!(cudaStreamQuery(sf), 0);
         assert_eq!(cudaStreamDestroy(sf), 0);
 
         // cudaHostAlloc hands back real writable pinned host memory (shares cudaMallocHost's body).
         let mut ha: *mut c_void = core::ptr::null_mut();
-        assert_eq!(cudaHostAlloc(&mut ha, 128, 0x2 /* cudaHostAllocMapped */), 0);
+        assert_eq!(
+            cudaHostAlloc(&mut ha, 128, 0x2 /* cudaHostAllocMapped */),
+            0
+        );
         assert!(!ha.is_null());
         unsafe { *(ha as *mut u8).add(64) = 0x5A };
         assert_eq!(unsafe { *(ha as *mut u8).add(64) }, 0x5A);
@@ -177,7 +203,11 @@ mod tests {
         // cudaDeviceReset clears it back to success. A failing call sets the sticky error truthfully.
         assert_eq!(cudaSetDevice(7), CUDART_ERR_INVALID_DEVICE); // sets last_error = 101
         assert_eq!(cudaPeekAtLastError(), CUDART_ERR_INVALID_DEVICE);
-        assert_eq!(cudaPeekAtLastError(), CUDART_ERR_INVALID_DEVICE, "peek does not clear");
+        assert_eq!(
+            cudaPeekAtLastError(),
+            CUDART_ERR_INVALID_DEVICE,
+            "peek does not clear"
+        );
         assert_eq!(cudaGetLastError(), CUDART_ERR_INVALID_DEVICE); // reads + clears
         assert_eq!(cudaPeekAtLastError(), 0, "cleared after get");
         // reset restores a clean slate (device 0, no sticky error)
@@ -210,7 +240,8 @@ mod tests {
         assert_eq!(cudaStreamDestroy(stream), 0);
 
         // events: create → record → query(ready) → elapsed; unrecorded → NotReady; bad handle errors
-        let (mut a, mut b): (*mut c_void, *mut c_void) = (core::ptr::null_mut(), core::ptr::null_mut());
+        let (mut a, mut b): (*mut c_void, *mut c_void) =
+            (core::ptr::null_mut(), core::ptr::null_mut());
         assert_eq!(cudaEventCreate(&mut a), 0);
         assert_eq!(cudaEventCreateWithFlags(&mut b, 0), 0);
         assert_eq!(cudaEventQuery(a), CUDART_ERR_NOT_READY); // created but not recorded
@@ -222,7 +253,10 @@ mod tests {
         let mut ms = -1.0f32;
         assert_eq!(cudaEventElapsedTime(&mut ms, a, b), 0);
         assert!(ms >= 0.0, "elapsed must be non-negative, got {ms}");
-        assert_eq!(cudaEventRecord(bogus, core::ptr::null_mut()), CUDART_ERR_INVALID_RESOURCE_HANDLE);
+        assert_eq!(
+            cudaEventRecord(bogus, core::ptr::null_mut()),
+            CUDART_ERR_INVALID_RESOURCE_HANDLE
+        );
         assert_eq!(cudaStreamWaitEvent(stream_default(), a, 0), 0);
         assert_eq!(cudaEventDestroy(a), 0);
         assert_eq!(cudaEventDestroy(b), 0);
@@ -237,12 +271,20 @@ mod tests {
         // <<<>>> call-config stack push/pop round-trip
         let g = Dim3 { x: 4, y: 1, z: 1 };
         let bl = Dim3 { x: 64, y: 2, z: 1 };
-        assert_eq!(__cudaPushCallConfiguration(g, bl, 128, core::ptr::null_mut()), 0);
+        assert_eq!(
+            __cudaPushCallConfiguration(g, bl, 128, core::ptr::null_mut()),
+            0
+        );
         let (mut og, mut ob) = (Dim3 { x: 0, y: 0, z: 0 }, Dim3 { x: 0, y: 0, z: 0 });
         let mut oshm = 0usize;
         let mut ostream: *mut c_void = core::ptr::null_mut();
         assert_eq!(
-            __cudaPopCallConfiguration(&mut og, &mut ob, &mut oshm, &mut ostream as *mut _ as *mut c_void),
+            __cudaPopCallConfiguration(
+                &mut og,
+                &mut ob,
+                &mut oshm,
+                &mut ostream as *mut _ as *mut c_void
+            ),
             0
         );
         assert_eq!((og.x, ob.x, ob.y, oshm), (4, 64, 2, 128));
@@ -261,7 +303,7 @@ mod tests {
     fn device_properties_report_the_configured_identity_and_no_cooperative_launch() {
         use crate::runtime::DevicePropOffset as Offset;
 
-        let _serial = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = crate::state::serial();
         std::env::set_var("HL_CUDA_NAME", "NVIDIA GeForce RTX 3060");
         std::env::set_var("HL_CUDA_CC", "7.5");
         crate::state::reset();
@@ -329,7 +371,11 @@ mod tests {
         exec: hl_gpu::CpuExecutor,
     }
     impl hl_gpu::ConnectionHandler for RuntimeHost {
-        fn submit(&mut self, _h: &hl_gpu::transport::SubmitHeader, batch: &[hl_gpu::Cmd]) -> hl_gpu::transport::Verdict {
+        fn submit(
+            &mut self,
+            _h: &hl_gpu::transport::SubmitHeader,
+            batch: &[hl_gpu::Cmd],
+        ) -> hl_gpu::transport::Verdict {
             let frame_bytes = hl_gpu::Encoder::stream(batch).len();
             match hl_gpu::runtime::submit(&mut self.session, &mut self.exec, frame_bytes, batch) {
                 Ok(_) => hl_gpu::transport::Verdict::Ack,
@@ -354,7 +400,7 @@ mod tests {
     // memset must still write EXACTLY the right bytes — asserted via a real device→host readback.
     #[test]
     fn memset_hostile_count_is_bounded_and_legal_memset_is_exact() {
-        let _serial = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = crate::state::serial();
 
         // A runtime-backed host on a private temp socket, serving one connection (submit + readback).
         let sock = std::env::temp_dir().join(format!(
@@ -403,8 +449,20 @@ mod tests {
         // LEGAL full fill: exactly 64 bytes of 0xCD, verified by an exact device→host readback.
         assert_eq!(cudaMemset(dptr, 0xCD, 64), 0);
         let mut host_buf = vec![0u8; 64];
-        assert_eq!(cudaMemcpy(host_buf.as_mut_ptr() as *mut c_void, dptr, 64, 2 /* DtoH */), 0);
-        assert_eq!(host_buf, vec![0xCDu8; 64], "legal full memset must write exactly 64 bytes of 0xCD");
+        assert_eq!(
+            cudaMemcpy(
+                host_buf.as_mut_ptr() as *mut c_void,
+                dptr,
+                64,
+                2 /* DtoH */
+            ),
+            0
+        );
+        assert_eq!(
+            host_buf,
+            vec![0xCDu8; 64],
+            "legal full memset must write exactly 64 bytes of 0xCD"
+        );
 
         // LEGAL interior fill: clear, then fill 16 bytes at offset 8 with 0xEE — exactly that window
         // changes, the rest stays zero (proves the bounded path still writes the correct range/offset).
@@ -422,15 +480,30 @@ mod tests {
         // the synchronous one, so a round-trip through device memory returns the exact source bytes.
         let src: Vec<u8> = (0..64u8).map(|i| i.wrapping_mul(5)).collect();
         assert_eq!(
-            cudaMemcpyAsync(dptr, src.as_ptr() as *const c_void, 64, 1 /* HtoD */, core::ptr::null_mut()),
+            cudaMemcpyAsync(
+                dptr,
+                src.as_ptr() as *const c_void,
+                64,
+                1, /* HtoD */
+                core::ptr::null_mut()
+            ),
             0
         );
         let mut got = vec![0u8; 64];
         assert_eq!(
-            cudaMemcpyAsync(got.as_mut_ptr() as *mut c_void, dptr, 64, 2 /* DtoH */, core::ptr::null_mut()),
+            cudaMemcpyAsync(
+                got.as_mut_ptr() as *mut c_void,
+                dptr,
+                64,
+                2, /* DtoH */
+                core::ptr::null_mut()
+            ),
             0
         );
-        assert_eq!(got, src, "cudaMemcpyAsync round-trips the exact bytes through device memory");
+        assert_eq!(
+            got, src,
+            "cudaMemcpyAsync round-trips the exact bytes through device memory"
+        );
 
         // Synchronization barriers really submit + wait on a timeline fence over the live socket.
         assert_eq!(cudaDeviceSynchronize(), 0);
@@ -440,7 +513,10 @@ mod tests {
         assert_eq!(cudaStreamSynchronize(stream), 0);
         assert_eq!(cudaStreamSynchronize(core::ptr::null_mut()), 0); // default stream
         let bogus = 0x9999usize as *mut c_void;
-        assert_eq!(cudaStreamSynchronize(bogus), 1 /* cudaErrorInvalidValue */);
+        assert_eq!(
+            cudaStreamSynchronize(bogus),
+            1 /* cudaErrorInvalidValue */
+        );
         assert_eq!(cudaStreamDestroy(stream), 0);
 
         // cudaHostGetDevicePointer maps a pinned host allocation to a live device pointer (lazily backing
@@ -453,7 +529,10 @@ mod tests {
         let mut junk = [0u8; 8];
         let foreign = junk.as_mut_ptr() as *mut c_void;
         let mut jdev: *mut c_void = core::ptr::null_mut();
-        assert_eq!(cudaHostGetDevicePointer(&mut jdev, foreign, 0), 1 /* invalid */);
+        assert_eq!(
+            cudaHostGetDevicePointer(&mut jdev, foreign, 0),
+            1 /* invalid */
+        );
         assert_eq!(cudaFreeHost(hp), 0);
 
         // Tear down: freeing + resetting the state drops the connected sink, closing the socket so the

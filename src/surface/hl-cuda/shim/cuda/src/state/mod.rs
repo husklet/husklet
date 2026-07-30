@@ -7,24 +7,36 @@
 //! single boundary to the host GPU-exec service, connected lazily from `$HL_GPU_EXEC` on first submit.
 //!
 //! This module owns only the C-ABI marshalling state the driver API needs: the opaque handle tables for
-//! `CUcontext` / `CUmodule` / `CUfunction` / `CUstream` / `CUevent`. The compute semantics are NOT
-//! redefined here — they are the shared `hl_cuda` services.
+//! `CUmodule` / `CUfunction` / `CUstream` / `CUevent` ([`handle`]) and the `CUcontext` token bookkeeping
+//! ([`context`]). The compute semantics are NOT redefined here — they are the shared `hl_cuda` services,
+//! and object LIFETIME is the `hl_cuda` model's `StreamTable`/`EventTable`, which the handle tables
+//! resolve through so a destroyed handle can never be mistaken for a live one.
 
 use core::ffi::c_void;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
+use hl_cuda::model::event::Event;
 use hl_cuda::model::stream::Stream;
+use hl_cuda::result::CUDA_ERROR_NOT_INITIALIZED;
 use hl_cuda::{CudaContext, CudaDeviceDesc, Function};
 use hl_gpu::transport::DEFAULT_EXEC_SOCK;
 use hl_gpu::RemoteCommandSink;
 
+mod context;
+mod handle;
+
+pub use handle::{CU_STREAM_LEGACY, CU_STREAM_PER_THREAD};
+
 /// Everything the shim tracks between `cu*` calls.
 pub struct State {
-    /// `cuInit` was called (the driver spec-guards most calls behind this).
+    /// `cuInit` was called. Every entry point that lowers IR is gated on it ([`State::require_init`]), which
+    /// is also how a `fork(2)` child is refused: the child's fresh state has never been initialized.
     pub inited: bool,
+    /// The pid that owns this state. A mismatch means the state was inherited across `fork(2)`.
+    pid: u32,
     /// The CUDA object model + lowering target (device desc, allocation/module/stream tables).
     pub ctx: CudaContext,
     /// The guest→host boundary: encodes each lowered batch and ships it framed over `$HL_GPU_EXEC`.
@@ -37,18 +49,25 @@ pub struct State {
     func_cache_config: Vec<i32>,
     /// `CUmodule` table: an opaque handle is `index + 1`, storing the `hl_cuda` module id.
     modules: Vec<u32>,
-    /// `CUstream` table: an opaque handle is `index + 1`, storing the `hl_cuda` [`Stream`]. The default
-    /// stream is the null handle (token `0`).
+    /// `CUstream` token table: a created handle is `index + STREAM_TOKEN_BASE`, storing the `hl_cuda`
+    /// [`Stream`] whose liveness `ctx.streams` owns. Append-only — a token is never recycled.
     streams: Vec<Stream>,
     /// Parallel to `streams`: the `(flags, priority)` a stream was created with, for
     /// `cuStreamGetFlags`/`cuStreamGetPriority`.
     stream_meta: Vec<(u32, i32)>,
-    /// `CUevent` table: an opaque handle is `index + 1`, holding the record timestamp (`None` until
-    /// `cuEventRecord`) for `cuEventElapsedTime`/`cuEventQuery`.
-    events: Vec<Option<Instant>>,
+    /// `CUevent` token table: a handle is `index + 1`, storing the `hl_cuda` [`Event`] whose liveness
+    /// `ctx.events` owns. Append-only — a token is never recycled.
+    events: Vec<Event>,
+    /// Parallel to `events`: the `cuEventRecord` timestamp (`None` until recorded) for
+    /// `cuEventElapsedTime`. The model tracks *whether* an event is recorded; the wall clock is C-ABI
+    /// state only this shim needs.
+    event_times: Vec<Option<Instant>>,
 
     /// `CUcontext` token allocator (opaque, non-null). One simulated device, so contexts are tokens.
     next_ctx: usize,
+    /// The live `CUcontext` tokens. `cuCtxDestroy` removes one; every context-taking entry point checks
+    /// membership so a destroyed token is `CUDA_ERROR_INVALID_CONTEXT`, not a silent success.
+    contexts: HashSet<usize>,
     /// The current context token (`0` = none).
     current_ctx: usize,
     /// The `cuCtxPushCurrent`/`cuCtxPopCurrent` stack (holds the *previous* current tokens).
@@ -87,6 +106,7 @@ impl State {
         );
         State {
             inited: false,
+            pid: std::process::id(),
             ctx: CudaContext::new(device),
             // Connect target from $HL_GPU_EXEC; the connection itself is opened lazily on first submit.
             sink: RemoteCommandSink::new(
@@ -98,7 +118,9 @@ impl State {
             streams: Vec::new(),
             stream_meta: Vec::new(),
             events: Vec::new(),
+            event_times: Vec::new(),
             next_ctx: 1,
+            contexts: HashSet::new(),
             current_ctx: 0,
             ctx_stack: Vec::new(),
             ctx_flags: HashMap::new(),
@@ -109,6 +131,37 @@ impl State {
             limits: [1024, 1024 * 1024, 8 * 1024 * 1024, 2, 2048, 128, 0],
             cache_config: 0,
             shared_config: 0,
+        }
+    }
+
+    /// The gate every IR-emitting entry point checks before touching `ctx`/`sink`. `Err` carries
+    /// `CUDA_ERROR_NOT_INITIALIZED`: either `cuInit` was never called, or this state was inherited
+    /// across `fork(2)` and disowned (see [`State::disown_after_fork`]).
+    pub fn require_init(&self) -> Result<(), i32> {
+        if self.inited {
+            Ok(())
+        } else {
+            Err(CUDA_ERROR_NOT_INITIALIZED)
+        }
+    }
+
+    /// CUDA does not inherit a context across `fork(2)`, and using the parent's context in the child is
+    /// undefined. The engine implements a guest `fork()` as a real host fork, so without this the child
+    /// would hold a copy of the parent's `$HL_GPU_EXEC` fd and believe it owns the parent's buffer ids —
+    /// two processes interleaving frames on one socket. Dropping the inherited state closes only the
+    /// CHILD's copy of the fd and empties every handle table, and the fresh state is uninitialized, so
+    /// each lowering entry point reports `CUDA_ERROR_NOT_INITIALIZED` and each inherited handle reports
+    /// `CUDA_ERROR_INVALID_HANDLE` until the child calls `cuInit` for itself.
+    ///
+    /// The pid comparison runs on every state access rather than from a `pthread_atfork` handler, so it
+    /// also covers `clone(2)`/`vfork` and happens before any fd or table is touched. A guest `execve()`
+    /// reloads the image, which reinitializes these statics, and std's `UnixStream` fd is `SOCK_CLOEXEC`,
+    /// so exec needs no guard.
+    fn disown_after_fork(&mut self) {
+        let pid = std::process::id();
+        if self.pid != pid {
+            *self = State::new();
+            self.pid = pid;
         }
     }
 
@@ -138,221 +191,6 @@ impl State {
     pub fn set_ctx_shared_config(&mut self, c: i32) {
         self.shared_config = c;
     }
-    /// The current context token as a raw `usize` (`0` = none) — the id `cuCtxGetId` reports.
-    pub fn current_ctx_token(&self) -> usize {
-        self.current_ctx
-    }
-
-    // ---- context tokens ---------------------------------------------------------------------------
-
-    pub fn create_ctx(&mut self) -> *mut c_void {
-        let token = self.next_ctx;
-        self.next_ctx += 1;
-        self.current_ctx = token;
-        token as *mut c_void
-    }
-    /// Mint a context token with recorded creation flags (`cuCtxCreate(flags)`).
-    pub fn create_ctx_with_flags(&mut self, flags: u32) -> *mut c_void {
-        let token = self.next_ctx;
-        self.next_ctx += 1;
-        self.current_ctx = token;
-        self.ctx_flags.insert(token, flags);
-        token as *mut c_void
-    }
-    pub fn current_ctx(&self) -> *mut c_void {
-        self.current_ctx as *mut c_void
-    }
-    pub fn set_current_ctx(&mut self, h: *mut c_void) {
-        self.current_ctx = h as usize;
-    }
-    pub fn destroy_ctx(&mut self, h: *mut c_void) {
-        let token = h as usize;
-        if self.current_ctx == token {
-            self.current_ctx = 0;
-        }
-        self.ctx_flags.remove(&token);
-    }
-
-    /// `cuCtxPushCurrent(ctx)` — save the current context and make `ctx` current.
-    pub fn push_current_ctx(&mut self, h: *mut c_void) {
-        self.ctx_stack.push(self.current_ctx);
-        self.current_ctx = h as usize;
-    }
-    /// `cuCtxPopCurrent()` — pop the saved context back to current, returning the token that *was*
-    /// current (which the API hands back to the caller).
-    pub fn pop_current_ctx(&mut self) -> *mut c_void {
-        let popped = self.current_ctx;
-        self.current_ctx = self.ctx_stack.pop().unwrap_or(0);
-        popped as *mut c_void
-    }
-    /// The current context's creation flags (`0` if none / untracked).
-    pub fn current_ctx_flags(&self) -> u32 {
-        self.ctx_flags.get(&self.current_ctx).copied().unwrap_or(0)
-    }
-    /// Set the current context's flags (`cuCtxSetFlags`); a no-op if there is no current context.
-    pub fn set_current_ctx_flags(&mut self, flags: u32) {
-        if self.current_ctx != 0 {
-            self.ctx_flags.insert(self.current_ctx, flags);
-        }
-    }
-
-    // ---- primary context (device 0) ---------------------------------------------------------------
-
-    /// `cuDevicePrimaryCtxRetain` — lazily create the single primary context, bump its refcount, and
-    /// return its token.
-    pub fn primary_ctx_retain(&mut self) -> *mut c_void {
-        if self.primary_ctx == 0 {
-            self.primary_ctx = self.next_ctx;
-            self.next_ctx += 1;
-        }
-        self.primary_refcount += 1;
-        self.primary_ctx as *mut c_void
-    }
-    /// `cuDevicePrimaryCtxRelease` — drop one reference; the last release tears the primary context down.
-    pub fn primary_ctx_release(&mut self) {
-        if self.primary_refcount > 0 {
-            self.primary_refcount -= 1;
-        }
-        if self.primary_refcount == 0 {
-            self.primary_ctx_teardown();
-        }
-    }
-    /// `cuDevicePrimaryCtxReset` — force the primary context inactive regardless of refcount.
-    pub fn primary_ctx_reset(&mut self) {
-        self.primary_refcount = 0;
-        self.primary_ctx_teardown();
-    }
-    fn primary_ctx_teardown(&mut self) {
-        if self.primary_ctx != 0 {
-            if self.current_ctx == self.primary_ctx {
-                self.current_ctx = 0;
-            }
-            self.primary_ctx = 0;
-        }
-    }
-    /// `cuDevicePrimaryCtxGetState` — `(flags, active)` where `active` is 1 while a reference is held.
-    pub fn report_primary_context(&self) -> (u32, i32) {
-        let flags = if self.primary_ctx != 0 {
-            self.primary_flags
-        } else {
-            0
-        };
-        (flags, (self.primary_refcount > 0) as i32)
-    }
-    /// `cuDevicePrimaryCtxSetFlags` — record the primary context's flags (only while it exists).
-    pub fn set_primary_ctx_flags(&mut self, flags: u32) {
-        if self.primary_ctx != 0 {
-            self.primary_flags = flags;
-        }
-    }
-
-    // ---- module handles ---------------------------------------------------------------------------
-
-    pub fn intern_module(&mut self, module_id: u32) -> *mut c_void {
-        self.modules.push(module_id);
-        self.modules.len() as *mut c_void // len == index + 1
-    }
-    pub fn module_id(&self, h: *mut c_void) -> Option<u32> {
-        let idx = h as usize;
-        (idx != 0 && idx <= self.modules.len()).then(|| self.modules[idx - 1])
-    }
-
-    // ---- function handles -------------------------------------------------------------------------
-
-    pub fn intern_function(&mut self, f: Function, name: &str) -> *mut c_void {
-        self.functions
-            .push((f, CString::new(name).unwrap_or_default()));
-        self.func_cache_config.push(0);
-        self.functions.len() as *mut c_void
-    }
-    pub fn function(&self, h: *mut c_void) -> Option<Function> {
-        self.func_index(h).map(|i| self.functions[i].0)
-    }
-    /// The interned entry-name pointer for `cuFuncGetName` (`None` for a bad handle). The `CString` is
-    /// owned by the process-global table for the process lifetime, so the pointer stays valid.
-    pub fn func_name_ptr(&self, h: *mut c_void) -> Option<*const core::ffi::c_char> {
-        self.func_index(h).map(|i| self.functions[i].1.as_ptr())
-    }
-    /// Index into the parallel `CUfunction` tables for a handle (`None` for null / out-of-range).
-    fn func_index(&self, h: *mut c_void) -> Option<usize> {
-        let idx = h as usize;
-        (idx != 0 && idx <= self.functions.len()).then_some(idx - 1)
-    }
-    /// Record a function's preferred cache config (`cuFuncSetCacheConfig`); `false` for a bad handle.
-    pub fn set_func_cache_config(&mut self, h: *mut c_void, c: i32) -> bool {
-        match self.func_index(h) {
-            Some(i) => {
-                self.func_cache_config[i] = c;
-                true
-            }
-            None => false,
-        }
-    }
-
-    // ---- stream handles ---------------------------------------------------------------------------
-
-    pub fn intern_stream(&mut self, s: Stream, flags: u32, priority: i32) -> *mut c_void {
-        self.streams.push(s);
-        self.stream_meta.push((flags, priority));
-        self.streams.len() as *mut c_void
-    }
-    /// Resolve a `CUstream` handle to its [`Stream`]. The null handle is the default stream.
-    pub fn stream(&self, h: *mut c_void) -> Option<Stream> {
-        let idx = h as usize;
-        if idx == 0 {
-            return Some(hl_cuda::model::stream::StreamTable::DEFAULT);
-        }
-        (idx <= self.streams.len()).then(|| self.streams[idx - 1])
-    }
-    /// The `(flags, priority)` a `CUstream` was created with. The null handle is the default stream
-    /// (flags `0`, priority `0`); an out-of-range handle is `None`.
-    pub fn stream_meta(&self, h: *mut c_void) -> Option<(u32, i32)> {
-        let idx = h as usize;
-        if idx == 0 {
-            return Some((0, 0));
-        }
-        (idx <= self.streams.len()).then(|| self.stream_meta[idx - 1])
-    }
-
-    // ---- event handles ----------------------------------------------------------------------------
-
-    pub fn create_event(&mut self) -> *mut c_void {
-        self.events.push(None);
-        self.events.len() as *mut c_void
-    }
-    pub fn record_event(&mut self, h: *mut c_void) -> bool {
-        let idx = h as usize;
-        if idx != 0 && idx <= self.events.len() {
-            self.events[idx - 1] = Some(Instant::now());
-            true
-        } else {
-            false
-        }
-    }
-    pub fn event_is_valid(&self, h: *mut c_void) -> bool {
-        let idx = h as usize;
-        idx != 0 && idx <= self.events.len()
-    }
-    /// `cuEventQuery` — has this (valid) event been recorded yet? With the synchronous executor a
-    /// recorded event is already complete; an unrecorded one is not ready.
-    pub fn event_recorded(&self, h: *mut c_void) -> bool {
-        let idx = h as usize;
-        idx != 0 && idx <= self.events.len() && self.events[idx - 1].is_some()
-    }
-    /// `cuEventElapsedTime` — milliseconds between two recorded events. `None` if either handle is
-    /// invalid or unrecorded (→ `CUDA_ERROR_NOT_READY`).
-    pub fn event_elapsed_ms(&self, start: *mut c_void, end: *mut c_void) -> Option<f32> {
-        let a = self.event_timestamp(start)?;
-        let b = self.event_timestamp(end)?;
-        Some(b.saturating_duration_since(a).as_secs_f64() as f32 * 1.0e3)
-    }
-    fn event_timestamp(&self, h: *mut c_void) -> Option<Instant> {
-        let idx = h as usize;
-        if idx == 0 || idx > self.events.len() {
-            return None;
-        }
-        self.events[idx - 1]
-    }
 
     // ---- memory info ------------------------------------------------------------------------------
 
@@ -368,11 +206,13 @@ impl State {
 pub struct ShimState;
 
 impl ShimState {
-    /// Run `f` with exclusive global shim-state access. This operation is non-reentrant.
+    /// Run `f` with exclusive global shim-state access. This operation is non-reentrant. State inherited
+    /// across `fork(2)` is disowned first (see [`State::disown_after_fork`]).
     pub fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
         static STATE: OnceLock<Mutex<State>> = OnceLock::new();
         let state = STATE.get_or_init(|| Mutex::new(State::new()));
         let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+        state.disown_after_fork();
         f(&mut state)
     }
 }

@@ -50,8 +50,16 @@ pub(super) unsafe fn write_cstr(dst: *mut c_char, len: i32, s: &str) {
 // bring-up
 // ==================================================================================================
 
+/// `cuInit(flags)` — initialize the driver for the calling process. Every entry point that lowers IR is
+/// gated on this having run (`CUDA_ERROR_NOT_INITIALIZED` otherwise), which is also how a `fork(2)` child
+/// is refused: its disowned state has never been initialized, so it must call `cuInit` itself — and then
+/// gets a fresh context and its own `$HL_GPU_EXEC` connection, never the parent's.
 #[no_mangle]
-pub extern "C" fn cuInit(_flags: u32) -> i32 {
+pub extern "C" fn cuInit(flags: u32) -> i32 {
+    // `cuInit` defines no flags; a non-zero value is `CUDA_ERROR_INVALID_VALUE`.
+    if flags != 0 {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
     ShimState::with(|s| s.inited = true);
     CUDA_SUCCESS
 }
@@ -252,16 +260,34 @@ pub extern "C" fn cuCtxCreate_v2(pctx: *mut *mut c_void, flags: u32, dev: i32) -
     CUDA_SUCCESS
 }
 
+/// `cuCtxDestroy(ctx)` — retire a context. A null token is `CUDA_ERROR_INVALID_VALUE`; a token that was
+/// never created or was already destroyed is `CUDA_ERROR_INVALID_CONTEXT`. Accepting any token let a
+/// double-destroy — a lifetime bug — report success.
 #[no_mangle]
 pub extern "C" fn cuCtxDestroy_v2(ctx: *mut c_void) -> i32 {
-    ShimState::with(|s| s.destroy_ctx(ctx));
-    CUDA_SUCCESS
+    if ctx.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    ShimState::with(|s| {
+        if s.destroy_ctx(ctx) {
+            CUDA_SUCCESS
+        } else {
+            CUDA_ERROR_INVALID_CONTEXT
+        }
+    })
 }
 
+/// `cuCtxSetCurrent(ctx)` — bind `ctx` to the calling thread. A null token detaches the current context
+/// (permitted by CUDA); a token that is not live is `CUDA_ERROR_INVALID_CONTEXT`.
 #[no_mangle]
 pub extern "C" fn cuCtxSetCurrent(ctx: *mut c_void) -> i32 {
-    ShimState::with(|s| s.set_current_ctx(ctx));
-    CUDA_SUCCESS
+    ShimState::with(|s| {
+        if s.set_current_ctx(ctx) {
+            CUDA_SUCCESS
+        } else {
+            CUDA_ERROR_INVALID_CONTEXT
+        }
+    })
 }
 
 #[no_mangle]
@@ -285,9 +311,14 @@ pub extern "C" fn cuCtxGetDevice(device: *mut i32) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn cuCtxSynchronize() -> i32 {
-    ShimState::with(|s| match s.ctx.synchronize(&mut s.sink) {
-        Ok(()) => CUDA_SUCCESS,
-        Err(e) => DriverStatus::from(&e).code(),
+    ShimState::with(|s| {
+        if let Err(code) = s.require_init() {
+            return code;
+        }
+        match s.ctx.synchronize(&mut s.sink) {
+            Ok(()) => CUDA_SUCCESS,
+            Err(e) => DriverStatus::from(&e).code(),
+        }
     })
 }
 
@@ -295,18 +326,30 @@ pub extern "C" fn cuCtxSynchronize() -> i32 {
 // context management: push/pop stack, api version, flags
 // ==================================================================================================
 
+/// `cuCtxPushCurrent(ctx)` — push `ctx` onto the calling thread's context stack. A null token is
+/// `CUDA_ERROR_INVALID_HANDLE`; a destroyed / never-created token is `CUDA_ERROR_INVALID_CONTEXT`.
 #[no_mangle]
 pub extern "C" fn cuCtxPushCurrent_v2(ctx: *mut c_void) -> i32 {
     if ctx.is_null() {
         return CUDA_ERROR_INVALID_HANDLE;
     }
-    ShimState::with(|s| s.push_current_ctx(ctx));
-    CUDA_SUCCESS
+    ShimState::with(|s| {
+        if s.push_current_ctx(ctx) {
+            CUDA_SUCCESS
+        } else {
+            CUDA_ERROR_INVALID_CONTEXT
+        }
+    })
 }
 
+/// `cuCtxPopCurrent(pctx)` — pop the calling thread's current context. With no context current the stack
+/// is empty and real CUDA returns `CUDA_ERROR_INVALID_CONTEXT`; succeeding with a null token let a
+/// program that popped more than it pushed carry on believing it had a context.
 #[no_mangle]
 pub extern "C" fn cuCtxPopCurrent_v2(pctx: *mut *mut c_void) -> i32 {
-    let popped = ShimState::with(|s| s.pop_current_ctx());
+    let Some(popped) = ShimState::with(|s| s.pop_current_ctx()) else {
+        return CUDA_ERROR_INVALID_CONTEXT;
+    };
     if !pctx.is_null() {
         unsafe { *pctx = popped };
     }

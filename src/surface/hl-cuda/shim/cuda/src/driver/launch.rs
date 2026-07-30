@@ -9,8 +9,8 @@ pub extern "C" fn cuLaunchKernel(
     bx: u32,
     by: u32,
     bz: u32,
-    _shared_mem_bytes: u32,
-    _stream: *mut c_void,
+    shared_mem_bytes: u32,
+    stream: *mut c_void,
     kernel_params: *mut *mut c_void,
     _extra: *mut *mut c_void,
 ) -> i32 {
@@ -18,6 +18,8 @@ pub extern "C" fn cuLaunchKernel(
         f,
         (gx, gy, gz),
         (bx, by, bz),
+        shared_mem_bytes,
+        stream,
         kernel_params,
         "cuLaunchKernel",
     )
@@ -28,17 +30,40 @@ pub extern "C" fn cuLaunchKernel(
 /// layout, and submit the same compute IR through the sink. Both entry points funnel here so the lowered
 /// command stream is identical.
 ///
+/// `sharedMemBytes` requests DYNAMIC (`extern __shared__`) shared memory, which is not expressible in
+/// the kernel IR — the PTX front-end rejects an `.extern .shared` declaration outright, `cuFuncSetAttribute`
+/// refuses the opt-in, and `CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES` reports 0. A non-zero request
+/// is therefore `CUDA_ERROR_INVALID_VALUE`: accepting and ignoring it would run the kernel with none of the
+/// shared memory it asked for. `stream` is validated for the same reason every other stream-taking entry
+/// point validates it — a destroyed stream must not launch work.
+///
 /// # Safety
 /// `kernel_params`, when non-null, must point at `prog.params.len()` valid `void*` slots, each pointing at
 /// a value of the parameter's natural width (the `cuLaunchKernel` ABI).
+#[allow(clippy::too_many_arguments)]
 fn launch_kernel_impl(
     f: *mut c_void,
     grid: (u32, u32, u32),
     block: (u32, u32, u32),
+    shared_mem_bytes: u32,
+    stream: *mut c_void,
     kernel_params: *mut *mut c_void,
     who: &'static str,
 ) -> i32 {
+    if shared_mem_bytes != 0 {
+        crate::stub::Call::unsupported(
+            who,
+            "dynamic shared memory is not expressible in the kernel IR",
+        );
+        return CUDA_ERROR_INVALID_VALUE;
+    }
     ShimState::with(|s| {
+        if let Err(code) = s.require_init() {
+            return code;
+        }
+        if s.stream(stream).is_none() {
+            return CUDA_ERROR_INVALID_HANDLE;
+        }
         let Some(func) = s.function(f) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
@@ -135,10 +160,20 @@ pub extern "C" fn cuLaunchKernelEx(
     kernel_params: *mut *mut c_void,
     _extra: *mut *mut c_void,
 ) -> i32 {
-    let Some((grid, block, _smem)) = (unsafe { LaunchConfig::parse(cfg) }) else {
+    let Some((grid, block, smem)) = (unsafe { LaunchConfig::parse(cfg) }) else {
         return CUDA_ERROR_INVALID_VALUE;
     };
-    launch_kernel_impl(f, grid, block, kernel_params, "cuLaunchKernelEx")
+    // The trailing `hStream` of `CUlaunchConfig` is not parsed, so the launch runs on the default stream;
+    // `sharedMemBytes` is refused exactly as in `cuLaunchKernel`.
+    launch_kernel_impl(
+        f,
+        grid,
+        block,
+        smem,
+        core::ptr::null_mut(),
+        kernel_params,
+        "cuLaunchKernelEx",
+    )
 }
 
 // ==================================================================================================

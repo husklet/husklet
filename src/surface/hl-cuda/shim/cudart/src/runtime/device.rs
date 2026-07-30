@@ -316,11 +316,12 @@ pub extern "C" fn cudaPeekAtLastError() -> i32 {
     ShimState::with(|s| s.last_error)
 }
 
+/// `cudaDeviceReset()` — destroy the calling process's primary context. Every device allocation, loaded
+/// module, `__cudaRegister*` binding, stream and event it owned is released, so a pointer or handle taken
+/// before the reset stops working (`cudaErrorInvalidValue` / `cudaErrorInvalidResourceHandle`). Clearing
+/// only the sticky error left all of them live, which is a substantially different guarantee.
 #[no_mangle]
 pub extern "C" fn cudaDeviceReset() -> i32 {
-    ShimState::with(|s| {
-        s.last_error = CUDART_SUCCESS;
-        s.device = 0;
-    });
+    ShimState::with(|s| s.reset_device());
     CUDART_SUCCESS
 }

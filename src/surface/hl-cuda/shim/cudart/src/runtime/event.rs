@@ -76,19 +76,25 @@ pub extern "C" fn cudaEventQuery(event: *mut c_void) -> i32 {
 }
 
 /// `cudaEventElapsedTime(ms, start, end)` — milliseconds between two recorded events, from the monotonic
-/// clock. A null out-pointer is `cudaErrorInvalidValue`; either event invalid/unrecorded is
-/// `cudaErrorNotReady`.
+/// clock. A null out-pointer is `cudaErrorInvalidValue`; an unknown or destroyed event handle is
+/// `cudaErrorInvalidResourceHandle`; a live-but-unrecorded event is `cudaErrorNotReady`. The two are
+/// different faults and must not report the same code.
 #[no_mangle]
 pub extern "C" fn cudaEventElapsedTime(ms: *mut f32, start: *mut c_void, end: *mut c_void) -> i32 {
     if ms.is_null() {
         return ShimState::with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
     }
-    ShimState::with(|s| match s.event_elapsed_ms(start, end) {
-        Some(v) => {
-            unsafe { *ms = v };
-            CUDART_SUCCESS
+    ShimState::with(|s| {
+        if !s.event_is_valid(start) || !s.event_is_valid(end) {
+            return s.fail(CUDART_ERROR_INVALID_RESOURCE_HANDLE);
         }
-        None => s.fail(CUDART_ERROR_NOT_READY),
+        match s.event_elapsed_ms(start, end) {
+            Some(v) => {
+                unsafe { *ms = v };
+                CUDART_SUCCESS
+            }
+            None => s.fail(CUDART_ERROR_NOT_READY),
+        }
     })
 }
 

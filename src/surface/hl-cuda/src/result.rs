@@ -128,6 +128,7 @@ pub const CUDART_SUCCESS: i32 = 0; // cudaSuccess
 pub const CUDART_ERROR_INVALID_VALUE: i32 = 1; // cudaErrorInvalidValue
 pub const CUDART_ERROR_MEMORY_ALLOCATION: i32 = 2; // cudaErrorMemoryAllocation
 pub const CUDART_ERROR_INITIALIZATION: i32 = 3; // cudaErrorInitializationError
+pub const CUDART_ERROR_INVALID_DEVICE_FUNCTION: i32 = 98; // cudaErrorInvalidDeviceFunction
 pub const CUDART_ERROR_INVALID_DEVICE: i32 = 101; // cudaErrorInvalidDevice
 pub const CUDART_ERROR_INVALID_KERNEL_IMAGE: i32 = 200; // cudaErrorInvalidKernelImage
 pub const CUDART_ERROR_INVALID_PTX: i32 = 218; // cudaErrorInvalidPtx

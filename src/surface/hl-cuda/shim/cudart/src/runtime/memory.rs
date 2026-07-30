@@ -4,8 +4,8 @@ use core::ffi::c_void;
 
 use hl_cuda::model::device::DevicePtr;
 use hl_cuda::result::{
-    RuntimeStatus, CUDART_ERROR_INVALID_VALUE, CUDART_ERROR_MEMORY_ALLOCATION,
-    CUDART_ERROR_NOT_SUPPORTED, CUDART_SUCCESS,
+    RuntimeStatus, CUDART_ERROR_INVALID_RESOURCE_HANDLE, CUDART_ERROR_INVALID_VALUE,
+    CUDART_ERROR_MEMORY_ALLOCATION, CUDART_ERROR_NOT_SUPPORTED, CUDART_SUCCESS,
 };
 use hl_cuda::service::{allocate, transfer};
 
@@ -62,16 +62,23 @@ pub extern "C" fn cudaMemcpy(dst: *mut c_void, src: *const c_void, count: usize,
     ShimState::with(|s| memcpy_impl(s, dst, src, count, kind))
 }
 
+/// `cudaMemcpyAsync(dst, src, count, kind, stream)` — the stream-ordered copy. The synchronous executor
+/// makes the ordering trivially satisfied, so it shares `cudaMemcpy`'s lowering, but `stream` is validated
+/// first: a destroyed stream must not carry work (`cudaErrorInvalidResourceHandle`).
 #[no_mangle]
 pub extern "C" fn cudaMemcpyAsync(
     dst: *mut c_void,
     src: *const c_void,
     count: usize,
     kind: i32,
-    _stream: *mut c_void,
+    stream: *mut c_void,
 ) -> i32 {
-    // Synchronous executor: async copy is the same lowering (ordering is trivially satisfied).
-    ShimState::with(|s| memcpy_impl(s, dst, src, count, kind))
+    ShimState::with(|s| {
+        if s.stream(stream).is_none() {
+            return s.fail(CUDART_ERROR_INVALID_RESOURCE_HANDLE);
+        }
+        memcpy_impl(s, dst, src, count, kind)
+    })
 }
 
 fn memcpy_impl(
@@ -136,14 +143,21 @@ pub extern "C" fn cudaMemset(dev_ptr: *mut c_void, value: i32, count: usize) -> 
     ShimState::with(|s| memset_impl(s, dev_ptr, value, count))
 }
 
+/// `cudaMemsetAsync(devPtr, value, count, stream)` — the stream-ordered fill; shares `cudaMemset`'s
+/// bounded lowering once `stream` validates.
 #[no_mangle]
 pub extern "C" fn cudaMemsetAsync(
     dev_ptr: *mut c_void,
     value: i32,
     count: usize,
-    _stream: *mut c_void,
+    stream: *mut c_void,
 ) -> i32 {
-    ShimState::with(|s| memset_impl(s, dev_ptr, value, count))
+    ShimState::with(|s| {
+        if s.stream(stream).is_none() {
+            return s.fail(CUDART_ERROR_INVALID_RESOURCE_HANDLE);
+        }
+        memset_impl(s, dev_ptr, value, count)
+    })
 }
 
 fn memset_impl(s: &mut crate::state::State, dev_ptr: *mut c_void, value: i32, count: usize) -> i32 {

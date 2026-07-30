@@ -35,6 +35,8 @@ const DEVICE_TOKEN: usize = 1;
 /// Everything NVML reports for hl's one fabricated device, seeded once at `nvmlInit` from `HL_CUDA_*`.
 pub(super) struct Nvml {
     inited: bool,
+    /// The pid that owns this state. A mismatch means it was inherited across `fork(2)`.
+    pid: u32,
     pub(super) desc: CudaDeviceDesc,
     serial: String,
     driver_version: String,
@@ -47,6 +49,7 @@ impl Nvml {
     fn new() -> Self {
         Nvml {
             inited: false,
+            pid: std::process::id(),
             desc: CudaDeviceDesc::apple_default(8u64 << 30),
             serial: "HL-SIM-00000001".to_string(),
             driver_version: "535.230.02".to_string(),
@@ -108,7 +111,21 @@ impl Nvml {
         static STATE: OnceLock<Mutex<Nvml>> = OnceLock::new();
         let state = STATE.get_or_init(|| Mutex::new(Nvml::new()));
         let mut nvml = state.lock().unwrap_or_else(|error| error.into_inner());
+        nvml.disown_after_fork();
         f(&mut nvml)
+    }
+
+    /// NVML's init is per-process: `nvmlInit` is not inherited across `fork(2)`, and a child that never
+    /// called it must observe `NVML_ERROR_UNINITIALIZED`. This state holds no file descriptor (unlike the
+    /// `libcuda`/`libcudart` shims), so the fork hazard is only the inherited `inited` flag; dropping the
+    /// state resets it. The pid is compared on every access rather than from a `pthread_atfork` handler,
+    /// so `clone(2)`/`vfork` are covered too, and a guest `execve()` reinitializes these statics anyway.
+    fn disown_after_fork(&mut self) {
+        let pid = std::process::id();
+        if self.pid != pid {
+            *self = Nvml::new();
+            self.pid = pid;
+        }
     }
 
     /// Is `device` the one valid device handle?

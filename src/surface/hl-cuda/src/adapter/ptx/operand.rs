@@ -107,13 +107,23 @@ pub(super) fn parse_mem(
         .trim_start_matches('[')
         .trim_end_matches(']')
         .trim();
-    if let Some(pos) = inner.find(['+', '-']) {
-        let (r, o) = inner.split_at(pos);
-        let off = Ptx::parse_imm_i(o.trim())?;
-        Ok((resolve_reg(r.trim(), interner, sregs)?, off))
-    } else {
-        Ok((resolve_reg(inner, interner, sregs)?, 0))
+    let (base, off) = match inner.find(['+', '-']) {
+        Some(pos) => {
+            let (r, o) = inner.split_at(pos);
+            (r.trim(), Ptx::parse_imm_i(o.trim())?)
+        }
+        None => (inner, 0),
+    };
+    // A `.global` address operand must be a register. A bare identifier is a module-scope symbol
+    // (`ld.global.u32 %r1, [gCounter];`, what nvcc emits for a `__device__`/`__constant__` global);
+    // `.global` variables are outside the modeled module, so interning the name as a fresh virtual
+    // register would read zero and hand the kernel a plausible wrong number.
+    if !Ptx::is_reg(base) {
+        return Err(Ptx::error(format!(
+            "module-scope `.global` symbol `{base}` unsupported (only register addresses are modeled): `{tok}`"
+        )));
     }
+    Ok((resolve_reg(base, interner, sregs)?, off))
 }
 
 pub(super) fn parse_op(

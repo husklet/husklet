@@ -18,7 +18,18 @@ pub extern "C" fn cuLaunchCooperativeKernel(
     stream: *mut c_void,
     kernel_params: *mut *mut c_void,
 ) -> i32 {
-    let _ = (f, gx, gy, gz, bx, by, bz, shared_mem_bytes, stream, kernel_params);
+    let _ = (
+        f,
+        gx,
+        gy,
+        gz,
+        bx,
+        by,
+        bz,
+        shared_mem_bytes,
+        stream,
+        kernel_params,
+    );
     crate::stub::Call::unsupported(
         "cuLaunchCooperativeKernel",
         "no grid-wide barrier in the kernel IR",
@@ -96,29 +107,74 @@ pub extern "C" fn cuMemFreeAsync(dptr: u64, s: *mut c_void) -> i32 {
     cuMemFree_v2(dptr)
 }
 
+/// `CU_MEM_ADVISE_SET_READ_MOSTLY` — the first `CUmem_advise` value cuda.h defines.
+pub const CU_MEM_ADVISE_SET_READ_MOSTLY: i32 = 1;
+/// `CU_MEM_ADVISE_UNSET_ACCESSED_BY` — the last one. Anything outside `1..=5` is not an advice a driver
+/// knows, and is `CUDA_ERROR_INVALID_VALUE`.
+pub const CU_MEM_ADVISE_UNSET_ACCESSED_BY: i32 = 5;
+/// `CU_DEVICE_CPU` — the pseudo-ordinal `cuMemAdvise`/`cuMemPrefetchAsync` accept for the host.
+const CU_DEVICE_CPU: i32 = -1;
+
 /// `cuMemAdvise(devPtr, count, advice, device)` — a memory-usage hint for managed memory. The model's
-/// unified memory needs no migration, so advice is a valid no-op (the same observable result a real
-/// driver gives: the hint is accepted and changes no data).
+/// unified memory is always resident, so applying the hint changes no data — but the ARGUMENTS are still
+/// checked, because a real driver rejects them: an unknown `advice`, a `device` that is neither ordinal 0
+/// nor `CU_DEVICE_CPU`, and a `[devPtr, devPtr+count)` range that is not inside one live allocation are
+/// each `CUDA_ERROR_INVALID_VALUE`. Ignoring all three let a caller hint a freed pointer and get success.
 #[no_mangle]
 pub extern "C" fn cuMemAdvise(p: u64, n: usize, advice: i32, dev: i32) -> i32 {
-    let _ = (p, n, advice, dev);
-    CUDA_SUCCESS
+    if !(CU_MEM_ADVISE_SET_READ_MOSTLY..=CU_MEM_ADVISE_UNSET_ACCESSED_BY).contains(&advice) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    if dev != 0 && dev != CU_DEVICE_CPU {
+        return CUDA_ERROR_INVALID_DEVICE;
+    }
+    ShimState::with(|s| {
+        if ManagedRange::is_live(s, p, n) {
+            CUDA_SUCCESS
+        } else {
+            CUDA_ERROR_INVALID_VALUE
+        }
+    })
+}
+
+/// Whether a `[base, base+len)` byte range lies inside one live device allocation — the check the
+/// unified-memory hint entry points (`cuMemAdvise`, `cuMemPrefetchAsync`) owe their pointer argument.
+struct ManagedRange;
+
+impl ManagedRange {
+    fn is_live(s: &crate::state::State, base: u64, len: usize) -> bool {
+        let Some((start, size)) = s.ctx.mem.containing(DevicePtr(base)) else {
+            return false;
+        };
+        let offset = base - start;
+        offset.saturating_add(len as u64) <= size
+    }
 }
 
 /// `cuMemPrefetchAsync(devPtr, count, dstDevice, stream)` — prefetch managed memory. Unified memory is
-/// always resident in the model, so prefetch is a valid no-op once the stream validates.
+/// always resident in the model, so the migration is a no-op, but the destination device, the stream, and
+/// the pointer range are all validated (a prefetch of a freed range is `CUDA_ERROR_INVALID_VALUE`).
 #[no_mangle]
 pub extern "C" fn cuMemPrefetchAsync(p: u64, n: usize, dst: i32, s: *mut c_void) -> i32 {
-    let _ = (p, n, dst);
-    if ShimState::with(|st| st.stream(s).is_none()) {
-        return CUDA_ERROR_INVALID_HANDLE;
+    if dst != 0 && dst != CU_DEVICE_CPU {
+        return CUDA_ERROR_INVALID_DEVICE;
     }
-    CUDA_SUCCESS
+    ShimState::with(|st| {
+        if st.stream(s).is_none() {
+            return CUDA_ERROR_INVALID_HANDLE;
+        }
+        if ManagedRange::is_live(st, p, n) {
+            CUDA_SUCCESS
+        } else {
+            CUDA_ERROR_INVALID_VALUE
+        }
+    })
 }
 
 /// `cuStreamAttachMemAsync(stream, devPtr, length, flags)` — scope a managed allocation to a stream. The
-/// single-device unified model has no per-stream residency to change, so this is a valid no-op once the
-/// stream validates.
+/// single-device unified model has no per-stream residency to change, so the attachment changes nothing,
+/// but the stream and the `[devPtr, devPtr+length)` range are both validated: attaching a freed pointer is
+/// `CUDA_ERROR_INVALID_VALUE`, as a real driver reports.
 #[no_mangle]
 pub extern "C" fn cuStreamAttachMemAsync(
     s: *mut c_void,
@@ -126,11 +182,17 @@ pub extern "C" fn cuStreamAttachMemAsync(
     length: usize,
     flags: u32,
 ) -> i32 {
-    let _ = (dptr, length, flags);
-    if ShimState::with(|st| st.stream(s).is_none()) {
-        return CUDA_ERROR_INVALID_HANDLE;
-    }
-    CUDA_SUCCESS
+    let _ = flags;
+    ShimState::with(|st| {
+        if st.stream(s).is_none() {
+            return CUDA_ERROR_INVALID_HANDLE;
+        }
+        if ManagedRange::is_live(st, dptr, length) {
+            CUDA_SUCCESS
+        } else {
+            CUDA_ERROR_INVALID_VALUE
+        }
+    })
 }
 
 /// `cuMemHostGetFlags(pFlags, p)` — the flags a host allocation was created with. The modeled pinned
@@ -149,16 +211,23 @@ pub extern "C" fn cuMemHostGetFlags(pflags: *mut u32, p: *mut c_void) -> i32 {
     CUDA_SUCCESS
 }
 
-/// `cuPointerSetAttribute(value, attribute, ptr)` — set a writable pointer attribute. The only writable
-/// attribute is `SYNC_MEMOPS`, which the synchronous model already reports as enabled, so setting it is a
-/// valid no-op. A null value is rejected.
+/// `cuPointerSetAttribute(value, attribute, ptr)` — set a writable pointer attribute.
+/// `CU_POINTER_ATTRIBUTE_SYNC_MEMOPS` is the only attribute a driver accepts here, and the synchronous
+/// model already reports it enabled, so applying it changes nothing. Every OTHER attribute is
+/// `CUDA_ERROR_INVALID_VALUE` (ignoring the attribute let a caller believe an unrelated one was set), and
+/// `ptr` must resolve to a live allocation.
 #[no_mangle]
 pub extern "C" fn cuPointerSetAttribute(value: *const c_void, attr: i32, ptr: u64) -> i32 {
-    let _ = (attr, ptr);
-    if value.is_null() {
+    if value.is_null() || attr != CU_POINTER_ATTRIBUTE_SYNC_MEMOPS {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    CUDA_SUCCESS
+    ShimState::with(|s| {
+        if s.ctx.resolve(DevicePtr(ptr)).is_some() {
+            CUDA_SUCCESS
+        } else {
+            CUDA_ERROR_INVALID_VALUE
+        }
+    })
 }
 
 /// `cuOccupancyAvailableDynamicSMemPerBlock(dynSmem, f, numBlocks, blockSize)` — the dynamic shared bytes
@@ -255,11 +324,15 @@ pub extern "C" fn cuThreadExchangeStreamCaptureMode(mode: *mut i32) -> i32 {
 // ==================================================================================================
 
 /// `cuProfilerInitialize(configFile, outputFile, outputMode)` — the deprecated profiler-config entry.
-/// There is no host profiler to configure, so it is a benign no-op.
+/// Unlike `cuProfilerStart`/`Stop` (documented no-ops when no session is active) this one PROMISES to
+/// write a counter trace to `outputFile` in `outputMode`. Nothing here produces one, so success would be
+/// a lie the caller cannot detect except by finding an empty file. CUDA 12 removed the entry point;
+/// `CUDA_ERROR_NOT_SUPPORTED` is what a caller must handle anyway.
 #[no_mangle]
 pub extern "C" fn cuProfilerInitialize(cfg: *const c_char, out: *const c_char, fmt: i32) -> i32 {
     let _ = (cfg, out, fmt);
-    CUDA_SUCCESS
+    crate::stub::Call::unsupported("cuProfilerInitialize", "no host profiler produces a trace");
+    CUDA_ERROR_NOT_SUPPORTED
 }
 
 /// `cuProfilerStart()` — begin profile collection. No host profiler is attached, so this is a no-op that

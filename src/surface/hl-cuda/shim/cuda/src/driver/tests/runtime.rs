@@ -259,11 +259,15 @@ fn stream_capture_priority_and_memory_hints() {
         CUDA_ERROR_INVALID_VALUE
     );
 
-    // Unified-memory hints are valid no-ops; stream-scoped ones validate the stream.
-    assert_eq!(cuMemAdvise(0xdead_beef, 4096, 0, 0), CUDA_SUCCESS);
+    // Unified-memory hints change no data, but they validate their advice, device, stream and POINTER:
+    // a made-up address is `CUDA_ERROR_INVALID_VALUE`, not a success that pretends the hint landed.
+    assert_eq!(
+        cuMemAdvise(0xdead_beef, 4096, CU_MEM_ADVISE_SET_READ_MOSTLY, 0),
+        CUDA_ERROR_INVALID_VALUE
+    );
     assert_eq!(
         cuMemPrefetchAsync(0xdead_beef, 4096, 0, stream),
-        CUDA_SUCCESS
+        CUDA_ERROR_INVALID_VALUE
     );
     assert_eq!(
         cuMemPrefetchAsync(0xdead_beef, 4096, 0, 0x9999 as *mut c_void),
@@ -271,7 +275,7 @@ fn stream_capture_priority_and_memory_hints() {
     );
     assert_eq!(
         cuStreamAttachMemAsync(stream, 0xdead_beef, 4096, 4),
-        CUDA_SUCCESS
+        CUDA_ERROR_INVALID_VALUE
     );
     // Stream-ordered alloc/free reject a bogus stream before touching the allocator.
     let mut dptr = 0u64;
@@ -296,18 +300,26 @@ fn stream_capture_priority_and_memory_hints() {
         CUDA_ERROR_INVALID_VALUE
     );
 
-    // Pointer set-attribute (SYNC_MEMOPS) is a valid no-op; a null value is rejected.
+    // Pointer set-attribute: SYNC_MEMOPS on a LIVE allocation succeeds (the synchronous model already
+    // has it enabled), while a null value, an unknown pointer, and a non-settable attribute are each
+    // rejected — so the success above is not a blanket accept-anything.
     let one = 1i32;
+    let value = &one as *const i32 as *const c_void;
+    let live = record_alloc(256);
     assert_eq!(
-        cuPointerSetAttribute(
-            &one as *const i32 as *const c_void,
-            CU_POINTER_ATTRIBUTE_SYNC_MEMOPS,
-            0
-        ),
+        cuPointerSetAttribute(value, CU_POINTER_ATTRIBUTE_SYNC_MEMOPS, live),
         CUDA_SUCCESS
     );
     assert_eq!(
-        cuPointerSetAttribute(core::ptr::null(), CU_POINTER_ATTRIBUTE_SYNC_MEMOPS, 0),
+        cuPointerSetAttribute(core::ptr::null(), CU_POINTER_ATTRIBUTE_SYNC_MEMOPS, live),
+        CUDA_ERROR_INVALID_VALUE
+    );
+    assert_eq!(
+        cuPointerSetAttribute(value, CU_POINTER_ATTRIBUTE_SYNC_MEMOPS, 0xdead_beef),
+        CUDA_ERROR_INVALID_VALUE
+    );
+    assert_eq!(
+        cuPointerSetAttribute(value, CU_POINTER_ATTRIBUTE_IS_MANAGED, live),
         CUDA_ERROR_INVALID_VALUE
     );
 }
@@ -350,11 +362,12 @@ fn profiler_controls_are_benign_noops() {
     let _g = guard();
     assert_eq!(cuProfilerStart(), CUDA_SUCCESS);
     assert_eq!(cuProfilerStop(), CUDA_SUCCESS);
+    // `cuProfilerInitialize` promises a counter trace in `out`; nothing writes one, so it must refuse.
     let cfg = std::ffi::CString::new("cfg").unwrap();
     let out = std::ffi::CString::new("out").unwrap();
     assert_eq!(
         cuProfilerInitialize(cfg.as_ptr(), out.as_ptr(), 0),
-        CUDA_SUCCESS
+        CUDA_ERROR_NOT_SUPPORTED
     );
 }
 

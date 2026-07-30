@@ -3,6 +3,8 @@
 mod device;
 mod event;
 mod launch;
+#[cfg(test)]
+mod lifetime;
 mod memory;
 mod stream;
 

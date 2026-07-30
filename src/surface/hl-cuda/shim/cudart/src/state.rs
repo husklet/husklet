@@ -8,9 +8,18 @@ use core::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
-use hl_cuda::model::stream::Stream;
+use hl_cuda::model::event::Event;
+use hl_cuda::model::stream::{Stream, StreamTable};
 use hl_cuda::service::register::Registry;
 use hl_cuda::{CudaContext, CudaDeviceDesc};
+
+/// `cudaStreamLegacy` — the reserved `cudaStream_t` value `((cudaStream_t)1)`.
+pub const CUDA_STREAM_LEGACY: usize = 1;
+/// `cudaStreamPerThread` — the reserved `cudaStream_t` value `((cudaStream_t)2)`.
+pub const CUDA_STREAM_PER_THREAD: usize = 2;
+/// Created `cudaStream_t` tokens start above the reserved values (`NULL`, `cudaStreamLegacy`,
+/// `cudaStreamPerThread`) so a created stream can never collide with a special stream.
+const STREAM_TOKEN_BASE: usize = CUDA_STREAM_PER_THREAD + 1;
 use hl_gpu::transport::DEFAULT_EXEC_SOCK;
 use hl_gpu::RemoteCommandSink;
 
@@ -27,6 +36,8 @@ pub struct CallCfg {
 }
 
 pub struct State {
+    /// The pid that owns this state. A mismatch means it was inherited across `fork(2)`.
+    pid: u32,
     pub ctx: CudaContext,
     pub sink: RemoteCommandSink,
     /// The CUDA Runtime API `__cudaRegister*` registry: fatbin handle → module, host-fn pointer →
@@ -36,11 +47,16 @@ pub struct State {
     pub last_error: i32,
     /// Selected device ordinal (`cudaSetDevice`/`cudaGetDevice`). One simulated device → always 0.
     pub device: i32,
-    /// `cudaStream_t` table: an opaque handle is `index + 1`. The null handle is the default stream.
+    /// `cudaStream_t` token table: a created handle is `index + STREAM_TOKEN_BASE`, storing the `hl_cuda`
+    /// [`Stream`] whose liveness `ctx.streams` owns. Append-only — a token is never recycled.
     streams: Vec<Stream>,
-    /// `cudaEvent_t` table: an opaque handle is `index + 1`, holding the record timestamp (`None` until
-    /// `cudaEventRecord`) so `cudaEventElapsedTime`/`cudaEventQuery` answer from a real monotonic clock.
-    events: Vec<Option<Instant>>,
+    /// `cudaEvent_t` token table: a handle is `index + 1`, storing the `hl_cuda` [`Event`] whose liveness
+    /// `ctx.events` owns. Append-only — a token is never recycled.
+    events: Vec<Event>,
+    /// Parallel to `events`: the `cudaEventRecord` timestamp (`None` until recorded), so
+    /// `cudaEventElapsedTime` answers from a real monotonic clock. The model tracks *whether* an event is
+    /// recorded; the wall clock is C-ABI state only this shim needs.
+    event_times: Vec<Option<Instant>>,
     /// The `__cudaPushCallConfiguration`/`__cudaPopCallConfiguration` stack (nvcc's `<<<>>>` glue).
     call_configs: Vec<CallCfg>,
 }
@@ -59,6 +75,7 @@ impl State {
             std::env::var("HL_CUDA_CC").ok().as_deref(),
         );
         State {
+            pid: std::process::id(),
             ctx: CudaContext::new(device),
             sink: RemoteCommandSink::new(
                 std::env::var("HL_GPU_EXEC").unwrap_or_else(|_| DEFAULT_EXEC_SOCK.to_owned()),
@@ -68,6 +85,7 @@ impl State {
             device: 0,
             streams: Vec::new(),
             events: Vec::new(),
+            event_times: Vec::new(),
             call_configs: Vec::new(),
         }
     }
@@ -76,55 +94,88 @@ impl State {
 
     pub fn intern_stream(&mut self, s: Stream) -> *mut c_void {
         self.streams.push(s);
-        self.streams.len() as *mut c_void
+        (self.streams.len() - 1 + STREAM_TOKEN_BASE) as *mut c_void
     }
+
+    /// Resolve a `cudaStream_t` token to its LIVE [`Stream`]. The reserved tokens (`NULL`,
+    /// `cudaStreamLegacy`, `cudaStreamPerThread`) all name the always-live default stream, which is not an
+    /// ordinary allocation and can never be destroyed. A created token resolves only while
+    /// `cudaStreamDestroy` has not retired it; afterwards it is indistinguishable from a token that never
+    /// existed, and both are `cudaErrorInvalidResourceHandle`.
     pub fn stream(&self, h: *mut c_void) -> Option<Stream> {
-        let idx = h as usize;
-        if idx == 0 {
-            return Some(hl_cuda::model::stream::StreamTable::DEFAULT);
+        let token = h as usize;
+        if token <= CUDA_STREAM_PER_THREAD {
+            return Some(StreamTable::DEFAULT);
         }
-        (idx <= self.streams.len()).then(|| self.streams[idx - 1])
+        let stream = *self.streams.get(token - STREAM_TOKEN_BASE)?;
+        self.ctx.streams.is_valid(stream).then_some(stream)
+    }
+
+    /// `cudaStreamDestroy` — retire a created stream. `false` for an unknown/already-destroyed token and
+    /// for the reserved default-stream tokens, which CUDA does not allow an application to destroy.
+    pub fn destroy_stream(&mut self, h: *mut c_void) -> bool {
+        let Some(stream) = self.stream(h) else {
+            return false;
+        };
+        self.ctx.streams.destroy(stream)
     }
 
     // ---- event handles ----------------------------------------------------------------------------
 
     /// `cudaEventCreate` — mint an (unrecorded) event; the opaque handle is `index + 1`.
     pub fn create_event(&mut self) -> *mut c_void {
-        self.events.push(None);
+        let event = self.ctx.event_create();
+        self.events.push(event);
+        self.event_times.push(None);
         self.events.len() as *mut c_void
     }
+
+    /// Resolve a `cudaEvent_t` token to its LIVE [`Event`]. `cudaEventDestroy` retires the model object,
+    /// so a destroyed token stops resolving — unlike a cleared timestamp slot, which only means "created
+    /// but not yet recorded".
+    fn event(&self, h: *mut c_void) -> Option<Event> {
+        let token = h as usize;
+        if token == 0 {
+            return None;
+        }
+        let event = *self.events.get(token - 1)?;
+        self.ctx.events.is_valid(event).then_some(event)
+    }
+
     /// Is `h` a live event handle?
     pub fn event_is_valid(&self, h: *mut c_void) -> bool {
-        let idx = h as usize;
-        idx != 0 && idx <= self.events.len()
+        self.event(h).is_some()
     }
-    /// `cudaEventRecord` — timestamp a valid event with the monotonic clock. `false` for a bad handle.
+
+    /// `cudaEventRecord` — timestamp a live event with the monotonic clock. `false` for an unknown or
+    /// already-destroyed handle.
     pub fn record_event(&mut self, h: *mut c_void) -> bool {
-        let idx = h as usize;
-        if idx != 0 && idx <= self.events.len() {
-            self.events[idx - 1] = Some(Instant::now());
-            true
-        } else {
-            false
+        let Some(event) = self.event(h) else {
+            return false;
+        };
+        if self.ctx.event_record(event, StreamTable::DEFAULT).is_err() {
+            return false;
         }
+        self.event_times[h as usize - 1] = Some(Instant::now());
+        true
     }
-    /// `cudaEventQuery` — has this (valid) event been recorded yet? With the synchronous executor a
+
+    /// `cudaEventQuery` — has this (live) event been recorded yet? With the synchronous executor a
     /// recorded event is already complete; an unrecorded one is not ready.
     pub fn event_recorded(&self, h: *mut c_void) -> bool {
-        let idx = h as usize;
-        idx != 0 && idx <= self.events.len() && self.events[idx - 1].is_some()
+        self.event(h)
+            .is_some_and(|event| self.ctx.events.is_recorded(event))
     }
-    /// `cudaEventDestroy` — retire a valid event (its slot is cleared, never reused). `false` for a bad
-    /// handle.
+
+    /// `cudaEventDestroy` — retire a live event. `false` for an unknown or already-destroyed handle.
     pub fn destroy_event(&mut self, h: *mut c_void) -> bool {
-        let idx = h as usize;
-        if idx != 0 && idx <= self.events.len() {
-            self.events[idx - 1] = None;
-            true
-        } else {
-            false
-        }
+        let Some(event) = self.event(h) else {
+            return false;
+        };
+        self.event_times[h as usize - 1] = None;
+        self.ctx.event_destroy(event).is_ok()
     }
+
     /// `cudaEventElapsedTime` — milliseconds between two recorded events. `None` if either handle is
     /// invalid or unrecorded (→ `cudaErrorNotReady`).
     pub fn event_elapsed_ms(&self, start: *mut c_void, end: *mut c_void) -> Option<f32> {
@@ -132,12 +183,10 @@ impl State {
         let b = self.event_timestamp(end)?;
         Some(b.saturating_duration_since(a).as_secs_f64() as f32 * 1.0e3)
     }
+
     fn event_timestamp(&self, h: *mut c_void) -> Option<Instant> {
-        let idx = h as usize;
-        if idx == 0 || idx > self.events.len() {
-            return None;
-        }
-        self.events[idx - 1]
+        self.event(h)?;
+        self.event_times[h as usize - 1]
     }
 
     // ---- <<<>>> call-configuration stack ----------------------------------------------------------
@@ -166,6 +215,40 @@ impl State {
         ((total - used) as usize, total as usize)
     }
 
+    /// `cudaDeviceReset()` — destroy the calling process's primary context and everything in it. Every
+    /// device allocation, loaded module, `__cudaRegister*` binding, stream and event is released, so a
+    /// pointer or handle obtained before the reset is no longer valid — which is the whole point of the
+    /// call. Clearing only the sticky error left all of them alive and working.
+    ///
+    /// The device ordinal and the sticky error return to their initial values; the `$HL_GPU_EXEC` sink is
+    /// rebuilt too, so the next call opens a fresh connection (real CUDA likewise re-creates the primary
+    /// context lazily).
+    pub fn reset_device(&mut self) {
+        let pid = self.pid;
+        *self = State::new();
+        self.pid = pid;
+    }
+
+    /// CUDA does not inherit a context across `fork(2)`, and the engine implements a guest `fork()` as a
+    /// real host fork. Without this the child would hold a copy of the parent's `$HL_GPU_EXEC` fd and
+    /// believe it owns the parent's buffer ids — two processes interleaving frames on one socket. Dropping
+    /// the inherited state closes only the CHILD's copy of the fd and empties every handle table, so an
+    /// inherited `cudaStream_t`/`cudaEvent_t` is `cudaErrorInvalidResourceHandle` and an inherited device
+    /// pointer is `cudaErrorInvalidValue`. The runtime API has no explicit init, so a child that starts
+    /// over gets its own context and its own connection — never the parent's.
+    ///
+    /// The pid comparison runs on every state access rather than from a `pthread_atfork` handler, so it
+    /// also covers `clone(2)`/`vfork` and happens before any fd or table is touched. A guest `execve()`
+    /// reloads the image, which reinitializes these statics, and std's `UnixStream` fd is `SOCK_CLOEXEC`,
+    /// so exec needs no guard.
+    fn disown_after_fork(&mut self) {
+        let pid = std::process::id();
+        if self.pid != pid {
+            *self = State::new();
+            self.pid = pid;
+        }
+    }
+
     /// Record a runtime error as the sticky last-error and return it (for the `?`-style early returns).
     pub fn fail(&mut self, code: i32) -> i32 {
         if code != 0 {
@@ -178,12 +261,24 @@ impl State {
 pub struct ShimState;
 
 impl ShimState {
+    /// Run `f` with exclusive global shim-state access. State inherited across `fork(2)` is disowned first
+    /// (see [`State::disown_after_fork`]).
     pub fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
         static STATE: OnceLock<Mutex<State>> = OnceLock::new();
         let state = STATE.get_or_init(|| Mutex::new(State::new()));
         let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+        state.disown_after_fork();
         f(&mut state)
     }
+}
+
+/// Serialize the tests that drive the process-global state (a single `OnceLock<Mutex<State>>` shared by
+/// the whole test binary) so their `reset()` + `$HL_GPU_EXEC` manipulation never interleave under the
+/// default parallel test runner.
+#[cfg(test)]
+pub fn serial() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Reset the process-global state to a clean slate (test-only, so a unit test starts deterministic).

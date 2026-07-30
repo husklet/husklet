@@ -3,7 +3,10 @@
 use core::ffi::{c_char, c_void};
 
 use hl_cuda::adapter::ptx;
-use hl_cuda::result::{RuntimeStatus, CUDART_ERROR_INVALID_VALUE, CUDART_SUCCESS};
+use hl_cuda::result::{
+    RuntimeStatus, CUDART_ERROR_INVALID_DEVICE_FUNCTION, CUDART_ERROR_INVALID_RESOURCE_HANDLE,
+    CUDART_ERROR_INVALID_VALUE, CUDART_SUCCESS,
+};
 use hl_cuda::service::register::{self, FatbinHandle};
 
 use crate::state::{CallCfg, ShimState};
@@ -147,19 +150,31 @@ pub extern "C" fn __cudaRegisterFatBinaryEnd(fatCubinHandle: *mut *mut c_void) {
 /// `cudaLaunchKernel(func, gridDim, blockDim, args, sharedMem, stream)` — resolve the host-fn pointer to
 /// its registered device entry and lower exactly like the driver-API `cuLaunchKernel`, via the shared
 /// [`register::launch_kernel`].
+///
+/// `sharedMem` requests DYNAMIC (`extern __shared__`) shared memory, which is not expressible in the
+/// kernel IR — the PTX front-end rejects an `.extern .shared` declaration outright and
+/// `cudaFuncAttributes::maxDynamicSharedSizeBytes` reports 0. A non-zero request is therefore
+/// `cudaErrorInvalidValue`: running the kernel with none of the shared memory it asked for would return a
+/// wrong result. `stream` is validated so a destroyed stream cannot carry a launch.
 #[no_mangle]
 pub extern "C" fn cudaLaunchKernel(
     func: *const c_void,
     gridDim: Dim3,
     blockDim: Dim3,
     args: *mut *mut c_void,
-    _sharedMem: usize,
-    _stream: *mut c_void,
+    sharedMem: usize,
+    stream: *mut c_void,
 ) -> i32 {
+    if sharedMem != 0 {
+        return ShimState::with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
+    }
     let host_fn = func as usize;
     let grid = (gridDim.x, gridDim.y, gridDim.z);
     let block = (blockDim.x, blockDim.y, blockDim.z);
     ShimState::with(|s| {
+        if s.stream(stream).is_none() {
+            return s.fail(CUDART_ERROR_INVALID_RESOURCE_HANDLE);
+        }
         match unsafe {
             register::launch_kernel(
                 &mut s.ctx,
@@ -216,28 +231,35 @@ impl FuncAttrOffset {
 }
 
 /// `cudaFuncGetAttributes(attr, func)` — the launch-relevant attributes of a device function. `func` is
-/// nvcc's host stub pointer; when it resolves through the runtime-API [`register::Registry`] to a real
-/// device entry, the register + static-shared figures are recovered from the module PTX by the SAME
-/// front-end the driver-API `cuFuncGetAttribute` uses (never fabricated for a kernel we can inspect). A
-/// host pointer that was never registered falls back to the modeled defaults. A null `attr` is
-/// `cudaErrorInvalidValue`.
+/// nvcc's host stub pointer; it must resolve through the runtime-API [`register::Registry`] to a real
+/// device entry, and the register + static-shared figures are then recovered from the module PTX by the
+/// SAME front-end the driver-API `cuFuncGetAttribute` uses.
+///
+/// A host pointer that was never registered is `cudaErrorInvalidDeviceFunction`, as in real CUDA. It used
+/// to fall back to plausible constants (32 registers, 0 shared) and report `cudaSuccess`, so a caller
+/// sizing a launch from the attributes of a function that does not exist got numbers with nothing behind
+/// them. A null `attr` is `cudaErrorInvalidValue`.
 #[no_mangle]
 pub extern "C" fn cudaFuncGetAttributes(attr: *mut c_void, func: *const c_void) -> i32 {
     if attr.is_null() {
         return ShimState::with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
     }
-    let (cc, num_regs, shared_size_bytes) = ShimState::with(|s| {
+    let resolved = ShimState::with(|s| {
         // Resolve the host stub → device Function → real (reg_count, static-shared bytes) via the PTX
-        // front-end; fall back to the modeled defaults for an unregistered host pointer.
+        // front-end. A kernel outside the modeled subset still has a device entry, so it reports (0, 0)
+        // rather than being mistaken for an unregistered function.
+        let function = s.registry.resolve(func as usize)?;
         let (regs, shared) = s
-            .registry
-            .resolve(func as usize)
-            .and_then(|f| s.ctx.entry_source(f))
+            .ctx
+            .entry_source(function)
             .and_then(|(src, entry)| ptx::compile(&src, &entry, [1, 1, 1]).ok())
             .map(|p| (p.reg_count as i32, p.shared_bytes as usize))
-            .unwrap_or((32, 0));
-        (s.ctx.device.compute_capability, regs, shared)
+            .unwrap_or((0, 0));
+        Some((s.ctx.device.compute_capability, regs, shared))
     });
+    let Some((cc, num_regs, shared_size_bytes)) = resolved else {
+        return ShimState::with(|s| s.fail(CUDART_ERROR_INVALID_DEVICE_FUNCTION));
+    };
     let ptx_ver = cc.0 as i32 * 10 + cc.1 as i32;
     let a = CudaFuncAttributes {
         shared_size_bytes,
@@ -268,9 +290,14 @@ pub extern "C" fn cudaFuncGetAttributes(attr: *mut c_void, func: *const c_void) 
 // ==================================================================================================
 
 /// `__cudaRegisterVar(handle, hostVar, deviceAddress, deviceName, ext, size, constant, global)` — nvcc
-/// binds a `__device__`/`__constant__` global. hl's PTX model parses only kernel entries (not `.global`
-/// variables), so there is nothing to bind; this is an honest no-op (a later `cudaGetSymbolAddress` on
-/// such a symbol — not part of this surface — would report it absent).
+/// binds a `__device__`/`__constant__` global. It returns `void`, so it cannot report a failure, and hl's
+/// PTX model parses only kernel entries: there is no module-scope storage to bind.
+///
+/// That makes the no-op honest only because the KERNEL that would use such a global is refused: the PTX
+/// front-end rejects a module-scope symbol in a `.global` address operand
+/// (`ld.global.u32 %r1, [gCounter];`) rather than interning the name as a fresh zero register, so
+/// `cudaLaunchKernel` returns `cudaErrorInvalidPtx` instead of silently reading zeros. Without that
+/// rejection this no-op would be a wrong-result bug rather than a missing feature.
 #[no_mangle]
 pub extern "C" fn __cudaRegisterVar(
     fatCubinHandle: *mut *mut c_void,
