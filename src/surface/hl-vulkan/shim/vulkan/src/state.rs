@@ -64,6 +64,18 @@ pub enum PresenterId {
     Surface(u64),
 }
 
+impl PresenterId {
+    /// Whether this identity names a real application window that a present MUST reach.
+    ///
+    /// `Wayland(w)` with a non-zero `w` is an application-owned `wl_surface`: if a present does not
+    /// commit to it, nothing is displayed and the present has failed. `Surface(_)` (a headless surface)
+    /// and `Wayland(0)` (the application supplied no `wl_surface`) are deliberately offscreen targets
+    /// where a readback-only present is the honest outcome, so those stay `VK_SUCCESS`.
+    pub fn expects_window(&self) -> bool {
+        matches!(self, PresenterId::Wayland(surface) if *surface != 0)
+    }
+}
+
 /// Surface-owned Wayland presenters with swapchain leases.
 ///
 /// Vulkan permits an old and replacement swapchain to overlap on one `VkSurfaceKHR`. The protocol
@@ -195,13 +207,21 @@ pub struct State {
 
 impl State {
     fn new() -> Self {
+        // Connect target from $HL_GPU_EXEC; the connection itself is opened lazily on first submit.
+        let mut sink = RemoteCommandSink::new(
+            std::env::var("HL_GPU_EXEC").unwrap_or_else(|_| DEFAULT_EXEC_SOCK.to_owned()),
+        );
+        // Honour the same trace switches the GL shim honours. Without this the Vulkan ICD was silent
+        // under both, so a total presentation failure produced no diagnostic at all.
+        sink.set_trace(
+            std::env::var_os("HL_GPU_TRACE").is_some()
+                || std::env::var_os("HL_SHIM_DEBUG").is_some(),
+        );
         State {
             instance: None,
             device: None,
             // Connect target from $HL_GPU_EXEC; the connection itself is opened lazily on first submit.
-            sink: RemoteCommandSink::new(
-                std::env::var("HL_GPU_EXEC").unwrap_or_else(|_| DEFAULT_EXEC_SOCK.to_owned()),
-            ),
+            sink,
             native_present: false,
             image_views: HashMap::new(),
             render_passes: HashMap::new(),

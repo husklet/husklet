@@ -340,3 +340,78 @@ pub struct VkPhysicalDeviceMaintenance4Properties {
 // ==================================================================================================
 // *CreateInfo / *AllocateInfo input structs (read across the seam; layout from vk.xml)
 // ==================================================================================================
+
+// ---- driver / device identity pNext payloads ------------------------------------------------------
+// Tools and applications read the driver's identity from these. A node the driver leaves untouched
+// reports whatever the caller initialized it to — in practice a blank name, driver ID 0 and zero UUIDs,
+// i.e. an unidentifiable driver.
+
+/// `VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES` (extnumber 72, offset 4).
+pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES: i32 = 1_000_071_004;
+/// `VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES` (extnumber 95, offset 0).
+pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES: i32 = 1_000_094_000;
+/// `VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES` (core value 50).
+pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES: i32 = 50;
+/// `VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES` (core value 52).
+pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES: i32 = 52;
+
+pub const VK_LUID_SIZE: usize = 8;
+
+/// `VkPhysicalDeviceIDProperties` — the complete struct (7 members, `vk.xml` order).
+#[repr(C)]
+pub struct VkPhysicalDeviceIDProperties {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub device_uuid: [u8; VK_UUID_SIZE],
+    pub driver_uuid: [u8; VK_UUID_SIZE],
+    pub device_luid: [u8; VK_LUID_SIZE],
+    pub device_node_mask: u32,
+    pub device_luid_valid: VkBool32,
+}
+
+/// `VkPhysicalDeviceSubgroupProperties` — the complete struct (6 members, `vk.xml` order).
+#[repr(C)]
+pub struct VkPhysicalDeviceSubgroupProperties {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub subgroup_size: u32,
+    pub supported_stages: VkFlags,
+    pub supported_operations: VkFlags,
+    pub quad_operations_in_all_stages: VkBool32,
+}
+
+/// The leading members of `VkPhysicalDeviceVulkan11Properties`, in exact `vk.xml` order.
+///
+/// A deliberate PREFIX, not the whole struct: only these fields are written, and a `#[repr(C)]` prefix
+/// of a C struct has identical offsets to the full declaration, so writing through it can never disturb
+/// the members beyond it. The tail (multiview/protected/descriptor ceilings) is left alone rather than
+/// declared, because a hand-transcribed 17-member layout that drifts from `vk.xml` would write garbage
+/// into the application — strictly worse than leaving zeros.
+#[repr(C)]
+pub struct VkPhysicalDeviceVulkan11PropertiesPrefix {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub device_uuid: [u8; VK_UUID_SIZE],
+    pub driver_uuid: [u8; VK_UUID_SIZE],
+    pub device_luid: [u8; VK_LUID_SIZE],
+    pub device_node_mask: u32,
+    pub device_luid_valid: VkBool32,
+    pub subgroup_size: u32,
+    pub subgroup_supported_stages: VkFlags,
+    pub subgroup_supported_operations: VkFlags,
+    pub subgroup_quad_operations_in_all_stages: VkBool32,
+}
+
+/// The leading members of `VkPhysicalDeviceVulkan12Properties`, in exact `vk.xml` order — the driver
+/// identity quartet. A deliberate prefix for the same reason as
+/// [`VkPhysicalDeviceVulkan11PropertiesPrefix`]. This is where a client at the advertised Vulkan 1.2+
+/// reads the driver name, NOT `VkPhysicalDeviceDriverProperties`.
+#[repr(C)]
+pub struct VkPhysicalDeviceVulkan12PropertiesPrefix {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub driver_id: i32,
+    pub driver_name: [c_char; VK_MAX_DRIVER_NAME_SIZE],
+    pub driver_info: [c_char; VK_MAX_DRIVER_INFO_SIZE],
+    pub conformance_version: VkConformanceVersion,
+}

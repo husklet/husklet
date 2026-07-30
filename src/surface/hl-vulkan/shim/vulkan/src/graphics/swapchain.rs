@@ -1,6 +1,6 @@
 use super::*;
 use crate::state::PresenterId;
-use hl_vulkan::result::VK_ERROR_OUT_OF_DATE_KHR;
+use hl_vulkan::result::{VK_ERROR_OUT_OF_DATE_KHR, VK_ERROR_SURFACE_LOST_KHR};
 
 // ==================================================================================================
 // WSI: swapchain + present
@@ -35,7 +35,19 @@ pub extern "C" fn vkCreateSwapchainKHR(
             // SAFETY: the application owns this live wl_surface for the VkSurfaceKHR lifetime.
             match unsafe { WaylandAppPresenter::new(window.surface) } {
                 Ok(presenter) => Some(presenter),
-                Err(error) if error.is_unavailable() => None,
+                Err(error) if error.is_unavailable() => {
+                    // Soft: cache `None` so it is not re-probed each frame. Log the reason once —
+                    // without it a total presentation failure was completely silent.
+                    crate::stub::Failure::report(
+                        "vkCreateSwapchainKHR",
+                        &format!(
+                            "no app-surface presenter for wl_surface={:#x} ({error:?}); presents \
+                             cannot reach a window",
+                            window.surface
+                        ),
+                    );
+                    None
+                }
                 Err(error) => {
                     hard_error = Some(error);
                     None
@@ -247,8 +259,9 @@ pub extern "C" fn vkQueuePresentKHR(
                     continue;
                 }
             };
-            // 3) Marshal that plane onto the app's OWN `wl_surface` (soft-unavailable ⇒ readback-only,
-            //    still VK_SUCCESS; a hard marshal/flush failure ⇒ VK_ERROR_OUT_OF_DATE/SURFACE_LOST).
+            // 3) Marshal that plane onto the app's OWN `wl_surface`. No live presenter for a surface
+            //    that names a window ⇒ VK_ERROR_SURFACE_LOST_KHR; a hard marshal/flush failure ⇒
+            //    VK_ERROR_OUT_OF_DATE/SURFACE_LOST. Only a deliberately offscreen target is VK_SUCCESS.
             let vk = Presentation::frame_to_app_surface(&mut s.presenters, sc, plane);
             if vk != VK_SUCCESS {
                 hl_log::hl_warn!(hl_log::tag::PRESENT, "commit failed sc={sc:#x} -> {:?}", vk);
@@ -260,11 +273,19 @@ pub extern "C" fn vkQueuePresentKHR(
 }
 
 /// Marshal one presented frame's XRGB plane onto the app's OWN `wl_surface` via a cached
-/// [`WaylandAppPresenter`]. If the swapchain has no captured wayland window (a headless/offscreen or
-/// non-wayland surface), the readback already ran and the on-surface attach is skipped — `VK_SUCCESS`. A
-/// *soft* bring-up error (libwayland/global absent) caches `None` (so it is not re-probed each frame) and
-/// is likewise `VK_SUCCESS`. A *hard* per-frame marshal/flush/size failure maps to
-/// `VK_ERROR_OUT_OF_DATE_KHR` / `VK_ERROR_SURFACE_LOST_KHR` — never a faked present.
+/// [`WaylandAppPresenter`].
+///
+/// A present that commits nothing must never report success. When no presenter is live, the outcome
+/// depends on what the swapchain's target IS ([`PresenterId::expects_window`]): for an
+/// application-owned `wl_surface` this is a total presentation failure and returns
+/// `VK_ERROR_SURFACE_LOST_KHR` — the surface cannot be presented to, and unlike
+/// `VK_ERROR_OUT_OF_DATE_KHR` it does not invite an endless swapchain-recreate loop. (Vulkan does not
+/// permit `VK_ERROR_INITIALIZATION_FAILED` from `vkQueuePresentKHR`.) For a deliberately offscreen
+/// target — a headless surface, or a wayland surface the application created with no `wl_surface` — the
+/// readback is the whole present and `VK_SUCCESS` is truthful.
+///
+/// A *hard* per-frame marshal/flush/size failure maps to `VK_ERROR_OUT_OF_DATE_KHR` /
+/// `VK_ERROR_SURFACE_LOST_KHR` — never a faked present.
 struct Presentation;
 impl Presentation {
     fn frame_to_app_surface(
@@ -273,12 +294,29 @@ impl Presentation {
         plane: (Vec<u8>, u32, u32),
     ) -> VkResult {
         let (xrgb, w, h) = plane;
+        // Resolved before the mutable borrow below: what this swapchain was supposed to present to.
+        let expects_window = presenters
+            .surface(swapchain)
+            .is_some_and(|target| target.expects_window());
         match presenters.get_mut(swapchain) {
             Some(Some(p)) => match p.present(&xrgb, w, h) {
                 Ok(()) => VK_SUCCESS,
                 Err(e) => e.to_vk_result(),
             },
-            _ => VK_SUCCESS, // soft-unavailable: readback-only present
+            _ if expects_window => {
+                crate::stub::Failure::report(
+                    "vkQueuePresentKHR",
+                    &format!(
+                        "present committed nothing (sc={swapchain:#x}): the surface names an \
+                         application wl_surface but no presenter is live; returning \
+                         VK_ERROR_SURFACE_LOST_KHR"
+                    ),
+                );
+                VK_ERROR_SURFACE_LOST_KHR
+            }
+            // Deliberately offscreen (headless surface, or no `wl_surface` supplied): the readback IS
+            // the present.
+            _ => VK_SUCCESS,
         }
     }
 }
@@ -287,44 +325,84 @@ impl Presentation {
 mod tests {
     use super::*;
 
+    fn plane() -> (Vec<u8>, u32, u32) {
+        (vec![0xFFu8; 16], 2, 2)
+    }
+
+    /// An unbound swapchain has no known target, so nothing was promised — readback-only is truthful.
     #[test]
-    fn no_wayland_window_is_readback_only_vk_success() {
+    fn unbound_swapchain_is_readback_only_vk_success() {
         let mut presenters = crate::state::Presenters::new();
-        let plane = (vec![0xFFu8; 16], 2, 2);
 
         assert_eq!(
-            Presentation::frame_to_app_surface(&mut presenters, 0xABC, plane),
+            Presentation::frame_to_app_surface(&mut presenters, 0xABC, plane()),
             VK_SUCCESS
         );
     }
 
+    /// THE DEFECT: a swapchain whose surface names a real application `wl_surface` but whose presenter
+    /// never came up committed nothing and still reported `VK_SUCCESS`. `vkcube-wayland` therefore ran
+    /// to completion with 60 successful presents and ZERO composited frames, and exited 0.
     #[test]
-    fn soft_unavailable_bringup_caches_none_and_returns_vk_success() {
+    fn present_with_no_live_presenter_for_a_real_window_reports_surface_lost() {
         let swapchain = 0xBEEF;
-        let surface = PresenterId::Wayland(0x515);
+        let target = PresenterId::Wayland(0x515);
         let mut presenters = crate::state::Presenters::new();
-        presenters.ensure(surface, || None);
-        presenters.bind(swapchain, surface);
-
-        let first =
-            Presentation::frame_to_app_surface(&mut presenters, swapchain, (vec![0xFF; 16], 2, 2));
-        assert_eq!(first, VK_SUCCESS);
-
-        let second =
-            Presentation::frame_to_app_surface(&mut presenters, swapchain, (vec![0xFF; 16], 2, 2));
-        assert_eq!(second, VK_SUCCESS);
-    }
-
-    #[test]
-    fn cached_soft_unavailable_is_vk_success() {
-        let swapchain = 0x1234;
-        let surface = PresenterId::Wayland(0x515);
-        let mut presenters = crate::state::Presenters::new();
-        presenters.ensure(surface, || None);
-        presenters.bind(swapchain, surface);
+        presenters.ensure(target, || None);
+        presenters.bind(swapchain, target);
 
         assert_eq!(
-            Presentation::frame_to_app_surface(&mut presenters, swapchain, (vec![0xFF; 16], 2, 2),),
+            Presentation::frame_to_app_surface(&mut presenters, swapchain, plane()),
+            VK_ERROR_SURFACE_LOST_KHR,
+            "a present that commits nothing to a real window must not report success"
+        );
+    }
+
+    /// The failure must be reported on EVERY present, not just the first: the cached `None` presenter
+    /// must not decay back into a silent success.
+    #[test]
+    fn repeated_presents_keep_reporting_surface_lost() {
+        let swapchain = 0x1234;
+        let target = PresenterId::Wayland(0x515);
+        let mut presenters = crate::state::Presenters::new();
+        presenters.ensure(target, || None);
+        presenters.bind(swapchain, target);
+
+        for _ in 0..3 {
+            assert_eq!(
+                Presentation::frame_to_app_surface(&mut presenters, swapchain, plane()),
+                VK_ERROR_SURFACE_LOST_KHR
+            );
+        }
+    }
+
+    /// A headless surface never had a window, so the readback IS the present. This is the path the
+    /// offscreen/capture flows use and it must keep succeeding.
+    #[test]
+    fn headless_surface_target_stays_vk_success() {
+        let swapchain = 0x77;
+        let target = PresenterId::Surface(0x5000_0000_0000_0001);
+        let mut presenters = crate::state::Presenters::new();
+        presenters.ensure(target, || None);
+        presenters.bind(swapchain, target);
+
+        assert_eq!(
+            Presentation::frame_to_app_surface(&mut presenters, swapchain, plane()),
+            VK_SUCCESS
+        );
+    }
+
+    /// `vkCreateWaylandSurfaceKHR` with a null `wl_surface` is an application asking for no window.
+    #[test]
+    fn wayland_surface_without_a_window_stays_vk_success() {
+        let swapchain = 0x88;
+        let target = PresenterId::Wayland(0);
+        let mut presenters = crate::state::Presenters::new();
+        presenters.ensure(target, || None);
+        presenters.bind(swapchain, target);
+
+        assert_eq!(
+            Presentation::frame_to_app_surface(&mut presenters, swapchain, plane()),
             VK_SUCCESS
         );
     }

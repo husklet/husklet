@@ -64,9 +64,13 @@ pub fn pixels_to_xrgb8888(src: &[u8], w: usize, h: usize, source_is_bgra: bool) 
 }
 
 /// A typed outcome for the fallible app-surface present. A library/symbol/global gap is a *soft* failure
-/// (the caller maps it to `VK_SUCCESS` — the readback happened, the on-surface attach was skipped); a live
-/// marshal/flush gap is a *hard* failure the caller surfaces as `VK_ERROR_OUT_OF_DATE_KHR` /
-/// `VK_ERROR_SURFACE_LOST_KHR`. Never a fake present.
+/// (the presenter is simply not available); a live marshal/flush gap is a *hard* failure the caller
+/// surfaces as `VK_ERROR_OUT_OF_DATE_KHR` / `VK_ERROR_SURFACE_LOST_KHR`. Never a fake present.
+///
+/// "Soft" classifies the PRESENTER, not the present. Whether an unavailable presenter is acceptable is
+/// the caller's decision and depends on what the swapchain was targeting: for a deliberately offscreen
+/// target the readback is the whole present, but for an application-owned `wl_surface` an unavailable
+/// presenter means nothing was displayed, which the caller must report as a failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WlAppError {
     /// No app `wl_surface*` was captured (not a wayland window) — soft.
@@ -94,8 +98,8 @@ pub enum WlAppError {
 }
 
 impl WlAppError {
-    /// Whether this is a *soft* failure (the presenter is simply unavailable and the caller keeps the
-    /// readback-only present, returning `VK_SUCCESS`) vs a *hard* live-present failure.
+    /// Whether this is a *soft* failure (the presenter is simply unavailable) vs a *hard* live-present
+    /// failure. A soft failure is not by itself a successful present — see the type-level note.
     pub fn is_unavailable(&self) -> bool {
         matches!(
             self,
@@ -109,11 +113,14 @@ impl WlAppError {
         )
     }
 
-    /// Map this present outcome onto the `VkResult` `vkQueuePresentKHR` returns for the swapchain. A soft
-    /// error is `VK_SUCCESS` (the readback ran; only the on-surface attach was skipped, i.e. an
-    /// offscreen/headless present). A connection/allocation loss (`Flush`/`ShmAlloc`) is
-    /// `VK_ERROR_SURFACE_LOST_KHR`; a per-frame marshal/size failure is `VK_ERROR_OUT_OF_DATE_KHR` (the app
-    /// recreates its swapchain).
+    /// Map this present outcome onto the `VkResult` `vkQueuePresentKHR` returns for the swapchain. A
+    /// connection/allocation loss (`Flush`/`ShmAlloc`) is `VK_ERROR_SURFACE_LOST_KHR`; a per-frame
+    /// marshal/size failure is `VK_ERROR_OUT_OF_DATE_KHR` (the app recreates its swapchain).
+    ///
+    /// A soft error maps to `VK_SUCCESS` here because this conversion is only reached once a presenter
+    /// WAS live and then failed mid-present. The no-presenter-at-all case never reaches this function:
+    /// the caller decides it from the swapchain's target identity, because only the caller knows whether
+    /// a windowless present was intended.
     pub fn to_vk_result(&self) -> i32 {
         if self.is_unavailable() {
             return VK_SUCCESS;

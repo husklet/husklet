@@ -54,6 +54,12 @@ pub struct PhysicalDeviceDesc {
     pub device_type: u32,
     /// A stable hl-specific `pipelineCacheUUID` tag.
     pub pipeline_cache_uuid: [u8; 16],
+    /// `VkPhysicalDeviceIDProperties::deviceUUID` — stable identity of this physical device. Tools and
+    /// applications key caches and device matching on it, so an all-zero value makes the device
+    /// unidentifiable and indistinguishable from every other driver reporting zeros.
+    pub device_uuid: [u8; 16],
+    /// `VkPhysicalDeviceIDProperties::driverUUID` — stable identity of this driver build.
+    pub driver_uuid: [u8; 16],
     pub limits: Limits,
     /// Size in bytes of the single unified DEVICE_LOCAL heap (Apple unified memory, shared with system
     /// RAM). Backs every advertised memory type — see [`PhysicalDeviceDesc::memory_types`].
@@ -206,6 +212,8 @@ impl PhysicalDeviceDesc {
             device_id: 0xdd00_0001,
             device_type: DEVICE_TYPE_INTEGRATED_GPU,
             pipeline_cache_uuid: *b"hlMetalVulkan\0\0\0",
+            device_uuid: *b"hl-Metal-device0",
+            driver_uuid: *b"hl-Vulkan-driver",
             limits: Limits::metal_class(),
             memory_heap_bytes: 8 * 1024 * 1024 * 1024, // 8 GiB (unified, shared with system RAM)
             queue_family: QueueFamily {

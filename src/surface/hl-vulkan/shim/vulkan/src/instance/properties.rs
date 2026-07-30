@@ -2,6 +2,40 @@ use super::*;
 
 const VK_DRIVER_ID_UNKNOWN: i32 = 0;
 
+/// `VkShaderStageFlagBits` / `VkSubgroupFeatureFlagBits` values used by the subgroup report.
+const SHADER_STAGE_FRAGMENT: VkFlags = 0x0000_0010;
+const SHADER_STAGE_COMPUTE: VkFlags = 0x0000_0020;
+const SUBGROUP_FEATURE_BASIC: VkFlags = 0x0000_0001;
+
+/// The one source of truth for how this driver identifies itself, so every spelling of the query — the
+/// standalone `VkPhysicalDeviceDriverProperties`, the `VkPhysicalDeviceVulkan12Properties` aggregate a
+/// Vulkan-1.2+ client actually reads, and `VkPhysicalDeviceIDProperties` — reports the same answer.
+struct Identity;
+
+impl Identity {
+    const DRIVER_NAME: &'static str = "hl";
+    const DRIVER_INFO: &'static str = "hl Metal (Vulkan) 0.1";
+    /// No Vulkan CTS conformance version has been assigned to this driver; claiming one would be a lie.
+    const CONFORMANCE: VkConformanceVersion = VkConformanceVersion {
+        major: 0,
+        minor: 0,
+        subminor: 0,
+        patch: 0,
+    };
+    /// Metal's SIMD group width on Apple GPUs. Reported non-zero because a client that computes a
+    /// dispatch geometry from `subgroupSize` divides by it, and a zero is an immediate divide-by-zero.
+    const SUBGROUP_SIZE: u32 = 32;
+
+    fn write_ids(id: &mut VkPhysicalDeviceIDProperties) {
+        let desc = StateStore::with(|state| state.physical_device());
+        id.device_uuid = desc.device_uuid;
+        id.driver_uuid = desc.driver_uuid;
+        id.device_luid = [0; VK_LUID_SIZE];
+        id.device_node_mask = 0;
+        id.device_luid_valid = VK_FALSE; // no LUID: this is not a Windows/D3D device
+    }
+}
+
 pub extern "C" fn vkGetPhysicalDeviceProperties2(
     physical_device: *mut c_void,
     p_properties: *mut c_void,
@@ -20,15 +54,9 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
                 // No Khronos driver ID is assigned to hl. UNKNOWN is truthful; borrowing another
                 // implementation's ID can make clients classify this Metal-backed device as software.
                 d.driver_id = VK_DRIVER_ID_UNKNOWN;
-                Name::write(&mut d.driver_name, "hl");
-                Name::write(&mut d.driver_info, "hl Metal (Vulkan) 0.1");
-                // No Vulkan CTS conformance version has been assigned to this driver.
-                d.conformance_version = VkConformanceVersion {
-                    major: 0,
-                    minor: 0,
-                    subminor: 0,
-                    patch: 0,
-                };
+                Name::write(&mut d.driver_name, Identity::DRIVER_NAME);
+                Name::write(&mut d.driver_info, Identity::DRIVER_INFO);
+                d.conformance_version = Identity::CONFORMANCE;
             }
         } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES {
             if let Some(m) =
@@ -36,6 +64,46 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
             {
                 m.max_per_set_descriptors = 1_000_000;
                 m.max_memory_allocation_size = 1 << 31; // 2 GiB
+            }
+        } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES {
+            if let Some(id) = unsafe { (node as *mut VkPhysicalDeviceIDProperties).as_mut() } {
+                Identity::write_ids(id);
+            }
+        } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES {
+            if let Some(sub) = unsafe { (node as *mut VkPhysicalDeviceSubgroupProperties).as_mut() } {
+                sub.subgroup_size = Identity::SUBGROUP_SIZE;
+                sub.supported_stages = SHADER_STAGE_COMPUTE | SHADER_STAGE_FRAGMENT;
+                sub.supported_operations = SUBGROUP_FEATURE_BASIC;
+                sub.quad_operations_in_all_stages = VK_FALSE;
+            }
+        } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES {
+            // The 1.1 aggregate carries the same identity + subgroup members. A client at the
+            // advertised 1.1+ reads them from HERE, not from the standalone structs above.
+            if let Some(v11) =
+                unsafe { (node as *mut VkPhysicalDeviceVulkan11PropertiesPrefix).as_mut() }
+            {
+                let desc = StateStore::with(|s| s.physical_device());
+                v11.device_uuid = desc.device_uuid;
+                v11.driver_uuid = desc.driver_uuid;
+                v11.device_luid = [0; VK_LUID_SIZE];
+                v11.device_node_mask = 0;
+                v11.device_luid_valid = VK_FALSE; // no LUID: this is not a Windows/D3D device
+                v11.subgroup_size = Identity::SUBGROUP_SIZE;
+                v11.subgroup_supported_stages = SHADER_STAGE_COMPUTE | SHADER_STAGE_FRAGMENT;
+                v11.subgroup_supported_operations = SUBGROUP_FEATURE_BASIC;
+                v11.subgroup_quad_operations_in_all_stages = VK_FALSE;
+            }
+        } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES {
+            // The 1.2 aggregate carries the driver identity. This — not
+            // `VkPhysicalDeviceDriverProperties` — is where a client at the advertised 1.2+ reads the
+            // driver name, which is why leaving it untouched reported a blank driver.
+            if let Some(v12) =
+                unsafe { (node as *mut VkPhysicalDeviceVulkan12PropertiesPrefix).as_mut() }
+            {
+                v12.driver_id = VK_DRIVER_ID_UNKNOWN;
+                Name::write(&mut v12.driver_name, Identity::DRIVER_NAME);
+                Name::write(&mut v12.driver_info, Identity::DRIVER_INFO);
+                v12.conformance_version = Identity::CONFORMANCE;
             }
         } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES {
             if let Some(m) =
@@ -223,5 +291,88 @@ mod tests {
         assert_eq!(driver.conformance_version.minor, 0);
         assert_eq!(driver.conformance_version.subminor, 0);
         assert_eq!(driver.conformance_version.patch, 0);
+    }
+
+    /// A Vulkan-1.2+ client reads the driver identity from the `VkPhysicalDeviceVulkan12Properties`
+    /// aggregate, not from `VkPhysicalDeviceDriverProperties`. Leaving it untouched reported a blank
+    /// driver name, so tools could not identify the driver at all.
+    #[test]
+    fn vulkan_1_2_aggregate_reports_the_driver_identity() {
+        let mut v12: VkPhysicalDeviceVulkan12PropertiesPrefix = unsafe { core::mem::zeroed() };
+        v12.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES;
+        let mut properties: VkPhysicalDeviceProperties2 = unsafe { core::mem::zeroed() };
+        properties.p_next = &mut v12 as *mut _ as *mut c_void;
+
+        vkGetPhysicalDeviceProperties2(
+            core::ptr::null_mut(),
+            &mut properties as *mut _ as *mut c_void,
+        );
+
+        let name: Vec<u8> = v12
+            .driver_name
+            .iter()
+            .take_while(|&&c| c != 0)
+            .map(|&c| c as u8)
+            .collect();
+        assert_eq!(String::from_utf8_lossy(&name), "hl");
+        assert_eq!(v12.driver_id, VK_DRIVER_ID_UNKNOWN);
+    }
+
+    /// `subgroupSize` of 0 is not a conservative answer, it is an arithmetic trap: a client sizing a
+    /// dispatch from it divides by zero.
+    #[test]
+    fn subgroup_size_is_reported_non_zero() {
+        let mut subgroup: VkPhysicalDeviceSubgroupProperties = unsafe { core::mem::zeroed() };
+        subgroup.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
+        let mut properties: VkPhysicalDeviceProperties2 = unsafe { core::mem::zeroed() };
+        properties.p_next = &mut subgroup as *mut _ as *mut c_void;
+
+        vkGetPhysicalDeviceProperties2(
+            core::ptr::null_mut(),
+            &mut properties as *mut _ as *mut c_void,
+        );
+
+        assert_ne!(subgroup.subgroup_size, 0);
+        assert_eq!(subgroup.subgroup_size, Identity::SUBGROUP_SIZE);
+    }
+
+    /// Device and driver UUIDs must be stable and non-zero, and must differ from each other — an
+    /// all-zero UUID makes the device indistinguishable from any other driver reporting zeros.
+    #[test]
+    fn identity_uuids_are_non_zero_and_distinct() {
+        let mut id: VkPhysicalDeviceIDProperties = unsafe { core::mem::zeroed() };
+        id.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+        let mut properties: VkPhysicalDeviceProperties2 = unsafe { core::mem::zeroed() };
+        properties.p_next = &mut id as *mut _ as *mut c_void;
+
+        vkGetPhysicalDeviceProperties2(
+            core::ptr::null_mut(),
+            &mut properties as *mut _ as *mut c_void,
+        );
+
+        assert_ne!(id.device_uuid, [0u8; 16]);
+        assert_ne!(id.driver_uuid, [0u8; 16]);
+        assert_ne!(id.device_uuid, id.driver_uuid);
+        assert_eq!(id.device_luid_valid, VK_FALSE);
+    }
+
+    /// The prefix structs must have the same offsets as the full `vk.xml` declarations, or a write
+    /// through them lands on the wrong member.
+    #[test]
+    fn identity_prefix_layouts_match_the_registry() {
+        // sType(4) + pad(4) + pNext(8), then driverID, then the two 256-byte name buffers.
+        let v12: VkPhysicalDeviceVulkan12PropertiesPrefix = unsafe { core::mem::zeroed() };
+        let base = &v12 as *const _ as usize;
+        assert_eq!(v12.driver_name.as_ptr() as usize - base, 20);
+        assert_eq!(v12.driver_info.as_ptr() as usize - base, 20 + 256);
+        let v11: VkPhysicalDeviceVulkan11PropertiesPrefix = unsafe { core::mem::zeroed() };
+        let base = &v11 as *const _ as usize;
+        assert_eq!(v11.device_uuid.as_ptr() as usize - base, 16);
+        assert_eq!(v11.driver_uuid.as_ptr() as usize - base, 32);
+        assert_eq!(v11.device_luid.as_ptr() as usize - base, 48);
+        let id: VkPhysicalDeviceIDProperties = unsafe { core::mem::zeroed() };
+        let base = &id as *const _ as usize;
+        assert_eq!(id.device_uuid.as_ptr() as usize - base, 16);
+        assert_eq!(id.driver_uuid.as_ptr() as usize - base, 32);
     }
 }
