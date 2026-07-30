@@ -145,6 +145,7 @@ impl MetalWindow {
             fullscreen: Cell::new(false),
             maximized: Cell::new(false),
             floating_frame: Cell::new(None),
+            last_presented_ns: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 

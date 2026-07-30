@@ -465,6 +465,13 @@ pub struct HlState {
     /// content-type) a test reads back. Cloned from the presenter at construction (before it moves into the
     /// engine), so the protocol handlers here write exactly where the test reads. See [`Observations`].
     observations: Arc<Mutex<Observations>>,
+    /// The surface a client set as its pointer cursor with `wl_pointer.set_cursor`, and the hotspot it
+    /// passed (surface-local logical coordinates). The pixels arrive on that surface's OWN commit, which
+    /// may precede or follow the `set_cursor` request, so both halves are retained until they meet in
+    /// [`Self::publish_host_cursor`]. Cleared when the client switches to a named shape or hides.
+    cursor_surface: Option<(SurfaceId, (i32, i32))>,
+    /// The most recent committed pixels of `cursor_surface` — the other half of the same rendezvous.
+    cursor_pixels: Option<(SurfaceId, crate::scene::port::CursorImage)>,
     clipboard_tx: Sender<String>,
     clipboard_rx: Receiver<String>,
 }
@@ -473,6 +480,7 @@ mod buffer;
 mod command;
 mod commit;
 mod configuration;
+mod cursor;
 mod extensions;
 mod frame;
 mod identity;

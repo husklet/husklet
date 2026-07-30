@@ -217,6 +217,7 @@ impl HlState {
                             buffer_scale: scale,
                             gpu: false,
                         };
+                        self.stash_cursor_pixels(sid, &stored, scale);
                         self.engine.presenter_mut().deposit(sid, stored);
                         // Synchronous CPU copy is done — release the buffer so the client may reuse it.
                         buffer.release();
@@ -229,6 +230,7 @@ impl HlState {
                 }
             }
             Some(BufferAssignment::Removed) => {
+                self.drop_cursor_pixels(sid);
                 self.engine.presenter_mut().forget(sid);
                 Commit {
                     buffer: BufferChange::Removed,
@@ -378,6 +380,7 @@ impl HlState {
                     buffer_scale: scale,
                     gpu: false,
                 };
+                self.stash_cursor_pixels(sid, &stored, scale);
                 self.engine.presenter_mut().deposit(sid, stored);
                 buffer.release();
                 let mut commit = Commit::attach(state);

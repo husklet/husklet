@@ -83,13 +83,25 @@ fn main() {
 
     let mut delivered = false;
     let run_loop = unsafe { NSRunLoop::currentRunLoop() };
-    for _ in 0..60 {
+    // Whole-surface damage every frame. The composite target is scissored to the frame's damage, so a
+    // run of empty-damage presents renders the FIRST frame and then repeats it: the window would look
+    // right while 59 of the 60 presents drew nothing.
+    let whole = [Rect::new(0, 0, w as i32, h as i32)];
+    let mut last_blue = 0u8;
+    for tick in 0..60u32 {
         presenter.poll_events();
-        presenter.attach_bgra(sid, frame.clone(), w, h);
+        // A slow blue ramp, so a watching human sees a LIVE window rather than a still image, and the
+        // readback below can name which frame it is looking at.
+        last_blue = (140 + tick * 2) as u8;
+        let mut frame = frame.clone();
+        for px in frame.chunks_exact_mut(4) {
+            px[0] = last_blue;
+        }
+        presenter.attach_bgra(sid, frame, w, h);
         let fb = presenter.present_frame(&single_layer(
             OutputId(0),
             img.clone(),
-            &[],
+            &whole,
             PresentTiming {
                 present_ns: 0,
                 refresh_ns: 0,
@@ -109,7 +121,8 @@ fn main() {
         .expect("the visible frame remains capturable");
     assert_eq!((capture_w, capture_h), (w, h));
     let center = ((capture_h / 2 * capture_w + capture_w / 2) * 4) as usize;
-    assert_eq!(&rgba[center..center + 4], &[20, 120, 200, 255]);
+    // The LAST frame of the ramp, not the first: proof every present actually composited.
+    assert_eq!(&rgba[center..center + 4], &[20, 120, last_blue, 255]);
     if let Ok(path) = std::env::var("HL_CAPTURE_PATH") {
         let mut ppm = format!("P6\n{capture_w} {capture_h}\n255\n").into_bytes();
         ppm.extend(

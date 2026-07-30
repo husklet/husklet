@@ -417,3 +417,20 @@ mod tests {
         assert!(error.contains("exceeds"), "{error}");
     }
 }
+
+#[test]
+#[ignore = "measurement, not an assertion"]
+fn measure_iosurface_texture_wrap() {
+    let ctx = MetalCtx::new().expect("metal");
+    let surface = hl_iosurface::Surface::new_bgra(1920, 1080).expect("iosurface");
+    for _ in 0..50 {
+        let _ = ctx.texture_from_iosurface(&surface, 1920, 1080).unwrap();
+    }
+    let started = std::time::Instant::now();
+    const N: u32 = 1000;
+    for _ in 0..N {
+        let _ = ctx.texture_from_iosurface(&surface, 1920, 1080).unwrap();
+    }
+    let each = started.elapsed() / N;
+    println!("texture_from_iosurface 1920x1080: {each:?} per call");
+}

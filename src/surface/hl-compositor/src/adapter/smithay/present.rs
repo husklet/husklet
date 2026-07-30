@@ -437,6 +437,10 @@ impl Windows for AdapterPresenter {
     ) {
         self.inner.begin_interaction(surface, interaction);
     }
+
+    fn set_cursor(&mut self, cursor: &crate::scene::port::HostCursor) {
+        self.inner.set_cursor(cursor);
+    }
 }
 
 #[cfg(test)]

@@ -37,6 +37,7 @@ use crate::scene::port::{
 };
 
 use super::capture::Capture;
+use super::cursor::HostCursorState;
 use super::metal::{BgraFrame, MetalCtx};
 use super::transform::Sampling;
 use super::window::{DisplayConfig, MetalWindow, NativeApplication, ResizeDrag};
@@ -253,6 +254,9 @@ pub struct MacPresenter {
     next_submission: u64,
     present_surfaces: HashMap<PresentationId, SurfaceId>,
     wake: Option<Arc<dyn Wake>>,
+    /// The host pointer cursor the guest last asked for. Only applied in windowed mode: headless there is
+    /// no AppKit cursor to own.
+    cursor: HostCursorState,
 }
 
 impl MacPresenter {
@@ -328,6 +332,7 @@ impl MacPresenter {
             next_submission: 1,
             present_surfaces: HashMap::new(),
             wake: None,
+            cursor: HostCursorState::default(),
         })
     }
 
@@ -361,6 +366,7 @@ impl MacPresenter {
             next_submission: 1,
             present_surfaces: HashMap::new(),
             wake: None,
+            cursor: HostCursorState::default(),
         };
         if let Some(directory) = std::env::var_os("HL_SURFACE_CAPTURE_DIR") {
             match Capture::new(PathBuf::from(directory)) {

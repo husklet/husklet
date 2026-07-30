@@ -172,18 +172,37 @@ fn requested_capture_writes_only_the_next_presented_frame() {
         vsync: false,
     };
 
+    // Every frame carries whole-surface damage: the composite target is scissored to the frame's damage,
+    // so presenting three DIFFERENT buffers with empty damage would render only the first and this test
+    // would pass while comparing one frame against itself.
+    let whole = [Rect::new(0, 0, 2, 2)];
     presenter.attach_bgra(sid, known_frame(2, 2, [1, 2, 3, 255]), 2, 2);
-    presenter.present_frame(&single_layer(OutputId(0), image(sid, 2, 2), &[], timing));
+    presenter.present_frame(&single_layer(OutputId(0), image(sid, 2, 2), &whole, timing));
     let output = directory.join("surface-14.ppm");
     assert!(!output.exists(), "capture stays idle without a request");
 
     std::fs::write(directory.join("request"), []).unwrap();
     presenter.attach_bgra(sid, known_frame(2, 2, [4, 5, 6, 255]), 2, 2);
-    presenter.present_frame(&single_layer(OutputId(0), image(sid, 2, 2), &[], timing));
+    presenter.present_frame(&single_layer(OutputId(0), image(sid, 2, 2), &whole, timing));
+    // The capture is the frame that followed the request — BGRA (4,5,6) read back as RGB (6,5,4) — not
+    // the frame before it and not a stale composite.
     let captured = std::fs::read(&output).unwrap();
+    assert_eq!(
+        captured,
+        b"P6\n2 2\n255\n\x06\x05\x04\x06\x05\x04\x06\x05\x04\x06\x05\x04"
+    );
 
     presenter.attach_bgra(sid, known_frame(2, 2, [7, 8, 9, 255]), 2, 2);
-    presenter.present_frame(&single_layer(OutputId(0), image(sid, 2, 2), &[], timing));
+    presenter.present_frame(&single_layer(OutputId(0), image(sid, 2, 2), &whole, timing));
+    // The third frame really did render (its composite is the readback below), yet the one-shot request
+    // was already claimed, so the file still holds the second frame.
+    assert_eq!(
+        presenter
+            .last_rgba(sid)
+            .map(|(_, _, rgba)| rgba[..4].to_vec()),
+        Some(vec![9, 8, 7, 255]),
+        "the frame after the capture must still render"
+    );
     assert_eq!(
         std::fs::read(&output).unwrap(),
         captured,

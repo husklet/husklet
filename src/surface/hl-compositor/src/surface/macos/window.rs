@@ -18,12 +18,13 @@ use objc2_metal::{
 };
 use objc2_quartz_core::{kCAGravityTopLeft, CAMetalDrawable, CAMetalLayer};
 use std::cell::Cell;
+use std::sync::atomic::AtomicU64;
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use super::layer;
 use super::metal::MetalCtx;
-use super::present::submission::{drawable_matches, NativePresent, PresentAttempt};
+use super::present::submission::{drawable_matches, DisplayTiming, NativePresent, PresentAttempt};
 use crate::scene::model::Visibility;
 use crate::scene::port::{PresentationId, PresenterEvent, Wake};
 use std::sync::Arc;
@@ -46,6 +47,10 @@ pub struct MetalWindow {
     maximized: Cell<bool>,
     /// Floating frame restored when XDG maximize is withdrawn. `None` until the first maximize.
     floating_frame: Cell<Option<NSRect>>,
+    /// `presentedTime` of the last frame this layer actually put on screen (`0` = none). Shared with each
+    /// submission's presented handler, which runs off the main thread — it is the only evidence available
+    /// for whether presentation is landing on the display's refresh cadence.
+    last_presented_ns: Arc<AtomicU64>,
 }
 
 /// State for a compositor-driven native edge resize. AppKit's ordinary titled-window resize enters a
@@ -179,6 +184,24 @@ impl MetalWindow {
         self.window.backingScaleFactor().max(1.0)
     }
 
+    /// What this window's display can actually attest about a present: the target screen's refresh
+    /// interval and whether the layer is in display-sync mode. A window on no screen reports an unknown
+    /// (`0`) interval rather than a plausible-looking guess.
+    fn display_timing(&self) -> DisplayTiming {
+        let refresh_ns = self
+            .window
+            .screen()
+            .map(|screen| unsafe { screen.maximumFramesPerSecond() })
+            .filter(|hz| *hz > 0)
+            .map(|hz| 1_000_000_000u64 / hz as u64)
+            .unwrap_or(0);
+        DisplayTiming {
+            refresh_ns,
+            display_sync: unsafe { self.layer.displaySyncEnabled() },
+            last_presented_ns: Arc::clone(&self.last_presented_ns),
+        }
+    }
+
     /// Whether AppKit has ordered the window on screen. A window covered by another app remains visible
     /// and must keep accepting frames; desktop occlusion is not compositor minimization policy.
     pub fn is_visible(&self) -> bool {
@@ -291,7 +314,14 @@ impl MetalWindow {
         unsafe { blit.copyFromTexture_toTexture(composite, &dst) };
         blit.endEncoding();
         cmd.presentDrawable(ProtocolObject::from_ref(&*drawable));
-        let present = NativePresent::new(id, cmd.clone(), drawable, events, wake);
+        let present = NativePresent::new(
+            id,
+            cmd.clone(),
+            drawable,
+            self.display_timing(),
+            events,
+            wake,
+        );
         cmd.commit();
         PresentAttempt::Submitted(present)
     }

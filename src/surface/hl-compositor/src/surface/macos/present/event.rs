@@ -57,6 +57,10 @@ impl MacPresenter {
                                     }
                                 }
                             }
+                            // AppKit re-resolves the cursor as the pointer moves over a view that owns no
+                            // cursor rect, so the guest's requested cursor is re-asserted here. This event
+                            // belongs to one of our windows, which is exactly when the cursor is ours.
+                            self.cursor.apply();
                             let point = event.locationInWindow();
                             let (x, y) = window.wayland_point(point.x, point.y);
                             let (x, y) = (x + input_origin.0, y + input_origin.1);

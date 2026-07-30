@@ -18,6 +18,7 @@
 //! same split the Wayland compositor uses (commit stashes the buffer; present composes it).
 
 mod capture;
+mod cursor;
 mod layer;
 mod metal;
 mod present;

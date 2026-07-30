@@ -10,6 +10,7 @@
 use crate::scene::model::{
     OutputId, PresentableImage, Rect, SurfaceId, WindowInteraction, WindowState,
 };
+use crate::scene::port::cursor::HostCursor;
 use std::sync::Arc;
 
 /// Input/window intent emitted by a native presenter. Platform key codes are translated before crossing
@@ -237,6 +238,11 @@ pub trait Windows {
 
     /// Begin an interactive window-manager operation.
     fn begin_interaction(&mut self, _surface: SurfaceId, _interaction: WindowInteraction) {}
+
+    /// Draw `cursor` as the host pointer cursor. The compositor advertises both `wp_cursor_shape_v1`
+    /// (themed names) and `wl_pointer.set_cursor` (client pixels), so a backend that opens real windows
+    /// must honour both — see [`HostCursor`]. A backend with no cursor to own (headless) ignores it.
+    fn set_cursor(&mut self, _cursor: &HostCursor) {}
 }
 
 /// Finished-frame presentation.

@@ -102,6 +102,11 @@ pub struct Observations {
     /// `wp_cursor_shape` carries no reply event, so this is the only way a test can assert the exact shape
     /// name Chrome/Ozone set reached the seat. See the `cursor_shape` demo.
     pub cursor_shape: Option<String>,
+    /// The last [`HostCursor`] the compositor asked the host to draw, exactly as
+    /// [`Windows::set_cursor`] received it: the decoded themed shape, the client's cursor PIXELS plus its
+    /// hotspot, or `Hidden`. Headless there is no host cursor to own, so this is what proves the request
+    /// reached the port at all — `cursor_shape` above records only the named half, and only its name.
+    pub host_cursor: Option<crate::scene::port::HostCursor>,
     /// `wl_surface` protocol ids that currently hold an ACTIVE `zwp_keyboard_shortcuts_inhibitor_v1`.
     /// Inserted (and the inhibitor activated) by `KeyboardShortcutsInhibitHandler::new_inhibitor`, removed by
     /// `inhibitor_destroyed`. The client also receives the `active` wire event, but this lets a test assert
@@ -345,7 +350,13 @@ impl PngPresenter {
 
 impl HostEvents for PngPresenter {}
 impl Clipboard for PngPresenter {}
-impl Windows for PngPresenter {}
+impl Windows for PngPresenter {
+    /// Headless there is no host pointer to change, so the request is recorded instead of drawn — the
+    /// only observable proof that a `wp_cursor_shape`/`wl_pointer.set_cursor` request reached the port.
+    fn set_cursor(&mut self, cursor: &crate::scene::port::HostCursor) {
+        self.observations.lock().unwrap().host_cursor = Some(cursor.clone());
+    }
+}
 
 /// Hard cap on any single presented axis. A real display dimension is far below this; a hostile
 /// `wp_viewport` destination or buffer size beyond it is refused by [`Presenter::present`] rather than

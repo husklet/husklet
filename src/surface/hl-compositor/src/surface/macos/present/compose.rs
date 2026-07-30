@@ -16,90 +16,16 @@ impl MacPresenter {
         let st = self.surfaces.get_mut(&sid).ok_or("no state for surface")?;
         let content = st.content.as_ref().ok_or("no content attached")?;
 
-        // Resolve the source texture (and its device-pixel size) from the attached content.
+        // The attached content's device-pixel size. Cheap for both sources, and it is all the geometry
+        // below needs — resolving the actual source TEXTURE is deferred until after the unchanged-native
+        // early return, because re-wrapping an IOSurface into a fresh MTLTexture for a frame that is then
+        // skipped is pure cost on the hot path.
         let native = matches!(content, Content::IoSurface(_));
-        let (src, w, h) = match content {
-            Content::Bgra { bgra, w, h } => {
-                let expected = usize::try_from(*w)
-                    .ok()
-                    .and_then(|width| {
-                        usize::try_from(*h)
-                            .ok()
-                            .and_then(|height| width.checked_mul(height))
-                    })
-                    .and_then(|pixels| pixels.checked_mul(4))
-                    .ok_or("BGRA dimensions overflow address space")?;
-                if *w == 0 || *h == 0 {
-                    return Err("BGRA content has a zero dimension".to_string());
-                }
-                if bgra.len() != expected {
-                    return Err(format!(
-                        "BGRA content length {} does not match {}x{}x4 ({expected})",
-                        bgra.len(),
-                        w,
-                        h
-                    ));
-                }
-                if st
-                    .uploads
-                    .first()
-                    .is_some_and(|(uw, uh, _)| (*uw, *uh) != (*w, *h))
-                {
-                    st.uploads.clear();
-                    st.upload_cursor = 0;
-                }
-                let tex = if st.uploads.len() < 3 {
-                    let tex = self.ctx.upload_bgra(bgra, *w, *h);
-                    st.uploads.push((*w, *h, tex.clone()));
-                    tex
-                } else {
-                    let index = st.upload_cursor % st.uploads.len();
-                    let texture = st.uploads[index].2.clone();
-                    // Damage is relative to the immediately preceding client buffer, but this rotating
-                    // texture last held the frame from three commits ago. Applying only the latest damage
-                    // would leave intervening changes stale. Upload the complete current plane into only
-                    // the selected slot: one coherent upload rather than three uploads every frame.
-                    self.ctx.update_bgra(&texture, bgra, *w, *h);
-                    texture
-                };
-                st.upload_cursor = (st.upload_cursor + 1) % 3;
-                (tex, *w, *h)
-            }
+        let (w, h) = match content {
+            Content::Bgra { w, h, .. } => (*w, *h),
             Content::IoSurface(surface) => {
                 let (sw, sh, _) = surface.dimensions();
-                if capture_pending {
-                    match surface.read_bgra() {
-                        Ok(bytes) => {
-                            let stats = PixelStats::from_bytes(&bytes);
-                            hl_log::hl_log!(
-                                tag::PRESENT,
-                                Level::Warn,
-                                "capture pixel boundary=source sid={} iosurface={} size={}x{} bytes={} min={} max={} nonzero={}",
-                                sid.0,
-                                surface.id(),
-                                sw,
-                                sh,
-                                bytes.len(),
-                                stats.min,
-                                stats.max,
-                                stats.nonzero
-                            );
-                        }
-                        Err(error) => hl_log::hl_log!(
-                            tag::PRESENT,
-                            Level::Warn,
-                            "capture pixel boundary=source sid={} iosurface={} size={}x{} read_error={error}",
-                            sid.0,
-                            surface.id(),
-                            sw,
-                            sh
-                        ),
-                    }
-                }
-                let tex = self
-                    .ctx
-                    .texture_from_iosurface(surface, sw as u32, sh as u32)?;
-                (tex, sw as u32, sh as u32)
+                (sw as u32, sh as u32)
             }
         };
 
@@ -187,6 +113,94 @@ impl MacPresenter {
                 .map(|(width, height, _)| (*width, *height))
                 .ok_or_else(|| "native content submitted without a composite".to_string());
         }
+
+        // Source texture resolution: deferred to here so an unchanged native submission never pays for a
+        // fresh IOSurface texture wrap (or an shm re-upload) it would immediately discard.
+        let st = self.surfaces.get_mut(&sid).ok_or("no state for surface")?;
+        let content = st.content.as_ref().ok_or("no content attached")?;
+        let src = match content {
+            Content::Bgra { bgra, w, h } => {
+                let expected = usize::try_from(*w)
+                    .ok()
+                    .and_then(|width| {
+                        usize::try_from(*h)
+                            .ok()
+                            .and_then(|height| width.checked_mul(height))
+                    })
+                    .and_then(|pixels| pixels.checked_mul(4))
+                    .ok_or("BGRA dimensions overflow address space")?;
+                if *w == 0 || *h == 0 {
+                    return Err("BGRA content has a zero dimension".to_string());
+                }
+                if bgra.len() != expected {
+                    return Err(format!(
+                        "BGRA content length {} does not match {}x{}x4 ({expected})",
+                        bgra.len(),
+                        w,
+                        h
+                    ));
+                }
+                if st
+                    .uploads
+                    .first()
+                    .is_some_and(|(uw, uh, _)| (*uw, *uh) != (*w, *h))
+                {
+                    st.uploads.clear();
+                    st.upload_cursor = 0;
+                }
+                let tex = if st.uploads.len() < 3 {
+                    let tex = self.ctx.upload_bgra(bgra, *w, *h);
+                    st.uploads.push((*w, *h, tex.clone()));
+                    tex
+                } else {
+                    let index = st.upload_cursor % st.uploads.len();
+                    let texture = st.uploads[index].2.clone();
+                    // Damage is relative to the immediately preceding client buffer, but this rotating
+                    // texture last held the frame from three commits ago. Applying only the latest damage
+                    // would leave intervening changes stale. Upload the complete current plane into only
+                    // the selected slot: one coherent upload rather than three uploads every frame.
+                    self.ctx.update_bgra(&texture, bgra, *w, *h);
+                    texture
+                };
+                st.upload_cursor = (st.upload_cursor + 1) % 3;
+                tex
+            }
+            Content::IoSurface(surface) => {
+                let (sw, sh, _) = surface.dimensions();
+                if capture_pending {
+                    match surface.read_bgra() {
+                        Ok(bytes) => {
+                            let stats = PixelStats::from_bytes(&bytes);
+                            hl_log::hl_log!(
+                                tag::PRESENT,
+                                Level::Warn,
+                                "capture pixel boundary=source sid={} iosurface={} size={}x{} bytes={} min={} max={} nonzero={}",
+                                sid.0,
+                                surface.id(),
+                                sw,
+                                sh,
+                                bytes.len(),
+                                stats.min,
+                                stats.max,
+                                stats.nonzero
+                            );
+                        }
+                        Err(error) => hl_log::hl_log!(
+                            tag::PRESENT,
+                            Level::Warn,
+                            "capture pixel boundary=source sid={} iosurface={} size={}x{} read_error={error}",
+                            sid.0,
+                            surface.id(),
+                            sw,
+                            sh
+                        ),
+                    }
+                }
+                self.ctx
+                    .texture_from_iosurface(surface, sw as u32, sh as u32)?
+            }
+        };
+
         // Reuse a persistent composite target sized to the destination. The source crop controls only
         // sampling; wp_viewport's destination size and the native backing scale control rasterization.
         let need_new = match &self.surfaces.get(&sid).unwrap().composite {

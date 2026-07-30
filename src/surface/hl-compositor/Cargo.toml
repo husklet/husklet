@@ -59,6 +59,8 @@ objc2-foundation = { version = "0.2", optional = true, features = ["NSString", "
 objc2-app-kit = { version = "0.2", optional = true, features = [
     "NSApplication", "NSEvent", "NSWindow", "NSResponder", "NSView", "NSControl", "NSButton", "NSScreen", "NSColor",
     "NSGraphics", "NSRunningApplication", "NSPasteboard", "objc2-quartz-core",
+    # The host cursor: system cursors (`NSCursor`) plus the bitmap a client-provided cursor surface becomes.
+    "NSCursor", "NSImage", "NSImageRep", "NSBitmapImageRep",
 ] }
 objc2-metal = { version = "0.2", optional = true, features = [
     "block2",

@@ -142,19 +142,37 @@ impl SeatHandler for HlState {
 
     /// The focused client set the pointer cursor. A `wp_cursor_shape_device_v1.set_shape` arrives here as
     /// [`CursorImageStatus::Named`] (Smithay decoded the shape enum to a `CursorIcon`); a client-provided
-    /// `wl_pointer.set_cursor` with a surface arrives as `Surface`, and hiding it as `Hidden`. Headless there
-    /// is no on-screen cursor to repaint, but recording the requested NAMED shape into [`Observations`] is
-    /// the observable proof the compositor honoured `wp_cursor_shape` (it carries no reply event), and lets a
-    /// test assert Chrome's cursor name reached the seat. `Surface`/`Hidden` clear the recorded name.
+    /// `wl_pointer.set_cursor` with a surface arrives as `Surface`, and hiding it as `Hidden`. Each is
+    /// forwarded to the host through [`Windows::set_cursor`] — the compositor advertises both mechanisms,
+    /// so both must reach the platform. The requested NAMED shape is additionally recorded into
+    /// [`Observations`]: `wp_cursor_shape` carries no reply event, so that is how a test asserts Chrome's
+    /// cursor name reached the seat. `Surface`/`Hidden` clear the recorded name.
     fn cursor_image(
         &mut self,
         _seat: &Seat<HlState>,
         image: smithay::input::pointer::CursorImageStatus,
     ) {
-        use smithay::input::pointer::CursorImageStatus;
+        use crate::scene::port::{CursorShape, HostCursor};
+        use smithay::input::pointer::{CursorImageStatus, CursorImageSurfaceData};
         let named = match image {
-            CursorImageStatus::Named(icon) => Some(icon.name().to_string()),
-            CursorImageStatus::Hidden => None,
+            CursorImageStatus::Named(icon) => {
+                let name = icon.name().to_string();
+                // An unknown name is not silently mapped onto some other shape: the host falls back to its
+                // default cursor, which is uninformative rather than wrong.
+                let shape = CursorShape::from_name(&name).unwrap_or(CursorShape::Default);
+                self.cursor_surface = None;
+                self.cursor_pixels = None;
+                self.engine
+                    .presenter_mut()
+                    .set_cursor(&HostCursor::Shape(shape));
+                Some(name)
+            }
+            CursorImageStatus::Hidden => {
+                self.cursor_surface = None;
+                self.cursor_pixels = None;
+                self.engine.presenter_mut().set_cursor(&HostCursor::Hidden);
+                None
+            }
             CursorImageStatus::Surface(cursor) => {
                 // A client-provided cursor image becomes a host cursor, never a window. Mark it with the
                 // scene's `Cursor` role so the commit path stops treating it as its own window root:
@@ -163,6 +181,20 @@ impl SeatHandler for HlState {
                 // that animates its cursor.
                 if let Some(sid) = self.sid(&cursor) {
                     self.engine.scene.set_role(sid, SurfaceRole::Cursor);
+                    let hotspot = with_states(&cursor, |states| {
+                        states
+                            .data_map
+                            .get::<CursorImageSurfaceData>()
+                            .map(|attributes| {
+                                let hotspot = attributes.lock().unwrap().hotspot;
+                                (hotspot.x, hotspot.y)
+                            })
+                            .unwrap_or((0, 0))
+                    });
+                    self.cursor_surface = Some((sid, hotspot));
+                    // `set_cursor` may follow the cursor surface's commit, in which case the pixels are
+                    // already stashed and the host cursor can be built right now.
+                    self.publish_host_cursor();
                 }
                 None
             }

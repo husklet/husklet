@@ -1,5 +1,5 @@
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -43,6 +43,51 @@ fn presented_nanos(seconds: f64) -> Option<u64> {
         .then(|| nanos.round() as u64)
 }
 
+/// What the host display can be ASKED about a submission, gathered at submit time.
+///
+/// `wp_presentation` feedback is a client's frame-pacing input (Chrome's `BeginFrame` estimator reads
+/// it), so every field here has to be something macOS actually reports rather than something assumed.
+#[derive(Clone)]
+pub(in crate::surface::macos) struct DisplayTiming {
+    /// The target screen's refresh interval in nanoseconds, from `NSScreen.maximumFramesPerSecond`.
+    /// `0` when the window is on no screen — reported as unknown rather than guessed.
+    pub refresh_ns: u64,
+    /// `CAMetalLayer.displaySyncEnabled`: the AppKit contract that a presented drawable waits for the
+    /// display's vertical blank. False means CoreAnimation may show the frame immediately (tearing).
+    pub display_sync: bool,
+    /// `presentedTime` of the previous frame presented through the same layer (`0` = none yet). Shared
+    /// with the presented handler, which both reads and updates it.
+    pub last_presented_ns: Arc<AtomicU64>,
+}
+
+/// Whether a vertical-blank-synchronized presentation was actually OBSERVED, as opposed to assumed.
+///
+/// Three things together are the evidence: the layer is in display-sync mode, the display's interval is
+/// known, and the gap between this drawable's `presentedTime` and the previous one is an integer multiple
+/// of that interval. The multiple (not just one interval) is what makes this work on a client that paces
+/// below the refresh rate, and on a ProMotion panel presenting at a divisor of its maximum. The FIRST
+/// frame after an idle gap has no predecessor, so nothing has been observed and `false` is reported —
+/// `wp_presentation`'s vsync flag is a claim about evidence, and there is none yet.
+fn vsync_observed(timing: &DisplayTiming, previous_ns: u64, present_ns: u64) -> bool {
+    const TOLERANCE_NUMERATOR: u64 = 1;
+    const TOLERANCE_DENOMINATOR: u64 = 4;
+    if !timing.display_sync
+        || timing.refresh_ns == 0
+        || previous_ns == 0
+        || present_ns <= previous_ns
+    {
+        return false;
+    }
+    let delta = present_ns - previous_ns;
+    let intervals = (delta + timing.refresh_ns / 2) / timing.refresh_ns;
+    if intervals == 0 {
+        return false;
+    }
+    let expected = intervals.saturating_mul(timing.refresh_ns);
+    let tolerance = timing.refresh_ns * TOLERANCE_NUMERATOR / TOLERANCE_DENOMINATOR;
+    delta.abs_diff(expected) <= tolerance
+}
+
 fn sane_presented_time(presented: u64, submitted: u64, observed: u64) -> bool {
     const TOLERANCE: u64 = 5_000_000_000;
     presented.saturating_add(TOLERANCE) >= submitted
@@ -80,6 +125,7 @@ impl NativePresent {
         id: PresentationId,
         command: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
         drawable: Retained<ProtocolObject<dyn CAMetalDrawable>>,
+        display: DisplayTiming,
         events: Sender<PresenterEvent>,
         wake: Option<Arc<dyn Wake>>,
     ) -> Self {
@@ -123,6 +169,10 @@ impl NativePresent {
                     );
                     return;
                 }
+                // Evidence, not optimism: the refresh interval is the target screen's, and the vsync flag
+                // is claimed only when this frame's presented time lines up with the previous one on the
+                // display's cadence. `swap` makes the comparison exactly-once per submission.
+                let previous_ns = display.last_presented_ns.swap(present_ns, Ordering::AcqRel);
                 publish(
                     &callback_events,
                     &callback_wake,
@@ -132,8 +182,8 @@ impl NativePresent {
                             serial: id.0,
                             timing: Some(PresentTiming {
                                 present_ns,
-                                refresh_ns: 0,
-                                vsync: true,
+                                refresh_ns: display.refresh_ns,
+                                vsync: vsync_observed(&display, previous_ns, present_ns),
                             }),
                         },
                     },
@@ -213,6 +263,64 @@ mod tests {
     fn callback_deadline_is_bounded() {
         assert!(CALLBACK_DEADLINE >= Duration::from_millis(100));
         assert!(CALLBACK_DEADLINE <= Duration::from_secs(2));
+    }
+
+    fn timing(display_sync: bool, refresh_ns: u64) -> DisplayTiming {
+        DisplayTiming {
+            refresh_ns,
+            display_sync,
+            last_presented_ns: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    const HZ60: u64 = 16_666_667;
+
+    #[test]
+    fn vsync_is_claimed_only_for_a_frame_that_landed_on_the_display_cadence() {
+        let sync = timing(true, HZ60);
+        // Consecutive refreshes, and a client pacing at half rate: both land on the cadence.
+        assert!(vsync_observed(&sync, 1_000_000_000, 1_000_000_000 + HZ60));
+        assert!(vsync_observed(
+            &sync,
+            1_000_000_000,
+            1_000_000_000 + HZ60 * 2
+        ));
+        assert!(vsync_observed(
+            &sync,
+            1_000_000_000,
+            1_000_000_000 + HZ60 * 7
+        ));
+        // Half an interval off the cadence is exactly what a non-synchronized present looks like.
+        assert!(!vsync_observed(
+            &sync,
+            1_000_000_000,
+            1_000_000_000 + HZ60 / 2
+        ));
+        assert!(!vsync_observed(
+            &sync,
+            1_000_000_000,
+            1_000_000_000 + HZ60 + HZ60 / 2
+        ));
+    }
+
+    #[test]
+    fn vsync_is_never_claimed_without_the_evidence_for_it() {
+        // No predecessor (the first frame, or the first after an idle gap): nothing was observed.
+        assert!(!vsync_observed(&timing(true, HZ60), 0, 1_000_000_000));
+        // Unknown refresh interval: there is no cadence to have landed on.
+        assert!(!vsync_observed(&timing(true, 0), 1_000, 1_000 + HZ60));
+        // The layer is not in display-sync mode, so CoreAnimation never promised a vblank.
+        assert!(!vsync_observed(
+            &timing(false, HZ60),
+            1_000_000_000,
+            1_000_000_000 + HZ60
+        ));
+        // A non-advancing presented time proves nothing either way.
+        assert!(!vsync_observed(
+            &timing(true, HZ60),
+            1_000_000_000,
+            1_000_000_000
+        ));
     }
 
     #[test]

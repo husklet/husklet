@@ -13,6 +13,9 @@ use wayland_client::protocol::{
     wl_registry, wl_seat, wl_shm, wl_shm_pool::WlShmPool, wl_surface::WlSurface,
 };
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
+use wayland_protocols::wp::cursor_shape::v1::client::{
+    wp_cursor_shape_device_v1, wp_cursor_shape_manager_v1,
+};
 use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
 use wayland_protocols::xdg::shell::client::{
     xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base,
@@ -40,6 +43,9 @@ struct App {
     keys: Vec<(u32, u32)>,
     /// Surface-local `wl_pointer.enter` coordinates, in order.
     pointer_enters: Vec<(f64, f64)>,
+    /// The serial of the most recent `wl_pointer.enter` — the token `wl_pointer.set_cursor` and
+    /// `wp_cursor_shape_device_v1.set_shape` must present for the compositor to honour them.
+    last_enter_serial: Option<u32>,
     /// Every `wl_pointer` event in wire order — the ORDER is the contract: axis values and their source
     /// must arrive inside one `frame`, and an `axis_stop` terminates the sequence.
     pointer_events: Vec<PointerWire>,
@@ -237,10 +243,12 @@ impl Dispatch<wl_pointer::WlPointer, ()> for App {
         if let wl_pointer::Event::Enter {
             surface_x,
             surface_y,
+            serial,
             ..
         } = event
         {
             app.pointer_enters.push((surface_x, surface_y));
+            app.last_enter_serial = Some(serial);
         }
         app.pointer_events.push(match event {
             wl_pointer::Event::Enter { .. } => PointerWire::Enter,
@@ -305,6 +313,8 @@ wayland_client::delegate_noop!(App: ignore WlShmPool);
 wayland_client::delegate_noop!(App: ignore WlBuffer);
 wayland_client::delegate_noop!(App: ignore wp_viewporter::WpViewporter);
 wayland_client::delegate_noop!(App: ignore wp_viewport::WpViewport);
+wayland_client::delegate_noop!(App: ignore wp_cursor_shape_manager_v1::WpCursorShapeManagerV1);
+wayland_client::delegate_noop!(App: ignore wp_cursor_shape_device_v1::WpCursorShapeDeviceV1);
 
 /// A compositor and one connected client, driven on this thread with no sockets, threads or env.
 struct Fixture {
@@ -412,6 +422,7 @@ impl Fixture {
     }
 }
 
+mod cursor;
 mod focus;
 mod input;
 mod popup;

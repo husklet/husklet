@@ -225,6 +225,8 @@ impl HlState {
             host_fullscreen: HashSet::new(),
             resize_grab: None,
             observations,
+            cursor_surface: None,
+            cursor_pixels: None,
             clipboard_tx,
             clipboard_rx,
         };

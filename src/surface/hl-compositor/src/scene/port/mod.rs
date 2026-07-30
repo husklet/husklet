@@ -5,9 +5,11 @@
 //! clock — lives behind these; the neutral core depends only on the traits.
 
 pub mod clock;
+pub mod cursor;
 pub mod presenter;
 
 pub use clock::Clock;
+pub use cursor::{CursorImage, CursorShape, HostCursor};
 pub use presenter::{
     Clipboard, CompletionOutcome, HostEvents, HostSurface, PresentFrame, PresentLayer,
     PresentOutcome, PresentTiming, PresentationCompletion, PresentationFeedback, PresentationId,

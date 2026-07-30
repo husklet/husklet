@@ -29,6 +29,14 @@ impl Windows for MacPresenter {
         self.destroy(surface);
     }
 
+    /// Adopt the guest's cursor request. Headless there is no AppKit cursor to set, and setting one
+    /// off the main thread is not allowed, so the request is dropped rather than half-applied.
+    fn set_cursor(&mut self, cursor: &crate::scene::port::HostCursor) {
+        if self.mtm.is_some() {
+            self.cursor.request(cursor);
+        }
+    }
+
     fn begin_interaction(&mut self, surface: SurfaceId, interaction: WindowInteraction) {
         if interaction == WindowInteraction::Move {
             if let (Some(window), Some(event)) = (
