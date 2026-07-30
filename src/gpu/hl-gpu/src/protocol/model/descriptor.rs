@@ -158,9 +158,11 @@ pub struct DepthState {
     pub stencil_front: StencilFaceState,
     /// Back-face stencil test + ops.
     pub stencil_back: StencilFaceState,
-    /// Bits of the stored stencil value the compare reads (WebGPU `stencilReadMask`).
+    /// Bits of the stored stencil value the compare reads (WebGPU `stencilReadMask`). 32-bit on the wire so
+    /// a guest passes an API mask through unchanged, but only the LOW 8 BITS are meaningful — this IR's only
+    /// stencil format has an 8-bit plane, so an executor truncates to `& 0xff` rather than rejecting.
     pub stencil_read_mask: u32,
-    /// Bits of the stencil value a pass/fail op may write (WebGPU `stencilWriteMask`).
+    /// Bits of the stencil value a pass/fail op may write (WebGPU `stencilWriteMask`); low 8 bits only.
     pub stencil_write_mask: u32,
     /// Fixed depth bias. `constant` uses wgpu's integer depth-bias units; `slope_scale` scales the maximum
     /// depth slope; `clamp` limits the resulting bias when the host supports depth-bias clamping.

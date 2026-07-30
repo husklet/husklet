@@ -100,7 +100,10 @@ impl Session {
     }
 }
 
-/// Accept ownership of an object transferred INTO this connection, charging it under `(kind, id)`.
+/// Accept ownership of an object transferred INTO this connection, charging it under `(kind, id)`. A
+/// pipeline is charged to the compiled-pipeline sub-total as well as the aggregate, exactly as
+/// [`Session::charge_frame`] charges a created one — the accept must mirror what
+/// [`release_ownership`] refunds, or the sub-total drifts on a round trip.
 pub fn accept_ownership(session: &mut Session, kind: u8, id: u32, bytes: u64) -> Result<()> {
     let mut next_live = session.ledger.live.clone();
     let mut next = session.ledger.totals;
@@ -115,6 +118,12 @@ pub fn accept_ownership(session: &mut Session, kind: u8, id: u32, bytes: u64) ->
         .objects
         .checked_add(1)
         .ok_or(GpuError::ResourceLimit("object count overflow"))?;
+    if kind == KIND_PIPELINE {
+        next.compiled_bytes = next
+            .compiled_bytes
+            .checked_add(bytes)
+            .ok_or(GpuError::ResourceLimit("compiled cache overflow"))?;
+    }
     commit(session, next_live, next)?;
     Ok(())
 }

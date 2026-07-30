@@ -53,6 +53,18 @@ impl RasterState {
     }
 }
 
+/// Byte address of vertex `index` in a slot-0 vertex buffer bound at `offset` with `stride`. Every operand
+/// is guest-controlled — the index of an indexed draw comes out of buffer CONTENT, which no validation can
+/// bound — so the address is computed in checked arithmetic and an address no `usize` can hold is out of
+/// bounds rather than a wrapped (and therefore bounds-check-passing) offset.
+fn vertex_address(offset: u64, index: u64, stride: usize) -> Result<usize> {
+    index
+        .checked_mul(stride as u64)
+        .and_then(|span| span.checked_add(offset))
+        .and_then(|address| usize::try_from(address).ok())
+        .ok_or(GpuError::OutOfBounds)
+}
+
 /// Execute a non-indexed `Draw`: fetch `[first_vertex, first_vertex+vertex_count)` from slot-0's vertex
 /// buffer and rasterize into the bound color attachments.
 #[allow(clippy::too_many_arguments)]
@@ -85,10 +97,13 @@ pub(crate) fn exec_draw(
     };
     let verts = {
         let b = crate::cpu::model::buffer(res, vbuf)?;
-        let mut out = Vec::with_capacity(vertex_count as usize);
+        // Reserve only for vertices the buffer could actually supply: `vertex_count` is guest-chosen and a
+        // maximal one would otherwise reserve tens of gigabytes before the per-vertex bounds check below
+        // rejects the first fetch.
+        let mut out = Vec::with_capacity((vertex_count as usize).min(b.data.len() / stride + 1));
         for i in first_vertex..first_vertex.saturating_add(vertex_count) {
-            let base = voff as usize + i as usize * stride;
-            if base + 8 > b.data.len() {
+            let base = vertex_address(voff, i as u64, stride)?;
+            if base.saturating_add(8) > b.data.len() {
                 return Err(GpuError::OutOfBounds);
             }
             out.push(read_vertex(&b.data, base, stride));
@@ -182,8 +197,8 @@ pub(crate) fn exec_draw_indexed(
             if vidx < 0 {
                 return Err(GpuError::OutOfBounds);
             }
-            let base = voff as usize + vidx as usize * stride;
-            if base + 8 > b.data.len() {
+            let base = vertex_address(voff, vidx as u64, stride)?;
+            if base.saturating_add(8) > b.data.len() {
                 return Err(GpuError::OutOfBounds);
             }
             out.push(read_vertex(&b.data, base, stride));

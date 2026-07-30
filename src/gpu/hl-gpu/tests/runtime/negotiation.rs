@@ -104,3 +104,65 @@ fn negotiate_rejects_incompatible_wire_version() {
     );
     assert!(s.caps.is_none(), "a failed negotiation records no caps");
 }
+
+/// Capability honesty in the tightening direction: the CPU reference executor MATERIALIZES a combined
+/// depth+stencil attachment (an 8-byte/texel depth+stencil plane) and runs the full stencil test/op set
+/// against it, so it must ADVERTISE `Depth24PlusStencil8`. While it did not, a guest could negotiate the
+/// stencil encoder ops successfully and then have every stencil attachment rejected at validation as an
+/// unsupported format — a capability the intersection claimed but the format bitset withheld.
+#[test]
+fn the_cpu_oracle_advertises_the_depth_stencil_format_it_materializes() {
+    use hl_gpu::protocol::model::descriptor::TextureDesc;
+    use hl_gpu::{CommandSink, CpuExecutor, InProcessCommandSink};
+
+    let exec = CpuExecutor::new();
+    assert!(
+        exec.capabilities()
+            .supports_format(TextureFormat::Depth24PlusStencil8),
+        "the oracle implements this format, so it must advertise it"
+    );
+
+    // And a guest can actually create one through the whole runtime pipeline, with no widened ceilings.
+    let mut sink = InProcessCommandSink::new(CpuExecutor::new());
+    sink.submit(&[Cmd::CreateTexture(
+        1,
+        TextureDesc {
+            width: 4,
+            height: 4,
+            depth: 1,
+            mip_levels: 1,
+            sample_count: 1,
+            dim: TextureDim::D2,
+            format: TextureFormat::Depth24PlusStencil8,
+            usage: texture_usage::RENDER_TARGET,
+            label: String::new(),
+        },
+    )])
+    .expect("a depth+stencil render target the oracle materializes must validate");
+}
+
+/// The other direction of capability honesty: the oracle must not ADVERTISE an encoder op it refuses.
+/// It materializes only mip 0 of a single layer, so the two explicit-region buffer↔texture copies are
+/// rejected outright at replay — a guest requiring them has to learn that at NEGOTIATION, cleanly, not
+/// after the app already committed to the path and a frame comes back `Unsupported`.
+#[test]
+fn the_cpu_oracle_does_not_advertise_the_region_copies_it_refuses() {
+    use hl_gpu::protocol::model::command::etag;
+    use hl_gpu::CpuExecutor;
+
+    let caps = CpuExecutor::new().capabilities();
+    assert!(!caps.supports_command(etag::COPY_B2T_REGION));
+    assert!(!caps.supports_command(etag::COPY_T2B_REGION));
+    // Everything else in the advertised set stays advertised.
+    assert!(caps.supports_command(etag::COPY_T2T) && caps.supports_command(etag::BLIT_TEXTURE));
+
+    assert_eq!(
+        caps.negotiate(&FeatureRequest {
+            wire_version: caps.wire_version,
+            command_bits: hl_gpu::Capabilities::command_bits(&[etag::COPY_B2T_REGION]),
+            ..FeatureRequest::default()
+        })
+        .unwrap_err(),
+        GpuError::Unsupported("capability: command tag not supported"),
+    );
+}

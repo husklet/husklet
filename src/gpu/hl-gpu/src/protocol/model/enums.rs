@@ -116,6 +116,13 @@ u32_enum!(
 
 u32_enum!(
     /// Render-pass attachment load behavior.
+    ///
+    /// CONTRACT NOTE on `DontCare`: no executor in this workspace honours it as "the prior contents are
+    /// undefined". Both the CPU oracle and the wgpu executor lower it as `Load`. That is the only SAFE
+    /// lowering — wgpu/WebGPU has no `DontCare`, and lowering it to `Clear` would invent pixels a caller
+    /// never asked for — but it means a guest cannot use `DontCare` to skip a load. Treat it as a HINT the
+    /// contract currently discards: a producer must not rely on the attachment being undefined afterwards,
+    /// and must not rely on saving the load bandwidth either.
     LoadOp { Load = 0, Clear = 1, DontCare = 2 } "LoadOp"
 );
 

@@ -22,6 +22,12 @@ impl EncoderState {
         if state.in_render_pass || state.in_compute_pass {
             return Err(GpuError::Invalid("command buffer ends inside an open pass"));
         }
+        // The completion signal is part of the command buffer, so its fence must resolve HERE. Executing
+        // the ops first and only then failing on an unknown fence would leave the ops' writes behind: the
+        // runtime transaction restores the id tables but cannot un-write pixels or buffer bytes.
+        if let Some((fence, _)) = commands.signal {
+            resources.fences.get(fence)?;
+        }
         Ok(())
     }
 

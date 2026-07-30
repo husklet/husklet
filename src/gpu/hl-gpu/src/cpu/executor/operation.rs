@@ -7,6 +7,20 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
                 return Err(GpuError::Invalid("nested render pass"));
             }
             let mut formats = Vec::with_capacity(color.len());
+            // Every attachment of a pass must share one extent (WebGPU `renderPass` / Vulkan
+            // `VkFramebuffer` both require it). The depth-tested raster path sizes its per-pixel coverage
+            // window from the depth attachment and composites those pixels into each color attachment, so
+            // a disagreement would index a smaller plane out of range.
+            let mut extent: Option<(u32, u32)> = None;
+            let mut agree = |t: &Texture| match extent {
+                Some(e) if e != (t.desc.width, t.desc.height) => {
+                    Err(GpuError::Invalid("render pass attachments disagree on extent"))
+                }
+                _ => {
+                    extent = Some((t.desc.width, t.desc.height));
+                    Ok(())
+                }
+            };
             for c in color {
                 let t = texture_with_usage(
                     res,
@@ -22,6 +36,7 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
                 if c.load == LoadOp::Clear {
                     t.desc.format.clear_texel(c.clear)?;
                 }
+                agree(t)?;
                 formats.push(t.desc.format);
             }
             if let Some(dp) = depth {
@@ -36,6 +51,7 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
                         "software: multisample depth attachment",
                     ));
                 }
+                agree(t)?;
             }
             st.in_render_pass = true;
             st.color_targets = color.iter().map(|c| c.texture).collect();
@@ -103,11 +119,15 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
         // reference is any `u32`; the executor applies it to the draws that follow (see `submit`).
         Enc::SetStencilReference { .. } => {}
         Enc::SetBlendConstant { .. } => {}
-        Enc::ClearRect { texture, .. } => {
+        Enc::ClearRect { texture, color, .. } => {
             let t = crate::cpu::model::texture(res, *texture)?;
             if t.desc.sample_count != 1 {
                 return Err(GpuError::Unsupported("software: multisample clear"));
             }
+            // Pack the clear color HERE so a format the oracle cannot clear is rejected before any op in
+            // this command buffer runs: an unclearable format discovered mid-execution would leave earlier
+            // ops' writes behind, which the runtime's id-table transaction cannot undo.
+            t.desc.format.clear_texel(*color)?;
         }
         Enc::Draw {
             vertex_count,

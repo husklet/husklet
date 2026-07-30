@@ -24,7 +24,7 @@ use crate::cpu::service::compute::run_dispatch;
 use crate::cpu::service::copy;
 use crate::cpu::service::raster;
 use crate::protocol::model::capability::{
-    shader_payload, Capabilities, PresentKind, ALL_COMMANDS, COLOR_FORMATS, DEPTH_FORMATS,
+    shader_payload, Capabilities, PresentKind, COLOR_FORMATS, DEPTH_FORMATS,
 };
 use crate::protocol::model::command::{Cmd, CommandBuffer, Enc, ShaderPayloadKind, WIRE_VERSION};
 use crate::protocol::model::descriptor::{

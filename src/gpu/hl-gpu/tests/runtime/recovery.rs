@@ -150,3 +150,58 @@ fn residency_cap_nacks_over_budget_frame_then_free_and_recreate_recovers() {
     assert!(s.resources.textures.contains(3) && s.resources.textures.contains(4));
     assert!(!s.resources.textures.contains(1) && !s.resources.textures.contains(2));
 }
+
+/// A backwards timeline-fence signal is a typed rejection the runtime raises AFTER the executor has
+/// already accepted the batch (`dispatch` reflects the fence lifecycle only once `execute` succeeded).
+/// That rejection must still be atomic: the frame's creates must not survive it, the ledger must not
+/// drift, and the timeline must not move — otherwise a guest that signals backwards every frame leaves
+/// resources live on the executor that the ledger no longer accounts for, defeating the residency bound.
+#[test]
+fn a_backwards_fence_signal_rolls_back_the_whole_frame() {
+    let caps = Capabilities::full("fake");
+    let mut exec = FakeExecutor::new(caps.clone());
+    let mut s = session(
+        Limits::from_capabilities(caps.clone()),
+        GlobalLedger::unbounded(),
+    );
+
+    let signal = |value| {
+        Cmd::Submit(CommandBuffer {
+            encoder: Vec::new(),
+            signal: Some((1, value)),
+        })
+    };
+    hl_gpu::runtime::submit(&mut s, &mut exec, 64, &[Cmd::CreateFence(1), signal(10)])
+        .expect("fence created and signalled to 10");
+    let before = (
+        s.residency_bytes(),
+        s.object_count(),
+        s.resources.live_count(),
+    );
+
+    // This frame creates a buffer and then signals fence 1 BACKWARDS (5 < 10).
+    let err = hl_gpu::runtime::submit(&mut s, &mut exec, 128, &[buffer(7, 4096), signal(5)])
+        .unwrap_err();
+    assert_eq!(
+        err,
+        GpuError::Invalid("fence timeline value moved backwards")
+    );
+    assert_eq!(
+        (
+            s.residency_bytes(),
+            s.object_count(),
+            s.resources.live_count()
+        ),
+        before,
+        "a rejected frame leaves the tables and the ledger exactly as they were"
+    );
+    assert_eq!(
+        s.timeline.get(1),
+        Some(10),
+        "the timeline must not move on a rejected frame"
+    );
+
+    // The connection recovers: the rolled-back id is free to be created again.
+    hl_gpu::runtime::submit(&mut s, &mut exec, 128, &[buffer(7, 4096)])
+        .expect("the rolled-back id is creatable again");
+}

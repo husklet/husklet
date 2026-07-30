@@ -108,3 +108,63 @@ fn huge_dispatch_grid_over_a_spirv_pipeline_short_circuits() {
     )
     .expect("huge grid over a SPIR-V pipeline returns cleanly (no kernel to run)");
 }
+
+// ---------------------------------------------------------------------------------------------------
+// a submit that fails on its completion signal must not have mutated resource CONTENTS
+// ---------------------------------------------------------------------------------------------------
+
+/// The CPU oracle validates a whole command buffer before executing any of it, precisely so a bad op late
+/// in a submit leaves earlier state untouched. The completion `signal` is part of that command buffer, so
+/// an unknown signal fence must be caught by the SAME pre-execution pass: the runtime's transaction rolls
+/// back the id TABLES on a NACK, but it cannot un-write pixels a clear already stored. A submit rejected
+/// for its signal must therefore leave the attachment byte-identical.
+#[test]
+fn a_submit_rejected_for_its_signal_fence_leaves_the_attachment_unchanged() {
+    let (mut exec, mut res) = primed(&[Cmd::CreateTexture(
+        1,
+        tex(
+            2,
+            2,
+            TextureFormat::Rgba8Unorm,
+            texture_usage::RENDER_TARGET | texture_usage::COPY_SRC,
+        ),
+    )]);
+    let mut before = vec![0u8; 2 * 2 * 4];
+    exec.read_texture(&res, TextureId(1), &mut before).unwrap();
+
+    let err = exec
+        .execute(
+            &mut res,
+            &[Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginRenderPass {
+                        color: vec![ColorAttachment {
+                            texture: 1,
+                            load: LoadOp::Clear,
+                            clear: [1.0, 1.0, 1.0, 1.0],
+                            store: true,
+                        }],
+                        depth: None,
+                    },
+                    Enc::EndRenderPass,
+                ],
+                // Fence 77 was never created: the submit cannot complete.
+                signal: Some((77, 1)),
+            })],
+        )
+        .unwrap_err();
+    assert_eq!(
+        err,
+        GpuError::UnknownId {
+            kind: "fence",
+            id: 77
+        }
+    );
+
+    let mut after = vec![0u8; 2 * 2 * 4];
+    exec.read_texture(&res, TextureId(1), &mut after).unwrap();
+    assert_eq!(
+        after, before,
+        "a rejected submit must not have cleared the attachment"
+    );
+}

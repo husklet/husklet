@@ -473,6 +473,8 @@ fn no_panic(bytes: &[u8]) -> hl_gpu::Result<Vec<Cmd>> {
 
 #[path = "wire_adversarial/compatibility.rs"]
 mod compatibility;
+#[path = "wire_adversarial/distinct.rs"]
+mod distinct;
 #[path = "wire_adversarial/mutation.rs"]
 mod mutation;
 #[path = "wire_adversarial/roundtrip.rs"]

@@ -1,4 +1,36 @@
 use super::*;
+use crate::protocol::model::command::etag;
+
+/// The encoder ops this oracle actually replays. It is [`ALL_COMMANDS`] MINUS the two explicit-region
+/// buffer↔texture copies: the oracle materializes only mip 0 of a single layer, so it refuses those two
+/// ops outright (`software: layered or offset buffer-texture copy`). Advertising a command the executor
+/// then refuses is the failure the capability handshake exists to prevent — a guest that requires them
+/// must fail cleanly at negotiation, not at replay.
+const REPLAYED_COMMANDS: &[u8] = &[
+    etag::BEGIN_RENDER_PASS,
+    etag::END_RENDER_PASS,
+    etag::SET_PIPELINE,
+    etag::SET_BIND_GROUP,
+    etag::SET_VERTEX_BUFFER,
+    etag::SET_INDEX_BUFFER,
+    etag::SET_VIEWPORT,
+    etag::SET_SCISSOR,
+    etag::CLEAR_RECT,
+    etag::DRAW,
+    etag::DRAW_INDEXED,
+    etag::BEGIN_COMPUTE_PASS,
+    etag::END_COMPUTE_PASS,
+    etag::DISPATCH,
+    etag::COPY_B2B,
+    etag::COPY_B2T,
+    etag::COPY_T2B,
+    etag::COPY_T2T,
+    etag::BLIT_TEXTURE,
+    etag::RESOLVE_TEXTURE,
+    etag::FILL_BUFFER,
+    etag::SET_STENCIL_REFERENCE,
+    etag::SET_BLEND_CONSTANT,
+];
 
 impl GpuExecutor for CpuExecutor {
     fn capabilities(&self) -> Capabilities {
@@ -10,12 +42,17 @@ impl GpuExecutor for CpuExecutor {
             max_texture_2d: 8192,
             present_kinds: vec![PresentKind::Shm],
             wire_version: WIRE_VERSION,
-            command_bits: Capabilities::command_bits(ALL_COMMANDS),
+            command_bits: Capabilities::command_bits(REPLAYED_COMMANDS),
             // Executes compiled kernels; it cannot run a graphics (SPIR-V/MSL) shader.
             shader_payloads: shader_payload::KERNEL,
-            // Color formats plus the depth formats the oracle materializes for depth-tested rendering.
+            // Color formats plus every depth format the oracle materializes for depth-tested rendering.
+            // The shared `DEPTH_FORMATS` is depth-only; this oracle also materializes the COMBINED
+            // depth+stencil plane and runs the full stencil test/op set against it (see
+            // `raster::raster_draw_depth`), so it must advertise that format too — otherwise a guest
+            // negotiates the stencil ops and then has every stencil attachment refused at validation.
             texture_formats: TextureFormat::bits(COLOR_FORMATS)
-                | TextureFormat::bits(DEPTH_FORMATS),
+                | TextureFormat::bits(DEPTH_FORMATS)
+                | TextureFormat::bits(&[TextureFormat::Depth24PlusStencil8]),
             // Browser-class per-frame wire-byte ceiling (256 MiB): a hostile-DoS guard, not a correctness
             // bound — the `GlobalLedger` is the true host-OOM guard. Raised from 64 MiB, which tripped
             // healthy browser frames. (Matches the wgpu executor; see its rationale.)

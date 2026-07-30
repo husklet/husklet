@@ -23,6 +23,27 @@ pub fn dispatch(
     exec: &mut dyn GpuExecutor,
     batch: &[Cmd],
 ) -> Result<Vec<Presentation>> {
+    // Reflect the batch's fence lifecycle + completion signals onto a COPY of the timeline first. A signal
+    // that moves a fence backwards is a typed rejection, and raising it after the executor already applied
+    // (and committed) the batch would leave resources live on the executor that `runtime::submit` has just
+    // un-charged from the ledger — an accounting divergence a guest could repeat to grow past its residency
+    // bound. Pre-flighting makes the rejection happen before ANY mutation; the copy is then installed
+    // wholesale once the executor has accepted the work, so the timeline moves exactly when the frame does.
+    let now = session.clock.now_nanos();
+    let mut next_timeline = session.timeline.clone();
+    for cmd in batch {
+        match cmd {
+            Cmd::CreateFence(id) => next_timeline.register(*id),
+            Cmd::DestroyFence(id) => next_timeline.retire(*id),
+            Cmd::Submit(cb) => {
+                if let Some((fence, value)) = cb.signal {
+                    next_timeline.signal(fence, value, now)?;
+                }
+            }
+            _ => {}
+        }
+    }
+
     // Execute inside an all-tables transaction so the batch's resource-lifecycle mutations are atomic:
     // an executor that fails PART-WAY through a batch (a Submit that fails device validation, an unknown
     // resource ref, a shader the backend can't compile — i.e. a NACK) would otherwise leave the id tables
@@ -43,21 +64,9 @@ pub fn dispatch(
         }
     };
 
-    // Reflect the batch's fence lifecycle + completion signals into the timeline only after the executor
-    // has accepted the work, so a failed execute leaves the timeline untouched (failure atomicity).
-    let now = session.clock.now_nanos();
-    for cmd in batch {
-        match cmd {
-            Cmd::CreateFence(id) => session.timeline.register(*id),
-            Cmd::DestroyFence(id) => session.timeline.retire(*id),
-            Cmd::Submit(cb) => {
-                if let Some((fence, value)) = cb.signal {
-                    session.timeline.signal(fence, value, now)?;
-                }
-            }
-            _ => {}
-        }
-    }
+    // Install the pre-flighted timeline only after the executor accepted the work, so a failed execute
+    // leaves the timeline untouched (failure atomicity).
+    session.timeline = next_timeline;
     Ok(presents)
 }
 

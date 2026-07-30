@@ -211,3 +211,48 @@ fn legal_create_after_rejections_still_charges_and_dispatches() {
         vec![0u8; 128]
     );
 }
+
+// -------------------------------------------------------------------------------------------------
+// 4. an ownership transfer in and back out is arithmetically symmetric
+// -------------------------------------------------------------------------------------------------
+
+/// Accepting ownership of an object and then releasing it must return EVERY counter to its starting
+/// value. A pipeline is the sharp case: its bytes belong to the compiled-pipeline sub-total as well as
+/// the aggregate, so an accept that charges only the aggregate while the matching release refunds the
+/// sub-total too underflows `compiled_bytes` — a wrapped ceiling that would then reject every later
+/// pipeline (or, in a debug build, an overflow panic).
+#[test]
+fn ownership_transfer_in_and_out_leaves_every_counter_at_its_start() {
+    let global = GlobalLedger::new(1 << 30, 1 << 20);
+    let limits = Limits::from_capabilities(CpuExecutor::new().capabilities());
+    let mut session = Session::new(limits, global.clone(), Box::new(FakeClock::new(0)));
+
+    let before = (
+        session.residency_bytes(),
+        session.object_count(),
+        session.compiled_cache_bytes(),
+    );
+    hl_gpu::runtime::service::account::accept_ownership(
+        &mut session,
+        hl_gpu::runtime::KIND_PIPELINE,
+        11,
+        4096,
+    )
+    .expect("accepting a transferred pipeline charges it");
+    let released = hl_gpu::runtime::service::account::release_ownership(
+        &mut session,
+        hl_gpu::runtime::KIND_PIPELINE,
+        11,
+    )
+    .expect("releasing it refunds it");
+    assert_eq!(released, 4096);
+    assert_eq!(
+        (
+            session.residency_bytes(),
+            session.object_count(),
+            session.compiled_cache_bytes()
+        ),
+        before,
+        "an accept/release round trip must leave the ledger exactly as it was"
+    );
+}

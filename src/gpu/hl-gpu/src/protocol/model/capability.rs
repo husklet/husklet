@@ -300,8 +300,15 @@ impl Capabilities {
     }
 
     /// A permissive descriptor advertising the full current IR surface — every encoder command, every
-    /// color format, all shader payloads, all present kinds — at [`super::command::WIRE_VERSION`]. Used
-    /// by the software oracle and test doubles that accept anything the guest can encode.
+    /// COLOR format (no depth/stencil format: see [`DEPTH_FORMATS`]), all shader payloads, all present
+    /// kinds, every binding-array kind and every [`gpu_feature`] — at [`super::command::WIRE_VERSION`].
+    ///
+    /// This is a TEST DOUBLE for sinks that accept anything the guest can encode. It must never be
+    /// advertised on behalf of a real executor: the standing rule is that a capability claim equals the
+    /// intersection of what shim, IR, executor, compositor and presenter actually honour, and no executor
+    /// in this workspace honours this whole set (the CPU oracle, for one, runs no graphics shader payload
+    /// and emulates fences). A real executor builds its own descriptor from what it implements — see
+    /// [`crate::cpu::CpuExecutor::capabilities`].
     pub fn full(name: impl Into<String>) -> Capabilities {
         Capabilities {
             name: name.into(),
