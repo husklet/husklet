@@ -76,6 +76,32 @@ impl Viewport {
     }
 }
 
+/// A GL scissor rect intersected with the render target, for `RenderPass::set_scissor_rect`.
+///
+/// WHY this exists: `glScissor` is a clip rectangle GL intersects with the framebuffer, so a rect that
+/// overhangs the target (an app that scissors to its logical layer size after the framebuffer shrank, or
+/// any `glScissor(0, 0, HUGE, HUGE)` "reset") is legal and simply clips. wgpu instead REJECTS the whole
+/// pass when `x + w > extent.width || y + h > extent.height`, and computes that sum with wrapping `u32`
+/// arithmetic — so a hostile `x = u32::MAX` both overflows and can alias onto an accepted rect. This is the
+/// same GL-vs-wgpu mismatch [`Viewport`] fixes. `None` = empty intersection: nothing rasterizes, which is
+/// also GL's result for an empty scissor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Scissor {
+    clipped: (u32, u32, u32, u32),
+}
+
+impl Scissor {
+    fn new(x: u32, y: u32, w: u32, h: u32, tw: u32, th: u32) -> Option<Self> {
+        let x0 = x.min(tw);
+        let y0 = y.min(th);
+        let cw = x.saturating_add(w).min(tw).saturating_sub(x0);
+        let ch = y.saturating_add(h).min(th).saturating_sub(y0);
+        (cw != 0 && ch != 0).then_some(Self {
+            clipped: (x0, y0, cw, ch),
+        })
+    }
+}
+
 impl WgpuExecutor {
     pub(crate) fn submit_cb(
         &mut self,

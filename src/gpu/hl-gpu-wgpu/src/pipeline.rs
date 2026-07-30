@@ -134,7 +134,7 @@ impl WgpuExecutor {
                         })
                         .collect();
                     Self::apply_authoritative_counts(&mut merged, authoritative_layout)?;
-                    let group_layouts = self.build_render_bind_group_layouts(&merged);
+                    let group_layouts = self.build_render_bind_group_layouts(&merged)?;
                     let layout_refs: Vec<_> = group_layouts.iter().collect();
                     let push_constant_ranges = self
                         .gpu
@@ -251,6 +251,19 @@ impl WgpuExecutor {
             }
             None => (None, Vec::new(), None),
         };
+        // wgpu's Metal backend does not program a raster sample mask at all (`wgpu-hal`'s
+        // `metal::device` carries a literal `//TODO: handle sample mask`), so a non-default mask would be
+        // silently dropped and the pass would shade every sample — wrong pixels with no error. Refuse it
+        // explicitly instead. The neutral default (all bits set) is unaffected, so no ordinary pipeline
+        // changes behavior.
+        if multisample.mask != u64::MAX
+            && desc.sample_count > 1
+            && self.gpu.info.backend == wgpu::Backend::Metal
+        {
+            return Err(GpuError::Unsupported(
+                "wgpu: this backend does not honour a multisample sample mask",
+            ));
+        }
         if multisample.sample_shading {
             let Some((key, entry)) = fs_key.as_ref().zip(
                 desc.fragment
@@ -434,7 +447,7 @@ impl WgpuExecutor {
         // 0 at draw time (`get_bind_group_layout(0)`); a pipeline that uses a higher group reaches the layout
         // but its multi-group draw is the next gap, not an executor error here.
         let layout_started = diagnostics.then(Instant::now);
-        let group_layouts = self.build_render_bind_group_layouts(&merged);
+        let group_layouts = self.build_render_bind_group_layouts(&merged)?;
         let layout_refs: Vec<&wgpu::BindGroupLayout> = group_layouts.iter().collect();
         let pipeline_layout =
             self.gpu
@@ -672,12 +685,20 @@ impl WgpuExecutor {
                 Option<std::num::NonZeroU32>,
             ),
         >,
-    ) -> Vec<wgpu::BindGroupLayout> {
+    ) -> Result<Vec<wgpu::BindGroupLayout>> {
         let max_group = match merged.keys().map(|(g, _)| *g).max() {
             Some(m) => m,
-            None => return Vec::new(),
+            None => return Ok(Vec::new()),
         };
-        (0..=max_group)
+        // A layout entry with a descriptor-array `count` needs a wgpu device feature this adapter may not
+        // hold (Metal has no buffer/storage-resource binding arrays). `create_bind_group_layout` reports
+        // that through the device's error handler, whose default PANICS the host — so capture it and return
+        // a typed refusal instead. The advertised `binding_arrays` set is gated on the same features, so a
+        // guest that negotiated honestly never lands here.
+        self.gpu
+            .device
+            .push_error_scope(wgpu::ErrorFilter::Validation);
+        let layouts: Vec<wgpu::BindGroupLayout> = (0..=max_group)
             .map(|group| {
                 let entries: Vec<wgpu::BindGroupLayoutEntry> = merged
                     .iter()
@@ -709,7 +730,17 @@ impl WgpuExecutor {
                         entries: &entries,
                     })
             })
-            .collect()
+            .collect();
+        if let Some(error) = pollster::block_on(self.gpu.device.pop_error_scope()) {
+            hl_log::hl_warn!(
+                hl_log::tag::WGPU,
+                "bind-group layout rejected reason=device-cannot-express err={error}"
+            );
+            return Err(GpuError::Unsupported(
+                "wgpu: bind-group layout is not expressible on this device",
+            ));
+        }
+        Ok(layouts)
     }
 
     fn apply_authoritative_counts(
@@ -803,7 +834,19 @@ impl WgpuExecutor {
                     "wgpu: shader binding kind differs from authoritative pipeline layout",
                 ));
             }
-            *count = if declared.count > 1 && declared.kind != PipelineBindingKind::UniformBuffer {
+            // Only a kind that survives as a NATIVE descriptor array keeps an array count. Uniform,
+            // storage-buffer, and storage-image arrays are lowered to separate scalar bindings by
+            // `wgsl::descriptor::ScalarArrays` (Metal exposes no buffer/storage resource arrays), so
+            // re-attaching the authoritative count here would ask the device for an array the shader no
+            // longer declares — a layout `create_bind_group_layout` refuses outright.
+            *count = if declared.count > 1
+                && !matches!(
+                    declared.kind,
+                    PipelineBindingKind::UniformBuffer
+                        | PipelineBindingKind::StorageBuffer
+                        | PipelineBindingKind::StorageTexture
+                )
+            {
                 std::num::NonZeroU32::new(declared.count)
             } else {
                 None

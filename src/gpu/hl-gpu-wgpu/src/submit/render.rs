@@ -299,6 +299,8 @@ impl WgpuExecutor {
             // produce no pixels — exactly GL's result) instead of falling back to wgpu's default full-target
             // viewport, which would wrongly paint the geometry. Reset by the next in-bounds SetViewport.
             let mut vp_degenerate = false;
+            // The same for a scissor rect whose intersection with the target is empty (see `Scissor`).
+            let mut sc_degenerate = false;
             // Exact logical buffer bindings seen by wgpu. Kept beside the native pass state solely so a
             // validation failure can name the offending pipeline/slot/buffer tuple.
             let mut vertex_bindings = std::collections::BTreeMap::new();
@@ -338,7 +340,19 @@ impl WgpuExecutor {
                             None => vp_degenerate = true,
                         }
                     }
-                    Enc::SetScissor { x, y, w, h } => pass.set_scissor_rect(*x, *y, *w, *h),
+                    // GL's glScissor is clipped by the framebuffer; wgpu rejects an overhanging rect
+                    // outright (and adds `x + w` with wrapping arithmetic). Intersect it, and drop the
+                    // draws when the intersection is empty — GL rasterizes nothing through such a rect.
+                    Enc::SetScissor { x, y, w, h } => {
+                        match Scissor::new(*x, *y, *w, *h, target_w, target_h) {
+                            Some(scissor) => {
+                                sc_degenerate = false;
+                                let (sx, sy, sw, sh) = scissor.clipped;
+                                pass.set_scissor_rect(sx, sy, sw, sh);
+                            }
+                            None => sc_degenerate = true,
+                        }
+                    }
                     // Dynamic stencil reference: the value the pipeline's stencil compare tests against and
                     // that a `REPLACE` op writes. Applied in stream order, so it takes effect for the draws
                     // that follow it — exactly like viewport/scissor.
@@ -428,9 +442,10 @@ impl WgpuExecutor {
                             instance_count: *instance_count,
                         }
                         .log();
-                        // A draw under a wholly-out-of-bounds viewport rasterizes nothing in GL; skip it
-                        // (di/pipeline/binds already advanced) rather than draw through the default viewport.
-                        if !vp_degenerate {
+                        // A draw under a wholly-out-of-bounds viewport or an empty scissor rasterizes
+                        // nothing in GL; skip it (di/pipeline/binds already advanced) rather than draw
+                        // through wgpu's default full-target viewport/scissor.
+                        if !vp_degenerate && !sc_degenerate {
                             pass.draw(*first_vertex..v_end, *first_instance..i_end);
                         }
                     }
@@ -457,8 +472,9 @@ impl WgpuExecutor {
                         let i_end = first_instance
                             .checked_add(*instance_count)
                             .ok_or(GpuError::Invalid("wgpu: draw instance range overflow"))?;
-                        // See the `Draw` arm: a wholly-out-of-bounds viewport draws nothing in GL.
-                        if !vp_degenerate {
+                        // See the `Draw` arm: a wholly-out-of-bounds viewport or empty scissor draws
+                        // nothing in GL.
+                        if !vp_degenerate && !sc_degenerate {
                             pass.draw_indexed(
                                 *first_index..idx_end,
                                 *base_vertex,

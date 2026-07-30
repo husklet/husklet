@@ -217,6 +217,10 @@ pub struct WgpuExecutor {
     presentation_completions: Mutex<HashMap<(u64, u64), IoSurfaceCompletion>>,
     #[cfg(target_os = "macos")]
     presentation_journal: Vec<(u64, u64)>,
+    /// `(surface token, frame serial)` retirements the current batch's presentations earn. Applied on
+    /// commit so a rolled-back batch cannot discard an earlier committed frame's completion record.
+    #[cfg(target_os = "macos")]
+    presentation_retirements: Vec<(u64, u64)>,
     /// Test-only observation of host-blocking device waits. Keeping the counter beside the one helper that
     /// performs `Maintain::Wait` lets focused tests distinguish queue-ordered submission from CPU-visible
     /// completion without timing assertions.
@@ -304,6 +308,8 @@ impl WgpuExecutor {
             presentation_completions: Mutex::new(HashMap::new()),
             #[cfg(target_os = "macos")]
             presentation_journal: Vec::new(),
+            #[cfg(target_os = "macos")]
+            presentation_retirements: Vec::new(),
             #[cfg(test)]
             completion_waits: Cell::new(0),
             #[cfg(test)]

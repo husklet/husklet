@@ -30,7 +30,10 @@ impl GpuExecutor for WgpuExecutor {
         self.module_journal.clear();
         self.pipeline_journal.clear();
         #[cfg(target_os = "macos")]
-        self.presentation_journal.clear();
+        {
+            self.presentation_journal.clear();
+            self.presentation_retirements.clear();
+        }
         let result = self.execute_batch(res, batch);
         // `write_buffer` operations are queue ordered. One batch-boundary submit makes a write-only batch
         // observable and replaces the former empty submit after every aligned write. Flush on failure too:
@@ -44,7 +47,7 @@ impl GpuExecutor for WgpuExecutor {
                 self.pipelines
                     .apply(std::mem::take(&mut self.pipeline_journal));
                 #[cfg(target_os = "macos")]
-                self.presentation_journal.clear();
+                self.retire_abandoned_presentations();
                 Ok(presents)
             }
             Err(e) => {
@@ -60,6 +63,7 @@ impl GpuExecutor for WgpuExecutor {
                     for key in self.presentation_journal.drain(..) {
                         completions.remove(&key);
                     }
+                    self.presentation_retirements.clear();
                 }
                 Err(e)
             }
@@ -124,6 +128,22 @@ impl GpuExecutor for WgpuExecutor {
 }
 
 impl WgpuExecutor {
+    /// Drop the completion records the batch's presentations superseded, and forget the journal.
+    ///
+    /// Only a COMMITTED batch retires anything: a rolled-back batch must not take an earlier committed
+    /// frame's completion record with it.
+    #[cfg(target_os = "macos")]
+    fn retire_abandoned_presentations(&mut self) {
+        self.presentation_journal.clear();
+        let mut completions = self
+            .presentation_completions
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        for (token, serial) in self.presentation_retirements.drain(..) {
+            completions.retain(|(held, previous), _| *held != token || *previous >= serial);
+        }
+    }
+
     /// Run one validated command batch against `res`. Wrapped by [`GpuExecutor::execute`], which brackets it
     /// with the dedup-cache transaction hooks so a partial-batch failure rolls the caches back too.
     fn execute_batch(

@@ -45,11 +45,6 @@ pub fn present(
             .presentation_completions
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        // Results are consumed before the next batch. An older unclaimed result for this surface token was
-        // abandoned; keeping it would leak one callback record per canceled frame.
-        completions.retain(|(token, previous), _| {
-            *token != sdesc.token.get() || *previous >= serial.get()
-        });
         completions.insert(
             key,
             crate::IoSurfaceCompletion {
@@ -59,6 +54,11 @@ pub fn present(
         );
         drop(completions);
         executor.presentation_journal.push(key);
+        // Results are consumed before the next batch, so an older unclaimed result for this surface token
+        // was abandoned and keeping it would leak one callback record per canceled frame. Retire it only
+        // when the batch COMMITS: a batch that later fails is rolled back whole, and it must not take the
+        // previous good frame's completion with it.
+        executor.presentation_retirements.push((sdesc.token.get(), serial.get()));
     }
     Ok(Presentation {
         surface: SurfaceId(surface_id),
