@@ -106,7 +106,11 @@ impl Process {
         let (uid, default_gid) = if let Ok(uid) = user.parse::<i32>() {
             (uid, uid)
         } else {
-            let passwd = std::fs::read_to_string(rootfs.join("etc/passwd"))?;
+            // A missing account database is a bad request, not a missing resource: the daemon maps
+            // a NotFound io error to HTTP 404, which misreports a scratch image asked for a name.
+            let passwd = std::fs::read_to_string(rootfs.join("etc/passwd")).map_err(|error| {
+                Error::InvalidSpec(format!("user {user:?} cannot be resolved: /etc/passwd {error}"))
+            })?;
             let matches = passwd
                 .lines()
                 .filter_map(|line| {
@@ -136,7 +140,12 @@ impl Process {
                 if let Ok(gid) = group.parse::<i32>() {
                     gid
                 } else {
-                    let groups = std::fs::read_to_string(rootfs.join("etc/group"))?;
+                    let groups =
+                        std::fs::read_to_string(rootfs.join("etc/group")).map_err(|error| {
+                            Error::InvalidSpec(format!(
+                                "group {group:?} cannot be resolved: /etc/group {error}"
+                            ))
+                        })?;
                     let matches = groups
                         .lines()
                         .filter_map(|line| {

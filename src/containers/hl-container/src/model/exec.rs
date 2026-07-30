@@ -97,20 +97,15 @@ impl ExecSpec {
         self
     }
 
-    pub(crate) fn apply_user(&mut self) -> crate::Result<()> {
+    /// Resolve Docker's `User` field against the container's account databases.
+    ///
+    /// Container create and the image builder resolve the same way, so `docker exec -u root`
+    /// and `docker run -u root` agree on the identity they select.
+    pub(crate) fn apply_user(&mut self, rootfs: &std::path::Path) -> crate::Result<()> {
         if self.user.is_empty() {
             return Ok(());
         }
-        let (uid, gid) = self
-            .user
-            .split_once(':')
-            .map_or((&*self.user, &*self.user), |values| values);
-        let uid = uid.parse().map_err(|_| {
-            crate::Error::InvalidSpec("exec user must be a numeric UID or UID:GID".into())
-        })?;
-        let gid = gid.parse().map_err(|_| {
-            crate::Error::InvalidSpec("exec user must be a numeric UID or UID:GID".into())
-        })?;
+        let (uid, gid) = Process::resolve_user(&self.user, rootfs)?;
         self.process.uid = Some(uid);
         self.process.gid = Some(gid);
         Ok(())
@@ -167,16 +162,51 @@ impl Exec {
 mod tests {
     use super::*;
 
+    /// `docker exec -u root` must work, so a named user resolves against the container's own
+    /// account databases exactly as container create does.
     #[test]
-    fn exec_user_updates_effective_process_identity() {
-        let mut spec = ExecSpec::new(Process::new("/usr/bin/id")).user("1000:1001");
-        spec.apply_user().unwrap();
-        assert_eq!(
-            (spec.process.uid, spec.process.gid),
-            (Some(1000), Some(1001))
-        );
+    fn exec_user_resolves_names_and_numeric_identities_against_the_container_root() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("etc")).unwrap();
+        std::fs::write(
+            root.path().join("etc/passwd"),
+            "root:x:0:0:root:/root:/bin/sh\nubuntu:x:1000:1000::/home/ubuntu:/bin/bash\n",
+        )
+        .unwrap();
+        std::fs::write(root.path().join("etc/group"), "root:x:0:\nstaff:x:50:\n").unwrap();
+        let resolve = |value: &str| {
+            let mut spec = ExecSpec::new(Process::new("/usr/bin/id")).user(value);
+            spec.apply_user(root.path())
+                .map(|()| (spec.process.uid, spec.process.gid))
+        };
 
-        let mut invalid = ExecSpec::new(Process::new("/usr/bin/id")).user("named");
-        assert!(invalid.apply_user().is_err());
+        assert_eq!(resolve("root").unwrap(), (Some(0), Some(0)));
+        assert_eq!(resolve("ubuntu").unwrap(), (Some(1000), Some(1000)));
+        assert_eq!(resolve("ubuntu:staff").unwrap(), (Some(1000), Some(50)));
+        assert_eq!(resolve("1000:1001").unwrap(), (Some(1000), Some(1001)));
+        // Docker takes a numeric id verbatim, with no passwd entry required.
+        assert_eq!(resolve("4242").unwrap(), (Some(4242), Some(4242)));
+        // An empty value inherits the container's configured identity.
+        assert_eq!(resolve("").unwrap(), (None, None));
+
+        for rejected in ["absent", "root:absent", "-1", ":"] {
+            assert!(
+                matches!(resolve(rejected), Err(crate::Error::InvalidSpec(_))),
+                "{rejected}"
+            );
+        }
+    }
+
+    /// A scratch image without account databases is a bad request, not a missing resource: the
+    /// daemon turns `Error::Io(NotFound)` into HTTP 404.
+    #[test]
+    fn a_named_user_without_account_databases_is_reported_as_an_invalid_spec() {
+        let root = tempfile::tempdir().unwrap();
+        let mut spec = ExecSpec::new(Process::new("/usr/bin/id")).user("root");
+
+        assert!(matches!(
+            spec.apply_user(root.path()),
+            Err(crate::Error::InvalidSpec(_))
+        ));
     }
 }

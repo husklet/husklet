@@ -4,18 +4,18 @@
 //! product-level place that decides which drivers a workspace combines.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 mod capture;
 pub(crate) mod executor;
+mod projection;
 mod render;
 pub mod replay;
 #[path = "gpu_service.rs"]
 mod service;
 
+use projection::Projection;
 use render::RenderNode;
 pub use service::{Backend, Configuration, Service};
 
@@ -169,138 +169,12 @@ impl CaptureOptions {
 /// Product composition of host graphics services and their declarative guest requirements.
 pub struct Graphics {
     request: hl_container::DeviceRequest,
-    library_path: String,
+    driver_directory: String,
     _service: Option<Service>,
     _compositor: Option<crate::runtime::compositor::Service>,
 }
 
 impl Graphics {
-    fn vulkan_manifest(arch: hl_ws::Arch) -> &'static str {
-        match arch {
-            // Chromium's Linux GPU broker permits only a fixed set of distribution manifest
-            // basenames after sandbox activation. Manifest names carry no Vulkan vendor
-            // semantics; the JSON library path remains the authoritative driver identity.
-            hl_ws::Arch::Arm64 => "freedreno_icd.aarch64.json",
-            hl_ws::Arch::Amd64 => "intel_icd.x86_64.json",
-        }
-    }
-
-    fn vulkan_library(arch: hl_ws::Arch) -> &'static str {
-        match arch {
-            hl_ws::Arch::Arm64 => "libvulkan_freedreno.so",
-            hl_ws::Arch::Amd64 => "libvulkan_intel.so",
-        }
-    }
-
-    fn driver_bindings() -> [(&'static str, &'static str, &'static str); 9] {
-        [
-            ("gl", "libEGL.so.1", "libEGL.so.1"),
-            ("gl", "libEGL.so.1", "libEGL.so"),
-            ("gl", "libGLESv2.so.2", "libGLESv2.so.2"),
-            ("gl", "libGLESv2.so.2", "libGLESv2.so"),
-            ("gl", "libgbm.so.1", "libgbm.so.1"),
-            ("gl", "libgbm.so.1", "libgbm.so.1.0.0"),
-            ("gl", "libgbm.so.1", "libgbm.so"),
-            ("vulkan", "libvk_hl.so.1", "libvk_hl.so.1"),
-            ("vulkan", "libvk_hl.so.1", "libvk_hl.so"),
-        ]
-    }
-
-    fn guest_environment() -> BTreeMap<String, String> {
-        BTreeMap::from([
-            ("WAYLAND_DISPLAY".to_owned(), "wayland-0".to_owned()),
-            ("XDG_RUNTIME_DIR".to_owned(), "/run".to_owned()),
-            ("XDG_SESSION_TYPE".to_owned(), "wayland".to_owned()),
-        ])
-    }
-
-    fn driver_namespace(
-        drivers: &crate::runtime::drivers::Drivers,
-        library: &str,
-        arch: hl_ws::Arch,
-    ) -> io::Result<Vec<hl_container::device::extension::NamespaceEntry>> {
-        let mut namespace = Self::driver_bindings()
-            .into_iter()
-            .map(|(family, source, target)| {
-                let path: PathBuf = format!("{library}/{target}").into();
-                let host = drivers.path(family, source);
-                Ok(hl_container::device::extension::NamespaceEntry::HostBind(
-                    hl_container::device::extension::HostBindEntry {
-                        path,
-                        host,
-                        access: hl_container::device::extension::BindAccess::ReadOnly,
-                    },
-                ))
-            })
-            .collect::<io::Result<Vec<_>>>()?;
-        let source = fs::read_to_string(drivers.path("vulkan", "icd.json"))?;
-        let relative = "\"./libvk_hl.so\"";
-        if !source.contains(relative) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Vulkan manifest does not name the packaged driver",
-            ));
-        }
-        let contents = source.replace(relative, &format!("\"{}\"", Self::vulkan_library(arch)));
-        let vulkan = drivers.path("vulkan", "libvk_hl.so.1");
-        namespace.push(hl_container::device::extension::NamespaceEntry::HostBind(
-            hl_container::device::extension::HostBindEntry {
-                path: Path::new(library).join(Self::vulkan_library(arch)),
-                host: vulkan,
-                access: hl_container::device::extension::BindAccess::ReadOnly,
-            },
-        ));
-        namespace.push(hl_container::device::extension::NamespaceEntry::File(
-            hl_container::device::extension::FileEntry {
-                path: Path::new("/usr/share/vulkan/icd.d").join(Self::vulkan_manifest(arch)),
-                metadata: hl_container::device::extension::Metadata {
-                    mode: 0o444,
-                    uid: 0,
-                    gid: 0,
-                },
-                source: hl_container::device::extension::FileSource::Immutable(Arc::from(
-                    contents.into_bytes(),
-                )),
-            },
-        ));
-        Ok(namespace)
-    }
-
-    fn library_search_path(library: &str, inherited: Option<&str>) -> String {
-        inherited
-            .filter(|value| !value.is_empty())
-            .map_or_else(|| library.to_owned(), |value| format!("{library}:{value}"))
-    }
-
-    fn loader_rules(
-        drivers: &crate::runtime::drivers::Drivers,
-    ) -> Vec<hl_container::device::extension::NamespaceRule> {
-        [
-            (
-                ["libEGL.so", "libEGL.so.1"].as_slice(),
-                drivers.path("gl", "libEGL.so.1"),
-            ),
-            (
-                ["libGLESv2.so", "libGLESv2.so.2"].as_slice(),
-                drivers.path("gl", "libGLESv2.so.2"),
-            ),
-            (
-                ["libgbm.so", "libgbm.so.1", "libgbm.so.1.0.0"].as_slice(),
-                drivers.path("gl", "libgbm.so.1"),
-            ),
-        ]
-        .into_iter()
-        .map(|(names, host)| {
-            hl_container::device::extension::NamespaceRule::NameBind(
-                hl_container::device::extension::NameBindEntry {
-                    names: names.iter().map(Into::into).collect(),
-                    host,
-                },
-            )
-        })
-        .collect()
-    }
-
     pub fn for_workspace(workspace: &crate::config::WorkspaceConfig) -> io::Result<Option<Self>> {
         let enabled = workspace.gui || workspace.cuda.is_some();
         if !enabled {
@@ -353,16 +227,16 @@ impl Graphics {
                 )
             })
             .transpose()?;
-        let library = match workspace.arch {
-            hl_ws::Arch::Arm64 => "/usr/lib/aarch64-linux-gnu",
-            hl_ws::Arch::Amd64 => "/usr/lib/x86_64-linux-gnu",
-        };
-        let mut namespace = vec![hl_container::device::extension::NamespaceEntry::Socket(
-            hl_container::device::extension::SocketEntry {
-                path: "/run/hl-gpu.sock".into(),
-                host: socket,
-            },
-        )];
+        let projection = Projection::new(workspace.arch);
+        let mut namespace = vec![
+            hl_container::device::extension::NamespaceEntry::Socket(
+                hl_container::device::extension::SocketEntry {
+                    path: "/run/hl-gpu.sock".into(),
+                    host: socket,
+                },
+            ),
+            projection.root(),
+        ];
         let mut request = hl_container::DeviceRequest {
             environment: BTreeMap::from([(
                 "HL_GPU_EXEC".to_owned(),
@@ -371,29 +245,17 @@ impl Graphics {
             ..Default::default()
         };
         if workspace.gui {
-            namespace.extend(Self::driver_namespace(&drivers, library, workspace.arch)?);
+            namespace.extend(projection.graphics(&drivers)?);
             namespace.push(hl_container::device::extension::NamespaceEntry::Socket(
                 hl_container::device::extension::SocketEntry {
                     path: "/run/wayland-0".into(),
                     host: wayland,
                 },
             ));
-            request.environment.extend(Self::guest_environment());
+            request.environment.extend(Projection::guest_environment());
         }
         if let Some(cuda) = &workspace.cuda {
-            for (family, library_name) in [
-                ("cuda", "libcuda.so.1"),
-                ("cuda", "libcudart.so.1"),
-                ("nvml", "libnvidia-ml.so.1"),
-            ] {
-                namespace.push(hl_container::device::extension::NamespaceEntry::HostBind(
-                    hl_container::device::extension::HostBindEntry {
-                        path: format!("{library}/{library_name}").into(),
-                        host: drivers.path(family, library_name),
-                        access: hl_container::device::extension::BindAccess::ReadOnly,
-                    },
-                ));
-            }
+            namespace.extend(projection.accelerator(&drivers));
             request.environment.extend([
                 ("HL_CUDA_NAME".to_owned(), cuda.name.clone()),
                 ("HL_CUDA_CC".to_owned(), cuda.compute_capability.clone()),
@@ -417,8 +279,6 @@ impl Graphics {
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, format!("{error:?}")))?;
         let immutable_files = hl_container::device::extension::Feature::new("immutable-files")
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, format!("{error:?}")))?;
-        let name_bind = hl_container::device::extension::Feature::new("name-bind-read-only")
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, format!("{error:?}")))?;
         request
             .extensions
             .push(hl_container::device::extension::ExtensionSpec {
@@ -429,7 +289,6 @@ impl Graphics {
                     directories,
                     host_bind,
                     immutable_files,
-                    name_bind,
                     sockets,
                     symlinks,
                 ]),
@@ -438,10 +297,9 @@ impl Graphics {
                     "engine.namespace/v1",
                 ),
                 namespace,
-                rules: workspace
-                    .gui
-                    .then(|| Self::loader_rules(&drivers))
-                    .unwrap_or_default(),
+                // No loader name aliases: the engine's alias projection forces every aliased guest
+                // path read-only, which is exactly what stops dpkg from owning `libgbm.so.1`.
+                rules: Vec::new(),
                 services: Vec::new(),
                 memory: Vec::new(),
                 environment: Vec::new(),
@@ -451,7 +309,7 @@ impl Graphics {
         }
         Ok(Some(Self {
             request,
-            library_path: library.to_owned(),
+            driver_directory: projection.directory().to_owned(),
             _service: service,
             _compositor: compositor,
         }))
@@ -468,8 +326,8 @@ impl hl_container::Device for Graphics {
         context: hl_container::DeviceContext<'_>,
     ) -> hl_container::Result<hl_container::DeviceRequest> {
         let mut request = self.request.clone();
-        let library_path = Self::library_search_path(
-            &self.library_path,
+        let library_path = Projection::search_path(
+            &self.driver_directory,
             context
                 .process
                 .env
@@ -480,156 +338,5 @@ impl hl_container::Device for Graphics {
             .environment
             .insert("LD_LIBRARY_PATH".to_owned(), library_path);
         Ok(request)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn arm_vulkan_projection_contract_uses_bundled_artifacts() {
-        assert_eq!(
-            Graphics::vulkan_manifest(hl_ws::Arch::Arm64),
-            "freedreno_icd.aarch64.json"
-        );
-        assert_eq!(
-            Graphics::vulkan_manifest(hl_ws::Arch::Amd64),
-            "intel_icd.x86_64.json"
-        );
-        assert_eq!(
-            Graphics::vulkan_library(hl_ws::Arch::Arm64),
-            "libvulkan_freedreno.so"
-        );
-        assert_eq!(
-            Graphics::vulkan_library(hl_ws::Arch::Amd64),
-            "libvulkan_intel.so"
-        );
-        let root = tempfile::tempdir().unwrap();
-        for (family, name) in [
-            ("gl", "libEGL.so.1"),
-            ("gl", "libGLESv2.so.2"),
-            ("gl", "libwayland-egl.so.1"),
-            ("gl", "libgbm.so.1"),
-            ("vulkan", "libvk_hl.so.1"),
-            ("vulkan", "icd.json"),
-        ] {
-            let directory = root.path().join(family).join("aarch64");
-            fs::create_dir_all(&directory).unwrap();
-            let contents = if name == "icd.json" {
-                br#"{"ICD":{"library_path":"./libvk_hl.so"}}"#.as_slice()
-            } else {
-                name.as_bytes()
-            };
-            fs::write(directory.join(name), contents).unwrap();
-        }
-        let drivers =
-            crate::runtime::drivers::Drivers::open(root.path(), hl_ws::Arch::Arm64, true, false)
-                .unwrap();
-        let library = "/usr/lib/aarch64-linux-gnu";
-        let vulkan = Graphics::driver_bindings()
-            .into_iter()
-            .filter(|(family, _, _)| *family == "vulkan")
-            .map(|(family, source, target)| {
-                (
-                    Path::new(library).join(target),
-                    drivers.path(family, source),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-
-        assert_eq!(
-            vulkan,
-            BTreeMap::from([
-                (
-                    PathBuf::from("/usr/lib/aarch64-linux-gnu/libvk_hl.so"),
-                    root.path().join("vulkan/aarch64/libvk_hl.so.1"),
-                ),
-                (
-                    PathBuf::from("/usr/lib/aarch64-linux-gnu/libvk_hl.so.1"),
-                    root.path().join("vulkan/aarch64/libvk_hl.so.1"),
-                ),
-            ])
-        );
-        assert!(vulkan.values().all(|source| source.is_file()));
-
-        assert!(!Graphics::guest_environment().contains_key("VK_ICD_FILENAMES"));
-        let namespace = Graphics::driver_namespace(&drivers, library, hl_ws::Arch::Arm64).unwrap();
-        let manifest = namespace
-            .iter()
-            .find(|entry| {
-                entry.path() == Path::new("/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json")
-            })
-            .unwrap();
-        let hl_container::device::extension::NamespaceEntry::File(manifest) = manifest else {
-            panic!("the Vulkan manifest must be a sandbox-readable immutable file");
-        };
-        assert_eq!(manifest.metadata.mode, 0o444);
-        let hl_container::device::extension::FileSource::Immutable(contents) = &manifest.source
-        else {
-            unreachable!();
-        };
-        assert_eq!(
-            std::str::from_utf8(contents).unwrap(),
-            r#"{"ICD":{"library_path":"libvulkan_freedreno.so"}}"#
-        );
-        assert!(namespace.iter().any(|entry| {
-            entry.path() == Path::new("/usr/lib/aarch64-linux-gnu/libvulkan_freedreno.so")
-        }));
-        let amd64 =
-            Graphics::driver_namespace(&drivers, "/usr/lib/x86_64-linux-gnu", hl_ws::Arch::Amd64)
-                .unwrap();
-        assert!(amd64.iter().any(|entry| {
-            entry.path() == Path::new("/usr/share/vulkan/icd.d/intel_icd.x86_64.json")
-        }));
-        assert!(amd64.iter().any(|entry| {
-            entry.path() == Path::new("/usr/lib/x86_64-linux-gnu/libvulkan_intel.so")
-        }));
-        assert_eq!(
-            Graphics::library_search_path(library, None),
-            "/usr/lib/aarch64-linux-gnu"
-        );
-        assert_eq!(
-            Graphics::library_search_path(library, Some("/opt/chrome")),
-            "/usr/lib/aarch64-linux-gnu:/opt/chrome"
-        );
-    }
-
-    #[test]
-    fn loader_aliases_are_declarative_and_do_not_scan_guest_layers() {
-        let root = tempfile::tempdir().unwrap();
-        for name in [
-            "libEGL.so.1",
-            "libGLESv2.so.2",
-            "libwayland-egl.so.1",
-            "libgbm.so.1",
-        ] {
-            let directory = root.path().join("gl/aarch64");
-            fs::create_dir_all(&directory).unwrap();
-            fs::write(directory.join(name), name).unwrap();
-        }
-        let vulkan = root.path().join("vulkan/aarch64");
-        fs::create_dir_all(&vulkan).unwrap();
-        fs::write(vulkan.join("libvk_hl.so.1"), b"vulkan").unwrap();
-        fs::write(
-            vulkan.join("icd.json"),
-            br#"{"ICD":{"library_path":"./libvk_hl.so"}}"#,
-        )
-        .unwrap();
-        let drivers =
-            crate::runtime::drivers::Drivers::open(root.path(), hl_ws::Arch::Arm64, true, false)
-                .unwrap();
-        let rules = Graphics::loader_rules(&drivers);
-
-        assert_eq!(rules.len(), 3);
-        let hl_container::device::extension::NamespaceRule::NameBind(egl) = &rules[0];
-        assert_eq!(
-            egl.names,
-            ["libEGL.so", "libEGL.so.1"]
-                .into_iter()
-                .map(Into::into)
-                .collect()
-        );
-        assert_eq!(egl.host, root.path().join("gl/aarch64/libEGL.so.1"));
     }
 }

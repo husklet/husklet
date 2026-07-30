@@ -101,7 +101,7 @@ impl Drivers {
 
 #[cfg(test)]
 mod tests {
-    use super::Drivers;
+    use super::{Drivers, GUI};
     use std::collections::BTreeMap;
 
     #[test]
@@ -187,7 +187,7 @@ mod tests {
             );
         }
         for arch in ["aarch64", "x86_64"] {
-            for &(family, name) in super::GUI.iter().chain(super::CUDA) {
+            for &(family, name) in GUI.iter().chain(super::CUDA) {
                 assert!(
                     entries.contains_key(format!("{family}/{arch}/{name}").as_str()),
                     "{arch}/{family}/{name}"

@@ -14,10 +14,14 @@ impl Service {
                 "privileged exec is not implemented by the engine".into(),
             ));
         }
-        spec.apply_user()?;
         let _guard = self.operations.lock().await;
         let container = self.resolve(reference).await?;
         container.require_exec()?;
+        // A named user only resolves against the container's own root filesystem, so this must
+        // happen after the container is known. For an overlay this is the same lower directory
+        // container create resolves against, keeping create and exec identities identical.
+        let rootfs = self.rootfs_path(&container.spec.rootfs).await?;
+        spec.apply_user(&rootfs)?;
         let exec = Exec::new(container.id, spec);
         self.execs.insert(&exec).await?;
         Ok(exec)

@@ -99,6 +99,13 @@ fn main() {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let shim_target = manifest_dir.join("target").join("shim-build");
     let stage_root = stage_root(&manifest_dir);
+    // The `dlopen` tests must load the shim THIS build staged. Publishing the directory the staging loop
+    // below writes keeps the loader path and the staging path one fact: a test resolving the directory
+    // itself silently exercises whatever a previous build happened to leave there.
+    println!(
+        "cargo:rustc-env=HL_GL_STAGE_GL={}",
+        stage_root.join("gl").display()
+    );
     let sysroot = rustc_sysroot();
     let wlegl_c = manifest_dir.join("shim/wayland_egl.c");
     let gbm_c = manifest_dir.join("shim/gbm.c");
