@@ -39,10 +39,36 @@ pub const VK_ERROR_SURFACE_LOST_KHR: i32 = -1000000000;
 /// A swapchain can no longer acquire images because it has been replaced or resized.
 pub const VK_ERROR_OUT_OF_DATE_KHR: i32 = -1000001004;
 
-/// The Vulkan API version this ICD advertises: **Vulkan 1.4.0**. Packed like `VK_MAKE_API_VERSION`:
-/// `(variant<<29) | (major<<22) | (minor<<12) | patch`. Ported from `hl-shim-vk/src/state.rs`
-/// (`HL_API_VERSION`) — the entire mandatory 1.0–1.4 core has real bodies, so 1.4 is honestly selectable.
-pub const HL_API_VERSION: u32 = make_api_version(0, 1, 4, 0);
+/// The Vulkan API version this ICD advertises: **Vulkan 1.3.0**. Packed like `VK_MAKE_API_VERSION`:
+/// `(variant<<29) | (major<<22) | (minor<<12) | patch`.
+///
+/// 1.3 is the highest version whose mandatory COMMAND set this driver genuinely performs. The census test
+/// `every_core_mandated_command_at_the_advertised_version_is_lowered` (shim `src/tests.rs`) checks that
+/// against the Khronos registry, so raising this constant past what is implemented fails the build's tests
+/// rather than a client's frame.
+///
+/// It was 1.4, which was false: seven commands core 1.4 mandates — the push-descriptor family and
+/// `vkCmdBindDescriptorSets2` — were silent `void` no-ops, and `void` cannot report a failure, so a client
+/// using them mis-rendered with no error at all. The push-descriptor family is now really implemented
+/// (`shim/vulkan/src/compute/push_descriptor.rs`), but 1.4 also mandates `dynamicRenderingLocalRead`
+/// attachment remapping, `maintenance5`/`maintenance6`, `pipelineRobustness` and line-stipple rasterization
+/// that nothing below the shim implements.
+///
+/// KNOWN RESIDUAL, accepted deliberately: even at 1.3 the mandatory FEATURE bits are not all satisfied
+/// (`inlineUniformBlock`, `vulkanMemoryModel`, `subgroupSizeControl`, `maintenance4` and others are
+/// reported `VK_FALSE`, and `robustBufferAccess` is gated on executor negotiation). Every individual claim
+/// a client can read is truthful, and `vkCreateDevice` refuses to enable a feature this driver does not
+/// implement, so an unmet requirement is a hard `VK_ERROR_FEATURE_NOT_PRESENT` at device creation and never
+/// a wrong pixel. Dropping to 1.0 to make the feature set literally true would withdraw the whole promoted
+/// 1.1–1.3 command surface this driver does implement and that its clients use, which buys honesty in one
+/// number at the cost of capability that is really there. The version is therefore a claim about commands,
+/// enforced; features are claimed one bit at a time, and refused one bit at a time.
+///
+/// Lowering costs no client: an application may always request a HIGHER instance `apiVersion` than a
+/// driver supports — see `vkCreateInstance` in the shim, which clamps instead of rejecting. Verified
+/// against the real loader 1.4.341: an app requesting 1.4.0 gets `VK_SUCCESS` and enumerates this device
+/// at 1.3.0.
+pub const HL_API_VERSION: u32 = make_api_version(0, 1, 3, 0);
 /// `driverVersion` — hl's own driver revision (packed like an api version), increment 1.
 pub const HL_DRIVER_VERSION: u32 = make_api_version(0, 0, 1, 0);
 

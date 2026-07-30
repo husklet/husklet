@@ -1,17 +1,5 @@
 use super::*;
 
-pub extern "C" fn vkAcquireNextImage2KHR(
-    device: *mut core::ffi::c_void,
-    pAcquireInfo: *const core::ffi::c_void,
-    pImageIndex: *mut core::ffi::c_void,
-) -> i32 {
-    let _ = device;
-    let _ = pAcquireInfo;
-    let _ = pImageIndex;
-    crate::stub::Call::unsupported("vkAcquireNextImage2KHR", "extension not advertised");
-    VK_ERROR_EXTENSION_NOT_PRESENT
-}
-
 pub extern "C" fn vkCompileDeferredNV(
     device: *mut core::ffi::c_void,
     pipeline: u64,
@@ -298,20 +286,6 @@ pub extern "C" fn vkMergeValidationCachesEXT(
     let _ = pSrcCaches;
     crate::stub::Call::unsupported("vkMergeValidationCachesEXT", "extension not advertised");
     VK_ERROR_EXTENSION_NOT_PRESENT
-}
-
-pub extern "C" fn vkQueueBindSparse(
-    queue: *mut core::ffi::c_void,
-    bindInfoCount: u32,
-    pBindInfo: *const core::ffi::c_void,
-    fence: u64,
-) -> i32 {
-    let _ = queue;
-    let _ = bindInfoCount;
-    let _ = pBindInfo;
-    let _ = fence;
-    crate::stub::Call::unsupported("vkQueueBindSparse", "extension not advertised");
-    VK_ERROR_FEATURE_NOT_PRESENT
 }
 
 pub extern "C" fn vkQueueNotifyOutOfBandNV(

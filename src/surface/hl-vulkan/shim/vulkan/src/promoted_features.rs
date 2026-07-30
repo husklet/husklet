@@ -301,7 +301,9 @@ mod tests {
 
         assert_eq!(result, crate::types::VK_ERROR_FEATURE_NOT_PRESENT);
         assert!(device.is_null());
-        assert!(crate::state::StateStore::with(|state| state.device.is_none()));
+        assert!(crate::state::StateStore::with(|state| state
+            .device
+            .is_none()));
     }
 
     /// `dynamicRendering` is really implemented, so requesting it through the aggregate must succeed —

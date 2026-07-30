@@ -142,3 +142,25 @@ pub extern "C" fn vkQueueSubmit2KHR(
 ) -> VkResult {
     vkQueueSubmit2(queue, submit_count, p_submits, fence)
 }
+
+/// `vkQueueBindSparse` (core Vulkan 1.0) — a sparse-binding submission. `sparseBinding` and every other
+/// sparse feature are reported `VK_FALSE`, so no sparse resource can have been created and the only batch
+/// an application can legally submit is an empty one: that is a real submission with nothing to bind, and
+/// it signals its fence exactly as an empty `vkQueueSubmit` does. A non-empty batch names memory ranges of
+/// a resource that cannot exist, so it is `VK_ERROR_FEATURE_NOT_PRESENT` rather than a false success.
+pub extern "C" fn vkQueueBindSparse(
+    _queue: *mut c_void,
+    bind_info_count: u32,
+    p_bind_info: *const c_void,
+    fence: u64,
+) -> VkResult {
+    if bind_info_count != 0 && !p_bind_info.is_null() {
+        crate::stub::Call::unsupported("vkQueueBindSparse", "sparseBinding is not supported");
+        return VK_ERROR_FEATURE_NOT_PRESENT;
+    }
+    let signal = (fence != 0).then_some(fence);
+    ShimState::with_sink(|dev, sink| {
+        ResultStatus::from_gpu(submit_service::queue_submit(dev, sink, &[], signal))
+    })
+    .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
+}

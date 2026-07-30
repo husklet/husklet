@@ -227,3 +227,195 @@ fn external_buffer_properties_report_no_handle_types() {
     );
     assert_eq!(properties[2], 0);
 }
+
+/// `vkCmdPushDescriptorSet` (core Vulkan 1.4, promoted from `VK_KHR_push_descriptor`) must apply the write
+/// where the bind path reads it. It was a silent `void` no-op, so the descriptor vanished and the draw read
+/// whatever was bound before — with no error possible, because the command returns nothing.
+#[test]
+fn push_descriptor_set_applies_its_write_to_the_bound_set() {
+    let _g = test_guard();
+    let (cb, cb_handle) = recording_command_buffer();
+    let device = core::ptr::null_mut();
+
+    let binding = VkDescriptorSetLayoutBinding {
+        binding: 0,
+        descriptor_type: hl_vulkan::model::descriptor::vk_descriptor_type::UNIFORM_BUFFER,
+        descriptor_count: 1,
+        stage_flags: 0,
+        p_immutable_samplers: core::ptr::null(),
+    };
+    let layout_ci = VkDescriptorSetLayoutCreateInfo {
+        s_type: 0,
+        p_next: core::ptr::null(),
+        flags: 0,
+        binding_count: 1,
+        p_bindings: &binding,
+    };
+    let mut set_layout: u64 = 0;
+    assert_eq!(
+        crate::compute::vkCreateDescriptorSetLayout(
+            device,
+            &layout_ci as *const _ as *const c_void,
+            core::ptr::null(),
+            &mut set_layout,
+        ),
+        VK_SUCCESS
+    );
+    let pipeline_ci = VkPipelineLayoutCreateInfo {
+        s_type: 0,
+        p_next: core::ptr::null(),
+        flags: 0,
+        set_layout_count: 1,
+        p_set_layouts: &set_layout,
+        push_constant_range_count: 0,
+        p_push_constant_ranges: core::ptr::null(),
+    };
+    let mut pipeline_layout: u64 = 0;
+    assert_eq!(
+        crate::compute::vkCreatePipelineLayout(
+            device,
+            &pipeline_ci as *const _ as *const c_void,
+            core::ptr::null(),
+            &mut pipeline_layout,
+        ),
+        VK_SUCCESS
+    );
+    // The descriptor write records a `(buffer, offset, range)` triple; the bind path resolves the handle
+    // later, so no host GPU connection is needed to observe the write landing.
+    let buffer: u64 = 0x1000;
+
+    let buffer_info = VkDescriptorBufferInfo {
+        buffer,
+        offset: 64,
+        range: 128,
+    };
+    let write = VkWriteDescriptorSet {
+        s_type: 0,
+        p_next: core::ptr::null(),
+        // `dstSet` is ignored by a push, so a deliberately bogus one must not reach the model.
+        dst_set: 0xDEAD_BEEF,
+        dst_binding: 0,
+        dst_array_element: 0,
+        descriptor_count: 1,
+        descriptor_type: hl_vulkan::model::descriptor::vk_descriptor_type::UNIFORM_BUFFER,
+        p_image_info: core::ptr::null(),
+        p_buffer_info: &buffer_info,
+        p_texel_buffer_view: core::ptr::null(),
+    };
+    crate::compute::vkCmdPushDescriptorSet(
+        cb,
+        0,
+        pipeline_layout,
+        0,
+        1,
+        &write as *const _ as *const c_void,
+    );
+
+    let pushed = crate::state::StateStore::with(|state| {
+        state.push_descriptor_sets.get(&(cb_handle, 0)).copied()
+    })
+    .expect("a push must mint a set for (command buffer, set 0)");
+    let descriptor = crate::state::StateStore::with(|state| {
+        state
+            .device
+            .as_ref()
+            .unwrap()
+            .descriptor_sets
+            .get(&pushed)
+            .unwrap()
+            .buffers
+            .get(&(0, 0))
+            .copied()
+    });
+    assert_eq!(descriptor, Some((buffer, 64, 128)));
+
+    // A second push accumulates into the SAME set, as the spec requires.
+    let second = VkDescriptorBufferInfo {
+        buffer,
+        offset: 0,
+        range: 32,
+    };
+    let write = VkWriteDescriptorSet {
+        p_buffer_info: &second,
+        ..write
+    };
+    crate::compute::vkCmdPushDescriptorSet(
+        cb,
+        0,
+        pipeline_layout,
+        0,
+        1,
+        &write as *const _ as *const c_void,
+    );
+    let (again, descriptor) = crate::state::StateStore::with(|state| {
+        let again = state.push_descriptor_sets.get(&(cb_handle, 0)).copied();
+        let descriptor = state
+            .device
+            .as_ref()
+            .unwrap()
+            .descriptor_sets
+            .get(&pushed)
+            .unwrap()
+            .buffers
+            .get(&(0, 0))
+            .copied();
+        (again, descriptor)
+    });
+    assert_eq!(again, Some(pushed));
+    assert_eq!(descriptor, Some((buffer, 0, 32)));
+
+    // Re-recording forgets the pushed set: push-descriptor state does not survive a begin.
+    assert_eq!(
+        crate::compute::vkBeginCommandBuffer(cb, core::ptr::null()),
+        VK_SUCCESS
+    );
+    assert_eq!(
+        crate::state::StateStore::with(|state| state
+            .push_descriptor_sets
+            .get(&(cb_handle, 0))
+            .copied()),
+        None
+    );
+}
+
+/// `vkAcquireNextImage2KHR` belongs to `VK_KHR_swapchain`, which this driver advertises, so it must behave
+/// as `vkAcquireNextImageKHR` does. It was a stub returning `VK_ERROR_EXTENSION_NOT_PRESENT` for an
+/// extension that IS present. The two forms must agree exactly, including on an unknown swapchain.
+#[test]
+fn acquire_next_image2_reports_an_unknown_swapchain_like_the_positional_form() {
+    let _g = test_guard();
+    let mut device: *mut c_void = core::ptr::null_mut();
+    assert_eq!(
+        crate::device::vkCreateDevice(
+            core::ptr::null_mut(),
+            core::ptr::null(),
+            core::ptr::null(),
+            &mut device,
+        ),
+        VK_SUCCESS
+    );
+    let info = crate::graphics::VkAcquireNextImageInfoKHR {
+        s_type: 0,
+        p_next: core::ptr::null(),
+        swapchain: 0x1234,
+        timeout: 0,
+        semaphore: 0,
+        fence: 0,
+        device_mask: 1,
+    };
+    let mut index: u32 = 7;
+    let mut positional: u32 = 7;
+
+    let structured = crate::graphics::vkAcquireNextImage2KHR(
+        device,
+        &info as *const _ as *const c_void,
+        &mut index,
+    );
+
+    assert_eq!(
+        structured,
+        crate::graphics::vkAcquireNextImageKHR(device, 0x1234, 0, 0, 0, &mut positional)
+    );
+    assert_ne!(structured, VK_SUCCESS);
+    assert_eq!(index, 7);
+}

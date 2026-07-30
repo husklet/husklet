@@ -190,6 +190,14 @@ pub struct State {
     pub debug_messengers: std::collections::HashSet<u64>,
     /// Live `VkDebugReportCallbackEXT` handles (`vkCreateDebugReportCallbackEXT`). Pure host objects.
     pub debug_report_callbacks: std::collections::HashSet<u64>,
+    /// `(VkCommandBuffer, set number)` → the descriptor set that carries the descriptors pushed at that
+    /// set index (`VK_KHR_push_descriptor`, core Vulkan 1.4). Push descriptors are command-buffer state,
+    /// not an app object, so the set is minted by the shim; consecutive pushes accumulate into it exactly
+    /// as the spec requires, and re-recording the command buffer forgets it (a push-descriptor set does
+    /// not survive `vkBeginCommandBuffer`).
+    pub push_descriptor_sets: HashMap<(u64, u32), u64>,
+    /// The unbounded pool those pushed sets are allocated from, minted on first push.
+    pub push_descriptor_pool: u64,
     /// Live `VkBufferView` handles (`vkCreateBufferView`). A buffer view is a pure host object in this
     /// model (the color/compute lowering binds buffers directly), tracked so create/destroy balance.
     pub buffer_views: std::collections::HashSet<u64>,
@@ -203,7 +211,6 @@ pub struct State {
     device_handle: usize,
     queue_handle: usize,
 }
-
 
 impl State {
     fn new() -> Self {
@@ -237,6 +244,8 @@ impl State {
             debug_messengers: std::collections::HashSet::new(),
             debug_report_callbacks: std::collections::HashSet::new(),
             buffer_views: std::collections::HashSet::new(),
+            push_descriptor_sets: HashMap::new(),
+            push_descriptor_pool: 0,
             next_aux: 0,
             phys_dev: 0,
             device_handle: 0,

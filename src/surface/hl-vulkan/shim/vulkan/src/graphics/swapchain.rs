@@ -190,6 +190,44 @@ pub extern "C" fn vkAcquireNextImageKHR(
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
 
+/// `VkAcquireNextImageInfoKHR` — the struct `vkAcquireNextImage2KHR` takes in place of the positional
+/// arguments of `vkAcquireNextImageKHR`. Layout from `vk.xml`.
+#[repr(C)]
+pub struct VkAcquireNextImageInfoKHR {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub swapchain: u64,
+    pub timeout: u64,
+    pub semaphore: u64,
+    pub fence: u64,
+    pub device_mask: u32,
+}
+
+/// `vkAcquireNextImage2KHR` — part of `VK_KHR_swapchain`, which this driver DOES advertise, so a stub here
+/// was a capability lie inside an advertised extension. It is `vkAcquireNextImageKHR` with its arguments in
+/// a struct plus a `deviceMask`; one physical device is presented, so the only valid mask is device 0.
+pub extern "C" fn vkAcquireNextImage2KHR(
+    device: *mut c_void,
+    p_acquire_info: *const c_void,
+    p_image_index: *mut u32,
+) -> VkResult {
+    let Some(info) = (unsafe { (p_acquire_info as *const VkAcquireNextImageInfoKHR).as_ref() })
+    else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    if info.device_mask & 0x1 == 0 {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    vkAcquireNextImageKHR(
+        device,
+        info.swapchain,
+        info.timeout,
+        info.semaphore,
+        info.fence,
+        p_image_index,
+    )
+}
+
 pub extern "C" fn vkQueuePresentKHR(
     _queue: *mut c_void,
     p_present_info: *const c_void,

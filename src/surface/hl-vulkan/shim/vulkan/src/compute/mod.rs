@@ -18,6 +18,7 @@ mod descriptor;
 mod fence;
 mod memory;
 mod pipeline;
+mod push_descriptor;
 mod submit;
 
 pub use command::*;
@@ -25,6 +26,7 @@ pub use descriptor::*;
 pub use fence::*;
 pub use memory::*;
 pub use pipeline::*;
+pub use push_descriptor::*;
 pub use submit::*;
 
 pub(super) struct ShimState;

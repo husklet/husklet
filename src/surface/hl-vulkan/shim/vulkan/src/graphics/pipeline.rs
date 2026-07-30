@@ -231,9 +231,8 @@ impl Blend {
         p_color_blend_state: *const c_void,
         formats: &[TextureFormat],
     ) -> Vec<hl_gpu::protocol::model::descriptor::ColorTargetState> {
-        let cb = unsafe {
-            (p_color_blend_state as *const VkPipelineColorBlendStateCreateInfo).as_ref()
-        };
+        let cb =
+            unsafe { (p_color_blend_state as *const VkPipelineColorBlendStateCreateInfo).as_ref() };
         let attachments = cb
             .filter(|cb| cb.attachment_count != 0 && !cb.p_attachments.is_null())
             .map(|cb| unsafe {
@@ -258,9 +257,8 @@ impl Blend {
                 hl_gpu::protocol::model::descriptor::ColorTargetState {
                     format,
                     blend,
-                    write_mask: attachment.map_or(0xf, |attachment| {
-                        attachment.color_write_mask & 0xf
-                    }),
+                    write_mask: attachment
+                        .map_or(0xf, |attachment| attachment.color_write_mask & 0xf),
                 }
             })
             .collect()
@@ -277,10 +275,7 @@ struct Multisample;
 impl Multisample {
     fn parse(
         p_multisample_state: *const c_void,
-    ) -> (
-        u32,
-        hl_gpu::protocol::model::descriptor::RenderMultisample,
-    ) {
+    ) -> (u32, hl_gpu::protocol::model::descriptor::RenderMultisample) {
         let Some(ms) = (unsafe {
             (p_multisample_state as *const VkPipelineMultisampleStateCreateInfo).as_ref()
         }) else {

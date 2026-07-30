@@ -81,6 +81,13 @@ pub extern "C" fn vk_icdGetInstanceProcAddr(
 
 /// Interface version 4+: lets the loader distinguish physical-device entry points from device ones.
 /// Return a pointer ONLY for names whose primary dispatch handle is `VkPhysicalDevice`.
+///
+/// Checked against `vk.xml` (VK_HEADER_VERSION 341): 63 commands match this filter and every one of them
+/// really takes `VkPhysicalDevice` first, so nothing is over-reported. Sixteen commands take
+/// `VkPhysicalDevice` first and are NOT reported: `vkCreateDevice` and `vkEnumerateDeviceLayerProperties`,
+/// which the loader terminates itself, and fourteen display/DRM/performance-query commands from extensions
+/// this driver does not advertise — for those, `None` is the honest answer, since a pointer would invite a
+/// call into a family we refuse.
 #[no_mangle]
 pub extern "C" fn vk_icdGetPhysicalDeviceProcAddr(
     _instance: VkInstance,

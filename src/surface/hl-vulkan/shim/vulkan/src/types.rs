@@ -43,8 +43,9 @@ pub const VK_ERROR_SURFACE_LOST_KHR: VkResult = -1_000_000_000;
 /// `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR` — a second surface over a window already claimed by one.
 pub const VK_ERROR_NATIVE_WINDOW_IN_USE_KHR: VkResult = -1_000_000_001;
 
-/// The Vulkan API version this ICD advertises: **Vulkan 1.4.0** (mirrors `hl_vulkan::result`).
-pub const HL_API_VERSION: u32 = make_api_version(0, 1, 4, 0);
+/// The Vulkan API version this ICD advertises: **Vulkan 1.3.0** (mirrors `hl_vulkan::result`, which
+/// carries the full rationale for why 1.3 and not 1.4).
+pub const HL_API_VERSION: u32 = make_api_version(0, 1, 3, 0);
 pub const HL_DRIVER_VERSION: u32 = make_api_version(0, 0, 1, 0);
 
 /// `VK_MAKE_API_VERSION(variant, major, minor, patch)` — the stable Vulkan version packing.

@@ -21,13 +21,18 @@ pub extern "C" fn vkCreateInstance(
             .filter(|&v| v != 0)
             .unwrap_or(HL_API_VERSION)
     };
-    // Vulkan patch versions describe header revisions, not additional core API capability.
-    // Chrome/Dawn requests the current header patch of the major/minor version we advertise.
-    // Reject only a newer variant/major/minor contract.
-    if app_api >> 12 > HL_API_VERSION >> 12 {
+    // `VkApplicationInfo::apiVersion` is the highest version the APPLICATION is written against, not a
+    // requirement on the driver: an app may legally request more than a driver implements and then gate on
+    // the version each physical device reports. So clamp to what is advertised — a 1.4 app gets an instance
+    // and reads 1.3 from `vkGetPhysicalDeviceProperties`. Rejecting instead (which this did) made lowering
+    // the advertised version look like it would break every modern client, and it would have.
+    //
+    // A different VARIANT is a different API (Vulkan SC, not Vulkan), and no clamp can substitute for it.
+    const VARIANT: u32 = 29;
+    if app_api >> VARIANT != HL_API_VERSION >> VARIANT {
         return VK_ERROR_INCOMPATIBLE_DRIVER;
     }
-    StateStore::with(|s| s.instance = Some(Instance::new(app_api)));
+    StateStore::with(|s| s.instance = Some(Instance::new(app_api.min(HL_API_VERSION))));
     let token = Dispatchable::new(());
     unsafe { *p_instance = token };
     VK_SUCCESS

@@ -9,6 +9,8 @@ mod binding;
 mod implementation;
 #[path = "build/link.rs"]
 mod link;
+#[path = "build/mandate.rs"]
+mod mandate;
 #[path = "build/manifest.rs"]
 mod manifest;
 #[path = "build/staging.rs"]
@@ -17,6 +19,7 @@ mod staging;
 fn main() {
     let manifest = manifest::Manifest::load();
     let implementations = implementation::Implementations;
+    let mandate = mandate::Mandate::load();
     link::Directives::new(manifest.path()).emit();
-    staging::Artifact::new(&manifest, &implementations).write();
+    staging::Artifact::new(&manifest, &implementations, &mandate).write();
 }

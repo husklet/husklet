@@ -70,7 +70,8 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
                 Identity::write_ids(id);
             }
         } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES {
-            if let Some(sub) = unsafe { (node as *mut VkPhysicalDeviceSubgroupProperties).as_mut() } {
+            if let Some(sub) = unsafe { (node as *mut VkPhysicalDeviceSubgroupProperties).as_mut() }
+            {
                 sub.subgroup_size = Identity::SUBGROUP_SIZE;
                 sub.supported_stages = SHADER_STAGE_COMPUTE | SHADER_STAGE_FRAGMENT;
                 sub.supported_operations = SUBGROUP_FEATURE_BASIC;

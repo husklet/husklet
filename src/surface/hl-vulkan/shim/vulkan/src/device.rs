@@ -7,8 +7,8 @@
 use core::ffi::c_void;
 use std::ffi::CStr;
 
-use hl_gpu::{CommandSink, FeatureRequest, PresentKind, WIRE_VERSION};
 use hl_gpu::protocol::model::capability::{binding_array, gpu_feature};
+use hl_gpu::{CommandSink, FeatureRequest, PresentKind, WIRE_VERSION};
 use hl_vulkan::Instance;
 
 use crate::promoted_features::PromotedFeatures;
@@ -180,23 +180,22 @@ pub extern "C" fn vkCreateDevice(
             .instance
             .get_or_insert_with(|| Instance::new(HL_API_VERSION))
             .clone();
-        let native_present =
-            if std::env::var_os("HL_GPU_EXEC").is_some()
-                || binding_arrays != 0
-                || gpu_features != 0
-            {
-                let Ok(capabilities) = s.sink.negotiate(&FeatureRequest {
-                    wire_version: WIRE_VERSION,
-                    binding_arrays,
-                    gpu_features,
-                    ..FeatureRequest::default()
-                }) else {
-                    return None;
-                };
-                capabilities.present_kinds.contains(&PresentKind::IoSurface)
-            } else {
-                s.native_present
+        let native_present = if std::env::var_os("HL_GPU_EXEC").is_some()
+            || binding_arrays != 0
+            || gpu_features != 0
+        {
+            let Ok(capabilities) = s.sink.negotiate(&FeatureRequest {
+                wire_version: WIRE_VERSION,
+                binding_arrays,
+                gpu_features,
+                ..FeatureRequest::default()
+            }) else {
+                return None;
             };
+            capabilities.present_kinds.contains(&PresentKind::IoSurface)
+        } else {
+            s.native_present
+        };
         s.device = Some(inst.create_device());
         s.native_present = native_present;
         Some(s.device_token())

@@ -2,18 +2,25 @@ use std::fmt::Write as _;
 
 use crate::binding;
 use crate::implementation::Implementations;
+use crate::mandate::Mandate;
 use crate::manifest::Manifest;
 
 pub struct Artifact<'a> {
     manifest: &'a Manifest,
     implementations: &'a Implementations,
+    mandate: &'a Mandate,
 }
 
 impl<'a> Artifact<'a> {
-    pub fn new(manifest: &'a Manifest, implementations: &'a Implementations) -> Self {
+    pub fn new(
+        manifest: &'a Manifest,
+        implementations: &'a Implementations,
+        mandate: &'a Mandate,
+    ) -> Self {
         Self {
             manifest,
             implementations,
+            mandate,
         }
     }
 
@@ -67,36 +74,84 @@ impl<'a> Artifact<'a> {
             binding::emit_stub(&mut output, name, return_type, parameters, manifest.kinds());
         }
 
-        constants(&mut output, commands, stubs, self.implementations.len());
+        self.census(&mut output, commands, stubs);
         resolver(&mut output, &dispatch, &names);
         std::fs::write(Manifest::output(), output).unwrap();
     }
+
+    /// The completeness census: three DISJOINT classes plus the registry's core mandate.
+    ///
+    /// A lowered entry point performs its command; a refused one only reports a truthful failure. Counting
+    /// them together is what let seven mandatory core-1.4 commands stay silent no-ops behind a complete
+    /// looking total, so the two counts and the two name lists stay separate here and downstream.
+    fn census(&self, output: &mut String, commands: usize, stubs: usize) {
+        let lowered: Vec<&str> = self.implementations.lowered().copied().collect();
+        let refused: Vec<&str> = self.implementations.refused().copied().collect();
+        writeln!(
+            output,
+            "\n/// Total Vulkan `vk*` entry points in the manifest (the exported command surface)."
+        )
+        .unwrap();
+        writeln!(output, "pub const VK_ENTRYPOINTS: usize = {commands};").unwrap();
+        writeln!(
+            output,
+            "/// Entry points emitted as default stubs (no hand-written body at all)."
+        )
+        .unwrap();
+        writeln!(output, "pub const GENERATED_STUBS: usize = {stubs};").unwrap();
+        writeln!(
+            output,
+            "/// Entry points that PERFORM their command (a real lowering in `src/`)."
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "pub const LOWERED_ENTRYPOINTS: usize = {};",
+            lowered.len()
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "/// Entry points whose body only reports a truthful failure. NOT implementations."
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "pub const REFUSED_ENTRYPOINTS: usize = {};",
+            refused.len()
+        )
+        .unwrap();
+        names(output, "LOWERED_NAMES", &lowered);
+        names(output, "REFUSED_NAMES", &refused);
+        self.core_mandate(output);
+    }
+
+    /// `(packed api version, command)` for every command the Khronos registry mandates in core Vulkan —
+    /// the input to the census test that refuses a refusal or a stub at or below the advertised version.
+    fn core_mandate(&self, output: &mut String) {
+        let mut table = String::new();
+        for (version, name) in self.mandate.entries() {
+            writeln!(table, "    ({version}, \"{name}\"),").unwrap();
+        }
+        writeln!(
+            output,
+            "\n/// Every command core Vulkan mandates, with the packed API version that first mandates it."
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "pub static CORE_MANDATE: &[(u32, &str)] = &[\n{table}];"
+        )
+        .unwrap();
+    }
 }
 
-fn constants(output: &mut String, commands: usize, stubs: usize, implemented: usize) {
-    writeln!(
-        output,
-        "\n/// Total Vulkan `vk*` entry points in the manifest (the exported command surface)."
-    )
-    .unwrap();
-    writeln!(output, "pub const VK_ENTRYPOINTS: usize = {commands};").unwrap();
-    writeln!(
-        output,
-        "/// Entry points emitted as default stubs (not yet hand-implemented)."
-    )
-    .unwrap();
-    writeln!(output, "pub const GENERATED_STUBS: usize = {stubs};").unwrap();
-    writeln!(
-        output,
-        "/// Entry points with real hand-written bodies in `src/`."
-    )
-    .unwrap();
-    writeln!(
-        output,
-        "pub const IMPLEMENTED_ENTRYPOINTS: usize = {};",
-        implemented
-    )
-    .unwrap();
+fn names(output: &mut String, constant: &str, entries: &[&str]) {
+    let mut table = String::new();
+    for name in entries {
+        writeln!(table, "    \"{name}\",").unwrap();
+    }
+    writeln!(output, "pub static {constant}: &[&str] = &[\n{table}];").unwrap();
 }
 
 fn resolver(output: &mut String, dispatch: &str, names: &str) {

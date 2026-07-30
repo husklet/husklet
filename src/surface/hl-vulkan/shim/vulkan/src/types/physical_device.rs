@@ -328,7 +328,7 @@ pub struct VkPhysicalDeviceMaintenance3Properties {
 
 /// `VkPhysicalDeviceMaintenance4Properties` — the `maxBufferSize` ceiling a Vulkan-1.3 app (wgpu-hal)
 /// reads to size its buffers. maintenance4 is core in Vulkan 1.3, so an app that sees our advertised
-/// api_version (1.4.0) reads `maxBufferSize` from HERE; a zero-initialized node (no branch filling it)
+/// api_version (1.2 or later) reads `maxBufferSize` from HERE; a zero-initialized node (no branch filling it)
 /// makes wgpu reject the device with "Limit 'max_buffer_size' value … is better than allowed 0".
 #[repr(C)]
 pub struct VkPhysicalDeviceMaintenance4Properties {

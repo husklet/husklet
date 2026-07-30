@@ -68,6 +68,8 @@ pub extern "C" fn vkBeginCommandBuffer(
             Some(bi) => bi.flags & VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT != 0,
             None => false,
         };
+    // A push-descriptor set does not survive re-recording (`VK_KHR_push_descriptor` / core 1.4).
+    super::push_descriptor::PushSet::forget(cb);
     ShimState::with_sink(|dev, _| {
         ResultStatus::from_gpu(dev.begin_command_buffer(cb, one_time_submit))
     })

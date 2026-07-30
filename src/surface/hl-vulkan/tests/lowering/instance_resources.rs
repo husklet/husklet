@@ -5,7 +5,7 @@ fn physical_device_reports_metal_class_props() {
     let inst = Instance::new(result::HL_API_VERSION);
     let pd = &inst.physical_device;
     assert_eq!(pd.name, "hl Metal (Vulkan)");
-    assert_eq!(pd.api_version, result::HL_API_VERSION); // Vulkan 1.4.0
+    assert_eq!(pd.api_version, result::HL_API_VERSION); // Vulkan 1.3.0
     assert_eq!(pd.vendor_id, 0x106b); // Apple
     assert_eq!(pd.device_type, 1); // INTEGRATED_GPU (unified memory)
     assert_eq!(pd.limits.max_image_dimension_2d, 16384);

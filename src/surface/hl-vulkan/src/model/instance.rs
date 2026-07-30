@@ -31,7 +31,7 @@ pub struct Instance {
 
 impl Instance {
     /// Create the instance exposing the default hl physical device. A requested API version above what
-    /// this ICD advertises ([`HL_API_VERSION`], Vulkan 1.4) is the caller's to reject with
+    /// this ICD advertises ([`HL_API_VERSION`], Vulkan 1.3) is the caller's to reject with
     /// `VK_ERROR_INCOMPATIBLE_DRIVER`; this constructor just records it.
     pub fn new(app_api_version: u32) -> Self {
         Self {

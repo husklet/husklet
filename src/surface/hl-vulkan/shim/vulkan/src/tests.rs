@@ -8,8 +8,36 @@ fn surface_is_complete_and_matches_the_census() {
         VK_ENTRYPOINTS, 712,
         "Vulkan command surface drifted from the golden 712"
     );
-    assert_eq!(GENERATED_STUBS + IMPLEMENTED_ENTRYPOINTS, TOTAL_ENTRYPOINTS);
+    assert_eq!(
+        GENERATED_STUBS + LOWERED_ENTRYPOINTS + REFUSED_ENTRYPOINTS,
+        TOTAL_ENTRYPOINTS
+    );
     assert_eq!(DISPATCH_NAMES.len(), 712, "dispatch census drifted");
+    // The three classes are disjoint: a refusal must never also be counted as a lowering.
+    assert_eq!(
+        LOWERED_NAMES
+            .iter()
+            .filter(|name| REFUSED_NAMES.contains(name))
+            .collect::<Vec<_>>(),
+        Vec::<&&str>::new()
+    );
+}
+
+/// Every command core Vulkan mandates at or below the version this driver advertises must PERFORM its
+/// operation. A refusal or a generated stub in that set is a capability lie the version number makes —
+/// and for a `void` command it cannot even be reported to the caller, which is exactly how the core-1.4
+/// push-descriptor family stayed silent. Data comes from `registry/vk_core_mandate.manifest` (Khronos
+/// registry), so raising `HL_API_VERSION` past what is implemented fails here rather than in a client.
+#[test]
+fn every_core_mandated_command_at_the_advertised_version_is_lowered() {
+    let unmet: Vec<&str> = CORE_MANDATE
+        .iter()
+        .filter(|(version, _)| *version <= HL_API_VERSION)
+        .map(|(_, name)| *name)
+        .filter(|name| !LOWERED_NAMES.contains(name))
+        .collect();
+
+    assert_eq!(unmet, Vec::<&str>::new());
 }
 
 #[test]
@@ -368,8 +396,62 @@ fn private_data_round_trips_and_ycbcr_conversion_creates() {
     crate::maintenance::vkDestroySamplerYcbcrConversion(dev, conv, core::ptr::null());
 }
 
+/// `VkApplicationInfo::apiVersion` states what the APPLICATION was written against, so a request above
+/// the advertised version is clamped, not rejected: the app gets its instance and reads the real version
+/// off the physical device. This previously returned `VK_ERROR_INCOMPATIBLE_DRIVER`, which is what made
+/// the advertised version impossible to lower without rejecting Dawn.
 #[test]
-fn instance_rejects_api_above_advertised_without_replacing_state() {
+fn instance_clamps_an_api_request_above_the_advertised_version() {
+    let _g = test_guard();
+    let application = VkApplicationInfo {
+        s_type: 0,
+        p_next: core::ptr::null(),
+        p_application_name: core::ptr::null(),
+        application_version: 0,
+        p_engine_name: core::ptr::null(),
+        engine_version: 0,
+        api_version: HL_API_VERSION + (1 << 12),
+    };
+    let create = VkInstanceCreateInfo {
+        s_type: 0,
+        p_next: core::ptr::null(),
+        flags: 0,
+        p_application_info: &application,
+        enabled_layer_count: 0,
+        pp_enabled_layer_names: core::ptr::null(),
+        enabled_extension_count: 0,
+        pp_enabled_extension_names: core::ptr::null(),
+    };
+    let mut output = core::ptr::null_mut();
+
+    assert_eq!(
+        crate::instance::vkCreateInstance(
+            &create as *const _ as *const c_void,
+            core::ptr::null(),
+            &mut output,
+        ),
+        VK_SUCCESS
+    );
+    assert!(!output.is_null());
+    assert_eq!(
+        crate::state::StateStore::with(|state| {
+            state.instance.as_ref().unwrap().app_api_version
+        }),
+        HL_API_VERSION
+    );
+    let mut properties = [0u8; core::mem::size_of::<VkPhysicalDeviceProperties>()];
+    crate::instance::vkGetPhysicalDeviceProperties(
+        core::ptr::null_mut(),
+        properties.as_mut_ptr() as *mut c_void,
+    );
+    let reported = unsafe { &*(properties.as_ptr() as *const VkPhysicalDeviceProperties) };
+    assert_eq!(reported.api_version, HL_API_VERSION);
+    crate::instance::vkDestroyInstance(output, core::ptr::null());
+}
+
+/// A different `variant` is a different API (Vulkan SC), which no clamp can substitute for.
+#[test]
+fn instance_rejects_a_foreign_api_variant_without_replacing_state() {
     let _g = test_guard();
     crate::state::StateStore::with(|state| {
         state.instance = Some(hl_vulkan::Instance::new(make_api_version(0, 1, 0, 0)));
@@ -381,7 +463,7 @@ fn instance_rejects_api_above_advertised_without_replacing_state() {
         application_version: 0,
         p_engine_name: core::ptr::null(),
         engine_version: 0,
-        api_version: HL_API_VERSION + (1 << 12),
+        api_version: make_api_version(1, 1, 0, 0),
     };
     let create = VkInstanceCreateInfo {
         s_type: 0,
@@ -445,11 +527,13 @@ fn instance_accepts_newer_header_patch_for_advertised_api() {
         VK_SUCCESS
     );
     assert!(!output.is_null());
+    // A patch version names a header revision, not capability, so it is clamped away with the rest: the
+    // instance records the version this driver actually honours.
     assert_eq!(
         crate::state::StateStore::with(|state| {
             state.instance.as_ref().unwrap().app_api_version
         }),
-        application.api_version
+        HL_API_VERSION
     );
 
     crate::instance::vkDestroyInstance(output, core::ptr::null());
@@ -485,7 +569,9 @@ fn device_rejects_unknown_extension_without_creating_state() {
         VK_ERROR_EXTENSION_NOT_PRESENT
     );
     assert!(output.is_null());
-    assert!(crate::state::StateStore::with(|state| state.device.is_none()));
+    assert!(crate::state::StateStore::with(|state| state
+        .device
+        .is_none()));
 }
 
 #[test]
@@ -520,7 +606,9 @@ fn device_rejects_unadvertised_base_feature_without_creating_state() {
         VK_ERROR_FEATURE_NOT_PRESENT
     );
     assert!(output.is_null());
-    assert!(crate::state::StateStore::with(|state| state.device.is_none()));
+    assert!(crate::state::StateStore::with(|state| state
+        .device
+        .is_none()));
 }
 
 #[test]
@@ -665,7 +753,9 @@ fn device_rejects_unadvertised_features2_feature_without_creating_state() {
         VK_ERROR_FEATURE_NOT_PRESENT
     );
     assert!(output.is_null());
-    assert!(crate::state::StateStore::with(|state| state.device.is_none()));
+    assert!(crate::state::StateStore::with(|state| state
+        .device
+        .is_none()));
 }
 
 #[test]

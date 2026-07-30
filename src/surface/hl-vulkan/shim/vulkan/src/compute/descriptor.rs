@@ -137,10 +137,10 @@ pub extern "C" fn vkUpdateDescriptorSets(
         &[]
     } else {
         unsafe {
-        std::slice::from_raw_parts(
-            p_descriptor_writes as *const VkWriteDescriptorSet,
-            descriptor_write_count as usize,
-        )
+            std::slice::from_raw_parts(
+                p_descriptor_writes as *const VkWriteDescriptorSet,
+                descriptor_write_count as usize,
+            )
         }
     };
     // The view→image mapping lives in the shim state (disjoint from the device), so borrow both fields.
