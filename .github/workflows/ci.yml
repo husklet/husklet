@@ -75,3 +75,46 @@ jobs:
 
       - name: Build the macOS application
         run: nix develop . --command cargo check -p husklet --bin husklet --features gui
+
+  mac-crates:
+    name: macOS-gated crates
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      # The live-socket compositor tests bind `$XDG_RUNTIME_DIR/wayland-N`; give them a private directory.
+      XDG_RUNTIME_DIR: ${{ github.workspace }}/.runtime
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Require an Apple Silicon host
+        run: |
+          architecture="$(uname -m)"
+          test "$architecture" = arm64 || {
+            echo "Husklet CI requires an arm64 macOS host, got: $architecture" >&2
+            exit 1
+          }
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@786fff0690178f1234e4e1fe9b536e94f5433196 # v20
+        with:
+          diagnostic-endpoint: ""
+
+      - name: Cache the Nix development environment
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Prove every test target compiles
+        run: |
+          mkdir -p "$XDG_RUNTIME_DIR"
+          make test-compiles
+
+      - name: Test the Smithay adapter and the Metal presenter
+        run: make mac-crates
+
+      # Fact-finding, deliberately not a gate: the device-bound tests run on the self-hosted host, and this
+      # records whether a hosted runner could take them over.
+      - name: Record the hosted runner's Metal capability
+        if: always()
+        run: system_profiler SPDisplaysDataType | sed -n '1,40p'

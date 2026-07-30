@@ -1,9 +1,18 @@
 # Husklet workspace product.
-.PHONY: all design-lint lint-cases fmt fmt-check test test-ci mac-crates containers app dmg install uninstall clean
+.PHONY: all design-lint lint-cases fmt fmt-check test test-ci test-compiles mac-crates mac-gpu containers app dmg install uninstall clean
 
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
 VERSION ?= $(or $(TAG),0.0.0-dev)
 NIX_DEV = nix develop . --command
+
+# The macOS-gated crates are excluded from default-members and their real code sits behind features, so
+# `cargo test --workspace` never builds the Smithay adapter or the Metal presenter. These enable them.
+MAC_FEATURES = smithay-adapter,macos-surface
+# The Smithay adapter links libxkbcommon from the dev shell; an absent path is a preflight failure, never a
+# reason to build less.
+MAC_ENV = [ -n "$$HL_LIBXKBCOMMON" ] || { echo "HL_LIBXKBCOMMON is required by the compositor adapter" >&2; exit 1; }; \
+	  export RUSTFLAGS="-L native=$$HL_LIBXKBCOMMON/lib $${RUSTFLAGS:-}" \
+	         DYLD_LIBRARY_PATH="$$HL_LIBXKBCOMMON/lib:$${DYLD_LIBRARY_PATH:-}";
 
 all: design-lint test
 
@@ -27,13 +36,29 @@ test-ci: fmt-check test
 containers:
 	cargo test -p hl-images -p hl-container -p hl-daemon -p hl-client
 
+# Every test target in the workspace must compile, including the ones no test job runs. A test that stopped
+# compiling has been providing zero protection.
+test-compiles:
+	@[ "$$(uname)" = "Darwin" ] || { echo "test-compiles: requires macOS; the macOS-gated crates cannot be compiled on $$(uname)" >&2; exit 1; }
+	$(NIX_DEV) bash -euc '$(MAC_ENV) \
+	  cargo test --no-run --workspace --all-targets; \
+	  cargo test --no-run -p hl-compositor --features $(MAC_FEATURES) --all-targets'
+
+# The macOS-gated crates with their real features on: the Smithay Wayland adapter and the Metal presenter.
+# Device-free — every presenter here is the PngPresenter, so this belongs on a hosted runner.
 mac-crates:
-	@[ "$$(uname)" = "Darwin" ] || { echo "mac-crates: macOS-only; skipping on $$(uname)"; exit 0; }
-	$(NIX_DEV) bash -euc '\
-	  export RUSTFLAGS="-L native=$$HL_LIBXKBCOMMON/lib $${RUSTFLAGS:-}" \
-	         DYLD_LIBRARY_PATH="$$HL_LIBXKBCOMMON/lib:$${DYLD_LIBRARY_PATH:-}"; \
-	  cargo build -p hl-gpu-wgpu -p hl-compositor; \
-	  cargo test -p hl-compositor -p hl-gpu-wgpu'
+	@[ "$$(uname)" = "Darwin" ] || { echo "mac-crates: requires macOS, got $$(uname)" >&2; exit 1; }
+	$(NIX_DEV) bash -euc '$(MAC_ENV) \
+	  cargo test -p hl-compositor --features $(MAC_FEATURES)'
+
+# The tests that bind a real GPU: the wgpu/Metal host executor and the Metal presenter readback. These need
+# a genuine Metal device, so they belong on the self-hosted host.
+mac-gpu:
+	@[ "$$(uname)" = "Darwin" ] || { echo "mac-gpu: requires macOS, got $$(uname)" >&2; exit 1; }
+	@system_profiler SPDisplaysDataType | grep -q "Metal Support" || { echo "mac-gpu: no Metal-capable device on this host" >&2; exit 1; }
+	$(NIX_DEV) bash -euc '$(MAC_ENV) \
+	  cargo test -p hl-gpu-wgpu; \
+	  cargo test -p hl-compositor --features $(MAC_FEATURES) --test macos_present_smoke'
 
 app:
 	@chmod +x src/apps/husklet/package/bundle.sh src/apps/husklet/package/make-dmg.sh
