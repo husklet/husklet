@@ -55,11 +55,7 @@ impl<'a> Connection<'a> {
     }
 
     pub fn connect(path: &Path, timeout: Duration) -> io::Result<UnixStream> {
-        let socket = socket2::Socket::new(
-            socket2::Domain::UNIX,
-            socket2::Type::STREAM,
-            None,
-        )?;
+        let socket = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)?;
         let address = socket2::SockAddr::unix(path)?;
         socket.connect_timeout(&address, timeout)?;
         let descriptor: std::os::fd::OwnedFd = socket.into();

@@ -261,12 +261,21 @@ fn convert(kind: u8, in_ty: u8, out_ty: u8, word: [u8; 4]) -> [u8; 4] {
 #[test]
 fn unsigned_int_to_float_does_not_go_negative() {
     let big = 0x8000_0000u32; // 2_147_483_648
-    let got = f32::from_le_bytes(convert(CVT_F32_FROM_U32, gty::U32, gty::F32, big.to_le_bytes()));
+    let got = f32::from_le_bytes(convert(
+        CVT_F32_FROM_U32,
+        gty::U32,
+        gty::F32,
+        big.to_le_bytes(),
+    ));
     assert_eq!(got, 2_147_483_648.0);
 
     // The signed kind is still available and still signed — the two are genuinely different conversions.
-    let signed =
-        f32::from_le_bytes(convert(CVT_F32_FROM_S32, gty::U32, gty::F32, big.to_le_bytes()));
+    let signed = f32::from_le_bytes(convert(
+        CVT_F32_FROM_S32,
+        gty::U32,
+        gty::F32,
+        big.to_le_bytes(),
+    ));
     assert_eq!(signed, -2_147_483_648.0);
 }
 
@@ -311,7 +320,11 @@ fn round_to_nearest_even_is_distinct_from_truncation() {
 
     assert_eq!((rni(2.5), rzi(2.5)), (2, 2), "2.5 ties down to even 2");
     assert_eq!((rni(3.5), rzi(3.5)), (4, 3), "3.5 ties UP to even 4");
-    assert_eq!((rni(2.9), rzi(2.9)), (3, 2), "the plain rounding difference");
+    assert_eq!(
+        (rni(2.9), rzi(2.9)),
+        (3, 2),
+        "the plain rounding difference"
+    );
     assert_eq!((rni(-2.5), rzi(-2.5)), (-2, -2));
     assert_eq!((rni(-3.5), rzi(-3.5)), (-4, -3));
 

@@ -89,7 +89,10 @@ impl RemoteCommandSink {
                 self.submit_ir(&[], &[], 0)?;
             }
             let peer_closed = {
-                let socket = self.sock.as_ref().expect("residency restore installed socket");
+                let socket = self
+                    .sock
+                    .as_ref()
+                    .expect("residency restore installed socket");
                 unix::Connection::new(socket).peer_closed()
             };
             match peer_closed {
@@ -112,18 +115,21 @@ impl RemoteCommandSink {
                 }
             }
             {
-                let socket = self.sock.as_ref().expect("request socket remains installed");
+                let socket = self
+                    .sock
+                    .as_ref()
+                    .expect("request socket remains installed");
                 socket
                     .set_read_timeout(Some(response_timeout))
                     .map_err(|error| {
-                        GpuError::Transport(Self::unavailable(
-                            TransportPhase::ResponseRead,
-                            error,
-                        ))
+                        GpuError::Transport(Self::unavailable(TransportPhase::ResponseRead, error))
                     })?;
             }
             let write = {
-                let socket = self.sock.as_ref().expect("request socket remains installed");
+                let socket = self
+                    .sock
+                    .as_ref()
+                    .expect("request socket remains installed");
                 unix::Connection::new(socket).write_readback_request_tracked(request)
             };
             if let Err(failure) = write {

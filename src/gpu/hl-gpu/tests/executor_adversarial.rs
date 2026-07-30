@@ -145,10 +145,10 @@ fn store_one_setup() -> Vec<Cmd> {
 
 #[path = "executor_adversarial/compute.rs"]
 mod compute;
-#[path = "executor_adversarial/raster.rs"]
-mod raster;
 #[path = "executor_adversarial/presentation.rs"]
 mod presentation;
+#[path = "executor_adversarial/raster.rs"]
+mod raster;
 #[path = "executor_adversarial/resources.rs"]
 mod resources;
 #[path = "executor_adversarial/shader.rs"]

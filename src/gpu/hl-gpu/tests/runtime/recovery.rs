@@ -180,8 +180,8 @@ fn a_backwards_fence_signal_rolls_back_the_whole_frame() {
     );
 
     // This frame creates a buffer and then signals fence 1 BACKWARDS (5 < 10).
-    let err = hl_gpu::runtime::submit(&mut s, &mut exec, 128, &[buffer(7, 4096), signal(5)])
-        .unwrap_err();
+    let err =
+        hl_gpu::runtime::submit(&mut s, &mut exec, 128, &[buffer(7, 4096), signal(5)]).unwrap_err();
     assert_eq!(
         err,
         GpuError::Invalid("fence timeline value moved backwards")

@@ -109,7 +109,9 @@ impl Process {
             // A missing account database is a bad request, not a missing resource: the daemon maps
             // a NotFound io error to HTTP 404, which misreports a scratch image asked for a name.
             let passwd = std::fs::read_to_string(rootfs.join("etc/passwd")).map_err(|error| {
-                Error::InvalidSpec(format!("user {user:?} cannot be resolved: /etc/passwd {error}"))
+                Error::InvalidSpec(format!(
+                    "user {user:?} cannot be resolved: /etc/passwd {error}"
+                ))
             })?;
             let matches = passwd
                 .lines()

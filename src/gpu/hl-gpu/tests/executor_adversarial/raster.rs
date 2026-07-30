@@ -99,7 +99,10 @@ fn a_render_pass_whose_attachments_disagree_on_extent_is_rejected() {
                 texture_usage::RENDER_TARGET,
             ),
         ),
-        Cmd::CreateBuffer(1, buf(28 * 3, buffer_usage::VERTEX | buffer_usage::COPY_DST)),
+        Cmd::CreateBuffer(
+            1,
+            buf(28 * 3, buffer_usage::VERTEX | buffer_usage::COPY_DST),
+        ),
         Cmd::WriteBuffer {
             id: 1,
             offset: 0,
@@ -334,7 +337,10 @@ fn a_maximal_instance_count_is_rejected_before_rasterizing() {
                 texture_usage::RENDER_TARGET,
             ),
         ),
-        Cmd::CreateBuffer(1, buf(28 * 3, buffer_usage::VERTEX | buffer_usage::COPY_DST)),
+        Cmd::CreateBuffer(
+            1,
+            buf(28 * 3, buffer_usage::VERTEX | buffer_usage::COPY_DST),
+        ),
         Cmd::WriteBuffer {
             id: 1,
             offset: 0,

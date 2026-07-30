@@ -294,9 +294,9 @@ mod tests {
                 user: user.to_owned(),
                 ..ExecConfig::default()
             };
-            let process = config
-                .process(&parent)
-                .unwrap_or_else(|error| panic!("exec User {user:?} rejected at transport: {error}"));
+            let process = config.process(&parent).unwrap_or_else(|error| {
+                panic!("exec User {user:?} rejected at transport: {error}")
+            });
             assert_eq!(
                 (process.uid, process.gid),
                 (Some(11), Some(12)),

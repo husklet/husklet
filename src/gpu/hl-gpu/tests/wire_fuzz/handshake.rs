@@ -134,7 +134,10 @@ fn every_declared_texture_format_is_representable_in_the_bitset() {
     let declared: Vec<TextureFormat> = (0..=u32::from(u16::MAX))
         .filter_map(|v| TextureFormat::from_u32(v).ok())
         .collect();
-    assert!(declared.len() >= 25, "the format list should not have shrunk");
+    assert!(
+        declared.len() >= 25,
+        "the format list should not have shrunk"
+    );
 
     let mut caps = Capabilities::full("all");
     caps.texture_formats = TextureFormat::bits(&declared);

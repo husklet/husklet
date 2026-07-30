@@ -8,8 +8,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
-static SOCKET_SEQUENCE: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(1);
+static SOCKET_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 struct Socket(PathBuf);
 
@@ -236,10 +235,7 @@ fn reconnect_restores_fence_residency_before_polling() {
         let request = readback(&mut second);
         assert_eq!(request.id, 7);
         hl_gpu::transport::adapter::unix::Connection::new(&second)
-            .write_readback_response(
-                hl_gpu::transport::model::readback::READBACK_OK,
-                &[1],
-            )
+            .write_readback_response(hl_gpu::transport::model::readback::READBACK_OK, &[1])
             .unwrap();
         (
             hl_gpu::Decoder::stream(&original).unwrap(),
@@ -274,10 +270,7 @@ fn finite_fence_wait_can_exceed_base_response_deadline() {
         assert_eq!(request.len, 180_000_000);
         thread::sleep(Duration::from_millis(130));
         hl_gpu::transport::adapter::unix::Connection::new(&stream)
-            .write_readback_response(
-                hl_gpu::transport::model::readback::READBACK_OK,
-                &[1],
-            )
+            .write_readback_response(hl_gpu::transport::model::readback::READBACK_OK, &[1])
             .unwrap();
     });
 
@@ -300,10 +293,7 @@ fn unbounded_fence_wait_uses_bounded_requests_until_complete() {
             let request = readback(&mut stream);
             assert_eq!(request.len, 1_000_000_000);
             hl_gpu::transport::adapter::unix::Connection::new(&stream)
-                .write_readback_response(
-                    hl_gpu::transport::model::readback::READBACK_OK,
-                    &[status],
-                )
+                .write_readback_response(hl_gpu::transport::model::readback::READBACK_OK, &[status])
                 .unwrap();
         }
     });
@@ -322,10 +312,7 @@ fn explicit_readback_rejection_preserves_the_connection() {
         handshake(&stream);
         let _ = readback(&mut stream);
         hl_gpu::transport::adapter::unix::Connection::new(&stream)
-            .write_readback_response(
-                hl_gpu::transport::model::readback::READBACK_FAIL,
-                &[],
-            )
+            .write_readback_response(hl_gpu::transport::model::readback::READBACK_FAIL, &[])
             .unwrap();
         let submitted = frame(&mut stream);
         stream.write_all(&[hl_gpu::transport::ACK_OK]).unwrap();
@@ -405,13 +392,7 @@ fn partial_response_body_timeout_is_terminal() {
         handshake(&stream);
         let _ = readback(&mut stream);
         stream
-            .write_all(&[
-                hl_gpu::transport::model::readback::READBACK_OK,
-                1,
-                0,
-                0,
-                0,
-            ])
+            .write_all(&[hl_gpu::transport::model::readback::READBACK_OK, 1, 0, 0, 0])
             .unwrap();
         thread::sleep(Duration::from_millis(180));
     });
@@ -473,6 +454,9 @@ fn connect_deadline_bounds_a_saturated_unix_backlog() {
         ),
         "{timeout:?}"
     );
-    assert!(!queued.is_empty(), "the backlog was populated before refusal");
+    assert!(
+        !queued.is_empty(),
+        "the backlog was populated before refusal"
+    );
     assert!(started.elapsed() < Duration::from_secs(1));
 }

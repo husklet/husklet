@@ -22,7 +22,8 @@ impl Capabilities {
         // is presence-gated rather than version-gated). Absent for every descriptor that advertises only
         // the low 32 format slots, which is every descriptor today.
         let texture_formats_high = if d.remaining() >= 4 { d.u32()? } else { 0 };
-        let texture_formats = u64::from(texture_formats_low) | (u64::from(texture_formats_high) << 32);
+        let texture_formats =
+            u64::from(texture_formats_low) | (u64::from(texture_formats_high) << 32);
         Ok(Capabilities {
             name,
             unified_memory,

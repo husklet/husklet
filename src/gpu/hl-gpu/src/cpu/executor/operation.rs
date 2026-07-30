@@ -13,9 +13,9 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
             // a disagreement would index a smaller plane out of range.
             let mut extent: Option<(u32, u32)> = None;
             let mut agree = |t: &Texture| match extent {
-                Some(e) if e != (t.desc.width, t.desc.height) => {
-                    Err(GpuError::Invalid("render pass attachments disagree on extent"))
-                }
+                Some(e) if e != (t.desc.width, t.desc.height) => Err(GpuError::Invalid(
+                    "render pass attachments disagree on extent",
+                )),
                 _ => {
                     extent = Some((t.desc.width, t.desc.height));
                     Ok(())
