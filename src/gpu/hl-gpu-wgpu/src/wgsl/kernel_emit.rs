@@ -106,6 +106,12 @@ impl Kernel {
                 }
                 Inst::Nop => {}
                 Inst::Bar => {}
+                // A fence orders memory without a rendezvous. This executor runs a block's threads
+                // concurrently, so the ordering is load-bearing and must be emitted, not discarded.
+                Inst::Fence { scope } => body.push_str(match *scope {
+                    mem_scope::CTA => "workgroupBarrier();",
+                    _ => "storageBarrier();", // DEVICE and SYSTEM
+                }),
                 Inst::MovImmI { d, imm } => body.push_str(&format!("r{d} = {}u;", *imm as u32)),
                 Inst::MovImmF { d, bits } => body.push_str(&format!("r{d} = {bits}u;")),
                 Inst::MovReg { d, s: src } => body.push_str(&format!("r{d} = r{src};")),
@@ -189,6 +195,38 @@ impl Kernel {
                         format!("{} {sym} {}", Operand(a).u32(), Operand(b).u32())
                     } else {
                         format!("{} {sym} {}", Operand(a).i32(), Operand(b).i32())
+                    };
+                    body.push_str(&format!("r{d} = select(0u, 1u, {cond});"));
+                }
+                Inst::FSetp {
+                    d,
+                    a,
+                    b,
+                    cmp,
+                    ordered,
+                } => {
+                    let sym = match *cmp {
+                        CMP_EQ => "==",
+                        CMP_NE => "!=",
+                        CMP_LT => "<",
+                        CMP_LE => "<=",
+                        CMP_GT => ">",
+                        _ => ">=", // CMP_GE
+                    };
+                    let (x, y) = (Operand(a).f32(), Operand(b).f32());
+                    // `isNan` is not in WGSL; `v != v` is the portable NaN test.
+                    let unordered = format!("(({x}) != ({x}) || ({y}) != ({y}))");
+                    let strict = format!("({x}) {sym} ({y})");
+                    let cond = if *ordered {
+                        // WGSL float `!=` is TRUE at NaN; the ordered family must be false there. The
+                        // other five are already false at NaN.
+                        if *cmp == CMP_NE {
+                            format!("(!{unordered} && ({strict}))")
+                        } else {
+                            format!("({strict})")
+                        }
+                    } else {
+                        format!("({unordered} || ({strict}))")
                     };
                     body.push_str(&format!("r{d} = select(0u, 1u, {cond});"));
                 }
@@ -307,11 +345,24 @@ impl Kernel {
                     Operand(c).f32()
                 )),
                 Inst::Cvt { d, s: src, kind } => {
+                    // WGSL `round` is ties-to-even, which is exactly PTX `rni`. Bare `i32()`/`u32()`
+                    // truncate toward zero, which is `rzi`. An unknown kind is refused: falling back
+                    // to a bit-preserving move is a reinterpret, not a conversion.
                     let e = match *kind {
                         CVT_F32_FROM_S32 => format!("bitcast<u32>(f32({}))", Operand(src).i32()),
-                        CVT_S64_FROM_S32 => Operand(src).u32(),
+                        CVT_F32_FROM_U32 => format!("bitcast<u32>(f32({}))", Operand(src).u32()),
+                        CVT_S64_FROM_S32 | CVT_IDENTITY => Operand(src).u32(),
                         CVT_S32_FROM_F32 => format!("bitcast<u32>(i32({}))", Operand(src).f32()),
-                        _ => Operand(src).u32(),
+                        CVT_U32_FROM_F32 => format!("u32({})", Operand(src).f32()),
+                        CVT_S32_FROM_F32_RNI => {
+                            format!("bitcast<u32>(i32(round({})))", Operand(src).f32())
+                        }
+                        CVT_U32_FROM_F32_RNI => format!("u32(round({}))", Operand(src).f32()),
+                        other => {
+                            return Err(Diagnostic::kernel(format!(
+                                "wgsl lowering: unknown cvt kind {other}"
+                            )))
+                        }
                     };
                     body.push_str(&format!("r{d} = {e};"));
                 }

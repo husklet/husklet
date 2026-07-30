@@ -661,9 +661,8 @@ mod tests {
 
     #[test]
     fn texture_views_reject_dimensions_incompatible_with_the_source_before_wgpu() {
-        let Ok(executor) = WgpuExecutor::new(crate::DeviceConfig::default()) else {
-            return;
-        };
+        let executor = WgpuExecutor::new(crate::DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
         let mut resources = SessionResources::new();
         let source = executor
             .make_texture(&TextureDesc {

@@ -252,9 +252,8 @@ void main() { color = vec4(0.0, 0.0, 1.0, 1.0); }
 
     #[test]
     fn sequential_executors_reuse_exact_pipeline() {
-        let Ok(device) = Device::new(DeviceConfig::default()) else {
-            return;
-        };
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
         let mut first = device.executor();
         first
             .execute(&mut SessionResources::default(), &create(RED, 0xf))
@@ -272,9 +271,8 @@ void main() { color = vec4(0.0, 0.0, 1.0, 1.0); }
 
     #[test]
     fn fixed_state_and_source_are_part_of_exact_identity() {
-        let Ok(device) = Device::new(DeviceConfig::default()) else {
-            return;
-        };
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
         for commands in [create(RED, 0xf), create(RED, 0x7), create(BLUE, 0xf)] {
             device
                 .executor()
@@ -287,9 +285,8 @@ void main() { color = vec4(0.0, 0.0, 1.0, 1.0); }
 
     #[test]
     fn failed_batch_does_not_publish_pipeline() {
-        let Ok(device) = Device::new(DeviceConfig::default()) else {
-            return;
-        };
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
         let mut commands = create(RED, 0xf);
         commands.push(Cmd::DestroyPipeline(99));
 
@@ -302,9 +299,8 @@ void main() { color = vec4(0.0, 0.0, 1.0, 1.0); }
 
     #[test]
     fn duplicate_guest_id_does_not_touch_shared_pipeline() {
-        let Ok(device) = Device::new(DeviceConfig::default()) else {
-            return;
-        };
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
         device
             .executor()
             .execute(&mut SessionResources::default(), &create(RED, 0xf))
@@ -328,9 +324,8 @@ void main() { color = vec4(0.0, 0.0, 1.0, 1.0); }
 
     #[test]
     fn concurrent_executors_converge_on_one_exact_entry() {
-        let Ok(device) = Device::new(DeviceConfig::default()) else {
-            return;
-        };
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
         let device = std::sync::Arc::new(device);
         let ready = std::sync::Arc::new(std::sync::Barrier::new(3));
         let workers: Vec<_> = (0..2)

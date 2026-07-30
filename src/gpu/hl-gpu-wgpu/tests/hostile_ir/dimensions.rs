@@ -6,7 +6,7 @@ use super::*;
 
 #[test]
 fn zero_width_texture_is_rejected() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     hostile(
         &mut g,
         "zero_texture",
@@ -20,7 +20,7 @@ fn zero_width_texture_is_rejected() {
 
 #[test]
 fn huge_texture_is_rejected() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     hostile(
         &mut g,
         "huge_texture",
@@ -34,7 +34,7 @@ fn huge_texture_is_rejected() {
 
 #[test]
 fn oversized_dispatch_is_oob() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     let mut cmds = compute_setup();
     cmds.push(Cmd::Submit(CommandBuffer {
         encoder: vec![
@@ -58,7 +58,7 @@ fn oversized_dispatch_is_oob() {
 
 #[test]
 fn zero_size_blit_is_invalid() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     hostile(
         &mut g,
         "zero_blit",

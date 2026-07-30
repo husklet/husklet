@@ -32,10 +32,7 @@ fn t3_color(i: usize) -> [u8; 4] {
 
 #[test]
 fn many_resources() {
-    let mut exec = match try_exec() {
-        Some(e) => e,
-        None => return,
-    };
+    let mut exec = try_exec();
     let mut s = new_session(&exec);
 
     // Resident: target (tex id 1), sampler (id 1), VS (id 1), FS (id 2), pipeline (id 1).

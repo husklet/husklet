@@ -39,10 +39,8 @@ fn session(exec: &WgpuExecutor) -> Session {
 
 #[test]
 fn advertised_wire_version_and_command_set_are_the_full_ir() {
-    let exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
     let caps = exec.capabilities();
     assert_eq!(
         caps.wire_version, WIRE_VERSION,
@@ -96,10 +94,8 @@ fn advertised_wire_version_and_command_set_are_the_full_ir() {
 
 #[test]
 fn advertised_shader_payloads_match_what_is_accepted() {
-    let exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
     let caps = exec.capabilities();
     assert_eq!(
         caps.shader_payloads,
@@ -121,10 +117,8 @@ fn advertised_shader_payloads_match_what_is_accepted() {
 
 #[test]
 fn every_advertised_texture_format_is_really_creatable() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
     let caps = exec.capabilities();
     // The advertisement is exactly color ∪ depth ∪ combined-depth-stencil.
     let expect = TextureFormat::bits(COLOR_FORMATS)
@@ -191,10 +185,8 @@ fn every_advertised_texture_format_is_really_creatable() {
 
 #[test]
 fn timeline_fences_advertised_false_but_emulated_wait_services_a_signal() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
     assert!(
         !exec.capabilities().supports_timeline_fences,
         "the wgpu backend has no real external timeline fence"

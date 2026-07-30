@@ -221,10 +221,8 @@ fn sample_lod(exec: &mut WgpuExecutor, lod: f32) -> [u8; 4] {
 
 #[test]
 fn explicit_lod_selects_the_matching_mip_level() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     let base = sample_lod(&mut exec, 0.0);
     let mip1 = sample_lod(&mut exec, 1.0);

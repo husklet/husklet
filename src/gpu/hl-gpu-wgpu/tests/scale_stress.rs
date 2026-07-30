@@ -11,7 +11,7 @@
 //! is identical run-to-run and only the elapsed time varies. All ceilings are ENV-overridable for the rare
 //! pathologically-slow box (see [`env_f64`]).
 //!
-//! Each test acquires its own executor and SKIPS (returns) if no adapter is reachable, mirroring the rest of
+//! Each test acquires its own executor and FAILS if no adapter is reachable, mirroring the rest of
 //! the wgpu suite so a host with no Vulkan ICD still passes.
 
 mod gpu_harness;
@@ -52,9 +52,10 @@ fn median(v: &[f64]) -> f64 {
     s[s.len() / 2]
 }
 
-/// Acquire the wgpu executor, or `None` if no adapter is reachable (the whole test then skips).
-fn try_exec() -> Option<WgpuExecutor> {
-    WgpuExecutor::new(DeviceConfig::default()).ok()
+/// Acquire the wgpu executor. A missing adapter is a hard failure, not a skip.
+fn try_exec() -> WgpuExecutor {
+    WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor")
 }
 
 // ===================================================================================================

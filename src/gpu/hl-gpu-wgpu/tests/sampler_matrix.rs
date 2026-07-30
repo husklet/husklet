@@ -273,10 +273,8 @@ fn near(a: [u8; 4], b: [u8; 4], tol: i16) -> bool {
 
 #[test]
 fn every_address_mode_wraps_to_the_exact_texel() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
     let modes = [
         AddressMode::ClampToEdge,
         AddressMode::Repeat,
@@ -308,10 +306,8 @@ fn every_address_mode_wraps_to_the_exact_texel() {
 
 #[test]
 fn linear_mipmap_filter_blends_between_levels() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
     // A 2×2 base of solid X and a 1×1 mip1 of solid Y; sampling at LOD 0.5 with a LINEAR mipmap filter must
     // blend the two levels (~ the average), while a NEAREST filter would snap to one level.
     let x = [200u8, 200, 200, 255];
@@ -469,10 +465,8 @@ fn linear_mipmap_filter_blends_between_levels() {
 
 #[test]
 fn sampler_lod_and_comparison_state_is_validated_before_native_creation() {
-    let mut executor = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(executor) => executor,
-        Err(_) => return,
-    };
+    let mut executor = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
     let mut valid = session(&executor);
     let descriptor = SamplerDesc {
         lod_min_clamp: 1.0,

@@ -50,8 +50,9 @@ fn run_with_viewport(
     viewport: Enc,
     vertex: &str,
     vertex_count: u32,
-) -> Option<(hl_gpu::Result<()>, Vec<u8>)> {
-    let mut exec = WgpuExecutor::new(DeviceConfig::default()).ok()?;
+) -> (hl_gpu::Result<()>, Vec<u8>) {
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
     let mut s = new_session(&exec);
 
     // Create resources first (their own submit), so the pass submit under test carries ONLY the draw.
@@ -130,7 +131,7 @@ fn run_with_viewport(
     .map(|_| ()); // discard the presented-frame list; these tests read the target back directly
 
     let img = exec.read_texture(&s.resources, 1).unwrap();
-    Some((result, img))
+    (result, img)
 }
 
 /// (a) A negative-Y, oversized viewport must NOT NACK, and must clip to the intersection with the target.
@@ -138,7 +139,7 @@ fn run_with_viewport(
 /// fills exactly rows `y ∈ [0,24)` (the visible part of the scrolled layer) and leaves `y ∈ [24,32)` clear.
 #[test]
 fn negative_and_oversized_viewport_clips_and_does_not_nack() {
-    let Some((result, img)) = run_with_viewport(
+    let (result, img) = run_with_viewport(
         Enc::SetViewport {
             x: -8.0,
             y: -16.0,
@@ -149,9 +150,7 @@ fn negative_and_oversized_viewport_clips_and_does_not_nack() {
         },
         VS,
         3,
-    ) else {
-        return; // no adapter — skip like the rest of the wgpu suite
-    };
+    );
     write_png("viewport_clamp_partial", W, H, &img);
 
     // The load-bearing assertion: the frame is VALID now (previously this exact shape NACKed with
@@ -186,7 +185,7 @@ fn negative_and_oversized_viewport_clips_and_does_not_nack() {
 /// fill `[12,24)` and is the distortion Chrome exhibited.
 #[test]
 fn clipped_viewport_preserves_original_transform() {
-    let Some((result, img)) = run_with_viewport(
+    let (result, img) = run_with_viewport(
         Enc::SetViewport {
             x: 0.0,
             y: -16.0,
@@ -197,9 +196,7 @@ fn clipped_viewport_preserves_original_transform() {
         },
         HALF_VS,
         6,
-    ) else {
-        return;
-    };
+    );
     result.expect("the compensated viewport must submit without validation errors");
 
     for py in 0..H {
@@ -218,7 +215,7 @@ fn clipped_viewport_preserves_original_transform() {
 /// target has an empty intersection, so the draw is dropped and the target keeps its clear color.
 #[test]
 fn wholly_out_of_bounds_viewport_draws_nothing_without_nack() {
-    let Some((result, img)) = run_with_viewport(
+    let (result, img) = run_with_viewport(
         Enc::SetViewport {
             x: 100.0,
             y: 100.0,
@@ -229,9 +226,7 @@ fn wholly_out_of_bounds_viewport_draws_nothing_without_nack() {
         },
         VS,
         3,
-    ) else {
-        return;
-    };
+    );
     write_png("viewport_clamp_empty", W, H, &img);
 
     result.expect("a wholly-out-of-bounds viewport must run cleanly (draw dropped), not NACK");

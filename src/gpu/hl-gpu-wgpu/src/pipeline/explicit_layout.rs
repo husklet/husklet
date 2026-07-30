@@ -140,11 +140,8 @@ impl WgpuExecutor {
 
 #[test]
 fn cross_stage_inconsistent_binding_builds_via_explicit_layout() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        // No adapter (no lavapipe/Vulkan ICD reachable) — skip, mirroring the suite's other gpu tests.
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     // FAIL-BEFORE: the old auto-derive path rejects this exact stage pair as inconsistent.
     let err = exec.autoderive_error().expect(

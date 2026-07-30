@@ -6,7 +6,7 @@ use super::*;
 
 #[test]
 fn depth_attachment_on_color_format_is_invalid() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     hostile(
         &mut g,
         "depth_attach_color",
@@ -40,7 +40,7 @@ fn depth_attachment_on_color_format_is_invalid() {
 
 #[test]
 fn depth_tested_pipeline_in_color_only_pass_is_invalid() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     let vs = "#version 460\nvoid main(){ gl_Position = vec4(0.0,0.0,0.5,1.0); }\n";
     let fs = "#version 460\nlayout(location=0) out vec4 c; void main(){ c = vec4(1.0); }\n";
     hostile(

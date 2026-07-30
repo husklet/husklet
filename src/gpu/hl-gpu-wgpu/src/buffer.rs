@@ -5,6 +5,13 @@
 //! CPU-mediated (staging-buffer readback + `queue.write_buffer`) so this backend is free of wgpu's 4-byte
 //! copy-offset and 256-byte row-stride alignment rules at the protocol boundary — it reproduces the byte-
 //! addressable semantics the CPU oracle guarantees, which the conformance suite's unaligned copies need.
+//!
+//! `BufferDesc.usage` is therefore NOT enforced here — a documented gap, not an oversight. Enforcement
+//! needs the guest's declared bits to cover every use the executor actually makes, and they do not: the
+//! readback path above stages through a device-to-device copy, so a faithful COPY_SRC check would refuse
+//! `hl-gl`'s `glReadPixels` buffer, which legitimately declares only `COPY_DST` and is only ever a copy
+//! DESTINATION at the IR level. Narrowing the allocation must therefore wait until the binding-time uses
+//! (VERTEX/INDEX/UNIFORM/STORAGE) are separated from executor-synthesized transfers.
 
 use std::sync::atomic::Ordering;
 

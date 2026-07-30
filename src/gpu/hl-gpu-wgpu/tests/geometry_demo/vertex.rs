@@ -24,10 +24,8 @@ const VFMT_F32X4: u32 = 4;
 
 #[test]
 fn instanced_from_vertex_buffer() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
     let mut s = new_session(&exec);
 
     let insts: Vec<f32> = GRID.iter().flatten().copied().collect();

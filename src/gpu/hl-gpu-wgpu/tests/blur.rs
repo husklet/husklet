@@ -18,7 +18,7 @@
 //! many such pixels; (c) a deep-interior feature pixel stays ~white and a far-background pixel stays black.
 //!
 //! TOLERANCE ±2 per channel: bounds the intermediate + final unorm rounding and f32 summation-order ULPs;
-//! the box means avoid `.5` ties so nothing larger can occur. Skips if no adapter is reachable.
+//! the box means avoid `.5` ties so nothing larger can occur.
 
 mod gpu_harness;
 use gpu_harness::{glsl, le_f32, new_session, px, write_png};
@@ -321,10 +321,8 @@ fn reference() -> Vec<u8> {
 
 #[test]
 fn separable_box_blur_matches_the_two_stage_convolution() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     let img = render(&mut exec);
     write_png("blur", W, H, &img);

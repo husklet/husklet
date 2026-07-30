@@ -206,10 +206,8 @@ fn drew_through(exec: &mut WgpuExecutor, frag: f32, stored: f32, depth_compare: 
 
 #[test]
 fn every_depth_compare_gates_exactly_like_the_oracle() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     let stored = 0.5_f32;
     let codes = [

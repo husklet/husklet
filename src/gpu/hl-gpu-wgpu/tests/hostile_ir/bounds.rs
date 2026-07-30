@@ -6,7 +6,7 @@ use super::*;
 
 #[test]
 fn copy_buffer_to_buffer_overhang_is_oob() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     hostile(
         &mut g,
         "c2b_overhang",
@@ -30,7 +30,7 @@ fn copy_buffer_to_buffer_overhang_is_oob() {
 
 #[test]
 fn copy_buffer_to_texture_overhang_is_oob() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     hostile(
         &mut g,
         "c2t_overhang",
@@ -59,7 +59,7 @@ fn copy_buffer_to_texture_overhang_is_oob() {
 
 #[test]
 fn copy_buffer_to_texture_bad_mip_is_oob() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     hostile(
         &mut g,
         "c2t_bad_mip",
@@ -88,7 +88,7 @@ fn copy_buffer_to_texture_bad_mip_is_oob() {
 
 #[test]
 fn copy_texture_to_texture_overhang_is_oob() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     hostile(
         &mut g,
         "c2t2t_overhang",
@@ -118,7 +118,7 @@ fn copy_texture_to_texture_overhang_is_oob() {
 
 #[test]
 fn copy_texture_to_buffer_overhang_is_oob() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     hostile(
         &mut g,
         "t2b_overhang",
@@ -147,7 +147,7 @@ fn copy_texture_to_buffer_overhang_is_oob() {
 
 #[test]
 fn fill_buffer_overhang_is_oob() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     hostile(
         &mut g,
         "fill_overhang",
@@ -169,7 +169,7 @@ fn fill_buffer_overhang_is_oob() {
 
 #[test]
 fn fill_buffer_offset_size_overflow_is_oob() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     // offset + size overflows u64: without a guard this is a debug arithmetic PANIC.
     hostile(
         &mut g,
@@ -192,7 +192,7 @@ fn fill_buffer_offset_size_overflow_is_oob() {
 
 #[test]
 fn blit_into_smaller_target_is_oob() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     // dst rect (0,0 .. 8x8) overhangs a 4x4 destination.
     hostile(
         &mut g,
@@ -232,7 +232,7 @@ fn blit_into_smaller_target_is_oob() {
 /// rest at the pre-clear value — and of course does not panic.
 #[test]
 fn clear_rect_overhang_clamps_not_errors() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     let mut s = session(&g);
     // Pre-clear the whole 4x4 to black, then a red ClearRect at (2,2) size 8x8 that overhangs to the edge:
     // it must fill ONLY the 2x2 bottom-right corner, leaving the rest black.

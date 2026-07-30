@@ -76,20 +76,30 @@ fn pixel(bytes: &[u8], x: u32, y: u32) -> [u8; 4] {
     [bytes[at + 2], bytes[at + 1], bytes[at], bytes[at + 3]]
 }
 
+/// A 1:1 textured composite of an offscreen FBO onto the default framebuffer must present the SAME image
+/// the offscreen pass produced. Both are internal render targets and both store rows top-down (see
+/// `service::frame::geometry::stores_bottom_up_rows`), so the presented plane equals the atlas plane
+/// quadrant for quadrant. The atlas is asymmetric in both axes, so a flip, transpose or 180° rotation
+/// anywhere in the chain permutes the quadrants and fails.
+///
+/// This is the guard that went dead: reflecting clip Y for the default framebuffer made the composite the
+/// vertical MIRROR of the atlas it copies, which is what mirrored every presented glmark2 frame.
 #[test]
-fn rendered_fbo_sampling_and_present_clip_reflection_remain_independent() {
+fn presented_composite_matches_the_offscreen_atlas_it_samples() {
     let mut executor = match WgpuExecutor::new(DeviceConfig::default()) {
         Ok(executor) => executor,
         Err(_) => return,
     };
     let mut context = GlContext::new();
-    context.surf = GlSurface {
+    context.set_surface(GlSurface {
         have: true,
         width: W,
         height: H,
-    };
-    context.present_token = Some(SurfaceToken::new(7).unwrap());
-    context.present_serial = Some(FrameSerial::new(1).unwrap());
+    });
+    context.set_present_frame(
+        Some(SurfaceToken::new(7).unwrap()),
+        Some(FrameSerial::new(1).unwrap()),
+    );
 
     let atlas = context.textures.gen();
     context.active_texture(GL_TEXTURE0);
@@ -97,7 +107,7 @@ fn rendered_fbo_sampling_and_present_clip_reflection_remain_independent() {
     record::tex_image_2d_format(&mut context, 16, 16, &[], TextureFormat::Rgba8Unorm);
     record::tex_parameter(&mut context, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     record::tex_parameter(&mut context, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    let fbo = context.framebuffers.gen();
+    let fbo = context.gen_framebuffer();
     record::bind_framebuffer(&mut context, GL_FRAMEBUFFER, fbo);
     record::framebuffer_texture_2d(
         &mut context,
@@ -157,15 +167,24 @@ fn rendered_fbo_sampling_and_present_clip_reflection_remain_independent() {
     let bytes = executor
         .read_texture(&session.resources, target)
         .expect("read raw present target");
-    // The presentation clip reflection and the rendered-FBO sampler conversion are separate GL→host
-    // boundaries. Chrome's Skia graph relies on both; cancelling the sampler conversion for a presented
-    // destination makes its external scanout frame black.
-    assert_eq!(pixel(&bytes, 8, 8), [255, 0, 0, 255], "top-left RED");
-    assert_eq!(pixel(&bytes, 56, 8), [0, 0, 255, 255], "top-right BLUE");
-    assert_eq!(pixel(&bytes, 8, 56), [0, 255, 0, 255], "bottom-left GREEN");
+    // The rendered-FBO sampler conversion still applies (GL texel v=0 is the FBO's bottom row), so the
+    // composite reproduces the atlas rather than mirroring it.
+    assert_eq!(pixel(&bytes, 8, 8), atlas_pixel(2, 2), "top-left quadrant");
+    assert_eq!(
+        pixel(&bytes, 56, 8),
+        atlas_pixel(13, 2),
+        "top-right quadrant"
+    );
+    assert_eq!(
+        pixel(&bytes, 8, 56),
+        atlas_pixel(2, 13),
+        "bottom-left quadrant"
+    );
     assert_eq!(
         pixel(&bytes, 56, 56),
-        [255, 255, 0, 255],
-        "bottom-right YELLOW"
+        atlas_pixel(13, 13),
+        "bottom-right quadrant"
     );
+    assert_eq!(pixel(&bytes, 8, 8), [0, 255, 0, 255], "top-left GREEN");
+    assert_eq!(pixel(&bytes, 8, 56), [255, 0, 0, 255], "bottom-left RED");
 }

@@ -16,7 +16,7 @@
 //! Asserts each sampled coverage equals its bilinear reference, and that a genuinely sub-pixel position
 //! (unequal weights) differs from every one of the four atlas texels — proving real bilinear positioning,
 //! not a nearest tap. TOLERANCE ±2: hardware bilinear uses finite sub-texel fixed-point weights; ±2 bounds
-//! that plus the unorm store. Skips if no adapter is reachable.
+//! that plus the unorm store.
 
 mod gpu_harness;
 use gpu_harness::{glsl, le_f32, new_session, tex2d, write_png};
@@ -232,10 +232,8 @@ fn bilinear(uv: [f32; 2]) -> u8 {
 
 #[test]
 fn glyph_atlas_bilinear_coverage_matches_the_subpixel_reference() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     // Sub-pixel positions (glyph fractional placements), all inside [0.25,0.75] → no edge clamping.
     let positions = [

@@ -213,10 +213,8 @@ fn sample_layer(exec: &mut WgpuExecutor, k: u32) -> [u8; 4] {
 
 #[test]
 fn sampling_an_array_layer_returns_that_layers_texel() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     for (layer, &want) in LAYERS.iter().enumerate() {
         let got = sample_layer(&mut exec, layer as u32);

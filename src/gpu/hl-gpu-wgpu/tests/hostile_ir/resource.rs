@@ -6,7 +6,7 @@ use super::*;
 
 #[test]
 fn dangling_buffer_in_copy_is_unknown_id() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     hostile(
         &mut g,
         "dangling_buffer_copy",
@@ -30,7 +30,7 @@ fn dangling_buffer_in_copy_is_unknown_id() {
 
 #[test]
 fn dangling_texture_in_copy_is_unknown_id() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     hostile(
         &mut g,
         "dangling_texture_copy",
@@ -59,7 +59,7 @@ fn dangling_texture_in_copy_is_unknown_id() {
 
 #[test]
 fn dangling_pipeline_in_draw_is_unknown_id() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     hostile(
         &mut g,
         "dangling_pipeline_draw",
@@ -94,7 +94,7 @@ fn dangling_pipeline_in_draw_is_unknown_id() {
 
 #[test]
 fn dangling_vertex_buffer_is_unknown_id() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     let mut cmds = vec![Cmd::CreateTexture(
         1,
         tex(4, 4, TextureFormat::Rgba8Unorm, RT),
@@ -132,7 +132,7 @@ fn dangling_vertex_buffer_is_unknown_id() {
 
 #[test]
 fn dangling_pipeline_in_dispatch_is_unknown_id() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     hostile(
         &mut g,
         "dangling_dispatch_pipeline",

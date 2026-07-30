@@ -148,10 +148,8 @@ const M1: [u8; 4] = [50, 200, 90, 255]; // mip-1 texel (distinct from M0)
 
 #[test]
 fn copy_texture_to_buffer_reads_the_named_mip_level() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
     let mut s = new_session(&exec);
 
     let m0_plane: Vec<u8> = M0.iter().cycle().take(16).copied().collect(); // 2×2 of M0
@@ -273,10 +271,8 @@ fn copy_texture_to_buffer_reads_the_named_mip_level() {
 
 #[test]
 fn copy_texture_to_buffer_rejects_out_of_range_mip() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
     let mut s = new_session(&exec);
 
     hl_gpu::runtime::submit(
@@ -333,10 +329,8 @@ const DRAW: [u8; 4] = [200, 100, 50, 40];
 
 #[test]
 fn color_write_mask_leaves_the_masked_channel_untouched() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     // Full mask (0xF): every channel is the drawn colour (±1 for unorm rounding on written channels).
     let full = render(&mut exec, DRAW, CLEAR, 0, 0, 0xF);
@@ -368,10 +362,8 @@ fn color_write_mask_leaves_the_masked_channel_untouched() {
 
 #[test]
 fn cull_and_front_face_are_honored() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     let culled = |p: [u8; 4]| p == CLEAR; // nothing drawn ⇒ still the clear colour
     let drawn = |p: [u8; 4]| near(p, DRAW);

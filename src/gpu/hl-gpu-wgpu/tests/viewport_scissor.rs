@@ -37,10 +37,8 @@ void main() { o = vec4(230.0/255.0, 170.0/255.0, 40.0/255.0, 1.0); }
 
 #[test]
 fn viewport_transforms_and_scissor_clips_to_exact_subrect() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
     let mut s = new_session(&exec);
 
     hl_gpu::runtime::submit(

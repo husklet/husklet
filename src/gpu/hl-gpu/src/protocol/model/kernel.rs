@@ -146,13 +146,40 @@ pub enum Inst {
         wide: bool,
         unsigned: bool,
     },
-    /// Set predicate `d` = (a `cmp` b). `cmp` is a `CMP_*` constant; `unsigned` picks u32 vs s32.
+    /// Set predicate `d` = (a `cmp` b) over INTEGERS. `cmp` is a `CMP_*` constant; `unsigned` picks u32 vs
+    /// s32.
+    ///
+    /// This is integer-only by contract. A float comparison MUST use [`Self::FSetp`] — lowering one onto
+    /// this instruction compares the operands' bit patterns as integers, which agrees with float ordering
+    /// only while both operands are non-negative and INVERTS for any negative value (IEEE-754 magnitude
+    /// ordering runs backwards once the sign bit is set), so `if (x < y)` silently takes the opposite
+    /// branch.
     Setp {
         d: u16,
         a: Op,
         b: Op,
         cmp: u8,
         unsigned: bool,
+    },
+    /// Set predicate `d` = (a `cmp` b) over `f32`, with IEEE-754 NaN semantics. `cmp` is a `CMP_*`
+    /// constant.
+    ///
+    /// `ordered` selects the two families a guest front end has to distinguish, because a source-level
+    /// negation does not map to the negated comparison in the presence of NaN:
+    /// * `ordered == true` (PTX `setp.lt/le/gt/ge/eq/ne.f32`): the result is FALSE if either operand is
+    ///   NaN. Note this makes ordered `CMP_NE` stricter than Rust's `!=`, which is true for NaN.
+    /// * `ordered == false` (PTX `setp.ltu/leu/gtu/geu/equ/neu.f32`): the result is TRUE if either operand
+    ///   is NaN, otherwise the comparison. This is what a compiler emits for `!(x < y)`.
+    ///
+    /// The `setp.num`/`setp.nan` predicate tests (pure NaN queries, no comparison) are deliberately NOT
+    /// expressible: neither family reproduces them, and a front end must reject them rather than pick a
+    /// near-miss.
+    FSetp {
+        d: u16,
+        a: Op,
+        b: Op,
+        cmp: u8,
+        ordered: bool,
     },
     /// Branch to instruction index `target`, optionally guarded by predicate reg (negated if `.1`).
     Bra {
@@ -222,6 +249,17 @@ pub enum Inst {
     },
     /// `bar.sync` — a workgroup execution+memory barrier.
     Bar,
+    /// `membar` / `fence` — a MEMORY barrier with no execution rendezvous: it orders this thread's memory
+    /// operations at `scope` (a `MEM_SCOPE_*` constant) but does not wait for any other thread.
+    ///
+    /// Carried explicitly rather than discarded so the intent survives to the executor. An executor that
+    /// runs a block's threads to completion one at a time (as the CPU interpreter does) has nothing to
+    /// reorder and may treat this as a no-op — but it must NOT be lowered away by a front end, because the
+    /// moment an executor runs threads concurrently the ordering becomes load-bearing and a discarded
+    /// fence is an unfixable silent race. Distinct from [`Self::Bar`], which also rendezvouses.
+    Fence {
+        scope: u8,
+    },
     FAdd {
         d: u16,
         a: Op,
@@ -275,11 +313,48 @@ pub const CMP_LE: u8 = 3;
 pub const CMP_GT: u8 = 4;
 pub const CMP_GE: u8 = 5;
 
-// cvt kinds
+/// [`Inst::Cvt`] conversion kinds. The kind names its source type, its destination type AND — for any
+/// float→int conversion — its ROUNDING MODE, because PTX spells the rounding mode into the opcode
+/// (`cvt.rzi` truncates toward zero, `cvt.rni` rounds to nearest with ties to even) and collapsing the two
+/// onto one conversion silently truncates every round-to-nearest.
+///
+/// Encoding the mode in the kind selector rather than adding a field follows what the rest of this IR
+/// already does (`Setp::cmp`, `Shift::dir`, `BitOp::op`, `AtomGlobal::op` are all opaque `u8` selectors),
+/// and keeps [`Inst::Cvt`]'s shape unchanged so adding a conversion breaks no existing construction.
+///
+/// A consumer MUST reject a kind it does not recognize. It must never fall back to a bit-preserving move:
+/// that is not a conversion but a reinterpret, and it silently hands a kernel an integer's bits as a float
+/// (or the reverse) — which is how `(float)someUnsigned` used to produce garbage.
+// int -> float
 pub const CVT_F32_FROM_S32: u8 = 0;
+// int -> wider int (sign-extending)
 pub const CVT_S64_FROM_S32: u8 = 1;
+/// `cvt.rzi.s32.f32` — float → signed, truncating toward zero.
 pub const CVT_S32_FROM_F32: u8 = 2;
+/// A genuine bit-preserving move between same-width types (`cvt.u32.u32`). NOT a fallback for an
+/// unrecognized pair.
 pub const CVT_IDENTITY: u8 = 3;
+/// `cvt.rn.f32.u32` — UNSIGNED int → float. Distinct from [`CVT_F32_FROM_S32`]: reusing the signed kind
+/// reads any value ≥ 2^31 as negative.
+pub const CVT_F32_FROM_U32: u8 = 4;
+/// `cvt.rzi.u32.f32` — float → unsigned, truncating toward zero.
+pub const CVT_U32_FROM_F32: u8 = 5;
+/// `cvt.rni.s32.f32` — float → signed, round to nearest, ties to even.
+pub const CVT_S32_FROM_F32_RNI: u8 = 6;
+/// `cvt.rni.u32.f32` — float → unsigned, round to nearest, ties to even.
+pub const CVT_U32_FROM_F32_RNI: u8 = 7;
+// `cvt.rn.f32.s64` / `cvt.rn.f32.u64` are NOT expressible; a front end must reject them rather than
+// narrow through a 32-bit kind.
+
+/// Memory-ordering scope for [`Inst::Fence`], mirroring PTX `membar.{cta,gl,sys}`.
+pub mod mem_scope {
+    /// `membar.cta` — order within the thread block / workgroup.
+    pub const CTA: u8 = 0;
+    /// `membar.gl` — order across the whole device.
+    pub const DEVICE: u8 = 1;
+    /// `membar.sys` — order across device and host.
+    pub const SYSTEM: u8 = 2;
+}
 
 // atomic ops. All operate on 32-bit words.
 pub const ATOM_ADD: u8 = 0;

@@ -260,11 +260,8 @@ fn edge_stats(plane: &[u8]) -> (u32, i64) {
 
 #[test]
 fn msaa_resolve_antialiases_the_edge() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        // No adapter (no lavapipe/Vulkan ICD reachable) — skip, mirroring the rest of the suite.
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     // FAIL-BEFORE proof: the op is advertised now (it was NOT before this change — the frozen coverage test
     // `blit_and_resolve_are_advertised_and_run` used to assert `!supports_command(RESOLVE_TEXTURE)`).

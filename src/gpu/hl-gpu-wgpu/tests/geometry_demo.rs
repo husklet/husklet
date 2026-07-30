@@ -20,7 +20,7 @@
 //!   3. `instanced_from_vertex_buffer` — the same grid but per-instance data from a step_mode=Instance
 //!      vertex buffer, to isolate storage-vs-vertex-buffer.
 //!
-//! If NO adapter is reachable (no lavapipe/Vulkan ICD) the tests skip, mirroring the rest of the suite.
+//! A missing adapter fails these tests; it is never skipped.
 
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BufferDesc, ColorAttachment, ColorTargetState,

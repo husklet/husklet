@@ -207,10 +207,8 @@ fn sample_1d(exec: &mut WgpuExecutor, coord: f32) -> [u8; 4] {
 
 #[test]
 fn sampling_a_1d_texel_returns_that_texel() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     for (texel, &want) in TEXELS.iter().enumerate() {
         let coord = (texel as f32 + 0.5) / 2.0; // 0.25 -> texel 0, 0.75 -> texel 1

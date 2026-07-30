@@ -5,8 +5,9 @@ mod native_texture_copy {
 
     use crate::{DeviceConfig, WgpuExecutor};
 
-    fn executor() -> Option<(WgpuExecutor, Session)> {
-        let exec = WgpuExecutor::new(DeviceConfig::default()).ok()?;
+    fn executor() -> (WgpuExecutor, Session) {
+        let exec = WgpuExecutor::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove native texture copies");
         let mut limits = Limits::from_capabilities(exec.capabilities());
         limits.copy_alignment = 1;
         let session = Session::new(
@@ -14,7 +15,7 @@ mod native_texture_copy {
             GlobalLedger::unbounded(),
             Box::new(FakeClock::new(0)),
         );
-        Some((exec, session))
+        (exec, session)
     }
 
     fn texture(format: TextureFormat, width: u32, height: u32, mip_levels: u32) -> TextureDesc {
@@ -160,9 +161,7 @@ mod native_texture_copy {
 
     #[test]
     fn rgba_odd_width_copy_is_one_submit_and_waits_only_when_read() {
-        let Some((mut exec, mut session)) = executor() else {
-            return;
-        };
+        let (mut exec, mut session) = executor();
         let (width, height) = (65, 3);
         let pixels: Vec<u8> = (0u32..width * height * 4)
             .map(|byte| byte.wrapping_mul(17) as u8)
@@ -217,9 +216,7 @@ mod native_texture_copy {
 
     #[test]
     fn bgra_mip_copy_preserves_bytes_and_submission_count_is_height_independent() {
-        let Some((mut exec, mut session)) = executor() else {
-            return;
-        };
+        let (mut exec, mut session) = executor();
         let mip_extent = (5, 17);
         let pixels: Vec<u8> = (0..mip_extent.0 * mip_extent.1 * 4)
             .map(|byte| (byte ^ 0x5A) as u8)
@@ -285,9 +282,7 @@ mod native_texture_copy {
 
     #[test]
     fn unaligned_r8_layout_keeps_exact_fallback() {
-        let Some((mut exec, mut session)) = executor() else {
-            return;
-        };
+        let (mut exec, mut session) = executor();
         let pixels = vec![1, 2, 3, 4, 5, 6];
         seed(
             &mut exec,
@@ -321,9 +316,7 @@ mod native_texture_copy {
 
     #[test]
     fn aligned_rows_copy_directly_and_partial_mip_uses_the_requested_extent() {
-        let Some((mut exec, mut session)) = executor() else {
-            return;
-        };
+        let (mut exec, mut session) = executor();
         let mip_width = 8;
         let mip_height = 6;
         let pixels: Vec<u8> = (0u32..mip_width * mip_height * 4)
@@ -372,9 +365,7 @@ mod native_texture_copy {
 
     #[test]
     fn rejected_layouts_and_empty_copies_do_not_submit_or_mutate() {
-        let Some((mut exec, mut session)) = executor() else {
-            return;
-        };
+        let (mut exec, mut session) = executor();
         let pixels = vec![0x31; 4 * 4 * 4];
         seed(
             &mut exec,
@@ -458,9 +449,7 @@ mod native_texture_copy {
 
     #[test]
     fn multisampled_source_is_rejected_before_submission_or_destination_mutation() {
-        let Some((mut exec, mut session)) = executor() else {
-            return;
-        };
+        let (mut exec, mut session) = executor();
         let mut desc = texture(TextureFormat::Rgba8Unorm, 4, 4, 1);
         desc.sample_count = 4;
         hl_gpu::runtime::submit(&mut session, &mut exec, 0, &[Cmd::CreateTexture(1, desc)])
@@ -591,11 +580,8 @@ void main() {
 
     #[test]
     fn set_index_one_binds_against_its_own_group_layout() {
-        let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-            Ok(e) => e,
-            // No adapter (no lavapipe/Vulkan ICD reachable) — skip, mirroring the suite's other gpu tests.
-            Err(_) => return,
-        };
+        let mut exec = WgpuExecutor::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
 
         let texel: [u8; 4] = [30, 150, 220, 255]; // the group-1 texture's single texel
         let scale: [f32; 4] = [1.0, 1.0, 1.0, 1.0]; // group-0 uniform: identity (passthrough of the texel)

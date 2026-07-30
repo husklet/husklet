@@ -87,10 +87,8 @@ fn draw_const(exec: &mut WgpuExecutor, fmt: TextureFormat) -> Vec<u8> {
 
 #[test]
 fn every_color_format_roundtrips_exact_stored_bytes() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return, // no adapter — skip like the rest of the suite
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     // The three exact 8-bit encodings of C, computed live from the transfer functions.
     let (ru, gu, bu, au) = (unorm8(C[0]), unorm8(C[1]), unorm8(C[2]), unorm8(C[3])); // 191,128,64,255

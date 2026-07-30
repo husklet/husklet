@@ -237,10 +237,8 @@ fn is_green(p: [u8; 4]) -> bool {
 
 #[test]
 fn every_stencil_op_writes_exactly_the_oracle_value() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     // (op, stored, reference) — covering all 8 ops plus the CLAMP/WRAP boundary cases that distinguish
     // INCREMENT_CLAMP/WRAP (at 0xFF) and DECREMENT_CLAMP/WRAP (at 0x00).

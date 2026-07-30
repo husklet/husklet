@@ -23,6 +23,24 @@ use crate::runtime::model::resources::SessionResources;
 /// a pathological grid is rejected — BEFORE any block iterates — with a typed `ResourceLimit`.
 pub(crate) const MAX_DISPATCH_BLOCKS: u64 = 1 << 26;
 
+/// Hard ceiling on the THREADS PER BLOCK (`block_x * block_y * block_z`) of a kernel program — the
+/// companion to [`MAX_DISPATCH_BLOCKS`], which bounds the grid but not the block. The interpreter
+/// materializes one register file and one program counter per thread of a block, so an uncapped block
+/// shape allocates per-thread state proportional to `u32::MAX^3` before running anything.
+///
+/// `1024` is not an arbitrary safety number: it is CUDA's architectural `maxThreadsPerBlock`, so a kernel
+/// above it could not launch on real hardware either, and WebGPU's `maxComputeInvocationsPerWorkgroup` is
+/// the same figure. The largest block any program here declares is 64 threads. A guest front end derives
+/// `block` from guest-supplied PTX, so this is untrusted input reaching an allocation.
+pub(crate) const MAX_BLOCK_THREADS: u64 = 1024;
+
+/// Hard ceiling on a kernel's per-block shared-memory allocation. `shared_bytes` comes from the `.shared`
+/// declarations in guest-supplied PTX and is allocated fresh per block, so an uncapped value asks for up to
+/// 4 GiB per block. `64 KiB` sits above CUDA's 48 KiB standard per-block shared-memory limit (and well
+/// above WebGPU's 16 KiB workgroup-storage limit), so no launchable kernel is affected; every program here
+/// declares `0`.
+pub(crate) const MAX_SHARED_BYTES: u32 = 64 << 10;
+
 /// Execute a compute `Dispatch`. A dispatch with no pipeline/bind group bound is a no-op (a malformed
 /// stream the validation pass already rejected); a SPIR-V (non-kernel) module is recorded but not run.
 pub(crate) fn run_dispatch(
@@ -65,6 +83,18 @@ fn run_kernel(
     match blocks {
         Some(b) if b <= MAX_DISPATCH_BLOCKS => {}
         _ => return Err(GpuError::ResourceLimit("dispatch grid blocks")),
+    }
+    // Same reasoning one level down: the block SHAPE and its shared-memory request both size per-block
+    // allocations and both originate in guest-supplied PTX, so cap them before a single block is entered.
+    let threads = (prog.block[0].max(1) as u64)
+        .checked_mul(prog.block[1].max(1) as u64)
+        .and_then(|v| v.checked_mul(prog.block[2].max(1) as u64));
+    match threads {
+        Some(t) if t <= MAX_BLOCK_THREADS => {}
+        _ => return Err(GpuError::ResourceLimit("kernel block threads")),
+    }
+    if prog.shared_bytes > MAX_SHARED_BYTES {
+        return Err(GpuError::ResourceLimit("kernel shared memory"));
     }
     // Gather the parameter blob (binding 0) and each pointer region (binding r+1 → region r).
     let mut param_blob: Vec<u8> = Vec::new();

@@ -31,8 +31,14 @@ use crate::protocol::model::error::Result;
 
 /// Run one decoded frame through the fixed runtime pipeline: **validate → account → dispatch**. A failure
 /// in an earlier stage short-circuits before any later stage runs (and before the executor is touched),
-/// giving failure atomicity: a malformed or over-budget frame never partially mutates residency or native
-/// state. `negotiate` is a per-connection prelude (call it once at connect); `frame_bytes` is the encoded
+/// giving failure atomicity: a malformed or over-budget frame rejected at `validate` or `account` never
+/// reaches the executor at all, and one the executor NACKs is rolled back.
+///
+/// The guarantee's exact scope — a rejected batch leaves the ID LIFECYCLE and the RESIDENCY LEDGER as they
+/// were, while resource CONTENTS are not transactional — is stated with its reasoning in
+/// [`service::dispatch::dispatch`]. Read it before relying on atomicity for anything a batch WROTE.
+///
+/// `negotiate` is a per-connection prelude (call it once at connect); `frame_bytes` is the encoded
 /// size of the frame the batch decoded from (checked against the negotiated frame ceiling).
 pub fn submit(
     session: &mut Session,

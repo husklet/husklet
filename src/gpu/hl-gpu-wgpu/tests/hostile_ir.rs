@@ -41,17 +41,18 @@ use hl_gpu_wgpu::{DeviceConfig, WgpuExecutor};
 // Shared device + harness (a test binary is one process; share one executor across the cases).
 // -------------------------------------------------------------------------------------------------
 
-static EXEC: OnceLock<Option<Mutex<WgpuExecutor>>> = OnceLock::new();
+static EXEC: OnceLock<Mutex<WgpuExecutor>> = OnceLock::new();
 
-/// Lock the shared executor, or `None` if no adapter is reachable (skip, mirroring the rest of the suite).
-fn exec() -> Option<MutexGuard<'static, WgpuExecutor>> {
+/// Lock the shared executor. A missing adapter is a hard failure, not a skip.
+fn exec() -> MutexGuard<'static, WgpuExecutor> {
     EXEC.get_or_init(|| {
-        WgpuExecutor::new(DeviceConfig::default())
-            .ok()
-            .map(Mutex::new)
+        Mutex::new(
+            WgpuExecutor::new(DeviceConfig::default())
+                .expect("a GPU adapter is required to prove the wgpu executor"),
+        )
     })
-    .as_ref()
-    .map(|m| m.lock().unwrap_or_else(|e| e.into_inner()))
+    .lock()
+    .unwrap_or_else(|e| e.into_inner())
 }
 
 fn session(g: &WgpuExecutor) -> Session {

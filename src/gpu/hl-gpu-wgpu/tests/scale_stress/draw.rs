@@ -29,10 +29,7 @@ fn t1_color(i: usize) -> [u8; 4] {
 
 #[test]
 fn many_draws_one_frame() {
-    let mut exec = match try_exec() {
-        Some(e) => e,
-        None => return,
-    };
+    let mut exec = try_exec();
     let mut s = new_session(&exec);
 
     // Build the shared vertex buffer: NUM_DRAWS quads × 4 verts × (vec2 pos + vec4 color) = 24 B/vert.

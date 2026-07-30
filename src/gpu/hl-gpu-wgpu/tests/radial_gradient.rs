@@ -186,10 +186,8 @@ fn near2(a: [u8; 4], b: [u8; 4]) -> bool {
 
 #[test]
 fn radial_gradient_matches_the_analytic_ramp() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     let img = render(&mut exec);
     write_png("radial_gradient", W, H, &img);

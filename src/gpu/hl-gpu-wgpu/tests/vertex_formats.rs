@@ -166,10 +166,8 @@ fn build(
 
 #[test]
 fn every_supported_vertex_format_builds_a_pipeline() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     // (kind, comps, normalized) for every arm of `vertex_format`.
     let mut supported: Vec<(u32, u32, bool)> = Vec::new();
@@ -202,10 +200,8 @@ fn every_supported_vertex_format_builds_a_pipeline() {
 
 #[test]
 fn webgpu_invalid_vertex_formats_are_honest_errors() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
     // WebGPU has no 1-/3-component 8-/16-bit format, and no f16×1/×3 — each must be a typed error, not a
     // silent widening. (The shader class is immaterial; `vertex_format` rejects before the pipeline builds.)
     let invalid = [

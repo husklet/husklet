@@ -84,11 +84,8 @@ fn le_f32(vals: &[f32]) -> Vec<u8> {
 
 #[test]
 fn instanced_draw_reads_per_instance_geometry_from_a_vertex_storage_buffer() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        // No adapter (no lavapipe/Vulkan ICD reachable) — skip, mirroring the suite's other gpu tests.
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     // Two instances at DISTINCT NDC positions: quad 0 in the lower-left, quad 1 in the upper-right, each a
     // half-extent of 0.25 (a ~4px block on the 16px target). If the storage read collapses to zeros, both

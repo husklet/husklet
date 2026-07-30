@@ -6,7 +6,7 @@ use super::*;
 
 #[test]
 fn set_stencil_reference_without_stencil_is_harmless_noop() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     // A plain color pipeline (no depth/stencil) drawn in a color-only pass, with a SetStencilReference in
     // the stream: the reference has no stencil to test against, so it is a defined no-op — the draw still
     // runs and paints the target white. Proves a stray stencil-state op neither errors spuriously nor panics.

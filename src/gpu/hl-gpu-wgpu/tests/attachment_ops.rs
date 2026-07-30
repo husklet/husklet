@@ -139,10 +139,8 @@ fn preamble() -> Vec<Cmd> {
 
 #[test]
 fn store_true_keeps_drawn_pixels_and_store_false_does_not_panic() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     // store = true: the drawn red survives to the readback (Store honored as Store).
     let mut s = session(&exec);
@@ -210,10 +208,8 @@ fn store_true_keeps_drawn_pixels_and_store_false_does_not_panic() {
 
 #[test]
 fn load_op_load_and_dontcare_preserve_prior_content() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     // For both Load and DontCare (which the executor maps to Load): pass 1 clears the whole target RED and
     // stores; pass 2 loads and draws GREEN clipped by scissor to the LEFT half. The right half must retain

@@ -28,10 +28,7 @@ fn t4_fs() -> String {
 
 #[test]
 fn deep_multipass() {
-    let mut exec = match try_exec() {
-        Some(e) => e,
-        None => return,
-    };
+    let mut exec = try_exec();
     let mut s = new_session(&exec);
 
     let usage = texture_usage::RENDER_TARGET

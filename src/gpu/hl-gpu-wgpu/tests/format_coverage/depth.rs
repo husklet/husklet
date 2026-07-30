@@ -134,10 +134,8 @@ fn depth_run(exec: &mut WgpuExecutor, ds_fmt: TextureFormat, cmp: u32) -> [u8; 4
 
 #[test]
 fn depth_formats_nearest_occludes_regardless_of_draw_order() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     for &ds_fmt in &[
         TextureFormat::Depth32Float,

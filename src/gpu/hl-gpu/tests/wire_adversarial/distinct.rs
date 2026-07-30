@@ -163,3 +163,29 @@ fn the_op_inventory_covers_every_negotiated_command() {
         "every advertised encoder op needs a round-trip inventory entry"
     );
 }
+
+/// Headroom guard for the OTHER advertised bitset. `command_bits` is 64 slots keyed by etag number and
+/// `Capabilities::command_bits` / `supports_command` both silently drop a tag at or beyond 64 — the same
+/// silent-capability-lie shape the format bitset had. 25 etags are used, so there is room; this fails the
+/// moment an etag is added that the advertisement cannot name.
+#[test]
+fn every_negotiated_command_is_representable_in_the_bitset() {
+    let advertised = hl_gpu::protocol::model::capability::ALL_COMMANDS;
+    let bits = hl_gpu::Capabilities::command_bits(advertised);
+    assert_eq!(
+        bits.count_ones() as usize,
+        advertised.len(),
+        "every advertised etag must occupy its own bit — none silently dropped"
+    );
+    let caps = hl_gpu::Capabilities::full("headroom");
+    for tag in advertised {
+        assert!(
+            caps.supports_command(*tag),
+            "etag {tag} is not representable in the advertised command bitset"
+        );
+    }
+    assert!(
+        advertised.iter().all(|t| *t < 64),
+        "an etag at or beyond 64 cannot be advertised at all"
+    );
+}

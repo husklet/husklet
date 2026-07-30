@@ -156,10 +156,7 @@ fn assert_mat2_coverage(label: &str, px: &[u8], mask: &[bool]) {
 
 #[test]
 fn es_mat2_std140_ubo_transforms_quad_to_exact_pixels() {
-    let mut guard = match exec() {
-        Some(g) => g,
-        None => return,
-    };
+    let mut guard = exec();
     let exec = &mut *guard;
 
     // Case 1 — 90° CCW rotation about origin: (x,y) → (-y,x). Column-major mat2*v = col0*v.x + col1*v.y, so

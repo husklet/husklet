@@ -76,7 +76,7 @@ pub fn validate(limits: &Limits, frame_bytes: usize, cmds: &[Cmd]) -> Result<()>
                 if d.residency_bytes()? > caps.max_buffer_bytes {
                     return Err(GpuError::ResourceLimit("texture bytes"));
                 }
-                let bit = 1u32.checked_shl(d.format.to_u32()).unwrap_or(0);
+                let bit = 1u64.checked_shl(d.format.to_u32()).unwrap_or(0);
                 if caps.texture_formats & bit == 0 {
                     return Err(GpuError::ResourceLimit("texture format"));
                 }

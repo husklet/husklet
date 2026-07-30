@@ -8,19 +8,11 @@ use super::runners::{diff, run_cpu, run_wgpu};
 
 #[test]
 fn differential_cpu_oracle_vs_wgpu() {
-    // 23 generators × 10 seeds each — every generator (incl. the new write-mask + face-cull ones) gets 10
-    // seeds.
-    const N: u64 = 230;
+    // 24 generators × 10 seeds each — every generator gets 10 seeds.
+    const N: u64 = 240;
 
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => {
-            eprintln!(
-                "differential: no wgpu adapter reachable (no lavapipe/Vulkan ICD) — skipping"
-            );
-            return;
-        }
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     let mut agreed = 0u32;
     let mut per_category: std::collections::BTreeMap<&'static str, (u32, u32)> = Default::default(); // (agreed, total)
@@ -87,6 +79,8 @@ fn differential_cpu_oracle_vs_wgpu() {
         "draw_flat / draw_gradient / draw_depth / draw_blend — fixed-function raster (±1/±2)",
         "blit_nearest (EXACT) / blit_linear (±3 bilinear)",
         "compute_iota — neutral kernel-IR on both backends (EXACT)",
+        "compute_fcmp — ordered f32 compare on NEGATIVE operands via Inst::FSetp; a signed-integer compare \
+         of the float bit patterns inverts here (EXACT)",
         "clear_srgb / draw_srgb — sRGB gamma-encode on write, oracle now matches the ROP (±2)",
         "stencil_equal / stencil_greater — two-pass mark-then-test, oracle now models stencil (EXACT)",
         "draw_mask_rgb / draw_mask_alpha — per-channel write_mask, oracle now honors ColorTargetState.write_mask \

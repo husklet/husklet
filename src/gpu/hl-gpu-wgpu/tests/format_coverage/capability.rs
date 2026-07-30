@@ -3,10 +3,8 @@ use hl_gpu::protocol::model::capability::BC_FORMATS;
 
 #[test]
 fn executor_advertises_exactly_the_formats_this_suite_proves() {
-    let exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
     let advertised = exec.capabilities().texture_formats;
 
     // The suite round-trips the uncompressed formats here and every advertised BC format in

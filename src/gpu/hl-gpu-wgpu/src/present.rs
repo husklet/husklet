@@ -58,7 +58,9 @@ pub fn present(
         // was abandoned and keeping it would leak one callback record per canceled frame. Retire it only
         // when the batch COMMITS: a batch that later fails is rolled back whole, and it must not take the
         // previous good frame's completion with it.
-        executor.presentation_retirements.push((sdesc.token.get(), serial.get()));
+        executor
+            .presentation_retirements
+            .push((sdesc.token.get(), serial.get()));
     }
     Ok(Presentation {
         surface: SurfaceId(surface_id),

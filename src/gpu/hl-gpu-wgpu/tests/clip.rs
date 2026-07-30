@@ -12,7 +12,7 @@
 //!     `uv = fragcoord/res`. The reference is the analytic left/right split at `x < W/2`.
 //!
 //! Both references are computed here from the clip geometry, not snapshotted. Exact integer colors, so the
-//! tolerance is ±1 (last-ULP unorm only). Skips if no adapter is reachable.
+//! tolerance is ±1 (last-ULP unorm only).
 
 mod gpu_harness;
 use gpu_harness::{glsl, le_f32, new_session, px, write_png};
@@ -340,10 +340,8 @@ fn render_alpha_mask(exec: &mut WgpuExecutor) -> Vec<u8> {
 
 #[test]
 fn scissor_rect_clips_the_draw_to_its_rectangle() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     let img = render_scissor(&mut exec);
     write_png("clip_scissor", W, H, &img);
@@ -378,10 +376,8 @@ fn scissor_rect_clips_the_draw_to_its_rectangle() {
 
 #[test]
 fn alpha_mask_discard_clips_to_the_covered_region() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     let img = render_alpha_mask(&mut exec);
     write_png("clip_alpha_mask", W, H, &img);

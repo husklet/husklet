@@ -2,10 +2,7 @@ use super::*;
 
 #[test]
 fn es_combined_sampler_fragment_samples_exact_texel() {
-    let mut guard = match exec() {
-        Some(g) => g,
-        None => return,
-    };
+    let mut guard = exec();
     let exec = &mut *guard;
     // A GLSL-ES `uniform sampler2D` sampled at center -- exercises the combined->separate split END TO END:
     // the split lands the texture at binding 1 and the sampler at binding 2 (glsl_es scheme 1+2k / 2+2k).
@@ -157,9 +154,7 @@ void main() { o = texture(uTex, vec2(0.5, 0.5)); }
 
 #[test]
 fn inactive_external_sampler_branch_preserves_the_live_binding_and_texel() {
-    let mut guard = exec().expect(
-        "inactive sampler branch is an exact-pixel GPU test and requires a reachable WGPU adapter",
-    );
+    let mut guard = exec();
     let executor = &mut *guard;
     let texel = [19, 83, 211, 255];
     let fragment = r#"#version 300 es

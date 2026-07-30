@@ -105,16 +105,16 @@ fn session(exec: &WgpuExecutor) -> Session {
     )
 }
 
-fn new_exec() -> Option<WgpuExecutor> {
-    // No adapter (no lavapipe / Vulkan ICD reachable) — skip, mirroring the suite's other GPU tests.
-    WgpuExecutor::new(DeviceConfig::default()).ok()
+fn new_exec() -> WgpuExecutor {
+    WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor")
 }
 
 /// N identical `CreateShader`s share ONE compiled module backing; executor residency stays at one shader's
 /// worth, not N.
 #[test]
 fn identical_shaders_share_one_backing() {
-    let Some(mut exec) = new_exec() else { return };
+    let mut exec = new_exec();
     let mut s = session(&exec);
 
     const N: u32 = 200;
@@ -153,7 +153,7 @@ fn identical_shaders_share_one_backing() {
 /// pipeline's worth, not N.
 #[test]
 fn identical_pipelines_share_one_backing() {
-    let Some(mut exec) = new_exec() else { return };
+    let mut exec = new_exec();
     let mut s = session(&exec);
 
     const N: u32 = 200;
@@ -189,7 +189,7 @@ fn identical_pipelines_share_one_backing() {
 
 #[test]
 fn destroyed_pipeline_drops_local_backing_and_reuses_device_artifact() {
-    let Some(mut exec) = new_exec() else { return };
+    let mut exec = new_exec();
     let mut s = session(&exec);
     exec.enable_profile();
     hl_gpu::runtime::submit(
@@ -231,7 +231,7 @@ fn destroyed_pipeline_drops_local_backing_and_reuses_device_artifact() {
 
 #[test]
 fn failed_alias_batch_restores_pipeline_cache_accounting() {
-    let Some(mut exec) = new_exec() else { return };
+    let mut exec = new_exec();
     let mut s = session(&exec);
     let commands = [
         Cmd::CreateShader {
@@ -274,7 +274,7 @@ fn failed_alias_batch_restores_pipeline_cache_accounting() {
 #[test]
 fn device_pipeline_cache_is_bounded_without_local_released_residency() {
     const CAPACITY: u32 = 128;
-    let Some(mut exec) = new_exec() else { return };
+    let mut exec = new_exec();
     let mut s = session(&exec);
     exec.enable_profile();
     hl_gpu::runtime::submit(
@@ -354,7 +354,7 @@ fn hl_gpu_wgpu_pipeline_backing_bytes() -> u64 {
 /// output differs.
 #[test]
 fn distinct_sources_are_not_deduped() {
-    let Some(mut exec) = new_exec() else { return };
+    let mut exec = new_exec();
     let mut s = session(&exec);
 
     // Same VS, two DIFFERENT fragment sources → 1 VS backing + 2 FS backings = 3 distinct modules.
@@ -400,7 +400,7 @@ fn distinct_sources_are_not_deduped() {
 /// the shared backing survives until its LAST alias is gone.
 #[test]
 fn alias_survives_destroy_of_other_alias() {
-    let Some(mut exec) = new_exec() else { return };
+    let mut exec = new_exec();
     let mut s = session(&exec);
 
     let fs = glsl(glsl_stage::FRAGMENT, "fmain", FS_RED);
@@ -458,7 +458,7 @@ fn alias_survives_destroy_of_other_alias() {
 /// produces the exact expected pixels — dedup does not corrupt output.
 #[test]
 fn deduped_pipeline_renders_exact_pixels() {
-    let Some(mut exec) = new_exec() else { return };
+    let mut exec = new_exec();
     let mut s = session(&exec);
 
     let vs = glsl(glsl_stage::VERTEX, "vmain", VS);

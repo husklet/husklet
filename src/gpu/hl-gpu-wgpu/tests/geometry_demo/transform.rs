@@ -147,10 +147,8 @@ fn run_mvp_case(exec: &mut WgpuExecutor, mvp: [f32; 16], color: [u8; 4]) -> Vec<
 
 #[test]
 fn transform_quad_lands_at_known_rect() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     // Each case: an affine → the LOCAL [0,1]² quad's NDC rect → the exact expected framebuffer coverage.
     // identity      → NDC x[0,1] y[0,1]      = top-right quadrant

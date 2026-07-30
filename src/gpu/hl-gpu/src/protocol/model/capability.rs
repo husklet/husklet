@@ -71,13 +71,18 @@ impl Capabilities {
 }
 
 /// Build a supported-format bitset (bit = `TextureFormat::to_u32()`).
+///
+/// 64 slots wide. A discriminant at or beyond that is dropped rather than aliasing onto another format's
+/// bit — it would be a silent capability lie, so
+/// `every_declared_texture_format_is_representable_in_the_bitset` guards the invariant that no declared
+/// format is ever out of range.
 impl TextureFormat {
-    pub fn bits(formats: &[TextureFormat]) -> u32 {
-        let mut b = 0u32;
+    pub fn bits(formats: &[TextureFormat]) -> u64 {
+        let mut b = 0u64;
         for f in formats {
             let n = f.to_u32();
-            if n < 32 {
-                b |= 1u32 << n;
+            if n < 64 {
+                b |= 1u64 << n;
             }
         }
         b
@@ -170,8 +175,11 @@ pub struct Capabilities {
     pub command_bits: u64,
     /// Bitset of accepted shader payload kinds ([`shader_payload`]).
     pub shader_payloads: u32,
-    /// Bitset of supported texture formats (bit = `TextureFormat::to_u32()`).
-    pub texture_formats: u32,
+    /// Bitset of supported texture formats (bit = `TextureFormat::to_u32()`). 64 bits wide: 25 of the
+    /// slots are already used, and the format that overflowed a narrower bitset would have been silently
+    /// un-advertisable. Only the low 32 bits reach the wire unless a high bit is actually set — see
+    /// [`Capabilities::encode`](crate::protocol::codec::encode).
+    pub texture_formats: u64,
     /// Largest single submitted frame (encoded IR byte-stream) the backend will accept.
     pub max_frame_bytes: u64,
     /// Largest single buffer/texture allocation the backend will accept.
@@ -198,8 +206,8 @@ pub struct FeatureRequest {
     pub shader_payloads: u32,
     /// Required encoder-command bits (use [`command_bits`]).
     pub command_bits: u64,
-    /// Required texture-format bits (use [`format_bits`]).
-    pub texture_formats: u32,
+    /// Required texture-format bits (use [`TextureFormat::bits`]).
+    pub texture_formats: u64,
     pub binding_arrays: u32,
     pub non_uniform_binding_arrays: u32,
     pub gpu_features: u32,
@@ -228,7 +236,7 @@ impl Capabilities {
     /// True if the backend can materialize texture `format`.
     pub fn supports_format(&self, format: TextureFormat) -> bool {
         let n = format.to_u32();
-        n < 32 && self.texture_formats & (1u32 << n) != 0
+        n < 64 && self.texture_formats & (1u64 << n) != 0
     }
 
     /// Negotiate a guest's [`FeatureRequest`] against this descriptor. Returns a typed, clean error the

@@ -2,10 +2,7 @@ use super::*;
 
 #[test]
 fn es_vertexid_plus_const_fragment_renders_exact_pixel() {
-    let mut guard = match exec() {
-        Some(g) => g,
-        None => return,
-    };
+    let mut guard = exec();
     let exec = &mut *guard;
     // 0.2,0.4,0.6 -> 51,102,153 (round(x*255)).
     let fs = r#"#version 300 es
@@ -26,10 +23,7 @@ void main() { o = vec4(0.2, 0.4, 0.6, 1.0); }
 
 #[test]
 fn es_math_builtins_fragment_renders_exact_pixel() {
-    let mut guard = match exec() {
-        Some(g) => g,
-        None => return,
-    };
+    let mut guard = exec();
     let exec = &mut *guard;
     // clamp(mix(0,1,0.5)) = 0.5 -> 128 ; smoothstep(0,1,0.5) = 0.5 -> 128 ; abs(-0.25) = 0.25 -> 64.
     let fs = r#"#version 300 es

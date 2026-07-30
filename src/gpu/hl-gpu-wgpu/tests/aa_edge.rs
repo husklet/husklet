@@ -203,10 +203,8 @@ fn nearest_level_err(v: u8) -> i16 {
 
 #[test]
 fn msaa_edge_coverage_is_quantized_to_the_four_sample_levels() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return, // no adapter — skip, like the rest of the suite
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     let msaa = render(&mut exec, 4);
     write_png("aa_edge_msaa", W, H, &msaa);

@@ -145,16 +145,14 @@ const B: [u8; 4] = [30, 200, 40, 255];
 const C: [u8; 4] = [40, 30, 200, 255];
 const D: [u8; 4] = [10, 220, 120, 200];
 
-fn exec_or_skip() -> Option<WgpuExecutor> {
-    // No adapter (no lavapipe/Vulkan ICD reachable) — skip, mirroring the rest of the gpu suite.
-    WgpuExecutor::new(DeviceConfig::default()).ok()
+fn exec_or_skip() -> WgpuExecutor {
+    WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor")
 }
 
 #[test]
 fn rgba_to_bgra_copy_converts_channels_exact() {
-    let Some(mut exec) = exec_or_skip() else {
-        return;
-    };
+    let mut exec = exec_or_skip();
 
     // Rgba8Unorm source: tight bytes are [r,g,b,a] per texel.
     let src: Vec<u8> = [A, B, C, D].concat();
@@ -197,9 +195,7 @@ fn rgba_to_bgra_copy_converts_channels_exact() {
 
 #[test]
 fn cross_format_subregion_copy_converts_and_leaves_rest_untouched() {
-    let Some(mut exec) = exec_or_skip() else {
-        return;
-    };
+    let mut exec = exec_or_skip();
 
     // 2x2 Rgba8Unorm source; copy ONLY its bottom-right 1x1 texel (D) into the destination's top-left, so
     // the origin+extent sub-region path is exercised. The destination is pre-cleared to opaque red so every
@@ -293,9 +289,7 @@ fn cross_format_subregion_copy_converts_and_leaves_rest_untouched() {
 
 #[test]
 fn same_format_copy_is_exact_raw() {
-    let Some(mut exec) = exec_or_skip() else {
-        return;
-    };
+    let mut exec = exec_or_skip();
 
     // Same format → copy-compatible → the fast raw byte copy. The destination must be BYTE-IDENTICAL to the
     // source (no conversion path taken).
@@ -317,9 +311,7 @@ fn same_format_copy_is_exact_raw() {
 
 #[test]
 fn srgb_variant_copy_stays_on_the_raw_fast_path() {
-    let Some(mut exec) = exec_or_skip() else {
-        return;
-    };
+    let mut exec = exec_or_skip();
 
     // Rgba8Unorm → Rgba8UnormSrgb: same base format ignoring the sRGB suffix, so wgpu treats it as
     // COPY-COMPATIBLE. The executor keeps the raw byte copy (no transfer-function conversion) — the stored

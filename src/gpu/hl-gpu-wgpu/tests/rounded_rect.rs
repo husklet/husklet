@@ -14,7 +14,7 @@
 //! The DECISIVE rounding check does not rely on the guard band: the four extreme CORNER pixels (which a
 //! SHARP rectangle of the same bounds WOULD fill) must be the untouched clear — proving the corners are
 //! actually rounded away — while the four straight-edge midpoints must be filled. A sharp-rect executor
-//! would fail the corner assertions. Exact color, ±1 tolerance. Skips if no adapter is reachable.
+//! would fail the corner assertions. Exact color, ±1 tolerance.
 
 mod gpu_harness;
 use gpu_harness::{glsl, le_f32, new_session, px, write_png};
@@ -187,10 +187,8 @@ fn render(exec: &mut WgpuExecutor) -> Vec<u8> {
 
 #[test]
 fn rounded_rect_sdf_rounds_the_corners_at_the_exact_radius() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     let img = render(&mut exec);
     write_png("rounded_rect", W, H, &img);

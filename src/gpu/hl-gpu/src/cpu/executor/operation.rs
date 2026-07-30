@@ -135,7 +135,7 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
             first_vertex,
             first_instance,
         } => {
-            validate_draw(res, st, |layout, slot| {
+            validate_draw(res, st, *instance_count, |layout, slot| {
                 let (buffer, offset) =
                     st.vertex_buffers
                         .get(&slot)
@@ -154,9 +154,10 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
         Enc::DrawIndexed {
             index_count,
             first_index,
+            instance_count,
             ..
         } => {
-            validate_draw(res, st, |_layout, slot| {
+            validate_draw(res, st, *instance_count, |_layout, slot| {
                 st.vertex_buffers
                     .get(&slot)
                     .map(|_| ())

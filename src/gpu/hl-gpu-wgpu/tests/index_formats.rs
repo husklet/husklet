@@ -155,10 +155,8 @@ fn run(exec: &mut WgpuExecutor, fmt: IndexFormat, idx: Vec<u8>) -> Vec<u8> {
 
 #[test]
 fn u16_and_u32_indices_produce_identical_pixels() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     let u16_bytes: Vec<u8> = INDICES.iter().flat_map(|v| v.to_le_bytes()).collect();
     let u32_bytes: Vec<u8> = INDICES

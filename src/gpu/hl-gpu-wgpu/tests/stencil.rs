@@ -283,11 +283,8 @@ fn count_color(px: &[u8], want: [u8; 4]) -> usize {
 
 #[test]
 fn stencil_test_gates_the_draw_to_the_marked_rect() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        // No adapter (no lavapipe/Vulkan ICD reachable) — skip, mirroring the suite's other gpu tests.
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     // ---- ENABLED: only the marked rect is green; everything else is the pass-B blue clear. ----
     let enabled = run(&mut exec, true);

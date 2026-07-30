@@ -44,6 +44,25 @@ pub fn dispatch(
         }
     }
 
+    // SCOPE OF THE TRANSACTION — the contract, stated exactly:
+    //
+    //   A rejected batch leaves the ID LIFECYCLE and the RESIDENCY LEDGER precisely as they were.
+    //   Resource CONTENTS are NOT transactional.
+    //
+    // The table journal reverts inserts and removes, so a NACKed frame's creates disappear and its destroys
+    // come back — that is what lets a connection retry. It cannot revert a write made THROUGH a handle that
+    // survives the rollback: if a batch clears a texture and a LATER command in the same batch fails, the
+    // clear stays. Verified, not assumed: a `[Submit{clear T}, CreateBuffer(live id)]` batch NACKs on the
+    // duplicate id and leaves T cleared.
+    //
+    // This is the honest intersection rather than a gap to close. A copy-on-write snapshot of every mutated
+    // resource per batch is the only way to make contents transactional, and it is unaffordable at
+    // browser frame rates; more decisively, the wgpu executor cannot roll back GPU memory at all, so a
+    // promise of content atomicity would be one the real executor could never keep. Executors narrow the
+    // window instead by validating a whole command buffer before mutating anything (see the CPU executor's
+    // `EncoderState::validate`), which is why a single `Submit` is content-atomic even though a
+    // multi-command batch is not.
+    //
     // Execute inside an all-tables transaction so the batch's resource-lifecycle mutations are atomic:
     // an executor that fails PART-WAY through a batch (a Submit that fails device validation, an unknown
     // resource ref, a shader the backend can't compile — i.e. a NACK) would otherwise leave the id tables

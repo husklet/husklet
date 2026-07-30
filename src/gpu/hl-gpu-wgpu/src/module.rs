@@ -215,9 +215,8 @@ mod tests {
 
     #[test]
     fn sequential_executors_reuse_one_device_compilation() {
-        let Ok(device) = Device::new(DeviceConfig::default()) else {
-            return;
-        };
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
         let words =
             glsl("#version 460\nlayout(location=0) out vec4 color;\nvoid main(){color=vec4(1.0);}");
 
@@ -261,9 +260,8 @@ mod tests {
 
     #[test]
     fn rejected_duplicate_id_does_not_touch_device_residency() {
-        let Ok(device) = Device::new(DeviceConfig::default()) else {
-            return;
-        };
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
         let cached =
             glsl("#version 460\nlayout(location=0) out vec4 color;\nvoid main(){color=vec4(1.0);}");
         let other =
@@ -313,9 +311,8 @@ mod tests {
 
     #[test]
     fn failed_batch_does_not_publish_compilations() {
-        let Ok(device) = Device::new(DeviceConfig::default()) else {
-            return;
-        };
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
         let words =
             glsl("#version 460\nlayout(location=0) out vec4 color;\nvoid main(){color=vec4(0.5);}");
         let before = device.modules.stats();

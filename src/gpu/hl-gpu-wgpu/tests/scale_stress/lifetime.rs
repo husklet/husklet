@@ -7,10 +7,7 @@ const T6_BUF_BYTES: u64 = 256 << 10; // 256 KiB each
 
 #[test]
 fn no_resource_leak() {
-    let mut exec = match try_exec() {
-        Some(e) => e,
-        None => return,
-    };
+    let mut exec = try_exec();
     let mut s = new_session(&exec);
 
     let baseline_live = s.resources.live_count();

@@ -845,8 +845,7 @@ impl WgpuExecutor {
                     PipelineBindingKind::UniformBuffer
                         | PipelineBindingKind::StorageBuffer
                         | PipelineBindingKind::StorageTexture
-                )
-            {
+                ) {
                 std::num::NonZeroU32::new(declared.count)
             } else {
                 None

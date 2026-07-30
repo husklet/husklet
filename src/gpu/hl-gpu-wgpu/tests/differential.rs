@@ -57,7 +57,7 @@
 //!     `analytic_msaa_resolve` in the test body; these are counted + reported separately from the
 //!     oracle-compared programs.
 //!
-//! If no wgpu adapter is reachable (no lavapipe/Vulkan ICD) the whole test skips, like the rest of the suite.
+//! A missing wgpu adapter FAILS this test; it is never skipped.
 
 use std::collections::BTreeSet;
 
@@ -73,7 +73,8 @@ use hl_gpu::protocol::model::enums::{
     Topology,
 };
 use hl_gpu::protocol::model::kernel::{
-    gty, Inst, KernelProgram, Op, Param, CMP_GE, KERNEL_MAGIC, SR_CTAID_X, SR_NTID_X, SR_TID_X,
+    gty, Inst, KernelProgram, Op, Param, CMP_GE, CMP_LT, CVT_F32_FROM_U32, KERNEL_MAGIC,
+    SR_CTAID_X, SR_NTID_X, SR_TID_X,
 };
 use hl_gpu::{
     BufferId, Cmd, CommandBuffer, CpuExecutor, Enc, FakeClock, GlobalLedger, GpuExecutor, Limits,
@@ -335,6 +336,7 @@ const GENERATORS: &[fn(u64) -> Prog] = &[
     gen_cull_cw_front,
     gen_cull_rev_ccw_front,
     gen_compute_iota,
+    gen_compute_fcmp,
     gen_clear_srgb,
     gen_draw_srgb,
     gen_stencil_equal,

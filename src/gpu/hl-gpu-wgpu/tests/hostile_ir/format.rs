@@ -6,7 +6,7 @@ use super::*;
 
 #[test]
 fn render_pipeline_attachment_format_mismatch_is_invalid() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     let vertex = "#version 460\nvoid main(){ gl_Position = vec4(0.0,0.0,0.0,1.0); }\n";
     let fragment = "#version 460\nlayout(location=0) out vec4 c; void main(){ c = vec4(1.0); }\n";
     hostile(
@@ -78,7 +78,7 @@ fn render_pipeline_attachment_format_mismatch_is_invalid() {
 
 #[test]
 fn copy_texture_to_texture_between_incompatible_formats_converts_not_rejects() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     // R8 (1 byte/texel) → Rgba8 (4 bytes/texel): DIFFERENT texel layouts. GL permits this as a CONVERTING
     // copy (the red channel expands to (R,0,0,1)); the executor now routes a format mismatch through a
     // converting blit instead of rejecting it (previously `Invalid("… incompatible formats")`). Prove it
@@ -122,7 +122,7 @@ fn copy_texture_to_texture_between_incompatible_formats_converts_not_rejects() {
 
 #[test]
 fn resolve_non_multisampled_source_is_invalid() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     hostile(
         &mut g,
         "resolve_non_msaa",
@@ -152,7 +152,7 @@ fn resolve_non_multisampled_source_is_invalid() {
 
 #[test]
 fn resolve_format_mismatch_is_invalid() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     // Multisampled src, single-sample dst, but different formats.
     let msaa = TextureDesc {
         sample_count: 4,

@@ -14,7 +14,7 @@
 //!
 //! TOLERANCE ±2 per channel: the rasterizer evaluates barycentric weights in fixed point (a fraction of a
 //! ULP away from the real `f`) and the unorm store rounds to nearest; ±2 bounds those two effects and
-//! nothing larger — the gradient is otherwise an exact integer ramp. Skips if no adapter is reachable.
+//! nothing larger — the gradient is otherwise an exact integer ramp.
 
 mod gpu_harness;
 use gpu_harness::{glsl, le_f32, new_session, px, write_png};
@@ -180,10 +180,8 @@ fn near2(a: [u8; 4], b: [u8; 4]) -> bool {
 
 #[test]
 fn linear_gradient_matches_the_analytic_lerp() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     let img = render(&mut exec);
     write_png("linear_gradient", W, H, &img);

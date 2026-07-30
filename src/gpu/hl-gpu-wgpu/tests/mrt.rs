@@ -55,10 +55,8 @@ fn f4(c: [u8; 4]) -> [f32; 4] {
 
 #[test]
 fn two_color_attachments_each_hold_their_own_output() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return, // no adapter — skip like the rest of the suite
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
     let mut s = new_session(&exec);
 
     let mut ubo = f4(A).to_vec();

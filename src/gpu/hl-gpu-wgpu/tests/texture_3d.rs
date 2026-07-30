@@ -200,10 +200,8 @@ fn sample_slice(exec: &mut WgpuExecutor, w: f32) -> [u8; 4] {
 
 #[test]
 fn sampling_a_depth_slice_returns_that_slices_texel() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     for (slice, &want) in SLICES.iter().enumerate() {
         let w = (slice as f32 + 0.5) / 3.0;

@@ -8,10 +8,7 @@ const T5_TEMP_BYTES: u64 = 256 << 10; // 256 KiB transient buffer churned every 
 
 #[test]
 fn steady_state_no_blowup() {
-    let mut exec = match try_exec() {
-        Some(e) => e,
-        None => return,
-    };
+    let mut exec = try_exec();
     let mut s = new_session(&exec);
 
     // A resident vertex buffer of T5_DRAWS quads tiling the target (reused every frame — no per-frame create

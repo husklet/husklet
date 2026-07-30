@@ -230,10 +230,8 @@ fn sample_dir(exec: &mut WgpuExecutor, dir: [f32; 3]) -> [u8; 4] {
 
 #[test]
 fn sampling_a_direction_returns_that_faces_texel() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     for (face, &want) in FACES.iter().enumerate() {
         let dir = DIRS[face];

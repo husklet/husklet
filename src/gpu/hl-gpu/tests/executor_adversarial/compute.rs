@@ -63,3 +63,58 @@ fn normal_dispatch_grid_over_a_real_kernel_still_computes() {
         "the kernel stored 1.0f under a normal grid"
     );
 }
+
+/// The grid ceiling's siblings: the per-block THREAD count and the shared-memory size. Both come from the
+/// compiled `KernelProgram` (`block` / `shared_bytes`), which a guest front end derives from guest-supplied
+/// PTX, and neither was capped — so a maximal block dimension pushes billions of thread records and a
+/// maximal `.shared` declaration asks for gigabytes, both per block and both before any work is useful.
+#[test]
+fn an_over_cap_block_shape_is_rejected_before_any_thread_runs() {
+    let mut program = store_one_program();
+    program.block = [u32::MAX, u32::MAX, u32::MAX];
+    let mut exec = CpuExecutor::new();
+    exec.define_kernel(1, program);
+    let mut res = SessionResources::new();
+    exec.execute(&mut res, &store_one_setup())
+        .expect("setup must run cleanly");
+    let err = exec
+        .execute(
+            &mut res,
+            &[submit(vec![
+                Enc::BeginComputePass,
+                Enc::SetPipeline(1),
+                Enc::SetBindGroup { index: 0, group: 1 },
+                Enc::Dispatch { x: 1, y: 1, z: 1 },
+                Enc::EndComputePass,
+            ])],
+        )
+        .expect_err("an over-cap block shape must error, not allocate per-thread state");
+    assert_eq!(err, GpuError::ResourceLimit("kernel block threads"));
+    let mut out = [0u8; 4];
+    exec.read_buffer(&res, BufferId(2), 0, &mut out).unwrap();
+    assert_eq!(out, [0u8; 4], "rejected dispatch left no partial effect");
+}
+
+#[test]
+fn an_over_cap_shared_memory_request_is_rejected() {
+    let mut program = store_one_program();
+    program.shared_bytes = u32::MAX;
+    let mut exec = CpuExecutor::new();
+    exec.define_kernel(1, program);
+    let mut res = SessionResources::new();
+    exec.execute(&mut res, &store_one_setup())
+        .expect("setup must run cleanly");
+    let err = exec
+        .execute(
+            &mut res,
+            &[submit(vec![
+                Enc::BeginComputePass,
+                Enc::SetPipeline(1),
+                Enc::SetBindGroup { index: 0, group: 1 },
+                Enc::Dispatch { x: 1, y: 1, z: 1 },
+                Enc::EndComputePass,
+            ])],
+        )
+        .expect_err("an over-cap shared-memory request must error, not allocate");
+    assert_eq!(err, GpuError::ResourceLimit("kernel shared memory"));
+}

@@ -211,10 +211,8 @@ fn near2(a: [u8; 4], b: [u8; 4]) -> bool {
 
 #[test]
 fn porter_duff_src_over_multiply_and_screen_match_their_identities() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     let src = [0.6f32, 0.5, 0.8, 0.7];
     let dst = [0.4f32, 0.9, 0.3, 0.5];

@@ -295,10 +295,8 @@ fn near(a: [u8; 4], b: [u8; 4]) -> bool {
 
 #[test]
 fn src_alpha_over_composites_exactly_and_disabled_overwrites() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return, // no reachable adapter — skip, like the rest of the suite
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     // Center pixel is inside the foreground quad (the overlap); a corner is background-only.
     let (cx, cy) = (W / 2, H / 2);

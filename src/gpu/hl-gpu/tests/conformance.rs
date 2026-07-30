@@ -15,7 +15,9 @@ use hl_gpu::protocol::model::enums::{
     buffer_usage, texture_usage, LoadOp, TextureDim, TextureFormat,
 };
 use hl_gpu::protocol::model::kernel::{
-    gty, Inst, KernelProgram, Op, Param, CMP_GE, KERNEL_MAGIC, SR_CTAID_X, SR_NTID_X, SR_TID_X,
+    gty, Inst, KernelProgram, Op, Param, CMP_EQ, CMP_GE, CMP_GT, CMP_LE, CMP_LT, CMP_NE,
+    CVT_F32_FROM_S32, CVT_F32_FROM_U32, CVT_S32_FROM_F32, CVT_S32_FROM_F32_RNI, CVT_U32_FROM_F32,
+    CVT_U32_FROM_F32_RNI, KERNEL_MAGIC, SR_CTAID_X, SR_NTID_X, SR_TID_X,
 };
 use hl_gpu::{
     BufferId, Cmd, CommandBuffer, Enc, FakeClock, GlobalLedger, GpuExecutor, Limits, Session,
@@ -79,5 +81,7 @@ fn kernel_words() -> Vec<u32> {
 mod buffer;
 #[path = "conformance/compute.rs"]
 mod compute;
+#[path = "conformance/kernel_arith.rs"]
+mod kernel_arith;
 #[path = "conformance/texture.rs"]
 mod texture;

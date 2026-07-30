@@ -12,7 +12,7 @@
 //! Method: clear the target to a known `dst` (the LoadOp::Clear sets all four channels exactly), then draw
 //! one full-screen triangle whose fragment emits a known `src`, with the blend state under test. The target
 //! is linear `Rgba8Unorm`, so the hardware blend runs on the normalized values with no gamma and the
-//! composite is an exact unorm8 (±2 absorbs last-ULP rounding). Skips if no adapter is reachable.
+//! composite is an exact unorm8 (±2 absorbs last-ULP rounding).
 
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BlendState, BufferDesc, ColorAttachment,
@@ -284,10 +284,8 @@ fn near(a: [u8; 4], b: [u8; 4]) -> bool {
 
 #[test]
 fn every_blend_factor_and_op_composites_exactly() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return, // no reachable adapter — skip, like the rest of the suite
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     // Values chosen so the factors spread the result across the byte range (no two factors collapse to the
     // same pixel for these inputs), making a wrong mapping observable.

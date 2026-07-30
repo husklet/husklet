@@ -620,9 +620,8 @@ mod device_tests {
 
     #[test]
     fn one_device_creates_resource_isolated_executors() {
-        let Ok(device) = Device::new(DeviceConfig::default()) else {
-            return;
-        };
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
         let mut first = device.executor();
         let mut second = device.executor();
 
@@ -688,9 +687,8 @@ mod device_tests {
 
     #[test]
     fn aligned_write_run_flushes_once_and_copy_observes_latest_bytes() {
-        let Ok(device) = Device::new(DeviceConfig::default()) else {
-            return;
-        };
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
         let mut executor = device.executor();
         let mut resources = SessionResources::default();
         let descriptor = BufferDesc {
@@ -758,9 +756,8 @@ mod device_tests {
 
     #[test]
     fn ordered_native_buffer_copies_share_one_submission() {
-        let Ok(device) = Device::new(DeviceConfig::default()) else {
-            return;
-        };
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
         let mut executor = device.executor();
         let mut resources = SessionResources::default();
         let descriptor = BufferDesc {
@@ -828,9 +825,8 @@ mod device_tests {
 
     #[test]
     fn ordered_native_texture_copies_share_one_submission() {
-        let Ok(device) = Device::new(DeviceConfig::default()) else {
-            return;
-        };
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
         let mut executor = device.executor();
         let mut resources = SessionResources::default();
         let texture = TextureDesc {
@@ -915,9 +911,8 @@ mod device_tests {
 
     #[test]
     fn aligned_buffer_to_texture_upload_is_native_and_exact() {
-        let Ok(device) = Device::new(DeviceConfig::default()) else {
-            return;
-        };
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
         let mut executor = device.executor();
         let mut resources = SessionResources::default();
         executor
@@ -984,9 +979,8 @@ mod device_tests {
 
     #[test]
     fn unaligned_texture_pitch_repacks_on_gpu_and_ignores_padding() {
-        let Ok(device) = Device::new(DeviceConfig::default()) else {
-            return;
-        };
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
         let mut executor = device.executor();
         let mut resources = SessionResources::default();
         let source = vec![
@@ -1057,9 +1051,8 @@ mod device_tests {
 
     #[test]
     fn staged_upload_and_texture_copy_share_exact_order_and_one_submission() {
-        let Ok(device) = Device::new(DeviceConfig::default()) else {
-            return;
-        };
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
         let mut executor = device.executor();
         let mut resources = SessionResources::default();
         let source = vec![
@@ -1144,9 +1137,8 @@ mod device_tests {
 
     #[test]
     fn staged_multilayer_upload_uses_rows_per_image_without_waiting() {
-        let Ok(device) = Device::new(DeviceConfig::default()) else {
-            return;
-        };
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
         let mut executor = device.executor();
         let mut resources = SessionResources::default();
         executor
@@ -1211,9 +1203,8 @@ mod device_tests {
 
     #[test]
     fn non_four_byte_texture_rows_keep_exact_cpu_fallback() {
-        let Ok(device) = Device::new(DeviceConfig::default()) else {
-            return;
-        };
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
         let mut executor = device.executor();
         let mut resources = SessionResources::default();
         executor
@@ -1279,9 +1270,8 @@ mod device_tests {
 
     #[test]
     fn unaligned_buffer_to_texture_offset_keeps_exact_fallback() {
-        let Ok(device) = Device::new(DeviceConfig::default()) else {
-            return;
-        };
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
         let mut executor = device.executor();
         let mut resources = SessionResources::default();
         executor
@@ -1347,9 +1337,8 @@ mod device_tests {
 
     #[test]
     fn native_buffer_to_texture_rejects_source_overhang_before_submission() {
-        let Ok(device) = Device::new(DeviceConfig::default()) else {
-            return;
-        };
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
         let mut executor = device.executor();
         let mut resources = SessionResources::default();
         executor
@@ -1409,9 +1398,8 @@ mod device_tests {
 
     #[test]
     fn three_ordered_render_passes_share_one_native_submission() {
-        let Ok(device) = Device::new(DeviceConfig::default()) else {
-            return;
-        };
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
         let mut executor = device.executor();
         let mut resources = SessionResources::default();
         let texture = TextureDesc {

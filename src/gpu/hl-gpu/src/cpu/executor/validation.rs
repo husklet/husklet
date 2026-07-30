@@ -87,6 +87,7 @@ pub(super) fn check_vertex_range(
 pub(super) fn validate_draw<F>(
     res: &SessionResources,
     st: &EncoderState,
+    instance_count: u32,
     mut per_layout: F,
 ) -> Result<()>
 where
@@ -94,6 +95,9 @@ where
 {
     if !st.in_render_pass {
         return Err(GpuError::Invalid("draw outside a render pass"));
+    }
+    if instance_count > crate::cpu::service::raster::MAX_DRAW_INSTANCES {
+        return Err(GpuError::ResourceLimit("draw instances"));
     }
     let pid = st
         .pipeline

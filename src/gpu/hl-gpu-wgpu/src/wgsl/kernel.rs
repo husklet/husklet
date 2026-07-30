@@ -59,6 +59,7 @@ impl<'a> Analysis<'a> {
                 | Inst::LdGlobal { d, .. }
                 | Inst::LdShared { d, .. }
                 | Inst::Setp { d, .. }
+                | Inst::FSetp { d, .. }
                 | Inst::Shift { d, .. }
                 | Inst::BitOp { d, .. }
                 | Inst::FAdd { d, .. }
@@ -75,6 +76,7 @@ impl<'a> Analysis<'a> {
                 | Inst::StShared { .. }
                 | Inst::Bra { .. }
                 | Inst::Bar
+                | Inst::Fence { .. }
                 | Inst::Ret
                 | Inst::Nop => {}
             }

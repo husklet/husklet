@@ -6,7 +6,7 @@ use super::*;
 
 #[test]
 fn bind_group_index_out_of_range_is_invalid() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     let mut cmds = vec![Cmd::CreateTexture(
         1,
         tex(4, 4, TextureFormat::Rgba8Unorm, RT),
@@ -55,7 +55,7 @@ fn bind_group_index_out_of_range_is_invalid() {
 
 #[test]
 fn vertex_buffer_offset_beyond_buffer_is_oob() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     let mut cmds = vec![Cmd::CreateTexture(
         1,
         tex(4, 4, TextureFormat::Rgba8Unorm, RT),
@@ -97,7 +97,7 @@ fn vertex_buffer_offset_beyond_buffer_is_oob() {
 
 #[test]
 fn draw_range_overflow_is_invalid() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     let mut cmds = vec![Cmd::CreateTexture(
         1,
         tex(4, 4, TextureFormat::Rgba8Unorm, RT),
@@ -131,7 +131,7 @@ fn draw_range_overflow_is_invalid() {
 
 #[test]
 fn draw_vertex_count_beyond_bound_buffer_is_invalid() {
-    let Some(mut g) = exec() else { return };
+    let mut g = exec();
     // A pipeline that reads a per-vertex attribute, a tiny (24-byte) vertex buffer, and a draw of 100000
     // vertices — wgpu rejects the overrun at pass-end; the validation-scope net makes it a typed error.
     let vs = "#version 460\nlayout(location=0) in vec2 p; void main(){ gl_Position = vec4(p,0.0,1.0); }\n";

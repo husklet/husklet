@@ -132,11 +132,8 @@ fn px(plane: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
 
 #[test]
 fn scaling_blit_upscales_exact_pixels() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        // No adapter (no lavapipe/Vulkan ICD reachable) — skip, mirroring the suite's other gpu tests.
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     // ============================ NEAREST: 2x2 → 4x4, exact 2x2 blocks ============================
     // Four distinct source texels (row-major): (0,0)=A (1,0)=B (0,1)=C (1,1)=D.

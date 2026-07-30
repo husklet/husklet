@@ -164,10 +164,8 @@ fn quantize(value: f32) -> u8 {
 
 #[test]
 fn source1_factors_use_the_second_fragment_output() {
-    let mut executor = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(executor) => executor,
-        Err(_) => return,
-    };
+    let mut executor = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     let cases = [
         (

@@ -6,7 +6,8 @@ use super::memory::{atomic_rmw, ptr_int_add, read_scalar, write_scalar};
 use crate::protocol::model::error::{GpuError, Result};
 use crate::protocol::model::kernel::{
     gty, Inst, KernelProgram, Op, BIT_AND, BIT_OR, CMP_EQ, CMP_GT, CMP_LE, CMP_LT, CMP_NE,
-    CVT_F32_FROM_S32, CVT_S32_FROM_F32, CVT_S64_FROM_S32, SHIFT_LEFT,
+    CVT_F32_FROM_S32, CVT_F32_FROM_U32, CVT_IDENTITY, CVT_S32_FROM_F32, CVT_S32_FROM_F32_RNI,
+    CVT_S64_FROM_S32, CVT_U32_FROM_F32, CVT_U32_FROM_F32_RNI, SHIFT_LEFT,
 };
 
 /// A runtime value in a register: an integer (also holding f32 bits when moved through integer ops), an
@@ -189,6 +190,38 @@ pub(super) fn run_until(
                 };
                 regs[*d as usize] = Val::Pred(r);
             }
+            Inst::FSetp {
+                d,
+                a,
+                b,
+                cmp,
+                ordered,
+            } => {
+                let (fa, fb) = (eval(regs, a).as_f32(), eval(regs, b).as_f32());
+                // Rust's float comparisons are already the ORDERED family (false whenever an operand is
+                // NaN) with one exception: `!=` is true for NaN, so ordered CMP_NE needs the explicit
+                // NaN guard. The unordered family is the ordered result OR either operand being NaN.
+                let unordered_operand = fa.is_nan() || fb.is_nan();
+                let strict = match *cmp {
+                    CMP_EQ => fa == fb,
+                    CMP_NE => !unordered_operand && fa != fb,
+                    CMP_LT => fa < fb,
+                    CMP_LE => fa <= fb,
+                    CMP_GT => fa > fb,
+                    _ => fa >= fb,
+                };
+                regs[*d as usize] = Val::Pred(if *ordered {
+                    strict
+                } else {
+                    unordered_operand || strict
+                });
+            }
+            Inst::Fence { .. } => {
+                // This interpreter runs each thread of a block to completion between rendezvous points, so
+                // there is no reordering for a memory fence to prevent — it is correctly a no-op HERE. It is
+                // matched explicitly (never folded into a `Nop`) so an executor that runs threads
+                // concurrently is forced to confront it.
+            }
             Inst::Bra { target, pred } => {
                 let take = match pred {
                     None => true,
@@ -258,11 +291,26 @@ pub(super) fn run_until(
             }
             Inst::Cvt { d, s, kind } => {
                 let v = eval(regs, s);
+                // `as` on a float→int cast saturates at the destination's range in Rust, which is what PTX
+                // specifies for an unsaturated float→int `cvt` too, so the clamping needs no extra guard.
                 regs[*d as usize] = match *kind {
                     CVT_F32_FROM_S32 => Val::F(v.as_u64() as i32 as f32),
+                    CVT_F32_FROM_U32 => Val::F(v.as_u64() as u32 as f32),
                     CVT_S64_FROM_S32 => Val::I(v.as_u64() as i32 as i64 as u64),
                     CVT_S32_FROM_F32 => Val::I(v.as_f32() as i32 as u32 as u64),
-                    _ => v,
+                    CVT_U32_FROM_F32 => Val::I(v.as_f32() as u32 as u64),
+                    CVT_S32_FROM_F32_RNI => {
+                        Val::I(v.as_f32().round_ties_even() as i32 as u32 as u64)
+                    }
+                    CVT_U32_FROM_F32_RNI => Val::I(v.as_f32().round_ties_even() as u32 as u64),
+                    CVT_IDENTITY => v,
+                    // An unrecognized kind is a front-end/executor mismatch. Reinterpreting the bits (the
+                    // old fallback) would silently hand the kernel an integer's bits as a float.
+                    other => {
+                        return Err(GpuError::kernel(format!(
+                            "kernel: unsupported cvt kind {other}"
+                        )))
+                    }
                 };
             }
             Inst::Shift {

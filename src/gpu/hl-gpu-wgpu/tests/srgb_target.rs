@@ -305,10 +305,8 @@ fn sample_stored(exec: &mut WgpuExecutor, src_fmt: TextureFormat, stored: [u8; 4
 
 #[test]
 fn srgb_target_gamma_encodes_on_write_and_decodes_on_sample() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return, // no adapter — skip like the rest of the suite
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     // ================= CASE 1: gamma-on-WRITE (linear 0.5 → sRGB8 188, not 128) =================
     let srgb = draw_const(&mut exec, TextureFormat::Rgba8Srgb);

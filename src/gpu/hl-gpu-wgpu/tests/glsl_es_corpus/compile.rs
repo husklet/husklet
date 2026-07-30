@@ -3,13 +3,7 @@ use super::*;
 
 #[test]
 fn angle_glsl_es_corpus_reaches_valid_modules() {
-    let mut guard = match exec() {
-        Some(g) => g,
-        None => {
-            eprintln!("glsl_es_corpus: no wgpu adapter -- skipping (headless without lavapipe)");
-            return;
-        }
-    };
+    let mut guard = exec();
     let exec = &mut *guard;
 
     let mut passed = 0usize;

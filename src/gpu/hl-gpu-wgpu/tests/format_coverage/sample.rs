@@ -142,10 +142,8 @@ fn sample_stored(exec: &mut WgpuExecutor, src_fmt: TextureFormat, stored: &[u8])
 
 #[test]
 fn bgra_swizzles_and_srgb_decodes_on_sample() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     // A Bgra8Unorm texel stored as B=64,G=128,R=191,A=255 must SAMPLE as linear R=191,G=128,B=64,A=255.
     let got = sample_stored(&mut exec, TextureFormat::Bgra8Unorm, &[64, 128, 191, 255]);
@@ -179,10 +177,8 @@ fn bgra_swizzles_and_srgb_decodes_on_sample() {
 
 #[test]
 fn coverage_formats_sample_missing_channels_with_gl_compatible_defaults() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     // Chrome/Skia glyph atlases commonly use one- or two-channel normalized textures. Their shader sees
     // the stored channels plus WebGPU/OpenGL's defined defaults: absent color channels are zero and absent

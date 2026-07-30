@@ -36,10 +36,8 @@ fn tex(w: u32, h: u32, sample_count: u32, usage: u32) -> TextureDesc {
 
 #[test]
 fn reading_back_a_multisampled_texture_is_unsupported_not_a_panic() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return, // no adapter — skip
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
     let mut s = new_session(&exec);
 
     // A 4× MSAA color target (RENDER_TARGET only — exactly what Zed's wgpu path creates).

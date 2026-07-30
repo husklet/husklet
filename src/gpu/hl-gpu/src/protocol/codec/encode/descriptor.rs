@@ -14,13 +14,31 @@ impl Capabilities {
         e.u64(self.max_buffer_bytes);
         e.u64(self.command_bits);
         e.u32(self.shader_payloads);
-        e.u32(self.texture_formats);
+        e.u32(self.texture_formats as u32);
         e.u32(self.binding_arrays);
         e.u32(self.non_uniform_binding_arrays);
         if self.wire_version >= 11 {
             e.u32(self.gpu_features);
         }
         e.u32(self.present_bits());
+        // `texture_formats` is 64 bits wide in the model; its HIGH half is an optional trailing word,
+        // emitted only when a format at or above bit 32 is actually advertised.
+        //
+        // Deliberately gated on PRESENCE, not on `wire_version`. A version gate would need a
+        // `WIRE_VERSION` bump, and because `Capabilities::negotiate` demands exact version equality, a bump
+        // makes every already-shipped guest driver artifact fail negotiation the moment the host updates —
+        // paying the full compatibility cost today for a slot no format occupies yet. Presence-gating keeps
+        // the byte stream IDENTICAL while only the low 32 slots are used, so a pinned older guest is
+        // unaffected, and produces a clean handshake rejection (the frame carries a word it cannot account
+        // for) exactly when the host advertises a format that guest could not name anyway.
+        //
+        // The `frame` wrapper supplies the body length, which is what makes an optional tail decodable at
+        // all. Any FUTURE optional tail must be appended after this one, and the next `WIRE_VERSION` bump
+        // taken for another reason should fold this into the versioned shape.
+        let high = (self.texture_formats >> 32) as u32;
+        if high != 0 {
+            e.u32(high);
+        }
     }
 
     /// Serialize to a standalone handshake frame (u32 length + body).

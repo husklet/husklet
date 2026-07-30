@@ -196,10 +196,8 @@ fn tap(exec: &mut WgpuExecutor, filter: Filter, u: f32) -> [u8; 4] {
 
 #[test]
 fn nearest_taps_exact_texels_and_linear_interpolates_midpoint() {
-    let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
 
     let near_left = tap(&mut exec, Filter::Nearest, 0.25);
     let near_right = tap(&mut exec, Filter::Nearest, 0.75);

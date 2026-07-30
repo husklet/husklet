@@ -312,3 +312,70 @@ fn an_indexed_draw_with_a_maximal_index_and_stride_is_out_of_bounds_not_an_overf
         .unwrap_err();
     assert_eq!(err, GpuError::OutOfBounds);
 }
+
+// ---------------------------------------------------------------------------------------------------
+// the instance count is bounded
+// ---------------------------------------------------------------------------------------------------
+
+/// `instance_count` is only bounded when some vertex layout is per-instance; otherwise the rasterizer
+/// repeats the whole draw that many times. A maximal count means ~4 billion full-framebuffer
+/// rasterizations — a CPU-time denial of service on the host service, with no memory growth to trip any
+/// residency ceiling. It must be rejected before the first pass, the way an over-cap dispatch grid is.
+#[test]
+fn a_maximal_instance_count_is_rejected_before_rasterizing() {
+    let (mut exec, mut res) = primed(&[
+        spirv_module(),
+        Cmd::CreateTexture(
+            1,
+            tex(
+                4,
+                4,
+                TextureFormat::Rgba8Unorm,
+                texture_usage::RENDER_TARGET,
+            ),
+        ),
+        Cmd::CreateBuffer(1, buf(28 * 3, buffer_usage::VERTEX | buffer_usage::COPY_DST)),
+        Cmd::WriteBuffer {
+            id: 1,
+            offset: 0,
+            data: covering_triangle(),
+        },
+        depth_pipeline(1, 0, None),
+    ]);
+
+    let err = exec
+        .execute(
+            &mut res,
+            &[submit(vec![
+                Enc::BeginRenderPass {
+                    color: vec![ColorAttachment {
+                        texture: 1,
+                        load: LoadOp::Load,
+                        clear: [0.0; 4],
+                        store: true,
+                    }],
+                    depth: None,
+                },
+                Enc::SetPipeline(1),
+                Enc::SetVertexBuffer {
+                    slot: 0,
+                    buffer: 1,
+                    offset: 0,
+                },
+                Enc::Draw {
+                    vertex_count: 3,
+                    instance_count: u32::MAX,
+                    first_vertex: 0,
+                    first_instance: 0,
+                },
+                Enc::EndRenderPass,
+            ])],
+        )
+        .expect_err("a maximal instance count must error, not rasterize 4 billion times");
+    assert_eq!(err, GpuError::ResourceLimit("draw instances"));
+
+    // And the attachment is untouched: the rejection happened in the pre-execution validation pass.
+    let mut px = vec![0u8; 4 * 4 * 4];
+    exec.read_texture(&res, TextureId(1), &mut px).unwrap();
+    assert_eq!(px, vec![0u8; 4 * 4 * 4]);
+}

@@ -26,10 +26,7 @@ fn t2_fs(i: usize) -> String {
 
 #[test]
 fn many_pipelines() {
-    let mut exec = match try_exec() {
-        Some(e) => e,
-        None => return,
-    };
+    let mut exec = try_exec();
     let mut s = new_session(&exec);
 
     // Resident: a tiny target (id 1) + the shared VS (shader id 1). FS ids are 2.. , pipeline ids 1.. .
