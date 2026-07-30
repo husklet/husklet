@@ -177,7 +177,7 @@ fn every_negotiated_command_is_representable_in_the_bitset() {
         advertised.len(),
         "every advertised etag must occupy its own bit — none silently dropped"
     );
-    let caps = hl_gpu::Capabilities::full("headroom");
+    let caps = hl_gpu::Capabilities::permissive_fixture("headroom");
     for tag in advertised {
         assert!(
             caps.supports_command(*tag),

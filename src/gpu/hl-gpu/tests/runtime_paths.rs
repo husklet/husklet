@@ -371,7 +371,7 @@ fn dispatch_routes_draw_and_compute_work_to_the_executor() {
 
 #[test]
 fn negotiate_accepts_a_compatible_request() {
-    let caps = Capabilities::full("backend");
+    let caps = Capabilities::permissive_fixture("backend");
     // A subset request: a lower/equal-or-matching wire, a subset of shader payloads/commands/formats.
     let req = FeatureRequest {
         wire_version: caps.wire_version,
@@ -407,7 +407,7 @@ fn negotiate_accepts_a_compatible_request() {
 
 #[test]
 fn negotiate_rejects_each_incompatible_axis() {
-    let caps = Capabilities::full("backend");
+    let caps = Capabilities::permissive_fixture("backend");
     let base = FeatureRequest {
         wire_version: caps.wire_version,
         shader_payloads: 0,

@@ -67,7 +67,7 @@ fn perf_transport_submit_and_readback_latency() {
     let listener = UnixListener::bind(&sock.0).unwrap();
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let caps = Capabilities::full("host");
+        let caps = Capabilities::permissive_fixture("host");
         let mut host = RuntimeHost::new();
         hl_gpu::serve_connection_with_handler(&stream, &caps, &mut host).unwrap();
     });

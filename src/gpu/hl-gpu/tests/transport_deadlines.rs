@@ -42,7 +42,7 @@ fn config() -> TransportConfig {
 
 fn handshake(stream: &UnixStream) {
     hl_gpu::transport::adapter::unix::Connection::new(stream)
-        .write_handshake(&Capabilities::full("test"))
+        .write_handshake(&Capabilities::permissive_fixture("test"))
         .unwrap();
 }
 

@@ -1,6 +1,10 @@
 impl Capabilities {
     /// Decode a handshake descriptor produced by [`Capabilities::encode`](super::encode).
-    pub fn decode(d: &mut Decoder) -> Result<Capabilities> {
+    ///
+    /// Crate-private on purpose: the trailing high format half is PRESENCE-gated on `remaining()`, which is
+    /// only exact inside a frame. [`Capabilities::from_handshake`] is the sole entry point, so appending a
+    /// future field can never read into the next message's bytes.
+    pub(crate) fn decode(d: &mut Decoder) -> Result<Capabilities> {
         let wire_version = d.u32()?;
         let name = d.str()?;
         let unified_memory = d.bool()?;

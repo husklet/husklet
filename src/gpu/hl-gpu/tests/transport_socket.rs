@@ -155,7 +155,7 @@ fn drain_handshake(stream: &UnixStream) {
 /// Serve exactly one connection with a fresh runtime host, returning the serve-loop result.
 fn serve_one(listener: &UnixListener) -> std::io::Result<()> {
     let (stream, _) = listener.accept().expect("accept");
-    let caps = Capabilities::full("host");
+    let caps = Capabilities::permissive_fixture("host");
     let mut host = RuntimeHost::new();
     serve_connection_with_handler(&stream, &caps, &mut host)
 }

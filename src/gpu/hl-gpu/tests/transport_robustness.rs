@@ -89,7 +89,7 @@ fn spawn_host(sock: &TempSock) -> (thread::JoinHandle<()>, mpsc::Receiver<Vec<Cm
     let (batch_tx, batch_rx) = mpsc::channel();
     let handle = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let caps = Capabilities::full("host");
+        let caps = Capabilities::permissive_fixture("host");
         let mut host = TestHost {
             buffers: HashMap::new(),
             batch_tx,
@@ -204,7 +204,7 @@ fn an_over_cap_frame_is_drained_and_nacked_without_closing_the_connection() {
     let listener = UnixListener::bind(&sock.0).unwrap();
     let host = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let caps = Capabilities::full("host");
+        let caps = Capabilities::permissive_fixture("host");
         let mut h = TestHost {
             buffers: HashMap::new(),
             batch_tx: mpsc::channel().0,

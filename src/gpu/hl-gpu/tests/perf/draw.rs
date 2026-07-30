@@ -95,7 +95,7 @@ fn perf_draw_frame_cpu_stages() {
     let cmds = draw_frame();
     let commands = cmds.len();
     let wire = hl_gpu::Encoder::stream(&cmds);
-    let limits = Limits::from_capabilities(Capabilities::full("host"));
+    let limits = Limits::from_capabilities(Capabilities::permissive_fixture("host"));
 
     for _ in 0..3 {
         let e = hl_gpu::Encoder::stream(&cmds);

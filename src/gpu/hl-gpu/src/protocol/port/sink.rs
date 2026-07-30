@@ -94,9 +94,10 @@ impl RecordingSink {
         }
     }
 
-    /// A recording sink advertising the full current IR surface (see [`Capabilities::full`]).
+    /// A recording sink advertising the permissive test fixture
+    /// (see [`Capabilities::permissive_fixture`] for what it does and does not include).
     pub fn with_full_caps() -> Self {
-        Self::new(Capabilities::full("recording-sink"))
+        Self::new(Capabilities::permissive_fixture("recording-sink"))
     }
 
     /// Total commands recorded across all submitted batches.

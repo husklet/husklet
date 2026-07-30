@@ -16,7 +16,7 @@ mod tests {
 
     #[test]
     fn handshake_roundtrips_through_protocol_codec() {
-        let caps = Capabilities::full("transport-host");
+        let caps = Capabilities::permissive_fixture("transport-host");
         let bytes = caps.to_handshake();
         assert_eq!(Capabilities::from_handshake(&bytes).unwrap(), caps);
     }

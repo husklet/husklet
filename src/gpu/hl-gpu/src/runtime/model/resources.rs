@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::protocol::model::command::Cmd;
 use crate::protocol::model::descriptor::{BindResource, SurfaceDesc, TextureDesc};
-use crate::protocol::model::enums::TextureDim;
+use crate::protocol::model::enums::{TextureDim, TextureFormat};
 use crate::protocol::model::error::{GpuError, Result};
 use crate::protocol::model::id::{
     BindGroupId, BufferId, FenceId, PipelineId, ResourceTable, SamplerId, ShaderId, SurfaceId,
@@ -361,9 +361,14 @@ impl TextureDesc {
             ));
         }
         // Depth/stencil formats report `bytes_per_texel() == None` (the software backend can't clear-fill
-        // them) but for footprint accounting they occupy a real 4-byte-per-texel target; charge that instead
-        // of rejecting a valid depth render target.
-        let texel = d.format.bytes_per_texel().unwrap_or(4) as u64;
+        // them) but for footprint accounting they occupy a real target; charge it instead of rejecting a
+        // valid depth render target. `Depth24PlusStencil8` is materialized by the CPU executor as an
+        // 8-byte-per-texel depth+stencil plane (`cpu::executor::resource`), so charging the 4-byte default
+        // undercounted it by 2x; every other such format is a 4-byte plane.
+        let texel = match d.format {
+            TextureFormat::Depth24PlusStencil8 => 8,
+            format => format.bytes_per_texel().unwrap_or(4) as u64,
+        };
         let mut total = 0u64;
         let mut w = d.width as u64;
         let mut h = d.height as u64;

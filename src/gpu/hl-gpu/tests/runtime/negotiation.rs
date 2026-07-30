@@ -4,7 +4,7 @@ use super::*;
 /// executor, charges residency, and stamps the fence timeline.
 #[test]
 fn negotiate_then_submit_good_batch_executes_and_accounts() {
-    let caps = Capabilities::full("fake");
+    let caps = Capabilities::permissive_fixture("fake");
     let mut exec = FakeExecutor::new(caps.clone());
     let mut s = session(
         Limits::from_capabilities(caps.clone()),
@@ -88,7 +88,7 @@ fn negotiate_then_submit_good_batch_executes_and_accounts() {
 /// Negotiation rejects an incompatible guest before any command flows.
 #[test]
 fn negotiate_rejects_incompatible_wire_version() {
-    let caps = Capabilities::full("fake");
+    let caps = Capabilities::permissive_fixture("fake");
     let exec = FakeExecutor::new(caps.clone());
     let mut s = session(
         Limits::from_capabilities(caps.clone()),

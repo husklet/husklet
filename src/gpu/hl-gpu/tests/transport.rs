@@ -89,7 +89,7 @@ fn remote_sink_submits_a_batch_a_server_decodes_identically() {
     let (tx, rx) = mpsc::channel();
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let caps = Capabilities::full("host");
+        let caps = Capabilities::permissive_fixture("host");
         serve_connection(&stream, &caps, |header, decoded: &[Cmd]| {
             tx.send((*header, decoded.to_vec())).unwrap();
             true // ACK_OK
@@ -142,7 +142,7 @@ fn remote_sink_and_recording_sink_agree_at_the_command_boundary() {
     let (tx, rx) = mpsc::channel();
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let caps = Capabilities::full("host");
+        let caps = Capabilities::permissive_fixture("host");
         serve_connection(&stream, &caps, move |_h, decoded: &[Cmd]| {
             tx.send(decoded.to_vec()).unwrap();
             true
@@ -179,7 +179,7 @@ fn remote_sink_negotiates_against_the_host_handshake() {
 
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let caps = Capabilities::full("host");
+        let caps = Capabilities::permissive_fixture("host");
         // Serve until the client disconnects (it only negotiates + drops here).
         serve_connection(&stream, &caps, |_h, _b: &[Cmd]| true).unwrap();
     });
@@ -215,7 +215,7 @@ fn a_failure_ack_makes_submit_return_err() {
 
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let caps = Capabilities::full("host");
+        let caps = Capabilities::permissive_fixture("host");
         // Reject exactly one frame, then the client should give up (no retry) and disconnect.
         serve_connection(&stream, &caps, |_h, _b: &[Cmd]| false /* NACK */).unwrap();
     });
@@ -266,7 +266,11 @@ fn reconnect_replays_acknowledged_residency_once_before_new_work() {
         },
     ];
 
-    let caps_bytes = Capabilities::full("host");
+    let caps_bytes = Capabilities::permissive_fixture("host");
+    // The client may only start the second submit once connection #1 is actually closed: otherwise it
+    // writes the draw into a still-open socket and reads EOF at the ack, which is (correctly) ambiguous
+    // and terminal. Ordering by an explicit close event keeps the test independent of thread scheduling.
+    let (closed_tx, closed_rx) = mpsc::channel();
     let server = thread::spawn(move || {
         // Read one framed submit's payload after sending the handshake.
         fn hs_then_frame(stream: &mut UnixStream, caps: &Capabilities) -> Vec<u8> {
@@ -287,6 +291,7 @@ fn reconnect_replays_acknowledged_residency_once_before_new_work() {
         let first_body = hs_then_frame(&mut first, &caps_bytes);
         first.write_all(&[ACK_OK]).unwrap();
         drop(first);
+        closed_tx.send(()).unwrap();
 
         // Connection #2: a fresh executor. It must get residency replayed ahead of the new work.
         let (mut second, _) = listener.accept().unwrap();
@@ -305,6 +310,7 @@ fn reconnect_replays_acknowledged_residency_once_before_new_work() {
     };
     let mut sink = RemoteCommandSink::with_surface(sock.path(), surface);
     sink.submit(&upload).expect("residency frame acknowledged");
+    closed_rx.recv().expect("first executor closed its socket");
     sink.submit(&draw)
         .expect("reconnect recovered residency and executor ACKed");
 

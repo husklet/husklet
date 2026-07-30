@@ -169,8 +169,7 @@ fn pipeline(id: u32, depth: DepthState) -> Cmd {
 fn run(cmds: &[Cmd]) -> Vec<u8> {
     let mut exec = hl_gpu::CpuExecutor::new();
     exec.define_kernel(1, placeholder_shader());
-    let mut caps = exec.capabilities();
-    caps.texture_formats |= TextureFormat::bits(&[TextureFormat::Depth24PlusStencil8]);
+    let caps = hl_gpu::Capabilities::oracle_session_fixture(&exec.capabilities());
     let mut limits = hl_gpu::Limits::from_capabilities(caps);
     limits.copy_alignment = 1;
     let mut s = hl_gpu::Session::new(

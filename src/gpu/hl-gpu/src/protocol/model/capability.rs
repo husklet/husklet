@@ -307,17 +307,27 @@ impl Capabilities {
         present_kinds
     }
 
-    /// A permissive descriptor advertising the full current IR surface — every encoder command, every
-    /// COLOR format (no depth/stencil format: see [`DEPTH_FORMATS`]), all shader payloads, all present
-    /// kinds, every binding-array kind and every [`gpu_feature`] — at [`super::command::WIRE_VERSION`].
-    ///
-    /// This is a TEST DOUBLE for sinks that accept anything the guest can encode. It must never be
-    /// advertised on behalf of a real executor: the standing rule is that a capability claim equals the
-    /// intersection of what shim, IR, executor, compositor and presenter actually honour, and no executor
-    /// in this workspace honours this whole set (the CPU oracle, for one, runs no graphics shader payload
-    /// and emulates fences). A real executor builds its own descriptor from what it implements — see
-    /// [`crate::cpu::CpuExecutor::capabilities`].
+    /// Deprecated alias for [`Capabilities::permissive_fixture`], kept only while the call sites outside
+    /// `hl-gpu`/`hl-gpu-wgpu` migrate. The name promised "everything" and does not deliver it (no
+    /// block-compressed and no depth/stencil formats), which has already cost red tests.
     pub fn full(name: impl Into<String>) -> Capabilities {
+        Self::permissive_fixture(name)
+    }
+
+    /// A TEST FIXTURE for sinks that accept anything the guest can encode: every encoder command, every
+    /// COLOR format (no depth/stencil — see [`DEPTH_FORMATS`] — and no block-compressed format — see
+    /// [`BC_FORMATS`]), all shader payloads, all present kinds, every binding-array kind and every
+    /// [`gpu_feature`], at [`super::command::WIRE_VERSION`].
+    ///
+    /// It must never be advertised on behalf of a real executor: the standing rule is that a capability
+    /// claim equals the intersection of what shim, IR, executor, compositor and presenter actually honour,
+    /// and no executor in this workspace honours this whole set (the CPU oracle, for one, runs no graphics
+    /// shader payload and emulates fences). A real executor builds its own descriptor from what it
+    /// implements — see [`crate::cpu::CpuExecutor::capabilities`].
+    ///
+    /// For a fixture that also carries the block-compressed formats a Metal-class host reports, use
+    /// [`Capabilities::metal_class_fixture`]; do not widen this one inline.
+    pub fn permissive_fixture(name: impl Into<String>) -> Capabilities {
         Capabilities {
             name: name.into(),
             unified_memory: true,
@@ -353,5 +363,25 @@ impl Capabilities {
                 | gpu_feature::INDEPENDENT_BLEND
                 | gpu_feature::SAMPLE_RATE_SHADING,
         }
+    }
+
+    /// A TEST FIXTURE for a Metal-class host: [`Capabilities::permissive_fixture`] plus the
+    /// block-compressed formats ([`BC_FORMATS`]) such a host reports. This is what a shim asserting
+    /// `textureCompressionBC` against a host advertisement should be checked against.
+    pub fn metal_class_fixture(name: impl Into<String>) -> Capabilities {
+        let mut capabilities = Self::permissive_fixture(name);
+        capabilities.texture_formats |= TextureFormat::bits(BC_FORMATS);
+        capabilities
+    }
+
+    /// A TEST FIXTURE for a CPU-oracle session: `base` (the oracle's own honest descriptor) widened to
+    /// admit the SPIR-V/GLSL payloads it treats as opaque handles and the combined depth+stencil format it
+    /// models but does not advertise. It changes nothing the oracle computes; it only lets an identical
+    /// program past the runtime `validate` gate on both sides of a differential run.
+    pub fn oracle_session_fixture(base: &Capabilities) -> Capabilities {
+        let mut capabilities = base.clone();
+        capabilities.shader_payloads |= shader_payload::SPIRV | shader_payload::GLSL;
+        capabilities.texture_formats |= TextureFormat::bits(&[TextureFormat::Depth24PlusStencil8]);
+        capabilities
     }
 }

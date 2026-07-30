@@ -9,7 +9,7 @@ use super::*;
 /// `UnknownId`) and the new one stuck live + charged (its recreate hit `DuplicateId`), NACKing forever.
 #[test]
 fn executor_nack_rolls_back_tables_and_ledger_then_connection_recovers() {
-    let caps = Capabilities::full("fake");
+    let caps = Capabilities::permissive_fixture("fake");
     let mut exec = NackOnPresentExecutor::new(caps.clone());
     // Unbounded residency so the ONLY rejection here is the executor's dispatch-stage NACK, not accounting.
     let mut s = session(
@@ -104,7 +104,7 @@ fn executor_nack_rolls_back_tables_and_ledger_then_connection_recovers() {
 /// retires what it no longer needs never sticks against it, while the cap still bounds a hostile flood.
 #[test]
 fn residency_cap_nacks_over_budget_frame_then_free_and_recreate_recovers() {
-    let caps = Capabilities::full("fake");
+    let caps = Capabilities::permissive_fixture("fake");
     // Mirrors texture lifecycle into the tables; NACKs only on `Present` (this test issues none).
     let mut exec = NackOnPresentExecutor::new(caps.clone());
     let tile_bytes = 8 * 8 * 4u64; // one 8x8 rgba8 tile
@@ -158,7 +158,7 @@ fn residency_cap_nacks_over_budget_frame_then_free_and_recreate_recovers() {
 /// resources live on the executor that the ledger no longer accounts for, defeating the residency bound.
 #[test]
 fn a_backwards_fence_signal_rolls_back_the_whole_frame() {
-    let caps = Capabilities::full("fake");
+    let caps = Capabilities::permissive_fixture("fake");
     let mut exec = FakeExecutor::new(caps.clone());
     let mut s = session(
         Limits::from_capabilities(caps.clone()),

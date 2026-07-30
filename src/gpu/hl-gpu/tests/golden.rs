@@ -225,15 +225,21 @@ fn golden_d_glsl_payload_bytes_are_stable() {
 
 #[test]
 fn capability_handshake_round_trips() {
-    use hl_gpu::protocol::codec::wire::{Decoder, Encoder};
+    use hl_gpu::protocol::codec::wire::Encoder;
     use hl_gpu::Capabilities;
-    let caps = Capabilities::full("golden-backend");
-    // inline encode/decode
+    let caps = Capabilities::permissive_fixture("golden-backend");
+    // The encoded body is exactly the framed handshake's payload. Decoding is only offered framed (the
+    // trailing format half is presence-gated on `remaining()`), so this leg checks the body bytes and the
+    // leg below checks the round-trip.
     let mut e = Encoder::new();
     caps.encode(&mut e);
-    let bytes = e.into_vec();
-    let mut d = Decoder::new(&bytes);
-    assert_eq!(Capabilities::decode(&mut d).unwrap(), caps);
+    let body = e.into_vec();
+    let frame = caps.to_handshake();
+    assert_eq!(
+        u32::from_le_bytes(frame[..4].try_into().unwrap()) as usize,
+        body.len()
+    );
+    assert_eq!(&frame[4..], body.as_slice());
     // framed handshake round-trip (u32 length + body)
     let frame = caps.to_handshake();
     assert_eq!(Capabilities::from_handshake(&frame).unwrap(), caps);

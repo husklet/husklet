@@ -148,7 +148,7 @@ fn remote_sink_reads_a_written_buffer_back_over_the_socket() {
     // Host: a runtime-backed handler serving one connection (submit + readback) until the client drops.
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let caps = Capabilities::full("host");
+        let caps = Capabilities::permissive_fixture("host");
         let mut host = RuntimeHost::new();
         hl_gpu::serve_connection_with_handler(&stream, &caps, &mut host).unwrap();
     });
@@ -179,7 +179,7 @@ fn remote_fence_poll_reports_real_host_completion() {
     let listener = UnixListener::bind(&sock.0).unwrap();
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let caps = Capabilities::full("host");
+        let caps = Capabilities::permissive_fixture("host");
         let mut host = RuntimeHost::new();
         hl_gpu::serve_connection_with_handler(&stream, &caps, &mut host).unwrap();
     });
@@ -210,7 +210,7 @@ fn remote_fence_wait_preserves_pending_and_bounded_timeout() {
     let listener = UnixListener::bind(&sock.0).unwrap();
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let caps = Capabilities::full("host");
+        let caps = Capabilities::permissive_fixture("host");
         hl_gpu::serve_connection_with_handler(&stream, &caps, &mut PendingFenceHost).unwrap();
     });
 
@@ -240,7 +240,7 @@ fn in_process_and_remote_readback_are_byte_identical() {
     let listener = UnixListener::bind(&sock.0).unwrap();
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let caps = Capabilities::full("host");
+        let caps = Capabilities::permissive_fixture("host");
         let mut host = RuntimeHost::new();
         hl_gpu::serve_connection_with_handler(&stream, &caps, &mut host).unwrap();
     });
@@ -267,7 +267,7 @@ fn readback_of_a_missing_buffer_fails_cleanly() {
     let listener = UnixListener::bind(&sock.0).unwrap();
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let caps = Capabilities::full("host");
+        let caps = Capabilities::permissive_fixture("host");
         let mut host = RuntimeHost::new();
         hl_gpu::serve_connection_with_handler(&stream, &caps, &mut host).unwrap();
     });
@@ -287,7 +287,7 @@ fn submit_only_serve_connection_fails_readback() {
     let listener = UnixListener::bind(&sock.0).unwrap();
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let caps = Capabilities::full("host");
+        let caps = Capabilities::permissive_fixture("host");
         // A submit-only host: acks submits, has no readback half.
         hl_gpu::serve_connection(&stream, &caps, |_h, _b: &[Cmd]| true).unwrap();
     });

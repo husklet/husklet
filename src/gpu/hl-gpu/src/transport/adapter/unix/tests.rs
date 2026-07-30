@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn handshake_writes_and_reads_over_a_socketpair() {
     let (a, b) = UnixStream::pair().unwrap();
-    let caps = Capabilities::full("adapter-host");
+    let caps = Capabilities::permissive_fixture("adapter-host");
     Connection::new(&a).write_handshake(&caps).unwrap();
     assert_eq!(Connection::new(&b).read_handshake().unwrap(), caps);
 }

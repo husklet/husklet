@@ -61,7 +61,6 @@
 
 use std::collections::BTreeSet;
 
-use hl_gpu::protocol::model::capability::shader_payload;
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BlendState, BufferDesc, ColorAttachment,
     ColorTargetState, ComputePipelineDesc, DepthAttachment, DepthState, Extent3d, Origin3d,

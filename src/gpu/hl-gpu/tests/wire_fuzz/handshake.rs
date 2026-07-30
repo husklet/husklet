@@ -15,11 +15,11 @@ fn no_panic_handshake(bytes: &[u8]) {
 
 #[test]
 fn handshake_truncated_at_every_prefix_never_panics() {
-    let good = Capabilities::full("truncate-me").to_handshake();
+    let good = Capabilities::permissive_fixture("truncate-me").to_handshake();
     // The intact handshake decodes to exactly the source caps.
     assert_eq!(
         Capabilities::from_handshake(&good).unwrap(),
-        Capabilities::full("truncate-me")
+        Capabilities::permissive_fixture("truncate-me")
     );
     for cut in 0..good.len() {
         no_panic_handshake(&good[..cut]); // Err is fine; a panic/hang is not.
@@ -41,7 +41,7 @@ fn handshake_random_and_bitflipped_bytes_never_panic() {
     // Bit-flips of a valid handshake at every position (present-bit and unknown-field mutations may
     // decode to a DIFFERENT-but-valid descriptor; we assert only that decode never panics — a handshake
     // is not byte-stable under mutation because unknown present bits are dropped on re-encode).
-    let good = Capabilities::full("flip-me").to_handshake();
+    let good = Capabilities::permissive_fixture("flip-me").to_handshake();
     for pos in 0..good.len() {
         for bit in 0..8u32 {
             let mut bad = good.clone();
@@ -57,7 +57,7 @@ fn handshake_wire_version_mismatch_is_a_typed_version_error() {
     // typed version error — NOT a later runtime BadTag after the app committed to a path. Both the
     // too-new and too-old directions, and a guest that is itself newer than the backend, are rejected.
     for backend_version in [WIRE_VERSION + 1, WIRE_VERSION - 1, WIRE_VERSION + 7] {
-        let mut caps = Capabilities::full("mismatch");
+        let mut caps = Capabilities::permissive_fixture("mismatch");
         caps.wire_version = backend_version;
         // The handshake still DECODES structurally (the version check is a negotiation concern).
         let bytes = caps.to_handshake();
@@ -75,7 +75,7 @@ fn handshake_wire_version_mismatch_is_a_typed_version_error() {
         );
     }
     // The matching version negotiates cleanly (the mismatch check is not over-eager).
-    let caps = Capabilities::full("match");
+    let caps = Capabilities::permissive_fixture("match");
     let req = FeatureRequest {
         wire_version: caps.wire_version,
         ..Default::default()
@@ -94,7 +94,7 @@ fn handshake_wire_version_mismatch_is_a_typed_version_error() {
 /// a descriptor that uses only the low 32 — that is what keeps a pinned older guest working.
 #[test]
 fn a_high_format_bit_survives_the_handshake_and_low_only_stays_byte_identical() {
-    let mut caps = Capabilities::full("wide");
+    let mut caps = Capabilities::permissive_fixture("wide");
 
     // A descriptor using only the low 32 slots encodes exactly as it always did: no tail word.
     let low_only = caps.to_handshake();
@@ -139,7 +139,7 @@ fn every_declared_texture_format_is_representable_in_the_bitset() {
         "the format list should not have shrunk"
     );
 
-    let mut caps = Capabilities::full("all");
+    let mut caps = Capabilities::permissive_fixture("all");
     caps.texture_formats = TextureFormat::bits(&declared);
     for format in &declared {
         assert!(

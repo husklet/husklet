@@ -11,18 +11,10 @@ pub(super) fn wgpu_session(exec: &WgpuExecutor) -> Session {
     )
 }
 
-/// A CPU-oracle session. The oracle rasterises fixed-function and treats SPIR-V/GLSL modules as opaque
-/// handles, so we widen its advertised `shader_payloads` to admit them past the runtime `validate` gate —
-/// this changes nothing the oracle computes, it just lets the identical program reach the executor.
+/// A CPU-oracle session, built from the named oracle fixture rather than widened here by hand: see
+/// [`hl_gpu::Capabilities::oracle_session_fixture`] for which payloads and formats it admits and why.
 fn cpu_session(exec: &CpuExecutor) -> Session {
-    let mut caps = exec.capabilities();
-    caps.shader_payloads |= shader_payload::SPIRV | shader_payload::GLSL;
-    // The oracle now MODELS the stencil test against a `Depth24PlusStencil8` plane, but its advertised
-    // (negotiated-wire) depth-format set is depth-only. Widen the CPU *session's* formats to admit the
-    // combined depth+stencil format so the identical stencil IR reaches the executor on both sides — exactly
-    // as we widen `shader_payloads` for SPIR-V. This changes nothing the oracle computes; it only lets the
-    // shared program past the runtime `validate` format gate.
-    caps.texture_formats |= TextureFormat::bits(&[TextureFormat::Depth24PlusStencil8]);
+    let caps = hl_gpu::Capabilities::oracle_session_fixture(&exec.capabilities());
     let mut limits = Limits::from_capabilities(caps);
     limits.copy_alignment = 1;
     Session::new(

@@ -6,7 +6,7 @@ use super::*;
 /// not a per-object validation one.
 #[test]
 fn residency_charges_on_create_refunds_on_destroy_and_rejects_over_budget() {
-    let caps = Capabilities::full("fake"); // large per-object ceilings
+    let caps = Capabilities::permissive_fixture("fake"); // large per-object ceilings
     let mut exec = FakeExecutor::new(caps.clone());
     // Connection budget: 4096 bytes / 8 objects.
     let mut limits = Limits::from_capabilities(caps);
@@ -48,7 +48,7 @@ fn residency_charges_on_create_refunds_on_destroy_and_rejects_over_budget() {
 /// contribution.
 #[test]
 fn global_ledger_isolates_connections_and_drop_refunds() {
-    let caps = Capabilities::full("fake");
+    let caps = Capabilities::permissive_fixture("fake");
     let global = GlobalLedger::new(4096, 8);
 
     let mut e1 = FakeExecutor::new(caps.clone());

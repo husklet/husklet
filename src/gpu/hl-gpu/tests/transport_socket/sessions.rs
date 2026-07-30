@@ -13,7 +13,7 @@ fn concurrent_connections_have_isolated_sessions() {
         let listener = UnixListener::bind(&sock.0).unwrap();
 
         let server = thread::spawn(move || {
-            let caps = Capabilities::full("host");
+            let caps = Capabilities::permissive_fixture("host");
             let mut handles = Vec::new();
             for stream in listener.incoming().take(N) {
                 let stream = stream.unwrap();

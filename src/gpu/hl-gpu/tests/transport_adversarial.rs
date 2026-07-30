@@ -294,7 +294,7 @@ fn server_nacks_a_malformed_submit_payload_without_calling_the_handler() {
 
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let caps = Capabilities::full("host");
+        let caps = Capabilities::permissive_fixture("host");
         let mut handler_calls = 0u32;
         serve_connection(&stream, &caps, |_h, _b: &[Cmd]| {
             handler_calls += 1;
@@ -360,7 +360,7 @@ fn readback_frame_routes_to_readback_never_to_submit() {
 
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let caps = Capabilities::full("host");
+        let caps = Capabilities::permissive_fixture("host");
         let mut host = FixedReadbackHost { submits: 0 };
         serve_connection_with_handler(&stream, &caps, &mut host).unwrap();
         host.submits
@@ -423,7 +423,7 @@ fn serve_loop_returns_cleanly_when_the_peer_closes() {
     let listener = UnixListener::bind(&sock.0).unwrap();
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let caps = Capabilities::full("host");
+        let caps = Capabilities::permissive_fixture("host");
         serve_connection(&stream, &caps, |_h, _b: &[Cmd]| true)
     });
     let client = UnixStream::connect(&sock.0).unwrap();

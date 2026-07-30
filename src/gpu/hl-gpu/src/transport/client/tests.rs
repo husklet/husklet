@@ -51,7 +51,7 @@ fn residency_replay_loss_poison_is_stable() {
 #[test]
 fn capability_change_with_live_residency_is_typed_api_loss() {
     let mut conn = RemoteCommandSink::new("unused");
-    let caps = Capabilities::full("host");
+    let caps = Capabilities::permissive_fixture("host");
     conn.set_negotiated_capabilities(&caps).unwrap();
     conn.residency.append(&[Cmd::CreateFence(1)]);
 

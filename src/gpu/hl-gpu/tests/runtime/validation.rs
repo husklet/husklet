@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn validation_rejects_over_limit_batch_before_any_execute() {
     // Advertise a tiny per-buffer ceiling so a large buffer fails validation.
-    let mut caps = Capabilities::full("fake");
+    let mut caps = Capabilities::permissive_fixture("fake");
     caps.max_buffer_bytes = 1024;
     let mut exec = FakeExecutor::new(caps.clone());
     let mut s = session(Limits::from_capabilities(caps), GlobalLedger::unbounded());
@@ -31,7 +31,7 @@ fn validation_rejects_over_limit_batch_before_any_execute() {
 #[test]
 fn validation_rejects_unnegotiated_command_before_any_execute() {
     // Advertise a command set WITHOUT Dispatch, then submit a Dispatch.
-    let mut caps = Capabilities::full("fake");
+    let mut caps = Capabilities::permissive_fixture("fake");
     caps.command_bits = hl_gpu::Capabilities::command_bits(&[
         hl_gpu::protocol::model::command::etag::BEGIN_RENDER_PASS,
         hl_gpu::protocol::model::command::etag::CLEAR_RECT,
