@@ -37,7 +37,10 @@ mod tests {
 
     #[test]
     fn surface_is_complete_and_matches_the_census() {
-        assert_eq!(NVML_ENTRYPOINTS, 62, "NVML surface drifted from the oracle's 62 exports");
+        assert_eq!(
+            NVML_ENTRYPOINTS, 62,
+            "NVML surface drifted from the oracle's 62 exports"
+        );
         assert_eq!(GENERATED_STUBS + IMPLEMENTED_ENTRYPOINTS, TOTAL_ENTRYPOINTS);
         // The whole surface has real hand-written bodies — no generated default stubs remain.
         assert_eq!(GENERATED_STUBS, 0, "nvml still has default stubs");
@@ -70,23 +73,34 @@ mod tests {
         // name
         let mut name = [0 as c_char; 96];
         assert_eq!(nvmlDeviceGetName(dev, name.as_mut_ptr(), 96), 0);
-        let nm = unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) }.to_string_lossy().into_owned();
+        let nm = unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) }
+            .to_string_lossy()
+            .into_owned();
         assert!(nm.contains("CUDA-sim"), "unexpected name: {nm}");
 
         // compute capability from HL_CUDA_CC=7.5
         let (mut maj, mut min) = (-1i32, -1i32);
-        assert_eq!(nvmlDeviceGetCudaComputeCapability(dev, &mut maj, &mut min), 0);
+        assert_eq!(
+            nvmlDeviceGetCudaComputeCapability(dev, &mut maj, &mut min),
+            0
+        );
         assert_eq!((maj, min), (7, 5));
 
         // memory total from HL_CUDA_VRAM_BYTES (read `total` at offset 0 of nvmlMemory_t)
         let mut mem = [0u8; 32];
-        assert_eq!(nvmlDeviceGetMemoryInfo(dev, mem.as_mut_ptr() as *mut c_void), 0);
+        assert_eq!(
+            nvmlDeviceGetMemoryInfo(dev, mem.as_mut_ptr() as *mut c_void),
+            0
+        );
         let total = u64::from_le_bytes(mem[0..8].try_into().unwrap());
         assert_eq!(total, 6u64 << 30);
 
         // utilization (read `gpu` at offset 0 of nvmlUtilization_t)
         let mut util = [0u8; 8];
-        assert_eq!(nvmlDeviceGetUtilizationRates(dev, util.as_mut_ptr() as *mut c_void), 0);
+        assert_eq!(
+            nvmlDeviceGetUtilizationRates(dev, util.as_mut_ptr() as *mut c_void),
+            0
+        );
         assert_eq!(u32::from_le_bytes(util[0..4].try_into().unwrap()), 0);
 
         // temperature + clocks (modeled sane values)
@@ -124,7 +138,10 @@ mod tests {
 
         // private export-table handshake hands back a non-null table
         let mut table: *const c_void = core::ptr::null();
-        assert_eq!(nvmlInternalGetExportTable(&mut table, core::ptr::null_mut()), 0);
+        assert_eq!(
+            nvmlInternalGetExportTable(&mut table, core::ptr::null_mut()),
+            0
+        );
         assert!(!table.is_null());
 
         assert_eq!(nvmlShutdown(), 0);
@@ -144,10 +161,14 @@ mod tests {
         assert_eq!(nvmlInitWithFlags(0), 0);
         let mut drv = [0 as c_char; 96];
         assert_eq!(nvmlSystemGetDriverVersion(drv.as_mut_ptr(), 96), 0);
-        assert!(!unsafe { std::ffi::CStr::from_ptr(drv.as_ptr()) }.to_bytes().is_empty());
+        assert!(!unsafe { std::ffi::CStr::from_ptr(drv.as_ptr()) }
+            .to_bytes()
+            .is_empty());
         let mut nvv = [0 as c_char; 96];
         assert_eq!(nvmlSystemGetNVMLVersion(nvv.as_mut_ptr(), 96), 0);
-        assert!(!unsafe { std::ffi::CStr::from_ptr(nvv.as_ptr()) }.to_bytes().is_empty());
+        assert!(!unsafe { std::ffi::CStr::from_ptr(nvv.as_ptr()) }
+            .to_bytes()
+            .is_empty());
         let mut cdv = -1i32;
         assert_eq!(nvmlSystemGetCudaDriverVersion(&mut cdv), 0);
         assert_eq!(cdv, 12020);
@@ -169,18 +190,25 @@ mod tests {
         // UUID round-trip: read our device's UUID, then resolve a handle by it; a wrong UUID is NOT_FOUND.
         let mut uuid = [0 as c_char; 96];
         assert_eq!(nvmlDeviceGetUUID(dev, uuid.as_mut_ptr(), 96), 0);
-        let uuid_s = unsafe { std::ffi::CStr::from_ptr(uuid.as_ptr()) }.to_string_lossy().into_owned();
+        let uuid_s = unsafe { std::ffi::CStr::from_ptr(uuid.as_ptr()) }
+            .to_string_lossy()
+            .into_owned();
         assert!(uuid_s.starts_with("GPU-"), "unexpected uuid: {uuid_s}");
         let uuid_c = std::ffi::CString::new(uuid_s).unwrap();
         let mut du: *mut c_void = core::ptr::null_mut();
         assert_eq!(nvmlDeviceGetHandleByUUID(uuid_c.as_ptr(), &mut du), 0);
         let wrong = std::ffi::CString::new("GPU-does-not-exist").unwrap();
-        assert_eq!(nvmlDeviceGetHandleByUUID(wrong.as_ptr(), &mut du), 6 /* NOT_FOUND */);
+        assert_eq!(
+            nvmlDeviceGetHandleByUUID(wrong.as_ptr(), &mut du),
+            6 /* NOT_FOUND */
+        );
 
         // identity
         let mut serial = [0 as c_char; 64];
         assert_eq!(nvmlDeviceGetSerial(dev, serial.as_mut_ptr(), 64), 0);
-        assert!(unsafe { std::ffi::CStr::from_ptr(serial.as_ptr()) }.to_string_lossy().contains("HL-SIM"));
+        assert!(unsafe { std::ffi::CStr::from_ptr(serial.as_ptr()) }
+            .to_string_lossy()
+            .contains("HL-SIM"));
         let mut idx = 9u32;
         assert_eq!(nvmlDeviceGetIndex(dev, &mut idx), 0);
         assert_eq!(idx, 0);
@@ -203,22 +231,33 @@ mod tests {
         // memory_v2 (version@0, total@8 in the #[repr(C)] layout) reports the seeded 6 GiB total.
         // Backed by a `[u64; 5]` (40 bytes, 8-aligned) so the struct's u64 fields are naturally aligned.
         let mut mem2 = [0u64; 5];
-        assert_eq!(nvmlDeviceGetMemoryInfo_v2(dev, mem2.as_mut_ptr() as *mut c_void), 0);
+        assert_eq!(
+            nvmlDeviceGetMemoryInfo_v2(dev, mem2.as_mut_ptr() as *mut c_void),
+            0
+        );
         assert_eq!(mem2[1], 6u64 << 30, "total @ byte offset 8");
 
         // PCI info (all three versions share the body): the v1 bus id is field @0. Backed by a
         // `[u32; 24]` (96 bytes, 4-aligned) for the struct's u32 fields.
-        for variant in [nvmlDeviceGetPciInfo as usize, nvmlDeviceGetPciInfo_v2 as usize, nvmlDeviceGetPciInfo_v3 as usize] {
-            let f: extern "C" fn(*mut c_void, *mut c_void) -> i32 = unsafe { core::mem::transmute(variant) };
+        for variant in [
+            nvmlDeviceGetPciInfo as usize,
+            nvmlDeviceGetPciInfo_v2 as usize,
+            nvmlDeviceGetPciInfo_v3 as usize,
+        ] {
+            let f: extern "C" fn(*mut c_void, *mut c_void) -> i32 =
+                unsafe { core::mem::transmute(variant) };
             let mut pinfo = [0u32; 24];
             assert_eq!(f(dev, pinfo.as_mut_ptr() as *mut c_void), 0);
-            let bus_id_v1 =
-                unsafe { std::ffi::CStr::from_ptr(pinfo.as_ptr() as *const c_char) }.to_string_lossy();
+            let bus_id_v1 = unsafe { std::ffi::CStr::from_ptr(pinfo.as_ptr() as *const c_char) }
+                .to_string_lossy();
             assert_eq!(bus_id_v1, "0000:00:00.0");
         }
         // The extended PCI struct is an undocumented private layout → honestly unsupported.
         let mut ext = [0u8; 128];
-        assert_eq!(nvmlDeviceGetPciInfoExt(dev, ext.as_mut_ptr() as *mut c_void), 3 /* NOT_SUPPORTED */);
+        assert_eq!(
+            nvmlDeviceGetPciInfoExt(dev, ext.as_mut_ptr() as *mut c_void),
+            3 /* NOT_SUPPORTED */
+        );
 
         // PCIe link + bus width + core count
         let mut g = 0u32;
@@ -246,7 +285,10 @@ mod tests {
         let mut mhz = 0u32;
         assert_eq!(nvmlDeviceGetMaxClockInfo(dev, 2 /* MEM */, &mut mhz), 0);
         assert_eq!(mhz, 6000);
-        assert_eq!(nvmlDeviceGetMaxClockInfo(dev, 0 /* GRAPHICS */, &mut mhz), 0);
+        assert_eq!(
+            nvmlDeviceGetMaxClockInfo(dev, 0 /* GRAPHICS */, &mut mhz),
+            0
+        );
         assert_eq!(mhz, 1500);
         let mut tt = 0u32;
         assert_eq!(nvmlDeviceGetTemperatureThreshold(dev, 0, &mut tt), 0);
@@ -282,7 +324,8 @@ mod tests {
             nvmlDeviceGetGraphicsRunningProcesses_v2 as usize,
             nvmlDeviceGetGraphicsRunningProcesses_v3 as usize,
         ] {
-            let f: extern "C" fn(*mut c_void, *mut u32, *mut c_void) -> i32 = unsafe { core::mem::transmute(variant) };
+            let f: extern "C" fn(*mut c_void, *mut u32, *mut c_void) -> i32 =
+                unsafe { core::mem::transmute(variant) };
             c = 42;
             assert_eq!(f(dev, &mut c, core::ptr::null_mut()), 0);
             assert_eq!(c, 0);
@@ -290,7 +333,10 @@ mod tests {
 
         // A bogus device handle is honestly rejected (INVALID_ARGUMENT), never a fabricated answer.
         let bogus = 0x9999usize as *mut c_void;
-        assert_eq!(nvmlDeviceGetSerial(bogus, serial.as_mut_ptr(), 64), 2 /* INVALID_ARGUMENT */);
+        assert_eq!(
+            nvmlDeviceGetSerial(bogus, serial.as_mut_ptr(), 64),
+            2 /* INVALID_ARGUMENT */
+        );
         assert_eq!(nvmlDeviceGetNumGpuCores(bogus, &mut cores), 2);
 
         assert_eq!(nvmlShutdown(), 0);

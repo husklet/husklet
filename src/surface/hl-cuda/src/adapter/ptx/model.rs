@@ -1,4 +1,77 @@
+use super::operand::parse_op;
 use super::*;
+
+/// The module-scope names a statement can refer to: kernel parameters, branch labels, and `.shared`
+/// variables with their resolved byte offsets.
+pub(super) struct Symbols<'a> {
+    pub(super) params: &'a std::collections::HashMap<&'a str, u16>,
+    pub(super) labels: &'a std::collections::HashMap<String, u32>,
+    pub(super) shared: &'a std::collections::HashMap<String, u32>,
+}
+
+/// One PTX instruction statement, split into the opcode (with every `.` modifier) and its comma-separated
+/// operands. Each instruction family lowers from this; the family lowerings live in sibling modules.
+pub(super) struct Stmt<'a> {
+    pub(super) text: &'a str,
+    pub(super) opcode: &'a str,
+    pub(super) ops: Vec<String>,
+}
+
+impl<'a> Stmt<'a> {
+    pub(super) fn new(text: &'a str, opcode: &'a str, ops: Vec<String>) -> Self {
+        Self { text, opcode, ops }
+    }
+
+    /// The opcode without its modifiers (`mad.lo.s32` → `mad`).
+    pub(super) fn base(&self) -> &'a str {
+        self.opcode.split('.').next().unwrap_or(self.opcode)
+    }
+
+    /// Does the opcode carry `modifier` as a whole `.`-separated token? Token equality matters: `lt` must
+    /// not match the distinct PTX comparison `ltu`, nor `sat` the destination type.
+    pub(super) fn has(&self, modifier: &str) -> bool {
+        self.opcode.split('.').any(|t| t == modifier)
+    }
+
+    /// Is this a `.f32`-typed instruction (so an immediate operand is a float encoding)?
+    pub(super) fn is_f32(&self) -> bool {
+        self.has("f32")
+    }
+
+    /// Is the type suffix an unsigned integer width, i.e. does the operation zero-extend?
+    pub(super) fn is_unsigned(&self) -> bool {
+        ["u8", "u16", "u32", "u64"].iter().any(|t| self.has(t))
+    }
+
+    pub(super) fn tok(&self, index: usize) -> Result<&str> {
+        self.ops.get(index).map(String::as_str).ok_or_else(|| {
+            self.error(format!(
+                "expects at least {} operands: `{}`",
+                index + 1,
+                self.text
+            ))
+        })
+    }
+
+    pub(super) fn reg(&self, index: usize, interner: &mut Interner) -> Result<u16> {
+        Ok(interner.get(Ptx::strip_reg(self.tok(index)?)))
+    }
+
+    pub(super) fn op(
+        &self,
+        index: usize,
+        interner: &mut Interner,
+        float: bool,
+        sregs: &mut SRegAlloc,
+    ) -> Result<Op> {
+        let tok = self.tok(index)?.to_string();
+        parse_op(&tok, interner, float, sregs)
+    }
+
+    pub(super) fn error(&self, message: impl std::fmt::Display) -> GpuError {
+        Ptx::error(format!("`{}`: {message}", self.opcode))
+    }
+}
 
 #[derive(Default)]
 pub(super) struct Interner {

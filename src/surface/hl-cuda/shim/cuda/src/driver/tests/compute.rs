@@ -250,7 +250,7 @@ fn compute_path_end_to_end_over_socket() {
     assert_eq!(cuEventRecord(ev, stream), CUDA_SUCCESS);
     assert_eq!(cuEventSynchronize(ev), CUDA_SUCCESS);
 
-    // --- the other two launch forms lower through the identical path ---
+    // --- `cuLaunchKernelEx` lowers through the identical path; a cooperative launch stays refused ---
     assert_eq!(
         cuLaunchCooperativeKernel(
             func,
@@ -264,7 +264,9 @@ fn compute_path_end_to_end_over_socket() {
             core::ptr::null_mut(),
             params.as_ptr() as *mut *mut c_void
         ),
-        CUDA_SUCCESS
+        // A cooperative launch promises co-resident blocks for `grid.sync()`, which the kernel IR cannot
+        // provide; running it as an ordinary launch would silently drop every grid synchronization.
+        CUDA_ERROR_NOT_SUPPORTED
     );
     let cfg: [u32; 8] = [1, 1, 1, n, 1, 1, 0, 0];
     assert_eq!(

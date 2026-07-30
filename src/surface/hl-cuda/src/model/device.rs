@@ -34,16 +34,20 @@ impl CudaDeviceDesc {
     ///
     /// The kernel IR the PTX front-end lowers onto is far smaller than any real compute capability. As of
     /// today it covers: 32-bit integer ALU (`mov`/`add`/`sub`/`mul.lo`/`mul.wide.[su]32`/`mad.lo`/shifts/
-    /// bitwise), f32 `add`/`sub`/`mul`/`fma`, INTEGER `setp` only, `cvt` between f32 and s32 plus
+    /// bitwise), f32 `add`/`sub`/`mul`/`fma`, integer `setp` AND the IEEE-754 f32 `setp` in both PTX
+    /// families (ordered `lt`/`le`/`gt`/`ge`/`eq`/`ne`, unordered `ltu`/…/`neu`), `cvt` between f32 and
+    /// s32/u32 in both integer rounding modes (`.rzi` truncating, `.rni` nearest-ties-to-even) plus
     /// `s64<-s32` and same-width integer reinterpretation, `ld`/`st` in `.global` and `.shared` through a
-    /// register address, integer `atom`/`red` including `cas`, `bar.sync`, and `bra` predicated on a
-    /// `setp` result. It has NO f64/f16/bf16, no floating-point compare, no warp intrinsics
-    /// (`vote`/`shfl`/`match`/`%laneid`/`%warpid`), no dynamic (`extern`) shared memory, no module-scope
-    /// `.global` variables, no `atom.inc`/`dec`, and `membar`/`fence` lowers to a no-op.
+    /// register address, integer `atom`/`red` including `cas`, `bar.sync`, `membar`/`fence` at
+    /// `cta`/`gl`/`sys` scope, and `bra` predicated on a `setp` result. It has NO f64/f16/bf16, no warp
+    /// intrinsics (`vote`/`shfl`/`match`/`%laneid`/`%warpid`), no dynamic (`extern`) shared memory, no
+    /// module-scope `.global` variables, no `atom.inc`/`dec`, no `mad.rn.f32` (only the fused `fma`), no
+    /// `setp.num`/`setp.nan` and no fused-predicate `setp`, and no floor/ceil (`.rmi`/`.rpi`) conversion.
     ///
     /// Measured against the MANDATORY feature set of each capability level, the highest one this fully
-    /// covers is **1.1** — 1.2 already requires warp `vote` and 1.3 requires f64, neither of which exists
-    /// here. So there is no usable capability that is also a truthful feature claim.
+    /// covers is **1.1** — unchanged by the f32 compare, conversion and fence work above: 1.2 already
+    /// requires warp `vote` and 1.3 requires f64, neither of which exists here. So there is still no usable
+    /// capability that is also a truthful feature claim.
     ///
     /// Clamping to 1.1 was rejected. It would make every application fail, including the ones that
     /// compute correct results today: CUDA 12.2 (the version `cuDriverGetVersion` reports) has no PTX ISA

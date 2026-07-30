@@ -1,3 +1,4 @@
+use super::model::Symbols;
 use super::*;
 
 impl Ptx {
@@ -60,12 +61,16 @@ impl Ptx {
             .map(|(i, (n, _))| (n.as_str(), i as u16))
             .collect();
 
+        let syms = Symbols {
+            params: &param_idx,
+            labels: &labels,
+            shared: &shared_syms,
+        };
         let mut sregs = SRegAlloc::default();
         let mut insts = Vec::with_capacity(stmts.len());
         let mut ld_param = Vec::new();
         for s in &stmts {
-            let inst =
-                Self::parse_inst(s, &param_idx, &labels, &shared_syms, interner, &mut sregs)?;
+            let inst = Self::parse_inst(s, &syms, interner, &mut sregs)?;
             if let Inst::LdParam { d, param } = inst {
                 ld_param.push((d, param));
             }

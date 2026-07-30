@@ -73,21 +73,6 @@ fn predicated_non_branch_instructions_are_rejected() {
 }
 
 #[test]
-fn floating_point_comparisons_are_rejected() {
-    // `Inst::Setp` compares 32-bit integers. A signed-integer compare of f32 bit patterns agrees with
-    // IEEE-754 ordering only while both operands are non-negative; with a negative operand it inverts.
-    for cmp in ["lt", "le", "gt", "ge", "eq", "ne"] {
-        assert_rejected(
-            &format!("setp.{cmp}.f32 %p1, %f1, %f2; ret;"),
-            &format!("setp.{cmp}.f32"),
-        );
-    }
-    // Integer compares are unaffected.
-    assert!(compile("setp.lt.s32 %p1, %r1, %r2; ret;").is_ok());
-    assert!(compile("setp.lt.u32 %p1, %r1, %r2; ret;").is_ok());
-}
-
-#[test]
 fn double_and_half_precision_operations_are_rejected() {
     // The register file and every arithmetic `Inst` are 32-bit. `add.f64` used to fall through to the
     // INTEGER add (no `f32` token in the opcode), so a double add returned integer-added mantissa bits.
@@ -109,20 +94,21 @@ fn double_and_half_precision_operations_are_rejected() {
 
 #[test]
 fn unmodeled_conversions_are_rejected_instead_of_reinterpreted() {
-    // `cvt.rn.f32.u32` is an unsigned-int → float conversion that nvcc emits constantly. It used to fall
-    // into `CVT_IDENTITY`, i.e. the integer's BITS were handed on as an f32.
+    // A pair with no `CVT_*` kind used to fall into `CVT_IDENTITY`, i.e. the source's BITS were handed on
+    // as the destination type. The `f32 <-> u32` pairs are modeled now and are covered by
+    // `tests/ptx_float.rs`; a 64-bit or sub-word conversion still has no faithful form.
     for body in [
-        "cvt.rn.f32.u32 %f1, %r1; ret;",
-        "cvt.rzi.u32.f32 %r1, %f1; ret;",
         "cvt.rn.f32.s64 %f1, %rd1; ret;",
         "cvt.s32.s8 %r1, %r2; ret;",
         "cvt.u64.u32 %rd1, %r1; ret;",
     ] {
         assert_rejected(body, body);
     }
-    // The three conversions the executor really performs, plus a same-width integer reinterpretation.
+    // The conversions the executor really performs, plus a same-width integer reinterpretation.
     for body in [
         "cvt.rn.f32.s32 %f1, %r1; ret;",
+        "cvt.rn.f32.u32 %f1, %r1; ret;",
+        "cvt.rzi.u32.f32 %r1, %f1; ret;",
         "cvt.rzi.s32.f32 %r1, %f1; ret;",
         "cvt.s64.s32 %rd1, %r1; ret;",
         "cvt.u32.s32 %r1, %r2; ret;",

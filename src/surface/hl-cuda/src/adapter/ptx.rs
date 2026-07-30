@@ -17,9 +17,15 @@
 use hl_gpu::protocol::model::kernel::*;
 use hl_gpu::{GpuError, Result};
 
+mod arith;
+mod atomic;
 mod body;
+mod compare;
+mod control;
+mod convert;
 mod entry;
 mod instruction;
+mod memory;
 mod model;
 mod operand;
 mod register;

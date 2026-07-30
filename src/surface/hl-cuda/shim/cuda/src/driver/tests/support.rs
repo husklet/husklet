@@ -90,6 +90,28 @@ impl hl_gpu::ConnectionHandler for RuntimeHost {
         )
         .ok()
     }
+    /// `cuCtxSynchronize`/`cuStreamSynchronize` lower to a timeline-fence barrier, so the host must answer
+    /// the fence queries too — leaving them at the trait default returns `None`, which the client reports as
+    /// a transport failure (`CUDA_ERROR_UNKNOWN`) rather than a completed barrier.
+    fn poll_fence(&mut self, req: &hl_gpu::ReadbackRequest) -> Option<bool> {
+        hl_gpu::runtime::service::dispatch::poll_fence(
+            &self.session,
+            &mut self.exec,
+            hl_gpu::FenceId(req.id),
+            req.offset,
+        )
+        .ok()
+    }
+    fn wait_fence(&mut self, req: &hl_gpu::ReadbackRequest) -> Option<hl_gpu::FenceWait> {
+        hl_gpu::runtime::service::dispatch::wait_timeout(
+            &mut self.session,
+            &mut self.exec,
+            hl_gpu::FenceId(req.id),
+            req.offset,
+            req.len,
+        )
+        .ok()
+    }
 }
 
 pub(super) fn f32s(v: &[f32]) -> Vec<u8> {

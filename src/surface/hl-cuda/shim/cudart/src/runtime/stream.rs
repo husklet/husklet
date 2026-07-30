@@ -52,11 +52,13 @@ pub extern "C" fn cudaStreamDestroy(stream: *mut c_void) -> i32 {
     })
 }
 
+/// `cudaStreamSynchronize(stream)` — block until the stream's work completes. An unknown token is
+/// `cudaErrorInvalidResourceHandle`, which is what real CUDA returns for a stream handle it does not own.
 #[no_mangle]
 pub extern "C" fn cudaStreamSynchronize(stream: *mut c_void) -> i32 {
     ShimState::with(|s| {
         let Some(st) = s.stream(stream) else {
-            return s.fail(CUDART_ERROR_INVALID_VALUE);
+            return s.fail(CUDART_ERROR_INVALID_RESOURCE_HANDLE);
         };
         match s.ctx.synchronize_stream(&mut s.sink, st) {
             Ok(()) => CUDART_SUCCESS,
