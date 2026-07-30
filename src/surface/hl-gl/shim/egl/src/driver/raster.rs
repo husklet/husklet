@@ -335,8 +335,7 @@ pub extern "C" fn glGetBufferPointerv(target: u32, pname: u32, params: *mut *mut
         let Some((offset, _)) = s.gl.buffers.get(name).and_then(|buffer| buffer.mapped) else {
             return core::ptr::null_mut();
         };
-        s.gl
-            .buffers
+        s.gl.buffers
             .mapped_ptr(name, offset)
             .map_or(core::ptr::null_mut(), |pointer| pointer.cast())
     });

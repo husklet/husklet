@@ -237,11 +237,11 @@ pub extern "C" fn glMapBufferOES(target: u32, access: u32) -> *mut c_void {
             return core::ptr::null_mut();
         }
         match map::map_buffer_range(&mut s.gl, target, 0, size as isize, GL_MAP_WRITE_BIT) {
-            Some((name, offset)) => s
-                .gl
-                .buffers
-                .mapped_ptr(name, offset)
-                .map_or(core::ptr::null_mut(), |pointer| pointer.cast()),
+            Some((name, offset)) => {
+                s.gl.buffers
+                    .mapped_ptr(name, offset)
+                    .map_or(core::ptr::null_mut(), |pointer| pointer.cast())
+            }
             None => core::ptr::null_mut(),
         }
     })

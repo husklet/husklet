@@ -56,7 +56,9 @@ impl ConfigHandle {
     /// The config id a caller-supplied handle denotes, or `None` when this driver never handed it out.
     pub(in crate::driver) fn id(config: *mut c_void) -> Option<i32> {
         let id = config as usize as i32;
-        Self::exposed().into_iter().find(|advertised| *advertised == id)
+        Self::exposed()
+            .into_iter()
+            .find(|advertised| *advertised == id)
     }
 }
 

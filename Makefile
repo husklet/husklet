@@ -1,5 +1,5 @@
 # Husklet workspace product.
-.PHONY: all design-lint lint-cases fmt fmt-check test test-ci test-compiles mac-crates mac-gpu containers app dmg install uninstall clean
+.PHONY: all design-lint lint-cases fmt fmt-check shims test test-ci test-compiles mac-crates mac-gpu containers app dmg install uninstall clean
 
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
 VERSION ?= $(or $(TAG),0.0.0-dev)
@@ -28,10 +28,26 @@ fmt:
 fmt-check:
 	cargo fmt --all -- --check
 
+# The guest driver shims each declare their own `[workspace]`, so no root cargo command reaches them and a
+# failure there stays invisible. Formatting is checked too: the root `fmt --check` cannot see these either.
+SHIMS = src/surface/hl-gl/shim/egl \
+        src/surface/hl-vulkan/shim/vulkan \
+        src/surface/hl-cuda/shim/cuda \
+        src/surface/hl-cuda/shim/cudart \
+        src/surface/hl-cuda/shim/nvml
+
+shims:
+	@for shim in $(SHIMS); do \
+	  echo "== $$shim"; \
+	  cargo fmt --manifest-path "$$shim/Cargo.toml" -- --check || exit 1; \
+	  cargo test --manifest-path "$$shim/Cargo.toml" --no-fail-fast || exit 1; \
+	done
+
+
 test: design-lint
 	cargo test -p hl-design-lint -p hl-log -p hl-ws -p hl-ws-term -p hl-gpu
 
-test-ci: fmt-check test
+test-ci: fmt-check test shims
 
 containers:
 	cargo test -p hl-images -p hl-container -p hl-daemon -p hl-client
