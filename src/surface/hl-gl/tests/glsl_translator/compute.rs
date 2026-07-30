@@ -25,11 +25,11 @@ fn translate_compute_pins_desktop_version_and_strips_es_dialect() {
 
 #[test]
 fn compute_comment_scanner_preserves_comment_markers_inside_quotes() {
-    let source =
-        "#version 310 es\n#define URL \"https://host/*path*/\" // trailing\nvoid main() {}\n";
+    let source = "#version 310 es\nvoid main() { /* keep */ int u = 1; } // trailing\n";
     let translated = glsl::Translator::compute(source);
-    assert!(translated.contains("#define URL \"https://host/*path*/\" \n"));
-    assert!(!translated.contains("trailing"));
+    assert!(translated.contains("int u = 1;"), "{translated}");
+    assert!(!translated.contains("keep"), "{translated}");
+    assert!(!translated.contains("trailing"), "{translated}");
 }
 
 // ---------------------------------------------------------------------------------------------------

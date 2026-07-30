@@ -706,27 +706,22 @@ fn flush_executes_pending_work_and_swap_presents_the_completed_target() {
             .any(|c| matches!(c, Cmd::Present { .. })),
         "the swap presents the window"
     );
-    let present_vertex = sink.batches[1]
-        .iter()
-        .filter_map(|command| match command {
-            Cmd::CreateShader { spirv, .. } => {
-                hl_gpu::protocol::model::kernel::GlslDescriptor::from_words(spirv)
-                    .and_then(Result::ok)
-                    .filter(|shader| {
-                        shader.stage == hl_gpu::protocol::model::kernel::glsl_stage::VERTEX
-                    })
-            }
-            _ => None,
-        })
-        .next()
-        .expect("present vertex shader");
-    assert_eq!(
-        present_vertex
-            .source
-            .matches("gl_Position.y = -gl_Position.y")
-            .count(),
-        1,
-        "the default window target receives exactly one row-origin conversion"
+    // The default window target is an INTERNAL render target: it stores rows top-down like every other
+    // internal target, so no clip reflection is emitted for it (see `RenderPasses::stores_bottom_up_rows`).
+    // Reflecting it mirrored every presented frame; only an imported external image keeps the reflection
+    // (pinned in `render::order`). The window pass therefore needs no separate shader VARIANT either — the
+    // program's offscreen modules are reused verbatim.
+    assert!(
+        !sink.batches[1]
+            .iter()
+            .filter_map(|command| match command {
+                Cmd::CreateShader { spirv, .. } =>
+                    hl_gpu::protocol::model::kernel::GlslDescriptor::from_words(spirv)
+                        .and_then(Result::ok),
+                _ => None,
+            })
+            .any(|shader| shader.source.contains("gl_Position.y = -gl_Position.y")),
+        "the default window target keeps GL clip space unreflected"
     );
     let present_pipeline = sink.batches[1]
         .iter()
@@ -736,8 +731,8 @@ fn flush_executes_pending_work_and_swap_presents_the_completed_target() {
         })
         .expect("present pipeline");
     assert_eq!(
-        present_pipeline.front_face, 1,
-        "clip reflection swaps GL's default CCW winding"
+        present_pipeline.front_face, 0,
+        "with no clip reflection the declared GL winding is preserved"
     );
 
     // With nothing offscreen pending, a second flush is a no-op (returns false, submits nothing).

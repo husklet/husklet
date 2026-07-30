@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::glconst::MAX_TEXTURE_UNITS;
 
 // ---- shaders + programs --------------------------------------------------------------------------
 
@@ -528,7 +529,8 @@ impl GlContext {
         let ctx = self;
         // Capture the ES3 sampler OBJECT bound to each texture unit: a bound object overrides the texture's own
         // filter/wrap at lowering time (ES 3.0 §3.8.13). `None` where no object is bound (texture params win).
-        let mut samp_objs: [Option<crate::model::es3::SamplerObj>; 8] = [None; 8];
+        let mut samp_objs: [Option<crate::model::es3::SamplerObj>; MAX_TEXTURE_UNITS] =
+            [None; MAX_TEXTURE_UNITS];
         for (unit, slot) in samp_objs.iter_mut().enumerate() {
             let name = ctx.samplers.binding(unit as u32);
             if name != 0 {

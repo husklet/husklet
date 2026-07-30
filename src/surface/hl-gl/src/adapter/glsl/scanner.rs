@@ -41,6 +41,7 @@ impl Tokens<'_> {
     /// parameter would be reflected as a phantom fragment output / varying / attribute.
     pub(super) fn collect(&self, kw: &str) -> Vec<Decl> {
         let src = self.0;
+        let constants = Constants::from_source(src);
         let b = src.as_bytes();
         let kb = kw.as_bytes();
         let kl = kb.len();
@@ -105,7 +106,7 @@ impl Tokens<'_> {
                         mnm.push(b[q] as char);
                         q += 1;
                     }
-                    let (marr, array_literal) = Self::read_array_subscript(b, &mut q);
+                    let (marr, array_literal) = Self::read_array_subscript(b, &mut q, &constants);
                     while q < b.len() && b[q] != b';' && b[q] != b'}' {
                         q += 1; // skip to the member end
                     }
@@ -145,7 +146,7 @@ impl Tokens<'_> {
                     name.push(b[q] as char);
                     q += 1;
                 }
-                let (arr, array_literal) = Self::read_array_subscript(b, &mut q);
+                let (arr, array_literal) = Self::read_array_subscript(b, &mut q, &constants);
                 if !ty.is_empty() && !name.is_empty() {
                     out.push(Decl {
                         ty: ty.clone(),
@@ -167,10 +168,18 @@ impl Tokens<'_> {
         out
     }
 
-    /// If the bytes at `*q` are an array subscript `[N]` (possibly with surrounding spaces), consume it and
-    /// return `N` (the element count); otherwise leave `*q` unchanged and return `0`. A present but
-    /// non-literal/zero dimension returns `u32::MAX`, which link validation rejects explicitly.
-    pub(super) fn read_array_subscript(b: &[u8], q: &mut usize) -> (u32, bool) {
+    /// If the bytes at `*q` are an array subscript `[dimension]` (possibly with surrounding spaces), consume
+    /// it and return the element count; otherwise leave `*q` unchanged and return `(0, true)` (not an array).
+    ///
+    /// GLSL ES 1.00 §4.1.9 requires the dimension to be an INTEGRAL CONSTANT EXPRESSION, not merely a
+    /// literal: after preprocessing that admits `#define`d sizes (already substituted), arithmetic on
+    /// literals, and the stage's global `const int` values, all of which [`Constants`] folds. A dimension
+    /// that is not constant returns `(0, false)`, which link validation rejects explicitly.
+    pub(super) fn read_array_subscript(
+        b: &[u8],
+        q: &mut usize,
+        constants: &Constants,
+    ) -> (u32, bool) {
         let mut p = *q;
         while p < b.len() && Self::is_space(b[p]) {
             p += 1;
@@ -179,25 +188,34 @@ impl Tokens<'_> {
             return (0, true);
         }
         p += 1;
-        while p < b.len() && Self::is_space(b[p]) {
+        let start = p;
+        let mut depth = 0usize;
+        while p < b.len() {
+            match b[p] {
+                b'[' | b'(' => depth += 1,
+                b')' => depth = depth.saturating_sub(1),
+                b']' if depth == 0 => break,
+                b']' => depth -= 1,
+                b';' | b'{' | b'}' => break,
+                _ => {}
+            }
             p += 1;
         }
-        let s = p;
-        while p < b.len() && b[p].is_ascii_digit() {
-            p += 1;
+        if p >= b.len() || b[p] != b']' {
+            *q = p;
+            return (0, false);
         }
-        let digits = &b[s..p];
-        while p < b.len() && Self::is_space(b[p]) {
-            p += 1;
-        }
-        if p < b.len() && b[p] == b']' && !digits.is_empty() {
-            if let Ok(n) = std::str::from_utf8(digits).unwrap_or("").parse::<u32>() {
+        let dimension = std::str::from_utf8(&b[start..p]).unwrap_or("");
+        match constants.dimension(dimension) {
+            Some(size) => {
                 *q = p + 1;
-                return (n, true);
+                (size, true)
+            }
+            None => {
+                *q = p + 1;
+                (0, false)
             }
         }
-        *q = p;
-        (0, false)
     }
 }
 
@@ -337,51 +355,6 @@ impl Source<'_> {
     }
 }
 
-/// Strip `//` and `/* */` comments (gl_shim.c `strip_comments`).
-impl Source<'_> {
-    pub(super) fn comments_removed(self) -> String {
-        let b = self.text.as_bytes();
-        let n = b.len();
-        let mut out = String::with_capacity(n);
-        let mut r = 0;
-        let mut quote = None;
-        while r < n {
-            if let Some(delimiter) = quote {
-                out.push(b[r] as char);
-                if b[r] == b'\\' && r + 1 < n {
-                    r += 1;
-                    out.push(b[r] as char);
-                } else if b[r] == delimiter {
-                    quote = None;
-                }
-                r += 1;
-            } else if b[r] == b'\'' || b[r] == b'"' {
-                quote = Some(b[r]);
-                out.push(b[r] as char);
-                r += 1;
-            } else if r + 1 < n && b[r] == b'/' && b[r + 1] == b'/' {
-                while r < n && b[r] != b'\n' {
-                    r += 1;
-                }
-            } else if r + 1 < n && b[r] == b'/' && b[r + 1] == b'*' {
-                r += 2;
-                while r + 1 < n && !(b[r] == b'*' && b[r + 1] == b'/') {
-                    r += 1;
-                }
-                if r + 1 < n {
-                    r += 2;
-                } else {
-                    r = n;
-                }
-            } else {
-                out.push(b[r] as char);
-                r += 1;
-            }
-        }
-        out
-    }
-}
-
 /// Strip every preprocessor line (`#version`/`#define`/`#ifdef`/…). `translate_render` pins its own desktop
 /// `#version` and reflects the interface directly, so ES preprocessor directives are dropped on this path —
 /// the macro-heavy GskGpu/ANGLE shaders that actually depend on them take the VERBATIM host route (whose
@@ -473,4 +446,5 @@ impl Source<'_> {
     }
 }
 
-// Token-level declaration parsing continues in `tokens`.
+// Comment removal lives with the preprocessing phase it feeds (`preprocess::comment`); token-level
+// declaration parsing continues in `tokens`.

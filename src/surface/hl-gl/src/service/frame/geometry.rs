@@ -5,21 +5,6 @@ fn survivors(draws: &[DrawCall]) -> ([f32; 4], &[DrawCall]) {
     (clear, &draws[start..])
 }
 
-/// Whether draws to this framebuffer receive the host-surface coordinate specialization.
-///
-/// Imported scanout images are non-zero FBOs, but their row contract matches the default window target.
-pub(super) fn presents(
-    ctx: &GlContext,
-    fbo: u32,
-    target: Option<crate::model::program::TargetSnapshot>,
-) -> bool {
-    (fbo == 0 && ctx.local.surface_kind == crate::model::context::SurfaceKind::Window)
-        || target.is_some_and(|target| {
-            ctx.external_target(target.texture, target.generation)
-                .is_some()
-        })
-}
-
 pub(super) fn build_clear_frame_color(
     ctx: &mut GlContext,
     fbo: u32,
@@ -155,7 +140,7 @@ impl Frame {
             .and_then(|d| d.target);
         let (surface, target_tex, tw, th, target_fmt) =
             resolve_target(ctx, fbo, snapshot, &mut cmds);
-        let present_target = presents(ctx, fbo, snapshot);
+        let bottom_up = RenderPasses::stores_bottom_up_rows(ctx, snapshot);
         let no_fbo_tex = std::collections::HashMap::new();
         let mut snapshots = SnapshotTextures::new();
 
@@ -255,7 +240,7 @@ impl Frame {
                 );
                 first_pass = false;
                 segment_start = index + 1;
-                if let Some(cr) = scissored_clear_rect_enc(d, target_tex, tw, th, present_target) {
+                if let Some(cr) = scissored_clear_rect_enc(d, target_tex, tw, th, bottom_up) {
                     ops.push(cr);
                 }
             }
@@ -398,14 +383,14 @@ pub(super) fn scissored_clear_rect_enc(
     target_tex: u32,
     tw: i32,
     th: i32,
-    present_target: bool,
+    bottom_up: bool,
 ) -> Option<Enc> {
     let [sx, sy, sw, sh] = d.scissor;
     if sw <= 0 || sh <= 0 {
         return None;
     }
     let x = sx.clamp(0, tw);
-    let y_top = if present_target {
+    let y_top = if bottom_up {
         sy.max(0)
     } else {
         (th - sy - sh).max(0)

@@ -122,6 +122,116 @@ fn gsk_vertex_pulling_instance_offset_is_hoisted_into_the_bind_offset() {
     );
 }
 
+// glmark2's jellyfish/ideas shape: ONE VBO holding separate, NON-interleaved attribute regions —
+// positions as a tight vec3 array from byte 0, then texcoords as a tight vec2 array further in. GL gives
+// each attribute its own stride and offset, so folding both into one slot with a single stride described
+// the texcoord at offset 4800 inside a stride-8 slot and the host rejected the pipeline ("Vertex attribute
+// at location 1 stride 4800 exceeds the limit 8"). Each region must become its own vertex-buffer slot over
+// the SAME buffer, bound at its own byte offset.
+#[test]
+fn non_interleaved_regions_of_one_vbo_become_separate_slots() {
+    let mut c = ctx_640x480();
+    let mut sink = RecordingSink::with_full_caps();
+
+    const VERTICES: usize = 400;
+    const TEXCOORD_BASE: usize = VERTICES * 12; // positions: 400 * vec3
+    let vbo = c.buffers.gen();
+    record::bind_buffer(&mut c, GL_ARRAY_BUFFER, vbo);
+    record::buffer_data(
+        &mut c,
+        GL_ARRAY_BUFFER,
+        &vec![0u8; TEXCOORD_BASE + VERTICES * 8],
+        0x88E4,
+    );
+    record::vertex_attrib_pointer(&mut c, 0, 3, GL_FLOAT, false, 0, 0);
+    record::enable_vertex_attrib(&mut c, 0);
+    record::vertex_attrib_pointer(&mut c, 1, 2, GL_FLOAT, false, 0, TEXCOORD_BASE);
+    record::enable_vertex_attrib(&mut c, 1);
+
+    let vs = record::create_shader(&mut c, GL_VERTEX_SHADER);
+    record::shader_source(
+        &mut c,
+        vs,
+        "attribute vec3 position;\nattribute vec2 uv;\nvarying vec2 vuv;\n\
+         void main(){ vuv = uv; gl_Position = vec4(position, 1.0); }\n",
+    );
+    record::compile_shader(&mut c, vs);
+    let fs = record::create_shader(&mut c, GL_FRAGMENT_SHADER);
+    record::shader_source(
+        &mut c,
+        fs,
+        "precision mediump float;\nvarying vec2 vuv;\nvoid main(){ gl_FragColor = vec4(vuv, 0.0, 1.0); }\n",
+    );
+    record::compile_shader(&mut c, fs);
+    let prog = record::create_program(&mut c);
+    record::attach_shader(&mut c, prog, vs);
+    record::attach_shader(&mut c, prog, fs);
+    assert!(record::link_program(&mut c, prog));
+    record::use_program(&mut c, prog);
+
+    record::viewport(&mut c, [0, 0, 640, 480]);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, VERTICES as i32);
+
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let batch = &sink.batches[0];
+    let pipe = batch
+        .iter()
+        .find_map(|c| match c {
+            Cmd::CreateRenderPipeline(_, d) => Some(d),
+            _ => None,
+        })
+        .expect("CreateRenderPipeline");
+
+    // Every attribute lies inside its slot's stride — the property the host validates.
+    for layout in &pipe.vertex_buffers {
+        for attribute in &layout.attrs {
+            assert!(
+                attribute.offset < layout.stride,
+                "attribute at location {} offset {} must lie within its slot stride {}",
+                attribute.location,
+                attribute.offset,
+                layout.stride,
+            );
+        }
+    }
+    let slot_of = |location: u32| {
+        pipe.vertex_buffers
+            .iter()
+            .position(|layout| layout.attrs.iter().any(|a| a.location == location))
+            .expect("attribute is described by some slot")
+    };
+    let position = slot_of(0);
+    let texcoord = slot_of(1);
+    assert_ne!(
+        position, texcoord,
+        "two tight regions of one buffer with different strides need two slots"
+    );
+    assert_eq!(pipe.vertex_buffers[position].stride, 12);
+    assert_eq!(pipe.vertex_buffers[texcoord].stride, 8);
+
+    // Both slots bind the SAME buffer; only the bind offset separates the regions.
+    let ops = submit_ops(batch);
+    let binding = |slot: usize| {
+        ops.iter()
+            .find_map(|operation| match operation {
+                Enc::SetVertexBuffer {
+                    slot: bound,
+                    buffer,
+                    offset,
+                } if *bound as usize == slot => Some((*buffer, *offset)),
+                _ => None,
+            })
+            .expect("slot is bound")
+    };
+    assert_eq!(binding(position).1, 0);
+    assert_eq!(binding(texcoord).1, TEXCOORD_BASE as u64);
+    assert_eq!(
+        binding(position).0,
+        binding(texcoord).0,
+        "both regions live in one GL buffer, so both slots bind one IR buffer"
+    );
+}
+
 // ---------------------------------------------------------------------------------------------------
 // adapter/glsl — GLSL-ES → naga-acceptable desktop GLSL (forwarded, host-compiled)
 // ---------------------------------------------------------------------------------------------------

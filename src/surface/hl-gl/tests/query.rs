@@ -67,10 +67,10 @@ fn num_extensions_matches_the_extension_string() {
     let c = ctx_800x600();
     let mut buf = [0i32; 4];
     assert_eq!(query::get_integerv(&c, GL_NUM_EXTENSIONS, &mut buf), 1);
-    assert_eq!(buf[0], 11);
+    assert_eq!(buf[0], 13);
     assert_eq!(
         as_str(query::gl_string(GL_EXTENSIONS)),
-        "GL_KHR_debug GL_EXT_texture_format_BGRA8888 GL_EXT_read_format_bgra GL_ANGLE_robust_client_memory GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_copy_texture GL_ANGLE_client_arrays GL_ANGLE_webgl_compatibility GL_ANGLE_request_extension GL_OES_EGL_image GL_OES_EGL_sync"
+        "GL_KHR_debug GL_EXT_texture_format_BGRA8888 GL_EXT_read_format_bgra GL_ANGLE_robust_client_memory GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_copy_texture GL_ANGLE_client_arrays GL_ANGLE_webgl_compatibility GL_ANGLE_request_extension GL_OES_EGL_image GL_OES_EGL_sync GL_OES_rgb8_rgba8 GL_OES_depth24"
     );
     assert_eq!(
         as_str(query::string_i(GL_EXTENSIONS, 0).unwrap()),
@@ -96,13 +96,15 @@ fn num_extensions_matches_the_extension_string() {
         (8, "GL_ANGLE_request_extension"),
         (9, "GL_OES_EGL_image"),
         (10, "GL_OES_EGL_sync"),
+        (11, "GL_OES_rgb8_rgba8"),
+        (12, "GL_OES_depth24"),
     ] {
         assert_eq!(
             as_str(query::string_i(GL_EXTENSIONS, index).unwrap()),
             expected
         );
     }
-    assert!(query::string_i(GL_EXTENSIONS, 11).is_none());
+    assert!(query::string_i(GL_EXTENSIONS, 13).is_none());
     query::get_integerv(&c, GL_NUM_REQUESTABLE_EXTENSIONS_ANGLE, &mut buf);
     assert_eq!(buf[0], 0);
     assert!(query::string_i(GL_REQUESTABLE_EXTENSIONS_ANGLE, 0).is_none());
@@ -121,8 +123,14 @@ fn get_integerv_limits_are_positive_and_sane() {
     query::get_integerv(&c, GL_MAX_VERTEX_ATTRIBS, &mut b);
     assert_eq!(b[0], 16);
 
+    // The GLES3 minimum per stage (16), backed by the translator's link-time sampler check.
     query::get_integerv(&c, GL_MAX_TEXTURE_IMAGE_UNITS, &mut b);
-    assert_eq!(b[0], 8);
+    assert_eq!(b[0], 16);
+    query::get_integerv(&c, GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &mut b);
+    assert_eq!(
+        b[0], 32,
+        "both stages together, the modelled texture-unit bank"
+    );
 
     query::get_integerv(&c, GL_MAJOR_VERSION, &mut b);
     assert_eq!(b[0], query::ES_MAJOR);
@@ -141,12 +149,13 @@ fn get_integerv_limits_are_positive_and_sane() {
 #[test]
 fn get_integerv_reports_truthful_executor_consistent_limits() {
     // The limits GTK/epoxy query during GL init must be TRUTHFUL (no garbage / uninitialized memory) and
-    // consistent with the GPU-exec backend (`hl_gpu` Capabilities::full max_texture_2d = 16384).
+    // consistent with the GPU-exec backend: BOTH real executors advertise `max_texture_2d == 8192` and
+    // `hl_gpu`'s runtime validation rejects a larger texture, so 8192 is the honest ceiling.
     let c = ctx_800x600();
     let mut b = [0i32; 4];
 
-    // GL_MAX_TEXTURE_SIZE (and the cube-map / renderbuffer edges that share it) are the executor ceiling,
-    // not the old 4096 stand-in — and never the -455764240-style garbage of an untouched out-param.
+    // GL_MAX_TEXTURE_SIZE (and the cube-map / renderbuffer edges that share it) are the executor ceiling
+    // — and never the -455764240-style garbage of an untouched out-param.
     for pname in [
         GL_MAX_TEXTURE_SIZE,
         GL_MAX_CUBE_MAP_TEXTURE_SIZE,
@@ -154,14 +163,14 @@ fn get_integerv_reports_truthful_executor_consistent_limits() {
     ] {
         assert_eq!(query::get_integerv(&c, pname, &mut b), 1);
         assert_eq!(
-            b[0], 16384,
-            "limit {pname:#x} must be the 16384 executor ceiling"
+            b[0], 8192,
+            "limit {pname:#x} must be the 8192 executor ceiling"
         );
     }
 
     // GL_MAX_VIEWPORT_DIMS reports two positive dims consistent with the texture ceiling.
     assert_eq!(query::get_integerv(&c, GL_MAX_VIEWPORT_DIMS, &mut b), 2);
-    assert_eq!([b[0], b[1]], [16384, 16384]);
+    assert_eq!([b[0], b[1]], [8192, 8192]);
 
     // GLES3 MRT + batch limits GTK reads (previously fell through to the unknown-pname 0).
     query::get_integerv(&c, GL_MAX_COLOR_ATTACHMENTS, &mut b);
@@ -549,7 +558,15 @@ fn get_stringi_is_consistent_with_num_extensions() {
         as_str(query::string_i(GL_EXTENSIONS, 10).unwrap()),
         "GL_OES_EGL_sync"
     );
-    assert!(query::string_i(GL_EXTENSIONS, 11).is_none());
+    assert_eq!(
+        as_str(query::string_i(GL_EXTENSIONS, 11).unwrap()),
+        "GL_OES_rgb8_rgba8"
+    );
+    assert_eq!(
+        as_str(query::string_i(GL_EXTENSIONS, 12).unwrap()),
+        "GL_OES_depth24"
+    );
+    assert!(query::string_i(GL_EXTENSIONS, 13).is_none());
     assert!(query::string_i(GL_VERSION, 0).is_none());
 }
 

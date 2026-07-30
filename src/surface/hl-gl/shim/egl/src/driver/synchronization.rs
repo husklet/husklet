@@ -218,6 +218,41 @@ pub extern "C" fn glUnmapBuffer(target: u32) -> u8 {
     }
 }
 
+/// `glMapBufferOES(target, access)` — `GL_OES_mapbuffer`: map the WHOLE buffer bound to `target` and
+/// return a pointer into its host storage. That extension defines exactly one legal access,
+/// `GL_WRITE_ONLY_OES`; anything else is `GL_INVALID_ENUM`. Expressed as the ES 3 `glMapBufferRange` over
+/// `[0, size)` with `GL_MAP_WRITE_BIT`, so unmap/flush behaviour is the one modeled path
+/// ([`map::map_buffer_range`]). Null on error.
+pub extern "C" fn glMapBufferOES(target: u32, access: u32) -> *mut c_void {
+    const GL_WRITE_ONLY_OES: u32 = 0x88B9;
+    GlobalState::context(|s| {
+        if access != GL_WRITE_ONLY_OES {
+            s.gl.set_gl_error(GL_INVALID_ENUM);
+            return core::ptr::null_mut();
+        }
+        let name = s.gl.buffer_for_target(target);
+        let size = s.gl.buffers.get(name).map_or(0, |buffer| buffer.data.len());
+        if name == 0 || size == 0 {
+            s.gl.set_gl_error(GL_INVALID_OPERATION);
+            return core::ptr::null_mut();
+        }
+        match map::map_buffer_range(&mut s.gl, target, 0, size as isize, GL_MAP_WRITE_BIT) {
+            Some((name, offset)) => s
+                .gl
+                .buffers
+                .mapped_ptr(name, offset)
+                .map_or(core::ptr::null_mut(), |pointer| pointer.cast()),
+            None => core::ptr::null_mut(),
+        }
+    })
+}
+
+/// `glUnmapBufferOES(target)` — `GL_OES_mapbuffer`'s unmap; identical semantics to the ES 3
+/// `glUnmapBuffer` (flush the mapped range, clear the mapping).
+pub extern "C" fn glUnmapBufferOES(target: u32) -> u8 {
+    glUnmapBuffer(target)
+}
+
 /// `glFlushMappedBufferRange(target, offset, length)` — flush a sub-range of a still-mapped buffer as a
 /// `WriteBuffer`. See [`map::flush_mapped_range`].
 #[cfg_attr(gles_client, no_mangle)]

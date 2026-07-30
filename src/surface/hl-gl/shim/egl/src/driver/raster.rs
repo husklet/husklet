@@ -316,12 +316,32 @@ pub extern "C" fn glGetMultisamplefv(_pname: u32, _index: u32, val: *mut f32) {
 pub extern "C" fn glGetGraphicsResetStatus() -> u32 {
     GL_NO_ERROR
 }
-/// `glGetBufferPointerv(target, pname, params)` — the mapped-buffer pointer. This model does not retain a
-/// persistent host mapping pointer across the query, so it reports null — an honest default.
+/// `glGetBufferPointerv(target, pname, params)` — `GL_BUFFER_MAP_POINTER`: the pointer a live
+/// `glMapBufferRange` / `glMapBufferOES` handed out for the buffer bound to `target`, or null when it is not
+/// mapped (ES 3.0 §6.1.14 / `GL_OES_mapbuffer`). Any other `pname` is `GL_INVALID_ENUM`.
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glGetBufferPointerv(_target: u32, _pname: u32, params: *mut *mut c_void) {
+pub extern "C" fn glGetBufferPointerv(target: u32, pname: u32, params: *mut *mut c_void) {
+    const GL_BUFFER_MAP_POINTER: u32 = 0x88BD;
+    let pointer = GlobalState::context(|s| {
+        if pname != GL_BUFFER_MAP_POINTER {
+            s.gl.set_gl_error(GL_INVALID_ENUM);
+            return core::ptr::null_mut();
+        }
+        let name = s.gl.buffer_for_target(target);
+        if name == 0 {
+            s.gl.set_gl_error(GL_INVALID_OPERATION);
+            return core::ptr::null_mut();
+        }
+        let Some((offset, _)) = s.gl.buffers.get(name).and_then(|buffer| buffer.mapped) else {
+            return core::ptr::null_mut();
+        };
+        s.gl
+            .buffers
+            .mapped_ptr(name, offset)
+            .map_or(core::ptr::null_mut(), |pointer| pointer.cast())
+    });
     if !params.is_null() {
-        unsafe { *params = core::ptr::null_mut() };
+        unsafe { *params = pointer };
     }
 }
 /// `glGetPointerv(pname, params)` — a KHR_debug callback/pointer query; no such pointer state is modeled.

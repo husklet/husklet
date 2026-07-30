@@ -57,7 +57,7 @@ pub(super) extern "C" fn eglCreatePlatformWindowSurfaceEXT(
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
         return core::ptr::null_mut();
     }
-    if config as usize != CONFIG_TOKEN {
+    if super::egl::ConfigHandle::id(config).is_none() {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_CONFIG));
         return core::ptr::null_mut();
     }
@@ -337,23 +337,63 @@ pub extern "C" fn eglQuerySurface(
     unsafe { *value = v };
     EGL_TRUE
 }
-/// `eglCreatePbufferSurface(dpy, config, attrib_list)` — an offscreen pbuffer surface. Modeled as a window
-/// surface sized from the environment (the driver renders to one color target); returns a fresh token.
+/// The size an `eglCreatePbufferSurface` attribute list asks for.
+///
+/// EGL 1.5 §3.5.2: `EGL_WIDTH` / `EGL_HEIGHT` give the pbuffer's dimensions and a negative value is
+/// `EGL_BAD_PARAMETER`. Unspecified dimensions default to this driver's offscreen size rather than the
+/// spec's zero, because a zero-sized color target is not renderable and callers that omit the attributes
+/// (ANGLE's / Chrome's offscreen bring-up) expect a usable surface. Every other attribute is accepted and
+/// ignored: this driver models one RGBA8 color target with no texture-bound pbuffer path.
+struct PbufferSize;
+
+impl PbufferSize {
+    /// Read the requested dimensions, or `None` when the list is malformed (negative dimension).
+    fn parse(attrib_list: *const i32) -> Option<(u32, u32)> {
+        let (mut width, mut height) = default_surface_wh();
+        if attrib_list.is_null() {
+            return Some((width, height));
+        }
+        for index in 0..64 {
+            // SAFETY: an EGL attribute list is a caller-supplied `EGL_NONE`-terminated pair sequence; the
+            // loop stops at that terminator and reads the value only after seeing a non-terminator key.
+            let attribute = unsafe { *attrib_list.add(index * 2) };
+            if attribute == EGL_NONE {
+                break;
+            }
+            let value = unsafe { *attrib_list.add(index * 2 + 1) };
+            match attribute {
+                EGL_WIDTH if value < 0 => return None,
+                EGL_HEIGHT if value < 0 => return None,
+                EGL_WIDTH => width = value as u32,
+                EGL_HEIGHT => height = value as u32,
+                _ => {}
+            }
+        }
+        Some((width.max(1), height.max(1)))
+    }
+}
+
+/// `eglCreatePbufferSurface(dpy, config, attrib_list)` — an offscreen pbuffer surface, sized from the
+/// attribute list per EGL 1.5 §3.5.2 and backed by the same single color target a window surface uses, so
+/// GLES rendering into it (and `glReadPixels` out of it) works for `--off-screen` and headless callers.
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglCreatePbufferSurface(
     dpy: *mut c_void,
     config: *mut c_void,
-    _attrib_list: *const i32,
+    attrib_list: *const i32,
 ) -> *mut c_void {
     if dpy as usize != DISPLAY_TOKEN {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
         return core::ptr::null_mut();
     }
-    if config as usize != CONFIG_TOKEN {
+    if super::egl::ConfigHandle::id(config).is_none() {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_CONFIG));
         return core::ptr::null_mut();
     }
-    let (width, height) = default_surface_wh();
+    let Some((width, height)) = PbufferSize::parse(attrib_list) else {
+        GlobalState::access(|s| s.set_egl_error(EGL_BAD_PARAMETER));
+        return core::ptr::null_mut();
+    };
     GlobalState::access(|s| {
         s.create_surface(
             hl_gl::model::context::SurfaceKind::Offscreen,
@@ -401,7 +441,7 @@ pub extern "C" fn eglCreatePlatformWindowSurface(
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
         return core::ptr::null_mut();
     }
-    if config as usize != CONFIG_TOKEN {
+    if super::egl::ConfigHandle::id(config).is_none() {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_CONFIG));
         return core::ptr::null_mut();
     }

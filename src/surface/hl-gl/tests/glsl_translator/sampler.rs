@@ -1,9 +1,9 @@
 use super::*;
 
 #[test]
-fn eight_samplers_are_supported_and_a_ninth_is_rejected() {
+fn the_advertised_per_stage_sampler_count_is_supported_and_one_more_is_rejected() {
     let mut accepted = String::new();
-    for index in 0..8 {
+    for index in 0..16 {
         accepted.push_str(&format!("uniform sampler2D texture{index};\n"));
     }
     accepted.push_str("void main(){}\n");
@@ -14,29 +14,29 @@ fn eight_samplers_are_supported_and_a_ninth_is_rejected() {
     accepted.insert_str(0, "uniform sampler2D overflow;\n");
     assert!(matches!(
         glsl::StageSources::new("void main(){}", &accepted).uniform_layout(),
-        Err(glsl::UniformError::Samplers(9))
+        Err(glsl::UniformError::Samplers(17))
     ));
 }
 
 #[test]
 fn sampler_array_elements_consume_stage_and_combined_limits() {
     let accepted =
-        "uniform sampler2D textures[8];\nvoid main(){gl_FragColor=texture2D(textures[7],vec2(0));}\n";
+        "uniform sampler2D textures[16];\nvoid main(){gl_FragColor=texture2D(textures[15],vec2(0));}\n";
     assert!(glsl::StageSources::new("void main(){}", accepted)
         .uniform_layout()
         .is_ok());
 
-    let fragment_overflow = accepted.replace("[8]", "[9]").replace("[7]", "[8]");
+    let fragment_overflow = accepted.replace("[16]", "[17]").replace("[15]", "[16]");
     assert!(matches!(
         glsl::StageSources::new("void main(){}", &fragment_overflow).uniform_layout(),
-        Err(glsl::UniformError::Samplers(9))
+        Err(glsl::UniformError::Samplers(17))
     ));
 
     let vertex_overflow =
-        "uniform sampler2D textures[5];\nvoid main(){gl_Position=texture2D(textures[4],vec2(0));}\n";
+        "uniform sampler2D textures[17];\nvoid main(){gl_Position=texture2D(textures[16],vec2(0));}\n";
     assert!(matches!(
         glsl::StageSources::new(vertex_overflow, "void main(){}").uniform_layout(),
-        Err(glsl::UniformError::Samplers(5))
+        Err(glsl::UniformError::Samplers(17))
     ));
 }
 

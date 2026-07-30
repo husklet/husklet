@@ -206,11 +206,16 @@ fn matrix_shape(ty: &str) -> Option<(usize, usize)> {
 /// Why a GLSL program cannot be represented by the modeled GLES uniform interface.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum UniformError {
+    /// The stage could not be preprocessed (GLSL ES 1.00 §3.4); nothing downstream ran.
+    Preprocess(PreprocessError),
     UnsupportedType(String),
     NonLiteralArray(String),
     DynamicSamplerArray(String),
     ArithmeticOverflow,
-    StageComponents { stage: &'static str, count: usize },
+    StageComponents {
+        stage: &'static str,
+        count: usize,
+    },
     BlockBytes(usize),
     Samplers(usize),
     ConflictingDeclaration(String),
@@ -220,6 +225,7 @@ pub enum UniformError {
 impl std::fmt::Display for UniformError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Preprocess(error) => write!(f, "preprocessor error at line {error}"),
             Self::UnsupportedType(ty) => write!(f, "unsupported uniform type `{ty}`"),
             Self::NonLiteralArray(name) => {
                 write!(f, "uniform `{name}` has a non-literal array dimension")
@@ -252,11 +258,21 @@ impl std::fmt::Display for UniformError {
 
 impl std::error::Error for UniformError {}
 
+impl From<PreprocessError> for UniformError {
+    fn from(error: PreprocessError) -> Self {
+        Self::Preprocess(error)
+    }
+}
+
 /// Matches the values returned by the GLES capability queries.
 pub const MAX_UNIFORM_COMPONENTS: usize = 256 * 4;
-pub const MAX_VERTEX_SAMPLERS: usize = 4;
-pub const MAX_FRAGMENT_SAMPLERS: usize = 8;
-pub const MAX_COMBINED_SAMPLERS: usize = 8;
+/// Per-stage sampler ceiling: the GLES3 minimum (16) and simultaneously wgpu's guaranteed
+/// 16 sampled-textures + 16 samplers per shader stage, which is Metal's per-stage sampler-argument
+/// limit. A program declaring more is rejected at link.
+pub const MAX_VERTEX_SAMPLERS: usize = 16;
+pub const MAX_FRAGMENT_SAMPLERS: usize = 16;
+/// Both stages together, bounded by the modelled texture-unit bank.
+pub const MAX_COMBINED_SAMPLERS: usize = crate::model::glconst::MAX_TEXTURE_UNITS;
 /// Two independently valid stages are flattened into one internal std140 block. A scalar array is the
 /// worst-case std140 expansion: each component occupies one 16-byte array stride.
 pub const MAX_COMBINED_UNIFORM_BYTES: usize = 2 * MAX_UNIFORM_COMPONENTS * 16;
@@ -287,11 +303,22 @@ impl<'a> Source<'a> {
     }
 
     pub fn vertex_attrs(self) -> Vec<Decl> {
-        let text = self.comments_removed();
+        let text = self.expanded();
         let mut attrs = Tokens(&text).collect("attribute");
         attrs.truncate(16);
         append_decls_unique(&mut attrs, Tokens(&text).collect("in"), 16);
         attrs
+    }
+
+    /// The preprocessed stage, or — when preprocessing fails — the merely comment-free source.
+    ///
+    /// Every route to the host compiler is gated by [`StageSources::validate_sampler_array_uses`] and
+    /// [`StageSources::uniform_layout`], both of which REJECT the program with the preprocessor diagnostic
+    /// before any translation runs, so this fallback only ever feeds reflection whose result is discarded
+    /// together with the failed link. Reflection helpers stay infallible for their callers.
+    pub(super) fn expanded(self) -> String {
+        self.preprocessed()
+            .unwrap_or_else(|_| self.comments_removed())
     }
 
     pub fn inject_uniform_block_bindings(self) -> String {
@@ -303,7 +330,10 @@ impl<'a> Source<'a> {
 // GLSL-ES compute → naga-acceptable desktop GLSL compute (the CreateShader Glsl payload)
 
 mod bindings;
+mod constants;
 mod locations;
+mod normalize;
+mod preprocess;
 mod reflection;
 mod scanner;
 mod tokens;
@@ -311,8 +341,11 @@ mod translate;
 mod uniforms;
 
 pub use bindings::{prepare_verbatim_program, prepare_verbatim_program_with};
+pub use preprocess::PreprocessError;
 pub use uniforms::UniformBlockDecl;
 
 use bindings::UniformBlockEdits;
+use constants::Constants;
+use normalize::NormalizedSource;
 use scanner::*;
 use tokens::*;

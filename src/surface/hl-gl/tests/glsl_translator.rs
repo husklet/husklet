@@ -57,6 +57,8 @@ mod layout;
 mod location;
 #[path = "glsl_translator/metadata.rs"]
 mod metadata;
+#[path = "glsl_translator/preprocess.rs"]
+mod preprocess;
 #[path = "glsl_translator/robustness.rs"]
 mod robustness;
 #[path = "glsl_translator/sampler.rs"]

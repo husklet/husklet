@@ -2,8 +2,8 @@ use super::*;
 
 impl StageSources<'_> {
     pub fn uniform_layout(self) -> Result<(Vec<Uni>, i32), UniformError> {
-        let vs = Source::new(self.vertex).comments_removed();
-        let fs = Source::new(self.fragment).comments_removed();
+        let vs = Source::new(self.vertex).preprocessed()?;
+        let fs = Source::new(self.fragment).preprocessed()?;
         Self::validate_declaration_compatibility(&vs, &fs)?;
         Self::validate_stage("vertex", &vs)?;
         Self::validate_stage("fragment", &fs)?;
@@ -154,15 +154,16 @@ impl StageSources<'_> {
     }
 
     pub fn validate_sampler_array_uses(self) -> Result<(), UniformError> {
-        let declarations = Declarations::from_stages(self.vertex, self.fragment)
-            .uniforms()
-            .1;
+        // The first gate `Program::link` runs, and therefore where a preprocessor diagnostic must surface:
+        // no unexpanded macro may reach the reflection below or the host compiler beyond it.
+        let vertex = Source::new(self.vertex).preprocessed()?;
+        let fragment = Source::new(self.fragment).preprocessed()?;
+        let declarations = Declarations::from_stages(&vertex, &fragment).uniforms().1;
         for declaration in declarations
             .iter()
             .filter(|declaration| declaration.arr > 1 && declaration.array_literal)
         {
-            for source in [self.vertex, self.fragment] {
-                let source = Source::new(source).comments_removed();
+            for source in [&vertex, &fragment] {
                 let mut cursor = 0usize;
                 let needle = format!("{}[", declaration.name);
                 while let Some(relative) = source[cursor..].find(&needle) {
@@ -214,7 +215,7 @@ impl StageSources<'_> {
     pub fn uniform_blocks(self) -> Vec<UniformBlockDecl> {
         let mut out: Vec<UniformBlockDecl> = Vec::new();
         for src in [self.vertex, self.fragment] {
-            let src = Source::new(src).comments_removed();
+            let src = Source::new(src).expanded();
             for blk in Source::new(&src).uniform_blocks() {
                 if !out.iter().any(|b| b.binding == blk.binding) {
                     out.push(blk);
@@ -230,6 +231,7 @@ impl StageSources<'_> {
 impl Source<'_> {
     pub(super) fn uniform_blocks(self) -> Vec<UniformBlockDecl> {
         let src = self.text;
+        let constants = Constants::from_source(src);
         let b = src.as_bytes();
         let mut out = Vec::new();
         let mut p = 0usize;
@@ -298,7 +300,7 @@ impl Source<'_> {
                     q += 1;
                 }
                 let name = read_tok(&mut q);
-                let (arr, array_literal) = Tokens::read_array_subscript(b, &mut q);
+                let (arr, array_literal) = Tokens::read_array_subscript(b, &mut q, &constants);
                 if !ty.is_empty() && !name.is_empty() {
                     members.push(Decl {
                         ty,
@@ -324,7 +326,7 @@ impl Source<'_> {
 /// to resolve which `glBindBufferBase`d buffer feeds the shader's std140 UBO at IR binding 0.
 impl Source<'_> {
     pub fn uniform_block_binding(self) -> Option<u32> {
-        let src = Source::new(self.text).comments_removed();
+        let src = Source::new(self.text).expanded();
         let b = src.as_bytes();
         let mut p = 0usize;
         while let Some(rel) = find_from(b, b"uniform", p) {

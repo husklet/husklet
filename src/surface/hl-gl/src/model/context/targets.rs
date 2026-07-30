@@ -135,7 +135,10 @@ impl GlContext {
     }
 
     pub fn take_surface_target(&mut self, surface: u64) -> SurfaceTarget {
-        self.local.default_targets.remove(&surface).unwrap_or_default()
+        self.local
+            .default_targets
+            .remove(&surface)
+            .unwrap_or_default()
     }
 
     /// The shared 1x1 placeholder sampled-texture + default-sampler IR ids used to fill a

@@ -171,6 +171,57 @@ pub(super) fn lower_vertices(
             slot_base[sl] = (min_off / stride) * stride;
         }
     }
+    // GL gives every attribute its OWN stride and offset into the bound buffer, so one VBO may hold several
+    // separate, non-interleaved attribute regions (glmark2's jellyfish and ideas scenes upload positions,
+    // normals and texcoords as consecutive tight arrays in one buffer). Folding those into a single slot with
+    // one stride misdescribes them: the attribute's offset then exceeds the slot's array stride and the host
+    // rejects the pipeline ("Vertex attribute at location 1 stride 40 exceeds the limit 8"). An attribute that
+    // does not fit its buffer's shared (stride, base) therefore gets its own vertex-buffer slot over the SAME
+    // buffer, bound at its own byte offset — which the neutral IR expresses directly, since `VertexLayout`
+    // carries a per-slot stride and `Enc::SetVertexBuffer` a per-slot bind offset. Attributes that already fit
+    // (every interleaved layout, and GskGpu's hoisted per-instance base) keep their shared slot unchanged.
+    let mut nslot = nslot;
+    for (location, attribute) in d.attrs.iter().enumerate() {
+        let slot = attr_slot[location];
+        if slot < 0 || !attribute.enabled {
+            continue;
+        }
+        let slot = slot as usize;
+        let element = attribute_element_size(attribute);
+        let relative = (attribute.offset as u32).saturating_sub(slot_base[slot]);
+        if relative.saturating_add(element) <= slot_stride[slot] {
+            continue;
+        }
+        let stride = attribute_stride(attribute);
+        // Prefer a 4-aligned bind offset (WebGPU requires one); fall back to the exact attribute offset when
+        // the aligned remainder would not fit inside one stride.
+        let offset = attribute.offset as u32;
+        let aligned = offset & !3;
+        let base = if (offset - aligned).saturating_add(element) <= stride {
+            aligned
+        } else {
+            offset
+        };
+        let step = (attribute.divisor > 0) as u32;
+        let existing = (0..nslot).position(|candidate| {
+            slot_gl_buf[candidate] == attribute.buffer
+                && slot_stride[candidate] == stride
+                && slot_base[candidate] == base
+                && (0..d.attrs.len())
+                    .any(|other| attr_slot[other] == candidate as i32 && d.attrs[other].divisor > 0)
+                    == (step == 1)
+        });
+        attr_slot[location] = match existing {
+            Some(candidate) => candidate as i32,
+            None => {
+                slot_gl_buf.push(attribute.buffer);
+                slot_stride.push(stride);
+                slot_base.push(base);
+                nslot += 1;
+                (nslot - 1) as i32
+            }
+        };
+    }
     let nvd = d
         .attrs
         .iter()

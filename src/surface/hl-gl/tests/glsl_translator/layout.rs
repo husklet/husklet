@@ -65,16 +65,35 @@ fn conflicting_cross_stage_uniform_declarations_are_rejected() {
 }
 
 #[test]
-fn conflicting_conditional_uniform_declarations_are_rejected() {
+fn conflicting_uniform_declarations_are_rejected() {
+    let vertex = "uniform vec4 value;\n\
+                  uniform float value;\n\
+                  void main(){ gl_Position = vec4(value); }\n";
+    assert_eq!(
+        glsl::StageSources::new(vertex, "void main(){}").uniform_layout(),
+        Err(glsl::UniformError::ConflictingDeclaration("value".into()))
+    );
+}
+
+/// Opposite `#if`/`#else` arms are NOT a conflict: preprocessing selects one arm, so only the live
+/// declaration is reflected (GLSL ES 1.00 §3.4).
+#[test]
+fn only_the_live_conditional_uniform_arm_is_reflected() {
     let vertex = "#if defined(HL_VECTOR)\n\
                   uniform vec4 value;\n\
                   #else\n\
                   uniform float value;\n\
                   #endif\n\
                   void main(){ gl_Position = vec4(value); }\n";
+    let (uniforms, _) = glsl::StageSources::new(vertex, "void main(){}")
+        .uniform_layout()
+        .expect("one arm is live");
     assert_eq!(
-        glsl::StageSources::new(vertex, "void main(){}").uniform_layout(),
-        Err(glsl::UniformError::ConflictingDeclaration("value".into()))
+        uniforms
+            .iter()
+            .map(|uniform| (uniform.name.as_str(), uniform.ty.as_str()))
+            .collect::<Vec<_>>(),
+        [("value", "float")]
     );
 }
 
@@ -95,7 +114,10 @@ fn oversized_array_is_rejected_without_integer_wraparound() {
 
 #[test]
 fn nonliteral_array_dimension_is_a_link_error() {
-    let fs = "#define COUNT 4\nuniform vec4 values[COUNT];\nvoid main(){}\n";
+    // A `#define`d or `const int` dimension IS an integral constant expression (GLSL ES 1.00 §4.1.9) and is
+    // folded — see `preprocess::macro_array_dimension_and_inactive_branch`. Only a genuinely non-constant
+    // dimension is a link error.
+    let fs = "uniform int count;\nuniform vec4 values[count];\nvoid main(){}\n";
     assert_eq!(
         glsl::StageSources::new("void main(){}", fs).uniform_layout(),
         Err(glsl::UniformError::NonLiteralArray("values".into()))

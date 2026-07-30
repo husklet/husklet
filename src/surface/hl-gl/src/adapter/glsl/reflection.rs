@@ -2,8 +2,8 @@ use super::*;
 
 impl StageSources<'_> {
     pub fn samplers(self) -> Vec<String> {
-        let vs = Source::new(self.vertex).comments_removed();
-        let fs = Source::new(self.fragment).comments_removed();
+        let vs = Source::new(self.vertex).expanded();
+        let fs = Source::new(self.fragment).expanded();
         let (_data, samps) = Declarations::from_stages(&vs, &fs).uniforms();
         samps.into_iter().map(|d| d.name).collect()
     }
@@ -45,6 +45,9 @@ impl StageSources<'_> {
         // miss it — the host's tokenizer has no such cap and DOES count it). Match `uniform <samplerType> NAME`
         // exactly as `glsl_es::split_global_samplers` does: `uniform`, then a host-recognized sampler type, then
         // the sampler name; `k` increments once per such declaration in text order.
+        // Comment removal ONLY — deliberately not preprocessed. This replays the HOST's counter over the text
+        // actually forwarded on the verbatim route, which the host preprocesses itself; expanding here would
+        // drop the inactive external branch the host still counts and shift every `k`.
         let src = Source::new(self.fragment).comments_removed();
         let b = src.as_bytes();
         let mut words: Vec<(usize, &str)> = Vec::new();
@@ -93,8 +96,8 @@ impl StageSources<'_> {
 /// (data uniforms first, then samplers), so the two never disagree.
 impl StageSources<'_> {
     pub fn uniform_decls(self) -> Vec<Decl> {
-        let vs = Source::new(self.vertex).comments_removed();
-        let fs = Source::new(self.fragment).comments_removed();
+        let vs = Source::new(self.vertex).expanded();
+        let fs = Source::new(self.fragment).expanded();
         let (data, _samps) = Declarations::from_stages(&vs, &fs).uniforms();
         data
     }
@@ -102,8 +105,8 @@ impl StageSources<'_> {
     /// The SAMPLER uniforms as `(name, glsl_type)` (`program_samplers` keeps only names; this keeps the
     /// declared sampler type so `glGetActiveUniform` can report `GL_SAMPLER_2D` vs `GL_SAMPLER_CUBE`).
     pub fn sampler_decls(self) -> Vec<Decl> {
-        let vs = Source::new(self.vertex).comments_removed();
-        let fs = Source::new(self.fragment).comments_removed();
+        let vs = Source::new(self.vertex).expanded();
+        let fs = Source::new(self.fragment).expanded();
         let (_data, samps) = Declarations::from_stages(&vs, &fs).uniforms();
         samps
     }
@@ -112,7 +115,7 @@ impl StageSources<'_> {
     /// order — the resource list `glGetFragDataLocation`/`glGetProgramResource*(GL_PROGRAM_OUTPUT)` resolve
     /// against. An ES2-style `gl_FragColor` shader declares none (its single output is location 0 implicitly).
     pub fn frag_outputs(self) -> Vec<Decl> {
-        let fs = Source::new(self.fragment).comments_removed();
+        let fs = Source::new(self.fragment).expanded();
         let mut outs = Tokens(&fs).collect("out");
         outs.truncate(4);
         outs

@@ -111,6 +111,36 @@ impl RenderPasses {
         })
     }
 
+    /// Whether this framebuffer's rows are stored in GL texel order — row 0 is the framebuffer's BOTTOM.
+    ///
+    /// This is the authoritative row-order contract for every lowered render target:
+    ///
+    /// * INTERNAL targets — the default framebuffer and ordinary FBO textures — store rows top-down as the
+    ///   framebuffer is viewed (row 0 = its top). GL clip space and WebGPU clip space already agree on which
+    ///   edge is up, so nothing is reflected; instead every crossing back into GL WINDOW or TEXEL coordinates
+    ///   converts `h-1-y`: [`emit_viewport`], [`emit_scissor`], [`scissored_clear_rect_enc`],
+    ///   `adapter::glsl::fragment_coordinates`, `blit_copy_enc`, the rendered-FBO sampler `flip_y`, and
+    ///   `readpixels::pack_region`. A window frame therefore reaches its IOSurface or `wl_shm` buffer — both
+    ///   top-down — upright, with NO flip anywhere on the present path.
+    /// * An IMPORTED EXTERNAL image is the one exception. The guest, not this driver, owns what the foreign
+    ///   consumer reads out of that memory (Chrome attaches an imported EGLImage to a non-zero FBO and
+    ///   publishes it at `glFlush`), so the driver must materialize true GL FBO semantics, in which texel row
+    ///   0 is the framebuffer's BOTTOM. Those draws get the clip reflection, the reversed triangle winding it
+    ///   implies, and un-converted window rows.
+    ///
+    /// Reflecting the DEFAULT framebuffer as well — which this predicate used to do — mirrored every
+    /// presented frame of an ordinary GL application while leaving Chrome upright, because Chrome already
+    /// pre-flips its own projection for a top-left scanout image and the two flips cancelled.
+    pub(super) fn stores_bottom_up_rows(
+        ctx: &GlContext,
+        target: Option<crate::model::program::TargetSnapshot>,
+    ) -> bool {
+        target.is_some_and(|target| {
+            ctx.external_target(target.texture, target.generation)
+                .is_some()
+        })
+    }
+
     pub(super) fn groups(draws: &[DrawCall]) -> Vec<(u32, usize, usize)> {
         let mut groups: Vec<(u32, usize, usize)> = Vec::new();
         for (i, d) in draws.iter().enumerate() {
@@ -354,7 +384,7 @@ fn lower_ordered_run(
     let first = run.first()?;
     let fbo = first.fbo;
     let target = resolve_target(ctx, fbo, first.target, cmds);
-    let present_target = presents(ctx, fbo, first.target);
+    let bottom_up = RenderPasses::stores_bottom_up_rows(ctx, first.target);
     fbo_target.insert(fbo, target);
     if let Some(frame_target) = frame_target(
         ctx,
@@ -395,7 +425,7 @@ fn lower_ordered_run(
                 load = LoadOp::Load;
             }
             if let Some(clear) =
-                scissored_clear_rect_enc(draw, target.1, target.2, target.3, present_target)
+                scissored_clear_rect_enc(draw, target.1, target.2, target.3, bottom_up)
             {
                 ops.push(clear);
                 initialized.insert(target.1);
@@ -661,6 +691,21 @@ impl RenderPasses {
 /// unscissored clear's color (see [`effective_clear`]).
 impl Frame {
     pub(super) fn build_clear(ctx: &mut GlContext) -> Frame {
+        // GL specifies that `glClear` is scissor-tested. A frame whose only recorded ops are clears still
+        // has to honor that: a scissored clear paints a sub-rect and must not become a full-target clear (nor
+        // be dropped when a full clear precedes it, which is what a plain clear-load did). The geometry
+        // builder already lowers a scissored clear to `Enc::ClearRect` between render-pass segments and
+        // handles a segment list with no geometry at all, so route there and keep the full-target clear as
+        // the fallback.
+        let (_, start) = RenderPasses::effective_clear(&ctx.local.recording.draws);
+        if ctx.local.recording.draws[start..]
+            .iter()
+            .any(|draw| draw.is_clear && draw.scissor_enabled)
+        {
+            if let Some(frame) = Self::build_geometry(ctx) {
+                return frame;
+            }
+        }
         let cmds: Vec<Cmd> = Vec::new();
         let fbo = ctx.local.recording.draws.last().map(|d| d.fbo).unwrap_or(0);
         let clear = RenderPasses::effective_clear(&ctx.local.recording.draws).0;

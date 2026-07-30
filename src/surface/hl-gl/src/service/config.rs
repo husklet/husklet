@@ -1,10 +1,12 @@
-//! The EGL config table — the single, truthful `EGLConfig` this driver advertises and its attributes.
+//! The EGL config table — the `EGLConfig`s this driver advertises, their attributes, and the
+//! specification's selection + sort order.
 //!
 //! `eglGetConfigs` / `eglChooseConfig` / `eglGetConfigAttrib` are pure marshalling in the guest cdylib
 //! (`shim/egl`): the honest values live HERE so they are unit-testable without the shim (the same split
-//! [`crate::service::query`] uses for the `glGetString` identity). This driver backs exactly ONE config —
-//! an 8/8/8/8 RGBA color buffer with a 24-bit depth + 8-bit stencil buffer, renderable by OpenGL ES 2 and
-//! ES 3, usable for both window and pbuffer surfaces — so the enumeration is a one-element table.
+//! [`crate::service::query`] uses for the `glGetString` identity). Every config shares the one color
+//! buffer the presenter really has — 8/8/8/8 RGBA — and they differ in the depth/stencil the frame
+//! builder attaches, because an application that wants NO stencil (glmark2 at default settings) must find
+//! a config that says so instead of being handed the only stencil-8 config and giving up.
 //!
 //! The attribute values are the driver's REAL capabilities (see [`crate::service::query`] for the
 //! matching `glGetIntegerv` limits), not padding: the color/depth/stencil sizes match what
@@ -47,31 +49,74 @@ pub const EGL_COLOR_BUFFER_TYPE: i32 = 0x303F;
 pub const EGL_RENDERABLE_TYPE: i32 = 0x3040;
 pub const EGL_CONFORMANT: i32 = 0x3042;
 
+pub const EGL_MATCH_NATIVE_PIXMAP: i32 = 0x3041;
+pub const EGL_DONT_CARE: i32 = -1;
+
 // Attribute VALUE enums.
 pub const EGL_RGB_BUFFER: i32 = 0x308E; // EGL_COLOR_BUFFER_TYPE value
 pub const EGL_WINDOW_BIT: i32 = 0x0004;
 pub const EGL_PBUFFER_BIT: i32 = 0x0001;
 pub const EGL_OPENGL_ES2_BIT: i32 = 0x0004;
 pub const EGL_OPENGL_ES3_BIT: i32 = 0x0040;
+/// OpenGL ES **1.x** renderable. Never set by any config here: this driver implements no fixed-function
+/// ES1 pipeline, and `eglChooseConfig`'s DEFAULT `EGL_RENDERABLE_TYPE` is exactly this bit — so a caller
+/// that asks for nothing correctly matches nothing rather than being handed an ES2-only config.
+pub const EGL_OPENGL_ES_BIT: i32 = 0x0001;
 
 // ---- the advertised config table -----------------------------------------------------------------
 
-/// The number of `EGLConfig`s this driver advertises (`eglGetConfigs` total; the length of the table
-/// `eglChooseConfig` selects from). Exactly one.
+/// The number of `EGLConfig`s the guest shim currently enumerates. It marshals ONE opaque handle, so it
+/// can expose only the primary config ([`CONFIG_ID`]); the honest table is [`CONFIGS`], and exposing it
+/// needs `shim/egl` to carry a handle per config id.
 pub const NUM_CONFIGS: i32 = 1;
-/// The opaque, non-zero id of the single config (`eglGetConfigAttrib(EGL_CONFIG_ID)`). EGL config ids are
-/// 1-based, so `0` is never a valid id.
+/// The opaque, non-zero id of the primary config (`eglGetConfigAttrib(EGL_CONFIG_ID)`). EGL config ids
+/// are 1-based, so `0` is never a valid id.
 pub const CONFIG_ID: i32 = 1;
 
-// The color / depth / stencil sizes — the driver's REAL surface format (matches `GL_*_BITS`).
+// The color sizes — the presenter's REAL surface format (matches `GL_*_BITS`). Every config shares them:
+// the default framebuffer is a single 8888 plane, so an alpha-less config would be a claim about
+// opacity that the compositor path does not currently make.
 const RED: i32 = 8;
 const GREEN: i32 = 8;
 const BLUE: i32 = 8;
 const ALPHA: i32 = 8;
-const DEPTH: i32 = 24;
-const STENCIL: i32 = 8;
 const BUFFER: i32 = RED + GREEN + BLUE + ALPHA; // 32-bit color buffer
-const MAX_PBUFFER: i32 = 16384; // matches query::MAX_TEXTURE_SIZE / VIEWPORT_DIM
+const MAX_PBUFFER: i32 = crate::service::query::MAX_TEXTURE_SIZE; // a pbuffer becomes a host texture
+
+/// One advertised `EGLConfig`: its id and the depth/stencil sizes that distinguish it. Everything else
+/// (color sizes, surface + renderable bits, caveat, …) is identical across the table.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ConfigSpec {
+    pub id: i32,
+    pub depth: i32,
+    pub stencil: i32,
+}
+
+/// The advertised configs, each genuinely backed: the frame builder attaches a depth plane of at least 24
+/// bits when a config asks for depth, and the stencil-8 variant is the one the real
+/// `RenderPipeline`/`StencilState` path lowers. Ordered by id; [`Config::choose`] applies the
+/// specification's sort order, which puts the SMALLER depth/stencil first — so a default
+/// `eglChooseConfig` lands on the no-depth/no-stencil config instead of being forced into stencil 8.
+pub const CONFIGS: &[ConfigSpec] = &[
+    ConfigSpec {
+        id: CONFIG_ID,
+        depth: 24,
+        stencil: 8,
+    },
+    ConfigSpec {
+        id: 2,
+        depth: 24,
+        stencil: 0,
+    },
+    ConfigSpec {
+        id: 3,
+        depth: 0,
+        stencil: 0,
+    },
+];
+
+/// The primary config (the one the current shim hands out).
+const PRIMARY: ConfigSpec = CONFIGS[0];
 
 /// Why `config_attrib` rejected a query — mapped by the shim to the EGL error it raises.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,8 +141,17 @@ impl Config {
         if !is_our_config {
             return Err(ConfigError::BadConfig);
         }
+        Self::attrib_of(PRIMARY.id, attribute)
+    }
+
+    /// `eglGetConfigAttrib` for the config with id `id` — the same contract as [`Config::attrib`], keyed
+    /// by the id [`Config::choose`] / [`Config::ids`] return instead of a single opaque handle.
+    pub fn attrib_of(id: i32, attribute: i32) -> Result<i32, ConfigError> {
+        let Some(spec) = CONFIGS.iter().find(|spec| spec.id == id) else {
+            return Err(ConfigError::BadConfig);
+        };
         let v = match attribute {
-            EGL_CONFIG_ID => CONFIG_ID,
+            EGL_CONFIG_ID => spec.id,
             EGL_BUFFER_SIZE => BUFFER,
             EGL_RED_SIZE => RED,
             EGL_GREEN_SIZE => GREEN,
@@ -105,8 +159,8 @@ impl Config {
             EGL_ALPHA_SIZE => ALPHA,
             EGL_LUMINANCE_SIZE => 0,
             EGL_ALPHA_MASK_SIZE => 0,
-            EGL_DEPTH_SIZE => DEPTH,
-            EGL_STENCIL_SIZE => STENCIL,
+            EGL_DEPTH_SIZE => spec.depth,
+            EGL_STENCIL_SIZE => spec.stencil,
             EGL_SAMPLES => 0,
             EGL_SAMPLE_BUFFERS => 0,
             EGL_COLOR_BUFFER_TYPE => EGL_RGB_BUFFER,
@@ -150,67 +204,6 @@ impl Config {
     }
 }
 
+mod select;
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn our_config_reports_truthful_color_depth_stencil() {
-        assert_eq!(Config::attrib(true, EGL_RED_SIZE), Ok(8));
-        assert_eq!(Config::attrib(true, EGL_GREEN_SIZE), Ok(8));
-        assert_eq!(Config::attrib(true, EGL_BLUE_SIZE), Ok(8));
-        assert_eq!(Config::attrib(true, EGL_ALPHA_SIZE), Ok(8));
-        assert_eq!(Config::attrib(true, EGL_BUFFER_SIZE), Ok(32));
-        assert_eq!(Config::attrib(true, EGL_DEPTH_SIZE), Ok(24));
-        assert_eq!(Config::attrib(true, EGL_STENCIL_SIZE), Ok(8));
-        assert_eq!(Config::attrib(true, EGL_CONFIG_ID), Ok(CONFIG_ID));
-        assert_eq!(
-            Config::attrib(true, EGL_COLOR_BUFFER_TYPE),
-            Ok(EGL_RGB_BUFFER)
-        );
-        assert_eq!(Config::attrib(true, EGL_CONFIG_CAVEAT), Ok(EGL_NONE));
-        assert_eq!(
-            Config::attrib(true, EGL_RENDERABLE_TYPE),
-            Ok(EGL_OPENGL_ES2_BIT | EGL_OPENGL_ES3_BIT)
-        );
-        assert_eq!(
-            Config::attrib(true, EGL_SURFACE_TYPE),
-            Ok(EGL_WINDOW_BIT | EGL_PBUFFER_BIT)
-        );
-    }
-
-    #[test]
-    fn unknown_attribute_is_bad_attribute_not_a_fake_zero() {
-        // A garbage enum must be reported, never silently answered with 0.
-        assert_eq!(
-            Config::attrib(true, 0x1234_5678),
-            Err(ConfigError::BadAttribute)
-        );
-        assert_eq!(Config::attrib(true, 0), Err(ConfigError::BadAttribute));
-    }
-
-    #[test]
-    fn foreign_config_handle_is_bad_config() {
-        assert_eq!(
-            Config::attrib(false, EGL_RED_SIZE),
-            Err(ConfigError::BadConfig)
-        );
-    }
-
-    #[test]
-    fn enumerate_null_buffer_reports_count_only() {
-        // configs == NULL: write nothing, report the total.
-        assert_eq!(Config::enumerate(false, 0), (0, NUM_CONFIGS));
-        assert_eq!(Config::enumerate(false, 99), (0, NUM_CONFIGS));
-    }
-
-    #[test]
-    fn enumerate_bounded_copy() {
-        // Real array with room: write + report all configs.
-        assert_eq!(Config::enumerate(true, 16), (1, 1));
-        assert_eq!(Config::enumerate(true, 1), (1, 1));
-        // Zero / negative capacity writes none (no OOB store into a zero-length array).
-        assert_eq!(Config::enumerate(true, 0), (0, 0));
-        assert_eq!(Config::enumerate(true, -1), (0, 0));
-    }
-}
+mod tests;

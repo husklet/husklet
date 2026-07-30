@@ -1,20 +1,20 @@
 //! `glReadPixels` — the GL device→host readback, the GL equivalent of cuda's `cuMemcpyDtoH`.
 //!
-//! GL is deferred-lowering, so unlike a real driver there is no already-rendered framebuffer to sample
-//! when `glReadPixels` is called. This service therefore does what `glFinish`+read would: it lowers the
-//! recorded draw-list into the frame's render-target texture ([`crate::service::frame::build_frame_ir`]),
-//! submits it, then copies that render-target texture back to a host-readable buffer with a
-//! `CopyTextureToBuffer` + [`CommandSink::read_buffer`] — the SAME device→host port cuda's DtoH uses, so
-//! the readback works identically over an in-process sink or the socketed `RemoteCommandSink`.
+//! GL is deferred-lowering, so unlike a real driver there is no already-rendered framebuffer to sample when
+//! `glReadPixels` is called. This service therefore does what `glFinish`+read would: it lowers the recorded
+//! draw-list into the frame's render-target texture ([`crate::service::frame::build_frame_ir`]), submits it,
+//! then copies that render-target texture back to a host-readable buffer with a
+//! `CopyTextureToBuffer` + [`CommandSink::read_buffer`] — the SAME device→host port cuda's DtoH uses, so it
+//! works identically over an in-process sink or the socketed `RemoteCommandSink`.
 //!
-//! The accepted render submission is a completion boundary. Once the sink accepts it, residency and
-//! recording state advance exactly once; a later swap cannot replay the same command stream.
+//! The accepted render submission is a completion boundary: once the sink accepts it, residency and
+//! recording state advance exactly once, and a later swap cannot replay the same command stream.
 //!
 //! The copied plane is the target's native texel order (Bgra8 for the default surface, Rgba8 for an
-//! offscreen FBO), top-left origin. This service converts it into the requested GL pixel `format`
-//! (`GL_RGBA`/`GL_BGRA_EXT`/`GL_RGB`, `UNSIGNED_BYTE`) in GL's bottom-left row order, for the
-//! `(x, y, w, h)` rectangle. Callers validate `format`/`type` (only `UNSIGNED_BYTE` is modeled) and
-//! null-check the destination before calling in.
+//! offscreen FBO), with rows top-down — the contract on `RenderPasses::stores_bottom_up_rows`. So exactly
+//! ONE row flip belongs on the `glReadPixels` path ([`pack_region`], which packs GL's bottom-left rows in
+//! the requested `GL_RGBA`/`GL_BGRA_EXT`/`GL_RGB` `UNSIGNED_BYTE` format) and NONE on the `wl_shm` present
+//! path ([`xrgb_plane`], whose buffer is top-down too). Callers validate `format`/`type` and the pointer.
 
 use crate::model::context::GlContext;
 use crate::model::glconst::GL_INVALID_FRAMEBUFFER_OPERATION;
@@ -118,8 +118,8 @@ pub fn prepare_pixels(
     }
     // Bound the packed-region allocation: a hostile (or overflowing) `w*h*bpp` must never trigger an
     // unbounded host allocation. The largest legitimate readback is the full render target (≤ 16384²), so a
-    // region whose packed size overflows `usize` or exceeds this generous cap is rejected as
-    // GL_INVALID_VALUE (never allocated, never an OOB read). Mirrors the CUDA/VK sweep's pre-alloc bounds.
+    // region whose packed size overflows `usize` or exceeds this cap is rejected as GL_INVALID_VALUE (never
+    // allocated, never an OOB read). Mirrors the CUDA/VK sweep's pre-alloc bounds.
     const MAX_READBACK_BYTES: usize = 1 << 30; // 1 GiB
     let out_len = match (w as usize)
         .checked_mul(h as usize)
@@ -292,10 +292,9 @@ pub fn prepare_pixels(
 
 /// Present a window frame and return the XRGB8888 plane needed by the `wl_shm` compatibility path.
 ///
-/// The render pass, device-to-host copy, and authoritative present share one command batch. This avoids
-/// replaying the complete draw list once for `glReadPixels` and again for `eglSwapBuffers`. Unlike public
-/// `glReadPixels`, this internal presentation path preserves the target's top-left row order and converts
-/// directly to XRGB instead of converting to bottom-left RGBA and immediately back again.
+/// The render pass, device-to-host copy, and authoritative present share one command batch, so the draw list
+/// is not replayed once for `glReadPixels` and again for `eglSwapBuffers`. Unlike public `glReadPixels`, this
+/// path keeps the target's top-down rows and converts straight to XRGB — no flip, and no flip back.
 pub fn swap_xrgb(
     ctx: &mut GlContext,
     sink: &mut dyn CommandSink,
@@ -445,9 +444,9 @@ fn xrgb_plane(
     raw
 }
 
-/// Convert the native-format target plane `raw` (tight-packed `tw`×`th`, top-left origin) into the
-/// requested GL `format` for the `(x, y, w, h)` rectangle, in GL's bottom-left row order. Texels outside
-/// the target read back as zero.
+/// Convert the native-format target plane `raw` (tight-packed `tw`×`th`, rows top-down) into the requested
+/// GL `format` for the `(x, y, w, h)` rectangle, in GL's bottom-left rows. Texels outside the target read
+/// back as zero. This row flip is the ONE flip the GL readback path applies (see the module header).
 #[allow(clippy::too_many_arguments)]
 fn pack_region(
     raw: &[u8],

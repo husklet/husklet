@@ -1,4 +1,7 @@
 use super::*;
+
+mod selection;
+pub use selection::*;
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglBindAPI(api: u32) -> u32 {
     crate::stub::trace("eglBindAPI", "binding client API");
@@ -8,97 +11,6 @@ pub extern "C" fn eglBindAPI(api: u32) -> u32 {
     }
     current::Binding::bind_api(api);
     EGL_TRUE
-}
-
-// ==================================================================================================
-// EGL: config selection
-// ==================================================================================================
-
-/// Write the `n` config handles this driver advertises into the caller's `configs` array (each our
-/// single [`CONFIG_TOKEN`]) and report `num_config`. Shared by `eglChooseConfig` / `eglGetConfigs`: the
-/// enumeration contract (null array → count only; real array → bounded copy) is decided by
-/// [`config::enumerate`], so this only marshals the raw pointers.
-unsafe fn write_configs(configs: *mut *mut c_void, config_size: i32, num_config: *mut i32) {
-    let (n, num) = config::Config::enumerate(!configs.is_null(), config_size);
-    for i in 0..n as isize {
-        *configs.offset(i) = CONFIG_TOKEN as *mut c_void;
-    }
-    if !num_config.is_null() {
-        *num_config = num;
-    }
-}
-
-/// `eglChooseConfig(dpy, attrib_list, configs, config_size, num_config)` — select configs matching the
-/// requested attributes. This driver advertises one config that satisfies the common GLES2/ES3 window +
-/// pbuffer requests, so a null / empty `attrib_list` (match-all) and a populated list both return it. A
-/// null `configs` array is the count-only query (`num_config` = number available). `num_config` is
-/// required by the spec; a null one is `EGL_BAD_PARAMETER`.
-#[cfg_attr(not(gles_client), no_mangle)]
-pub extern "C" fn eglChooseConfig(
-    _dpy: *mut c_void,
-    _attrib_list: *const i32,
-    configs: *mut *mut c_void,
-    config_size: i32,
-    num_config: *mut i32,
-) -> u32 {
-    crate::stub::trace("eglChooseConfig", "selecting hl configuration");
-    if num_config.is_null() {
-        GlobalState::access(|s| s.set_egl_error(EGL_BAD_PARAMETER));
-        return EGL_FALSE;
-    }
-    unsafe { write_configs(configs, config_size, num_config) };
-    EGL_TRUE
-}
-
-/// `eglGetConfigs(dpy, configs, config_size, num_config)` — enumerate all configs. A null `configs` array
-/// returns the total count in `num_config`; a real array is filled with up to `config_size` handles and
-/// `num_config` reports how many were written. `num_config` is required; a null one is
-/// `EGL_BAD_PARAMETER`.
-#[cfg_attr(not(gles_client), no_mangle)]
-pub extern "C" fn eglGetConfigs(
-    _dpy: *mut c_void,
-    configs: *mut *mut c_void,
-    config_size: i32,
-    num_config: *mut i32,
-) -> u32 {
-    if num_config.is_null() {
-        GlobalState::access(|s| s.set_egl_error(EGL_BAD_PARAMETER));
-        return EGL_FALSE;
-    }
-    unsafe { write_configs(configs, config_size, num_config) };
-    EGL_TRUE
-}
-
-/// `eglGetConfigAttrib(dpy, config, attribute, value)` — the value of one attribute of an `EGLConfig`.
-/// Delegates the truthful value to [`config::config_attrib`]: a foreign config handle raises
-/// `EGL_BAD_CONFIG` and an unrecognized attribute raises `EGL_BAD_ATTRIBUTE` — both return `EGL_FALSE`
-/// WITHOUT writing `value` or dereferencing the unknown config, instead of the old silent `0`.
-#[cfg_attr(not(gles_client), no_mangle)]
-pub extern "C" fn eglGetConfigAttrib(
-    _dpy: *mut c_void,
-    config: *mut c_void,
-    attribute: i32,
-    value: *mut i32,
-) -> u32 {
-    if value.is_null() {
-        GlobalState::access(|s| s.set_egl_error(EGL_BAD_PARAMETER));
-        return EGL_FALSE;
-    }
-    let is_ours = config as usize == CONFIG_TOKEN;
-    match config::Config::attrib(is_ours, attribute) {
-        Ok(v) => {
-            unsafe { *value = v };
-            EGL_TRUE
-        }
-        Err(config::ConfigError::BadConfig) => {
-            GlobalState::access(|s| s.set_egl_error(EGL_BAD_CONFIG));
-            EGL_FALSE
-        }
-        Err(config::ConfigError::BadAttribute) => {
-            GlobalState::access(|s| s.set_egl_error(EGL_BAD_ATTRIBUTE));
-            EGL_FALSE
-        }
-    }
 }
 
 // ==================================================================================================
@@ -117,7 +29,7 @@ pub extern "C" fn eglCreateContext(
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
         return core::ptr::null_mut();
     }
-    if !config.is_null() && config as usize != CONFIG_TOKEN {
+    if !config.is_null() && ConfigHandle::id(config).is_none() {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_CONFIG));
         return core::ptr::null_mut();
     }
@@ -185,18 +97,23 @@ impl ContextAttributeError {
 
 impl ContextAttributeList {
     fn parse(attrib_list: *const i32) -> Result<ContextAttributes, ContextAttributeError> {
+        // DEFAULT CONTEXT VERSION — do not change without re-reading this.
+        //
+        // EGL 1.5 §3.7.1 makes a NULL or immediately-`EGL_NONE` attribute list mean "all defaults", which is
+        // legal and common (the spec's own default for `EGL_CONTEXT_MAJOR_VERSION` is 1). This driver ships
+        // no ES 1.x pipeline and its only config advertises `EGL_RENDERABLE_TYPE = ES2|ES3` — so an ES 1.x
+        // context would have to be refused with `EGL_BAD_MATCH` for lack of a matching config. The lowest
+        // version the config does support is the honest default: ES 2.0. An ES 3 app asks for 3 explicitly,
+        // as every real one does, and gets the ES 3 identity string from `driver/objects.rs`.
         let mut attributes = ContextAttributes {
-            client_version: 1,
+            client_version: 2,
             minor_version: 0,
             robust_access: false,
             reset_strategy: EGL_NO_RESET_NOTIFICATION_EXT,
             no_error: false,
         };
         if attrib_list.is_null() {
-            return Err(ContextAttributeError::Unsupported {
-                reason: "null attribute list requests unsupported ES 1.0".into(),
-                pairs: Vec::new(),
-            });
+            return Ok(attributes);
         }
         let mut pairs = Vec::new();
         for index in 0..32 {
@@ -368,7 +285,7 @@ pub extern "C" fn eglCreateWindowSurface(
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
         return core::ptr::null_mut();
     }
-    if config as usize != CONFIG_TOKEN {
+    if ConfigHandle::id(config).is_none() {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_CONFIG));
         return core::ptr::null_mut();
     }

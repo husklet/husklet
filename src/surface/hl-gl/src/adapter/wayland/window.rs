@@ -150,6 +150,11 @@ impl WlWindowInfo {
 /// Convert a `glReadPixels(GL_RGBA)` plane (tight-packed `w`×`h`, **bottom-left** origin, `[R,G,B,A]`) into
 /// the `WL_SHM_FORMAT_XRGB8888` little-endian byte order a `wl_shm` buffer wants (`[B,G,R,X]` per texel,
 /// **top-left** origin). The vertical flip turns GL's bottom-up scanlines into wayland's top-down ones.
+///
+/// The input must be a plane that already passed through `glReadPixels`, which is where the driver's single
+/// GL row flip lives. The live present path does NOT go through here: it packs the render target's own
+/// top-down rows straight into XRGB (`readpixels::xrgb_plane`) and flips nothing, so the two paths together
+/// apply exactly one flip each and never two.
 pub fn rgba_to_xrgb8888(rgba: &[u8], w: usize, h: usize) -> Vec<u8> {
     let mut out = vec![0u8; w * h * 4];
     if rgba.len() < w * h * 4 {

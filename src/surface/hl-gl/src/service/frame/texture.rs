@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::glconst::MAX_TEXTURE_UNITS;
 use crate::model::program::Program;
 use std::sync::Arc;
 
@@ -95,7 +96,7 @@ pub(super) fn lower_textures(
                 .samp_units
                 .get(i)
                 .copied()
-                .filter(|unit| (0..8).contains(unit))
+                .filter(|unit| (0..MAX_TEXTURE_UNITS as i32).contains(unit))
                 .unwrap_or(0) as usize;
             let gl_tex = d.tex_units[unit];
             let texture_generation = d.tex_generations[unit];

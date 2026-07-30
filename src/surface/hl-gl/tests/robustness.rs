@@ -55,7 +55,7 @@ fn program_link_rejects_unrepresentable_uniform_interfaces_with_diagnostics() {
     assert!(query::program_info_log(&context, oversized).contains("1028"));
 
     let mut samplers = String::new();
-    for index in 0..9 {
+    for index in 0..17 {
         samplers.push_str(&format!("uniform sampler2D texture{index};\n"));
     }
     samplers.push_str("void main(){}\n");
@@ -65,7 +65,7 @@ fn program_link_rejects_unrepresentable_uniform_interfaces_with_diagnostics() {
         &samplers,
     );
     assert!(!record::link_program(&mut context, too_many_samplers));
-    assert!(query::program_info_log(&context, too_many_samplers).contains("9 samplers"));
+    assert!(query::program_info_log(&context, too_many_samplers).contains("17 samplers"));
 }
 
 #[test]

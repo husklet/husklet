@@ -265,6 +265,44 @@ fn external_present_target_uses_the_present_row_origin_for_scissor_and_clear() {
             }
         )
     }));
+    // An imported external image is the ONE target stored in GL texel order (row 0 = the framebuffer's
+    // bottom), because the guest owns what the foreign consumer reads out of that memory. So it — and only
+    // it — carries the clip reflection and the reversed winding that implies.
+    let vertex = frame
+        .cmds
+        .iter()
+        .filter_map(|command| match command {
+            Cmd::CreateShader { spirv, .. } => {
+                hl_gpu::protocol::model::kernel::GlslDescriptor::from_words(spirv)
+                    .and_then(Result::ok)
+                    .filter(|shader| {
+                        shader.stage == hl_gpu::protocol::model::kernel::glsl_stage::VERTEX
+                    })
+            }
+            _ => None,
+        })
+        .next()
+        .expect("external target vertex shader");
+    assert_eq!(
+        vertex
+            .source
+            .matches("gl_Position.y = -gl_Position.y")
+            .count(),
+        1,
+        "an imported external image receives exactly one row-origin conversion"
+    );
+    let pipeline = frame
+        .cmds
+        .iter()
+        .find_map(|command| match command {
+            Cmd::CreateRenderPipeline(_, descriptor) => Some(descriptor),
+            _ => None,
+        })
+        .expect("external target pipeline");
+    assert_eq!(
+        pipeline.front_face, 1,
+        "the clip reflection swaps GL's default CCW winding"
+    );
 }
 
 #[test]

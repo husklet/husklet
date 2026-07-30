@@ -123,6 +123,8 @@ fn read_texel(px: &[u8], x: usize, y: usize, w: usize) -> [u8; 4] {
 mod framebuffer;
 #[path = "e2e/offscreen.rs"]
 mod offscreen;
+#[path = "e2e/orientation.rs"]
+mod orientation;
 #[path = "e2e/readback.rs"]
 mod readback;
 #[path = "e2e/surface.rs"]

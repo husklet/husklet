@@ -31,7 +31,7 @@ fn gl_identity_and_scalar_state_queries_marshal() {
     );
     assert_eq!(
         cstr(gl_get_string(GL_EXTENSIONS)),
-        "GL_KHR_debug GL_EXT_texture_format_BGRA8888 GL_EXT_read_format_bgra GL_ANGLE_robust_client_memory GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_copy_texture GL_ANGLE_client_arrays GL_ANGLE_webgl_compatibility GL_ANGLE_request_extension GL_OES_EGL_image GL_OES_EGL_sync"
+        "GL_KHR_debug GL_EXT_texture_format_BGRA8888 GL_EXT_read_format_bgra GL_ANGLE_robust_client_memory GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_copy_texture GL_ANGLE_client_arrays GL_ANGLE_webgl_compatibility GL_ANGLE_request_extension GL_OES_EGL_image GL_OES_EGL_sync GL_OES_rgb8_rgba8 GL_OES_depth24"
     );
 
     // glGetIntegerv scalar limits — the truthful executor ceiling, never uninitialized garbage.
@@ -40,13 +40,13 @@ fn gl_identity_and_scalar_state_queries_marshal() {
         gl_get_integerv(p, &mut v);
         v
     };
-    assert_eq!(getint(GL_MAX_TEXTURE_SIZE), 16384);
+    assert_eq!(getint(GL_MAX_TEXTURE_SIZE), 8192);
     assert_eq!(getint(GL_MAX_VERTEX_ATTRIBS), 16);
     assert_eq!(getint(GL_MAJOR_VERSION), 3);
     assert_eq!(getint(GL_MINOR_VERSION), 1);
     assert_eq!(
         getint(GL_NUM_EXTENSIONS),
-        11,
+        13,
         "matches the GL_EXTENSIONS inventory"
     );
     assert_eq!(getint(GL_DEPTH_BITS), 24);
@@ -75,7 +75,7 @@ fn gl_identity_and_scalar_state_queries_marshal() {
     // glGetInteger64v: the SAME ceiling widened to i64 (width-conversion marshalling).
     let mut v64: i64 = -1;
     gl_get_integer64v(GL_MAX_TEXTURE_SIZE, &mut v64);
-    assert_eq!(v64, 16384);
+    assert_eq!(v64, 8192);
 
     // glGetStringi exposes the same inventory and rejects out-of-range indices.
     assert_eq!(cstr(gl_get_stringi(GL_EXTENSIONS, 0)), "GL_KHR_debug");

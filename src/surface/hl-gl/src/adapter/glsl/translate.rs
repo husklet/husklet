@@ -10,7 +10,7 @@ use super::*;
 /// is asserted at the `Cmd` level; on wgpu it is a real compute module.
 impl Translator {
     pub fn compute(cs_in: &str) -> String {
-        let comments = Source::new(cs_in).comments_removed();
+        let comments = Source::new(cs_in).expanded();
         let mut body = Source::new(&comments).without_version();
         NormalizedSource::new(&mut body).strip_precision();
         offset_compute_uniform_blocks(&mut body);
@@ -126,22 +126,7 @@ impl Source<'_> {
     }
 }
 
-/// Remove ES precision qualifiers from a shader body — invalid as qualifiers in desktop core GLSL.
-pub(super) struct NormalizedSource<'a> {
-    text: &'a mut String,
-}
-
-impl<'a> NormalizedSource<'a> {
-    pub(super) fn new(text: &'a mut String) -> Self {
-        Self { text }
-    }
-
-    pub(super) fn strip_precision(&mut self) {
-        wreplace(self.text, "lowp", "");
-        wreplace(self.text, "mediump", "");
-        wreplace(self.text, "highp", "");
-    }
-}
+// ES → desktop source normalisation (precision qualifiers, texture builtins) lives in `normalize`.
 
 /// Emit the data-uniform interface block at `binding = 0` (matching the frame's uniform bind entry). An
 /// anonymous block puts its members in global scope so the shader body references them by their plain name.
@@ -328,7 +313,7 @@ impl Source<'_> {
 /// `attribute`/`gl_FragColor` dialect, so they must stay on this path.
 impl Source<'_> {
     pub fn is_forward_verbatim(self) -> bool {
-        let src = self.comments_removed();
+        let src = self.expanded();
         if src.contains("gl_VertexID") || src.contains("gl_InstanceID") {
             return true;
         }
@@ -399,8 +384,8 @@ impl StageSources<'_> {
         self,
         attribute_bindings: &std::collections::BTreeMap<String, u32>,
     ) -> (String, String) {
-        let vs = Source::new(self.vertex).comments_removed();
-        let fs = Source::new(self.fragment).comments_removed();
+        let vs = Source::new(self.vertex).expanded();
+        let fs = Source::new(self.fragment).expanded();
 
         let attrs = Source::new(&vs).vertex_attrs();
         let mut vary = Tokens(&vs).collect("varying");
@@ -432,8 +417,7 @@ impl StageSources<'_> {
                 let mut t = it.clone();
                 NormalizedSource::new(&mut t).strip_precision();
                 Declarations::rewrite_sampler_refs(&mut t, samps);
-                sreplace(&mut t, "texture2D(", "texture(");
-                sreplace(&mut t, "textureCube(", "texture(");
+                NormalizedSource::new(&mut t).lower_texture_builtins();
                 out.push_str(&t);
                 out.push('\n');
             }
@@ -488,9 +472,9 @@ impl StageSources<'_> {
         }
         NormalizedSource::new(&mut vb).strip_precision();
         Declarations::rewrite_sampler_refs(&mut vb, &samps);
-        sreplace(&mut vb, "texture2D(", "texture(");
-        sreplace(&mut vb, "textureCube(", "texture(");
+        NormalizedSource::new(&mut vb).lower_texture_builtins();
         vs_out.push_str(&format!("void main() {{\n{vb}\n}}\n"));
+        NormalizedSource::new(&mut vs_out).pin_vertex_lod();
 
         // ---- fragment stage ----
         let mut fs_out = String::new();
@@ -538,8 +522,7 @@ impl StageSources<'_> {
         }
         NormalizedSource::new(&mut fb).strip_precision();
         Declarations::rewrite_sampler_refs(&mut fb, &samps);
-        sreplace(&mut fb, "texture2D(", "texture(");
-        sreplace(&mut fb, "textureCube(", "texture(");
+        NormalizedSource::new(&mut fb).lower_texture_builtins();
         if fragouts.is_empty() {
             wreplace(&mut fb, "gl_FragColor", &frag_name);
         }

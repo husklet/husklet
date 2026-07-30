@@ -397,7 +397,7 @@ fn query_context_reports_gles_client_type_for_epoxy() {
 }
 
 /// glGetIntegerv / glGetInteger64v ALWAYS write the out-param (never leave it as uninitialized
-/// garbage): GL_MAX_TEXTURE_SIZE is the 16384 executor ceiling and an unknown pname writes 0.
+/// garbage): GL_MAX_TEXTURE_SIZE is the 8192 executor ceiling and an unknown pname writes 0.
 #[test]
 fn gl_get_integerv_always_writes_the_out_param() {
     let display = DISPLAY_TOKEN as *mut c_void;
@@ -415,14 +415,14 @@ fn gl_get_integerv_always_writes_the_out_param() {
     let mut v: i32 = -455_764_240;
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &mut v as *mut i32);
     assert_eq!(
-        v, 16384,
+        v, 8192,
         "GL_MAX_TEXTURE_SIZE is the truthful executor ceiling, not garbage"
     );
 
     let mut v64: i64 = -1;
     glGetInteger64v(GL_MAX_TEXTURE_SIZE, &mut v64 as *mut i64);
     assert_eq!(
-        v64, 16384,
+        v64, 8192,
         "glGetInteger64v writes the same truthful ceiling"
     );
 

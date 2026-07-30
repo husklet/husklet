@@ -102,6 +102,10 @@ pub(super) fn resolve(name: &str) -> *mut c_void {
         "glGetAttachedShaders" => p!(glGetAttachedShaders),
         "glGetBooleani_v" => p!(glGetBooleani_v),
         "glGetBufferPointerv" => p!(glGetBufferPointerv),
+        // GL_OES_mapbuffer entry points: resolved through eglGetProcAddress like every other extension
+        // function in this driver (they are not part of the exported ABI census).
+        "glMapBufferOES" => p!(glMapBufferOES),
+        "glUnmapBufferOES" => p!(glUnmapBufferOES),
         "glGetDebugMessageLog" => p!(glGetDebugMessageLog),
         "glGetDebugMessageLogKHR" => p!(glGetDebugMessageLogKHR),
         "glGetFragDataLocation" => p!(glGetFragDataLocation),

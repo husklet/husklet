@@ -1,6 +1,7 @@
 //! Immutable draw-time state snapshots.
 
 use super::MAX_ATTR;
+use crate::model::glconst::MAX_TEXTURE_UNITS;
 use crate::model::texture::GlTexture;
 use hl_gpu::protocol::model::enums::TextureFormat;
 use std::sync::Arc;
@@ -123,18 +124,18 @@ pub struct DrawCall {
     pub current_attrs: [[f32; 4]; MAX_ATTR],
     pub current_attr_kinds: [u8; MAX_ATTR],
     /// Bound texture (GL name) per texture unit, at draw time.
-    pub tex_units: [u32; 8],
+    pub tex_units: [u32; MAX_TEXTURE_UNITS],
     /// Content generation for each snapshotted texture-unit name.
-    pub tex_generations: [u64; 8],
+    pub tex_generations: [u64; MAX_TEXTURE_UNITS],
     /// Exact object state and resident resources for the generations bound to this draw.
     pub textures: Vec<TextureSnapshot>,
     /// Texture component mappings captured with the draw.
-    pub tex_swizzles: [[u32; 4]; 8],
+    pub tex_swizzles: [[u32; 4]; MAX_TEXTURE_UNITS],
     /// The ES3 sampler OBJECT bound to each texture unit (`glBindSampler`), captured at draw time. A bound
     /// sampler object OVERRIDES the texture's own filter/wrap (ES 3.0 §3.8.13) — the frame builder lowers
     /// its params into the `SamplerDesc` instead of the texture's. `None` = no sampler object bound at the
     /// unit, so the texture parameters win (the byte-identical pre-sampler-object path).
-    pub samp_objs: [Option<crate::model::es3::SamplerObj>; 8],
+    pub samp_objs: [Option<crate::model::es3::SamplerObj>; MAX_TEXTURE_UNITS],
     /// Sampler-uniform index → texture unit, at draw time.
     pub samp_units: Vec<i32>,
     pub viewport: [i32; 4],
@@ -231,16 +232,16 @@ impl Default for DrawCall {
             attrs: [Attr::default(); MAX_ATTR],
             current_attrs: [[0.0, 0.0, 0.0, 1.0]; MAX_ATTR],
             current_attr_kinds: [0; MAX_ATTR],
-            tex_units: [0; 8],
-            tex_generations: [0; 8],
+            tex_units: [0; MAX_TEXTURE_UNITS],
+            tex_generations: [0; MAX_TEXTURE_UNITS],
             textures: Vec::new(),
             tex_swizzles: [[
                 crate::model::glconst::GL_RED,
                 crate::model::glconst::GL_GREEN,
                 crate::model::glconst::GL_BLUE,
                 crate::model::glconst::GL_ALPHA,
-            ]; 8],
-            samp_objs: [None; 8],
+            ]; MAX_TEXTURE_UNITS],
+            samp_objs: [None; MAX_TEXTURE_UNITS],
             samp_units: Vec::new(),
             viewport: [0; 4],
             scissor_enabled: false,

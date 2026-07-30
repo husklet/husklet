@@ -101,11 +101,12 @@ pub(super) fn lower_draw_n(
     // program costs ZERO host naga compiles after the first sight. Before this cache the builder minted fresh
     // ids + re-emitted `CreateShader` for the SAME program on every draw (a GTK frame reuses ~11 programs
     // across ~260 draws → ~520 redundant compiles). See `GlContext::program_shader_ir`.
-    // Chrome's Wayland/GBM path does not render its scanout image through framebuffer 0 or
-    // `eglSwapBuffers`: it attaches an imported EGLImage to a non-zero FBO and publishes that image at
-    // `glFlush`. Such an external target has the same top-left host-surface row contract as the default
-    // window framebuffer, so it needs the same clip/sampler/winding specialization.
-    let present_target = presents(ctx, d.fbo, d.target);
+    // Row order of this draw's target — the one place the convention branches; see
+    // `RenderPasses::stores_bottom_up_rows` for the contract. An imported external image (Chrome's scanout
+    // EGLImage, attached to a non-zero FBO and published at `glFlush`) must carry true GL FBO texel order,
+    // so it takes the clip reflection, its reversed winding, and un-converted window rows. Every internal
+    // target — including the default framebuffer — stores rows top-down and takes none of that.
+    let bottom_up = RenderPasses::stores_bottom_up_rows(ctx, d.target);
     let sample_transforms: Vec<(String, bool, [u32; 4])> = texbinds
         .iter()
         .filter(|binding| {
@@ -125,10 +126,12 @@ pub(super) fn lower_draw_n(
     let pixel_center_integer = prog.fs_src.contains("pixel_center_integer");
     let correct_frag_coord =
         uses_frag_coord && (!origin_upper_left || pixel_center_integer) && th > 0;
-    // A WGPU present texture exposes row zero at the host surface's top. OpenGL's default framebuffer
-    // exposes window coordinates from the bottom, so direct presentation draws require one clip-space
-    // reflection. This is independent from sampling a rendered FBO: that texture still needs its own
-    // bottom-left-to-top-left coordinate conversion even when the destination is presented.
+    // `correct_frag_coord` restores GL's bottom-left `gl_FragCoord.y` from WebGPU's top-left fragment
+    // position, which is what a top-down target needs. A `bottom_up` target already exposes GL rows
+    // directly, so the conversion is redundant there; it is left applied because Chrome is the only such
+    // target today and its behavior is deliberately unchanged by this fix.
+    // The clip reflection below is independent from sampling a rendered FBO: that texture still needs its
+    // own texel-order conversion in the sampler regardless of the destination.
     let mut sample_variant = sample_transforms.iter().fold(
         0xcbf2_9ce4_8422_2325u64,
         |mut hash, (name, flip, swizzle)| {
@@ -152,12 +155,12 @@ pub(super) fn lower_draw_n(
         sample_variant = sample_variant.wrapping_mul(0x100_0000_01b3);
         sample_variant ^= u64::from(pixel_center_integer);
     }
-    sample_variant ^= u64::from(present_target) << 63;
+    sample_variant ^= u64::from(bottom_up) << 63;
     let (vs_id, fs_id, shaders_new) = ctx
         .program_shader_ir(prog_name, sample_variant, prog.link_gen)
         .ok()?;
     if shaders_new {
-        let vs_ir = if present_target {
+        let vs_ir = if bottom_up {
             use hl_gpu::protocol::model::kernel::GlslDescriptor;
             let mut descriptor = GlslDescriptor::from_words(&vs_ir)
                 .and_then(|result| result.ok())
@@ -319,10 +322,10 @@ pub(super) fn lower_draw_n(
     } else {
         0
     };
-    // Reflecting clip Y reverses triangle winding. Swap the declared front face for present-target
-    // pipelines so GL culling remains unchanged.
+    // Reflecting clip Y reverses triangle winding. Swap the declared front face for the reflected
+    // (bottom-up) targets so GL culling remains unchanged.
     let mut front_face = Pipeline::front_face(d.front_face);
-    if present_target {
+    if bottom_up {
         front_face ^= 1;
     }
     // Program-keyed pipeline residency: the render pipeline depends on the program's shaders PLUS this draw's
@@ -505,8 +508,8 @@ pub(super) fn lower_draw_n(
     }
     let mut ops: Vec<Enc> = Vec::new();
     ops.push(Enc::SetPipeline(pipeline_ir));
-    ops.push(emit_viewport(&d, tw, th));
-    ops.push(emit_scissor(&d, tw, th, present_target));
+    ops.push(emit_viewport(&d, tw, th, bottom_up));
+    ops.push(emit_scissor(&d, tw, th, bottom_up));
     // Dynamic stencil reference — the value the pipeline's stencil compare tests against and a `GL_REPLACE`
     // op writes. Emitted per-draw inside the pass like viewport/scissor (the compare/ops/masks live
     // statically on the pipeline's `DepthState`), so two draws with different `glStencilFunc` references

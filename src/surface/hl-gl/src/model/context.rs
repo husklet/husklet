@@ -381,8 +381,8 @@ impl GlContext {
 
 mod allocator;
 mod local;
-pub use local::SurfaceTarget;
 use local::LocalState;
+pub use local::SurfaceTarget;
 mod pipeline;
 use pipeline::PipelineState;
 mod recording;

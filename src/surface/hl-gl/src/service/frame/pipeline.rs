@@ -1,12 +1,21 @@
 use super::*;
 
-pub(super) fn emit_viewport(d: &DrawCall, tw: i32, th: i32) -> Enc {
+/// `SetViewport` for a `tw`×`th` target.
+///
+/// The recorded rect is GL window space (origin bottom-left). A target storing rows top-down converts the
+/// row (`th - y - h`); a `bottom_up` target — an imported external image, see
+/// [`RenderPasses::stores_bottom_up_rows`] — keeps the recorded row, exactly as its scissor does.
+pub(super) fn emit_viewport(d: &DrawCall, tw: i32, th: i32, bottom_up: bool) -> Enc {
     let (mut x, mut y, mut w, mut h) = (0.0f32, 0.0f32, tw as f32, th as f32);
     if d.viewport[2] > 0 && d.viewport[3] > 0 {
         x = d.viewport[0] as f32;
         w = d.viewport[2] as f32;
         h = d.viewport[3] as f32;
-        y = (th - d.viewport[1] - d.viewport[3]) as f32;
+        y = if bottom_up {
+            d.viewport[1] as f32
+        } else {
+            (th - d.viewport[1] - d.viewport[3]) as f32
+        };
     }
     Enc::SetViewport {
         x,
@@ -20,12 +29,12 @@ pub(super) fn emit_viewport(d: &DrawCall, tw: i32, th: i32) -> Enc {
 
 /// `SetScissor` clamped against a `tw`×`th` target.
 ///
-/// Ordinary FBO rows are converted from GL's bottom-left origin. Present targets already use the
-/// host-surface row specialization and retain their recorded row.
-pub(super) fn emit_scissor(d: &DrawCall, tw: i32, th: i32, present_target: bool) -> Enc {
+/// Rows of a top-down target are converted from GL's bottom-left origin; a `bottom_up` target keeps its
+/// recorded row (see [`RenderPasses::stores_bottom_up_rows`]).
+pub(super) fn emit_scissor(d: &DrawCall, tw: i32, th: i32, bottom_up: bool) -> Enc {
     let (x, y, w, h) = if d.scissor_enabled {
         let left = d.scissor[0];
-        let top = if present_target {
+        let top = if bottom_up {
             d.scissor[1]
         } else {
             th.saturating_sub(d.scissor[1].saturating_add(d.scissor[3]))

@@ -194,8 +194,7 @@ fn external_surface_token_shares_one_surface_across_live_texture_generations() {
     let mut context = GlContext::new();
     let token = hl_gpu::protocol::model::descriptor::SurfaceToken::new(23).unwrap();
     context.bind_external_target(1, 1, token);
-    let (first_surface, _, first_create) =
-        context.fbo_target(1, 1).expect("allocate first target");
+    let (first_surface, _, first_create) = context.fbo_target(1, 1).expect("allocate first target");
     assert!(first_create);
     context.bind_external_target(2, 1, token);
     let (second_surface, _, second_create) =
