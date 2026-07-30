@@ -63,15 +63,11 @@ impl Scene {
         timing: PresentTiming,
     ) -> Option<Vec<PresentFrame>> {
         self.get(root)?.buffer?;
-        let mut roles = vec![root];
-        roles.extend(
-            self.collect_popups_for_root(root)
-                .into_iter()
-                .map(|(popup, _, _)| popup),
-        );
+        let mut roles = vec![(root, 0, 0)];
+        roles.extend(self.collect_popups_for_root(root));
         roles
             .into_iter()
-            .map(|role| {
+            .map(|(role, origin_x, origin_y)| {
                 let mut surfaces = Vec::new();
                 self.collect_subtree_offsets(role, 0, 0, &mut surfaces);
                 let layers = surfaces
@@ -88,6 +84,7 @@ impl Scene {
                 (!layers.is_empty()).then_some(PresentFrame {
                     output,
                     role,
+                    origin: (origin_x, origin_y),
                     layers,
                     timing,
                 })

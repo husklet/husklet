@@ -32,10 +32,8 @@ mod tests {
 
     #[test]
     fn direct_iosurface_attach_retains_content_after_source_lease_drops() {
-        let Some(mut presenter) = MacPresenter::new_offscreen() else {
-            eprintln!("SKIP: no Metal device available");
-            return;
-        };
+        let mut presenter = MacPresenter::new_offscreen()
+            .expect("these tests prove the real Metal pixel path; a Metal device is required");
         let source = IOSurface::new_bgra(4, 3).expect("allocate IOSurface source");
         // IOSurface and Metal rows are top-down. Distinct X/Y sentinels prove composition neither flips Y
         // nor rotates the image while retaining the source lease.
@@ -82,10 +80,8 @@ mod tests {
 
     #[test]
     fn iosurface_sampling_applies_every_buffer_transform_once() {
-        let Some(mut presenter) = MacPresenter::new_offscreen() else {
-            eprintln!("SKIP: no Metal device available");
-            return;
-        };
+        let mut presenter = MacPresenter::new_offscreen()
+            .expect("these tests prove the real Metal pixel path; a Metal device is required");
         let transforms = [
             BufferTransform::Normal,
             BufferTransform::_90,
@@ -175,10 +171,8 @@ mod tests {
 
     #[test]
     fn iosurface_crop_scales_to_presentable_destination() {
-        let Some(mut presenter) = MacPresenter::new_offscreen() else {
-            eprintln!("SKIP: no Metal device available");
-            return;
-        };
+        let mut presenter = MacPresenter::new_offscreen()
+            .expect("these tests prove the real Metal pixel path; a Metal device is required");
         let sid = SurfaceId(300);
         let source = IOSurface::new_bgra(4, 3).expect("allocate crop-scale source");
         let pixels = [
@@ -250,10 +244,8 @@ mod tests {
 
     #[test]
     fn offscreen_composition_does_not_consume_native_drawable_slots() {
-        let Some(mut presenter) = MacPresenter::new_offscreen() else {
-            eprintln!("SKIP: no Metal device available");
-            return;
-        };
+        let mut presenter = MacPresenter::new_offscreen()
+            .expect("these tests prove the real Metal pixel path; a Metal device is required");
         let sid = SurfaceId(92);
         presenter.attach_iosurface(
             sid,
@@ -273,6 +265,7 @@ mod tests {
         let frame = |image: PresentableImage| crate::scene::port::PresentFrame {
             output: OutputId(1),
             role: image.surface,
+            origin: (0, 0),
             layers: vec![crate::scene::port::PresentLayer {
                 image,
                 x: 0,
@@ -303,9 +296,8 @@ mod tests {
 
     #[test]
     fn role_composite_rebuild_removes_and_moves_child_without_ghosts() {
-        let Some(mut presenter) = MacPresenter::new_offscreen() else {
-            return;
-        };
+        let mut presenter = MacPresenter::new_offscreen()
+            .expect("these tests prove the real Metal pixel path; a Metal device is required");
         let root = SurfaceId(101);
         let child = SurfaceId(102);
         presenter.attach_bgra(root, [0, 0, 255, 255].repeat(16), 4, 4);
@@ -329,6 +321,7 @@ mod tests {
         let frame = |layers| crate::scene::port::PresentFrame {
             output: OutputId(1),
             role: root,
+            origin: (0, 0),
             layers,
             timing: PresentTiming::fallback(1, 1),
         };
@@ -388,10 +381,8 @@ mod tests {
 
     #[test]
     fn hostile_geometry_arithmetic_is_widened_and_rejected_before_allocation() {
-        let Some(mut presenter) = MacPresenter::new_offscreen() else {
-            eprintln!("SKIP: no Metal device available");
-            return;
-        };
+        let mut presenter = MacPresenter::new_offscreen()
+            .expect("these tests prove the real Metal pixel path; a Metal device is required");
         let sid = SurfaceId(301);
         presenter.attach_iosurface(
             sid,

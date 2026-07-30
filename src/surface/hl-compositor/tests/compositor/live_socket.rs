@@ -155,8 +155,10 @@ ignore_dispatch!(
 );
 
 // `wl_data_device` can emit `data_offer` (which would create a child `wl_data_offer`), `selection`, and
-// DnD enter/leave/motion/drop. None occur in this headless, single-client test (no selection is set and
-// no drag is started), so we only need to observe the device stays alive after the roundtrip.
+// DnD enter/leave/motion/drop. The only one this headless single-client test may see is the EMPTY
+// `selection(nil)` the seat sends on keyboard-focus entry: this toplevel is focused as soon as it maps a
+// buffer, and `wl_data_device` requires the compositor to state the current selection to a newly focused
+// client — which is nothing here, since no client ever set one. Any other event is a real surprise.
 impl Dispatch<WlDataDevice, ()> for AppData {
     fn event(
         _: &mut Self,
@@ -166,8 +168,11 @@ impl Dispatch<WlDataDevice, ()> for AppData {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        // No cross-client selection/DnD is exercised here, so no event is expected. Any that arrives is a
-        // surprise worth failing on (e.g. a spurious selection offer to a single client).
+        if matches!(event, wl_data_device::Event::Selection { id: None }) {
+            return;
+        }
+        // No cross-client selection/DnD is exercised here, so nothing else is expected. Any other event is
+        // a surprise worth failing on (e.g. a spurious NON-EMPTY selection offer to a single client).
         panic!("unexpected wl_data_device event in headless single-client test: {event:?}");
     }
 }

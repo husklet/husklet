@@ -6,10 +6,8 @@
     /// cropped composite — not be re-stretched over the uncropped logical size.
     #[test]
     fn shadow_cropped_role_places_children_at_geometry_relative_offsets() {
-        let Some(mut presenter) = MacPresenter::new_offscreen() else {
-            eprintln!("SKIP: no Metal device available");
-            return;
-        };
+        let mut presenter = MacPresenter::new_offscreen()
+            .expect("these tests prove the real Metal pixel path; a Metal device is required");
         let root = SurfaceId(401);
         let child = SurfaceId(402);
         // 4x4 buffer, 2x2 of visible window inset by a 1px shadow margin on every side. Attached bytes are
@@ -49,6 +47,7 @@
         presenter.present_frame(&crate::scene::port::PresentFrame {
             output: OutputId(1),
             role: root,
+            origin: (0, 0),
             layers: vec![
                 crate::scene::port::PresentLayer {
                     image: image(root, 4, 4),

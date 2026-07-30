@@ -14,7 +14,9 @@ use wayland_client::protocol::{
 };
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
 use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
-use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
+use wayland_protocols::xdg::shell::client::{
+    xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base,
+};
 
 use super::{ClientState, HlState};
 use crate::adapter::smithay::present::PngPresenter;
@@ -34,6 +36,34 @@ struct App {
     keyboard_enters: Vec<u32>,
     /// Surface-local `wl_pointer.enter` coordinates, in order.
     pointer_enters: Vec<(f64, f64)>,
+    /// Every `xdg_popup` event, in wire order — the order matters: `repositioned` must precede the
+    /// configure that describes the new geometry.
+    popup_events: Vec<PopupWire>,
+}
+
+/// An `xdg_popup` event as the client read it off the wire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PopupWire {
+    /// `xdg_popup.configure(x, y, width, height)` — the placement, relative to the parent's window
+    /// geometry, the compositor resolved from the positioner.
+    Configure(i32, i32, i32, i32),
+    /// `xdg_popup.repositioned(token)` — the acknowledgement of an `xdg_popup.reposition`.
+    Repositioned(u32),
+    /// `xdg_popup.popup_done` — the compositor dismissed the popup.
+    Done,
+}
+
+impl App {
+    /// The most recent `xdg_popup.configure` geometry.
+    fn popup_geometry(&self) -> Option<(i32, i32, i32, i32)> {
+        self.popup_events
+            .iter()
+            .rev()
+            .find_map(|event| match event {
+                PopupWire::Configure(x, y, w, h) => Some((*x, *y, *w, *h)),
+                _ => None,
+            })
+    }
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for App {
@@ -163,6 +193,30 @@ impl Dispatch<wl_pointer::WlPointer, ()> for App {
     }
 }
 
+impl Dispatch<xdg_popup::XdgPopup, ()> for App {
+    fn event(
+        app: &mut App,
+        _popup: &xdg_popup::XdgPopup,
+        event: xdg_popup::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<App>,
+    ) {
+        app.popup_events.push(match event {
+            xdg_popup::Event::Configure {
+                x,
+                y,
+                width,
+                height,
+            } => PopupWire::Configure(x, y, width, height),
+            xdg_popup::Event::Repositioned { token } => PopupWire::Repositioned(token),
+            xdg_popup::Event::PopupDone => PopupWire::Done,
+            _ => return,
+        });
+    }
+}
+
+wayland_client::delegate_noop!(App: ignore xdg_positioner::XdgPositioner);
 wayland_client::delegate_noop!(App: ignore WlRegion);
 wayland_client::delegate_noop!(App: ignore WlCompositor);
 wayland_client::delegate_noop!(App: ignore WlSurface);
@@ -250,8 +304,14 @@ impl Fixture {
 
         let stride = w * 4;
         let size = (stride * h) as usize;
-        let path =
-            std::env::temp_dir().join(format!("hl-conformance-{}-{w}x{h}.shm", std::process::id()));
+        // Unique per call: these tests run concurrently in one process, so a path keyed only by pid+size
+        // lets two fixtures truncate each other's backing file and the compositor's mmap then fails.
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let nonce = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "hl-conformance-{}-{nonce}-{w}x{h}.shm",
+            std::process::id()
+        ));
         let mut file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -272,5 +332,6 @@ impl Fixture {
     }
 }
 
+mod popup;
 mod shell;
 mod surface;

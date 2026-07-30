@@ -16,10 +16,12 @@ pub struct CapturedFrame {
     pub width: i32,
     pub height: i32,
     /// Root-space top-left `(x, y)` this layer's content was composited at this cycle — the placement a
-    /// popup/subsurface was routed to. Derived from the compose damage the scene handed `present`
-    /// (`layer_damage` translates a layer's rect into root space by its offset), so a popup at a resolved
-    /// positioner geometry, or a subsurface at `parent + set_position`, reports that offset here. `(0, 0)`
-    /// when the layer contributed no damage this cycle (a clean base layer re-presented under a child).
+    /// popup/subsurface was routed to. It is the frame's role origin (`PresentFrame::origin` — `(0, 0)` for
+    /// the toplevel drawable, the positioner-resolved offset for a popup's own drawable) plus the top-left
+    /// of the layer's compose damage, which `layer_damage` already translated by the layer's offset within
+    /// that role. So a popup reports its resolved positioner geometry, a subsurface reports
+    /// `parent + set_position`, and a partially damaged toplevel reports the damaged region's origin. A
+    /// clean layer carries no damage and reports its role origin alone.
     pub x: i32,
     pub y: i32,
     /// Tight `width*height*4` RGBA of the presented surface. When a `wp_viewport` transform is active this
@@ -219,12 +221,15 @@ impl PngPresenter {
         // taking the first rectangle instead reports whichever one the client happened to damage first and
         // omits anything above or left of it. A clean layer carries no damage and reports `(0, 0)` — the
         // base root's own origin.
+        let (origin_x, origin_y) = frame.origin;
         let (x, y) = damage
             .iter()
             .filter(|rect| !rect.is_empty())
             .copied()
             .reduce(|acc, rect| acc.union(&rect))
-            .map_or((0, 0), |bounds| (bounds.x, bounds.y));
+            .map_or((origin_x, origin_y), |bounds| {
+                (origin_x + bounds.x, origin_y + bounds.y)
+            });
         // The presented logical size — the destination a `wp_viewport` scales to, or `tex/buffer_scale`,
         // as resolved by the scene into `image.width`/`image.height`.
         let (logical_width, logical_height) = (image.width.max(1), image.height.max(1));

@@ -17,6 +17,7 @@ fn present(
     adapter.present_frame(&PresentFrame {
         output: OutputId(1),
         role: image.surface,
+        origin: (0, 0),
         layers: vec![crate::scene::port::PresentLayer {
             image: image.clone(),
             x: 0,

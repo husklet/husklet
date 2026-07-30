@@ -231,6 +231,12 @@ pub struct PresentLayer {
 pub struct PresentFrame {
     pub output: OutputId,
     pub role: SurfaceId,
+    /// Root-space top-left of this role's drawable: `(0, 0)` for the toplevel that owns the tree, and the
+    /// positioner-resolved offset for a popup (a nested popup accumulates through its parent chain, per
+    /// `xdg_positioner`'s anchor rectangle being parent-window-geometry relative). Layer offsets inside
+    /// `layers` are relative to THIS origin, so a presenter that opens the popup as its own native window
+    /// ignores it, while one that composites into a single root drawable adds it.
+    pub origin: (i32, i32),
     pub layers: Vec<PresentLayer>,
     pub timing: PresentTiming,
 }

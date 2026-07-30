@@ -47,11 +47,8 @@ fn image(sid: SurfaceId, w: i32, h: i32) -> PresentableImage {
 
 #[test]
 fn offscreen_present_roundtrips_known_color_on_real_metal() {
-    let Some(mut presenter) = MacPresenter::new_offscreen() else {
-        // No Metal device (e.g. CI without a GPU). Nothing to prove; do not fail the suite.
-        eprintln!("SKIP: no Metal device available");
-        return;
-    };
+    let mut presenter = MacPresenter::new_offscreen()
+        .expect("these tests prove the real Metal pixel path; a Metal device is required");
     eprintln!("Metal adapter: {}", presenter.device_name());
 
     let (w, h) = (16u32, 16u32);
@@ -59,11 +56,16 @@ fn offscreen_present_roundtrips_known_color_on_real_metal() {
     let sid = SurfaceId(7);
     presenter.attach_bgra(sid, known_frame(w, h, [20, 130, 240, 255]), w, h);
 
-    let fb = presenter.present_frame(&single_layer(OutputId(0), image(sid, w as i32, h as i32), &[], PresentTiming {
+    let fb = presenter.present_frame(&single_layer(
+        OutputId(0),
+        image(sid, w as i32, h as i32),
+        &[],
+        PresentTiming {
             present_ns: 0,
             refresh_ns: 0,
             vsync: false,
-        }));
+        },
+    ));
     // Headless: composited into the backing target but not shown on a screen.
     assert_eq!(
         fb.outcome,
@@ -91,18 +93,21 @@ fn offscreen_present_roundtrips_known_color_on_real_metal() {
 
 #[test]
 fn argb_present_preserves_transparent_window_pixels_on_real_metal() {
-    let Some(mut presenter) = MacPresenter::new_offscreen() else {
-        eprintln!("SKIP: no Metal device available");
-        return;
-    };
+    let mut presenter = MacPresenter::new_offscreen()
+        .expect("these tests prove the real Metal pixel path; a Metal device is required");
 
     let sid = SurfaceId(8);
     presenter.attach_bgra(sid, known_frame(4, 4, [20, 130, 240, 37]), 4, 4);
-    presenter.present_frame(&single_layer(OutputId(0), image_with_format(sid, 4, 4, Format::Argb8888), &[], PresentTiming {
+    presenter.present_frame(&single_layer(
+        OutputId(0),
+        image_with_format(sid, 4, 4, Format::Argb8888),
+        &[],
+        PresentTiming {
             present_ns: 0,
             refresh_ns: 0,
             vsync: false,
-        }));
+        },
+    ));
 
     let (_, _, rgba) = presenter.last_rgba(sid).expect("ARGB frame readback");
     assert_eq!(&rgba[..4], &[240, 130, 20, 37]);
@@ -110,18 +115,21 @@ fn argb_present_preserves_transparent_window_pixels_on_real_metal() {
 
 #[test]
 fn xrgb_present_forces_opaque_window_pixels_on_real_metal() {
-    let Some(mut presenter) = MacPresenter::new_offscreen() else {
-        eprintln!("SKIP: no Metal device available");
-        return;
-    };
+    let mut presenter = MacPresenter::new_offscreen()
+        .expect("these tests prove the real Metal pixel path; a Metal device is required");
 
     let sid = SurfaceId(9);
     presenter.attach_bgra(sid, known_frame(4, 4, [20, 130, 240, 0]), 4, 4);
-    presenter.present_frame(&single_layer(OutputId(0), image(sid, 4, 4), &[], PresentTiming {
+    presenter.present_frame(&single_layer(
+        OutputId(0),
+        image(sid, 4, 4),
+        &[],
+        PresentTiming {
             present_ns: 0,
             refresh_ns: 0,
             vsync: false,
-        }));
+        },
+    ));
 
     let (_, _, rgba) = presenter.last_rgba(sid).expect("XRGB frame readback");
     assert_eq!(&rgba[..4], &[240, 130, 20, 255]);
@@ -129,18 +137,21 @@ fn xrgb_present_forces_opaque_window_pixels_on_real_metal() {
 
 #[test]
 fn malformed_bgra_is_rejected_before_metal_reads_it() {
-    let Some(mut presenter) = MacPresenter::new_offscreen() else {
-        eprintln!("SKIP: no Metal device available");
-        return;
-    };
+    let mut presenter = MacPresenter::new_offscreen()
+        .expect("these tests prove the real Metal pixel path; a Metal device is required");
 
     let sid = SurfaceId(10);
     presenter.attach_bgra(sid, vec![0; 15], 2, 2);
-    let feedback = presenter.present_frame(&single_layer(OutputId(0), image(sid, 2, 2), &[], PresentTiming {
+    let feedback = presenter.present_frame(&single_layer(
+        OutputId(0),
+        image(sid, 2, 2),
+        &[],
+        PresentTiming {
             present_ns: 0,
             refresh_ns: 0,
             vsync: false,
-        }));
+        },
+    ));
     assert_eq!(feedback.outcome, PresentOutcome::RetryableFailure);
     assert_eq!(presenter.frames, 0);
     assert!(presenter.last_rgba(sid).is_none());
@@ -148,9 +159,8 @@ fn malformed_bgra_is_rejected_before_metal_reads_it() {
 
 #[test]
 fn requested_capture_writes_only_the_next_presented_frame() {
-    let Some(presenter) = MacPresenter::new_offscreen() else {
-        return;
-    };
+    let presenter = MacPresenter::new_offscreen()
+        .expect("these tests prove the real Metal pixel path; a Metal device is required");
     let directory =
         std::env::temp_dir().join(format!("hl-one-shot-present-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&directory);
@@ -187,9 +197,8 @@ fn requested_capture_writes_only_the_next_presented_frame() {
 fn requested_capture_reads_the_latest_static_frame_during_event_poll() {
     use hl_compositor::scene::port::HostEvents;
 
-    let Some(presenter) = MacPresenter::new_offscreen() else {
-        return;
-    };
+    let presenter = MacPresenter::new_offscreen()
+        .expect("these tests prove the real Metal pixel path; a Metal device is required");
     let directory = std::env::temp_dir().join(format!("hl-static-present-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&directory);
     let mut presenter = presenter.capture_once_to(&directory).unwrap();
@@ -216,24 +225,38 @@ fn requested_capture_reads_the_latest_static_frame_during_event_poll() {
 
 #[test]
 fn rotating_upload_refreshes_the_selected_slot_completely() {
-    let Some(mut presenter) = MacPresenter::new_offscreen() else {
-        return;
-    };
+    let mut presenter = MacPresenter::new_offscreen()
+        .expect("these tests prove the real Metal pixel path; a Metal device is required");
     let sid = SurfaceId(11);
     let timing = PresentTiming {
         present_ns: 0,
         refresh_ns: 0,
         vsync: false,
     };
+    // Each of the first three commits repaints the whole surface, so it carries whole-surface damage —
+    // exactly what `Scene::layer_damage` emits for a fresh buffer without client damage. The composite
+    // target is scissored to the frame's damage, so a layer that declares NO damage declares "nothing
+    // changed" and correctly leaves the composite untouched; a test that attaches new pixels while
+    // declaring no damage describes a frame the scene never produces.
+    let whole = [Rect::new(0, 0, 4, 4)];
     for color in [[10, 20, 30, 255], [40, 50, 60, 255], [70, 80, 90, 255]] {
         presenter.attach_bgra(sid, known_frame(4, 4, color), 4, 4);
-        presenter.present_frame(&single_layer(OutputId(0), image(sid, 4, 4), &[], timing));
+        presenter.present_frame(&single_layer(OutputId(0), image(sid, 4, 4), &whole, timing));
     }
 
+    // The fourth commit changes ONLY pixel (0,0) and damages only that pixel. It lands in upload slot 0,
+    // which still held commit 1 — three commits stale. The slot must therefore receive the COMPLETE plane
+    // even though only one pixel is damaged, so the single damaged texel the composite re-samples comes
+    // from current content and the undamaged texels keep commit 3's already-composited colour.
     let mut fourth = known_frame(4, 4, [70, 80, 90, 255]);
     fourth[..4].copy_from_slice(&[1, 2, 3, 255]);
     presenter.attach_bgra_damage(sid, fourth, 4, 4, Some(vec![Rect::new(0, 0, 1, 1)]));
-    presenter.present_frame(&single_layer(OutputId(0), image(sid, 4, 4), &[], timing));
+    presenter.present_frame(&single_layer(
+        OutputId(0),
+        image(sid, 4, 4),
+        &[Rect::new(0, 0, 1, 1)],
+        timing,
+    ));
 
     let (_, _, rgba) = presenter.last_rgba(sid).expect("damaged frame readback");
     assert_eq!(&rgba[..4], &[3, 2, 1, 255], "damaged pixel updated");
@@ -246,9 +269,8 @@ fn rotating_upload_refreshes_the_selected_slot_completely() {
 
 #[test]
 fn xdg_window_geometry_crops_client_shadow_margins() {
-    let Some(mut presenter) = MacPresenter::new_offscreen() else {
-        return;
-    };
+    let mut presenter = MacPresenter::new_offscreen()
+        .expect("these tests prove the real Metal pixel path; a Metal device is required");
     let sid = SurfaceId(12);
     presenter.reconcile_window(&WindowState {
         surface: sid,
@@ -272,11 +294,16 @@ fn xdg_window_geometry_crops_client_shadow_margins() {
     presenter.attach_bgra(sid, frame, 4, 4);
     let mut image = image(sid, 4, 4);
     image.present_crop = Some((0.0, 0.0, 4.0, 4.0));
-    presenter.present_frame(&single_layer(OutputId(0), image, &[], PresentTiming {
+    presenter.present_frame(&single_layer(
+        OutputId(0),
+        image,
+        &[],
+        PresentTiming {
             present_ns: 0,
             refresh_ns: 0,
             vsync: false,
-        }));
+        },
+    ));
     let (w, h, rgba) = presenter.last_rgba(sid).expect("cropped frame");
     assert_eq!((w, h), (2, 2));
     assert_eq!(&rgba[..4], &[240, 130, 20, 255]);
@@ -312,6 +339,7 @@ fn single_layer(
     PresentFrame {
         output,
         role: image.surface,
+        origin: (0, 0),
         layers: vec![PresentLayer {
             image,
             x: 0,

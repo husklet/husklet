@@ -123,14 +123,25 @@ fn activation_focuses_target_toplevel() {
     let pid_a = app.surfaces[0].id().protocol_id();
     let pid_b = app.surfaces[1].id().protocol_id();
 
-    // Nothing is focused before any activation (headless does not auto-focus a mapped toplevel).
+    // Keyboard focus is granted when a toplevel first MAPS a buffer (`HlState::set_keyboard_focus` from
+    // the commit path), which deactivates the previously focused toplevel. Both A and B mapped above, so
+    // the LAST one mapped — B — already holds focus before any activation token exists. Activation's job
+    // is therefore to MOVE an existing focus, not to create the first one.
     let _ = queue.roundtrip(&mut app);
-    assert_eq!(app.focused, None, "no keyboard focus before activation");
+    assert_eq!(
+        app.focused,
+        Some(pid_b),
+        "the last mapped toplevel holds keyboard focus before activation; enter_log={:?}",
+        app.enter_log
+    );
 
     let sa = app.surfaces[0].clone();
     let sb = app.surfaces[1].clone();
 
     // ---- (1) activate A → keyboard focus lands on A ----
+    // Only the enters that arrive AFTER this point are attributable to the activation; the map-time enters
+    // above are not.
+    let enters_before_activation = app.enter_log.len();
     let token1 = mint_token(&mut queue, &mut app, &activation, &qh, &sa);
     activation.activate(token1, &sa);
     let got_a = poll(&mut queue, &mut app, 5, |a| a.focused == Some(pid_a));
@@ -144,9 +155,10 @@ fn activation_focuses_target_toplevel() {
         Some(&pid_a),
         "the enter targeted EXACTLY surface A"
     );
-    assert!(
-        !app.enter_log.contains(&pid_b),
-        "B was never focused by A's activation"
+    assert_eq!(
+        &app.enter_log[enters_before_activation..],
+        &[pid_a],
+        "A's activation produced EXACTLY one enter, on A"
     );
 
     // ---- (2) activate B → focus MOVES: leave A, enter B ----

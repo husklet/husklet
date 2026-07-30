@@ -191,9 +191,13 @@ fn popup_and_subsurface_composite_at_placed_positions_and_grab_dismisses() {
             app.tl_released,
             app.tl_frame_done,
         );
+        // `roundtrip` is BOUNDED: the server always answers `wl_display.sync`, so the loop returns to its
+        // deadline check every cycle. `blocking_dispatch` would park forever the moment the compositor has
+        // nothing further to send (it legitimately withholds a frame callback in some pacing paths), which
+        // turns a failing expectation into an unbounded hang.
         queue
-            .blocking_dispatch(&mut app)
-            .expect("client dispatch (map toplevel)");
+            .roundtrip(&mut app)
+            .expect("client roundtrip (map toplevel)");
     }
     assert!(
         wait_for(&captures, |f| f.width == TL_W
@@ -222,7 +226,7 @@ fn popup_and_subsurface_composite_at_placed_positions_and_grab_dismisses() {
             Instant::now() < deadline,
             "popup never composited at its placed position"
         );
-        queue.blocking_dispatch(&mut app).ok();
+        queue.roundtrip(&mut app).ok(); // bounded pump: see the map loop above
         popup_frame = captures
             .lock()
             .unwrap()
@@ -268,7 +272,7 @@ fn popup_and_subsurface_composite_at_placed_positions_and_grab_dismisses() {
             Instant::now() < deadline,
             "subsurface never composited at parent+offset"
         );
-        queue.blocking_dispatch(&mut app).ok();
+        queue.roundtrip(&mut app).ok(); // bounded pump: see the map loop above
         sub_frame = captures
             .lock()
             .unwrap()

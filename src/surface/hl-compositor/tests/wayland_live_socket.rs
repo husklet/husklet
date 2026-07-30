@@ -46,7 +46,8 @@ use wayland_client::protocol::{
     wl_surface::WlSurface,
 };
 use wayland_client::protocol::{
-    wl_data_device::WlDataDevice, wl_data_device_manager::WlDataDeviceManager,
+    wl_data_device::{self, WlDataDevice},
+    wl_data_device_manager::WlDataDeviceManager,
 };
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};
 use wayland_protocols::xdg::shell::client::{

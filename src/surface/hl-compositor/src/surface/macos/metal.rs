@@ -118,51 +118,6 @@ impl MetalCtx {
         }
     }
 
-    /// Update clipped buffer-pixel rectangles while retaining the complete source row stride. Invalid or
-    /// empty rectangles are ignored; callers use a full upload whenever damage coordinates are ambiguous.
-    pub fn update_bgra_regions(
-        &self,
-        tex: &ProtocolObject<dyn MTLTexture>,
-        bgra: &[u8],
-        w: u32,
-        h: u32,
-        damage: &[crate::scene::model::Rect],
-    ) {
-        for rect in damage {
-            let x0 = rect.x.max(0).min(w as i32);
-            let y0 = rect.y.max(0).min(h as i32);
-            let x1 = rect.x.saturating_add(rect.w).max(0).min(w as i32);
-            let y1 = rect.y.saturating_add(rect.h).max(0).min(h as i32);
-            if x1 <= x0 || y1 <= y0 {
-                continue;
-            }
-            let offset = (y0 as usize * w as usize + x0 as usize) * 4;
-            let Some(bytes) = bgra.get(offset..) else {
-                continue;
-            };
-            let region = MTLRegion {
-                origin: MTLOrigin {
-                    x: x0 as usize,
-                    y: y0 as usize,
-                    z: 0,
-                },
-                size: MTLSize {
-                    width: (x1 - x0) as usize,
-                    height: (y1 - y0) as usize,
-                    depth: 1,
-                },
-            };
-            unsafe {
-                tex.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
-                    region,
-                    0,
-                    std::ptr::NonNull::new(bytes.as_ptr() as *mut std::ffi::c_void).unwrap(),
-                    w as usize * 4,
-                );
-            }
-        }
-    }
-
     /// Wrap a host `IOSurface` as an `MTLTexture` with **zero copy** — the IOSurface's pages ARE the
     /// texture's storage (the GPU-rung-2 mechanism a guest's IOSurface-backed dmabuf uses).
     pub fn texture_from_iosurface(

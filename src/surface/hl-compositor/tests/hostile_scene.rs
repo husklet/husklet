@@ -218,6 +218,7 @@ mod present_path {
         PresentFrame {
             output,
             role: image.surface,
+            origin: (0, 0),
             layers: vec![PresentLayer {
                 image,
                 x: 0,
@@ -259,12 +260,13 @@ mod present_path {
 
     fn drive(p: &mut PngPresenter, buf: StoredBuffer, image: &PresentableImage) -> PresentOutcome {
         p.deposit(image.surface, buf);
-        p.present_frame(&single_layer(OutputId(1), image.clone(), &[], PresentTiming {
-                present_ns: 0,
-                refresh_ns: 0,
-                vsync: false,
-            }))
-        .outcome
+        let timing = PresentTiming {
+            present_ns: 0,
+            refresh_ns: 0,
+            vsync: false,
+        };
+        p.present_frame(&single_layer(OutputId(1), image.clone(), &[], timing))
+            .outcome
     }
 
     /// After ANY hostile frame, a valid frame must still composite to the exact expected pixels — proving

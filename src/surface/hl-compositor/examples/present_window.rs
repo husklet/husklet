@@ -27,6 +27,7 @@ fn main() {
         PresentFrame {
             output,
             role: image.surface,
+            origin: (0, 0),
             layers: vec![PresentLayer {
                 image,
                 x: 0,
@@ -85,11 +86,16 @@ fn main() {
     for _ in 0..60 {
         presenter.poll_events();
         presenter.attach_bgra(sid, frame.clone(), w, h);
-        let fb = presenter.present_frame(&single_layer(OutputId(0), img.clone(), &[], PresentTiming {
+        let fb = presenter.present_frame(&single_layer(
+            OutputId(0),
+            img.clone(),
+            &[],
+            PresentTiming {
                 present_ns: 0,
                 refresh_ns: 0,
                 vsync: false,
-            }));
+            },
+        ));
         if matches!(fb.outcome, PresentOutcome::Delivered { .. }) {
             delivered = true;
         }
