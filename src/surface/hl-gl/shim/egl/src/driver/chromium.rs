@@ -9,6 +9,27 @@ pub extern "C" fn glRequestExtensionANGLE(_name: *const c_char) {
     GlobalState::context(|group| group.gl.set_gl_error(GL_INVALID_OPERATION));
 }
 
+/// `glDisableExtensionANGLE(name)` — `GL_ANGLE_request_extension`'s other half. The advertised inventory
+/// is static, so nothing can be disabled either; rejecting matches [`glRequestExtensionANGLE`]. The
+/// extension is advertised, so ANGLE resolves this name and CALLS it without a null check — leaving it
+/// unimplemented made an advertised command a jump to address zero.
+// Not in the ABI census (registry manifest): an extension command resolves through
+// `eglGetProcAddress`, exactly like `glMapBufferOES`. Exporting it would change the pinned surface.
+pub extern "C" fn glDisableExtensionANGLE(_name: *const c_char) {
+    GlobalState::context(|group| group.gl.set_gl_error(GL_INVALID_OPERATION));
+}
+
+/// `glBindGeneratesResourceCHROMIUM(enabled)` — `GL_CHROMIUM_bind_generates_resource`. This model always
+/// materializes a name on first bind (see `hl_gl::model::{buffer,texture,framebuffer,renderbuffer}`), so
+/// the behavior is permanently enabled: `GL_TRUE` is the state the driver is already in, and a request to
+/// disable it is refused rather than silently ignored. Same null-call reason as above for existing at all.
+// Resolved through `eglGetProcAddress`; not part of the pinned export surface.
+pub extern "C" fn glBindGeneratesResourceCHROMIUM(enabled: u8) {
+    if enabled == 0 {
+        GlobalState::context(|group| group.gl.set_gl_error(GL_INVALID_OPERATION));
+    }
+}
+
 #[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glCopyTextureCHROMIUM(

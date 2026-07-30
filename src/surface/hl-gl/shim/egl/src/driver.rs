@@ -75,8 +75,8 @@ use hl_gl::model::context::GlContext;
 use hl_gl::model::glconst::*;
 use hl_gl::result::{
     egl_error_from_gpu_error, EGL_BAD_ACCESS, EGL_BAD_ATTRIBUTE, EGL_BAD_CONFIG, EGL_BAD_CONTEXT,
-    EGL_BAD_DISPLAY, EGL_BAD_MATCH, EGL_BAD_PARAMETER, EGL_BAD_SURFACE, EGL_FALSE,
-    EGL_NOT_INITIALIZED, EGL_TRUE, GL_INVALID_ENUM, GL_INVALID_VALUE, GL_OUT_OF_MEMORY,
+    EGL_BAD_DISPLAY, EGL_BAD_MATCH, EGL_BAD_NATIVE_PIXMAP, EGL_BAD_PARAMETER, EGL_BAD_SURFACE,
+    EGL_FALSE, EGL_NOT_INITIALIZED, EGL_TRUE, GL_INVALID_ENUM, GL_INVALID_VALUE, GL_OUT_OF_MEMORY,
 };
 use hl_gl::service::{
     compute, config, es3, intro, map, query, readpixels, record, swap, sync, upload::Upload,
@@ -207,6 +207,15 @@ unsafe fn to_rgba8(
     h: i32,
     pixels: *const c_void,
 ) -> Vec<u8> {
+    // GLES3.0 3.8.3: `width`/`height` above GL_MAX_TEXTURE_SIZE is GL_INVALID_VALUE, so the record layer
+    // will reject this upload. Refuse the extent HERE, before the client pointer is read: the source span
+    // is `w * h * bpp`, and a guest passing 65536x65536 with a small buffer made the shim read ~17 GiB out
+    // of bounds and segfault before the record layer ever saw the size.
+    if w < 0 || h < 0 || w > query::MAX_TEXTURE_SIZE || h > query::MAX_TEXTURE_SIZE {
+        hl_log::hl_count!(hl_log::tag::GL, "upload_extent_rejected");
+        crate::stub::Diagnostics::upload(format, type_, crate::stub::UploadOutcome::Rejected);
+        return Vec::new();
+    }
     match (format, type_) {
         (GL_RED, GL_UNSIGNED_BYTE) => {
             hl_log::hl_count!(hl_log::tag::GL, "upload_red_u8");

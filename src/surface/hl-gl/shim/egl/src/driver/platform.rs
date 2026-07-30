@@ -224,40 +224,96 @@ pub extern "C" fn eglWaitGL() -> u32 {
 pub extern "C" fn eglWaitNative(_engine: i32) -> u32 {
     EGL_TRUE
 }
-/// `eglSurfaceAttrib(dpy, surface, attribute, value)` — set a surface attribute (swap behavior, mipmap
-/// hint, …). This model tracks none of the settable attributes; the call is accepted. Success.
+// The three attributes EGL 1.5 3.5.6 makes settable, and the tokens their values are drawn from.
+const EGL_MIPMAP_LEVEL: i32 = 0x3083;
+const EGL_SWAP_BEHAVIOR: i32 = 0x3093;
+const EGL_BUFFER_PRESERVED: i32 = 0x3094;
+const EGL_BUFFER_DESTROYED: i32 = 0x3095;
+const EGL_MULTISAMPLE_RESOLVE: i32 = 0x3099;
+const EGL_MULTISAMPLE_RESOLVE_DEFAULT: i32 = 0x309A;
+const EGL_MULTISAMPLE_RESOLVE_BOX: i32 = 0x309B;
+
+/// Validate the `(display, surface)` pair every surface operation takes, setting the accurate EGL error.
+/// Reporting success for a handle the driver does not know is the failure mode most likely to precede a
+/// crash later: the caller proceeds believing state changed.
+fn surface_operand(dpy: *mut c_void, surface: *mut c_void) -> Result<(), i32> {
+    if dpy as usize != DISPLAY_TOKEN {
+        return Err(EGL_BAD_DISPLAY);
+    }
+    if !GlobalState::access(|state| state.has_surface(surface as usize)) {
+        return Err(EGL_BAD_SURFACE);
+    }
+    Ok(())
+}
+
+fn surface_failure(error: i32) -> u32 {
+    GlobalState::access(|state| state.set_egl_error(error));
+    EGL_FALSE
+}
+
+/// `eglSurfaceAttrib(dpy, surface, attribute, value)` — set a surface attribute.
+///
+/// EGL 1.5 §3.5.6 defines exactly three settable attributes and makes any other `EGL_BAD_ATTRIBUTE`; an
+/// unknown surface is `EGL_BAD_SURFACE`. This model tracks none of the three, so a recognized
+/// attribute/value pair stays an accepted no-op — but a bad handle or an undefined token is no longer
+/// reported as success.
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglSurfaceAttrib(
-    _dpy: *mut c_void,
-    _surface: *mut c_void,
-    _attribute: i32,
-    _value: i32,
+    dpy: *mut c_void,
+    surface: *mut c_void,
+    attribute: i32,
+    value: i32,
 ) -> u32 {
+    if let Err(error) = surface_operand(dpy, surface) {
+        return surface_failure(error);
+    }
+    let recognized = match attribute {
+        EGL_MIPMAP_LEVEL => true,
+        EGL_MULTISAMPLE_RESOLVE => {
+            matches!(
+                value,
+                EGL_MULTISAMPLE_RESOLVE_DEFAULT | EGL_MULTISAMPLE_RESOLVE_BOX
+            )
+        }
+        EGL_SWAP_BEHAVIOR => matches!(value, EGL_BUFFER_PRESERVED | EGL_BUFFER_DESTROYED),
+        _ => false,
+    };
+    if !recognized {
+        return surface_failure(EGL_BAD_ATTRIBUTE);
+    }
     EGL_TRUE
 }
-/// `eglBindTexImage` / `eglReleaseTexImage` — bind/release a pbuffer as a texture image. No render-to-
-/// texture pbuffer path is modeled; the call is accepted as a no-op. Success.
+/// `eglBindTexImage` / `eglReleaseTexImage` — bind/release a pbuffer as a texture image.
+///
+/// EGL 1.5 §3.6.1: `buffer` must be `EGL_BACK_BUFFER` (else `EGL_BAD_PARAMETER`), and a surface whose
+/// `EGL_TEXTURE_FORMAT` is `EGL_NO_TEXTURE` is `EGL_BAD_SURFACE`. No render-to-texture pbuffer is modeled,
+/// so every surface this driver creates has no texture format and the operation is refused — previously it
+/// reported success for an operation nothing backs, and for handles that do not exist.
 #[cfg_attr(not(gles_client), no_mangle)]
-pub extern "C" fn eglBindTexImage(_dpy: *mut c_void, _surface: *mut c_void, _buffer: i32) -> u32 {
-    EGL_TRUE
+pub extern "C" fn eglBindTexImage(dpy: *mut c_void, surface: *mut c_void, buffer: i32) -> u32 {
+    match surface_operand(dpy, surface) {
+        Err(error) => surface_failure(error),
+        Ok(()) if buffer != EGL_BACK_BUFFER => surface_failure(EGL_BAD_PARAMETER),
+        Ok(()) => surface_failure(EGL_BAD_SURFACE),
+    }
 }
 #[cfg_attr(not(gles_client), no_mangle)]
-pub extern "C" fn eglReleaseTexImage(
-    _dpy: *mut c_void,
-    _surface: *mut c_void,
-    _buffer: i32,
-) -> u32 {
-    EGL_TRUE
+pub extern "C" fn eglReleaseTexImage(dpy: *mut c_void, surface: *mut c_void, buffer: i32) -> u32 {
+    eglBindTexImage(dpy, surface, buffer)
 }
-/// `eglCopyBuffers(dpy, surface, target)` — copy the surface color buffer to a native pixmap. No native
-/// pixmap target is modeled; accepted as a no-op. Success.
+/// `eglCopyBuffers(dpy, surface, target)` — copy the surface color buffer to a native pixmap. EGL 1.5
+/// §3.9.4: an invalid pixmap target is `EGL_BAD_NATIVE_PIXMAP`. No native pixmap target is modeled, so
+/// there is no target this driver can accept; it no longer claims the copy happened.
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglCopyBuffers(
-    _dpy: *mut c_void,
-    _surface: *mut c_void,
+    dpy: *mut c_void,
+    surface: *mut c_void,
     _target: *mut c_void,
 ) -> u32 {
-    EGL_TRUE
+    match surface_operand(dpy, surface) {
+        Err(error) => surface_failure(error),
+        Ok(()) => surface_failure(EGL_BAD_NATIVE_PIXMAP),
+    }
 }
 /// `eglQueryContext(dpy, ctx, attribute, value)` — report a context attribute. This driver serves exactly
 /// one client API (OpenGL ES), so `EGL_CONTEXT_CLIENT_TYPE` MUST answer `EGL_OPENGL_ES_API` — libepoxy's

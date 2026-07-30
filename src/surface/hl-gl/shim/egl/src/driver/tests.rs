@@ -60,7 +60,10 @@ fn khr_create_context_flags_are_honoured_and_only_reject_the_opengl_only_bit() {
     ] {
         let attributes = with_flags(flags);
         let context = eglCreateContext(display, config, core::ptr::null_mut(), attributes.as_ptr());
-        assert!(!context.is_null(), "EGL_CONTEXT_FLAGS_KHR = {flags} accepted");
+        assert!(
+            !context.is_null(),
+            "EGL_CONTEXT_FLAGS_KHR = {flags} accepted"
+        );
         let mut value = -1;
         assert_eq!(
             eglQueryContext(
@@ -349,3 +352,9 @@ fn dawn_required_egl_procedures_all_resolve() {
 
 #[path = "tests/current.rs"]
 mod current_binding_tests;
+
+#[path = "tests/hostile.rs"]
+mod hostile_input_tests;
+
+#[path = "tests/advertised.rs"]
+mod advertised_extension_tests;

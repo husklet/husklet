@@ -46,6 +46,8 @@ pub extern "C" fn eglGetProcAddress(procname: *const c_char) -> *mut c_void {
         "glCopyTextureCHROMIUM" => p!(glCopyTextureCHROMIUM),
         "glCopySubTextureCHROMIUM" => p!(glCopySubTextureCHROMIUM),
         "glRequestExtensionANGLE" => p!(glRequestExtensionANGLE),
+        "glDisableExtensionANGLE" => p!(glDisableExtensionANGLE),
+        "glBindGeneratesResourceCHROMIUM" => p!(glBindGeneratesResourceCHROMIUM),
         "glGetString" => p!(glGetString),
         "glGetStringi" => p!(glGetStringi),
         "glGetIntegerv" => p!(glGetIntegerv),

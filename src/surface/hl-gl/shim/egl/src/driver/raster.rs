@@ -343,6 +343,13 @@ pub extern "C" fn glGetBufferPointerv(target: u32, pname: u32, params: *mut *mut
         unsafe { *params = pointer };
     }
 }
+/// `glGetBufferPointervOES(target, pname, params)` — `GL_OES_mapbuffer`'s spelling of the same query.
+/// The extension is advertised and supplies `glMapBufferOES`/`glUnmapBufferOES`, so a client resolves this
+/// name too and calls it without a null check; only the OES spelling was missing.
+// Resolved through `eglGetProcAddress` beside `glMapBufferOES`; not part of the pinned export surface.
+pub extern "C" fn glGetBufferPointervOES(target: u32, pname: u32, params: *mut *mut c_void) {
+    glGetBufferPointerv(target, pname, params);
+}
 /// `glGetPointerv(pname, params)` — a KHR_debug callback/pointer query; no such pointer state is modeled.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetPointerv(_pname: u32, params: *mut *mut c_void) {

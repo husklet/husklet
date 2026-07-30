@@ -178,13 +178,15 @@ impl ContextAttributeList {
                             | EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR)
                         == 0 =>
                 {
-                    attributes.robust_access |= value & EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR != 0;
+                    attributes.robust_access |=
+                        value & EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR != 0;
                 }
                 EGL_CONTEXT_FLAGS_KHR
                     if value & EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE_BIT_KHR != 0 =>
                 {
                     return Err(ContextAttributeError::Malformed {
-                        reason: "EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE_BIT_KHR is OpenGL-only".into(),
+                        reason: "EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE_BIT_KHR is OpenGL-only"
+                            .into(),
                         pairs,
                     });
                 }

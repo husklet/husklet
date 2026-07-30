@@ -106,6 +106,7 @@ pub(super) fn resolve(name: &str) -> *mut c_void {
         // function in this driver (they are not part of the exported ABI census).
         "glMapBufferOES" => p!(glMapBufferOES),
         "glUnmapBufferOES" => p!(glUnmapBufferOES),
+        "glGetBufferPointervOES" => p!(glGetBufferPointervOES),
         "glGetDebugMessageLog" => p!(glGetDebugMessageLog),
         "glGetDebugMessageLogKHR" => p!(glGetDebugMessageLogKHR),
         "glGetFragDataLocation" => p!(glGetFragDataLocation),

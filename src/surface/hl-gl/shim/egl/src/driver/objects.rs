@@ -172,11 +172,37 @@ pub extern "C" fn glBufferData(target: u32, size: isize, data: *const c_void, us
     // pipeline that DECLARES vertex buffer 0 while binding none, which wgpu rejects at pass validation
     // (`MissingVertexBuffer`). Real data (`data != NULL`) is copied verbatim as before.
     let d = if data.is_null() && size > 0 {
-        vec![0u8; size as usize]
+        // GLES3.0 2.9.2: a data store the GL cannot create is GL_OUT_OF_MEMORY, not a crash. The
+        // reservation is driver-side arithmetic on a guest-supplied length, so allocate fallibly —
+        // `vec![0u8; size]` aborted the whole process on `glBufferData(target, isize::MAX, NULL, usage)`.
+        let mut reserved = Vec::new();
+        if reserved.try_reserve_exact(size as usize).is_err() {
+            GlobalState::context(|s| s.gl.set_gl_error(GL_OUT_OF_MEMORY));
+            return;
+        }
+        reserved.resize(size as usize, 0u8);
+        reserved
     } else {
         unsafe { RawBytes::read(data, size) }.to_vec()
     };
     GlobalState::context(|s| record::buffer_data(&mut s.gl, target, &d, usage));
+}
+
+/// The storage size of the buffer bound to `target`, or `None` when no buffer is bound there. A guest
+/// length is only safe to read once it is bounded by the object it indexes.
+fn bound_buffer_capacity(target: u32) -> Option<usize> {
+    GlobalState::context(|s| {
+        let name = s.gl.buffer_for_target(target);
+        if name == 0 {
+            return None;
+        }
+        Some(
+            s.gl.buffers
+                .get(name)
+                .map(|buffer| buffer.data.len())
+                .unwrap_or(0),
+        )
+    })
 }
 
 #[cfg_attr(gles_client, no_mangle)]
@@ -185,10 +211,24 @@ pub extern "C" fn glBufferSubData(target: u32, offset: isize, size: isize, data:
         "glBufferSubData",
         &format!("target={target:#x} offset={offset} size={size}"),
     );
+    // GLES3.0 2.9.3: a negative `offset`/`size`, or a range reaching past the bound buffer's current size,
+    // is GL_INVALID_VALUE. Reject BEFORE the client pointer is read — `size` indexes guest memory, and
+    // `glBufferSubData(target, 0, isize::MAX, p)` against a 64-byte buffer copied `isize::MAX` bytes and
+    // aborted the process on the allocation. The record layer re-checks the range against the store.
+    let Some(capacity) = bound_buffer_capacity(target) else {
+        return; // no buffer bound to `target`: nothing to write into, and nothing to read
+    };
+    let fits = offset >= 0
+        && size >= 0
+        && (offset as usize)
+            .checked_add(size as usize)
+            .is_some_and(|end| end <= capacity);
+    if !fits {
+        GlobalState::context(|s| s.gl.set_gl_error(GL_INVALID_VALUE));
+        return;
+    }
     let d = unsafe { RawBytes::read(data, size) }.to_vec();
-    GlobalState::context(|s| {
-        record::buffer_sub_data(&mut s.gl, target, offset.max(0) as usize, &d)
-    });
+    GlobalState::context(|s| record::buffer_sub_data(&mut s.gl, target, offset as usize, &d));
 }
 
 #[cfg_attr(gles_client, no_mangle)]

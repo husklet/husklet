@@ -1,3 +1,15 @@
+/// Whether a compressed upload's extent may be allocated. GLES3.0 3.8.6: `width`/`height` above
+/// GL_MAX_TEXTURE_SIZE is GL_INVALID_VALUE, and the `w*h*4` RGBA8 reservation these entry points make is
+/// unbounded arithmetic on guest input — `glCompressedTexImage2D(…, i32::MAX, i32::MAX, …)` panicked the
+/// allocator with a capacity overflow, which `panic = "abort"` turns into a dead driver.
+fn allocatable_extent(width: i32, height: i32) -> bool {
+    if width > query::MAX_TEXTURE_SIZE || height > query::MAX_TEXTURE_SIZE {
+        GlobalState::context(|group| group.gl.set_gl_error(GL_INVALID_VALUE));
+        return false;
+    }
+    true
+}
+
 /// `glCompressedTexImage2D` — a compressed upload the RGBA8 model cannot decode. We allocate the bound
 /// texture's extent (so bookkeeping/bind proceeds) and truthfully do not materialize sampled pixels.
 #[cfg_attr(gles_client, no_mangle)]
@@ -13,6 +25,9 @@ pub extern "C" fn glCompressedTexImage2D(
     _data: *const c_void,
 ) {
     if target != GL_TEXTURE_2D || level != 0 {
+        return;
+    }
+    if !allocatable_extent(width, height) {
         return;
     }
     GlobalState::context(|group| {
@@ -40,6 +55,9 @@ pub extern "C" fn glCompressedTexImage3D(
     _data: *const c_void,
 ) {
     if level != 0 || (target != GL_TEXTURE_2D_ARRAY && target != GL_TEXTURE_3D) {
+        return;
+    }
+    if !allocatable_extent(width, height) {
         return;
     }
     GlobalState::context(|group| {
