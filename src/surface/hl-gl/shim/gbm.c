@@ -659,6 +659,82 @@ int gbm_bo_write(struct gbm_bo *bo, const void *buffer, size_t count) {
                : -1;
 }
 
+/*
+ * gbm_surface_* — the swap-chain family. Husklet has no honest backing for it:
+ * a gbm_surface's front buffer only becomes meaningful once a GL implementation
+ * has rendered into it and swapped, and this driver's EGL cannot render into a
+ * gbm_surface (eglCreateWindowSurface takes a `wl_egl_window`, not a gbm one),
+ * while the virtual render node reports DRM_CAP_PRIME = 0 and rejects the PRIME
+ * ioctls, so a locked front buffer could never be scanned out either.
+ *
+ * The family therefore exists so symbol resolution succeeds (libgstgl and other
+ * libraries link `gbm_surface_lock_front_buffer` whether or not they call it),
+ * and creation fails the way gbm defines: NULL with errno set. No gbm_surface
+ * object is ever produced, so every other entry point can only have been handed
+ * a pointer this driver did not create; none of them dereference it.
+ */
+struct gbm_surface;
+
+struct gbm_surface *gbm_surface_create(struct gbm_device *device, uint32_t width,
+                                       uint32_t height, uint32_t format,
+                                       uint32_t flags) {
+    debugf("[hl-gbm-shim] gbm_surface_create device=%p width=%u height=%u "
+           "format=0x%08x flags=0x%08x unsupported\n",
+           (void *)device, width, height, format, flags);
+    errno = ENOTSUP;
+    return NULL;
+}
+
+struct gbm_surface *gbm_surface_create_with_modifiers(
+    struct gbm_device *device, uint32_t width, uint32_t height, uint32_t format,
+    const uint64_t *modifiers, unsigned count) {
+    debugf("[hl-gbm-shim] gbm_surface_create_with_modifiers device=%p width=%u "
+           "height=%u format=0x%08x count=%u unsupported\n",
+           (void *)device, width, height, format, count);
+    (void)modifiers;
+    errno = ENOTSUP;
+    return NULL;
+}
+
+struct gbm_surface *gbm_surface_create_with_modifiers2(
+    struct gbm_device *device, uint32_t width, uint32_t height, uint32_t format,
+    const uint64_t *modifiers, unsigned count, uint32_t flags) {
+    debugf("[hl-gbm-shim] gbm_surface_create_with_modifiers2 device=%p width=%u "
+           "height=%u format=0x%08x count=%u flags=0x%08x unsupported\n",
+           (void *)device, width, height, format, count, flags);
+    (void)modifiers;
+    errno = ENOTSUP;
+    return NULL;
+}
+
+/* No surface can exist, so there is never a front buffer to hand out. */
+struct gbm_bo *gbm_surface_lock_front_buffer(struct gbm_surface *surface) {
+    debugf("[hl-gbm-shim] gbm_surface_lock_front_buffer surface=%p "
+           "unsupported\n",
+           (void *)surface);
+    errno = EINVAL;
+    return NULL;
+}
+
+/* Releasing a buffer this driver never locked is a no-op, not a free. */
+void gbm_surface_release_buffer(struct gbm_surface *surface,
+                                struct gbm_bo *bo) {
+    debugf("[hl-gbm-shim] gbm_surface_release_buffer surface=%p bo=%p "
+           "unsupported\n",
+           (void *)surface, (void *)bo);
+}
+
+int gbm_surface_has_free_buffers(struct gbm_surface *surface) {
+    debugf("[hl-gbm-shim] gbm_surface_has_free_buffers surface=%p free=0\n",
+           (void *)surface);
+    return 0;
+}
+
+void gbm_surface_destroy(struct gbm_surface *surface) {
+    debugf("[hl-gbm-shim] gbm_surface_destroy surface=%p unsupported\n",
+           (void *)surface);
+}
+
 char *gbm_format_get_name(uint32_t format, void *name) {
     if (!name) return NULL;
     memcpy(name, &format, 4);

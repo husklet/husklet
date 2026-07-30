@@ -15,9 +15,9 @@
 //! the exact exported-symbol set. Both `.so`s land beside each other, plus an unversioned `lib*.so`
 //! symlink. A third small object, `libwayland-egl.so.1`, is compiled from a one-file C shim.
 //!
-//! HOST NOTE: only the aarch64 rust std is installed here (system rust, no rustup), so the aarch64 build
-//! MUST succeed (a failure fails this build). For x86_64 the build is ATTEMPTED, but if the target std is
-//! missing it emits a `cargo:warning` and skips gracefully — it never fails the build. Cross linkers
+//! HOST NOTE: every SELECTED arch must build — a missing target std fails this build rather than staging a
+//! partial driver set (`package/drivers.manifest` ships both arches). A host with only the aarch64 std
+//! narrows the selection explicitly with `HL_DRIVER_ARCHES=aarch64`. Cross linkers
 //! The build environment selects the Linux linker + C compiler.
 //!
 //! STAGING PATH NOTE: the shims stage under `~/.hl/gl/<arch>/` (NOT the old `~/.hl/gui/<arch>/lib`), one
@@ -116,16 +116,19 @@ fn main() {
         }
         .unwrap_or_else(|| (*cc).to_owned());
         if !BuildEnvironment::std_available(&sysroot, triple) {
-            // aarch64 std is guaranteed on this host; a missing HOST std is a real, fail-loud error.
-            if required {
-                panic!(
-                    "host target std for {triple} is missing under {}",
-                    sysroot.display()
-                );
-            }
+            // An arch this build is answerable for cannot be skipped: `package/drivers.manifest` ships
+            // both, so a silent skip hands a workspace on the other arch a libgbm/libEGL that is simply
+            // absent. Naming the arches explicitly makes every one of them answerable, which is how a
+            // packaging build demands the complete set.
+            assert!(
+                !required,
+                "rust std for {triple} is missing under {} — install it, or narrow HL_DRIVER_ARCHES to \
+                 the arches this host can build (excluding {arch_dir})",
+                sysroot.display()
+            );
             println!(
-                "cargo:warning=hl-gl: rust std for {triple} not installed (no rustup on this host); \
-                 skipping the x86_64 guest shim build — install it to stage x86_64 shims"
+                "cargo:warning=hl-gl: rust std for {triple} is absent; {arch_dir} guest drivers are \
+                 not staged by this build"
             );
             continue;
         }
