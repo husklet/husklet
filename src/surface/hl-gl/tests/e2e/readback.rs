@@ -63,10 +63,30 @@ fn glreadpixels_reads_the_rendered_default_target_back() {
         "every read-back pixel is the triangle or the clear color"
     );
 
-    // glReadPixels is not a frame boundary: the draw-list survives so a later eglSwapBuffers still presents.
+    // glReadPixels is not a frame boundary: `eglSwapBuffers` after it must still post the frame the app
+    // drew, and the frame must execute exactly once — the readback already rendered it, so the swap
+    // presents the resident default target rather than replaying the draw-list.
     assert!(
-        !c.draws().is_empty(),
-        "readback left the recorded frame intact"
+        hl_gl::service::swap::swap_buffers(&mut c, &mut sink).unwrap(),
+        "eglSwapBuffers after glReadPixels still presents the rendered frame"
+    );
+    assert_eq!(
+        sink.executor().draws,
+        1,
+        "the frame executed once across the readback and the swap"
+    );
+    let target = c
+        .resident_default_read_target()
+        .expect("the readback left the default target resident")
+        .0;
+    let mut presented = vec![0u8; W * H * 4];
+    sink.executor()
+        .read_texture(sink.resources(), TextureId(target), &mut presented)
+        .unwrap();
+    assert_eq!(
+        texel(&presented, W / 2, H / 2),
+        [0, 0, 255, 255],
+        "the presented default target still holds the rendered frame (Bgra8 red center)"
     );
 }
 

@@ -77,6 +77,9 @@ pub(crate) struct LocalState {
     pub(crate) default_targets: HashMap<u64, SurfaceTarget>,
     pub(crate) present_token: Option<hl_gpu::protocol::model::descriptor::SurfaceToken>,
     pub(crate) present_serial: Option<hl_gpu::protocol::model::descriptor::FrameSerial>,
+    /// Set when a `glReadPixels` already rendered and consumed this frame's default framebuffer, so
+    /// `eglSwapBuffers` must still post that render instead of an empty frame. Cleared by `reset_frame`.
+    pub(crate) default_present_pending: bool,
 }
 
 impl LocalState {
@@ -132,6 +135,7 @@ impl Default for LocalState {
             default_targets: HashMap::new(),
             present_token: None,
             present_serial: None,
+            default_present_pending: false,
         }
     }
 }

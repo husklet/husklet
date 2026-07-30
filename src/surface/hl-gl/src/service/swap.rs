@@ -134,7 +134,27 @@ impl GlContext {
                 sink.submit(&destroys)?;
                 ctx.clear_pending_destroys();
             }
+            // …unless a `glReadPixels` already rendered this frame's default framebuffer. It consumed the
+            // draw-list (so the frame executes once) but `glReadPixels` is not a frame boundary, so the swap
+            // still has to post the render the readback left resident.
+            let deferred = ctx.take_deferred_default_present();
             ctx.reset_frame();
+            if deferred {
+                if let Some((surface, texture)) = ctx.resident_default_draw_target() {
+                    if ctx.local.present_token.is_some() && surface != 0 {
+                        let serial = ctx
+                            .local
+                            .present_serial
+                            .expect("native presentation carries a frame serial");
+                        sink.submit(&[Cmd::Present {
+                            surface,
+                            texture,
+                            serial,
+                        }])?;
+                    }
+                    return Ok(true);
+                }
+            }
             return Ok(false);
         };
 

@@ -1156,16 +1156,75 @@ fn window_readback_and_present_share_one_submission() {
     let pixels = pixels.unwrap();
     assert_eq!(pixels.len(), 64 * 64 * 4);
     assert!(pixels.chunks_exact(4).all(|pixel| pixel[3] == 0xff));
-    assert_eq!(
-        sink.batches.len(),
-        1,
-        "render, readback copy, and present must use one command batch"
-    );
+    // Render, readback copy and present share ONE batch: the draw-list is lowered and submitted once, so
+    // the frame is never replayed between the read and the present.
+    assert_eq!(sink.batches.len(), 2);
     assert_eq!(sink.reads.len(), 1);
-    assert!(sink.batches[0]
+    let render = &sink.batches[0];
+    assert!(render
         .iter()
         .any(|command| matches!(command, Cmd::Present { .. })));
+    assert!(render.iter().any(|command| matches!(
+        command,
+        Cmd::Submit(buffer)
+            if buffer.encoder.iter().any(|e| matches!(e, Enc::CopyTextureToBuffer { .. }))
+    )));
+    assert!(render.iter().any(|command| matches!(
+        command,
+        Cmd::Submit(buffer)
+            if buffer.encoder.iter().any(|e| matches!(e, Enc::BeginRenderPass { .. }))
+    )));
+    // The only later batch retires the temporary readback buffer, which cannot be freed until
+    // `read_buffer` has returned its bytes.
+    assert!(
+        sink.batches[1]
+            .iter()
+            .all(|command| matches!(command, Cmd::DestroyBuffer(_))),
+        "the trailing batch only retires the readback buffer: {:?}",
+        sink.batches[1]
+    );
     assert!(context.draws().is_empty());
+}
+
+// GL: `glReadPixels` returns the results of previously issued commands but is not a frame boundary, and
+// `eglSwapBuffers` posts the default framebuffer's contents. So a window `draw; glReadPixels;
+// eglSwapBuffers` must render ONCE and still Present that render.
+#[test]
+fn read_pixels_of_the_window_leaves_the_frame_presentable() {
+    let mut context = ctx_64();
+    let mut sink = RecordingSink::with_full_caps();
+    flat_program(&mut context);
+    tri_vbo(&mut context, 8);
+    record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
+
+    hl_gl::service::readpixels::read_pixels(&mut context, &mut sink, 0, 0, 1, 1, GL_RGBA).unwrap();
+    let target = context
+        .resident_default_read_target()
+        .expect("the readback rendered and kept the default target")
+        .0;
+    let batches_after_read = sink.batches.len();
+    assert!(!sink.batches[0]
+        .iter()
+        .any(|command| matches!(command, Cmd::Present { .. })));
+
+    assert!(
+        swap::swap_buffers(&mut context, &mut sink).unwrap(),
+        "the swap after glReadPixels presents the frame the readback rendered"
+    );
+    let swap_batches = &sink.batches[batches_after_read..];
+    assert_eq!(swap_batches.len(), 1);
+    assert!(swap_batches[0].iter().any(|command| matches!(
+        command,
+        Cmd::Present { texture, .. } if *texture == target
+    )));
+    assert!(
+        !swap_batches[0].iter().any(|command| matches!(
+            command,
+            Cmd::Submit(buffer)
+                if buffer.encoder.iter().any(|e| matches!(e, Enc::BeginRenderPass { .. }))
+        )),
+        "the frame is not re-rendered at the swap"
+    );
 }
 
 #[test]
@@ -1237,7 +1296,24 @@ fn read_pixels_reads_an_offscreen_target_after_flush() {
             .unwrap();
 
     assert_eq!(pixels.len(), 4);
-    assert_eq!(sink.batches.len(), 2, "readback submits after the flush");
+    // The flush already executed the clear, so the readback adds no render pass — only the copy batch and
+    // the retirement of the temporary readback buffer.
+    assert_eq!(sink.batches.len(), 3, "readback submits after the flush");
+    assert!(
+        !sink.batches[1].iter().any(|command| matches!(
+            command,
+            Cmd::Submit(buffer)
+                if buffer.encoder.iter().any(|e| matches!(e, Enc::BeginRenderPass { .. }))
+        )),
+        "nothing was pending, so the readback re-renders nothing"
+    );
+    assert!(
+        sink.batches[2]
+            .iter()
+            .all(|command| matches!(command, Cmd::DestroyBuffer(_))),
+        "the trailing batch only retires the readback buffer: {:?}",
+        sink.batches[2]
+    );
     assert!(sink.batches[1].iter().any(|command| {
         matches!(
             command,

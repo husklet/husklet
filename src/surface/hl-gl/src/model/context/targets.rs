@@ -141,6 +141,16 @@ impl GlContext {
         ))
     }
 
+    /// The resident default target of the DRAW surface as `(surface_ir, texture_ir)`. `eglSwapBuffers`
+    /// presents this when a `glReadPixels` already rendered the frame.
+    pub fn resident_default_draw_target(&self) -> Option<(u32, u32)> {
+        let target = self
+            .local
+            .default_targets
+            .get(&self.local.draw_surface_id)?;
+        (target.texture != 0).then_some((target.surface, target.texture))
+    }
+
     pub fn install_surface_target(&mut self, surface: u64, target: SurfaceTarget) {
         if target != SurfaceTarget::default() {
             self.local.default_targets.insert(surface, target);

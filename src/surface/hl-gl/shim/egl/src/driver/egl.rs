@@ -159,6 +159,7 @@ impl ContextAttributeList {
                     attributes.no_error = value == 1;
                 }
                 EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT
+                | EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_KHR
                     if matches!(
                         value,
                         EGL_NO_RESET_NOTIFICATION_EXT | EGL_LOSE_CONTEXT_ON_RESET_EXT
@@ -166,7 +167,31 @@ impl ContextAttributeList {
                 {
                     attributes.reset_strategy = value;
                 }
-                EGL_CONTEXT_CLIENT_VERSION | EGL_CONTEXT_MINOR_VERSION_KHR => {
+                // `EGL_KHR_create_context`: the flags word, whose default is 0. A client passing it — GDK
+                // and every other libepoxy-based toolkit do — must not have the whole context refused. The
+                // debug bit is a hint this driver has no debug-output extension to honour, so it is
+                // recorded and ignored; the robust-access bit means what the EXT attribute means; the
+                // forward-compatible bit is defined for OpenGL only and is an error on an ES context.
+                EGL_CONTEXT_FLAGS_KHR
+                    if value
+                        & !(EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR
+                            | EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR)
+                        == 0 =>
+                {
+                    attributes.robust_access |= value & EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR != 0;
+                }
+                EGL_CONTEXT_FLAGS_KHR
+                    if value & EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE_BIT_KHR != 0 =>
+                {
+                    return Err(ContextAttributeError::Malformed {
+                        reason: "EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE_BIT_KHR is OpenGL-only".into(),
+                        pairs,
+                    });
+                }
+                EGL_CONTEXT_CLIENT_VERSION
+                | EGL_CONTEXT_MINOR_VERSION_KHR
+                | EGL_CONTEXT_FLAGS_KHR
+                | EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_KHR => {
                     return Err(ContextAttributeError::Malformed {
                         reason: format!(
                             "invalid value 0x{value:04x} for attribute 0x{attribute:04x}"

@@ -9,6 +9,10 @@
 //!
 //! The accepted render submission is a completion boundary: once the sink accepts it, residency and
 //! recording state advance exactly once, and a later swap cannot replay the same command stream.
+//! `glReadPixels` is NOT, however, a FRAME boundary — `eglSwapBuffers` still has to post the default
+//! framebuffer's contents. So when this path renders a window's default framebuffer it marks the frame
+//! deferred-present ([`GlContext::defer_default_present`]) and the swap presents the resident target
+//! instead of replaying the draw-list.
 //!
 //! The copied plane is the target's native texel order (Bgra8 for the default surface, Rgba8 for an
 //! offscreen FBO), with rows top-down — the contract on `RenderPasses::stores_bottom_up_rows`. So exactly
@@ -162,6 +166,7 @@ pub fn prepare_pixels(
     let mut accepted_targets = Vec::new();
     let mut retained_shared = Vec::new();
     let mut submitted_frame = false;
+    let mut defer_present = false;
     let (mut cmds, texture, tw, th, fmt) = if let Some(mut f) = frame::Frame::build(ctx) {
         f.cmds.extend_from_slice(ctx.pending_destroys());
         retained_shared = ctx.retain_shared_targets(&mut f);
@@ -178,6 +183,12 @@ pub fn prepare_pixels(
         });
         let (texture, tw, th, fmt) = if ctx.local.read_fbo == 0 {
             if ctx.default_surfaces_match() {
+                // GL: `glReadPixels` returns previously issued commands' results but is NOT a frame
+                // boundary, and `eglSwapBuffers` posts the default framebuffer's contents. Rendering here
+                // consumes the draw-list (the frame must execute exactly once), so the swap has to present
+                // the target this render leaves resident. Only a window surface swaps.
+                defer_present =
+                    ctx.local.surface_kind == crate::model::context::SurfaceKind::Window;
                 (
                     f.present.1,
                     f.target_width,
@@ -259,6 +270,9 @@ pub fn prepare_pixels(
         ctx.own_shared_targets(&retained_shared);
         ctx.reset_frame();
         ctx.prune_shared_textures();
+        if defer_present {
+            ctx.defer_default_present();
+        }
     }
     hl_log::hl_debug!(
         hl_log::tag::PRESENT,

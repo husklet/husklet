@@ -391,6 +391,19 @@ impl GlContext {
     /// Reset the per-frame draw state after a successful swap (`eglSwapBuffers` tail).
     pub fn reset_frame(&mut self) {
         self.local.recording.clear();
+        self.local.default_present_pending = false;
+    }
+
+    /// Mark this frame's default framebuffer as already rendered by a `glReadPixels`, so the next
+    /// `eglSwapBuffers` posts that render rather than an empty frame (GL: `glReadPixels` is not a frame
+    /// boundary; `eglSwapBuffers` posts the default framebuffer's contents).
+    pub fn defer_default_present(&mut self) {
+        self.local.default_present_pending = true;
+    }
+
+    /// Take the deferred-present mark set by [`Self::defer_default_present`].
+    pub fn take_deferred_default_present(&mut self) -> bool {
+        std::mem::take(&mut self.local.default_present_pending)
     }
 
     pub(crate) fn record_draw(&mut self, draw: DrawCall) {

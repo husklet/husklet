@@ -119,6 +119,16 @@ const EGL_CONTEXT_OPENGL_ROBUST_ACCESS_EXT: i32 = 0x30BF;
 const EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT: i32 = 0x3138;
 const EGL_CONTEXT_OPENGL_NO_ERROR_KHR: i32 = 0x31B3;
 const EGL_CONTEXT_MINOR_VERSION_KHR: i32 = 0x30FB;
+// `EGL_KHR_create_context` (advertised in the display extension string) defines a flags word alongside the
+// major/minor pair, plus its own spelling of the reset-notification attribute. A client that passes the
+// flags word — even the default 0 — must not be refused, or NO version can be created at all.
+const EGL_CONTEXT_FLAGS_KHR: i32 = 0x30FC;
+const EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_KHR: i32 = 0x31BD;
+const EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR: i32 = 0x0001;
+// `EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE_BIT_KHR` is defined only for OpenGL contexts, so setting it on an
+// OpenGL ES context is `EGL_BAD_ATTRIBUTE`.
+const EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE_BIT_KHR: i32 = 0x0002;
+const EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR: i32 = 0x0004;
 const EGL_NO_RESET_NOTIFICATION_EXT: i32 = 0x31BE;
 const EGL_LOSE_CONTEXT_ON_RESET_EXT: i32 = 0x31BF;
 

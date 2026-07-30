@@ -33,6 +33,83 @@ fn matrix_marshalling_leaves_std140_padding_to_the_uniform_model() {
     }
 }
 
+// `EGL_KHR_create_context` (advertised in the display extension string) carries the debug / robust-access
+// request as bits in `EGL_CONTEXT_FLAGS_KHR`, and its default value is 0. Refusing the attribute refuses
+// EVERY version, so a toolkit that passes it gets no GL context at all.
+#[test]
+fn khr_create_context_flags_are_honoured_and_only_reject_the_opengl_only_bit() {
+    let display = DISPLAY_TOKEN as *mut c_void;
+    let config = CONFIG_TOKEN as *mut c_void;
+    let with_flags = |flags: i32| {
+        [
+            EGL_CONTEXT_CLIENT_VERSION,
+            3,
+            EGL_CONTEXT_MINOR_VERSION_KHR,
+            0,
+            EGL_CONTEXT_FLAGS_KHR,
+            flags,
+            EGL_NONE,
+        ]
+    };
+
+    for flags in [
+        0,
+        EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR,
+        EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR,
+        EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR | EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR,
+    ] {
+        let attributes = with_flags(flags);
+        let context = eglCreateContext(display, config, core::ptr::null_mut(), attributes.as_ptr());
+        assert!(!context.is_null(), "EGL_CONTEXT_FLAGS_KHR = {flags} accepted");
+        let mut value = -1;
+        assert_eq!(
+            eglQueryContext(
+                display,
+                context,
+                EGL_CONTEXT_OPENGL_ROBUST_ACCESS_EXT,
+                &mut value
+            ),
+            EGL_TRUE
+        );
+        let robust = flags & EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR != 0;
+        assert_eq!(
+            value, robust as i32,
+            "the robust-access bit means what the EXT attribute means"
+        );
+        assert_eq!(eglDestroyContext(display, context), EGL_TRUE);
+    }
+
+    // The forward-compatible bit is defined for OpenGL only: EGL_BAD_ATTRIBUTE on an ES context.
+    let attributes = with_flags(EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE_BIT_KHR);
+    assert!(
+        eglCreateContext(display, config, core::ptr::null_mut(), attributes.as_ptr()).is_null()
+    );
+    assert_eq!(eglGetError(), EGL_BAD_ATTRIBUTE);
+
+    // `EGL_KHR_create_context`'s own spelling of the reset-notification attribute is accepted too.
+    let attributes = [
+        EGL_CONTEXT_CLIENT_VERSION,
+        3,
+        EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_KHR,
+        EGL_LOSE_CONTEXT_ON_RESET_EXT,
+        EGL_NONE,
+    ];
+    let context = eglCreateContext(display, config, core::ptr::null_mut(), attributes.as_ptr());
+    assert!(!context.is_null());
+    let mut value = 0;
+    assert_eq!(
+        eglQueryContext(
+            display,
+            context,
+            EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT,
+            &mut value
+        ),
+        EGL_TRUE
+    );
+    assert_eq!(value, EGL_LOSE_CONTEXT_ON_RESET_EXT);
+    assert_eq!(eglDestroyContext(display, context), EGL_TRUE);
+}
+
 #[test]
 fn robust_es31_context_is_validated_and_queryable() {
     let display = DISPLAY_TOKEN as *mut c_void;
