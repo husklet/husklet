@@ -412,6 +412,32 @@ impl WgpuExecutor {
         self.profile.borrow().clone()
     }
 
+    /// The live wgpu device, for the submit-path helpers that create transient resources.
+    pub(crate) fn device(&self) -> &wgpu::Device {
+        &self.gpu.device
+    }
+
+    /// An `Instant` only while profiling is enabled, so an un-profiled hot path pays no clock read.
+    pub(crate) fn profile_clock(&self) -> Option<std::time::Instant> {
+        self.profile
+            .borrow()
+            .is_some()
+            .then(std::time::Instant::now)
+    }
+
+    /// Add `started`'s elapsed time to the metric `pick` selects. `started` is `None` when profiling is off.
+    pub(crate) fn profile_record(
+        &self,
+        pick: fn(&mut Profile) -> &mut Metric,
+        started: Option<std::time::Instant>,
+    ) {
+        if let Some(started) = started {
+            if let Some(profile) = self.profile.borrow_mut().as_mut() {
+                pick(profile).add(started.elapsed());
+            }
+        }
+    }
+
     /// The human-readable name of the bound adapter (e.g. `"llvmpipe (LLVM 17.0.6, 128 bits)"`), so a
     /// caller/test can assert it landed on the software Vulkan device.
     pub fn adapter_name(&self) -> &str {

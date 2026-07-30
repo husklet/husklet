@@ -1,5 +1,6 @@
 use super::*;
-use wgpu::util::DeviceExt;
+
+mod plan;
 
 impl WgpuExecutor {
     /// Execute one render pass: begin with the color attachments (clear/load), replay any pipeline/bind/
@@ -22,7 +23,11 @@ impl WgpuExecutor {
         // Run the pass under a validation scope so a wgpu rejection at pass-end/submit (e.g. a draw whose
         // vertex/index count overruns the bound buffer, or a depth-tested pipeline drawn with no depth
         // attachment) is a typed error, not the panicking default handler — and the executor survives.
-        self.with_validation_scope(|s| s.run_render_pass_inner(res, color, depth, ops, encoder))
+        let started = self.profile_clock();
+        let result = self
+            .with_validation_scope(|s| s.run_render_pass_inner(res, color, depth, ops, encoder));
+        self.profile_record(|p| &mut p.render_passes, started);
+        result
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -86,149 +91,11 @@ impl WgpuExecutor {
             }
             None => None,
         };
-        // Pre-build the bind groups every draw in this pass needs, keyed to the pipeline it's drawn with.
-        // Bind-group binding is tracked PER SET INDEX (mirroring `run_compute_pass`): a draw builds a
-        // concrete bind group for EVERY set index currently bound, each against THAT set's own layout on the
-        // bound pipeline (`get_bind_group_layout(index)`) and bound at that index below. Sized to the
-        // advertised `max_bind_groups` (4); a higher index would have been rejected by the runtime.
-        let mut cur_pipeline: Option<u32> = None;
-        let mut cur_groups: [Option<u32>; 4] = [None; 4];
-        // (pipeline id, [(set index, bind group)]) per Draw, in order. An empty group list is the bindingless
-        // fast path (e.g. the conformance triangle) — unlike compute, a draw with no bind group is legal.
-        #[allow(clippy::type_complexity)]
-        let mut draws: Vec<(u32, Vec<(u32, wgpu::BindGroup, Vec<u32>)>)> = Vec::new();
-        let alignment = self
-            .gpu
-            .device
-            .limits()
-            .min_uniform_buffer_offset_alignment
-            .max(16) as usize;
-        let mut corrections = Vec::new();
-        let mut viewport = Viewport::full();
-        for op in ops {
-            match op {
-                Enc::SetViewport { x, y, w, h, .. } => {
-                    viewport = Viewport::new(*x, *y, *w, *h, target_w, target_h)
-                        .unwrap_or_else(Viewport::full);
-                }
-                Enc::Draw { .. } | Enc::DrawIndexed { .. } => corrections.push(viewport.correction),
-                _ => {}
-            }
-        }
-        let uniform_size = corrections
-            .len()
-            .checked_mul(alignment)
-            .ok_or(GpuError::OutOfBounds)?;
-        let mut uniform_bytes = vec![0; uniform_size];
-        for (index, correction) in corrections.iter().enumerate() {
-            let start = index.checked_mul(alignment).ok_or(GpuError::OutOfBounds)?;
-            let end = start.checked_add(16).ok_or(GpuError::OutOfBounds)?;
-            uniform_bytes[start..end].copy_from_slice(bytemuck::cast_slice(correction));
-        }
-        let viewport_buffer = (!uniform_bytes.is_empty()).then(|| {
-            self.gpu
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("hl-viewports"),
-                    contents: &uniform_bytes,
-                    usage: wgpu::BufferUsages::UNIFORM,
-                })
-        });
-        let mut draw_index = 0usize;
-        for op in ops {
-            match op {
-                Enc::SetPipeline(p) => cur_pipeline = Some(*p),
-                Enc::SetBindGroup { index, group } => {
-                    let slot = *index as usize;
-                    if slot >= cur_groups.len() {
-                        return Err(GpuError::Invalid(
-                            "wgpu: render bind-group index out of range",
-                        ));
-                    }
-                    cur_groups[slot] = Some(*group);
-                }
-                Enc::Draw { .. } | Enc::DrawIndexed { .. } => {
-                    hl_log::hl_count!(tag::EXEC, "draws");
-                    let pid =
-                        cur_pipeline.ok_or(GpuError::Invalid("draw with no pipeline bound"))?;
-                    let (pipeline, pipeline_formats, used_bindings) =
-                        match PipelineNative::get(res, pid)? {
-                            PipelineNative::Render {
-                                pipeline,
-                                color_formats,
-                                used_bindings,
-                                ..
-                            } => (pipeline, color_formats, used_bindings),
-                            PipelineNative::Compute { .. } => {
-                                return Err(GpuError::Unsupported(
-                                    "wgpu: draw on a compute pipeline",
-                                ))
-                            }
-                        };
-                    if pipeline_formats != &target_formats {
-                        return Err(GpuError::Invalid(
-                            "pipeline color format mismatches render attachment",
-                        ));
-                    }
-                    let mut groups = Vec::new();
-                    let viewport_buffer = viewport_buffer
-                        .as_ref()
-                        .ok_or(GpuError::Invalid("draw has no viewport uniform buffer"))?;
-                    let dynamic_offset = draw_index
-                        .checked_mul(alignment)
-                        .and_then(|offset| u32::try_from(offset).ok())
-                        .ok_or(GpuError::OutOfBounds)?;
-                    draw_index += 1;
-                    for (idx, bound) in cur_groups.iter().enumerate() {
-                        if let Some(g) = bound {
-                            let layout = pipeline.get_bind_group_layout(idx as u32);
-                            // Filter the driver's bind-group entries to the bindings this pipeline's shaders
-                            // actually read in THIS group (the filter keys on the bind group's own `set`, so it
-                            // restricts to this set's slots), so a GskGpu bind group that carries an unsampled
-                            // texture/sampler pair still matches (see `bindgroup::build_bind_group`).
-                            let bg = self.build_bind_group(
-                                res,
-                                &layout,
-                                self.bind_group(res, *g)?,
-                                Some(used_bindings),
-                                true,
-                                (idx == 0).then_some(viewport_buffer),
-                            )?;
-                            groups.push((
-                                idx as u32,
-                                bg,
-                                if idx == 0 {
-                                    vec![dynamic_offset]
-                                } else {
-                                    Vec::new()
-                                },
-                            ));
-                        }
-                    }
-                    if cur_groups[0].is_none() {
-                        let layout = pipeline.get_bind_group_layout(0);
-                        let empty = hl_gpu::protocol::model::descriptor::BindGroupDesc {
-                            set: 0,
-                            entries: Vec::new(),
-                        };
-                        groups.push((
-                            0,
-                            self.build_bind_group(
-                                res,
-                                &layout,
-                                &empty,
-                                Some(used_bindings),
-                                true,
-                                Some(viewport_buffer),
-                            )?,
-                            vec![dynamic_offset],
-                        ));
-                    }
-                    draws.push((pid, groups));
-                }
-                _ => {}
-            }
-        }
+        // Every bind group a draw binds must exist BEFORE the pass opens (an open pass borrows the
+        // encoder), so the whole draw plan — viewport-correction uniform + one concrete bind group per
+        // (draw, set), memoized — is built first. See `plan`.
+        let plan = plan::Plan::build(self, res, ops, &target_formats, target_w, target_h)?;
+        let draws = &plan.draws;
 
         {
             let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = views
@@ -407,7 +274,8 @@ impl WgpuExecutor {
                         first_vertex,
                         first_instance,
                     } => {
-                        let (pid, groups) = &draws[di];
+                        let planned = &draws[di];
+                        let pid = &planned.pipeline;
                         di += 1;
                         let (pipeline, layouts) = match PipelineNative::get(res, *pid)? {
                             PipelineNative::Render {
@@ -420,8 +288,11 @@ impl WgpuExecutor {
                             }
                         };
                         pass.set_pipeline(pipeline);
-                        for (idx, bg, offsets) in groups {
-                            pass.set_bind_group(*idx, bg, offsets);
+                        for b in &planned.groups {
+                            match b.offset {
+                                Some(offset) => pass.set_bind_group(b.index, &b.group, &[offset]),
+                                None => pass.set_bind_group(b.index, &b.group, &[]),
+                            }
                         }
                         // Build the vertex/instance ranges with wrapping-safe arithmetic: a hostile
                         // `first_vertex + vertex_count` (or instance) that overflows `u32` is a debug panic
@@ -456,15 +327,19 @@ impl WgpuExecutor {
                         base_vertex,
                         first_instance,
                     } => {
-                        let (pid, groups) = &draws[di];
+                        let planned = &draws[di];
+                        let pid = &planned.pipeline;
                         di += 1;
                         if let PipelineNative::Render { pipeline, .. } =
                             PipelineNative::get(res, *pid)?
                         {
                             pass.set_pipeline(pipeline);
                         }
-                        for (idx, bg, offsets) in groups {
-                            pass.set_bind_group(*idx, bg, offsets);
+                        for b in &planned.groups {
+                            match b.offset {
+                                Some(offset) => pass.set_bind_group(b.index, &b.group, &[offset]),
+                                None => pass.set_bind_group(b.index, &b.group, &[]),
+                            }
                         }
                         let idx_end = first_index
                             .checked_add(*index_count)

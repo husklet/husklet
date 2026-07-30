@@ -155,15 +155,21 @@ impl WgpuExecutor {
         for cmd in batch {
             match cmd {
                 Cmd::CreateBuffer(id, d) => {
+                    let started = self.profile_clock();
                     let b = self.make_buffer(d.size);
+                    self.profile_record(|p| &mut p.buffers, started);
                     res.buffers.insert(*id, Box::new(b))?;
                 }
                 Cmd::DestroyBuffer(id) => {
+                    let started = self.profile_clock();
                     self.flush_writes();
                     res.buffers.remove(*id)?;
+                    self.profile_record(|p| &mut p.destroys, started);
                 }
                 Cmd::WriteBuffer { id, offset, data } => {
-                    self.write_bytes(res, *id, *offset, data)?
+                    let started = self.profile_clock();
+                    self.write_bytes(res, *id, *offset, data)?;
+                    self.profile_record(|p| &mut p.buffer_writes, started);
                 }
                 Cmd::CreateTexture(id, d) => {
                     let t = self.make_texture(d)?;
@@ -228,7 +234,9 @@ impl WgpuExecutor {
                     }
                 }
                 Cmd::DestroyBindGroup(id) => {
+                    let started = self.profile_clock();
                     res.bind_groups.remove(*id)?;
+                    self.profile_record(|p| &mut p.destroys, started);
                 }
                 Cmd::CreateSurface(id, d) => res.surfaces.insert(*id, Box::new(d.clone()))?,
                 Cmd::DestroySurface(id) => {

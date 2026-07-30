@@ -233,6 +233,8 @@ fn representative_stream() -> Vec<Cmd> {
 mod codec;
 #[path = "perf/compute.rs"]
 mod compute;
+#[path = "perf/draw.rs"]
+mod draw;
 #[path = "perf/inprocess.rs"]
 mod inprocess;
 #[path = "perf/transport.rs"]
