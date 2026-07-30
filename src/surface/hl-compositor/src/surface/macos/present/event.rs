@@ -231,7 +231,28 @@ impl MacPresenter {
                         _ => {}
                     }
                 }
-                if !consumed {
+                if consumed {
+                    // Report how long this event waited between AppKit stamping it and becoming a seat
+                    // event. Only translated events are measured; AppKit's own events never reach a guest.
+                    let kind = match event_type {
+                        NSEventType::MouseMoved
+                        | NSEventType::LeftMouseDragged
+                        | NSEventType::RightMouseDragged
+                        | NSEventType::OtherMouseDragged => "pointer_motion",
+                        NSEventType::LeftMouseDown
+                        | NSEventType::LeftMouseUp
+                        | NSEventType::RightMouseDown
+                        | NSEventType::RightMouseUp
+                        | NSEventType::OtherMouseDown
+                        | NSEventType::OtherMouseUp => "pointer_button",
+                        NSEventType::ScrollWheel => "pointer_axis",
+                        NSEventType::KeyDown | NSEventType::KeyUp => "key",
+                        NSEventType::FlagsChanged => "modifiers",
+                        NSEventType::TabletPoint | NSEventType::TabletProximity => "tablet",
+                        _ => "gesture",
+                    };
+                    HostInput::stamped(event.timestamp()).dispatched(kind);
+                } else {
                     app.sendEvent(&event);
                 }
             }

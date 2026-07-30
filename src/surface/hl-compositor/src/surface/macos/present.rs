@@ -49,6 +49,7 @@ mod frame;
 mod gesture;
 mod host;
 mod key;
+mod latency;
 pub(super) mod submission;
 mod tablet;
 mod window;
@@ -56,6 +57,7 @@ mod window;
 use damage::Damage;
 use gesture::Gestures;
 use key::{current_xkb_layout, KeyCode, Modifiers};
+use latency::HostInput;
 use submission::{NativePresent, PresentAttempt};
 use tablet::Tablet;
 

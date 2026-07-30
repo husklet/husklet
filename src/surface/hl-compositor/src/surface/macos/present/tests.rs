@@ -354,6 +354,8 @@ mod tests {
         assert_eq!(&moved[bottom_right..bottom_right + 4], &[0, 0, 255, 255]);
     }
 
+    include!("tests/composition.rs");
+
     #[test]
     fn destination_scale_changes_are_bounded_and_reversible() {
         assert_eq!(destination_pixels((640, 480), 1.0), Ok((640, 480)));

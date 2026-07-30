@@ -31,12 +31,27 @@ impl MacPresenter {
             self.surfaces.get_mut(&frame.role).unwrap().frame = Some((size.0, size.1, target));
         }
         let scale = self.backing_scale_for(frame.role);
+        // Layer offsets are root-relative LOGICAL surface coordinates, but this destination texture holds
+        // only the role's xdg window geometry, whose logical origin is that geometry's origin. A layer that
+        // carries its own geometry was likewise already cropped to it by `compose`, so its composite starts
+        // at that origin rather than at its surface origin. Both shifts are needed: dropping the role's
+        // displaces every child by the role's client-side shadow margin, and dropping the layer's
+        // double-counts the margin for the role's own layer.
+        let geometry_origin = |surface: SurfaceId| {
+            self.surfaces
+                .get(&surface)
+                .and_then(|state| state.desired.as_ref())
+                .and_then(|window| window.geometry)
+                .map_or((0, 0), |geometry| (geometry.x, geometry.y))
+        };
+        let role_origin = geometry_origin(frame.role);
         for (index, layer) in frame.layers.iter().enumerate() {
-            let source = self
+            let layer_origin = geometry_origin(layer.image.surface);
+            let (source_width, source_height, source) = self
                 .surfaces
                 .get(&layer.image.surface)
                 .and_then(|state| state.composite.as_ref())
-                .map(|(_, _, texture)| texture.clone())
+                .map(|(width, height, texture)| (*width, *height, texture.clone()))
                 .ok_or_else(|| "layer composite is missing".to_string())?;
             let destination = self
                 .surfaces
@@ -44,11 +59,26 @@ impl MacPresenter {
                 .and_then(|state| state.frame.as_ref())
                 .map(|(_, _, texture)| texture.clone())
                 .ok_or_else(|| "role composite is missing".to_string())?;
+            // The layer's own composite is already cropped to its window geometry and rasterized at the
+            // backing scale, so it — not the uncropped logical image size — is the destination extent.
+            // Scaling `image.width` here instead re-stretches a shadow-cropped surface over its own crop.
             let viewport = Rect::new(
-                (f64::from(layer.x) * scale).round() as i32,
-                (f64::from(layer.y) * scale).round() as i32,
-                (f64::from(layer.image.width) * scale).round() as i32,
-                (f64::from(layer.image.height) * scale).round() as i32,
+                (f64::from(
+                    layer
+                        .x
+                        .saturating_add(layer_origin.0)
+                        .saturating_sub(role_origin.0),
+                ) * scale)
+                    .round() as i32,
+                (f64::from(
+                    layer
+                        .y
+                        .saturating_add(layer_origin.1)
+                        .saturating_sub(role_origin.1),
+                ) * scale)
+                    .round() as i32,
+                i32::try_from(source_width).unwrap_or(i32::MAX),
+                i32::try_from(source_height).unwrap_or(i32::MAX),
             );
             self.ctx
                 .compose_into(
@@ -169,6 +199,25 @@ impl MacPresenter {
         }
     }
 
+    /// A frame the host refused this cycle. Each refusal costs the client a whole refresh period, so the
+    /// reason is recorded for attribution, and the repaint that re-drives the frame is always requested —
+    /// without it a client that goes idle after the refusal leaves its window showing stale content.
+    fn refuse(&mut self, sid: SurfaceId, reason: &'static str) -> PresentationFeedback {
+        hl_log::hl_count!(tag::PRESENT, "present_retry");
+        hl_log::hl_log!(
+            tag::PRESENT,
+            Level::Warn,
+            "present_retry sid={} reason={reason}",
+            sid.0
+        );
+        if !self.events.contains(&PresenterEvent::Repaint(sid)) {
+            self.events.push(PresenterEvent::Repaint(sid));
+        }
+        PresentationFeedback {
+            outcome: PresentOutcome::RetryableFailure,
+        }
+    }
+
     pub(super) fn present_native(
         &mut self,
         _output: OutputId,
@@ -193,9 +242,7 @@ impl MacPresenter {
                 eprintln!("[macos-surface] present sid={sid:?}: {err}");
                 // No content / unresolvable device resource: retryable — the compositor keeps pacing so a
                 // re-attached buffer next cycle can succeed.
-                return PresentationFeedback {
-                    outcome: PresentOutcome::RetryableFailure,
-                };
+                return self.refuse(sid, "no_composed_content");
             }
         };
         self.frames += 1;
@@ -206,7 +253,7 @@ impl MacPresenter {
             .surfaces
             .get(&sid)
             .is_some_and(|state| state.desired.is_some());
-        let (shown, retry) = if let (Some(mtm), true) = (self.mtm, has_window_role) {
+        let (shown, refused) = if let (Some(mtm), true) = (self.mtm, has_window_role) {
             let desired = self
                 .surfaces
                 .get(&sid)
@@ -359,9 +406,7 @@ impl MacPresenter {
                     state.native_submission = None;
                 }
                 if !compose {
-                    return PresentationFeedback {
-                        outcome: PresentOutcome::RetryableFailure,
-                    };
+                    return self.refuse(sid, "destination_size_changed");
                 }
                 match self.compose(image, damage) {
                     Ok(size) => (w, h) = size,
@@ -369,9 +414,7 @@ impl MacPresenter {
                         eprintln!(
                             "[macos-surface] present sid={sid:?} after backing-scale change: {error}"
                         );
-                        return PresentationFeedback {
-                            outcome: PresentOutcome::RetryableFailure,
-                        };
+                        return self.refuse(sid, "compose_failed_after_scale_change");
                     }
                 }
             }
@@ -391,49 +434,44 @@ impl MacPresenter {
                 }
             }
             win.set_drawable_size(w, h);
-            let Some(composite) = st.frame.as_ref().map(|(_, _, texture)| texture.clone()) else {
-                return PresentationFeedback {
-                    outcome: PresentOutcome::RetryableFailure,
-                };
-            };
-            let Some(next) = self.next_submission.checked_add(1) else {
-                return PresentationFeedback {
-                    outcome: PresentOutcome::TerminalFailure,
-                };
-            };
-            let submission = PresentationId(self.next_submission);
-            self.next_submission = next;
-            match win.present(
-                &self.ctx,
-                &composite,
-                st.native_presents.len(),
-                submission,
-                self.presentation_tx.clone(),
-                self.wake.clone(),
-            ) {
-                PresentAttempt::Submitted(present) => {
-                    st.native_presents.push_back(present);
-                    self.present_surfaces.insert(submission, sid);
-                    (Some(submission), false)
-                }
-                PresentAttempt::Retry => (None, true),
-                PresentAttempt::Terminal => {
-                    return PresentationFeedback {
-                        outcome: PresentOutcome::TerminalFailure,
+            match st.frame.as_ref().map(|(_, _, texture)| texture.clone()) {
+                None => (None, Some("role_frame_missing")),
+                Some(composite) => {
+                    let Some(next) = self.next_submission.checked_add(1) else {
+                        return PresentationFeedback {
+                            outcome: PresentOutcome::TerminalFailure,
+                        };
                     };
+                    let submission = PresentationId(self.next_submission);
+                    self.next_submission = next;
+                    match win.present(
+                        &self.ctx,
+                        &composite,
+                        st.native_presents.len(),
+                        submission,
+                        self.presentation_tx.clone(),
+                        self.wake.clone(),
+                    ) {
+                        PresentAttempt::Submitted(present) => {
+                            st.native_presents.push_back(present);
+                            self.present_surfaces.insert(submission, sid);
+                            (Some(submission), None)
+                        }
+                        PresentAttempt::Retry => (None, Some("drawable_unavailable")),
+                        PresentAttempt::Terminal => {
+                            return PresentationFeedback {
+                                outcome: PresentOutcome::TerminalFailure,
+                            };
+                        }
+                    }
                 }
             }
         } else {
-            (None, false)
+            (None, None)
         };
 
-        if retry {
-            if !self.events.contains(&PresenterEvent::Repaint(sid)) {
-                self.events.push(PresenterEvent::Repaint(sid));
-            }
-            return PresentationFeedback {
-                outcome: PresentOutcome::RetryableFailure,
-            };
+        if let Some(reason) = refused {
+            return self.refuse(sid, reason);
         }
 
         if let Some(capture) = &self.capture {
