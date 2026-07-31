@@ -838,6 +838,20 @@ correct side, once forty differences were the harness's own rounding ties, and o
 wrong framings before the third was right. Budget for that gap; a disagreement is a location, not a
 diagnosis.
 
+Show a new test failing before trusting it to pass. Two executor tests were run against a deliberately
+reverted executor and returned exactly the conformance suite's own failure signature, which is what makes
+them evidence rather than a claim. The same control caught three assertions passing for the wrong reason —
+the reference was refusing the case at creation time, so the test was re-asserting that refusal and
+learning nothing about the operation under test.
+
+When extending a wire format, prefer the form where the compiler enumerates every construction site over a
+catch-all that lets sites silently keep the old meaning. A field added as required failed the build at
+twenty call sites, and that enumeration was the evidence the change had been considered everywhere.
+
+A reference implementation must not reproduce the bug. An oracle asked to clear a subresource it cannot
+address should refuse, not write the one plane it has: the latter makes a differential agree by both sides
+being wrong, which is worse than no reference at all.
+
 A disagreement labelled deliberate or benign is the easiest place in this codebase to hide a defect. Two
 such labels were checked this session and neither survived: one covered a family where the latitude is real
 in some cases and absent in others, and had been applied to all of them; the other covered pairs where the
