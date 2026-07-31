@@ -795,6 +795,14 @@ you are reading the log that process writes.
 `strings` cannot verify a diagnostic whose level or values are runtime `{}` substitutions — the message
 never appears contiguously in the binary. Check a distinctive literal tail instead.
 
+The workspace exec transport prepends the Husklet driver directory to `LD_LIBRARY_PATH` and silently
+drops most caller-supplied environment variables. A harness that selects a different GL the ordinary way
+gets Husklet on both sides, so a self-comparison looks like a passing differential. Pass the environment
+as a prefix on the command line, and prove which driver you got — `dladdr` on an entry point, plus
+`GL_RENDERER` — rather than assuming the variable took effect. Note `env -i` fixes selection and strips
+`HL_GPU_EXEC`, after which the driver links shaders and returns out-of-memory on everything, which reads
+as catastrophic regression.
+
 Prefer an instrument that reports a positive count over one that reports absence, and when an
 instrument reports absence, verify it can detect presence at all. Four separate zeros in one session were
 artifacts rather than facts. **A positive count is only trustworthy with a denominator** — `count=100` is
