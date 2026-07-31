@@ -202,7 +202,12 @@ impl GlContext {
     /// an unbounded command list.
     pub fn flush(&mut self, sink: &mut dyn CommandSink) -> Result<bool> {
         let ctx = self;
-        if ctx.local.recording.draws.is_empty() {
+        // BLITS are recorded work too. This asked only whether the DRAW list was empty, so a frame whose
+        // only op was a `glBlitFramebuffer` returned here without ever consulting the builder — which is
+        // willing (`Frame::build` guards on draws AND blits). A `glReadPixels` of the blit's destination
+        // then read it as it was before the blit, and on an offscreen or pbuffer context there is no
+        // `eglSwapBuffers` afterwards to execute it, so the copy simply never happened.
+        if ctx.local.recording.draws.is_empty() && ctx.local.recording.blits.is_empty() {
             if ctx.has_pending_destroys() {
                 let destroys = ctx.pending_destroys().to_vec();
                 sink.submit(&destroys)?;
@@ -220,7 +225,13 @@ impl GlContext {
                 .iter()
                 .cloned()
                 .partition(|draw| draw.fbo != 0);
-            if offscreen.is_empty() {
+            // Offscreen BLITS are flushed here too — the operation partition below routes exactly those
+            // (`read_fbo != 0 && draw_fbo != 0`). Asking only about offscreen DRAWS dropped a frame whose
+            // offscreen work was a blit, so this guard now asks the same question that partition does.
+            let offscreen_blits = original_blits
+                .iter()
+                .any(|blit| blit.read_fbo != 0 && blit.draw_fbo != 0);
+            if offscreen.is_empty() && !offscreen_blits {
                 return Ok(false);
             }
 

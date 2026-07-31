@@ -452,3 +452,114 @@ fn failed_capture_plan_restores_lowering_state_for_identical_retry() {
     );
     assert_eq!(retry_captures, baseline_captures);
 }
+
+// ---------------------------------------------------------------------------------------------------
+// A frame whose only recorded work is a BLIT must still be flushed
+// ---------------------------------------------------------------------------------------------------
+
+/// `swap::flush` — the path `glFlush`, `glFinish` and `glReadPixels` all take — returned early whenever the
+/// draw list was empty, without consulting the recorded BLITS. `Frame::build` guards on both
+/// (`draws.is_empty() && blits.is_empty()`), so the builder was always willing; the boundary never asked it.
+///
+/// A `glBlitFramebuffer` followed by a `glReadPixels` of the destination therefore read the destination as
+/// it was BEFORE the blit. On an offscreen or pbuffer context there is no `eglSwapBuffers` to rescue it
+/// later, so the blit simply never executed.
+#[test]
+fn a_blit_only_frame_is_flushed() {
+    let mut context = ctx_64();
+    context.set_surface_kind(hl_gl::model::context::SurfaceKind::Offscreen);
+    flat_program(&mut context);
+    tri_vbo(&mut context, 8);
+    let source = framebuffer(&mut context);
+    let destination = framebuffer(&mut context);
+
+    // Give the source real content in its own frame, so the blit below is the ONLY thing recorded.
+    record::bind_framebuffer(&mut context, GL_FRAMEBUFFER, source);
+    record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
+    let mut sink = RecordingSink::with_full_caps();
+    assert!(swap::flush(&mut context, &mut sink).unwrap());
+    sink.batches.clear();
+
+    // Now a blit and nothing else — the shape a compositor's copy-then-read takes.
+    record::bind_framebuffer(&mut context, GL_READ_FRAMEBUFFER, source);
+    record::bind_framebuffer(&mut context, GL_DRAW_FRAMEBUFFER, destination);
+    record::blit_framebuffer(
+        &mut context,
+        0,
+        0,
+        16,
+        16,
+        0,
+        0,
+        16,
+        16,
+        GL_COLOR_BUFFER_BIT,
+        GL_NEAREST,
+    );
+    assert_eq!(
+        context.recording_counts(),
+        (0, 1),
+        "the recording holds one blit and no draws — the shape that was dropped"
+    );
+
+    assert!(
+        swap::flush(&mut context, &mut sink).unwrap(),
+        "a recorded blit is work, and the flush must report that it submitted some"
+    );
+    let copied = sink.batches.iter().flatten().any(|cmd| match cmd {
+        Cmd::Submit(batch) => batch.encoder.iter().any(|e| {
+            matches!(
+                e,
+                Enc::CopyTextureToTexture { .. } | Enc::BlitTexture { .. }
+            )
+        }),
+        _ => false,
+    });
+    assert!(copied, "the blit must reach the encoder: {:?}", sink.batches);
+}
+
+/// The WINDOW-surface branch of `swap::flush` has the same disagreement in a different shape. It splits
+/// the recording into offscreen work (flushed now) and default-framebuffer work (retained for
+/// `eglSwapBuffers`), then bails out when the offscreen DRAW list is empty — without asking whether any
+/// offscreen BLIT was recorded, even though the partition immediately below it routes exactly those.
+#[test]
+fn a_window_frame_flushes_an_offscreen_blit_with_no_offscreen_draw() {
+    let mut context = ctx_64();
+    context.set_surface_kind(hl_gl::model::context::SurfaceKind::Window);
+    flat_program(&mut context);
+    tri_vbo(&mut context, 8);
+    let source = framebuffer(&mut context);
+    let destination = framebuffer(&mut context);
+
+    record::bind_framebuffer(&mut context, GL_FRAMEBUFFER, source);
+    record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
+    let mut sink = RecordingSink::with_full_caps();
+    assert!(swap::flush(&mut context, &mut sink).unwrap());
+    sink.batches.clear();
+
+    // An offscreen-to-offscreen blit, plus a default-framebuffer draw that must STAY for the swap.
+    record::bind_framebuffer(&mut context, GL_READ_FRAMEBUFFER, source);
+    record::bind_framebuffer(&mut context, GL_DRAW_FRAMEBUFFER, destination);
+    record::blit_framebuffer(
+        &mut context, 0, 0, 16, 16, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT, GL_NEAREST,
+    );
+    record::bind_framebuffer(&mut context, GL_FRAMEBUFFER, 0);
+    record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
+
+    assert!(
+        swap::flush(&mut context, &mut sink).unwrap(),
+        "the offscreen blit is flushable work even with no offscreen draw beside it"
+    );
+    let copied = sink.batches.iter().flatten().any(|cmd| match cmd {
+        Cmd::Submit(batch) => batch.encoder.iter().any(|e| {
+            matches!(e, Enc::CopyTextureToTexture { .. } | Enc::BlitTexture { .. })
+        }),
+        _ => false,
+    });
+    assert!(copied, "the blit must reach the encoder: {:?}", sink.batches);
+    assert_eq!(
+        context.recording_counts().0,
+        1,
+        "and the default-framebuffer draw must be RETAINED for eglSwapBuffers, not flushed with it"
+    );
+}
