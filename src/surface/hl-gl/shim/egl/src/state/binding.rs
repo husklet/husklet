@@ -25,6 +25,15 @@ impl GlobalState {
         true
     }
 
+    /// Terminate the calling thread's share group. Test-only: in production a group is lost by a GPU
+    /// transport failure, which a unit test cannot provoke without a live actor.
+    #[cfg(test)]
+    pub(crate) fn lose_current_group(reason: &str) {
+        if let Some(group) = Self::group(current::context()) {
+            group.lose(reason.to_string());
+        }
+    }
+
     pub fn bind_current(
         previous: (usize, usize, usize),
         next: (usize, usize, usize),
@@ -46,7 +55,7 @@ impl GlobalState {
                 .group
                 .as_ref()
                 .expect("same-group binding has next group");
-            let mut lease = group.acquire().map_err(|_| MakeCurrentError::Context)?;
+            let mut lease = group.acquire().map_err(|_| MakeCurrentError::Lost)?;
             surface_retirements.extend(Self::release_bound_surfaces(
                 lease.data_mut(),
                 binding.previous_context,
@@ -60,17 +69,24 @@ impl GlobalState {
                 binding.read.as_ref(),
             )?;
         } else {
+            // Releasing the OUTGOING binding is best-effort, exactly as `remove_context` already treats
+            // the same lease. A terminated group has no state left to write a surface target back into,
+            // so failing here would refuse `eglMakeCurrent(dpy, NULL, NULL, NULL)` — the first step of
+            // the only recovery EGL defines — and leave the application bound to a dead context with no
+            // way off it. `eglDestroyContext` tolerated this and make-current did not; the two are the
+            // same condition and the strict one was the oversight.
             if let Some(group) = binding.previous_group.as_ref() {
-                let mut lease = group.acquire().map_err(|_| MakeCurrentError::Context)?;
-                surface_retirements.extend(Self::release_bound_surfaces(
-                    lease.data_mut(),
-                    binding.previous_context,
-                    binding.previous_draw.as_ref(),
-                    binding.previous_read.as_ref(),
-                )?);
+                if let Ok(mut lease) = group.acquire() {
+                    surface_retirements.extend(Self::release_bound_surfaces(
+                        lease.data_mut(),
+                        binding.previous_context,
+                        binding.previous_draw.as_ref(),
+                        binding.previous_read.as_ref(),
+                    )?);
+                }
             }
             if let Some(group) = binding.group.as_ref() {
-                let mut lease = group.acquire().map_err(|_| MakeCurrentError::Context)?;
+                let mut lease = group.acquire().map_err(|_| MakeCurrentError::Lost)?;
                 Self::install_bound_surfaces(
                     lease.data_mut(),
                     binding.context,

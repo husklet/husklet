@@ -303,6 +303,13 @@ pub extern "C" fn eglMakeCurrent(
                 GlobalState::access(|s| s.set_egl_error(EGL_BAD_ACCESS));
                 EGL_FALSE
             }
+            // Not EGL_BAD_CONTEXT: the handle is one we issued and re-checking it tells the application
+            // nothing. EGL_CONTEXT_LOST is the code that means "destroy this and build another", which is
+            // the recovery that works.
+            Err(MakeCurrentError::Lost) => {
+                GlobalState::access(|s| s.set_egl_error(EGL_CONTEXT_LOST));
+                EGL_FALSE
+            }
         }
     };
     if result == EGL_FALSE {

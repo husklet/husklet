@@ -460,3 +460,48 @@ fn gl_get_integerv_always_writes_the_out_param() {
     );
     assert_eq!(eglDestroyContext(display, context), EGL_TRUE);
 }
+
+/// After its share group dies, a context must be RELEASABLE and must say why it cannot be re-bound.
+///
+/// Both halves were wrong and in opposite directions. Releasing the binding acquired the outgoing
+/// group's lease to write surface targets back into it, so a dead group refused
+/// `eglMakeCurrent(dpy, NULL, NULL, NULL)` — the first step of the only recovery EGL defines — and left
+/// the application bound to a context it could not get off. `eglDestroyContext` tolerated the very same
+/// dead lease and carried on, which is what shows the strictness was an oversight rather than a policy.
+///
+/// And the refusal to re-bind reported `EGL_BAD_CONTEXT`, which tells an application it passed a handle
+/// that was never valid. A correct one then re-checks the handle, finds nothing wrong, and has nowhere
+/// left to go. `EGL_CONTEXT_LOST` is the code that means destroy this and build another.
+#[test]
+fn a_lost_context_can_be_released_and_reports_the_loss_rather_than_a_bad_handle() {
+    let dpy = DISPLAY_TOKEN as *mut c_void;
+    let draw = surface();
+    let read = surface();
+    let ctx = context();
+    assert_eq!(eglMakeCurrent(dpy, draw, read, ctx), EGL_TRUE);
+
+    crate::state::GlobalState::lose_current_group("test: GPU transport submission failed");
+
+    assert_eq!(
+        eglMakeCurrent(
+            dpy,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut()
+        ),
+        EGL_TRUE,
+        "releasing a lost context must succeed: there is nothing left to write into a dead group, and \
+         an application that cannot unbind cannot recover"
+    );
+
+    assert_eq!(
+        eglMakeCurrent(dpy, draw, read, ctx),
+        EGL_FALSE,
+        "a lost context must not bind"
+    );
+    assert_eq!(
+        eglGetError(),
+        EGL_CONTEXT_LOST,
+        "the refusal must name the loss, not the handle"
+    );
+}

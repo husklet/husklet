@@ -242,6 +242,12 @@ pub enum MakeCurrentError {
     Context,
     Surface,
     Access,
+    /// The context named is one this driver issued, but its share group has been terminated. Distinct
+    /// from [`Self::Context`] on purpose: `EGL_BAD_CONTEXT` tells an application it passed a handle that
+    /// was never valid, so a correct one re-checks the handle, finds nothing wrong and has nowhere to go.
+    /// `EGL_CONTEXT_LOST` tells it to destroy the context and build a new one, which is the only recovery
+    /// EGL defines and the one that actually works here.
+    Lost,
 }
 
 struct BoundSurface {
