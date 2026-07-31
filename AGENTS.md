@@ -838,6 +838,11 @@ correct side, once forty differences were the harness's own rounding ties, and o
 wrong framings before the third was right. Budget for that gap; a disagreement is a location, not a
 diagnosis.
 
+An enrichment needs a base rate before it means anything. Two case families were checked for how often a
+failing name mentioned a layer or a mip level: one came back at a hundred percent and was worthless,
+because every name in that family contains the word. The other was an eight-fold enrichment over its own
+base rate and was real. Without the control both look like the same finding.
+
 A single case's log from inside a batched run is not evidence about that case. One trace showed an object
 generator returning a null name with no error — a clean, specific, specification-violating story that
 explained several failing groups at once and matched a known-defect note. Probing the driver directly
