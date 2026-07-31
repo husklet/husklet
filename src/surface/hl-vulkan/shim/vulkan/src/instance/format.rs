@@ -5,15 +5,20 @@ use hl_gpu::{CommandSink, FeatureRequest, WIRE_VERSION};
 use crate::state::State;
 
 /// Which formats this ICD may advertise. The answer depends on the host sink the state owns: a
-/// block-compressed format is materialised by the host executor and is advertised only if the sink
-/// negotiates it, while every other known format is produced by the driver itself. An unrecognised
-/// `VkFormat` is never advertised.
+/// block-compressed or integer colour format is materialised by the host executor and is advertised only
+/// if the sink negotiates it, while every other known format is produced by the driver itself. An
+/// unrecognised `VkFormat` is never advertised.
 impl State {
     fn advertises(&mut self, format: Format) -> bool {
         let Some(wire) = format.wire() else {
             return false;
         };
-        if wire.block_geometry().is_none() {
+        // Integer colour joins the negotiated set for the reason `hl_gpu`'s `INTEGER_FORMATS` states: a
+        // backend carries raw integer texels only if it really can, and the software oracle — whose
+        // clear/blend/sample paths are all defined on normalised float channels — cannot.
+        let negotiated = wire.block_geometry().is_some()
+            || hl_gpu::protocol::model::capability::INTEGER_FORMATS.contains(&wire);
+        if !negotiated {
             return true;
         }
         self.sink

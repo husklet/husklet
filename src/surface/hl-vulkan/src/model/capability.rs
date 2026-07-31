@@ -115,38 +115,95 @@ pub struct FormatFeatures {
 
 use crate::model::memory::Format;
 
-/// Whether `vk_format` is one of the color formats the render/transfer path materializes (matches the
-/// translated set in [`crate::model::memory::tex_format_from_vk`] /
-/// [`crate::service::create::create_image`]).
+/// The class a lowerable `VkFormat` belongs to. Every class is derived from the ONE wire format the
+/// Vulkan format lowers to ([`crate::model::memory::Format::wire`]), so an advertisement can never again
+/// name a format the driver cannot materialize, nor omit one it can.
+///
+/// The classes exist because their capabilities genuinely differ, not for tidiness: an integer color
+/// format is unfilterable and unblendable by specification, a 32-bit float color format is renderable but
+/// not filterable without a host feature this driver does not request, a block-compressed format is
+/// sample-only, and a depth format is never a color attachment.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FormatClass {
+    /// 8-bit normalized/sRGB color: filterable, renderable, blendable.
+    NormalizedColor,
+    /// 8-bit integer color: renderable, but read only by `texelFetch` and never blended or filtered.
+    IntegerColor,
+    /// 16-bit float color: filterable, renderable, blendable.
+    FloatColor,
+    /// 32-bit float color: renderable, but unfilterable without the host `float32-filterable` feature,
+    /// which this driver does not request.
+    UnfilterableFloatColor,
+    /// Block-compressed color: sampled and copied only — never a render target.
+    Compressed,
+    /// Depth/stencil: a depth-stencil attachment, never a color one.
+    DepthStencil,
+}
+
 impl Format {
+    /// Which class this `VkFormat` lowers into, or `None` when the driver has no encoding for it at all.
+    pub fn class(&self) -> Option<FormatClass> {
+        use hl_gpu::protocol::model::enums::TextureFormat as T;
+        Some(match self.wire()? {
+            T::Rgba8Unorm | T::Bgra8Unorm | T::Rgba8Srgb | T::Bgra8Srgb | T::R8Unorm | T::Rg8Unorm => {
+                FormatClass::NormalizedColor
+            }
+            T::Rgba8Uint | T::Rgba8Sint | T::R8Uint | T::R8Sint | T::Rg8Uint | T::Rg8Sint => {
+                FormatClass::IntegerColor
+            }
+            T::Rgba16Float => FormatClass::FloatColor,
+            T::R32Float | T::Rgba32Float => FormatClass::UnfilterableFloatColor,
+            T::Depth32Float | T::Depth24PlusStencil8 => FormatClass::DepthStencil,
+            other if other.block_geometry().is_some() => FormatClass::Compressed,
+            // Unreachable by construction: every variant above is enumerated. A new wire format reaches
+            // this arm and is truthfully unadvertised until it is classified.
+            _ => return None,
+        })
+    }
+
+    /// Whether this format materializes as a color image (any of the three color classes).
     pub fn is_color(&self) -> bool {
-        let vk_format = self.0;
         matches!(
-            vk_format,
-            vk_format::R8G8B8A8_UNORM
-                | vk_format::R8G8B8A8_SRGB
-                | vk_format::B8G8R8A8_UNORM
-                | vk_format::B8G8R8A8_SRGB
+            self.class(),
+            Some(
+                FormatClass::NormalizedColor
+                    | FormatClass::IntegerColor
+                    | FormatClass::FloatColor
+                    | FormatClass::UnfilterableFloatColor
+            )
         )
     }
 
     /// Whether `vk_format` is a depth/stencil format the render path materializes.
     pub fn is_depth(&self) -> bool {
-        let vk_format = self.0;
-        matches!(
-            vk_format,
-            vk_format::D32_SFLOAT | vk_format::D24_UNORM_S8_UINT
-        )
+        self.class() == Some(FormatClass::DepthStencil)
     }
 
-    /// Whether a `(format, 2D, optimal-tiling)` image is creatable — the subset
-    /// `vkGetPhysicalDeviceImageFormatProperties` reports as supported (color formats only; anything else
-    /// is truthfully `VK_ERROR_FORMAT_NOT_SUPPORTED`).
+    /// Whether an optimally-tiled image of this format is creatable — the subset
+    /// `vkGetPhysicalDeviceImageFormatProperties` reports as supported. This is exactly the set the
+    /// driver can lower: reporting anything narrower refuses images `vkCreateImage` would have created,
+    /// and anything wider promises a format the executor would reject.
     pub fn is_image_supported(&self) -> bool {
-        self.is_color()
-            || Format(self.0)
-                .wire()
-                .is_some_and(|format| format.block_geometry().is_some())
+        self.class().is_some()
+    }
+
+    /// `STORAGE_IMAGE` when the host really permits a storage binding of this format. The core WebGPU
+    /// storage-texture set the executor targets is narrow: four-channel 8-bit unorm/integer, `rgba16float`
+    /// and the 32-bit float formats. Notably it excludes every sRGB format and the one- and two-channel
+    /// 8-bit formats, which the previous blanket "colour implies storage" claim asserted anyway.
+    fn storage(&self) -> u32 {
+        use hl_gpu::protocol::model::enums::TextureFormat as T;
+        match self.wire() {
+            Some(
+                T::Rgba8Unorm
+                | T::Rgba8Uint
+                | T::Rgba8Sint
+                | T::Rgba16Float
+                | T::R32Float
+                | T::Rgba32Float,
+            ) => format_feature::STORAGE_IMAGE,
+            _ => 0,
+        }
     }
 
     /// The truthful per-format `VkFormatProperties` feature masks. A color format advertises
@@ -158,27 +215,46 @@ impl Format {
     pub fn features(&self) -> FormatFeatures {
         let vk_format = self.0;
         use format_feature as f;
-        let color = self.is_color();
-        let depth = self.is_depth();
-        let compressed = Format(vk_format)
-            .wire()
-            .is_some_and(|format| format.block_geometry().is_some());
-        let optimal = if color {
-            f::SAMPLED_IMAGE
-                | f::STORAGE_IMAGE
-                | f::COLOR_ATTACHMENT
-                | f::COLOR_ATTACHMENT_BLEND
-                | f::BLIT_SRC
-                | f::BLIT_DST
-                | f::SAMPLED_IMAGE_FILTER_LINEAR
-                | f::TRANSFER_SRC
-                | f::TRANSFER_DST
-        } else if compressed {
-            f::SAMPLED_IMAGE | f::SAMPLED_IMAGE_FILTER_LINEAR | f::TRANSFER_SRC | f::TRANSFER_DST
-        } else if depth {
-            f::SAMPLED_IMAGE | f::DEPTH_STENCIL_ATTACHMENT | f::TRANSFER_SRC | f::TRANSFER_DST
-        } else {
-            0
+        // Every color class carries the copy/blit/sample base; the differences between the classes are
+        // filtering, blending and storage, each of which is a real host capability rather than a
+        // presentation choice.
+        const COLOR_BASE: u32 = f::SAMPLED_IMAGE
+            | f::COLOR_ATTACHMENT
+            | f::BLIT_SRC
+            | f::BLIT_DST
+            | f::TRANSFER_SRC
+            | f::TRANSFER_DST;
+        let optimal = match self.class() {
+            Some(FormatClass::NormalizedColor) => {
+                COLOR_BASE | f::COLOR_ATTACHMENT_BLEND | f::SAMPLED_IMAGE_FILTER_LINEAR | self.storage()
+            }
+            // Integer color is unfilterable and unblendable BY SPECIFICATION — a shader reads it through
+            // `texelFetch` only — so neither bit may be claimed however capable the host is.
+            Some(FormatClass::IntegerColor) => COLOR_BASE | self.storage(),
+            Some(FormatClass::FloatColor) => {
+                COLOR_BASE | f::COLOR_ATTACHMENT_BLEND | f::SAMPLED_IMAGE_FILTER_LINEAR | self.storage()
+            }
+            // 32-bit float sampling needs the host `float32-filterable` feature, which this driver does not
+            // request, and 32-bit float blending is not a core host capability either.
+            Some(FormatClass::UnfilterableFloatColor) => COLOR_BASE | self.storage(),
+            // Block-compressed texels are decoded by the sampler and cannot be written by a render pass or
+            // a blit destination, so only the read side is claimed.
+            Some(FormatClass::Compressed) => {
+                f::SAMPLED_IMAGE
+                    | f::SAMPLED_IMAGE_FILTER_LINEAR
+                    | f::BLIT_SRC
+                    | f::TRANSFER_SRC
+                    | f::TRANSFER_DST
+            }
+            Some(FormatClass::DepthStencil) => {
+                f::SAMPLED_IMAGE
+                    | f::DEPTH_STENCIL_ATTACHMENT
+                    | f::BLIT_SRC
+                    | f::BLIT_DST
+                    | f::TRANSFER_SRC
+                    | f::TRANSFER_DST
+            }
+            None => 0,
         };
         // Buffer features are INDEPENDENT bits, not alternatives. The previous `match` was exclusive, so
         // a format that advertised VERTEX_BUFFER could not also advertise texel-buffer use and vice
@@ -201,7 +277,7 @@ impl Format {
         if VertexFormat(vk_format).wire().is_some() {
             buffer |= f::VERTEX_BUFFER;
         }
-        if color {
+        if self.is_color() {
             buffer |= f::UNIFORM_TEXEL_BUFFER | f::STORAGE_TEXEL_BUFFER;
         }
         FormatFeatures {
@@ -274,36 +350,157 @@ mod tests {
         );
     }
 
-    /// KNOWN GAP, recorded so it is not rediscovered: `is_color` is a hand-written list of four formats
-    /// while `Format::wire` lowers roughly thirty as textures, and `is_image_supported` is just
-    /// `is_color`. So `vkGetPhysicalDeviceFormatProperties` reports NO optimal-tiling features, and
-    /// `vkGetPhysicalDeviceImageFormatProperties` reports VK_ERROR_FORMAT_NOT_SUPPORTED, for formats this
-    /// driver genuinely materializes — R32G32B32A32_SFLOAT, R16G16B16A16_SFLOAT, R32_SFLOAT, R8_UNORM,
-    /// R8G8_UNORM and every BC block format among them.
-    ///
-    /// That under-advertising is what gates most of the Vulkan CTS: 94.9% of enumerated cases return
-    /// NotSupported, and the largest single reason by an order of magnitude is a format query
-    /// (69,606 "Source format not supported" in blitting alone). This test pins the CURRENT extent of
-    /// the drift so closing it is a deliberate, measured change rather than a silent one.
+    /// The advertisement and the lowering are now ONE source: every format the driver can lower is
+    /// classified, and only those are. The previous form of this test recorded the opposite — a drift of
+    /// twenty-odd formats that `Format::wire` lowered while `is_color`'s hand-written four-format list
+    /// refused to advertise — which is what made `vkGetPhysicalDeviceImageFormatProperties` report
+    /// VK_ERROR_FORMAT_NOT_SUPPORTED for formats this driver genuinely materializes.
     #[test]
-    fn color_advertisement_drifts_from_the_texture_lowering() {
-        let mut lowered_not_advertised = Vec::new();
-        for format in 0..=200u32 {
-            let lowers = Format(format).wire().is_some();
-            if lowers && !Format(format).is_color() && !Format(format).is_depth() {
-                lowered_not_advertised.push(format);
+    fn every_lowerable_format_is_classified_and_advertised() {
+        let mut lowerable = 0;
+        for format in 0..=250u32 {
+            if Format(format).wire().is_none() {
+                assert!(
+                    Format(format).class().is_none(),
+                    "VkFormat {format} is classified but has no wire encoding"
+                );
+                continue;
             }
+            lowerable += 1;
+            assert!(
+                Format(format).class().is_some(),
+                "VkFormat {format} lowers as a texture but has no format class"
+            );
+            assert!(
+                Format(format).is_image_supported(),
+                "VkFormat {format} lowers as a texture but is refused image creation"
+            );
+            assert_ne!(
+                Format(format).features().optimal_tiling,
+                0,
+                "VkFormat {format} lowers as a texture but advertises no optimal-tiling feature"
+            );
         }
         assert!(
-            !lowered_not_advertised.is_empty(),
-            "if this list is empty the drift is closed — delete this test and its comment"
+            lowerable >= 30,
+            "expected at least the 30 lowerable texture formats, got {lowerable}"
         );
-        assert!(
-            lowered_not_advertised.len() >= 20,
-            "the drift shrank to {} formats; update this test deliberately: {:?}",
-            lowered_not_advertised.len(),
-            lowered_not_advertised
+    }
+
+    /// Every class carries the transfer bits, because a copy is the one operation this driver performs on
+    /// every image it can create. A class that advertised no transfer would be an image no caller could
+    /// populate.
+    #[test]
+    fn every_class_is_transferable_both_ways() {
+        for format in 0..=250u32 {
+            let Some(class) = Format(format).class() else {
+                continue;
+            };
+            let optimal = Format(format).features().optimal_tiling;
+            assert_ne!(
+                optimal & format_feature::TRANSFER_SRC,
+                0,
+                "{class:?} VkFormat {format} is not transfer-src"
+            );
+            assert_ne!(
+                optimal & format_feature::TRANSFER_DST,
+                0,
+                "{class:?} VkFormat {format} is not transfer-dst"
+            );
+        }
+    }
+
+    /// Integer colour is unfilterable and unblendable by specification — a shader reads it only through
+    /// `texelFetch`. Claiming either bit steers a caller into a sampler configuration the host refuses.
+    #[test]
+    fn integer_color_claims_no_filtering_or_blending() {
+        for format in [
+            vk_format::R8G8B8A8_UINT,
+            vk_format::R8G8B8A8_SINT,
+            vk_format::R8_UINT,
+            vk_format::R8_SINT,
+            vk_format::R8G8_UINT,
+            vk_format::R8G8_SINT,
+        ] {
+            assert_eq!(Format(format).class(), Some(FormatClass::IntegerColor));
+            let optimal = Format(format).features().optimal_tiling;
+            assert_ne!(optimal & format_feature::COLOR_ATTACHMENT, 0);
+            assert_eq!(optimal & format_feature::SAMPLED_IMAGE_FILTER_LINEAR, 0);
+            assert_eq!(optimal & format_feature::COLOR_ATTACHMENT_BLEND, 0);
+        }
+    }
+
+    /// 32-bit float sampling needs a host feature this driver does not request; 16-bit float filtering is
+    /// core. The two float classes must therefore differ in exactly that bit.
+    #[test]
+    fn float_classes_differ_by_filtering() {
+        assert_ne!(
+            Format(vk_format::R16G16B16A16_SFLOAT)
+                .features()
+                .optimal_tiling
+                & format_feature::SAMPLED_IMAGE_FILTER_LINEAR,
+            0
         );
+        for format in [vk_format::R32_SFLOAT, vk_format::R32G32B32A32_SFLOAT] {
+            assert_eq!(
+                Format(format).features().optimal_tiling & format_feature::SAMPLED_IMAGE_FILTER_LINEAR,
+                0,
+                "VkFormat {format} may not claim linear filtering"
+            );
+        }
+    }
+
+    /// D16 lowers onto the 32-bit float depth target, so it is a depth format like any other. The
+    /// hand-written `is_depth` list omitted it, which made a D16 depth image report itself uncreatable
+    /// while `vkCreateImage` created it happily.
+    #[test]
+    fn every_lowerable_depth_format_is_depth() {
+        for format in [
+            vk_format::D16_UNORM,
+            vk_format::D32_SFLOAT,
+            vk_format::D24_UNORM_S8_UINT,
+        ] {
+            assert!(Format(format).is_depth(), "VkFormat {format} is not depth");
+            assert!(!Format(format).is_color());
+        }
+    }
+
+    /// sRGB and the narrow one/two-channel 8-bit formats are not core storage-texture formats. The old
+    /// blanket "colour implies storage" claim asserted them anyway.
+    #[test]
+    fn storage_is_claimed_only_where_the_host_permits_it() {
+        for format in [
+            vk_format::R8G8B8A8_SRGB,
+            vk_format::B8G8R8A8_SRGB,
+            vk_format::B8G8R8A8_UNORM,
+            vk_format::R8_UNORM,
+            vk_format::R8G8_UNORM,
+        ] {
+            assert_eq!(
+                Format(format).features().optimal_tiling & format_feature::STORAGE_IMAGE,
+                0,
+                "VkFormat {format} is not a core storage-texture format"
+            );
+        }
+        assert_ne!(
+            Format(vk_format::R8G8B8A8_UNORM).features().optimal_tiling
+                & format_feature::STORAGE_IMAGE,
+            0
+        );
+    }
+
+    /// Block-compressed texels are produced by an offline encoder, not by a render pass or a blit
+    /// destination. Advertising either would steer a caller into a write this driver cannot perform.
+    #[test]
+    fn compressed_is_read_only() {
+        let optimal = Format(vk_format::BC7_UNORM_BLOCK).features().optimal_tiling;
+        assert_eq!(
+            Format(vk_format::BC7_UNORM_BLOCK).class(),
+            Some(FormatClass::Compressed)
+        );
+        assert_ne!(optimal & format_feature::SAMPLED_IMAGE, 0);
+        assert_eq!(optimal & format_feature::COLOR_ATTACHMENT, 0);
+        assert_eq!(optimal & format_feature::BLIT_DST, 0);
     }
 
     #[test]
