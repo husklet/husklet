@@ -2,6 +2,7 @@ use super::*;
 use crate::state::SurfaceInfo;
 use hl_gl::model::context::SurfaceKind;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 struct Prepared {
     info: SurfaceInfo,
@@ -64,6 +65,58 @@ impl PresentStats {
             Self::record_native();
         } else if prepared.app_surface {
             Self::record_readback(wl_surface);
+        }
+        Self::publish();
+    }
+
+    /// The destination for [`Self::publish`], from `HL_GL_COUNTERS`, resolved once. Unset means the
+    /// driver writes nothing at all — a driver inside Chrome's GPU process does not touch the filesystem
+    /// because it was loaded. `%p` in the path is replaced by this process's pid, which is what makes the
+    /// file usable for a multi-process client where one fixed path would have every process racing it.
+    fn destination() -> Option<&'static std::path::Path> {
+        static PATH: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+        PATH.get_or_init(|| {
+            let requested = std::env::var("HL_GL_COUNTERS").ok()?;
+            if requested.is_empty() {
+                return None;
+            }
+            Some(std::path::PathBuf::from(
+                requested.replace("%p", &std::process::id().to_string()),
+            ))
+        })
+        .as_deref()
+    }
+
+    /// Publish the counters where a harness can read them WHILE the client is still presenting, which is
+    /// the only time they can be read at all — a process that has exited has no counters and no maps.
+    ///
+    /// Throttled, and written through a temporary + rename so a reader never sees a half-written record.
+    /// Errors are swallowed deliberately: a driver must not fail a frame because a diagnostic file could
+    /// not be written.
+    fn publish() {
+        let Some(path) = Self::destination() else {
+            return;
+        };
+        // ~4 writes a second is far more resolution than a reader needs and keeps this off the hot path.
+        const INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+        static LAST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+        let now = std::time::Instant::now();
+        {
+            let mut last = LAST.lock().unwrap_or_else(|error| error.into_inner());
+            if last.is_some_and(|at| now.duration_since(at) < INTERVAL) {
+                return;
+            }
+            *last = Some(now);
+        }
+        let (native, readback) = Self::counts();
+        let record = format!(
+            "{{\"frames_native\":{native},\"frames_readback\":{readback},\"pid\":{}}}\n",
+            std::process::id()
+        );
+        let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
+        if std::fs::write(&temporary, record).is_ok() && std::fs::rename(&temporary, path).is_err()
+        {
+            let _ = std::fs::remove_file(&temporary);
         }
     }
 }
@@ -192,4 +245,81 @@ pub(super) fn swap(display: usize, token: usize) -> u32 {
         }
         EGL_TRUE
     })
+}
+
+#[cfg(test)]
+mod counter_publication {
+    use super::*;
+
+    /// Body run in a FRESH process by the test below: record a native frame and publish. Ignored by
+    /// default because it is only meaningful with `HL_GL_COUNTERS` set and a virgin `OnceLock`.
+    #[test]
+    #[ignore = "driven as a subprocess by counters_are_published_where_a_harness_can_read_them"]
+    fn publish_for_subprocess() {
+        PresentStats::record_native();
+        PresentStats::record_native();
+        PresentStats::publish();
+    }
+
+    /// The counters must be readable from OUTSIDE the process, while it is still presenting — a client
+    /// that has exited has no counters and no maps, which is exactly why the acceleration gate could not
+    /// answer. Unset must write nothing: the driver does not touch the filesystem because it was loaded.
+    #[test]
+    fn counters_are_published_where_a_harness_can_read_them() {
+        let directory = std::env::temp_dir().join(format!("hl-gl-counters-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("scratch directory");
+
+        let run = |value: Option<&std::path::Path>| {
+            let mut command =
+                std::process::Command::new(std::env::current_exe().expect("test binary"));
+            command.args([
+                "--exact",
+                "--ignored",
+                "--nocapture",
+                "driver::present::counter_publication::publish_for_subprocess",
+            ]);
+            match value {
+                Some(path) => command.env("HL_GL_COUNTERS", path),
+                None => command.env_remove("HL_GL_COUNTERS"),
+            };
+            let output = command.output().expect("re-exec the test binary");
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "the subprocess body must have run"
+            );
+        };
+
+        // `%p` becomes the writing process's pid, so a multi-process client does not race one path.
+        run(Some(&directory.join("counters-%p.json")));
+        let written: Vec<_> = std::fs::read_dir(&directory)
+            .expect("scratch directory")
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "json")
+            })
+            .collect();
+        assert_eq!(
+            written.len(),
+            1,
+            "exactly one pid-suffixed record: {written:?}"
+        );
+        let text = std::fs::read_to_string(&written[0]).expect("counter record");
+        assert!(
+            text.contains("\"frames_native\":2") && text.contains("\"frames_readback\":0"),
+            "unexpected record {text:?}"
+        );
+        assert!(
+            !written[0].to_string_lossy().contains("%p"),
+            "the pid placeholder must be substituted, got {:?}",
+            written[0]
+        );
+
+        // Unset: nothing new appears.
+        run(None);
+        let after = std::fs::read_dir(&directory).expect("scratch").count();
+        assert_eq!(after, 1, "an unset HL_GL_COUNTERS must write nothing");
+
+        let _ = std::fs::remove_dir_all(&directory);
+    }
 }
