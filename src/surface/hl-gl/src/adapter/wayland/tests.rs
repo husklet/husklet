@@ -68,6 +68,17 @@ fn the_surfaceless_platform_is_advertised_and_backed_but_gbm_and_x11_are_refused
     assert!(!egl_client_extensions().contains("EGL_EXT_platform_x11"));
 }
 
+/// Chrome's GPU process asks for a display on the device `eglQueryDevicesEXT` returned once GBM is
+/// unavailable, so the device platform is advertised and backed. GBM stays refused: it would promise a
+/// `gbm_surface` native window type that has no implementation.
+#[test]
+fn the_device_platform_is_advertised_and_backed_while_gbm_stays_refused() {
+    assert!(egl_client_extensions().contains("EGL_EXT_platform_device"));
+    assert!(egl_display_extensions().contains("EGL_EXT_platform_device"));
+    assert!(SupportedPlatform::contains(EGL_PLATFORM_DEVICE_EXT));
+    assert!(!SupportedPlatform::contains(EGL_PLATFORM_GBM_KHR));
+}
+
 /// The `wl_egl_window` ABI struct is the exact 64-byte C layout the staged `libwayland-egl` allocates.
 #[test]
 fn wl_egl_window_layout_is_the_c_abi() {

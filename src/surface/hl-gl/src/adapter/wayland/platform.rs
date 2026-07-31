@@ -13,6 +13,12 @@ pub const EGL_PLATFORM_GBM_KHR: u32 = 0x31D7;
 /// is always `EGL_DEFAULT_DISPLAY`; every surface is a pbuffer or the surfaceless default framebuffer,
 /// which is exactly the offscreen path this driver already serves.
 pub const EGL_PLATFORM_SURFACELESS_MESA: u32 = 0x31DD;
+/// `EGL_PLATFORM_DEVICE_EXT` — a display on an `EGLDeviceEXT` this driver already enumerates through
+/// `eglQueryDevicesEXT`. The platform defines NO native window or pixmap type at all, so a display of it
+/// promises exactly what this driver already delivers: pbuffer and surfaceless rendering on the one
+/// device backed by Husklet's projected render node. Chrome's GPU process asks for this display when
+/// GBM is unavailable, passing the very device token our own enumeration handed it.
+pub const EGL_PLATFORM_DEVICE_EXT: u32 = 0x313F;
 
 /// Whether `platform` selects the Wayland window system (the only windowed platform this driver backs).
 pub struct WaylandPlatform;
@@ -33,7 +39,7 @@ impl SupportedPlatform {
     pub fn contains(platform: u32) -> bool {
         matches!(
             platform,
-            EGL_PLATFORM_WAYLAND_KHR | EGL_PLATFORM_SURFACELESS_MESA
+            EGL_PLATFORM_WAYLAND_KHR | EGL_PLATFORM_SURFACELESS_MESA | EGL_PLATFORM_DEVICE_EXT
         )
     }
 }
@@ -50,9 +56,15 @@ impl SupportedPlatform {
 /// caller that does not find its platform named here never calls the driver at all. ANGLE was measured
 /// resolving every entry point from this driver and then reporting "Failed to get system egl display"
 /// without invoking one of them, because the platform it wanted was not in this list.
+///
+/// `EGL_EXT_platform_device` is here for the same reason, and is what Chrome's GPU process actually
+/// needs: an interposer inside that process shows ANGLE asking for `EGL_PLATFORM_GBM_KHR` first and then
+/// falling back to `EGL_PLATFORM_DEVICE_EXT` with the device `eglQueryDevicesEXT` returned. With neither
+/// name in this string it made both requests only in the measurement (which patched the string) and
+/// otherwise gave up before calling the driver at all.
 pub fn egl_client_extensions() -> &'static str {
     "EGL_EXT_client_extensions EGL_EXT_platform_base EGL_EXT_platform_wayland EGL_KHR_platform_wayland \
-     EGL_MESA_platform_surfaceless \
+     EGL_MESA_platform_surfaceless EGL_EXT_platform_device \
      EGL_EXT_device_base EGL_EXT_device_enumeration EGL_EXT_device_query"
 }
 
@@ -67,5 +79,6 @@ pub fn egl_display_extensions() -> &'static str {
      EGL_KHR_image_base \
      EGL_EXT_image_dma_buf_import EGL_EXT_image_dma_buf_import_modifiers \
      EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_MESA_platform_surfaceless \
+     EGL_EXT_platform_device \
      EGL_EXT_device_base EGL_EXT_device_query"
 }
