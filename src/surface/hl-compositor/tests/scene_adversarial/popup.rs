@@ -235,6 +235,47 @@ fn popup_for_native_toplevel_is_constrained_to_window_content() {
     );
 }
 
+/// A shadowed window's popup must be constrained against the WINDOW, not the surface around it.
+///
+/// Chrome and GTK both commit a surface larger than their window and name the difference with
+/// `set_window_geometry` — that margin is client-drawn shadow, not window. A popup's coordinates are
+/// window-geometry-relative, so constraining them against the surface's logical size measures them in the
+/// wrong space and lets a menu at the window's edge hang out over the shadow by the whole margin.
+#[test]
+fn popup_for_a_shadowed_toplevel_is_constrained_to_the_window_not_the_shadow() {
+    const MARGIN: (i32, i32) = (16, 26);
+    const WINDOW: (i32, i32) = (800, 600);
+    let mut scene = scene_with_output();
+    // The surface is the window plus its shadow margin on every side.
+    let top = map_toplevel(&mut scene, WINDOW.0 + MARGIN.0 * 2, WINDOW.1 + MARGIN.1 * 2);
+    scene
+        .get_mut(top)
+        .expect("the toplevel was just mapped")
+        .window_geometry = Some(Rect::new(MARGIN.0, MARGIN.1, WINDOW.0, WINDOW.1));
+
+    // A dropdown hanging off a field near the window's bottom edge, allowed only to slide.
+    let p = Positioner {
+        anchor_rect: Rect::new(300, 560, 120, 30),
+        size: (240, 180),
+        anchor: Anchor::Bottom,
+        gravity: Gravity::Bottom,
+        constraint_adjustment: ConstraintAdjustment {
+            slide_y: true,
+            ..ConstraintAdjustment::NONE
+        },
+        offset: (0, 0),
+    };
+
+    let geo = scene.constrain_popup_for_parent(top, &p);
+    assert_eq!(
+        geo.bottom(),
+        WINDOW.1,
+        "slide must stop at the window's edge; taking the surface's logical size instead leaves the \
+         dropdown {} points out over the client's own shadow",
+        MARGIN.1 * 2
+    );
+}
+
 #[test]
 fn nested_popup_constraints_are_translated_into_parent_coordinates() {
     let mut scene = scene_with_output();

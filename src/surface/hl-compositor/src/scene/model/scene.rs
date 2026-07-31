@@ -106,11 +106,25 @@ impl Scene {
         positioner.place(width, height)
     }
 
+    /// Constrain a popup against its ROOT WINDOW rather than the output.
+    ///
+    /// Husklet's popups become real child `NSWindow`s, so AppKit already keeps them inside the display's
+    /// work area; constraining to the parent instead is what keeps a menu visually attached to the window
+    /// it belongs to, which is what a Mac user expects. The target must therefore be stated in the space
+    /// the popup's own coordinates use — relative to the root's WINDOW GEOMETRY, not its surface. Those
+    /// differ by exactly the client-side shadow margin every GTK/Chromium window carries, so taking the
+    /// surface's logical size here lets a menu at the window's edge hang off it by that margin.
     pub fn constrain_popup_for_parent(&self, parent: SurfaceId, positioner: &Positioner) -> Rect {
         let Some(root) = self.window_root(parent) else {
             return self.constrain_popup(positioner);
         };
-        let Some((width, height)) = self.get(root).and_then(|surface| surface.logical_size())
+        let Some(surface) = self.get(root) else {
+            return self.constrain_popup(positioner);
+        };
+        let Some((width, height)) = surface
+            .window_geometry
+            .map(|geometry| (geometry.w, geometry.h))
+            .or_else(|| surface.logical_size())
         else {
             return self.constrain_popup(positioner);
         };

@@ -97,6 +97,63 @@ impl MacPresenter {
         Ok(size)
     }
 
+    /// State one popup's placement, once, the first time it reaches a native window.
+    ///
+    /// A popup is the one role whose on-screen rectangle is decided in four places at once — the
+    /// positioner resolves `position`, the client's `set_window_geometry` decides how much of its surface
+    /// is shadow, `compose` crops to that geometry, and AppKit owns the frame — and until now none of them
+    /// said so. `error` level deliberately: the host has a composition root, everything below `error` is
+    /// compiled out of the shipped bundle, and a subsystem that cannot speak in a release build is a
+    /// subsystem that reaches users before it reaches a test.
+    ///
+    /// `geometry=none` is the case worth reading for: without it there is no shadow margin to subtract, so
+    /// the native window is sized to the client's whole shadow-inclusive surface.
+    fn describe_popup_placement(
+        &mut self,
+        sid: SurfaceId,
+        parent: SurfaceId,
+        position: (i32, i32),
+        desired: Option<&WindowState>,
+        visible_size: (i32, i32),
+        origin: Option<objc2_foundation::NSPoint>,
+    ) {
+        if self
+            .surfaces
+            .get(&sid)
+            .is_none_or(|state| state.described_popup)
+        {
+            return;
+        }
+        let geometry = desired.and_then(|window| window.geometry);
+        let logical = desired.and_then(|window| window.logical_size);
+        hl_log::hl_log!(
+            tag::PRESENT,
+            Level::Error,
+            "popup placement sid={} parent={} position={},{} geometry={} logical={} native_size={}x{} native_origin={}",
+            sid.0,
+            parent.0,
+            position.0,
+            position.1,
+            geometry.map_or_else(
+                || "none".to_string(),
+                |rect| format!("{},{} {}x{}", rect.x, rect.y, rect.w, rect.h)
+            ),
+            logical.map_or_else(
+                || "none".to_string(),
+                |(width, height)| format!("{width}x{height}")
+            ),
+            visible_size.0,
+            visible_size.1,
+            origin.map_or_else(
+                || "unplaced".to_string(),
+                |point| format!("{},{}", point.x, point.y)
+            )
+        );
+        if let Some(state) = self.surfaces.get_mut(&sid) {
+            state.described_popup = true;
+        }
+    }
+
     pub(super) fn capture_requested_frame(&self) {
         let Some(capture) = self
             .requested_capture
@@ -385,6 +442,16 @@ impl MacPresenter {
                 {
                     window.set_screen_origin(origin);
                 }
+            }
+            if let Some((parent, position)) = popup {
+                self.describe_popup_placement(
+                    sid,
+                    parent,
+                    position,
+                    desired.as_ref(),
+                    visible_size,
+                    popup_origin,
+                );
             }
             let actual_scale = self
                 .surfaces
