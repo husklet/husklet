@@ -9,7 +9,7 @@ use hl_vulkan::model::descriptor::{
     vk_descriptor_type, DescriptorTemplateEntry, LayoutBinding,
     VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET,
 };
-use hl_vulkan::model::memory::{vk_buffer_usage, vk_format, vk_image_usage};
+use hl_vulkan::model::memory::{vk_buffer_usage, vk_format, vk_image_usage, SubresourceRange};
 use hl_vulkan::result;
 use hl_vulkan::service::{create, present, record, submit, sync};
 use hl_vulkan::{Device, Instance};

@@ -50,6 +50,14 @@ pub enum Enc {
         w: u32,
         h: u32,
     },
+    /// Fill a sub-rectangle of ONE mip level, across a contiguous run of array layers, with a colour.
+    ///
+    /// The subresource fields exist because a Vulkan `vkCmdClearColorImage` clears a
+    /// `VkImageSubresourceRange`, not a plane. Without them the operation could only ever address layer 0
+    /// of mip 0, so a clear of layers 1..N landed on layer 0 — writing texels the caller asked to leave
+    /// alone and leaving the ones it asked to clear untouched. `mip_level` is a single level rather than a
+    /// range because each level has its own extent, which `w`/`h` already carry; a caller clearing several
+    /// levels emits one op per level.
     ClearRect {
         texture: u32,
         x: u32,
@@ -57,6 +65,9 @@ pub enum Enc {
         w: u32,
         h: u32,
         color: [f32; 4],
+        base_array_layer: u32,
+        layer_count: u32,
+        mip_level: u32,
     },
     Draw {
         vertex_count: u32,

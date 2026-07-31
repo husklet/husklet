@@ -809,6 +809,11 @@ pub(super) fn clear_rect_enc(
         w: w as u32,
         h: h as u32,
         color: d.clear,
+        // GL's scissored clear addresses the bound draw target, which is already one resolved
+        // subresource; these are the base values the operation carried implicitly before they existed.
+        base_array_layer: 0,
+        layer_count: 1,
+        mip_level: 0,
     })
 }
 

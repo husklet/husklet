@@ -440,6 +440,9 @@ fn representative_stream() -> Vec<Cmd> {
                     dst_offset: 0,
                     bytes_per_row: 256,
                 },
+                // Deliberately NOT the base subresource: a codec that dropped these three fields would
+                // still round-trip a base-subresource clear, so the representative stream carries a
+                // layered, mipped one instead.
                 Enc::ClearRect {
                     texture: 2,
                     x: 0,
@@ -447,6 +450,9 @@ fn representative_stream() -> Vec<Cmd> {
                     w: 8,
                     h: 8,
                     color: [1.0, 0.0, 0.0, 1.0],
+                    base_array_layer: 3,
+                    layer_count: 5,
+                    mip_level: 2,
                 },
             ],
             signal: Some((8, 1)),

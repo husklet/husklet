@@ -192,7 +192,7 @@ fn clear_color_image_requires_copy_dst() {
     let cb = d.allocate_command_buffer();
     d.begin_command_buffer(cb, false).unwrap();
     assert!(matches!(
-        record::cmd_clear_color_image(&mut d, cb, img, [1.0; 4]),
+        record::cmd_clear_color_image(&mut d, cb, img, [1.0; 4], &[]),
         Err(GpuError::Invalid(_))
     ));
 }

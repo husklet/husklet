@@ -12,10 +12,11 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BufferDesc, ColorAttachment, ColorTargetState,
-    ComputePipelineDesc, RenderPipelineDesc, ShaderRef, TextureDesc,
+    ComputePipelineDesc, Extent3d, Origin3d, RenderPipelineDesc, ShaderRef, TextureDesc,
+    TextureSubresource,
 };
 use hl_gpu::protocol::model::enums::{
-    buffer_usage, texture_usage, LoadOp, TextureDim, TextureFormat, Topology,
+    buffer_usage, texture_usage, LoadOp, TextureAspect, TextureDim, TextureFormat, Topology,
 };
 use hl_gpu::protocol::model::kernel::{
     gty, Inst, KernelProgram, Op, Param, CMP_GE, KERNEL_MAGIC, SR_CTAID_X, SR_NTID_X, SR_TID_X,

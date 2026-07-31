@@ -152,6 +152,9 @@ fn non_finite_render_floats_are_rejected_at_the_wire() {
                 w: 1,
                 h: 1,
                 color: [bad, 0.0, 0.0, 1.0],
+                base_array_layer: 0,
+                layer_count: 1,
+                mip_level: 0,
             },
             Enc::BeginRenderPass {
                 color: vec![ColorAttachment {

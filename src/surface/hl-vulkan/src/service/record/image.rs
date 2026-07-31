@@ -275,20 +275,35 @@ pub fn cmd_resolve_image(
 
 // ---- clears ------------------------------------------------------------------------------------
 
-/// `vkCmdClearColorImage` (base subresource) — record a full-extent `ClearRect` on the image. The image
-/// must be `COPY_DST` (a transfer-clear target). Ported from `command.rs::vkCmdClearColorImage`.
+/// `vkCmdClearColorImage` — record a full-extent `ClearRect` over every mip level and array layer the
+/// `VkImageSubresourceRange`s name. The image must be `COPY_DST` (a transfer-clear target).
+///
+/// The ranges were previously discarded and one clear was recorded over the base extent, which the
+/// executor then wrote to layer 0 of mip 0 whatever the caller asked for. A clear of layers 1..N therefore
+/// painted layer 0 — writing texels the caller wanted preserved and preserving the ones it wanted
+/// cleared. One op is recorded per level because each level has its own extent; the layer run rides on the
+/// op itself, since the executor fills a contiguous run of layers in a single upload.
 pub fn cmd_clear_color_image(
     dev: &mut Device,
     cb: VkCommandBuffer,
     image: VkImage,
     color: [f32; 4],
+    ranges: &[SubresourceRange],
 ) -> Result<()> {
-    let (ir, usage, w, h) = {
+    let (ir, usage, w, h, resolved) = {
         let i = dev
             .images
             .get(&image)
             .ok_or(GpuError::Invalid("vkCmdClearColorImage: unknown VkImage"))?;
-        (i.ir_id, i.usage, i.width, i.height)
+        let resolved: Vec<SubresourceRange> = if ranges.is_empty() {
+            vec![SubresourceRange::whole(i)]
+        } else {
+            ranges
+                .iter()
+                .map(|range| SubresourceRange::resolve(i, *range))
+                .collect()
+        };
+        (i.ir_id, i.usage, i.width, i.height, resolved)
     };
     if usage & texture_usage::COPY_DST == 0 {
         return Err(GpuError::Invalid(
@@ -296,14 +311,26 @@ pub fn cmd_clear_color_image(
         ));
     }
     let rec = dev.require_recording(cb)?;
-    rec.enc.push(Enc::ClearRect {
-        texture: ir,
-        x: 0,
-        y: 0,
-        w,
-        h,
-        color,
-    });
+    for range in resolved {
+        if range.layer_count == 0 {
+            continue;
+        }
+        for level in range.base_mip_level..range.base_mip_level + range.level_count {
+            rec.enc.push(Enc::ClearRect {
+                texture: ir,
+                x: 0,
+                y: 0,
+                // Each level clears its OWN extent. Passing the base extent would overhang every smaller
+                // level, and the clamp would then silently shrink the clear to whatever fitted.
+                w: (w >> level).max(1),
+                h: (h >> level).max(1),
+                color,
+                base_array_layer: range.base_array_layer,
+                layer_count: range.layer_count,
+                mip_level: level,
+            });
+        }
+    }
     Ok(())
 }
 

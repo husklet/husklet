@@ -213,6 +213,9 @@ fn a_scissored_clear_lowers_to_clear_rect_over_a_load_pass() {
                     w: 4,
                     h: 4,
                     color: [0.0, 1.0, 0.0, 1.0],
+                    base_array_layer: 0,
+                    layer_count: 1,
+                    mip_level: 0,
                 },
             ],
             signal: None,
@@ -230,4 +233,124 @@ fn a_scissored_clear_lowers_to_clear_rect_over_a_load_pass() {
         64 - 16,
         "the rest survives the clear"
     );
+}
+
+/// This oracle materializes ONE plane per texture (`CpuTexture::pixels` is level 0 of layer 0), so it has
+/// nowhere to put a clear of any other subresource. It must refuse rather than write the plane it does
+/// have — silently redirecting the write to layer 0 is precisely the defect the subresource fields were
+/// added to fix, and a backend that reproduced it here would make the wgpu-vs-oracle differential agree by
+/// both sides being wrong.
+///
+/// The refusal is raised during validation, before any op in the batch runs, so an earlier op's writes are
+/// never left behind by a mid-batch rejection.
+#[test]
+fn oracle_refuses_a_clear_of_a_non_base_subresource() {
+    let mut exec = hl_gpu::CpuExecutor::new();
+    let caps = exec.capabilities();
+    let mut limits = hl_gpu::Limits::from_capabilities(caps);
+    limits.copy_alignment = 1;
+    let mut s = hl_gpu::Session::new(
+        limits,
+        hl_gpu::GlobalLedger::unbounded(),
+        Box::new(hl_gpu::FakeClock::new(0)),
+    );
+    // A plain single-layer, single-mip 2D texture: the only shape this oracle accepts at all (it refuses
+    // a layered texture outright at creation). The refusal under test must therefore come from the
+    // SUBRESOURCE the clear names, not from the texture's shape — which is what makes this test
+    // meaningful rather than a restatement of the create-time refusal.
+    let desc = tex(
+        4,
+        4,
+        TextureFormat::Rgba8Unorm,
+        texture_usage::RENDER_TARGET | texture_usage::COPY_SRC | texture_usage::COPY_DST,
+    );
+    for (label, clear) in [
+        (
+            "a non-base array layer",
+            Enc::ClearRect {
+                texture: 1,
+                x: 0,
+                y: 0,
+                w: 4,
+                h: 4,
+                color: [1.0, 0.0, 0.0, 1.0],
+                base_array_layer: 2,
+                layer_count: 1,
+                mip_level: 0,
+            },
+        ),
+        (
+            "more than one array layer",
+            Enc::ClearRect {
+                texture: 1,
+                x: 0,
+                y: 0,
+                w: 4,
+                h: 4,
+                color: [1.0, 0.0, 0.0, 1.0],
+                base_array_layer: 0,
+                layer_count: 2,
+                mip_level: 0,
+            },
+        ),
+        (
+            "a non-base mip level",
+            Enc::ClearRect {
+                texture: 1,
+                x: 0,
+                y: 0,
+                w: 2,
+                h: 2,
+                color: [1.0, 0.0, 0.0, 1.0],
+                base_array_layer: 0,
+                layer_count: 1,
+                mip_level: 1,
+            },
+        ),
+    ] {
+        let err = hl_gpu::runtime::submit(
+            &mut s,
+            &mut exec,
+            0,
+            &[
+                Cmd::CreateTexture(1, desc.clone()),
+                Cmd::Submit(CommandBuffer {
+                    encoder: vec![clear],
+                    signal: None,
+                }),
+                Cmd::DestroyTexture(1),
+            ],
+        )
+        .expect_err(label);
+        assert!(
+            matches!(err, hl_gpu::GpuError::Unsupported(_)),
+            "{label} must be refused as unsupported, got {err:?}"
+        );
+    }
+
+    // And the base subresource still runs, so the refusal is about the subresource and not about
+    // `ClearRect` on a layered texture generally.
+    hl_gpu::runtime::submit(
+        &mut s,
+        &mut exec,
+        0,
+        &[
+            Cmd::CreateTexture(2, desc),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![Enc::ClearRect {
+                    texture: 2,
+                    x: 0,
+                    y: 0,
+                    w: 4,
+                    h: 4,
+                    color: [1.0, 0.0, 0.0, 1.0],
+                    base_array_layer: 0,
+                    layer_count: 1,
+                    mip_level: 0,
+                }],
+                signal: None,
+            }),
+        ],
+    )
+    .expect("the base subresource is still clearable");
 }

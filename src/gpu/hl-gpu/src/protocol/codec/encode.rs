@@ -297,6 +297,9 @@ impl Encoder {
                 w,
                 h,
                 color,
+                base_array_layer,
+                layer_count,
+                mip_level,
             } => {
                 e.u8(etag::CLEAR_RECT);
                 e.u32(*texture);
@@ -307,6 +310,11 @@ impl Encoder {
                 for v in color {
                     e.f32(*v);
                 }
+                // Appended after the existing payload, so the prefix every previous field occupied is
+                // byte-identical and the tag itself never moved.
+                e.u32(*base_array_layer);
+                e.u32(*layer_count);
+                e.u32(*mip_level);
             }
             Enc::Draw {
                 vertex_count,

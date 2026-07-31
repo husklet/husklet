@@ -101,7 +101,11 @@ fn blit_scaled(
                     },
                     // Pre-clear the destination to opaque black so any texel the blit does NOT write is a
                     // KNOWN value — makes the "the whole dest rect was written" check unambiguous.
-                    Enc::ClearRect { texture: 2, x: 0, y: 0, w: dw, h: dh, color: [0.0, 0.0, 0.0, 1.0] },
+                    Enc::ClearRect { texture: 2, x: 0, y: 0, w: dw, h: dh, color: [0.0, 0.0, 0.0, 1.0],
+                        base_array_layer: 0,
+                        layer_count: 1,
+                        mip_level: 0,
+                    },
                     // The scaling blit under test: FULL source extent → FULL destination extent.
                     Enc::BlitTexture {
                         src: 1,

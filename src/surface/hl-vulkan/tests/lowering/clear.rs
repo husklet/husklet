@@ -69,7 +69,7 @@ fn clear_color_image_lowers_to_full_extent_clear_rect() {
     .unwrap();
     let ir = img_ir(&d, img);
     let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
-        record::cmd_clear_color_image(d, cb, img, [0.25, 0.5, 0.75, 1.0]).unwrap();
+        record::cmd_clear_color_image(d, cb, img, [0.25, 0.5, 0.75, 1.0], &[]).unwrap();
     });
     assert_eq!(
         enc,
@@ -79,8 +79,189 @@ fn clear_color_image_lowers_to_full_extent_clear_rect() {
             y: 0,
             w: 32,
             h: 16,
-            color: [0.25, 0.5, 0.75, 1.0]
+            color: [0.25, 0.5, 0.75, 1.0],
+            base_array_layer: 0,
+            layer_count: 1,
+            mip_level: 0,
         }]
+    );
+}
+
+/// A layered image cleared over a SUBRANGE of its layers must clear those layers and no others. Before
+/// the subresource range reached the IR, every clear addressed layer 0 of mip 0 whatever the caller asked
+/// for, so this recorded a clear of layer 0 — writing the one layer the caller wanted preserved and
+/// preserving the four it wanted cleared.
+#[test]
+fn clear_color_image_honours_the_array_layer_range() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let img = create::create_image_layers(
+        &mut d,
+        &mut sink,
+        32,
+        16,
+        6,
+        1,
+        false,
+        vk_format::R8G8B8A8_UNORM,
+        vk_image_usage::TRANSFER_DST,
+        1,
+    )
+    .unwrap();
+    let ir = img_ir(&d, img);
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_clear_color_image(
+            d,
+            cb,
+            img,
+            [1.0, 0.0, 0.0, 1.0],
+            &[SubresourceRange {
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 2,
+                layer_count: 3,
+            }],
+        )
+        .unwrap();
+    });
+    assert_eq!(
+        enc,
+        vec![Enc::ClearRect {
+            texture: ir,
+            x: 0,
+            y: 0,
+            w: 32,
+            h: 16,
+            color: [1.0, 0.0, 0.0, 1.0],
+            base_array_layer: 2,
+            layer_count: 3,
+            mip_level: 0,
+        }]
+    );
+}
+
+/// Each mip level is a separate op carrying its OWN extent. Recording one op over the base extent would
+/// overhang every smaller level, and the executor's clamp would then silently shrink the clear.
+#[test]
+fn clear_color_image_records_one_op_per_mip_level_at_that_levels_extent() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let img = create::create_image_layers(
+        &mut d,
+        &mut sink,
+        32,
+        16,
+        1,
+        4,
+        false,
+        vk_format::R8G8B8A8_UNORM,
+        vk_image_usage::TRANSFER_DST,
+        1,
+    )
+    .unwrap();
+    let ir = img_ir(&d, img);
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_clear_color_image(
+            d,
+            cb,
+            img,
+            [0.0, 1.0, 0.0, 1.0],
+            &[SubresourceRange {
+                base_mip_level: 1,
+                level_count: 2,
+                base_array_layer: 0,
+                layer_count: 1,
+            }],
+        )
+        .unwrap();
+    });
+    assert_eq!(
+        enc,
+        vec![
+            Enc::ClearRect {
+                texture: ir,
+                x: 0,
+                y: 0,
+                w: 16,
+                h: 8,
+                color: [0.0, 1.0, 0.0, 1.0],
+                base_array_layer: 0,
+                layer_count: 1,
+                mip_level: 1,
+            },
+            Enc::ClearRect {
+                texture: ir,
+                x: 0,
+                y: 0,
+                w: 8,
+                h: 4,
+                color: [0.0, 1.0, 0.0, 1.0],
+                base_array_layer: 0,
+                layer_count: 1,
+                mip_level: 2,
+            },
+        ]
+    );
+}
+
+/// `VK_REMAINING_ARRAY_LAYERS`/`VK_REMAINING_MIP_LEVELS` mean "to the end of the image", and a range that
+/// runs past the end is clamped rather than recorded as an out-of-bounds clear the executor would refuse.
+#[test]
+fn clear_color_image_resolves_the_remaining_sentinels_and_clamps() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let img = create::create_image_layers(
+        &mut d,
+        &mut sink,
+        8,
+        8,
+        4,
+        1,
+        false,
+        vk_format::R8G8B8A8_UNORM,
+        vk_image_usage::TRANSFER_DST,
+        1,
+    )
+    .unwrap();
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_clear_color_image(
+            d,
+            cb,
+            img,
+            [1.0; 4],
+            &[
+                SubresourceRange {
+                    base_mip_level: 0,
+                    level_count: SubresourceRange::REMAINING,
+                    base_array_layer: 1,
+                    layer_count: SubresourceRange::REMAINING,
+                },
+                // Entirely past the end: nothing exists to clear, so nothing is recorded.
+                SubresourceRange {
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 9,
+                    layer_count: 2,
+                },
+            ],
+        )
+        .unwrap();
+    });
+    let layers: Vec<(u32, u32)> = enc
+        .iter()
+        .filter_map(|e| match e {
+            Enc::ClearRect {
+                base_array_layer,
+                layer_count,
+                ..
+            } => Some((*base_array_layer, *layer_count)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        layers,
+        vec![(1, 3)],
+        "REMAINING must resolve to layers 1..4"
     );
 }
 
@@ -207,7 +388,10 @@ fn clear_attachments_lowers_to_clear_rect_on_active_target() {
                 y: 8,
                 w: 16,
                 h: 16,
-                color: [1.0, 0.0, 0.0, 1.0]
+                color: [1.0, 0.0, 0.0, 1.0],
+                base_array_layer: 0,
+                layer_count: 1,
+                mip_level: 0,
             },
             Enc::EndRenderPass,
         ]

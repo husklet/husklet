@@ -3,6 +3,7 @@
 use core::ffi::c_void;
 
 use hl_vulkan::service::record;
+use hl_vulkan::SubresourceRange;
 
 use super::{CommandBuffer, ShimState};
 use crate::types::*;
@@ -12,8 +13,8 @@ pub extern "C" fn vkCmdClearColorImage(
     image: u64,
     _image_layout: i32,
     p_color: *const c_void,
-    _range_count: u32,
-    _p_ranges: *const c_void,
+    range_count: u32,
+    p_ranges: *const c_void,
 ) {
     let Some(command_buffer) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
@@ -21,8 +22,29 @@ pub extern "C" fn vkCmdClearColorImage(
     let Some(color) = (unsafe { (p_color as *const VkClearColorValue).as_ref() }) else {
         return;
     };
+    // pRanges says WHICH mip levels and array layers to clear. Dropping it made every clear land on the
+    // base subresource, so a layered or mipped image was cleared in the wrong place.
+    let ranges: Vec<SubresourceRange> = if range_count == 0 || p_ranges.is_null() {
+        Vec::new()
+    } else {
+        unsafe {
+            std::slice::from_raw_parts(
+                p_ranges as *const VkImageSubresourceRange,
+                range_count as usize,
+            )
+        }
+        .iter()
+        .map(|range| SubresourceRange {
+            base_mip_level: range.base_mip_level,
+            level_count: range.level_count,
+            base_array_layer: range.base_array_layer,
+            layer_count: range.layer_count,
+        })
+        .collect()
+    };
     ShimState::with_device(|device| {
-        let _ = record::cmd_clear_color_image(device, command_buffer, image, color.float32);
+        let _ =
+            record::cmd_clear_color_image(device, command_buffer, image, color.float32, &ranges);
     });
 }
 

@@ -346,6 +346,9 @@ impl<'a> Decoder<'a> {
                     d.f32_finite("clear-rect b")?,
                     d.f32_finite("clear-rect a")?,
                 ],
+                base_array_layer: d.u32()?,
+                layer_count: d.u32()?,
+                mip_level: d.u32()?,
             },
             etag::DRAW => Enc::Draw {
                 vertex_count: d.u32()?,

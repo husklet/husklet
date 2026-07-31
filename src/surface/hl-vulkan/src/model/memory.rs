@@ -72,6 +72,56 @@ pub struct ImageRec {
     pub is_render_target: bool,
 }
 
+/// A `VkImageSubresourceRange`'s mip and array-layer extent, with Vulkan's `VK_REMAINING_*` sentinels
+/// already resolved against the image they name.
+///
+/// The sentinels are resolved at construction rather than at each use so no caller can forget: the value
+/// that reaches the recorder is always a concrete run of levels and layers.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SubresourceRange {
+    pub base_mip_level: u32,
+    pub level_count: u32,
+    pub base_array_layer: u32,
+    pub layer_count: u32,
+}
+
+impl SubresourceRange {
+    /// `VK_REMAINING_MIP_LEVELS` / `VK_REMAINING_ARRAY_LAYERS`.
+    pub const REMAINING: u32 = u32::MAX;
+
+    /// Resolve a raw range against `image`, clamping each run to the levels and layers that exist. A range
+    /// naming nothing that exists resolves to a zero-length run, which records no work.
+    pub fn resolve(image: &ImageRec, range: Self) -> Self {
+        let levels = range.remaining(range.base_mip_level, range.level_count, image.mip_levels);
+        let layers = range.remaining(range.base_array_layer, range.layer_count, image.layers);
+        Self {
+            base_mip_level: range.base_mip_level.min(image.mip_levels),
+            level_count: levels,
+            base_array_layer: range.base_array_layer.min(image.layers),
+            layer_count: layers,
+        }
+    }
+
+    fn remaining(&self, base: u32, count: u32, available: u32) -> u32 {
+        let rest = available.saturating_sub(base);
+        if count == Self::REMAINING {
+            rest
+        } else {
+            count.min(rest)
+        }
+    }
+
+    /// The whole image — the range a caller means when it clears without naming a subresource.
+    pub fn whole(image: &ImageRec) -> Self {
+        Self {
+            base_mip_level: 0,
+            level_count: image.mip_levels,
+            base_array_layer: 0,
+            layer_count: image.layers,
+        }
+    }
+}
+
 /// One `VkSampler`: the backing hl-GPU sampler id. Mirrors `MVKSampler`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct SamplerRec {
@@ -424,7 +474,9 @@ mod vertex_format_tests {
             (f::R32G32B32_SFLOAT, 3),
             (f::R32G32B32A32_SFLOAT, 4),
         ] {
-            let wire = VertexFormat(format).wire().expect("a core float format lowers");
+            let wire = VertexFormat(format)
+                .wire()
+                .expect("a core float format lowers");
             assert_eq!(
                 decode(wire),
                 (comps, VertexFormat::F32, false, false),

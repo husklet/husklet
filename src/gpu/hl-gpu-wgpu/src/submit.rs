@@ -214,10 +214,20 @@ impl WgpuExecutor {
                     w,
                     h,
                     color,
+                    base_array_layer,
+                    layer_count,
+                    mip_level,
                 } => {
                     let (fmt, tw, th) = {
                         let t = texture::WgpuTexture::get(res, *texture)?;
-                        (t.format, t.width, t.height)
+                        // Clamp against the addressed MIP LEVEL's extent, not the base level's. Using the
+                        // base extent would let a clear of a small level overhang its own bounds and be
+                        // rejected by `write_region`, where the contract is to clamp.
+                        (
+                            t.format,
+                            (t.width >> *mip_level).max(1),
+                            (t.height >> *mip_level).max(1),
+                        )
                     };
                     // Clamp the rect to the texture, exactly as the CPU oracle's `clear_rect` does: a rect
                     // that runs past the texture edge fills ONLY the covered sub-rectangle. Without this the
@@ -230,13 +240,30 @@ impl WgpuExecutor {
                     let y0 = (*y).min(th);
                     let cw = x.saturating_add(*w).min(tw).saturating_sub(x0);
                     let ch = y.saturating_add(*h).min(th).saturating_sub(y0);
-                    if cw != 0 && ch != 0 {
+                    if cw != 0 && ch != 0 && *layer_count != 0 {
                         let texel = Format::from(fmt).clear_texel(*color)?;
-                        let mut data = Vec::with_capacity(texel.len() * cw as usize * ch as usize);
-                        for _ in 0..(cw as usize * ch as usize) {
+                        let texels = (cw as usize)
+                            .checked_mul(ch as usize)
+                            .and_then(|plane| plane.checked_mul(*layer_count as usize))
+                            .ok_or(GpuError::OutOfBounds)?;
+                        let mut data = Vec::with_capacity(texel.len() * texels);
+                        for _ in 0..texels {
                             data.extend_from_slice(&texel);
                         }
-                        self.write_region(res, *texture, x0, y0, 0, cw, ch, 1, 0, &data)?;
+                        // `write_region` fills `depth` destination layers starting at `origin.z`, so the
+                        // layer run is one upload rather than a loop.
+                        self.write_region(
+                            res,
+                            *texture,
+                            x0,
+                            y0,
+                            *base_array_layer,
+                            cw,
+                            ch,
+                            *layer_count,
+                            *mip_level,
+                            &data,
+                        )?;
                     }
                     i += 1;
                 }

@@ -126,6 +126,8 @@ impl CpuExecutor {
                     cur_targets.clear();
                     cur_depth = None;
                 }
+                // Only the base subresource reaches here: `validate` refuses any other, because this
+                // oracle materializes exactly one plane per texture and has nowhere else to write.
                 Enc::ClearRect {
                     texture,
                     x,
@@ -133,6 +135,9 @@ impl CpuExecutor {
                     w,
                     h,
                     color,
+                    base_array_layer: _,
+                    layer_count: _,
+                    mip_level: _,
                 } => {
                     raster::clear_rect(res, *texture, *x, *y, *w, *h, *color)?;
                 }

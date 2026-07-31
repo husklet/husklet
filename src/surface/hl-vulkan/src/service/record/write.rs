@@ -19,6 +19,11 @@ pub fn cmd_clear_attachment_rect(
         "vkCmdClearAttachments: not inside a render pass",
     ))?;
     rec.enc.push(Enc::ClearRect {
+        // A mid-pass attachment clear addresses the render target the pass is bound to, which is already
+        // a single resolved subresource — hence the base level and one layer.
+        base_array_layer: 0,
+        layer_count: 1,
+        mip_level: 0,
         texture,
         x,
         y,

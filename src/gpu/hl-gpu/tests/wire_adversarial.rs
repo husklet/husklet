@@ -86,6 +86,9 @@ fn every_encoder_op() -> Vec<Enc> {
             w: 2,
             h: 2,
             color: [1.0, 0.0, 0.0, 1.0],
+            base_array_layer: 0,
+            layer_count: 1,
+            mip_level: 0,
         },
         Enc::Draw {
             vertex_count: 3,

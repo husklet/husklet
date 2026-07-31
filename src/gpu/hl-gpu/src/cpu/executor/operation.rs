@@ -119,10 +119,27 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
         // reference is any `u32`; the executor applies it to the draws that follow (see `submit`).
         Enc::SetStencilReference { .. } => {}
         Enc::SetBlendConstant { .. } => {}
-        Enc::ClearRect { texture, color, .. } => {
+        Enc::ClearRect {
+            texture,
+            color,
+            base_array_layer,
+            layer_count,
+            mip_level,
+            ..
+        } => {
             let t = crate::cpu::model::texture(res, *texture)?;
             if t.desc.sample_count != 1 {
                 return Err(GpuError::Unsupported("software: multisample clear"));
+            }
+            // This oracle materializes level 0 of layer 0 and nothing else (`CpuTexture::pixels` is a
+            // single tight-packed plane). Writing that plane in response to a clear of some other
+            // subresource is exactly the defect these fields were added to fix, so a subresource this
+            // backend cannot address is refused here — before any op in the batch runs — rather than
+            // silently redirected.
+            if *base_array_layer != 0 || *layer_count != 1 || *mip_level != 0 {
+                return Err(GpuError::Unsupported(
+                    "software: clear of a non-base image subresource",
+                ));
             }
             // Pack the clear color HERE so a format the oracle cannot clear is rejected before any op in
             // this command buffer runs: an unclearable format discovered mid-execution would leave earlier
