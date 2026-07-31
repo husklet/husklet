@@ -838,6 +838,17 @@ correct side, once forty differences were the harness's own rounding ties, and o
 wrong framings before the third was right. Budget for that gap; a disagreement is a location, not a
 diagnosis.
 
+A single case's log from inside a batched run is not evidence about that case. One trace showed an object
+generator returning a null name with no error — a clean, specific, specification-violating story that
+explained several failing groups at once and matched a known-defect note. Probing the driver directly
+showed the entry point working perfectly; the zeros came from a context wedged earlier in the same process.
+The story was coherent and it was about the neighbours.
+
+Returning a type's default on a failure path makes "could not reach the subject" indistinguishable from
+"the subject answered zero". A context that could not be acquired returned zero from every entry point,
+including an impossible value from a status query and an empty error queue — because the error register
+lived behind the very thing that could not be reached.
+
 An incoherent profile is evidence about the instrument. A driver scoring ninety-seven percent on blending
 and a hundred percent on the shader API while scoring zero on drawing is not a coherent picture of a
 driver, and it was reported as one for hours. When results are internally implausible, suspect the harness
