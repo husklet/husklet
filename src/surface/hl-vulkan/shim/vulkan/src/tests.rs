@@ -449,9 +449,14 @@ fn instance_clamps_an_api_request_above_the_advertised_version() {
     crate::instance::vkDestroyInstance(output, core::ptr::null());
 }
 
-/// A different `variant` is a different API (Vulkan SC), which no clamp can substitute for.
+/// An implementation advertising Vulkan 1.1 or later must never answer `vkCreateInstance` with
+/// `VK_ERROR_INCOMPATIBLE_DRIVER` — that result belongs to the 1.0 era, before an application could ask
+/// `vkEnumerateInstanceVersion` first. A nonzero `variant` names a different API (Vulkan SC), but choosing
+/// between implementations is the loader's job and is settled before the call reaches this ICD, so
+/// refusing it here only rejected an application this driver could serve. The recorded version is this
+/// driver's own, which is what the physical device reports for the caller to gate on.
 #[test]
-fn instance_rejects_a_foreign_api_variant_without_replacing_state() {
+fn instance_accepts_a_foreign_api_variant_and_records_its_own_version() {
     let _g = test_guard();
     crate::state::StateStore::with(|state| {
         state.instance = Some(hl_vulkan::Instance::new(make_api_version(0, 1, 0, 0)));
@@ -483,15 +488,16 @@ fn instance_rejects_a_foreign_api_variant_without_replacing_state() {
             core::ptr::null(),
             &mut output,
         ),
-        VK_ERROR_INCOMPATIBLE_DRIVER
+        VK_SUCCESS
     );
-    assert!(output.is_null());
+    assert!(!output.is_null());
     assert_eq!(
         crate::state::StateStore::with(|state| {
             state.instance.as_ref().unwrap().app_api_version
         }),
         make_api_version(0, 1, 0, 0)
     );
+    crate::instance::vkDestroyInstance(output, core::ptr::null());
 }
 
 #[test]

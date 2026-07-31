@@ -27,12 +27,20 @@ pub extern "C" fn vkCreateInstance(
     // and reads 1.3 from `vkGetPhysicalDeviceProperties`. Rejecting instead (which this did) made lowering
     // the advertised version look like it would break every modern client, and it would have.
     //
-    // A different VARIANT is a different API (Vulkan SC, not Vulkan), and no clamp can substitute for it.
-    const VARIANT: u32 = 29;
-    if app_api >> VARIANT != HL_API_VERSION >> VARIANT {
-        return VK_ERROR_INCOMPATIBLE_DRIVER;
-    }
-    StateStore::with(|s| s.instance = Some(Instance::new(app_api.min(HL_API_VERSION))));
+    // The variant field is NOT ours to reject either. An implementation advertising Vulkan 1.1 or later
+    // must never answer `vkCreateInstance` with `VK_ERROR_INCOMPATIBLE_DRIVER`: that result belongs to the
+    // 1.0 era, when there was no `vkEnumerateInstanceVersion` for an application to ask first. Choosing
+    // between a Vulkan and a Vulkan SC implementation is the loader's job, and it is done before a call
+    // ever reaches this ICD, so refusing a nonzero variant here only rejected an application that named a
+    // version this driver was perfectly able to serve. The instance still records the version this driver
+    // really implements, which is what `vkGetPhysicalDeviceProperties` reports back for the caller to gate
+    // on.
+    let variant = HL_API_VERSION & (0x7 << 29);
+    StateStore::with(|s| {
+        s.instance = Some(Instance::new(
+            (app_api & !(0x7 << 29) | variant).min(HL_API_VERSION),
+        ))
+    });
     let token = Dispatchable::new(());
     unsafe { *p_instance = token };
     VK_SUCCESS
