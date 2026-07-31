@@ -385,3 +385,36 @@ fn egl_get_display_keeps_the_app_wl_display_and_a_null_never_clears_it() {
     );
     assert_eq!(GlobalState::access(|s| s.app_display), APP_DISPLAY);
 }
+
+/// The present-route counters are the guard this driver did not have: `swap` decided the route every
+/// frame and discarded it, so a window whose frames had all degraded to a `glReadPixels` readback still
+/// presented correct pixels and passed every rung that only judges pixels. `eglQueryString` reports them
+/// so a probe can assert the route, and an unrecognized name must still be `EGL_BAD_PARAMETER`.
+#[test]
+fn present_route_is_queryable_and_counts_the_degraded_readback() {
+    let dpy = DISPLAY_TOKEN as *mut c_void;
+    let read = || {
+        let answer = eglQueryString(dpy, EGL_PRESENT_ROUTE_HL);
+        assert!(!answer.is_null(), "the route query must answer");
+        unsafe { std::ffi::CStr::from_ptr(answer) }
+            .to_str()
+            .expect("route is utf-8")
+            .to_owned()
+    };
+
+    let before = read();
+    assert!(
+        before.starts_with("native=") && before.contains(" readback="),
+        "unexpected route string {before:?}"
+    );
+    let readback_before = present::PresentStats::counts().1;
+
+    // A degraded window frame must move the readback counter — that is the whole assertion a rung makes.
+    present::PresentStats::record_readback(0xABCD);
+    assert_eq!(present::PresentStats::counts().1, readback_before + 1);
+    assert_eq!(read(), format!("native={} readback={}", present::PresentStats::counts().0, readback_before + 1));
+
+    // The new name must not have weakened the spec'd rejection of an unknown one.
+    assert!(eglQueryString(dpy, 0x1234).is_null());
+    assert_eq!(eglGetError(), EGL_BAD_PARAMETER);
+}

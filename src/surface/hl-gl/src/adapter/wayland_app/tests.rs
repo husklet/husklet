@@ -308,7 +308,8 @@ fn bringup_derives_display_and_binds_shm_on_private_queue() {
 #[test]
 fn present_marshals_pool_buffer_attach_damage_commit_flush() {
     let rec = Box::new(Recorder::new());
-    let mut p = WaylandAppPresenter::with_abi(rec, SURFACE, core::ptr::null_mut()).expect("bring-up");
+    let mut p =
+        WaylandAppPresenter::with_abi(rec, SURFACE, core::ptr::null_mut()).expect("bring-up");
     let surface_wrapper = p.surface_wrapper as usize;
     // Clear the bring-up trace to focus on the frame.
     unsafe { &*(std::ptr::addr_of!(*p.abi) as *const Recorder) }
@@ -364,7 +365,8 @@ fn present_marshals_pool_buffer_attach_damage_commit_flush() {
 #[test]
 fn second_frame_retires_the_previous_buffer() {
     let rec = Box::new(Recorder::new());
-    let mut p = WaylandAppPresenter::with_abi(rec, SURFACE, core::ptr::null_mut()).expect("bring-up");
+    let mut p =
+        WaylandAppPresenter::with_abi(rec, SURFACE, core::ptr::null_mut()).expect("bring-up");
     p.present(&xrgb(2, 2), 2, 2).expect("frame 1");
     unsafe { &*(std::ptr::addr_of!(*p.abi) as *const Recorder) }
         .log
@@ -442,7 +444,8 @@ fn null_surface_is_soft_no_surface() {
 #[test]
 fn short_plane_is_hard_bad_size() {
     let rec = Box::new(Recorder::new());
-    let mut p = WaylandAppPresenter::with_abi(rec, SURFACE, core::ptr::null_mut()).expect("bring-up");
+    let mut p =
+        WaylandAppPresenter::with_abi(rec, SURFACE, core::ptr::null_mut()).expect("bring-up");
     let err = p.present(&[0u8; 4], 4, 4).unwrap_err();
     assert_eq!(err, WlAppError::BadSize);
     assert!(
@@ -456,7 +459,8 @@ fn short_plane_is_hard_bad_size() {
 fn null_constructor_is_hard_marshal_error() {
     let mut rec = Recorder::new();
     rec.fail_pool = true;
-    let mut p = WaylandAppPresenter::with_abi(Box::new(rec), SURFACE, core::ptr::null_mut()).expect("bring-up");
+    let mut p = WaylandAppPresenter::with_abi(Box::new(rec), SURFACE, core::ptr::null_mut())
+        .expect("bring-up");
     let err = p.present(&xrgb(2, 2), 2, 2).unwrap_err();
     assert_eq!(err, WlAppError::Marshal);
     assert!(!err.is_unavailable());

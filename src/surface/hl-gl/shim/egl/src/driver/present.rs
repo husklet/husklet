@@ -1,6 +1,7 @@
 use super::*;
 use crate::state::SurfaceInfo;
 use hl_gl::model::context::SurfaceKind;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 struct Prepared {
     info: SurfaceInfo,
@@ -12,6 +13,59 @@ struct Prepared {
 struct Submitted {
     pixels: Option<Vec<u8>>,
     frame: bool,
+}
+
+/// Which route each presented frame actually took, since process start.
+///
+/// `swap` already decides this every frame and used to discard it, which is precisely how a window that
+/// silently stopped presenting zero-copy — every frame degraded to a `glReadPixels` readback onto the
+/// shim's own mirror window — passed a 115-frame run, the rung-0 clients, `eglinfo` and glmark2. Correct
+/// pixels by the wrong route is invisible to any check that only looks at pixels. These counters make it
+/// assertable: a window client that is accelerated ends with `readback=0`.
+pub(crate) struct PresentStats;
+
+/// Window frames committed on the app's own surface with no readback (the accelerated route).
+static NATIVE_FRAMES: AtomicU64 = AtomicU64::new(0);
+/// Window frames that went through a `glReadPixels` readback because the app-surface presenter had no
+/// native frame to reserve. On a window surface this is always a degradation, never a normal route.
+static READBACK_FRAMES: AtomicU64 = AtomicU64::new(0);
+
+impl PresentStats {
+    pub(crate) fn record_native() {
+        NATIVE_FRAMES.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Count a degraded window frame, and say so ONCE per process at `error` — the one level a release
+    /// build keeps. Per-frame logging would drown the app; staying silent is what hid this for so long.
+    pub(crate) fn record_readback(wl_surface: usize) {
+        if READBACK_FRAMES.fetch_add(1, Ordering::Relaxed) != 0 {
+            return;
+        }
+        hl_log::hl_error!(
+            hl_log::tag::PRESENT,
+            "window surface is presenting by glReadPixels readback, not zero-copy: no native frame \
+             was reservable on wl_surface={:#x}. Pixels stay correct; acceleration does not.",
+            wl_surface
+        );
+    }
+
+    pub(crate) fn counts() -> (u64, u64) {
+        (
+            NATIVE_FRAMES.load(Ordering::Relaxed),
+            READBACK_FRAMES.load(Ordering::Relaxed),
+        )
+    }
+
+    /// The route a presented frame took. A window surface with no native frame reserved is the degraded
+    /// readback route; anything else (pbuffer, surfaceless, a frame the submit never produced) is not
+    /// this counter's business.
+    fn record(prepared: &Prepared, wl_surface: usize) {
+        if prepared.native.is_some() {
+            Self::record_native();
+        } else if prepared.app_surface {
+            Self::record_readback(wl_surface);
+        }
+    }
 }
 
 pub(super) fn swap(display: usize, token: usize) -> u32 {
@@ -93,6 +147,11 @@ pub(super) fn swap(display: usize, token: usize) -> u32 {
             return EGL_FALSE;
         }
     };
+    // Account the route this frame actually took, now that the submit says a frame was produced. A window
+    // surface with no native frame reserved is the degraded readback route — see [`PresentStats`].
+    if submitted.frame {
+        PresentStats::record(&prepared, info.wl_surface);
+    }
     GlobalState::access(|state| {
         if let Some(frame) = prepared.native {
             if submitted.frame

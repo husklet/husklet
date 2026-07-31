@@ -115,6 +115,11 @@ const EGL_VERSION_Q: i32 = 0x3054;
 const EGL_EXTENSIONS_Q: i32 = 0x3055;
 const EGL_CLIENT_APIS: i32 = 0x308D;
 const EGL_NONE: i32 = 0x3038;
+/// `eglQueryString` name for this driver's present-route counters, as `"native=<n> readback=<n>"`. A
+/// vendor-private value OUTSIDE the Khronos `0x3000`-`0x3FFF` enum block, so it can never collide with a
+/// registered EGL enum. Lets a probe read the route without new entry points: an accelerated window
+/// client ends with `readback=0`.
+const EGL_PRESENT_ROUTE_HL: i32 = 0x484C_0001;
 const EGL_CONTEXT_OPENGL_ROBUST_ACCESS_EXT: i32 = 0x30BF;
 const EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT: i32 = 0x3138;
 const EGL_CONTEXT_OPENGL_NO_ERROR_KHR: i32 = 0x31B3;
@@ -377,6 +382,7 @@ pub extern "C" fn eglQueryString(dpy: *mut c_void, name: i32) -> *const c_char {
         EGL_VERSION_Q => b"1.4 hl-gl\0".as_ptr() as *const c_char,
         EGL_CLIENT_APIS => b"OpenGL_ES\0".as_ptr() as *const c_char,
         EGL_EXTENSIONS_Q => Extensions::get(dpy.is_null()),
+        EGL_PRESENT_ROUTE_HL => PresentRoute::get(),
         // EGL 1.4 §3.3: an unrecognized name is EGL_BAD_PARAMETER and returns NULL. The empty string told
         // the caller the query succeeded and the answer was "nothing".
         _ => {
@@ -406,5 +412,28 @@ impl Extensions {
             CString::new(s).unwrap_or_default()
         })
         .as_ptr()
+    }
+}
+
+/// The NUL-terminated `EGL_PRESENT_ROUTE_HL` string. Unlike the extension strings this one changes as
+/// frames present, so it is rebuilt per query and kept alive in a thread-local until that thread's next
+/// query — the usual lifetime an `eglQueryString` pointer carries.
+struct PresentRoute;
+
+impl PresentRoute {
+    fn get() -> *const c_char {
+        use std::cell::RefCell;
+        use std::ffi::CString;
+        thread_local! {
+            static ANSWER: RefCell<CString> = RefCell::new(CString::default());
+        }
+        let (native, readback) = present::PresentStats::counts();
+        ANSWER.with(|cell| {
+            let text = format!("native={native} readback={readback}");
+            let owned = CString::new(text).unwrap_or_default();
+            let pointer = owned.as_ptr();
+            *cell.borrow_mut() = owned;
+            pointer
+        })
     }
 }
