@@ -198,7 +198,11 @@ fn khr_import_accepts_the_image_preserved_attribute() {
         let token = unsafe {
             Images::default().import_khr(EGL_LINUX_DMA_BUF_EXT, attributes.as_ptr(), false)
         };
-        assert_eq!(token.is_some(), importable, "EGL_IMAGE_PRESERVED_KHR={preserved}");
+        assert_eq!(
+            token.is_some(),
+            importable,
+            "EGL_IMAGE_PRESERVED_KHR={preserved}"
+        );
     }
     std::fs::remove_file(path).unwrap();
 }
@@ -355,4 +359,65 @@ fn external_import_rejects_noncanonical_allocation() {
         .import(EGL_LINUX_DMA_BUF_EXT, attributes.as_ptr(), true)
         .is_none());
     std::fs::remove_file(path).unwrap();
+}
+
+/// A refused Husklet-modifier import must NAME the check that refused it.
+///
+/// This is the one import branch that runs only under native presentation, and every rejection in it
+/// used to collapse into a bare `None` — no debug line, no log, just `EGL_BAD_ATTRIBUTE` at the caller.
+/// That is why a Chromium whose every buffer import failed could only be diagnosed by interposing on the
+/// driver. The refusal itself is correct and is NOT widened here; only its silence is fixed.
+#[test]
+fn refused_external_import_names_the_check_that_refused_it() {
+    let plane = 32u64 * 2;
+    let canonical = plane + hl_surface_protocol::buffer::HEADER_LEN as u64;
+
+    // An allocation larger than the canonical layout: correctly refused, and the reason must say so.
+    let (file, path) = image_file();
+    let oversized = canonical + 64;
+    file.set_len(oversized).unwrap();
+    let mut header = Header::new(51, 4, 2, DRM_FORMAT_ARGB8888, 32, canonical)
+        .unwrap()
+        .encode()
+        .unwrap();
+    header[56..64].copy_from_slice(&oversized.to_le_bytes());
+    file.write_all_at(&header, plane).unwrap();
+    let attributes = Attributes {
+        width: 4,
+        height: 2,
+        fourcc: DRM_FORMAT_ARGB8888,
+        fd: file.as_raw_fd(),
+        offset: hl_surface_protocol::buffer::PLANE_OFFSET,
+        stride: 32,
+        modifier: MODIFIER,
+    };
+    let owned = file.try_clone().unwrap().into();
+    let reason = Images::default()
+        .external_header(&attributes, &owned)
+        .expect_err("an oversized allocation is refused");
+    // The header decoder catches this one before the field comparison does, and names the field it
+    // rejected — which is the point: the caller learns "allocation", not "no".
+    assert!(
+        reason.to_lowercase().contains("allocation"),
+        "the reason must name the allocation check: {reason}"
+    );
+    std::fs::remove_file(path).unwrap();
+
+    // A plane carrying the modifier but no Husklet header at all — the "not allocated by this driver"
+    // case, which is what an importer bringing a foreign dma-buf would hit.
+    let (foreign, foreign_path) = image_file();
+    foreign.set_len(plane).unwrap();
+    let owned = foreign.try_clone().unwrap().into();
+    let attributes = Attributes {
+        fd: foreign.as_raw_fd(),
+        ..attributes
+    };
+    let reason = Images::default()
+        .external_header(&attributes, &owned)
+        .expect_err("a header-less plane is refused");
+    assert!(
+        reason.contains("not allocated by this driver"),
+        "the reason must say the plane is foreign: {reason}"
+    );
+    std::fs::remove_file(foreign_path).unwrap();
 }

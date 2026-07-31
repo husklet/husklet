@@ -320,37 +320,34 @@ impl Images {
             }
         };
         let external = if attributes.modifier == MODIFIER {
-            let mut bytes = [0; hl_surface_protocol::buffer::HEADER_LEN];
-            let file = std::fs::File::from(fd.try_clone().ok()?);
-            let header_offset = u64::from(attributes.stride)
-                .checked_mul(u64::from(attributes.height))?
-                .checked_add(attributes.offset)?;
-            file.read_exact_at(&mut bytes, header_offset).ok()?;
-            let header = Header::decode(&bytes).ok()?;
-            let allocation_size = file.metadata().ok()?.len();
-            let expected_allocation =
-                header_offset.checked_add(hl_surface_protocol::buffer::HEADER_LEN as u64)?;
-            if header.width != attributes.width
-                || header.height != attributes.height
-                || header.fourcc != attributes.fourcc
-                || header.stride != attributes.stride
-                || header.plane_offset != attributes.offset
-                || header.plane_offset != hl_surface_protocol::buffer::PLANE_OFFSET
-                || header.allocation_size != expected_allocation
-                || allocation_size != expected_allocation
-            {
-                return None;
-            }
-            if let Some((canonical, _)) = self.external_tokens.get(&header.token) {
-                let mut canonical = *canonical;
-                let mut candidate = header;
-                canonical.serial = 0;
-                candidate.serial = 0;
-                if canonical != candidate {
+            match self.external_header(&attributes, &fd) {
+                Ok(header) => Some(header),
+                Err(reason) => {
+                    // This branch runs ONLY under native presentation, and until now every one of its
+                    // rejections collapsed into a bare `None` — no debug line, no log, just
+                    // `EGL_BAD_ATTRIBUTE` at the caller. That is why a refused import here could only be
+                    // diagnosed by interposing on the driver. Say which check refused, and at `error`,
+                    // because a client whose every buffer import fails is not a warning.
+                    if debug {
+                        eprintln!(
+                            "[hl-gl-shim] image-import reject target={target:#x} private_modifier: \
+                             {reason}"
+                        );
+                    }
+                    hl_log::hl_error!(
+                        hl_log::tag::EGL,
+                        "eglCreateImage refused a Husklet-modifier dma-buf: {}. The import was \
+                         {}x{} fourcc={:#x} stride={} offset={}.",
+                        reason,
+                        attributes.width,
+                        attributes.height,
+                        attributes.fourcc,
+                        attributes.stride,
+                        attributes.offset
+                    );
                     return None;
                 }
             }
-            Some(header)
         } else {
             None
         };
@@ -383,6 +380,108 @@ impl Images {
 
     /// Import through the `EGL_KHR_image_base` ABI, whose attribute list uses 32-bit `EGLint`
     /// entries even on 64-bit processes. `eglCreateImage` uses pointer-sized `EGLAttrib` instead.
+    /// Validate a Husklet-private-modifier plane against the header its allocator wrote, naming the
+    /// check that refused it.
+    ///
+    /// Every rejection here is a genuine refusal — the plane is not one this driver allocated, or not in
+    /// the canonical layout the compositor joins against a host IOSurface — and none of them may be
+    /// widened into an accept. What they must NOT be is anonymous: the reason is the whole diagnosis.
+    fn external_header(&self, attributes: &Attributes, fd: &OwnedFd) -> Result<Header, String> {
+        let file = std::fs::File::from(
+            fd.try_clone()
+                .map_err(|error| format!("the plane descriptor could not be cloned ({error})"))?,
+        );
+        let header_offset = u64::from(attributes.stride)
+            .checked_mul(u64::from(attributes.height))
+            .and_then(|plane| plane.checked_add(attributes.offset))
+            .ok_or_else(|| {
+                format!(
+                    "stride {} x height {} + offset {} overflows",
+                    attributes.stride, attributes.height, attributes.offset
+                )
+            })?;
+        let mut bytes = [0; hl_surface_protocol::buffer::HEADER_LEN];
+        file.read_exact_at(&mut bytes, header_offset).map_err(|error| {
+            format!(
+                "no {}-byte Husklet header at offset {header_offset} ({error}) — the plane carries the \
+                 Husklet modifier but was not allocated by this driver",
+                hl_surface_protocol::buffer::HEADER_LEN
+            )
+        })?;
+        let header = Header::decode(&bytes).map_err(|error| {
+            format!("the Husklet header at offset {header_offset} is malformed ({error:?})")
+        })?;
+        let allocation_size = file
+            .metadata()
+            .map_err(|error| format!("the plane's size could not be read ({error})"))?
+            .len();
+        let expected_allocation = header_offset
+            .checked_add(hl_surface_protocol::buffer::HEADER_LEN as u64)
+            .ok_or_else(|| format!("header offset {header_offset} + header length overflows"))?;
+
+        let mismatches = [
+            (
+                "width",
+                u64::from(header.width),
+                u64::from(attributes.width),
+            ),
+            (
+                "height",
+                u64::from(header.height),
+                u64::from(attributes.height),
+            ),
+            (
+                "fourcc",
+                u64::from(header.fourcc),
+                u64::from(attributes.fourcc),
+            ),
+            (
+                "stride",
+                u64::from(header.stride),
+                u64::from(attributes.stride),
+            ),
+            ("plane offset", header.plane_offset, attributes.offset),
+            (
+                "canonical plane offset",
+                header.plane_offset,
+                hl_surface_protocol::buffer::PLANE_OFFSET,
+            ),
+            (
+                "recorded allocation size",
+                header.allocation_size,
+                expected_allocation,
+            ),
+            (
+                "actual allocation size",
+                allocation_size,
+                expected_allocation,
+            ),
+        ];
+        if let Some((field, found, expected)) = mismatches
+            .into_iter()
+            .find(|(_, found, expected)| found != expected)
+        {
+            return Err(format!(
+                "{field} disagrees with the import: header says {found}, the import implies {expected}"
+            ));
+        }
+
+        if let Some((canonical, _)) = self.external_tokens.get(&header.token) {
+            let mut canonical = *canonical;
+            let mut candidate = header;
+            canonical.serial = 0;
+            candidate.serial = 0;
+            if canonical != candidate {
+                return Err(format!(
+                    "token {:#x} was already imported with a different layout; one token names one \
+                     allocation",
+                    header.token
+                ));
+            }
+        }
+        Ok(header)
+    }
+
     pub unsafe fn import_khr(
         &mut self,
         target: u32,
@@ -473,9 +572,7 @@ impl Attributes {
                 EGL_HEIGHT => height = u32::try_from(value).ok(),
                 EGL_LINUX_DRM_FOURCC_EXT => fourcc = u32::try_from(value).ok(),
                 EGL_DMA_BUF_PLANE0_FD_EXT => fd = i32::try_from(value).ok(),
-                EGL_DMA_BUF_PLANE0_OFFSET_EXT => {
-                    offset = u64::try_from(value).map_err(|_| None)?
-                }
+                EGL_DMA_BUF_PLANE0_OFFSET_EXT => offset = u64::try_from(value).map_err(|_| None)?,
                 EGL_DMA_BUF_PLANE0_PITCH_EXT => stride = u32::try_from(value).ok(),
                 EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT => modifier_lo = value as u32,
                 EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT => modifier_hi = value as u32,
