@@ -412,9 +412,57 @@ fn present_route_is_queryable_and_counts_the_degraded_readback() {
     // A degraded window frame must move the readback counter — that is the whole assertion a rung makes.
     present::PresentStats::record_readback(0xABCD);
     assert_eq!(present::PresentStats::counts().1, readback_before + 1);
-    assert_eq!(read(), format!("native={} readback={}", present::PresentStats::counts().0, readback_before + 1));
+    assert_eq!(
+        read(),
+        format!(
+            "native={} readback={}",
+            present::PresentStats::counts().0,
+            readback_before + 1
+        )
+    );
 
     // The new name must not have weakened the spec'd rejection of an unknown one.
     assert!(eglQueryString(dpy, 0x1234).is_null());
     assert_eq!(eglGetError(), EGL_BAD_PARAMETER);
+}
+
+/// A buffer size is untrusted guest input and must be refused at the boundary, before anything is
+/// allocated or marshalled.
+///
+/// `glBufferData(GL_ARRAY_BUFFER, 1 << 38, NULL, GL_STATIC_DRAW)` — one call — drove the HOST worker to
+/// 17.9 GiB RSS, left the machine with 75 MiB free, and on one run killed the workspace's execution
+/// domain outright. GLES 3.0 2.9.2 requires `GL_OUT_OF_MEMORY` for a data store the GL cannot create and
+/// `GL_INVALID_VALUE` for a negative size; neither was reported and neither bounded the allocation.
+#[test]
+fn an_absurd_buffer_size_is_refused_instead_of_allocated() {
+    use super::objects::BufferRequest;
+    const CEILING: u64 = 256 << 20;
+
+    // The reported reproduction: a quarter-terabyte reservation.
+    assert_eq!(
+        BufferRequest::refusal(1 << 38, CEILING),
+        Some(GL_OUT_OF_MEMORY),
+        "a size past the negotiated ceiling must be GL_OUT_OF_MEMORY"
+    );
+    assert_eq!(
+        BufferRequest::refusal(isize::MAX, CEILING),
+        Some(GL_OUT_OF_MEMORY)
+    );
+    // Negative sizes are GL_INVALID_VALUE, not out-of-memory and not a crash.
+    assert_eq!(BufferRequest::refusal(-1, CEILING), Some(GL_INVALID_VALUE));
+    assert_eq!(
+        BufferRequest::refusal(isize::MIN, CEILING),
+        Some(GL_INVALID_VALUE)
+    );
+    // The ceiling refuses, it does not forbid: ordinary sizes and the exact ceiling proceed.
+    assert_eq!(BufferRequest::refusal(0, CEILING), None);
+    assert_eq!(BufferRequest::refusal(64, CEILING), None);
+    assert_eq!(BufferRequest::refusal(CEILING as isize, CEILING), None);
+    assert_eq!(
+        BufferRequest::refusal(CEILING as isize + 1, CEILING),
+        Some(GL_OUT_OF_MEMORY)
+    );
+
+    // And the entry point itself survives the call rather than aborting the process.
+    glBufferData(0x8892, 1 << 38, core::ptr::null(), 0x88E4);
 }

@@ -154,6 +154,26 @@ pub extern "C" fn glBindBuffer(target: u32, buffer: u32) {
     GlobalState::context(|s| record::bind_buffer(&mut s.gl, target, buffer));
 }
 
+/// Whether a `glBufferData` size may be honoured at all.
+pub(crate) struct BufferRequest;
+
+impl BufferRequest {
+    /// The GL error a requested buffer size must be refused with, or `None` to proceed.
+    ///
+    /// GLES 3.0 2.9.2: a negative size is `GL_INVALID_VALUE` and a data store the GL cannot create is
+    /// `GL_OUT_OF_MEMORY`. The size is untrusted guest input, so this is decided BEFORE anything is
+    /// allocated or marshalled — `glBufferData(GL_ARRAY_BUFFER, 1 << 38, NULL, GL_STATIC_DRAW)` in one
+    /// call drove the HOST worker to 17.9 GiB RSS and killed the execution domain. The ceiling is the
+    /// executor's own negotiated `max_buffer_bytes`, so this refuses exactly what could not have been
+    /// served anyway.
+    pub(crate) fn refusal(size: isize, max_buffer_bytes: u64) -> Option<u32> {
+        if size < 0 {
+            return Some(GL_INVALID_VALUE);
+        }
+        (size as u64 > max_buffer_bytes).then_some(GL_OUT_OF_MEMORY)
+    }
+}
+
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBufferData(target: u32, size: isize, data: *const c_void, usage: u32) {
     crate::stub::trace(
@@ -171,6 +191,23 @@ pub extern "C" fn glBufferData(target: u32, size: isize, data: *const c_void, us
     // stayed false — and a draw whose vertex shader reads that VBO's attributes then lowered a render
     // pipeline that DECLARES vertex buffer 0 while binding none, which wgpu rejects at pass validation
     // (`MissingVertexBuffer`). Real data (`data != NULL`) is copied verbatim as before.
+    // GLES 3.0 2.9.2: a negative size is `GL_INVALID_VALUE`, and a data store the GL cannot create is
+    // `GL_OUT_OF_MEMORY`. Both must be decided BEFORE anything is allocated or marshalled: the size is
+    // untrusted guest input, and `glBufferData(GL_ARRAY_BUFFER, 1 << 38, NULL, GL_STATIC_DRAW)` — a single
+    // call — drove the HOST worker to 17.9 GiB RSS and killed the execution domain. Refusing at the
+    // boundary is the only place that cannot be reached by a guest.
+    let max_buffer_bytes = GlobalState::access(|state| state.max_buffer_bytes);
+    if let Some(error) = BufferRequest::refusal(size, max_buffer_bytes) {
+        if error == GL_OUT_OF_MEMORY {
+            hl_log::hl_error!(
+                hl_log::tag::GL,
+                "glBufferData refused {size} bytes: the negotiated executor accepts at most \
+                 {max_buffer_bytes}. Reporting GL_OUT_OF_MEMORY."
+            );
+        }
+        GlobalState::context(|s| s.gl.set_gl_error(error));
+        return;
+    }
     let d = if data.is_null() && size > 0 {
         // GLES3.0 2.9.2: a data store the GL cannot create is GL_OUT_OF_MEMORY, not a crash. The
         // reservation is driver-side arithmetic on a guest-supplied length, so allocate fallibly —

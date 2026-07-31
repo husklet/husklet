@@ -16,6 +16,11 @@ pub(super) struct IoDecl {
     /// `Some(_)` when the decl ALREADY declares `layout(location = …)` (parsed value, or `u32::MAX` when the
     /// value is a macro/non-integer) — such a decl is PRESERVED untouched and its location reserved.
     explicit_loc: Option<u32>,
+    /// How many CONSECUTIVE locations this declaration consumes. A matrix takes one location per COLUMN and
+    /// an array one per element, so `mat4` takes 4 and `vec4 corners[2]` takes 2. Reserving only the first
+    /// of them hands the next declaration a location the previous one is still using, which naga rejects as
+    /// `BindingCollision` — the program then links, draws with no error, and paints nothing.
+    span: u32,
 }
 
 /// A precision qualifier that may sit between the `in`/`out` storage keyword and the type (`in highp vec4`).
@@ -91,7 +96,7 @@ impl Declarations<'_> {
                 line_start = false;
                 let word = &src[start..i];
                 if brace == 0 && paren == 0 && (word == "in" || word == "out") {
-                    if let Some(name) = Self::parse_io_decl_forward(b, i) {
+                    if let Some((name, span)) = Self::parse_io_decl_forward(b, i) {
                         let (stmt_start, merge_rparen, explicit_loc) =
                             Self::preceding_io_qualifiers(b, start);
                         out.push(IoDecl {
@@ -100,6 +105,7 @@ impl Declarations<'_> {
                             stmt_start,
                             merge_rparen,
                             explicit_loc,
+                            span,
                         });
                     }
                 }
@@ -115,7 +121,7 @@ impl Declarations<'_> {
     /// `[precision] TYPE NAME [ [array] ] ;` and return the declared NAME. Returns `None` for an interface
     /// BLOCK (`… NAME {`), an initializer (`… = …`), or any shape that is not a plain varying/attribute/output
     /// (so a stray `in`/`out` is never rewritten).
-    pub(super) fn parse_io_decl_forward(b: &[u8], q: usize) -> Option<String> {
+    pub(super) fn parse_io_decl_forward(b: &[u8], q: usize) -> Option<(String, u32)> {
         let n = b.len();
         let mut p = q;
         let read_word = |p: &mut usize| -> String {
@@ -142,10 +148,13 @@ impl Declarations<'_> {
         while p < n && Tokens::is_space(b[p]) {
             p += 1;
         }
+        let mut elements = 1u32;
         if p < n && b[p] == b'[' {
+            let open = p;
             while p < n && b[p] != b']' {
                 p += 1;
             }
+            elements = Self::parse_array_length(&b[open + 1..p.min(n)]);
             if p < n {
                 p += 1; // consume ']'
             }
@@ -164,9 +173,11 @@ impl Declarations<'_> {
         }
         // An optional array suffix `[ … ]`.
         if p < n && b[p] == b'[' {
+            let open = p;
             while p < n && b[p] != b']' {
                 p += 1;
             }
+            elements = Self::parse_array_length(&b[open + 1..p.min(n)]);
             if p < n {
                 p += 1; // consume ']'
             }
@@ -176,10 +187,43 @@ impl Declarations<'_> {
         }
         // Must terminate at `;` (no initializer, no comma-list — Skia declares one varying per statement).
         if p < n && b[p] == b';' {
-            Some(name)
+            Some((name, Self::location_span(&ty, elements)))
         } else {
             None
         }
+    }
+
+    /// The array length inside a `[ … ]` subscript. A non-integer extent (a macro or a `const` expression)
+    /// is unknowable here and yields 1 — the same single location the allocator reserved before, so such a
+    /// declaration is no worse off than it was.
+    fn parse_array_length(inner: &[u8]) -> u32 {
+        let text: String = inner
+            .iter()
+            .copied()
+            .filter(|byte| !byte.is_ascii_whitespace())
+            .map(char::from)
+            .collect();
+        text.parse::<u32>().ok().filter(|&n| n > 0).unwrap_or(1)
+    }
+
+    /// How many consecutive interface locations a declaration of `ty` with `elements` array elements
+    /// consumes.
+    ///
+    /// A vector or scalar takes one. A matrix takes one per COLUMN — `matCxR` has `C` columns, so `mat4`
+    /// and `mat4x2` both take 4 — and an array multiplies by its length. This is the count naga assigns
+    /// when it expands the declaration, so anything less leaves the next declaration overlapping it.
+    fn location_span(ty: &str, elements: u32) -> u32 {
+        let columns = match ty.strip_prefix("mat") {
+            // `matC` is CxC; `matCxR` has C columns. Either way the first digit is the column count.
+            Some(rest) => rest
+                .as_bytes()
+                .first()
+                .and_then(|byte| char::from(*byte).to_digit(10))
+                .filter(|&c| (2..=4).contains(&c))
+                .unwrap_or(1),
+            None => 1,
+        };
+        columns.saturating_mul(elements.max(1)).max(1)
     }
 
     /// Walk backward from an `in`/`out` keyword over its preceding qualifier tokens (interpolation / precision /
@@ -317,28 +361,45 @@ impl StageSources<'_> {
         let vsd = Declarations::scan_io_decls(vs);
         let fsd = Declarations::scan_io_decls(fs);
 
-        // Lowest free location not yet used in `used`, then reserve it.
-        let take = |used: &mut BTreeSet<u32>| -> u32 {
-            let mut c = 0u32;
-            while used.contains(&c) {
-                c += 1;
+        // Lowest run of `span` consecutive free locations, then reserve the WHOLE run. A matrix or array
+        // occupies one location per column/element; reserving only its first hands the next declaration a
+        // location still in use, which naga rejects as `BindingCollision`.
+        let take = |used: &mut BTreeSet<u32>, span: u32| -> u32 {
+            let span = span.max(1);
+            let mut base = 0u32;
+            while (base..base + span).any(|l| used.contains(&l)) {
+                base += 1;
             }
-            used.insert(c);
-            c
+            used.extend(base..base + span);
+            base
+        };
+
+        // Reserve every location an explicitly-numbered declaration occupies, not just its first.
+        let reserve = |used: &mut BTreeSet<u32>, at: u32, span: u32| {
+            used.extend(at..at.saturating_add(span.max(1)));
         };
 
         // Reserve explicitly-numbered locations so a bare decl never collides with them.
-        let mut attr_used: BTreeSet<u32> = vsd
-            .iter()
-            .filter(|d| d.is_in)
-            .filter_map(|d| d.explicit_loc.filter(|&l| l != u32::MAX))
-            .collect();
-        attr_used.extend(attribute_bindings.values().copied());
-        let mut fs_out_used: BTreeSet<u32> = fsd
-            .iter()
-            .filter(|d| !d.is_in)
-            .filter_map(|d| d.explicit_loc.filter(|&l| l != u32::MAX))
-            .collect();
+        let mut attr_used: BTreeSet<u32> = BTreeSet::new();
+        for d in vsd.iter().filter(|d| d.is_in) {
+            if let Some(l) = d.explicit_loc.filter(|&l| l != u32::MAX) {
+                reserve(&mut attr_used, l, d.span);
+            }
+        }
+        // A `glBindAttribLocation` binding occupies the same span its declaration does.
+        for (name, at) in attribute_bindings {
+            let span = vsd
+                .iter()
+                .find(|d| d.is_in && &d.name == name)
+                .map_or(1, |d| d.span);
+            reserve(&mut attr_used, *at, span);
+        }
+        let mut fs_out_used: BTreeSet<u32> = BTreeSet::new();
+        for d in fsd.iter().filter(|d| !d.is_in) {
+            if let Some(l) = d.explicit_loc.filter(|&l| l != u32::MAX) {
+                reserve(&mut fs_out_used, l, d.span);
+            }
+        }
 
         // Shared varying map (name → location) seeded from explicit vertex-`out` / fragment-`in` decls.
         let mut varying_map: BTreeMap<String, u32> = BTreeMap::new();
@@ -346,25 +407,25 @@ impl StageSources<'_> {
         for d in vsd.iter().filter(|d| !d.is_in) {
             if let Some(l) = d.explicit_loc.filter(|&l| l != u32::MAX) {
                 varying_map.entry(d.name.clone()).or_insert(l);
-                varying_used.insert(l);
+                reserve(&mut varying_used, l, d.span);
             }
         }
         for d in fsd.iter().filter(|d| d.is_in) {
             if let Some(l) = d.explicit_loc.filter(|&l| l != u32::MAX) {
                 varying_map.entry(d.name.clone()).or_insert(l);
-                varying_used.insert(l);
+                reserve(&mut varying_used, l, d.span);
             }
         }
         // Assign bare varyings: vertex `out` in declaration order, then any fragment-only `in`.
         for d in vsd.iter().filter(|d| !d.is_in && d.explicit_loc.is_none()) {
             varying_map
                 .entry(d.name.clone())
-                .or_insert_with(|| take(&mut varying_used));
+                .or_insert_with(|| take(&mut varying_used, d.span));
         }
         for d in fsd.iter().filter(|d| d.is_in && d.explicit_loc.is_none()) {
             varying_map
                 .entry(d.name.clone())
-                .or_insert_with(|| take(&mut varying_used));
+                .or_insert_with(|| take(&mut varying_used, d.span));
         }
 
         // Emit per-stage edits (position, inserted text) in declaration order.
@@ -383,7 +444,7 @@ impl StageSources<'_> {
                 attribute_bindings
                     .get(&d.name)
                     .copied()
-                    .unwrap_or_else(|| take(&mut attr_used))
+                    .unwrap_or_else(|| take(&mut attr_used, d.span))
             } else {
                 varying_map[&d.name]
             };
@@ -397,7 +458,7 @@ impl StageSources<'_> {
             let loc = if d.is_in {
                 varying_map[&d.name]
             } else {
-                take(&mut fs_out_used)
+                take(&mut fs_out_used, d.span)
             };
             fs_edits.push(edit_for(d, loc));
         }

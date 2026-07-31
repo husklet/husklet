@@ -144,3 +144,91 @@ fn prepare_verbatim_program_wraps_uniforms_and_injects_locations_together() {
     assert!(f.contains("layout(location = 0) in highp vec2 vUV;"), "{f}");
     assert!(f.contains("layout(location = 0) out vec4 c;"), "{f}");
 }
+
+/// A declaration occupying MORE THAN ONE location must reserve all of them.
+///
+/// A matrix takes one location per column and an array one per element, so `mat4` takes 4 and
+/// `vec4 corners[2]` takes 2. Reserving only the first handed the next declaration a location the
+/// previous one was still using; naga rejects that as `BindingCollision`, and the program then links,
+/// draws with `GL_NO_ERROR`, paints nothing, and wedges the context. This is what stopped GTK4's GPU
+/// renderers rendering at all — `layout(location = 1) in mat2 pair;` is the smallest reproduction.
+#[test]
+fn a_multi_location_declaration_reserves_every_location_it_occupies() {
+    // A bare mat4 attribute occupies 0..=3, so the next attribute must start at 4 — not 1.
+    let vs = "#version 300 es\nin mat4 model;\nin vec4 colour;\n\
+              void main(){ gl_Position = model * colour; }\n";
+    let fs =
+        "#version 300 es\nprecision mediump float;\nout vec4 c;\nvoid main(){ c = vec4(1.0); }\n";
+    let (v, _) = glsl::StageSources::new(vs, fs).inject_io_locations();
+    assert!(v.contains("layout(location = 0) in mat4 model;"), "{v}");
+    assert!(
+        v.contains("layout(location = 4) in vec4 colour;"),
+        "a mat4 occupies four locations, so the next attribute starts at 4: {v}"
+    );
+
+    // An array attribute occupies one location per element.
+    let vs = "#version 300 es\nin vec4 corners[2];\nin vec4 colour;\n\
+              void main(){ gl_Position = corners[0] + colour; }\n";
+    let (v, _) = glsl::StageSources::new(vs, fs).inject_io_locations();
+    assert!(
+        v.contains("layout(location = 0) in vec4 corners[2];"),
+        "{v}"
+    );
+    assert!(
+        v.contains("layout(location = 2) in vec4 colour;"),
+        "a two-element array occupies two locations: {v}"
+    );
+
+    // Varyings share one namespace and must respect spans across BOTH stages.
+    let vs = "#version 300 es\nin vec4 p;\nout mat4 xform;\nout vec2 uv;\n\
+              void main(){ xform = mat4(1.0); uv = p.xy; gl_Position = p; }\n";
+    let fs = "#version 300 es\nprecision mediump float;\nin mat4 xform;\nin vec2 uv;\n\
+              out vec4 c;\nvoid main(){ c = xform[0] + vec4(uv, 0.0, 0.0); }\n";
+    let (v, f) = glsl::StageSources::new(vs, fs).inject_io_locations();
+    assert!(v.contains("layout(location = 0) out mat4 xform;"), "{v}");
+    assert!(
+        v.contains("layout(location = 4) out vec2 uv;"),
+        "a mat4 varying occupies four locations: {v}"
+    );
+    assert!(f.contains("layout(location = 0) in mat4 xform;"), "{f}");
+    assert!(f.contains("layout(location = 4) in vec2 uv;"), "{f}");
+}
+
+/// An EXPLICIT location reserves its whole span too, so a bare declaration cannot be assigned into the
+/// middle of it. `layout(location = 1) in mat2 pair;` occupies 1 and 2.
+#[test]
+fn an_explicit_multi_location_declaration_is_not_overlapped() {
+    let vs =
+        "#version 300 es\nlayout(location = 1) in mat2 pair;\nin vec4 colour;\nin vec4 extra;\n\
+              void main(){ gl_Position = vec4(pair[0], 0.0, 0.0) + colour + extra; }\n";
+    let fs =
+        "#version 300 es\nprecision mediump float;\nout vec4 c;\nvoid main(){ c = vec4(1.0); }\n";
+    let (v, _) = glsl::StageSources::new(vs, fs).inject_io_locations();
+    // The explicit decl is preserved untouched.
+    assert!(v.contains("layout(location = 1) in mat2 pair;"), "{v}");
+    // 0 is free, but 1 and 2 are taken by the mat2 — so the bare decls take 0 then 3.
+    assert!(v.contains("layout(location = 0) in vec4 colour;"), "{v}");
+    assert!(
+        v.contains("layout(location = 3) in vec4 extra;"),
+        "locations 1 and 2 belong to the mat2: {v}"
+    );
+}
+
+/// `matCxR` has `C` columns and therefore takes `C` locations regardless of its row count — `mat2x4`
+/// takes 2 and `mat4x2` takes 4. Getting this backwards would over- or under-reserve every matrix.
+#[test]
+fn matrix_location_span_follows_the_column_count_not_the_row_count() {
+    let fs =
+        "#version 300 es\nprecision mediump float;\nout vec4 c;\nvoid main(){ c = vec4(1.0); }\n";
+    for (declaration, span) in [("mat2x4", 2u32), ("mat4x2", 4), ("mat3", 3), ("mat2", 2)] {
+        let vs = format!(
+            "#version 300 es\nin {declaration} m;\nin vec4 colour;\n\
+             void main(){{ gl_Position = vec4(m[0]) + colour; }}\n"
+        );
+        let (v, _) = glsl::StageSources::new(&vs, fs).inject_io_locations();
+        assert!(
+            v.contains(&format!("layout(location = {span}) in vec4 colour;")),
+            "{declaration} must occupy {span} locations: {v}"
+        );
+    }
+}
