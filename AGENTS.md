@@ -827,6 +827,21 @@ The checks we build into a harness are usually the checks the report needs too. 
 harness refuses a run whose renderer is not the one it asked for, and it did not apply that standard to
 its own prose.
 
+Check that two hypotheses predict **different** observables before running the test meant to separate
+them. A discriminator was once run where both candidate explanations predicted the same image; it returned
+a confident-looking result that meant nothing, and the flaw surfaced only when the predictions were
+re-derived afterwards.
+
+A differential finds *where* something is wrong and is silent on *why*. Three times in one session a real
+disagreement had a root cause different from its obvious reading — once the driver under test was the more
+correct side, once forty differences were the harness's own rounding ties, and once a depth defect took two
+wrong framings before the third was right. Budget for that gap; a disagreement is a location, not a
+diagnosis.
+
+"Not in my crate" and "not mine to fix" are different questions. An investigation correctly established a
+defect was downstream and stopped there — downstream included a vendored dependency it could have read and
+edited, and the fault was two lines inside it.
+
 Prefer an instrument that reports a positive count over one that reports absence, and when an
 instrument reports absence, verify it can detect presence at all. Four separate zeros in one session were
 artifacts rather than facts. **A positive count is only trustworthy with a denominator** — `count=100` is
