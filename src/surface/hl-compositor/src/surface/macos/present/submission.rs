@@ -125,13 +125,59 @@ impl CompletionGate {
     }
 }
 
-/// `MTLDrawable.presentedTime` as a monotonic instant, or `None` when it does not name one.
+/// Darwin's `CLOCK_UPTIME_RAW`: nanoseconds since boot EXCLUDING time asleep — the `mach_absolute_time`
+/// epoch that `CACurrentMediaTime`, and therefore `MTLDrawable.presentedTime`, is stamped on.
+///
+/// Deliberately not [`crate::scene::port::clock::monotonic_nanos`], for the same reason
+/// `present/latency.rs` reads its own clock for `NSEvent.timestamp`: that reads `CLOCK_MONOTONIC`, which
+/// on Darwin INCLUDES time asleep. Measured on the host this was found on, the two epochs stood
+/// 13257.094632 s apart while `CLOCK_UPTIME_RAW` matched `CACurrentMediaTime` to 0.000000 — so comparing
+/// a drawable's presented time against `CLOCK_MONOTONIC` put every real presentation 3.7 hours "before"
+/// its own submission, far outside any tolerance. Every present was judged implausible and terminated,
+/// from submission 1, with no recovery: no present, so no frame callback, so no client ever drew again.
+fn drawable_now_nanos() -> Option<u64> {
+    #[repr(C)]
+    struct Timespec {
+        seconds: i64,
+        nanos: i64,
+    }
+    extern "C" {
+        fn clock_gettime(clock: i32, value: *mut Timespec) -> i32;
+    }
+    const CLOCK_UPTIME_RAW: i32 = 8;
+
+    let mut value = Timespec {
+        seconds: 0,
+        nanos: 0,
+    };
+    // SAFETY: `value` is a valid writable timespec and CLOCK_UPTIME_RAW is supported on Darwin.
+    let result = unsafe { clock_gettime(CLOCK_UPTIME_RAW, &mut value) };
+    (result == 0 && value.seconds >= 0 && (0..1_000_000_000).contains(&value.nanos)).then(|| {
+        (value.seconds as u64)
+            .saturating_mul(1_000_000_000)
+            .saturating_add(value.nanos as u64)
+    })
+}
+
+/// Move an instant from the drawable's epoch into `CLOCK_MONOTONIC`, the clock id this compositor
+/// advertises on `wp_presentation` (`state/lifecycle.rs`).
+///
+/// A client is told which clock its presentation timestamps are on and has every right to subtract them
+/// from its own readings of it. Publishing a `mach_absolute_time` value into that domain hands Chrome's
+/// `BeginFrame` estimator a timestamp hours in the past. Both clocks are read together so the offset is
+/// the sleep time, not the cost of this function.
+fn monotonic_domain_nanos(drawable_ns: u64) -> Option<u64> {
+    let drawable_now = drawable_now_nanos()?;
+    let monotonic_now = crate::scene::port::clock::monotonic_nanos()?;
+    Some(drawable_ns.saturating_add(monotonic_now.saturating_sub(drawable_now)))
+}
+
+/// `MTLDrawable.presentedTime` as an instant on the drawable's own clock, or `None` when it does not name
+/// one.
 ///
 /// Zero is the value Metal leaves in place for a drawable WindowServer never actually displayed, and it
 /// is the single most common reading on a window that is not on screen — so it has to be rejected HERE.
-/// Admitting it as `Some(0)` sent it on to `sane_presented_time`, which compares against machine-uptime
-/// nanoseconds and so failed it as *implausible*: a window that never reached the screen was reported as
-/// one that reached it at an unbelievable time, which is a different bug with a different fix.
+/// Admitting it as `Some(0)` sent it on to `sane_presented_time` as if it were a real presentation.
 fn presented_nanos(seconds: f64) -> Option<u64> {
     let nanos = seconds * 1_000_000_000.0;
     (seconds.is_finite() && seconds > 0.0 && nanos <= u64::MAX as f64)
@@ -183,6 +229,9 @@ fn vsync_observed(timing: &DisplayTiming, previous_ns: u64, present_ns: u64) -> 
     delta.abs_diff(expected) <= tolerance
 }
 
+/// Whether a reported presentation time sits plausibly between when the frame was submitted and when the
+/// callback was observed. All three MUST be readings of the drawable's own clock ([`drawable_now_nanos`]);
+/// mixing epochs here makes the check reject every real presentation rather than the implausible ones.
 fn sane_presented_time(presented: u64, submitted: u64, observed: u64) -> bool {
     const TOLERANCE: u64 = 5_000_000_000;
     presented.saturating_add(TOLERANCE) >= submitted
@@ -228,7 +277,8 @@ impl NativePresent {
         let callback_terminal = terminal.clone();
         let callback_events = events.clone();
         let callback_wake = wake.clone();
-        let submitted_ns = crate::scene::port::clock::monotonic_nanos();
+        // The drawable's epoch, NOT `monotonic_nanos` — this is compared against `presentedTime`.
+        let submitted_ns = drawable_now_nanos();
         let callback: RcBlock<Presented> =
             RcBlock::new(move |drawable: NonNull<ProtocolObject<dyn MTLDrawable>>| {
                 if !callback_terminal.claim() {
@@ -244,7 +294,7 @@ impl NativePresent {
                     );
                     return;
                 };
-                let observed_ns = crate::scene::port::clock::monotonic_nanos();
+                let observed_ns = drawable_now_nanos();
                 if !submitted_ns
                     .zip(observed_ns)
                     .is_some_and(|(submitted, observed)| {
@@ -262,6 +312,15 @@ impl NativePresent {
                 // is claimed only when this frame's presented time lines up with the previous one on the
                 // display's cadence. `swap` makes the comparison exactly-once per submission.
                 let previous_ns = display.last_presented_ns.swap(present_ns, Ordering::AcqRel);
+                let vsync = vsync_observed(&display, previous_ns, present_ns);
+                // Cadence above is compared drawable-clock to drawable-clock. What LEAVES here is a client's
+                // `wp_presentation` timestamp, so it is stated on the clock this compositor advertised; an
+                // instant we cannot place on that clock is reported as absent rather than on the wrong one.
+                let timing = monotonic_domain_nanos(present_ns).map(|present_ns| PresentTiming {
+                    present_ns,
+                    refresh_ns: display.refresh_ns,
+                    vsync,
+                });
                 publish(
                     &callback_events,
                     &callback_wake,
@@ -269,11 +328,7 @@ impl NativePresent {
                         id,
                         outcome: CompletionOutcome::Delivered {
                             serial: id.0,
-                            timing: Some(PresentTiming {
-                                present_ns,
-                                refresh_ns: display.refresh_ns,
-                                vsync: vsync_observed(&display, previous_ns, present_ns),
-                            }),
+                            timing,
                         },
                     },
                 );
@@ -369,6 +424,48 @@ mod tests {
         ] {
             assert_eq!(terminal.outcome(), CompletionOutcome::TerminalFailure);
         }
+    }
+
+    #[test]
+    fn the_drawable_clock_matches_the_drawable_epoch_and_monotonic_does_not() {
+        // The bug this pins: `presentedTime` is on `mach_absolute_time`, which excludes time asleep, while
+        // `monotonic_nanos` reads Darwin's `CLOCK_MONOTONIC`, which includes it. Comparing across the two
+        // put every real presentation "before" its own submission by the machine's total sleep time and
+        // terminated it. Measured 13257.094632 s apart on the host this was found on.
+        let drawable = drawable_now_nanos().expect("CLOCK_UPTIME_RAW readable");
+        let monotonic =
+            crate::scene::port::clock::monotonic_nanos().expect("CLOCK_MONOTONIC readable");
+        assert!(
+            monotonic >= drawable,
+            "CLOCK_MONOTONIC includes sleep, so it can never trail the drawable clock"
+        );
+
+        // A frame presented one refresh after submission is sane on one clock and rejected across two.
+        let refresh = 16_666_667;
+        let submitted = drawable;
+        let presented = submitted + refresh;
+        let observed = presented + 200_000;
+        assert!(sane_presented_time(presented, submitted, observed));
+        let slept = 13_257_094_632_000u64;
+        assert!(
+            !sane_presented_time(presented, submitted + slept, observed + slept),
+            "this is exactly the misclassification: a real presentation judged implausible"
+        );
+    }
+
+    #[test]
+    fn a_published_presentation_time_is_stated_on_the_advertised_clock() {
+        // `wp_presentation` is advertised as CLOCK_MONOTONIC (state/lifecycle.rs), so what a client
+        // receives has to be comparable with its own reading of that clock, not with the drawable's.
+        let drawable = drawable_now_nanos().expect("CLOCK_UPTIME_RAW readable");
+        let published = monotonic_domain_nanos(drawable).expect("both clocks readable");
+        let monotonic =
+            crate::scene::port::clock::monotonic_nanos().expect("CLOCK_MONOTONIC readable");
+        assert!(
+            published.abs_diff(monotonic) < 1_000_000_000,
+            "a just-now drawable instant must publish as a just-now monotonic instant \
+             (published={published} monotonic={monotonic})"
+        );
     }
 
     #[test]
