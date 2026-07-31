@@ -734,6 +734,55 @@ Avoid excessive comments, short comments are fine, usually handy to tell what st
 Everytime you add new functionality ask if domain/folder is right what is correct approach to structure
 the api so its DX friendly.
 
+# Running a fleet
+
+Keep roughly six agents busy at all times. An idle agent is wasted capacity; a manager waiting on one agent
+while five sit finished is the common failure.
+
+## Keep agents alive; enqueue, do not respawn
+
+**Send follow-up work to an existing agent rather than spawning a new one.** A finished agent still holds
+everything it learned: the traces it captured, the theories it discarded and why, which files it already read,
+which measurements were provenance-clean. A fresh agent starts blind and rebuilds that context from scratch,
+which costs both tokens and wall-clock, and it rebuilds it *imperfectly* — it will re-chase leads the previous
+agent already eliminated.
+
+Six agents each holding half a million tokens of accumulated context is the desired state, not a problem to
+manage. Prefer a long-lived agent with a deep context window over a short-lived one with a clean slate.
+
+Spawn a new agent only when the work is genuinely a new area with no useful overlap, or when file ownership
+would collide with what a live agent is holding.
+
+A corollary: when an agent reports, reply to it. Even "nothing more for now, stand by" is better than letting
+it lapse, because the next question in that area should go to the agent that already has the answers.
+
+## Ownership and collisions
+
+Partition by file ownership and state it explicitly in every assignment: what the agent owns, and which paths
+other agents are live in. Two agents editing one file will silently clobber each other, and the manager will
+commit the wreckage. Assign separate workspaces too — two agents on one workspace will `pkill` each other's
+domain workers and invalidate each other's runs.
+
+Tell each agent what the others are doing in the same crate. An agent that knows a neighbour owns
+`service/frame/` will report a defect there instead of fixing it, which is the outcome you want.
+
+## What to tell every agent
+
+- The bundle hashes, and to **read them itself** rather than trusting the message. Bundles move.
+- Not to rebuild or hot-swap the app bundle; the manager sequences builds from committed source in an
+  isolated worktree, because a moving source tree makes the bundler refuse and mixed provenance makes every
+  number worthless.
+- To report a clean negative plainly. Killing a theory is a result. An agent that discards its own
+  well-developed hypothesis on provenance grounds has done the job correctly.
+- That a number without provenance is worse than no number.
+
+## Manager discipline
+
+Stage commits by file, never `git add -A` across a shared tree — you will sweep up another agent's
+uncommitted work and mis-attribute it. Do not install a bundle while an agent is mid-measurement. When you
+relay a finding between agents, mark clearly what was measured and what was inferred; a hypothesis passed on
+as fact wastes the next agent's whole session.
+
 # Work
 
 keep your work in ../hl-work folder, for each expriment keep one folder or share the folder but concentrate all 
