@@ -34,6 +34,11 @@ pub fn buffer_data(ctx: &mut GlContext, target: u32, data: &[u8], usage: u32) {
         ctx.set_gl_error(GL_INVALID_OPERATION);
     } else if name != 0 {
         ctx.buffers.set_data(name, target, data, usage);
+    } else {
+        // ES 3.0 §2.9.2: with NO buffer bound to `target`, `glBufferData` is GL_INVALID_OPERATION. This
+        // was a silent no-op, so an application whose binding had reverted — most often because the buffer
+        // was deleted, which correctly unbinds it — uploaded into nothing and read GL_NO_ERROR back.
+        ctx.set_gl_error(GL_INVALID_OPERATION);
     }
 }
 

@@ -271,6 +271,17 @@ pub fn shader_source(ctx: &mut GlContext, shader: u32, src: &str) {
 /// `glCompileShader(shader)`.
 impl GlContext {
     pub fn compile_shader(&mut self, shader: u32) {
+        if !self.programs.has_shader(shader) {
+            // ES 3.0 §2.11.1: a name that is not a shader object is GL_INVALID_VALUE, and one that names a
+            // program is GL_INVALID_OPERATION. Both were silent no-ops, so a call on a DELETED shader
+            // looked like it had worked.
+            self.set_gl_error(if self.programs.contains(shader) {
+                GL_INVALID_OPERATION
+            } else {
+                GL_INVALID_VALUE
+            });
+            return;
+        }
         self.programs.compile_shader(shader);
     }
 }
@@ -284,6 +295,22 @@ impl GlContext {
 
 /// `glAttachShader(program, shader)`.
 pub fn attach_shader(ctx: &mut GlContext, program: u32, shader: u32) {
+    if !ctx.programs.contains(program) {
+        ctx.set_gl_error(if ctx.programs.has_shader(program) {
+            GL_INVALID_OPERATION
+        } else {
+            GL_INVALID_VALUE
+        });
+        return;
+    }
+    if !ctx.programs.has_shader(shader) {
+        ctx.set_gl_error(if ctx.programs.contains(shader) {
+            GL_INVALID_OPERATION
+        } else {
+            GL_INVALID_VALUE
+        });
+        return;
+    }
     ctx.programs.attach(program, shader);
 }
 

@@ -282,9 +282,11 @@ pub fn framebuffer_renderbuffer(
     }
     match attachment {
         GL_COLOR_ATTACHMENT0 => {
-            // The renderbuffer's texture-backed storage becomes the FBO's color target (`0` detaches).
+            // The renderbuffer's texture-backed storage becomes the FBO's color target (`0` detaches) —
+            // but the ATTACHED OBJECT is the renderbuffer, and the attachment queries must say so.
             let tex = ctx.renderbuffers.backing_tex(rbo);
             ctx.local.framebuffers.attach_color(fbo, tex);
+            ctx.local.framebuffers.set_color_source(fbo, 0, rbo, true);
         }
         // This model has no depth/stencil PLANE — the frame builder mints one for any depth/stencil-tested
         // pass — but WHETHER the framebuffer has such an attachment is load-bearing GL state: without an

@@ -351,16 +351,17 @@ pub fn framebuffer_attachment_parameter(
             _ => 0,
         };
     }
-    let tex = ctx.local.framebuffers.color_attachment(fbo);
+    // What the application attached, not what it resolved to: a renderbuffer is backed by a texture here,
+    // so reading the colour table alone reported `GL_TEXTURE` and the backing texture's name for a
+    // renderbuffer attachment — exactly the distinction this query exists to make (ES 3.0 §6.1.13).
+    let source = ctx.local.framebuffers.color_source(fbo, 0);
     match pname {
-        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE => {
-            if tex != 0 {
-                GL_TEXTURE as i32
-            } else {
-                GL_NONE as i32
-            }
-        }
-        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME => tex as i32,
+        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE => match source {
+            Some((_, true)) => GL_RENDERBUFFER as i32,
+            Some((_, false)) => GL_TEXTURE as i32,
+            None => GL_NONE as i32,
+        },
+        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME => source.map(|(name, _)| name).unwrap_or(0) as i32,
         _ => 0,
     }
 }

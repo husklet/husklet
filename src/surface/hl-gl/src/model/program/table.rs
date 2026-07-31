@@ -51,6 +51,11 @@ impl Programs {
         }
     }
 
+    /// Whether `name` is a live SHADER object (not a program, not a reclaimed name).
+    pub fn has_shader(&self, name: u32) -> bool {
+        self.shaders.contains_key(&name)
+    }
+
     pub fn shader(&self, name: u32) -> Option<&Shader> {
         self.shaders.get(&name)
     }

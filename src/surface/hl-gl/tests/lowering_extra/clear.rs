@@ -342,3 +342,52 @@ fn a_depth_clear_alone_survives_a_frame_boundary() {
         "clearing here would discard the 0.5 and let GL_LESS pass: {ops:?}"
     );
 }
+
+/// The clear matrix, as the differential established it: depth, stencil, and the STENCIL HALF of a
+/// combined clear were all lost at a frame boundary, while the colour clear inside the same `glClear`
+/// always survived.
+///
+/// The mechanism is one line in `swap::flush`: when the frame builder returns nothing, the recording is
+/// `reset_frame()`d anyway, so a clear that lowered to no frame was discarded rather than retained. Every
+/// boundary that loses it — `glFlush`, `glFinish`, `glReadPixels` — funnels through that same builder,
+/// which is why a fix confined to the readback path would have left the other two broken. A colour clear
+/// always built a frame, so it never took that branch.
+///
+/// The combined case has its own trap: the pass format was chosen from the draws alone, so a frame with a
+/// depth-tested draw took `Depth32Float` and the stencil half of the clear had no plane to land on — depth
+/// survived and stencil did not, in the same call.
+#[test]
+fn a_combined_depth_stencil_clear_keeps_both_halves() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    record::clear_depth(&mut c, 0.25);
+    record::clear_stencil(&mut c, 7);
+    record::clear_buffers(
+        &mut c,
+        GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT,
+    );
+    // A DEPTH-tested (but not stencil-tested) draw: the pass would otherwise take a depth-only format and
+    // silently drop the stencil half of the clear above.
+    record::enable(&mut c, GL_DEPTH_TEST);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+
+    let (depth, stencil) = pass_depth_clear(&sink.batches[0]).expect("a depth/stencil attachment");
+    assert_eq!(depth, 0.25, "the depth half");
+    assert_eq!(stencil, 7, "and the stencil half, in the same clear");
+}
+
+/// A stencil-only clear with no stencil-tested draw anywhere still has to land.
+#[test]
+fn a_stencil_only_clear_lands_without_a_stencil_tested_draw() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    record::clear_stencil(&mut c, 5);
+    record::clear_buffers(&mut c, GL_STENCIL_BUFFER_BIT);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let (_, stencil) = pass_depth_clear(&sink.batches[0]).expect("a stencil-capable attachment");
+    assert_eq!(stencil, 5);
+}

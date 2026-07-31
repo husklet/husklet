@@ -124,3 +124,78 @@ fn a_colour_renderable_attachment_is_complete() {
         );
     }
 }
+
+/// `GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE` must distinguish a renderbuffer attachment from a texture one.
+///
+/// A renderbuffer is BACKED by a texture in this model, so reading the colour table alone reported
+/// `GL_TEXTURE` — and `_OBJECT_NAME` reported the backing texture's name rather than the renderbuffer's.
+/// That is precisely the distinction the query exists to make (ES 3.0 §6.1.13), and the texture case
+/// agreeing is what showed the attachment tracking was otherwise sound.
+#[test]
+fn the_attachment_query_names_the_object_that_was_attached() {
+    let mut c = ctx();
+    let fbo = c.gen_framebuffer();
+    record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
+
+    // A RENDERBUFFER attachment.
+    let rbo = c.gen_renderbuffer();
+    record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, rbo);
+    record::renderbuffer_storage(&mut c, GL_RENDERBUFFER, GL_RGBA4, 16, 16);
+    record::framebuffer_renderbuffer(&mut c, GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rbo);
+    assert_eq!(
+        intro::framebuffer_attachment_parameter(
+            &c,
+            GL_FRAMEBUFFER,
+            GL_COLOR_ATTACHMENT0,
+            GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE
+        ),
+        GL_RENDERBUFFER as i32,
+        "a renderbuffer attachment is a renderbuffer, not the texture backing it"
+    );
+    assert_eq!(
+        intro::framebuffer_attachment_parameter(
+            &c,
+            GL_FRAMEBUFFER,
+            GL_COLOR_ATTACHMENT0,
+            GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME
+        ),
+        rbo as i32,
+        "and its name is the renderbuffer's"
+    );
+
+    // A TEXTURE attachment on the same slot — this case already agreed and must keep agreeing.
+    let tex = c.textures.gen();
+    record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
+    record::tex_image_2d(&mut c, 16, 16, &[]);
+    record::framebuffer_texture_2d(&mut c, GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    assert_eq!(
+        intro::framebuffer_attachment_parameter(
+            &c,
+            GL_FRAMEBUFFER,
+            GL_COLOR_ATTACHMENT0,
+            GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE
+        ),
+        GL_TEXTURE as i32
+    );
+    assert_eq!(
+        intro::framebuffer_attachment_parameter(
+            &c,
+            GL_FRAMEBUFFER,
+            GL_COLOR_ATTACHMENT0,
+            GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME
+        ),
+        tex as i32
+    );
+
+    // Detaching leaves NONE — the post-delete case that also already agreed.
+    record::framebuffer_texture_2d(&mut c, GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+    assert_eq!(
+        intro::framebuffer_attachment_parameter(
+            &c,
+            GL_FRAMEBUFFER,
+            GL_COLOR_ATTACHMENT0,
+            GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE
+        ),
+        GL_NONE as i32
+    );
+}

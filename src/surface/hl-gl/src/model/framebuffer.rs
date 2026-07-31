@@ -29,6 +29,13 @@ pub struct Framebuffers {
     /// `GL_DEPTH_TEST` enabled while rendering to a depth-less FBO loses every draw after the first.
     depth: HashMap<u32, u32>,
     stencil: HashMap<u32, u32>,
+    /// What the application actually attached at each colour slot: `(GL object name, is renderbuffer)`.
+    ///
+    /// A renderbuffer attachment RESOLVES to its backing texture for rendering, so the colour tables above
+    /// hold a texture name either way and cannot answer
+    /// `GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE`/`_OBJECT_NAME` — both reported `GL_TEXTURE` and the backing
+    /// texture's name for a renderbuffer, which is the one thing the query exists to distinguish.
+    color_source: HashMap<(u32, u32), (u32, bool)>,
     next_name: u32,
 }
 
@@ -44,6 +51,7 @@ impl Framebuffers {
             color_extra: HashMap::new(),
             depth: HashMap::new(),
             stencil: HashMap::new(),
+            color_source: HashMap::new(),
             next_name: 1,
         }
     }
@@ -77,11 +85,31 @@ impl Framebuffers {
         if fbo == 0 {
             return;
         }
+        self.set_color_source(fbo, index, tex, false);
         if index == 0 {
             self.color.insert(fbo, tex);
         } else {
             self.color_extra.insert((fbo, index), tex);
         }
+    }
+
+    /// Record what was attached at a colour slot, so the attachment queries can tell a renderbuffer from
+    /// a texture. `name` `0` clears the slot.
+    pub fn set_color_source(&mut self, fbo: u32, index: u32, name: u32, renderbuffer: bool) {
+        if fbo == 0 {
+            return;
+        }
+        if name == 0 {
+            self.color_source.remove(&(fbo, index));
+        } else {
+            self.color_source.insert((fbo, index), (name, renderbuffer));
+        }
+    }
+
+    /// What is attached at `fbo`'s colour slot `index`, as `(GL object name, is renderbuffer)`. `None`
+    /// when the slot is empty.
+    pub fn color_source(&self, fbo: u32, index: u32) -> Option<(u32, bool)> {
+        self.color_source.get(&(fbo, index)).copied()
     }
 
     /// `glFramebufferRenderbuffer`/`glFramebufferTexture2D` at `GL_DEPTH_ATTACHMENT` — `name` `0` detaches.
@@ -161,6 +189,10 @@ impl Framebuffers {
                 *v = 0;
             }
         }
+        // A texture attachment's source name IS the texture, so deleting it empties the slot. A
+        // renderbuffer's source is the renderbuffer and survives its backing texture being reclaimed.
+        self.color_source
+            .retain(|_, (name, renderbuffer)| *renderbuffer || *name != tex);
     }
 
     pub(crate) fn references_texture(&self, texture: u32) -> bool {
@@ -172,6 +204,7 @@ impl Framebuffers {
     /// `glDeleteFramebuffers` — drop the object. Returns `false` for an unknown name.
     pub fn delete(&mut self, name: u32) -> bool {
         self.color_extra.retain(|&(fbo, _), _| fbo != name);
+        self.color_source.retain(|&(fbo, _), _| fbo != name);
         self.depth.remove(&name);
         self.stencil.remove(&name);
         self.color.remove(&name).is_some()
