@@ -838,6 +838,12 @@ correct side, once forty differences were the harness's own rounding ties, and o
 wrong framings before the third was right. Budget for that gap; a disagreement is a location, not a
 diagnosis.
 
+An incoherent profile is evidence about the instrument. A driver scoring ninety-seven percent on blending
+and a hundred percent on the shader API while scoring zero on drawing is not a coherent picture of a
+driver, and it was reported as one for hours. When results are internally implausible, suspect the harness
+before the subject — three harness defects in a single session all produced plausible-looking output, and
+the worst of them made the driver look broken in exactly the places a real driver plausibly breaks.
+
 Show a new test failing before trusting it to pass. Two executor tests were run against a deliberately
 reverted executor and returned exactly the conformance suite's own failure signature, which is what makes
 them evidence rather than a claim. The same control caught three assertions passing for the wrong reason —
