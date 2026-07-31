@@ -38,11 +38,17 @@ impl PrimitiveTopology {
 pub(super) struct CullMode(pub(super) u32);
 
 impl CullMode {
-    pub(super) fn native(self) -> Option<wgpu::Face> {
+    /// An UNRECOGNISED code is REFUSED rather than absorbed into `None`. Absorbing it made a malformed
+    /// value and a deliberate "no culling" the same observation, so a guest whose cull state failed to
+    /// encode would render un-culled geometry and report success — the sibling `compare` code has been
+    /// range-checked all along (`sampler.rs`, and again in the runtime's `validate`), and the difference
+    /// between the two was an oversight rather than a policy.
+    pub(super) fn native(self) -> Result<Option<wgpu::Face>> {
         match self.0 {
-            1 => Some(wgpu::Face::Front),
-            2 => Some(wgpu::Face::Back),
-            _ => None,
+            0 => Ok(None),
+            1 => Ok(Some(wgpu::Face::Front)),
+            2 => Ok(Some(wgpu::Face::Back)),
+            _ => Err(GpuError::Invalid("wgpu: unsupported cull mode")),
         }
     }
 }
@@ -53,10 +59,13 @@ impl CullMode {
 pub(super) struct FrontFace(pub(super) u32);
 
 impl FrontFace {
-    pub(super) fn native(self) -> wgpu::FrontFace {
+    /// Refused on an unrecognised code, for the reason given on [`CullMode::native`]: silently answering
+    /// `Ccw` made a malformed winding indistinguishable from the default one.
+    pub(super) fn native(self) -> Result<wgpu::FrontFace> {
         match self.0 {
-            1 => wgpu::FrontFace::Cw,
-            _ => wgpu::FrontFace::Ccw,
+            0 => Ok(wgpu::FrontFace::Ccw),
+            1 => Ok(wgpu::FrontFace::Cw),
+            _ => Err(GpuError::Invalid("wgpu: unsupported front face winding")),
         }
     }
 }

@@ -552,8 +552,8 @@ impl WgpuExecutor {
                     // the neutral wire defaults (cull 0 → None, front_face 0 → Ccw) reproduce the previous
                     // `..default()` byte-for-byte, while a real culling guest now actually discards the culled
                     // face instead of the state silently vanishing.
-                    front_face: FrontFace(desc.front_face).native(),
-                    cull_mode: CullMode(desc.cull).native(),
+                    front_face: FrontFace(desc.front_face).native()?,
+                    cull_mode: CullMode(desc.cull).native()?,
                     ..Default::default()
                 },
                 depth_stencil,
