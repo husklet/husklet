@@ -312,7 +312,17 @@ pub const FENCE_BYTES: u64 = 128;
 /// target at the surface's format footprint.
 impl SurfaceDesc {
     pub(crate) fn residency_bytes(&self) -> u64 {
-        let texel = self.format.bytes_per_texel().unwrap_or(4) as u64;
+        // `bytes_per_texel` answers None for depth/stencil and for every block-compressed format, so
+        // taking 4 here invents a footprint for exactly the formats it could not describe. The texture
+        // path below already found this and special-cased Depth24PlusStencil8 as an 8-byte plane —
+        // "charging the 4-byte default undercounted it by 2x" — but the surface path kept the bare
+        // default, so the same format was charged 4 as a surface and 8 as a texture. Measured at
+        // 256x256: depth24+stencil8 undercharged 2x, and BC1 overcharged 8x against its half-byte
+        // texel. Nothing validates a surface's format, so both are reachable.
+        //
+        // Undercharging is the direction that matters: residency limits stop reflecting what the
+        // executor actually keeps resident.
+        let texel = self.format.footprint_bytes_per_texel() as u64;
         (self.width as u64)
             .saturating_mul(self.height as u64)
             .saturating_mul(texel)
@@ -362,13 +372,9 @@ impl TextureDesc {
         }
         // Depth/stencil formats report `bytes_per_texel() == None` (the software backend can't clear-fill
         // them) but for footprint accounting they occupy a real target; charge it instead of rejecting a
-        // valid depth render target. `Depth24PlusStencil8` is materialized by the CPU executor as an
-        // 8-byte-per-texel depth+stencil plane (`cpu::executor::resource`), so charging the 4-byte default
-        // undercounted it by 2x; every other such format is a 4-byte plane.
-        let texel = match d.format {
-            TextureFormat::Depth24PlusStencil8 => 8,
-            format => format.bytes_per_texel().unwrap_or(4) as u64,
-        };
+        // valid depth render target. The per-format footprint lives in `footprint_bytes_per_texel` so
+        // the surface charge path cannot disagree with this one about the same format.
+        let texel = d.format.footprint_bytes_per_texel() as u64;
         let mut total = 0u64;
         let mut w = d.width as u64;
         let mut h = d.height as u64;

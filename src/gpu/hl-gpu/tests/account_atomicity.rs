@@ -256,3 +256,74 @@ fn ownership_transfer_in_and_out_leaves_every_counter_at_its_start() {
         "an accept/release round trip must leave the ledger exactly as it was"
     );
 }
+
+/// A surface and a texture of the same format and extent are charged the same residency.
+///
+/// `bytes_per_texel` answers `None` for depth/stencil and for every block-compressed format, so a
+/// caller taking a default invents a footprint for exactly the formats it could not describe. The
+/// texture path found this and special-cased `Depth24PlusStencil8` as an 8-byte plane; the surface path
+/// kept the bare 4-byte default. The same format was therefore charged 4 bytes per texel as a surface
+/// and 8 as a texture — measured at 256x256, a 2x undercharge — and nothing validates a surface's
+/// format, so it is reachable rather than theoretical.
+///
+/// Undercharging is the direction that matters: residency limits stop reflecting what the executor
+/// actually keeps resident. The test compares the two paths against each other rather than against a
+/// constant, so it pins the agreement itself and cannot be satisfied by both drifting together.
+#[test]
+fn a_surface_and_a_texture_of_one_format_are_charged_alike() {
+    use hl_gpu::protocol::model::descriptor::{SurfaceDesc, TextureDesc};
+    use hl_gpu::protocol::model::enums::{texture_usage, TextureFormat};
+    use hl_gpu::SurfaceToken;
+
+    for format in [
+        TextureFormat::Rgba8Unorm,
+        TextureFormat::Depth24PlusStencil8,
+        TextureFormat::Depth32Float,
+        TextureFormat::Rgba32Float,
+    ] {
+        let (w, h) = (256u32, 256u32);
+
+        let mut as_surface = sink_on(&GlobalLedger::unbounded());
+        as_surface
+            .submit(&[Cmd::CreateSurface(
+                1,
+                SurfaceDesc {
+                    width: w,
+                    height: h,
+                    format,
+                    token: SurfaceToken::new(1).unwrap(),
+                },
+            )])
+            .expect("surface create");
+        let surface_bytes = as_surface.session().residency_bytes();
+
+        let mut as_texture = sink_on(&GlobalLedger::unbounded());
+        let created = as_texture.submit(&[Cmd::CreateTexture(
+            1,
+            TextureDesc {
+                width: w,
+                height: h,
+                depth: 1,
+                mip_levels: 1,
+                sample_count: 1,
+                dim: hl_gpu::protocol::model::enums::TextureDim::D2,
+                format,
+                usage: texture_usage::RENDER_TARGET,
+                label: String::new(),
+            },
+        )]);
+        // A format the texture path refuses outright carries no comparison; the surface path is the one
+        // under test and it accepted the format, which is the asymmetry worth knowing about either way.
+        if created.is_err() {
+            continue;
+        }
+        let texture_bytes = as_texture.session().residency_bytes();
+
+        assert_eq!(
+            surface_bytes, texture_bytes,
+            "{format:?} at {w}x{h} is charged {surface_bytes} bytes as a surface and {texture_bytes} \
+             as a texture; one of the two paths is inventing a footprint for a format the other \
+             describes",
+        );
+    }
+}

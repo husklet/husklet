@@ -78,6 +78,30 @@ impl TextureFormat {
         })
     }
 
+    /// Bytes per texel to charge for *residency accounting*, for every format including the ones
+    /// [`Self::bytes_per_texel`] cannot describe.
+    ///
+    /// `bytes_per_texel` answers `None` for depth/stencil and for the block-compressed formats, because
+    /// it exists to tell the software backend how to clear-fill a plain colour texel. Accounting has a
+    /// different question — how much the executor keeps resident — and every format has an answer to
+    /// that one, so this never returns an Option that a caller has to invent a value for. Both the
+    /// texture and the surface charge paths call it, so a format cannot be charged two different ways
+    /// depending on which one created it, which is exactly what happened before it existed.
+    ///
+    /// Known conservative inaccuracy, unchanged from the previous behaviour and safe in direction: the
+    /// block-compressed formats are charged as 4-byte texels although BC1/BC4 occupy half a byte per
+    /// texel and the rest one byte. That overcharges, so a limit trips early rather than late. Fixing it
+    /// needs block-geometry arithmetic in the footprint walk rather than a per-texel constant, and this
+    /// is now the single place to do it.
+    pub fn footprint_bytes_per_texel(self) -> usize {
+        match self {
+            // Materialized by the CPU executor as an 8-byte depth+stencil plane
+            // (`cpu::executor::resource`); charging the 4-byte default undercounted it by 2x.
+            TextureFormat::Depth24PlusStencil8 => 8,
+            format => format.bytes_per_texel().unwrap_or(4),
+        }
+    }
+
     pub fn block_geometry(self) -> Option<(u32, u32, u32)> {
         Some(match self {
             TextureFormat::Bc1RgbaUnorm
