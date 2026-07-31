@@ -11,7 +11,7 @@
 use hl_log::{hl_debug, hl_span, tag};
 
 use crate::scene::{
-    model::{Format, PresentableImage, Rect, Scene, SurfaceId},
+    model::{Format, PresentableImage, Rect, Scene, Surface, SurfaceId},
     port::{PresentFrame, PresentLayer, PresentTiming},
 };
 
@@ -160,7 +160,7 @@ impl Scene {
             surface: sid,
             width: w,
             height: h,
-            format: if buffer.format.is_opaque() {
+            format: if buffer.format.is_opaque() || declares_fully_opaque(surface, w, h) {
                 Format::Xrgb8888
             } else {
                 Format::Argb8888
@@ -247,6 +247,23 @@ impl Scene {
     }
 }
 
+/// Whether the client declared its WHOLE presented surface opaque via `wl_surface.set_opaque_region`.
+///
+/// An ARGB8888 buffer's alpha is only meaningful where the client did not say otherwise. Chrome (and other
+/// Ozone/Wayland clients) allocate `AR24` unconditionally, leave alpha unwritten in regions they render as
+/// part of an opaque window, and then declare the whole window opaque. Honouring the buffer's alpha there
+/// punches the unwritten pixels through to the desktop. The declaration is the client's own statement about
+/// its pixels, so a region covering the entire presented rect is taken at face value and presented opaque.
+///
+/// Deliberately all-or-nothing: the presenter forces opacity per surface, so a PARTIAL region cannot be
+/// honoured without wrongly flattening the rest. Partial or absent regions keep the buffer's alpha, which is
+/// what cursors, rounded popups and translucent subsurfaces rely on.
+fn declares_fully_opaque(surface: &Surface, w: i32, h: i32) -> bool {
+    surface
+        .opaque_region
+        .is_some_and(|region| region.contains(&Rect::new(0, 0, w, h)))
+}
+
 /// Whether `up`'s opaque region — translated from its surface-local space to root space by `(ux, uy)` —
 /// provably covers the whole root-space rectangle `rect`. A `None` opaque region proves nothing. Port
 /// of `opaque_covers_root_rect` (single-rect neutral opaque region; a conservative subset is safe).
@@ -290,5 +307,40 @@ mod tests {
             scene.compose_frame(surface).unwrap().items[0].damage,
             vec![Rect::new(1, 2, 3, 4), Rect::new(70, 60, 5, 6)]
         );
+    }
+
+    /// Attach a 100x80 ARGB8888 buffer, optionally declaring `opaque` via `set_opaque_region`, and report
+    /// the format the presenter is handed.
+    fn presented_format(opaque: Option<Rect>) -> Format {
+        let mut scene = Scene::new();
+        let surface = scene.create_surface();
+        let mut commit = Commit::attach(BufferState {
+            tex_w: 100,
+            tex_h: 80,
+            format: Format::Argb8888,
+            buffer_scale: 1,
+            gpu: true,
+        });
+        commit.opaque_region = Some(opaque);
+        assert!(commit_surface(&mut scene, surface, commit));
+        scene.compose_frame(surface).unwrap().items[0].image.format
+    }
+
+    #[test]
+    fn whole_surface_opaque_region_presents_argb_as_opaque() {
+        // Chrome's case: an AR24 buffer whose alpha is unwritten in places, plus a whole-window
+        // `set_opaque_region`. Honouring the declaration is what stops those pixels reaching the desktop.
+        assert_eq!(presented_format(Some(Rect::new(0, 0, 100, 80))), Format::Xrgb8888);
+        // A larger declared region still covers the surface.
+        assert_eq!(presented_format(Some(Rect::new(0, 0, 200, 200))), Format::Xrgb8888);
+    }
+
+    #[test]
+    fn partial_or_absent_opaque_region_keeps_client_alpha() {
+        // Nothing declared: a translucent cursor / rounded popup must keep its alpha.
+        assert_eq!(presented_format(None), Format::Argb8888);
+        // Partially declared: the presenter forces opacity per surface, so a partial claim is not honoured.
+        assert_eq!(presented_format(Some(Rect::new(0, 0, 100, 40))), Format::Argb8888);
+        assert_eq!(presented_format(Some(Rect::new(10, 0, 100, 80))), Format::Argb8888);
     }
 }
