@@ -268,6 +268,14 @@ impl<'a> ShaderModule<'a> {
         }
     }
 
+    /// Lower `isInf`/`isNan` to integer tests on the IEEE-754 bit pattern (see [`super::nonfinite`]).
+    /// naga's `wgsl-out` can emit neither, so a module still carrying one is refused at emission — which
+    /// is what a SPIR-V payload using either predicate ran into, since the GLSL route's textual rewrite
+    /// cannot reach it. A module using neither is left untouched.
+    pub(super) fn lower_nonfinite_predicates(&mut self) {
+        super::nonfinite::NonFinite::lower(self.module);
+    }
+
     pub(super) fn wgsl(&self) -> Result<String> {
         let module = &*self.module;
         let info = naga::valid::Validator::new(

@@ -29,6 +29,7 @@ use hl_gpu::{GpuError, Result};
 mod descriptor;
 mod diagnostic;
 mod module;
+mod nonfinite;
 
 use diagnostic::Diagnostic;
 use module::ShaderModule;
@@ -162,7 +163,12 @@ impl Spirv {
         }
         viewport::Shader::prepare(&mut module)?;
         let reflected = crate::reflect::ModuleUsage::from_module(&module);
-        Ok((ShaderModule::new(&mut module).wgsl()?, reflected))
+        // `OpIsInf`/`OpIsNan` survive `spv-in` as relational expressions naga's `wgsl-out` cannot emit.
+        // The GLSL route rewrites those in the source text, which a SPIR-V payload never has, so the
+        // lowering has to happen on the IR both front ends share.
+        let mut shader = ShaderModule::new(&mut module);
+        shader.lower_nonfinite_predicates();
+        Ok((shader.wgsl()?, reflected))
     }
 }
 
@@ -247,6 +253,7 @@ pub fn glsl_to_wgsl_reflect(
     // (`InvalidReturnType(None)`). Replace each such fallthrough return with a zero-value return of the
     // function's result type — the path is unreachable for the values GskGpu emits.
     let mut shader = ShaderModule::new(&mut module);
+    shader.lower_nonfinite_predicates();
     shader.default_bare_returns();
     // GskGpu declares functions top-down (`main` → `main_clip_*` → `run`) behind forward prototypes, which
     // GLSL permits but naga does not: naga assigns each function's handle at its first sighting (prototype

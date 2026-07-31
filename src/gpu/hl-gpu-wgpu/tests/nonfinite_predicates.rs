@@ -64,7 +64,61 @@ fn uniform_bytes() -> Vec<u8> {
     bytes
 }
 
-fn render(exec: &mut WgpuExecutor) -> hl_gpu::Result<Vec<u8>> {
+/// Mint the SAME fragment shader as real SPIR-V (`glsl-in` → validate → `spv-out`), which is what a
+/// precompiled-shader guest sends. `OpIsInf`/`OpIsNan` survive into the payload, so this reaches the
+/// translator's own representation rather than the textual source rewrite — the one route a GLSL rewrite
+/// can never cover.
+fn fragment_spirv(source: &str) -> Vec<u32> {
+    let mut frontend = naga::front::glsl::Frontend::default();
+    let module = frontend
+        .parse(
+            &naga::front::glsl::Options::from(naga::ShaderStage::Fragment),
+            source,
+        )
+        .expect("glsl-in accepts isinf/isnan — the gap is wgsl-out, not the front end");
+    let info = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .expect("the module validates — the predicates are legal naga IR");
+    naga::back::spv::write_vec(&module, &info, &naga::back::spv::Options::default(), None)
+        .expect("spv-out emits OpIsInf/OpIsNan")
+}
+
+/// Which payload kind carries the fragment shader — the same source, reaching the translator two ways.
+#[derive(Clone, Copy, Debug)]
+enum Payload {
+    Glsl,
+    SpirV,
+}
+
+impl Payload {
+    fn shader(self, source: &str) -> Cmd {
+        match self {
+            Self::Glsl => Cmd::CreateShader {
+                id: 2,
+                kind: ShaderPayloadKind::Glsl,
+                spirv: glsl(glsl_stage::FRAGMENT, "fmain", source),
+            },
+            Self::SpirV => Cmd::CreateShader {
+                id: 2,
+                kind: ShaderPayloadKind::SpirV,
+                spirv: fragment_spirv(source),
+            },
+        }
+    }
+
+    /// The SPIR-V front end keeps naga's own entry-point name (`main`); the GLSL path is told `fmain`.
+    fn entry(self) -> &'static str {
+        match self {
+            Self::Glsl => "fmain",
+            Self::SpirV => "main",
+        }
+    }
+}
+
+fn render(exec: &mut WgpuExecutor, payload: Payload, source: &str) -> hl_gpu::Result<Vec<u8>> {
     let mut session = new_session(exec);
     hl_gpu::runtime::submit(
         &mut session,
@@ -93,11 +147,7 @@ fn render(exec: &mut WgpuExecutor) -> hl_gpu::Result<Vec<u8>> {
                 kind: ShaderPayloadKind::Glsl,
                 spirv: glsl(glsl_stage::VERTEX, "vmain", VS),
             },
-            Cmd::CreateShader {
-                id: 2,
-                kind: ShaderPayloadKind::Glsl,
-                spirv: glsl(glsl_stage::FRAGMENT, "fmain", FS),
-            },
+            payload.shader(source),
             Cmd::CreateRenderPipeline(
                 1,
                 RenderPipelineDesc {
@@ -107,7 +157,7 @@ fn render(exec: &mut WgpuExecutor) -> hl_gpu::Result<Vec<u8>> {
                     },
                     fragment: Some(ShaderRef {
                         module: 2,
-                        entry: "fmain".into(),
+                        entry: payload.entry().into(),
                     }),
                     vertex_buffers: vec![],
                     color_targets: vec![color_target()],
@@ -172,17 +222,73 @@ fn isnan_and_isinf_answer_correctly_for_runtime_values() {
     let mut exec = WgpuExecutor::new(DeviceConfig::default())
         .expect("a GPU adapter is required to prove the wgpu executor");
 
-    let pixels = render(&mut exec).expect("a shader using isnan/isinf must compile and draw");
-    let expected = [255, 255, 0, 255];
-    for y in 0..H {
-        for x in 0..W {
-            let got = px(&pixels, W, x, y);
-            assert!(
-                near(got, expected),
-                "pixel ({x},{y}) is {got:?}, expected {expected:?} \
-                 (R=isinf(+INF), G=isnan(NaN), B=finite control, A=isinf(-INF)) — a channel that came \
-                 back 0 means the predicate was folded away; a B of 255 means it answers true for everything"
-            );
+    for payload in [Payload::Glsl, Payload::SpirV] {
+        let pixels = render(&mut exec, payload, FS)
+            .unwrap_or_else(|e| panic!("{payload:?}: a shader using isnan/isinf must compile and draw: {e}"));
+        let expected = [255, 255, 0, 255];
+        for y in 0..H {
+            for x in 0..W {
+                let got = px(&pixels, W, x, y);
+                assert!(
+                    near(got, expected),
+                    "{payload:?} pixel ({x},{y}) is {got:?}, expected {expected:?} \
+                     (R=isinf(+INF), G=isnan(NaN), B=finite control, A=isinf(-INF)) — a channel that came \
+                     back 0 means the predicate was folded away; a B of 255 means it answers true for everything"
+                );
+            }
+        }
+    }
+}
+
+/// The predicates used from inside CONTROL FLOW and a HELPER FUNCTION, so the arena rebuild has to carry
+/// more than a straight-line expression list.
+///
+/// This exists because of what the rebuild is: replacing a predicate means rebuilding a function's whole
+/// expression arena and remapping every handle that pointed into it. An exhaustive `match` makes the
+/// compiler catch a MISSING variant, but it cannot catch a variant remapped WRONGLY, and the simple case
+/// above only walks a handful. This one routes the predicates through a call, a loop, nested branches and
+/// a dynamically-indexed vector, so `Call`/`CallResult`, `If`, `Loop`, `Return` and `Access` all pass
+/// through the remap with an answer that is checked, not merely compiled.
+const FS_CONTROL_FLOW: &str = r#"#version 460
+layout(std140, binding = 0) uniform HlUniforms { vec4 v; };
+layout(location = 0) out vec4 o;
+
+float classify(float x) {
+    if (isnan(x)) { return 0.25; }
+    if (isinf(x)) { return 0.5; }
+    return 1.0;
+}
+
+void main() {
+    float acc = 0.0;
+    for (int i = 0; i < 2; ++i) {
+        acc += classify(v[i]);
+    }
+    o = vec4(classify(v.z), acc, classify(v.w), 1.0);
+}
+"#;
+
+#[test]
+fn predicates_survive_the_arena_rebuild_through_calls_and_control_flow() {
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
+
+    // v = [+INF, NaN, 1.0, -INF]: R = classify(1.0) = 1.0; G = classify(+INF) + classify(NaN) = 0.75;
+    // B = classify(-INF) = 0.5; A = 1.0. Every channel is a DIFFERENT value, so a remap that crossed two
+    // handles shows up as a wrong colour rather than a wrong shape.
+    let expected = [255, 191, 128, 255];
+    for payload in [Payload::Glsl, Payload::SpirV] {
+        let pixels = render(&mut exec, payload, FS_CONTROL_FLOW)
+            .unwrap_or_else(|e| panic!("{payload:?}: the control-flow shader must compile and draw: {e}"));
+        for y in 0..H {
+            for x in 0..W {
+                let got = px(&pixels, W, x, y);
+                assert!(
+                    near(got, expected),
+                    "{payload:?} pixel ({x},{y}) is {got:?}, expected {expected:?} — a handle remapped \
+                     to the wrong expression during the arena rebuild changes the value, not the shape"
+                );
+            }
         }
     }
 }
