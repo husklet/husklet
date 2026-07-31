@@ -358,3 +358,30 @@ mod hostile_input_tests;
 
 #[path = "tests/advertised.rs"]
 mod advertised_extension_tests;
+
+/// `eglGetDisplay(native_display)` is the ONLY place a wayland app hands the shim its own `wl_display*`,
+/// and the app-surface presenter needs that connection: deriving it from the `wl_surface` proxy takes
+/// `wl_proxy_get_display`, a Wayland 1.23+ symbol that 24.04-era guests (libwayland 1.22) do not export.
+/// Discarding it there is what latched the presenter unavailable and sent every frame through a readback
+/// present onto the shim's own mirror window. `EGL_DEFAULT_DISPLAY` is null and must stay legal — Chrome's
+/// GPU process passes it — so a null never clears a connection already learnt.
+#[test]
+fn egl_get_display_keeps_the_app_wl_display_and_a_null_never_clears_it() {
+    const APP_DISPLAY: usize = 0xDEAD_D150;
+    assert_eq!(
+        eglGetDisplay(APP_DISPLAY as *mut c_void),
+        DISPLAY_TOKEN as *mut c_void
+    );
+    assert_eq!(
+        GlobalState::access(|s| s.app_display),
+        APP_DISPLAY,
+        "the app's own wl_display must reach the app-surface presenter"
+    );
+
+    // EGL_DEFAULT_DISPLAY: still a valid display, and it must not forget what we already know.
+    assert_eq!(
+        eglGetDisplay(core::ptr::null_mut()),
+        DISPLAY_TOKEN as *mut c_void
+    );
+    assert_eq!(GlobalState::access(|s| s.app_display), APP_DISPLAY);
+}

@@ -182,6 +182,12 @@ pub struct State {
     /// The app's `wl_surface*` (as a `usize`) the current window surface wraps (`0` = none). Recovered
     /// from the `wl_egl_window` in `eglCreateWindowSurface`.
     pub wl_surface_ptr: usize,
+    /// The app's OWN `wl_display*` (as a `usize`, `0` = unknown), as handed to `eglGetDisplay` /
+    /// `eglGetPlatformDisplay`. The app-surface presenter needs the connection its `wl_surface` lives on,
+    /// and deriving it from the surface proxy needs `wl_proxy_get_display` — Wayland 1.23+, absent on
+    /// 24.04-era guests. Carrying it from the display getter is what keeps the presenter (and with it the
+    /// native zero-copy path) alive there.
+    pub app_display: usize,
     current_surface: usize,
     /// The live self-contained `wl_shm` present session to the compositor (`None` in tests / when no
     /// compositor is reachable — the present is then skipped, never faked). This drives the shim's OWN

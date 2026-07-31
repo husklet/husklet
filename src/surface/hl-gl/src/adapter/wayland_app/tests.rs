@@ -76,6 +76,8 @@ struct Recorder {
     identity_token: u64,
     /// Force a constructor to return null (models a live marshal failure).
     fail_pool: bool,
+    /// Model a pre-1.23 `libwayland-client`: `wl_proxy_get_display` is absent, so it yields null.
+    no_get_display: bool,
 }
 
 impl Recorder {
@@ -87,6 +89,7 @@ impl Recorder {
             has_identity: true,
             identity_token: 0x1234_5678_9abc_def0,
             fail_pool: false,
+            no_get_display: false,
         }
     }
     fn fresh(&self) -> *mut c_void {
@@ -106,6 +109,9 @@ impl Recorder {
 unsafe impl WlAbi for Recorder {
     fn get_display(&self, surface: *mut c_void) -> *mut c_void {
         self.push(Rec::GetDisplay(surface as usize));
+        if self.no_get_display {
+            return core::ptr::null_mut();
+        }
         0xD15_9000usize as *mut c_void // a fixed non-null "app display"
     }
     fn get_version(&self, _proxy: *mut c_void) -> u32 {
@@ -387,6 +393,38 @@ fn missing_shm_global_is_a_soft_error() {
         err.is_unavailable(),
         "a missing global must be a soft (fall-back) failure"
     );
+}
+
+/// A supplied `wl_display*` (the `native_display` the app handed `eglGetDisplay`) is used AS IS:
+/// bring-up must never call `wl_proxy_get_display` — that symbol only exists on Wayland 1.23+, and
+/// 24.04-era guests ship 1.22. Without this, the presenter never comes up there and every frame falls
+/// back to a readback present onto the shim's own mirror window.
+#[test]
+fn supplied_display_is_used_without_wl_proxy_get_display() {
+    const APP_DISPLAY: *mut c_void = 0xDEAD_D150usize as *mut c_void;
+    let rec = Box::new(Recorder::new());
+    let p = WaylandAppPresenter::with_abi(rec, SURFACE, APP_DISPLAY).expect("bring-up");
+    assert_eq!(p.display, APP_DISPLAY);
+    let log = unsafe { &*(std::ptr::addr_of!(*p.abi) as *const Recorder) }.log();
+    assert!(
+        !log.iter().any(|r| matches!(r, Rec::GetDisplay(_))),
+        "the supplied display must short-circuit wl_proxy_get_display"
+    );
+    // Everything derives from the SUPPLIED display, not a re-derived one.
+    assert_eq!(log[0], Rec::CreateQueue(APP_DISPLAY as usize));
+}
+
+/// Without a supplied display AND without `wl_proxy_get_display` (a 1.22 guest), bring-up is a soft
+/// NoDisplay — the exact state that latched the presenter unavailable before the display was threaded.
+#[test]
+fn absent_get_display_without_supplied_display_is_no_display() {
+    let mut rec = Recorder::new();
+    rec.no_get_display = true;
+    let err = WaylandAppPresenter::with_abi(Box::new(rec), SURFACE, core::ptr::null_mut())
+        .err()
+        .unwrap();
+    assert_eq!(err, WlAppError::NoDisplay);
+    assert!(err.is_unavailable());
 }
 
 /// A null surface pointer (not a wayland app) is a soft NoSurface — the caller keeps its self-owned path.

@@ -30,6 +30,7 @@ impl State {
             next_external_serial: Some(1),
             current_is_wayland: false,
             wl_surface_ptr: 0,
+            app_display: 0,
             current_surface: 0,
             wl: None,
             native_present: false,
@@ -77,6 +78,15 @@ impl State {
         }
         self.inited = true;
         Ok(())
+    }
+
+    /// Remember the app's own `wl_display*` from a display getter. `EGL_DEFAULT_DISPLAY` is null and
+    /// legitimate (Chrome's GPU process passes it), so a null never clears a connection already learnt —
+    /// the presenter falls back to `wl_proxy_get_display` in that case, as before.
+    pub fn record_app_display(&mut self, display: usize) {
+        if display != 0 {
+            self.app_display = display;
+        }
     }
 
     pub fn external_buffers_enabled(&self) -> bool {
@@ -379,14 +389,32 @@ impl State {
         let Some(surface) = self.surface_slot(self.current_surface) else {
             return false;
         };
+        let app_display = self.app_display;
         let mut surface = surface.state.lock().expect("surface slot poisoned");
         if surface.wl_app.is_none() && !surface.wl_app_unavailable {
-            // SAFETY: `wl_surface_ptr` came from the live wl_egl_window for the selected EGL surface.
+            // SAFETY: `wl_surface_ptr` came from the live wl_egl_window for the selected EGL surface, and
+            // `app_display` is the connection the app opened it on (`0` = derive it from the proxy).
             match unsafe {
-                hl_gl::adapter::wayland_app::WaylandAppPresenter::new(surface.wl_surface)
+                hl_gl::adapter::wayland_app::WaylandAppPresenter::new_with_display(
+                    surface.wl_surface,
+                    app_display,
+                )
             } {
                 Ok(presenter) => surface.wl_app = Some(presenter),
-                Err(_) => surface.wl_app_unavailable = true,
+                Err(error) => {
+                    // Logged at `error` because that is the one level a release build keeps: losing the
+                    // presenter also loses the native zero-copy path (every frame becomes a readback) and
+                    // moves the pixels to a mirror window. A degradation that severe must not be silent.
+                    hl_log::hl_error!(
+                        hl_log::tag::EGL,
+                        "app-surface presenter unavailable, falling back to the shim's own window \
+                         (readback present): {:?} wl_surface={:#x} wl_display={:#x}",
+                        error,
+                        surface.wl_surface,
+                        app_display
+                    );
+                    surface.wl_app_unavailable = true;
+                }
             }
         }
         surface.wl_app.is_some()

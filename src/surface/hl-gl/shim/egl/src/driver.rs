@@ -310,8 +310,12 @@ pub extern "C" fn eglGetError() -> i32 {
 }
 
 #[cfg_attr(not(gles_client), no_mangle)]
-pub extern "C" fn eglGetDisplay(_display_id: *mut c_void) -> *mut c_void {
+pub extern "C" fn eglGetDisplay(display_id: *mut c_void) -> *mut c_void {
     crate::stub::trace("eglGetDisplay", "returning the hl display");
+    // `display_id` is the app's OWN `wl_display*` — keep it. The app-surface presenter marshals on that
+    // connection, and the only other way to reach it is `wl_proxy_get_display` (Wayland 1.23+, absent on
+    // 24.04-era guests). `EGL_DEFAULT_DISPLAY` is null and stays legal: it simply teaches us nothing.
+    GlobalState::access(|s| s.record_app_display(display_id as usize));
     DISPLAY_TOKEN as *mut c_void
 }
 
