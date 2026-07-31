@@ -62,10 +62,12 @@ fn incomplete_framebuffer_blit_and_draw_are_safe() {
         GL_NEAREST,
     );
     assert_eq!(c.take_gl_error(), GL_INVALID_FRAMEBUFFER_OPERATION);
-    // Drawing with no program + an incomplete FBO bound just records the draw (dropped at lowering).
+    // ES 3.0 §2.8.3: a draw into an incomplete framebuffer is GL_INVALID_FRAMEBUFFER_OPERATION and
+    // records nothing. This asserted GL_NO_ERROR and a recorded draw, so an application that checks
+    // glGetError to learn whether its framebuffer is usable was told that it was.
     record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
-    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
-    assert_eq!(c.draws().len(), 1);
+    assert_eq!(c.take_gl_error(), GL_INVALID_FRAMEBUFFER_OPERATION);
+    assert!(c.draws().is_empty());
 
     // Attaching a real texture makes it complete.
     let tex = c.textures.gen();

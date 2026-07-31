@@ -37,6 +37,11 @@ pub(super) fn lower_draw_n(
     snapshots: &mut SnapshotTextures,
 ) -> Option<DrawCommands> {
     let d = d.clone();
+    // `glCullFace(GL_FRONT_AND_BACK)` discards every triangle in GL. There is no WebGPU cull mode for it,
+    // so the draw produces no primitives and is dropped here rather than lowered as a back-face cull.
+    if d.discards_every_primitive() {
+        return None;
+    }
     let prog_name = if d.prog != 0 {
         d.prog
     } else {
@@ -315,11 +320,17 @@ pub(super) fn lower_draw_n(
     // One color target for the ordinary path; `n_color_targets` identical targets for a `glDrawBuffers` MRT
     // pass (each attachment shares the draw's format + blend). The fragment shader's `layout(location = k)`
     // outputs map onto target `k` (see `adapter::glsl::translate_render`).
+    // A slot deselected by `glDrawBuffers(…, GL_NONE, …)` receives no fragment output at all, which is a
+    // zero write mask on that target — the attachment keeps whatever it already held.
     let color_targets: Vec<ColorTargetState> = (0..n_color_targets.max(1))
-        .map(|_| ColorTargetState {
+        .map(|slot| ColorTargetState {
             format: target_fmt,
             blend: blend.clone(),
-            write_mask: d.color_mask & 0xf,
+            write_mask: if d.draw_buffer_mask & (1u32 << slot.min(31)) != 0 {
+                d.color_mask & 0xf
+            } else {
+                0
+            },
         })
         .collect();
     let cull = if d.cull_enabled {
@@ -524,18 +535,8 @@ pub(super) fn lower_draw_n(
             reference: (d.stencil_ref.max(0) as u32) & 0xff,
         });
     }
-    if [
-        d.blend_src_rgb,
-        d.blend_dst_rgb,
-        d.blend_src_alpha,
-        d.blend_dst_alpha,
-    ]
-    .iter()
-    .any(|factor| matches!(*factor, 0x8001..=0x8004))
-    {
-        ops.push(Enc::SetBlendConstant {
-            color: d.blend_color,
-        });
+    if let Some(color) = blend_constant(&d) {
+        ops.push(Enc::SetBlendConstant { color });
     }
     if has_bg {
         ops.push(Enc::SetBindGroup {
@@ -619,3 +620,43 @@ pub(super) fn lower_draw_n(
 }
 
 // Fixed pipeline state encoding continues in `pipeline`.
+
+/// The blend constant a draw's `Enc::SetBlendConstant` must carry, or `None` when no factor references it.
+///
+/// The IR (like WebGPU) has one `CONSTANT` factor, which multiplies each channel by the SAME-channel
+/// component of the blend constant. GL has two: `GL_CONSTANT_COLOR` means exactly that, while
+/// `GL_CONSTANT_ALPHA` broadcasts the constant's ALPHA to all four channels. The alpha form is expressed by
+/// broadcasting the alpha into the constant this draw sets — the constant is per-draw dynamic state, so
+/// this costs nothing and needs no new factor. Without it `GL_CONSTANT_ALPHA` silently behaved as
+/// `GL_CONSTANT_COLOR` and a `(0, 0, 0, 200)` constant scaled RGB by zero.
+///
+/// A draw that references BOTH forms cannot be expressed by one constant; the colour form wins, because it
+/// is the one whose meaning the IR factor already has.
+fn blend_constant(d: &DrawCall) -> Option<[f32; 4]> {
+    const CONSTANT_COLOR: u32 = 0x8001;
+    const ONE_MINUS_CONSTANT_COLOR: u32 = 0x8002;
+    const CONSTANT_ALPHA: u32 = 0x8003;
+    const ONE_MINUS_CONSTANT_ALPHA: u32 = 0x8004;
+    let factors = [
+        d.blend_src_rgb,
+        d.blend_dst_rgb,
+        d.blend_src_alpha,
+        d.blend_dst_alpha,
+    ];
+    if !factors
+        .iter()
+        .any(|factor| matches!(*factor, CONSTANT_COLOR..=ONE_MINUS_CONSTANT_ALPHA))
+    {
+        return None;
+    }
+    let colour_form = factors
+        .iter()
+        .any(|factor| matches!(*factor, CONSTANT_COLOR | ONE_MINUS_CONSTANT_COLOR));
+    let alpha_form = factors
+        .iter()
+        .any(|factor| matches!(*factor, CONSTANT_ALPHA | ONE_MINUS_CONSTANT_ALPHA));
+    if alpha_form && !colour_form {
+        return Some([d.blend_color[3]; 4]);
+    }
+    Some(d.blend_color)
+}

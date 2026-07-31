@@ -81,3 +81,5 @@ mod pipeline;
 mod stencil;
 #[path = "lowering_extra/unlinked.rs"]
 mod unlinked;
+#[path = "lowering_extra/mrt.rs"]
+mod mrt;

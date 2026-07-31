@@ -178,8 +178,20 @@ pub struct DrawCall {
     /// `glColorMask` per-channel write enable at draw time, packed `R<<0 | G<<1 | B<<2 | A<<3` — lowered
     /// verbatim into every color target's `ColorTargetState::write_mask`. `0xf` = write all channels.
     pub color_mask: u32,
+    /// `glDrawBuffers` selection at draw time, one bit per color-attachment slot (`1` = this slot receives
+    /// the fragment output at that location). A `GL_NONE` entry clears its bit, and the slot's color target
+    /// then lowers with a zero `write_mask` — GL discards the output for that attachment, leaving whatever
+    /// the attachment already held. The initial state is "every slot writes", so `!0` is the default and an
+    /// app that never calls `glDrawBuffers` lowers unchanged.
+    pub draw_buffer_mask: u32,
     /// The clear color in force for this draw / clear.
     pub clear: [f32; 4],
+    /// The `glClearDepthf` / `glClearStencil` values in force for this draw / clear. Snapshotted with the
+    /// call, exactly like [`Self::clear`]: reading them off live context state at lowering time gave a
+    /// depth clear whatever value the app happened to set LAST in the frame, so a
+    /// `glClearDepthf(0.5); glClear(DEPTH); glClearDepthf(1.0)` sequence cleared to 1.0.
+    pub clear_depth: f32,
+    pub clear_stencil: i32,
     /// For a clear call: the (x, y, w, h) rect being cleared.
     pub clear_rect: [i32; 4],
     /// For a clear call: the `glClear` buffer mask (`GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
@@ -187,6 +199,11 @@ pub struct DrawCall {
     /// explicit mask keeps the historical "color clear" meaning. Which planes the clear may actually WRITE
     /// also depends on the write masks snapshotted with it — see [`DrawCall::clears_color`].
     pub clear_mask: u32,
+    /// Which color attachment this clear is SCOPED to. `None` — a `glClear`, which clears every attachment
+    /// the draw-buffer selection names. `Some(i)` — a `glClearBuffer*(GL_COLOR, i, …)`, which clears
+    /// attachment `i` and no other. A scoped clear therefore never wipes the whole framebuffer and never
+    /// discards earlier draws to the OTHER attachments.
+    pub clear_draw_buffer: Option<u32>,
     /// Captured client-side vertex arrays (enabled attribs drawn with NO VBO bound). EMPTY for an
     /// all-VBO draw — so a bound-VBO draw lowers byte-identically. Each entry lowers to a transient
     /// vertex buffer + a one-attribute vertex-layout slot (see [`ClientArray`]).
@@ -229,6 +246,18 @@ impl DrawCall {
         self.is_clear
             && self.clear_mask & crate::model::glconst::GL_COLOR_BUFFER_BIT != 0
             && self.color_mask & 0xf == 0xf
+    }
+
+    /// This clear writes color attachment `slot`: an unscoped `glClear` reaches every attachment the
+    /// draw-buffer selection still names, a `glClearBuffer*` only the one it was given.
+    pub fn clears_color_slot(&self, slot: u32) -> bool {
+        if !self.clears_color() {
+            return false;
+        }
+        match self.clear_draw_buffer {
+            Some(index) => index == slot,
+            None => self.draw_buffer_mask & (1u32 << slot.min(31)) != 0,
+        }
     }
 
     /// This clear names the color buffer but only SOME of its channels — unrepresentable, so refused.
@@ -329,9 +358,13 @@ impl Default for DrawCall {
             cull_face: crate::model::glconst::GL_BACK,
             front_face: crate::model::glconst::GL_CCW,
             color_mask: 0xf,
+            draw_buffer_mask: !0,
             clear: [0.0; 4],
+            clear_depth: 1.0,
+            clear_stencil: 0,
             clear_rect: [0; 4],
             clear_mask: crate::model::glconst::GL_COLOR_BUFFER_BIT,
+            clear_draw_buffer: None,
             client_vbufs: Vec::new(),
             client_indices: Vec::new(),
             buffers: Vec::new(),

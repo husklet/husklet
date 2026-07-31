@@ -365,15 +365,21 @@ pub fn uniform_at(ctx: &mut GlContext, location: usize, bytes: &[u8]) {
         .programs
         .program(ctx.local.cur_prog)
         .and_then(|program| program.location(location as i32));
+    // ES 3.0 §2.11.7: a location that does not name a uniform of the CURRENT program (including "there is
+    // no current program") is GL_INVALID_OPERATION. Location `-1` is the one exception and is filtered by
+    // the caller before it gets here, so an unresolvable location at this point really is bogus. Accepting
+    // it silently let an application write into nothing and read GL_NO_ERROR back.
+    let Some(crate::model::program::UniformLocation::Data {
+        declaration,
+        element,
+    }) = resolved
+    else {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    };
     if let Some(p) = ctx.programs.get_mut(ctx.local.cur_prog) {
-        let Some(crate::model::program::UniformLocation::Data {
-            declaration,
-            element,
-        }) = resolved
-        else {
-            return;
-        };
         let Some(uniform) = p.unis.get(declaration) else {
+            ctx.set_gl_error(GL_INVALID_OPERATION);
             return;
         };
         uniform.write_from(&mut p.ubuf, element, bytes);
@@ -526,6 +532,43 @@ pub fn detach_shader(ctx: &mut GlContext, program: u32, shader: u32) {
 
 /// Snapshot the currently-bound draw state into a fresh [`DrawCall`] (the immutable per-draw record).
 impl GlContext {
+    /// The preconditions every `glDraw*` shares, in the order ES 3.0 §2.8.3 raises them. Returns `false`
+    /// when the draw must record nothing, having raised the error itself.
+    ///
+    /// * an undefined primitive `mode` → `GL_INVALID_ENUM`;
+    /// * an index type other than `GL_UNSIGNED_{BYTE,SHORT,INT}` → `GL_INVALID_ENUM`;
+    /// * a draw framebuffer that is not complete → `GL_INVALID_FRAMEBUFFER_OPERATION`.
+    ///
+    /// Each was previously accepted silently, which is worse than a wrong picture: an application that
+    /// checks `glGetError` to decide whether its framebuffer is usable was told it was.
+    pub(super) fn draw_preconditions(&mut self, mode: u32, index_type: Option<u32>) -> bool {
+        // GL_POINTS(0) … GL_TRIANGLE_FAN(6) are the seven defined modes; there is no glconst for
+        // GL_LINE_LOOP(2) or GL_TRIANGLE_FAN(6).
+        if mode > 6 {
+            self.set_gl_error(GL_INVALID_ENUM);
+            return false;
+        }
+        if let Some(index_type) = index_type {
+            if !matches!(
+                index_type,
+                GL_UNSIGNED_BYTE | GL_UNSIGNED_SHORT | GL_UNSIGNED_INT
+            ) {
+                self.set_gl_error(GL_INVALID_ENUM);
+                return false;
+            }
+        }
+        // Completeness is asked of USER framebuffers only. The default framebuffer's is EGL's business,
+        // and a surfaceless context legitimately renders to its FBOs — `build_raw` already declines the
+        // default-framebuffer work such a context records, so testing it here would only reject draws
+        // this driver serves correctly today.
+        let fbo = self.local.bound_fbo;
+        if fbo != 0 && self.framebuffer_status(fbo) != GL_FRAMEBUFFER_COMPLETE {
+            self.set_gl_error(GL_INVALID_FRAMEBUFFER_OPERATION);
+            return false;
+        }
+        true
+    }
+
     pub(super) fn draw_uses_mapped_buffer(&self) -> bool {
         self.local.attr.iter().any(|attribute| {
             if !attribute.enabled {
@@ -592,10 +635,13 @@ impl GlContext {
             blend_eq_rgb: ctx.local.pipeline.blend_eq_rgb,
             blend_eq_alpha: ctx.local.pipeline.blend_eq_alpha,
             blend_color: ctx.local.pipeline.blend_color,
-            depth: ctx.local.pipeline.depth,
+            // ES 3.0 §4.1.5/§4.1.6: with no depth (resp. stencil) attachment on the DRAW framebuffer the
+            // test behaves as though it always passes and nothing is written — it is not the enable alone
+            // that arms the test. The default framebuffer's planes come from the context's `EGLConfig`.
+            depth: ctx.local.pipeline.depth && ctx.draw_framebuffer_has_depth(),
             depth_func: ctx.local.pipeline.depth_func,
-            depth_write: ctx.local.pipeline.depth_write,
-            stencil: ctx.local.pipeline.stencil,
+            depth_write: ctx.local.pipeline.depth_write && ctx.draw_framebuffer_has_depth(),
+            stencil: ctx.local.pipeline.stencil && ctx.draw_framebuffer_has_stencil(),
             stencil_func_front: ctx.local.pipeline.stencil_func_front,
             stencil_func_back: ctx.local.pipeline.stencil_func_back,
             stencil_fail_front: ctx.local.pipeline.stencil_fail_front,
@@ -611,7 +657,10 @@ impl GlContext {
             cull_face: ctx.local.pipeline.cull_face,
             front_face: ctx.local.pipeline.front_face,
             color_mask: ctx.local.pipeline.color_mask,
+            draw_buffer_mask: ctx.draw_buffer_mask(),
             clear: ctx.local.pipeline.clear_color,
+            clear_depth: ctx.local.pipeline.clear_depth,
+            clear_stencil: ctx.local.pipeline.clear_stencil,
             elem_buf: ctx.local.element_buffer,
             ..DrawCall::default()
         };

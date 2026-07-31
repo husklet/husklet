@@ -3,6 +3,18 @@ use crate::model::context::VertexBinding;
 
 // ---- fixed-function state ------------------------------------------------------------------------
 
+/// Validate the `index`/`size`/`stride` triple every `glVertexAttrib{Pointer,IPointer,Format}` shares
+/// (ES 3.0 §2.8): the index must name an attribute array, `size` must be 1..=4, and `stride` must not be
+/// negative. Raises `GL_INVALID_VALUE` and returns `false` when the call must record nothing — silently
+/// accepting these left an application believing a 5-component or negatively-strided array was in force.
+fn vertex_attrib_arguments(ctx: &mut GlContext, location: usize, size: i32, stride: i32) -> bool {
+    if location >= ctx.local.attr.len() || !(1..=4).contains(&size) || stride < 0 {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return false;
+    }
+    true
+}
+
 /// `glVertexAttribPointer` + implicit `glEnableVertexAttribArray` is separate.
 #[allow(clippy::too_many_arguments)]
 pub fn vertex_attrib_pointer(
@@ -14,7 +26,7 @@ pub fn vertex_attrib_pointer(
     stride: i32,
     offset: usize,
 ) {
-    if location < ctx.local.attr.len() {
+    if vertex_attrib_arguments(ctx, location, size, stride) {
         let a = &mut ctx.local.attr[location];
         a.size = size;
         a.kind = kind;
@@ -39,7 +51,8 @@ pub fn vertex_attrib_format(
     integer: bool,
     relative_offset: usize,
 ) {
-    if location < ctx.local.attr.len() {
+    // `glVertexAttribFormat` carries no stride of its own (the binding supplies it), so 0 always passes.
+    if vertex_attrib_arguments(ctx, location, size, 0) {
         let attr = &mut ctx.local.attr[location];
         attr.size = size;
         attr.kind = kind;
@@ -129,15 +142,18 @@ pub fn vertex_attrib_divisor(ctx: &mut GlContext, index: usize, divisor: u32) {
 /// `glEnableVertexAttribArray(location)`.
 impl GlContext {
     pub fn enable_vertex_attrib(&mut self, location: usize) {
-        if location < self.local.attr.len() {
-            self.local.attr[location].enabled = true;
+        match self.local.attr.get_mut(location) {
+            Some(attr) => attr.enabled = true,
+            // ES 3.0 §2.8: an index at or past GL_MAX_VERTEX_ATTRIBS is GL_INVALID_VALUE.
+            None => self.set_gl_error(GL_INVALID_VALUE),
         }
     }
 
     /// `glDisableVertexAttribArray(location)`.
     pub fn disable_vertex_attrib(&mut self, location: usize) {
-        if location < self.local.attr.len() {
-            self.local.attr[location].enabled = false;
+        match self.local.attr.get_mut(location) {
+            Some(attr) => attr.enabled = false,
+            None => self.set_gl_error(GL_INVALID_VALUE),
         }
     }
 
@@ -275,9 +291,15 @@ pub fn color_mask(ctx: &mut GlContext, r: bool, g: bool, b: bool, a: bool) {
         (r as u32) | ((g as u32) << 1) | ((b as u32) << 2) | ((a as u32) << 3);
 }
 
-/// `glViewport(x, y, w, h)`.
+/// `glViewport(x, y, w, h)` — a negative width or height is `GL_INVALID_VALUE` and leaves the viewport
+/// unchanged (ES 3.0 §2.12.1). Accepting one silently let an application draw through a viewport it
+/// believed it had rejected.
 impl GlContext {
     pub fn set_viewport(&mut self, vp: [i32; 4]) {
+        if vp[2] < 0 || vp[3] < 0 {
+            self.set_gl_error(GL_INVALID_VALUE);
+            return;
+        }
         self.local.pipeline.viewport = vp;
     }
 }
@@ -339,9 +361,14 @@ pub fn pixel_store(ctx: &mut GlContext, pname: u32, value: i32) {
     let _ = ok;
 }
 
-/// `glScissor(x, y, w, h)`.
+/// `glScissor(x, y, w, h)` — a negative width or height is `GL_INVALID_VALUE` (ES 3.0 §4.1.2), like
+/// [`GlContext::set_viewport`].
 impl GlContext {
     pub fn set_scissor(&mut self, sc: [i32; 4]) {
+        if sc[2] < 0 || sc[3] < 0 {
+            self.set_gl_error(GL_INVALID_VALUE);
+            return;
+        }
         self.local.pipeline.scissor = sc;
     }
 
@@ -369,13 +396,28 @@ pub(super) fn set_cap(ctx: &mut GlContext, cap: u32, on: bool) {
 
 // ---- clear-buffer (glClearBuffer*) ---------------------------------------------------------------
 
-/// `glClearBufferfv(GL_COLOR, drawbuffer, value)` — clear the current render target to `rgba`. Recorded as
-/// a full-surface clear at the given color (the same deferred clear `glClear` records), so the frame
-/// builder lowers a pass clear-load with this color.
+/// `glClearBuffer*(GL_COLOR, drawbuffer, value)` — clear color attachment `drawbuffer` to `rgba`.
+///
+/// Recorded as a full-surface clear SCOPED to that attachment, so a multiple-render-target frame clears
+/// the attachment it was given rather than whichever one happens to be first. Unlike `glClear` this does
+/// not consult — and must not disturb — `GL_COLOR_CLEAR_VALUE` (ES 3.0 §4.2.3): the value travels with the
+/// recorded clear.
 impl GlContext {
-    pub fn clear_buffer_color(&mut self, rgba: [f32; 4]) {
-        self.local.pipeline.clear_color = rgba;
-        self.record_clear();
+    pub fn clear_buffer_color(&mut self, drawbuffer: u32, rgba: [f32; 4]) {
+        let (w, h) = self.target_wh();
+        let mut d = DrawCall {
+            is_clear: true,
+            clear_mask: GL_COLOR_BUFFER_BIT,
+            clear_draw_buffer: Some(drawbuffer),
+            ..self.snapshot(false)
+        };
+        d.clear = rgba;
+        d.clear_rect = [0, 0, w, h];
+        // A channel-masked clear is refused on the same terms as `glClear`'s (see `record_clear_buffers`).
+        if !d.clears_color() {
+            return;
+        }
+        self.record_draw(d);
     }
 
     // ---- blend equation (glBlendEquation*) -----------------------------------------------------------
@@ -387,7 +429,7 @@ impl GlContext {
     }
 }
 
-pub const CLEAR_BUFFER_COLOR: fn(&mut GlContext, [f32; 4]) = GlContext::clear_buffer_color;
+pub const CLEAR_BUFFER_COLOR: fn(&mut GlContext, u32, [f32; 4]) = GlContext::clear_buffer_color;
 pub const BLEND_EQUATION: fn(&mut GlContext, u32) = GlContext::set_blend_equation;
 pub use BLEND_EQUATION as blend_equation;
 pub use CLEAR_BUFFER_COLOR as clear_buffer_color;

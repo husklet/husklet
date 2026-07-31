@@ -147,3 +147,69 @@ fn blend_equation_lowers_same_op_for_color_and_alpha() {
         "alpha equation = FUNC_REVERSE_SUBTRACT (same, non-separate)"
     );
 }
+
+// ---------------------------------------------------------------------------------------------------
+// glCullFace(GL_FRONT_AND_BACK) discards every triangle, whichever way it winds. WebGPU's cull mode names
+// one face, so the pipeline mapping cannot express it; the draw must be dropped instead of lowered as a
+// back-face cull, which removed a triangle only when its winding happened to make it a back face.
+// ---------------------------------------------------------------------------------------------------
+
+/// Lower one triangle at `winding` with `GL_CULL_FACE` enabled and `cull_face`, and report whether any
+/// draw reached the encoder.
+fn triangle_survives_cull(cull_face: u32, winding: u32) -> bool {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    record::enable(&mut c, GL_CULL_FACE);
+    record::cull_face(&mut c, cull_face);
+    record::front_face(&mut c, winding);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    if !swap::swap_buffers(&mut c, &mut sink).unwrap() {
+        return false;
+    }
+    sink.batches[0]
+        .iter()
+        .any(|cmd| matches!(cmd, Cmd::CreateRenderPipeline(..)))
+}
+
+#[test]
+fn cull_front_and_back_discards_triangles_of_either_winding() {
+    for winding in [GL_CCW, GL_CW] {
+        assert!(
+            !triangle_survives_cull(GL_FRONT_AND_BACK, winding),
+            "GL_FRONT_AND_BACK must discard the triangle at winding {winding:#x}"
+        );
+    }
+}
+
+#[test]
+fn single_face_cull_still_lowers_a_pipeline() {
+    // The neighbouring modes must be untouched: GL_BACK/GL_FRONT are ordinary pipeline cull state and
+    // whether a given triangle survives is the rasterizer's business, not the lowering's.
+    for face in [GL_BACK, GL_FRONT] {
+        assert!(
+            triangle_survives_cull(face, GL_CCW),
+            "cull face {face:#x} must still lower a pipeline"
+        );
+    }
+}
+
+#[test]
+fn cull_front_and_back_leaves_points_and_lines_alone() {
+    // GL culls triangles only (ES 3.0 §3.6.1); points and lines are never culled.
+    for mode in [GL_POINTS, GL_LINES] {
+        let mut c = ctx();
+        let mut sink = RecordingSink::with_full_caps();
+        setup_geometry(&mut c);
+        record::enable(&mut c, GL_CULL_FACE);
+        record::cull_face(&mut c, GL_FRONT_AND_BACK);
+        record::draw_arrays(&mut c, mode, 0, 3);
+        assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+        assert!(
+            sink.batches[0]
+                .iter()
+                .any(|cmd| matches!(cmd, Cmd::CreateRenderPipeline(..))),
+            "mode {mode:#x} is not a triangle and must survive GL_FRONT_AND_BACK"
+        );
+    }
+}

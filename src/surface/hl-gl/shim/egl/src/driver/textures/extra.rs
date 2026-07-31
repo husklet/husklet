@@ -160,36 +160,84 @@ pub extern "C" fn glGetTexParameterIuiv(target: u32, pname: u32, params: *mut u3
     unsafe { *params = v as u32 };
 }
 
-/// `glGetVertexAttribfv`/`iv` — attribute readback. This model records the array pointer + enable state
-/// but reports the safe default `0` for the queried parameters (no attribute reflected back), matching the
-/// reference shim; the app's own `glVertexAttribPointer` state is authoritative.
+/// `glGetVertexAttrib{f,i}v(index, pname)` — the vertex attribute ARRAY state (`glVertexAttribPointer`'s
+/// size/type/stride/normalized/binding, the `glEnableVertexAttribArray` flag, and the
+/// `glVertexAttribDivisor` rate) plus `GL_CURRENT_VERTEX_ATTRIB`. An out-of-range index or an untracked
+/// `pname` raises the spec error and leaves `params` untouched, rather than writing a `0` an app would
+/// then restore as real state.
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glGetVertexAttribfv(_index: u32, _pname: u32, params: *mut f32) {
-    if !params.is_null() {
-        unsafe { *params = 0.0 };
+pub extern "C" fn glGetVertexAttribfv(index: u32, pname: u32, params: *mut f32) {
+    if params.is_null() {
+        return;
     }
+    GlobalState::context(|s| {
+        if pname == GL_CURRENT_VERTEX_ATTRIB {
+            match query::get_current_vertex_attrib(&s.gl, index) {
+                // SAFETY: GL_CURRENT_VERTEX_ATTRIB writes exactly four components; `params` is non-null.
+                Some(v) => unsafe { std::ptr::copy_nonoverlapping(v.as_ptr(), params, 4) },
+                None => s.gl.set_gl_error(GL_INVALID_VALUE),
+            }
+            return;
+        }
+        match query::get_vertex_attrib(&s.gl, index, pname) {
+            // SAFETY: every remaining pname is a single value and `params` is non-null.
+            Some(v) => unsafe { *params = v as f32 },
+            None => s.gl.set_gl_error(attrib_query_error(&s.gl, index)),
+        }
+    });
 }
 
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glGetVertexAttribiv(_index: u32, _pname: u32, params: *mut i32) {
-    if !params.is_null() {
-        unsafe { *params = 0 };
+pub extern "C" fn glGetVertexAttribiv(index: u32, pname: u32, params: *mut i32) {
+    if params.is_null() {
+        return;
+    }
+    GlobalState::context(|s| {
+        if pname == GL_CURRENT_VERTEX_ATTRIB {
+            match query::get_current_vertex_attrib(&s.gl, index) {
+                // SAFETY: four components into a non-null `params`.
+                Some(v) => unsafe {
+                    for (slot, value) in v.iter().enumerate() {
+                        *params.add(slot) = *value as i32;
+                    }
+                },
+                None => s.gl.set_gl_error(GL_INVALID_VALUE),
+            }
+            return;
+        }
+        match query::get_vertex_attrib(&s.gl, index, pname) {
+            // SAFETY: a single value into a non-null `params`.
+            Some(v) => unsafe { *params = v },
+            None => s.gl.set_gl_error(attrib_query_error(&s.gl, index)),
+        }
+    });
+}
+
+/// `GL_INVALID_VALUE` when the attribute index is out of range, `GL_INVALID_ENUM` for an unrecognized
+/// `pname` at a valid index — the split ES 3.0 §6.1.10 requires.
+fn attrib_query_error(ctx: &GlContext, index: u32) -> u32 {
+    if index as usize >= ctx.attributes().len() {
+        GL_INVALID_VALUE
+    } else {
+        GL_INVALID_ENUM
     }
 }
 
-/// `glGetVertexAttribIiv`/`Iuiv` — the integer forms; same `0` default.
+/// `glGetVertexAttribIiv`/`Iuiv` — the integer forms of the same array state.
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glGetVertexAttribIiv(_index: u32, _pname: u32, params: *mut i32) {
-    if !params.is_null() {
-        unsafe { *params = 0 };
-    }
+pub extern "C" fn glGetVertexAttribIiv(index: u32, pname: u32, params: *mut i32) {
+    glGetVertexAttribiv(index, pname, params);
 }
 
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glGetVertexAttribIuiv(_index: u32, _pname: u32, params: *mut u32) {
-    if !params.is_null() {
-        unsafe { *params = 0 };
+pub extern "C" fn glGetVertexAttribIuiv(index: u32, pname: u32, params: *mut u32) {
+    if params.is_null() {
+        return;
     }
+    let mut value = 0i32;
+    glGetVertexAttribiv(index, pname, &mut value);
+    // SAFETY: `params` is non-null and holds one value for every pname this form accepts.
+    unsafe { *params = value as u32 };
 }
 
 /// `glGetVertexAttribPointerv` — the attribute array pointer readback; reports null (the app's own bound

@@ -108,6 +108,20 @@ impl Frame {
         // Folded into the same segmented path as the scissored colour clear (see [`segment_boundary`]).
         let needs_segments = survivors.iter().any(segment_boundary);
         let first_geometry = survivors.iter().find(|draw| !draw.is_clear);
+        // A multiple-render-target framebuffer resolves BEFORE the "nothing but clears" shortcut below: a
+        // `glClearBufferfv(GL_COLOR, 1, …)` frame has no geometry at all, and the single-target shortcut
+        // would clear attachment 0 with it (which is exactly "the index was ignored").
+        if !needs_segments {
+            let mrt_fbo = draws.first().map(|d| d.fbo).unwrap_or(0);
+            if mrt_fbo != 0 && ctx.local.framebuffers.color_attachment_count(mrt_fbo) > 1 {
+                // The WHOLE run, not the slot-0 survivors: which draws a clear supersedes is a per-
+                // attachment question here, and the builder answers it per attachment.
+                if let Some(f) = build_mrt_geometry_frame(ctx, draws, mrt_fbo) {
+                    return Some(f);
+                }
+                // Fall through to the single-target path if the MRT attachments could not be fully resolved.
+            }
+        }
         if first_geometry.is_none() && !needs_segments {
             // Nothing but non-colour clears (or nothing at all) is left, so there is no colour work to present.
             if !draws.iter().any(DrawCall::clears_color) {
@@ -136,16 +150,6 @@ impl Frame {
         // renders ALL of them in ONE pass with N color targets (see [`build_mrt_geometry_frame`]). An FBO with
         // one (or zero) attachment, or the default framebuffer, stays on the byte-identical single-target path.
         // MRT never co-occurs with a scissored clear in practice, so it keeps the single-pass path.
-        if !needs_segments
-            && fbo != 0
-            && ctx.local.framebuffers.color_attachment_count(fbo) > 1
-        {
-            if let Some(f) = build_mrt_geometry_frame(ctx, survivors, fbo, clear) {
-                return Some(f);
-            }
-            // Fall through to the single-target path if the MRT attachments could not be fully resolved.
-        }
-
         let mut cmds: Vec<Cmd> = Vec::new();
         let snapshot = first_geometry
             .or_else(|| survivors.first())
@@ -497,18 +501,46 @@ pub(super) fn segment_boundary(d: &DrawCall) -> bool {
     (d.clears_color() && d.scissor_enabled) || d.clears_depth() || d.clears_stencil()
 }
 
-/// The depth-attachment load op for a pass covering `draws`: `Clear` when one of them is a depth or stencil
-/// clear, otherwise `Load` (GL keeps the depth buffer between frames unless the app clears it). A depth
-/// texture created this frame always clear-loads regardless — see [`depth_attachment_for`].
-pub(super) fn depth_load(draws: &[DrawCall]) -> LoadOp {
-    if draws
-        .iter()
-        .any(|d| d.clears_depth() || d.clears_stencil())
-    {
-        LoadOp::Clear
-    } else {
-        LoadOp::Load
+/// The depth-attachment load op for a pass covering `draws`, together with the values the clear that armed
+/// it carried: `Clear` when one of them is a depth or stencil clear, otherwise `Load` (GL keeps the depth
+/// buffer between frames unless the app clears it). A depth texture created this frame always clear-loads
+/// regardless — see [`depth_attachment_for`].
+///
+/// The values come from the LAST depth (resp. stencil) clear in the run rather than from live context
+/// state, because `glClearDepthf` is ordinary state an app moves between clears: reading it at lowering
+/// time gave every depth clear in a frame the frame's final `glClearDepthf` value.
+#[derive(Clone, Copy)]
+pub(super) struct DepthClear {
+    pub(super) load: LoadOp,
+    pub(super) depth: f32,
+    pub(super) stencil: i32,
+}
+
+impl DepthClear {
+    /// The GL initial clear values, used when nothing in the run recorded a depth/stencil clear (a depth
+    /// texture minted this frame still has to clear-load; see [`depth_attachment_for`]).
+    pub(super) fn preserving() -> Self {
+        Self {
+            load: LoadOp::Load,
+            depth: 1.0,
+            stencil: 0,
+        }
     }
+}
+
+pub(super) fn depth_load(draws: &[DrawCall]) -> DepthClear {
+    let mut clear = DepthClear::preserving();
+    for d in draws {
+        if d.clears_depth() {
+            clear.load = LoadOp::Clear;
+            clear.depth = d.clear_depth;
+        }
+        if d.clears_stencil() {
+            clear.load = LoadOp::Clear;
+            clear.stencil = d.clear_stencil;
+        }
+    }
+    clear
 }
 
 /// Lower one framebuffer run as a SEQUENCE of render-pass segments split at every [`segment_boundary`],
@@ -539,7 +571,7 @@ pub(super) fn lower_segments(
                     ops: &mut Vec<Enc>,
                     segment: &mut Vec<DrawCall>,
                     load: &mut LoadOp,
-                    dload: &mut LoadOp| {
+                    dload: &mut DepthClear| {
         emit_segment_pass(
             ctx,
             cmds,
@@ -557,7 +589,7 @@ pub(super) fn lower_segments(
         );
         segment.clear();
         *load = LoadOp::Load;
-        *dload = LoadOp::Load;
+        *dload = DepthClear::preserving();
     };
 
     for d in run {
@@ -583,8 +615,13 @@ pub(super) fn lower_segments(
                 ops.push(rect);
             }
         }
-        if d.clears_depth() || d.clears_stencil() {
-            dload = LoadOp::Clear;
+        if d.clears_depth() {
+            dload.load = LoadOp::Clear;
+            dload.depth = d.clear_depth;
+        }
+        if d.clears_stencil() {
+            dload.load = LoadOp::Clear;
+            dload.stencil = d.clear_stencil;
         }
     }
     emit(ctx, cmds, ops, &mut segment, &mut load, &mut dload);
@@ -607,7 +644,7 @@ pub(super) fn emit_segment_pass(
     th: i32,
     clear: [f32; 4],
     load: LoadOp,
-    depth_load: LoadOp,
+    depth_load: DepthClear,
     no_fbo_tex: &std::collections::HashMap<(u32, u64), u32>,
     snapshots: &mut SnapshotTextures,
 ) {
@@ -690,7 +727,6 @@ pub(super) fn build_mrt_geometry_frame(
     ctx: &mut GlContext,
     geom: &[DrawCall],
     fbo: u32,
-    clear: [f32; 4],
 ) -> Option<Frame> {
     let n = ctx.local.framebuffers.color_attachment_count(fbo) as usize;
     // Resolve every attachment's render-target texture (all must share the pass dimensions, as wgpu
@@ -761,12 +797,21 @@ pub(super) fn build_mrt_geometry_frame(
     }
     let (tw, th) = dims?;
 
+    // An UNSCOPED unscissored `glClear` wipes every selected attachment, so the draws recorded before it
+    // are gone and the pass starts there. A `glClearBuffer*` is scoped to one attachment and supersedes
+    // nothing, which is why it does not move this boundary.
+    let start = geom
+        .iter()
+        .rposition(|d| d.clears_color() && !d.scissor_enabled && d.clear_draw_buffer.is_none())
+        .unwrap_or(0);
+    let geom = &geom[start..];
+
     // Lower each draw with N color targets so the pipeline writes every attachment.
     let no_fbo_tex = std::collections::HashMap::new();
     let mut snapshots = SnapshotTextures::new();
     let mut copies: Vec<Enc> = Vec::new();
     let mut draw_ops: Vec<Enc> = Vec::new();
-    for d in geom {
+    for d in geom.iter().filter(|d| !d.is_clear) {
         // MRT passes carry no depth/stencil attachment in this model, so no depth pipeline format.
         if let Some(lowered) = lower_draw_n(
             ctx,
@@ -784,17 +829,32 @@ pub(super) fn build_mrt_geometry_frame(
             draw_ops.extend(lowered.ops);
         }
     }
-    if draw_ops.is_empty() {
+    // A frame of nothing but `glClearBufferfv`s is still a frame: its pass carries the attachment loads and
+    // no draws. Only a frame that neither draws nor clears any attachment has nothing to lower.
+    if draw_ops.is_empty()
+        && !(0..n as u32).any(|slot| geom.iter().any(|d| d.clears_color_slot(slot)))
+    {
         return None;
     }
 
+    // Each attachment clear-loads with the LAST clear that names IT (see [`RenderPasses::full_clear_slot`])
+    // and load-preserves when nothing cleared it — which is what makes a scoped clear of attachment 1 leave
+    // attachments 0 and 2 alone.
     let color: Vec<ColorAttachment> = targets
         .iter()
-        .map(|&texture| ColorAttachment {
-            texture,
-            load: LoadOp::Clear,
-            clear,
-            store: true,
+        .enumerate()
+        .map(|(slot, &texture)| {
+            let (clear, _) = RenderPasses::full_clear_slot(geom, slot as u32);
+            ColorAttachment {
+                texture,
+                load: if clear.is_some() {
+                    LoadOp::Clear
+                } else {
+                    LoadOp::Load
+                },
+                clear: clear.unwrap_or([0.0; 4]),
+                store: true,
+            }
         })
         .collect();
     let mut ops: Vec<Enc> = copies;

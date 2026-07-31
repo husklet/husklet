@@ -46,7 +46,11 @@ pub fn framebuffer_texture_2d(
     // GL_COLOR_ATTACHMENT0..15 are all attachable (MRT); a non-color attachment / textarget / level is
     // unmodeled. The attachment index is `attachment - GL_COLOR_ATTACHMENT0`.
     let is_color = (GL_COLOR_ATTACHMENT0..=GL_COLOR_ATTACHMENT0 + 15).contains(&attachment);
-    if !is_color || textarget != GL_TEXTURE_2D || level != 0 {
+    let is_depth_stencil = matches!(
+        attachment,
+        GL_DEPTH_ATTACHMENT | GL_STENCIL_ATTACHMENT | GL_DEPTH_STENCIL_ATTACHMENT
+    );
+    if (!is_color && !is_depth_stencil) || textarget != GL_TEXTURE_2D || level != 0 {
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
@@ -58,9 +62,20 @@ pub fn framebuffer_texture_2d(
         ctx.set_gl_error(GL_INVALID_OPERATION);
         return;
     }
-    ctx.local
-        .framebuffers
-        .attach_color_index(fbo, attachment - GL_COLOR_ATTACHMENT0, tex);
+    // A depth/stencil TEXTURE attachment records only its presence, exactly as the renderbuffer path does
+    // (see [`framebuffer_renderbuffer`]): the plane itself is minted by the frame builder.
+    match attachment {
+        GL_DEPTH_ATTACHMENT => ctx.local.framebuffers.attach_depth(fbo, tex),
+        GL_STENCIL_ATTACHMENT => ctx.local.framebuffers.attach_stencil(fbo, tex),
+        GL_DEPTH_STENCIL_ATTACHMENT => {
+            ctx.local.framebuffers.attach_depth(fbo, tex);
+            ctx.local.framebuffers.attach_stencil(fbo, tex);
+        }
+        _ => ctx
+            .local
+            .framebuffers
+            .attach_color_index(fbo, attachment - GL_COLOR_ATTACHMENT0, tex),
+    }
 }
 
 /// `glDeleteFramebuffers` (one name). Deleting the bound draw/read FBO reverts that binding to the default.
@@ -264,9 +279,15 @@ pub fn framebuffer_renderbuffer(
             let tex = ctx.renderbuffers.backing_tex(rbo);
             ctx.local.framebuffers.attach_color(fbo, tex);
         }
-        // No depth/stencil buffer is modeled — accept the attach as a no-op so a guest that attaches a
-        // depth/stencil renderbuffer still runs (its color attachment is what this model renders).
-        GL_DEPTH_ATTACHMENT | GL_STENCIL_ATTACHMENT | GL_DEPTH_STENCIL_ATTACHMENT => {}
+        // This model has no depth/stencil PLANE — the frame builder mints one for any depth/stencil-tested
+        // pass — but WHETHER the framebuffer has such an attachment is load-bearing GL state: without an
+        // attachment the depth (resp. stencil) test always passes and writes nothing (ES 3.0 §4.1.5/§4.1.6).
+        GL_DEPTH_ATTACHMENT => ctx.local.framebuffers.attach_depth(fbo, rbo),
+        GL_STENCIL_ATTACHMENT => ctx.local.framebuffers.attach_stencil(fbo, rbo),
+        GL_DEPTH_STENCIL_ATTACHMENT => {
+            ctx.local.framebuffers.attach_depth(fbo, rbo);
+            ctx.local.framebuffers.attach_stencil(fbo, rbo);
+        }
         _ => ctx.set_gl_error(GL_INVALID_ENUM),
     }
 }

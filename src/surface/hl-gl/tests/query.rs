@@ -648,3 +648,133 @@ fn every_location_a_matrix_attribute_spans_reports_its_column_components() {
         );
     }
 }
+
+/// Every pixel-store parameter this driver honours must also READ BACK.
+///
+/// All six of row-length and the two skips, pack and unpack, were recorded and applied on the upload and
+/// readback paths, but only the two alignments appeared in the integer query table — the rest reported 0
+/// whatever the application had set. A toolkit that saves this state, draws, and restores it therefore
+/// wrote 0 back over its own `glPixelStorei`, silently undoing itself. ES 3.0 §2.2.2 requires every state
+/// value to read back through Get*; write-only state is worse than unimplemented state, because the
+/// application cannot detect it.
+#[test]
+fn every_recorded_pixel_store_parameter_reads_back() {
+    let mut c = ctx_800x600();
+    let mut out = [0i32; 4];
+
+    // Defaults first: GL initializes row length and both skips to 0, alignments to 4.
+    for (pname, default) in [
+        (GL_UNPACK_ALIGNMENT, 4),
+        (GL_PACK_ALIGNMENT, 4),
+        (GL_UNPACK_ROW_LENGTH, 0),
+        (GL_UNPACK_SKIP_ROWS, 0),
+        (GL_UNPACK_SKIP_PIXELS, 0),
+        (GL_PACK_ROW_LENGTH, 0),
+        (GL_PACK_SKIP_ROWS, 0),
+        (GL_PACK_SKIP_PIXELS, 0),
+    ] {
+        out[0] = -1;
+        assert_eq!(query::get_integerv(&c, pname, &mut out), 1, "{pname:#x}");
+        assert_eq!(out[0], default, "{pname:#x} default");
+    }
+
+    // Then a distinct value per parameter, so a query reading the wrong field cannot pass.
+    for (index, pname) in [
+        GL_UNPACK_ROW_LENGTH,
+        GL_UNPACK_SKIP_ROWS,
+        GL_UNPACK_SKIP_PIXELS,
+        GL_PACK_ROW_LENGTH,
+        GL_PACK_SKIP_ROWS,
+        GL_PACK_SKIP_PIXELS,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let value = 3 + index as i32;
+        record::pixel_store(&mut c, pname, value);
+        out[0] = -1;
+        assert_eq!(query::get_integerv(&c, pname, &mut out), 1, "{pname:#x}");
+        assert_eq!(out[0], value, "{pname:#x} must read back what was set");
+    }
+
+    // A rejected value leaves the parameter — and its readback — unchanged.
+    record::pixel_store(&mut c, GL_UNPACK_ROW_LENGTH, -1);
+    out[0] = -1;
+    query::get_integerv(&c, GL_UNPACK_ROW_LENGTH, &mut out);
+    assert_eq!(
+        out[0], 3,
+        "a refused glPixelStorei must not disturb the state"
+    );
+}
+
+/// Blend state, the VAO binding, and the per-attribute array state must READ BACK.
+///
+/// All three families answered a constant `0` while the features themselves worked. That is the worst
+/// shape a query defect can take: every embedded toolkit saves this state, draws, and restores what it
+/// read — so a `0` is not an unknown, it is the value the application then installs. `GL_BLEND_SRC_RGB`
+/// reading 0 makes the restore `glBlendFunc(GL_ZERO, GL_ZERO)`.
+#[test]
+fn blend_state_reads_back_what_blend_func_and_equation_set() {
+    let mut c = ctx_800x600();
+    let mut out = [0i32; 4];
+    record::blend_func_separate(&mut c, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
+    record::blend_equation_separate(&mut c, GL_FUNC_SUBTRACT, GL_MIN);
+
+    for (pname, want) in [
+        (GL_BLEND_SRC_RGB, GL_SRC_ALPHA),
+        (GL_BLEND_DST_RGB, GL_ONE_MINUS_SRC_ALPHA),
+        (GL_BLEND_SRC_ALPHA_STATE, GL_ONE),
+        (GL_BLEND_DST_ALPHA, GL_ZERO),
+        (GL_BLEND_EQUATION_RGB, GL_FUNC_SUBTRACT),
+        (GL_BLEND_EQUATION_ALPHA, GL_MIN),
+    ] {
+        assert_eq!(query::get_integerv(&c, pname, &mut out), 1);
+        assert_eq!(out[0], want as i32, "pname {pname:#x} must read back its enum");
+    }
+
+    let mut colour = [0f32; 4];
+    record::blend_color(&mut c, [0.25, 0.5, 0.75, 1.0]);
+    assert_eq!(query::get_floatv(&c, GL_BLEND_COLOR, &mut colour), 4);
+    assert_eq!(colour, [0.25, 0.5, 0.75, 1.0]);
+}
+
+#[test]
+fn vertex_array_binding_and_attribute_array_state_read_back() {
+    let mut c = ctx_800x600();
+    let mut out = [0i32; 4];
+
+    let vao = c.gen_vertex_array();
+    c.bind_vertex_array(vao);
+    assert_eq!(query::get_integerv(&c, GL_VERTEX_ARRAY_BINDING, &mut out), 1);
+    assert_eq!(out[0], vao as i32);
+
+    let vbo = c.buffers.gen();
+    record::bind_buffer(&mut c, GL_ARRAY_BUFFER, vbo);
+    record::vertex_attrib_pointer(&mut c, 1, 3, GL_SHORT, true, 12, 0);
+    record::enable_vertex_attrib(&mut c, 1);
+    record::vertex_attrib_divisor(&mut c, 1, 2);
+
+    let get = |pname| query::get_vertex_attrib(&c, 1, pname);
+    assert_eq!(get(GL_VERTEX_ATTRIB_ARRAY_ENABLED), Some(1));
+    assert_eq!(get(GL_VERTEX_ATTRIB_ARRAY_SIZE), Some(3));
+    assert_eq!(get(GL_VERTEX_ATTRIB_ARRAY_STRIDE), Some(12));
+    assert_eq!(get(GL_VERTEX_ATTRIB_ARRAY_TYPE), Some(GL_SHORT as i32));
+    assert_eq!(get(GL_VERTEX_ATTRIB_ARRAY_NORMALIZED), Some(1));
+    assert_eq!(get(GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING), Some(vbo as i32));
+    assert_eq!(get(GL_VERTEX_ATTRIB_ARRAY_DIVISOR), Some(2));
+
+    // Attribute state is VAO state: the default VAO's attribute 1 was never enabled, and the pair is what
+    // distinguishes a real query from one that answers a constant.
+    c.bind_vertex_array(0);
+    assert_eq!(
+        query::get_vertex_attrib(&c, 1, GL_VERTEX_ATTRIB_ARRAY_ENABLED),
+        Some(0),
+        "the default VAO has its own, untouched attribute state"
+    );
+
+    // An index past the attribute bank has no answer at all, so the caller raises GL_INVALID_VALUE.
+    assert_eq!(
+        query::get_vertex_attrib(&c, 9999, GL_VERTEX_ATTRIB_ARRAY_ENABLED),
+        None
+    );
+}

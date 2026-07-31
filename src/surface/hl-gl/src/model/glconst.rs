@@ -208,6 +208,29 @@ pub const GL_ALIASED_LINE_WIDTH_RANGE: u32 = 0x846E;
 pub const GL_MAX_TEXTURE_LOD_BIAS: u32 = 0x84FD;
 pub const GL_COLOR_WRITEMASK: u32 = 0x0C23;
 pub const GL_DEPTH_WRITEMASK: u32 = 0x0B72;
+
+// Blend state readback (ES 2.0 table 6.14). Every toolkit that saves and restores GL state around its own
+// drawing reads these back; answering `0` for all of them made a restore install `GL_ZERO`/`GL_ZERO`.
+pub const GL_BLEND_DST_RGB: u32 = 0x80C8;
+pub const GL_BLEND_SRC_RGB: u32 = 0x80C9;
+pub const GL_BLEND_DST_ALPHA: u32 = 0x80CA;
+pub const GL_BLEND_SRC_ALPHA_STATE: u32 = 0x80CB;
+pub const GL_BLEND_COLOR: u32 = 0x8005;
+/// `GL_BLEND_EQUATION` and `GL_BLEND_EQUATION_RGB` share enum 0x8009.
+pub const GL_BLEND_EQUATION_RGB: u32 = 0x8009;
+pub const GL_BLEND_EQUATION_ALPHA: u32 = 0x883D;
+
+// Vertex-array object + per-attribute array state (`glGetIntegerv` / `glGetVertexAttrib*v`).
+pub const GL_VERTEX_ARRAY_BINDING: u32 = 0x85B5;
+pub const GL_VERTEX_ATTRIB_ARRAY_ENABLED: u32 = 0x8622;
+pub const GL_VERTEX_ATTRIB_ARRAY_SIZE: u32 = 0x8623;
+pub const GL_VERTEX_ATTRIB_ARRAY_STRIDE: u32 = 0x8624;
+pub const GL_VERTEX_ATTRIB_ARRAY_TYPE: u32 = 0x8625;
+pub const GL_CURRENT_VERTEX_ATTRIB: u32 = 0x8626;
+pub const GL_VERTEX_ATTRIB_ARRAY_NORMALIZED: u32 = 0x886A;
+pub const GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING: u32 = 0x889F;
+pub const GL_VERTEX_ATTRIB_ARRAY_INTEGER: u32 = 0x88FD;
+pub const GL_VERTEX_ATTRIB_ARRAY_DIVISOR: u32 = 0x88FE;
 /// ES 2.0 table 6.19 — the depth range, two floats, fixed at `[0, 1]` by this driver's NDC mapping.
 pub const GL_DEPTH_RANGE: u32 = 0x0B70;
 

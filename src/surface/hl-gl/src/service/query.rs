@@ -144,6 +144,15 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         // ES 2.0 §6.1.5: GL_TRUE on any implementation that accepts shader SOURCE, which this driver does.
         GL_SHADER_COMPILER => one(GL_TRUE as i32),
         GL_CURRENT_PROGRAM => one(ctx.local.cur_prog as i32),
+        // Blend state readback. Every embedded toolkit saves and restores this around its own drawing, so
+        // a `0` here is not a harmless unknown — it is the value the app then installs.
+        GL_BLEND_SRC_RGB => one(ctx.local.pipeline.blend_src_rgb as i32),
+        GL_BLEND_DST_RGB => one(ctx.local.pipeline.blend_dst_rgb as i32),
+        GL_BLEND_SRC_ALPHA_STATE => one(ctx.local.pipeline.blend_src_alpha as i32),
+        GL_BLEND_DST_ALPHA => one(ctx.local.pipeline.blend_dst_alpha as i32),
+        GL_BLEND_EQUATION_RGB => one(ctx.local.pipeline.blend_eq_rgb as i32),
+        GL_BLEND_EQUATION_ALPHA => one(ctx.local.pipeline.blend_eq_alpha as i32),
+        GL_VERTEX_ARRAY_BINDING => one(ctx.current_vertex_array() as i32),
         GL_ACTIVE_TEXTURE => one((GL_TEXTURE0 + ctx.local.active_texture as u32) as i32),
         GL_ARRAY_BUFFER_BINDING => one(ctx.local.array_buffer as i32),
         GL_ELEMENT_ARRAY_BUFFER_BINDING => one(ctx.local.element_buffer as i32),
@@ -152,8 +161,19 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         GL_FRAMEBUFFER_BINDING => one(ctx.local.bound_fbo as i32),
         GL_READ_FRAMEBUFFER_BINDING => one(ctx.local.read_fbo as i32),
         GL_RENDERBUFFER_BINDING => one(ctx.local.bound_rbo as i32),
+        // Pixel-store readback. Every one of these is honoured on the upload/readback path already, but
+        // only the two alignments could be READ BACK — the rest reported 0 whatever the app had set. A
+        // toolkit that saves this state, draws, and restores it therefore installed 0 for row length and
+        // both skips, silently undoing its own `glPixelStorei`. ES 3.0 §2.2.2 requires every state value
+        // to read back through Get*, and a write-only state is worse than an unimplemented one.
         GL_UNPACK_ALIGNMENT => one(ctx.local.pixel_store.unpack_alignment),
         GL_PACK_ALIGNMENT => one(ctx.local.pixel_store.pack_alignment),
+        GL_UNPACK_ROW_LENGTH => one(ctx.local.pixel_store.unpack_row_length),
+        GL_UNPACK_SKIP_ROWS => one(ctx.local.pixel_store.unpack_skip_rows),
+        GL_UNPACK_SKIP_PIXELS => one(ctx.local.pixel_store.unpack_skip_pixels),
+        GL_PACK_ROW_LENGTH => one(ctx.local.pixel_store.pack_row_length),
+        GL_PACK_SKIP_ROWS => one(ctx.local.pixel_store.pack_skip_rows),
+        GL_PACK_SKIP_PIXELS => one(ctx.local.pixel_store.pack_skip_pixels),
         // Fixed-function caps read back as 1/0.
         GL_DEPTH_TEST => one(ctx.local.pipeline.depth as i32),
         GL_STENCIL_TEST => one(ctx.local.pipeline.stencil as i32),
@@ -232,6 +252,34 @@ pub fn get_integer_indexed(ctx: &GlContext, target: u32, index: u32) -> i64 {
     }
 }
 
+/// `glGetVertexAttrib{i,f}v(index, pname)` — one enabled/format/stride/binding value of vertex attribute
+/// array `index`, as [`crate::model::program::Attr`] records it. `None` for an out-of-range index or a
+/// `pname` this model does not track, so the caller can raise the spec error rather than write a value.
+///
+/// The attribute arrays are VAO state (`glBindVertexArray` swaps them in and out), so this reads the LIVE
+/// array set — which is what makes the answer differ between two bound VAOs. Reporting a constant `0` here
+/// made every save-and-restore an embedded toolkit performs reinstall a disabled, unbound attribute.
+pub fn get_vertex_attrib(ctx: &GlContext, index: u32, pname: u32) -> Option<i32> {
+    let attr = ctx.attributes().get(index as usize)?;
+    Some(match pname {
+        GL_VERTEX_ATTRIB_ARRAY_ENABLED => attr.enabled as i32,
+        GL_VERTEX_ATTRIB_ARRAY_SIZE => attr.size,
+        GL_VERTEX_ATTRIB_ARRAY_STRIDE => attr.stride,
+        GL_VERTEX_ATTRIB_ARRAY_TYPE => attr.kind as i32,
+        GL_VERTEX_ATTRIB_ARRAY_NORMALIZED => attr.normalized as i32,
+        GL_VERTEX_ATTRIB_ARRAY_INTEGER => attr.integer as i32,
+        GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING => attr.buffer as i32,
+        GL_VERTEX_ATTRIB_ARRAY_DIVISOR => attr.divisor as i32,
+        _ => return None,
+    })
+}
+
+/// The four components of the generic (disabled-array) vertex attribute `index`
+/// (`glGetVertexAttribfv(GL_CURRENT_VERTEX_ATTRIB)`). `None` for an out-of-range index.
+pub fn get_current_vertex_attrib(ctx: &GlContext, index: u32) -> Option<[f32; 4]> {
+    ctx.current_vertex_attributes().get(index as usize).copied()
+}
+
 /// `glGetFloatv(pname)` — the float-typed state a GLES app reads. Writes the value(s) into `out` and
 /// returns the count. An unrecognized `pname` writes a single `0.0`.
 pub fn get_floatv(ctx: &GlContext, pname: u32, out: &mut [f32; 4]) -> usize {
@@ -256,6 +304,10 @@ pub fn get_floatv(ctx: &GlContext, pname: u32, out: &mut [f32; 4]) -> usize {
         GL_MAX_TEXTURE_LOD_BIAS => {
             out[0] = 2.0;
             1
+        }
+        GL_BLEND_COLOR => {
+            out.copy_from_slice(&ctx.local.pipeline.blend_color);
+            4
         }
         // ES 2.0 table 6.19: two floats. glDepthRangef is a no-op here (NDC depth maps directly), so the
         // range is permanently the initial [0, 1].

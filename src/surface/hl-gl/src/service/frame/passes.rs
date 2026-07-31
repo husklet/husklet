@@ -614,17 +614,17 @@ pub(super) fn depth_attachment_for(
     h: i32,
     draws: &[DrawCall],
     cmds: &mut Vec<Cmd>,
-    load: LoadOp,
+    clear: DepthClear,
 ) -> Option<DepthAttachment> {
     let format = RenderPasses::depth_format(draws)?;
     let with_stencil = matches!(format, TextureFormat::Depth24PlusStencil8);
-    let clear_depth = ctx.local.pipeline.clear_depth;
+    let clear_depth = clear.depth;
     // GL clears the stencil plane to `glClearStencil`'s value (default 0), masked to the 8-bit buffer.
-    let clear_stencil = (ctx.local.pipeline.clear_stencil as u32) & 0xff;
+    let clear_stencil = (clear.stencil as u32) & 0xff;
     let (depth_tex, needs_create) = ctx.depth_target(color_tex, with_stencil).ok()?;
     // A depth texture minted this frame has no prior contents to preserve — and a zero-initialized depth
     // plane fails every `GL_LESS` test — so its first pass always clear-loads regardless of the caller's op.
-    let load = if needs_create { LoadOp::Clear } else { load };
+    let load = if needs_create { LoadOp::Clear } else { clear.load };
     if needs_create {
         cmds.push(Cmd::CreateTexture(
             depth_tex,
@@ -679,9 +679,16 @@ impl RenderPasses {
     /// index from which draws survive. `None` means nothing wiped the target: the pass must `LoadOp::Load`,
     /// not clear, or it destroys everything outside a scissored clear's rect.
     pub(super) fn full_clear(run: &[DrawCall]) -> (Option<[f32; 4]>, usize) {
+        Self::full_clear_slot(run, 0)
+    }
+
+    /// [`full_clear`] for one color-attachment `slot`. A `glClearBuffer*`-scoped clear wipes only the
+    /// attachment it names (see [`DrawCall::clear_draw_buffer`]), so asking per slot is what keeps a clear
+    /// of attachment 1 from wiping attachment 0 — and from discarding the draws recorded before it there.
+    pub(super) fn full_clear_slot(run: &[DrawCall], slot: u32) -> (Option<[f32; 4]>, usize) {
         let mut last_full: Option<usize> = None;
         for (i, d) in run.iter().enumerate() {
-            if d.clears_color() && !d.scissor_enabled {
+            if d.clears_color_slot(slot) && !d.scissor_enabled {
                 last_full = Some(i);
             }
         }
@@ -713,9 +720,19 @@ impl Frame {
         // handles a segment list with no geometry at all, so route there and keep the full-target clear as
         // the fallback.
         let (_, start) = RenderPasses::effective_clear(&ctx.local.recording.draws);
-        if ctx.local.recording.draws[start..]
-            .iter()
-            .any(|draw| draw.clears_color() && draw.scissor_enabled)
+        // A multiple-render-target framebuffer needs the per-attachment loads only the geometry builder
+        // computes: this single-target path would apply a `glClearBufferfv(GL_COLOR, 1, …)` to attachment 0.
+        let mrt = ctx
+            .local
+            .recording
+            .draws
+            .first()
+            .map(|draw| draw.fbo)
+            .is_some_and(|fbo| fbo != 0 && ctx.local.framebuffers.color_attachment_count(fbo) > 1);
+        if mrt
+            || ctx.local.recording.draws[start..]
+                .iter()
+                .any(|draw| draw.clears_color() && draw.scissor_enabled)
         {
             if let Some(frame) = Self::build_geometry(ctx) {
                 return Some(frame);

@@ -310,6 +310,9 @@ pub fn draw_arrays_instanced(
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
+    if !ctx.draw_preconditions(mode, None) {
+        return;
+    }
     if ctx.draw_uses_mapped_buffer() {
         ctx.set_gl_error(GL_INVALID_OPERATION);
         return;
@@ -351,6 +354,9 @@ pub fn draw_elements_instanced(
 ) {
     if instances < 0 || count < 0 {
         ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    if !ctx.draw_preconditions(mode, Some(index_type)) {
         return;
     }
     if ctx.draw_uses_mapped_buffer() {
@@ -402,6 +408,9 @@ pub fn draw_elements_instanced_base_vertex(
 ) {
     if instances < 0 || count < 0 {
         ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    if !ctx.draw_preconditions(mode, Some(index_type)) {
         return;
     }
     if ctx.draw_uses_mapped_buffer() {

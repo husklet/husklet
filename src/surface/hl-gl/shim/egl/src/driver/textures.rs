@@ -323,6 +323,13 @@ pub extern "C" fn glTexSubImage2D(
     pixels: *const c_void,
 ) {
     GlobalState::context(|group| {
+        // ES 3.0 §3.8.3: `glTexSubImage2D` has no "allocate without data" form — a null `pixels` is only
+        // an OFFSET into a bound `GL_PIXEL_UNPACK_BUFFER`. With no such buffer it is
+        // `GL_INVALID_OPERATION`, not an invitation to read address zero.
+        if pixels.is_null() && group.gl.buffer_for_target(GL_PIXEL_UNPACK_BUFFER) == 0 {
+            group.gl.set_gl_error(GL_INVALID_OPERATION);
+            return;
+        }
         let rgba = unsafe { to_rgba8(&group.gl, format, type_, width, height, pixels) };
         let texture = group.gl.bound_texture();
         let generation = group.gl.textures.get(texture).map(|texture| texture.gen);

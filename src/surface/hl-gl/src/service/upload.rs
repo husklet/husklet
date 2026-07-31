@@ -95,7 +95,10 @@ impl Upload {
                 }
                 match self.format {
                     GL_RED => out.extend_from_slice(&[pixel[0], 0, 0, 0xff]),
-                    GL_ALPHA => out.extend_from_slice(&[0xff, 0xff, 0xff, pixel[0]]),
+                    // ES 2.0 table 3.11: a GL_ALPHA texel samples as (0, 0, 0, A) — the RGB is ZERO, not
+                    // one. Glyph and mask atlases are GL_ALPHA, so white RGB here tinted every masked
+                    // draw white instead of leaving the mask's own colour to the shader.
+                    GL_ALPHA => out.extend_from_slice(&[0, 0, 0, pixel[0]]),
                     GL_LUMINANCE => out.extend_from_slice(&[pixel[0], pixel[0], pixel[0], 0xff]),
                     GL_RG => out.extend_from_slice(&[pixel[0], pixel[1], 0, 0xff]),
                     GL_LUMINANCE_ALPHA => {

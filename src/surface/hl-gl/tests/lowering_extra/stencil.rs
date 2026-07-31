@@ -24,6 +24,10 @@ fn stencil_test_lowers_to_pipeline_stencil_faces_and_reference_and_clear() {
     setup_geometry(&mut c);
     record::clear_stencil(&mut c, 0x7);
     record::clear_depth(&mut c, 0.25);
+    // The pass clear values come from the recorded `glClear`, not from live `glClearDepthf`/`glClearStencil`
+    // state at lowering time: an app moves those between clears, and reading them late gave every depth
+    // clear in a frame the frame's LAST value. Without a clear the pass keeps GL's initial 1.0 / 0.
+    record::clear_buffers(&mut c, GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
     record::enable(&mut c, GL_STENCIL_TEST);
     // Compare EQUAL, ref 0x12, masks; on pass REPLACE, on stencil-fail KEEP, on depth-fail INCR.
     record::stencil_func(&mut c, GL_EQUAL, 0x12, 0xf0);

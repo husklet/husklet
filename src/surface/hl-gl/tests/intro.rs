@@ -205,7 +205,7 @@ fn clear_buffer_color_records_a_scoped_clear() {
     let mut c = ctx_800x600();
     assert!(c.draws().is_empty());
 
-    record::clear_buffer_color(&mut c, [0.1, 0.2, 0.3, 0.4]);
+    record::clear_buffer_color(&mut c, 0, [0.1, 0.2, 0.3, 0.4]);
 
     // Exactly one clear draw was recorded, carrying the requested color + a full-surface rect.
     assert_eq!(c.draws().len(), 1);
@@ -213,10 +213,13 @@ fn clear_buffer_color_records_a_scoped_clear() {
     assert!(d.is_clear);
     assert_eq!(d.clear, [0.1, 0.2, 0.3, 0.4]);
     assert_eq!(d.clear_rect, [0, 0, 800, 600]);
-    // The clear color also updated the live state (glGetFloatv round-trip).
+    assert_eq!(d.clear_draw_buffer, Some(0), "the clear is scoped to its attachment");
+    // ES 3.0 §4.2.3: the value travels with the call. Only `glClearColor` sets GL_COLOR_CLEAR_VALUE, so
+    // a `glClearBufferfv` must leave it at the initial (0, 0, 0, 0) — this test asserted the opposite,
+    // which let the recording clobber state the app had set for its own `glClear`s.
     let mut f = [0f32; 4];
     query::get_floatv(&c, GL_COLOR_CLEAR_VALUE, &mut f);
-    assert_eq!(f, [0.1, 0.2, 0.3, 0.4]);
+    assert_eq!(f, [0.0, 0.0, 0.0, 0.0]);
 }
 
 // ---- glGetProgramResource* / glGetProgramInterfaceiv ---------------------------------------------

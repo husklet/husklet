@@ -184,10 +184,21 @@ fn indices(values: &[u32]) -> Vec<u8> {
 }
 
 #[test]
-fn unknown_mode_never_panics_and_defaults_to_triangle_list() {
-    // A bogus GL primitive enum must not panic — safe TriangleList default.
+fn unknown_mode_is_rejected_at_record_and_never_reaches_lowering() {
+    // ES 3.0 §2.8.3 defines seven primitive modes; anything else is GL_INVALID_ENUM and records nothing.
+    // This test previously lowered 0xBEEF to a TriangleList, which is how an undefined mode drew.
+    let mut c = ctx_64();
+    let mut sink = RecordingSink::with_full_caps();
+    flat_program(&mut c);
+    tri_vbo(&mut c);
+    record::draw_arrays(&mut c, 0xBEEF, 0, 4);
+    assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
+    assert!(c.draws().is_empty());
+    assert!(!swap::swap_buffers(&mut c, &mut sink).unwrap());
+
+    // The safe TriangleList default still covers every DEFINED mode with no neutral topology.
     assert_eq!(
-        lower_default_fbo_draw(0xBEEF).topology,
+        lower_default_fbo_draw(0x0006 /* GL_TRIANGLE_FAN */).topology,
         Topology::TriangleList
     );
 }

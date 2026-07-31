@@ -366,12 +366,42 @@ impl GlContext {
         &self.local.attr
     }
 
+    /// The generic (disabled-array) vertex attribute values `glVertexAttrib*f` last set.
+    pub fn current_vertex_attributes(&self) -> &[[f32; 4]; MAX_ATTR] {
+        &self.local.current_attr
+    }
+
     pub fn current_vertex_array(&self) -> u32 {
         self.local.cur_vao
     }
 
     pub fn draw_buffers(&self) -> &[u32] {
         &self.local.draw_buffers
+    }
+
+    /// The `glDrawBuffers` selection as a per-slot write bitmask (see [`DrawCall::draw_buffer_mask`]).
+    /// Slots beyond the recorded list keep their initial "writes" state, so a shorter list never disables
+    /// an attachment the app did not name.
+    pub fn draw_buffer_mask(&self) -> u32 {
+        let mut mask = !0u32;
+        for (slot, &buffer) in self.local.draw_buffers.iter().enumerate().take(32) {
+            if buffer == crate::model::glconst::GL_NONE {
+                mask &= !(1u32 << slot);
+            }
+        }
+        mask
+    }
+
+    /// Whether the bound DRAW framebuffer can be depth-tested at all. The default framebuffer's depth plane
+    /// is supplied by EGL and is always present in this model; a user FBO must have been given a
+    /// `GL_DEPTH_ATTACHMENT`, and without one every depth test passes and writes nothing (ES 3.0 §4.1.5).
+    pub fn draw_framebuffer_has_depth(&self) -> bool {
+        self.local.bound_fbo == 0 || self.local.framebuffers.has_depth(self.local.bound_fbo)
+    }
+
+    /// The stencil counterpart of [`Self::draw_framebuffer_has_depth`] (ES 3.0 §4.1.4).
+    pub fn draw_framebuffer_has_stencil(&self) -> bool {
+        self.local.bound_fbo == 0 || self.local.framebuffers.has_stencil(self.local.bound_fbo)
     }
 
     pub fn read_buffer_source(&self) -> u32 {

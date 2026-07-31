@@ -20,6 +20,15 @@ pub struct Framebuffers {
     /// (`glDrawBuffers` MRT). Keyed `(fbo, attachment_index)`; attachment 0 stays in `color` above so a
     /// single-attachment FBO is byte-identical to before. `0` = no attachment at that index.
     color_extra: HashMap<(u32, u32), u32>,
+    /// FBO name → the object attached at `GL_DEPTH_ATTACHMENT` / `GL_STENCIL_ATTACHMENT` (`0` = none).
+    ///
+    /// This model has no depth or stencil PLANE of its own — the frame builder mints one whenever a draw
+    /// is depth- or stencil-tested — so the attachment is tracked for its GL semantics rather than for its
+    /// storage: ES 3.0 §4.1.5/§4.1.6 make the depth test always pass and write nothing when the draw
+    /// framebuffer has no depth attachment, and likewise for stencil. Without this an app that leaves
+    /// `GL_DEPTH_TEST` enabled while rendering to a depth-less FBO loses every draw after the first.
+    depth: HashMap<u32, u32>,
+    stencil: HashMap<u32, u32>,
     next_name: u32,
 }
 
@@ -33,6 +42,8 @@ impl Framebuffers {
         Self {
             color: HashMap::new(),
             color_extra: HashMap::new(),
+            depth: HashMap::new(),
+            stencil: HashMap::new(),
             next_name: 1,
         }
     }
@@ -71,6 +82,31 @@ impl Framebuffers {
         } else {
             self.color_extra.insert((fbo, index), tex);
         }
+    }
+
+    /// `glFramebufferRenderbuffer`/`glFramebufferTexture2D` at `GL_DEPTH_ATTACHMENT` — `name` `0` detaches.
+    pub fn attach_depth(&mut self, fbo: u32, name: u32) {
+        if fbo != 0 {
+            self.depth.insert(fbo, name);
+        }
+    }
+
+    /// `glFramebufferRenderbuffer`/`glFramebufferTexture2D` at `GL_STENCIL_ATTACHMENT` — `0` detaches.
+    pub fn attach_stencil(&mut self, fbo: u32, name: u32) {
+        if fbo != 0 {
+            self.stencil.insert(fbo, name);
+        }
+    }
+
+    /// Whether `fbo` carries a depth attachment. The default framebuffer's answer belongs to its
+    /// `EGLConfig`, not to this table, so callers pass `fbo != 0` here only.
+    pub fn has_depth(&self, fbo: u32) -> bool {
+        self.depth.get(&fbo).copied().unwrap_or(0) != 0
+    }
+
+    /// Whether `fbo` carries a stencil attachment (see [`Self::has_depth`]).
+    pub fn has_stencil(&self, fbo: u32) -> bool {
+        self.stencil.get(&fbo).copied().unwrap_or(0) != 0
     }
 
     /// The GL texture attached as `fbo`'s color target (`0` = default framebuffer or no attachment).
@@ -136,6 +172,8 @@ impl Framebuffers {
     /// `glDeleteFramebuffers` — drop the object. Returns `false` for an unknown name.
     pub fn delete(&mut self, name: u32) -> bool {
         self.color_extra.retain(|&(fbo, _), _| fbo != name);
+        self.depth.remove(&name);
+        self.stencil.remove(&name);
         self.color.remove(&name).is_some()
     }
 

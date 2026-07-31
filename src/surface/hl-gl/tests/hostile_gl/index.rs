@@ -9,11 +9,13 @@ use super::*;
 #[test]
 fn out_of_range_indices_are_guarded_no_ops() {
     let mut c = ctx();
-    // A vertex-attrib index far past MAX_VERTEX_ATTRIBS is a no-op.
+    // A vertex-attrib index far past MAX_VERTEX_ATTRIBS raises GL_INVALID_VALUE and changes no state
+    // (ES 3.0 §2.8) — it must never index past the fixed array either.
     record::vertex_attrib_pointer(&mut c, 9999, 4, GL_FLOAT, false, 0, 0);
     record::vertex_attrib_divisor(&mut c, 9999, 1);
     record::enable_vertex_attrib(&mut c, 9999);
     record::disable_vertex_attrib(&mut c, 9999);
+    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
     // A texture unit far past the modeled bank leaves the active unit unchanged.
     c.active_texture(GL_TEXTURE0 + 9999);
     assert_eq!(
@@ -35,10 +37,14 @@ fn out_of_range_indices_are_guarded_no_ops() {
     record::attach_shader(&mut c, p, f);
     record::link_program(&mut c, p);
     record::use_program(&mut c, p);
+    // A uniform LOCATION that names nothing in the current program is GL_INVALID_OPERATION (ES 3.0
+    // §2.11.7) — it must be an error, not a silent write into nothing, and above all not a slice panic.
+    // Only location -1 is the defined silent no-op, and it never reaches the recorder.
     record::uniform_at(&mut c, 99999, &[0u8; 64]);
+    assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
     record::uniform_sampler(&mut c, 99999, 3);
     record::program_uniform_at(&mut c, p, -7, &[0u8; 16]);
-    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
+    let _ = c.take_gl_error();
 
     // A valid attribute index does take effect.
     record::vertex_attrib_pointer(&mut c, 0, 4, GL_FLOAT, false, 0, 0);
@@ -76,14 +82,16 @@ fn negative_array_first_is_invalid_and_records_nothing() {
     assert!(c.draws().is_empty());
 }
 
-/// Negative / huge `glViewport` + `glScissor` dimensions are stored without panicking; a valid viewport
-/// afterwards is stored too. (The frame builder clamps at lowering; the record op never faults.)
+/// A NEGATIVE `glViewport`/`glScissor` extent is `GL_INVALID_VALUE` and leaves the box unchanged (ES 3.0
+/// §2.12.1 / §4.1.2); a huge but non-negative one is legal and merely clamped at lowering. A valid
+/// viewport afterwards is stored, and no input faults. This asserted `GL_NO_ERROR` for the negative case.
 #[test]
 fn extreme_viewport_and_scissor_dims_do_not_panic() {
     let mut c = ctx();
     record::viewport(&mut c, [-1, -1, i32::MAX, i32::MAX]);
+    assert_eq!(c.take_gl_error(), GL_NO_ERROR, "a huge extent is legal");
     record::scissor(&mut c, [i32::MIN, i32::MIN, -4, -4]);
-    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
+    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE, "a negative extent is not");
     record::viewport(&mut c, [0, 0, 320, 240]);
     assert_eq!(c.viewport(), [0, 0, 320, 240]);
 }

@@ -46,14 +46,15 @@ fn draw_read_buffer_reject_bad_enum_then_valid_works() {
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
 }
 
-/// `glDrawArrays` with a junk `mode` records the draw (topology validated at lowering) without panicking;
-/// a following valid draw is recorded too.
+/// `glDrawArrays` with a junk `mode` is `GL_INVALID_ENUM` and records nothing (ES 3.0 §2.8.3 defines
+/// exactly seven modes); a following valid draw is still recorded. This asserted `GL_NO_ERROR` and one
+/// recorded draw while the mode went unvalidated — an undefined mode silently became `GL_TRIANGLES`.
 #[test]
-fn draw_arrays_with_junk_mode_records_without_panicking() {
+fn draw_arrays_with_junk_mode_is_rejected() {
     let mut c = ctx();
     record::draw_arrays(&mut c, 0xDEAD_BEEF, 0, 3);
-    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
-    assert_eq!(c.draws().len(), 1);
+    assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
+    assert!(c.draws().is_empty());
     record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
-    assert_eq!(c.draws().len(), 2);
+    assert_eq!(c.draws().len(), 1);
 }
