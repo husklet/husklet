@@ -181,3 +181,87 @@ fn lowers_returning_switch_to_if_else_chain() {
         "stacked labels OR'd: {out}"
     );
 }
+
+/// The GL driver collects a program's bare default-block uniforms into an ANONYMOUS
+/// `layout(std140, binding = 0) uniform HlUniforms { … };`, whose members live in global scope and are
+/// referenced by their plain name. That form was parsed and then silently skipped, so a `mat2` member
+/// reached naga intact and was rejected (`UnsupportedMatrixTypeInStd140`) — which wedged the context and
+/// made every later shader in the process fail to compile. The rewrite must cover it, reconstructing the
+/// matrix at the BARE use site.
+#[test]
+fn rewrites_anonymous_std140_block_and_reconstructs_bare_uses() {
+    let src = "#version 300 es\nlayout(std140, binding = 0) uniform HlUniforms { mat2 a; };\nlayout(location=0) in vec2 aPos;\nvoid main(){ gl_Position = vec4(a * aPos, 0.0, 1.0); }\n";
+    let out = Source::new(src).normalize(naga::ShaderStage::Vertex);
+    assert!(out.contains("vec4 a__col[2]"), "member split: {out}");
+    assert!(!out.contains("mat2 a;"), "original mat2 member gone: {out}");
+    assert!(
+        out.contains("mat2(a__col[0].xy, a__col[1].xy)"),
+        "bare use reconstructed without an instance qualifier: {out}"
+    );
+}
+
+#[test]
+fn rewrites_anonymous_std140_mat3x2_and_mat4x2() {
+    let src = "#version 300 es\nlayout(std140, binding = 0) uniform HlUniforms { mat3x2 a; mat4x2 b; };\nvoid main(){ vec2 p = a * vec3(1.0) + b * vec4(1.0); gl_Position = vec4(p, 0.0, 1.0); }\n";
+    let out = Source::new(src).normalize(naga::ShaderStage::Vertex);
+    assert!(out.contains("vec4 a__col[3]"), "mat3x2 → 3 columns: {out}");
+    assert!(out.contains("vec4 b__col[4]"), "mat4x2 → 4 columns: {out}");
+    assert!(
+        out.contains("mat3x2(a__col[0].xy, a__col[1].xy, a__col[2].xy)"),
+        "mat3x2 use: {out}"
+    );
+    assert!(
+        out.contains("mat4x2(b__col[0].xy, b__col[1].xy, b__col[2].xy, b__col[3].xy)"),
+        "mat4x2 use: {out}"
+    );
+}
+
+/// An anonymous block's members are bare globals, so a local of the same name SHADOWS the member. This
+/// pass has no scope tracking, so it must decline the rewrite for such a name rather than silently
+/// redirect the local's reads to the uniform. Declining leaves naga to reject the shader loudly.
+#[test]
+fn declines_anonymous_rewrite_when_a_local_shadows_the_member() {
+    let src = "#version 300 es\nlayout(std140, binding = 0) uniform HlUniforms { mat2 a; };\nlayout(location=0) in vec2 aPos;\nvoid main(){ mat2 a = mat2(1.0); gl_Position = vec4(a * aPos, 0.0, 1.0); }\n";
+    let out = Source::new(src).normalize(naga::ShaderStage::Vertex);
+    assert!(
+        !out.contains("__col"),
+        "a shadowed member must not be rewritten: {out}"
+    );
+    assert!(out.contains("mat2 a;"), "member left declared: {out}");
+}
+
+/// A named-instance block keeps working exactly as before — the instance qualifies the use, so no
+/// shadowing question arises.
+#[test]
+fn named_instance_block_is_unaffected_by_the_anonymous_support() {
+    let src = "#version 300 es\nlayout(std140, binding = 0) uniform Xf { mat2 m2; } x;\nlayout(location=0) in vec2 aPos;\nvoid main(){ mat2 m2 = mat2(1.0); gl_Position = vec4(x.m2 * aPos * m2, 0.0, 1.0); }\n";
+    let out = Source::new(src).normalize(naga::ShaderStage::Vertex);
+    assert!(
+        out.contains("mat2(x.m2__col[0].xy, x.m2__col[1].xy)"),
+        "qualified use still rewritten despite a same-named local: {out}"
+    );
+}
+
+/// naga's std140 2-row-matrix restriction is a LAYOUT rule, not an ES one. The GL driver's ES2 path
+/// rewrites its shaders to desktop form before they arrive, so `is_es()` is false and `normalize` never
+/// runs — which is why a plain `uniform mat2` (collected into the driver's default block) still failed
+/// after the anonymous-block gate was widened. The pass must therefore be reachable on both routes.
+#[test]
+fn desktop_route_shaders_also_get_the_std140_mat2_rewrite() {
+    let desktop = "#version 460\nlayout(std140, binding = 0) uniform HlUniforms { mat2 a; };\nlayout(location=0) in vec2 aPos;\nvoid main(){ gl_Position = vec4(a * aPos, 0.0, 1.0); }\n";
+    assert!(
+        !Source::new(desktop).is_es(),
+        "the driver's translated output is not ES-shaped"
+    );
+    assert!(
+        crate::wgsl::glsl_to_wgsl(desktop, naga::ShaderStage::Vertex, "main").is_ok(),
+        "a desktop-route std140 mat2 must compile"
+    );
+    // And a shader with no std140 mat2 is returned byte-for-byte by the unconditional pass.
+    let plain = "#version 460\nlayout(std140, binding = 0) uniform HlUniforms { vec4 a; };\nvoid main(){ gl_Position = a; }\n";
+    assert_eq!(
+        Source::new(plain).split_std140_mat2(),
+        plain,
+        "byte-faithful when there is nothing to rewrite"
+    );
+}

@@ -333,6 +333,25 @@ impl<'a> Source<'a> {
         Self::rewrite(self.text)
     }
 
+    /// Rewrite every 2-row-matrix member of a `std140` uniform block to its `vec4 col[N]` column form
+    /// (identical std140 bytes) and reconstruct the matrix at each use, because naga's `glsl-in` rejects
+    /// `matNx2` in std140 outright (`UnsupportedMatrixTypeInStd140`, `front/glsl/offset.rs`).
+    ///
+    /// DIALECT-INDEPENDENT, so it is applied on BOTH routes rather than only inside [`Self::normalize`].
+    /// naga's restriction has nothing to do with GLSL-ES: the GL driver's ES2 path rewrites its shaders to
+    /// desktop form before they arrive, which makes [`Self::is_es`] false and skips `normalize` entirely —
+    /// so a plain `uniform mat2` collected into the driver's default-uniform block was never reached by
+    /// this pass at all. A shader with no 2-row matrix in a std140 block is returned unchanged, so the
+    /// unconditional application is byte-faithful (the same contract as [`Self::rewrite_isinf`]).
+    pub(crate) fn split_std140_mat2(&self) -> String {
+        if !self.text.contains("std140") {
+            return self.text.to_string();
+        }
+        let mut toks = Tokens::from_source(self.text);
+        toks.split_std140_mat2();
+        toks.0.as_slice().source()
+    }
+
     fn rewrite(text: &str) -> String {
         if !text.contains("isinf") {
             return text.to_string();

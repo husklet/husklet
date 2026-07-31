@@ -203,6 +203,18 @@ pub fn glsl_to_wgsl_reflect(
     } else {
         src
     };
+    // naga's `glsl-in` rejects a 2-row matrix (`mat2`/`mat3x2`/`mat4x2`) in a std140 uniform block. That is
+    // a layout restriction, not a dialect one, so the column-splitting workaround runs on BOTH routes — the
+    // ES route above already applied it inside `normalize`, and this reaches the DESKTOP route, which is
+    // where the GL driver's ES2 output lands after it rewrites its own shaders (`is_es()` is false for it).
+    // Byte-faithful for any shader without such a member, so the direct path stays unchanged.
+    let unmat2;
+    let src = if src.contains("std140") {
+        unmat2 = crate::glsl_es::Source::new(src).split_std140_mat2();
+        unmat2.as_str()
+    } else {
+        src
+    };
     // naga's `wgsl-out` has no `IsInf` emitter, so a shader using `isinf()` (Chrome's GLES fragment
     // shaders do) parses fine but NACKs at WGSL emission (`Unsupported relational function: IsInf`).
     // Rewrite `isinf(x)` → `(abs(x) > FLT_MAX)` textually before parsing. Unconditional and cheap: a
