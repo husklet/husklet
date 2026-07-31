@@ -1,3 +1,9 @@
+//! LINUX-ONLY: this is the one test in this crate that consumes `hl-gl`, whose build script cross-builds
+//! the guest EGL/GLES shims and therefore needs a Linux cross-linker. The dev-dependency is scoped to
+//! Linux in `Cargo.toml` so the rest of this crate's tests build on a macOS host without that toolchain;
+//! this attribute is the other half of that scope, making the file compile to nothing elsewhere.
+#![cfg(target_os = "linux")]
+
 use hl_gl::model::context::{GlContext, GlSurface};
 use hl_gl::model::glconst::*;
 use hl_gl::service::{frame, query, record};

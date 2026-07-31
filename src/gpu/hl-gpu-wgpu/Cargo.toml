@@ -37,7 +37,17 @@ bytemuck = "1"
 # `{}` in a default release build); instrumentation is gated at runtime by HL_LOG / HL_LOG_COUNTERS.
 hl-log = { path = "../../packages/hl-log" }
 
-[dev-dependencies]
+# LINUX-ONLY, and the platform scope is the point. `hl-gl` is the guest GL surface crate; its build script
+# CROSS-BUILDS the guest EGL/GLES shims as Linux shared objects, which needs a `*-linux-gnu` linker. On the
+# macOS host that linker lives only inside the nix dev shell, so a single dev-dependency made EVERY test in
+# this crate unbuildable on the host whenever that shell was unavailable — including tests with nothing to
+# do with GL, such as the Metal-specific `nonfinite_predicates`. Scoping the dependency to Linux keeps the
+# one test that uses it (`gl_fbo_orientation`, itself `#![cfg(target_os = "linux")]`) running exactly where
+# it always ran, and lets every other test run on the host with no cross toolchain at all.
+#
+# Note the direction: this stays a DEV-dependency. `gpu` must not depend on `surface` in a shipped build,
+# and the only reason the edge exists is that one integration test consumes the driver's lowering.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
 hl-gl = { path = "../../surface/hl-gl" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
