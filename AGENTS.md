@@ -838,6 +838,12 @@ correct side, once forty differences were the harness's own rounding ties, and o
 wrong framings before the third was right. Budget for that gap; a disagreement is a location, not a
 diagnosis.
 
+Bind a number to the hash of the thing that actually determines the behaviour, not to the artifact name it
+was produced under. Four conformance findings were nearly discarded as unusable because they came from a
+differently-named bundle; they were rescued by noticing that the relevant driver subtree hashed identically
+across both, which the results file already recorded. The bundle name was the coarse instrument and the
+subtree hash was the real one.
+
 A test can be right about the thing it was written to defend and still nail down a defect beside it. Four
 repository tests this session asserted the broken behaviour they sat next to; the clearest pair correctly
 insisted that a depth-only clear must not repaint colour, and encoded that as "produces no frame at all" —
