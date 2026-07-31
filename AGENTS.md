@@ -805,6 +805,19 @@ with itself. Prove which driver you got — `dladdr` on an entry point, plus `GL
 assuming a variable took effect. Note `env -i` selects correctly and strips `HL_GPU_EXEC`, after which the
 driver links shaders and returns out-of-memory on everything, which reads as catastrophic regression.
 
+Design a case so the wrong answer names its own cause. Uploading each mipmap level as a distinct flat
+colour made the level actually sampled fall straight out of the pixels, which turned a vague "mipmapped
+draws go flat" into "always samples the smallest level, even under a non-mipmap filter" in a single run.
+
+Isolate at the finest granularity the work allows. Moving a differential from one process per family to
+one per expression turned two apparent defects into collateral from an earlier wedge — they agreed once
+isolated — and let three silent-failure triggers each name themselves.
+
+When a test's comment states a specification requirement, check the specification rather than the comment.
+Two tests were found asserting the opposite of the spec **in prose**, which makes them read as
+authoritative to anyone auditing them; one claimed that a successful call must not clear a pending error,
+and was green throughout a period when that bug blocked an entire conformance suite.
+
 Prefer an instrument that reports a positive count over one that reports absence, and when an
 instrument reports absence, verify it can detect presence at all. Four separate zeros in one session were
 artifacts rather than facts. **A positive count is only trustworthy with a denominator** — `count=100` is
