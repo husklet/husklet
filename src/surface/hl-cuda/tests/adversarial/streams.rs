@@ -46,3 +46,43 @@ fn ctx_synchronize_barrier_uses_a_fresh_fence_value_each_time() {
         "fence values are monotonic across barriers"
     );
 }
+
+/// A destroyed stream's id is never handed out again, so a stale `CUstream` cannot come back to life as
+/// a live stream belonging to someone else.
+///
+/// Handle validation rejects an id that is not live, which is what makes use-after-destroy an error —
+/// but only while the id stays dead. If `create` reused a freed id, a stale handle would pass every
+/// validity check and address a different stream than its holder believes, and there is no observation
+/// that separates that from correct use: the call succeeds, the work lands, and it lands on the wrong
+/// queue. This is the handle analogue of a wrong answer arriving on a correct call.
+///
+/// `next_id` is monotonic, so this holds today; the test pins it because reuse is the natural thing to
+/// add when someone later wants ids to stay small.
+#[test]
+fn a_destroyed_stream_id_is_never_reminted() {
+    let mut c = ctx();
+
+    let first = c.streams.create();
+    let second = c.streams.create();
+    assert!(c.streams.destroy(first));
+    assert!(c.streams.destroy(second));
+
+    // Both freed ids must stay dead, and neither may be reissued to a later create.
+    let mut minted = Vec::new();
+    for _ in 0..8 {
+        minted.push(c.streams.create());
+    }
+    for dead in [first, second] {
+        assert!(
+            !minted.contains(&dead),
+            "a destroyed stream id {dead:?} was reissued; a stale handle would pass validation and \
+             silently address a different stream than its holder believes",
+        );
+    }
+    // And the default stream is never minted as an explicit stream, or a stale explicit handle would
+    // alias the implicit queue every guest already uses.
+    assert!(
+        !minted.contains(&StreamTable::DEFAULT),
+        "create() minted the default stream id",
+    );
+}

@@ -546,3 +546,65 @@ fn an_unknown_device_attribute_is_refused() {
     );
     assert_eq!(value, 0);
 }
+
+/// Destroying a context does not release the allocations made under it: they stay resolvable, and they
+/// stay charged against the device memory budget.
+///
+/// This pins actual behaviour rather than asserting a wish, because it is a consequence of a deliberate
+/// design — `State` holds ONE `CudaContext` (the device description plus the allocation, module and
+/// stream tables) for the whole process, and `destroy_ctx` removes only the handle token. There is no
+/// per-context object model to tear down.
+///
+/// Two things follow, and neither is currently written down anywhere:
+///
+///   1. A pointer allocated under a destroyed context still resolves under a later one. Real CUDA frees
+///      a context's allocations with the context, so this is more permissive than the hardware: a guest
+///      that uses a pointer across `cuCtxDestroy` works here and faults on a real driver. That hides an
+///      application bug rather than causing one, which is the same shape as `cuModuleUnload` validating
+///      its handle and otherwise doing nothing.
+///   2. The bytes stay charged. `check_budget` sums live allocations against `total_mem`, and nothing
+///      subtracts on context destruction, so a guest that repeatedly creates a context, allocates, and
+///      destroys it will eventually be refused for out-of-memory with no live allocation of its own.
+///      That one is a real limit on a long-running process, not merely a permissiveness.
+///
+/// If per-context ownership is ever introduced, this test should fail and be replaced by one asserting
+/// that destruction frees. It exists so that change is a deliberate decision rather than a surprise.
+#[test]
+fn destroying_a_context_neither_frees_its_allocations_nor_releases_their_budget() {
+    let _g = guard();
+    let _server = serve_reference_executor();
+
+    let mut first: *mut c_void = core::ptr::null_mut();
+    assert_eq!(cuCtxCreate_v2(&mut first, 0, 0), CUDA_SUCCESS);
+    let mut ptr = 0u64;
+    assert_eq!(cuMemAlloc_v2(&mut ptr, 4096), CUDA_SUCCESS);
+    let charged = ShimState::with(|s| s.ctx.mem.total_bytes());
+    assert!(charged >= 4096, "the allocation was not charged to begin with");
+
+    assert_eq!(cuCtxDestroy_v2(first), CUDA_SUCCESS);
+
+    let mut second: *mut c_void = core::ptr::null_mut();
+    assert_eq!(cuCtxCreate_v2(&mut second, 0, 0), CUDA_SUCCESS);
+
+    // (1) The pointer from the destroyed context still resolves under the new one.
+    let mut size = 0usize;
+    assert_eq!(
+        cuPointerGetAttribute(
+            &mut size as *mut usize as *mut c_void,
+            CU_POINTER_ATTRIBUTE_RANGE_SIZE,
+            ptr
+        ),
+        CUDA_SUCCESS,
+        "a pointer from a destroyed context no longer resolves; if that is now intended, this test \
+         should be replaced by one asserting the free",
+    );
+    assert_eq!(size, 4096);
+
+    // (2) Its bytes are still charged against the budget.
+    assert_eq!(
+        ShimState::with(|s| s.ctx.mem.total_bytes()),
+        charged,
+        "the budget changed across context destruction; if destruction now releases, this test \
+         should be replaced",
+    );
+}
