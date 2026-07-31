@@ -190,12 +190,6 @@ struct SurfState {
     native_resize_last_sent: Option<(u32, u32, bool, bool, bool)>,
     observed_native_fullscreen: Option<bool>,
     observed_backing_scale: Option<u64>,
-    /// Whether this surface has already reported that its presents were abandoned (see `abandon`).
-    abandoned_reported: bool,
-    /// Refusal reasons this surface has already reported (see `refuse`). A refusal is retried, so a
-    /// surface stuck on one repeats it every refresh; latching per reason keeps a permanent stall to a
-    /// handful of lines while still naming a second, different reason if one appears.
-    refused_reported: Vec<&'static str>,
     /// Whether this popup has already described its placement (see `describe_popup_placement`). Latched
     /// so a menu that repaints at refresh rate states its geometry once, not sixty times a second.
     described_popup: bool,
@@ -221,8 +215,6 @@ impl SurfState {
             native_resize_last_sent: None,
             observed_native_fullscreen: None,
             observed_backing_scale: None,
-            abandoned_reported: false,
-            refused_reported: Vec::new(),
             described_popup: false,
         }
     }
@@ -269,6 +261,10 @@ pub struct MacPresenter {
     /// The host pointer cursor the guest last asked for. Only applied in windowed mode: headless there is
     /// no AppKit cursor to own.
     cursor: HostCursorState,
+    /// Occurrence counts behind the `refuse` / `abandon` diagnostics. Held here rather than per surface
+    /// so a frame refused before its `SurfState` exists is still counted and still speaks.
+    reported_refusals: crate::diagnostic::Tally<(SurfaceId, &'static str)>,
+    reported_abandonments: crate::diagnostic::Tally<(SurfaceId, &'static str)>,
 }
 
 impl MacPresenter {
@@ -345,6 +341,8 @@ impl MacPresenter {
             present_surfaces: HashMap::new(),
             wake: None,
             cursor: HostCursorState::default(),
+            reported_refusals: crate::diagnostic::Tally::new(),
+            reported_abandonments: crate::diagnostic::Tally::new(),
         })
     }
 
@@ -379,6 +377,8 @@ impl MacPresenter {
             present_surfaces: HashMap::new(),
             wake: None,
             cursor: HostCursorState::default(),
+            reported_refusals: crate::diagnostic::Tally::new(),
+            reported_abandonments: crate::diagnostic::Tally::new(),
         };
         if let Some(directory) = std::env::var_os("HL_SURFACE_CAPTURE_DIR") {
             match Capture::new(PathBuf::from(directory)) {

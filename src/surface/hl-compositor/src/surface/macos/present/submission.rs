@@ -75,26 +75,29 @@ impl FailureCause {
     }
 }
 
-/// One `error`-level line per surface per cause.
+/// Occurrence counts per surface per cause, reported on the [`milestone`](crate::diagnostic::milestone)
+/// schedule.
 ///
-/// A window whose presents fail fails EVERY present, so logging each one buries the fact in thousands of
-/// identical lines — the same silence as saying nothing. Latched PER SURFACE rather than per process: a
-/// process-global latch answers "does this cause ever fire", which is a question worth asking exactly
-/// once, after which the first failing client hides every other client failing the same way.
-static ANNOUNCED: std::sync::Mutex<Option<Vec<(SurfaceId, usize)>>> = std::sync::Mutex::new(None);
+/// Per SURFACE, not per process: a process-global latch answers "does this cause ever fire" — worth
+/// asking exactly once, after which the first failing client hides every other one failing the same way.
+/// And COUNTED, not latched: `presented_time_unreadable` firing once as a window is created is a
+/// transient the window recovers from, while the same cause firing every frame is a window that is
+/// never composited. A single line looks identical either way, and reading one as the other cost this
+/// project a build cycle and two misrouted investigations.
+///
+/// Completions arrive on Metal's callback threads, so this is shared state rather than presenter state.
+static ANNOUNCED: std::sync::Mutex<Option<crate::diagnostic::Tally<(SurfaceId, usize)>>> =
+    std::sync::Mutex::new(None);
 
-/// Whether `(surface, cause)` is speaking for the first time. A poisoned lock logs rather than goes
-/// silent — over-reporting a failure is recoverable, losing it is what this whole path is for.
-fn claim_announcement(surface: SurfaceId, cause: FailureCause) -> bool {
+/// The running count for `(surface, cause)` when this occurrence should speak. A poisoned lock reports
+/// rather than goes silent — over-reporting a failure is recoverable, losing it is what this path is for.
+fn claim_announcement(surface: SurfaceId, cause: FailureCause) -> Option<u64> {
     let Ok(mut announced) = ANNOUNCED.lock() else {
-        return true;
+        return Some(0);
     };
-    let seen = announced.get_or_insert_with(Vec::new);
-    if seen.contains(&(surface, cause.index())) {
-        return false;
-    }
-    seen.push((surface, cause.index()));
-    true
+    announced
+        .get_or_insert_with(crate::diagnostic::Tally::new)
+        .record((surface, cause.index()))
 }
 
 /// Build the failure completion for `id`, attributing it to `cause` once per surface.
@@ -110,12 +113,13 @@ fn failed_completion(
     } else {
         hl_log::hl_count!(hl_log::tag::PRESENT, "present_terminal");
     }
-    if claim_announcement(surface, cause) {
+    if let Some(count) = claim_announcement(surface, cause) {
         hl_log::hl_log!(
             hl_log::tag::PRESENT,
             hl_log::Level::Error,
-            "present {} surface={} submission={} cause={} — further failures of this cause on this \
-             surface are counted, not logged",
+            "present {} surface={} submission={} cause={} count={count} — count=1 as a window is \
+             created is a transient it recovers from; a climbing count is a window WindowServer never \
+             composites",
             if retryable { "retryable" } else { "terminal" },
             surface.0,
             id.0,

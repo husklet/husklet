@@ -260,28 +260,23 @@ impl MacPresenter {
     /// reason is recorded for attribution, and the repaint that re-drives the frame is always requested —
     /// without it a client that goes idle after the refusal leaves its window showing stale content.
     ///
-    /// Attributed at `error`, latched per surface per reason. "Retryable" describes the pacing, not the
-    /// severity: a refusal that recurs every refresh never ships a frame, so the client's `wl_surface.frame`
-    /// callbacks never fire and its window is as dead as an abandoned one. A default release build compiles
-    /// `warn` and below out entirely, so at `warn` this said nothing at all in a shipped bundle.
+    /// Attributed at `error` and COUNTED per surface per reason. "Retryable" describes the pacing, not
+    /// the severity: a refusal that recurs every refresh never ships a frame, so the client's
+    /// `wl_surface.frame` callbacks never fire and its window is as dead as an abandoned one — but a
+    /// refusal that happens once while a window is settling is nothing at all. Only the count separates
+    /// them, so the count is in the message. A default release build compiles `warn` and below out
+    /// entirely, so at `warn` this said nothing whatsoever in a shipped bundle.
     fn refuse(&mut self, sid: SurfaceId, reason: &'static str) -> PresentationFeedback {
         hl_log::hl_count!(tag::PRESENT, "present_retry");
-        let announced = self
-            .surfaces
-            .get(&sid)
-            .is_some_and(|state| state.refused_reported.contains(&reason));
-        if !announced {
+        if let Some(count) = self.reported_refusals.record((sid, reason)) {
             hl_log::hl_log!(
                 tag::PRESENT,
                 Level::Error,
-                "present refused sid={} reason={reason} — this frame did not reach the screen and the \
-                 client's frame callbacks do not fire until one does; further refusals of this reason \
-                 are counted (present_retry), not logged",
+                "present refused sid={} reason={reason} count={count} — this frame did not reach the \
+                 screen and the client's frame callbacks do not fire until one does; count=1 is a \
+                 transient, a climbing count is a window that never advances",
                 sid.0
             );
-            if let Some(state) = self.surfaces.get_mut(&sid) {
-                state.refused_reported.push(reason);
-            }
         }
         if !self.events.contains(&PresenterEvent::Repaint(sid)) {
             self.events.push(PresenterEvent::Repaint(sid));
@@ -296,25 +291,19 @@ impl MacPresenter {
     /// retried, so the surface simply stops advancing. Both now name their cause; without it a window
     /// that goes permanently blank leaves nothing on record saying why.
     ///
-    /// Latched per surface — the condition that abandons one frame abandons every subsequent one, and
-    /// thousands of identical lines hide the fact as thoroughly as no line at all.
+    /// Counted per surface per reason — thousands of identical lines hide the fact as thoroughly as no
+    /// line at all, but a bare latch cannot say whether the surface abandoned one frame or every frame
+    /// since. The running count is carried in the message so it can.
     fn abandon(&mut self, sid: SurfaceId, reason: &'static str) -> PresentationFeedback {
         hl_log::hl_count!(tag::PRESENT, "present_terminal");
-        let announced = self
-            .surfaces
-            .get(&sid)
-            .is_some_and(|state| state.abandoned_reported);
-        if !announced {
+        if let Some(count) = self.reported_abandonments.record((sid, reason)) {
             hl_log::hl_log!(
                 tag::PRESENT,
                 Level::Error,
-                "present abandoned sid={} reason={reason} — this surface will not advance again; \
-                 further abandonments are counted (present_terminal), not logged",
+                "present abandoned sid={} reason={reason} count={count} — this frame will not be \
+                 retried; a climbing count is a surface that has stopped advancing entirely",
                 sid.0
             );
-            if let Some(state) = self.surfaces.get_mut(&sid) {
-                state.abandoned_reported = true;
-            }
         }
         PresentationFeedback {
             outcome: PresentOutcome::TerminalFailure,

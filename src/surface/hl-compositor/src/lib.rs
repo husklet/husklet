@@ -20,6 +20,7 @@
 //! Cocoa/Metal presentation. The default build remains the neutral core and its deterministic tests.
 
 pub mod adapter;
+pub mod diagnostic;
 pub mod scene;
 /// Concrete platform `scene::port::Presenter` backends. Behind the `macos-surface` feature so the
 /// pure-std scene core (and the Linux build) is unaffected; only the macOS presenter lives here today.

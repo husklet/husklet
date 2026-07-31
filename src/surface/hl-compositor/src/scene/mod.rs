@@ -80,9 +80,10 @@ pub struct Compositor<P: Presenter, C: Clock> {
     pending_frames: HashMap<SurfaceId, PendingFrame>,
     pending_submissions: HashMap<PresentationId, SurfaceId>,
     pending_roots: HashMap<SurfaceId, PresentationId>,
-    /// Reasons each root has already reported for a frame dropped before the presenter (see
-    /// [`Self::announce_stall`]).
-    announced_stalls: HashMap<SurfaceId, Vec<&'static str>>,
+    /// How many times each root has dropped a frame before the presenter, per reason (see
+    /// [`Self::announce_stall`]). Counted, not merely latched — the count is what says whether a root is
+    /// recovering or stuck.
+    announced_stalls: crate::diagnostic::Tally<(SurfaceId, &'static str)>,
 }
 
 impl<P: Presenter, C: Clock> Compositor<P, C> {
@@ -96,7 +97,7 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
             pending_frames: HashMap::new(),
             pending_submissions: HashMap::new(),
             pending_roots: HashMap::new(),
-            announced_stalls: HashMap::new(),
+            announced_stalls: crate::diagnostic::Tally::new(),
         }
     }
 
@@ -111,7 +112,7 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
             pending_frames: HashMap::new(),
             pending_submissions: HashMap::new(),
             pending_roots: HashMap::new(),
-            announced_stalls: HashMap::new(),
+            announced_stalls: crate::diagnostic::Tally::new(),
         }
     }
 
@@ -500,22 +501,17 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
     /// per commit for the life of the process.
     fn announce_stall(&mut self, root: SurfaceId, reason: &'static str) {
         hl_count!(tag::PRESENT, "present_unpresentable");
-        if self
-            .announced_stalls
-            .get(&root)
-            .is_some_and(|seen| seen.contains(&reason))
-        {
+        let Some(count) = self.announced_stalls.record((root, reason)) else {
             return;
-        }
+        };
         hl_log::hl_log!(
             tag::PRESENT,
             hl_log::Level::Error,
-            "present unpresentable root={} reason={reason} — the frame never reached the presenter and \
-             this client's frame callbacks are dropped; further occurrences are counted \
-             (present_unpresentable), not logged",
+            "present unpresentable root={} reason={reason} count={count} — the frame never reached the \
+             presenter and this client's frame callbacks are dropped; count=1 is a transient, a climbing \
+             count is a stuck root",
             root.0
         );
-        self.announced_stalls.entry(root).or_default().push(reason);
     }
 
     fn pace_tree(&mut self, root: SurfaceId, pacing: FramePacing) -> u32 {
