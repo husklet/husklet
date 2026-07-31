@@ -102,6 +102,23 @@ pub const COLOR_FORMATS: &[TextureFormat] = &[
     TextureFormat::R32Float,
 ];
 
+/// The INTEGER color formats — the storage a `usampler2D`/`isampler2D` reads (`GL_RGBA_INTEGER`,
+/// `GL_RED_INTEGER`, `GL_RG_INTEGER`).
+///
+/// Deliberately NOT part of [`COLOR_FORMATS`]: that set is the formats *every* host backend can
+/// materialize, and the software oracle cannot. Its clear/blend/sample paths are all defined on normalized
+/// float channels, and an integer format has no normalized reading — `clear_texel` and friends refuse it
+/// rather than inventing one. A backend advertises this set only if it can really carry raw integer texels,
+/// which today means the wgpu executor.
+pub const INTEGER_FORMATS: &[TextureFormat] = &[
+    TextureFormat::Rgba8Uint,
+    TextureFormat::Rgba8Sint,
+    TextureFormat::R8Uint,
+    TextureFormat::R8Sint,
+    TextureFormat::Rg8Uint,
+    TextureFormat::Rg8Sint,
+];
+
 /// The depth/stencil formats a backend can materialize as a real depth target (the software oracle
 /// runs the per-fragment depth test against a `Depth32Float` plane).
 pub const DEPTH_FORMATS: &[TextureFormat] = &[TextureFormat::Depth32Float];

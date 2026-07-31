@@ -43,11 +43,15 @@ fn out_of_range_enums_are_typed_bad_enum() {
             ..
         })
     ));
+    // One past the LAST declared discriminant. This boundary moves whenever a format is added — it was 26
+    // before the integer formats (`Rgba8Uint` … `Rg8Sint` = 26..=31) took that range — and it must move,
+    // because the property under test is that an undeclared value is refused rather than aliasing onto a
+    // declared one.
     assert!(matches!(
-        TextureFormat::from_u32(26),
+        TextureFormat::from_u32(32),
         Err(GpuError::BadEnum { .. })
     ));
-    for v in 1..=11 {
+    for v in 1..=31 {
         assert_eq!(TextureFormat::from_u32(v).unwrap().to_u32(), v);
     }
     assert!(matches!(

@@ -35,6 +35,12 @@ u32_enum!(
         Bc3RgbaUnorm = 16, Bc3RgbaSrgb = 17, Bc4RUnorm = 18, Bc4RSnorm = 19,
         Bc5RgUnorm = 20, Bc5RgSnorm = 21, Bc6hRgbUfloat = 22, Bc6hRgbFloat = 23,
         Bc7RgbaUnorm = 24, Bc7RgbaSrgb = 25,
+        // Integer color formats (v-next, additive). A GL texture declared `GL_RGBA_INTEGER` / `GL_RED_INTEGER`
+        // / `GL_RG_INTEGER` — the storage a `usampler2D`/`isampler2D` reads — had NO representation in this
+        // enum at all, so the whole integer-texture family was unexpressible rather than merely unsupported.
+        // These are UNFILTERABLE and UNBLENDABLE by specification: a sampler reads them only through
+        // `texelFetch` (WGSL `textureLoad`), and their texels are raw integers, never normalized.
+        Rgba8Uint = 26, Rgba8Sint = 27, R8Uint = 28, R8Sint = 29, Rg8Uint = 30, Rg8Sint = 31,
     } "TextureFormat"
 );
 
@@ -42,9 +48,11 @@ impl TextureFormat {
     /// Bytes per texel for the color formats the software backend can materialize.
     pub fn bytes_per_texel(self) -> Option<usize> {
         Some(match self {
-            TextureFormat::R8Unorm => 1,
-            TextureFormat::Rg8Unorm => 2,
-            TextureFormat::Rgba8Unorm
+            TextureFormat::R8Unorm | TextureFormat::R8Uint | TextureFormat::R8Sint => 1,
+            TextureFormat::Rg8Unorm | TextureFormat::Rg8Uint | TextureFormat::Rg8Sint => 2,
+            TextureFormat::Rgba8Uint
+            | TextureFormat::Rgba8Sint
+            | TextureFormat::Rgba8Unorm
             | TextureFormat::Bgra8Unorm
             | TextureFormat::Rgba8Srgb
             | TextureFormat::Bgra8Srgb

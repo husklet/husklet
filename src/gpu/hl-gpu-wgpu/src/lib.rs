@@ -538,6 +538,10 @@ impl WgpuExecutor {
             texture_formats: TextureFormat::bits(COLOR_FORMATS)
                 | TextureFormat::bits(DEPTH_FORMATS)
                 | TextureFormat::bits(&[TextureFormat::Depth24PlusStencil8])
+                // Integer color formats carry raw integer texels this executor really allocates, uploads,
+                // renders to and reads back (see `format_coverage::integer`). The CPU oracle cannot, which
+                // is why `INTEGER_FORMATS` is advertised here rather than shared through `COLOR_FORMATS`.
+                | TextureFormat::bits(hl_gpu::protocol::model::capability::INTEGER_FORMATS)
                 | if features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC) {
                     TextureFormat::bits(hl_gpu::protocol::model::capability::BC_FORMATS)
                 } else {

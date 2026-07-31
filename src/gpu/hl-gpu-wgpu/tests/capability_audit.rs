@@ -120,8 +120,9 @@ fn every_advertised_texture_format_is_really_creatable() {
     let mut exec = WgpuExecutor::new(DeviceConfig::default())
         .expect("a GPU adapter is required to prove the wgpu executor");
     let caps = exec.capabilities();
-    // The advertisement is exactly color ∪ depth ∪ combined-depth-stencil.
+    // The advertisement is exactly color ∪ integer ∪ depth ∪ combined-depth-stencil.
     let expect = TextureFormat::bits(COLOR_FORMATS)
+        | TextureFormat::bits(hl_gpu::protocol::model::capability::INTEGER_FORMATS)
         | TextureFormat::bits(DEPTH_FORMATS)
         | TextureFormat::bits(&[TextureFormat::Depth24PlusStencil8])
         | (caps.texture_formats
@@ -146,6 +147,7 @@ fn every_advertised_texture_format_is_really_creatable() {
         TextureFormat::Depth32Float,
         TextureFormat::Depth24PlusStencil8,
     ];
+    all.extend_from_slice(hl_gpu::protocol::model::capability::INTEGER_FORMATS);
     all.extend_from_slice(hl_gpu::protocol::model::capability::BC_FORMATS);
     for fmt in all {
         if !caps.supports_format(fmt) {
