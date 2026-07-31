@@ -26,6 +26,10 @@ use objc2_foundation::{NSPoint, NSSize};
 
 use crate::scene::port::{CursorImage, CursorShape, HostCursor};
 
+/// Client cursor images the host could not use, counted per requested size.
+static UNUSABLE_CURSOR: crate::diagnostic::SharedTally<(u32, u32)> =
+    crate::diagnostic::SharedTally::new();
+
 /// The macOS system cursors a themed shape can resolve to — everything `NSCursor` publishes that is
 /// useful for a pointer shape, plus [`SystemCursor::Arrow`] as the honest fallback.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -229,13 +233,17 @@ impl HostCursorState {
             HostCursor::Image(image) => match image_cursor(image) {
                 Some(cursor) => self.desired = Some(cursor),
                 None => {
-                    hl_log::hl_log!(
-                        hl_log::tag::PRESENT,
-                        hl_log::Level::Warn,
-                        "client cursor image {}x{} is unusable; keeping the previous cursor",
-                        image.width,
-                        image.height
-                    );
+                    // The client asked for a cursor and silently did not get it. Visible to the user as
+                    // a wrong pointer, with nothing on record at `warn` in a release build.
+                    if let Some(count) = UNUSABLE_CURSOR.record((image.width, image.height)) {
+                        hl_log::hl_error!(
+                            hl_log::tag::PRESENT,
+                            "client cursor image {}x{} is unusable count={count}; keeping the previous \
+                             cursor",
+                            image.width,
+                            image.height
+                        );
+                    }
                     return;
                 }
             },

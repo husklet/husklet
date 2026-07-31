@@ -21,6 +21,10 @@ use std::cell::Cell;
 use std::sync::atomic::AtomicU64;
 use std::time::Instant;
 
+/// Frames skipped for a composite/drawable size mismatch, counted per size pair.
+static SKIPPED_MISMATCH: crate::diagnostic::SharedTally<((usize, usize), (usize, usize))> =
+    crate::diagnostic::SharedTally::new();
+
 use super::layer;
 use super::metal::MetalCtx;
 use super::present::submission::{
@@ -290,10 +294,13 @@ impl MetalWindow {
         let source_size = (composite.width(), composite.height());
         let drawable_size = (dst.width(), dst.height());
         if !drawable_matches(composite, &dst) {
-            hl_log::hl_log!(
+            // The frame is dropped here and retried. Once, mid-resize, that is normal; every frame means
+            // a window whose drawable never agrees with its composite and so never updates again.
+            if let Some(count) = SKIPPED_MISMATCH.record((source_size, drawable_size)) {
+            hl_log::hl_error!(
                 hl_log::tag::PRESENT,
-                hl_log::Level::Warn,
-                "skip native frame: composite={}x{} drawable={}x{} logical={}x{}",
+                "skip native frame count={} composite={}x{} drawable={}x{} logical={}x{}",
+                count,
                 source_size.0,
                 source_size.1,
                 drawable_size.0,
@@ -301,6 +308,7 @@ impl MetalWindow {
                 self.logical_size().0,
                 self.logical_size().1,
             );
+            }
             return PresentAttempt::Retry;
         }
         let Some(cmd) = ctx.queue.commandBuffer() else {

@@ -38,6 +38,17 @@ enum ImportFailure {
     Stride,
 }
 
+impl ImportFailure {
+    /// Stable key for counting occurrences of this cause per surface.
+    fn as_str(self) -> &'static str {
+        match self {
+            ImportFailure::Width => "width",
+            ImportFailure::Height => "height",
+            ImportFailure::Stride => "stride",
+        }
+    }
+}
+
 impl Metadata {
     fn from_surface(surface: &hl_iosurface::Surface) -> Option<Self> {
         let (width, height, stride) = surface.dimensions();

@@ -67,6 +67,9 @@ impl HostInput {
             .map(|(stamped, now)| now.saturating_sub(stamped))?;
         hl_log::hl_add!(tag::PRESENT, "host_input_age_ns", age);
         hl_log::hl_count!(tag::PRESENT, "host_input_events");
+        // Deliberately left verbose. This traces an input that WAS delivered — a slow one is a timing
+        // observation of a working path, not a failure, and it runs on the hottest path in the
+        // compositor. `host_input_age_ns` / `host_input_events` carry it in a release build.
         hl_log::hl_log!(
             tag::PRESENT,
             if age >= SLOW_DISPATCH_NANOS {

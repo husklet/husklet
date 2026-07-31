@@ -173,7 +173,7 @@ impl MacPresenter {
                             let stats = PixelStats::from_bytes(&bytes);
                             hl_log::hl_log!(
                                 tag::PRESENT,
-                                Level::Warn,
+                                Level::Error,
                                 "capture pixel boundary=source sid={} iosurface={} size={}x{} bytes={} min={} max={} nonzero={}",
                                 sid.0,
                                 surface.id(),
@@ -187,7 +187,7 @@ impl MacPresenter {
                         }
                         Err(error) => hl_log::hl_log!(
                             tag::PRESENT,
-                            Level::Warn,
+                            Level::Error,
                             "capture pixel boundary=source sid={} iosurface={} size={}x{} read_error={error}",
                             sid.0,
                             surface.id(),
@@ -250,7 +250,7 @@ impl MacPresenter {
             let stats = PixelStats::from_bytes(&bytes);
             hl_log::hl_log!(
                 tag::PRESENT,
-                Level::Warn,
+                Level::Error,
                 "capture pixel boundary=destination sid={} size={}x{} bytes={} min={} max={} nonzero={}",
                 sid.0,
                 out_w,

@@ -1,4 +1,8 @@
 use super::*;
+/// Native imports that failed, counted per surface per cause.
+static NATIVE_IMPORT_FAILED: crate::diagnostic::SharedTally<(SurfaceId, &'static str)> =
+    crate::diagnostic::SharedTally::new();
+
 impl HlState {
     pub fn set_native_frames(&mut self, frames: NativeFrames) {
         hl_log::hl_log!(
@@ -259,9 +263,16 @@ impl HlState {
             .or_else(|| Metadata::from_surface(&frame.surface));
         let Some(metadata) = metadata else {
             let (width, height, stride) = frame.surface.dimensions();
-            hl_log::hl_warn!(
+            // A native import that fails drops the frame outright: the client's buffer never becomes a
+            // texture, so nothing reaches the screen and no present-path diagnostic downstream can
+            // explain why. At `warn` this said nothing at all in a release build — the exact silence
+            // that turns "the window is blank" into an investigation instead of a lookup.
+            if let Some(count) = NATIVE_IMPORT_FAILED.record((deferred.surface, "metadata_conversion"))
+            {
+            hl_log::hl_error!(
                 hl_log::tag::PRESENT,
-                "native import failed reason=metadata_conversion surface={} token={} serial={} metadata_source={} actual_iosurface={} actual_width={} actual_height={} actual_stride={}",
+                "native import failed reason=metadata_conversion count={} surface={} token={} serial={} metadata_source={} actual_iosurface={} actual_width={} actual_height={} actual_stride={}",
+                count,
                 deferred.surface.0,
                 frame.token,
                 frame.serial,
@@ -271,16 +282,19 @@ impl HlState {
                 height,
                 stride
             );
+            }
             frame.complete(NativeFrameOutcome::ImportFailed);
             self.discard_deferred(deferred);
             return;
         };
         let actual = frame.surface.dimensions();
         if let Some(reason) = metadata.failure(actual) {
-            hl_log::hl_warn!(
+            if let Some(count) = NATIVE_IMPORT_FAILED.record((deferred.surface, reason.as_str())) {
+            hl_log::hl_error!(
                 hl_log::tag::PRESENT,
-                "native import failed reason={:?} surface={} token={} serial={} metadata_source={} expected_width={} expected_height={} expected_stride={} expected_format={:?} actual_iosurface={} actual_width={} actual_height={} actual_stride={} actual_format=bgra8",
+                "native import failed reason={:?} count={} surface={} token={} serial={} metadata_source={} expected_width={} expected_height={} expected_stride={} expected_format={:?} actual_iosurface={} actual_width={} actual_height={} actual_stride={} actual_format=bgra8",
                 reason,
+                count,
                 deferred.surface.0,
                 frame.token,
                 frame.serial,
@@ -294,6 +308,7 @@ impl HlState {
                 actual.1,
                 actual.2
             );
+            }
             frame.complete(NativeFrameOutcome::ImportFailed);
             self.discard_deferred(deferred);
             return;

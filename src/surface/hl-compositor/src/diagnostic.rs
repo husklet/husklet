@@ -59,9 +59,50 @@ impl<K: Eq + Hash> Tally<K> {
     }
 }
 
+/// A [`Tally`] usable from a `static`, for failure sites that have no `&mut self` to hang state on —
+/// free functions, `&self` methods, and completion callbacks arriving on foreign threads.
+///
+/// Declare one per site: `static SKIPPED: SharedTally<(u32, u32)> = SharedTally::new();`
+pub struct SharedTally<K>(std::sync::Mutex<Option<Tally<K>>>);
+
+impl<K: Eq + Hash> SharedTally<K> {
+    pub const fn new() -> Self {
+        Self(std::sync::Mutex::new(None))
+    }
+
+    /// The running count for `key` when this occurrence should speak.
+    ///
+    /// A poisoned lock reports rather than goes silent: over-reporting a failure is recoverable, losing
+    /// one is the failure mode this whole family of diagnostics exists to prevent. `0` marks that the
+    /// count itself is unavailable, so it can never be misread as a real first occurrence.
+    pub fn record(&self, key: K) -> Option<u64> {
+        let Ok(mut tally) = self.0.lock() else {
+            return Some(0);
+        };
+        tally.get_or_insert_with(Tally::new).record(key)
+    }
+}
+
+impl<K: Eq + Hash> Default for SharedTally<K> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{milestone, Tally};
+    use super::{milestone, SharedTally, Tally};
+
+    #[test]
+    fn a_shared_tally_counts_across_calls_from_anywhere() {
+        static SITE: SharedTally<&'static str> = SharedTally::new();
+        assert_eq!(SITE.record("a"), Some(1));
+        assert_eq!(SITE.record("a"), None);
+        assert_eq!(SITE.record("b"), Some(1), "keys count independently");
+        // "a" has fired twice; carry it to 100 and collect what it chose to report.
+        let reported: Vec<u64> = (3..=100).filter_map(|_| SITE.record("a")).collect();
+        assert_eq!(reported, vec![10, 100]);
+    }
 
     #[test]
     fn milestones_are_the_first_occurrence_then_each_power_of_ten() {

@@ -42,20 +42,37 @@ pub(super) fn can_acquire(queue_depth: usize) -> bool {
     queue_depth < DRAWABLES
 }
 
+/// Drawables the layer refused to hand out, counted by queue depth.
+static ACQUIRE_FAILED: crate::diagnostic::SharedTally<usize> = crate::diagnostic::SharedTally::new();
+
 pub(super) fn record_acquire(elapsed: Duration, queue_depth: usize, acquired: bool) {
-    let level = if !acquired || elapsed >= SLOW_ACQUIRE {
-        Level::Warn
-    } else {
-        Level::Trace
-    };
+    // Failing to acquire a drawable costs the frame outright, so it reports in a release build. A slow
+    // BUT successful acquire is a timing observation of a working path and stays verbose. Counted
+    // because this is the hot path: one line, then decade milestones, never a flood.
+    if !acquired {
+        if let Some(count) = ACQUIRE_FAILED.record(queue_depth) {
+            hl_log::hl_error!(
+                tag::PRESENT,
+                "drawable_acquire failed count={count} elapsed_us={} queued={} capacity={} — this frame \
+                 did not reach the screen; a climbing count is a layer that never yields a drawable",
+                elapsed.as_micros(),
+                queue_depth,
+                DRAWABLES
+            );
+        }
+        return;
+    }
     hl_log::hl_log!(
         tag::PRESENT,
-        level,
-        "drawable_acquire elapsed_us={} queued={} capacity={} acquired={}",
+        if elapsed >= SLOW_ACQUIRE {
+            Level::Warn
+        } else {
+            Level::Trace
+        },
+        "drawable_acquire elapsed_us={} queued={} capacity={} acquired=true",
         elapsed.as_micros(),
         queue_depth,
-        DRAWABLES,
-        acquired
+        DRAWABLES
     );
 }
 
