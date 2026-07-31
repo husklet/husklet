@@ -20,10 +20,12 @@
 //! Off by default. A CUDA driver injected into an arbitrary guest process must not write to stderr
 //! unless it was asked to, so an absent `HL_CUDA_LOG` leaves the mask exactly where it is today: closed.
 
-use hl_log::{Config, Level, Tags};
+use hl_log::{tag, Config, Level, Tags};
 use std::sync::Once;
 
 /// Tag list to open, e.g. `HL_CUDA_LOG=cuda,shim` or `HL_CUDA_LOG=all`. Unset or `off` stays quiet.
+/// Any non-empty request also opens `transport` and `wire`: the guest→host transport is on this
+/// driver's failure path, and nobody diagnosing a lost device should have to know that.
 const TAGS_VARIABLE: &str = "HL_CUDA_LOG";
 /// Maximum severity to emit, e.g. `HL_CUDA_LOG_LEVEL=warn`. Defaults to `error`, the level a release
 /// build still compiles in — asking for more in a release build is accepted and simply has less to
@@ -60,6 +62,12 @@ impl GuestLogging {
         if logging == Tags::NONE {
             return;
         }
+        // The guest→host transport is part of THIS driver's failure path, not a separate subsystem the
+        // caller opted out of. Its sites are tagged TRANSPORT/WIRE, so a mask parsed from the
+        // documented `HL_CUDA_LOG=cuda` left "host executor rejected frame" — the one line that
+        // explains any DEVICE_LOST — masked for anyone following the documented usage. Unioned only
+        // once the caller has asked for something, so absent/`off` still leaves the gate closed.
+        let logging = logging | Tags::from(tag::TRANSPORT) | Tags::from(tag::WIRE);
         let level = level.and_then(Level::from_name).unwrap_or(Level::Error);
         Config {
             logging,
@@ -162,6 +170,54 @@ mod tests {
             assert!(
                 !captured("sentinel-should-stay-quiet"),
                 "{request:?} must leave the gate closed"
+            );
+        }
+
+        end_capture();
+    }
+
+    /// The transport is reachable from the DOCUMENTED usage. Its sites are tagged `TRANSPORT`/`WIRE`,
+    /// not `tag::CUDA`, so before the union `HL_CUDA_LOG=cuda` left "host executor rejected frame" —
+    /// the single line that explains any `DEVICE_LOST` — masked for anyone following the documentation.
+    #[test]
+    fn opening_the_driver_also_opens_the_transport_it_fails_through() {
+        let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+        start_capture();
+        hl_log::Logging::global().set(Tags::NONE);
+
+        GuestLogging::configure(Some("cuda"), Some("error"));
+        hl_log::hl_error!(hl_log::tag::TRANSPORT, "sentinel-transport");
+        hl_log::hl_error!(hl_log::tag::WIRE, "sentinel-wire");
+        assert!(
+            captured("sentinel-transport") && captured("sentinel-wire"),
+            "HL_CUDA_LOG=cuda must reach the transport that carries this driver's work"
+        );
+
+        end_capture();
+    }
+
+    /// The union must not turn an unasked-for driver loud: it adds the transport, nothing else.
+    #[test]
+    fn the_transport_union_does_not_open_unrequested_subsystems() {
+        let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+        start_capture();
+        hl_log::Logging::global().set(Tags::NONE);
+
+        GuestLogging::configure(Some("cuda"), Some("error"));
+        hl_log::hl_error!(hl_log::tag::COMPOSITOR, "sentinel-compositor");
+        assert!(
+            !captured("sentinel-compositor"),
+            "the union adds the transport only"
+        );
+
+        // And an absent or refused request still opens nothing at all, transport included.
+        hl_log::Logging::global().set(Tags::NONE);
+        for request in [None, Some(""), Some("off"), Some("none")] {
+            GuestLogging::configure(request, None);
+            hl_log::hl_error!(hl_log::tag::TRANSPORT, "sentinel-closed-transport");
+            assert!(
+                !captured("sentinel-closed-transport"),
+                "{request:?} must leave even the transport closed"
             );
         }
 
