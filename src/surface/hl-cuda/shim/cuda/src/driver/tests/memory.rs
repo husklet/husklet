@@ -412,3 +412,60 @@ fn pointer_attributes_refuse_a_pointer_outside_any_allocation() {
         );
     }
 }
+
+/// A host→device copy from a null source with a non-zero length is refused, not reported as a success
+/// that copied nothing.
+///
+/// `CInput::bytes` borrows a `const void*` plus a length and yields an empty slice when the pointer is
+/// null — a reasonable contract for a borrow helper, but the host→device entry points passed the result
+/// straight through. A null source with n > 0 therefore became a zero-length copy: `resolve_range`
+/// bounds-checked a length of 0, which passes trivially, a `WriteBuffer` carrying no bytes was
+/// submitted, and the call returned `CUDA_SUCCESS`. The caller asked for n bytes, was told the copy
+/// succeeded, and the destination still holds whatever it held before.
+///
+/// That is the same shape as the pointer attributes returning success with a zero: the failure and the
+/// no-op are the same observation. The device→host direction already checks its host pointer for null
+/// and refuses, so the two directions disagreed about the same mistake.
+///
+/// Real CUDA returns `CUDA_ERROR_INVALID_VALUE`. A null source with n == 0 stays legal, because a
+/// zero-length copy is well defined and copies nothing by request rather than by accident.
+#[test]
+fn host_to_device_copy_from_a_null_source_is_refused() {
+    let _g = guard();
+    // A working path is a precondition for asserting how a refusal happens. A model-only
+    // `record_alloc` allocation the sink has never seen makes every submit fail, so a null source and
+    // a valid one are refused alike; the first version of this test did that and its assertions passed
+    // while measuring the setup rather than the code.
+    let _server = serve_reference_executor();
+    let mut dst = 0u64;
+    assert_eq!(cuMemAlloc_v2(&mut dst, 4096), CUDA_SUCCESS);
+    // Prove the path works at all before asserting anything about how it refuses.
+    let sane = [7u8; 16];
+    assert_eq!(
+        cuMemcpyHtoD_v2(dst, sane.as_ptr() as *const c_void, sane.len()),
+        CUDA_SUCCESS,
+        "a normal host→device copy must succeed, or the refusals below prove nothing",
+    );
+
+    assert_eq!(
+        cuMemcpyHtoD_v2(dst, core::ptr::null(), 1024),
+        CUDA_ERROR_INVALID_VALUE,
+        "a 1024-byte copy from a null source reported success while copying nothing, so a caller \
+         cannot tell the refused copy from a completed one",
+    );
+
+    let mut stream: *mut c_void = core::ptr::null_mut();
+    assert_eq!(cuStreamCreate(&mut stream, 0), CUDA_SUCCESS);
+    assert_eq!(
+        cuMemcpyHtoDAsync_v2(dst, core::ptr::null(), 1024, stream),
+        CUDA_ERROR_INVALID_VALUE,
+        "the async host→device copy has the same hole as the synchronous one",
+    );
+
+    // A zero-length copy from a null source remains legal: nothing was asked for and nothing is copied.
+    assert_eq!(
+        cuMemcpyHtoD_v2(dst, core::ptr::null(), 0),
+        CUDA_SUCCESS,
+        "a zero-length copy from a null source is well defined and must stay accepted",
+    );
+}

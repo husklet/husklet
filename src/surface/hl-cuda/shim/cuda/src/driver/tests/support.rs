@@ -125,3 +125,47 @@ pub(super) fn as_f32s(b: &[u8]) -> Vec<f32> {
         .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
         .collect()
 }
+
+/// Stand up a reference executor behind a private socket, point the process-global sink at it, and
+/// bring the driver up against it. Returns the join handle for the one-connection server.
+///
+/// Tests that assert how an entry point *refuses* need a path that otherwise *works*, or the refusal is
+/// observed for reasons unrelated to the thing under test — a model-only `record_alloc` makes every
+/// submit fail, so a bogus argument and a correct one are refused alike and the assertion proves
+/// nothing about the argument.
+pub(super) fn serve_reference_executor() -> std::thread::JoinHandle<()> {
+    use hl_gpu::protocol::model::kernel::KernelDescriptor;
+    use hl_gpu::GpuExecutor as _;
+
+    let sock = std::env::temp_dir().join(format!(
+        "hl-cuda-driver-{}-{:?}.sock",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_file(&sock);
+    let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+    let server = std::thread::spawn(move || {
+        let Ok((stream, _)) = listener.accept() else {
+            return;
+        };
+        let caps = hl_gpu::Capabilities::permissive_fixture("host");
+        let mut exec = hl_gpu::CpuExecutor::new();
+        exec.set_kernel_compiler(|desc: &KernelDescriptor| {
+            crate::driver::ptx::compile(&desc.ptx, &desc.entry, desc.block)
+        });
+        let limits = hl_gpu::Limits::from_capabilities(exec.capabilities());
+        let session = hl_gpu::Session::new(
+            limits,
+            hl_gpu::GlobalLedger::unbounded(),
+            Box::new(hl_gpu::FakeClock::new(0)),
+        );
+        let mut host = RuntimeHost { session, exec };
+        let _ = hl_gpu::serve_connection_with_handler(&stream, &caps, &mut host);
+    });
+    std::env::set_var("HL_GPU_EXEC", sock.to_string_lossy().into_owned());
+    reset();
+    assert_eq!(cuInit(0), CUDA_SUCCESS);
+    let mut ctx: *mut c_void = core::ptr::null_mut();
+    assert_eq!(cuCtxCreate_v2(&mut ctx, 0, 0), CUDA_SUCCESS);
+    server
+}

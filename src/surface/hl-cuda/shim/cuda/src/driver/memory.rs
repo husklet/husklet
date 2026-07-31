@@ -166,6 +166,14 @@ pub extern "C" fn cuMemFree_v2(dptr: u64) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn cuMemcpyHtoD_v2(dst: u64, src: *const c_void, n: usize) -> i32 {
+    // `CInput::bytes` yields an empty slice for a null pointer, which is a fair contract for a borrow
+    // helper but silently turns an n-byte request into a zero-byte copy: the bounds check then passes
+    // trivially, an empty WriteBuffer is submitted, and the caller is told the copy succeeded while the
+    // destination still holds what it held before. The device→host direction already refuses a null
+    // host pointer, so the two directions disagreed about the same mistake. n == 0 stays legal.
+    if src.is_null() && n != 0 {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
     let host = unsafe { CInput::bytes(src, n) };
     ShimState::with_context(|s| {
         match transfer::memcpy_htod(&mut s.ctx, &mut s.sink, DevicePtr(dst), host) {
@@ -429,6 +437,10 @@ pub extern "C" fn cuMemcpyHtoDAsync_v2(
     n: usize,
     s: *mut c_void,
 ) -> i32 {
+    // Same hole as the synchronous form above.
+    if src.is_null() && n != 0 {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
     let host = unsafe { CInput::bytes(src, n) };
     ShimState::with_context(|st| {
         let Some(stream) = st.stream(s) else {
