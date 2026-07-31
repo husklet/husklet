@@ -14,6 +14,38 @@ pub(super) enum Disposition {
     Checkpoint,
 }
 
+/// What asked the domain to stop, so a dying domain can name its own reason.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Trigger {
+    Signal,
+    Request,
+}
+
+/// One decided stop: what the domain will do, and who asked for it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct Stop {
+    pub(super) disposition: Disposition,
+    pub(super) trigger: Trigger,
+}
+
+impl Trigger {
+    pub(super) fn describe(self) -> &'static str {
+        match self {
+            Self::Signal => "terminating signal",
+            Self::Request => "close request",
+        }
+    }
+}
+
+impl Disposition {
+    pub(super) fn describe(self) -> &'static str {
+        match self {
+            Self::Kill => "stopping without checkpoint",
+            Self::Checkpoint => "checkpointing then stopping",
+        }
+    }
+}
+
 struct Control {
     listener: tokio::net::UnixListener,
     path: PathBuf,
@@ -53,20 +85,23 @@ impl Shutdown {
         connection.write_all(&[disposition.code()])
     }
 
-    pub(super) async fn wait(self) -> Disposition {
+    pub(super) async fn wait(self) -> Stop {
         let terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate());
-        let disposition = match terminate {
+        let (disposition, trigger) = match terminate {
             Ok(mut terminate) => {
                 tokio::select! {
-                    _ = tokio::signal::ctrl_c() => KILL,
-                    _ = terminate.recv() => KILL,
-                    disposition = self.control.request() => disposition,
+                    _ = tokio::signal::ctrl_c() => (KILL, Trigger::Signal),
+                    _ = terminate.recv() => (KILL, Trigger::Signal),
+                    disposition = self.control.request() => (disposition, Trigger::Request),
                 }
             }
-            _ => self.control.request().await,
+            _ => (self.control.request().await, Trigger::Request),
         };
         self.disposition.store(disposition, Ordering::Release);
-        self.disposition()
+        Stop {
+            disposition: self.disposition(),
+            trigger,
+        }
     }
 }
 
@@ -164,7 +199,7 @@ impl Drop for Lease {
 
 #[cfg(test)]
 mod tests {
-    use super::{Disposition, Lease, Shutdown, CHECKPOINT, KILL};
+    use super::{Disposition, Lease, Shutdown, Trigger, CHECKPOINT, KILL};
     use std::sync::atomic::Ordering;
 
     #[tokio::test]
@@ -178,7 +213,9 @@ mod tests {
         let task = tokio::spawn(waiting.wait());
         Shutdown::request(&path, Disposition::Checkpoint).unwrap();
 
-        assert_eq!(task.await.unwrap(), Disposition::Checkpoint);
+        let stop = task.await.unwrap();
+        assert_eq!(stop.disposition, Disposition::Checkpoint);
+        assert_eq!(stop.trigger, Trigger::Request);
         assert_eq!(shutdown.disposition.load(Ordering::Acquire), CHECKPOINT);
 
         shutdown.disposition.store(KILL, Ordering::Release);

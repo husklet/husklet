@@ -21,7 +21,9 @@ use close::ResultFile;
 use configuration::Configuration;
 use identity::RuntimeIdentity;
 use lifecycle::{Disposition, Lease, Shutdown};
-use publication::{ConfigurationIdentity as PublishedConfiguration, Protocol as PublishedProtocol};
+use publication::{
+    ConfigurationIdentity as PublishedConfiguration, Protocol as PublishedProtocol, Publication,
+};
 use restore::RestoreSummary;
 
 const CONTAINER: &str = "workspace";
@@ -37,6 +39,22 @@ pub struct Domain {
 pub enum Close {
     Kill,
     Continue,
+}
+
+/// How long a live socket without a published protocol is treated as an unfinished startup or
+/// teardown rather than as an unusable domain.
+const SETTLE: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long a start waits for a previous owner to release the domain lease before giving up.
+const HANDOVER: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// What a start decided to do about whatever currently owns the workspace socket.
+enum Decision {
+    /// A live, compatible domain already serves this workspace; use it untouched.
+    Serve,
+    /// A live domain owns the socket but cannot serve this build; stop it, then start.
+    Replace(Peer, String),
+    /// Nothing live owns the socket; start a domain.
+    Start(String),
 }
 
 impl Domain {
@@ -61,30 +79,31 @@ impl Domain {
             self.directory.join("startup.lock"),
             std::time::Duration::from_secs(180),
         )?;
-        if let Ok(connection) = std::os::unix::net::UnixStream::connect(self.socket()) {
-            if PublishedProtocol::new(&self.directory).compatible()? {
-                PublishedConfiguration::new(&self.directory).validate(workspace)?;
-                return Ok(self.socket());
+        let reason = match self.decide(workspace)? {
+            Decision::Serve => return Ok(self.socket()),
+            Decision::Replace(peer, reason) => {
+                hl_log::hl_error!(
+                    hl_log::tag::RUNTIME,
+                    "replacing workspace '{}' execution domain: {reason}",
+                    workspace.name
+                );
+                peer.stop(
+                    libc::SIGTERM,
+                    std::time::Duration::from_secs(10),
+                    || std::os::unix::net::UnixStream::connect(self.socket()),
+                )?;
+                reason
             }
-            Peer::new(connection)?.stop(
-                libc::SIGTERM,
-                std::time::Duration::from_secs(10),
-                || std::os::unix::net::UnixStream::connect(self.socket()),
-            )?;
-            Lease::wait_available(
-                self.directory.join("domain.lock"),
-                std::time::Duration::from_secs(10),
-            )?;
-        }
-        match std::fs::remove_file(self.socket()) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
+            Decision::Start(reason) => reason,
+        };
+        self.reserve(workspace, HANDOVER)?;
         let output = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(self.directory.join("domain.log"))?;
+        // The log is appended across restarts, so mark the boundary: without it the previous
+        // domain's output reads as this one's.
+        Self::mark_restart(&output, workspace, &reason)?;
         let errors = output.try_clone()?;
         let mut command = std::process::Command::new(std::env::current_exe()?);
         command
@@ -109,6 +128,90 @@ impl Domain {
         }
         let child = command.spawn()?;
         self.wait_for_start(child, std::time::Duration::from_secs(180))
+    }
+
+    /// Decides what to do about whatever currently owns this workspace's socket.
+    ///
+    /// A live socket carrying a compatible publication is always kept: a healthy domain is never
+    /// replaced, and nothing on this path touches the socket file.
+    fn decide(&self, workspace: &WorkspaceConfig) -> io::Result<Decision> {
+        let deadline = std::time::Instant::now() + SETTLE;
+        loop {
+            let Ok(connection) = std::os::unix::net::UnixStream::connect(self.socket()) else {
+                return Ok(Decision::Start(
+                    "no live domain owns the workspace socket".into(),
+                ));
+            };
+            match PublishedProtocol::new(&self.directory).state()? {
+                Publication::Compatible => {
+                    PublishedConfiguration::new(&self.directory).validate(workspace)?;
+                    return Ok(Decision::Serve);
+                }
+                Publication::Mismatched(published) => {
+                    return Ok(Decision::Replace(
+                        Peer::new(connection)?,
+                        format!(
+                            "domain speaks protocol {published}, this build speaks {PROTOCOL}"
+                        ),
+                    ));
+                }
+                // A live socket with nothing published means the owner is still starting up or
+                // already tearing down. That is "cannot tell", not "wrong version"; let the
+                // window close instead of unlinking a socket a client may be mid-request on.
+                Publication::Unpublished if std::time::Instant::now() < deadline => {
+                    drop(connection);
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Publication::Unpublished => {
+                    return Ok(Decision::Replace(
+                        Peer::new(connection)?,
+                        format!(
+                            "domain published no protocol version within {}s of being reachable",
+                            SETTLE.as_secs()
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Takes the socket path for a new domain, once no live domain can still be using it.
+    ///
+    /// Only a serving domain holds the domain lease, so waiting for it to be free is what makes
+    /// the path provably nobody's. Unlinking before that strands every client holding the path on
+    /// a live domain with a bare "no such file" and no sign of what went.
+    fn reserve(&self, workspace: &WorkspaceConfig, timeout: std::time::Duration) -> io::Result<()> {
+        let lock = self.directory.join("domain.lock");
+        Lease::wait_available(lock.clone(), timeout).map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!(
+                    "workspace '{}' execution domain still holds {}: {error}",
+                    workspace.name,
+                    lock.display()
+                ),
+            )
+        })?;
+        match std::fs::remove_file(self.socket()) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Writes a boundary line so a restart is legible in the appended domain log.
+    fn mark_restart(
+        mut log: &std::fs::File,
+        workspace: &WorkspaceConfig,
+        reason: &str,
+    ) -> io::Result<()> {
+        use std::io::Write as _;
+        writeln!(
+            log,
+            "==== husklet: starting workspace '{}' execution domain (pid {}): {reason} ====",
+            workspace.name,
+            std::process::id()
+        )
     }
 
     /// Stops this workspace execution domain according to the user's close choice.
@@ -196,7 +299,18 @@ impl Domain {
         let served = server
             .serve_with_shutdown(async move {
                 loop {
-                    let disposition = shutdown.clone().wait().await;
+                    let stop = shutdown.clone().wait().await;
+                    let disposition = stop.disposition;
+                    // A domain heading for its end says so, so a replacement is never mistaken
+                    // for a crash.
+                    hl_log::hl_error!(
+                        hl_log::tag::RUNTIME,
+                        "workspace '{}' execution domain (pid {}) is stopping: {}, {}",
+                        stopped_workspace.name,
+                        std::process::id(),
+                        stop.trigger.describe(),
+                        disposition.describe()
+                    );
                     let docker = stopped_workspace
                         .docker_sock
                         .then(|| crate::runtime::resources::Daemon::new(&stopped_workspace));

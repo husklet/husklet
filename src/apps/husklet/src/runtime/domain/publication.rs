@@ -3,6 +3,18 @@ use crate::config::WorkspaceConfig;
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// What the runtime directory says about the protocol its domain speaks.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum Publication {
+    /// The published version is the one this build speaks.
+    Compatible,
+    /// A version is published and it is not ours.
+    Mismatched(String),
+    /// No version is published: the owner is mid-startup, mid-teardown, or gone. This is
+    /// "cannot tell", not "wrong version", and the two deserve different handling.
+    Unpublished,
+}
+
 pub(super) struct Protocol {
     pub(super) path: PathBuf,
 }
@@ -18,12 +30,17 @@ impl Protocol {
         hl_fs::File::from(self.path.clone()).replace(super::PROTOCOL)
     }
 
-    pub(super) fn compatible(&self) -> io::Result<bool> {
+    pub(super) fn state(&self) -> io::Result<Publication> {
         match std::fs::read_to_string(&self.path) {
-            Ok(value) => Ok(value.trim() == super::PROTOCOL),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Ok(value) if value.trim() == super::PROTOCOL => Ok(Publication::Compatible),
+            Ok(value) => Ok(Publication::Mismatched(value.trim().to_owned())),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Publication::Unpublished),
             Err(error) => Err(error),
         }
+    }
+
+    pub(super) fn compatible(&self) -> io::Result<bool> {
+        Ok(self.state()? == Publication::Compatible)
     }
 
     pub(super) fn remove(&self) -> io::Result<()> {
