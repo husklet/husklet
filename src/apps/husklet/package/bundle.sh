@@ -32,6 +32,29 @@ die() { printf '\033[1;31m[bundle] %s\033[0m\n' "$*" >&2; exit 1; }
 [ "$(uname)" = "Darwin" ] || die "must run on macOS"
 [ -n "${HL_GTK4:-}" ] || die "run inside the nix dev shell: nix develop . --command src/apps/husklet/package/bundle.sh"
 command -v dylibbundler >/dev/null || die "dylibbundler not found (nix dev shell)"
+for tool in gdk-pixbuf-query-loaders glib-compile-schemas gtk4-update-icon-cache; do
+  command -v "$tool" >/dev/null || die "$tool not found (nix dev shell)"
+done
+
+# A cross compiler that cannot run here fails much later, inside a nested cargo build, with a message
+# naming bash or an unrecognised flag rather than the compiler. Both have happened: a wrapper whose
+# interpreter was built for Linux dies on `declare -g` under macOS's bash 3.2, and pointing an arch at
+# another arch's compiler dies on `-m64`. Compile an empty translation unit for each now instead.
+cross_compilers_run() {
+  local probe status
+  probe="$(mktemp -t hl-bundle-cc)" || return 1
+  : > "$probe.c"
+  for spec in "aarch64:${HL_AARCH64_LINUX_CC:-}" "x86_64:${HL_X86_64_LINUX_CC:-}"; do
+    local arch="${spec%%:*}" compiler="${spec#*:}"
+    [ -n "$compiler" ] || die "HL_${arch^^}_LINUX_CC is required to build the $arch guest drivers"
+    if ! status="$("$compiler" -c "$probe.c" -o "$probe.o" 2>&1)"; then
+      die "$arch cross compiler cannot run here: $compiler
+$status"
+    fi
+  done
+  rm -f "$probe" "$probe.c" "$probe.o"
+}
+cross_compilers_run
 
 source_changes() {
   {
