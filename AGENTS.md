@@ -818,6 +818,15 @@ Two tests were found asserting the opposite of the spec **in prose**, which make
 authoritative to anyone auditing them; one claimed that a successful call must not clear a pending error,
 and was green throughout a period when that bug blocked an entire conformance suite.
 
+Quote a hash, a pid or a measurement only in the same message as the command output that produced it,
+and quote a figure you were given verbatim rather than from memory. An agent once stated a bundle hash
+before reading it and happened to be right — which is worse than being wrong, because it launders a guess
+into a confirmation that nothing downstream can distinguish from a real one.
+
+The checks we build into a harness are usually the checks the report needs too. That same agent's
+harness refuses a run whose renderer is not the one it asked for, and it did not apply that standard to
+its own prose.
+
 Prefer an instrument that reports a positive count over one that reports absence, and when an
 instrument reports absence, verify it can detect presence at all. Four separate zeros in one session were
 artifacts rather than facts. **A positive count is only trustworthy with a denominator** — `count=100` is
