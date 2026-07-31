@@ -795,6 +795,16 @@ you are reading the log that process writes.
 `strings` cannot verify a diagnostic whose level or values are runtime `{}` substitutions — the message
 never appears contiguously in the binary. Check a distinctive literal tail instead.
 
+Prefer an instrument that reports a positive count over one that reports absence, and when an
+instrument reports absence, verify it can detect presence at all. Four separate zeros in one session were
+artifacts rather than facts. **A positive count is only trustworthy with a denominator** — `count=100` is
+not a measurement, `count=100 over_ms=381159` is, and the difference between a hundred failures across a
+hundred frames and a hundred across six minutes demands opposite responses.
+
+Establish a baseline from a known-good subject before concluding anything from a suspect one. A client
+that works showed the identical failure signature to the one under investigation, which is what proved the
+signature was normal.
+
 Two corollaries worth stating because both cost time here. A latched diagnostic cannot distinguish
 "happened once at startup" from "happening every frame" — carry an occurrence count. And an instrument
 that is self-consistent and produces plausible numbers is not thereby correct: a probe that sent
