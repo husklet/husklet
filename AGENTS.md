@@ -795,13 +795,15 @@ you are reading the log that process writes.
 `strings` cannot verify a diagnostic whose level or values are runtime `{}` substitutions — the message
 never appears contiguously in the binary. Check a distinctive literal tail instead.
 
-The workspace exec transport prepends the Husklet driver directory to `LD_LIBRARY_PATH` and silently
-drops most caller-supplied environment variables. A harness that selects a different GL the ordinary way
-gets Husklet on both sides, so a self-comparison looks like a passing differential. Pass the environment
-as a prefix on the command line, and prove which driver you got — `dladdr` on an entry point, plus
-`GL_RENDERER` — rather than assuming the variable took effect. Note `env -i` fixes selection and strips
-`HL_GPU_EXEC`, after which the driver links shaders and returns out-of-memory on everything, which reads
-as catastrophic regression.
+Selecting a different GL inside a workspace is harder than it looks, for reasons that are easy to
+misdiagnose. Caller environment **is** passed through — that was measured — but the graphics device
+prepends its own driver directory to `LD_LIBRARY_PATH`, so the driver search finds Husklet first, and
+Mesa's selection variables (`GALLIUM_DRIVER`, `LIBGL_DRIVERS_PATH`, `LIBGL_ALWAYS_SOFTWARE`,
+`__EGL_VENDOR_LIBRARY_FILENAMES`) reach the process and do nothing, because Husklet's shim never
+implemented them. A harness that sets them and believes it selected another driver is comparing Husklet
+with itself. Prove which driver you got — `dladdr` on an entry point, plus `GL_RENDERER` — rather than
+assuming a variable took effect. Note `env -i` selects correctly and strips `HL_GPU_EXEC`, after which the
+driver links shaders and returns out-of-memory on everything, which reads as catastrophic regression.
 
 Prefer an instrument that reports a positive count over one that reports absence, and when an
 instrument reports absence, verify it can detect presence at all. Four separate zeros in one session were

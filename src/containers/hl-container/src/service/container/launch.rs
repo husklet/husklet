@@ -45,12 +45,20 @@ impl Service {
             }
         }
         mounts.extend(request.mounts.iter().cloned());
-        process.env.extend(
-            request
-                .environment
-                .iter()
-                .map(|(name, value)| (name.clone(), value.clone())),
-        );
+        // A device owns the variables that name its own guest endpoints, so it wins over a caller
+        // value. Overriding a variable the caller asked for is a decision the caller cannot observe
+        // from the resulting process, so report each one; this fires only on an actual conflict,
+        // never on an ordinary launch or exec.
+        for (name, value) in &request.environment {
+            if let Some(requested) = process.env.insert(name.clone(), value.clone()) {
+                if &requested != value {
+                    hl_log::hl_error!(
+                        hl_log::tag::CONTAINER,
+                        "device environment overrode requested variable {name}={requested} with {value}"
+                    );
+                }
+            }
+        }
         Ok(request)
     }
 
