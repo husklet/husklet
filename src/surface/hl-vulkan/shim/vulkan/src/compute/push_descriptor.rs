@@ -66,19 +66,21 @@ impl PushSet {
             if let Some(existing) = state.push_descriptor_sets.get(&(cb, set)) {
                 return Some(*existing);
             }
-            let device = state.device.as_mut()?;
+            let existing_pool = state.push_descriptor_pool;
+            let device = state.device_mut()?;
             let set_layout = *device
                 .pipeline_layouts
                 .get(&layout)?
                 .set_layouts
                 .get(set as usize)?;
-            if state.push_descriptor_pool == 0 {
+            if existing_pool == 0 {
                 // maxSets == 0 is unbounded in the model, which is what push descriptors need: their
                 // count is bounded by the command buffers in flight, not by an app-declared pool size.
-                state.push_descriptor_pool = device.create_descriptor_pool(0);
+                let pool = device.create_descriptor_pool(0);
+                state.push_descriptor_pool = pool;
             }
             let pool = state.push_descriptor_pool;
-            let device = state.device.as_mut()?;
+            let device = state.device_mut()?;
             let handle = create::allocate_descriptor_set(device, pool, set_layout, set).ok()?;
             state.push_descriptor_sets.insert((cb, set), handle);
             Some(handle)

@@ -77,8 +77,7 @@ pub extern "C" fn vkCreateSwapchainKHR(
                     .and_then(WaylandAppPresenter::native_token)
             })
             .flatten();
-        let sink = &mut s.sink;
-        let Some(dev) = s.device.as_mut() else {
+        let Some((dev, sink)) = s.device_and_sink() else {
             return VK_ERROR_INITIALIZATION_FAILED;
         };
         let r = (|| {
@@ -124,8 +123,7 @@ pub extern "C" fn vkDestroySwapchainKHR(
     _p_allocator: *const c_void,
 ) {
     StateStore::with(|s| {
-        let sink = &mut s.sink;
-        if let Some(dev) = s.device.as_mut() {
+        if let Some((dev, sink)) = s.device_and_sink() {
             // Retire the swapchain AND its presentable images + presentation surface (dropping their
             // `dev.images`/`dev.surfaces` bookkeeping + freeing the host textures/surface). Removing only the
             // `SwapchainRec` would orphan the images in `dev.images` forever — a per-resize handle leak.
@@ -259,10 +257,15 @@ pub extern "C" fn vkQueuePresentKHR(
     let indices =
         unsafe { std::slice::from_raw_parts(pi.p_image_indices, pi.swapchain_count as usize) };
     StateStore::with(|s| {
-        let sink = &mut s.sink;
-        let Some(dev) = s.device.as_mut() else {
+        let Some(parts) = s.present_parts() else {
             return VK_ERROR_INITIALIZATION_FAILED;
         };
+        let crate::state::PresentParts {
+            device: dev,
+            sink,
+            presenters,
+            native_present,
+        } = parts;
         let mut res = VK_SUCCESS;
         // A present that commits nothing must never be silent. Every failure exit below reports at
         // `error` — the one level a release build keeps — and each is latched per swapchain, because
@@ -274,8 +277,8 @@ pub extern "C" fn vkQueuePresentKHR(
         static READBACK_FAILED: crate::logging::Latch = crate::logging::Latch::new();
         static SHM_COMMIT_FAILED: crate::logging::Latch = crate::logging::Latch::new();
         for (&sc, &idx) in swapchains.iter().zip(indices) {
-            let native = if s.native_present {
-                s.presenters
+            let native = if native_present {
+                presenters
                     .get_mut(sc)
                     .and_then(Option::as_mut)
                     .and_then(WaylandAppPresenter::reserve_native_frame)
@@ -307,8 +310,7 @@ pub extern "C" fn vkQueuePresentKHR(
                     res = VK_ERROR_OUT_OF_DATE_KHR;
                     continue;
                 };
-                let commit = s
-                    .presenters
+                let commit = presenters
                     .get_mut(sc)
                     .and_then(Option::as_mut)
                     .expect("native frame requires its presenter")
@@ -323,13 +325,13 @@ pub extern "C" fn vkQueuePresentKHR(
                             error
                         );
                     }
-                    let owner = s.presenters.surface(sc);
+                    let owner = presenters.surface(sc);
                     if let Some(surface) = owner {
-                        for swapchain in s.presenters.swapchains(surface) {
+                        for swapchain in presenters.swapchains(surface) {
                             let _ = present::demote_swapchain(dev, sink, swapchain);
                         }
                     }
-                    if let Some(Some(presenter)) = s.presenters.get_mut(sc) {
+                    if let Some(Some(presenter)) = presenters.get_mut(sc) {
                         presenter.retire_native();
                     }
                     res = error.to_vk_result();
@@ -354,7 +356,7 @@ pub extern "C" fn vkQueuePresentKHR(
             // 3) Marshal that plane onto the app's OWN `wl_surface`. No live presenter for a surface
             //    that names a window ⇒ VK_ERROR_SURFACE_LOST_KHR; a hard marshal/flush failure ⇒
             //    VK_ERROR_OUT_OF_DATE/SURFACE_LOST. Only a deliberately offscreen target is VK_SUCCESS.
-            let vk = Presentation::frame_to_app_surface(&mut s.presenters, sc, plane);
+            let vk = Presentation::frame_to_app_surface(presenters, sc, plane);
             if vk != VK_SUCCESS {
                 if SHM_COMMIT_FAILED.fires(sc) {
                     hl_log::hl_error!(

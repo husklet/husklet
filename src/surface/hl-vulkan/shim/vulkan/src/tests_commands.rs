@@ -28,8 +28,7 @@ fn extended_dynamic_state_is_recorded() {
     crate::dynstate::vkCmdSetColorBlendEnableEXT(cb, 0, 2, enables.as_ptr() as *const c_void);
 
     let ds = crate::state::StateStore::with(|s| {
-        s.device
-            .as_ref()
+        s.device_ref()
             .unwrap()
             .command_buffers
             .get(&handle)
@@ -65,8 +64,7 @@ fn viewport_with_count_and_bind_vertex_buffers2_lower_to_ir() {
     crate::dynstate::vkCmdSetViewportWithCount(cb, 1, viewports.as_ptr() as *const c_void);
     let count = crate::state::StateStore::with(|s| {
         use hl_gpu::protocol::model::command::Enc;
-        s.device
-            .as_ref()
+        s.device_ref()
             .unwrap()
             .command_buffers
             .get(&handle)
@@ -86,8 +84,7 @@ fn dispatch_base_lowers_to_dispatch() {
     crate::devgroup::vkCmdDispatchBase(cb, 0, 0, 0, 4, 5, 6);
     let dispatched = crate::state::StateStore::with(|s| {
         use hl_gpu::protocol::model::command::Enc;
-        s.device
-            .as_ref()
+        s.device_ref()
             .unwrap()
             .command_buffers
             .get(&handle)
@@ -115,7 +112,7 @@ fn buffer_device_address_is_stable_nonzero_and_distinct_per_buffer() {
     );
     let (first, second) = crate::state::StateStore::with(|state| {
         use hl_vulkan::model::memory::BufferRec;
-        let device = state.device.as_mut().unwrap();
+        let device = state.device_mut().unwrap();
         let insert = |device: &mut hl_vulkan::Device, size: u64| {
             let handle = device.alloc_handle();
             let ir_id = device.alloc_ir();
@@ -317,8 +314,7 @@ fn push_descriptor_set_applies_its_write_to_the_bound_set() {
     .expect("a push must mint a set for (command buffer, set 0)");
     let descriptor = crate::state::StateStore::with(|state| {
         state
-            .device
-            .as_ref()
+            .device_ref()
             .unwrap()
             .descriptor_sets
             .get(&pushed)
@@ -350,8 +346,7 @@ fn push_descriptor_set_applies_its_write_to_the_bound_set() {
     let (again, descriptor) = crate::state::StateStore::with(|state| {
         let again = state.push_descriptor_sets.get(&(cb_handle, 0)).copied();
         let descriptor = state
-            .device
-            .as_ref()
+            .device_ref()
             .unwrap()
             .descriptor_sets
             .get(&pushed)

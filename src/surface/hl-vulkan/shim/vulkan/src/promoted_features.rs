@@ -283,7 +283,7 @@ mod tests {
     #[test]
     fn device_creation_rejects_an_unimplemented_aggregate_feature() {
         let _guard = crate::tests::test_guard();
-        crate::state::StateStore::with(|state| state.device = None);
+        crate::state::StateStore::with(|state| state.clear_devices());
         let mut requested = Aggregate::<15> {
             s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
             p_next: core::ptr::null_mut(),
@@ -301,9 +301,7 @@ mod tests {
 
         assert_eq!(result, crate::types::VK_ERROR_FEATURE_NOT_PRESENT);
         assert!(device.is_null());
-        assert!(crate::state::StateStore::with(|state| state
-            .device
-            .is_none()));
+        assert!(crate::state::StateStore::with(|state| !state.has_device()));
     }
 
     /// `dynamicRendering` is really implemented, so requesting it through the aggregate must succeed —
@@ -311,7 +309,7 @@ mod tests {
     #[test]
     fn device_creation_accepts_dynamic_rendering_through_the_aggregate() {
         let _guard = crate::tests::test_guard();
-        crate::state::StateStore::with(|state| state.device = None);
+        crate::state::StateStore::with(|state| state.clear_devices());
         let mut requested = Aggregate::<15> {
             s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
             p_next: core::ptr::null_mut(),

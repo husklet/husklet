@@ -69,7 +69,7 @@ pub extern "C" fn vkFreeCommandBuffers(
         }
         if let Some(h) = unsafe { CommandBuffer::handle(p) } {
             StateStore::with(|s| {
-                if let Some(d) = s.device.as_mut() {
+                if let Some(d) = s.device_mut() {
                     d.command_buffers.remove(&h);
                 }
             });
@@ -224,7 +224,7 @@ pub extern "C" fn vkCreatePrivateDataSlot(
         unsafe { *p_private_data_slot = 0 };
     }
     StateStore::with(|s| {
-        let Some(d) = s.device.as_mut() else {
+        let Some(d) = s.device_mut() else {
             return VK_ERROR_INITIALIZATION_FAILED;
         };
         let h = d.alloc_handle();
@@ -341,7 +341,7 @@ pub extern "C" fn vkCreateSamplerYcbcrConversion(
         return VK_ERROR_INITIALIZATION_FAILED;
     }
     StateStore::with(|s| {
-        let Some(d) = s.device.as_mut() else {
+        let Some(d) = s.device_mut() else {
             return VK_ERROR_INITIALIZATION_FAILED;
         };
         let h = d.alloc_handle();

@@ -145,12 +145,9 @@ pub extern "C" fn vkUpdateDescriptorSets(
     };
     // The view→image mapping lives in the shim state (disjoint from the device), so borrow both fields.
     StateStore::with(|s| {
-        let crate::state::State {
-            device,
-            image_views,
-            ..
-        } = s;
-        let Some(dev) = device.as_mut() else { return };
+        let Some((dev, image_views)) = s.device_and_image_views() else {
+            return;
+        };
         for w in writes {
             if w.descriptor_count == 0 {
                 continue;
@@ -343,8 +340,7 @@ pub extern "C" fn vkUpdateDescriptorSetWithTemplate(
     }
     // Determine exactly how many bytes the template reads, then build a bounded slice over pData.
     let Some(len) = StateStore::with(|s| {
-        s.device
-            .as_ref()
+        s.device_ref()
             .and_then(|d| d.descriptor_template_data_len(descriptor_update_template))
     }) else {
         return;

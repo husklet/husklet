@@ -36,8 +36,7 @@ impl ShimState {
         f: impl FnOnce(&mut Device, &mut dyn CommandSink) -> R,
     ) -> Option<R> {
         StateStore::with(|state| {
-            let sink = &mut state.sink;
-            let device = state.device.as_mut()?;
+            let (device, sink) = state.device_and_sink()?;
             Some(f(device, sink))
         })
     }

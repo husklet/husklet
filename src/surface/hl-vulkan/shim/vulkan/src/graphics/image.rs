@@ -222,7 +222,7 @@ pub extern "C" fn vkCreateImageView(
     }
     let handle = StateStore::with(|s| {
         let (h, ir_id, mut image, view) = {
-            let dev = s.device.as_mut()?;
+            let dev = s.device_mut()?;
             let image = dev.images.get(&ci.image)?.clone();
             let base_mip = ci.subresource_range.base_mip_level;
             let base_layer = ci.subresource_range.base_array_layer;
@@ -320,7 +320,7 @@ pub extern "C" fn vkCreateImageView(
         } else {
             ci.subresource_range.layer_count
         };
-        s.device.as_mut()?.images.insert(h, image);
+        s.device_mut()?.images.insert(h, image);
         s.image_views.insert(h, h);
         Some(h)
     });
@@ -344,7 +344,7 @@ pub extern "C" fn vkDestroyImageView(
         let Some(alias) = s.image_views.remove(&image_view) else {
             return;
         };
-        let Some(image) = s.device.as_mut().and_then(|dev| dev.images.remove(&alias)) else {
+        let Some(image) = s.device_mut().and_then(|dev| dev.images.remove(&alias)) else {
             return;
         };
         let _ = s.sink.submit(&[Cmd::DestroyTextureView(image.ir_id)]);

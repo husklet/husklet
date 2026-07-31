@@ -26,7 +26,7 @@ pub(super) struct ShimState;
 
 impl ShimState {
     pub(super) fn with_device<R>(f: impl FnOnce(&mut Device) -> R) -> Option<R> {
-        StateStore::with(|state| state.device.as_mut().map(f))
+        StateStore::with(|state| state.device_mut().map(f))
     }
 }
 

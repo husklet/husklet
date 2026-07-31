@@ -9,7 +9,7 @@ pub(super) struct ShimState;
 
 impl ShimState {
     pub(super) fn with_device_result(f: impl FnOnce(&mut Device) -> VkResult) -> VkResult {
-        StateStore::with(|state| state.device.as_mut().map(f))
+        StateStore::with(|state| state.device_mut().map(f))
             .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
     }
 }

@@ -15,7 +15,7 @@ use crate::types::*;
 /// Whether a logical device exists (host-copy commands need one). `false` maps to
 /// `VK_ERROR_INITIALIZATION_FAILED`.
 fn have_device() -> bool {
-    StateStore::with(|s| s.device.is_some())
+    StateStore::with(|s| s.has_device())
 }
 
 /// The shared truthful answer for an unmodeled host-image-copy op: validate the device + the argument
@@ -114,7 +114,7 @@ pub extern "C" fn vkGetImageSubresourceLayout2(
     };
     out.subresource_layout = VkSubresourceLayout::default();
     if let Some(Ok(l)) =
-        StateStore::with(|s| s.device.as_ref().map(|d| d.image_subresource_layout(image)))
+        StateStore::with(|s| s.device_ref().map(|d| d.image_subresource_layout(image)))
     {
         out.subresource_layout = VkSubresourceLayout {
             offset: l.offset,

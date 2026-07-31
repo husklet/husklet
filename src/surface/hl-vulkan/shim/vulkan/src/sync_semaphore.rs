@@ -57,7 +57,7 @@ pub extern "C" fn vkCreateSemaphore(
 ) -> VkResult {
     let (timeline, initial) = SemaphoreInfo::parse_type(p_create_info);
     let handle = StateStore::with(|state| {
-        let device = state.device.as_mut()?;
+        let device = state.device_mut()?;
         Some(sync::create_semaphore(device, timeline, initial))
     });
     match handle {
@@ -77,7 +77,7 @@ pub extern "C" fn vkDestroySemaphore(
     _p_allocator: *const c_void,
 ) {
     StateStore::with(|state| {
-        if let Some(device) = state.device.as_mut() {
+        if let Some(device) = state.device_mut() {
             device.destroy_semaphore(semaphore);
         }
     });

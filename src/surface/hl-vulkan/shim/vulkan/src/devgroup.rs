@@ -27,7 +27,7 @@ impl CommandBuffer {
 struct ShimState;
 impl ShimState {
     fn with_device<R>(f: impl FnOnce(&mut Device) -> R) -> Option<R> {
-        StateStore::with(|s| s.device.as_mut().map(f))
+        StateStore::with(|s| s.device_mut().map(f))
     }
 }
 

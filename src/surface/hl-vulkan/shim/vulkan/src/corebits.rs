@@ -37,15 +37,14 @@ pub use command::*;
 struct ShimState;
 impl ShimState {
     fn with_device<R>(f: impl FnOnce(&mut Device) -> R) -> Option<R> {
-        StateStore::with(|s| s.device.as_mut().map(f))
+        StateStore::with(|s| s.device_mut().map(f))
     }
 
     /// Run `f` with the logical device + the command sink (disjoint `State` fields) — the readback path
     /// `vkInvalidateMappedMemoryRanges` needs. `None` if no device exists yet.
     fn with_sink<R>(f: impl FnOnce(&mut Device, &mut dyn CommandSink) -> R) -> Option<R> {
         StateStore::with(|s| {
-            let sink = &mut s.sink;
-            let dev = s.device.as_mut()?;
+            let (dev, sink) = s.device_and_sink()?;
             Some(f(dev, sink))
         })
     }

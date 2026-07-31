@@ -55,7 +55,7 @@ pub extern "C" fn vkCmdBeginRenderPass(
             })
         });
         let Some(image) = image else { return };
-        if let Some(dev) = s.device.as_mut() {
+        if let Some(dev) = s.device_mut() {
             let _ = record::cmd_begin_render_pass(dev, cb, image, clear, clears, depth);
         }
     });
@@ -123,7 +123,7 @@ pub extern "C" fn vkCmdBeginRendering(
                 load_clear: att.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR,
             })
         });
-        if let Some(dev) = s.device.as_mut() {
+        if let Some(dev) = s.device_mut() {
             let _ = record::cmd_begin_rendering(dev, cb, &colors, depth);
         }
     });

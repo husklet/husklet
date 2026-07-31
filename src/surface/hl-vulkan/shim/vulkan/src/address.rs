@@ -63,8 +63,7 @@ pub extern "C" fn vkGetBufferDeviceAddress(_device: *mut c_void, p_info: *const 
         return 0;
     };
     StateStore::with(|s| {
-        s.device
-            .as_ref()
+        s.device_ref()
             .map(|d| BufferAddress::get(d, handle))
             .unwrap_or(0)
     })
@@ -88,8 +87,7 @@ pub extern "C" fn vkGetBufferOpaqueCaptureAddress(
         return 0;
     };
     StateStore::with(|s| {
-        s.device
-            .as_ref()
+        s.device_ref()
             .map(|d| BufferAddress::get(d, handle))
             .unwrap_or(0)
     })
@@ -111,8 +109,7 @@ pub extern "C" fn vkGetDeviceMemoryOpaqueCaptureAddress(
         return 0;
     };
     StateStore::with(|s| {
-        s.device
-            .as_ref()
+        s.device_ref()
             .map(|d| MemoryAddress::get(d, handle))
             .unwrap_or(0)
     })

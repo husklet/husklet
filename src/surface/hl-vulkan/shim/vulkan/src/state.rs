@@ -141,12 +141,30 @@ impl Presenters {
 pub struct State {
     /// The current `VkInstance` (created by `vkCreateInstance`), holding the physical-device descriptor.
     pub instance: Option<Instance>,
-    /// The logical device (created by `vkCreateDevice`) — the `hl_vulkan` object model + lowering target.
-    pub device: Option<Device>,
+    /// The live logical devices, keyed by the dispatchable token `vkCreateDevice` handed back.
+    ///
+    /// Vulkan allows several `VkDevice`s from one physical device, each an independent object with its
+    /// own object model, and destroying one must not disturb another. A single `Option<Device>` could
+    /// not represent that: creating a second device silently replaced the first's object model, and
+    /// `vkDestroyDevice` destroyed whichever device happened to be there rather than the one it was
+    /// passed — leaving the application holding a handle the loader then rejected, which ABORTED the
+    /// process. That is what took whole CTS runs down rather than failing one case.
+    devices: HashMap<usize, Device>,
+    /// The token of the device untyped accessors resolve — the most recently created live device.
+    ///
+    /// HONEST LIMITATION: the generated `vk*` entry points receive their `VkDevice` and discard it, so
+    /// [`State::device_mut`] cannot route by handle yet and answers for this one instead. That is
+    /// correct for the create / use / destroy sequence applications and the CTS actually use, and it is
+    /// what makes destroying a second device leave the first intact. It is still wrong for a client
+    /// genuinely interleaving work across two live devices; closing that means threading the handle
+    /// through every entry point and is deliberately not done here.
+    current_device: usize,
     /// The guest→host boundary: encodes each lowered batch and ships it framed over `$HL_GPU_EXEC`.
     pub sink: RemoteCommandSink,
     /// Whether the negotiated host can import native IOSurface-backed presentation textures.
     pub native_present: bool,
+    /// Whether host capabilities have already been negotiated over the process-global sink.
+    pub negotiated: bool,
 
     /// `VkImageView` handle → the `VkImage` handle it views. The `hl_vulkan` model renders into images,
     /// so a view is a thin alias resolved back to its image at `vkCmdBeginRenderPass` (via a framebuffer).
@@ -208,7 +226,6 @@ pub struct State {
     /// Stable loader-magic'd dispatchable tokens (a pointer, once minted, is reused so the loader's
     /// object identity is consistent across calls). `0` = not yet minted.
     phys_dev: usize,
-    device_handle: usize,
     queue_handle: usize,
 }
 
@@ -226,7 +243,6 @@ impl State {
         );
         State {
             instance: None,
-            device: None,
             // Connect target from $HL_GPU_EXEC; the connection itself is opened lazily on first submit.
             sink,
             native_present: false,
@@ -248,7 +264,9 @@ impl State {
             push_descriptor_pool: 0,
             next_aux: 0,
             phys_dev: 0,
-            device_handle: 0,
+            negotiated: false,
+            devices: HashMap::new(),
+            current_device: 0,
             queue_handle: 0,
         }
     }
@@ -282,11 +300,78 @@ impl State {
     }
 
     /// The logical-device dispatchable token, minted once and reused.
-    pub fn device_token(&mut self) -> *mut c_void {
-        if self.device_handle == 0 {
-            self.device_handle = Dispatchable::new(()) as usize;
+    /// Register `device` under a FRESH dispatchable token and make it current.
+    ///
+    /// A new token every time: two live devices must be distinguishable, and the loader tracks the
+    /// handles it hands out — returning the same pointer for every `vkCreateDevice` is what made
+    /// destroying one device invalidate the other in the loader's own bookkeeping.
+    pub fn insert_device(&mut self, device: Device) -> *mut c_void {
+        let token = Dispatchable::new(()) as usize;
+        self.devices.insert(token, device);
+        self.current_device = token;
+        token as *mut c_void
+    }
+
+    /// Destroy exactly the device named by `token`, per `vkDestroyDevice`. Any other live device keeps
+    /// working; if the destroyed one was current, another live device takes over so the application's
+    /// remaining handle stays usable.
+    pub fn remove_device(&mut self, token: *mut c_void) {
+        let token = token as usize;
+        if self.devices.remove(&token).is_none() {
+            return;
         }
-        self.device_handle as *mut c_void
+        if self.current_device == token {
+            self.current_device = self.devices.keys().copied().next().unwrap_or(0);
+        }
+    }
+
+    /// The device untyped accessors operate on. See `current_device` for why this is not routed by
+    /// handle yet.
+    pub fn device_mut(&mut self) -> Option<&mut Device> {
+        self.devices.get_mut(&self.current_device)
+    }
+
+    /// The current device together with the sink, as two disjoint borrows.
+    ///
+    /// The device used to be a public field, so a caller could hold `&mut state.device` and
+    /// `&mut state.sink` at once. Routing through a method borrows all of `State`, so the pairs a
+    /// caller genuinely needs are handed out together here instead.
+    pub fn device_and_sink(&mut self) -> Option<(&mut Device, &mut RemoteCommandSink)> {
+        let device = self.devices.get_mut(&self.current_device)?;
+        Some((device, &mut self.sink))
+    }
+
+    /// The current device together with the shim's `VkImageView` → `VkImage` table.
+    pub fn device_and_image_views(&mut self) -> Option<(&mut Device, &mut HashMap<u64, u64>)> {
+        let device = self.devices.get_mut(&self.current_device)?;
+        Some((device, &mut self.image_views))
+    }
+
+    /// The present path's whole working set as disjoint borrows: it needs the device, the sink and the
+    /// surface presenters at the same time, which a single `&mut self` accessor cannot give it.
+    pub fn present_parts(&mut self) -> Option<PresentParts<'_>> {
+        let device = self.devices.get_mut(&self.current_device)?;
+        Some(PresentParts {
+            device,
+            sink: &mut self.sink,
+            presenters: &mut self.presenters,
+            native_present: self.native_present,
+        })
+    }
+
+    pub fn device_ref(&self) -> Option<&Device> {
+        self.devices.get(&self.current_device)
+    }
+
+    pub fn has_device(&self) -> bool {
+        self.devices.contains_key(&self.current_device)
+    }
+
+    /// Drop every device (test-only: a unit test starts from a clean slate).
+    #[cfg(test)]
+    pub fn clear_devices(&mut self) {
+        self.devices.clear();
+        self.current_device = 0;
     }
 
     /// The single queue dispatchable token, minted once and reused.
@@ -304,11 +389,6 @@ impl State {
             Some(i) => i.physical_device.clone(),
             None => hl_vulkan::PhysicalDeviceDesc::hl_default(),
         }
-    }
-
-    /// Borrow the logical device mutably, if one has been created.
-    pub fn device_mut(&mut self) -> Option<&mut Device> {
-        self.device.as_mut()
     }
 }
 
@@ -352,4 +432,12 @@ mod presenter_tests {
         assert!(presenters.get_mut(new).is_none());
         assert!(presenters.swapchains(surface).is_empty());
     }
+}
+
+/// The present path's working set, borrowed disjointly from [`State`].
+pub struct PresentParts<'a> {
+    pub device: &'a mut Device,
+    pub sink: &'a mut RemoteCommandSink,
+    pub presenters: &'a mut Presenters,
+    pub native_present: bool,
 }

@@ -10,7 +10,7 @@
 //! on. The format masks mirror `MVKPixelFormats::getVkFormatProperties` for the color/depth subset the
 //! render/transfer path materializes ([`crate::service::create::create_image`]).
 
-use super::memory::{vk_format, Format as MemoryFormat, VertexFormat};
+use super::memory::{vk_format, VertexFormat};
 
 /// One advertised extension: its `VK_KHR_*`/`VK_EXT_*` name + spec version (the two fields
 /// `vkEnumerate{Instance,Device}ExtensionProperties` writes into each `VkExtensionProperties`).
@@ -289,7 +289,7 @@ mod tests {
     fn color_advertisement_drifts_from_the_texture_lowering() {
         let mut lowered_not_advertised = Vec::new();
         for format in 0..=200u32 {
-            let lowers = MemoryFormat(format).wire().is_some();
+            let lowers = Format(format).wire().is_some();
             if lowers && !Format(format).is_color() && !Format(format).is_depth() {
                 lowered_not_advertised.push(format);
             }

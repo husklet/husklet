@@ -47,7 +47,7 @@ pub extern "C" fn vkCreateRenderPass(
         )
     };
     let handle = StateStore::with(|s| {
-        let h = s.device.as_mut()?.alloc_handle();
+        let h = s.device_mut()?.alloc_handle();
         s.render_passes.insert(
             h,
             RenderPassRec {
@@ -95,7 +95,7 @@ pub extern "C" fn vkCreateFramebuffer(
             .to_vec()
     };
     let handle = StateStore::with(|s| {
-        let h = s.device.as_mut()?.alloc_handle();
+        let h = s.device_mut()?.alloc_handle();
         s.framebuffers.insert(h, views);
         Some(h)
     });
@@ -158,7 +158,7 @@ pub extern "C" fn vkCreateRenderPass2(
         )
     };
     let handle = StateStore::with(|s| {
-        let h = s.device.as_mut()?.alloc_handle();
+        let h = s.device_mut()?.alloc_handle();
         s.render_passes.insert(
             h,
             RenderPassRec {

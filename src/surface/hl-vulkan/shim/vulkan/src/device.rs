@@ -199,9 +199,11 @@ pub extern "C" fn vkCreateDevice(
             .instance
             .get_or_insert_with(|| Instance::new(HL_API_VERSION))
             .clone();
-        let native_present = if std::env::var_os("HL_GPU_EXEC").is_some()
-            || binding_arrays != 0
-            || gpu_features != 0
+        // Negotiate ONCE per process. The sink is process-global, so a second `vkCreateDevice`
+        // re-negotiating over a connection already in use is what put the driver into
+        // VK_ERROR_DEVICE_LOST for every object created on a second device.
+        let native_present = if !s.negotiated
+            && (std::env::var_os("HL_GPU_EXEC").is_some() || binding_arrays != 0 || gpu_features != 0)
         {
             let Ok(capabilities) = s.sink.negotiate(&FeatureRequest {
                 wire_version: WIRE_VERSION,
@@ -211,13 +213,14 @@ pub extern "C" fn vkCreateDevice(
             }) else {
                 return None;
             };
+            s.negotiated = true;
             capabilities.present_kinds.contains(&PresentKind::IoSurface)
         } else {
             s.native_present
         };
-        s.device = Some(inst.create_device());
         s.native_present = native_present;
-        Some(s.device_token())
+        // A device of its own, under a token of its own. Any device already live keeps its object model.
+        Some(s.insert_device(inst.create_device()))
     });
     let Some(token) = token else {
         return VK_ERROR_INITIALIZATION_FAILED;
@@ -226,8 +229,11 @@ pub extern "C" fn vkCreateDevice(
     VK_SUCCESS
 }
 
-pub extern "C" fn vkDestroyDevice(_device: *mut c_void, _p_allocator: *const c_void) {
-    StateStore::with(|s| s.device = None);
+/// `vkDestroyDevice` destroys the device it is GIVEN, and only that one. Destroying whichever device
+/// happened to be current left an application's other handle dangling; the loader then rejected it and
+/// aborted the process, which is what ended every `object_management.single.*` CTS case.
+pub extern "C" fn vkDestroyDevice(device: *mut c_void, _p_allocator: *const c_void) {
+    StateStore::with(|s| s.remove_device(device));
 }
 
 pub extern "C" fn vkGetDeviceQueue(

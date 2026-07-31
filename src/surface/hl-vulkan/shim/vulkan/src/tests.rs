@@ -542,7 +542,7 @@ fn instance_accepts_newer_header_patch_for_advertised_api() {
 #[test]
 fn device_rejects_unknown_extension_without_creating_state() {
     let _g = test_guard();
-    crate::state::StateStore::with(|state| state.device = None);
+    crate::state::StateStore::with(|state| state.clear_devices());
     let unknown = std::ffi::CString::new("VK_HL_not_present").unwrap();
     let names = [unknown.as_ptr()];
     let create = VkDeviceCreateInfo {
@@ -569,15 +569,13 @@ fn device_rejects_unknown_extension_without_creating_state() {
         VK_ERROR_EXTENSION_NOT_PRESENT
     );
     assert!(output.is_null());
-    assert!(crate::state::StateStore::with(|state| state
-        .device
-        .is_none()));
+    assert!(crate::state::StateStore::with(|state| !state.has_device()));
 }
 
 #[test]
 fn device_rejects_unadvertised_base_feature_without_creating_state() {
     let _g = test_guard();
-    crate::state::StateStore::with(|state| state.device = None);
+    crate::state::StateStore::with(|state| state.clear_devices());
     let mut features = VkPhysicalDeviceFeatures {
         bits: [VK_FALSE; 55],
     };
@@ -606,9 +604,7 @@ fn device_rejects_unadvertised_base_feature_without_creating_state() {
         VK_ERROR_FEATURE_NOT_PRESENT
     );
     assert!(output.is_null());
-    assert!(crate::state::StateStore::with(|state| state
-        .device
-        .is_none()));
+    assert!(crate::state::StateStore::with(|state| !state.has_device()));
 }
 
 #[test]
@@ -720,7 +716,7 @@ fn device_request_forwards_enabled_shader_guarantees() {
 #[test]
 fn device_rejects_unadvertised_features2_feature_without_creating_state() {
     let _g = test_guard();
-    crate::state::StateStore::with(|state| state.device = None);
+    crate::state::StateStore::with(|state| state.clear_devices());
     let mut requested = VkPhysicalDeviceFeatures2 {
         s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
         p_next: core::ptr::null_mut(),
@@ -753,9 +749,7 @@ fn device_rejects_unadvertised_features2_feature_without_creating_state() {
         VK_ERROR_FEATURE_NOT_PRESENT
     );
     assert!(output.is_null());
-    assert!(crate::state::StateStore::with(|state| state
-        .device
-        .is_none()));
+    assert!(crate::state::StateStore::with(|state| !state.has_device()));
 }
 
 #[test]
