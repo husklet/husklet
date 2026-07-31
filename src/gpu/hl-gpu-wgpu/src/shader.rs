@@ -199,13 +199,9 @@ impl WgpuExecutor {
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
         let module_started = diagnostics.then(Instant::now);
-        let module = self
-            .gpu
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(label),
-                source: wgpu::ShaderSource::Wgsl(src.into()),
-            });
+        // Checked: a module wgpu refuses becomes a typed error (and so a NACKed batch that leaves this
+        // session's resource tables untouched), never the device error sink's default PANIC.
+        let module = self.gpu.shader_module(label, src)?;
         let module_us = module_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();

@@ -46,13 +46,7 @@ impl WgpuExecutor {
                 ShaderNative::Kernel(p) => {
                     let prog = p.clone();
                     let src = wgsl::Kernel::translate(&prog)?;
-                    let module =
-                        self.gpu
-                            .device
-                            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                                label: Some("hl-kernel"),
-                                source: wgpu::ShaderSource::Wgsl(src.into()),
-                            });
+                    let module = self.gpu.shader_module("hl-kernel", src)?;
                     let mut entries = vec![ComputeLayout::storage(0, true)];
                     for r in 0..prog.num_regions {
                         entries.push(ComputeLayout::storage(r + 1, false));
@@ -110,13 +104,7 @@ impl WgpuExecutor {
                             &key.words,
                             authoritative_layout,
                         )?;
-                        module =
-                            self.gpu
-                                .device
-                                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                                    label: Some("hl-spirv-layout"),
-                                    source: wgpu::ShaderSource::Wgsl(source.into()),
-                                });
+                        module = self.gpu.shader_module("hl-spirv-layout", source)?;
                         reflected_override = reflected;
                         &reflected_override
                     } else {
@@ -282,12 +270,7 @@ impl WgpuExecutor {
             let (source, reflected) =
                 wgsl::Spirv::translate_reflect_sample_shading(&key.words, authoritative_layout)?;
             fs = Some((
-                self.gpu
-                    .device
-                    .create_shader_module(wgpu::ShaderModuleDescriptor {
-                        label: Some("hl-spirv-sample-shading"),
-                        source: wgpu::ShaderSource::Wgsl(source.into()),
-                    }),
+                self.gpu.shader_module("hl-spirv-sample-shading", source)?,
                 entry.to_string(),
             ));
             fs_used = reflected.used_for(entry).to_vec();

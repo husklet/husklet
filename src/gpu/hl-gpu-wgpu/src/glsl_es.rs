@@ -352,6 +352,26 @@ impl<'a> Source<'a> {
         toks.0.as_slice().source()
     }
 
+    /// Rewrite every narrow-element array member of a `std140` uniform block (`float u[4]`, `vec2 u[2]`,
+    /// `int u[16]`, …) to the equivalent array of 4-component vectors (`vec4 u__arr[4]`), swizzling the
+    /// original value back at each use. The uniform address space requires a 16-byte array stride in both
+    /// WGSL and std140, but naga's `glsl-in` carries the element type's NATURAL stride into the module, so
+    /// the emitted WGSL is refused by wgpu's validator ("array stride 4 is not a multiple of the required
+    /// alignment 16"). The driver already writes these elements 16 bytes apart, so the rewrite describes
+    /// the bytes that are actually uploaded.
+    ///
+    /// DIALECT-INDEPENDENT for the same reason as [`Self::split_std140_mat2`] — the layout rule has nothing
+    /// to do with GLSL-ES — so it is applied on BOTH routes. A shader with no such member is returned
+    /// unchanged.
+    pub(crate) fn pad_std140_arrays(&self) -> String {
+        if !self.text.contains("std140") {
+            return self.text.to_string();
+        }
+        let mut toks = Tokens::from_source(self.text);
+        toks.pad_std140_arrays();
+        toks.0.as_slice().source()
+    }
+
     fn rewrite(text: &str) -> String {
         if !text.contains("isinf") {
             return text.to_string();

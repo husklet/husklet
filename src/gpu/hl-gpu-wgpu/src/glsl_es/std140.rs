@@ -308,6 +308,246 @@ impl Tokens {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// std140 arrays of scalars / 2-component vectors → arrays of 4-component vectors
+// ---------------------------------------------------------------------------------------------------
+//
+// WGSL requires every array in the `uniform` address space to have a stride that is a multiple of 16, and
+// std140 requires exactly the same thing: an array element's base alignment is rounded UP to the size of a
+// `vec4`. naga's `glsl-in` does not carry that rounding into the module it builds — it types `float u[4]`
+// as `array<f32, 4>` (stride 4) and `vec2 u[2]` as `array<vec2<f32>, 2>` (stride 8) — so `wgsl-out` emits
+// a uniform global that wgpu's validator REFUSES:
+//
+//     Alignment requirements for address space Uniform are not met by [2]
+//     The array stride 4 is not a multiple of the required alignment 16
+//
+// That is a translation defect, not a guest one: the GL driver's own std140 sizes and writes already use
+// the rounded `esz + 15 & !15` element stride, so the bytes it uploads are laid out at 16 per element and
+// only the declared TYPE disagrees. Declaring the member as an array of `vec4`/`ivec4`/`uvec4` and reading
+// the leading component(s) back at each use describes exactly the bytes the driver already writes, so the
+// rewrite is byte-faithful in both directions.
+//
+// Arrays of `vec3` and `vec4` (and of matrices, whose columns are `vec4`-aligned) already have a 16-byte
+// stride and are left completely alone. `bool` arrays are also left alone: naga rejects a `bool` uniform
+// for an unrelated reason, and rewriting one would only exchange one refusal for another.
+
+/// The padded element type and the swizzle that recovers the original value, for an element type whose
+/// std140 array stride (16) exceeds its natural WGSL stride. `None` for every element type that is already
+/// 16-byte strided (`vec3`/`vec4`/matrices) or that must not be touched (`bool`, structs, samplers).
+fn padded_element(base: &str) -> Option<(&'static str, &'static str)> {
+    match base {
+        "float" => Some(("vec4", "x")),
+        "int" => Some(("ivec4", "x")),
+        "uint" => Some(("uvec4", "x")),
+        "vec2" => Some(("vec4", "xy")),
+        "ivec2" => Some(("ivec4", "xy")),
+        "uvec2" => Some(("uvec4", "xy")),
+        _ => None,
+    }
+}
+
+/// An array member of a std140 uniform block whose element type is narrower than the 16-byte std140 array
+/// stride, and the `NAME__arr` array of 4-component vectors it is rewritten to.
+struct SmallArrayMember {
+    name: String,
+    vector: &'static str,
+    swizzle: &'static str,
+}
+
+impl SmallArrayMember {
+    /// Parse `TYPE NAME[N]` out of one `;`-separated block-body segment. `None` for a non-array member, an
+    /// element type that is already 16-byte strided, or any shape this pass does not model.
+    fn parse(seg: &str) -> Option<Self> {
+        let toks = Tokens::from_source(seg);
+        let sig: Vec<&Tok> = toks.iter().filter(|token| token.is_significant()).collect();
+        let base = match sig.first()? {
+            Tok::Word(w) => w.as_str(),
+            _ => return None,
+        };
+        let (vector, swizzle) = padded_element(base)?;
+        let name = match sig.get(1)? {
+            Tok::Word(w) => w.clone(),
+            _ => return None,
+        };
+        if !matches!(sig.get(2)?, Tok::Punct('[')) {
+            return None;
+        }
+        Some(Self {
+            name,
+            vector,
+            swizzle,
+        })
+    }
+}
+
+impl Tokens {
+    /// Rewrite every narrow-element array member of a `std140` uniform block to an equivalent array of
+    /// 4-component vectors (identical std140 bytes) and swizzle the original value back at each use:
+    /// `float u[4]` becomes `vec4 u__arr[4]` and `u[i]` becomes `u__arr[i].x`.
+    ///
+    /// A member is rewritten only when EVERY use of its name is an element subscript (`u[…]`). A use that
+    /// is not — passing the whole array to a function, `u.length()` — has no swizzled equivalent this
+    /// textual pass can write, so that member is left exactly as it was and wgpu refuses the module loudly
+    /// (a refused shader beats a silently miscompiled one). An anonymous block's members live in global
+    /// scope, so a name a local could shadow is declined on the same terms as [`Self::split_std140_mat2`].
+    pub(super) fn pad_std140_arrays(&mut self) {
+        let toks = &mut self.0;
+        let candidates = Self::small_array_members(toks);
+        if candidates.is_empty() {
+            return;
+        }
+        let declined: Vec<String> = candidates
+            .iter()
+            .filter(|name| {
+                Self::shadowed(toks, name) || !Self::every_use_is_subscript(toks, name)
+            })
+            .cloned()
+            .collect();
+
+        let mut members: Vec<SmallArrayMember> = Vec::new();
+        let mut out: Vec<Tok> = Vec::with_capacity(toks.len());
+        let mut i = 0;
+        while i < toks.len() {
+            if matches!(&toks[i], Tok::Word(w) if w == "layout") {
+                if let Some(b) = Std140Block::parse(toks, i) {
+                    let before = members.len();
+                    let body = toks[b.lb + 1..b.rb].source();
+                    let new_body = rewrite_small_arrays(&body, &declined, &mut members);
+                    if members.len() == before {
+                        // Nothing rewritten — emit the block verbatim (byte-faithful).
+                        out.extend(toks[i..b.end].iter().cloned());
+                    } else {
+                        out.extend(toks[i..=b.lb].iter().cloned()); // through the opening `{`
+                        out.extend(Tokens::from_source(&new_body));
+                        out.extend(toks[b.rb..b.end].iter().cloned()); // `}` … `;`
+                    }
+                    i = b.end;
+                    continue;
+                }
+            }
+            out.push(toks[i].clone());
+            i += 1;
+        }
+        *toks = out;
+        if members.is_empty() {
+            return;
+        }
+
+        // Rewrite the uses. The declarations now read `NAME__arr`, so they can no longer match `NAME`, and
+        // every remaining occurrence is a subscripted read (guaranteed by `every_use_is_subscript`). The
+        // subscript tokens are copied through untouched, so an arbitrary index expression survives.
+        let mut result: Vec<Tok> = Vec::with_capacity(toks.len());
+        let mut i = 0;
+        while i < toks.len() {
+            if let Tok::Word(w) = &toks[i] {
+                if let Some(member) = members.iter().find(|member| &member.name == w) {
+                    if let Some(lb) = toks.next_significant(i + 1) {
+                        if toks[lb] == Tok::Punct('[') {
+                            let rb = match_close(toks, lb, '[', ']');
+                            if rb < toks.len() {
+                                result.push(Tok::Word(format!("{w}__arr")));
+                                result.extend(toks[i + 1..=rb].iter().cloned());
+                                result.push(Tok::Punct('.'));
+                                result.push(Tok::Word(member.swizzle.to_string()));
+                                i = rb + 1;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+            result.push(toks[i].clone());
+            i += 1;
+        }
+        *toks = result;
+    }
+
+    /// Every narrow-element array member declared in any `std140` uniform block in the unit.
+    fn small_array_members(toks: &[Tok]) -> Vec<String> {
+        let mut names = Vec::new();
+        let mut i = 0;
+        while i < toks.len() {
+            if matches!(&toks[i], Tok::Word(w) if w == "layout") {
+                if let Some(b) = Std140Block::parse(toks, i) {
+                    for seg in toks[b.lb + 1..b.rb].source().split(';') {
+                        if let Some(member) = SmallArrayMember::parse(seg) {
+                            names.push(member.name);
+                        }
+                    }
+                    i = b.end;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        names
+    }
+
+    /// Whether `name` is declared more than once in the unit — a local or parameter shadowing the block
+    /// member this pass has no scope tracking to distinguish. See [`Self::shadowed_bare_members`].
+    fn shadowed(toks: &[Tok], name: &str) -> bool {
+        toks.iter()
+            .enumerate()
+            .filter(|(k, t)| {
+                matches!(t, Tok::Word(w) if w == name)
+                    && matches!(
+                        toks[..*k].iter().rev().find(|t| t.is_significant()),
+                        Some(Tok::Word(p)) if is_type_word(p)
+                    )
+            })
+            .count()
+            > 1
+    }
+
+    /// Whether every non-declaration occurrence of `name` is immediately followed by `[` — the only use
+    /// form the swizzle rewrite can express.
+    fn every_use_is_subscript(toks: &[Tok], name: &str) -> bool {
+        (0..toks.len())
+            .filter(|k| matches!(&toks[*k], Tok::Word(w) if w == name))
+            .filter(|k| {
+                !matches!(
+                    toks[..*k].iter().rev().find(|t| t.is_significant()),
+                    Some(Tok::Word(p)) if is_type_word(p)
+                )
+            })
+            .all(|k| {
+                toks.next_significant(k + 1)
+                    .is_some_and(|next| toks[next] == Tok::Punct('['))
+            })
+    }
+}
+
+/// Rewrite the body text of a std140 uniform block: each narrow-element array member `TYPE NAME[N]`
+/// becomes `VEC4TYPE NAME__arr[N]`, recording it in `members`. Every other member is kept verbatim, and a
+/// `declined` name is left exactly as it was.
+fn rewrite_small_arrays(
+    body: &str,
+    declined: &[String],
+    members: &mut Vec<SmallArrayMember>,
+) -> String {
+    body.split(';')
+        .map(|seg| match SmallArrayMember::parse(seg) {
+            Some(member) if !declined.contains(&member.name) => {
+                let lead: String = seg.chars().take_while(|c| c.is_whitespace()).collect();
+                let bracket = match seg.find('[') {
+                    Some(bracket) => bracket,
+                    None => return seg.to_string(),
+                };
+                let text = format!(
+                    "{lead}{} {}__arr{}",
+                    member.vector,
+                    member.name,
+                    &seg[bracket..]
+                );
+                members.push(member);
+                text
+            }
+            _ => seg.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
 /// Whether `w` is a GLSL type keyword that would make a following identifier a DECLARATION rather than a
 /// use. Deliberately broad: a false positive only costs the mat2 workaround for that name (naga then
 /// reports the unsupported type), while a false negative would rewrite a shadowed local.

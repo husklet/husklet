@@ -137,4 +137,42 @@ impl Gpu {
             downlevel,
         })
     }
+
+    /// Compile WGSL into a shader module, returning a typed error for anything wgpu refuses.
+    ///
+    /// EVERY guest-derived shader must come through here. `wgpu::Device::create_shader_module` reports a
+    /// validation failure through the device error sink, and with no error scope on the stack that sink's
+    /// default handler PANICS on the calling thread (`wgpu-24/src/backend/wgpu_core.rs`,
+    /// `default_error_handler`). The payload is guest-controlled — a guest compiles any shader it likes —
+    /// so a shader this backend's translation emits in a form wgpu rejects would otherwise turn a refused
+    /// module into a panic unwinding out of the GPU connection thread. A validation error scope converts
+    /// it into the same [`GpuError`] every other refusal uses, so the batch is NACKed with the resource
+    /// tables untouched, exactly as the pipeline-creation paths already do.
+    ///
+    /// The scope is popped on BOTH outcomes, so the device's scope stack is left as it was found.
+    pub(crate) fn shader_module(&self, label: &str, wgsl: String) -> Result<wgpu::ShaderModule> {
+        self.device
+            .push_error_scope(wgpu::ErrorFilter::Validation);
+        let module = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(label),
+                source: wgpu::ShaderSource::Wgsl(wgsl.into()),
+            });
+        match pollster::block_on(self.device.pop_error_scope()) {
+            Some(error) => {
+                hl_log::hl_warn!(
+                    hl_log::tag::WGPU,
+                    "shader module rejected label={} err={}",
+                    label,
+                    error
+                );
+                hl_log::hl_count!(hl_log::tag::WGPU, "shader_errors");
+                Err(GpuError::Kernel(format!(
+                    "wgpu: shader module {label} rejected: {error}"
+                )))
+            }
+            None => Ok(module),
+        }
+    }
 }

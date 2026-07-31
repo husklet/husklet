@@ -208,10 +208,17 @@ pub fn glsl_to_wgsl_reflect(
     // ES route above already applied it inside `normalize`, and this reaches the DESKTOP route, which is
     // where the GL driver's ES2 output lands after it rewrites its own shaders (`is_es()` is false for it).
     // Byte-faithful for any shader without such a member, so the direct path stays unchanged.
+    // The uniform address space requires a 16-byte array stride in WGSL, which is also what std140 mandates
+    // and what the GL driver's own writes use — but naga's `glsl-in` gives `float u[4]` the element type's
+    // natural stride (4), so the emitted module is refused by wgpu's validator. Padding those members to
+    // arrays of `vec4` is the same kind of layout-only, dialect-independent rewrite, so it runs on BOTH
+    // routes beside the 2-row-matrix split and is byte-faithful for a shader without such a member.
     let unmat2;
+    let padded;
     let src = if src.contains("std140") {
         unmat2 = crate::glsl_es::Source::new(src).split_std140_mat2();
-        unmat2.as_str()
+        padded = crate::glsl_es::Source::new(&unmat2).pad_std140_arrays();
+        padded.as_str()
     } else {
         src
     };

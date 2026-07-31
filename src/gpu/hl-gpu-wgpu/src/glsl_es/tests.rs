@@ -265,3 +265,112 @@ fn desktop_route_shaders_also_get_the_std140_mat2_rewrite() {
         "byte-faithful when there is nothing to rewrite"
     );
 }
+
+// ---------------------------------------------------------------------------------------------------
+// std140 arrays of scalars / 2-component vectors
+// ---------------------------------------------------------------------------------------------------
+
+/// `uniform float u[4]` reaches naga intact and is typed `array<f32, 4>` — stride 4 — which wgpu's
+/// validator refuses in the uniform address space ("array stride 4 is not a multiple of the required
+/// alignment 16"). std140 requires the same 16-byte stride, and the driver already writes it that way, so
+/// the member is declared as an array of `vec4` and the value swizzled back at each use.
+#[test]
+fn pads_scalar_std140_array_to_vec4_and_swizzles_uses() {
+    let src = "#version 460\nlayout(std140, binding = 0) uniform HlUniforms { float u[4]; };\nlayout(location=0) out vec4 c;\nvoid main(){ c = vec4(u[2]); }\n";
+    let out = Source::new(src).pad_std140_arrays();
+    assert!(out.contains("vec4 u__arr[4]"), "member padded: {out}");
+    assert!(!out.contains("float u[4]"), "original member gone: {out}");
+    assert!(out.contains("u__arr[2].x"), "use swizzled: {out}");
+}
+
+/// `int`/`uint` arrays pad to the MATCHING vector type (a `vec4` would change the element's type), and a
+/// `vec2` array recovers two components.
+#[test]
+fn pads_integer_and_vec2_std140_arrays_to_their_own_vector_types() {
+    let src = "#version 460\nlayout(std140, binding = 0) uniform HlUniforms { int k[2]; uint m[2]; vec2 v[2]; };\nlayout(location=0) out vec4 c;\nvoid main(){ c = vec4(float(k[0]) + float(m[1]), v[1].x, 0.0, 0.0); }\n";
+    let out = Source::new(src).pad_std140_arrays();
+    assert!(out.contains("ivec4 k__arr[2]"), "int → ivec4: {out}");
+    assert!(out.contains("uvec4 m__arr[2]"), "uint → uvec4: {out}");
+    assert!(out.contains("vec4 v__arr[2]"), "vec2 → vec4: {out}");
+    assert!(out.contains("k__arr[0].x"), "int use: {out}");
+    assert!(out.contains("m__arr[1].x"), "uint use: {out}");
+    assert!(out.contains("v__arr[1].xy"), "vec2 use recovers two components: {out}");
+}
+
+/// An element type whose array stride is ALREADY 16 must be left completely alone — padding it would
+/// change nothing and only risk a mistranslation.
+#[test]
+fn leaves_already_aligned_std140_members_byte_for_byte() {
+    for src in [
+        "#version 460\nlayout(std140, binding = 0) uniform HlUniforms { vec4 u[4]; };\nvoid main(){ gl_Position = u[1]; }\n",
+        "#version 460\nlayout(std140, binding = 0) uniform HlUniforms { vec3 u[4]; };\nvoid main(){ gl_Position = vec4(u[1], 1.0); }\n",
+        "#version 460\nlayout(std140, binding = 0) uniform HlUniforms { mat4 u[2]; };\nvoid main(){ gl_Position = u[1][0]; }\n",
+        "#version 460\nlayout(std140, binding = 0) uniform HlUniforms { float a; vec2 b; };\nvoid main(){ gl_Position = vec4(a, b, 1.0); }\n",
+    ] {
+        assert_eq!(
+            Source::new(src).pad_std140_arrays(),
+            src,
+            "byte-faithful when there is nothing to rewrite"
+        );
+    }
+}
+
+/// A named-instance block's uses are `x.u[i]`; only the member name is rewritten, so the qualifier and the
+/// index expression survive untouched.
+#[test]
+fn pads_named_instance_std140_arrays_and_keeps_the_index_expression() {
+    let src = "#version 460\nlayout(std140, binding = 0) uniform Xf { float u[4]; int k; } x;\nlayout(location=0) out vec4 c;\nvoid main(){ c = vec4(x.u[x.k + 1]); }\n";
+    let out = Source::new(src).pad_std140_arrays();
+    assert!(out.contains("vec4 u__arr[4]"), "member padded: {out}");
+    assert!(
+        out.contains("x.u__arr[x.k + 1].x"),
+        "qualified use keeps its qualifier and index expression: {out}"
+    );
+}
+
+/// An anonymous block's members are bare globals, so a local of the same name SHADOWS the member and this
+/// pass has no scope tracking. Decline the rewrite rather than redirect the local's reads to the uniform —
+/// wgpu then refuses the module loudly, which beats a silently wrong value.
+#[test]
+fn declines_padding_when_a_local_shadows_the_array_member() {
+    let src = "#version 460\nlayout(std140, binding = 0) uniform HlUniforms { float u[4]; };\nlayout(location=0) out vec4 c;\nvoid main(){ float u[4]; u[0] = 1.0; c = vec4(u[0]); }\n";
+    assert_eq!(
+        Source::new(src).pad_std140_arrays(),
+        src,
+        "a shadowed member must not be rewritten"
+    );
+}
+
+/// A use that is not an element subscript — passing the whole array, or `.length()` — has no swizzled
+/// equivalent this textual pass can write, so the member is declined entirely rather than half-rewritten.
+#[test]
+fn declines_padding_when_the_array_is_used_whole() {
+    let src = "#version 460\nlayout(std140, binding = 0) uniform HlUniforms { float u[4]; };\nlayout(location=0) out vec4 c;\nfloat s(float a[4]){ return a[0]; }\nvoid main(){ c = vec4(s(u)); }\n";
+    assert_eq!(
+        Source::new(src).pad_std140_arrays(),
+        src,
+        "a non-subscript use must decline the rewrite"
+    );
+}
+
+/// The stride rule is a LAYOUT rule, not an ES one: the GL driver rewrites its ES2 shaders to desktop form
+/// before they arrive, so `is_es()` is false and `normalize` never runs. The pass must be reachable on
+/// BOTH routes, exactly like the 2-row-matrix split beside it.
+#[test]
+fn both_dialect_routes_compile_a_std140_scalar_array() {
+    let desktop = "#version 460\nlayout(std140, binding = 0) uniform HlUniforms { float u[4]; };\nlayout(location=0) out vec4 c;\nvoid main(){ c = vec4(u[2]); }\n";
+    assert!(
+        !Source::new(desktop).is_es(),
+        "the driver's translated output is not ES-shaped"
+    );
+    assert!(
+        crate::wgsl::glsl_to_wgsl(desktop, naga::ShaderStage::Fragment, "main").is_ok(),
+        "a desktop-route std140 scalar array must compile"
+    );
+    let es = "#version 300 es\nprecision mediump float;\nlayout(std140, binding = 0) uniform HlUniforms { float u[4]; };\nlayout(location=0) out vec4 c;\nvoid main(){ c = vec4(u[2]); }\n";
+    assert!(Source::new(es).is_es(), "the ES route is taken");
+    assert!(
+        crate::wgsl::glsl_to_wgsl(es, naga::ShaderStage::Fragment, "main").is_ok(),
+        "an ES-route std140 scalar array must compile"
+    );
+}
