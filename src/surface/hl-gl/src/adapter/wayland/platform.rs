@@ -9,12 +9,32 @@ pub const EGL_PLATFORM_WAYLAND_KHR: u32 = 0x31D8;
 pub const EGL_PLATFORM_WAYLAND_EXT: u32 = 0x31D8;
 /// `EGL_PLATFORM_GBM_KHR` — recognised so a GBM probe gets a truthful "not wayland" answer.
 pub const EGL_PLATFORM_GBM_KHR: u32 = 0x31D7;
+/// `EGL_PLATFORM_SURFACELESS_MESA` — a display that renders without a window system. The native display
+/// is always `EGL_DEFAULT_DISPLAY`; every surface is a pbuffer or the surfaceless default framebuffer,
+/// which is exactly the offscreen path this driver already serves.
+pub const EGL_PLATFORM_SURFACELESS_MESA: u32 = 0x31DD;
 
 /// Whether `platform` selects the Wayland window system (the only windowed platform this driver backs).
 pub struct WaylandPlatform;
 impl WaylandPlatform {
     pub fn contains(platform: u32) -> bool {
         platform == EGL_PLATFORM_WAYLAND_KHR
+    }
+}
+
+/// Whether this driver can back a display for `platform` at all.
+///
+/// A platform this driver cannot serve must be REFUSED at `eglGetPlatformDisplay`, not accepted and
+/// silently treated as Wayland: a caller that gets a display back is entitled to a native surface of
+/// that platform's type, and there is none. Accepting every enum and answering Wayland is how a GBM or
+/// X11 caller got a display it could never present through, and found out only frames later.
+pub struct SupportedPlatform;
+impl SupportedPlatform {
+    pub fn contains(platform: u32) -> bool {
+        matches!(
+            platform,
+            EGL_PLATFORM_WAYLAND_KHR | EGL_PLATFORM_SURFACELESS_MESA
+        )
     }
 }
 
@@ -25,8 +45,14 @@ impl WaylandPlatform {
 /// (`eglQueryDevicesEXT` / `eglQueryDeviceStringEXT` take no display), so — matching real Mesa — it is
 /// advertised in the CLIENT string as well, letting a toolkit's GL loader (e.g. libepoxy for GTK/GDK)
 /// resolve `eglQueryDisplayAttribEXT` & friends before display init.
+///
+/// `EGL_MESA_platform_surfaceless` belongs here too: this string is read BEFORE any display call, and a
+/// caller that does not find its platform named here never calls the driver at all. ANGLE was measured
+/// resolving every entry point from this driver and then reporting "Failed to get system egl display"
+/// without invoking one of them, because the platform it wanted was not in this list.
 pub fn egl_client_extensions() -> &'static str {
     "EGL_EXT_client_extensions EGL_EXT_platform_base EGL_EXT_platform_wayland EGL_KHR_platform_wayland \
+     EGL_MESA_platform_surfaceless \
      EGL_EXT_device_base EGL_EXT_device_enumeration EGL_EXT_device_query"
 }
 
@@ -40,6 +66,6 @@ pub fn egl_display_extensions() -> &'static str {
      EGL_EXT_create_context_robustness EGL_KHR_fence_sync \
      EGL_KHR_image_base \
      EGL_EXT_image_dma_buf_import EGL_EXT_image_dma_buf_import_modifiers \
-     EGL_EXT_platform_wayland EGL_KHR_platform_wayland \
+     EGL_EXT_platform_wayland EGL_KHR_platform_wayland EGL_MESA_platform_surfaceless \
      EGL_EXT_device_base EGL_EXT_device_query"
 }

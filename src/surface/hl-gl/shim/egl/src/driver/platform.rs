@@ -10,8 +10,28 @@ pub use query::*;
 // EGL: the remaining lifecycle / query / sync / image / surface-creation entry points
 // ==================================================================================================
 
+/// The single display token, for a platform this driver backs; `EGL_NO_DISPLAY` + `EGL_BAD_PARAMETER`
+/// for one it does not.
+///
+/// Refusing is the whole point: handing a display back for, say, GBM would promise a native surface
+/// type that has no implementation behind it, and the caller only discovers that frames later. The
+/// refusal logs at `error` because that is the one level a release build keeps — a shipped driver that
+/// declines a display must still say which platform it declined.
+fn display_for(platform: u32) -> *mut c_void {
+    if hl_gl::adapter::wayland::SupportedPlatform::contains(platform) {
+        return DISPLAY_TOKEN as *mut c_void;
+    }
+    hl_log::hl_error!(
+        hl_log::tag::EGL,
+        "eglGetPlatformDisplay refused unsupported platform=0x{:x}",
+        platform
+    );
+    GlobalState::access(|s| s.set_egl_error(EGL_BAD_PARAMETER));
+    core::ptr::null_mut()
+}
+
 /// `eglGetPlatformDisplay(platform, native_display, attrib_list)` — the EGL 1.5 display getter; returns the
-/// same single display token as `eglGetDisplay` (this driver has one display).
+/// same single display token as `eglGetDisplay` for the platforms this driver backs.
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglGetPlatformDisplay(
     platform: u32,
@@ -19,7 +39,7 @@ pub extern "C" fn eglGetPlatformDisplay(
     _attrib_list: *const isize,
 ) -> *mut c_void {
     crate::stub::trace("eglGetPlatformDisplay", &format!("platform=0x{platform:x}"));
-    DISPLAY_TOKEN as *mut c_void
+    display_for(platform)
 }
 
 // ---- EGL_EXT_platform_base entry points ----------------------------------------------------------
@@ -37,14 +57,14 @@ pub extern "C" fn eglGetPlatformDisplay(
 // deliberately not `#[no_mangle]`.
 
 /// `eglGetPlatformDisplayEXT(platform, native_display, attrib_list)` — `EGL_EXT_platform_base` display
-/// getter. Same single display token as `eglGetDisplay`; the surfaceless / wayland / gbm / x11 platform
-/// enums all map to the one initializable display this driver serves.
+/// getter. Same single display token as `eglGetDisplay` for the wayland and surfaceless platforms; every
+/// other platform enum is refused, exactly as in the EGL 1.5 core spelling above.
 pub(super) extern "C" fn eglGetPlatformDisplayEXT(
-    _platform: u32,
+    platform: u32,
     _native_display: *mut c_void,
     _attrib_list: *const i32,
 ) -> *mut c_void {
-    DISPLAY_TOKEN as *mut c_void
+    display_for(platform)
 }
 /// `eglCreatePlatformWindowSurfaceEXT(dpy, config, native_window, attrib_list)` — `EGL_EXT_platform_base`
 /// window-surface getter; `native_window` is the `wl_egl_window*`. Brings up the window surface exactly

@@ -35,6 +35,8 @@ const EGL_EXTENSION_COMMANDS: &[Extension] = &[
     ),
     ext("EGL_EXT_platform_wayland", &[]),
     ext("EGL_KHR_platform_wayland", &[]),
+    // A platform name for eglGetPlatformDisplay; the entry points come from EGL_EXT_platform_base.
+    ext("EGL_MESA_platform_surfaceless", &[]),
     ext(
         "EGL_EXT_device_base",
         &[
