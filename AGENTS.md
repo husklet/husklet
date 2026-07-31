@@ -838,6 +838,11 @@ correct side, once forty differences were the harness's own rounding ties, and o
 wrong framings before the third was right. Budget for that gap; a disagreement is a location, not a
 diagnosis.
 
+When several agents share a working tree, commit with `git commit --only -- <paths>`. Staging by path does
+not reserve the index: a later `git commit` takes whatever is staged, so one agent's careful staging plus
+another's careful message produced a commit whose diff and message describe different work. `--only` binds
+the paths to the commit itself and is immune to what else is staged.
+
 Never let a tool failure become a property of the subject. A probe for the default gateway reported "none"
 — which reads as no route at all and would have aimed the investigation at a routing fix — because it used
 an extension absent from the guest's awk, and a fallback laundered the error into a confident answer. A
