@@ -94,8 +94,37 @@ struct HandlerBoundary;
 impl HandlerBoundary {
     /// Run one handler operation across the unwind boundary. On panic, the caller discards the operation's
     /// result and emits a failure response without inspecting potentially partial backend state.
-    fn call<R>(op: impl FnOnce() -> R) -> Result<R, ()> {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(op)).map_err(|_| ())
+    ///
+    /// `Err` carries the panic's own message. A contained panic and a clean rejection produce the SAME
+    /// wire byte, so the message is the only thing that can tell them apart afterwards — dropping it (as
+    /// this boundary used to) makes a crashing backend indistinguishable from a refused batch.
+    fn call<R>(op: impl FnOnce() -> R) -> Result<R, String> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(op)).map_err(|payload| {
+            payload
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_owned())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "non-string panic payload".to_owned())
+        })
+    }
+}
+
+/// Once-per-connection latch for the error-level diagnostics on the per-frame serve path. A backend that
+/// fails every frame must produce a handful of legible lines, not one per frame at 60 Hz; the first
+/// occurrence of each distinct cause is the one that explains the failure.
+#[derive(Default)]
+struct Reported {
+    panicked: bool,
+    nacked: bool,
+    decode_failed: bool,
+    too_large: bool,
+    readback_failed: bool,
+}
+
+impl Reported {
+    /// True the first time `flag` is raised on this connection.
+    fn first(flag: &mut bool) -> bool {
+        !std::mem::replace(flag, true)
     }
 }
 
@@ -110,6 +139,7 @@ fn serve_loop<H: ConnectionHandler>(
 ) -> io::Result<()> {
     // The guest reads this off the connection and negotiates before advertising any API feature.
     unix::Connection::new(stream).write_handshake(caps)?;
+    let mut reported = Reported::default();
     loop {
         let frame = match unix::Connection::new(stream).read_frame_outcome()? {
             FrameOutcome::Frame(f) => f,
@@ -120,6 +150,15 @@ fn serve_loop<H: ConnectionHandler>(
             // peer is genuinely gone, which propagates as an error (the connection really did end).
             FrameOutcome::TooLarge(header) => {
                 hl_log::hl_count!(hl_log::tag::TRANSPORT, "nacks");
+                if Reported::first(&mut reported.too_large) {
+                    hl_log::hl_error!(
+                        hl_log::tag::TRANSPORT,
+                        "over-cap frame refused len={} cap={} surface={} (first on this connection)",
+                        header.len,
+                        unix::MAX_FRAME_BYTES,
+                        header.surface_id
+                    );
+                }
                 unix::Connection::new(stream).drain_payload(header.len)?;
                 unix::Connection::new(stream).write_ack(ACK_FAIL)?;
                 continue;
@@ -131,16 +170,39 @@ fn serve_loop<H: ConnectionHandler>(
             // and failed rather than allowed to unwind the connection thread.
             let started = std::time::Instant::now();
             let bytes = ReadbackRequest::from_bytes(&frame.payload).and_then(|req| {
-                HandlerBoundary::call(|| match req.kind {
+                let kind = req.kind;
+                match HandlerBoundary::call(|| match req.kind {
                     readback_kind::BUFFER => handler.read_buffer(&req),
                     readback_kind::FENCE => handler.poll_fence(&req).map(|done| vec![done as u8]),
                     readback_kind::FENCE_WAIT => handler
                         .wait_fence(&req)
                         .map(|status| vec![matches!(status, crate::FenceWait::Complete) as u8]),
                     _ => None,
-                })
-                .unwrap_or(None)
+                }) {
+                    Ok(bytes) => bytes,
+                    Err(panic) => {
+                        // A contained panic and a refused readback both answer READBACK_FAIL. Say which.
+                        if Reported::first(&mut reported.panicked) {
+                            hl_log::hl_error!(
+                                hl_log::tag::TRANSPORT,
+                                "readback handler PANICKED kind={} (readback failed, connection kept): {}",
+                                kind,
+                                panic
+                            );
+                        }
+                        None
+                    }
+                }
             });
+            // A readback the handler refused is a failure the guest sees as a rejected request with no
+            // host-side explanation, so name it once per connection.
+            if bytes.is_none() && Reported::first(&mut reported.readback_failed) {
+                hl_log::hl_error!(
+                    hl_log::tag::TRANSPORT,
+                    "readback refused request_bytes={} (first on this connection)",
+                    frame.payload.len()
+                );
+            }
             hl_log::hl_debug!(
                 hl_log::tag::TRANSPORT,
                 "readback complete request_bytes={} response_bytes={} elapsed_us={} ok={}",
@@ -176,28 +238,65 @@ fn serve_loop<H: ConnectionHandler>(
                         .map(|started| started.elapsed().as_micros())
                         .unwrap_or_default();
                     let handler_started = diagnostics.then(Instant::now);
-                    let verdict = HandlerBoundary::call(|| handler.submit(&frame.header, &batch))
-                        .unwrap_or(Verdict::Nack);
+                    let verdict = match HandlerBoundary::call(|| {
+                        handler.submit(&frame.header, &batch)
+                    }) {
+                        Ok(verdict) => verdict,
+                        Err(panic) => {
+                            // Both outcomes write ACK_FAIL, so without this line a crashing backend looks
+                            // exactly like a cleanly-refused batch and the panic message is lost entirely.
+                            if Reported::first(&mut reported.panicked) {
+                                hl_log::hl_error!(
+                                    hl_log::tag::TRANSPORT,
+                                    "submit handler PANICKED surface={} commands={} bytes={} \
+                                     (frame NACKed, connection kept): {}",
+                                    frame.header.surface_id,
+                                    batch.len(),
+                                    frame.payload.len(),
+                                    panic
+                                );
+                            }
+                            Verdict::Nack
+                        }
+                    };
                     let handler_us = handler_started
                         .map(|started| started.elapsed().as_micros())
                         .unwrap_or_default();
                     (verdict, batch.len(), decode_us, handler_us)
                 }
-                Err(_error) => {
+                Err(error) => {
                     let decode_us = decode_started
                         .map(|started| started.elapsed().as_micros())
                         .unwrap_or_default();
-                    hl_log::hl_warn!(
-                        hl_log::tag::WIRE,
-                        "decode failed bytes={}: {}",
-                        frame.payload.len(),
-                        _error
-                    );
+                    // A payload this side cannot decode is a protocol violation by the guest; the frame is
+                    // NACKed without ever reaching the handler. `error` names the command index, byte
+                    // offset and tag, which is the whole diagnosis.
+                    if Reported::first(&mut reported.decode_failed) {
+                        hl_log::hl_error!(
+                            hl_log::tag::WIRE,
+                            "frame decode failed bytes={} surface={} (first on this connection): {}",
+                            frame.payload.len(),
+                            frame.header.surface_id,
+                            error
+                        );
+                    }
                     (Verdict::Nack, 0, decode_us, 0)
                 }
             };
         if matches!(verdict, Verdict::Nack) {
             hl_log::hl_count!(hl_log::tag::TRANSPORT, "nacks");
+            // The guest turns this ack into DEVICE_LOST. It is the host's only chance to say a frame was
+            // refused; the counter alone is invisible in a shipped build. Latched: a backend that refuses
+            // every frame prints once, not at frame rate.
+            if Reported::first(&mut reported.nacked) {
+                hl_log::hl_error!(
+                    hl_log::tag::TRANSPORT,
+                    "frame REFUSED surface={} commands={} bytes={} (first on this connection)",
+                    frame.header.surface_id,
+                    commands,
+                    frame.payload.len()
+                );
+            }
         }
         let ack = verdict.ack_byte();
         let ack_started = diagnostics.then(Instant::now);

@@ -305,9 +305,11 @@ impl Connection<'_> {
         // Same untrusted-length cap as `read_frame`: refuse an absurd handshake length before allocating its
         // body buffer, so a hostile peer cannot force a multi-GB preallocation at connect time.
         if len_u32 > MAX_FRAME_BYTES {
-            hl_log::hl_warn!(
+            // Connect-time and fatal — the guest never negotiates, so nothing downstream ever runs to
+            // report it. Once per connection attempt, not a per-frame path.
+            hl_log::hl_error!(
                 hl_log::tag::TRANSPORT,
-                "handshake too large len={} cap={}",
+                "handshake REFUSED len={} cap={} (peer is not a compatible host)",
                 len_u32,
                 MAX_FRAME_BYTES
             );

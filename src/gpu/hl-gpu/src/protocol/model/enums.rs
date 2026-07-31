@@ -142,9 +142,10 @@ u32_enum!(
     AddressMode { ClampToEdge = 0, Repeat = 1, MirrorRepeat = 2 } "AddressMode"
 );
 
-/// Depth/stencil compare functions. `DepthState::depth_compare` carries an opaque WebGPU compare-function
-/// value on the wire; the software oracle interprets it with these stable constants (Vulkan `VkCompareOp`
-/// ordering). `passes(compare, frag, stored)` is the per-fragment test the depth rasterizer runs.
+/// Depth/stencil compare functions. `DepthState::depth_compare` and `StencilFaceState::compare` carry one
+/// of THESE codes on the wire — the protocol's own numbering, which follows Vulkan `VkCompareOp` ordering
+/// and is NOT WebGPU's 1-based `GPUCompareFunction`. `passes(compare, frag, stored)` is the per-fragment
+/// test the depth rasterizer runs.
 pub mod compare {
     pub const NEVER: u32 = 0;
     pub const LESS: u32 = 1;
@@ -172,8 +173,9 @@ pub mod compare {
 }
 
 /// Stencil operations. A [`super::descriptor::StencilFaceState`]'s `fail_op` / `depth_fail_op` / `pass_op`
-/// carry one of these opaque values on the wire, mirroring how [`compare`] numbers the compare functions
-/// (Vulkan `VkStencilOp` ordering). The executor maps each to the matching `wgpu::StencilOperation`; an
+/// carry one of these codes on the wire — this protocol's own numbering, mirroring how [`compare`] numbers
+/// the compare functions (Vulkan `VkStencilOp` ordering), not a WebGPU enum. The executor maps each to the
+/// matching `wgpu::StencilOperation`; an
 /// unmodeled value falls back to `KEEP` so an honest bring-up never hard-fails a draw on a code it does not
 /// model (the stencil analogue of `compare::passes`'s `ALWAYS` fallback).
 pub mod stencil_op {
@@ -230,6 +232,18 @@ pub mod blend_factor {
     pub const ONE_MINUS_SRC1_COLOR: u32 = 14;
     pub const SRC1_ALPHA: u32 = 15;
     pub const ONE_MINUS_SRC1_ALPHA: u32 = 16;
+}
+
+/// Blend equations carried by [`super::descriptor::BlendState`]'s `op_color` / `op_alpha`. Same neutral
+/// GL-to-host vocabulary as [`blend_factor`], not a backend enum; the executor defaults an unmodeled code
+/// to `ADD`. These constants existed only as prose in the guest and executor until now, which is how a
+/// driver author ends up guessing a foreign enum instead.
+pub mod blend_op {
+    pub const ADD: u32 = 0;
+    pub const SUBTRACT: u32 = 1;
+    pub const REVERSE_SUBTRACT: u32 = 2;
+    pub const MIN: u32 = 3;
+    pub const MAX: u32 = 4;
 }
 
 // ---------------------------------------------------------------------------------------------------

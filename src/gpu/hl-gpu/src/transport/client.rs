@@ -69,8 +69,19 @@ pub struct RemoteCommandSink {
     trace: bool,
     config: TransportConfig,
     terminal: Option<TransportError>,
+    /// Error-level diagnostics already emitted for the CURRENT connection generation, so a persistent
+    /// failure on the per-frame submit path prints a handful of legible lines rather than one per frame.
+    /// Keyed `(class, code)`; cleared whenever `generation` advances, because a fresh executor is a fresh
+    /// story worth telling again.
+    reported: HashSet<(u8, u8)>,
+    reported_generation: u64,
     _single_writer: PhantomData<Cell<()>>,
 }
+
+/// `reported` classes.
+const REPORT_NACK: u8 = 0;
+const REPORT_RETRIES: u8 = 1;
+const REPORT_TERMINAL: u8 = 2;
 
 impl RemoteCommandSink {
     pub fn new(path: impl Into<String>) -> Self {
@@ -88,6 +99,8 @@ impl RemoteCommandSink {
             trace: false,
             config: TransportConfig::default(),
             terminal: None,
+            reported: HashSet::new(),
+            reported_generation: 0,
             _single_writer: PhantomData,
         }
     }
@@ -356,12 +369,21 @@ impl RemoteCommandSink {
                 // rather than letting the guest commit a stale or partly-rendered frame as if it presented.
                 nack => {
                     hl_log::hl_count!(hl_log::tag::TRANSPORT, "nacks");
-                    hl_log::hl_warn!(
-                        hl_log::tag::TRANSPORT,
-                        "host executor rejected frame ack={} bytes={}",
-                        nack,
-                        ir.len()
-                    );
+                    // The single most explanatory line available for a guest-visible DEVICE_LOST: the
+                    // host ran the frame and refused it. Latched per distinct ack per generation.
+                    if self.first_report(REPORT_NACK, nack) {
+                        hl_log::hl_error!(
+                            hl_log::tag::TRANSPORT,
+                            "host executor REJECTED frame ack={} submit={} generation={} surface={} \
+                             commands={} bytes={} (first for this ack on this connection)",
+                            nack,
+                            submit,
+                            self.generation,
+                            self.surface.id,
+                            current.len(),
+                            ir.len()
+                        );
+                    }
                     return Err(GpuError::Transport(TransportError::Rejected {
                         phase: TransportPhase::Acknowledgement,
                         acknowledgement: nack,
@@ -369,12 +391,26 @@ impl RemoteCommandSink {
                 }
             }
         }
-        Err(last_error.unwrap_or_else(|| {
+        let failure = last_error.unwrap_or_else(|| {
             GpuError::Transport(TransportError::Unavailable {
                 phase: TransportPhase::Connect,
                 detail: "connection attempts exhausted".into(),
             })
-        }))
+        });
+        // The frame is gone and the sink is NOT retired, so `lose` will not speak for it. Without this the
+        // guest sees a failed present with nothing on either side of the socket explaining it.
+        if self.first_report(REPORT_RETRIES, 0) {
+            hl_log::hl_error!(
+                hl_log::tag::TRANSPORT,
+                "gpu transport submit FAILED after retries path={} submit={} generation={} bytes={}: {}",
+                self.path,
+                submit,
+                self.generation,
+                ir.len(),
+                failure
+            );
+        }
+        Err(failure)
     }
 }
 

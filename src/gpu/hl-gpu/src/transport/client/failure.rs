@@ -20,6 +20,17 @@ impl RemoteCommandSink {
                 ))
     }
 
+    /// True the FIRST time `(class, code)` is reported on the current connection generation. Every
+    /// error-level site on the per-frame submit path goes through this: the guest driver turns a transport
+    /// failure into `DEVICE_LOST` and then keeps trying, so an unlatched line would arrive at frame rate.
+    pub(super) fn first_report(&mut self, class: u8, code: u8) -> bool {
+        if self.reported_generation != self.generation {
+            self.reported_generation = self.generation;
+            self.reported.clear();
+        }
+        self.reported.insert((class, code))
+    }
+
     pub(super) fn timeout(error: &io::Error) -> bool {
         matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock)
     }
@@ -70,7 +81,20 @@ impl RemoteCommandSink {
         })
     }
 
+    /// Permanently retire this sink. This is the moment the guest API becomes `DEVICE_LOST` with no way
+    /// back, and it had no diagnostic at all — the guest driver reported a lost device and the reason died
+    /// here. Fires once: `ensure` short-circuits on `terminal` afterwards.
     pub(super) fn lose(&mut self, failure: TransportError) -> GpuError {
+        if self.terminal.is_none() && self.first_report(REPORT_TERMINAL, 0) {
+            hl_log::hl_error!(
+                hl_log::tag::TRANSPORT,
+                "gpu transport RETIRED path={} generation={} submits={}: {}",
+                self.path,
+                self.generation,
+                self.submits,
+                failure
+            );
+        }
         self.sock = None;
         self.terminal = Some(failure.clone());
         GpuError::Transport(failure)
@@ -179,11 +203,23 @@ impl RemoteCommandSink {
                 }
             }
         }
-        Err(last_error.unwrap_or_else(|| {
+        let failure = last_error.unwrap_or_else(|| {
             GpuError::Transport(TransportError::Unavailable {
                 phase: TransportPhase::RequestWrite,
                 detail: "request attempts exhausted".into(),
             })
-        }))
+        });
+        // Same as the submit path: a readback that ran out of retries without retiring the sink.
+        if self.first_report(REPORT_RETRIES, 1) {
+            hl_log::hl_error!(
+                hl_log::tag::TRANSPORT,
+                "gpu transport readback FAILED after retries path={} generation={} kind={}: {}",
+                self.path,
+                self.generation,
+                request.kind,
+                failure
+            );
+        }
+        Err(failure)
     }
 }

@@ -1,8 +1,11 @@
 //! Resource descriptors + texture subresource/region selectors + render-pass attachments.
 //!
 //! Pure value types with their invariants; serialization lives in [`crate::protocol::codec`]. Enum-valued
-//! fields (`format`, `dim`, `topology`, …) use the [`super::enums`] wire enums; opaque WebGPU enum values
-//! (`VertexFormat`, blend factors, compare functions) are carried as raw `u32` exactly as on the wire.
+//! fields (`format`, `dim`, `topology`, …) use the [`super::enums`] wire enums. The fields typed as raw
+//! `u32` (vertex-attribute formats, blend factors/ops, compare and stencil functions) carry this
+//! PROTOCOL's own neutral numbering — NOT a backend enum. They are not WebGPU `VertexFormat` /
+//! `GPUBlendFactor` / `GPUCompareFunction` values and not Vulkan `VkFormat` values; forwarding a foreign
+//! enum into one of them is a wire violation the executor decodes as a different value entirely.
 //!
 //! Two cohesive groups live in submodules and are re-exported here, so `descriptor::*` names them all:
 //! [`binding`] (pipeline layout + bind groups) and [`surface`] (presentation identity + surface
@@ -94,11 +97,18 @@ pub struct ShaderRef {
     pub entry: String,
 }
 
-/// One vertex attribute. `format`/`offset` follow WebGPU's `GPUVertexAttribute`.
+/// One vertex attribute. `location`/`offset` follow WebGPU's `GPUVertexAttribute`; `format` does NOT —
+/// see the field.
 #[derive(Clone, PartialEq, Debug)]
 pub struct VertexAttr {
     pub location: u32,
-    pub format: u32, // opaque WebGPU VertexFormat enum value
+    /// PACKED attribute description, NOT a format enum of any API:
+    /// `comps | (kind << 8) | (normalized << 16) | (integer << 17)`, where `comps` is 1..=4 and `kind` is
+    /// 0=f32 1=u8 2=i8 3=u16 4=i16 5=u32 6=i32 7=f16 8=rgb10a2 (the GL driver's `vertex_format_wire`).
+    /// Writing a `wgpu::VertexFormat` or a `VkFormat` here is a wire violation: the executor reads the low
+    /// byte as a component count, so `VK_FORMAT_R32G32B32_SFLOAT` (106) becomes a 106-component attribute
+    /// and the pipeline is refused. Lower foreign formats into this packing at the guest boundary.
+    pub format: u32,
     pub offset: u32,
 }
 
@@ -110,7 +120,9 @@ pub struct VertexLayout {
     pub attrs: Vec<VertexAttr>,
 }
 
-/// Fixed-function blend for one color target. Factors/ops are opaque WebGPU enum values.
+/// Fixed-function blend for one color target. Factors are [`super::enums::blend_factor`] codes and ops are
+/// [`super::enums::blend_op`] codes — this protocol's own neutral numbering, not `GPUBlendFactor` /
+/// `GPUBlendOperation` and not `VkBlendFactor` / `VkBlendOp`.
 #[derive(Clone, PartialEq, Debug)]
 pub struct BlendState {
     pub src_color: u32,
@@ -129,9 +141,9 @@ pub struct ColorTargetState {
     pub write_mask: u32,
 }
 
-/// One face's stencil test + operation set. `compare` is an opaque WebGPU compare-function value (the same
-/// neutral [`super::enums::compare`] numbering [`DepthState::depth_compare`] uses); `fail_op` /
-/// `depth_fail_op` / `pass_op` are opaque WebGPU stencil-operation values ([`super::enums::stencil_op`]).
+/// One face's stencil test + operation set. `compare` is a neutral [`super::enums::compare`] code (the
+/// same numbering [`DepthState::depth_compare`] uses — `VkCompareOp` ordering, NOT WebGPU's 1-based
+/// `GPUCompareFunction`); `fail_op` / `depth_fail_op` / `pass_op` are [`super::enums::stencil_op`] codes.
 /// The neutral default — `ALWAYS` compare, `KEEP` on every outcome ([`StencilFaceState::DISABLED`]) — maps
 /// to `wgpu::StencilFaceState::IGNORE`, so a `DepthState` whose front+back are both `DISABLED` (with the
 /// masks the encoder appends) reproduces the prior no-stencil behavior — the wire-back-compat default.
@@ -164,7 +176,8 @@ impl Default for StencilFaceState {
 pub struct DepthState {
     pub format: TextureFormat,
     pub depth_write: bool,
-    /// Opaque WebGPU compare-function value.
+    /// Neutral [`super::enums::compare`] code (`VkCompareOp` ordering: `NEVER` = 0 … `ALWAYS` = 7). NOT
+    /// WebGPU's 1-based `GPUCompareFunction`: writing that numbering here shifts every comparison by one.
     pub depth_compare: u32,
     /// Front-face stencil test + ops. Neutral default ([`StencilFaceState::DISABLED`]) = no stencil test.
     pub stencil_front: StencilFaceState,
