@@ -776,6 +776,23 @@ Tell each agent what the others are doing in the same crate. An agent that knows
   well-developed hypothesis on provenance grounds has done the job correctly.
 - That a number without provenance is worse than no number.
 
+## Bind a measurement to its target
+
+Three wrong conclusions in one session came from measuring a real thing about the wrong target: the
+window server listed *after* the probe exited, the *worker* pid sampled instead of its `__compositor`
+child, and clicks aimed at a *different process's* windows. Each instrument was working; the binding was
+wrong.
+
+Bind every measurement to the process under test and to identifiers that process reported — a compositor
+pid you resolved, a window number its own log emitted, a bundle hash you read yourself. Never to a name
+like "Husklet", never to whatever happens to be on screen, never to a hash quoted in a message.
+
+Two corollaries worth stating because both cost time here. A latched diagnostic cannot distinguish
+"happened once at startup" from "happening every frame" — carry an occurrence count. And an instrument
+that is self-consistent and produces plausible numbers is not thereby correct: a probe that sent
+`wl_surface.destroy` where it meant `attach` reported a stable, believable zero for hours. Check an
+instrument against something outside itself before trusting a negative from it.
+
 ## Manager discipline
 
 Stage commits by file, never `git add -A` across a shared tree — you will sweep up another agent's
