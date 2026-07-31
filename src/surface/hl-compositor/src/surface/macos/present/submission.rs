@@ -19,6 +19,76 @@ const PENDING: u8 = 0;
 const TERMINAL: u8 = 1;
 type Presented = dyn Fn(NonNull<ProtocolObject<dyn MTLDrawable>>);
 
+/// Why a drawable submission ended terminally.
+///
+/// A terminal failure costs the client the frame outright and is never retried, so an unattributed one
+/// leaves a window permanently blank with nothing on record explaining it. Each cause is distinct and
+/// actionable: the first two mean WindowServer presented the drawable but could not be believed about
+/// when, the third that Metal rejected the command buffer, the fourth that the presented callback never
+/// arrived at all.
+#[derive(Clone, Copy)]
+enum TerminalCause {
+    /// `MTLDrawable.presentedTime` did not convert to a monotonic instant — typically still zero,
+    /// meaning WindowServer never actually presented this drawable.
+    PresentedTimeUnreadable,
+    /// A presented time outside any plausible window relative to submission and observation.
+    PresentedTimeImplausible,
+    /// The `MTLCommandBuffer` reported `Error` — the GPU work itself failed.
+    CommandBufferError,
+    /// Neither the presented callback nor a command-buffer error arrived within `CALLBACK_DEADLINE`.
+    CallbackDeadlineExpired,
+}
+
+impl TerminalCause {
+    const ALL: usize = 4;
+
+    const fn index(self) -> usize {
+        match self {
+            TerminalCause::PresentedTimeUnreadable => 0,
+            TerminalCause::PresentedTimeImplausible => 1,
+            TerminalCause::CommandBufferError => 2,
+            TerminalCause::CallbackDeadlineExpired => 3,
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            TerminalCause::PresentedTimeUnreadable => "presented_time_unreadable",
+            TerminalCause::PresentedTimeImplausible => "presented_time_implausible",
+            TerminalCause::CommandBufferError => "command_buffer_error",
+            TerminalCause::CallbackDeadlineExpired => "callback_deadline_expired",
+        }
+    }
+}
+
+/// One `error`-level line per distinct cause, for the whole process.
+///
+/// A window whose presents fail terminally fails EVERY present, so logging each one buries the fact in
+/// thousands of identical lines — the same silence as saying nothing. The first of each cause speaks and
+/// names its submission; the rest are counted. Correlate the submission id with the adapter's
+/// `settle async root=… submission=…` line to get the surface.
+static ANNOUNCED: [std::sync::atomic::AtomicBool; TerminalCause::ALL] =
+    [const { std::sync::atomic::AtomicBool::new(false) }; TerminalCause::ALL];
+
+/// Build the terminal completion for `id`, attributing it to `cause` exactly once per cause.
+fn terminal_completion(id: PresentationId, cause: TerminalCause) -> PresentationCompletion {
+    hl_log::hl_count!(hl_log::tag::PRESENT, "present_terminal");
+    if !ANNOUNCED[cause.index()].swap(true, Ordering::Relaxed) {
+        hl_log::hl_log!(
+            hl_log::tag::PRESENT,
+            hl_log::Level::Error,
+            "present terminal submission={} cause={} — further failures of this cause are counted \
+             (present_terminal), not logged",
+            id.0,
+            cause.name()
+        );
+    }
+    PresentationCompletion {
+        id,
+        outcome: CompletionOutcome::TerminalFailure,
+    }
+}
+
 struct CompletionGate(AtomicU8);
 
 impl CompletionGate {
@@ -145,10 +215,7 @@ impl NativePresent {
                     publish(
                         &callback_events,
                         &callback_wake,
-                        PresentationCompletion {
-                            id,
-                            outcome: CompletionOutcome::TerminalFailure,
-                        },
+                        terminal_completion(id, TerminalCause::PresentedTimeUnreadable),
                     );
                     return;
                 };
@@ -162,10 +229,7 @@ impl NativePresent {
                     publish(
                         &callback_events,
                         &callback_wake,
-                        PresentationCompletion {
-                            id,
-                            outcome: CompletionOutcome::TerminalFailure,
-                        },
+                        terminal_completion(id, TerminalCause::PresentedTimeImplausible),
                     );
                     return;
                 }
@@ -219,14 +283,14 @@ impl NativePresent {
             return false;
         }
         if self.terminal.claim() {
-            publish(
-                &self.events,
-                &self.wake,
-                PresentationCompletion {
-                    id: self.id,
-                    outcome: CompletionOutcome::TerminalFailure,
-                },
-            );
+            // Distinguish the two: a command-buffer error is the GPU rejecting the work, an expiry is the
+            // presented callback never arriving. They have entirely different causes and fixes.
+            let cause = if failed {
+                TerminalCause::CommandBufferError
+            } else {
+                TerminalCause::CallbackDeadlineExpired
+            };
+            publish(&self.events, &self.wake, terminal_completion(self.id, cause));
         }
         true
     }

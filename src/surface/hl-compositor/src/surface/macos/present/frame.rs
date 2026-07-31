@@ -275,6 +275,36 @@ impl MacPresenter {
         }
     }
 
+    /// A frame the host gave up on entirely. The counterpart to [`MacPresenter::refuse`], and the more
+    /// serious of the two: a refusal costs one refresh period and is re-driven, whereas this is never
+    /// retried, so the surface simply stops advancing. Both now name their cause; without it a window
+    /// that goes permanently blank leaves nothing on record saying why.
+    ///
+    /// Latched per surface — the condition that abandons one frame abandons every subsequent one, and
+    /// thousands of identical lines hide the fact as thoroughly as no line at all.
+    fn abandon(&mut self, sid: SurfaceId, reason: &'static str) -> PresentationFeedback {
+        hl_log::hl_count!(tag::PRESENT, "present_terminal");
+        let announced = self
+            .surfaces
+            .get(&sid)
+            .is_some_and(|state| state.abandoned_reported);
+        if !announced {
+            hl_log::hl_log!(
+                tag::PRESENT,
+                Level::Error,
+                "present abandoned sid={} reason={reason} — this surface will not advance again; \
+                 further abandonments are counted (present_terminal), not logged",
+                sid.0
+            );
+            if let Some(state) = self.surfaces.get_mut(&sid) {
+                state.abandoned_reported = true;
+            }
+        }
+        PresentationFeedback {
+            outcome: PresentOutcome::TerminalFailure,
+        }
+    }
+
     pub(super) fn present_native(
         &mut self,
         _output: OutputId,
@@ -505,9 +535,7 @@ impl MacPresenter {
                 None => (None, Some("role_frame_missing")),
                 Some(composite) => {
                     let Some(next) = self.next_submission.checked_add(1) else {
-                        return PresentationFeedback {
-                            outcome: PresentOutcome::TerminalFailure,
-                        };
+                        return self.abandon(sid, "submission_counter_exhausted");
                     };
                     let submission = PresentationId(self.next_submission);
                     self.next_submission = next;
@@ -526,9 +554,7 @@ impl MacPresenter {
                         }
                         PresentAttempt::Retry => (None, Some("drawable_unavailable")),
                         PresentAttempt::Terminal => {
-                            return PresentationFeedback {
-                                outcome: PresentOutcome::TerminalFailure,
-                            };
+                            return self.abandon(sid, "drawable_terminal");
                         }
                     }
                 }

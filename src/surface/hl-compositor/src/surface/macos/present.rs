@@ -190,6 +190,8 @@ struct SurfState {
     native_resize_last_sent: Option<(u32, u32, bool, bool, bool)>,
     observed_native_fullscreen: Option<bool>,
     observed_backing_scale: Option<u64>,
+    /// Whether this surface has already reported that its presents were abandoned (see `abandon`).
+    abandoned_reported: bool,
     /// Whether this popup has already described its placement (see `describe_popup_placement`). Latched
     /// so a menu that repaints at refresh rate states its geometry once, not sixty times a second.
     described_popup: bool,
@@ -215,6 +217,7 @@ impl SurfState {
             native_resize_last_sent: None,
             observed_native_fullscreen: None,
             observed_backing_scale: None,
+            abandoned_reported: false,
             described_popup: false,
         }
     }
