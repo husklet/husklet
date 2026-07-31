@@ -542,6 +542,26 @@ impl Source<'_> {
     /// Offscreen framebuffer shaders must not use this conversion: their OpenGL texture orientation is
     /// preserved at sampling time. The frame lowerer specializes vertex modules by target kind.
     pub(crate) fn present_coordinates(self) -> String {
+        self.append_to_main(" gl_Position.y = -gl_Position.y;")
+    }
+
+    /// Map OpenGL's clip volume onto the host GPU's.
+    ///
+    /// GL clips to `-w <= z <= w`; Metal and WebGPU clip to `0 <= z <= w`. Without this, every vertex
+    /// with negative clip z is clipped away before rasterization — and since every standard projection
+    /// matrix puts near geometry at negative clip z, an application loses its near half with depth
+    /// testing not even enabled. This is a property of the clip volume, not of orientation, so unlike
+    /// [`Self::present_coordinates`] it applies to EVERY vertex shader, offscreen included.
+    ///
+    /// `z_host = (z_gl + w) / 2` is the standard remap and is exact at both ends: `z = -w` maps to 0 and
+    /// `z = +w` maps to `w`. It composes with the depth range the rasterizer applies afterwards.
+    pub(crate) fn clip_depth(self) -> String {
+        self.append_to_main(" gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;")
+    }
+
+    /// Insert `statement` as the last statement of `main`, or return the source untouched when there is
+    /// no `main` body to append to.
+    fn append_to_main(self, statement: &str) -> String {
         let source = self.text;
         let Some(main) = source.find("void main") else {
             return source.to_owned();
@@ -568,7 +588,7 @@ impl Source<'_> {
             return source.to_owned();
         };
         let mut rewritten = source.to_owned();
-        rewritten.insert_str(close, "\n gl_Position.y = -gl_Position.y;\n");
+        rewritten.insert_str(close, &format!("\n{statement}\n"));
         rewritten
     }
 
@@ -769,6 +789,52 @@ impl Source<'_> {
 #[cfg(test)]
 mod orientation_tests {
     use super::{Source, Translator};
+
+    /// GL clips to `-w <= z <= w`, the host to `0 <= z <= w`. Without the remap every vertex at
+    /// negative clip z is clipped away before rasterization, so a full-screen triangle at
+    /// `gl_Position.z = -0.5` paints nothing while `+0.5` paints correctly — with depth testing not even
+    /// enabled. Every standard projection matrix puts near geometry at negative clip z.
+    #[test]
+    fn clip_depth_maps_the_gl_clip_volume_onto_the_host_volume() {
+        let source = "void main() { gl_Position = vec4(x, y, -0.5, 1.0); }\n";
+        let corrected = Source::new(source).clip_depth();
+        assert!(
+            corrected.contains("gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;"),
+            "{corrected}"
+        );
+        assert_eq!(
+            corrected
+                .matches("gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;")
+                .count(),
+            1,
+            "the remap must be applied exactly once"
+        );
+
+        // The remap is exact at both ends of the GL volume: -w -> 0 and +w -> w.
+        let map = |z: f32, w: f32| (z + w) * 0.5;
+        assert_eq!(map(-1.0, 1.0), 0.0);
+        assert_eq!(map(1.0, 1.0), 1.0);
+        // The case the rung reports: z = -0.5 lands inside the host volume instead of outside it.
+        assert!((0.0..=1.0).contains(&map(-0.5, 1.0)));
+    }
+
+    /// Depth and orientation are independent corrections and must compose without either being lost:
+    /// an offscreen target takes the depth remap ALONE, a presented target takes both.
+    #[test]
+    fn depth_and_orientation_corrections_compose() {
+        let source = "void main() { gl_Position = vec4(x, y, z, 1.0); }\n";
+        let depth_corrected = Source::new(source).clip_depth();
+        let both = Source::new(&depth_corrected).present_coordinates();
+        assert!(both.contains("gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;"));
+        assert!(both.contains("gl_Position.y = -gl_Position.y;"));
+
+        let offscreen = Source::new(source).clip_depth();
+        assert!(offscreen.contains("gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;"));
+        assert!(
+            !offscreen.contains("gl_Position.y = -gl_Position.y;"),
+            "an offscreen target must not be flipped"
+        );
+    }
 
     #[test]
     fn present_target_reflects_vertex_y_once() {

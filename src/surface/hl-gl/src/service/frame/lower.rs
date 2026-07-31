@@ -160,16 +160,21 @@ pub(super) fn lower_draw_n(
         .program_shader_ir(prog_name, sample_variant, prog.link_gen)
         .ok()?;
     if shaders_new {
-        let vs_ir = if bottom_up {
+        let vs_ir = {
             use hl_gpu::protocol::model::kernel::GlslDescriptor;
             let mut descriptor = GlslDescriptor::from_words(&vs_ir)
                 .and_then(|result| result.ok())
                 .expect("linked GL vertex shader is a GLSL descriptor");
-            descriptor.source =
-                crate::adapter::glsl::Source::new(&descriptor.source).present_coordinates();
+            // The clip-volume remap is unconditional: GL clips to -w <= z <= w and the host to
+            // 0 <= z <= w, so without it every vertex at negative clip z is discarded — offscreen
+            // exactly as much as on a presented target. The Y flip, by contrast, is an orientation
+            // fix that only a directly-presented target needs.
+            descriptor.source = crate::adapter::glsl::Source::new(&descriptor.source).clip_depth();
+            if bottom_up {
+                descriptor.source =
+                    crate::adapter::glsl::Source::new(&descriptor.source).present_coordinates();
+            }
             descriptor.to_words()
-        } else {
-            vs_ir
         };
         cmds.push(Cmd::CreateShader {
             id: vs_id,
