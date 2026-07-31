@@ -171,6 +171,38 @@ fn khr_import_reads_32_bit_eglints_on_64_bit_hosts() {
     std::fs::remove_file(path).unwrap();
 }
 
+/// ANGLE appends `EGL_IMAGE_PRESERVED_KHR` to every dma-buf import it forwards, so refusing it
+/// refuses Chromium's whole `NativePixmapEGLBinding` path. Only the two defined values are legal.
+#[test]
+fn khr_import_accepts_the_image_preserved_attribute() {
+    let (mut file, path) = image_file();
+    file.write_all(&[3, 2, 1, 0]).unwrap();
+    for (preserved, importable) in [(0, true), (1, true), (2, false)] {
+        let attributes = [
+            EGL_WIDTH as i32,
+            1,
+            EGL_HEIGHT as i32,
+            1,
+            EGL_LINUX_DRM_FOURCC_EXT as i32,
+            DRM_FORMAT_ARGB8888 as i32,
+            EGL_DMA_BUF_PLANE0_FD_EXT as i32,
+            file.as_raw_fd(),
+            EGL_DMA_BUF_PLANE0_OFFSET_EXT as i32,
+            0,
+            EGL_DMA_BUF_PLANE0_PITCH_EXT as i32,
+            4,
+            EGL_IMAGE_PRESERVED_KHR as i32,
+            preserved,
+            EGL_NONE as i32,
+        ];
+        let token = unsafe {
+            Images::default().import_khr(EGL_LINUX_DMA_BUF_EXT, attributes.as_ptr(), false)
+        };
+        assert_eq!(token.is_some(), importable, "EGL_IMAGE_PRESERVED_KHR={preserved}");
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
 #[test]
 fn external_import_requires_capability_and_publishes_only_the_header() {
     let (file, path) = image_file();

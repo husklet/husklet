@@ -18,6 +18,7 @@ pub const EGL_DMA_BUF_PLANE0_OFFSET_EXT: isize = 0x3273;
 pub const EGL_DMA_BUF_PLANE0_PITCH_EXT: isize = 0x3274;
 pub const EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT: isize = 0x3443;
 pub const EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT: isize = 0x3444;
+pub const EGL_IMAGE_PRESERVED_KHR: isize = 0x30D2;
 
 pub const DRM_FORMAT_ARGB8888: u32 = u32::from_le_bytes(*b"AR24");
 pub const DRM_FORMAT_XRGB8888: u32 = u32::from_le_bytes(*b"XR24");
@@ -260,13 +261,23 @@ impl Images {
             }
             return None;
         }
-        let Some(attributes) = (unsafe { Attributes::parse(attributes) }) else {
-            if debug {
-                eprintln!(
-                    "[hl-gl-shim] image-import reject target={target:#x} malformed_attributes"
-                );
+        let attributes = match unsafe { Attributes::parse(attributes) } {
+            Ok(attributes) => attributes,
+            Err(key) => {
+                if debug {
+                    match key {
+                        Some(key) => eprintln!(
+                            "[hl-gl-shim] image-import reject target={target:#x} \
+                             unsupported_attribute={key:#x}"
+                        ),
+                        None => eprintln!(
+                            "[hl-gl-shim] image-import reject target={target:#x} \
+                             incomplete_attributes"
+                        ),
+                    }
+                }
+                return None;
             }
-            return None;
         };
         if debug {
             eprintln!(
@@ -427,7 +438,11 @@ struct Attributes {
 }
 
 impl Attributes {
-    unsafe fn parse(mut values: *const isize) -> Option<Self> {
+    /// Parse a dma-buf import attribute list, or report the attribute that made it unusable.
+    ///
+    /// `Err(Some(key))` names an attribute this driver cannot honour; `Err(None)` means a required
+    /// one was missing or out of range. The caller turns either into `EGL_BAD_ATTRIBUTE`.
+    unsafe fn parse(mut values: *const isize) -> Result<Self, Option<isize>> {
         let mut width = None;
         let mut height = None;
         let mut fourcc = None;
@@ -442,13 +457,13 @@ impl Attributes {
         for _ in 0..64 {
             let key = unsafe { *values };
             if key == EGL_NONE {
-                return Some(Self {
-                    width: width?,
-                    height: height?,
-                    fourcc: fourcc?,
-                    fd: fd?,
+                return Ok(Self {
+                    width: width.ok_or(None)?,
+                    height: height.ok_or(None)?,
+                    fourcc: fourcc.ok_or(None)?,
+                    fd: fd.ok_or(None)?,
                     offset,
-                    stride: stride?,
+                    stride: stride.ok_or(None)?,
                     modifier: u64::from(modifier_lo) | (u64::from(modifier_hi) << 32),
                 });
             }
@@ -458,15 +473,27 @@ impl Attributes {
                 EGL_HEIGHT => height = u32::try_from(value).ok(),
                 EGL_LINUX_DRM_FOURCC_EXT => fourcc = u32::try_from(value).ok(),
                 EGL_DMA_BUF_PLANE0_FD_EXT => fd = i32::try_from(value).ok(),
-                EGL_DMA_BUF_PLANE0_OFFSET_EXT => offset = u64::try_from(value).ok()?,
+                EGL_DMA_BUF_PLANE0_OFFSET_EXT => {
+                    offset = u64::try_from(value).map_err(|_| None)?
+                }
                 EGL_DMA_BUF_PLANE0_PITCH_EXT => stride = u32::try_from(value).ok(),
                 EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT => modifier_lo = value as u32,
                 EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT => modifier_hi = value as u32,
-                _ => return None,
+                // `EGL_KHR_image_base` attribute, legal for every target and the one ANGLE always
+                // appends. It asks whether the source buffer's pixels survive creation: this import
+                // only duplicates the descriptor and never writes through it, so the contents are
+                // preserved either way and both values are honoured as asked. Any other value is a
+                // question about behaviour that is not defined, so it is refused.
+                EGL_IMAGE_PRESERVED_KHR => {
+                    if !matches!(value, 0 | 1) {
+                        return Err(Some(key));
+                    }
+                }
+                _ => return Err(Some(key)),
             }
             values = unsafe { values.add(2) };
         }
-        None
+        Err(None)
     }
 }
 

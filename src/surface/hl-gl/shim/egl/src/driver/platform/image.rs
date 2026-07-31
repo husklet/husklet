@@ -1,3 +1,17 @@
+/// The error a refused import reports.
+///
+/// `EGL_KHR_image_base` gives `EGL_BAD_PARAMETER` for a target this driver does not implement and
+/// `EGL_BAD_ATTRIBUTE` for an attribute list it cannot honour. Setting one matters: without it the
+/// caller reads whatever `eglGetError` happened to hold — Chromium logged a failed create as
+/// `EGL_SUCCESS` — and cannot tell a refusal from a driver that never ran.
+fn refusal_error(target: u32) -> i32 {
+    if target == crate::image::EGL_LINUX_DMA_BUF_EXT {
+        EGL_BAD_ATTRIBUTE
+    } else {
+        EGL_BAD_PARAMETER
+    }
+}
+
 /// Import a linear single-plane dma-buf as an independently owned `EGLImage`.
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglCreateImage(
@@ -8,10 +22,16 @@ pub extern "C" fn eglCreateImage(
     attrib_list: *const isize,
 ) -> *mut c_void {
     GlobalState::access(|state| {
-        let image = state
+        let image = match state
             .images
             .import(target, attrib_list, state.external_buffers_enabled())
-            .unwrap_or(core::ptr::null_mut());
+        {
+            Some(image) => image,
+            None => {
+                state.set_egl_error(refusal_error(target));
+                core::ptr::null_mut()
+            }
+        };
         if std::env::var_os("HL_SHIM_DEBUG").is_some() {
             eprintln!(
                 "[hl-gl-shim] eglCreateImage target={target:#x} attributes_null={} result={:#x}",
@@ -42,10 +62,16 @@ pub extern "C" fn eglCreateImageKHR(
 ) -> *mut c_void {
     let _ = (dpy, ctx, buffer);
     GlobalState::access(|state| unsafe {
-        let image = state
+        let image = match state
             .images
             .import_khr(target, attrib_list, state.external_buffers_enabled())
-            .unwrap_or(core::ptr::null_mut());
+        {
+            Some(image) => image,
+            None => {
+                state.set_egl_error(refusal_error(target));
+                core::ptr::null_mut()
+            }
+        };
         if std::env::var_os("HL_SHIM_DEBUG").is_some() {
             eprintln!(
                 "[hl-gl-shim] eglCreateImageKHR target={target:#x} attributes_null={} result={:#x}",
