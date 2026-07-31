@@ -838,6 +838,12 @@ correct side, once forty differences were the harness's own rounding ties, and o
 wrong framings before the third was right. Budget for that gap; a disagreement is a location, not a
 diagnosis.
 
+Never let a tool failure become a property of the subject. A probe for the default gateway reported "none"
+— which reads as no route at all and would have aimed the investigation at a routing fix — because it used
+an extension absent from the guest's awk, and a fallback laundered the error into a confident answer. A
+probe that could not run must say so, distinctly from a probe that ran and found nothing. Print the raw
+data beside the parsed answer and the difference is visible.
+
 Ask of every instrument: what would this print if it were measuring nothing at all? Four separate
 instruments in one session returned a plausible, stable, entirely empty measurement — a comparator that
 read zero items and called them clean, a process check whose pattern matched its own wrapper so "still

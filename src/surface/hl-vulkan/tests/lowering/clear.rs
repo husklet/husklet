@@ -27,7 +27,20 @@ fn blit_image_lowers_to_blit_texture_with_filter() {
     let (s, t) = (img_ir(&d, src), img_ir(&d, dst));
     let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
         // Upscale the 8x8 source into a 16x16 region with a linear filter.
-        record::cmd_blit_image(d, cb, src, dst, (0, 0), (8, 8), (0, 0), (16, 16), true).unwrap();
+        record::cmd_blit_image(
+            d,
+            cb,
+            src,
+            dst,
+            SubresourceLayers::base(),
+            SubresourceLayers::base(),
+            (0, 0),
+            (8, 8),
+            (0, 0),
+            (16, 16),
+            true,
+        )
+        .unwrap();
     });
     assert_eq!(
         enc,

@@ -102,7 +102,18 @@ fn msaa_resolve_pass_lowers_to_a_real_resolve() {
     record::cmd_bind_pipeline(&mut d, cb, pipe).unwrap();
     record::cmd_draw(&mut d, cb, 3, 1, 0, 0).unwrap();
     d.end_render_pass(cb).unwrap();
-    record::cmd_resolve_image(&mut d, cb, msaa, resolve, (0, 0), (0, 0), (64, 64)).unwrap();
+    record::cmd_resolve_image(
+        &mut d,
+        cb,
+        msaa,
+        resolve,
+        SubresourceLayers::base(),
+        SubresourceLayers::base(),
+        (0, 0),
+        (0, 0),
+        (64, 64),
+    )
+    .unwrap();
     d.end_command_buffer(cb).unwrap();
     let enc = submit_encoder(&mut d, &mut sink, cb);
 
@@ -184,7 +195,18 @@ fn single_sample_resolve_still_lowers_to_a_copy() {
 
     let cb = d.allocate_command_buffer();
     d.begin_command_buffer(cb, false).unwrap();
-    record::cmd_resolve_image(&mut d, cb, src, dst, (0, 0), (0, 0), (32, 32)).unwrap();
+    record::cmd_resolve_image(
+        &mut d,
+        cb,
+        src,
+        dst,
+        SubresourceLayers::base(),
+        SubresourceLayers::base(),
+        (0, 0),
+        (0, 0),
+        (32, 32),
+    )
+    .unwrap();
     d.end_command_buffer(cb).unwrap();
     let enc = submit_encoder(&mut d, &mut sink, cb);
 

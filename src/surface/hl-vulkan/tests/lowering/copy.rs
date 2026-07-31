@@ -395,7 +395,18 @@ fn copy_image_lowers_to_copy_texture_to_texture() {
     .unwrap();
     let (s, t) = (img_ir(&d, src), img_ir(&d, dst));
     let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
-        record::cmd_copy_image(d, cb, src, dst, (1, 2), (3, 4), (4, 4)).unwrap();
+        record::cmd_copy_image(
+            d,
+            cb,
+            src,
+            dst,
+            SubresourceLayers::base(),
+            SubresourceLayers::base(),
+            (1, 2),
+            (3, 4),
+            (4, 4),
+        )
+        .unwrap();
     });
     assert_eq!(
         enc,
@@ -426,7 +437,18 @@ fn copy_image_lowers_to_copy_texture_to_texture() {
     .unwrap();
     let cb = d.allocate_command_buffer();
     d.begin_command_buffer(cb, false).unwrap();
-    assert!(record::cmd_copy_image(&mut d, cb, src, other, (0, 0), (0, 0), (4, 4)).is_err());
+    assert!(record::cmd_copy_image(
+        &mut d,
+        cb,
+        src,
+        other,
+        SubresourceLayers::base(),
+        SubresourceLayers::base(),
+        (0, 0),
+        (0, 0),
+        (4, 4)
+    )
+    .is_err());
 }
 
 #[test]
@@ -457,11 +479,33 @@ fn resolve_image_lowers_to_copy_texture_to_texture() {
     .unwrap();
     let (s, t) = (img_ir(&d, src), img_ir(&d, dst));
     let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
-        record::cmd_resolve_image(d, cb, src, dst, (0, 0), (0, 0), (8, 8)).unwrap();
+        record::cmd_resolve_image(
+            d,
+            cb,
+            src,
+            dst,
+            SubresourceLayers::base(),
+            SubresourceLayers::base(),
+            (0, 0),
+            (0, 0),
+            (8, 8),
+        )
+        .unwrap();
     });
     // A resolve lowers to the byte-identical op a same-region vkCmdCopyImage would emit (resolve == copy).
     let copy = record_and_submit(&mut d, &mut sink, |d, cb| {
-        record::cmd_copy_image(d, cb, src, dst, (0, 0), (0, 0), (8, 8)).unwrap();
+        record::cmd_copy_image(
+            d,
+            cb,
+            src,
+            dst,
+            SubresourceLayers::base(),
+            SubresourceLayers::base(),
+            (0, 0),
+            (0, 0),
+            (8, 8),
+        )
+        .unwrap();
     });
     assert_eq!(
         enc,
@@ -496,5 +540,304 @@ fn resolve_image_lowers_to_copy_texture_to_texture() {
     .unwrap();
     let cb = d.allocate_command_buffer();
     d.begin_command_buffer(cb, false).unwrap();
-    assert!(record::cmd_resolve_image(&mut d, cb, src, bad, (0, 0), (0, 0), (8, 8)).is_err());
+    assert!(record::cmd_resolve_image(
+        &mut d,
+        cb,
+        src,
+        bad,
+        SubresourceLayers::base(),
+        SubresourceLayers::base(),
+        (0, 0),
+        (0, 0),
+        (8, 8)
+    )
+    .is_err());
+}
+
+/// A `w x h` image with `layers` array layers and `mips` mip levels, for the subresource tests below.
+fn layered(
+    d: &mut Device,
+    sink: &mut RecordingSink,
+    w: u32,
+    h: u32,
+    layers: u32,
+    mips: u32,
+    usage: u32,
+) -> u64 {
+    create::create_image_layers(
+        d,
+        sink,
+        w,
+        h,
+        layers,
+        mips,
+        false,
+        vk_format::R8G8B8A8_UNORM,
+        usage,
+        1,
+    )
+    .unwrap()
+}
+
+/// A copy naming mip level 2 must address level 2 on BOTH sides. The subresource of each `VkImageCopy`
+/// region used to be discarded and every copy recorded against mip 0 / layer 0, so a copy of a higher
+/// level silently read and wrote the base level's texels instead.
+#[test]
+fn copy_image_addresses_the_mip_level_the_region_names() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let src = layered(
+        &mut d,
+        &mut sink,
+        32,
+        32,
+        1,
+        4,
+        vk_image_usage::TRANSFER_SRC,
+    );
+    let dst = layered(
+        &mut d,
+        &mut sink,
+        32,
+        32,
+        1,
+        4,
+        vk_image_usage::TRANSFER_DST,
+    );
+    let (s, t) = (img_ir(&d, src), img_ir(&d, dst));
+    let level = SubresourceLayers {
+        mip_level: 2,
+        base_array_layer: 0,
+        layer_count: 1,
+    };
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_copy_image(d, cb, src, dst, level, level, (0, 0), (0, 0), (8, 8)).unwrap();
+    });
+    assert_eq!(
+        enc,
+        vec![Enc::CopyTextureToTexture {
+            src: s,
+            src_sub: TextureSubresource {
+                mip: 2,
+                layer: 0,
+                aspect: TextureAspect::All
+            },
+            src_origin: Origin3d { x: 0, y: 0, z: 0 },
+            dst: t,
+            dst_sub: TextureSubresource {
+                mip: 2,
+                layer: 0,
+                aspect: TextureAspect::All
+            },
+            dst_origin: Origin3d { x: 0, y: 0, z: 0 },
+            extent: Extent3d {
+                width: 8,
+                height: 8,
+                depth: 1
+            },
+        }]
+    );
+}
+
+/// A region past the end of level 2 must be REFUSED. The bounds check used to measure every region
+/// against the BASE level, where an 8x8 copy of a 32x32 image trivially fits, so a copy that overran the
+/// level it actually named passed validation.
+#[test]
+fn copy_image_bounds_check_uses_the_named_levels_extent() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let src = layered(
+        &mut d,
+        &mut sink,
+        32,
+        32,
+        1,
+        4,
+        vk_image_usage::TRANSFER_SRC,
+    );
+    let dst = layered(
+        &mut d,
+        &mut sink,
+        32,
+        32,
+        1,
+        4,
+        vk_image_usage::TRANSFER_DST,
+    );
+    // Level 3 of a 32x32 image is 4x4. A 16x16 region fits inside level 0 and must not fit inside level 3.
+    let level = SubresourceLayers {
+        mip_level: 3,
+        base_array_layer: 0,
+        layer_count: 1,
+    };
+    let cb = begin(&mut d, &mut sink);
+    assert!(
+        record::cmd_copy_image(&mut d, cb, src, dst, level, level, (0, 0), (0, 0), (16, 16))
+            .is_err(),
+        "a 16x16 region does not fit in the 4x4 level 3 it names"
+    );
+    // The same region against level 0 is legal, so the refusal is about the level and not the extent.
+    assert!(record::cmd_copy_image(
+        &mut d,
+        cb,
+        src,
+        dst,
+        SubresourceLayers::base(),
+        SubresourceLayers::base(),
+        (0, 0),
+        (0, 0),
+        (16, 16)
+    )
+    .is_ok());
+}
+
+/// A multi-layer region becomes one op per layer pair, because the IR subresource addresses one layer.
+#[test]
+fn copy_image_expands_a_layer_run_into_one_op_per_layer() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let src = layered(&mut d, &mut sink, 8, 8, 6, 1, vk_image_usage::TRANSFER_SRC);
+    let dst = layered(&mut d, &mut sink, 8, 8, 6, 1, vk_image_usage::TRANSFER_DST);
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_copy_image(
+            d,
+            cb,
+            src,
+            dst,
+            SubresourceLayers {
+                mip_level: 0,
+                base_array_layer: 1,
+                layer_count: 3,
+            },
+            SubresourceLayers {
+                mip_level: 0,
+                base_array_layer: 2,
+                layer_count: 3,
+            },
+            (0, 0),
+            (0, 0),
+            (8, 8),
+        )
+        .unwrap();
+    });
+    let pairs: Vec<(u32, u32)> = enc
+        .iter()
+        .map(|e| match e {
+            Enc::CopyTextureToTexture {
+                src_sub, dst_sub, ..
+            } => (src_sub.layer, dst_sub.layer),
+            other => panic!("unexpected op {other:?}"),
+        })
+        .collect();
+    assert_eq!(pairs, vec![(1, 2), (2, 3), (3, 4)]);
+}
+
+/// `VK_REMAINING_ARRAY_LAYERS` resolves against the image, and a layer run past the end is refused
+/// rather than clamped: a copy that silently returned fewer layers than asked would hand back the wrong
+/// texels, which is the failure mode the whole subresource change exists to remove.
+#[test]
+fn copy_image_resolves_remaining_layers_and_refuses_an_overrun() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let src = layered(&mut d, &mut sink, 8, 8, 4, 1, vk_image_usage::TRANSFER_SRC);
+    let dst = layered(&mut d, &mut sink, 8, 8, 4, 1, vk_image_usage::TRANSFER_DST);
+    let remaining = SubresourceLayers {
+        mip_level: 0,
+        base_array_layer: 1,
+        layer_count: u32::MAX,
+    };
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_copy_image(
+            d,
+            cb,
+            src,
+            dst,
+            remaining,
+            remaining,
+            (0, 0),
+            (0, 0),
+            (8, 8),
+        )
+        .unwrap();
+    });
+    assert_eq!(enc.len(), 3, "layers 1..4 remain");
+
+    let overrun = SubresourceLayers {
+        mip_level: 0,
+        base_array_layer: 2,
+        layer_count: 3,
+    };
+    let cb = begin(&mut d, &mut sink);
+    assert!(
+        record::cmd_copy_image(
+            &mut d,
+            cb,
+            src,
+            dst,
+            overrun,
+            overrun,
+            (0, 0),
+            (0, 0),
+            (8, 8)
+        )
+        .is_err(),
+        "layers 2..5 do not exist on a 4-layer image"
+    );
+}
+
+/// A same-image copy between DIFFERENT layers is legal and must not be refused as an overlapping
+/// self-copy: the same rectangle of two array layers is two disjoint regions of memory.
+#[test]
+fn copy_image_allows_a_same_image_copy_between_different_layers() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let img = create::create_image_layers(
+        &mut d,
+        &mut sink,
+        8,
+        8,
+        4,
+        1,
+        false,
+        vk_format::R8G8B8A8_UNORM,
+        vk_image_usage::TRANSFER_SRC | vk_image_usage::TRANSFER_DST,
+        1,
+    )
+    .unwrap();
+    let cb = begin(&mut d, &mut sink);
+    let layer = |n| SubresourceLayers {
+        mip_level: 0,
+        base_array_layer: n,
+        layer_count: 1,
+    };
+    assert!(
+        record::cmd_copy_image(
+            &mut d,
+            cb,
+            img,
+            img,
+            layer(0),
+            layer(1),
+            (0, 0),
+            (0, 0),
+            (8, 8)
+        )
+        .is_ok(),
+        "layer 0 to layer 1 is disjoint"
+    );
+    assert!(
+        record::cmd_copy_image(
+            &mut d,
+            cb,
+            img,
+            img,
+            layer(0),
+            layer(0),
+            (0, 0),
+            (0, 0),
+            (8, 8)
+        )
+        .is_err(),
+        "the same rectangle of the same layer still overlaps"
+    );
 }

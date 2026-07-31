@@ -58,16 +58,47 @@ fn copy_image_format_mismatch_and_self_overlap_rejected() {
     d.begin_command_buffer(cb, false).unwrap();
     // Format mismatch.
     assert!(matches!(
-        record::cmd_copy_image(&mut d, cb, a, b, (0, 0), (0, 0), (4, 4)),
+        record::cmd_copy_image(
+            &mut d,
+            cb,
+            a,
+            b,
+            SubresourceLayers::base(),
+            SubresourceLayers::base(),
+            (0, 0),
+            (0, 0),
+            (4, 4)
+        ),
         Err(GpuError::Invalid(_))
     ));
     // Overlapping same-image self-copy.
     assert!(matches!(
-        record::cmd_copy_image(&mut d, cb, a, a, (0, 0), (2, 2), (4, 4)),
+        record::cmd_copy_image(
+            &mut d,
+            cb,
+            a,
+            a,
+            SubresourceLayers::base(),
+            SubresourceLayers::base(),
+            (0, 0),
+            (2, 2),
+            (4, 4)
+        ),
         Err(GpuError::Invalid(_))
     ));
     // A non-overlapping same-image copy is allowed.
-    assert!(record::cmd_copy_image(&mut d, cb, a, a, (0, 0), (4, 0), (4, 4)).is_ok());
+    assert!(record::cmd_copy_image(
+        &mut d,
+        cb,
+        a,
+        a,
+        SubresourceLayers::base(),
+        SubresourceLayers::base(),
+        (0, 0),
+        (4, 0),
+        (4, 4)
+    )
+    .is_ok());
 }
 
 #[test]
@@ -97,11 +128,35 @@ fn blit_same_image_rejected_and_zero_extent_rejected() {
     let cb = d.allocate_command_buffer();
     d.begin_command_buffer(cb, false).unwrap();
     assert!(matches!(
-        record::cmd_blit_image(&mut d, cb, a, a, (0, 0), (4, 4), (0, 0), (4, 4), true),
+        record::cmd_blit_image(
+            &mut d,
+            cb,
+            a,
+            a,
+            SubresourceLayers::base(),
+            SubresourceLayers::base(),
+            (0, 0),
+            (4, 4),
+            (0, 0),
+            (4, 4),
+            true
+        ),
         Err(GpuError::Invalid(_))
     ));
     assert!(matches!(
-        record::cmd_blit_image(&mut d, cb, a, b, (0, 0), (0, 4), (0, 0), (4, 4), false),
+        record::cmd_blit_image(
+            &mut d,
+            cb,
+            a,
+            b,
+            SubresourceLayers::base(),
+            SubresourceLayers::base(),
+            (0, 0),
+            (0, 4),
+            (0, 0),
+            (4, 4),
+            false
+        ),
         Err(GpuError::OutOfBounds)
     ));
 }

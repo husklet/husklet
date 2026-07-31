@@ -12,6 +12,7 @@ use hl_vulkan::model::descriptor::{
 use hl_vulkan::model::memory::{vk_buffer_usage, vk_format, vk_image_usage, SubresourceRange};
 use hl_vulkan::result;
 use hl_vulkan::service::{create, present, record, submit, sync};
+use hl_vulkan::SubresourceLayers;
 use hl_vulkan::{Device, Instance};
 
 use hl_gpu::protocol::model::command::Enc;
@@ -53,6 +54,13 @@ fn buf_ir(d: &Device, h: u64) -> u32 {
 }
 fn img_ir(d: &Device, h: u64) -> u32 {
     d.images.get(&h).unwrap().ir_id
+}
+
+/// Open a command buffer for recording, for tests that assert on a REFUSAL rather than a stream.
+fn begin(d: &mut Device, _sink: &mut RecordingSink) -> u64 {
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    cb
 }
 
 /// Record `record_fn` into a fresh command buffer and return the single submitted encoder stream.

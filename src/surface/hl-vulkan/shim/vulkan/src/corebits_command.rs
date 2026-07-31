@@ -3,12 +3,24 @@
 use core::ffi::c_void;
 
 use hl_vulkan::service::record;
+use hl_vulkan::SubresourceLayers;
 use hl_vulkan::VkCommandBuffer as VkCbHandle;
 
 use super::ShimState;
 use crate::types::{
-    Dispatchable, VkClearDepthStencilValue, VkCopyImageInfo2, VkImageCopy, VkImageSubresourceRange,
+    Dispatchable, VkClearDepthStencilValue, VkCopyImageInfo2, VkImageCopy,
+    VkImageSubresourceLayers, VkImageSubresourceRange,
 };
+
+/// Translate a `VkImageSubresourceLayers` into the driver's own value. `layerCount` may be
+/// `VK_REMAINING_ARRAY_LAYERS`, which the recorder resolves against the image it names.
+fn layers_of(sub: &VkImageSubresourceLayers) -> SubresourceLayers {
+    SubresourceLayers {
+        mip_level: sub.mip_level,
+        base_array_layer: sub.base_array_layer,
+        layer_count: sub.layer_count,
+    }
+}
 
 const VK_IMAGE_ASPECT_STENCIL_BIT: u32 = 0x0000_0004;
 
@@ -92,6 +104,8 @@ pub extern "C" fn vkCmdResolveImage(
                 command_buffer,
                 src_image,
                 dst_image,
+                layers_of(&region.src_subresource),
+                layers_of(&region.dst_subresource),
                 (region.src_offset.x as u32, region.src_offset.y as u32),
                 (region.dst_offset.x as u32, region.dst_offset.y as u32),
                 (region.extent.width, region.extent.height.max(1)),
@@ -128,6 +142,8 @@ pub extern "C" fn vkCmdResolveImage2(
                 command_buffer,
                 info.src_image,
                 info.dst_image,
+                layers_of(&region.src_subresource),
+                layers_of(&region.dst_subresource),
                 (region.src_offset.x as u32, region.src_offset.y as u32),
                 (region.dst_offset.x as u32, region.dst_offset.y as u32),
                 (region.extent.width, region.extent.height.max(1)),

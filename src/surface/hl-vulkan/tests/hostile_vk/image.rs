@@ -31,19 +31,60 @@ fn copy_image_origin_overflow_is_out_of_bounds_then_valid() {
     let cb = recording_cb(&mut d);
     // An origin near `u32::MAX` previously overflow-panicked the `origin + extent > dim` bounds check.
     assert!(matches!(
-        record::cmd_copy_image(&mut d, cb, a, b, (u32::MAX, 0), (0, 0), (4, 4)),
+        record::cmd_copy_image(
+            &mut d,
+            cb,
+            a,
+            b,
+            SubresourceLayers::base(),
+            SubresourceLayers::base(),
+            (u32::MAX, 0),
+            (0, 0),
+            (4, 4)
+        ),
         Err(GpuError::OutOfBounds)
     ));
     assert!(matches!(
-        record::cmd_copy_image(&mut d, cb, a, b, (0, 0), (u32::MAX, 0), (4, 4)),
+        record::cmd_copy_image(
+            &mut d,
+            cb,
+            a,
+            b,
+            SubresourceLayers::base(),
+            SubresourceLayers::base(),
+            (0, 0),
+            (u32::MAX, 0),
+            (4, 4)
+        ),
         Err(GpuError::OutOfBounds)
     ));
     assert!(matches!(
-        record::cmd_copy_image(&mut d, cb, a, b, (0, u32::MAX), (0, 0), (4, 4)),
+        record::cmd_copy_image(
+            &mut d,
+            cb,
+            a,
+            b,
+            SubresourceLayers::base(),
+            SubresourceLayers::base(),
+            (0, u32::MAX),
+            (0, 0),
+            (4, 4)
+        ),
         Err(GpuError::OutOfBounds)
     ));
     // A valid in-bounds copy still records.
-    assert!(record::cmd_copy_image(&mut d, cb, a, b, (0, 0), (0, 0), (4, 4)).is_ok());
+    assert!(record::cmd_copy_image(
+        &mut d,
+        cb,
+        a,
+        b,
+        SubresourceLayers::base(),
+        SubresourceLayers::base(),
+        (0, 0),
+        (0, 0),
+        (4, 4)
+    )
+    .is_ok());
 }
 
 #[test]
@@ -78,6 +119,8 @@ fn blit_image_extent_overflow_is_out_of_bounds_then_valid() {
             cb,
             a,
             b,
+            SubresourceLayers::base(),
+            SubresourceLayers::base(),
             (u32::MAX, 0),
             (4, 4),
             (0, 0),
@@ -92,6 +135,8 @@ fn blit_image_extent_overflow_is_out_of_bounds_then_valid() {
             cb,
             a,
             b,
+            SubresourceLayers::base(),
+            SubresourceLayers::base(),
             (0, 0),
             (4, 4),
             (0, u32::MAX),
@@ -106,6 +151,8 @@ fn blit_image_extent_overflow_is_out_of_bounds_then_valid() {
             cb,
             a,
             b,
+            SubresourceLayers::base(),
+            SubresourceLayers::base(),
             (4, 4),
             (u32::MAX, 1),
             (0, 0),
@@ -115,7 +162,20 @@ fn blit_image_extent_overflow_is_out_of_bounds_then_valid() {
         Err(GpuError::OutOfBounds)
     ));
     // A valid blit still records.
-    assert!(record::cmd_blit_image(&mut d, cb, a, b, (0, 0), (4, 4), (0, 0), (8, 8), true).is_ok());
+    assert!(record::cmd_blit_image(
+        &mut d,
+        cb,
+        a,
+        b,
+        SubresourceLayers::base(),
+        SubresourceLayers::base(),
+        (0, 0),
+        (4, 4),
+        (0, 0),
+        (8, 8),
+        true
+    )
+    .is_ok());
 }
 
 // =====================================================================================================

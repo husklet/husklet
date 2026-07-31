@@ -72,6 +72,49 @@ pub struct ImageRec {
     pub is_render_target: bool,
 }
 
+impl ImageRec {
+    /// This image's extent AT `mip`, which is what a copy region naming that level is measured against.
+    /// Validating a region against the BASE level instead let a copy naming a higher mip pass a bounds
+    /// check it should have failed, because every smaller level fits inside level zero.
+    pub fn extent_at(&self, mip: u32) -> (u32, u32) {
+        ((self.width >> mip).max(1), (self.height >> mip).max(1))
+    }
+}
+
+/// A `VkImageSubresourceLayers` — the single mip level and array-layer run a copy, blit or resolve
+/// region addresses. Distinct from [`SubresourceRange`]: a range spans levels, a *layers* value names
+/// exactly one, because a copy region's extent belongs to that one level.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SubresourceLayers {
+    pub mip_level: u32,
+    pub base_array_layer: u32,
+    pub layer_count: u32,
+}
+
+impl SubresourceLayers {
+    /// The base subresource: mip 0, layer 0, one layer.
+    pub fn base() -> Self {
+        Self {
+            mip_level: 0,
+            base_array_layer: 0,
+            layer_count: 1,
+        }
+    }
+
+    /// Resolve `VK_REMAINING_ARRAY_LAYERS` against `image`, leaving everything else untouched so an
+    /// out-of-range level or layer stays out of range and is refused rather than silently clamped — a
+    /// copy is not a clear, and quietly shrinking one returns the wrong texels instead of fewer.
+    pub fn resolve(image: &ImageRec, layers: Self) -> Self {
+        if layers.layer_count != SubresourceRange::REMAINING {
+            return layers;
+        }
+        Self {
+            layer_count: image.layers.saturating_sub(layers.base_array_layer),
+            ..layers
+        }
+    }
+}
+
 /// A `VkImageSubresourceRange`'s mip and array-layer extent, with Vulkan's `VK_REMAINING_*` sentinels
 /// already resolved against the image they name.
 ///

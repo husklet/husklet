@@ -14,6 +14,7 @@ use hl_vulkan::model::descriptor::{
 use hl_vulkan::model::memory::{vk_buffer_usage, vk_format, vk_image_usage};
 use hl_vulkan::result::{self, Status};
 use hl_vulkan::service::{create, present, record, submit, sync};
+use hl_vulkan::SubresourceLayers;
 use hl_vulkan::{Device, Instance};
 
 use hl_gpu::protocol::model::command::Enc;

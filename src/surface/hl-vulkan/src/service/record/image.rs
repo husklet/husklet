@@ -1,31 +1,79 @@
 use super::*;
 
-/// `vkCmdCopyImage` (one region, base subresource) — record an exact-size `CopyTextureToTexture`. Formats
-/// must match; both usages present; both regions in-bounds; overlapping same-image self-copy rejected.
+/// Refuse a region whose subresource does not exist on `image`. A copy is not a clear: clamping a
+/// too-large level or layer run would return the wrong texels rather than fewer of them, so this is a
+/// truthful error instead of a silent narrowing.
+fn subresource_in_bounds(
+    image: &ImageRec,
+    sub: SubresourceLayers,
+    what: &'static str,
+) -> Result<()> {
+    if sub.mip_level >= image.mip_levels {
+        return Err(GpuError::Invalid(match what {
+            "vkCmdCopyImage: source" => "vkCmdCopyImage: source mip level does not exist",
+            "vkCmdCopyImage: destination" => "vkCmdCopyImage: destination mip level does not exist",
+            "vkCmdBlitImage: source" => "vkCmdBlitImage: source mip level does not exist",
+            "vkCmdBlitImage: destination" => "vkCmdBlitImage: destination mip level does not exist",
+            "vkCmdResolveImage: source" => "vkCmdResolveImage: source mip level does not exist",
+            _ => "vkCmdResolveImage: destination mip level does not exist",
+        }));
+    }
+    if sub.layer_count == 0
+        || sub
+            .base_array_layer
+            .checked_add(sub.layer_count)
+            .is_none_or(|end| end > image.layers)
+    {
+        return Err(GpuError::OutOfBounds);
+    }
+    Ok(())
+}
+
+/// `vkCmdCopyImage` (one region) — record an exact-size `CopyTextureToTexture` per array layer the
+/// region names. Formats must match; both usages present; both regions in-bounds AT THE MIP LEVEL THEY
+/// NAME; overlapping same-image self-copy rejected.
+///
+/// The `VkImageSubresourceLayers` of each region used to be discarded and every copy recorded against
+/// mip 0 / layer 0, so a copy of level 3 read and wrote level 0's texels. The bounds check compounded it
+/// by measuring the region against the base level, where every smaller level trivially fits, so the
+/// wrong-level copy passed validation instead of being refused.
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_copy_image(
     dev: &mut Device,
     cb: VkCommandBuffer,
     src: VkImage,
     dst: VkImage,
+    src_sub: SubresourceLayers,
+    dst_sub: SubresourceLayers,
     src_origin: (u32, u32),
     dst_origin: (u32, u32),
     extent: (u32, u32),
 ) -> Result<()> {
-    let (src_ir, src_fmt, src_usage, siw, sih) = {
+    let (src_ir, src_fmt, src_usage, src_sub, siw, sih) = {
         let i = dev
             .images
             .get(&src)
             .ok_or(GpuError::Invalid("vkCmdCopyImage: unknown src VkImage"))?;
-        (i.ir_id, i.format, i.usage, i.width, i.height)
+        let sub = SubresourceLayers::resolve(i, src_sub);
+        subresource_in_bounds(i, sub, "vkCmdCopyImage: source")?;
+        let (w, h) = i.extent_at(sub.mip_level);
+        (i.ir_id, i.format, i.usage, sub, w, h)
     };
-    let (dst_ir, dst_fmt, dst_usage, diw, dih) = {
+    let (dst_ir, dst_fmt, dst_usage, dst_sub, diw, dih) = {
         let i = dev
             .images
             .get(&dst)
             .ok_or(GpuError::Invalid("vkCmdCopyImage: unknown dst VkImage"))?;
-        (i.ir_id, i.format, i.usage, i.width, i.height)
+        let sub = SubresourceLayers::resolve(i, dst_sub);
+        subresource_in_bounds(i, sub, "vkCmdCopyImage: destination")?;
+        let (w, h) = i.extent_at(sub.mip_level);
+        (i.ir_id, i.format, i.usage, sub, w, h)
     };
+    if src_sub.layer_count != dst_sub.layer_count {
+        return Err(GpuError::Invalid(
+            "vkCmdCopyImage: source and destination layer counts differ",
+        ));
+    }
     if src_fmt != dst_fmt {
         return Err(GpuError::Invalid(
             "vkCmdCopyImage: source and destination formats differ",
@@ -50,8 +98,13 @@ pub fn cmd_copy_image(
     {
         return Err(GpuError::OutOfBounds);
     }
-    // A same-image overlapping self-copy is undefined; reject it (the reference does).
+    // A same-image overlapping self-copy is undefined; reject it (the reference does). Overlap is only
+    // possible within ONE subresource: the same rectangle of two different mip levels or array layers is
+    // two disjoint regions of memory, and refusing that would reject a legal layer-to-layer copy.
     if src == dst
+        && src_sub.mip_level == dst_sub.mip_level
+        && src_sub.base_array_layer < dst_sub.base_array_layer + dst_sub.layer_count
+        && dst_sub.base_array_layer < src_sub.base_array_layer + src_sub.layer_count
         && src_origin.0 < dst_origin.0 + w
         && dst_origin.0 < src_origin.0 + w
         && src_origin.1 < dst_origin.1 + h
@@ -60,31 +113,42 @@ pub fn cmd_copy_image(
         return Err(GpuError::Invalid("vkCmdCopyImage: overlapping self-copy"));
     }
     let rec = dev.require_recording(cb)?;
-    rec.enc.push(Enc::CopyTextureToTexture {
-        src: src_ir,
-        src_sub: TextureSubresource::base(),
-        src_origin: Origin3d {
-            x: src_origin.0,
-            y: src_origin.1,
-            z: 0,
-        },
-        dst: dst_ir,
-        dst_sub: TextureSubresource::base(),
-        dst_origin: Origin3d {
-            x: dst_origin.0,
-            y: dst_origin.1,
-            z: 0,
-        },
-        extent: Extent3d {
-            width: w,
-            height: h,
-            depth: 1,
-        },
-    });
+    // The IR subresource addresses ONE layer, so a multi-layer region becomes one op per layer pair.
+    for layer in 0..src_sub.layer_count {
+        rec.enc.push(Enc::CopyTextureToTexture {
+            src: src_ir,
+            src_sub: TextureSubresource {
+                mip: src_sub.mip_level,
+                layer: src_sub.base_array_layer + layer,
+                aspect: TextureAspect::All,
+            },
+            src_origin: Origin3d {
+                x: src_origin.0,
+                y: src_origin.1,
+                z: 0,
+            },
+            dst: dst_ir,
+            dst_sub: TextureSubresource {
+                mip: dst_sub.mip_level,
+                layer: dst_sub.base_array_layer + layer,
+                aspect: TextureAspect::All,
+            },
+            dst_origin: Origin3d {
+                x: dst_origin.0,
+                y: dst_origin.1,
+                z: 0,
+            },
+            extent: Extent3d {
+                width: w,
+                height: h,
+                depth: 1,
+            },
+        });
+    }
     Ok(())
 }
 
-/// `vkCmdBlitImage` (one region, base subresource) — record a scaled/filtered `BlitTexture`. Distinct
+/// `vkCmdBlitImage` (one region) — record a scaled/filtered `BlitTexture` per array layer. Distinct
 /// images, matching formats, both usages present, positive src/dst extents in-bounds. `linear` selects
 /// the resampling filter (`VK_FILTER_LINEAR` → [`Filter::Linear`], else [`Filter::Nearest`]).
 #[allow(clippy::too_many_arguments)]
@@ -93,6 +157,8 @@ pub fn cmd_blit_image(
     cb: VkCommandBuffer,
     src: VkImage,
     dst: VkImage,
+    src_sub: SubresourceLayers,
+    dst_sub: SubresourceLayers,
     src_origin: (u32, u32),
     src_extent: (u32, u32),
     dst_origin: (u32, u32),
@@ -104,20 +170,31 @@ pub fn cmd_blit_image(
             "vkCmdBlitImage: src and dst image must differ",
         ));
     }
-    let (src_ir, src_fmt, src_usage, siw, sih) = {
+    let (src_ir, src_fmt, src_usage, src_sub, siw, sih) = {
         let i = dev
             .images
             .get(&src)
             .ok_or(GpuError::Invalid("vkCmdBlitImage: unknown src VkImage"))?;
-        (i.ir_id, i.format, i.usage, i.width, i.height)
+        let sub = SubresourceLayers::resolve(i, src_sub);
+        subresource_in_bounds(i, sub, "vkCmdBlitImage: source")?;
+        let (w, h) = i.extent_at(sub.mip_level);
+        (i.ir_id, i.format, i.usage, sub, w, h)
     };
-    let (dst_ir, dst_fmt, dst_usage, diw, dih) = {
+    let (dst_ir, dst_fmt, dst_usage, dst_sub, diw, dih) = {
         let i = dev
             .images
             .get(&dst)
             .ok_or(GpuError::Invalid("vkCmdBlitImage: unknown dst VkImage"))?;
-        (i.ir_id, i.format, i.usage, i.width, i.height)
+        let sub = SubresourceLayers::resolve(i, dst_sub);
+        subresource_in_bounds(i, sub, "vkCmdBlitImage: destination")?;
+        let (w, h) = i.extent_at(sub.mip_level);
+        (i.ir_id, i.format, i.usage, sub, w, h)
     };
+    if src_sub.layer_count != dst_sub.layer_count {
+        return Err(GpuError::Invalid(
+            "vkCmdBlitImage: source and destination layer counts differ",
+        ));
+    }
     if src_fmt != dst_fmt {
         return Err(GpuError::Invalid(
             "vkCmdBlitImage: source and destination formats differ",
@@ -142,41 +219,51 @@ pub fn cmd_blit_image(
         return Err(GpuError::OutOfBounds);
     }
     let rec = dev.require_recording(cb)?;
-    rec.enc.push(Enc::BlitTexture {
-        src: src_ir,
-        src_sub: TextureSubresource::base(),
-        src_origin: Origin3d {
-            x: src_origin.0,
-            y: src_origin.1,
-            z: 0,
-        },
-        src_extent: Extent3d {
-            width: src_extent.0,
-            height: src_extent.1,
-            depth: 1,
-        },
-        dst: dst_ir,
-        dst_sub: TextureSubresource::base(),
-        dst_origin: Origin3d {
-            x: dst_origin.0,
-            y: dst_origin.1,
-            z: 0,
-        },
-        dst_extent: Extent3d {
-            width: dst_extent.0,
-            height: dst_extent.1,
-            depth: 1,
-        },
-        filter: if linear {
-            Filter::Linear
-        } else {
-            Filter::Nearest
-        },
-    });
+    for layer in 0..src_sub.layer_count {
+        rec.enc.push(Enc::BlitTexture {
+            src: src_ir,
+            src_sub: TextureSubresource {
+                mip: src_sub.mip_level,
+                layer: src_sub.base_array_layer + layer,
+                aspect: TextureAspect::All,
+            },
+            src_origin: Origin3d {
+                x: src_origin.0,
+                y: src_origin.1,
+                z: 0,
+            },
+            src_extent: Extent3d {
+                width: src_extent.0,
+                height: src_extent.1,
+                depth: 1,
+            },
+            dst: dst_ir,
+            dst_sub: TextureSubresource {
+                mip: dst_sub.mip_level,
+                layer: dst_sub.base_array_layer + layer,
+                aspect: TextureAspect::All,
+            },
+            dst_origin: Origin3d {
+                x: dst_origin.0,
+                y: dst_origin.1,
+                z: 0,
+            },
+            dst_extent: Extent3d {
+                width: dst_extent.0,
+                height: dst_extent.1,
+                depth: 1,
+            },
+            filter: if linear {
+                Filter::Linear
+            } else {
+                Filter::Nearest
+            },
+        });
+    }
     Ok(())
 }
 
-/// `vkCmdResolveImage` (one region, base subresource) — a multisample-resolve.
+/// `vkCmdResolveImage` (one region) — a multisample-resolve, one op per array layer.
 ///
 /// When the SOURCE `VkImage` is multisampled (`sample_count > 1`, threaded from `VkImageCreateInfo::samples`
 /// by [`create::create_image`]), this is a TRUE resolve: it averages the source's samples down into the
@@ -197,6 +284,8 @@ pub fn cmd_resolve_image(
     cb: VkCommandBuffer,
     src: VkImage,
     dst: VkImage,
+    src_sub: SubresourceLayers,
+    dst_sub: SubresourceLayers,
     src_origin: (u32, u32),
     dst_origin: (u32, u32),
     extent: (u32, u32),
@@ -208,24 +297,37 @@ pub fn cmd_resolve_image(
         .sample_count;
     if src_samples <= 1 {
         // Single-sample source: resolve degenerates to a content-moving copy.
-        return cmd_copy_image(dev, cb, src, dst, src_origin, dst_origin, extent);
+        return cmd_copy_image(
+            dev, cb, src, dst, src_sub, dst_sub, src_origin, dst_origin, extent,
+        );
     }
     // Multisample source: emit the real resolve. Validate identically to a copy (formats/usages/bounds) so a
     // bad resolve is a truthful error, then push ResolveTexture instead of CopyTextureToTexture.
-    let (src_ir, src_fmt, src_usage, siw, sih) = {
+    let (src_ir, src_fmt, src_usage, src_sub, siw, sih) = {
         let i = dev
             .images
             .get(&src)
             .ok_or(GpuError::Invalid("vkCmdResolveImage: unknown src VkImage"))?;
-        (i.ir_id, i.format, i.usage, i.width, i.height)
+        let sub = SubresourceLayers::resolve(i, src_sub);
+        subresource_in_bounds(i, sub, "vkCmdResolveImage: source")?;
+        let (w, h) = i.extent_at(sub.mip_level);
+        (i.ir_id, i.format, i.usage, sub, w, h)
     };
-    let (dst_ir, dst_fmt, dst_usage, diw, dih) = {
+    let (dst_ir, dst_fmt, dst_usage, dst_sub, diw, dih) = {
         let i = dev
             .images
             .get(&dst)
             .ok_or(GpuError::Invalid("vkCmdResolveImage: unknown dst VkImage"))?;
-        (i.ir_id, i.format, i.usage, i.width, i.height)
+        let sub = SubresourceLayers::resolve(i, dst_sub);
+        subresource_in_bounds(i, sub, "vkCmdResolveImage: destination")?;
+        let (w, h) = i.extent_at(sub.mip_level);
+        (i.ir_id, i.format, i.usage, sub, w, h)
     };
+    if src_sub.layer_count != dst_sub.layer_count {
+        return Err(GpuError::Invalid(
+            "vkCmdResolveImage: source and destination layer counts differ",
+        ));
+    }
     if src_fmt != dst_fmt {
         return Err(GpuError::Invalid(
             "vkCmdResolveImage: source and destination formats differ",
@@ -249,27 +351,37 @@ pub fn cmd_resolve_image(
         return Err(GpuError::OutOfBounds);
     }
     let rec = dev.require_recording(cb)?;
-    rec.enc.push(Enc::ResolveTexture {
-        src: src_ir,
-        src_sub: TextureSubresource::base(),
-        src_origin: Origin3d {
-            x: src_origin.0,
-            y: src_origin.1,
-            z: 0,
-        },
-        dst: dst_ir,
-        dst_sub: TextureSubresource::base(),
-        dst_origin: Origin3d {
-            x: dst_origin.0,
-            y: dst_origin.1,
-            z: 0,
-        },
-        extent: Extent3d {
-            width: w,
-            height: h,
-            depth: 1,
-        },
-    });
+    for layer in 0..src_sub.layer_count {
+        rec.enc.push(Enc::ResolveTexture {
+            src: src_ir,
+            src_sub: TextureSubresource {
+                mip: src_sub.mip_level,
+                layer: src_sub.base_array_layer + layer,
+                aspect: TextureAspect::All,
+            },
+            src_origin: Origin3d {
+                x: src_origin.0,
+                y: src_origin.1,
+                z: 0,
+            },
+            dst: dst_ir,
+            dst_sub: TextureSubresource {
+                mip: dst_sub.mip_level,
+                layer: dst_sub.base_array_layer + layer,
+                aspect: TextureAspect::All,
+            },
+            dst_origin: Origin3d {
+                x: dst_origin.0,
+                y: dst_origin.1,
+                z: 0,
+            },
+            extent: Extent3d {
+                width: w,
+                height: h,
+                depth: 1,
+            },
+        });
+    }
     Ok(())
 }
 

@@ -1,5 +1,5 @@
 pub(crate) use hl_vulkan::model::descriptor::{vk_descriptor_type, LayoutBinding};
-pub(crate) use hl_vulkan::model::memory::{vk_format, vk_image_usage};
+pub(crate) use hl_vulkan::model::memory::{vk_format, vk_image_usage, SubresourceLayers};
 pub(crate) use hl_vulkan::result;
 pub(crate) use hl_vulkan::service::record::{RenderingColorAttachment, RenderingDepthAttachment};
 pub(crate) use hl_vulkan::service::{create, record, submit};
