@@ -235,13 +235,15 @@ impl HostCursorState {
                 None => {
                     // The client asked for a cursor and silently did not get it. Visible to the user as
                     // a wrong pointer, with nothing on record at `warn` in a release build.
-                    if let Some(count) = UNUSABLE_CURSOR.record((image.width, image.height)) {
+                    if let Some(seen) = UNUSABLE_CURSOR.record((image.width, image.height)) {
                         hl_log::hl_error!(
                             hl_log::tag::PRESENT,
-                            "client cursor image {}x{} is unusable count={count}; keeping the previous \
-                             cursor",
+                            "client cursor image {}x{} is unusable count={} over_ms={}; keeping the \
+                             previous cursor",
                             image.width,
-                            image.height
+                            image.height,
+                            seen.count,
+                            seen.since.as_millis()
                         );
                     }
                     return;

@@ -268,14 +268,15 @@ impl MacPresenter {
     /// entirely, so at `warn` this said nothing whatsoever in a shipped bundle.
     fn refuse(&mut self, sid: SurfaceId, reason: &'static str) -> PresentationFeedback {
         hl_log::hl_count!(tag::PRESENT, "present_retry");
-        if let Some(count) = self.reported_refusals.record((sid, reason)) {
+        if let Some(seen) = self.reported_refusals.record((sid, reason)) {
             hl_log::hl_log!(
                 tag::PRESENT,
                 Level::Error,
-                "present refused sid={} reason={reason} count={count} — this frame did not reach the \
-                 screen and the client's frame callbacks do not fire until one does; count=1 is a \
-                 transient, a climbing count is a window that never advances",
-                sid.0
+                "present refused sid={} reason={reason} count={} over_ms={} — this frame did not reach \
+                 the screen and the client's frame callbacks do not fire until one does; read the rate",
+                sid.0,
+                seen.count,
+                seen.since.as_millis()
             );
         }
         if !self.events.contains(&PresenterEvent::Repaint(sid)) {
@@ -296,13 +297,15 @@ impl MacPresenter {
     /// since. The running count is carried in the message so it can.
     fn abandon(&mut self, sid: SurfaceId, reason: &'static str) -> PresentationFeedback {
         hl_log::hl_count!(tag::PRESENT, "present_terminal");
-        if let Some(count) = self.reported_abandonments.record((sid, reason)) {
+        if let Some(seen) = self.reported_abandonments.record((sid, reason)) {
             hl_log::hl_log!(
                 tag::PRESENT,
                 Level::Error,
-                "present abandoned sid={} reason={reason} count={count} — this frame will not be \
-                 retried; a climbing count is a surface that has stopped advancing entirely",
-                sid.0
+                "present abandoned sid={} reason={reason} count={} over_ms={} — this frame will not be \
+                 retried; read the rate before concluding the surface has stopped",
+                sid.0,
+                seen.count,
+                seen.since.as_millis()
             );
         }
         PresentationFeedback {

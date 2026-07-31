@@ -501,16 +501,18 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
     /// per commit for the life of the process.
     fn announce_stall(&mut self, root: SurfaceId, reason: &'static str) {
         hl_count!(tag::PRESENT, "present_unpresentable");
-        let Some(count) = self.announced_stalls.record((root, reason)) else {
+        let Some(seen) = self.announced_stalls.record((root, reason)) else {
             return;
         };
         hl_log::hl_log!(
             tag::PRESENT,
             hl_log::Level::Error,
-            "present unpresentable root={} reason={reason} count={count} — the frame never reached the \
-             presenter and this client's frame callbacks are dropped; count=1 is a transient, a climbing \
-             count is a stuck root",
-            root.0
+            "present unpresentable root={} reason={reason} count={} over_ms={} — the frame never \
+             reached the presenter and this client's frame callbacks are dropped; read the rate, not \
+             the count",
+            root.0,
+            seen.count,
+            seen.since.as_millis()
         );
     }
 

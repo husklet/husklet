@@ -91,9 +91,12 @@ static ANNOUNCED: std::sync::Mutex<Option<crate::diagnostic::Tally<(SurfaceId, u
 
 /// The running count for `(surface, cause)` when this occurrence should speak. A poisoned lock reports
 /// rather than goes silent — over-reporting a failure is recoverable, losing it is what this path is for.
-fn claim_announcement(surface: SurfaceId, cause: FailureCause) -> Option<u64> {
+fn claim_announcement(surface: SurfaceId, cause: FailureCause) -> Option<crate::diagnostic::Occurrence> {
     let Ok(mut announced) = ANNOUNCED.lock() else {
-        return Some(0);
+        return Some(crate::diagnostic::Occurrence {
+            count: 0,
+            since: std::time::Duration::ZERO,
+        });
     };
     announced
         .get_or_insert_with(crate::diagnostic::Tally::new)
@@ -113,17 +116,22 @@ fn failed_completion(
     } else {
         hl_log::hl_count!(hl_log::tag::PRESENT, "present_terminal");
     }
-    if let Some(count) = claim_announcement(surface, cause) {
+    if let Some(seen) = claim_announcement(surface, cause) {
+        // Report the SPAN as well as the count. A count alone cannot distinguish 100 failures in 100
+        // frames (a dead window) from 100 over six minutes (an intermittent one under 1%), and stating
+        // only the count led a reader straight to the first conclusion when the data said the second.
         hl_log::hl_log!(
             hl_log::tag::PRESENT,
             hl_log::Level::Error,
-            "present {} surface={} submission={} cause={} count={count} — count=1 as a window is \
-             created is a transient it recovers from; a climbing count is a window WindowServer never \
-             composites",
+            "present {} surface={} submission={} cause={} count={} over_ms={} — divide before \
+             concluding: a count that tracks the frame rate is a window that never composites, a count \
+             far below it is intermittent",
             if retryable { "retryable" } else { "terminal" },
             surface.0,
             id.0,
-            cause.name()
+            cause.name(),
+            seen.count,
+            seen.since.as_millis()
         );
     }
     PresentationCompletion { id, outcome }

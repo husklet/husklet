@@ -269,12 +269,13 @@ impl HlState {
             // texture, so nothing reaches the screen and no present-path diagnostic downstream can
             // explain why. At `warn` this said nothing at all in a release build — the exact silence
             // that turns "the window is blank" into an investigation instead of a lookup.
-            if let Some(count) = NATIVE_IMPORT_FAILED.record((deferred.surface, "metadata_conversion"))
+            if let Some(seen) = NATIVE_IMPORT_FAILED.record((deferred.surface, "metadata_conversion"))
             {
             hl_log::hl_error!(
                 hl_log::tag::PRESENT,
-                "native import failed reason=metadata_conversion count={} surface={} token={} serial={} metadata_source={} actual_iosurface={} actual_width={} actual_height={} actual_stride={}",
-                count,
+                "native import failed reason=metadata_conversion count={} over_ms={} surface={} token={} serial={} metadata_source={} actual_iosurface={} actual_width={} actual_height={} actual_stride={}",
+                seen.count,
+                seen.since.as_millis(),
                 deferred.surface.0,
                 frame.token,
                 frame.serial,
@@ -291,12 +292,13 @@ impl HlState {
         };
         let actual = frame.surface.dimensions();
         if let Some(reason) = metadata.failure(actual) {
-            if let Some(count) = NATIVE_IMPORT_FAILED.record((deferred.surface, reason.as_str())) {
+            if let Some(seen) = NATIVE_IMPORT_FAILED.record((deferred.surface, reason.as_str())) {
             hl_log::hl_error!(
                 hl_log::tag::PRESENT,
-                "native import failed reason={:?} count={} surface={} token={} serial={} metadata_source={} expected_width={} expected_height={} expected_stride={} expected_format={:?} actual_iosurface={} actual_width={} actual_height={} actual_stride={} actual_format=bgra8",
+                "native import failed reason={:?} count={} over_ms={} surface={} token={} serial={} metadata_source={} expected_width={} expected_height={} expected_stride={} expected_format={:?} actual_iosurface={} actual_width={} actual_height={} actual_stride={} actual_format=bgra8",
                 reason,
-                count,
+                seen.count,
+                seen.since.as_millis(),
                 deferred.surface.0,
                 frame.token,
                 frame.serial,

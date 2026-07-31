@@ -50,11 +50,13 @@ pub(super) fn record_acquire(elapsed: Duration, queue_depth: usize, acquired: bo
     // BUT successful acquire is a timing observation of a working path and stays verbose. Counted
     // because this is the hot path: one line, then decade milestones, never a flood.
     if !acquired {
-        if let Some(count) = ACQUIRE_FAILED.record(queue_depth) {
+        if let Some(seen) = ACQUIRE_FAILED.record(queue_depth) {
             hl_log::hl_error!(
                 tag::PRESENT,
-                "drawable_acquire failed count={count} elapsed_us={} queued={} capacity={} — this frame \
-                 did not reach the screen; a climbing count is a layer that never yields a drawable",
+                "drawable_acquire failed count={} over_ms={} elapsed_us={} queued={} capacity={} — this \
+                 frame did not reach the screen; read the rate against the refresh rate",
+                seen.count,
+                seen.since.as_millis(),
                 elapsed.as_micros(),
                 queue_depth,
                 DRAWABLES

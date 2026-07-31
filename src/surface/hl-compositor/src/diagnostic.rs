@@ -28,10 +28,23 @@ pub fn milestone(count: u64) -> bool {
     step == count
 }
 
+/// How often a cause has fired, and over what span.
+#[derive(Clone, Copy)]
+pub struct Occurrence {
+    /// Total occurrences of this cause, including this one.
+    pub count: u64,
+    /// Elapsed time since the FIRST occurrence.
+    ///
+    /// A count without a span cannot be read. 100 failures in 100 frames is a dead window; 100 failures
+    /// over six minutes is an intermittent one under 1%, and the two demand completely different
+    /// responses. Reporting the count alone invited exactly that misreading once already.
+    pub since: std::time::Duration,
+}
+
 /// Occurrence counts for latched diagnostics, keyed by whatever identifies one cause at one site.
 ///
 /// Deliberately not a bare `HashSet` of "already reported": the count IS the diagnostic.
-pub struct Tally<K>(HashMap<K, u64>);
+pub struct Tally<K>(HashMap<K, (u64, std::time::Instant)>);
 
 impl<K: Eq + Hash> Default for Tally<K> {
     fn default() -> Self {
@@ -44,12 +57,18 @@ impl<K: Eq + Hash> Tally<K> {
         Self::default()
     }
 
-    /// Record one occurrence of `key`. Returns the running count when this one should be reported, and
-    /// `None` when it falls between milestones.
-    pub fn record(&mut self, key: K) -> Option<u64> {
-        let count = self.0.entry(key).or_insert(0);
-        *count += 1;
-        milestone(*count).then_some(*count)
+    /// Record one occurrence of `key`. Returns the running count and elapsed span when this one should
+    /// be reported, and `None` when it falls between milestones.
+    pub fn record(&mut self, key: K) -> Option<Occurrence> {
+        let entry = self
+            .0
+            .entry(key)
+            .or_insert_with(|| (0, std::time::Instant::now()));
+        entry.0 += 1;
+        milestone(entry.0).then_some(Occurrence {
+            count: entry.0,
+            since: entry.1.elapsed(),
+        })
     }
 
     /// Forget a key's history — used when the thing it describes is gone, so a later occurrence on a
@@ -75,9 +94,12 @@ impl<K: Eq + Hash> SharedTally<K> {
     /// A poisoned lock reports rather than goes silent: over-reporting a failure is recoverable, losing
     /// one is the failure mode this whole family of diagnostics exists to prevent. `0` marks that the
     /// count itself is unavailable, so it can never be misread as a real first occurrence.
-    pub fn record(&self, key: K) -> Option<u64> {
+    pub fn record(&self, key: K) -> Option<Occurrence> {
         let Ok(mut tally) = self.0.lock() else {
-            return Some(0);
+            return Some(Occurrence {
+                count: 0,
+                since: std::time::Duration::ZERO,
+            });
         };
         tally.get_or_insert_with(Tally::new).record(key)
     }
@@ -96,11 +118,18 @@ mod tests {
     #[test]
     fn a_shared_tally_counts_across_calls_from_anywhere() {
         static SITE: SharedTally<&'static str> = SharedTally::new();
-        assert_eq!(SITE.record("a"), Some(1));
-        assert_eq!(SITE.record("a"), None);
-        assert_eq!(SITE.record("b"), Some(1), "keys count independently");
+        assert_eq!(SITE.record("a").map(|seen| seen.count), Some(1));
+        assert!(SITE.record("a").is_none());
+        assert_eq!(
+            SITE.record("b").map(|seen| seen.count),
+            Some(1),
+            "keys count independently"
+        );
         // "a" has fired twice; carry it to 100 and collect what it chose to report.
-        let reported: Vec<u64> = (3..=100).filter_map(|_| SITE.record("a")).collect();
+        let reported: Vec<u64> = (3..=100)
+            .filter_map(|_| SITE.record("a"))
+            .map(|seen| seen.count)
+            .collect();
         assert_eq!(reported, vec![10, 100]);
     }
 
@@ -125,24 +154,43 @@ mod tests {
     fn a_tally_distinguishes_a_transient_from_a_standing_fault() {
         let mut tally = Tally::new();
         // A one-off reports once and never speaks again.
-        assert_eq!(tally.record("transient"), Some(1));
+        assert_eq!(tally.record("transient").map(|seen| seen.count), Some(1));
 
         // A standing fault keeps reporting, carrying a count that says so.
         let mut reported = Vec::new();
         for _ in 0..1_000 {
-            if let Some(count) = tally.record("standing") {
-                reported.push(count);
+            if let Some(seen) = tally.record("standing") {
+                reported.push(seen.count);
             }
         }
         assert_eq!(reported, vec![1, 10, 100, 1_000]);
     }
 
     #[test]
+    fn an_occurrence_carries_the_span_its_count_accrued_over() {
+        // The count alone was misread once: 100 failures were taken for a dead window when they were
+        // spread over six minutes. The span is what makes the rate derivable at the point of reading.
+        let mut tally = Tally::new();
+        let first = tally.record("cause").expect("first occurrence reports");
+        assert_eq!(first.count, 1);
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        let tenth = (2..=10)
+            .filter_map(|_| tally.record("cause"))
+            .last()
+            .expect("the tenth occurrence reports");
+        assert_eq!(tenth.count, 10);
+        assert!(
+            tenth.since >= std::time::Duration::from_millis(15),
+            "the span runs from the FIRST occurrence, not the last"
+        );
+    }
+
+    #[test]
     fn forgetting_a_key_lets_a_reused_identity_report_again() {
         let mut tally = Tally::new();
-        assert_eq!(tally.record(7), Some(1));
-        assert_eq!(tally.record(7), None);
+        assert_eq!(tally.record(7).map(|seen| seen.count), Some(1));
+        assert!(tally.record(7).is_none());
         tally.forget(&7);
-        assert_eq!(tally.record(7), Some(1));
+        assert_eq!(tally.record(7).map(|seen| seen.count), Some(1));
     }
 }

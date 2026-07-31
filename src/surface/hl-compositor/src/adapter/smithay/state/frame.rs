@@ -13,13 +13,15 @@ static DISCARDED: crate::diagnostic::SharedTally<(SurfaceId, &'static str)> =
 /// screen, which no present-path diagnostic can account for by construction.
 fn discard(feedback: PresentationFeedbackCallback, surface: SurfaceId, reason: &'static str) {
     hl_count!(tag::PRESENT, "presentation_discarded");
-    if let Some(count) = DISCARDED.record((surface, reason)) {
+    if let Some(seen) = DISCARDED.record((surface, reason)) {
         hl_log::hl_error!(
             tag::PRESENT,
-            "presentation feedback discarded surface={} reason={reason} count={count} — the client is \
-             being told this frame was never shown; a climbing count starves a client that paces on \
-             presentation",
-            surface.0
+            "presentation feedback discarded surface={} reason={reason} count={} over_ms={} — the \
+             client is told this frame was never shown; a rate near the frame rate starves a client \
+             that paces on presentation, a low rate does not",
+            surface.0,
+            seen.count,
+            seen.since.as_millis()
         );
     }
     feedback.discarded();
