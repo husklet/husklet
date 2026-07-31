@@ -964,6 +964,41 @@ that is self-consistent and produces plausible numbers is not thereby correct: a
 `wl_surface.destroy` where it meant `attach` reported a stable, believable zero for hours. Check an
 instrument against something outside itself before trusting a negative from it.
 
+## Swept clean: defaults in hl-vulkan
+
+The "a failed lookup becomes a plausible empty value" family was swept through `hl-vulkan` and its shim.
+One defect was found and fixed (`create_buffer` accepting a zero or absurd size while its two sibling
+creation paths refused both). Recording what the sweep CLEARED matters as much, so the next reader does
+not re-audit twenty defaults that are already right:
+
+- **Device addresses** (`shim/vulkan/src/address.rs`). Unknown buffer or memory returns 0, but a live
+  object's address is derived from a high base, so 0 is not a value any real object can have. The
+  ambiguity the CUDA pointer-attribute defect had is impossible here by construction.
+- **Descriptor binding with an unknown set layout** (`service/record/binding.rs`). The layout lookup
+  falls back to an empty binding table, but every binding is then checked against it and a descriptor
+  the layout does not account for is refused as "not fully bound". It fails closed, not silently empty.
+- **Query results** (`service/submit.rs`). An out-of-range slot defaults to value 0 with its
+  availability bit `false`, so a caller asking for availability is told the truth; the value itself is
+  undefined by specification when unavailable.
+- **`vkGetPrivateData`** (`shim/vulkan/src/maintenance.rs`). Returning 0 when nothing was set is what
+  the specification requires, not a fallback.
+- **Missing colour blend state** (`shim/vulkan/src/graphics/pipeline.rs`) and **failed feature
+  negotiation** (`shim/vulkan/src/instance/physical.rs`). Both default to advertising or enabling
+  nothing, which is the safe direction: they under-promise rather than over-promise.
+- **Indirect argument reads** (`service/record/indirect.rs`). The out-of-range default is behind
+  `validate_indirect`, which bounds-checks the whole span first, so it is unreachable defence rather
+  than a silent zero.
+- **Current device after the last is destroyed** (`shim/vulkan/src/state.rs`). Falls back to 0, which
+  resolves to no device, and every entry point then reports a truthful failure.
+
+Two things stay open and are written down rather than fixed. `vkGetBufferMemoryRequirements` and
+`vkGetDeviceBufferMemoryRequirements` report 0 for a handle or create-info they cannot resolve; both are
+`void` in Vulkan with no error channel, and now that a zero-size buffer cannot be created, 0 is at least
+no longer ambiguous with a real buffer. And `bytes_per_texel().unwrap_or(4)` in the image-requirement
+paths over-reports a block-compressed image by up to eight times, which is the safe direction for a
+memory requirement but interacts with the 2 GiB ceiling, so it is a sizing question rather than a
+correctness one.
+
 ## Manager discipline
 
 Stage commits by file, never `git add -A` across a shared tree — you will sweep up another agent's
