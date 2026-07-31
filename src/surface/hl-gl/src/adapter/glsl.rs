@@ -23,6 +23,13 @@ pub struct Decl {
 }
 
 impl Decl {
+    /// How many consecutive interface locations this declaration occupies: one per matrix COLUMN, times
+    /// the array length. A `mat4` takes four and `vec4 c[2]` takes two, so numbering declarations
+    /// sequentially overlaps them — the program then links, draws with `GL_NO_ERROR` and paints nothing.
+    pub(crate) fn location_span(&self) -> u32 {
+        Declarations::location_span(&self.ty, self.arr)
+    }
+
     fn is_sampler(&self) -> bool {
         TypeToken(&self.ty).is_sampler()
     }
