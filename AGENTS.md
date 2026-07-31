@@ -883,6 +883,13 @@ driver, and it was reported as one for hours. When results are internally implau
 before the subject — three harness defects in a single session all produced plausible-looking output, and
 the worst of them made the driver look broken in exactly the places a real driver plausibly breaks.
 
+Compare each guard against the guard of the thing it guards. A boundary that asked whether any draws had
+been recorded stood in front of a builder that also accepted copies, so a frame whose only work was a copy
+was discarded before the builder ever saw it — and the same disagreement appeared again three lines above a
+partition that routed exactly the work its guard ignored. This is cheaper to find than a defect inside the
+thing being guarded and it fails the same way: silently, with no error and stale pixels. Ask not only what
+a function refuses, but what its callers refuse to offer it.
+
 A comment asserting an impossibility is load-bearing in a way an ordinary comment is not. It does not
 describe behaviour, it forecloses an option — so the next reader routes around it instead of evaluating it,
 and the routing becomes more code citing the comment. Re-derive an impossibility against the thing it
