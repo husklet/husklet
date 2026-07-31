@@ -41,6 +41,13 @@ pub(crate) struct LocalState {
     pub(crate) client_major: i32,
     pub(crate) client_minor: i32,
     pub(crate) no_error: bool,
+    /// The default framebuffer's depth/stencil sizes AS ADVERTISED BY THE `EGLConfig` this context was
+    /// created on — what `GL_DEPTH_BITS` / `GL_STENCIL_BITS` must report, so the GL query and
+    /// `eglGetConfigAttrib` never disagree (`tests/egl_conformance/configs.rs` pins this). The frame
+    /// builder always attaches a 24/8 plane, so a context on a stencil-free config is OVER-provided; it
+    /// is told 0 and every promise made to it still holds.
+    pub(crate) depth_bits: i32,
+    pub(crate) stencil_bits: i32,
     pub(crate) surf: GlSurface,
     pub(crate) surface_kind: SurfaceKind,
     pub(crate) draw_surface_id: u64,
@@ -80,6 +87,9 @@ pub(crate) struct LocalState {
     /// Set when a `glReadPixels` already rendered and consumed this frame's default framebuffer, so
     /// `eglSwapBuffers` must still post that render instead of an empty frame. Cleared by `reset_frame`.
     pub(crate) default_present_pending: bool,
+    /// Latch for the once-per-context `glClear` partial-color-mask report (see `record_clear_buffers`).
+    /// A channel-masked clear recurs every frame, so the report must not.
+    pub(crate) partial_clear_mask_reported: bool,
 }
 
 impl LocalState {
@@ -91,6 +101,13 @@ impl LocalState {
             ..Self::default()
         }
     }
+
+    /// Adopt the depth/stencil sizes of the `EGLConfig` the context was created on.
+    pub fn on_config(mut self, depth_bits: i32, stencil_bits: i32) -> Self {
+        self.depth_bits = depth_bits;
+        self.stencil_bits = stencil_bits;
+        self
+    }
 }
 
 impl Default for LocalState {
@@ -99,6 +116,8 @@ impl Default for LocalState {
             client_major: 3,
             client_minor: 1,
             no_error: false,
+            depth_bits: 24,
+            stencil_bits: 8,
             surf: GlSurface::default(),
             surface_kind: SurfaceKind::Window,
             draw_surface_id: 0,
@@ -136,6 +155,7 @@ impl Default for LocalState {
             present_token: None,
             present_serial: None,
             default_present_pending: false,
+            partial_clear_mask_reported: false,
         }
     }
 }

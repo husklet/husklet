@@ -118,9 +118,9 @@ pub extern "C" fn glFrontFace(mode: u32) {
 // ==================================================================================================
 
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glClear(_mask: u32) {
+pub extern "C" fn glClear(mask: u32) {
     crate::stub::trace("glClear", "recording a clear");
-    GlobalState::context(|s| record::clear(&mut s.gl));
+    GlobalState::context(|s| record::clear_buffers(&mut s.gl, mask));
 }
 
 #[cfg_attr(gles_client, no_mangle)]

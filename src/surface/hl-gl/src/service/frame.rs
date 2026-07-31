@@ -612,7 +612,7 @@ impl Frame {
             return RenderPasses::build_multi(ctx, &groups);
         }
         if ctx.local.recording.draws.iter().all(|d| d.is_clear) {
-            return Some(Self::build_clear(ctx));
+            return Self::build_clear(ctx);
         }
         // One framebuffer, one or more geometry draws (optionally led by a clear) → the single/multi-draw path.
         Self::build_geometry(ctx)

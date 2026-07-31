@@ -34,7 +34,9 @@ type AddListenerFn = unsafe extern "C" fn(*mut c_void, *const c_void, *mut c_voi
 /// The resolved `libwayland-client` symbols + the exported `wl_interface` pointers we marshal against.
 pub(crate) struct SysWlAbi {
     marshal: MarshalFlags,
-    get_display: GetDisplayFn,
+    /// `wl_proxy_get_display` — Wayland **1.23+** only. Optional: the caller can supply the app's own
+    /// `wl_display*` instead. Ubuntu 24.04 / Debian 12 ship libwayland 1.22 and do NOT export it.
+    get_display: Option<GetDisplayFn>,
     get_version: GetVersionFn,
     create_queue: CreateQueueFn,
     create_wrapper: CreateWrapperFn,
@@ -145,9 +147,9 @@ impl SysWlAbi {
                     handle,
                     b"wl_proxy_marshal_flags\0",
                 )?),
-                get_display: core::mem::transmute::<*mut c_void, GetDisplayFn>(
-                    WaylandLibrary::symbol(handle, b"wl_proxy_get_display\0")?,
-                ),
+                // Optional (Wayland 1.23+): absence is NOT a failure — the display can be threaded in.
+                get_display: WaylandLibrary::optional_symbol(handle, b"wl_proxy_get_display\0")
+                    .map(|p| core::mem::transmute::<*mut c_void, GetDisplayFn>(p)),
                 get_version: core::mem::transmute::<*mut c_void, GetVersionFn>(
                     WaylandLibrary::symbol(handle, b"wl_proxy_get_version\0")?,
                 ),
@@ -209,6 +211,12 @@ impl WaylandLibrary {
         Ok(p)
     }
 
+    /// `dlsym` a symbol that may legitimately be absent on older `libwayland-client` releases.
+    fn optional_symbol(handle: *mut c_void, name: &'static [u8]) -> Option<*mut c_void> {
+        let p = unsafe { dlsym(handle, name.as_ptr() as *const c_char) };
+        (!p.is_null()).then_some(p)
+    }
+
     /// Read `interface->name` (the first pointer of a `struct wl_interface`) as a `*const c_char`.
     unsafe fn interface_name(iface: *const c_void) -> *const c_char {
         *(iface as *const *const c_char)
@@ -220,7 +228,10 @@ impl WaylandLibrary {
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 unsafe impl WlAbi for SysWlAbi {
     fn get_display(&self, surface: *mut c_void) -> *mut c_void {
-        unsafe { (self.get_display)(surface) }
+        match self.get_display {
+            Some(f) => unsafe { f(surface) },
+            None => core::ptr::null_mut(),
+        }
     }
     fn get_version(&self, proxy: *mut c_void) -> u32 {
         unsafe { (self.get_version)(proxy) }

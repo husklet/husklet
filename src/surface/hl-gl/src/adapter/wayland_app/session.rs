@@ -33,23 +33,45 @@ impl WaylandAppPresenter {
     /// `surface_ptr` must identify a live `wl_surface` whose display connection and proxy remain valid
     /// until the returned presenter is dropped.
     pub unsafe fn new(surface_ptr: usize) -> WlAppResult<WaylandAppPresenter> {
+        Self::new_with_display(surface_ptr, 0)
+    }
+
+    /// As [`Self::new`], but with the app's OWN `wl_display*` supplied (e.g. the `native_display` passed
+    /// to `eglGetDisplay`). Prefer this: deriving the display from the surface proxy needs
+    /// `wl_proxy_get_display`, which only exists on Wayland 1.23+ (24.04-era guests ship 1.22).
+    /// # Safety
+    /// Same contract as [`Self::new`]; `display_ptr` must be that surface's live connection (or `0`).
+    pub unsafe fn new_with_display(
+        surface_ptr: usize,
+        display_ptr: usize,
+    ) -> WlAppResult<WaylandAppPresenter> {
         if surface_ptr == 0 {
             return Err(WlAppError::NoSurface);
         }
         let abi = SysWlAbi::load()?;
-        Self::with_abi(Box::new(abi), surface_ptr as *mut c_void)
+        Self::with_abi(
+            Box::new(abi),
+            surface_ptr as *mut c_void,
+            display_ptr as *mut c_void,
+        )
     }
 
     /// Bring up the presenter over an explicit ABI backend (the seam the recording tests drive).
     pub(crate) fn with_abi(
         abi: Box<dyn WlAbi>,
         surface: *mut c_void,
+        display: *mut c_void,
     ) -> WlAppResult<WaylandAppPresenter> {
         if surface.is_null() {
             return Err(WlAppError::NoSurface);
         }
-        // Reach the app's connection through the surface proxy — NEVER open our own socket.
-        let display = abi.get_display(surface);
+        // Use the app's OWN connection — NEVER open our own socket. Only derive it from the surface proxy
+        // when it was not supplied (`wl_proxy_get_display` is Wayland 1.23+).
+        let display = if display.is_null() {
+            abi.get_display(surface)
+        } else {
+            display
+        };
         if display.is_null() {
             return Err(WlAppError::NoDisplay);
         }

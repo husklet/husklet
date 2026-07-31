@@ -2,15 +2,48 @@ use super::*;
 
 // ---- draw + clear recording ----------------------------------------------------------------------
 
-/// `glClear(mask)` — record a full-surface clear rect at the current clear color (color bit assumed).
+/// `glClear(mask)` — record a full-surface clear rect at the current clear color, carrying the app's
+/// buffer mask. The mask decides WHICH planes the lowering may touch: a `GL_DEPTH_BUFFER_BIT`-only clear
+/// must not repaint the color buffer, which is what dropping the mask here used to do.
 impl GlContext {
+    /// Record `glClear(GL_COLOR_BUFFER_BIT)` (the historical mask-less entry point).
     pub fn record_clear(&mut self) {
+        self.record_clear_buffers(GL_COLOR_BUFFER_BIT);
+    }
+
+    pub fn record_clear_buffers(&mut self, mask: u32) {
+        // GL: any bit outside the three buffer bits is GL_INVALID_VALUE and the call records nothing.
+        const BITS: u32 = GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT;
+        if mask & !BITS != 0 {
+            self.set_gl_error(GL_INVALID_VALUE);
+            return;
+        }
         let (w, h) = self.target_wh();
         let mut d = DrawCall {
             is_clear: true,
+            clear_mask: mask,
             ..self.snapshot(false)
         };
         d.clear_rect = [0, 0, w, h];
+        // A partially `glColorMask`ed color clear writes only some channels. Neither `LoadOp::Clear` nor
+        // `Enc::ClearRect` can express that, so the color plane is left alone rather than written wholesale
+        // (Skia/Chrome's `glColorMask(0,0,0,1); glClear(...)` would otherwise destroy RGB). Reported ONCE per
+        // context at error level: below error is compiled out of release builds, and these calls recur every
+        // frame.
+        if d.color_clear_is_partial() && !self.local.partial_clear_mask_reported {
+            self.local.partial_clear_mask_reported = true;
+            hl_log::hl_error!(
+                hl_log::tag::GL,
+                "glClear: color mask {:#x} is partial — the color plane is NOT cleared (a channel-masked \
+                 clear is not representable in the IR). Reported once per context.",
+                d.color_mask & 0xf
+            );
+        }
+        // Nothing left to write: every named plane is masked off. Recording it would still be harmless, but
+        // dropping it keeps a masked-off clear from becoming a pass boundary.
+        if !d.clears_color() && !d.clears_depth() && !d.clears_stencil() {
+            return;
+        }
         self.record_draw(d);
     }
 }
@@ -31,6 +64,8 @@ pub const SCISSOR: fn(&mut GlContext, [i32; 4]) = GlContext::set_scissor;
 pub const ENABLE: fn(&mut GlContext, u32) = GlContext::enable;
 pub const DISABLE: fn(&mut GlContext, u32) = GlContext::disable;
 pub const CLEAR: fn(&mut GlContext) = GlContext::record_clear;
+pub const CLEAR_BUFFERS: fn(&mut GlContext, u32) = GlContext::record_clear_buffers;
+pub use CLEAR_BUFFERS as clear_buffers;
 pub use BLEND_COLOR as blend_color;
 pub use CLEAR as clear;
 pub use CLEAR_COLOR as clear_color;

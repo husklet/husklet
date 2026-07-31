@@ -50,7 +50,7 @@ fn context(frame: NativeFrame) -> GlContext {
 fn no_op_native_swap_never_associates_or_commits() {
     let recorder = Box::new(Recorder::new());
     let log = Rc::clone(&recorder.log);
-    let mut presenter = WaylandAppPresenter::with_abi(recorder, SURFACE).expect("bring-up");
+    let mut presenter = WaylandAppPresenter::with_abi(recorder, SURFACE, std::ptr::null_mut()).expect("bring-up");
     let frame = presenter.reserve_native_frame().expect("identity");
     log.borrow_mut().clear();
     let mut sink = Sink {
@@ -79,7 +79,7 @@ fn no_op_native_swap_never_associates_or_commits() {
 fn native_swap_submits_before_associate_and_commit_without_readback_or_shm() {
     let recorder = Box::new(Recorder::new());
     let log = Rc::clone(&recorder.log);
-    let mut presenter = WaylandAppPresenter::with_abi(recorder, SURFACE).expect("bring-up");
+    let mut presenter = WaylandAppPresenter::with_abi(recorder, SURFACE, std::ptr::null_mut()).expect("bring-up");
     let frame = presenter.reserve_native_frame().expect("identity");
     log.borrow_mut().clear();
     let mut sink = Sink {
@@ -132,9 +132,9 @@ fn presenters_keep_tokens_and_serials_isolated_per_surface() {
     let mut second_recorder = Recorder::new();
     second_recorder.identity_token = 22;
     let mut first =
-        WaylandAppPresenter::with_abi(Box::new(first_recorder), SURFACE).expect("first");
+        WaylandAppPresenter::with_abi(Box::new(first_recorder), SURFACE, std::ptr::null_mut()).expect("first");
     let mut second =
-        WaylandAppPresenter::with_abi(Box::new(second_recorder), 0xA9910usize as *mut c_void)
+        WaylandAppPresenter::with_abi(Box::new(second_recorder), 0xA9910usize as *mut c_void, std::ptr::null_mut())
             .expect("second");
 
     let first_frame = first.reserve_native_frame().expect("first identity");
@@ -150,7 +150,7 @@ fn presenters_keep_tokens_and_serials_isolated_per_surface() {
 #[test]
 fn native_frame_associates_only_when_explicitly_committed() {
     let rec = Box::new(Recorder::new());
-    let mut presenter = WaylandAppPresenter::with_abi(rec, SURFACE).expect("bring-up");
+    let mut presenter = WaylandAppPresenter::with_abi(rec, SURFACE, std::ptr::null_mut()).expect("bring-up");
     let frame = presenter.reserve_native_frame().expect("identity");
     assert_eq!(frame.serial.get(), 1);
     let log = unsafe { &*(std::ptr::addr_of!(*presenter.abi) as *const Recorder) };
@@ -181,7 +181,7 @@ fn native_frame_associates_only_when_explicitly_committed() {
 fn missing_identity_preserves_app_surface_shm() {
     let mut recorder = Recorder::new();
     recorder.has_identity = false;
-    let mut presenter = WaylandAppPresenter::with_abi(Box::new(recorder), SURFACE).expect("SHM");
+    let mut presenter = WaylandAppPresenter::with_abi(Box::new(recorder), SURFACE, std::ptr::null_mut()).expect("SHM");
     assert!(presenter.reserve_native_frame().is_none());
     presenter.present(&xrgb(2, 2), 2, 2).expect("SHM fallback");
 }
@@ -190,7 +190,7 @@ fn missing_identity_preserves_app_surface_shm() {
 fn drop_retires_identity_before_wrapper_and_owned_queue() {
     let recorder = Box::new(Recorder::new());
     let log = Rc::clone(&recorder.log);
-    let presenter = WaylandAppPresenter::with_abi(recorder, SURFACE).expect("bring-up");
+    let presenter = WaylandAppPresenter::with_abi(recorder, SURFACE, std::ptr::null_mut()).expect("bring-up");
     drop(presenter);
     let log = log.borrow();
     let identity = log

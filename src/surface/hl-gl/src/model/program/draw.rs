@@ -182,6 +182,11 @@ pub struct DrawCall {
     pub clear: [f32; 4],
     /// For a clear call: the (x, y, w, h) rect being cleared.
     pub clear_rect: [i32; 4],
+    /// For a clear call: the `glClear` buffer mask (`GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
+    /// GL_STENCIL_BUFFER_BIT`) as the app passed it. Defaults to the color bit so a clear built without an
+    /// explicit mask keeps the historical "color clear" meaning. Which planes the clear may actually WRITE
+    /// also depends on the write masks snapshotted with it — see [`DrawCall::clears_color`].
+    pub clear_mask: u32,
     /// Captured client-side vertex arrays (enabled attribs drawn with NO VBO bound). EMPTY for an
     /// all-VBO draw — so a bound-VBO draw lowers byte-identically. Each entry lowers to a transient
     /// vertex buffer + a one-attribute vertex-layout slot (see [`ClientArray`]).
@@ -210,6 +215,42 @@ pub struct DrawCall {
     /// EMPTY when the program feeds its uniforms via a `glBindBufferBase`d block (`ubo_bytes`) or has no
     /// default uniforms — the frame builder then falls back to `Program::ubuf` (byte-identical old path).
     pub ubuf_bytes: Vec<u8>,
+}
+
+/// Which planes a recorded `glClear` may actually write. GL applies the CURRENT write masks to a clear
+/// exactly as it does to a draw: `glColorMask` gates the color planes, `glDepthMask` the depth plane, and
+/// `glStencilMask` the stencil plane. A clear whose plane is masked off entirely is a no-op and must reach
+/// no attachment; a PARTIALLY masked color clear (some channels enabled, some not) is not representable by
+/// `LoadOp::Clear` or `Enc::ClearRect`, both of which write all four channels, so it is refused rather than
+/// lowered as a full-channel clear (see [`DrawCall::color_clear_is_partial`]).
+impl DrawCall {
+    /// This clear writes the WHOLE color value of every texel it covers.
+    pub fn clears_color(&self) -> bool {
+        self.is_clear
+            && self.clear_mask & crate::model::glconst::GL_COLOR_BUFFER_BIT != 0
+            && self.color_mask & 0xf == 0xf
+    }
+
+    /// This clear names the color buffer but only SOME of its channels — unrepresentable, so refused.
+    pub fn color_clear_is_partial(&self) -> bool {
+        self.is_clear
+            && self.clear_mask & crate::model::glconst::GL_COLOR_BUFFER_BIT != 0
+            && !matches!(self.color_mask & 0xf, 0 | 0xf)
+    }
+
+    /// This clear writes the depth plane (`glDepthMask(GL_FALSE)` makes it a no-op).
+    pub fn clears_depth(&self) -> bool {
+        self.is_clear
+            && self.clear_mask & crate::model::glconst::GL_DEPTH_BUFFER_BIT != 0
+            && self.depth_write
+    }
+
+    /// This clear writes the stencil plane (a zero `glStencilMask` makes it a no-op).
+    pub fn clears_stencil(&self) -> bool {
+        self.is_clear
+            && self.clear_mask & crate::model::glconst::GL_STENCIL_BUFFER_BIT != 0
+            && self.stencil_write_mask & 0xff != 0
+    }
 }
 
 impl Default for DrawCall {
@@ -275,6 +316,7 @@ impl Default for DrawCall {
             color_mask: 0xf,
             clear: [0.0; 4],
             clear_rect: [0; 4],
+            clear_mask: crate::model::glconst::GL_COLOR_BUFFER_BIT,
             client_vbufs: Vec::new(),
             client_indices: Vec::new(),
             buffers: Vec::new(),

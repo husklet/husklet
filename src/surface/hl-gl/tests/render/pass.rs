@@ -403,3 +403,241 @@ fn clear_then_draw_folds_clear_into_the_pass_then_draws() {
         1
     );
 }
+
+// ---------------------------------------------------------------------------------------------------
+// glClear's buffer mask: a depth/stencil clear is not a color clear, and a masked clear writes nothing
+// ---------------------------------------------------------------------------------------------------
+
+/// Every `BeginRenderPass` color load op in the frame, in order.
+fn all_color_loads(batch: &[Cmd]) -> Vec<LoadOp> {
+    batch
+        .iter()
+        .filter_map(|c| match c {
+            Cmd::Submit(cb) => Some(cb.encoder.iter()),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|e| match e {
+            Enc::BeginRenderPass { color, .. } => color.first().map(|a| a.load),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every `BeginRenderPass` depth load op in the frame, in order.
+fn all_depth_loads(batch: &[Cmd]) -> Vec<LoadOp> {
+    batch
+        .iter()
+        .filter_map(|c| match c {
+            Cmd::Submit(cb) => Some(cb.encoder.iter()),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|e| match e {
+            Enc::BeginRenderPass { depth, .. } => depth.as_ref().map(|d| d.load),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `glClear(GL_DEPTH_BUFFER_BIT)` clears DEPTH. It must not repaint the color buffer with the current
+/// `glClearColor` — the shim used to drop the mask, so every clear became a color clear.
+#[test]
+fn depth_only_clear_does_not_clear_color() {
+    let mut c = ctx_64();
+    let mut sink = RecordingSink::with_full_caps();
+    record::clear_color(&mut c, [1.0, 0.0, 0.0, 1.0]);
+    record::enable(&mut c, GL_DEPTH_TEST);
+    record::clear_buffers(&mut c, GL_DEPTH_BUFFER_BIT);
+    flat_program(&mut c);
+    tri_vbo(&mut c, 8);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let batch = &sink.batches[0];
+    assert!(
+        all_color_loads(batch).iter().all(|l| *l == LoadOp::Load),
+        "a depth-only glClear must not clear-load the color attachment: {:?}",
+        all_color_loads(batch)
+    );
+    assert!(
+        !submit_ops(batch)
+            .iter()
+            .any(|o| matches!(o, Enc::ClearRect { .. })),
+        "a depth-only glClear must not paint the color plane at all"
+    );
+    assert_eq!(
+        all_depth_loads(batch),
+        vec![LoadOp::Clear],
+        "…but the depth plane it names must still be cleared"
+    );
+}
+
+/// `glClear(GL_STENCIL_BUFFER_BIT)` likewise never touches color.
+#[test]
+fn stencil_only_clear_does_not_clear_color() {
+    let mut c = ctx_64();
+    let mut sink = RecordingSink::with_full_caps();
+    record::clear_color(&mut c, [0.0, 1.0, 0.0, 1.0]);
+    record::enable(&mut c, GL_STENCIL_TEST);
+    record::clear_buffers(&mut c, GL_STENCIL_BUFFER_BIT);
+    flat_program(&mut c);
+    tri_vbo(&mut c, 8);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let batch = &sink.batches[0];
+    assert!(
+        all_color_loads(batch).iter().all(|l| *l == LoadOp::Load),
+        "a stencil-only glClear must not clear-load the color attachment: {:?}",
+        all_color_loads(batch)
+    );
+}
+
+/// Skia/Chrome do `glColorMask(0,0,0,1); glClear(GL_COLOR_BUFFER_BIT)`. Neither `LoadOp::Clear` nor
+/// `Enc::ClearRect` can write only alpha, so the clear must not reach the color plane at all — writing all
+/// four channels would destroy RGB.
+#[test]
+fn alpha_masked_clear_does_not_write_rgb() {
+    let mut c = ctx_64();
+    let mut sink = RecordingSink::with_full_caps();
+    record::clear_color(&mut c, [1.0, 0.0, 0.0, 1.0]);
+    record::color_mask(&mut c, false, false, false, true);
+    record::clear_buffers(&mut c, GL_COLOR_BUFFER_BIT);
+    record::color_mask(&mut c, true, true, true, true);
+    flat_program(&mut c);
+    tri_vbo(&mut c, 8);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let batch = &sink.batches[0];
+    assert!(
+        all_color_loads(batch).iter().all(|l| *l == LoadOp::Load),
+        "a channel-masked clear must not clear-load all four channels: {:?}",
+        all_color_loads(batch)
+    );
+    assert!(
+        !submit_ops(batch)
+            .iter()
+            .any(|o| matches!(o, Enc::ClearRect { .. })),
+        "…nor paint them with a rect fill"
+    );
+}
+
+/// A clear masked off entirely (`glColorMask(0,0,0,0)`) writes nothing, so a frame whose only op is that
+/// clear has nothing to present.
+#[test]
+fn fully_masked_clear_records_nothing() {
+    let mut c = ctx_64();
+    let mut sink = RecordingSink::with_full_caps();
+    record::color_mask(&mut c, false, false, false, false);
+    record::clear_buffers(&mut c, GL_COLOR_BUFFER_BIT);
+
+    assert_eq!(c.recording_counts().0, 0);
+    assert!(!swap::swap_buffers(&mut c, &mut sink).unwrap());
+}
+
+/// A frame whose only recorded op is a depth clear has no color work: it must present nothing rather than
+/// repaint the window with the clear color.
+#[test]
+fn depth_only_clear_frame_presents_nothing() {
+    let mut c = ctx_64();
+    let mut sink = RecordingSink::with_full_caps();
+    record::clear_color(&mut c, [1.0, 0.0, 1.0, 1.0]);
+    record::clear_buffers(&mut c, GL_DEPTH_BUFFER_BIT);
+
+    assert!(!swap::swap_buffers(&mut c, &mut sink).unwrap());
+}
+
+/// `glClear(GL_DEPTH_BUFFER_BIT)` BETWEEN two depth-tested passes must re-clear depth: the draws after it
+/// test against a fresh depth buffer, not the earlier draws' depth. It becomes a pass boundary whose color
+/// attachment load-preserves and whose depth attachment clear-loads.
+#[test]
+fn mid_frame_depth_clear_splits_the_pass_and_reclears_depth() {
+    let mut c = ctx_64();
+    let mut sink = RecordingSink::with_full_caps();
+    record::clear_color(&mut c, [0.0, 0.0, 0.0, 1.0]);
+    record::enable(&mut c, GL_DEPTH_TEST);
+    record::clear_buffers(&mut c, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    flat_program(&mut c);
+    tri_vbo(&mut c, 8);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    record::clear_buffers(&mut c, GL_DEPTH_BUFFER_BIT);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let batch = &sink.batches[0];
+    assert_eq!(
+        all_color_loads(batch),
+        vec![LoadOp::Clear, LoadOp::Load],
+        "the leading full clear clears once; the depth clear opens a LOAD-ing second pass"
+    );
+    assert_eq!(
+        all_depth_loads(batch),
+        vec![LoadOp::Clear, LoadOp::Clear],
+        "both passes clear depth — the second because the mid-frame glClear named it"
+    );
+}
+
+/// The mask reaches the recorded draw: `glClear` no longer discards it at the shim boundary. Recorded at
+/// the layer where the decision is made, so a regression shows up before any lowering is involved.
+#[test]
+fn recorded_clear_carries_its_buffer_mask() {
+    let mut c = ctx_64();
+    record::enable(&mut c, GL_DEPTH_TEST);
+    record::clear_buffers(&mut c, GL_DEPTH_BUFFER_BIT);
+    record::clear_buffers(&mut c, GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+
+    let draws = c.draws().to_vec();
+    assert_eq!(draws.len(), 2);
+    assert!(!draws[0].clears_color() && draws[0].clears_depth());
+    assert!(draws[1].clears_color() && draws[1].clears_stencil());
+    assert!(!draws[1].clears_depth());
+}
+
+/// A mask bit outside the three buffer bits is `GL_INVALID_VALUE` and records nothing.
+#[test]
+fn invalid_clear_mask_is_an_error_and_records_nothing() {
+    let mut c = ctx_64();
+    record::clear_buffers(&mut c, GL_COLOR_BUFFER_BIT | 0x1);
+
+    assert_eq!(c.recording_counts().0, 0);
+    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
+}
+
+/// `glDepthMask(GL_FALSE)` makes a depth clear a no-op, exactly as it does a depth write.
+#[test]
+fn depth_masked_off_clear_records_nothing() {
+    let mut c = ctx_64();
+    record::depth_mask(&mut c, false);
+    record::clear_buffers(&mut c, GL_DEPTH_BUFFER_BIT);
+
+    assert_eq!(c.recording_counts().0, 0);
+}
+
+/// GL keeps the depth buffer between frames unless the app clears it, so a frame that depth-tests without
+/// any `glClear(GL_DEPTH_BUFFER_BIT)` must LOAD the depth attachment. (Its very first frame still clears:
+/// the depth texture is minted then, and a zero-initialized depth plane fails every `GL_LESS` test.)
+#[test]
+fn depth_pass_without_a_depth_clear_loads_the_depth_attachment() {
+    let mut c = ctx_64();
+    let mut sink = RecordingSink::with_full_caps();
+    record::enable(&mut c, GL_DEPTH_TEST);
+    flat_program(&mut c);
+    tri_vbo(&mut c, 8);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    assert_eq!(
+        all_depth_loads(&sink.batches[0]),
+        vec![LoadOp::Clear],
+        "the first frame mints the depth texture, so it clear-loads"
+    );
+
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    assert_eq!(
+        all_depth_loads(&sink.batches[1]),
+        vec![LoadOp::Load],
+        "with no depth clear recorded, the second frame must preserve the depth buffer"
+    );
+}

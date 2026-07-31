@@ -45,7 +45,8 @@ pub extern "C" fn glClearBufferfv(buffer: u32, drawbuffer: i32, value: *const f3
         } else {
             // SAFETY: GL_DEPTH consumes exactly one component and null was rejected above.
             record::clear_depth(&mut s.gl, unsafe { *value });
-            record::clear(&mut s.gl);
+            // A DEPTH selector clears depth ONLY — recording a color clear here repainted the color buffer.
+            record::clear_buffers(&mut s.gl, GL_DEPTH_BUFFER_BIT);
         }
     });
 }
@@ -73,7 +74,7 @@ pub extern "C" fn glClearBufferiv(buffer: u32, drawbuffer: i32, value: *const i3
         } else {
             // SAFETY: GL_STENCIL consumes exactly one component and null was rejected above.
             record::clear_stencil(&mut s.gl, unsafe { *value });
-            record::clear(&mut s.gl);
+            record::clear_buffers(&mut s.gl, GL_STENCIL_BUFFER_BIT);
         }
     });
 }
@@ -111,7 +112,7 @@ pub extern "C" fn glClearBufferfi(buffer: u32, drawbuffer: i32, depth: f32, sten
         }
         record::clear_depth(&mut s.gl, depth);
         record::clear_stencil(&mut s.gl, stencil);
-        record::clear(&mut s.gl);
+        record::clear_buffers(&mut s.gl, GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
     });
 }
 
