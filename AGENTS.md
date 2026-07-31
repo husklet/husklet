@@ -883,6 +883,12 @@ driver, and it was reported as one for hours. When results are internally implau
 before the subject — three harness defects in a single session all produced plausible-looking output, and
 the worst of them made the driver look broken in exactly the places a real driver plausibly breaks.
 
+A refusal proves nothing without a path that otherwise works. A test asserting that a bad input is rejected
+was measuring its own broken setup — every submission failed, so a null pointer and a valid one were
+refused identically and the assertions passed while establishing nothing. It surfaced only because a
+control expected to *succeed* also failed. Pair every refusal assertion with a positive control you expect
+to pass, and prove the normal path first.
+
 Show a new test failing before trusting it to pass. Two executor tests were run against a deliberately
 reverted executor and returned exactly the conformance suite's own failure signature, which is what makes
 them evidence rather than a claim. The same control caught three assertions passing for the wrong reason —
