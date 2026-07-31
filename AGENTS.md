@@ -787,6 +787,14 @@ Bind every measurement to the process under test and to identifiers that process
 pid you resolved, a window number its own log emitted, a bundle hash you read yourself. Never to a name
 like "Husklet", never to whatever happens to be on screen, never to a hash quoted in a message.
 
+Ask a process where its output goes rather than assuming the conventional path:
+`lsof -p $(pgrep -f 'worker domain <ws>$') | grep '\.log'`. Two workers racing at startup can leave the
+winner writing somewhere else entirely, and "the log was empty" is only evidence once you have confirmed
+you are reading the log that process writes.
+
+`strings` cannot verify a diagnostic whose level or values are runtime `{}` substitutions — the message
+never appears contiguously in the binary. Check a distinctive literal tail instead.
+
 Two corollaries worth stating because both cost time here. A latched diagnostic cannot distinguish
 "happened once at startup" from "happening every frame" — carry an occurrence count. And an instrument
 that is self-consistent and produces plausible numbers is not thereby correct: a probe that sent
