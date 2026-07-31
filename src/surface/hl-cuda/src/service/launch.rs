@@ -102,9 +102,20 @@ pub fn launch(
         if let Some((_, pipeline)) = ctx.cached_pipeline(func.module, func.entry, block_arr) {
             pipeline
         } else {
+            // Resolve BEFORE taking identifiers. Allocating first and refusing afterwards abandons a
+            // shader and a pipeline id on every rejected launch, and an id taken by a call that then
+            // failed is the shape that wedges a session on retry.
+            // Taking the type's default here yielded ("", "") for a function that does not resolve,
+            // which was then packed into a KernelDescriptor, submitted, cached and dispatched. The
+            // kernel wrote nothing, so the guest read back zeros and "could not resolve the kernel"
+            // became indistinguishable from "the kernel ran and produced zeros" — a lookup failure
+            // wearing the appearance of a compute bug. `Function` carries public fields, so a
+            // fabricated or corrupted handle from the shim reaches here directly.
+            let (ptx_src, entry_name) = ctx.entry_source(func).ok_or(GpuError::Invalid(
+                "cuLaunchKernel: function handle does not resolve to a loaded module entry",
+            ))?;
             let shader = ctx.alloc_shader();
             let pipeline = ctx.alloc_pipeline();
-            let (ptx_src, entry_name) = ctx.entry_source(func).unwrap_or_default();
             let desc = KernelDescriptor {
                 ptx: ptx_src,
                 entry: entry_name.clone(),

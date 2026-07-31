@@ -101,3 +101,85 @@ fn launch_with_null_pointer_arg_binds_no_region_but_succeeds() {
         assert!(matches!(e.resource, BindResource::Buffer { .. }));
     }
 }
+
+// ===================================================================================================
+// launch — a Function that does not resolve
+// ===================================================================================================
+
+/// A `Function` whose module or entry does not resolve is an error, never a dispatch of an empty kernel.
+///
+/// `Function` carries public `module` and `entry` fields, so the shim translating a guest's `CUfunction`
+/// handle can present any pair of integers, and a fabricated or corrupted handle reaches `launch`
+/// directly. `module_get_function` guards the front door, but nothing guards a `Function` that is
+/// already held.
+///
+/// The failure this pins is silent rather than loud. `entry_source` returns `None` for an unresolvable
+/// function, and taking the type's default on that path yields `("", "")` — an empty PTX source and an
+/// empty entry name — which is then packed into a `KernelDescriptor`, submitted as `CreateShader` plus
+/// `CreateComputePipeline`, cached, and dispatched. The kernel writes nothing, so the output buffer keeps
+/// whatever it held and the guest reads back zeros. "Could not resolve the kernel" and "the kernel ran
+/// and produced zeros" become indistinguishable at the only place a caller can observe them, which turns
+/// a lookup failure into what looks like a compute bug.
+///
+/// `launch` already returns `Invalid` for a dangling pointer argument, so refusing here is its existing
+/// contract rather than a new policy.
+#[test]
+fn launch_with_unresolvable_function_errors_and_does_not_submit_or_cache() {
+    for label in ["unknown module", "entry past the end"] {
+        let mut c = ctx();
+        let m = c.load_ptx(ptx::VECADD_PTX);
+        let bad = if label == "unknown module" {
+            hl_cuda::Function { module: 999, entry: 0 }
+        } else {
+            hl_cuda::Function { module: m, entry: 999 }
+        };
+
+        let mut sink = RecordingSink::with_full_caps();
+        let p = allocate::mem_alloc(&mut c, &mut sink, 64).unwrap();
+        let args = [KernelArg::Ptr(p), KernelArg::Ptr(p), KernelArg::Ptr(p)];
+        let before = sink.commands().count();
+
+        let outcome = launch::launch(&mut c, &mut sink, bad, (1, 1, 1), (16, 1, 1), &args);
+
+        assert!(
+            outcome.is_err(),
+            "{label}: launching an unresolvable Function returned {outcome:?}; an empty kernel was \
+             dispatched instead of the lookup failure being reported, so the guest would read back \
+             zeros and see a compute bug",
+        );
+        // Nothing may be submitted for a launch that cannot resolve, and in particular no shader or
+        // pipeline built from an empty descriptor may be left in the cache for a later launch to reuse.
+        assert_eq!(
+            sink.commands().count(),
+            before,
+            "{label}: commands were submitted for a launch that could not resolve its function",
+        );
+        // Nor may the refused launch consume identifiers. An id taken by a call that then failed is
+        // the shape that wedges a session on retry, so a launch that resolves nothing must take
+        // nothing: the next successful launch gets the ids the refused one would have had.
+        let mut fresh = ctx();
+        let fm = fresh.load_ptx(ptx::VECADD_PTX);
+        let good = load_module::module_get_function(&fresh, fm, "vecadd").unwrap();
+        let mut fresh_sink = RecordingSink::with_full_caps();
+        let fp = allocate::mem_alloc(&mut fresh, &mut fresh_sink, 64).unwrap();
+        let fargs = [KernelArg::Ptr(fp), KernelArg::Ptr(fp), KernelArg::Ptr(fp)];
+        launch::launch(&mut fresh, &mut fresh_sink, good, (1, 1, 1), (16, 1, 1), &fargs).unwrap();
+
+        let after_refusal = load_module::module_get_function(&c, m, "vecadd").unwrap();
+        launch::launch(&mut c, &mut sink, after_refusal, (1, 1, 1), (16, 1, 1), &args).unwrap();
+        let shader_ids = |sink: &RecordingSink| -> Vec<u32> {
+            sink.commands()
+                .filter_map(|cmd| match cmd {
+                    Cmd::CreateShader { id, .. } => Some(*id),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(
+            shader_ids(&sink),
+            shader_ids(&fresh_sink),
+            "{label}: the refused launch consumed a shader id, so the successful launch after it got a \
+             different id than the same launch would have got on a fresh context",
+        );
+    }
+}
