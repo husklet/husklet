@@ -18,14 +18,16 @@ fn egl_get_config_attrib_marshals_real_values_and_errors() {
     );
     let egl_get_error = f!(sh.egl, "eglGetError", extern "C" fn() -> i32);
 
-    // Select the driver's single config (match-all: null attrib list).
+    // Select the depth+stencil tranche explicitly — a match-all list would sort the SMALLEST depth /
+    // stencil first (EGL 1.5 §3.4.1), which is a different, equally advertised config.
+    let request: [i32; 5] = [EGL_DEPTH_SIZE, 24, EGL_STENCIL_SIZE, 8, EGL_NONE];
     let mut cfg: *mut c_void = core::ptr::null_mut();
     let mut n: i32 = -1;
     assert_eq!(
-        egl_choose_config(dpy, core::ptr::null(), &mut cfg, 1, &mut n),
+        egl_choose_config(dpy, request.as_ptr(), &mut cfg, 1, &mut n),
         EGL_TRUE
     );
-    assert_eq!(n, 1, "the driver advertises exactly one config");
+    assert_eq!(n, 1, "one handle fits the caller's one-slot array");
     assert!(!cfg.is_null(), "the selected EGLConfig handle is non-null");
 
     // Every attribute reads back its truthful value into the caller's `*value` out-param.
@@ -148,7 +150,11 @@ fn egl_choose_and_get_configs_marshal_arrays_and_count() {
         egl_choose_config(dpy, attribs.as_ptr(), core::ptr::null_mut(), 0, &mut count),
         EGL_TRUE
     );
-    assert_eq!(count, 1, "count-only eglChooseConfig reports the total (1)");
+    assert_eq!(
+        count,
+        hl_gl::service::config::NUM_CONFIGS,
+        "count-only eglChooseConfig reports every matching config, not just the first"
+    );
 
     // Real array: fill up to config_size handles and report how many were written. A sentinel slot proves
     // the bounded copy did not overrun (only slot 0 is written).
@@ -164,14 +170,13 @@ fn egl_choose_and_get_configs_marshal_arrays_and_count() {
         ),
         EGL_TRUE
     );
-    assert_eq!(num, 1, "one config written");
-    assert!(
-        !configs[0].is_null(),
-        "slot 0 holds a real EGLConfig handle"
-    );
+    assert_eq!(num, hl_gl::service::config::NUM_CONFIGS, "every match written");
+    for slot in configs.iter().take(num as usize) {
+        assert!(!slot.is_null(), "each slot holds a real EGLConfig handle");
+    }
     assert_eq!(
-        configs[1], 0xF00Dusize as *mut c_void,
-        "slot 1 is untouched (bounded copy)"
+        configs[num as usize], 0xF00Dusize as *mut c_void,
+        "the slot past the last match is untouched (bounded copy)"
     );
     // The written handle is a real one: eglGetConfigAttrib(EGL_RED_SIZE) reads 8 through it.
     let mut red: i32 = -1;
@@ -213,15 +218,20 @@ fn egl_choose_and_get_configs_marshal_arrays_and_count() {
         egl_get_configs(dpy, core::ptr::null_mut(), 0, &mut total),
         EGL_TRUE
     );
-    assert_eq!(total, 1, "eglGetConfigs count-only total is 1");
+    assert_eq!(
+        total,
+        hl_gl::service::config::NUM_CONFIGS,
+        "eglGetConfigs count-only reports the whole table"
+    );
     let mut all: [*mut c_void; 2] = [core::ptr::null_mut(); 2];
     let mut got: i32 = -1;
     assert_eq!(
         egl_get_configs(dpy, all.as_mut_ptr(), all.len() as i32, &mut got),
         EGL_TRUE
     );
-    assert_eq!(got, 1, "eglGetConfigs wrote one handle");
-    assert!(!all[0].is_null());
+    // A capacity SMALLER than the table is a bounded copy, not an error.
+    assert_eq!(got, all.len() as i32, "eglGetConfigs filled the array");
+    assert!(all.iter().all(|config| !config.is_null()));
     let _ = egl_get_error();
     assert_eq!(
         egl_get_configs(dpy, all.as_mut_ptr(), 2, core::ptr::null_mut()),

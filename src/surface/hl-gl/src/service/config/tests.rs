@@ -55,7 +55,8 @@ fn enumerate_null_buffer_reports_count_only() {
 #[test]
 fn enumerate_bounded_copy() {
     // Real array with room: write + report all configs.
-    assert_eq!(Config::enumerate(true, 16), (1, 1));
+    let all = NUM_CONFIGS;
+    assert_eq!(Config::enumerate(true, 16), (all as usize, all));
     assert_eq!(Config::enumerate(true, 1), (1, 1));
     // Zero / negative capacity writes none (no OOB store into a zero-length array).
     assert_eq!(Config::enumerate(true, 0), (0, 0));
@@ -176,6 +177,72 @@ fn unsatisfiable_requests_match_nothing() {
         (EGL_MATCH_NATIVE_PIXMAP, 7),
     ])
     .is_empty());
+}
+
+/// The whole honest table is exposed. This constant was pinned to 1 while the shim carried a single
+/// opaque token, which hid the stencil-free tranche and broke stock glmark2 — a table entry nobody can
+/// select is the same defect as a missing one.
+#[test]
+fn every_table_entry_is_advertised() {
+    assert_eq!(NUM_CONFIGS as usize, CONFIGS.len());
+    assert_eq!(Config::ids().count(), CONFIGS.len());
+}
+
+/// STOCK `glmark2-es2-wayland`, no `--visual-config`. Its selector (`GLVisualConfig::match_score`) scores
+/// a component that is PRESENT BUT UNREQUESTED at -1000, exactly as harshly as a missing one, and takes
+/// the best config only when the best score is strictly positive. Its default target is
+/// `red=green=blue=alpha=1, depth=1, stencil=0, buffer=1, samples=0`, and it filters with nothing but
+/// `EGL_RENDERABLE_TYPE = EGL_OPENGL_ES2_BIT`. So the table must contain a config with depth > 0,
+/// stencil == 0, samples == 0, RGBA all in 1..=8 — or glmark2 prints `Failed to find suitable EGL config`.
+#[test]
+fn stock_glmark2_scores_at_least_one_advertised_config_as_acceptable() {
+    // glmark2's own scoring, transcribed: `component` is what a config advertises, `target` what it asked.
+    fn score_component(component: i32, target: i32, scale: i32) -> i32 {
+        if (component > 0 && target == 0) || (component == 0 && target > 0) {
+            return -1000;
+        }
+        if component == target {
+            return 32;
+        }
+        if component > 8 && target <= 8 && scale > 1 {
+            return -1000;
+        }
+        let difference = scale.abs() * (component - target);
+        if difference > 0 {
+            let score = if scale < 0 { 32 - difference } else { difference };
+            score.min(32).max(0)
+        } else {
+            0
+        }
+    }
+
+    let matched = Config::choose(&[(EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT)]);
+    assert!(!matched.is_empty(), "glmark2 filters on ES2 alone");
+    let best = matched
+        .iter()
+        .map(|id| {
+            let attrib = |attribute| Config::attrib_of(*id, attribute).unwrap();
+            // (advertised, glmark2's default target, scale)
+            [
+                (attrib(EGL_RED_SIZE), 1, 4),
+                (attrib(EGL_GREEN_SIZE), 1, 4),
+                (attrib(EGL_BLUE_SIZE), 1, 4),
+                (attrib(EGL_ALPHA_SIZE), 1, 4),
+                (attrib(EGL_DEPTH_SIZE), 1, 1),
+                (attrib(EGL_STENCIL_SIZE), 0, 0),
+                (attrib(EGL_BUFFER_SIZE), 1, 1),
+                (attrib(EGL_SAMPLES), 0, -1),
+            ]
+            .into_iter()
+            .map(|(component, target, scale)| score_component(component, target, scale))
+            .sum::<i32>()
+        })
+        .max()
+        .unwrap();
+    assert!(
+        best > 0,
+        "stock glmark2 accepts a config only on a strictly positive score; best was {best}"
+    );
 }
 
 /// Every advertised id answers every attribute; a foreign id is `EGL_BAD_CONFIG`.

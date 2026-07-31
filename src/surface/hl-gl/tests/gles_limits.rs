@@ -198,10 +198,17 @@ const SPEC: &[SpecLimit] = &[
         50048,
     ),
     // compute (ES3.1)
+    // DELIBERATE DEVIATION from the ES3.1 minimum of 1024, asserted as 0 rather than waived: the compute
+    // path has NO default uniform block. `Program::link` returns before reflecting a uniform layout for a
+    // compute source and `service::compute` binds only the `glBindBufferBase`d UBO/SSBO bindings, so a
+    // `glUniform*` on a compute program would read zero forever. Advertising 1024 here would be exactly
+    // the over-report this table exists to prevent; a compute shader that declares a default-block uniform
+    // is refused at link (`UniformError::ComputeDefaultBlock`). This driver's ES3.1 profile is already
+    // knowingly incomplete (no image units, no atomic counters) and is served only on explicit request.
     es31_only(
         GL_MAX_COMPUTE_UNIFORM_COMPONENTS,
         "MAX_COMPUTE_UNIFORM_COMPONENTS",
-        1024,
+        0,
     ),
     es31_only(
         GL_MAX_COMBINED_COMPUTE_UNIFORM_COMPONENTS,
@@ -497,4 +504,90 @@ fn the_advertised_texture_ceiling_fits_the_executor_capability() {
             "limit {pname:#x} advertises {advertised}, above the executor's {host}"
         );
     }
+}
+
+/// The advertised uniform ceiling versus what the LINKER accepts — both directions. An advertised limit
+/// the linker refuses is an over-report; a linker that accepts more than was advertised is a silently
+/// unadvertised capability. `glLinkProgram` is the only place a uniform budget is enforced, so this is
+/// the executor-facing edge of `GL_MAX_{VERTEX,FRAGMENT}_UNIFORM_VECTORS`.
+#[test]
+fn the_advertised_uniform_ceiling_is_exactly_what_the_linker_accepts() {
+    use hl_gl::adapter::glsl;
+
+    let c = ctx(3, 1);
+    for (vectors, components) in [
+        (GL_MAX_VERTEX_UNIFORM_VECTORS, GL_MAX_VERTEX_UNIFORM_COMPONENTS),
+        (
+            GL_MAX_FRAGMENT_UNIFORM_VECTORS,
+            GL_MAX_FRAGMENT_UNIFORM_COMPONENTS,
+        ),
+    ] {
+        assert_eq!(integer(&c, components), integer(&c, vectors) * 4);
+    }
+    let advertised = integer(&c, GL_MAX_VERTEX_UNIFORM_VECTORS) as usize;
+
+    // Exactly the advertised count links, in EITHER stage and in BOTH at once (the two are flattened into
+    // one std140 block, so "both at once" is the case a per-stage-only budget would miss).
+    let at_limit = format!("uniform vec4 v[{advertised}];\nvoid main(){{ gl_Position = v[0]; }}\n");
+    let fragment = format!("uniform vec4 f[{advertised}];\nvoid main(){{ gl_FragColor = f[0]; }}\n");
+    assert!(
+        glsl::StageSources::new(&at_limit, &fragment)
+            .uniform_layout()
+            .is_ok(),
+        "both stages at the advertised ceiling must link"
+    );
+
+    // One vector past it is refused, loudly and by name.
+    let over = format!(
+        "uniform vec4 v[{}];\nvoid main(){{ gl_Position = v[0]; }}\n",
+        advertised + 1
+    );
+    let error = glsl::StageSources::new(&over, "void main(){}")
+        .uniform_layout()
+        .expect_err("one vector past the advertised ceiling must be refused");
+    assert!(
+        matches!(error, glsl::UniformError::StageComponents { stage: "vertex", .. }),
+        "expected a component-count diagnostic, got {error}"
+    );
+
+    // WORST-CASE std140 expansion: a scalar array costs a full 16-byte stride per component, so a program
+    // at the advertised component count in both stages is the largest block a link can ever produce. It
+    // must still fit the enforced combined budget — otherwise the advertised limit is reachable only for
+    // shaders that happen to pack well, which is not a limit at all.
+    let components = advertised * 4;
+    assert_eq!(2 * components * 16, glsl::MAX_COMBINED_UNIFORM_BYTES);
+    let scalars = |name: &str, body: &str| {
+        format!("uniform float {name}[{components}];\nvoid main(){{ {body} }}\n")
+    };
+    assert!(
+        glsl::StageSources::new(
+            &scalars("v", "gl_Position = vec4(v[0]);"),
+            &scalars("f", "gl_FragColor = vec4(f[0]);"),
+        )
+        .uniform_layout()
+        .is_ok(),
+        "the advertised ceiling must hold even for the worst-case std140 layout"
+    );
+}
+
+/// COMPUTE advertises ZERO default-block uniform components, and that zero is enforced: the compute path
+/// reflects no uniform layout and binds only `glBindBufferBase`d buffers, so a `glUniform*` there would
+/// read zero forever. The link must fail instead — a silent zero is the defect this pins.
+#[test]
+fn a_compute_default_block_uniform_is_refused_because_none_is_carried() {
+    use hl_gl::adapter::glsl;
+
+    let c = ctx(3, 1);
+    assert_eq!(integer(&c, GL_MAX_COMPUTE_UNIFORM_COMPONENTS), 0);
+
+    let rejected = glsl::compute_default_block_uniform(
+        "#version 310 es\nuniform float scale;\nvoid main(){}\n",
+    );
+    assert_eq!(rejected, Ok(Some("scale".into())));
+
+    // A `glBindBufferBase`d BLOCK is a different, working path and must keep linking.
+    let accepted = glsl::compute_default_block_uniform(
+        "#version 310 es\nlayout(std140, binding = 0) uniform Params { float scale; };\nvoid main(){}\n",
+    );
+    assert_eq!(accepted, Ok(None));
 }

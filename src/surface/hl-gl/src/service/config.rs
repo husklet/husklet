@@ -65,10 +65,16 @@ pub const EGL_OPENGL_ES_BIT: i32 = 0x0001;
 
 // ---- the advertised config table -----------------------------------------------------------------
 
-/// The number of `EGLConfig`s the guest shim currently enumerates. It marshals ONE opaque handle, so it
-/// can expose only the primary config ([`CONFIG_ID`]); the honest table is [`CONFIGS`], and exposing it
-/// needs `shim/egl` to carry a handle per config id.
-pub const NUM_CONFIGS: i32 = 1;
+/// The number of `EGLConfig`s the guest shim enumerates — the WHOLE honest table. `shim/egl` carries the
+/// config's own id in the opaque `EGLConfig` handle, so every entry of [`CONFIGS`] round-trips through
+/// `eglChooseConfig` → `eglCreateWindowSurface` / `eglCreateContext` → `eglGetConfigAttrib`.
+///
+/// This was pinned to 1 while the shim still marshalled a single token, and that lie is what broke stock
+/// `glmark2-es2-wayland`: its selector scores an ADVERTISED-BUT-UNREQUESTED component at -1000, so the
+/// lone stencil-8 config was "unacceptable" against glmark2's default `stencil=0` request and it printed
+/// `Failed to find suitable EGL config`. The stencil-free tranche was already in the table; only this
+/// constant kept it hidden.
+pub const NUM_CONFIGS: i32 = CONFIGS.len() as i32;
 /// The opaque, non-zero id of the primary config (`eglGetConfigAttrib(EGL_CONFIG_ID)`). EGL config ids
 /// are 1-based, so `0` is never a valid id.
 pub const CONFIG_ID: i32 = 1;

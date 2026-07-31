@@ -132,8 +132,10 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         GL_MINOR_VERSION => one(ctx.local.client_minor),
         GL_NUM_EXTENSIONS => one(num_extensions()),
         GL_NUM_REQUESTABLE_EXTENSIONS_ANGLE => one(0),
-        GL_DEPTH_BITS => one(24),
-        GL_STENCIL_BITS => one(8),
+        // The default framebuffer's depth/stencil AS THE CONTEXT'S `EGLConfig` advertises them, so this
+        // and `eglGetConfigAttrib` can never disagree (see `LocalState::depth_bits`).
+        GL_DEPTH_BITS => one(ctx.local.depth_bits),
+        GL_STENCIL_BITS => one(ctx.local.stencil_bits),
         GL_RED_BITS | GL_GREEN_BITS | GL_BLUE_BITS | GL_ALPHA_BITS => one(8),
         // ES 3.0 §4.3.2: the second format/type pair glReadPixels always accepts. The presented surface is
         // RGBA8, so the pair is GL_RGBA / GL_UNSIGNED_BYTE — a `0` here makes the caller pass format 0.

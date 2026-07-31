@@ -5,6 +5,15 @@ use hl_gl::model::context::{ContextState, IrAllocator};
 
 use super::group::GroupSlot;
 use super::{ContextAttributes, EglSync};
+use hl_gl::service::config;
+
+/// One depth/stencil size of an advertised config, falling back to the primary config for a handle this
+/// driver never issued (`EGL_NO_CONFIG_KHR`).
+fn config_attrib(id: i32, attribute: i32) -> i32 {
+    config::Config::attrib_of(id, attribute)
+        .or_else(|_| config::Config::attrib_of(config::CONFIG_ID, attribute))
+        .unwrap_or(0)
+}
 
 struct Context {
     attributes: ContextAttributes,
@@ -62,6 +71,10 @@ impl Contexts {
                 attributes.client_version,
                 attributes.minor_version,
                 attributes.no_error,
+            )
+            .on_config(
+                config_attrib(attributes.config_id, config::EGL_DEPTH_SIZE),
+                config_attrib(attributes.config_id, config::EGL_STENCIL_SIZE),
             ),
         })
     }

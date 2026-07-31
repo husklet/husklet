@@ -34,7 +34,12 @@ pub extern "C" fn eglCreateContext(
         return core::ptr::null_mut();
     }
     let attributes = match ContextAttributeList::parse(attrib_list) {
-        Ok(attributes) => attributes,
+        // The context reports its OWN config's depth/stencil as `GL_DEPTH_BITS`/`GL_STENCIL_BITS`; a null
+        // config (`EGL_NO_CONFIG_KHR`) keeps the primary config's.
+        Ok(attributes) => ContextAttributes {
+            config_id: ConfigHandle::id(config).unwrap_or(config::CONFIG_ID),
+            ..attributes
+        },
         Err(error @ ContextAttributeError::Malformed { .. }) => {
             error.report();
             GlobalState::access(|s| s.set_egl_error(EGL_BAD_ATTRIBUTE));
@@ -120,6 +125,7 @@ impl ContextAttributeList {
             robust_access: false,
             reset_strategy: EGL_NO_RESET_NOTIFICATION_EXT,
             no_error: false,
+            config_id: config::CONFIG_ID,
         };
         if attrib_list.is_null() {
             return Ok(attributes);

@@ -25,6 +25,13 @@ impl ContextState {
         }
     }
 
+    /// Adopt the depth/stencil sizes of the `EGLConfig` the context was created on (see
+    /// [`LocalState::on_config`]).
+    pub fn on_config(mut self, depth_bits: i32, stencil_bits: i32) -> Self {
+        self.local = self.local.on_config(depth_bits, stencil_bits);
+        self
+    }
+
     pub fn references_buffer(&self, name: u32) -> bool {
         self.local.array_buffer == name
             || self.local.element_buffer == name

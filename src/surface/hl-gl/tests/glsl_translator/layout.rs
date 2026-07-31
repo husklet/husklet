@@ -126,15 +126,17 @@ fn nonliteral_array_dimension_is_a_link_error() {
 
 #[test]
 fn uniform_components_are_enforced_per_stage() {
-    let accepted = "uniform vec4 values[256];\nvoid main(){ gl_FragColor = values[255]; }\n";
+    // Exactly the advertised ceiling must LINK — an advertised limit the linker refuses is the bug this
+    // pair guards against. `MAX_UNIFORM_VECTORS` is 2048 vec4s / 8192 components per stage.
+    let accepted = "uniform vec4 values[2048];\nvoid main(){ gl_FragColor = values[2047]; }\n";
     assert!(
         glsl::StageSources::new("void main(){}", accepted)
             .uniform_layout()
             .is_ok(),
-        "the advertised 256-vector limit must remain usable"
+        "the advertised uniform-vector limit must remain usable"
     );
 
-    let rejected = "uniform vec4 values[257];\nvoid main(){ gl_FragColor = values[256]; }\n";
+    let rejected = "uniform vec4 values[2049];\nvoid main(){ gl_FragColor = values[2048]; }\n";
     assert!(matches!(
         glsl::StageSources::new("void main(){}", rejected).uniform_layout(),
         Err(glsl::UniformError::StageComponents {

@@ -28,6 +28,7 @@ const EGL_RED_SIZE: i32 = 0x3024;
 const EGL_GREEN_SIZE: i32 = 0x3023;
 const EGL_BLUE_SIZE: i32 = 0x3022;
 const EGL_ALPHA_SIZE: i32 = 0x3021;
+const EGL_NONE: i32 = 0x3038;
 const EGL_DEPTH_SIZE: i32 = 0x3025;
 const EGL_STENCIL_SIZE: i32 = 0x3026;
 const EGL_CONFIG_ID: i32 = 0x3028;
@@ -210,7 +211,9 @@ fn surfaceless_display_and_config_enumeration_end_to_end() {
     );
     assert_eq!(zero, 0, "config_size 0 copies no handles");
 
-    // 5) eglChooseConfig with a NULL attrib list (match-all) returns a usable config.
+    // 5) eglChooseConfig with a NULL attrib list (match-all) returns a usable config. Ask for the
+    // depth+stencil tranche explicitly: match-all sorts the SMALLEST depth/stencil first, so the
+    // attribute assertions below would otherwise be about a different, equally advertised config.
     let mut chosen: *mut c_void = core::ptr::null_mut();
     let mut nchosen = -1i32;
     assert_eq!(
@@ -219,6 +222,12 @@ fn surfaceless_display_and_config_enumeration_end_to_end() {
         "eglChooseConfig accepts a null attrib list"
     );
     assert_eq!(nchosen, 1);
+    let request: [i32; 5] = [EGL_DEPTH_SIZE, 24, EGL_STENCIL_SIZE, 8, EGL_NONE];
+    assert_eq!(
+        egl_choose_config(dpy, request.as_ptr(), &mut chosen, 1, &mut nchosen),
+        EGL_TRUE
+    );
+    assert_eq!(nchosen, 1, "exactly one config carries depth 24 + stencil 8");
     assert!(!chosen.is_null(), "eglChooseConfig returns a config handle");
 
     // 6) eglGetConfigAttrib returns TRUTHFUL attributes for our config (RGBA8 / D24 / S8, ES2+ES3).

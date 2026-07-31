@@ -220,6 +220,10 @@ pub enum UniformError {
     Samplers(usize),
     ConflictingDeclaration(String),
     AttributeLocation(String),
+    /// A compute shader declared a DEFAULT-BLOCK uniform. The compute path binds only the
+    /// `glBindBufferBase`d UBO/SSBO bindings, so such a uniform would silently read zero — hence the
+    /// advertised `GL_MAX_COMPUTE_UNIFORM_COMPONENTS = 0` and this loud refusal at link.
+    ComputeDefaultBlock(String),
 }
 
 impl std::fmt::Display for UniformError {
@@ -252,6 +256,11 @@ impl std::fmt::Display for UniformError {
             Self::AttributeLocation(name) => {
                 write!(f, "attribute `{name}` has a conflicting or invalid location")
             }
+            Self::ComputeDefaultBlock(name) => write!(
+                f,
+                "compute shader declares default-block uniform `{name}`; \
+                 GL_MAX_COMPUTE_UNIFORM_COMPONENTS is 0 — use a uniform block bound with glBindBufferBase"
+            ),
         }
     }
 }
@@ -264,8 +273,11 @@ impl From<PreprocessError> for UniformError {
     }
 }
 
-/// Matches the values returned by the GLES capability queries.
-pub const MAX_UNIFORM_COMPONENTS: usize = 256 * 4;
+/// The per-stage default-block ceiling ENFORCED here, kept identical to the advertised
+/// `GL_MAX_VERTEX_UNIFORM_COMPONENTS` / `GL_MAX_FRAGMENT_UNIFORM_COMPONENTS` (see
+/// [`crate::service::query::MAX_UNIFORM_COMPONENTS`] for what backs the number). The two must never
+/// drift: an advertised limit the linker refuses is exactly the over-report this table exists to avoid.
+pub const MAX_UNIFORM_COMPONENTS: usize = crate::service::query::MAX_UNIFORM_COMPONENTS as usize;
 /// Per-stage sampler ceiling: the GLES3 minimum (16) and simultaneously wgpu's guaranteed
 /// 16 sampled-textures + 16 samplers per shader stage, which is Metal's per-stage sampler-argument
 /// limit. A program declaring more is rejected at link.
@@ -342,7 +354,7 @@ mod uniforms;
 
 pub use bindings::{prepare_verbatim_program, prepare_verbatim_program_with};
 pub use preprocess::PreprocessError;
-pub use uniforms::UniformBlockDecl;
+pub use uniforms::{compute_default_block_uniform, UniformBlockDecl};
 
 use bindings::UniformBlockEdits;
 use constants::Constants;

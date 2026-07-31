@@ -49,10 +49,10 @@ fn program_link_rejects_unrepresentable_uniform_interfaces_with_diagnostics() {
     let oversized = link_sources(
         &mut context,
         "void main(){ gl_Position = vec4(0.0); }",
-        "uniform vec4 values[257];\nvoid main(){}",
+        "uniform vec4 values[2049];\nvoid main(){}",
     );
     assert!(!record::link_program(&mut context, oversized));
-    assert!(query::program_info_log(&context, oversized).contains("1028"));
+    assert!(query::program_info_log(&context, oversized).contains("8196"));
 
     let mut samplers = String::new();
     for index in 0..17 {

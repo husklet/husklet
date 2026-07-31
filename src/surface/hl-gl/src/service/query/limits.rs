@@ -84,13 +84,38 @@ pub const MAX_COMBINED_TEXTURE_IMAGE_UNITS: i32 = MAX_TEXTURE_UNITS as i32;
 
 // ---- program uniforms / varyings -----------------------------------------------------------------
 
-pub const MAX_UNIFORM_VECTORS: i32 = 256;
+/// Default-block uniform ceiling for the VERTEX and FRAGMENT stages, in `vec4`s. The two stages are
+/// flattened into ONE std140 block ([`crate::adapter::glsl::MAX_COMBINED_UNIFORM_BYTES`]), so their
+/// ceilings are genuinely identical and both are enforced at link.
+///
+/// Backed end to end, and NOT the old ES3.0 floor of 256:
+///   * storage is a heap `Vec<u8>` sized by the linker (`Program::ubuf`), not a fixed array;
+///   * the block is uploaded as an ordinary `CreateBuffer`+`WriteBuffer` — `hl_gpu`'s only gate is the
+///     generic `max_buffer_bytes` / `max_frame_bytes` (256 MiB each), thousands of times larger;
+///   * wgpu on Metal reports `max_uniform_buffer_binding_size == max_buffer_size` (GiBs), and the device
+///     is created with `adapter.limits()`, so the binding size is not the constraint either.
+/// The honest bound is therefore OUR OWN budget: 256 KiB for the combined block, which every advertised
+/// program fits even in the worst case (a scalar array costs a full 16-byte std140 stride per component,
+/// so `2 stages * 8192 components * 16 B` is exactly that budget). A program above it is refused at
+/// `glLinkProgram` with `UniformError::StageComponents` / `BlockBytes`, never silently truncated.
+pub const MAX_UNIFORM_VECTORS: i32 = 2048;
 pub const MAX_UNIFORM_COMPONENTS: i32 = MAX_UNIFORM_VECTORS * 4;
+/// COMPUTE has no default-block path at all: `Program::link` takes an early return for a compute source
+/// and never reflects a uniform layout, and `service::compute` binds ONLY the `glBindBufferBase`d
+/// UBO/SSBO bindings. A `glUniform*` on a compute program would go nowhere, so the honest ceiling is
+/// zero — DELIBERATELY BELOW the ES3.1 minimum of 1024, which this driver's 3.1 profile already does not
+/// meet (see the `eglCreateContext` default-version note on images/atomics). A compute shader that
+/// declares a default-block uniform is refused at link (`UniformError::ComputeDefaultBlock`) rather than
+/// reading zeros. Named uniform BLOCKS work in compute and keep their real limits below.
+pub const MAX_COMPUTE_UNIFORM_COMPONENTS: i32 = 0;
 pub const MAX_VARYING_VECTORS: i32 = 15;
 pub const MAX_VARYING_COMPONENTS: i32 = MAX_VARYING_VECTORS * 4;
 pub const MAX_VERTEX_OUTPUT_COMPONENTS: i32 = 64;
 pub const MAX_FRAGMENT_INPUT_COMPONENTS: i32 = 60;
-pub const MAX_UNIFORM_LOCATIONS: i32 = 1024;
+/// Uniform locations are DENSE indices into the linked program's uniform list (one per array element,
+/// then one per sampler element — `Program::uniform_location`), so the largest location a link can hand
+/// out is bounded by the combined component budget: every element costs at least one component.
+pub const MAX_UNIFORM_LOCATIONS: i32 = 2 * MAX_UNIFORM_COMPONENTS;
 pub const MIN_PROGRAM_TEXEL_OFFSET: i32 = -8;
 pub const MAX_PROGRAM_TEXEL_OFFSET: i32 = 7;
 
@@ -103,11 +128,16 @@ pub const MAX_COMBINED_UNIFORM_BLOCKS: i32 =
     MAX_VERTEX_UNIFORM_BLOCKS + MAX_FRAGMENT_UNIFORM_BLOCKS;
 pub const MAX_UNIFORM_BUFFER_BINDINGS: i32 =
     crate::model::glconst::MAX_UNIFORM_BUFFER_BINDINGS as i32;
-/// wgpu's `max_uniform_buffer_binding_size` guarantee is 64 KiB, so a 16 KiB block is real.
-pub const MAX_UNIFORM_BLOCK_SIZE: i32 = 16 * 1024;
+/// A named block is uploaded verbatim as its own buffer, so the ceiling is the smallest binding size any
+/// backend we run on guarantees: wgpu's `Limits::default().max_uniform_buffer_binding_size`, 64 KiB.
+/// (Metal reports far more — `max_buffer_size` — but 64 KiB is the number that holds on every adapter.)
+pub const MAX_UNIFORM_BLOCK_SIZE: i32 = 64 * 1024;
 /// The default block plus every bindable uniform block, per the spec's own composition rule.
 pub const MAX_COMBINED_UNIFORM_COMPONENTS: i32 =
     MAX_UNIFORM_COMPONENTS + MAX_VERTEX_UNIFORM_BLOCKS * (MAX_UNIFORM_BLOCK_SIZE / 4);
+/// Same composition, but the compute stage contributes no default block.
+pub const MAX_COMBINED_COMPUTE_UNIFORM_COMPONENTS: i32 =
+    MAX_COMPUTE_UNIFORM_COMPONENTS + MAX_COMPUTE_UNIFORM_BLOCKS * (MAX_UNIFORM_BLOCK_SIZE / 4);
 pub const UNIFORM_BUFFER_OFFSET_ALIGNMENT: i32 = 256;
 
 // ---- shader storage (ES3.1) ----------------------------------------------------------------------
@@ -190,9 +220,10 @@ impl CapabilityLimits {
             GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS => MAX_VERTEX_TEXTURE_IMAGE_UNITS,
             GL_MAX_COMPUTE_TEXTURE_IMAGE_UNITS => MAX_COMPUTE_TEXTURE_IMAGE_UNITS,
             GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS => MAX_COMBINED_TEXTURE_IMAGE_UNITS,
-            GL_MAX_FRAGMENT_UNIFORM_COMPONENTS
-            | GL_MAX_VERTEX_UNIFORM_COMPONENTS
-            | GL_MAX_COMPUTE_UNIFORM_COMPONENTS => MAX_UNIFORM_COMPONENTS,
+            GL_MAX_FRAGMENT_UNIFORM_COMPONENTS | GL_MAX_VERTEX_UNIFORM_COMPONENTS => {
+                MAX_UNIFORM_COMPONENTS
+            }
+            GL_MAX_COMPUTE_UNIFORM_COMPONENTS => MAX_COMPUTE_UNIFORM_COMPONENTS,
             GL_MAX_FRAGMENT_UNIFORM_VECTORS | GL_MAX_VERTEX_UNIFORM_VECTORS => MAX_UNIFORM_VECTORS,
             GL_MAX_VARYING_COMPONENTS => MAX_VARYING_COMPONENTS,
             GL_MAX_VARYING_VECTORS => MAX_VARYING_VECTORS,
@@ -208,8 +239,8 @@ impl CapabilityLimits {
             GL_MAX_UNIFORM_BUFFER_BINDINGS => MAX_UNIFORM_BUFFER_BINDINGS,
             GL_MAX_UNIFORM_BLOCK_SIZE => MAX_UNIFORM_BLOCK_SIZE,
             GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS
-            | GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS
-            | GL_MAX_COMBINED_COMPUTE_UNIFORM_COMPONENTS => MAX_COMBINED_UNIFORM_COMPONENTS,
+            | GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS => MAX_COMBINED_UNIFORM_COMPONENTS,
+            GL_MAX_COMBINED_COMPUTE_UNIFORM_COMPONENTS => MAX_COMBINED_COMPUTE_UNIFORM_COMPONENTS,
             GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT => UNIFORM_BUFFER_OFFSET_ALIGNMENT,
             GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS => MAX_SHADER_STORAGE_BUFFER_BINDINGS,
             GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS => MAX_VERTEX_SHADER_STORAGE_BLOCKS,

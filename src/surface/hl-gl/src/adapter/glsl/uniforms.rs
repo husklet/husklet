@@ -184,6 +184,26 @@ impl StageSources<'_> {
     }
 }
 
+/// The first DEFAULT-BLOCK uniform a COMPUTE stage declares — a plain `uniform TYPE name;` that is NOT a
+/// member of an interface block. `service::compute` builds its bind group from the `glBindBufferBase`d
+/// UBO/SSBO bindings alone and `Program::link` reflects no uniform layout for a compute source, so such a
+/// uniform would read zero forever; `link` turns this into a link failure instead, which is what the
+/// advertised `GL_MAX_COMPUTE_UNIFORM_COMPONENTS = 0` promises.
+pub fn compute_default_block_uniform(stage: &str) -> Result<Option<String>, UniformError> {
+    let source = Source::new(stage).preprocessed()?;
+    let members: Vec<String> = Source::new(&source)
+        .uniform_blocks()
+        .into_iter()
+        .flat_map(|block| block.members)
+        .map(|member| member.name)
+        .collect();
+    let (data, _) = Declarations::from_stages(&source, "").uniforms();
+    Ok(data
+        .into_iter()
+        .map(|declaration| declaration.name)
+        .find(|name| !members.contains(name)))
+}
+
 fn sampler_elements(declarations: &[Decl]) -> Result<usize, UniformError> {
     declarations.iter().try_fold(0usize, |total, declaration| {
         if !declaration.array_literal {

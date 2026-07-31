@@ -103,6 +103,11 @@ impl Program {
         // program-keyed shader/pipeline cache invalidates any IR it created for the previous link.
         self.link_gen += 1;
         if !cs_src.is_empty() {
+            // The compute path carries no default uniform block (see `MAX_COMPUTE_UNIFORM_COMPONENTS`):
+            // refuse such a program instead of letting every `glUniform*` on it read back zero.
+            if let Some(name) = glsl::compute_default_block_uniform(&cs_src)? {
+                return Err(glsl::UniformError::ComputeDefaultBlock(name));
+            }
             let source = glsl::Translator::compute(&cs_src);
             self.compute_ir = Some(
                 GlslDescriptor {
