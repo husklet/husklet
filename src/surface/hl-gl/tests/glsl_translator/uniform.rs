@@ -263,3 +263,85 @@ fn default_block_array_uniform_keeps_its_dimension() {
 // ---------------------------------------------------------------------------------------------------
 // verbatim path: layout(location=N) injection into BARE Skia-style in/out (Task #243)
 // ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn postfix_array_on_the_type_declares_the_same_uniform_array() {
+    // GskGLRenderer's shape. `uniform vec4[3] x;` is `uniform vec4 x[3];` (GLSL ES 3.00 §4.1.9); the
+    // scanner used to read `vec4[3]` as one type token and refuse the program with
+    // `unsupported uniform type vec4[3]`, dropping GTK4 to GskNglRenderer.
+    let vs = "#version 300 es\nin vec2 aPos;\nvoid main(){ gl_Position = vec4(aPos, 0.0, 1.0); }\n";
+    let fs = "#version 300 es\nprecision highp float;\nuniform vec4[3] uColors;\nout vec4 o;\n\
+              void main(){ o = uColors[0] + uColors[1] + uColors[2]; }\n";
+    let (unis, total) = glsl::StageSources::new(vs, fs)
+        .uniform_layout()
+        .expect("postfix array uniform is supported");
+    let c = unis
+        .iter()
+        .find(|u| u.name == "uColors")
+        .expect("uColors reflected");
+    assert_eq!(c.arr, 3, "three elements, not a scalar");
+    assert_eq!(c.sz, 48, "vec4[3] std140 size");
+    assert!(total >= 48, "ubuf holds the array: {total}");
+    // The regenerated block must spell the dimension on the NAME, which is all naga accepts.
+    let (_v, f) = glsl::StageSources::new(vs, fs).translate_render();
+    assert!(
+        f.contains("vec4 uColors[3];"),
+        "dimension moved onto the declarator:\n{f}"
+    );
+    // GTK's real shader is macro-heavy ES and takes the VERBATIM route, which wraps the bare declaration
+    // into `HlUniforms` — that block must carry the array too, or naga const-indexes a scalar.
+    let combined = glsl::StageSources::new(vs, fs).uniform_decls();
+    let wrapped = glsl::Source::new(fs).prepare_verbatim_stage(&combined);
+    assert!(
+        !wrapped.contains("uniform vec4[3] uColors;"),
+        "bare postfix declaration removed:\n{wrapped}"
+    );
+    assert!(
+        wrapped.contains("vec4 uColors[3];"),
+        "wrapped block carries the dimension:\n{wrapped}"
+    );
+    // The point of the dimension: naga must see an array to const-index, not a scalar.
+    assert_naga_parses(&f, naga::ShaderStage::Fragment);
+}
+
+#[test]
+fn detached_postfix_array_and_block_member_postfix_array_both_parse() {
+    let vs = "#version 300 es\nin vec2 aPos;\nvoid main(){ gl_Position = vec4(aPos, 0.0, 1.0); }\n";
+    // `vec2 [4]` — the subscript as its own token — and a postfix array MEMBER of an interface block.
+    let fs = "#version 300 es\nprecision highp float;\nuniform vec2 [4] uOffsets;\n\
+              uniform Block { vec4[2] mColors; float mScale; };\nout vec4 o;\n\
+              void main(){ o = vec4(uOffsets[0], 0.0, 1.0) + mColors[1] * mScale; }\n";
+    let unis = glsl::StageSources::new(vs, fs)
+        .uniform_layout()
+        .expect("detached postfix array is supported")
+        .0;
+    let o = unis
+        .iter()
+        .find(|u| u.name == "uOffsets")
+        .expect("uOffsets reflected");
+    assert_eq!(o.arr, 4, "detached subscript belongs to the declarator");
+    let blocks = glsl::StageSources::new(vs, fs).uniform_blocks();
+    let member = blocks
+        .iter()
+        .flat_map(|b| &b.members)
+        .find(|m| m.name == "mColors")
+        .expect("block member reflected");
+    assert_eq!(member.ty, "vec4", "type token has no subscript left on it");
+    assert_eq!(member.arr, 2, "member dimension read from the type");
+}
+
+#[test]
+fn an_array_of_arrays_uniform_is_refused_not_misparsed() {
+    // GLSL ES has no arrays of arrays and this layout cannot model one. Refuse loudly rather than keep
+    // whichever of the two dimensions was read last and lay out the wrong number of bytes.
+    let vs = "#version 300 es\nin vec2 aPos;\nvoid main(){ gl_Position = vec4(aPos, 0.0, 1.0); }\n";
+    let fs = "#version 300 es\nprecision highp float;\nuniform vec4[3] uGrid[2];\nout vec4 o;\n\
+              void main(){ o = uGrid[0][0]; }\n";
+    let error = glsl::StageSources::new(vs, fs)
+        .uniform_layout()
+        .expect_err("an array of arrays is not modelable");
+    assert!(
+        format!("{error}").contains("uGrid"),
+        "the refusal names the declaration: {error}"
+    );
+}

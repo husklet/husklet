@@ -78,6 +78,7 @@ impl Tokens<'_> {
                 }
                 ty = read_tok(&mut q);
             }
+            let on_type = Self::split_type_array(&mut ty, b, &mut q, &constants);
             while q < b.len() && Self::is_space(b[q]) {
                 q += 1;
             }
@@ -98,6 +99,7 @@ impl Tokens<'_> {
                         }
                         mty = read_tok(&mut q);
                     }
+                    let member_on_type = Self::split_type_array(&mut mty, b, &mut q, &constants);
                     while q < b.len() && Self::is_space(b[q]) {
                         q += 1;
                     }
@@ -106,7 +108,10 @@ impl Tokens<'_> {
                         mnm.push(b[q] as char);
                         q += 1;
                     }
-                    let (marr, array_literal) = Self::read_array_subscript(b, &mut q, &constants);
+                    let (marr, array_literal) = Self::merge_array_subscripts(
+                        member_on_type,
+                        Self::read_array_subscript(b, &mut q, &constants),
+                    );
                     while q < b.len() && b[q] != b';' && b[q] != b'}' {
                         q += 1; // skip to the member end
                     }
@@ -146,7 +151,10 @@ impl Tokens<'_> {
                     name.push(b[q] as char);
                     q += 1;
                 }
-                let (arr, array_literal) = Self::read_array_subscript(b, &mut q, &constants);
+                let (arr, array_literal) = Self::merge_array_subscripts(
+                    on_type,
+                    Self::read_array_subscript(b, &mut q, &constants),
+                );
                 if !ty.is_empty() && !name.is_empty() {
                     out.push(Decl {
                         ty: ty.clone(),
@@ -166,6 +174,44 @@ impl Tokens<'_> {
             p = q;
         }
         out
+    }
+
+    /// GLSL puts the array size on the TYPE as readily as on the NAME: `uniform vec4[3] x;` is exactly
+    /// `uniform vec4 x[3];` (GLSL ES 3.00 §4.1.9, and desktop GLSL since 1.20). `read_tok` stops only at a
+    /// space or `;`, so it swallows the subscript into the type token and every type table then rejects
+    /// `vec4[3]` as an unknown type — which is how a legal GskGLRenderer shader failed to link.
+    ///
+    /// Split any subscript off `ty` (both the joined `vec4[3]` and the detached `vec4 [3] name` spelling)
+    /// and return it in [`read_array_subscript`]'s `(elements, modelable)` form; `(0, true)` when the type
+    /// carries none.
+    pub(super) fn split_type_array(
+        ty: &mut String,
+        b: &[u8],
+        q: &mut usize,
+        constants: &Constants,
+    ) -> (u32, bool) {
+        if let Some(open) = ty.find('[') {
+            let subscript = ty.split_off(open);
+            let bytes = subscript.as_bytes();
+            let mut at = 0usize;
+            let (size, modelable) = Self::read_array_subscript(bytes, &mut at, constants);
+            // Anything trailing the `]` (`vec4[2][3]`, or a name jammed against the type) is not the single
+            // dimension this uniform model can lay out; refuse rather than silently keep the first size.
+            return (size, modelable && at == bytes.len());
+        }
+        // `TYPE [n] name` — the subscript stands alone between the type and the declarator.
+        Self::read_array_subscript(b, q, constants)
+    }
+
+    /// Combine a type-side and a name-side array subscript for one declarator. Exactly one may be present:
+    /// GLSL ES has no arrays of arrays, so `vec4[3] x[2]` is refused (`modelable = false`) rather than
+    /// collapsing to whichever dimension we happened to read last.
+    pub(super) fn merge_array_subscripts(on_type: (u32, bool), on_name: (u32, bool)) -> (u32, bool) {
+        match (on_type, on_name) {
+            ((0, true), name) => name,
+            (ty, (0, true)) => ty,
+            _ => (0, false),
+        }
     }
 
     /// If the bytes at `*q` are an array subscript `[dimension]` (possibly with surrounding spaces), consume

@@ -316,11 +316,14 @@ impl Source<'_> {
                     }
                     ty = read_tok(&mut q);
                 }
+                let on_type = Tokens::split_type_array(&mut ty, b, &mut q, &constants);
                 while q < b.len() && Tokens::is_space(b[q]) {
                     q += 1;
                 }
-                let name = read_tok(&mut q);
-                let (arr, array_literal) = Tokens::read_array_subscript(b, &mut q, &constants);
+                let mut name = read_tok(&mut q);
+                // `read_tok` also swallows a subscript jammed onto the NAME (`m[3]`); hand it back.
+                let on_name = Tokens::split_type_array(&mut name, b, &mut q, &constants);
+                let (arr, array_literal) = Tokens::merge_array_subscripts(on_type, on_name);
                 if !ty.is_empty() && !name.is_empty() {
                     members.push(Decl {
                         ty,

@@ -136,6 +136,20 @@ impl Declarations<'_> {
         if ty.is_empty() {
             return None;
         }
+        // GLSL also allows the array size on the TYPE (`in vec4[3] uv;`). Skip that subscript so the
+        // declarator is still recognised — otherwise the name reads empty and the varying silently goes
+        // without a location.
+        while p < n && Tokens::is_space(b[p]) {
+            p += 1;
+        }
+        if p < n && b[p] == b'[' {
+            while p < n && b[p] != b']' {
+                p += 1;
+            }
+            if p < n {
+                p += 1; // consume ']'
+            }
+        }
         // The declared name.
         let name = read_word(&mut p);
         if name.is_empty() || name.as_bytes()[0].is_ascii_digit() {
