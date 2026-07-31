@@ -179,7 +179,10 @@ impl AdapterPresenter {
             crate::scene::port::CompletionOutcome::Delivered { .. } => {
                 super::native::NativeFrameOutcome::Displayed
             }
-            crate::scene::port::CompletionOutcome::TerminalFailure => {
+            // A retryable completion did not display the frame either — the producer's buffer is released
+            // on the same terms; only the compositor's pacing distinguishes the two.
+            crate::scene::port::CompletionOutcome::RetryableFailure
+            | crate::scene::port::CompletionOutcome::TerminalFailure => {
                 super::native::NativeFrameOutcome::TerminalFailure
             }
         };

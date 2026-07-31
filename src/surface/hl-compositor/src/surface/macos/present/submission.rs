@@ -19,17 +19,16 @@ const PENDING: u8 = 0;
 const TERMINAL: u8 = 1;
 type Presented = dyn Fn(NonNull<ProtocolObject<dyn MTLDrawable>>);
 
-/// Why a drawable submission ended terminally.
+/// Why a drawable submission failed.
 ///
-/// A terminal failure costs the client the frame outright and is never retried, so an unattributed one
-/// leaves a window permanently blank with nothing on record explaining it. Each cause is distinct and
-/// actionable: the first two mean WindowServer presented the drawable but could not be believed about
-/// when, the third that Metal rejected the command buffer, the fourth that the presented callback never
-/// arrived at all.
+/// A failed present costs the client the frame, so an unattributed one leaves a window blank with nothing
+/// on record explaining it. Each cause is distinct and actionable: the first means WindowServer never
+/// displayed the drawable at all, the second that it claims a presentation time nothing else agrees with,
+/// the third that Metal rejected the command buffer, the fourth that the presented callback never arrived.
 #[derive(Clone, Copy)]
-enum TerminalCause {
-    /// `MTLDrawable.presentedTime` did not convert to a monotonic instant — typically still zero,
-    /// meaning WindowServer never actually presented this drawable.
+enum FailureCause {
+    /// `MTLDrawable.presentedTime` did not name an instant — zero, the value Metal leaves for a drawable
+    /// WindowServer never displayed. The frame did not reach the screen; nothing says it cannot next time.
     PresentedTimeUnreadable,
     /// A presented time outside any plausible window relative to submission and observation.
     PresentedTimeImplausible,
@@ -39,54 +38,73 @@ enum TerminalCause {
     CallbackDeadlineExpired,
 }
 
-impl TerminalCause {
+impl FailureCause {
     const ALL: usize = 4;
 
     const fn index(self) -> usize {
         match self {
-            TerminalCause::PresentedTimeUnreadable => 0,
-            TerminalCause::PresentedTimeImplausible => 1,
-            TerminalCause::CommandBufferError => 2,
-            TerminalCause::CallbackDeadlineExpired => 3,
+            FailureCause::PresentedTimeUnreadable => 0,
+            FailureCause::PresentedTimeImplausible => 1,
+            FailureCause::CommandBufferError => 2,
+            FailureCause::CallbackDeadlineExpired => 3,
         }
     }
 
     const fn name(self) -> &'static str {
         match self {
-            TerminalCause::PresentedTimeUnreadable => "presented_time_unreadable",
-            TerminalCause::PresentedTimeImplausible => "presented_time_implausible",
-            TerminalCause::CommandBufferError => "command_buffer_error",
-            TerminalCause::CallbackDeadlineExpired => "callback_deadline_expired",
+            FailureCause::PresentedTimeUnreadable => "presented_time_unreadable",
+            FailureCause::PresentedTimeImplausible => "presented_time_implausible",
+            FailureCause::CommandBufferError => "command_buffer_error",
+            FailureCause::CallbackDeadlineExpired => "callback_deadline_expired",
+        }
+    }
+
+    /// What this cause proves about the NEXT present.
+    ///
+    /// Only a cause that says the drawable can never be believed again is terminal. A drawable that was
+    /// simply not displayed is the offscreen case the pacing model already carries: retain the frame and
+    /// its callbacks and re-drive it, rather than dropping the client's callbacks outright — a window that
+    /// is off screen now may be on screen at the next refresh, and a client whose callbacks were dropped
+    /// never asks again.
+    const fn outcome(self) -> CompletionOutcome {
+        match self {
+            FailureCause::PresentedTimeUnreadable => CompletionOutcome::RetryableFailure,
+            FailureCause::PresentedTimeImplausible
+            | FailureCause::CommandBufferError
+            | FailureCause::CallbackDeadlineExpired => CompletionOutcome::TerminalFailure,
         }
     }
 }
 
 /// One `error`-level line per distinct cause, for the whole process.
 ///
-/// A window whose presents fail terminally fails EVERY present, so logging each one buries the fact in
-/// thousands of identical lines — the same silence as saying nothing. The first of each cause speaks and
-/// names its submission; the rest are counted. Correlate the submission id with the adapter's
+/// A window whose presents fail fails EVERY present, so logging each one buries the fact in thousands of
+/// identical lines — the same silence as saying nothing. The first of each cause speaks and names its
+/// submission; the rest are counted. Correlate the submission id with the adapter's
 /// `settle async root=… submission=…` line to get the surface.
-static ANNOUNCED: [std::sync::atomic::AtomicBool; TerminalCause::ALL] =
-    [const { std::sync::atomic::AtomicBool::new(false) }; TerminalCause::ALL];
+static ANNOUNCED: [std::sync::atomic::AtomicBool; FailureCause::ALL] =
+    [const { std::sync::atomic::AtomicBool::new(false) }; FailureCause::ALL];
 
-/// Build the terminal completion for `id`, attributing it to `cause` exactly once per cause.
-fn terminal_completion(id: PresentationId, cause: TerminalCause) -> PresentationCompletion {
-    hl_log::hl_count!(hl_log::tag::PRESENT, "present_terminal");
+/// Build the failure completion for `id`, attributing it to `cause` exactly once per cause.
+fn failed_completion(id: PresentationId, cause: FailureCause) -> PresentationCompletion {
+    let outcome = cause.outcome();
+    let retryable = matches!(outcome, CompletionOutcome::RetryableFailure);
+    if retryable {
+        hl_log::hl_count!(hl_log::tag::PRESENT, "present_retry");
+    } else {
+        hl_log::hl_count!(hl_log::tag::PRESENT, "present_terminal");
+    }
     if !ANNOUNCED[cause.index()].swap(true, Ordering::Relaxed) {
         hl_log::hl_log!(
             hl_log::tag::PRESENT,
             hl_log::Level::Error,
-            "present terminal submission={} cause={} — further failures of this cause are counted \
-             (present_terminal), not logged",
+            "present {} submission={} cause={} — further failures of this cause are counted, not logged",
+            if retryable { "retryable" } else { "terminal" },
             id.0,
             cause.name()
         );
     }
-    PresentationCompletion {
-        id,
-        outcome: CompletionOutcome::TerminalFailure,
-    }
+    PresentationCompletion { id, outcome }
 }
 
 struct CompletionGate(AtomicU8);
@@ -107,9 +125,16 @@ impl CompletionGate {
     }
 }
 
+/// `MTLDrawable.presentedTime` as a monotonic instant, or `None` when it does not name one.
+///
+/// Zero is the value Metal leaves in place for a drawable WindowServer never actually displayed, and it
+/// is the single most common reading on a window that is not on screen — so it has to be rejected HERE.
+/// Admitting it as `Some(0)` sent it on to `sane_presented_time`, which compares against machine-uptime
+/// nanoseconds and so failed it as *implausible*: a window that never reached the screen was reported as
+/// one that reached it at an unbelievable time, which is a different bug with a different fix.
 fn presented_nanos(seconds: f64) -> Option<u64> {
     let nanos = seconds * 1_000_000_000.0;
-    (seconds.is_finite() && seconds >= 0.0 && nanos <= u64::MAX as f64)
+    (seconds.is_finite() && seconds > 0.0 && nanos <= u64::MAX as f64)
         .then(|| nanos.round() as u64)
 }
 
@@ -215,7 +240,7 @@ impl NativePresent {
                     publish(
                         &callback_events,
                         &callback_wake,
-                        terminal_completion(id, TerminalCause::PresentedTimeUnreadable),
+                        failed_completion(id, FailureCause::PresentedTimeUnreadable),
                     );
                     return;
                 };
@@ -229,7 +254,7 @@ impl NativePresent {
                     publish(
                         &callback_events,
                         &callback_wake,
-                        terminal_completion(id, TerminalCause::PresentedTimeImplausible),
+                        failed_completion(id, FailureCause::PresentedTimeImplausible),
                     );
                     return;
                 }
@@ -286,11 +311,11 @@ impl NativePresent {
             // Distinguish the two: a command-buffer error is the GPU rejecting the work, an expiry is the
             // presented callback never arriving. They have entirely different causes and fixes.
             let cause = if failed {
-                TerminalCause::CommandBufferError
+                FailureCause::CommandBufferError
             } else {
-                TerminalCause::CallbackDeadlineExpired
+                FailureCause::CallbackDeadlineExpired
             };
-            publish(&self.events, &self.wake, terminal_completion(self.id, cause));
+            publish(&self.events, &self.wake, failed_completion(self.id, cause));
         }
         true
     }
@@ -321,6 +346,29 @@ mod tests {
             MTLCommandBufferStatus::Completed,
             MTLCommandBufferStatus::Error
         );
+    }
+
+    #[test]
+    fn a_drawable_window_server_never_displayed_is_unreadable_and_retryable() {
+        // Metal leaves `presentedTime` at zero for a drawable that never reached the screen. Admitting it
+        // as an instant sent it to `sane_presented_time`, which compares against machine-uptime nanos and
+        // failed it as implausible — the wrong cause, and terminal, which drops the client's frame
+        // callbacks so the window never advances again.
+        assert_eq!(presented_nanos(0.0), None);
+        assert!(presented_nanos(1.0).is_some());
+        let uptime_ns = 12 * 60 * 60 * 1_000_000_000u64;
+        assert!(!sane_presented_time(0, uptime_ns, uptime_ns));
+        assert_eq!(
+            FailureCause::PresentedTimeUnreadable.outcome(),
+            CompletionOutcome::RetryableFailure
+        );
+        for terminal in [
+            FailureCause::PresentedTimeImplausible,
+            FailureCause::CommandBufferError,
+            FailureCause::CallbackDeadlineExpired,
+        ] {
+            assert_eq!(terminal.outcome(), CompletionOutcome::TerminalFailure);
+        }
     }
 
     #[test]

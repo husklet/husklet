@@ -115,13 +115,17 @@ pub enum ScrollSource {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct PresentationId(pub u64);
 
-/// Terminal outcome reported after an asynchronous host-display submission.
+/// Outcome reported after an asynchronous host-display submission.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CompletionOutcome {
     Delivered {
         serial: u64,
         timing: Option<PresentTiming>,
     },
+    /// The frame did not reach the screen, but nothing says the next one cannot — retain the frame and
+    /// its callbacks and re-drive it. The asynchronous counterpart of [`PresentOutcome::RetryableFailure`].
+    RetryableFailure,
+    /// Delivery cannot succeed for this frame; drop its callbacks and retire its resources.
     TerminalFailure,
 }
 

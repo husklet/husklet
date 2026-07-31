@@ -259,14 +259,30 @@ impl MacPresenter {
     /// A frame the host refused this cycle. Each refusal costs the client a whole refresh period, so the
     /// reason is recorded for attribution, and the repaint that re-drives the frame is always requested —
     /// without it a client that goes idle after the refusal leaves its window showing stale content.
+    ///
+    /// Attributed at `error`, latched per surface per reason. "Retryable" describes the pacing, not the
+    /// severity: a refusal that recurs every refresh never ships a frame, so the client's `wl_surface.frame`
+    /// callbacks never fire and its window is as dead as an abandoned one. A default release build compiles
+    /// `warn` and below out entirely, so at `warn` this said nothing at all in a shipped bundle.
     fn refuse(&mut self, sid: SurfaceId, reason: &'static str) -> PresentationFeedback {
         hl_log::hl_count!(tag::PRESENT, "present_retry");
-        hl_log::hl_log!(
-            tag::PRESENT,
-            Level::Warn,
-            "present_retry sid={} reason={reason}",
-            sid.0
-        );
+        let announced = self
+            .surfaces
+            .get(&sid)
+            .is_some_and(|state| state.refused_reported.contains(&reason));
+        if !announced {
+            hl_log::hl_log!(
+                tag::PRESENT,
+                Level::Error,
+                "present refused sid={} reason={reason} — this frame did not reach the screen and the \
+                 client's frame callbacks do not fire until one does; further refusals of this reason \
+                 are counted (present_retry), not logged",
+                sid.0
+            );
+            if let Some(state) = self.surfaces.get_mut(&sid) {
+                state.refused_reported.push(reason);
+            }
+        }
         if !self.events.contains(&PresenterEvent::Repaint(sid)) {
             self.events.push(PresenterEvent::Repaint(sid));
         }

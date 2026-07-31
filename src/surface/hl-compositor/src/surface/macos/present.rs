@@ -192,6 +192,10 @@ struct SurfState {
     observed_backing_scale: Option<u64>,
     /// Whether this surface has already reported that its presents were abandoned (see `abandon`).
     abandoned_reported: bool,
+    /// Refusal reasons this surface has already reported (see `refuse`). A refusal is retried, so a
+    /// surface stuck on one repeats it every refresh; latching per reason keeps a permanent stall to a
+    /// handful of lines while still naming a second, different reason if one appears.
+    refused_reported: Vec<&'static str>,
     /// Whether this popup has already described its placement (see `describe_popup_placement`). Latched
     /// so a menu that repaints at refresh rate states its geometry once, not sixty times a second.
     described_popup: bool,
@@ -218,6 +222,7 @@ impl SurfState {
             observed_native_fullscreen: None,
             observed_backing_scale: None,
             abandoned_reported: false,
+            refused_reported: Vec::new(),
             described_popup: false,
         }
     }
@@ -440,7 +445,12 @@ impl MacPresenter {
         while let Ok(event) = self.presentation_rx.try_recv() {
             if let PresenterEvent::Presentation(completion) = event {
                 let surface = self.present_surfaces.remove(&completion.id);
-                if completion.outcome == CompletionOutcome::TerminalFailure {
+                // Either failure leaves the surface without a live submission and needs re-driving; the
+                // retryable one is the case where the next repaint is expected to succeed.
+                if matches!(
+                    completion.outcome,
+                    CompletionOutcome::TerminalFailure | CompletionOutcome::RetryableFailure
+                ) {
                     if let Some(surface) = surface {
                         if let Some(state) = self.surfaces.get_mut(&surface) {
                             state.native_submission = None;

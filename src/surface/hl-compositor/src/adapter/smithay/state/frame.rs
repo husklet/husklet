@@ -106,7 +106,8 @@ impl HlState {
             crate::scene::service::FramePacing::Presented => {
                 let timing = match completion.outcome {
                     crate::scene::port::CompletionOutcome::Delivered { timing, .. } => timing,
-                    crate::scene::port::CompletionOutcome::TerminalFailure => None,
+                    crate::scene::port::CompletionOutcome::RetryableFailure
+                    | crate::scene::port::CompletionOutcome::TerminalFailure => None,
                 };
                 let time_ns = timing
                     .map(|timing| timing.present_ns)

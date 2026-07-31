@@ -74,6 +74,58 @@ fn one_layer_failure_terminates_atomic_frame_after_all_receipts_retire() {
 }
 
 #[test]
+fn a_retryable_completion_retains_the_frame_callbacks_a_terminal_one_drops() {
+    // A drawable the host never displayed is not a dead frame. Retaining its callbacks is what lets the
+    // next accepted present fire them; dropping them leaves the client waiting forever on a callback that
+    // will never arrive, which is indistinguishable to the user from a frozen window.
+    let (mut compositor, root) = two_role_compositor();
+    compositor.apply_commit(root, Commit::frame_callback_only());
+    script_two(&mut compositor, 91, 92);
+    assert_eq!(compositor.present_root(root).pacing, FramePacing::Pending);
+
+    assert!(compositor
+        .complete_presentation(PresentationCompletion {
+            id: PresentationId(91),
+            outcome: CompletionOutcome::RetryableFailure,
+        })
+        .is_none());
+    let (_, completed) = compositor
+        .complete_presentation(delivered(92))
+        .expect("remaining submission retired");
+    assert_eq!(completed.pacing, FramePacing::RetryableFailure);
+    assert_eq!(completed.callbacks_fired, 0, "retained, not fired");
+    assert_eq!(
+        compositor.retained_callbacks(root),
+        1,
+        "the callback survives for the next accepted present"
+    );
+
+    // Terminal beats retryable when both appear in one atomic frame.
+    let refresh = compositor.scene.primary_output().unwrap().refresh_nanos();
+    compositor.clock().set(refresh);
+    compositor.apply_commit(
+        root,
+        Commit::frame_callback_only().with_damage(Rect::new(0, 0, 2, 2)),
+    );
+    script_two(&mut compositor, 93, 94);
+    assert_eq!(compositor.present_root(root).pacing, FramePacing::Pending);
+    assert!(compositor
+        .complete_presentation(PresentationCompletion {
+            id: PresentationId(93),
+            outcome: CompletionOutcome::RetryableFailure,
+        })
+        .is_none());
+    let (_, mixed) = compositor
+        .complete_presentation(PresentationCompletion {
+            id: PresentationId(94),
+            outcome: CompletionOutcome::TerminalFailure,
+        })
+        .expect("remaining submission retired");
+    assert_eq!(mixed.pacing, FramePacing::TerminalFailure);
+    assert_eq!(compositor.retained_callbacks(root), 0);
+}
+
+#[test]
 fn duplicate_stale_and_new_generation_completions_do_not_cross() {
     let (mut compositor, root) = two_role_compositor();
     compositor.apply_commit(root, Commit::frame_callback_only());

@@ -54,6 +54,9 @@ struct PendingFrame {
     callbacks: HashMap<SurfaceId, u32>,
     deliver: bool,
     failed: bool,
+    /// A submission in this frame completed retryably (the frame did not reach the screen, but may next
+    /// time). Distinct from `failed`: it retains the frame's callbacks instead of dropping them.
+    retryable: bool,
 }
 
 /// The outcome of a `commit`: whether the surface's content changed, and the present it triggered (if
@@ -346,6 +349,7 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
                     callbacks,
                     deliver,
                     failed,
+                    retryable: retry,
                 },
             );
             self.pending_roots.insert(root, submissions[0]);
@@ -387,8 +391,10 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
         let root = self.pending_submissions.remove(&completion.id)?;
         let pending = self.pending_frames.get_mut(&root)?;
         pending.submissions.remove(&completion.id);
-        if completion.outcome == CompletionOutcome::TerminalFailure {
-            pending.failed = true;
+        match completion.outcome {
+            CompletionOutcome::TerminalFailure => pending.failed = true,
+            CompletionOutcome::RetryableFailure => pending.retryable = true,
+            CompletionOutcome::Delivered { .. } => {}
         }
         if !pending.submissions.is_empty() {
             return None;
@@ -403,7 +409,7 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
             CompletionOutcome::Delivered {
                 serial: _,
                 timing: _,
-            } if !pending.deliver => (FramePacing::RetryableFailure, None, 0),
+            } if pending.retryable || !pending.deliver => (FramePacing::RetryableFailure, None, 0),
             CompletionOutcome::Delivered { serial, timing: _ } => {
                 // The backend timestamp may use the host's boot-time epoch while this injected clock may
                 // use any fixed epoch. Pacing compares values only within the injected clock domain.
@@ -415,8 +421,25 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
                     pending.callbacks.values().copied().sum(),
                 )
             }
-            CompletionOutcome::TerminalFailure => (FramePacing::TerminalFailure, None, 0),
+            // A retryable completion keeps the frame's callbacks alive for the next accepted present; only
+            // a terminal one drops them.
+            CompletionOutcome::RetryableFailure if !pending.failed => {
+                (FramePacing::RetryableFailure, None, 0)
+            }
+            CompletionOutcome::RetryableFailure | CompletionOutcome::TerminalFailure => {
+                (FramePacing::TerminalFailure, None, 0)
+            }
         };
+        // Retryable pacing means RETAIN — the same contract `pace_tree` honours on the synchronous path.
+        // Without this the callbacks a frame carried were simply dropped when its submission came back
+        // undelivered, so a client waiting on `wl_surface.frame` never heard again from a frame the host
+        // fully intends to re-drive.
+        if pacing == FramePacing::RetryableFailure {
+            for (sid, count) in pending.callbacks {
+                let queued = self.retained_callbacks.entry(sid).or_insert(0);
+                *queued = (*queued + count).min(MAX_RETAINED_CALLBACKS);
+            }
+        }
         Some((
             root,
             FrameOutcome {
