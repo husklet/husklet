@@ -59,7 +59,7 @@ use damage::Damage;
 use gesture::Gestures;
 use key::{current_xkb_layout, KeyCode, Modifiers};
 use latency::HostInput;
-use submission::{NativePresent, PresentAttempt};
+use submission::{NativePresent, PresentAttempt, Submission};
 use tablet::Tablet;
 
 /// The pixel source a surface last attached — resolved to an `MTLTexture` at present time.

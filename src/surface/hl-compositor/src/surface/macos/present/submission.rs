@@ -10,6 +10,7 @@ use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLCommandBuffer, MTLCommandBufferStatus, MTLDrawable, MTLTexture};
 use objc2_quartz_core::CAMetalDrawable;
 
+use crate::scene::model::SurfaceId;
 use crate::scene::port::{
     CompletionOutcome, PresentTiming, PresentationCompletion, PresentationId, PresenterEvent, Wake,
 };
@@ -39,8 +40,6 @@ enum FailureCause {
 }
 
 impl FailureCause {
-    const ALL: usize = 4;
-
     const fn index(self) -> usize {
         match self {
             FailureCause::PresentedTimeUnreadable => 0,
@@ -76,17 +75,34 @@ impl FailureCause {
     }
 }
 
-/// One `error`-level line per distinct cause, for the whole process.
+/// One `error`-level line per surface per cause.
 ///
 /// A window whose presents fail fails EVERY present, so logging each one buries the fact in thousands of
-/// identical lines — the same silence as saying nothing. The first of each cause speaks and names its
-/// submission; the rest are counted. Correlate the submission id with the adapter's
-/// `settle async root=… submission=…` line to get the surface.
-static ANNOUNCED: [std::sync::atomic::AtomicBool; FailureCause::ALL] =
-    [const { std::sync::atomic::AtomicBool::new(false) }; FailureCause::ALL];
+/// identical lines — the same silence as saying nothing. Latched PER SURFACE rather than per process: a
+/// process-global latch answers "does this cause ever fire", which is a question worth asking exactly
+/// once, after which the first failing client hides every other client failing the same way.
+static ANNOUNCED: std::sync::Mutex<Option<Vec<(SurfaceId, usize)>>> = std::sync::Mutex::new(None);
 
-/// Build the failure completion for `id`, attributing it to `cause` exactly once per cause.
-fn failed_completion(id: PresentationId, cause: FailureCause) -> PresentationCompletion {
+/// Whether `(surface, cause)` is speaking for the first time. A poisoned lock logs rather than goes
+/// silent — over-reporting a failure is recoverable, losing it is what this whole path is for.
+fn claim_announcement(surface: SurfaceId, cause: FailureCause) -> bool {
+    let Ok(mut announced) = ANNOUNCED.lock() else {
+        return true;
+    };
+    let seen = announced.get_or_insert_with(Vec::new);
+    if seen.contains(&(surface, cause.index())) {
+        return false;
+    }
+    seen.push((surface, cause.index()));
+    true
+}
+
+/// Build the failure completion for `id`, attributing it to `cause` once per surface.
+fn failed_completion(
+    id: PresentationId,
+    surface: SurfaceId,
+    cause: FailureCause,
+) -> PresentationCompletion {
     let outcome = cause.outcome();
     let retryable = matches!(outcome, CompletionOutcome::RetryableFailure);
     if retryable {
@@ -94,12 +110,14 @@ fn failed_completion(id: PresentationId, cause: FailureCause) -> PresentationCom
     } else {
         hl_log::hl_count!(hl_log::tag::PRESENT, "present_terminal");
     }
-    if !ANNOUNCED[cause.index()].swap(true, Ordering::Relaxed) {
+    if claim_announcement(surface, cause) {
         hl_log::hl_log!(
             hl_log::tag::PRESENT,
             hl_log::Level::Error,
-            "present {} submission={} cause={} — further failures of this cause are counted, not logged",
+            "present {} surface={} submission={} cause={} — further failures of this cause on this \
+             surface are counted, not logged",
             if retryable { "retryable" } else { "terminal" },
+            surface.0,
             id.0,
             cause.name()
         );
@@ -253,9 +271,21 @@ fn publish(
     }
 }
 
+/// Who a drawable submission belongs to and where its completion is reported.
+///
+/// Grouped rather than passed as four positional arguments: they travel together everywhere, and the
+/// surface exists purely so a failure can name the window it cost.
+pub(in crate::surface::macos) struct Submission {
+    pub id: PresentationId,
+    pub surface: SurfaceId,
+    pub events: Sender<PresenterEvent>,
+    pub wake: Option<Arc<dyn Wake>>,
+}
+
 /// One drawable submission retained until WindowServer reports presentation or a bounded failure.
 pub(in crate::surface::macos) struct NativePresent {
     id: PresentationId,
+    surface: SurfaceId,
     command: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
     _drawable: Retained<ProtocolObject<dyn CAMetalDrawable>>,
     terminal: Arc<CompletionGate>,
@@ -266,13 +296,17 @@ pub(in crate::surface::macos) struct NativePresent {
 
 impl NativePresent {
     pub(in crate::surface::macos) fn new(
-        id: PresentationId,
+        submission: Submission,
         command: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
         drawable: Retained<ProtocolObject<dyn CAMetalDrawable>>,
         display: DisplayTiming,
-        events: Sender<PresenterEvent>,
-        wake: Option<Arc<dyn Wake>>,
     ) -> Self {
+        let Submission {
+            id,
+            surface,
+            events,
+            wake,
+        } = submission;
         let terminal = Arc::new(CompletionGate::new());
         let callback_terminal = terminal.clone();
         let callback_events = events.clone();
@@ -290,7 +324,7 @@ impl NativePresent {
                     publish(
                         &callback_events,
                         &callback_wake,
-                        failed_completion(id, FailureCause::PresentedTimeUnreadable),
+                        failed_completion(id, surface, FailureCause::PresentedTimeUnreadable),
                     );
                     return;
                 };
@@ -304,7 +338,7 @@ impl NativePresent {
                     publish(
                         &callback_events,
                         &callback_wake,
-                        failed_completion(id, FailureCause::PresentedTimeImplausible),
+                        failed_completion(id, surface, FailureCause::PresentedTimeImplausible),
                     );
                     return;
                 }
@@ -343,6 +377,7 @@ impl NativePresent {
         }
         Self {
             id,
+            surface,
             command,
             _drawable: drawable,
             terminal,
@@ -370,7 +405,7 @@ impl NativePresent {
             } else {
                 FailureCause::CallbackDeadlineExpired
             };
-            publish(&self.events, &self.wake, failed_completion(self.id, cause));
+            publish(&self.events, &self.wake, failed_completion(self.id, self.surface, cause));
         }
         true
     }

@@ -80,6 +80,9 @@ pub struct Compositor<P: Presenter, C: Clock> {
     pending_frames: HashMap<SurfaceId, PendingFrame>,
     pending_submissions: HashMap<PresentationId, SurfaceId>,
     pending_roots: HashMap<SurfaceId, PresentationId>,
+    /// Reasons each root has already reported for a frame dropped before the presenter (see
+    /// [`Self::announce_stall`]).
+    announced_stalls: HashMap<SurfaceId, Vec<&'static str>>,
 }
 
 impl<P: Presenter, C: Clock> Compositor<P, C> {
@@ -93,6 +96,7 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
             pending_frames: HashMap::new(),
             pending_submissions: HashMap::new(),
             pending_roots: HashMap::new(),
+            announced_stalls: HashMap::new(),
         }
     }
 
@@ -107,6 +111,7 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
             pending_frames: HashMap::new(),
             pending_submissions: HashMap::new(),
             pending_roots: HashMap::new(),
+            announced_stalls: HashMap::new(),
         }
     }
 
@@ -208,6 +213,7 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
         }
         // A root with no output is unpresentable.
         let Some(output) = self.scene.selected_output(root).cloned() else {
+            self.announce_stall(root, "no_selected_output");
             let fired = self.pace_tree(root, FramePacing::TerminalFailure);
             return FrameOutcome {
                 pacing: FramePacing::TerminalFailure,
@@ -265,6 +271,7 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
         // Compose the ordered layers, then present each through the port (scene borrow released first).
         let timing = PresentTiming::fallback(now, refresh);
         let Some(frames) = self.scene.compose_present_frames(root, output.id, timing) else {
+            self.announce_stall(root, "compose_produced_no_frame");
             let fired = self.pace_tree(root, FramePacing::TerminalFailure);
             return FrameOutcome {
                 pacing: FramePacing::TerminalFailure,
@@ -484,6 +491,33 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
     /// Advance frame pacing for every surface in the tree: fire, retain, or drop each surface's pending
     /// `wl_surface.frame` callbacks per the pacing policy. Returns the total fired. Neutral port of
     /// `pace_tree` / `pace_surface` (callbacks modelled as a count; feedback objects elided).
+    /// Name a frame the policy dropped before it ever reached the presenter, once per root per reason.
+    ///
+    /// These two branches were the last places a frame could vanish in complete silence: they return
+    /// `TerminalFailure`, which drops the client's `wl_surface.frame` callbacks, and they do it without
+    /// touching the port — so no presenter attribution can ever fire for them and a window simply stops.
+    /// Counted always, logged once, so a permanently unpresentable root costs two lines rather than one
+    /// per commit for the life of the process.
+    fn announce_stall(&mut self, root: SurfaceId, reason: &'static str) {
+        hl_count!(tag::PRESENT, "present_unpresentable");
+        if self
+            .announced_stalls
+            .get(&root)
+            .is_some_and(|seen| seen.contains(&reason))
+        {
+            return;
+        }
+        hl_log::hl_log!(
+            tag::PRESENT,
+            hl_log::Level::Error,
+            "present unpresentable root={} reason={reason} — the frame never reached the presenter and \
+             this client's frame callbacks are dropped; further occurrences are counted \
+             (present_unpresentable), not logged",
+            root.0
+        );
+        self.announced_stalls.entry(root).or_default().push(reason);
+    }
+
     fn pace_tree(&mut self, root: SurfaceId, pacing: FramePacing) -> u32 {
         let policy = pacing.policy();
         let surfaces = self.present_tree_surfaces(root);

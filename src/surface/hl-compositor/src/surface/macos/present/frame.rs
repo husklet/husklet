@@ -559,9 +559,12 @@ impl MacPresenter {
                         &self.ctx,
                         &composite,
                         st.native_presents.len(),
-                        submission,
-                        self.presentation_tx.clone(),
-                        self.wake.clone(),
+                        Submission {
+                            id: submission,
+                            surface: sid,
+                            events: self.presentation_tx.clone(),
+                            wake: self.wake.clone(),
+                        },
                     ) {
                         PresentAttempt::Submitted(present) => {
                             st.native_presents.push_back(present);

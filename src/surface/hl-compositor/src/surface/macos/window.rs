@@ -19,14 +19,14 @@ use objc2_metal::{
 use objc2_quartz_core::{kCAGravityTopLeft, CAMetalDrawable, CAMetalLayer};
 use std::cell::Cell;
 use std::sync::atomic::AtomicU64;
-use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use super::layer;
 use super::metal::MetalCtx;
-use super::present::submission::{drawable_matches, DisplayTiming, NativePresent, PresentAttempt};
+use super::present::submission::{
+    drawable_matches, DisplayTiming, NativePresent, PresentAttempt, Submission,
+};
 use crate::scene::model::Visibility;
-use crate::scene::port::{PresentationId, PresenterEvent, Wake};
 use std::sync::Arc;
 
 #[path = "window_application.rs"]
@@ -271,9 +271,7 @@ impl MetalWindow {
         ctx: &MetalCtx,
         composite: &ProtocolObject<dyn MTLTexture>,
         queue_depth: usize,
-        id: PresentationId,
-        events: Sender<PresenterEvent>,
-        wake: Option<Arc<dyn Wake>>,
+        submission: Submission,
     ) -> PresentAttempt {
         if !self.is_visible() {
             return PresentAttempt::Retry;
@@ -314,14 +312,7 @@ impl MetalWindow {
         unsafe { blit.copyFromTexture_toTexture(composite, &dst) };
         blit.endEncoding();
         cmd.presentDrawable(ProtocolObject::from_ref(&*drawable));
-        let present = NativePresent::new(
-            id,
-            cmd.clone(),
-            drawable,
-            self.display_timing(),
-            events,
-            wake,
-        );
+        let present = NativePresent::new(submission, cmd.clone(), drawable, self.display_timing());
         cmd.commit();
         PresentAttempt::Submitted(present)
     }
