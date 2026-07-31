@@ -10,7 +10,7 @@
 //! on. The format masks mirror `MVKPixelFormats::getVkFormatProperties` for the color/depth subset the
 //! render/transfer path materializes ([`crate::service::create::create_image`]).
 
-use super::memory::vk_format;
+use super::memory::{vk_format, Format as MemoryFormat, VertexFormat};
 
 /// One advertised extension: its `VK_KHR_*`/`VK_EXT_*` name + spec version (the two fields
 /// `vkEnumerate{Instance,Device}ExtensionProperties` writes into each `VkExtensionProperties`).
@@ -180,15 +180,30 @@ impl Format {
         } else {
             0
         };
-        // Vertex-attribute float formats (a client's vertex buffers); a color format also serves as a
-        // uniform/storage texel buffer.
-        let buffer = match vk_format {
-            vk_format::R32_SFLOAT
-            | vk_format::R16G16B16A16_SFLOAT
-            | vk_format::R32G32B32A32_SFLOAT => f::VERTEX_BUFFER,
-            _ if color => f::UNIFORM_TEXEL_BUFFER | f::STORAGE_TEXEL_BUFFER,
-            _ => 0,
-        };
+        // Buffer features are INDEPENDENT bits, not alternatives. The previous `match` was exclusive, so
+        // a format that advertised VERTEX_BUFFER could not also advertise texel-buffer use and vice
+        // versa, which is not how VkFormatProperties::bufferFeatures works.
+        //
+        // VERTEX_BUFFER is derived from the vertex lowering itself rather than from a second hand-written
+        // list. It previously named three formats while `VertexFormat::wire` lowers thirty, so the driver
+        // refused to admit to twenty-seven vertex formats it correctly supports — the same
+        // under-advertising defect as the instance extensions, and the mirror of the bug where the driver
+        // forwarded a VkFormat it had never lowered. Deriving it means the advertisement can never drift
+        // from the lowering again: adding a format to `VertexFormat::wire` advertises it, and removing
+        // one stops advertising it, in the same edit.
+        //
+        // KNOWN GAP, deliberate: Vulkan's mandatory-format table also requires VERTEX_BUFFER for the
+        // single-component 8/16-bit formats and for BGRA orders. The neutral wire has no encoding for
+        // those (no 1- or 3-component narrow formats, no component swizzle), so this driver genuinely
+        // cannot lower them and does not claim them. Claiming them to satisfy the table would be the lie
+        // the ladder forbids; closing the gap needs a wire change in hl-gpu.
+        let mut buffer = 0;
+        if VertexFormat(vk_format).wire().is_some() {
+            buffer |= f::VERTEX_BUFFER;
+        }
+        if color {
+            buffer |= f::UNIFORM_TEXEL_BUFFER | f::STORAGE_TEXEL_BUFFER;
+        }
         FormatFeatures {
             // LINEAR tiling advertises NOTHING materializable. Vulkan's linear tiling exists so an app can
             // populate an image through host-mapped memory (`vkMapMemory` + memcpy) — but this backend stores
@@ -208,6 +223,88 @@ impl Format {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every format this driver can LOWER as a vertex attribute must also be ADVERTISED as usable in a
+    /// vertex buffer. A well-behaved application (and the CTS) checks `bufferFeatures & VERTEX_BUFFER_BIT`
+    /// before using a format, so a format we lower but do not advertise is one no careful caller will
+    /// ever reach — the same under-advertising defect as an unnamed instance extension.
+    #[test]
+    fn every_lowerable_vertex_format_advertises_vertex_buffer() {
+        let mut lowerable = 0;
+        for format in 0..=200u32 {
+            if VertexFormat(format).wire().is_none() {
+                continue;
+            }
+            lowerable += 1;
+            let features = Format(format).features();
+            assert!(
+                features.buffer & format_feature::VERTEX_BUFFER != 0,
+                "VkFormat {format} lowers as a vertex attribute but bufferFeatures omits VERTEX_BUFFER"
+            );
+        }
+        assert!(lowerable >= 30, "expected the lowerable set to be the 30 from VertexFormat, got {lowerable}");
+    }
+
+    /// And the converse: nothing may claim VERTEX_BUFFER that the driver cannot lower, or an application
+    /// that trusts the advertisement gets a pipeline refused at creation.
+    #[test]
+    fn nothing_advertises_a_vertex_format_it_cannot_lower() {
+        for format in 0..=250u32 {
+            let features = Format(format).features();
+            if features.buffer & format_feature::VERTEX_BUFFER != 0 {
+                assert!(
+                    VertexFormat(format).wire().is_some(),
+                    "VkFormat {format} advertises VERTEX_BUFFER but has no wire encoding"
+                );
+            }
+        }
+    }
+
+    /// Buffer feature bits are independent, not alternatives: a colour format used as a vertex buffer is
+    /// still a legal texel buffer. The exclusive `match` this replaced could report only one of them.
+    #[test]
+    fn buffer_features_are_not_mutually_exclusive() {
+        // R8G8B8A8_UNORM is both a lowerable vertex format and a colour format, so it must carry BOTH
+        // sets of buffer bits. The exclusive `match` this replaced could report only one.
+        let features = Format(vk_format::R8G8B8A8_UNORM).features();
+        assert!(features.buffer & format_feature::VERTEX_BUFFER != 0, "vertex buffer");
+        assert!(
+            features.buffer & format_feature::UNIFORM_TEXEL_BUFFER != 0,
+            "a colour format is also a uniform texel buffer"
+        );
+    }
+
+    /// KNOWN GAP, recorded so it is not rediscovered: `is_color` is a hand-written list of four formats
+    /// while `Format::wire` lowers roughly thirty as textures, and `is_image_supported` is just
+    /// `is_color`. So `vkGetPhysicalDeviceFormatProperties` reports NO optimal-tiling features, and
+    /// `vkGetPhysicalDeviceImageFormatProperties` reports VK_ERROR_FORMAT_NOT_SUPPORTED, for formats this
+    /// driver genuinely materializes — R32G32B32A32_SFLOAT, R16G16B16A16_SFLOAT, R32_SFLOAT, R8_UNORM,
+    /// R8G8_UNORM and every BC block format among them.
+    ///
+    /// That under-advertising is what gates most of the Vulkan CTS: 94.9% of enumerated cases return
+    /// NotSupported, and the largest single reason by an order of magnitude is a format query
+    /// (69,606 "Source format not supported" in blitting alone). This test pins the CURRENT extent of
+    /// the drift so closing it is a deliberate, measured change rather than a silent one.
+    #[test]
+    fn color_advertisement_drifts_from_the_texture_lowering() {
+        let mut lowered_not_advertised = Vec::new();
+        for format in 0..=200u32 {
+            let lowers = MemoryFormat(format).wire().is_some();
+            if lowers && !Format(format).is_color() && !Format(format).is_depth() {
+                lowered_not_advertised.push(format);
+            }
+        }
+        assert!(
+            !lowered_not_advertised.is_empty(),
+            "if this list is empty the drift is closed — delete this test and its comment"
+        );
+        assert!(
+            lowered_not_advertised.len() >= 20,
+            "the drift shrank to {} formats; update this test deliberately: {:?}",
+            lowered_not_advertised.len(),
+            lowered_not_advertised
+        );
+    }
 
     #[test]
     fn instance_extensions_advertise_surface_and_pdp2() {
