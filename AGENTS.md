@@ -948,16 +948,22 @@ instrument against something outside itself before trusting a negative from it.
 ## Manager discipline
 
 Stage commits by file, never `git add -A` across a shared tree — you will sweep up another agent's
-uncommitted work and mis-attribute it. This is not hypothetical: `40220be39`, whose message is about an
-awk extension in a gateway probe, carries 294 lines of unrelated Vulkan copy/blit/resolve changes that
-another agent was midway through staging. The code was correct and the tests passed, so nothing looked
-wrong — the loss is that the defect and the reasoning for the fix are recorded nowhere, and the history
-now actively misleads whoever reads it next. Recovering afterwards is not possible: rewriting a pushed
-commit under a live fleet costs more than it repairs.
+uncommitted work and mis-attribute it. But staging by path is not sufficient protection, and assuming it
+is has already cost this repository a commit. **The index is shared, and `git commit` takes all of it.**
+Verify that what is staged is what your message describes, every time, whatever you believe you staged.
 
-An agent working in an isolated worktree should commit and push FROM that worktree, not copy files into
-the shared tree first. The copy is the window in which someone else's `git add -A` can swallow the work,
-and it is wide — long enough here for the sweep to land between staging and committing.
+`40220be39`, whose message is about an awk extension in a gateway probe, carries 294 lines of unrelated
+Vulkan copy, blit and resolve changes. Nobody ran `git add -A`. An agent had staged exactly sixteen files
+by explicit path, correctly; the manager then committed a documentation change without checking the
+staged set against the message, and the index handed over everything in it. Both parties followed the
+half of the rule they had internalised and the missing half was the check. `bda4e5c29` carries the
+displaced reasoning as an empty commit, which is the repair available after a push — rewriting published
+history under a live fleet costs more than it fixes.
+
+An agent working in an isolated worktree should commit and push FROM that worktree rather than copying
+files into the shared tree first. That would not have prevented the case above, whose collision was in
+the index rather than in the copy — it is stronger than that, because it removes the shared index from
+the path entirely.
 
 Do not install a bundle while an agent is mid-measurement. When you
 relay a finding between agents, mark clearly what was measured and what was inferred; a hypothesis passed on
