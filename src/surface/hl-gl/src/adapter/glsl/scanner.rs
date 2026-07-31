@@ -206,7 +206,10 @@ impl Tokens<'_> {
     /// Combine a type-side and a name-side array subscript for one declarator. Exactly one may be present:
     /// GLSL ES has no arrays of arrays, so `vec4[3] x[2]` is refused (`modelable = false`) rather than
     /// collapsing to whichever dimension we happened to read last.
-    pub(super) fn merge_array_subscripts(on_type: (u32, bool), on_name: (u32, bool)) -> (u32, bool) {
+    pub(super) fn merge_array_subscripts(
+        on_type: (u32, bool),
+        on_name: (u32, bool),
+    ) -> (u32, bool) {
         match (on_type, on_name) {
             ((0, true), name) => name,
             (ty, (0, true)) => ty,

@@ -232,3 +232,46 @@ fn matrix_location_span_follows_the_column_count_not_the_row_count() {
         );
     }
 }
+
+/// The ES2/ES3 TRANSLATE path allocates locations too, independently of the verbatim injector, and it
+/// must use the same span arithmetic.
+///
+/// Plain ES3 shaders take this path, not the verbatim one, so a span fix applied only to the injector
+/// leaves every ordinary application still overlapping its matrix and array declarations. Because
+/// `Program::attrib_locations` is read back off the TRANSLATED source, this also decides what
+/// `glGetAttribLocation` reports — emission and reflection cannot disagree, but they can be wrong
+/// together.
+#[test]
+fn the_translate_path_allocates_attribute_locations_by_span() {
+    let vs = "#version 300 es\nin vec4 position;\nin mat4 transform;\nin vec4 tint;\n\
+              void main(){ gl_Position = transform * position + tint; }\n";
+    let fs =
+        "#version 300 es\nprecision mediump float;\nout vec4 c;\nvoid main(){ c = vec4(1.0); }\n";
+    let (v, _) = glsl::StageSources::new(vs, fs).translate_render();
+    assert!(v.contains("layout(location = 0) in vec4 position;"), "{v}");
+    assert!(v.contains("layout(location = 1) in mat4 transform;"), "{v}");
+    assert!(
+        v.contains("layout(location = 5) in vec4 tint;"),
+        "a mat4 occupies locations 1..=4, so tint must be 5: {v}"
+    );
+}
+
+/// Varyings on the translate path were numbered by their ENUMERATE INDEX, which cannot account for a
+/// multi-location varying at all. Both stages must walk identically or the inter-stage interface stops
+/// matching at the first matrix varying.
+#[test]
+fn the_translate_path_numbers_varyings_by_span_in_both_stages() {
+    let vs = "#version 300 es\nin vec4 p;\nout mat4 xform;\nout vec2 uv;\n\
+              void main(){ xform = mat4(1.0); uv = p.xy; gl_Position = p; }\n";
+    let fs = "#version 300 es\nprecision mediump float;\nin mat4 xform;\nin vec2 uv;\n\
+              out vec4 c;\nvoid main(){ c = xform[0] + vec4(uv, 0.0, 0.0); }\n";
+    let (v, f) = glsl::StageSources::new(vs, fs).translate_render();
+    assert!(v.contains("layout(location = 0) out mat4 xform;"), "{v}");
+    assert!(
+        v.contains("layout(location = 4) out vec2 uv;"),
+        "a mat4 varying occupies four locations: {v}"
+    );
+    // The fragment stage must agree declaration for declaration.
+    assert!(f.contains("layout(location = 0) in mat4 xform;"), "{f}");
+    assert!(f.contains("layout(location = 4) in vec2 uv;"), "{f}");
+}

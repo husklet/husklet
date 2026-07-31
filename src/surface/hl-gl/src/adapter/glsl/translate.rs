@@ -432,36 +432,42 @@ impl StageSources<'_> {
             vs_out.push('\n');
         }
         vs_out.push_str(&rewrite(&vs_structs, &samps));
-        let mut used = attribute_bindings
-            .values()
-            .copied()
-            .collect::<std::collections::BTreeSet<_>>();
-        let mut next_location = 0u32;
+        // Locations are allocated by SPAN, not by declaration: a matrix occupies one location per column
+        // and an array one per element, so numbering them sequentially makes the next declaration overlap
+        // the previous one. naga rejects that as `BindingCollision`, and the program then links, draws
+        // with `GL_NO_ERROR`, paints nothing and wedges the context.
+        let mut used = std::collections::BTreeSet::new();
+        for (name, at) in attribute_bindings {
+            let span = attrs
+                .iter()
+                .find(|a| &a.name == name)
+                .map_or(1, |a| a.location_span());
+            used.extend(*at..at.saturating_add(span));
+        }
         for a in &attrs {
-            let location = attribute_bindings.get(&a.name).copied().unwrap_or_else(|| {
-                while used.contains(&next_location) {
-                    next_location += 1;
-                }
-                let location = next_location;
-                used.insert(location);
-                next_location += 1;
-                location
-            });
+            let location = attribute_bindings
+                .get(&a.name)
+                .copied()
+                .unwrap_or_else(|| Declarations::reserve_run(&mut used, a.location_span()));
             vs_out.push_str(&format!(
                 "layout(location = {location}) in {} {};\n",
                 a.ty, a.name
             ));
         }
-        for (j, v) in vary.iter().enumerate() {
+        // Varyings are numbered by span for the same reason, and the fragment stage below repeats this
+        // walk so the two stages agree declaration for declaration.
+        let mut varying_location = 0u32;
+        for v in vary.iter() {
             let flat = if v.requires_flat_interpolation() {
                 "flat "
             } else {
                 ""
             };
             vs_out.push_str(&format!(
-                "layout(location = {j}) {flat}out {} {};\n",
+                "layout(location = {varying_location}) {flat}out {} {};\n",
                 v.ty, v.name
             ));
+            varying_location += v.location_span();
         }
         Declarations::emit_uniform_block(&mut vs_out, &unis);
         Declarations::emit_sampler_decls(&mut vs_out, &samps);
@@ -484,16 +490,20 @@ impl StageSources<'_> {
             fs_out.push('\n');
         }
         fs_out.push_str(&rewrite(&fs_structs, &samps));
-        for (j, v) in vary.iter().enumerate() {
+        // The SAME span walk as the vertex stage: the two must agree declaration for declaration, or the
+        // inter-stage interface stops matching at the first multi-location varying.
+        let mut varying_location = 0u32;
+        for v in vary.iter() {
             let flat = if v.requires_flat_interpolation() {
                 "flat "
             } else {
                 ""
             };
             fs_out.push_str(&format!(
-                "layout(location = {j}) {flat}in {} {};\n",
+                "layout(location = {varying_location}) {flat}in {} {};\n",
                 v.ty, v.name
             ));
+            varying_location += v.location_span();
         }
         Declarations::emit_uniform_block(&mut fs_out, &unis);
         Declarations::emit_sampler_decls(&mut fs_out, &samps);

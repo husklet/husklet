@@ -212,7 +212,22 @@ impl Declarations<'_> {
     /// A vector or scalar takes one. A matrix takes one per COLUMN — `matCxR` has `C` columns, so `mat4`
     /// and `mat4x2` both take 4 — and an array multiplies by its length. This is the count naga assigns
     /// when it expands the declaration, so anything less leaves the next declaration overlapping it.
-    fn location_span(ty: &str, elements: u32) -> u32 {
+    /// The lowest base at which `span` consecutive locations are all free in `used`, reserving the run.
+    ///
+    /// Both allocators — the verbatim injector and the ES translate path — need this, and they must agree:
+    /// a matrix or array occupies one location per column/element, so reserving only its first hands the
+    /// next declaration a location still in use.
+    pub(super) fn reserve_run(used: &mut std::collections::BTreeSet<u32>, span: u32) -> u32 {
+        let span = span.max(1);
+        let mut base = 0u32;
+        while (base..base + span).any(|location| used.contains(&location)) {
+            base += 1;
+        }
+        used.extend(base..base + span);
+        base
+    }
+
+    pub(super) fn location_span(ty: &str, elements: u32) -> u32 {
         let columns = match ty.strip_prefix("mat") {
             // `matC` is CxC; `matCxR` has C columns. Either way the first digit is the column count.
             Some(rest) => rest
@@ -364,15 +379,7 @@ impl StageSources<'_> {
         // Lowest run of `span` consecutive free locations, then reserve the WHOLE run. A matrix or array
         // occupies one location per column/element; reserving only its first hands the next declaration a
         // location still in use, which naga rejects as `BindingCollision`.
-        let take = |used: &mut BTreeSet<u32>, span: u32| -> u32 {
-            let span = span.max(1);
-            let mut base = 0u32;
-            while (base..base + span).any(|l| used.contains(&l)) {
-                base += 1;
-            }
-            used.extend(base..base + span);
-            base
-        };
+        let take = Declarations::reserve_run;
 
         // Reserve every location an explicitly-numbered declaration occupies, not just its first.
         let reserve = |used: &mut BTreeSet<u32>, at: u32, span: u32| {
