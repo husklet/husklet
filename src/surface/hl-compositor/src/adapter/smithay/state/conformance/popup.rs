@@ -26,6 +26,13 @@ struct Menus {
 impl Menus {
     /// Bind the shell globals and map a `TL`-sized toplevel, leaving it committed with a buffer.
     fn open() -> Menus {
+        Menus::open_shadowed(None)
+    }
+
+    /// As [`Menus::open`], but the toplevel declares an `xdg_surface.set_window_geometry` — the
+    /// client-side shadow margin every GTK/Chromium window carries. The surface stays `TL`-sized; the
+    /// window is the smaller rect inside it, and every popup coordinate is relative to THAT rect.
+    fn open_shadowed(geometry: Option<(i32, i32, i32, i32)>) -> Menus {
         let mut fixture = Fixture::new();
         let compositor: WlCompositor = fixture.bind(4);
         let wm_base: xdg_wm_base::XdgWmBase = fixture.bind(3);
@@ -34,6 +41,9 @@ impl Menus {
         let surface = compositor.create_surface(&fixture.qh, ());
         let root = wm_base.get_xdg_surface(&surface, &fixture.qh, ());
         let _toplevel = root.get_toplevel(&fixture.qh, ());
+        if let Some((x, y, w, h)) = geometry {
+            root.set_window_geometry(x, y, w, h);
+        }
         surface.commit();
         fixture.pump();
         let buffer = fixture.buffer(&shm, TL.0, TL.1);
@@ -172,6 +182,38 @@ fn a_submenu_is_configured_relative_to_its_parent_popup_and_accumulates_in_root_
         menus.frame_origins(),
         vec![(1, (0, 0)), (2, (107, 129)), (3, (143, 156))],
         "the submenu accumulates its parent chain: (107,129)+(36,27)"
+    );
+}
+
+/// Chrome's omnibox dropdown: the toplevel carries a client-side shadow margin, so its window geometry
+/// starts inside its surface. Every popup coordinate — the anchor rect the client sends and the origin
+/// the presenter routes the drawable to — is relative to that WINDOW rect, never to the surface. A
+/// compositor that mixes the two drops the dropdown onto the tab strip it was anchored below.
+#[test]
+fn a_popup_on_a_shadowed_parent_is_placed_against_its_window_geometry() {
+    const MARGIN: (i32, i32) = (16, 26);
+    let mut menus = Menus::open_shadowed(Some((MARGIN.0, MARGIN.1, 260, 150)));
+    // An omnibox 60 down the WINDOW, 34 tall; the dropdown hangs off its bottom edge.
+    let positioner = menus.positioner(
+        (20, 60, 200, 34),
+        (200, 40),
+        xdg_positioner::Anchor::BottomLeft,
+        xdg_positioner::Gravity::BottomRight,
+        (0, 0),
+        xdg_positioner::ConstraintAdjustment::None,
+    );
+    let root = menus.root.clone();
+    menus.popup(&root, &positioner, (200, 40));
+
+    assert_eq!(
+        menus.fixture.app.popup_geometry(),
+        Some((20, 94, 200, 40)),
+        "the configure is window-geometry-relative and must not absorb the shadow margin"
+    );
+    assert_eq!(
+        menus.frame_origins(),
+        vec![(1, (0, 0)), (2, (20, 94))],
+        "the popup's drawable is routed to the same window-relative origin the client was told"
     );
 }
 
