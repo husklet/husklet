@@ -194,6 +194,8 @@ mod tests {
         has_identity: bool,
         /// Force a constructor to return null (models a live marshal failure).
         fail_pool: bool,
+        /// Model a pre-1.23 `libwayland-client`: `wl_proxy_get_display` is absent, so it yields null.
+        no_get_display: bool,
     }
 
     impl Recorder {
@@ -204,6 +206,7 @@ mod tests {
                 has_shm: true,
                 has_identity: true,
                 fail_pool: false,
+                no_get_display: false,
             }
         }
         fn fresh(&self) -> *mut c_void {
@@ -223,6 +226,9 @@ mod tests {
     unsafe impl WlAbi for Recorder {
         fn get_display(&self, surface: *mut c_void) -> *mut c_void {
             self.push(Rec::GetDisplay(surface as usize));
+            if self.no_get_display {
+                return core::ptr::null_mut(); // pre-1.23 libwayland: the symbol does not exist
+            }
             0xD15_9000usize as *mut c_void // a fixed non-null "app display"
         }
         fn get_version(&self, _proxy: *mut c_void) -> u32 {
@@ -396,7 +402,7 @@ mod tests {
     #[test]
     fn bringup_derives_display_and_binds_shm_on_private_queue() {
         let rec = Box::new(Recorder::new());
-        let p = WaylandAppPresenter::with_abi(rec, SURFACE).expect("bring-up");
+        let p = WaylandAppPresenter::with_abi(rec, SURFACE, core::ptr::null_mut()).expect("bring-up");
         assert_eq!(p.shm_version, 1);
         let log = unsafe { &*(std::ptr::addr_of!(*p.abi) as *const Recorder) }.log();
 
@@ -432,7 +438,7 @@ mod tests {
     #[test]
     fn present_marshals_pool_buffer_attach_damage_commit_flush() {
         let rec = Box::new(Recorder::new());
-        let mut p = WaylandAppPresenter::with_abi(rec, SURFACE).expect("bring-up");
+        let mut p = WaylandAppPresenter::with_abi(rec, SURFACE, core::ptr::null_mut()).expect("bring-up");
         let surface_wrapper = p.surface_wrapper as usize;
         // Clear the bring-up trace to focus on the frame.
         unsafe { &*(std::ptr::addr_of!(*p.abi) as *const Recorder) }
@@ -488,7 +494,7 @@ mod tests {
     #[test]
     fn second_frame_retires_the_previous_buffer() {
         let rec = Box::new(Recorder::new());
-        let mut p = WaylandAppPresenter::with_abi(rec, SURFACE).expect("bring-up");
+        let mut p = WaylandAppPresenter::with_abi(rec, SURFACE, core::ptr::null_mut()).expect("bring-up");
         p.present(&xrgb(2, 2), 2, 2).expect("frame 1");
         unsafe { &*(std::ptr::addr_of!(*p.abi) as *const Recorder) }
             .log
@@ -509,7 +515,7 @@ mod tests {
         let mut rec = Recorder::new();
         rec.has_shm = false;
         rec.has_identity = false;
-        let err = WaylandAppPresenter::with_abi(Box::new(rec), SURFACE)
+        let err = WaylandAppPresenter::with_abi(Box::new(rec), SURFACE, core::ptr::null_mut())
             .err()
             .unwrap();
         assert_eq!(err, WlAppError::NoShmGlobal);
@@ -525,7 +531,7 @@ mod tests {
         let mut rec = Recorder::new();
         rec.has_shm = false;
         let mut presenter =
-            WaylandAppPresenter::with_abi(Box::new(rec), SURFACE).expect("native bring-up");
+            WaylandAppPresenter::with_abi(Box::new(rec), SURFACE, core::ptr::null_mut()).expect("native bring-up");
 
         let first = presenter.reserve_native_frame().expect("frame one");
         let second = presenter.reserve_native_frame().expect("frame two");
@@ -558,7 +564,7 @@ mod tests {
     #[test]
     fn failed_gpu_frame_can_retire_identity_without_committing() {
         let mut presenter =
-            WaylandAppPresenter::with_abi(Box::new(Recorder::new()), SURFACE).expect("bring-up");
+            WaylandAppPresenter::with_abi(Box::new(Recorder::new()), SURFACE, core::ptr::null_mut()).expect("bring-up");
         let _reserved = presenter.reserve_native_frame().expect("reserved frame");
 
         // This is the path taken when GPU submission fails: no association is made, and native pairing
@@ -578,7 +584,7 @@ mod tests {
     #[test]
     fn null_surface_is_soft_no_surface() {
         let rec = Box::new(Recorder::new());
-        let err = WaylandAppPresenter::with_abi(rec, core::ptr::null_mut())
+        let err = WaylandAppPresenter::with_abi(rec, core::ptr::null_mut(), core::ptr::null_mut())
             .err()
             .unwrap();
         assert_eq!(err, WlAppError::NoSurface);
@@ -590,7 +596,7 @@ mod tests {
     #[test]
     fn short_plane_is_hard_bad_size() {
         let rec = Box::new(Recorder::new());
-        let mut p = WaylandAppPresenter::with_abi(rec, SURFACE).expect("bring-up");
+        let mut p = WaylandAppPresenter::with_abi(rec, SURFACE, core::ptr::null_mut()).expect("bring-up");
         let err = p.present(&[0u8; 4], 4, 4).unwrap_err();
         assert_eq!(err, WlAppError::BadSize);
         assert!(
@@ -605,7 +611,7 @@ mod tests {
     fn null_constructor_is_hard_marshal_error() {
         let mut rec = Recorder::new();
         rec.fail_pool = true;
-        let mut p = WaylandAppPresenter::with_abi(Box::new(rec), SURFACE).expect("bring-up");
+        let mut p = WaylandAppPresenter::with_abi(Box::new(rec), SURFACE, core::ptr::null_mut()).expect("bring-up");
         let err = p.present(&xrgb(2, 2), 2, 2).unwrap_err();
         assert_eq!(err, WlAppError::Marshal);
         assert!(!err.is_unavailable());
@@ -618,7 +624,6 @@ mod tests {
         for e in [
             WlAppError::NoSurface,
             WlAppError::LibraryMissing,
-            WlAppError::SymbolMissing("wl_proxy_marshal_flags"),
             WlAppError::NoDisplay,
             WlAppError::QueueSetup,
             WlAppError::NoShmGlobal,
@@ -626,8 +631,12 @@ mod tests {
             assert!(e.is_unavailable(), "{e:?} must be soft");
             assert_eq!(e.to_vk_result(), VK_SUCCESS, "{e:?} soft → VK_SUCCESS");
         }
-        // Hard, connection/allocation loss → SURFACE_LOST.
-        for e in [WlAppError::ShmAlloc, WlAppError::Flush] {
+        // Hard, connection/allocation loss (and a required-symbol ABI gap) → SURFACE_LOST.
+        for e in [
+            WlAppError::ShmAlloc,
+            WlAppError::Flush,
+            WlAppError::SymbolMissing("wl_proxy_marshal_flags"),
+        ] {
             assert!(!e.is_unavailable(), "{e:?} must be hard");
             assert_eq!(e.to_vk_result(), VK_ERROR_SURFACE_LOST_KHR);
         }
@@ -636,6 +645,36 @@ mod tests {
             assert!(!e.is_unavailable(), "{e:?} must be hard");
             assert_eq!(e.to_vk_result(), VK_ERROR_OUT_OF_DATE_KHR);
         }
+    }
+
+    /// A supplied `wl_display*` (captured at `vkCreateWaylandSurfaceKHR`) is used AS IS: bring-up must
+    /// never call `wl_proxy_get_display` — the symbol only exists on Wayland 1.23+, and 24.04-era guests
+    /// ship 1.22.
+    #[test]
+    fn supplied_display_is_used_without_wl_proxy_get_display() {
+        const APP_DISPLAY: *mut c_void = 0xDEAD_D150usize as *mut c_void;
+        let p = WaylandAppPresenter::with_abi(Box::new(Recorder::new()), SURFACE, APP_DISPLAY)
+            .expect("bring-up");
+        assert_eq!(p.display, APP_DISPLAY);
+        let log = unsafe { &*(std::ptr::addr_of!(*p.abi) as *const Recorder) }.log();
+        assert!(
+            !log.iter().any(|r| matches!(r, Rec::GetDisplay(_))),
+            "the supplied display must short-circuit wl_proxy_get_display"
+        );
+        // Everything derives from the SUPPLIED display, not a re-derived one.
+        assert_eq!(log[0], Rec::CreateQueue(APP_DISPLAY as usize));
+    }
+
+    /// Without a supplied display AND without `wl_proxy_get_display`, bring-up is a soft NoDisplay —
+    /// not a null-display crash.
+    #[test]
+    fn absent_get_display_without_supplied_display_is_no_display() {
+        let mut rec = Recorder::new();
+        rec.no_get_display = true;
+        let err = WaylandAppPresenter::with_abi(Box::new(rec), SURFACE, core::ptr::null_mut())
+            .err()
+            .unwrap();
+        assert_eq!(err, WlAppError::NoDisplay);
     }
 
     /// The live `dlopen(RTLD_NOLOAD)` load path: with `libwayland-client` NOT mapped into this test

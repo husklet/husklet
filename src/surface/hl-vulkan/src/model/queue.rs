@@ -120,7 +120,11 @@ pub struct SwapchainRec {
 
 /// `VkColorSpaceKHR::SRGB_NONLINEAR` — the one color space the surface formats advertise.
 pub const VK_COLOR_SPACE_SRGB_NONLINEAR_KHR: i32 = 0;
-/// `VkPresentModeKHR::FIFO` — the one present mode (guaranteed-available, v-synced).
+/// `VkPresentModeKHR::IMMEDIATE` — present as soon as submitted (no v-sync wait).
+pub const VK_PRESENT_MODE_IMMEDIATE_KHR: i32 = 0;
+/// `VkPresentModeKHR::MAILBOX` — newest-frame-wins; the default many apps (e.g. vkmark) assume.
+pub const VK_PRESENT_MODE_MAILBOX_KHR: i32 = 1;
+/// `VkPresentModeKHR::FIFO` — the guaranteed-available, v-synced mode.
 pub const VK_PRESENT_MODE_FIFO_KHR: i32 = 2;
 /// `VkSurfaceTransformFlagBitsKHR::IDENTITY`.
 pub const SURFACE_TRANSFORM_IDENTITY_BIT: u32 = 0x0000_0001;

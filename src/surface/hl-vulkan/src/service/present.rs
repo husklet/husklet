@@ -15,7 +15,8 @@ use crate::model::memory::{vk_format, Format};
 use crate::model::queue::{
     ImageState, SurfaceCapabilities, SurfaceFormat, SurfaceRec, SwapImage, SwapchainRec,
     COMPOSITE_ALPHA_OPAQUE_BIT, CURRENT_EXTENT_UNDEFINED, SURFACE_IMAGE_USAGE,
-    SURFACE_TRANSFORM_IDENTITY_BIT, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, VK_PRESENT_MODE_FIFO_KHR,
+    SURFACE_TRANSFORM_IDENTITY_BIT, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+    VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_MAILBOX_KHR,
 };
 use crate::*;
 use hl_gpu::protocol::model::command::Enc;
@@ -74,10 +75,16 @@ pub fn surface_formats() -> Vec<SurfaceFormat> {
     .collect()
 }
 
-/// `vkGetPhysicalDeviceSurfacePresentModesKHR` — the supported present modes: FIFO (the always-available,
-/// v-synced mode the compositor present path implements).
+/// `vkGetPhysicalDeviceSurfacePresentModesKHR` — the supported present modes. Every present lowers to the
+/// same `Cmd::Present` (the compositor paces it), so FIFO/MAILBOX/IMMEDIATE differ only in the pacing the
+/// app may assume — all three are honestly satisfiable. Advertising FIFO alone made apps that default to
+/// MAILBOX (vkmark) abort before their first frame.
 pub fn surface_present_modes() -> Vec<i32> {
-    vec![VK_PRESENT_MODE_FIFO_KHR]
+    vec![
+        VK_PRESENT_MODE_FIFO_KHR,
+        VK_PRESENT_MODE_MAILBOX_KHR,
+        VK_PRESENT_MODE_IMMEDIATE_KHR,
+    ]
 }
 
 /// `vkCreate*SurfaceKHR` — mint an hl-GPU surface id and submit [`Cmd::CreateSurface`]. `hlp_surface`

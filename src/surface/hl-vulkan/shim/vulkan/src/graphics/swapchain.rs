@@ -33,7 +33,7 @@ pub extern "C" fn vkCreateSwapchainKHR(
                 return None;
             };
             // SAFETY: the application owns this live wl_surface for the VkSurfaceKHR lifetime.
-            match unsafe { WaylandAppPresenter::new(window.surface) } {
+            match unsafe { WaylandAppPresenter::new(window.surface, window.display) } {
                 Ok(presenter) => Some(presenter),
                 Err(error) if error.is_unavailable() => {
                     // Soft: cache `None` so it is not re-probed each frame. Log the reason once —
@@ -49,6 +49,16 @@ pub extern "C" fn vkCreateSwapchainKHR(
                     None
                 }
                 Err(error) => {
+                    // Hard: an ABI/version incompatibility with the app's libwayland-client. Report it
+                    // loudly — this is a real presentation failure, not a headless swapchain.
+                    crate::stub::Failure::report(
+                        "vkCreateSwapchainKHR",
+                        &format!(
+                            "app-surface presenter bring-up failed for wl_surface={:#x} \
+                             ({error:?}); the swapchain cannot present",
+                            window.surface
+                        ),
+                    );
                     hard_error = Some(error);
                     None
                 }

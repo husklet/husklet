@@ -36,15 +36,21 @@ impl WaylandAppPresenter {
     /// Bring up the presenter for the app's `wl_surface*` (`0` = not a wayland window) using the live
     /// `dlopen`/`dlsym` [`SysWlAbi`]. A missing library / symbol / global is a typed *soft* error so the
     /// caller keeps the readback-only present.
+    /// `display_ptr` is the app's OWN `wl_display*` as captured in `VkWaylandSurfaceCreateInfoKHR`
+    /// (`0` = unknown, fall back to `wl_proxy_get_display`, which only exists on Wayland 1.23+).
     /// # Safety
     /// `surface_ptr` must identify a live `wl_surface` whose display connection and proxy remain valid
     /// until the returned presenter is dropped.
-    pub unsafe fn new(surface_ptr: usize) -> WlAppResult<WaylandAppPresenter> {
+    pub unsafe fn new(surface_ptr: usize, display_ptr: usize) -> WlAppResult<WaylandAppPresenter> {
         if surface_ptr == 0 {
             return Err(WlAppError::NoSurface);
         }
         let abi = SysWlAbi::load()?;
-        Self::with_abi(Box::new(abi), surface_ptr as *mut c_void)
+        Self::with_abi(
+            Box::new(abi),
+            surface_ptr as *mut c_void,
+            display_ptr as *mut c_void,
+        )
     }
 
     pub fn reserve_native_frame(&mut self) -> Option<NativeFrame> {
@@ -93,12 +99,19 @@ impl WaylandAppPresenter {
     pub(crate) fn with_abi(
         abi: Box<dyn WlAbi>,
         surface: *mut c_void,
+        display: *mut c_void,
     ) -> WlAppResult<WaylandAppPresenter> {
         if surface.is_null() {
             return Err(WlAppError::NoSurface);
         }
-        // Reach the app's connection through the surface proxy — NEVER open our own socket.
-        let display = abi.get_display(surface);
+        // Use the app's OWN connection — NEVER open our own socket. It is normally handed to us
+        // (`VkWaylandSurfaceCreateInfoKHR.display`); only if it was not do we derive it from the surface
+        // proxy via `wl_proxy_get_display` (Wayland 1.23+, absent on 24.04-era guests).
+        let display = if display.is_null() {
+            abi.get_display(surface)
+        } else {
+            display
+        };
         if display.is_null() {
             return Err(WlAppError::NoDisplay);
         }

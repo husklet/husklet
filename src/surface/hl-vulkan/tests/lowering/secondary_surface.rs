@@ -80,9 +80,12 @@ fn surface_queries_report_modeled_values() {
     assert!(formats.iter().any(|f| f.format == vk_format::B8G8R8A8_SRGB));
     assert!(formats.iter().any(|f| f.format == vk_format::R8G8B8A8_SRGB));
 
-    // Present modes: FIFO (the always-available v-synced mode).
-    assert_eq!(
-        present::surface_present_modes(),
-        vec![hl_vulkan::model::queue::VK_PRESENT_MODE_FIFO_KHR]
-    );
+    // Present modes: FIFO (always-available) plus MAILBOX/IMMEDIATE, which real apps assume.
+    use hl_vulkan::model::queue::{
+        VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_MAILBOX_KHR,
+    };
+    let modes = present::surface_present_modes();
+    assert_eq!(modes[0], VK_PRESENT_MODE_FIFO_KHR);
+    assert!(modes.contains(&VK_PRESENT_MODE_MAILBOX_KHR));
+    assert!(modes.contains(&VK_PRESENT_MODE_IMMEDIATE_KHR));
 }

@@ -77,9 +77,13 @@ pub enum WlAppError {
     NoSurface,
     /// `libwayland-client.so.0` is not already mapped in this process (`RTLD_NOLOAD` miss) — soft.
     LibraryMissing,
-    /// A required proxy/queue/interface symbol was absent from `libwayland-client` — soft.
+    /// A REQUIRED proxy/queue/interface symbol was absent from the app's `libwayland-client` — **hard**.
+    /// This is an ABI/version incompatibility with a library the app has already loaded: the presenter
+    /// can never come up in this process, so treating it as "simply unavailable" hides a total
+    /// presentation failure behind a `VK_SUCCESS`. Genuinely version-gated symbols (e.g.
+    /// `wl_proxy_get_display`, Wayland 1.23+) are resolved optionally and never reach this variant.
     SymbolMissing(&'static str),
-    /// `wl_proxy_get_display` on the app surface returned null — soft.
+    /// The app's `wl_display*` was neither supplied nor derivable from the surface proxy — soft.
     NoDisplay,
     /// `wl_display_create_queue` / `wl_proxy_create_wrapper` returned null — soft.
     QueueSetup,
@@ -105,7 +109,6 @@ impl WlAppError {
             self,
             WlAppError::NoSurface
                 | WlAppError::LibraryMissing
-                | WlAppError::SymbolMissing(_)
                 | WlAppError::NoDisplay
                 | WlAppError::QueueSetup
                 | WlAppError::NoShmGlobal
@@ -126,7 +129,11 @@ impl WlAppError {
             return VK_SUCCESS;
         }
         match self {
-            WlAppError::Flush | WlAppError::ShmAlloc => VK_ERROR_SURFACE_LOST_KHR,
+            // A missing required symbol means this connection can never be presented to — the same
+            // permanence as a lost surface (and a valid `vkCreateSwapchainKHR` result).
+            WlAppError::Flush | WlAppError::ShmAlloc | WlAppError::SymbolMissing(_) => {
+                VK_ERROR_SURFACE_LOST_KHR
+            }
             _ => VK_ERROR_OUT_OF_DATE_KHR,
         }
     }

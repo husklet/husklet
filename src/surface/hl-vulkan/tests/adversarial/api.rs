@@ -59,7 +59,7 @@ fn surface_queries_report_modeled_values() {
     let caps = present::surface_capabilities();
     assert_eq!(caps.min_image_count, 2);
     assert_eq!(caps.max_image_count, 3);
-    assert_eq!(present::surface_present_modes(), vec![2]); // FIFO
+    assert_eq!(present::surface_present_modes(), vec![2, 1, 0]); // FIFO, MAILBOX, IMMEDIATE
     assert_eq!(present::surface_formats().len(), 4);
 }
 
