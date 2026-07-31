@@ -138,6 +138,28 @@ impl MetalWindow {
             NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
         }
 
+        // State what WindowServer made of this window, once, at birth.
+        //
+        // `windowNumber` is the decisive field: WindowServer assigns it, so a window it never accepted
+        // reports 0 and can never appear on screen however healthy AppKit looks from inside the process.
+        // A popup is the interesting case — it is deliberately NOT ordered front here, so it reaches the
+        // screen only via `add_child`, and this line is what distinguishes "never accepted" from
+        // "accepted but never parented".
+        let frame = window.frame();
+        hl_log::hl_log!(
+            hl_log::tag::PRESENT,
+            hl_log::Level::Error,
+            "native window created kind={} number={} visible={} on_screen={} frame={},{} {}x{}",
+            if popup { "popup" } else { "toplevel" },
+            unsafe { window.windowNumber() },
+            window.isVisible(),
+            window.screen().is_some(),
+            frame.origin.x,
+            frame.origin.y,
+            frame.size.width,
+            frame.size.height
+        );
+
         MetalWindow {
             window,
             layer,
