@@ -593,6 +593,26 @@ impl GlContext {
             self.set_gl_error(GL_INVALID_FRAMEBUFFER_OPERATION);
             return false;
         }
+        // ES 3.0 §2.8: with a NON-DEFAULT vertex array object bound, an enabled attribute array whose
+        // buffer binding is zero is GL_INVALID_OPERATION. There is no client-array fallback for a non-
+        // default VAO — client arrays are legal only on the default one — so this draw has no vertex
+        // source at all.
+        //
+        // This is the error neither implementation raised, and letting the draw through is what destroyed
+        // the context: it reached the GPU transport, failed there, and a transport failure marks the whole
+        // share group LOST. A lost group makes every later GL call return `R::default()` without reaching
+        // the model — which is why `glCheckFramebufferStatus` answered 0x0000 (not a value it can return),
+        // the error queue stayed empty, and neither a fresh buffer nor a plain clear could recover it.
+        if self.local.cur_vao != 0
+            && self
+                .local
+                .attr
+                .iter()
+                .any(|attr| attr.enabled && attr.buffer == 0 && attr.binding.is_none())
+        {
+            self.set_gl_error(GL_INVALID_OPERATION);
+            return false;
+        }
         true
     }
 

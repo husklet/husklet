@@ -116,3 +116,69 @@ fn a_client_array_draw_span_past_the_capture_bound_is_refused_not_read() {
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
     assert_eq!(c.draws().len(), 1);
 }
+
+// ---------------------------------------------------------------------------------------------------
+// A draw with no vertex source must be REFUSED, not sent to the GPU
+// ---------------------------------------------------------------------------------------------------
+
+/// ES 3.0 §2.8: with a NON-DEFAULT vertex array object bound, an enabled attribute array whose buffer
+/// binding is zero is `GL_INVALID_OPERATION` — client arrays are legal only on the default VAO, so such a
+/// draw has no vertex source at all.
+///
+/// This is the error neither implementation raised, and letting the draw through is what destroyed the
+/// context: it reached the GPU transport, failed there, and a transport failure marks the whole share
+/// group LOST. Every later GL call then returns `R::default()` without reaching the model, which is why
+/// `glCheckFramebufferStatus` answered `0x0000` — a value it cannot otherwise return — while the error
+/// queue stayed empty and neither a fresh buffer nor a plain clear could recover the context.
+#[test]
+fn a_draw_whose_buffer_binding_reverted_is_refused_on_a_user_vao() {
+    let mut c = ctx();
+    let vao = c.gen_vertex_array();
+    c.bind_vertex_array(vao);
+    let vbo = c.buffers.gen();
+    record::bind_buffer(&mut c, GL_ARRAY_BUFFER, vbo);
+    record::buffer_data(&mut c, GL_ARRAY_BUFFER, &[0u8; 32], 0x88E4);
+    record::vertex_attrib_pointer(&mut c, 0, 2, GL_FLOAT, false, 8, 0);
+    record::enable_vertex_attrib(&mut c, 0);
+    let _ = c.take_gl_error();
+
+    // Deleting the buffer correctly reverts the binding to zero — that part was never in doubt.
+    assert!(c.delete_buffer_later(vbo));
+    assert_eq!(c.attributes()[0].buffer, 0, "deletion unbinds, as it should");
+
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert_eq!(
+        c.take_gl_error(),
+        GL_INVALID_OPERATION,
+        "the draw has no vertex source and must be refused"
+    );
+    assert!(
+        c.draws().is_empty(),
+        "and must record nothing, so it never reaches the transport"
+    );
+
+    // The context stays usable: a valid buffer re-established on the same attribute draws again.
+    let replacement = c.buffers.gen();
+    record::bind_buffer(&mut c, GL_ARRAY_BUFFER, replacement);
+    record::buffer_data(&mut c, GL_ARRAY_BUFFER, &[0u8; 32], 0x88E4);
+    record::vertex_attrib_pointer(&mut c, 0, 2, GL_FLOAT, false, 8, 0);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
+    assert_eq!(c.draws().len(), 1, "recovery is the part that matters");
+}
+
+/// The DEFAULT vertex array object is the one place client arrays are legal, so the same shape there must
+/// still record — that is the GTK client-array path and it must not be caught by the rule above.
+#[test]
+fn the_same_shape_on_the_default_vao_still_records() {
+    let mut c = ctx();
+    record::vertex_attrib_pointer(&mut c, 0, 2, GL_FLOAT, false, 8, 0);
+    record::enable_vertex_attrib(&mut c, 0);
+    let _ = c.take_gl_error();
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert_eq!(
+        c.take_gl_error(),
+        GL_NO_ERROR,
+        "a client array on the default VAO is legal"
+    );
+}

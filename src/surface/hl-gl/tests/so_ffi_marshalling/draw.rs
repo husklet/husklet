@@ -77,6 +77,13 @@ fn gl_draw_array_in_paths_marshal() {
 
     // ---- CLIENT-side arrays: no bound buffer, so the shim reads guest memory THROUGH the marshalled
     //      pointer (the ABI path GTK's client-array draws take). A real Rust array backs each pointer.
+    //
+    // The DEFAULT vertex array object first. ES 3.0 §2.8 permits client arrays only there: with a
+    // non-default VAO bound, an enabled array whose buffer binding is zero is GL_INVALID_OPERATION and the
+    // draw has no vertex source at all. This section ran with the VAO above still bound, so it was
+    // asserting GL_NO_ERROR for a draw the specification forbids — and that draw is the one that reached
+    // the GPU transport and destroyed the share group.
+    gl_bind_vertex_array(0);
     gl_bind_buffer(GL_ARRAY_BUFFER, 0);
     gl_bind_buffer(GL_ELEMENT_ARRAY_BUFFER, 0);
     let client_verts: [f32; 6] = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
