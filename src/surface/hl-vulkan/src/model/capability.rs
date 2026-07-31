@@ -41,6 +41,32 @@ pub const INSTANCE_EXTENSIONS: &[ExtensionProp] = &[
         name: "VK_KHR_get_physical_device_properties2",
         spec_version: 2,
     },
+    // The external-capability QUERY trio. All three were promoted to core in Vulkan 1.1 and this ICD
+    // advertises 1.3, so their core entry points
+    // (`vkGetPhysicalDeviceExternalBufferProperties`/`…SemaphoreProperties`/`…FenceProperties`, in
+    // `devgroup.rs`) are already mandatory and already have real bodies: each reports all-zero
+    // `externalMemoryFeatures` / `compatibleHandleTypes`, the truthful answer for a device that
+    // supports no external handle types at all.
+    //
+    // Naming them costs nothing and changes no behaviour, and NOT naming them was the ladder's rule
+    // running backwards — under-advertising something we do honour. A client targeting 1.0/1.1 asks for
+    // the `KHR` spelling rather than the core one and was refused `VK_ERROR_EXTENSION_NOT_PRESENT` at
+    // `vkCreateInstance` for a capability this driver genuinely has. Measured against the installed
+    // bundle: these three were the only refused instance extensions whose entry points are really
+    // implemented (`VK_KHR_get_surface_capabilities2`'s are in the refused list, and there is no X11 or
+    // display path at all, so those stay unadvertised).
+    ExtensionProp {
+        name: "VK_KHR_external_memory_capabilities",
+        spec_version: 1,
+    },
+    ExtensionProp {
+        name: "VK_KHR_external_semaphore_capabilities",
+        spec_version: 1,
+    },
+    ExtensionProp {
+        name: "VK_KHR_external_fence_capabilities",
+        spec_version: 1,
+    },
 ];
 
 /// Device-level extensions the ICD really backs: `VK_KHR_swapchain` (the present path in
@@ -190,6 +216,52 @@ mod tests {
         assert!(names.contains(&"VK_KHR_wayland_surface"));
         assert!(names.contains(&"VK_KHR_get_physical_device_properties2"));
         assert!(INSTANCE_EXTENSIONS.iter().all(|e| e.spec_version >= 1));
+    }
+
+    /// The census: the EXACT instance-extension set, so adding one is a deliberate act with a body
+    /// behind it rather than a drift. A name here is a promise the driver keeps.
+    #[test]
+    fn instance_extension_census_is_exact() {
+        let names: Vec<&str> = INSTANCE_EXTENSIONS.iter().map(|e| e.name).collect();
+        assert_eq!(
+            names,
+            vec![
+                "VK_KHR_surface",
+                "VK_KHR_wayland_surface",
+                "VK_KHR_get_physical_device_properties2",
+                "VK_KHR_external_memory_capabilities",
+                "VK_KHR_external_semaphore_capabilities",
+                "VK_KHR_external_fence_capabilities",
+            ],
+            "the advertised instance-extension set drifted"
+        );
+        // No duplicates: the loader dedupes, but a repeated name means the list was edited blind.
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), names.len(), "a name is listed twice");
+    }
+
+    /// The extensions this driver must NOT advertise, each because the entry points it would promise
+    /// are refused stubs or do not exist. Measured against the installed bundle before this list was
+    /// written; every one of these is a lie the ladder forbids, not an oversight to fix later.
+    #[test]
+    fn extensions_without_a_body_are_not_advertised() {
+        let names: Vec<&str> = INSTANCE_EXTENSIONS.iter().map(|e| e.name).collect();
+        for forbidden in [
+            // Entry points are in the shim's refused list.
+            "VK_KHR_get_surface_capabilities2",
+            // No X11 path exists; only wayland surfaces are created.
+            "VK_KHR_xcb_surface",
+            "VK_KHR_xlib_surface",
+            // No display/KMS path exists.
+            "VK_KHR_display",
+        ] {
+            assert!(
+                !names.contains(&forbidden),
+                "{forbidden} has no body in this driver and must not be advertised"
+            );
+        }
     }
 
     #[test]
