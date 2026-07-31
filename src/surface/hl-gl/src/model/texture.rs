@@ -354,7 +354,11 @@ impl GlTexture {
 
 /// The per-context texture table: GL name → [`GlTexture`], with a monotonic name counter. Name `0` is
 /// the reserved "no texture" binding.
-#[derive(Debug, Default)]
+/// No `Default`: the derived one would start `next_name` at `0`, and `0` is the reserved "no texture"
+/// binding, so the first `glGenTextures` through it would hand the application a name that means "unbind"
+/// and every upload would land on the default texture. `next_generation` has the same problem — `0` is
+/// the generation a never-uploaded texture carries. [`Textures::new`] is the only way to build one.
+#[derive(Debug)]
 pub struct Textures {
     map: HashMap<u32, GlTexture>,
     next_name: u32,
