@@ -305,7 +305,6 @@ impl TokenSlice for [Tok] {
 // ---------------------------------------------------------------------------------------------------
 
 /// The largest finite f32, as a GLSL float literal. A value's magnitude exceeds it iff the value is ±∞.
-const F32_FINITE_MAX_LIT: &str = "3.40282347e38";
 
 /// Rewrite every `isinf(x)` call to `(abs(x) > 3.40282347e38)` — a finite-max-bound test that survives
 /// naga's `wgsl-out`, which has NO `IsInf` emitter and otherwise NACKs the whole shader with
@@ -329,7 +328,38 @@ impl<'a> Source<'a> {
         Self { text }
     }
 
-    pub(crate) fn rewrite_isinf(&self) -> String {
+    /// Rewrite `isinf(x)` / `isnan(x)` into BIT-PATTERN tests on the IEEE-754 binary32 encoding.
+    ///
+    /// Two separate defects made this necessary, and only the first was known.
+    ///
+    /// naga's `wgsl-out` emits no relational function except `all`/`any`, so `isnan` NEVER COMPILED — it
+    /// reached WGSL emission and was refused (`Unsupported relational function: IsNan`). WGSL has no such
+    /// builtins at all: gpuweb REMOVED `isNan`/`isInf` from the language (gpuweb#2311) precisely because
+    /// backends assuming fast math made them unreliable, so there is nothing to lower to and the test has
+    /// to survive as ordinary arithmetic written here.
+    ///
+    /// The second defect is why that arithmetic must be INTEGER arithmetic. The previous rewrite produced
+    /// `(abs(x) > 3.40282347e38)`, which is a FLOAT comparison — and a float comparison is exactly what a
+    /// fast-math compiler is licensed to fold away, because fast math permits assuming no operand is NaN
+    /// or infinite. Metal's shader compiler defaults to fast math and wgpu-hal never disables it, so on
+    /// that backend the comparison can be constant-folded to `false` and the predicate silently answers
+    /// "never" for every input. Reinterpreting the bits and testing them as an INTEGER puts the test
+    /// outside what those assumptions can reach: fast math's licence is over floating-point arithmetic,
+    /// and `floatBitsToUint` + an integer compare performs none.
+    ///
+    /// The encoding, exactly: mask off the sign (`& 0x7fffffff`) and compare against the exponent-all-ones
+    /// pattern `0x7f800000`. EQUAL is an infinity (all-ones exponent, zero mantissa); GREATER is a NaN
+    /// (all-ones exponent, nonzero mantissa). Both `+INF` and `-INF` answer true because the sign is
+    /// masked, which a magnitude comparison also got right and is worth not losing.
+    ///
+    /// SCALAR ARGUMENTS ONLY, deliberately. GLSL's vector overloads return a `bvec`, and the emitted
+    /// integer compare has no vector form (`==` on a `uvec` is not GLSL — it needs `equal()`), so a vector
+    /// argument produces source naga rejects rather than a silently wrong answer. That matches both the
+    /// previous rewrite, whose `abs(v) > FLT_MAX` was equally scalar-only, and this crate's standing
+    /// preference for a loud refusal over a quiet mistranslation.
+    ///
+    /// A shader using neither builtin is returned byte-for-byte.
+    pub(crate) fn rewrite_nonfinite_predicates(&self) -> String {
         Self::rewrite(self.text)
     }
 
@@ -372,8 +402,17 @@ impl<'a> Source<'a> {
         toks.0.as_slice().source()
     }
 
+    /// The IEEE-754 binary32 predicate for one builtin, as an integer test on the bits. See
+    /// [`Self::rewrite_nonfinite_predicates`] for why this is integer arithmetic and not a comparison.
+    fn bit_test(builtin: &str, argument: &str) -> String {
+        // `== exponent-all-ones` is an infinity; `>` is a NaN (all-ones exponent + nonzero mantissa).
+        let compare = if builtin == "isnan" { ">" } else { "==" };
+        format!("((floatBitsToUint({argument}) & 0x7fffffffu) {compare} 0x7f800000u)")
+    }
+
     fn rewrite(text: &str) -> String {
-        if !text.contains("isinf") {
+        const BUILTINS: [&str; 2] = ["isinf", "isnan"];
+        if !BUILTINS.iter().any(|builtin| text.contains(builtin)) {
             return text.to_string();
         }
         let s = Self::without_comments(text);
@@ -386,12 +425,17 @@ impl<'a> Source<'a> {
                 || !(bytes[i - 1] == b'_'
                     || bytes[i - 1].is_ascii_alphanumeric()
                     || bytes[i - 1] == b'.');
+            // Both builtin names are five characters, so one length serves the word-boundary check.
             let followed_by_word = bytes
                 .get(i + 5)
-                .is_some_and(|&byte| byte == b'_' || byte.is_ascii_alphanumeric() || byte == b'.');
-            if on_boundary && !followed_by_word && s[i..].starts_with("isinf") {
-                // Skip any whitespace between `isinf` and its opening paren.
-                let mut j = i + 5;
+                .is_some_and(|byte| *byte == b'_' || byte.is_ascii_alphanumeric() || *byte == b'.');
+            let matched = BUILTINS
+                .iter()
+                .find(|builtin| s[i..].starts_with(**builtin))
+                .copied();
+            if let (true, false, Some(builtin)) = (on_boundary, followed_by_word, matched) {
+                // Skip any whitespace between the builtin and its opening paren.
+                let mut j = i + builtin.len();
                 while j < bytes.len() && bytes[j].is_ascii_whitespace() {
                     j += 1;
                 }
@@ -415,12 +459,9 @@ impl<'a> Source<'a> {
                     };
                     if close < bytes.len() {
                         out.push_str(&s[flush_from..i]);
+                        // Recurse so a nested `isnan(isinf(...) ? … : …)` is rewritten inside out.
                         let inner = Self::rewrite(&s[j + 1..close]);
-                        out.push_str("(abs(");
-                        out.push_str(inner.trim());
-                        out.push_str(") > ");
-                        out.push_str(F32_FINITE_MAX_LIT);
-                        out.push(')');
+                        out.push_str(&Self::bit_test(builtin, inner.trim()));
                         i = close + 1;
                         flush_from = i;
                         continue;

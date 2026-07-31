@@ -222,13 +222,14 @@ pub fn glsl_to_wgsl_reflect(
     } else {
         src
     };
-    // naga's `wgsl-out` has no `IsInf` emitter, so a shader using `isinf()` (Chrome's GLES fragment
-    // shaders do) parses fine but NACKs at WGSL emission (`Unsupported relational function: IsInf`).
-    // Rewrite `isinf(x)` → `(abs(x) > FLT_MAX)` textually before parsing. Unconditional and cheap: a
-    // shader with no `isinf` is returned byte-for-byte, so non-isinf paths are unaffected.
+    // naga's `wgsl-out` emits no relational function but `all`/`any`, so `isinf()` (which Chrome's GLES
+    // fragment shaders use) and `isnan()` both NACK at WGSL emission — WGSL has no such builtins, by
+    // design. Both are rewritten to integer tests on the IEEE-754 bit pattern before parsing, which is
+    // also what keeps them from being folded away by a fast-math backend; see
+    // `glsl_es::Source::rewrite_nonfinite_predicates`. A shader using neither is returned byte-for-byte.
     let deinf;
-    let src = if src.contains("isinf") {
-        deinf = crate::glsl_es::Source::new(src).rewrite_isinf();
+    let src = if src.contains("isinf") || src.contains("isnan") {
+        deinf = crate::glsl_es::Source::new(src).rewrite_nonfinite_predicates();
         deinf.as_str()
     } else {
         src

@@ -349,8 +349,14 @@ fn isinf_fails_wgsl_out_directly_but_compiles_through_glsl_to_wgsl() {
         other => panic!("expected the IsInf wgsl-out failure, got {other:?}"),
     }
 
-    // PASS-AFTER: the `isinf` → `(abs(x) > FLT_MAX)` rewrite compiles the shader to real WGSL — no
-    // `isinf`/`IsInf` survives and the finite-max-bound `abs(...)` is present.
+    // PASS-AFTER: the bit-pattern rewrite compiles the shader to real WGSL — no `isinf`/`IsInf` survives,
+    // and what replaces it is an INTEGER test on the bits (a `bitcast` to `u32`), not a float comparison a
+    // fast-math backend could fold away.
+    //
+    // NOTE what this test does NOT establish, because that was the whole defect: it asserts the shader
+    // COMPILES and that no such instruction survives. Neither is the property in question — a rewrite can
+    // satisfy both and still answer `false` for every input at runtime. The VALUE is asserted in
+    // `tests/nonfinite_predicates.rs`; this one only guards the emission shape.
     let wgsl = glsl_to_wgsl(ISINF_FRAG, naga::ShaderStage::Fragment, "fmain")
         .expect("isinf fragment must compile through the rewrite");
     assert!(
@@ -358,33 +364,37 @@ fn isinf_fails_wgsl_out_directly_but_compiles_through_glsl_to_wgsl() {
         "no isinf survives to WGSL: {wgsl}"
     );
     assert!(
-        wgsl.contains("abs("),
-        "the finite-max-bound rewrite is present: {wgsl}"
+        wgsl.contains("bitcast<u32>"),
+        "the predicate is an integer test on the bit pattern, not a float comparison: {wgsl}"
     );
 }
 
 #[test]
-fn rewrite_isinf_is_exact_and_leaves_isinf_free_source_untouched() {
+fn rewrite_nonfinite_is_exact_and_leaves_unaffected_source_untouched() {
     use crate::glsl_es::Source;
-    // A shader with no isinf is returned byte-for-byte (fast path).
+    // A shader using neither builtin is returned byte-for-byte (fast path).
     let plain = "void main() { float x = 1.0; }";
     assert_eq!(
-        Source::new(plain).rewrite_isinf(),
+        Source::new(plain).rewrite_nonfinite_predicates(),
         plain,
-        "isinf-free source is untouched"
+        "source using neither builtin is untouched"
     );
 
-    // Scalar isinf on an expression argument, with a nested isinf, both rewritten to the abs bound; no
-    // `isinf` token remains and the `isinfx` identifier (a false prefix) is NOT touched.
-    let src = "bool a = isinf(u.v * 2.0); bool b = isinf(isinf(w) ? 1.0 : x); float isinfx = 3.0;";
-    let out = Source::new(src).rewrite_isinf();
+    // Scalar calls on expression arguments, including a nested one, all rewritten to the bit test; no
+    // `isinf`/`isnan` token remains and the `isinfx` identifier (a false prefix) is NOT touched.
+    let src = "bool a = isinf(u.v * 2.0); bool b = isnan(isinf(w) ? 1.0 : x); float isinfx = 3.0;";
+    let out = Source::new(src).rewrite_nonfinite_predicates();
     assert!(
-        !out.contains("isinf("),
-        "every isinf() call rewritten: {out}"
+        !out.contains("isinf(") && !out.contains("isnan("),
+        "every call rewritten: {out}"
     );
     assert!(
-        out.contains("(abs(u.v * 2.0) > 3.40282347e38)"),
-        "scalar arg rewritten: {out}"
+        out.contains("((floatBitsToUint(u.v * 2.0) & 0x7fffffffu) == 0x7f800000u)"),
+        "isinf is the exponent-all-ones EQUALITY: {out}"
+    );
+    assert!(
+        out.contains("& 0x7fffffffu) > 0x7f800000u)"),
+        "isnan is the STRICTLY-GREATER form (all-ones exponent, nonzero mantissa): {out}"
     );
     assert!(
         out.contains("isinfx"),
