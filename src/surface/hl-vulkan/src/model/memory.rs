@@ -109,6 +109,14 @@ pub mod vk_format {
     pub const B8G8R8A8_SRGB: u32 = 50;
     pub const R8_UNORM: u32 = 9;
     pub const R8G8_UNORM: u32 = 16;
+    // Integer color. Unfilterable and unblendable by specification: a shader reads them only through
+    // `texelFetch`/`textureLoad` and their texels are raw integers, never normalized.
+    pub const R8_UINT: u32 = 13;
+    pub const R8_SINT: u32 = 14;
+    pub const R8G8_UINT: u32 = 20;
+    pub const R8G8_SINT: u32 = 21;
+    pub const R8G8B8A8_UINT: u32 = 41;
+    pub const R8G8B8A8_SINT: u32 = 42;
     pub const R16G16B16A16_SFLOAT: u32 = 97;
     pub const R32G32B32A32_SFLOAT: u32 = 109;
     pub const R32_SFLOAT: u32 = 100;
@@ -353,6 +361,16 @@ impl Format {
             vk_format::R16G16B16A16_SFLOAT => T::Rgba16Float,
             vk_format::R32G32B32A32_SFLOAT => T::Rgba32Float,
             vk_format::R32_SFLOAT => T::R32Float,
+            // The integer color family. The neutral wire has carried these since the GL driver needed
+            // `GL_RGBA_INTEGER`/`GL_RED_INTEGER`/`GL_RG_INTEGER` storage, and `hl-gpu-wgpu` maps each to its
+            // exact wgpu counterpart, but this Vulkan lowering never learned them — so every `vkCreateImage`
+            // naming one was refused for a format the whole stack below already materializes.
+            vk_format::R8G8B8A8_UINT => T::Rgba8Uint,
+            vk_format::R8G8B8A8_SINT => T::Rgba8Sint,
+            vk_format::R8_UINT => T::R8Uint,
+            vk_format::R8_SINT => T::R8Sint,
+            vk_format::R8G8_UINT => T::Rg8Uint,
+            vk_format::R8G8_SINT => T::Rg8Sint,
             // The hl model carries no 16-bit depth target; fold D16 onto the 32-bit float depth format so a
             // classic pass declaring VK_FORMAT_D16_UNORM (vkcube) resolves to a real depth aspect — both the
             // depth image and the pipeline's DepthState land on the same format, staying executor-valid.
