@@ -163,7 +163,9 @@ impl DriverStatus<'_> {
             GpuError::UnknownId { .. } | GpuError::DuplicateId { .. } => CUDA_ERROR_INVALID_HANDLE,
             GpuError::OutOfBounds => CUDA_ERROR_INVALID_VALUE,
             GpuError::ResourceLimit(_) => CUDA_ERROR_OUT_OF_MEMORY,
-            GpuError::Decode(_) | GpuError::Transport(_) => CUDA_ERROR_UNKNOWN,
+            GpuError::Decode(_) | GpuError::Transport(_) | GpuError::Panicked(_) => {
+                CUDA_ERROR_UNKNOWN
+            }
             GpuError::Invalid(_)
             | GpuError::BadEnum { .. }
             | GpuError::BadTag(_)

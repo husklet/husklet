@@ -36,6 +36,12 @@ pub enum GpuError {
     ResourceLimit(&'static str),
     /// Malformed or unsupported kernel descriptor while decoding a neutral kernel-IR payload.
     Kernel(String),
+    /// The executor ABORTED ABNORMALLY — it panicked partway through a batch instead of returning. The
+    /// frame is refused and the session rolled back exactly as for any other rejection, so this is not a
+    /// different OUTCOME; it is a different CAUSE, and it stays distinguishable because the two are worth
+    /// telling apart. A refusal is the backend doing its job; a panic is a backend defect, and one that
+    /// reached this variant is a bug to fix rather than a guest to blame. Carries the panic's own message.
+    Panicked(String),
     /// Higher-level decode context wrapped around a low-level wire error.
     Decode(String),
     /// A typed failure at the remote command transport boundary.
@@ -66,6 +72,7 @@ impl std::fmt::Display for GpuError {
             GpuError::Invalid(m) => write!(f, "invalid argument: {m}"),
             GpuError::ResourceLimit(m) => write!(f, "executor resource limit: {m}"),
             GpuError::Kernel(m) => write!(f, "kernel: {m}"),
+            GpuError::Panicked(m) => write!(f, "executor panicked (backend defect): {m}"),
             GpuError::Decode(m) => write!(f, "decode: {m}"),
             GpuError::Transport(error) => error.fmt(f),
         }

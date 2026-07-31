@@ -71,22 +71,64 @@ pub fn dispatch(
     // EXACTLY to the pre-frame state (the ledger is rolled back by `runtime::submit`), so the connection
     // recovers: a subsequent destroy of a still-live id no longer `UnknownId`s and a retry no longer
     // `DuplicateId`s. This is the executor-side "swap-reset-on-NACK".
-    session.resources.begin_txn();
-    let presents = match exec.execute(&mut session.resources, batch) {
-        Ok(presents) => {
-            session.resources.commit_txn();
-            presents
-        }
-        Err(e) => {
-            session.resources.rollback_txn();
-            return Err(e);
-        }
+    // The transaction is scoped by an RAII guard rather than by matching on the result, because an
+    // executor can leave this stage in a THIRD way that the match could not see: by PANICKING. A panic
+    // unwinds straight past a rollback written on the error arm, so every mutation the batch had already
+    // applied stayed applied, with the transaction still open and no owner aware of it — the id the
+    // aborted batch created remained allocated forever, and every later batch reusing it was refused,
+    // which a guest reads as an unrecoverable device. That was measured, not theorised: see
+    // `tests/panic_atomicity.rs`, whose arm A is exactly this leak and whose arm B shows the same panic
+    // costs nothing when the aborted batch had allocated nothing — which is why the same defect presented
+    // as "cost a thread" on one run and "killed the session" on another.
+    //
+    // `Drop` runs during unwinding, so the guard restores the pre-frame tables on the panic path too, and
+    // an abnormal abort becomes indistinguishable from a clean refusal.
+    let presents = {
+        let mut txn = Transaction::begin(&mut session.resources);
+        let presents = exec.execute(txn.resources, batch)?;
+        txn.commit();
+        presents
     };
 
     // Install the pre-flighted timeline only after the executor accepted the work, so a failed execute
     // leaves the timeline untouched (failure atomicity).
     session.timeline = next_timeline;
     Ok(presents)
+}
+
+/// The in-flight all-tables transaction, scoped so it is resolved on EVERY exit path — including an
+/// unwind out of the executor.
+///
+/// Holding the `&mut SessionResources` is what makes this airtight: the tables cannot be reached except
+/// through the guard while a transaction is open, so no path can forget to end one. `commit` consumes the
+/// guard; anything else — an early `?`, a panic — drops it and rolls back.
+struct Transaction<'a> {
+    resources: &'a mut super::super::model::resources::SessionResources,
+    committed: bool,
+}
+
+impl<'a> Transaction<'a> {
+    fn begin(resources: &'a mut super::super::model::resources::SessionResources) -> Self {
+        resources.begin_txn();
+        Self {
+            resources,
+            committed: false,
+        }
+    }
+
+    /// Accept the batch: parked natives are freed for real and the tables keep the batch's mutations.
+    fn commit(mut self) {
+        self.resources.commit_txn();
+        self.committed = true;
+    }
+}
+
+impl Drop for Transaction<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.resources.rollback_txn();
+        }
+    }
 }
 
 /// Service the `CommandSink::wait` path: block on the executor until fence `fence` reaches `value`. Not

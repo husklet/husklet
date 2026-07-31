@@ -16,19 +16,25 @@
 //! on WHAT THE ABORTED BATCH HAD ALREADY DONE when it died — which is not a property of the panic at all,
 //! and would look like nondeterminism from the outside.
 //!
-//! The two arms below hold the panic fixed and vary only that. `panic_on` marks the command the executor
-//! dies on; every command before it is really applied to the resource tables first, exactly as a mid-batch
-//! backend failure does.
-
-use std::panic::{catch_unwind, AssertUnwindSafe};
+//! That was measured here first, with these tests written as characterizations of the defect, and the
+//! measurement corrected the diagnosis in a way worth recording: the leak that is actually OBSERVABLE is
+//! not in the resource tables but in the residency ledger. Both leaked — `dispatch`'s table transaction was
+//! left open and `submit`'s charge stayed committed — but the ledger carries its own `live` id map and is
+//! consulted FIRST, so a retry was refused by the account before the tables were ever reached. Two
+//! independent deaths sharing one trigger; fixing either alone leaves the session wedged.
+//!
+//! Both rollbacks are now unwind-safe (an RAII transaction guard in `dispatch`, an unwind boundary around
+//! the charge in `submit`), so the arms below are the REGRESSION GUARD for that: a panic must cost the
+//! frame and nothing else, whatever the aborted batch had already done. The arms hold the panic fixed and
+//! vary only what it had allocated; if either rollback regresses, arm A diverges from the control again.
 
 use hl_gpu::protocol::model::descriptor::BufferDesc;
 use hl_gpu::protocol::model::enums::buffer_usage;
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::runtime::port::executor::Presentation;
 use hl_gpu::{
-    Capabilities, Cmd, CpuExecutor, FakeClock, FenceId, GlobalLedger, GpuExecutor, Limits, Result,
-    Session,
+    Capabilities, Cmd, CpuExecutor, FakeClock, FenceId, GlobalLedger, GpuError, GpuExecutor, Limits,
+    Result, Session,
 };
 
 /// The id whose creation the executor panics on — a stand-in for `create_shader_module`'s panic, reached
@@ -85,40 +91,41 @@ fn buffer(id: u32) -> Cmd {
 
 /// ARM A — the aborted batch had ALREADY ALLOCATED when it panicked.
 ///
-/// `submit` never returns, so neither the id-table rollback nor the ledger rollback runs. Id 3 stays
-/// allocated with no owner aware of it, and the frame's residency charge stays committed. Every later
-/// batch that reuses that id is refused, which the guest reads as an unrecoverable device — the session is
-/// wedged even though the process is fine.
+/// The panic unwinds past both rollbacks, so both must survive unwinding: the id-table transaction is
+/// rolled back by its guard's `Drop`, and the residency charge — committed for the WHOLE frame up front,
+/// including the command that never ran — is restored across an unwind boundary. The session is left
+/// exactly as it was before the frame: the id is free, the account is back to its pre-frame totals, and
+/// nothing live was left behind.
 #[test]
-fn a_panic_after_an_allocation_leaks_the_id_and_wedges_the_session() {
+fn a_panic_after_an_allocation_leaves_no_trace() {
     let mut exec = PanicMidBatch(CpuExecutor::new());
     let mut s = session(&exec);
 
     let before = s.ledger.totals;
+    assert_eq!(before.objects, 0, "the session starts unbilled");
 
-    let panicked = catch_unwind(AssertUnwindSafe(|| {
-        hl_gpu::runtime::submit(&mut s, &mut exec, 0, &[buffer(3), buffer(PANIC_ID)])
-    }))
-    .is_err();
-    assert!(panicked, "the executor must have panicked");
-
-    // The id the aborted batch created is STILL TAKEN — the rollback the `Err` path performs was skipped.
-    let retry = hl_gpu::runtime::submit(&mut s, &mut exec, 0, &[buffer(3)]);
+    let refused = hl_gpu::runtime::submit(&mut s, &mut exec, 0, &[buffer(3), buffer(PANIC_ID)]);
     assert!(
-        matches!(retry, Err(hl_gpu::GpuError::DuplicateId { kind: "buffer", .. })),
-        "id 3 must still be allocated after the panic — this leak is what wedges the session, got {retry:?}"
+        matches!(refused, Err(GpuError::Panicked(_))),
+        "a panicking executor must REFUSE the frame, not unwind into the caller, got {refused:?}"
     );
 
-    // The residency charge leaked too, and it leaked the WHOLE frame's charge: `submit` commits the entire
-    // batch's cost up front, so both buffers are still billed (2 objects, 512 bytes) even though only one
-    // of them was ever created. A connection that survives this drifts upward every time until every frame
-    // trips its residency cap — the second way the same panic ends a session.
-    assert_eq!(before.objects, 0, "the session starts unbilled");
+    // Nothing the aborted batch created survived it.
+    assert_eq!(
+        s.resources.live_count(),
+        0,
+        "the id-table transaction must be rolled back on the unwind path"
+    );
     assert_eq!(
         (s.ledger.totals.objects, s.ledger.totals.bytes),
-        (2, 512),
-        "the aborted frame's full charge is still committed, including the command that never ran"
+        (before.objects, before.bytes),
+        "the aborted frame's residency charge must be released on the unwind path"
     );
+
+    // And the id is genuinely reusable — the account no longer refuses it as a duplicate, which is the
+    // symptom a guest actually saw (an unrecoverable device after one bad shader).
+    hl_gpu::runtime::submit(&mut s, &mut exec, 0, &[buffer(3)])
+        .expect("id 3 must be free again after the aborted batch was rolled back");
 }
 
 /// ARM B — the aborted batch had ALLOCATED NOTHING when it panicked.
@@ -131,11 +138,11 @@ fn a_panic_with_nothing_allocated_leaves_the_session_fully_usable() {
     let mut exec = PanicMidBatch(CpuExecutor::new());
     let mut s = session(&exec);
 
-    let panicked = catch_unwind(AssertUnwindSafe(|| {
-        hl_gpu::runtime::submit(&mut s, &mut exec, 0, &[buffer(PANIC_ID)])
-    }))
-    .is_err();
-    assert!(panicked, "the executor must have panicked");
+    let refused = hl_gpu::runtime::submit(&mut s, &mut exec, 0, &[buffer(PANIC_ID)]);
+    assert!(
+        matches!(refused, Err(GpuError::Panicked(_))),
+        "a panicking executor must REFUSE the frame, got {refused:?}"
+    );
 
     hl_gpu::runtime::submit(&mut s, &mut exec, 0, &[buffer(3)])
         .expect("a panic that allocated nothing must leave the session fully usable");
@@ -157,4 +164,31 @@ fn a_clean_refusal_after_an_allocation_leaves_no_trace() {
 
     hl_gpu::runtime::submit(&mut s, &mut exec, 0, &[buffer(3)])
         .expect("a cleanly refused batch rolls its allocation back, so id 3 is free again");
+}
+
+/// A panic and a clean refusal produce the SAME observable outcome — the frame is refused and the session
+/// is untouched — which is the whole point, but it means nothing downstream could tell a backend DEFECT
+/// from a backend doing its job. The transport had a log line for this and nothing else did; the ack byte
+/// certainly cannot carry it. The typed cause travels with the error instead, so an in-process caller and
+/// the socket path agree, and a panicking backend is still findable.
+#[test]
+fn a_panic_is_distinguishable_from_a_clean_refusal() {
+    let mut exec = PanicMidBatch(CpuExecutor::new());
+    let mut s = session(&exec);
+
+    let panicked = hl_gpu::runtime::submit(&mut s, &mut exec, 0, &[buffer(PANIC_ID)]);
+    let refused = hl_gpu::runtime::submit(&mut s, &mut exec, 0, &[Cmd::DestroyBuffer(9)]);
+
+    assert!(
+        matches!(panicked, Err(GpuError::Panicked(ref m)) if m.contains("panicked mid-batch")),
+        "the panic's own message survives into the typed error, got {panicked:?}"
+    );
+    assert!(
+        matches!(refused, Err(GpuError::UnknownId { .. })),
+        "a clean refusal keeps its own typed cause, got {refused:?}"
+    );
+    assert!(
+        !matches!(refused, Err(GpuError::Panicked(_))),
+        "a clean refusal must never be reported as a backend panic"
+    );
 }

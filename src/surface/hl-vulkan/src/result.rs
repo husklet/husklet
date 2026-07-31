@@ -92,7 +92,9 @@ impl Status {
             GpuError::ResourceLimit(_) => VK_ERROR_OUT_OF_DEVICE_MEMORY,
             GpuError::OutOfBounds => VK_ERROR_MEMORY_MAP_FAILED,
             GpuError::Kernel(_) => VK_ERROR_UNKNOWN,
-            GpuError::Decode(_) | GpuError::Transport(_) => VK_ERROR_DEVICE_LOST,
+            GpuError::Decode(_) | GpuError::Transport(_) | GpuError::Panicked(_) => {
+                VK_ERROR_DEVICE_LOST
+            }
             GpuError::Invalid(_)
             | GpuError::BadEnum { .. }
             | GpuError::BadTag(_)
