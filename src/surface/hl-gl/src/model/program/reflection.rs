@@ -12,17 +12,26 @@ pub enum UniformLocation {
 impl Program {
     /// Component count of the active vertex input at `location`.
     pub fn vertex_attr_components(&self, location: usize) -> Option<i32> {
-        let name = self
-            .attrib_locations
-            .iter()
-            .find_map(|(name, &bound)| (bound as usize == location).then_some(name));
-        if let Some(declaration) = crate::adapter::glsl::Source::new(&self.vs_src)
-            .vertex_attrs()
-            .into_iter()
-            .find(|declaration| Some(&declaration.name) == name)
-        {
-            if let Some(components) = components(&declaration.ty) {
-                return Some(components);
+        // A matrix or array attribute occupies one location PER COLUMN / PER ELEMENT, and each of those is
+        // a separate vertex input the pipeline must supply. Matching `location` exactly left every column
+        // after the first unknown, so a declared-but-disabled `mat2` got no constant attribute for its
+        // second column — the shader declared a location the pipeline never supplied, pipeline creation
+        // failed, and the draw wedged the context. Each location carries ONE COLUMN's components, so a
+        // `mat4x2` supplies four locations of two components, not one of eight.
+        let declarations = crate::adapter::glsl::Source::new(&self.vs_src).vertex_attrs();
+        for (name, &base) in &self.attrib_locations {
+            let Some(declaration) = declarations
+                .iter()
+                .find(|declaration| &declaration.name == name)
+            else {
+                continue;
+            };
+            let base = base as usize;
+            let span = declaration.location_span() as usize;
+            if (base..base.saturating_add(span)).contains(&location) {
+                if let Some(components) = components_per_location(&declaration.ty) {
+                    return Some(components);
+                }
             }
         }
         let descriptor = GlslDescriptor::from_words(self.vs_ir.as_ref()?)?.ok()?;
@@ -122,9 +131,7 @@ fn linked_input(declaration: &str, wanted: usize) -> Option<i32> {
     let location = declaration.find("location")?;
     let assignment = declaration[location..].find('=')? + location + 1;
     let end = declaration[assignment..].find(')')? + assignment;
-    if declaration[assignment..end].trim().parse::<usize>().ok()? != wanted {
-        return None;
-    }
+    let base = declaration[assignment..end].trim().parse::<usize>().ok()?;
     let tokens = declaration[end + 1..]
         .split_whitespace()
         .collect::<Vec<_>>();
@@ -133,5 +140,38 @@ fn linked_input(declaration: &str, wanted: usize) -> Option<i32> {
         .iter()
         .skip(input + 1)
         .find(|token| !matches!(**token, "highp" | "mediump" | "lowp"))?;
+    // The emitted declaration spans one location per column; `wanted` may name any of them.
+    let span = matrix_shape(ty).map_or(1, |(columns, _)| columns as usize);
+    if !(base..base.saturating_add(span)).contains(&wanted) {
+        return None;
+    }
+    components_per_location(ty)
+}
+
+/// `(columns, rows)` for a matrix type spelling, or `None` when `ty` is not a matrix. GLSL's `matCxR` has
+/// `C` columns of `R` rows, and the square `matN` is `matNxN`.
+fn matrix_shape(ty: &str) -> Option<(i32, i32)> {
+    let rest = ty.strip_prefix("mat")?;
+    let digit = |byte: Option<&u8>| {
+        byte.and_then(|byte| char::from(*byte).to_digit(10))
+            .map(|value| value as i32)
+            .filter(|value| (2..=4).contains(value))
+    };
+    let bytes = rest.as_bytes();
+    let columns = digit(bytes.first())?;
+    match bytes.get(1) {
+        None => Some((columns, columns)),
+        Some(b'x') => digit(bytes.get(2)).map(|rows| (columns, rows)),
+        Some(_) => None,
+    }
+}
+
+/// Components supplied at ONE location of a declaration. A matrix contributes one column per location, so
+/// this is its ROW count — `mat4x2` is four locations of two components. Everything else contributes all
+/// of its components at a single location, and an array repeats its element type per location.
+fn components_per_location(ty: &str) -> Option<i32> {
+    if let Some((_, rows)) = matrix_shape(ty) {
+        return Some(rows);
+    }
     components(ty)
 }

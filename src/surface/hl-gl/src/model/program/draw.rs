@@ -245,6 +245,21 @@ impl DrawCall {
             && self.depth_write
     }
 
+    /// `glCullFace(GL_FRONT_AND_BACK)` with `GL_CULL_FACE` enabled: GL discards EVERY triangle, whichever
+    /// way it winds. WebGPU's cull mode names one face only, so such a draw cannot be expressed as a
+    /// pipeline state and is dropped before lowering instead. Culling applies to triangles alone — points
+    /// and lines are never culled — so the primitive mode is part of the test.
+    pub fn discards_every_primitive(&self) -> bool {
+        self.cull_enabled
+            && self.cull_face == crate::model::glconst::GL_FRONT_AND_BACK
+            && matches!(
+                self.mode,
+                crate::model::glconst::GL_TRIANGLES
+                    | crate::model::glconst::GL_TRIANGLE_STRIP
+                    | 0x0006 /* GL_TRIANGLE_FAN */
+            )
+    }
+
     /// This clear writes the stencil plane (a zero `glStencilMask` makes it a no-op).
     pub fn clears_stencil(&self) -> bool {
         self.is_clear

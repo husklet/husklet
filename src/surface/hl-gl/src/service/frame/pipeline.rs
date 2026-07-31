@@ -584,7 +584,8 @@ impl Pipeline {
     }
 
     /// GL cull-face enum → pipeline cull mode (`0` none, `1` front, `2` back). `GL_FRONT_AND_BACK` has no
-    /// single-face WebGPU equivalent, so it maps to back (the conservative common case).
+    /// single-face WebGPU equivalent; a draw that requests it discards every triangle before it is lowered
+    /// at all (see [`DrawCall::discards_every_primitive`]), so it never reaches this mapping.
     pub(super) fn cull(face: u32) -> u32 {
         match face {
             GL_FRONT => 1,

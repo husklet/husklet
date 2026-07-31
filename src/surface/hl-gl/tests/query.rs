@@ -590,3 +590,61 @@ fn gl_error_round_trips_and_is_first_error_wins() {
     // Reading clears it.
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
 }
+
+/// Every location a matrix or array attribute occupies must report its own component count.
+///
+/// A `mat2` at location 1 occupies locations 1 AND 2, and each is a separate vertex input the pipeline
+/// must supply. Reflection matched a location EXACTLY, so column 1 was unknown: a declared-but-disabled
+/// matrix attribute got no constant vertex buffer for its later columns, the shader then declared a
+/// location the pipeline never supplied, pipeline creation failed and the draw wedged the context. That
+/// is what stops GTK4's GPU renderers rendering. Each location carries ONE COLUMN, so the count is the
+/// matrix's ROW count — `mat4x2` is four locations of two components, not one of eight.
+#[test]
+fn every_location_a_matrix_attribute_spans_reports_its_column_components() {
+    const FRAG: &str = "#version 300 es\nprecision mediump float;\nout vec4 c;\n\
+                        void main(){ c = vec4(1.0); }\n";
+    // (declaration, rows per location, locations spanned)
+    for (ty, rows, span) in [
+        ("mat2", 2, 2),
+        ("mat3", 3, 3),
+        ("mat4", 4, 4),
+        ("mat4x2", 2, 4),
+        ("mat2x4", 4, 2),
+    ] {
+        let source = format!(
+            "#version 300 es\nlayout(location = 0) in vec2 position;\n\
+             layout(location = 1) in {ty} pair;\n\
+             void main(){{ gl_Position = vec4(position, 0.0, 1.0) + vec4(pair[0], 0.0, 0.0).xyzw * 0.0; }}\n"
+        );
+        let mut c = ctx_800x600();
+        let vs = record::create_shader(&mut c, GL_VERTEX_SHADER);
+        record::shader_source(&mut c, vs, &source);
+        record::compile_shader(&mut c, vs);
+        let fs = record::create_shader(&mut c, GL_FRAGMENT_SHADER);
+        record::shader_source(&mut c, fs, FRAG);
+        record::compile_shader(&mut c, fs);
+        let prog = record::create_program(&mut c);
+        record::attach_shader(&mut c, prog, vs);
+        record::attach_shader(&mut c, prog, fs);
+        assert!(record::link_program(&mut c, prog), "{ty} must link");
+
+        let program = c.programs.program(prog).expect("linked program");
+        // The single-location attribute is unchanged.
+        assert_eq!(program.vertex_attr_components(0), Some(2), "{ty}: position");
+        // EVERY location the matrix spans answers with one column's components.
+        for column in 0..span {
+            assert_eq!(
+                program.vertex_attr_components(1 + column),
+                Some(rows),
+                "{ty}: location {} is column {column} and must supply {rows} components",
+                1 + column
+            );
+        }
+        // And nothing beyond its span is claimed.
+        assert_eq!(
+            program.vertex_attr_components(1 + span),
+            None,
+            "{ty} must not claim the location after its last column"
+        );
+    }
+}
