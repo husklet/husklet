@@ -138,7 +138,9 @@ impl Frame {
         // A depth/stencil clear recorded AFTER geometry is not a colour op at all: it starts a new render
         // pass whose depth attachment clear-loads, so the draws after it test against a fresh depth buffer.
         // Folded into the same segmented path as the scissored colour clear (see [`segment_boundary`]).
-        let needs_segments = survivors.iter().any(segment_boundary);
+        let needs_segments = survivors
+            .iter()
+            .any(|d| segment_boundary(d) || d.needs_rect_clear());
         let first_geometry = survivors.iter().find(|draw| !draw.is_clear);
         // A multiple-render-target framebuffer resolves BEFORE the "nothing but clears" shortcut below: a
         // `glClearBufferfv(GL_COLOR, 1, …)` frame has no geometry at all, and the single-target shortcut
@@ -573,6 +575,9 @@ pub(super) struct SegmentTarget {
 /// because an earlier draw wrote depth or stencil — and then it, too, must become a boundary and paint a
 /// full-target `Enc::ClearRect`, so the planes it does not clear survive it.
 pub(super) fn segment_boundary(d: &DrawCall) -> bool {
+    if d.needs_rect_clear() {
+        return false;
+    }
     d.clears_color() || segment_boundary_non_colour(d)
 }
 
@@ -616,6 +621,11 @@ impl DepthClear {
 pub(super) fn depth_load(draws: &[DrawCall]) -> DepthClear {
     let mut clear = DepthClear::preserving();
     for d in draws {
+        // A clear painted by the rect draw writes the plane itself, so arming the load op here as well
+        // would wipe the whole attachment — which is exactly the scissor being ignored.
+        if d.needs_rect_clear() {
+            continue;
+        }
         if d.clears_depth() {
             clear.load = LoadOp::Clear;
             clear.depth = d.clear_depth;
@@ -683,6 +693,12 @@ pub(super) fn lower_segments(
             segment.push(d.clone());
             continue;
         }
+        // A clear an attachment load op cannot express is PAINTED, by a draw inside the current pass, in
+        // the position it was recorded — so it is not a boundary at all. `emit_segment_pass` lowers it.
+        if d.needs_rect_clear() {
+            segment.push(d.clone());
+            continue;
+        }
         if !segment_boundary(d) {
             continue; // an unscissored color clear inside the run is already folded into `clear`.
         }
@@ -741,7 +757,18 @@ pub(super) fn emit_segment_pass(
     let depth_fmt = RenderPasses::depth_format_with(seg, depth_load);
     let mut copies: Vec<Enc> = Vec::new();
     let mut draw_ops: Vec<Enc> = Vec::new();
+    let bottom_up = RenderPasses::stores_bottom_up_rows(ctx, seg.first().and_then(|d| d.target));
     for d in seg {
+        // A clear that a load op cannot express is painted here, in the position it was recorded, so an
+        // application that clears BETWEEN draws gets the ordering it asked for.
+        if d.is_clear {
+            if let Some(ops) =
+                lower_rect_clear(ctx, d, target_fmt, depth_fmt, tw, th, bottom_up, cmds)
+            {
+                draw_ops.extend(ops);
+            }
+            continue;
+        }
         if let Some(lowered) = lower_draw(
             ctx, d, target_fmt, depth_fmt, tw, th, cmds, no_fbo_tex, snapshots,
         ) {

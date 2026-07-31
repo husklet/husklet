@@ -158,3 +158,17 @@ impl Default for PixelStore {
         }
     }
 }
+
+/// What distinguishes one internal clear pipeline from another (see [`GlContext::clear_pipeline_ir`]).
+///
+/// The clear VALUES are deliberately absent: depth rides the viewport's collapsed depth range, stencil
+/// the dynamic `SetStencilReference`, and colour the `SetBlendConstant`. Only the things baked into a
+/// pipeline — the target format and the write masks — can vary the pipeline.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct ClearPipelineKey {
+    pub color_format: u32,
+    pub depth_format: u32,
+    pub color_write_mask: u32,
+    pub depth_write: bool,
+    pub stencil_write_mask: u32,
+}

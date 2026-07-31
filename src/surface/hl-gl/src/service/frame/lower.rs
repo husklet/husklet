@@ -47,13 +47,54 @@ pub(super) fn lower_draw_n(
     } else {
         ctx.local.cur_prog
     };
+    // The three lookups below can each fail, and each failure DROPS the draw. They log rather than
+    // returning silently, for the reason the indexed-draw site below already does: from the application's
+    // side a draw that quietly did nothing is indistinguishable from one that was legitimately culled, so
+    // a discard with no signal makes the frame's missing geometry unattributable.
+    //
+    // The missing-IR cases are the ones that matter most. A program with no vertex or fragment
+    // representation is one whose TRANSLATION failed earlier; by the time it reaches here the draw's
+    // disappearance carries no link back to that failure, so a shader-translation defect presents as
+    // missing geometry and the investigation starts at the renderer instead of at the translator.
+    //
+    // Deliberately NOT an error: ES 3.0 §2.11.3 leaves drawing with no usable program undefined but does
+    // not require `GL_INVALID_OPERATION`, and `glUseProgram(0)` followed by a draw is legal. Inventing an
+    // error here would make a conformant application fail. A log is the honest signal.
     let Some(prog) = ctx.programs.program(prog_name).cloned() else {
+        hl_log::hl_warn!(
+            hl_log::tag::GL,
+            "dropping draw with no such program program={prog_name} current={} fbo={} mode={:#x} count={}",
+            ctx.local.cur_prog,
+            d.fbo,
+            d.mode,
+            d.count
+        );
         return None;
     };
     let Some(vs_ir) = prog.vs_ir.clone() else {
+        hl_log::hl_warn!(
+            hl_log::tag::GL,
+            "dropping draw whose program has no vertex IR — its translation failed earlier \
+             program={prog_name} linked={} link_gen={} fbo={} mode={:#x} count={}",
+            prog.linked,
+            prog.link_gen,
+            d.fbo,
+            d.mode,
+            d.count
+        );
         return None;
     };
     let Some(fs_ir) = prog.fs_ir.clone() else {
+        hl_log::hl_warn!(
+            hl_log::tag::GL,
+            "dropping draw whose program has no fragment IR — its translation failed earlier \
+             program={prog_name} linked={} link_gen={} fbo={} mode={:#x} count={}",
+            prog.linked,
+            prog.link_gen,
+            d.fbo,
+            d.mode,
+            d.count
+        );
         return None;
     };
     if d.indexed {

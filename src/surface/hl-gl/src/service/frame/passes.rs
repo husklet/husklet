@@ -596,9 +596,15 @@ impl RenderPasses {
         draws: &[DrawCall],
         clear: DepthClear,
     ) -> Option<TextureFormat> {
-        let any_stencil =
-            draws.iter().any(|d| !d.is_clear && d.stencil) || clear.stencil_armed;
-        let any_depth = draws.iter().any(|d| !d.is_clear && d.depth)
+        // A RECT clear writes the plane with a draw, so the pass must carry the attachment for it just as
+        // much as a depth-tested draw or a load-op clear does.
+        let any_stencil = draws
+            .iter()
+            .any(|d| !d.is_clear && d.stencil || d.needs_rect_clear() && d.clears_stencil())
+            || clear.stencil_armed;
+        let any_depth = draws
+            .iter()
+            .any(|d| !d.is_clear && d.depth || d.needs_rect_clear() && d.clears_depth())
             || matches!(clear.load, LoadOp::Clear);
         if any_stencil {
             Some(TextureFormat::Depth24PlusStencil8)
@@ -751,10 +757,12 @@ impl Frame {
             .first()
             .map(|draw| draw.fbo)
             .is_some_and(|fbo| fbo != 0 && ctx.local.framebuffers.color_attachment_count(fbo) > 1);
+        // A clear the geometry builder paints with a draw belongs there too: this single-target path can
+        // only express a whole-attachment load op, which is the thing those clears are not.
         if mrt
-            || ctx.local.recording.draws[start..]
-                .iter()
-                .any(|draw| draw.clears_color() && draw.scissor_enabled)
+            || ctx.local.recording.draws[start..].iter().any(|draw| {
+                (draw.clears_color() && draw.scissor_enabled) || draw.needs_rect_clear()
+            })
         {
             if let Some(frame) = Self::build_geometry(ctx) {
                 return Some(frame);

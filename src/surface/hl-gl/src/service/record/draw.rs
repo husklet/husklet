@@ -25,23 +25,11 @@ impl GlContext {
             ..self.snapshot(false)
         };
         d.clear_rect = [0, 0, w, h];
-        // A partially `glColorMask`ed color clear writes only some channels. Neither `LoadOp::Clear` nor
-        // `Enc::ClearRect` can express that, so the color plane is left alone rather than written wholesale
-        // (Skia/Chrome's `glColorMask(0,0,0,1); glClear(...)` would otherwise destroy RGB). Reported ONCE per
-        // context at error level: below error is compiled out of release builds, and these calls recur every
-        // frame.
-        if d.color_clear_is_partial() && !self.local.partial_clear_mask_reported {
-            self.local.partial_clear_mask_reported = true;
-            hl_log::hl_error!(
-                hl_log::tag::GL,
-                "glClear: color mask {:#x} is partial — the color plane is NOT cleared (a channel-masked \
-                 clear is not representable in the IR). Reported once per context.",
-                d.color_mask & 0xf
-            );
-        }
-        // Nothing left to write: every named plane is masked off. Recording it would still be harmless, but
-        // dropping it keeps a masked-off clear from becoming a pass boundary.
-        if !d.clears_color() && !d.clears_depth() && !d.clears_stencil() {
+        // Nothing left to write: every named plane is masked off entirely. Recording it would still be
+        // harmless, but dropping it keeps a masked-off clear from becoming a pass boundary. A PARTIALLY
+        // masked clear does write something and is kept — the frame builder paints it with the rect clear
+        // (see `service::frame`), which carries `glColorMask` and `glStencilMask` on the pipeline.
+        if !d.writes_any_plane() {
             return;
         }
         self.record_draw(d);

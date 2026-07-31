@@ -1,0 +1,225 @@
+use super::*;
+use crate::model::context::ClearPipelineKey;
+use hl_gpu::protocol::model::enums::compare;
+use hl_gpu::protocol::model::kernel::{glsl_stage, GlslDescriptor};
+
+/// The internal clear shaders, in the HOST dialect (desktop GLSL 460, what naga's `glsl-in` receives) —
+/// not the app-facing GLSL-ES the translator produces, because these never pass through it.
+///
+/// The vertex stage generates a full-target triangle from `gl_VertexID` alone, so the draw binds no vertex
+/// buffer and needs no layout. The fragment stage emits `vec4(1.0)`; the value actually written is that
+/// multiplied by the blend constant (see [`clear_blend`]), which is how the clear COLOUR reaches the
+/// target without a uniform buffer — and a uniform buffer would mean a bind group keyed on a GL program
+/// this draw does not have.
+const CLEAR_VS: &str = "#version 460\n\
+void vmain() {\n\
+    vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));\n\
+    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n\
+}\n";
+
+const CLEAR_FS: &str = "#version 460\n\
+layout(location = 0) out vec4 hl_clear_colour;\n\
+void fmain() { hl_clear_colour = vec4(1.0); }\n";
+
+/// `src = CONSTANT, dst = ZERO, op = ADD`, so the written value is exactly the blend constant.
+fn clear_blend() -> BlendState {
+    use hl_gpu::protocol::model::enums::blend_factor;
+    BlendState {
+        src_color: blend_factor::CONSTANT,
+        dst_color: blend_factor::ZERO,
+        op_color: 0,
+        src_alpha: blend_factor::CONSTANT,
+        dst_alpha: blend_factor::ZERO,
+        op_alpha: 0,
+    }
+}
+
+/// Lower one `glClear` that an attachment load op cannot express into a draw that paints exactly the
+/// planes, channels, bits and rect it names (see [`DrawCall::needs_rect_clear`]).
+///
+/// Three encoder operations carry the three clear values, which is what keeps this to one static shader
+/// pair rather than a shader per clear value:
+///
+/// * DEPTH — the viewport's depth range is collapsed (`min_depth == max_depth == clear_depth`), so every
+///   fragment's window depth is exactly the clear value whatever the vertices say.
+/// * STENCIL — `Enc::SetStencilReference` with a `REPLACE` pass op.
+/// * COLOUR — `Enc::SetBlendConstant` with the blend above.
+///
+/// The write masks are the pipeline's, so a partial `glColorMask` or `glStencilMask` writes exactly its
+/// channels or bits, and a plane this clear does not name is masked off entirely rather than being
+/// touched. Returns the ops to append inside the current render pass.
+pub(super) fn lower_rect_clear(
+    ctx: &mut GlContext,
+    d: &DrawCall,
+    target_fmt: TextureFormat,
+    depth_fmt: Option<TextureFormat>,
+    tw: i32,
+    th: i32,
+    bottom_up: bool,
+    cmds: &mut Vec<Cmd>,
+) -> Option<Vec<Enc>> {
+    let writes_colour = d.clears_color() || d.color_clear_is_partial();
+    let writes_depth = d.clears_depth();
+    let writes_stencil = d.clears_stencil();
+    if !writes_colour && !writes_depth && !writes_stencil {
+        return None;
+    }
+    // A plane this clear does not name must not be disturbed, so its mask is zero rather than absent.
+    let color_write_mask = if writes_colour { d.color_mask & 0xf } else { 0 };
+    let stencil_write_mask = if writes_stencil {
+        d.stencil_write_mask & 0xff
+    } else {
+        0
+    };
+    // A depth/stencil-writing clear needs the pass to actually carry that attachment. When it does not,
+    // there is nothing to write and the clear is dropped rather than lowered against a missing plane.
+    if (writes_depth || writes_stencil) && depth_fmt.is_none() {
+        return None;
+    }
+
+    let (vs_ir, fs_ir, needs_shaders) = ctx.clear_shader_ir().ok()?;
+    if needs_shaders {
+        for (id, stage, entry, source) in [
+            (vs_ir, glsl_stage::VERTEX, "vmain", CLEAR_VS),
+            (fs_ir, glsl_stage::FRAGMENT, "fmain", CLEAR_FS),
+        ] {
+            cmds.push(Cmd::CreateShader {
+                id,
+                kind: ShaderPayloadKind::Glsl,
+                spirv: GlslDescriptor {
+                    stage,
+                    entry: entry.into(),
+                    source: source.into(),
+                }
+                .to_words(),
+            });
+        }
+    }
+
+    let depth = depth_fmt.map(|format| DepthState {
+        format,
+        depth_write: writes_depth,
+        // The clear must land on every fragment it covers, so the depth TEST is defeated rather than
+        // consulted — a clear is not depth-tested.
+        depth_compare: compare::ALWAYS,
+        stencil_front: stencil_face(writes_stencil),
+        stencil_back: stencil_face(writes_stencil),
+        stencil_read_mask: 0xff,
+        stencil_write_mask,
+        bias_constant: 0,
+        bias_slope_scale: 0.0,
+        bias_clamp: 0.0,
+    });
+    let key = ClearPipelineKey {
+        color_format: target_fmt.to_u32(),
+        depth_format: depth_fmt.map(|f| f.to_u32()).unwrap_or(0),
+        color_write_mask,
+        depth_write: writes_depth,
+        stencil_write_mask,
+    };
+    let (pipeline_ir, needs_pipeline) = ctx.clear_pipeline_ir(key).ok()?;
+    if needs_pipeline {
+        cmds.push(Cmd::CreateRenderPipeline(
+            pipeline_ir,
+            RenderPipelineDesc {
+                vertex: ShaderRef {
+                    module: vs_ir,
+                    entry: "vmain".into(),
+                },
+                fragment: Some(ShaderRef {
+                    module: fs_ir,
+                    entry: "fmain".into(),
+                }),
+                vertex_buffers: Vec::new(),
+                color_targets: vec![ColorTargetState {
+                    format: target_fmt,
+                    blend: Some(clear_blend()),
+                    write_mask: color_write_mask,
+                }],
+                depth: depth.clone(),
+                topology: Topology::TriangleList,
+                cull: 0,
+                front_face: 0,
+                sample_count: 1,
+                label: "gl-rect-clear".into(),
+            },
+        ));
+    }
+
+    let mut ops = Vec::with_capacity(6);
+    // The collapsed depth range IS the depth clear value. A clear that does not name depth still needs a
+    // viewport, and collapsing it to the current value would write depth on a masked-off plane — so an
+    // unnamed depth plane keeps the ordinary range and is protected by `depth_write: false` above.
+    let depth_value = d.clear_depth.clamp(0.0, 1.0);
+    let (min_depth, max_depth) = if writes_depth {
+        (depth_value, depth_value)
+    } else {
+        (0.0, 1.0)
+    };
+    ops.push(Enc::SetViewport {
+        x: 0.0,
+        y: 0.0,
+        w: tw as f32,
+        h: th as f32,
+        min_depth,
+        max_depth,
+    });
+    ops.push(clear_scissor_enc(d, tw, th, bottom_up));
+    if writes_stencil {
+        ops.push(Enc::SetStencilReference {
+            reference: (d.clear_stencil.max(0) as u32) & 0xff,
+        });
+    }
+    if writes_colour {
+        ops.push(Enc::SetBlendConstant { color: d.clear });
+    }
+    ops.push(Enc::SetPipeline(pipeline_ir));
+    ops.push(Enc::Draw {
+        vertex_count: 3,
+        instance_count: 1,
+        first_vertex: 0,
+        first_instance: 0,
+    });
+    Some(ops)
+}
+
+/// `ALWAYS`/`REPLACE` when this clear writes stencil, and a face that changes nothing when it does not.
+fn stencil_face(writes: bool) -> StencilFaceState {
+    use hl_gpu::protocol::model::enums::stencil_op as so;
+    StencilFaceState {
+        compare: compare::ALWAYS,
+        fail_op: so::KEEP,
+        depth_fail_op: so::KEEP,
+        pass_op: if writes { so::REPLACE } else { so::KEEP },
+    }
+}
+
+/// The rect a clear paints, as an `Enc::SetScissor`: its scissor box when the scissor test is on, and the
+/// whole target when it is not. Rows convert from GL's bottom-left origin exactly as [`emit_scissor`] does
+/// for an ordinary draw.
+fn clear_scissor_enc(d: &DrawCall, tw: i32, th: i32, bottom_up: bool) -> Enc {
+    if !d.scissor_enabled {
+        return Enc::SetScissor {
+            x: 0,
+            y: 0,
+            w: tw.max(0) as u32,
+            h: th.max(0) as u32,
+        };
+    }
+    let [sx, sy, sw, sh] = d.scissor;
+    let top = if bottom_up {
+        sy
+    } else {
+        th.saturating_sub(sy.saturating_add(sh))
+    };
+    let x0 = sx.clamp(0, tw);
+    let x1 = sx.saturating_add(sw).clamp(0, tw);
+    let y0 = top.clamp(0, th);
+    let y1 = top.saturating_add(sh).clamp(0, th);
+    Enc::SetScissor {
+        x: x0 as u32,
+        y: y0 as u32,
+        w: (x1 - x0).max(0) as u32,
+        h: (y1 - y0).max(0) as u32,
+    }
+}

@@ -145,6 +145,14 @@ pub struct GlContext {
     /// Immutable GPU samplers keyed by their complete descriptor. GL sampler and texture parameter
     /// mutations resolve to a different descriptor, so an existing resident sampler never changes.
     sampler_ir_cache: Vec<(SamplerDesc, u32)>,
+    /// The INTERNAL clear shaders — a `gl_VertexID` full-target triangle and a fragment stage emitting
+    /// `vec4(1.0)` — created once per context and shared by every rect clear. `None` until first use.
+    clear_shader_ir: Option<(u32, u32)>,
+    /// Internal clear pipelines, keyed by everything that distinguishes one: the colour target format,
+    /// the pass's depth format, and the colour/depth/stencil write masks. The clear VALUES are not part
+    /// of the key — depth rides the viewport's collapsed range, stencil the dynamic reference, and colour
+    /// the blend constant — which is what keeps this to one shader pair and a handful of pipelines.
+    clear_pipeline_cache: HashMap<ClearPipelineKey, u32>,
 
     /// Queued `Destroy*` IR for PERSISTENT resources the app has released — `glDeleteTextures`/`Buffers`/
     /// `Renderbuffers` retire the resident IR ids the deleted GL object owned (its cached sampled-texture /

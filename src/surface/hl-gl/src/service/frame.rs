@@ -629,6 +629,7 @@ mod lower;
 mod passes;
 mod pipeline;
 mod range;
+mod rect_clear;
 mod texture;
 mod vertex;
 
@@ -636,6 +637,7 @@ use geometry::*;
 use lower::*;
 use passes::*;
 use pipeline::*;
+use rect_clear::*;
 use texture::*;
 use vertex::*;
 

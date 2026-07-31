@@ -87,9 +87,6 @@ pub(crate) struct LocalState {
     /// Set when a `glReadPixels` already rendered and consumed this frame's default framebuffer, so
     /// `eglSwapBuffers` must still post that render instead of an empty frame. Cleared by `reset_frame`.
     pub(crate) default_present_pending: bool,
-    /// Latch for the once-per-context `glClear` partial-color-mask report (see `record_clear_buffers`).
-    /// A channel-masked clear recurs every frame, so the report must not.
-    pub(crate) partial_clear_mask_reported: bool,
 }
 
 impl LocalState {
@@ -155,7 +152,6 @@ impl Default for LocalState {
             present_token: None,
             present_serial: None,
             default_present_pending: false,
-            partial_clear_mask_reported: false,
         }
     }
 }

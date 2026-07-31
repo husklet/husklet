@@ -465,18 +465,26 @@ fn scissors(batch: &[Cmd]) -> Vec<(u32, u32, u32, u32)> {
 /// plane, which is indistinguishable from ignoring `GL_SCISSOR_TEST` — and `glClear` is scissor-tested
 /// for every plane it names, not just colour.
 #[test]
-#[ignore = "records the required IR ahead of the fix; see hl-work/gl-clear-scissor-20260731/DESIGN.md"]
 fn a_scissored_depth_clear_does_not_clear_load_the_whole_attachment() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();
     setup_geometry(&mut c);
     record::depth_mask(&mut c, true);
+
+    // Establish the depth plane in an earlier frame. A depth texture minted THIS frame has no prior
+    // contents and always clear-loads to the GL initial 1.0 regardless of the caller's op (see
+    // `depth_attachment_for`), which would mask the property under test — this assertion is about the
+    // clear's own value never reaching the whole attachment, not about first-use initialization.
+    record::enable(&mut c, GL_DEPTH_TEST);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    sink.batches.clear();
+
     record::clear_depth(&mut c, 0.25);
     record::enable(&mut c, GL_SCISSOR_TEST);
     record::scissor(&mut c, [8, 8, 16, 16]);
     record::clear_buffers(&mut c, GL_DEPTH_BUFFER_BIT);
     record::disable(&mut c, GL_SCISSOR_TEST);
-    record::enable(&mut c, GL_DEPTH_TEST);
     record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
     swap::swap_buffers(&mut c, &mut sink).unwrap();
 
@@ -485,10 +493,22 @@ fn a_scissored_depth_clear_does_not_clear_load_the_whole_attachment() {
         Some(LoadOp::Load),
         "a scissored depth clear must not clear-load the whole depth attachment"
     );
+    // GL window rows convert to texture rows, so the box at y = 8 height 16 on a 256-row target is at
+    // top row 256 - 8 - 16 = 232.
     assert!(
-        scissors(&sink.batches[0]).contains(&(8, 8, 16, 16)),
+        scissors(&sink.batches[0]).contains(&(8, 232, 16, 16)),
         "the clear's rect must reach the encoder: {:?}",
         scissors(&sink.batches[0])
+    );
+    // And the clear VALUE rides the collapsed viewport depth range, which is what writes it inside that
+    // rect without touching anything outside it.
+    assert!(
+        submit_ops(&sink.batches[0]).iter().any(|e| matches!(
+            e,
+            Enc::SetViewport { min_depth, max_depth, .. } if *min_depth == 0.25 && *max_depth == 0.25
+        )),
+        "the collapsed depth range carries the clear value: {:?}",
+        submit_ops(&sink.batches[0])
     );
 }
 
@@ -496,7 +516,6 @@ fn a_scissored_depth_clear_does_not_clear_load_the_whole_attachment() {
 /// non-zero mask as licence to write all eight is a different image whenever an application packs more
 /// than one thing into the stencil plane, which is the reason to have a mask at all.
 #[test]
-#[ignore = "records the required IR ahead of the fix; see hl-work/gl-clear-scissor-20260731/DESIGN.md"]
 fn a_partially_masked_stencil_clear_writes_only_the_masked_bits() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();
@@ -519,7 +538,6 @@ fn a_partially_masked_stencil_clear_writes_only_the_masked_bits() {
 /// clear dropped, reported once per context as unrepresentable. `glColorMask(0,0,0,1); glClear(...)` is
 /// what a browser compositor does on every frame, so this was silently unsupported throughout.
 #[test]
-#[ignore = "records the required IR ahead of the fix; see hl-work/gl-clear-scissor-20260731/DESIGN.md"]
 fn a_partially_masked_colour_clear_writes_the_enabled_channels() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();
@@ -534,4 +552,117 @@ fn a_partially_masked_colour_clear_writes_the_enabled_channels() {
         Some(0b1000),
         "only the alpha channel may be written"
     );
+}
+
+// ---------------------------------------------------------------------------------------------------
+// The fast path is the point: the rect draw is a FALLBACK, not a replacement
+// ---------------------------------------------------------------------------------------------------
+
+/// Whether the batch created the internal clear pipeline (the rect-draw fallback).
+fn used_rect_clear(batch: &[Cmd]) -> bool {
+    batch.iter().any(|c| match c {
+        Cmd::CreateRenderPipeline(_, desc) | Cmd::CreateRenderPipelineLayout(_, desc, _, _) => {
+            desc.label == "gl-rect-clear"
+        }
+        _ => false,
+    })
+}
+
+/// An UNSCISSORED, UNMASKED clear must keep lowering to a single attachment load op. That is one
+/// operation against a full-target draw, it is the fast path on tiled hardware, and it is what the
+/// overwhelming majority of frames do — the rect draw exists only for what a load op cannot express.
+#[test]
+fn an_ordinary_clear_still_lowers_to_a_load_op_and_no_draw() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    record::clear_color(&mut c, [0.25, 0.5, 0.75, 1.0]);
+    record::clear_depth(&mut c, 0.5);
+    record::clear_buffers(
+        &mut c,
+        GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT,
+    );
+    record::enable(&mut c, GL_DEPTH_TEST);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    swap::swap_buffers(&mut c, &mut sink).unwrap();
+
+    let ops = submit_ops(&sink.batches[0]);
+    assert!(
+        !used_rect_clear(&sink.batches[0]),
+        "an ordinary clear must not take the rect-draw fallback: {ops:?}"
+    );
+    match &ops[0] {
+        Enc::BeginRenderPass { color, depth } => {
+            assert_eq!(color[0].load, LoadOp::Clear, "colour clear-loads");
+            assert_eq!(color[0].clear, [0.25, 0.5, 0.75, 1.0]);
+            let depth = depth.as_ref().expect("the depth attachment");
+            assert_eq!(depth.load, LoadOp::Clear);
+            assert_eq!(depth.clear_depth, 0.5);
+        }
+        other => panic!("expected the pass to open the frame, got {other:?}"),
+    }
+}
+
+/// A SCISSORED but unmasked colour clear keeps its `Enc::ClearRect`: it already paints exactly its rect
+/// with every channel enabled, and a rect FILL is cheaper than a rect DRAW.
+#[test]
+fn a_scissored_unmasked_colour_clear_still_uses_a_rect_fill() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    record::enable(&mut c, GL_SCISSOR_TEST);
+    record::scissor(&mut c, [4, 4, 8, 8]);
+    record::clear_color(&mut c, [1.0, 0.0, 0.0, 1.0]);
+    record::clear_buffers(&mut c, GL_COLOR_BUFFER_BIT);
+    swap::swap_buffers(&mut c, &mut sink).unwrap();
+
+    assert!(
+        submit_ops(&sink.batches[0])
+            .iter()
+            .any(|e| matches!(e, Enc::ClearRect { .. })),
+        "the scissored colour clear keeps its fill"
+    );
+    assert!(
+        !used_rect_clear(&sink.batches[0]),
+        "and must not have been promoted to a draw"
+    );
+}
+
+/// The internal clear shaders and pipeline are created ONCE and reused. The clear VALUES are dynamic
+/// encoder state — the collapsed viewport range, the stencil reference and the blend constant — so two
+/// clears differing only in value must share one pipeline.
+#[test]
+fn two_clears_at_different_values_share_one_pipeline() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    for value in [0.25f32, 0.75] {
+        record::clear_depth(&mut c, value);
+        record::enable(&mut c, GL_SCISSOR_TEST);
+        record::scissor(&mut c, [4, 4, 8, 8]);
+        record::clear_buffers(&mut c, GL_DEPTH_BUFFER_BIT);
+        record::disable(&mut c, GL_SCISSOR_TEST);
+        record::enable(&mut c, GL_DEPTH_TEST);
+        record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+        swap::swap_buffers(&mut c, &mut sink).unwrap();
+    }
+    let creates: usize = sink
+        .batches
+        .iter()
+        .map(|b| {
+            b.iter()
+                .filter(|c| matches!(c, Cmd::CreateShader { .. }))
+                .count()
+        })
+        .sum();
+    // Two shader modules for the app's program, two for the internal clear — and nothing on the second
+    // frame, whose clear value differs but whose pipeline does not.
+    assert_eq!(creates, 4, "the clear shaders are created once per context");
+    let clear_pipelines: usize = sink
+        .batches
+        .iter()
+        .filter(|b| used_rect_clear(b))
+        .count();
+    assert_eq!(clear_pipelines, 1, "and so is the pipeline");
 }

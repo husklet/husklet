@@ -413,8 +413,9 @@ impl GlContext {
         };
         d.clear = rgba;
         d.clear_rect = [0, 0, w, h];
-        // A channel-masked clear is refused on the same terms as `glClear`'s (see `record_clear_buffers`).
-        if !d.clears_color() {
+        // A clear that writes no channel at all is a no-op, exactly as for `glClear`; a channel-masked one
+        // writes its enabled channels through the rect draw (see `record_clear_buffers`).
+        if !d.clears_color() && !d.color_clear_is_partial() {
             return;
         }
         self.record_draw(d);

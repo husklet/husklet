@@ -237,9 +237,11 @@ pub struct DrawCall {
 /// Which planes a recorded `glClear` may actually write. GL applies the CURRENT write masks to a clear
 /// exactly as it does to a draw: `glColorMask` gates the color planes, `glDepthMask` the depth plane, and
 /// `glStencilMask` the stencil plane. A clear whose plane is masked off entirely is a no-op and must reach
-/// no attachment; a PARTIALLY masked color clear (some channels enabled, some not) is not representable by
-/// `LoadOp::Clear` or `Enc::ClearRect`, both of which write all four channels, so it is refused rather than
-/// lowered as a full-channel clear (see [`DrawCall::color_clear_is_partial`]).
+/// no attachment.
+///
+/// A PARTIALLY masked clear — some channels or bits enabled, some not — writes a subset that an attachment
+/// LOAD OP cannot express, since a load op covers the whole attachment. It is painted by the rect draw
+/// instead (see [`DrawCall::needs_rect_clear`]), whose pipeline carries the masks exactly.
 impl DrawCall {
     /// This clear writes the WHOLE color value of every texel it covers.
     pub fn clears_color(&self) -> bool {
@@ -260,7 +262,42 @@ impl DrawCall {
         }
     }
 
-    /// This clear names the color buffer but only SOME of its channels — unrepresentable, so refused.
+    /// This clear names the STENCIL plane but only some of its bits. GL applies `glStencilMask` to a
+    /// clear exactly as to a draw, so only the enabled bits change; treating any non-zero mask as licence
+    /// to write all eight is a different image the moment an application packs more than one thing into
+    /// the stencil plane, which is the only reason to have a mask.
+    pub fn stencil_clear_is_partial(&self) -> bool {
+        self.is_clear
+            && self.clear_mask & crate::model::glconst::GL_STENCIL_BUFFER_BIT != 0
+            && !matches!(self.stencil_write_mask & 0xff, 0 | 0xff)
+    }
+
+    /// This clear writes something, by any route — a whole plane through a load op, or a subset through
+    /// the rect draw. A clear that writes nothing at all never needs recording.
+    pub fn writes_any_plane(&self) -> bool {
+        self.clears_color()
+            || self.color_clear_is_partial()
+            || self.clears_depth()
+            || self.clears_stencil()
+    }
+
+    /// This clear cannot be expressed as an attachment LOAD OP and must be painted by the rect draw
+    /// instead (see [`crate::service::frame`]): a load op covers the whole attachment and writes every
+    /// channel and bit of it.
+    ///
+    /// A scissored COLOUR clear is excluded on purpose — `Enc::ClearRect` already paints exactly its rect
+    /// with every channel enabled, and it is cheaper than a draw.
+    pub fn needs_rect_clear(&self) -> bool {
+        if !self.is_clear {
+            return false;
+        }
+        self.color_clear_is_partial()
+            || self.stencil_clear_is_partial()
+            || (self.scissor_enabled && (self.clears_depth() || self.clears_stencil()))
+    }
+
+    /// This clear names the color buffer but only SOME of its channels, so it is painted by the rect draw
+    /// rather than by a load op (see [`Self::needs_rect_clear`]).
     pub fn color_clear_is_partial(&self) -> bool {
         self.is_clear
             && self.clear_mask & crate::model::glconst::GL_COLOR_BUFFER_BIT != 0
