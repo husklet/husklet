@@ -247,9 +247,36 @@ impl GlTexture {
     /// The number of mip levels the host texture should declare: the base plus its contiguous chain,
     /// clamped by `GL_TEXTURE_MAX_LEVEL`.
     pub fn mip_levels(&self) -> u32 {
-        let available = 1 + self.mip_chain().len() as u32;
-        let allowed = self.max_level.max(0).saturating_add(1) as u32;
-        available.min(allowed).max(1)
+        self.effective_levels().len().max(1) as u32
+    }
+
+    /// The levels the host texture actually receives, as `(width, height, pixels)` from the EFFECTIVE base
+    /// downwards — GL's `[GL_TEXTURE_BASE_LEVEL, GL_TEXTURE_MAX_LEVEL]` window.
+    ///
+    /// GL's base level RE-INDEXES the pyramid: with `GL_TEXTURE_BASE_LEVEL = 2` the texture *is* level 2
+    /// and below, level 2 is what a magnifying draw samples, and levels 0 and 1 are not part of the texture
+    /// at all. WebGPU has no base-level parameter, so the window is applied here by handing the host a
+    /// pyramid that starts at the base level — which is the same thing, and needs nothing from the IR.
+    ///
+    /// Reporting the clamp back through `glGetTexParameteriv` while ignoring it for SAMPLING is how a
+    /// magnifying draw under `base = 2` returned level 0: no LOD computation is involved in magnification,
+    /// so there was no latitude to hide behind.
+    pub fn effective_levels(&self) -> Vec<(i32, i32, Arc<Vec<u8>>)> {
+        let mut all: Vec<(i32, i32, Arc<Vec<u8>>)> =
+            Vec::with_capacity(1 + self.mip_chain().len());
+        all.push((self.w, self.h, Arc::clone(&self.data)));
+        for level in self.mip_chain() {
+            all.push((level.w, level.h, Arc::clone(&level.data)));
+        }
+        let base = self.base_level.max(0) as usize;
+        let last = self.max_level.max(0) as usize;
+        if base >= all.len() || base > last {
+            // A base level past the levels that exist makes the texture mipmap-INCOMPLETE. Keep the level
+            // 0 image rather than handing the host an empty pyramid; completeness is a separate concern.
+            return all.into_iter().take(1).collect();
+        }
+        let end = (last + 1).min(all.len());
+        all[base..end].to_vec()
     }
 
     /// Has this texture received a REAL pixel upload (`glTexImage2D`-with-pixels / `glTexSubImage2D` /
@@ -729,6 +756,8 @@ impl Textures {
 
     /// `glTexParameteri` — set one filter/wrap parameter.
     pub fn set_param(&mut self, name: u32, pname: u32, value: u32) {
+        let generation = self.generation();
+        let mut bump = false;
         if let Some(t) = self.map.get_mut(&name) {
             match pname {
                 GL_TEXTURE_MIN_FILTER => t.min_filter = value,
@@ -739,9 +768,20 @@ impl Textures {
                 GL_TEXTURE_SWIZZLE_G => t.swizzle[1] = value,
                 GL_TEXTURE_SWIZZLE_B => t.swizzle[2] = value,
                 GL_TEXTURE_SWIZZLE_A => t.swizzle[3] = value,
-                GL_TEXTURE_BASE_LEVEL => t.base_level = value as i32,
-                GL_TEXTURE_MAX_LEVEL => t.max_level = value as i32,
+                // These change WHICH levels the host texture must carry, so the resident upload is stale:
+                // bump the generation exactly as a pixel write does, or the re-based pyramid is never sent.
+                GL_TEXTURE_BASE_LEVEL => {
+                    t.base_level = value as i32;
+                    bump = true;
+                }
+                GL_TEXTURE_MAX_LEVEL => {
+                    t.max_level = value as i32;
+                    bump = true;
+                }
                 _ => {}
+            }
+            if bump {
+                t.gen = generation;
             }
         }
     }

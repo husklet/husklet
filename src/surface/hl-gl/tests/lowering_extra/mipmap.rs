@@ -117,3 +117,90 @@ fn generate_mipmap_averages_a_two_by_two_block() {
     assert_eq!(t.mip_chain().len(), 1);
     assert_eq!(t.mip_chain()[0].data[0], 139);
 }
+
+// ---------------------------------------------------------------------------------------------------
+// GL_TEXTURE_BASE_LEVEL / GL_TEXTURE_MAX_LEVEL select which levels the texture HAS
+// ---------------------------------------------------------------------------------------------------
+
+/// GL's base level RE-INDEXES the pyramid: with `GL_TEXTURE_BASE_LEVEL = 2` the texture *is* level 2 and
+/// below, and levels 0 and 1 are not part of it at all. The differential caught this at a MAGNIFYING ratio,
+/// where no LOD computation is involved and there is therefore no implementation latitude to appeal to:
+/// the level sampled is exactly the base level, and a draw under `base = 2` returned level 0.
+#[test]
+fn base_level_rebases_the_pyramid_it_hands_the_host() {
+    let mut c = ctx();
+    let tex = upload_chain(&mut c, 8); // levels 0..3 at 8, 4, 2, 1
+    record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
+    record::tex_parameter(&mut c, GL_TEXTURE_BASE_LEVEL, 2);
+    let t = c.textures.get(tex).expect("the texture");
+
+    let levels = t.effective_levels();
+    assert_eq!(levels.len(), 2, "levels 2 and 3 remain");
+    assert_eq!(
+        (levels[0].0, levels[0].1),
+        (2, 2),
+        "the host's level 0 is GL's level 2"
+    );
+    assert_eq!(levels[0].2[0], 0x12, "and carries level 2's pixels");
+    assert_eq!((levels[1].0, levels[1].1), (1, 1));
+    assert_eq!(t.mip_levels(), 2);
+}
+
+#[test]
+fn max_level_trims_the_bottom_of_the_window() {
+    let mut c = ctx();
+    let tex = upload_chain(&mut c, 8);
+    record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
+    record::tex_parameter(&mut c, GL_TEXTURE_BASE_LEVEL, 1);
+    record::tex_parameter(&mut c, GL_TEXTURE_MAX_LEVEL, 2);
+    let t = c.textures.get(tex).expect("the texture");
+    let levels = t.effective_levels();
+    assert_eq!(levels.len(), 2, "levels 1 and 2 only");
+    assert_eq!((levels[0].0, levels[0].2[0]), (4, 0x11));
+    assert_eq!((levels[1].0, levels[1].2[0]), (2, 0x12));
+}
+
+/// Changing the window makes the resident host upload stale, so it must bump the generation — otherwise
+/// the re-based pyramid is computed and never sent.
+#[test]
+fn changing_the_level_window_bumps_the_generation() {
+    let mut c = ctx();
+    let tex = upload_chain(&mut c, 8);
+    record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
+    let before = c.textures.get(tex).expect("the texture").gen;
+    record::tex_parameter(&mut c, GL_TEXTURE_BASE_LEVEL, 2);
+    let after = c.textures.get(tex).expect("the texture").gen;
+    assert_ne!(before, after, "the resident upload is stale and must be re-sent");
+
+    // A filter change is NOT a storage change and must leave the generation alone.
+    let before = after;
+    record::tex_parameter(&mut c, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    assert_eq!(
+        c.textures.get(tex).expect("the texture").gen,
+        before,
+        "a sampler parameter must not invalidate the upload"
+    );
+}
+
+/// The default window is the whole pyramid, so an ordinary texture is unchanged.
+#[test]
+fn the_default_window_is_every_level() {
+    let mut c = ctx();
+    let tex = upload_chain(&mut c, 8);
+    let t = c.textures.get(tex).expect("the texture");
+    assert_eq!(t.effective_levels().len(), 4);
+    assert_eq!(t.effective_levels()[0].0, 8, "level 0 is still the base");
+}
+
+/// A base level past the levels that exist leaves the texture mipmap-incomplete. Keep level 0 rather than
+/// handing the host an empty pyramid — a host texture must have at least one level.
+#[test]
+fn a_base_level_past_the_chain_falls_back_to_level_zero() {
+    let mut c = ctx();
+    let tex = upload_chain(&mut c, 8);
+    record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
+    record::tex_parameter(&mut c, GL_TEXTURE_BASE_LEVEL, 9);
+    let t = c.textures.get(tex).expect("the texture");
+    assert_eq!(t.effective_levels().len(), 1);
+    assert_eq!(t.effective_levels()[0].0, 8);
+}

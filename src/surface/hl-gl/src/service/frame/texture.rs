@@ -349,10 +349,16 @@ pub(super) fn lower_textures(
             };
             let sampler = Pipeline::sampler_desc(&t, &d.samp_objs[unit]);
             let (samp_ir, create_sampler) = ctx.sampler_ir(&sampler)?;
-            // The contiguous mip chain above the base (empty for a single-level texture). Every declared
-            // level must be uploaded, so the chain and the level count are taken from one place.
-            let chain = t.mip_chain().to_vec();
-            let mip_levels = t.mip_levels();
+            // The levels the host texture receives, from the EFFECTIVE base downwards — GL's
+            // `[BASE_LEVEL, MAX_LEVEL]` window, which re-indexes the pyramid so the base level becomes the
+            // host's level 0. Every declared level must be uploaded, so the window and the level count are
+            // taken from one place.
+            let levels = t.effective_levels();
+            let mip_levels = levels.len().max(1) as u32;
+            let (base_w, base_h, base_data) = levels
+                .first()
+                .cloned()
+                .unwrap_or((t.w, t.h, Arc::clone(&t.data)));
             let mut mip_stages: Vec<(u32, u32, u32, u32)> = Vec::new();
             let stage_ir = if needs_upload {
                 let stage_ir = ctx.alloc_buffer_ir()?;
@@ -366,8 +372,8 @@ pub(super) fn lower_textures(
                 cmds.push(Cmd::CreateTexture(
                     tex_ir,
                     TextureDesc {
-                        width: t.w as u32,
-                        height: t.h as u32,
+                        width: base_w as u32,
+                        height: base_h as u32,
                         depth: 1,
                         mip_levels,
                         sample_count: 1,
@@ -384,7 +390,7 @@ pub(super) fn lower_textures(
                 cmds.push(Cmd::CreateBuffer(
                     stage_ir,
                     BufferDesc {
-                        size: t.data.len() as u64,
+                        size: base_data.len() as u64,
                         usage: buffer_usage::COPY_SRC,
                         label: String::new(),
                     },
@@ -392,16 +398,16 @@ pub(super) fn lower_textures(
                 cmds.push(Cmd::WriteBuffer {
                     id: stage_ir,
                     offset: 0,
-                    data: (*t.data).clone(),
+                    data: (*base_data).clone(),
                 });
                 // One staging buffer per declared level above the base. A host texture must have every
                 // level it declares, so this walks exactly the levels `mip_levels` counted.
-                for (index, level) in chain.iter().enumerate().take(mip_levels as usize - 1) {
+                for (index, (lw, lh, data)) in levels.iter().enumerate().skip(1) {
                     let level_ir = ctx.alloc_buffer_ir()?;
                     cmds.push(Cmd::CreateBuffer(
                         level_ir,
                         BufferDesc {
-                            size: level.data.len() as u64,
+                            size: data.len() as u64,
                             usage: buffer_usage::COPY_SRC,
                             label: String::new(),
                         },
@@ -409,9 +415,9 @@ pub(super) fn lower_textures(
                     cmds.push(Cmd::WriteBuffer {
                         id: level_ir,
                         offset: 0,
-                        data: (*level.data).clone(),
+                        data: (**data).clone(),
                     });
-                    mip_stages.push((level_ir, index as u32 + 1, level.w as u32, level.h as u32));
+                    mip_stages.push((level_ir, index as u32, *lw as u32, *lh as u32));
                 }
                 stage_ir
             } else {
@@ -425,8 +431,8 @@ pub(super) fn lower_textures(
                 tex_ir,
                 samp_ir,
                 stage_ir,
-                w: t.w as u32,
-                h: t.h as u32,
+                w: base_w as u32,
+                h: base_h as u32,
                 sampler: sampler_name(name, element, elements),
                 flip_y: false,
                 swizzle: d.tex_swizzles[unit],
