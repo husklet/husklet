@@ -43,6 +43,29 @@ use io::IoPlan;
 pub(crate) use io::{IoResult, Observation};
 use plan::SubmitPlan;
 
+/// The prologue every EGL entry point runs.
+///
+/// EGL 1.4 §3.1: "the error status is set to `EGL_SUCCESS`" by any command that succeeds, and only a
+/// FAILING command leaves an error behind. This driver only ever SET errors and never cleared them, so
+/// one legitimately-failing call — `eglBindAPI(EGL_OPENGL_API)` on a GLES-only driver — poisoned every
+/// later `eglGetError()` until something happened to read it.
+///
+/// That is not a cosmetic gap. The near-universal error-checking idiom (dEQP's `EGLU_CHECK_CALL`, and
+/// every toolkit that wraps EGL the same way) tests `eglGetError()` and IGNORES return values, so a stale
+/// error is indistinguishable from a failure of whatever ran next. dEQP-GLES2 aborted before a single
+/// test, blaming the innocent call that followed.
+///
+/// Clearing on ENTRY gives exactly the specified behaviour: a command that succeeds leaves `EGL_SUCCESS`
+/// because nothing set anything, and a command that fails leaves the error it set. `eglGetError` itself
+/// is the one entry point that must NOT do this — it reads and resets.
+pub struct EglCall;
+
+impl EglCall {
+    pub fn enter() {
+        EGL_ERROR.with(|cell| cell.set(EGL_SUCCESS));
+    }
+}
+
 /// The single opaque `EGLDisplay` this shim hands out (`eglGetDisplay` → this token). Non-null.
 pub const DISPLAY_TOKEN: usize = 1;
 /// The single opaque `EGLConfig` this shim advertises. Non-null.

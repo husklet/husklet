@@ -17,6 +17,7 @@ pub extern "C" fn eglCreateSync(
     type_: u32,
     attrib_list: *const isize,
 ) -> *mut c_void {
+    crate::state::EglCall::enter();
     let attributes_empty = attrib_list.is_null() || unsafe { *attrib_list } == EGL_NONE as isize;
     Sync::create(dpy, type_, attributes_empty)
 }
@@ -55,6 +56,7 @@ impl Sync {
 }
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglDestroySync(dpy: *mut c_void, sync: *mut c_void) -> u32 {
+    crate::state::EglCall::enter();
     if dpy as usize != DISPLAY_TOKEN {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
         return EGL_FALSE;
@@ -86,6 +88,7 @@ pub extern "C" fn eglClientWaitSync(
     flags: i32,
     _timeout: u64,
 ) -> i32 {
+    crate::state::EglCall::enter();
     if flags & !EGL_SYNC_FLUSH_COMMANDS_BIT_KHR != 0 {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_PARAMETER));
         return EGL_FALSE as i32;
@@ -142,6 +145,7 @@ pub extern "C" fn eglClientWaitSync(
 }
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglWaitSync(dpy: *mut c_void, sync: *mut c_void, flags: i32) -> u32 {
+    crate::state::EglCall::enter();
     if flags != 0 {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_PARAMETER));
         return EGL_FALSE;
@@ -167,6 +171,7 @@ pub extern "C" fn eglGetSyncAttrib(
     attribute: i32,
     value: *mut isize,
 ) -> u32 {
+    crate::state::EglCall::enter();
     if value.is_null() {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_PARAMETER));
         return EGL_FALSE;
@@ -237,11 +242,13 @@ pub(crate) extern "C" fn eglCreateSyncKHR(
     type_: u32,
     attrib_list: *const i32,
 ) -> *mut c_void {
+    crate::state::EglCall::enter();
     let attributes_empty = attrib_list.is_null() || unsafe { *attrib_list } == EGL_NONE;
     Sync::create(dpy, type_, attributes_empty)
 }
 
 pub(crate) extern "C" fn eglDestroySyncKHR(dpy: *mut c_void, sync: *mut c_void) -> u32 {
+    crate::state::EglCall::enter();
     eglDestroySync(dpy, sync)
 }
 
@@ -251,10 +258,12 @@ pub(crate) extern "C" fn eglClientWaitSyncKHR(
     flags: i32,
     timeout: u64,
 ) -> i32 {
+    crate::state::EglCall::enter();
     eglClientWaitSync(dpy, sync, flags, timeout)
 }
 
 pub(crate) extern "C" fn eglWaitSyncKHR(dpy: *mut c_void, sync: *mut c_void, flags: i32) -> u32 {
+    crate::state::EglCall::enter();
     eglWaitSync(dpy, sync, flags)
 }
 
@@ -264,6 +273,7 @@ pub(crate) extern "C" fn eglGetSyncAttribKHR(
     attribute: i32,
     value: *mut i32,
 ) -> u32 {
+    crate::state::EglCall::enter();
     if value.is_null() {
         return EGL_FALSE;
     }

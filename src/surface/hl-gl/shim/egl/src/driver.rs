@@ -316,6 +316,7 @@ pub extern "C" fn eglGetError() -> i32 {
 
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglGetDisplay(display_id: *mut c_void) -> *mut c_void {
+    crate::state::EglCall::enter();
     crate::stub::trace("eglGetDisplay", "returning the hl display");
     // `display_id` is the app's OWN `wl_display*` — keep it. The app-surface presenter marshals on that
     // connection, and the only other way to reach it is `wl_proxy_get_display` (Wayland 1.23+, absent on
@@ -325,7 +326,15 @@ pub extern "C" fn eglGetDisplay(display_id: *mut c_void) -> *mut c_void {
 }
 
 #[cfg_attr(not(gles_client), no_mangle)]
-pub extern "C" fn eglInitialize(_dpy: *mut c_void, major: *mut i32, minor: *mut i32) -> u32 {
+pub extern "C" fn eglInitialize(dpy: *mut c_void, major: *mut i32, minor: *mut i32) -> u32 {
+    crate::state::EglCall::enter();
+    // EGL 1.4 §3.2: a display that is not a valid `EGLDisplay` is `EGL_BAD_DISPLAY`. Accepting any
+    // pointer told a conformance suite its bogus handle was a working display, so every later call on it
+    // failed somewhere far from the mistake.
+    if dpy as usize != DISPLAY_TOKEN {
+        GlobalState::access(|state| state.set_egl_error(EGL_BAD_DISPLAY));
+        return EGL_FALSE;
+    }
     crate::stub::trace("eglInitialize", "advertising EGL 1.4");
     hl_log::hl_info!(hl_log::tag::EGL, "eglInitialize egl=1.4");
     if GlobalState::access(|s| {
@@ -358,6 +367,7 @@ pub extern "C" fn eglInitialize(_dpy: *mut c_void, major: *mut i32, minor: *mut 
 
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglTerminate(_dpy: *mut c_void) -> u32 {
+    crate::state::EglCall::enter();
     GlobalState::access(|state| state.terminate());
     EGL_TRUE
 }
@@ -369,6 +379,7 @@ pub extern "C" fn eglTerminate(_dpy: *mut c_void) -> u32 {
 /// `eglGetPlatformDisplay(EGL_PLATFORM_WAYLAND_KHR, …)` window path instead of surfaceless/pbuffer.
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglQueryString(dpy: *mut c_void, name: i32) -> *const c_char {
+    crate::state::EglCall::enter();
     crate::stub::trace(
         "eglQueryString",
         if dpy.is_null() {
@@ -377,6 +388,14 @@ pub extern "C" fn eglQueryString(dpy: *mut c_void, name: i32) -> *const c_char {
             "display query"
         },
     );
+    // EGL 1.4 §3.3 + EGL_EXT_client_extensions: with `EGL_NO_DISPLAY` the ONLY legal query is the client
+    // extension string. `EGL_VENDOR`, `EGL_VERSION` and `EGL_CLIENT_APIS` are per-display, so answering
+    // them without one reports a display's properties before any display exists — a conformance suite
+    // reads that as a working display and proceeds on it.
+    if dpy.is_null() && name != EGL_EXTENSIONS_Q {
+        GlobalState::access(|state| state.set_egl_error(EGL_BAD_DISPLAY));
+        return core::ptr::null();
+    }
     match name {
         EGL_VENDOR => b"hl-gl\0".as_ptr() as *const c_char,
         EGL_VERSION_Q => b"1.4 hl-gl\0".as_ptr() as *const c_char,

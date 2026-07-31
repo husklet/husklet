@@ -52,6 +52,7 @@ pub extern "C" fn eglGetPlatformDisplay(
     native_display: *mut c_void,
     _attrib_list: *const isize,
 ) -> *mut c_void {
+    crate::state::EglCall::enter();
     crate::stub::trace("eglGetPlatformDisplay", &format!("platform=0x{platform:x}"));
     display_for(platform, native_display)
 }
@@ -78,6 +79,7 @@ pub(super) extern "C" fn eglGetPlatformDisplayEXT(
     native_display: *mut c_void,
     _attrib_list: *const i32,
 ) -> *mut c_void {
+    crate::state::EglCall::enter();
     display_for(platform, native_display)
 }
 /// `eglCreatePlatformWindowSurfaceEXT(dpy, config, native_window, attrib_list)` — `EGL_EXT_platform_base`
@@ -89,6 +91,7 @@ pub(super) extern "C" fn eglCreatePlatformWindowSurfaceEXT(
     native_window: *mut c_void,
     _attrib_list: *const i32,
 ) -> *mut c_void {
+    crate::state::EglCall::enter();
     if dpy as usize != DISPLAY_TOKEN {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
         return core::ptr::null_mut();
@@ -107,6 +110,7 @@ pub(super) extern "C" fn eglCreatePlatformPixmapSurfaceEXT(
     _native_pixmap: *mut c_void,
     _attrib_list: *const i32,
 ) -> *mut c_void {
+    crate::state::EglCall::enter();
     GlobalState::access(|s| s.mint_token())
 }
 
@@ -136,6 +140,7 @@ pub(super) extern "C" fn eglQueryDisplayAttribEXT(
     attribute: i32,
     value: *mut isize,
 ) -> u32 {
+    crate::state::EglCall::enter();
     if value.is_null() {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_PARAMETER));
         return EGL_FALSE;
@@ -161,6 +166,7 @@ pub(super) extern "C" fn eglQueryDeviceAttribEXT(
     _attribute: i32,
     value: *mut isize,
 ) -> u32 {
+    crate::state::EglCall::enter();
     if device as usize != DEVICE_TOKEN {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_DEVICE_EXT));
         return EGL_FALSE;
@@ -180,6 +186,7 @@ pub(super) extern "C" fn eglQueryDeviceAttribEXT(
 /// A foreign device handle is `EGL_BAD_DEVICE_EXT` + null; an unmodeled `name` is `EGL_BAD_PARAMETER` +
 /// null (never a dangling pointer). Returned pointers are process-static (valid for the app's lifetime).
 pub(super) extern "C" fn eglQueryDeviceStringEXT(device: *mut c_void, name: i32) -> *const c_char {
+    crate::state::EglCall::enter();
     if device as usize != DEVICE_TOKEN {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_DEVICE_EXT));
         return core::ptr::null();
@@ -205,6 +212,7 @@ pub(super) extern "C" fn eglQueryDevicesEXT(
     devices: *mut *mut c_void,
     num_devices: *mut i32,
 ) -> u32 {
+    crate::state::EglCall::enter();
     if num_devices.is_null() {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_PARAMETER));
         return EGL_FALSE;
@@ -232,12 +240,14 @@ pub(super) extern "C" fn eglQueryDevicesEXT(
 /// `EGL_OPENGL_ES_API`, the only API this driver serves). libepoxy reads this to confirm GLES dispatch.
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglQueryAPI() -> u32 {
+    crate::state::EglCall::enter();
     current::query_api()
 }
 /// `eglReleaseThread()` — release the calling thread's EGL state: the current context/surface/display
 /// binding is dropped (the bound API resets to the `EGL_OPENGL_ES_API` default via the released cells).
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglReleaseThread() -> u32 {
+    crate::state::EglCall::enter();
     let context = current::context();
     if context != 0 {
         let previous = (context, current::draw_surface(), current::read_surface());
@@ -250,14 +260,17 @@ pub extern "C" fn eglReleaseThread() -> u32 {
 /// deferred model completes synchronously at swap, so these succeed immediately.
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglWaitClient() -> u32 {
+    crate::state::EglCall::enter();
     EGL_TRUE
 }
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglWaitGL() -> u32 {
+    crate::state::EglCall::enter();
     EGL_TRUE
 }
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglWaitNative(_engine: i32) -> u32 {
+    crate::state::EglCall::enter();
     EGL_TRUE
 }
 // The three attributes EGL 1.5 3.5.6 makes settable, and the tokens their values are drawn from.
@@ -300,6 +313,7 @@ pub extern "C" fn eglSurfaceAttrib(
     attribute: i32,
     value: i32,
 ) -> u32 {
+    crate::state::EglCall::enter();
     if let Err(error) = surface_operand(dpy, surface) {
         return surface_failure(error);
     }
@@ -327,6 +341,7 @@ pub extern "C" fn eglSurfaceAttrib(
 /// reported success for an operation nothing backs, and for handles that do not exist.
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglBindTexImage(dpy: *mut c_void, surface: *mut c_void, buffer: i32) -> u32 {
+    crate::state::EglCall::enter();
     match surface_operand(dpy, surface) {
         Err(error) => surface_failure(error),
         Ok(()) if buffer != EGL_BACK_BUFFER => surface_failure(EGL_BAD_PARAMETER),
@@ -335,6 +350,7 @@ pub extern "C" fn eglBindTexImage(dpy: *mut c_void, surface: *mut c_void, buffer
 }
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglReleaseTexImage(dpy: *mut c_void, surface: *mut c_void, buffer: i32) -> u32 {
+    crate::state::EglCall::enter();
     eglBindTexImage(dpy, surface, buffer)
 }
 /// `eglCopyBuffers(dpy, surface, target)` — copy the surface color buffer to a native pixmap. EGL 1.5
@@ -346,6 +362,7 @@ pub extern "C" fn eglCopyBuffers(
     surface: *mut c_void,
     _target: *mut c_void,
 ) -> u32 {
+    crate::state::EglCall::enter();
     match surface_operand(dpy, surface) {
         Err(error) => surface_failure(error),
         Ok(()) => surface_failure(EGL_BAD_NATIVE_PIXMAP),
@@ -396,6 +413,7 @@ pub extern "C" fn eglCreatePbufferSurface(
     config: *mut c_void,
     attrib_list: *const i32,
 ) -> *mut c_void {
+    crate::state::EglCall::enter();
     if dpy as usize != DISPLAY_TOKEN {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
         return core::ptr::null_mut();
@@ -427,6 +445,7 @@ pub extern "C" fn eglCreatePixmapSurface(
     _pixmap: *mut c_void,
     _attrib_list: *const i32,
 ) -> *mut c_void {
+    crate::state::EglCall::enter();
     GlobalState::access(|s| s.mint_token())
 }
 /// `eglCreatePbufferFromClientBuffer(...)` — a pbuffer wrapping a client buffer (e.g. an OpenVG image);
@@ -439,6 +458,7 @@ pub extern "C" fn eglCreatePbufferFromClientBuffer(
     _config: *mut c_void,
     _attrib_list: *const i32,
 ) -> *mut c_void {
+    crate::state::EglCall::enter();
     GlobalState::access(|s| s.mint_token())
 }
 /// `eglCreatePlatformWindowSurface(dpy, config, native_window, attrib_list)` — the EGL 1.5 window-surface
@@ -451,6 +471,7 @@ pub extern "C" fn eglCreatePlatformWindowSurface(
     native_window: *mut c_void,
     _attrib_list: *const isize,
 ) -> *mut c_void {
+    crate::state::EglCall::enter();
     if dpy as usize != DISPLAY_TOKEN {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
         return core::ptr::null_mut();
@@ -469,5 +490,6 @@ pub extern "C" fn eglCreatePlatformPixmapSurface(
     _native_pixmap: *mut c_void,
     _attrib_list: *const isize,
 ) -> *mut c_void {
+    crate::state::EglCall::enter();
     GlobalState::access(|s| s.mint_token())
 }

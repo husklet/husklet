@@ -43,6 +43,7 @@ pub extern "C" fn eglQueryContext(
     attribute: i32,
     value: *mut i32,
 ) -> u32 {
+    crate::state::EglCall::enter();
     if value.is_null() {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_PARAMETER));
         return EGL_FALSE;
@@ -86,6 +87,7 @@ pub extern "C" fn eglQuerySurface(
     attribute: i32,
     value: *mut i32,
 ) -> u32 {
+    crate::state::EglCall::enter();
     if value.is_null() {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_PARAMETER));
         return EGL_FALSE;

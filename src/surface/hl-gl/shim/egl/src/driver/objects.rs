@@ -311,7 +311,7 @@ pub extern "C" fn glBindTexture(target: u32, texture: u32) {
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glTexImage2D(
     _target: u32,
-    _level: i32,
+    level: i32,
     _internalformat: i32,
     width: i32,
     height: i32,
@@ -322,6 +322,18 @@ pub extern "C" fn glTexImage2D(
 ) {
     crate::stub::trace("glTexImage2D", "uploading a 2D texture");
     GlobalState::context(|s| {
+        if level < 0 {
+            s.gl.set_gl_error(GL_INVALID_VALUE);
+            return;
+        }
+        // `level` was ignored, so EVERY level of a mip chain redefined the BASE image and the last, 1×1
+        // upload won — a mipmapped texture collapsed to a single texel and every draw sampling it came
+        // back a flat colour. This model samples the base level only (see `glGenerateMipmap`), so a
+        // non-base level is accepted and its pixels are not stored. That is exact for a magnifying draw,
+        // which needs level 0, and remains an honest partial for a minifying one.
+        if level > 0 {
+            return;
+        }
         let rgba = unsafe { to_rgba8(&s.gl, format, type_, width, height, pixels) };
         s.redefine_texture(|ctx| record::tex_image_2d(ctx, width, height, &rgba))
     });

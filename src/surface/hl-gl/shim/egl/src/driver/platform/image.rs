@@ -21,6 +21,7 @@ pub extern "C" fn eglCreateImage(
     _buffer: *mut c_void,
     attrib_list: *const isize,
 ) -> *mut c_void {
+    crate::state::EglCall::enter();
     GlobalState::access(|state| {
         let image = match state
             .images
@@ -44,6 +45,7 @@ pub extern "C" fn eglCreateImage(
 }
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglDestroyImage(_dpy: *mut c_void, image: *mut c_void) -> u32 {
+    crate::state::EglCall::enter();
     GlobalState::access(|state| {
         if state.images.remove(image) {
             EGL_TRUE
@@ -60,18 +62,20 @@ pub extern "C" fn eglCreateImageKHR(
     buffer: *mut c_void,
     attrib_list: *const i32,
 ) -> *mut c_void {
+    crate::state::EglCall::enter();
     let _ = (dpy, ctx, buffer);
     GlobalState::access(|state| unsafe {
-        let image = match state
-            .images
-            .import_khr(target, attrib_list, state.external_buffers_enabled())
-        {
-            Some(image) => image,
-            None => {
-                state.set_egl_error(refusal_error(target));
-                core::ptr::null_mut()
-            }
-        };
+        let image =
+            match state
+                .images
+                .import_khr(target, attrib_list, state.external_buffers_enabled())
+            {
+                Some(image) => image,
+                None => {
+                    state.set_egl_error(refusal_error(target));
+                    core::ptr::null_mut()
+                }
+            };
         if std::env::var_os("HL_SHIM_DEBUG").is_some() {
             eprintln!(
                 "[hl-gl-shim] eglCreateImageKHR target={target:#x} attributes_null={} result={:#x}",
@@ -84,6 +88,7 @@ pub extern "C" fn eglCreateImageKHR(
 }
 
 pub extern "C" fn eglDestroyImageKHR(dpy: *mut c_void, image: *mut c_void) -> u32 {
+    crate::state::EglCall::enter();
     eglDestroyImage(dpy, image)
 }
 
@@ -128,6 +133,7 @@ pub extern "C" fn eglQueryDmaBufFormatsEXT(
     formats: *mut i32,
     count: *mut i32,
 ) -> u32 {
+    crate::state::EglCall::enter();
     if count.is_null() || max_formats < 0 || (max_formats > 0 && formats.is_null()) {
         return EGL_FALSE;
     }
@@ -161,6 +167,7 @@ pub extern "C" fn eglQueryDmaBufModifiersEXT(
     external_only: *mut u32,
     count: *mut i32,
 ) -> u32 {
+    crate::state::EglCall::enter();
     if count.is_null()
         || max_modifiers < 0
         || (max_modifiers > 0 && modifiers.is_null())

@@ -190,22 +190,38 @@ fn current_binding_is_thread_local_and_independent() {
     );
 }
 
+/// EGL 1.4 §3.1: a command that SUCCEEDS sets the error status to `EGL_SUCCESS`; only a failing command
+/// leaves an error behind.
+///
+/// This test previously asserted the opposite — "successful calls must not clear a pending error" — and
+/// so defended the defect it was best placed to catch. The consequence was not cosmetic: the near
+/// universal error-checking idiom (dEQP's `EGLU_CHECK_CALL`, and every toolkit that wraps EGL the same
+/// way) reads `eglGetError()` and IGNORES return values, so one legitimately-failing call poisoned every
+/// later check. dEQP-GLES2 — 17,485 spec-derived cases — aborted before running a single test and blamed
+/// the innocent call that followed. This test was green throughout.
 #[test]
-fn successful_make_current_preserves_the_thread_egl_error_until_get_error() {
+fn a_successful_call_clears_the_error_a_failing_one_left() {
     // A real failing EGL call leaves a pending error on this thread.
     assert_eq!(eglBindAPI(EGL_OPENGL_API), EGL_FALSE);
     let dpy = DISPLAY_TOKEN as *mut c_void;
     let ctx = context();
+
+    // The next command SUCCEEDS, so the error it did not raise must not survive it.
     assert_eq!(
         eglMakeCurrent(dpy, core::ptr::null_mut(), core::ptr::null_mut(), ctx),
         EGL_TRUE
     );
     assert_eq!(
         eglGetError(),
-        EGL_BAD_PARAMETER,
-        "successful calls must not clear a pending error"
+        hl_gl::result::EGL_SUCCESS,
+        "a succeeding command must report EGL_SUCCESS, not the previous command's error"
     );
+
+    // A failing command still reports ITS error, and reading it resets the status.
+    assert_eq!(eglBindAPI(EGL_OPENGL_API), EGL_FALSE);
+    assert_eq!(eglGetError(), EGL_BAD_PARAMETER);
     assert_eq!(eglGetError(), hl_gl::result::EGL_SUCCESS);
+
     // Cleanup this thread's binding.
     eglMakeCurrent(
         DISPLAY_TOKEN as *mut c_void,

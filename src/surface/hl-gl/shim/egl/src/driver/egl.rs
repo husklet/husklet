@@ -4,6 +4,7 @@ mod selection;
 pub use selection::*;
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglBindAPI(api: u32) -> u32 {
+    crate::state::EglCall::enter();
     crate::stub::trace("eglBindAPI", "binding client API");
     if api != EGL_OPENGL_ES_API {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_PARAMETER));
@@ -24,6 +25,7 @@ pub extern "C" fn eglCreateContext(
     share_context: *mut c_void,
     attrib_list: *const i32,
 ) -> *mut c_void {
+    crate::state::EglCall::enter();
     crate::stub::trace("eglCreateContext", "creating GLES context");
     if dpy as usize != DISPLAY_TOKEN {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
@@ -234,6 +236,7 @@ impl ContextAttributeList {
 
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglDestroyContext(dpy: *mut c_void, ctx: *mut c_void) -> u32 {
+    crate::state::EglCall::enter();
     if dpy as usize != DISPLAY_TOKEN {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
         return EGL_FALSE;
@@ -258,6 +261,7 @@ pub extern "C" fn eglMakeCurrent(
     read: *mut c_void,
     ctx: *mut c_void,
 ) -> u32 {
+    crate::state::EglCall::enter();
     crate::stub::trace("eglMakeCurrent", "binding GLES context");
     hl_log::hl_info!(
         hl_log::tag::EGL,
@@ -322,6 +326,7 @@ pub extern "C" fn eglCreateWindowSurface(
     win: *mut c_void,
     _attrib_list: *const i32,
 ) -> *mut c_void {
+    crate::state::EglCall::enter();
     crate::stub::trace("eglCreateWindowSurface", "creating Wayland window surface");
     if dpy as usize != DISPLAY_TOKEN {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
@@ -374,6 +379,7 @@ impl WindowSurface {
 
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglDestroySurface(dpy: *mut c_void, surface: *mut c_void) -> u32 {
+    crate::state::EglCall::enter();
     if dpy as usize != DISPLAY_TOKEN {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
         return EGL_FALSE;
@@ -407,11 +413,13 @@ pub extern "C" fn eglDestroySurface(dpy: *mut c_void, surface: *mut c_void) -> u
 /// present are emitted in one submission so the recorded frame is never rendered twice.
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglSwapBuffers(dpy: *mut c_void, surface: *mut c_void) -> u32 {
+    crate::state::EglCall::enter();
     present::swap(dpy as usize, surface as usize)
 }
 
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglSwapInterval(_dpy: *mut c_void, _interval: i32) -> u32 {
+    crate::state::EglCall::enter();
     EGL_TRUE
 }
 
@@ -419,6 +427,7 @@ pub extern "C" fn eglSwapInterval(_dpy: *mut c_void, _interval: i32) -> u32 {
 /// `eglMakeCurrent`), or `EGL_NO_DISPLAY` (null) when no context is current on this thread.
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglGetCurrentDisplay() -> *mut c_void {
+    crate::state::EglCall::enter();
     current::display() as *mut c_void
 }
 
@@ -427,6 +436,7 @@ pub extern "C" fn eglGetCurrentDisplay() -> *mut c_void {
 /// MUST return the live context on the thread that made it current.
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglGetCurrentContext() -> *mut c_void {
+    crate::state::EglCall::enter();
     current::context() as *mut c_void
 }
 
@@ -434,6 +444,7 @@ pub extern "C" fn eglGetCurrentContext() -> *mut c_void {
 /// THREAD's current binding, or `EGL_NO_SURFACE` (null) when no context is current on this thread.
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglGetCurrentSurface(readdraw: i32) -> *mut c_void {
+    crate::state::EglCall::enter();
     let tok = if readdraw == EGL_READ {
         current::read_surface()
     } else {

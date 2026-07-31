@@ -5,6 +5,7 @@ mod extra;
 /// Resolves a hand-written EGL or GLES entry point to its exported C function address.
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglGetProcAddress(procname: *const c_char) -> *mut c_void {
+    crate::state::EglCall::enter();
     if procname.is_null() {
         return core::ptr::null_mut();
     }

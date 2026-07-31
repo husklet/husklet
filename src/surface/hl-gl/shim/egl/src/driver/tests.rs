@@ -466,3 +466,96 @@ fn an_absurd_buffer_size_is_refused_instead_of_allocated() {
     // And the entry point itself survives the call rather than aborting the process.
     glBufferData(0x8892, 1 << 38, core::ptr::null(), 0x88E4);
 }
+
+/// The reported reproduction, end to end: a failing `eglBindAPI` followed by a succeeding one must leave
+/// `EGL_SUCCESS`, and the prologue must apply to EVERY entry point rather than the handful that happened
+/// to be audited.
+///
+/// The error is sticky only until the next command runs — clearing on ENTRY is what makes a succeeding
+/// command report success without every entry point having to remember to say so on each of its return
+/// paths. `eglGetError` is deliberately exempt: it reads and resets.
+#[test]
+fn a_succeeding_command_reports_success_across_the_entry_point_surface() {
+    const EGL_OPENGL_API: u32 = 0x30A2;
+    let dpy = DISPLAY_TOKEN as *mut c_void;
+
+    // The exact sequence from the defect report.
+    assert_eq!(eglBindAPI(EGL_OPENGL_API), EGL_FALSE);
+    assert_eq!(eglBindAPI(EGL_OPENGL_ES_API), EGL_TRUE);
+    assert_eq!(
+        eglGetError(),
+        hl_gl::result::EGL_SUCCESS,
+        "a succeeding eglBindAPI must clear the previous failure"
+    );
+
+    // The same must hold for a representative spread of entry points, not just eglBindAPI: a query, a
+    // display getter, a string query and a proc-address lookup.
+    for (name, succeed) in [
+        ("eglQueryAPI", &(|| eglQueryAPI() != 0) as &dyn Fn() -> bool),
+        (
+            "eglGetDisplay",
+            &(|| !eglGetDisplay(core::ptr::null_mut()).is_null()),
+        ),
+        (
+            "eglQueryString",
+            &(|| !eglQueryString(dpy, EGL_VENDOR).is_null()),
+        ),
+        (
+            "eglInitialize",
+            &(|| {
+                let (mut major, mut minor) = (0, 0);
+                eglInitialize(dpy, &mut major, &mut minor) == EGL_TRUE
+            }),
+        ),
+    ] {
+        assert_eq!(eglBindAPI(EGL_OPENGL_API), EGL_FALSE, "arm the error");
+        assert!(
+            succeed(),
+            "{name} must succeed for this check to mean anything"
+        );
+        assert_eq!(
+            eglGetError(),
+            hl_gl::result::EGL_SUCCESS,
+            "{name} succeeded, so it must have cleared the pending error"
+        );
+    }
+}
+
+/// A display handle this driver never issued is `EGL_BAD_DISPLAY`, and with `EGL_NO_DISPLAY` the only
+/// legal `eglQueryString` is the CLIENT extension string.
+///
+/// Both were reported as succeeding, which is worse than failing: a conformance suite took a bogus
+/// handle for a working display and proceeded on it, so every later failure landed far from the mistake.
+#[test]
+fn an_unissued_display_and_a_displayless_query_are_refused() {
+    let good = DISPLAY_TOKEN as *mut c_void;
+    let bogus = 0xdeadusize as *mut c_void;
+    let (mut major, mut minor) = (0, 0);
+
+    assert_eq!(eglInitialize(bogus, &mut major, &mut minor), EGL_FALSE);
+    assert_eq!(eglGetError(), EGL_BAD_DISPLAY);
+    assert_eq!((major, minor), (0, 0), "a refused init must write nothing");
+
+    // The real display still initializes, and reports EGL 1.4.
+    assert_eq!(eglInitialize(good, &mut major, &mut minor), EGL_TRUE);
+    assert_eq!((major, minor), (1, 4));
+    assert_eq!(eglGetError(), hl_gl::result::EGL_SUCCESS);
+
+    // EGL_NO_DISPLAY: client extensions only.
+    assert!(
+        !eglQueryString(core::ptr::null_mut(), EGL_EXTENSIONS_Q).is_null(),
+        "the client extension string is the one legal displayless query"
+    );
+    assert_eq!(eglGetError(), hl_gl::result::EGL_SUCCESS);
+    for name in [EGL_VENDOR, EGL_VERSION_Q, EGL_CLIENT_APIS] {
+        assert!(
+            eglQueryString(core::ptr::null_mut(), name).is_null(),
+            "{name:#x} is per-display and must not answer without one"
+        );
+        assert_eq!(eglGetError(), EGL_BAD_DISPLAY, "{name:#x}");
+    }
+    // With a real display they all still answer.
+    for name in [EGL_VENDOR, EGL_VERSION_Q, EGL_CLIENT_APIS, EGL_EXTENSIONS_Q] {
+        assert!(!eglQueryString(good, name).is_null(), "{name:#x}");
+    }
+}
