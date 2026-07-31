@@ -67,11 +67,33 @@ unsafe fn pointer_attr(attr: i32, data: *mut c_void, ptr: u64) -> i32 {
         CU_POINTER_ATTRIBUTE_HOST_POINTER => *(data as *mut *mut c_void) = core::ptr::null_mut(),
         CU_POINTER_ATTRIBUTE_IS_MANAGED => *(data as *mut u32) = managed as u32,
         CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL => *(data as *mut i32) = 0,
-        CU_POINTER_ATTRIBUTE_BUFFER_ID => *(data as *mut u64) = base,
+        // These three are answers *about the containing allocation*, so a pointer that is inside none
+        // has no honest answer. Letting the miss fall through wrote base = 0 / size = 0 under a success
+        // status, which tells the caller the zero is valid: "not a live allocation" and "an allocation
+        // at address 0 of length 0" become the same observation, and code that sizes a copy from
+        // RANGE_SIZE gets a silent zero-length transfer instead of an error where the mistake was made.
+        CU_POINTER_ATTRIBUTE_BUFFER_ID => {
+            if !found {
+                return CUDA_ERROR_INVALID_VALUE;
+            }
+            *(data as *mut u64) = base;
+        }
         CU_POINTER_ATTRIBUTE_SYNC_MEMOPS => *(data as *mut i32) = 1,
+        // MAPPED is a genuine yes/no about whether the pointer is backed, so `found` IS the answer here
+        // rather than a precondition for it.
         CU_POINTER_ATTRIBUTE_MAPPED => *(data as *mut i32) = found as i32,
-        CU_POINTER_ATTRIBUTE_RANGE_START_ADDR => *(data as *mut u64) = base,
-        CU_POINTER_ATTRIBUTE_RANGE_SIZE => *(data as *mut usize) = size as usize,
+        CU_POINTER_ATTRIBUTE_RANGE_START_ADDR => {
+            if !found {
+                return CUDA_ERROR_INVALID_VALUE;
+            }
+            *(data as *mut u64) = base;
+        }
+        CU_POINTER_ATTRIBUTE_RANGE_SIZE => {
+            if !found {
+                return CUDA_ERROR_INVALID_VALUE;
+            }
+            *(data as *mut usize) = size as usize;
+        }
         _ => return CUDA_ERROR_NOT_SUPPORTED,
     }
     CUDA_SUCCESS

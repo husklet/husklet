@@ -363,3 +363,52 @@ fn stream_query_and_wait_event() {
         CUDA_ERROR_INVALID_HANDLE
     );
 }
+
+/// Every pointer attribute that cannot be honestly answered for a pointer outside any live allocation
+/// reports `CUDA_ERROR_INVALID_VALUE`, rather than succeeding with a zero.
+///
+/// `pointer_attr` resolves the containing allocation once and lets the miss fall through as `base = 0`
+/// and `size = 0`. `MEMORY_TYPE` and `DEVICE_POINTER` consult the `found` flag and refuse, but
+/// `BUFFER_ID`, `RANGE_START_ADDR` and `RANGE_SIZE` did not: they returned `CUDA_SUCCESS` and wrote a
+/// zero, which tells the caller the value is valid. A caller cannot then distinguish "this pointer is
+/// not a live allocation" from "this allocation starts at 0 and is 0 bytes long", and code that sizes a
+/// copy from `RANGE_SIZE` gets a silent zero-length transfer instead of an error at the point of the
+/// mistake.
+///
+/// Real CUDA returns `CUDA_ERROR_INVALID_VALUE` from `cuPointerGetAttribute` for a pointer it does not
+/// know, and this function's own contract already says the same.
+#[test]
+fn pointer_attributes_refuse_a_pointer_outside_any_allocation() {
+    let _g = guard();
+    // A live allocation exists, so the model is not simply empty; the queried pointer is elsewhere.
+    let live = record_alloc(4096);
+    let dangling = live + (1 << 20);
+
+    let mut buffer_id = 0xDEADu64;
+    let mut start = 0xDEADu64;
+    let mut size = 0xDEADusize;
+    for (label, attr, data) in [
+        (
+            "BUFFER_ID",
+            CU_POINTER_ATTRIBUTE_BUFFER_ID,
+            &mut buffer_id as *mut u64 as *mut c_void,
+        ),
+        (
+            "RANGE_START_ADDR",
+            CU_POINTER_ATTRIBUTE_RANGE_START_ADDR,
+            &mut start as *mut u64 as *mut c_void,
+        ),
+        (
+            "RANGE_SIZE",
+            CU_POINTER_ATTRIBUTE_RANGE_SIZE,
+            &mut size as *mut usize as *mut c_void,
+        ),
+    ] {
+        let code = cuPointerGetAttribute(data, attr, dangling);
+        assert_eq!(
+            code, CUDA_ERROR_INVALID_VALUE,
+            "{label} on a pointer outside any allocation returned {code}, so the caller was told a \
+             zero was a valid answer and cannot tell a missing allocation from an empty one",
+        );
+    }
+}
