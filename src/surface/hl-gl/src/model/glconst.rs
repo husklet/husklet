@@ -19,6 +19,16 @@ pub const GL_FIXED: u32 = 0x140C;
 // Packed pixel types (`glTexImage2D` / `glTexSubImage2D`; ES 3.0 table 3.2).
 pub const GL_UNSIGNED_SHORT_4_4_4_4: u32 = 0x8033;
 pub const GL_UNSIGNED_SHORT_5_5_5_1: u32 = 0x8034;
+pub const GL_UNSIGNED_INT_5_9_9_9_REV: u32 = 0x8C3E;
+pub const GL_UNSIGNED_INT_10F_11F_11F_REV: u32 = 0x8C3B;
+pub const GL_UNSIGNED_INT_24_8: u32 = 0x84FA;
+
+// Integer + depth pixel FORMATS (the `format` argument, distinct from the sized internal format).
+pub const GL_RED_INTEGER: u32 = 0x8D94;
+pub const GL_RG_INTEGER: u32 = 0x8228;
+pub const GL_RGB_INTEGER: u32 = 0x8D98;
+pub const GL_RGBA_INTEGER: u32 = 0x8D99;
+pub const GL_DEPTH_COMPONENT: u32 = 0x1902;
 
 // buffer targets
 pub const GL_ARRAY_BUFFER: u32 = 0x8892;
@@ -350,6 +360,39 @@ pub const MAX_TRANSFORM_FEEDBACK_BUFFERS: u32 = 4;
 
 // ES3 sampler-object parameters (glSamplerParameter* / glGetSamplerParameter*).
 pub const GL_TEXTURE_WRAP_R: u32 = 0x8072;
+// ES 3.0 table 3.12/3.13 sized internal formats beyond the unorm set. The model materializes an RGBA8
+// plane for all of them; the enum is retained so `glTexStorage2D` accepts them and so framebuffer
+// completeness can tell a colour-RENDERABLE format from one that merely samples (table 3.13).
+pub const GL_R8_SNORM: u32 = 0x8F94;
+pub const GL_RG8_SNORM: u32 = 0x8F95;
+pub const GL_RGB8_SNORM: u32 = 0x8F96;
+pub const GL_RGBA8_SNORM: u32 = 0x8F97;
+pub const GL_R8UI: u32 = 0x8232;
+pub const GL_R8I: u32 = 0x8231;
+pub const GL_R16UI: u32 = 0x8234;
+pub const GL_R16I: u32 = 0x8233;
+pub const GL_R32UI: u32 = 0x8236;
+pub const GL_R32I: u32 = 0x8235;
+pub const GL_RG8UI: u32 = 0x8238;
+pub const GL_RG8I: u32 = 0x8237;
+pub const GL_RG16UI: u32 = 0x823A;
+pub const GL_RG16I: u32 = 0x8239;
+pub const GL_RG32UI: u32 = 0x823C;
+pub const GL_RG32I: u32 = 0x823B;
+pub const GL_RGB8UI: u32 = 0x8D7D;
+pub const GL_RGB8I: u32 = 0x8D8F;
+pub const GL_RGB16UI: u32 = 0x8D77;
+pub const GL_RGB16I: u32 = 0x8D89;
+pub const GL_RGB32UI: u32 = 0x8D71;
+pub const GL_RGB32I: u32 = 0x8D83;
+pub const GL_RGBA8UI: u32 = 0x8D7C;
+pub const GL_RGBA8I: u32 = 0x8D8E;
+pub const GL_RGBA16UI: u32 = 0x8D76;
+pub const GL_RGBA16I: u32 = 0x8D88;
+pub const GL_RGBA32UI: u32 = 0x8D70;
+pub const GL_RGBA32I: u32 = 0x8D82;
+pub const GL_RGB32F: u32 = 0x8815;
+
 pub const GL_TEXTURE_BASE_LEVEL: u32 = 0x813C;
 pub const GL_TEXTURE_MAX_LEVEL: u32 = 0x813D;
 pub const GL_TEXTURE_MIN_LOD: u32 = 0x813A;

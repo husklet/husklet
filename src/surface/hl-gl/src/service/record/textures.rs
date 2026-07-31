@@ -58,6 +58,38 @@ pub fn tex_image_2d_format(
     }
 }
 
+/// Record the SIZED internal format the application declared for the active unit's texture. Kept as
+/// metadata beside the neutral `ir_format` (which stays RGBA8, the plane this model materializes) so a
+/// framebuffer completeness check can ask what the format actually WAS — `GL_SRGB8`, `GL_RGB9_E5`,
+/// `GL_RGB8_SNORM` and `GL_RGB8UI` are indistinguishable once mapped to a neutral format, and none of
+/// them may back a colour attachment. An unsized `GL_RGB`/`GL_RGBA` records `0`.
+pub fn tex_internal_format(ctx: &mut GlContext, internalformat: u32) {
+    let name = ctx.local.tex_unit[ctx.local.active_texture];
+    if name == 0 {
+        return;
+    }
+    if let Some(texture) = ctx.textures.get_mut(name) {
+        texture.internal_format = internalformat;
+    }
+}
+
+/// `glTexImage2D` at a level ABOVE the base — one image of a mip chain, stored beside the base image on
+/// the active unit's texture rather than replacing it (see [`crate::model::texture::GlTexture::mips`]).
+pub fn tex_image_2d_level(ctx: &mut GlContext, level: u32, w: i32, h: i32, pixels: &[u8]) {
+    if w < 0
+        || h < 0
+        || w > crate::service::query::MAX_TEXTURE_SIZE
+        || h > crate::service::query::MAX_TEXTURE_SIZE
+    {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    let name = ctx.local.tex_unit[ctx.local.active_texture];
+    if name != 0 {
+        ctx.textures.image_2d_level(name, level, w, h, pixels);
+    }
+}
+
 /// `glTexParameteri(GL_TEXTURE_2D, pname, value)` on the active unit's texture.
 pub fn tex_parameter(ctx: &mut GlContext, pname: u32, value: u32) {
     let name = ctx.local.tex_unit[ctx.local.active_texture];
@@ -83,20 +115,72 @@ pub fn tex_parameter_vector(ctx: &mut GlContext, pname: u32, values: &[u32]) {
     }
 }
 
-/// `glGenerateMipmap(target)` — validate the request. This model samples only the base level (the
-/// neutral-IR textures carry a single mip), so the mip chain is not materialized — an honest no-op on
-/// the pixel data. `target` must be a 2D/cube texture target (else `GL_INVALID_ENUM`) with a texture
-/// bound to the active unit (else `GL_INVALID_OPERATION`); the state is otherwise unchanged.
+/// `glGenerateMipmap(target)` — derive the whole mip chain from the base level by box filtering, down to
+/// 1x1 (ES 3.0 §3.8.10). `target` must be a 2D/cube texture target (else `GL_INVALID_ENUM`) with a texture
+/// bound to the active unit (else `GL_INVALID_OPERATION`).
+///
+/// This used to validate and then do nothing, because the model carried a single level. It is not a
+/// harmless partial: an application that uploads level 0, calls this, and selects a mipmap min filter gets
+/// a texture that is mipmap-COMPLETE on a conformant driver and was left with one level here.
 impl GlContext {
     pub fn generate_mipmap(&mut self, target: u32) {
         if target != GL_TEXTURE_2D && target != GL_TEXTURE_CUBE_MAP {
             self.set_gl_error(GL_INVALID_ENUM);
             return;
         }
-        if self.local.tex_unit[self.local.active_texture] == 0 {
+        let name = self.local.tex_unit[self.local.active_texture];
+        if name == 0 {
             self.set_gl_error(GL_INVALID_OPERATION);
+            return;
+        }
+        let Some(texture) = self.textures.get(name) else {
+            self.set_gl_error(GL_INVALID_OPERATION);
+            return;
+        };
+        if !texture.has_data() || texture.w <= 0 || texture.h <= 0 {
+            return;
+        }
+        let mut levels: Vec<(i32, i32, Vec<u8>)> = Vec::new();
+        let (mut w, mut h, mut source) = (texture.w, texture.h, (*texture.data).clone());
+        while w > 1 || h > 1 {
+            let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+            source = box_filter(&source, w, h, nw, nh);
+            levels.push((nw, nh, source.clone()));
+            w = nw;
+            h = nh;
+        }
+        for (index, (lw, lh, data)) in levels.into_iter().enumerate() {
+            self.textures
+                .image_2d_level(name, index as u32 + 1, lw, lh, &data);
         }
     }
+}
+
+/// Average each 2x2 source block into one destination texel (the standard box reduction ES 3.0 §3.8.10
+/// describes for a power-of-two halving). Odd source extents clamp the second sample to the last row or
+/// column rather than reading past the image.
+fn box_filter(source: &[u8], sw: i32, sh: i32, dw: i32, dh: i32) -> Vec<u8> {
+    let mut out = vec![0u8; (dw as usize) * (dh as usize) * 4];
+    let texel = |x: i32, y: i32, channel: usize| -> u32 {
+        let x = x.min(sw - 1).max(0) as usize;
+        let y = y.min(sh - 1).max(0) as usize;
+        source
+            .get((y * sw as usize + x) * 4 + channel)
+            .copied()
+            .unwrap_or(0) as u32
+    };
+    for y in 0..dh {
+        for x in 0..dw {
+            for channel in 0..4 {
+                let sum = texel(x * 2, y * 2, channel)
+                    + texel(x * 2 + 1, y * 2, channel)
+                    + texel(x * 2, y * 2 + 1, channel)
+                    + texel(x * 2 + 1, y * 2 + 1, channel);
+                out[(y as usize * dw as usize + x as usize) * 4 + channel] = ((sum + 2) / 4) as u8;
+            }
+        }
+    }
+    out
 }
 
 /// `glTexStorage2D(target, levels, internalformat, w, h)` — immutable-format allocation of the bound
@@ -123,7 +207,10 @@ pub fn tex_storage_2d(
         ctx.set_gl_error(GL_INVALID_ENUM);
         return;
     };
-    if levels != 1 || w <= 0 || h <= 0 {
+    // `levels` may name a whole mip chain; it used to be required to be exactly 1, which is a large part
+    // of why immutable storage was unusable. The ceiling is the chain a `w x h` base can actually have.
+    let max_levels = 32 - (w.max(h).max(1) as u32).leading_zeros() as i32;
+    if levels < 1 || levels > max_levels || w <= 0 || h <= 0 {
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
@@ -143,7 +230,7 @@ pub fn tex_storage_2d(
             return;
         }
     }
-    if !ctx.textures.storage_2d(name, w, h, levels, fmt) {
+    if !ctx.textures.storage_2d(name, w, h, levels, fmt, internalformat) {
         ctx.set_gl_error(GL_INVALID_VALUE);
     }
 }
@@ -165,6 +252,23 @@ impl TryFrom<InternalFormat> for TextureFormat {
                 TextureFormat::Rgba8Unorm
             }
             GL_SRGB8_ALPHA8 | GL_SRGB8 => TextureFormat::Rgba8Srgb,
+            // Signed-normalized and integer sized formats. The model stores an RGBA8 plane for all of
+            // them, so the neutral format is the same; keeping them ACCEPTED here is what makes immutable
+            // storage usable at all — `glTexStorage2D` was raising GL_INVALID_ENUM for twenty valid sized
+            // formats. Which of them may back a colour attachment is a separate question, answered by
+            // `colour_renderable` (ES 3.0 table 3.13), not by this mapping.
+            GL_R8_SNORM | GL_RG8_SNORM | GL_RGB8_SNORM | GL_RGBA8_SNORM => TextureFormat::Rgba8Unorm,
+            GL_R8UI | GL_R8I | GL_R16UI | GL_R16I | GL_R32UI | GL_R32I => TextureFormat::Rgba8Unorm,
+            GL_RG8UI | GL_RG8I | GL_RG16UI | GL_RG16I | GL_RG32UI | GL_RG32I => {
+                TextureFormat::Rgba8Unorm
+            }
+            GL_RGB8UI | GL_RGB8I | GL_RGB16UI | GL_RGB16I | GL_RGB32UI | GL_RGB32I => {
+                TextureFormat::Rgba8Unorm
+            }
+            GL_RGBA8UI | GL_RGBA8I | GL_RGBA16UI | GL_RGBA16I | GL_RGBA32UI | GL_RGBA32I => {
+                TextureFormat::Rgba8Unorm
+            }
+            GL_RGB32F => TextureFormat::Rgba32Float,
             GL_BGRA8_EXT => TextureFormat::Bgra8Unorm,
             GL_R8 | GL_R16F => TextureFormat::R8Unorm,
             GL_RG8 | GL_RG16F => TextureFormat::Rg8Unorm,
@@ -199,7 +303,7 @@ pub fn tex_storage_3d(ctx: &mut GlContext, target: u32, levels: i32, w: i32, h: 
     }
     if ctx
         .textures
-        .storage_2d(name, w, h, levels, TextureFormat::Rgba8Unorm)
+        .storage_2d(name, w, h, levels, TextureFormat::Rgba8Unorm, 0)
     {
         // storage_2d marks immutable; that is correct for glTexStorage3D too.
     } else {

@@ -1234,7 +1234,24 @@ impl<'a> ConstantEvaluator<'a> {
 
             // computational
             crate::MathFunction::Sign => {
-                component_wise_signed!(self, span, [arg], |e| { Ok([e.signum()]) })
+                // Husklet: this used Rust's `signum()`, which is NOT the sign function every shading
+                // language specifies: `f32::signum` returns +1.0 for +0.0 and -1.0 for -0.0, so it never
+                // yields zero. Every spec that naga's IR models agrees zero must map to zero — GLSL ES
+                // 3.00 §8.3 ("Returns 1.0 if x > 0, 0.0 if x = 0, and -1.0 if x < 0"), WGSL `sign`, and
+                // SPIR-V `FSign` ("Result is 1.0 if x > 0, 0.0 if x = 0, -1.0 if x < 0"). So this is a
+                // defect in the shared constant evaluator, not a GLSL-vs-WGSL semantic difference, and it
+                // is fixed here rather than in a backend: the backends' runtime `sign` (metal::sign,
+                // OpFSign) were already correct, and only the const-folded path was wrong.
+                // Confirmed against llvmpipe: `sign(0.0)` returned 1.0 instead of 0.0, while `sign(-2.0)`
+                // and `sign(3.0)` agreed — exactly the signature of a wrong zero case. The MSL emitted for
+                // `vec4(sign(0.0), sign(-2.0), sign(3.0), 1.0)` was the folded literal
+                // `float4(1.0, -1.0, 1.0, 1.0)`, which pins the fault to this fold.
+                // Integers were already correct (`i32::signum(0) == 0`); returning `zero` rather than `e`
+                // also normalises -0.0 to +0.0, matching OpFSign.
+                component_wise_signed!(self, span, [arg], |e| {
+                    let zero = Default::default();
+                    Ok([if e == zero { zero } else { e.signum() }])
+                })
             }
             crate::MathFunction::Fma => {
                 component_wise_float!(
@@ -2474,6 +2491,72 @@ mod tests {
     };
 
     use super::{Behavior, ConstantEvaluator, ExpressionKindTracker, WgslRestrictions};
+
+    /// Husklet: `sign(0.0)` used to constant-fold to `1.0`, because the evaluator used Rust's
+    /// `f32::signum`, which returns +/-1.0 for +/-0.0 and never zero. GLSL ES 3.00 §8.3 ("Returns
+    /// 1.0 if x > 0, 0.0 if x = 0, and -1.0 if x < 0"), WGSL `sign`, and SPIR-V `FSign` all require
+    /// zero to map to zero, so this was wrong for every front end, not a GLSL-specific mapping
+    /// issue. The non-zero cases are asserted alongside it: they were already correct against the
+    /// reference and must stay that way.
+    #[test]
+    fn sign_of_zero_is_zero() {
+        use crate::MathFunction;
+
+        fn eval_sign(literal: Literal) -> Literal {
+            let mut types = UniqueArena::new();
+            let constants = Arena::new();
+            let overrides = Arena::new();
+            let mut global_expressions = Arena::new();
+
+            let arg = global_expressions.append(Expression::Literal(literal), Default::default());
+
+            let expression_kind_tracker =
+                &mut ExpressionKindTracker::from_arena(&global_expressions);
+            let mut solver = ConstantEvaluator {
+                behavior: Behavior::Wgsl(WgslRestrictions::Const(None)),
+                types: &mut types,
+                constants: &constants,
+                overrides: &overrides,
+                expressions: &mut global_expressions,
+                expression_kind_tracker,
+            };
+
+            let expr = Expression::Math {
+                fun: MathFunction::Sign,
+                arg,
+                arg1: None,
+                arg2: None,
+                arg3: None,
+            };
+            let res = solver
+                .try_eval_and_append(expr, Default::default())
+                .unwrap();
+            match global_expressions[res] {
+                Expression::Literal(l) => l,
+                ref other => panic!("sign did not fold to a literal: {other:?}"),
+            }
+        }
+
+        // The regression itself.
+        assert_eq!(eval_sign(Literal::F32(0.0)), Literal::F32(0.0));
+        // -0.0 is still "x = 0". Compared by bit pattern, since `-0.0 == 0.0` would pass either
+        // way: the result is normalised to *positive* zero, matching SPIR-V `OpFSign`.
+        match eval_sign(Literal::F32(-0.0)) {
+            Literal::F32(v) => assert_eq!(v.to_bits(), 0.0f32.to_bits()),
+            other => panic!("expected an f32 literal, got {other:?}"),
+        }
+
+        // Must NOT change: these already agreed with the reference implementation.
+        assert_eq!(eval_sign(Literal::F32(-2.0)), Literal::F32(-1.0));
+        assert_eq!(eval_sign(Literal::F32(3.0)), Literal::F32(1.0));
+        assert_eq!(eval_sign(Literal::F32(f32::INFINITY)), Literal::F32(1.0));
+
+        // Integers were already correct (`i32::signum(0) == 0`); pinned so the shared closure
+        // change cannot regress them.
+        assert_eq!(eval_sign(Literal::I32(0)), Literal::I32(0));
+        assert_eq!(eval_sign(Literal::I32(-7)), Literal::I32(-1));
+        assert_eq!(eval_sign(Literal::I32(7)), Literal::I32(1));
+    }
 
     #[test]
     fn unary_op() {

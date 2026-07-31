@@ -1357,6 +1357,48 @@ impl<W: Write> Writer<W> {
         Ok(())
     }
 
+    /// Husklet: emit code for `outerProduct`, which Metal has no intrinsic for.
+    ///
+    /// Builds `metal::floatCxR(c * r[0], c * r[1], ...)`, one column per component of `r`, per
+    /// GLSL ES 3.00 §8.6 (`outerProduct(c, r)[j][i] == c[i] * r[j]`).
+    ///
+    /// Note that naga's validator (`valid/expression.rs`, the `Mf::Outer` arm) requires both
+    /// operands to have the *same* type, so only square results are reachable today; the non-square
+    /// `mat2x3`-style overloads that `glsl-in` declares are rejected upstream of this point. That is
+    /// a pre-existing naga limitation and is deliberately not papered over here.
+    fn put_outer_product(
+        &mut self,
+        arg: Handle<crate::Expression>,
+        arg1: Handle<crate::Expression>,
+        context: &ExpressionContext,
+    ) -> BackendResult {
+        // `arg` (`c`) supplies the row count, `arg1` (`r`) the column count.
+        let (rows, scalar) = match *context.resolve_type(arg) {
+            crate::TypeInner::Vector { size, scalar } => (size, scalar),
+            _ => unreachable!("outerProduct operand 0 should already be validated as a vector"),
+        };
+        let columns = match *context.resolve_type(arg1) {
+            crate::TypeInner::Vector { size, .. } => size,
+            _ => unreachable!("outerProduct operand 1 should already be validated as a vector"),
+        };
+
+        put_numeric_type(&mut self.out, scalar, &[rows, columns])?;
+        write!(self.out, "(")?;
+        for column in 0..columns as usize {
+            if column != 0 {
+                write!(self.out, ", ")?;
+            }
+            // Both operands are marked as cacheable so this expands to a temporary name rather
+            // than re-emitting the whole sub-expression once per column.
+            self.put_expression(arg, context, true)?;
+            write!(self.out, " * ")?;
+            self.put_expression(arg1, context, true)?;
+            write!(self.out, ".{}", back::COMPONENTS[column])?;
+        }
+        write!(self.out, ")")?;
+        Ok(())
+    }
+
     /// Emit code for the sign(i32) expression.
     ///
     fn put_isign(
@@ -1940,7 +1982,22 @@ impl<W: Write> Writer<W> {
                             "Correct TypeInner for dot product should be already validated"
                         ),
                     },
-                    Mf::Outer => return Err(Error::UnsupportedCall(format!("{fun:?}"))),
+                    // Husklet: the MSL backend had no lowering for `Mf::Outer` at all and simply
+                    // returned `UnsupportedCall("Outer")`. That is the whole explanation for the
+                    // reported `outerProduct` signature: naga runs on the host at pipeline-creation
+                    // time, long after glCompileShader/glLinkProgram have returned success, so the
+                    // shader links, reports GL_NO_ERROR, and then draws nothing when the MSL writer
+                    // errors out. Evidence, not speculation: feeding
+                    // `mat2 m = outerProduct(vec2(1.0,2.0), vec2(3.0,4.0));` through
+                    // glsl-in + validate + msl-out reproduces exactly `MSL ERR: UnsupportedCall("Outer")`,
+                    // while glsl-in and the validator both accept it.
+                    // Metal has no `outerProduct` intrinsic, so it is expanded here into a matrix
+                    // constructed from its columns. GLSL ES 3.00 §8.6 defines
+                    // `outerProduct(c, r)[j][i] == c[i] * r[j]`, i.e. column j is `c * r[j]`, which is
+                    // also what SPIR-V `OpOuterProduct` and the glsl-out backend already emit.
+                    // This is purely additive: every input that reaches here previously failed, so no
+                    // existing WGSL or SPIR-V behaviour can change.
+                    Mf::Outer => return self.put_outer_product(arg, arg1.unwrap(), context),
                     Mf::Cross => "cross",
                     Mf::Distance => "distance",
                     Mf::Length if scalar_argument => "abs",

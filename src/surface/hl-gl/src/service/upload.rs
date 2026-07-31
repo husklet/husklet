@@ -31,21 +31,30 @@ impl Upload {
         if width == 0 || height == 0 {
             return None;
         }
-        let channels = match format {
-            GL_RED | GL_ALPHA | GL_LUMINANCE => 1,
-            GL_RG | GL_LUMINANCE_ALPHA => 2,
-            GL_RGB => 3,
-            GL_RGBA | GL_BGRA_EXT => 4,
+        let channels: usize = match format {
+            GL_RED | GL_ALPHA | GL_LUMINANCE | GL_RED_INTEGER | GL_DEPTH_COMPONENT => 1,
+            GL_RG | GL_LUMINANCE_ALPHA | GL_RG_INTEGER => 2,
+            GL_RGB | GL_RGB_INTEGER => 3,
+            GL_RGBA | GL_BGRA_EXT | GL_RGBA_INTEGER => 4,
             _ => return None,
         };
+        // The component width of the source type. The model materializes an RGBA8 plane whatever the
+        // declared format, so a wider or signed component is narrowed at conversion — an honest partial.
+        // What matters here is that the upload is ACCEPTED: refusing these types made `glTexSubImage2D`
+        // into immutable storage fail for thirty-two sized formats with GL_INVALID_VALUE, which left
+        // `glTexStorage2D` broadly unusable.
         let source_bpp = match type_ {
-            GL_UNSIGNED_BYTE => channels,
+            GL_UNSIGNED_BYTE | GL_BYTE => channels,
+            GL_UNSIGNED_SHORT | GL_SHORT | GL_HALF_FLOAT => channels.checked_mul(2)?,
+            GL_UNSIGNED_INT | GL_INT | GL_FLOAT => channels.checked_mul(4)?,
             GL_UNSIGNED_SHORT_5_6_5 if format == GL_RGB => 2,
             // ES 3.0 table 3.2 pairs each packed type with exactly one format. Refusing these made the
             // whole upload fail, which is why an RGBA4 / RGB5_A1 / RGB10_A2 texture sampled as all-zero
             // while its `glTexImage2D` reported no error at all.
             GL_UNSIGNED_SHORT_4_4_4_4 | GL_UNSIGNED_SHORT_5_5_5_1 if format == GL_RGBA => 2,
-            GL_UNSIGNED_INT_2_10_10_10_REV if format == GL_RGBA => 4,
+            GL_UNSIGNED_INT_2_10_10_10_REV if format == GL_RGBA || format == GL_RGBA_INTEGER => 4,
+            GL_UNSIGNED_INT_5_9_9_9_REV | GL_UNSIGNED_INT_10F_11F_11F_REV if format == GL_RGB => 4,
+            GL_UNSIGNED_INT_24_8 if format == GL_DEPTH_STENCIL => 4,
             _ => return None,
         };
         let row_pixels = if store.unpack_row_length > 0 {
@@ -95,8 +104,18 @@ impl Upload {
                     out.extend_from_slice(&packed);
                     continue;
                 }
+                // A non-byte component type is narrowed to 8 bits per channel (see `Upload::new`).
+                if let Some(narrowed) = self.narrowed(pixel) {
+                    out.extend_from_slice(&narrowed);
+                    continue;
+                }
                 match self.format {
-                    GL_RED => out.extend_from_slice(&[pixel[0], 0, 0, 0xff]),
+                    GL_RED | GL_RED_INTEGER | GL_DEPTH_COMPONENT => {
+                        out.extend_from_slice(&[pixel[0], 0, 0, 0xff])
+                    }
+                    GL_RG_INTEGER => out.extend_from_slice(&[pixel[0], pixel[1], 0, 0xff]),
+                    GL_RGB_INTEGER => out.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 0xff]),
+                    GL_RGBA_INTEGER => out.extend_from_slice(pixel),
                     // ES 2.0 table 3.11: a GL_ALPHA texel samples as (0, 0, 0, A) — the RGB is ZERO, not
                     // one. Glyph and mask atlases are GL_ALPHA, so white RGB here tinted every masked
                     // draw white instead of leaving the mask's own colour to the shader.
@@ -159,6 +178,74 @@ impl Upload {
             }
             _ => None,
         }
+    }
+}
+
+impl Upload {
+    /// Narrow one texel whose components are WIDER than a byte (or signed) into RGBA8, or `None` when the
+    /// components are already unsigned bytes and the per-format path applies.
+    ///
+    /// The model materializes an RGBA8 plane whatever the declared format, so this is where precision is
+    /// lost. Integer formats carry a numeric value and are clamped to `0..=255`; float formats carry a
+    /// normalized value and are scaled by 255. Both are honest partials, and both are better than the
+    /// refusal they replace — the whole upload used to fail.
+    fn narrowed(self, pixel: &[u8]) -> Option<[u8; 4]> {
+        let integer = matches!(
+            self.format,
+            GL_RED_INTEGER | GL_RG_INTEGER | GL_RGB_INTEGER | GL_RGBA_INTEGER
+        );
+        let channels = pixel.len() / self.component_width()?;
+        let mut out = [0u8, 0, 0, 0xff];
+        for channel in 0..channels.min(4) {
+            let base = channel * self.component_width()?;
+            let value = match self.type_ {
+                GL_BYTE => (pixel[base] as i8).max(0) as u8,
+                GL_UNSIGNED_SHORT => {
+                    let raw = u16::from_le_bytes([pixel[base], pixel[base + 1]]);
+                    if integer {
+                        raw.min(255) as u8
+                    } else {
+                        (raw / 257) as u8
+                    }
+                }
+                GL_SHORT => {
+                    let raw = i16::from_le_bytes([pixel[base], pixel[base + 1]]);
+                    raw.clamp(0, 255) as u8
+                }
+                GL_UNSIGNED_INT => {
+                    let raw =
+                        u32::from_le_bytes(pixel[base..base + 4].try_into().ok()?);
+                    raw.min(255) as u8
+                }
+                GL_INT => {
+                    let raw = i32::from_le_bytes(pixel[base..base + 4].try_into().ok()?);
+                    raw.clamp(0, 255) as u8
+                }
+                GL_FLOAT => {
+                    let raw = f32::from_le_bytes(pixel[base..base + 4].try_into().ok()?);
+                    (raw.clamp(0.0, 1.0) * 255.0).round() as u8
+                }
+                _ => return None,
+            };
+            out[channel] = value;
+        }
+        // A one- or two-channel source leaves the remaining colour channels at zero and alpha opaque,
+        // matching the per-format byte path above.
+        if channels < 4 {
+            out[3] = 0xff;
+        }
+        Some(out)
+    }
+
+    /// The byte width of ONE component of this upload's type, or `None` for a packed type (whose whole
+    /// texel is decoded by [`Self::packed`]) or an unsigned-byte type (the per-format path).
+    fn component_width(self) -> Option<usize> {
+        Some(match self.type_ {
+            GL_BYTE => 1,
+            GL_UNSIGNED_SHORT | GL_SHORT | GL_HALF_FLOAT => 2,
+            GL_UNSIGNED_INT | GL_INT | GL_FLOAT => 4,
+            _ => return None,
+        })
     }
 }
 

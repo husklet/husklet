@@ -1397,8 +1397,98 @@ fn inject_common_builtin(
                 declaration.overloads.push(module.add_builtin(args, fun))
             }
         }
-        // TODO: https://github.com/gfx-rs/naga/issues/2526
-        // "modf" | "frexp" => { ... }
+        // Husklet: `modf` was never declared here — it sat behind the upstream TODO
+        // (https://github.com/gfx-rs/naga/issues/2526) alongside `frexp`. That is the entire
+        // explanation for its reported signature: naga runs on the host at pipeline-creation time,
+        // long after glCompileShader/glLinkProgram have returned success, so a call to `modf` makes
+        // glsl-in fail with `SemanticError("Unknown function 'modf'")`, the shader still links, GL
+        // reports GL_NO_ERROR, and the draw silently produces nothing. Reproduced directly:
+        // `float ip; float fp = modf(vin.x, ip);` yields exactly that error from `Frontend::parse`.
+        //
+        // naga's IR *can* express this: `MathFunction::Modf` exists (src/lib.rs), it resolves to the
+        // `PredeclaredType::ModfResult { fract, whole }` struct (src/proc/typifier.rs), and the MSL
+        // backend already lowers it via `MODF_FUNCTION` (src/back/msl/writer.rs). Only the GLSL front
+        // end was missing. So this is a declaration, not a new IR feature.
+        //
+        // GLSL ES 3.00 §8.3: "genType modf(genType x, out genType i)" — "Returns the fractional part
+        // of x and sets i to the integer part (as a whole number floating point value). Both the
+        // return value and the output parameter will have the same sign as x." naga's IR models the
+        // WGSL/SPIR-V form, which returns both halves in a struct with the same truncate-toward-zero
+        // split, so `.fract` is the return value and `.whole` is stored to the out parameter.
+        //
+        // `frexp` is deliberately NOT added: GLSL's `frexp` writes an `out int` exponent, and wiring
+        // that up needs a signed-integer store next to the float result. It is left on the upstream
+        // TODO rather than half-implemented.
+        "modf" => {
+            // bits layout
+            // bit 0 through 1 - dims
+            for bits in 0..0b100 {
+                let size = match bits {
+                    0b00 => None,
+                    0b01 => Some(VectorSize::Bi),
+                    0b10 => Some(VectorSize::Tri),
+                    _ => Some(VectorSize::Quad),
+                };
+
+                let ty = match size {
+                    Some(size) => TypeInner::Vector {
+                        size,
+                        scalar: float_scalar,
+                    },
+                    None => TypeInner::Scalar(float_scalar),
+                };
+
+                let mut overload = module.add_builtin(vec![ty.clone(), ty], MacroCall::Modf);
+                // `add_builtin` marks every parameter as `In`; the second one is GLSL's `out i`.
+                overload.parameters_info[1].qualifier = ParameterQualifier::Out;
+                declaration.overloads.push(overload)
+            }
+        }
+        // Husklet: `matrixCompMult` was not declared by glsl-in at all — the only occurrence of the
+        // name anywhere in naga 24.0.0 was in the *glsl-out* keyword list (src/back/glsl/keywords.rs),
+        // never in the front end. Same silent-failure shape as `modf` above: glsl-in returns
+        // `SemanticError("Unknown function 'matrixCompMult'")` at pipeline-creation time, well after
+        // the guest's glCompileShader/glLinkProgram reported success, so the program links, GL reports
+        // GL_NO_ERROR, and nothing is drawn. Reproduced directly with
+        // `mat2 c = matrixCompMult(mat2(1.,2.,3.,4.), mat2(5.,6.,7.,8.));`.
+        //
+        // GLSL ES 3.00 §8.6: "mat matrixCompMult(mat x, mat y)" — "Multiply matrix x by matrix y
+        // component-wise, i.e., result[i][j] is the scalar product of x[i][j] and y[i][j]. Note: to
+        // get linear algebraic matrix multiplication, use the multiply operator (*)."
+        //
+        // naga's IR has no component-wise matrix `MathFunction` (its `Multiply` on two matrices is
+        // the linear-algebraic one), so this is lowered in the front end into a `Compose` of per-column
+        // vector `Multiply`s, which every backend already supports. Confined to glsl-in: no shared
+        // layer, no IR variant, so WGSL and SPIR-V inputs are untouched.
+        "matrixCompMult" => {
+            // bits layout
+            // bit 0 through 1 - columns
+            // bit 2 through 3 - rows
+            for bits in 0..0b10000 {
+                let columns = match bits & 0b11 {
+                    0b00 => VectorSize::Bi,
+                    0b01 => VectorSize::Tri,
+                    0b10 => VectorSize::Quad,
+                    _ => continue,
+                };
+                let rows = match (bits >> 2) & 0b11 {
+                    0b00 => VectorSize::Bi,
+                    0b01 => VectorSize::Tri,
+                    0b10 => VectorSize::Quad,
+                    _ => continue,
+                };
+
+                let ty = TypeInner::Matrix {
+                    columns,
+                    rows,
+                    scalar: float_scalar,
+                };
+
+                declaration.overloads.push(
+                    module.add_builtin(vec![ty.clone(), ty], MacroCall::MatrixCompMult),
+                )
+            }
+        }
         "cross" => {
             let args = vec![
                 TypeInner::Vector {
@@ -1565,6 +1655,11 @@ pub enum MacroCall {
     },
     ImageStore,
     MathFunction(MathFunction),
+    /// Husklet: GLSL ES 3.00 §8.3 `modf`, lowered onto [`MathFunction::Modf`] plus a store of the
+    /// `.whole` half into the `out` parameter.
+    Modf,
+    /// Husklet: GLSL ES 3.00 §8.6 `matrixCompMult`, lowered into a per-column vector multiply.
+    MatrixCompMult,
     FindLsbUint,
     FindMsbUint,
     BitfieldExtract,
@@ -1852,6 +1947,109 @@ impl MacroCall {
                 },
                 Span::default(),
             )?,
+            // Husklet: see the `"modf"` declaration above for why this exists.
+            MacroCall::Modf => {
+                let (size, scalar) = match *ctx.resolve_type(args[0], meta)? {
+                    TypeInner::Scalar(scalar) => (None, scalar),
+                    TypeInner::Vector { size, scalar } => (Some(size), scalar),
+                    _ => unreachable!("modf overloads only accept float scalars and vectors"),
+                };
+
+                // The `__modf_result_*` struct is a predeclared special type; it must be registered
+                // before the typifier can resolve the `Math` expression's result.
+                ctx.module
+                    .generate_predeclared_type(crate::PredeclaredType::ModfResult { size, scalar });
+
+                let result = ctx.add_expression(
+                    Expression::Math {
+                        fun: MathFunction::Modf,
+                        arg: args[0],
+                        arg1: None,
+                        arg2: None,
+                        arg3: None,
+                    },
+                    meta,
+                )?;
+
+                // Member 0 is `fract`, member 1 is `whole` (src/front/type_gen.rs).
+                let whole = ctx.add_expression(
+                    Expression::AccessIndex {
+                        base: result,
+                        index: 1,
+                    },
+                    meta,
+                )?;
+
+                ctx.emit_restart();
+                ctx.body.push(
+                    crate::Statement::Store {
+                        pointer: args[1],
+                        value: whole,
+                    },
+                    meta,
+                );
+
+                ctx.add_expression(
+                    Expression::AccessIndex {
+                        base: result,
+                        index: 0,
+                    },
+                    meta,
+                )?
+            }
+            // Husklet: see the `"matrixCompMult"` declaration above for why this exists.
+            MacroCall::MatrixCompMult => {
+                let (columns, rows, scalar) = match *ctx.resolve_type(args[0], meta)? {
+                    TypeInner::Matrix {
+                        columns,
+                        rows,
+                        scalar,
+                    } => (columns, rows, scalar),
+                    _ => unreachable!("matrixCompMult overloads only accept matrices"),
+                };
+
+                let mut components = Vec::with_capacity(columns as usize);
+                for index in 0..columns as u32 {
+                    let left = ctx.add_expression(
+                        Expression::AccessIndex {
+                            base: args[0],
+                            index,
+                        },
+                        meta,
+                    )?;
+                    let right = ctx.add_expression(
+                        Expression::AccessIndex {
+                            base: args[1],
+                            index,
+                        },
+                        meta,
+                    )?;
+                    // `Multiply` on two vectors is component-wise in naga's IR; only matrix operands
+                    // give it the linear-algebraic meaning, which is why this goes column by column.
+                    components.push(ctx.add_expression(
+                        Expression::Binary {
+                            op: BinaryOperator::Multiply,
+                            left,
+                            right,
+                        },
+                        meta,
+                    )?);
+                }
+
+                let ty = ctx.module.types.insert(
+                    Type {
+                        name: None,
+                        inner: TypeInner::Matrix {
+                            columns,
+                            rows,
+                            scalar,
+                        },
+                    },
+                    Span::default(),
+                );
+
+                ctx.add_expression(Expression::Compose { ty, components }, meta)?
+            }
             mc @ (MacroCall::FindLsbUint | MacroCall::FindMsbUint) => {
                 let fun = match mc {
                     MacroCall::FindLsbUint => MathFunction::FirstTrailingBit,

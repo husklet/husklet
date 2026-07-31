@@ -521,6 +521,18 @@ pub(super) fn lower_draw_n(
             width: tb.w,
             height: tb.h,
         });
+        // The mip levels above the base, each into its own level of the same host texture.
+        for &(src, mip, width, height) in &tb.mip_stages {
+            copies.push(Enc::CopyBufferToTexture {
+                src,
+                src_offset: 0,
+                bytes_per_row: width * 4,
+                dst: tb.tex_ir,
+                mip,
+                width,
+                height,
+            });
+        }
     }
     let mut ops: Vec<Enc> = Vec::new();
     ops.push(Enc::SetPipeline(pipeline_ir));

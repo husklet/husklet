@@ -854,3 +854,63 @@ fn expressions() {
         )
         .unwrap();
 }
+
+/// Husklet: regression cover for built-ins that `glsl-in` used to reject outright.
+///
+/// These matter more than a normal parser test because of where naga sits in Husklet: it runs on
+/// the host at pipeline-creation time, long after the guest's `glCompileShader`/`glLinkProgram`
+/// have already returned success. A built-in that makes `Frontend::parse` return `Err` therefore
+/// does not surface as a compile error — the program links, GL reports `GL_NO_ERROR`, and the draw
+/// silently produces nothing. Each of these previously failed with
+/// `SemanticError("Unknown function '...'")`.
+#[test]
+fn husklet_builtin_declarations() {
+    let mut frontend = Frontend::default();
+
+    // GLSL ES 3.00 §8.3: `genType modf(genType x, out genType i)`.
+    for ty in ["float", "vec2", "vec3", "vec4"] {
+        frontend
+            .parse(
+                &Options::from(ShaderStage::Fragment),
+                &format!(
+                    "#version 450\nvoid main() {{ {ty} i; {ty} f = modf({ty}(1.5), i); }}\n"
+                ),
+            )
+            .unwrap();
+    }
+
+    // GLSL ES 3.00 §8.6: `mat matrixCompMult(mat x, mat y)`, for every matCxR shape.
+    for cols in 2..=4 {
+        for rows in 2..=4 {
+            let ty = if cols == rows {
+                format!("mat{cols}")
+            } else {
+                format!("mat{cols}x{rows}")
+            };
+            frontend
+                .parse(
+                    &Options::from(ShaderStage::Fragment),
+                    &format!(
+                        "#version 450\nvoid main() {{ {ty} a = {ty}(1.0); {ty} m = matrixCompMult(a, a); }}\n"
+                    ),
+                )
+                .unwrap();
+        }
+    }
+
+    // GLSL ES 3.00 §8.6: `outerProduct`. Only the square overloads are exercised here: naga's
+    // validator (`valid/expression.rs`, the `Mf::Outer` arm) requires both operands to have the
+    // same type, so the non-square `mat2x3`-style results that this front end declares are
+    // rejected later, during validation. That is a pre-existing naga IR limitation, not something
+    // this test should pretend away.
+    for size in 2..=4 {
+        frontend
+            .parse(
+                &Options::from(ShaderStage::Fragment),
+                &format!(
+                    "#version 450\nvoid main() {{ mat{size} m = outerProduct(vec{size}(1.0), vec{size}(2.0)); }}\n"
+                ),
+            )
+            .unwrap();
+    }
+}

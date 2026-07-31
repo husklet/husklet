@@ -85,3 +85,5 @@ mod unlinked;
 mod mrt;
 #[path = "lowering_extra/vformat.rs"]
 mod vformat;
+#[path = "lowering_extra/mipmap.rs"]
+mod mipmap;

@@ -312,7 +312,7 @@ pub extern "C" fn glBindTexture(target: u32, texture: u32) {
 pub extern "C" fn glTexImage2D(
     _target: u32,
     level: i32,
-    _internalformat: i32,
+    internalformat: i32,
     width: i32,
     height: i32,
     _border: i32,
@@ -326,16 +326,21 @@ pub extern "C" fn glTexImage2D(
             s.gl.set_gl_error(GL_INVALID_VALUE);
             return;
         }
+        let rgba = unsafe { to_rgba8(&s.gl, format, type_, width, height, pixels) };
         // `level` was ignored, so EVERY level of a mip chain redefined the BASE image and the last, 1×1
         // upload won — a mipmapped texture collapsed to a single texel and every draw sampling it came
-        // back a flat colour. This model samples the base level only (see `glGenerateMipmap`), so a
-        // non-base level is accepted and its pixels are not stored. That is exact for a magnifying draw,
-        // which needs level 0, and remains an honest partial for a minifying one.
+        // back a flat colour, whatever its min filter. A non-base level now lands beside the base image
+        // instead of replacing it (see `GlTexture::mips`).
         if level > 0 {
+            record::tex_image_2d_level(&mut s.gl, level as u32, width, height, &rgba);
             return;
         }
-        let rgba = unsafe { to_rgba8(&s.gl, format, type_, width, height, pixels) };
-        s.redefine_texture(|ctx| record::tex_image_2d(ctx, width, height, &rgba))
+        s.redefine_texture(|ctx| {
+            record::tex_image_2d(ctx, width, height, &rgba);
+            // The declared internal format is metadata the completeness check needs; it does not change
+            // which plane is materialized (see `record::tex_internal_format`).
+            record::tex_internal_format(ctx, internalformat.max(0) as u32);
+        })
     });
 }
 

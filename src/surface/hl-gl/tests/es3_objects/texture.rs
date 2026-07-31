@@ -30,10 +30,17 @@ fn tex_storage_2d_sizes_and_seals_the_texture() {
     record::tex_storage_2d(&mut c, GL_TEXTURE_2D, 1, GL_RGBA, 16, 16);
     assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
 
-    // Bad levels / extent → GL_INVALID_VALUE; bad target → GL_INVALID_ENUM.
+    // ES 3.0 §3.8.4: `levels` must be in `1..=floor(log2(max(w, h))) + 1`. An 8x8 texture therefore
+    // accepts 1 through 4 (8, 4, 2, 1). This asserted that 2 was GL_INVALID_VALUE, which encoded the
+    // driver's old "base level only" restriction — a large part of why immutable storage was unusable.
     let _ = bound_texture(&mut c);
-    record::tex_storage_2d(&mut c, GL_TEXTURE_2D, 2, GL_RGBA, 8, 8);
-    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
+    record::tex_storage_2d(&mut c, GL_TEXTURE_2D, 4, GL_RGBA, 8, 8);
+    assert_eq!(c.take_gl_error(), GL_NO_ERROR, "8x8 has four mip levels");
+    let _ = bound_texture(&mut c);
+    record::tex_storage_2d(&mut c, GL_TEXTURE_2D, 5, GL_RGBA, 8, 8);
+    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE, "but not five");
+    record::tex_storage_2d(&mut c, GL_TEXTURE_2D, 0, GL_RGBA, 8, 8);
+    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE, "nor zero");
     record::tex_storage_2d(&mut c, GL_TEXTURE_3D, 1, GL_RGBA, 8, 8);
     assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
 }

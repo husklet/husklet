@@ -88,6 +88,14 @@ impl PartialEq for SharedPixels {
     }
 }
 
+/// One mip level above the base (see [`GlTexture::mips`]): its extent and RGBA8 pixels.
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct MipLevel {
+    pub w: i32,
+    pub h: i32,
+    pub data: Arc<Vec<u8>>,
+}
+
 /// One live GL texture object: RGBA8 pixels + the min/mag filter + S/T wrap GL enums.
 #[derive(Clone, PartialEq, Debug)]
 pub struct GlTexture {
@@ -108,13 +116,21 @@ pub struct GlTexture {
     /// The mip-level count declared by `glTexStorage*` (`1` for a mutable texture — the base level only).
     pub levels: i32,
     /// `GL_TEXTURE_BASE_LEVEL` / `GL_TEXTURE_MAX_LEVEL` — the level range the app declared usable.
-    ///
-    /// This model stores ONE image per texture (the base level), so these do not yet select a level to
-    /// sample; they are real, queryable state an application sets and reads back, and reporting the
-    /// initial `0` / `1000` for whatever it had set made `glGetTexParameteriv` disagree with the value
-    /// the app had just written.
     pub base_level: i32,
     pub max_level: i32,
+    /// Mip levels ABOVE the base: `mips[i]` is level `i + 1`. EMPTY for the overwhelmingly common
+    /// single-level texture, whose base image stays in `data`/`w`/`h` exactly as before — so every reader
+    /// of those fields (FBO attachments, readback, shared EGLImage pixels) is untouched.
+    ///
+    /// `glTexImage2D` used to IGNORE its `level` argument, so each level of a mip chain redefined the base
+    /// image and the last, 1x1 upload won: a mipmapped texture collapsed to one texel and every draw
+    /// sampling it read a flat colour.
+    pub mips: Vec<MipLevel>,
+    /// The SIZED GL internal format the application declared (`0` when it gave an unsized one, which is
+    /// RGBA8 here). The neutral `ir_format` cannot stand in for it: `GL_SRGB8`, `GL_RGB9_E5`,
+    /// `GL_RGB8_SNORM` and `GL_RGB8UI` all materialize as an RGBA8 plane, yet none of them is
+    /// colour-renderable, and telling them apart is what a framebuffer completeness check needs.
+    pub internal_format: u32,
     /// The neutral-IR texel format this texture lowers to (a `CreateTexture` `format`, and — when the
     /// texture is a framebuffer color attachment — the render-target + surface format). Chosen from the
     /// `glTexImage2D` internal format; defaults to `Rgba8Unorm` (the RGBA8 upload the model materializes).
@@ -157,6 +173,8 @@ impl Default for GlTexture {
             levels: 1,
             base_level: 0,
             max_level: 1000,
+            mips: Vec::new(),
+            internal_format: 0,
             ir_format: TextureFormat::Rgba8Unorm,
             real_pixels: false,
             gpu_authoritative: false,
@@ -205,6 +223,33 @@ impl GlTexture {
     /// Has this texture usable sampled content (materialized pixels)?
     pub fn has_data(&self) -> bool {
         !self.data.is_empty()
+    }
+
+    /// The CONTIGUOUS mip chain above the base level, stopping at the first level the application never
+    /// uploaded. A host texture must have every level it declares, so a gap ends the chain rather than
+    /// leaving a hole — and a chain whose extents do not halve is not a mip chain at all, so it is
+    /// rejected here instead of being handed to the host as one.
+    pub fn mip_chain(&self) -> &[MipLevel] {
+        let mut count = 0;
+        let (mut w, mut h) = (self.w, self.h);
+        for level in &self.mips {
+            let (want_w, want_h) = ((w / 2).max(1), (h / 2).max(1));
+            if level.data.is_empty() || level.w != want_w || level.h != want_h {
+                break;
+            }
+            count += 1;
+            w = level.w;
+            h = level.h;
+        }
+        &self.mips[..count]
+    }
+
+    /// The number of mip levels the host texture should declare: the base plus its contiguous chain,
+    /// clamped by `GL_TEXTURE_MAX_LEVEL`.
+    pub fn mip_levels(&self) -> u32 {
+        let available = 1 + self.mip_chain().len() as u32;
+        let allowed = self.max_level.max(0).saturating_add(1) as u32;
+        available.min(allowed).max(1)
     }
 
     /// Has this texture received a REAL pixel upload (`glTexImage2D`-with-pixels / `glTexSubImage2D` /
@@ -467,6 +512,41 @@ impl Textures {
         t.gen = generation;
     }
 
+    /// `glTexImage2D` at a level ABOVE the base — one image of a mip chain. Stored beside the base image
+    /// (see [`GlTexture::mips`]) rather than replacing it, and bumps the generation so the resident host
+    /// texture is rebuilt with the new level count.
+    ///
+    /// A level far past any plausible chain is ignored rather than allowed to allocate: the level index is
+    /// application input, and `1 << level` is the extent it implies.
+    pub fn image_2d_level(
+        &mut self,
+        name: u32,
+        level: u32,
+        w: i32,
+        h: i32,
+        pixels: &[u8],
+    ) -> bool {
+        const MAX_LEVELS: usize = 16;
+        if level == 0 || level as usize > MAX_LEVELS || w <= 0 || h <= 0 {
+            return false;
+        }
+        let generation = self.generation();
+        let Some(t) = self.map.get_mut(&name) else {
+            return false;
+        };
+        let index = level as usize - 1;
+        if t.mips.len() <= index {
+            t.mips.resize(index + 1, MipLevel::default());
+        }
+        t.mips[index] = MipLevel {
+            w,
+            h,
+            data: Arc::new(pixels.to_vec()),
+        };
+        t.gen = generation;
+        true
+    }
+
     /// Define host-external storage without allocating or reading a CPU shadow plane.
     pub fn external_image_2d(&mut self, name: u32, w: i32, h: i32, format: TextureFormat) {
         let generation = self.generation();
@@ -493,6 +573,7 @@ impl Textures {
         h: i32,
         levels: i32,
         format: TextureFormat,
+        internal_format: u32,
     ) -> bool {
         let Some(size) = (w as usize)
             .checked_mul(h as usize)
@@ -507,6 +588,7 @@ impl Textures {
         t.w = w;
         t.h = h;
         t.ir_format = format;
+        t.internal_format = internal_format;
         t.data = Arc::new(vec![0u8; size]);
         t.immutable = true;
         t.levels = levels;

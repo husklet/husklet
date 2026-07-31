@@ -64,6 +64,9 @@ pub(super) struct TexBind {
     pub(super) stage_ir: u32,
     pub(super) w: u32,
     pub(super) h: u32,
+    /// Staging buffers for the mip levels ABOVE the base, as `(buffer, level, width, height)`. EMPTY for
+    /// the single-level textures that are the overwhelming majority, so their lowering is unchanged.
+    pub(super) mip_stages: Vec<(u32, u32, u32, u32)>,
     pub(super) sampler: String,
     pub(super) flip_y: bool,
     pub(super) swizzle: [u32; 4],
@@ -160,6 +163,7 @@ pub(super) fn lower_textures(
                     sampler: sampler_name(name, element, elements),
                     flip_y: true,
                     swizzle: d.tex_swizzles[unit],
+                    mip_stages: Vec::new(),
                 });
                 continue;
             }
@@ -194,6 +198,7 @@ pub(super) fn lower_textures(
                             sampler: sampler_name(name, element, elements),
                             flip_y: true,
                             swizzle: d.tex_swizzles[unit],
+                            mip_stages: Vec::new(),
                         });
                         continue;
                     }
@@ -266,6 +271,7 @@ pub(super) fn lower_textures(
                         sampler: sampler_name(name, element, elements),
                         flip_y: false,
                         swizzle: d.tex_swizzles[unit],
+                        mip_stages: Vec::new(),
                     });
                     continue;
                 }
@@ -331,6 +337,11 @@ pub(super) fn lower_textures(
             };
             let sampler = Pipeline::sampler_desc(&t, &d.samp_objs[unit]);
             let (samp_ir, create_sampler) = ctx.sampler_ir(&sampler)?;
+            // The contiguous mip chain above the base (empty for a single-level texture). Every declared
+            // level must be uploaded, so the chain and the level count are taken from one place.
+            let chain = t.mip_chain().to_vec();
+            let mip_levels = t.mip_levels();
+            let mut mip_stages: Vec<(u32, u32, u32, u32)> = Vec::new();
             let stage_ir = if needs_upload {
                 let stage_ir = ctx.alloc_buffer_ir()?;
                 // The GL model deliberately keeps CPU texture shadows as canonical RGBA8 regardless of
@@ -346,7 +357,7 @@ pub(super) fn lower_textures(
                         width: t.w as u32,
                         height: t.h as u32,
                         depth: 1,
-                        mip_levels: 1,
+                        mip_levels,
                         sample_count: 1,
                         dim: TextureDim::D2,
                         format: upload_format,
@@ -371,6 +382,25 @@ pub(super) fn lower_textures(
                     offset: 0,
                     data: (*t.data).clone(),
                 });
+                // One staging buffer per declared level above the base. A host texture must have every
+                // level it declares, so this walks exactly the levels `mip_levels` counted.
+                for (index, level) in chain.iter().enumerate().take(mip_levels as usize - 1) {
+                    let level_ir = ctx.alloc_buffer_ir()?;
+                    cmds.push(Cmd::CreateBuffer(
+                        level_ir,
+                        BufferDesc {
+                            size: level.data.len() as u64,
+                            usage: buffer_usage::COPY_SRC,
+                            label: String::new(),
+                        },
+                    ));
+                    cmds.push(Cmd::WriteBuffer {
+                        id: level_ir,
+                        offset: 0,
+                        data: (*level.data).clone(),
+                    });
+                    mip_stages.push((level_ir, index as u32 + 1, level.w as u32, level.h as u32));
+                }
                 stage_ir
             } else {
                 0
@@ -388,6 +418,7 @@ pub(super) fn lower_textures(
                 sampler: sampler_name(name, element, elements),
                 flip_y: false,
                 swizzle: d.tex_swizzles[unit],
+                mip_stages,
             });
         }
         sampler_base += elements as usize;

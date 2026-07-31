@@ -862,7 +862,41 @@ impl Frontend {
 
                 Ok(result)
             }
-            FunctionKind::Macro(builtin) => builtin.call(self, ctx, arguments.as_mut_slice(), meta),
+            FunctionKind::Macro(builtin) => {
+                let result = builtin.call(self, ctx, arguments.as_mut_slice(), meta)?;
+
+                // Husklet: this branch previously discarded `proxy_writes` outright. That was
+                // harmless only because no builtin macro declared an `out` parameter; `modf` (GLSL ES
+                // 3.00 §8.3) now does, and `process_lhs_argument` spills to a temporary local whenever
+                // the argument is a swizzle or lives outside the `Function` address space. Without
+                // this write-back the spilled value would never reach the caller's variable — the same
+                // silent "links fine, writes nothing" failure mode the out-param builtins were
+                // reported for. Same loop as the `FunctionKind::Call` branch above.
+                for proxy_write in proxy_writes {
+                    let mut value = ctx.add_expression(
+                        Expression::Load {
+                            pointer: proxy_write.value,
+                        },
+                        meta,
+                    )?;
+
+                    if let Some(scalar) = proxy_write.convert {
+                        ctx.conversion(&mut value, meta, scalar)?;
+                    }
+
+                    ctx.emit_restart();
+
+                    ctx.body.push(
+                        Statement::Store {
+                            pointer: proxy_write.target,
+                            value,
+                        },
+                        meta,
+                    );
+                }
+
+                Ok(result)
+            }
         }
     }
 

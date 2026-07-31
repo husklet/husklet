@@ -130,6 +130,13 @@ impl GlContext {
             return GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
         }
         match self.textures.get(color) {
+            // ES 3.0 §4.4.4: a colour attachment must have a COLOUR-RENDERABLE internal format. Reporting
+            // COMPLETE for a depth, snorm, shared-exponent, SRGB8 or three-component integer texture bound
+            // to `GL_COLOR_ATTACHMENT0` hands the application a framebuffer that cannot work and gives it
+            // no way to find out — the check it performs precisely to avoid that says yes.
+            Some(t) if t.w > 0 && t.h > 0 && !colour_renderable(t.internal_format) => {
+                GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT
+            }
             Some(t) if t.w > 0 && t.h > 0 => GL_FRAMEBUFFER_COMPLETE,
             _ => GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT,
         }
@@ -381,3 +388,51 @@ pub use BIND_VERTEX_ARRAY as bind_vertex_array;
 pub use DELETE_VERTEX_ARRAY as delete_vertex_array;
 pub use GEN_VERTEX_ARRAY as gen_vertex_array;
 pub use IS_VERTEX_ARRAY as is_vertex_array;
+
+/// Whether a sized internal format may back a colour attachment (ES 3.0 table 3.13).
+///
+/// `0` means the application gave an UNSIZED format (`GL_RGB` / `GL_RGBA`), which this driver materializes
+/// as RGBA8 and which is renderable — so an ordinary `glTexImage2D` attachment stays complete.
+///
+/// The renderable set is the unorm colour formats plus `SRGB8_ALPHA8` plus the one-, two- and
+/// four-component integer formats. Deliberately EXCLUDED, each of which this driver reported complete:
+/// every depth/stencil format; the signed-normalized formats; `GL_RGB9_E5` and `GL_R11F_G11F_B10F`
+/// (shared-exponent / packed float); `GL_SRGB8` (unlike `GL_SRGB8_ALPHA8`); and the THREE-component
+/// integer formats, which the specification omits while including their one-, two- and four-component
+/// siblings.
+fn colour_renderable(internal_format: u32) -> bool {
+    matches!(
+        internal_format,
+        0 | GL_RGB
+            | GL_RGBA
+            | GL_R8
+            | GL_RG8
+            | GL_RGB8
+            | GL_RGB565
+            | GL_RGBA4
+            | GL_RGB5_A1
+            | GL_RGBA8
+            | GL_RGB10_A2
+            | GL_RGB10_A2UI
+            | GL_SRGB8_ALPHA8
+            | GL_BGRA8_EXT
+            | GL_R8UI
+            | GL_R8I
+            | GL_R16UI
+            | GL_R16I
+            | GL_R32UI
+            | GL_R32I
+            | GL_RG8UI
+            | GL_RG8I
+            | GL_RG16UI
+            | GL_RG16I
+            | GL_RG32UI
+            | GL_RG32I
+            | GL_RGBA8UI
+            | GL_RGBA8I
+            | GL_RGBA16UI
+            | GL_RGBA16I
+            | GL_RGBA32UI
+            | GL_RGBA32I
+    )
+}

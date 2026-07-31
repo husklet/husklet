@@ -134,3 +134,82 @@ fn a_packed_type_with_the_wrong_format_is_still_refused() {
     )
     .is_none());
 }
+
+/// `glTexSubImage2D` into immutable storage failed with `GL_INVALID_VALUE` for thirty-two sized formats
+/// because `Upload::new` accepted only `GL_UNSIGNED_BYTE` and the packed types. Every remaining ES 3.0
+/// component type and the integer/depth formats are now accepted; the model still materializes an RGBA8
+/// plane, so wider components are narrowed — an honest partial, and the reason each expectation below is
+/// stated as arithmetic rather than as a round trip.
+#[test]
+fn integer_and_wide_component_uploads_are_accepted_not_refused() {
+    // GL_RGBA_INTEGER + GL_UNSIGNED_BYTE: the value is numeric, so it passes through unchanged.
+    let rgba8ui = Upload::new(
+        GL_RGBA_INTEGER,
+        GL_UNSIGNED_BYTE,
+        1,
+        1,
+        PixelStore::default(),
+    )
+    .expect("RGBA8UI must be accepted");
+    assert_eq!(rgba8ui.rgba8(&[7, 8, 9, 10]).unwrap(), [7, 8, 9, 10]);
+
+    // GL_RED_INTEGER + GL_UNSIGNED_SHORT: an integer value clamps to the 8-bit plane, it is not scaled.
+    let r16ui = Upload::new(
+        GL_RED_INTEGER,
+        GL_UNSIGNED_SHORT,
+        1,
+        1,
+        PixelStore::default(),
+    )
+    .expect("R16UI must be accepted");
+    assert_eq!(r16ui.rgba8(&200u16.to_le_bytes()).unwrap(), [200, 0, 0, 255]);
+    assert_eq!(
+        r16ui.rgba8(&5000u16.to_le_bytes()).unwrap(),
+        [255, 0, 0, 255],
+        "an integer past the plane's range clamps"
+    );
+
+    // GL_RGBA + GL_FLOAT: a normalized value scales by 255. 0.5 -> 127.5 -> 128 (round to nearest).
+    let rgba32f = Upload::new(GL_RGBA, GL_FLOAT, 1, 1, PixelStore::default())
+        .expect("RGBA32F must be accepted");
+    let source = [0.0f32, 0.5, 1.0, 2.0]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rgba32f.rgba8(&source).unwrap(),
+        [0, 128, 255, 255],
+        "out of range clamps rather than wrapping"
+    );
+
+    // Every remaining type/format pair the ES 3.0 sized formats use must at least construct.
+    for (format, type_) in [
+        (GL_RED, GL_BYTE),
+        (GL_RG, GL_BYTE),
+        (GL_RGB, GL_BYTE),
+        (GL_RGBA, GL_BYTE),
+        (GL_RED_INTEGER, GL_BYTE),
+        (GL_RG_INTEGER, GL_UNSIGNED_BYTE),
+        (GL_RGB_INTEGER, GL_UNSIGNED_BYTE),
+        (GL_RED_INTEGER, GL_SHORT),
+        (GL_RGBA_INTEGER, GL_SHORT),
+        (GL_RED_INTEGER, GL_INT),
+        (GL_RGBA_INTEGER, GL_INT),
+        (GL_RED_INTEGER, GL_UNSIGNED_INT),
+        (GL_RGBA_INTEGER, GL_UNSIGNED_INT),
+        (GL_RED, GL_FLOAT),
+        (GL_RG, GL_FLOAT),
+        (GL_RGB, GL_FLOAT),
+        (GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT),
+        (GL_DEPTH_COMPONENT, GL_UNSIGNED_INT),
+        (GL_DEPTH_COMPONENT, GL_FLOAT),
+        (GL_RGBA_INTEGER, GL_UNSIGNED_INT_2_10_10_10_REV),
+        (GL_RGB, GL_UNSIGNED_INT_5_9_9_9_REV),
+        (GL_RGB, GL_UNSIGNED_INT_10F_11F_11F_REV),
+    ] {
+        assert!(
+            Upload::new(format, type_, 2, 2, PixelStore::default()).is_some(),
+            "format {format:#x} type {type_:#x} must be accepted"
+        );
+    }
+}
