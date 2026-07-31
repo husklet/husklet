@@ -191,6 +191,7 @@ mod tests {
                 false,
                 wgpu::Features::empty(),
                 wgpu::DownlevelFlags::empty(),
+                1 << 30,
             )
             .present_kinds,
             vec![PresentKind::Shm]

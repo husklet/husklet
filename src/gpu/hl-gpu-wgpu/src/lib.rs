@@ -189,6 +189,43 @@ const REPLAYED_COMMANDS: &[u8] = &[
     etag::SET_BLEND_CONSTANT,
 ];
 
+/// Per-frame wire-byte ceiling: the largest DECODED FRAME (one batch of encoded IR, including any inline
+/// `WriteBuffer` payload) this executor accepts. A hostile-guest DoS guard on the transient per-frame
+/// allocation — NOT a correctness bound, and NOT a per-allocation bound (see
+/// [`MAX_ADVERTISED_BUFFER_BYTES`], which is the separate single-resource ceiling; the two were previously
+/// one number, which is how a frame budget came to act as a buffer ceiling).
+///
+/// Sized BROWSER-CLASS: the old 64 MiB tripped healthy Chrome frames, seen at 89–168 MB. It must stay
+/// below the coarse transport pre-read guard (`transport::adapter::unix::MAX_FRAME_BYTES`, 512 MiB), which
+/// refuses an oversized frame before a body byte is read, so this cannot follow the buffer ceiling upward.
+/// Finite by construction.
+const MAX_FRAME_BYTES: u64 = 256 << 20;
+
+/// Ceiling on the single-allocation size this executor will ADVERTISE, whatever the adapter reports.
+///
+/// The advertised value is `min(device max_buffer_size, this)`. Metal reports `max_buffer_size` in the
+/// multi-GiB range and wgpu really will serve such an allocation, but `max_buffer_bytes` is not read only
+/// as a wgpu allocation bound once it is negotiated:
+///
+///   * the runtime derives a connection's residency ceiling from it
+///     (`Limits::from_capabilities`: `2 ×`), so advertising multi-GiB hands one guest a multi-GiB pinned
+///     working set before the per-connection guard engages;
+///   * the GL shim sizes its host-side readback/staging groups by the negotiated value
+///     (`hl-gl::service::frame::Frame::capture_targets`), so it is also a HOST-RAM budget, not only a
+///     device-address-space budget.
+///
+/// 1 GiB is therefore what the whole path can honour, not merely what the device can allocate: it clears
+/// the largest legitimate single Skia/Chrome vertex or index buffer (which does exceed 256 MiB) while
+/// keeping the derived per-connection and host-staging budgets bounded. Advertising the adapter's raw
+/// multi-GiB figure would be a capability claim the surrounding accounting cannot keep.
+///
+/// SCOPE — this is an ALLOCATION ceiling, not an upload ceiling. A buffer's CONTENTS still cross the wire
+/// as `Cmd::WriteBuffer { offset, data }` inside a frame, so a guest filling a buffer larger than
+/// [`MAX_FRAME_BYTES`] must split the fill across frames at increasing offsets, which the IR supports.
+/// A guest driver that emits one whole-buffer `WriteBuffer` will hit `ResourceLimit("frame bytes")`
+/// instead — that is the frame budget doing its own job, not this ceiling being dishonest.
+const MAX_ADVERTISED_BUFFER_BYTES: u64 = 1 << 30;
+
 /// The wgpu-backed [`hl_gpu::GpuExecutor`]. Holds the acquired device/queue, the negotiated capabilities
 /// it advertises, and the kernel front-end state (a pre-registered kernel map + optional PTX-descriptor
 /// compiler) that resolves a `PtxKernel` shader payload — the same seam the CPU oracle exposes.
@@ -293,6 +330,7 @@ impl WgpuExecutor {
             native_present,
             gpu.features,
             gpu.downlevel.flags,
+            gpu.device.limits().max_buffer_size,
         );
         Self {
             gpu,
@@ -478,6 +516,7 @@ impl WgpuExecutor {
         iosurface: bool,
         features: wgpu::Features,
         downlevel: wgpu::DownlevelFlags,
+        device_max_buffer_size: u64,
     ) -> Capabilities {
         let mut present_kinds = vec![PresentKind::Shm];
         if iosurface {
@@ -504,17 +543,12 @@ impl WgpuExecutor {
                 } else {
                     0
                 },
-            // Per-frame wire-byte ceiling: a hostile-guest DoS guard (one decoded frame can't force an
-            // unbounded transient allocation), NOT a correctness bound — the process-wide `GlobalLedger` is
-            // the real host-OOM guard across all connections. Sized BROWSER-CLASS at 256 MiB: the old 64 MiB
-            // was mis-sized for a browser — Chrome's real frames were seen at 89–168 MB, and even a healthy
-            // browser frame runs well past 64 MiB (the extreme end of that range was inflated by the
-            // viewport-NACK roll-back replaying a growing working set, fixed at its root by the viewport
-            // clamp in `submit.rs`; 256 MiB is comfortable headroom over a legitimate peak). Stays below the
-            // 512 MiB coarse transport pre-read guard (`transport::adapter::unix::MAX_FRAME_BYTES`), which
-            // refuses an oversized frame before a body byte is read. Finite by construction.
-            max_frame_bytes: 256 << 20,
-            max_buffer_bytes: 256 << 20,
+            max_frame_bytes: MAX_FRAME_BYTES,
+            // DERIVED FROM THE DEVICE, then clamped to what the rest of the path can honour. A guest asking
+            // for more than this is refused at validate before anything is allocated, so the ceiling stays a
+            // hard pre-allocation DoS guard; it is simply no longer a per-frame budget wearing a
+            // per-buffer's name. See [`MAX_ADVERTISED_BUFFER_BYTES`].
+            max_buffer_bytes: device_max_buffer_size.min(MAX_ADVERTISED_BUFFER_BYTES),
             max_bind_groups: 4,
             supports_timeline_fences: false,
             binding_arrays: {
@@ -642,7 +676,91 @@ mod device_tests {
         BufferId, Cmd, CommandBuffer, Enc, FenceId, GpuError, GpuExecutor, SessionResources,
     };
 
-    use super::{Device, DeviceConfig};
+    use super::{Device, DeviceConfig, WgpuExecutor, MAX_ADVERTISED_BUFFER_BYTES, MAX_FRAME_BYTES};
+
+    /// The single-allocation ceiling comes from the bound device, not from a constant that happened to be
+    /// the frame budget. It is `min(device max_buffer_size, MAX_ADVERTISED_BUFFER_BYTES)` — never larger
+    /// than the device serves (no over-advertisement) and never larger than the surrounding residency and
+    /// host-staging accounting can honour.
+    #[test]
+    fn buffer_ceiling_is_derived_from_the_device_and_clamped() {
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
+        let executor = device.executor();
+        let reported = executor.gpu.device.limits().max_buffer_size;
+
+        assert_eq!(
+            executor.caps.max_buffer_bytes,
+            reported.min(MAX_ADVERTISED_BUFFER_BYTES),
+            "advertised {} for a device reporting {reported}",
+            executor.caps.max_buffer_bytes,
+        );
+        assert!(
+            executor.caps.max_buffer_bytes <= reported,
+            "must never advertise more than the device serves",
+        );
+    }
+
+    /// The DoS guard survives the raise: the ceiling is finite, far below the absurd request that drove
+    /// host RSS to 17.9 GiB (`1 << 38`), and enforced before any allocation — so `CreateBuffer` above it is
+    /// refused at validate, not attempted.
+    #[test]
+    fn buffer_ceiling_stays_finite_and_refuses_before_allocating() {
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
+        let mut executor = device.executor();
+        let ceiling = executor.caps.max_buffer_bytes;
+
+        assert!(ceiling > 0 && ceiling < u64::MAX, "finite by construction");
+        assert!(ceiling < 1u64 << 38, "far below the DoS request");
+
+        let limits = hl_gpu::runtime::model::session::Limits::from_capabilities(executor.caps.clone());
+        let absurd = Cmd::CreateBuffer(
+            1,
+            BufferDesc {
+                size: 1 << 38,
+                usage: buffer_usage::COPY_DST,
+                label: String::new(),
+            },
+        );
+        assert!(
+            matches!(
+                hl_gpu::runtime::service::validate::validate(&limits, 64, &[absurd]),
+                Err(GpuError::ResourceLimit("buffer bytes")),
+            ),
+            "an over-ceiling create must be refused at validate",
+        );
+
+        // Nothing reached the executor: its resource table is untouched.
+        let mut resources = SessionResources::default();
+        assert!(executor.execute(&mut resources, &[]).is_ok());
+    }
+
+    /// The frame budget and the buffer ceiling are separate values with separate reasons. The frame budget
+    /// must stay under the 512 MiB transport pre-read guard; the buffer ceiling need not, and no longer
+    /// does. Raising one must not move the other.
+    #[test]
+    fn frame_budget_and_buffer_ceiling_are_distinct() {
+        assert_eq!(MAX_FRAME_BYTES, 256 << 20);
+        assert!(
+            MAX_FRAME_BYTES
+                <= hl_gpu::transport::adapter::unix::MAX_FRAME_BYTES as u64,
+            "the negotiated frame budget must stay under the transport pre-read guard",
+        );
+        assert!(
+            MAX_ADVERTISED_BUFFER_BYTES > MAX_FRAME_BYTES,
+            "a single allocation is not bounded by one frame's wire bytes",
+        );
+        let caps = WgpuExecutor::capabilities_for(
+            "test",
+            false,
+            wgpu::Features::empty(),
+            wgpu::DownlevelFlags::empty(),
+            u64::MAX,
+        );
+        assert_eq!(caps.max_frame_bytes, MAX_FRAME_BYTES);
+        assert_eq!(caps.max_buffer_bytes, MAX_ADVERTISED_BUFFER_BYTES);
+    }
 
     #[test]
     fn one_device_creates_resource_isolated_executors() {

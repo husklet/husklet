@@ -53,10 +53,18 @@ impl GpuExecutor for CpuExecutor {
             texture_formats: TextureFormat::bits(COLOR_FORMATS)
                 | TextureFormat::bits(DEPTH_FORMATS)
                 | TextureFormat::bits(&[TextureFormat::Depth24PlusStencil8]),
-            // Browser-class per-frame wire-byte ceiling (256 MiB): a hostile-DoS guard, not a correctness
-            // bound — the `GlobalLedger` is the true host-OOM guard. Raised from 64 MiB, which tripped
-            // healthy browser frames. (Matches the wgpu executor; see its rationale.)
+            // Per-frame wire-byte ceiling (browser-class, 256 MiB): a hostile-DoS guard on one decoded
+            // frame's transient allocation, not a correctness bound — the `GlobalLedger` is the true
+            // host-OOM guard. Raised from 64 MiB, which tripped healthy browser frames. Stays under the
+            // 512 MiB transport pre-read guard (`transport::adapter::unix::MAX_FRAME_BYTES`).
             max_frame_bytes: 256 << 20,
+            // Single-allocation ceiling, stated on THIS oracle's own terms rather than copied from the
+            // wgpu executor's (which derives its figure from the adapter's `max_buffer_size` and clamps to
+            // 1 GiB). This oracle has no device: `Cmd::CreateBuffer` is `vec![0u8; size]` and every texture
+            // is a materialized host-RAM plane, so the ceiling is committed, zero-filled process memory the
+            // moment the command is replayed — there is no lazily-paged device address space to hide in.
+            // 256 MiB per allocation is what a software oracle can honestly serve on a normal host; it is
+            // deliberately smaller than the wgpu path's and must not be raised to match it.
             max_buffer_bytes: 256 << 20,
             max_bind_groups: 4,
             // Synchronous; a fence only reaches a value a submit signalled.
