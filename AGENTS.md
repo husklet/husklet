@@ -838,6 +838,18 @@ correct side, once forty differences were the harness's own rounding ties, and o
 wrong framings before the third was right. Budget for that gap; a disagreement is a location, not a
 diagnosis.
 
+A disagreement labelled deliberate or benign is the easiest place in this codebase to hide a defect. Two
+such labels were checked this session and neither survived: one covered a family where the latitude is real
+in some cases and absent in others, and had been applied to all of them; the other covered pairs where the
+reference side had aborted and written nothing at all, so there was no reference answer to be deliberate
+about. Those are unusable, not benign — the difference between a closed question and an unasked one.
+
+Name a failure by what you measured, not by the first plausible cause. A guest fetch failure was called
+"no egress" when the one hard datum available was a TLS certificate verification failure — packets reaching
+an endpoint and a handshake being rejected, which points at a stale certificate bundle rather than at
+routing or name resolution, and has an entirely different fix. Making that distinction is cheap and
+skipping it is expensive.
+
 A guest workspace is recreated per session, so nothing installed in it survives. Any rung that provisions
 packages and looks green may be green only because its container was provisioned while the fetch still
 worked. Treat provisioning as part of the measurement, not as setup that happened once.
