@@ -212,9 +212,14 @@ pub(super) fn lower_textures(
                     // pixels bound at its unit (an unbound unit, or a texture object with no storage yet). NEVER
                     // skip it: a skipped declared sampler leaves the bind group short of the layout and
                     // `create_bind_group` NACKs ("bindings (3) does not match (7)"). Bind a shared 1x1
-                    // transparent-black placeholder texture + a default sampler (created ONCE, cached on the
-                    // context) at this sampler's host binding so the driver covers every declared sampler; the
-                    // executor's used-binding filter then trims to the shader's actually-sampled subset.
+                    // placeholder texture + a default sampler (created ONCE, cached on the context) at this
+                    // sampler's host binding so the driver covers every declared sampler; the executor's
+                    // used-binding filter then trims to the shader's actually-sampled subset.
+                    //
+                    // The placeholder texel is OPAQUE black. ES 3.0 §3.8.2 fixes what an INCOMPLETE texture
+                    // samples as — (0, 0, 0, 1) — and this placeholder is what an app hits after deleting a
+                    // bound texture. A transparent (0,0,0,0) texel turned that geometry invisible instead of
+                    // black, which is a much harder thing to notice than a black quad.
                     let (tex_ir, samp_ir, needs_create) = ctx.default_placeholder()?;
                     let stage_ir = if needs_create {
                         let stage_ir = ctx.alloc_buffer_ir()?;
@@ -243,7 +248,7 @@ pub(super) fn lower_textures(
                         cmds.push(Cmd::WriteBuffer {
                             id: stage_ir,
                             offset: 0,
-                            data: vec![0u8; 4],
+                            data: vec![0, 0, 0, 0xff],
                         });
                         cmds.push(Cmd::CreateSampler(
                             samp_ir,

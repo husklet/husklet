@@ -4500,7 +4500,12 @@ template <typename A>
                 )?;
                 writeln!(
                     self.out,
-                    "{}return metal::unpack_snorm2x16_to_float(b1 << 24 | b0 << 16 | b3 << 8 | b2);",
+                    // Husklet: the two 16-bit components were packed into the WRONG halves of the word.
+                    // `unpack_snorm2x16_to_float(u)` returns `.x` from the LOW half of `u` and `.y`
+                    // from the high half, so component 0 — the little-endian pair `(b1 << 8 | b0)` —
+                    // must occupy the LOW half. Writing `b1 << 24 | b0 << 16` put it in the HIGH half
+                    // and returned the pair swapped. See `Snorm16x4` below for the confirmation.
+                    "{}return metal::unpack_snorm2x16_to_float(b3 << 24 | b2 << 16 | b1 << 8 | b0);",
                     back::INDENT
                 )?;
                 writeln!(self.out, "}}")?;
@@ -4521,8 +4526,19 @@ template <typename A>
                 )?;
                 writeln!(
                     self.out,
-                    "{}return metal::float4(metal::unpack_snorm2x16_to_float(b1 << 24 | b0 << 16 | b3 << 8 | b2), \
-                                            metal::unpack_snorm2x16_to_float(b5 << 24 | b4 << 16 | b7 << 8 | b6));",
+                    // Husklet: same swapped-halves defect as `Snorm16x2`, and the one the differential
+                    // harness caught. A `GL_SHORT` normalized `vec4` attribute read its components as
+                    // {c1, c0, c3, c2}. Worked through with the corpus values
+                    // {4369, -8738, 17476, 32767} (little-endian bytes 11 11 de dd 44 44 ff 7f): the old
+                    // packing yields rgba 00 22 ff 88, which is byte-for-byte what Husklet returned,
+                    // and this packing yields 22 00 88 ff, which is byte-for-byte what the reference
+                    // (Mesa llvmpipe) returned — no free parameters either way.
+                    //
+                    // `Unorm16x2`/`Unorm16x4` above assemble each component independently rather than
+                    // going through `unpack_*2x16`, which is exactly why UNSIGNED normalized shorts
+                    // were correct while signed ones were not.
+                    "{}return metal::float4(metal::unpack_snorm2x16_to_float(b3 << 24 | b2 << 16 | b1 << 8 | b0), \
+                                            metal::unpack_snorm2x16_to_float(b7 << 24 | b6 << 16 | b5 << 8 | b4));",
                     back::INDENT
                 )?;
                 writeln!(self.out, "}}")?;

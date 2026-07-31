@@ -579,15 +579,27 @@ pub(super) fn push_target_creates(
 }
 
 /// The depth(+stencil) attachment FORMAT a render pass needs, if any of `run`'s geometry draws is depth-
-/// or stencil-tested. A stencil-testing draw requires a stencil aspect, so the pass upgrades to
+/// or stencil-tested, or a clear armed the plane. A stencil-testing draw requires a stencil aspect, so the pass upgrades to
 /// `Depth24PlusStencil8`; a purely depth-tested pass keeps the leaner `Depth32Float`. `None` when no draw
 /// needs a depth attachment at all (the common 2D path). Every depth-carrying pipeline in the run MUST use
 /// this ONE format — wgpu requires the pipeline's depth-stencil format to match the pass attachment — so a
 /// pass that stencil-tests any draw lowers ALL its depth pipelines as `Depth24PlusStencil8`.
 impl RenderPasses {
-    pub(super) fn depth_format(draws: &[DrawCall]) -> Option<TextureFormat> {
-        let any_stencil = draws.iter().any(|d| !d.is_clear && d.stencil);
-        let any_depth = draws.iter().any(|d| !d.is_clear && d.depth);
+    /// [`Self::depth_format_with`], also honouring a depth/stencil CLEAR that armed this pass.
+    ///
+    /// A `glClear(GL_DEPTH_BUFFER_BIT)` in a frame where no draw happens to be depth-tested still has to
+    /// land: the plane it wrote is what the NEXT frame's depth test reads. Deciding the attachment from
+    /// the draws alone dropped that clear entirely — `glClearDepthf(0.5); glClear(DEPTH); draw(untested)`
+    /// materialized no depth plane at all, so when a later frame first enabled `GL_DEPTH_TEST` the plane
+    /// was created fresh and cleared to the GL initial 1.0, and every fragment passed `GL_LESS`.
+    pub(super) fn depth_format_with(
+        draws: &[DrawCall],
+        clear: DepthClear,
+    ) -> Option<TextureFormat> {
+        let any_stencil =
+            draws.iter().any(|d| !d.is_clear && d.stencil) || clear.stencil_armed;
+        let any_depth = draws.iter().any(|d| !d.is_clear && d.depth)
+            || matches!(clear.load, LoadOp::Clear);
         if any_stencil {
             Some(TextureFormat::Depth24PlusStencil8)
         } else if any_depth {
@@ -616,7 +628,7 @@ pub(super) fn depth_attachment_for(
     cmds: &mut Vec<Cmd>,
     clear: DepthClear,
 ) -> Option<DepthAttachment> {
-    let format = RenderPasses::depth_format(draws)?;
+    let format = RenderPasses::depth_format_with(draws, clear)?;
     let with_stencil = matches!(format, TextureFormat::Depth24PlusStencil8);
     let clear_depth = clear.depth;
     // GL clears the stencil plane to `glClearStencil`'s value (default 0), masked to the 8-bit buffer.
@@ -624,11 +636,7 @@ pub(super) fn depth_attachment_for(
     let (depth_tex, needs_create) = ctx.depth_target(color_tex, with_stencil).ok()?;
     // A depth texture minted this frame has no prior contents to preserve — and a zero-initialized depth
     // plane fails every `GL_LESS` test — so its first pass always clear-loads regardless of the caller's op.
-    let load = if needs_create {
-        LoadOp::Clear
-    } else {
-        clear.load
-    };
+    let load = if needs_create { LoadOp::Clear } else { clear.load };
     if needs_create {
         cmds.push(Cmd::CreateTexture(
             depth_tex,

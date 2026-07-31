@@ -218,3 +218,87 @@ fn a_scissored_clear_wholly_outside_the_target_is_dropped() {
         "nothing of the box is inside the target"
     );
 }
+
+// ---------------------------------------------------------------------------------------------------
+// A depth clear must land even when NO draw in that frame is depth-tested
+// ---------------------------------------------------------------------------------------------------
+
+/// The `state:depth_toggle` sequence: clear depth to 0.5, draw with the depth test OFF, present, then
+/// enable `GL_DEPTH_TEST`/`GL_LESS` and draw again. The second draw sits at window depth 0.5, so
+/// `0.5 < 0.5` is false and it must be rejected.
+///
+/// The pass's depth attachment was decided from the DRAWS alone. Frame 1's only draw was untested, so no
+/// depth plane was materialized and the `glClearDepthf(0.5)` was silently dropped; frame 2 then minted the
+/// plane fresh, clear-loaded it to the GL initial 1.0, and every fragment passed. The symptom — "enabling
+/// the depth test between draws has no effect" — is one frame removed from its cause.
+#[test]
+fn a_depth_clear_materializes_the_plane_even_with_no_depth_tested_draw() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+
+    // Frame 1: colour clear, depth clear to 0.5, one UNTESTED draw.
+    record::clear_color(&mut c, [0.0, 0.25, 0.0, 1.0]);
+    record::clear_buffers(&mut c, GL_COLOR_BUFFER_BIT);
+    record::clear_depth(&mut c, 0.5);
+    record::clear_buffers(&mut c, GL_DEPTH_BUFFER_BIT);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+
+    let first = pass_depth_clear(&sink.batches[0]).expect(
+        "the depth clear must materialize a depth plane even though no draw in this frame tests depth",
+    );
+    assert_eq!(first.0, 0.5, "cleared to the value the app asked for");
+
+    // Frame 2: enable the depth test and draw again. The plane already exists, so it load-preserves the
+    // 0.5 — which is what rejects the draw.
+    record::enable(&mut c, GL_DEPTH_TEST);
+    record::depth_func(&mut c, GL_LESS);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+
+    let ops = submit_ops(&sink.batches[1]);
+    let load = ops
+        .iter()
+        .find_map(|e| match e {
+            Enc::BeginRenderPass { depth, .. } => depth.as_ref().map(|d| d.load),
+            _ => None,
+        })
+        .expect("frame 2 is depth-tested and must carry the depth attachment");
+    assert_eq!(
+        load,
+        hl_gpu::protocol::model::enums::LoadOp::Load,
+        "the plane persists from frame 1; clearing it here is exactly the defect: {ops:?}"
+    );
+}
+
+/// The same rule for stencil: a stencil clear alone must give the pass a stencil-carrying format.
+#[test]
+fn a_stencil_clear_alone_materializes_a_stencil_capable_plane() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    record::clear_stencil(&mut c, 3);
+    record::clear_buffers(&mut c, GL_STENCIL_BUFFER_BIT);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let (_, stencil) = pass_depth_clear(&sink.batches[0]).expect("a stencil-capable attachment");
+    assert_eq!(stencil, 3);
+}
+
+/// And the common case stays exactly as it was: a frame with neither a depth/stencil clear nor a
+/// depth/stencil-tested draw carries NO depth attachment at all.
+#[test]
+fn a_plain_colour_frame_still_carries_no_depth_attachment() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    record::clear_color(&mut c, [0.0, 0.25, 0.0, 1.0]);
+    record::clear_buffers(&mut c, GL_COLOR_BUFFER_BIT);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    assert!(
+        pass_depth_clear(&sink.batches[0]).is_none(),
+        "the 2D path must not grow a depth plane"
+    );
+}

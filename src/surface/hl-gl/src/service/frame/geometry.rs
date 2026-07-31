@@ -167,9 +167,11 @@ impl Frame {
 
         if !needs_segments {
             // ---- single-pass path (byte-identical to the pre-scissored-clear builder) ----
-            // The pass's shared depth(+stencil) attachment format (if any draw is depth/stencil-tested) — every
-            // depth pipeline in the pass must be built at this format to match the attachment (wgpu requirement).
-            let depth_fmt = RenderPasses::depth_format(survivors);
+            // The pass's shared depth(+stencil) attachment format — every depth pipeline in the pass must be
+            // built at this format to match the attachment (wgpu requirement). A depth/stencil CLEAR counts
+            // as well as a depth/stencil-tested draw: the clear has to land even in a frame whose draws are
+            // all untested, or the value it wrote is lost (see [`RenderPasses::depth_format_with`]).
+            let depth_fmt = RenderPasses::depth_format_with(survivors, depth_load(draws));
             let mut copies: Vec<Enc> = Vec::new();
             let mut draw_ops: Vec<Enc> = Vec::new();
             for d in survivors {
@@ -529,6 +531,9 @@ pub(super) struct DepthClear {
     pub(super) load: LoadOp,
     pub(super) depth: f32,
     pub(super) stencil: i32,
+    /// Whether a STENCIL clear armed this, so the pass takes a stencil-carrying format even when no draw
+    /// in it is stencil-tested.
+    pub(super) stencil_armed: bool,
 }
 
 impl DepthClear {
@@ -539,6 +544,7 @@ impl DepthClear {
             load: LoadOp::Load,
             depth: 1.0,
             stencil: 0,
+            stencil_armed: false,
         }
     }
 }
@@ -553,6 +559,7 @@ pub(super) fn depth_load(draws: &[DrawCall]) -> DepthClear {
         if d.clears_stencil() {
             clear.load = LoadOp::Clear;
             clear.stencil = d.clear_stencil;
+            clear.stencil_armed = true;
         }
     }
     clear
@@ -637,6 +644,7 @@ pub(super) fn lower_segments(
         if d.clears_stencil() {
             dload.load = LoadOp::Clear;
             dload.stencil = d.clear_stencil;
+            dload.stencil_armed = true;
         }
     }
     emit(ctx, cmds, ops, &mut segment, &mut load, &mut dload);
@@ -663,7 +671,10 @@ pub(super) fn emit_segment_pass(
     no_fbo_tex: &std::collections::HashMap<(u32, u64), u32>,
     snapshots: &mut SnapshotTextures,
 ) {
-    let depth_fmt = RenderPasses::depth_format(seg);
+    // The pass's depth format must account for the CLEAR that armed it as well as the draws in it: a
+    // pipeline built without a depth state cannot run in a pass that has a depth attachment, and vice
+    // versa, so both decisions read the same answer.
+    let depth_fmt = RenderPasses::depth_format_with(seg, depth_load);
     let mut copies: Vec<Enc> = Vec::new();
     let mut draw_ops: Vec<Enc> = Vec::new();
     for d in seg {

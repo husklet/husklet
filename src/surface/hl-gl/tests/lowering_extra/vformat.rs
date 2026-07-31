@@ -145,3 +145,67 @@ fn expressible_formats_are_left_on_the_direct_path() {
         );
     }
 }
+
+/// The exact `corpus:attribute_types` short-normalized case, asserted on the EMITTED IR.
+///
+/// The differential shows Husklet returning `00 22 ff 88` where llvmpipe returns `22 00 88 ff` — the four
+/// source shorts read as `{s[1], s[0], s[3], s[2]}`, i.e. the two 16-bit halves of each 32-bit word
+/// swapped. This test asks whether that transformation happens in THIS crate: it pins the bytes the driver
+/// uploads and the format it declares. If both are right here, the fault is downstream and this test is
+/// the evidence for saying so; if either is wrong, it is ours and this test names it.
+#[test]
+fn short_normalized_uploads_its_bytes_verbatim_and_declares_snorm16x4() {
+    // The corpus values, and the little-endian bytes they occupy.
+    const SHORTS: [i16; 4] = [4369, -8738, 17476, 32767];
+    let vertex = SHORTS
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect::<Vec<_>>();
+    let buffer = vertex.repeat(3);
+
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_tint(&mut c);
+    let tint = c.buffers.gen();
+    record::bind_buffer(&mut c, GL_ARRAY_BUFFER, tint);
+    record::buffer_data(&mut c, GL_ARRAY_BUFFER, &buffer, 0x88E4);
+    record::vertex_attrib_pointer(&mut c, 1, 4, GL_SHORT, true, 0, 0);
+    record::enable_vertex_attrib(&mut c, 1);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let batch = &sink.batches[0];
+
+    // 1. A normalized 4-component short is directly expressible, so it must NOT be converted.
+    assert!(
+        !batch.iter().any(|cmd| matches!(
+            cmd,
+            Cmd::CreateBuffer(_, desc) if desc.label.starts_with("gl-converted-vertex")
+        )),
+        "Snorm16x4 is expressible; the f32 conversion path must not run"
+    );
+
+    // 2. The bytes reaching the host are the application's, unaltered.
+    let uploaded = batch
+        .iter()
+        .find_map(|cmd| match cmd {
+            Cmd::WriteBuffer { data, .. } if data.len() == buffer.len() => Some(data.clone()),
+            _ => None,
+        })
+        .expect("the vertex buffer upload");
+    assert_eq!(
+        &uploaded[..8],
+        &vertex[..],
+        "the driver uploads the source shorts verbatim — no 16-bit reordering happens here"
+    );
+
+    // 3. The declared format is `comps | kind<<8 | normalized<<16` = 4 | (4 << 8) | (1 << 16), which the
+    //    executor decodes as Snorm16x4. Attribute 1 is at offset 0 of its own slot.
+    let attr = pipeline_desc(batch)
+        .vertex_buffers
+        .iter()
+        .flat_map(|layout| layout.attrs.iter())
+        .find(|attr| attr.location == 1)
+        .expect("the tint attribute");
+    assert_eq!(attr.format, 4 | (4 << 8) | (1 << 16), "Snorm16x4");
+    assert_eq!(attr.offset, 0);
+}
