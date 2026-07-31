@@ -59,7 +59,14 @@ impl From<&GpuError> for EglError {
             | GpuError::Utf8
             | GpuError::ShortBuffer
             | GpuError::TrailingBytes => EGL_BAD_PARAMETER,
-            GpuError::Kernel(_) | GpuError::Decode(_) | GpuError::Transport(_) => EGL_CONTEXT_LOST,
+            // A backend PANIC is a backend defect, not a guest error: the frame is refused and the
+            // session rolled back, but there is no argument to blame and nothing the app can correct.
+            // `EGL_CONTEXT_LOST` is the honest report — the frame could not be presented — and it keeps a
+            // driver bug from being mislabelled as bad input from the application.
+            GpuError::Panicked(_)
+            | GpuError::Kernel(_)
+            | GpuError::Decode(_)
+            | GpuError::Transport(_) => EGL_CONTEXT_LOST,
         })
     }
 }

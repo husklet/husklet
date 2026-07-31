@@ -157,6 +157,14 @@ impl Declarations<'_> {
             "samplerCube" => ("textureCube", "sampler", "samplerCube"),
             "sampler2DArray" => ("texture2DArray", "sampler", "sampler2DArray"),
             "sampler2DShadow" => ("texture2D", "samplerShadow", "sampler2DShadow"),
+            // Integer textures. Their uses are rewritten to `texelFetch` by
+            // [`rewrite_integer_sampler_fetches`], so the recombining constructor is never emitted — but
+            // the sampler global still is, because the driver allocates a texture+sampler binding PAIR per
+            // declared sampler and a bind group short of its layout is refused outright.
+            "usampler2D" => ("utexture2D", "sampler", "usampler2D"),
+            "isampler2D" => ("itexture2D", "sampler", "isampler2D"),
+            "usampler2DArray" => ("utexture2DArray", "sampler", "usampler2DArray"),
+            "isampler2DArray" => ("itexture2DArray", "sampler", "isampler2DArray"),
             // `samplerExternalOES` (ANGLE's YUV external image) maps to a plain 2D sampler for this bring-up —
             // correct for the single-plane RGBA path — matching the executor's `glsl_es::split_sampler_ty`.
             _ => ("texture2D", "sampler", "sampler2D"),
@@ -196,18 +204,113 @@ impl Declarations<'_> {
     pub(super) fn rewrite_sampler_refs(body: &mut String, samps: &[Decl]) {
         for s in samps {
             let (_, _, ctor) = Self::split_sampler(&s.ty);
+            // An INTEGER sampler never recombines: there is no legal operation that pairs it with a
+            // sampler, so every remaining use — a `texelFetch` or `textureSize` the guest wrote itself,
+            // and anything [`rewrite_integer_sampler_fetches`] already converted — wants the bare texture
+            // global. Emitting the constructor here would hand a sampled-image to a fetch instruction.
+            let integer = TypeToken(&s.ty).is_integer_sampler();
             if s.arr > 0 {
                 for element in (0..s.arr).rev() {
                     let source = format!("{}[{element}]", s.name);
                     let name = Self::sampler_element_name(s, element);
-                    let replacement = format!("{ctor}({name}_hltex, {name}_hlsmp)");
+                    let replacement = if integer {
+                        format!("{name}_hltex")
+                    } else {
+                        format!("{ctor}({name}_hltex, {name}_hlsmp)")
+                    };
                     wreplace(body, &source, &replacement);
                 }
             } else {
-                let repl = format!("{ctor}({}_hltex, {}_hlsmp)", s.name, s.name);
+                let repl = if integer {
+                    format!("{}_hltex", s.name)
+                } else {
+                    format!("{ctor}({}_hltex, {}_hlsmp)", s.name, s.name)
+                };
                 wreplace(body, &s.name, &repl);
             }
         }
+    }
+
+    /// Rewrite every `texture(NAME, COORD)` / `texture2D(NAME, COORD)` on an INTEGER sampler into
+    /// `texelFetch(NAME_hltex, ivec2(COORD * vec2(textureSize(NAME_hltex, 0))), 0)`.
+    ///
+    /// An integer texture cannot be SAMPLED: it has no normalized reading, so it cannot be filtered, and a
+    /// bind group that offers one to a sampling instruction is refused by the backend outright. `texelFetch`
+    /// is the only legal access, and it addresses texels by integer index — hence the multiply by
+    /// `textureSize`, which turns the normalized coordinate the guest wrote into that index.
+    ///
+    /// GL_NEAREST is the only filter an integer texture may carry (ES 3.0 §3.8.13), so truncating the
+    /// scaled coordinate reproduces exactly what sampling it would have selected.
+    ///
+    /// Runs BEFORE [`rewrite_sampler_refs`], which then finds no bare occurrence of the name left to
+    /// recombine — `NAME_hltex` is one word, so its word-boundary replace cannot match inside it.
+    pub(super) fn rewrite_integer_sampler_fetches(body: &mut String, samps: &[Decl]) {
+        for s in samps {
+            if !TypeToken(&s.ty).is_integer_sampler() {
+                continue;
+            }
+            for element in (0..s.arr.max(1)).rev() {
+                let source = if s.arr == 0 {
+                    s.name.clone()
+                } else {
+                    format!("{}[{element}]", s.name)
+                };
+                let name = Self::sampler_element_name(s, element);
+                while let Some((start, coord, end)) = Self::find_texture_call(body, &source) {
+                    let fetch = format!(
+                        "texelFetch({name}_hltex, ivec2(({coord}) * vec2(textureSize({name}_hltex, 0))), 0)"
+                    );
+                    body.replace_range(start..end, &fetch);
+                }
+            }
+        }
+    }
+
+    /// Locate one `texture(`/`texture2D(` call whose FIRST argument is exactly `sampler`, returning the
+    /// call's byte range and its coordinate argument. Paren-balanced, so a coordinate containing its own
+    /// calls or parentheses is extracted whole.
+    fn find_texture_call(body: &str, sampler: &str) -> Option<(usize, String, usize)> {
+        for call in ["texture2D(", "texture("] {
+            let mut from = 0usize;
+            while let Some(offset) = body[from..].find(call) {
+                let start = from + offset;
+                let before_is_word = start > 0 && Tokens::is_word(body.as_bytes()[start - 1]);
+                let open = start + call.len();
+                let rest = body[open..].trim_start();
+                let lead = body[open..].len() - rest.len();
+                if before_is_word || !rest.starts_with(sampler) {
+                    from = start + call.len();
+                    continue;
+                }
+                let after_name = open + lead + sampler.len();
+                let tail = body[after_name..].trim_start();
+                if !tail.starts_with(',') {
+                    from = start + call.len();
+                    continue;
+                }
+                let comma = after_name + (body[after_name..].len() - tail.len());
+                // Balance from the opening paren to find the call's end.
+                let bytes = body.as_bytes();
+                let (mut depth, mut index) = (1i32, open);
+                while index < bytes.len() && depth > 0 {
+                    match bytes[index] {
+                        b'(' => depth += 1,
+                        b')' => depth -= 1,
+                        _ => {}
+                    }
+                    if depth == 0 {
+                        break;
+                    }
+                    index += 1;
+                }
+                if depth != 0 {
+                    return None;
+                }
+                let coord = body[comma + 1..index].trim().to_owned();
+                return Some((start, coord, index + 1));
+            }
+        }
+        None
     }
 
     fn sampler_element_name(sampler: &Decl, element: u32) -> String {
@@ -296,6 +399,7 @@ impl Source<'_> {
         for (start, end, replacement) in edits.into_iter().rev() {
             output.replace_range(start..end, &replacement);
         }
+        Declarations::rewrite_integer_sampler_fetches(&mut output, &arrays);
         Declarations::rewrite_sampler_refs(&mut output, &arrays);
         output
     }
@@ -416,7 +520,8 @@ impl StageSources<'_> {
             for it in items {
                 let mut t = it.clone();
                 NormalizedSource::new(&mut t).strip_precision();
-                Declarations::rewrite_sampler_refs(&mut t, samps);
+                Declarations::rewrite_integer_sampler_fetches(&mut t, samps);
+        Declarations::rewrite_sampler_refs(&mut t, samps);
                 NormalizedSource::new(&mut t).lower_texture_builtins();
                 out.push_str(&t);
                 out.push('\n');
@@ -477,6 +582,7 @@ impl StageSources<'_> {
             hl_log::hl_warn!(hl_log::tag::GL, "glsl vs translate: no main body");
         }
         NormalizedSource::new(&mut vb).strip_precision();
+        Declarations::rewrite_integer_sampler_fetches(&mut vb, &samps);
         Declarations::rewrite_sampler_refs(&mut vb, &samps);
         NormalizedSource::new(&mut vb).lower_texture_builtins();
         vs_out.push_str(&format!("void main() {{\n{vb}\n}}\n"));
@@ -531,6 +637,7 @@ impl StageSources<'_> {
             hl_log::hl_warn!(hl_log::tag::GL, "glsl fs translate: no main body");
         }
         NormalizedSource::new(&mut fb).strip_precision();
+        Declarations::rewrite_integer_sampler_fetches(&mut fb, &samps);
         Declarations::rewrite_sampler_refs(&mut fb, &samps);
         NormalizedSource::new(&mut fb).lower_texture_builtins();
         if fragouts.is_empty() {

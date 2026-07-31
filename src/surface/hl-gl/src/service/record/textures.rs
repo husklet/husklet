@@ -258,16 +258,23 @@ impl TryFrom<InternalFormat> for TextureFormat {
             // formats. Which of them may back a colour attachment is a separate question, answered by
             // `colour_renderable` (ES 3.0 table 3.13), not by this mapping.
             GL_R8_SNORM | GL_RG8_SNORM | GL_RGB8_SNORM | GL_RGBA8_SNORM => TextureFormat::Rgba8Unorm,
-            GL_R8UI | GL_R8I | GL_R16UI | GL_R16I | GL_R32UI | GL_R32I => TextureFormat::Rgba8Unorm,
-            GL_RG8UI | GL_RG8I | GL_RG16UI | GL_RG16I | GL_RG32UI | GL_RG32I => {
-                TextureFormat::Rgba8Unorm
-            }
+            // The 8-bit INTEGER formats have real integer storage in the IR, so they keep it: an integer
+            // texture carries raw texels a `usampler2D`/`isampler2D` reads with `texelFetch`, and routing
+            // them onto an RGBA8 unorm plane would normalize values that have no normalized reading (a
+            // texel of 200 is 200, not 200/255). The WIDER integer formats have no IR storage yet and stay
+            // on the RGBA8 plane, an honest partial — their texels are narrowed on upload.
+            GL_R8UI => TextureFormat::R8Uint,
+            GL_R8I => TextureFormat::R8Sint,
+            GL_RG8UI => TextureFormat::Rg8Uint,
+            GL_RG8I => TextureFormat::Rg8Sint,
+            GL_RGBA8UI => TextureFormat::Rgba8Uint,
+            GL_RGBA8I => TextureFormat::Rgba8Sint,
+            GL_R16UI | GL_R16I | GL_R32UI | GL_R32I => TextureFormat::Rgba8Unorm,
+            GL_RG16UI | GL_RG16I | GL_RG32UI | GL_RG32I => TextureFormat::Rgba8Unorm,
             GL_RGB8UI | GL_RGB8I | GL_RGB16UI | GL_RGB16I | GL_RGB32UI | GL_RGB32I => {
                 TextureFormat::Rgba8Unorm
             }
-            GL_RGBA8UI | GL_RGBA8I | GL_RGBA16UI | GL_RGBA16I | GL_RGBA32UI | GL_RGBA32I => {
-                TextureFormat::Rgba8Unorm
-            }
+            GL_RGBA16UI | GL_RGBA16I | GL_RGBA32UI | GL_RGBA32I => TextureFormat::Rgba8Unorm,
             GL_RGB32F => TextureFormat::Rgba32Float,
             GL_BGRA8_EXT => TextureFormat::Bgra8Unorm,
             GL_R8 | GL_R16F => TextureFormat::R8Unorm,

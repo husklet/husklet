@@ -515,7 +515,7 @@ pub(super) fn lower_draw_n(
         copies.push(Enc::CopyBufferToTexture {
             src: tb.stage_ir,
             src_offset: 0,
-            bytes_per_row: tb.w * 4,
+            bytes_per_row: tb.w * tb.bytes_per_texel,
             dst: tb.tex_ir,
             mip: 0,
             width: tb.w,
@@ -526,7 +526,7 @@ pub(super) fn lower_draw_n(
             copies.push(Enc::CopyBufferToTexture {
                 src,
                 src_offset: 0,
-                bytes_per_row: width * 4,
+                bytes_per_row: width * tb.bytes_per_texel,
                 dst: tb.tex_ir,
                 mip,
                 width,

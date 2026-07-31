@@ -64,6 +64,19 @@ impl TypeToken<'_> {
                 | "sampler2DArray"
                 | "sampler2DShadow"
                 | "samplerExternalOES"
+        ) || self.is_integer_sampler()
+    }
+
+    /// The INTEGER sampler types (`usampler2D` / `isampler2D` and their array forms), which read a texture
+    /// of raw integer texels.
+    ///
+    /// These were absent from `is_sampler`, so an integer sampler was classified as a DATA uniform: it was
+    /// emitted into the uniform block, no texture binding was made for it, and the shader failed to
+    /// compile. That is why integer textures "sampled as zero" — nothing was sampling at all.
+    fn is_integer_sampler(&self) -> bool {
+        matches!(
+            self.0,
+            "usampler2D" | "isampler2D" | "usampler2DArray" | "isampler2DArray"
         )
     }
 

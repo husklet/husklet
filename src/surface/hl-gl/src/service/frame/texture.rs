@@ -67,6 +67,10 @@ pub(super) struct TexBind {
     /// Staging buffers for the mip levels ABOVE the base, as `(buffer, level, width, height)`. EMPTY for
     /// the single-level textures that are the overwhelming majority, so their lowering is unchanged.
     pub(super) mip_stages: Vec<(u32, u32, u32, u32)>,
+    /// Bytes per texel of the staged plane. Four for every normalized shadow; one or two for an integer
+    /// format whose texels are stored raw at their own channel count. The upload's row pitch is derived
+    /// from this rather than assuming RGBA8, which would read an `R8Uint` plane four times too wide.
+    pub(super) bytes_per_texel: u32,
     pub(super) sampler: String,
     pub(super) flip_y: bool,
     pub(super) swizzle: [u32; 4],
@@ -164,6 +168,7 @@ pub(super) fn lower_textures(
                     flip_y: true,
                     swizzle: d.tex_swizzles[unit],
                     mip_stages: Vec::new(),
+                    bytes_per_texel: 4,
                 });
                 continue;
             }
@@ -199,6 +204,7 @@ pub(super) fn lower_textures(
                             flip_y: true,
                             swizzle: d.tex_swizzles[unit],
                             mip_stages: Vec::new(),
+                            bytes_per_texel: 4,
                         });
                         continue;
                     }
@@ -277,6 +283,7 @@ pub(super) fn lower_textures(
                         flip_y: false,
                         swizzle: d.tex_swizzles[unit],
                         mip_stages: Vec::new(),
+                        bytes_per_texel: 4,
                     });
                     continue;
                 }
@@ -424,6 +431,7 @@ pub(super) fn lower_textures(
                 flip_y: false,
                 swizzle: d.tex_swizzles[unit],
                 mip_stages,
+                bytes_per_texel: upload_format.bytes_per_texel().unwrap_or(4) as u32,
             });
         }
         sampler_base += elements as usize;
@@ -432,11 +440,32 @@ pub(super) fn lower_textures(
     Ok(texbinds)
 }
 
+/// The format a sampled CPU shadow is materialized as.
+///
+/// The GL model keeps shadows as canonical RGBA8 whatever the declared internal format, so this collapses
+/// to `Rgba8Unorm` (or its sRGB sibling). The INTEGER formats are the exception and pass through
+/// unchanged: their texels are raw integers with no normalized reading, the plane really is one/two/four
+/// bytes per texel rather than always four, and the shader reads them through an integer sample type that
+/// a unorm format cannot satisfy.
 fn sampled_format(format: TextureFormat) -> TextureFormat {
     match format {
         TextureFormat::Rgba8Srgb | TextureFormat::Bgra8Srgb => TextureFormat::Rgba8Srgb,
+        format if is_integer_format(format) => format,
         _ => TextureFormat::Rgba8Unorm,
     }
+}
+
+/// Whether this IR format carries raw integer texels (the `INTEGER_FORMATS` capability set).
+pub(super) fn is_integer_format(format: TextureFormat) -> bool {
+    matches!(
+        format,
+        TextureFormat::Rgba8Uint
+            | TextureFormat::Rgba8Sint
+            | TextureFormat::R8Uint
+            | TextureFormat::R8Sint
+            | TextureFormat::Rg8Uint
+            | TextureFormat::Rg8Sint
+    )
 }
 
 fn sampler_name(name: &str, element: u32, elements: u32) -> String {

@@ -155,3 +155,102 @@ fn multiple_varyings_and_outs_get_distinct_sequential_locations() {
     assert!(f.contains("layout(location = 0) in vec2 vUV;"), "{f}");
     assert!(f.contains("layout(location = 1) in vec3 vNormal;"), "{f}");
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Integer samplers: declared as integer textures, and ACCESSED by fetch rather than by sampling
+// ---------------------------------------------------------------------------------------------------
+
+/// `usampler2D` was not in the sampler type set at all, so it was classified as a DATA uniform: it landed
+/// in the uniform block, no texture binding was made for it, and the shader failed to compile. That is why
+/// integer textures "sampled as zero" — nothing was sampling.
+#[test]
+fn an_integer_sampler_declares_an_integer_texture_and_a_sampler() {
+    let fs = "#version 300 es\nprecision highp float;\nin vec2 uv;\n\
+              uniform highp usampler2D tex;\nout vec4 c;\n\
+              void main() { c = vec4(texture(tex, uv)) / 255.0; }\n";
+    let out = fragment_of(fs);
+    assert!(
+        out.contains("uniform utexture2D tex_hltex"),
+        "the texture global must carry the INTEGER texture type: {out}"
+    );
+    assert!(
+        out.contains("tex_hlsmp"),
+        "the sampler global is still declared — the driver binds a texture+sampler PAIR per sampler and \
+         a bind group short of its layout is refused: {out}"
+    );
+    assert!(
+        !out.contains("uniform highp usampler2D tex;"),
+        "the combined declaration must not survive: {out}"
+    );
+}
+
+/// An integer texture cannot be sampled — no normalized reading, so no filtering — and a bind group that
+/// offers one to a sampling instruction is refused. `texelFetch` is the only legal access, and it indexes
+/// by texel, so the normalized coordinate is scaled by `textureSize`.
+#[test]
+fn sampling_an_integer_sampler_becomes_a_texel_fetch() {
+    let fs = "#version 300 es\nprecision highp float;\nin vec2 uv;\n\
+              uniform highp usampler2D tex;\nout vec4 c;\n\
+              void main() { c = vec4(texture(tex, uv)) / 255.0; }\n";
+    let out = fragment_of(fs);
+    assert!(
+        out.contains("texelFetch(tex_hltex, ivec2((uv) * vec2(textureSize(tex_hltex, 0))), 0)"),
+        "the sample must become an indexed fetch: {out}"
+    );
+    assert!(
+        !out.contains("usampler2D(tex_hltex"),
+        "the recombining constructor must NOT be emitted for an integer sampler: {out}"
+    );
+}
+
+/// The coordinate is extracted paren-balanced, so an expression containing its own calls survives whole.
+#[test]
+fn an_integer_fetch_keeps_a_compound_coordinate_intact() {
+    let fs = "#version 300 es\nprecision highp float;\nin vec2 uv;\n\
+              uniform highp isampler2D tex;\nout vec4 c;\n\
+              void main() { c = vec4(texture(tex, clamp(uv * 2.0, vec2(0.0), vec2(1.0)))); }\n";
+    let out = fragment_of(fs);
+    assert!(
+        out.contains("(clamp(uv * 2.0, vec2(0.0), vec2(1.0))) * vec2(textureSize(tex_hltex, 0))"),
+        "the whole coordinate expression must be carried through: {out}"
+    );
+    assert!(out.contains("uniform itexture2D tex_hltex"), "{out}");
+}
+
+/// An ORDINARY float sampler must be untouched by any of this.
+#[test]
+fn a_float_sampler_still_recombines_and_samples() {
+    let fs = "#version 300 es\nprecision highp float;\nin vec2 uv;\n\
+              uniform sampler2D tex;\nout vec4 c;\nvoid main() { c = texture(tex, uv); }\n";
+    let out = fragment_of(fs);
+    assert!(out.contains("uniform texture2D tex_hltex"), "{out}");
+    assert!(out.contains("sampler2D(tex_hltex, tex_hlsmp)"), "{out}");
+    assert!(!out.contains("texelFetch"), "no fetch rewrite on a float sampler: {out}");
+}
+
+/// Translate a fragment shader alongside a trivial vertex stage and return the emitted fragment source.
+fn fragment_of(fs: &str) -> String {
+    const VS: &str = "#version 300 es\nin vec2 position;\nout vec2 uv;\n\
+                      void main() { uv = position; gl_Position = vec4(position, 0.0, 1.0); }\n";
+    glsl::StageSources::new(VS, fs).translate_render().1
+}
+
+/// A guest may write `texelFetch`/`textureSize` on an integer sampler itself. Those uses want the bare
+/// texture global — handing them the recombining constructor would give a fetch instruction a sampled
+/// image, which the backend refuses.
+#[test]
+fn a_hand_written_integer_fetch_gets_the_bare_texture_global() {
+    let fs = "#version 300 es\nprecision highp float;\n\
+              uniform highp usampler2D tex;\nout vec4 c;\n\
+              void main() { c = vec4(texelFetch(tex, ivec2(1, 2), 0)) / float(textureSize(tex, 0).x); }\n";
+    let out = fragment_of(fs);
+    assert!(
+        out.contains("texelFetch(tex_hltex, ivec2(1, 2), 0)"),
+        "the fetch keeps its own index and takes the bare global: {out}"
+    );
+    assert!(out.contains("textureSize(tex_hltex, 0)"), "{out}");
+    assert!(
+        !out.contains("usampler2D(tex_hltex"),
+        "no constructor anywhere for an integer sampler: {out}"
+    );
+}

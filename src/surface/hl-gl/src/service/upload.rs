@@ -11,6 +11,8 @@ use crate::model::glconst::*;
 pub struct Upload {
     format: u32,
     type_: u32,
+    /// Component count of the source FORMAT (1..=4).
+    channels: usize,
     width: usize,
     height: usize,
     source_bpp: usize,
@@ -75,6 +77,7 @@ impl Upload {
         Some(Self {
             format,
             type_,
+            channels,
             width,
             height,
             source_bpp,
@@ -88,15 +91,54 @@ impl Upload {
         self.source_len
     }
 
+    /// Whether this upload's FORMAT is an integer one, whose texels are stored raw at their own channel
+    /// count rather than expanded to RGBA8 (see [`Self::rgba8`]).
+    pub fn is_integer(self) -> bool {
+        matches!(
+            self.format,
+            GL_RED_INTEGER | GL_RG_INTEGER | GL_RGB_INTEGER | GL_RGBA_INTEGER
+        )
+    }
+
+    /// The bytes-per-texel of the produced plane: four for the RGBA8 shadow every normalized format
+    /// materializes, and the channel count for an 8-bit integer format, whose plane is `R8`/`Rg8`/`Rgba8`
+    /// of raw integers.
+    ///
+    /// Restricted to 8-BIT integer sources on purpose: those are exactly the formats with real integer
+    /// storage in the IR (`GL_R8UI`/`GL_RG8UI`/`GL_RGBA8UI` and their signed siblings). A wider integer
+    /// format has no IR storage, still resolves to an `Rgba8Unorm` plane, and must therefore keep
+    /// producing four bytes per texel — otherwise the plane and the texture's declared format disagree
+    /// about its size and the upload's row pitch walks off the end of it. Three-channel integer formats
+    /// have no IR storage either and take the same RGBA8 path.
+    pub fn destination_bpt(self) -> usize {
+        let eight_bit = matches!(self.type_, GL_UNSIGNED_BYTE | GL_BYTE);
+        if self.is_integer() && eight_bit && self.channels != 3 {
+            self.channels
+        } else {
+            4
+        }
+    }
+
     pub fn rgba8(self, source: &[u8]) -> Option<Vec<u8>> {
         if source.len() < self.source_len {
             return None;
         }
-        let mut out = Vec::with_capacity(self.width.checked_mul(self.height)?.checked_mul(4)?);
+        let bpt = self.destination_bpt();
+        let mut out = Vec::with_capacity(self.width.checked_mul(self.height)?.checked_mul(bpt)?);
         for y in 0..self.height {
             let begin = self.start + y * self.stride;
             let row = &source[begin..begin + self.width * self.source_bpp];
             for pixel in row.chunks_exact(self.source_bpp) {
+                // An INTEGER texel is stored RAW at its own channel count: the value is a number, not a
+                // colour, so it is neither normalized nor padded out to four channels. A three-channel
+                // integer format has no IR storage and still takes the RGBA8 path below.
+                if bpt != 4 {
+                    for channel in 0..bpt {
+                        out.push(self.integer_channel(pixel, channel));
+                    }
+                    continue;
+                }
+
                 // The packed types (ES 3.0 table 3.2). Each component is an unsigned normalized integer of
                 // its own width, expanded to 8 bits by [`unorm8`]. Bit positions are MSB-first for the
                 // `_5_6_5` / `_4_4_4_4` / `_5_5_5_1` types and LSB-first (`_REV`) for `_2_10_10_10_REV`.
@@ -246,6 +288,24 @@ impl Upload {
             GL_UNSIGNED_INT | GL_INT | GL_FLOAT => 4,
             _ => return None,
         })
+    }
+}
+
+impl Upload {
+    /// One channel of an INTEGER texel, as the raw integer value truncated to the 8-bit plane. Signed
+    /// sources keep their two's-complement byte, so a `GL_BYTE` value of -120 stores as `0x88` and reads
+    /// back as -120 through an `R8Sint`/`Rgba8Sint` view.
+    fn integer_channel(self, pixel: &[u8], channel: usize) -> u8 {
+        let width = match self.type_ {
+            GL_UNSIGNED_BYTE | GL_BYTE => 1,
+            GL_UNSIGNED_SHORT | GL_SHORT => 2,
+            GL_UNSIGNED_INT | GL_INT => 4,
+            // A packed integer type (`GL_UNSIGNED_INT_2_10_10_10_REV` with `GL_RGBA_INTEGER`) has no
+            // per-channel byte; the packed decoder already produced its components.
+            _ => return self.packed(pixel).map(|texel| texel[channel]).unwrap_or(0),
+        };
+        // The low byte of the component: an integer wider than the plane truncates rather than scaling.
+        pixel.get(channel * width).copied().unwrap_or(0)
     }
 }
 
