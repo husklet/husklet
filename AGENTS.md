@@ -948,7 +948,18 @@ instrument against something outside itself before trusting a negative from it.
 ## Manager discipline
 
 Stage commits by file, never `git add -A` across a shared tree — you will sweep up another agent's
-uncommitted work and mis-attribute it. Do not install a bundle while an agent is mid-measurement. When you
+uncommitted work and mis-attribute it. This is not hypothetical: `40220be39`, whose message is about an
+awk extension in a gateway probe, carries 294 lines of unrelated Vulkan copy/blit/resolve changes that
+another agent was midway through staging. The code was correct and the tests passed, so nothing looked
+wrong — the loss is that the defect and the reasoning for the fix are recorded nowhere, and the history
+now actively misleads whoever reads it next. Recovering afterwards is not possible: rewriting a pushed
+commit under a live fleet costs more than it repairs.
+
+An agent working in an isolated worktree should commit and push FROM that worktree, not copy files into
+the shared tree first. The copy is the window in which someone else's `git add -A` can swallow the work,
+and it is wide — long enough here for the sweep to land between staging and committing.
+
+Do not install a bundle while an agent is mid-measurement. When you
 relay a finding between agents, mark clearly what was measured and what was inferred; a hypothesis passed on
 as fact wastes the next agent's whole session.
 
