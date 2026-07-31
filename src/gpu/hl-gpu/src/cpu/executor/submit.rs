@@ -90,11 +90,15 @@ impl CpuExecutor {
         // the static stencil compare/ops/masks; this is the one dynamic operand the compare tests against
         // and a `REPLACE` op writes.
         let mut cur_stencil_ref: u32 = 0;
+        // The viewport/scissor rectangles in force at a draw. Pass-scoped, exactly as in wgpu: a new
+        // render pass starts with neither bound (full-target viewport, no scissor).
+        let mut cur_rect = raster::PassRect::default();
         for op in &cb.encoder {
             match op {
                 Enc::BeginRenderPass { color, depth } => {
                     cur_targets.clear();
                     cur_stencil_ref = 0;
+                    cur_rect = raster::PassRect::default();
                     for c in color {
                         let fmt = texture(res, c.texture)?.desc.format;
                         cur_targets.push((c.texture, fmt));
@@ -131,6 +135,12 @@ impl CpuExecutor {
                     color,
                 } => {
                     raster::clear_rect(res, *texture, *x, *y, *w, *h, *color)?;
+                }
+                Enc::SetViewport { x, y, w, h, .. } => {
+                    cur_rect.viewport = Some([*x, *y, *w, *h]);
+                }
+                Enc::SetScissor { x, y, w, h } => {
+                    cur_rect.scissor = Some([*x, *y, *w, *h]);
                 }
                 Enc::SetPipeline(p) => cur_pipeline = Some(*p),
                 Enc::SetStencilReference { reference } => cur_stencil_ref = *reference,
@@ -169,6 +179,7 @@ impl CpuExecutor {
                         *vertex_count,
                         *instance_count,
                         cur_stencil_ref,
+                        cur_rect,
                     )?;
                 }
                 Enc::DrawIndexed {
@@ -193,6 +204,7 @@ impl CpuExecutor {
                         *base_vertex,
                         *instance_count,
                         cur_stencil_ref,
+                        cur_rect,
                     )?;
                 }
                 Enc::Dispatch { x, y, z } => {

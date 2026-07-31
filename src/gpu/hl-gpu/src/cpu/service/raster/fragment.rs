@@ -142,8 +142,14 @@ pub(super) fn edge(a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> f32 {
 }
 
 /// Integer pixel bounding box `[minx,maxx) × [miny,maxy)` of a framebuffer-space triangle, clamped to the
-/// target dimensions.
-pub(super) fn tri_bbox(fb: &[[f32; 2]; 3], w: usize, h: usize) -> (usize, usize, usize, usize) {
+/// target dimensions and then to `clip` — the draw's viewport ∩ scissor rect (see `PassRect::clip`), which
+/// is what keeps a scissored draw inside its rectangle.
+pub(super) fn tri_bbox(
+    fb: &[[f32; 2]; 3],
+    w: usize,
+    h: usize,
+    clip: (usize, usize, usize, usize),
+) -> (usize, usize, usize, usize) {
     let minxf = fb[0][0].min(fb[1][0]).min(fb[2][0]);
     let maxxf = fb[0][0].max(fb[1][0]).max(fb[2][0]);
     let minyf = fb[0][1].min(fb[1][1]).min(fb[2][1]);
@@ -152,5 +158,6 @@ pub(super) fn tri_bbox(fb: &[[f32; 2]; 3], w: usize, h: usize) -> (usize, usize,
     let miny = (minyf.floor().max(0.0) as i64).clamp(0, h as i64) as usize;
     let maxx = (maxxf.ceil() as i64).clamp(0, w as i64) as usize;
     let maxy = (maxyf.ceil() as i64).clamp(0, h as i64) as usize;
-    (minx, miny, maxx, maxy)
+    let (cx0, cy0, cx1, cy1) = clip;
+    (minx.max(cx0), miny.max(cy0), maxx.min(cx1), maxy.min(cy1))
 }

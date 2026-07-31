@@ -78,6 +78,7 @@ pub(crate) fn exec_draw(
     vertex_count: u32,
     instance_count: u32,
     stencil_ref: u32,
+    rect: PassRect,
 ) -> Result<()> {
     let RasterState {
         topology,
@@ -123,6 +124,7 @@ pub(crate) fn exec_draw(
             stencil_ref,
             cull,
             front_face,
+            rect,
         )?;
     }
     Ok(())
@@ -143,6 +145,7 @@ pub(crate) fn exec_draw_indexed(
     base_vertex: i32,
     instance_count: u32,
     stencil_ref: u32,
+    rect: PassRect,
 ) -> Result<()> {
     let RasterState {
         topology,
@@ -218,6 +221,7 @@ pub(crate) fn exec_draw_indexed(
             stencil_ref,
             cull,
             front_face,
+            rect,
         )?;
     }
     Ok(())

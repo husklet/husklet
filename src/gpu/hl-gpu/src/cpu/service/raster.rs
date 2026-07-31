@@ -20,6 +20,62 @@ pub(crate) use draw::{exec_draw, exec_draw_indexed};
 
 use fragment::{barycentric, edge, ndc_to_fb, read_vertex, tri_bbox, write_fragment, DrawVertex};
 
+/// Pass-scoped rasterizer rectangles: the `SetViewport` NDC→window transform and the `SetScissor` clip
+/// rect in force at a draw. Both are framebuffer pixels with a top-left origin (y down) — the convention
+/// `RenderPass::set_viewport`/`set_scissor_rect` take, so the oracle and the wgpu executor read the SAME
+/// numbers off the wire.
+///
+/// The oracle previously ignored both ops outright, which made it agree with the executor over any
+/// scissored or viewport-transformed program *by both being wrong* — a differential over that area proved
+/// nothing. Modelling them here is what gives the oracle its authority back.
+///
+/// Fidelity note — this mirrors the executor exactly (`hl-gpu-wgpu` `Viewport`/`Scissor`): a GL viewport
+/// may overhang the target, so wgpu is handed the target-INTERSECTED rect plus a vertex correction that
+/// preserves the ORIGINAL transform. So the mapping uses the raw rect and the coverage is clipped to the
+/// intersection. An empty intersection (viewport or scissor entirely outside the target) rasterizes
+/// nothing, which is both GL's and the executor's result.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct PassRect {
+    /// `SetViewport` `(x, y, w, h)`, raw off the wire; `None` = the wgpu default (the whole target).
+    pub(crate) viewport: Option<[f32; 4]>,
+    /// `SetScissor` `(x, y, w, h)`, raw off the wire; `None` = the whole target.
+    pub(crate) scissor: Option<[u32; 4]>,
+}
+
+impl PassRect {
+    /// Map an NDC position into framebuffer pixels through the bound viewport (or the full target).
+    fn map(&self, p: [f32; 2], w: usize, h: usize) -> [f32; 2] {
+        match self.viewport {
+            Some([vx, vy, vw, vh]) => [vx + (p[0] * 0.5 + 0.5) * vw, vy + (0.5 - p[1] * 0.5) * vh],
+            None => ndc_to_fb(p, w, h),
+        }
+    }
+
+    /// The pixel rect a draw may touch: target ∩ viewport ∩ scissor, as `[minx, maxx) × [miny, maxy)`.
+    /// `None` = empty, so the draw writes no color, no depth and no stencil.
+    fn clip(&self, w: usize, h: usize) -> Option<(usize, usize, usize, usize)> {
+        let (mut x0, mut y0, mut x1, mut y1) = (0usize, 0usize, w, h);
+        if let Some([vx, vy, vw, vh]) = self.viewport {
+            if !(vw.is_finite() && vh.is_finite() && vw > 0.0 && vh > 0.0) {
+                return None;
+            }
+            // A pixel is inside the viewport when its CENTRE is (the rect may be fractional).
+            let px = |e: f32| (e - 0.5).ceil().max(0.0) as usize;
+            x0 = x0.max(px(vx));
+            y0 = y0.max(px(vy));
+            x1 = x1.min(px(vx + vw));
+            y1 = y1.min(px(vy + vh));
+        }
+        if let Some([sx, sy, sw, sh]) = self.scissor {
+            x0 = x0.max(sx as usize);
+            y0 = y0.max(sy as usize);
+            x1 = x1.min(sx.saturating_add(sw) as usize);
+            y1 = y1.min(sy.saturating_add(sh) as usize);
+        }
+        (x0 < x1 && y0 < y1).then_some((x0, y0, x1, y1))
+    }
+}
+
 /// Rasterize one draw's assembled triangles into every bound color attachment, compositing with
 /// premultiplied source-over performed in LINEAR light (sRGB targets decode/encode around the blend; a
 /// target whose blend is `None` gets an opaque replace).
@@ -35,6 +91,7 @@ fn raster_draw(
     stencil_ref: u32,
     cull: u32,
     front_face: u32,
+    rect: PassRect,
 ) -> Result<()> {
     let tris: Vec<[usize; 3]> = match topology {
         Topology::TriangleList => (0..verts.len() / 3)
@@ -68,6 +125,7 @@ fn raster_draw(
             stencil_ref,
             cull,
             front_face,
+            rect,
         ),
         None => raster_draw_no_depth(
             res,
@@ -78,6 +136,7 @@ fn raster_draw(
             verts,
             cull,
             front_face,
+            rect,
         ),
     }
 }
@@ -122,6 +181,7 @@ fn raster_draw_no_depth(
     verts: &[DrawVertex],
     cull: u32,
     front_face: u32,
+    rect: PassRect,
 ) -> Result<()> {
     for (ti, (tex_id, fmt)) in targets.iter().enumerate() {
         let order = fmt.rgba_channel_order().ok_or(GpuError::Unsupported(
@@ -141,20 +201,25 @@ fn raster_draw_no_depth(
         if w == 0 || h == 0 {
             continue;
         }
+        // Viewport ∩ scissor ∩ target: every fragment of this draw is clipped to it.
+        let clip = match rect.clip(w, h) {
+            Some(c) => c,
+            None => continue,
+        };
         let mut covered = vec![false; w * h];
         let t = texture_mut(res, *tex_id)?;
         for tri in tris {
             let v = [verts[tri[0]], verts[tri[1]], verts[tri[2]]];
             let fb = [
-                ndc_to_fb(v[0].pos, w, h),
-                ndc_to_fb(v[1].pos, w, h),
-                ndc_to_fb(v[2].pos, w, h),
+                rect.map(v[0].pos, w, h),
+                rect.map(v[1].pos, w, h),
+                rect.map(v[2].pos, w, h),
             ];
             let area = edge(fb[0], fb[1], fb[2]);
             if area == 0.0 || culled(area, cull, front_face) {
                 continue;
             }
-            let (minx, miny, maxx, maxy) = tri_bbox(&fb, w, h);
+            let (minx, miny, maxx, maxy) = tri_bbox(&fb, w, h, clip);
             for py in miny..maxy {
                 for px in minx..maxx {
                     let idx = py * w + px;
@@ -208,6 +273,7 @@ fn raster_draw_depth(
     stencil_ref: u32,
     cull: u32,
     front_face: u32,
+    rect: PassRect,
 ) -> Result<()> {
     // Dimensions + format come from the depth attachment (color + depth attachments share extent).
     let (ds_fmt, w, h) = {
@@ -217,6 +283,11 @@ fn raster_draw_depth(
     if w == 0 || h == 0 {
         return Ok(());
     }
+    // Viewport ∩ scissor ∩ target. An empty clip writes no color, no depth and no stencil.
+    let clip = match rect.clip(w, h) {
+        Some(c) => c,
+        None => return Ok(()),
+    };
     // A combined depth+stencil attachment stores 8 bytes/texel (`[depth f32 | stencil u8 | 0,0,0]`); a
     // depth-only attachment stores 4 (`[depth f32]`). The stencil plane exists only for the former.
     let has_stencil = ds_fmt == TextureFormat::Depth24PlusStencil8;
@@ -256,9 +327,9 @@ fn raster_draw_depth(
     for tri in tris {
         let v = [verts[tri[0]], verts[tri[1]], verts[tri[2]]];
         let fb = [
-            ndc_to_fb(v[0].pos, w, h),
-            ndc_to_fb(v[1].pos, w, h),
-            ndc_to_fb(v[2].pos, w, h),
+            rect.map(v[0].pos, w, h),
+            rect.map(v[1].pos, w, h),
+            rect.map(v[2].pos, w, h),
         ];
         let area = edge(fb[0], fb[1], fb[2]);
         // A culled triangle contributes NOTHING — no color, no depth write, and no stencil op — matching
@@ -266,7 +337,7 @@ fn raster_draw_depth(
         if area == 0.0 || culled(area, cull, front_face) {
             continue;
         }
-        let (minx, miny, maxx, maxy) = tri_bbox(&fb, w, h);
+        let (minx, miny, maxx, maxy) = tri_bbox(&fb, w, h, clip);
         for py in miny..maxy {
             for px in minx..maxx {
                 let idx = py * w + px;
