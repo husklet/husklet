@@ -26,13 +26,25 @@ pub fn get_shaderiv(ctx: &GlContext, shader: u32, pname: u32) -> i32 {
                 GL_FALSE as i32
             }
         }
-        GL_INFO_LOG_LENGTH => 0,
+        GL_INFO_LOG_LENGTH => {
+            let log = ctx.programs.shader_info_log(shader);
+            if log.is_empty() {
+                0
+            } else {
+                log.len() as i32 + 1
+            }
+        }
         GL_SHADER_SOURCE_LENGTH => sh.src.as_ref().map(|s| s.len() as i32 + 1).unwrap_or(0),
         GL_SHADER_TYPE => sh.kind as i32,
         // ES 3.0 §7.1: GL_TRUE once glDeleteShader has flagged this shader.
         GL_DELETE_STATUS => i32::from(sh.pending_delete),
         _ => 0,
     }
+}
+
+/// The actionable diagnostic retained by the most recent refused shader compile.
+pub fn shader_info_log(ctx: &GlContext, shader: u32) -> &str {
+    ctx.programs.shader_info_log(shader)
 }
 
 /// The actionable diagnostic retained by the most recent failed program link.

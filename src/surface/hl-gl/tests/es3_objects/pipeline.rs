@@ -77,3 +77,43 @@ fn delete_program_pipeline_object_makes_it_no_longer_a_pipeline() {
     );
     assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
 }
+
+/// A refused compile must report `GL_FALSE` and say why. `GL_INFO_LOG_LENGTH` was hard-coded to zero, so
+/// even once a compile could fail there was nowhere for the reason to go.
+#[test]
+fn a_refused_compile_reports_false_and_a_diagnostic() {
+    let mut c = ctx();
+    let sh = record::create_shader(&mut c, GL_FRAGMENT_SHADER);
+    record::shader_source(
+        &mut c,
+        sh,
+        "#version 300 es\nprecision highp float;\nout vec4 o;\n\
+         void main() { o = vec4(float(bitCount(7))); }\n",
+    );
+    record::compile_shader(&mut c, sh);
+
+    assert_eq!(
+        query::get_shaderiv(&c, sh, GL_COMPILE_STATUS),
+        GL_FALSE as i32,
+        "a 3.10 built-in under #version 300 es must not compile"
+    );
+    let log = query::shader_info_log(&c, sh);
+    assert!(log.contains("bitCount"), "the log names the construct: {log:?}");
+    assert!(log.contains("3.10"), "and the version that introduced it: {log:?}");
+    assert_eq!(
+        query::get_shaderiv(&c, sh, GL_INFO_LOG_LENGTH),
+        log.len() as i32 + 1,
+        "GL_INFO_LOG_LENGTH must match the log, not report zero"
+    );
+
+    // An ordinary 3.00 shader still compiles with an empty log.
+    let ok = record::create_shader(&mut c, GL_FRAGMENT_SHADER);
+    record::shader_source(
+        &mut c,
+        ok,
+        "#version 300 es\nprecision highp float;\nout vec4 o;\nvoid main() { o = vec4(1.0); }\n",
+    );
+    record::compile_shader(&mut c, ok);
+    assert_eq!(query::get_shaderiv(&c, ok, GL_COMPILE_STATUS), GL_TRUE as i32);
+    assert_eq!(query::get_shaderiv(&c, ok, GL_INFO_LOG_LENGTH), 0);
+}

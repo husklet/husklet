@@ -48,7 +48,24 @@ impl Programs {
     pub fn compile_shader(&mut self, name: u32) {
         if let Some(sh) = self.shaders.get_mut(&name) {
             sh.compiled = true;
+            sh.info_log.clear();
         }
+    }
+
+    /// Refuse a compile, retaining the diagnostic for `glGetShaderInfoLog`.
+    pub fn fail_compile(&mut self, name: u32, reason: String) {
+        if let Some(sh) = self.shaders.get_mut(&name) {
+            sh.compiled = false;
+            sh.info_log = reason;
+        }
+    }
+
+    /// The diagnostic from this shader's most recent refused compile (empty when it compiled).
+    pub fn shader_info_log(&self, name: u32) -> &str {
+        self.shaders
+            .get(&name)
+            .map(|sh| sh.info_log.as_str())
+            .unwrap_or("")
     }
 
     /// Whether `name` is a live SHADER object (not a program, not a reclaimed name).

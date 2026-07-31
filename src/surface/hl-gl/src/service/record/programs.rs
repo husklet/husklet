@@ -271,6 +271,25 @@ pub fn shader_source(ctx: &mut GlContext, shader: u32, src: &str) {
 /// `glCompileShader(shader)`.
 impl GlContext {
     pub fn compile_shader(&mut self, shader: u32) {
+        // GLSL-ES §3.3: a shader may use only the constructs its declared `#version` defines. A 3.10
+        // built-in under `#version 300 es` compiled here and failed on real hardware — the author's first
+        // notice being a bug report from a device they do not have. Refuse it, and say which one.
+        if let Some(source) = self
+            .programs
+            .shader(shader)
+            .and_then(|sh| sh.src.as_deref())
+        {
+            if let Some(builtin) = crate::adapter::glsl::builtin_above_declared_version(source) {
+                let version = crate::adapter::glsl::declared_es_version(source);
+                self.programs.fail_compile(
+                    shader,
+                    format!(
+                        "'{builtin}' : no matching overloaded function found — it was introduced in                          GLSL ES 3.10 and this shader declares #version {version} es"
+                    ),
+                );
+                return;
+            }
+        }
         if !self.programs.has_shader(shader) {
             // ES 3.0 §2.11.1: a name that is not a shader object is GL_INVALID_VALUE, and one that names a
             // program is GL_INVALID_OPERATION. Both were silent no-ops, so a call on a DELETED shader

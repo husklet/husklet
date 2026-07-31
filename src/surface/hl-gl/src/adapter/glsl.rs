@@ -381,3 +381,88 @@ use constants::Constants;
 use normalize::NormalizedSource;
 use scanner::*;
 use tokens::*;
+
+/// The GLSL-ES version a shader declares, as the `#version` integer (`300` for `#version 300 es`).
+///
+/// `None` when the shader declares no `#version` at all, which GLSL-ES defines as version 100.
+pub fn declared_es_version(source: &str) -> u32 {
+    for line in source.lines() {
+        let line = line.trim_start();
+        let Some(rest) = line.strip_prefix("#version") else {
+            continue;
+        };
+        let digits: String = rest
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        return digits.parse().unwrap_or(100);
+    }
+    100
+}
+
+/// Built-ins that GLSL-ES introduced at 3.10 and which a 3.00 or 1.00 shader may not use.
+///
+/// A shader that uses one under `#version 300 es` compiles here and fails on conformant hardware, which
+/// is the worst way for an author to find out. Each entry is a FUNCTION, matched only as a call, so a
+/// user-defined variable of the same name is untouched.
+///
+/// Deliberately confined to the unambiguous 3.10 additions of GLSL-ES §8 — the integer/bit-manipulation
+/// group, the extended-arithmetic group, `frexp`/`ldexp`, `textureGather`, and the image/atomic entry
+/// points. Constructs that merely *look* newer are excluded: `packSnorm2x16` and friends are 3.00, and
+/// `texelFetch` is 3.00.
+const ES_310_BUILTINS: &[&str] = &[
+    "bitCount",
+    "bitfieldExtract",
+    "bitfieldInsert",
+    "bitfieldReverse",
+    "findLSB",
+    "findMSB",
+    "frexp",
+    "ldexp",
+    "imulExtended",
+    "umulExtended",
+    "uaddCarry",
+    "usubBorrow",
+    "textureGather",
+    "textureGatherOffset",
+    "imageLoad",
+    "imageStore",
+    "imageSize",
+    "atomicAdd",
+    "atomicMin",
+    "atomicMax",
+    "atomicAnd",
+    "atomicOr",
+    "atomicXor",
+    "atomicExchange",
+    "atomicCompSwap",
+];
+
+/// The first ES 3.10 built-in this source calls, when its declared version is below 3.10.
+///
+/// Returns `None` for a shader that is within its declared version — including every 3.10-or-later
+/// shader, which may use all of them.
+pub fn builtin_above_declared_version(source: &str) -> Option<&'static str> {
+    if declared_es_version(source) >= 310 {
+        return None;
+    }
+    let bytes = source.as_bytes();
+    for name in ES_310_BUILTINS {
+        let mut from = 0usize;
+        while let Some(offset) = source[from..].find(name) {
+            let start = from + offset;
+            let end = start + name.len();
+            let before_is_word = start > 0 && Tokens::is_word(bytes[start - 1]);
+            // A CALL: the next non-space character is `(`. A declaration or a member access is not one.
+            let after = source[end..].trim_start();
+            let is_call = after.starts_with('(');
+            let is_member = start > 0 && bytes[start - 1] == b'.';
+            if !before_is_word && !is_member && is_call {
+                return Some(name);
+            }
+            from = end;
+        }
+    }
+    None
+}

@@ -302,6 +302,21 @@ pub fn get_floatv(ctx: &GlContext, pname: u32, out: &mut [f32; 4]) -> usize {
             out[0] = 1.0;
             1
         }
+        // Both ranges are `[1, 1]`, and that is HONEST rather than unambitious. Granting only unity is
+        // legal (ES 3.0 §3.4/§3.5 fix no minimum above it), but it makes every wide-point and wide-line
+        // conformance case unsatisfiable by construction, so the reason is recorded here rather than
+        // re-investigated:
+        //
+        // * LINE WIDTH cannot be widened at all. WebGPU removed wide lines: `wgpu::PrimitiveState` carries
+        //   topology, strip index format, winding, cull mode, unclipped depth and polygon mode, and no
+        //   width. The neutral IR has no field for one either, so there is nothing between this driver and
+        //   the rasterizer that could carry it. This range is final.
+        // * POINT SIZE is not as clear-cut and is deliberately left at unity for now. WGSL has no point
+        //   size, but the Metal path underneath does: `wgpu-hal` sets naga's `allow_and_force_point_size`
+        //   whenever the topology class is Point, and naga passes a shader-declared `PointSize` through
+        //   when it is set. So the capability may exist on that path — but assigning `gl_PointSize` is
+        //   currently what silently destroys the context, and advertising a wider range before that is
+        //   fixed would turn "unsatisfiable" into "wedges", which is strictly worse. Revisit once it is.
         GL_ALIASED_POINT_SIZE_RANGE | GL_ALIASED_LINE_WIDTH_RANGE => {
             out[0] = 1.0;
             out[1] = 1.0;

@@ -254,3 +254,76 @@ fn a_hand_written_integer_fetch_gets_the_bare_texture_global() {
         "no constructor anywhere for an integer sampler: {out}"
     );
 }
+
+// ---------------------------------------------------------------------------------------------------
+// A shader may use only what its declared #version defines
+// ---------------------------------------------------------------------------------------------------
+
+/// GLSL-ES §3.3. A 3.10 built-in under `#version 300 es` compiled here and failed on real hardware, so a
+/// shader that only worked on Husklet shipped silently and the author found out from a device they do not
+/// have. Matching is on CALL syntax, so a user-defined name is untouched.
+#[test]
+fn an_es_310_builtin_is_refused_below_its_version() {
+    for (name, body) in [
+        ("bitCount", "int n = bitCount(7);"),
+        ("findMSB", "int n = findMSB(7);"),
+        ("frexp", "int e; float m = frexp(1.5, e);"),
+        ("textureGather", "vec4 g = textureGather(tex, uv);"),
+        ("imageStore", "imageStore(img, ivec2(0), vec4(1.0));"),
+    ] {
+        let fs = format!(
+            "#version 300 es\nprecision highp float;\nin vec2 uv;\nuniform sampler2D tex;\n\
+             out vec4 c;\nvoid main() {{ {body} c = vec4(1.0); }}\n"
+        );
+        assert_eq!(
+            glsl::builtin_above_declared_version(&fs),
+            Some(name),
+            "{name} is an ES 3.10 addition and this shader declares 300"
+        );
+    }
+}
+
+/// The same shader at 3.10 is legal and must compile — the rule is about the DECLARED version, not about
+/// the built-in being unsupported.
+#[test]
+fn the_same_builtin_is_accepted_at_its_own_version() {
+    let fs = "#version 310 es\nprecision highp float;\nout vec4 c;\n\
+              void main() { c = vec4(float(bitCount(7))); }\n";
+    assert_eq!(glsl::builtin_above_declared_version(fs), None);
+}
+
+/// A 3.00 shader that uses only 3.00 constructs is untouched — including the ones that merely LOOK newer.
+/// `packSnorm2x16` and `texelFetch` are both 3.00 and must not be caught.
+#[test]
+fn ordinary_es_300_constructs_are_not_refused() {
+    let fs = "#version 300 es\nprecision highp float;\nin vec2 uv;\nuniform sampler2D tex;\nout vec4 c;\n\
+              void main() {\n\
+                uint p = packSnorm2x16(vec2(0.25, 0.75));\n\
+                vec4 t = texelFetch(tex, ivec2(0, 0), 0);\n\
+                c = t + vec4(float(p));\n\
+              }\n";
+    assert_eq!(glsl::builtin_above_declared_version(fs), None);
+}
+
+/// A user-defined name that happens to match must not be caught: only a CALL counts, and a declaration
+/// with the same spelling is the author's own function at their own version.
+#[test]
+fn a_user_defined_name_is_not_mistaken_for_the_builtin() {
+    // Used as a variable, never called.
+    let fs = "#version 300 es\nprecision highp float;\nout vec4 c;\n\
+              void main() { float bitCount = 3.0; c = vec4(bitCount); }\n";
+    assert_eq!(glsl::builtin_above_declared_version(fs), None);
+
+    // A member access of that name is not the built-in either.
+    let fs = "#version 300 es\nprecision highp float;\nout vec4 c;\nstruct S { float frexp; };\n\
+              void main() { S s; s.frexp = 1.0; c = vec4(s.frexp); }\n";
+    assert_eq!(glsl::builtin_above_declared_version(fs), None);
+}
+
+/// A shader with no `#version` is GLSL-ES 1.00, which is below 3.10 like any other.
+#[test]
+fn the_declared_version_defaults_to_one_hundred() {
+    assert_eq!(glsl::declared_es_version("void main(){}\n"), 100);
+    assert_eq!(glsl::declared_es_version("#version 300 es\n"), 300);
+    assert_eq!(glsl::declared_es_version("  #version 310 es\n"), 310);
+}
