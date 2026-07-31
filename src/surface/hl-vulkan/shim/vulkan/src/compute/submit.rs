@@ -55,8 +55,12 @@ pub extern "C" fn vkQueueSubmit(
         r
     })
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED);
-    if r != VK_SUCCESS {
-        hl_log::hl_warn!(
+    // Error: a refused submit means the recorded work never ran. Latched by result code — submit runs
+    // per frame and a persistent failure repeats every frame, but the set of `VkResult`s is small and
+    // bounded, so each distinct reason still gets to say itself once.
+    static REFUSED: crate::logging::Latch = crate::logging::Latch::new();
+    if r != VK_SUCCESS && REFUSED.fires(r as u32 as u64) {
+        hl_log::hl_error!(
             hl_log::tag::SHIM,
             "vkQueueSubmit cbs={} -> {:?}",
             cbs.len(),

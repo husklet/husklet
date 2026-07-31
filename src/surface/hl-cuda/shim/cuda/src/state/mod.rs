@@ -233,6 +233,11 @@ impl ShimState {
     /// Run `f` with exclusive global shim-state access. This operation is non-reentrant. State inherited
     /// across `fork(2)` is disowned first (see [`State::disown_after_fork`]).
     pub fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
+        // The driver's logging composition root: opens `hl-log`'s runtime tag mask from the environment
+        // on first use, so an `hl_error!` in a lowering service can actually reach stderr. One relaxed
+        // atomic after the first call. Every `cu*` entry point funnels through here, and this object
+        // links its own copy of `hl-log`'s statics, so this is `libcuda.so.1`'s own gate.
+        hl_cuda::logging::GuestLogging::install();
         static STATE: OnceLock<Mutex<State>> = OnceLock::new();
         let state = STATE.get_or_init(|| Mutex::new(State::new()));
         let mut state = state.lock().unwrap_or_else(|error| error.into_inner());

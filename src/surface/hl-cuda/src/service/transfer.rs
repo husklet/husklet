@@ -16,7 +16,7 @@ use hl_gpu::{BufferId, Cmd, CommandBuffer, CommandSink, GpuError, Result};
 
 fn resolve(ctx: &CudaContext, p: DevicePtr, what: &'static str) -> Result<(BufferId, u64)> {
     ctx.resolve(p).ok_or_else(|| {
-        hl_log::hl_warn!(
+        hl_log::hl_error!(
             hl_log::tag::CUDA,
             "memcpy dangling ptr={:#x} at={}",
             p.0,
@@ -48,7 +48,7 @@ fn resolve_range(
         .expect("a resolved device pointer always has a containing allocation");
     let avail = size.saturating_sub(off);
     if len > avail {
-        hl_log::hl_warn!(
+        hl_log::hl_error!(
             hl_log::tag::CUDA,
             "copy/memset out of bounds ptr={:#x} len={} avail={} at={}",
             p.0,

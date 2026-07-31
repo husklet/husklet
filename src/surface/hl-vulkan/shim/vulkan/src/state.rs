@@ -318,6 +318,11 @@ impl StateStore {
     /// Run `f` with exclusive access to the global shim state. Non-reentrant — never call this method
     /// from inside `f` (the `Mutex` is not recursive); each entry point takes the state exactly once.
     pub fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
+        // The driver's logging composition root: opens `hl-log`'s runtime tag mask from the environment
+        // on first use, so an `hl_error!` in an entry point can actually reach stderr. One relaxed
+        // atomic after the first call. Every `vk*` entry point funnels through here, so the gate opens
+        // before anything can report. See [`crate::logging::GuestLogging`].
+        crate::logging::GuestLogging::install();
         static STATE: OnceLock<Mutex<State>> = OnceLock::new();
         let state = STATE.get_or_init(|| Mutex::new(State::new()));
         let mut state = state.lock().unwrap_or_else(|error| error.into_inner());

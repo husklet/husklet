@@ -141,7 +141,7 @@ pub unsafe fn launch_kernel(
     args: *const *const c_void,
 ) -> Result<()> {
     let func = registry.resolve(host_fn).ok_or_else(|| {
-        hl_log::hl_warn!(
+        hl_log::hl_error!(
             hl_log::tag::CUDA,
             "launch_kernel unregistered host={:#x}",
             host_fn

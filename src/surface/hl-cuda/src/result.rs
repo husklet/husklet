@@ -173,7 +173,7 @@ impl DriverStatus<'_> {
             | GpuError::ShortBuffer
             | GpuError::TrailingBytes => CUDA_ERROR_INVALID_VALUE,
         };
-        hl_log::hl_warn!(hl_log::tag::SHIM, "cu err={:?} -> {}", self.0, code);
+        hl_log::hl_error!(hl_log::tag::SHIM, "cu err={:?} -> {}", self.0, code);
         code
     }
 }
@@ -199,7 +199,7 @@ impl RuntimeStatus<'_> {
             GpuError::Decode(_) => CUDART_ERROR_UNKNOWN,
             _ => CUDART_ERROR_INVALID_VALUE,
         };
-        hl_log::hl_warn!(hl_log::tag::SHIM, "cudart err={:?} -> {}", self.0, code);
+        hl_log::hl_error!(hl_log::tag::SHIM, "cudart err={:?} -> {}", self.0, code);
         code
     }
 }

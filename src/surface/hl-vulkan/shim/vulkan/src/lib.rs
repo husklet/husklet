@@ -35,6 +35,7 @@ pub mod graphics;
 pub mod hostcopy;
 pub mod icd;
 pub mod instance;
+pub mod logging;
 pub mod maintenance;
 pub mod promoted_features;
 pub mod state;

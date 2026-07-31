@@ -189,11 +189,17 @@ pub extern "C" fn vkAcquireNextImageKHR(
             VK_SUCCESS
         }
         Err(e) => {
-            hl_log::hl_warn!(
-                hl_log::tag::SHIM,
-                "vkAcquireNextImageKHR sc={swapchain:#x} -> {:?}",
-                Status::from_error(&e)
-            );
+            // Error: the app cannot get an image to render into, so the frame is lost. Latched per
+            // swapchain — acquire runs at display rate and a swapchain that cannot acquire keeps
+            // failing until it is recreated, so an unlatched line would be sixty a second.
+            static REFUSED: crate::logging::Latch = crate::logging::Latch::new();
+            if REFUSED.fires(swapchain) {
+                hl_log::hl_error!(
+                    hl_log::tag::SHIM,
+                    "vkAcquireNextImageKHR sc={swapchain:#x} -> {:?}",
+                    Status::from_error(&e)
+                );
+            }
             Status::from_error(&e)
         }
     })
@@ -258,6 +264,15 @@ pub extern "C" fn vkQueuePresentKHR(
             return VK_ERROR_INITIALIZATION_FAILED;
         };
         let mut res = VK_SUCCESS;
+        // A present that commits nothing must never be silent. Every failure exit below reports at
+        // `error` — the one level a release build keeps — and each is latched per swapchain, because
+        // present runs at display rate and these failures persist until the swapchain is recreated.
+        // One latch per REASON so a second, different failure on the same swapchain still speaks.
+        static LOWERING_FAILED: crate::logging::Latch = crate::logging::Latch::new();
+        static EXTENT_GONE: crate::logging::Latch = crate::logging::Latch::new();
+        static NATIVE_COMMIT_FAILED: crate::logging::Latch = crate::logging::Latch::new();
+        static READBACK_FAILED: crate::logging::Latch = crate::logging::Latch::new();
+        static SHM_COMMIT_FAILED: crate::logging::Latch = crate::logging::Latch::new();
         for (&sc, &idx) in swapchains.iter().zip(indices) {
             let native = if s.native_present {
                 s.presenters
@@ -271,11 +286,24 @@ pub extern "C" fn vkQueuePresentKHR(
             if let Err(e) =
                 present::queue_present(dev, sink, sc, idx, native.map(|frame| frame.serial))
             {
+                if LOWERING_FAILED.fires(sc) {
+                    hl_log::hl_error!(
+                        hl_log::tag::PRESENT,
+                        "present lowering failed sc={sc:#x} image={idx} -> {:?}",
+                        Status::from_error(&e)
+                    );
+                }
                 res = Status::from_error(&e);
                 continue;
             }
             if let Some(frame) = native {
                 let Some((w, h)) = dev.swapchains.get(&sc).map(|sc| (sc.width, sc.height)) else {
+                    if EXTENT_GONE.fires(sc) {
+                        hl_log::hl_error!(
+                            hl_log::tag::PRESENT,
+                            "present reserved a native frame for an unknown swapchain sc={sc:#x}"
+                        );
+                    }
                     res = VK_ERROR_OUT_OF_DATE_KHR;
                     continue;
                 };
@@ -286,6 +314,15 @@ pub extern "C" fn vkQueuePresentKHR(
                     .expect("native frame requires its presenter")
                     .commit_native(frame, w, h);
                 if let Err(error) = commit {
+                    if NATIVE_COMMIT_FAILED.fires(sc) {
+                        hl_log::hl_error!(
+                            hl_log::tag::PRESENT,
+                            "native commit failed sc={sc:#x} {}x{} -> {:?}; demoting to readback",
+                            w,
+                            h,
+                            error
+                        );
+                    }
                     let owner = s.presenters.surface(sc);
                     if let Some(surface) = owner {
                         for swapchain in s.presenters.swapchains(surface) {
@@ -303,6 +340,13 @@ pub extern "C" fn vkQueuePresentKHR(
             let plane = match present::read_presented_xrgb(dev, sink, sc, idx) {
                 Ok(p) => p,
                 Err(e) => {
+                    if READBACK_FAILED.fires(sc) {
+                        hl_log::hl_error!(
+                            hl_log::tag::PRESENT,
+                            "present readback failed sc={sc:#x} image={idx} -> {:?}",
+                            Status::from_error(&e)
+                        );
+                    }
                     res = Status::from_error(&e);
                     continue;
                 }
@@ -312,7 +356,13 @@ pub extern "C" fn vkQueuePresentKHR(
             //    VK_ERROR_OUT_OF_DATE/SURFACE_LOST. Only a deliberately offscreen target is VK_SUCCESS.
             let vk = Presentation::frame_to_app_surface(&mut s.presenters, sc, plane);
             if vk != VK_SUCCESS {
-                hl_log::hl_warn!(hl_log::tag::PRESENT, "commit failed sc={sc:#x} -> {:?}", vk);
+                if SHM_COMMIT_FAILED.fires(sc) {
+                    hl_log::hl_error!(
+                        hl_log::tag::PRESENT,
+                        "present committed nothing sc={sc:#x} -> {:?}",
+                        vk
+                    );
+                }
                 res = vk;
             }
         }

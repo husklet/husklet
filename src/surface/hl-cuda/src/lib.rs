@@ -26,6 +26,7 @@
 //! [`hl_gpu::RemoteCommandSink`]; `build.rs` cross-compiles + stages them for both guest arches.
 
 pub mod adapter;
+pub mod logging;
 pub mod model;
 pub mod result;
 pub mod service;

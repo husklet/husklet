@@ -48,6 +48,9 @@ impl CudaContext {
 /// `cuModuleGetFunction(module, name)` → the function handle, or `CUDA_ERROR_NOT_FOUND` analogue.
 pub fn module_get_function(ctx: &CudaContext, module: u32, name: &str) -> Result<Function> {
     ctx.modules.get_function(module, name).ok_or_else(|| {
+        // Deliberately NOT `error`: apps and libraries probe for optional kernels with this call and
+        // treat `CUDA_ERROR_NOT_FOUND` as an answer, not a failure. Promoting it would make the driver
+        // shout on a path that works as designed, which is as useless as never shouting at all.
         hl_log::hl_warn!(
             hl_log::tag::CUDA,
             "get_function miss mod={} name={}",

@@ -133,7 +133,7 @@ pub extern "C" fn vkMapMemory(
     })
     .unwrap_or(VK_ERROR_MEMORY_MAP_FAILED);
     if r != VK_SUCCESS {
-        hl_log::hl_warn!(hl_log::tag::SHIM, "vkMapMemory mem={memory:#x} -> {:?}", r);
+        hl_log::hl_error!(hl_log::tag::SHIM, "vkMapMemory mem={memory:#x} -> {:?}", r);
     }
     r
 }

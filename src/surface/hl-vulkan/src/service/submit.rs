@@ -47,7 +47,7 @@ pub fn queue_submit(
             .get(&cb)
             .ok_or(GpuError::Invalid("vkQueueSubmit: unknown VkCommandBuffer"))?;
         if rec.state != CommandBufferState::Executable {
-            hl_log::hl_warn!(
+            hl_log::hl_error!(
                 hl_log::tag::VULKAN,
                 "submit not-executable cb={cb:#x} state={:?}",
                 rec.state

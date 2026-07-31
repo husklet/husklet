@@ -6,10 +6,12 @@
 //! `VkResult` instead of a false `VK_SUCCESS`). [`Failure::report`] is for failures whose symptom is
 //! indistinguishable from success. Ported from `hl-shim-cuda/src/stub.rs`.
 //!
-//! All three use `eprintln!` rather than `hl_log`. That is deliberate and load-bearing: the guest cdylib
-//! is built `--release` WITHOUT the `release-verbose` feature, so every `hl_warn!`/`hl_info!` in this
-//! crate expands to `{}` in the SHIPPED driver. Any diagnostic that must survive the release build has
-//! to bypass those macros.
+//! All three use `eprintln!` rather than `hl_log`. The guest cdylib is built `--release` WITHOUT the
+//! `release-verbose` feature, so every `hl_warn!`/`hl_info!` in this crate expands to `{}` in the
+//! SHIPPED driver — which is exactly why these three bypass the macros. `hl_error!` does NOT: it
+//! survives the release build, and since [`crate::logging::GuestLogging`] gave the driver a runtime
+//! composition root it also reaches stderr. New failure diagnostics belong at `hl_error!`, tagged and
+//! opt-in under `HL_VK_LOG`, not here.
 
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};

@@ -57,8 +57,12 @@ pub extern "C" fn vkGetPhysicalDeviceFeatures(
     };
     *f = supported_features();
     let missing = DawnBaseline::new(f, &metal_limits(), 2 << 30).missing();
-    if !missing.is_empty() {
-        hl_log::hl_warn!(
+    // Error, not warn: a driver that misses the baseline Dawn requires is a driver Chrome will refuse,
+    // and this line is the only explanation of why. Latched to once per process — the answer is a
+    // property of the build, identical on every query, and Chrome queries features repeatedly.
+    static REPORTED: crate::logging::Latch = crate::logging::Latch::new();
+    if !missing.is_empty() && REPORTED.fires(0) {
+        hl_log::hl_error!(
             hl_log::tag::GPU,
             "vulkan compatibility=dawn_chrome_150 missing={}",
             missing.join(",")

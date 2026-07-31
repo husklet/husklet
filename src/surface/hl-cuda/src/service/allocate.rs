@@ -51,7 +51,7 @@ impl CudaContext {
             .map(|total| total > budget)
             .unwrap_or(true)
         {
-            hl_log::hl_warn!(
+            hl_log::hl_error!(
                 hl_log::tag::CUDA,
                 "mem_alloc OOM: size={} used={} budget={}",
                 size,
@@ -140,7 +140,7 @@ pub fn mem_alloc_pitch(
 /// is not a live allocation base.
 pub fn mem_free(ctx: &mut CudaContext, sink: &mut dyn CommandSink, ptr: DevicePtr) -> Result<()> {
     let buffer = ctx.mem.free(ptr).ok_or_else(|| {
-        hl_log::hl_warn!(hl_log::tag::CUDA, "mem_free bad ptr={:#x}", ptr.0);
+        hl_log::hl_error!(hl_log::tag::CUDA, "mem_free bad ptr={:#x}", ptr.0);
         GpuError::Invalid("cuMemFree: pointer is not a live allocation base")
     })?;
     sink.submit(&[Cmd::DestroyBuffer(buffer)])?;
@@ -170,7 +170,7 @@ pub fn mem_free(ctx: &mut CudaContext, sink: &mut dyn CommandSink, ptr: DevicePt
 impl CudaContext {
     pub fn host_alloc(&mut self, size: usize) -> Option<u64> {
         if size as u64 > self.device.total_mem {
-            hl_log::hl_warn!(
+            hl_log::hl_error!(
                 hl_log::tag::CUDA,
                 "host_alloc OOM: size={} budget={}",
                 size,

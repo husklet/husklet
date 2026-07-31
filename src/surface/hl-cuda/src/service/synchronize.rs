@@ -37,7 +37,7 @@ impl CudaContext {
     /// (`CUDA_ERROR_INVALID_HANDLE` analogue) on an unknown stream handle.
     pub fn synchronize_stream(&mut self, sink: &mut dyn CommandSink, stream: Stream) -> Result<()> {
         if !self.streams.is_valid(stream) {
-            hl_log::hl_warn!(hl_log::tag::CUDA, "stream_sync invalid handle");
+            hl_log::hl_error!(hl_log::tag::CUDA, "stream_sync invalid handle");
             return Err(GpuError::Invalid(
                 "cuStreamSynchronize: invalid stream handle",
             ));

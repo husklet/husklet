@@ -72,7 +72,7 @@ pub fn launch(
                 blob.extend(&p.0.to_le_bytes());
                 if p.0 != 0 {
                     let (buf, off) = ctx.resolve(*p).ok_or_else(|| {
-                        hl_log::hl_warn!(hl_log::tag::CUDA, "launch dangling arg ptr={:#x}", p.0);
+                        hl_log::hl_error!(hl_log::tag::CUDA, "launch dangling arg ptr={:#x}", p.0);
                         GpuError::Invalid(
                             "cuLaunchKernel: kernel argument is a dangling device pointer",
                         )
@@ -212,21 +212,34 @@ fn validate_launch_dims(
     block: (u32, u32, u32),
 ) -> Result<()> {
     if grid.0 == 0 || grid.1 == 0 || grid.2 == 0 {
-        hl_log::hl_warn!(hl_log::tag::CUDA, "launch zero grid dim {:?}", grid);
+        hl_log::hl_error!(hl_log::tag::CUDA, "launch zero grid dim {:?}", grid);
         return Err(GpuError::Invalid("cuLaunchKernel: grid dimension is zero"));
     }
     if block.0 == 0 || block.1 == 0 || block.2 == 0 {
-        hl_log::hl_warn!(hl_log::tag::CUDA, "launch zero block dim {:?}", block);
+        hl_log::hl_error!(hl_log::tag::CUDA, "launch zero block dim {:?}", block);
         return Err(GpuError::Invalid("cuLaunchKernel: block dimension is zero"));
     }
     // Per-axis limits must match what `cuDeviceGetAttribute`/`cudaDeviceProp` advertise, or the driver
     // would accept a grid/block the device it describes could never dispatch.
     if block.0 > MAX_BLOCK_DIM[0] || block.1 > MAX_BLOCK_DIM[1] || block.2 > MAX_BLOCK_DIM[2] {
+        // Its two neighbours said so and these two refusals did not; a refused launch must be legible.
+        hl_log::hl_error!(
+            hl_log::tag::CUDA,
+            "launch block {:?} exceeds maxThreadsDim {:?}",
+            block,
+            MAX_BLOCK_DIM
+        );
         return Err(GpuError::Invalid(
             "cuLaunchKernel: block dimension exceeds device maxThreadsDim",
         ));
     }
     if grid.0 > MAX_GRID_DIM[0] || grid.1 > MAX_GRID_DIM[1] || grid.2 > MAX_GRID_DIM[2] {
+        hl_log::hl_error!(
+            hl_log::tag::CUDA,
+            "launch grid {:?} exceeds maxGridSize {:?}",
+            grid,
+            MAX_GRID_DIM
+        );
         return Err(GpuError::Invalid(
             "cuLaunchKernel: grid dimension exceeds device maxGridSize",
         ));
@@ -234,7 +247,7 @@ fn validate_launch_dims(
     // Thread-count product in u64 so a `u32^3` block can never overflow past the comparison.
     let threads = (block.0 as u64) * (block.1 as u64) * (block.2 as u64);
     if threads > ctx.device.max_threads_per_block as u64 {
-        hl_log::hl_warn!(
+        hl_log::hl_error!(
             hl_log::tag::CUDA,
             "launch block {:?} = {} threads > maxThreadsPerBlock {}",
             block,
