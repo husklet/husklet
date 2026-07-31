@@ -8,7 +8,7 @@ pub extern "C" fn cuModuleLoadData(module: *mut *mut c_void, image: *const c_voi
     let Some(img) = (unsafe { CInput::string(image as *const c_char) }) else {
         return CUDA_ERROR_INVALID_VALUE;
     };
-    ShimState::with(|s| match s.ctx.load_module(&img) {
+    ShimState::with_context(|s| match s.ctx.load_module(&img) {
         Ok(id) => {
             let h = s.intern_module(id);
             unsafe { *module = h };
@@ -33,7 +33,7 @@ pub extern "C" fn cuModuleGetFunction(
     let Ok(nm) = std::str::from_utf8(&nm) else {
         return CUDA_ERROR_INVALID_VALUE;
     };
-    ShimState::with(|s| {
+    ShimState::with_context(|s| {
         let Some(module_id) = s.module_id(hmod) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
@@ -65,7 +65,7 @@ pub extern "C" fn cuModuleLoad(module: *mut *mut c_void, fname: *const c_char) -
     let Ok(bytes) = std::fs::read(path) else {
         return CUDA_ERROR_FILE_NOT_FOUND;
     };
-    ShimState::with(|s| match s.ctx.load_module(&bytes) {
+    ShimState::with_context(|s| match s.ctx.load_module(&bytes) {
         Ok(id) => {
             let h = s.intern_module(id);
             unsafe { *module = h };
@@ -102,7 +102,7 @@ pub extern "C" fn cuModuleLoadFatBinary(module: *mut *mut c_void, image: *const 
 /// is `CUDA_ERROR_INVALID_HANDLE`.
 #[no_mangle]
 pub extern "C" fn cuModuleUnload(m: *mut c_void) -> i32 {
-    ShimState::with(|s| {
+    ShimState::with_context(|s| {
         if s.module_id(m).is_some() {
             CUDA_SUCCESS
         } else {
@@ -128,7 +128,7 @@ pub extern "C" fn cuModuleGetGlobal_v2(
     let Ok(nm) = std::str::from_utf8(&nm) else {
         return CUDA_ERROR_INVALID_VALUE;
     };
-    ShimState::with(|s| {
+    ShimState::with_context(|s| {
         let Some(module_id) = s.module_id(m) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
@@ -168,7 +168,7 @@ pub extern "C" fn cuModuleGetTexRef(
     name: *const c_char,
 ) -> i32 {
     let _ = (t, name);
-    ShimState::with(|s| {
+    ShimState::with_context(|s| {
         if s.module_id(m).is_some() {
             CUDA_ERROR_NOT_FOUND
         } else {
@@ -185,7 +185,7 @@ pub extern "C" fn cuModuleGetSurfRef(
     name: *const c_char,
 ) -> i32 {
     let _ = (sref, name);
-    ShimState::with(|s| {
+    ShimState::with_context(|s| {
         if s.module_id(m).is_some() {
             CUDA_ERROR_NOT_FOUND
         } else {

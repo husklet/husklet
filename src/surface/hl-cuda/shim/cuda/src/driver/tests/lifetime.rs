@@ -177,6 +177,11 @@ fn a_destroyed_event_is_invalid_everywhere_and_a_live_one_still_works() {
 fn a_destroyed_context_token_is_invalid_and_an_empty_pop_is_refused() {
     let _g = guard();
 
+    // Retire the guard's context so the calling thread genuinely has none.
+    let mut cur: *mut c_void = core::ptr::null_mut();
+    assert_eq!(cuCtxGetCurrent(&mut cur), CUDA_SUCCESS);
+    assert_eq!(cuCtxDestroy_v2(cur), CUDA_SUCCESS);
+
     // With no context current, `cuCtxPopCurrent` has nothing to pop.
     assert_eq!(
         cuCtxPopCurrent_v2(core::ptr::null_mut()),
@@ -311,16 +316,29 @@ fn a_fork_child_does_not_inherit_the_parents_driver() {
     let pid = unsafe { fork() };
     assert!(pid >= 0, "fork failed");
     if pid == 0 {
-        // The child: the inherited tokens must be dead and the driver uninitialized.
-        let inherited_stream = cuStreamQuery(parent_stream) == CUDA_ERROR_INVALID_HANDLE;
-        let inherited_event = cuEventQuery(parent_event) == CUDA_ERROR_INVALID_HANDLE;
+        // The child: its state is disowned, so nothing works until it initializes for itself.
+        let inherited_stream = cuStreamQuery(parent_stream) == CUDA_ERROR_NOT_INITIALIZED;
+        let inherited_event = cuEventQuery(parent_event) == CUDA_ERROR_NOT_INITIALIZED;
         let uninitialized = cuCtxSynchronize() == CUDA_ERROR_NOT_INITIALIZED;
-        // Re-initializing in the child gives it its OWN driver: a fresh stream of its own works.
+        // Re-initializing is not enough — the child inherited no context either.
         let reinit = cuInit(0) == CUDA_SUCCESS;
+        let no_context = cuStreamQuery(parent_stream) == CUDA_ERROR_INVALID_CONTEXT;
+        let mut own_ctx: *mut c_void = core::ptr::null_mut();
+        let own_context = cuCtxCreate_v2(&mut own_ctx, 0, 0) == CUDA_SUCCESS;
+        // With its OWN driver and context the inherited tokens are still dead, and a fresh stream works.
+        let inherited_still_dead = cuStreamQuery(parent_stream) == CUDA_ERROR_INVALID_HANDLE
+            && cuEventQuery(parent_event) == CUDA_ERROR_INVALID_HANDLE;
         let mut own: *mut c_void = core::ptr::null_mut();
         let own_stream =
             cuStreamCreate(&mut own, 0) == CUDA_SUCCESS && cuStreamQuery(own) == CUDA_SUCCESS;
-        let ok = inherited_stream && inherited_event && uninitialized && reinit && own_stream;
+        let ok = inherited_stream
+            && inherited_event
+            && uninitialized
+            && reinit
+            && no_context
+            && own_context
+            && inherited_still_dead
+            && own_stream;
         unsafe { _exit(i32::from(!ok)) };
     }
 
@@ -339,4 +357,192 @@ fn a_fork_child_does_not_inherit_the_parents_driver() {
     assert_eq!(cuStreamQuery(parent_stream), CUDA_SUCCESS);
     assert_eq!(cuEventQuery(parent_event), CUDA_SUCCESS);
     assert_eq!(cuStreamDestroy_v2(parent_stream), CUDA_SUCCESS);
+}
+
+/// Destroying the current context must stop every family that needs one — allocation, copy, memset,
+/// module load, launch, stream/event creation and the context's own properties — and each must say
+/// `CUDA_ERROR_INVALID_CONTEXT` rather than succeed against a model that outlived the token. Each
+/// refusal is paired with the same call succeeding while the context is live, so the fix cannot be a
+/// blanket refusal.
+#[test]
+fn a_destroyed_context_stops_every_entry_point_that_needs_one() {
+    let _g = guard();
+
+    // --- while the context is live, every one of these works ---
+    let func = load_vecadd();
+    // The alloc/copy/memset families are not exercised positively here: they reach the GPU-exec socket,
+    // which `compute::compute_path_end_to_end_over_socket` owns. What matters is that they refuse BEFORE
+    // it, so the allocation they are pointed at is recorded straight into the model.
+    let mut ptr = record_alloc(256);
+    let host = [0u8; 16];
+    let live_stream = stream();
+    let mut ev: *mut c_void = core::ptr::null_mut();
+    assert_eq!(cuEventCreate(&mut ev, 0), CUDA_SUCCESS);
+    let mut free = 0usize;
+    let mut total = 0usize;
+    assert_eq!(cuMemGetInfo_v2(&mut free, &mut total), CUDA_SUCCESS);
+
+    let mut cur: *mut c_void = core::ptr::null_mut();
+    assert_eq!(cuCtxGetCurrent(&mut cur), CUDA_SUCCESS);
+    assert!(!cur.is_null());
+    assert_eq!(cuCtxDestroy_v2(cur), CUDA_SUCCESS);
+
+    // The token really is retired: `cuCtxGetCurrent` succeeds reporting no context.
+    let mut after: *mut c_void = 1 as *mut c_void;
+    assert_eq!(cuCtxGetCurrent(&mut after), CUDA_SUCCESS);
+    assert!(after.is_null());
+
+    // --- and now every family refuses ---
+    let mut orphan = 0u64;
+    assert_eq!(
+        cuMemAlloc_v2(&mut orphan, 64),
+        CUDA_ERROR_INVALID_CONTEXT,
+        "allocation after context destroy"
+    );
+    assert_eq!(orphan, 0, "a refused allocation must not hand back a pointer");
+    assert_eq!(cuMemFree_v2(ptr), CUDA_ERROR_INVALID_CONTEXT);
+    assert_eq!(
+        cuMemcpyHtoD_v2(ptr, host.as_ptr() as *const c_void, 16),
+        CUDA_ERROR_INVALID_CONTEXT
+    );
+    let mut back = [0u8; 16];
+    assert_eq!(
+        cuMemcpyDtoH_v2(back.as_mut_ptr() as *mut c_void, ptr, 16),
+        CUDA_ERROR_INVALID_CONTEXT
+    );
+    assert_eq!(cuMemcpyDtoD_v2(ptr, ptr, 16), CUDA_ERROR_INVALID_CONTEXT);
+    assert_eq!(cuMemsetD32_v2(ptr, 0, 4), CUDA_ERROR_INVALID_CONTEXT);
+    assert_eq!(
+        cuMemGetInfo_v2(&mut free, &mut total),
+        CUDA_ERROR_INVALID_CONTEXT
+    );
+
+    let img = std::ffi::CString::new(ptx::VECADD_PTX).unwrap();
+    let mut module: *mut c_void = core::ptr::null_mut();
+    assert_eq!(
+        cuModuleLoadData(&mut module, img.as_ptr() as *const c_void),
+        CUDA_ERROR_INVALID_CONTEXT
+    );
+    assert!(module.is_null());
+
+    let mut args = [&mut ptr as *mut u64 as *mut c_void; 4];
+    assert_eq!(
+        cuLaunchKernel(
+            func,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            0,
+            core::ptr::null_mut(),
+            args.as_mut_ptr(),
+            core::ptr::null_mut(),
+        ),
+        CUDA_ERROR_INVALID_CONTEXT
+    );
+
+    let mut s2: *mut c_void = core::ptr::null_mut();
+    assert_eq!(cuStreamCreate(&mut s2, 0), CUDA_ERROR_INVALID_CONTEXT);
+    assert_eq!(cuStreamSynchronize(live_stream), CUDA_ERROR_INVALID_CONTEXT);
+    assert_eq!(cuStreamDestroy_v2(live_stream), CUDA_ERROR_INVALID_CONTEXT);
+    let mut e2: *mut c_void = core::ptr::null_mut();
+    assert_eq!(cuEventCreate(&mut e2, 0), CUDA_ERROR_INVALID_CONTEXT);
+    assert_eq!(
+        cuEventRecord(ev, core::ptr::null_mut()),
+        CUDA_ERROR_INVALID_CONTEXT
+    );
+    assert_eq!(cuCtxSynchronize(), CUDA_ERROR_INVALID_CONTEXT);
+    let mut flags = 0u32;
+    assert_eq!(cuCtxGetFlags(&mut flags), CUDA_ERROR_INVALID_CONTEXT);
+    let mut dev = -1;
+    assert_eq!(cuCtxGetDevice(&mut dev), CUDA_ERROR_INVALID_CONTEXT);
+
+    // Binding a fresh context makes the same calls work again — the gate is the CONTEXT, not a latch.
+    let mut fresh: *mut c_void = core::ptr::null_mut();
+    assert_eq!(cuCtxCreate_v2(&mut fresh, 0, 0), CUDA_SUCCESS);
+    assert_eq!(cuCtxGetFlags(&mut flags), CUDA_SUCCESS);
+    assert_eq!(cuCtxGetDevice(&mut dev), CUDA_SUCCESS);
+    assert_eq!(cuStreamCreate(&mut s2, 0), CUDA_SUCCESS);
+    assert_eq!(cuEventCreate(&mut e2, 0), CUDA_SUCCESS);
+    assert_eq!(
+        cuModuleLoadData(&mut module, img.as_ptr() as *const c_void),
+        CUDA_SUCCESS
+    );
+    let mut free2 = 0usize;
+    assert_eq!(cuMemGetInfo_v2(&mut free2, &mut total), CUDA_SUCCESS);
+    let _ = (orphan, ptr, host);
+}
+
+/// The calls that legitimately precede any context must keep working with none current — gating them
+/// too would break a correct program's start-up (and its shutdown after `cuCtxDestroy`).
+#[test]
+fn the_context_free_entry_points_still_answer_without_one() {
+    let _g = guard();
+    let mut cur: *mut c_void = core::ptr::null_mut();
+    assert_eq!(cuCtxGetCurrent(&mut cur), CUDA_SUCCESS);
+    assert_eq!(cuCtxDestroy_v2(cur), CUDA_SUCCESS);
+
+    assert_eq!(cuInit(0), CUDA_SUCCESS);
+    let mut version = 0;
+    assert_eq!(cuDriverGetVersion(&mut version), CUDA_SUCCESS);
+    assert_eq!(version, DRIVER_VERSION);
+    let mut name: *const c_char = core::ptr::null();
+    assert_eq!(cuGetErrorName(CUDA_ERROR_INVALID_CONTEXT, &mut name), CUDA_SUCCESS);
+
+    let mut count = 0;
+    assert_eq!(cuDeviceGetCount(&mut count), CUDA_SUCCESS);
+    assert_eq!(count, 1);
+    let mut device = -1;
+    assert_eq!(cuDeviceGet(&mut device, 0), CUDA_SUCCESS);
+    let mut buf = [0 as c_char; 64];
+    assert_eq!(cuDeviceGetName(buf.as_mut_ptr(), 64, 0), CUDA_SUCCESS);
+    let mut bytes = 0usize;
+    assert_eq!(cuDeviceTotalMem_v2(&mut bytes, 0), CUDA_SUCCESS);
+    let mut warp = 0;
+    assert_eq!(
+        cuDeviceGetAttribute(&mut warp, CU_DEVICE_ATTRIBUTE_WARP_SIZE, 0),
+        CUDA_SUCCESS
+    );
+    assert_eq!(warp, 32);
+
+    // Context creation, the current-context stack and the primary-context refcount all predate a context.
+    let mut primary: *mut c_void = core::ptr::null_mut();
+    assert_eq!(cuDevicePrimaryCtxRetain(&mut primary, 0), CUDA_SUCCESS);
+    assert_eq!(cuDevicePrimaryCtxRelease_v2(0), CUDA_SUCCESS);
+    let mut made: *mut c_void = core::ptr::null_mut();
+    assert_eq!(cuCtxCreate_v2(&mut made, 0, 0), CUDA_SUCCESS);
+    assert_eq!(cuCtxSetCurrent(core::ptr::null_mut()), CUDA_SUCCESS);
+    assert_eq!(cuCtxSetCurrent(made), CUDA_SUCCESS);
+    assert_eq!(cuCtxDestroy_v2(made), CUDA_SUCCESS);
+}
+
+/// `cuDeviceGetAttribute` must refuse a `CUdevice_attribute` no driver defines instead of fabricating 0
+/// — a capability query that cannot be told apart from "present, and its value is zero" is useless.
+#[test]
+fn an_unknown_device_attribute_is_refused() {
+    let _g = guard();
+    let mut value = -1;
+    assert_eq!(
+        cuDeviceGetAttribute(&mut value, 9999, 0),
+        CUDA_ERROR_INVALID_VALUE
+    );
+    assert_eq!(
+        cuDeviceGetAttribute(&mut value, -1, 0),
+        CUDA_ERROR_INVALID_VALUE
+    );
+    assert_eq!(cuDeviceGetAttribute(&mut value, 0, 0), CUDA_ERROR_INVALID_VALUE);
+    assert_eq!(
+        cuDeviceGetAttribute(&mut value, CU_DEVICE_ATTRIBUTE_MAX, 0),
+        CUDA_ERROR_INVALID_VALUE
+    );
+    assert_eq!(value, -1, "a refused query must not write the out-param");
+    // An attribute that IS in the enum but the model does not track answers "feature absent" (0),
+    // which is what a real driver reports for one it does not set.
+    assert_eq!(
+        cuDeviceGetAttribute(&mut value, CU_DEVICE_ATTRIBUTE_MAX - 1, 0),
+        CUDA_SUCCESS
+    );
+    assert_eq!(value, 0);
 }

@@ -90,6 +90,12 @@ pub const CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN: i32 = 97;
 pub const CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS: i32 = 101;
 pub const CU_DEVICE_ATTRIBUTE_DIRECT_MANAGED_MEM_ACCESS_FROM_HOST: i32 = 108;
 pub const CU_DEVICE_ATTRIBUTE_MEMORY_POOLS_SUPPORTED: i32 = 115;
+/// `CU_DEVICE_ATTRIBUTE_MAX` — one past the last `CUdevice_attribute` the reported driver version
+/// ([`DRIVER_VERSION`], CUDA 12.2) defines. `cuDeviceGetAttribute` answers 0 for an in-range attribute
+/// the model does not track (a real driver likewise reports "feature absent") and
+/// `CUDA_ERROR_INVALID_VALUE` for anything outside — an enum no driver knows is not a capability query
+/// that can be answered, and answering 0 makes "unknown" indistinguishable from "present but zero".
+pub const CU_DEVICE_ATTRIBUTE_MAX: i32 = 150;
 
 // ---- CUpointer_attribute + CUmemorytype (values from cuda.h) -------------------------------------
 pub const CU_POINTER_ATTRIBUTE_CONTEXT: i32 = 1;

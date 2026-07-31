@@ -111,13 +111,20 @@ pub extern "C" fn cuCtxGetId(ctx: *mut c_void, id: *mut u64) -> i32 {
     if id.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    let token = if ctx.is_null() {
-        ShimState::with(|s| s.current_ctx_token())
-    } else {
-        ctx as usize
-    };
-    unsafe { *id = token as u64 };
-    CUDA_SUCCESS
+    ShimState::with(|s| {
+        let token = if ctx.is_null() {
+            match s.require_context() {
+                Ok(()) => s.current_ctx_token(),
+                Err(code) => return code,
+            }
+        } else if s.ctx_is_live(ctx) {
+            ctx as usize
+        } else {
+            return CUDA_ERROR_INVALID_CONTEXT;
+        };
+        unsafe { *id = token as u64 };
+        CUDA_SUCCESS
+    })
 }
 
 /// `cuCtxGetSharedMemConfig(config)` — the current context's shared-memory bank width config.
@@ -126,17 +133,21 @@ pub extern "C" fn cuCtxGetSharedMemConfig(c: *mut i32) -> i32 {
     if c.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    let v = ShimState::with(|s| s.ctx_shared_config());
-    unsafe { *c = v };
-    CUDA_SUCCESS
+    ShimState::with_context(|s| {
+        let v = s.ctx_shared_config();
+        unsafe { *c = v };
+        CUDA_SUCCESS
+    })
 }
 
 /// `cuCtxSetSharedMemConfig(config)` — record the context's preferred shared-memory bank config (a hint
 /// the synchronous executor honors as a no-op but reports faithfully via the getter).
 #[no_mangle]
 pub extern "C" fn cuCtxSetSharedMemConfig(c: i32) -> i32 {
-    ShimState::with(|s| s.set_ctx_shared_config(c));
-    CUDA_SUCCESS
+    ShimState::with_context(|s| {
+        s.set_ctx_shared_config(c);
+        CUDA_SUCCESS
+    })
 }
 
 /// `cuCtxEnablePeerAccess(peerContext, flags)` — the single simulated device has no peers, so enabling
@@ -172,7 +183,7 @@ pub extern "C" fn cuFuncGetModule(m: *mut *mut c_void, f: *mut c_void) -> i32 {
     if m.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    ShimState::with(|s| match s.function(f) {
+    ShimState::with_context(|s| match s.function(f) {
         Some(func) => {
             // The module handle is `module id` interned as `index + 1` (see `intern_module`); the resolved
             // `Function.module` IS that model id, so the guest handle is the id itself.
@@ -190,7 +201,7 @@ pub extern "C" fn cuFuncGetName(name: *mut *const c_char, f: *mut c_void) -> i32
     if name.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    ShimState::with(|s| match s.func_name_ptr(f) {
+    ShimState::with_context(|s| match s.func_name_ptr(f) {
         Some(p) => {
             unsafe { *name = p };
             CUDA_SUCCESS
@@ -204,7 +215,7 @@ pub extern "C" fn cuFuncGetName(name: *mut *const c_char, f: *mut c_void) -> i32
 #[no_mangle]
 pub extern "C" fn cuFuncSetSharedMemConfig(f: *mut c_void, config: i32) -> i32 {
     let _ = config;
-    ShimState::with(|s| {
+    ShimState::with_context(|s| {
         if s.function(f).is_some() {
             CUDA_SUCCESS
         } else {

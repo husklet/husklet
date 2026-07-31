@@ -1,19 +1,21 @@
 use super::*;
 #[no_mangle]
 pub extern "C" fn cuMemGetInfo_v2(free_out: *mut usize, total_out: *mut usize) -> i32 {
-    let (free, total) = ShimState::with(|s| s.mem_info());
-    if !free_out.is_null() {
-        unsafe { *free_out = free };
-    }
-    if !total_out.is_null() {
-        unsafe { *total_out = total };
-    }
-    CUDA_SUCCESS
+    ShimState::with_context(|s| {
+        let (free, total) = s.mem_info();
+        if !free_out.is_null() {
+            unsafe { *free_out = free };
+        }
+        if !total_out.is_null() {
+            unsafe { *total_out = total };
+        }
+        CUDA_SUCCESS
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn cuMemGetAddressRange_v2(pbase: *mut u64, psize: *mut usize, dptr: u64) -> i32 {
-    match ShimState::with(|s| s.ctx.mem.containing(DevicePtr(dptr))) {
+    ShimState::with_context(|s| match s.ctx.mem.containing(DevicePtr(dptr)) {
         Some((base, size)) => {
             if !pbase.is_null() {
                 unsafe { *pbase = base };
@@ -24,7 +26,7 @@ pub extern "C" fn cuMemGetAddressRange_v2(pbase: *mut u64, psize: *mut usize, dp
             CUDA_SUCCESS
         }
         None => CUDA_ERROR_INVALID_VALUE, // not a live device allocation
-    }
+    })
 }
 
 /// Fill one pointer attribute into `data`. Every allocation the modeled driver hands out is device
@@ -80,6 +82,9 @@ pub extern "C" fn cuPointerGetAttribute(data: *mut c_void, attr: i32, ptr: u64) 
     if data.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
+    if let Err(code) = ShimState::with(|s| s.require_context()) {
+        return code;
+    }
     unsafe { pointer_attr(attr, data, ptr) }
 }
 
@@ -92,6 +97,9 @@ pub extern "C" fn cuPointerGetAttributes(
 ) -> i32 {
     if attrs.is_null() || data.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
+    }
+    if let Err(code) = ShimState::with(|s| s.require_context()) {
+        return code;
     }
     for i in 0..n as usize {
         let attr = unsafe { *attrs.add(i) };
@@ -115,10 +123,7 @@ pub extern "C" fn cuMemAlloc_v2(dptr: *mut u64, bytesize: usize) -> i32 {
     if dptr.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    ShimState::with(|s| {
-        if let Err(code) = s.require_init() {
-            return code;
-        }
+    ShimState::with_context(|s| {
         match allocate::mem_alloc(&mut s.ctx, &mut s.sink, bytesize as u64) {
             Ok(p) => {
                 unsafe { *dptr = p.0 };
@@ -131,24 +136,16 @@ pub extern "C" fn cuMemAlloc_v2(dptr: *mut u64, bytesize: usize) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn cuMemFree_v2(dptr: u64) -> i32 {
-    ShimState::with(|s| {
-        if let Err(code) = s.require_init() {
-            return code;
-        }
-        match allocate::mem_free(&mut s.ctx, &mut s.sink, DevicePtr(dptr)) {
-            Ok(()) => CUDA_SUCCESS,
-            Err(_) => CUDA_ERROR_INVALID_VALUE,
-        }
+    ShimState::with_context(|s| match allocate::mem_free(&mut s.ctx, &mut s.sink, DevicePtr(dptr)) {
+        Ok(()) => CUDA_SUCCESS,
+        Err(_) => CUDA_ERROR_INVALID_VALUE,
     })
 }
 
 #[no_mangle]
 pub extern "C" fn cuMemcpyHtoD_v2(dst: u64, src: *const c_void, n: usize) -> i32 {
     let host = unsafe { CInput::bytes(src, n) };
-    ShimState::with(|s| {
-        if let Err(code) = s.require_init() {
-            return code;
-        }
+    ShimState::with_context(|s| {
         match transfer::memcpy_htod(&mut s.ctx, &mut s.sink, DevicePtr(dst), host) {
             Ok(()) => CUDA_SUCCESS,
             Err(_) => CUDA_ERROR_INVALID_VALUE,
@@ -158,10 +155,7 @@ pub extern "C" fn cuMemcpyHtoD_v2(dst: u64, src: *const c_void, n: usize) -> i32
 
 #[no_mangle]
 pub extern "C" fn cuMemcpyDtoD_v2(dst: u64, src: u64, n: usize) -> i32 {
-    ShimState::with(|s| {
-        if let Err(code) = s.require_init() {
-            return code;
-        }
+    ShimState::with_context(|s| {
         match transfer::memcpy_dtod(
             &mut s.ctx,
             &mut s.sink,
@@ -183,19 +177,14 @@ pub extern "C" fn cuMemcpyDtoH_v2(dst: *mut c_void, src: u64, n: usize) -> i32 {
     if dst.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    ShimState::with(|s| {
-        if let Err(code) = s.require_init() {
-            return code;
+    ShimState::with_context(|s| match transfer::read_dtoh(&s.ctx, &mut s.sink, DevicePtr(src), n) {
+        Ok(bytes) => {
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst as *mut u8, bytes.len())
+            };
+            CUDA_SUCCESS
         }
-        match transfer::read_dtoh(&s.ctx, &mut s.sink, DevicePtr(src), n) {
-            Ok(bytes) => {
-                unsafe {
-                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst as *mut u8, bytes.len())
-                };
-                CUDA_SUCCESS
-            }
-            Err(_) => CUDA_ERROR_INVALID_VALUE,
-        }
+        Err(_) => CUDA_ERROR_INVALID_VALUE,
     })
 }
 
@@ -210,13 +199,13 @@ pub extern "C" fn cuMemAllocHost_v2(pp: *mut *mut c_void, size: usize) -> i32 {
     if pp.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    match ShimState::with(|s| s.ctx.host_alloc(size)) {
+    ShimState::with_context(|s| match s.ctx.host_alloc(size) {
         Some(base) => {
             unsafe { *pp = base as *mut c_void };
             CUDA_SUCCESS
         }
         None => CUDA_ERROR_OUT_OF_MEMORY,
-    }
+    })
 }
 
 /// `cuMemHostAlloc(pp, size, flags)` — the flagged pinned-allocation form; the modeled semantics do not
@@ -232,7 +221,7 @@ pub extern "C" fn cuMemFreeHost(p: *mut c_void) -> i32 {
     if p.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    ShimState::with(|s| match s.ctx.host_free(p as u64) {
+    ShimState::with_context(|s| match s.ctx.host_free(p as u64) {
         Ok(()) => CUDA_SUCCESS,
         Err(_) => CUDA_ERROR_INVALID_VALUE,
     })
@@ -245,7 +234,7 @@ pub extern "C" fn cuMemHostRegister_v2(p: *mut c_void, size: usize, _flags: u32)
     if p.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    ShimState::with(|s| match s.ctx.host_register(p as u64, size as u64) {
+    ShimState::with_context(|s| match s.ctx.host_register(p as u64, size as u64) {
         Ok(()) => CUDA_SUCCESS,
         Err(_) => CUDA_ERROR_INVALID_VALUE,
     })
@@ -258,7 +247,7 @@ pub extern "C" fn cuMemHostUnregister(p: *mut c_void) -> i32 {
     if p.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    ShimState::with(|s| match s.ctx.host_unregister(p as u64) {
+    ShimState::with_context(|s| match s.ctx.host_unregister(p as u64) {
         Ok(()) => CUDA_SUCCESS,
         Err(_) => CUDA_ERROR_INVALID_VALUE,
     })
@@ -276,7 +265,7 @@ pub extern "C" fn cuMemHostGetDevicePointer_v2(
     if pdptr.is_null() || p.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    ShimState::with(
+    ShimState::with_context(
         |s| match s.ctx.host_get_device_pointer(&mut s.sink, p as u64) {
             Ok(ptr) => {
                 unsafe { *pdptr = ptr.0 };
@@ -294,7 +283,7 @@ pub extern "C" fn cuMemAllocManaged(dptr: *mut u64, bytesize: usize, _flags: u32
     if dptr.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    ShimState::with(|s| {
+    ShimState::with_context(|s| {
         match allocate::mem_alloc_managed(&mut s.ctx, &mut s.sink, bytesize as u64) {
             Ok(p) => {
                 unsafe { *dptr = p.0 };
@@ -318,7 +307,7 @@ pub extern "C" fn cuMemAllocPitch_v2(
     if dptr.is_null() || p_pitch.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    ShimState::with(|s| {
+    ShimState::with_context(|s| {
         match allocate::mem_alloc_pitch(
             &mut s.ctx,
             &mut s.sink,
@@ -346,7 +335,7 @@ fn memset_sync(dst: u64, value: u64, width: usize, n: usize) -> i32 {
     if n == 0 {
         return CUDA_SUCCESS;
     }
-    ShimState::with(|s| {
+    ShimState::with_context(|s| {
         match transfer::memset_elements(&mut s.ctx, &mut s.sink, DevicePtr(dst), value, width, n) {
             Ok(()) => CUDA_SUCCESS,
             Err(_) => CUDA_ERROR_INVALID_VALUE,
@@ -360,7 +349,7 @@ fn memset_stream(dst: u64, value: u64, width: usize, n: usize, hstream: *mut c_v
     if n == 0 {
         return CUDA_SUCCESS;
     }
-    ShimState::with(|s| {
+    ShimState::with_context(|s| {
         let Some(st) = s.stream(hstream) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
@@ -419,7 +408,7 @@ pub extern "C" fn cuMemcpyHtoDAsync_v2(
     s: *mut c_void,
 ) -> i32 {
     let host = unsafe { CInput::bytes(src, n) };
-    ShimState::with(|st| {
+    ShimState::with_context(|st| {
         let Some(stream) = st.stream(s) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
@@ -433,7 +422,7 @@ pub extern "C" fn cuMemcpyHtoDAsync_v2(
 /// `cuMemcpyDtoDAsync_v2(dst, src, n, stream)` — stream-ordered on-device copy.
 #[no_mangle]
 pub extern "C" fn cuMemcpyDtoDAsync_v2(dst: u64, src: u64, n: usize, s: *mut c_void) -> i32 {
-    ShimState::with(|st| {
+    ShimState::with_context(|st| {
         let Some(stream) = st.stream(s) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
@@ -463,7 +452,7 @@ pub extern "C" fn cuMemcpyDtoHAsync_v2(
     if dst.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    ShimState::with(|st| {
+    ShimState::with_context(|st| {
         let Some(stream) = st.stream(s) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };

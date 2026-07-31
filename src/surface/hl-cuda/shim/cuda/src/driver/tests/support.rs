@@ -2,8 +2,9 @@ use super::*;
 use crate::state::reset;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 /// Serialize the tests: they share one process-global `State`, so they must not run concurrently. The
-/// fresh state is then `cuInit`-ed, because every IR-lowering entry point is gated on it exactly as a real
-/// driver gates them — a test that wants the uninitialized behaviour calls [`reset`] itself.
+/// fresh state is then `cuInit`-ed and given a current context, because every entry point that touches
+/// the object model is gated on both exactly as a real driver gates them — a test that wants the
+/// uninitialized or context-free behaviour calls [`reset`] / `cuCtxDestroy_v2` itself.
 pub(super) fn guard() -> MutexGuard<'static, ()> {
     static L: OnceLock<Mutex<()>> = OnceLock::new();
     let g = L
@@ -12,6 +13,8 @@ pub(super) fn guard() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|e| e.into_inner());
     reset();
     assert_eq!(cuInit(0), CUDA_SUCCESS);
+    let mut ctx: *mut c_void = core::ptr::null_mut();
+    assert_eq!(cuCtxCreate_v2(&mut ctx, 0, 0), CUDA_SUCCESS);
     g
 }
 

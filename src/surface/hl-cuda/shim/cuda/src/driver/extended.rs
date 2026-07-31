@@ -50,8 +50,14 @@ pub extern "C" fn cuLaunchHostFunc(
     if fn_.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    if ShimState::with(|s| s.stream(stream).is_none()) {
-        return CUDA_ERROR_INVALID_HANDLE;
+    if let Err(code) = ShimState::with(|s| {
+        s.require_context()?;
+        if s.stream(stream).is_none() {
+            return Err(CUDA_ERROR_INVALID_HANDLE);
+        }
+        Ok(())
+    }) {
+        return code;
     }
     // SAFETY: `fn_` is a `CUhostFn = void(*)(void*)` supplied by the caller.
     let hostfn: extern "C" fn(*mut c_void) = unsafe { core::mem::transmute(fn_) };
@@ -74,8 +80,14 @@ pub extern "C" fn cuStreamAddCallback(
     if cb.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    if ShimState::with(|st| st.stream(s).is_none()) {
-        return CUDA_ERROR_INVALID_HANDLE;
+    if let Err(code) = ShimState::with(|st| {
+        st.require_context()?;
+        if st.stream(s).is_none() {
+            return Err(CUDA_ERROR_INVALID_HANDLE);
+        }
+        Ok(())
+    }) {
+        return code;
     }
     // SAFETY: `cb` is a `CUstreamCallback = void(*)(CUstream, CUresult, void*)`.
     let callback: extern "C" fn(*mut c_void, i32, *mut c_void) =
@@ -92,8 +104,14 @@ pub extern "C" fn cuStreamAddCallback(
 /// completes it immediately, sharing `cuMemAlloc_v2`'s body once the stream validates.
 #[no_mangle]
 pub extern "C" fn cuMemAllocAsync(dptr: *mut u64, bytesize: usize, s: *mut c_void) -> i32 {
-    if ShimState::with(|st| st.stream(s).is_none()) {
-        return CUDA_ERROR_INVALID_HANDLE;
+    if let Err(code) = ShimState::with(|st| {
+        st.require_context()?;
+        if st.stream(s).is_none() {
+            return Err(CUDA_ERROR_INVALID_HANDLE);
+        }
+        Ok(())
+    }) {
+        return code;
     }
     cuMemAlloc_v2(dptr, bytesize)
 }
@@ -101,8 +119,14 @@ pub extern "C" fn cuMemAllocAsync(dptr: *mut u64, bytesize: usize, s: *mut c_voi
 /// `cuMemFreeAsync(dptr, stream)` — stream-ordered free; shares `cuMemFree_v2` once the stream validates.
 #[no_mangle]
 pub extern "C" fn cuMemFreeAsync(dptr: u64, s: *mut c_void) -> i32 {
-    if ShimState::with(|st| st.stream(s).is_none()) {
-        return CUDA_ERROR_INVALID_HANDLE;
+    if let Err(code) = ShimState::with(|st| {
+        st.require_context()?;
+        if st.stream(s).is_none() {
+            return Err(CUDA_ERROR_INVALID_HANDLE);
+        }
+        Ok(())
+    }) {
+        return code;
     }
     cuMemFree_v2(dptr)
 }
@@ -128,7 +152,7 @@ pub extern "C" fn cuMemAdvise(p: u64, n: usize, advice: i32, dev: i32) -> i32 {
     if dev != 0 && dev != CU_DEVICE_CPU {
         return CUDA_ERROR_INVALID_DEVICE;
     }
-    ShimState::with(|s| {
+    ShimState::with_context(|s| {
         if ManagedRange::is_live(s, p, n) {
             CUDA_SUCCESS
         } else {
@@ -159,7 +183,7 @@ pub extern "C" fn cuMemPrefetchAsync(p: u64, n: usize, dst: i32, s: *mut c_void)
     if dst != 0 && dst != CU_DEVICE_CPU {
         return CUDA_ERROR_INVALID_DEVICE;
     }
-    ShimState::with(|st| {
+    ShimState::with_context(|st| {
         if st.stream(s).is_none() {
             return CUDA_ERROR_INVALID_HANDLE;
         }
@@ -183,7 +207,7 @@ pub extern "C" fn cuStreamAttachMemAsync(
     flags: u32,
 ) -> i32 {
     let _ = flags;
-    ShimState::with(|st| {
+    ShimState::with_context(|st| {
         if st.stream(s).is_none() {
             return CUDA_ERROR_INVALID_HANDLE;
         }
@@ -204,11 +228,13 @@ pub extern "C" fn cuMemHostGetFlags(pflags: *mut u32, p: *mut c_void) -> i32 {
     if pflags.is_null() || p.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    if !ShimState::with(|s| s.ctx.host.is_host_base(p as u64)) {
-        return CUDA_ERROR_INVALID_VALUE;
-    }
-    unsafe { *pflags = 0 };
-    CUDA_SUCCESS
+    ShimState::with_context(|s| {
+        if !s.ctx.host.is_host_base(p as u64) {
+            return CUDA_ERROR_INVALID_VALUE;
+        }
+        unsafe { *pflags = 0 };
+        CUDA_SUCCESS
+    })
 }
 
 /// `cuPointerSetAttribute(value, attribute, ptr)` — set a writable pointer attribute.
@@ -221,7 +247,7 @@ pub extern "C" fn cuPointerSetAttribute(value: *const c_void, attr: i32, ptr: u6
     if value.is_null() || attr != CU_POINTER_ATTRIBUTE_SYNC_MEMOPS {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    ShimState::with(|s| {
+    ShimState::with_context(|s| {
         if s.ctx.resolve(DevicePtr(ptr)).is_some() {
             CUDA_SUCCESS
         } else {
@@ -245,7 +271,7 @@ pub extern "C" fn cuOccupancyAvailableDynamicSMemPerBlock(
     if dyn_smem.is_null() || num_blocks <= 0 {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    ShimState::with(|s| {
+    ShimState::with_context(|s| {
         let Some((_num_regs, static_shared)) = FunctionResources::get(s, f) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
@@ -271,19 +297,19 @@ pub extern "C" fn cuStreamCreateWithPriority(
     if phstream.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    let h = ShimState::with(|s| {
+    ShimState::with_context(|s| {
         let stream = s.ctx.streams.create();
-        s.intern_stream(stream, flags, priority)
-    });
-    unsafe { *phstream = h };
-    CUDA_SUCCESS
+        let h = s.intern_stream(stream, flags, priority);
+        unsafe { *phstream = h };
+        CUDA_SUCCESS
+    })
 }
 
 /// `cuStreamIsCapturing(stream, status)` — graph capture is not modeled, so a valid stream is honestly
 /// never capturing (`CU_STREAM_CAPTURE_STATUS_NONE`). A bogus handle is `CUDA_ERROR_INVALID_HANDLE`.
 #[no_mangle]
 pub extern "C" fn cuStreamIsCapturing(s: *mut c_void, status: *mut i32) -> i32 {
-    ShimState::with(|st| {
+    ShimState::with_context(|st| {
         if st.stream(s).is_none() {
             return CUDA_ERROR_INVALID_HANDLE;
         }

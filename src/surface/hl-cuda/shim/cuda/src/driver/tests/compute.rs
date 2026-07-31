@@ -38,6 +38,8 @@ fn compute_path_end_to_end_over_socket() {
     reset();
 
     assert_eq!(cuInit(0), CUDA_SUCCESS);
+    let mut ctx: *mut c_void = core::ptr::null_mut();
+    assert_eq!(cuCtxCreate_v2(&mut ctx, 0, 0), CUDA_SUCCESS);
 
     // --- module load + kernel resolution ---
     let img = std::ffi::CString::new(ptx::VECADD_PTX).unwrap();

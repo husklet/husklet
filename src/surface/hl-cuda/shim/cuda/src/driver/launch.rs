@@ -57,10 +57,7 @@ fn launch_kernel_impl(
         );
         return CUDA_ERROR_INVALID_VALUE;
     }
-    ShimState::with(|s| {
-        if let Err(code) = s.require_init() {
-            return code;
-        }
+    ShimState::with_context(|s| {
         if s.stream(stream).is_none() {
             return CUDA_ERROR_INVALID_HANDLE;
         }
@@ -228,7 +225,7 @@ pub extern "C" fn cuFuncGetAttribute(pi: *mut i32, attrib: i32, f: *mut c_void) 
     if pi.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    ShimState::with(|s| {
+    ShimState::with_context(|s| {
         // Validate the handle + recover the modeled function's resource use.
         let Some((num_regs, static_shared)) = FunctionResources::get(s, f) else {
             return CUDA_ERROR_INVALID_HANDLE;
@@ -262,7 +259,7 @@ pub extern "C" fn cuFuncGetAttribute(pi: *mut i32, attrib: i32, f: *mut c_void) 
 /// attribute is accepted as a no-op once the handle validates.
 #[no_mangle]
 pub extern "C" fn cuFuncSetAttribute(f: *mut c_void, attrib: i32, value: i32) -> i32 {
-    ShimState::with(|s| {
+    ShimState::with_context(|s| {
         if s.function(f).is_none() {
             return CUDA_ERROR_INVALID_HANDLE;
         }
@@ -281,7 +278,7 @@ pub extern "C" fn cuFuncSetAttribute(f: *mut c_void, attrib: i32, value: i32) ->
 /// executor does not need to act on, but tracks faithfully). A bad handle is `INVALID_HANDLE`.
 #[no_mangle]
 pub extern "C" fn cuFuncSetCacheConfig(f: *mut c_void, config: i32) -> i32 {
-    ShimState::with(|s| {
+    ShimState::with_context(|s| {
         if s.set_func_cache_config(f, config) {
             CUDA_SUCCESS
         } else {
@@ -300,7 +297,7 @@ pub extern "C" fn cuOccupancyMaxActiveBlocksPerMultiprocessor(
     if num_blocks.is_null() || block_size <= 0 {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    ShimState::with(|s| {
+    ShimState::with_context(|s| {
         let Some((num_regs, static_shared)) = FunctionResources::get(s, f) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
@@ -331,7 +328,7 @@ pub extern "C" fn cuOccupancyMaxPotentialBlockSize(
     dyn_smem: usize,
     block_size_limit: i32,
 ) -> i32 {
-    ShimState::with(|s| {
+    ShimState::with_context(|s| {
         let Some((num_regs, static_shared)) = FunctionResources::get(s, f) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };

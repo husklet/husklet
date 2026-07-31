@@ -20,7 +20,7 @@ use std::time::Instant;
 
 use hl_cuda::model::event::Event;
 use hl_cuda::model::stream::Stream;
-use hl_cuda::result::CUDA_ERROR_NOT_INITIALIZED;
+use hl_cuda::result::{CUDA_ERROR_INVALID_CONTEXT, CUDA_ERROR_NOT_INITIALIZED};
 use hl_cuda::{CudaContext, CudaDeviceDesc, Function};
 use hl_gpu::transport::DEFAULT_EXEC_SOCK;
 use hl_gpu::RemoteCommandSink;
@@ -65,8 +65,10 @@ pub struct State {
 
     /// `CUcontext` token allocator (opaque, non-null). One simulated device, so contexts are tokens.
     next_ctx: usize,
-    /// The live `CUcontext` tokens. `cuCtxDestroy` removes one; every context-taking entry point checks
-    /// membership so a destroyed token is `CUDA_ERROR_INVALID_CONTEXT`, not a silent success.
+    /// The live `CUcontext` tokens. `cuCtxDestroy` removes one; every entry point handed a token checks
+    /// membership so a destroyed token is `CUDA_ERROR_INVALID_CONTEXT`, not a silent success. Destroying
+    /// the CURRENT context also clears [`State::current_ctx`], which is what [`State::require_context`]
+    /// consults on behalf of every entry point that does not take a token.
     contexts: HashSet<usize>,
     /// The current context token (`0` = none).
     current_ctx: usize,
@@ -145,13 +147,35 @@ impl State {
         }
     }
 
+    /// The gate every entry point that touches the CUDA OBJECT MODEL checks — allocations, copies,
+    /// memsets, modules, functions, launches, streams, events and the context's own properties. All of
+    /// those belong to a context, but the model they live in is one process-global [`CudaContext`] that
+    /// outlives any `CUcontext` token, so without asking here a destroyed context would keep answering:
+    /// `cuMemAlloc` after `cuCtxDestroy` handed back a pointer and reported success.
+    ///
+    /// Subsumes [`State::require_init`] — an uninitialized driver can have no current context either, and
+    /// `CUDA_ERROR_NOT_INITIALIZED` is the more specific answer, so it is reported first.
+    ///
+    /// Calls that legitimately predate a context are NOT gated on this: `cuInit`, the driver version and
+    /// error strings, device enumeration and device properties, context creation, the current-context
+    /// stack (`cuCtxGetCurrent`/`SetCurrent`/`Push`/`Pop`/`Destroy`), the primary-context refcount, and
+    /// `cuGetProcAddress`.
+    pub fn require_context(&self) -> Result<(), i32> {
+        self.require_init()?;
+        if self.current_ctx == 0 {
+            return Err(CUDA_ERROR_INVALID_CONTEXT);
+        }
+        Ok(())
+    }
+
     /// CUDA does not inherit a context across `fork(2)`, and using the parent's context in the child is
     /// undefined. The engine implements a guest `fork()` as a real host fork, so without this the child
     /// would hold a copy of the parent's `$HL_GPU_EXEC` fd and believe it owns the parent's buffer ids —
     /// two processes interleaving frames on one socket. Dropping the inherited state closes only the
     /// CHILD's copy of the fd and empties every handle table, and the fresh state is uninitialized, so
-    /// each lowering entry point reports `CUDA_ERROR_NOT_INITIALIZED` and each inherited handle reports
-    /// `CUDA_ERROR_INVALID_HANDLE` until the child calls `cuInit` for itself.
+    /// every entry point reports `CUDA_ERROR_NOT_INITIALIZED` until the child calls `cuInit` for itself,
+    /// then `CUDA_ERROR_INVALID_CONTEXT` until it creates its own context, and only then does an
+    /// inherited handle reach the empty handle tables and report `CUDA_ERROR_INVALID_HANDLE`.
     ///
     /// The pid comparison runs on every state access rather than from a `pthread_atfork` handler, so it
     /// also covers `clone(2)`/`vfork` and happens before any fd or table is touched. A guest `execve()`
@@ -214,6 +238,16 @@ impl ShimState {
         let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
         state.disown_after_fork();
         f(&mut state)
+    }
+
+    /// [`ShimState::with`] for an entry point that needs a CURRENT CONTEXT: `f` runs only once
+    /// [`State::require_context`] passes, otherwise its `CUresult` is returned without `f` running. Every
+    /// such entry point says so exactly once, by calling this instead of `with`.
+    pub fn with_context(f: impl FnOnce(&mut State) -> i32) -> i32 {
+        Self::with(|s| match s.require_context() {
+            Ok(()) => f(s),
+            Err(code) => code,
+        })
     }
 }
 

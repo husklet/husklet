@@ -149,10 +149,16 @@ pub extern "C" fn cuDeviceGetAttribute(pi: *mut i32, attrib: i32, dev: i32) -> i
     if pi.is_null() || dev != 0 {
         return CUDA_ERROR_INVALID_VALUE;
     }
+    // An enum no driver defines is not a question about this device, so it is `CUDA_ERROR_INVALID_VALUE`
+    // — as real CUDA answers. Reporting 0 instead made "the driver has never heard of this" identical to
+    // "the feature is present and its value is zero", which no caller can tell apart.
+    if attrib <= 0 || attrib >= CU_DEVICE_ATTRIBUTE_MAX {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
     // The full modeled CU_DEVICE_ATTRIBUTE_* set: values that vary with the device descriptor read it
     // (compute capability, warp size, SM count, clock); the rest are the fixed, truthful properties of
-    // the simulated Ampere-class unified-memory device. The unmodeled attribute tail reports 0, which is
-    // the spec-faithful "feature absent" answer a real driver gives for an attribute it doesn't set.
+    // the simulated Ampere-class unified-memory device. An IN-RANGE attribute the model does not track
+    // reports 0, the "feature absent" answer a real driver gives for an attribute it doesn't set.
     let v = ShimState::with(|s| {
         let d = &s.ctx.device;
         match attrib {
@@ -203,7 +209,7 @@ pub extern "C" fn cuDeviceGetAttribute(pi: *mut i32, attrib: i32, dev: i32) -> i
             // No grid-wide barrier in the kernel IR → cooperative launch is genuinely absent, and
             // `cuLaunchCooperativeKernel` / `cudaDeviceProp::cooperativeLaunch` must agree.
             CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH => 0,
-            _ => 0, // spec-faithful default for the unmodeled attribute tail
+            _ => 0, // in-range but unmodeled: feature absent
         }
     });
     unsafe { *pi = v };
@@ -305,20 +311,17 @@ pub extern "C" fn cuCtxGetDevice(device: *mut i32) -> i32 {
     if device.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    unsafe { *device = 0 };
-    CUDA_SUCCESS
+    ShimState::with_context(|_| {
+        unsafe { *device = 0 };
+        CUDA_SUCCESS
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn cuCtxSynchronize() -> i32 {
-    ShimState::with(|s| {
-        if let Err(code) = s.require_init() {
-            return code;
-        }
-        match s.ctx.synchronize(&mut s.sink) {
-            Ok(()) => CUDA_SUCCESS,
-            Err(e) => DriverStatus::from(&e).code(),
-        }
+    ShimState::with_context(|s| match s.ctx.synchronize(&mut s.sink) {
+        Ok(()) => CUDA_SUCCESS,
+        Err(e) => DriverStatus::from(&e).code(),
     })
 }
 
@@ -357,12 +360,22 @@ pub extern "C" fn cuCtxPopCurrent_v2(pctx: *mut *mut c_void) -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn cuCtxGetApiVersion(_ctx: *mut c_void, version: *mut u32) -> i32 {
+pub extern "C" fn cuCtxGetApiVersion(ctx: *mut c_void, version: *mut u32) -> i32 {
     if version.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    unsafe { *version = CTX_API_VERSION };
-    CUDA_SUCCESS
+    // A null `ctx` asks about the current context; a token must be one that is still live.
+    ShimState::with(|s| {
+        if ctx.is_null() {
+            if let Err(code) = s.require_context() {
+                return code;
+            }
+        } else if !s.ctx_is_live(ctx) {
+            return CUDA_ERROR_INVALID_CONTEXT;
+        }
+        unsafe { *version = CTX_API_VERSION };
+        CUDA_SUCCESS
+    })
 }
 
 #[no_mangle]
@@ -370,15 +383,19 @@ pub extern "C" fn cuCtxGetFlags(flags: *mut u32) -> i32 {
     if flags.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    let f = ShimState::with(|s| s.current_ctx_flags());
-    unsafe { *flags = f };
-    CUDA_SUCCESS
+    ShimState::with_context(|s| {
+        let f = s.current_ctx_flags();
+        unsafe { *flags = f };
+        CUDA_SUCCESS
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn cuCtxSetFlags(flags: u32) -> i32 {
-    ShimState::with(|s| s.set_current_ctx_flags(flags));
-    CUDA_SUCCESS
+    ShimState::with_context(|s| {
+        s.set_current_ctx_flags(flags);
+        CUDA_SUCCESS
+    })
 }
 
 // ==================================================================================================
