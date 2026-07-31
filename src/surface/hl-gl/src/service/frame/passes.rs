@@ -669,11 +669,21 @@ pub(super) fn depth_attachment_for(
 /// old "use the first draw's clear + replay all geometry" folded the leading transparent clear onto the pass
 /// and kept the wiped pre-clear draws, so the page background (orange) was dropped and the frame read blank.
 ///
-/// A scissored clear only touches its rect, so it does NOT wipe — it is not a boundary here. With no
-/// unscissored clear at all the run falls back to `(first-draw clear, 0)` = the prior leading-clear behavior,
-/// so an ordinary "clear then draw" frame lowers byte-identically.
+/// A scissored clear only touches its rect, so it does NOT wipe — it is not a boundary here, and its color is
+/// NEVER the full-target clear color (that is literally "scissor ignored"). With no unscissored clear at all
+/// the run falls back to `(first non-scissored-clear draw's clear, 0)` = the prior leading-clear behavior, so
+/// an ordinary "clear then draw" frame lowers byte-identically. Callers that decide a `LoadOp` must ask
+/// [`full_clear`]: only `Some` there justifies clearing the attachment at all.
 impl RenderPasses {
     pub(super) fn effective_clear(run: &[DrawCall]) -> ([f32; 4], usize) {
+        let (clear, start) = Self::full_clear(run);
+        (clear.unwrap_or_else(|| Self::fallback_clear(run)), start)
+    }
+
+    /// `Some(color)` only when an UNSCISSORED clear in the run justifies clearing the WHOLE target, plus the
+    /// index from which draws survive. `None` means nothing wiped the target: the pass must `LoadOp::Load`,
+    /// not clear, or it destroys everything outside a scissored clear's rect.
+    pub(super) fn full_clear(run: &[DrawCall]) -> (Option<[f32; 4]>, usize) {
         let mut last_full: Option<usize> = None;
         for (i, d) in run.iter().enumerate() {
             if d.is_clear && !d.scissor_enabled {
@@ -681,9 +691,19 @@ impl RenderPasses {
             }
         }
         match last_full {
-            Some(i) => (run[i].clear, i + 1),
-            None => (run.first().map(|d| d.clear).unwrap_or([0.0; 4]), 0),
+            Some(i) => (Some(run[i].clear), i + 1),
+            None => (None, 0),
         }
+    }
+
+    /// The full-target clear color for a run with no unscissored clear: the first draw's recorded clear color
+    /// (the prior leading-clear behavior), SKIPPING scissored clears. A scissored clear paints only its rect,
+    /// so promoting its color to the whole attachment is exactly "scissor ignored".
+    fn fallback_clear(run: &[DrawCall]) -> [f32; 4] {
+        run.iter()
+            .find(|d| !(d.is_clear && d.scissor_enabled))
+            .map(|d| d.clear)
+            .unwrap_or([0.0; 4])
     }
 }
 

@@ -95,6 +95,11 @@ impl Frame {
         // draw-list, then composites tiles — replaying the wiped pre-clear draws or using the leading transparent
         // clear (the old behavior) dropped that background and read back blank.
         let (clear, survivors) = survivors(draws);
+        // Only an UNSCISSORED clear may clear-load the whole attachment. With none, the frame's first render
+        // pass must LOAD what is already there — clearing it would wipe the previous frame's content outside a
+        // scissored clear's rect (and, with the clear color taken from that scissored clear, read as "scissor
+        // ignored"). See [`RenderPasses::full_clear`].
+        let has_full_clear = RenderPasses::full_clear(draws).0.is_some();
         // A SCISSORED `glClear` among the survivors fills a sub-rect with a color (GskGpu/Chrome fill the page
         // background this way: `glEnable(GL_SCISSOR_TEST); glClear(#ff7700)` over the content rect). It is a real
         // paint op, not a pass boundary — lowered below as an `Enc::ClearRect` between render-pass segments.
@@ -225,7 +230,8 @@ impl Frame {
 
         // ---- segmented path: a scissored clear paints a rect, so the frame is a SEQUENCE of render-pass
         // segments separated by `Enc::ClearRect` fills, all writing the ONE target in draw order. The first
-        // segment's pass clear-loads the target (`clear`, the effective full clear); every later segment
+        // segment's pass clear-loads the target ONLY if an unscissored clear justified it (`clear`, the
+        // effective full clear) — otherwise it load-preserves like the rest; every later segment
         // load-preserves what the prior segments + fills already wrote (`LoadOp::Load`). This is what renders
         // Chrome's page background: `clear(full transparent); …draws; SCISSORED clear(#ff7700 over the content
         // rect); …composite tile draws` → transparent clear, orange rect fill, tiles composited on top.
@@ -244,7 +250,7 @@ impl Frame {
                     tw,
                     th,
                     clear,
-                    if first_pass {
+                    if first_pass && has_full_clear {
                         LoadOp::Clear
                     } else {
                         LoadOp::Load
@@ -270,7 +276,7 @@ impl Frame {
             tw,
             th,
             clear,
-            if first_pass {
+            if first_pass && has_full_clear {
                 LoadOp::Clear
             } else {
                 LoadOp::Load
@@ -338,6 +344,101 @@ mod clone_tests {
             refs_before,
             "selecting a Chrome-sized draw list must not clone per-draw snapshots"
         );
+    }
+
+    fn clear_draw(color: [f32; 4], scissor: Option<[i32; 4]>) -> DrawCall {
+        let mut draw = DrawCall::default();
+        draw.is_clear = true;
+        draw.clear = color;
+        draw.scissor_enabled = scissor.is_some();
+        draw.scissor = scissor.unwrap_or_default();
+        draw
+    }
+
+    fn window_ctx(w: u32, h: u32) -> GlContext {
+        let mut ctx = GlContext::new();
+        ctx.local.surf.have = true;
+        ctx.local.surf.width = w;
+        ctx.local.surf.height = h;
+        ctx
+    }
+
+    fn color_loads(frame: &Frame) -> Vec<LoadOp> {
+        frame
+            .cmds
+            .iter()
+            .filter_map(|c| match c {
+                Cmd::Submit(batch) => Some(batch.encoder.iter()),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|e| match e {
+                Enc::BeginRenderPass { color, .. } => color.first().map(|a| a.load),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A scissored `glClear` must paint ONLY its rect: an `Enc::ClearRect` over a LOAD-ing pass. Promoting it
+    /// to a full-target `LoadOp::Clear` is indistinguishable from ignoring `GL_SCISSOR_TEST` (and wipes the
+    /// previous frame outside the rect).
+    #[test]
+    fn scissored_clear_lowers_to_load_plus_clear_rect() {
+        let mut ctx = window_ctx(64, 64);
+        ctx.local.recording.draws = vec![clear_draw([1.0, 0.0, 0.0, 1.0], Some([0, 0, 32, 32]))];
+
+        let frame = Frame::build_clear(&mut ctx);
+
+        assert!(
+            color_loads(&frame).iter().all(|l| *l == LoadOp::Load),
+            "a frame with no unscissored clear must not clear-load the whole attachment: {:?}",
+            color_loads(&frame)
+        );
+        let rects = frame
+            .cmds
+            .iter()
+            .filter_map(|c| match c {
+                Cmd::Submit(batch) => Some(batch.encoder.iter()),
+                _ => None,
+            })
+            .flatten()
+            .filter(|e| matches!(e, Enc::ClearRect { .. }))
+            .count();
+        assert_eq!(rects, 1, "the scissored clear must lower to one ClearRect");
+    }
+
+    /// An UNSCISSORED clear still clear-loads the pass at its color — the scissored rect fill lands on top.
+    #[test]
+    fn full_clear_before_a_scissored_clear_still_clear_loads() {
+        let mut ctx = window_ctx(64, 64);
+        ctx.local.recording.draws = vec![
+            clear_draw([0.0, 0.0, 1.0, 1.0], None),
+            clear_draw([1.0, 0.0, 0.0, 1.0], Some([0, 0, 32, 32])),
+        ];
+
+        let frame = Frame::build_clear(&mut ctx);
+
+        assert_eq!(color_loads(&frame).first(), Some(&LoadOp::Clear));
+    }
+
+    /// A scissored clear's color must never become the full-target clear color.
+    #[test]
+    fn scissored_clear_color_is_not_the_full_target_clear() {
+        let red = [1.0, 0.0, 0.0, 1.0];
+        let draws = vec![clear_draw(red, Some([0, 0, 32, 32]))];
+
+        assert_eq!(RenderPasses::full_clear(&draws).0, None);
+        assert_ne!(
+            RenderPasses::effective_clear(&draws).0,
+            red,
+            "a scissored clear paints its rect only — its color must not clear the attachment"
+        );
+
+        // …and it must not be picked up as the fallback ahead of a later geometry draw either.
+        let mut geometry = DrawCall::default();
+        geometry.clear = [0.0, 0.0, 1.0, 1.0];
+        let mixed = vec![clear_draw(red, Some([0, 0, 32, 32])), geometry];
+        assert_ne!(RenderPasses::effective_clear(&mixed).0, red);
     }
 }
 

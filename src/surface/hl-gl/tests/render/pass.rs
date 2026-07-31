@@ -326,6 +326,54 @@ fn multi_draw_frame_replays_every_draw_in_one_pass() {
 }
 
 // ---------------------------------------------------------------------------------------------------
+// scissored glClear: an Enc::ClearRect over a LOAD-ing pass, never a full-target LoadOp::Clear
+// ---------------------------------------------------------------------------------------------------
+
+/// `glClear` is scissor-tested. A frame whose only clear is scissored must NOT clear-load the attachment:
+/// doing so paints the whole target with the scissored clear's color (the "scissor ignored" readback) and
+/// destroys the previous frame's content outside the rect. Mirrors `apps/gl-minimal` case `egl_offscreen`:
+/// a 64x64 target, `glScissor(0, 0, 32, 32)`, one `glClear`.
+#[test]
+fn scissored_clear_alone_fills_only_its_rect_over_a_loading_pass() {
+    let mut c = ctx_64();
+    let mut sink = RecordingSink::with_full_caps();
+    record::clear_color(&mut c, [0.25, 0.5, 0.75, 1.0]);
+    record::enable(&mut c, GL_SCISSOR_TEST);
+    record::scissor(&mut c, [0, 0, 32, 32]);
+    record::clear(&mut c);
+
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let ops = submit_ops(&sink.batches[0]);
+
+    for op in ops {
+        if let Enc::BeginRenderPass { color, .. } = op {
+            assert_eq!(
+                color[0].load,
+                LoadOp::Load,
+                "no unscissored clear justifies clearing the whole attachment"
+            );
+        }
+    }
+    assert_eq!(
+        ops.iter()
+            .filter(|o| matches!(
+                o,
+                Enc::ClearRect {
+                    x: 0,
+                    y: 32,
+                    w: 32,
+                    h: 32,
+                    color,
+                    ..
+                } if *color == [0.25, 0.5, 0.75, 1.0]
+            ))
+            .count(),
+        1,
+        "the scissored clear must lower to exactly one ClearRect over its rect: {ops:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------------
 // clear-then-draw: the leading glClear color becomes the pass LoadOp::Clear
 // ---------------------------------------------------------------------------------------------------
 
