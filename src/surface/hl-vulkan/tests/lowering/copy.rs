@@ -841,3 +841,59 @@ fn copy_image_allows_a_same_image_copy_between_different_layers() {
         "the same rectangle of the same layer still overlaps"
     );
 }
+
+// ---- buffer creation size guards ----------------------------------------------------------------
+//
+// `allocate_memory` refuses a zero or over-heap size and `create_image` refuses a zero or over-limit
+// extent; `create_buffer` guarded neither, which is what makes this an oversight rather than a policy.
+// Three sibling creation paths cannot disagree about the same class of caller mistake on purpose.
+
+/// The normal path FIRST. Without this, a `create_buffer` that refused everything would satisfy both
+/// refusal assertions below while measuring nothing at all.
+#[test]
+fn create_buffer_accepts_an_ordinary_size() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let handle = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_SRC, 4096)
+        .expect("an ordinary buffer must be created");
+    assert_eq!(
+        d.buffers.get(&handle).map(|b| b.size),
+        Some(4096),
+        "the created buffer must carry the size it was asked for"
+    );
+    // And one texel below the advertised ceiling is still legal, so the bound is a ceiling and not a
+    // blanket refusal of large buffers.
+    let ceiling = d.physical_device.limits.max_buffer_size;
+    assert!(
+        create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_SRC, ceiling).is_ok(),
+        "a buffer exactly at maxBufferSize is legal"
+    );
+}
+
+/// A zero-size buffer used to be created successfully. Its reported memory requirement was then 0 —
+/// the same answer `vkGetBufferMemoryRequirements` gives for a buffer it has never heard of, so a
+/// caller could not tell an allocation of nothing from a handle that does not exist.
+#[test]
+fn create_buffer_refuses_a_zero_size() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    assert!(
+        create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_SRC, 0).is_err(),
+        "a zero-size buffer is not a buffer"
+    );
+}
+
+/// The driver advertises a 2 GiB maxBufferSize and used to create a buffer of u64::MAX anyway,
+/// contradicting its own advertisement and leaving the contradiction to surface somewhere later.
+#[test]
+fn create_buffer_refuses_a_size_past_the_advertised_ceiling() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let ceiling = d.physical_device.limits.max_buffer_size;
+    for size in [ceiling + 1, u64::MAX] {
+        assert!(
+            create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_SRC, size).is_err(),
+            "size {size} exceeds the advertised maxBufferSize {ceiling}"
+        );
+    }
+}

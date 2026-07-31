@@ -93,6 +93,11 @@ pub struct Limits {
     pub min_storage_buffer_offset_alignment: u64,
     pub min_memory_map_alignment: u64,
     pub non_coherent_atom_size: u64,
+    /// The largest `VkBuffer` this driver will create, and the value it advertises as `maxBufferSize`
+    /// and `maxMemoryAllocationSize`. One constant so the advertisement and the refusal cannot drift:
+    /// the driver used to advertise a 2 GiB ceiling from the property query while `create_buffer`
+    /// enforced nothing, and so returned success for a buffer of `u64::MAX`.
+    pub max_buffer_size: u64,
 }
 
 /// The one queue family we expose: graphics + compute + transfer, a single queue.
@@ -251,6 +256,8 @@ impl Limits {
             min_storage_buffer_offset_alignment: 16,
             min_memory_map_alignment: 256,
             non_coherent_atom_size: 256,
+            // 2 GiB: the executor's residency budget, and what wgpu-hal reads as `maxBufferSize`.
+            max_buffer_size: 1 << 31,
         }
     }
 }

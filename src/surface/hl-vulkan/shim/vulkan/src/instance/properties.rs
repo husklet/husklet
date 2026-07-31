@@ -63,7 +63,10 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
                 unsafe { (node as *mut VkPhysicalDeviceMaintenance3Properties).as_mut() }
             {
                 m.max_per_set_descriptors = 1_000_000;
-                m.max_memory_allocation_size = 1 << 31; // 2 GiB
+                // Read from the same constant `create_buffer` refuses against, so the advertised
+                // ceiling and the enforced one cannot drift apart again.
+                m.max_memory_allocation_size =
+                    StateStore::with(|s| s.physical_device().limits.max_buffer_size);
             }
         } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES {
             if let Some(id) = unsafe { (node as *mut VkPhysicalDeviceIDProperties).as_mut() } {
@@ -111,9 +114,11 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
                 unsafe { (node as *mut VkPhysicalDeviceMaintenance4Properties).as_mut() }
             {
                 // A truthful upper bound: the executor residency budget backs buffers up to the same
-                // 2 GiB ceiling as maintenance3's maxMemoryAllocationSize. wgpu-hal reads maxBufferSize
+                // ceiling as maintenance3's maxMemoryAllocationSize. wgpu-hal reads maxBufferSize
                 // from here (maintenance4 is core 1.3); a zero would fail device creation before submit.
-                m.max_buffer_size = 1 << 31; // 2 GiB
+                // Same constant `create_buffer` refuses against — one source, so it stays honest.
+                m.max_buffer_size =
+                    StateStore::with(|s| s.physical_device().limits.max_buffer_size);
             }
         }
         node = n.p_next;

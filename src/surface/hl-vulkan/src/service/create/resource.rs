@@ -30,6 +30,23 @@ pub fn create_buffer(
     vk_usage: u32,
     size: u64,
 ) -> Result<VkBuffer> {
+    // Validate the size HERE, the way `allocate_memory` validates its allocation size and
+    // `create_image` validates its extent. This path guarded neither bound, so it was the one sibling
+    // of the three that answered a caller's mistake with a live handle: a zero-size buffer became a
+    // real object whose reported memory requirement was 0 — indistinguishable from the 0 that
+    // `vkGetBufferMemoryRequirements` reports for a buffer it has never heard of — and an absurd size
+    // was accepted against the 2 GiB ceiling this same driver advertises as `maxBufferSize`, leaving
+    // the contradiction to surface much later, somewhere else.
+    if size == 0 {
+        return Err(GpuError::Invalid(
+            "vkCreateBuffer: size must be greater than 0",
+        ));
+    }
+    if size > dev.physical_device.limits.max_buffer_size {
+        return Err(GpuError::ResourceLimit(
+            "vkCreateBuffer: size exceeds the advertised maxBufferSize",
+        ));
+    }
     let ir_id = dev.alloc_ir();
     let handle = dev.alloc_handle();
     let usage = BufferUsage(vk_usage).wire();
