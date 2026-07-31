@@ -9,7 +9,7 @@ use hl_gl::service::{record, swap};
 
 use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::descriptor::RenderPipelineDesc;
-use hl_gpu::protocol::model::enums::{IndexFormat, Topology};
+use hl_gpu::protocol::model::enums::{IndexFormat, LoadOp, Topology};
 use hl_gpu::{Cmd, RecordingSink};
 
 const VS: &str = "attribute vec2 aPos;\nvoid main(){ gl_Position = vec4(aPos, 0.0, 1.0); }\n";

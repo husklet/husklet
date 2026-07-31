@@ -391,3 +391,125 @@ fn a_stencil_only_clear_lands_without_a_stencil_tested_draw() {
     let (_, stencil) = pass_depth_clear(&sink.batches[0]).expect("a stencil-capable attachment");
     assert_eq!(stencil, 5);
 }
+
+// ---------------------------------------------------------------------------------------------------
+// A clear that `LoadOp::Clear` cannot express lowers to a scissored, masked rect DRAW
+//
+// The source asserted in three places that these were "not representable in the IR". All three claims
+// were wrong and none had been re-derived: `SetScissor` bounds the rect, a viewport whose depth range is
+// collapsed to the clear value writes that exact depth from any geometry, `SetStencilReference` plus a
+// `REPLACE` pass op writes the stencil value, and the pipeline's `stencil_write_mask` / `write_mask`
+// carry `glStencilMask` and `glColorMask` exactly.
+// ---------------------------------------------------------------------------------------------------
+
+/// The depth attachment's load op, and whether any pass in the frame carries one.
+fn depth_load(batch: &[Cmd]) -> Option<LoadOp> {
+    submit_ops(batch).iter().find_map(|e| match e {
+        Enc::BeginRenderPass { depth, .. } => depth.as_ref().map(|d| d.load),
+        _ => None,
+    })
+}
+
+/// The depth state of the first render pipeline created in the batch.
+fn pipeline_depth(batch: &[Cmd]) -> Option<hl_gpu::protocol::model::descriptor::DepthState> {
+    batch.iter().find_map(|c| match c {
+        Cmd::CreateRenderPipeline(_, desc)
+        | Cmd::CreateRenderPipelineLayout(_, desc, _, _) => desc.depth.clone(),
+        _ => None,
+    })
+}
+
+fn pipeline_color_write_mask(batch: &[Cmd]) -> Option<u32> {
+    batch.iter().find_map(|c| match c {
+        Cmd::CreateRenderPipeline(_, desc)
+        | Cmd::CreateRenderPipelineLayout(_, desc, _, _) => {
+            desc.color_targets.first().map(|t| t.write_mask)
+        }
+        _ => None,
+    })
+}
+
+fn scissors(batch: &[Cmd]) -> Vec<(u32, u32, u32, u32)> {
+    submit_ops(batch)
+        .iter()
+        .filter_map(|e| match e {
+            Enc::SetScissor { x, y, w, h } => Some((*x, *y, *w, *h)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A SCISSORED depth clear must paint only its rect. Clear-loading the depth attachment wipes the whole
+/// plane, which is indistinguishable from ignoring `GL_SCISSOR_TEST` — and `glClear` is scissor-tested
+/// for every plane it names, not just colour.
+#[test]
+#[ignore = "records the required IR ahead of the fix; see hl-work/gl-clear-scissor-20260731/DESIGN.md"]
+fn a_scissored_depth_clear_does_not_clear_load_the_whole_attachment() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    record::depth_mask(&mut c, true);
+    record::clear_depth(&mut c, 0.25);
+    record::enable(&mut c, GL_SCISSOR_TEST);
+    record::scissor(&mut c, [8, 8, 16, 16]);
+    record::clear_buffers(&mut c, GL_DEPTH_BUFFER_BIT);
+    record::disable(&mut c, GL_SCISSOR_TEST);
+    record::enable(&mut c, GL_DEPTH_TEST);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    swap::swap_buffers(&mut c, &mut sink).unwrap();
+
+    assert_eq!(
+        depth_load(&sink.batches[0]),
+        Some(LoadOp::Load),
+        "a scissored depth clear must not clear-load the whole depth attachment"
+    );
+    assert!(
+        scissors(&sink.batches[0]).contains(&(8, 8, 16, 16)),
+        "the clear's rect must reach the encoder: {:?}",
+        scissors(&sink.batches[0])
+    );
+}
+
+/// GL applies `glStencilMask` to a clear exactly as to a draw: only the enabled BITS change. Treating any
+/// non-zero mask as licence to write all eight is a different image whenever an application packs more
+/// than one thing into the stencil plane, which is the reason to have a mask at all.
+#[test]
+#[ignore = "records the required IR ahead of the fix; see hl-work/gl-clear-scissor-20260731/DESIGN.md"]
+fn a_partially_masked_stencil_clear_writes_only_the_masked_bits() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    record::clear_stencil(&mut c, 0xff);
+    record::stencil_mask(&mut c, 0x0f);
+    record::clear_buffers(&mut c, GL_STENCIL_BUFFER_BIT);
+    swap::swap_buffers(&mut c, &mut sink).unwrap();
+
+    let depth = pipeline_depth(&sink.batches[0])
+        .expect("a partially masked stencil clear lowers to a depth-stencil pipeline");
+    assert_eq!(
+        depth.stencil_write_mask & 0xff,
+        0x0f,
+        "the pipeline must carry glStencilMask, not a full-plane write"
+    );
+}
+
+/// A partially `glColorMask`ed clear was REFUSED — the colour plane was left untouched and the whole
+/// clear dropped, reported once per context as unrepresentable. `glColorMask(0,0,0,1); glClear(...)` is
+/// what a browser compositor does on every frame, so this was silently unsupported throughout.
+#[test]
+#[ignore = "records the required IR ahead of the fix; see hl-work/gl-clear-scissor-20260731/DESIGN.md"]
+fn a_partially_masked_colour_clear_writes_the_enabled_channels() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    record::clear_color(&mut c, [1.0, 1.0, 1.0, 1.0]);
+    record::color_mask(&mut c, false, false, false, true);
+    record::clear_buffers(&mut c, GL_COLOR_BUFFER_BIT);
+    swap::swap_buffers(&mut c, &mut sink).unwrap();
+
+    assert_eq!(
+        pipeline_color_write_mask(&sink.batches[0]),
+        Some(0b1000),
+        "only the alpha channel may be written"
+    );
+}
