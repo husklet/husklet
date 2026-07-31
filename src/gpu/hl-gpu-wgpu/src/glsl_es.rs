@@ -328,41 +328,6 @@ impl<'a> Source<'a> {
         Self { text }
     }
 
-    /// Rewrite `isinf(x)` / `isnan(x)` into BIT-PATTERN tests on the IEEE-754 binary32 encoding.
-    ///
-    /// Two separate defects made this necessary, and only the first was known.
-    ///
-    /// naga's `wgsl-out` emits no relational function except `all`/`any`, so `isnan` NEVER COMPILED — it
-    /// reached WGSL emission and was refused (`Unsupported relational function: IsNan`). WGSL has no such
-    /// builtins at all: gpuweb REMOVED `isNan`/`isInf` from the language (gpuweb#2311) precisely because
-    /// backends assuming fast math made them unreliable, so there is nothing to lower to and the test has
-    /// to survive as ordinary arithmetic written here.
-    ///
-    /// The second defect is why that arithmetic must be INTEGER arithmetic. The previous rewrite produced
-    /// `(abs(x) > 3.40282347e38)`, which is a FLOAT comparison — and a float comparison is exactly what a
-    /// fast-math compiler is licensed to fold away, because fast math permits assuming no operand is NaN
-    /// or infinite. Metal's shader compiler defaults to fast math and wgpu-hal never disables it, so on
-    /// that backend the comparison can be constant-folded to `false` and the predicate silently answers
-    /// "never" for every input. Reinterpreting the bits and testing them as an INTEGER puts the test
-    /// outside what those assumptions can reach: fast math's licence is over floating-point arithmetic,
-    /// and `floatBitsToUint` + an integer compare performs none.
-    ///
-    /// The encoding, exactly: mask off the sign (`& 0x7fffffff`) and compare against the exponent-all-ones
-    /// pattern `0x7f800000`. EQUAL is an infinity (all-ones exponent, zero mantissa); GREATER is a NaN
-    /// (all-ones exponent, nonzero mantissa). Both `+INF` and `-INF` answer true because the sign is
-    /// masked, which a magnitude comparison also got right and is worth not losing.
-    ///
-    /// SCALAR ARGUMENTS ONLY, deliberately. GLSL's vector overloads return a `bvec`, and the emitted
-    /// integer compare has no vector form (`==` on a `uvec` is not GLSL — it needs `equal()`), so a vector
-    /// argument produces source naga rejects rather than a silently wrong answer. That matches both the
-    /// previous rewrite, whose `abs(v) > FLT_MAX` was equally scalar-only, and this crate's standing
-    /// preference for a loud refusal over a quiet mistranslation.
-    ///
-    /// A shader using neither builtin is returned byte-for-byte.
-    pub(crate) fn rewrite_nonfinite_predicates(&self) -> String {
-        Self::rewrite(self.text)
-    }
-
     /// Rewrite every 2-row-matrix member of a `std140` uniform block to its `vec4 col[N]` column form
     /// (identical std140 bytes) and reconstruct the matrix at each use, because naga's `glsl-in` rejects
     /// `matNx2` in std140 outright (`UnsupportedMatrixTypeInStd140`, `front/glsl/offset.rs`).
@@ -400,78 +365,6 @@ impl<'a> Source<'a> {
         let mut toks = Tokens::from_source(self.text);
         toks.pad_std140_arrays();
         toks.0.as_slice().source()
-    }
-
-    /// The IEEE-754 binary32 predicate for one builtin, as an integer test on the bits. See
-    /// [`Self::rewrite_nonfinite_predicates`] for why this is integer arithmetic and not a comparison.
-    fn bit_test(builtin: &str, argument: &str) -> String {
-        // `== exponent-all-ones` is an infinity; `>` is a NaN (all-ones exponent + nonzero mantissa).
-        let compare = if builtin == "isnan" { ">" } else { "==" };
-        format!("((floatBitsToUint({argument}) & 0x7fffffffu) {compare} 0x7f800000u)")
-    }
-
-    fn rewrite(text: &str) -> String {
-        const BUILTINS: [&str; 2] = ["isinf", "isnan"];
-        if !BUILTINS.iter().any(|builtin| text.contains(builtin)) {
-            return text.to_string();
-        }
-        let s = Self::without_comments(text);
-        let bytes = s.as_bytes();
-        let mut out = String::with_capacity(s.len() + 32);
-        let mut i = 0usize;
-        let mut flush_from = 0usize;
-        while i < bytes.len() {
-            let on_boundary = i == 0
-                || !(bytes[i - 1] == b'_'
-                    || bytes[i - 1].is_ascii_alphanumeric()
-                    || bytes[i - 1] == b'.');
-            // Both builtin names are five characters, so one length serves the word-boundary check.
-            let followed_by_word = bytes
-                .get(i + 5)
-                .is_some_and(|byte| *byte == b'_' || byte.is_ascii_alphanumeric() || *byte == b'.');
-            let matched = BUILTINS
-                .iter()
-                .find(|builtin| s[i..].starts_with(**builtin))
-                .copied();
-            if let (true, false, Some(builtin)) = (on_boundary, followed_by_word, matched) {
-                // Skip any whitespace between the builtin and its opening paren.
-                let mut j = i + builtin.len();
-                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                    j += 1;
-                }
-                if bytes.get(j) == Some(&b'(') {
-                    // Find the paren that closes this call.
-                    let mut depth = 0i32;
-                    let mut k = j;
-                    let close = loop {
-                        match bytes.get(k) {
-                            None => break bytes.len(),
-                            Some(b'(') => depth += 1,
-                            Some(b')') => {
-                                depth -= 1;
-                                if depth == 0 {
-                                    break k;
-                                }
-                            }
-                            _ => {}
-                        }
-                        k += 1;
-                    };
-                    if close < bytes.len() {
-                        out.push_str(&s[flush_from..i]);
-                        // Recurse so a nested `isnan(isinf(...) ? … : …)` is rewritten inside out.
-                        let inner = Self::rewrite(&s[j + 1..close]);
-                        out.push_str(&Self::bit_test(builtin, inner.trim()));
-                        i = close + 1;
-                        flush_from = i;
-                        continue;
-                    }
-                }
-            }
-            i += 1;
-        }
-        out.push_str(&s[flush_from..]);
-        out
     }
 
     // ---------------------------------------------------------------------------------------------------

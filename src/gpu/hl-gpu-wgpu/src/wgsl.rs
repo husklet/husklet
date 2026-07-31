@@ -129,7 +129,14 @@ impl Spirv {
                         }
                         base
                     }
-                    _ => continue,
+                    // A layout that declares a descriptor ARRAY at this slot while the shader declares a
+                    // plain resource is the same shader/layout disagreement the two arms above refuse;
+                    // skipping it silently left the mismatch to be discovered, or not, downstream.
+                    _ => {
+                        return Err(GpuError::Invalid(
+                            "SPIR-V global is not an array where the pipeline layout declares one",
+                        ))
+                    }
                 };
             }
         }
@@ -225,18 +232,6 @@ pub fn glsl_to_wgsl_reflect(
         unmat2 = crate::glsl_es::Source::new(src).split_std140_mat2();
         padded = crate::glsl_es::Source::new(&unmat2).pad_std140_arrays();
         padded.as_str()
-    } else {
-        src
-    };
-    // naga's `wgsl-out` emits no relational function but `all`/`any`, so `isinf()` (which Chrome's GLES
-    // fragment shaders use) and `isnan()` both NACK at WGSL emission — WGSL has no such builtins, by
-    // design. Both are rewritten to integer tests on the IEEE-754 bit pattern before parsing, which is
-    // also what keeps them from being folded away by a fast-math backend; see
-    // `glsl_es::Source::rewrite_nonfinite_predicates`. A shader using neither is returned byte-for-byte.
-    let deinf;
-    let src = if src.contains("isinf") || src.contains("isnan") {
-        deinf = crate::glsl_es::Source::new(src).rewrite_nonfinite_predicates();
-        deinf.as_str()
     } else {
         src
     };

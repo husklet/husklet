@@ -349,7 +349,7 @@ fn isinf_fails_wgsl_out_directly_but_compiles_through_glsl_to_wgsl() {
         other => panic!("expected the IsInf wgsl-out failure, got {other:?}"),
     }
 
-    // PASS-AFTER: the bit-pattern rewrite compiles the shader to real WGSL — no `isinf`/`IsInf` survives,
+    // PASS-AFTER: the representation-level lowering (`wgsl::nonfinite`) compiles the shader to real WGSL — no `isinf`/`IsInf` survives,
     // and what replaces it is an INTEGER test on the bits (a `bitcast` to `u32`), not a float comparison a
     // fast-math backend could fold away.
     //
@@ -358,7 +358,7 @@ fn isinf_fails_wgsl_out_directly_but_compiles_through_glsl_to_wgsl() {
     // satisfy both and still answer `false` for every input at runtime. The VALUE is asserted in
     // `tests/nonfinite_predicates.rs`; this one only guards the emission shape.
     let wgsl = glsl_to_wgsl(ISINF_FRAG, naga::ShaderStage::Fragment, "fmain")
-        .expect("isinf fragment must compile through the rewrite");
+        .expect("isinf fragment must compile through the lowering");
     assert!(
         !wgsl.contains("isinf") && !wgsl.contains("isInf") && !wgsl.contains("IsInf"),
         "no isinf survives to WGSL: {wgsl}"
@@ -370,34 +370,20 @@ fn isinf_fails_wgsl_out_directly_but_compiles_through_glsl_to_wgsl() {
 }
 
 #[test]
-fn rewrite_nonfinite_is_exact_and_leaves_unaffected_source_untouched() {
-    use crate::glsl_es::Source;
-    // A shader using neither builtin is returned byte-for-byte (fast path).
-    let plain = "void main() { float x = 1.0; }";
-    assert_eq!(
-        Source::new(plain).rewrite_nonfinite_predicates(),
-        plain,
-        "source using neither builtin is untouched"
-    );
-
-    // Scalar calls on expression arguments, including a nested one, all rewritten to the bit test; no
-    // `isinf`/`isnan` token remains and the `isinfx` identifier (a false prefix) is NOT touched.
-    let src = "bool a = isinf(u.v * 2.0); bool b = isnan(isinf(w) ? 1.0 : x); float isinfx = 3.0;";
-    let out = Source::new(src).rewrite_nonfinite_predicates();
+fn a_vector_argument_to_a_nonfinite_predicate_is_refused_not_mistranslated() {
+    // `isinf(vec3)` is legal GLSL returning a `bvec3`. The lowering replaces the predicate with a bitwise
+    // AND against a SCALAR mask, and WGSL does not broadcast a scalar across a vector for bitwise
+    // operators — so the rebuilt module does not validate and the shader is REFUSED.
+    //
+    // That is the intended outcome, and it is asserted rather than assumed because the alternative failure
+    // mode is the one this codebase keeps finding: a lowering that produces something which compiles and
+    // answers wrongly. A refusal names itself; a wrong answer does not. If vector support is ever wanted,
+    // the mask has to be splatted to the argument's width, and this test is where that change announces
+    // itself.
+    let src = "#version 460\nlayout(std140, binding = 0) uniform U { vec4 v; };\nlayout(location=0) out vec4 o;\nvoid main(){ bvec3 b = isinf(v.xyz); o = vec4(b.x ? 1.0 : 0.0); }\n";
+    let outcome = glsl_to_wgsl(src, naga::ShaderStage::Fragment, "fmain");
     assert!(
-        !out.contains("isinf(") && !out.contains("isnan("),
-        "every call rewritten: {out}"
-    );
-    assert!(
-        out.contains("((floatBitsToUint(u.v * 2.0) & 0x7fffffffu) == 0x7f800000u)"),
-        "isinf is the exponent-all-ones EQUALITY: {out}"
-    );
-    assert!(
-        out.contains("& 0x7fffffffu) > 0x7f800000u)"),
-        "isnan is the STRICTLY-GREATER form (all-ones exponent, nonzero mantissa): {out}"
-    );
-    assert!(
-        out.contains("isinfx"),
-        "the `isinfx` identifier is not a false match: {out}"
+        outcome.is_err(),
+        "a vector predicate must be refused, never silently mistranslated: {outcome:?}"
     );
 }
