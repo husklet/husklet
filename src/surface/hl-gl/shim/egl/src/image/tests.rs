@@ -421,3 +421,92 @@ fn refused_external_import_names_the_check_that_refused_it() {
     );
     std::fs::remove_file(foreign_path).unwrap();
 }
+
+/// The exact allocation `gbm.c`'s `bo_create_external` makes, so the importer can be held to the
+/// allocator's arithmetic. Mirrors that function and must be changed in lockstep with it:
+/// `stride = align64(width * 4)`, plane at offset 0, header at `stride * height`, file sized
+/// `stride * height + HEADER_LEN`.
+fn gbm_external_allocation(width: u32, height: u32) -> (std::fs::File, std::path::PathBuf, u32) {
+    let stride = ((u64::from(width) * 4 + 63) & !63) as u32;
+    let plane = u64::from(stride) * u64::from(height);
+    let allocation = plane + hl_surface_protocol::buffer::HEADER_LEN as u64;
+    let (file, path) = image_file();
+    file.set_len(allocation).unwrap();
+    let header = Header::new(0x51, width, height, DRM_FORMAT_ARGB8888, stride, allocation)
+        .unwrap()
+        .encode()
+        .unwrap();
+    file.write_all_at(&header, plane).unwrap();
+    (file, path, stride)
+}
+
+/// A buffer this driver's OWN GBM allocated must import through this driver's OWN `eglCreateImage`.
+///
+/// Nothing covered this seam: `tests/gbm_surface.rs` exercises the allocator and `image/tests.rs`
+/// exercised the importer, but no test ever handed one's output to the other — and the private-modifier
+/// arm they share runs ONLY under native presentation, which is where Chromium's every import fails with
+/// `EGL_BAD_ATTRIBUTE`. The allocator's arithmetic living in C and the importer's in Rust is exactly the
+/// kind of seam that drifts silently.
+#[test]
+fn a_buffer_our_gbm_allocated_imports_through_our_egl() {
+    // 800x600 is the size the browser rungs actually present at.
+    for (width, height) in [(800u32, 600u32), (801, 600), (1280, 720), (1, 1)] {
+        let (file, path, stride) = gbm_external_allocation(width, height);
+        let attributes = [
+            EGL_WIDTH,
+            width as isize,
+            EGL_HEIGHT,
+            height as isize,
+            EGL_LINUX_DRM_FOURCC_EXT,
+            DRM_FORMAT_ARGB8888 as isize,
+            EGL_DMA_BUF_PLANE0_FD_EXT,
+            file.as_raw_fd() as isize,
+            // Exactly what `gbm_bo_get_offset` / `gbm_bo_get_stride` report for that allocation.
+            EGL_DMA_BUF_PLANE0_OFFSET_EXT,
+            hl_surface_protocol::buffer::PLANE_OFFSET as isize,
+            EGL_DMA_BUF_PLANE0_PITCH_EXT,
+            stride as isize,
+            EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT,
+            MODIFIER as u32 as isize,
+            EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT,
+            (MODIFIER >> 32) as u32 as isize,
+            EGL_NONE,
+        ];
+        let imported = Images::default().import(EGL_LINUX_DMA_BUF_EXT, attributes.as_ptr(), true);
+        assert!(
+            imported.is_some(),
+            "our GBM's own {width}x{height} allocation (stride {stride}) was refused by our own import"
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
+/// An importer that computes its own stride instead of using the one `gbm_bo_get_stride` reported is
+/// correctly refused — and the refusal must NAME stride, because that is a caller-side mistake the
+/// caller can only fix if it is told which field disagreed.
+#[test]
+fn an_importer_that_invents_its_own_stride_is_told_which_field_disagreed() {
+    // 801 pixels: the allocator pads 3204 up to 3264, so a caller assuming `width * 4` differs.
+    let (width, height) = (801u32, 600u32);
+    let (file, path, stride) = gbm_external_allocation(width, height);
+    let assumed = width * 4;
+    assert_ne!(assumed, stride, "this width must exercise the padding");
+    let attributes = Attributes {
+        width,
+        height,
+        fourcc: DRM_FORMAT_ARGB8888,
+        fd: file.as_raw_fd(),
+        offset: hl_surface_protocol::buffer::PLANE_OFFSET,
+        stride: assumed,
+        modifier: MODIFIER,
+    };
+    let owned = file.try_clone().unwrap().into();
+    let reason = Images::default()
+        .external_header(&attributes, &owned)
+        .expect_err("an invented stride is refused");
+    assert!(
+        reason.contains("DID allocate") && reason.contains(&stride.to_string()),
+        "an invented stride must be named as such, not reported as a foreign buffer: {reason}"
+    );
+    std::fs::remove_file(path).unwrap();
+}

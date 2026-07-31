@@ -386,6 +386,55 @@ impl Images {
     /// Every rejection here is a genuine refusal — the plane is not one this driver allocated, or not in
     /// the canonical layout the compositor joins against a host IOSurface — and none of them may be
     /// widened into an accept. What they must NOT be is anonymous: the reason is the whole diagnosis.
+    /// Explain a header that was not found where the import said it would be.
+    ///
+    /// The lookup offset is derived from the CALLER's own `stride x height + offset`, so a caller that
+    /// invents a stride instead of using the one `gbm_bo_get_stride` reported reads past the header and
+    /// gets told the buffer is foreign — the single most misleading answer available, and the one a
+    /// browser hitting this would see. The allocator always puts the header last, so `size - HEADER_LEN`
+    /// is where it really is: look there, and if a valid header exists, report the real disagreement.
+    fn explain_missing_header(
+        file: &std::fs::File,
+        attributes: &Attributes,
+        header_offset: u64,
+        reason: &str,
+    ) -> String {
+        let foreign = format!(
+            "the Husklet header {reason} — the plane carries the Husklet modifier but was not \
+             allocated by this driver"
+        );
+        let Ok(size) = file.metadata().map(|metadata| metadata.len()) else {
+            return foreign;
+        };
+        let Some(actual_offset) = size.checked_sub(hl_surface_protocol::buffer::HEADER_LEN as u64)
+        else {
+            return foreign;
+        };
+        if actual_offset == header_offset {
+            return foreign;
+        }
+        let mut bytes = [0; hl_surface_protocol::buffer::HEADER_LEN];
+        let Ok(header) = file
+            .read_exact_at(&mut bytes, actual_offset)
+            .map_err(|_| ())
+            .and_then(|()| Header::decode(&bytes).map_err(|_| ()))
+        else {
+            return foreign;
+        };
+        format!(
+            "this driver DID allocate the plane, but the import describes it differently: the header \
+             is at offset {actual_offset} and records {}x{} stride {}, while the import declared {}x{} \
+             stride {} (which looks for the header at offset {header_offset}). Import with the values \
+             gbm_bo_get_stride/_offset report.",
+            header.width,
+            header.height,
+            header.stride,
+            attributes.width,
+            attributes.height,
+            attributes.stride,
+        )
+    }
+
     fn external_header(&self, attributes: &Attributes, fd: &OwnedFd) -> Result<Header, String> {
         let file = std::fs::File::from(
             fd.try_clone()
@@ -401,16 +450,33 @@ impl Images {
                 )
             })?;
         let mut bytes = [0; hl_surface_protocol::buffer::HEADER_LEN];
-        file.read_exact_at(&mut bytes, header_offset).map_err(|error| {
-            format!(
-                "no {}-byte Husklet header at offset {header_offset} ({error}) — the plane carries the \
-                 Husklet modifier but was not allocated by this driver",
-                hl_surface_protocol::buffer::HEADER_LEN
-            )
-        })?;
-        let header = Header::decode(&bytes).map_err(|error| {
-            format!("the Husklet header at offset {header_offset} is malformed ({error:?})")
-        })?;
+        let read = file
+            .read_exact_at(&mut bytes, header_offset)
+            .map_err(|error| {
+                format!(
+                    "no {}-byte Husklet header could be read at offset {header_offset} ({error})",
+                    hl_surface_protocol::buffer::HEADER_LEN
+                )
+            });
+        if let Err(reason) = read {
+            return Err(Self::explain_missing_header(
+                &file,
+                attributes,
+                header_offset,
+                &reason,
+            ));
+        }
+        let header = match Header::decode(&bytes) {
+            Ok(header) => header,
+            Err(error) => {
+                return Err(Self::explain_missing_header(
+                    &file,
+                    attributes,
+                    header_offset,
+                    &format!("is malformed ({error:?})"),
+                ))
+            }
+        };
         let allocation_size = file
             .metadata()
             .map_err(|error| format!("the plane's size could not be read ({error})"))?
