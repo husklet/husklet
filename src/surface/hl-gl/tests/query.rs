@@ -790,3 +790,30 @@ fn vertex_array_binding_and_attribute_array_state_read_back() {
         None
     );
 }
+
+/// `glCullFace` and `glFrontFace` must read back. Both were absent from the integer query table and fell
+/// through to `0`, which is not even a legal enum for either — and the RENDERING was correct, so nothing
+/// downstream flagged it. A toolkit that saves and restores this state installed `0` for the mode it had
+/// set.
+#[test]
+fn cull_face_mode_and_front_face_read_back() {
+    let mut c = ctx_800x600();
+    let mut out = [0i32; 4];
+
+    // The initial state (ES 3.0 table 6.9): GL_BACK and GL_CCW.
+    assert_eq!(query::get_integerv(&c, GL_CULL_FACE_MODE, &mut out), 1);
+    assert_eq!(out[0], GL_BACK as i32);
+    assert_eq!(query::get_integerv(&c, GL_FRONT_FACE, &mut out), 1);
+    assert_eq!(out[0], GL_CCW as i32);
+
+    for mode in [GL_FRONT, GL_BACK, GL_FRONT_AND_BACK] {
+        record::cull_face(&mut c, mode);
+        query::get_integerv(&c, GL_CULL_FACE_MODE, &mut out);
+        assert_eq!(out[0], mode as i32, "glCullFace({mode:#x}) must read back");
+    }
+    for winding in [GL_CW, GL_CCW] {
+        record::front_face(&mut c, winding);
+        query::get_integerv(&c, GL_FRONT_FACE, &mut out);
+        assert_eq!(out[0], winding as i32);
+    }
+}

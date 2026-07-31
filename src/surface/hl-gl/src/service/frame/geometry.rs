@@ -19,34 +19,66 @@ pub(super) fn build_clear_frame_color(
         .rev()
         .find(|d| d.fbo == fbo)
         .and_then(|d| d.target);
+    let depth = depth_load(&ctx.local.recording.draws);
+    let count = ctx.local.recording.draws.len();
+    build_clear_frame_snapshot(ctx, fbo, snapshot, clear, LoadOp::Clear, depth, cmds, count)
+}
+
+/// A frame whose only work is a DEPTH/STENCIL clear: the colour attachment load-preserves, so nothing
+/// repaints it, and the depth attachment carries the cleared value.
+pub(super) fn build_clear_frame_depth(
+    ctx: &mut GlContext,
+    fbo: u32,
+    depth: DepthClear,
+    cmds: Vec<Cmd>,
+) -> Frame {
+    let snapshot = ctx
+        .local
+        .recording
+        .draws
+        .iter()
+        .rev()
+        .find(|d| d.fbo == fbo)
+        .and_then(|d| d.target);
+    let count = ctx.local.recording.draws.len();
     build_clear_frame_snapshot(
         ctx,
         fbo,
         snapshot,
-        clear,
+        [0.0; 4],
+        LoadOp::Load,
+        depth,
         cmds,
-        ctx.local.recording.draws.len(),
+        count,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_clear_frame_snapshot(
     ctx: &mut GlContext,
     fbo: u32,
     snapshot: Option<crate::model::program::TargetSnapshot>,
     clear: [f32; 4],
+    colour_load: LoadOp,
+    depth: DepthClear,
     mut cmds: Vec<Cmd>,
     draw_count: usize,
 ) -> Frame {
     let (surface, texture, w, h, fmt) = resolve_target(ctx, fbo, snapshot, &mut cmds);
+    // A clear-only frame carries the depth/stencil plane too. `glClear(GL_DEPTH_BUFFER_BIT)` on its own is
+    // a frame with no colour work, and returning no frame at all — which is what happened — DROPPED the
+    // cleared depth value: the next frame to enable the depth test minted the plane fresh and cleared it
+    // to the GL initial 1.0. The colour attachment LOADs here so a depth-only clear cannot repaint colour.
+    let depth_attachment = depth_attachment_for(ctx, texture, w, h, &[], &mut cmds, depth);
     let ops = vec![
         Enc::BeginRenderPass {
             color: vec![ColorAttachment {
                 texture,
-                load: LoadOp::Clear,
+                load: colour_load,
                 clear,
                 store: true,
             }],
-            depth: None,
+            depth: depth_attachment,
         },
         Enc::EndRenderPass,
     ];
@@ -141,6 +173,8 @@ impl Frame {
                 fbo,
                 last.and_then(|draw| draw.target),
                 clear,
+                LoadOp::Clear,
+                depth_load(draws),
                 Vec::new(),
                 draws.len(),
             ));
@@ -204,6 +238,8 @@ impl Frame {
                     fbo,
                     snapshot,
                     clear,
+                    LoadOp::Clear,
+                    depth_load(draws),
                     cmds,
                     draws.len(),
                 ));
@@ -425,7 +461,12 @@ mod clone_tests {
     }
 
     /// A depth- or stencil-only `glClear` is not a color clear: it must neither justify a full-target
-    /// `LoadOp::Clear` nor supply the clear color, and a frame made only of such clears has no color work.
+    /// `LoadOp::Clear` nor supply the clear color. But it IS work — it writes the depth/stencil plane, and
+    /// the value it writes is what a later frame's depth test reads.
+    ///
+    /// This asserted that such a frame presents NOTHING, which conflated "no colour work" with "no work"
+    /// and is precisely how the cleared depth value was lost: no plane was materialized, so the next frame
+    /// to enable `GL_DEPTH_TEST` minted one at the GL initial 1.0 and every `GL_LESS` fragment passed.
     #[test]
     fn depth_and_stencil_clears_are_not_color_clears() {
         let red = [1.0, 0.0, 0.0, 1.0];
@@ -446,9 +487,32 @@ mod clone_tests {
 
             let mut ctx = window_ctx(64, 64);
             ctx.local.recording.draws = draws;
-            assert!(
-                Frame::build_clear(&mut ctx).is_none(),
-                "a clear frame with no color clear must present nothing (mask {mask:#x})"
+            let frame = Frame::build_clear(&mut ctx)
+                .unwrap_or_else(|| panic!("mask {mask:#x} writes a plane, so it is a frame"));
+            let ops = frame
+                .cmds
+                .iter()
+                .find_map(|cmd| match cmd {
+                    Cmd::Submit(batch) => Some(batch.encoder.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            let pass = ops
+                .iter()
+                .find_map(|op| match op {
+                    Enc::BeginRenderPass { color, depth } => Some((color.clone(), depth.clone())),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("mask {mask:#x} lowers to a pass"));
+            assert_eq!(
+                pass.0[0].load,
+                LoadOp::Load,
+                "mask {mask:#x} must not repaint the colour plane"
+            );
+            assert_eq!(
+                pass.1.map(|d| d.load),
+                Some(LoadOp::Clear),
+                "mask {mask:#x} clears the plane it names"
             );
         }
     }

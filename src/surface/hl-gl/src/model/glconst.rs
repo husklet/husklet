@@ -114,6 +114,9 @@ pub const GL_BACK: u32 = 0x0405;
 pub const GL_FRONT_AND_BACK: u32 = 0x0408;
 pub const GL_CW: u32 = 0x0900;
 pub const GL_CCW: u32 = 0x0901;
+/// The readback pnames for the two settings above (`glGetIntegerv`).
+pub const GL_CULL_FACE_MODE: u32 = 0x0B45;
+pub const GL_FRONT_FACE: u32 = 0x0B46;
 
 // shader object kinds
 pub const GL_VERTEX_SHADER: u32 = 0x8B31;

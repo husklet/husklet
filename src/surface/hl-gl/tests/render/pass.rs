@@ -537,16 +537,36 @@ fn fully_masked_clear_records_nothing() {
     assert!(!swap::swap_buffers(&mut c, &mut sink).unwrap());
 }
 
-/// A frame whose only recorded op is a depth clear has no color work: it must present nothing rather than
-/// repaint the window with the clear color.
+/// A frame whose only recorded op is a depth clear has no COLOUR work — it must not repaint the window
+/// with the clear colour — but it is still work: it writes the depth plane, and that value is what a later
+/// frame's depth test reads. This asserted the frame presented NOTHING, which is how the cleared value was
+/// lost: no plane was materialized, so the next frame to enable `GL_DEPTH_TEST` minted one at the GL
+/// initial 1.0 and every `GL_LESS` fragment passed.
 #[test]
-fn depth_only_clear_frame_presents_nothing() {
+fn depth_only_clear_frame_clears_depth_without_repainting_colour() {
     let mut c = ctx_64();
     let mut sink = RecordingSink::with_full_caps();
     record::clear_color(&mut c, [1.0, 0.0, 1.0, 1.0]);
+    record::clear_depth(&mut c, 0.5);
     record::clear_buffers(&mut c, GL_DEPTH_BUFFER_BIT);
 
-    assert!(!swap::swap_buffers(&mut c, &mut sink).unwrap());
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let ops = submit_ops(&sink.batches[0]);
+    let (color, depth) = ops
+        .iter()
+        .find_map(|op| match op {
+            Enc::BeginRenderPass { color, depth } => Some((color.clone(), depth.clone())),
+            _ => None,
+        })
+        .expect("a pass");
+    assert_eq!(
+        color[0].load,
+        LoadOp::Load,
+        "the magenta clear colour must not reach the window: {ops:?}"
+    );
+    let depth = depth.expect("the depth plane the clear names");
+    assert_eq!(depth.load, LoadOp::Clear);
+    assert_eq!(depth.clear_depth, 0.5);
 }
 
 /// `glClear(GL_DEPTH_BUFFER_BIT)` BETWEEN two depth-tested passes must re-clear depth: the draws after it

@@ -180,6 +180,12 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         GL_STENCIL_CLEAR_VALUE => one(ctx.local.pipeline.clear_stencil),
         GL_BLEND => one(ctx.local.pipeline.blend as i32),
         GL_CULL_FACE => one(ctx.local.pipeline.cull_enabled as i32),
+        // The culled face and the front-face winding themselves, not just the enable. Both were absent
+        // from this table and fell through to `0`, which is not even a legal enum — an application that
+        // saves and restores them installed `0` for the mode it had set, while the RENDERING was correct,
+        // so nothing downstream flagged it.
+        GL_CULL_FACE_MODE => one(ctx.local.pipeline.cull_face as i32),
+        GL_FRONT_FACE => one(ctx.local.pipeline.front_face as i32),
         GL_SCISSOR_TEST => one(ctx.local.pipeline.scissor_enabled as i32),
         // ES 3.0 §2.2.2: every state value must read back the same through each Get* variant.
         GL_DEPTH_WRITEMASK => one(ctx.local.pipeline.depth_write as i32),

@@ -760,11 +760,20 @@ impl Frame {
                 return Some(frame);
             }
         }
-        // No recorded clear writes the color plane (a depth- or stencil-only `glClear`, or one masked off by
-        // `glColorMask`): there is no color work to present, and clearing the target here is exactly the bug
-        // where `glClear(GL_DEPTH_BUFFER_BIT)` repainted the color buffer.
+        // No recorded clear writes the color plane — a depth- or stencil-only `glClear`, or one masked off
+        // by `glColorMask`. The colour target must NOT be cleared here (that was the bug where
+        // `glClear(GL_DEPTH_BUFFER_BIT)` repainted the colour buffer), but returning no frame at all dropped
+        // the DEPTH clear just as silently: the plane was never materialized, so the next frame to enable
+        // the depth test minted it fresh at the GL initial 1.0 and every `GL_LESS` fragment passed. Build
+        // the pass with the colour attachment LOADing and the depth attachment carrying the clear.
+        let depth = depth_load(&ctx.local.recording.draws);
         if !ctx.local.recording.draws.iter().any(DrawCall::clears_color) {
-            return None;
+            if !matches!(depth.load, LoadOp::Clear) {
+                return None;
+            }
+            let cmds: Vec<Cmd> = Vec::new();
+            let fbo = ctx.local.recording.draws.last().map(|d| d.fbo).unwrap_or(0);
+            return Some(build_clear_frame_depth(ctx, fbo, depth, cmds));
         }
         let cmds: Vec<Cmd> = Vec::new();
         let fbo = ctx.local.recording.draws.last().map(|d| d.fbo).unwrap_or(0);

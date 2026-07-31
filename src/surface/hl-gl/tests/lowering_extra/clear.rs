@@ -302,3 +302,43 @@ fn a_plain_colour_frame_still_carries_no_depth_attachment() {
         "the 2D path must not grow a depth plane"
     );
 }
+
+/// The DISCRIMINATOR shape: a depth clear, a readback (frame boundary) with NO intervening draw, then a
+/// depth-tested draw. This separates "the intervening draw is the trigger" from "the frame boundary is the
+/// trigger" — and it is the frame boundary. A clear-only frame used to lower to no frame at all, so the
+/// cleared depth never reached a plane and the next frame minted one at the GL initial 1.0.
+#[test]
+fn a_depth_clear_alone_survives_a_frame_boundary() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+
+    // Frame 1: nothing but the depth clear.
+    record::clear_depth(&mut c, 0.5);
+    record::clear_buffers(&mut c, GL_DEPTH_BUFFER_BIT);
+    assert!(
+        swap::swap_buffers(&mut c, &mut sink).unwrap(),
+        "a depth clear is work, even with no draw and no colour clear"
+    );
+    let first = pass_depth_clear(&sink.batches[0]).expect("the depth plane the clear names");
+    assert_eq!(first.0, 0.5);
+
+    // Frame 2: the dependent depth-tested draw. The plane already exists, so it load-preserves 0.5.
+    record::enable(&mut c, GL_DEPTH_TEST);
+    record::depth_func(&mut c, GL_LESS);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let ops = submit_ops(&sink.batches[1]);
+    let load = ops
+        .iter()
+        .find_map(|e| match e {
+            Enc::BeginRenderPass { depth, .. } => depth.as_ref().map(|d| d.load),
+            _ => None,
+        })
+        .expect("the depth attachment");
+    assert_eq!(
+        load,
+        hl_gpu::protocol::model::enums::LoadOp::Load,
+        "clearing here would discard the 0.5 and let GL_LESS pass: {ops:?}"
+    );
+}
