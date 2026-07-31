@@ -395,11 +395,33 @@ fn a_stencil_only_clear_lands_without_a_stencil_tested_draw() {
 // ---------------------------------------------------------------------------------------------------
 // A clear that `LoadOp::Clear` cannot express lowers to a scissored, masked rect DRAW
 //
-// The source asserted in three places that these were "not representable in the IR". All three claims
-// were wrong and none had been re-derived: `SetScissor` bounds the rect, a viewport whose depth range is
-// collapsed to the clear value writes that exact depth from any geometry, `SetStencilReference` plus a
-// `REPLACE` pass op writes the stencil value, and the pipeline's `stencil_write_mask` / `write_mask`
-// carry `glStencilMask` and `glColorMask` exactly.
+// The claim these refute is that a channel-masked clear is "not representable in the IR". It is false,
+// and it is stated in FIVE places, one of which is a runtime diagnostic rather than a comment. Whoever
+// implements the fix must delete all five, because each one on its own re-lays the trap:
+//
+//   1. `model/program/draw.rs`  — "a PARTIALLY masked color clear … is not representable by
+//                                  `LoadOp::Clear` or `Enc::ClearRect`"
+//   2. `model/program/draw.rs`  — "unrepresentable, so refused" on `color_clear_is_partial`
+//   3. `service/record/draw.rs` — "Neither `LoadOp::Clear` nor `Enc::ClearRect` can express that"
+//   4. `service/record/draw.rs` — the `hl_error!` STRING: "a channel-masked clear is not representable
+//                                  in the IR", emitted once per context, to the operator, at error level
+//   5. `service/record/state.rs`— "refused on the same terms as `glClear`'s", which propagates the claim
+//                                  to `glClearBuffer*` by citation rather than by re-derivation
+//
+// `service/frame/geometry.rs`'s "only the clears it genuinely cannot express" is about ROUTING, is
+// correct, and must not be deleted with them.
+//
+// What is actually available, read out of `Enc` and `RenderPipelineDesc`: `SetScissor` bounds the rect;
+// a viewport whose depth range is collapsed to one value writes that exact depth from any geometry;
+// `SetStencilReference` with a `REPLACE` pass op writes the stencil value; `SetBlendConstant` with
+// `src_factor = CONSTANT, dst_factor = ZERO` writes the colour whatever the fragment emits; and the
+// pipeline's `stencil_write_mask` / `write_mask` carry `glStencilMask` and `glColorMask` exactly. The
+// two value tricks are what keep this to ONE static shader pair rather than one per clear value.
+//
+// `Enc::ClearRect` really cannot be extended to cover it, for a reason the claim never gave: it is a
+// processor-side texel write through `Queue::write_texture`, invalid for a depth texture.
+//
+// Full write-up: `hl-work/gl-clear-scissor-20260731/{DESIGN,FINDING}.md`.
 // ---------------------------------------------------------------------------------------------------
 
 /// The depth attachment's load op, and whether any pass in the frame carries one.
