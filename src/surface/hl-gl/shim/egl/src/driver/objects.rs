@@ -1,6 +1,14 @@
 use super::*;
 #[cfg_attr(gles_client, no_mangle)]
+/// `glGetError()` — the pending GL error, or `GL_CONTEXT_LOST` once if the share group has been
+/// terminated. The lost check comes FIRST because it cannot be answered from inside the group: the group
+/// is what has gone away, so the ordinary path would return its type's default and report `GL_NO_ERROR`.
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetError() -> u32 {
+    if GlobalState::take_context_lost() {
+        crate::stub::trace("glGetError", "returning GL_CONTEXT_LOST");
+        return hl_gl::result::GL_CONTEXT_LOST;
+    }
     let error = GlobalState::context(|s| s.gl.take_gl_error());
     crate::stub::trace("glGetError", &format!("returning 0x{error:x}"));
     error

@@ -221,6 +221,25 @@ impl GlobalState {
         Self::context_for(current::context(), f)
     }
 
+    /// Take the one `GL_CONTEXT_LOST` owed to the calling thread's context, if its group has been lost
+    /// and nobody has read it yet.
+    ///
+    /// This exists because [`Self::context_for`] cannot report it. Every entry point runs its work inside
+    /// the share-group lease, so once the group is lost there is no lease to run in and the only thing
+    /// left to return is `R::default()` — for `glGetError` that default is `0`, `GL_NO_ERROR`, and the
+    /// driver claims perfect health for the rest of the process. Measured: a `glGenTextures` after a lost
+    /// group left the application's name at `0`, it bound the reserved texture, uploaded seven mip levels
+    /// into nothing and dereferenced a null pointer several calls later, with `glGetError` answering
+    /// `GL_NO_ERROR` throughout.
+    pub(crate) fn take_context_lost() -> bool {
+        Self::group(current::context()).is_some_and(|group| group.take_lost_report())
+    }
+
+    /// Whether the calling thread's share group has been terminated.
+    pub(crate) fn context_is_lost() -> bool {
+        Self::group(current::context()).is_some_and(|group| group.is_lost())
+    }
+
     pub(crate) fn context_for<R: Default>(
         token: usize,
         f: impl FnOnce(&mut group::GroupData) -> R,

@@ -191,3 +191,43 @@ fn sibling_context_records_while_prepared_submit_waits_for_ack() {
     assert!(lease.data_mut().activate(2));
     assert_eq!(lease.data_mut().gl.take_gl_error(), 0x0501);
 }
+
+/// A lost group owes the application exactly one `GL_CONTEXT_LOST`, and goes on reporting the reset.
+///
+/// Before this, losing a group was completely silent: every entry point ran its work inside the lease,
+/// so with no lease to run in the only thing left to return was the type's default — `0` for
+/// `glGetError`, which is `GL_NO_ERROR`. A driver that had permanently died reported perfect health.
+#[test]
+fn a_lost_group_reports_the_loss_once_and_the_reset_for_good() {
+    let allocator = Arc::new(IrAllocator::new());
+    let slot = group(&allocator);
+
+    assert!(!slot.is_lost(), "a fresh group is healthy");
+    assert!(
+        !slot.take_lost_report(),
+        "a healthy group owes no GL_CONTEXT_LOST"
+    );
+
+    slot.lose("GPU transport submission failed: test");
+
+    assert!(slot.acquire().is_err(), "a lost group cannot be leased");
+    assert!(
+        slot.take_lost_report(),
+        "the first glGetError after the loss must report GL_CONTEXT_LOST"
+    );
+    // Draining the error queue in a loop is an ordinary idiom and dEQP uses it, so a sticky
+    // GL_CONTEXT_LOST would spin forever. The error is reported once; the reset status is not.
+    assert!(
+        !slot.take_lost_report(),
+        "the error is reported once, not on every call"
+    );
+    assert!(
+        slot.is_lost(),
+        "glGetGraphicsResetStatus reports the reset for as long as the group stays lost"
+    );
+
+    // Losing an already-lost group must not re-arm the report: the first loss is the real one, and the
+    // reason it carries is the one that names the original failure.
+    slot.lose("a later, derived failure");
+    assert!(!slot.take_lost_report(), "a repeated loss re-arms nothing");
+}

@@ -312,6 +312,8 @@ enum Status {
 struct Slot {
     generation: u64,
     status: Status,
+    /// Whether the one `GL_CONTEXT_LOST` this loss owes the application has been handed out yet.
+    lost_reported: bool,
 }
 
 pub(super) struct GroupSlot {
@@ -325,6 +327,7 @@ impl GroupSlot {
             state: Mutex::new(Slot {
                 generation: 1,
                 status: Status::Ready(GroupData::new(allocator)),
+                lost_reported: false,
             }),
             changed: Condvar::new(),
         })
@@ -365,18 +368,57 @@ impl GroupSlot {
         }
     }
 
+    /// Terminate this share group permanently. Every GL object it owns is gone and every context in it is
+    /// unusable from here on, so this is reported at error level: it is the last moment at which the
+    /// ORIGINAL failure is still named. Afterwards every entry point can say only that the group is lost,
+    /// and a driver that dies without a diagnostic leaves the application's later symptoms unattributable —
+    /// a `glGenTextures` that never ran, an upload into the reserved name, a null dereference several
+    /// calls downstream. Reported once because the first loss is the real one and `lose` is idempotent.
+    /// Whether this group has been terminated. Unlike [`Self::take_lost_report`] this does not consume
+    /// anything: `glGetGraphicsResetStatus` reports a persistent condition, not a one-shot event.
+    pub(super) fn is_lost(&self) -> bool {
+        let slot = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        matches!(slot.status, Status::Lost(_))
+    }
+
+    /// Take the single `GL_CONTEXT_LOST` this loss owes the application, if it has not been taken yet.
+    ///
+    /// `GL_KHR_robustness` specifies the error is reported ONCE and the queue then reads empty until the
+    /// context is recreated. Reporting it on every call would be worse than the silence it replaces:
+    /// draining the error queue in a `while (glGetError() != GL_NO_ERROR)` loop is an ordinary idiom, and
+    /// dEQP does exactly that, so a sticky error would spin forever.
+    pub(super) fn take_lost_report(&self) -> bool {
+        let mut slot = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if !matches!(slot.status, Status::Lost(_)) || slot.lost_reported {
+            return false;
+        }
+        slot.lost_reported = true;
+        true
+    }
+
     pub(super) fn lose(&self, reason: impl Into<Arc<str>>) {
         let mut slot = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if matches!(slot.status, Status::Lost(_)) {
             return;
         }
+        slot.lost_reported = false;
         let Some(generation) = slot.generation.checked_add(1) else {
             slot.status = Status::Lost(Arc::from("share-group generation exhausted"));
+            hl_log::hl_error!(
+                hl_log::tag::GL,
+                "share group lost: generation counter exhausted. Every later GL call in this group \
+                 does nothing."
+            );
             self.changed.notify_all();
             return;
         };
+        let reason = reason.into();
+        hl_log::hl_error!(
+            hl_log::tag::GL,
+            "share group lost: {reason}. Every later GL call in this group does nothing."
+        );
         slot.generation = generation;
-        slot.status = Status::Lost(reason.into());
+        slot.status = Status::Lost(reason);
         self.changed.notify_all();
     }
 }

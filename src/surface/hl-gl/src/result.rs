@@ -38,6 +38,16 @@ pub const GL_INVALID_VALUE: u32 = 0x0501;
 pub const GL_INVALID_OPERATION: u32 = 0x0502;
 pub const GL_OUT_OF_MEMORY: u32 = 0x0505;
 pub const GL_INVALID_FRAMEBUFFER_OPERATION: u32 = 0x0506;
+/// The share group has been terminated and every object in it is gone (`GL_KHR_robustness`, and core
+/// since ES 3.2). Reported once per loss, because an application that drains the error queue in a loop
+/// would otherwise never leave it.
+pub const GL_CONTEXT_LOST: u32 = 0x0507;
+
+// ---- GLenum graphics-reset status (returned by glGetGraphicsResetStatus) ------------------------
+/// The context was reset for a reason the driver cannot attribute to this context or another one
+/// (`GL_KHR_robustness`). A lost share group is exactly that: the transport failed, and which context's
+/// work provoked it is not recoverable afterwards.
+pub const GL_UNKNOWN_CONTEXT_RESET: u32 = 0x8255;
 
 /// Map a lowering [`GpuError`] onto the `EGLint` error `eglGetError` reports after a failed frame. A
 /// delivery/transport failure at swap is `EGL_CONTEXT_LOST` (the frame could not be presented — matching

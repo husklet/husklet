@@ -311,9 +311,21 @@ pub extern "C" fn glGetMultisamplefv(_pname: u32, _index: u32, val: *mut f32) {
         }
     }
 }
-/// `glGetGraphicsResetStatus()` — the context has not been reset (no robustness reset is modeled).
+/// `glGetGraphicsResetStatus()` — whether this context's share group has been terminated.
+///
+/// This used to answer `GL_NO_ERROR` unconditionally, on the reasoning that no robustness reset is
+/// modeled. A share group that a transport failure has lost IS a reset: every object in it is gone and no
+/// later call can succeed. Answering "healthy" is the same lie `glGetError` was telling, and it is the
+/// one an application that has just been handed `GL_CONTEXT_LOST` calls next to find out whether to
+/// rebuild. Unlike the error, this is a persistent condition and is not consumed by reading it.
+///
+/// `GL_UNKNOWN_CONTEXT_RESET` rather than `GL_GUILTY_`/`GL_INNOCENT_CONTEXT_RESET`: the group is lost by
+/// the whole transport, and which context's work provoked it is not recoverable afterwards.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetGraphicsResetStatus() -> u32 {
+    if GlobalState::context_is_lost() {
+        return hl_gl::result::GL_UNKNOWN_CONTEXT_RESET;
+    }
     GL_NO_ERROR
 }
 /// `glGetBufferPointerv(target, pname, params)` — `GL_BUFFER_MAP_POINTER`: the pointer a live
