@@ -838,6 +838,18 @@ correct side, once forty differences were the harness's own rounding ties, and o
 wrong framings before the third was right. Budget for that gap; a disagreement is a location, not a
 diagnosis.
 
+Ask of every instrument: what would this print if it were measuring nothing at all? Four separate
+instruments in one session returned a plausible, stable, entirely empty measurement — a comparator that
+read zero items and called them clean, a process check whose pattern matched its own wrapper so "still
+running" could never be false, a set of differences produced by the harness's own arithmetic, and a case
+that reported a confident defect through a capture path blind to its subject. Every one looked like a
+result, and the answer to the question was usually "exactly what it just printed". Asking is cheaper than
+any diagnosis it prevents.
+
+A case that cannot observe its own subject must not be readable as green. Mark it not-measured in the
+harness itself and make it fail, not merely say so in a report — and where an invariant holds but has no
+power against the symptom it appears to address, record that scope beside the result.
+
 An enrichment needs a base rate before it means anything. Two case families were checked for how often a
 failing name mentioned a layer or a mip level: one came back at a hundred percent and was worthless,
 because every name in that family contains the word. The other was an eight-fold enrichment over its own
