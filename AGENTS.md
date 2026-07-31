@@ -838,6 +838,14 @@ correct side, once forty differences were the harness's own rounding ties, and o
 wrong framings before the third was right. Budget for that gap; a disagreement is a location, not a
 diagnosis.
 
+A guest workspace is recreated per session, so nothing installed in it survives. Any rung that provisions
+packages and looks green may be green only because its container was provisioned while the fetch still
+worked. Treat provisioning as part of the measurement, not as setup that happened once.
+
+Scope a blocker to the layer you actually measured. A failed package fetch inside a guest was reported as
+"host egress is down"; the host had working egress the whole time and only the guest workspace did not.
+The observation was real and the name would have sent the next person to the wrong layer.
+
 Bind a number to the hash of the thing that actually determines the behaviour, not to the artifact name it
 was produced under. Four conformance findings were nearly discarded as unusable because they came from a
 differently-named bundle; they were rescued by noticing that the relevant driver subtree hashed identically
