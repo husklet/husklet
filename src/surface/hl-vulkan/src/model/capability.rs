@@ -145,9 +145,12 @@ impl Format {
     pub fn class(&self) -> Option<FormatClass> {
         use hl_gpu::protocol::model::enums::TextureFormat as T;
         Some(match self.wire()? {
-            T::Rgba8Unorm | T::Bgra8Unorm | T::Rgba8Srgb | T::Bgra8Srgb | T::R8Unorm | T::Rg8Unorm => {
-                FormatClass::NormalizedColor
-            }
+            T::Rgba8Unorm
+            | T::Bgra8Unorm
+            | T::Rgba8Srgb
+            | T::Bgra8Srgb
+            | T::R8Unorm
+            | T::Rg8Unorm => FormatClass::NormalizedColor,
             T::Rgba8Uint | T::Rgba8Sint | T::R8Uint | T::R8Sint | T::Rg8Uint | T::Rg8Sint => {
                 FormatClass::IntegerColor
             }
@@ -226,13 +229,19 @@ impl Format {
             | f::TRANSFER_DST;
         let optimal = match self.class() {
             Some(FormatClass::NormalizedColor) => {
-                COLOR_BASE | f::COLOR_ATTACHMENT_BLEND | f::SAMPLED_IMAGE_FILTER_LINEAR | self.storage()
+                COLOR_BASE
+                    | f::COLOR_ATTACHMENT_BLEND
+                    | f::SAMPLED_IMAGE_FILTER_LINEAR
+                    | self.storage()
             }
             // Integer color is unfilterable and unblendable BY SPECIFICATION — a shader reads it through
             // `texelFetch` only — so neither bit may be claimed however capable the host is.
             Some(FormatClass::IntegerColor) => COLOR_BASE | self.storage(),
             Some(FormatClass::FloatColor) => {
-                COLOR_BASE | f::COLOR_ATTACHMENT_BLEND | f::SAMPLED_IMAGE_FILTER_LINEAR | self.storage()
+                COLOR_BASE
+                    | f::COLOR_ATTACHMENT_BLEND
+                    | f::SAMPLED_IMAGE_FILTER_LINEAR
+                    | self.storage()
             }
             // 32-bit float sampling needs the host `float32-filterable` feature, which this driver does not
             // request, and 32-bit float blending is not a core host capability either.
@@ -318,7 +327,10 @@ mod tests {
                 "VkFormat {format} lowers as a vertex attribute but bufferFeatures omits VERTEX_BUFFER"
             );
         }
-        assert!(lowerable >= 30, "expected the lowerable set to be the 30 from VertexFormat, got {lowerable}");
+        assert!(
+            lowerable >= 30,
+            "expected the lowerable set to be the 30 from VertexFormat, got {lowerable}"
+        );
     }
 
     /// And the converse: nothing may claim VERTEX_BUFFER that the driver cannot lower, or an application
@@ -343,7 +355,10 @@ mod tests {
         // R8G8B8A8_UNORM is both a lowerable vertex format and a colour format, so it must carry BOTH
         // sets of buffer bits. The exclusive `match` this replaced could report only one.
         let features = Format(vk_format::R8G8B8A8_UNORM).features();
-        assert!(features.buffer & format_feature::VERTEX_BUFFER != 0, "vertex buffer");
+        assert!(
+            features.buffer & format_feature::VERTEX_BUFFER != 0,
+            "vertex buffer"
+        );
         assert!(
             features.buffer & format_feature::UNIFORM_TEXEL_BUFFER != 0,
             "a colour format is also a uniform texel buffer"
@@ -443,7 +458,8 @@ mod tests {
         );
         for format in [vk_format::R32_SFLOAT, vk_format::R32G32B32A32_SFLOAT] {
             assert_eq!(
-                Format(format).features().optimal_tiling & format_feature::SAMPLED_IMAGE_FILTER_LINEAR,
+                Format(format).features().optimal_tiling
+                    & format_feature::SAMPLED_IMAGE_FILTER_LINEAR,
                 0,
                 "VkFormat {format} may not claim linear filtering"
             );

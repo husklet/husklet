@@ -319,9 +319,18 @@ mod tests {
             R8G8B8A8_UNORM,
             &mut ten as *mut _ as *mut c_void,
         );
-        assert_ne!(ten.optimal_tiling_features, 0, "the fixture format must have features");
-        assert_eq!(p3.linear_tiling_features, u64::from(ten.linear_tiling_features));
-        assert_eq!(p3.optimal_tiling_features, u64::from(ten.optimal_tiling_features));
+        assert_ne!(
+            ten.optimal_tiling_features, 0,
+            "the fixture format must have features"
+        );
+        assert_eq!(
+            p3.linear_tiling_features,
+            u64::from(ten.linear_tiling_features)
+        );
+        assert_eq!(
+            p3.optimal_tiling_features,
+            u64::from(ten.optimal_tiling_features)
+        );
         assert_eq!(p3.buffer_features, u64::from(ten.buffer_features));
     }
 
