@@ -288,6 +288,22 @@ pub struct VkFormatProperties2 {
     pub format_properties: VkFormatProperties,
 }
 
+/// `VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3` — the `VK_KHR_format_feature_flags2` (core 1.3) restatement of
+/// `VkFormatProperties` in 64-bit flags, chained onto `VkFormatProperties2`.
+pub const VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3: i32 = 1_000_360_000;
+
+/// `VkFormatProperties3` — same three feature sets as [`VkFormatProperties`], widened to
+/// `VkFormatFeatureFlags2` (64-bit). Every `VkFormatFeatureFlagBits` value is defined to equal its
+/// `VkFormatFeatureFlagBits2` counterpart, so the 32-bit masks zero-extend without translation.
+#[repr(C)]
+pub struct VkFormatProperties3 {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub linear_tiling_features: u64,
+    pub optimal_tiling_features: u64,
+    pub buffer_features: u64,
+}
+
 /// `VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES` (a pNext payload apps read back).
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES: i32 = 1_000_196_000;
 /// `VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES`.

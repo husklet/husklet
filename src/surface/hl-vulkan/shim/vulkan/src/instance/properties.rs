@@ -201,7 +201,13 @@ pub extern "C" fn vkGetPhysicalDeviceQueueFamilyProperties2(
     unsafe { *p_queue_family_property_count = 1 };
 }
 
-/// `vkGetPhysicalDeviceFormatProperties2` — delegates to the 1.0 per-format feature fill.
+/// `vkGetPhysicalDeviceFormatProperties2` — delegates to the 1.0 per-format feature fill, then answers a
+/// `VkFormatProperties3` in the pNext chain with the same masks widened to 64 bits.
+///
+/// The chain was previously ignored entirely. `VkFormatProperties3` is an OUTPUT structure the caller does
+/// not initialise, so leaving it untouched hands back whatever the caller's stack held: the CTS's
+/// `Context::getFormatProperties` declares a plain local and reads it, which is why the reported feature
+/// sets looked arbitrary per format rather than uniformly empty.
 pub extern "C" fn vkGetPhysicalDeviceFormatProperties2(
     physical_device: *mut c_void,
     format: i32,
@@ -215,6 +221,18 @@ pub extern "C" fn vkGetPhysicalDeviceFormatProperties2(
         format,
         &mut out.format_properties as *mut _ as *mut c_void,
     );
+    let mut node = out.p_next as *mut VkBaseOutStructure;
+    while let Some(n) = unsafe { node.as_mut() } {
+        if n.s_type == VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3 {
+            if let Some(p3) = unsafe { (node as *mut VkFormatProperties3).as_mut() } {
+                p3.linear_tiling_features = u64::from(out.format_properties.linear_tiling_features);
+                p3.optimal_tiling_features =
+                    u64::from(out.format_properties.optimal_tiling_features);
+                p3.buffer_features = u64::from(out.format_properties.buffer_features);
+            }
+        }
+        node = n.p_next;
+    }
 }
 
 // ==================================================================================================
@@ -273,6 +291,39 @@ pub extern "C" fn vkGetPhysicalDeviceFormatProperties2KHR(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `VkFormatProperties3` in the chain must be answered, and answered with the SAME feature sets the
+    /// 1.0 query reports. The struct is caller-uninitialised, so a poisoned buffer here stands in for the
+    /// live stack garbage a real caller would otherwise read back as capabilities.
+    #[test]
+    fn format_properties3_in_the_chain_mirrors_the_ten_query() {
+        let _g = crate::tests::test_guard();
+        let mut p3: VkFormatProperties3 = unsafe { core::mem::zeroed() };
+        p3.s_type = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3;
+        p3.linear_tiling_features = u64::MAX;
+        p3.optimal_tiling_features = u64::MAX;
+        p3.buffer_features = u64::MAX;
+        let mut properties: VkFormatProperties2 = unsafe { core::mem::zeroed() };
+        properties.p_next = &mut p3 as *mut _ as *mut c_void;
+
+        const R8G8B8A8_UNORM: i32 = 37;
+        vkGetPhysicalDeviceFormatProperties2(
+            core::ptr::null_mut(),
+            R8G8B8A8_UNORM,
+            &mut properties as *mut _ as *mut c_void,
+        );
+
+        let mut ten: VkFormatProperties = unsafe { core::mem::zeroed() };
+        vkGetPhysicalDeviceFormatProperties(
+            core::ptr::null_mut(),
+            R8G8B8A8_UNORM,
+            &mut ten as *mut _ as *mut c_void,
+        );
+        assert_ne!(ten.optimal_tiling_features, 0, "the fixture format must have features");
+        assert_eq!(p3.linear_tiling_features, u64::from(ten.linear_tiling_features));
+        assert_eq!(p3.optimal_tiling_features, u64::from(ten.optimal_tiling_features));
+        assert_eq!(p3.buffer_features, u64::from(ten.buffer_features));
+    }
 
     #[test]
     fn driver_properties_do_not_claim_a_software_driver_identity() {
