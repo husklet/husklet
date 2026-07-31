@@ -244,14 +244,15 @@ pub extern "C" fn glReadPixelsRobustANGLE(
             return;
         }
     };
+    // `GL_PACK_ALIGNMENT` pads between rows, so the buffer the caller must supply is larger than the
+    // tightly packed pixels whenever a row does not fill a whole number of alignment units.
     let required = usize::try_from(width)
         .ok()
-        .and_then(|width| {
-            usize::try_from(height)
-                .ok()
-                .and_then(|height| width.checked_mul(height))
-        })
-        .and_then(|pixels| pixels.checked_mul(bpp));
+        .zip(usize::try_from(height).ok())
+        .and_then(|(width, height)| Some((width.checked_mul(bpp)?, height)))
+        .map(|(row, height)| {
+            GlobalState::context(|state| state.gl.pixel_store_state().pack_size(row, height))
+        });
     let Some(required) = required else {
         reject(length);
         return;

@@ -312,17 +312,19 @@ pub extern "C" fn glReadnPixels(
         fail(GL_INVALID_VALUE);
         return;
     }
-    let need = width as usize * height as usize * bpp;
+    let row = width as usize * bpp;
+    // The buffer has to hold the alignment padding between rows as well as the pixels; checking the
+    // tightly packed size would accept a buffer the aligned write then runs past.
+    let need = GlobalState::context(|s| s.gl.pixel_store_state().pack_size(row, height as usize));
     if (buf_size as usize) < need {
         fail(GL_INVALID_OPERATION);
         return;
     }
     let packed = gpu_read_pixels(x, y, width, height, format);
     match packed {
-        Ok(bytes) => {
-            let n = bytes.len().min(need).min(buf_size as usize);
-            unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), data as *mut u8, n) };
-        }
+        Ok(bytes) => unsafe {
+            crate::driver::drawing::write_packed_rows(&bytes, row, height as usize, data)
+        },
         Err(e) => {
             GlobalState::context(|s| s.gl.set_gl_error(GL_OUT_OF_MEMORY));
             GlobalState::access(|s| s.set_egl_error(egl_error_from_gpu_error(&e)));

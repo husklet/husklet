@@ -66,6 +66,33 @@ pub struct PixelStore {
     pub pack_skip_pixels: i32,
 }
 
+impl PixelStore {
+    /// The distance in bytes between the starts of two consecutive rows a readback writes.
+    ///
+    /// GLES2 §4.3.1: a pack operation starts every row at a multiple of `GL_PACK_ALIGNMENT`, so a row
+    /// whose bytes do not already fill a whole number of alignment units is followed by padding the
+    /// caller expects to be skipped. Only byte-typed readback is modeled — `glReadPixels` rejects every
+    /// other type — so the element size is one and the stride is the tightly packed row rounded up.
+    ///
+    /// The padding sits BETWEEN rows. The last row is not padded, and a caller's buffer is only
+    /// `stride * (rows - 1) + row_bytes` long, so a writer must copy `row_bytes` per row rather than
+    /// `stride`.
+    pub fn pack_stride(&self, row_bytes: usize) -> usize {
+        let alignment = self.pack_alignment.max(1) as usize;
+        row_bytes.div_ceil(alignment) * alignment
+    }
+
+    /// The bytes a readback of `rows` rows of `row_bytes` needs in the caller's buffer: every row but the
+    /// last is followed by its alignment padding. This is what a bounded readback (`glReadnPixels`) must
+    /// check `bufSize` against — the tightly packed size would accept a buffer the write then overruns.
+    pub fn pack_size(&self, row_bytes: usize, rows: usize) -> usize {
+        match rows.checked_sub(1) {
+            None => 0,
+            Some(before) => self.pack_stride(row_bytes) * before + row_bytes,
+        }
+    }
+}
+
 /// A Vertex Array Object's captured state: the per-location vertex-attribute array plus the
 /// element-array-buffer binding. Binding a VAO swaps this state into the live context (`ctx.attr` /
 /// `ctx.element_buffer`); a GLES3 app MUST bind a VAO before it can draw. Ported from `hl-shim-gl`'s `Vao`.

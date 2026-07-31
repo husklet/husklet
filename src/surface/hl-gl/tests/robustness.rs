@@ -351,6 +351,33 @@ fn pixel_store_rejects_bad_alignment_and_leaves_state_unchanged() {
 }
 
 #[test]
+fn pack_alignment_pads_between_readback_rows_but_not_after_the_last() {
+    let mut c = ctx();
+    let store = c.pixel_store_state();
+    // The default alignment of 4 leaves a three-pixel RGB row (9 bytes) starting on the next multiple.
+    assert_eq!(store.pack_stride(9), 12);
+    assert_eq!(store.pack_size(9, 1), 9, "a single row carries no padding");
+    assert_eq!(
+        store.pack_size(9, 4),
+        45,
+        "three padded rows plus the unpadded last one"
+    );
+    // An alignment of 8 pads a row that four already satisfied — the case dEQP's align_8 readback fails
+    // when the copy ignores the alignment and writes every row at the tightly packed offset.
+    record::pixel_store(&mut c, GL_PACK_ALIGNMENT, 8);
+    let store = c.pixel_store_state();
+    assert_eq!(store.pack_stride(12), 16);
+    assert_eq!(store.pack_size(12, 3), 44);
+    // A row that already fills whole alignment units is never padded, whatever the alignment.
+    assert_eq!(store.pack_stride(16), 16);
+    assert_eq!(store.pack_size(16, 3), 48);
+    record::pixel_store(&mut c, GL_PACK_ALIGNMENT, 1);
+    let store = c.pixel_store_state();
+    assert_eq!(store.pack_stride(9), 9, "alignment 1 packs tightly");
+    assert_eq!(store.pack_size(9, 4), 36);
+}
+
+#[test]
 fn tex_sub_image_2d_rejects_out_of_bounds_rect() {
     let mut c = ctx();
     let t = c.textures.gen();

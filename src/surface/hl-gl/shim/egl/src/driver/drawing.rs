@@ -395,6 +395,33 @@ pub extern "C" fn glBlitFramebuffer(
 // GLES: readback (device→host — the GL equivalent of cuMemcpyDtoH)
 // ==================================================================================================
 
+/// Write a tightly packed readback into a caller's buffer at the row stride `GL_PACK_ALIGNMENT` demands.
+///
+/// The readback service always produces rows with no padding between them; GL lets the application choose
+/// where each row starts. Only each row's own bytes are written — the padding belongs to the caller, and
+/// the last row has none, so a buffer sized [`PixelStore::pack_size`] is enough.
+///
+/// # Safety
+///
+/// `destination` must be writable for [`PixelStore::pack_size(row, rows)`] bytes.
+pub(crate) unsafe fn write_packed_rows(
+    bytes: &[u8],
+    row: usize,
+    rows: usize,
+    destination: *mut c_void,
+) {
+    if row == 0 {
+        return;
+    }
+    let stride = GlobalState::context(|s| s.gl.pixel_store_state().pack_stride(row));
+    let out = destination as *mut u8;
+    for (index, source) in bytes.chunks(row).take(rows).enumerate() {
+        unsafe {
+            core::ptr::copy_nonoverlapping(source.as_ptr(), out.add(index * stride), source.len())
+        };
+    }
+}
+
 /// `glReadPixels(x, y, w, h, format, type, pixels)` — render the recorded frame and read the requested
 /// rectangle of the resulting render target back into `pixels`. Only `GL_UNSIGNED_BYTE` RGBA/BGRA/RGB is
 /// modeled; the readback goes through the `hl_gl` service (render → `CopyTextureToBuffer` → `read_buffer`),
@@ -442,7 +469,15 @@ pub extern "C" fn glReadPixels(
         let byte_off = pixels as usize; // GL: the offset is the `pixels` argument treated as an integer
         let packed = gpu_read_pixels(x, y, width, height, format);
         match packed {
-            Ok(bytes) => GlobalState::context(|s| s.gl.buffers.set_sub_data(pbo, byte_off, &bytes)),
+            Ok(bytes) => GlobalState::context(|s| {
+                let row = width as usize * bpp;
+                let stride = s.gl.pixel_store_state().pack_stride(row);
+                for (index, source) in bytes.chunks(row).take(height as usize).enumerate() {
+                    s.gl
+                        .buffers
+                        .set_sub_data(pbo, byte_off + index * stride, source);
+                }
+            }),
             Err(e) => {
                 GlobalState::context(|s| s.gl.set_gl_error(GL_OUT_OF_MEMORY));
                 GlobalState::access(|s| s.set_egl_error(egl_error_from_gpu_error(&e)));
@@ -456,10 +491,9 @@ pub extern "C" fn glReadPixels(
     }
     let packed = gpu_read_pixels(x, y, width, height, format);
     match packed {
-        Ok(bytes) => {
-            let n = bytes.len().min(width as usize * height as usize * bpp);
-            unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), pixels as *mut u8, n) };
-        }
+        Ok(bytes) => unsafe {
+            write_packed_rows(&bytes, width as usize * bpp, height as usize, pixels)
+        },
         Err(e) => {
             GlobalState::context(|s| s.gl.set_gl_error(GL_OUT_OF_MEMORY));
             GlobalState::access(|s| s.set_egl_error(egl_error_from_gpu_error(&e)));
