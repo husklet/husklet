@@ -20,6 +20,7 @@
 
 pub mod driver;
 pub mod image;
+pub mod logging;
 pub mod state;
 pub mod stub;
 #[allow(dead_code)] // Foundation for the pending State transport integration.

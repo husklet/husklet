@@ -201,6 +201,10 @@ impl GlobalState {
     }
 
     pub fn access<R>(f: impl FnOnce(&mut State) -> R) -> R {
+        // The driver's logging composition root: opens `hl-log`'s runtime tag mask from the environment
+        // on first use, so an `hl_error!` in an entry point can actually reach stderr. One relaxed
+        // atomic after the first call. See [`crate::logging::GuestLogging`].
+        crate::logging::GuestLogging::install();
         // SAFETY: `state_ptr` returns a `&'static Mutex<State>` (as a raw pointer) that is either the owner's
         // own `OnceLock`-backed cell or the same cell imported from libEGL — never null, never dangling.
         let m: &Mutex<State> = unsafe { &*state_ptr() };
