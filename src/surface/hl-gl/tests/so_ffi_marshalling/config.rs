@@ -170,7 +170,11 @@ fn egl_choose_and_get_configs_marshal_arrays_and_count() {
         ),
         EGL_TRUE
     );
-    assert_eq!(num, hl_gl::service::config::NUM_CONFIGS, "every match written");
+    assert_eq!(
+        num,
+        hl_gl::service::config::NUM_CONFIGS,
+        "every match written"
+    );
     for slot in configs.iter().take(num as usize) {
         assert!(!slot.is_null(), "each slot holds a real EGLConfig handle");
     }

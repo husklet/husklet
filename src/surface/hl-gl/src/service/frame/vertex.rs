@@ -67,6 +67,145 @@ fn attribute_stride(attribute: &Attr) -> u32 {
     }
 }
 
+/// Whether this attribute's GL semantics cannot be handed to the IR as-is and must be converted to plain
+/// `f32` components first.
+///
+/// The IR's vertex formats are WebGPU's, and three GL behaviours have no member there:
+///
+/// * `GL_FIXED` — 16.16 fixed point. There is no such vertex format, and the bytes were being declared
+///   `f32` and reinterpreted, so every component decoded as a denormal ≈ 0.
+/// * an integer component type with `normalized = GL_FALSE` feeding a `float`/`vec*` attribute. GL
+///   converts the integer straight to float (40 → 40.0); WebGPU's `Uint8x4` and friends deliver an
+///   *integer* to the shader, and a pipeline that feeds one to a float input is rejected outright — which
+///   is what wedged the context, silently, for the rest of the process.
+/// * a 1- or 3-component 8-/16-bit format, and a normalized 32-bit integer format. WebGPU has neither.
+///
+/// `glVertexAttribIPointer` attributes (`integer`) are excluded: those legitimately deliver integers, and
+/// the 2-/4-component 32-bit forms they use are expressible.
+fn needs_float_conversion(attribute: &Attr) -> bool {
+    if attribute.integer {
+        return false;
+    }
+    let comps = attribute.size.clamp(1, 4);
+    match attribute.kind {
+        GL_FIXED => true,
+        GL_FLOAT => false,
+        GL_HALF_FLOAT => matches!(comps, 1 | 3),
+        GL_INT | GL_UNSIGNED_INT => true,
+        GL_UNSIGNED_INT_2_10_10_10_REV | GL_INT_2_10_10_10_REV => !attribute.normalized,
+        GL_BYTE | GL_UNSIGNED_BYTE | GL_SHORT | GL_UNSIGNED_SHORT => {
+            !attribute.normalized || matches!(comps, 1 | 3)
+        }
+        _ => false,
+    }
+}
+
+/// Decode one component of `attribute` from `bytes` at `offset` into the float GL says the shader sees.
+///
+/// Normalized conversion follows ES 3.0 §2.9.1: unsigned `c / (2^b − 1)`, signed `max(c / (2^(b−1) − 1),
+/// −1)`. Unnormalized conversion is the plain numeric value. `GL_FIXED` is 16.16 fixed point, i.e. the
+/// signed 32-bit value divided by 65536.
+fn decode_component(attribute: &Attr, bytes: &[u8], offset: usize) -> f32 {
+    let byte = |index: usize| bytes.get(offset + index).copied().unwrap_or(0);
+    let two = || u16::from_le_bytes([byte(0), byte(1)]);
+    let four = || u32::from_le_bytes([byte(0), byte(1), byte(2), byte(3)]);
+    match attribute.kind {
+        GL_FIXED => four() as i32 as f32 / 65536.0,
+        GL_FLOAT => f32::from_bits(four()),
+        GL_HALF_FLOAT => f32::from(half_to_f32(two())),
+        GL_UNSIGNED_BYTE => {
+            let value = f32::from(byte(0));
+            if attribute.normalized {
+                value / 255.0
+            } else {
+                value
+            }
+        }
+        GL_BYTE => {
+            let value = f32::from(byte(0) as i8);
+            if attribute.normalized {
+                (value / 127.0).max(-1.0)
+            } else {
+                value
+            }
+        }
+        GL_UNSIGNED_SHORT => {
+            let value = f32::from(two());
+            if attribute.normalized {
+                value / 65535.0
+            } else {
+                value
+            }
+        }
+        GL_SHORT => {
+            let value = f32::from(two() as i16);
+            if attribute.normalized {
+                (value / 32767.0).max(-1.0)
+            } else {
+                value
+            }
+        }
+        GL_UNSIGNED_INT => {
+            let value = four() as f32;
+            if attribute.normalized {
+                value / 4_294_967_295.0
+            } else {
+                value
+            }
+        }
+        GL_INT => {
+            let value = four() as i32 as f32;
+            if attribute.normalized {
+                (value / 2_147_483_647.0).max(-1.0)
+            } else {
+                value
+            }
+        }
+        _ => 0.0,
+    }
+}
+
+/// IEEE 754 half → single. Only reached by the 1-/3-component half formats WebGPU cannot express.
+fn half_to_f32(bits: u16) -> f32 {
+    let sign = u32::from(bits & 0x8000) << 16;
+    let exponent = u32::from(bits >> 10) & 0x1f;
+    let mantissa = u32::from(bits & 0x03ff);
+    let bits = match exponent {
+        0 if mantissa == 0 => sign,
+        // Subnormal: renormalize into a single-precision exponent.
+        0 => {
+            let shift = mantissa.leading_zeros() - 21;
+            sign | ((127 - 15 - shift) << 23) | ((mantissa << (shift + 1)) & 0x007f_ffff)
+        }
+        0x1f => sign | 0x7f80_0000 | (mantissa << 13),
+        _ => sign | ((exponent + 127 - 15) << 23) | (mantissa << 13),
+    };
+    f32::from_bits(bits)
+}
+
+/// De-interleave one attribute out of its vertex buffer into a tightly-packed `f32` array, one element per
+/// vertex the buffer can supply. Returns the bytes and the vertex count.
+fn convert_attribute_to_f32(attribute: &Attr, source: &[u8]) -> (Vec<u8>, usize) {
+    let comps = attribute.size.clamp(1, 4) as usize;
+    let stride = attribute_stride(attribute).max(1) as usize;
+    let element = attribute_element_size(attribute) as usize;
+    let component = GlType(attribute.kind).component_size().max(1);
+    // Every vertex whose whole element lies inside the buffer: one at `offset`, then one per stride.
+    let vertices = match source.len().checked_sub(attribute.offset + element) {
+        Some(remaining) => 1 + remaining / stride,
+        None => 0,
+    };
+    let mut out = Vec::with_capacity(vertices * comps * size_of::<f32>());
+    for vertex in 0..vertices {
+        let base = attribute.offset + vertex * stride;
+        for index in 0..comps {
+            let value = decode_component(attribute, source, base + index * component);
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    (out, vertices)
+}
+
 fn attribute_element_size(attribute: &Attr) -> u32 {
     if attribute.kind == GL_UNSIGNED_INT_2_10_10_10_REV || attribute.kind == GL_INT_2_10_10_10_REV {
         4
@@ -328,6 +467,52 @@ pub(super) fn lower_vertices(
     // slots. De-interleaving into per-attribute buffers maps 1:1 onto the vertex-layout IR and handles
     // interleaved and separate client arrays uniformly. EMPTY for a bound-VBO draw → that path is unchanged.
     let mut client_slots: Vec<ClientSlot> = Vec::with_capacity(d.client_vbufs.len());
+
+    // ---- attribute formats the IR cannot express → a converted, tightly-packed f32 slot ----
+    // `GL_FIXED`, an unnormalized integer type feeding a float attribute, and the 1-/3-component 8-/16-bit
+    // forms have no WebGPU vertex format (see [`needs_float_conversion`]). Each is de-interleaved out of
+    // its vertex buffer and converted here, then appended as its own single-attribute slot — reusing the
+    // client-array machinery, so the location is excluded from its VBO slot's layout and nothing else in
+    // the lowering changes. Handing these to the IR raw declared an INTEGER format for a float shader
+    // input, which wgpu rejects outright and which wedged the context for the rest of the process.
+    for (location, attribute) in d.attrs.iter().enumerate() {
+        if !attribute.enabled || attr_slot[location] < 0 || !needs_float_conversion(attribute) {
+            continue;
+        }
+        let source = captured_buffer(attribute.buffer)
+            .map(|buffer| buffer.data.clone())
+            .or_else(|| ctx.buffers.get(attribute.buffer).map(|b| b.data.clone()))
+            .unwrap_or_default();
+        let (data, vertices) = convert_attribute_to_f32(attribute, &source);
+        if vertices == 0 {
+            continue;
+        }
+        let comps = attribute.size.clamp(1, 4) as u32;
+        let ir = ctx.alloc_buffer_ir()?;
+        cmds.push(Cmd::CreateBuffer(
+            ir,
+            BufferDesc {
+                size: data.len() as u64,
+                usage: buffer_usage::VERTEX,
+                label: format!("gl-converted-vertex:{:#x}", attribute.kind),
+            },
+        ));
+        let bytes = data.len();
+        cmds.push(Cmd::WriteBuffer {
+            id: ir,
+            offset: 0,
+            data,
+        });
+        client_slots.push(ClientSlot {
+            ir,
+            bytes,
+            stride: comps * size_of::<f32>() as u32,
+            step_mode: (attribute.divisor > 0) as u32,
+            location: location as u32,
+            format: vertex_format_wire(GL_FLOAT, comps as i32, false, false),
+        });
+    }
+
     for ca in &d.client_vbufs {
         let ir = ctx.alloc_buffer_ir()?;
         cmds.push(Cmd::CreateBuffer(

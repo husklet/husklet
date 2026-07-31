@@ -14,6 +14,11 @@ pub const GL_INT: u32 = 0x1404;
 pub const GL_UNSIGNED_INT: u32 = 0x1405;
 pub const GL_FLOAT: u32 = 0x1406;
 pub const GL_HALF_FLOAT: u32 = 0x140B;
+pub const GL_FIXED: u32 = 0x140C;
+
+// Packed pixel types (`glTexImage2D` / `glTexSubImage2D`; ES 3.0 table 3.2).
+pub const GL_UNSIGNED_SHORT_4_4_4_4: u32 = 0x8033;
+pub const GL_UNSIGNED_SHORT_5_5_5_1: u32 = 0x8034;
 
 // buffer targets
 pub const GL_ARRAY_BUFFER: u32 = 0x8892;
@@ -345,6 +350,8 @@ pub const MAX_TRANSFORM_FEEDBACK_BUFFERS: u32 = 4;
 
 // ES3 sampler-object parameters (glSamplerParameter* / glGetSamplerParameter*).
 pub const GL_TEXTURE_WRAP_R: u32 = 0x8072;
+pub const GL_TEXTURE_BASE_LEVEL: u32 = 0x813C;
+pub const GL_TEXTURE_MAX_LEVEL: u32 = 0x813D;
 pub const GL_TEXTURE_MIN_LOD: u32 = 0x813A;
 pub const GL_TEXTURE_MAX_LOD: u32 = 0x813B;
 pub const GL_TEXTURE_COMPARE_MODE: u32 = 0x884C;

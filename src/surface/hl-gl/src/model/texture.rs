@@ -107,6 +107,14 @@ pub struct GlTexture {
     pub immutable: bool,
     /// The mip-level count declared by `glTexStorage*` (`1` for a mutable texture — the base level only).
     pub levels: i32,
+    /// `GL_TEXTURE_BASE_LEVEL` / `GL_TEXTURE_MAX_LEVEL` — the level range the app declared usable.
+    ///
+    /// This model stores ONE image per texture (the base level), so these do not yet select a level to
+    /// sample; they are real, queryable state an application sets and reads back, and reporting the
+    /// initial `0` / `1000` for whatever it had set made `glGetTexParameteriv` disagree with the value
+    /// the app had just written.
+    pub base_level: i32,
+    pub max_level: i32,
     /// The neutral-IR texel format this texture lowers to (a `CreateTexture` `format`, and — when the
     /// texture is a framebuffer color attachment — the render-target + surface format). Chosen from the
     /// `glTexImage2D` internal format; defaults to `Rgba8Unorm` (the RGBA8 upload the model materializes).
@@ -147,6 +155,8 @@ impl Default for GlTexture {
             gen: 0,
             immutable: false,
             levels: 1,
+            base_level: 0,
+            max_level: 1000,
             ir_format: TextureFormat::Rgba8Unorm,
             real_pixels: false,
             gpu_authoritative: false,
@@ -647,6 +657,8 @@ impl Textures {
                 GL_TEXTURE_SWIZZLE_G => t.swizzle[1] = value,
                 GL_TEXTURE_SWIZZLE_B => t.swizzle[2] = value,
                 GL_TEXTURE_SWIZZLE_A => t.swizzle[3] = value,
+                GL_TEXTURE_BASE_LEVEL => t.base_level = value as i32,
+                GL_TEXTURE_MAX_LEVEL => t.max_level = value as i32,
                 _ => {}
             }
         }

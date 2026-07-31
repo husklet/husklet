@@ -118,7 +118,7 @@ impl RenderPasses {
     /// * INTERNAL targets — the default framebuffer and ordinary FBO textures — store rows top-down as the
     ///   framebuffer is viewed (row 0 = its top). GL clip space and WebGPU clip space already agree on which
     ///   edge is up, so nothing is reflected; instead every crossing back into GL WINDOW or TEXEL coordinates
-    ///   converts `h-1-y`: [`emit_viewport`], [`emit_scissor`], [`scissored_clear_rect_enc`],
+    ///   converts `h-1-y`: [`emit_viewport`], [`emit_scissor`], [`clear_rect_enc`],
     ///   `adapter::glsl::fragment_coordinates`, `blit_copy_enc`, the rendered-FBO sampler `flip_y`, and
     ///   `readpixels::pack_region`. A window frame therefore reaches its IOSurface or `wl_shm` buffer — both
     ///   top-down — upright, with NO flip anywhere on the present path.
@@ -624,7 +624,11 @@ pub(super) fn depth_attachment_for(
     let (depth_tex, needs_create) = ctx.depth_target(color_tex, with_stencil).ok()?;
     // A depth texture minted this frame has no prior contents to preserve — and a zero-initialized depth
     // plane fails every `GL_LESS` test — so its first pass always clear-loads regardless of the caller's op.
-    let load = if needs_create { LoadOp::Clear } else { clear.load };
+    let load = if needs_create {
+        LoadOp::Clear
+    } else {
+        clear.load
+    };
     if needs_create {
         cmds.push(Cmd::CreateTexture(
             depth_tex,
@@ -692,10 +696,20 @@ impl RenderPasses {
                 last_full = Some(i);
             }
         }
-        match last_full {
-            Some(i) => (Some(run[i].clear), i + 1),
-            None => (None, 0),
+        let Some(index) = last_full else {
+            return (None, 0);
+        };
+        // Folding the clear into the pass load op DISCARDS every draw before it — which is only sound if
+        // those draws affected nothing but colour. A draw that wrote the stencil or depth plane leaves a
+        // result the colour clear does not erase, and a later draw may test against it: dropping it
+        // silently dropped the side effect. Three `GL_INCR` draws followed by a `glClear(GL_COLOR)` and a
+        // `GL_EQUAL` test read black for exactly this reason. Refusing the fold sends the run down the
+        // segmented path, where the clear becomes a full-target `Enc::ClearRect` between two passes and
+        // the stencil plane load-preserves across it.
+        if run[..index].iter().any(DrawCall::writes_depth_or_stencil) {
+            return (None, 0);
         }
+        (Some(run[index].clear), index + 1)
     }
 
     /// The full-target clear color for a run with no unscissored clear: the first draw's recorded clear color
@@ -741,13 +755,7 @@ impl Frame {
         // No recorded clear writes the color plane (a depth- or stencil-only `glClear`, or one masked off by
         // `glColorMask`): there is no color work to present, and clearing the target here is exactly the bug
         // where `glClear(GL_DEPTH_BUFFER_BIT)` repainted the color buffer.
-        if !ctx
-            .local
-            .recording
-            .draws
-            .iter()
-            .any(DrawCall::clears_color)
-        {
+        if !ctx.local.recording.draws.iter().any(DrawCall::clears_color) {
             return None;
         }
         let cmds: Vec<Cmd> = Vec::new();

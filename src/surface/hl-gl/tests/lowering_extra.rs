@@ -83,3 +83,5 @@ mod stencil;
 mod unlinked;
 #[path = "lowering_extra/mrt.rs"]
 mod mrt;
+#[path = "lowering_extra/vformat.rs"]
+mod vformat;

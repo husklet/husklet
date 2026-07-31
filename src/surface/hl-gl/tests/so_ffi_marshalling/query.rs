@@ -11,14 +11,25 @@ fn egl_query_string_returns_marshal() {
         extern "C" fn(*mut c_void, i32) -> *const c_char
     );
 
-    // With EGL_NO_DISPLAY (null) the vendor/version/client-API identity strings are the driver's fixed ids.
+    // EGL 1.4 §3.3 + EGL_EXT_client_extensions: vendor / version / client-APIs are PER-DISPLAY, so with
+    // `EGL_NO_DISPLAY` they must be refused. This test previously asserted they answered, and its comment
+    // stated that as though it were the specification — a conformance suite reading those strings takes a
+    // null display for a working one and proceeds on it.
     let nodpy = core::ptr::null_mut();
-    assert_eq!(cstr(egl_query_string(nodpy, EGL_VENDOR_Q)), "hl-gl");
-    assert_eq!(cstr(egl_query_string(nodpy, EGL_VERSION_Q)), "1.4 hl-gl");
-    assert_eq!(
-        cstr(egl_query_string(nodpy, EGL_CLIENT_APIS_Q)),
-        "OpenGL_ES"
-    );
+    let egl_get_error = f!(sh.egl, "eglGetError", extern "C" fn() -> i32);
+    for name in [EGL_VENDOR_Q, EGL_VERSION_Q, EGL_CLIENT_APIS_Q] {
+        assert!(
+            egl_query_string(nodpy, name).is_null(),
+            "{name:#x} is per-display and must not answer without one"
+        );
+        assert_eq!(egl_get_error(), EGL_BAD_DISPLAY_Q, "{name:#x}");
+    }
+
+    // On a real display they are the driver's fixed identity strings.
+    let dpy = surfaceless_display(&sh);
+    assert_eq!(cstr(egl_query_string(dpy, EGL_VENDOR_Q)), "hl-gl");
+    assert_eq!(cstr(egl_query_string(dpy, EGL_VERSION_Q)), "1.4 hl-gl");
+    assert_eq!(cstr(egl_query_string(dpy, EGL_CLIENT_APIS_Q)), "OpenGL_ES");
 
     // A null display => CLIENT extensions: the platform-base + wayland-platform set a toolkit probes BEFORE
     // opening a display. Advertising EGL_EXT_platform_wayland is what routes a Wayland app to the window path.

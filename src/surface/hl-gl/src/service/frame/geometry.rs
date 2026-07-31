@@ -111,7 +111,12 @@ impl Frame {
         // A multiple-render-target framebuffer resolves BEFORE the "nothing but clears" shortcut below: a
         // `glClearBufferfv(GL_COLOR, 1, …)` frame has no geometry at all, and the single-target shortcut
         // would clear attachment 0 with it (which is exactly "the index was ignored").
-        if !needs_segments {
+        // The MRT builder expresses an unscissored colour clear itself, as a per-attachment load op, so
+        // only the clears it genuinely cannot express keep a run off that path.
+        let mrt_unsupported = survivors
+            .iter()
+            .any(|d| (d.clears_color() && d.scissor_enabled) || segment_boundary_non_colour(d));
+        if !mrt_unsupported {
             let mrt_fbo = draws.first().map(|d| d.fbo).unwrap_or(0);
             if mrt_fbo != 0 && ctx.local.framebuffers.color_attachment_count(mrt_fbo) > 1 {
                 // The WHOLE run, not the slot-0 survivors: which draws a clear supersedes is a per-
@@ -477,7 +482,6 @@ mod clone_tests {
     }
 }
 
-
 /// The one render target a run of draws lowers into.
 #[derive(Clone, Copy)]
 pub(super) struct SegmentTarget {
@@ -497,8 +501,19 @@ pub(super) struct SegmentTarget {
 ///   the current pass would leave the following draws testing against the previous draws' depth.
 ///
 /// A clear that names no writable plane at all never reaches recording (see `record_clear_buffers`).
+///
+/// An UNSCISSORED colour clear is normally folded into the pass load op by [`RenderPasses::full_clear`]
+/// and never appears in the survivor list this predicate sees. It appears only when that fold was refused
+/// because an earlier draw wrote depth or stencil — and then it, too, must become a boundary and paint a
+/// full-target `Enc::ClearRect`, so the planes it does not clear survive it.
 pub(super) fn segment_boundary(d: &DrawCall) -> bool {
-    (d.clears_color() && d.scissor_enabled) || d.clears_depth() || d.clears_stencil()
+    d.clears_color() || segment_boundary_non_colour(d)
+}
+
+/// The part of [`segment_boundary`] that concerns the depth and stencil planes: the only place this IR can
+/// clear them is a pass's `DepthAttachment` load op, so the draws after such a clear need a new pass.
+pub(super) fn segment_boundary_non_colour(d: &DrawCall) -> bool {
+    d.clears_depth() || d.clears_stencil()
 }
 
 /// The depth-attachment load op for a pass covering `draws`, together with the values the clear that armed
@@ -604,8 +619,8 @@ pub(super) fn lower_segments(
         if !segment.is_empty() || matches!(load, LoadOp::Clear) {
             emit(ctx, cmds, ops, &mut segment, &mut load, &mut dload);
         }
-        if d.clears_color() && d.scissor_enabled {
-            if let Some(rect) = scissored_clear_rect_enc(
+        if d.clears_color() {
+            if let Some(rect) = clear_rect_enc(
                 d,
                 target.texture,
                 target.width,
@@ -674,43 +689,48 @@ pub(super) fn emit_segment_pass(
     ops.push(Enc::EndRenderPass);
 }
 
-/// Lower a SCISSORED `glClear` to an `Enc::ClearRect` fill of `target_tex`, clamped to the target.
+/// Lower a `glClear` to an `Enc::ClearRect` fill of `target_tex`, clamped to the target — a scissored
+/// clear to its box, an unscissored one to the whole target.
 ///
 /// Ordinary FBOs convert GL's bottom-left rows into texture rows. Present targets already receive the
 /// host-surface coordinate specialization used by their vertex shaders, so their rows remain unchanged.
 /// Returns `None` for a degenerate rect.
-pub(super) fn scissored_clear_rect_enc(
+pub(super) fn clear_rect_enc(
     d: &DrawCall,
     target_tex: u32,
     tw: i32,
     th: i32,
     bottom_up: bool,
 ) -> Option<Enc> {
-    let [sx, sy, sw, sh] = d.scissor;
+    let [sx, sy, sw, sh] = if d.scissor_enabled {
+        d.scissor
+    } else {
+        [0, 0, tw, th]
+    };
     if sw <= 0 || sh <= 0 {
         return None;
     }
-    let x = sx.clamp(0, tw);
-    let y_top = if bottom_up {
-        sy.max(0)
+    // Clamp BOTH edges and take the difference, exactly as [`emit_scissor`] does for a draw. Clamping only
+    // the origin and keeping the full width is what made `glScissor(-10, -10, 24, 24)` paint 24 columns
+    // from x = 0 instead of the 14 that remain inside the target: the columns clipped off the left were
+    // silently re-added on the right.
+    let top = if bottom_up {
+        sy
     } else {
-        (th - sy - sh).max(0)
+        th.saturating_sub(sy.saturating_add(sh))
     };
-    let mut w = sw;
-    let mut h = sh;
-    if x + w > tw {
-        w = tw - x;
-    }
-    if y_top + h > th {
-        h = th - y_top;
-    }
+    let x0 = sx.clamp(0, tw);
+    let x1 = sx.saturating_add(sw).clamp(0, tw);
+    let y0 = top.clamp(0, th);
+    let y1 = top.saturating_add(sh).clamp(0, th);
+    let (w, h) = (x1 - x0, y1 - y0);
     if w <= 0 || h <= 0 {
         return None;
     }
     Some(Enc::ClearRect {
         texture: target_tex,
-        x: x as u32,
-        y: y_top as u32,
+        x: x0 as u32,
+        y: y0 as u32,
         w: w as u32,
         h: h as u32,
         color: d.clear,

@@ -289,6 +289,32 @@ impl DrawCall {
             )
     }
 
+    /// Whether this GEOMETRY draw leaves a result in the depth or stencil plane — a result a later colour
+    /// clear does not erase and a later draw may test against.
+    ///
+    /// A stencil-testing draw with any non-`GL_KEEP` op and a non-zero write mask writes stencil; a
+    /// depth-testing draw with `glDepthMask(GL_TRUE)` writes depth. Clears are excluded: they are not
+    /// draws, and which planes they touch is answered by `clears_*`.
+    pub fn writes_depth_or_stencil(&self) -> bool {
+        if self.is_clear {
+            return false;
+        }
+        let keep = crate::model::glconst::GL_KEEP;
+        let stencil = self.stencil
+            && self.stencil_write_mask & 0xff != 0
+            && [
+                self.stencil_fail_front,
+                self.stencil_zfail_front,
+                self.stencil_zpass_front,
+                self.stencil_fail_back,
+                self.stencil_zfail_back,
+                self.stencil_zpass_back,
+            ]
+            .iter()
+            .any(|op| *op != keep);
+        stencil || (self.depth && self.depth_write)
+    }
+
     /// This clear writes the stencil plane (a zero `glStencilMask` makes it a no-op).
     pub fn clears_stencil(&self) -> bool {
         self.is_clear

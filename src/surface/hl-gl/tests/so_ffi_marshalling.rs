@@ -89,6 +89,7 @@ const EGL_CONTEXT_CLIENT_VERSION: i32 = 0x3098;
 
 // EGL query-string names.
 const EGL_VENDOR_Q: i32 = 0x3053;
+const EGL_BAD_DISPLAY_Q: i32 = 0x3008;
 const EGL_VERSION_Q: i32 = 0x3054;
 const EGL_EXTENSIONS_Q: i32 = 0x3055;
 const EGL_CLIENT_APIS_Q: i32 = 0x308D;

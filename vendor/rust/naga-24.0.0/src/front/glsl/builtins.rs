@@ -751,8 +751,15 @@ fn inject_standard_builtins(
             let fun = match name {
                 "packSnorm4x8" => MathFunction::Pack4x8snorm,
                 "packUnorm4x8" => MathFunction::Pack4x8unorm,
-                "packSnorm2x16" => MathFunction::Pack2x16unorm,
-                "packUnorm2x16" => MathFunction::Pack2x16snorm,
+                // Husklet: these two were swapped upstream in naga 24.0.0, so `packUnorm2x16` emitted the
+                // SIGNED conversion (×32767 into an i16 pair) and `packSnorm2x16` the unsigned one.
+                // Confirmed against llvmpipe with no free parameters: `packUnorm2x16(0.25, 0.75)` gave
+                // `20 60` instead of `40 bf`, and `packSnorm2x16(-0.5, 0.5)` gave `80 00` — a SIGN FLIP,
+                // because -0.5 clamps to 0 under the unsigned rule and 0.5 lands on 32768, which reads
+                // back as i16 -32768. The `unpack*` pair below was already correct, which is why only the
+                // pack direction was wrong. Upstream: the GLSL ES 3.00 §8.4 definitions.
+                "packSnorm2x16" => MathFunction::Pack2x16snorm,
+                "packUnorm2x16" => MathFunction::Pack2x16unorm,
                 "packHalf2x16" => MathFunction::Pack2x16float,
                 _ => unreachable!(),
             };

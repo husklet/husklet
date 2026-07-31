@@ -717,7 +717,13 @@ fn every_recorded_pixel_store_parameter_reads_back() {
 fn blend_state_reads_back_what_blend_func_and_equation_set() {
     let mut c = ctx_800x600();
     let mut out = [0i32; 4];
-    record::blend_func_separate(&mut c, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
+    record::blend_func_separate(
+        &mut c,
+        GL_SRC_ALPHA,
+        GL_ONE_MINUS_SRC_ALPHA,
+        GL_ONE,
+        GL_ZERO,
+    );
     record::blend_equation_separate(&mut c, GL_FUNC_SUBTRACT, GL_MIN);
 
     for (pname, want) in [
@@ -729,7 +735,10 @@ fn blend_state_reads_back_what_blend_func_and_equation_set() {
         (GL_BLEND_EQUATION_ALPHA, GL_MIN),
     ] {
         assert_eq!(query::get_integerv(&c, pname, &mut out), 1);
-        assert_eq!(out[0], want as i32, "pname {pname:#x} must read back its enum");
+        assert_eq!(
+            out[0], want as i32,
+            "pname {pname:#x} must read back its enum"
+        );
     }
 
     let mut colour = [0f32; 4];
@@ -745,7 +754,10 @@ fn vertex_array_binding_and_attribute_array_state_read_back() {
 
     let vao = c.gen_vertex_array();
     c.bind_vertex_array(vao);
-    assert_eq!(query::get_integerv(&c, GL_VERTEX_ARRAY_BINDING, &mut out), 1);
+    assert_eq!(
+        query::get_integerv(&c, GL_VERTEX_ARRAY_BINDING, &mut out),
+        1
+    );
     assert_eq!(out[0], vao as i32);
 
     let vbo = c.buffers.gen();

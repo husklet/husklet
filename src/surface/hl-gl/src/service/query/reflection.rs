@@ -133,6 +133,8 @@ pub fn get_tex_parameteriv(ctx: &GlContext, target: u32, pname: u32) -> i32 {
         GL_TEXTURE_SWIZZLE_G => t.swizzle[1] as i32,
         GL_TEXTURE_SWIZZLE_B => t.swizzle[2] as i32,
         GL_TEXTURE_SWIZZLE_A => t.swizzle[3] as i32,
+        GL_TEXTURE_BASE_LEVEL => t.base_level,
+        GL_TEXTURE_MAX_LEVEL => t.max_level,
         _ => 0,
     }
 }
