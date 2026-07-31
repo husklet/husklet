@@ -11,7 +11,7 @@ use hl_gpu::protocol::model::descriptor::{
 use hl_gpu::protocol::model::enums::{compare, TextureAspect, TextureDim, TextureFormat, Topology};
 use hl_gpu::{Cmd, CommandSink};
 use hl_vulkan::adapter::wayland_app::WaylandAppPresenter;
-use hl_vulkan::model::memory::Format;
+use hl_vulkan::model::memory::{Format, VertexFormat};
 use hl_vulkan::result::Status;
 use hl_vulkan::service::record::{RenderingColorAttachment, RenderingDepthAttachment};
 use hl_vulkan::service::{create, present, record};

@@ -131,6 +131,142 @@ pub mod vk_format {
     pub const BC7_SRGB_BLOCK: u32 = 146;
 }
 
+/// `VkFormat` values that appear as VERTEX ATTRIBUTE formats. Distinct from the image formats above
+/// because the wire encodes a vertex attribute completely differently from a texture (see
+/// [`VertexFormat`]), and because Vulkan permits component counts and widths here that no image uses.
+pub mod vk_vertex_format {
+    // 8-bit
+    pub const R8_UNORM: u32 = 9;
+    pub const R8_SNORM: u32 = 10;
+    pub const R8_UINT: u32 = 13;
+    pub const R8_SINT: u32 = 14;
+    pub const R8G8_UNORM: u32 = 16;
+    pub const R8G8_SNORM: u32 = 17;
+    pub const R8G8_UINT: u32 = 20;
+    pub const R8G8_SINT: u32 = 21;
+    pub const R8G8B8A8_UNORM: u32 = 37;
+    pub const R8G8B8A8_SNORM: u32 = 38;
+    pub const R8G8B8A8_UINT: u32 = 41;
+    pub const R8G8B8A8_SINT: u32 = 42;
+    // BGRA component order — legal Vulkan vertex formats with no wire encoding, kept named so the
+    // refusal is deliberate and testable rather than an unlisted gap.
+    pub const B8G8R8A8_UNORM: u32 = 44;
+    pub const B8G8R8A8_SNORM: u32 = 45;
+    pub const B8G8R8A8_UINT: u32 = 48;
+    pub const B8G8R8A8_SINT: u32 = 49;
+    // packed
+    pub const A2B10G10R10_UNORM_PACK32: u32 = 64;
+    // 16-bit
+    pub const R16_UNORM: u32 = 70;
+    pub const R16_SNORM: u32 = 71;
+    pub const R16_UINT: u32 = 74;
+    pub const R16_SINT: u32 = 75;
+    pub const R16_SFLOAT: u32 = 76;
+    pub const R16G16_UNORM: u32 = 77;
+    pub const R16G16_SNORM: u32 = 78;
+    pub const R16G16_UINT: u32 = 81;
+    pub const R16G16_SINT: u32 = 82;
+    pub const R16G16_SFLOAT: u32 = 83;
+    pub const R16G16B16A16_UNORM: u32 = 91;
+    pub const R16G16B16A16_SNORM: u32 = 92;
+    pub const R16G16B16A16_UINT: u32 = 95;
+    pub const R16G16B16A16_SINT: u32 = 96;
+    pub const R16G16B16A16_SFLOAT: u32 = 97;
+    // 32-bit
+    pub const R32_UINT: u32 = 98;
+    pub const R32_SINT: u32 = 99;
+    pub const R32_SFLOAT: u32 = 100;
+    pub const R32G32_UINT: u32 = 101;
+    pub const R32G32_SINT: u32 = 102;
+    pub const R32G32_SFLOAT: u32 = 103;
+    pub const R32G32B32_UINT: u32 = 104;
+    pub const R32G32B32_SINT: u32 = 105;
+    pub const R32G32B32_SFLOAT: u32 = 106;
+    pub const R32G32B32A32_UINT: u32 = 107;
+    pub const R32G32B32A32_SINT: u32 = 108;
+    pub const R32G32B32A32_SFLOAT: u32 = 109;
+}
+
+/// Translate a `VkVertexInputAttributeDescription::format` into the neutral wire encoding the executor
+/// decodes for a vertex attribute.
+///
+/// The wire field is NOT a format enum of any API. It is a packed quadruple —
+/// `comps | (kind << 8) | (normalized << 16) | (integer << 17)`, `kind` 0=f32 1=u8 2=i8 3=u16 4=i16
+/// 5=u32 6=i32 7=f16 8=2-10-10-10 — defined by the GL driver's `vertex_format_wire` and decoded by
+/// `hl-gpu-wgpu`'s `VertexState::format`. Passing a raw `VkFormat` through the field therefore does not
+/// mean the format it names: `VK_FORMAT_R32G32B32_SFLOAT` is 106, which decodes as a 106-component
+/// attribute and is refused by the executor as an unsupported vertex attribute format. That is what made
+/// every `vkmark` scene with geometry fail at `vkCreateGraphicsPipelines` with `VK_ERROR_DEVICE_LOST`
+/// while `vkcube` — which sources its positions from a uniform buffer by `gl_VertexIndex` and declares no
+/// vertex bindings at all — presented perfectly.
+///
+/// `None` means the executor has no encoding for this attribute and the pipeline must be REFUSED rather
+/// than created against a format the host will silently reinterpret. WebGPU has no 1- or 3-component
+/// 8-/16-bit vertex format, and the wire cannot express a BGRA component order, so those Vulkan formats
+/// are honestly unsupported instead of being widened or swizzled behind the application's back.
+pub struct VertexFormat(pub u32);
+
+impl VertexFormat {
+    /// Wire `kind` codes, mirroring the GL driver's encoder.
+    const F32: u32 = 0;
+    const U8: u32 = 1;
+    const I8: u32 = 2;
+    const U16: u32 = 3;
+    const I16: u32 = 4;
+    const U32: u32 = 5;
+    const I32: u32 = 6;
+    const F16: u32 = 7;
+    const PACKED_2_10_10_10: u32 = 8;
+
+    pub fn wire(&self) -> Option<u32> {
+        use vk_vertex_format as f;
+        // (kind, components, normalized, integer)
+        let (kind, comps, normalized, integer) = match self.0 {
+            // 32-bit float — the overwhelmingly common case (positions, normals, uvs, colors).
+            f::R32_SFLOAT => (Self::F32, 1, false, false),
+            f::R32G32_SFLOAT => (Self::F32, 2, false, false),
+            f::R32G32B32_SFLOAT => (Self::F32, 3, false, false),
+            f::R32G32B32A32_SFLOAT => (Self::F32, 4, false, false),
+            // 32-bit integer
+            f::R32_UINT => (Self::U32, 1, false, true),
+            f::R32G32_UINT => (Self::U32, 2, false, true),
+            f::R32G32B32_UINT => (Self::U32, 3, false, true),
+            f::R32G32B32A32_UINT => (Self::U32, 4, false, true),
+            f::R32_SINT => (Self::I32, 1, false, true),
+            f::R32G32_SINT => (Self::I32, 2, false, true),
+            f::R32G32B32_SINT => (Self::I32, 3, false, true),
+            f::R32G32B32A32_SINT => (Self::I32, 4, false, true),
+            // 16-bit float — x2/x4 only.
+            f::R16G16_SFLOAT => (Self::F16, 2, false, false),
+            f::R16G16B16A16_SFLOAT => (Self::F16, 4, false, false),
+            // 8-bit — x2/x4 only.
+            f::R8G8_UNORM => (Self::U8, 2, true, false),
+            f::R8G8B8A8_UNORM => (Self::U8, 4, true, false),
+            f::R8G8_UINT => (Self::U8, 2, false, true),
+            f::R8G8B8A8_UINT => (Self::U8, 4, false, true),
+            f::R8G8_SNORM => (Self::I8, 2, true, false),
+            f::R8G8B8A8_SNORM => (Self::I8, 4, true, false),
+            f::R8G8_SINT => (Self::I8, 2, false, true),
+            f::R8G8B8A8_SINT => (Self::I8, 4, false, true),
+            // 16-bit integer — x2/x4 only.
+            f::R16G16_UNORM => (Self::U16, 2, true, false),
+            f::R16G16B16A16_UNORM => (Self::U16, 4, true, false),
+            f::R16G16_UINT => (Self::U16, 2, false, true),
+            f::R16G16B16A16_UINT => (Self::U16, 4, false, true),
+            f::R16G16_SNORM => (Self::I16, 2, true, false),
+            f::R16G16B16A16_SNORM => (Self::I16, 4, true, false),
+            f::R16G16_SINT => (Self::I16, 2, false, true),
+            f::R16G16B16A16_SINT => (Self::I16, 4, false, true),
+            // The one packed format the wire encodes, and only in its normalized 4-component form.
+            f::A2B10G10R10_UNORM_PACK32 => (Self::PACKED_2_10_10_10, 4, true, false),
+            // Everything else — 1- and 3-component 8-/16-bit formats, every BGRA order, every sRGB,
+            // scaled and 64-bit format — has no wire encoding. Refused, never approximated.
+            _ => return None,
+        };
+        Some(comps | (kind << 8) | ((normalized as u32) << 16) | ((integer as u32) << 17))
+    }
+}
+
 /// Translate `VkBufferUsageFlags` → hl-GPU `buffer_usage` bits. Ported from `memory.rs::buffer_usage`.
 /// Every hl device buffer additionally gets `MAP` (unified memory is host-visible).
 pub struct BufferUsage(pub u32);
@@ -239,5 +375,128 @@ impl Format {
             vk_format::BC7_SRGB_BLOCK => T::Bc7RgbaSrgb,
             _ => return None,
         })
+    }
+}
+
+#[cfg(test)]
+mod vertex_format_tests {
+    use super::{vk_vertex_format as f, VertexFormat};
+
+    /// Decode a wire value the way `hl-gpu-wgpu`'s `VertexState::format` does, so these tests assert the
+    /// ENCODING CONTRACT rather than re-stating this module's own arithmetic. Every existing hl-vulkan
+    /// test built its `VertexAttr` by hand with `format: 0`, which is why none of them could notice that
+    /// the shim never lowered `VkFormat` at all.
+    fn decode(wire: u32) -> (u32, u32, bool, bool) {
+        (
+            wire & 0xff,
+            (wire >> 8) & 0xff,
+            (wire >> 16) & 1 != 0,
+            (wire >> 17) & 1 != 0,
+        )
+    }
+
+    /// The formats a real application actually uses for positions, normals and texture coordinates.
+    /// `R32G32B32_SFLOAT` is the one every `vkmark` geometry scene declares; forwarded raw it is 106,
+    /// which the executor decoded as a 106-component attribute and refused.
+    #[test]
+    fn float_positions_lower_to_a_component_count_and_not_to_a_vulkan_enum() {
+        for (format, comps) in [
+            (f::R32_SFLOAT, 1),
+            (f::R32G32_SFLOAT, 2),
+            (f::R32G32B32_SFLOAT, 3),
+            (f::R32G32B32A32_SFLOAT, 4),
+        ] {
+            let wire = VertexFormat(format).wire().expect("a core float format lowers");
+            assert_eq!(
+                decode(wire),
+                (comps, VertexFormat::F32, false, false),
+                "VkFormat {format} must lower to {comps} f32 components"
+            );
+            assert_ne!(
+                wire, format,
+                "the wire value must not be the VkFormat number itself"
+            );
+        }
+    }
+
+    /// Normalized and integer attributes must carry their flags, or the executor picks the wrong
+    /// `wgpu::VertexFormat` from the same (kind, comps) pair — `Unorm8x4` versus `Uint8x4`.
+    #[test]
+    fn normalized_and_integer_flags_survive_the_encoding() {
+        assert_eq!(
+            decode(VertexFormat(f::R8G8B8A8_UNORM).wire().unwrap()),
+            (4, VertexFormat::U8, true, false)
+        );
+        assert_eq!(
+            decode(VertexFormat(f::R8G8B8A8_UINT).wire().unwrap()),
+            (4, VertexFormat::U8, false, true)
+        );
+        assert_eq!(
+            decode(VertexFormat(f::R16G16_SNORM).wire().unwrap()),
+            (2, VertexFormat::I16, true, false)
+        );
+        assert_eq!(
+            decode(VertexFormat(f::R16G16B16A16_SFLOAT).wire().unwrap()),
+            (4, VertexFormat::F16, false, false)
+        );
+        assert_eq!(
+            decode(VertexFormat(f::A2B10G10R10_UNORM_PACK32).wire().unwrap()),
+            (4, VertexFormat::PACKED_2_10_10_10, true, false)
+        );
+    }
+
+    /// A format the wire cannot express is refused, never widened or swizzled. WebGPU has no 1- or
+    /// 3-component 8-/16-bit vertex format, and the wire has no BGRA component order, so honouring these
+    /// would mean handing the executor an attribute that reads different bytes than the app declared.
+    #[test]
+    fn a_format_without_a_wire_encoding_is_refused_rather_than_approximated() {
+        for format in [
+            f::R8_UNORM,
+            f::R8_SINT,
+            f::R16_SFLOAT,
+            f::R16_UNORM,
+            f::B8G8R8A8_UNORM,
+            f::B8G8R8A8_SINT,
+            0,
+            u32::MAX,
+        ] {
+            assert!(
+                VertexFormat(format).wire().is_none(),
+                "VkFormat {format} has no wire encoding and must be refused"
+            );
+        }
+    }
+
+    /// Every lowered format must decode to a component count Vulkan agrees with, and to one the executor
+    /// accepts. Catches a transcription slip in the table that a per-format assertion would miss.
+    #[test]
+    fn every_lowered_format_decodes_to_a_legal_attribute() {
+        let widths_needing_two_or_four = [
+            VertexFormat::U8,
+            VertexFormat::I8,
+            VertexFormat::U16,
+            VertexFormat::I16,
+            VertexFormat::F16,
+        ];
+        for format in 0..=200u32 {
+            let Some(wire) = VertexFormat(format).wire() else {
+                continue;
+            };
+            let (comps, kind, normalized, integer) = decode(wire);
+            assert!(
+                (1..=4).contains(&comps),
+                "VkFormat {format} lowered to {comps} components"
+            );
+            assert!(
+                !(normalized && integer),
+                "VkFormat {format} is both normalized and integer"
+            );
+            if widths_needing_two_or_four.contains(&kind) {
+                assert!(
+                    comps == 2 || comps == 4,
+                    "VkFormat {format} lowered to a {comps}-component narrow format the executor rejects"
+                );
+            }
+        }
     }
 }

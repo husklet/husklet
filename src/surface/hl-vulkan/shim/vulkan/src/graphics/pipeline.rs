@@ -8,9 +8,14 @@ use super::*;
 /// host rasterizer fetches slot-0 positions/colors from these).
 struct VertexLayouts;
 impl VertexLayouts {
-    fn parse(vi: *const VkPipelineVertexInputStateCreateInfo) -> Vec<VertexLayout> {
+    /// `Err(format)` names the first `VkFormat` the wire cannot encode, so the caller can refuse the
+    /// pipeline and say which attribute did it. Never approximates: a format the executor would
+    /// reinterpret must not reach it.
+    fn parse(
+        vi: *const VkPipelineVertexInputStateCreateInfo,
+    ) -> Result<Vec<VertexLayout>, u32> {
         let Some(vi) = (unsafe { vi.as_ref() }) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let bindings: &[VkVertexInputBindingDescription] =
             if vi.p_vertex_binding_descriptions.is_null()
@@ -40,18 +45,27 @@ impl VertexLayouts {
             };
         bindings
             .iter()
-            .map(|b| VertexLayout {
-                stride: b.stride,
-                step_mode: b.input_rate as u32,
-                attrs: attrs
-                    .iter()
-                    .filter(|a| a.binding == b.binding)
-                    .map(|a| VertexAttr {
-                        location: a.location,
-                        format: a.format as u32,
-                        offset: a.offset,
-                    })
-                    .collect(),
+            .map(|b| {
+                Ok(VertexLayout {
+                    stride: b.stride,
+                    step_mode: b.input_rate as u32,
+                    attrs: attrs
+                        .iter()
+                        .filter(|a| a.binding == b.binding)
+                        .map(|a| {
+                            // The wire field is a PACKED (comps, kind, normalized, integer) quadruple,
+                            // not a format enum. Forwarding `a.format` raw shipped a VkFormat number
+                            // into it, which the executor decoded as a component count.
+                            Ok(VertexAttr {
+                                location: a.location,
+                                format: VertexFormat(a.format as u32)
+                                    .wire()
+                                    .ok_or(a.format as u32)?,
+                                offset: a.offset,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, u32>>()?,
+                })
             })
             .collect()
     }
@@ -402,10 +416,28 @@ pub extern "C" fn vkCreateGraphicsPipelines(
             }
         }
         let Some((vmod, ventry)) = vertex else {
+            hl_log::hl_error!(
+                hl_log::tag::VULKAN,
+                "vkCreateGraphicsPipelines[{i}]: no vertex stage in pStages (stages={})",
+                stages.len()
+            );
             result = VK_ERROR_UNKNOWN;
             continue;
         };
-        let layouts = VertexLayouts::parse(ci.p_vertex_input_state);
+        let layouts = match VertexLayouts::parse(ci.p_vertex_input_state) {
+            Ok(layouts) => layouts,
+            Err(format) => {
+                // Refused, not approximated: the executor has no encoding for this attribute, and
+                // creating the pipeline anyway would hand it a number meaning something else.
+                hl_log::hl_error!(
+                    hl_log::tag::VULKAN,
+                    "vkCreateGraphicsPipelines[{i}]: VkFormat {format} is not a vertex attribute \
+                     format this driver can lower"
+                );
+                result = VK_ERROR_FEATURE_NOT_PRESENT;
+                continue;
+            }
+        };
         // The color-target formats: from the bound VkRenderPass's attachment in the classic path, or —
         // for a VK_KHR_dynamic_rendering pipeline (null renderPass) — from the
         // VkPipelineRenderingCreateInfo::pColorAttachmentFormats carried in the pNext chain.
@@ -420,6 +452,11 @@ pub extern "C" fn vkCreateGraphicsPipelines(
             })
         };
         let Some(color_formats) = color_formats else {
+            hl_log::hl_error!(
+                hl_log::tag::VULKAN,
+                "vkCreateGraphicsPipelines[{i}]: no color target format (renderPass={:#x})",
+                ci.render_pass
+            );
             result = VK_ERROR_UNKNOWN;
             continue;
         };
@@ -492,7 +529,17 @@ pub extern "C" fn vkCreateGraphicsPipelines(
         )));
         match r {
             Ok(h) => out[i] = h,
-            Err(e) => result = Status::from_error(&e),
+            Err(e) => {
+                // The entry point could not honour its contract. Without this the only symptom was the
+                // VkResult itself, which is how a host-side rejection of the lowered pipeline reached
+                // vkmark as a bare DEVICE_LOST with nothing anywhere saying why.
+                hl_log::hl_error!(
+                    hl_log::tag::VULKAN,
+                    "vkCreateGraphicsPipelines[{i}] failed: {e:?} -> {:?}",
+                    Status::from_error(&e)
+                );
+                result = Status::from_error(&e);
+            }
         }
     }
     result
