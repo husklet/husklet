@@ -332,9 +332,7 @@ impl HlState {
             // A destroyed surface's owed presentation feedback can never be answered `presented`; discard it
             // (per spec: content the client did not see) so the client's `wp_presentation_feedback` resolves.
             if let Some(feedbacks) = self.pending_presentation.remove(&sid) {
-                for feedback in feedbacks {
-                    feedback.discarded();
-                }
+                crate::adapter::smithay::state::frame::discard_owed(feedbacks, sid, "surface_destroyed");
             }
             // Re-present the owning root without the removed child: mark it dirty (so the compose is not
             // skipped as clean) and arm a repaint at the next refresh boundary. The serve loop's

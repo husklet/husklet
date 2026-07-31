@@ -1,5 +1,53 @@
 use super::*;
 
+/// Presentation feedback answered `discarded`, counted per surface per reason.
+static DISCARDED: crate::diagnostic::SharedTally<(SurfaceId, &'static str)> =
+    crate::diagnostic::SharedTally::new();
+
+/// Answer one `wp_presentation_feedback` with `discarded`, naming why.
+///
+/// `discarded` is how the compositor tells a client its frame was never shown, and a client that paces on
+/// presentation — Chrome's `BeginFrame` estimator does — stops producing when they keep arriving. Until
+/// now every one of these was sent silently, so a climbing `discarded` count on the client had no
+/// counterpart anywhere in the compositor. Several of these paths discard a frame that DID reach the
+/// screen, which no present-path diagnostic can account for by construction.
+fn discard(feedback: PresentationFeedbackCallback, surface: SurfaceId, reason: &'static str) {
+    hl_count!(tag::PRESENT, "presentation_discarded");
+    if let Some(count) = DISCARDED.record((surface, reason)) {
+        hl_log::hl_error!(
+            tag::PRESENT,
+            "presentation feedback discarded surface={} reason={reason} count={count} — the client is \
+             being told this frame was never shown; a climbing count starves a client that paces on \
+             presentation",
+            surface.0
+        );
+    }
+    feedback.discarded();
+}
+
+/// Discard a flat list of feedbacks owed by one surface, attributing each to `reason`.
+pub(in crate::adapter::smithay::state) fn discard_owed(
+    feedbacks: Vec<PresentationFeedbackCallback>,
+    surface: SurfaceId,
+    reason: &'static str,
+) {
+    for feedback in feedbacks {
+        discard(feedback, surface, reason);
+    }
+}
+
+/// Discard every feedback in a per-surface map, attributing each to `reason`.
+fn discard_all(
+    feedbacks: HashMap<SurfaceId, Vec<PresentationFeedbackCallback>>,
+    reason: &'static str,
+) {
+    for (surface, callbacks) in feedbacks {
+        for feedback in callbacks {
+            discard(feedback, surface, reason);
+        }
+    }
+}
+
 pub(super) struct HostFrame {
     root: SurfaceId,
     callbacks: HashMap<SurfaceId, Vec<WlCallback>>,
@@ -11,9 +59,7 @@ impl HlState {
         self.engine.cancel_root(root);
         self.pending_repaints.remove(&root);
         if let Some(host) = self.pending_host_frames.remove(&root) {
-            for feedback in host.feedbacks.into_values().flatten() {
-                feedback.discarded();
-            }
+            discard_all(host.feedbacks, "root_cancelled");
         }
     }
 
@@ -138,9 +184,7 @@ impl HlState {
                 self.repaint_surface(host.root);
             }
             crate::scene::service::FramePacing::TerminalFailure => {
-                for feedback in host.feedbacks.into_values().flatten() {
-                    feedback.discarded();
-                }
+                discard_all(host.feedbacks, "terminal_pacing");
                 self.repaint_surface(host.root);
             }
             crate::scene::service::FramePacing::Pending
@@ -177,9 +221,8 @@ impl HlState {
             .map(|timing| timing.present_ns)
             .or_else(crate::scene::port::clock::monotonic_nanos);
         let Some(present_ns) = present_ns else {
-            for feedback in feedbacks.into_values().flatten() {
-                feedback.discarded();
-            }
+            // The frame reached the screen; only the clock reading failed.
+            discard_all(feedbacks, "no_present_time");
             return;
         };
         let now = std::time::Duration::from_nanos(present_ns);
@@ -217,7 +260,10 @@ impl HlState {
                         });
                     feedback.presented(output, now, refresh, 0, kind);
                 } else {
-                    feedback.discarded();
+                    // `presented` cannot be sent without naming a wl_output, so a frame that DID reach the
+                    // screen is reported to the client as discarded. Nothing on the present path can
+                    // explain this one — it is a success being described as a failure.
+                    discard(feedback, surface, "no_output_handle");
                 }
             }
         }
@@ -348,20 +394,16 @@ impl HlState {
                 continue;
             };
             for feedback in feedbacks {
-                if presented {
-                    if let Some(output_handle) = &output_handle {
-                        feedback.presented(
-                            output_handle,
-                            now,
-                            refresh,
-                            0,
-                            wp_presentation_feedback::Kind::empty(),
-                        );
-                    } else {
-                        feedback.discarded();
-                    }
-                } else {
-                    feedback.discarded();
+                match (presented, &output_handle) {
+                    (true, Some(output_handle)) => feedback.presented(
+                        output_handle,
+                        now,
+                        refresh,
+                        0,
+                        wp_presentation_feedback::Kind::empty(),
+                    ),
+                    (true, None) => discard(feedback, sid, "no_output_handle"),
+                    (false, _) => discard(feedback, sid, "tree_not_presented"),
                 }
             }
         }

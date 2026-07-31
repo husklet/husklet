@@ -243,9 +243,11 @@ impl HlState {
             self.engine.clock().now_nanos(),
             |callback, time_ms| callback.done(time_ms),
         );
-        for feedback in deferred.feedbacks {
-            feedback.discarded();
-        }
+        crate::adapter::smithay::state::frame::discard_owed(
+            deferred.feedbacks,
+            deferred.surface,
+            "native_commit_discarded",
+        );
     }
 
     pub(in crate::adapter::smithay::state) fn finish_native(&mut self, ready: Ready) {
