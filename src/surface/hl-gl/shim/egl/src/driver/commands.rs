@@ -37,11 +37,7 @@ pub extern "C" fn glClearBufferfv(buffer: u32, drawbuffer: i32, value: *const f3
         if buffer == GL_COLOR {
             // SAFETY: the GLES contract requires four color components and null was rejected above.
             let c = unsafe { std::slice::from_raw_parts(value, 4) };
-            // This backend exposes one color attachment. Other valid draw-buffer selectors name absent
-            // attachments and therefore have no effect.
-            if drawbuffer == 0 {
-                record::clear_buffer_color(&mut s.gl, [c[0], c[1], c[2], c[3]]);
-            }
+            record::clear_buffer_color(&mut s.gl, drawbuffer as u32, [c[0], c[1], c[2], c[3]]);
         } else {
             // SAFETY: GL_DEPTH consumes exactly one component and null was rejected above.
             record::clear_depth(&mut s.gl, unsafe { *value });
@@ -65,12 +61,11 @@ pub extern "C" fn glClearBufferiv(buffer: u32, drawbuffer: i32, value: *const i3
         if buffer == GL_COLOR {
             // SAFETY: the GLES contract requires four color components and null was rejected above.
             let c = unsafe { std::slice::from_raw_parts(value, 4) };
-            if drawbuffer == 0 {
-                record::clear_buffer_color(
-                    &mut s.gl,
-                    [c[0] as f32, c[1] as f32, c[2] as f32, c[3] as f32],
-                );
-            }
+            record::clear_buffer_color(
+                &mut s.gl,
+                drawbuffer as u32,
+                [c[0] as f32, c[1] as f32, c[2] as f32, c[3] as f32],
+            );
         } else {
             // SAFETY: GL_STENCIL consumes exactly one component and null was rejected above.
             record::clear_stencil(&mut s.gl, unsafe { *value });
@@ -92,12 +87,11 @@ pub extern "C" fn glClearBufferuiv(buffer: u32, drawbuffer: i32, value: *const u
         }
         // SAFETY: the GLES contract requires four color components and null was rejected above.
         let c = unsafe { std::slice::from_raw_parts(value, 4) };
-        if drawbuffer == 0 {
-            record::clear_buffer_color(
-                &mut s.gl,
-                [c[0] as f32, c[1] as f32, c[2] as f32, c[3] as f32],
-            );
-        }
+        record::clear_buffer_color(
+            &mut s.gl,
+            drawbuffer as u32,
+            [c[0] as f32, c[1] as f32, c[2] as f32, c[3] as f32],
+        );
     });
 }
 

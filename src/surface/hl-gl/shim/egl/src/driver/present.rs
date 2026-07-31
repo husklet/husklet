@@ -30,6 +30,11 @@ static NATIVE_FRAMES: AtomicU64 = AtomicU64::new(0);
 /// Window frames that went through a `glReadPixels` readback because the app-surface presenter had no
 /// native frame to reserve. On a window surface this is always a degradation, never a normal route.
 static READBACK_FRAMES: AtomicU64 = AtomicU64::new(0);
+/// Every swap that produced a frame, whatever route it took. Separates "this client presented, but not
+/// through a window surface" from "this process never presented at all" — without it a `0/0` record is
+/// ambiguous between the two, and a reader cannot tell an instrument with nothing to say from proof that
+/// nothing was presented.
+static PRESENTED_FRAMES: AtomicU64 = AtomicU64::new(0);
 
 impl PresentStats {
     pub(crate) fn record_native() {
@@ -57,10 +62,15 @@ impl PresentStats {
         )
     }
 
+    pub(crate) fn presented() -> u64 {
+        PRESENTED_FRAMES.load(Ordering::Relaxed)
+    }
+
     /// The route a presented frame took. A window surface with no native frame reserved is the degraded
     /// readback route; anything else (pbuffer, surfaceless, a frame the submit never produced) is not
     /// this counter's business.
     fn record(prepared: &Prepared, wl_surface: usize) {
+        PRESENTED_FRAMES.fetch_add(1, Ordering::Relaxed);
         if prepared.native.is_some() {
             Self::record_native();
         } else if prepared.app_surface {
@@ -97,6 +107,15 @@ impl PresentStats {
         let Some(path) = Self::destination() else {
             return;
         };
+        // Say nothing until there is something to say. A record written before this process presented
+        // anything reads as `frames_native: 0` — indistinguishable from proof that the native path was
+        // never taken — and a reader treats an existing file as authoritative. No file is the honest
+        // answer for "this process has not presented", and it lets a reader fall through to another
+        // source instead of concluding failure from an instrument that never observed anything.
+        let (native, readback) = Self::counts();
+        if Self::presented() == 0 && native == 0 && readback == 0 {
+            return;
+        }
         // ~4 writes a second is far more resolution than a reader needs and keeps this off the hot path.
         const INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
         static LAST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
@@ -108,9 +127,16 @@ impl PresentStats {
             }
             *last = Some(now);
         }
-        let (native, readback) = Self::counts();
+        // The identity of the WRITER, so a reader can tell whether the counters came from the process it
+        // believes is presenting. A record from the wrong process explains a zero far more often than a
+        // driver that failed to present, and without this the two are indistinguishable.
+        let comm = std::fs::read_to_string("/proc/self/comm")
+            .map(|comm| comm.trim().replace(['"', '\\'], "_"))
+            .unwrap_or_default();
         let record = format!(
-            "{{\"frames_native\":{native},\"frames_readback\":{readback},\"pid\":{}}}\n",
+            "{{\"frames_native\":{native},\"frames_readback\":{readback},\
+             \"frames_presented\":{},\"pid\":{},\"comm\":\"{comm}\"}}\n",
+            Self::presented(),
             std::process::id()
         );
         let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
@@ -309,6 +335,34 @@ mod counter_publication {
             text.contains("\"frames_native\":2") && text.contains("\"frames_readback\":0"),
             "unexpected record {text:?}"
         );
+        // The writer identifies itself, so a reader can tell whether the counters came from the process
+        // it believes is presenting — a record from the wrong process explains a zero far more often
+        // than a driver that failed to present.
+        // The writer is the SUBPROCESS, so its pid is not this process's. What must hold is that the
+        // `%p` in the filename and the `pid` in the record name the SAME process — otherwise a reader
+        // cannot tell whether a zero came from the presenting client or from somewhere else entirely.
+        let file_name = written[0]
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("record file name");
+        let from_name: u32 = file_name
+            .trim_start_matches("counters-")
+            .trim_end_matches(".json")
+            .parse()
+            .expect("the filename must carry the writer's pid");
+        assert!(
+            text.contains(&format!("\"pid\":{from_name}")),
+            "the filename pid and the record pid must agree: {file_name} vs {text:?}"
+        );
+        assert_ne!(
+            from_name,
+            std::process::id(),
+            "the writer is the subprocess"
+        );
+        assert!(
+            text.contains("\"comm\":\"") && !text.contains("\"comm\":\"\""),
+            "the record must name the writing program: {text:?}"
+        );
         assert!(
             !written[0].to_string_lossy().contains("%p"),
             "the pid placeholder must be substituted, got {:?}",
@@ -321,5 +375,50 @@ mod counter_publication {
         assert_eq!(after, 1, "an unset HL_GL_COUNTERS must write nothing");
 
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// A process that has presented NOTHING must write no record at all.
+    ///
+    /// The first time these counters fired in anger they reported `frames_native: 0, frames_readback: 0`
+    /// for a run whose frames had already been captured, and the reader — which treats an existing record
+    /// as authoritative — turned that into "presented no frames through the native path; acceleration is
+    /// unprovable". But zero/zero was never a measurement: the counted path had not been entered. An
+    /// instrument with nothing to say must stay silent so the reader falls through to another source,
+    /// rather than manufacture proof of a failure it never observed.
+    #[test]
+    fn a_process_that_presented_nothing_writes_no_record() {
+        let directory = std::env::temp_dir().join(format!("hl-gl-silent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("scratch directory");
+
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        command
+            .args([
+                "--exact",
+                "--ignored",
+                "--nocapture",
+                // A body that publishes WITHOUT recording a present.
+                "driver::present::counter_publication::publish_without_presenting",
+            ])
+            .env("HL_GL_COUNTERS", directory.join("counters-%p.json"));
+        let output = command.output().expect("re-exec the test binary");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "the subprocess body must have run"
+        );
+
+        let written = std::fs::read_dir(&directory).expect("scratch").count();
+        assert_eq!(
+            written, 0,
+            "a driver that has presented nothing must publish nothing, not a zeroed record"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// The body for the test above: ask to publish having presented nothing.
+    #[test]
+    #[ignore = "driven as a subprocess by a_process_that_presented_nothing_writes_no_record"]
+    fn publish_without_presenting() {
+        PresentStats::publish();
     }
 }
