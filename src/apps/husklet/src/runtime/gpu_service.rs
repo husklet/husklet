@@ -188,9 +188,12 @@ impl ConnectionHandler for Connection {
                 if let Some(producer) = &self.presentations {
                     producer.cancel(&native_reservations);
                 }
-                hl_log::hl_log!(
+                // A rejected batch is a guest-input outcome, not a host fault: the runtime already rolled the
+                // frame back, so the session stays serving and only THIS submit fails. Report it at `error`
+                // — `warn` is compiled out of a release bundle, which is why this was previously invisible
+                // without the raw `eprintln!` beside it.
+                hl_log::hl_error!(
                     hl_log::tag::GPU,
-                    hl_log::Level::Warn,
                     "submit commands={} sequence={} encoded_bytes={} uploaded_bytes={} capture_encode_us={} execute_us={} verdict=nack error={error}",
                     batch.len(),
                     submit,
@@ -198,11 +201,6 @@ impl ConnectionHandler for Connection {
                     uploaded_bytes,
                     encode_elapsed.as_micros(),
                     execute_started.elapsed().as_micros()
-                );
-                eprintln!(
-                    "husklet gpu: rejected submit (commands={}, encoded_bytes={}): {error}",
-                    batch.len(),
-                    bytes
                 );
                 Verdict::Nack
             }
@@ -243,18 +241,15 @@ impl ConnectionHandler for Connection {
                 Some(bytes)
             }
             Err(error) => {
-                hl_log::hl_log!(
+                // Same shape as a rejected submit: the request fails, the connection keeps serving, and the
+                // reason has to survive a release build.
+                hl_log::hl_error!(
                     hl_log::tag::GPU,
-                    hl_log::Level::Warn,
                     "readback buffer={} offset={} requested_bytes={} elapsed_us={} verdict=nack error={error}",
                     request.id,
                     request.offset,
                     request.len,
                     started.elapsed().as_micros()
-                );
-                eprintln!(
-                    "husklet gpu: readback failed (buffer={}, offset={}, len={}): {error}",
-                    request.id, request.offset, request.len
                 );
                 None
             }
