@@ -97,10 +97,12 @@ fn main() {
             continue;
         }
         let required = BuildEnvironment::mandatory(arch_dir);
-        let linker = required
-            .then(|| std::env::var("HL_AARCH64_LINUX_CC").ok())
-            .flatten()
-            .unwrap_or_else(|| (*linker).to_owned());
+        let linker = match *arch_dir {
+            "aarch64" => std::env::var("HL_AARCH64_LINUX_CC").ok(),
+            "x86_64" => std::env::var("HL_X86_64_LINUX_CC").ok(),
+            _ => None,
+        }
+        .unwrap_or_else(|| (*linker).to_owned());
         if !BuildEnvironment::std_available(&sysroot, triple) {
             // aarch64 std is guaranteed on this host; a missing HOST std is a real, fail-loud error.
             if required {
