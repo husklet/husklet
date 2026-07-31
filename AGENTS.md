@@ -883,6 +883,14 @@ driver, and it was reported as one for hours. When results are internally implau
 before the subject — three harness defects in a single session all produced plausible-looking output, and
 the worst of them made the driver look broken in exactly the places a real driver plausibly breaks.
 
+A comment asserting an impossibility is load-bearing in a way an ordinary comment is not. It does not
+describe behaviour, it forecloses an option — so the next reader routes around it instead of evaluating it,
+and the routing becomes more code citing the comment. Re-derive an impossibility against the thing it
+claims about: one enumeration and one descriptor struct refuted a claim that had stood in five places.
+A shipped diagnostic explaining why something cannot be done deserves the same scrutiny as the code path,
+because it is the reason nobody investigates it — and unlike a comment it has an audience, so it goes on
+being believed after the code stops being true.
+
 A refusal proves nothing without a path that otherwise works. A test asserting that a bad input is rejected
 was measuring its own broken setup — every submission failed, so a null pointer and a valid one were
 refused identically and the assertions passed while establishing nothing. It surfaced only because a
