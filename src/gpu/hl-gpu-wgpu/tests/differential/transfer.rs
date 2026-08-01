@@ -727,6 +727,106 @@ pub(super) fn gen_mip_level(seed: u64) -> Prog {
     }
 }
 
+/// (6f) A DOWNSCALING blit from a MIPMAPPED source — which level does the sampler actually read?
+///
+/// The blit is the only path in which either backend samples a texture: the reference's rasterizer never
+/// does, and its sampler native is a marker that discards the descriptor, so a shader's level-of-detail
+/// selection is outside what it can model at all. This is therefore the ONE place a cross-level sampling
+/// disagreement can be compared, and it was not compared until now.
+///
+/// It found a real defect on the executor. `Enc::BlitTexture` names `src_sub.mip`, and both backends
+/// refuse a non-base subresource, so the operation always says level 0 — but the executor bound a source
+/// view spanning EVERY level and sampled it with `textureSample`, whose level of detail comes from the
+/// coordinate's derivative. An 8x8 four-level source blitted to 1x1 returned level 3, under both filters,
+/// because the sampler's mipmap filter is nearest while its LOD range was the default 0..32. Any
+/// application that downscales from a mipmapped texture got a different image than it asked for, on a
+/// path with no error anywhere.
+///
+/// The construction is what makes the level visible: each level is a DISTINCT FLAT COLOUR, so the level
+/// actually sampled falls straight out of the pixels rather than having to be inferred. And the blit
+/// DOWNSCALES by a large factor, because the derivative is what drives the selection — a same-size blit
+/// varies the coordinate but not the sampling rate, and would have returned level 0 whatever the view
+/// contained.
+pub(super) fn gen_mip_blit_downscale(seed: u64) -> Prog {
+    // Deep enough that a wrong level is far from the right one, and square so every level exists.
+    let base = 8u32;
+    let levels = 4u32;
+    let dst = 1 + (seed % 2) as u32; // 1x1 or 2x2 — both are steep downscales
+    let colour = |m: u32| {
+        let t = texel(seed.wrapping_add(m as u64 * 53));
+        [
+            t[0] as f32 / 255.0,
+            t[1] as f32 / 255.0,
+            t[2] as f32 / 255.0,
+            t[3] as f32 / 255.0,
+        ]
+    };
+    // Every level a distinct flat colour. Level 0 is flat too, so nearest and linear agree on it exactly
+    // and the category stays EXACT — the subject here is which level is read, not how it is filtered.
+    let mut encoder: Vec<Enc> = (0..levels)
+        .map(|m| Enc::ClearRect {
+            texture: 1,
+            x: 0,
+            y: 0,
+            w: base >> m,
+            h: base >> m,
+            color: colour(m),
+            base_array_layer: 0,
+            layer_count: 1,
+            mip_level: m,
+        })
+        .collect();
+    encoder.push(Enc::BlitTexture {
+        src: 1,
+        src_sub: TextureSubresource::base(),
+        src_origin: Origin3d::default(),
+        src_extent: Extent3d {
+            width: base,
+            height: base,
+            depth: 1,
+        },
+        dst: 2,
+        dst_sub: TextureSubresource::base(),
+        dst_origin: Origin3d::default(),
+        dst_extent: Extent3d {
+            width: dst,
+            height: dst,
+            depth: 1,
+        },
+        filter: if seed % 3 == 0 {
+            Filter::Linear
+        } else {
+            Filter::Nearest
+        },
+        mirror: Mirror::NONE,
+    });
+    Prog {
+        seed,
+        category: "mip_blit_downscale",
+        ops: vec!["ClearRect", "BlitTexture"],
+        cmds: vec![
+            Cmd::CreateTexture(
+                1,
+                TextureDesc {
+                    mip_levels: levels,
+                    ..tex(base, base)
+                },
+            ),
+            Cmd::CreateTexture(2, tex(dst, dst)),
+            Cmd::Submit(CommandBuffer {
+                encoder,
+                signal: None,
+            }),
+        ],
+        read: Read::Tex {
+            id: 2,
+            len: (dst * dst * 4) as usize,
+        },
+        tol: Tolerance::Unorm(0),
+        kernel: None,
+    }
+}
+
 /// (8) CROSS-FORMAT `BlitTexture`: a blit whose destination format DIFFERS from its source.
 ///
 /// This class was uncomparable because the two backends implemented different rules, and neither rule was

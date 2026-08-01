@@ -430,6 +430,19 @@ impl WgpuExecutor {
                 dimension: Some(wgpu::TextureViewDimension::D2),
                 base_array_layer: sub.layer,
                 array_layer_count: Some(1),
+                // Name the MIP LEVEL too, not only the layer. The view used to span every level the
+                // texture had, and the blit samples with `textureSample`, whose level of detail comes
+                // from the coordinate's derivative — so a DOWNSCALING blit from a mipmapped source
+                // selected a smaller level and returned its contents instead of the one the operation
+                // names. Measured with a level-per-colour source: an 8x8 four-level texture blitted to
+                // 1x1 returned level 3 where the operation said level 0, under BOTH filters, because the
+                // sampler's mipmap filter is nearest but its LOD range was the default 0..32.
+                //
+                // A blit addresses one subresource of each side by definition. Naming it in the view is
+                // the same correction the array layer needed and for the same reason; it also makes the
+                // destination view single-level, which a colour attachment must be.
+                base_mip_level: sub.mip,
+                mip_level_count: Some(1),
                 ..Default::default()
             }))
         };

@@ -430,6 +430,7 @@ const GENERATORS: &[fn(u64) -> Prog] = &[
     gen_clear_layered,
     gen_region_nonbase,
     gen_mip_level,
+    gen_mip_blit_downscale,
     gen_blit_cross_format,
     gen_copy_cross_format,
     gen_draw_flat,
