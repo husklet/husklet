@@ -1072,6 +1072,31 @@ is committed**, not the single-crate check. More generally, when you name a mech
 check that you ran it over the whole domain it claims to cover — the compiler will enumerate every site
 you let it see, and silently none of the ones you did not.
 
+**And `--workspace` is not the whole tree.** It covers the root `members` list, and five crates in this
+repository are deliberately outside it — each declares its own `[workspace]`, each depends on `hl-gpu`,
+and every one of them holds live construction sites of shared wire types:
+
+```text
+src/surface/hl-vulkan/shim/vulkan
+src/surface/hl-gl/shim/egl
+src/surface/hl-cuda/shim/cuda
+src/surface/hl-cuda/shim/cudart
+src/surface/hl-cuda/shim/nvml
+```
+
+They are separate because they build as guest `cdylib`s for another target, driven by their parent's
+build script rather than by the root workspace. The consequence is that the WIDEST check command in the
+repository still misses them: adding a required field to `hl_gpu::Mirror` produced a clean
+`cargo check --workspace --all-targets` while `shim/vulkan/src/transfer.rs` had an unbuildable
+`Mirror` literal in production code, discoverable only by running `cargo check --all-targets` from inside
+that crate. That is the same enumeration argument coming up one radius short a second time, and the first
+time it cost a broken shared tree.
+
+So a shared-type change needs the workspace check **and** a per-shim check, and a commit message that
+cites the workspace check alone is describing a narrower verification than it sounds like. The general
+form of the rule: before citing a build as exhaustive, ask which crates it actually compiles — a
+workspace member list is a curated set, not the filesystem.
+
 When extending a wire format, prefer the form where the compiler enumerates every construction site over a
 catch-all that lets sites silently keep the old meaning. A field added as required failed the build at
 twenty call sites, and that enumeration was the evidence the change had been considered everywhere.
