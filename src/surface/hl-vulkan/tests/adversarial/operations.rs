@@ -31,7 +31,7 @@ fn copy_buffer_to_image_usage_and_bounds_errors() {
 }
 
 #[test]
-fn copy_image_size_incompatibility_and_self_overlap_rejected() {
+fn copy_image_format_mismatch_and_self_overlap_rejected() {
     let mut d = dev();
     let mut s = sink();
     let a = create::create_image(
@@ -67,11 +67,10 @@ fn copy_image_size_incompatibility_and_self_overlap_rejected() {
     .unwrap();
     let cb = d.allocate_command_buffer();
     d.begin_command_buffer(cb, false).unwrap();
-    // A copy REINTERPRETS rather than converts, so the specification asks for size-compatible formats and
-    // not identical ones: RGBA8 into BGRA8 moves four bytes into four bytes and is legal. This asserted
-    // the opposite, which was correct about the driver of the time and wrong about the specification —
-    // the surface demanded equality where the IR beneath it requires only equal texel sizes.
-    assert!(
+    // Format mismatch. Stricter than Vulkan, deliberately: `Enc::CopyTextureToTexture` is reinterpreted
+    // by the oracle and converted by the executor, so a copy across formats has no single meaning to
+    // lower onto. See the refusal in `cmd_copy_image` for the full reasoning.
+    assert!(matches!(
         record::cmd_copy_image(
             &mut d,
             cb,
@@ -82,11 +81,10 @@ fn copy_image_size_incompatibility_and_self_overlap_rejected() {
             (0, 0),
             (0, 0),
             (4, 4)
-        )
-        .is_ok(),
-        "RGBA8 into BGRA8 is a size-compatible copy"
-    );
-    // The refusal that remains, and the control for the acceptance above: a genuine size change.
+        ),
+        Err(GpuError::Invalid(_))
+    ));
+    // A size change is refused by the same rule.
     assert!(matches!(
         record::cmd_copy_image(
             &mut d,

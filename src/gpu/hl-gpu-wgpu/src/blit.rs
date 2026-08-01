@@ -72,11 +72,27 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 /// both nearest and linear — so the pipeline map keys on format alone.
 pub(crate) struct BlitCache {
     module: wgpu::ShaderModule,
-    bind_group_layout: wgpu::BindGroupLayout,
-    pipeline_layout: wgpu::PipelineLayout,
+    /// Indexed by [`Filterable`]: the layout declaring a filterable float source, and the one declaring a
+    /// non-filterable float source with a non-filtering sampler.
+    bind_group_layout: [wgpu::BindGroupLayout; 2],
+    pipeline_layout: [wgpu::PipelineLayout; 2],
     nearest: wgpu::Sampler,
     linear: wgpu::Sampler,
-    pipelines: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
+    /// A non-filtering sampler, which is the only kind a `NonFiltering` binding accepts.
+    non_filtering: wgpu::Sampler,
+    pipelines: HashMap<(wgpu::TextureFormat, bool), wgpu::RenderPipeline>,
+}
+
+/// Whether a source format can be SAMPLED with filtering on this device.
+///
+/// WebGPU makes the 32-bit float formats non-filterable unless `FLOAT32_FILTERABLE` is enabled, and a
+/// bind group whose layout says `Float { filterable: true }` cannot take such a view at all — which is
+/// why this matters for NEAREST too. The blit declared filterable unconditionally, so a blit whose source
+/// was `R32Float` or `Rgba32Float` failed at bind-group creation with `InvalidTextureSampleType`
+/// regardless of the filter, although a nearest blit does no filtering and needs none of it.
+fn filterable(format: hl_gpu::protocol::model::enums::TextureFormat) -> bool {
+    use hl_gpu::protocol::model::enums::TextureFormat as F;
+    !matches!(format, F::R32Float | F::Rgba32Float)
 }
 
 impl BlitCache {
@@ -85,25 +101,32 @@ impl BlitCache {
             label: Some("hl-blit"),
             source: wgpu::ShaderSource::Wgsl(BLIT_WGSL.into()),
         });
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("hl-blit-bgl"),
+        // Two layouts, because the source's sample type is part of the layout and a non-filterable float
+        // view cannot bind to a filterable declaration. Built as a pair rather than lazily so the choice
+        // is visible in one place.
+        let layout_for = |can_filter: bool| device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some(if can_filter { "hl-blit-bgl" } else { "hl-blit-bgl-nonfilterable" }),
             entries: &[
-                // 0: the source texture (filterable float 2D).
+                // 0: the source texture (float 2D, filterable or not).
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        sample_type: wgpu::TextureSampleType::Float { filterable: can_filter },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
                     count: None,
                 },
-                // 1: a filtering sampler (nearest or linear picked per call).
+                // 1: the sampler. A non-filterable source admits only a NonFiltering sampler.
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    ty: wgpu::BindingType::Sampler(if can_filter {
+                        wgpu::SamplerBindingType::Filtering
+                    } else {
+                        wgpu::SamplerBindingType::NonFiltering
+                    }),
                     count: None,
                 },
                 // 2: the uv_off / uv_scale transform (16 bytes).
@@ -119,11 +142,19 @@ impl BlitCache {
                 },
             ],
         });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("hl-blit-pl"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
-        });
+        let bind_group_layout = [layout_for(true), layout_for(false)];
+        let pipeline_layout = [
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("hl-blit-pl"),
+                bind_group_layouts: &[&bind_group_layout[0]],
+                push_constant_ranges: &[],
+            }),
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("hl-blit-pl-nonfilterable"),
+                bind_group_layouts: &[&bind_group_layout[1]],
+                push_constant_ranges: &[],
+            }),
+        ];
         let sampler = |mode: wgpu::FilterMode, label: &str| {
             device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some(label),
@@ -142,25 +173,34 @@ impl BlitCache {
             pipeline_layout,
             nearest: sampler(wgpu::FilterMode::Nearest, "hl-blit-nearest"),
             linear: sampler(wgpu::FilterMode::Linear, "hl-blit-linear"),
+            non_filtering: sampler(wgpu::FilterMode::Nearest, "hl-blit-nonfiltering"),
             pipelines: HashMap::new(),
         }
     }
 
-    fn sampler(&self, filter: Filter) -> &wgpu::Sampler {
-        match filter {
-            Filter::Nearest => &self.nearest,
-            Filter::Linear => &self.linear,
+    fn sampler(&self, filter: Filter, can_filter: bool) -> &wgpu::Sampler {
+        match (can_filter, filter) {
+            // A non-filterable source is only ever reached with a nearest filter (linear is refused
+            // before this point), and its layout admits only the non-filtering sampler.
+            (false, _) => &self.non_filtering,
+            (true, Filter::Nearest) => &self.nearest,
+            (true, Filter::Linear) => &self.linear,
         }
     }
 
     /// Build (once) the blit render pipeline for a destination color `format`.
-    fn ensure_pipeline(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
-        if self.pipelines.contains_key(&format) {
+    fn ensure_pipeline(
+        &mut self,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        can_filter: bool,
+    ) {
+        if self.pipelines.contains_key(&(format, can_filter)) {
             return;
         }
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("hl-blit-pipeline"),
-            layout: Some(&self.pipeline_layout),
+            layout: Some(&self.pipeline_layout[usize::from(!can_filter)]),
             vertex: wgpu::VertexState {
                 module: &self.module,
                 entry_point: Some("vs_main"),
@@ -186,7 +226,7 @@ impl BlitCache {
             multiview: None,
             cache: None,
         });
-        self.pipelines.insert(format, pipeline);
+        self.pipelines.insert((format, can_filter), pipeline);
     }
 }
 
@@ -230,11 +270,19 @@ impl WgpuExecutor {
         // Source dims (for UV normalization) + destination wgpu format (the pipeline's color-target format).
         // A blit reads the source through a sampler and writes the destination as a color attachment, so both
         // must have a packed COLOR layout — the depth/stencil formats have none and are rejected honestly.
-        let (sw, sh) = {
+        let (sw, sh, can_filter) = {
             let t = texture::WgpuTexture::get(res, src)?;
             let _ = Format::from(t.format).texel_bytes()?;
-            (t.width, t.height)
+            (t.width, t.height, filterable(t.format))
         };
+        // LINEAR genuinely needs a filterable source; NEAREST does not, and used to be refused anyway
+        // because the bind-group layout declared filterable unconditionally. Only the linear case is a
+        // real limit, and it is one this device could lift by enabling `FLOAT32_FILTERABLE`.
+        if !can_filter && filter == Filter::Linear {
+            return Err(GpuError::Unsupported(
+                "wgpu: linear blit filter for a non-filterable source format",
+            ));
+        }
         let (dw, dh, dst_wfmt) = {
             let t = texture::WgpuTexture::get(res, dst)?;
             let _ = Format::from(t.format).texel_bytes()?;
@@ -281,7 +329,7 @@ impl WgpuExecutor {
         let device = &self.gpu.device;
         let queue = &self.gpu.queue;
         let cache = self.blit.as_mut().expect("blit cache initialized above");
-        cache.ensure_pipeline(device, dst_wfmt);
+        cache.ensure_pipeline(device, dst_wfmt, can_filter);
 
         // Per-call: the UV-transform uniform + the source-texture bind group.
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
@@ -300,7 +348,7 @@ impl WgpuExecutor {
         let dst_view = &texture::WgpuTexture::get(res, dst)?.view;
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("hl-blit-bg"),
-            layout: &cache.bind_group_layout,
+            layout: &cache.bind_group_layout[usize::from(!can_filter)],
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -308,7 +356,7 @@ impl WgpuExecutor {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(cache.sampler(filter)),
+                    resource: wgpu::BindingResource::Sampler(cache.sampler(filter, can_filter)),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -318,7 +366,7 @@ impl WgpuExecutor {
         });
         let pipeline = cache
             .pipelines
-            .get(&dst_wfmt)
+            .get(&(dst_wfmt, can_filter))
             .expect("pipeline built by ensure_pipeline above");
 
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {

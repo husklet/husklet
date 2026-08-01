@@ -62,21 +62,30 @@ pub(super) fn emit_scissor(d: &DrawCall, tw: i32, th: i32, bottom_up: bool) -> E
 }
 
 /// Lower a `glBlitFramebuffer` color sub-rect, flipping the GL bottom-left window rects into the render
-/// targets' top-left texel origin. The equal-size (non-scaling) case lowers to an exact
-/// `Enc::CopyTextureToTexture`; a SCALING case (source extent != destination extent) lowers to
-/// `Enc::BlitTexture` carrying `filter` (`GL_LINEAR`→`Filter::Linear`, `GL_NEAREST`→`Filter::Nearest`), which
-/// the executor resamples into the destination rect. Returns `None` only for a degenerate (empty) source or
-/// destination rect.
+/// targets' top-left texel origin.
+///
+/// A SCALING blit (source extent != destination extent) or one that CHANGES FORMAT lowers to
+/// `Enc::BlitTexture` carrying `filter`, which resamples and converts. Only an equal-size, same-format
+/// blit lowers to the exact `Enc::CopyTextureToTexture`, which moves bytes.
+///
+/// The format half was missing, and the two format parameters were plumbed in and then ignored — the
+/// signature said `_src_fmt` and `_dst_fmt`. So a non-scaling blit between differently formatted
+/// framebuffers became a byte REINTERPRET where `glBlitFramebuffer` is defined to convert: an
+/// `Rgba8Unorm` into a `Bgra8Unorm` attachment silently swapped every channel, reachable today through
+/// `GL_BGRA8_EXT` with no extension involved. Advertising float colour buffers widened it further, since
+/// a half-float source into an eight-bit attachment then differs in texel SIZE as well as meaning.
+///
+/// Returns `None` only for a degenerate (empty) source or destination rect.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn blit_copy_enc(
     src: &[i32; 4],
     dst: &[i32; 4],
     src_tex: u32,
     src_th: i32,
-    _src_fmt: TextureFormat,
+    src_fmt: TextureFormat,
     dst_tex: u32,
     dst_th: i32,
-    _dst_fmt: TextureFormat,
+    dst_fmt: TextureFormat,
     filter: Filter,
 ) -> Option<Enc> {
     let (sx0, sx1) = (src[0].min(src[2]), src[0].max(src[2]));
@@ -91,9 +100,11 @@ pub(super) fn blit_copy_enc(
     // GL y is bottom-left; a region's TOP row in a top-left texture is `height - y_max`.
     let src_oy = (src_th - sy1).max(0) as u32;
     let dst_oy = (dst_th - dy1).max(0) as u32;
-    if sw != dw || sh != dh {
-        // Scaling blit: resample the source rect into the (differently-sized) destination rect. The wgpu
-        // executor draws a filtered textured quad for this (its `Enc::BlitTexture` implementation).
+    if sw != dw || sh != dh || src_fmt != dst_fmt {
+        // Scaling OR format-changing blit: resample and convert the source rect into the destination
+        // rect. The wgpu executor draws a filtered textured quad for this (its `Enc::BlitTexture`
+        // implementation), which is what performs the conversion `glBlitFramebuffer` promises; the exact
+        // copy below cannot convert and must not be used when the formats disagree.
         return Some(Enc::BlitTexture {
             src: src_tex,
             src_sub: TextureSubresource::base(),

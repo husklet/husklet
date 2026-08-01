@@ -1269,16 +1269,23 @@ fn an_integer_blit_is_refused_and_says_whose_fault_it_is() {
     }
 }
 
-/// `vkCmdCopyImage` accepts SIZE-COMPATIBLE formats and refuses only a size change.
+/// `vkCmdCopyImage` requires IDENTICAL formats, which is stricter than Vulkan and deliberately so.
 ///
-/// A copy reinterprets rather than converts, so the specification asks for equal texel block size, not
-/// identical formats — and the IR agrees, since `CopyTextureToTexture` requires equal texel sizes and
-/// moves the bytes unchanged. Requiring identical formats was this surface's own rule.
+/// The specification asks only for size-compatible formats, because a copy reinterprets: RGBA8 into BGRA8
+/// moves four bytes unchanged and reads back channel-swapped. This surface could express that — I relaxed
+/// it to exactly that, having measured the executor ACCEPTING such a copy — and it was wrong, because
+/// "accepted without error" is not "produced the right bytes" and I did not check the second thing.
 ///
-/// The refusal is the control: a genuine size change must still fail, or this test would pass against a
-/// path that had simply stopped checking.
+/// A differential program written to pin the relaxed behaviour immediately caught it: the two backends
+/// produce DIFFERENT pixels for one command. `Enc::CopyTextureToTexture` is reinterpreted by the software
+/// oracle, which moves the bytes, and converted by the wgpu executor, which deliberately routes a
+/// mismatched pair through a blit so GL's converting copy paths work. A Vulkan copy must reinterpret, so
+/// it cannot ride an operation that might convert.
+///
+/// This test therefore pins the RESTRICTION and its reason, so the next person to notice that the
+/// specification is looser finds out why before relaxing it again.
 #[test]
-fn copy_image_accepts_size_compatible_formats_and_refuses_a_size_change() {
+fn copy_image_requires_identical_formats_until_the_ir_contract_is_settled() {
     let attempt = |src_format: u32, dst_format: u32| {
         let mut d = dev();
         let mut s = RecordingSink::with_full_caps();
@@ -1316,19 +1323,131 @@ fn copy_image_accepts_size_compatible_formats_and_refuses_a_size_change() {
         )
     };
 
-    assert!(
-        attempt(vk_format::R8G8B8A8_UNORM, vk_format::B8G8R8A8_UNORM).is_ok(),
-        "four bytes into four bytes is size-compatible, and a copy moves the bytes unchanged"
-    );
+    // The control, and the case that must never regress: identical formats copy.
     assert!(
         attempt(vk_format::R8G8B8A8_UNORM, vk_format::R8G8B8A8_UNORM).is_ok(),
-        "the identical-format case must keep working"
+        "the identical-format copy is the whole supported surface and must keep working"
     );
+    // Size-compatible but different meaning: legal Vulkan, refused here, for the reason above.
+    assert!(
+        matches!(
+            attempt(vk_format::R8G8B8A8_UNORM, vk_format::B8G8R8A8_UNORM),
+            Err(GpuError::Invalid(_))
+        ),
+        "a channel-order change would convert on one backend and reinterpret on the other"
+    );
+    // And a genuine size change stays refused by the same rule.
     assert!(
         matches!(
             attempt(vk_format::R8_UNORM, vk_format::R8G8B8A8_UNORM),
             Err(GpuError::Invalid(_))
         ),
-        "one byte into four is NOT size-compatible and must still be refused"
+        "one byte into four is not a copy under any reading"
+    );
+}
+
+/// `VK_FILTER_LINEAR` from a source format that cannot be linearly filtered is refused at RECORD time,
+/// and the nearest blit from the same format still records.
+///
+/// The 32-bit float formats are non-filterable in WebGPU without an optional feature, and Vulkan
+/// independently requires a source format to advertise linear filtering. The host was measured refusing
+/// exactly these two — and refusing them for BOTH filters until the blit's bind-group layout stopped
+/// declaring filterability unconditionally, which is a separate fix in the executor that this refusal is
+/// paired with: nearest now works there, so it must not be refused here.
+///
+/// The pairing is the whole test. Refusing linear while also refusing nearest would look identical from
+/// the outside and would be wrong, so the nearest arm is what distinguishes "this filter is unsupported"
+/// from "this format is unsupported".
+#[test]
+fn a_linear_blit_from_a_non_filterable_format_is_refused_but_nearest_records() {
+    for src_format in [vk_format::R32_SFLOAT, vk_format::R32G32B32A32_SFLOAT] {
+        let attempt = |linear: bool| {
+            let mut d = dev();
+            let mut s = RecordingSink::with_full_caps();
+            let a = create::create_image(
+                &mut d,
+                &mut s,
+                4,
+                4,
+                src_format,
+                vk_image_usage::TRANSFER_SRC,
+                1,
+            )
+            .unwrap();
+            let b = create::create_image(
+                &mut d,
+                &mut s,
+                4,
+                4,
+                vk_format::R8G8B8A8_UNORM,
+                vk_image_usage::TRANSFER_DST,
+                1,
+            )
+            .unwrap();
+            let cb = recording_cb(&mut d);
+            record::cmd_blit_image(
+                &mut d,
+                cb,
+                a,
+                b,
+                SubresourceLayers::base(),
+                SubresourceLayers::base(),
+                (0, 0),
+                (4, 4),
+                (0, 0),
+                (4, 4),
+                linear,
+            )
+        };
+        assert!(
+            attempt(false).is_ok(),
+            "{src_format:#x} records under VK_FILTER_NEAREST — no filtering is required"
+        );
+        assert!(
+            matches!(attempt(true), Err(GpuError::Unsupported(_))),
+            "{src_format:#x} cannot be linearly filtered, and that is OUR limit, not the caller's error"
+        );
+    }
+
+    // The control that keeps the refusal about the FORMAT: a filterable source takes linear happily.
+    let mut d = dev();
+    let mut s = RecordingSink::with_full_caps();
+    let a = create::create_image(
+        &mut d,
+        &mut s,
+        4,
+        4,
+        vk_format::R16G16B16A16_SFLOAT,
+        vk_image_usage::TRANSFER_SRC,
+        1,
+    )
+    .unwrap();
+    let b = create::create_image(
+        &mut d,
+        &mut s,
+        4,
+        4,
+        vk_format::R8G8B8A8_UNORM,
+        vk_image_usage::TRANSFER_DST,
+        1,
+    )
+    .unwrap();
+    let cb = recording_cb(&mut d);
+    assert!(
+        record::cmd_blit_image(
+            &mut d,
+            cb,
+            a,
+            b,
+            SubresourceLayers::base(),
+            SubresourceLayers::base(),
+            (0, 0),
+            (4, 4),
+            (0, 0),
+            (4, 4),
+            true,
+        )
+        .is_ok(),
+        "a half-float source IS filterable and must keep taking a linear blit"
     );
 }

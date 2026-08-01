@@ -17,6 +17,19 @@ const INTEGER_FORMATS: &[TextureFormat] = &[
     TextureFormat::Rgba8Sint,
 ];
 
+/// The colour formats that support LINEAR filtering. The 32-bit float formats are absent: WebGPU makes
+/// them non-filterable without an optional feature, Vulkan requires the format to advertise linear
+/// filtering, and the host was measured refusing exactly these two.
+const FILTERABLE: &[TextureFormat] = &[
+    TextureFormat::Rgba8Unorm,
+    TextureFormat::Bgra8Unorm,
+    TextureFormat::Rgba8Srgb,
+    TextureFormat::Bgra8Srgb,
+    TextureFormat::R8Unorm,
+    TextureFormat::Rg8Unorm,
+    TextureFormat::Rgba16Float,
+];
+
 fn is_integer(format: TextureFormat) -> bool {
     INTEGER_FORMATS.contains(&format)
 }
@@ -95,14 +108,23 @@ pub fn cmd_copy_image(
             "vkCmdCopyImage: source and destination layer counts differ",
         ));
     }
-    // A COPY reinterprets rather than converts, so the specification asks for SIZE-COMPATIBLE formats
-    // (equal texel block size) and not identical ones — `VK_FORMAT_R8G8B8A8_UNORM` into
-    // `VK_FORMAT_B8G8R8A8_UNORM` is a legal copy that moves the bytes unchanged. Demanding equality was
-    // this surface's own rule: the IR's `CopyTextureToTexture` requires equal texel sizes and copies the
-    // bytes, which is exactly the specification's contract.
-    if src_fmt.bytes_per_texel() != dst_fmt.bytes_per_texel() {
+    // STRICTER THAN THE SPECIFICATION, on purpose, and the reason is worth reading before relaxing it.
+    //
+    // Vulkan asks only for SIZE-COMPATIBLE formats here, because a copy reinterprets: RGBA8 into BGRA8 is
+    // a legal `vkCmdCopyImage` that moves four bytes unchanged and leaves the channels swapped when read
+    // through the destination's format. This surface could express that — except that the IR operation it
+    // would lower to has no agreed meaning across a format mismatch. `Enc::CopyTextureToTexture` is
+    // REINTERPRETED by the software oracle, which moves the bytes, and CONVERTED by the wgpu executor,
+    // which deliberately routes a mismatched pair through a blit so GL's converting copy paths work. The
+    // two backends therefore produce different pixels for the same command, which a differential program
+    // added while investigating this confirmed at once.
+    //
+    // A Vulkan copy must reinterpret, so it cannot ride an operation that might convert. Requiring
+    // identical formats is the only answer available until that IR contract is settled, and it fails
+    // closed rather than silently channel-swapping an application's image.
+    if src_fmt != dst_fmt {
         return Err(GpuError::Invalid(
-            "vkCmdCopyImage: source and destination formats are not size-compatible",
+            "vkCmdCopyImage: source and destination formats differ",
         ));
     }
     if src_usage & texture_usage::COPY_SRC == 0 || dst_usage & texture_usage::COPY_DST == 0 {
@@ -243,6 +265,16 @@ pub fn cmd_blit_image(
     if is_integer(src_fmt) {
         return Err(GpuError::Unsupported(
             "vkCmdBlitImage: blit of an integer format",
+        ));
+    }
+    // VK_FILTER_LINEAR requires the source format to support linear filtering, which the 32-bit float
+    // formats do not without an optional device feature — measured on the host, which refuses exactly
+    // these. Refused HERE so the caller gets an attributable answer at record time instead of a device
+    // validation failure later, which is the same improvement the integer refusal above makes. A NEAREST
+    // blit from one of these formats is fine and deliberately still records.
+    if linear && !FILTERABLE.contains(&src_fmt) {
+        return Err(GpuError::Unsupported(
+            "vkCmdBlitImage: VK_FILTER_LINEAR for a source format that cannot be linearly filtered",
         ));
     }
     if src_usage & texture_usage::COPY_SRC == 0 || dst_usage & texture_usage::COPY_DST == 0 {

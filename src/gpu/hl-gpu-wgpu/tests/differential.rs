@@ -106,6 +106,16 @@
 //!     blind spot, because a reader who remembers the gap should find its resolution and not just its
 //!     absence.
 //!
+//!   * `Enc::CopyTextureToTexture` ACROSS A FORMAT MISMATCH, which is not a coverage gap but an
+//!     UNSETTLED CONTRACT, and is recorded here because a program pinning either behaviour would freeze
+//!     the wrong one. The software oracle REINTERPRETS — it moves the bytes, which is what a Vulkan
+//!     `vkCmdCopyImage` requires. The wgpu executor CONVERTS, deliberately routing a mismatched pair
+//!     through a blit so GL's converting copy paths work (see `submit/transfer.rs`). Both are defensible
+//!     readings of an operation whose two callers want opposite things, and they produce different
+//!     pixels: a `Rgba8Unorm` into `Bgra8Unorm` copy was measured at 133 against 39 in the first channel.
+//!     Until the IR says which it means, `hl-vulkan` refuses a cross-format copy outright rather than
+//!     lowering onto it, and nothing here compares the case.
+//!
 //!   * BLENDING and CHANNEL MASKING into any target with no normalized reading. Both read the destination
 //!     back as normalized RGBA, which a one-channel, float or integer plane has none of, so the oracle
 //!     refuses them BY NAME rather than refusing the whole draw. Float blending is not advertised

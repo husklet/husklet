@@ -103,7 +103,7 @@ pub(crate) fn sample_bilinear(
     y_hi: usize,
     format: TextureFormat,
 ) -> Option<[f32; 4]> {
-    if INTEGER_FILTER_REFUSED.contains(&format) {
+    if INTEGER_FILTER_REFUSED.contains(&format) || FILTERABLE_REFUSED.contains(&format) {
         return None;
     }
     let gx = (fx - 0.5).clamp(x_lo as f32, x_hi as f32);
@@ -131,6 +131,15 @@ pub(crate) fn sample_bilinear(
 /// Formats whose texels are raw integers, for which a linear filter has no defined meaning. Both GL and
 /// Vulkan forbid linear filtering of an integer texture; averaging the values would produce a plausible
 /// number that no specification asks for.
+/// Formats the HOST cannot filter, so this reference must not either.
+///
+/// WebGPU makes the 32-bit float formats non-filterable unless `FLOAT32_FILTERABLE` is enabled, and the
+/// executor refuses a linear blit from one. This oracle could interpolate them perfectly well in
+/// software — and doing so would be the wrong kind of better: a reference that ACCEPTS what the subject
+/// refuses is a false divergence, the same defect as refusing what the subject performs. Vulkan agrees
+/// independently, forbidding a linear filter unless the source format supports linear filtering.
+const FILTERABLE_REFUSED: &[TextureFormat] = &[TextureFormat::R32Float, TextureFormat::Rgba32Float];
+
 const INTEGER_FILTER_REFUSED: &[TextureFormat] = &[
     TextureFormat::R8Uint,
     TextureFormat::R8Sint,
