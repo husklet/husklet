@@ -78,6 +78,90 @@ impl TextureFormat {
         })
     }
 
+    /// Whether this format's COLOUR channels are stored gamma-encoded. Alpha never is.
+    pub fn is_srgb(self) -> bool {
+        matches!(self, TextureFormat::Rgba8Srgb | TextureFormat::Bgra8Srgb)
+    }
+
+    /// The IEC 61966-2-1 sRGB OETF (linear-light optical → electrical), quantized to 8 bits.
+    pub fn srgb_encode(value: f32) -> u8 {
+        let x = value.clamp(0.0, 1.0);
+        let y = if x <= 0.0031308 {
+            x * 12.92
+        } else {
+            1.055 * x.powf(1.0 / 2.4) - 0.055
+        };
+        (y * 255.0 + 0.5) as u8
+    }
+
+    /// The IEC 61966-2-1 sRGB EOTF on a normalized value (electrical → linear-light optical).
+    pub fn srgb_to_linear(x: f32) -> f32 {
+        if x <= 0.04045 {
+            x / 12.92
+        } else {
+            ((x + 0.055) / 1.055).powf(2.4)
+        }
+    }
+
+    /// Pack a linear-light clear colour into ONE texel of this format, or `None` for a format that has no
+    /// defined packing of a normalized colour.
+    ///
+    /// This is a property of the format — a constant table, with one right answer per format — and it
+    /// lives here because it had been written out twice, once in the software oracle and once in the wgpu
+    /// backend, each claiming in a comment to match the other. They did not. The wgpu copy quantized every
+    /// channel linearly, so a `ClearRect` into an sRGB target stored 128 for linear 0.5 where the oracle
+    /// and the hardware ROP both store 188 — sixty unorm steps apart, and invisible to the differential
+    /// because its sRGB clear case takes the render-pass load op rather than `ClearRect`. Two hand-written
+    /// copies of a constant table do not buy independence, they buy drift.
+    ///
+    /// The genuine independence in the differential is untouched: wgpu's `LoadOp::Clear` is the hardware
+    /// ROP and never calls this. This serves `ClearRect` only, which wgpu has no fixed-function equivalent
+    /// for and must emulate by uploading bytes — there is no second implementation there to disagree with.
+    ///
+    /// Rules, and why each is what it is:
+    /// * A colour channel of an sRGB format is gamma-ENCODED; alpha is always a plain linear quantize.
+    /// * An 8-bit unorm channel is clamped to `0..=1` then quantized round-half-up, because that is the
+    ///   range its storage can represent.
+    /// * A FLOAT format is stored unclamped and ungamma'd. Clamping here would defeat the reason a float
+    ///   target exists, and would disagree with the load-op clear, which carries the value through.
+    /// * An INTEGER format answers `None` on purpose, not by omission. Its texels are raw numbers with no
+    ///   normalized reading, so a `[f32; 4]` has no defined mapping onto them; inventing one would write
+    ///   plausible wrong pixels. See `INTEGER_FORMATS` in `protocol::model::capability`, which keeps them
+    ///   out of the set every backend claims to materialize for exactly this reason.
+    pub fn clear_texel(self, color: [f32; 4]) -> Option<Vec<u8>> {
+        let unorm = |value: f32| (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        let channel = |value: f32| {
+            if self.is_srgb() {
+                Self::srgb_encode(value)
+            } else {
+                unorm(value)
+            }
+        };
+        let half = |value: f32| crate::protocol::model::half::from_f32(value).to_le_bytes();
+        Some(match self {
+            TextureFormat::Rgba8Unorm | TextureFormat::Rgba8Srgb => vec![
+                channel(color[0]),
+                channel(color[1]),
+                channel(color[2]),
+                unorm(color[3]),
+            ],
+            TextureFormat::Bgra8Unorm | TextureFormat::Bgra8Srgb => vec![
+                channel(color[2]),
+                channel(color[1]),
+                channel(color[0]),
+                unorm(color[3]),
+            ],
+            TextureFormat::R8Unorm => vec![unorm(color[0])],
+            TextureFormat::Rg8Unorm => vec![unorm(color[0]), unorm(color[1])],
+            TextureFormat::R32Float => color[0].to_le_bytes().to_vec(),
+            TextureFormat::Rgba16Float => color.iter().flat_map(|v| half(*v)).collect(),
+            TextureFormat::Rgba32Float => {
+                color.iter().flat_map(|v| v.to_le_bytes()).collect()
+            }
+            _ => return None,
+        })
+    }
+
     /// Bytes per texel to charge for *residency accounting*, for every format including the ones
     /// [`Self::bytes_per_texel`] cannot describe.
     ///
@@ -312,4 +396,137 @@ pub mod texture_usage {
     pub const COPY_DST: u32 = 1 << 4;
     /// Presentable to an HLP surface.
     pub const PRESENT: u32 = 1 << 5;
+}
+
+#[cfg(test)]
+mod clear_texel_tests {
+    use super::TextureFormat;
+    use crate::protocol::model::capability::{COLOR_FORMATS, INTEGER_FORMATS};
+
+    /// Colours chosen to separate wrong arithmetic from right arithmetic. Mid-range values survive almost
+    /// any mistake; the endpoints and the out-of-range values do not.
+    const COLORS: &[[f32; 4]] = &[
+        [0.0, 0.0, 0.0, 0.0],
+        [1.0, 1.0, 1.0, 1.0],
+        [0.5, 0.25, 0.75, 0.125],
+        [4.0, -2.5, 65504.0, 1.0e-9],
+        [-1.0, 2.0, 0.0, 1.0],
+    ];
+
+    /// Every format the capability set claims EVERY backend can materialize must have a clear packing.
+    ///
+    /// This is the assertion that would have caught the blocker: `COLOR_FORMATS` has listed the three
+    /// float formats all along while both `clear_texel` copies refused them, so a float colour buffer was
+    /// promised and could not be cleared. A capability claimed and not honoured is worse than one never
+    /// made, and this pins the two against each other so they cannot drift apart again.
+    #[test]
+    fn every_promised_colour_format_can_be_cleared() {
+        for &format in COLOR_FORMATS {
+            for &color in COLORS {
+                assert!(
+                    format.clear_texel(color).is_some(),
+                    "{format:?} is in COLOR_FORMATS and must have a clear packing for {color:?}"
+                );
+            }
+        }
+    }
+
+    /// The packed texel is exactly as wide as the format says it is. A clear that packs the wrong width
+    /// fills a plane at the wrong stride, which is as silent as a readback at the wrong stride.
+    #[test]
+    fn a_clear_texel_is_exactly_one_texel_wide() {
+        for &format in COLOR_FORMATS {
+            let texel = format.clear_texel([0.5, 0.5, 0.5, 1.0]).expect("promised");
+            assert_eq!(
+                Some(texel.len()),
+                format.bytes_per_texel(),
+                "{format:?} packs a texel of its own declared width"
+            );
+        }
+    }
+
+    /// The values themselves, named. One shared implementation makes the backends agree; it does not make
+    /// them right, so the rule's own answers are pinned separately from the agreement.
+    #[test]
+    fn the_packing_rule_answers_what_each_format_requires() {
+        // An sRGB colour channel is gamma-encoded and alpha is not: linear 0.5 stores 188, not 128. This
+        // is the value the wgpu copy got wrong, and `hl-gpu-wgpu/tests/srgb_target.rs` independently
+        // proves 188 is what the hardware ROP writes.
+        assert_eq!(
+            TextureFormat::Rgba8Srgb.clear_texel([0.5, 0.5, 0.5, 0.5]),
+            Some(vec![188, 188, 188, 128]),
+            "an sRGB target gamma-encodes colour and leaves alpha linear"
+        );
+        assert_eq!(
+            TextureFormat::Rgba8Unorm.clear_texel([0.5, 0.5, 0.5, 0.5]),
+            Some(vec![128, 128, 128, 128]),
+            "a linear target quantizes every channel the same way"
+        );
+        assert_eq!(
+            TextureFormat::Bgra8Srgb.clear_texel([1.0, 0.5, 0.0, 1.0]),
+            Some(vec![0, 188, 255, 255]),
+            "a BGRA target swaps blue and red, and still gamma-encodes"
+        );
+        assert_eq!(
+            TextureFormat::R8Unorm.clear_texel([1.0, 0.5, 0.5, 0.5]),
+            Some(vec![255]),
+            "a one-channel target packs one byte"
+        );
+        assert_eq!(
+            TextureFormat::Rgba8Unorm.clear_texel([4.0, -2.5, 0.0, 1.0]),
+            Some(vec![255, 0, 0, 255]),
+            "out-of-range clamps into a unorm, whose storage cannot hold anything else"
+        );
+
+        // A FLOAT target does NOT clamp. Clamping would defeat the reason it exists, and would disagree
+        // with the render-pass load op, which carries the value through to the hardware unchanged.
+        let half = |v: f32| crate::protocol::model::half::from_f32(v).to_le_bytes();
+        let mut expected = Vec::new();
+        for value in [4.0f32, -2.5, 65504.0, 1.0] {
+            expected.extend_from_slice(&half(value));
+        }
+        assert_eq!(
+            TextureFormat::Rgba16Float.clear_texel([4.0, -2.5, 65504.0, 1.0]),
+            Some(expected),
+            "a half-float target stores values outside 0..=1 rather than clamping them"
+        );
+        assert_eq!(
+            TextureFormat::Rgba32Float.clear_texel([4.0, -2.5, 0.0, 1.0]),
+            Some(
+                [4.0f32, -2.5, 0.0, 1.0]
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect::<Vec<u8>>()
+            ),
+            "a float target stores the value it was given"
+        );
+        assert_eq!(
+            TextureFormat::R32Float.clear_texel([4.0, 9.0, 9.0, 9.0]),
+            Some(4.0f32.to_le_bytes().to_vec()),
+            "a single-channel float target is one float, and ignores the channels it lacks"
+        );
+        assert!(
+            !TextureFormat::Rgba16Float.is_srgb() && !TextureFormat::Rgba32Float.is_srgb(),
+            "no float format is sRGB, so a clear into one is never gamma-encoded"
+        );
+    }
+
+    /// The integer formats answer "no packing" rather than inventing one, and that is a deliberate
+    /// refusal rather than an omission: their texels are raw numbers with no normalized reading, so a
+    /// `[f32; 4]` has no defined mapping onto them. The refusal is asserted together with the capability
+    /// set that justifies it, and the coverage test above is the positive control proving the path serves
+    /// everything that IS promised — without it, a rule that refused everything would pass this.
+    #[test]
+    fn the_integer_formats_are_refused_and_promised_by_neither() {
+        for &format in INTEGER_FORMATS {
+            assert!(
+                format.clear_texel([1.0, 0.0, 0.0, 1.0]).is_none(),
+                "{format:?} has no normalized clear packing and must not invent one"
+            );
+            assert!(
+                !COLOR_FORMATS.contains(&format),
+                "{format:?} must not be promised as a format every backend materializes"
+            );
+        }
+    }
 }

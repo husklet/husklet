@@ -63,7 +63,7 @@ pub(super) fn write_fragment(
         ];
         store_texel_linear(texel, order, srgb, out);
     } else {
-        let bytes = fmt.clear_texel(src)?;
+        let bytes = fmt.software_clear_texel(src)?;
         texel.copy_from_slice(&bytes);
     }
     // Restore the channels the mask leaves untouched (logical R,G,B,A at byte indices `order[0..4]`).

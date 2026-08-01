@@ -219,7 +219,7 @@ impl Upload {
                     .max(-1.0)
             }
             GL_HALF_FLOAT => {
-                crate::service::half::to_f32(u16::from_le_bytes(
+                hl_gpu::protocol::model::half::to_f32(u16::from_le_bytes(
                     pixel.get(base..base + 2)?.try_into().ok()?,
                 ))
             }
@@ -445,7 +445,7 @@ impl FloatTexel {
         match self {
             Self::Half4 => {
                 for channel in rgba {
-                    out.extend_from_slice(&crate::service::half::from_f32(channel).to_le_bytes());
+                    out.extend_from_slice(&hl_gpu::protocol::model::half::from_f32(channel).to_le_bytes());
                 }
             }
             Self::Single4 => {

@@ -1,13 +1,14 @@
 //! IEEE 754 binary16 ("half float") encode and decode.
 //!
-//! Two directions of one conversion, kept in one module so they cannot drift apart: the texture upload
-//! path encodes into a half-float plane ([`crate::service::upload`]) and the pixel readback path decodes
-//! out of one ([`crate::service::readpixels`]). A round trip through both must be the identity for every
-//! value half can represent, which is what the tests below pin.
+//! Two directions of one conversion, kept in one module so they cannot drift apart. It lives beside
+//! [`TextureFormat`](super::enums::TextureFormat) because `Rgba16Float` is what makes it necessary: the
+//! clear-colour packing there, the GL texture upload that fills such a plane, and the GL pixel readback
+//! that empties one are three callers across two crates, and a half-float encoder written out once per
+//! caller is the drift this codebase has already paid for elsewhere.
 //!
-//! This is a codec with no GL vocabulary in it and belongs in `packages/` once a second domain needs it;
-//! it lives here because both callers are in this crate today and moving it before that is true would be
-//! an abstraction without a concrete reason.
+//! A round trip through both directions must be the identity for every value half can represent, which is
+//! what the exhaustive test below pins — and which caught a subnormal decode whose exponent was one too
+//! low the first time it ran.
 
 /// IEEE 754 binary16 → binary32. Subnormals and infinities/NaN are carried through rather than flushed,
 /// because a half-float value is being read precisely when values outside `0..=1` matter.

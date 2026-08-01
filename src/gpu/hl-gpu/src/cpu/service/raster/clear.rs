@@ -7,7 +7,7 @@ pub(crate) fn clear_target(
         let t = texture(res, texture_id)?;
         (t.desc.format, t.desc.width, t.desc.height)
     };
-    let texel = fmt.clear_texel(color)?;
+    let texel = fmt.software_clear_texel(color)?;
     let t = texture_mut(res, texture_id)?;
     let n = (w * h) as usize;
     t.pixels.clear();
@@ -32,7 +32,7 @@ pub(crate) fn clear_rect(
         let t = texture(res, texture_id)?;
         (t.desc.format, t.desc.width, t.desc.height)
     };
-    let texel = fmt.clear_texel(color)?;
+    let texel = fmt.software_clear_texel(color)?;
     let bpt = texel.len();
     let x0 = x.min(tw) as usize;
     let y0 = y.min(th) as usize;

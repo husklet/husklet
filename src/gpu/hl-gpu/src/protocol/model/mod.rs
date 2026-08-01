@@ -6,5 +6,6 @@ pub mod command;
 pub mod descriptor;
 pub mod enums;
 pub mod error;
+pub mod half;
 pub mod id;
 pub mod kernel;

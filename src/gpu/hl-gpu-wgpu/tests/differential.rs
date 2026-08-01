@@ -57,6 +57,27 @@
 //!     `analytic_msaa_resolve` in the test body; these are counted + reported separately from the
 //!     oracle-compared programs.
 //!
+//! ## BLIND SPOTS — target classes this differential cannot see at all
+//!
+//! Recorded because a harness that cannot observe a class of target will report that class clean forever,
+//! and both of these hid a real defect until they were looked for directly.
+//!
+//!   * NON-4-CHANNEL COLOUR TARGETS, entirely. The oracle's rasterizer refuses to draw into any of them
+//!     (`cpu/service/raster.rs`: "software: draw into a non-4-channel color format"), so no program in
+//!     this battery can render into a one- or two-channel target, or into any FLOAT target. That is why
+//!     `glReadPixels` returned pure white for an 8x8 `GL_R8` colour attachment cleared to red — the
+//!     readback strided a one-byte plane at four bytes — while every case here stayed green. The
+//!     restriction is the ORACLE's, not the wgpu backend's; the executor renders these formats fine. So
+//!     the gap is coverage, not capability, and it is widest exactly where the driver is newest.
+//!   * `Enc::ClearRect` as a PACKING path. Every clear in this battery is unscissored and lands on the
+//!     render-pass load op, which on wgpu is the hardware ROP and never packs bytes in software. The
+//!     `ClearRect` path — a scissored clear, or a clear-only frame — is where wgpu EMULATES a clear by
+//!     uploading packed texels, and it had no oracle comparison here. It had silently drifted: an sRGB
+//!     `ClearRect` stored 128 for linear 0.5 where this file's own `gen_clear_srgb` note (and the ROP)
+//!     say 188. Both backends now call one packing rule on `TextureFormat`, and the byte-for-byte
+//!     comparison lives beside each of them as a unit test — `protocol::model::enums::clear_texel_tests`
+//!     and `convert::clear_texel_tests` — because it needs no adapter and this battery cannot reach it.
+//!
 //! A missing wgpu adapter FAILS this test; it is never skipped.
 
 use std::collections::BTreeSet;

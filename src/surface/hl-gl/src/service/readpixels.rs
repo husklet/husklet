@@ -86,7 +86,7 @@ impl TargetTexel {
             texel
                 .get(index * 2..index * 2 + 2)
                 .and_then(|bytes| bytes.try_into().ok())
-                .map_or(0.0, |bytes| crate::service::half::to_f32(u16::from_le_bytes(bytes)))
+                .map_or(0.0, |bytes| hl_gpu::protocol::model::half::to_f32(u16::from_le_bytes(bytes)))
         };
         match self.0 {
             // Bgra targets store [B,G,R,A]; every other eight-bit target stores its channels in order.
@@ -639,7 +639,7 @@ mod tests {
     /// control: they are what already worked and must be byte-identical.
     #[test]
     fn a_target_texel_decodes_to_the_channels_it_carries() {
-        let half = |value: f32| crate::service::half::from_f32(value).to_le_bytes();
+        let half = |value: f32| hl_gpu::protocol::model::half::from_f32(value).to_le_bytes();
 
         assert_eq!(
             TargetTexel(TextureFormat::Rgba8Unorm).rgba8(&[1, 2, 3, 4]),

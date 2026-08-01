@@ -75,31 +75,76 @@ impl Format {
             .ok_or(GpuError::Unsupported("wgpu: texture copy layout"))
     }
 
-    /// Pack a normalized clear color to a format's texel bytes (round-half-up), matching the CPU oracle's
-    /// `clear_texel` byte-for-byte — the `ClearRect` fill path uploads these bytes directly (the sub-rectangle
-    /// clear wgpu has no fixed-function equivalent for).
+    /// Pack a normalized clear colour into one texel, or a typed refusal naming THIS backend.
+    ///
+    /// The rule is the format's own ([`TextureFormat::clear_texel`]) rather than a second copy that claims
+    /// in a comment to match the oracle's. The copy this replaces did not match it: every channel was
+    /// quantized linearly, so a `ClearRect` into an sRGB target stored 128 for linear 0.5 where the oracle
+    /// and the hardware ROP store 188. Nothing caught it, because the differential's sRGB clear case goes
+    /// through the render-pass load op, which is the hardware ROP and never reaches here.
     pub fn clear_texel(self, color: [f32; 4]) -> Result<Vec<u8>> {
-        let to_u8 = |value: f32| (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-        Ok(match self.0 {
-            TextureFormat::Rgba8Unorm | TextureFormat::Rgba8Srgb => {
-                vec![
-                    to_u8(color[0]),
-                    to_u8(color[1]),
-                    to_u8(color[2]),
-                    to_u8(color[3]),
-                ]
+        self.0
+            .clear_texel(color)
+            .ok_or(GpuError::Unsupported("wgpu: ClearRect for this format"))
+    }
+}
+
+#[cfg(test)]
+mod clear_texel_tests {
+    use super::Format;
+    use hl_gpu::protocol::model::capability::{COLOR_FORMATS, INTEGER_FORMATS};
+
+    const COLORS: &[[f32; 4]] = &[
+        [0.0, 0.0, 0.0, 0.0],
+        [1.0, 1.0, 1.0, 1.0],
+        [0.5, 0.25, 0.75, 0.125],
+        [4.0, -2.5, 65504.0, 1.0e-9],
+        [-1.0, 2.0, 0.0, 1.0],
+    ];
+
+    /// The differential the pixel-level one cannot run: this backend and the software oracle must pack a
+    /// clear colour into IDENTICAL bytes, for every format the capability set promises.
+    ///
+    /// It lives here, as a unit test, because it needs no GPU adapter and because the rendered-pixel
+    /// differential is structurally blind to the question. Its sRGB clear case goes through the
+    /// render-pass load op — the hardware ROP, which never calls `clear_texel` — and its oracle cannot
+    /// draw into or clear any target the software rasterizer does not model. So `Enc::ClearRect`, the one
+    /// path where this backend EMULATES a clear by uploading packed bytes because wgpu has no
+    /// fixed-function equivalent, had no comparison against the oracle at all. It had also drifted: every
+    /// channel was quantized linearly here, so a `ClearRect` into an sRGB target stored 128 for linear 0.5
+    /// where the oracle and the ROP both store 188, while both copies carried a comment claiming to match
+    /// the other.
+    ///
+    /// Agreement is now structural — both call one rule on `TextureFormat` — so what this defends is that
+    /// the wgpu wrapper keeps DELEGATING rather than growing a copy again.
+    #[test]
+    fn this_backend_packs_the_same_bytes_as_the_shared_rule() {
+        for &format in COLOR_FORMATS {
+            for &color in COLORS {
+                let shared = format.clear_texel(color).expect("promised by COLOR_FORMATS");
+                let mine = Format::from(format)
+                    .clear_texel(color)
+                    .expect("this backend must serve every promised format");
+                assert_eq!(
+                    mine, shared,
+                    "{format:?} clear {color:?} must pack identically on both backends"
+                );
             }
-            TextureFormat::Bgra8Unorm | TextureFormat::Bgra8Srgb => {
-                vec![
-                    to_u8(color[2]),
-                    to_u8(color[1]),
-                    to_u8(color[0]),
-                    to_u8(color[3]),
-                ]
-            }
-            TextureFormat::R8Unorm => vec![to_u8(color[0])],
-            TextureFormat::Rg8Unorm => vec![to_u8(color[0]), to_u8(color[1])],
-            _ => return Err(GpuError::Unsupported("wgpu: ClearRect for this format")),
-        })
+        }
+    }
+
+    /// An integer format is refused here too, with THIS backend's message so a refusal still says who
+    /// refused. Paired with the agreement test above as its positive control: a wrapper that failed for
+    /// everything would satisfy the refusal on its own.
+    #[test]
+    fn an_integer_format_is_refused_with_this_backends_message() {
+        for &format in INTEGER_FORMATS {
+            assert!(
+                Format::from(format)
+                    .clear_texel([1.0, 0.0, 0.0, 1.0])
+                    .is_err(),
+                "{format:?} has no normalized clear packing"
+            );
+        }
     }
 }

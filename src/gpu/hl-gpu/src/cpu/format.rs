@@ -14,56 +14,17 @@ impl TextureFormat {
             .ok_or(GpuError::Unsupported("software: non-color texture format"))
     }
 
-    /// Convert a normalized (linear-light) color to packed bytes for the 8-bit color formats. Alpha — and
-    /// every channel of a LINEAR format — is a plain unorm quantize (round half up). A COLOR channel of an
-    /// sRGB format is gamma-ENCODED (the IEC 61966-2-1 linear→sRGB OETF) on write, exactly as the hardware ROP
-    /// does for a `LoadOp::Clear` or a non-blended (replace) draw into an sRGB target — so the oracle stores
-    /// e.g. 188 for linear 0.5, not the naive 128. (A BLENDED draw encodes via [`store_texel_linear`]; this is
-    /// the clear / replace-draw path.)
-    pub(crate) fn clear_texel(self, c: [f32; 4]) -> Result<Vec<u8>> {
-        let lin = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-        let col = |v: f32| {
-            if self.is_srgb() {
-                Self::srgb_encode(v)
-            } else {
-                lin(v)
-            }
-        };
-        Ok(match self {
-            TextureFormat::Rgba8Unorm | TextureFormat::Rgba8Srgb => {
-                vec![col(c[0]), col(c[1]), col(c[2]), lin(c[3])]
-            }
-            TextureFormat::Bgra8Unorm | TextureFormat::Bgra8Srgb => {
-                vec![col(c[2]), col(c[1]), col(c[0]), lin(c[3])]
-            }
-            TextureFormat::R8Unorm => vec![lin(c[0])],
-            TextureFormat::Rg8Unorm => vec![lin(c[0]), lin(c[1])],
-            _ => return Err(GpuError::Unsupported("software: clear for this format")),
-        })
+    /// Pack a normalized (linear-light) clear colour into one texel, or a typed refusal naming THIS
+    /// backend. The packing rule itself belongs to the format and is shared with the wgpu executor
+    /// ([`TextureFormat::clear_texel`]) — it used to be written out here and there separately, and the two
+    /// disagreed on sRGB. Only the error message is the oracle's own, so a refusal still says who refused.
+    pub(crate) fn software_clear_texel(self, c: [f32; 4]) -> Result<Vec<u8>> {
+        TextureFormat::clear_texel(self, c)
+            .ok_or(GpuError::Unsupported("software: clear for this format"))
     }
 
-    /// The IEC 61966-2-1 sRGB EOTF on a normalized [0,1] value (electrical → linear-light optical).
-    pub(crate) fn srgb_to_linear(x: f32) -> f32 {
-        if x <= 0.04045 {
-            x / 12.92
-        } else {
-            ((x + 0.055) / 1.055).powf(2.4)
-        }
-    }
     fn srgb_decode(v: u8) -> f32 {
         Self::srgb_to_linear(v as f32 / 255.0)
-    }
-    fn srgb_encode(v: f32) -> u8 {
-        let x = v.clamp(0.0, 1.0);
-        let y = if x <= 0.0031308 {
-            x * 12.92
-        } else {
-            1.055 * x.powf(1.0 / 2.4) - 0.055
-        };
-        (y * 255.0 + 0.5) as u8
-    }
-    pub(crate) fn is_srgb(self) -> bool {
-        matches!(self, TextureFormat::Rgba8Srgb | TextureFormat::Bgra8Srgb)
     }
 
     /// Logical-RGBA → byte-offset permutation for the oracle's 4-channel color formats. `Bgra*` stores blue

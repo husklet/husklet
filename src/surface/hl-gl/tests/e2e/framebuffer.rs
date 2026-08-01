@@ -296,3 +296,80 @@ fn glreadpixels_of_a_narrow_colour_attachment_reads_its_own_channel() {
         );
     }
 }
+
+/// A FLOAT colour buffer, end to end: allocate the plane, clear it, and read it back.
+///
+/// This is the case the float work exists for, and it needed five separate paths to be right before it
+/// could run at all. Four were allocation and upload; the fifth was the clear, which refused every float
+/// format on BOTH executors while `capability::COLOR_FORMATS` had listed all three as formats every
+/// backend materializes. The shape of that one was the dangerous part: an unscissored clear is normally
+/// folded into the render pass load op, so clear-plus-draw worked and clear-alone did not — and a
+/// clear-only frame is exactly what a test harness or a screenshot produces.
+///
+/// The RGBA8 arm is the control. R32Float is here because a single-channel float target is the case that
+/// separates "reads the plane" from "reads four bytes and calls them a pixel": it must report its one
+/// channel and leave green and blue at zero.
+#[test]
+fn a_float_colour_buffer_clears_and_reads_back() {
+    use hl_gpu::protocol::model::enums::TextureFormat;
+
+    for (plane, expected) in [
+        (TextureFormat::Rgba16Float, [255u8, 128, 0, 255]),
+        (TextureFormat::Rgba32Float, [255, 128, 0, 255]),
+        // One channel: the green the clear carried is not storable and must not be invented.
+        (TextureFormat::R32Float, [255, 0, 0, 255]),
+        (TextureFormat::Rgba8Unorm, [255, 128, 0, 255]),
+    ] {
+        let mut c = GlContext::new();
+        c.set_surface(GlSurface {
+            have: true,
+            width: W as u32,
+            height: H as u32,
+        });
+        let mut sink = cpu_sink();
+
+        let tex = c.textures.gen();
+        c.active_texture(GL_TEXTURE0);
+        record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
+        record::tex_image_2d_format(&mut c, W as i32, H as i32, &[], plane);
+        assert_eq!(
+            c.textures.get(tex).map(|t| t.data.len()),
+            Some(W * H * plane.bytes_per_texel().expect("a colour plane")),
+            "{plane:?} allocates a plane sized by its own texel"
+        );
+
+        let fbo = c.gen_framebuffer();
+        record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
+        record::framebuffer_texture_2d(
+            &mut c,
+            GL_FRAMEBUFFER,
+            GL_COLOR_ATTACHMENT0,
+            GL_TEXTURE_2D,
+            tex,
+            0,
+        );
+        assert_eq!(
+            record::check_framebuffer_status(&mut c, GL_FRAMEBUFFER),
+            GL_FRAMEBUFFER_COMPLETE,
+            "{plane:?} is a complete colour attachment"
+        );
+
+        // A clear with NO draw after it: the frame lowers to a clear-only submit, which is the path that
+        // becomes an `Enc::ClearRect` rather than a render-pass load op.
+        record::clear_color(&mut c, [1.0, 0.5, 0.0, 1.0]);
+        record::clear(&mut c);
+        let px = readpixels::read_pixels(&mut c, &mut sink, 0, 0, W as i32, H as i32, GL_RGBA)
+            .unwrap_or_else(|error| panic!("{plane:?} clear-only readback failed: {error:?}"));
+
+        let wrong = px
+            .chunks_exact(4)
+            .enumerate()
+            .find(|(_, texel)| *texel != expected);
+        assert!(
+            wrong.is_none(),
+            "{plane:?} must read back {expected:?} at every pixel; pixel {} is {:?}",
+            wrong.map_or(0, |(index, _)| index),
+            wrong.map(|(_, texel)| texel),
+        );
+    }
+}

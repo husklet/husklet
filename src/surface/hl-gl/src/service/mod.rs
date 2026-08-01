@@ -17,7 +17,6 @@ pub mod compute;
 pub mod config;
 pub mod es3;
 pub mod frame;
-pub mod half;
 pub mod intro;
 pub mod map;
 pub mod query;
