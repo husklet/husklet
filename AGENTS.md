@@ -1144,6 +1144,17 @@ the code it guards.
 defect was downstream and stopped there — downstream included a vendored dependency it could have read and
 edited, and the fault was two lines inside it.
 
+An instrument that exists and cannot speak is worse than a missing one, because the source then reads as
+well-instrumented and the next reader trusts its silence. Do not land a diagnostic until a run has shown
+it emitting; if it is added and proves mute, delete it rather than leaving it as decoration. Three traces
+were added to a guest driver in one session and all three printed nothing — read naively that said
+"textures are never uploaded", a dramatic and completely unsupported conclusion, and the only thing that
+stopped it being reported was counting lines by originating crate in the same log. The corollary bit
+immediately afterwards: a control that stays silent has not confirmed anything until you have shown the
+same channel carrying a message you know was sent, because "the subject said nothing" and "this channel
+drops messages" look identical. A raw `eprintln!` added to prove the point vanished too — from the crate
+whose logging was working nine lines later in the same run.
+
 A ratchet reports regression, not correctness, and a floor recorded as acceptable reads as a pass
 forever. `ci/glmark2-baseline.json` records `texture`, `build`, `bump`, `desktop`, `pulsar` and `shading`
 as `pixels-wrong`, and `glmark2_ratchet.py` fails only on a DROP below the recorded grade — so "glmark2 is
