@@ -924,6 +924,16 @@ build. Several discard lines were added in one session specifically to make a fa
 they make it attributable in a debug build only. Before claiming an instrument exists, check the level it
 emits at and whether anything enables it.
 
+Rank comments for audit by "claims a rule, cites no check". Six comments in one crate were found asserting
+rules the code did not implement — a rounding mode, a claim of matching another backend, a promise of
+refusals, and two sets described by a membership rule they did not follow. Every accurate comment in the
+same files named a specific cross-check: a test, a fuzzer, a divergence count. Every defective one named
+nothing checkable. That filter is far cheaper than re-deriving the arithmetic and it found all six.
+
+A set documented by a rule it does not follow is the dangerous direction, because the next person adds a
+member the rule admits and the code cannot serve. Document membership as an obligation the entry must meet,
+not as a category it falls into.
+
 A comment asserting an impossibility is load-bearing in a way an ordinary comment is not. It does not
 describe behaviour, it forecloses an option — so the next reader routes around it instead of evaluating it,
 and the routing becomes more code citing the comment. Re-derive an impossibility against the thing it
