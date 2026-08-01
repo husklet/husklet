@@ -1038,6 +1038,17 @@ them evidence rather than a claim. The same control caught three assertions pass
 the reference was refusing the case at creation time, so the test was re-asserting that refusal and
 learning nothing about the operation under test.
 
+Fail-first is not always available, and the honest substitute is mutation rather than a claim. A test
+written after the code it covers has never been observed failing, so nothing yet distinguishes it from a
+test that asserts something always true — and this fleet writes a great many tests after the fact. Break
+the rule the test guards, one rule at a time, and confirm that test and no other catches it. A registry
+landed this way had eight rules reverted individually and every one was caught by its own guard; the
+matrix went into the test file rather than into the report, because the next reader is opening the test.
+Say plainly which of the two you did. **A test whose reversion was never observed to fail is a claim, not
+evidence** — and where fail-first IS available, use it: the same session's next slice landed the plumbing
+with the check deliberately absent, watched the command succeed against a resource another session had
+mapped, then added the check.
+
 When extending a wire format, prefer the form where the compiler enumerates every construction site over a
 catch-all that lets sites silently keep the old meaning. A field added as required failed the build at
 twenty call sites, and that enumeration was the evidence the change had been considered everywhere.
