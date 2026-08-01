@@ -54,6 +54,23 @@ fn run(cmds: &[Cmd]) -> (hl_gpu::CpuExecutor, hl_gpu::Session) {
     (exec, s)
 }
 
+/// `run` for a program expected to FAIL: returns the typed error instead of panicking, so a refusal can
+/// be asserted alongside a control that must succeed.
+#[allow(dead_code)]
+fn try_run(cmds: &[Cmd]) -> hl_gpu::Result<()> {
+    let mut exec = hl_gpu::CpuExecutor::new();
+    exec.define_kernel(1, placeholder_shader());
+    let caps = exec.capabilities();
+    let mut limits = hl_gpu::Limits::from_capabilities(caps);
+    limits.copy_alignment = 1;
+    let mut s = hl_gpu::Session::new(
+        limits,
+        hl_gpu::GlobalLedger::unbounded(),
+        Box::new(hl_gpu::FakeClock::new(0)),
+    );
+    hl_gpu::runtime::submit(&mut s, &mut exec, 0, cmds).map(|_| ())
+}
+
 fn buf(size: u64, usage: u32) -> BufferDesc {
     BufferDesc {
         size,

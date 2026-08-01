@@ -177,6 +177,74 @@ impl TextureFormat {
         })
     }
 
+    /// Decode ONE texel of this format back to linear-light RGBA — the inverse of [`Self::clear_texel`],
+    /// and the operation any code that must INTERPOLATE texels needs.
+    ///
+    /// Kept beside its inverse so the two cannot drift, and round-tripped against it by test. Without it,
+    /// the software bilinear sampler read every plane as unsigned bytes and averaged them: blitting a
+    /// half-float 2x1 down to 1x1 with a linear filter averaged the BYTES of the two encodings, so
+    /// (1.0, 0, 0, 1) and (0, 0, 1.0, 1) produced 0.0059 where the answer is 0.5 — the mean of the high
+    /// bytes `0x3C` and `0x00` reassembled as `0x1E00`. Its alpha came out right, because both texels
+    /// happened to carry identical alpha bytes, which is exactly the kind of channel that makes a wrong
+    /// path look correct.
+    ///
+    /// Channels the format does not carry read as zero, and an absent alpha reads as one, matching the
+    /// rule a sampler applies. Returns `None` for a format with no plain-colour texel — the depth/stencil
+    /// and block-compressed ones — for the same reason [`Self::clear_texel`] does.
+    pub fn texel_to_f32(self, texel: &[u8]) -> Option<[f32; 4]> {
+        let byte = |index: usize| texel.get(index).copied().unwrap_or(0);
+        // An sRGB colour channel is stored gamma-encoded, so decoding it is where the transfer function
+        // is undone; alpha is linear in both directions.
+        let colour = |index: usize| {
+            if self.is_srgb() {
+                Self::srgb_to_linear(byte(index) as f32 / 255.0)
+            } else {
+                byte(index) as f32 / 255.0
+            }
+        };
+        let unorm = |index: usize| byte(index) as f32 / 255.0;
+        let single = |index: usize| {
+            texel
+                .get(index * 4..index * 4 + 4)
+                .and_then(|b| b.try_into().ok())
+                .map_or(0.0, f32::from_le_bytes)
+        };
+        let half = |index: usize| {
+            texel
+                .get(index * 2..index * 2 + 2)
+                .and_then(|b| b.try_into().ok())
+                .map_or(0.0, |b| super::half::to_f32(u16::from_le_bytes(b)))
+        };
+        Some(match self {
+            TextureFormat::Rgba8Unorm | TextureFormat::Rgba8Srgb => {
+                [colour(0), colour(1), colour(2), unorm(3)]
+            }
+            TextureFormat::Bgra8Unorm | TextureFormat::Bgra8Srgb => {
+                [colour(2), colour(1), colour(0), unorm(3)]
+            }
+            TextureFormat::R8Unorm => [unorm(0), 0.0, 0.0, 1.0],
+            TextureFormat::Rg8Unorm => [unorm(0), unorm(1), 0.0, 1.0],
+            TextureFormat::R32Float => [single(0), 0.0, 0.0, 1.0],
+            TextureFormat::Rgba16Float => [half(0), half(1), half(2), half(3)],
+            TextureFormat::Rgba32Float => [single(0), single(1), single(2), single(3)],
+            // Raw integer values, matching the direction `clear_texel` packs them.
+            TextureFormat::R8Uint => [byte(0) as f32, 0.0, 0.0, 1.0],
+            TextureFormat::Rg8Uint => [byte(0) as f32, byte(1) as f32, 0.0, 1.0],
+            TextureFormat::Rgba8Uint => {
+                [byte(0) as f32, byte(1) as f32, byte(2) as f32, byte(3) as f32]
+            }
+            TextureFormat::R8Sint => [byte(0) as i8 as f32, 0.0, 0.0, 1.0],
+            TextureFormat::Rg8Sint => [byte(0) as i8 as f32, byte(1) as i8 as f32, 0.0, 1.0],
+            TextureFormat::Rgba8Sint => [
+                byte(0) as i8 as f32,
+                byte(1) as i8 as f32,
+                byte(2) as i8 as f32,
+                byte(3) as i8 as f32,
+            ],
+            _ => return None,
+        })
+    }
+
     /// Bytes per texel to charge for *residency accounting*, for every format including the ones
     /// [`Self::bytes_per_texel`] cannot describe.
     ///
@@ -524,6 +592,59 @@ mod clear_texel_tests {
             !TextureFormat::Rgba16Float.is_srgb() && !TextureFormat::Rgba32Float.is_srgb(),
             "no float format is sRGB, so a clear into one is never gamma-encoded"
         );
+    }
+
+    /// `texel_to_f32` is the inverse of `clear_texel` for every format that has both.
+    ///
+    /// Round-tripped rather than spot-checked, because the two are a pair and the failure mode is drift
+    /// between them — the same failure that put a byte-averaging sampler in the blit path, where nothing
+    /// related an encoding to its decoding at all. sRGB is in the loop deliberately: it is the only format
+    /// family where the two directions are not each other's obvious mirror, so it is where a mismatched
+    /// transfer function would hide.
+    #[test]
+    fn decoding_a_texel_inverts_packing_it() {
+        for &format in COLOR_FORMATS {
+            for &color in COLORS {
+                let packed = format.clear_texel(color).expect("promised");
+                let decoded = format.texel_to_f32(&packed).expect("its own inverse exists");
+                let repacked = format.clear_texel(decoded).expect("promised");
+                assert_eq!(
+                    repacked, packed,
+                    "{format:?} must decode {color:?} back to something that re-packs identically"
+                );
+            }
+        }
+    }
+
+    /// Channels a format does not carry decode as zero, and an absent alpha as one — the rule a sampler
+    /// applies, and the reason a one-channel plane blitted into does not acquire a green channel.
+    #[test]
+    fn a_decoded_texel_reports_only_the_channels_the_format_has() {
+        assert_eq!(
+            TextureFormat::R8Unorm.texel_to_f32(&[255]),
+            Some([1.0, 0.0, 0.0, 1.0])
+        );
+        assert_eq!(
+            TextureFormat::Rg8Unorm.texel_to_f32(&[255, 128]),
+            Some([1.0, 128.0 / 255.0, 0.0, 1.0])
+        );
+        // sRGB decodes the colour channels and leaves alpha linear: 188 is the stored form of linear 0.5.
+        let srgb = TextureFormat::Rgba8Srgb
+            .texel_to_f32(&[188, 188, 188, 128])
+            .expect("an sRGB texel decodes");
+        assert!(
+            (srgb[0] - 0.5).abs() < 0.005,
+            "an sRGB colour channel decodes through the transfer function, got {}",
+            srgb[0]
+        );
+        assert!(
+            (srgb[3] - 128.0 / 255.0).abs() < 1e-6,
+            "and alpha does not, got {}",
+            srgb[3]
+        );
+        // A format with no plain-colour texel has no decoding, exactly as it has no packing.
+        assert!(TextureFormat::Depth32Float.texel_to_f32(&[0; 4]).is_none());
+        assert!(TextureFormat::Bc1RgbaUnorm.texel_to_f32(&[0; 8]).is_none());
     }
 
     /// An integer target is cleared from RAW VALUES, and is still not promised as a fully materializable

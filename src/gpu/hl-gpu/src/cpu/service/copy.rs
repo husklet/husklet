@@ -310,6 +310,9 @@ pub(crate) fn blit_texture(
                     let sy = (fy as usize).clamp(soy, soy + seh - 1);
                     texel_at(&src_pixels, sw, sx, sy, bpt).to_vec()
                 }
+                // A linear filter the oracle cannot define for this plane is a typed refusal, not a
+                // fallback to nearest: silently changing the filter would make the blit disagree with the
+                // executor and look like a filtering difference rather than an unsupported operation.
                 Filter::Linear => sample_bilinear(
                     &src_pixels,
                     sw,
@@ -321,7 +324,10 @@ pub(crate) fn blit_texture(
                     soy,
                     soy + seh - 1,
                     src_fmt,
-                ),
+                )
+                .ok_or(GpuError::Unsupported(
+                    "software: linear filter for this texel format",
+                ))?,
             };
             let hlx = dst_origin.x as usize + dx;
             let hly = dst_origin.y as usize + dy;

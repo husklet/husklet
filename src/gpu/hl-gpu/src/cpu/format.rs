@@ -76,9 +76,20 @@ pub(crate) fn texel_at(pixels: &[u8], tex_w: usize, x: usize, y: usize, bpt: usi
     &pixels[off..off + bpt]
 }
 
-/// Bilinearly sample a tight-packed color plane at fractional `(fx, fy)` (in absolute texel space),
-/// clamping neighbors to `[lo, hi]` in each axis — the oracle's `Filter::Linear` blit path.
-#[allow(clippy::too_many_arguments)]
+/// Bilinearly sample a tight-packed colour plane at fractional `(fx, fy)` (in absolute texel space),
+/// clamping neighbours to `[lo, hi]` in each axis — the oracle's `Filter::Linear` blit path.
+///
+/// Interpolation happens on VALUES, decoded through the format's own rule and re-encoded through its
+/// inverse. It used to happen on raw BYTES: every plane was read as `bpt` independent unsigned-normalized
+/// channels, which is right for the eight-bit formats by coincidence of layout and meaningless for any
+/// other. A half-float 2x1 blitted down to 1x1 averaged the two encodings byte-wise, so (1.0, 0, 0, 1)
+/// and (0, 0, 1.0, 1) gave 0.0059 instead of 0.5 — the mean of the high bytes `0x3C` and `0x00` read back
+/// as `0x1E00`. Nothing caught it: no test blitted a float plane, and the alpha channel came out correct
+/// because both texels carried identical alpha bytes.
+///
+/// A format with no plain-colour texel yields `None`, as does an INTEGER format — averaging raw integers
+/// has no defined meaning and both GL and Vulkan forbid linear filtering of integer textures. The caller
+/// turns that into a typed refusal.
 pub(crate) fn sample_bilinear(
     pixels: &[u8],
     tex_w: usize,
@@ -90,7 +101,10 @@ pub(crate) fn sample_bilinear(
     y_lo: usize,
     y_hi: usize,
     format: TextureFormat,
-) -> Vec<u8> {
+) -> Option<Vec<u8>> {
+    if INTEGER_FILTER_REFUSED.contains(&format) {
+        return None;
+    }
     let gx = (fx - 0.5).clamp(x_lo as f32, x_hi as f32);
     let gy = (fy - 0.5).clamp(y_lo as f32, y_hi as f32);
     let x0 = gx.floor() as usize;
@@ -99,27 +113,25 @@ pub(crate) fn sample_bilinear(
     let y1 = (y0 + 1).min(y_hi);
     let tx = gx - x0 as f32;
     let ty = gy - y0 as f32;
-    let p00 = texel_at(pixels, tex_w, x0, y0, bpt);
-    let p10 = texel_at(pixels, tex_w, x1, y0, bpt);
-    let p01 = texel_at(pixels, tex_w, x0, y1, bpt);
-    let p11 = texel_at(pixels, tex_w, x1, y1, bpt);
-    let mut out = Vec::with_capacity(bpt);
-    for c in 0..bpt {
-        let cv = |v: u8| {
-            if c < 3 && format.is_srgb() {
-                TextureFormat::srgb_decode(v)
-            } else {
-                v as f32 / 255.0
-            }
-        };
-        let top = cv(p00[c]) * (1.0 - tx) + cv(p10[c]) * tx;
-        let bot = cv(p01[c]) * (1.0 - tx) + cv(p11[c]) * tx;
-        let v = top * (1.0 - ty) + bot * ty;
-        out.push(if c < 3 && format.is_srgb() {
-            TextureFormat::srgb_encode(v)
-        } else {
-            (v * 255.0 + 0.5) as u8
-        });
+    let at = |x: usize, y: usize| format.texel_to_f32(texel_at(pixels, tex_w, x, y, bpt));
+    let (p00, p10, p01, p11) = (at(x0, y0)?, at(x1, y0)?, at(x0, y1)?, at(x1, y1)?);
+    let mut rgba = [0.0f32; 4];
+    for c in 0..4 {
+        let top = p00[c] * (1.0 - tx) + p10[c] * tx;
+        let bot = p01[c] * (1.0 - tx) + p11[c] * tx;
+        rgba[c] = top * (1.0 - ty) + bot * ty;
     }
-    out
+    format.clear_texel(rgba)
 }
+
+/// Formats whose texels are raw integers, for which a linear filter has no defined meaning. Both GL and
+/// Vulkan forbid linear filtering of an integer texture; averaging the values would produce a plausible
+/// number that no specification asks for.
+const INTEGER_FILTER_REFUSED: &[TextureFormat] = &[
+    TextureFormat::R8Uint,
+    TextureFormat::R8Sint,
+    TextureFormat::Rg8Uint,
+    TextureFormat::Rg8Sint,
+    TextureFormat::Rgba8Uint,
+    TextureFormat::Rgba8Sint,
+];
