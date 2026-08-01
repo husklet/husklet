@@ -390,3 +390,63 @@ fn a_texture_view_is_refused_rather_than_modelled_as_a_copy() {
         "a non-base view keeps the narrower message, got {err:?}"
     );
 }
+
+/// A MULTISAMPLED texture cannot take part in a blit, and both backends say so.
+///
+/// This reference has refused the pair from the start. The executor did not check at all until a test
+/// binding its attachment grant to its guards was written and failed on its first run: a multisampled
+/// destination reached `RenderPass::end` as `IncompatibleSampleCount`, naming the blit pipeline rather
+/// than the texture the caller passed. The reference was the correct side and nothing recorded the
+/// agreement, so this pins it from here.
+///
+/// Multisampled content reaches a blit only after `ResolveTexture` has made it single-sampled, which is
+/// that operation's entire purpose.
+#[test]
+fn a_multisampled_texture_is_refused_by_a_blit_on_both_sides() {
+    // Both copy usages, or the destination case is refused for lacking COPY_DST before the sample count
+    // is ever consulted — a refusal that looks identical to the one under test if only `is_err` were
+    // asserted. Asserting the REASON is what surfaced it.
+    let msaa = TextureDesc {
+        sample_count: 4,
+        ..layered(2, 2, 1, COPYABLE | texture_usage::RENDER_TARGET)
+    };
+    let plain = layered(2, 2, 1, COPYABLE | texture_usage::RENDER_TARGET);
+    let extent = Extent3d {
+        width: 2,
+        height: 2,
+        depth: 1,
+    };
+    let blit = |src: u32, dst: u32| Enc::BlitTexture {
+        src,
+        src_sub: TextureSubresource::base(),
+        src_origin: Origin3d::default(),
+        src_extent: extent,
+        dst,
+        dst_sub: TextureSubresource::base(),
+        dst_origin: Origin3d::default(),
+        dst_extent: extent,
+        filter: Filter::Nearest,
+        mirror: Mirror::NONE,
+    };
+    let attempt = |op: Enc| {
+        try_run(&[
+            Cmd::CreateTexture(1, msaa.clone()),
+            Cmd::CreateTexture(2, plain.clone()),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![op],
+                signal: None,
+            }),
+        ])
+    };
+
+    // Positive control: plain to plain runs, so the refusals are about the sample count.
+    assert!(attempt(blit(2, 2)).is_ok(), "a single-sampled blit must run");
+
+    for (op, side) in [(blit(1, 2), "source"), (blit(2, 1), "destination")] {
+        let err = attempt(op).expect_err("a multisampled side must be refused");
+        assert!(
+            matches!(err, GpuError::Unsupported(m) if m.contains("multisample")),
+            "a multisampled {side} must be refused by name, got {err:?}"
+        );
+    }
+}

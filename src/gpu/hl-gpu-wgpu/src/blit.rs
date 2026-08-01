@@ -276,6 +276,25 @@ impl WgpuExecutor {
         {
             return Err(GpuError::Invalid("wgpu: blit with a zero-sized region"));
         }
+        // A MULTISAMPLED texture on either side cannot take part. The blit resamples by RENDERING: it
+        // binds the source to a single-sampled `texture_2d<f32>` and draws into the destination with a
+        // pipeline built at sample count 1. A multisampled destination therefore fails the pass's
+        // pipeline-compatibility check and a multisampled source cannot bind at all — both as device
+        // validation, out of the pass, naming the pipeline rather than the texture the caller passed.
+        //
+        // Measured before this existed: a multisampled destination produced `IncompatibleSampleCount`
+        // at `RenderPass::end`. The software reference has refused this pair from the start
+        // ("software: multisample blit"), so the executor was the side out of step; multisampled content
+        // reaches a blit only after `ResolveTexture` has made it single-sampled, which is that
+        // operation's whole purpose.
+        for (id, refusal) in [
+            (src, "wgpu: multisample blit source (resolve first)"),
+            (dst, "wgpu: multisample blit destination"),
+        ] {
+            if texture::WgpuTexture::get(res, id)?.sample_count != 1 {
+                return Err(GpuError::Unsupported(refusal));
+            }
+        }
 
         // Source dims (for UV normalization) + destination wgpu format (the pipeline's color-target format).
         // A blit reads the source through a sampler and writes the destination as a color attachment, so both
