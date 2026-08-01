@@ -358,10 +358,77 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
                     .len();
             copy::check_len(d_len, *dst_offset, dst_span)?;
         }
-        Enc::CopyBufferToTextureRegion { .. } | Enc::CopyTextureToBufferRegion { .. } => {
-            return Err(GpuError::Unsupported(
-                "software: layered or offset buffer-texture copy",
-            ));
+        // The REGION copies, which are the only channel either backend has for observing a non-base
+        // layer, slice or face. Refused as a whole op class until the reference materialized one plane
+        // per layer; served now, at every layer and sub-rect the executor serves — measured against it,
+        // including that it bounds-checks a layer past the end rather than clamping.
+        //
+        // A non-zero MIP is the one thing the executor serves here that this reference cannot: it
+        // round-trips mip 1 of a two-level texture, and only level 0 is materialized here. Refused by
+        // name, narrower than the subject rather than wrong about it. Retire when the reference
+        // materializes the mip chain.
+        Enc::CopyBufferToTextureRegion {
+            src,
+            src_offset,
+            bytes_per_row,
+            rows_per_image,
+            dst,
+            dst_sub,
+            dst_origin,
+            extent,
+        } => {
+            let s_len =
+                buffer_with_usage(res, *src, buffer_usage::COPY_SRC, "copy src lacks COPY_SRC")?
+                    .data
+                    .len();
+            let t = texture_with_usage(
+                res,
+                *dst,
+                texture_usage::COPY_DST,
+                "copy dst lacks COPY_DST",
+            )?;
+            copy::check_region_subresource(t, dst_sub)?;
+            let (_, row_bytes, stride, span) = copy::region_layout(
+                t,
+                dst_sub,
+                dst_origin,
+                extent,
+                *bytes_per_row,
+                *rows_per_image,
+            )?;
+            let (_, _) = (row_bytes, stride);
+            copy::check_len(s_len, *src_offset, span)?;
+        }
+        Enc::CopyTextureToBufferRegion {
+            src,
+            src_sub,
+            src_origin,
+            extent,
+            dst,
+            dst_offset,
+            bytes_per_row,
+            rows_per_image,
+        } => {
+            let t = texture_with_usage(
+                res,
+                *src,
+                texture_usage::COPY_SRC,
+                "copy src lacks COPY_SRC",
+            )?;
+            copy::check_region_subresource(t, src_sub)?;
+            let (_, _, _, span) = copy::region_layout(
+                t,
+                src_sub,
+                src_origin,
+                extent,
+                *bytes_per_row,
+                *rows_per_image,
+            )?;
+            let d_len =
+                buffer_with_usage(res, *dst, buffer_usage::COPY_DST, "copy dst lacks COPY_DST")?
+                    .data
+                    .len();
+            copy::check_len(d_len, *dst_offset, span)?;
         }
         Enc::CopyTextureToTexture {
             src,

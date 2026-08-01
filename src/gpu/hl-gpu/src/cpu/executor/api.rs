@@ -1,11 +1,17 @@
 use super::*;
 use crate::protocol::model::command::etag;
 
-/// The encoder ops this oracle actually replays. It is [`ALL_COMMANDS`] MINUS the two explicit-region
-/// buffer↔texture copies: the oracle materializes only mip 0, so it refuses those two ops outright
-/// (`software: layered or offset buffer-texture copy`). Advertising a command the executor then refuses
-/// is the failure the capability handshake exists to prevent — a guest that requires them must fail
-/// cleanly at negotiation, not at replay.
+/// The encoder ops this oracle actually replays.
+///
+/// It is now [`ALL_COMMANDS`]: the two explicit-region buffer↔texture copies used to be excluded, because
+/// the oracle materialized a single plane and refused them outright, and advertising a command the
+/// executor then refuses is the failure the capability handshake exists to prevent. It materializes one
+/// plane per layer, slice and face now, and serves both — at every layer and sub-rect the executor
+/// serves, measured against it.
+///
+/// The residual narrowing is per-CALL rather than per-op and so has no bit here: a region copy naming a
+/// non-zero mip is refused, because only level 0 is materialized. That is the executor's one capability
+/// this reference does not match, and it is refused by name rather than served wrongly.
 ///
 /// These are ENCODER etags. `Cmd::CreateTextureView`, which this executor also refuses, is a top-level
 /// command with no bit in this set, so its refusal reaches the caller at replay rather than at
@@ -28,6 +34,8 @@ const REPLAYED_COMMANDS: &[u8] = &[
     etag::COPY_B2B,
     etag::COPY_B2T,
     etag::COPY_T2B,
+    etag::COPY_B2T_REGION,
+    etag::COPY_T2B_REGION,
     etag::COPY_T2T,
     etag::BLIT_TEXTURE,
     etag::RESOLVE_TEXTURE,

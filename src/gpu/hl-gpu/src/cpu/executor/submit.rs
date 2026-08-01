@@ -283,6 +283,50 @@ impl CpuExecutor {
                         *bytes_per_row,
                     )?;
                 }
+                Enc::CopyBufferToTextureRegion {
+                    src,
+                    src_offset,
+                    bytes_per_row,
+                    rows_per_image,
+                    dst,
+                    dst_sub,
+                    dst_origin,
+                    extent,
+                } => {
+                    copy::copy_buffer_to_texture_region(
+                        res,
+                        *src,
+                        *src_offset,
+                        *bytes_per_row,
+                        *rows_per_image,
+                        *dst,
+                        dst_sub,
+                        dst_origin,
+                        extent,
+                    )?;
+                }
+                Enc::CopyTextureToBufferRegion {
+                    src,
+                    src_sub,
+                    src_origin,
+                    extent,
+                    dst,
+                    dst_offset,
+                    bytes_per_row,
+                    rows_per_image,
+                } => {
+                    copy::copy_texture_to_buffer_region(
+                        res,
+                        *src,
+                        src_sub,
+                        src_origin,
+                        extent,
+                        *dst,
+                        *dst_offset,
+                        *bytes_per_row,
+                        *rows_per_image,
+                    )?;
+                }
                 Enc::CopyTextureToTexture {
                     src,
                     src_origin,

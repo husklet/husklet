@@ -1,4 +1,5 @@
 use super::*;
+use hl_gpu::protocol::model::enums::TextureAspect;
 use hl_gpu::protocol::model::descriptor::Mirror;
 
 pub(super) fn gen_clear(seed: u64) -> Prog {
@@ -537,6 +538,85 @@ pub(super) fn gen_clear_layered(seed: u64) -> Prog {
         read: Read::Tex {
             id: 1,
             len: (n * n * 4) as usize,
+        },
+        tol: Tolerance::Unorm(0),
+        kernel: None,
+    }
+}
+
+/// (6d) A NON-BASE plane's CONTENT, read out through a region copy.
+///
+/// Every other layered program in this battery compares the BASE plane, because that is all
+/// `read_texture` returns on either backend — so a layered write could only ever be checked by its
+/// effect on layer 0, and the content of every other plane went unverified on both sides. That limit was
+/// recorded rather than hidden, and this closes it: `CopyTextureToBufferRegion` names a layer, both
+/// backends serve it, and the bytes land in a buffer the differential compares directly.
+///
+/// The program paints every plane a distinct colour and reads one that is NOT the base. A backend that
+/// wrote the wrong plane, aliased its planes, or quietly read the base one instead disagrees here and
+/// could not have been caught by any earlier program. Integer clears, so EXACT.
+pub(super) fn gen_region_nonbase(seed: u64) -> Prog {
+    let layers = 2 + (seed % 3) as u32; // 2..=4
+    let n = 1 + (seed % 2) as u32; // 1..=2
+    // Never layer 0 — the base plane is what every other program already covers.
+    let layer = 1 + (seed % (layers - 1) as u64) as u32;
+    let bytes = (n * n * 4) as usize;
+    let colour = |i: u32| {
+        let t = texel(seed.wrapping_add(i as u64 * 23));
+        [
+            t[0] as f32 / 255.0,
+            t[1] as f32 / 255.0,
+            t[2] as f32 / 255.0,
+            t[3] as f32 / 255.0,
+        ]
+    };
+    let mut encoder: Vec<Enc> = (0..layers)
+        .map(|p| Enc::ClearRect {
+            texture: 1,
+            x: 0,
+            y: 0,
+            w: n,
+            h: n,
+            color: colour(p),
+            base_array_layer: p,
+            layer_count: 1,
+            mip_level: 0,
+        })
+        .collect();
+    encoder.push(Enc::CopyTextureToBufferRegion {
+        src: 1,
+        src_sub: TextureSubresource {
+            mip: 0,
+            layer,
+            aspect: TextureAspect::All,
+        },
+        src_origin: Origin3d::default(),
+        extent: Extent3d {
+            width: n,
+            height: n,
+            depth: 1,
+        },
+        dst: 1,
+        dst_offset: 0,
+        bytes_per_row: n * 4,
+        rows_per_image: n,
+    });
+    Prog {
+        seed,
+        category: "region_nonbase",
+        ops: vec!["ClearRect", "CopyTextureToBufferRegion"],
+        cmds: vec![
+            Cmd::CreateTexture(1, tex_layers(n, n, layers)),
+            Cmd::CreateBuffer(1, buf(bytes as u64, buffer_usage::COPY_SRC | buffer_usage::COPY_DST)),
+            Cmd::Submit(CommandBuffer {
+                encoder,
+                signal: None,
+            }),
+        ],
+        read: Read::Buf {
+            id: 1,
+            offset: 0,
+            len: bytes,
         },
         tol: Tolerance::Unorm(0),
         kernel: None,

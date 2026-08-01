@@ -144,25 +144,48 @@ fn the_cpu_oracle_advertises_the_depth_stencil_format_it_materializes() {
     .expect("a depth+stencil render target the oracle materializes must validate");
 }
 
-/// The other direction of capability honesty: the oracle must not ADVERTISE an encoder op it refuses.
-/// It materializes only mip 0 of a single layer, so the two explicit-region buffer↔texture copies are
-/// rejected outright at replay — a guest requiring them has to learn that at NEGOTIATION, cleanly, not
-/// after the app already committed to the path and a frame comes back `Unsupported`.
+/// The other direction of capability honesty: what the oracle advertises must be what it serves.
+///
+/// This test used to assert the opposite of what it asserts now, and both were right in their turn. The
+/// two explicit-region buffer↔texture copies were excluded from the advertised set because the oracle
+/// materialized a single plane and refused them outright — and a guest requiring them has to learn that
+/// at NEGOTIATION, cleanly, not after the app has committed to the path and a frame comes back
+/// `Unsupported`. It materializes one plane per layer, slice and face now and serves both, so continuing
+/// to withhold the bits would be the same dishonesty pointing the other way: a guest would be refused a
+/// capability the oracle has.
+///
+/// The residual narrowing is per-CALL and therefore has no bit to withhold: a region copy naming a
+/// non-zero mip is refused, because only level 0 is materialized. The handshake cannot express that, and
+/// pretending the whole op is missing in order to signal it would deny the layer and sub-rect cases that
+/// do work. So it is refused at replay, by name, and asserted below beside the capability.
 #[test]
-fn the_cpu_oracle_does_not_advertise_the_region_copies_it_refuses() {
+fn the_cpu_oracle_advertises_the_region_copies_it_now_serves() {
     use hl_gpu::protocol::model::command::etag;
     use hl_gpu::CpuExecutor;
 
     let caps = CpuExecutor::new().capabilities();
-    assert!(!caps.supports_command(etag::COPY_B2T_REGION));
-    assert!(!caps.supports_command(etag::COPY_T2B_REGION));
-    // Everything else in the advertised set stays advertised.
+    assert!(caps.supports_command(etag::COPY_B2T_REGION));
+    assert!(caps.supports_command(etag::COPY_T2B_REGION));
     assert!(caps.supports_command(etag::COPY_T2T) && caps.supports_command(etag::BLIT_TEXTURE));
 
+    // A guest asking for them negotiates cleanly.
+    assert!(caps
+        .negotiate(&FeatureRequest {
+            wire_version: caps.wire_version,
+            command_bits: hl_gpu::Capabilities::command_bits(&[
+                etag::COPY_B2T_REGION,
+                etag::COPY_T2B_REGION
+            ]),
+            ..FeatureRequest::default()
+        })
+        .is_ok());
+
+    // And the negotiation still refuses a tag genuinely absent, so the assertions above are not merely
+    // a handshake that accepts anything.
     assert_eq!(
         caps.negotiate(&FeatureRequest {
             wire_version: caps.wire_version,
-            command_bits: hl_gpu::Capabilities::command_bits(&[etag::COPY_B2T_REGION]),
+            command_bits: 1u64 << 40,
             ..FeatureRequest::default()
         })
         .unwrap_err(),

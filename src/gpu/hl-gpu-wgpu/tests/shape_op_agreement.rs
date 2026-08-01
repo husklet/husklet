@@ -37,6 +37,7 @@ fn d(dim: TextureDim, w: u32, h: u32, depth: u32) -> TextureDesc {
         label: String::new() }
 }
 fn sb() -> TextureSubresource { TextureSubresource::base() }
+fn sub1() -> TextureSubresource { TextureSubresource { mip:0, layer:1, aspect: TextureAspect::All } }
 
 fn programs(desc: &TextureDesc) -> Vec<(&'static str, Vec<Cmd>)> {
     let (w, h) = (desc.width, desc.height);
@@ -53,6 +54,12 @@ fn programs(desc: &TextureDesc) -> Vec<(&'static str, Vec<Cmd>)> {
         ("T2B",  pre(vec![Enc::CopyTextureToBuffer { src:1, mip:0, width:w, height:h, dst:1, dst_offset:0, bytes_per_row:w*4 }])),
         ("T2T",  pre(vec![Enc::CopyTextureToTexture { src:1, src_sub:sb(), src_origin:Origin3d::default(), dst:2, dst_sub:sb(), dst_origin:Origin3d::default(), extent:ext }])),
         ("Blit", pre(vec![Enc::BlitTexture { src:1, src_sub:sb(), src_origin:Origin3d::default(), src_extent:ext, dst:2, dst_sub:sb(), dst_origin:Origin3d::default(), dst_extent:ext, filter:Filter::Nearest, mirror:Mirror::NONE }])),
+        // The REGION copies at a NON-BASE layer, which is the only channel that observes a plane the
+        // whole-texture readback cannot reach. On a single-plane shape layer 1 does not exist and both
+        // backends must say so — agreement about the bound is as much the subject as agreement about
+        // the transfer.
+        ("B2Trgn", pre(vec![Enc::CopyBufferToTextureRegion { src:1, src_offset:0, bytes_per_row:w*4, rows_per_image:h, dst:1, dst_sub:sub1(), dst_origin:Origin3d::default(), extent:ext }])),
+        ("T2Brgn", pre(vec![Enc::CopyTextureToBufferRegion { src:1, src_sub:sub1(), src_origin:Origin3d::default(), extent:ext, dst:1, dst_offset:0, bytes_per_row:w*4, rows_per_image:h }])),
         ("Pass", pre(vec![Enc::BeginRenderPass { color: vec![ColorAttachment { texture:1, load:LoadOp::Clear, clear:[0.0,0.0,0.0,1.0], store:true }], depth: None }, Enc::EndRenderPass])),
     ]
 }
@@ -132,11 +139,11 @@ fn every_shape_and_op_agrees_on_what_is_legal() {
     // failed for an unrelated reason — or in which both backends refused everything — would be
     // indistinguishable from perfect agreement, because refusing in unison IS agreement here.
     assert_eq!(
-        compared, 30,
-        "the shape x op matrix must be fully exercised; {compared} of 30 cells ran"
+        compared, 40,
+        "the shape x op matrix must be fully exercised; {compared} of 40 cells ran"
     );
     assert!(
-        accepted >= 15,
+        accepted >= 20,
         "only {accepted} of {compared} cells were ACCEPTED by the executor — agreement made mostly of \
          mutual refusal proves little, and this matrix has lost its power"
     );
