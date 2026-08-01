@@ -181,6 +181,48 @@ fn a_colour_renderable_renderbuffer_is_complete() {
     }
 }
 
+/// An IMPORTED image is a colour buffer by construction — a dma-buf or IOSurface the compositor already
+/// owns — so a framebuffer wrapping one is complete whatever the texture name was used for before.
+///
+/// `external_image_2d` resets the extent, the neutral format, the pixel data and the generation, which
+/// makes it read as a full redefinition. It does not reset the DECLARED internal format, so completeness
+/// judged the import by the format of whatever the texture used to be. Skia performs exactly that
+/// sequence — allocate a backend texture with a sized format, then wrap a shared image over it — and a
+/// predecessor format outside the renderable set left the wrapped surface permanently incomplete.
+#[test]
+fn an_imported_image_is_judged_by_itself_not_by_what_the_texture_used_to_be() {
+    for predecessor in [GL_RGBA8, GL_RGB8_SNORM, GL_SRGB8, GL_RGB9_E5, GL_RGBA16F] {
+        let mut c = ctx();
+        let tex = c.textures.gen();
+        record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
+        // What the texture was before the import: immutable storage of a sized format.
+        record::tex_storage_2d(&mut c, GL_TEXTURE_2D, 1, predecessor, 16, 16);
+        // The import, exactly as `glEGLImageTargetTexture2DOES` performs it.
+        c.textures.external_image_2d(
+            tex,
+            16,
+            16,
+            hl_gpu::protocol::model::enums::TextureFormat::Bgra8Unorm,
+        );
+
+        let fbo = c.gen_framebuffer();
+        record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
+        record::framebuffer_texture_2d(
+            &mut c,
+            GL_FRAMEBUFFER,
+            GL_COLOR_ATTACHMENT0,
+            GL_TEXTURE_2D,
+            tex,
+            0,
+        );
+        assert_eq!(
+            c.check_framebuffer_status(GL_FRAMEBUFFER),
+            GL_FRAMEBUFFER_COMPLETE,
+            "an imported image after a {predecessor:#x} texture must be complete on its own terms"
+        );
+    }
+}
+
 /// `GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE` must distinguish a renderbuffer attachment from a texture one.
 ///
 /// A renderbuffer is BACKED by a texture in this model, so reading the colour table alone reported

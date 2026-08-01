@@ -587,6 +587,13 @@ impl Textures {
         texture.w = w;
         texture.h = h;
         texture.ir_format = format;
+        // An import REDEFINES the texture, so the format the guest declared for whatever this name held
+        // before must go with it. Leaving it behind made completeness judge an imported colour buffer by
+        // its predecessor: allocate a backend texture with a sized format, wrap a shared image over it,
+        // and the framebuffer is incomplete for a format the import replaced. Zero is the unsized
+        // spelling — the right answer here, because an imported image is a colour buffer by construction
+        // and the guest never declared a sized format for it; EGL did.
+        texture.internal_format = 0;
         texture.data = Arc::new(Vec::new());
         texture.real_pixels = false;
         texture.gpu_authoritative = false;
