@@ -39,6 +39,12 @@ impl HlState {
                 self.token_surfaces.insert(token, surface);
                 #[cfg(feature = "macos-surface")]
                 let _ = self.register_native_token(token);
+                // The scene learns the surface now HAS content, and the window is reconciled against
+                // that immediately. A zero-copy client's first frame arrives through the GPU service,
+                // not as a `wl_buffer`, so without this the toplevel stays occluded and no native
+                // window is ever created — and the frame it is waiting for can never be shown.
+                self.engine.scene.set_native_token(surface, Some(token));
+                self.reconcile_window(surface);
                 return Ok(token);
             }
         }
@@ -67,6 +73,9 @@ impl HlState {
             #[cfg(feature = "macos-surface")]
             self.retire_native_token(token);
             self.token_surfaces.remove(&token);
+            // Paired with the mint: the scene must not keep claiming content through an identity that
+            // no longer exists.
+            self.engine.scene.set_native_token(surface, None);
         }
         self.pending_associations.remove(&surface);
         self.last_associations.remove(&surface);

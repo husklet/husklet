@@ -15,7 +15,8 @@ impl HlState {
             .engine
             .scene
             .get(sid)
-            .is_some_and(|surface| surface.buffer.is_some());
+            // Content, not a buffer: a zero-copy surface is mapped without ever attaching one.
+            .is_some_and(|surface| surface.has_content());
 
         // Mirror Smithay's just-applied subsurface state (set_position offset, sync/desync, and the
         // place_above/place_below z-order) into the scene BEFORE the engine composes/paces this commit: a
@@ -404,7 +405,7 @@ impl HlState {
         let changed = self.engine.apply_commit(sid, commit);
         let mapped_toplevel = !was_mapped
             && self.engine.scene.get(sid).is_some_and(|surface| {
-                surface.buffer.is_some() && matches!(surface.role, SurfaceRole::Toplevel)
+                surface.has_content() && matches!(surface.role, SurfaceRole::Toplevel)
             });
         if let Some(surface) = self.engine.scene.get_mut(sid) {
             surface.set_size_limits(min_size, max_size);

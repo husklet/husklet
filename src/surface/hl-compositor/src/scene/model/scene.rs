@@ -318,6 +318,17 @@ impl Scene {
 
     // ---- visibility -------------------------------------------------------------------------------
 
+    /// Record (or clear) the GPU surface token a zero-copy client presents this surface through.
+    ///
+    /// The adapter owns the `hl_surface_identity_v1` protocol; the scene owns what a surface IS, and
+    /// "has content" is scene state. Called from exactly two places — the mint and the retire — so the
+    /// token in the scene cannot outlive the identity that issued it.
+    pub fn set_native_token(&mut self, id: SurfaceId, token: Option<u64>) {
+        if let Some(surface) = self.get_mut(id) {
+            surface.native_token = token;
+        }
+    }
+
     pub fn set_visibility(&mut self, id: SurfaceId, visibility: Visibility) {
         self.visibility.insert(id, visibility);
     }
@@ -342,8 +353,10 @@ impl Scene {
             _ => return None,
         };
         let requested_visibility = self.visibility(id);
-        let visibility = if surface.buffer.is_none() && requested_visibility == Visibility::Visible
-        {
+        // A surface with nothing to show must not be shown — but "nothing to show" is a question about
+        // CONTENT, not about which route the content took. Asking `buffer.is_none()` here tested for
+        // Wayland-attached content specifically, and held every zero-copy client permanently occluded.
+        let visibility = if !surface.has_content() && requested_visibility == Visibility::Visible {
             Visibility::Occluded
         } else {
             requested_visibility
@@ -412,3 +425,70 @@ impl Scene {
 
 #[path = "scene_tree.rs"]
 mod tree;
+
+#[cfg(test)]
+mod window_visibility {
+    //! What makes a toplevel showable.
+    //!
+    //! `window_state` refuses to mark a surface visible when it has nothing to show, and used to decide
+    //! that by asking `buffer.is_none()`. That tests for Wayland-attached content specifically, so a
+    //! client presenting zero-copy through a GPU surface token — every Vulkan client on this stack —
+    //! was held `Occluded` forever: no native window was created for it, so no frame could ever be
+    //! shown, and the compositor logged nothing at all while the client presented a thousand correct
+    //! frames.
+    //!
+    //! The three cases below are the three content states, and the first two are the controls that make
+    //! the third mean something: a surface with NO content must still be occluded (or this check would
+    //! be satisfied by removing it), and a surface with a buffer must still be visible (or the fix would
+    //! have broken the path that already worked).
+
+    use super::super::surface::{BufferState, Format};
+    use super::*;
+
+    fn toplevel(scene: &mut Scene) -> SurfaceId {
+        let id = scene.create_surface();
+        scene.set_role(id, SurfaceRole::Toplevel);
+        id
+    }
+
+    fn visibility(scene: &Scene, id: SurfaceId) -> Visibility {
+        scene
+            .window_state(id)
+            .expect("a toplevel must have a window state")
+            .visibility
+    }
+
+    #[test]
+    fn a_toplevel_with_no_content_at_all_is_occluded() {
+        let mut scene = Scene::new();
+        let id = toplevel(&mut scene);
+        assert_eq!(visibility(&scene, id), Visibility::Occluded);
+    }
+
+    #[test]
+    fn a_toplevel_with_an_attached_buffer_is_visible() {
+        let mut scene = Scene::new();
+        let id = toplevel(&mut scene);
+        scene.get_mut(id).unwrap().buffer = Some(BufferState {
+            tex_w: 64,
+            tex_h: 64,
+            format: Format::Argb8888,
+            buffer_scale: 1,
+            gpu: false,
+        });
+        assert_eq!(visibility(&scene, id), Visibility::Visible);
+    }
+
+    #[test]
+    fn a_toplevel_presenting_through_a_gpu_surface_token_is_visible() {
+        let mut scene = Scene::new();
+        let id = toplevel(&mut scene);
+        // No buffer will ever be attached: this client's pixels reach the host through the GPU service.
+        scene.set_native_token(id, Some(0x5EED));
+        assert_eq!(visibility(&scene, id), Visibility::Visible);
+        // And the token retiring takes the content with it, or the scene would keep claiming content
+        // through an identity that no longer exists.
+        scene.set_native_token(id, None);
+        assert_eq!(visibility(&scene, id), Visibility::Occluded);
+    }
+}

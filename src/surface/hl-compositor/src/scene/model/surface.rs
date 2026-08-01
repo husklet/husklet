@@ -223,6 +223,14 @@ pub struct Surface {
     /// `wl_surface.frame` callbacks requested since the last pace, as a count (the neutral analogue of
     /// the retained `WlCallback` objects). Drained/fired or retained by the schedule service.
     pub pending_callbacks: u32,
+    /// The live GPU surface token this surface presents through, when a client drives it zero-copy
+    /// (`hl_surface_identity_v1`). Set when the token is minted, cleared when the identity retires.
+    ///
+    /// This is the SECOND source of content, and its absence from the model was a real defect: a
+    /// zero-copy client's pixels reach the host out of band through the GPU service and never arrive as
+    /// a `wl_buffer`, so every check that asked `buffer.is_none()` concluded the surface had nothing to
+    /// show. See [`Surface::has_content`].
+    pub native_token: Option<u64>,
 }
 
 impl Surface {
@@ -244,7 +252,22 @@ impl Surface {
             maximized: false,
             fullscreen: false,
             pending_callbacks: 0,
+            native_token: None,
         }
+    }
+
+    /// Whether this surface has content to show, from EITHER source.
+    ///
+    /// A surface is contentful when it has an attached `wl_buffer` OR a live GPU surface token. Both
+    /// are real content; only the route differs, and asking about the route was the bug. A toplevel
+    /// driven zero-copy by Vulkan was held permanently `Occluded` because it never attaches a buffer,
+    /// so no native window was ever created for it, so no frame could ever be shown — measured as a
+    /// completely empty compositor log for a client that presented a thousand correct frames.
+    ///
+    /// A third content path belongs HERE, as one more clause, rather than at each of the four callers
+    /// that ask this question.
+    pub fn has_content(&self) -> bool {
+        self.buffer.is_some() || self.native_token.is_some()
     }
 
     /// On-screen logical size `(w, h)`, or `None` when no buffer is committed. The size half of a

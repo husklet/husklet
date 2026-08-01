@@ -14,7 +14,12 @@ impl HlState {
         let Some(wl_surface) = self.surfaces_by_id.get(&root).cloned() else {
             return;
         };
-        let mapped = self.engine.scene.get(root).and_then(|s| s.buffer).is_some();
+        // Content, not a buffer: a zero-copy toplevel must enter an output like any other.
+        let mapped = self
+            .engine
+            .scene
+            .get(root)
+            .is_some_and(crate::scene::model::Surface::has_content);
         let current = self.entered_outputs.get(&root).copied();
         let target = self.engine.scene.selected_output(root).map(|o| o.id);
         if mapped {
