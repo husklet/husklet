@@ -41,6 +41,8 @@ Baseline for all "before" figures is tree `65cbdb6169065570d23c42d3ccc778f04b3c3
 | `api.device_init` | 1 fail | **0 fail** | instance API-version fix |
 | `api.format_features` | 24 fail | **3 fail** | `VkFormatProperties3` fill |
 | `compute.*` + `api.smoke` | 73 fail | 73 fail | see the caveat below |
+| `image_clearing.core` (already-running 252) | 68 pass / 116 fail | 120 pass / 48 fail | clear-subresource work |
+| `image_clearing.core` (783 newly exposed) | all NotSupported | 12 pass / 771 fail | see below |
 
 **The compute caveat, which must travel with the number:** zero regressions across 60817 cases sounds
 strong until you notice only **29 of them actually pass** — 60715 are `NotSupported`. It is a weak
@@ -48,9 +50,8 @@ instrument for anything about format advertisement.
 
 ## Unmeasured
 
-- `api.image_clearing` (45636 cases) — the clear-subresource and pass-segmentation fixes are unverified
-  against the suite. A run of `image_clearing.core.*` was started at the end of the session; check
-  `/Users/x/dd/hl-work/vk-cts/v2-clear/`.
+- `api.image_clearing` — partially measured, see below. The run covered 15722 of 22818 `core.*` cases
+  before being cut short, and `image_clearing.dedicated_allocation.*` was never run at all.
 - `api.copy_and_blit` (113317 cases, 26 minutes) — the copy/blit/resolve subresource fix is unverified.
   This is the largest group and the one most likely to move.
 - Everything landed after tree `9982fbbb…`: the refusal mapping, the classified acknowledgement, the
@@ -58,6 +59,18 @@ instrument for anything about format advertisement.
   measured.** A rebuild and re-run is the first thing worth doing.
 - The harness wedged once mid-run — 37 minutes with no `deqp-vk` process alive and no output. If a group
   stops producing output, check for a live test binary before waiting on it.
+
+### The ungate lesson, measured
+
+The format-class ungate made 783 previously-skipped `image_clearing.core` cases run, and 771 of them
+failed. Do not read that as the ungate being wrong — it is the cost of a capability claimed before every
+path that serves it was ready. The dominant single cause was 441 `vkCreateImageView` failures, because
+image creation and the format query both learned 1D while the view path did not, and an image clear
+needs a view. Fixed in `87b46e21d`, after the measured tree.
+
+The general form is worth carrying: **when you widen what the driver advertises, enumerate every path
+that must serve the widened set before shipping it.** Creation, view, the format query and the executor
+all had to agree, and three of the four did.
 
 ## Capability gaps, not defects
 
