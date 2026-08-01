@@ -255,7 +255,7 @@ fn the_reference_refuses_a_layered_texture_wherever_the_executor_does() {
     )
     .expect_err("a layered colour attachment must be refused");
     assert!(
-        matches!(err, GpuError::Unsupported(m) if m.contains("layered render attachment")),
+        matches!(err, GpuError::Unsupported(m) if m.contains("render attachment")),
         "a layered colour attachment must be refused by name, got {err:?}"
     );
 

@@ -146,7 +146,7 @@ impl CpuExecutor {
                     color,
                     base_array_layer,
                     layer_count,
-                    mip_level: _,
+                    mip_level,
                 } => {
                     raster::clear_rect(
                         res,
@@ -158,6 +158,7 @@ impl CpuExecutor {
                         *color,
                         *base_array_layer,
                         *layer_count,
+                        *mip_level,
                     )?;
                 }
                 Enc::SetViewport { x, y, w, h, .. } => {
@@ -252,7 +253,7 @@ impl CpuExecutor {
                     dst,
                     width,
                     height,
-                    ..
+                    mip,
                 } => {
                     copy::copy_buffer_to_texture(
                         res,
@@ -262,16 +263,17 @@ impl CpuExecutor {
                         *dst,
                         *width,
                         *height,
+                        *mip,
                     )?;
                 }
                 Enc::CopyTextureToBuffer {
                     src,
+                    mip,
                     width,
                     height,
                     dst,
                     dst_offset,
                     bytes_per_row,
-                    ..
                 } => {
                     copy::copy_texture_to_buffer(
                         res,
@@ -281,6 +283,7 @@ impl CpuExecutor {
                         *dst,
                         *dst_offset,
                         *bytes_per_row,
+                        *mip,
                     )?;
                 }
                 Enc::CopyBufferToTextureRegion {

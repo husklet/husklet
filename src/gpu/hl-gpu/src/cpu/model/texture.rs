@@ -2,7 +2,7 @@
 //! Stored behind a `TextureId`. Ported from the `Texture` struct in `hl-gpu/src/software.rs`.
 
 use crate::protocol::model::descriptor::TextureDesc;
-use crate::protocol::model::enums::TextureDim;
+use crate::protocol::model::enums::{TextureDim, TextureFormat};
 
 #[derive(Clone)]
 pub struct Texture {
@@ -39,9 +39,74 @@ impl Texture {
         }
     }
 
-    /// Byte length of one layer's plane.
-    pub fn plane_bytes(&self) -> usize {
-        self.pixels.len() / self.layers() as usize
+    /// Mip levels materialized (`>= 1`).
+    pub fn levels(&self) -> u32 {
+        self.desc.mip_levels.max(1)
+    }
+
+    /// A mip level's dimensions: the base extent halved per level, floored, never below one.
+    ///
+    /// The `max(1)` is the whole rule and it is where an off-by-one lives: level 2 of a 5x3 texture is
+    /// 1x1, not 1x0, and a plane of zero rows would make the level occupy no bytes and every level after
+    /// it start in the wrong place. The executor uses exactly this expression for its own readback.
+    pub fn level_size(desc: &TextureDesc, mip: u32) -> (u32, u32) {
+        (
+            (desc.width >> mip).max(1),
+            (desc.height >> mip).max(1),
+        )
+    }
+
+    /// Bytes per texel AS THIS REFERENCE MATERIALIZES IT.
+    ///
+    /// Not `TextureFormat::bytes_per_texel`, which has no answer for a depth format: this oracle stores a
+    /// `Depth32Float` plane as four bytes per texel and a `Depth24PlusStencil8` plane as eight, so the
+    /// rasterizer can run the depth and stencil tests against them. Allocation and plane addressing must
+    /// agree about that or a depth texture's planes are sized by one rule and indexed by another —
+    /// which is exactly what happened: the readback of a depth attachment started reporting
+    /// `OutOfBounds` because the addressing side had no size for the format at all.
+    pub fn texel_bytes(desc: &TextureDesc) -> Option<usize> {
+        match desc.format {
+            TextureFormat::Depth32Float => Some(4),
+            TextureFormat::Depth24PlusStencil8 => Some(8),
+            other => other.bytes_per_texel(),
+        }
+    }
+
+    /// Byte offset and length of one (`mip`, `layer`) plane within [`Texture::pixels`].
+    ///
+    /// Storage is LEVEL-major and layer-minor: every layer of level 0, then every layer of level 1, and
+    /// so on. Level 0 layer 0 therefore still begins at offset zero and is still `width * height * bpt`
+    /// long, which is why the whole-plane paths that address the base subresource by construction did
+    /// not have to change when levels were added — the same property that let layers in earlier.
+    pub fn plane_at(&self, mip: u32, layer: u32) -> Option<std::ops::Range<usize>> {
+        if mip >= self.levels() || layer >= self.layers() {
+            return None;
+        }
+        let bpt = Self::texel_bytes(&self.desc)?;
+        let samples = self.desc.sample_count.max(1) as usize;
+        let layers = self.layers() as usize;
+        let plane_of = |m: u32| {
+            let (w, h) = Self::level_size(&self.desc, m);
+            w as usize * h as usize * bpt * samples
+        };
+        let start: usize = (0..mip).map(|m| plane_of(m) * layers).sum::<usize>()
+            + layer as usize * plane_of(mip);
+        Some(start..start + plane_of(mip))
+    }
+
+    /// Total bytes for every level and layer of `desc`.
+    pub fn total_bytes(desc: &TextureDesc, bpt: usize) -> Option<usize> {
+        let layers = Self::planes(desc) as usize;
+        let samples = desc.sample_count.max(1) as usize;
+        (0..desc.mip_levels.max(1)).try_fold(0usize, |acc, m| {
+            let (w, h) = Self::level_size(desc, m);
+            (w as usize)
+                .checked_mul(h as usize)
+                .and_then(|v| v.checked_mul(bpt))
+                .and_then(|v| v.checked_mul(samples))
+                .and_then(|v| v.checked_mul(layers))
+                .and_then(|v| acc.checked_add(v))
+        })
     }
 
     /// Byte range of `layer`'s plane within [`Texture::pixels`], or `None` if there is no such layer.
@@ -52,11 +117,6 @@ impl Texture {
     /// deliberate and mirrors the executor, which likewise serves a layered clear and a layered region
     /// read and refuses a non-base subresource everywhere else.
     pub fn layer_plane(&self, layer: u32) -> Option<std::ops::Range<usize>> {
-        if layer >= self.layers() {
-            return None;
-        }
-        let plane = self.plane_bytes();
-        let start = layer as usize * plane;
-        Some(start..start + plane)
+        self.plane_at(0, layer)
     }
 }

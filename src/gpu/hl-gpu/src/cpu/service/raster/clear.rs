@@ -1,3 +1,6 @@
+use super::*;
+use crate::cpu::model::texture::Texture;
+
 pub(crate) fn clear_target(
     res: &mut SessionResources,
     texture_id: u32,
@@ -34,10 +37,14 @@ pub(crate) fn clear_rect(
     color: [f32; 4],
     base_array_layer: u32,
     layer_count: u32,
+    mip_level: u32,
 ) -> Result<()> {
+    // The LEVEL's own extent, not the base one: a rect is clamped against the level it names, or a clear
+    // of a small level would be clamped against a bound it cannot reach and overhang its own plane.
     let (fmt, tw, th) = {
         let t = texture(res, texture_id)?;
-        (t.desc.format, t.desc.width, t.desc.height)
+        let (w, h) = Texture::level_size(&t.desc, mip_level);
+        (t.desc.format, w, h)
     };
     let texel = fmt.software_clear_texel(color)?;
     let bpt = texel.len();
@@ -48,7 +55,10 @@ pub(crate) fn clear_rect(
     let tw = tw as usize;
     let t = texture_mut(res, texture_id)?;
     for layer in base_array_layer..base_array_layer.saturating_add(layer_count) {
-        let plane = t.layer_plane(layer).ok_or(GpuError::OutOfBounds)?.start;
+        let plane = t
+            .plane_at(mip_level, layer)
+            .ok_or(GpuError::OutOfBounds)?
+            .start;
         for yy in y0..y1 {
             for xx in x0..x1 {
                 let off = plane + (yy * tw + xx) * bpt;
@@ -99,4 +109,3 @@ pub(crate) fn clear_depth_stencil_target(
     }
     Ok(())
 }
-use super::*;

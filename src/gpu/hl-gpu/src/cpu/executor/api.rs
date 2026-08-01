@@ -9,9 +9,9 @@ use crate::protocol::model::command::etag;
 /// plane per layer, slice and face now, and serves both — at every layer and sub-rect the executor
 /// serves, measured against it.
 ///
-/// The residual narrowing is per-CALL rather than per-op and so has no bit here: a region copy naming a
-/// non-zero mip is refused, because only level 0 is materialized. That is the executor's one capability
-/// this reference does not match, and it is refused by name rather than served wrongly.
+/// There is no residual narrowing left in this set: the reference materializes the whole mip pyramid and
+/// serves every level the executor serves, so a region copy naming a non-zero mip now transfers rather
+/// than being refused. A level past the end of the chain is `OutOfBounds` on both sides.
 ///
 /// These are ENCODER etags. `Cmd::CreateTextureView`, which this executor also refuses, is a top-level
 /// command with no bit in this set, so its refusal reaches the caller at replay rather than at

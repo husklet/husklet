@@ -64,17 +64,17 @@ impl CpuExecutor {
         // `raster::raster_draw_depth`). The stored byte layout is an oracle-internal detail: only the color
         // target is ever read back and compared, so it need not match any hardware depth/stencil packing.
         // Other depth/stencil formats stay unsupported.
-        let bpt = match desc.format {
-            TextureFormat::Depth32Float => 4,
-            TextureFormat::Depth24PlusStencil8 => 8,
-            _ => desc.format.software_texel_bytes()?,
+        // One rule for how many bytes a texel occupies here, shared with the plane addressing in
+        // `Texture::plane_at`. Sizing the allocation by one rule and indexing it by another is how a
+        // depth plane comes to be allocated and then unreachable.
+        let bpt = match Texture::texel_bytes(desc) {
+            Some(n) => n,
+            None => desc.format.software_texel_bytes()?,
         };
-        let n = bpt
-            .checked_mul(desc.width as usize)
-            .and_then(|v| v.checked_mul(desc.height as usize))
-            .and_then(|v| v.checked_mul(desc.sample_count as usize))
-            .and_then(|v| v.checked_mul(Texture::planes(desc) as usize))
-            .ok_or(GpuError::OutOfBounds)?;
+        // Every LEVEL of every layer. The mip chain used to be accepted in the descriptor and never
+        // allocated, which was sound only because every path refused a non-zero level; the executor
+        // materializes and serves the whole pyramid, so this now does too.
+        let n = Texture::total_bytes(desc, bpt).ok_or(GpuError::OutOfBounds)?;
         res.textures.insert(
             id,
             Box::new(Texture {

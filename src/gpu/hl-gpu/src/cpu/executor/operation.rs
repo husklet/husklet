@@ -172,14 +172,11 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
             // the materialized layers is refused rather than clamped, because writing fewer layers than
             // asked is the silent-partial-work shape, and the executor's own bounds would reject it.
             //
-            // A non-zero MIP is still refused: only level 0 is materialized. Writing level 0 in response
-            // to a clear of some other level is exactly the defect these fields were added to fix, so the
-            // subresource this backend cannot address is refused here — before any op in the batch runs —
-            // rather than silently redirected.
-            if *mip_level != 0 {
-                return Err(GpuError::Unsupported(
-                    "software: clear of a non-base mip level",
-                ));
+            // A MIP LEVEL is served too, now that the whole pyramid is materialized. Past the end of the
+            // chain is out of bounds, which is the executor's answer; it is a bound rather than a
+            // refusal of the capability.
+            if *mip_level >= t.levels() {
+                return Err(GpuError::OutOfBounds);
             }
             let layers = t.layers();
             if *layer_count == 0
@@ -291,9 +288,6 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
             width,
             height,
         } => {
-            if *mip != 0 {
-                return Err(GpuError::Unsupported("software: non-zero mip copy"));
-            }
             let s_len =
                 buffer_with_usage(res, *src, buffer_usage::COPY_SRC, "copy src lacks COPY_SRC")?
                     .data
@@ -311,7 +305,8 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
             }
             // The span covers EVERY plane: the executor uploads the destination's full layer/slice/face
             // count in one operation and refuses a buffer that cannot supply them all.
-            let (row_bytes, _, _) = copy::texture_copy_layout(t, *width, *height, *bytes_per_row)?;
+            let (row_bytes, _, _) =
+                copy::texture_copy_layout(t, *mip, *width, *height, *bytes_per_row)?;
             let stride = if *bytes_per_row == 0 {
                 row_bytes
             } else {
@@ -339,9 +334,7 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
             dst_offset,
             bytes_per_row,
         } => {
-            if *mip != 0 {
-                return Err(GpuError::Unsupported("software: non-zero mip copy"));
-            }
+
             let t = texture_with_usage(
                 res,
                 *src,
@@ -359,7 +352,8 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
                     "texture readback offset not texel-aligned",
                 ));
             }
-            let (_, _, dst_span) = copy::texture_copy_layout(t, *width, *height, *bytes_per_row)?;
+            let (_, _, dst_span) =
+                copy::texture_copy_layout(t, *mip, *width, *height, *bytes_per_row)?;
             let d_len =
                 buffer_with_usage(res, *dst, buffer_usage::COPY_DST, "copy dst lacks COPY_DST")?
                     .data

@@ -240,7 +240,8 @@ fn a_scissored_clear_lowers_to_clear_rect_over_a_load_pass() {
 enum Refusal {
     /// The subresource does not exist on this texture.
     OutOfBounds,
-    /// The subresource is one no texture in this reference has.
+    /// The subresource is one no texture in this reference has. Currently unused — see the test's note.
+    #[allow(dead_code)]
     Unsupported,
 }
 
@@ -259,7 +260,14 @@ enum Refusal {
 ///     out of bounds — the same answer a range past the end gets on a texture that is layered (see
 ///     `oracle_spec::layered`). They are no longer categorically unsupported, and asserting that they were
 ///     would now be asserting the old limit rather than the rule.
-///   * the MIP case is still categorically unsupported: only level 0 is materialized, on any texture.
+///   * the MIP case has since followed them, for the same reason. The reference materializes the whole
+///     mip pyramid now, so level 1 is not a level no texture has — it is a level THIS single-level
+///     texture does not have, which is a bound and not a missing capability.
+///
+/// All three are now out of bounds, and the enum below has one inhabited variant. It is kept rather than
+/// collapsed because the distinction it draws is real and load-bearing: a subresource this texture lacks
+/// and a subresource no texture here can have are different answers, and the second one WILL return the
+/// moment a shape or level is added that the reference genuinely cannot serve.
 ///
 /// The refusal is raised during validation, before any op in the batch runs, so an earlier op's writes are
 /// never left behind by a mid-batch rejection.
@@ -316,7 +324,7 @@ fn oracle_refuses_a_clear_of_a_non_base_subresource() {
         ),
         (
             "a non-base mip level",
-            Refusal::Unsupported,
+            Refusal::OutOfBounds,
             Enc::ClearRect {
                 texture: 1,
                 x: 0,

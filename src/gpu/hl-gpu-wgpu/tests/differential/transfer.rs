@@ -623,6 +623,110 @@ pub(super) fn gen_region_nonbase(seed: u64) -> Prog {
     }
 }
 
+/// (6e) A mip level's content, read out through a region copy.
+///
+/// The last structural asymmetry between the two backends: the reference materialized level 0 alone
+/// while the executor materializes the whole pyramid, so no comparison reached level 1 on either side.
+///
+/// Three things about the construction, and each of them is here because the obvious version of this
+/// generator had NO POWER against the defect it was written for — both controls passed against a broken
+/// reference before these were added.
+///
+/// Levels are told apart by COLOUR, not by size. Level selection is where an off-by-one survives, and
+/// two levels differing only in extent would let a backend read the wrong one and still return a
+/// plausible number of plausible bytes.
+///
+/// The level read is sometimes the BASE one. A program that writes and reads through the same addressing
+/// function cannot see an addressing error: a reference whose level offsets were all shifted by one
+/// stored level 1 where level 1 was later looked for, and agreed. Reading level 0 after every level has
+/// been written catches it, because a shifted chain leaves the base plane holding a neighbour's colour.
+///
+/// The base extent is NON-SQUARE. A square base bottoms out at exactly 1x1 by construction, so the
+/// floor-versus-max rule is never exercised — `4 >> 2` is 1 and `.max(1)` changes nothing. Level 2 of a
+/// 5x3 texture is 1x1 only BECAUSE of the max: the height floors to 0, and a plane of zero rows would
+/// make every level after it start in the wrong place. Removing the max was the second control, and it
+/// passed until the base stopped being square.
+pub(super) fn gen_mip_level(seed: u64) -> Prog {
+    // Non-square, and deep enough that the last level's height floors to zero without the max.
+    let (bw, bh, levels) = if seed % 2 == 0 { (5u32, 3u32, 3u32) } else { (6, 2, 3) };
+    // Every third program reads the BASE level, which is what detects a shifted chain.
+    let level = if seed % 3 == 0 {
+        0
+    } else {
+        1 + (seed % (levels - 1) as u64) as u32
+    };
+    let (lw, lh) = ((bw >> level).max(1), (bh >> level).max(1));
+    let bytes = (lw * lh * 4) as usize;
+    let colour = |m: u32| {
+        let t = texel(seed.wrapping_add(m as u64 * 37));
+        [
+            t[0] as f32 / 255.0,
+            t[1] as f32 / 255.0,
+            t[2] as f32 / 255.0,
+            t[3] as f32 / 255.0,
+        ]
+    };
+    let mut encoder: Vec<Enc> = (0..levels)
+        .map(|m| Enc::ClearRect {
+            texture: 1,
+            x: 0,
+            y: 0,
+            w: (bw >> m).max(1),
+            h: (bh >> m).max(1),
+            color: colour(m),
+            base_array_layer: 0,
+            layer_count: 1,
+            mip_level: m,
+        })
+        .collect();
+    encoder.push(Enc::CopyTextureToBufferRegion {
+        src: 1,
+        src_sub: TextureSubresource {
+            mip: level,
+            layer: 0,
+            aspect: TextureAspect::All,
+        },
+        src_origin: Origin3d::default(),
+        extent: Extent3d {
+            width: lw,
+            height: lh,
+            depth: 1,
+        },
+        dst: 1,
+        dst_offset: 0,
+        bytes_per_row: lw * 4,
+        rows_per_image: lh,
+    });
+    Prog {
+        seed,
+        category: "mip_level",
+        ops: vec!["ClearRect", "CopyTextureToBufferRegion"],
+        cmds: vec![
+            Cmd::CreateTexture(
+                1,
+                TextureDesc {
+                    width: bw,
+                    height: bh,
+                    mip_levels: levels,
+                    ..tex(bw, bh)
+                },
+            ),
+            Cmd::CreateBuffer(1, buf(bytes as u64, buffer_usage::COPY_SRC | buffer_usage::COPY_DST)),
+            Cmd::Submit(CommandBuffer {
+                encoder,
+                signal: None,
+            }),
+        ],
+        read: Read::Buf {
+            id: 1,
+            offset: 0,
+            len: bytes,
+        },
+        tol: Tolerance::Unorm(0),
+        kernel: None,
+    }
+}
+
 /// (8) CROSS-FORMAT `BlitTexture`: a blit whose destination format DIFFERS from its source.
 ///
 /// This class was uncomparable because the two backends implemented different rules, and neither rule was

@@ -55,11 +55,18 @@ pub(crate) fn check_len(len: usize, offset: u64, span: usize) -> Result<()> {
 /// stride and validating the extent against the texture dimensions. `bytes_per_row == 0` means tight.
 pub(crate) fn texture_copy_layout(
     t: &Texture,
+    mip: u32,
     width: u32,
     height: u32,
     bytes_per_row: u32,
 ) -> Result<(usize, usize, usize)> {
-    if width > t.desc.width || height > t.desc.height {
+    if mip >= t.levels() {
+        return Err(GpuError::OutOfBounds);
+    }
+    // Bound against the LEVEL's extent. Level 2 of a 5x3 texture is 1x1, and a copy sized to the base
+    // extent would run off the end of a plane whose neighbour begins immediately after it.
+    let (lw, lh) = Texture::level_size(&t.desc, mip);
+    if width > lw || height > lh {
         return Err(GpuError::OutOfBounds);
     }
     let bpt = t
@@ -161,6 +168,7 @@ pub(crate) fn copy_buffer_to_buffer(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn copy_buffer_to_texture(
     res: &mut SessionResources,
     src: u32,
@@ -169,10 +177,11 @@ pub(crate) fn copy_buffer_to_texture(
     dst: u32,
     width: u32,
     height: u32,
+    mip: u32,
 ) -> Result<()> {
     let (row_bytes, tight, _span) = {
         let t = texture(res, dst)?;
-        texture_copy_layout(t, width, height, bytes_per_row)?
+        texture_copy_layout(t, mip, width, height, bytes_per_row)?
     };
     let rows = height as usize;
     let src_stride = if bytes_per_row == 0 {
@@ -198,14 +207,17 @@ pub(crate) fn copy_buffer_to_texture(
         out
     };
     let t = texture_mut(res, dst)?;
-    let plane_bytes = t.plane_bytes();
-    for (plane, image) in chunk.chunks_exact(tight).enumerate() {
-        let base = plane * plane_bytes;
+    for (layer, image) in chunk.chunks_exact(tight).enumerate() {
+        let base = t
+            .plane_at(mip, layer as u32)
+            .ok_or(GpuError::OutOfBounds)?
+            .start;
         t.pixels[base..base + tight].copy_from_slice(image);
     }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn copy_texture_to_buffer(
     res: &mut SessionResources,
     src: u32,
@@ -214,10 +226,11 @@ pub(crate) fn copy_texture_to_buffer(
     dst: u32,
     dst_offset: u64,
     bytes_per_row: u32,
+    mip: u32,
 ) -> Result<()> {
     let (row_bytes, _tight, _span) = {
         let t = texture(res, src)?;
-        texture_copy_layout(t, width, height, bytes_per_row)?
+        texture_copy_layout(t, mip, width, height, bytes_per_row)?
     };
     let rows = height as usize;
     let dst_stride = if bytes_per_row == 0 {
@@ -225,15 +238,19 @@ pub(crate) fn copy_texture_to_buffer(
     } else {
         bytes_per_row as usize
     };
-    let (tw, bpt) = {
+    let (tw, bpt, plane) = {
         let t = texture(res, src)?;
-        (t.desc.width as usize, t.desc.format.software_texel_bytes()?)
+        (
+            Texture::level_size(&t.desc, mip).0 as usize,
+            t.desc.format.software_texel_bytes()?,
+            t.plane_at(mip, 0).ok_or(GpuError::OutOfBounds)?.start,
+        )
     };
     let rows_data: Vec<u8> = {
         let t = texture(res, src)?;
         let mut out = Vec::with_capacity(rows * row_bytes);
         for row in 0..rows {
-            let start = row * tw * bpt;
+            let start = plane + row * tw * bpt;
             out.extend_from_slice(&t.pixels[start..start + row_bytes]);
         }
         out
@@ -442,16 +459,22 @@ pub(crate) fn region_layout(
         .format
         .bytes_per_texel()
         .ok_or(GpuError::Unsupported("software: non-color texture format"))?;
-    // The named region must lie inside the plane, checked without wrapping.
+    // The named region must lie inside the LEVEL's own extent, checked without wrapping. Bounding
+    // against the base extent would let a region on a small level overhang its plane and write into the
+    // next one — levels are contiguous in this allocation, so that would corrupt a neighbour rather than
+    // fail.
+    let (lw, lh) = Texture::level_size(&t.desc, sub.mip);
     let x_end = origin.x.checked_add(extent.width).ok_or(GpuError::OutOfBounds)?;
     let y_end = origin
         .y
         .checked_add(extent.height)
         .ok_or(GpuError::OutOfBounds)?;
-    if x_end > t.desc.width || y_end > t.desc.height || extent.depth > 1 || origin.z != 0 {
+    if x_end > lw || y_end > lh || extent.depth > 1 || origin.z != 0 {
         return Err(GpuError::OutOfBounds);
     }
-    let plane = t.layer_plane(sub.layer).ok_or(GpuError::OutOfBounds)?;
+    let plane = t
+        .plane_at(sub.mip, sub.layer)
+        .ok_or(GpuError::OutOfBounds)?;
     let row_bytes = bpt
         .checked_mul(extent.width as usize)
         .ok_or(GpuError::OutOfBounds)?;
@@ -497,7 +520,8 @@ pub(crate) fn copy_buffer_to_texture_region(
         region_layout(t, dst_sub, dst_origin, extent, bytes_per_row, rows_per_image)?
     };
     let bpt = row_bytes / (extent.width as usize).max(1);
-    let (tw, so) = (texture(res, dst)?.desc.width as usize, src_offset as usize);
+    let tw = Texture::level_size(&texture(res, dst)?.desc, dst_sub.mip).0 as usize;
+    let so = src_offset as usize;
     let rows: Vec<Vec<u8>> = {
         let b = buffer(res, src)?;
         (0..extent.height as usize)
@@ -539,7 +563,7 @@ pub(crate) fn copy_texture_to_buffer_region(
     };
     let bpt = row_bytes / (extent.width as usize).max(1);
     let t = texture(res, src)?;
-    let tw = t.desc.width as usize;
+    let tw = Texture::level_size(&t.desc, src_sub.mip).0 as usize;
     let rows: Vec<Vec<u8>> = (0..extent.height as usize)
         .map(|row| {
             let y = src_origin.y as usize + row;
@@ -558,22 +582,19 @@ pub(crate) fn copy_texture_to_buffer_region(
 
 /// The subresource rules a region copy must satisfy here, as opposed to on the executor.
 ///
-/// A non-zero MIP is refused because only level 0 is materialized — the executor round-trips mip 1 of a
-/// multi-level texture, so this reference is deliberately narrower rather than wrong, and the refusal is
-/// named so the difference is visible. A non-colour ASPECT is refused because the executor refuses it
-/// too ("buffer to texture region: depth/stencil aspects"), measured directly. The LAYER is checked by
+/// A MIP past the materialized chain is out of bounds — the same answer the executor gives, and the
+/// reference now materializes the whole pyramid rather than level 0 alone, so this is a bound rather than
+/// a refusal of the capability. A non-colour ASPECT is refused because the executor refuses it too
+/// ("buffer to texture region: depth/stencil aspects"), measured directly. The LAYER is checked by
 /// `region_layout`, which resolves the plane and reports out-of-bounds past the end.
 pub(crate) fn check_region_subresource(t: &Texture, sub: &TextureSubresource) -> Result<()> {
-    if sub.mip != 0 {
-        return Err(GpuError::Unsupported(
-            "software: non-zero mip region copy (only level 0 is materialized)",
-        ));
+    if sub.mip >= t.levels() {
+        return Err(GpuError::OutOfBounds);
     }
     if sub.aspect != crate::protocol::model::enums::TextureAspect::All {
         return Err(GpuError::Unsupported(
             "software: depth/stencil aspect region copy",
         ));
     }
-    let _ = t;
     Ok(())
 }
