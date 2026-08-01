@@ -396,6 +396,20 @@ impl GlContext {
                 sink.submit(&destroys)?;
                 ctx.clear_pending_destroys();
             }
+            // The recording is DISCARDED here, not retained: a frame that could not be built would
+            // otherwise accumulate without bound. That is the right policy and the wrong silence — from
+            // the application's side the draws simply never happened, and on a freshly minted target
+            // (a resize retires the stale-sized one) the region they would have covered stays
+            // zero-filled, which is transparency the user can see through. Name it, so the next
+            // occurrence is attributable to the frame that failed to build rather than to the renderer.
+            let (draws, blits) = ctx.recording_counts();
+            if draws > 0 || blits > 0 {
+                hl_log::hl_warn!(
+                    hl_log::tag::GL,
+                    "discarding an unbuildable frame: {draws} draw(s) and {blits} blit(s) recorded and \
+                     nothing lowered — their pixels will be missing from this frame"
+                );
+            }
             ctx.reset_frame();
             return Ok(false);
         };

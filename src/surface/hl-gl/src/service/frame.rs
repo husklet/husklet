@@ -597,6 +597,10 @@ impl Frame {
         // default-framebuffer draw lost all of it. Drop only the unrenderable draws, and only give up when
         // nothing renderable is left.
         if !ctx.local.surf.have {
+            let before = (
+                ctx.local.recording.draws.len(),
+                ctx.local.recording.blits.len(),
+            );
             ctx.local.recording.draws.retain(|draw| draw.fbo != 0);
             ctx.local
                 .recording
@@ -611,6 +615,25 @@ impl Frame {
                 .recording
                 .blits
                 .retain(|blit| blit.read_fbo != 0 && blit.draw_fbo != 0);
+            // Dropping work silently is what made the over-wide version of this guard so hard to see:
+            // the frame simply had less in it than the application recorded, with nothing to attribute
+            // that to. Say what went and why, so a surfaceless caller whose output is missing a region
+            // can tell "targeted a framebuffer this context does not have" from a translation failure.
+            let dropped = (
+                before.0 - ctx.local.recording.draws.len(),
+                before.1 - ctx.local.recording.blits.len(),
+            );
+            if dropped != (0, 0) {
+                hl_debug!(
+                    tag::GL,
+                    "surfaceless context: dropped {} draw(s) and {} blit(s) targeting the default \
+                     framebuffer, which this context does not have; {} draw(s) and {} blit(s) remain",
+                    dropped.0,
+                    dropped.1,
+                    ctx.local.recording.draws.len(),
+                    ctx.local.recording.blits.len()
+                );
+            }
             if ctx.local.recording.draws.is_empty() && ctx.local.recording.blits.is_empty() {
                 return None;
             }
