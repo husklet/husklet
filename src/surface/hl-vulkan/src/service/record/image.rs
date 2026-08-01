@@ -54,6 +54,13 @@ const INTEGER_FORMATS: &[TextureFormat] = &[
 /// The colour formats that support LINEAR filtering. The 32-bit float formats are absent: WebGPU makes
 /// them non-filterable without an optional feature, Vulkan requires the format to advertise linear
 /// filtering, and the host was measured refusing exactly these two.
+///
+/// This is one of THREE independent layers that decline a linear filter on `R32Float`/`Rgba32Float` —
+/// the others are the executor's blit (`hl-gpu-wgpu`'s `blit.rs::filterable`) and the software
+/// reference (`hl-gpu`'s `cpu/format.rs::FILTERABLE_REFUSED`). They agreed by coincidence rather than by
+/// construction until `hl-gpu-wgpu/tests/float_filter_agreement.rs` bound them; that test fails if any
+/// one of the three moves alone, and its header carries the measurement and the condition for enabling
+/// the feature. Add a format here only together with the other two.
 const FILTERABLE: &[TextureFormat] = &[
     TextureFormat::Rgba8Unorm,
     TextureFormat::Bgra8Unorm,

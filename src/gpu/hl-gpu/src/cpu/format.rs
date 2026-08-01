@@ -133,6 +133,12 @@ pub(crate) fn sample_bilinear(
 /// number that no specification asks for.
 /// Formats the HOST cannot filter, so this reference must not either.
 ///
+/// One of three independent layers that decline these two formats a linear filter; the others are the
+/// executor's blit and the Vulkan surface's `FILTERABLE` list. `float_filter_agreement.rs` in
+/// `hl-gpu-wgpu`'s tests binds the three so none can move alone, and records why the optional feature
+/// stays off: the adapter measured DOES offer it, but it is adapter-dependent while these two lists are
+/// compile-time, so enabling it would make the differential's answer depend on the host it ran on.
+///
 /// WebGPU makes the 32-bit float formats non-filterable unless `FLOAT32_FILTERABLE` is enabled, and the
 /// executor refuses a linear blit from one. This oracle could interpolate them perfectly well in
 /// software — and doing so would be the wrong kind of better: a reference that ACCEPTS what the subject

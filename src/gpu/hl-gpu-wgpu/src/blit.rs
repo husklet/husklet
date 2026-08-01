@@ -89,6 +89,11 @@ pub(crate) struct BlitCache {
 
 /// Whether a source format can be SAMPLED with filtering on this device.
 ///
+/// One of three independent layers that decline a linear filter on the 32-bit float formats; the others
+/// are the software reference's `FILTERABLE_REFUSED` and the Vulkan surface's `FILTERABLE`. See
+/// `tests/float_filter_agreement.rs`, which binds all three and records why `FLOAT32_FILTERABLE` stays
+/// unrequested — the adapter measured offers it, so this is a decision rather than an absence.
+///
 /// WebGPU makes the 32-bit float formats non-filterable unless `FLOAT32_FILTERABLE` is enabled, and a
 /// bind group whose layout says `Float { filterable: true }` cannot take such a view at all — which is
 /// why this matters for NEAREST too. The blit declared filterable unconditionally, so a blit whose source
