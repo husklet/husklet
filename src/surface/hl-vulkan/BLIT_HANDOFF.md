@@ -65,6 +65,43 @@ slice, and **no new shader is required**. Leaves Z-scaled blits refused.
 not validated at all — while both sides decline, a differential agrees by mutual refusal and establishes
 nothing.
 
+### LANDED 2026-08-01 (`e9de8e48f`): the oracle slice is done. Layers 1–3 below are what remains.
+
+The CPU oracle now serves an unscaled depth-spanning blit and `Mirror` has its `z`. What changed against
+the plan, measured rather than assumed:
+
+* **There were TWO gates, not four.** `check_copy_subresource`'s z refusal and the `D3` refusal were
+  real. The other two were not: a `D3` texture's slices ARE its planes, so `CopyBufferToTexture` already
+  populated every slice and `CopyTextureToBufferRegion` with `sub.layer = z` already read any one back.
+  `read_texture` returning `OutOfBounds` past the base plane is by design and was simply the wrong
+  channel to measure through. `oracle_spec/blit3d.rs` proves that instrument first, with distinct
+  content per slice, before any capability test leans on it.
+* **The regression did not reappear.** `a_nearest_blit_converts_rather_than_reinterpreting_a_same_size_texel`
+  passes. The form that avoids it: `Origin3d::z` names a PLANE and is spent exactly once, choosing the
+  plane; the in-plane offset stays `(y * width + x)` relative to that plane's own start. A `depth: 1` D2
+  texture resolves to `plane_at(0, 0)` = `0..w*h*bpt`, byte-identical to the old implicit base — so the
+  predecessor's second untried lead ("does `plane_at(0,0)` return what the old code assumed?") is
+  answered YES, and the first ("does `doz + dz` double-count?") is the trap that form avoids.
+* **`Mirror::z` is wire bit 2 and is NOT a `WIRE_VERSION` bump.** It widens the accepted value set with
+  the framing unchanged, and `Capabilities::negotiate` demands exact version equality, so no peer can
+  mis-frame it. Reasoning is on `Mirror::to_u32`; reverse it there, not by inference.
+* **`cargo check --workspace --all-targets` does NOT cover the Vulkan shim.**
+  `src/surface/hl-vulkan/shim/vulkan` is its own workspace, absent from the root `members` list, and it
+  held a live `Mirror` construction site the root check reported nothing about. The rule in `AGENTS.md`
+  needs this second step: check the shim crates separately, or the enumeration argument is one radius
+  short again.
+* **A deliberate divergence now exists.** The oracle serves `D3` blits; `hl-gpu-wgpu` still answers
+  "wgpu: 1D/3D blit source". That is the intended state for this slice and is recorded at both refusal
+  sites. It is also the thing that makes layer 3 measurable.
+* **z-scaled blits stay refused** as `Unsupported("software: depth-scaled blit")`. `VK_FILTER_LINEAR` is
+  trilinear on a 3D blit; nearest-slice selection would be a plausible wrong answer that reads as a
+  filtering difference. Do not "fix" it by picking a slice.
+
+Not done, and not started: the recorder (layer 2) and the executor (layer 3). The shim's `BlitRect` now
+derives `inverted.z` from the offset pair, so the flip is carried the moment the offsets are read and
+lifting the `vkCmdBlitImage: 3D region` refusal cannot silently ship an unflipped blit — but the refusal
+itself is untouched, at `shim/vulkan/src/transfer/copy.rs:240` and `copy2.rs:213`.
+
 ### An attempt was made and reverted. Read this before repeating it.
 
 The oracle change was written, compiled, and **reverted** because it regressed an existing test with
