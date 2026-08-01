@@ -31,6 +31,9 @@ hl-log = { path = "../../packages/hl-log" }
 
 [features]
 default = []
+# Compile the instrumented diagnostics into the lowering services. Off by default, and enabled through
+# the shim's own `verbose` so one `HL_DRIVER_FEATURES=verbose` instruments the whole guest driver.
+verbose = ["hl-log/release-verbose"]
 
 [build-dependencies]
 hl-surface-protocol = { path = "../hl-surface-protocol", default-features = false }

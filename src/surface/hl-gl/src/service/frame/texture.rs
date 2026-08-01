@@ -360,6 +360,24 @@ pub(super) fn lower_textures(
                 .cloned()
                 .unwrap_or((t.w, t.h, Arc::clone(&t.data)));
             let mut mip_stages: Vec<(u32, u32, u32, u32)> = Vec::new();
+            // INSTRUMENTED BUILDS ONLY. Both branches, so "no staging write was emitted" can be told
+            // apart from "this lowering path never ran". The first is a defect; the second means the
+            // trace is in the wrong place, and only reporting both distinguishes them.
+            #[cfg(feature = "verbose")]
+            {
+                use std::sync::atomic::{AtomicUsize, Ordering};
+                static BINDS: AtomicUsize = AtomicUsize::new(0);
+                if BINDS.fetch_add(1, Ordering::Relaxed) < 12 {
+                    hl_log::hl_error!(
+                        hl_log::tag::GL,
+                        "texbind gl_tex={gl_tex} texture={tex_ir} needs_upload={needs_upload} \
+                         ephemeral={ephemeral} shadow_bytes={} {}x{}",
+                        base_data.len(),
+                        base_w,
+                        base_h
+                    );
+                }
+            }
             let stage_ir = if needs_upload {
                 let stage_ir = ctx.alloc_buffer_ir()?;
                 // The GL model deliberately keeps CPU texture shadows as canonical RGBA8 regardless of
@@ -395,6 +413,34 @@ pub(super) fn lower_textures(
                         label: String::new(),
                     },
                 ));
+                // INSTRUMENTED BUILDS ONLY. The bytes as they enter the IR, which is the cut between a
+                // guest-side substitution (wrong here) and transport or host replay (right here, wrong
+                // on readback). The shim is already known to read the application's bytes correctly, so
+                // this is the next boundary downstream and the two answers want different owners.
+                #[cfg(feature = "verbose")]
+                {
+                    let traced: Option<usize> = std::env::var("HL_GL_UPLOAD_TRACE_SPAN")
+                        .ok()
+                        .and_then(|value| value.parse().ok());
+                    // Also the first few unconditionally. A filtered trace that prints nothing cannot
+                    // distinguish "no staging write happened for this texture" from "the length I
+                    // filtered on was wrong", and those are opposite findings.
+                    use std::sync::atomic::{AtomicUsize, Ordering};
+                    static STAGED: AtomicUsize = AtomicUsize::new(0);
+                    let count = STAGED.fetch_add(1, Ordering::Relaxed);
+                    if traced == Some(base_data.len()) || count < 12 {
+                        let head: Vec<String> =
+                            base_data.iter().take(8).map(|b| format!("{b:02x}")).collect();
+                        hl_log::hl_error!(
+                            hl_log::tag::GL,
+                            "encode stage buffer={stage_ir} texture={tex_ir} {}x{} bytes={} head=[{}]",
+                            base_w,
+                            base_h,
+                            base_data.len(),
+                            head.join(" ")
+                        );
+                    }
+                }
                 cmds.push(Cmd::WriteBuffer {
                     id: stage_ir,
                     offset: 0,

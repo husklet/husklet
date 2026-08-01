@@ -53,7 +53,30 @@ pub fn tex_image_2d_format(
         return;
     }
     let name = ctx.local.tex_unit[ctx.local.active_texture];
-    if name != 0 && !ctx.textures.image_2d(name, w, h, pixels, format) {
+    let stored = name != 0 && ctx.textures.image_2d(name, w, h, pixels, format);
+    // INSTRUMENTED BUILDS ONLY. Whether the bytes the shim read were ACCEPTED into the CPU shadow, taken
+    // from the real return value rather than from a second predicate that could disagree with it. The
+    // shim is known to read the application's pixels correctly, so a refusal here leaves the texture
+    // with zeroed storage and everything downstream working from an image nobody wrote -- which reads
+    // as "the upload was corrupted" when the upload was discarded.
+    #[cfg(feature = "verbose")]
+    {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static SEEN: AtomicUsize = AtomicUsize::new(0);
+        let traced: Option<usize> = std::env::var("HL_GL_UPLOAD_TRACE_SPAN")
+            .ok()
+            .and_then(|value| value.parse().ok());
+        if SEEN.fetch_add(1, Ordering::Relaxed) < 12 || traced == Some(pixels.len()) {
+            let head: Vec<String> = pixels.iter().take(8).map(|b| format!("{b:02x}")).collect();
+            hl_log::hl_error!(
+                hl_log::tag::GL,
+                "record tex_image name={name} {w}x{h} format={format:?} bytes={} stored={stored} head=[{}]",
+                pixels.len(),
+                head.join(" ")
+            );
+        }
+    }
+    if name != 0 && !stored {
         // Supplied pixels that are not the size this plane's texel requires. The texture keeps the zeroed
         // plane its format names; the application is told, rather than left with an image whose bytes and
         // whose declared format disagree.

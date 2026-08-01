@@ -52,4 +52,4 @@ opt-level = "z"
 # for an investigation — `HL_LOG_COUNTERS` cannot switch them on, because the code is not in the binary
 # to be gated. Build with `HL_DRIVER_FEATURES=verbose` to get an INSTRUMENTED driver, and bind any
 # number it produces to that driver's own subtree hash rather than to the shipping one.
-verbose = ["hl-log/release-verbose"]
+verbose = ["hl-log/release-verbose", "hl_gl/verbose"]
