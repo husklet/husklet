@@ -890,6 +890,12 @@ partition that routed exactly the work its guard ignored. This is cheaper to fin
 thing being guarded and it fails the same way: silently, with no error and stale pixels. Ask not only what
 a function refuses, but what its callers refuse to offer it.
 
+A test driven at a value both sides round to the same answer is testing nothing. Four rows compared a small
+integer written into a normalised sixteen-bit attribute, which is a fraction that rounds to zero
+everywhere, so three agreed on zero while measuring nothing and a fourth hid a real disagreement behind the
+same zero. Driving at the endpoints instead is both the honest test and the sharper one, since a conversion
+that divides by the wrong constant is invisible mid-range and visible at the top.
+
 Resume paths overstate completeness. Three separate measurement failures in one session were all in a
 resume: an isolation filter that considered only the cases remaining after a resume while claiming to have
 covered every failure, a checkpoint that wrote a zero change-count for work nobody had finished counting,
