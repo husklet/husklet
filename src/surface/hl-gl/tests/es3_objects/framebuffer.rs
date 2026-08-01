@@ -373,3 +373,56 @@ fn a_renderbuffer_allocates_the_plane_its_declared_format_names() {
         );
     }
 }
+
+/// A sub-image upload into a FLOAT plane writes half of it, at the wrong stride, and says it succeeded.
+/// This records the blocker ahead of the fix rather than the fix.
+///
+/// Measured on this tree: a 4x4 `Rgba16Float` plane is 128 bytes; `glTexSubImage2D` hands the model 64
+/// bytes of already-narrowed RGBA8 and `sub_image_2d` writes all 64 into the first half, addressing rows
+/// at a hardcoded four bytes per texel. It returns true. The remaining half stays zero. Nothing in the
+/// path can notice, because every participant is doing what it was written to do.
+///
+/// The reason this is recorded rather than fixed is the shape of the change, not its size. Teaching the
+/// upload conversion to emit texels of the destination plane — the obvious framing, and the one that
+/// sounds like one function — does not fix this and makes it worse: the model would then receive 128
+/// bytes and still address them at four per texel. The four-byte texel is not an assumption of the
+/// conversion, it is an assumption of the CPU SHADOW, stated in the field's own doc comment ("RGBA8
+/// pixels, `w*h*4` bytes") and relied on by nine sites in this model — the sub-image write, its
+/// unchanged-comparison fast path, mip extraction, the framebuffer copy-back, and the array/3D
+/// allocation among them. Making an upload land in a float plane is a model change across all of them,
+/// with the conversion as its last step rather than its first.
+///
+/// Two things follow that matter for whoever takes it. This is a live defect TODAY, with no extension
+/// advertised: `glTexStorage2D(GL_RGBA16F)` has produced a float plane since before the float work, so
+/// any application uploading into an immutable half-float texture is already getting this. And it is the
+/// fourth of four allocation paths in the float colour-buffer question — the one that keeps the answer at
+/// three of four, and the reason the extension stays unadvertised.
+#[test]
+#[ignore = "records the blocker: the CPU shadow addresses every plane at four bytes per texel"]
+fn a_sub_image_upload_fills_a_float_plane_completely() {
+    let mut c = ctx();
+    let tex = c.textures.gen();
+    record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
+    record::tex_storage_2d(&mut c, GL_TEXTURE_2D, 1, GL_RGBA16F, 4, 4);
+
+    let plane = c.textures.get(tex).expect("immutable storage");
+    assert_eq!(plane.data.len(), 4 * 4 * 8, "a half-float 4x4 plane is 128 bytes");
+
+    // What the upload path hands the model today: RGBA8, four bytes per texel.
+    let upload = vec![0xABu8; 4 * 4 * 4];
+    assert!(c.textures.sub_image_2d(tex, 0, 0, 4, 4, &upload));
+
+    let written = c
+        .textures
+        .get(tex)
+        .expect("plane")
+        .data
+        .iter()
+        .filter(|byte| **byte == 0xAB)
+        .count();
+    assert_eq!(
+        written,
+        4 * 4 * 8,
+        "a full-extent upload must cover the whole plane, not the first half of it"
+    );
+}
