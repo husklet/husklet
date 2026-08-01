@@ -92,6 +92,23 @@ impl Status {
             GpuError::ResourceLimit(_) => VK_ERROR_OUT_OF_DEVICE_MEMORY,
             GpuError::OutOfBounds => VK_ERROR_MEMORY_MAP_FAILED,
             GpuError::Kernel(_) => VK_ERROR_UNKNOWN,
+            // A REFUSAL is not a lost device. `TransportError::refusal()` is true exactly when the host
+            // received the frame, understood it, and declined it: the connection is not retired, the
+            // runtime rolled the batch back atomically, and the next request is as likely to succeed as
+            // before. Reporting that as VK_ERROR_DEVICE_LOST told every application its device was
+            // unrecoverable over one refused frame — which is why the conformance suite aborted its
+            // process 425 times, and why a refusal cascaded into hundreds of unrelated failures behind
+            // it. hl-gl's result map has drawn this distinction since it was added; this one had not.
+            //
+            // VK_ERROR_DEVICE_LOST is not even a legal result for vkCreateImage or vkCreateBuffer, which
+            // is what those refusals were being reported as.
+            //
+            // OUT_OF_DEVICE_MEMORY is the closest LEGAL and recoverable code, and it is legal on every
+            // command that can carry a refusal, including vkQueueSubmit. It is not precise, and it
+            // cannot be: the host knows which typed error it refused with and the acknowledgement byte
+            // carries only "no", so the reason is destroyed at the wire. Widening that byte is what
+            // would let this be exact.
+            GpuError::Transport(failure) if failure.refusal() => VK_ERROR_OUT_OF_DEVICE_MEMORY,
             GpuError::Decode(_) | GpuError::Transport(_) | GpuError::Panicked(_) => {
                 VK_ERROR_DEVICE_LOST
             }
@@ -111,6 +128,26 @@ impl Status {
 mod tests {
     use super::{Status, VK_ERROR_DEVICE_LOST};
     use hl_gpu::{GpuError, TransportError};
+
+    /// A host refusal must NOT be a lost device. The two differ in blast radius: a refusal belongs to the
+    /// one frame that provoked it and leaves the connection usable, and reporting it as DEVICE_LOST told
+    /// applications to tear everything down — the conformance suite aborts its process on it.
+    #[test]
+    fn a_host_refusal_is_recoverable_and_not_a_device_loss() {
+        use super::VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        use hl_gpu::transport::model::error::TransportPhase;
+
+        let refused = GpuError::Transport(TransportError::Rejected {
+            phase: TransportPhase::Acknowledgement,
+            acknowledgement: 0,
+        });
+        assert!(
+            matches!(&refused, GpuError::Transport(f) if f.refusal()),
+            "the fixture must actually be a refusal or this test proves nothing"
+        );
+        assert_eq!(Status::from_error(&refused), VK_ERROR_OUT_OF_DEVICE_MEMORY);
+        assert_ne!(Status::from_error(&refused), VK_ERROR_DEVICE_LOST);
+    }
 
     #[test]
     fn transport_loss_is_reported_as_device_loss() {
