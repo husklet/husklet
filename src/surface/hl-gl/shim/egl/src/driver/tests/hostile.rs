@@ -14,6 +14,8 @@ const OVER_MAX: i32 = query::MAX_TEXTURE_SIZE + 1;
 
 /// Bind this thread to a live context so the `gl*` entry points record against real state.
 fn bind_current() {
+    // A surface cannot exist on an uninitialized display; model the eglInitialize a real caller does.
+    GlobalState::access(|state| state.inited = true);
     let attributes = [
         EGL_CONTEXT_CLIENT_VERSION,
         3,
@@ -253,3 +255,4 @@ fn terminating_a_display_this_driver_never_issued_is_refused_and_tears_nothing_d
         "a refused eglTerminate must leave the real display initialized"
     );
 }
+

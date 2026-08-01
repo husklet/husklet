@@ -1,4 +1,5 @@
 use super::*;
+use hl_gl::result::EGL_NOT_INITIALIZED;
 
 impl State {
     pub(super) fn new() -> Self {
@@ -186,6 +187,16 @@ impl State {
         self.contexts.destroy_sync(token)
     }
 
+    /// Create a surface, or null with `EGL_NOT_INITIALIZED` when the display is not initialized.
+    ///
+    /// EGL 1.4 §3.5 requires that of every surface-creation entry point, and nothing here consulted the
+    /// flag: `eglInitialize` set it, `eglTerminate` cleared it, and no caller ever read it, so a
+    /// terminated display went on serving surfaces as though it were live. The check belongs here rather
+    /// than in the entry points because this is the one place all of them pass through — the window,
+    /// pbuffer and the four `eglCreatePlatform*` spellings — so a spelling added later cannot forget it.
+    ///
+    /// The state a terminated display leaves behind is not inert: `terminate` clears `native_present`, so
+    /// a surface created afterwards silently takes the readback path instead of presenting zero-copy.
     pub fn create_surface(
         &mut self,
         kind: SurfaceKind,
@@ -194,6 +205,10 @@ impl State {
         wl_surface: usize,
         native_window: usize,
     ) -> *mut c_void {
+        if !self.inited {
+            self.set_egl_error(EGL_NOT_INITIALIZED);
+            return core::ptr::null_mut();
+        }
         let token = self.mint_token() as usize;
         let surface = Surface {
             render: GlSurface {

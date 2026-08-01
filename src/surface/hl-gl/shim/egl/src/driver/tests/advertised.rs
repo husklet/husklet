@@ -18,6 +18,8 @@ fn resolves(name: &str) -> bool {
 
 /// The GL error register is context-local, so a `gl*` assertion needs this thread bound to a context.
 fn bind_current() {
+    // A surface cannot exist on an uninitialized display; model the eglInitialize a real caller does.
+    GlobalState::access(|state| state.inited = true);
     let attributes = [EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE];
     let context = eglCreateContext(
         DISPLAY_TOKEN as *mut c_void,
@@ -113,6 +115,8 @@ fn the_static_extension_inventory_refuses_every_request_to_change_it() {
 #[test]
 fn surface_operations_refuse_an_unknown_handle_and_an_undefined_attribute() {
     let display = DISPLAY_TOKEN as *mut c_void;
+    // A surface cannot exist on an uninitialized display; model the eglInitialize a real caller does.
+    GlobalState::access(|state| state.inited = true);
     let surface = WindowSurface::create(core::ptr::null_mut());
     let stranger = 0xDEAD_BEEFusize as *mut c_void;
     let _ = eglGetError();

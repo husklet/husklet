@@ -14,6 +14,7 @@ fn context_zero_never_resolves_to_a_share_group() {
 #[test]
 fn unbound_surface_carries_target_between_unshared_contexts() {
     let mut state = State::new();
+    state.inited = true;
     state.create_context(1, attributes());
     state.create_context(2, attributes());
     let surface = state.create_surface(SurfaceKind::Window, 640, 480, 0, 0) as usize;
@@ -89,6 +90,7 @@ fn unbound_surface_carries_target_between_unshared_contexts() {
 #[test]
 fn destroying_unbound_surface_retires_its_executor_resources() {
     let mut state = State::new();
+    state.inited = true;
     state.create_context(1, attributes());
     let surface = state.create_surface(SurfaceKind::Window, 32, 32, 0, 0) as usize;
     let group = state.contexts.group(1).expect("group");
@@ -193,4 +195,51 @@ fn resizing_a_transferred_target_allocates_fresh_ids_and_retires_old_texture() {
         .pending_destroys()
         .iter()
         .any(|command| matches!(command, hl_gpu::Cmd::DestroyTexture(id) if *id == first)));
+}
+
+/// A surface cannot be created against a display that was never initialized, or that was terminated.
+///
+/// EGL 1.4 §3.5 requires `EGL_NOT_INITIALIZED` of every surface-creation entry point. Nothing here read
+/// the flag: `eglInitialize` set it, `eglTerminate` cleared it, and no caller consulted it, so a
+/// terminated display went on handing out surfaces as though it were live. What it hands out is not
+/// equivalent either — `terminate` clears `native_present`, so a surface created afterwards silently
+/// takes the readback path instead of presenting zero-copy.
+///
+/// The check lives on `create_surface` rather than on the entry points because all six spellings —
+/// window, pbuffer, and the four `eglCreatePlatform*` variants — pass through it, and copying one
+/// condition into six places is how a claim ends up stated six times and re-derived none.
+#[test]
+fn a_surface_needs_a_display_that_is_initialized() {
+    let mut state = State::new();
+    assert!(!state.inited, "a fresh display is not yet initialized");
+
+    let refused = state.create_surface(SurfaceKind::Window, 64, 64, 0, 0);
+    assert!(
+        refused.is_null(),
+        "an uninitialized display must not back a surface"
+    );
+    assert_eq!(
+        state.take_egl_error(),
+        hl_gl::result::EGL_NOT_INITIALIZED,
+        "the refusal must say the display is not initialized"
+    );
+
+    state.inited = true;
+    let created = state.create_surface(SurfaceKind::Window, 64, 64, 0, 0);
+    assert!(
+        !created.is_null(),
+        "an initialized display still creates surfaces"
+    );
+
+    // The sequence that actually happens: a live display, then eglTerminate, then a create.
+    state.terminate();
+    let after_terminate = state.create_surface(SurfaceKind::Window, 64, 64, 0, 0);
+    assert!(
+        after_terminate.is_null(),
+        "a terminated display must not back a surface"
+    );
+    assert_eq!(
+        state.take_egl_error(),
+        hl_gl::result::EGL_NOT_INITIALIZED
+    );
 }

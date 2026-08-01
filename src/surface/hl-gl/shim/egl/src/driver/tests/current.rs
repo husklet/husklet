@@ -20,6 +20,8 @@ fn context() -> *mut c_void {
 }
 
 fn surface() -> *mut c_void {
+    // A surface cannot exist on an uninitialized display; model the eglInitialize a real caller does.
+    GlobalState::access(|state| state.inited = true);
     WindowSurface::create(core::ptr::null_mut())
 }
 
