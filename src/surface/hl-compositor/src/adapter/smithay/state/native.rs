@@ -112,6 +112,17 @@ pub(super) enum DeferOutcome {
     Refused,
 }
 
+impl DeferOutcome {
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::Joined => "joined",
+            Self::Reused => "reused",
+            Self::Parked => "parked",
+            Self::Refused => "refused",
+        }
+    }
+}
+
 /// Running totals behind the deferral report, and when each outstanding commit was parked.
 ///
 /// The three states a reader needs to tell apart are never-deferred (all counters zero), deferred and
@@ -126,6 +137,15 @@ pub(super) struct Deferrals {
     /// When each key was parked. Pruned against the live commit table at report time rather than
     /// maintained at every removal site, so it cannot drift or leak however commits are retired.
     parked_at: HashMap<Key, Instant>,
+    /// First occurrence of each (fate, reason) pair, so every distinct way a deferral can end says so
+    /// ONCE at error level with the surface and token that hit it.
+    ///
+    /// The totals alone were not enough and that gap cost a diagnosis: a wedged surface reported
+    /// `parked=3 refused=3` while the only line naming a deferral — a `hl_debug!` compiled out of the
+    /// build that ships — fired zero times, so the counts were known to come from *some* path and the
+    /// reader could not tell which. A counter that cannot name its own call site can start a sentence
+    /// and not finish it.
+    reasons: crate::diagnostic::Tally<(&'static str, &'static str)>,
 }
 
 struct Pending {

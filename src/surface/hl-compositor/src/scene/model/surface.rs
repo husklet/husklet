@@ -264,8 +264,16 @@ impl Surface {
     /// so no native window was ever created for it, so no frame could ever be shown — measured as a
     /// completely empty compositor log for a client that presented a thousand correct frames.
     ///
-    /// A third content path belongs HERE, as one more clause, rather than at each of the four callers
-    /// that ask this question.
+    /// SCOPE, learned the hard way. This answers "may this surface be SHOWN", and it is used by
+    /// `Scene::window_state` alone. It is NOT the answer to "has this surface committed content" —
+    /// that question belongs to `buffer.is_some()`, because a token is a promise to present zero-copy
+    /// and not content that has arrived. Three callers were converted to this predicate when it was
+    /// introduced and two of them were asking the second question: a toplevel counted as mapped from
+    /// the moment its token was minted, so the not-mapped-to-mapped transition never fired for a
+    /// zero-copy client and a GL client stopped getting a window. A widening has to be checked against
+    /// every KIND of client behind the predicate, not only the one that motivated it.
+    ///
+    /// A third content path belongs HERE, as one more clause.
     pub fn has_content(&self) -> bool {
         self.buffer.is_some() || self.native_token.is_some()
     }

@@ -15,8 +15,14 @@ impl HlState {
             .engine
             .scene
             .get(sid)
-            // Content, not a buffer: a zero-copy surface is mapped without ever attaching one.
-            .is_some_and(|surface| surface.has_content());
+            // A buffer, deliberately, NOT `has_content()`. "Was this surface mapped" asks whether it
+            // has committed content, and a GPU surface token is a promise to present zero-copy rather
+            // than content that has arrived. Asking `has_content()` here made a toplevel count as
+            // mapped from the moment its token was minted — before its first commit — so the
+            // not-mapped-to-mapped TRANSITION below never fired for a zero-copy client. The deferred
+            // native path sets a `BufferState` when the frame lands, so `buffer.is_some()` becomes
+            // true for those surfaces too, at the correct moment.
+            .is_some_and(|surface| surface.buffer.is_some());
 
         // Mirror Smithay's just-applied subsurface state (set_position offset, sync/desync, and the
         // place_above/place_below z-order) into the scene BEFORE the engine composes/paces this commit: a
@@ -405,7 +411,7 @@ impl HlState {
         let changed = self.engine.apply_commit(sid, commit);
         let mapped_toplevel = !was_mapped
             && self.engine.scene.get(sid).is_some_and(|surface| {
-                surface.has_content() && matches!(surface.role, SurfaceRole::Toplevel)
+                surface.buffer.is_some() && matches!(surface.role, SurfaceRole::Toplevel)
             });
         if let Some(surface) = self.engine.scene.get_mut(sid) {
             surface.set_size_limits(min_size, max_size);

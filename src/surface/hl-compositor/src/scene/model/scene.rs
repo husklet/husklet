@@ -480,6 +480,24 @@ mod window_visibility {
     }
 
     #[test]
+    fn a_token_does_not_make_a_surface_count_as_having_committed_content() {
+        // The GL direction, and the one that broke. `has_content` is about whether a surface may be
+        // SHOWN; whether it has COMMITTED content is `buffer.is_some()`, and conflating the two made a
+        // toplevel look mapped from the moment its token was minted — before its first commit — so the
+        // not-mapped-to-mapped transition never fired for a client that drives GL zero-copy.
+        let mut scene = Scene::new();
+        let id = toplevel(&mut scene);
+        scene.set_native_token(id, Some(0x5EED));
+        let surface = scene.get(id).expect("surface");
+        assert!(surface.has_content(), "a token means the surface may be shown");
+        assert!(
+            surface.buffer.is_none(),
+            "a token must NOT count as committed content: `was_mapped` and output membership ask \
+             this question and a premature yes suppresses the map transition"
+        );
+    }
+
+    #[test]
     fn a_toplevel_presenting_through_a_gpu_surface_token_is_visible() {
         let mut scene = Scene::new();
         let id = toplevel(&mut scene);

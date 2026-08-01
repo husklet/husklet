@@ -56,7 +56,23 @@ impl NativeState {
     /// total for each of the four fates WITH the window they accumulated over, so "no deferrals at
     /// all" and "deferrals that never complete" cannot print the same thing. `oldest_ms` is the age of
     /// the longest-outstanding park, which is the number that says the hypothesis is right.
-    fn note(&mut self, key: Option<Key>, outcome: DeferOutcome) {
+    fn note(&mut self, key: Option<Key>, outcome: DeferOutcome, reason: &'static str) {
+        // One error-level line per distinct (fate, reason), milestone-latched, carrying the surface and
+        // token it happened to. This is what turns "parked=3 refused=3" into a sentence: which path
+        // recorded it, and for a refusal, WHICH of the four refusals it was.
+        if let Some(seen) = self.deferrals.reasons.record((outcome.name(), reason)) {
+            hl_log::hl_log!(
+                hl_log::tag::PRESENT,
+                hl_log::Level::Error,
+                "native deferral {} reason={} token={} serial={} count={} over_ms={}",
+                outcome.name(),
+                reason,
+                key.map_or(0, |key| key.token.get()),
+                key.map_or(0, |key| key.serial.get()),
+                seen.count,
+                seen.since.as_millis()
+            );
+        }
         match outcome {
             DeferOutcome::Joined => self.deferrals.joined += 1,
             DeferOutcome::Reused => self.deferrals.reused += 1,
@@ -138,25 +154,25 @@ impl NativeState {
         // frame can ever complete it — and one returns `Defer::Waiting` having parked it. Collapsing
         // those into one value with no diagnostic is what made a wedged surface unreadable.
         if self.canceled.contains(&key) {
-            self.note(None, DeferOutcome::Refused);
+            self.note(Some(key), DeferOutcome::Refused, "defer:canceled");
             return (Defer::Waiting, vec![deferred]);
         }
         if self.poisoned.contains(&key.token)
             || self.closing.contains(&key.token)
             || !self.activate(key.token)
         {
-            self.note(None, DeferOutcome::Refused);
+            self.note(Some(key), DeferOutcome::Refused, "defer:token-not-live");
             return (Defer::Waiting, vec![deferred]);
         }
         if self.last_joined.get(&key.token).copied() == Some(key.serial) {
-            self.note(None, DeferOutcome::Reused);
+            self.note(Some(key), DeferOutcome::Reused, "defer:same-serial");
             return (Defer::Reuse(deferred), Vec::new());
         }
         if let Some(frame) = self.frames.remove(&key) {
             self.frame_order.retain(|candidate| *candidate != key);
             self.last_joined.insert(key.token, key.serial);
             self.activate(key.token);
-            self.note(None, DeferOutcome::Joined);
+            self.note(Some(key), DeferOutcome::Joined, "defer:frame-already-here");
             return (Defer::Ready(Ready { frame, deferred }), Vec::new());
         }
         if self
@@ -164,7 +180,7 @@ impl NativeState {
             .get(&key.token)
             .is_some_and(|last| key.serial < *last)
         {
-            self.note(None, DeferOutcome::Refused);
+            self.note(Some(key), DeferOutcome::Refused, "defer:serial-overtaken");
             return (Defer::Waiting, vec![deferred]);
         }
         let mut discarded = self
@@ -194,7 +210,7 @@ impl NativeState {
             }
         }
         self.commit_order.push_back(key);
-        self.note(Some(key), DeferOutcome::Parked);
+        self.note(Some(key), DeferOutcome::Parked, "defer:awaiting-frame");
         (Defer::Waiting, discarded)
     }
 
@@ -224,7 +240,7 @@ impl NativeState {
             || (!self.active_tokens.contains(&token) && deferred.external.is_none())
             || !self.activate(token)
         {
-            self.note(None, DeferOutcome::Refused);
+            self.note(None, DeferOutcome::Refused, "defer_pending:token-not-live");
             return (Defer::Waiting, vec![deferred]);
         }
         let matching = self
@@ -235,7 +251,7 @@ impl NativeState {
             .collect::<Vec<_>>();
         let queue = self.pending.entry(token).or_default();
         if queue.len() == self.serial_capacity {
-            self.note(None, DeferOutcome::Refused);
+            self.note(None, DeferOutcome::Refused, "defer_pending:queue-full");
             return (Defer::Waiting, vec![deferred]);
         }
         queue.push_back(Pending::commit(deferred));
@@ -246,7 +262,7 @@ impl NativeState {
             self.frame_order.retain(|candidate| *candidate != key);
             match self.resolve_pending(frame) {
                 PendingFrame::Ready(ready) => {
-                    self.note(None, DeferOutcome::Joined);
+                    self.note(None, DeferOutcome::Joined, "defer_pending:frame-matched");
                     return (Defer::Ready(*ready), Vec::new());
                 }
                 PendingFrame::Discarded => {}
@@ -258,7 +274,7 @@ impl NativeState {
         }
         // Parked on the pending queue rather than on a `(token, serial)` key: the serial is not known
         // yet, so there is no key to age. `pending` in the report is what shows these.
-        self.note(None, DeferOutcome::Parked);
+        self.note(None, DeferOutcome::Parked, "defer_pending:awaiting-serial");
         (Defer::Waiting, Vec::new())
     }
 
