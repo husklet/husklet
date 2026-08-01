@@ -372,6 +372,18 @@ pub(super) fn lower_textures(
                 use std::sync::atomic::{AtomicUsize, Ordering};
                 static BINDS: AtomicUsize = AtomicUsize::new(0);
                 if BINDS.fetch_add(1, Ordering::Relaxed) < 12 {
+                    // Whether this GL name is actually a RENDER TARGET, read off the attachment table
+                    // rather than inferred from its content being absent and its extent looking like a
+                    // canvas. `recorded_framebuffers` is the set of FBOs this frame drew into, so a hit
+                    // means the texture was rendered into and then sampled -- the case whose content
+                    // never passes through an upload and so never reaches the CPU shadow. A miss moves
+                    // the defect somewhere else entirely and must not be quietly read as a hit.
+                    let mut drawn_into: Vec<u32> = ctx
+                        .recorded_framebuffers()
+                        .filter(|fbo| *fbo != 0 && ctx.framebuffer_color_attachment(*fbo) == gl_tex)
+                        .collect();
+                    drawn_into.sort_unstable();
+                    drawn_into.dedup();
                     // The inputs the arm was chosen FROM, beside the arm. `needs_upload=true` has three
                     // different causes wearing one symptom -- a shadow that is stale, one that was never
                     // written, and a path that never consults residency at all -- and only the arm plus
@@ -383,12 +395,13 @@ pub(super) fn lower_textures(
                          needs_upload={needs_upload} ephemeral={ephemeral} \
                          shadow_bytes={} shadow_nonzero={} generation={:?} shared_residency={} \
                          live_generation={live_generation} shared_advanced={shared_advanced} \
-                         snapshot={} {}x{}",
+                         snapshot={} render_target_of={:?} {}x{}",
                         base_data.len(),
                         base_data.iter().any(|byte| *byte != 0),
                         t.sampled_generation(),
                         t.shared_residency().is_some(),
                         snapshot.is_some(),
+                        drawn_into,
                         base_w,
                         base_h
                     );
