@@ -416,3 +416,61 @@ fn render_varying(exec: &mut WgpuExecutor, vs: &str, fs: &str) -> hl_gpu::Result
     )?;
     exec.read_texture(&session.resources, 1)
 }
+
+/// RECORDED LIMIT — a two-row matrix inside a NESTED STRUCT in a std140 block is refused.
+///
+/// The column split that makes `matNx2` expressible at all rewrites members declared directly in the
+/// block. A matrix reached through a struct (`struct S { mat3x2 m; }; uniform Blk { S s; };`) is not one of
+/// those, so it arrives at naga intact and is rejected. The failing set is the two-row shapes — `mat2`,
+/// `mat3x2`, `mat4x2` — and every other shape works, nested or not.
+///
+/// Not fixed here, and the reason is worth stating rather than leaving as an omission: the struct is
+/// declared outside the block and may also be used where `matNx2` is perfectly legal, so rewriting its
+/// member would change types the shader relies on elsewhere. Doing it properly means rewriting uses
+/// (`s.m`) rather than the declaration, which needs the field-access tracking this textual pass does not
+/// have. A refusal is the honest state until then.
+///
+/// This asserts the limit so it cannot be mistaken for working, and so it fails the moment someone makes
+/// it pass — at which point the assertion below should become a value check like the ones above.
+#[test]
+fn two_row_matrices_nested_in_a_struct_are_a_recorded_limit() {
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
+
+    for (ty, _) in MATRICES {
+        let two_row = matches!(ty, "mat2" | "mat3x2" | "mat4x2");
+        let fs = format!(
+            "#version 460\nstruct S {{ {ty} m; }};\n\
+             layout(std140, binding = 0) uniform Blk {{ S s; }};\n\
+             layout(location = 0) out vec4 o;\n\
+             void main() {{ o = vec4(s.m[0][0], s.m[1][0], s.m[0][1], s.m[1][1]); }}\n"
+        );
+        let outcome = render_source(&mut exec, &fs);
+        if two_row {
+            assert!(
+                outcome.is_err(),
+                "{ty} nested in a struct is a KNOWN LIMIT. If it now compiles, the split reaches struct \
+                 members — replace this with a value assertion"
+            );
+        } else {
+            outcome.unwrap_or_else(|e| panic!("{ty} nested in a struct must still compile: {e}"));
+        }
+    }
+}
+
+/// Compile a fragment source through the executor's real shader path; the pipeline is not built, so this
+/// isolates translation.
+fn render_source(exec: &mut WgpuExecutor, fs: &str) -> hl_gpu::Result<()> {
+    let mut session = new_session(exec);
+    hl_gpu::runtime::submit(
+        &mut session,
+        exec,
+        0,
+        &[Cmd::CreateShader {
+            id: 1,
+            kind: ShaderPayloadKind::Glsl,
+            spirv: glsl(glsl_stage::FRAGMENT, "fmain", fs),
+        }],
+    )
+    .map(|_| ())
+}
