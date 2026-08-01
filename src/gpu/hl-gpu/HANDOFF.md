@@ -124,3 +124,87 @@ The count for a working external-memory tier is **23 entry points, not 21** — 
 `cuSignalExternalSemaphoresAsync` or `cuWaitExternalSemaphoresAsync`, and an imported semaphore is inert
 without them. That is right for "what is missing that we measure" and wrong for "what building it costs",
 and it errs in the direction that hurts.
+
+---
+
+# Slice 3 in progress — what has landed, and two decisions that need the manager
+
+Appended by the agent building slice 3. The sections above are slices 1–2 and are unchanged.
+
+## Landed
+
+| commit | established |
+|---|---|
+| this section's parent commit | `SessionId::next` (process-global, monotonic, never reused); `Session::id`; `Session::exports: Option<Exports>` defaulting to `None`; teardown in both directions on `Drop` and `release_all`; **`Exports::access`**, the bridge that hands a party an `Access` bound to the entry's own state cell. 9 tests in `tests/sharing.rs`'s new sibling `tests/sharing_session.rs`, with a 7-row mutation matrix in the file. |
+
+That is handoff steps 3 and 4. `Entry::state` became the `Arc<AtomicU64>` itself rather than gaining one
+beside a `MapState` field, so there is exactly one representation of a claim; `MapState` is derived on
+read. Two representations would have drifted in the direction nobody tests — the registry's own tests read
+the field and stay green while every guard reads a stale cell.
+
+Worth carrying forward from the mutation run: **a guard bound to the WRONG session is invisible to every
+refusal assertion**, because a wrongly-bound guard refuses more rather than less. Only the positive
+control caught it.
+
+## Decision 1: `ExportBuffer`/`ImportBuffer` cannot be `Cmd` variants. They belong on the readback channel.
+
+Step 1 above specifies them as `Cmd` variants. That does not work, and the reason is structural rather
+than stylistic: **a `Cmd` batch is fire-and-forget with a one-byte ack, and an export mints a host-owned
+identity the guest has to learn.** `ImportBuffer` has the same problem in the other direction — SHARING.md
+requires the importer to receive the export's authoritative byte length and be unable to widen it, which
+is a value returned, not a value sent.
+
+The only way to keep them as `Cmd`s is to let the GUEST name the `ExportId`. That gives away the single
+property the whole design rests on: non-reuse is what makes a stale handle distinguishable from a live
+one, and SHARING.md makes the host owe that. A guest whose counter repeats would get a silently wrong
+resource where the design owes an error.
+
+The channel that already fits exists: `transport/model/readback.rs`. It is a versioned, additive
+request/response over the same connection, disjoint from submit by a `surface_id` sentinel, with an
+extensible `kind` byte (`BUFFER`, `FENCE`, `FENCE_WAIT`) and a length-prefixed reply. Export is
+`kind = EXPORT_BUFFER`, `id = buffer`, reply = the `ExportId`. Import is `kind = IMPORT_BUFFER`,
+`id = the local buffer id the guest mints`, `offset = the ExportId`, reply = the authoritative length.
+It carries its own `READBACK_VERSION`, so this costs no `WIRE_VERSION` bump and cannot mis-frame a submit.
+
+Consequence worth noting: **`Cmd` is not touched at all**, so the shared-type hazard the handoff warns
+about does not arise for this part. Map/unmap (step 5) are a different case and may still want to be
+`Cmd`s, because they are ordering points inside a batch and return nothing.
+
+## Decision 2: the `Box<dyn Any>` / `Arc<dyn Any + Send + Sync>` reconciliation splits by executor
+
+The handoff calls this the first real design decision. Three facts were measured, not assumed:
+
+- **Connections are genuinely concurrent.** `apps/husklet/src/runtime/gpu_service.rs::serve_connection`
+  does `thread::spawn` per accepted connection. (`hl_gpu::transport::server::serve` is sequential and
+  says so in its own doc comment, which is misleading if read as the product's threading model — the
+  composition root does not use it.) So a shared native must be safely mutable under real concurrency.
+  The map protocol does not supply that: while `Unmapped`, BOTH sessions are permitted, by design —
+  SHARING.md says the mechanism turns a race into a refusal only while mapped.
+- **All connections share one wgpu device.** `Executors::Wgpu(Device)` is cloned per connection and
+  `device.executor()` builds a fresh `WgpuExecutor` over the *same* `Device`.
+- **`wgpu::Buffer` is `Clone + Send + Sync`** (wgpu 24.0.5) — verified by compiling a trait assertion, not
+  from memory. It is internally refcounted to one allocation.
+
+So on the **product path aliasing is a `Clone`** and is already sound: two sessions holding clones of one
+`wgpu::Buffer` on one device is exactly the alias tier 1 wants, and `WgpuBuffer { buffer, size }` needs no
+change beyond an `export`/`import` pair.
+
+The **CPU reference executor is the expensive one**, and it is the oracle rather than the product path.
+`cpu::model::buffer::Buffer` is `{ data: Vec<u8>, usage: u32 }` with 37 sites treating `data` as a slice
+(`len`, index, `copy_from_slice`, `iter_mut`, `&b.data`). Aliasing it needs either `Arc<Mutex<Vec<u8>>>`
+— which touches all 37 and creates a self-copy deadlock in `service/copy.rs`, where a source and a
+destination are held at once — or `UnsafeCell`, whose soundness argument the map protocol cannot supply
+for the reason above.
+
+**Recommendation, for the manager rather than taken unilaterally:** put `export_buffer`/`import_buffer` on
+the `GpuExecutor` port with defaults returning `Unsupported`, implement them on `WgpuExecutor` only, and
+leave the CPU executor honestly declining. An executor that cannot alias then says so instead of
+returning a copy that looks like an alias — a copy that succeeds would make the copy-elimination
+measurement meaningless in exactly the way this slice exists to avoid. The cost is that the closed path
+is not testable in-process against the CPU oracle, so the end-to-end proof has to be
+`e2e/husklet/apps/cuda-present` on the host.
+
+## Not done, and not measured
+
+Steps 1, 2 and 5, and therefore the copy-elimination distribution — there is still no closed path, so
+there is still no copy to have eliminated. It remains slice 3's to take, as a distribution.
