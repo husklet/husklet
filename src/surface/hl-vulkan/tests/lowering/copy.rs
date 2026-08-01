@@ -1088,3 +1088,45 @@ fn a_transfer_command_inside_a_render_pass_is_refused_while_recording() {
     // And after the pass closes it is legal again.
     assert!(record::cmd_clear_color_image(&mut d, cb, target, [1.0; 4], &[]).is_ok());
 }
+
+/// A multisampled image is a render target this backend draws into and resolves out of: one layer, one
+/// mip. Creating a multisampled ARRAY image produced a host validation failure — "Multisampled texture
+/// depth or array layers must be 1, got 8" — which reached the guest as a refused frame it could not
+/// attribute to any particular call.
+#[test]
+fn a_multisampled_image_must_be_single_layer_and_single_mip() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let make = |d: &mut Device, sink: &mut RecordingSink, layers, mips, samples| {
+        create::create_image_layers(
+            d,
+            sink,
+            32,
+            32,
+            layers,
+            mips,
+            false,
+            vk_format::R8G8B8A8_UNORM,
+            vk_image_usage::COLOR_ATTACHMENT,
+            samples,
+        )
+    };
+    // Positive controls FIRST, so the refusals below are about multisampling and not about the shape.
+    assert!(
+        make(&mut d, &mut sink, 1, 1, 4).is_ok(),
+        "a plain multisampled 2D image is exactly what this backend supports"
+    );
+    assert!(
+        make(&mut d, &mut sink, 8, 4, 1).is_ok(),
+        "a single-sample layered, mipped image is still fine"
+    );
+
+    assert!(
+        make(&mut d, &mut sink, 8, 1, 4).is_err(),
+        "a multisampled ARRAY image is what the host refused"
+    );
+    assert!(
+        make(&mut d, &mut sink, 1, 4, 4).is_err(),
+        "a multisampled mip chain is forbidden by Vulkan itself"
+    );
+}

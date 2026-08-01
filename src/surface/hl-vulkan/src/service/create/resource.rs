@@ -396,6 +396,16 @@ pub fn create_image_geometry(
             "vkCreateImage: 1D images require extent.height == 1 and mipLevels == 1",
         ));
     }
+    // A multisampled image is a render target this backend draws into and resolves out of: it carries no
+    // mip chain and exactly one layer. Vulkan itself forbids the mip chain; the single layer is this
+    // backend's limit, and creating one anyway produced a host validation failure —
+    // "Multisampled texture depth or array layers must be 1, got 8" — that reached the guest as a
+    // refused frame with no way to attribute it. Refusing here names the image that cannot be made.
+    if vk_samples.max(1) > 1 && (layers != 1 || mip_levels != 1 || dim != TextureDim::D2) {
+        return Err(GpuError::Invalid(
+            "vkCreateImage: a multisampled image must be 2D with one array layer and one mip level",
+        ));
+    }
     let max_dim = if dim == TextureDim::D3 {
         dev.physical_device.limits.max_image_dimension_3d
     } else {
