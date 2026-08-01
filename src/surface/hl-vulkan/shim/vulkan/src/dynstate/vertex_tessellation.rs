@@ -69,7 +69,8 @@ pub extern "C" fn vkCmdBindVertexBuffers2(
         for i in 0..binding_count as usize {
             let slot = first_binding + i as u32;
             let offset = offsets.map(|o| o[i]).unwrap_or(0);
-            let _ = record::cmd_bind_vertex_buffer(d, cb, slot, buffers[i], offset);
+            let recorded = record::cmd_bind_vertex_buffer(d, cb, slot, buffers[i], offset);
+            d.latch(cb, recorded);
         }
     });
 }

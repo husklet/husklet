@@ -35,7 +35,7 @@ impl Transfer2 {
             unsafe { std::slice::from_raw_parts(info.p_regions, info.region_count as usize) };
         ShimState::with_device(|device| {
             for region in regions {
-                let _ = record::cmd_copy_buffer(
+                let recorded = record::cmd_copy_buffer(
                     device,
                     command_buffer,
                     info.src_buffer,
@@ -44,6 +44,7 @@ impl Transfer2 {
                     region.dst_offset,
                     region.size,
                 );
+                device.latch(command_buffer, recorded);
             }
         });
     }
@@ -69,7 +70,7 @@ impl Transfer2 {
                 {
                     continue;
                 }
-                let _ = record::cmd_copy_buffer_to_image_region(
+                let recorded = record::cmd_copy_buffer_to_image_region(
                     device,
                     command_buffer,
                     info.src_buffer,
@@ -89,6 +90,7 @@ impl Transfer2 {
                         .layer_count
                         .max(region.image_extent.depth.max(1)),
                 );
+                device.latch(command_buffer, recorded);
             }
         });
     }
@@ -114,7 +116,7 @@ impl Transfer2 {
                 {
                     continue;
                 }
-                let _ = record::cmd_copy_image(
+                let recorded = record::cmd_copy_image(
                     device,
                     command_buffer,
                     info.src_image,
@@ -125,6 +127,7 @@ impl Transfer2 {
                     (region.dst_offset.x as u32, region.dst_offset.y as u32),
                     (region.extent.width, region.extent.height.max(1)),
                 );
+                device.latch(command_buffer, recorded);
             }
         });
     }
@@ -150,7 +153,7 @@ impl Transfer2 {
                 {
                     continue;
                 }
-                let _ = record::cmd_copy_image_to_buffer_region(
+                let recorded = record::cmd_copy_image_to_buffer_region(
                     device,
                     command_buffer,
                     info.src_image,
@@ -170,6 +173,7 @@ impl Transfer2 {
                         .layer_count
                         .max(region.image_extent.depth.max(1)),
                 );
+                device.latch(command_buffer, recorded);
             }
         });
     }
@@ -202,7 +206,7 @@ impl Transfer2 {
                 {
                     continue;
                 }
-                let _ = record::cmd_blit_image(
+                let recorded = record::cmd_blit_image(
                     device,
                     command_buffer,
                     info.src_image,
@@ -221,6 +225,7 @@ impl Transfer2 {
                     ),
                     linear,
                 );
+                device.latch(command_buffer, recorded);
             }
         });
     }

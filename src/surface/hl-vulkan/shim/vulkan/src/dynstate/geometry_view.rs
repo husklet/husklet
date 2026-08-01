@@ -51,7 +51,7 @@ pub extern "C" fn vkCmdSetViewportWithCount(
     };
     ShimState::with_device(|d| {
         for v in vps {
-            let _ = record::cmd_set_viewport(
+            let recorded = record::cmd_set_viewport(
                 d,
                 cb,
                 v.x,
@@ -61,6 +61,7 @@ pub extern "C" fn vkCmdSetViewportWithCount(
                 v.min_depth,
                 v.max_depth,
             );
+            d.latch(cb, recorded);
         }
     });
 }
@@ -89,7 +90,7 @@ pub extern "C" fn vkCmdSetScissorWithCount(
     };
     ShimState::with_device(|d| {
         for r in rects {
-            let _ = record::cmd_set_scissor(
+            let recorded = record::cmd_set_scissor(
                 d,
                 cb,
                 r.offset.x.max(0) as u32,
@@ -97,6 +98,7 @@ pub extern "C" fn vkCmdSetScissorWithCount(
                 r.extent.width,
                 r.extent.height,
             );
+            d.latch(cb, recorded);
         }
     });
 }

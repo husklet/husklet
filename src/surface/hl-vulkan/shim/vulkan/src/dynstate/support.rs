@@ -33,7 +33,8 @@ impl DynamicState {
             return;
         };
         ShimState::with_device(|device| {
-            let _ = record::set_dynamic(device, handle, update);
+            let recorded = record::set_dynamic(device, handle, update);
+            device.latch(handle, recorded);
         });
     }
 }

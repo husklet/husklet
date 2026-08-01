@@ -93,7 +93,8 @@ pub extern "C" fn vkCmdBindPipeline(
         return;
     };
     ShimState::with_sink(|dev, _| {
-        let _ = record::cmd_bind_pipeline(dev, cb, pipeline);
+        let recorded = record::cmd_bind_pipeline(dev, cb, pipeline);
+        dev.latch(cb, recorded);
     });
 }
 
@@ -124,7 +125,9 @@ pub extern "C" fn vkCmdBindDescriptorSets(
             .to_vec()
     };
     ShimState::with_sink(|dev, sink| {
-        let _ = record::cmd_bind_descriptor_sets(dev, sink, cb, first_set, &sets, &dyn_offsets);
+        let recorded =
+            record::cmd_bind_descriptor_sets(dev, sink, cb, first_set, &sets, &dyn_offsets);
+        dev.latch(cb, recorded);
     });
 }
 
@@ -138,7 +141,8 @@ pub extern "C" fn vkCmdDispatch(
         return;
     };
     ShimState::with_sink(|dev, _| {
-        let _ = record::cmd_dispatch(dev, cb, group_count_x, group_count_y, group_count_z);
+        let recorded = record::cmd_dispatch(dev, cb, group_count_x, group_count_y, group_count_z);
+        dev.latch(cb, recorded);
     });
 }
 
@@ -150,7 +154,8 @@ pub extern "C" fn vkCmdDispatchIndirect(command_buffer: *mut c_void, buffer: u64
         return;
     };
     ShimState::with_sink(|dev, _| {
-        let _ = record::cmd_dispatch_indirect(dev, cb, buffer, offset);
+        let recorded = record::cmd_dispatch_indirect(dev, cb, buffer, offset);
+        dev.latch(cb, recorded);
     });
 }
 
@@ -176,6 +181,7 @@ pub extern "C" fn vkCmdExecuteCommands(
         .filter_map(|&p| unsafe { CommandBuffer::handle(p) })
         .collect();
     ShimState::with_sink(|dev, _| {
-        let _ = record::cmd_execute_commands(dev, primary, &secondaries);
+        let recorded = record::cmd_execute_commands(dev, primary, &secondaries);
+        dev.latch(primary, recorded);
     });
 }

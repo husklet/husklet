@@ -100,7 +100,8 @@ pub extern "C" fn vkCmdSetEvent(command_buffer: *mut c_void, event: u64, _stage_
     };
     StateStore::with(|s| {
         if let Some(d) = s.device_mut() {
-            let _ = record::cmd_set_event(d, cb, event, true);
+            let recorded = record::cmd_set_event(d, cb, event, true);
+            d.latch(cb, recorded);
         }
     });
 }
@@ -111,7 +112,8 @@ pub extern "C" fn vkCmdResetEvent(command_buffer: *mut c_void, event: u64, _stag
     };
     StateStore::with(|s| {
         if let Some(d) = s.device_mut() {
-            let _ = record::cmd_set_event(d, cb, event, false);
+            let recorded = record::cmd_set_event(d, cb, event, false);
+            d.latch(cb, recorded);
         }
     });
 }
@@ -140,7 +142,8 @@ pub extern "C" fn vkCmdWaitEvents(
     };
     StateStore::with(|s| {
         if let Some(d) = s.device_mut() {
-            let _ = record::cmd_wait_events(d, cb, &events);
+            let recorded = record::cmd_wait_events(d, cb, &events);
+            d.latch(cb, recorded);
         }
     });
 }
@@ -251,7 +254,8 @@ pub extern "C" fn vkCmdBeginQuery(
     };
     StateStore::with(|s| {
         if let Some(d) = s.device_mut() {
-            let _ = record::cmd_begin_query(d, cb, query_pool, query);
+            let recorded = record::cmd_begin_query(d, cb, query_pool, query);
+            d.latch(cb, recorded);
         }
     });
 }
@@ -262,7 +266,8 @@ pub extern "C" fn vkCmdEndQuery(command_buffer: *mut c_void, query_pool: u64, qu
     };
     StateStore::with(|s| {
         if let Some(d) = s.device_mut() {
-            let _ = record::cmd_end_query(d, cb, query_pool, query);
+            let recorded = record::cmd_end_query(d, cb, query_pool, query);
+            d.latch(cb, recorded);
         }
     });
 }
@@ -278,7 +283,9 @@ pub extern "C" fn vkCmdResetQueryPool(
     };
     StateStore::with(|s| {
         if let Some(d) = s.device_mut() {
-            let _ = record::cmd_reset_query_pool(d, cb, query_pool, first_query, query_count);
+            let recorded =
+                record::cmd_reset_query_pool(d, cb, query_pool, first_query, query_count);
+            d.latch(cb, recorded);
         }
     });
 }
@@ -294,7 +301,8 @@ pub extern "C" fn vkCmdWriteTimestamp(
     };
     StateStore::with(|s| {
         if let Some(d) = s.device_mut() {
-            let _ = record::cmd_write_timestamp(d, cb, query_pool, query);
+            let recorded = record::cmd_write_timestamp(d, cb, query_pool, query);
+            d.latch(cb, recorded);
         }
     });
 }
@@ -330,7 +338,8 @@ pub extern "C" fn vkCmdWriteTimestamp2(
     };
     StateStore::with(|s| {
         if let Some(d) = s.device_mut() {
-            let _ = record::cmd_write_timestamp(d, cb, query_pool, query);
+            let recorded = record::cmd_write_timestamp(d, cb, query_pool, query);
+            d.latch(cb, recorded);
         }
     });
 }
@@ -356,7 +365,8 @@ pub extern "C" fn vkCmdSetEvent2(
     };
     StateStore::with(|s| {
         if let Some(d) = s.device_mut() {
-            let _ = record::cmd_set_event(d, cb, event, true);
+            let recorded = record::cmd_set_event(d, cb, event, true);
+            d.latch(cb, recorded);
         }
     });
 }
@@ -377,7 +387,8 @@ pub extern "C" fn vkCmdResetEvent2(command_buffer: *mut c_void, event: u64, _sta
     };
     StateStore::with(|s| {
         if let Some(d) = s.device_mut() {
-            let _ = record::cmd_set_event(d, cb, event, false);
+            let recorded = record::cmd_set_event(d, cb, event, false);
+            d.latch(cb, recorded);
         }
     });
 }
@@ -405,7 +416,8 @@ pub extern "C" fn vkCmdWaitEvents2(
     };
     StateStore::with(|s| {
         if let Some(d) = s.device_mut() {
-            let _ = record::cmd_wait_events(d, cb, &events);
+            let recorded = record::cmd_wait_events(d, cb, &events);
+            d.latch(cb, recorded);
         }
     });
 }
@@ -438,7 +450,7 @@ pub extern "C" fn vkCmdCopyQueryPoolResults(
     let with_avail = flags & VK_QUERY_RESULT_WITH_AVAILABILITY_BIT != 0;
     StateStore::with(|s| {
         if let Some(d) = s.device_mut() {
-            let _ = record::cmd_copy_query_pool_results(
+            let recorded = record::cmd_copy_query_pool_results(
                 d,
                 cb,
                 query_pool,
@@ -450,6 +462,7 @@ pub extern "C" fn vkCmdCopyQueryPoolResults(
                 wide,
                 with_avail,
             );
+            d.latch(cb, recorded);
         }
     });
 }

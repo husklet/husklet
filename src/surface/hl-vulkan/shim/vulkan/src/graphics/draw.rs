@@ -15,7 +15,8 @@ pub extern "C" fn vkCmdDrawIndirect(
         return;
     };
     ShimState::with_device(|d| {
-        let _ = record::cmd_draw_indirect(d, cb, buffer, offset, draw_count, stride);
+        let recorded = record::cmd_draw_indirect(d, cb, buffer, offset, draw_count, stride);
+        d.latch(cb, recorded);
     });
 }
 
@@ -30,6 +31,7 @@ pub extern "C" fn vkCmdDrawIndexedIndirect(
         return;
     };
     ShimState::with_device(|d| {
-        let _ = record::cmd_draw_indexed_indirect(d, cb, buffer, offset, draw_count, stride);
+        let recorded = record::cmd_draw_indexed_indirect(d, cb, buffer, offset, draw_count, stride);
+        d.latch(cb, recorded);
     });
 }

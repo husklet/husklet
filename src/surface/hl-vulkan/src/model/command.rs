@@ -204,6 +204,15 @@ pub struct CmdBufRec {
     /// The IR texture id of the active render pass's color target (set at `vkCmdBeginRenderPass`) — the
     /// target `vkCmdClearAttachments` clears while inside the pass.
     pub active_render_texture: Option<u32>,
+    /// The FIRST error a `vkCmd*` hit while recording, surfaced by `vkEndCommandBuffer`.
+    ///
+    /// Every `vkCmd*` returns `void`, so a recorder that fails has nowhere to report it at the call
+    /// itself; the specification's answer is that the command buffer enters an invalid state and
+    /// `vkEndCommandBuffer` returns the error. This driver had no such state, so all 63 recording call
+    /// sites discarded their `Result` and `vkEndCommandBuffer` reported success over a command buffer
+    /// that had silently dropped work. The first error is kept rather than the last: it is the one that
+    /// explains the others.
+    pub recording_error: Option<GpuError>,
     /// The attachments of the render pass currently open, kept so a mid-pass `vkCmdClearAttachments` can
     /// close the pass, fill its rectangle, and reopen it LOADING what was already drawn. The executor
     /// refuses a `ClearRect` between `BeginRenderPass` and `EndRenderPass`, so the clear has to become a
@@ -263,7 +272,20 @@ impl CmdBufRec {
             ));
         }
         self.state = CommandBufferState::Executable;
-        Ok(())
+        // A command that failed while recording makes the whole buffer invalid, and this is the call
+        // the specification gives the driver to say so. Reporting success here and submitting anyway is
+        // how dropped work reached a queue with nothing to attribute it to.
+        match self.recording_error.take() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    /// Latch a recording failure. Keeps the FIRST, because later ones are usually its consequences.
+    pub fn fail(&mut self, error: GpuError) {
+        if self.recording_error.is_none() {
+            self.recording_error = Some(error);
+        }
     }
 
     /// Requires the lifecycle state accepted by every `vkCmd*` recording operation.
@@ -303,6 +325,7 @@ impl CmdBufRec {
         self.in_render_pass = false;
         self.active_render_texture = None;
         self.active_pass = None;
+        self.recording_error = None;
         self.active_query = None;
         self.occlusion_accum = None;
         self.render_extent = (0, 0);

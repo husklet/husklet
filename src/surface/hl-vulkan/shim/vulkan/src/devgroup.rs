@@ -91,7 +91,8 @@ pub extern "C" fn vkCmdDispatchBase(
         return;
     };
     ShimState::with_device(|d| {
-        let _ = record::cmd_dispatch(d, cb, group_count_x, group_count_y, group_count_z);
+        let recorded = record::cmd_dispatch(d, cb, group_count_x, group_count_y, group_count_z);
+        d.latch(cb, recorded);
     });
 }
 pub extern "C" fn vkCmdDispatchBaseKHR(

@@ -36,7 +36,7 @@ pub extern "C" fn vkCmdCopyBuffer(
     };
     ShimState::with_device(|device| {
         for region in regions {
-            let _ = record::cmd_copy_buffer(
+            let recorded = record::cmd_copy_buffer(
                 device,
                 command_buffer,
                 src_buffer,
@@ -45,6 +45,7 @@ pub extern "C" fn vkCmdCopyBuffer(
                 region.dst_offset,
                 region.size,
             );
+            device.latch(command_buffer, recorded);
         }
     });
 }
@@ -75,7 +76,7 @@ pub extern "C" fn vkCmdCopyBufferToImage(
             {
                 continue;
             }
-            let _ = record::cmd_copy_buffer_to_image_region(
+            let recorded = record::cmd_copy_buffer_to_image_region(
                 device,
                 command_buffer,
                 src_buffer,
@@ -95,6 +96,7 @@ pub extern "C" fn vkCmdCopyBufferToImage(
                     .layer_count
                     .max(region.image_extent.depth.max(1)),
             );
+            device.latch(command_buffer, recorded);
         }
     });
 }
@@ -125,7 +127,7 @@ pub extern "C" fn vkCmdCopyImageToBuffer(
             {
                 continue;
             }
-            let _ = record::cmd_copy_image_to_buffer_region(
+            let recorded = record::cmd_copy_image_to_buffer_region(
                 device,
                 command_buffer,
                 src_image,
@@ -145,6 +147,7 @@ pub extern "C" fn vkCmdCopyImageToBuffer(
                     .layer_count
                     .max(region.image_extent.depth.max(1)),
             );
+            device.latch(command_buffer, recorded);
         }
     });
 }
@@ -176,7 +179,7 @@ pub extern "C" fn vkCmdCopyImage(
             {
                 continue;
             }
-            let _ = record::cmd_copy_image(
+            let recorded = record::cmd_copy_image(
                 device,
                 command_buffer,
                 src_image,
@@ -187,6 +190,7 @@ pub extern "C" fn vkCmdCopyImage(
                 (region.dst_offset.x as u32, region.dst_offset.y as u32),
                 (region.extent.width, region.extent.height.max(1)),
             );
+            device.latch(command_buffer, recorded);
         }
     });
 }
@@ -226,7 +230,7 @@ pub extern "C" fn vkCmdBlitImage(
             {
                 continue;
             }
-            let _ = record::cmd_blit_image(
+            let recorded = record::cmd_blit_image(
                 device,
                 command_buffer,
                 src_image,
@@ -245,6 +249,7 @@ pub extern "C" fn vkCmdBlitImage(
                 ),
                 linear,
             );
+            device.latch(command_buffer, recorded);
         }
     });
 }

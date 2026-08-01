@@ -37,7 +37,7 @@ pub extern "C" fn vkCmdSetScissor(
     }
     let r = unsafe { &*(p_scissors as *const VkRect2D) };
     ShimState::with_device(|d| {
-        let _ = record::cmd_set_scissor(
+        let recorded = record::cmd_set_scissor(
             d,
             cb,
             r.offset.x.max(0) as u32,
@@ -45,6 +45,7 @@ pub extern "C" fn vkCmdSetScissor(
             r.extent.width,
             r.extent.height,
         );
+        d.latch(cb, recorded);
     });
 }
 
@@ -53,7 +54,8 @@ pub extern "C" fn vkCmdSetLineWidth(command_buffer: *mut c_void, line_width: f32
         return;
     };
     ShimState::with_device(|d| {
-        let _ = record::cmd_set_line_width(d, cb, line_width);
+        let recorded = record::cmd_set_line_width(d, cb, line_width);
+        d.latch(cb, recorded);
     });
 }
 
@@ -67,13 +69,14 @@ pub extern "C" fn vkCmdSetDepthBias(
         return;
     };
     ShimState::with_device(|d| {
-        let _ = record::cmd_set_depth_bias(
+        let recorded = record::cmd_set_depth_bias(
             d,
             cb,
             depth_bias_constant_factor,
             depth_bias_clamp,
             depth_bias_slope_factor,
         );
+        d.latch(cb, recorded);
     });
 }
 
@@ -86,7 +89,8 @@ pub extern "C" fn vkCmdSetBlendConstants(command_buffer: *mut c_void, blend_cons
     }
     let c = unsafe { std::slice::from_raw_parts(blend_constants, 4) };
     ShimState::with_device(|d| {
-        let _ = record::cmd_set_blend_constants(d, cb, [c[0], c[1], c[2], c[3]]);
+        let recorded = record::cmd_set_blend_constants(d, cb, [c[0], c[1], c[2], c[3]]);
+        d.latch(cb, recorded);
     });
 }
 
@@ -99,7 +103,8 @@ pub extern "C" fn vkCmdSetStencilCompareMask(
         return;
     };
     ShimState::with_device(|d| {
-        let _ = record::cmd_set_stencil_compare_mask(d, cb, face_mask, compare_mask);
+        let recorded = record::cmd_set_stencil_compare_mask(d, cb, face_mask, compare_mask);
+        d.latch(cb, recorded);
     });
 }
 
@@ -112,7 +117,8 @@ pub extern "C" fn vkCmdSetStencilWriteMask(
         return;
     };
     ShimState::with_device(|d| {
-        let _ = record::cmd_set_stencil_write_mask(d, cb, face_mask, write_mask);
+        let recorded = record::cmd_set_stencil_write_mask(d, cb, face_mask, write_mask);
+        d.latch(cb, recorded);
     });
 }
 
@@ -125,7 +131,8 @@ pub extern "C" fn vkCmdSetStencilReference(
         return;
     };
     ShimState::with_device(|d| {
-        let _ = record::cmd_set_stencil_reference(d, cb, face_mask, reference);
+        let recorded = record::cmd_set_stencil_reference(d, cb, face_mask, reference);
+        d.latch(cb, recorded);
     });
 }
 
@@ -149,7 +156,8 @@ pub extern "C" fn vkCmdPushConstants(
     }
     let bytes = unsafe { std::slice::from_raw_parts(p_values as *const u8, size as usize) };
     ShimState::with_device(|d| {
-        let _ = record::cmd_push_constants(d, cb, offset, bytes);
+        let recorded = record::cmd_push_constants(d, cb, offset, bytes);
+        d.latch(cb, recorded);
     });
 }
 

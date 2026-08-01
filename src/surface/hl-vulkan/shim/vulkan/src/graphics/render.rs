@@ -56,7 +56,8 @@ pub extern "C" fn vkCmdBeginRenderPass(
         });
         let Some(image) = image else { return };
         if let Some(dev) = s.device_mut() {
-            let _ = record::cmd_begin_render_pass(dev, cb, image, clear, clears, depth);
+            let recorded = record::cmd_begin_render_pass(dev, cb, image, clear, clears, depth);
+            dev.latch(cb, recorded);
         }
     });
 }
@@ -124,7 +125,8 @@ pub extern "C" fn vkCmdBeginRendering(
             })
         });
         if let Some(dev) = s.device_mut() {
-            let _ = record::cmd_begin_rendering(dev, cb, &colors, depth);
+            let recorded = record::cmd_begin_rendering(dev, cb, &colors, depth);
+            dev.latch(cb, recorded);
         }
     });
 }
@@ -176,7 +178,8 @@ pub extern "C" fn vkCmdBindVertexBuffers(
         for (i, &buf) in buffers.iter().enumerate() {
             let slot = first_binding + i as u32;
             let offset = offsets.get(i).copied().unwrap_or(0);
-            let _ = record::cmd_bind_vertex_buffer(dev, cb, slot, buf, offset);
+            let recorded = record::cmd_bind_vertex_buffer(dev, cb, slot, buf, offset);
+            dev.latch(cb, recorded);
         }
     });
 }
@@ -191,7 +194,8 @@ pub extern "C" fn vkCmdBindIndexBuffer(
         return;
     };
     ShimState::with_device(|dev| {
-        let _ = record::cmd_bind_index_buffer(dev, cb, buffer, offset, index_type as u32);
+        let recorded = record::cmd_bind_index_buffer(dev, cb, buffer, offset, index_type as u32);
+        dev.latch(cb, recorded);
     });
 }
 
@@ -206,7 +210,7 @@ pub extern "C" fn vkCmdDraw(
         return;
     };
     ShimState::with_device(|dev| {
-        let _ = record::cmd_draw(
+        let recorded = record::cmd_draw(
             dev,
             cb,
             vertex_count,
@@ -214,6 +218,7 @@ pub extern "C" fn vkCmdDraw(
             first_vertex,
             first_instance,
         );
+        dev.latch(cb, recorded);
     });
 }
 
@@ -229,7 +234,7 @@ pub extern "C" fn vkCmdDrawIndexed(
         return;
     };
     ShimState::with_device(|dev| {
-        let _ = record::cmd_draw_indexed(
+        let recorded = record::cmd_draw_indexed(
             dev,
             cb,
             index_count,
@@ -238,6 +243,7 @@ pub extern "C" fn vkCmdDrawIndexed(
             vertex_offset,
             first_instance,
         );
+        dev.latch(cb, recorded);
     });
 }
 

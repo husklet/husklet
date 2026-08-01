@@ -34,9 +34,10 @@ pub extern "C" fn vkCmdSetColorBlendEnableEXT(
     }
     .to_vec();
     ShimState::with_device(|d| {
-        let _ = record::set_dynamic_attachment_array(d, cb, first_attachment, &vals, |ds| {
+        let recorded = record::set_dynamic_attachment_array(d, cb, first_attachment, &vals, |ds| {
             &mut ds.color_blend_enables
         });
+        d.latch(cb, recorded);
     });
 }
 
@@ -57,9 +58,10 @@ pub extern "C" fn vkCmdSetColorWriteMaskEXT(
     }
     .to_vec();
     ShimState::with_device(|d| {
-        let _ = record::set_dynamic_attachment_array(d, cb, first_attachment, &vals, |ds| {
+        let recorded = record::set_dynamic_attachment_array(d, cb, first_attachment, &vals, |ds| {
             &mut ds.color_write_masks
         });
+        d.latch(cb, recorded);
     });
 }
 
@@ -105,9 +107,10 @@ pub extern "C" fn vkCmdSetColorBlendEquationEXT(
     // Ensure the blend-enable vector covers the touched attachments (honest observable state).
     let ext = vec![0u32; attachment_count as usize];
     ShimState::with_device(|d| {
-        let _ = record::set_dynamic_attachment_array(d, cb, first_attachment, &ext, |ds| {
+        let recorded = record::set_dynamic_attachment_array(d, cb, first_attachment, &ext, |ds| {
             &mut ds.color_blend_enables
         });
+        d.latch(cb, recorded);
     });
 }
 
@@ -127,8 +130,9 @@ pub extern "C" fn vkCmdSetColorBlendAdvancedEXT(
     }
     let ext = vec![0u32; attachment_count as usize];
     ShimState::with_device(|d| {
-        let _ = record::set_dynamic_attachment_array(d, cb, first_attachment, &ext, |ds| {
+        let recorded = record::set_dynamic_attachment_array(d, cb, first_attachment, &ext, |ds| {
             &mut ds.color_blend_enables
         });
+        d.latch(cb, recorded);
     });
 }

@@ -76,12 +76,13 @@ pub extern "C" fn vkCmdSetStencilOp(
         return;
     };
     ShimState::with_device(|d| {
-        let _ = record::set_stencil_op(
+        let recorded = record::set_stencil_op(
             d,
             cb,
             face_mask,
             (fail_op, pass_op, depth_fail_op, compare_op),
         );
+        d.latch(cb, recorded);
     });
 }
 

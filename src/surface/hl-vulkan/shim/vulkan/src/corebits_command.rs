@@ -61,7 +61,7 @@ pub extern "C" fn vkCmdClearDepthStencilImage(
         .iter()
         .any(|range| range.aspect_mask & VK_IMAGE_ASPECT_STENCIL_BIT != 0);
     ShimState::with_device(|device| {
-        let _ = record::cmd_clear_depth_stencil_image(
+        let recorded = record::cmd_clear_depth_stencil_image(
             device,
             command_buffer,
             image,
@@ -69,6 +69,7 @@ pub extern "C" fn vkCmdClearDepthStencilImage(
             depth_stencil.stencil,
             clears_stencil,
         );
+        device.latch(command_buffer, recorded);
     });
 }
 
@@ -99,7 +100,7 @@ pub extern "C" fn vkCmdResolveImage(
             {
                 continue;
             }
-            let _ = record::cmd_resolve_image(
+            let recorded = record::cmd_resolve_image(
                 device,
                 command_buffer,
                 src_image,
@@ -110,6 +111,7 @@ pub extern "C" fn vkCmdResolveImage(
                 (region.dst_offset.x as u32, region.dst_offset.y as u32),
                 (region.extent.width, region.extent.height.max(1)),
             );
+            device.latch(command_buffer, recorded);
         }
     });
 }
@@ -137,7 +139,7 @@ pub extern "C" fn vkCmdResolveImage2(
             {
                 continue;
             }
-            let _ = record::cmd_resolve_image(
+            let recorded = record::cmd_resolve_image(
                 device,
                 command_buffer,
                 info.src_image,
@@ -148,6 +150,7 @@ pub extern "C" fn vkCmdResolveImage2(
                 (region.dst_offset.x as u32, region.dst_offset.y as u32),
                 (region.extent.width, region.extent.height.max(1)),
             );
+            device.latch(command_buffer, recorded);
         }
     });
 }
@@ -172,7 +175,7 @@ pub extern "C" fn vkCmdDrawIndirectCount(
         return;
     };
     ShimState::with_device(|device| {
-        let _ = record::cmd_draw_indirect_count(
+        let recorded = record::cmd_draw_indirect_count(
             device,
             command_buffer,
             buffer,
@@ -182,6 +185,7 @@ pub extern "C" fn vkCmdDrawIndirectCount(
             max_draw_count,
             stride,
         );
+        device.latch(command_buffer, recorded);
     });
 }
 
@@ -238,7 +242,7 @@ pub extern "C" fn vkCmdDrawIndexedIndirectCount(
         return;
     };
     ShimState::with_device(|device| {
-        let _ = record::cmd_draw_indexed_indirect_count(
+        let recorded = record::cmd_draw_indexed_indirect_count(
             device,
             command_buffer,
             buffer,
@@ -248,6 +252,7 @@ pub extern "C" fn vkCmdDrawIndexedIndirectCount(
             max_draw_count,
             stride,
         );
+        device.latch(command_buffer, recorded);
     });
 }
 

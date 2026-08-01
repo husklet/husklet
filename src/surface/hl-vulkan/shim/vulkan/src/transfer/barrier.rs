@@ -38,7 +38,8 @@ pub extern "C" fn vkCmdPipelineBarrier(
         .map(|barrier| (barrier.image, barrier.old_layout, barrier.new_layout))
         .collect();
     ShimState::with_device(|device| {
-        let _ = record::cmd_pipeline_barrier(device, command_buffer, &transitions);
+        let recorded = record::cmd_pipeline_barrier(device, command_buffer, &transitions);
+        device.latch(command_buffer, recorded);
     });
 }
 
@@ -70,7 +71,8 @@ pub extern "C" fn vkCmdPipelineBarrier2(
         .map(|barrier| (barrier.image, barrier.old_layout, barrier.new_layout))
         .collect();
     ShimState::with_device(|device| {
-        let _ = record::cmd_pipeline_barrier(device, command_buffer, &transitions);
+        let recorded = record::cmd_pipeline_barrier(device, command_buffer, &transitions);
+        device.latch(command_buffer, recorded);
     });
 }
 

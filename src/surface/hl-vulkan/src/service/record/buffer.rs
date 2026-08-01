@@ -22,7 +22,10 @@ pub fn cmd_copy_buffer(
         .get(&dst)
         .ok_or(GpuError::Invalid("vkCmdCopyBuffer: unknown dst VkBuffer"))?
         .ir_id;
-    let rec = dev.require_recording(cb)?;
+    let rec = dev.require_recording_outside_pass(
+        cb,
+        "vkCmdCopyBuffer: must be recorded outside a render pass",
+    )?;
     rec.enc.push(Enc::CopyBufferToBuffer {
         src: src_ir,
         src_offset,
@@ -219,7 +222,10 @@ pub fn cmd_copy_buffer_to_image_region(
         buf_size,
     )
     .ok_or(GpuError::OutOfBounds)?;
-    let rec = dev.require_recording(cb)?;
+    let rec = dev.require_recording_outside_pass(
+        cb,
+        "vkCmdCopyBufferToImage: must be recorded outside a render pass",
+    )?;
     if mip == 0 && layer == 0 && x == 0 && y == 0 && origin_z == 0 && layers == 1 {
         rec.enc.push(Enc::CopyBufferToTexture {
             src: src_ir,
@@ -368,7 +374,10 @@ pub fn cmd_copy_image_to_buffer_region(
         buf_size,
     )
     .ok_or(GpuError::OutOfBounds)?;
-    let rec = dev.require_recording(cb)?;
+    let rec = dev.require_recording_outside_pass(
+        cb,
+        "vkCmdCopyImageToBuffer: must be recorded outside a render pass",
+    )?;
     if mip == 0 && layer == 0 && x == 0 && y == 0 && origin_z == 0 && layers == 1 {
         rec.enc.push(Enc::CopyTextureToBuffer {
             src: src_ir,

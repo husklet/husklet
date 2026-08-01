@@ -76,7 +76,7 @@ pub extern "C" fn vkCmdClearAttachments(
                 continue;
             }
             for rect in rects {
-                let _ = record::cmd_clear_attachment_rect(
+                let recorded = record::cmd_clear_attachment_rect(
                     device,
                     command_buffer,
                     rect.rect.offset.x.max(0) as u32,
@@ -85,6 +85,7 @@ pub extern "C" fn vkCmdClearAttachments(
                     rect.rect.extent.height,
                     attachment.clear_value.float32,
                 );
+                device.latch(command_buffer, recorded);
             }
         }
     });
@@ -101,7 +102,9 @@ pub extern "C" fn vkCmdFillBuffer(
         return;
     };
     ShimState::with_device(|device| {
-        let _ = record::cmd_fill_buffer(device, command_buffer, dst_buffer, dst_offset, size, data);
+        let recorded =
+            record::cmd_fill_buffer(device, command_buffer, dst_buffer, dst_offset, size, data);
+        device.latch(command_buffer, recorded);
     });
 }
 
@@ -120,6 +123,8 @@ pub extern "C" fn vkCmdUpdateBuffer(
     }
     let bytes = unsafe { std::slice::from_raw_parts(p_data as *const u8, data_size as usize) };
     ShimState::with_device(|device| {
-        let _ = record::cmd_update_buffer(device, command_buffer, dst_buffer, dst_offset, bytes);
+        let recorded =
+            record::cmd_update_buffer(device, command_buffer, dst_buffer, dst_offset, bytes);
+        device.latch(command_buffer, recorded);
     });
 }

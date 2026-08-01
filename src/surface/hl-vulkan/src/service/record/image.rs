@@ -112,7 +112,10 @@ pub fn cmd_copy_image(
     {
         return Err(GpuError::Invalid("vkCmdCopyImage: overlapping self-copy"));
     }
-    let rec = dev.require_recording(cb)?;
+    let rec = dev.require_recording_outside_pass(
+        cb,
+        "vkCmdCopyImage: must be recorded outside a render pass",
+    )?;
     // The IR subresource addresses ONE layer, so a multi-layer region becomes one op per layer pair.
     for layer in 0..src_sub.layer_count {
         rec.enc.push(Enc::CopyTextureToTexture {
@@ -218,7 +221,10 @@ pub fn cmd_blit_image(
     {
         return Err(GpuError::OutOfBounds);
     }
-    let rec = dev.require_recording(cb)?;
+    let rec = dev.require_recording_outside_pass(
+        cb,
+        "vkCmdBlitImage: must be recorded outside a render pass",
+    )?;
     for layer in 0..src_sub.layer_count {
         rec.enc.push(Enc::BlitTexture {
             src: src_ir,
@@ -350,7 +356,10 @@ pub fn cmd_resolve_image(
     {
         return Err(GpuError::OutOfBounds);
     }
-    let rec = dev.require_recording(cb)?;
+    let rec = dev.require_recording_outside_pass(
+        cb,
+        "vkCmdResolveImage: must be recorded outside a render pass",
+    )?;
     for layer in 0..src_sub.layer_count {
         rec.enc.push(Enc::ResolveTexture {
             src: src_ir,
@@ -422,7 +431,10 @@ pub fn cmd_clear_color_image(
             "vkCmdClearColorImage: image missing COPY_DST usage",
         ));
     }
-    let rec = dev.require_recording(cb)?;
+    let rec = dev.require_recording_outside_pass(
+        cb,
+        "vkCmdClearColorImage: must be recorded outside a render pass",
+    )?;
     for range in resolved {
         if range.layer_count == 0 {
             continue;
@@ -494,7 +506,10 @@ pub fn cmd_clear_depth_stencil_image(
     } else {
         0
     };
-    let rec = dev.require_recording(cb)?;
+    let rec = dev.require_recording_outside_pass(
+        cb,
+        "vkCmdClearDepthStencilImage: must be recorded outside a render pass",
+    )?;
     rec.enc.push(Enc::BeginRenderPass {
         color: Vec::new(),
         depth: Some(DepthAttachment {

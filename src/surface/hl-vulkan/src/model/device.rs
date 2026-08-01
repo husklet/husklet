@@ -148,6 +148,39 @@ impl Device {
             .end()
     }
 
+    /// Resolve a recording command buffer for a command the specification confines to OUTSIDE a render
+    /// pass.
+    ///
+    /// The executor refuses any transfer-shaped operation encoded between `BeginRenderPass` and
+    /// `EndRenderPass` — it used to drop them and report success — so recording one there would fail the
+    /// entire submit, taking unrelated correct work with it and naming nothing useful. Catching it here
+    /// keeps the blast radius at the one command that was misused and lets `vkEndCommandBuffer` say
+    /// which.
+    pub(crate) fn require_recording_outside_pass(
+        &mut self,
+        command_buffer: VkCommandBuffer,
+        command: &'static str,
+    ) -> Result<&mut CmdBufRec> {
+        let rec = self.require_recording(command_buffer)?;
+        if rec.in_render_pass {
+            return Err(GpuError::Invalid(command));
+        }
+        Ok(rec)
+    }
+
+    /// Latch a `vkCmd*` recorder's result onto its command buffer.
+    ///
+    /// Every `vkCmd*` returns `void`, so this is where a recording failure has to go: the buffer becomes
+    /// invalid and `vkEndCommandBuffer` reports it. Call sites used to discard the `Result` outright,
+    /// which is why a command buffer that had silently dropped work still ended successfully.
+    pub fn latch<T>(&mut self, command_buffer: VkCommandBuffer, result: Result<T>) {
+        if let Err(error) = result {
+            if let Some(rec) = self.command_buffers.get_mut(&command_buffer) {
+                rec.fail(error);
+            }
+        }
+    }
+
     /// Resolves an owned command buffer and requires its recording state.
     pub(crate) fn require_recording(
         &mut self,

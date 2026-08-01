@@ -970,3 +970,121 @@ fn a_one_dimensional_image_lowers_to_d1_and_enforces_its_limits() {
         "the D1 path carries no mip chain"
     );
 }
+
+// ---- recording errors and render-pass scope ------------------------------------------------------
+
+/// A `vkCmd*` that fails while recording must make the command buffer invalid, and
+/// `vkEndCommandBuffer` is where the specification says that is reported. Every recording call site in
+/// the shim used to discard its `Result`, so a buffer that had silently dropped work still ended
+/// successfully and was submitted.
+#[test]
+fn a_failed_recording_command_is_reported_by_end_command_buffer() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let buffer =
+        create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_DST, 256).unwrap();
+
+    // Positive control FIRST: a clean recording still ends successfully. Without it, an `end()` that
+    // failed unconditionally would satisfy the assertion below while meaning nothing.
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    let ok = record::cmd_fill_buffer(&mut d, cb, buffer, 0, 4, 0);
+    d.latch(cb, ok);
+    assert!(
+        d.end_command_buffer(cb).is_ok(),
+        "a clean recording must still end successfully"
+    );
+
+    // Now a failing command: an unknown buffer handle.
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    let failed = record::cmd_fill_buffer(&mut d, cb, 0xDEAD_BEEF, 0, 4, 0);
+    assert!(failed.is_err(), "an unknown VkBuffer must fail to record");
+    d.latch(cb, failed);
+    assert!(
+        d.end_command_buffer(cb).is_err(),
+        "vkEndCommandBuffer must report a command buffer invalidated during recording"
+    );
+}
+
+/// The FIRST recording error is the one reported, because the later ones are usually its consequences.
+#[test]
+fn the_first_recording_error_is_the_one_reported() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    // TRANSFER_SRC only: a fill needs COPY_DST, so the second command below really fails, with a
+    // different message from the first.
+    let buffer =
+        create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_SRC, 256).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+
+    let first = record::cmd_fill_buffer(&mut d, cb, 0xDEAD_BEEF, 0, 4, 0);
+    assert!(first.is_err());
+    d.latch(cb, first);
+    // A DIFFERENT, later failure must not displace it. Both must really fail and their messages must
+    // differ, or this test cannot tell first from last — an earlier draft used a second command that
+    // returned Ok, so the assertion held no matter which the code kept.
+    let second = record::cmd_fill_buffer(&mut d, cb, buffer, 0, 4, 0);
+    assert!(
+        second.is_err(),
+        "the second command must also fail or this test proves nothing"
+    );
+    assert_ne!(
+        format!("{:?}", first_message(&second)),
+        "unknown VkBuffer",
+        "the two errors must be distinguishable"
+    );
+    d.latch(cb, second);
+
+    let reported = d.end_command_buffer(cb).expect_err("still invalid");
+    assert!(
+        format!("{reported:?}").contains("unknown VkBuffer"),
+        "expected the FIRST error (the unknown buffer), got {reported:?}"
+    );
+}
+
+fn first_message<T>(r: &Result<T, GpuError>) -> String {
+    match r {
+        Err(e) => format!("{e:?}"),
+        Ok(_) => String::new(),
+    }
+}
+
+/// Transfer commands are confined to OUTSIDE a render pass by the specification, and the executor now
+/// refuses any such operation encoded between Begin and End rather than dropping it. Catching the
+/// misuse while recording keeps the blast radius at the one command instead of failing the whole
+/// submit, and lets vkEndCommandBuffer name it.
+#[test]
+fn a_transfer_command_inside_a_render_pass_is_refused_while_recording() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let target = create::create_image(
+        &mut d,
+        &mut sink,
+        32,
+        32,
+        vk_format::R8G8B8A8_UNORM,
+        vk_image_usage::COLOR_ATTACHMENT | vk_image_usage::TRANSFER_DST,
+        1,
+    )
+    .unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+
+    // OUTSIDE the pass the very same call succeeds — the refusal is about scope, not the arguments.
+    assert!(
+        record::cmd_clear_color_image(&mut d, cb, target, [1.0; 4], &[]).is_ok(),
+        "outside a pass this clear is legal"
+    );
+
+    record::cmd_begin_render_pass(&mut d, cb, target, [0.0; 4], true, None).unwrap();
+    assert!(
+        record::cmd_clear_color_image(&mut d, cb, target, [1.0; 4], &[]).is_err(),
+        "vkCmdClearColorImage is an outside-render-pass command"
+    );
+    d.end_render_pass(cb).unwrap();
+
+    // And after the pass closes it is legal again.
+    assert!(record::cmd_clear_color_image(&mut d, cb, target, [1.0; 4], &[]).is_ok());
+}
