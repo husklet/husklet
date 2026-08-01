@@ -890,6 +890,14 @@ partition that routed exactly the work its guard ignored. This is cheaper to fin
 thing being guarded and it fails the same way: silently, with no error and stale pixels. Ask not only what
 a function refuses, but what its callers refuse to offer it.
 
+Resume paths overstate completeness. Three separate measurement failures in one session were all in a
+resume: an isolation filter that considered only the cases remaining after a resume while claiming to have
+covered every failure, a checkpoint that wrote a zero change-count for work nobody had finished counting,
+and a counter carried across a resume that double-counted what the earlier invocation had already done.
+All three failed in the same direction, because a resume is written as an afterthought to a happy path that
+never had to describe partial work. Record what was done by name rather than by count, and make the summary
+state which of "not started", "complete" and "cut short at N of M" it is in.
+
 An output nobody produced is not the same defect as a wrong value, and it hides better. A structure chained
 by the caller was never written at all, and the neighbouring tests passed because they zeroed the structure
 before the call — the answer was right by the caller's own initialisation, not by anything the subject did.
