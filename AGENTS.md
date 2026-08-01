@@ -857,6 +857,13 @@ that reported a confident defect through a capture path blind to its subject. Ev
 result, and the answer to the question was usually "exactly what it just printed". Asking is cheaper than
 any diagnosis it prevents.
 
+A pass condition satisfied by the ABSENCE of the measurement is not a pass condition. A windowed case
+was specified to require zero offscreen frames, which a bundle emitting no presentation heartbeat at all
+reports — the identical zero a perfect run reports, from an instrument that never spoke. The fix is not a
+better threshold: it is to require the measurement to EXIST as a separate condition, fail when it does
+not, and never let "not measured" resolve to the good outcome. Ask of every green criterion which of
+"the subject behaved" and "the instrument said nothing" it is actually distinguishing.
+
 A case that cannot observe its own subject must not be readable as green. Mark it not-measured in the
 harness itself and make it fail, not merely say so in a report — and where an invariant holds but has no
 power against the symptom it appears to address, record that scope beside the result.
