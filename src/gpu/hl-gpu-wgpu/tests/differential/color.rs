@@ -397,6 +397,13 @@ pub(super) fn gen_clear_float(seed: u64) -> Prog {
 /// exhaustive round trip over all 65536 half patterns, by the ties-to-even case, and by the clear-packing
 /// value tests, none of which involve the host at all. Had this started permissive, the truncation would
 /// have looked like agreement and the encoder would have had no cross-check at all.
+///
+/// RETIRE THIS TOLERANCE when the host driver rounds correctly. It absorbs someone else's defect, which
+/// means a genuine one-ULP regression in our own encoder would not show up HERE — that is why the three
+/// host-free guards above matter, and why this is written down rather than left as slack whose reason
+/// nobody remembers. Measured 2026-08-01 against lavapipe: two of eight seeds low by one ULP. Re-run at
+/// `Ulps(0)`; if it passes, the host has been fixed and this should go back to exact rather than being
+/// kept because it is passing.
 pub(super) fn gen_clear_half(seed: u64) -> Prog {
     let mut prog = gen_clear_float(seed);
     let format = TextureFormat::Rgba16Float;

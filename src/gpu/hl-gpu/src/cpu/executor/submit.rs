@@ -126,8 +126,13 @@ impl CpuExecutor {
                     cur_targets.clear();
                     cur_depth = None;
                 }
-                // Only the base subresource reaches here: `validate` refuses any other, because this
-                // oracle materializes exactly one plane per texture and has nowhere else to write.
+                // Only the base subresource reaches here, because this oracle materializes exactly one
+                // plane per texture and has nowhere else to write. The refusal is in THIS executor's own
+                // encoder pre-pass (`operation::validate_op`, run over every command by
+                // `EncoderState::validate` before any of them executes) — NOT in the runtime's `validate`
+                // service, which this comment used to name and which has no such check. Two different
+                // things are called "validate" here, and sending a reader to the one without the guard is
+                // how a redundant check gets added, or the real one removed as unnecessary.
                 Enc::ClearRect {
                     texture,
                     x,

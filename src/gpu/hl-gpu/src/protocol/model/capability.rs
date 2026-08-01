@@ -89,7 +89,20 @@ impl TextureFormat {
     }
 }
 
-/// The color formats every host backend can materialize (the non-depth `TextureFormat`s).
+/// The colour formats EVERY host backend can materialize in full — allocate, clear, draw into, blend and
+/// sample.
+///
+/// This was described as "the non-depth `TextureFormat`s", which is not what it is and is the dangerous
+/// direction to be wrong in. Two whole families of non-depth format are deliberately absent:
+/// [`INTEGER_FORMATS`], whose texels have no normalized reading for the software oracle's blend and
+/// sample paths, and [`BC_FORMATS`], which are block-compressed. A reader who trusted the old rule and
+/// added a new non-depth format here would be advertising, on behalf of every backend, a capability the
+/// oracle does not have — and a format offered by one part of a driver and refused by another is the
+/// defect that has cost this project the most.
+///
+/// Membership is an obligation, not a description: `clear_texel` must pack every format in this list,
+/// which `protocol::model::enums::clear_texel_tests` asserts. Adding one without that is how the float
+/// formats came to be promised here while both clear paths refused them.
 pub const COLOR_FORMATS: &[TextureFormat] = &[
     TextureFormat::Rgba8Unorm,
     TextureFormat::Bgra8Unorm,
@@ -329,10 +342,18 @@ impl Capabilities {
         present_kinds
     }
 
-    /// A TEST FIXTURE for sinks that accept anything the guest can encode: every encoder command, every
-    /// COLOR format (no depth/stencil — see [`DEPTH_FORMATS`] — and no block-compressed format — see
-    /// [`BC_FORMATS`]), all shader payloads, all present kinds, every binding-array kind and every
-    /// [`gpu_feature`], at [`super::command::WIRE_VERSION`].
+    /// A TEST FIXTURE for sinks that accept anything the guest can encode: every encoder command, all
+    /// shader payloads, all present kinds, every binding-array kind and every [`gpu_feature`], at
+    /// [`super::command::WIRE_VERSION`].
+    ///
+    /// Its texture formats are exactly [`COLOR_FORMATS`] — which is NOT "every colour format". Three
+    /// families are absent, and this listed only two of them: depth/stencil ([`DEPTH_FORMATS`]),
+    /// block-compressed ([`BC_FORMATS`]), and the INTEGER colour formats ([`INTEGER_FORMATS`]), which are
+    /// colour formats by any ordinary reading of the words and are the one a reader would not expect. A
+    /// test that needs an integer texture must widen its own capabilities deliberately rather than
+    /// assuming this fixture already covers it — and widening THIS one to make such a test pass would
+    /// claim integer support on behalf of every backend, including the oracle that cannot blend or sample
+    /// them.
     ///
     /// It must never be advertised on behalf of a real executor: the standing rule is that a capability
     /// claim equals the intersection of what shim, IR, executor, compositor and presenter actually honour,
