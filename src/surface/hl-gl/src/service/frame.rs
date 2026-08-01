@@ -591,8 +591,29 @@ impl Frame {
         // A surfaceless EGL context has no default framebuffer, but user FBOs remain fully renderable.
         // Reject only work that actually targets framebuffer 0; globally rejecting the context made Chrome's
         // surfaceless GPU command buffers acknowledge `glFlush` without executing their FBO commands.
-        if !ctx.local.surf.have && ctx.local.recording.draws.iter().any(|draw| draw.fbo == 0) {
-            return None;
+        //
+        // This used to reject the whole FRAME whenever ANY draw targeted framebuffer 0 — the same failure
+        // the comment describes, one level up: a command buffer holding offscreen work beside a single
+        // default-framebuffer draw lost all of it. Drop only the unrenderable draws, and only give up when
+        // nothing renderable is left.
+        if !ctx.local.surf.have {
+            ctx.local.recording.draws.retain(|draw| draw.fbo != 0);
+            ctx.local
+                .recording
+                .operations
+                .retain(|operation| match operation {
+                    crate::model::context::FrameOp::Draw(draw) => draw.fbo != 0,
+                    crate::model::context::FrameOp::Blit(blit) => {
+                        blit.read_fbo != 0 && blit.draw_fbo != 0
+                    }
+                });
+            ctx.local
+                .recording
+                .blits
+                .retain(|blit| blit.read_fbo != 0 && blit.draw_fbo != 0);
+            if ctx.local.recording.draws.is_empty() && ctx.local.recording.blits.is_empty() {
+                return None;
+            }
         }
         let groups = RenderPasses::groups(&ctx.local.recording.draws);
         let ordered = !ctx.local.recording.operations.is_empty()

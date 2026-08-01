@@ -563,3 +563,45 @@ fn a_window_frame_flushes_an_offscreen_blit_with_no_offscreen_draw() {
         "and the default-framebuffer draw must be RETAINED for eglSwapBuffers, not flushed with it"
     );
 }
+
+/// A surfaceless EGL context has no default framebuffer, but its user FBOs are fully renderable. The
+/// guard says so in its own comment — "reject only work that actually targets framebuffer 0" — and then
+/// rejects the WHOLE FRAME the moment any single draw targets it, discarding every offscreen draw beside
+/// it.
+///
+/// That is the exact failure the comment was written to fix, still present one level up: a surfaceless
+/// Chrome-shaped context whose command buffer happens to contain one default-framebuffer draw loses all
+/// of its FBO work and acknowledges the flush as though it had run.
+#[test]
+fn a_surfaceless_frame_keeps_its_offscreen_work_beside_a_default_framebuffer_draw() {
+    let mut context = ctx_64();
+    context.set_surface(hl_gl::model::context::GlSurface {
+        have: false,
+        width: 0,
+        height: 0,
+    });
+    context.set_surface_kind(hl_gl::model::context::SurfaceKind::Offscreen);
+    flat_program(&mut context);
+    tri_vbo(&mut context, 8);
+    let offscreen = framebuffer(&mut context);
+
+    // Offscreen work, which is renderable, and one default-framebuffer draw, which is not.
+    record::bind_framebuffer(&mut context, GL_FRAMEBUFFER, offscreen);
+    record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
+    record::bind_framebuffer(&mut context, GL_FRAMEBUFFER, 0);
+    record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
+
+    let mut sink = RecordingSink::with_full_caps();
+    assert!(
+        swap::flush(&mut context, &mut sink).unwrap(),
+        "the offscreen draw is renderable and must be submitted"
+    );
+    let drew = sink.batches.iter().flatten().any(|cmd| match cmd {
+        Cmd::Submit(batch) => batch
+            .encoder
+            .iter()
+            .any(|e| matches!(e, Enc::Draw { .. } | Enc::DrawIndexed { .. })),
+        _ => false,
+    });
+    assert!(drew, "the offscreen draw must reach the encoder: {:?}", sink.batches);
+}
