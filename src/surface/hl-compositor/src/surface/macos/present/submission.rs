@@ -58,19 +58,37 @@ impl FailureCause {
         }
     }
 
-    /// What this cause proves about the NEXT present.
+    /// What this cause proves about the NEXT present, given how many times it has already fired on this
+    /// surface.
     ///
     /// Only a cause that says the drawable can never be believed again is terminal. A drawable that was
     /// simply not displayed is the offscreen case the pacing model already carries: retain the frame and
     /// its callbacks and re-drive it, rather than dropping the client's callbacks outright — a window that
     /// is off screen now may be on screen at the next refresh, and a client whose callbacks were dropped
     /// never asks again.
-    const fn outcome(self) -> CompletionOutcome {
+    ///
+    /// Three of the four causes are statements about the drawable and answer without reference to the
+    /// count: an unreadable presented time means it was not displayed and says nothing about the next
+    /// one; an implausible time means the drawable's own accounting cannot be trusted; a command-buffer
+    /// error means the work did not happen. `CallbackDeadlineExpired` is the exception, and the reason it
+    /// needs `seen`: it is a statement about ELAPSED TIME rather than about the drawable — the only one of
+    /// the four whose firing depends on how busy the machine is. A single expiry is what every observed
+    /// recovery looked like; a surface that keeps missing the deadline is the window WindowServer never
+    /// composites, and retrying that forever leaves a client waiting on frames that will not come.
+    fn outcome(self, seen: u32) -> CompletionOutcome {
         match self {
             FailureCause::PresentedTimeUnreadable => CompletionOutcome::RetryableFailure,
-            FailureCause::PresentedTimeImplausible
-            | FailureCause::CommandBufferError
-            | FailureCause::CallbackDeadlineExpired => CompletionOutcome::TerminalFailure,
+            FailureCause::PresentedTimeImplausible | FailureCause::CommandBufferError => {
+                CompletionOutcome::TerminalFailure
+            }
+            // The bound is ONE, read off the logs rather than chosen round. Every occurrence that
+            // recovered was a single expiry during window creation — `chrome-arm` at +3287ms and
+            // +4601ms, a windowed GLES client at +1136ms, all at count=1 — and every pathological one
+            // climbed immediately, reaching count=10 within nine seconds on the same surface. Nothing
+            // observed sat between the two, so the first repeat is the earliest point that separates
+            // them and it separates them with margin.
+            FailureCause::CallbackDeadlineExpired if seen <= 1 => CompletionOutcome::RetryableFailure,
+            FailureCause::CallbackDeadlineExpired => CompletionOutcome::TerminalFailure,
         }
     }
 }
@@ -103,13 +121,32 @@ fn claim_announcement(surface: SurfaceId, cause: FailureCause) -> Option<crate::
         .record((surface, cause.index()))
 }
 
+/// How many times each `(surface, cause)` has fired. Separate from [`ANNOUNCED`], which is a REPORTING
+/// schedule that deliberately speaks only at milestones — a decision cannot be taken from a counter that
+/// skips occurrences. Completions arrive on Metal's callback threads, so this is shared state.
+static OCCURRENCES: std::sync::Mutex<Option<std::collections::HashMap<(SurfaceId, usize), u32>>> =
+    std::sync::Mutex::new(None);
+
+/// The number of times `cause` has now fired on `surface`, this occurrence included. A poisoned lock
+/// answers 1, the recoverable direction: one more retry costs a frame, while a spurious terminal costs
+/// the client every frame after it.
+fn occurrences(surface: SurfaceId, cause: FailureCause) -> u32 {
+    let Ok(mut counts) = OCCURRENCES.lock() else {
+        return 1;
+    };
+    let counts = counts.get_or_insert_with(std::collections::HashMap::new);
+    let seen = counts.entry((surface, cause.index())).or_insert(0);
+    *seen = seen.saturating_add(1);
+    *seen
+}
+
 /// Build the failure completion for `id`, attributing it to `cause` once per surface.
 fn failed_completion(
     id: PresentationId,
     surface: SurfaceId,
     cause: FailureCause,
 ) -> PresentationCompletion {
-    let outcome = cause.outcome();
+    let outcome = cause.outcome(occurrences(surface, cause));
     let retryable = matches!(outcome, CompletionOutcome::RetryableFailure);
     if retryable {
         hl_log::hl_count!(hl_log::tag::PRESENT, "present_retry");
@@ -308,12 +345,32 @@ pub(in crate::surface::macos) struct Submission {
     pub wake: Option<Arc<dyn Wake>>,
 }
 
+/// The one question [`NativePresent::poll`] asks the command buffer. Behind a trait solely so a test can
+/// construct a submission without a `CAMetalDrawable` — which needs a `CAMetalLayer`, which needs a
+/// window, which needs the main thread the cargo harness does not have. That chain is why no test drove
+/// this path before: the code was unreachable from the harness rather than overlooked.
+///
+/// Injection only. The real construction site passes the real command buffer and the runtime behaviour is
+/// the status read it always was. No `Send` bound: a `NativePresent` already holds `Retained` Metal
+/// objects and is thread-affine, so requiring it here only fails to compile against the real type.
+pub(in crate::surface::macos) trait CommandStatus {
+    fn failed(&self) -> bool;
+}
+
+impl CommandStatus for Retained<ProtocolObject<dyn MTLCommandBuffer>> {
+    fn failed(&self) -> bool {
+        self.status() == MTLCommandBufferStatus::Error
+    }
+}
+
 /// One drawable submission retained until WindowServer reports presentation or a bounded failure.
 pub(in crate::surface::macos) struct NativePresent {
     id: PresentationId,
     surface: SurfaceId,
-    command: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
-    _drawable: Retained<ProtocolObject<dyn CAMetalDrawable>>,
+    command: Box<dyn CommandStatus>,
+    /// Held only to keep the drawable alive for the submission's lifetime. `None` only in a test that
+    /// drives the deadline, which has no drawable to hold.
+    _drawable: Option<Retained<ProtocolObject<dyn CAMetalDrawable>>>,
     terminal: Arc<CompletionGate>,
     submitted: Instant,
     events: Sender<PresenterEvent>,
@@ -404,12 +461,38 @@ impl NativePresent {
         Self {
             id,
             surface,
-            command,
-            _drawable: drawable,
+            command: Box::new(command),
+            _drawable: Some(drawable),
             terminal,
             submitted: Instant::now(),
             events,
             wake,
+        }
+    }
+
+    /// A submission with no drawable, for driving [`Self::poll`]'s failure classification in a test.
+    ///
+    /// Every field the poll path reads is real: the same gate, the same `submitted` instant, the same
+    /// channel. Only the drawable — which the poll path never touches, holding it solely to keep it
+    /// alive — is absent, and only the command status is substitutable. `submitted` is taken as an
+    /// argument so a deadline can be expired without a test sleeping for a second.
+    #[cfg(test)]
+    pub(in crate::surface::macos) fn for_test(
+        id: PresentationId,
+        surface: SurfaceId,
+        command: Box<dyn CommandStatus>,
+        submitted: Instant,
+        events: Sender<PresenterEvent>,
+    ) -> Self {
+        Self {
+            id,
+            surface,
+            command,
+            _drawable: None,
+            terminal: Arc::new(CompletionGate::new()),
+            submitted,
+            events,
+            wake: None,
         }
     }
 
@@ -418,7 +501,7 @@ impl NativePresent {
         if self.terminal.terminal() {
             return true;
         }
-        let failed = self.command.status() == MTLCommandBufferStatus::Error;
+        let failed = self.command.failed();
         let expired = now.saturating_duration_since(self.submitted) >= CALLBACK_DEADLINE;
         if !failed && !expired {
             return false;
@@ -475,16 +558,28 @@ mod tests {
         let uptime_ns = 12 * 60 * 60 * 1_000_000_000u64;
         assert!(!sane_presented_time(0, uptime_ns, uptime_ns));
         assert_eq!(
-            FailureCause::PresentedTimeUnreadable.outcome(),
+            FailureCause::PresentedTimeUnreadable.outcome(1),
             CompletionOutcome::RetryableFailure
         );
+        // These two are terminal on their FIRST occurrence, because each is a statement about the
+        // drawable rather than about elapsed time. The deadline is deliberately absent from this list:
+        // it is bounded-retryable and has its own tests.
         for terminal in [
             FailureCause::PresentedTimeImplausible,
             FailureCause::CommandBufferError,
-            FailureCause::CallbackDeadlineExpired,
         ] {
-            assert_eq!(terminal.outcome(), CompletionOutcome::TerminalFailure);
+            assert_eq!(terminal.outcome(1), CompletionOutcome::TerminalFailure);
         }
+        assert_eq!(
+            FailureCause::CallbackDeadlineExpired.outcome(1),
+            CompletionOutcome::RetryableFailure,
+            "one expiry keeps the client's callbacks"
+        );
+        assert_eq!(
+            FailureCause::CallbackDeadlineExpired.outcome(2),
+            CompletionOutcome::TerminalFailure,
+            "a repeat on the same surface is the window that never composites"
+        );
     }
 
     #[test]
@@ -526,6 +621,111 @@ mod tests {
             published.abs_diff(monotonic) < 1_000_000_000,
             "a just-now drawable instant must publish as a just-now monotonic instant \
              (published={published} monotonic={monotonic})"
+        );
+    }
+
+    struct Command(bool);
+    impl CommandStatus for Command {
+        fn failed(&self) -> bool {
+            self.0
+        }
+    }
+
+    /// Drive a REAL deadline expiry through `poll` and read what it publishes.
+    ///
+    /// Returns the completion the surface's client would receive, or `None` if the poll reported nothing.
+    fn expire(surface: u32, command_failed: bool) -> Option<CompletionOutcome> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let present = NativePresent::for_test(
+            PresentationId(1),
+            SurfaceId(surface),
+            Box::new(Command(command_failed)),
+            // Submitted a full deadline ago, so this poll is past it. Real elapsed time, no sleeping.
+            Instant::now() - CALLBACK_DEADLINE,
+            sender,
+        );
+        assert!(present.poll(Instant::now()), "an expired submission retires");
+        receiver.try_iter().find_map(|event| match event {
+            PresenterEvent::Presentation(completion) => Some(completion.outcome),
+            _ => None,
+        })
+    }
+
+    /// A client that waits for `wl_surface.frame` before drawing again must survive one expired deadline.
+    ///
+    /// This is the assertion that matters, and it is not about repainting: `reap_native_presents` clears
+    /// the live submission and requests a repaint for a terminal failure exactly as for a retryable one,
+    /// so the SURFACE recovers either way. What a terminal outcome costs is downstream — the frame's
+    /// callbacks are dropped rather than retained (`scene::Scene::complete_presentation`), so a client
+    /// waiting on one never asks for another frame and its window stops advancing. Measured: a windowed
+    /// GLES client was killed by a single `callback_deadline_expired` at count=1, over_ms=0.
+    ///
+    /// A deadline expiring is a statement about elapsed time, not about the drawable — the only member of
+    /// the terminal set that does not describe the thing being presented, and the only one whose firing
+    /// depends on how busy the machine is. One expiry is the transient every observed occurrence at window
+    /// creation turned out to be.
+    #[test]
+    fn one_expired_deadline_keeps_the_clients_callbacks() {
+        assert_eq!(
+            expire(1, false),
+            Some(CompletionOutcome::RetryableFailure),
+            "the first deadline expiry on a surface must retain the client's frame callbacks"
+        );
+    }
+
+    /// The bound. A surface that keeps missing the deadline is the window WindowServer never composites,
+    /// and retrying it forever means a client that never learns its frames are not arriving.
+    ///
+    /// The bound is ONE, taken from the logs rather than chosen round. Every occurrence that recovered was
+    /// a single expiry during window creation (`chrome-arm` at +3287ms and +4601ms, `gl-steady` at
+    /// +1136ms, all count=1); every pathological one climbed immediately, reaching count=10 within nine
+    /// seconds on the same surface. Nothing observed sat between the two, so the first repeat is the
+    /// earliest point that separates them and it separates them with margin.
+    #[test]
+    fn a_repeated_deadline_on_one_surface_is_terminal() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let outcomes: Vec<_> = (0..2)
+            .map(|_| {
+                let present = NativePresent::for_test(
+                    PresentationId(1),
+                    SurfaceId(7),
+                    Box::new(Command(false)),
+                    Instant::now() - CALLBACK_DEADLINE,
+                    sender.clone(),
+                );
+                present.poll(Instant::now());
+                receiver.try_iter().find_map(|event| match event {
+                    PresenterEvent::Presentation(completion) => Some(completion.outcome),
+                    _ => None,
+                })
+            })
+            .collect();
+        assert_eq!(
+            outcomes,
+            vec![
+                Some(CompletionOutcome::RetryableFailure),
+                Some(CompletionOutcome::TerminalFailure)
+            ],
+            "the first expiry is retryable and the second on the same surface is terminal"
+        );
+    }
+
+    /// The three causes that DO describe the drawable keep their classification. A harness able to produce
+    /// only the outcome under investigation cannot show that the others still behave.
+    #[test]
+    fn a_command_buffer_error_is_still_terminal_on_the_first_occurrence() {
+        assert_eq!(
+            expire(2, true),
+            Some(CompletionOutcome::TerminalFailure),
+            "the GPU rejecting the work says the frame did not happen, whatever the count"
+        );
+        assert_eq!(
+            FailureCause::PresentedTimeImplausible.outcome(1),
+            CompletionOutcome::TerminalFailure
+        );
+        assert_eq!(
+            FailureCause::PresentedTimeUnreadable.outcome(1),
+            CompletionOutcome::RetryableFailure
         );
     }
 
