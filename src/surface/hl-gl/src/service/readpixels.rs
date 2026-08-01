@@ -46,6 +46,77 @@ impl PixelFormat {
     }
 }
 
+/// One texel of the RENDER TARGET being read back, and how to read it as the RGBA bytes `glReadPixels`
+/// packs.
+///
+/// This is a DIFFERENT plane from the texture model's CPU shadow and does not share its rules. The shadow
+/// is a four-channel eight-bit image for every narrow format by construction, so its texel size takes a
+/// floor of four; a render target's plane is whatever the executor allocated for the format, which is the
+/// format's true texel with no floor at all (`Format::copy_layout` derives the copy row from exactly
+/// that). Applying the shadow's floor here is not conservative, it is wrong in both directions: it
+/// over-states the row for a one-byte target, so the readback walks into inter-row padding, and it
+/// under-states the row for a half-float target, so the copy is refused as out of bounds.
+#[derive(Clone, Copy, Debug)]
+struct TargetTexel(TextureFormat);
+
+impl TargetTexel {
+    /// The plane's true bytes per texel, or `None` for a format that has no plain-colour texel — the
+    /// depth/stencil and block-compressed formats. A readback cannot compute a row for those, and
+    /// answering four would make "could not describe this format" indistinguishable from a real width.
+    fn bytes(self) -> Option<usize> {
+        self.0.bytes_per_texel()
+    }
+
+    /// One texel decoded to straight RGBA bytes.
+    ///
+    /// The narrowing of a float target to eight bits is REQUIRED here, unlike in the upload direction
+    /// where it was the defect: ES 3.0 §4.3.1 says a `glReadPixels` into `GL_UNSIGNED_BYTE` clamps to
+    /// `[0, 1]` and converts to unsigned normalized. Channels the target format does not carry read as
+    /// zero, and an absent alpha reads as one, which is the same rule the sampler applies.
+    fn rgba8(self, texel: &[u8]) -> [u8; 4] {
+        let byte = |index: usize| texel.get(index).copied().unwrap_or(0);
+        let unorm = |value: f32| (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        let float = |index: usize| {
+            texel
+                .get(index * 4..index * 4 + 4)
+                .and_then(|bytes| bytes.try_into().ok())
+                .map_or(0.0, f32::from_le_bytes)
+        };
+        let half = |index: usize| {
+            texel
+                .get(index * 2..index * 2 + 2)
+                .and_then(|bytes| bytes.try_into().ok())
+                .map_or(0.0, |bytes| crate::service::half::to_f32(u16::from_le_bytes(bytes)))
+        };
+        match self.0 {
+            // Bgra targets store [B,G,R,A]; every other eight-bit target stores its channels in order.
+            TextureFormat::Bgra8Unorm | TextureFormat::Bgra8Srgb => {
+                [byte(2), byte(1), byte(0), byte(3)]
+            }
+            TextureFormat::R8Unorm | TextureFormat::R8Uint | TextureFormat::R8Sint => {
+                [byte(0), 0, 0, 0xff]
+            }
+            TextureFormat::Rg8Unorm | TextureFormat::Rg8Uint | TextureFormat::Rg8Sint => {
+                [byte(0), byte(1), 0, 0xff]
+            }
+            TextureFormat::R32Float => [unorm(float(0)), 0, 0, 0xff],
+            TextureFormat::Rgba16Float => [
+                unorm(half(0)),
+                unorm(half(1)),
+                unorm(half(2)),
+                unorm(half(3)),
+            ],
+            TextureFormat::Rgba32Float => [
+                unorm(float(0)),
+                unorm(float(1)),
+                unorm(float(2)),
+                unorm(float(3)),
+            ],
+            _ => [byte(0), byte(1), byte(2), byte(3)],
+        }
+    }
+}
+
 /// `glReadPixels(x, y, w, h, format, GL_UNSIGNED_BYTE, dst)` — render the recorded frame and read the
 /// `(x, y, w, h)` rectangle of the resulting render target back, tight-packed in `format`. Returns the
 /// packed bytes (`w*h*bpp`); an empty region or a frame with nothing to render yields a zero-filled
@@ -235,9 +306,19 @@ pub fn prepare_pixels(
         return Ok(PreparedPixels::empty(vec![0u8; out_len]));
     }
 
-    // Copy the whole rendered target back into a host-readable buffer (the device→host port).
+    // Copy the whole rendered target back into a host-readable buffer (the device→host port). The row is
+    // the TARGET's own texel, not four bytes: the executor derives the copy's tight row from the texture's
+    // format, so a row stated at four bytes for a one-byte target leaves the plane interleaved with
+    // padding this path then reads as pixels, and a row stated at four bytes for a half-float target is
+    // shorter than the tight row and the copy is refused.
+    let Some(target_texel) = TargetTexel(fmt).bytes() else {
+        // A depth/stencil or block-compressed colour attachment has no plain-colour texel to pack from.
+        ctx.restore_frame_state(frame_state);
+        ctx.set_gl_error(crate::model::glconst::GL_INVALID_OPERATION);
+        return Ok(PreparedPixels::empty(vec![0u8; out_len]));
+    };
     let readback = ctx.alloc_buffer_ir()?;
-    let row_bytes = tw as u64 * 4;
+    let row_bytes = tw as u64 * target_texel as u64;
     let size = row_bytes * th as u64;
     cmds.push(Cmd::CreateBuffer(
         readback,
@@ -357,8 +438,18 @@ pub fn prepare_swap_xrgb(
 
     let (surface, texture) = frame.present;
     let (tw, th, target_format) = (frame.target_width, frame.target_height, frame.target_format);
+    // As in `prepare_pixels`: the copy row is the target's own texel. A window surface is Bgra8 today, so
+    // this is four in practice — but the value has to come from the format, or this path acquires the
+    // same latent defect the moment a surface is ever allocated in anything else.
+    let Some(target_texel) = TargetTexel(target_format).bytes() else {
+        ctx.restore_frame_state(frame_state);
+        return Ok(PreparedSwap {
+            pixels: None,
+            packing: None,
+        });
+    };
     let readback = ctx.alloc_buffer_ir()?;
-    let row_bytes = tw as u64 * 4;
+    let row_bytes = tw as u64 * target_texel as u64;
     let size = row_bytes * th as u64;
     frame.cmds.push(Cmd::CreateBuffer(
         readback,
@@ -432,30 +523,34 @@ pub fn prepare_swap_xrgb(
     })
 }
 
+/// Pack the target plane as `WL_SHM_FORMAT_XRGB8888` — `[B, G, R, X]` in memory, opaque.
+///
+/// The source stride is the target's own texel; the output is always four bytes a pixel because the
+/// `wl_shm` format is. Those were the same number while every target was eight-bit four-channel, and
+/// conflating them is what made this path read a one-byte plane as if it were four.
 fn xrgb_plane(
-    mut raw: Vec<u8>,
+    raw: Vec<u8>,
     target_width: i32,
     target_height: i32,
     target_format: TextureFormat,
     width: i32,
     height: i32,
 ) -> Vec<u8> {
-    let expected = width.max(0) as usize * height.max(0) as usize * 4;
-    if target_width != width || target_height != height || raw.len() < expected {
+    let pixels = width.max(0) as usize * height.max(0) as usize;
+    let expected = pixels * 4;
+    let target = TargetTexel(target_format);
+    let Some(texel) = target.bytes() else {
+        return vec![0; expected];
+    };
+    if target_width != width || target_height != height || raw.len() < pixels * texel {
         return vec![0; expected];
     }
-    raw.truncate(expected);
-    let rgba = matches!(
-        target_format,
-        TextureFormat::Rgba8Unorm | TextureFormat::Rgba8Srgb
-    );
-    for pixel in raw.chunks_exact_mut(4) {
-        if rgba {
-            pixel.swap(0, 2);
-        }
-        pixel[3] = 0xff;
+    let mut out = vec![0u8; expected];
+    for (index, source) in raw.chunks_exact(texel).take(pixels).enumerate() {
+        let [r, g, b, _] = target.rgba8(source);
+        out[index * 4..index * 4 + 4].copy_from_slice(&[b, g, r, 0xff]);
     }
-    raw
+    out
 }
 
 /// Convert the native-format target plane `raw` (tight-packed `tw`×`th`, rows top-down) into the requested
@@ -477,8 +572,13 @@ fn pack_region(
     let (tw, th) = (tw as usize, th as usize);
     let tight = w as usize * bpp;
     let mut out = vec![0u8; h as usize * tight];
-    // Bgra targets store [B,G,R,A]; Rgba targets store [R,G,B,A].
-    let bgra = matches!(fmt, TextureFormat::Bgra8Unorm | TextureFormat::Bgra8Srgb);
+    let target = TargetTexel(fmt);
+    // The source stride is the target plane's own texel, and the channel order is the target format's.
+    // Both used to be four bytes of [R,G,B,A] (or [B,G,R,A]), which is right for exactly the eight-bit
+    // four-channel targets and wrong for every other one this driver can allocate.
+    let Some(texel) = target.bytes() else {
+        return out;
+    };
     for row in 0..h as usize {
         // Output row `row` is GL scanline `y+row` (from the bottom); in a top-left texture that is
         // texture row `th-1-(y+row)`.
@@ -491,16 +591,11 @@ fn pack_region(
             if tx < 0 || tx >= tw as isize {
                 continue;
             }
-            let sp = (ty as usize * tw + tx as usize) * 4;
-            if sp + 4 > raw.len() {
+            let sp = (ty as usize * tw + tx as usize) * texel;
+            if sp + texel > raw.len() {
                 continue;
             }
-            let s = &raw[sp..sp + 4];
-            let (r, g, b, a) = if bgra {
-                (s[2], s[1], s[0], s[3])
-            } else {
-                (s[0], s[1], s[2], s[3])
-            };
+            let [r, g, b, a] = target.rgba8(&raw[sp..sp + texel]);
             let dp = row * tight + col * bpp;
             match format {
                 GL_BGRA_EXT => out[dp..dp + 4].copy_from_slice(&[b, g, r, a]),
@@ -510,4 +605,148 @@ fn pack_region(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The readback's source stride is the target format's TRUE texel, with no floor at four.
+    ///
+    /// The texture model's CPU shadow takes `max(4, texel)` because narrow formats are shadowed as
+    /// four-channel eight-bit images. That floor is correct there and wrong here, and it is wrong in BOTH
+    /// directions, which is why it is pinned rather than left to a reader to re-derive: four for a
+    /// one-byte target reads padding as pixels, and four for a half-float target under-states the tight
+    /// row so the executor refuses the copy as out of bounds.
+    #[test]
+    fn the_target_texel_has_no_floor_and_no_invented_default() {
+        assert_eq!(TargetTexel(TextureFormat::R8Unorm).bytes(), Some(1));
+        assert_eq!(TargetTexel(TextureFormat::Rg8Unorm).bytes(), Some(2));
+        assert_eq!(TargetTexel(TextureFormat::Rgba8Unorm).bytes(), Some(4));
+        assert_eq!(TargetTexel(TextureFormat::Bgra8Unorm).bytes(), Some(4));
+        assert_eq!(TargetTexel(TextureFormat::R32Float).bytes(), Some(4));
+        assert_eq!(TargetTexel(TextureFormat::Rgba16Float).bytes(), Some(8));
+        assert_eq!(TargetTexel(TextureFormat::Rgba32Float).bytes(), Some(16));
+        // A format with no plain-colour texel answers None rather than four. Four would make "this path
+        // cannot describe the format" indistinguishable from a real four-byte target, which is the shape
+        // of failure that makes a wrong readback unattributable.
+        assert_eq!(TargetTexel(TextureFormat::Depth32Float).bytes(), None);
+        assert_eq!(TargetTexel(TextureFormat::Depth24PlusStencil8).bytes(), None);
+        assert_eq!(TargetTexel(TextureFormat::Bc1RgbaUnorm).bytes(), None);
+    }
+
+    /// Each target format decodes to the RGBA bytes `glReadPixels` packs. The eight-bit rows are the
+    /// control: they are what already worked and must be byte-identical.
+    #[test]
+    fn a_target_texel_decodes_to_the_channels_it_carries() {
+        let half = |value: f32| crate::service::half::from_f32(value).to_le_bytes();
+
+        assert_eq!(
+            TargetTexel(TextureFormat::Rgba8Unorm).rgba8(&[1, 2, 3, 4]),
+            [1, 2, 3, 4],
+            "an RGBA8 target is passed through"
+        );
+        assert_eq!(
+            TargetTexel(TextureFormat::Bgra8Unorm).rgba8(&[1, 2, 3, 4]),
+            [3, 2, 1, 4],
+            "a BGRA8 target is swizzled, exactly as before"
+        );
+        assert_eq!(
+            TargetTexel(TextureFormat::R8Unorm).rgba8(&[200]),
+            [200, 0, 0, 0xff],
+            "a one-channel target reads green and blue as zero and alpha as one"
+        );
+        assert_eq!(
+            TargetTexel(TextureFormat::Rg8Unorm).rgba8(&[200, 100]),
+            [200, 100, 0, 0xff],
+            "a two-channel target reads blue as zero and alpha as one"
+        );
+
+        // ES 3.0 §4.3.1: a readback into GL_UNSIGNED_BYTE clamps to [0,1] and converts to unsigned
+        // normalized. Driven at the endpoints, because a mid-range value survives almost any arithmetic.
+        let mut texel = Vec::new();
+        for value in [1.0f32, 0.0, 4.0, -2.5] {
+            texel.extend_from_slice(&half(value));
+        }
+        assert_eq!(
+            TargetTexel(TextureFormat::Rgba16Float).rgba8(&texel),
+            [255, 0, 255, 0],
+            "a half-float target clamps out of range and scales in range"
+        );
+
+        let mut texel = Vec::new();
+        for value in [0.5f32, 1.0, 0.0, 65504.0] {
+            texel.extend_from_slice(&value.to_le_bytes());
+        }
+        assert_eq!(
+            TargetTexel(TextureFormat::Rgba32Float).rgba8(&texel),
+            [128, 255, 0, 255],
+            "a float target rounds half up, as the clear-colour packing does"
+        );
+        assert_eq!(
+            TargetTexel(TextureFormat::R32Float).rgba8(&1.0f32.to_le_bytes()),
+            [255, 0, 0, 0xff],
+            "a single-channel float target is one float, not four bytes of colour"
+        );
+    }
+
+    /// `pack_region` walks the source at the target's texel and the destination at the packed one, and
+    /// still applies exactly one row flip. A one-byte target is the case that used to read its
+    /// neighbours' bytes; the RGBA8 target beside it is the control that must not move.
+    #[test]
+    fn pack_region_strides_the_source_by_the_target_texel() {
+        // A 2x2 R8 target whose four texels are distinguishable, so a wrong stride cannot coincide.
+        let raw = [10u8, 20, 30, 40];
+        let packed = pack_region(&raw, 2, 2, TextureFormat::R8Unorm, 0, 0, 2, 2, 0x1908, 4);
+        assert_eq!(
+            packed,
+            // GL row 0 is the BOTTOM, which is target row 1: texels 30 and 40.
+            [30, 0, 0, 255, 40, 0, 0, 255, 10, 0, 0, 255, 20, 0, 0, 255],
+            "each output pixel is one source byte, flipped into GL's bottom-left rows"
+        );
+
+        // The control: the same call shape over an RGBA8 target is unchanged.
+        let raw: Vec<u8> = (0u8..16).collect();
+        let packed = pack_region(&raw, 2, 2, TextureFormat::Rgba8Unorm, 0, 0, 2, 2, 0x1908, 4);
+        assert_eq!(
+            packed,
+            [8, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3, 4, 5, 6, 7],
+            "an RGBA8 target packs exactly as it always did"
+        );
+
+        // A format with no plain-colour texel yields the zero-filled rectangle rather than reading bytes
+        // it cannot interpret.
+        let packed = pack_region(&raw, 2, 2, TextureFormat::Depth32Float, 0, 0, 2, 2, 0x1908, 4);
+        assert_eq!(packed, vec![0u8; 16], "an undescribable target packs zeros");
+    }
+
+    /// The `wl_shm` present path strides its source by the target texel too, and always emits four bytes
+    /// a pixel because `WL_SHM_FORMAT_XRGB8888` is four bytes a pixel. Those were the same number while
+    /// every target was eight-bit four-channel.
+    #[test]
+    fn xrgb_plane_strides_the_source_by_the_target_texel() {
+        // Control: a BGRA8 target, the format a window surface actually uses, is unchanged.
+        let raw = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
+        assert_eq!(
+            xrgb_plane(raw, 2, 1, TextureFormat::Bgra8Unorm, 2, 1),
+            [1, 2, 3, 0xff, 5, 6, 7, 0xff],
+            "a BGRA8 target is already [B,G,R,_] and only its alpha is forced opaque"
+        );
+
+        // An RGBA8 target is swizzled into XRGB order, as before.
+        let raw = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
+        assert_eq!(
+            xrgb_plane(raw, 2, 1, TextureFormat::Rgba8Unorm, 2, 1),
+            [3, 2, 1, 0xff, 7, 6, 5, 0xff],
+            "an RGBA8 target is swizzled to [B,G,R,X]"
+        );
+
+        // A one-byte target: two source bytes become two four-byte pixels, where the old path read the
+        // first four bytes of the plane as a single pixel and ran off the end of a short plane.
+        assert_eq!(
+            xrgb_plane(vec![200u8, 100], 2, 1, TextureFormat::R8Unorm, 2, 1),
+            [0, 0, 200, 0xff, 0, 0, 100, 0xff],
+            "a one-channel target contributes red only"
+        );
+    }
 }

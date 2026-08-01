@@ -215,3 +215,84 @@ fn framebuffer_status_and_object_lifecycle_are_honest() {
         GL_FRAMEBUFFER_COMPLETE
     );
 }
+
+/// A NARROW colour attachment reads back the channel it holds, not the neighbouring texels' bytes.
+///
+/// `GL_R8` is colour-renderable by ES 3.0 table 3.13 and this driver has always accepted it, so this is a
+/// live defect with no extension involved. The render target's plane is one byte a texel — the executor
+/// derives the readback copy's tight row from the texture's own format — while this path asked for a row
+/// of `width * 4` and then read texels at four bytes. The copy therefore landed one byte of every four
+/// with padding between, and `glReadPixels` returned the R channel of four ADJACENT texels as one RGBA
+/// pixel: an 8x8 R8 target cleared to red read back pure WHITE, `[255, 255, 255, 255]`, at every pixel.
+///
+/// The RGBA8 arm is the control. It is the case that already worked, it must keep working byte for byte,
+/// and without it a readback that returned red for everything would pass the R8 assertion alone.
+#[test]
+fn glreadpixels_of_a_narrow_colour_attachment_reads_its_own_channel() {
+    for (declared, plane, expected) in [
+        (
+            GL_R8,
+            hl_gpu::protocol::model::enums::TextureFormat::R8Unorm,
+            // A one-channel target: green and blue read as zero, alpha as one.
+            [255u8, 0, 0, 255],
+        ),
+        (
+            GL_RGBA8,
+            hl_gpu::protocol::model::enums::TextureFormat::Rgba8Unorm,
+            [255, 0, 0, 255],
+        ),
+    ] {
+        let mut c = GlContext::new();
+        c.set_surface(GlSurface {
+            have: true,
+            width: W as u32,
+            height: H as u32,
+        });
+        let mut sink = cpu_sink();
+
+        let tex = c.textures.gen();
+        c.active_texture(GL_TEXTURE0);
+        record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
+        record::tex_image_2d_declared(&mut c, declared, W as i32, H as i32, &[]);
+        assert_eq!(
+            c.textures.get(tex).map(|t| t.ir_format),
+            Some(plane),
+            "{declared:#x} allocates the plane it declared"
+        );
+        let fbo = c.gen_framebuffer();
+        record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
+        record::framebuffer_texture_2d(
+            &mut c,
+            GL_FRAMEBUFFER,
+            GL_COLOR_ATTACHMENT0,
+            GL_TEXTURE_2D,
+            tex,
+            0,
+        );
+        assert_eq!(
+            record::check_framebuffer_status(&mut c, GL_FRAMEBUFFER),
+            GL_FRAMEBUFFER_COMPLETE,
+            "{declared:#x} is a renderable colour attachment"
+        );
+
+        record::clear_color(&mut c, [1.0, 0.0, 0.0, 1.0]);
+        record::clear(&mut c);
+        let px = readpixels::read_pixels(&mut c, &mut sink, 0, 0, W as i32, H as i32, GL_RGBA)
+            .expect("glReadPixels of the colour attachment");
+
+        assert_eq!(px.len(), W * H * 4, "the PACKED rectangle is always w*h*4");
+        // Report the FIRST pixel that disagrees, not pixel zero. A wrong stride is often right at the
+        // origin and wrong afterwards, so printing `px[..4]` shows a matching pixel beside a failure
+        // and reads as though the assertion itself were broken.
+        let wrong = px
+            .chunks_exact(4)
+            .enumerate()
+            .find(|(_, texel)| *texel != expected);
+        assert!(
+            wrong.is_none(),
+            "{declared:#x} must read back {expected:?} at every pixel; pixel {} is {:?}",
+            wrong.map_or(0, |(index, _)| index),
+            wrong.map(|(_, texel)| texel),
+        );
+    }
+}

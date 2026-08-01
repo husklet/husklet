@@ -219,7 +219,9 @@ impl Upload {
                     .max(-1.0)
             }
             GL_HALF_FLOAT => {
-                half_to_f32(u16::from_le_bytes(pixel.get(base..base + 2)?.try_into().ok()?))
+                crate::service::half::to_f32(u16::from_le_bytes(
+                    pixel.get(base..base + 2)?.try_into().ok()?,
+                ))
             }
             GL_FLOAT => f32::from_le_bytes(pixel.get(base..base + 4)?.try_into().ok()?),
             _ => return None,
@@ -443,7 +445,7 @@ impl FloatTexel {
         match self {
             Self::Half4 => {
                 for channel in rgba {
-                    out.extend_from_slice(&f32_to_half(channel).to_le_bytes());
+                    out.extend_from_slice(&crate::service::half::from_f32(channel).to_le_bytes());
                 }
             }
             Self::Single4 => {
@@ -454,57 +456,6 @@ impl FloatTexel {
             Self::Single1 => out.extend_from_slice(&rgba[0].to_le_bytes()),
         }
     }
-}
-
-/// IEEE 754 binary16 → binary32. Subnormals and infinities/NaN are carried through rather than flushed,
-/// because a half-float texture is asked for precisely when values outside `0..=1` matter.
-fn half_to_f32(bits: u16) -> f32 {
-    let sign = ((bits >> 15) as u32) << 31;
-    let exponent = ((bits >> 10) & 0x1f) as u32;
-    let mantissa = (bits & 0x3ff) as u32;
-    let value = match exponent {
-        0 if mantissa == 0 => sign,
-        // Subnormal: normalize by shifting the mantissa up until its leading bit falls out.
-        0 => {
-            let shift = mantissa.leading_zeros() - 21;
-            sign | ((127 - 15 - shift) << 23) | ((mantissa << (shift + 1)) & 0x7f_ffff) << 13
-        }
-        0x1f => sign | 0x7f80_0000 | (mantissa << 13),
-        _ => sign | ((exponent + 127 - 15) << 23) | (mantissa << 13),
-    };
-    f32::from_bits(value)
-}
-
-/// IEEE 754 binary32 → binary16, rounding to nearest even. A magnitude above half's maximum saturates to
-/// infinity and one below its smallest subnormal flushes to zero, which is what the range of the format
-/// permits; NaN stays NaN rather than becoming an infinity.
-fn f32_to_half(value: f32) -> u16 {
-    let bits = value.to_bits();
-    let sign = ((bits >> 16) & 0x8000) as u16;
-    let exponent = ((bits >> 23) & 0xff) as i32;
-    let mantissa = bits & 0x7f_ffff;
-    if exponent == 0xff {
-        // Infinity, or a NaN whose payload must not round away to infinity.
-        return sign | 0x7c00 | if mantissa == 0 { 0 } else { 0x200 };
-    }
-    let unbiased = exponent - 127 + 15;
-    if unbiased >= 0x1f {
-        return sign | 0x7c00;
-    }
-    if unbiased <= 0 {
-        // Subnormal half, or an underflow to zero.
-        if unbiased < -10 {
-            return sign;
-        }
-        let full = mantissa | 0x80_0000;
-        let shift = (14 - unbiased) as u32;
-        let rounded = (full >> shift) + ((full >> (shift - 1)) & 1);
-        return sign | rounded as u16;
-    }
-    let rounded = ((unbiased as u32) << 10) + (mantissa >> 13) + ((mantissa >> 12) & 1);
-    // Rounding the mantissa up may carry into the exponent, which the addition above already handles;
-    // a carry past the largest finite exponent lands on the infinity encoding, which is correct.
-    sign | rounded as u16
 }
 
 /// Expand a `bits`-wide unsigned normalized integer to 8 bits.
