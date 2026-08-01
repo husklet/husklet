@@ -890,6 +890,12 @@ partition that routed exactly the work its guard ignored. This is cheaper to fin
 thing being guarded and it fails the same way: silently, with no error and stale pixels. Ask not only what
 a function refuses, but what its callers refuse to offer it.
 
+A differential cannot find a divergence in behaviour neither side was known to exercise. One executor
+performed an operation inside a render pass and the other silently ignored it, and the comparison battery
+never caught it because the battery only compares programs both executors were already known to handle.
+That is a coverage shape, not an oversight: the instrument is blind to exactly the disagreements nobody
+anticipated, which are the ones worth finding.
+
 A diagnostic that cannot fire in the build that ships is closer to a missing one than to a useful one, and
 it is worse than missing because the source reads as well-instrumented. Warn, info and debug are compiled
 out of release here and the error level is masked by a default of no tags, so a whole layer's richest
