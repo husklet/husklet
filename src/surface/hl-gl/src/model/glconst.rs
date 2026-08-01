@@ -304,6 +304,17 @@ pub const GL_UNSIGNED_INT_VEC4: u32 = 0x8DC8;
 pub const GL_FLOAT_MAT2: u32 = 0x8B5A;
 pub const GL_FLOAT_MAT3: u32 = 0x8B5B;
 pub const GL_FLOAT_MAT4: u32 = 0x8B5C;
+// The non-square matrices (ES 3.0). `matCxR` is C columns of R rows, and the enum spells the same order,
+// so the mapping is direct and there is no transposition to get wrong here.
+pub const GL_FLOAT_MAT2x3: u32 = 0x8B65;
+pub const GL_FLOAT_MAT2x4: u32 = 0x8B66;
+pub const GL_FLOAT_MAT3x2: u32 = 0x8B67;
+pub const GL_FLOAT_MAT3x4: u32 = 0x8B68;
+pub const GL_FLOAT_MAT4x2: u32 = 0x8B69;
+pub const GL_FLOAT_MAT4x3: u32 = 0x8B6A;
+pub const GL_BOOL_VEC2: u32 = 0x8B57;
+pub const GL_BOOL_VEC3: u32 = 0x8B58;
+pub const GL_BOOL_VEC4: u32 = 0x8B59;
 pub const GL_SAMPLER_2D: u32 = 0x8B5E;
 pub const GL_SAMPLER_CUBE: u32 = 0x8B60;
 

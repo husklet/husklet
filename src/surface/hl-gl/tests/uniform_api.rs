@@ -97,3 +97,42 @@ fn mandatory_uniform_limits_are_nonzero_and_coherent() {
     query::get_integerv(&context, GL_MAX_UNIFORM_BLOCK_SIZE, &mut values);
     assert!(values[0] as usize <= hl_gl::adapter::glsl::MAX_COMBINED_UNIFORM_BYTES);
 }
+
+/// Every matrix shape reports its own type, not the scalar the fallback hands out.
+///
+/// `GlType` mapped only `mat2`, `mat3` and `mat4`, so the six non-square shapes fell through to
+/// `_ => GL_FLOAT` — the same silent default in a different costume. `glGetActiveUniform` and
+/// `glGetActiveAttrib` described a `mat3x2` as a `float`, while the value itself was delivered correctly
+/// column for column. That partition is what makes it diagnosable at a glance: every square shape passed
+/// and every non-square one failed, and the failures were reflection tests rather than rendering ones.
+///
+/// `matCxR` is C columns of R rows and the enum spells the same order, so a transposed mapping would show
+/// up here as `mat2x3` reporting `GL_FLOAT_MAT3x2`.
+#[test]
+fn every_matrix_shape_reports_its_own_type() {
+    for (declared, expected) in [
+        ("mat2", GL_FLOAT_MAT2),
+        ("mat3", GL_FLOAT_MAT3),
+        ("mat4", GL_FLOAT_MAT4),
+        ("mat2x3", GL_FLOAT_MAT2x3),
+        ("mat2x4", GL_FLOAT_MAT2x4),
+        ("mat3x2", GL_FLOAT_MAT3x2),
+        ("mat3x4", GL_FLOAT_MAT3x4),
+        ("mat4x2", GL_FLOAT_MAT4x2),
+        ("mat4x3", GL_FLOAT_MAT4x3),
+    ] {
+        let mut context = GlContext::new();
+        let program = program(
+            &mut context,
+            &format!("uniform {declared} m;\nvoid main(){{gl_Position=vec4(m[0][0]);}}"),
+            "void main(){gl_FragColor=vec4(1.0);}",
+        );
+        let reflected = query::active_uniform(&context, program, 0)
+            .unwrap_or_else(|| panic!("{declared} is an active uniform"));
+        assert_eq!(
+            reflected.gl_type, expected,
+            "{declared} must report its own type, not 0x{:04X}",
+            reflected.gl_type
+        );
+    }
+}
