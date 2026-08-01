@@ -1,4 +1,5 @@
 use super::*;
+use hl_gpu::protocol::model::descriptor::Mirror;
 
 // =====================================================================================================
 // vkCmdCopyImage / vkCmdBlitImage coordinate overflow (REGRESSION: `origin + extent` u32 add-overflow)
@@ -125,7 +126,8 @@ fn blit_image_extent_overflow_is_out_of_bounds_then_valid() {
             (4, 4),
             (0, 0),
             (4, 4),
-            false
+            false,
+            Mirror::NONE,
         ),
         Err(GpuError::OutOfBounds)
     ));
@@ -141,7 +143,8 @@ fn blit_image_extent_overflow_is_out_of_bounds_then_valid() {
             (4, 4),
             (0, u32::MAX),
             (4, 4),
-            true
+            true,
+            Mirror::NONE,
         ),
         Err(GpuError::OutOfBounds)
     ));
@@ -157,7 +160,8 @@ fn blit_image_extent_overflow_is_out_of_bounds_then_valid() {
             (u32::MAX, 1),
             (0, 0),
             (4, 4),
-            false
+            false,
+            Mirror::NONE,
         ),
         Err(GpuError::OutOfBounds)
     ));
@@ -173,7 +177,8 @@ fn blit_image_extent_overflow_is_out_of_bounds_then_valid() {
         (4, 4),
         (0, 0),
         (8, 8),
-        true
+        true,
+        Mirror::NONE,
     )
     .is_ok());
 }

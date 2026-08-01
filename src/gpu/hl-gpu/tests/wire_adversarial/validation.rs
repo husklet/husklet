@@ -107,6 +107,40 @@ fn out_of_range_enums_are_typed_bad_enum() {
     ));
 }
 
+/// A blit `Mirror` is a two-bit set, and an undefined bit is refused rather than dropped.
+///
+/// The whole point of the field is that a flip must not be silently lost, so a decoder that masked an
+/// unrecognised value down to "no mirror" would reintroduce the defect at the wire boundary — for a peer
+/// that means something by that bit. The wire form must also be asymmetric per axis: collapsing the two
+/// bits would make an x-flip and a y-flip indistinguishable.
+#[test]
+fn a_blit_mirror_round_trips_per_axis_and_refuses_an_undefined_bit() {
+    for mirror in [
+        Mirror::NONE,
+        Mirror { x: true, y: false },
+        Mirror { x: false, y: true },
+        Mirror { x: true, y: true },
+    ] {
+        assert_eq!(
+            Mirror::from_u32(mirror.to_u32()),
+            Some(mirror),
+            "{mirror:?} must survive the wire form"
+        );
+    }
+    assert_ne!(
+        Mirror { x: true, y: false }.to_u32(),
+        Mirror { x: false, y: true }.to_u32(),
+        "the two axes must occupy different bits"
+    );
+    for undefined in [0b100u32, 0b1000, 0xFFFF_FFFF] {
+        assert_eq!(
+            Mirror::from_u32(undefined),
+            None,
+            "{undefined:#b} carries a bit this version does not define and must not decode"
+        );
+    }
+}
+
 #[test]
 fn bad_enum_in_a_real_stream_is_rejected() {
     // A CreateTexture whose `dim` word is out of range must fail decode with a BadEnum context. Build the

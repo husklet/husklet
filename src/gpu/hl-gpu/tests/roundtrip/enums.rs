@@ -1,4 +1,5 @@
 use super::*;
+use hl_gpu::protocol::model::descriptor::Mirror;
 
 /// Round-trip one command stream through the codec and assert it comes back unchanged.
 fn rt(cmds: Vec<Cmd>) {
@@ -220,6 +221,7 @@ fn every_encoder_enum_value_round_trips_in_its_op() {
                     depth: 1,
                 },
                 filter,
+                mirror: Mirror::NONE,
             }],
             signal: None,
         })]);

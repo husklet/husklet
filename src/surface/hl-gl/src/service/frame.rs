@@ -30,7 +30,8 @@ use crate::model::program::DrawCall;
 use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BlendState, BufferDesc, ColorAttachment,
-    ColorTargetState, DepthAttachment, DepthState, Extent3d, Origin3d, RenderPipelineDesc,
+    ColorTargetState, DepthAttachment, DepthState, Extent3d, Mirror, Origin3d,
+    RenderPipelineDesc,
     SamplerDesc, ShaderRef, StencilFaceState, SurfaceDesc, TextureDesc, TextureSubresource,
     VertexAttr, VertexLayout,
 };

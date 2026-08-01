@@ -415,69 +415,77 @@ fn acquire_next_image2_reports_an_unknown_swapchain_like_the_positional_form() {
     assert_eq!(index, 7);
 }
 
-/// A MIRRORED `vkCmdBlitImage` region fails the command buffer instead of vanishing.
+/// A MIRRORED `vkCmdBlitImage` region is NORMALIZED and its flip is kept; an EMPTY one is still skipped.
 ///
 /// Vulkan expresses a flipped blit by putting `offsets[1]` before `offsets[0]` on an axis, and it is
-/// legal. `Enc::BlitTexture` carries an unsigned origin and extent, so the driver cannot express one —
-/// which makes it a limitation rather than the caller's error, and the caller has to be told either way.
-/// It was told nothing: the mirrored region hit the same `continue` that skips an EMPTY region, so the
-/// command produced no work, reported no error, and left the destination holding whatever it had.
+/// legal. The IR's origin and extent are unsigned, so this shim has to normalize the two corners with a
+/// min/max before it has a rect at all — and the comparison that normalization performs IS the flip. It
+/// used to be discarded: first by the same `continue` that skips an empty region (the command produced
+/// nothing, reported nothing, and left the destination stale), then by an honest but unnecessary
+/// `Unsupported` refusal. `BlitRect` keeps it, and `Mirror::net` combines the two sides.
 ///
-/// `Device::latch` exists for exactly this. Its own documentation records that call sites used to discard
-/// these Results, "which is why a command buffer that had silently dropped work still ended
-/// successfully" — and a `continue` walks around the mechanism built to stop that.
+/// The EMPTY region is the control, and it is what makes this discriminating: an empty region is
+/// genuinely nothing to do, and a `BlitRect` that returned a rect for it would turn every application
+/// that submits one into a zero-extent blit the host refuses.
 ///
-/// The EMPTY region is the control, and it is what makes this test discriminating rather than merely
-/// red-then-green: an empty region is genuinely nothing to do and must still be skipped in silence. Both
-/// regions took the same path before, so a test asserting only the failure would have passed against a
-/// driver that failed on empty regions too — which would break every application that submits one.
-///
-/// Neither region reaches the images, because both checks precede the recording call, so the handles here
-/// are deliberately arbitrary: this is a statement about region geometry alone.
+/// The NET rule is the other half. Inverting BOTH sides of an axis mirrors twice and is the identity, so
+/// a driver that took the source's inversion alone would flip images no application asked to flip.
 #[test]
-fn a_mirrored_blit_region_fails_the_command_buffer_and_an_empty_one_is_skipped() {
-    const VK_FILTER_NEAREST: i32 = 0;
+fn a_mirrored_blit_region_keeps_its_flip_and_an_empty_one_is_skipped() {
+    use crate::transfer::BlitRect;
+    use hl_gpu::protocol::model::descriptor::Mirror;
 
-    let offsets = |x0: i32, x1: i32| {
+    let offsets = |x0: i32, y0: i32, x1: i32, y1: i32| {
         [
-            VkOffset3D { x: x0, y: 0, z: 0 },
-            VkOffset3D { x: x1, y: 4, z: 1 },
+            VkOffset3D { x: x0, y: y0, z: 0 },
+            VkOffset3D { x: x1, y: y1, z: 1 },
         ]
     };
-    let region = |x0: i32, x1: i32| VkImageBlit {
-        src_subresource: unsafe { core::mem::zeroed() },
-        src_offsets: offsets(x0, x1),
-        dst_subresource: unsafe { core::mem::zeroed() },
-        dst_offsets: offsets(0, 4),
-    };
-    let blit = |x0: i32, x1: i32| {
-        let _g = test_guard();
-        let (cb, _handle) = recording_command_buffer();
-        let r = region(x0, x1);
-        crate::transfer::vkCmdBlitImage(
-            cb,
-            1,
-            0,
-            2,
-            0,
-            1,
-            &r as *const _ as *const c_void,
-            VK_FILTER_NEAREST,
-        );
-        crate::compute::vkEndCommandBuffer(cb)
-    };
 
-    // Control: an empty region is nothing to do, and the buffer must still end cleanly.
+    // Control: an empty rect on either axis is nothing to do and must not become a region.
+    assert!(
+        BlitRect::of(&offsets(2, 0, 2, 4)).is_none(),
+        "a zero-width region is nothing to do"
+    );
+    assert!(
+        BlitRect::of(&offsets(0, 3, 4, 3)).is_none(),
+        "a zero-height region is nothing to do"
+    );
+
+    // A forward rect: origin at the low corner, extent the span, no flip.
+    let forward = BlitRect::of(&offsets(1, 2, 5, 8)).expect("a non-empty region");
+    assert_eq!((forward.origin, forward.extent), ((1, 2), (4, 6)));
+    assert_eq!(forward.inverted, Mirror::NONE);
+
+    // An inverted rect: the SAME origin and extent — that is why the flip cannot live in them — plus the
+    // comparison the min/max performed.
+    let inverted = BlitRect::of(&offsets(5, 8, 1, 2)).expect("a non-empty region");
+    assert_eq!((inverted.origin, inverted.extent), ((1, 2), (4, 6)));
+    assert_eq!(inverted.inverted, Mirror { x: true, y: true });
+
+    // One axis each, to prove the two are independent rather than moving together.
+    let flip_x = BlitRect::of(&offsets(5, 2, 1, 8)).expect("a non-empty region");
+    assert_eq!(flip_x.inverted, Mirror { x: true, y: false });
+    let flip_y = BlitRect::of(&offsets(1, 8, 5, 2)).expect("a non-empty region");
+    assert_eq!(flip_y.inverted, Mirror { x: false, y: true });
+
+    // The net rule: source XOR destination. Both inverted is the identity.
     assert_eq!(
-        blit(2, 2),
-        VK_SUCCESS,
-        "an empty region is a no-op, not a failure"
+        Mirror::net(inverted.inverted, inverted.inverted),
+        Mirror::NONE,
+        "inverting both sides of an axis mirrors twice and must not flip the image"
+    );
+    assert_eq!(
+        Mirror::net(flip_x.inverted, forward.inverted),
+        Mirror { x: true, y: false },
+        "one inverted side is a real flip"
+    );
+    assert_eq!(
+        Mirror::net(flip_x.inverted, flip_y.inverted),
+        Mirror { x: true, y: true },
+        "the two axes combine independently"
     );
 
-    // The mirrored region the driver cannot express must reach the caller.
-    assert_ne!(
-        blit(4, 0),
-        VK_SUCCESS,
-        "a mirrored region must fail the command buffer rather than silently producing nothing"
-    );
+    // The depth span is carried unnormalized, because a 3D region is refused rather than mirrored.
+    assert_eq!(forward.depth, (0, 1));
 }

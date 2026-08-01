@@ -1,4 +1,5 @@
 use super::*;
+use hl_gpu::protocol::model::descriptor::Mirror;
 
 #[test]
 fn blit_image_lowers_to_blit_texture_with_filter() {
@@ -39,6 +40,7 @@ fn blit_image_lowers_to_blit_texture_with_filter() {
             (0, 0),
             (16, 16),
             true,
+            Mirror::NONE,
         )
         .unwrap();
     });
@@ -62,8 +64,78 @@ fn blit_image_lowers_to_blit_texture_with_filter() {
                 depth: 1
             },
             filter: Filter::Linear,
+            mirror: Mirror::NONE,
         }]
     );
+}
+
+/// A MIRRORED region reaches the IR as a mirror, on the axes the caller inverted.
+///
+/// `vkCmdBlitImage` expresses a flip by putting `offsets[1]` before `offsets[0]` on an axis, and it is
+/// legal. The origin and extent this recorder takes are already normalized — an unsigned pair cannot say
+/// "flipped" — so the surface used to have nowhere to put the intent and refused the whole region as
+/// unsupported (and before that dropped it with no error at all, leaving the destination stale).
+///
+/// The four states are asserted together, and the control is that they produce four DIFFERENT encodings:
+/// a recorder that dropped `mirror` on the floor would record `Mirror::NONE` four times.
+#[test]
+fn blit_image_carries_a_mirror_per_axis() {
+    for mirror in [
+        Mirror::NONE,
+        Mirror { x: true, y: false },
+        Mirror { x: false, y: true },
+        Mirror { x: true, y: true },
+    ] {
+        let mut d = dev();
+        let mut sink = RecordingSink::with_full_caps();
+        let src = create::create_image(
+            &mut d,
+            &mut sink,
+            8,
+            8,
+            vk_format::R8G8B8A8_UNORM,
+            vk_image_usage::TRANSFER_SRC,
+            1,
+        )
+        .unwrap();
+        let dst = create::create_image(
+            &mut d,
+            &mut sink,
+            8,
+            8,
+            vk_format::R8G8B8A8_UNORM,
+            vk_image_usage::TRANSFER_DST,
+            1,
+        )
+        .unwrap();
+        let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+            record::cmd_blit_image(
+                d,
+                cb,
+                src,
+                dst,
+                SubresourceLayers::base(),
+                SubresourceLayers::base(),
+                (0, 0),
+                (8, 8),
+                (0, 0),
+                (8, 8),
+                false,
+                mirror,
+            )
+            .expect("a mirrored region is legal Vulkan and must record, not be refused");
+        });
+        let [Enc::BlitTexture {
+            mirror: recorded, ..
+        }] = enc.as_slice()
+        else {
+            panic!("expected exactly one BlitTexture, got {enc:?}");
+        };
+        assert_eq!(
+            *recorded, mirror,
+            "the recorded blit must carry the mirror the caller asked for"
+        );
+    }
 }
 
 #[test]

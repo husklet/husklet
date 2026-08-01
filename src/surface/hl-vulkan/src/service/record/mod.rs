@@ -9,7 +9,7 @@ use crate::*;
 use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BufferBinding, ColorAttachment, DepthAttachment,
-    Extent3d, Origin3d, TextureSubresource,
+    Extent3d, Mirror, Origin3d, TextureSubresource,
 };
 use hl_gpu::protocol::model::enums::{
     buffer_usage, texture_usage, Filter, IndexFormat, LoadOp, TextureAspect, TextureFormat,

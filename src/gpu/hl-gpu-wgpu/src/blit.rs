@@ -9,6 +9,10 @@
 //! the pixel-CENTER source coordinate `src_origin + (d + 0.5) * src_extent / dst_extent`, which is exactly
 //! what a viewport-mapped fullscreen triangle with clamp-to-edge sampling produces.
 //!
+//! A MIRRORED blit needs no new capability here. The shader's remap is a plain `uv_off + uv * uv_scale`
+//! with nothing constraining the sign, so a flipped axis is the origin moved to the far edge of the source
+//! rect and the scale negated; clamp-to-edge handles the boundary exactly as it does unmirrored.
+//!
 //! The blit pipeline/sampler are CACHED on the executor (`BlitCache`): the WGSL module + bind-group layout
 //! + the two samplers are built once, and one render pipeline per `(dst format, filter)` is memoized — a
 //!
@@ -17,7 +21,7 @@
 
 use std::collections::HashMap;
 
-use hl_gpu::protocol::model::descriptor::{Extent3d, Origin3d, TextureSubresource};
+use hl_gpu::protocol::model::descriptor::{Extent3d, Mirror, Origin3d, TextureSubresource};
 use hl_gpu::protocol::model::enums::{Filter, TextureAspect};
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
@@ -249,6 +253,7 @@ impl WgpuExecutor {
         dst_origin: &Origin3d,
         dst_extent: &Extent3d,
         filter: Filter,
+        mirror: Mirror,
     ) -> Result<()> {
         let _sp = hl_log::hl_span!(hl_log::tag::WGPU, "blit");
         for sub in [src_sub, dst_sub] {
@@ -313,13 +318,21 @@ impl WgpuExecutor {
 
         // Normalize the source rect into UV space: uv = uv_off + local_uv * uv_scale, with local_uv running
         // 0..1 across the destination rect (see BLIT_WGSL). uv_off/scale come straight from the source rect.
+        // A MIRRORED axis puts the origin at the FAR edge of the source rect and negates the scale, so
+        // `uv_off + local_uv * uv_scale` walks the rect backwards. Nothing in the shader constrains the
+        // sign, and the clamp-to-edge sampler handles the boundary exactly as it does unmirrored.
         let (sw_f, sh_f) = (sw as f32, sh as f32);
-        let xform: [f32; 4] = [
-            src_origin.x as f32 / sw_f,
-            src_origin.y as f32 / sh_f,
-            src_extent.width as f32 / sw_f,
-            src_extent.height as f32 / sh_f,
-        ];
+        let axis = |origin: u32, extent: u32, dim: f32, flip: bool| -> (f32, f32) {
+            let (o, e) = (origin as f32 / dim, extent as f32 / dim);
+            if flip {
+                (o + e, -e)
+            } else {
+                (o, e)
+            }
+        };
+        let (uv_off_x, uv_scale_x) = axis(src_origin.x, src_extent.width, sw_f, mirror.x);
+        let (uv_off_y, uv_scale_y) = axis(src_origin.y, src_extent.height, sh_f, mirror.y);
+        let xform: [f32; 4] = [uv_off_x, uv_off_y, uv_scale_x, uv_scale_y];
 
         // Lazily build the device-lifetime cache, then split the field borrows: `device`/`queue` borrow
         // `self.gpu` immutably, `cache` borrows `self.blit` mutably — disjoint fields, so both live at once.

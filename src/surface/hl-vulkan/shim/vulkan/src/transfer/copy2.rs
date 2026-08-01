@@ -5,7 +5,8 @@ use core::ffi::c_void;
 use hl_vulkan::service::record;
 use hl_vulkan::SubresourceLayers;
 
-use super::{CommandBuffer, ShimState};
+use super::{BlitRect, CommandBuffer, ShimState};
+use hl_gpu::protocol::model::descriptor::Mirror;
 use crate::types::*;
 
 /// Translate a `VkImageSubresourceLayers` into the driver's own value. `layerCount` may be
@@ -197,17 +198,20 @@ impl Transfer2 {
         let linear = info.filter == VK_FILTER_LINEAR;
         ShimState::with_device(|device| {
             for region in regions {
-                let [source_start, source_end] = region.src_offsets;
-                let [destination_start, destination_end] = region.dst_offsets;
-                if source_end.x <= source_start.x
-                    || source_end.y <= source_start.y
-                    || source_start.z != 0
-                    || source_end.z != 1
-                    || destination_end.x <= destination_start.x
-                    || destination_end.y <= destination_start.y
-                    || destination_start.z != 0
-                    || destination_end.z != 1
-                {
+                // Same normalization as `vkCmdBlitImage`: an empty rect is skipped and an inverted one
+                // is a legal MIRROR whose flip is carried into the IR. The `<=` comparison this replaced
+                // conflated the two, so every mirrored blit2 was dropped with no error at all.
+                let (Some(source), Some(destination)) = (
+                    BlitRect::of(&region.src_offsets),
+                    BlitRect::of(&region.dst_offsets),
+                ) else {
+                    continue;
+                };
+                if source.depth != (0, 1) || destination.depth != (0, 1) {
+                    device.latch::<()>(
+                        command_buffer,
+                        Err(hl_gpu::GpuError::Unsupported("vkCmdBlitImage2: 3D region")),
+                    );
                     continue;
                 }
                 let recorded = record::cmd_blit_image(
@@ -217,17 +221,12 @@ impl Transfer2 {
                     info.dst_image,
                     layers_of(&region.src_subresource),
                     layers_of(&region.dst_subresource),
-                    (source_start.x as u32, source_start.y as u32),
-                    (
-                        (source_end.x - source_start.x) as u32,
-                        (source_end.y - source_start.y) as u32,
-                    ),
-                    (destination_start.x as u32, destination_start.y as u32),
-                    (
-                        (destination_end.x - destination_start.x) as u32,
-                        (destination_end.y - destination_start.y) as u32,
-                    ),
+                    source.origin,
+                    source.extent,
+                    destination.origin,
+                    destination.extent,
                     linear,
+                    Mirror::net(source.inverted, destination.inverted),
                 );
                 device.latch(command_buffer, recorded);
             }

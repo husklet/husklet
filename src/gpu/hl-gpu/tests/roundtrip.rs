@@ -398,6 +398,7 @@ fn representative_stream() -> Vec<Cmd> {
                         depth: 1,
                     },
                     filter: Filter::Linear,
+                    mirror: Mirror::NONE,
                 },
                 Enc::ResolveTexture {
                     src: 2,

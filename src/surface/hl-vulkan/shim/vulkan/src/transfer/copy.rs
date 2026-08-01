@@ -5,7 +5,8 @@ use core::ffi::c_void;
 use hl_vulkan::service::record;
 use hl_vulkan::SubresourceLayers;
 
-use super::{CommandBuffer, ShimState};
+use super::{BlitRect, CommandBuffer, ShimState};
+use hl_gpu::protocol::model::descriptor::Mirror;
 use crate::types::*;
 
 /// Translate a `VkImageSubresourceLayers` into the driver's own value. `layerCount` may be
@@ -221,43 +222,19 @@ pub extern "C" fn vkCmdBlitImage(
     let linear = filter == VK_FILTER_LINEAR;
     ShimState::with_device(|device| {
         for region in regions {
-            let [source_start, source_end] = region.src_offsets;
-            let [destination_start, destination_end] = region.dst_offsets;
-            // An EMPTY region is nothing to do, and skipping it is right.
-            if source_end.x == source_start.x
-                || source_end.y == source_start.y
-                || destination_end.x == destination_start.x
-                || destination_end.y == destination_start.y
-            {
+            // An EMPTY region is nothing to do, and skipping it is right. A MIRRORED region —
+            // `offsets[1]` before `offsets[0]` on an axis — is how Vulkan expresses a flipped blit, and
+            // it is legal; `BlitRect` normalizes the bounds and KEEPS the comparison, so the flip
+            // survives into the IR instead of being discarded (or, before that, refused).
+            let (Some(source), Some(destination)) = (
+                BlitRect::of(&region.src_offsets),
+                BlitRect::of(&region.dst_offsets),
+            ) else {
                 continue;
-            }
-            // A MIRRORED region — `offsets[1]` before `offsets[0]` on an axis — is how Vulkan expresses a
-            // flipped blit, and it is legal. `Enc::BlitTexture` carries an unsigned origin and extent and
-            // so cannot express one at all, which makes this a limitation of the driver rather than an
-            // error by the caller. It used to be dropped by the same `continue` that skips an empty
-            // region: the command produced nothing, reported nothing, and left the destination holding
-            // whatever it had. `latch` exists precisely so a `vkCmd*` failure reaches
-            // `vkEndCommandBuffer` — its own documentation records that discarding these Results is why a
-            // buffer that had silently dropped work still ended successfully — and a `continue` walks
-            // around the mechanism built to stop that.
-            let mirrored = source_end.x < source_start.x
-                || source_end.y < source_start.y
-                || destination_end.x < destination_start.x
-                || destination_end.y < destination_start.y;
-            if mirrored {
-                device.latch::<()>(
-                    command_buffer,
-                    Err(hl_gpu::GpuError::Unsupported("vkCmdBlitImage: mirrored region")),
-                );
-                continue;
-            }
-            // A region spanning depth, likewise legal and likewise unrepresentable: the lowering carries
-            // a 2D rect per array layer and the host refuses a 3D blit outright.
-            if source_start.z != 0
-                || source_end.z != 1
-                || destination_start.z != 0
-                || destination_end.z != 1
-            {
+            };
+            // A region spanning depth is legal and unrepresentable: the lowering carries a 2D rect per
+            // array layer and the host refuses a 3D blit outright.
+            if source.depth != (0, 1) || destination.depth != (0, 1) {
                 device.latch::<()>(
                     command_buffer,
                     Err(hl_gpu::GpuError::Unsupported("vkCmdBlitImage: 3D region")),
@@ -271,17 +248,12 @@ pub extern "C" fn vkCmdBlitImage(
                 dst_image,
                 layers_of(&region.src_subresource),
                 layers_of(&region.dst_subresource),
-                (source_start.x as u32, source_start.y as u32),
-                (
-                    (source_end.x - source_start.x) as u32,
-                    (source_end.y - source_start.y) as u32,
-                ),
-                (destination_start.x as u32, destination_start.y as u32),
-                (
-                    (destination_end.x - destination_start.x) as u32,
-                    (destination_end.y - destination_start.y) as u32,
-                ),
+                source.origin,
+                source.extent,
+                destination.origin,
+                destination.extent,
                 linear,
+                Mirror::net(source.inverted, destination.inverted),
             );
             device.latch(command_buffer, recorded);
         }

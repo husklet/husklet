@@ -63,6 +63,7 @@ pub(super) fn emit_scissor(d: &DrawCall, tw: i32, th: i32, bottom_up: bool) -> E
 
 /// Lower a `glBlitFramebuffer` color sub-rect, flipping the GL bottom-left window rects into the render
 /// targets' top-left texel origin.
+
 ///
 /// A SCALING blit (source extent != destination extent) or one that CHANGES FORMAT lowers to
 /// `Enc::BlitTexture` carrying `filter`, which resamples and converts. Only an equal-size, same-format
@@ -131,6 +132,8 @@ pub(super) fn blit_copy_enc(
                 depth: 1,
             },
             filter,
+            // TODO(mirror): the surface still discards the inversion; wired in the next commit.
+            mirror: Mirror::NONE,
         });
     }
     Some(Enc::CopyTextureToTexture {

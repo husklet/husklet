@@ -149,8 +149,9 @@ pub enum Enc {
         extent: Extent3d,
     },
     /// Scaled/filtered texture→texture blit: the `src_extent` region of `src` is resampled with `filter`
-    /// into the `dst_extent` region of `dst` (equal extents = a straight copy). Wire tag 19 (added at
-    /// [`WIRE_VERSION`] 2).
+    /// into the `dst_extent` region of `dst` (equal extents and `Mirror::NONE` = a straight copy), with
+    /// `mirror` reversing the sample order on either axis. Wire tag 19 (added at [`WIRE_VERSION`] 2;
+    /// `mirror` appended at [`WIRE_VERSION`] 15).
     BlitTexture {
         src: u32,
         src_sub: TextureSubresource,
@@ -161,6 +162,9 @@ pub enum Enc {
         dst_origin: Origin3d,
         dst_extent: Extent3d,
         filter: super::enums::Filter,
+        /// Per-axis mirroring. `Mirror::NONE` is an ordinary blit; see [`Mirror`] for why the flip cannot
+        /// live in the (unsigned) origin and extent.
+        mirror: Mirror,
     },
     /// Resolve a multisampled color region into a single-sampled texture. Unlike copy/blit this
     /// averages distinguishable samples and therefore has its own negotiated operation. Wire tag 20
@@ -346,7 +350,11 @@ pub enum Cmd {
 // v12 adds render multisample mask + forced per-sample shading to layout-qualified render pipelines.
 // v14 extends `SamplerDesc` with LOD clamps and optional depth comparison. A v13 decoder would
 // mis-frame every command following `CreateSampler`, so negotiation must reject mixed versions.
-pub const WIRE_VERSION: u32 = 14;
+// v15 appends a per-axis `Mirror` to `BlitTexture` (etag 19). A mirrored blit is legal in both GL and
+// Vulkan and was expressed there by inverting a rect's bounds, which an unsigned origin+extent cannot
+// carry; the surfaces normalized the rect and dropped the intent. A v14 decoder would mis-frame every
+// operation following a blit, so negotiation must reject mixed versions.
+pub const WIRE_VERSION: u32 = 15;
 
 // tag constants (stable wire) --------------------------------------------------------------------
 /// Top-level [`Cmd`] tag numbers.

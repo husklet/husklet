@@ -1,4 +1,5 @@
 use super::*;
+use hl_gpu::protocol::model::descriptor::Mirror;
 #[test]
 fn copy_buffer_to_image_usage_and_bounds_errors() {
     let mut d = dev();
@@ -167,7 +168,8 @@ fn blit_same_image_rejected_and_zero_extent_rejected() {
             (4, 4),
             (0, 0),
             (4, 4),
-            true
+            true,
+            Mirror::NONE,
         ),
         Err(GpuError::Invalid(_))
     ));
@@ -183,7 +185,8 @@ fn blit_same_image_rejected_and_zero_extent_rejected() {
             (0, 4),
             (0, 0),
             (4, 4),
-            false
+            false,
+            Mirror::NONE,
         ),
         Err(GpuError::OutOfBounds)
     ));

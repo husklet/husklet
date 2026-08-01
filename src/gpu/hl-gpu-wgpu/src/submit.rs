@@ -915,10 +915,11 @@ impl WgpuExecutor {
                     dst_origin,
                     dst_extent,
                     filter,
+                    mirror,
                 } => {
                     self.blit_texture(
                         res, *src, src_sub, src_origin, src_extent, *dst, dst_sub, dst_origin,
-                        dst_extent, *filter,
+                        dst_extent, *filter, *mirror,
                     )?;
                     i += 1;
                 }

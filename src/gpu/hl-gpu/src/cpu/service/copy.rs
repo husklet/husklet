@@ -5,7 +5,7 @@
 use crate::cpu::format::{sample_bilinear, texel_at};
 use crate::cpu::model::texture::Texture;
 use crate::cpu::model::{buffer, buffer_mut, texture, texture_mut};
-use crate::protocol::model::descriptor::{Extent3d, Origin3d, TextureSubresource};
+use crate::protocol::model::descriptor::{Extent3d, Mirror, Origin3d, TextureSubresource};
 use crate::protocol::model::enums::{Filter, TextureAspect};
 use crate::protocol::model::error::{GpuError, Result};
 use crate::runtime::model::resources::SessionResources;
@@ -299,6 +299,7 @@ pub(crate) fn blit_texture(
     dst_origin: &Origin3d,
     dst_extent: &Extent3d,
     filter: Filter,
+    mirror: Mirror,
 ) -> Result<()> {
     let (sw, src_bpt, src_fmt) = {
         let t = texture(res, src)?;
@@ -321,10 +322,21 @@ pub(crate) fn blit_texture(
         )
     };
     let t = texture_mut(res, dst)?;
+    // A MIRRORED axis reverses the sample coordinate WITHIN the source rect: destination step `d` reads
+    // `dext - d - 0.5` steps in instead of `d + 0.5`. Mirroring the coordinate rather than the destination
+    // write keeps the destination rect exactly the one the caller named, and it is the same reflection the
+    // executor performs by negating its UV scale about the far edge of the source rect.
+    let along = |d: usize, dext: usize, flip: bool| {
+        if flip {
+            dext as f32 - d as f32 - 0.5
+        } else {
+            d as f32 + 0.5
+        }
+    };
     for dy in 0..deh {
-        let fy = soy as f32 + (dy as f32 + 0.5) * seh as f32 / deh as f32;
+        let fy = soy as f32 + along(dy, deh, mirror.y) * seh as f32 / deh as f32;
         for dx in 0..dew {
-            let fx = sox as f32 + (dx as f32 + 0.5) * sew as f32 / dew as f32;
+            let fx = sox as f32 + along(dx, dew, mirror.x) * sew as f32 / dew as f32;
             // Both filters produce the source colour as VALUES; only how the neighbourhood is reduced
             // differs. Encoding into the destination is then one shared step, so the two filters cannot
             // come to different conclusions about what a format means — which is exactly what happened

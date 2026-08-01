@@ -1,4 +1,5 @@
 use super::*;
+use hl_gpu::protocol::model::descriptor::Mirror;
 
 pub(super) fn gen_clear(seed: u64) -> Prog {
     let w = 3 + (seed % 6) as u32; // 3..=8
@@ -348,6 +349,58 @@ pub(super) fn gen_blit_linear(seed: u64) -> Prog {
     }
 }
 
+/// (6b) MIRRORED `BlitTexture` NEAREST integer upscale — the same pure texel replication as (6), but with
+/// one or both axes flipped. A mirrored blit was unrepresentable in the IR, so neither backend was ever
+/// asked to perform one and this differential was blind to the whole class: the GL surface produced an
+/// UNMIRRORED image and the Vulkan surface produced none at all, and no comparison here could see either.
+/// Point sampling of an integer upscale stays exact under a reflection, so the tolerance is still 0.
+pub(super) fn gen_blit_mirror(seed: u64) -> Prog {
+    let n = 2 + (seed % 3) as u32; // 2..=4
+    let k = 2 + (seed % 3) as u32; // 2..=4
+    let (dw, dh) = (n * k, n * k);
+    // Cycle the three non-identity mirrors so every seed batch exercises x, y and both.
+    let mirror = match seed % 3 {
+        0 => Mirror { x: true, y: false },
+        1 => Mirror { x: false, y: true },
+        _ => Mirror { x: true, y: true },
+    };
+    let src: Vec<u8> = (0..n * n)
+        .flat_map(|i| texel(seed.wrapping_add(i as u64 * 13)))
+        .collect();
+    let mut cmds = blit_cmds(&src, n, n, dw, dh, Filter::Nearest);
+    set_blit_mirror(&mut cmds, mirror);
+    Prog {
+        seed,
+        category: "blit_mirror",
+        ops: vec!["CopyBufferToTexture", "ClearRect", "BlitTexture"],
+        cmds,
+        read: Read::Tex {
+            id: 2,
+            len: (dw * dh * 4) as usize,
+        },
+        tol: Tolerance::Unorm(0),
+        kernel: None,
+    }
+}
+
+/// Set the mirror on the single `BlitTexture` a `blit_cmds` program contains. Panics if the program does
+/// not hold exactly one, so a future edit to `blit_cmds` cannot silently produce an unmirrored program that
+/// still reports itself as the mirror category.
+fn set_blit_mirror(cmds: &mut [Cmd], m: Mirror) {
+    let mut found = 0;
+    for cmd in cmds {
+        if let Cmd::Submit(cb) = cmd {
+            for enc in &mut cb.encoder {
+                if let Enc::BlitTexture { mirror, .. } = enc {
+                    *mirror = m;
+                    found += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(found, 1, "blit_cmds must hold exactly one BlitTexture");
+}
+
 /// Shared blit program body: upload `src` (tight) into tex 1, pre-clear tex 2 (dst) opaque black, then blit
 /// the full source extent into the full destination extent with `filter`.
 fn blit_cmds(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32, filter: Filter) -> Vec<Cmd> {
@@ -406,6 +459,7 @@ fn blit_cmds(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32, filter: Filter) -> 
                         depth: 1,
                     },
                     filter,
+                    mirror: Mirror::NONE,
                 },
             ],
             signal: None,

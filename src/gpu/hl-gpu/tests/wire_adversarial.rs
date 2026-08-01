@@ -171,6 +171,7 @@ fn every_encoder_op() -> Vec<Enc> {
             dst_origin: org,
             dst_extent: ext,
             filter: Filter::Linear,
+            mirror: Mirror::NONE,
         },
         Enc::ResolveTexture {
             src: 2,

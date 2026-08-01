@@ -287,10 +287,12 @@ impl CpuExecutor {
                     dst_origin,
                     dst_extent,
                     filter,
+                    mirror,
                     ..
                 } => {
                     copy::blit_texture(
                         res, *src, src_origin, src_extent, *dst, dst_origin, dst_extent, *filter,
+                        *mirror,
                     )?;
                 }
                 Enc::ResolveTexture {

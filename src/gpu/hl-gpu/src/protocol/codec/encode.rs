@@ -468,6 +468,7 @@ impl Encoder {
                 dst_origin,
                 dst_extent,
                 filter,
+                mirror,
             } => {
                 e.u8(etag::BLIT_TEXTURE);
                 e.u32(*src);
@@ -479,6 +480,7 @@ impl Encoder {
                 e.origin(dst_origin);
                 e.extent(dst_extent);
                 e.u32(filter.to_u32());
+                e.u32(mirror.to_u32());
             }
             Enc::ResolveTexture {
                 src,

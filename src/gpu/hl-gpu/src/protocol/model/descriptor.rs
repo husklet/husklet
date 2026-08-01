@@ -299,6 +299,47 @@ pub struct Extent3d {
     pub depth: u32,
 }
 
+/// Per-axis mirroring of a blit: the destination row/column order is reversed relative to the source.
+///
+/// Origin and extent stay unsigned, so a rect alone cannot say "flipped". Both `glBlitFramebuffer` and
+/// `vkCmdBlitImage` express a mirror by inverting a rect's bounds (`x1 < x0`), which a surface must
+/// normalize with a min/max before it has an origin and an extent at all — that normalization is where
+/// the intent used to be discarded. The surface carries it here instead: the NET flip of an axis is the
+/// source inversion exclusive-or the destination inversion, since inverting both sides mirrors twice and
+/// is the identity.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Mirror {
+    pub x: bool,
+    pub y: bool,
+}
+
+impl Mirror {
+    /// No mirroring on either axis — an ordinary blit.
+    pub const NONE: Self = Mirror { x: false, y: false };
+
+    /// The net mirror of a blit whose source and destination rects were each inverted (or not) per axis.
+    pub fn net(src: Self, dst: Self) -> Self {
+        Mirror {
+            x: src.x != dst.x,
+            y: src.y != dst.y,
+        }
+    }
+
+    /// Wire form: bit 0 = `x`, bit 1 = `y`. Any other bit is not a mirror this version defines.
+    pub fn to_u32(self) -> u32 {
+        u32::from(self.x) | (u32::from(self.y) << 1)
+    }
+
+    /// Inverse of [`Self::to_u32`]; `None` for a value carrying a bit this version does not define, so an
+    /// unknown mirroring is a decode error rather than silently an unmirrored blit.
+    pub fn from_u32(v: u32) -> Option<Self> {
+        (v & !0b11 == 0).then_some(Mirror {
+            x: v & 0b01 != 0,
+            y: v & 0b10 != 0,
+        })
+    }
+}
+
 // ---------------------------------------------------------------------------------------------------
 // render-pass attachments (encoder-level)
 // ---------------------------------------------------------------------------------------------------

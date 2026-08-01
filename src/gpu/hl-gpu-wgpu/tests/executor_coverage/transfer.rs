@@ -1,4 +1,5 @@
 use super::*;
+use hl_gpu::protocol::model::descriptor::Mirror;
 
 // (1) COPY BUG REGRESSIONS — sub-region source stride + tight (bytes_per_row == 0)
 // =================================================================================================
@@ -241,6 +242,7 @@ fn blit_and_resolve_are_advertised_and_run() {
                     depth: 1,
                 },
                 filter: Filter::Nearest,
+                mirror: Mirror::NONE,
             },
         ],
         signal: None,

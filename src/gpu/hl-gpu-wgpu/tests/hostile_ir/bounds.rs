@@ -1,4 +1,5 @@
 use super::*;
+use hl_gpu::protocol::model::descriptor::Mirror;
 
 // =================================================================================================
 // (2) OUT-OF-BOUNDS regions
@@ -219,6 +220,7 @@ fn blit_into_smaller_target_is_oob() {
                         depth: 1,
                     },
                     filter: Filter::Nearest,
+                    mirror: Mirror::NONE,
                 }],
                 signal: None,
             }),

@@ -22,8 +22,10 @@ fn wire_version_is_pinned_at_14() {
     // `RenderPipelineDesc.sample_count` (appended after `front_face`); no golden stream below encodes a
     // render pipeline, so every GOLDEN_* byte array is still valid unchanged. Bumped 8 → 9 when the
     // presentation identity became a non-zero u64 and Present gained its u64 frame serial. Bumped 9 → 10
-    // when bind groups gained typed buffer/texture/sampler array resources.
-    assert_eq!(WIRE_VERSION, 14);
+    // when bind groups gained typed buffer/texture/sampler array resources. Bumped 14 → 15 when
+    // `BlitTexture` gained its per-axis `Mirror` (appended after `filter`); no golden stream below
+    // encodes a blit, so every GOLDEN_* byte array is still valid unchanged.
+    assert_eq!(WIRE_VERSION, 15);
 }
 
 /// Stream A: buffer create + write + fence create + wait + destroy.

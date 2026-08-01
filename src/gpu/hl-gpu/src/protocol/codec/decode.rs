@@ -434,6 +434,13 @@ impl<'a> Decoder<'a> {
                 dst_origin: d.origin()?,
                 dst_extent: d.extent()?,
                 filter: Filter::from_u32(d.u32()?)?,
+                mirror: {
+                    let v = d.u32()?;
+                    Mirror::from_u32(v).ok_or(GpuError::BadEnum {
+                        what: "blit mirror",
+                        val: v,
+                    })?
+                },
             },
             etag::RESOLVE_TEXTURE => Enc::ResolveTexture {
                 src: d.u32()?,

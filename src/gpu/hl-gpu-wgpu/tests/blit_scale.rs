@@ -28,6 +28,7 @@ use hl_gpu::protocol::model::enums::{
 };
 use hl_gpu::{Cmd, CommandBuffer, Enc, FakeClock, GlobalLedger, GpuExecutor, Limits, Session};
 use hl_gpu_wgpu::{DeviceConfig, WgpuExecutor};
+use hl_gpu::protocol::model::descriptor::Mirror;
 
 const RT: u32 = texture_usage::RENDER_TARGET | texture_usage::COPY_SRC | texture_usage::COPY_DST;
 
@@ -117,6 +118,7 @@ fn blit_scaled(
                         dst_origin: Origin3d::default(),
                         dst_extent: Extent3d { width: dw, height: dh, depth: 1 },
                         filter,
+                        mirror: Mirror::NONE,
                     },
                 ],
                 signal: None,

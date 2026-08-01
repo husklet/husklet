@@ -1,4 +1,5 @@
 use super::*;
+use hl_gpu::protocol::model::descriptor::Mirror;
 
 // =================================================================================================
 // (3) ZERO-SIZE / absurdly-huge dimensions
@@ -84,6 +85,7 @@ fn zero_size_blit_is_invalid() {
                         depth: 1,
                     },
                     filter: Filter::Nearest,
+                    mirror: Mirror::NONE,
                 }],
                 signal: None,
             }),

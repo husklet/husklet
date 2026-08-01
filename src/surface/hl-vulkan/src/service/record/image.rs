@@ -236,6 +236,10 @@ pub fn cmd_copy_image(
 /// `vkCmdBlitImage` (one region) — record a scaled/filtered `BlitTexture` per array layer. Distinct
 /// images, matching formats, both usages present, positive src/dst extents in-bounds. `linear` selects
 /// the resampling filter (`VK_FILTER_LINEAR` → [`Filter::Linear`], else [`Filter::Nearest`]).
+///
+/// `mirror` is the NET per-axis flip the caller derived from its two offset pairs. Vulkan expresses a
+/// mirrored blit by inverting a rect's bounds, and the origin/extent this function takes are already
+/// normalized, so the intent has to arrive alongside them or not at all — it used to not at all.
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_blit_image(
     dev: &mut Device,
@@ -249,6 +253,7 @@ pub fn cmd_blit_image(
     dst_origin: (u32, u32),
     dst_extent: (u32, u32),
     linear: bool,
+    mirror: Mirror,
 ) -> Result<()> {
     if src == dst {
         return Err(GpuError::Invalid(
@@ -376,6 +381,7 @@ pub fn cmd_blit_image(
             } else {
                 Filter::Nearest
             },
+            mirror,
         });
     }
     Ok(())

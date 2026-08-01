@@ -1,5 +1,6 @@
 use super::*;
 use hl_gpu::protocol::model::enums::{TextureAspect, TextureDim};
+use hl_gpu::protocol::model::descriptor::Mirror;
 
 #[test]
 fn copy_buffer_lowers_to_copy_buffer_to_buffer() {
@@ -1198,6 +1199,7 @@ fn blit_between_different_formats_records() {
                 (0, 0),
                 (4, 4),
                 true,
+                Mirror::NONE,
             )
             .is_ok(),
             "{src_format:#x} -> {dst_format:#x} is a legal converting blit"
@@ -1267,6 +1269,7 @@ fn an_integer_blit_is_refused_and_says_whose_fault_it_is() {
             (0, 0),
             (4, 4),
             false,
+            Mirror::NONE,
         );
         match (unsupported, result) {
             (true, Err(GpuError::Unsupported(_))) => {}
@@ -1393,6 +1396,7 @@ fn a_linear_blit_from_a_non_filterable_format_is_refused_but_nearest_records() {
                 (0, 0),
                 (4, 4),
                 linear,
+                Mirror::NONE,
             )
         };
         assert!(
@@ -1442,6 +1446,7 @@ fn a_linear_blit_from_a_non_filterable_format_is_refused_but_nearest_records() {
             (0, 0),
             (4, 4),
             true,
+            Mirror::NONE,
         )
         .is_ok(),
         "a half-float source IS filterable and must keep taking a linear blit"

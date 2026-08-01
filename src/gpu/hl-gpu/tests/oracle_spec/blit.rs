@@ -1,4 +1,5 @@
 use super::*;
+use hl_gpu::protocol::model::descriptor::Mirror;
 
 fn blit_downscale(filter: Filter) -> [u8; 4] {
     // src 2x1: texel(0,0)=red, texel(1,0)=blue (populated via CopyBufferToTexture). Blit 2x1 -> dst 1x1.
@@ -60,6 +61,7 @@ fn blit_downscale(filter: Filter) -> [u8; 4] {
                         depth: 1,
                     },
                     filter,
+                    mirror: Mirror::NONE,
                 },
             ],
             signal: None,
@@ -80,6 +82,130 @@ fn blit_nearest_selects_and_linear_averages() {
         [128, 0, 128, 255],
         "linear averages the two src texels (red+blue)"
     );
+}
+
+/// A MIRRORED blit — the reference side.
+///
+/// `Mirror` exists because an unsigned origin and extent cannot say "flipped", and both GL and Vulkan
+/// express a flip by inverting a rect's bounds. Before it, a mirrored `glBlitFramebuffer` reached this
+/// oracle (and the executor) as an ordinary blit and produced an unmirrored image on both. The asymmetric
+/// 3x2 source below distinguishes every one of the four states: no two of NONE / x / y / both agree on it.
+///
+/// NEAREST at 1:1 is pure texel selection, so this is exact.
+fn blit_mirrored(mirror: Mirror) -> Vec<u8> {
+    // src 3x2, six distinct texels. Every value differs, so a wrong reflection cannot alias onto a right
+    // one — the failure names which axis is wrong by which texel moved where.
+    let src: Vec<u8> = (0..6u8)
+        .flat_map(|i| [10 + i * 40, 200 - i * 30, 5 + i * 20, 255])
+        .collect();
+    let (exec, s) = run(&[
+        Cmd::CreateBuffer(1, buf(24, buffer_usage::COPY_SRC | buffer_usage::COPY_DST)),
+        Cmd::WriteBuffer {
+            id: 1,
+            offset: 0,
+            data: src,
+        },
+        Cmd::CreateTexture(
+            1,
+            tex(
+                3,
+                2,
+                TextureFormat::Rgba8Unorm,
+                texture_usage::COPY_DST | texture_usage::COPY_SRC,
+            ),
+        ),
+        Cmd::CreateTexture(
+            2,
+            tex(
+                3,
+                2,
+                TextureFormat::Rgba8Unorm,
+                texture_usage::COPY_DST | texture_usage::COPY_SRC,
+            ),
+        ),
+        Cmd::Submit(CommandBuffer {
+            encoder: vec![
+                Enc::CopyBufferToTexture {
+                    src: 1,
+                    src_offset: 0,
+                    bytes_per_row: 12,
+                    dst: 1,
+                    mip: 0,
+                    width: 3,
+                    height: 2,
+                },
+                Enc::BlitTexture {
+                    src: 1,
+                    src_sub: TextureSubresource::base(),
+                    src_origin: Origin3d::default(),
+                    src_extent: Extent3d {
+                        width: 3,
+                        height: 2,
+                        depth: 1,
+                    },
+                    dst: 2,
+                    dst_sub: TextureSubresource::base(),
+                    dst_origin: Origin3d::default(),
+                    dst_extent: Extent3d {
+                        width: 3,
+                        height: 2,
+                        depth: 1,
+                    },
+                    filter: Filter::Nearest,
+                    mirror,
+                },
+            ],
+            signal: None,
+        }),
+    ]);
+    readback(&exec, &s, 2, 24)
+}
+
+/// The expected 3x2 plane: destination texel `(x, y)` holds source texel `(x', y')` reflected per axis.
+fn mirrored_expectation(mirror: Mirror) -> Vec<u8> {
+    let texel = |i: u8| [10 + i * 40, 200 - i * 30, 5 + i * 20, 255];
+    let mut out = Vec::with_capacity(24);
+    for y in 0..2u8 {
+        for x in 0..3u8 {
+            let sx = if mirror.x { 2 - x } else { x };
+            let sy = if mirror.y { 1 - y } else { y };
+            out.extend_from_slice(&texel(sy * 3 + sx));
+        }
+    }
+    out
+}
+
+#[test]
+fn blit_mirror_reflects_each_axis() {
+    for mirror in [
+        Mirror::NONE,
+        Mirror { x: true, y: false },
+        Mirror { x: false, y: true },
+        Mirror { x: true, y: true },
+    ] {
+        assert_eq!(
+            blit_mirrored(mirror),
+            mirrored_expectation(mirror),
+            "a {mirror:?} blit must reflect the source rect on exactly those axes"
+        );
+    }
+    // The four results are pairwise DISTINCT, which is what makes the assertions above evidence: an
+    // implementation that ignored `mirror` entirely would return the unmirrored plane four times and
+    // three of the four comparisons would fail. Stated here so the control is checked, not assumed.
+    let planes: Vec<Vec<u8>> = [
+        Mirror::NONE,
+        Mirror { x: true, y: false },
+        Mirror { x: false, y: true },
+        Mirror { x: true, y: true },
+    ]
+    .into_iter()
+    .map(mirrored_expectation)
+    .collect();
+    for i in 0..planes.len() {
+        for j in i + 1..planes.len() {
+            assert_ne!(planes[i], planes[j], "expectations {i} and {j} must differ");
+        }
+    }
 }
 
 // =================================================================================================
@@ -210,6 +336,7 @@ fn a_linear_blit_of_a_float_plane_interpolates_values() {
                         depth: 1,
                     },
                     filter: Filter::Linear,
+                    mirror: Mirror::NONE,
                 },
             ],
             signal: None,
@@ -301,6 +428,7 @@ fn an_integer_plane_cannot_reach_the_linear_filter_because_it_cannot_be_created(
                             depth: 1,
                         },
                         filter,
+                        mirror: Mirror::NONE,
                     },
                 ],
                 signal: None,
@@ -401,6 +529,7 @@ fn a_blit_converts_between_formats_and_across_texel_sizes() {
                         depth: 1,
                     },
                     filter: Filter::Nearest,
+                    mirror: Mirror::NONE,
                 },
             ],
             signal: None,
@@ -479,6 +608,7 @@ fn a_nearest_blit_converts_rather_than_reinterpreting_a_same_size_texel() {
                         depth: 1,
                     },
                     filter: Filter::Nearest,
+                    mirror: Mirror::NONE,
                 },
             ],
             signal: None,

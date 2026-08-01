@@ -21,6 +21,7 @@ use hl_gpu::protocol::model::enums::{
 use hl_gpu::protocol::model::kernel::glsl_stage;
 use hl_gpu::{Cmd, CommandBuffer, Enc, ShaderPayloadKind};
 use hl_gpu_wgpu::{DeviceConfig, WgpuExecutor};
+use hl_gpu::protocol::model::descriptor::Mirror;
 
 const LAYERS: [[u8; 4]; 4] = [
     [210, 20, 20, 255],  // layer 0
@@ -281,6 +282,7 @@ fn a_blit_from_an_array_source_runs_at_the_base_layer() {
         dst_origin: Origin3d::default(),
         dst_extent: extent.clone(),
         filter: Filter::Nearest,
+        mirror: Mirror::NONE,
     };
 
     let run = |exec: &mut WgpuExecutor, src: TextureDesc, enc| {

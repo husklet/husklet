@@ -8,6 +8,7 @@
 //! inventory's completeness against the negotiated command set.
 
 use super::*;
+use hl_gpu::protocol::model::descriptor::Mirror;
 
 /// Distinct subresource / origin / extent triples so no two fields share a value.
 fn sub(mip: u32, layer: u32, aspect: TextureAspect) -> TextureSubresource {
@@ -68,6 +69,8 @@ fn distinct_region_ops() -> Vec<Enc> {
             dst_origin: origin(83, 84, 85),
             dst_extent: extent(86, 87, 88),
             filter: Filter::Linear,
+            // Asymmetric on purpose: the two mirror bits must not be transposed or collapsed on the wire.
+            mirror: Mirror { x: true, y: false },
         },
         Enc::ResolveTexture {
             src: 91,

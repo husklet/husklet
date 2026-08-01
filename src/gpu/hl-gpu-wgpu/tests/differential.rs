@@ -415,6 +415,7 @@ const GENERATORS: &[fn(u64) -> Prog] = &[
     gen_fill_buffer,
     gen_blit_nearest,
     gen_blit_linear,
+    gen_blit_mirror,
     gen_blit_cross_format,
     gen_copy_cross_format,
     gen_draw_flat,

@@ -98,7 +98,8 @@ fn boundary_field_values_round_trip() {
 fn wire_version_and_magics_are_pinned() {
     // A version bump or a magic change must be a deliberate, reviewed edit (matches the frozen goldens).
     // Version 10 adds typed descriptor arrays and negotiated array capabilities.
-    assert_eq!(WIRE_VERSION, 14);
+    // Version 15 appends a per-axis `Mirror` to `BlitTexture`, which no v14 decoder can frame.
+    assert_eq!(WIRE_VERSION, 15);
     assert_eq!(SPIRV_MAGIC, 0x0723_0203);
     assert_eq!(KERNEL_MAGIC, 0xDD6B_0001);
     assert_eq!(GLSL_MAGIC, 0xDD67_0001);
