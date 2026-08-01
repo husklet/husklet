@@ -1014,6 +1014,32 @@ paths over-reports a block-compressed image by up to eight times, which is the s
 memory requirement but interacts with the 2 GiB ceiling, so it is a sizing question rather than a
 correctness one.
 
+## Swept clean: the Vulkan shim's marshalling surface
+
+The count-then-fill and `pNext` questions were swept through the shim. Three defects were found and
+fixed, all of one shape — an OUTPUT nobody produced, which is distinct from a default masking a failure
+because there is no wrong value computed, there is no value at all, and the caller cannot tell a field
+the driver set from one it skipped. What the sweep cleared:
+
+- **Every count-then-fill query agrees with itself.** Both `write_enumeration` helpers clamp to the
+  caller's capacity, write back the number actually written, and return `VK_INCOMPLETE` on truncation.
+  The hand-rolled ones — swapchain images, calibrateable time domains, physical devices, device groups,
+  queue families, sparse requirements — each do the same. No fill path can write more elements than its
+  own count path reported, so the overrun shape does not occur here.
+- **`vkGetPhysicalDeviceMemoryProperties2`, `vkGetImageSubresourceLayout2` and
+  `vkGetPhysicalDeviceQueueFamilyProperties2`** do not walk their chains, and that is currently safe:
+  every structure chainable onto them belongs to an extension this driver does not advertise, so a
+  conformant caller has nothing to chain. This is safe *by advertisement*, not by construction — it
+  becomes a defect the moment one of those extensions is advertised, which is the thing to remember.
+- **An unrecognised chain node** is skipped, left byte-identical, and the walk continues past it. A
+  driver that stopped at the first unknown would silently drop every output behind it.
+
+On the question of whether a caller can distinguish "recognised but unhandled" from "unrecognised": it
+cannot, and no implementation can make it. The specification requires unknown structures to be ignored
+silently, so the only half of the distinction a driver controls is writing every output it does
+recognise. That is precisely why skipping one is serious — it is indistinguishable from correct
+behaviour on a structure the driver was never required to handle.
+
 ## Manager discipline
 
 Stage commits by file, never `git add -A` across a shared tree — you will sweep up another agent's
