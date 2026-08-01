@@ -1,5 +1,39 @@
 use super::*;
 
+/// The IR aspect a region's Vulkan `aspectMask` names on an image of `format`, or a typed refusal.
+///
+/// The rule that matters is the accepting one. A Vulkan depth copy MUST name `VK_IMAGE_ASPECT_DEPTH_BIT`
+/// — there is no "all" to pass — so a mask naming exactly the aspects the format HAS is the ordinary,
+/// legal case and maps to `TextureAspect::All`. Refusing every non-colour mask would turn every legal
+/// depth copy into an error, which is the shape of mistake that once turned seven hundred and
+/// eighty-three honest refusals into failures on this surface.
+///
+/// A STRICT SUBSET of a combined depth/stencil image is the case that cannot be served: measured on the
+/// host, a `DepthOnly` or `StencilOnly` image-to-image copy is refused outright, so the only honest
+/// answers are this refusal or the silent both-planes copy that recording `All` produced. The refusal at
+/// least reaches the caller.
+fn ir_aspect(format: TextureFormat, aspect_mask: u32, what: &'static str) -> Result<TextureAspect> {
+    let (depth, stencil) = (
+        aspect_mask & SubresourceLayers::ASPECT_DEPTH != 0,
+        aspect_mask & SubresourceLayers::ASPECT_STENCIL != 0,
+    );
+    let has_stencil = matches!(format, TextureFormat::Depth24PlusStencil8);
+    let has_depth = has_stencil || matches!(format, TextureFormat::Depth32Float);
+    if !has_depth {
+        // A colour image: any mask names the whole thing.
+        return Ok(TextureAspect::All);
+    }
+    // A depth image, named in full (depth for a depth-only format, depth+stencil for a combined one).
+    if depth && stencil == has_stencil {
+        return Ok(TextureAspect::All);
+    }
+    Err(GpuError::Unsupported(match what {
+        "vkCmdCopyImage" => "vkCmdCopyImage: single-aspect copy of a combined depth/stencil image",
+        "vkCmdBlitImage" => "vkCmdBlitImage: single-aspect blit of a combined depth/stencil image",
+        _ => "vkCmdResolveImage: single-aspect resolve of a combined depth/stencil image",
+    }))
+}
+
 /// The colour formats whose texels are raw integers.
 ///
 /// Vulkan requires a blit's two formats to share a numeric class — a signed-integer source needs a
@@ -156,6 +190,10 @@ pub fn cmd_copy_image(
     {
         return Err(GpuError::Invalid("vkCmdCopyImage: overlapping self-copy"));
     }
+    // Resolve the region's aspect against BOTH images before recording anything: a subset aspect the
+    // host cannot serve must be refused, not silently widened to the whole image.
+    let src_aspect = ir_aspect(src_fmt, src_sub.aspect_mask, "vkCmdCopyImage")?;
+    let dst_aspect = ir_aspect(dst_fmt, dst_sub.aspect_mask, "vkCmdCopyImage")?;
     let rec = dev.require_recording_outside_pass(
         cb,
         "vkCmdCopyImage: must be recorded outside a render pass",
@@ -167,7 +205,7 @@ pub fn cmd_copy_image(
             src_sub: TextureSubresource {
                 mip: src_sub.mip_level,
                 layer: src_sub.base_array_layer + layer,
-                aspect: TextureAspect::All,
+                aspect: src_aspect,
             },
             src_origin: Origin3d {
                 x: src_origin.0,
@@ -178,7 +216,7 @@ pub fn cmd_copy_image(
             dst_sub: TextureSubresource {
                 mip: dst_sub.mip_level,
                 layer: dst_sub.base_array_layer + layer,
-                aspect: TextureAspect::All,
+                aspect: dst_aspect,
             },
             dst_origin: Origin3d {
                 x: dst_origin.0,
@@ -291,6 +329,10 @@ pub fn cmd_blit_image(
     {
         return Err(GpuError::OutOfBounds);
     }
+    // Resolve the region's aspect against BOTH images before recording anything: a subset aspect the
+    // host cannot serve must be refused, not silently widened to the whole image.
+    let src_aspect = ir_aspect(src_fmt, src_sub.aspect_mask, "vkCmdBlitImage")?;
+    let dst_aspect = ir_aspect(dst_fmt, dst_sub.aspect_mask, "vkCmdBlitImage")?;
     let rec = dev.require_recording_outside_pass(
         cb,
         "vkCmdBlitImage: must be recorded outside a render pass",
@@ -301,7 +343,7 @@ pub fn cmd_blit_image(
             src_sub: TextureSubresource {
                 mip: src_sub.mip_level,
                 layer: src_sub.base_array_layer + layer,
-                aspect: TextureAspect::All,
+                aspect: src_aspect,
             },
             src_origin: Origin3d {
                 x: src_origin.0,
@@ -317,7 +359,7 @@ pub fn cmd_blit_image(
             dst_sub: TextureSubresource {
                 mip: dst_sub.mip_level,
                 layer: dst_sub.base_array_layer + layer,
-                aspect: TextureAspect::All,
+                aspect: dst_aspect,
             },
             dst_origin: Origin3d {
                 x: dst_origin.0,
@@ -438,6 +480,10 @@ pub fn cmd_resolve_image(
     {
         return Err(GpuError::OutOfBounds);
     }
+    // Resolve the region's aspect against BOTH images before recording anything: a subset aspect the
+    // host cannot serve must be refused, not silently widened to the whole image.
+    let src_aspect = ir_aspect(src_fmt, src_sub.aspect_mask, "vkCmdResolveImage")?;
+    let dst_aspect = ir_aspect(dst_fmt, dst_sub.aspect_mask, "vkCmdResolveImage")?;
     let rec = dev.require_recording_outside_pass(
         cb,
         "vkCmdResolveImage: must be recorded outside a render pass",
@@ -448,7 +494,7 @@ pub fn cmd_resolve_image(
             src_sub: TextureSubresource {
                 mip: src_sub.mip_level,
                 layer: src_sub.base_array_layer + layer,
-                aspect: TextureAspect::All,
+                aspect: src_aspect,
             },
             src_origin: Origin3d {
                 x: src_origin.0,
@@ -459,7 +505,7 @@ pub fn cmd_resolve_image(
             dst_sub: TextureSubresource {
                 mip: dst_sub.mip_level,
                 layer: dst_sub.base_array_layer + layer,
-                aspect: TextureAspect::All,
+                aspect: dst_aspect,
             },
             dst_origin: Origin3d {
                 x: dst_origin.0,

@@ -613,7 +613,8 @@ fn copy_image_addresses_the_mip_level_the_region_names() {
         mip_level: 2,
         base_array_layer: 0,
         layer_count: 1,
-    };
+            aspect_mask: SubresourceLayers::ASPECT_COLOR,
+        };
     let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
         record::cmd_copy_image(d, cb, src, dst, level, level, (0, 0), (0, 0), (8, 8)).unwrap();
     });
@@ -673,7 +674,8 @@ fn copy_image_bounds_check_uses_the_named_levels_extent() {
         mip_level: 3,
         base_array_layer: 0,
         layer_count: 1,
-    };
+            aspect_mask: SubresourceLayers::ASPECT_COLOR,
+        };
     let cb = begin(&mut d, &mut sink);
     assert!(
         record::cmd_copy_image(&mut d, cb, src, dst, level, level, (0, 0), (0, 0), (16, 16))
@@ -712,12 +714,14 @@ fn copy_image_expands_a_layer_run_into_one_op_per_layer() {
                 mip_level: 0,
                 base_array_layer: 1,
                 layer_count: 3,
-            },
+            aspect_mask: SubresourceLayers::ASPECT_COLOR,
+        },
             SubresourceLayers {
                 mip_level: 0,
                 base_array_layer: 2,
                 layer_count: 3,
-            },
+            aspect_mask: SubresourceLayers::ASPECT_COLOR,
+        },
             (0, 0),
             (0, 0),
             (8, 8),
@@ -749,7 +753,8 @@ fn copy_image_resolves_remaining_layers_and_refuses_an_overrun() {
         mip_level: 0,
         base_array_layer: 1,
         layer_count: u32::MAX,
-    };
+            aspect_mask: SubresourceLayers::ASPECT_COLOR,
+        };
     let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
         record::cmd_copy_image(
             d,
@@ -770,7 +775,8 @@ fn copy_image_resolves_remaining_layers_and_refuses_an_overrun() {
         mip_level: 0,
         base_array_layer: 2,
         layer_count: 3,
-    };
+            aspect_mask: SubresourceLayers::ASPECT_COLOR,
+        };
     let cb = begin(&mut d, &mut sink);
     assert!(
         record::cmd_copy_image(
@@ -813,7 +819,8 @@ fn copy_image_allows_a_same_image_copy_between_different_layers() {
         mip_level: 0,
         base_array_layer: n,
         layer_count: 1,
-    };
+            aspect_mask: SubresourceLayers::ASPECT_COLOR,
+        };
     assert!(
         record::cmd_copy_image(
             &mut d,
@@ -1439,4 +1446,96 @@ fn a_linear_blit_from_a_non_filterable_format_is_refused_but_nearest_records() {
         .is_ok(),
         "a half-float source IS filterable and must keep taking a linear blit"
     );
+}
+
+/// A region's `aspectMask` reaches the IR, and a single-aspect copy of a COMBINED depth/stencil image is
+/// refused rather than silently widened to both planes.
+///
+/// The aspect was discarded. `SubresourceLayers` had no field for it, the image-to-image shim entries
+/// never read it — while their buffer-to-image sibling in the same file always has — and all three record
+/// paths hardcoded `TextureAspect::All`. On a `D24_UNORM_S8_UINT` image that is not a lost detail but a
+/// wrong answer: a guest copying the DEPTH plane got both planes, and the destination's stencil was
+/// overwritten with no error at all.
+///
+/// The host cannot serve the narrow case either — measured directly, a `DepthOnly` or `StencilOnly`
+/// image-to-image copy is refused — so carrying the aspect honestly converts a silent overwrite into an
+/// attributable refusal, which is the whole improvement.
+///
+/// The ACCEPTING arms are what keep this from being the other kind of mistake. A Vulkan depth copy must
+/// name `VK_IMAGE_ASPECT_DEPTH_BIT` — there is no "all" to pass — so a mask naming exactly the aspects
+/// the format has is the ordinary legal case and must record. Refusing those would turn every legal depth
+/// copy into an error, which is the shape that once turned hundreds of honest refusals into failures on
+/// this surface.
+#[test]
+fn a_region_aspect_reaches_the_ir_and_a_partial_depth_stencil_aspect_is_refused() {
+    let layers = |aspect_mask: u32| SubresourceLayers {
+        mip_level: 0,
+        base_array_layer: 0,
+        layer_count: 1,
+        aspect_mask,
+    };
+    let attempt = |format: u32, aspect_mask: u32| {
+        let mut d = dev();
+        let mut s = RecordingSink::with_full_caps();
+        let a = create::create_image(
+            &mut d,
+            &mut s,
+            4,
+            4,
+            format,
+            vk_image_usage::TRANSFER_SRC,
+            1,
+        )
+        .unwrap();
+        let b = create::create_image(
+            &mut d,
+            &mut s,
+            4,
+            4,
+            format,
+            vk_image_usage::TRANSFER_DST,
+            1,
+        )
+        .unwrap();
+        let cb = recording_cb(&mut d);
+        record::cmd_copy_image(
+            &mut d,
+            cb,
+            a,
+            b,
+            layers(aspect_mask),
+            layers(aspect_mask),
+            (0, 0),
+            (0, 0),
+            (4, 4),
+        )
+    };
+
+    const COLOR: u32 = SubresourceLayers::ASPECT_COLOR;
+    const DEPTH: u32 = SubresourceLayers::ASPECT_DEPTH;
+    const STENCIL: u32 = SubresourceLayers::ASPECT_STENCIL;
+
+    // Controls: a mask naming exactly what the format has is the ordinary case and must record.
+    assert!(
+        attempt(vk_format::R8G8B8A8_UNORM, COLOR).is_ok(),
+        "a colour copy naming COLOR_BIT is the everyday case"
+    );
+    assert!(
+        attempt(vk_format::D32_SFLOAT, DEPTH).is_ok(),
+        "a depth-only format named by DEPTH_BIT is the ONLY way to write a legal depth copy"
+    );
+    assert!(
+        attempt(vk_format::D24_UNORM_S8_UINT, DEPTH | STENCIL).is_ok(),
+        "a combined image named in full is a whole-image copy"
+    );
+
+    // The refusals: a strict subset of a combined image, which the host cannot express.
+    for aspect in [DEPTH, STENCIL] {
+        let refused = attempt(vk_format::D24_UNORM_S8_UINT, aspect)
+            .expect_err("a single plane of a combined image is not something the host can copy");
+        assert!(
+            matches!(refused, GpuError::Unsupported(_)),
+            "OUR limitation, not the caller's error: {refused:?}"
+        );
+    }
 }

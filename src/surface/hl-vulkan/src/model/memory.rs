@@ -89,17 +89,31 @@ pub struct SubresourceLayers {
     pub mip_level: u32,
     pub base_array_layer: u32,
     pub layer_count: u32,
+    /// The Vulkan `aspectMask` the region named.
+    ///
+    /// This field did not exist, so `vkCmdCopyImage`, `vkCmdBlitImage` and `vkCmdResolveImage` discarded
+    /// the aspect before it reached the IR and every one of them recorded `TextureAspect::All`. On a
+    /// combined depth/stencil image that is a silent wrong answer rather than a lost detail: a guest
+    /// asking to copy the DEPTH plane of a `D24_UNORM_S8_UINT` image got both planes, and the
+    /// destination's stencil was overwritten with no error. The buffer-to-image sibling in the same shim
+    /// has always inspected `aspectMask`; the image-to-image path never did.
+    pub aspect_mask: u32,
 }
 
 impl SubresourceLayers {
-    /// The base subresource: mip 0, layer 0, one layer.
+    /// The base subresource: mip 0, layer 0, one layer, the colour aspect.
     pub fn base() -> Self {
         Self {
             mip_level: 0,
             base_array_layer: 0,
             layer_count: 1,
+            aspect_mask: Self::ASPECT_COLOR,
         }
     }
+
+    pub const ASPECT_COLOR: u32 = 0x0000_0001;
+    pub const ASPECT_DEPTH: u32 = 0x0000_0002;
+    pub const ASPECT_STENCIL: u32 = 0x0000_0004;
 
     /// Resolve `VK_REMAINING_ARRAY_LAYERS` against `image`, leaving everything else untouched so an
     /// out-of-range level or layer stays out of range and is refused rather than silently clamped — a

@@ -19,6 +19,10 @@ fn layers_of(sub: &VkImageSubresourceLayers) -> SubresourceLayers {
         mip_level: sub.mip_level,
         base_array_layer: sub.base_array_layer,
         layer_count: sub.layer_count,
+        // The aspect the region named. Carried rather than dropped: the image-to-image copy path used to
+        // discard it and record `TextureAspect::All`, which silently copies both planes of a combined
+        // depth/stencil image when the guest asked for one.
+        aspect_mask: sub.aspect_mask,
     }
 }
 
