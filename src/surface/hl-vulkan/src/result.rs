@@ -92,6 +92,22 @@ impl Status {
             GpuError::ResourceLimit(_) => VK_ERROR_OUT_OF_DEVICE_MEMORY,
             GpuError::OutOfBounds => VK_ERROR_MEMORY_MAP_FAILED,
             GpuError::Kernel(_) => VK_ERROR_UNKNOWN,
+            // **Vulkan has no code for a transient contention refusal, and this mapping is lossy.**
+            // Recorded rather than quietly collapsed, because the distinction is real and is lost here:
+            // the identical call from the same device succeeds once the holder unmaps, and nothing in
+            // `VkResult` says so. The candidates and why each was rejected --
+            //   `VK_ERROR_MEMORY_MAP_FAILED` is already this driver's code for `OutOfBounds`, so reusing
+            //     it would make a contention refusal indistinguishable from a bounds violation;
+            //   `VK_NOT_READY` is a SUCCESS-class code, and returning success for a refused command is
+            //     the worst available answer;
+            //   `VK_ERROR_VALIDATION_FAILED_EXT` asserts the caller was wrong, which is the specific
+            //     falsehood that makes someone "fix" a correct program.
+            // `VK_ERROR_UNKNOWN` is chosen because it is the only one that claims nothing false. The
+            // consequence is a constraint on the design, not just a comment: Vulkan-side sharing must
+            // PREVENT this condition through the map protocol rather than report it, because a Vulkan
+            // caller cannot act on what it cannot distinguish. Revisit alongside the wire "retry later"
+            // acknowledgement code that `hl-gpu`'s header classification also wants.
+            GpuError::MappedElsewhere { .. } => VK_ERROR_UNKNOWN,
             // A REFUSAL is not a lost device. `TransportError::refusal()` is true exactly when the host
             // received the frame, understood it, and declined it: the connection is not retired, the
             // runtime rolled the batch back atomically, and the next request is as likely to succeed as

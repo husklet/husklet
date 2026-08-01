@@ -18,6 +18,9 @@ pub const CUDA_ERROR_NOT_INITIALIZED: i32 = 3;
 pub const CUDA_ERROR_INVALID_DEVICE: i32 = 101;
 pub const CUDA_ERROR_INVALID_IMAGE: i32 = 200;
 pub const CUDA_ERROR_INVALID_CONTEXT: i32 = 201;
+/// The resource is mapped, and not by this caller. CUDA's own vocabulary for a graphics-interop
+/// resource that cannot be touched because a map is outstanding.
+pub const CUDA_ERROR_ALREADY_MAPPED: i32 = 211;
 pub const CUDA_ERROR_UNSUPPORTED_LIMIT: i32 = 215;
 /// Peer access between two contexts is not supported by the device (the single simulated device has no
 /// peers), returned by `cuCtxEnablePeerAccess`.
@@ -164,6 +167,13 @@ impl DriverStatus<'_> {
             GpuError::UnknownId { .. } | GpuError::DuplicateId { .. } => CUDA_ERROR_INVALID_HANDLE,
             GpuError::OutOfBounds => CUDA_ERROR_INVALID_VALUE,
             GpuError::ResourceLimit(_) => CUDA_ERROR_OUT_OF_MEMORY,
+            // A TIMING refusal, and CUDA has the precise word for it. `CUDA_ERROR_NOT_READY` was the
+            // other candidate and is worse here: it says "come back later" without saying why, whereas
+            // `ALREADY_MAPPED` names the condition, which is what lets a caller act on it instead of
+            // spinning. Deliberately NOT folded in with the `Invalid` arms — the identical call from the
+            // same context succeeds once the holder unmaps, and a caller that cannot tell a timing
+            // refusal from a malformed one will "fix" a correct program.
+            GpuError::MappedElsewhere { .. } => CUDA_ERROR_ALREADY_MAPPED,
             // A host that received a complete request and REFUSED it has not lost anything: the batch
             // was rejected atomically and the connection is still there. The acknowledgement carries the
             // CLASS of the refusal, so each arm below is the code this driver raises for the same

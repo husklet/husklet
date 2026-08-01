@@ -61,6 +61,10 @@ impl From<&GpuError> for EglError {
             GpuError::UnknownId { .. } | GpuError::DuplicateId { .. } => EGL_BAD_SURFACE,
             GpuError::ResourceLimit(_) => EGL_BAD_ALLOC,
             GpuError::Unsupported(_) => EGL_BAD_MATCH,
+            // `EGL_BAD_ACCESS` is the one EGL code that actually means contention — a resource already
+            // in use by another thread or context — so the timing distinction survives here rather than
+            // collapsing into `EGL_BAD_PARAMETER` with the malformed-input arms below.
+            GpuError::MappedElsewhere { .. } => EGL_BAD_ACCESS,
             GpuError::Invalid(_)
             | GpuError::BadEnum { .. }
             | GpuError::BadTag(_)
