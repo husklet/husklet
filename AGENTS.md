@@ -1172,6 +1172,17 @@ artifacts rather than facts. **A positive count is only trustworthy with a denom
 not a measurement, `count=100 over_ms=381159` is, and the difference between a hundred failures across a
 hundred frames and a hundred across six minutes demands opposite responses.
 
+An instrument that speaks only when the subject acts goes quiet exactly when the subject wedges. A
+deferral report driven solely from each incoming commit would have said nothing about the case it was
+built for, because the client stopped committing the moment its first commit parked — one commit
+deferred, never joined, and then silence indistinguishable from an idle system. Drive the report from a
+periodic tick as well as from the event, so "nothing is happening" and "something is stuck" are
+different lines. The same rule condemns a state with no diagnostic at all: `Defer::Waiting` was one enum
+variant covering a commit PARKED awaiting its frame and a commit REFUSED and discarded, and neither had
+a voice, so a commit parked forever read exactly like a commit never made. Count the fates separately
+and report them together with the window they accumulated over; the first line that instrument printed
+answered a question that had already cost a day.
+
 Establish a baseline from a known-good subject before concluding anything from a suspect one. A client
 that works showed the identical failure signature to the one under investigation, which is what proved the
 signature was normal.
