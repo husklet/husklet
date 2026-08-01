@@ -218,3 +218,38 @@ fn a_compressed_extent_above_the_limit_is_refused_before_the_reservation() {
     );
     assert_eq!(glGetError(), GL_NO_ERROR, "a legal extent still allocates");
 }
+
+/// `eglTerminate` on a display this driver never issued must be refused, and must not tear down the one
+/// it did issue.
+///
+/// Every other display-taking entry point — `eglInitialize`, `eglCreateContext`, `eglMakeCurrent`,
+/// `eglDestroyContext`, `eglCreateWindowSurface`, `eglDestroySurface`, `eglCreatePbufferSurface`,
+/// `eglQueryContext`, `eglQuerySurface` — checks the handle against `DISPLAY_TOKEN` and answers
+/// `EGL_BAD_DISPLAY`. `eglTerminate` ignored its argument entirely, returned `EGL_TRUE`, and tore down
+/// the real display's state on the way. Ten call sites agreeing and one disagreeing is what marks the
+/// one as the oversight.
+///
+/// What it tore down is not bookkeeping: `State::terminate` clears `native_present`, and
+/// `reserve_native_frame` returns `None` without it, so every later frame in the process degrades from a
+/// zero-copy present to a readback. An application handing this driver another vendor's display — or
+/// tearing down a second display at shutdown — silently lost zero-copy for the rest of its life.
+#[test]
+fn terminating_a_display_this_driver_never_issued_is_refused_and_tears_nothing_down() {
+    GlobalState::access(|state| state.inited = true);
+
+    let bogus = 0xdead_usize as *mut c_void;
+    assert_eq!(
+        eglTerminate(bogus),
+        EGL_FALSE,
+        "a display this driver never issued is not terminable"
+    );
+    assert_eq!(
+        eglGetError(),
+        EGL_BAD_DISPLAY,
+        "the refusal must name the display"
+    );
+    assert!(
+        GlobalState::access(|state| state.inited),
+        "a refused eglTerminate must leave the real display initialized"
+    );
+}

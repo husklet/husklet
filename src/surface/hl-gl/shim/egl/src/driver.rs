@@ -366,9 +366,21 @@ pub extern "C" fn eglInitialize(dpy: *mut c_void, major: *mut i32, minor: *mut i
     EGL_TRUE
 }
 
+/// `eglTerminate(dpy)` — release the display's resources (EGL 1.4 §3.3).
+///
+/// The display is checked for the same reason every other display-taking entry point checks it, and this
+/// one did not: `State::terminate` clears `native_present`, `reserve_native_frame` returns `None` without
+/// it, and every later frame in the process degrades from a zero-copy present to a readback. Accepting
+/// any pointer meant an application that handed this driver another vendor's display — or tore down a
+/// second display at shutdown — silently lost zero-copy for the rest of its life, with `EGL_TRUE`
+/// returned and no error recorded.
 #[cfg_attr(not(gles_client), no_mangle)]
-pub extern "C" fn eglTerminate(_dpy: *mut c_void) -> u32 {
+pub extern "C" fn eglTerminate(dpy: *mut c_void) -> u32 {
     crate::state::EglCall::enter();
+    if dpy as usize != DISPLAY_TOKEN {
+        GlobalState::access(|state| state.set_egl_error(EGL_BAD_DISPLAY));
+        return EGL_FALSE;
+    }
     GlobalState::access(|state| state.terminate());
     EGL_TRUE
 }
