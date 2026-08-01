@@ -55,6 +55,12 @@ const INTEGER_FORMATS: &[TextureFormat] = &[
 /// them non-filterable without an optional feature, Vulkan requires the format to advertise linear
 /// filtering, and the host was measured refusing exactly these two.
 ///
+/// This list is only ever consulted for a format that HAS a packed colour texel, because compressed and
+/// depth/stencil formats are refused before it on grounds that apply to every filter. That ordering is
+/// what lets this list mean "cannot be linearly filtered" rather than "is not on a list" — it is the
+/// difference between a membership rule and an obligation the entry must meet. Every member is a format
+/// the host was measured filtering; the two omissions are formats it was measured refusing.
+///
 /// This is one of THREE independent layers that decline a linear filter on `R32Float`/`Rgba32Float` —
 /// the others are the executor's blit (`hl-gpu-wgpu`'s `blit.rs::filterable`) and the software
 /// reference (`hl-gpu`'s `cpu/format.rs::FILTERABLE_REFUSED`). They agreed by coincidence rather than by
@@ -312,6 +318,29 @@ pub fn cmd_blit_image(
         return Err(GpuError::Unsupported(
             "vkCmdBlitImage: blit of an integer format",
         ));
+    }
+    // A format with no PACKED COLOUR TEXEL — every block-compressed format, and every depth/stencil one —
+    // cannot take part in a blit on either side, whatever the filter. The host settles this and says so
+    // in one voice: measured across BC1, BC3, BC7, BC6H and `Depth32Float`, as source and as destination,
+    // under both filters, it returns "no packed texel layout for this format" every time.
+    //
+    // This refusal has to come BEFORE the filter check, and that ordering is the point rather than a
+    // detail. A compressed source used to fall through to the linear-filter rule and be refused as
+    // "a source format that cannot be linearly filtered" — true of the format but not the reason, and
+    // actively misleading: a caller reading it switches to VK_FILTER_NEAREST and gets a different error
+    // for the same underlying cause. With this in front, the filter message can only ever be about
+    // filtering.
+    //
+    // It narrows nothing that worked. Every format it refuses is one the host already refuses in every
+    // role, so this turns a late error naming the host's internals into a record-time one naming what
+    // the caller passed; it does not turn legal work into errors.
+    for (format, side) in [(src_fmt, "source"), (dst_fmt, "destination")] {
+        if format.bytes_per_texel().is_none() {
+            return Err(GpuError::Unsupported(match side {
+                "source" => "vkCmdBlitImage: source format has no packed colour texel (compressed or depth/stencil)",
+                _ => "vkCmdBlitImage: destination format has no packed colour texel (compressed or depth/stencil)",
+            }));
+        }
     }
     // VK_FILTER_LINEAR requires the source format to support linear filtering, which the 32-bit float
     // formats do not without an optional device feature — measured on the host, which refuses exactly

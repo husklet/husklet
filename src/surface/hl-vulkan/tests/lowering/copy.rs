@@ -1207,6 +1207,134 @@ fn blit_between_different_formats_records() {
     }
 }
 
+/// A format with no packed colour texel is refused for the RIGHT reason, in every filter.
+///
+/// Block-compressed and depth/stencil formats cannot take part in a blit at all: the host performs one by
+/// rendering through a sampled view into a colour attachment, and measured across BC1, BC3, BC7, BC6H and
+/// `Depth32Float` — as source and as destination, under both filters — it answers "no packed texel layout
+/// for this format" every time.
+///
+/// The refusal existed only by accident and named the wrong cause. A compressed source fell through to
+/// the linear-filter rule, was absent from `FILTERABLE`, and came back as "a source format that cannot be
+/// linearly filtered" — true of the format, wrong about the reason, and actively misleading, because a
+/// caller reading it switches to `VK_FILTER_NEAREST` and gets a different error for the same underlying
+/// cause. Worse, with NEAREST it was not refused here at all and reached the host.
+///
+/// So the assertion that matters is not that these are refused; it is that BOTH filters give the SAME
+/// answer and that the answer is about the texel layout. A test asserting only `is_err` would have passed
+/// against the old behaviour for the linear half.
+#[test]
+fn a_format_with_no_packed_texel_is_refused_for_the_right_reason() {
+    let unpackable = [
+        ("BC1", vk_format::BC1_RGBA_UNORM_BLOCK),
+        ("BC3", vk_format::BC3_UNORM_BLOCK),
+        ("BC7", vk_format::BC7_UNORM_BLOCK),
+        ("depth", vk_format::D32_SFLOAT),
+    ];
+    for (what, format) in unpackable {
+        for linear in [false, true] {
+            for as_source in [true, false] {
+                let mut d = dev();
+                let mut s = RecordingSink::with_full_caps();
+                let odd = create::create_image(
+                    &mut d,
+                    &mut s,
+                    4,
+                    4,
+                    format,
+                    vk_image_usage::TRANSFER_SRC | vk_image_usage::TRANSFER_DST,
+                    1,
+                )
+                .unwrap();
+                let plain = create::create_image(
+                    &mut d,
+                    &mut s,
+                    4,
+                    4,
+                    vk_format::R8G8B8A8_UNORM,
+                    vk_image_usage::TRANSFER_SRC | vk_image_usage::TRANSFER_DST,
+                    1,
+                )
+                .unwrap();
+                let (src, dst) = if as_source { (odd, plain) } else { (plain, odd) };
+                let cb = recording_cb(&mut d);
+                let err = record::cmd_blit_image(
+                    &mut d,
+                    cb,
+                    src,
+                    dst,
+                    SubresourceLayers::base(),
+                    SubresourceLayers::base(),
+                    (0, 0),
+                    (4, 4),
+                    (0, 0),
+                    (4, 4),
+                    linear,
+                    Mirror::NONE,
+                )
+                .expect_err("a format with no packed colour texel cannot be blitted");
+                let side = if as_source { "source" } else { "destination" };
+                assert!(
+                    matches!(err, GpuError::Unsupported(m) if m.contains("no packed colour texel")),
+                    "{what} as {side} with linear={linear} must be refused for its TEXEL LAYOUT, not \
+                     for a filter rule that happens to exclude it: got {err:?}"
+                );
+            }
+        }
+    }
+
+    // Control: the filter rule still applies, and still says what IT means, for a packed colour format
+    // the host genuinely cannot filter. Without this the change above could have been a blanket refusal.
+    let mut d = dev();
+    let mut s = RecordingSink::with_full_caps();
+    let a = create::create_image(
+        &mut d,
+        &mut s,
+        4,
+        4,
+        vk_format::R32_SFLOAT,
+        vk_image_usage::TRANSFER_SRC,
+        1,
+    )
+    .unwrap();
+    let b = create::create_image(
+        &mut d,
+        &mut s,
+        4,
+        4,
+        vk_format::R8G8B8A8_UNORM,
+        vk_image_usage::TRANSFER_DST,
+        1,
+    )
+    .unwrap();
+    let attempt = |d: &mut _, linear| {
+        let cb = recording_cb(d);
+        record::cmd_blit_image(
+            d,
+            cb,
+            a,
+            b,
+            SubresourceLayers::base(),
+            SubresourceLayers::base(),
+            (0, 0),
+            (4, 4),
+            (0, 0),
+            (4, 4),
+            linear,
+            Mirror::NONE,
+        )
+    };
+    assert!(
+        attempt(&mut d, false).is_ok(),
+        "a NEAREST blit from R32Float is legal and must still record"
+    );
+    let err = attempt(&mut d, true).expect_err("linear from R32Float is refused");
+    assert!(
+        matches!(err, GpuError::Unsupported(m) if m.contains("linearly filtered")),
+        "the FILTER rule must still name filtering, got {err:?}"
+    );
+}
+
 /// An INTEGER blit is refused, and the two reasons are reported as two different errors.
 ///
 /// A mixed integer/float pair violates the specification's numeric-class rule and is the APPLICATION's
