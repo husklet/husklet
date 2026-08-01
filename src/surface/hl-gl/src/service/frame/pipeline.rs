@@ -101,14 +101,18 @@ pub(super) fn blit_copy_enc(
     let (dy0, dy1) = (dst[1].min(dst[3]), dst[1].max(dst[3]));
     // Both sides get the same bottom-left-to-top-left y reflection below, so it cancels out of the net
     // vertical flip and the comparison is taken on the GL rects as given.
+    // `z` is false on both sides by construction, not by default: `glBlitFramebuffer` names two 2D
+    // rects and has no depth axis to invert, so a GL blit can never carry a depth flip.
     let mirror = Mirror::net(
         Mirror {
             x: src[2] < src[0],
             y: src[3] < src[1],
+            z: false,
         },
         Mirror {
             x: dst[2] < dst[0],
             y: dst[3] < dst[1],
+            z: false,
         },
     );
     let (sw, sh) = (sx1 - sx0, sy1 - sy0);

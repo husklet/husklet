@@ -69,8 +69,13 @@ fn distinct_region_ops() -> Vec<Enc> {
             dst_origin: origin(83, 84, 85),
             dst_extent: extent(86, 87, 88),
             filter: Filter::Linear,
-            // Asymmetric on purpose: the two mirror bits must not be transposed or collapsed on the wire.
-            mirror: Mirror { x: true, y: false },
+            // Asymmetric on purpose: the three mirror bits must not be transposed or collapsed on the
+            // wire, so no two of x/y/z agree here.
+            mirror: Mirror {
+                x: true,
+                y: false,
+                z: true,
+            },
         },
         Enc::ResolveTexture {
             src: 91,

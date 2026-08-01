@@ -390,8 +390,16 @@ fn every_dimension_is_materialized_and_refused_where_the_executor_refuses_it() {
         );
     }
 
-    // The BLIT declines 1D and 3D and serves the rest — the one operation that is not uniform across
-    // dimensions, matching the executor measured op by op.
+    // The BLIT declines 1D and serves the rest — the one operation that is not uniform across
+    // dimensions.
+    //
+    // `D3` moved out of this refusal on 2026-08-01 and the change is DELIBERATELY not symmetric with
+    // the executor, which still answers "wgpu: 1D/3D blit source". A 3D blit is core Vulkan 1.0 with no
+    // format bit to withdraw and no query to decline it through, so it has to be served; the reference
+    // has to be able to represent it before the executor can be validated against it, because two sides
+    // that both refuse agree by mutual refusal and prove nothing. `oracle_spec/blit3d.rs` holds the
+    // per-slice assertions. When the executor learns the same operation, its own dimension test is the
+    // one that closes this gap — not this line.
     for (what, desc) in &cases {
         let extent = Extent3d {
             width: desc.width,
@@ -417,12 +425,12 @@ fn every_dimension_is_materialized_and_refused_where_the_executor_refuses_it() {
                 signal: None,
             }),
         ]);
-        let blittable = !matches!(desc.dim, TextureDim::D1 | TextureDim::D3);
+        let blittable = !matches!(desc.dim, TextureDim::D1);
         assert_eq!(
             attempt.is_ok(),
             blittable,
-            "{what}: the blit renders through a 2D view, so 1D and 3D are declined and a cube FACE is \
-             not, got {attempt:?}"
+            "{what}: 1D has no 2D view to render through and is declined; 3D is served per slice and a \
+             cube FACE is an ordinary 2D layer, got {attempt:?}"
         );
     }
 

@@ -107,32 +107,51 @@ fn out_of_range_enums_are_typed_bad_enum() {
     ));
 }
 
-/// A blit `Mirror` is a two-bit set, and an undefined bit is refused rather than dropped.
+/// A blit `Mirror` is a THREE-bit set, and an undefined bit is refused rather than dropped.
 ///
 /// The whole point of the field is that a flip must not be silently lost, so a decoder that masked an
 /// unrecognised value down to "no mirror" would reintroduce the defect at the wire boundary — for a peer
-/// that means something by that bit. The wire form must also be asymmetric per axis: collapsing the two
-/// bits would make an x-flip and a y-flip indistinguishable.
+/// that means something by that bit. The wire form must also be asymmetric per axis: collapsing any two
+/// bits would make those axes' flips indistinguishable.
+///
+/// All EIGHT states are exercised and all eight wire words are required to be distinct, which is the
+/// control: a `to_u32` that dropped the depth bit would still round-trip four of the eight and would
+/// still pass a per-axis spot check, but it could not produce eight different words.
 #[test]
 fn a_blit_mirror_round_trips_per_axis_and_refuses_an_undefined_bit() {
-    for mirror in [
-        Mirror::NONE,
-        Mirror { x: true, y: false },
-        Mirror { x: false, y: true },
-        Mirror { x: true, y: true },
-    ] {
+    let all: Vec<Mirror> = (0..8)
+        .map(|i| Mirror {
+            x: i & 0b001 != 0,
+            y: i & 0b010 != 0,
+            z: i & 0b100 != 0,
+        })
+        .collect();
+    for &mirror in &all {
         assert_eq!(
             Mirror::from_u32(mirror.to_u32()),
             Some(mirror),
             "{mirror:?} must survive the wire form"
         );
     }
-    assert_ne!(
-        Mirror { x: true, y: false }.to_u32(),
-        Mirror { x: false, y: true }.to_u32(),
-        "the two axes must occupy different bits"
+    let words: std::collections::BTreeSet<u32> = all.iter().map(|m| m.to_u32()).collect();
+    assert_eq!(
+        words.len(),
+        8,
+        "the three axes must occupy three different bits; {words:?} collapses at least two"
     );
-    for undefined in [0b100u32, 0b1000, 0xFFFF_FFFF] {
+    // Bit 2 is the DEPTH axis. A 3D blit can flip z exactly as it flips x or y, and until the bit
+    // existed the surface had nowhere to put that intent, so a z-flipped `vkCmdBlitImage` would have
+    // reached both backends as an unflipped one.
+    assert_eq!(
+        Mirror::from_u32(0b100),
+        Some(Mirror {
+            x: false,
+            y: false,
+            z: true
+        }),
+        "bit 2 is the depth-axis flip"
+    );
+    for undefined in [0b1000u32, 0xFFFF_FFFF] {
         assert_eq!(
             Mirror::from_u32(undefined),
             None,

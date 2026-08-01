@@ -82,9 +82,19 @@ fn blit_image_lowers_to_blit_texture_with_filter() {
 fn blit_image_carries_a_mirror_per_axis() {
     for mirror in [
         Mirror::NONE,
-        Mirror { x: true, y: false },
-        Mirror { x: false, y: true },
-        Mirror { x: true, y: true },
+        Mirror {
+            x: true,
+            ..Mirror::NONE
+        },
+        Mirror {
+            y: true,
+            ..Mirror::NONE
+        },
+        Mirror {
+            x: true,
+            y: true,
+            ..Mirror::NONE
+        },
     ] {
         let mut d = dev();
         let mut sink = RecordingSink::with_full_caps();

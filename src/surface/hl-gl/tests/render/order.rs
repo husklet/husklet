@@ -114,9 +114,9 @@ fn a_mirrored_blit_lowers_to_a_mirrored_blit_texture() {
     // `(src rect, dst rect)` in GL window coordinates, and the net mirror each must produce.
     let cases: [([i32; 4], [i32; 4], Mirror); 5] = [
         ([0, 0, 16, 16], [0, 0, 16, 16], Mirror::NONE),
-        ([16, 0, 0, 16], [0, 0, 16, 16], Mirror { x: true, y: false }),
-        ([0, 16, 16, 0], [0, 0, 16, 16], Mirror { x: false, y: true }),
-        ([16, 16, 0, 0], [0, 0, 16, 16], Mirror { x: true, y: true }),
+        ([16, 0, 0, 16], [0, 0, 16, 16], Mirror { x: true, y: false, z: false }),
+        ([0, 16, 16, 0], [0, 0, 16, 16], Mirror { x: false, y: true, z: false }),
+        ([16, 16, 0, 0], [0, 0, 16, 16], Mirror { x: true, y: true, z: false }),
         // Both sides inverted on x: two reflections are the identity, so this is NOT a mirror.
         ([16, 0, 0, 16], [16, 0, 0, 16], Mirror::NONE),
     ];

@@ -179,9 +179,19 @@ fn mirrored_expectation(mirror: Mirror) -> Vec<u8> {
 fn blit_mirror_reflects_each_axis() {
     for mirror in [
         Mirror::NONE,
-        Mirror { x: true, y: false },
-        Mirror { x: false, y: true },
-        Mirror { x: true, y: true },
+        Mirror {
+            x: true,
+            ..Mirror::NONE
+        },
+        Mirror {
+            y: true,
+            ..Mirror::NONE
+        },
+        Mirror {
+            x: true,
+            y: true,
+            ..Mirror::NONE
+        },
     ] {
         assert_eq!(
             blit_mirrored(mirror),
@@ -194,9 +204,19 @@ fn blit_mirror_reflects_each_axis() {
     // three of the four comparisons would fail. Stated here so the control is checked, not assumed.
     let planes: Vec<Vec<u8>> = [
         Mirror::NONE,
-        Mirror { x: true, y: false },
-        Mirror { x: false, y: true },
-        Mirror { x: true, y: true },
+        Mirror {
+            x: true,
+            ..Mirror::NONE
+        },
+        Mirror {
+            y: true,
+            ..Mirror::NONE
+        },
+        Mirror {
+            x: true,
+            y: true,
+            ..Mirror::NONE
+        },
     ]
     .into_iter()
     .map(mirrored_expectation)

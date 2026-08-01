@@ -91,6 +91,23 @@ fn tex(w: u32, h: u32, fmt: TextureFormat, usage: u32) -> TextureDesc {
         label: String::new(),
     }
 }
+/// A 3D texture of `d` depth slices. `depth` on a `D3` descriptor is the SLICE COUNT, and
+/// `Texture::planes` materializes one plane per slice, so `d` here is both the z extent and the number
+/// of addressable planes.
+#[allow(dead_code)]
+fn tex3d(w: u32, h: u32, d: u32, fmt: TextureFormat, usage: u32) -> TextureDesc {
+    TextureDesc {
+        width: w,
+        height: h,
+        depth: d,
+        mip_levels: 1,
+        sample_count: 1,
+        dim: TextureDim::D3,
+        format: fmt,
+        usage,
+        label: String::new(),
+    }
+}
 fn tex_ms(w: u32, h: u32, samples: u32, fmt: TextureFormat, usage: u32) -> TextureDesc {
     TextureDesc {
         width: w,
@@ -186,6 +203,8 @@ fn draw_pipeline(
 
 #[path = "oracle_spec/blit.rs"]
 mod blit;
+#[path = "oracle_spec/blit3d.rs"]
+mod blit3d;
 #[path = "oracle_spec/color.rs"]
 mod color;
 #[path = "oracle_spec/copy.rs"]

@@ -46,9 +46,15 @@ impl BlitRect {
         Some(BlitRect {
             origin: (a.x.min(b.x) as u32, a.y.min(b.y) as u32),
             extent: (a.x.abs_diff(b.x), a.y.abs_diff(b.y)),
+            // `z` is derived from the same offset pair as x and y. It has no consumer yet — a 3D region
+            // is still refused above this — but deriving it here rather than defaulting it to `false`
+            // means the depth flip is CARRIED from the moment the offsets are read, so lifting that
+            // refusal cannot silently ship an unflipped blit. A default would have been the same
+            // discard the x/y bits were added to stop, one axis later.
             inverted: Mirror {
                 x: b.x < a.x,
                 y: b.y < a.y,
+                z: b.z < a.z,
             },
             depth: (a.z, b.z),
         })

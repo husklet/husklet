@@ -481,16 +481,34 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
             dst_extent,
             ..
         } => {
-            copy::check_copy_subresource(src_sub, src_origin, src_extent.depth)?;
-            copy::check_copy_subresource(dst_sub, dst_origin, dst_extent.depth)?;
-            // The executor blits by RENDERING, through a 2D view of one layer, and declines a 1D or 3D
-            // texture on either side — measured, not assumed, and it is the one operation of the four
-            // that does not extend to every dimension. A cube face IS a 2D layer there and blits fine,
-            // so cube is deliberately absent from this refusal.
+            copy::check_plane_subresource(src_sub)?;
+            copy::check_plane_subresource(dst_sub)?;
+            // A DEPTH-SPANNING blit is served, and it is the one gap on this operation that cannot be
+            // closed by advertising less. `VkFormatFeatureFlags` is per FORMAT, not per image type, so
+            // no bit exists for a driver to withdraw and no query exists through which an application
+            // could discover a refusal — a 3D blit is core Vulkan 1.0 and the refusal is unannounceable.
+            //
+            // Only the UNSCALED span is served: with `src.depth == dst.depth` each destination slice
+            // reads exactly one source slice and the existing in-plane resample runs per slice. A
+            // z-scaled span would need trilinear filtering under `VK_FILTER_LINEAR`, and approximating
+            // it by nearest-slice selection would produce a plausible image that no real driver agrees
+            // with — a difference that reads as filtering rather than as a missing capability.
+            if src_extent.depth.max(1) != dst_extent.depth.max(1) {
+                return Err(GpuError::Unsupported("software: depth-scaled blit"));
+            }
+            // A 1D texture still cannot take part: the executor blits by RENDERING through a 2D view,
+            // and `create_view` rejects a `D2` view of a `D1` texture outright — measured, not assumed.
+            // A cube face IS a 2D layer there and blits fine, so cube is deliberately absent.
+            //
+            // `D3` was refused here for the same measured reason and is now SERVED by this reference
+            // alone: as of 2026-08-01 the wgpu executor still returns "wgpu: 1D/3D blit source". That
+            // divergence is deliberate and is the point of doing the oracle first — a reference that
+            // cannot represent the case cannot validate the executor that will serve it, and while both
+            // sides decline a differential agrees by mutual refusal and establishes nothing.
             for id in [*src, *dst] {
                 let dim = crate::cpu::model::texture(res, id)?.desc.dim;
-                if matches!(dim, TextureDim::D1 | TextureDim::D3) {
-                    return Err(GpuError::Unsupported("software: 1D/3D texture blit"));
+                if matches!(dim, TextureDim::D1) {
+                    return Err(GpuError::Unsupported("software: 1D texture blit"));
                 }
             }
             if src_extent.width == 0
@@ -545,8 +563,10 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
             }
             let s = texture(res, *src)?;
             copy::check_region_in_texture(s, src_origin, src_extent)?;
+            copy::check_depth_span_in_texture(s, src_origin, src_extent)?;
             let d = texture(res, *dst)?;
             copy::check_region_in_texture(d, dst_origin, dst_extent)?;
+            copy::check_depth_span_in_texture(d, dst_origin, dst_extent)?;
         }
         Enc::ResolveTexture {
             src,

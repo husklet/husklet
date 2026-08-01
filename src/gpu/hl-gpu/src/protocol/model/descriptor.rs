@@ -319,35 +319,56 @@ pub struct Extent3d {
 /// the intent used to be discarded. The surface carries it here instead: the NET flip of an axis is the
 /// source inversion exclusive-or the destination inversion, since inverting both sides mirrors twice and
 /// is the identity.
+///
+/// `z` is the DEPTH axis and exists for the same reason as the other two. `vkCmdBlitImage` names a
+/// `VkOffset3D` pair per region, so a source or destination box may be inverted in z exactly as in x or
+/// y, and the same min/max normalization that discards an x-flip discards a z-flip. Without the field a
+/// depth-flipped 3D blit is INEXPRESSIBLE — the surface would hand both backends an unflipped region and
+/// neither could detect the loss, which is precisely the failure the x/y bits were added to stop.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Mirror {
     pub x: bool,
     pub y: bool,
+    pub z: bool,
 }
 
 impl Mirror {
-    /// No mirroring on either axis — an ordinary blit.
-    pub const NONE: Self = Mirror { x: false, y: false };
+    /// No mirroring on any axis — an ordinary blit.
+    pub const NONE: Self = Mirror {
+        x: false,
+        y: false,
+        z: false,
+    };
 
-    /// The net mirror of a blit whose source and destination rects were each inverted (or not) per axis.
+    /// The net mirror of a blit whose source and destination boxes were each inverted (or not) per axis.
     pub fn net(src: Self, dst: Self) -> Self {
         Mirror {
             x: src.x != dst.x,
             y: src.y != dst.y,
+            z: src.z != dst.z,
         }
     }
 
-    /// Wire form: bit 0 = `x`, bit 1 = `y`. Any other bit is not a mirror this version defines.
+    /// Wire form: bit 0 = `x`, bit 1 = `y`, bit 2 = `z`. Any other bit is not a mirror this version
+    /// defines.
+    ///
+    /// Bit 2 widens the ACCEPTED VALUE SET without changing the framing — the field is still one `u32` —
+    /// so it is not a [`super::command::WIRE_VERSION`] bump: no decoder can mis-frame the command after
+    /// it, and `Capabilities::negotiate` demands exact version equality, so the two sides of a session
+    /// are always the same build. A peer that predated the bit would have refused it as a decode error
+    /// rather than silently reading an unmirrored blit, which is the property that made the widening
+    /// safe to make in place.
     pub fn to_u32(self) -> u32 {
-        u32::from(self.x) | (u32::from(self.y) << 1)
+        u32::from(self.x) | (u32::from(self.y) << 1) | (u32::from(self.z) << 2)
     }
 
     /// Inverse of [`Self::to_u32`]; `None` for a value carrying a bit this version does not define, so an
     /// unknown mirroring is a decode error rather than silently an unmirrored blit.
     pub fn from_u32(v: u32) -> Option<Self> {
-        (v & !0b11 == 0).then_some(Mirror {
-            x: v & 0b01 != 0,
-            y: v & 0b10 != 0,
+        (v & !0b111 == 0).then_some(Mirror {
+            x: v & 0b001 != 0,
+            y: v & 0b010 != 0,
+            z: v & 0b100 != 0,
         })
     }
 }

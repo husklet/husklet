@@ -1,5 +1,6 @@
-//! The CPU-native texture: its descriptor + tight-packed level-0 pixels, one plane per array layer.
-//! Stored behind a `TextureId`. Ported from the `Texture` struct in `hl-gpu/src/software.rs`.
+//! The CPU-native texture: its descriptor + tight-packed pixels for every mip level and plane, where a
+//! plane is an array layer, a 3D depth slice, or a cube face. Stored behind a `TextureId`. Ported from
+//! the `Texture` struct in `hl-gpu/src/software.rs`.
 
 use crate::protocol::model::descriptor::TextureDesc;
 use crate::protocol::model::enums::{TextureDim, TextureFormat};
@@ -7,13 +8,18 @@ use crate::protocol::model::enums::{TextureDim, TextureFormat};
 #[derive(Clone)]
 pub struct Texture {
     pub desc: TextureDesc,
-    /// Tight-packed level-0 pixels, LAYER-MAJOR: `layers` consecutive planes of
-    /// `bytes_per_texel * width * height [* sample_count]`.
+    /// Tight-packed pixels, LEVEL-major and plane-minor: every plane of level 0, then every plane of
+    /// level 1, and so on. A plane is `bytes_per_texel * level_width * level_height [* sample_count]`.
     ///
-    /// A single-layer texture is one plane and is byte-identical to what this field held when it could
-    /// only ever be one — every existing offset of the form `(y * width + x) * bpt` still addresses layer
-    /// 0 unchanged, which is why the layered case could be added without disturbing the paths that are
-    /// layer-blind by contract (see [`Texture::layer_plane`]).
+    /// [`Texture::plane_at`] is the only correct way to address one, and it states the same ordering —
+    /// this doc said LAYER-major until 2026-08-01, contradicting both the code and `plane_at`'s own doc
+    /// two screens below, which is the kind of disagreement that survives review because each half reads
+    /// authoritative on its own.
+    ///
+    /// A single-plane, single-level texture is byte-identical to what this field held when it could only
+    /// ever be one: every offset of the form `(y * width + x) * bpt` still addresses it unchanged, which
+    /// is why layers, then levels, then depth-spanning blits could each be added without disturbing the
+    /// paths that address the base subresource by construction.
     pub pixels: Vec<u8>,
 }
 

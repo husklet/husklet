@@ -461,13 +461,13 @@ fn a_mirrored_blit_region_keeps_its_flip_and_an_empty_one_is_skipped() {
     // comparison the min/max performed.
     let inverted = BlitRect::of(&offsets(5, 8, 1, 2)).expect("a non-empty region");
     assert_eq!((inverted.origin, inverted.extent), ((1, 2), (4, 6)));
-    assert_eq!(inverted.inverted, Mirror { x: true, y: true });
+    assert_eq!(inverted.inverted, Mirror { x: true, y: true, z: false });
 
     // One axis each, to prove the two are independent rather than moving together.
     let flip_x = BlitRect::of(&offsets(5, 2, 1, 8)).expect("a non-empty region");
-    assert_eq!(flip_x.inverted, Mirror { x: true, y: false });
+    assert_eq!(flip_x.inverted, Mirror { x: true, y: false, z: false });
     let flip_y = BlitRect::of(&offsets(1, 8, 5, 2)).expect("a non-empty region");
-    assert_eq!(flip_y.inverted, Mirror { x: false, y: true });
+    assert_eq!(flip_y.inverted, Mirror { x: false, y: true, z: false });
 
     // The net rule: source XOR destination. Both inverted is the identity.
     assert_eq!(
@@ -477,15 +477,41 @@ fn a_mirrored_blit_region_keeps_its_flip_and_an_empty_one_is_skipped() {
     );
     assert_eq!(
         Mirror::net(flip_x.inverted, forward.inverted),
-        Mirror { x: true, y: false },
+        Mirror { x: true, y: false, z: false },
         "one inverted side is a real flip"
     );
     assert_eq!(
         Mirror::net(flip_x.inverted, flip_y.inverted),
-        Mirror { x: true, y: true },
+        Mirror { x: true, y: true, z: false },
         "the two axes combine independently"
     );
 
     // The depth span is carried unnormalized, because a 3D region is refused rather than mirrored.
     assert_eq!(forward.depth, (0, 1));
+
+    // The DEPTH flip is derived from the same offset pair, and it is derived rather than defaulted even
+    // though nothing consumes it yet — a 3D region is still refused above this. That matters because the
+    // refusal is the only thing standing between a depth-flipped `vkCmdBlitImage` and a silently
+    // unflipped one; a `z: false` default would look identical here and be wrong the day it is lifted.
+    // Every case above pins `z: false` from a forward depth span, which is the control: this is the only
+    // offset pair in the test whose z is inverted, so a derivation that ignored z would fail here alone.
+    let depth_flipped = BlitRect::of(&[
+        VkOffset3D { x: 1, y: 2, z: 4 },
+        VkOffset3D { x: 5, y: 8, z: 0 },
+    ])
+    .expect("a non-empty region");
+    assert_eq!(
+        depth_flipped.inverted,
+        Mirror {
+            x: false,
+            y: false,
+            z: true
+        },
+        "an inverted depth span is a depth flip, and must not be read as an x or y flip"
+    );
+    assert_eq!(
+        depth_flipped.depth,
+        (4, 0),
+        "the depth span stays unnormalized; the flip lives in `inverted`, not in the span"
+    );
 }

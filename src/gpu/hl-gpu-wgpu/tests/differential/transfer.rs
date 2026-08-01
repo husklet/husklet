@@ -361,9 +361,9 @@ pub(super) fn gen_blit_mirror(seed: u64) -> Prog {
     let (dw, dh) = (n * k, n * k);
     // Cycle the three non-identity mirrors so every seed batch exercises x, y and both.
     let mirror = match seed % 3 {
-        0 => Mirror { x: true, y: false },
-        1 => Mirror { x: false, y: true },
-        _ => Mirror { x: true, y: true },
+        0 => Mirror { x: true, y: false, z: false },
+        1 => Mirror { x: false, y: true, z: false },
+        _ => Mirror { x: true, y: true, z: false },
     };
     let src: Vec<u8> = (0..n * n)
         .flat_map(|i| texel(seed.wrapping_add(i as u64 * 13)))

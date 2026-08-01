@@ -163,9 +163,9 @@ fn mirrored_blit_reflects_each_axis_exactly() {
 
     let states = [
         Mirror::NONE,
-        Mirror { x: true, y: false },
-        Mirror { x: false, y: true },
-        Mirror { x: true, y: true },
+        Mirror { x: true, y: false, z: false },
+        Mirror { x: false, y: true, z: false },
+        Mirror { x: true, y: true, z: false },
     ];
 
     // The four expectations must be pairwise distinct, or the assertions below would pass for an executor

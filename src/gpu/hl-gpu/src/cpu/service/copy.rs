@@ -118,13 +118,14 @@ pub(crate) fn check_region_in_texture(
     Ok(())
 }
 
-/// The software oracle materializes only 2D, single-layer, level-0 color textures, so a copy/blit
-/// subresource that names a non-zero mip/layer, a non-color aspect, or a 3D depth slice is rejected.
-pub(crate) fn check_copy_subresource(
-    sub: &TextureSubresource,
-    origin: &Origin3d,
-    depth: u32,
-) -> Result<()> {
+/// The subresource a whole-plane copy or blit may name: level 0, the base array layer, whole colour
+/// aspect.
+///
+/// The DEPTH axis is deliberately not judged here. `Origin3d::z` and `Extent3d::depth` select slices of
+/// a 3D texture, which is a different question from which subresource is addressed, and the two callers
+/// answer it differently: a blit serves a depth span and a texture-to-texture copy does not. Folding
+/// both into one check is how the blit came to be refused by a rule written for the copy.
+pub(crate) fn check_plane_subresource(sub: &TextureSubresource) -> Result<()> {
     if sub.mip != 0 {
         return Err(GpuError::Unsupported("software: non-zero mip texture copy"));
     }
@@ -136,10 +137,46 @@ pub(crate) fn check_copy_subresource(
             "software: non-color aspect texture copy",
         ));
     }
+    Ok(())
+}
+
+/// [`check_plane_subresource`] plus the depth refusal a texture-to-texture COPY still carries.
+///
+/// `copy_texture_to_texture` addresses one plane with a flat `(y * width + x)` offset and has no notion
+/// of a slice, so a depth-spanning copy would silently write the base plane. The refusal is the honest
+/// answer until that path is given planes of its own; it is not a statement about 3D textures in
+/// general, which the blit path does serve.
+pub(crate) fn check_copy_subresource(
+    sub: &TextureSubresource,
+    origin: &Origin3d,
+    depth: u32,
+) -> Result<()> {
+    check_plane_subresource(sub)?;
     if origin.z != 0 || depth > 1 {
         return Err(GpuError::Unsupported(
             "software: 3D/depth-slice texture copy",
         ));
+    }
+    Ok(())
+}
+
+/// Bounds-check a blit's DEPTH span against the planes `t` actually materializes.
+///
+/// A 3D texture's planes are its slices, so `origin.z + depth` must fit inside `Texture::layers`. This
+/// is separate from [`check_region_in_texture`], which judges the in-plane rect and is silent about z —
+/// an overhanging depth span would otherwise resolve to a plane index `plane_at` refuses, turning a
+/// bounds error into whatever the first failing slice happened to report, part-way through a write.
+pub(crate) fn check_depth_span_in_texture(
+    t: &Texture,
+    origin: &Origin3d,
+    extent: &Extent3d,
+) -> Result<()> {
+    let z_end = origin
+        .z
+        .checked_add(extent.depth.max(1))
+        .ok_or(GpuError::OutOfBounds)?;
+    if z_end > t.layers() {
+        return Err(GpuError::OutOfBounds);
     }
     Ok(())
 }
@@ -349,6 +386,25 @@ pub(crate) fn blit_texture(
             t.desc.format,
         )
     };
+    // The DEPTH axis is served one destination slice per source slice, which is why the caller has
+    // already refused an unequal span: with `src.depth == dst.depth` there is no resampling along z, the
+    // in-plane arithmetic below is untouched, and no new filter has to be invented.
+    //
+    // Slices are resolved as PLANE RANGES up front. `Origin3d::z` names a slice, not a byte offset, so
+    // it is spent exactly once — here, choosing the plane — and never again inside the plane, where the
+    // offset is `(y * width + x)` relative to that plane's own start. A depth of one on a 2D texture
+    // resolves to `plane_at(0, 0)`, which begins at zero and is the full plane, so every 2D blit sees
+    // byte-for-byte the arithmetic it saw before slices existed.
+    let depth = dst_extent.depth.max(1) as usize;
+    let plane_ranges =
+        |res: &SessionResources, id: u32, base: u32| -> Result<Vec<std::ops::Range<usize>>> {
+            let t = texture(res, id)?;
+            (0..depth)
+                .map(|z| t.plane_at(0, base + z as u32).ok_or(GpuError::OutOfBounds))
+                .collect()
+        };
+    let src_planes = plane_ranges(res, src, src_origin.z)?;
+    let dst_planes = plane_ranges(res, dst, dst_origin.z)?;
     let t = texture_mut(res, dst)?;
     // A MIRRORED axis reverses the sample coordinate WITHIN the source rect: destination step `d` reads
     // `dext - d - 0.5` steps in instead of `d + 0.5`. Mirroring the coordinate rather than the destination
@@ -361,46 +417,57 @@ pub(crate) fn blit_texture(
             d as f32 + 0.5
         }
     };
-    for dy in 0..deh {
-        let fy = soy as f32 + along(dy, deh, mirror.y) * seh as f32 / deh as f32;
-        for dx in 0..dew {
-            let fx = sox as f32 + along(dx, dew, mirror.x) * sew as f32 / dew as f32;
-            // Both filters produce the source colour as VALUES; only how the neighbourhood is reduced
-            // differs. Encoding into the destination is then one shared step, so the two filters cannot
-            // come to different conclusions about what a format means — which is exactly what happened
-            // while nearest copied bytes and linear interpolated them.
-            let rgba = match filter {
-                Filter::Nearest => {
-                    let sx = (fx as usize).clamp(sox, sox + sew - 1);
-                    let sy = (fy as usize).clamp(soy, soy + seh - 1);
-                    src_fmt.texel_to_f32(texel_at(&src_pixels, sw, sx, sy, src_bpt))
-                }
-                Filter::Linear => sample_bilinear(
-                    &src_pixels,
-                    sw,
-                    src_bpt,
-                    fx,
-                    fy,
-                    sox,
-                    sox + sew - 1,
-                    soy,
-                    soy + seh - 1,
-                    src_fmt,
-                ),
-            };
-            // A filter or a format this oracle cannot express is a typed refusal, never a fallback:
-            // quietly substituting another filter or a byte copy would read as a filtering difference
-            // rather than as an unsupported operation.
-            let rgba = rgba.ok_or(GpuError::Unsupported(
-                "software: blit filter for this texel format",
-            ))?;
-            let texel = dst_fmt.clear_texel(rgba).ok_or(GpuError::Unsupported(
-                "software: blit into this texel format",
-            ))?;
-            let hlx = dst_origin.x as usize + dx;
-            let hly = dst_origin.y as usize + dy;
-            let off = (hly * dw + hlx) * dst_bpt;
-            t.pixels[off..off + dst_bpt].copy_from_slice(&texel);
+    for dz in 0..depth {
+        // A z flip reverses which SOURCE slice a destination slice reads, exactly as `along` reverses
+        // which source texel a destination texel reads. There is no interpolation to mirror because the
+        // mapping is one-to-one, so this is a plain index reflection rather than a coordinate one.
+        let sz = if mirror.z { depth - 1 - dz } else { dz };
+        let src_plane = &src_pixels[src_planes[sz].clone()];
+        let dst_base = dst_planes[dz].start;
+        for dy in 0..deh {
+            let fy = soy as f32 + along(dy, deh, mirror.y) * seh as f32 / deh as f32;
+            for dx in 0..dew {
+                let fx = sox as f32 + along(dx, dew, mirror.x) * sew as f32 / dew as f32;
+                // Both filters produce the source colour as VALUES; only how the neighbourhood is reduced
+                // differs. Encoding into the destination is then one shared step, so the two filters cannot
+                // come to different conclusions about what a format means — which is exactly what happened
+                // while nearest copied bytes and linear interpolated them.
+                let rgba = match filter {
+                    Filter::Nearest => {
+                        let sx = (fx as usize).clamp(sox, sox + sew - 1);
+                        let sy = (fy as usize).clamp(soy, soy + seh - 1);
+                        src_fmt.texel_to_f32(texel_at(src_plane, sw, sx, sy, src_bpt))
+                    }
+                    Filter::Linear => sample_bilinear(
+                        src_plane,
+                        sw,
+                        src_bpt,
+                        fx,
+                        fy,
+                        sox,
+                        sox + sew - 1,
+                        soy,
+                        soy + seh - 1,
+                        src_fmt,
+                    ),
+                };
+                // A filter or a format this oracle cannot express is a typed refusal, never a fallback:
+                // quietly substituting another filter or a byte copy would read as a filtering difference
+                // rather than as an unsupported operation.
+                let rgba = rgba.ok_or(GpuError::Unsupported(
+                    "software: blit filter for this texel format",
+                ))?;
+                let texel = dst_fmt.clear_texel(rgba).ok_or(GpuError::Unsupported(
+                    "software: blit into this texel format",
+                ))?;
+                let hlx = dst_origin.x as usize + dx;
+                let hly = dst_origin.y as usize + dy;
+                // `dst_base` already carries the slice; only x and y are added here. Adding
+                // `dst_origin.z` again would spend the origin twice and land outside the plane for any
+                // non-zero z.
+                let off = dst_base + (hly * dw + hlx) * dst_bpt;
+                t.pixels[off..off + dst_bpt].copy_from_slice(&texel);
+            }
         }
     }
     Ok(())
