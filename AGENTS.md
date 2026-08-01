@@ -967,6 +967,16 @@ were separable and worth separating: wrong level, never emitted on that path, or
 Enable the tag from inside the harness rather than from the invoking shell, so the measurement cannot
 depend on how someone happened to launch it.
 
+In this codebase a comment asserting a CAPABILITY is a hypothesis, and two found in one day had both
+hidden a real defect. `submit.rs:111` said a refused batch leaves both sides agreeing it did not happen,
+citing a residency mirror that is byte accounting and silent about the id caches that actually
+desynchronised — one refused pipeline then cost a whole Chrome session instead of one frame.
+`vertex.rs:83` said integer vertex attributes are excluded from float conversion, describing a rule the
+code cannot follow because the flag it keys on is hard-coded false on that entry point. Neither named a
+check, both foreclosed the exact question that mattered, and both sat next to code that had been
+carefully fixed for a neighbouring reason. When a comment explains why something is SAFE, find the test
+that would fail if it were not; if there is none, the comment is the defect's hiding place.
+
 Rank comments for audit by "claims a rule, cites no check". Six comments in one crate were found asserting
 rules the code did not implement — a rounding mode, a claim of matching another backend, a promise of
 refusals, and two sets described by a membership rule they did not follow. Every accurate comment in the
