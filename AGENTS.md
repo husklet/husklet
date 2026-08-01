@@ -1144,6 +1144,17 @@ the code it guards.
 defect was downstream and stopped there — downstream included a vendored dependency it could have read and
 edited, and the fault was two lines inside it.
 
+A ratchet reports regression, not correctness, and a floor recorded as acceptable reads as a pass
+forever. `ci/glmark2-baseline.json` records `texture`, `build`, `bump`, `desktop`, `pulsar` and `shading`
+as `pixels-wrong`, and `glmark2_ratchet.py` fails only on a DROP below the recorded grade — so "glmark2 is
+green" means "no scene got worse than the wrongness we already accepted". An investigation into blank
+browser content nearly died on that sentence, written by the agent who had just found the defect: the
+textured scenes were cited as evidence the upload path worked, when every one of them was recorded broken.
+Before citing a green gate as evidence a thing WORKS, read what its baseline actually records; a graded
+floor and a pass look identical from the outside. `ci/rung.py` is the contrasting shape and worth copying
+— it requires `outcome == "pass"` as well as the numeric floor, and `rungs.json` carries an explicit
+`ungated` list naming every stage no floor compares, so the holes are printed rather than implied.
+
 Prefer an instrument that reports a positive count over one that reports absence, and when an
 instrument reports absence, verify it can detect presence at all. Four separate zeros in one session were
 artifacts rather than facts. **A positive count is only trustworthy with a denominator** — `count=100` is
