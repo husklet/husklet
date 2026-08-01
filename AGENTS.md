@@ -1049,6 +1049,19 @@ evidence** — and where fail-first IS available, use it: the same session's nex
 with the check deliberately absent, watched the command succeed against a resource another session had
 mapped, then added the check.
 
+A safeguard is only as wide as the build you run it against. Adding a variant to a shared protocol enum
+in `hl-gpu` and running `cargo check -p hl-gpu` enumerates that crate's construction sites and no others —
+and then reads, in a commit message, exactly like exhaustive verification. Four crates consume `GpuError`;
+one was checked and three were invisible, so a variant landed with `hl-cuda`, `hl-gl` and `hl-vulkan`
+non-exhaustive and the shared tree unbuildable for every agent who needed them. Citing the property while
+having exercised it one step short of where it pays is worse than not citing it, because it reads as
+verification to whoever audits the commit later and stops them looking.
+
+So: **anything touching a shared type in `hl-gpu` gets `cargo check --workspace --all-targets` before it
+is committed**, not the single-crate check. More generally, when you name a mechanism as your evidence,
+check that you ran it over the whole domain it claims to cover — the compiler will enumerate every site
+you let it see, and silently none of the ones you did not.
+
 When extending a wire format, prefer the form where the compiler enumerates every construction site over a
 catch-all that lets sites silently keep the old meaning. A field added as required failed the build at
 twenty call sites, and that enumeration was the evidence the change had been considered everywhere.
