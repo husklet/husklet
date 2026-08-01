@@ -217,3 +217,30 @@ pub const TAGS: &[Tag] = &[
     GPU, WGPU, VULKAN, GL, CUDA, COMPOSITOR, TRANSPORT, WIRE, PRESENT, EXEC, SHIM, RUNTIME, CPU,
     EGL, WAYLAND, CONTAINER, IMAGE, DAEMON, UI,
 ];
+
+#[cfg(test)]
+mod env_value_tests {
+    use super::*;
+    use std::str::FromStr;
+
+    /// A LEVEL name in the TAG variable opens nothing, and does so silently.
+    ///
+    /// `gl-diff` shipped `HL_LOG=debug` for as long as the setting existed, beside a comment stating that
+    /// the gate was open. `debug` is not a tag, unknown names are dropped for forward compatibility, and
+    /// the result is an empty mask indistinguishable from never having asked.
+    #[test]
+    fn a_level_name_in_the_tag_list_opens_nothing() {
+        assert_eq!(Tags::from_str("debug").unwrap(), Tags::NONE);
+        assert_eq!(Tags::from_str("warn").unwrap(), Tags::NONE);
+    }
+
+    /// The replacement value actually opens the tags a GL context loss is reported under.
+    #[test]
+    fn the_gl_diff_tag_list_opens_its_tags() {
+        let tags = Tags::from_str("gl,egl,present").unwrap();
+        assert!(tags.intersects(Tags::from(GL)));
+        assert!(tags.intersects(Tags::from(EGL)));
+        assert!(tags.intersects(Tags::from(PRESENT)));
+        assert!(!tags.intersects(Tags::from(CUDA)));
+    }
+}
