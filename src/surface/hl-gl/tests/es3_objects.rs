@@ -23,6 +23,8 @@ mod buffer;
 mod feedback;
 #[path = "es3_objects/framebuffer.rs"]
 mod framebuffer;
+#[path = "es3_objects/link.rs"]
+mod link;
 #[path = "es3_objects/pipeline.rs"]
 mod pipeline;
 #[path = "es3_objects/query.rs"]

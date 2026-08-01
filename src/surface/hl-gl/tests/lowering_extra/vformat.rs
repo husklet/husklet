@@ -17,8 +17,10 @@ const TINT_FS: &str = "varying vec4 v;\nvoid main(){ gl_FragColor = v; }\n";
 fn setup_tint(c: &mut GlContext) {
     let v = record::create_shader(c, GL_VERTEX_SHADER);
     record::shader_source(c, v, TINT_VS);
+    record::compile_shader(c, v);
     let f = record::create_shader(c, GL_FRAGMENT_SHADER);
     record::shader_source(c, f, TINT_FS);
+    record::compile_shader(c, f);
     let p = record::create_program(c);
     record::attach_shader(c, p, v);
     record::attach_shader(c, p, f);

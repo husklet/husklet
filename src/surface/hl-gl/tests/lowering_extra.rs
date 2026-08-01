@@ -29,8 +29,10 @@ fn ctx() -> GlContext {
 fn flat_program(c: &mut GlContext) -> u32 {
     let v = record::create_shader(c, GL_VERTEX_SHADER);
     record::shader_source(c, v, VS);
+    record::compile_shader(c, v);
     let f = record::create_shader(c, GL_FRAGMENT_SHADER);
     record::shader_source(c, f, FS);
+    record::compile_shader(c, f);
     let p = record::create_program(c);
     record::attach_shader(c, p, v);
     record::attach_shader(c, p, f);

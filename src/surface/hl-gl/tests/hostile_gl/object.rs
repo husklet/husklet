@@ -49,8 +49,10 @@ fn dangling_object_names_to_bind_use_attach_never_panic() {
         v,
         "attribute vec4 p; void main(){ gl_Position = p; }\n",
     );
+    record::compile_shader(&mut c, v);
     let f = record::create_shader(&mut c, GL_FRAGMENT_SHADER);
     record::shader_source(&mut c, f, "void main(){ gl_FragColor = vec4(1.0); }\n");
+    record::compile_shader(&mut c, f);
     let p = record::create_program(&mut c);
     record::attach_shader(&mut c, p, v);
     record::attach_shader(&mut c, p, f);

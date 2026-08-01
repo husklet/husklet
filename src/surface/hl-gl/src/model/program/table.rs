@@ -98,9 +98,48 @@ impl Programs {
         }
     }
 
+    /// Why an attached shader bars this program from linking, if one does.
+    ///
+    /// ES 3.0 §7.3: a link succeeds only when every attached shader carries `GL_COMPILE_STATUS` true.
+    /// The status is read HERE rather than remembered from an earlier link, because a shader may be
+    /// attached after a link and recompiled between two of them. A shader that was never compiled and
+    /// one whose compile was refused are distinct states (ES 3.0 §7.1) and say so; the refused one
+    /// repeats its own info log, which is the only place the actual cause is written down.
+    fn attachment_barring_link(&self, program: u32) -> Option<String> {
+        let program = self.programs.get(&program)?;
+        let stages = [
+            ("vertex", program.vs),
+            ("fragment", program.fs),
+            ("compute", program.cs),
+        ];
+        stages.into_iter().find_map(|(stage, name)| {
+            if name == 0 {
+                return None;
+            }
+            match self.shaders.get(&name) {
+                None => Some(format!("attached {stage} shader {name} is not a shader object")),
+                Some(shader) if shader.compiled => None,
+                Some(shader) if shader.info_log.is_empty() => {
+                    Some(format!("attached {stage} shader {name} was never compiled"))
+                }
+                Some(shader) => Some(format!(
+                    "attached {stage} shader {name} failed to compile: {}",
+                    shader.info_log
+                )),
+            }
+        })
+    }
+
     /// `glLinkProgram(program)` — translate + reflect the attached shaders. Returns `false` if the
-    /// program name or either attached shader is unknown.
+    /// program name or either attached shader is unknown, or if an attached shader did not compile.
     pub fn link(&mut self, program: u32) -> bool {
+        if let Some(reason) = self.attachment_barring_link(program) {
+            if let Some(p) = self.programs.get_mut(&program) {
+                p.linked = false;
+                p.link_error = reason;
+            }
+            return false;
+        }
         let (vs, fs, cs) = match self.programs.get(&program) {
             Some(p) => (p.vs, p.fs, p.cs),
             None => return false,
