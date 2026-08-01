@@ -65,6 +65,37 @@ fn fs(ty: &str) -> String {
     )
 }
 
+/// The same read, but from element 1 of a two-element ARRAY of matrices.
+fn fs_array(ty: &str) -> String {
+    format!(
+        "#version 460\nlayout(std140, binding = 0) uniform HlUniforms {{ {ty} m[2]; }};\n\
+         layout(location = 0) out vec4 o;\n\
+         void main() {{ o = vec4(m[1][0][0], m[1][1][0], m[1][0][1], m[1][1][1]); }}\n"
+    )
+}
+
+/// std140 bytes for a TWO-element array of matrices: element `e`, column `c`, row `r` at
+/// `16 * (e * columns + c) + 4 * r` — a matrix column occupies its own 16-byte slot whether or not the
+/// matrix is in an array, so the array is just a longer run of the same slots.
+///
+/// Element 0 is filled with DECOYS. Reading the wrong element returns them, and they are far enough from
+/// the expected values that the assertion names the mistake rather than tolerating it.
+fn uniform_bytes_array(columns: u32) -> Vec<u8> {
+    let mut bytes = vec![0u8; (columns as usize) * 2 * 16];
+    let mut put = |element: usize, column: usize, row: usize, value: f32| {
+        let at = (element * columns as usize + column) * 16 + row * 4;
+        bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    };
+    for (column, row) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+        put(0, column, row, 1.0); // decoy: element 0 reads as full white
+    }
+    put(1, 0, 0, M00);
+    put(1, 1, 0, M10);
+    put(1, 0, 1, M01);
+    put(1, 1, 1, M11);
+    bytes
+}
+
 /// std140 bytes for a matrix with `columns` columns: column `c`, row `r` sits at `16*c + 4*r`. This is what
 /// the GL driver writes — it lays matrix columns out at an explicit `column * 16`.
 fn uniform_bytes(columns: u32) -> Vec<u8> {
@@ -80,9 +111,15 @@ fn uniform_bytes(columns: u32) -> Vec<u8> {
     bytes
 }
 
-fn render(exec: &mut WgpuExecutor, ty: &str, columns: u32) -> hl_gpu::Result<Vec<u8>> {
+fn render(exec: &mut WgpuExecutor, ty: &str, columns: u32, array: bool) -> hl_gpu::Result<Vec<u8>> {
     let mut session = new_session(exec);
-    let size = u64::from(columns) * 16;
+    let elements = if array { 2 } else { 1 };
+    let size = u64::from(columns) * 16 * elements;
+    let (source, data) = if array {
+        (fs_array(ty), uniform_bytes_array(columns))
+    } else {
+        (fs(ty), uniform_bytes(columns))
+    };
     hl_gpu::runtime::submit(
         &mut session,
         exec,
@@ -103,7 +140,7 @@ fn render(exec: &mut WgpuExecutor, ty: &str, columns: u32) -> hl_gpu::Result<Vec
             Cmd::WriteBuffer {
                 id: 1,
                 offset: 0,
-                data: uniform_bytes(columns),
+                data,
             },
             Cmd::CreateShader {
                 id: 1,
@@ -113,7 +150,7 @@ fn render(exec: &mut WgpuExecutor, ty: &str, columns: u32) -> hl_gpu::Result<Vec
             Cmd::CreateShader {
                 id: 2,
                 kind: ShaderPayloadKind::Glsl,
-                spirv: glsl(glsl_stage::FRAGMENT, "fmain", &fs(ty)),
+                spirv: glsl(glsl_stage::FRAGMENT, "fmain", &source),
             },
             Cmd::CreateRenderPipeline(
                 1,
@@ -191,7 +228,7 @@ fn every_matrix_shape_reads_its_own_std140_elements() {
     ];
     let mut failures = Vec::new();
     for (ty, columns) in MATRICES {
-        match render(&mut exec, ty, columns) {
+        match render(&mut exec, ty, columns, false) {
             Err(e) => failures.push(format!("{ty}: refused: {e}")),
             Ok(pixels) => {
                 let got = px(&pixels, W, 0, 0);
@@ -204,6 +241,47 @@ fn every_matrix_shape_reads_its_own_std140_elements() {
     assert!(
         failures.is_empty(),
         "matrix uniforms must read their own std140 elements (column c, row r at 16c+4r):\n  {}",
+        failures.join("\n  ")
+    );
+}
+
+/// The same nine shapes, in a two-element ARRAY.
+///
+/// Arrays of TWO-ROW matrices (`mat2`, `mat3x2`, `mat4x2`) were refused outright until now: the column
+/// split that makes a two-row matrix expressible at all — naga rejects `matNx2` in `std140` — declined any
+/// member with a subscript, so three of the nine shapes could not appear in a uniform array. That set
+/// contains a square type, which is why it was not the non-square partition; it was its own gap, and an
+/// array of matrices in a uniform block is an ordinary thing to write.
+///
+/// The flattening is byte-identical to what the driver uploads, and this asserts that rather than assuming
+/// it: element 0 holds decoys, so reading the wrong element or striding the wrong way returns white.
+#[test]
+fn every_matrix_shape_reads_its_own_elements_from_an_array() {
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
+
+    let expected = [
+        (M00 * 255.0).round() as u8,
+        (M10 * 255.0).round() as u8,
+        (M01 * 255.0).round() as u8,
+        (M11 * 255.0).round() as u8,
+    ];
+    let mut failures = Vec::new();
+    for (ty, columns) in MATRICES {
+        match render(&mut exec, ty, columns, true) {
+            Err(e) => failures.push(format!("{ty}[2]: refused: {e}")),
+            Ok(pixels) => {
+                let got = px(&pixels, W, 0, 0);
+                if !near(got, expected) {
+                    failures.push(format!("{ty}[2]: got {got:?}, want {expected:?}"));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "an array of matrices must read element 1's own std140 elements \
+         (element e, column c, row r at 16*(e*C+c)+4*r):\n  {}",
         failures.join("\n  ")
     );
 }

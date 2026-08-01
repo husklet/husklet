@@ -74,19 +74,24 @@ fn rewrite_std140_body(
     body.split(';')
         .map(|seg| match Mat2Member::parse(seg) {
             Some(member) if !skip.contains(&member.name) => {
+                let array = member.elements.is_some();
                 members.push(match instance {
                     Some(instance) => Member::Qualified {
                         instance: instance.to_string(),
                         name: member.name.clone(),
                         columns: member.columns,
+                        array,
                     },
                     None => Member::Bare {
                         name: member.name.clone(),
                         columns: member.columns,
+                        array,
                     },
                 });
                 let lead: String = seg.chars().take_while(|c| c.is_whitespace()).collect();
-                format!("{lead}vec4 {}__col[{}]", member.name, member.columns)
+                // An array member flattens to one run of `elements * columns` vec4 slots.
+                let slots = member.columns * member.elements.unwrap_or(1);
+                format!("{lead}vec4 {}__col[{}]", member.name, slots)
             }
             _ => seg.to_string(),
         })
@@ -94,20 +99,21 @@ fn rewrite_std140_body(
         .join(";")
 }
 
-/// If `seg` is a scalar 2-row-matrix member declaration (`mat2`/`mat3x2`/`mat4x2 NAME`, no array), return
-/// `(NAME, cols)`; otherwise `None`. Precision qualifiers are already stripped before this pass runs.
+/// A 2-row-matrix member declaration (`mat2`/`mat3x2`/`mat4x2 NAME`), scalar or ARRAY. Precision
+/// qualifiers are already stripped before this pass runs.
 struct Mat2Member {
     name: String,
     columns: u32,
+    /// `Some(N)` for `NAME[N]`. An array is flattened into one `vec4` run of `N * columns` entries, which
+    /// is byte-identical: std140 gives every matrix column its own 16-byte slot whether or not the matrix
+    /// sits in an array, so element `e` column `c` lands at flat index `e * columns + c` either way.
+    elements: Option<u32>,
 }
 
 impl Mat2Member {
     fn parse(seg: &str) -> Option<Self> {
         let toks = Tokens::from_source(seg);
         let sig: Vec<&Tok> = toks.iter().filter(|token| token.is_significant()).collect();
-        if sig.iter().any(|t| matches!(t, Tok::Punct('['))) {
-            return None; // an array member (`mat2 m[3]`) — not handled; leave for naga to reject
-        }
         let base = match sig.first() {
             Some(Tok::Word(w)) => w.clone(),
             _ => return None,
@@ -116,13 +122,24 @@ impl Mat2Member {
         if matrix.rows != 2 {
             return None;
         }
-        let name = sig.iter().skip(1).find_map(|t| match t {
-            Tok::Word(w) => Some(w.clone()),
-            _ => None,
-        })?;
+        let name = match sig.get(1) {
+            Some(Tok::Word(w)) => w.clone(),
+            _ => return None,
+        };
+        // `NAME [ N ]` — only a literal count, since the flattened length must be computed here. An
+        // unsized or expression-sized member is declined and reaches naga unchanged.
+        let elements = match sig.get(2) {
+            None => None,
+            Some(Tok::Punct('[')) => match (sig.get(3), sig.get(4)) {
+                (Some(Tok::Word(count)), Some(Tok::Punct(']'))) => Some(count.parse().ok()?),
+                _ => return None,
+            },
+            _ => return None,
+        };
         Some(Self {
             name,
             columns: matrix.columns,
+            elements,
         })
     }
 }
@@ -130,16 +147,43 @@ impl Mat2Member {
 /// The reconstructed matrix rvalue for a use of a rewritten member: `matN2(P__col[0].xy, …)`, where `P`
 /// is `block.member` for a named-instance block and the bare `member` for an anonymous one (whose members
 /// live in global scope).
-fn reconstruct_mat2(path: &str, cols: u32) -> String {
+///
+/// `index` is the element expression for an ARRAY member — `a[i]` reads columns at flat `i * cols + k`.
+/// It is parenthesised, so an arbitrary index expression keeps its own precedence.
+fn reconstruct_mat2(path: &str, cols: u32, index: Option<&str>) -> String {
     let ctor = match cols {
         3 => "mat3x2",
         4 => "mat4x2",
         _ => "mat2",
     };
     let args: Vec<String> = (0..cols)
-        .map(|k| format!("{path}__col[{k}].xy"))
+        .map(|k| match index {
+            Some(index) => format!("{path}__col[({index}) * {cols} + {k}].xy"),
+            None => format!("{path}__col[{k}].xy"),
+        })
         .collect();
     format!("{ctor}({})", args.join(", "))
+}
+
+/// The element subscript of a use whose name token is at `name`, and the index just past what the use
+/// consumes.
+///
+/// A scalar member consumes only its name. An ARRAY member must be followed by `[…]`, whose inner text
+/// becomes the element expression; `None` is returned when it is not, so the caller can decline rather
+/// than emit a flattened read the source never asked for.
+fn subscript(toks: &[Tok], name: usize, array: bool) -> Option<(Option<String>, usize)> {
+    if !array {
+        return Some((None, name + 1));
+    }
+    let lb = toks.next_significant(name + 1)?;
+    if toks[lb] != Tok::Punct('[') {
+        return None;
+    }
+    let rb = match_close(toks, lb, '[', ']');
+    if rb >= toks.len() {
+        return None;
+    }
+    Some((Some(toks[lb + 1..rb].source().trim().to_string()), rb + 1))
 }
 
 /// A member the block pass rewrote, and how its uses are spelled.
@@ -153,14 +197,30 @@ fn reconstruct_mat2(path: &str, cols: u32) -> String {
 /// no competing declaration of that name. When it is ambiguous the member is left alone: naga then rejects
 /// the shader loudly, which is far better than silently reading the wrong value.
 enum Member {
-    Qualified { instance: String, name: String, columns: u32 },
-    Bare { name: String, columns: u32 },
+    Qualified {
+        instance: String,
+        name: String,
+        columns: u32,
+        array: bool,
+    },
+    Bare {
+        name: String,
+        columns: u32,
+        array: bool,
+    },
 }
 
 impl Member {
     fn columns(&self) -> u32 {
         match self {
             Self::Qualified { columns, .. } | Self::Bare { columns, .. } => *columns,
+        }
+    }
+
+    /// Whether uses of this member are subscripted (`a[i]`) rather than bare.
+    fn array(&self) -> bool {
+        match self {
+            Self::Qualified { array, .. } | Self::Bare { array, .. } => *array,
         }
     }
 }
@@ -220,11 +280,20 @@ impl Tokens {
                             Member::Qualified { instance, name, .. } => instance == w && name == m,
                             Member::Bare { .. } => false,
                         }) {
+                            let Some((index, end)) = subscript(toks, mem, found.array()) else {
+                                // An ARRAY member used without a subscript (passed whole, `.length()`):
+                                // there is no flattened rvalue for that, so it is left alone and naga
+                                // rejects the shader loudly rather than this pass inventing one.
+                                result.push(toks[i].clone());
+                                i += 1;
+                                continue;
+                            };
                             result.push(Tok::Word(reconstruct_mat2(
                                 &format!("{w}.{m}"),
                                 found.columns(),
+                                index.as_deref(),
                             )));
-                            i = mem + 1;
+                            i = end;
                             continue;
                         }
                     }
@@ -242,8 +311,17 @@ impl Tokens {
                         Member::Bare { name, .. } => name == w,
                         Member::Qualified { .. } => false,
                     }) {
-                        result.push(Tok::Word(reconstruct_mat2(w, found.columns())));
-                        i += 1;
+                        let Some((index, end)) = subscript(toks, i, found.array()) else {
+                            result.push(toks[i].clone());
+                            i += 1;
+                            continue;
+                        };
+                        result.push(Tok::Word(reconstruct_mat2(
+                            w,
+                            found.columns(),
+                            index.as_deref(),
+                        )));
+                        i = end;
                         continue;
                     }
                 }
