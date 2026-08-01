@@ -414,3 +414,70 @@ fn acquire_next_image2_reports_an_unknown_swapchain_like_the_positional_form() {
     assert_ne!(structured, VK_SUCCESS);
     assert_eq!(index, 7);
 }
+
+/// A MIRRORED `vkCmdBlitImage` region fails the command buffer instead of vanishing.
+///
+/// Vulkan expresses a flipped blit by putting `offsets[1]` before `offsets[0]` on an axis, and it is
+/// legal. `Enc::BlitTexture` carries an unsigned origin and extent, so the driver cannot express one —
+/// which makes it a limitation rather than the caller's error, and the caller has to be told either way.
+/// It was told nothing: the mirrored region hit the same `continue` that skips an EMPTY region, so the
+/// command produced no work, reported no error, and left the destination holding whatever it had.
+///
+/// `Device::latch` exists for exactly this. Its own documentation records that call sites used to discard
+/// these Results, "which is why a command buffer that had silently dropped work still ended
+/// successfully" — and a `continue` walks around the mechanism built to stop that.
+///
+/// The EMPTY region is the control, and it is what makes this test discriminating rather than merely
+/// red-then-green: an empty region is genuinely nothing to do and must still be skipped in silence. Both
+/// regions took the same path before, so a test asserting only the failure would have passed against a
+/// driver that failed on empty regions too — which would break every application that submits one.
+///
+/// Neither region reaches the images, because both checks precede the recording call, so the handles here
+/// are deliberately arbitrary: this is a statement about region geometry alone.
+#[test]
+fn a_mirrored_blit_region_fails_the_command_buffer_and_an_empty_one_is_skipped() {
+    const VK_FILTER_NEAREST: i32 = 0;
+
+    let offsets = |x0: i32, x1: i32| {
+        [
+            VkOffset3D { x: x0, y: 0, z: 0 },
+            VkOffset3D { x: x1, y: 4, z: 1 },
+        ]
+    };
+    let region = |x0: i32, x1: i32| VkImageBlit {
+        src_subresource: unsafe { core::mem::zeroed() },
+        src_offsets: offsets(x0, x1),
+        dst_subresource: unsafe { core::mem::zeroed() },
+        dst_offsets: offsets(0, 4),
+    };
+    let blit = |x0: i32, x1: i32| {
+        let _g = test_guard();
+        let (cb, _handle) = recording_command_buffer();
+        let r = region(x0, x1);
+        crate::transfer::vkCmdBlitImage(
+            cb,
+            1,
+            0,
+            2,
+            0,
+            1,
+            &r as *const _ as *const c_void,
+            VK_FILTER_NEAREST,
+        );
+        crate::compute::vkEndCommandBuffer(cb)
+    };
+
+    // Control: an empty region is nothing to do, and the buffer must still end cleanly.
+    assert_eq!(
+        blit(2, 2),
+        VK_SUCCESS,
+        "an empty region is a no-op, not a failure"
+    );
+
+    // The mirrored region the driver cannot express must reach the caller.
+    assert_ne!(
+        blit(4, 0),
+        VK_SUCCESS,
+        "a mirrored region must fail the command buffer rather than silently producing nothing"
+    );
+}

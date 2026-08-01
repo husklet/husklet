@@ -223,15 +223,45 @@ pub extern "C" fn vkCmdBlitImage(
         for region in regions {
             let [source_start, source_end] = region.src_offsets;
             let [destination_start, destination_end] = region.dst_offsets;
-            if source_end.x <= source_start.x
-                || source_end.y <= source_start.y
-                || source_start.z != 0
+            // An EMPTY region is nothing to do, and skipping it is right.
+            if source_end.x == source_start.x
+                || source_end.y == source_start.y
+                || destination_end.x == destination_start.x
+                || destination_end.y == destination_start.y
+            {
+                continue;
+            }
+            // A MIRRORED region — `offsets[1]` before `offsets[0]` on an axis — is how Vulkan expresses a
+            // flipped blit, and it is legal. `Enc::BlitTexture` carries an unsigned origin and extent and
+            // so cannot express one at all, which makes this a limitation of the driver rather than an
+            // error by the caller. It used to be dropped by the same `continue` that skips an empty
+            // region: the command produced nothing, reported nothing, and left the destination holding
+            // whatever it had. `latch` exists precisely so a `vkCmd*` failure reaches
+            // `vkEndCommandBuffer` — its own documentation records that discarding these Results is why a
+            // buffer that had silently dropped work still ended successfully — and a `continue` walks
+            // around the mechanism built to stop that.
+            let mirrored = source_end.x < source_start.x
+                || source_end.y < source_start.y
+                || destination_end.x < destination_start.x
+                || destination_end.y < destination_start.y;
+            if mirrored {
+                device.latch::<()>(
+                    command_buffer,
+                    Err(hl_gpu::GpuError::Unsupported("vkCmdBlitImage: mirrored region")),
+                );
+                continue;
+            }
+            // A region spanning depth, likewise legal and likewise unrepresentable: the lowering carries
+            // a 2D rect per array layer and the host refuses a 3D blit outright.
+            if source_start.z != 0
                 || source_end.z != 1
-                || destination_end.x <= destination_start.x
-                || destination_end.y <= destination_start.y
                 || destination_start.z != 0
                 || destination_end.z != 1
             {
+                device.latch::<()>(
+                    command_buffer,
+                    Err(hl_gpu::GpuError::Unsupported("vkCmdBlitImage: 3D region")),
+                );
                 continue;
             }
             let recorded = record::cmd_blit_image(
