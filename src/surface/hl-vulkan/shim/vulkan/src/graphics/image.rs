@@ -19,6 +19,11 @@ pub extern "C" fn vkCreateImage(
     ShimState::with_sink(|dev, sink| {
         let cube = ci.flags & 0x10 != 0;
         let dim = match ci.image_type {
+            // A 1D image is materialized as a real `TextureDim::D1`, not collapsed onto a 1-row 2D
+            // image: a `sampler1D` binding expects a D1 view and rejects anything else at bind time.
+            // Refusing it outright was an under-claim of a capability the executor has, and Vulkan
+            // requires 1D optimal images of an ordinary format.
+            0 => TextureDim::D1,
             1 => TextureDim::D2,
             2 => TextureDim::D3,
             _ => return VK_ERROR_INITIALIZATION_FAILED,

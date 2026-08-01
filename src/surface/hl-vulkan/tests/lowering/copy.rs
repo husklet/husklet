@@ -897,3 +897,76 @@ fn create_buffer_refuses_a_size_past_the_advertised_ceiling() {
         );
     }
 }
+
+/// A 1D image must reach the executor as a real `TextureDim::D1`, not collapsed onto a one-row 2D
+/// texture: a `sampler1D` binding expects a D1 view and rejects anything else at bind time. And the
+/// creation path must enforce the same limits the format query advertises for 1D — one row, no mip
+/// chain — so the two cannot disagree.
+#[test]
+fn a_one_dimensional_image_lowers_to_d1_and_enforces_its_limits() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let handle = create::create_image_geometry(
+        &mut d,
+        &mut sink,
+        64,
+        1,
+        1,
+        1,
+        1,
+        TextureDim::D1,
+        vk_format::R8G8B8A8_UNORM,
+        vk_image_usage::SAMPLED,
+        1,
+    )
+    .expect("a 1D image is creatable");
+    let created = sink
+        .batches
+        .iter()
+        .flatten()
+        .find_map(|c| match c {
+            Cmd::CreateTexture(_, desc) => Some(desc.clone()),
+            _ => None,
+        })
+        .expect("a CreateTexture");
+    assert_eq!(created.dim, TextureDim::D1, "must not collapse onto 2D");
+    assert_eq!(created.width, 64);
+    assert_eq!(created.height, 1);
+    assert!(d.images.contains_key(&handle));
+
+    // A second row or a mip chain is refused, matching the advertised 1D limits.
+    assert!(
+        create::create_image_geometry(
+            &mut d,
+            &mut sink,
+            64,
+            4,
+            1,
+            1,
+            1,
+            TextureDim::D1,
+            vk_format::R8G8B8A8_UNORM,
+            vk_image_usage::SAMPLED,
+            1,
+        )
+        .is_err(),
+        "a 1D image has one row"
+    );
+    assert!(
+        create::create_image_geometry(
+            &mut d,
+            &mut sink,
+            64,
+            1,
+            1,
+            1,
+            4,
+            TextureDim::D1,
+            vk_format::R8G8B8A8_UNORM,
+            vk_image_usage::SAMPLED,
+            1,
+        )
+        .is_err(),
+        "the D1 path carries no mip chain"
+    );
+}

@@ -387,6 +387,15 @@ pub fn create_image_geometry(
             "vkCreateImage: non-3D images require extent.depth == 1",
         ));
     }
+    // A 1D image is a single row with no mip chain: the executor's D1 path forbids both a second row
+    // and a mip pyramid, and `vkGetPhysicalDeviceImageFormatProperties` reports exactly that
+    // (maxExtent.height == 1, maxMipLevels == 1). Refusing here keeps the creation path and the
+    // advertised limits saying the same thing.
+    if dim == TextureDim::D1 && (height != 1 || mip_levels != 1) {
+        return Err(GpuError::Invalid(
+            "vkCreateImage: 1D images require extent.height == 1 and mipLevels == 1",
+        ));
+    }
     let max_dim = if dim == TextureDim::D3 {
         dev.physical_device.limits.max_image_dimension_3d
     } else {

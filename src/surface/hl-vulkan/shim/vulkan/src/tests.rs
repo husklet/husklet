@@ -959,7 +959,6 @@ fn an_unrecognised_chain_node_is_skipped_without_stopping_the_walk() {
 #[test]
 fn a_refused_image_format_query_zeroes_the_properties() {
     const R8G8B8A8_UNORM: i32 = 37;
-    const VK_IMAGE_TYPE_1D: i32 = 0;
     const VK_IMAGE_TYPE_2D: i32 = 1;
     const VK_IMAGE_TILING_OPTIMAL: i32 = 0;
     const VK_ERROR_FORMAT_NOT_SUPPORTED: VkResult = -11;
@@ -998,13 +997,16 @@ fn a_refused_image_format_query_zeroes_the_properties() {
     );
     assert_ne!(supported.max_extent.width, 0xDEAD);
 
-    // Then the refusal. 1D is not materialised by this driver, so this combination is refused.
+    // Then the refusal. A format with no lowering at all is refused whatever the type — 1D used to
+    // serve as the refused case here and no longer does, which is the test noticing that 1D became
+    // supported rather than the test being wrong.
+    const R4G4_UNORM_PACK8: i32 = 1;
     let mut refused = poison;
     assert_eq!(
         crate::instance::vkGetPhysicalDeviceImageFormatProperties(
             core::ptr::null_mut(),
-            R8G8B8A8_UNORM,
-            VK_IMAGE_TYPE_1D,
+            R4G4_UNORM_PACK8,
+            VK_IMAGE_TYPE_2D,
             VK_IMAGE_TILING_OPTIMAL,
             0,
             0,
@@ -1088,4 +1090,68 @@ fn sample_counts_are_claimed_only_where_the_specification_permits() {
         0,
         "a compressed format is never an attachment, so it can never be multisampled"
     );
+}
+
+/// A 1D optimally-tiled image of an ordinary format is a REQUIRED combination, and the executor
+/// materializes it as a real `TextureDim::D1`. Refusing it was an under-claim of a capability the
+/// driver has — 10 `dEQP-VK.api.info.image_format_properties` cases reported
+/// "VK_ERROR_FORMAT_NOT_SUPPORTED returned for required image parameter combination".
+///
+/// The reported limits must match what a 1D image can actually be: a single row, no mip chain, no
+/// multisampling. Advertising a 1D mip pyramid the executor's D1 path forbids would be the over-claim
+/// this driver has been removing everywhere else.
+#[test]
+fn a_one_dimensional_image_is_supported_with_one_dimensional_limits() {
+    const R8G8B8A8_UNORM: i32 = 37;
+    const BC1_RGBA_UNORM_BLOCK: i32 = 133;
+    const D32_SFLOAT: i32 = 126;
+    const VK_IMAGE_TYPE_1D: i32 = 0;
+    const VK_IMAGE_TYPE_2D: i32 = 1;
+    const VK_IMAGE_TILING_OPTIMAL: i32 = 0;
+    const VK_ERROR_FORMAT_NOT_SUPPORTED: VkResult = -11;
+
+    let query = |format: i32, image_type: i32| {
+        let mut p: VkImageFormatProperties = unsafe { core::mem::zeroed() };
+        let r = crate::instance::vkGetPhysicalDeviceImageFormatProperties(
+            core::ptr::null_mut(),
+            format,
+            image_type,
+            VK_IMAGE_TILING_OPTIMAL,
+            0,
+            0,
+            &mut p as *mut _ as *mut c_void,
+        );
+        (r, p)
+    };
+
+    // The 2D answer is unchanged — a positive control that widening the type set did not disturb it.
+    let (result, two_d) = query(R8G8B8A8_UNORM, VK_IMAGE_TYPE_2D);
+    assert_eq!(result, VK_SUCCESS);
+    assert!(two_d.max_extent.height > 1 && two_d.max_mip_levels > 1);
+
+    let (result, one_d) = query(R8G8B8A8_UNORM, VK_IMAGE_TYPE_1D);
+    assert_eq!(result, VK_SUCCESS, "1D optimal is a required combination");
+    assert!(one_d.max_extent.width >= 1, "a 1D image has a width");
+    assert_eq!(
+        one_d.max_extent.height, 1,
+        "Invalid dimensions for 1D image"
+    );
+    assert_eq!(one_d.max_extent.depth, 1, "Invalid dimensions for 1D image");
+    assert_eq!(one_d.max_mip_levels, 1, "the D1 path carries no mip chain");
+    assert_eq!(one_d.sample_counts, 0x1, "1D is never multisampled");
+
+    // The two documented exceptions stay refused: 1D support is OPTIONAL for compressed and for
+    // depth/stencil formats, and the executor's D1 path cannot carry either.
+    assert_eq!(
+        query(D32_SFLOAT, VK_IMAGE_TYPE_1D).0,
+        VK_ERROR_FORMAT_NOT_SUPPORTED,
+        "1D depth/stencil is optional and unsupported here"
+    );
+    let compressed_2d = query(BC1_RGBA_UNORM_BLOCK, VK_IMAGE_TYPE_2D).0;
+    assert_eq!(
+        query(BC1_RGBA_UNORM_BLOCK, VK_IMAGE_TYPE_1D).0,
+        VK_ERROR_FORMAT_NOT_SUPPORTED,
+        "1D compressed is optional and unsupported here"
+    );
+    let _ = compressed_2d;
 }

@@ -65,7 +65,9 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
     p_image_format_properties: *mut c_void,
 ) -> VkResult {
     const VK_ERROR_FORMAT_NOT_SUPPORTED: VkResult = -11;
+    const VK_IMAGE_TYPE_1D: i32 = 0;
     const VK_IMAGE_TYPE_2D: i32 = 1;
+    const VK_IMAGE_TYPE_3D: i32 = 2;
     const VK_IMAGE_TILING_OPTIMAL: i32 = 0;
     const VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT: VkFlags = 0x0000_0010;
     const VK_SAMPLE_COUNT_1_BIT: VkFlags = 0x1;
@@ -75,9 +77,24 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
     else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
+    // 1D and 3D optimal images of an ordinary format are REQUIRED combinations, not optional ones, and
+    // `create_image_geometry` already materializes both — 3D directly, 1D as a `TextureDim::D1`. Refusing
+    // them here was the mirror of the format under-advertisement: a capability the driver has and does
+    // not admit to, which a careful caller therefore never reaches. Compressed and depth/stencil formats
+    // are the documented exceptions; both are optional at 1D and 3D and stay refused, because the
+    // executor's 1D path forbids the mip chain a block format needs.
+    let ordinary = !Format(format as u32).is_depth()
+        && Format(format as u32)
+            .wire()
+            .is_some_and(|w| w.block_geometry().is_none());
+    let type_supported = match image_type {
+        VK_IMAGE_TYPE_2D => true,
+        VK_IMAGE_TYPE_1D | VK_IMAGE_TYPE_3D => ordinary,
+        _ => false,
+    };
     if !StateStore::with(|state| state.advertises(Format(format as u32)))
         || !Format(format as u32).is_image_supported()
-        || image_type != VK_IMAGE_TYPE_2D
+        || !type_supported
         || tiling != VK_IMAGE_TILING_OPTIMAL
     {
         // "If the combination of parameters ... is not supported by the implementation for use in
@@ -100,22 +117,54 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
     // believes it can multisample a sampled-only or cube-compatible image finds out somewhere downstream
     // that cannot name this query as the cause.
     let attachment = format_feature::COLOR_ATTACHMENT | format_feature::DEPTH_STENCIL_ATTACHMENT;
-    let multisamplable = flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT == 0
+    let multisamplable = image_type == VK_IMAGE_TYPE_2D
+        && flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT == 0
         && Format(format as u32).features().optimal_tiling & attachment != 0;
     let sample_counts = if multisamplable {
         VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_4_BIT
     } else {
         VK_SAMPLE_COUNT_1_BIT
     };
-    let dim = StateStore::with(|s| s.physical_device().limits.max_image_dimension_2d);
+    let (dim, dim_3d) = StateStore::with(|s| {
+        let limits = s.physical_device().limits;
+        (limits.max_image_dimension_2d, limits.max_image_dimension_3d)
+    });
+    // Each type reports the extent it can actually have: a 1D image is a row, so its height and depth
+    // are 1; a 2D image has no depth; only a 3D image has all three, and it has no array layers. A 1D
+    // image also carries no mip chain and no multisampling — the executor's 1D path forbids both.
+    let (max_extent, max_mip_levels, max_array_layers) = match image_type {
+        VK_IMAGE_TYPE_1D => (
+            VkExtent3D {
+                width: dim,
+                height: 1,
+                depth: 1,
+            },
+            1,
+            2048,
+        ),
+        VK_IMAGE_TYPE_3D => (
+            VkExtent3D {
+                width: dim_3d,
+                height: dim_3d,
+                depth: dim_3d,
+            },
+            1 + (dim_3d as f32).log2() as u32,
+            1,
+        ),
+        _ => (
+            VkExtent3D {
+                width: dim,
+                height: dim,
+                depth: 1,
+            },
+            1 + (dim as f32).log2() as u32,
+            2048,
+        ),
+    };
     *out = VkImageFormatProperties {
-        max_extent: VkExtent3D {
-            width: dim,
-            height: dim,
-            depth: 1,
-        },
-        max_mip_levels: 1 + (dim as f32).log2() as u32,
-        max_array_layers: 2048,
+        max_extent,
+        max_mip_levels,
+        max_array_layers,
         sample_counts,
         max_resource_size: 1 << 31, // 2 GiB (the executor residency budget)
     };
