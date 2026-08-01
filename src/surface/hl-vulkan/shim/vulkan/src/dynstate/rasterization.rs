@@ -81,8 +81,11 @@ pub extern "C" fn vkCmdSetDepthBias2EXT(
         return;
     };
     ShimState::with_device(|d| {
-        let _ =
+        // See `vkCmdSetViewport`: a recording command's result reaches the application only through
+        // the latch, so discarding it hides a command issued outside a recording command buffer.
+        let recorded =
             record::cmd_set_depth_bias(d, cb, info.constant_factor, info.clamp, info.slope_factor);
+        d.latch(cb, recorded);
     });
 }
 

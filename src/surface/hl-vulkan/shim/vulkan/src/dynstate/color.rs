@@ -84,8 +84,13 @@ pub extern "C" fn vkCmdSetColorWriteEnableEXT(
     }
     .to_vec();
     ShimState::with_device(|d| {
-        let _ =
+        // This one had a second, wholly silent refusal behind it: `set_dynamic_attachment_array`
+        // rejects an attachment span beyond `maxColorAttachments` — a truthful usage error, added to
+        // stop a hostile `first` resizing the state vector to gigabytes — and the caller was told
+        // nothing about it at all.
+        let recorded =
             record::set_dynamic_attachment_array(d, cb, 0, &vals, |ds| &mut ds.color_write_enables);
+        d.latch(cb, recorded);
     });
 }
 

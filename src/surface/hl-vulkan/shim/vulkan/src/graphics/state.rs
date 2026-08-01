@@ -18,8 +18,12 @@ pub extern "C" fn vkCmdSetViewport(
     }
     let v = unsafe { &*(p_viewports as *const VkViewport) };
     ShimState::with_device(|d| {
-        let _ =
+        // Latched like every other recording command: the only failure here is `require_recording`,
+        // which means the application issued a command outside a recording command buffer, and that
+        // is precisely what `vkEndCommandBuffer` exists to report.
+        let recorded =
             record::cmd_set_viewport(d, cb, v.x, v.y, v.width, v.height, v.min_depth, v.max_depth);
+        d.latch(cb, recorded);
     });
 }
 

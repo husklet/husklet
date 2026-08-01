@@ -130,8 +130,21 @@ pub const VK_PRESENT_MODE_FIFO_KHR: i32 = 2;
 pub const SURFACE_TRANSFORM_IDENTITY_BIT: u32 = 0x0000_0001;
 /// `VkCompositeAlphaFlagBitsKHR::OPAQUE`.
 pub const COMPOSITE_ALPHA_OPAQUE_BIT: u32 = 0x0000_0001;
-/// `VkImageUsageFlagBits` a swapchain image supports: COLOR_ATTACHMENT | TRANSFER_SRC | TRANSFER_DST.
-pub const SURFACE_IMAGE_USAGE: u32 = 0x0000_0010 | 0x0000_0001 | 0x0000_0002;
+/// `VkImageUsageFlagBits` a swapchain image supports.
+///
+/// THE single statement of that capability. `vkGetPhysicalDeviceSurfaceCapabilitiesKHR` reports it and
+/// [`crate::service::present::create_swapchain`] derives the presentable images' IR usage from it
+/// through the same [`crate::model::memory::ImageUsage`] translation `vkCreateImage` uses, so the
+/// advertisement and the images cannot drift apart.
+///
+/// They did drift. This constant promised TRANSFER_DST while `create_swapchain` independently wrote
+/// `RENDER_TARGET | COPY_SRC`, so every transfer into a presentable image — `vkCmdClearColorImage`,
+/// `vkCmdCopyBufferToImage`, `vkCmdCopyImage`, `vkCmdBlitImage` — was refused for a usage the surface
+/// had told the application it supported. Spelled with the named bits rather than literals for the
+/// same reason: a second spelling is a second place to disagree.
+pub const SURFACE_IMAGE_USAGE: u32 = crate::model::memory::vk_image_usage::COLOR_ATTACHMENT
+    | crate::model::memory::vk_image_usage::TRANSFER_SRC
+    | crate::model::memory::vk_image_usage::TRANSFER_DST;
 /// The special "surface decides" current extent, both dimensions `u32::MAX` (the app must pick).
 pub const CURRENT_EXTENT_UNDEFINED: (u32, u32) = (u32::MAX, u32::MAX);
 

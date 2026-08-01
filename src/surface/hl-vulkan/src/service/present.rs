@@ -2,8 +2,8 @@
 //!
 //! Ported from `hl-shim-vk/src/wsi.rs`. A surface lowers to one [`Cmd::CreateSurface`] (its IR surface
 //! id is what a present targets). A swapchain's presentable images are REAL hl-GPU render-target
-//! textures: [`create_swapchain`] emits one [`Cmd::CreateTexture`] per image (`RENDER_TARGET | COPY_SRC`,
-//! sized/formatted from the surface) and mints a `VkImage` for each, so the app records rendering into an
+//! textures: [`create_swapchain`] emits one [`Cmd::CreateTexture`] per image whose usage is derived from
+//! the surface's advertised [`crate::model::queue::SURFACE_IMAGE_USAGE`] (sized/formatted from the surface) and mints a `VkImage` for each, so the app records rendering into an
 //! acquired image exactly as into any [`crate::service::create::create_image`] target. A present lowers
 //! to one [`Cmd::Present`] naming the surface + the presented image's real texture id; because that
 //! texture is `COPY_SRC`-able, [`read_presented_image`] can copy it back to host pixels over the sink —
@@ -23,7 +23,7 @@ use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::descriptor::{
     BufferDesc, FrameSerial, SurfaceDesc, SurfaceToken, TextureDesc,
 };
-use hl_gpu::protocol::model::enums::{buffer_usage, texture_usage, TextureDim};
+use hl_gpu::protocol::model::enums::{buffer_usage, TextureDim};
 use hl_gpu::{BufferId, Cmd, CommandBuffer, CommandSink, GpuError, Result};
 
 // ---- WSI physical-device surface queries (modeled, physical-device-level — no Device/sink) --------
@@ -127,8 +127,8 @@ pub fn create_surface(
 }
 
 /// `vkCreateSwapchainKHR` — create `image_count` REAL presentable images against `surface`. Each image is
-/// a `Cmd::CreateTexture` render target (`RENDER_TARGET | COPY_SRC`, sized/formatted from the surface) with
-/// its own `VkImage` handle registered in `dev.images`, so the app records rendering into an acquired
+/// a `Cmd::CreateTexture` whose usage is DERIVED from [`SURFACE_IMAGE_USAGE`] (sized/formatted from the
+/// surface), with its own `VkImage` handle registered in `dev.images`, so the app records rendering into an acquired
 /// image exactly as into any other render target, a present names its texture, and its contents read back
 /// over the sink. Errors on an unknown surface. (The surface's `CreateSurface` already went out.)
 pub fn create_swapchain(
@@ -143,10 +143,32 @@ pub fn create_swapchain(
         ))?;
         (s.width, s.height, s.format)
     };
-    // A presentable image must be renderable (RENDER_TARGET, the app draws into it) AND copy-source-able
-    // (COPY_SRC, so its presented contents read back to host pixels) — matching GL's default target
-    // (`RENDER_TARGET | PRESENT | COPY_SRC`).
-    let usage = texture_usage::RENDER_TARGET | texture_usage::COPY_SRC;
+    // DERIVED from what the surface advertises, through the same `VkImageUsageFlags` translation
+    // `vkCreateImage` uses — not stated again here. `SURFACE_IMAGE_USAGE` is the one place that decides
+    // what a presentable image supports, and `vkGetPhysicalDeviceSurfaceCapabilitiesKHR` reports the
+    // same constant, so the advertisement and the images are the same fact rather than two facts that
+    // happened to agree.
+    //
+    // They did not agree. This line used to read `RENDER_TARGET | COPY_SRC` while the surface promised
+    // TRANSFER_DST as well, so every transfer INTO a presentable image was refused for a capability the
+    // driver had claimed. A `vkCmdClearColorImage` onto an acquired swapchain image — vkmark's `clear`
+    // scene, and the first thing any Vulkan client does — was rejected on `missing COPY_DST`.
+    //
+    // Nothing downstream needed widening for this, which was checked rather than assumed: the four
+    // record paths that gate on `COPY_DST` for an image (clear, buffer→image, image→image, blit) are all
+    // served by the bit alone, and the executor already grants `wgpu::TextureUsages::COPY_DST` to every
+    // single-sampled texture irrespective of the IR usage bits (`hl-gpu-wgpu/src/texture.rs`). The real
+    // Metal texture behind a presentable image has always been copy-writable; only this bookkeeping said
+    // otherwise.
+    //
+    // The whole advertised set is granted rather than the application's `VkSwapchainCreateInfoKHR::
+    // imageUsage`, because presentation itself needs bits the application never asks for: COPY_SRC is
+    // what `read_presented_image` copies through, and RENDER_TARGET is what a present names. A union
+    // with the request would therefore always be taken. Granting the advertised set means the driver
+    // accepts more than an application requested, which no conformant application can observe or rely
+    // on, and never less than it advertised — the safe direction. The unsafe direction, a request for
+    // usage the surface does NOT advertise, is refused at the entry point.
+    let usage = crate::model::memory::ImageUsage(SURFACE_IMAGE_USAGE).wire();
     let mut images = Vec::with_capacity(image_count.max(1) as usize);
     for _ in 0..image_count.max(1) {
         let ir_texture_id = dev.alloc_ir();
@@ -178,7 +200,9 @@ pub fn create_swapchain(
                 format,
                 usage,
                 sample_count: 1,
-                is_render_target: true,
+                // Derived too, from the same constant, for the same reason.
+                is_render_target: crate::model::memory::ImageUsage(SURFACE_IMAGE_USAGE)
+                    .is_render_target(),
             },
         );
         images.push(SwapImage {
