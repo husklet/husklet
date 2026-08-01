@@ -188,8 +188,16 @@ pub mod compare {
     pub const GREATER_EQUAL: u32 = 6;
     pub const ALWAYS: u32 = 7;
 
-    /// Evaluate `frag <compare> stored`. An unrecognized opaque value is treated as `ALWAYS` so an
-    /// honest bring-up never hard-fails a draw on a compare code it does not model.
+    /// Evaluate `frag <compare> stored`.
+    ///
+    /// The trailing arm is DEFENSIVE, not a policy. It used to be documented as deliberate leniency — "an
+    /// unrecognized value is treated as `ALWAYS` so an honest bring-up never hard-fails" — and that was a
+    /// claim about a path nothing prevented from being taken: `depth_compare` and the stencil face
+    /// compares were validated NOWHERE, so a guest code above `ALWAYS` silently disabled the depth test on
+    /// this executor and on the wgpu one alike, and the draw reported success. `validate` now rejects any
+    /// code above `ALWAYS` on `CreateRenderPipeline`, exactly as it always did for a sampler's compare, so
+    /// no such value reaches here from the wire. The arm stays because this is a `u32` in a `pub fn` an
+    /// in-process caller can reach directly.
     pub fn passes(compare: u32, frag: f32, stored: f32) -> bool {
         match compare {
             NEVER => false,
@@ -207,9 +215,9 @@ pub mod compare {
 /// Stencil operations. A [`super::descriptor::StencilFaceState`]'s `fail_op` / `depth_fail_op` / `pass_op`
 /// carry one of these codes on the wire — this protocol's own numbering, mirroring how [`compare`] numbers
 /// the compare functions (Vulkan `VkStencilOp` ordering), not a WebGPU enum. The executor maps each to the
-/// matching `wgpu::StencilOperation`; an
-/// unmodeled value falls back to `KEEP` so an honest bring-up never hard-fails a draw on a code it does not
-/// model (the stencil analogue of `compare::passes`'s `ALWAYS` fallback).
+/// matching `wgpu::StencilOperation`. A code above `DECREMENT_WRAP` is rejected by `validate` on
+/// `CreateRenderPipeline`; the `KEEP` fallback in [`stencil_op::apply`] is defensive rather than a
+/// deliberate leniency (see [`compare::passes`], which carried the same false claim).
 pub mod stencil_op {
     pub const KEEP: u32 = 0;
     pub const ZERO: u32 = 1;
@@ -224,9 +232,9 @@ pub mod stencil_op {
     /// `reference`, for the oracle's 8-bit (`Depth24PlusStencil8`) stencil plane — matching
     /// `wgpu::StencilOperation` byte-for-byte. `*_CLAMP` clamps to the `[0, 255]` representable range of the
     /// 8-bit buffer; `*_WRAP` wraps modulo 256; `INVERT` flips all eight bits. An unmodeled code falls back
-    /// to `KEEP` (the stencil analogue of [`super::compare::passes`]'s `ALWAYS` fallback). The write mask is
+    /// to `KEEP`, which is DEFENSIVE — `validate` rejects such a code on `CreateRenderPipeline`. The write mask is
     /// applied by the caller (only bits set in `stencilWriteMask` are updated), so this returns the raw
-    /// pre-mask candidate value.
+    /// pre-mask candidate value. `validate` rejects an out-of-range op before it reaches here.
     pub fn apply(op: u32, stored: u8, reference: u8) -> u8 {
         match op {
             ZERO => 0,

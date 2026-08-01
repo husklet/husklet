@@ -138,9 +138,13 @@ fn storage_format(format: naga::StorageFormat) -> wgpu::TextureFormat {
 }
 
 /// Map the protocol's opaque WebGPU depth-compare code (carried through the neutral [`compare`] constants,
-/// Vulkan `VkCompareOp` ordering) to a `wgpu::CompareFunction`. An unrecognized code is treated as
-/// `Always` — matching the CPU oracle's `compare::passes`, which never hard-fails a draw on a code it does
-/// not model.
+/// Vulkan `VkCompareOp` ordering) to a `wgpu::CompareFunction`.
+///
+/// The trailing `Always` is DEFENSIVE. It was previously documented as matching the CPU oracle's
+/// deliberate leniency, but neither was deliberate and neither was unreachable: nothing validated
+/// `depth_compare`, so an unrecognised code silently turned the depth test off on both executors and the
+/// draw reported success. The runtime's `validate` now rejects any code above `ALWAYS` before a pipeline
+/// is created, so only `compare::ALWAYS` reaches this arm from the wire.
 pub(super) struct CompareFunction(pub(super) u32);
 
 impl CompareFunction {

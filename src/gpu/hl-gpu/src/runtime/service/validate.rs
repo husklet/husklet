@@ -8,7 +8,7 @@
 
 use crate::protocol::model::capability::shader_payload;
 use crate::protocol::model::command::{Cmd, Enc, ShaderPayloadKind};
-use crate::protocol::model::enums::compare;
+use crate::protocol::model::enums::{compare, stencil_op};
 use crate::protocol::model::error::{GpuError, Result};
 use crate::runtime::model::session::Limits;
 
@@ -110,6 +110,29 @@ pub fn validate(limits: &Limits, frame_bytes: usize, cmds: &[Cmd]) -> Result<()>
             }
             Cmd::CreateBindGroup(_, d) if d.set >= caps.max_bind_groups => {
                 return Err(GpuError::ResourceLimit("bind groups"));
+            }
+            Cmd::CreateRenderPipeline(_, descriptor) => {
+                // Depth/stencil comparisons and stencil ops are opaque `u32` codes, and BOTH executors
+                // absorbed an unrecognised one into a permissive answer: the oracle's `compare::passes`
+                // returned true and the wgpu path mapped it to `Always`, so a depth test the guest asked
+                // for was silently not performed and the draw reported success. The sampler's compare has
+                // been range-checked here all along — same constants, twenty lines up — and nothing
+                // distinguished the two but oversight.
+                if let Some(depth) = &descriptor.depth {
+                    if depth.depth_compare > compare::ALWAYS {
+                        return Err(GpuError::Invalid("depth compare"));
+                    }
+                    for face in [&depth.stencil_front, &depth.stencil_back] {
+                        if face.compare > compare::ALWAYS {
+                            return Err(GpuError::Invalid("stencil compare"));
+                        }
+                        for op in [face.fail_op, face.depth_fail_op, face.pass_op] {
+                            if op > stencil_op::DECREMENT_WRAP {
+                                return Err(GpuError::Invalid("stencil operation"));
+                            }
+                        }
+                    }
+                }
             }
             Cmd::CreateRenderPipelineLayout(_, _, layout, _)
             | Cmd::CreateComputePipelineLayout(_, _, layout) => {
