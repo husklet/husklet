@@ -120,18 +120,32 @@ fn failed_completion(
         // Report the SPAN as well as the count. A count alone cannot distinguish 100 failures in 100
         // frames (a dead window) from 100 over six minutes (an intermittent one under 1%), and stating
         // only the count led a reader straight to the first conclusion when the data said the second.
+        // The reading advice differs by OUTCOME, and giving the retryable one to a terminal cause is
+        // actively misleading. For a retryable failure the rate is the question: a count tracking the
+        // frame rate is a window that never composites, a count far below it is intermittent and the
+        // frame is re-driven. For a TERMINAL failure the rate is beside the point — the first
+        // occurrence already retired that surface's frame and dropped its callbacks, so "only
+        // intermittent" is not available as a conclusion. An earlier version of this line told the
+        // reader a count of one was "a transient it recovers from" for a cause that recovers from
+        // nothing; that text is gone, but inviting the same division for both outcomes leaves the same
+        // wrong conclusion one step further away.
         hl_log::hl_log!(
             hl_log::tag::PRESENT,
             hl_log::Level::Error,
-            "present {} surface={} submission={} cause={} count={} over_ms={} — divide before \
-             concluding: a count that tracks the frame rate is a window that never composites, a count \
-             far below it is intermittent",
+            "present {} surface={} submission={} cause={} count={} over_ms={} — {}",
             if retryable { "retryable" } else { "terminal" },
             surface.0,
             id.0,
             cause.name(),
             seen.count,
-            seen.since.as_millis()
+            seen.since.as_millis(),
+            if retryable {
+                "divide before concluding: a count that tracks the frame rate is a window that never \
+                 composites, a count far below it is intermittent and the frame is re-driven"
+            } else {
+                "TERMINAL: this surface's frame was retired and its callbacks dropped. The count is the \
+                 number of frames lost, not a rate to be excused — the first one already cost a frame"
+            }
         );
     }
     PresentationCompletion { id, outcome }
