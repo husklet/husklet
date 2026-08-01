@@ -478,6 +478,11 @@ fn colour_renderable(internal_format: u32) -> bool {
             | GL_RGB10_A2UI
             | GL_SRGB8_ALPHA8
             | GL_BGRA8_EXT
+            // The unsized spelling too: the extension we advertise defines BGRA's internal format as the
+            // unsized constant, so a browser's raster tile declares 0x80E1 and never 0x93A1. Listing only
+            // the sized one made every such attachment incomplete, which cost a browser its whole raster
+            // path — the surface never initialised and every raster command after it was refused.
+            | GL_BGRA_EXT
             | GL_R8UI
             | GL_R8I
             | GL_R16UI

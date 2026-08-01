@@ -317,7 +317,11 @@ impl TryFrom<InternalFormat> for TextureFormat {
             }
             GL_RGBA16UI | GL_RGBA16I | GL_RGBA32UI | GL_RGBA32I => TextureFormat::Rgba8Unorm,
             GL_RGB32F => TextureFormat::Rgba32Float,
-            GL_BGRA8_EXT => TextureFormat::Bgra8Unorm,
+            // Both spellings, because the extension that offers BGRA defines the UNSIZED one as the
+            // internal format: `EXT_texture_format_BGRA8888` requires `internalformat == format ==
+            // GL_BGRA_EXT`, so an application following the extension we advertise never names the sized
+            // constant at all. Accepting only the sized spelling advertised a format and then refused it.
+            GL_BGRA8_EXT | GL_BGRA_EXT => TextureFormat::Bgra8Unorm,
             GL_R8 => TextureFormat::R8Unorm,
             GL_RG8 => TextureFormat::Rg8Unorm,
             // Every FLOAT format lands on a float plane, widening to more channels where the IR has no
