@@ -3,5 +3,6 @@
 //! Pure data — the workflows that mutate it live in [`super::service`].
 
 pub mod resources;
+pub mod sharing;
 pub mod session;
 pub mod timeline;
