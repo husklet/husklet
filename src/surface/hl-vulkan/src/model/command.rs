@@ -9,6 +9,7 @@ use super::pipeline::PipelineKind;
 use super::sync::DeferredOp;
 use crate::VkQueryPool;
 use hl_gpu::protocol::model::command::Enc;
+use hl_gpu::protocol::model::descriptor::{ColorAttachment, DepthAttachment};
 use hl_gpu::{GpuError, Result};
 
 /// The Vulkan command-buffer lifecycle state (spec §6). Ported from MoltenVK's flag model:
@@ -203,6 +204,11 @@ pub struct CmdBufRec {
     /// The IR texture id of the active render pass's color target (set at `vkCmdBeginRenderPass`) — the
     /// target `vkCmdClearAttachments` clears while inside the pass.
     pub active_render_texture: Option<u32>,
+    /// The attachments of the render pass currently open, kept so a mid-pass `vkCmdClearAttachments` can
+    /// close the pass, fill its rectangle, and reopen it LOADING what was already drawn. The executor
+    /// refuses a `ClearRect` between `BeginRenderPass` and `EndRenderPass`, so the clear has to become a
+    /// pass boundary rather than an op inside one.
+    pub active_pass: Option<(Vec<ColorAttachment>, Option<DepthAttachment>)>,
     /// The `(pool, query)` opened by `vkCmdBeginQuery` (spec §17.4: at most one active query of a type).
     /// `vkCmdEndQuery` resolves the matching slot.
     pub active_query: Option<(VkQueryPool, u32)>,
@@ -296,6 +302,7 @@ impl CmdBufRec {
         self.pending_bind_groups.clear();
         self.in_render_pass = false;
         self.active_render_texture = None;
+        self.active_pass = None;
         self.active_query = None;
         self.occlusion_accum = None;
         self.render_extent = (0, 0);

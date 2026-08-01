@@ -20,7 +20,9 @@ use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindResource, Extent3d, FrameSerial, Origin3d, PipelineBinding, SurfaceToken,
     TextureSubresource, VertexAttr, VertexLayout,
 };
-use hl_gpu::protocol::model::enums::{buffer_usage, Filter, IndexFormat, TextureFormat, Topology};
+use hl_gpu::protocol::model::enums::{
+    buffer_usage, Filter, IndexFormat, LoadOp, TextureFormat, Topology,
+};
 use hl_gpu::{Cmd, FenceId, GpuError, RecordingSink, ShaderPayloadKind};
 
 /// A slot-0 vertex layout carrying interleaved position (offset 0) + color (offset 8), stride 24 — the

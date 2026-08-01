@@ -363,6 +363,13 @@ fn clear_depth_stencil_image_lowers_to_depth_clear_render_pass() {
     assert!(record::cmd_clear_depth_stencil_image(&mut d, cb, 0xdead, 0.0, 0, false).is_err());
 }
 
+/// `vkCmdClearAttachments` must lower to a PASS BOUNDARY, not to a `ClearRect` recorded inside the pass.
+/// The executor refuses a transfer-shaped op between `BeginRenderPass` and `EndRenderPass` — it used to
+/// drop them silently — so an op emitted there would fail the whole submit rather than clear anything.
+///
+/// The reopened pass must LOAD. Reopening with the original load operations would re-run a
+/// `LoadOp::Clear` and erase everything drawn before the clear, which is the failure this shape is most
+/// likely to regress into.
 #[test]
 fn clear_attachments_lowers_to_clear_rect_on_active_target() {
     let mut d = dev();
@@ -395,6 +402,7 @@ fn clear_attachments_lowers_to_clear_rect_on_active_target() {
                 }],
                 depth: None,
             },
+            Enc::EndRenderPass,
             Enc::ClearRect {
                 texture: ir,
                 x: 8,
@@ -405,6 +413,15 @@ fn clear_attachments_lowers_to_clear_rect_on_active_target() {
                 base_array_layer: 0,
                 layer_count: 1,
                 mip_level: 0,
+            },
+            Enc::BeginRenderPass {
+                color: vec![hl_gpu::protocol::model::descriptor::ColorAttachment {
+                    texture: ir,
+                    load: hl_gpu::protocol::model::enums::LoadOp::Load,
+                    clear: [0.0, 0.0, 0.0, 1.0],
+                    store: true,
+                }],
+                depth: None,
             },
             Enc::EndRenderPass,
         ]
@@ -453,4 +470,92 @@ fn fill_and_update_buffer_flush_as_write_buffer_at_submit() {
     d.begin_command_buffer(cb2, false).unwrap();
     assert!(record::cmd_fill_buffer(&mut d, cb2, vbuf, 0, 8, 0).is_err());
     assert!(record::cmd_fill_buffer(&mut d, cb2, buf, 2, 8, 0).is_err());
+}
+
+/// A pass opened with `LoadOp::Clear` and then interrupted by `vkCmdClearAttachments` must reopen
+/// LOADING. Reopening with the original `Clear` would wipe everything drawn between the pass start and
+/// the attachment clear — the whole reason the clear was scissored in the first place.
+///
+/// A depth attachment is present so the depth load operation is checked too: it is a separate field and
+/// carrying `Clear` through on it would silently reset the depth buffer mid-pass.
+#[test]
+fn an_interrupted_clearing_pass_reopens_loading_on_every_attachment() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let target = create::create_image(
+        &mut d,
+        &mut sink,
+        32,
+        32,
+        vk_format::R8G8B8A8_UNORM,
+        vk_image_usage::COLOR_ATTACHMENT,
+        1,
+    )
+    .unwrap();
+    let depth = create::create_image(
+        &mut d,
+        &mut sink,
+        32,
+        32,
+        vk_format::D32_SFLOAT,
+        vk_image_usage::DEPTH_STENCIL_ATTACHMENT,
+        1,
+    )
+    .unwrap();
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_begin_render_pass(
+            d,
+            cb,
+            target,
+            [0.0, 0.0, 1.0, 1.0],
+            // Open CLEARING, on both planes.
+            true,
+            Some(record::RenderingDepthAttachment {
+                image: depth,
+                load_clear: true,
+                clear_depth: 1.0,
+            }),
+        )
+        .unwrap();
+        record::cmd_clear_attachment_rect(d, cb, 0, 0, 8, 8, [1.0, 0.0, 0.0, 1.0]).unwrap();
+        d.end_render_pass(cb).unwrap();
+    });
+
+    let loads: Vec<(LoadOp, Option<LoadOp>)> = enc
+        .iter()
+        .filter_map(|e| match e {
+            Enc::BeginRenderPass { color, depth } => {
+                Some((color[0].load, depth.as_ref().map(|dep| dep.load)))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        loads.len(),
+        2,
+        "the clear must split the pass in two: {enc:?}"
+    );
+    assert_eq!(
+        loads[0],
+        (LoadOp::Clear, Some(LoadOp::Clear)),
+        "the pass still opens clearing"
+    );
+    assert_eq!(
+        loads[1],
+        (LoadOp::Load, Some(LoadOp::Load)),
+        "the reopened pass must LOAD both planes, or the clear erases the pass so far"
+    );
+    // And the fill lands BETWEEN the two passes, never inside one.
+    let rect = enc
+        .iter()
+        .position(|e| matches!(e, Enc::ClearRect { .. }))
+        .expect("a ClearRect");
+    let ends = enc
+        .iter()
+        .position(|e| matches!(e, Enc::EndRenderPass))
+        .expect("an EndRenderPass");
+    assert!(
+        ends < rect,
+        "the rect fill must be outside the pass, not inside it: {enc:?}"
+    );
 }

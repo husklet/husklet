@@ -45,20 +45,22 @@ pub fn cmd_begin_render_pass(
         None => None,
     };
     let rec = dev.require_recording(cb)?;
+    let color = vec![ColorAttachment {
+        texture,
+        load: if load_clear {
+            LoadOp::Clear
+        } else {
+            LoadOp::Load
+        },
+        clear,
+        store: true,
+    }];
     rec.enc.push(Enc::BeginRenderPass {
-        color: vec![ColorAttachment {
-            texture,
-            load: if load_clear {
-                LoadOp::Clear
-            } else {
-                LoadOp::Load
-            },
-            clear,
-            store: true,
-        }],
-        depth: depth_target,
+        color: color.clone(),
+        depth: depth_target.clone(),
     });
     rec.in_render_pass = true;
+    rec.active_pass = Some((color, depth_target));
     rec.active_render_texture = Some(texture);
     rec.render_extent = extent;
     rec.scissor = None;
@@ -280,10 +282,11 @@ pub fn cmd_begin_rendering(
     let active = color_targets.first().map(|c| c.texture);
     let rec = dev.require_recording(cb)?;
     rec.enc.push(Enc::BeginRenderPass {
-        color: color_targets,
-        depth: depth_target,
+        color: color_targets.clone(),
+        depth: depth_target.clone(),
     });
     rec.in_render_pass = true;
+    rec.active_pass = Some((color_targets, depth_target));
     rec.active_render_texture = active;
     rec.render_extent = extent;
     rec.scissor = None;
@@ -297,6 +300,7 @@ impl Device {
         rec.enc.push(Enc::EndRenderPass);
         rec.in_render_pass = false;
         rec.active_render_texture = None;
+        rec.active_pass = None;
         Ok(())
     }
 }

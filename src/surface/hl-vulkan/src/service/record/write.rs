@@ -1,7 +1,17 @@
 use super::*;
 
-/// `vkCmdClearAttachments` (one color rect) — record a `ClearRect` on the active render pass's color
-/// target. Must be inside a render pass. Ported from `command.rs::vkCmdClearAttachments` (color subset).
+/// `vkCmdClearAttachments` (one color rect) — clear a rectangle of the active render pass's color
+/// target, lowered as a PASS BOUNDARY: end the pass, fill the rectangle, and reopen the pass loading
+/// what was already drawn.
+///
+/// It cannot be a `ClearRect` recorded inside the pass. The executor refuses any transfer-shaped op
+/// between `BeginRenderPass` and `EndRenderPass` — it used to drop them silently, which is worse — so an
+/// op emitted there would fail the whole submit. WebGPU has no scissored clear inside a pass either, so
+/// segmenting is the only lowering that performs the write, and it is the same shape the GL driver uses
+/// for a scissored `glClear`.
+///
+/// The reopened pass LOADS every attachment. Reopening with the original load operations would re-run a
+/// `LoadOp::Clear` and erase everything drawn before the clear.
 pub fn cmd_clear_attachment_rect(
     dev: &mut Device,
     cb: VkCommandBuffer,
@@ -18,6 +28,10 @@ pub fn cmd_clear_attachment_rect(
     let texture = rec.active_render_texture.ok_or(GpuError::Invalid(
         "vkCmdClearAttachments: not inside a render pass",
     ))?;
+    let (color_targets, depth_target) = rec.active_pass.clone().ok_or(GpuError::Invalid(
+        "vkCmdClearAttachments: not inside a render pass",
+    ))?;
+    rec.enc.push(Enc::EndRenderPass);
     rec.enc.push(Enc::ClearRect {
         // A mid-pass attachment clear addresses the render target the pass is bound to, which is already
         // a single resolved subresource — hence the base level and one layer.
@@ -31,6 +45,24 @@ pub fn cmd_clear_attachment_rect(
         h,
         color,
     });
+    let reopened: Vec<ColorAttachment> = color_targets
+        .iter()
+        .map(|attachment| ColorAttachment {
+            load: LoadOp::Load,
+            ..attachment.clone()
+        })
+        .collect();
+    let depth_reopened = depth_target.as_ref().map(|d| DepthAttachment {
+        load: LoadOp::Load,
+        ..d.clone()
+    });
+    rec.enc.push(Enc::BeginRenderPass {
+        color: reopened.clone(),
+        depth: depth_reopened.clone(),
+    });
+    // The pass stays open from the caller's point of view, but its attachments now LOAD — a second clear
+    // in the same pass must not resurrect the original clear operations either.
+    rec.active_pass = Some((reopened, depth_reopened));
     Ok(())
 }
 
