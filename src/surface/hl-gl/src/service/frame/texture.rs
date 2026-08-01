@@ -311,12 +311,15 @@ pub(super) fn lower_textures(
                     format: sampled_format(t.ir_format).to_u32(),
                 }
             });
-            let (tex_ir, needs_upload, ephemeral) = match snapshot
+            // The arm label is produced BY the match rather than re-derived from the same predicates
+            // afterwards: a second copy of this condition could disagree with the branch actually taken,
+            // and the whole point of the label is to be trusted about which one ran.
+            let (tex_ir, needs_upload, ephemeral, arm) = match snapshot
                 .as_ref()
                 .filter(|_| !shared_advanced)
                 .and_then(|snapshot| snapshot.sampled_ir)
             {
-                Some(texture) => (texture, false, false),
+                Some(texture) => (texture, false, false, "snapshot-sampled"),
                 None if t.shared_residency().is_some() => {
                     let (storage, revision, residency) = t.shared_residency().unwrap();
                     let (texture, upload) = ctx.shared_texture_ir(
@@ -329,24 +332,25 @@ pub(super) fn lower_textures(
                         ),
                         residency,
                     )?;
-                    (texture, upload, false)
+                    (texture, upload, false, "shared-residency")
                 }
                 None if live_generation => {
                     let (texture, upload) =
                         ctx.sampled_texture_ir(gl_tex, t.sampled_generation())?;
-                    (texture, upload, false)
+                    (texture, upload, false, "live-generation")
                 }
                 None => match snapshot_key.and_then(|key| snapshots.get(&key).copied()) {
-                    Some(texture) => (texture, false, true),
+                    Some(texture) => (texture, false, true, "snapshot-cache"),
                     None => {
                         let texture = ctx.alloc_texture_ir()?;
                         if let Some(key) = snapshot_key {
                             snapshots.insert(key, texture);
                         }
-                        (texture, true, true)
+                        (texture, true, true, "fresh-allocation")
                     }
                 },
             };
+            let _ = arm;
             let sampler = Pipeline::sampler_desc(&t, &d.samp_objs[unit]);
             let (samp_ir, create_sampler) = ctx.sampler_ir(&sampler)?;
             // The levels the host texture receives, from the EFFECTIVE base downwards — GL's
@@ -368,11 +372,23 @@ pub(super) fn lower_textures(
                 use std::sync::atomic::{AtomicUsize, Ordering};
                 static BINDS: AtomicUsize = AtomicUsize::new(0);
                 if BINDS.fetch_add(1, Ordering::Relaxed) < 12 {
+                    // The inputs the arm was chosen FROM, beside the arm. `needs_upload=true` has three
+                    // different causes wearing one symptom -- a shadow that is stale, one that was never
+                    // written, and a path that never consults residency at all -- and only the arm plus
+                    // these inputs tell them apart. `shadow_nonzero` is the base rate in miniature: a
+                    // zero shadow means nothing without a texture in the same run that has one.
                     hl_log::hl_error!(
                         hl_log::tag::GL,
-                        "texbind gl_tex={gl_tex} texture={tex_ir} needs_upload={needs_upload} \
-                         ephemeral={ephemeral} shadow_bytes={} {}x{}",
+                        "texbind gl_tex={gl_tex} texture={tex_ir} arm={arm} \
+                         needs_upload={needs_upload} ephemeral={ephemeral} \
+                         shadow_bytes={} shadow_nonzero={} generation={:?} shared_residency={} \
+                         live_generation={live_generation} shared_advanced={shared_advanced} \
+                         snapshot={} {}x{}",
                         base_data.len(),
+                        base_data.iter().any(|byte| *byte != 0),
+                        t.sampled_generation(),
+                        t.shared_residency().is_some(),
+                        snapshot.is_some(),
                         base_w,
                         base_h
                     );
