@@ -988,6 +988,17 @@ Scope a blocker to the layer you actually measured. A failed package fetch insid
 "host egress is down"; the host had working egress the whole time and only the guest workspace did not.
 The observation was real and the name would have sent the next person to the wrong layer.
 
+When you widen what the driver advertises, enumerate every path that must serve the widened set before
+shipping it. A format ungate moved seven hundred and eighty-three cases from honestly declined to running
+and failing, because image creation and the format query both learned a new image type and the view path
+did not — three of four paths agreed, and the fourth turned refusals into failures. A capability claimed
+and not honoured is worse than one never made.
+
+A code path reachable only from a running system should be assumed untested until it has been made
+testable. Reverting one such arm broke no test at all, which is precisely how the arm came to be missing in
+the first place. Extracting it far enough to test — with the pre-existing arms as the control proving the
+extraction moved the logic rather than rewriting it — is what makes a green suite mean something.
+
 A guest binds the payload staged into its workspace, not the bundle on the host. Hashing the bundle at run
 time is truthful about the bundle and blind to what the guest loaded: a workspace that failed to restart
 keeps what it was given. Of seventy-four runs in one session, twenty-nine loaded a driver up to twelve
