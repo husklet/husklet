@@ -77,12 +77,15 @@ fn render_pipeline_attachment_format_mismatch_is_invalid() {
 }
 
 #[test]
-fn copy_texture_to_texture_between_incompatible_formats_converts_not_rejects() {
+fn copy_texture_to_texture_across_a_texel_size_change_is_refused_cleanly() {
     let mut g = exec();
-    // R8 (1 byte/texel) → Rgba8 (4 bytes/texel): DIFFERENT texel layouts. GL permits this as a CONVERTING
-    // copy (the red channel expands to (R,0,0,1)); the executor now routes a format mismatch through a
-    // converting blit instead of rejecting it (previously `Invalid("… incompatible formats")`). Prove it
-    // SUCCEEDS and leaves the executor healthy — the exact-conversion pixel checks live in `t2t_convert.rs`.
+    // R8 (1 byte/texel) → Rgba8 (4 bytes/texel): a texel-SIZE change, which is not a copy under any
+    // reading. This asserted the opposite — that the executor routes a format mismatch through a
+    // converting blit — and that was the ambiguity itself: the same command reinterpreted on the oracle
+    // and converted here, giving different pixels. The operation has since been split, conversion lives
+    // in `BlitTexture`, and a copy reinterprets on both backends under one rule. What this file cares
+    // about is unchanged: the refusal must be a clean typed error that leaves the executor healthy,
+    // never a panic or a wedged device.
     let mut s = session(&g);
     let r = std::panic::catch_unwind(AssertUnwindSafe(|| {
         hl_gpu::runtime::submit(
@@ -112,12 +115,15 @@ fn copy_texture_to_texture_between_incompatible_formats_converts_not_rejects() {
         )
     }));
     match r {
-        Err(_) => panic!("[c2t2t_convert] converting copy PANICKED"),
-        Ok(Err(e)) => panic!("[c2t2t_convert] converting copy must succeed, got {e:?}"),
-        Ok(Ok(_)) => {}
+        Err(_) => panic!("[c2t2t_size] a refused copy PANICKED"),
+        Ok(Ok(_)) => panic!("[c2t2t_size] a texel-size change must not be accepted as a copy"),
+        Ok(Err(e)) => assert!(
+            matches!(e, hl_gpu::GpuError::Invalid(_)),
+            "[c2t2t_size] refused as invalid input, got {e:?}"
+        ),
     }
     drop(s);
-    assert_survives(&mut g, "c2t2t_convert");
+    assert_survives(&mut g, "c2t2t_size");
 }
 
 #[test]

@@ -1269,23 +1269,18 @@ fn an_integer_blit_is_refused_and_says_whose_fault_it_is() {
     }
 }
 
-/// `vkCmdCopyImage` requires IDENTICAL formats, which is stricter than Vulkan and deliberately so.
+/// `vkCmdCopyImage` accepts SIZE-COMPATIBLE formats, and refuses a texel-size change.
 ///
-/// The specification asks only for size-compatible formats, because a copy reinterprets: RGBA8 into BGRA8
-/// moves four bytes unchanged and reads back channel-swapped. This surface could express that — I relaxed
-/// it to exactly that, having measured the executor ACCEPTING such a copy — and it was wrong, because
-/// "accepted without error" is not "produced the right bytes" and I did not check the second thing.
+/// The specification's rule, expressible at last. This surface demanded identical formats; I relaxed it
+/// once on the evidence that the executor ACCEPTED such a copy, which was not evidence — accepted without
+/// error is not produced the right bytes — and a differential program caught the two backends producing
+/// different pixels for one command, 133 against 39 in the first channel. So it was restored, with the
+/// reason recorded, until the IR operation could be split.
 ///
-/// A differential program written to pin the relaxed behaviour immediately caught it: the two backends
-/// produce DIFFERENT pixels for one command. `Enc::CopyTextureToTexture` is reinterpreted by the software
-/// oracle, which moves the bytes, and converted by the wgpu executor, which deliberately routes a
-/// mismatched pair through a blit so GL's converting copy paths work. A Vulkan copy must reinterpret, so
-/// it cannot ride an operation that might convert.
-///
-/// This test therefore pins the RESTRICTION and its reason, so the next person to notice that the
-/// specification is looser finds out why before relaxing it again.
+/// It has been: conversion is `BlitTexture`, and `CopyTextureToTexture` reinterprets on both backends
+/// under one rule. A Vulkan copy must reinterpret, and now it can say so.
 #[test]
-fn copy_image_requires_identical_formats_until_the_ir_contract_is_settled() {
+fn copy_image_accepts_size_compatible_formats_and_refuses_a_size_change() {
     let attempt = |src_format: u32, dst_format: u32| {
         let mut d = dev();
         let mut s = RecordingSink::with_full_caps();
@@ -1323,26 +1318,20 @@ fn copy_image_requires_identical_formats_until_the_ir_contract_is_settled() {
         )
     };
 
-    // The control, and the case that must never regress: identical formats copy.
     assert!(
         attempt(vk_format::R8G8B8A8_UNORM, vk_format::R8G8B8A8_UNORM).is_ok(),
-        "the identical-format copy is the whole supported surface and must keep working"
+        "the identical-format copy must never regress"
     );
-    // Size-compatible but different meaning: legal Vulkan, refused here, for the reason above.
     assert!(
-        matches!(
-            attempt(vk_format::R8G8B8A8_UNORM, vk_format::B8G8R8A8_UNORM),
-            Err(GpuError::Invalid(_))
-        ),
-        "a channel-order change would convert on one backend and reinterpret on the other"
+        attempt(vk_format::R8G8B8A8_UNORM, vk_format::B8G8R8A8_UNORM).is_ok(),
+        "four bytes into four bytes is size-compatible, and a copy moves them unchanged"
     );
-    // And a genuine size change stays refused by the same rule.
     assert!(
         matches!(
             attempt(vk_format::R8_UNORM, vk_format::R8G8B8A8_UNORM),
             Err(GpuError::Invalid(_))
         ),
-        "one byte into four is not a copy under any reading"
+        "one byte into four is not a copy under any reading — that is a converting blit"
     );
 }
 

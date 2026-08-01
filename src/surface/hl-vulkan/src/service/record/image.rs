@@ -108,23 +108,19 @@ pub fn cmd_copy_image(
             "vkCmdCopyImage: source and destination layer counts differ",
         ));
     }
-    // STRICTER THAN THE SPECIFICATION, on purpose, and the reason is worth reading before relaxing it.
+    // Vulkan asks for SIZE-COMPATIBLE formats, not identical ones, because a copy reinterprets: RGBA8
+    // into BGRA8 moves four bytes unchanged and reads back channel-swapped. That is now expressible,
+    // because `Enc::CopyTextureToTexture` means exactly one thing.
     //
-    // Vulkan asks only for SIZE-COMPATIBLE formats here, because a copy reinterprets: RGBA8 into BGRA8 is
-    // a legal `vkCmdCopyImage` that moves four bytes unchanged and leaves the channels swapped when read
-    // through the destination's format. This surface could express that — except that the IR operation it
-    // would lower to has no agreed meaning across a format mismatch. `Enc::CopyTextureToTexture` is
-    // REINTERPRETED by the software oracle, which moves the bytes, and CONVERTED by the wgpu executor,
-    // which deliberately routes a mismatched pair through a blit so GL's converting copy paths work. The
-    // two backends therefore produce different pixels for the same command, which a differential program
-    // added while investigating this confirmed at once.
-    //
-    // A Vulkan copy must reinterpret, so it cannot ride an operation that might convert. Requiring
-    // identical formats is the only answer available until that IR contract is settled, and it fails
-    // closed rather than silently channel-swapping an application's image.
-    if src_fmt != dst_fmt {
+    // It briefly was not. I relaxed this once on the evidence that the executor ACCEPTED such a copy,
+    // which was not evidence — accepted without error is not produced the right bytes — and the two
+    // backends turned out to disagree, one reinterpreting and one converting. The operation has since
+    // been split: conversion is `BlitTexture`, which every caller wanting it now emits, and this
+    // operation reinterprets on both backends under the same equal-bytes-per-texel rule the oracle
+    // always applied. Only with that settled is the specification's rule safe to express here.
+    if src_fmt.bytes_per_texel() != dst_fmt.bytes_per_texel() {
         return Err(GpuError::Invalid(
-            "vkCmdCopyImage: source and destination formats differ",
+            "vkCmdCopyImage: source and destination formats are not size-compatible",
         ));
     }
     if src_usage & texture_usage::COPY_SRC == 0 || dst_usage & texture_usage::COPY_DST == 0 {

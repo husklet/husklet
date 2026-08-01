@@ -456,3 +456,77 @@ pub(super) fn gen_blit_cross_format(seed: u64) -> Prog {
         kernel: None,
     }
 }
+
+/// (9) A CROSS-FORMAT `CopyTextureToTexture` between size-compatible formats. EXACT.
+///
+/// This case was uncomparable, and not for want of coverage: the two backends implemented DIFFERENT
+/// OPERATIONS under one name. The oracle moved the bytes; the executor routed a format mismatch through
+/// a converting blit so GL's copy paths would work. A program pinning either would have frozen one of two
+/// defensible readings, so the header recorded it as an unsettled contract instead.
+///
+/// It is settled now by splitting: conversion is `BlitTexture` — with equal extents and a nearest filter
+/// it IS a converting copy — and this operation REINTERPRETS on both backends. `Rgba8Unorm` into
+/// `Bgra8Unorm` therefore moves four bytes unchanged and reads back channel-swapped through the
+/// destination's own format, which is what `vkCmdCopyImage` requires. Exact, because moving bytes has no
+/// rounding to disagree about.
+pub(super) fn gen_copy_cross_format(seed: u64) -> Prog {
+    let n = 2 + (seed % 3) as u32;
+    let src: Vec<u8> = (0..n * n)
+        .flat_map(|i| texel(seed.wrapping_add(i as u64 * 17)))
+        .collect();
+    let cmds = vec![
+        Cmd::CreateTexture(1, tex(n, n)),
+        Cmd::CreateTexture(2, tex_fmt(n, n, TextureFormat::Bgra8Unorm)),
+        Cmd::CreateBuffer(
+            1,
+            buf(
+                src.len() as u64,
+                buffer_usage::COPY_SRC | buffer_usage::COPY_DST,
+            ),
+        ),
+        Cmd::WriteBuffer {
+            id: 1,
+            offset: 0,
+            data: src,
+        },
+        Cmd::Submit(CommandBuffer {
+            encoder: vec![
+                Enc::CopyBufferToTexture {
+                    src: 1,
+                    src_offset: 0,
+                    bytes_per_row: n * 4,
+                    dst: 1,
+                    mip: 0,
+                    width: n,
+                    height: n,
+                },
+                Enc::CopyTextureToTexture {
+                    src: 1,
+                    src_sub: TextureSubresource::base(),
+                    src_origin: Origin3d::default(),
+                    dst: 2,
+                    dst_sub: TextureSubresource::base(),
+                    dst_origin: Origin3d::default(),
+                    extent: Extent3d {
+                        width: n,
+                        height: n,
+                        depth: 1,
+                    },
+                },
+            ],
+            signal: None,
+        }),
+    ];
+    Prog {
+        seed,
+        category: "copy_cross_format",
+        ops: vec!["CopyBufferToTexture", "CopyTextureToTexture"],
+        cmds,
+        read: Read::Tex {
+            id: 2,
+            len: (n * n * 4) as usize,
+        },
+        tol: Tolerance::Unorm(0),
+        kernel: None,
+    }
+}

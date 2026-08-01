@@ -13,7 +13,7 @@ use hl_gpu::protocol::model::command::{CommandBuffer, Enc};
 use hl_gpu::protocol::model::descriptor::{
     ColorAttachment, DepthAttachment, Extent3d, Origin3d, TextureSubresource,
 };
-use hl_gpu::protocol::model::enums::{Filter, IndexFormat, LoadOp, TextureAspect, TextureFormat};
+use hl_gpu::protocol::model::enums::{IndexFormat, LoadOp, TextureAspect, TextureFormat};
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
 use hl_log::tag;

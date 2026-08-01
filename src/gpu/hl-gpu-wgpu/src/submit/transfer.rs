@@ -52,48 +52,39 @@ impl WgpuExecutor {
         dst_origin: &Origin3d,
         extent: &Extent3d,
     ) -> Result<()> {
-        // Copy-compatibility gate. wgpu's raw texel copy — and the CPU-mediated byte copy below, which
-        // reinterprets the source bytes verbatim in the destination — is only correct when the two formats
-        // share an IDENTICAL byte layout: the same wgpu format ignoring an sRGB suffix
-        // (`Rgba8Unorm` ↔ `Rgba8UnormSrgb` differ only in transfer interpretation, not bytes). A copy across
-        // a DIFFERENT layout — a channel-order swap (`Rgba8` ↔ `Bgra8`), a different texel size, or an sRGB
-        // vs linear reinterpretation — is what GL permits through a CONVERTING copy (`glBlitFramebuffer` /
-        // `glCopyTexSubImage2D` / `glCopyImageSubData`): it re-samples the source and RE-ENCODES into the
-        // destination format. A byte copy would silently corrupt (wrong channel order) or, on a size
-        // mismatch, be rejected. So for a format mismatch we route through a CONVERTING BLIT — sample the
-        // source region, render it into the destination region, and let wgpu channel-swap / re-encode on
-        // write — a 1:1 (`src_extent == dst_extent == extent`) blit with NEAREST filter, i.e. an exact
-        // texel remap with no resampling. Copy-COMPATIBLE formats keep the fast raw byte copy below, so
-        // there is no behaviour or perf change for existing apps.
-        let (src_wfmt, dst_wfmt) = {
+        // A COPY REINTERPRETS. That is the whole distinction between this operation and `BlitTexture`,
+        // and it is now stated in one place instead of being decided differently by each backend.
+        //
+        // This used to route a format mismatch through a converting 1:1 blit, so that GL's converting
+        // copy paths would work — while the software oracle moved the bytes. One command, two meanings,
+        // different pixels: `Rgba8Unorm` into `Bgra8Unorm` measured 133 against 39 in the first channel.
+        // Neither reading was wrong; the operation was.
+        //
+        // The split is that the converting copy already HAD a name. `BlitTexture` with equal extents and
+        // a nearest filter IS a converting copy, exactly, and every caller that wanted conversion now
+        // emits it: GL's `glBlitFramebuffer` chooses between the two on format as well as extent, which
+        // is the fix that made this fallback unreachable from any surface. Adding a mode to this
+        // operation would have been a second representation of something already represented.
+        //
+        // What remains is the reinterpreting contract, and its rule is the oracle's: equal bytes per
+        // texel. Formats that differ only in layout — a channel-order swap, an sRGB suffix — take the
+        // CPU-mediated byte path below, which uploads the source bytes verbatim, which is what
+        // reinterpretation means.
+        let (src_fmt, dst_fmt) = {
             let s = texture::WgpuTexture::get(res, src)?;
             let d = texture::WgpuTexture::get(res, dst)?;
-            (
-                Format::from(s.format).native(),
-                Format::from(d.format).native(),
-            )
+            (s.format, d.format)
         };
-        if src_wfmt.remove_srgb_suffix() != dst_wfmt.remove_srgb_suffix() {
-            hl_log::hl_debug!(
-                tag::EXEC,
-                "t2t converting-copy: src={src_wfmt:?} dst={dst_wfmt:?} (incompatible formats → blit)"
-            );
-            hl_log::hl_count!(tag::EXEC, "t2t_converting_copy");
-            // A 1:1 blit: same source and destination extent (no scaling), nearest sampling (exact texel
-            // mapping). `blit_texture` performs the same base-subresource / bounds / 2D-only validation the
-            // fast path does, so a bad subresource or out-of-range region is the same typed error.
-            return self.blit_texture(
-                res,
-                src,
-                src_sub,
-                src_origin,
-                extent,
-                dst,
-                dst_sub,
-                dst_origin,
-                extent,
-                Filter::Nearest,
-            );
+        let size_compatible = match (src_fmt.bytes_per_texel(), dst_fmt.bytes_per_texel()) {
+            (Some(s), Some(d)) => s == d,
+            // Block-compressed and depth/stencil formats have no plain texel size to compare, so a copy
+            // between them is only meaningful when the formats are identical.
+            _ => src_fmt == dst_fmt,
+        };
+        if !size_compatible {
+            return Err(GpuError::Invalid(
+                "texture copy between incompatible texel sizes",
+            ));
         }
         for sub in [src_sub, dst_sub] {
             if sub.mip != 0 || sub.layer != 0 || sub.aspect != TextureAspect::All {
