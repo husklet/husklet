@@ -11,15 +11,20 @@ use hl_gpu::protocol::model::kernel::{glsl_stage, GlslDescriptor};
 /// multiplied by the blend constant (see [`clear_blend`]), which is how the clear COLOUR reaches the
 /// target without a uniform buffer — and a uniform buffer would mean a bind group keyed on a GL program
 /// this draw does not have.
+///
+/// Both entry points are `main` IN SOURCE and are renamed host-side to the pipeline-bound `vmain`/`fmain`
+/// (`GlslDescriptor::entry`) — the same contract the translated application shaders keep. naga's `glsl-in`
+/// takes a STAGE, not an entry name, and parses only `main`: a source function named `vmain` is "Missing
+/// entry point", which fails the submit and loses the share group.
 const CLEAR_VS: &str = "#version 460\n\
-void vmain() {\n\
+void main() {\n\
     vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));\n\
     gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n\
 }\n";
 
 const CLEAR_FS: &str = "#version 460\n\
 layout(location = 0) out vec4 hl_clear_colour;\n\
-void fmain() { hl_clear_colour = vec4(1.0); }\n";
+void main() { hl_clear_colour = vec4(1.0); }\n";
 
 /// `src = CONSTANT, dst = ZERO, op = ADD`, so the written value is exactly the blend constant.
 fn clear_blend() -> BlendState {
@@ -66,6 +71,12 @@ pub(super) fn lower_rect_clear(
     }
     // A plane this clear does not name must not be disturbed, so its mask is zero rather than absent.
     let color_write_mask = if writes_colour { d.color_mask & 0xf } else { 0 };
+    // The constant-factor blend is what carries the clear COLOUR, and a pipeline that names a constant
+    // factor obliges every draw through it to have a blend constant set. A depth- or stencil-only clear
+    // sets none — it has no colour to carry — so it must not name one either: the colour target takes a
+    // plain replace with a zero write mask instead. Keying this on the write mask rather than on
+    // `writes_colour` keeps it consistent with `ClearPipelineKey`, which carries the mask.
+    let blends_colour = color_write_mask != 0;
     let stencil_write_mask = if writes_stencil {
         d.stencil_write_mask & 0xff
     } else {
@@ -133,7 +144,7 @@ pub(super) fn lower_rect_clear(
                 vertex_buffers: Vec::new(),
                 color_targets: vec![ColorTargetState {
                     format: target_fmt,
-                    blend: Some(clear_blend()),
+                    blend: blends_colour.then(clear_blend),
                     write_mask: color_write_mask,
                 }],
                 depth: depth.clone(),
@@ -170,7 +181,7 @@ pub(super) fn lower_rect_clear(
             reference: (d.clear_stencil.max(0) as u32) & 0xff,
         });
     }
-    if writes_colour {
+    if blends_colour {
         ops.push(Enc::SetBlendConstant { color: d.clear });
     }
     ops.push(Enc::SetPipeline(pipeline_ir));
