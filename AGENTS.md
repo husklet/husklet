@@ -964,6 +964,12 @@ refused identically and the assertions passed while establishing nothing. It sur
 control expected to *succeed* also failed. Pair every refusal assertion with a positive control you expect
 to pass, and prove the normal path first.
 
+A crash agreeing with a refusal is not agreement. A differential comparing two sides through a success-or-
+failure predicate reported green when one side panicked, because a caught panic reads as a refusal. The
+control that should have caught a reverted bounds check passed. Once a panic and a device-validation error
+were made failures in their own right — independent of what the other side did — the same matrix
+immediately reported a second defect it had been hiding.
+
 An exhaustive test can be exhaustive over the wrong space. A round-trip across all sixty-five thousand
 representable half-float patterns could not catch a rounding rule that was wrong at ties, because every
 value it generates is exactly representable and no tie ever occurs — both rules agree on every one. The
