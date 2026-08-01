@@ -297,3 +297,48 @@ fn the_attachment_query_names_the_object_that_was_attached() {
         GL_NONE as i32
     );
 }
+
+/// A float texture must get a float PLANE, sized by that plane's own texel. Both halves were wrong and
+/// each hid the other.
+///
+/// `GL_R16F` and `GL_RG16F` resolved to eight-bit UNORM planes and `GL_R11F_G11F_B10F` to RGBA8, so a
+/// texture that asked for floats was given 256 levels and a hard clamp at 1.0 — wrong on its own terms,
+/// with or without a float colour-buffer extension. And the zeroed storage was sized at a hardcoded four
+/// bytes per texel, so the formats that DID resolve to a float plane were allocated at half or a quarter
+/// of their own size: an `Rgba16Float` 8x8 declared 512 bytes' worth of format over a 256-byte buffer.
+///
+/// Widening to more channels than the GL format names is the trade `GL_RG32F` already takes onto
+/// `Rgba32Float`; half-float represents every `GL_R11F_G11F_B10F` component exactly, so it costs memory
+/// and never precision. The narrow formats are asserted alongside because the plane size has a FLOOR of
+/// RGBA8 — the CPU shadow is an RGBA8 image for them and several writers address it that way.
+#[test]
+fn a_float_texture_gets_a_float_plane_sized_by_its_own_texel() {
+    use hl_gpu::protocol::model::enums::TextureFormat;
+
+    for (declared, plane) in [
+        (GL_R16F, TextureFormat::Rgba16Float),
+        (GL_RG16F, TextureFormat::Rgba16Float),
+        (GL_RGB16F, TextureFormat::Rgba16Float),
+        (GL_RGBA16F, TextureFormat::Rgba16Float),
+        (GL_R11F_G11F_B10F, TextureFormat::Rgba16Float),
+        (GL_R32F, TextureFormat::R32Float),
+        (GL_RG32F, TextureFormat::Rgba32Float),
+        (GL_RGBA32F, TextureFormat::Rgba32Float),
+        // The narrow formats keep the RGBA8-shadow floor they have always had.
+        (GL_RGBA8, TextureFormat::Rgba8Unorm),
+        (GL_R8, TextureFormat::R8Unorm),
+    ] {
+        let mut c = ctx();
+        let tex = c.textures.gen();
+        record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
+        record::tex_storage_2d(&mut c, GL_TEXTURE_2D, 1, declared, 8, 8);
+        let stored = c.textures.get(tex).expect("immutable storage");
+        assert_eq!(stored.ir_format, plane, "{declared:#x} plane");
+        let want = 8 * 8 * plane.bytes_per_texel().unwrap_or(4).max(4);
+        assert_eq!(
+            stored.data.len(),
+            want,
+            "{declared:#x} plane must be sized by its own texel"
+        );
+    }
+}

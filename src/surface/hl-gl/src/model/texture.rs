@@ -37,6 +37,22 @@ struct PixelState {
     data: Arc<Vec<u8>>,
 }
 
+/// Bytes per texel of the plane a texture materializes, which is what its zeroed storage must be sized
+/// by. This was hardcoded to four, so a plane whose format is wider than RGBA8 was allocated at half or a
+/// quarter of its own size: `glTexStorage2D(GL_RGBA16F, 8, 8)` declared an `Rgba16Float` plane and gave it
+/// 256 bytes where the format needs 512. Nothing narrowed the format to match, so the plane and its
+/// declared format disagreed about how big a texel is, and every consumer that trusts the format reads
+/// past the end or short.
+///
+/// Four is both the fallback for a format with no host texel size (the depth formats) and a FLOOR. The
+/// floor is not tidiness: the CPU shadow is an RGBA8 image for every narrow format — `glTexSubImage2D`,
+/// the readback path and the render-target shadow all address it at four bytes per texel — so sizing an
+/// `R8Unorm` plane at its own one byte per texel makes those writers run off the end. Only the formats
+/// WIDER than RGBA8 were under-allocated, and only they change here.
+fn plane_bytes_per_texel(format: TextureFormat) -> usize {
+    format.bytes_per_texel().unwrap_or(4).max(4)
+}
+
 impl SharedPixels {
     pub fn new(data: Arc<Vec<u8>>) -> Self {
         Self {
@@ -520,7 +536,7 @@ impl Textures {
         // no-alloc `None` rather than crashing the driver (the record layer raises GL_INVALID_VALUE).
         let want = (w.max(0) as usize)
             .checked_mul(h.max(0) as usize)
-            .and_then(|n| n.checked_mul(4));
+            .and_then(|n| n.checked_mul(plane_bytes_per_texel(format)));
         let generation = self.generation();
         let t = self.map.entry(name).or_default();
         t.shared = None;
@@ -615,7 +631,7 @@ impl Textures {
     ) -> bool {
         let Some(size) = (w as usize)
             .checked_mul(h as usize)
-            .and_then(|n| n.checked_mul(4))
+            .and_then(|n| n.checked_mul(plane_bytes_per_texel(format)))
         else {
             return false;
         };

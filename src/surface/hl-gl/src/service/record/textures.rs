@@ -248,9 +248,7 @@ impl TryFrom<InternalFormat> for TextureFormat {
         Ok(match internalformat.0 {
             // 8-bit unorm RGBA/RGB — sized + the lenient unsized spellings, plus the packed <=8bpc formats.
             GL_RGBA | GL_RGBA8 | GL_RGB | GL_RGB8 | GL_RGB565 | GL_RGBA4 | GL_RGB5_A1
-            | GL_RGB10_A2 | GL_RGB10_A2UI | GL_R11F_G11F_B10F | GL_RGB9_E5 => {
-                TextureFormat::Rgba8Unorm
-            }
+            | GL_RGB10_A2 | GL_RGB10_A2UI | GL_RGB9_E5 => TextureFormat::Rgba8Unorm,
             GL_SRGB8_ALPHA8 | GL_SRGB8 => TextureFormat::Rgba8Srgb,
             // Signed-normalized and integer sized formats. The model stores an RGBA8 plane for all of
             // them, so the neutral format is the same; keeping them ACCEPTED here is what makes immutable
@@ -277,8 +275,18 @@ impl TryFrom<InternalFormat> for TextureFormat {
             GL_RGBA16UI | GL_RGBA16I | GL_RGBA32UI | GL_RGBA32I => TextureFormat::Rgba8Unorm,
             GL_RGB32F => TextureFormat::Rgba32Float,
             GL_BGRA8_EXT => TextureFormat::Bgra8Unorm,
-            GL_R8 | GL_R16F => TextureFormat::R8Unorm,
-            GL_RG8 | GL_RG16F => TextureFormat::Rg8Unorm,
+            GL_R8 => TextureFormat::R8Unorm,
+            GL_RG8 => TextureFormat::Rg8Unorm,
+            // Every FLOAT format lands on a float plane, widening to more channels where the IR has no
+            // exact match — the same trade `GL_RG32F` already takes onto `Rgba32Float`. A half-float plane
+            // represents every value of `GL_R11F_G11F_B10F` exactly (its components have a 5-bit exponent
+            // and at most a 6-bit mantissa, against half's 5 and 10), so widening costs memory and never
+            // precision. What it replaces cost precision and range: `GL_R16F` was an 8-bit UNORM plane, so
+            // a texture asked for sixteen-bit floats was given one that quantises to 256 levels and clamps
+            // everything above 1.0 — wrong today, whatever is decided about advertising a float colour
+            // buffer. The extra channels are writable but not readable through the GL format's own
+            // spelling, which is the ordinary rule for channels a format does not have.
+            GL_R16F | GL_RG16F | GL_R11F_G11F_B10F => TextureFormat::Rgba16Float,
             GL_RGB16F | GL_RGBA16F => TextureFormat::Rgba16Float,
             GL_RG32F | GL_RGBA32F => TextureFormat::Rgba32Float,
             GL_R32F => TextureFormat::R32Float,
