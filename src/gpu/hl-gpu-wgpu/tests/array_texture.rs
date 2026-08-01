@@ -245,6 +245,146 @@ fn sampling_an_array_layer_returns_that_layers_texel() {
 /// is exactly what the blit now builds — but widening the usage set touches every array and cube texture
 /// in the driver, not only blit destinations, so it is left alone and written down rather than done at
 /// the end of an audit.
+///
+/// FOLLOW-UP, measured. The premise is false and by a wider margin than the paragraph above supposed: the
+/// IR already carries the layer selector the render pass would need. `CreateTextureView` takes a
+/// `base_layer`/`layer_count` and a `dim`, its result is stored in the SAME resource table as a texture,
+/// and a `ColorAttachment` names it by that id — so a single-layer `D2` view of an array texture is
+/// already expressible and is already a shape wgpu accepts as a colour target. Probed directly, such a
+/// view failed for exactly one reason and it was not the shape: `TextureViewIsNotRenderable { reason:
+/// Usage(..) }`, the parent texture's missing usage bit.
+///
+/// It is still not widened, and the reason moved. It is not that the mechanism is missing; it is that the
+/// software reference refuses to create a layered texture at all ("software: only 2D single-layer
+/// textures"), so every program that used the capability would be executor-only — performed by one
+/// backend and refused by the other, with the differential unable to compare a single one of them. That
+/// is the divergence shape this project spends its nights removing, and it would be self-inflicted. The
+/// reference is the thing to change first, not the usage bit.
+///
+/// What the probe DID justify fixing is beside it: see
+/// `a_texture_that_is_not_a_render_target_is_refused_where_the_caller_can_see_it`.
+/// A texture that is not a render target is refused by name, not by device validation.
+///
+/// The creation-time usage rule decides only which textures GET `RENDER_ATTACHMENT`. It is not a guard:
+/// nothing stopped a texture without the bit from being named as a colour attachment, a depth attachment
+/// or a blit destination, and the refusal then came from wgpu, late and under the wrong name.
+///
+/// Measured before this guard existed, a 2D-array texture named as a colour attachment failed at
+/// `RenderPass::end` with `MissingFeatures(MULTIVIEW)` — a feature the caller never asked for, naming a
+/// capability rather than the mistake, and pointing whoever reads it at multiview support. A single-layer
+/// `D2` view of the same texture failed with `TextureViewIsNotRenderable { reason: Usage(..) }`, which is
+/// accurate but still arrives as a device-validation error out of the pass rather than as an answer to
+/// the command that caused it. Two different messages for one mistake, neither attributable.
+///
+/// The predicate is the creation-time grant itself, recorded on the texture, so the guard cannot drift
+/// from the rule it guards — the failure where a guard tests something adjacent to its subject.
+///
+/// The positive control matters as much as the refusals: a plain 2D texture must still be accepted on all
+/// three paths, or this test would pass against a guard that refused everything.
+#[test]
+fn a_texture_that_is_not_a_render_target_is_refused_where_the_caller_can_see_it() {
+    use hl_gpu::protocol::model::descriptor::{
+        Extent3d, Origin3d, TextureSubresource, TextureViewDesc,
+    };
+    use hl_gpu::protocol::model::enums::TextureAspect;
+
+    let mut exec = WgpuExecutor::new(DeviceConfig::default()).expect("adapter");
+    let texture = |layers: u32| TextureDesc {
+        width: 4,
+        height: 4,
+        depth: layers,
+        mip_levels: 1,
+        sample_count: 1,
+        dim: TextureDim::D2,
+        format: TextureFormat::Rgba8Unorm,
+        usage: texture_usage::RENDER_TARGET | texture_usage::COPY_SRC | texture_usage::COPY_DST,
+        label: String::new(),
+    };
+    // A single-layer 2D view of layer 0 — the shape the old premise said did not exist, and which a
+    // colour pass genuinely can target. It is refused for the PARENT's usage, not for its own dimension.
+    let layer_view = TextureViewDesc {
+        texture: 1,
+        dim: TextureDim::D2,
+        format: TextureFormat::Rgba8Unorm,
+        aspect: TextureAspect::All,
+        base_mip: 0,
+        mip_count: 1,
+        base_layer: 0,
+        layer_count: 1,
+    };
+    let pass = |target: u32| {
+        vec![
+            Enc::BeginRenderPass {
+                color: vec![ColorAttachment {
+                    texture: target,
+                    load: LoadOp::Clear,
+                    clear: [1.0, 0.0, 0.0, 1.0],
+                    store: true,
+                }],
+                depth: None,
+            },
+            Enc::EndRenderPass,
+        ]
+    };
+    let extent = Extent3d {
+        width: 4,
+        height: 4,
+        depth: 1,
+    };
+    let blit_into = |target: u32| {
+        vec![Enc::BlitTexture {
+            src: 3,
+            src_sub: TextureSubresource::base(),
+            src_origin: Origin3d::default(),
+            src_extent: extent.clone(),
+            dst: target,
+            dst_sub: TextureSubresource::base(),
+            dst_origin: Origin3d::default(),
+            dst_extent: extent.clone(),
+            filter: Filter::Nearest,
+            mirror: Mirror::NONE,
+        }]
+    };
+    let run = |exec: &mut WgpuExecutor, layers: u32, encoder: Vec<Enc>| {
+        let mut s = new_session(exec);
+        hl_gpu::runtime::submit(
+            &mut s,
+            exec,
+            0,
+            &[
+                Cmd::CreateTexture(1, texture(layers)),
+                Cmd::CreateTextureView(2, layer_view.clone()),
+                Cmd::CreateTexture(3, texture(1)),
+                Cmd::Submit(CommandBuffer {
+                    encoder,
+                    signal: None,
+                }),
+            ],
+        )
+        .map(|_| ())
+    };
+
+    // Positive control FIRST: the ordinary path works, so a refusal below means something.
+    run(&mut exec, 1, pass(1)).expect("a plain 2D texture is a colour target");
+    run(&mut exec, 1, pass(2)).expect("a single-layer view of a plain 2D texture is a colour target");
+    run(&mut exec, 1, blit_into(1)).expect("a plain 2D texture is a blit destination");
+
+    // The array texture, by its default D2Array view: previously `MissingFeatures(MULTIVIEW)`.
+    // The array texture, through a single-layer D2 view: previously `TextureViewIsNotRenderable(Usage)`.
+    // Both are now one answer that names what the caller did.
+    for (target, what) in [(1u32, "the array texture"), (2, "a single-layer view of it")] {
+        for (encoder, path) in [(pass(target), "colour attachment"), (blit_into(target), "blit destination")] {
+            let err = run(&mut exec, 3, encoder).expect_err(
+                "an array texture has no RENDER_ATTACHMENT and must be refused as a render target",
+            );
+            assert!(
+                matches!(err, hl_gpu::GpuError::Invalid(m) if m.contains("not created as a render target")),
+                "{what} as a {path} must be refused by name, got {err:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn a_blit_from_an_array_source_runs_at_the_base_layer() {
     use hl_gpu::protocol::model::descriptor::{Extent3d, Origin3d, TextureSubresource};

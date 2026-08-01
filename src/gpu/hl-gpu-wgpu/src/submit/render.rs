@@ -51,6 +51,19 @@ impl WgpuExecutor {
         let mut target_h = u32::MAX;
         for c in color {
             let t = texture::WgpuTexture::get(res, c.texture)?;
+            // A texture that was not created with RENDER_ATTACHMENT cannot be a colour target, and saying
+            // so HERE is the whole point: without this the command reaches wgpu and fails at
+            // `RenderPass::end` with a message about the shape rather than about the mistake. Measured, a
+            // 2D-array texture named as a colour attachment reported
+            // `MissingFeatures(MULTIVIEW)` — a feature nobody asked for, which sends the reader to
+            // multiview support instead of to "this texture is not a render target". The predicate is the
+            // creation-time grant itself (`WgpuTexture::render_attachment`), not a re-derived shape rule,
+            // so the guard cannot drift from the thing it guards.
+            if !t.render_attachment {
+                return Err(GpuError::Invalid(
+                    "wgpu: colour attachment texture was not created as a render target",
+                ));
+            }
             target_w = target_w.min(t.width);
             target_h = target_h.min(t.height);
             target_formats.push(t.format);
@@ -66,6 +79,11 @@ impl WgpuExecutor {
         let depth_view = match depth {
             Some(d) => {
                 let t = texture::WgpuTexture::get(res, d.texture)?;
+                if !t.render_attachment {
+                    return Err(GpuError::Invalid(
+                        "wgpu: depth attachment texture was not created as a render target",
+                    ));
+                }
                 // The depth attachment MUST be a depth(+stencil) format: a color-format texture handed as a
                 // `depth_stencil_attachment` is a hard wgpu validation error (its handler panics). The
                 // runtime does not type-check the attachment, so reject a non-depth format here.

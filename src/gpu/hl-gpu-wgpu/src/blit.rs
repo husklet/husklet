@@ -291,6 +291,14 @@ impl WgpuExecutor {
         let (dw, dh, dst_wfmt) = {
             let t = texture::WgpuTexture::get(res, dst)?;
             let _ = Format::from(t.format).texel_bytes()?;
+            // A blit WRITES its destination as a colour attachment, so the destination needs the same
+            // usage a render pass target needs. Refused here, where the caller can be told what it named,
+            // rather than as a device-validation failure inside the pass below.
+            if !t.render_attachment {
+                return Err(GpuError::Invalid(
+                    "wgpu: blit destination was not created as a render target",
+                ));
+            }
             (t.width, t.height, Format::from(t.format).native())
         };
 

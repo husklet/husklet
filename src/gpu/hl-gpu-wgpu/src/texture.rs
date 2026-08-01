@@ -59,6 +59,13 @@ pub struct WgpuTexture {
     /// `ResolveTexture` op which averages its samples into a single-sample destination.
     pub sample_count: u32,
     pub format: TextureFormat,
+    /// Whether this texture was created with `RENDER_ATTACHMENT`, i.e. whether it can be a colour or
+    /// depth attachment, a resolve target, or a blit destination.
+    ///
+    /// Recorded rather than re-derived so the guard on the consuming paths is literally the same predicate
+    /// as the grant below and cannot drift from it. Re-deriving the shape rule at each consumer is how a
+    /// guard comes to test something adjacent to what it guards.
+    pub render_attachment: bool,
     #[cfg(target_os = "macos")]
     pub iosurface: Option<Arc<hl_iosurface::Surface>>,
 }
@@ -161,6 +168,9 @@ impl WgpuExecutor {
             mip_levels: desc.mip_count,
             sample_count: source.sample_count,
             format: source.format,
+            // A view's attachability is the PARENT texture's: the usage lives on the wgpu texture, and a
+            // view cannot add one its texture was not created with.
+            render_attachment: source.render_attachment,
             #[cfg(target_os = "macos")]
             iosurface: source.iosurface.clone(),
         })
@@ -268,9 +278,20 @@ impl WgpuExecutor {
             usage |= wgpu::TextureUsages::STORAGE_BINDING;
         }
         // Only a single-sampled plain 2D image gets RENDER_ATTACHMENT. A 3D volume cannot be a render
-        // attachment; a 1D texture cannot either; and a cube / 2D-array here is a sampled/copied resource
-        // whose default view is a Cube / D2Array (not a single-layer 2D view a color pass could target), so
-        // it is never a color target. This keeps the usage set valid for every shape.
+        // attachment and neither can a 1D texture. A cube / 2D-array is excluded because every consumer of
+        // this usage except the blit binds the texture's DEFAULT view, which for those shapes is a Cube /
+        // D2Array — not a single-layer 2D view a colour pass can target.
+        //
+        // That exclusion used to be stated as a property of the texture ("its default view is not a
+        // single-layer 2D view"), which a later per-layer view in the blit path made false: a blit
+        // destination builds exactly such a view. The premise is narrower than it read. What actually
+        // blocks an array attachment is that `ColorAttachment` carries no layer selector, so the render
+        // pass has nothing to build a per-layer view FROM, and the software reference refuses to create a
+        // layered texture at all — so widening this would be an executor-only capability the differential
+        // could never compare. Both are encoding questions, not usage-bit questions.
+        //
+        // This decides only the usage set. It is NOT a guard: a texture without the bit can still be named
+        // as an attachment, which `submit::render` refuses by consulting `render_attachment` below.
         if dimension == wgpu::TextureDimension::D2
             && view_dim == wgpu::TextureViewDimension::D2
             && sample_count == 1
@@ -322,6 +343,7 @@ impl WgpuExecutor {
             mip_levels,
             sample_count,
             format: desc.format,
+            render_attachment: usage.contains(wgpu::TextureUsages::RENDER_ATTACHMENT),
             #[cfg(target_os = "macos")]
             iosurface,
         })
