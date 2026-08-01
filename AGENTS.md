@@ -890,6 +890,12 @@ partition that routed exactly the work its guard ignored. This is cheaper to fin
 thing being guarded and it fails the same way: silently, with no error and stale pixels. Ask not only what
 a function refuses, but what its callers refuse to offer it.
 
+An output nobody produced is not the same defect as a wrong value, and it hides better. A structure chained
+by the caller was never written at all, and the neighbouring tests passed because they zeroed the structure
+before the call — the answer was right by the caller's own initialisation, not by anything the subject did.
+Poison an output buffer before every call that is supposed to fill it, or a subject that ignores it passes
+on your zeroes.
+
 A differential cannot find a divergence in behaviour neither side was known to exercise. One executor
 performed an operation inside a render pass and the other silently ignored it, and the comparison battery
 never caught it because the battery only compares programs both executors were already known to handle.
