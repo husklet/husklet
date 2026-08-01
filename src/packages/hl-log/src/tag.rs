@@ -161,6 +161,30 @@ impl Display for Tags {
     }
 }
 
+/// The names in an environment tag list that [`Tags::from_str`] will ignore.
+///
+/// `from_str` drops unknown names on purpose, so an older binary reading a newer configuration does not
+/// die over a tag it has not heard of. The cost is that a typo — or a LEVEL name written into the TAG
+/// variable, which is the mistake that actually happens — is indistinguishable from a closed mask at the
+/// point of use. This lets the caller that owns the environment tell the operator what was dropped
+/// without changing what the parser accepts.
+///
+/// Empty for `all`, `off`, `none` and the empty string, which are meanings rather than tag lists.
+pub fn unrecognised(value: &str) -> Vec<&str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("all")
+        || trimmed.eq_ignore_ascii_case("off")
+        || trimmed.eq_ignore_ascii_case("none")
+    {
+        return Vec::new();
+    }
+    trimmed
+        .split([',', '|', ' '])
+        .filter(|name| !name.is_empty() && name.parse::<Tag>().is_err())
+        .collect()
+}
+
 /// Environment tag lists intentionally ignore unknown names for compatibility.
 impl FromStr for Tags {
     type Err = Infallible;
@@ -242,5 +266,24 @@ mod env_value_tests {
         assert!(tags.intersects(Tags::from(EGL)));
         assert!(tags.intersects(Tags::from(PRESENT)));
         assert!(!tags.intersects(Tags::from(CUDA)));
+    }
+}
+
+#[cfg(test)]
+mod unrecognised_tests {
+    use super::*;
+
+    #[test]
+    fn a_level_name_is_reported_as_unrecognised() {
+        assert_eq!(unrecognised("debug"), vec!["debug"]);
+        assert_eq!(unrecognised("gl,debug,present"), vec!["debug"]);
+    }
+
+    #[test]
+    fn a_valid_list_and_the_meanings_report_nothing() {
+        assert!(unrecognised("gl,egl,present").is_empty());
+        assert!(unrecognised("all").is_empty());
+        assert!(unrecognised("off").is_empty());
+        assert!(unrecognised("").is_empty());
     }
 }
