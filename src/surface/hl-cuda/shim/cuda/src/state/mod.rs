@@ -65,15 +65,12 @@ pub struct State {
 
     /// `CUcontext` token allocator (opaque, non-null). One simulated device, so contexts are tokens.
     next_ctx: usize,
-    /// The live `CUcontext` tokens. `cuCtxDestroy` removes one; every entry point handed a token checks
-    /// membership so a destroyed token is `CUDA_ERROR_INVALID_CONTEXT`, not a silent success. Destroying
-    /// the CURRENT context also clears [`State::current_ctx`], which is what [`State::require_context`]
-    /// consults on behalf of every entry point that does not take a token.
+    /// The live `CUcontext` tokens — process-global, because a context created on one thread can be
+    /// named and destroyed from another. What is NOT global is which token each thread currently has
+    /// bound: that, and the push/pop stack, are per-thread and live in [`context`]'s thread-local.
+    /// `cuCtxDestroy` removes the token here and clears it from the CALLING thread's binding; other
+    /// threads still naming it are caught by the liveness check in [`State::require_context`].
     contexts: HashSet<usize>,
-    /// The current context token (`0` = none).
-    current_ctx: usize,
-    /// The `cuCtxPushCurrent`/`cuCtxPopCurrent` stack (holds the *previous* current tokens).
-    ctx_stack: Vec<usize>,
     /// Per-context creation flags (`cuCtxGetFlags`/`cuCtxSetFlags`), keyed by context token.
     ctx_flags: HashMap<usize, u32>,
     /// Device-0 primary context (`cuDevicePrimaryCtxRetain`/`Release`/`Reset`): token (`0` = none),
@@ -123,8 +120,6 @@ impl State {
             event_times: Vec::new(),
             next_ctx: 1,
             contexts: HashSet::new(),
-            current_ctx: 0,
-            ctx_stack: Vec::new(),
             ctx_flags: HashMap::new(),
             primary_ctx: 0,
             primary_refcount: 0,
@@ -162,7 +157,11 @@ impl State {
     /// `cuGetProcAddress`.
     pub fn require_context(&self) -> Result<(), i32> {
         self.require_init()?;
-        if self.current_ctx == 0 {
+        // Liveness, not merely presence. The current context is per-thread while the live-token set is
+        // process-global, so another thread may have destroyed the context this thread still names.
+        // Checking only "a token is set" would let a thread keep working under a destroyed context.
+        let token = context::current_token();
+        if token == 0 || !self.contexts.contains(&token) {
             return Err(CUDA_ERROR_INVALID_CONTEXT);
         }
         Ok(())
@@ -186,6 +185,8 @@ impl State {
         if self.pid != pid {
             *self = State::new();
             self.pid = pid;
+            // The handle tables are gone, so this thread's context token names nothing.
+            context::reset_current();
         }
     }
 

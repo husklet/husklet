@@ -608,3 +608,120 @@ fn destroying_a_context_neither_frees_its_allocations_nor_releases_their_budget(
          should be replaced",
     );
 }
+
+/// CUDA binds the current context, and the `cuCtxPushCurrent`/`cuCtxPopCurrent` stack, **per thread**.
+/// These were process-global fields, so the last thread to call `cuCtxSetCurrent` silently redirected
+/// every other one: measured against a shipped bundle, thread A set context `0x2` and then read back
+/// `0x3`, thread B's. Nothing errored — both threads still had *a* context, so every later call
+/// succeeded under the wrong one.
+///
+/// The threads are sequenced by a barrier so the interleaving is deterministic and the assertion is not
+/// a race: both create and set, THEN both read back.
+#[test]
+fn the_current_context_is_bound_per_thread() {
+    let _g = guard();
+    let mut outer: *mut c_void = core::ptr::null_mut();
+    assert_eq!(cuCtxGetCurrent(&mut outer), CUDA_SUCCESS);
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let worker = |barrier: std::sync::Arc<std::sync::Barrier>| {
+        std::thread::spawn(move || {
+            let mut mine: *mut c_void = core::ptr::null_mut();
+            assert_eq!(cuCtxCreate_v2(&mut mine, 0, 0), CUDA_SUCCESS);
+            assert_eq!(cuCtxSetCurrent(mine), CUDA_SUCCESS);
+            barrier.wait();
+            let mut seen: *mut c_void = core::ptr::null_mut();
+            assert_eq!(cuCtxGetCurrent(&mut seen), CUDA_SUCCESS);
+            // The peer has bound its own context by now; this thread must still see its own.
+            (mine as usize, seen as usize)
+        })
+    };
+    let a = worker(std::sync::Arc::clone(&barrier));
+    let b = worker(std::sync::Arc::clone(&barrier));
+    let (a_mine, a_seen) = a.join().unwrap();
+    let (b_mine, b_seen) = b.join().unwrap();
+
+    assert_ne!(a_mine, b_mine, "the two threads must hold distinct contexts");
+    assert_eq!(a_seen, a_mine, "thread A saw {a_seen:#x}, it had bound {a_mine:#x}");
+    assert_eq!(b_seen, b_mine, "thread B saw {b_seen:#x}, it had bound {b_mine:#x}");
+    // And neither thread disturbed the one that spawned them.
+    let mut still: *mut c_void = core::ptr::null_mut();
+    assert_eq!(cuCtxGetCurrent(&mut still), CUDA_SUCCESS);
+    assert_eq!(still, outer, "a worker thread changed the parent's current context");
+}
+
+/// The push/pop stack is per-thread too, and a context pushed on one thread must not be poppable from
+/// another. The paired positive control is that the SAME thread can pop what it pushed, so this cannot
+/// pass by `cuCtxPopCurrent` simply failing everywhere.
+#[test]
+fn the_context_stack_is_per_thread() {
+    let _g = guard();
+    let mut mine: *mut c_void = core::ptr::null_mut();
+    assert_eq!(cuCtxCreate_v2(&mut mine, 0, 0), CUDA_SUCCESS);
+
+    let pushed = std::thread::spawn(move || {
+        let mut theirs: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuCtxCreate_v2(&mut theirs, 0, 0), CUDA_SUCCESS);
+        assert_eq!(cuCtxPushCurrent_v2(theirs), CUDA_SUCCESS);
+        theirs as usize
+    })
+    .join()
+    .unwrap();
+
+    // This thread never pushed that context, so its own stack cannot yield it.
+    let mut popped: *mut c_void = core::ptr::null_mut();
+    let result = cuCtxPopCurrent_v2(&mut popped);
+    assert_ne!(
+        popped as usize, pushed,
+        "another thread's pushed context was popped from this one"
+    );
+
+    // Positive control: this thread pops exactly what this thread pushed.
+    if result == CUDA_SUCCESS {
+        assert_eq!(cuCtxSetCurrent(mine), CUDA_SUCCESS);
+    }
+    assert_eq!(cuCtxPushCurrent_v2(mine), CUDA_SUCCESS);
+    let mut back: *mut c_void = core::ptr::null_mut();
+    assert_eq!(cuCtxPopCurrent_v2(&mut back), CUDA_SUCCESS);
+    assert_eq!(back, mine, "a thread must pop the context it pushed");
+}
+
+/// Destroying a context on one thread must not strip an unrelated context from another — and a thread
+/// whose OWN context was destroyed elsewhere must be refused rather than allowed to keep working under
+/// a dead token. The live-token set is process-global; only the binding is per-thread, so liveness has
+/// to be checked on use.
+#[test]
+fn a_context_destroyed_on_another_thread_stops_answering_here() {
+    let _g = guard();
+    let mut victim: *mut c_void = core::ptr::null_mut();
+    assert_eq!(cuCtxCreate_v2(&mut victim, 0, 0), CUDA_SUCCESS);
+    assert_eq!(cuCtxSetCurrent(victim), CUDA_SUCCESS);
+
+    // Positive control first: while it is live, a call gated on a current context succeeds.
+    // `cuMemGetInfo_v2` is the right probe here — it is gated on `require_context` but reads the model
+    // without submitting, so it works with no `$HL_GPU_EXEC` and the assertion is about the context
+    // rather than about the transport.
+    let (mut free, mut total) = (0usize, 0usize);
+    assert_eq!(cuMemGetInfo_v2(&mut free, &mut total), CUDA_SUCCESS);
+    assert!(total > 0, "the positive control must actually report memory");
+
+    // `CUcontext` is a raw pointer and so not `Send`; the token is what matters, so it crosses as a
+    // `usize` and is rebuilt on the other side exactly as a C caller would pass it.
+    let token = victim as usize;
+    let destroyed = std::thread::spawn(move || cuCtxDestroy_v2(token as *mut c_void))
+        .join()
+        .unwrap();
+    assert_eq!(destroyed, CUDA_SUCCESS, "another thread may destroy the context");
+
+    let (mut after_free, mut after_total) = (7usize, 7usize);
+    assert_eq!(
+        cuMemGetInfo_v2(&mut after_free, &mut after_total),
+        CUDA_ERROR_INVALID_CONTEXT,
+        "this thread still named the destroyed context and must be refused"
+    );
+    assert_eq!(
+        (after_free, after_total),
+        (7, 7),
+        "a refused query must not write its out-params"
+    );
+}
