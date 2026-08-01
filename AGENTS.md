@@ -890,6 +890,14 @@ partition that routed exactly the work its guard ignored. This is cheaper to fin
 thing being guarded and it fails the same way: silently, with no error and stale pixels. Ask not only what
 a function refuses, but what its callers refuse to offer it.
 
+A diagnostic that cannot fire in the build that ships is closer to a missing one than to a useful one, and
+it is worse than missing because the source reads as well-instrumented. Warn, info and debug are compiled
+out of release here and the error level is masked by a default of no tags, so a whole layer's richest
+diagnostics — a refusal carrying its reason, its occurrence count and its rate — emit nothing on a shipped
+build. Several discard lines were added in one session specifically to make a failure attributable, and
+they make it attributable in a debug build only. Before claiming an instrument exists, check the level it
+emits at and whether anything enables it.
+
 A comment asserting an impossibility is load-bearing in a way an ordinary comment is not. It does not
 describe behaviour, it forecloses an option — so the next reader routes around it instead of evaluating it,
 and the routing becomes more code citing the comment. Re-derive an impossibility against the thing it
