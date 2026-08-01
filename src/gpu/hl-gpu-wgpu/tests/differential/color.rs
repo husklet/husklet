@@ -38,7 +38,7 @@ pub(super) fn gen_clear_srgb(seed: u64) -> Prog {
             id: 1,
             len: (w * h * 4) as usize,
         },
-        tol: 2,
+        tol: Tolerance::Unorm(2),
         kernel: None,
     }
 }
@@ -142,7 +142,7 @@ pub(super) fn gen_draw_srgb(seed: u64) -> Prog {
             id: 1,
             len: (w * h * 4) as usize,
         },
-        tol: 2,
+        tol: Tolerance::Unorm(2),
         kernel: None,
     }
 }
@@ -268,7 +268,7 @@ pub(super) fn gen_draw_narrow(seed: u64) -> Prog {
             id: 1,
             len: (w * h) as usize * texel,
         },
-        tol: 2,
+        tol: Tolerance::Unorm(2),
         kernel: None,
     }
 }
@@ -317,8 +317,215 @@ pub(super) fn gen_clear_narrow(seed: u64) -> Prog {
             id: 1,
             len: (w * h) as usize * texel,
         },
-        tol: 1,
+        tol: Tolerance::Unorm(1),
         kernel: None,
     }
 }
 
+
+// -------------------------------------------------------------------------------------------------
+// Float colour targets — compared as VALUES in ULPs of the plane's own encoding, not as bytes
+// -------------------------------------------------------------------------------------------------
+
+fn float_plane(seed: u64) -> TextureFormat {
+    match seed % 3 {
+        0 => TextureFormat::Rgba16Float,
+        1 => TextureFormat::Rgba32Float,
+        _ => TextureFormat::R32Float,
+    }
+}
+
+/// (F) 32-BIT FLOAT CLEAR: `LoadOp::Clear` an `Rgba32Float` or `R32Float` target, no draw. EXACT, and it
+/// holds — every seed agrees bit for bit.
+///
+/// The clear colour goes through no arithmetic on either side and no narrowing conversion, so bit-exact
+/// is the honest position rather than an aspiration, and it is kept separate from the half-float clear
+/// precisely so that one case's need for a tolerance does not silently buy this one the same latitude.
+pub(super) fn gen_clear_float(seed: u64) -> Prog {
+    let format = if seed % 2 == 0 {
+        TextureFormat::Rgba32Float
+    } else {
+        TextureFormat::R32Float
+    };
+    let texel = format.bytes_per_texel().expect("a float colour plane");
+    let w = 3 + (seed % 6) as u32;
+    let h = 2 + (seed % 5) as u32;
+    let c = fcolor_opaque(seed);
+    let cmds = vec![
+        Cmd::CreateTexture(1, tex_fmt(w, h, format)),
+        Cmd::Submit(CommandBuffer {
+            encoder: vec![
+                Enc::BeginRenderPass {
+                    color: vec![ColorAttachment {
+                        texture: 1,
+                        load: LoadOp::Clear,
+                        clear: c,
+                        store: true,
+                    }],
+                    depth: None,
+                },
+                Enc::EndRenderPass,
+            ],
+            signal: None,
+        }),
+    ];
+    Prog {
+        seed,
+        category: "clear_float",
+        ops: vec!["BeginRenderPass", "EndRenderPass"],
+        cmds,
+        read: Read::Tex {
+            id: 1,
+            len: (w * h) as usize * texel,
+        },
+        tol: Tolerance::Ulps(0),
+        kernel: None,
+    }
+}
+
+/// (F+1) HALF-FLOAT CLEAR: `LoadOp::Clear` an `Rgba16Float` target, no draw. ONE ULP, and the tolerance
+/// is the host driver's, not ours.
+///
+/// Started at exact, which is what found this. Two of eight seeds disagreed by exactly one ULP and the
+/// executor was LOW every time — the signature of truncation rather than round-to-nearest. Recomputing
+/// the four cases in exact rational arithmetic with ties-to-even settled which side was right, and it was
+/// the oracle in all four: for a source of 94/255, the nearest half is `0x35e6` and lavapipe stored
+/// `0x35e5`. So this is a defect in the host's software Vulkan driver's f32→f16 clear conversion, not in
+/// this driver, and the one ULP is allowed here only to keep a known host quirk from masking real work.
+///
+/// The oracle's own encoder is NOT left unguarded by that allowance: it is pinned exactly by the
+/// exhaustive round trip over all 65536 half patterns, by the ties-to-even case, and by the clear-packing
+/// value tests, none of which involve the host at all. Had this started permissive, the truncation would
+/// have looked like agreement and the encoder would have had no cross-check at all.
+pub(super) fn gen_clear_half(seed: u64) -> Prog {
+    let mut prog = gen_clear_float(seed);
+    let format = TextureFormat::Rgba16Float;
+    let texel = format.bytes_per_texel().expect("a float colour plane");
+    let w = 3 + (seed % 6) as u32;
+    let h = 2 + (seed % 5) as u32;
+    prog.cmds[0] = Cmd::CreateTexture(1, tex_fmt(w, h, format));
+    prog.category = "clear_half";
+    prog.read = Read::Tex {
+        id: 1,
+        len: (w * h) as usize * texel,
+    };
+    prog.tol = Tolerance::Ulps(1);
+    prog
+}
+
+/// (F+2) FLOAT DRAW: a flat opaque replace draw into a float target, full-screen triangle. ONE ULP, and
+/// this tolerance is OURS.
+///
+/// Every texel is fully covered by a constant colour, so nothing should stand between the vertex value
+/// and the stored texel — and on the executor nothing does: it stores the source f32 bit for bit. The
+/// oracle is the side that drifts. Its barycentric evaluation computes `a·w0 + b·w1 + c·w2`, which for
+/// three identical corners is `a` only up to rounding, and the file header already records that last-ULP
+/// weight difference as a tolerance source for byte targets — where unorm quantization hides it. A float
+/// target has no quantization to hide it in, so the same known approximation becomes visible here as
+/// exactly one ULP.
+///
+/// Left as a tolerance rather than special-cased away. Making the reference short-circuit a constant
+/// colour would tune it to this test rather than make it more correct, and a reference bent to agree is
+/// the failure mode this whole battery exists to avoid.
+pub(super) fn gen_draw_float(seed: u64) -> Prog {
+    let format = float_plane(seed);
+    let texel = format.bytes_per_texel().expect("a float colour plane");
+    let w = 4 + (seed % 5) as u32;
+    let h = 4 + (seed % 4) as u32;
+    let c = fcolor_opaque(seed);
+    let vbytes: Vec<u8> = FS_TRI
+        .iter()
+        .flat_map(|(x, y)| le_f32(&[*x, *y, c[0], c[1], c[2], c[3]]))
+        .collect();
+    let spirv = wgsl_to_spirv(SEED_POS2_COLOR);
+    let cmds = vec![
+        Cmd::CreateTexture(1, tex_fmt(w, h, format)),
+        Cmd::CreateShader {
+            id: 1,
+            kind: ShaderPayloadKind::SpirV,
+            spirv,
+        },
+        Cmd::CreateBuffer(
+            1,
+            buf(
+                vbytes.len() as u64,
+                buffer_usage::VERTEX | buffer_usage::COPY_DST,
+            ),
+        ),
+        Cmd::WriteBuffer {
+            id: 1,
+            offset: 0,
+            data: vbytes,
+        },
+        Cmd::CreateRenderPipeline(
+            1,
+            RenderPipelineDesc {
+                vertex: ShaderRef {
+                    module: 1,
+                    entry: "vs_main".into(),
+                },
+                fragment: Some(ShaderRef {
+                    module: 1,
+                    entry: "fs_main".into(),
+                }),
+                vertex_buffers: vec![pos2_color_layout()],
+                color_targets: vec![ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: 0xF,
+                }],
+                depth: None,
+                topology: Topology::TriangleList,
+                cull: 0,
+                front_face: 0,
+                sample_count: 1,
+                label: String::new(),
+            },
+        ),
+        Cmd::Submit(CommandBuffer {
+            encoder: vec![
+                Enc::BeginRenderPass {
+                    color: vec![ColorAttachment {
+                        texture: 1,
+                        load: LoadOp::Clear,
+                        clear: [0.0, 0.0, 0.0, 1.0],
+                        store: true,
+                    }],
+                    depth: None,
+                },
+                Enc::SetPipeline(1),
+                Enc::SetVertexBuffer {
+                    slot: 0,
+                    buffer: 1,
+                    offset: 0,
+                },
+                Enc::Draw {
+                    vertex_count: 3,
+                    instance_count: 1,
+                    first_vertex: 0,
+                    first_instance: 0,
+                },
+                Enc::EndRenderPass,
+            ],
+            signal: None,
+        }),
+    ];
+    Prog {
+        seed,
+        category: "draw_float",
+        ops: vec![
+            "BeginRenderPass",
+            "SetPipeline",
+            "SetVertexBuffer",
+            "Draw",
+            "EndRenderPass",
+        ],
+        cmds,
+        read: Read::Tex {
+            id: 1,
+            len: (w * h) as usize * texel,
+        },
+        tol: Tolerance::Ulps(1),
+        kernel: None,
+    }
+}

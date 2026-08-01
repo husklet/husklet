@@ -31,7 +31,7 @@ pub(super) fn gen_clear(seed: u64) -> Prog {
             id: 1,
             len: (w * h * 4) as usize,
         },
-        tol: 0,
+        tol: Tolerance::Unorm(0),
         kernel: None,
     }
 }
@@ -96,7 +96,7 @@ pub(super) fn gen_clear_rect(seed: u64) -> Prog {
             id: 1,
             len: (w * h * 4) as usize,
         },
-        tol: 0,
+        tol: Tolerance::Unorm(0),
         kernel: None,
     }
 }
@@ -144,7 +144,7 @@ pub(super) fn gen_copy_b2t(seed: u64) -> Prog {
             id: 1,
             len: (w * h * 4) as usize,
         },
-        tol: 0,
+        tol: Tolerance::Unorm(0),
         kernel: None,
     }
 }
@@ -214,7 +214,7 @@ pub(super) fn gen_copy_t2t(seed: u64) -> Prog {
             id: 2,
             len: (w * h * 4) as usize,
         },
-        tol: 0,
+        tol: Tolerance::Unorm(0),
         kernel: None,
     }
 }
@@ -255,7 +255,7 @@ pub(super) fn gen_copy_b2b(seed: u64) -> Prog {
             offset: 0,
             len: n as usize,
         },
-        tol: 0,
+        tol: Tolerance::Unorm(0),
         kernel: None,
     }
 }
@@ -294,7 +294,7 @@ pub(super) fn gen_fill_buffer(seed: u64) -> Prog {
             offset: 0,
             len: n as usize,
         },
-        tol: 0,
+        tol: Tolerance::Unorm(0),
         kernel: None,
     }
 }
@@ -319,7 +319,7 @@ pub(super) fn gen_blit_nearest(seed: u64) -> Prog {
             id: 2,
             len: (dw * dh * 4) as usize,
         },
-        tol: 0,
+        tol: Tolerance::Unorm(0),
         kernel: None,
     }
 }
@@ -343,7 +343,7 @@ pub(super) fn gen_blit_linear(seed: u64) -> Prog {
             id: 2,
             len: (dw * dh * 4) as usize,
         },
-        tol: 3,
+        tol: Tolerance::Unorm(3),
         kernel: None,
     }
 }

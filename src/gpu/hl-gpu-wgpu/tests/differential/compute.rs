@@ -89,7 +89,7 @@ pub(super) fn gen_compute_fcmp(seed: u64) -> Prog {
             offset: 0,
             len: (n * 4) as usize,
         },
-        tol: 0,
+        tol: Tolerance::Unorm(0),
         kernel: Some((1, fcmp_program())),
     }
 }
@@ -177,7 +177,7 @@ pub(super) fn gen_compute_iota(seed: u64) -> Prog {
             offset: 0,
             len: (n * 4) as usize,
         },
-        tol: 0,
+        tol: Tolerance::Unorm(0),
         kernel: Some((1, iota_program())),
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use super::runners::read_plane;
 
 // =================================================================================================
 // the differential test
@@ -33,7 +34,7 @@ fn differential_cpu_oracle_vs_wgpu() {
         let gpu_out = run_wgpu(&mut exec, &prog);
 
         match (cpu_out, gpu_out) {
-            (Ok(c), Ok(g)) => match diff(&c, &g, prog.tol) {
+            (Ok(c), Ok(g)) => match diff(&c, &g, prog.tol, read_plane(&prog)) {
                 None => {
                     agreed += 1;
                     entry.0 += 1;

@@ -67,29 +67,44 @@
 //! red, because the readback strided a one-byte plane at four bytes, and this battery stayed green
 //! throughout. The restriction was the ORACLE's, never the executor's, which shipped the formats.
 //!
+//! ## FLOAT COLOUR TARGETS — compared as VALUES, in ULPs of the plane's own encoding
+//!
+//! `diff` decodes a float plane and compares in units in the last place, because a per-byte number is not
+//! merely imprecise on float data, it is meaningless: one ULP that carries across a byte boundary
+//! (`0x0100` against `0x00FF`) reads as a per-byte delta of 255, so the only byte tolerance that admits a
+//! last-mantissa-bit difference also admits a wrong exponent. `runners.rs` pins that pair directly.
+//!
+//! Every case started at BIT-EXACT and had to earn any latitude, which is what turned the tolerances into
+//! findings instead of guesses. What each one earned, and why:
+//!
+//!   * `clear_float` (`Rgba32Float`, `R32Float`) — EXACT, and it holds on every seed. No arithmetic and
+//!     no narrowing conversion stands between the clear colour and the stored texel on either side.
+//!   * `clear_half` (`Rgba16Float`) — ONE ULP, and the tolerance is the HOST's. Two of eight seeds
+//!     disagreed and lavapipe was low every time, the signature of truncation rather than
+//!     round-to-nearest. Recomputing in exact rational arithmetic with ties-to-even settled it: the
+//!     oracle was right in all four cases checked (for 94/255 the nearest half is `0x35e6`; lavapipe
+//!     stored `0x35e5`). A defect in the host's software Vulkan driver, not in this one. The oracle's
+//!     encoder keeps a strict cross-check elsewhere — the exhaustive round trip over all 65536 half
+//!     patterns, the ties-to-even case, and the clear-packing values — none of which involve the host.
+//!   * `draw_float` — ONE ULP, and this tolerance is OURS. The executor stores the source f32 bit for
+//!     bit; the oracle's barycentric evaluation of three identical corners is `a` only up to rounding.
+//!     The header already recorded that last-ULP weight difference for byte targets, where unorm
+//!     quantization hides it; a float target has nothing to hide it in. Left as a tolerance rather than
+//!     special-cased away, because a reference bent to agree is the failure mode this battery exists to
+//!     catch.
+//!
+//! Injecting a two-ULP error into the half encoder takes `clear_half` to zero of eight and `draw_float`
+//! to five of eight while `clear_float` is untouched, so neither tolerance is vacuous.
+//!
 //! ## BLIND SPOTS — what this differential still cannot see
 //!
 //! Recorded because a harness that cannot observe a class of target will report that class clean forever,
 //! and every one of these hid a real defect until it was looked for directly. Note the shape: coverage is
 //! THINNEST exactly where the driver is NEWEST, which is the opposite of where you want it.
 //!
-//!   * FLOAT COLOUR TARGETS. The oracle now renders them — a replace draw writes through the format's own
-//!     packing rule, which is the same rule the clear uses and is defensible — but they cannot be
-//!     COMPARED here, and the blocker is the comparator rather than the reference. `diff` is per-byte with
-//!     an integer tolerance, and that cannot express "within one ULP" of a float: measured on lavapipe at
-//!     tolerance 0, a flat `Rgba16Float` clear agreed on 6 of 8 seeds and a flat draw on 0 of 8, with the
-//!     disagreements one ULP apart — and one of them reported a per-byte delta of 255, because a one-ULP
-//!     difference that carries across a byte boundary looks enormous byte-wise (mantissa `0x0100` against
-//!     `0x00FF`). A per-byte tolerance loose enough to absorb that would hide every real defect in the
-//!     high bits, so widening `tol` is not the fix and would be worse than not comparing.
-//!
-//!     What it needs is a comparator that decodes each plane by its format and compares as VALUES with a
-//!     relative tolerance, plus a decision about what that tolerance means for a flat colour that both
-//!     sides should in principle produce bit-identically. That decision is deliberately not made here:
-//!     choosing it badly makes the two sides agree by both being wrong, which is worse than no reference
-//!     at all. Ruled OUT as the cause while investigating: the oracle's own binary16 encoder rounded ties
-//!     away from zero where the hardware rounds to even — a genuine defect, fixed, and it did not move
-//!     these numbers.
+//!   * (CLOSED) FLOAT COLOUR TARGETS — see the section above; kept here only to say it is no longer a
+//!     blind spot, because a reader who remembers the gap should find its resolution and not just its
+//!     absence.
 //!
 //!   * BLENDING and CHANNEL MASKING into any target with no normalized reading. Both read the destination
 //!     back as normalized RGBA, which a one-channel, float or integer plane has none of, so the oracle
@@ -296,6 +311,23 @@ enum Read {
     Buf { id: u32, offset: u64, len: usize },
 }
 
+/// How far two readbacks of one plane may differ.
+///
+/// A single per-byte number cannot serve both kinds of plane, which is what kept float targets out of
+/// this battery. One ULP of a half-float that carries across a byte boundary reads as a per-byte delta of
+/// 255 (mantissa `0x0100` against `0x00FF`), so a byte tolerance loose enough to call that "close" would
+/// also call a wrong exponent close — it would hide every real defect in the high bits. The unit has to
+/// be the one the format has.
+#[derive(Clone, Copy, Debug)]
+enum Tolerance {
+    /// Byte planes: per-channel unsigned-normalized steps.
+    Unorm(i16),
+    /// Float planes: units in the last place — adjacent representable values of the plane's OWN encoding,
+    /// which is the only unit in which "one step" means the same thing across the whole range. `Ulps(0)`
+    /// is bit-exact and is where a case starts; a case earns more by demonstrating why.
+    Ulps(u32),
+}
+
 /// One minted differential program.
 struct Prog {
     seed: u64,
@@ -304,8 +336,8 @@ struct Prog {
     ops: Vec<&'static str>,
     cmds: Vec<Cmd>,
     read: Read,
-    /// Per-channel byte tolerance (0 = exact).
-    tol: i16,
+    /// How far the two readbacks may differ, in the units the plane actually has.
+    tol: Tolerance,
     /// Optional kernel to register (compute programs) under the given shader id.
     kernel: Option<(u32, KernelProgram)>,
 }
@@ -387,6 +419,9 @@ const GENERATORS: &[fn(u64) -> Prog] = &[
     gen_compute_fcmp,
     gen_clear_srgb,
     gen_draw_narrow,
+    gen_clear_float,
+    gen_clear_half,
+    gen_draw_float,
     gen_clear_narrow,
     gen_draw_srgb,
     gen_stencil_equal,

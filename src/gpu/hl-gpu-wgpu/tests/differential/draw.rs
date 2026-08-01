@@ -43,7 +43,7 @@ pub(super) fn gen_draw_flat(seed: u64) -> Prog {
             id: 1,
             len: (w * h * 4) as usize,
         },
-        tol: 1,
+        tol: Tolerance::Unorm(1),
         kernel: None,
     }
 }
@@ -95,7 +95,7 @@ pub(super) fn gen_draw_gradient(seed: u64) -> Prog {
             id: 1,
             len: (w * h * 4) as usize,
         },
-        tol: 2,
+        tol: Tolerance::Unorm(2),
         kernel: None,
     }
 }

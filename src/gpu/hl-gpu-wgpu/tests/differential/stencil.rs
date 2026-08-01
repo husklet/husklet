@@ -214,7 +214,7 @@ fn stencil_prog(seed: u64, category: &'static str, test_cmp: u32) -> Prog {
             id: 1,
             len: (n * n * 4) as usize,
         },
-        tol: 0,
+        tol: Tolerance::Unorm(0),
         kernel: None,
     }
 }

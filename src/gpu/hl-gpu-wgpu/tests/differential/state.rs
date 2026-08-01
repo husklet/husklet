@@ -110,7 +110,7 @@ fn mask_prog(seed: u64, category: &'static str, mask: u32) -> Prog {
             id: 1,
             len: (w * h * 4) as usize,
         },
-        tol: 0,
+        tol: Tolerance::Unorm(0),
         kernel: None,
     }
 }
@@ -241,7 +241,7 @@ fn cull_prog(
             id: 1,
             len: (w * h * 4) as usize,
         },
-        tol: 0,
+        tol: Tolerance::Unorm(0),
         kernel: None,
     }
 }
