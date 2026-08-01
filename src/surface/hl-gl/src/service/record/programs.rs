@@ -351,7 +351,46 @@ pub fn bind_attrib(ctx: &mut GlContext, program: u32, index: u32, name: &str) {
 /// `glLinkProgram(program)` — translate the attached GLSL-ES pair to shader-IR + reflect the layout.
 impl GlContext {
     pub fn link_program(&mut self, program: u32) -> bool {
-        self.programs.link(program)
+        let linked = self.programs.link(program);
+        if linked {
+            self.reflect_uniform_blocks(program);
+        }
+        linked
+    }
+
+    /// Rebuild the program's uniform-block table from the blocks its shaders declare, in declaration
+    /// order — which is the order and the identity `glGetUniformBlockIndex`,
+    /// `glGetActiveUniformBlockName` and `glGetActiveUniformBlockiv` all answer for.
+    ///
+    /// Link is the right moment and the only honest one: the block set is a property of the linked
+    /// program, and building it lazily on first lookup is what let a name the program never declared
+    /// receive a valid index. A relink replaces the table, so a program relinked with different sources
+    /// does not keep blocks it no longer has.
+    ///
+    /// The BINDING is deliberately re-seeded from the shader's own `layout(binding = N)` here rather than
+    /// carried across a relink: GL resets a block's binding to its declared value when the program is
+    /// linked, and an application that assigned one with `glUniformBlockBinding` is expected to assign it
+    /// again.
+    fn reflect_uniform_blocks(&mut self, program: u32) {
+        let Some(prog) = self.programs.program(program) else {
+            return;
+        };
+        let declared = crate::adapter::glsl::StageSources::new(&prog.vs_src, &prog.fs_src)
+            .declared_uniform_blocks();
+        let blocks = declared
+            .into_iter()
+            .map(|block| crate::model::context::UniformBlock {
+                name: block.name.clone(),
+                binding: block.binding,
+                data_size: block.std140_size(),
+                members: block.members.len() as i32,
+            })
+            .collect::<Vec<_>>();
+        if blocks.is_empty() {
+            self.uniform_blocks.remove(&program);
+        } else {
+            self.uniform_blocks.insert(program, blocks);
+        }
     }
 
     /// `glUseProgram(program)`.

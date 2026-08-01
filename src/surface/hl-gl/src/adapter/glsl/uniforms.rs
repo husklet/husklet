@@ -253,6 +253,36 @@ impl StageSources<'_> {
     }
 }
 
+impl UniformBlockDecl {
+    /// The block's std140 size in bytes — what `glGetActiveUniformBlockiv(GL_UNIFORM_BLOCK_DATA_SIZE)`
+    /// reports, and what an application allocates its buffer from before writing members at the offsets
+    /// the driver gives it.
+    ///
+    /// Each member is aligned to its own std140 alignment and the block is rounded up to sixteen, both
+    /// read from [`TypeToken::layout`] rather than restated here — an array member occupies its element
+    /// count times the sixteen-byte array stride, which is the rule std140 applies to every array
+    /// regardless of element type. A member whose type this driver cannot lay out contributes nothing
+    /// rather than a guess, which keeps a size that is too small — and therefore visibly wrong — in
+    /// preference to one that looks plausible.
+    pub fn std140_size(&self) -> i32 {
+        let mut end: usize = 0;
+        for member in &self.members {
+            let Some((size, align, _)) = TypeToken(&member.ty).layout() else {
+                continue;
+            };
+            let stride = if member.arr > 1 { size.max(16) } else { size };
+            let span = if member.arr > 1 {
+                stride * member.arr as usize
+            } else {
+                size
+            };
+            let align = if member.arr > 1 { align.max(16) } else { align };
+            end = end.div_ceil(align) * align + span;
+        }
+        (end.div_ceil(16) * 16) as i32
+    }
+}
+
 /// Every uniform block a program declares, identified by NAME and in declaration order — the set and the
 /// order `glGetUniformBlockIndex` and `glGetActiveUniformBlock*` answer for.
 ///

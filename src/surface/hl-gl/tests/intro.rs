@@ -42,30 +42,37 @@ fn linked_program(c: &mut GlContext) -> u32 {
 
 // ---- uniform-block reflection --------------------------------------------------------------------
 
+/// Block reflection round-trips through a program that actually DECLARES a block.
+///
+/// This test asserted the defect it sat next to. It drove a program whose only uniform is a plain
+/// `uniform vec4 uTint` — no interface block at all — asked for a block called `Uniforms`, and asserted
+/// it got a valid index, a data size and a name back. Every one of those was the synthetic default-block
+/// entry answering, so the assertions passed while describing behaviour a conformant driver does not
+/// have: the default uniform block has no index to look up. What the test was really defending is the
+/// binding round-trip, which is real, so that moves onto a program with a declared block and the
+/// default-block claim is asserted the other way round.
 #[test]
 fn uniform_block_index_is_stable_and_binding_round_trips() {
     let mut c = ctx_800x600();
-    let prog = linked_program(&mut c);
+    let prog = program_with_blocks(&mut c);
 
-    // A first lookup of a name assigns a stable index; the same name returns the same index.
-    let i0 = intro::uniform_block_index(&mut c, prog, "Uniforms");
-    assert_ne!(i0, GL_INVALID_INDEX);
-    assert_eq!(intro::uniform_block_index(&mut c, prog, "Uniforms"), i0);
+    // A declared block's index is its declaration position, and the same name returns the same index.
+    let i0 = intro::uniform_block_index(&mut c, prog, "Matrices");
+    assert_eq!(i0, 0);
+    assert_eq!(intro::uniform_block_index(&mut c, prog, "Matrices"), i0);
 
-    // Block 0 reflects the program's real implicit block: its data size + active-uniform count.
     assert_eq!(
         intro::active_uniform_blockiv(&mut c, prog, i0, GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS),
         Some(1),
-        "one data uniform (uTint) in the reflected block"
+        "one member (uMvp) in the Matrices block"
     );
-    let data_size =
-        intro::active_uniform_blockiv(&mut c, prog, i0, GL_UNIFORM_BLOCK_DATA_SIZE).unwrap();
-    assert!(
-        data_size >= 16,
-        "a vec4 block is at least 16 bytes, got {data_size}"
+    assert_eq!(
+        intro::active_uniform_blockiv(&mut c, prog, i0, GL_UNIFORM_BLOCK_DATA_SIZE),
+        Some(64),
+        "a mat4 block is 64 bytes of std140"
     );
 
-    // Default binding is 0; glUniformBlockBinding sets it, and it reads back.
+    // Default binding is the declared one; glUniformBlockBinding sets it, and it reads back.
     assert_eq!(
         intro::active_uniform_blockiv(&mut c, prog, i0, GL_UNIFORM_BLOCK_BINDING),
         Some(0)
@@ -80,14 +87,20 @@ fn uniform_block_index_is_stable_and_binding_round_trips() {
     // The block name round-trips.
     assert_eq!(
         intro::active_uniform_block_name(&mut c, prog, i0).as_deref(),
-        Some("Uniforms")
+        Some("Matrices")
     );
 
     // An out-of-range block index → GL_INVALID_VALUE via the shim path (None here).
     assert!(intro::active_uniform_blockiv(&mut c, prog, 99, GL_UNIFORM_BLOCK_BINDING).is_none());
+    // A name the program does not declare as a block has no index — including the name of the synthetic
+    // block this driver used to invent.
+    assert_eq!(
+        intro::uniform_block_index(&mut c, prog, "Uniforms"),
+        GL_INVALID_INDEX
+    );
     // An unknown program has no block namespace.
     assert_eq!(
-        intro::uniform_block_index(&mut c, 4242, "Uniforms"),
+        intro::uniform_block_index(&mut c, 4242, "Matrices"),
         GL_INVALID_INDEX
     );
 }
@@ -397,14 +410,14 @@ fn program_with_blocks(c: &mut GlContext) -> u32 {
     prog
 }
 
-/// The DEFAULT uniform block is not a named block, and modelling it as one shifts every real block by a
-/// place. This records the required behaviour ahead of the fix; see the analysis below.
+/// The DEFAULT uniform block is not a named block, and modelling it as one shifted every real block by a
+/// place.
 ///
-/// Measured on this tree: a program declaring `Matrices` then `Material` reports them at indices 1 and 2
+/// Measured before the fix: a program declaring `Matrices` then `Material` reports them at indices 1 and 2
 /// against a conformant driver's 0 and 1, index 0 is a synthetic block named `Uniforms`, and the two real
 /// blocks report a data size and active-uniform count of zero while the synthetic one reports the
 /// program's whole flattened uniform buffer. `GL_ACTIVE_UNIFORM_BLOCKS` is not implemented at all — the
-/// enum is not even declared — so the count is zero, which puts every index out of range for an
+/// enum was not even declared — so the count was zero, which put every index out of range for an
 /// application that enumerates rather than looks up by name.
 ///
 /// The cause is a category error rather than an off-by-one, and correcting a constant would leave it in
@@ -414,14 +427,9 @@ fn program_with_blocks(c: &mut GlContext) -> u32 {
 /// `GL_UNIFORM_BLOCK_INDEX` of -1 — which `uniformsiv` in this same file already returns correctly, so
 /// the model contradicts itself two functions apart.
 ///
-/// The fix is to build the table at link from the blocks the shader declares, in declaration order, and
-/// to drop the synthetic entry. It is blocked on one thing worth knowing before starting: the GLSL block
-/// parser deliberately SKIPS the block name token (`adapter::glsl::uniforms`, "Skip the block NAME
-/// token"), so `UniformBlockDecl` carries a binding and members but no name, and the table cannot be
-/// populated from the shader until it does. Two of the assertions here fail for that reason and two for
-/// the indices; both are the same fix.
+/// The table is now built at link from the blocks the shader declares, in declaration order, and the
+/// synthetic entry is gone.
 #[test]
-#[ignore = "records the required reflection ahead of the fix: the default block is not a named block"]
 fn declared_uniform_blocks_are_indexed_from_zero_in_declaration_order() {
     let mut c = ctx_800x600();
     let prog = program_with_blocks(&mut c);

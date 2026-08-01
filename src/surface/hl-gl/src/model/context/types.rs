@@ -142,6 +142,10 @@ pub struct IndexedBinding {
 pub struct UniformBlock {
     pub name: String,
     pub binding: u32,
+    /// The block's std140 size, reflected from its declaration at link.
+    pub data_size: i32,
+    /// How many uniforms the block declares.
+    pub members: i32,
 }
 
 impl Default for PixelStore {

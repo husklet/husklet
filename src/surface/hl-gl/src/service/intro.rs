@@ -132,48 +132,24 @@ pub fn active_uniformsiv(ctx: &GlContext, program: u32, index: u32, pname: u32) 
 // named uniform blocks (glGetUniformBlockIndex / glUniformBlockBinding / glGetActiveUniformBlock*)
 // ==================================================================================================
 
-/// Ensure the program's block table has a canonical block 0 mirroring the reflected implicit block (the
-/// one `glUniform*` writes into) when the program declares data uniforms. Idempotent.
-impl GlContext {
-    fn seed_blocks(&mut self, program: u32) {
-        let has_uniforms = self
-            .programs
-            .program(program)
-            .map(|p| p.has_uniforms())
-            .unwrap_or(false);
-        if !has_uniforms {
-            return;
-        }
-        let blocks = self.uniform_blocks.entry(program).or_default();
-        if blocks.is_empty() {
-            // The single implicit block this model reflects. GLSL flattens the block name away at collect
-            // time, so the canonical name is the MSL struct name the translator emits.
-            blocks.push(UniformBlock {
-                name: "Uniforms".to_string(),
-                binding: 0,
-            });
-        }
-    }
-}
-
-/// `glGetUniformBlockIndex(program, name)` — the index of the named uniform block, lazily assigning a
-/// stable index the first time a name is seen (default binding 0), matching the reference shim. Returns
-/// `GL_INVALID_INDEX` for an unknown program.
+/// `glGetUniformBlockIndex(program, name)` — the index of the named uniform block, or `GL_INVALID_INDEX`
+/// for an unknown program or a name the program does not declare as a block.
+///
+/// The table is built at link from the blocks the shader declares (see `record::programs`), so an index is
+/// a position in declaration order and nothing else. It used to be assigned lazily on first lookup, on top
+/// of a synthetic block called `Uniforms` seeded at index 0 to stand for the DEFAULT uniform block — which
+/// is not a named block at all (ES 3.0 §2.12.6: no index, excluded from `GL_ACTIVE_UNIFORM_BLOCKS`, its
+/// members reporting a block index of -1, which [`uniformsiv`] already returns correctly). A non-block
+/// occupying the first slot shifted every real block by one, and lazy assignment then handed out an index
+/// for any string at all, so a name the program does not declare came back valid.
 pub fn uniform_block_index(ctx: &mut GlContext, program: u32, name: &str) -> u32 {
     if !ctx.programs.contains(program) {
         return GL_INVALID_INDEX;
     }
-    ctx.seed_blocks(program);
-    let blocks = ctx.uniform_blocks.entry(program).or_default();
-    if let Some(pos) = blocks.iter().position(|b| b.name == name) {
-        return pos as u32;
-    }
-    let idx = blocks.len() as u32;
-    blocks.push(UniformBlock {
-        name: name.to_string(),
-        binding: 0,
-    });
-    idx
+    ctx.uniform_blocks
+        .get(&program)
+        .and_then(|blocks| blocks.iter().position(|b| b.name == name))
+        .map_or(GL_INVALID_INDEX, |pos| pos as u32)
 }
 
 /// `glUniformBlockBinding(program, blockIndex, binding)` — assign the block's binding point. Honest GL
@@ -188,7 +164,6 @@ pub fn uniform_block_binding(ctx: &mut GlContext, program: u32, block_index: u32
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
-    ctx.seed_blocks(program);
     let blocks = ctx.uniform_blocks.entry(program).or_default();
     match blocks.get_mut(block_index as usize) {
         Some(b) => b.binding = binding,
@@ -203,7 +178,6 @@ pub fn active_uniform_block_name(
     program: u32,
     block_index: u32,
 ) -> Option<String> {
-    ctx.seed_blocks(program);
     ctx.uniform_blocks
         .get(&program)
         .and_then(|b| b.get(block_index as usize))
@@ -220,23 +194,16 @@ pub fn active_uniform_blockiv(
     block_index: u32,
     pname: u32,
 ) -> Option<i32> {
-    ctx.seed_blocks(program);
-    let (binding, name_len) = {
-        let b = ctx
-            .uniform_blocks
-            .get(&program)
-            .and_then(|b| b.get(block_index as usize))?;
-        (b.binding as i32, b.name.len() as i32 + 1)
-    };
-    // Block 0 is the reflected implicit block; report its real size + active-uniform count.
-    let (data_size, active) = if block_index == 0 {
-        ctx.programs
-            .program(program)
-            .map(|p| (p.ubuf_size, p.unis.len() as i32))
-            .unwrap_or((0, 0))
-    } else {
-        (0, 0)
-    };
+    // Every block answers from its OWN declaration. Index 0 used to be special-cased to report the
+    // program's whole flattened uniform buffer, because index 0 was the synthetic default block — so the
+    // real blocks were left reporting a size and a count of zero, and an application laying its buffer out
+    // at the driver's own figures was told the block needs no space at all.
+    let b = ctx
+        .uniform_blocks
+        .get(&program)
+        .and_then(|b| b.get(block_index as usize))?;
+    let (binding, name_len) = (b.binding as i32, b.name.len() as i32 + 1);
+    let (data_size, active) = (b.data_size, b.members);
     Some(match pname {
         GL_UNIFORM_BLOCK_BINDING => binding,
         GL_UNIFORM_BLOCK_DATA_SIZE => data_size,
