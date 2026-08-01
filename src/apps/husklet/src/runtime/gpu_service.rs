@@ -165,6 +165,35 @@ impl ConnectionHandler for Connection {
                 );
                 #[cfg(target_os = "macos")]
                 if let Some(producer) = &mut self.presentations {
+                    // A reservation that produced no presentation is neither published nor cancelled,
+                    // and until now said nothing at all. The compositor is holding a commit deferred on
+                    // that exact `(token, serial)`; with no frame and no cancellation it parks FOREVER,
+                    // which is indistinguishable from a commit that was never made. Measured against
+                    // Chromium: `joined=0`, one commit outstanding, `oldest_ms` climbing past eighty
+                    // seconds, and no diagnostic anywhere on the path that dropped it.
+                    //
+                    // Reported, not cancelled. Cancelling would stop the wedge but would also decide
+                    // that a presentation can never arrive later, and that is a claim about the
+                    // executor this line is not in a position to make. Naming it is what lets the next
+                    // measurement say which.
+                    let produced: Vec<(u64, u64)> = presentations
+                        .iter()
+                        .map(|p| (p.token.get(), p.serial.get()))
+                        .collect();
+                    for reserved in &native_reservations {
+                        if !produced.contains(reserved) {
+                            hl_log::hl_error!(
+                                hl_log::tag::PRESENT,
+                                "native presentation reserved but not produced token={} serial={} \
+                                 batch_commands={} presentations={} — the compositor's commit for this \
+                                 token/serial has nothing to join and will stay deferred",
+                                reserved.0,
+                                reserved.1,
+                                batch.len(),
+                                presentations.len()
+                            );
+                        }
+                    }
                     producer.publish(&self.session, &self.executor, presentations);
                 }
                 hl_log::hl_log!(
