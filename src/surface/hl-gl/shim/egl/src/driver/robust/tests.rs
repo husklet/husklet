@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn robust_integer_query_honors_capacity_and_reports_length() {
-    let display = DISPLAY_TOKEN as *mut c_void;
+    let display = initialized_display();
     let attributes = [
         EGL_CONTEXT_CLIENT_VERSION,
         3,

@@ -187,6 +187,26 @@ impl State {
         self.contexts.destroy_sync(token)
     }
 
+    /// Whether the display may back new objects, recording `EGL_NOT_INITIALIZED` when it may not.
+    ///
+    /// EGL 1.4 requires this of every entry point that creates something against a display: §3.5 for the
+    /// surface spellings, §3.7.1 for `eglCreateContext`. The flag was written by `eglInitialize`, cleared
+    /// by `eglTerminate`, and read by nothing, so a terminated display went on serving both as though it
+    /// were live — and what it serves is not equivalent, because `terminate` also clears `native_present`
+    /// and every later frame silently degrades from a zero-copy present to a readback.
+    ///
+    /// One named precondition rather than a copy per entry point: surfaces reach creation through six
+    /// spellings and contexts through one, and the condition is the same piece of process state for all
+    /// seven. The `EGL_BAD_DISPLAY` checks are per-entry-point for the opposite reason — each validates a
+    /// different argument that only that entry point received.
+    pub fn require_initialized(&mut self) -> bool {
+        if self.inited {
+            return true;
+        }
+        self.set_egl_error(EGL_NOT_INITIALIZED);
+        false
+    }
+
     /// Create a surface, or null with `EGL_NOT_INITIALIZED` when the display is not initialized.
     ///
     /// EGL 1.4 §3.5 requires that of every surface-creation entry point, and nothing here consulted the
@@ -205,8 +225,7 @@ impl State {
         wl_surface: usize,
         native_window: usize,
     ) -> *mut c_void {
-        if !self.inited {
-            self.set_egl_error(EGL_NOT_INITIALIZED);
+        if !self.require_initialized() {
             return core::ptr::null_mut();
         }
         let token = self.mint_token() as usize;

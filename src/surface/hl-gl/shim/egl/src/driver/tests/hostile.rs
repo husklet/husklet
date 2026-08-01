@@ -14,8 +14,7 @@ const OVER_MAX: i32 = query::MAX_TEXTURE_SIZE + 1;
 
 /// Bind this thread to a live context so the `gl*` entry points record against real state.
 fn bind_current() {
-    // A surface cannot exist on an uninitialized display; model the eglInitialize a real caller does.
-    GlobalState::access(|state| state.inited = true);
+    let display = initialized_display();
     let attributes = [
         EGL_CONTEXT_CLIENT_VERSION,
         3,
@@ -24,16 +23,13 @@ fn bind_current() {
         EGL_NONE,
     ];
     let context = eglCreateContext(
-        DISPLAY_TOKEN as *mut c_void,
+        display,
         CONFIG_TOKEN as *mut c_void,
         core::ptr::null_mut(),
         attributes.as_ptr(),
     );
     let surface = WindowSurface::create(core::ptr::null_mut());
-    assert_eq!(
-        eglMakeCurrent(DISPLAY_TOKEN as *mut c_void, surface, surface, context),
-        EGL_TRUE
-    );
+    assert_eq!(eglMakeCurrent(display, surface, surface, context), EGL_TRUE);
     while glGetError() != GL_NO_ERROR {}
 }
 

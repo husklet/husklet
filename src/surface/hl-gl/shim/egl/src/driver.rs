@@ -32,6 +32,19 @@ mod synchronization;
 mod textures;
 mod uniforms;
 
+/// The display handle, with the `eglInitialize` every real caller makes already done.
+///
+/// Contexts and surfaces cannot be created against an uninitialized display (see
+/// `State::require_initialized`), and `inited` is process-global, so a suite that relied on some earlier
+/// test happening to set it would pass or fail on test ordering — which is exactly what happened when
+/// this helper was first added to only three of the four suites that create EGL objects. Every test
+/// helper that creates one goes through here.
+#[cfg(test)]
+fn initialized_display() -> *mut c_void {
+    GlobalState::access(|state| state.inited = true);
+    DISPLAY_TOKEN as *mut c_void
+}
+
 #[cfg(test)]
 mod tests;
 

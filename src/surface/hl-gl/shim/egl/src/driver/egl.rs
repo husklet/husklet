@@ -31,6 +31,10 @@ pub extern "C" fn eglCreateContext(
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_DISPLAY));
         return core::ptr::null_mut();
     }
+    // EGL 1.4 §3.7.1, the same precondition surface creation asks (see `State::require_initialized`).
+    if !GlobalState::access(|s| s.require_initialized()) {
+        return core::ptr::null_mut();
+    }
     if !config.is_null() && ConfigHandle::id(config).is_none() {
         GlobalState::access(|s| s.set_egl_error(EGL_BAD_CONFIG));
         return core::ptr::null_mut();

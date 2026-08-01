@@ -243,3 +243,35 @@ fn a_surface_needs_a_display_that_is_initialized() {
         hl_gl::result::EGL_NOT_INITIALIZED
     );
 }
+
+/// The precondition both surface and context creation ask, on its own.
+///
+/// Tested here rather than through `eglCreateContext` because `inited` is process-global and a test that
+/// cleared it would race every other test in this suite that creates an EGL object — the same hazard the
+/// `initialized_display` harness helper exists to remove. A local `State` starts uninitialized, which is
+/// the state a real display is in before `eglInitialize` and after `eglTerminate`.
+#[test]
+fn an_uninitialized_display_backs_nothing_and_says_so() {
+    let mut state = State::new();
+    assert!(!state.inited, "a fresh display is not yet initialized");
+    assert!(!state.require_initialized(), "and backs nothing");
+    assert_eq!(
+        state.take_egl_error(),
+        hl_gl::result::EGL_NOT_INITIALIZED,
+        "the refusal must name the display's state, not the caller's arguments"
+    );
+
+    state.inited = true;
+    assert!(state.require_initialized());
+    assert_eq!(
+        state.take_egl_error(),
+        hl_gl::result::EGL_SUCCESS,
+        "a display that is initialized records no error"
+    );
+
+    state.terminate();
+    assert!(
+        !state.require_initialized(),
+        "eglTerminate puts the display back where eglInitialize found it"
+    );
+}

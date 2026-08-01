@@ -12,7 +12,7 @@ fn context() -> *mut c_void {
         EGL_NONE,
     ];
     eglCreateContext(
-        DISPLAY_TOKEN as *mut c_void,
+        initialized_display(),
         CONFIG_TOKEN as *mut c_void,
         core::ptr::null_mut(),
         attributes.as_ptr(),
@@ -20,8 +20,7 @@ fn context() -> *mut c_void {
 }
 
 fn surface() -> *mut c_void {
-    // A surface cannot exist on an uninitialized display; model the eglInitialize a real caller does.
-    GlobalState::access(|state| state.inited = true);
+    let _ = initialized_display();
     WindowSurface::create(core::ptr::null_mut())
 }
 
