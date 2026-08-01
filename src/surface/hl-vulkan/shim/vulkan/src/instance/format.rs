@@ -76,6 +76,13 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
         || image_type != VK_IMAGE_TYPE_2D
         || tiling != VK_IMAGE_TILING_OPTIMAL
     {
+        // "If the combination of parameters ... is not supported by the implementation for use in
+        // vkCreateImage, then all members of VkImageFormatProperties will be filled with zero." The
+        // refusal used to return without touching the structure at all, which is not the same thing as
+        // zeroing it: this is an output the caller need not initialise, so leaving it alone hands back
+        // whatever its stack held. That is what 32 dEQP-VK.api.info.image_format_properties cases saw
+        // when they checked `maxExtent.width == 0` after a refusal.
+        *out = VkImageFormatProperties::default();
         return VK_ERROR_FORMAT_NOT_SUPPORTED;
     }
     let dim = StateStore::with(|s| s.physical_device().limits.max_image_dimension_2d);

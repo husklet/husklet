@@ -949,3 +949,74 @@ fn an_unrecognised_chain_node_is_skipped_without_stopping_the_walk() {
         "the walk must continue past an unrecognised node"
     );
 }
+
+/// The specification requires that when `vkGetPhysicalDeviceImageFormatProperties` refuses a
+/// combination with `VK_ERROR_FORMAT_NOT_SUPPORTED`, every member of `VkImageFormatProperties` is
+/// filled with zero. Returning without touching the structure is not the same thing: it is an output
+/// the caller need not initialise, so the caller reads back its own stack. 32
+/// `dEQP-VK.api.info.image_format_properties` cases caught exactly that by checking
+/// `maxExtent.width == 0` after a refusal.
+#[test]
+fn a_refused_image_format_query_zeroes_the_properties() {
+    const R8G8B8A8_UNORM: i32 = 37;
+    const VK_IMAGE_TYPE_1D: i32 = 0;
+    const VK_IMAGE_TYPE_2D: i32 = 1;
+    const VK_IMAGE_TILING_OPTIMAL: i32 = 0;
+    const VK_ERROR_FORMAT_NOT_SUPPORTED: VkResult = -11;
+
+    let poison = VkImageFormatProperties {
+        max_extent: VkExtent3D {
+            width: 0xDEAD,
+            height: 0xDEAD,
+            depth: 0xDEAD,
+        },
+        max_mip_levels: 0xDEAD,
+        max_array_layers: 0xDEAD,
+        sample_counts: 0xDEAD,
+        max_resource_size: 0xDEAD,
+    };
+
+    // Positive control FIRST: a combination this driver really supports must still be answered with
+    // real limits. Without this, a query that refused everything would satisfy the assertion below
+    // while measuring nothing.
+    let mut supported = poison;
+    assert_eq!(
+        crate::instance::vkGetPhysicalDeviceImageFormatProperties(
+            core::ptr::null_mut(),
+            R8G8B8A8_UNORM,
+            VK_IMAGE_TYPE_2D,
+            VK_IMAGE_TILING_OPTIMAL,
+            0,
+            0,
+            &mut supported as *mut _ as *mut c_void,
+        ),
+        VK_SUCCESS
+    );
+    assert_ne!(
+        supported.max_extent.width, 0,
+        "a supported combination must report real limits"
+    );
+    assert_ne!(supported.max_extent.width, 0xDEAD);
+
+    // Then the refusal. 1D is not materialised by this driver, so this combination is refused.
+    let mut refused = poison;
+    assert_eq!(
+        crate::instance::vkGetPhysicalDeviceImageFormatProperties(
+            core::ptr::null_mut(),
+            R8G8B8A8_UNORM,
+            VK_IMAGE_TYPE_1D,
+            VK_IMAGE_TILING_OPTIMAL,
+            0,
+            0,
+            &mut refused as *mut _ as *mut c_void,
+        ),
+        VK_ERROR_FORMAT_NOT_SUPPORTED
+    );
+    assert_eq!(refused.max_extent.width, 0, "maxExtent.width != 0");
+    assert_eq!(refused.max_extent.height, 0);
+    assert_eq!(refused.max_extent.depth, 0);
+    assert_eq!(refused.max_mip_levels, 0);
+    assert_eq!(refused.max_array_layers, 0);
+    assert_eq!(refused.sample_counts, 0);
+    assert_eq!(refused.max_resource_size, 0);
+}
