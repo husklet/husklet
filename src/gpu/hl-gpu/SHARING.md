@@ -207,8 +207,17 @@ the error channel improves.
 The mapping site in `src/surface/hl-vulkan/src/result.rs` carries the same reasoning, so the two cannot
 drift apart without one of them being obviously stale.
 
-This is dissolved, not worked around, by the wire "retry later" acknowledgement code described below —
-which is now wanted by two independent findings.
+**The wire "retry later" code below does NOT dissolve this.** That was claimed here and it was wrong.
+The wire code carries the reason CLASS across the transport, and each driver then maps that class to
+"the result the identical error would have produced had it been caught locally" — which is the invariant
+`a_classified_refusal_maps_like_the_local_error` asserts. For Vulkan the local result is
+`VK_ERROR_UNKNOWN`, so a remote contention refusal maps to `VK_ERROR_UNKNOWN` too. The wire code makes
+the remote path CONSISTENT with the local one; it cannot make the local one honest, because the poverty
+is in `VkResult`'s vocabulary and no transport change reaches that.
+
+So this constraint is **permanent, not transitional**. It is not waiting on a wire feature. It is waiting
+on Vulkan growing a code for transient contention, which is not in anyone's gift here. Build Vulkan-side
+sharing to prevent the condition, and do not plan for a future in which it can be reported.
 
 ## Scope note for tier 3
 
@@ -216,9 +225,17 @@ which is now wanted by two independent findings.
 
 `hl-gpu`'s `Refusal::for_error` classifies `MappedElsewhere` as `Invalid` on the wire, because the
 acknowledgement byte has no code meaning "refused, and the same call will succeed later". That was noted
-once as a wart. It is now the same missing thing the Vulkan constraint above is a consequence of: give the
-wire the code and `VkResult` gets an honest answer through the transport's refusal classification instead
-of collapsing to `VK_ERROR_UNKNOWN`.
+once as a wart. What it actually buys, stated carefully because an earlier version of this section
+overclaimed it:
+
+* **CUDA and EGL gain an honest REMOTE refusal.** Today a contention refusal arriving over the wire is
+  classified `Invalid` and lands on those drivers' generic invalid-argument codes. With the code, it
+  lands on `CUDA_ERROR_ALREADY_MAPPED` and `EGL_BAD_ACCESS` — the same codes the local path already
+  produces.
+* **It preserves local/remote agreement** for the new variant, which is the invariant each driver's
+  `a_classified_refusal_maps_like_the_local_error` test asserts. Without it, that invariant is simply
+  false for `MappedElsewhere`.
+* **It does nothing for Vulkan**, for the reason given in the section above.
 
 Cost, so it can be scoped rather than guessed: one `Refusal` variant and one `ACK_*` constant in
 `transport/model/header.rs`, one arm in `for_error`, and a `RefusalKind` arm in each of the three drivers'
