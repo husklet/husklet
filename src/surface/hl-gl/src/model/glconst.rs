@@ -210,6 +210,11 @@ pub const GL_MAX_UNIFORM_BLOCK_SIZE: u32 = 0x8A30;
 pub const GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS: u32 = 0x8A31;
 pub const GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS: u32 = 0x8A33;
 pub const GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT: u32 = 0x8A34;
+/// `glGetProgramiv` block-reflection queries. Neither was declared, so both fell through the program
+/// query's default arm and answered `0` — a count of zero puts every block index out of range, and it is
+/// indistinguishable from a program that genuinely declares no blocks.
+pub const GL_ACTIVE_UNIFORM_BLOCK_MAX_NAME_LENGTH: u32 = 0x8A35;
+pub const GL_ACTIVE_UNIFORM_BLOCKS: u32 = 0x8A36;
 pub const GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT: u32 = 0x90DF;
 pub const GL_MIN_PROGRAM_TEXEL_OFFSET: u32 = 0x8904;
 pub const GL_MAX_PROGRAM_TEXEL_OFFSET: u32 = 0x8905;

@@ -463,3 +463,41 @@ fn declared_uniform_blocks_are_indexed_from_zero_in_declaration_order() {
         "the default uniform block has no index to look up"
     );
 }
+
+/// `GL_ACTIVE_UNIFORM_BLOCKS` is what an application enumerates blocks with, and it was not merely
+/// answering zero — neither it nor `GL_ACTIVE_UNIFORM_BLOCK_MAX_NAME_LENGTH` was declared anywhere in the
+/// driver, so both fell through the program query's default arm. That is the worst shape a query can have:
+/// zero is exactly what a program with no blocks reports, so nothing outside could tell the difference,
+/// and every valid index was out of range of the count that describes it.
+///
+/// The pairing with a program that genuinely declares none is the whole point of the test.
+#[test]
+fn the_active_block_count_describes_the_blocks_that_exist() {
+    let mut c = ctx_800x600();
+    let blocks = program_with_blocks(&mut c);
+    assert_eq!(
+        query::get_programiv(&c, blocks, GL_ACTIVE_UNIFORM_BLOCKS),
+        2,
+        "Matrices and Material"
+    );
+    assert_eq!(
+        query::get_programiv(&c, blocks, GL_ACTIVE_UNIFORM_BLOCK_MAX_NAME_LENGTH),
+        "Material".len() as i32 + 1,
+        "the longest block name, with its terminator"
+    );
+    // Every index the count describes must resolve, which is the property that was broken.
+    for index in 0..query::get_programiv(&c, blocks, GL_ACTIVE_UNIFORM_BLOCKS) as u32 {
+        assert!(
+            intro::active_uniform_block_name(&mut c, blocks, index).is_some(),
+            "block {index} is inside the reported count and must resolve"
+        );
+    }
+
+    // A program with only plain data uniforms declares no blocks — the default block is not one.
+    let plain = linked_program(&mut c);
+    assert_eq!(query::get_programiv(&c, plain, GL_ACTIVE_UNIFORM_BLOCKS), 0);
+    assert_eq!(
+        query::get_programiv(&c, plain, GL_ACTIVE_UNIFORM_BLOCK_MAX_NAME_LENGTH),
+        0
+    );
+}

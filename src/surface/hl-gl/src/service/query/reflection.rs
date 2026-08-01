@@ -83,6 +83,22 @@ pub fn get_programiv(ctx: &GlContext, program: u32, pname: u32) -> i32 {
         GL_DELETE_STATUS => i32::from(p.pending_delete),
         GL_ATTACHED_SHADERS => (p.vs != 0) as i32 + (p.fs != 0) as i32,
         GL_ACTIVE_UNIFORMS => (p.unis.len() + p.samp_names.len()) as i32,
+        // How many uniform BLOCKS the linked program declares, and the longest of their names. Neither
+        // enum was declared anywhere in the driver, so both fell through the default arm below and
+        // answered 0 — which is not merely wrong but unfalsifiable from outside, since it is exactly what
+        // a program with no blocks reports. A count of zero also puts every valid block index out of
+        // range, so an application that enumerates blocks rather than looking them up by name saw none.
+        // The default uniform block is deliberately not counted (ES 3.0 §2.12.6); see
+        // `service::intro::uniform_block_index`.
+        GL_ACTIVE_UNIFORM_BLOCKS => ctx
+            .uniform_blocks
+            .get(&program)
+            .map_or(0, |blocks| blocks.len() as i32),
+        GL_ACTIVE_UNIFORM_BLOCK_MAX_NAME_LENGTH => ctx
+            .uniform_blocks
+            .get(&program)
+            .and_then(|blocks| blocks.iter().map(|b| b.name.len() as i32 + 1).max())
+            .unwrap_or(0),
         GL_ACTIVE_UNIFORM_MAX_LENGTH => {
             crate::adapter::glsl::StageSources::new(&p.vs_src, &p.fs_src)
                 .uniform_decls()
