@@ -20,3 +20,6 @@ Build and test with:
 ```sh
 cargo test -p hl-vulkan
 ```
+
+Where this driver stands against Khronos VK-GL-CTS — what is measured, what is a capability gap
+rather than a defect, and what to do first — is in [CONFORMANCE.md](CONFORMANCE.md).
