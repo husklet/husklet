@@ -84,7 +84,7 @@ pub fn dispatch(
     // `Drop` runs during unwinding, so the guard restores the pre-frame tables on the panic path too, and
     // an abnormal abort becomes indistinguishable from a clean refusal.
     let presents = {
-        let mut txn = Transaction::begin(&mut session.resources);
+        let txn = Transaction::begin(&mut session.resources);
         let presents = exec.execute(txn.resources, batch)?;
         txn.commit();
         presents
