@@ -954,6 +954,12 @@ refused identically and the assertions passed while establishing nothing. It sur
 control expected to *succeed* also failed. Pair every refusal assertion with a positive control you expect
 to pass, and prove the normal path first.
 
+An exhaustive test can be exhaustive over the wrong space. A round-trip across all sixty-five thousand
+representable half-float patterns could not catch a rounding rule that was wrong at ties, because every
+value it generates is exactly representable and no tie ever occurs — both rules agree on every one. The
+test its author was most confident in had no power over the defect at all. Ask what the generator can
+produce, not how many cases it runs.
+
 Show a new test failing before trusting it to pass. Two executor tests were run against a deliberately
 reverted executor and returned exactly the conformance suite's own failure signature, which is what makes
 them evidence rather than a claim. The same control caught three assertions passing for the wrong reason —
