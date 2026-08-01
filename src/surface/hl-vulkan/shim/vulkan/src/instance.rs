@@ -14,7 +14,7 @@ use crate::types::*;
 mod compatibility;
 mod format;
 mod lifecycle;
-mod limits;
+pub(crate) mod limits;
 mod physical;
 mod properties;
 

@@ -43,31 +43,141 @@ impl VertexLayouts {
                     )
                 }
             };
-        bindings
-            .iter()
-            .map(|b| {
-                Ok(VertexLayout {
-                    stride: b.stride,
-                    step_mode: b.input_rate as u32,
-                    attrs: attrs
-                        .iter()
-                        .filter(|a| a.binding == b.binding)
-                        .map(|a| {
-                            // The wire field is a PACKED (comps, kind, normalized, integer) quadruple,
-                            // not a format enum. Forwarding `a.format` raw shipped a VkFormat number
-                            // into it, which the executor decoded as a component count.
-                            Ok(VertexAttr {
-                                location: a.location,
-                                format: VertexFormat(a.format as u32)
-                                    .wire()
-                                    .ok_or(a.format as u32)?,
-                                offset: a.offset,
-                            })
+        // The executor addresses a vertex buffer by its POSITION in this vector, and
+        // `vkCmdBindVertexBuffers` records `firstBinding + i` — the Vulkan BINDING NUMBER. Building this
+        // in declaration order makes the two agree only when the bindings happen to be exactly
+        // `0..N-1` ascending. A guest that declares only `binding = 1`, or lists its bindings out of
+        // order, or leaves a gap, otherwise gets every later attribute read from the wrong buffer with
+        // no error anywhere — the bind and the layout simply mean different slots. Index by binding
+        // number so `slot == binding` holds on both sides by construction, which is the same property
+        // the GL lowering establishes deliberately (`hl-gl/src/service/frame/lower.rs`).
+        //
+        // A binding the guest never declared becomes an attribute-less placeholder. That is not a
+        // silent hole: the executor's own draw validation requires a buffer for every slot it is given,
+        // so an unbound placeholder is refused loudly rather than shifting the slots beneath it.
+        let mut layouts: Vec<VertexLayout> = Vec::new();
+        for b in bindings {
+            // `maxVertexInputBindings` is advertised as 31, so a binding number past it is a guest
+            // error and must be refused rather than allowed to size this vector.
+            if b.binding >= crate::instance::limits::MAX_VERTEX_INPUT_BINDINGS {
+                return Err(b.binding);
+            }
+            let slot = b.binding as usize;
+            if layouts.len() <= slot {
+                layouts.resize_with(slot + 1, VertexLayout::unused);
+            }
+            layouts[slot] = VertexLayout {
+                stride: b.stride,
+                step_mode: b.input_rate as u32,
+                attrs: attrs
+                    .iter()
+                    .filter(|a| a.binding == b.binding)
+                    .map(|a| {
+                        // The wire field is a PACKED (comps, kind, normalized, integer) quadruple,
+                        // not a format enum. Forwarding `a.format` raw shipped a VkFormat number
+                        // into it, which the executor decoded as a component count.
+                        Ok(VertexAttr {
+                            location: a.location,
+                            format: VertexFormat(a.format as u32)
+                                .wire()
+                                .ok_or(a.format as u32)?,
+                            offset: a.offset,
                         })
-                        .collect::<Result<Vec<_>, u32>>()?,
-                })
-            })
-            .collect()
+                    })
+                    .collect::<Result<Vec<_>, u32>>()?,
+            };
+        }
+        Ok(layouts)
+    }
+}
+
+#[cfg(test)]
+mod vertex_layout_tests {
+    use super::*;
+
+    // VK_FORMAT_R32G32B32A32_SFLOAT, a format the wire packing accepts.
+    const RGBA32F: i32 = 109;
+
+    fn parse(
+        bindings: &[VkVertexInputBindingDescription],
+        attrs: &[VkVertexInputAttributeDescription],
+    ) -> Result<Vec<VertexLayout>, u32> {
+        let vi = VkPipelineVertexInputStateCreateInfo {
+            s_type: 0,
+            p_next: std::ptr::null(),
+            flags: 0,
+            vertex_binding_description_count: bindings.len() as u32,
+            p_vertex_binding_descriptions: bindings.as_ptr(),
+            vertex_attribute_description_count: attrs.len() as u32,
+            p_vertex_attribute_descriptions: attrs.as_ptr(),
+        };
+        VertexLayouts::parse(&vi)
+    }
+
+    fn binding(binding: u32, stride: u32) -> VkVertexInputBindingDescription {
+        VkVertexInputBindingDescription { binding, stride, input_rate: 0 }
+    }
+
+    fn attribute(location: u32, binding: u32) -> VkVertexInputAttributeDescription {
+        VkVertexInputAttributeDescription { location, binding, format: RGBA32F, offset: 0 }
+    }
+
+    /// A single binding numbered 1 must land at SLOT 1, leaving slot 0 unused.
+    ///
+    /// `vkCmdBindVertexBuffers` records `firstBinding + i`, so this guest's buffer arrives at slot 1.
+    /// Placing the layout at slot 0 — which building the vector in declaration order does — silently
+    /// pairs the layout with a buffer that was never bound to it.
+    #[test]
+    fn a_lone_nonzero_binding_keeps_its_slot_number() {
+        let layouts = parse(&[binding(1, 16)], &[attribute(0, 1)]).unwrap();
+        assert_eq!(layouts.len(), 2, "slot 1 must exist as slot 1, not be shifted to slot 0");
+        assert_eq!(layouts[0], VertexLayout::unused());
+        assert_eq!(layouts[1].stride, 16);
+        assert_eq!(layouts[1].attrs.len(), 1);
+    }
+
+    /// Descending declaration order must not transpose the two layouts.
+    #[test]
+    fn out_of_order_bindings_are_placed_by_number_not_position() {
+        let layouts = parse(
+            &[binding(1, 16), binding(0, 32)],
+            &[attribute(0, 0), attribute(1, 1)],
+        )
+        .unwrap();
+        assert_eq!(layouts.len(), 2);
+        assert_eq!(layouts[0].stride, 32, "binding 0 belongs at slot 0 whenever it was declared");
+        assert_eq!(layouts[1].stride, 16);
+        assert_eq!(layouts[0].attrs[0].location, 0);
+        assert_eq!(layouts[1].attrs[0].location, 1);
+    }
+
+    /// The ascending 0..N-1 case every other test uses — the one shape where declaration order and
+    /// binding number agree. It is the control: it passed before this change and must still pass, which
+    /// is what proves the fix moved the placement rule rather than rewriting the common path.
+    #[test]
+    fn contiguous_ascending_bindings_are_unchanged() {
+        let layouts = parse(
+            &[binding(0, 12), binding(1, 24)],
+            &[attribute(0, 0), attribute(1, 1)],
+        )
+        .unwrap();
+        assert_eq!(layouts.len(), 2);
+        assert_eq!(layouts[0].stride, 12);
+        assert_eq!(layouts[1].stride, 24);
+    }
+
+    /// A binding number past `maxVertexInputBindings` is refused rather than allowed to size the vector.
+    #[test]
+    fn a_binding_past_the_advertised_limit_is_refused() {
+        let over = crate::instance::limits::MAX_VERTEX_INPUT_BINDINGS;
+        assert_eq!(parse(&[binding(over, 16)], &[]), Err(over));
+    }
+
+    /// No vertex input state at all stays empty — a pipeline with no vertex buffers must not acquire a
+    /// phantom slot 0, which the executor would then demand a buffer for.
+    #[test]
+    fn no_bindings_produce_no_slots() {
+        assert!(parse(&[], &[]).unwrap().is_empty());
     }
 }
 

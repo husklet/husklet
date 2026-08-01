@@ -1,5 +1,10 @@
 use super::*;
 
+/// `maxVertexInputBindings`. Named because the pipeline path must refuse a binding number past what this
+/// device advertises before it uses that number to place a vertex layout, and a second literal would
+/// drift away from the advertised limit silently.
+pub const MAX_VERTEX_INPUT_BINDINGS: u32 = 31;
+
 pub(super) fn metal_limits() -> VkPhysicalDeviceLimits {
     let dim = 16384u32;
     let per_stage_buffers = 31u32;
@@ -40,7 +45,7 @@ pub(super) fn metal_limits() -> VkPhysicalDeviceLimits {
         max_descriptor_set_storage_images: per_stage_storage_images * 5,
         max_descriptor_set_input_attachments: per_stage_textures * 5,
         max_vertex_input_attributes: 31,
-        max_vertex_input_bindings: 31,
+        max_vertex_input_bindings: MAX_VERTEX_INPUT_BINDINGS,
         max_vertex_input_attribute_offset: 4095,
         max_vertex_input_binding_stride: 4096,
         max_vertex_output_components: 124,

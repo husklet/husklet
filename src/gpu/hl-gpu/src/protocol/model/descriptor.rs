@@ -120,6 +120,18 @@ pub struct VertexLayout {
     pub attrs: Vec<VertexAttr>,
 }
 
+impl VertexLayout {
+    /// A slot the guest declared no binding for.
+    ///
+    /// A slot index in this protocol is the source API's own binding number, not a position in a list
+    /// that happened to be built in declaration order — so a guest binding only slot 1 leaves slot 0
+    /// with nothing in it. This is that hole, stated rather than closed by shifting slot 1 down, which
+    /// would put every attribute on the wrong buffer.
+    pub fn unused() -> Self {
+        Self { stride: 0, step_mode: 0, attrs: Vec::new() }
+    }
+}
+
 /// Fixed-function blend for one color target. Factors are [`super::enums::blend_factor`] codes and ops are
 /// [`super::enums::blend_op`] codes — this protocol's own neutral numbering, not `GPUBlendFactor` /
 /// `GPUBlendOperation` and not `VkBlendFactor` / `VkBlendOp`.

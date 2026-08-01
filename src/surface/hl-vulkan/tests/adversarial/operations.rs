@@ -237,6 +237,72 @@ fn fill_buffer_alignment_usage_and_whole_size() {
     assert!(data.chunks_exact(4).all(|w| w == [0xAA, 0, 0, 0]));
 }
 
+/// `VK_WHOLE_SIZE` on a buffer whose size is NOT a multiple of 4 must round the range DOWN, not refuse.
+///
+/// The case above uses a 64-byte buffer, so its remaining size is already aligned and the rounding rule
+/// is invisible to it — it agreed with the broken implementation on every value it could generate. This
+/// drives the one shape that separates them, which is what `dEQP-VK.api.fill_and_update_buffer.
+/// *.fill_buffer_vk_whole_size_*_extra_bytes_offset_*` does: 36 of those failed, and the guest saw only
+/// `vkEndCommandBuffer` returning VK_ERROR_INITIALIZATION_FAILED, because a refusal here fails the whole
+/// command buffer and the command never reaches the host to be logged.
+#[test]
+fn fill_buffer_whole_size_rounds_down_to_a_whole_word() {
+    let mut d = dev();
+    let mut s = sink();
+    // 66 = 16 whole words plus 2 bytes that no 32-bit fill can cover.
+    let buf = create::create_buffer(&mut d, &mut s, vk_buffer_usage::TRANSFER_DST, 66).unwrap();
+    let ir = buf_ir(&d, buf);
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    record::cmd_fill_buffer(&mut d, cb, buf, 0, u64::MAX, 0xAA).unwrap();
+    d.end_command_buffer(cb).unwrap();
+    submit::queue_submit(&mut d, &mut s, &[cb], None).unwrap();
+    let (off, data) = s
+        .batches
+        .last()
+        .unwrap()
+        .iter()
+        .find_map(|c| match c {
+            Cmd::WriteBuffer { id, offset, data } if *id == ir => Some((*offset, data.clone())),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(off, 0);
+    // 64, not 66 and not a refusal: the trailing 2 bytes are outside any whole word.
+    assert_eq!(data.len(), 64);
+    assert!(data.chunks_exact(4).all(|w| w == [0xAA, 0, 0, 0]));
+}
+
+/// `VK_WHOLE_SIZE` with fewer than 4 bytes left is a no-op, and an explicit size still must be a whole
+/// number of words. Paired deliberately: the first half proves the round-down does not turn into a
+/// silent refusal at the boundary, and the second proves it did not relax the rule it was narrowing.
+#[test]
+fn fill_buffer_whole_size_below_one_word_writes_nothing() {
+    let mut d = dev();
+    let mut s = sink();
+    let buf = create::create_buffer(&mut d, &mut s, vk_buffer_usage::TRANSFER_DST, 66).unwrap();
+    let ir = buf_ir(&d, buf);
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    // Offset 64 of a 66-byte buffer: 2 bytes remain, no whole word.
+    record::cmd_fill_buffer(&mut d, cb, buf, 64, u64::MAX, 0xAA).unwrap();
+    // An explicit non-multiple-of-4 size is still refused; only VK_WHOLE_SIZE rounds.
+    assert!(matches!(
+        record::cmd_fill_buffer(&mut d, cb, buf, 0, 6, 0xAA),
+        Err(GpuError::Invalid(_))
+    ));
+    d.end_command_buffer(cb).unwrap();
+    submit::queue_submit(&mut d, &mut s, &[cb], None).unwrap();
+    assert!(
+        !s.batches
+            .last()
+            .unwrap()
+            .iter()
+            .any(|c| matches!(c, Cmd::WriteBuffer { id, .. } if *id == ir)),
+        "a whole-size fill with no whole word left must write nothing at all"
+    );
+}
+
 #[test]
 fn update_buffer_size_limits() {
     let mut d = dev();

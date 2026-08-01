@@ -97,15 +97,26 @@ pub fn cmd_fill_buffer(
         ));
     }
     let fill_size = if size == u64::MAX {
-        bsize.saturating_sub(dst_offset)
+        // VK_WHOLE_SIZE. The specification requires the remaining range to be ROUNDED DOWN to the
+        // nearest multiple of 4 — a buffer whose size is not a multiple of 4 is legal, and the fill
+        // covers its 4-byte-aligned part. Refusing it instead failed the whole command buffer, which
+        // the guest sees as `vkEndCommandBuffer` returning VK_ERROR_INITIALIZATION_FAILED with nothing
+        // logged on either side of the transport, because the command never reaches the host.
+        let remaining = bsize.saturating_sub(dst_offset) & !3;
+        if remaining == 0 {
+            // Fewer than 4 bytes left to align: there is no whole word to write. A no-op, not an
+            // error — the caller asked to fill to the end and the end is already reached.
+            return Ok(());
+        }
+        remaining
     } else {
+        if size == 0 || !size.is_multiple_of(4) {
+            return Err(GpuError::Invalid(
+                "vkCmdFillBuffer: size must be a nonzero multiple of 4",
+            ));
+        }
         size
     };
-    if fill_size == 0 || fill_size % 4 != 0 {
-        return Err(GpuError::Invalid(
-            "vkCmdFillBuffer: size must be a nonzero multiple of 4",
-        ));
-    }
     match dst_offset.checked_add(fill_size) {
         Some(end) if end <= bsize => {}
         _ => return Err(GpuError::OutOfBounds),
