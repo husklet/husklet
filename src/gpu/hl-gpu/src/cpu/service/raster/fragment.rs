@@ -22,9 +22,13 @@ pub(super) fn barycentric(fb: &[[f32; 2]; 3], c: [f32; 2], area: f32) -> Option<
 /// neutral `0xF` writes every channel and takes the fast path — byte-for-byte the pre-mask behavior; the
 /// composite (blend or replace) is computed in full and then the masked-out channels are restored, so
 /// masking composes correctly with both the blend and the sRGB encode.
+/// `order` is the logical-RGBA to byte-offset permutation, and it exists only for the four-channel
+/// eight-bit formats. `None` means this target has no such permutation — a one- or two-channel plane, or
+/// a float or integer one — which is fine for a REPLACE write and is what blending and channel masking
+/// cannot do without. Those two refuse by name rather than the whole draw refusing generically.
 pub(super) fn write_fragment(
     texel: &mut [u8],
-    order: [usize; 4],
+    order: Option<[usize; 4]>,
     srgb: bool,
     fmt: TextureFormat,
     blend_enabled: bool,
@@ -35,17 +39,29 @@ pub(super) fn write_fragment(
     // taken when a channel is actually masked out (`write_mask != 0xF`), keeping the neutral path allocation-
     // and copy-free.
     let masked = write_mask & 0xF != 0xF;
-    let saved: [u8; 4] = if masked {
-        [
+    if (masked || blend_enabled) && order.is_none() {
+        // Both of these read the destination back as normalized RGBA, which a plane with no
+        // logical-RGBA byte permutation has no reading for. Named separately so a refusal says which
+        // capability was missing rather than "this format", which is what the old blanket refusal on
+        // every draw said — and which made the whole class of target invisible rather than one operation
+        // on it unsupported.
+        return Err(GpuError::Unsupported(if blend_enabled {
+            "software: blend into a color format with no normalized reading"
+        } else {
+            "software: channel-mask a color format with no normalized reading"
+        }));
+    }
+    let saved: [u8; 4] = match order {
+        Some(order) if masked => [
             texel[order[0]],
             texel[order[1]],
             texel[order[2]],
             texel[order[3]],
-        ]
-    } else {
-        [0; 4]
+        ],
+        _ => [0; 4],
     };
     if blend_enabled {
+        let order = order.expect("blending refused above without a channel order");
         let a = src[3].clamp(0.0, 1.0);
         let s_lin = |k: usize| {
             if srgb {
@@ -67,7 +83,7 @@ pub(super) fn write_fragment(
         texel.copy_from_slice(&bytes);
     }
     // Restore the channels the mask leaves untouched (logical R,G,B,A at byte indices `order[0..4]`).
-    if masked {
+    if let (true, Some(order)) = (masked, order) {
         for k in 0..4 {
             if (write_mask >> k) & 1 == 0 {
                 texel[order[k]] = saved[k];

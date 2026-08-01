@@ -443,3 +443,88 @@ fn a_float_colour_buffer_reads_back_unclamped_through_the_float_pair() {
         "the values the buffer holds, above one and below zero, come back as they are"
     );
 }
+
+/// A draw into a NARROW and into a FLOAT colour target, end to end through the software reference.
+///
+/// The reference used to refuse every draw whose target was not a four-channel eight-bit plane, which is
+/// why a `GL_R8` colour attachment reading back pure white survived a green suite: no test in the
+/// repository, and no program in the executor differential, could render into one. The refusal was the
+/// reference's own limit rather than the executor's, so it read as "unsupported" while the driver
+/// happily shipped the format.
+///
+/// A replace draw needs nothing a narrow or float plane lacks — it writes the fragment through the same
+/// packing rule the clear uses — so what remains refused is blending and channel masking, which read the
+/// destination back as normalized RGBA and genuinely have no reading here.
+///
+/// The result names its own correctness: the blue clear survives in the corner of a four-channel target
+/// and is GONE from the one- and two-channel ones, because those planes have no blue to store it in. A
+/// stride bug cannot produce that pattern, and neither can a reference that quietly wrote four channels
+/// into a one-channel plane.
+#[test]
+fn the_reference_draws_into_narrow_and_float_colour_targets() {
+    use hl_gpu::protocol::model::enums::TextureFormat;
+
+    for (plane, corner) in [
+        // One and two channels: the blue clear has nowhere to live.
+        (TextureFormat::R8Unorm, [0u8, 0, 0, 255]),
+        (TextureFormat::Rg8Unorm, [0, 0, 0, 255]),
+        // Four channels, so the clear survives where the triangle does not cover.
+        (TextureFormat::Rgba16Float, [0, 0, 255, 255]),
+        (TextureFormat::Rgba8Unorm, [0, 0, 255, 255]),
+    ] {
+        let mut c = GlContext::new();
+        c.set_surface(GlSurface {
+            have: true,
+            width: W as u32,
+            height: H as u32,
+        });
+        let mut sink = cpu_sink();
+
+        let tex = c.textures.gen();
+        c.active_texture(GL_TEXTURE0);
+        record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
+        record::tex_image_2d_format(&mut c, W as i32, H as i32, &[], plane);
+        let fbo = c.gen_framebuffer();
+        record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
+        record::framebuffer_texture_2d(
+            &mut c,
+            GL_FRAMEBUFFER,
+            GL_COLOR_ATTACHMENT0,
+            GL_TEXTURE_2D,
+            tex,
+            0,
+        );
+
+        record::clear_color(&mut c, [0.0, 0.0, 1.0, 1.0]); // blue
+        record::clear(&mut c);
+        record_triangle(&mut c, [1.0, 0.0, 0.0, 1.0]); // red
+        record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+
+        let px = readpixels::read_pixels(
+            &mut c,
+            &mut sink,
+            0,
+            0,
+            W as i32,
+            H as i32,
+            hl_gl::service::readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE),
+        )
+        .unwrap_or_else(|error| panic!("{plane:?} draw+readback failed: {error:?}"));
+
+        assert_eq!(
+            sink.executor().draws,
+            1,
+            "{plane:?} must actually execute the draw, not skip it"
+        );
+        assert_eq!(
+            read_texel(&px, W / 2, H / 2, W),
+            [255, 0, 0, 255],
+            "{plane:?} centre is the red triangle — every one of these planes has a red channel"
+        );
+        assert_eq!(
+            read_texel(&px, 0, 0, W),
+            corner,
+            "{plane:?} corner is the clear, in the channels this plane actually has"
+        );
+    }
+}

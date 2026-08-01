@@ -184,9 +184,12 @@ fn raster_draw_no_depth(
     rect: PassRect,
 ) -> Result<()> {
     for (ti, (tex_id, fmt)) in targets.iter().enumerate() {
-        let order = fmt.rgba_channel_order().ok_or(GpuError::Unsupported(
-            "software: draw into a non-4-channel color format",
-        ))?;
+        // NOT a gate. A replace draw writes the fragment through the format's own packing rule
+        // (`TextureFormat::clear_texel`, the same one the clear uses), so it serves every colour format
+        // this driver can allocate. Refusing every draw whose target had no four-channel eight-bit
+        // permutation made narrow and float render targets invisible to the differential entirely —
+        // which is how a `GL_R8` colour attachment reading back pure white survived a green suite.
+        let order = fmt.rgba_channel_order();
         let srgb = fmt.is_srgb();
         let blend_enabled = blends.get(ti).map(|b| b.is_some()).unwrap_or(false);
         let write_mask = write_masks.get(ti).copied().unwrap_or(0xF);
@@ -398,9 +401,12 @@ fn raster_draw_depth(
 
     // Composite the winning fragments into every color attachment.
     for (ti, (tex_id, fmt)) in targets.iter().enumerate() {
-        let order = fmt.rgba_channel_order().ok_or(GpuError::Unsupported(
-            "software: draw into a non-4-channel color format",
-        ))?;
+        // NOT a gate. A replace draw writes the fragment through the format's own packing rule
+        // (`TextureFormat::clear_texel`, the same one the clear uses), so it serves every colour format
+        // this driver can allocate. Refusing every draw whose target had no four-channel eight-bit
+        // permutation made narrow and float render targets invisible to the differential entirely —
+        // which is how a `GL_R8` colour attachment reading back pure white survived a green suite.
+        let order = fmt.rgba_channel_order();
         let srgb = fmt.is_srgb();
         let blend_enabled = blends.get(ti).map(|b| b.is_some()).unwrap_or(false);
         let write_mask = write_masks.get(ti).copied().unwrap_or(0xF);

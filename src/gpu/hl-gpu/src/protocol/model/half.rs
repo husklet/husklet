@@ -32,7 +32,22 @@ pub fn to_f32(bits: u16) -> f32 {
     f32::from_bits(value)
 }
 
-/// IEEE 754 binary32 → binary16, rounding to nearest even. A magnitude above half's maximum saturates to
+/// Shift `value` right by `shift`, rounding the discarded bits to NEAREST, ties to EVEN.
+///
+/// This was `(value >> shift) + ((value >> (shift - 1)) & 1)`, which rounds a tie AWAY FROM ZERO — while
+/// the doc comment above claimed nearest-even and the hardware does nearest-even. A comment asserting the
+/// rule the code does not implement is worse than no comment, because it is what the next reader checks
+/// instead of the arithmetic; this one survived a 65536-case exhaustive round trip, which cannot see the
+/// difference at all, since every value that round trip produces is exactly representable and never ties.
+fn round_to_even(value: u32, shift: u32) -> u32 {
+    let truncated = value >> shift;
+    let round_bit = (value >> (shift - 1)) & 1;
+    let sticky = value & ((1 << (shift - 1)) - 1);
+    // Round up only when past the halfway point, or exactly at it with an odd result to make even.
+    truncated + u32::from(round_bit == 1 && (sticky != 0 || truncated & 1 == 1))
+}
+
+/// IEEE 754 binary32 → binary16, rounding to nearest, ties to even. A magnitude above half's maximum saturates to
 /// infinity and one below its smallest subnormal flushes to zero, which is what the range of the format
 /// permits; NaN stays NaN rather than becoming an infinity.
 pub fn from_f32(value: f32) -> u16 {
@@ -55,13 +70,11 @@ pub fn from_f32(value: f32) -> u16 {
         }
         let full = mantissa | 0x80_0000;
         let shift = (14 - unbiased) as u32;
-        let rounded = (full >> shift) + ((full >> (shift - 1)) & 1);
-        return sign | rounded as u16;
+        return sign | (round_to_even(full, shift) as u16);
     }
-    let rounded = ((unbiased as u32) << 10) + (mantissa >> 13) + ((mantissa >> 12) & 1);
-    // Rounding the mantissa up may carry into the exponent, which the addition above already handles;
+    // Rounding the mantissa up may carry into the exponent, which the addition below already handles;
     // a carry past the largest finite exponent lands on the infinity encoding, which is correct.
-    sign | rounded as u16
+    sign | (((unbiased as u32) << 10) + round_to_even(mantissa, 13)) as u16
 }
 
 #[cfg(test)]
@@ -94,6 +107,35 @@ mod tests {
         fn is_nan_half(self) -> bool {
             self & 0x7c00 == 0x7c00 && self & 0x03ff != 0
         }
+    }
+
+    /// A tie rounds to EVEN, not away from zero.
+    ///
+    /// The exhaustive round trip above has no power here and neither did anything else: every value it
+    /// produces is exactly representable in half, so no tie ever occurs and both rounding rules agree on
+    /// all 65536 of them. The encoder rounded ties away from zero for its whole life while its doc comment
+    /// said nearest-even, and the first thing that noticed was comparing float clears against real
+    /// hardware. A halfway value is `n + 0.5` ULP: with an 11-bit significand at exponent 0, one ULP is
+    /// 2^-10, so 1.0 + 2^-11 sits exactly between 1.0 and the next half, and must round DOWN to the even
+    /// significand rather than up.
+    #[test]
+    fn a_tie_rounds_to_the_even_significand() {
+        let ulp = 2.0f32.powi(-10);
+        // 1.0 is even (significand 0x000); 1.0 + half an ulp ties and must stay at 1.0.
+        assert_eq!(from_f32(1.0 + ulp / 2.0), 0x3c00, "tie down to the even significand");
+        // 1.0 + 1 ulp is odd (significand 0x001); + half an ulp ties and must round UP to even 0x002.
+        assert_eq!(
+            from_f32(1.0 + ulp + ulp / 2.0),
+            0x3c02,
+            "tie up when rounding down would leave an odd significand"
+        );
+        // Just past the halfway point always rounds up regardless of parity.
+        assert!(
+            from_f32(1.0 + ulp * 0.51) > 0x3c00,
+            "past the tie rounds up even from an even significand"
+        );
+        // Symmetric for negatives: ties go to even, not away from zero.
+        assert_eq!(from_f32(-(1.0 + ulp / 2.0)), 0xbc00, "negative tie also goes to even");
     }
 
     /// The endpoints, named. A conversion that divides or shifts by the wrong constant is invisible in

@@ -57,18 +57,46 @@
 //!     `analytic_msaa_resolve` in the test body; these are counted + reported separately from the
 //!     oracle-compared programs.
 //!
-//! ## BLIND SPOTS — target classes this differential cannot see at all
+//! ## NARROW COLOUR TARGETS — previously invisible, now covered
+//!
+//! `gen_draw_narrow` / `gen_clear_narrow` render into `R8Unorm` and `Rg8Unorm` and compare EXACTLY (the
+//! draw at ±2 for flat-colour quantization, the clear at ±1). Until the oracle learned to render them,
+//! nothing in this repository could: its rasterizer refused every draw whose target lacked a four-channel
+//! eight-bit permutation, so an entire class of target was reported clean forever by never being run. The
+//! cost was concrete — `glReadPixels` returned pure WHITE for an 8x8 `GL_R8` colour attachment cleared to
+//! red, because the readback strided a one-byte plane at four bytes, and this battery stayed green
+//! throughout. The restriction was the ORACLE's, never the executor's, which shipped the formats.
+//!
+//! ## BLIND SPOTS — what this differential still cannot see
 //!
 //! Recorded because a harness that cannot observe a class of target will report that class clean forever,
-//! and both of these hid a real defect until they were looked for directly.
+//! and every one of these hid a real defect until it was looked for directly. Note the shape: coverage is
+//! THINNEST exactly where the driver is NEWEST, which is the opposite of where you want it.
 //!
-//!   * NON-4-CHANNEL COLOUR TARGETS, entirely. The oracle's rasterizer refuses to draw into any of them
-//!     (`cpu/service/raster.rs`: "software: draw into a non-4-channel color format"), so no program in
-//!     this battery can render into a one- or two-channel target, or into any FLOAT target. That is why
-//!     `glReadPixels` returned pure white for an 8x8 `GL_R8` colour attachment cleared to red — the
-//!     readback strided a one-byte plane at four bytes — while every case here stayed green. The
-//!     restriction is the ORACLE's, not the wgpu backend's; the executor renders these formats fine. So
-//!     the gap is coverage, not capability, and it is widest exactly where the driver is newest.
+//!   * FLOAT COLOUR TARGETS. The oracle now renders them — a replace draw writes through the format's own
+//!     packing rule, which is the same rule the clear uses and is defensible — but they cannot be
+//!     COMPARED here, and the blocker is the comparator rather than the reference. `diff` is per-byte with
+//!     an integer tolerance, and that cannot express "within one ULP" of a float: measured on lavapipe at
+//!     tolerance 0, a flat `Rgba16Float` clear agreed on 6 of 8 seeds and a flat draw on 0 of 8, with the
+//!     disagreements one ULP apart — and one of them reported a per-byte delta of 255, because a one-ULP
+//!     difference that carries across a byte boundary looks enormous byte-wise (mantissa `0x0100` against
+//!     `0x00FF`). A per-byte tolerance loose enough to absorb that would hide every real defect in the
+//!     high bits, so widening `tol` is not the fix and would be worse than not comparing.
+//!
+//!     What it needs is a comparator that decodes each plane by its format and compares as VALUES with a
+//!     relative tolerance, plus a decision about what that tolerance means for a flat colour that both
+//!     sides should in principle produce bit-identically. That decision is deliberately not made here:
+//!     choosing it badly makes the two sides agree by both being wrong, which is worse than no reference
+//!     at all. Ruled OUT as the cause while investigating: the oracle's own binary16 encoder rounded ties
+//!     away from zero where the hardware rounds to even — a genuine defect, fixed, and it did not move
+//!     these numbers.
+//!
+//!   * BLENDING and CHANNEL MASKING into any target with no normalized reading. Both read the destination
+//!     back as normalized RGBA, which a one-channel, float or integer plane has none of, so the oracle
+//!     refuses them BY NAME rather than refusing the whole draw. Float blending is not advertised
+//!     (`EXT_float_blend` is absent) and GL forbids blending into an integer target, so this is a real
+//!     limit of the reference and not a promise unkept.
+//!
 //!   * `Enc::ClearRect` as a PACKING path. Every clear in this battery is unscissored and lands on the
 //!     render-pass load op, which on wgpu is the hardware ROP and never packs bytes in software. The
 //!     `ClearRect` path — a scissored clear, or a clear-only frame — is where wgpu EMULATES a clear by
@@ -358,6 +386,8 @@ const GENERATORS: &[fn(u64) -> Prog] = &[
     gen_compute_iota,
     gen_compute_fcmp,
     gen_clear_srgb,
+    gen_draw_narrow,
+    gen_clear_narrow,
     gen_draw_srgb,
     gen_stencil_equal,
     gen_stencil_greater,
