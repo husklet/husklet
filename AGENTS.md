@@ -1089,6 +1089,27 @@ silently, so the only half of the distinction a driver controls is writing every
 recognise. That is precisely why skipping one is serious — it is indistinguishable from correct
 behaviour on a structure the driver was never required to handle.
 
+## Read the stream the subject writes, not the one the harness collected
+
+Twice in one night the answer was sitting in a log nobody was reading, while the report said the system
+was silent. A conformance run recorded 716 device losses with three collected `session-*.log` files of 72
+bytes each, containing a shell prompt — the driver's own stderr went somewhere else entirely. Separately,
+three agents concluded a presentation path emitted nothing while error-level diagnostics accumulated in
+the domain log the whole time.
+
+So when a harness reports no output, the first question is not what the subject failed to emit. It is
+whether the collector is attached to the stream the subject writes to. `lsof -p <pid> | grep log` answers
+it in one command and the answer is frequently a path nobody expected.
+
+Two corollaries, both paid for:
+
+- A diagnostic that exists in the source is not a diagnostic that exists in the artifact, and not one
+  that is switched on. Check a distinctive literal in the installed binary, and check the gate: a driver
+  loaded into someone else's process is often silent by default, correctly.
+- A pipeline can discard the line after the collector captures it. `2>&1 | tail -25` looks like capture
+  and is not, when the interesting line is written at the moment of failure and the subject's own abort
+  output then pushes it past the end.
+
 ## Manager discipline
 
 Stage commits by file, never `git add -A` across a shared tree — you will sweep up another agent's
