@@ -347,6 +347,25 @@ impl<'a> Source<'a> {
         toks.0.as_slice().source()
     }
 
+    /// Split every MATRIX (and aggregate) interface member into per-location vector slots plus a private
+    /// global, bridging the two inside `main` — the only form WGSL can express, since a matrix cannot be a
+    /// shader input or output there at all.
+    ///
+    /// DIALECT-INDEPENDENT, and applied on BOTH routes for the same reason as
+    /// [`Self::split_std140_mat2`]: WGSL's restriction on interface types has nothing to do with GLSL-ES,
+    /// but this pass lived only inside [`Self::normalize`], which the GL driver's output skips because it
+    /// rewrites its shaders to desktop form before they arrive. A plain `layout(location = N) out mat3 v;`
+    /// was therefore split on the ES route and refused on the desktop one — the same gate that hid the
+    /// two-row-matrix rewrite, in a second pass.
+    ///
+    /// Idempotent: a unit with nothing left to split is returned unchanged, so applying it after
+    /// `normalize` has already run costs nothing.
+    pub(crate) fn split_aggregate_io(&self, stage: naga::ShaderStage) -> String {
+        let mut toks = Tokens::from_source(self.text);
+        toks.split_aggregate_io(stage);
+        toks.0.as_slice().source()
+    }
+
     /// Rewrite every narrow-element array member of a `std140` uniform block (`float u[4]`, `vec2 u[2]`,
     /// `int u[16]`, …) to the equivalent array of 4-component vectors (`vec4 u__arr[4]`), swizzling the
     /// original value back at each use. The uniform address space requires a 16-byte array stride in both

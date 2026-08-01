@@ -285,3 +285,134 @@ fn every_matrix_shape_reads_its_own_elements_from_an_array() {
         failures.join("\n  ")
     );
 }
+
+/// A matrix VARYING carries its values across the stage boundary — on both dialect routes.
+///
+/// WGSL has no matrix shader inputs or outputs, so every matrix varying must be split into per-location
+/// vector slots with a private global bridging them inside `main`. That pass existed, and ran only on the
+/// ES route; the GL driver rewrites its shaders to desktop form before they arrive, so the driver's own
+/// output was refused while an ES guest's was accepted. It is the same dialect gate that once hid the
+/// two-row-matrix rewrite, in a second pass — which is why this test drives BOTH spellings of the same
+/// shader rather than trusting one.
+///
+/// The vertex stage writes a matrix whose four read-back elements are distinct, so a column delivered to
+/// the wrong location, or a row/column transposition in the split, changes the colour rather than the shape.
+#[test]
+fn a_matrix_varying_survives_both_dialect_routes() {
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
+
+    let expected = [
+        (M00 * 255.0).round() as u8,
+        (M10 * 255.0).round() as u8,
+        (M01 * 255.0).round() as u8,
+        (M11 * 255.0).round() as u8,
+    ];
+    let mut failures = Vec::new();
+    for (ty, _) in MATRICES {
+        for (dialect, header) in [
+            ("es", "#version 300 es\nprecision highp float;\n"),
+            ("desktop", "#version 460\n"),
+        ] {
+            // Column c row r = the element values above where they exist, 0 elsewhere.
+            let vs = format!(
+                "{header}layout(location = 0) out {ty} v;\n\
+                 void main() {{\n\
+                   v = {ty}(0.0);\n\
+                   v[0][0] = {M00}; v[1][0] = {M10}; v[0][1] = {M01}; v[1][1] = {M11};\n\
+                   vec2 p[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));\n\
+                   gl_Position = vec4(p[gl_VertexIndex], 0.0, 1.0);\n\
+                 }}\n"
+            );
+            let fs = format!(
+                "{header}layout(location = 0) in {ty} v;\n\
+                 layout(location = 0) out vec4 o;\n\
+                 void main() {{ o = vec4(v[0][0], v[1][0], v[0][1], v[1][1]); }}\n"
+            );
+            match render_varying(&mut exec, &vs, &fs) {
+                Err(e) => failures.push(format!("{ty} ({dialect}): refused: {e}")),
+                Ok(pixels) => {
+                    let got = px(&pixels, W, 0, 0);
+                    if !near(got, expected) {
+                        failures.push(format!("{ty} ({dialect}): got {got:?}, want {expected:?}"));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "a matrix varying must carry its values across the stage boundary on both routes:\n  {}",
+        failures.join("\n  ")
+    );
+}
+
+/// Render with the given vertex + fragment sources and read back the target.
+fn render_varying(exec: &mut WgpuExecutor, vs: &str, fs: &str) -> hl_gpu::Result<Vec<u8>> {
+    let mut session = new_session(exec);
+    hl_gpu::runtime::submit(
+        &mut session,
+        exec,
+        0,
+        &[
+            Cmd::CreateTexture(
+                1,
+                tex2d(W, H, texture_usage::RENDER_TARGET | texture_usage::COPY_SRC),
+            ),
+            Cmd::CreateShader {
+                id: 1,
+                kind: ShaderPayloadKind::Glsl,
+                spirv: glsl(glsl_stage::VERTEX, "vmain", vs),
+            },
+            Cmd::CreateShader {
+                id: 2,
+                kind: ShaderPayloadKind::Glsl,
+                spirv: glsl(glsl_stage::FRAGMENT, "fmain", fs),
+            },
+            Cmd::CreateRenderPipeline(
+                1,
+                RenderPipelineDesc {
+                    vertex: ShaderRef {
+                        module: 1,
+                        entry: "vmain".into(),
+                    },
+                    fragment: Some(ShaderRef {
+                        module: 2,
+                        entry: "fmain".into(),
+                    }),
+                    vertex_buffers: vec![],
+                    color_targets: vec![color_target()],
+                    depth: None,
+                    topology: Topology::TriangleList,
+                    cull: 0,
+                    front_face: 0,
+                    sample_count: 1,
+                    label: String::new(),
+                },
+            ),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginRenderPass {
+                        color: vec![ColorAttachment {
+                            texture: 1,
+                            load: LoadOp::Clear,
+                            clear: [0.0, 0.0, 0.0, 1.0],
+                            store: true,
+                        }],
+                        depth: None,
+                    },
+                    Enc::SetPipeline(1),
+                    Enc::Draw {
+                        vertex_count: 3,
+                        instance_count: 1,
+                        first_vertex: 0,
+                        first_instance: 0,
+                    },
+                    Enc::EndRenderPass,
+                ],
+                signal: None,
+            }),
+        ],
+    )?;
+    exec.read_texture(&session.resources, 1)
+}

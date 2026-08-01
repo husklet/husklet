@@ -221,6 +221,13 @@ pub fn glsl_to_wgsl_reflect(
     // ES route above already applied it inside `normalize`, and this reaches the DESKTOP route, which is
     // where the GL driver's ES2 output lands after it rewrites its own shaders (`is_es()` is false for it).
     // Byte-faithful for any shader without such a member, so the direct path stays unchanged.
+    // A matrix cannot be a shader input or output in WGSL at all, so every matrix varying has to be split
+    // into per-location vector slots. That pass lived only inside `normalize`, i.e. only on the ES route,
+    // while the GL driver rewrites its shaders to desktop form before they arrive — so a plain matrix
+    // varying was split for an ES guest and refused for the driver's own output. Layout and interface
+    // rules are dialect-independent; this runs on both routes, and is idempotent after `normalize`.
+    let split_io = crate::glsl_es::Source::new(src).split_aggregate_io(stage);
+    let src = split_io.as_str();
     // The uniform address space requires a 16-byte array stride in WGSL, which is also what std140 mandates
     // and what the GL driver's own writes use — but naga's `glsl-in` gives `float u[4]` the element type's
     // natural stride (4), so the emitted module is refused by wgpu's validator. Padding those members to
