@@ -181,17 +181,28 @@ pub(crate) fn copy_buffer_to_texture(
         bytes_per_row as usize
     };
     let so = src_offset as usize;
+    // EVERY plane, not just the base one. The executor issues this as one `write_texture` over the
+    // texture's full `depth_or_array_layers`, so the source buffer is read as consecutive plane images
+    // of `height` rows each — measured: given only one plane's worth of bytes for a three-layer
+    // destination it returns OutOfBounds, where this reference used to write the base plane and report
+    // success. That is the reference accepting what the subject refuses, which is the divergence
+    // direction that makes a differential agree by one side being wrong.
+    let planes = texture(res, dst)?.layers() as usize;
     let chunk = {
         let s = buffer(res, src)?;
-        let mut out = Vec::with_capacity(tight);
-        for row in 0..rows {
+        let mut out = Vec::with_capacity(tight * planes);
+        for row in 0..rows * planes {
             let start = so + row * src_stride;
             out.extend_from_slice(&s.data[start..start + row_bytes]);
         }
         out
     };
     let t = texture_mut(res, dst)?;
-    t.pixels[..tight].copy_from_slice(&chunk);
+    let plane_bytes = t.plane_bytes();
+    for (plane, image) in chunk.chunks_exact(tight).enumerate() {
+        let base = plane * plane_bytes;
+        t.pixels[base..base + tight].copy_from_slice(image);
+    }
     Ok(())
 }
 

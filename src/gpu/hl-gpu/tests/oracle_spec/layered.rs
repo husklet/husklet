@@ -44,6 +44,21 @@ fn clear(texture: u32, color: [f32; 4], base_array_layer: u32, layer_count: u32)
 }
 
 const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+
+/// A full-extent base-plane clear sized to whatever shape `desc` is.
+fn clear_of(desc: &TextureDesc, color: [f32; 4]) -> Enc {
+    Enc::ClearRect {
+        texture: 1,
+        x: 0,
+        y: 0,
+        w: desc.width,
+        h: desc.height,
+        color,
+        base_array_layer: 0,
+        layer_count: 1,
+        mip_level: 0,
+    }
+}
 const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 
 /// A clear of a non-base layer must leave the base layer alone.
@@ -297,41 +312,136 @@ fn a_multisampled_texture_cannot_be_layered() {
     );
 }
 
-/// 1D, 3D and cube textures stay refused, and the message says why rather than restating the shape.
+/// EVERY dimension is materialized, and each is refused exactly where the executor refuses it.
 ///
-/// They are not blocked by storage — the plane is layer-major and a depth slice or a cube face would sit
-/// in it identically. They are blocked by there being no operation to agree with: the executor refuses a
-/// non-base subresource on every copy, blit and resolve, so a 3D or cube texture the reference
-/// materialized could not be exercised against it in the first place.
+/// This test used to assert the opposite, and its premise was mine. It said 1D, 3D and cube stay refused
+/// because the executor had no operation on them for this reference to agree with — true when written,
+/// and re-measured on current code it is false. The executor serves `ClearRect`, both buffer↔texture
+/// copies and a texture-to-texture copy on all three, and its readback returns their base slice, so the
+/// class is comparable. A belief encoded in a test reads as authoritative to whoever audits it next,
+/// which is why re-measuring rather than trusting the note was worth one probe.
+///
+/// The blit is the single operation that does NOT extend to every dimension: it resamples by rendering
+/// through a 2D view, so the executor declines 1D and 3D on either side — and a cube face IS a 2D layer
+/// there, so cube blits fine and is deliberately absent from that refusal. Getting the exception wrong
+/// in either direction is a divergence: refusing cube would decline what the subject performs, and
+/// allowing 1D would perform what the subject declines.
 #[test]
-fn the_dimensions_with_no_shared_operation_stay_refused() {
-    // Each descriptor must be VALID for its dimension, or the refusal under test is not the one that
-    // fires: a cube with one face is refused by residency accounting as a malformed cube
-    // (`invalid cube texture shape`) long before the executor sees it, which would make this test pass
-    // while measuring something else entirely.
-    for (dim, height, layers) in [
-        (TextureDim::D1, 1, 1),
-        (TextureDim::D3, 2, 2),
-        (TextureDim::Cube, 2, 6),
-    ] {
-        let err = try_run(&[Cmd::CreateTexture(
-            1,
-            TextureDesc {
-                dim,
-                height,
-                ..layered(2, 2, layers, COPYABLE)
-            },
-        )])
-        .expect_err("only 2D is materialized");
-        assert!(
-            matches!(err, GpuError::Unsupported(m) if m.contains("only 2D textures")),
-            "{dim:?} must be refused with the reason, got {err:?}"
+fn every_dimension_is_materialized_and_refused_where_the_executor_refuses_it() {
+    let shape = |dim: TextureDim, w: u32, h: u32, depth: u32| TextureDesc {
+        dim,
+        width: w,
+        height: h,
+        depth,
+        ..layered(w, h, depth, COPYABLE | texture_usage::RENDER_TARGET)
+    };
+    let cases = [
+        ("1D", shape(TextureDim::D1, 4, 1, 1)),
+        ("3D", shape(TextureDim::D3, 2, 2, 3)),
+        ("cube", shape(TextureDim::Cube, 2, 2, 6)),
+        ("2D array", shape(TextureDim::D2, 2, 2, 3)),
+        ("plain 2D", shape(TextureDim::D2, 2, 2, 1)),
+    ];
+
+    for (what, desc) in &cases {
+        // Created, and its base plane clearable — the operation both backends serve on every shape.
+        let (exec, s) = run(&[
+            Cmd::CreateTexture(1, desc.clone()),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![clear_of(desc, RED)],
+                signal: None,
+            }),
+        ]);
+        let plane = (desc.width * desc.height * 4) as usize;
+        assert_eq!(
+            readback(&exec, &s, 1, plane)[0..4],
+            [255, 0, 0, 255],
+            "{what}: the base plane must be clearable and readable"
         );
     }
-    // Control: 2D, layered and not, is accepted — so the refusals above are about the dimension.
-    assert!(try_run(&[Cmd::CreateTexture(1, layered(2, 2, 1, COPYABLE))]).is_ok());
-    assert!(try_run(&[Cmd::CreateTexture(1, layered(2, 2, 4, COPYABLE))]).is_ok());
+
+    // A RENDER ATTACHMENT is 2D and single-layer, by dimension and not merely by plane count: a 1D
+    // texture has exactly one plane and is still not a colour target on the executor, so a layer-count
+    // test alone would let it through.
+    for (what, desc) in &cases {
+        let attempt = try_run(&[
+            Cmd::CreateTexture(1, desc.clone()),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginRenderPass {
+                        color: vec![ColorAttachment {
+                            texture: 1,
+                            load: LoadOp::Clear,
+                            clear: [0.0, 0.0, 0.0, 1.0],
+                            store: true,
+                        }],
+                        depth: None,
+                    },
+                    Enc::EndRenderPass,
+                ],
+                signal: None,
+            }),
+        ]);
+        let is_plain_2d = desc.dim == TextureDim::D2 && desc.depth <= 1;
+        assert_eq!(
+            attempt.is_ok(),
+            is_plain_2d,
+            "{what}: only a plain 2D texture is a colour attachment, got {attempt:?}"
+        );
+    }
+
+    // The BLIT declines 1D and 3D and serves the rest — the one operation that is not uniform across
+    // dimensions, matching the executor measured op by op.
+    for (what, desc) in &cases {
+        let extent = Extent3d {
+            width: desc.width,
+            height: desc.height,
+            depth: 1,
+        };
+        let attempt = try_run(&[
+            Cmd::CreateTexture(1, desc.clone()),
+            Cmd::CreateTexture(2, shape(TextureDim::D2, desc.width, desc.height, 1)),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![Enc::BlitTexture {
+                    src: 1,
+                    src_sub: TextureSubresource::base(),
+                    src_origin: Origin3d::default(),
+                    src_extent: extent,
+                    dst: 2,
+                    dst_sub: TextureSubresource::base(),
+                    dst_origin: Origin3d::default(),
+                    dst_extent: extent,
+                    filter: Filter::Nearest,
+                    mirror: Mirror::NONE,
+                }],
+                signal: None,
+            }),
+        ]);
+        let blittable = !matches!(desc.dim, TextureDim::D1 | TextureDim::D3);
+        assert_eq!(
+            attempt.is_ok(),
+            blittable,
+            "{what}: the blit renders through a 2D view, so 1D and 3D are declined and a cube FACE is \
+             not, got {attempt:?}"
+        );
+    }
+
+    // Shape rules, which are the executor's. A wrong one would not refuse a legal texture — it would
+    // allocate a different number of planes from the subject for the same descriptor.
+    assert!(
+        try_run(&[Cmd::CreateTexture(1, shape(TextureDim::D1, 4, 2, 1))]).is_err(),
+        "a 1D texture with height != 1 is refused"
+    );
+    assert!(
+        try_run(&[Cmd::CreateTexture(1, shape(TextureDim::Cube, 2, 3, 6))]).is_err(),
+        "a cube with non-square faces is refused"
+    );
+    assert!(
+        try_run(&[Cmd::CreateTexture(1, shape(TextureDim::Cube, 2, 2, 4))]).is_err(),
+        "a cube whose face count is not a multiple of six is refused"
+    );
 }
+
 
 /// A texture VIEW is refused, because this reference cannot alias and a snapshot is worse than nothing.
 ///

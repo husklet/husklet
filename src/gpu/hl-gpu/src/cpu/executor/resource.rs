@@ -13,22 +13,31 @@ impl CpuExecutor {
         if desc.width == 0 || desc.height == 0 {
             return Err(GpuError::Invalid("zero-sized texture"));
         }
-        // A 2D texture may be LAYERED. Only the operations the executor itself serves on a layered
-        // texture are served here — a layered `ClearRect` writes a chosen layer range, and a region copy
-        // reads one out — and everything else refuses a non-base layer exactly as the executor does. That
-        // symmetry is the point: a reference that accepted what the subject refuses would manufacture a
-        // divergence in the other direction.
+        // Every dimension is materialized, as one tight plane per array layer / depth slice / cube face.
+        // 1D, 3D and cube were refused here on the recorded grounds that the executor had no operation on
+        // them for this reference to agree with. RE-MEASURED on current code, that is false: the executor
+        // serves `ClearRect`, both buffer↔texture copies and a texture-to-texture copy on all three, and
+        // readback returns their base slice, so the class is comparable. Only the blit still declines 1D
+        // and 3D, and this executor declines them too (`operation::validate_op`).
         //
-        // 1D, 3D and cube stay refused. They are not blocked by storage — this plane is layer-major and
-        // a depth slice or a cube face would sit in it identically — but by the executor, which refuses a
-        // non-base subresource on every copy, blit and resolve, so there is no operation for the reference
-        // to agree with. Widen this when the executor grows one, not before.
-        if desc.dim != TextureDim::D2 {
-            return Err(GpuError::Unsupported(
-                "software: only 2D textures (1D, 3D and cube have no layered operation to agree on)",
-            ));
+        // The SHAPE rules below are the executor's, not this reference's preference, and each was
+        // measured against it. Getting one wrong would not refuse a legal texture — it would allocate a
+        // different number of planes from the subject for the same descriptor, which is a divergence in
+        // the storage rather than in an operation, and every later comparison would inherit it.
+        if desc.dim == TextureDim::D1 && desc.height != 1 {
+            return Err(GpuError::Invalid("1D texture must have height == 1"));
         }
-        if desc.depth == 0 {
+        if desc.dim == TextureDim::Cube {
+            if !Texture::planes(desc).is_multiple_of(6) {
+                return Err(GpuError::Invalid(
+                    "cube texture layer count must be a multiple of 6",
+                ));
+            }
+            if desc.width != desc.height {
+                return Err(GpuError::Invalid("cube texture faces must be square"));
+            }
+        }
+        if desc.depth == 0 && desc.dim != TextureDim::Cube {
             return Err(GpuError::Invalid("texture layer count must be >= 1"));
         }
         if desc.mip_levels == 0 {
@@ -42,7 +51,7 @@ impl CpuExecutor {
         // reference could allocate one — the plane is layer-major and samples interleave within a texel —
         // and that is the point. Accepting a shape the subject cannot create would put a texture in the
         // differential that only one backend can hold.
-        if desc.sample_count > 1 && desc.depth > 1 {
+        if desc.sample_count > 1 && (Texture::planes(desc) > 1 || desc.dim != TextureDim::D2) {
             return Err(GpuError::Unsupported(
                 "software: a multisampled texture cannot be layered",
             ));
@@ -64,7 +73,7 @@ impl CpuExecutor {
             .checked_mul(desc.width as usize)
             .and_then(|v| v.checked_mul(desc.height as usize))
             .and_then(|v| v.checked_mul(desc.sample_count as usize))
-            .and_then(|v| v.checked_mul(desc.depth.max(1) as usize))
+            .and_then(|v| v.checked_mul(Texture::planes(desc) as usize))
             .ok_or(GpuError::OutOfBounds)?;
         res.textures.insert(
             id,

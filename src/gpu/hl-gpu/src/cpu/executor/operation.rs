@@ -51,7 +51,7 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
                 // which is exactly why the refusal has to be explicit. Serving what the subject refuses
                 // is a false divergence in the other direction, and it would arrive the moment layered
                 // textures became creatable here.
-                if t.layers() != 1 {
+                if t.desc.dim != TextureDim::D2 || t.layers() != 1 {
                     return Err(GpuError::Unsupported(
                         "software: layered render attachment",
                     ));
@@ -74,7 +74,7 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
                         "software: multisample depth attachment",
                     ));
                 }
-                if t.layers() != 1 {
+                if t.desc.dim != TextureDim::D2 || t.layers() != 1 {
                     return Err(GpuError::Unsupported(
                         "software: layered depth attachment",
                     ));
@@ -301,7 +301,25 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
                     "software: buffer copy to multisample texture",
                 ));
             }
-            let (_, _, src_span) = copy::texture_copy_layout(t, *width, *height, *bytes_per_row)?;
+            // The span covers EVERY plane: the executor uploads the destination's full layer/slice/face
+            // count in one operation and refuses a buffer that cannot supply them all.
+            let (row_bytes, _, _) = copy::texture_copy_layout(t, *width, *height, *bytes_per_row)?;
+            let stride = if *bytes_per_row == 0 {
+                row_bytes
+            } else {
+                *bytes_per_row as usize
+            };
+            let total_rows = (*height as usize)
+                .checked_mul(t.layers() as usize)
+                .ok_or(GpuError::OutOfBounds)?;
+            let src_span = if total_rows == 0 {
+                0
+            } else {
+                (total_rows - 1)
+                    .checked_mul(stride)
+                    .and_then(|v| v.checked_add(row_bytes))
+                    .ok_or(GpuError::OutOfBounds)?
+            };
             copy::check_len(s_len, *src_offset, src_span)?;
         }
         Enc::CopyTextureToBuffer {
@@ -396,6 +414,16 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
         } => {
             copy::check_copy_subresource(src_sub, src_origin, src_extent.depth)?;
             copy::check_copy_subresource(dst_sub, dst_origin, dst_extent.depth)?;
+            // The executor blits by RENDERING, through a 2D view of one layer, and declines a 1D or 3D
+            // texture on either side — measured, not assumed, and it is the one operation of the four
+            // that does not extend to every dimension. A cube face IS a 2D layer there and blits fine,
+            // so cube is deliberately absent from this refusal.
+            for id in [*src, *dst] {
+                let dim = crate::cpu::model::texture(res, id)?.desc.dim;
+                if matches!(dim, TextureDim::D1 | TextureDim::D3) {
+                    return Err(GpuError::Unsupported("software: 1D/3D texture blit"));
+                }
+            }
             if src_extent.width == 0
                 || src_extent.height == 0
                 || dst_extent.width == 0

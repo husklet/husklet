@@ -295,6 +295,28 @@ impl WgpuExecutor {
                 return Err(GpuError::Unsupported(refusal));
             }
         }
+        // A 1D or 3D texture on either side cannot take part, for the same reason as the multisample
+        // pair: this blit resamples by RENDERING through a single-layer 2D view of each side, and
+        // `create_view` rejects a `D2` view of a `D1` or `D3` texture outright. Measured before this
+        // existed, a 1D source produced `InvalidTextureViewDimension { view: D2, texture: D1 }` from
+        // `Texture::create_view` — the graphics API answering for the driver, naming the view it was
+        // handed rather than the texture the caller passed.
+        //
+        // A CUBE is deliberately absent: it is a 2D texture with six layers underneath, so a single-layer
+        // 2D view of a face is exactly what this path builds, and it blits correctly today.
+        for (id, side) in [(src, "source"), (dst, "destination")] {
+            let dim = texture::WgpuTexture::get(res, id)?.dim;
+            if matches!(
+                dim,
+                hl_gpu::protocol::model::enums::TextureDim::D1
+                    | hl_gpu::protocol::model::enums::TextureDim::D3
+            ) {
+                return Err(GpuError::Unsupported(match side {
+                    "source" => "wgpu: 1D/3D blit source",
+                    _ => "wgpu: 1D/3D blit destination",
+                }));
+            }
+        }
 
         // Source dims (for UV normalization) + destination wgpu format (the pipeline's color-target format).
         // A blit reads the source through a sampler and writes the destination as a color attachment, so both
