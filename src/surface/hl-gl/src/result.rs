@@ -9,6 +9,7 @@
 //!
 //! Mirrors `hl-cuda/src/result.rs` (the CUDA analogue) exactly in shape.
 
+use hl_gpu::transport::model::header::RefusalKind;
 use hl_gpu::GpuError;
 
 // ---- EGLint error codes (returned by eglGetError) -----------------------------------------------
@@ -74,9 +75,18 @@ impl From<&GpuError> for EglError {
             // `GlobalState::retires_share_group`). Reporting `EGL_CONTEXT_LOST` for it would tell a robust
             // application to destroy its context and rebuild its entire working set over one bad frame,
             // which is the same amplification the group-loss escalation caused, moved up a layer.
-            // `EGL_BAD_ACCESS` is the honest code: the request could not be serviced, and the display,
-            // context and surface are all still valid.
-            GpuError::Transport(failure) if failure.refusal() => EGL_BAD_ACCESS,
+            //
+            // The acknowledgement now carries the CLASS of the refusal, so this is the same code the guest
+            // would have reported had it raised the error itself — an exact answer rather than the nearest
+            // legal one. `Unstated` is the only approximation left, and it is the honest one: the host
+            // declined and named no reason, the display, context and surface are all still valid.
+            GpuError::Transport(failure) if failure.refusal() => match failure.refusal_kind() {
+                Some(RefusalKind::ResourceLimit) => EGL_BAD_ALLOC,
+                Some(RefusalKind::Unsupported) => EGL_BAD_MATCH,
+                Some(RefusalKind::UnknownId) => EGL_BAD_SURFACE,
+                Some(RefusalKind::Invalid) | Some(RefusalKind::OutOfBounds) => EGL_BAD_PARAMETER,
+                Some(RefusalKind::Unstated) | None => EGL_BAD_ACCESS,
+            },
             // A backend PANIC is a backend defect, not a guest error: the frame is refused and the
             // session rolled back, but there is no argument to blame and nothing the app can correct.
             // `EGL_CONTEXT_LOST` is the honest report — the frame could not be presented — and it keeps a
@@ -107,9 +117,18 @@ impl From<&GpuError> for GlError {
         Self(match e {
             GpuError::ResourceLimit(_) => GL_OUT_OF_MEMORY,
             // The host refused this request and the connection survived it, so the call — not the context
-            // — failed. `GL_INVALID_OPERATION` is the code for an operation that could not be performed;
-            // the loss codes belong to a group that is actually gone.
-            GpuError::Transport(failure) if failure.refusal() => GL_INVALID_OPERATION,
+            // — failed, and the acknowledgement's class says which way. Each arm is the code this driver
+            // raises for the same condition locally, so where the error was detected stops being visible
+            // to the application. An unclassified refusal keeps `GL_INVALID_OPERATION`: the operation
+            // could not be performed, which is all the host actually said.
+            GpuError::Transport(failure) if failure.refusal() => match failure.refusal_kind() {
+                Some(RefusalKind::ResourceLimit) => GL_OUT_OF_MEMORY,
+                Some(RefusalKind::Invalid) | Some(RefusalKind::OutOfBounds) => GL_INVALID_VALUE,
+                Some(RefusalKind::Unsupported)
+                | Some(RefusalKind::UnknownId)
+                | Some(RefusalKind::Unstated)
+                | None => GL_INVALID_OPERATION,
+            },
             GpuError::BadEnum { .. } => GL_INVALID_ENUM,
             GpuError::UnknownId { .. } | GpuError::DuplicateId { .. } => GL_INVALID_OPERATION,
             GpuError::Unsupported(_) => GL_INVALID_OPERATION,
@@ -146,6 +165,13 @@ mod tests {
         })
     }
 
+    fn refused_as(kind: RefusalKind) -> GpuError {
+        GpuError::Transport(TransportError::Rejected {
+            phase: TransportPhase::Acknowledgement,
+            acknowledgement: kind.ack(),
+        })
+    }
+
     /// A refusal and a dead transport are both `GpuError::Transport`, and they must not report the same
     /// thing. Telling an application its context is lost makes it destroy the context and rebuild its
     /// whole working set — the right response to a transport that is gone, and a catastrophic
@@ -156,5 +182,25 @@ mod tests {
         assert_eq!(u32::from(GlError::from(&rejected())), GL_INVALID_OPERATION);
 
         assert_eq!(i32::from(EglError::from(&gone())), EGL_CONTEXT_LOST);
+    }
+
+    /// A classified refusal reports the code this driver raises for the SAME condition locally, so where
+    /// the error was detected stops being visible to the application — a host that ran out of memory and
+    /// a guest that did are the same `GL_OUT_OF_MEMORY`. The unstated class is the only approximation
+    /// left, and it must not silently absorb the classified ones.
+    #[test]
+    fn a_classified_refusal_reports_what_the_same_failure_would_report_locally() {
+        for (kind, egl, gl) in [
+            (RefusalKind::ResourceLimit, EGL_BAD_ALLOC, GL_OUT_OF_MEMORY),
+            (RefusalKind::Unsupported, EGL_BAD_MATCH, GL_INVALID_OPERATION),
+            (RefusalKind::UnknownId, EGL_BAD_SURFACE, GL_INVALID_OPERATION),
+            (RefusalKind::Invalid, EGL_BAD_PARAMETER, GL_INVALID_VALUE),
+            (RefusalKind::OutOfBounds, EGL_BAD_PARAMETER, GL_INVALID_VALUE),
+            (RefusalKind::Unstated, EGL_BAD_ACCESS, GL_INVALID_OPERATION),
+        ] {
+            let error = refused_as(kind);
+            assert_eq!(i32::from(EglError::from(&error)), egl, "{kind:?} EGL code");
+            assert_eq!(u32::from(GlError::from(&error)), gl, "{kind:?} GL code");
+        }
     }
 }
