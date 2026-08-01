@@ -341,3 +341,60 @@ fn reconnect_replays_acknowledged_residency_once_before_new_work() {
         "successful replay consumed the reset generation"
     );
 }
+
+/// What the acknowledgement tells the guest, pinned — because a layer above this one now decides the
+/// BLAST RADIUS of a failure from it (`GlobalState::retires_share_group` in the GL shim fails only the
+/// refused call, while every other transport kind still retires the share group).
+///
+/// The distinction that decision rests on is drawable here and always has been: a refusal is minted only
+/// where a complete acknowledgement was read, and every other kind is minted from an I/O failure. The
+/// byte's VALUE is not what carries it — the fact that an answer arrived at all is. A rejection therefore
+/// proves the host received, decoded and declined the request, which is what makes it recoverable.
+///
+/// What the single-value acknowledgement does not carry is WHICH error caused the refusal: the host holds
+/// a typed error and sends an undifferentiated no, so `acknowledgement` is 0 whatever the cause. This test
+/// pins the scope of the guarantee; closing that gap is owned elsewhere.
+#[test]
+fn the_ack_separates_an_answer_from_silence_but_not_one_refusal_from_another() {
+    use hl_gpu::{GpuError, TransportError};
+
+    let sock = TempSock::new("ack-refusal");
+    let listener = UnixListener::bind(&sock.0).unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let caps = Capabilities::permissive_fixture("host");
+        serve_connection(&stream, &caps, |_h, _b: &[Cmd]| false).unwrap();
+    });
+
+    let mut sink = RemoteCommandSink::new(sock.path());
+    let refused = sink.submit(&[Cmd::CreateFence(1)]).expect_err("refused");
+    assert!(
+        sink.terminal_error().is_none(),
+        "a refusal must not retire the sink: {:?}",
+        sink.terminal_error()
+    );
+    drop(sink);
+    server.join().unwrap();
+
+    let GpuError::Transport(refused) = refused else {
+        panic!("a refusal must surface as a transport error");
+    };
+    assert!(
+        refused.refusal(),
+        "an answered request is a refusal, not a dead transport: {refused:?}"
+    );
+    assert_eq!(
+        refused,
+        TransportError::Rejected {
+            phase: hl_gpu::TransportPhase::Acknowledgement,
+            acknowledgement: 0,
+        },
+        "the host writes one failure value for every cause, so the reason is gone by here"
+    );
+
+    // The other half of the split — that a transport which never answered is NOT a refusal — is asserted
+    // where the decision is made, in the GL shim's `only_an_unusable_transport_retires_the_group`, which
+    // walks every kind. Driving an absent peer from here is not the cheap control it looks like: a submit
+    // against a socket path with no listener did not return promptly in this harness, which deserves
+    // attention on its own and is not this test's subject.
+}
