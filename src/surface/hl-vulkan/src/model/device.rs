@@ -175,6 +175,24 @@ impl Device {
     /// which is why a command buffer that had silently dropped work still ended successfully.
     pub fn latch<T>(&mut self, command_buffer: VkCommandBuffer, result: Result<T>) {
         if let Err(error) = result {
+            // Say WHY, here, at the one choke point every `vkCmd*` refusal passes through.
+            //
+            // The reason is carried in the error and then thrown away: the caller sees only
+            // `vkEndCommandBuffer` returning a code, one buffer-wide verdict for whichever command
+            // failed first. That made a conformance result unattributable — 1,172 refused cases in
+            // `dEQP-VK.api.copy_and_blit` on 2026-08-01 had to have their causes DERIVED by replaying
+            // the driver's own predicates against the case names, because a probe with every guest tag
+            // open captured nothing at all. Three distinct capabilities were hiding behind one error
+            // code, and one of them was found only because 256 cases refused to fit the other two.
+            //
+            // `error` level because a release build compiles out everything below it, and this is
+            // precisely the line someone needs from a shipped driver.
+            hl_log::hl_error!(
+                hl_log::tag::VULKAN,
+                "command buffer {:#x} refused at record time: {}",
+                command_buffer,
+                error
+            );
             if let Some(rec) = self.command_buffers.get_mut(&command_buffer) {
                 rec.fail(error);
             }

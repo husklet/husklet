@@ -215,6 +215,28 @@ impl Format {
     /// formats advertise `VERTEX_BUFFER`. Reporting the same flags for every format (the old all-broad stub)
     /// made a client build wrong per-format capabilities. Ported from
     /// `MVKPixelFormats::getVkFormatProperties`.
+    /// # This table is currently wrong in BOTH directions, and they pull against each other
+    ///
+    /// Measured 2026-08-01 against `dEQP-VK.api.*` and `dEQP-VK.api.copy_and_blit.core.*`:
+    ///
+    /// * **Claimed and not honoured.** Bits advertised here that the recorder then refuses. A blit of an
+    ///   integer format and a blit whose region spans depth are both refused at record time while the
+    ///   format bits say yes — together 452 cases failing at `vkEndCommandBuffer` with
+    ///   VK_ERROR_FEATURE_NOT_PRESENT. An application that queries correctly still fails, which is worse
+    ///   than never advertising.
+    /// * **Required and not claimed.** 30 formats — `r16_sfloat`, `r32_uint`, `a8b8g8r8_unorm_pack32`,
+    ///   `r8g8b8a8_snorm` among them — lack a bit the specification mandates, which is what most of the
+    ///   `dEQP-VK.api.info.*` failures are.
+    ///
+    /// **So a change that only widens, or only narrows, makes the other half worse.** Before editing:
+    /// decide which of the two a format is in, and re-run BOTH `dEQP-VK.api.info.*` (10,481 cases, ~12s,
+    /// catches required-and-missing) and the relevant `copy_and_blit` groups (catches
+    /// claimed-and-refused). Neither suite alone can see the damage the other measures — that asymmetry
+    /// is why the table drifted in two directions without either being noticed.
+    ///
+    /// A widening in particular must be paired with a path that serves it: an earlier format ungate moved
+    /// 783 cases from honestly declined to running and failing, because three of four code paths learned
+    /// the new capability and the fourth did not.
     pub fn features(&self) -> FormatFeatures {
         let vk_format = self.0;
         use format_feature as f;
@@ -248,12 +270,26 @@ impl Format {
             Some(FormatClass::UnfilterableFloatColor) => COLOR_BASE | self.storage(),
             // Block-compressed texels are decoded by the sampler and cannot be written by a render pass or
             // a blit destination, so only the read side is claimed.
+            //
+            // BLIT_SRC is not claimed either, and that is the correction rather than the obvious part.
+            // It WAS claimed, and the blit recorder refuses every compressed format outright because a
+            // block-compressed texel has no packed colour layout to resample — so the driver promised a
+            // capability at query time and refused it at record time, which is worse than never
+            // promising it: an application that checks `VkFormatProperties` correctly still failed.
+            // That cost 636 cases in `dEQP-VK.api.copy_and_blit.core`, every one refused at
+            // `vkEndCommandBuffer` with VK_ERROR_FEATURE_NOT_PRESENT.
+            //
+            // Dropping it is free here and was MEASURED to be, not assumed: BLIT_SRC becomes mandatory
+            // for a compressed format only when that format's required set includes
+            // SAMPLED_IMAGE_FILTER_LINEAR (CTS `getRequiredOptimalTilingFeatures`), which follows from
+            // `textureCompressionBC`, which this driver does not advertise. Re-running
+            // `dEQP-VK.api.info.*` with the bit removed left the failure count at exactly 184, and the
+            // 624-case BC blit groups went from wholly failing to wholly NotSupported.
+            //
+            // Restore this bit only together with a blit path that can actually resample a compressed
+            // source, and re-run both suites — the two move in opposite directions.
             Some(FormatClass::Compressed) => {
-                f::SAMPLED_IMAGE
-                    | f::SAMPLED_IMAGE_FILTER_LINEAR
-                    | f::BLIT_SRC
-                    | f::TRANSFER_SRC
-                    | f::TRANSFER_DST
+                f::SAMPLED_IMAGE | f::SAMPLED_IMAGE_FILTER_LINEAR | f::TRANSFER_SRC | f::TRANSFER_DST
             }
             Some(FormatClass::DepthStencil) => {
                 f::SAMPLED_IMAGE
@@ -517,6 +553,9 @@ mod tests {
         assert_ne!(optimal & format_feature::SAMPLED_IMAGE, 0);
         assert_eq!(optimal & format_feature::COLOR_ATTACHMENT, 0);
         assert_eq!(optimal & format_feature::BLIT_DST, 0);
+        // Nor BLIT_SRC: the recorder refuses a compressed blit on either side, so claiming the source
+        // half was a promise the driver could not keep. Measured free to drop — see `features`.
+        assert_eq!(optimal & format_feature::BLIT_SRC, 0);
     }
 
     #[test]
