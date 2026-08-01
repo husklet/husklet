@@ -988,6 +988,14 @@ Scope a blocker to the layer you actually measured. A failed package fetch insid
 "host egress is down"; the host had working egress the whole time and only the guest workspace did not.
 The observation was real and the name would have sent the next person to the wrong layer.
 
+A guest binds the payload staged into its workspace, not the bundle on the host. Hashing the bundle at run
+time is truthful about the bundle and blind to what the guest loaded: a workspace that failed to restart
+keeps what it was given. Of seventy-four runs in one session, twenty-nine loaded a driver up to twelve
+hours behind the bundle they reported, and one investigation straddled a driver change mid-flight — so a
+before-and-after delta inside it conflates the code change with a driver swap. The predictor was exact:
+every workspace whose log carried a settings-changed-while-running warning produced a stale driver. Compare
+the guest's hash against what the bundle stages, and refuse the run when they differ.
+
 Print the hash of the component whose behaviour you are measuring, not the container it ships in. Two
 agents ran one probe and reported mirror-image results; both read their own logs correctly and both
 harnesses printed an identical header naming the application binary — while their guest driver subtrees
