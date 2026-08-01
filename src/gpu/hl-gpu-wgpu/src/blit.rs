@@ -344,8 +344,30 @@ impl WgpuExecutor {
         };
         queue.write_buffer(&uniform, 0, bytes);
 
-        let src_view = &texture::WgpuTexture::get(res, src)?.view;
-        let dst_view = &texture::WgpuTexture::get(res, dst)?.view;
+        // Build a SINGLE-LAYER 2D view of each side rather than binding the texture's default view.
+        //
+        // The default view of an array texture is `D2Array`, and the blit's bind-group layout declares
+        // `D2`, so binding it failed device validation with `InvalidTextureDimension` — for EVERY blit
+        // whose source happened to have more than one layer, including at layer 0, which is the case both
+        // backends otherwise support. A blit addresses one layer of each side by definition, so naming
+        // that layer in the view is both the fix and the more accurate description of the operation.
+        //
+        // This deliberately does not unlock `layer != 0`, which is still refused above: the software
+        // oracle materializes one plane per texture and has no array-layer concept, so serving layered
+        // blits here alone would make the executor perform what the reference refuses — a false
+        // divergence in the direction this project has spent the night removing.
+        let layer_view = |id: u32, sub: &TextureSubresource, label: &str| -> Result<wgpu::TextureView> {
+            let t = texture::WgpuTexture::get(res, id)?;
+            Ok(t.texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some(label),
+                dimension: Some(wgpu::TextureViewDimension::D2),
+                base_array_layer: sub.layer,
+                array_layer_count: Some(1),
+                ..Default::default()
+            }))
+        };
+        let src_view = &layer_view(src, src_sub, "hl-blit-src")?;
+        let dst_view = &layer_view(dst, dst_sub, "hl-blit-dst")?;
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("hl-blit-bg"),
             layout: &cache.bind_group_layout[usize::from(!can_filter)],

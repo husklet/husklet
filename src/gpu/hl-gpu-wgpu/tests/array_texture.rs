@@ -226,3 +226,106 @@ fn sampling_an_array_layer_returns_that_layers_texel() {
     }
     eprintln!("demo `array_texture`: all 4 array layers sampled to their exact texels");
 }
+
+/// A BLIT whose source is an ARRAY texture runs, at the base layer both backends support.
+///
+/// It did not. The blit bound the source texture's DEFAULT view, which for an array texture is
+/// `D2Array`, into a bind-group layout declaring `D2` — so every blit from an array or cube source failed
+/// device validation with `InvalidTextureDimension`, regardless of which layer it named, including layer
+/// 0, which is the case both backends otherwise support. Nothing caught it because no test blitted from
+/// an array texture and the differential's blit programs all use plain 2D sources.
+///
+/// A blit addresses ONE layer of each side by definition, so the view now names that layer. That is both
+/// the fix and the more accurate description of the operation.
+///
+/// The destination here is a plain 2D texture on purpose, and the reason is worth recording: an array
+/// texture is denied `RENDER_ATTACHMENT` at creation, on the stated grounds that its default view is not
+/// "a single-layer 2D view a color pass could target". This change makes that premise false — such a view
+/// is exactly what the blit now builds — but widening the usage set touches every array and cube texture
+/// in the driver, not only blit destinations, so it is left alone and written down rather than done at
+/// the end of an audit.
+#[test]
+fn a_blit_from_an_array_source_runs_at_the_base_layer() {
+    use hl_gpu::protocol::model::descriptor::{Extent3d, Origin3d, TextureSubresource};
+    use hl_gpu::protocol::model::enums::TextureAspect;
+
+    let mut exec = WgpuExecutor::new(DeviceConfig::default()).expect("adapter");
+    let plain = TextureDesc {
+        width: 4,
+        height: 4,
+        depth: 1,
+        mip_levels: 1,
+        sample_count: 1,
+        dim: TextureDim::D2,
+        format: TextureFormat::Rgba8Unorm,
+        usage: texture_usage::RENDER_TARGET | texture_usage::COPY_SRC | texture_usage::COPY_DST,
+        label: String::new(),
+    };
+    let sub = |layer: u32| TextureSubresource {
+        mip: 0,
+        layer,
+        aspect: TextureAspect::All,
+    };
+    let extent = Extent3d {
+        width: 4,
+        height: 4,
+        depth: 1,
+    };
+    let blit = |src_sub, dst_sub| Enc::BlitTexture {
+        src: 1,
+        src_sub,
+        src_origin: Origin3d::default(),
+        src_extent: extent.clone(),
+        dst: 2,
+        dst_sub,
+        dst_origin: Origin3d::default(),
+        dst_extent: extent.clone(),
+        filter: Filter::Nearest,
+    };
+
+    let run = |exec: &mut WgpuExecutor, src: TextureDesc, enc| {
+        let mut s = new_session(exec);
+        hl_gpu::runtime::submit(
+            &mut s,
+            exec,
+            0,
+            &[
+                Cmd::CreateTexture(1, src),
+                Cmd::CreateTexture(2, plain.clone()),
+                Cmd::Submit(CommandBuffer {
+                    encoder: vec![enc],
+                    signal: None,
+                }),
+            ],
+        )
+        .map(|_| ())
+    };
+
+    let array_src = TextureDesc {
+        depth: 4,
+        usage: texture_usage::SAMPLED | texture_usage::COPY_SRC | texture_usage::COPY_DST,
+        ..plain.clone()
+    };
+    assert!(
+        run(&mut exec, array_src.clone(), blit(sub(0), sub(0))).is_ok(),
+        "a blit from a four-layer source must run at layer 0"
+    );
+
+    // The control: the plain-2D source that always worked must keep working, so the assertion above is
+    // about the array shape and not about the blit path having been loosened generally.
+    assert!(
+        run(&mut exec, plain.clone(), blit(sub(0), sub(0))).is_ok(),
+        "a plain 2D source is unaffected"
+    );
+
+    // And a non-base layer stays refused, deliberately: the software oracle materializes one plane per
+    // texture and has no array-layer concept, so serving layered blits here alone would make the executor
+    // perform what the reference refuses.
+    assert!(
+        matches!(
+            run(&mut exec, array_src, blit(sub(1), sub(0))),
+            Err(hl_gpu::GpuError::Unsupported(_))
+        ),
+        "layer 1 is refused, in agreement with the reference"
+    );
+}
