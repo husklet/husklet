@@ -42,7 +42,9 @@ done
 # another arch's compiler dies on `-m64`. Compile an empty translation unit for each now instead.
 cross_compilers_run() {
   local probe status
-  probe="$(mktemp -t hl-bundle-cc)" || return 1
+  # The template needs its own X's: macOS mktemp appends a suffix to a -t prefix, GNU mktemp refuses one
+  # without them. The dev shell supplies GNU coreutils, so the macOS-only spelling fails there.
+  probe="$(mktemp -t hl-bundle-cc.XXXXXX)" || return 1
   : > "$probe.c"
   for spec in "aarch64:${HL_AARCH64_LINUX_CC:-}" "x86_64:${HL_X86_64_LINUX_CC:-}"; do
     local arch="${spec%%:*}" compiler="${spec#*:}"
