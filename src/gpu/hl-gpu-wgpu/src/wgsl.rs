@@ -221,6 +221,14 @@ pub fn glsl_to_wgsl_reflect(
     // ES route above already applied it inside `normalize`, and this reaches the DESKTOP route, which is
     // where the GL driver's ES2 output lands after it rewrites its own shaders (`is_es()` is false for it).
     // Byte-faithful for any shader without such a member, so the direct path stays unchanged.
+    // Two more passes that encode TARGET-language rules rather than dialect ones, and so must reach the
+    // desktop route the GL driver emits. `index =` is a qualifier naga's `glsl-in` cannot parse in any
+    // dialect; a fall-through switch case is something its `wgsl-out` cannot emit in any dialect. Both
+    // previously ran only inside `normalize`, so the identical shader compiled as ES and was refused as
+    // desktop. Both are byte-faithful when their construct is absent and idempotent after `normalize`.
+    let dual = crate::glsl_es::Source::new(src).normalize_dual_source();
+    let lowered = crate::glsl_es::Source::new(&dual).lower_switch();
+    let src = lowered.as_str();
     // A matrix cannot be a shader input or output in WGSL at all, so every matrix varying has to be split
     // into per-location vector slots. That pass lived only inside `normalize`, i.e. only on the ES route,
     // while the GL driver rewrites its shaders to desktop form before they arrive — so a plain matrix

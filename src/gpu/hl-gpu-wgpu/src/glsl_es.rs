@@ -347,6 +347,33 @@ impl<'a> Source<'a> {
         toks.0.as_slice().source()
     }
 
+    /// Drop the `index = N` layout qualifier and mark each `index >= 1` fragment output, so
+    /// `crate::wgsl::fix_dual_source_blend` can turn it into a `@second_blend_source`.
+    ///
+    /// DIALECT-INDEPENDENT: naga's `glsl-in` cannot PARSE `index =` in any dialect, so a desktop-form
+    /// shader using `EXT_blend_func_extended`-style dual-source blending was refused outright while the
+    /// identical ES shader compiled. Byte-faithful when no `index =` qualifier is present, and idempotent
+    /// — the rewrite leaves only `location`, so a second application finds nothing.
+    pub(crate) fn normalize_dual_source(&self) -> String {
+        let mut toks = Tokens::from_source(self.text);
+        toks.normalize_dual_source();
+        toks.0.as_slice().source()
+    }
+
+    /// Lower `switch` to an `if`/`else` chain.
+    ///
+    /// DIALECT-INDEPENDENT: `switch` is valid in both GLSL-ES 3.0 and desktop GLSL, and what cannot accept
+    /// it is the TARGET — naga's `wgsl-out` refuses a fall-through case block. A desktop-form shader whose
+    /// switch returns from its cases was refused while the identical ES shader compiled. Idempotent: the
+    /// lowering leaves no `switch` behind.
+    pub(crate) fn lower_switch(&self) -> String {
+        if !self.text.contains("switch") {
+            return self.text.to_string();
+        }
+        let toks = Tokens::from_source(self.text);
+        SwitchRewrite::lower_all(&toks).as_slice().source()
+    }
+
     /// Split every MATRIX (and aggregate) interface member into per-location vector slots plus a private
     /// global, bridging the two inside `main` — the only form WGSL can express, since a matrix cannot be a
     /// shader input or output there at all.
