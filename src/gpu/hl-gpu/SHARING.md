@@ -175,7 +175,57 @@ Stated so the implementation is not read as broader than it is.
 - **It says nothing about performance.** Removing the round trip is the point, but no number here is
   measured. A first slice must show the copy is gone by measurement rather than by argument.
 
+## A constraint on Vulkan sharing, inherited from the error channel
+
+**Read this before implementing Vulkan-side sharing.** It is not a note about a mapping; it changes what
+the Vulkan side is allowed to do.
+
+`GpuError::MappedElsewhere` is a TIMING refusal: the identical call from the same caller succeeds once the
+holder unmaps. CUDA and EGL can both say that — `CUDA_ERROR_ALREADY_MAPPED` names the condition exactly,
+and `EGL_BAD_ACCESS` is EGL's own word for a resource already in use by another thread or context. **Vulkan
+cannot.** Every candidate in `VkResult` either lies or collides:
+
+| candidate | why not |
+|---|---|
+| `VK_ERROR_MEMORY_MAP_FAILED` | already this driver's code for `OutOfBounds`; contention would be indistinguishable from a bounds violation |
+| `VK_NOT_READY` | success-class. Returning success for a refused command is the worst answer available |
+| `VK_ERROR_VALIDATION_FAILED_EXT` | asserts the caller was wrong — the precise falsehood that makes someone "fix" a correct program |
+| `VK_ERROR_UNKNOWN` | **chosen**, because alone among them it claims nothing false |
+
+So a Vulkan caller cannot distinguish "retry once the holder unmaps" from "something went wrong", and it
+cannot act on what it cannot distinguish. The consequence is a design rule rather than a caveat:
+
+> **Vulkan-side sharing must PREVENT contention through the map protocol rather than report it.**
+
+Concretely, a Vulkan path may not be built on the assumption that a caller will see a refusal and retry.
+Whatever acquires a shared resource for a Vulkan session has to establish exclusivity before the command
+that needs it is submitted — by ordering against the other session's fence, or by refusing at
+registration time — so that `MappedElsewhere` is unreachable from a correct Vulkan program rather than
+merely reported to it. If a design requires the caller to observe and retry, it is wrong for Vulkan until
+the error channel improves.
+
+The mapping site in `src/surface/hl-vulkan/src/result.rs` carries the same reasoning, so the two cannot
+drift apart without one of them being obviously stale.
+
+This is dissolved, not worked around, by the wire "retry later" acknowledgement code described below —
+which is now wanted by two independent findings.
+
 ## Scope note for tier 3
+
+### A wire "retry later" acknowledgement is wanted by two findings now
+
+`hl-gpu`'s `Refusal::for_error` classifies `MappedElsewhere` as `Invalid` on the wire, because the
+acknowledgement byte has no code meaning "refused, and the same call will succeed later". That was noted
+once as a wart. It is now the same missing thing the Vulkan constraint above is a consequence of: give the
+wire the code and `VkResult` gets an honest answer through the transport's refusal classification instead
+of collapsing to `VK_ERROR_UNKNOWN`.
+
+Cost, so it can be scoped rather than guessed: one `Refusal` variant and one `ACK_*` constant in
+`transport/model/header.rs`, one arm in `for_error`, and a `RefusalKind` arm in each of the three drivers'
+`result.rs` where a classified refusal is turned back into a native code. It is a wire-format change, so
+it needs the usual compatibility thought about a host that classifies more finely than a guest
+understands — the existing arms already handle that by keying on `refusal()` rather than on a particular
+byte, which is the property that makes this additive rather than breaking.
 
 An imported external semaphore is inert without `cuSignalExternalSemaphoresAsync` and
 `cuWaitExternalSemaphoresAsync`, which `e2e/husklet/apps/cuda/probe.c` does not currently probe. The
