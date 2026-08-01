@@ -1,0 +1,209 @@
+//! Non-square matrix uniforms are laid out at the std140 column stride the driver writes.
+//!
+//! A GLES3 smoke run partitioned perfectly: every non-square matrix type failed, every square one passed.
+//! The hypothesis worth testing in this layer is not whether the type can be EXPRESSED — it can — but
+//! whether it is expressed at the right COLUMN STRIDE. std140 pads every matrix column to 16 bytes
+//! regardless of its row count, so an implementation that sized columns by their natural width would read
+//! `mat2x3` columns 12 bytes apart instead of 16 and return neighbouring data, silently.
+//!
+//! Every type is driven through ONE shader shape: all nine have at least two columns and two rows, so
+//! `m[0][0]`, `m[1][0]`, `m[0][1]`, `m[1][1]` exist for each and land in four different output channels.
+//! The uploaded bytes are written at the std140 positions the GL driver uses (column `c`, row `r` at
+//! `16*c + 4*r`), so a reader using any other stride picks up a value this test can name.
+//!
+//! The square types are included deliberately as the CONTROL. If the reported partition originates here,
+//! the square ones pass and the non-square ones fail; if all nine pass, the partition comes from somewhere
+//! else and this test says so by staying green.
+
+mod gpu_harness;
+use gpu_harness::{color_target, glsl, near, new_session, px, tex2d};
+
+use hl_gpu::protocol::model::descriptor::{
+    BindEntry, BindGroupDesc, BindResource, BufferDesc, ColorAttachment, RenderPipelineDesc,
+    ShaderRef,
+};
+use hl_gpu::protocol::model::enums::{buffer_usage, texture_usage, LoadOp, Topology};
+use hl_gpu::protocol::model::kernel::glsl_stage;
+use hl_gpu::{Cmd, CommandBuffer, Enc, GpuExecutor, ShaderPayloadKind};
+use hl_gpu_wgpu::{DeviceConfig, WgpuExecutor};
+
+const W: u32 = 4;
+const H: u32 = 4;
+
+/// `(type, columns)` — every matrix form GLSL ES 3.0 defines.
+const MATRICES: [(&str, u32); 9] = [
+    ("mat2", 2),
+    ("mat3", 3),
+    ("mat4", 4),
+    ("mat2x3", 2),
+    ("mat2x4", 2),
+    ("mat3x2", 3),
+    ("mat3x4", 3),
+    ("mat4x2", 4),
+    ("mat4x3", 4),
+];
+
+/// The four elements read, and the value written to each. Distinct so a column read at the wrong stride,
+/// or a row/column transposition, lands on a value that names which mistake it was.
+const M00: f32 = 0.2;
+const M10: f32 = 0.4;
+const M01: f32 = 0.6;
+const M11: f32 = 0.8;
+
+const VS: &str = r#"#version 460
+void main() {
+    vec2 p[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
+    gl_Position = vec4(p[gl_VertexIndex], 0.0, 1.0);
+}
+"#;
+
+fn fs(ty: &str) -> String {
+    format!(
+        "#version 460\nlayout(std140, binding = 0) uniform HlUniforms {{ {ty} m; }};\n\
+         layout(location = 0) out vec4 o;\n\
+         void main() {{ o = vec4(m[0][0], m[1][0], m[0][1], m[1][1]); }}\n"
+    )
+}
+
+/// std140 bytes for a matrix with `columns` columns: column `c`, row `r` sits at `16*c + 4*r`. This is what
+/// the GL driver writes — it lays matrix columns out at an explicit `column * 16`.
+fn uniform_bytes(columns: u32) -> Vec<u8> {
+    let mut bytes = vec![0u8; (columns as usize) * 16];
+    let mut put = |column: usize, row: usize, value: f32| {
+        let at = column * 16 + row * 4;
+        bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    };
+    put(0, 0, M00);
+    put(1, 0, M10);
+    put(0, 1, M01);
+    put(1, 1, M11);
+    bytes
+}
+
+fn render(exec: &mut WgpuExecutor, ty: &str, columns: u32) -> hl_gpu::Result<Vec<u8>> {
+    let mut session = new_session(exec);
+    let size = u64::from(columns) * 16;
+    hl_gpu::runtime::submit(
+        &mut session,
+        exec,
+        0,
+        &[
+            Cmd::CreateTexture(
+                1,
+                tex2d(W, H, texture_usage::RENDER_TARGET | texture_usage::COPY_SRC),
+            ),
+            Cmd::CreateBuffer(
+                1,
+                BufferDesc {
+                    size,
+                    usage: buffer_usage::UNIFORM,
+                    label: String::new(),
+                },
+            ),
+            Cmd::WriteBuffer {
+                id: 1,
+                offset: 0,
+                data: uniform_bytes(columns),
+            },
+            Cmd::CreateShader {
+                id: 1,
+                kind: ShaderPayloadKind::Glsl,
+                spirv: glsl(glsl_stage::VERTEX, "vmain", VS),
+            },
+            Cmd::CreateShader {
+                id: 2,
+                kind: ShaderPayloadKind::Glsl,
+                spirv: glsl(glsl_stage::FRAGMENT, "fmain", &fs(ty)),
+            },
+            Cmd::CreateRenderPipeline(
+                1,
+                RenderPipelineDesc {
+                    vertex: ShaderRef {
+                        module: 1,
+                        entry: "vmain".into(),
+                    },
+                    fragment: Some(ShaderRef {
+                        module: 2,
+                        entry: "fmain".into(),
+                    }),
+                    vertex_buffers: vec![],
+                    color_targets: vec![color_target()],
+                    depth: None,
+                    topology: Topology::TriangleList,
+                    cull: 0,
+                    front_face: 0,
+                    sample_count: 1,
+                    label: String::new(),
+                },
+            ),
+            Cmd::CreateBindGroup(
+                1,
+                BindGroupDesc {
+                    set: 0,
+                    entries: vec![BindEntry {
+                        binding: 0,
+                        resource: BindResource::Buffer {
+                            id: 1,
+                            offset: 0,
+                            size,
+                        },
+                    }],
+                },
+            ),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginRenderPass {
+                        color: vec![ColorAttachment {
+                            texture: 1,
+                            load: LoadOp::Clear,
+                            clear: [0.0, 0.0, 0.0, 1.0],
+                            store: true,
+                        }],
+                        depth: None,
+                    },
+                    Enc::SetPipeline(1),
+                    Enc::SetBindGroup { index: 0, group: 1 },
+                    Enc::Draw {
+                        vertex_count: 3,
+                        instance_count: 1,
+                        first_vertex: 0,
+                        first_instance: 0,
+                    },
+                    Enc::EndRenderPass,
+                ],
+                signal: None,
+            }),
+        ],
+    )?;
+    exec.read_texture(&session.resources, 1)
+}
+
+#[test]
+fn every_matrix_shape_reads_its_own_std140_elements() {
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
+
+    let expected = [
+        (M00 * 255.0).round() as u8,
+        (M10 * 255.0).round() as u8,
+        (M01 * 255.0).round() as u8,
+        (M11 * 255.0).round() as u8,
+    ];
+    let mut failures = Vec::new();
+    for (ty, columns) in MATRICES {
+        match render(&mut exec, ty, columns) {
+            Err(e) => failures.push(format!("{ty}: refused: {e}")),
+            Ok(pixels) => {
+                let got = px(&pixels, W, 0, 0);
+                if !near(got, expected) {
+                    failures.push(format!("{ty}: got {got:?}, want {expected:?}"));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "matrix uniforms must read their own std140 elements (column c, row r at 16c+4r):\n  {}",
+        failures.join("\n  ")
+    );
+}
