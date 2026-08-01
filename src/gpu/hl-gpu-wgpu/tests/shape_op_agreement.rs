@@ -98,6 +98,11 @@ fn every_shape_and_op_agrees_on_what_is_legal() {
         ("Cube",  d(TextureDim::Cube, 2, 2, 6)),
         ("2Darr", d(TextureDim::D2, 2, 2, 3)),
         ("2D",    d(TextureDim::D2, 2, 2, 1)),
+        // A MULTI-LEVEL texture. Every shape above declares one mip level, which is why this matrix
+        // did not reach the level axis at all: a three-level texture named as a colour attachment
+        // reached `RenderPass::end` as `TextureViewIsNotRenderable { reason: MipLevelCount(3) }`, and
+        // nothing here could see it because nothing here had more than one level.
+        ("2Dmip", TextureDesc { mip_levels: 3, ..d(TextureDim::D2, 4, 4, 1) }),
     ] {
         let mut line = format!("{name:6}");
         for (op, cmds) in programs(&desc) {
@@ -139,11 +144,11 @@ fn every_shape_and_op_agrees_on_what_is_legal() {
     // failed for an unrelated reason — or in which both backends refused everything — would be
     // indistinguishable from perfect agreement, because refusing in unison IS agreement here.
     assert_eq!(
-        compared, 40,
-        "the shape x op matrix must be fully exercised; {compared} of 40 cells ran"
+        compared, 48,
+        "the shape x op matrix must be fully exercised; {compared} of 48 cells ran"
     );
     assert!(
-        accepted >= 20,
+        accepted >= 24,
         "only {accepted} of {compared} cells were ACCEPTED by the executor — agreement made mostly of \
          mutual refusal proves little, and this matrix has lost its power"
     );

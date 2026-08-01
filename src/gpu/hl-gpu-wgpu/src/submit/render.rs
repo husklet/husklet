@@ -2,6 +2,16 @@ use super::*;
 
 mod plan;
 
+/// Whether this texture (or explicit view) can actually be BOUND as a render-pass attachment.
+///
+/// Distinct from `render_attachment`, which records only that the usage was granted. A pass binds the
+/// default view, and wgpu requires an attachment view to name exactly one mip level and one array layer
+/// of a 2D image; a texture that is layered, multi-level, 1D or 3D is refused here rather than at
+/// `RenderPass::end`, where the message names the view it was handed instead of what the caller passed.
+fn bindable_as_attachment(t: &texture::WgpuTexture) -> bool {
+    t.dim == hl_gpu::protocol::model::enums::TextureDim::D2 && t.depth == 1 && t.mip_levels == 1
+}
+
 impl WgpuExecutor {
     /// Execute one render pass: begin with the color attachments (clear/load), replay any pipeline/bind/
     /// draw ops into it, end, submit, and wait. A clear-only pass (no draws) realizes the clear.
@@ -64,6 +74,21 @@ impl WgpuExecutor {
                     "wgpu: colour attachment texture was not created as a render target",
                 ));
             }
+            // The grant says "this may be a render target"; it does not say "this VIEW can be bound as
+            // one", and the two came apart on a multi-mip texture. An attachment binds the texture's
+            // default view, which spans every level it has, and wgpu requires an attachment view to name
+            // exactly one — measured, a three-level texture produced
+            // `TextureViewIsNotRenderable { reason: MipLevelCount(3) }` at `RenderPass::end`.
+            //
+            // This is the predicate the grant/guard coupling test's own failure message prescribes: the
+            // bound view must be a single-layer, single-mip 2D view, because that is what a colour pass
+            // can target. An explicit `CreateTextureView` that selects one level of a multi-level
+            // texture satisfies it and is deliberately still allowed.
+            if !bindable_as_attachment(t) {
+                return Err(GpuError::Invalid(
+                    "wgpu: colour attachment must be a single-layer, single-mip 2D view",
+                ));
+            }
             target_w = target_w.min(t.width);
             target_h = target_h.min(t.height);
             target_formats.push(t.format);
@@ -82,6 +107,11 @@ impl WgpuExecutor {
                 if !t.render_attachment {
                     return Err(GpuError::Invalid(
                         "wgpu: depth attachment texture was not created as a render target",
+                    ));
+                }
+                if !bindable_as_attachment(t) {
+                    return Err(GpuError::Invalid(
+                        "wgpu: depth attachment must be a single-layer, single-mip 2D view",
                     ));
                 }
                 // The depth attachment MUST be a depth(+stencil) format: a color-format texture handed as a

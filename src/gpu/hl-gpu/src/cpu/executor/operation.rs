@@ -51,9 +51,13 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
                 // which is exactly why the refusal has to be explicit. Serving what the subject refuses
                 // is a false divergence in the other direction, and it would arrive the moment layered
                 // textures became creatable here.
-                if t.desc.dim != TextureDim::D2 || t.layers() != 1 {
+                // Single-layer, single-mip, 2D — the shape a colour pass can bind. The executor
+                // requires exactly this: an attachment binds the texture's default view, and wgpu
+                // rejects one spanning several levels or layers. A MULTI-LEVEL texture is the case
+                // that is easy to miss, because it has one layer and passes a layer-count test.
+                if t.desc.dim != TextureDim::D2 || t.layers() != 1 || t.desc.mip_levels > 1 {
                     return Err(GpuError::Unsupported(
-                        "software: layered render attachment",
+                        "software: layered or multi-level render attachment",
                     ));
                 }
                 if c.load == LoadOp::Clear {
@@ -74,9 +78,13 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
                         "software: multisample depth attachment",
                     ));
                 }
-                if t.desc.dim != TextureDim::D2 || t.layers() != 1 {
+                // Single-layer, single-mip, 2D — the shape a colour pass can bind. The executor
+                // requires exactly this: an attachment binds the texture's default view, and wgpu
+                // rejects one spanning several levels or layers. A MULTI-LEVEL texture is the case
+                // that is easy to miss, because it has one layer and passes a layer-count test.
+                if t.desc.dim != TextureDim::D2 || t.layers() != 1 || t.desc.mip_levels > 1 {
                     return Err(GpuError::Unsupported(
-                        "software: layered depth attachment",
+                        "software: layered or multi-level depth attachment",
                     ));
                 }
                 agree(t)?;
