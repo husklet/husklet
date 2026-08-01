@@ -72,29 +72,49 @@ pub(super) fn lower_draw_n(
         return None;
     };
     let Some(vs_ir) = prog.vs_ir.clone() else {
-        hl_log::hl_warn!(
-            hl_log::tag::GL,
-            "dropping draw whose program has no vertex IR — its translation failed earlier \
-             program={prog_name} linked={} link_gen={} fbo={} mode={:#x} count={}",
-            prog.linked,
-            prog.link_gen,
-            d.fbo,
-            d.mode,
-            d.count
-        );
+        // ERROR, not warn: warn/info/debug are compiled out of a release build entirely, so a warning
+        // here would make this loss attributable in a debug build only — and this is the first link of a
+        // chain that ends in a window region the user sees the desktop through. At error it survives the
+        // build and an operator can reach it with `HL_LOG=gl`. Latched once per context because a broken
+        // program is redrawn every frame; the first occurrence carries the identifying detail.
+        if !ctx.local.missing_shader_ir_reported {
+            ctx.local.missing_shader_ir_reported = true;
+            hl_log::hl_error!(
+                hl_log::tag::GL,
+                "dropping draw whose program has no vertex IR — its translation failed earlier. Its \
+                 pixels will be MISSING from this frame, and on a freshly minted target that region is \
+                 transparent rather than stale. program={prog_name} linked={} link_gen={} fbo={} \
+                 mode={:#x} count={}. Reported once per context.",
+                prog.linked,
+                prog.link_gen,
+                d.fbo,
+                d.mode,
+                d.count
+            );
+        }
         return None;
     };
     let Some(fs_ir) = prog.fs_ir.clone() else {
-        hl_log::hl_warn!(
-            hl_log::tag::GL,
-            "dropping draw whose program has no fragment IR — its translation failed earlier \
-             program={prog_name} linked={} link_gen={} fbo={} mode={:#x} count={}",
-            prog.linked,
-            prog.link_gen,
-            d.fbo,
-            d.mode,
-            d.count
-        );
+        // ERROR, not warn: warn/info/debug are compiled out of a release build entirely, so a warning
+        // here would make this loss attributable in a debug build only — and this is the first link of a
+        // chain that ends in a window region the user sees the desktop through. At error it survives the
+        // build and an operator can reach it with `HL_LOG=gl`. Latched once per context because a broken
+        // program is redrawn every frame; the first occurrence carries the identifying detail.
+        if !ctx.local.missing_shader_ir_reported {
+            ctx.local.missing_shader_ir_reported = true;
+            hl_log::hl_error!(
+                hl_log::tag::GL,
+                "dropping draw whose program has no fragment IR — its translation failed earlier. Its \
+                 pixels will be MISSING from this frame, and on a freshly minted target that region is \
+                 transparent rather than stale. program={prog_name} linked={} link_gen={} fbo={} \
+                 mode={:#x} count={}. Reported once per context.",
+                prog.linked,
+                prog.link_gen,
+                d.fbo,
+                d.mode,
+                d.count
+            );
+        }
         return None;
     };
     if d.indexed {

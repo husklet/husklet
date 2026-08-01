@@ -42,6 +42,7 @@ pub const CLEAR_COLOR: fn(&mut GlContext, [f32; 4]) = GlContext::set_clear_color
 pub const CLEAR_DEPTH: fn(&mut GlContext, f32) = GlContext::set_clear_depth;
 pub const BLEND_COLOR: fn(&mut GlContext, [f32; 4]) = GlContext::set_blend_color;
 pub const DEPTH_FUNC: fn(&mut GlContext, u32) = GlContext::set_depth_func;
+pub const DEPTH_RANGE: fn(&mut GlContext, f32, f32) = GlContext::set_depth_range;
 pub const DEPTH_MASK: fn(&mut GlContext, bool) = GlContext::set_depth_mask;
 pub const CLEAR_STENCIL: fn(&mut GlContext, i32) = GlContext::set_clear_stencil;
 pub const STENCIL_MASK: fn(&mut GlContext, u32) = GlContext::set_stencil_mask;
@@ -61,6 +62,7 @@ pub use CLEAR_DEPTH as clear_depth;
 pub use CLEAR_STENCIL as clear_stencil;
 pub use CULL_FACE as cull_face;
 pub use DEPTH_FUNC as depth_func;
+pub use DEPTH_RANGE as depth_range;
 pub use DEPTH_MASK as depth_mask;
 pub use DISABLE as disable;
 pub use DISABLE_VERTEX_ATTRIB as disable_vertex_attrib;

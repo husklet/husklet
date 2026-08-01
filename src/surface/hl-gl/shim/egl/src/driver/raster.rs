@@ -66,10 +66,17 @@ pub extern "C" fn glColorMaski(index: u32, r: u8, g: u8, b: u8, a: u8) {
         GlobalState::context(|s| record::color_mask(&mut s.gl, r != 0, g != 0, b != 0, a != 0));
     }
 }
-/// `glDepthRangef` — the model maps NDC depth directly (fixed 0..1 range), so a custom depth range carries
-/// no lowered state: an honest no-op.
+/// `glDepthRangef(n, f)` — the window-depth range the viewport transform maps device depth onto.
+///
+/// This discarded both arguments. The claim above it — that the model maps NDC depth directly and a range
+/// therefore carries no meaning — was false: the viewport is a real encoder operation with its own depth
+/// range, which the rect clear already relies on to place fragments at an exact depth. Ignoring it left
+/// every fragment at its default-range depth whatever the application asked for.
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glDepthRangef(_n: f32, _f: f32) {}
+pub extern "C" fn glDepthRangef(n: f32, f: f32) {
+    GlobalState::context(|s| record::depth_range(&mut s.gl, n, f));
+}
+
 /// Desktop OpenGL spelling used by Chromium's ANGLE/OpenGL dispatch.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDepthRange(near: f64, far: f64) {

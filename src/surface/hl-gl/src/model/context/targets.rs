@@ -108,6 +108,32 @@ impl GlContext {
         if target.texture != 0
             && (target.size != (w, h) || target.token != self.local.present_token)
         {
+            // A fresh presentable texture is ZERO-FILLED, so on this frame — and only this frame — a draw
+            // that fails to lower leaves the desktop showing through rather than stale content. That
+            // makes the re-mint the middle link of the transparent-rectangle chain, and it was invisible
+            // in the domain log: an operator saw a dropped draw and a transparent region with nothing
+            // connecting them.
+            //
+            // The trigger is named because resize is NOT the only one. The token is assigned per swap
+            // from the native frame acquired for it, so any swap taking a different native frame
+            // re-mints at UNCHANGED size — and a native-to-readback transition is a token change too,
+            // since the readback path carries no token at all. A browser recreating a layer or the
+            // presentation path flipping mode looks like this; a resize looks different.
+            let trigger = match (target.size != (w, h), target.token != self.local.present_token) {
+                (true, true) => "size and present token",
+                (true, false) => "size",
+                _ => "present token",
+            };
+            hl_log::hl_debug!(
+                hl_log::tag::GL,
+                "default target re-minted on {trigger} change: texture {} -> fresh (zero-filled), \
+                 size {:?} -> {:?}, token {:?} -> {:?}",
+                target.texture,
+                target.size,
+                (w, h),
+                target.token,
+                self.local.present_token
+            );
             self.pending_destroys
                 .push(Cmd::DestroyTexture(target.texture));
             if target.token.is_some() {

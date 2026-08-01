@@ -87,6 +87,13 @@ pub(crate) struct LocalState {
     /// Set when a `glReadPixels` already rendered and consumed this frame's default framebuffer, so
     /// `eglSwapBuffers` must still post that render instead of an empty frame. Cleared by `reset_frame`.
     pub(crate) default_present_pending: bool,
+    /// Latch for the once-per-context `glBlitFramebuffer` depth/stencil-aspect report. A compositor blits
+    /// every frame, so the report must not.
+    pub(crate) depth_stencil_blit_reported: bool,
+    /// Latch for the once-per-context missing-shader-IR report. A program whose translation failed is
+    /// drawn every frame, often hundreds of times, so the report must be bounded — but it must also
+    /// survive a release build, which is why it is an ERROR rather than a warning.
+    pub(crate) missing_shader_ir_reported: bool,
 }
 
 impl LocalState {
@@ -152,6 +159,8 @@ impl Default for LocalState {
             present_token: None,
             present_serial: None,
             default_present_pending: false,
+            depth_stencil_blit_reported: false,
+            missing_shader_ir_reported: false,
         }
     }
 }

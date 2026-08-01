@@ -22,8 +22,12 @@ pub(super) fn emit_viewport(d: &DrawCall, tw: i32, th: i32, bottom_up: bool) -> 
         y,
         w,
         h,
-        min_depth: 0.0,
-        max_depth: 1.0,
+        // `glDepthRangef`. This was hard-coded to `[0, 1]`, so a fragment landed at its default-range
+        // depth whatever range the application had set — invisible to any test using the default, and
+        // wrong for every one that does not. `n > f` is legal in GL and passes through unchanged; the
+        // host validates each component's range, not their order.
+        min_depth: d.depth_range[0],
+        max_depth: d.depth_range[1],
     }
 }
 

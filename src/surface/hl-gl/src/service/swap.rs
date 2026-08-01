@@ -404,7 +404,11 @@ impl GlContext {
             // occurrence is attributable to the frame that failed to build rather than to the renderer.
             let (draws, blits) = ctx.recording_counts();
             if draws > 0 || blits > 0 {
-                hl_log::hl_warn!(
+                // ERROR, not warn, for the same reason as the missing-IR site: a warning is compiled out
+                // of release, and this is the frame-level end of that chain. Naturally bounded — one line
+                // per frame, and only when EVERYTHING recorded failed to lower — so if it repeats, the
+                // repetition is itself the report.
+                hl_log::hl_error!(
                     hl_log::tag::GL,
                     "discarding an unbuildable frame: {draws} draw(s) and {blits} blit(s) recorded and \
                      nothing lowered — their pixels will be missing from this frame"

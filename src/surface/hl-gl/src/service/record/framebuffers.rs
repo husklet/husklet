@@ -325,13 +325,31 @@ pub fn blit_framebuffer(
     mask: u32,
     filter: u32,
 ) {
-    if mask & GL_COLOR_BUFFER_BIT == 0 {
-        return;
-    }
+    // Validation comes FIRST, whatever the mask names. Testing the colour bit before the framebuffers
+    // meant a depth- or stencil-only blit skipped the completeness check entirely and reported
+    // GL_NO_ERROR against an incomplete framebuffer — the mask decides what is COPIED, not whether the
+    // call is legal (ES 3.0 §4.3.2).
     if ctx.framebuffer_status(ctx.local.read_fbo) != GL_FRAMEBUFFER_COMPLETE
         || ctx.framebuffer_status(ctx.local.bound_fbo) != GL_FRAMEBUFFER_COMPLETE
     {
         ctx.set_gl_error(GL_INVALID_FRAMEBUFFER_OPERATION);
+        return;
+    }
+    // Only the COLOUR aspect is copied. A depth or stencil blit has no lowering here, and dropping it in
+    // silence is worse than not supporting it: nothing is recorded, so no later diagnostic can fire for
+    // it either — the copy simply never happened and the frame that needed it has no account of why.
+    // Say so once per context; a compositor blits every frame.
+    if mask & (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT) != 0
+        && !ctx.local.depth_stencil_blit_reported
+    {
+        ctx.local.depth_stencil_blit_reported = true;
+        hl_log::hl_warn!(
+            hl_log::tag::GL,
+            "glBlitFramebuffer: the depth/stencil aspects of mask {mask:#x} are NOT copied (only the \
+             colour aspect is lowered). Reported once per context."
+        );
+    }
+    if mask & GL_COLOR_BUFFER_BIT == 0 {
         return;
     }
     // GL defines only GL_NEAREST and GL_LINEAR for a color blit; anything else falls back to Nearest.

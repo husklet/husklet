@@ -817,3 +817,21 @@ fn cull_face_mode_and_front_face_read_back() {
         assert_eq!(out[0], winding as i32);
     }
 }
+
+/// `GL_DEPTH_RANGE` reported a permanent `[0, 1]` beside a comment asserting `glDepthRangef` was a no-op.
+/// It is not a no-op, and a state value that cannot read back is how the write side went unnoticed.
+#[test]
+fn the_depth_range_reads_back_through_both_getters() {
+    let mut c = ctx_800x600();
+    let mut floats = [0f32; 4];
+    let mut ints = [0i32; 4];
+
+    assert_eq!(query::get_floatv(&c, GL_DEPTH_RANGE, &mut floats), 2);
+    assert_eq!(&floats[..2], &[0.0, 1.0], "the initial range");
+
+    record::depth_range(&mut c, 0.25, 0.75);
+    assert_eq!(query::get_floatv(&c, GL_DEPTH_RANGE, &mut floats), 2);
+    assert_eq!(&floats[..2], &[0.25, 0.75]);
+    assert_eq!(query::get_integerv(&c, GL_DEPTH_RANGE, &mut ints), 2);
+    assert_eq!(&ints[..2], &[0, 0], "0.25 and 0.75 both truncate to 0");
+}

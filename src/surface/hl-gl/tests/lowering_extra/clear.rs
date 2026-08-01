@@ -666,3 +666,169 @@ fn two_clears_at_different_values_share_one_pipeline() {
         .count();
     assert_eq!(clear_pipelines, 1, "and so is the pipeline");
 }
+
+// ---------------------------------------------------------------------------------------------------
+// glDepthRangef reaches the viewport transform
+// ---------------------------------------------------------------------------------------------------
+
+/// `glDepthRangef` was discarded at the ABI boundary and the viewport was lowered with a hard-coded
+/// `[0, 1]`, so every fragment landed at its default-range depth however the application set the range.
+/// It is invisible to any test using the default range, which is why it survived — and the rect clear
+/// depends on exactly this encoder field to place its fragments, so the two paths disagreed about
+/// whether the range meant anything.
+fn viewport_depth(batch: &[Cmd]) -> Option<(f32, f32)> {
+    submit_ops(batch).iter().find_map(|e| match e {
+        Enc::SetViewport {
+            min_depth,
+            max_depth,
+            ..
+        } => Some((*min_depth, *max_depth)),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_draw_carries_the_depth_range_the_application_set() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    record::depth_range(&mut c, 0.25, 0.75);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    swap::swap_buffers(&mut c, &mut sink).unwrap();
+    assert_eq!(viewport_depth(&sink.batches[0]), Some((0.25, 0.75)));
+}
+
+/// ES 3.0 §2.12.1 clamps each component to `[0, 1]`, and `n > f` is legal — it reverses the mapping. The
+/// host validates each component's range rather than their order, so a reversed range passes through.
+#[test]
+fn the_depth_range_is_clamped_per_component_and_may_be_reversed() {
+    for (set, want) in [
+        ((-1.0f32, 2.0f32), (0.0f32, 1.0f32)),
+        ((1.0, 0.0), (1.0, 0.0)),
+        ((0.75, 0.75), (0.75, 0.75)),
+    ] {
+        let mut c = ctx();
+        let mut sink = RecordingSink::with_full_caps();
+        setup_geometry(&mut c);
+        record::depth_range(&mut c, set.0, set.1);
+        record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+        swap::swap_buffers(&mut c, &mut sink).unwrap();
+        assert_eq!(viewport_depth(&sink.batches[0]), Some(want), "set {set:?}");
+    }
+}
+
+/// The default range must stay exactly `[0, 1]`, so every frame that never calls `glDepthRangef` lowers
+/// byte-identically to before.
+#[test]
+fn the_default_depth_range_is_unchanged() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    swap::swap_buffers(&mut c, &mut sink).unwrap();
+    assert_eq!(viewport_depth(&sink.batches[0]), Some((0.0, 1.0)));
+}
+
+/// `Enc::ClearRect` must be emitted BETWEEN render passes, never inside one.
+///
+/// The wgpu executor silently ignored any operation it did not recognise inside a render pass —
+/// `ClearRect` among them — reporting success while the region stayed as it was minted, and the CPU
+/// oracle performed it. So the two backends disagreed and every lowering test still passed, because a
+/// lowering test asserts what was EMITTED and not what was executed. This asserts the structural property
+/// that keeps the routing valid: the rect fill sits outside the pass, where the executor's flat op loop
+/// handles it, which is why the scissored-unmasked path was not affected.
+#[test]
+fn a_scissored_clear_fill_is_emitted_outside_any_render_pass() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    record::enable(&mut c, GL_SCISSOR_TEST);
+    record::scissor(&mut c, [4, 4, 8, 8]);
+    record::clear_color(&mut c, [1.0, 0.0, 0.0, 1.0]);
+    record::clear_buffers(&mut c, GL_COLOR_BUFFER_BIT);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    swap::swap_buffers(&mut c, &mut sink).unwrap();
+
+    let ops = submit_ops(&sink.batches[0]);
+    let mut depth = 0i32;
+    let mut saw_fill = false;
+    for op in ops {
+        match op {
+            Enc::BeginRenderPass { .. } => depth += 1,
+            Enc::EndRenderPass => depth -= 1,
+            Enc::ClearRect { .. } => {
+                saw_fill = true;
+                assert_eq!(
+                    depth, 0,
+                    "a ClearRect inside a pass is dropped by the wgpu executor: {ops:?}"
+                );
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_fill, "the scissored clear must still lower to a fill: {ops:?}");
+    assert_eq!(depth, 0, "every pass is closed");
+}
+
+/// The general form of the rule above, over a frame rich enough to emit every kind of op this driver
+/// produces: NO copy, blit, fill or resolve may appear inside a render pass.
+///
+/// The wgpu executor silently dropped exactly these when it found them inside a pass, and reported
+/// success. The driver has always hoisted its staging copies ahead of `BeginRenderPass` and emitted its
+/// blits as standalone submits, so it was not affected — but nothing asserted that, and a future change
+/// that pushed one into `draw_ops` instead of `copies` would be invisible in both the tests and the
+/// executor. It is one predicate over the emitted stream, so it costs nothing to hold.
+#[test]
+fn no_transfer_operation_is_emitted_inside_a_render_pass() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+
+    // A sampled texture with a mip chain (staging copies), a scissored clear (a fill), a rect clear
+    // (a draw), and ordinary geometry.
+    let tex = c.textures.gen();
+    record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
+    record::tex_image_2d(&mut c, 4, 4, &[0x40u8; 4 * 4 * 4]);
+    record::tex_image_2d_level(&mut c, 1, 2, 2, &[0x50u8; 2 * 2 * 4]);
+    record::tex_image_2d_level(&mut c, 2, 1, 1, &[0x60u8; 4]);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    record::enable(&mut c, GL_SCISSOR_TEST);
+    record::scissor(&mut c, [2, 2, 4, 4]);
+    record::clear_color(&mut c, [0.0, 1.0, 0.0, 1.0]);
+    record::clear_buffers(&mut c, GL_COLOR_BUFFER_BIT);
+    record::clear_depth(&mut c, 0.5);
+    record::clear_buffers(&mut c, GL_DEPTH_BUFFER_BIT);
+    record::disable(&mut c, GL_SCISSOR_TEST);
+    record::enable(&mut c, GL_DEPTH_TEST);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    swap::swap_buffers(&mut c, &mut sink).unwrap();
+
+    for batch in &sink.batches {
+        for cmd in batch {
+            let Cmd::Submit(buffer) = cmd else { continue };
+            let mut depth = 0i32;
+            for op in &buffer.encoder {
+                match op {
+                    Enc::BeginRenderPass { .. } => depth += 1,
+                    Enc::EndRenderPass => depth -= 1,
+                    Enc::ClearRect { .. }
+                    | Enc::CopyBufferToTexture { .. }
+                    | Enc::CopyTextureToBuffer { .. }
+                    | Enc::CopyBufferToBuffer { .. }
+                    | Enc::CopyTextureToTexture { .. }
+                    | Enc::BlitTexture { .. }
+                    | Enc::ResolveTexture { .. }
+                    | Enc::FillBuffer { .. } => assert_eq!(
+                        depth, 0,
+                        "a transfer op inside a render pass is silently dropped by the wgpu \
+                         executor: {:?}",
+                        buffer.encoder
+                    ),
+                    _ => {}
+                }
+            }
+            assert_eq!(depth, 0, "every pass is closed");
+        }
+    }
+}

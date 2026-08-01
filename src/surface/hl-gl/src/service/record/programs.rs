@@ -723,6 +723,7 @@ impl GlContext {
             cull_face: ctx.local.pipeline.cull_face,
             front_face: ctx.local.pipeline.front_face,
             color_mask: ctx.local.pipeline.color_mask,
+            depth_range: ctx.local.pipeline.depth_range,
             draw_buffer_mask: ctx.draw_buffer_mask(),
             clear: ctx.local.pipeline.clear_color,
             clear_depth: ctx.local.pipeline.clear_depth,

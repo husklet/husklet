@@ -190,8 +190,8 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         // ES 3.0 §2.2.2: every state value must read back the same through each Get* variant.
         GL_DEPTH_WRITEMASK => one(ctx.local.pipeline.depth_write as i32),
         GL_DEPTH_RANGE => {
-            out[0] = 0;
-            out[1] = 1;
+            out[0] = ctx.local.pipeline.depth_range[0] as i32;
+            out[1] = ctx.local.pipeline.depth_range[1] as i32;
             2
         }
         GL_MAX_VIEWPORT_DIMS => {
@@ -330,11 +330,12 @@ pub fn get_floatv(ctx: &GlContext, pname: u32, out: &mut [f32; 4]) -> usize {
             out.copy_from_slice(&ctx.local.pipeline.blend_color);
             4
         }
-        // ES 2.0 table 6.19: two floats. glDepthRangef is a no-op here (NDC depth maps directly), so the
-        // range is permanently the initial [0, 1].
+        // ES 2.0 table 6.19: two floats — the range `glDepthRangef` set. This reported a permanent
+        // `[0, 1]` alongside a comment asserting the call was a no-op; it is not, and the viewport
+        // transform now applies it.
         GL_DEPTH_RANGE => {
-            out[0] = 0.0;
-            out[1] = 1.0;
+            out[0] = ctx.local.pipeline.depth_range[0];
+            out[1] = ctx.local.pipeline.depth_range[1];
             2
         }
         _ => {

@@ -175,6 +175,8 @@ pub struct DrawCall {
     pub cull_enabled: bool,
     pub cull_face: u32,
     pub front_face: u32,
+    /// `glDepthRangef` at draw time — the window-depth range the viewport transform maps onto.
+    pub depth_range: [f32; 2],
     /// `glColorMask` per-channel write enable at draw time, packed `R<<0 | G<<1 | B<<2 | A<<3` — lowered
     /// verbatim into every color target's `ColorTargetState::write_mask`. `0xf` = write all channels.
     pub color_mask: u32,
@@ -421,6 +423,7 @@ impl Default for DrawCall {
             cull_face: crate::model::glconst::GL_BACK,
             front_face: crate::model::glconst::GL_CCW,
             color_mask: 0xf,
+            depth_range: [0.0, 1.0],
             draw_buffer_mask: !0,
             clear: [0.0; 4],
             clear_depth: 1.0,

@@ -38,6 +38,9 @@ pub(crate) struct PipelineState {
     pub(crate) cull_face: u32,
     pub(crate) front_face: u32,
     pub(crate) color_mask: u32,
+    /// `glDepthRangef(n, f)` — the window-depth range the viewport transform maps device depth onto.
+    /// Each component is clamped to `[0, 1]` (ES 3.0 §2.12.1); `n > f` is legal and reverses the mapping.
+    pub(crate) depth_range: [f32; 2],
 }
 
 impl Default for PipelineState {
@@ -76,6 +79,7 @@ impl Default for PipelineState {
             cull_face: glconst::GL_BACK,
             front_face: glconst::GL_CCW,
             color_mask: 0xf,
+            depth_range: [0.0, 1.0],
         }
     }
 }

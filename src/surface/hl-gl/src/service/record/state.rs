@@ -201,6 +201,16 @@ impl GlContext {
         self.local.pipeline.depth_func = func;
     }
 
+    /// `glDepthRangef(n, f)` — the window-depth range the viewport transform maps device depth onto.
+    ///
+    /// This was discarded at the ABI boundary and the viewport was lowered with a hard-coded `[0, 1]`, so
+    /// every fragment landed at its default-range depth however the application set the range. Both
+    /// components clamp to `[0, 1]` (ES 3.0 §2.12.1); `n > f` is legal and reverses the mapping, which the
+    /// host accepts — it validates each component's range, not their order.
+    pub fn set_depth_range(&mut self, near: f32, far: f32) {
+        self.local.pipeline.depth_range = [near.clamp(0.0, 1.0), far.clamp(0.0, 1.0)];
+    }
+
     /// `glDepthMask(flag)` — enable/disable depth writes.
     pub fn set_depth_mask(&mut self, write: bool) {
         self.local.pipeline.depth_write = write;
