@@ -348,9 +348,10 @@ pub fn framebuffer_renderbuffer(
 ///
 /// The deferred model applies the blit AFTER the frame's render passes: its source is the read FBO's
 /// rendered color attachment and its destination is the draw FBO's, both materialized as render-target
-/// textures. For the equal-size (non-scaling) case the frame lowers this to `Enc::CopyTextureToTexture`
-/// (the executor implements exact texture→texture copy); a SCALING blit (source extent != destination
-/// extent) lowers to `Enc::BlitTexture` carrying the resampling `filter`. A non-color `mask` is a no-op, and an incomplete
+/// textures. For the equal-size, same-format, unmirrored case the frame lowers this to
+/// `Enc::CopyTextureToTexture` (the executor implements exact texture→texture copy); a SCALING,
+/// converting or MIRRORED blit lowers to `Enc::BlitTexture` carrying the resampling `filter` and the net
+/// per-axis flip. A non-color `mask` is a no-op, and an incomplete
 /// read or draw framebuffer raises `GL_INVALID_FRAMEBUFFER_OPERATION` (first-error-wins) — a conforming
 /// driver never samples an incomplete attachment.
 #[allow(clippy::too_many_arguments)]

@@ -1,4 +1,5 @@
 use super::*;
+use hl_gpu::protocol::model::descriptor::Mirror;
 
 fn mixed_frame() -> (GlContext, [u32; 2]) {
     let mut context = ctx_64();
@@ -95,6 +96,99 @@ fn draw_blit_draw_preserves_exact_gl_call_order() {
         .collect::<Vec<_>>();
 
     assert_eq!(kinds, ["draw", "blit", "draw"]);
+}
+
+/// A MIRRORED `glBlitFramebuffer` reaches the IR as a mirror, and it takes the resampling path.
+///
+/// GL flips a blit by inverting a rect: `srcX1 < srcX0` reverses the destination's column order. The
+/// lowering already normalises both rects with a min/max — it has to, since the IR's origin and extent are
+/// unsigned — and it threw the comparison away, so a mirrored blit produced an UNMIRRORED image with no
+/// error anywhere. It also has to leave the exact-copy path, because `CopyTextureToTexture` moves bytes
+/// and cannot reflect them: equal extents and matching formats are no longer sufficient for a copy.
+///
+/// The y axis is the subtle one and is asserted rather than assumed: both rects get the same bottom-left
+/// to top-left reflection, so that reflection cancels out of the NET flip and an ordinary (uninverted)
+/// blit must still record `Mirror::NONE`.
+#[test]
+fn a_mirrored_blit_lowers_to_a_mirrored_blit_texture() {
+    // `(src rect, dst rect)` in GL window coordinates, and the net mirror each must produce.
+    let cases: [([i32; 4], [i32; 4], Mirror); 5] = [
+        ([0, 0, 16, 16], [0, 0, 16, 16], Mirror::NONE),
+        ([16, 0, 0, 16], [0, 0, 16, 16], Mirror { x: true, y: false }),
+        ([0, 16, 16, 0], [0, 0, 16, 16], Mirror { x: false, y: true }),
+        ([16, 16, 0, 0], [0, 0, 16, 16], Mirror { x: true, y: true }),
+        // Both sides inverted on x: two reflections are the identity, so this is NOT a mirror.
+        ([16, 0, 0, 16], [16, 0, 0, 16], Mirror::NONE),
+    ];
+
+    for (src_rect, dst_rect, want) in cases {
+        let mut context = ctx_64();
+        context.set_surface_kind(hl_gl::model::context::SurfaceKind::Offscreen);
+        flat_program(&mut context);
+        tri_vbo(&mut context, 8);
+        let source = framebuffer(&mut context);
+        let destination = framebuffer(&mut context);
+
+        record::bind_framebuffer(&mut context, GL_FRAMEBUFFER, source);
+        record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
+        record::bind_framebuffer(&mut context, GL_READ_FRAMEBUFFER, source);
+        record::bind_framebuffer(&mut context, GL_DRAW_FRAMEBUFFER, destination);
+        record::blit_framebuffer(
+            &mut context,
+            src_rect[0],
+            src_rect[1],
+            src_rect[2],
+            src_rect[3],
+            dst_rect[0],
+            dst_rect[1],
+            dst_rect[2],
+            dst_rect[3],
+            GL_COLOR_BUFFER_BIT,
+            GL_NEAREST,
+        );
+
+        let frame = hl_gl::service::frame::Frame::build(&mut context).expect("the frame lowers");
+        let transfers: Vec<&Enc> = frame
+            .cmds
+            .iter()
+            .filter_map(|command| match command {
+                Cmd::Submit(buffer) => Some(buffer.encoder.iter()),
+                _ => None,
+            })
+            .flatten()
+            .filter(|op| {
+                matches!(
+                    op,
+                    Enc::CopyTextureToTexture { .. } | Enc::BlitTexture { .. }
+                )
+            })
+            .collect();
+        assert_eq!(
+            transfers.len(),
+            1,
+            "{src_rect:?} -> {dst_rect:?} must lower to exactly one transfer, got {transfers:?}"
+        );
+
+        if want == Mirror::NONE {
+            // Equal extents, matching formats, no net flip: still the exact byte copy it always was.
+            assert!(
+                matches!(transfers[0], Enc::CopyTextureToTexture { .. }),
+                "{src_rect:?} -> {dst_rect:?} carries no net flip and must stay an exact copy"
+            );
+            continue;
+        }
+        let Enc::BlitTexture { mirror, .. } = transfers[0] else {
+            panic!(
+                "{src_rect:?} -> {dst_rect:?} is mirrored, so it must take the resampling path (an \
+                 exact copy cannot reflect), got {:?}",
+                transfers[0]
+            );
+        };
+        assert_eq!(
+            *mirror, want,
+            "{src_rect:?} -> {dst_rect:?} must carry the net per-axis flip"
+        );
+    }
 }
 
 #[test]

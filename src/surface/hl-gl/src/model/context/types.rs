@@ -2,9 +2,10 @@ use super::*;
 
 /// A recorded `glBlitFramebuffer` — a sub-rect copy from a read framebuffer's color attachment to a draw
 /// framebuffer's. Rects are GL window coordinates (bottom-left origin), captured verbatim; the frame
-/// builder resolves the two FBOs' render-target textures and lowers the equal-size (non-scaling) case to
-/// `Enc::CopyTextureToTexture` and the scaling case (source extent ≠ destination extent) to
-/// `Enc::BlitTexture` with `filter` (both flipping Y into the textures' top-left origin).
+/// builder resolves the two FBOs' render-target textures and lowers the equal-size, same-format,
+/// UNMIRRORED case to `Enc::CopyTextureToTexture`; a scaling, converting or mirrored blit lowers to
+/// `Enc::BlitTexture` with `filter` and the net per-axis `Mirror` (both flipping Y into the textures'
+/// top-left origin). Rects are captured verbatim precisely so an inverted one still reads as inverted.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct BlitOp {
     /// The read (source) and draw (destination) framebuffer names bound when the blit was recorded.

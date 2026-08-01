@@ -367,9 +367,10 @@ pub extern "C" fn glFramebufferRenderbuffer(
 }
 
 /// `glBlitFramebuffer(...)` — validate the read+draw framebuffers and record the color blit for the frame
-/// builder. The deferred model applies it after the frame's render passes: an equal-size blit lowers to
-/// `Enc::CopyTextureToTexture`, a scaling blit to `Enc::BlitTexture` with `filter` mapped from GL's
-/// `GL_NEAREST`/`GL_LINEAR`; see [`record::blit_framebuffer`].
+/// builder. The deferred model applies it after the frame's render passes: an equal-size, same-format,
+/// unmirrored blit lowers to `Enc::CopyTextureToTexture`; a scaling, converting or mirrored one (an
+/// inverted rect — `srcX1 < srcX0` — is how GL asks for a flip) lowers to `Enc::BlitTexture` with
+/// `filter` mapped from GL's `GL_NEAREST`/`GL_LINEAR`; see [`record::blit_framebuffer`].
 #[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glBlitFramebuffer(

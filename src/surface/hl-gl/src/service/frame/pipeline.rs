@@ -63,7 +63,13 @@ pub(super) fn emit_scissor(d: &DrawCall, tw: i32, th: i32, bottom_up: bool) -> E
 
 /// Lower a `glBlitFramebuffer` color sub-rect, flipping the GL bottom-left window rects into the render
 /// targets' top-left texel origin.
-
+///
+/// A MIRRORED blit — `x1 < x0` (or `y1 < y0`) on one side but not the other — is legal GL and reverses
+/// the destination's row or column order. The min/max below already computes the comparison that decides
+/// it; that result used to be discarded, so a mirrored blit produced an unmirrored image. The NET flip
+/// (source inversion exclusive-or destination inversion) now rides along on `Enc::BlitTexture`. Because
+/// the exact copy cannot mirror, a net-flipped blit takes the resampling path even at equal extents and
+/// matching formats.
 ///
 /// A SCALING blit (source extent != destination extent) or one that CHANGES FORMAT lowers to
 /// `Enc::BlitTexture` carrying `filter`, which resamples and converts. Only an equal-size, same-format
@@ -93,6 +99,18 @@ pub(super) fn blit_copy_enc(
     let (sy0, sy1) = (src[1].min(src[3]), src[1].max(src[3]));
     let (dx0, dx1) = (dst[0].min(dst[2]), dst[0].max(dst[2]));
     let (dy0, dy1) = (dst[1].min(dst[3]), dst[1].max(dst[3]));
+    // Both sides get the same bottom-left-to-top-left y reflection below, so it cancels out of the net
+    // vertical flip and the comparison is taken on the GL rects as given.
+    let mirror = Mirror::net(
+        Mirror {
+            x: src[2] < src[0],
+            y: src[3] < src[1],
+        },
+        Mirror {
+            x: dst[2] < dst[0],
+            y: dst[3] < dst[1],
+        },
+    );
     let (sw, sh) = (sx1 - sx0, sy1 - sy0);
     let (dw, dh) = (dx1 - dx0, dy1 - dy0);
     if sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0 {
@@ -101,7 +119,7 @@ pub(super) fn blit_copy_enc(
     // GL y is bottom-left; a region's TOP row in a top-left texture is `height - y_max`.
     let src_oy = (src_th - sy1).max(0) as u32;
     let dst_oy = (dst_th - dy1).max(0) as u32;
-    if sw != dw || sh != dh || src_fmt != dst_fmt {
+    if sw != dw || sh != dh || src_fmt != dst_fmt || mirror != Mirror::NONE {
         // Scaling OR format-changing blit: resample and convert the source rect into the destination
         // rect. The wgpu executor draws a filtered textured quad for this (its `Enc::BlitTexture`
         // implementation), which is what performs the conversion `glBlitFramebuffer` promises; the exact
@@ -132,8 +150,7 @@ pub(super) fn blit_copy_enc(
                 depth: 1,
             },
             filter,
-            // TODO(mirror): the surface still discards the inversion; wired in the next commit.
-            mirror: Mirror::NONE,
+            mirror,
         });
     }
     Some(Enc::CopyTextureToTexture {
