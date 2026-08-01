@@ -1,6 +1,7 @@
 use super::*;
 use hl_gpu::protocol::model::enums::TextureFormat;
 use hl_gpu::{CommandSink, FeatureRequest, WIRE_VERSION};
+use hl_vulkan::model::capability::format_feature;
 
 use crate::state::State;
 
@@ -60,12 +61,15 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
     image_type: i32,
     tiling: i32,
     _usage: VkFlags,
-    _flags: VkFlags,
+    flags: VkFlags,
     p_image_format_properties: *mut c_void,
 ) -> VkResult {
     const VK_ERROR_FORMAT_NOT_SUPPORTED: VkResult = -11;
     const VK_IMAGE_TYPE_2D: i32 = 1;
     const VK_IMAGE_TILING_OPTIMAL: i32 = 0;
+    const VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT: VkFlags = 0x0000_0010;
+    const VK_SAMPLE_COUNT_1_BIT: VkFlags = 0x1;
+    const VK_SAMPLE_COUNT_4_BIT: VkFlags = 0x4;
     let Some(out) =
         (unsafe { (p_image_format_properties as *mut VkImageFormatProperties).as_mut() })
     else {
@@ -85,6 +89,24 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
         *out = VkImageFormatProperties::default();
         return VK_ERROR_FORMAT_NOT_SUPPORTED;
     }
+    // Multisampling is available only where the specification permits it to be reported. sampleCounts
+    // must be exactly VK_SAMPLE_COUNT_1_BIT unless the image is optimally tiled, two-dimensional, not
+    // cube-compatible, and its format can be an attachment. Type and tiling are already settled above,
+    // so what remains is the cube flag — which this query used to ignore entirely — and whether the
+    // format is attachment-capable, read from the SAME feature mask
+    // `vkGetPhysicalDeviceFormatProperties` reports, so the two answers cannot disagree.
+    //
+    // Reporting 4x everywhere was an over-claim, and an over-claim is the worse direction: a caller that
+    // believes it can multisample a sampled-only or cube-compatible image finds out somewhere downstream
+    // that cannot name this query as the cause.
+    let attachment = format_feature::COLOR_ATTACHMENT | format_feature::DEPTH_STENCIL_ATTACHMENT;
+    let multisamplable = flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT == 0
+        && Format(format as u32).features().optimal_tiling & attachment != 0;
+    let sample_counts = if multisamplable {
+        VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_4_BIT
+    } else {
+        VK_SAMPLE_COUNT_1_BIT
+    };
     let dim = StateStore::with(|s| s.physical_device().limits.max_image_dimension_2d);
     *out = VkImageFormatProperties {
         max_extent: VkExtent3D {
@@ -94,7 +116,7 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
         },
         max_mip_levels: 1 + (dim as f32).log2() as u32,
         max_array_layers: 2048,
-        sample_counts: 0x1 | 0x4,   // TYPE_1 | TYPE_4
+        sample_counts,
         max_resource_size: 1 << 31, // 2 GiB (the executor residency budget)
     };
     VK_SUCCESS

@@ -1020,3 +1020,72 @@ fn a_refused_image_format_query_zeroes_the_properties() {
     assert_eq!(refused.sample_counts, 0);
     assert_eq!(refused.max_resource_size, 0);
 }
+
+/// `sampleCounts` must be exactly `VK_SAMPLE_COUNT_1_BIT` unless the image is optimally tiled,
+/// two-dimensional, NOT cube-compatible, and its format can be an attachment. The query used to report
+/// `1|4` for every supported combination and ignored `flags` entirely, which is an over-claim — the
+/// worse direction, because a caller that believes it can multisample finds out somewhere downstream
+/// that cannot name this query as the cause. 18 `dEQP-VK.api.info.image_format_properties` cases caught
+/// it as `sampleCounts != VK_SAMPLE_COUNT_1_BIT`.
+#[test]
+fn sample_counts_are_claimed_only_where_the_specification_permits() {
+    const R8G8B8A8_UNORM: i32 = 37;
+    const BC1_RGBA_UNORM_BLOCK: i32 = 133;
+    const VK_IMAGE_TYPE_2D: i32 = 1;
+    const VK_IMAGE_TILING_OPTIMAL: i32 = 0;
+    const CUBE_COMPATIBLE: VkFlags = 0x10;
+
+    let query = |format: i32, flags: VkFlags| {
+        let mut p: VkImageFormatProperties = unsafe { core::mem::zeroed() };
+        let r = crate::instance::vkGetPhysicalDeviceImageFormatProperties(
+            core::ptr::null_mut(),
+            format,
+            VK_IMAGE_TYPE_2D,
+            VK_IMAGE_TILING_OPTIMAL,
+            0,
+            flags,
+            &mut p as *mut _ as *mut c_void,
+        );
+        (r, p.sample_counts)
+    };
+
+    // Positive control FIRST: an attachment-capable colour format with no cube flag really does back 4x,
+    // so this must still claim it. Without this the test would pass against a query that reported
+    // 1_BIT for everything, which is a different lie.
+    let (result, counts) = query(R8G8B8A8_UNORM, 0);
+    assert_eq!(result, VK_SUCCESS);
+    assert_eq!(
+        counts, 0x5,
+        "an attachment-capable 2D optimal format still backs 1x and 4x"
+    );
+
+    // Cube-compatible: the specification requires 1_BIT regardless of the format.
+    let (result, counts) = query(R8G8B8A8_UNORM, CUBE_COMPATIBLE);
+    assert_eq!(result, VK_SUCCESS);
+    assert_eq!(counts, 0x1, "a cube-compatible image is single-sample only");
+
+    // The attachment-capability half cannot be driven through this entry point in a unit test, and
+    // saying so is better than a conditional assertion that quietly measures nothing — an earlier draft
+    // of this test wrapped the check in `if result == VK_SUCCESS` and passed against a build that had
+    // the condition deleted. The only formats lacking an attachment bit are the block-compressed ones,
+    // and those are advertised only when a host sink negotiates them, which no in-process test has.
+    let (result, _) = query(BC1_RGBA_UNORM_BLOCK, 0);
+    assert_ne!(
+        result, VK_SUCCESS,
+        "if BC1 became queryable without a negotiated sink, extend this test to cover the \
+         attachment-capability half through it"
+    );
+    // So assert that half where it IS reachable: on the feature mask the query reads. A compressed
+    // format carries no attachment bit, which is what makes the query report single-sample for it.
+    let compressed = hl_vulkan::model::memory::Format(BC1_RGBA_UNORM_BLOCK as u32)
+        .features()
+        .optimal_tiling;
+    assert_ne!(compressed, 0, "BC1 is a format this driver does lower");
+    assert_eq!(
+        compressed
+            & (hl_vulkan::model::capability::format_feature::COLOR_ATTACHMENT
+                | hl_vulkan::model::capability::format_feature::DEPTH_STENCIL_ATTACHMENT),
+        0,
+        "a compressed format is never an attachment, so it can never be multisampled"
+    );
+}
