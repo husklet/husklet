@@ -118,7 +118,11 @@ impl Status {
                     Some(RefusalKind::Unsupported) => VK_ERROR_FEATURE_NOT_PRESENT,
                     Some(RefusalKind::OutOfBounds) => VK_ERROR_MEMORY_MAP_FAILED,
                     Some(RefusalKind::UnknownId) => VK_ERROR_UNKNOWN,
-                    Some(RefusalKind::Invalid) => VK_ERROR_INITIALIZATION_FAILED,
+                    // Grouped with `Invalid`, which is the class a kernel-lowering refusal carried before
+                // `RefusalKind::Kernel` existed; Vulkan's reported codes are unchanged by that split.
+                Some(RefusalKind::Invalid) | Some(RefusalKind::Kernel) => {
+                    VK_ERROR_INITIALIZATION_FAILED
+                }
                     Some(RefusalKind::ResourceLimit) | Some(RefusalKind::Unstated) | None => {
                         VK_ERROR_OUT_OF_DEVICE_MEMORY
                     }

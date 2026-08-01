@@ -7,6 +7,7 @@
 //! never inspect a value, they return `CUDA_SUCCESS`. The `GpuError` → code map is what the shim
 //! cdylibs (later) will use to turn a lowering error into the `CUresult` the guest expects.
 
+use hl_gpu::transport::model::header::RefusalKind;
 use hl_gpu::GpuError;
 
 // ---- CUresult (returned as i32 across the C ABI) -------------------------------------------------
@@ -163,6 +164,26 @@ impl DriverStatus<'_> {
             GpuError::UnknownId { .. } | GpuError::DuplicateId { .. } => CUDA_ERROR_INVALID_HANDLE,
             GpuError::OutOfBounds => CUDA_ERROR_INVALID_VALUE,
             GpuError::ResourceLimit(_) => CUDA_ERROR_OUT_OF_MEMORY,
+            // A host that received a complete request and REFUSED it has not lost anything: the batch
+            // was rejected atomically and the connection is still there. The acknowledgement carries the
+            // CLASS of the refusal, so each arm below is the code this driver raises for the same
+            // condition locally — where the failure was detected stops being visible to the caller.
+            //
+            // Keyed on `refusal()`, never on a particular acknowledgement byte: a host that classifies
+            // more finely than this guest understands must still land here and be reported as a refused
+            // call, not fall through to the transport-death arm below and become a lost device.
+            GpuError::Transport(failure) if failure.refusal() => match failure.refusal_kind() {
+                Some(RefusalKind::Unsupported) => CUDA_ERROR_NOT_SUPPORTED,
+                Some(RefusalKind::ResourceLimit) => CUDA_ERROR_OUT_OF_MEMORY,
+                Some(RefusalKind::UnknownId) => CUDA_ERROR_INVALID_HANDLE,
+                Some(RefusalKind::Kernel) => CUDA_ERROR_INVALID_PTX,
+                Some(RefusalKind::Invalid) | Some(RefusalKind::OutOfBounds) => {
+                    CUDA_ERROR_INVALID_VALUE
+                }
+                // The host declined and named no reason. `CUDA_ERROR_UNKNOWN` is the honest answer, and
+                // it is the only approximation left.
+                Some(RefusalKind::Unstated) | None => CUDA_ERROR_UNKNOWN,
+            },
             GpuError::Decode(_) | GpuError::Transport(_) | GpuError::Panicked(_) => {
                 CUDA_ERROR_UNKNOWN
             }
@@ -198,6 +219,18 @@ impl RuntimeStatus<'_> {
                 CUDART_ERROR_INVALID_RESOURCE_HANDLE
             }
             GpuError::ResourceLimit(_) => CUDART_ERROR_MEMORY_ALLOCATION,
+            // Same contract as `DriverStatus`, in runtime-API codes: a classified refusal reports what
+            // the identical local failure would report. Keyed on `refusal()`, not on an ack value.
+            GpuError::Transport(failure) if failure.refusal() => match failure.refusal_kind() {
+                Some(RefusalKind::Unsupported) => CUDART_ERROR_NOT_SUPPORTED,
+                Some(RefusalKind::ResourceLimit) => CUDART_ERROR_MEMORY_ALLOCATION,
+                Some(RefusalKind::UnknownId) => CUDART_ERROR_INVALID_RESOURCE_HANDLE,
+                Some(RefusalKind::Kernel) => CUDART_ERROR_INVALID_PTX,
+                Some(RefusalKind::Invalid) | Some(RefusalKind::OutOfBounds) => {
+                    CUDART_ERROR_INVALID_VALUE
+                }
+                Some(RefusalKind::Unstated) | None => CUDART_ERROR_UNKNOWN,
+            },
             GpuError::Decode(_) => CUDART_ERROR_UNKNOWN,
             _ => CUDART_ERROR_INVALID_VALUE,
         };
@@ -208,8 +241,17 @@ impl RuntimeStatus<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DriverStatus, CUDA_ERROR_UNKNOWN};
+    use super::*;
+    use hl_gpu::transport::model::header::{RefusalKind, ACK_FAIL, ACK_OK};
+    use hl_gpu::transport::TransportPhase;
     use hl_gpu::{GpuError, TransportError};
+
+    fn refused(acknowledgement: u8) -> GpuError {
+        GpuError::Transport(TransportError::Rejected {
+            phase: TransportPhase::Acknowledgement,
+            acknowledgement,
+        })
+    }
 
     #[test]
     fn transport_loss_is_reported_as_driver_failure() {
@@ -218,5 +260,75 @@ mod tests {
         });
 
         assert_eq!(DriverStatus::from(&error).code(), CUDA_ERROR_UNKNOWN);
+    }
+
+    /// A host that refused because it could not lower the kernel must reach the caller as
+    /// `CUDA_ERROR_INVALID_PTX` — the same code this driver raises when it rejects the PTX itself — not
+    /// as the generic `CUDA_ERROR_UNKNOWN` every transport failure used to collapse into. Measured
+    /// against the shipped executor, `red.global.min.s32` produced 999 before this map existed.
+    #[test]
+    fn a_refused_kernel_lowering_reports_invalid_ptx_not_unknown() {
+        let error = refused(RefusalKind::Kernel.ack());
+
+        assert_eq!(DriverStatus::from(&error).code(), CUDA_ERROR_INVALID_PTX);
+        assert_eq!(
+            RuntimeStatus::from(&error).code(),
+            CUDART_ERROR_INVALID_PTX
+        );
+        // The point of the change: it is no longer the unclassified answer.
+        assert_ne!(DriverStatus::from(&error).code(), CUDA_ERROR_UNKNOWN);
+    }
+
+    /// Each class reports what the identical locally-detected error reports, so where the failure was
+    /// detected is invisible to the caller. The local column is the assertion — writing the constants
+    /// twice would just restate the map.
+    #[test]
+    fn every_refusal_class_agrees_with_the_local_error_for_the_same_condition() {
+        for (kind, local) in [
+            (RefusalKind::Unsupported, GpuError::Unsupported("x".into())),
+            (RefusalKind::ResourceLimit, GpuError::ResourceLimit("x".into())),
+            (RefusalKind::OutOfBounds, GpuError::OutOfBounds),
+            (RefusalKind::Invalid, GpuError::Invalid("x".into())),
+            (RefusalKind::Kernel, GpuError::Kernel("x".into())),
+        ] {
+            assert_eq!(
+                DriverStatus::from(&refused(kind.ack())).code(),
+                DriverStatus::from(&local).code(),
+                "refusal class {kind:?} must report what the local error reports"
+            );
+        }
+    }
+
+    /// The caution the wire's authors paid for: key on the REFUSAL, never on the particular
+    /// acknowledgement value. A host that classifies more finely than this guest understands must still
+    /// be treated as having refused the call — reported as a plain failure the caller can act on — and
+    /// must NOT fall through to the transport-death arm and become an unrecoverable device.
+    #[test]
+    fn an_unrecognised_refusal_class_is_still_a_refusal() {
+        let future = refused(200);
+
+        assert_eq!(
+            RefusalKind::from_ack(200),
+            RefusalKind::Unstated,
+            "an unknown class reads as unstated"
+        );
+        assert_eq!(DriverStatus::from(&future).code(), CUDA_ERROR_UNKNOWN);
+        // A refusal is recoverable: the batch was rejected atomically and the connection survived. The
+        // guard is that it took the refusal arm at all, which `refusal()` — not the byte — decides.
+        let GpuError::Transport(failure) = &future else {
+            panic!("constructed a transport failure");
+        };
+        assert!(failure.refusal(), "any Rejected acknowledgement is a refusal");
+    }
+
+    /// The unclassified refusal an OLDER host sends keeps meaning exactly what it meant before.
+    #[test]
+    fn an_unstated_refusal_from_an_older_host_is_unchanged() {
+        assert_eq!(RefusalKind::from_ack(ACK_FAIL), RefusalKind::Unstated);
+        assert_eq!(
+            DriverStatus::from(&refused(ACK_FAIL)).code(),
+            CUDA_ERROR_UNKNOWN
+        );
+        assert_ne!(ACK_OK, RefusalKind::Kernel.ack(), "a refusal is never ACK_OK");
     }
 }

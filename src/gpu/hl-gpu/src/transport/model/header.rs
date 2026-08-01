@@ -40,6 +40,14 @@ pub const ACK_INVALID: u8 = 4;
 pub const ACK_OUT_OF_BOUNDS: u8 = 5;
 /// The request named a resource the host does not have.
 pub const ACK_UNKNOWN_ID: u8 = 6;
+/// The shader or kernel payload could not be lowered by the host.
+///
+/// Distinct from [`ACK_INVALID`] because a caller can act on it: the request was well-formed and the
+/// resources existed, but the program text uses something this host's shader translation does not
+/// implement. Collapsing it into `Invalid` costs a surface that has its own code for exactly this —
+/// CUDA's `CUDA_ERROR_INVALID_PTX` — the ability to report it, which is the whole point of carrying a
+/// class at all.
+pub const ACK_KERNEL: u8 = 7;
 
 /// Why the host refused a frame, as far as one acknowledgement byte can say.
 ///
@@ -55,6 +63,8 @@ pub enum RefusalKind {
     Invalid,
     OutOfBounds,
     UnknownId,
+    /// The host could not lower the shader/kernel payload.
+    Kernel,
 }
 
 impl RefusalKind {
@@ -68,6 +78,7 @@ impl RefusalKind {
             ACK_INVALID => Self::Invalid,
             ACK_OUT_OF_BOUNDS => Self::OutOfBounds,
             ACK_UNKNOWN_ID => Self::UnknownId,
+            ACK_KERNEL => Self::Kernel,
             _ => Self::Unstated,
         }
     }
@@ -80,6 +91,7 @@ impl RefusalKind {
             Self::Invalid => ACK_INVALID,
             Self::OutOfBounds => ACK_OUT_OF_BOUNDS,
             Self::UnknownId => ACK_UNKNOWN_ID,
+            Self::Kernel => ACK_KERNEL,
         }
     }
 
@@ -100,8 +112,8 @@ impl RefusalKind {
             | E::NonCanonicalBool(_)
             | E::Utf8
             | E::ShortBuffer
-            | E::TrailingBytes
-            | E::Kernel(_) => Self::Invalid,
+            | E::TrailingBytes => Self::Invalid,
+            E::Kernel(_) => Self::Kernel,
             E::Decode(_) | E::Transport(_) | E::Panicked(_) => Self::Unstated,
         }
     }
@@ -222,7 +234,28 @@ mod refusal_tests {
             RefusalKind::Invalid,
             RefusalKind::OutOfBounds,
             RefusalKind::UnknownId,
+            RefusalKind::Kernel,
         ];
+        // A hand-written list silently stops covering the thing it guards the moment a variant is
+        // added — `Kernel` was added and this list did not notice. The match below is enumerated by the
+        // compiler, so a new variant fails the BUILD until it is named, and the length check then forces
+        // it into `sent` too. Together they are the only way this list stays honest.
+        for kind in sent {
+            match kind {
+                RefusalKind::Unstated
+                | RefusalKind::Unsupported
+                | RefusalKind::ResourceLimit
+                | RefusalKind::Invalid
+                | RefusalKind::OutOfBounds
+                | RefusalKind::UnknownId
+                | RefusalKind::Kernel => {}
+            }
+        }
+        assert_eq!(
+            sent.len(),
+            7,
+            "a refusal class was added; name it in `sent` so its byte is checked for collisions"
+        );
         let mut bytes: Vec<u8> = sent.iter().map(|k| k.ack()).collect();
         bytes.sort_unstable();
         let count = bytes.len();

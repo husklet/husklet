@@ -84,7 +84,13 @@ impl From<&GpuError> for EglError {
                 Some(RefusalKind::ResourceLimit) => EGL_BAD_ALLOC,
                 Some(RefusalKind::Unsupported) => EGL_BAD_MATCH,
                 Some(RefusalKind::UnknownId) => EGL_BAD_SURFACE,
-                Some(RefusalKind::Invalid) | Some(RefusalKind::OutOfBounds) => EGL_BAD_PARAMETER,
+                // `Kernel` is grouped with `Invalid` deliberately: before the class existed, a shader the
+                // host could not lower arrived here as `Invalid`, and GL has no distinct code for
+                // "unlowerable program" at this boundary the way CUDA's `CUDA_ERROR_INVALID_PTX` does.
+                // Keeping the grouping leaves GL's reported codes bit-identical.
+                Some(RefusalKind::Invalid)
+                | Some(RefusalKind::Kernel)
+                | Some(RefusalKind::OutOfBounds) => EGL_BAD_PARAMETER,
                 Some(RefusalKind::Unstated) | None => EGL_BAD_ACCESS,
             },
             // A backend PANIC is a backend defect, not a guest error: the frame is refused and the
@@ -123,7 +129,9 @@ impl From<&GpuError> for GlError {
             // could not be performed, which is all the host actually said.
             GpuError::Transport(failure) if failure.refusal() => match failure.refusal_kind() {
                 Some(RefusalKind::ResourceLimit) => GL_OUT_OF_MEMORY,
-                Some(RefusalKind::Invalid) | Some(RefusalKind::OutOfBounds) => GL_INVALID_VALUE,
+                Some(RefusalKind::Invalid)
+                | Some(RefusalKind::Kernel)
+                | Some(RefusalKind::OutOfBounds) => GL_INVALID_VALUE,
                 Some(RefusalKind::Unsupported)
                 | Some(RefusalKind::UnknownId)
                 | Some(RefusalKind::Unstated)

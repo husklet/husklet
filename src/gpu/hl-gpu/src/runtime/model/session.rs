@@ -29,6 +29,17 @@ pub struct Limits {
 }
 
 impl Limits {
+    /// The buffer-copy alignment every backend here requires, in bytes.
+    ///
+    /// This is a real host constraint, not a policy knob: `wgpu::CommandEncoder::copy_buffer_to_buffer`
+    /// requires both offsets and the size to be multiples of `COPY_BUFFER_ALIGNMENT`, which is 4. A guest
+    /// lowering an API whose copies are byte-granular — `cuMemcpyDtoD` is — must therefore split the
+    /// unaligned edges out itself rather than expect the transfer to be accepted.
+    ///
+    /// It is NOT advertised through `Capabilities`, so a guest cannot negotiate it and has to assume this
+    /// value. Anything stricter fails closed: the middle copy is refused and the error is reported.
+    pub const DEFAULT_COPY_ALIGNMENT: u64 = 4;
+
     /// Hard ceiling on a draw's `instance_count`.
     ///
     /// The instance loop re-runs the whole primitive set once per instance, and `instance_count` is
@@ -92,7 +103,7 @@ impl Limits {
             // contexts) can hold well over 64k distinct objects at once; 256k keeps the object guard finite
             // without tripping a healthy browser frame.
             max_connection_objects: 262_144,
-            copy_alignment: 4,
+            copy_alignment: Self::DEFAULT_COPY_ALIGNMENT,
             // Chrome links a large program set; 128 MiB of compiled PSO/AIR cache is browser-class headroom
             // while still bounding the compiled-pipeline residency separately from raw data.
             max_compiled_cache_bytes: 128 << 20,
