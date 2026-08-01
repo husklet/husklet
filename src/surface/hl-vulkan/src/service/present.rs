@@ -23,7 +23,7 @@ use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::descriptor::{
     BufferDesc, FrameSerial, SurfaceDesc, SurfaceToken, TextureDesc,
 };
-use hl_gpu::protocol::model::enums::{buffer_usage, TextureDim};
+use hl_gpu::protocol::model::enums::{buffer_usage, texture_usage, TextureDim};
 use hl_gpu::{BufferId, Cmd, CommandBuffer, CommandSink, GpuError, Result};
 
 // ---- WSI physical-device surface queries (modeled, physical-device-level — no Device/sink) --------
@@ -168,7 +168,21 @@ pub fn create_swapchain(
     // accepts more than an application requested, which no conformant application can observe or rely
     // on, and never less than it advertised — the safe direction. The unsafe direction, a request for
     // usage the surface does NOT advertise, is refused at the entry point.
-    let usage = crate::model::memory::ImageUsage(SURFACE_IMAGE_USAGE).wire();
+    //
+    // `PRESENT` is OR-ed in structurally and CANNOT come from `SURFACE_IMAGE_USAGE`: Vulkan has no
+    // such usage bit, so no application can ask for it and no translation can produce it. It is also
+    // the bit that decides whether the frame is ever seen at all — `IoSurfaceAllocator::supports`
+    // requires it before it will back a texture with an IOSurface, and a presentable image with no
+    // IOSurface makes `iosurface_image` return `Ok(None)`, which publishes no native frame, which
+    // leaves the compositor's commit deferred on a `(token, serial)` that can never arrive. Measured:
+    // a Vulkan client presenting a thousand correct frames, one commit parked, zero joined, no window
+    // and an empty compositor log.
+    //
+    // The comment this replaced already named the right set — "matching GL's default target
+    // (`RENDER_TARGET | PRESENT | COPY_SRC`)" — while the code beside it omitted `PRESENT`. A comment
+    // asserting a rule its code does not implement is the cheapest defect in this repository to find
+    // and among the most expensive to chase.
+    let usage = crate::model::memory::ImageUsage(SURFACE_IMAGE_USAGE).wire() | texture_usage::PRESENT;
     let mut images = Vec::with_capacity(image_count.max(1) as usize);
     for _ in 0..image_count.max(1) {
         let ir_texture_id = dev.alloc_ir();

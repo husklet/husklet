@@ -12,6 +12,10 @@ use crate::runtime::gpu::executor::Executor;
 pub(crate) struct Producer {
     publisher: NativeFrameSender,
     receipts: Vec<NativeFrameReceipt>,
+    /// Presentations that cannot be published because their texture has no IOSurface. Latched per
+    /// (surface, texture) so the diagnostic carries an occurrence count and a window rather than
+    /// repeating at display rate.
+    unpublishable: hl_compositor::diagnostic::Tally<(u32, u32)>,
 }
 
 impl Producer {
@@ -19,6 +23,7 @@ impl Producer {
         Self {
             publisher,
             receipts: Vec::new(),
+            unpublishable: hl_compositor::diagnostic::Tally::default(),
         }
     }
 
@@ -65,7 +70,37 @@ impl Producer {
             let extraction_started = diagnostics.then(std::time::Instant::now);
             let image = match executor.image(&session.resources, presentation) {
                 Ok(Some(image)) => image,
-                Ok(None) => continue,
+                Ok(None) => {
+                    // NOT a silent `continue`. This arm means the presented texture has no IOSurface
+                    // backing, so no native frame can be published for it — and the compositor is at
+                    // that moment holding a commit deferred on exactly this `(token, serial)`, which
+                    // will now never arrive. Nothing downstream can report it: the compositor cannot
+                    // distinguish a commit parked forever from one never made, and the guest sees
+                    // `VK_SUCCESS`. Skipping quietly here is what made a completely invisible window
+                    // an investigation instead of a lookup.
+                    //
+                    // Error level so it survives a release build, latched per texture so a surface
+                    // presenting at display rate contributes a line rather than a flood.
+                    if let Some(seen) = self
+                        .unpublishable
+                        .record((presentation.surface.0, presentation.texture.0))
+                    {
+                        hl_log::hl_error!(
+                            hl_log::tag::PRESENT,
+                            "native presentation has no IOSurface surface={} texture={} token={} \
+                             serial={} count={} over_ms={} — the texture was not created with the \
+                             PRESENT usage, so nothing is published and the compositor's commit for \
+                             this token/serial can never complete",
+                            presentation.surface.0,
+                            presentation.texture.0,
+                            presentation.token.get(),
+                            presentation.serial.get(),
+                            seen.count,
+                            seen.since.as_millis()
+                        );
+                    }
+                    continue;
+                }
                 Err(error) => {
                     hl_log::hl_error!(
                         hl_log::tag::PRESENT,
