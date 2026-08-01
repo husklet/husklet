@@ -600,6 +600,42 @@ impl MacPresenter {
         //
         // Error level so it survives a release build, on a time cadence so a reader sees the rate, and
         // keyed per surface so the ABSENCE of a surface's beat is itself information.
+        // WHY a frame took the route it did, reported on TRANSITION rather than per frame.
+        //
+        // The gate above is `(Some(mtm), has_window_role)`, and its two failure arms mean completely
+        // different things to an operator. No main-thread handle is the deliberate headless mode and
+        // will never change. An unreconciled window role is an ordinary startup race that resolves the
+        // moment `Windows::reconcile_window` runs — `desired` is set in exactly one place and never
+        // cleared in this path, so there is no latch and no permanent loss.
+        //
+        // That is why the interesting signal is not "is this surface offscreen" but "did it stop being
+        // offscreen". A surface that never makes that transition is stuck; one that makes it late was
+        // only racing. Both arms were previously silent: a real decision with a real consequence, made
+        // with no log, no error and no evidence.
+        let route = if shown.is_some() {
+            "shown"
+        } else if self.mtm.is_none() {
+            "offscreen (no main-thread window handle — headless; this will not change)"
+        } else if !has_window_role {
+            "offscreen (window role not yet reconciled — a startup race that resolves when the role \
+             arrives; if no `shown` line follows, it did not)"
+        } else {
+            "offscreen (windowed, but the path produced no drawable)"
+        };
+        if self.presentation_route.get(&sid) != Some(&route) {
+            let previous = self.presentation_route.insert(sid, route);
+            hl_log::hl_log!(
+                tag::PRESENT,
+                Level::Error,
+                "present route sid={} now {route}{}",
+                sid.0,
+                match previous {
+                    Some(was) => format!(" (was {was})"),
+                    None => String::new(),
+                }
+            );
+        }
+
         let outcome = if shown.is_some() { "shown" } else { "offscreen" };
         if let Some(beat) = self.presented.record((sid, outcome)) {
             hl_log::hl_log!(

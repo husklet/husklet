@@ -267,6 +267,9 @@ pub struct MacPresenter {
     reported_abandonments: crate::diagnostic::Tally<(SurfaceId, &'static str)>,
     /// Liveness for the SUCCESS path, which had no diagnostic at all. See `present_heartbeat`.
     presented: crate::diagnostic::Heartbeat<(SurfaceId, &'static str)>,
+    /// The route each surface's last frame took, so a CHANGE of route can be reported once instead of
+    /// the state being repeated every frame. See the transition log in `present_native`.
+    presentation_route: std::collections::HashMap<SurfaceId, &'static str>,
 }
 
 /// How often a presenting surface says so. Chosen for a person reading a log: long enough that a
@@ -350,6 +353,7 @@ impl MacPresenter {
             cursor: HostCursorState::default(),
             reported_refusals: crate::diagnostic::Tally::new(),
             presented: crate::diagnostic::Heartbeat::new(PRESENT_HEARTBEAT),
+            presentation_route: std::collections::HashMap::new(),
             reported_abandonments: crate::diagnostic::Tally::new(),
         })
     }
@@ -387,6 +391,7 @@ impl MacPresenter {
             cursor: HostCursorState::default(),
             reported_refusals: crate::diagnostic::Tally::new(),
             presented: crate::diagnostic::Heartbeat::new(PRESENT_HEARTBEAT),
+            presentation_route: std::collections::HashMap::new(),
             reported_abandonments: crate::diagnostic::Tally::new(),
         };
         if let Some(directory) = std::env::var_os("HL_SURFACE_CAPTURE_DIR") {
