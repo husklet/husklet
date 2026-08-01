@@ -44,6 +44,18 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
                         "software: multisample render attachment",
                     ));
                 }
+                // A LAYERED texture is not a colour attachment, and the reason is the executor's, not
+                // this reference's convenience: measured, it refuses one outright, because every render
+                // pass there binds the texture's default view and an array texture's is a `D2Array` no
+                // colour pass can target. This reference could rasterize into layer 0 quite happily —
+                // which is exactly why the refusal has to be explicit. Serving what the subject refuses
+                // is a false divergence in the other direction, and it would arrive the moment layered
+                // textures became creatable here.
+                if t.layers() != 1 {
+                    return Err(GpuError::Unsupported(
+                        "software: layered render attachment",
+                    ));
+                }
                 if c.load == LoadOp::Clear {
                     t.desc.format.software_clear_texel(c.clear)?;
                 }
@@ -60,6 +72,11 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
                 if t.desc.sample_count != 1 {
                     return Err(GpuError::Unsupported(
                         "software: multisample depth attachment",
+                    ));
+                }
+                if t.layers() != 1 {
+                    return Err(GpuError::Unsupported(
+                        "software: layered depth attachment",
                     ));
                 }
                 agree(t)?;
@@ -142,15 +159,27 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
             if t.desc.sample_count != 1 {
                 return Err(GpuError::Unsupported("software: multisample clear"));
             }
-            // This oracle materializes level 0 of layer 0 and nothing else (`CpuTexture::pixels` is a
-            // single tight-packed plane). Writing that plane in response to a clear of some other
-            // subresource is exactly the defect these fields were added to fix, so a subresource this
-            // backend cannot address is refused here — before any op in the batch runs — rather than
-            // silently redirected.
-            if *base_array_layer != 0 || *layer_count != 1 || *mip_level != 0 {
+            // A LAYER RANGE is served: `pixels` is layer-major, and the executor serves a layered clear
+            // too (measured — it clears any base layer and count on a 2D array). A range that runs past
+            // the materialized layers is refused rather than clamped, because writing fewer layers than
+            // asked is the silent-partial-work shape, and the executor's own bounds would reject it.
+            //
+            // A non-zero MIP is still refused: only level 0 is materialized. Writing level 0 in response
+            // to a clear of some other level is exactly the defect these fields were added to fix, so the
+            // subresource this backend cannot address is refused here — before any op in the batch runs —
+            // rather than silently redirected.
+            if *mip_level != 0 {
                 return Err(GpuError::Unsupported(
-                    "software: clear of a non-base image subresource",
+                    "software: clear of a non-base mip level",
                 ));
+            }
+            let layers = t.layers();
+            if *layer_count == 0
+                || base_array_layer
+                    .checked_add(*layer_count)
+                    .is_none_or(|end| end > layers)
+            {
+                return Err(GpuError::OutOfBounds);
             }
             // Pack the clear color HERE so a format the oracle cannot clear is rejected before any op in
             // this command buffer runs: an unclearable format discovered mid-execution would leave earlier

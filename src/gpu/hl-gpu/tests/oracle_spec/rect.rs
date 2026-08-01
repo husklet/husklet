@@ -235,11 +235,31 @@ fn a_scissored_clear_lowers_to_clear_rect_over_a_load_pass() {
     );
 }
 
-/// This oracle materializes ONE plane per texture (`CpuTexture::pixels` is level 0 of layer 0), so it has
-/// nowhere to put a clear of any other subresource. It must refuse rather than write the plane it does
-/// have — silently redirecting the write to layer 0 is precisely the defect the subresource fields were
-/// added to fix, and a backend that reproduced it here would make the wgpu-vs-oracle differential agree by
-/// both sides being wrong.
+/// Which kind of refusal a subresource case must produce — see the test below for why the two differ.
+#[derive(Clone, Copy, Debug)]
+enum Refusal {
+    /// The subresource does not exist on this texture.
+    OutOfBounds,
+    /// The subresource is one no texture in this reference has.
+    Unsupported,
+}
+
+/// A clear must never be redirected to a subresource the caller did not name. Silently writing layer 0 in
+/// response to a clear of some other subresource is precisely the defect the subresource fields were added
+/// to fix, and a backend that reproduced it here would make the wgpu-vs-oracle differential agree by both
+/// sides being wrong.
+///
+/// The premise changed under this test and the cases did not. It used to hold because the oracle
+/// materialized ONE plane per texture and refused a layered texture at creation, so every non-base
+/// subresource was categorically unsupported. It now materializes one plane per LAYER and serves a layer
+/// range, which the executor does too. What that changes here is the REASON each case is refused, not
+/// whether it is:
+///
+///   * the two LAYER cases name layers this four-by-four single-layer texture does not have, so they are
+///     out of bounds — the same answer a range past the end gets on a texture that is layered (see
+///     `oracle_spec::layered`). They are no longer categorically unsupported, and asserting that they were
+///     would now be asserting the old limit rather than the rule.
+///   * the MIP case is still categorically unsupported: only level 0 is materialized, on any texture.
 ///
 /// The refusal is raised during validation, before any op in the batch runs, so an earlier op's writes are
 /// never left behind by a mid-batch rejection.
@@ -254,19 +274,19 @@ fn oracle_refuses_a_clear_of_a_non_base_subresource() {
         hl_gpu::GlobalLedger::unbounded(),
         Box::new(hl_gpu::FakeClock::new(0)),
     );
-    // A plain single-layer, single-mip 2D texture: the only shape this oracle accepts at all (it refuses
-    // a layered texture outright at creation). The refusal under test must therefore come from the
-    // SUBRESOURCE the clear names, not from the texture's shape — which is what makes this test
-    // meaningful rather than a restatement of the create-time refusal.
+    // A plain single-layer, single-mip 2D texture. The refusal under test must come from the SUBRESOURCE
+    // the clear names against THIS texture, not from the texture's shape being unsupported — which is
+    // what keeps this a test about the clear rather than a restatement of a create-time refusal.
     let desc = tex(
         4,
         4,
         TextureFormat::Rgba8Unorm,
         texture_usage::RENDER_TARGET | texture_usage::COPY_SRC | texture_usage::COPY_DST,
     );
-    for (label, clear) in [
+    for (label, expected, clear) in [
         (
             "a non-base array layer",
+            Refusal::OutOfBounds,
             Enc::ClearRect {
                 texture: 1,
                 x: 0,
@@ -281,6 +301,7 @@ fn oracle_refuses_a_clear_of_a_non_base_subresource() {
         ),
         (
             "more than one array layer",
+            Refusal::OutOfBounds,
             Enc::ClearRect {
                 texture: 1,
                 x: 0,
@@ -295,6 +316,7 @@ fn oracle_refuses_a_clear_of_a_non_base_subresource() {
         ),
         (
             "a non-base mip level",
+            Refusal::Unsupported,
             Enc::ClearRect {
                 texture: 1,
                 x: 0,
@@ -322,14 +344,15 @@ fn oracle_refuses_a_clear_of_a_non_base_subresource() {
             ],
         )
         .expect_err(label);
-        assert!(
-            matches!(err, hl_gpu::GpuError::Unsupported(_)),
-            "{label} must be refused as unsupported, got {err:?}"
-        );
+        let ok = match expected {
+            Refusal::OutOfBounds => matches!(err, hl_gpu::GpuError::OutOfBounds),
+            Refusal::Unsupported => matches!(err, hl_gpu::GpuError::Unsupported(_)),
+            };
+        assert!(ok, "{label} must be refused as {expected:?}, got {err:?}");
     }
 
     // And the base subresource still runs, so the refusal is about the subresource and not about
-    // `ClearRect` on a layered texture generally.
+    // `ClearRect` generally.
     hl_gpu::runtime::submit(
         &mut s,
         &mut exec,

@@ -3,22 +3,27 @@ pub(crate) fn clear_target(
     texture_id: u32,
     color: [f32; 4],
 ) -> Result<()> {
-    let (fmt, w, h) = {
-        let t = texture(res, texture_id)?;
-        (t.desc.format, t.desc.width, t.desc.height)
-    };
+    let fmt = texture(res, texture_id)?.desc.format;
     let texel = fmt.software_clear_texel(color)?;
     let t = texture_mut(res, texture_id)?;
-    let n = (w * h) as usize;
-    t.pixels.clear();
-    t.pixels.reserve(n * texel.len());
-    for _ in 0..n {
-        t.pixels.extend_from_slice(&texel);
+    // Fill IN PLACE rather than rebuilding the vector at `w * h * texel.len()`. The rebuild silently
+    // resized the allocation to one single-sampled plane, which was invisible only because a multisampled
+    // and (now) a layered attachment are both refused before reaching here — a correctness that depended
+    // on two guards elsewhere rather than on this function. Writing over what is allocated cannot shrink
+    // it whatever the shape turns out to be.
+    for chunk in t.pixels.chunks_exact_mut(texel.len()) {
+        chunk.copy_from_slice(&texel);
     }
     Ok(())
 }
 
-/// `ClearRect`: fill only the covered sub-rectangle of a texture with the packed clear color.
+/// `ClearRect`: fill only the covered sub-rectangle of `layer_count` array layers from `base_array_layer`
+/// with the packed clear color.
+///
+/// The layer range is the caller's, not assumed to be the base one: `pixels` is layer-major and the
+/// executor clears exactly the range it is given, so this does too. Validation has already established
+/// that the range lies inside the materialized layers.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn clear_rect(
     res: &mut SessionResources,
     texture_id: u32,
@@ -27,6 +32,8 @@ pub(crate) fn clear_rect(
     w: u32,
     h: u32,
     color: [f32; 4],
+    base_array_layer: u32,
+    layer_count: u32,
 ) -> Result<()> {
     let (fmt, tw, th) = {
         let t = texture(res, texture_id)?;
@@ -40,10 +47,13 @@ pub(crate) fn clear_rect(
     let y1 = y.saturating_add(h).min(th) as usize;
     let tw = tw as usize;
     let t = texture_mut(res, texture_id)?;
-    for yy in y0..y1 {
-        for xx in x0..x1 {
-            let off = (yy * tw + xx) * bpt;
-            t.pixels[off..off + bpt].copy_from_slice(&texel);
+    for layer in base_array_layer..base_array_layer.saturating_add(layer_count) {
+        let plane = t.layer_plane(layer).ok_or(GpuError::OutOfBounds)?.start;
+        for yy in y0..y1 {
+            for xx in x0..x1 {
+                let off = plane + (yy * tw + xx) * bpt;
+                t.pixels[off..off + bpt].copy_from_slice(&texel);
+            }
         }
     }
     Ok(())

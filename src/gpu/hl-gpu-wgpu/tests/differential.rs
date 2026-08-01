@@ -169,6 +169,17 @@ fn tex(w: u32, h: u32) -> TextureDesc {
     tex_fmt(w, h, TextureFormat::Rgba8Unorm)
 }
 
+/// A copyable colour texture with `layers` ARRAY LAYERS. Layered textures were uncomparable until the
+/// reference learned to materialize one plane per layer; both backends now create them and clear a layer
+/// range, and both readbacks return the base layer, so a program that clears the wrong layer shows up
+/// through the same channel every other program uses.
+fn tex_layers(w: u32, h: u32, layers: u32) -> TextureDesc {
+    TextureDesc {
+        depth: layers,
+        ..tex(w, h)
+    }
+}
+
 /// A copyable `RENDER_TARGET | COPY_SRC | COPY_DST` colour texture in an arbitrary colour `format` (used by
 /// the sRGB programs, which render into `Rgba8Srgb`).
 fn tex_fmt(w: u32, h: u32, format: TextureFormat) -> TextureDesc {
@@ -416,6 +427,7 @@ const GENERATORS: &[fn(u64) -> Prog] = &[
     gen_blit_nearest,
     gen_blit_linear,
     gen_blit_mirror,
+    gen_clear_layered,
     gen_blit_cross_format,
     gen_copy_cross_format,
     gen_draw_flat,

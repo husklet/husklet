@@ -467,6 +467,82 @@ fn blit_cmds(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32, filter: Filter) -> 
     ]
 }
 
+/// (6c) LAYERED `ClearRect` — a clear of an array texture's layer RANGE.
+///
+/// An array texture could not be compared at all until now: the software reference refused to create one
+/// ("software: only 2D single-layer textures"), so the whole class sat outside the differential and every
+/// backend disagreement inside it would have gone on reporting clean. That is the same coverage shape that
+/// hid a mirrored blit — the battery only compares programs both sides were already known to handle.
+///
+/// The program paints the base layer, then clears a range that may or may not include it. Both readbacks
+/// return the BASE layer only (the executor's `copy_texture_to_buffer` is issued with
+/// `depth_or_array_layers: 1`, and the reference matches that deliberately), so the comparison asks the
+/// question that matters about a layered clear: did it write the layers it was asked to and no others? A
+/// backend that cleared every layer, or the wrong one, or ignored the range and always wrote layer 0,
+/// disagrees here. Integer clear values on both sides, so EXACT.
+pub(super) fn gen_clear_layered(seed: u64) -> Prog {
+    let layers = 2 + (seed % 3) as u32; // 2..=4
+    let n = 2 + (seed % 2) as u32; // 2..=3
+    // A range that sometimes covers the base layer and sometimes deliberately does not — the case that
+    // separates "cleared the named layers" from "cleared everything".
+    let base = (seed % layers as u64) as u32;
+    let count = 1 + (seed % (layers - base) as u64) as u32;
+    let first = texel(seed.wrapping_add(3));
+    let second = texel(seed.wrapping_add(17));
+    let colour = |t: [u8; 4]| {
+        [
+            t[0] as f32 / 255.0,
+            t[1] as f32 / 255.0,
+            t[2] as f32 / 255.0,
+            t[3] as f32 / 255.0,
+        ]
+    };
+    let cmds = vec![
+        Cmd::CreateTexture(1, tex_layers(n, n, layers)),
+        Cmd::Submit(CommandBuffer {
+            encoder: vec![
+                // Paint EVERY layer, so "the range was ignored and nothing happened" and "the range was
+                // honoured" are distinguishable at the base layer whenever the range covers it.
+                Enc::ClearRect {
+                    texture: 1,
+                    x: 0,
+                    y: 0,
+                    w: n,
+                    h: n,
+                    color: colour(first),
+                    base_array_layer: 0,
+                    layer_count: layers,
+                    mip_level: 0,
+                },
+                Enc::ClearRect {
+                    texture: 1,
+                    x: 0,
+                    y: 0,
+                    w: n,
+                    h: n,
+                    color: colour(second),
+                    base_array_layer: base,
+                    layer_count: count,
+                    mip_level: 0,
+                },
+            ],
+            signal: None,
+        }),
+    ];
+    Prog {
+        seed,
+        category: "clear_layered",
+        ops: vec!["ClearRect"],
+        cmds,
+        read: Read::Tex {
+            id: 1,
+            len: (n * n * 4) as usize,
+        },
+        tol: Tolerance::Unorm(0),
+        kernel: None,
+    }
+}
+
 /// (8) CROSS-FORMAT `BlitTexture`: a blit whose destination format DIFFERS from its source.
 ///
 /// This class was uncomparable because the two backends implemented different rules, and neither rule was

@@ -192,5 +192,7 @@ mod color;
 mod copy;
 #[path = "oracle_spec/draw.rs"]
 mod draw;
+#[path = "oracle_spec/layered.rs"]
+mod layered;
 #[path = "oracle_spec/rect.rs"]
 mod rect;

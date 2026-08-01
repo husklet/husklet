@@ -107,7 +107,14 @@ impl CpuExecutor {
         Ok(())
     }
 
-    /// Read the whole tight-packed level-0 pixel plane of texture `id` (exactly `out.len()` bytes).
+    /// Read the tight-packed level-0 pixel plane of texture `id`'s BASE LAYER (exactly `out.len()` bytes).
+    ///
+    /// Layer 0 and not the whole allocation, because that is what the executor's readback does: its
+    /// `copy_texture_to_buffer` is issued at `origin: ZERO` with `depth_or_array_layers: 1`, so a
+    /// comparison against this channel can only ever see the base layer. Returning every plane here would
+    /// make the reference's readback a different shape from the subject's for exactly the textures the
+    /// differential was widened to cover. A non-base layer is observed through
+    /// `CopyTextureToBufferRegion`, which both sides serve.
     pub fn read_texture(
         &self,
         resources: &SessionResources,
@@ -115,10 +122,11 @@ impl CpuExecutor {
         out: &mut [u8],
     ) -> Result<()> {
         let t = texture(resources, id.0)?;
-        if out.len() != t.pixels.len() {
+        let base = t.layer_plane(0).ok_or(GpuError::OutOfBounds)?;
+        if out.len() != base.len() {
             return Err(GpuError::OutOfBounds);
         }
-        out.copy_from_slice(&t.pixels);
+        out.copy_from_slice(&t.pixels[base]);
         Ok(())
     }
 }

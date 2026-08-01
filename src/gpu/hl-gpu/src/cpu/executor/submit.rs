@@ -127,12 +127,16 @@ impl CpuExecutor {
                     cur_depth = None;
                 }
                 // Only the base subresource reaches here, because this oracle materializes exactly one
-                // plane per texture and has nowhere else to write. The refusal is in THIS executor's own
-                // encoder pre-pass (`operation::validate_op`, run over every command by
+                // plane per LAYER and nowhere to write a non-zero mip. The refusal is in THIS executor's
+                // own encoder pre-pass (`operation::validate_op`, run over every command by
                 // `EncoderState::validate` before any of them executes) — NOT in the runtime's `validate`
                 // service, which this comment used to name and which has no such check. Two different
                 // things are called "validate" here, and sending a reader to the one without the guard is
                 // how a redundant check gets added, or the real one removed as unnecessary.
+                //
+                // The LAYER RANGE is passed through rather than dropped: it was `base_array_layer: _`
+                // while validation refused anything but the base layer, which was consistent then and
+                // would silently clear the wrong layer now that a range is legal.
                 Enc::ClearRect {
                     texture,
                     x,
@@ -140,11 +144,21 @@ impl CpuExecutor {
                     w,
                     h,
                     color,
-                    base_array_layer: _,
-                    layer_count: _,
+                    base_array_layer,
+                    layer_count,
                     mip_level: _,
                 } => {
-                    raster::clear_rect(res, *texture, *x, *y, *w, *h, *color)?;
+                    raster::clear_rect(
+                        res,
+                        *texture,
+                        *x,
+                        *y,
+                        *w,
+                        *h,
+                        *color,
+                        *base_array_layer,
+                        *layer_count,
+                    )?;
                 }
                 Enc::SetViewport { x, y, w, h, .. } => {
                     cur_rect.viewport = Some([*x, *y, *w, *h]);
