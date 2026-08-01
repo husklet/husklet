@@ -9,6 +9,10 @@
   <key>CFBundlePackageType</key>        <string>APPL</string>
   <key>CFBundleShortVersionString</key> <string>@VERSION@</string>
   <key>CFBundleVersion</key>            <string>@VERSION@</string>
+  <!-- The revision this bundle was built from, and whether the tree was dirty. A measurement bound only to
+       content hashes cannot be tied back to source, which is how a conformance run ends up unattributable. -->
+  <key>HLSourceRevision</key>           <string>@REVISION@</string>
+  <key>HLSourceChanges</key>            <string>@CHANGES@</string>
   <key>CFBundleIconFile</key>           <string>husklet.icns</string>
   <key>NSHighResolutionCapable</key>    <true/>
   <key>LSMinimumSystemVersion</key>     <string>12.0</string>

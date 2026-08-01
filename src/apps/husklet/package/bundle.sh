@@ -99,7 +99,8 @@ mkdir -p "$MACOS" "$RES" "$FW"
 cp "$BUILD_TARGET/release/husklet" "$MACOS/husklet"
 cp "$BUILD_TARGET/release/hl-daemon" "$RES/hl-daemon"
 printf 'APPL????' > "$C/PkgInfo"
-sed "s/@VERSION@/$VERSION/g" "$ROOT/src/apps/husklet/package/Info.plist.in" > "$C/Info.plist"
+sed -e "s/@VERSION@/$VERSION/g" -e "s/@REVISION@/$SOURCE_REVISION/g" -e "s/@CHANGES@/$SOURCE_CHANGES/g" \
+  "$ROOT/src/apps/husklet/package/Info.plist.in" > "$C/Info.plist"
 [ -f "$ROOT/src/apps/husklet/package/husklet.icns" ] && cp "$ROOT/src/apps/husklet/package/husklet.icns" "$RES/husklet.icns" || true
 [ -f "$ROOT/assets/logo.png" ] && cp "$ROOT/assets/logo.png" "$RES/logo.png" || true # onboarding logo
 [ -d "$ROOT/assets/images" ] && cp -R "$ROOT/assets/images" "$RES/images" || true # bundled starter images
