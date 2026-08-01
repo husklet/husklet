@@ -344,10 +344,11 @@ pub extern "C" fn glTexImage2D(
             return;
         }
         s.redefine_texture(|ctx| {
-            record::tex_image_2d(ctx, width, height, &rgba);
-            // The declared internal format is metadata the completeness check needs; it does not change
-            // which plane is materialized (see `record::tex_internal_format`).
-            record::tex_internal_format(ctx, internalformat.max(0) as u32);
+            // The declared internal format selects the plane for a storage-only define and is recorded
+            // for the completeness check either way (see `record::tex_image_2d_declared`). It used to be
+            // metadata only, so `glTexImage2D(GL_RGBA16F, …, NULL)` — how a render target is allocated
+            // through the classic call — produced an eight-bit plane for a texture declared half-float.
+            record::tex_image_2d_declared(ctx, internalformat.max(0) as u32, width, height, &rgba);
         })
     });
 }

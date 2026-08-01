@@ -58,6 +58,35 @@ pub fn tex_image_2d_format(
     }
 }
 
+/// `glTexImage2D` with the SIZED internal format the application declared, which selects the plane
+/// instead of being kept only as metadata — the same table `glTexStorage2D` reads, so the two ways of
+/// allocating one texture stop disagreeing about what the format means. A format this driver does not
+/// model keeps the RGBA8 plane rather than failing: `glTexImage2D` accepts unsized spellings, and the
+/// declared format is still recorded for the completeness check either way.
+///
+/// Restricted to a STORAGE-ONLY define (`pixels` empty), and that restriction is the honest half of an
+/// unfinished change rather than a design. Supplied pixels arrive here already converted to RGBA8 by the
+/// upload path, so handing them to a wider plane would put eight-bit bytes in a sixteen-bit-float buffer
+/// — a plane and its contents disagreeing, which is the defect one layer down that this same commit
+/// series fixed. Until the conversion can emit texels of the destination plane, an upload keeps the RGBA8
+/// plane it has always had. The render-target case, which is the one that allocates and never uploads, is
+/// the case that needed this.
+pub fn tex_image_2d_declared(
+    ctx: &mut GlContext,
+    internalformat: u32,
+    w: i32,
+    h: i32,
+    pixels: &[u8],
+) {
+    let format = if pixels.is_empty() {
+        TextureFormat::try_from(InternalFormat(internalformat)).unwrap_or(TextureFormat::Rgba8Unorm)
+    } else {
+        TextureFormat::Rgba8Unorm
+    };
+    tex_image_2d_format(ctx, w, h, pixels, format);
+    tex_internal_format(ctx, internalformat);
+}
+
 /// Record the SIZED internal format the application declared for the active unit's texture. Kept as
 /// metadata beside the neutral `ir_format` (which stays RGBA8, the plane this model materializes) so a
 /// framebuffer completeness check can ask what the format actually WAS — `GL_SRGB8`, `GL_RGB9_E5`,

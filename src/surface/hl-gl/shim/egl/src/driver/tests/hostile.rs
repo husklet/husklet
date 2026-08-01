@@ -252,3 +252,69 @@ fn terminating_a_display_this_driver_never_issued_is_refused_and_tears_nothing_d
     );
 }
 
+/// A storage-only `glTexImage2D` allocates the plane its DECLARED format names, through the same table
+/// `glTexStorage2D` reads. Allocating a render target through the classic call is how Skia and most of
+/// GLES-era code do it, and the declared format used to be metadata only — so
+/// `glTexImage2D(GL_RGBA16F, …, NULL)` produced an eight-bit unorm plane for a texture the application
+/// declared half-float, and everything rendered into it clamped at 1.0 with 256 levels per channel.
+///
+/// The upload arm is asserted beside it and is deliberately NOT derived: supplied pixels reach the model
+/// already converted to RGBA8, so a wider plane would hold narrower bytes. That is the remaining half of
+/// the change, and pinning it here means it fails loudly when the conversion learns to emit float texels
+/// rather than being discovered later as a silent disagreement.
+#[test]
+fn a_storage_only_upload_allocates_the_plane_its_declared_format_names() {
+    use hl_gpu::protocol::model::enums::TextureFormat;
+
+    for (declared, plane) in [
+        (GL_RGBA16F, TextureFormat::Rgba16Float),
+        (GL_R11F_G11F_B10F, TextureFormat::Rgba16Float),
+        (GL_RGBA32F, TextureFormat::Rgba32Float),
+        (GL_RGBA8, TextureFormat::Rgba8Unorm),
+    ] {
+        bind_current();
+        let mut name = 0;
+        glGenTextures(1, &mut name);
+        glBindTexture(GL_TEXTURE_2D, name);
+        glTexImage2D(
+            GL_TEXTURE_2D,
+            0,
+            declared as i32,
+            8,
+            8,
+            0,
+            GL_RGBA,
+            GL_UNSIGNED_BYTE,
+            std::ptr::null(),
+        );
+        assert_eq!(glGetError(), GL_NO_ERROR, "{declared:#x} storage-only define");
+        assert_eq!(
+            GlobalState::context(|state| state.gl.textures.get(name).map(|t| t.ir_format)),
+            Some(plane),
+            "{declared:#x} must allocate the plane it declared"
+        );
+    }
+
+    // The upload arm: pixels are RGBA8 by the time they arrive, so the plane stays RGBA8 for now.
+    bind_current();
+    let mut name = 0;
+    glGenTextures(1, &mut name);
+    glBindTexture(GL_TEXTURE_2D, name);
+    let pixels = [0x3Cu8; 8 * 8 * 4];
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGBA16F as i32,
+        8,
+        8,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        pixels.as_ptr().cast(),
+    );
+    assert_eq!(
+        GlobalState::context(|state| state.gl.textures.get(name).map(|t| t.ir_format)),
+        Some(TextureFormat::Rgba8Unorm),
+        "an upload keeps the RGBA8 plane until the conversion can emit float texels"
+    );
+}
