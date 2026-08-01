@@ -988,6 +988,13 @@ Scope a blocker to the layer you actually measured. A failed package fetch insid
 "host egress is down"; the host had working egress the whole time and only the guest workspace did not.
 The observation was real and the name would have sent the next person to the wrong layer.
 
+A workspace can reuse a worker that predates the artifact you installed. Three conformance runs were
+measured against a host executor started twelve hours before the bundle under test, because other
+workspaces got fresh workers on install and that one reused its open process. A wire encoding had changed
+in between, so a new guest was talking to an old host and the failure counts nearly doubled — 857 against
+448 for the same group. Check process start times against the artifact's build time, not just the
+artifact's hash.
+
 Bind a number to the hash of the thing that actually determines the behaviour, not to the artifact name it
 was produced under. Four conformance findings were nearly discarded as unusable because they came from a
 differently-named bundle; they were rescued by noticing that the relevant driver subtree hashed identically
