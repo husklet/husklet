@@ -278,6 +278,34 @@ impl GlContext {
         self.local.framebuffers.color_attachment(framebuffer)
     }
 
+    /// The texel format of the colour buffer `glReadPixels` would read: the READ framebuffer's colour
+    /// attachment, or the default surface's plane when no framebuffer is bound.
+    ///
+    /// ES 3.0 §4.3.1 defines the accepted readback `format`/`type` pairs, and
+    /// `GL_IMPLEMENTATION_COLOR_READ_FORMAT`/`_TYPE`, in terms of this buffer — so both questions have to
+    /// ask what is actually bound rather than answering from a constant.
+    pub fn read_colour_buffer_format(&self) -> hl_gpu::protocol::model::enums::TextureFormat {
+        use hl_gpu::protocol::model::enums::TextureFormat;
+        if self.local.read_fbo == 0 {
+            // The default window target, which the frame builder allocates as `Bgra8Unorm`
+            // (`service::frame::passes`). It is fixed-point, so no readback pair changes because of it.
+            return TextureFormat::Bgra8Unorm;
+        }
+        self.textures
+            .get(self.local.framebuffers.color_attachment(self.local.read_fbo))
+            .map_or(TextureFormat::Rgba8Unorm, |texture| texture.ir_format)
+    }
+
+    /// Whether that colour buffer is a floating-point one, which is what decides whether a `GL_FLOAT`
+    /// readback is the spec's required pair or an illegal combination.
+    pub fn read_colour_buffer_is_float(&self) -> bool {
+        use hl_gpu::protocol::model::enums::TextureFormat;
+        matches!(
+            self.read_colour_buffer_format(),
+            TextureFormat::Rgba16Float | TextureFormat::Rgba32Float | TextureFormat::R32Float
+        )
+    }
+
     pub fn gen_framebuffer(&mut self) -> u32 {
         self.local.framebuffers.gen()
     }

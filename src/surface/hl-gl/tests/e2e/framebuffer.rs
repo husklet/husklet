@@ -63,7 +63,7 @@ fn guest_bound_texture_fbo_renders_and_glreadpixels_reads_it_back() {
 
     // glReadPixels reads back the RENDERED FBO target (Rgba8, bottom-left origin) — the offscreen path
     // end-to-end (render into the attachment → CopyTextureToBuffer → read_buffer).
-    let px = readpixels::read_pixels(&mut c, &mut sink, 0, 0, W as i32, H as i32, GL_RGBA)
+    let px = readpixels::read_pixels(&mut c, &mut sink, 0, 0, W as i32, H as i32, readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE))
         .expect("glReadPixels of the offscreen FBO");
     assert_eq!(px.len(), W * H * 4, "packed RGBA rectangle is w*h*4 bytes");
 
@@ -149,7 +149,7 @@ fn guest_renderbuffer_backed_fbo_renders_and_glreadpixels_reads_it_back() {
     record_triangle(&mut c, [1.0, 0.0, 0.0, 1.0]); // red triangle
     record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
 
-    let px = readpixels::read_pixels(&mut c, &mut sink, 0, 0, W as i32, H as i32, GL_RGBA)
+    let px = readpixels::read_pixels(&mut c, &mut sink, 0, 0, W as i32, H as i32, readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE))
         .expect("glReadPixels of the renderbuffer-backed FBO");
     assert_eq!(
         read_texel(&px, W / 2, H / 2, W),
@@ -277,7 +277,7 @@ fn glreadpixels_of_a_narrow_colour_attachment_reads_its_own_channel() {
 
         record::clear_color(&mut c, [1.0, 0.0, 0.0, 1.0]);
         record::clear(&mut c);
-        let px = readpixels::read_pixels(&mut c, &mut sink, 0, 0, W as i32, H as i32, GL_RGBA)
+        let px = readpixels::read_pixels(&mut c, &mut sink, 0, 0, W as i32, H as i32, readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE))
             .expect("glReadPixels of the colour attachment");
 
         assert_eq!(px.len(), W * H * 4, "the PACKED rectangle is always w*h*4");
@@ -358,7 +358,7 @@ fn a_float_colour_buffer_clears_and_reads_back() {
         // becomes an `Enc::ClearRect` rather than a render-pass load op.
         record::clear_color(&mut c, [1.0, 0.5, 0.0, 1.0]);
         record::clear(&mut c);
-        let px = readpixels::read_pixels(&mut c, &mut sink, 0, 0, W as i32, H as i32, GL_RGBA)
+        let px = readpixels::read_pixels(&mut c, &mut sink, 0, 0, W as i32, H as i32, readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE))
             .unwrap_or_else(|error| panic!("{plane:?} clear-only readback failed: {error:?}"));
 
         let wrong = px
@@ -372,4 +372,74 @@ fn a_float_colour_buffer_clears_and_reads_back() {
             wrong.map(|(_, texel)| texel),
         );
     }
+}
+
+/// A float colour buffer read back through `GL_RGBA`/`GL_FLOAT` returns the values it holds, unclamped.
+///
+/// This is the pair ES 3.0 §4.3.1 makes always-acceptable for a floating-point colour buffer, and it is
+/// the readback a conformant application performs on one. It used to be refused outright — the shim
+/// accepted no type but `GL_UNSIGNED_BYTE` — so the extension would have advertised a renderable float
+/// framebuffer whose defining property could not be observed through the call designed to observe it.
+///
+/// Driven at a value ABOVE one on purpose. Every clear colour inside `0..=1` reads back the same through
+/// both types, so a test at 0.5 would pass against the byte-only path and prove nothing; 4.0 comes back as
+/// 4.0 through `GL_FLOAT` and saturates to 255 through `GL_UNSIGNED_BYTE`, and the byte arm is kept here
+/// as the control showing exactly what the float pair buys.
+#[test]
+fn a_float_colour_buffer_reads_back_unclamped_through_the_float_pair() {
+    use hl_gpu::protocol::model::enums::TextureFormat;
+    use hl_gl::service::readpixels::PixelFormat;
+
+    const GL_FLOAT: u32 = 0x1406;
+
+    let mut c = GlContext::new();
+    c.set_surface(GlSurface {
+        have: true,
+        width: W as u32,
+        height: H as u32,
+    });
+    let mut sink = cpu_sink();
+
+    let tex = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
+    record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
+    record::tex_image_2d_format(&mut c, W as i32, H as i32, &[], TextureFormat::Rgba16Float);
+    let fbo = c.gen_framebuffer();
+    record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
+    record::framebuffer_texture_2d(&mut c, GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+
+    // The read framebuffer is now floating-point, so the driver must say so — this is what tells an
+    // application which pair to use, and it answered GL_UNSIGNED_BYTE for every buffer before.
+    assert!(
+        c.read_colour_buffer_is_float(),
+        "a half-float colour attachment makes the read buffer floating-point"
+    );
+
+    record::clear_color(&mut c, [4.0, -2.5, 0.5, 1.0]);
+    record::clear(&mut c);
+
+    let floats = readpixels::read_pixels(
+        &mut c,
+        &mut sink,
+        0,
+        0,
+        W as i32,
+        H as i32,
+        PixelFormat::new(GL_RGBA, GL_FLOAT),
+    )
+    .expect("a float colour buffer must be readable through GL_RGBA/GL_FLOAT");
+    assert_eq!(
+        floats.len(),
+        W * H * 16,
+        "four 32-bit channels a pixel, not four bytes"
+    );
+    let texel: Vec<f32> = floats[..16]
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes(b.try_into().expect("four bytes")))
+        .collect();
+    assert_eq!(
+        texel,
+        vec![4.0, -2.5, 0.5, 1.0],
+        "the values the buffer holds, above one and below zero, come back as they are"
+    );
 }

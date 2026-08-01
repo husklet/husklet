@@ -110,7 +110,7 @@ fn glreadpixels_preserves_an_offscreen_fbo_across_flush() {
         "flush consumes the offscreen work"
     );
 
-    let pixels = readpixels::read_pixels(&mut context, &mut sink, 2, 2, 1, 1, GL_RGBA)
+    let pixels = readpixels::read_pixels(&mut context, &mut sink, 2, 2, 1, 1, readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE))
         .expect("read the persistent target rendered before glFlush");
     assert_eq!(pixels, [17, 34, 51, 255]);
 }
@@ -177,7 +177,7 @@ fn glreadpixels_uses_read_fbo_while_unrelated_draw_fbo_work_is_pending() {
     assert_eq!(context.bound_framebuffer(), draw_framebuffer);
     assert!(!context.draws().is_empty());
 
-    let pixels = readpixels::read_pixels(&mut context, &mut sink, 2, 2, 1, 1, GL_RGBA)
+    let pixels = readpixels::read_pixels(&mut context, &mut sink, 2, 2, 1, 1, readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE))
         .expect("read the selected read FBO, not the pending draw FBO");
     assert_eq!(pixels, [17, 34, 51, 255]);
 }

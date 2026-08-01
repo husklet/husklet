@@ -423,9 +423,20 @@ pub(crate) unsafe fn write_packed_rows(
 }
 
 /// `glReadPixels(x, y, w, h, format, type, pixels)` — render the recorded frame and read the requested
-/// rectangle of the resulting render target back into `pixels`. Only `GL_UNSIGNED_BYTE` RGBA/BGRA/RGB is
-/// modeled; the readback goes through the `hl_gl` service (render → `CopyTextureToBuffer` → `read_buffer`),
-/// the same device→host port as cuda's DtoH.
+/// rectangle of the resulting render target back into `pixels`. The readback goes through the `hl_gl`
+/// service (render → `CopyTextureToBuffer` → `read_buffer`), the same device→host port as cuda's DtoH.
+///
+/// ES 3.0 §4.3.1 defines the accepted `format`/`type` pairs by what the READ COLOUR BUFFER is, and this
+/// used to refuse every type but `GL_UNSIGNED_BYTE`. That is the required pair for a normalized
+/// fixed-point buffer only: for a FLOATING-POINT colour buffer the always-accepted pair is
+/// `GL_RGBA`/`GL_FLOAT`, so the one readback a conformant application performs on a float framebuffer
+/// came back `GL_INVALID_ENUM` — and a readback is how a harness, a screenshot and a browser's own
+/// compositor verification all get their pixels.
+///
+/// `GL_UNSIGNED_BYTE` stays accepted for a float buffer as this driver's implementation-defined pair
+/// (§4.3.1 permits one, and the required pair is accepted regardless of which one is reported), so every
+/// caller that worked before still works. `GL_FLOAT` out of a fixed-point buffer is `GL_INVALID_OPERATION`
+/// — neither the required pair nor the reported one — rather than being quietly widened.
 #[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glReadPixels(
@@ -440,18 +451,22 @@ pub extern "C" fn glReadPixels(
     crate::stub::trace("glReadPixels", "reading framebuffer pixels");
     // Record the first GL error and bail (GL keeps the first error until glGetError clears it).
     let fail = |e: u32| GlobalState::context(|s| s.gl.set_gl_error(e));
-    if type_ != GL_UNSIGNED_BYTE {
+    if type_ != GL_UNSIGNED_BYTE && type_ != GL_FLOAT {
         fail(GL_INVALID_ENUM);
         return;
     }
-    let bpp = match format {
-        GL_RGBA | GL_BGRA_EXT => 4usize,
-        GL_RGB => 3,
-        _ => {
-            fail(GL_INVALID_ENUM);
-            return;
-        }
-    };
+    if !matches!(format, GL_RGBA | GL_BGRA_EXT | GL_RGB) {
+        fail(GL_INVALID_ENUM);
+        return;
+    }
+    // A float readback is defined against a float colour buffer. Asking for one out of a fixed-point
+    // buffer is a legal enum in an illegal combination, which ES 3.0 separates: INVALID_OPERATION.
+    if type_ == GL_FLOAT && !GlobalState::context(|s| s.gl.read_colour_buffer_is_float()) {
+        fail(GL_INVALID_OPERATION);
+        return;
+    }
+    let destination = readpixels::PixelFormat::new(format, type_);
+    let bpp = destination.bytes_per_pixel();
     if width < 0 || height < 0 {
         fail(GL_INVALID_VALUE);
         return;
@@ -467,7 +482,7 @@ pub extern "C" fn glReadPixels(
     let pbo = GlobalState::context(|s| s.gl.buffer_for_target(GL_PIXEL_PACK_BUFFER));
     if pbo != 0 {
         let byte_off = pixels as usize; // GL: the offset is the `pixels` argument treated as an integer
-        let packed = gpu_read_pixels(x, y, width, height, format);
+        let packed = gpu_read_pixels(x, y, width, height, destination);
         match packed {
             Ok(bytes) => GlobalState::context(|s| {
                 let row = width as usize * bpp;
@@ -492,7 +507,7 @@ pub extern "C" fn glReadPixels(
         fail(GL_INVALID_VALUE);
         return;
     }
-    let packed = gpu_read_pixels(x, y, width, height, format);
+    let packed = gpu_read_pixels(x, y, width, height, destination);
     match packed {
         Ok(bytes) => unsafe {
             write_packed_rows(&bytes, width as usize * bpp, height as usize, pixels)

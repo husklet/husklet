@@ -96,7 +96,7 @@ fn glreadpixels_reports_the_rendered_top_in_its_last_rows() {
     record_upper_half(&mut c);
     record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
 
-    let px = readpixels::read_pixels(&mut c, &mut sink, 0, 0, W as i32, H as i32, GL_RGBA)
+    let px = readpixels::read_pixels(&mut c, &mut sink, 0, 0, W as i32, H as i32, readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE))
         .expect("glReadPixels device->host readback");
 
     let rows: Vec<usize> = (0..H)

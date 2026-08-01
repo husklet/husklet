@@ -320,7 +320,7 @@ pub extern "C" fn glReadnPixels(
         fail(GL_INVALID_OPERATION);
         return;
     }
-    let packed = gpu_read_pixels(x, y, width, height, format);
+    let packed = gpu_read_pixels(x, y, width, height, readpixels::PixelFormat::new(format, GL_UNSIGNED_BYTE));
     match packed {
         Ok(bytes) => unsafe {
             crate::driver::drawing::write_packed_rows(&bytes, row, height as usize, data)

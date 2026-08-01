@@ -33,16 +33,35 @@ use hl_gpu::{BufferId, Cmd, CommandBuffer, CommandSink, Result};
 const GL_RGB: u32 = 0x1907;
 const GL_BGRA_EXT: u32 = 0x80E1;
 
-/// Bytes per packed pixel for a supported readback `format` (`GL_RGB` = 3, else 4).
-struct PixelFormat(u32);
+const GL_FLOAT: u32 = 0x1406;
+
+/// The packed destination `glReadPixels` writes: its GL `format` and component `type`.
+///
+/// The component type used to be assumed `GL_UNSIGNED_BYTE` — the shim refused every other one — which is
+/// the required pair only for a NORMALIZED FIXED-POINT colour buffer. ES 3.0 §4.3.1 makes
+/// `GL_RGBA`/`GL_FLOAT` the always-accepted pair for a FLOATING-POINT colour buffer, so refusing it left
+/// the one readback a conformant application performs on a float framebuffer returning `GL_INVALID_ENUM`.
+#[derive(Clone, Copy, Debug)]
+pub struct PixelFormat {
+    pub format: u32,
+    pub type_: u32,
+}
 
 impl PixelFormat {
-    fn bytes_per_pixel(self) -> usize {
-        if self.0 == GL_RGB {
+    pub fn new(format: u32, type_: u32) -> Self {
+        Self { format, type_ }
+    }
+
+    fn channels(self) -> usize {
+        if self.format == GL_RGB {
             3
         } else {
             4
         }
+    }
+
+    pub fn bytes_per_pixel(self) -> usize {
+        self.channels() * if self.type_ == GL_FLOAT { 4 } else { 1 }
     }
 }
 
@@ -67,15 +86,15 @@ impl TargetTexel {
         self.0.bytes_per_texel()
     }
 
-    /// One texel decoded to straight RGBA bytes.
+    /// One texel decoded to straight RGBA channels as VALUES, before any destination narrowing.
     ///
-    /// The narrowing of a float target to eight bits is REQUIRED here, unlike in the upload direction
-    /// where it was the defect: ES 3.0 §4.3.1 says a `glReadPixels` into `GL_UNSIGNED_BYTE` clamps to
-    /// `[0, 1]` and converts to unsigned normalized. Channels the target format does not carry read as
-    /// zero, and an absent alpha reads as one, which is the same rule the sampler applies.
-    fn rgba8(self, texel: &[u8]) -> [u8; 4] {
-        let byte = |index: usize| texel.get(index).copied().unwrap_or(0);
-        let unorm = |value: f32| (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    /// A float target's channels come through unclamped, because that is what the plane holds and what a
+    /// `GL_FLOAT` readback must return. An eight-bit channel is normalized by 255. An sRGB target's bytes
+    /// are returned as stored rather than decoded to linear, which is what this path has always done for
+    /// the byte readback; changing it is a separate question from the stride, and doing it silently here
+    /// would move a value nobody asked me to move.
+    fn rgba_f32(self, texel: &[u8]) -> [f32; 4] {
+        let byte = |index: usize| texel.get(index).copied().unwrap_or(0) as f32 / 255.0;
         let float = |index: usize| {
             texel
                 .get(index * 4..index * 4 + 4)
@@ -86,7 +105,9 @@ impl TargetTexel {
             texel
                 .get(index * 2..index * 2 + 2)
                 .and_then(|bytes| bytes.try_into().ok())
-                .map_or(0.0, |bytes| hl_gpu::protocol::model::half::to_f32(u16::from_le_bytes(bytes)))
+                .map_or(0.0, |bytes| {
+                    hl_gpu::protocol::model::half::to_f32(u16::from_le_bytes(bytes))
+                })
         };
         match self.0 {
             // Bgra targets store [B,G,R,A]; every other eight-bit target stores its channels in order.
@@ -94,26 +115,29 @@ impl TargetTexel {
                 [byte(2), byte(1), byte(0), byte(3)]
             }
             TextureFormat::R8Unorm | TextureFormat::R8Uint | TextureFormat::R8Sint => {
-                [byte(0), 0, 0, 0xff]
+                [byte(0), 0.0, 0.0, 1.0]
             }
             TextureFormat::Rg8Unorm | TextureFormat::Rg8Uint | TextureFormat::Rg8Sint => {
-                [byte(0), byte(1), 0, 0xff]
+                [byte(0), byte(1), 0.0, 1.0]
             }
-            TextureFormat::R32Float => [unorm(float(0)), 0, 0, 0xff],
-            TextureFormat::Rgba16Float => [
-                unorm(half(0)),
-                unorm(half(1)),
-                unorm(half(2)),
-                unorm(half(3)),
-            ],
-            TextureFormat::Rgba32Float => [
-                unorm(float(0)),
-                unorm(float(1)),
-                unorm(float(2)),
-                unorm(float(3)),
-            ],
+            TextureFormat::R32Float => [float(0), 0.0, 0.0, 1.0],
+            TextureFormat::Rgba16Float => [half(0), half(1), half(2), half(3)],
+            TextureFormat::Rgba32Float => [float(0), float(1), float(2), float(3)],
             _ => [byte(0), byte(1), byte(2), byte(3)],
         }
+    }
+
+    /// One texel as the unsigned-normalized bytes a `GL_UNSIGNED_BYTE` readback packs.
+    ///
+    /// The narrowing of a float target to eight bits is REQUIRED here, unlike in the upload direction
+    /// where it was the defect: ES 3.0 §4.3.1 says a readback into `GL_UNSIGNED_BYTE` clamps to `[0, 1]`
+    /// and converts to unsigned normalized. Channels the target format does not carry read as zero, and
+    /// an absent alpha reads as one, which is the same rule the sampler applies.
+    fn rgba8(self, texel: &[u8]) -> [u8; 4] {
+        // Routed through the value decode so the two readback types cannot disagree about what a texel
+        // says — only about how finely they can express it.
+        self.rgba_f32(texel)
+            .map(|value| (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8)
     }
 }
 
@@ -129,8 +153,7 @@ pub struct PreparedPixels {
 struct Packing {
     target: (i32, i32, TextureFormat),
     region: (i32, i32, i32, i32),
-    format: u32,
-    bpp: usize,
+    destination: PixelFormat,
 }
 
 impl PreparedPixels {
@@ -150,18 +173,7 @@ impl PreparedPixels {
         };
         let (tw, th, target_format) = packing.target;
         let (x, y, w, h) = packing.region;
-        pack_region(
-            &raw,
-            tw,
-            th,
-            target_format,
-            x,
-            y,
-            w,
-            h,
-            packing.format,
-            packing.bpp,
-        )
+        pack_region(&raw, tw, th, target_format, x, y, w, h, packing.destination)
     }
 }
 
@@ -172,9 +184,9 @@ pub fn read_pixels(
     y: i32,
     w: i32,
     h: i32,
-    format: u32,
+    destination: PixelFormat,
 ) -> Result<Vec<u8>> {
-    prepare_pixels(ctx, sink, x, y, w, h, format).map(|prepared| prepared.bytes)
+    prepare_pixels(ctx, sink, x, y, w, h, destination).map(|prepared| prepared.bytes)
 }
 
 pub fn prepare_pixels(
@@ -184,10 +196,10 @@ pub fn prepare_pixels(
     y: i32,
     w: i32,
     h: i32,
-    format: u32,
+    destination: PixelFormat,
 ) -> Result<PreparedPixels> {
     let _s = hl_log::hl_span!(hl_log::tag::PRESENT, "readpixels");
-    let bpp = PixelFormat(format).bytes_per_pixel();
+    let bpp = destination.bytes_per_pixel();
     if w <= 0 || h <= 0 {
         return Ok(PreparedPixels::empty(Vec::new()));
     }
@@ -375,12 +387,11 @@ pub fn prepare_pixels(
     hl_log::hl_add!(hl_log::tag::PRESENT, "readback_bytes", raw.len() as u64);
 
     Ok(PreparedPixels {
-        bytes: pack_region(&raw, tw, th, fmt, x, y, w, h, format, bpp),
+        bytes: pack_region(&raw, tw, th, fmt, x, y, w, h, destination),
         packing: Some(Packing {
             target: (tw, th, fmt),
             region: (x, y, w, h),
-            format,
-            bpp,
+            destination,
         }),
     })
 }
@@ -566,9 +577,10 @@ fn pack_region(
     y: i32,
     w: i32,
     h: i32,
-    format: u32,
-    bpp: usize,
+    destination: PixelFormat,
 ) -> Vec<u8> {
+    let bpp = destination.bytes_per_pixel();
+    let format = destination.format;
     let (tw, th) = (tw as usize, th as usize);
     let tight = w as usize * bpp;
     let mut out = vec![0u8; h as usize * tight];
@@ -595,8 +607,24 @@ fn pack_region(
             if sp + texel > raw.len() {
                 continue;
             }
-            let [r, g, b, a] = target.rgba8(&raw[sp..sp + texel]);
             let dp = row * tight + col * bpp;
+            if destination.type_ == GL_FLOAT {
+                // The target's channels as VALUES, unclamped: a float colour buffer's whole purpose is
+                // to hold what a unorm cannot, and this is the pair ES 3.0 requires it be readable
+                // through.
+                let [r, g, b, a] = target.rgba_f32(&raw[sp..sp + texel]);
+                let channels: &[f32] = match format {
+                    GL_BGRA_EXT => &[b, g, r, a],
+                    GL_RGB => &[r, g, b],
+                    _ => &[r, g, b, a],
+                };
+                for (index, value) in channels.iter().enumerate() {
+                    out[dp + index * 4..dp + index * 4 + 4]
+                        .copy_from_slice(&value.to_le_bytes());
+                }
+                continue;
+            }
+            let [r, g, b, a] = target.rgba8(&raw[sp..sp + texel]);
             match format {
                 GL_BGRA_EXT => out[dp..dp + 4].copy_from_slice(&[b, g, r, a]),
                 GL_RGB => out[dp..dp + 3].copy_from_slice(&[r, g, b]),
@@ -697,7 +725,7 @@ mod tests {
     fn pack_region_strides_the_source_by_the_target_texel() {
         // A 2x2 R8 target whose four texels are distinguishable, so a wrong stride cannot coincide.
         let raw = [10u8, 20, 30, 40];
-        let packed = pack_region(&raw, 2, 2, TextureFormat::R8Unorm, 0, 0, 2, 2, 0x1908, 4);
+        let packed = pack_region(&raw, 2, 2, TextureFormat::R8Unorm, 0, 0, 2, 2, PixelFormat::new(0x1908, 0x1401));
         assert_eq!(
             packed,
             // GL row 0 is the BOTTOM, which is target row 1: texels 30 and 40.
@@ -707,7 +735,7 @@ mod tests {
 
         // The control: the same call shape over an RGBA8 target is unchanged.
         let raw: Vec<u8> = (0u8..16).collect();
-        let packed = pack_region(&raw, 2, 2, TextureFormat::Rgba8Unorm, 0, 0, 2, 2, 0x1908, 4);
+        let packed = pack_region(&raw, 2, 2, TextureFormat::Rgba8Unorm, 0, 0, 2, 2, PixelFormat::new(0x1908, 0x1401));
         assert_eq!(
             packed,
             [8, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3, 4, 5, 6, 7],
@@ -716,7 +744,7 @@ mod tests {
 
         // A format with no plain-colour texel yields the zero-filled rectangle rather than reading bytes
         // it cannot interpret.
-        let packed = pack_region(&raw, 2, 2, TextureFormat::Depth32Float, 0, 0, 2, 2, 0x1908, 4);
+        let packed = pack_region(&raw, 2, 2, TextureFormat::Depth32Float, 0, 0, 2, 2, PixelFormat::new(0x1908, 0x1401));
         assert_eq!(packed, vec![0u8; 16], "an undescribable target packs zeros");
     }
 

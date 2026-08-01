@@ -157,6 +157,12 @@ const GL_EXTENSION_COMMANDS: &[Extension] = &[
             "glGetBufferPointervOES",
         ],
     ),
+    // No entry points: `EXT_color_buffer_float` adds only accepted `internalformat` values, so there is
+    // nothing for this battery to resolve. What it promises is checked where the promise lives —
+    // `es3_objects::framebuffer::the_float_renderable_set_is_exactly_what_the_extension_names` asserts
+    // the seven formats it names are complete through both attachment paths and the excluded ones are
+    // not, and `e2e::framebuffer` clears and reads one back.
+    ext("GL_EXT_color_buffer_float", &[]),
 ];
 
 /// The names in a space-separated EGL/GL extension string.

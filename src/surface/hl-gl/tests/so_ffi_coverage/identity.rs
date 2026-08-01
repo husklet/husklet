@@ -29,10 +29,14 @@ fn gl_identity_and_scalar_state_queries_marshal() {
         cstr(gl_get_string(GL_SHADING_LANGUAGE_VERSION)),
         "OpenGL ES GLSL ES 3.10"
     );
-    assert_eq!(
-        cstr(gl_get_string(GL_EXTENSIONS)),
-        "GL_KHR_debug GL_EXT_texture_format_BGRA8888 GL_EXT_read_format_bgra GL_ANGLE_robust_client_memory GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_copy_texture GL_ANGLE_client_arrays GL_ANGLE_webgl_compatibility GL_ANGLE_request_extension GL_OES_EGL_image GL_OES_EGL_sync GL_OES_rgb8_rgba8 GL_OES_depth24 GL_OES_mapbuffer"
-    );
+    // Derived from the library's own inventory rather than transcribed. What this test can prove is that
+    // the built `.so` exports what `hl_gl` declares; re-typing the list here only proves that two people
+    // typed the same thing, and it made adding one extension a four-file edit with three chances to
+    // forget. The inventory's own consistency is asserted in `tests/query.rs`.
+    let advertised = std::str::from_utf8(hl_gl::service::query::IDENT_EXTENSIONS)
+        .expect("the inventory is UTF-8")
+        .trim_end_matches('\0');
+    assert_eq!(cstr(gl_get_string(GL_EXTENSIONS)), advertised);
 
     // glGetIntegerv scalar limits — the truthful executor ceiling, never uninitialized garbage.
     let getint = |p: u32| {
@@ -45,8 +49,8 @@ fn gl_identity_and_scalar_state_queries_marshal() {
     assert_eq!(getint(GL_MAJOR_VERSION), 3);
     assert_eq!(getint(GL_MINOR_VERSION), 1);
     assert_eq!(
-        getint(GL_NUM_EXTENSIONS),
-        14,
+        getint(GL_NUM_EXTENSIONS) as usize,
+        advertised.split_whitespace().count(),
         "matches the GL_EXTENSIONS inventory"
     );
     assert_eq!(getint(GL_DEPTH_BITS), 24);

@@ -23,10 +23,18 @@ fn gl_readpixels_and_vertex_attrib_getters_marshal() {
     let gl_get_error = f!(sh.gles, "glGetError", extern "C" fn() -> u32);
 
     // glReadPixels error-path marshalling (these branches validate BEFORE touching the sink, so they are
-    // executor-independent): a non-UNSIGNED_BYTE type and a bad format are GL_INVALID_ENUM; negative extent
-    // is GL_INVALID_VALUE; a null client pointer (no PBO bound) is GL_INVALID_VALUE.
+    // executor-independent): an unrecognized type or format is GL_INVALID_ENUM; a recognized type in an
+    // illegal COMBINATION is GL_INVALID_OPERATION; negative extent is GL_INVALID_VALUE; a null client
+    // pointer (no PBO bound) is GL_INVALID_VALUE.
     let mut px = [0u8; 16];
     let _ = gl_get_error();
+
+    // GL_FLOAT is a recognized readback type — it is the pair ES 3.0 §4.3.1 REQUIRES for a floating-point
+    // colour buffer. This context's read buffer is the default fixed-point surface, so the combination is
+    // illegal rather than the type being unknown, and ES 3.0 separates those: INVALID_OPERATION, not
+    // INVALID_ENUM. This assertion previously read INVALID_ENUM, which was correct about the driver of the
+    // time and wrong about the specification — the driver refused GL_FLOAT everywhere, including from the
+    // float framebuffers it now advertises as renderable.
     gl_read_pixels(
         0,
         0,
@@ -38,8 +46,25 @@ fn gl_readpixels_and_vertex_attrib_getters_marshal() {
     );
     assert_eq!(
         gl_get_error(),
+        GL_INVALID_OPERATION,
+        "GL_FLOAT out of a fixed-point read buffer is a bad COMBINATION, not a bad enum"
+    );
+
+    // A type that is not a readback type at all still fails the enum check, which is what keeps the
+    // assertion above from being satisfied by a driver that simply renamed one error to the other.
+    gl_read_pixels(
+        0,
+        0,
+        2,
+        2,
+        GL_RGBA,
+        0xBEEF,
+        px.as_mut_ptr() as *mut c_void,
+    );
+    assert_eq!(
+        gl_get_error(),
         GL_INVALID_ENUM,
-        "a non-UNSIGNED_BYTE type → GL_INVALID_ENUM"
+        "an unrecognized type → GL_INVALID_ENUM"
     );
     gl_read_pixels(
         0,

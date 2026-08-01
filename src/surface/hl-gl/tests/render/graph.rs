@@ -1197,7 +1197,7 @@ fn read_pixels_of_the_window_leaves_the_frame_presentable() {
     tri_vbo(&mut context, 8);
     record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
 
-    hl_gl::service::readpixels::read_pixels(&mut context, &mut sink, 0, 0, 1, 1, GL_RGBA).unwrap();
+    hl_gl::service::readpixels::read_pixels(&mut context, &mut sink, 0, 0, 1, 1, hl_gl::service::readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE)).unwrap();
     let target = context
         .resident_default_read_target()
         .expect("the readback rendered and kept the default target")
@@ -1292,7 +1292,7 @@ fn read_pixels_reads_an_offscreen_target_after_flush() {
         .expect("flush materializes a persistent offscreen target");
 
     let pixels =
-        hl_gl::service::readpixels::read_pixels(&mut context, &mut sink, 0, 0, 1, 1, GL_RGBA)
+        hl_gl::service::readpixels::read_pixels(&mut context, &mut sink, 0, 0, 1, 1, hl_gl::service::readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE))
             .unwrap();
 
     assert_eq!(pixels.len(), 4);

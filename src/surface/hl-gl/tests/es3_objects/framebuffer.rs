@@ -79,9 +79,16 @@ fn status_for_colour_attachment(internal_format: u32) -> u32 {
 
 /// The driver reported COMPLETE for every one of these, handing the application a framebuffer that cannot
 /// work and no way to discover it. Each is absent from ES 3.0 table 3.13 for its own reason: depth is not
-/// a colour format; snorm and shared-exponent/packed-float are sampled-only; `GL_SRGB8` is excluded while
+/// a colour format; snorm and shared-exponent are sampled-only; `GL_SRGB8` is excluded while
 /// `GL_SRGB8_ALPHA8` is included; and the THREE-component integer formats are omitted where their one-,
 /// two- and four-component siblings are present.
+///
+/// `GL_R11F_G11F_B10F` used to be in this list and has MOVED, because the driver now advertises
+/// `GL_EXT_color_buffer_float` and that extension names it explicitly alongside the six other float
+/// formats. Its renderability is now asserted in
+/// `the_float_renderable_set_is_exactly_what_the_extension_names`. The exclusion was correct for a driver
+/// advertising nothing; it became wrong the moment the promise was made, which is the half of a widening
+/// that is easy to miss.
 #[test]
 fn a_non_colour_renderable_attachment_is_incomplete() {
     for format in [
@@ -91,7 +98,6 @@ fn a_non_colour_renderable_attachment_is_incomplete() {
         GL_RGB9_E5,
         GL_SRGB8,
         GL_RGB8UI,
-        GL_R11F_G11F_B10F,
     ] {
         assert_eq!(
             status_for_colour_attachment(format),
@@ -152,7 +158,9 @@ fn status_for_renderbuffer_attachment(internal_format: u32) -> u32 {
 
 #[test]
 fn a_non_colour_renderable_renderbuffer_is_incomplete() {
-    for format in [GL_RGB8_SNORM, GL_RGB9_E5, GL_SRGB8, GL_RGB8UI, GL_R11F_G11F_B10F] {
+    // `GL_R11F_G11F_B10F` is absent for the reason given on the texture-path test above: advertising
+    // `GL_EXT_color_buffer_float` makes it renderable through both attachment paths, not just one.
+    for format in [GL_RGB8_SNORM, GL_RGB9_E5, GL_SRGB8, GL_RGB8UI] {
         assert_eq!(
             status_for_renderbuffer_attachment(format),
             GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT,
@@ -507,4 +515,85 @@ fn generate_mipmap_declines_a_plane_it_cannot_filter() {
         c.textures.get(float).expect("plane").mips.is_empty(),
         "a half-float plane gets no levels rather than wrong ones"
     );
+}
+
+/// The renderable set matches exactly what `GL_EXT_color_buffer_float` names — no more, no less.
+///
+/// An extension string is a promise to every application, so the set it implies is checked against the
+/// advertisement rather than against what happened to be convenient. `EXT_color_buffer_float` names seven
+/// formats. It deliberately does NOT name the three-component float formats, and `GL_RGB9_E5` is a
+/// shared-exponent format that no colour-buffer extension makes renderable — this driver can materialize
+/// a plane for all three, which is exactly why the exclusions need asserting: "we can allocate it" is not
+/// "the specification says you may render to it".
+#[test]
+fn the_float_renderable_set_is_exactly_what_the_extension_names() {
+    let advertised = std::str::from_utf8(hl_gl::service::query::IDENT_EXTENSIONS)
+        .expect("the inventory is UTF-8");
+    assert!(
+        advertised.contains("GL_EXT_color_buffer_float"),
+        "this test describes the set that extension implies, so it must be advertised"
+    );
+
+    for declared in [
+        GL_R16F,
+        GL_RG16F,
+        GL_RGBA16F,
+        GL_R32F,
+        GL_RG32F,
+        GL_RGBA32F,
+        GL_R11F_G11F_B10F,
+    ] {
+        let mut c = ctx();
+        let tex = c.textures.gen();
+        record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
+        record::tex_image_2d_declared(&mut c, declared, 8, 8, &[]);
+        let fbo = c.gen_framebuffer();
+        record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
+        record::framebuffer_texture_2d(
+            &mut c,
+            GL_FRAMEBUFFER,
+            GL_COLOR_ATTACHMENT0,
+            GL_TEXTURE_2D,
+            tex,
+            0,
+        );
+        assert_eq!(
+            record::check_framebuffer_status(&mut c, GL_FRAMEBUFFER),
+            GL_FRAMEBUFFER_COMPLETE,
+            "{declared:#x} is named by EXT_color_buffer_float and must be renderable"
+        );
+
+        // The extension names `RenderbufferStorage` in the same sentence as the texture path, so both
+        // attachment routes must serve the widened set. Checking only the one that prompted the work is
+        // how a format ungate once moved hundreds of cases from honestly declined to running and failing.
+        assert_eq!(
+            status_for_renderbuffer_attachment(declared),
+            GL_FRAMEBUFFER_COMPLETE,
+            "{declared:#x} must be renderable through a renderbuffer too"
+        );
+    }
+
+    // The exclusions, which are the half that a widening gets wrong. Each of these materializes a plane
+    // here, so nothing but the completeness rule stops them being offered.
+    for declared in [GL_RGB16F, GL_RGB32F, GL_RGB9_E5, GL_SRGB8, GL_RGB8_SNORM] {
+        let mut c = ctx();
+        let tex = c.textures.gen();
+        record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
+        record::tex_image_2d_declared(&mut c, declared, 8, 8, &[]);
+        let fbo = c.gen_framebuffer();
+        record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
+        record::framebuffer_texture_2d(
+            &mut c,
+            GL_FRAMEBUFFER,
+            GL_COLOR_ATTACHMENT0,
+            GL_TEXTURE_2D,
+            tex,
+            0,
+        );
+        assert_ne!(
+            record::check_framebuffer_status(&mut c, GL_FRAMEBUFFER),
+            GL_FRAMEBUFFER_COMPLETE,
+            "{declared:#x} is NOT colour-renderable and must not be reported complete"
+        );
+    }
 }

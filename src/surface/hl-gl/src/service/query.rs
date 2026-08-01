@@ -29,7 +29,7 @@ pub const IDENT_VERSION: &[u8] = b"OpenGL ES 3.1 hl-gl\0";
 pub const IDENT_GLSL_VERSION: &[u8] = b"OpenGL ES GLSL ES 3.10\0";
 /// The space-separated extension inventory returned by `glGetString(GL_EXTENSIONS)`.
 pub const IDENT_EXTENSIONS: &[u8] =
-    b"GL_KHR_debug GL_EXT_texture_format_BGRA8888 GL_EXT_read_format_bgra GL_ANGLE_robust_client_memory GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_copy_texture GL_ANGLE_client_arrays GL_ANGLE_webgl_compatibility GL_ANGLE_request_extension GL_OES_EGL_image GL_OES_EGL_sync GL_OES_rgb8_rgba8 GL_OES_depth24 GL_OES_mapbuffer\0";
+    b"GL_KHR_debug GL_EXT_texture_format_BGRA8888 GL_EXT_read_format_bgra GL_ANGLE_robust_client_memory GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_copy_texture GL_ANGLE_client_arrays GL_ANGLE_webgl_compatibility GL_ANGLE_request_extension GL_OES_EGL_image GL_OES_EGL_sync GL_OES_rgb8_rgba8 GL_OES_depth24 GL_OES_mapbuffer GL_EXT_color_buffer_float\0";
 
 /// The advertised extension inventory, each entry a NUL-terminated name — the single source of truth for
 /// `glGetStringi` (indexed enumeration) and `GL_NUM_EXTENSIONS` (the count).
@@ -57,6 +57,14 @@ pub const EXTENSIONS: &[&[u8]] = &[
     // points resolve through `eglGetProcAddress` only (they are not exported from the `.so`), which is how
     // the GLES spec requires extension functions to be obtained.
     b"GL_OES_mapbuffer\0",
+    // Float colour buffers: the seven formats `EXT_color_buffer_float` names are colour-renderable
+    // (`record::framebuffers::colour_renderable`). Every path that a newly-complete float framebuffer
+    // reaches was checked before this string was added, because an extension string is a promise to every
+    // application and not only to the one whose failure prompted it — allocation by the plane's own texel,
+    // an upload that emits that texel rather than narrowing first, a clear on both executors including
+    // the clear-only frame that lowers to a rectangle fill, and a readback at the plane's own stride
+    // through both `GL_UNSIGNED_BYTE` and the `GL_RGBA`/`GL_FLOAT` pair the specification requires.
+    b"GL_EXT_color_buffer_float\0",
 ];
 
 /// The GLES major/minor version the driver advertises (`glGetIntegerv(GL_MAJOR_VERSION/…)`), matching the
@@ -137,10 +145,18 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         GL_DEPTH_BITS => one(ctx.local.depth_bits),
         GL_STENCIL_BITS => one(ctx.local.stencil_bits),
         GL_RED_BITS | GL_GREEN_BITS | GL_BLUE_BITS | GL_ALPHA_BITS => one(8),
-        // ES 3.0 §4.3.2: the second format/type pair glReadPixels always accepts. The presented surface is
-        // RGBA8, so the pair is GL_RGBA / GL_UNSIGNED_BYTE — a `0` here makes the caller pass format 0.
+        // ES 3.0 §4.3.2: the second format/type pair glReadPixels accepts, which the specification defines
+        // against the CURRENTLY BOUND READ COLOUR BUFFER — not against a constant. Answering
+        // GL_UNSIGNED_BYTE for every buffer told an application reading a float framebuffer to pack its
+        // pixels into bytes, which silently discards exactly the range that made the buffer float. The
+        // required pair for such a buffer (GL_RGBA / GL_FLOAT) is accepted regardless of what is reported
+        // here; this reports the pair that can actually carry the buffer's values.
         GL_IMPLEMENTATION_COLOR_READ_FORMAT => one(GL_RGBA as i32),
-        GL_IMPLEMENTATION_COLOR_READ_TYPE => one(GL_UNSIGNED_BYTE as i32),
+        GL_IMPLEMENTATION_COLOR_READ_TYPE => one(if ctx.read_colour_buffer_is_float() {
+            GL_FLOAT as i32
+        } else {
+            GL_UNSIGNED_BYTE as i32
+        }),
         // ES 2.0 §6.1.5: GL_TRUE on any implementation that accepts shader SOURCE, which this driver does.
         GL_SHADER_COMPILER => one(GL_TRUE as i32),
         GL_CURRENT_PROGRAM => one(ctx.local.cur_prog as i32),

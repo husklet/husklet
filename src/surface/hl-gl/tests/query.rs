@@ -61,51 +61,62 @@ fn get_string_advertises_gles3_identity() {
     assert_eq!(as_str(query::gl_string(0xDEAD)), "");
 }
 
+/// The advertised inventory, in order. Adding an extension is a deliberate edit to THIS list, and every
+/// other assertion below is derived from it — the string form, the indexed enumeration and the count are
+/// three views of one inventory and must not be transcribed separately.
+const ADVERTISED: &[&str] = &[
+    "GL_KHR_debug",
+    "GL_EXT_texture_format_BGRA8888",
+    "GL_EXT_read_format_bgra",
+    "GL_ANGLE_robust_client_memory",
+    "GL_CHROMIUM_bind_generates_resource",
+    "GL_CHROMIUM_copy_texture",
+    "GL_ANGLE_client_arrays",
+    "GL_ANGLE_webgl_compatibility",
+    "GL_ANGLE_request_extension",
+    "GL_OES_EGL_image",
+    "GL_OES_EGL_sync",
+    "GL_OES_rgb8_rgba8",
+    "GL_OES_depth24",
+    "GL_OES_mapbuffer",
+    "GL_EXT_color_buffer_float",
+];
+
+/// The three ways an application can ask what is advertised must give the same answer.
+///
+/// The driver keeps the inventory twice — a space-separated string for `glGetString` and an array for
+/// `glGetStringi` — and nothing tied them together. That is the same drift shape as two copies of a
+/// packing rule: an extension added to one and not the other is advertised to whichever query the
+/// application happens to use, which is the worst possible half-promise. The string is now DERIVED from
+/// the array here, so a one-sided edit fails rather than shipping.
 #[test]
 fn num_extensions_matches_the_extension_string() {
-    // The legacy string and indexed GLES3 extension inventory must agree.
     let c = ctx_800x600();
     let mut buf = [0i32; 4];
+
     assert_eq!(query::get_integerv(&c, GL_NUM_EXTENSIONS, &mut buf), 1);
-    assert_eq!(buf[0], 14);
+    assert_eq!(
+        buf[0] as usize,
+        ADVERTISED.len(),
+        "GL_NUM_EXTENSIONS counts the inventory"
+    );
     assert_eq!(
         as_str(query::gl_string(GL_EXTENSIONS)),
-        "GL_KHR_debug GL_EXT_texture_format_BGRA8888 GL_EXT_read_format_bgra GL_ANGLE_robust_client_memory GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_copy_texture GL_ANGLE_client_arrays GL_ANGLE_webgl_compatibility GL_ANGLE_request_extension GL_OES_EGL_image GL_OES_EGL_sync GL_OES_rgb8_rgba8 GL_OES_depth24 GL_OES_mapbuffer"
+        ADVERTISED.join(" "),
+        "the glGetString form is the indexed inventory joined by spaces"
     );
-    assert_eq!(
-        as_str(query::string_i(GL_EXTENSIONS, 0).unwrap()),
-        "GL_KHR_debug"
-    );
-    assert_eq!(
-        as_str(query::string_i(GL_EXTENSIONS, 1).unwrap()),
-        "GL_EXT_texture_format_BGRA8888"
-    );
-    assert_eq!(
-        as_str(query::string_i(GL_EXTENSIONS, 2).unwrap()),
-        "GL_EXT_read_format_bgra"
-    );
-    assert_eq!(
-        as_str(query::string_i(GL_EXTENSIONS, 3).unwrap()),
-        "GL_ANGLE_robust_client_memory"
-    );
-    for (index, expected) in [
-        (4, "GL_CHROMIUM_bind_generates_resource"),
-        (5, "GL_CHROMIUM_copy_texture"),
-        (6, "GL_ANGLE_client_arrays"),
-        (7, "GL_ANGLE_webgl_compatibility"),
-        (8, "GL_ANGLE_request_extension"),
-        (9, "GL_OES_EGL_image"),
-        (10, "GL_OES_EGL_sync"),
-        (11, "GL_OES_rgb8_rgba8"),
-        (12, "GL_OES_depth24"),
-        (13, "GL_OES_mapbuffer"),
-    ] {
+    for (index, expected) in ADVERTISED.iter().enumerate() {
         assert_eq!(
-            as_str(query::string_i(GL_EXTENSIONS, index).unwrap()),
-            expected
+            as_str(query::string_i(GL_EXTENSIONS, index as u32).unwrap()),
+            *expected,
+            "glGetStringi({index})"
         );
     }
-    assert!(query::string_i(GL_EXTENSIONS, 14).is_none());
+    assert!(
+        query::string_i(GL_EXTENSIONS, ADVERTISED.len() as u32).is_none(),
+        "one past the end is out of range"
+    );
+
     query::get_integerv(&c, GL_NUM_REQUESTABLE_EXTENSIONS_ANGLE, &mut buf);
     assert_eq!(buf[0], 0);
     assert!(query::string_i(GL_REQUESTABLE_EXTENSIONS_ANGLE, 0).is_none());
@@ -511,68 +522,29 @@ fn active_attrib_reflects_declared_name_and_type() {
 
 // ---- glGetStringi --------------------------------------------------------------------------------
 
+/// `glGetStringi` agrees with `GL_NUM_EXTENSIONS` and refuses what it should.
+///
+/// The NAMES are asserted once, in `num_extensions_matches_the_extension_string`, against the single
+/// `ADVERTISED` list. This used to transcribe all fourteen of them a second time, which is two more
+/// places to forget when the inventory changes and no more coverage than the derivation gives.
 #[test]
 fn get_stringi_is_consistent_with_num_extensions() {
     assert_eq!(query::num_extensions(), query::EXTENSIONS.len() as i32);
-    assert_eq!(
-        as_str(query::string_i(GL_EXTENSIONS, 0).unwrap()),
-        "GL_KHR_debug"
+    assert_eq!(query::num_extensions() as usize, ADVERTISED.len());
+    for index in 0..query::num_extensions() as u32 {
+        assert!(
+            query::string_i(GL_EXTENSIONS, index).is_some(),
+            "every index below the count resolves ({index})"
+        );
+    }
+    assert!(
+        query::string_i(GL_EXTENSIONS, query::num_extensions() as u32).is_none(),
+        "one past the end is out of range"
     );
-    // A non-GL_EXTENSIONS name and an out-of-range extension index are both rejected.
-    assert_eq!(
-        as_str(query::string_i(GL_EXTENSIONS, 1).unwrap()),
-        "GL_EXT_texture_format_BGRA8888"
+    assert!(
+        query::string_i(GL_VERSION, 0).is_none(),
+        "an indexed query of a non-indexed name is refused"
     );
-    assert_eq!(
-        as_str(query::string_i(GL_EXTENSIONS, 2).unwrap()),
-        "GL_EXT_read_format_bgra"
-    );
-    assert_eq!(
-        as_str(query::string_i(GL_EXTENSIONS, 3).unwrap()),
-        "GL_ANGLE_robust_client_memory"
-    );
-    assert_eq!(
-        as_str(query::string_i(GL_EXTENSIONS, 4).unwrap()),
-        "GL_CHROMIUM_bind_generates_resource"
-    );
-    assert_eq!(
-        as_str(query::string_i(GL_EXTENSIONS, 5).unwrap()),
-        "GL_CHROMIUM_copy_texture"
-    );
-    assert_eq!(
-        as_str(query::string_i(GL_EXTENSIONS, 6).unwrap()),
-        "GL_ANGLE_client_arrays"
-    );
-    assert_eq!(
-        as_str(query::string_i(GL_EXTENSIONS, 7).unwrap()),
-        "GL_ANGLE_webgl_compatibility"
-    );
-    assert_eq!(
-        as_str(query::string_i(GL_EXTENSIONS, 8).unwrap()),
-        "GL_ANGLE_request_extension"
-    );
-    assert_eq!(
-        as_str(query::string_i(GL_EXTENSIONS, 9).unwrap()),
-        "GL_OES_EGL_image"
-    );
-    assert_eq!(
-        as_str(query::string_i(GL_EXTENSIONS, 10).unwrap()),
-        "GL_OES_EGL_sync"
-    );
-    assert_eq!(
-        as_str(query::string_i(GL_EXTENSIONS, 11).unwrap()),
-        "GL_OES_rgb8_rgba8"
-    );
-    assert_eq!(
-        as_str(query::string_i(GL_EXTENSIONS, 12).unwrap()),
-        "GL_OES_depth24"
-    );
-    assert_eq!(
-        as_str(query::string_i(GL_EXTENSIONS, 13).unwrap()),
-        "GL_OES_mapbuffer"
-    );
-    assert!(query::string_i(GL_EXTENSIONS, 14).is_none());
-    assert!(query::string_i(GL_VERSION, 0).is_none());
 }
 
 // ---- glGetError ----------------------------------------------------------------------------------

@@ -108,10 +108,10 @@ fn gpu_read_pixels(
     y: i32,
     width: i32,
     height: i32,
-    format: u32,
+    destination: readpixels::PixelFormat,
 ) -> hl_gpu::Result<Vec<u8>> {
     let completed = GlobalState::gpu_io(std::time::Duration::from_secs(31), move |group, sink| {
-        readpixels::prepare_pixels(&mut group.gl, sink, x, y, width, height, format)
+        readpixels::prepare_pixels(&mut group.gl, sink, x, y, width, height, destination)
     })?;
     let raw = completed
         .observations

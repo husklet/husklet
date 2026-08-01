@@ -456,12 +456,14 @@ pub use IS_VERTEX_ARRAY as is_vertex_array;
 /// `0` means the application gave an UNSIZED format (`GL_RGB` / `GL_RGBA`), which this driver materializes
 /// as RGBA8 and which is renderable — so an ordinary `glTexImage2D` attachment stays complete.
 ///
-/// The renderable set is the unorm colour formats plus `SRGB8_ALPHA8` plus the one-, two- and
-/// four-component integer formats. Deliberately EXCLUDED, each of which this driver reported complete:
-/// every depth/stencil format; the signed-normalized formats; `GL_RGB9_E5` and `GL_R11F_G11F_B10F`
-/// (shared-exponent / packed float); `GL_SRGB8` (unlike `GL_SRGB8_ALPHA8`); and the THREE-component
-/// integer formats, which the specification omits while including their one-, two- and four-component
-/// siblings.
+/// The renderable set is the unorm colour formats plus `SRGB8_ALPHA8`, the one-, two- and four-component
+/// integer formats, and — because this driver advertises `GL_EXT_color_buffer_float` — the seven float
+/// formats that extension names. Deliberately EXCLUDED, each of which this driver reported complete:
+/// every depth/stencil format; the signed-normalized formats; `GL_RGB9_E5` (shared exponent); `GL_SRGB8`
+/// (unlike `GL_SRGB8_ALPHA8`); the THREE-component integer formats, which the specification omits while
+/// including their one-, two- and four-component siblings; and `GL_RGB16F`/`GL_RGB32F`, which
+/// `EXT_color_buffer_float` likewise omits — a three-component float format is not colour-renderable even
+/// though this driver can materialize its plane.
 fn colour_renderable(internal_format: u32) -> bool {
     matches!(
         internal_format,
@@ -501,5 +503,16 @@ fn colour_renderable(internal_format: u32) -> bool {
             | GL_RGBA16I
             | GL_RGBA32UI
             | GL_RGBA32I
+            // `GL_EXT_color_buffer_float`, exactly the seven formats it names. Each one's plane is
+            // allocated by its own texel, filled by an upload that emits that texel, cleared by the
+            // shared packing rule on both executors, and read back at the plane's own stride through
+            // either `GL_UNSIGNED_BYTE` or the required `GL_RGBA`/`GL_FLOAT` pair.
+            | GL_R16F
+            | GL_RG16F
+            | GL_RGBA16F
+            | GL_R32F
+            | GL_RG32F
+            | GL_RGBA32F
+            | GL_R11F_G11F_B10F
     )
 }
