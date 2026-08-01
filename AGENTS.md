@@ -932,6 +932,11 @@ A shipped diagnostic explaining why something cannot be done deserves the same s
 because it is the reason nobody investigates it — and unlike a comment it has an audience, so it goes on
 being believed after the code stops being true.
 
+An assertion inside a conditional measures nothing when the condition never holds. A check was wrapped in
+"if the call succeeded" for a case that cannot succeed in an in-process test, so reverting the code it
+guarded did not fail the test. Assert instead that the unreachable case *is* unreachable, so the test fails
+loudly if that ever changes, and put the real assertion where the path is actually taken.
+
 A refusal proves nothing without a path that otherwise works. A test asserting that a bad input is rejected
 was measuring its own broken setup — every submission failed, so a null pointer and a valid one were
 refused identically and the assertions passed while establishing nothing. It surfaced only because a
