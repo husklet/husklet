@@ -988,6 +988,13 @@ Scope a blocker to the layer you actually measured. A failed package fetch insid
 "host egress is down"; the host had working egress the whole time and only the guest workspace did not.
 The observation was real and the name would have sent the next person to the wrong layer.
 
+Print the hash of the component whose behaviour you are measuring, not the container it ships in. Two
+agents ran one probe and reported mirror-image results; both read their own logs correctly and both
+harnesses printed an identical header naming the application binary — while their guest driver subtrees
+differed by eleven hours, one of them a stale copy inside an isolated work directory. The disagreement was
+resolvable only because each run also recorded the driver hashes in its own preamble. A header that names
+the coarse artifact will make two incompatible measurements look like one contradiction.
+
 A workspace can reuse a worker that predates the artifact you installed. Three conformance runs were
 measured against a host executor started twelve hours before the bundle under test, because other
 workspaces got fresh workers on install and that one reused its open process. A wire encoding had changed
