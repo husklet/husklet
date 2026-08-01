@@ -50,6 +50,26 @@ impl TransportError {
         }
     }
 
+    /// Whether the peer received a complete request, understood it, and refused it — as opposed to the
+    /// connection being gone, ambiguous, or retired.
+    ///
+    /// The distinction is what a caller needs to decide the BLAST RADIUS of a failure. A refusal is an
+    /// ordinary error belonging to the one request that provoked it: the runtime rejects a batch
+    /// atomically (see `runtime::submit` — a refused batch leaves the id lifecycle and the residency
+    /// ledger exactly as they were), the connection is not retired, and the next request is as likely to
+    /// succeed as it was before. Every other kind means the transport itself can no longer be trusted, so
+    /// nothing behind it is recoverable.
+    pub fn refusal(&self) -> bool {
+        match self {
+            Self::Rejected { .. } => true,
+            Self::Unavailable { .. }
+            | Self::Timeout { .. }
+            | Self::Ambiguous { .. }
+            | Self::ApiLost { .. }
+            | Self::Poisoned { .. } => false,
+        }
+    }
+
     pub fn retryable_before_request(&self) -> bool {
         matches!(
             self,

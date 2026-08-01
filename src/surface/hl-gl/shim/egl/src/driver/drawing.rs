@@ -479,7 +479,10 @@ pub extern "C" fn glReadPixels(
                 }
             }),
             Err(e) => {
-                GlobalState::context(|s| s.gl.set_gl_error(GL_OUT_OF_MEMORY));
+                // Report what actually failed. Every readback failure used to be `GL_OUT_OF_MEMORY`,
+                // which names a cause the driver did not measure: a host refusal, a decode failure and a
+                // real allocation limit are three different findings and only one of them is memory.
+                GlobalState::context(|s| s.gl.set_gl_error(gl_error_from_gpu_error(&e)));
                 GlobalState::access(|s| s.set_egl_error(egl_error_from_gpu_error(&e)));
             }
         }
@@ -495,7 +498,8 @@ pub extern "C" fn glReadPixels(
             write_packed_rows(&bytes, width as usize * bpp, height as usize, pixels)
         },
         Err(e) => {
-            GlobalState::context(|s| s.gl.set_gl_error(GL_OUT_OF_MEMORY));
+            // See the PBO arm above: the code names the failure that happened, not memory by default.
+            GlobalState::context(|s| s.gl.set_gl_error(gl_error_from_gpu_error(&e)));
             GlobalState::access(|s| s.set_egl_error(egl_error_from_gpu_error(&e)));
         }
     }

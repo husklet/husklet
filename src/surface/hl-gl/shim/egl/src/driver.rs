@@ -87,7 +87,7 @@ use core::ffi::{c_char, c_void};
 use hl_gl::model::context::GlContext;
 use hl_gl::model::glconst::*;
 use hl_gl::result::{
-    egl_error_from_gpu_error, EGL_BAD_ACCESS, EGL_BAD_ATTRIBUTE, EGL_BAD_CONFIG, EGL_BAD_CONTEXT,
+    egl_error_from_gpu_error, gl_error_from_gpu_error, EGL_BAD_ACCESS, EGL_BAD_ATTRIBUTE, EGL_BAD_CONFIG, EGL_BAD_CONTEXT,
     EGL_BAD_DISPLAY, EGL_BAD_MATCH, EGL_BAD_NATIVE_PIXMAP, EGL_BAD_PARAMETER, EGL_BAD_SURFACE,
     EGL_CONTEXT_LOST, EGL_FALSE, EGL_NOT_INITIALIZED, EGL_TRUE, GL_INVALID_ENUM, GL_INVALID_VALUE,
     GL_OUT_OF_MEMORY,

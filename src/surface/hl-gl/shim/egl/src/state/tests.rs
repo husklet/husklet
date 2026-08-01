@@ -275,3 +275,132 @@ fn an_uninitialized_display_backs_nothing_and_says_so() {
         "eglTerminate puts the display back where eglInitialize found it"
     );
 }
+
+/// A host that REFUSES one request must fail that one request. Escalating a refusal to share-group loss
+/// is the largest amplifier in this driver: a lost group makes every later GL call a no-op reporting
+/// `GL_CONTEXT_LOST`, so one bad submission takes down every case behind it in the same process and the
+/// first failure disappears behind a cascade that has nothing to do with it. The refused submission is
+/// safe to continue from — `runtime::submit` rejects a batch atomically and the client's residency mirror
+/// records only acknowledged batches, so both sides agree the batch did not happen.
+#[test]
+fn a_refused_request_fails_the_call_and_keeps_the_share_group() {
+    let sequencer = crate::transport::Sequencer::spawn(RemoteCommandSink::new(
+        "/tmp/hl-gl-state-refusal-test-unused.sock",
+    ))
+    .expect("actor");
+    let group = group::GroupSlot::new(Arc::new(IrAllocator::new()));
+
+    let ticket = sequencer
+        .submit(Plan::new(GlobalState::attempt(
+            Arc::clone(&group),
+            move |_| -> hl_gpu::Result<()> {
+                Err(hl_gpu::GpuError::Transport(
+                    hl_gpu::TransportError::Rejected {
+                        phase: hl_gpu::TransportPhase::Acknowledgement,
+                        acknowledgement: 0,
+                    },
+                ))
+            },
+        )))
+        .expect("queued");
+
+    assert!(ticket.wait().is_err(), "the refused call itself fails");
+    assert!(!group.is_lost(), "a refusal must not retire the share group");
+    assert!(
+        !group.take_lost_report(),
+        "no GL_CONTEXT_LOST is owed for a call that merely failed"
+    );
+    assert!(
+        group.acquire().is_ok(),
+        "the next GL call must still be able to take the lease"
+    );
+}
+
+/// The control, and the half that must NOT change: a transport that is gone leaves nothing recoverable
+/// behind it, so the group is right to die. Without this pair the test above would pass just as well
+/// against a driver that never loses a group at all.
+#[test]
+fn a_transport_that_is_gone_still_loses_the_share_group() {
+    let sequencer = crate::transport::Sequencer::spawn(RemoteCommandSink::new(
+        "/tmp/hl-gl-state-gone-test-unused.sock",
+    ))
+    .expect("actor");
+    let group = group::GroupSlot::new(Arc::new(IrAllocator::new()));
+
+    let ticket = sequencer
+        .submit(Plan::new(GlobalState::attempt(
+            Arc::clone(&group),
+            move |_| -> hl_gpu::Result<()> {
+                Err(hl_gpu::GpuError::Transport(
+                    hl_gpu::TransportError::Unavailable {
+                        phase: hl_gpu::TransportPhase::FrameWrite,
+                        detail: "peer closed".into(),
+                    },
+                ))
+            },
+        )))
+        .expect("queued");
+
+    assert!(ticket.wait().is_err());
+    assert!(
+        group.is_lost(),
+        "an unusable transport must still retire the share group"
+    );
+    assert!(
+        group.take_lost_report(),
+        "the loss owes the application one GL_CONTEXT_LOST"
+    );
+}
+
+/// The classification is on the failure's KIND, not on where it was caught: every kind that means the
+/// connection is unusable retires the group, and every kind that means the host answered does not.
+#[test]
+fn only_an_unusable_transport_retires_the_group() {
+    use hl_gpu::{GpuError, TransportError, TransportPhase};
+
+    let phase = TransportPhase::Acknowledgement;
+    for error in [
+        GpuError::Transport(TransportError::Unavailable {
+            phase,
+            detail: "socket gone".into(),
+        }),
+        GpuError::Transport(TransportError::Timeout {
+            phase,
+            ambiguous: true,
+        }),
+        GpuError::Transport(TransportError::Ambiguous {
+            phase,
+            detail: "protocol desync".into(),
+        }),
+        GpuError::Transport(TransportError::ApiLost {
+            detail: "capabilities changed".into(),
+        }),
+        GpuError::Transport(TransportError::Poisoned {
+            cause: "earlier ambiguity".into(),
+        }),
+    ] {
+        assert!(
+            GlobalState::retires_share_group(&error),
+            "an unusable transport retires the group: {error:?}"
+        );
+    }
+
+    for error in [
+        GpuError::Transport(TransportError::Rejected {
+            phase,
+            acknowledgement: 0,
+        }),
+        // The host answered — through a connection that is still there.
+        GpuError::Invalid("malformed command"),
+        GpuError::UnknownId {
+            kind: "texture",
+            id: 7,
+        },
+        GpuError::Panicked("backend defect the runtime rolled back".into()),
+    ] {
+        assert!(
+            !GlobalState::retires_share_group(&error),
+            "an answered request fails only itself: {error:?}"
+        );
+    }
+}

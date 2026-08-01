@@ -69,6 +69,14 @@ impl From<&GpuError> for EglError {
             | GpuError::Utf8
             | GpuError::ShortBuffer
             | GpuError::TrailingBytes => EGL_BAD_PARAMETER,
+            // A host that received a complete request and REFUSED it has not lost anything: the batch was
+            // rejected atomically, the connection is still there, and the share group is not retired (see
+            // `GlobalState::retires_share_group`). Reporting `EGL_CONTEXT_LOST` for it would tell a robust
+            // application to destroy its context and rebuild its entire working set over one bad frame,
+            // which is the same amplification the group-loss escalation caused, moved up a layer.
+            // `EGL_BAD_ACCESS` is the honest code: the request could not be serviced, and the display,
+            // context and surface are all still valid.
+            GpuError::Transport(failure) if failure.refusal() => EGL_BAD_ACCESS,
             // A backend PANIC is a backend defect, not a guest error: the frame is refused and the
             // session rolled back, but there is no argument to blame and nothing the app can correct.
             // `EGL_CONTEXT_LOST` is the honest report — the frame could not be presented — and it keeps a
@@ -98,6 +106,10 @@ impl From<&GpuError> for GlError {
     fn from(e: &GpuError) -> Self {
         Self(match e {
             GpuError::ResourceLimit(_) => GL_OUT_OF_MEMORY,
+            // The host refused this request and the connection survived it, so the call — not the context
+            // — failed. `GL_INVALID_OPERATION` is the code for an operation that could not be performed;
+            // the loss codes belong to a group that is actually gone.
+            GpuError::Transport(failure) if failure.refusal() => GL_INVALID_OPERATION,
             GpuError::BadEnum { .. } => GL_INVALID_ENUM,
             GpuError::UnknownId { .. } | GpuError::DuplicateId { .. } => GL_INVALID_OPERATION,
             GpuError::Unsupported(_) => GL_INVALID_OPERATION,
@@ -114,3 +126,35 @@ impl From<GlError> for u32 {
 
 pub const GL_ERROR_FROM_GPU_ERROR: fn(&GpuError) -> u32 = |error| GlError::from(error).into();
 pub use GL_ERROR_FROM_GPU_ERROR as gl_error_from_gpu_error;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hl_gpu::{TransportError, TransportPhase};
+
+    fn rejected() -> GpuError {
+        GpuError::Transport(TransportError::Rejected {
+            phase: TransportPhase::Acknowledgement,
+            acknowledgement: 0,
+        })
+    }
+
+    fn gone() -> GpuError {
+        GpuError::Transport(TransportError::Unavailable {
+            phase: TransportPhase::FrameWrite,
+            detail: "peer closed".into(),
+        })
+    }
+
+    /// A refusal and a dead transport are both `GpuError::Transport`, and they must not report the same
+    /// thing. Telling an application its context is lost makes it destroy the context and rebuild its
+    /// whole working set — the right response to a transport that is gone, and a catastrophic
+    /// over-reaction to one frame the host declined to run.
+    #[test]
+    fn a_refusal_is_an_ordinary_error_and_a_dead_transport_is_a_lost_context() {
+        assert_eq!(i32::from(EglError::from(&rejected())), EGL_BAD_ACCESS);
+        assert_eq!(u32::from(GlError::from(&rejected())), GL_INVALID_OPERATION);
+
+        assert_eq!(i32::from(EglError::from(&gone())), EGL_CONTEXT_LOST);
+    }
+}

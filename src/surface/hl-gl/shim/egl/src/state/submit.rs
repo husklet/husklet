@@ -77,10 +77,58 @@ impl GlobalState {
         }
     }
 
+    /// Run one prepared plan on the actor thread: mark the in-flight guard complete, and retire the share
+    /// group only when the failure means the transport itself is GONE (see [`Self::retires_share_group`]).
+    ///
+    /// Both submit paths route their failure through here so the classification cannot drift between them.
+    pub(super) fn attempt<T: Send + 'static>(
+        group: Arc<group::GroupSlot>,
+        run: impl FnOnce(&mut dyn CommandSink) -> hl_gpu::Result<T> + Send + 'static,
+    ) -> impl FnOnce(&mut RemoteCommandSink) -> hl_gpu::Result<T> + Send + 'static {
+        let in_flight = InFlightGroup::new(group);
+        move |sink| {
+            let mut in_flight = in_flight;
+            let result = run(sink);
+            in_flight.complete();
+            if let Err(error) = &result {
+                if Self::retires_share_group(error) {
+                    in_flight.group.lose(format!("GPU transport failed: {error}"));
+                }
+            }
+            result
+        }
+    }
+
+    /// Whether a failed operation means the whole share group is unusable, or only the call that failed.
+    ///
+    /// Escalating every failure to a lost group is the largest amplifier this driver has: a lost group
+    /// makes every later GL call in the process a no-op reporting `GL_CONTEXT_LOST`, so ONE refused
+    /// submission takes down every case behind it and the first failure becomes invisible behind a
+    /// cascade that has nothing to do with it.
+    ///
+    /// A host that received a complete request and refused it has not taken the connection with it: the
+    /// runtime rejects a batch atomically, so the id lifecycle and the residency ledger are exactly as
+    /// they were, the client's residency mirror records only acknowledged batches, and the next request
+    /// stands on the same ground the refused one did. That is an ordinary error and the call that caused
+    /// it is the call that reports it. A transport that is gone, ambiguous or retired is the opposite:
+    /// nothing behind it is recoverable, and the group is right to die.
+    ///
+    /// The classification is on the failure's KIND rather than on where it was caught, because the two do
+    /// not coincide — a refusal and a dropped socket both arrive here, from the same call.
+    pub(super) fn retires_share_group(error: &hl_gpu::GpuError) -> bool {
+        match error {
+            hl_gpu::GpuError::Transport(failure) => !failure.refusal(),
+            // Everything else is the host answering: a malformed command, an unknown id, a backend panic
+            // the runtime already converted and rolled back. The connection carried the answer, so the
+            // connection is fine.
+            _ => false,
+        }
+    }
+
     /// Prepare submit-only work under the share-group lease, release it before transport I/O, then verify
     /// the same generation after acknowledgement. State advances optimistically during preparation; a
-    /// rejected or ambiguous request terminates the group, so no rollback can overwrite GL calls recorded
-    /// by sibling contexts while the actor was waiting.
+    /// request whose outcome cannot be trusted terminates the group, so no rollback can overwrite GL calls
+    /// recorded by sibling contexts while the actor was waiting.
     pub(crate) fn gpu_submit<T: Send + 'static>(
         operation: impl FnOnce(&mut group::GroupData, &mut dyn CommandSink) -> hl_gpu::Result<T>
             + Send
@@ -108,24 +156,11 @@ impl GlobalState {
             (generation, prepared)
         };
         let ready = Self::transport()?;
-        let failed_group = Arc::clone(&group);
-        let in_flight = InFlightGroup::new(Arc::clone(&group));
         let ticket = ready
             .sequencer
-            .submit(Plan::new(move |sink| {
-                let mut in_flight = in_flight;
-                match prepared.execute(sink) {
-                    Ok(value) => {
-                        in_flight.complete();
-                        Ok(value)
-                    }
-                    Err(error) => {
-                        in_flight.complete();
-                        failed_group.lose(format!("GPU transport failed: {error}"));
-                        Err(error)
-                    }
-                }
-            }))
+            .submit(Plan::new(Self::attempt(Arc::clone(&group), move |sink| {
+                prepared.execute(sink)
+            })))
             .map_err(|error| {
                 group.lose(format!("GPU transport submission failed: {error}"));
                 hl_gpu::GpuError::Decode(error.to_string())
@@ -194,24 +229,11 @@ impl GlobalState {
             (generation, prepared)
         };
         let ready = Self::transport()?;
-        let failed_group = Arc::clone(&group);
-        let in_flight = InFlightGroup::new(Arc::clone(&group));
         let ticket = ready
             .sequencer
-            .submit(Plan::new(move |sink| {
-                let mut in_flight = in_flight;
-                match prepared.execute(sink) {
-                    Ok(result) => {
-                        in_flight.complete();
-                        Ok(result)
-                    }
-                    Err(error) => {
-                        in_flight.complete();
-                        failed_group.lose(format!("GPU transport failed: {error}"));
-                        Err(error)
-                    }
-                }
-            }))
+            .submit(Plan::new(Self::attempt(Arc::clone(&group), move |sink| {
+                prepared.execute(sink)
+            })))
             .map_err(|error| {
                 group.lose(format!("GPU transport submission failed: {error}"));
                 hl_gpu::GpuError::Decode(error.to_string())
