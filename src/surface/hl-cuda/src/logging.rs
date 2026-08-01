@@ -31,6 +31,11 @@ const TAGS_VARIABLE: &str = "HL_CUDA_LOG";
 /// build still compiles in — asking for more in a release build is accepted and simply has less to
 /// report, because the verbose macros are already gone.
 const LEVEL_VARIABLE: &str = "HL_CUDA_LOG_LEVEL";
+/// The general variable the host forwards into the guest. Used when the specific one above is unset, so
+/// one `HL_LOG` reaches host and guest alike instead of four names a person has to know.
+const GENERAL_TAGS_VARIABLE: &str = "HL_LOG";
+/// The general level variable, used when the specific one is unset.
+const GENERAL_LEVEL_VARIABLE: &str = "HL_LOG_LEVEL";
 
 pub struct GuestLogging;
 
@@ -46,8 +51,21 @@ impl GuestLogging {
     }
 
     fn apply_from_environment() {
-        let tags = std::env::var(TAGS_VARIABLE).ok();
-        let level = std::env::var(LEVEL_VARIABLE).ok();
+        // The specific variable wins, and `HL_LOG` is the fallback when it is unset.
+        //
+        // Without the fallback this gate had no key through the product's own launch path. The host
+        // forwards only `HL_LOG`, `HL_LOG_LEVEL` and `HL_LOG_COUNTERS` across the sanitized worker into
+        // the guest (`apps/husklet/src/bin/host/environment.rs`), and `HL_CUDA_LOG` is not among them —
+        // so setting it on the host did nothing, and the guest never saw a tag. Every guest-side
+        // diagnostic in the product was therefore unreachable in any build at any level, which is why
+        // nobody had ever seen one. The specific variable keeps working for harnesses that inject the
+        // guest environment directly, where it is still the precise control.
+        let tags = std::env::var(TAGS_VARIABLE)
+            .ok()
+            .or_else(|| std::env::var(GENERAL_TAGS_VARIABLE).ok());
+        let level = std::env::var(LEVEL_VARIABLE)
+            .ok()
+            .or_else(|| std::env::var(GENERAL_LEVEL_VARIABLE).ok());
         Self::configure(tags.as_deref(), level.as_deref());
     }
 
