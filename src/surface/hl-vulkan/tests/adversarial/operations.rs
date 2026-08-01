@@ -31,7 +31,7 @@ fn copy_buffer_to_image_usage_and_bounds_errors() {
 }
 
 #[test]
-fn copy_image_format_mismatch_and_self_overlap_rejected() {
+fn copy_image_size_incompatibility_and_self_overlap_rejected() {
     let mut d = dev();
     let mut s = sink();
     let a = create::create_image(
@@ -54,15 +54,45 @@ fn copy_image_format_mismatch_and_self_overlap_rejected() {
         1,
     )
     .unwrap();
+    // A one-byte format, for the size incompatibility a copy must still refuse.
+    let narrow = create::create_image(
+        &mut d,
+        &mut s,
+        8,
+        8,
+        vk_format::R8_UNORM,
+        vk_image_usage::TRANSFER_DST,
+        1,
+    )
+    .unwrap();
     let cb = d.allocate_command_buffer();
     d.begin_command_buffer(cb, false).unwrap();
-    // Format mismatch.
-    assert!(matches!(
+    // A copy REINTERPRETS rather than converts, so the specification asks for size-compatible formats and
+    // not identical ones: RGBA8 into BGRA8 moves four bytes into four bytes and is legal. This asserted
+    // the opposite, which was correct about the driver of the time and wrong about the specification —
+    // the surface demanded equality where the IR beneath it requires only equal texel sizes.
+    assert!(
         record::cmd_copy_image(
             &mut d,
             cb,
             a,
             b,
+            SubresourceLayers::base(),
+            SubresourceLayers::base(),
+            (0, 0),
+            (0, 0),
+            (4, 4)
+        )
+        .is_ok(),
+        "RGBA8 into BGRA8 is a size-compatible copy"
+    );
+    // The refusal that remains, and the control for the acceptance above: a genuine size change.
+    assert!(matches!(
+        record::cmd_copy_image(
+            &mut d,
+            cb,
+            a,
+            narrow,
             SubresourceLayers::base(),
             SubresourceLayers::base(),
             (0, 0),

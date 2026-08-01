@@ -424,13 +424,17 @@ fn copy_image_lowers_to_copy_texture_to_texture() {
             },
         }]
     );
-    // Copy-compatible-format rejection: differing formats are a typed error, not a silent mis-copy.
+    // Size-compatibility rejection. This used to use `B8G8R8A8_UNORM` and expect a refusal, which was
+    // the surface's own rule rather than the specification's: a copy reinterprets, so four bytes into
+    // four bytes is legal and is asserted as such in
+    // `copy_image_accepts_size_compatible_formats_and_refuses_a_size_change`. What must still fail is a
+    // genuine texel-size change, which would move the wrong number of bytes per texel.
     let other = create::create_image(
         &mut d,
         &mut sink,
         8,
         8,
-        vk_format::B8G8R8A8_UNORM,
+        vk_format::R8_UNORM,
         vk_image_usage::TRANSFER_DST,
         1,
     )
@@ -1128,5 +1132,203 @@ fn a_multisampled_image_must_be_single_layer_and_single_mip() {
     assert!(
         make(&mut d, &mut sink, 1, 4, 4).is_err(),
         "a multisampled mip chain is forbidden by Vulkan itself"
+    );
+}
+
+/// `vkCmdBlitImage` between DIFFERENT formats records, because a blit converts.
+///
+/// The surface required the two formats to be identical, which is this driver's own rule and not the
+/// specification's: a blit is distinguished from a copy precisely by converting, and the formats may
+/// differ freely except in numeric class. The host does exactly that — measured directly on lavapipe, it
+/// resamples `Rgba8Unorm` into `Bgra8Unorm`, `Rgba8Srgb`, `R32Float` and `Rgba16Float`, and across a
+/// texel-size change in both directions. The refusal turned the canonical case into an error: blitting an
+/// image into a differently-formatted swapchain image.
+///
+/// Same shape as the reference defect closed in `hl-gpu` earlier — a layer refusing what the layer below
+/// performs perfectly well — which is why the pairs here include a channel swap, a transfer function, a
+/// widening and a narrowing rather than one representative case.
+#[test]
+fn blit_between_different_formats_records() {
+    for (src_format, dst_format) in [
+        (vk_format::R8G8B8A8_UNORM, vk_format::B8G8R8A8_UNORM),
+        (vk_format::R8G8B8A8_UNORM, vk_format::R8G8B8A8_SRGB),
+        (vk_format::R8_UNORM, vk_format::R8G8B8A8_UNORM),
+        (vk_format::R8G8B8A8_UNORM, vk_format::R8_UNORM),
+    ] {
+        let mut d = dev();
+        let mut s = RecordingSink::with_full_caps();
+        let a = create::create_image(
+            &mut d,
+            &mut s,
+            4,
+            4,
+            src_format,
+            vk_image_usage::TRANSFER_SRC,
+            1,
+        )
+        .unwrap();
+        let b = create::create_image(
+            &mut d,
+            &mut s,
+            4,
+            4,
+            dst_format,
+            vk_image_usage::TRANSFER_DST,
+            1,
+        )
+        .unwrap();
+        let cb = recording_cb(&mut d);
+        assert!(
+            record::cmd_blit_image(
+                &mut d,
+                cb,
+                a,
+                b,
+                SubresourceLayers::base(),
+                SubresourceLayers::base(),
+                (0, 0),
+                (4, 4),
+                (0, 0),
+                (4, 4),
+                true,
+            )
+            .is_ok(),
+            "{src_format:#x} -> {dst_format:#x} is a legal converting blit"
+        );
+    }
+}
+
+/// An INTEGER blit is refused, and the two reasons are reported as two different errors.
+///
+/// A mixed integer/float pair violates the specification's numeric-class rule and is the APPLICATION's
+/// mistake — `Invalid`. A matched integer pair is legal Vulkan that this driver cannot serve, because the
+/// host blits by rendering and neither binds an integer view to a filterable sampler nor writes a float
+/// shader output into an integer target — `Unsupported`. Collapsing those into one answer would tell an
+/// application it had made an error when the limitation is ours.
+///
+/// It matters that this is refused HERE. Before, a matched integer pair passed the format-equality check,
+/// lowered, and failed inside the executor as a device-validation error the caller could not attribute.
+#[test]
+fn an_integer_blit_is_refused_and_says_whose_fault_it_is() {
+    let cases = [
+        (
+            vk_format::R8G8B8A8_UINT,
+            vk_format::R8G8B8A8_UNORM,
+            "mixed numeric class",
+            false,
+        ),
+        (
+            vk_format::R8G8B8A8_UINT,
+            vk_format::R8G8B8A8_UINT,
+            "matched integer pair",
+            true,
+        ),
+    ];
+    for (src_format, dst_format, what, unsupported) in cases {
+        let mut d = dev();
+        let mut s = RecordingSink::with_full_caps();
+        let a = create::create_image(
+            &mut d,
+            &mut s,
+            4,
+            4,
+            src_format,
+            vk_image_usage::TRANSFER_SRC,
+            1,
+        )
+        .unwrap();
+        let b = create::create_image(
+            &mut d,
+            &mut s,
+            4,
+            4,
+            dst_format,
+            vk_image_usage::TRANSFER_DST,
+            1,
+        )
+        .unwrap();
+        let cb = recording_cb(&mut d);
+        let result = record::cmd_blit_image(
+            &mut d,
+            cb,
+            a,
+            b,
+            SubresourceLayers::base(),
+            SubresourceLayers::base(),
+            (0, 0),
+            (4, 4),
+            (0, 0),
+            (4, 4),
+            false,
+        );
+        match (unsupported, result) {
+            (true, Err(GpuError::Unsupported(_))) => {}
+            (false, Err(GpuError::Invalid(_))) => {}
+            (_, other) => panic!("{what}: unexpected {other:?}"),
+        }
+    }
+}
+
+/// `vkCmdCopyImage` accepts SIZE-COMPATIBLE formats and refuses only a size change.
+///
+/// A copy reinterprets rather than converts, so the specification asks for equal texel block size, not
+/// identical formats — and the IR agrees, since `CopyTextureToTexture` requires equal texel sizes and
+/// moves the bytes unchanged. Requiring identical formats was this surface's own rule.
+///
+/// The refusal is the control: a genuine size change must still fail, or this test would pass against a
+/// path that had simply stopped checking.
+#[test]
+fn copy_image_accepts_size_compatible_formats_and_refuses_a_size_change() {
+    let attempt = |src_format: u32, dst_format: u32| {
+        let mut d = dev();
+        let mut s = RecordingSink::with_full_caps();
+        let a = create::create_image(
+            &mut d,
+            &mut s,
+            4,
+            4,
+            src_format,
+            vk_image_usage::TRANSFER_SRC,
+            1,
+        )
+        .unwrap();
+        let b = create::create_image(
+            &mut d,
+            &mut s,
+            4,
+            4,
+            dst_format,
+            vk_image_usage::TRANSFER_DST,
+            1,
+        )
+        .unwrap();
+        let cb = recording_cb(&mut d);
+        record::cmd_copy_image(
+            &mut d,
+            cb,
+            a,
+            b,
+            SubresourceLayers::base(),
+            SubresourceLayers::base(),
+            (0, 0),
+            (0, 0),
+            (4, 4),
+        )
+    };
+
+    assert!(
+        attempt(vk_format::R8G8B8A8_UNORM, vk_format::B8G8R8A8_UNORM).is_ok(),
+        "four bytes into four bytes is size-compatible, and a copy moves the bytes unchanged"
+    );
+    assert!(
+        attempt(vk_format::R8G8B8A8_UNORM, vk_format::R8G8B8A8_UNORM).is_ok(),
+        "the identical-format case must keep working"
+    );
+    assert!(
+        matches!(
+            attempt(vk_format::R8_UNORM, vk_format::R8G8B8A8_UNORM),
+            Err(GpuError::Invalid(_))
+        ),
+        "one byte into four is NOT size-compatible and must still be refused"
     );
 }

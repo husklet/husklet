@@ -1,5 +1,26 @@
 use super::*;
 
+/// The colour formats whose texels are raw integers.
+///
+/// Vulkan requires a blit's two formats to share a numeric class — a signed-integer source needs a
+/// signed-integer destination, an unsigned one an unsigned destination — so a mixed integer/float pair is
+/// the APPLICATION's error. A matched integer pair is legal Vulkan and this driver still cannot serve it,
+/// because the host performs a blit by rendering: measured directly, an integer view cannot bind to the
+/// blit's filterable float sampler and the blit shader's float output is incompatible with an integer
+/// colour target. Those are two different answers and are reported as two different errors.
+const INTEGER_FORMATS: &[TextureFormat] = &[
+    TextureFormat::R8Uint,
+    TextureFormat::R8Sint,
+    TextureFormat::Rg8Uint,
+    TextureFormat::Rg8Sint,
+    TextureFormat::Rgba8Uint,
+    TextureFormat::Rgba8Sint,
+];
+
+fn is_integer(format: TextureFormat) -> bool {
+    INTEGER_FORMATS.contains(&format)
+}
+
 /// Refuse a region whose subresource does not exist on `image`. A copy is not a clear: clamping a
 /// too-large level or layer run would return the wrong texels rather than fewer of them, so this is a
 /// truthful error instead of a silent narrowing.
@@ -74,9 +95,14 @@ pub fn cmd_copy_image(
             "vkCmdCopyImage: source and destination layer counts differ",
         ));
     }
-    if src_fmt != dst_fmt {
+    // A COPY reinterprets rather than converts, so the specification asks for SIZE-COMPATIBLE formats
+    // (equal texel block size) and not identical ones — `VK_FORMAT_R8G8B8A8_UNORM` into
+    // `VK_FORMAT_B8G8R8A8_UNORM` is a legal copy that moves the bytes unchanged. Demanding equality was
+    // this surface's own rule: the IR's `CopyTextureToTexture` requires equal texel sizes and copies the
+    // bytes, which is exactly the specification's contract.
+    if src_fmt.bytes_per_texel() != dst_fmt.bytes_per_texel() {
         return Err(GpuError::Invalid(
-            "vkCmdCopyImage: source and destination formats differ",
+            "vkCmdCopyImage: source and destination formats are not size-compatible",
         ));
     }
     if src_usage & texture_usage::COPY_SRC == 0 || dst_usage & texture_usage::COPY_DST == 0 {
@@ -198,9 +224,25 @@ pub fn cmd_blit_image(
             "vkCmdBlitImage: source and destination layer counts differ",
         ));
     }
-    if src_fmt != dst_fmt {
+    // A BLIT converts; that is what distinguishes it from a copy. The specification lets the two formats
+    // differ freely except in numeric class, and the host does exactly that — measured directly, it
+    // resamples `Rgba8Unorm` into `Bgra8Unorm`, `Rgba8Srgb`, `R32Float` and `Rgba16Float`, and across a
+    // texel-size change in both directions. Demanding identical formats was this surface's own rule, and
+    // it refused the canonical case: blitting an image into a differently-formatted swapchain image.
+    //
+    // The two refusals that remain are different in kind and say so. A mixed integer/float pair violates
+    // the specification's numeric-class rule and is the application's error. A MATCHED integer pair is
+    // legal Vulkan that this driver cannot serve, because the host blits by rendering and neither binds
+    // an integer view to a filterable sampler nor writes a float shader output into an integer target —
+    // an honest refusal here, where the caller can see it, rather than a device-validation failure later.
+    if is_integer(src_fmt) != is_integer(dst_fmt) {
         return Err(GpuError::Invalid(
-            "vkCmdBlitImage: source and destination formats differ",
+            "vkCmdBlitImage: source and destination formats are not of the same numeric class",
+        ));
+    }
+    if is_integer(src_fmt) {
+        return Err(GpuError::Unsupported(
+            "vkCmdBlitImage: blit of an integer format",
         ));
     }
     if src_usage & texture_usage::COPY_SRC == 0 || dst_usage & texture_usage::COPY_DST == 0 {
@@ -301,6 +343,18 @@ pub fn cmd_resolve_image(
         .get(&src)
         .ok_or(GpuError::Invalid("vkCmdResolveImage: unknown src VkImage"))?
         .sample_count;
+    // A RESOLVE requires IDENTICAL formats — not the size-compatibility a copy asks for — and it requires
+    // them whatever the sample count. Checked HERE, above the single-sample shortcut, because that
+    // shortcut delegates to `cmd_copy_image` and would otherwise inherit the copy's looser rule: relaxing
+    // copy to size-compatible silently widened resolve through this one line, which is what enumerating
+    // the callers of a widened check is for.
+    if let (Some(s), Some(d)) = (dev.images.get(&src), dev.images.get(&dst)) {
+        if s.format != d.format {
+            return Err(GpuError::Invalid(
+                "vkCmdResolveImage: source and destination formats differ",
+            ));
+        }
+    }
     if src_samples <= 1 {
         // Single-sample source: resolve degenerates to a content-moving copy.
         return cmd_copy_image(

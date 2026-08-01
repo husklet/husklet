@@ -66,6 +66,14 @@ fn begin(d: &mut Device, _sink: &mut RecordingSink) -> u64 {
 }
 
 /// Record `record_fn` into a fresh command buffer and return the single submitted encoder stream.
+/// A command buffer left in the RECORDING state, for tests that assert on a record-time refusal rather
+/// than on the encoder a successful recording produces.
+fn recording_cb(d: &mut Device) -> u64 {
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    cb
+}
+
 fn record_and_submit(
     d: &mut Device,
     sink: &mut RecordingSink,
