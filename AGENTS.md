@@ -932,6 +932,12 @@ A shipped diagnostic explaining why something cannot be done deserves the same s
 because it is the reason nobody investigates it — and unlike a comment it has an audience, so it goes on
 being believed after the code stops being true.
 
+A guard written against the symptom is not a guard against the condition. Two vertex attributes sharing a
+buffer are split into separate slots only when one would not fit inside the other's stride — which is a
+test for whether the host will reject the layout, not for whether the strides agree. An attribute whose
+stride differs but happens to fit is read at the wrong rate with no error at all. The comment above it
+names the host's rejection message as the thing being avoided, which is the tell.
+
 An assertion inside a conditional measures nothing when the condition never holds. A check was wrapped in
 "if the call succeeded" for a case that cannot succeed in an in-process test, so reverting the code it
 guarded did not fail the test. Assert instead that the unreachable case *is* unreachable, so the test fails
