@@ -87,9 +87,10 @@ pub(crate) fn texel_at(pixels: &[u8], tex_w: usize, x: usize, y: usize, bpt: usi
 /// as `0x1E00`. Nothing caught it: no test blitted a float plane, and the alpha channel came out correct
 /// because both texels carried identical alpha bytes.
 ///
-/// A format with no plain-colour texel yields `None`, as does an INTEGER format — averaging raw integers
-/// has no defined meaning and both GL and Vulkan forbid linear filtering of integer textures. The caller
-/// turns that into a typed refusal.
+/// Returns the interpolated colour as VALUES; the caller encodes them into whatever format the
+/// destination is. A format with no plain-colour texel yields `None`, as does an INTEGER format —
+/// averaging raw integers has no defined meaning and both GL and Vulkan forbid linear filtering of
+/// integer textures. The caller turns that into a typed refusal.
 pub(crate) fn sample_bilinear(
     pixels: &[u8],
     tex_w: usize,
@@ -101,7 +102,7 @@ pub(crate) fn sample_bilinear(
     y_lo: usize,
     y_hi: usize,
     format: TextureFormat,
-) -> Option<Vec<u8>> {
+) -> Option<[f32; 4]> {
     if INTEGER_FILTER_REFUSED.contains(&format) {
         return None;
     }
@@ -121,7 +122,10 @@ pub(crate) fn sample_bilinear(
         let bot = p01[c] * (1.0 - tx) + p11[c] * tx;
         rgba[c] = top * (1.0 - ty) + bot * ty;
     }
-    format.clear_texel(rgba)
+    // Returns VALUES, not an encoding: the caller decides which format receives them, and a blit whose
+    // destination differs from its source must encode once, at the destination, rather than round-trip
+    // through the source's encoding on the way.
+    Some(rgba)
 }
 
 /// Formats whose texels are raw integers, for which a linear filter has no defined meaning. Both GL and

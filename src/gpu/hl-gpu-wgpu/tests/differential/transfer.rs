@@ -412,3 +412,47 @@ fn blit_cmds(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32, filter: Filter) -> 
         }),
     ]
 }
+
+/// (8) CROSS-FORMAT `BlitTexture`: a blit whose destination format DIFFERS from its source.
+///
+/// This class was uncomparable because the two backends implemented different rules, and neither rule was
+/// written down. The executor blits by rendering — it samples the source and writes the destination as a
+/// colour attachment — so a differing format is a CONVERSION and the texel sizes need not match; measured
+/// directly, it accepts `Rgba8Unorm` into `Bgra8Unorm`, `Rgba8Srgb`, `R32Float` and `Rgba16Float`, and
+/// accepts `R8Unorm` into `Rgba8Unorm` across a size change. The oracle refused every size change, and on
+/// the pairs it did accept its nearest filter copied the source bytes verbatim — so `Rgba8Unorm` into
+/// `R32Float`, four bytes either way, reinterpreted unsigned bytes as a float while the executor
+/// converted, and both ran.
+///
+/// The destination formats here are chosen so a byte copy cannot pass: `Bgra8Unorm` needs a channel swap,
+/// `Rgba8Srgb` needs the transfer function, and `Rgba16Float` needs a different texel width entirely.
+///
+/// Compared in the destination's own units — exact for the eight-bit destinations, one ULP for the
+/// half-float one, which is the same host-side rounding allowance the other float cases carry.
+pub(super) fn gen_blit_cross_format(seed: u64) -> Prog {
+    let (format, tol) = match seed % 3 {
+        0 => (TextureFormat::Bgra8Unorm, Tolerance::Unorm(0)),
+        1 => (TextureFormat::Rgba8Srgb, Tolerance::Unorm(1)),
+        _ => (TextureFormat::Rgba16Float, Tolerance::Ulps(1)),
+    };
+    let n = 2 + (seed % 3) as u32;
+    let src: Vec<u8> = (0..n * n)
+        .flat_map(|i| texel(seed.wrapping_add(i as u64 * 13)))
+        .collect();
+    let texel_bytes = format.bytes_per_texel().expect("a colour destination");
+    let mut cmds = blit_cmds(&src, n, n, n, n, Filter::Nearest);
+    // Same shape as the shared body, with the DESTINATION re-declared in the format under test.
+    cmds[1] = Cmd::CreateTexture(2, tex_fmt(n, n, format));
+    Prog {
+        seed,
+        category: "blit_cross_format",
+        ops: vec!["CopyBufferToTexture", "ClearRect", "BlitTexture"],
+        cmds,
+        read: Read::Tex {
+            id: 2,
+            len: (n * n) as usize * texel_bytes,
+        },
+        tol,
+        kernel: None,
+    }
+}

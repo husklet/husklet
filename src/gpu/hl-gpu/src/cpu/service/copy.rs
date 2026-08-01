@@ -276,6 +276,20 @@ pub(crate) fn copy_texture_to_texture(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// `BlitTexture`: resample the source region into the destination region, CONVERTING between the two
+/// formats rather than reinterpreting bytes.
+///
+/// The contract is the host's, established by measuring it rather than by preference. The wgpu executor
+/// performs a blit by RENDERING — it samples the source and writes the destination as a colour attachment
+/// — so a differing format is a conversion through the sampler and the ROP, and the texel sizes need not
+/// match at all. `R8Unorm` into `Rgba8Unorm` and `Rgba16Float` into `Rgba8Unorm` both run there.
+///
+/// This oracle disagreed with that in both directions. It REFUSED any pair whose texel sizes differed,
+/// which the executor accepts — a divergence that is purely the reference's. And its nearest-filter path
+/// copied the source texel's raw bytes into the destination, so a same-size pair with different meanings
+/// (`Rgba8Unorm` into `R32Float`, four bytes either way) reinterpreted unsigned bytes as a float and both
+/// backends ran and disagreed silently. Now both filters decode through the source format and re-encode
+/// through the destination's, which is the same arithmetic the sampler-and-ROP path performs.
 pub(crate) fn blit_texture(
     res: &mut SessionResources,
     src: u32,
@@ -286,7 +300,7 @@ pub(crate) fn blit_texture(
     dst_extent: &Extent3d,
     filter: Filter,
 ) -> Result<()> {
-    let (sw, bpt, src_fmt) = {
+    let (sw, src_bpt, src_fmt) = {
         let t = texture(res, src)?;
         (
             t.desc.width as usize,
@@ -298,25 +312,33 @@ pub(crate) fn blit_texture(
     let (sox, soy) = (src_origin.x as usize, src_origin.y as usize);
     let (sew, seh) = (src_extent.width as usize, src_extent.height as usize);
     let (dew, deh) = (dst_extent.width as usize, dst_extent.height as usize);
-    let dw = texture(res, dst)?.desc.width as usize;
+    let (dw, dst_bpt, dst_fmt) = {
+        let t = texture(res, dst)?;
+        (
+            t.desc.width as usize,
+            t.desc.format.software_texel_bytes()?,
+            t.desc.format,
+        )
+    };
     let t = texture_mut(res, dst)?;
     for dy in 0..deh {
         let fy = soy as f32 + (dy as f32 + 0.5) * seh as f32 / deh as f32;
         for dx in 0..dew {
             let fx = sox as f32 + (dx as f32 + 0.5) * sew as f32 / dew as f32;
-            let texel = match filter {
+            // Both filters produce the source colour as VALUES; only how the neighbourhood is reduced
+            // differs. Encoding into the destination is then one shared step, so the two filters cannot
+            // come to different conclusions about what a format means — which is exactly what happened
+            // while nearest copied bytes and linear interpolated them.
+            let rgba = match filter {
                 Filter::Nearest => {
                     let sx = (fx as usize).clamp(sox, sox + sew - 1);
                     let sy = (fy as usize).clamp(soy, soy + seh - 1);
-                    texel_at(&src_pixels, sw, sx, sy, bpt).to_vec()
+                    src_fmt.texel_to_f32(texel_at(&src_pixels, sw, sx, sy, src_bpt))
                 }
-                // A linear filter the oracle cannot define for this plane is a typed refusal, not a
-                // fallback to nearest: silently changing the filter would make the blit disagree with the
-                // executor and look like a filtering difference rather than an unsupported operation.
                 Filter::Linear => sample_bilinear(
                     &src_pixels,
                     sw,
-                    bpt,
+                    src_bpt,
                     fx,
                     fy,
                     sox,
@@ -324,15 +346,21 @@ pub(crate) fn blit_texture(
                     soy,
                     soy + seh - 1,
                     src_fmt,
-                )
-                .ok_or(GpuError::Unsupported(
-                    "software: linear filter for this texel format",
-                ))?,
+                ),
             };
+            // A filter or a format this oracle cannot express is a typed refusal, never a fallback:
+            // quietly substituting another filter or a byte copy would read as a filtering difference
+            // rather than as an unsupported operation.
+            let rgba = rgba.ok_or(GpuError::Unsupported(
+                "software: blit filter for this texel format",
+            ))?;
+            let texel = dst_fmt.clear_texel(rgba).ok_or(GpuError::Unsupported(
+                "software: blit into this texel format",
+            ))?;
             let hlx = dst_origin.x as usize + dx;
             let hly = dst_origin.y as usize + dy;
-            let off = (hly * dw + hlx) * bpt;
-            t.pixels[off..off + bpt].copy_from_slice(&texel);
+            let off = (hly * dw + hlx) * dst_bpt;
+            t.pixels[off..off + dst_bpt].copy_from_slice(&texel);
         }
     }
     Ok(())

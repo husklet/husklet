@@ -1,5 +1,16 @@
 use super::{validation::*, *};
 
+/// Formats whose texels are raw integers, which cannot take part in a blit on either side. See the
+/// refusal in `BlitTexture` below for why this is the host's rule rather than this oracle's.
+const INTEGER_BLIT_REFUSED: &[TextureFormat] = &[
+    TextureFormat::R8Uint,
+    TextureFormat::R8Sint,
+    TextureFormat::Rg8Uint,
+    TextureFormat::Rg8Sint,
+    TextureFormat::Rgba8Uint,
+    TextureFormat::Rgba8Sint,
+];
+
 pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderState) -> Result<()> {
     match op {
         Enc::BeginRenderPass { color, depth } => {
@@ -380,8 +391,31 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
             if s_samples != 1 || d.desc.sample_count != 1 {
                 return Err(GpuError::Unsupported("software: multisample blit"));
             }
-            if s_fmt.software_texel_bytes()? != d.desc.format.software_texel_bytes()? {
-                return Err(GpuError::Invalid("blit between incompatible texel sizes"));
+            // Both sides must have a plain-colour texel; their SIZES need not match. Requiring equal
+            // sizes was this reference's own invention: the executor blits by rendering — sampling the
+            // source and writing the destination as a colour attachment — so `R8Unorm` into `Rgba8Unorm`
+            // and `Rgba16Float` into `Rgba8Unorm` both run there, and refusing them here produced a
+            // divergence that belonged to the oracle rather than to either backend.
+            let d_fmt = d.desc.format;
+            let (_, _) = (
+                s_fmt.software_texel_bytes()?,
+                d_fmt.software_texel_bytes()?,
+            );
+            // An INTEGER format cannot take part in a blit on either side, which the host settles rather
+            // than this oracle: wgpu refuses the source (an integer view cannot bind to a filterable
+            // float sampler) and refuses the destination (the blit shader's float output is incompatible
+            // with an integer colour target). Matching that refusal here keeps the two backends agreeing
+            // about what is legal instead of only about what the legal cases produce.
+            //
+            // UNREACHABLE TODAY, and asserted as such by test: integer formats are absent from
+            // `COLOR_FORMATS`, so this oracle advertises none and `CreateTexture` refuses one before a
+            // blit can name it. Kept because the capability doc contemplates that changing.
+            for format in [s_fmt, d_fmt] {
+                if INTEGER_BLIT_REFUSED.contains(&format) {
+                    return Err(GpuError::Unsupported(
+                        "software: blit of an integer texel format",
+                    ));
+                }
             }
             let s = texture(res, *src)?;
             copy::check_region_in_texture(s, src_origin, src_extent)?;

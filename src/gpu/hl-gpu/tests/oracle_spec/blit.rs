@@ -328,3 +328,169 @@ fn an_integer_plane_cannot_reach_the_linear_filter_because_it_cannot_be_created(
     }
 
 }
+
+/// A blit between DIFFERENT formats converts, and the two texel sizes need not match.
+///
+/// The contract here is the host's, established by measuring it. The wgpu executor blits by rendering —
+/// it samples the source and writes the destination as a colour attachment — so a differing format is a
+/// conversion through the sampler and the ROP, and a size change is fine. Measured directly on lavapipe,
+/// it accepts `Rgba8Unorm` into `Bgra8Unorm`, `Rgba8Srgb`, `R32Float` and `Rgba16Float`, and accepts
+/// `R8Unorm` into `Rgba8Unorm` and `Rgba16Float` into `Rgba8Unorm` across a size change.
+///
+/// This oracle disagreed in BOTH directions, which is the reason to pin it here rather than only in the
+/// differential. It refused every size change, so it diverged on operations the executor performs
+/// perfectly well. And on the pairs it did accept, its nearest filter copied the source texel's raw
+/// bytes: `Rgba8Unorm` into `R32Float` is four bytes either way, so unsigned bytes were reinterpreted as
+/// a float while the executor converted, and both backends ran and silently disagreed.
+#[test]
+fn a_blit_converts_between_formats_and_across_texel_sizes() {
+    // A one-channel source widening into four: the executor samples R8 as (r, 0, 0, 1), so the
+    // destination takes the red channel and an opaque alpha — and the sizes differ, which this oracle
+    // used to refuse outright.
+    let (exec, s) = run(&[
+        Cmd::CreateBuffer(1, buf(2, buffer_usage::COPY_SRC | buffer_usage::COPY_DST)),
+        Cmd::WriteBuffer {
+            id: 1,
+            offset: 0,
+            data: vec![255u8, 0],
+        },
+        Cmd::CreateTexture(
+            1,
+            tex(
+                2,
+                1,
+                TextureFormat::R8Unorm,
+                texture_usage::COPY_DST | texture_usage::COPY_SRC,
+            ),
+        ),
+        Cmd::CreateTexture(
+            2,
+            tex(
+                2,
+                1,
+                TextureFormat::Rgba8Unorm,
+                texture_usage::COPY_DST | texture_usage::COPY_SRC,
+            ),
+        ),
+        Cmd::Submit(CommandBuffer {
+            encoder: vec![
+                Enc::CopyBufferToTexture {
+                    src: 1,
+                    src_offset: 0,
+                    bytes_per_row: 2,
+                    dst: 1,
+                    mip: 0,
+                    width: 2,
+                    height: 1,
+                },
+                Enc::BlitTexture {
+                    src: 1,
+                    src_sub: TextureSubresource::base(),
+                    src_origin: Origin3d::default(),
+                    src_extent: Extent3d {
+                        width: 2,
+                        height: 1,
+                        depth: 1,
+                    },
+                    dst: 2,
+                    dst_sub: TextureSubresource::base(),
+                    dst_origin: Origin3d::default(),
+                    dst_extent: Extent3d {
+                        width: 2,
+                        height: 1,
+                        depth: 1,
+                    },
+                    filter: Filter::Nearest,
+                },
+            ],
+            signal: None,
+        }),
+    ]);
+    let mut out = vec![0u8; 8];
+    exec.read_texture(&s.resources, TextureId(2), &mut out)
+        .expect("the widened destination is readable");
+    assert_eq!(
+        out,
+        vec![255, 0, 0, 255, 0, 0, 0, 255],
+        "a one-channel source widens to (r, 0, 0, 1), and the size change is legal"
+    );
+}
+
+/// The nearest filter CONVERTS across formats rather than copying bytes, which is the half a same-size
+/// pair hides.
+///
+/// `Rgba8Unorm` and `R32Float` are both four bytes, so a byte copy passes every length check and produces
+/// a number. The source texel here is (255, 0, 0, 255) — red — which as a float plane must read 1.0, and
+/// as a verbatim byte copy reads whatever `0xFF0000FF` happens to mean as an f32. That the two are wildly
+/// different is the point: a same-size cross-format pair is exactly where a reinterpret survives review.
+#[test]
+fn a_nearest_blit_converts_rather_than_reinterpreting_a_same_size_texel() {
+    let (exec, s) = run(&[
+        Cmd::CreateBuffer(1, buf(4, buffer_usage::COPY_SRC | buffer_usage::COPY_DST)),
+        Cmd::WriteBuffer {
+            id: 1,
+            offset: 0,
+            data: vec![255u8, 0, 0, 255],
+        },
+        Cmd::CreateTexture(
+            1,
+            tex(
+                1,
+                1,
+                TextureFormat::Rgba8Unorm,
+                texture_usage::COPY_DST | texture_usage::COPY_SRC,
+            ),
+        ),
+        Cmd::CreateTexture(
+            2,
+            tex(
+                1,
+                1,
+                TextureFormat::R32Float,
+                texture_usage::COPY_DST | texture_usage::COPY_SRC,
+            ),
+        ),
+        Cmd::Submit(CommandBuffer {
+            encoder: vec![
+                Enc::CopyBufferToTexture {
+                    src: 1,
+                    src_offset: 0,
+                    bytes_per_row: 4,
+                    dst: 1,
+                    mip: 0,
+                    width: 1,
+                    height: 1,
+                },
+                Enc::BlitTexture {
+                    src: 1,
+                    src_sub: TextureSubresource::base(),
+                    src_origin: Origin3d::default(),
+                    src_extent: Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth: 1,
+                    },
+                    dst: 2,
+                    dst_sub: TextureSubresource::base(),
+                    dst_origin: Origin3d::default(),
+                    dst_extent: Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth: 1,
+                    },
+                    filter: Filter::Nearest,
+                },
+            ],
+            signal: None,
+        }),
+    ]);
+    let mut out = vec![0u8; 4];
+    exec.read_texture(&s.resources, TextureId(2), &mut out)
+        .expect("the float destination is readable");
+    let got = f32::from_le_bytes(out.clone().try_into().expect("four bytes"));
+    assert_eq!(
+        got, 1.0,
+        "a red unorm texel is 1.0 in a float plane; a byte copy would give {:e}",
+        f32::from_le_bytes([255, 0, 0, 255])
+    );
+}
