@@ -964,6 +964,13 @@ refused identically and the assertions passed while establishing nothing. It sur
 control expected to *succeed* also failed. Pair every refusal assertion with a positive control you expect
 to pass, and prove the normal path first.
 
+A generator that writes and reads through the same addressing function agrees with itself. Two controls
+passed against a deliberately broken reference: an off-by-one in the level offset was invisible because the
+program stored level one where it later looked for level one, and a dropped clamp was invisible because
+every base was square and a square base bottoms out at one by one without needing the clamp. Read back
+through a *different* path than you wrote, and choose case dimensions that do not satisfy the rule by
+accident.
+
 A crash agreeing with a refusal is not agreement. A differential comparing two sides through a success-or-
 failure predicate reported green when one side panicked, because a caught panic reads as a refusal. The
 control that should have caught a reverted bounds check passed. Once a panic and a device-validation error
