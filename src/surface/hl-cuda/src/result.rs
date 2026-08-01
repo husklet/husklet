@@ -141,6 +141,8 @@ pub const CUDART_ERROR_INITIALIZATION: i32 = 3; // cudaErrorInitializationError
 pub const CUDART_ERROR_INVALID_DEVICE_FUNCTION: i32 = 98; // cudaErrorInvalidDeviceFunction
 pub const CUDART_ERROR_INVALID_DEVICE: i32 = 101; // cudaErrorInvalidDevice
 pub const CUDART_ERROR_INVALID_KERNEL_IMAGE: i32 = 200; // cudaErrorInvalidKernelImage
+/// Runtime-API counterpart of `CUDA_ERROR_ALREADY_MAPPED`.
+pub const CUDART_ERROR_ALREADY_MAPPED: i32 = 27;
 pub const CUDART_ERROR_INVALID_PTX: i32 = 218; // cudaErrorInvalidPtx
 pub const CUDART_ERROR_INVALID_RESOURCE_HANDLE: i32 = 400; // cudaErrorInvalidResourceHandle
 pub const CUDART_ERROR_SYMBOL_NOT_FOUND: i32 = 500; // cudaErrorSymbolNotFound
@@ -187,6 +189,7 @@ impl DriverStatus<'_> {
                 Some(RefusalKind::ResourceLimit) => CUDA_ERROR_OUT_OF_MEMORY,
                 Some(RefusalKind::UnknownId) => CUDA_ERROR_INVALID_HANDLE,
                 Some(RefusalKind::Kernel) => CUDA_ERROR_INVALID_PTX,
+                Some(RefusalKind::MappedElsewhere) => CUDA_ERROR_ALREADY_MAPPED,
                 Some(RefusalKind::Invalid) | Some(RefusalKind::OutOfBounds) => {
                     CUDA_ERROR_INVALID_VALUE
                 }
@@ -236,6 +239,7 @@ impl RuntimeStatus<'_> {
                 Some(RefusalKind::ResourceLimit) => CUDART_ERROR_MEMORY_ALLOCATION,
                 Some(RefusalKind::UnknownId) => CUDART_ERROR_INVALID_RESOURCE_HANDLE,
                 Some(RefusalKind::Kernel) => CUDART_ERROR_INVALID_PTX,
+                Some(RefusalKind::MappedElsewhere) => CUDART_ERROR_ALREADY_MAPPED,
                 Some(RefusalKind::Invalid) | Some(RefusalKind::OutOfBounds) => {
                     CUDART_ERROR_INVALID_VALUE
                 }

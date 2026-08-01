@@ -134,6 +134,13 @@ impl Status {
                     Some(RefusalKind::Unsupported) => VK_ERROR_FEATURE_NOT_PRESENT,
                     Some(RefusalKind::OutOfBounds) => VK_ERROR_MEMORY_MAP_FAILED,
                     Some(RefusalKind::UnknownId) => VK_ERROR_UNKNOWN,
+                    // Agrees with the local mapping, and that agreement is VACUOUS. Both sides are
+                    // `VK_ERROR_UNKNOWN` because Vulkan has no code for transient contention, not
+                    // because this is the right answer — see the local `MappedElsewhere` arm above and
+                    // the "constraint on Vulkan sharing" section of `src/gpu/hl-gpu/SHARING.md`. A green
+                    // `a_classified_refusal_maps_like_the_local_error` proves consistency here and says
+                    // NOTHING about correctness; do not read it as evidence the mapping is good.
+                    Some(RefusalKind::MappedElsewhere) => VK_ERROR_UNKNOWN,
                     // Grouped with `Invalid`, which is the class a kernel-lowering refusal carried before
                 // `RefusalKind::Kernel` existed; Vulkan's reported codes are unchanged by that split.
                 Some(RefusalKind::Invalid) | Some(RefusalKind::Kernel) => {

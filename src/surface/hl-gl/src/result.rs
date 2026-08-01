@@ -88,6 +88,7 @@ impl From<&GpuError> for EglError {
                 Some(RefusalKind::ResourceLimit) => EGL_BAD_ALLOC,
                 Some(RefusalKind::Unsupported) => EGL_BAD_MATCH,
                 Some(RefusalKind::UnknownId) => EGL_BAD_SURFACE,
+                Some(RefusalKind::MappedElsewhere) => EGL_BAD_ACCESS,
                 // `Kernel` is grouped with `Invalid` deliberately: before the class existed, a shader the
                 // host could not lower arrived here as `Invalid`, and GL has no distinct code for
                 // "unlowerable program" at this boundary the way CUDA's `CUDA_ERROR_INVALID_PTX` does.
@@ -133,6 +134,11 @@ impl From<&GpuError> for GlError {
             // could not be performed, which is all the host actually said.
             GpuError::Transport(failure) if failure.refusal() => match failure.refusal_kind() {
                 Some(RefusalKind::ResourceLimit) => GL_OUT_OF_MEMORY,
+                // GL has no contention code; INVALID_OPERATION is the closest honest one — the call was
+                // not legal in the current state, which is exactly true while another connection holds
+                // the map. Unlike Vulkan this loses little: it is also what a real GL raises for using a
+                // buffer that is mapped.
+                Some(RefusalKind::MappedElsewhere) => GL_INVALID_OPERATION,
                 Some(RefusalKind::Invalid)
                 | Some(RefusalKind::Kernel)
                 | Some(RefusalKind::OutOfBounds) => GL_INVALID_VALUE,

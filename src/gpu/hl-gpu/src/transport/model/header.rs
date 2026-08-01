@@ -49,6 +49,15 @@ pub const ACK_UNKNOWN_ID: u8 = 6;
 /// class at all.
 pub const ACK_KERNEL: u8 = 7;
 
+/// The host refused because a resource shared across connections is mapped by a different one. A TIMING
+/// refusal: the identical frame from the same guest succeeds once the holder unmaps.
+///
+/// Allocated ABOVE every code that shipped before it, which is what makes it additive — a guest that
+/// predates this value has no arm for it and takes `from_ack`'s wildcard to `Unstated`, landing on the
+/// same generic refusal it always did. That property is asserted in `an_older_guest_reads_a_newer_code_as_unstated`,
+/// not argued: a wildcard doing the right thing stays right only until someone adds an arm above it.
+pub const ACK_MAPPED_ELSEWHERE: u8 = 8;
+
 /// Why the host refused a frame, as far as one acknowledgement byte can say.
 ///
 /// This is a REASON CLASS, not an identity: it says what kind of thing was wrong, never which command in
@@ -65,6 +74,9 @@ pub enum RefusalKind {
     UnknownId,
     /// The host could not lower the shader/kernel payload.
     Kernel,
+    /// A resource shared across connections is mapped by another one. Recoverable BY WAITING, unlike
+    /// every other kind here, which are recoverable only by sending something different.
+    MappedElsewhere,
 }
 
 impl RefusalKind {
@@ -79,6 +91,7 @@ impl RefusalKind {
             ACK_OUT_OF_BOUNDS => Self::OutOfBounds,
             ACK_UNKNOWN_ID => Self::UnknownId,
             ACK_KERNEL => Self::Kernel,
+            ACK_MAPPED_ELSEWHERE => Self::MappedElsewhere,
             _ => Self::Unstated,
         }
     }
@@ -92,6 +105,7 @@ impl RefusalKind {
             Self::OutOfBounds => ACK_OUT_OF_BOUNDS,
             Self::UnknownId => ACK_UNKNOWN_ID,
             Self::Kernel => ACK_KERNEL,
+            Self::MappedElsewhere => ACK_MAPPED_ELSEWHERE,
         }
     }
 
@@ -114,11 +128,9 @@ impl RefusalKind {
             | E::ShortBuffer
             | E::TrailingBytes => Self::Invalid,
             E::Kernel(_) => Self::Kernel,
-            // A TIMING refusal, not a malformed request. It is classified `Invalid` on the wire only
-            // because the wire has no code for "retry later"; the guest driver must not cache this as a
-            // permanent property of the command, because the identical command succeeds once the holder
-            // unmaps. Give it its own ACK code before any guest starts making decisions on this one.
-            E::MappedElsewhere { .. } => Self::Invalid,
+            // A TIMING refusal, and now the only kind on this wire that a guest could recover from by
+            // waiting rather than by sending something different.
+            E::MappedElsewhere { .. } => Self::MappedElsewhere,
             E::Decode(_) | E::Transport(_) | E::Panicked(_) => Self::Unstated,
         }
     }
@@ -240,6 +252,7 @@ mod refusal_tests {
             RefusalKind::OutOfBounds,
             RefusalKind::UnknownId,
             RefusalKind::Kernel,
+            RefusalKind::MappedElsewhere,
         ];
         // A hand-written list silently stops covering the thing it guards the moment a variant is
         // added — `Kernel` was added and this list did not notice. The match below is enumerated by the
@@ -253,12 +266,13 @@ mod refusal_tests {
                 | RefusalKind::Invalid
                 | RefusalKind::OutOfBounds
                 | RefusalKind::UnknownId
-                | RefusalKind::Kernel => {}
+                | RefusalKind::Kernel
+                | RefusalKind::MappedElsewhere => {}
             }
         }
         assert_eq!(
             sent.len(),
-            7,
+            8,
             "a refusal class was added; name it in `sent` so its byte is checked for collisions"
         );
         let mut bytes: Vec<u8> = sent.iter().map(|k| k.ack()).collect();

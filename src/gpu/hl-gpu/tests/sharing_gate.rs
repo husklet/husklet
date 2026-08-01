@@ -231,3 +231,65 @@ fn cost_of_the_guard() {
         );
     }
 }
+
+/// A host emitting the new acknowledgement to a guest that PREDATES it must land on `Unstated`.
+///
+/// This is the property that makes `ACK_MAPPED_ELSEWHERE` additive rather than breaking, and it was a
+/// claim about a wildcard arm until it was measured. A wildcard doing the right thing is true only until
+/// someone adds a match arm above it, so the old guest is reconstructed literally below — the exact
+/// `from_ack` body as it stood before the code existed — and fed the new byte.
+#[test]
+fn an_older_guest_reads_a_newer_code_as_unstated() {
+    use hl_gpu::transport::model::header::*;
+
+    /// `RefusalKind::from_ack` exactly as it was before `ACK_MAPPED_ELSEWHERE` existed. Copied rather
+    /// than referenced on purpose: the point is to run the OLD decoder against the NEW byte.
+    fn from_ack_before(ack: u8) -> RefusalKind {
+        match ack {
+            ACK_UNSUPPORTED => RefusalKind::Unsupported,
+            ACK_RESOURCE_LIMIT => RefusalKind::ResourceLimit,
+            ACK_INVALID => RefusalKind::Invalid,
+            ACK_OUT_OF_BOUNDS => RefusalKind::OutOfBounds,
+            ACK_UNKNOWN_ID => RefusalKind::UnknownId,
+            ACK_KERNEL => RefusalKind::Kernel,
+            _ => RefusalKind::Unstated,
+        }
+    }
+
+    // The measurement: the old decoder, the new byte.
+    assert_eq!(
+        from_ack_before(ACK_MAPPED_ELSEWHERE),
+        RefusalKind::Unstated,
+        "an older guest must read the new code as an unclassified refusal — still a refusal, and still \
+         recoverable. Anything else means this wire change was not additive."
+    );
+
+    // The reconstruction is only faithful if it still agrees with the real decoder everywhere else. Two
+    // copies of a match that have silently diverged would make the assertion above meaningless.
+    for ack in [
+        ACK_UNSUPPORTED,
+        ACK_RESOURCE_LIMIT,
+        ACK_INVALID,
+        ACK_OUT_OF_BOUNDS,
+        ACK_UNKNOWN_ID,
+        ACK_KERNEL,
+        ACK_FAIL,
+        200,
+    ] {
+        assert_eq!(
+            from_ack_before(ack),
+            RefusalKind::from_ack(ack),
+            "the reconstructed old decoder disagrees with the current one on {ack}, so it is not a \
+             faithful stand-in for the old guest and the assertion above proves nothing"
+        );
+    }
+
+    // And the new byte is genuinely new: the current decoder must NOT read it as Unstated.
+    assert_eq!(
+        RefusalKind::from_ack(ACK_MAPPED_ELSEWHERE),
+        RefusalKind::MappedElsewhere,
+        "a positive control — if the current decoder also said Unstated, the test above would pass \
+         while the feature did nothing"
+    );
+    assert_eq!(RefusalKind::MappedElsewhere.ack(), ACK_MAPPED_ELSEWHERE, "round trip");
+}
