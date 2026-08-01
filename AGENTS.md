@@ -932,6 +932,11 @@ A shipped diagnostic explaining why something cannot be done deserves the same s
 because it is the reason nobody investigates it — and unlike a comment it has an audience, so it goes on
 being believed after the code stops being true.
 
+The shared working directory is not versioned, and one documentation directory in the repository is
+ignored. A finding written to either exists only until that directory does. Land anything worth keeping in
+a tracked path — beside the tests it explains is the best place, because the person who needs it is already
+opening that file.
+
 A guard written against the symptom is not a guard against the condition. Two vertex attributes sharing a
 buffer are split into separate slots only when one would not fit inside the other's stride — which is a
 test for whether the host will reject the layout, not for whether the strides agree. An attribute whose
