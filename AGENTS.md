@@ -988,6 +988,10 @@ Scope a blocker to the layer you actually measured. A failed package fetch insid
 "host egress is down"; the host had working egress the whole time and only the guest workspace did not.
 The observation was real and the name would have sent the next person to the wrong layer.
 
+An extension string is a promise to every application, not only to the one being traced. A capability was
+measured as safe for the specific consumer whose failure prompted it and unsafe for the general case, and
+the right answer was still to refuse — because the promise is read by callers nobody profiled.
+
 When you widen what the driver advertises, enumerate every path that must serve the widened set before
 shipping it. A format ungate moved seven hundred and eighty-three cases from honestly declined to running
 and failing, because image creation and the format query both learned a new image type and the view path
