@@ -2,10 +2,14 @@ use super::*;
 use crate::protocol::model::command::etag;
 
 /// The encoder ops this oracle actually replays. It is [`ALL_COMMANDS`] MINUS the two explicit-region
-/// buffer↔texture copies: the oracle materializes only mip 0 of a single layer, so it refuses those two
-/// ops outright (`software: layered or offset buffer-texture copy`). Advertising a command the executor
-/// then refuses is the failure the capability handshake exists to prevent — a guest that requires them
-/// must fail cleanly at negotiation, not at replay.
+/// buffer↔texture copies: the oracle materializes only mip 0, so it refuses those two ops outright
+/// (`software: layered or offset buffer-texture copy`). Advertising a command the executor then refuses
+/// is the failure the capability handshake exists to prevent — a guest that requires them must fail
+/// cleanly at negotiation, not at replay.
+///
+/// These are ENCODER etags. `Cmd::CreateTextureView`, which this executor also refuses, is a top-level
+/// command with no bit in this set, so its refusal reaches the caller at replay rather than at
+/// negotiation — a gap in the handshake's coverage rather than in this list.
 const REPLAYED_COMMANDS: &[u8] = &[
     etag::BEGIN_RENDER_PASS,
     etag::END_RENDER_PASS,
@@ -98,7 +102,26 @@ impl GpuExecutor for CpuExecutor {
                 Cmd::DestroyTexture(id) => {
                     res.textures.remove(*id)?;
                 }
-                Cmd::CreateTextureView(id, view) => {
+                // A texture VIEW is an ALIAS of its texture, and this reference cannot express one.
+                //
+                // It used to accept the base view — whole mip, whole layer — by CLONING the texture into
+                // the view's id. That is a snapshot, not an alias, and the difference is observable in
+                // both directions. Measured against the executor on one program: clear the texture red,
+                // then clear THROUGH a base view green, then read the texture. The executor reports green
+                // (the view names the same image); this reference reported red, because the write landed
+                // in a copy. Reading a view after writing its texture diverges the same way with the
+                // roles swapped. Nothing caught it because no differential generator emits a view.
+                //
+                // Refused rather than modelled, because a wrong answer here is worse than no answer: an
+                // oracle that quietly disagrees with the subject is the thing the differential is built
+                // to detect, and it cannot detect it in itself. A faithful alias needs two ids to name
+                // one object, which contradicts the singular-ownership rule this executor's storage is
+                // built on (see `cpu::model`) and outlives the parent on the executor besides — so it is
+                // a change to the resource model, not to this arm.
+                //
+                // Non-base views were already refused, and their message is kept for that case so the
+                // narrower refusal stays distinguishable from this general one.
+                Cmd::CreateTextureView(_, view) => {
                     if view.base_mip != 0
                         || view.mip_count != 1
                         || view.base_layer != 0
@@ -106,13 +129,9 @@ impl GpuExecutor for CpuExecutor {
                     {
                         return Err(GpuError::Unsupported("software: texture subresource views"));
                     }
-                    let texture = texture(res, view.texture)?.clone();
-                    if view.format != texture.desc.format
-                        || view.aspect != crate::protocol::model::enums::TextureAspect::All
-                    {
-                        return Err(GpuError::Invalid("software: incompatible texture view"));
-                    }
-                    res.textures.insert(*id, Box::new(texture))?;
+                    return Err(GpuError::Unsupported(
+                        "software: texture views (a view aliases its texture; this reference has no alias)",
+                    ));
                 }
                 Cmd::DestroyTextureView(id) => {
                     res.textures.remove(*id)?;

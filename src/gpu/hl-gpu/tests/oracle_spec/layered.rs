@@ -15,6 +15,7 @@
 
 use super::*;
 use hl_gpu::protocol::model::descriptor::Mirror;
+use hl_gpu::protocol::model::descriptor::TextureViewDesc;
 use hl_gpu::protocol::model::enums::TextureAspect;
 use hl_gpu::GpuError;
 
@@ -330,4 +331,62 @@ fn the_dimensions_with_no_shared_operation_stay_refused() {
     // Control: 2D, layered and not, is accepted — so the refusals above are about the dimension.
     assert!(try_run(&[Cmd::CreateTexture(1, layered(2, 2, 1, COPYABLE))]).is_ok());
     assert!(try_run(&[Cmd::CreateTexture(1, layered(2, 2, 4, COPYABLE))]).is_ok());
+}
+
+/// A texture VIEW is refused, because this reference cannot alias and a snapshot is worse than nothing.
+///
+/// The base view — whole mip, whole layer — used to be accepted by cloning the texture into the view's
+/// id. Measured against the executor on one program (clear the texture red, clear THROUGH a base view
+/// green, read the texture): the executor reports green because the view names the same image; this
+/// reference reported red, because the write landed in a copy. That is a live disagreement in an
+/// advertised path, and the differential could not see it because no generator emits a view.
+///
+/// The non-base refusal is asserted separately, because it is the narrower and older statement and must
+/// stay distinguishable — collapsing the two would lose the fact that subresource selection is a
+/// different missing thing from aliasing.
+///
+/// Retirement condition, so this is checkable rather than folklore: a faithful view needs two ids to name
+/// one object, and to keep that object alive while either id lives (the executor's view holds a reference
+/// to the texture, so destroying the texture does not invalidate it). That contradicts the
+/// singular-ownership rule this executor's storage is built on — one id, one object — so it is a change
+/// to the resource model, not to the view arm. When the resource table can express shared ownership,
+/// this refusal becomes an alias and the test below becomes a round-trip.
+#[test]
+fn a_texture_view_is_refused_rather_than_modelled_as_a_copy() {
+    let base_view = TextureViewDesc {
+        texture: 1,
+        dim: TextureDim::D2,
+        format: RGBA,
+        aspect: TextureAspect::All,
+        base_mip: 0,
+        mip_count: 1,
+        base_layer: 0,
+        layer_count: 1,
+    };
+    let attempt = |view: TextureViewDesc| {
+        try_run(&[
+            Cmd::CreateTexture(1, layered(2, 2, 1, COPYABLE)),
+            Cmd::CreateTextureView(2, view),
+        ])
+    };
+
+    // Positive control: the texture alone is created happily, so the refusals are about the VIEW.
+    assert!(try_run(&[Cmd::CreateTexture(1, layered(2, 2, 1, COPYABLE))]).is_ok());
+
+    let err = attempt(base_view.clone()).expect_err("a base view must be refused, not cloned");
+    assert!(
+        matches!(err, GpuError::Unsupported(m) if m.contains("a view aliases its texture")),
+        "the base view must be refused for the reason that makes it wrong, got {err:?}"
+    );
+
+    // The narrower, older refusal is still its own answer.
+    let err = attempt(TextureViewDesc {
+        base_layer: 1,
+        ..base_view
+    })
+    .expect_err("a non-base view must be refused");
+    assert!(
+        matches!(err, GpuError::Unsupported(m) if m.contains("subresource views")),
+        "a non-base view keeps the narrower message, got {err:?}"
+    );
 }

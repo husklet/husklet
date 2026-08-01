@@ -263,6 +263,28 @@ fn sampling_an_array_layer_returns_that_layers_texel() {
 ///
 /// What the probe DID justify fixing is beside it: see
 /// `a_texture_that_is_not_a_render_target_is_refused_where_the_caller_can_see_it`.
+///
+/// SECOND FOLLOW-UP, measured, after the reference learned layered textures. The blocker recorded above
+/// no longer holds — the reference creates a layered texture now — and the widening is STILL not done,
+/// because the blocker moved rather than cleared. With the usage granted to a 2D-array texture the
+/// executor serves exactly two new things: a blit into layer 0 of a layered destination, which the
+/// reference already computes correctly, and an explicit single-layer `D2` view of an array texture as a
+/// colour target, which it does not. The array's own default view still fails, so the widening also
+/// requires the attachment guard to refuse a bound view that is not single-layer `D2`, or the
+/// `MissingFeatures(MULTIVIEW)` message comes straight back — the guard consults the grant, so widening
+/// the grant re-opens the path it closed.
+///
+/// The explicit-view half is what the reference cannot follow, and the reason is one layer deeper than
+/// the usage: its texture VIEW is a whole-texture snapshot clone rather than an alias, so it cannot
+/// represent "layer 1 of this texture" at all. That was a live divergence on its own — measured on a
+/// program needing no widening whatever — and is now an honest refusal (`oracle_spec::layered`,
+/// `a_texture_view_is_refused_rather_than_modelled_as_a_copy`), which carries the retirement condition:
+/// the resource table must be able to let two ids name one object.
+///
+/// So the widening's both-sides-servable surface is one case, the blit destination, and it would cost a
+/// grant change plus a new attachment predicate plus a way to keep the executor from accepting the
+/// view case the reference must refuse. That is more machinery than the one case earns, and it would
+/// deliberately suppress a capability the executor genuinely has. Left undone on purpose, again.
 /// A texture that is not a render target is refused by name, not by device validation.
 ///
 /// The creation-time usage rule decides only which textures GET `RENDER_ATTACHMENT`. It is not a guard:
