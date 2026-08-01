@@ -35,7 +35,92 @@ impl NativeState {
             canceled_order: VecDeque::new(),
             serial_capacity: capacity,
             token_capacity: capacity.saturating_mul(128).max(256),
+            deferrals: Deferrals::default(),
+            // Five seconds: long enough that a busy surface contributes one line every few seconds
+            // rather than one per frame, short enough that a reader watching a stuck client sees the
+            // outstanding count and its age climb while they are still watching.
+            report: crate::diagnostic::Heartbeat::new(std::time::Duration::from_secs(5)),
         }
+    }
+
+    /// Record one deferral's fate, then report the running picture on a cadence.
+    ///
+    /// The report exists because `Defer::Waiting` had no voice at all: a commit parked forever and a
+    /// commit never made produced the same silence, and reading that silence as "nothing is deferring"
+    /// cost this fleet a day of bounding a defect. It is emitted at ERROR level so it survives a
+    /// release build — the two `hl_debug!` lines in `defer` and `defer_pending` are compiled out of
+    /// the build that ships, which is why they were no help — and on the `PRESENT` tag, which is the
+    /// one an operator investigating presentation already enables.
+    ///
+    /// It proves its own liveness rather than reporting an absence: every line carries a positive
+    /// total for each of the four fates WITH the window they accumulated over, so "no deferrals at
+    /// all" and "deferrals that never complete" cannot print the same thing. `oldest_ms` is the age of
+    /// the longest-outstanding park, which is the number that says the hypothesis is right.
+    fn note(&mut self, key: Option<Key>, outcome: DeferOutcome) {
+        match outcome {
+            DeferOutcome::Joined => self.deferrals.joined += 1,
+            DeferOutcome::Reused => self.deferrals.reused += 1,
+            DeferOutcome::Refused => self.deferrals.refused += 1,
+            DeferOutcome::Parked => {
+                self.deferrals.parked += 1;
+                if let Some(key) = key {
+                    self.deferrals
+                        .parked_at
+                        .entry(key)
+                        .or_insert_with(Instant::now);
+                }
+            }
+        }
+        self.report_deferrals();
+    }
+
+    /// The cadenced line. Also called from the frame drain so a client that stops committing entirely
+    /// still has its outstanding parks reported — an instrument that only speaks when the subject acts
+    /// goes quiet exactly when the subject wedges.
+    pub(super) fn report_deferrals(&mut self) {
+        // Pruned against the live tables rather than maintained at every removal site: a key that is
+        // no longer parked cannot inflate `oldest_ms`, however its commit was retired.
+        let commits = &self.commits;
+        self.deferrals
+            .parked_at
+            .retain(|key, _| commits.contains_key(key));
+        let outstanding = self.commits.len();
+        let pending: usize = self.pending.values().map(VecDeque::len).sum();
+        if outstanding == 0 && pending == 0 && self.deferrals.parked == 0 {
+            // Nothing has ever been deferred and nothing is outstanding. Saying so every five seconds
+            // would drown the log; the first deferral reports immediately, so silence here is bounded
+            // by "no client has ever deferred a commit", which the counters state the moment one does.
+            return;
+        }
+        let Some(beat) = self.report.record(()) else {
+            return;
+        };
+        let oldest_ms = self
+            .deferrals
+            .parked_at
+            .values()
+            .map(|at| at.elapsed().as_millis())
+            .max()
+            .unwrap_or(0);
+        hl_log::hl_log!(
+            hl_log::tag::PRESENT,
+            hl_log::Level::Error,
+            "native deferrals joined={} reused={} parked={} refused={} outstanding={} \
+             pending={} oldest_ms={} in {}ms ({} reports). Not a fault by itself: `parked` counts \
+             commits waiting for their native frame and `joined` counts the ones that got it. \
+             `outstanding` staying non-zero while `oldest_ms` climbs and `joined` does not is a \
+             commit that will never complete, which is indistinguishable from one never made unless \
+             this line exists.",
+            self.deferrals.joined,
+            self.deferrals.reused,
+            self.deferrals.parked,
+            self.deferrals.refused,
+            outstanding,
+            pending,
+            oldest_ms,
+            beat.window.as_millis(),
+            beat.total
+        );
     }
 
     pub(super) fn defer(&mut self, key: Key, deferred: Deferred) -> (Defer, Vec<Deferred>) {
@@ -48,22 +133,30 @@ impl NativeState {
             key.serial,
             self.frames.contains_key(&key)
         );
+        // Every exit below records WHICH fate it was before returning. Three of them return
+        // `Defer::Waiting` while handing the commit back to be discarded — it is never parked and no
+        // frame can ever complete it — and one returns `Defer::Waiting` having parked it. Collapsing
+        // those into one value with no diagnostic is what made a wedged surface unreadable.
         if self.canceled.contains(&key) {
+            self.note(None, DeferOutcome::Refused);
             return (Defer::Waiting, vec![deferred]);
         }
         if self.poisoned.contains(&key.token)
             || self.closing.contains(&key.token)
             || !self.activate(key.token)
         {
+            self.note(None, DeferOutcome::Refused);
             return (Defer::Waiting, vec![deferred]);
         }
         if self.last_joined.get(&key.token).copied() == Some(key.serial) {
+            self.note(None, DeferOutcome::Reused);
             return (Defer::Reuse(deferred), Vec::new());
         }
         if let Some(frame) = self.frames.remove(&key) {
             self.frame_order.retain(|candidate| *candidate != key);
             self.last_joined.insert(key.token, key.serial);
             self.activate(key.token);
+            self.note(None, DeferOutcome::Joined);
             return (Defer::Ready(Ready { frame, deferred }), Vec::new());
         }
         if self
@@ -71,6 +164,7 @@ impl NativeState {
             .get(&key.token)
             .is_some_and(|last| key.serial < *last)
         {
+            self.note(None, DeferOutcome::Refused);
             return (Defer::Waiting, vec![deferred]);
         }
         let mut discarded = self
@@ -100,6 +194,7 @@ impl NativeState {
             }
         }
         self.commit_order.push_back(key);
+        self.note(Some(key), DeferOutcome::Parked);
         (Defer::Waiting, discarded)
     }
 
@@ -129,6 +224,7 @@ impl NativeState {
             || (!self.active_tokens.contains(&token) && deferred.external.is_none())
             || !self.activate(token)
         {
+            self.note(None, DeferOutcome::Refused);
             return (Defer::Waiting, vec![deferred]);
         }
         let matching = self
@@ -139,6 +235,7 @@ impl NativeState {
             .collect::<Vec<_>>();
         let queue = self.pending.entry(token).or_default();
         if queue.len() == self.serial_capacity {
+            self.note(None, DeferOutcome::Refused);
             return (Defer::Waiting, vec![deferred]);
         }
         queue.push_back(Pending::commit(deferred));
@@ -148,7 +245,10 @@ impl NativeState {
             };
             self.frame_order.retain(|candidate| *candidate != key);
             match self.resolve_pending(frame) {
-                PendingFrame::Ready(ready) => return (Defer::Ready(*ready), Vec::new()),
+                PendingFrame::Ready(ready) => {
+                    self.note(None, DeferOutcome::Joined);
+                    return (Defer::Ready(*ready), Vec::new());
+                }
                 PendingFrame::Discarded => {}
                 PendingFrame::Unmatched(frame) => {
                     self.frame_order.push_back(key);
@@ -156,6 +256,9 @@ impl NativeState {
                 }
             }
         }
+        // Parked on the pending queue rather than on a `(token, serial)` key: the serial is not known
+        // yet, so there is no key to age. `pending` in the report is what shows these.
+        self.note(None, DeferOutcome::Parked);
         (Defer::Waiting, Vec::new())
     }
 

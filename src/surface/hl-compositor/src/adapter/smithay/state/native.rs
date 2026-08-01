@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroU64;
+use std::time::Instant;
 
 use super::*;
 use crate::adapter::smithay::native::{NativeFrame, NativeFrameOutcome, NativeFrames};
@@ -92,6 +93,41 @@ pub(super) enum Defer {
     Waiting,
 }
 
+/// Why a deferral did not produce a frame, for the report in [`NativeState::report_deferrals`].
+///
+/// `Defer::Waiting` is one value covering two entirely different fates: a commit PARKED awaiting the
+/// native frame that will complete it, and a commit REFUSED outright (its token cancelled, poisoned,
+/// closing, inactive, or its serial already overtaken) and handed straight back to be discarded. They
+/// were indistinguishable to every caller and to every reader of the log, which is what made a commit
+/// parked forever look exactly like a commit that was never made.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DeferOutcome {
+    /// The frame was already here: joined immediately.
+    Joined,
+    /// Re-presenting the frame this serial already joined.
+    Reused,
+    /// Parked, awaiting a native frame for this `(token, serial)`.
+    Parked,
+    /// Refused and returned for discard. Never parked, so no frame can ever complete it.
+    Refused,
+}
+
+/// Running totals behind the deferral report, and when each outstanding commit was parked.
+///
+/// The three states a reader needs to tell apart are never-deferred (all counters zero), deferred and
+/// ready (`joined` climbing), and deferred and still waiting (`outstanding` non-zero and `oldest_ms`
+/// growing). A single count could not distinguish them and an absence of output could not either.
+#[derive(Default)]
+pub(super) struct Deferrals {
+    joined: u64,
+    reused: u64,
+    parked: u64,
+    refused: u64,
+    /// When each key was parked. Pruned against the live commit table at report time rather than
+    /// maintained at every removal site, so it cannot drift or leak however commits are retired.
+    parked_at: HashMap<Key, Instant>,
+}
+
 struct Pending {
     surface: SurfaceId,
     deferred: Option<Deferred>,
@@ -178,6 +214,10 @@ pub(super) struct NativeState {
     canceled_order: VecDeque<Key>,
     serial_capacity: usize,
     token_capacity: usize,
+    deferrals: Deferrals,
+    /// The deferral report's cadence. Error level, `PRESENT` tag: it has to survive a release build and
+    /// land on the tag an operator investigating presentation already enables.
+    report: crate::diagnostic::Heartbeat<()>,
 }
 
 mod host;

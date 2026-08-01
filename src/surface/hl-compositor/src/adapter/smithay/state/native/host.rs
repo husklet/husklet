@@ -117,6 +117,12 @@ impl HlState {
     }
 
     pub fn drain_native_frames(&mut self) {
+        // Reported from the drain as well as from each deferral, so a client that commits once and then
+        // wedges still has its outstanding parks counted. An instrument that only speaks when the
+        // subject acts goes quiet exactly when the subject stops acting, which is the case it is for.
+        if let Some(native) = self.native.as_mut() {
+            native.report_deferrals();
+        }
         loop {
             let cancellation = self
                 .native
