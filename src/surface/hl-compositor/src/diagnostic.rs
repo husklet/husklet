@@ -194,3 +194,62 @@ mod tests {
         assert_eq!(tally.record(7).map(|seen| seen.count), Some(1));
     }
 }
+
+/// One heartbeat report: how much happened, and over how long.
+#[derive(Clone, Copy)]
+pub struct Beat {
+    /// Total occurrences of this key since the first, including this one.
+    pub total: u64,
+    /// Occurrences since the previous report, including this one.
+    pub in_window: u64,
+    /// Elapsed time since the previous report — or since the first occurrence, for the first report.
+    pub window: std::time::Duration,
+}
+
+/// A liveness report on a time cadence: the first occurrence, then at most one per interval.
+///
+/// Deliberately NOT [`Tally`]. Milestones answer "how often is this failing" and go quiet by design —
+/// after the ten-thousandth occurrence the next line is ninety thousand away. That is right for a fault
+/// and wrong for a heartbeat, because a heartbeat's value is that its ABSENCE is information: if a
+/// surface stops presenting, the gap in its beats says so, and a cadence that legitimately goes quiet
+/// for minutes cannot be read that way.
+///
+/// The interval is chosen for a person reading a log, not a machine parsing one — seconds, so a reader
+/// sees both that frames are flowing and roughly how fast, without the line becoming the log.
+pub struct Heartbeat<K> {
+    interval: std::time::Duration,
+    entries: HashMap<K, (u64, u64, std::time::Instant)>,
+}
+
+impl<K: Eq + Hash> Heartbeat<K> {
+    pub fn new(interval: std::time::Duration) -> Self {
+        Self {
+            interval,
+            entries: HashMap::new(),
+        }
+    }
+
+    /// Record one occurrence. Returns a [`Beat`] on the first occurrence of `key` and then once per
+    /// interval, `None` in between.
+    pub fn record(&mut self, key: K) -> Option<Beat> {
+        let now = std::time::Instant::now();
+        let interval = self.interval;
+        let entry = self.entries.entry(key).or_insert((0, 0, now));
+        entry.0 += 1;
+        entry.1 += 1;
+        let elapsed = now.duration_since(entry.2);
+        // The very first occurrence reports immediately: a reader should not wait an interval to learn
+        // that a surface started presenting at all.
+        if entry.0 == entry.1 || elapsed >= interval {
+            let beat = Beat {
+                total: entry.0,
+                in_window: entry.1,
+                window: elapsed,
+            };
+            entry.1 = 0;
+            entry.2 = now;
+            return Some(beat);
+        }
+        None
+    }
+}

@@ -587,6 +587,33 @@ impl MacPresenter {
         }
         self.capture_requested_frame();
 
+        // The success path had NO diagnostic, at any level, in any build. That made silence ambiguous:
+        // it meant either everything is working or nothing is presenting, and the log could not tell
+        // them apart — which is exactly the position someone is in when a frame counter reads zero
+        // while pixels are visibly on screen. A refusal was already loud; only success was mute.
+        //
+        // The two outcomes below are reported separately because their difference is the whole
+        // question. `shown` means a drawable was handed to the window server; `offscreen` means the
+        // frame was composed into the backing target and never displayed — the compositor pacing over
+        // drawables that never reach the screen. A surface that only ever beats `offscreen` is
+        // presenting nothing while looking busy from the inside.
+        //
+        // Error level so it survives a release build, on a time cadence so a reader sees the rate, and
+        // keyed per surface so the ABSENCE of a surface's beat is itself information.
+        let outcome = if shown.is_some() { "shown" } else { "offscreen" };
+        if let Some(beat) = self.presented.record((sid, outcome)) {
+            hl_log::hl_log!(
+                tag::PRESENT,
+                Level::Error,
+                "present {outcome} sid={} — {} frame(s) in {}ms ({} total). A heartbeat, not a fault: \
+                 its absence means this surface stopped presenting. `offscreen` means composed but \
+                 never handed to the window server.",
+                sid.0,
+                beat.in_window,
+                beat.window.as_millis(),
+                beat.total
+            );
+        }
         if let Some(id) = shown {
             PresentationFeedback {
                 outcome: PresentOutcome::Pending { id },

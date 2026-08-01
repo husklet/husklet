@@ -265,7 +265,14 @@ pub struct MacPresenter {
     /// so a frame refused before its `SurfState` exists is still counted and still speaks.
     reported_refusals: crate::diagnostic::Tally<(SurfaceId, &'static str)>,
     reported_abandonments: crate::diagnostic::Tally<(SurfaceId, &'static str)>,
+    /// Liveness for the SUCCESS path, which had no diagnostic at all. See `present_heartbeat`.
+    presented: crate::diagnostic::Heartbeat<(SurfaceId, &'static str)>,
 }
+
+/// How often a presenting surface says so. Chosen for a person reading a log: long enough that a
+/// sixty-hertz surface contributes one line every few seconds rather than sixty a second, short enough
+/// that the GAP after a surface stops is obvious while someone is still watching.
+const PRESENT_HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl MacPresenter {
     fn backing_scale_for(&self, sid: SurfaceId) -> f64 {
@@ -342,6 +349,7 @@ impl MacPresenter {
             wake: None,
             cursor: HostCursorState::default(),
             reported_refusals: crate::diagnostic::Tally::new(),
+            presented: crate::diagnostic::Heartbeat::new(PRESENT_HEARTBEAT),
             reported_abandonments: crate::diagnostic::Tally::new(),
         })
     }
@@ -378,6 +386,7 @@ impl MacPresenter {
             wake: None,
             cursor: HostCursorState::default(),
             reported_refusals: crate::diagnostic::Tally::new(),
+            presented: crate::diagnostic::Heartbeat::new(PRESENT_HEARTBEAT),
             reported_abandonments: crate::diagnostic::Tally::new(),
         };
         if let Some(directory) = std::env::var_os("HL_SURFACE_CAPTURE_DIR") {
