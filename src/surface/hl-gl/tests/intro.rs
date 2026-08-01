@@ -375,3 +375,83 @@ fn delete_and_detach_mutate_program_state() {
     record::detach_shader(&mut c, p2, vs);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
 }
+
+const VS_BLOCKS: &str = "#version 300 es\n\
+layout(std140) uniform Matrices { mat4 uMvp; };\n\
+layout(std140) uniform Material { vec4 uTint; };\n\
+void main(){ gl_Position = uMvp * vec4(uTint.xy, 0.0, 1.0); }\n";
+const FS_BLOCKS: &str =
+    "#version 300 es\nprecision mediump float;\nout vec4 o;\nvoid main(){ o = vec4(1.0); }\n";
+
+fn program_with_blocks(c: &mut GlContext) -> u32 {
+    let vs = record::create_shader(c, GL_VERTEX_SHADER);
+    record::shader_source(c, vs, VS_BLOCKS);
+    record::compile_shader(c, vs);
+    let fs = record::create_shader(c, GL_FRAGMENT_SHADER);
+    record::shader_source(c, fs, FS_BLOCKS);
+    record::compile_shader(c, fs);
+    let prog = record::create_program(c);
+    record::attach_shader(c, prog, vs);
+    record::attach_shader(c, prog, fs);
+    assert!(record::link_program(c, prog));
+    prog
+}
+
+/// The DEFAULT uniform block is not a named block, and modelling it as one shifts every real block by a
+/// place. This records the required behaviour ahead of the fix; see the analysis below.
+///
+/// Measured on this tree: a program declaring `Matrices` then `Material` reports them at indices 1 and 2
+/// against a conformant driver's 0 and 1, index 0 is a synthetic block named `Uniforms`, and the two real
+/// blocks report a data size and active-uniform count of zero while the synthetic one reports the
+/// program's whole flattened uniform buffer. `GL_ACTIVE_UNIFORM_BLOCKS` is not implemented at all — the
+/// enum is not even declared — so the count is zero, which puts every index out of range for an
+/// application that enumerates rather than looks up by name.
+///
+/// The cause is a category error rather than an off-by-one, and correcting a constant would leave it in
+/// place. `seed_blocks` inserts a block named `Uniforms` at index 0 for any program with plain data
+/// uniforms, to model the implicit block `glUniform*` writes into. ES 3.0 §2.12.6 does not make that a
+/// named block: it has no index, it is excluded from `GL_ACTIVE_UNIFORM_BLOCKS`, and its members report
+/// `GL_UNIFORM_BLOCK_INDEX` of -1 — which `uniformsiv` in this same file already returns correctly, so
+/// the model contradicts itself two functions apart.
+///
+/// The fix is to build the table at link from the blocks the shader declares, in declaration order, and
+/// to drop the synthetic entry. It is blocked on one thing worth knowing before starting: the GLSL block
+/// parser deliberately SKIPS the block name token (`adapter::glsl::uniforms`, "Skip the block NAME
+/// token"), so `UniformBlockDecl` carries a binding and members but no name, and the table cannot be
+/// populated from the shader until it does. Two of the assertions here fail for that reason and two for
+/// the indices; both are the same fix.
+#[test]
+#[ignore = "records the required reflection ahead of the fix: the default block is not a named block"]
+fn declared_uniform_blocks_are_indexed_from_zero_in_declaration_order() {
+    let mut c = ctx_800x600();
+    let prog = program_with_blocks(&mut c);
+
+    assert_eq!(
+        intro::uniform_block_index(&mut c, prog, "Matrices"),
+        0,
+        "the first DECLARED block is index 0; the default block is not a named block"
+    );
+    assert_eq!(intro::uniform_block_index(&mut c, prog, "Material"), 1);
+    assert_eq!(
+        intro::active_uniform_block_name(&mut c, prog, 0).as_deref(),
+        Some("Matrices")
+    );
+    // Each block reports its OWN std140 size, not the program's flattened uniform buffer: a mat4 block is
+    // 64 bytes and a vec4 block is 16. Reporting zero is what makes an application lay its buffer out at
+    // the driver's own offsets and corrupt it.
+    assert_eq!(
+        intro::active_uniform_blockiv(&mut c, prog, 0, GL_UNIFORM_BLOCK_DATA_SIZE),
+        Some(64)
+    );
+    assert_eq!(
+        intro::active_uniform_blockiv(&mut c, prog, 1, GL_UNIFORM_BLOCK_DATA_SIZE),
+        Some(16)
+    );
+    // And a program with only plain data uniforms has NO named blocks at all.
+    let plain = linked_program(&mut c);
+    assert_eq!(
+        intro::uniform_block_index(&mut c, plain, "Uniforms"),
+        GL_INVALID_INDEX,
+        "the default uniform block has no index to look up"
+    );
+}
