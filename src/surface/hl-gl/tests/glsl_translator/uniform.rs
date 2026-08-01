@@ -345,3 +345,43 @@ fn an_array_of_arrays_uniform_is_refused_not_misparsed() {
         "the refusal names the declaration: {error}"
     );
 }
+
+/// Two blocks that both take the default binding are two blocks. The byte-assembly accessor dedupes by
+/// binding point, which is right for feeding one bound range per point and wrong for reflection: GL
+/// identifies an active uniform block by its interface name, and a program declaring `Matrices` and
+/// `Material` with no explicit binding has two of them, not one.
+#[test]
+fn declared_blocks_are_identified_by_name_not_by_binding_point() {
+    let vs = "#version 300 es\nlayout(std140) uniform Matrices { mat4 uMvp; };\n\
+              layout(std140) uniform Material { vec4 uTint; };\n\
+              void main(){ gl_Position = uMvp * uTint; }\n";
+    let fs = "#version 300 es\nprecision highp float;\nout vec4 o;\nvoid main(){ o = vec4(1.0); }\n";
+
+    let declared = glsl::StageSources::new(vs, fs).declared_uniform_blocks();
+    assert_eq!(
+        declared.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(),
+        ["Matrices", "Material"],
+        "both blocks survive, in declaration order"
+    );
+
+    // The binding-keyed accessor keeps its own identity, which is what the byte assembly needs.
+    let by_binding = glsl::StageSources::new(vs, fs).uniform_blocks();
+    assert_eq!(
+        by_binding.len(),
+        1,
+        "sharing a binding point makes them one range to assemble"
+    );
+
+    // A block declared in BOTH stages is one active block.
+    let shared_vs = "#version 300 es\nlayout(std140) uniform Camera { mat4 uView; };\n\
+                     void main(){ gl_Position = uView[0]; }\n";
+    let shared_fs = "#version 300 es\nprecision highp float;\n\
+                     layout(std140) uniform Camera { mat4 uView; };\nout vec4 o;\n\
+                     void main(){ o = uView[1]; }\n";
+    let shared = glsl::StageSources::new(shared_vs, shared_fs).declared_uniform_blocks();
+    assert_eq!(
+        shared.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(),
+        ["Camera"],
+        "one block declared twice is one active block"
+    );
+}

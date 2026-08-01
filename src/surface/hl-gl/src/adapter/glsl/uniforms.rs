@@ -215,13 +215,20 @@ fn sampler_elements(declarations: &[Decl]) -> Result<usize, UniformError> {
     })
 }
 
-/// One declared uniform BLOCK: its `layout(binding = N)` point + its ordered member declarations. Used by
-/// [`crate::service::record`] to route a MULTI-block program (two `glBindBufferRange`d ranges bound to
-/// distinct binding points, each feeding its own block) — the translator flattens every block's members
-/// into one `HlUniforms` block at IR binding 0, so the recorded bytes must be assembled block-by-block from
-/// each block's own bound range in declaration order.
+/// One declared uniform BLOCK: its declared NAME, its `layout(binding = N)` point, and its ordered member
+/// declarations. Used by [`crate::service::record`] to route a MULTI-block program (two
+/// `glBindBufferRange`d ranges bound to distinct binding points, each feeding its own block) — the
+/// translator flattens every block's members into one `HlUniforms` block at IR binding 0, so the recorded
+/// bytes must be assembled block-by-block from each block's own bound range in declaration order — and by
+/// [`crate::service::intro`] to answer the block reflection queries.
+///
+/// The name is the block's INTERFACE name (`uniform Matrices { … }` → `Matrices`), which is what
+/// `glGetUniformBlockIndex` is asked about and what `glGetActiveUniformBlockName` reports. It is not the
+/// optional instance name that may follow the closing brace: GLSL addresses members through the instance
+/// name and the API addresses the block through the interface name.
 #[derive(Clone, Debug, PartialEq)]
 pub struct UniformBlockDecl {
+    pub name: String,
     pub binding: u32,
     pub members: Vec<Decl>,
 }
@@ -246,6 +253,30 @@ impl StageSources<'_> {
     }
 }
 
+/// Every uniform block a program declares, identified by NAME and in declaration order — the set and the
+/// order `glGetUniformBlockIndex` and `glGetActiveUniformBlock*` answer for.
+///
+/// This differs from [`StageSources::uniform_blocks`] in what makes two declarations the same block, and
+/// the difference is not cosmetic. That one dedupes by BINDING POINT, which is right for assembling the
+/// recorded bytes — one bound range feeds one binding point — but wrong here twice over: two blocks that
+/// both take the default binding of 0 are two distinct active blocks and would collapse into one, and a
+/// block declared in BOTH stages is one active block that would survive as one only by accident. GL
+/// identifies an active block by its interface name, so this does too.
+impl StageSources<'_> {
+    pub fn declared_uniform_blocks(self) -> Vec<UniformBlockDecl> {
+        let mut out: Vec<UniformBlockDecl> = Vec::new();
+        for src in [self.vertex, self.fragment] {
+            let src = Source::new(src).expanded();
+            for blk in Source::new(&src).uniform_blocks() {
+                if !out.iter().any(|b| b.name == blk.name) {
+                    out.push(blk);
+                }
+            }
+        }
+        out
+    }
+}
+
 /// Scan ONE (comment-stripped) stage for its `uniform Name { … }` blocks, capturing each block's
 /// `binding = N` (from the preceding `layout(...)`, default `0`) and its ordered member decls.
 impl Source<'_> {
@@ -262,18 +293,22 @@ impl Source<'_> {
                 p = rel + 7;
                 continue;
             }
-            // Skip the block NAME token, then require `{` (a plain `uniform TYPE name;` is not a block).
+            // Read the block's interface NAME, then require `{` (a plain `uniform TYPE name;` is not a
+            // block). The name was previously skipped, which is why the reflection queries had to invent
+            // one: `glGetUniformBlockIndex` is asked about exactly this token.
             let mut q = rel + 7;
             while q < b.len() && Tokens::is_space(b[q]) {
                 q += 1;
             }
+            let name_start = q;
             while q < b.len() && Tokens::is_word(b[q]) {
                 q += 1;
             }
+            let name = src[name_start..q].to_string();
             while q < b.len() && Tokens::is_space(b[q]) {
                 q += 1;
             }
-            if q >= b.len() || b[q] != b'{' {
+            if q >= b.len() || b[q] != b'{' || name.is_empty() {
                 p = rel + 7;
                 continue;
             }
@@ -333,7 +368,11 @@ impl Source<'_> {
                     });
                 }
             }
-            out.push(UniformBlockDecl { binding, members });
+            out.push(UniformBlockDecl {
+                name,
+                binding,
+                members,
+            });
             p = q.max(rel + 7);
         }
         out
