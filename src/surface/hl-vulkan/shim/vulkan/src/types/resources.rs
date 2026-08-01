@@ -36,12 +36,55 @@ pub struct VkImageMemoryRequirementsInfo2 {
     pub image: u64,
 }
 
-/// `VkMemoryRequirements2` — the `...Requirements2` output (base `VkMemoryRequirements` + preserved chain).
+/// `VkMemoryRequirements2` — the `...Requirements2` output: base `VkMemoryRequirements` plus a chain of
+/// further OUTPUT structures the implementation is required to fill in.
 #[repr(C)]
 pub struct VkMemoryRequirements2 {
     pub s_type: i32,
     pub p_next: *mut c_void,
     pub memory_requirements: VkMemoryRequirements,
+}
+
+/// `VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS` (core 1.1).
+pub const VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS: i32 = 1_000_127_000;
+
+/// `VkMemoryDedicatedRequirements` — chained onto `VkMemoryRequirements2` to ask whether this resource
+/// wants, or insists on, its own `VkDeviceMemory` rather than a suballocation.
+///
+/// Both fields are OUTPUTS. A caller is not required to initialise an output structure, so a driver that
+/// does not write them hands back whatever the caller's stack held, and a `VkBool32` that is neither 0
+/// nor 1 is what comes out.
+#[repr(C)]
+pub struct VkMemoryDedicatedRequirements {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub prefers_dedicated_allocation: u32,
+    pub requires_dedicated_allocation: u32,
+}
+
+impl VkMemoryRequirements2 {
+    /// Answer every OUTPUT structure chained onto this one.
+    ///
+    /// Only `VkMemoryDedicatedRequirements` exists in core, and this driver never needs or prefers a
+    /// dedicated allocation — every resource is a suballocation of ordinary host memory — so both
+    /// answers are `VK_FALSE`. Writing them is not optional just because the answer is "no": the fields
+    /// are outputs, a caller may legally pass the structure uninitialised, and a driver that skips them
+    /// returns the caller's own stack as a capability. That is not hypothetical here —
+    /// `dEQP-VK.memory.requirements.dedicated_allocation.buffer.regular` failed
+    /// `validValueVkBool32(m_allUsageFlagsPrefersDedicatedAllocation)`, which fires only when the value
+    /// read is neither 0 nor 1.
+    pub fn answer_chain(&mut self) {
+        let mut node = self.p_next as *mut VkBaseOutStructure;
+        while let Some(n) = unsafe { node.as_mut() } {
+            if n.s_type == VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS {
+                if let Some(d) = unsafe { (node as *mut VkMemoryDedicatedRequirements).as_mut() } {
+                    d.prefers_dedicated_allocation = 0;
+                    d.requires_dedicated_allocation = 0;
+                }
+            }
+            node = n.p_next;
+        }
+    }
 }
 
 #[repr(C)]

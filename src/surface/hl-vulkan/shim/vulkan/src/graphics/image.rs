@@ -179,7 +179,7 @@ pub extern "C" fn vkBindImageMemory2KHR(
 }
 
 /// `vkGetImageMemoryRequirements2` — read `VkImageMemoryRequirementsInfo2` and fill the base
-/// `VkMemoryRequirements` via the v1 [`vkGetImageMemoryRequirements`] body (chain preserved).
+/// `VkMemoryRequirements` via the v1 [`vkGetImageMemoryRequirements`] body, then answer the chained outputs.
 pub extern "C" fn vkGetImageMemoryRequirements2(
     device: *mut c_void,
     p_info: *const c_void,
@@ -197,6 +197,9 @@ pub extern "C" fn vkGetImageMemoryRequirements2(
         info.image,
         &mut out.memory_requirements as *mut _ as *mut c_void,
     );
+    // The chain is not "preserved" by leaving it alone: everything on it is an OUTPUT this driver owes
+    // the caller, and skipping it returns the caller's uninitialised stack as an answer.
+    out.answer_chain();
 }
 
 /// `vkGetImageMemoryRequirements2KHR` — the `VK_KHR_get_memory_requirements2` alias.

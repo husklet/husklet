@@ -34,6 +34,7 @@ impl MemoryRequirements {
                 alignment: 256,
                 memory_type_bits,
             };
+            output.answer_chain();
         }
     }
 }

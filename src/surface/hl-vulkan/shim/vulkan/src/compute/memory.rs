@@ -180,7 +180,7 @@ pub extern "C" fn vkBindBufferMemory2KHR(
 }
 
 /// `vkGetBufferMemoryRequirements2` — read `VkBufferMemoryRequirementsInfo2` and fill the base
-/// `VkMemoryRequirements` via the v1 [`vkGetBufferMemoryRequirements`] body (chain preserved).
+/// `VkMemoryRequirements` via the v1 [`vkGetBufferMemoryRequirements`] body, then answer the chained outputs.
 pub extern "C" fn vkGetBufferMemoryRequirements2(
     device: *mut c_void,
     p_info: *const c_void,
@@ -199,6 +199,9 @@ pub extern "C" fn vkGetBufferMemoryRequirements2(
         info.buffer,
         &mut out.memory_requirements as *mut _ as *mut c_void,
     );
+    // The chain is not "preserved" by leaving it alone: everything on it is an OUTPUT this driver owes
+    // the caller, and skipping it returns the caller's uninitialised stack as an answer.
+    out.answer_chain();
 }
 
 /// `vkGetBufferMemoryRequirements2KHR` — the `VK_KHR_get_memory_requirements2` alias.

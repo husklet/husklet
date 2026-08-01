@@ -776,3 +776,176 @@ fn ray_tracing_family_returns_extension_not_present() {
 
 #[path = "tests_commands.rs"]
 mod commands;
+
+/// Build a poisoned `VkMemoryDedicatedRequirements`: a driver that does not write it leaves a value
+/// that is not a valid `VkBool32`, which is exactly what the conformance suite caught.
+fn poisoned_dedicated() -> VkMemoryDedicatedRequirements {
+    VkMemoryDedicatedRequirements {
+        s_type: VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS,
+        p_next: core::ptr::null_mut(),
+        prefers_dedicated_allocation: 0xDEAD_BEEF,
+        requires_dedicated_allocation: 0xDEAD_BEEF,
+    }
+}
+
+fn buffer_create_info(size: u64) -> VkBufferCreateInfo {
+    VkBufferCreateInfo {
+        s_type: 0,
+        p_next: core::ptr::null(),
+        flags: 0,
+        size,
+        usage: 0,
+        sharing_mode: 0,
+        queue_family_index_count: 0,
+        p_queue_family_indices: core::ptr::null(),
+    }
+}
+
+/// A `VkMemoryDedicatedRequirements` chained onto a `VkMemoryRequirements2` is an OUTPUT the driver owes
+/// the caller, not an input it may leave alone. Skipping it hands back whatever the caller's stack held,
+/// which is how `dEQP-VK.memory.requirements.dedicated_allocation.buffer.regular` came to fail
+/// `validValueVkBool32(...)` — a check that fires only when a `VkBool32` is neither 0 nor 1.
+#[test]
+fn device_memory_requirements_answers_a_chained_dedicated_requirements() {
+    let ci = buffer_create_info(4096);
+    let info = VkDeviceBufferMemoryRequirements {
+        s_type: 0,
+        p_next: core::ptr::null(),
+        p_create_info: &ci,
+    };
+    let mut dedicated = poisoned_dedicated();
+    let mut out: VkMemoryRequirements2 = unsafe { core::mem::zeroed() };
+    out.p_next = &mut dedicated as *mut _ as *mut c_void;
+
+    crate::maintenance::vkGetDeviceBufferMemoryRequirements(
+        core::ptr::null_mut(),
+        &info as *const _ as *const c_void,
+        &mut out as *mut _ as *mut c_void,
+    );
+
+    // The BASE structure first. Without this the test would pass against a driver that answered the
+    // chain and produced nothing else, and the query itself would be untested.
+    assert_eq!(
+        out.memory_requirements.size, 4096,
+        "the base requirements must still be filled"
+    );
+    assert_eq!(out.memory_requirements.alignment, 256);
+    // Then the chained output. Both are VK_FALSE for this driver — every resource is a suballocation of
+    // ordinary host memory — but they must be WRITTEN, not left as the caller found them.
+    assert_eq!(
+        dedicated.prefers_dedicated_allocation, 0,
+        "prefersDedicatedAllocation was not written"
+    );
+    assert_eq!(
+        dedicated.requires_dedicated_allocation, 0,
+        "requiresDedicatedAllocation was not written"
+    );
+}
+
+/// The per-object entry points answer the chain too, and they reach it through two different modules.
+/// A handle this driver cannot resolve is used deliberately: the base size is then 0, but an output
+/// structure is still owed — "I do not know this buffer" is not a licence to leave the caller's memory
+/// as it was found. The base fields that do not depend on the handle prove the query still ran.
+#[test]
+fn per_object_memory_requirements2_answer_a_chained_dedicated_requirements() {
+    let _g = test_guard();
+    let mut dev: *mut c_void = core::ptr::null_mut();
+    assert_eq!(
+        crate::device::vkCreateDevice(
+            core::ptr::null_mut(),
+            core::ptr::null(),
+            core::ptr::null(),
+            &mut dev
+        ),
+        VK_SUCCESS
+    );
+
+    let mut dedicated = poisoned_dedicated();
+    let mut out: VkMemoryRequirements2 = unsafe { core::mem::zeroed() };
+    out.p_next = &mut dedicated as *mut _ as *mut c_void;
+    let info = VkBufferMemoryRequirementsInfo2 {
+        s_type: 0,
+        p_next: core::ptr::null(),
+        buffer: 0,
+    };
+    crate::compute::vkGetBufferMemoryRequirements2(
+        dev,
+        &info as *const _ as *const c_void,
+        &mut out as *mut _ as *mut c_void,
+    );
+    assert_eq!(
+        out.memory_requirements.alignment, 256,
+        "the base fill must have run"
+    );
+    assert_ne!(out.memory_requirements.memory_type_bits, 0);
+    assert_eq!(
+        dedicated.prefers_dedicated_allocation, 0,
+        "vkGetBufferMemoryRequirements2 left the chain unwritten"
+    );
+    assert_eq!(dedicated.requires_dedicated_allocation, 0);
+
+    let mut dedicated = poisoned_dedicated();
+    let mut out: VkMemoryRequirements2 = unsafe { core::mem::zeroed() };
+    out.p_next = &mut dedicated as *mut _ as *mut c_void;
+    let info = VkImageMemoryRequirementsInfo2 {
+        s_type: 0,
+        p_next: core::ptr::null(),
+        image: 0,
+    };
+    crate::graphics::vkGetImageMemoryRequirements2(
+        dev,
+        &info as *const _ as *const c_void,
+        &mut out as *mut _ as *mut c_void,
+    );
+    assert_eq!(
+        dedicated.prefers_dedicated_allocation, 0,
+        "vkGetImageMemoryRequirements2 left the chain unwritten"
+    );
+    assert_eq!(dedicated.requires_dedicated_allocation, 0);
+}
+
+/// An UNRECOGNISED structure must be left exactly as the caller left it AND must not stop the walk.
+/// Vulkan requires an implementation to skip what it does not know; a driver that halted on the first
+/// unknown would silently drop every output behind it, and the caller could not tell the difference
+/// between "skipped because unknown" and "skipped because the walk ended". The poisoned structure sits
+/// AFTER the unknown node, so it is reached only if the walk continues.
+#[test]
+fn an_unrecognised_chain_node_is_skipped_without_stopping_the_walk() {
+    #[repr(C)]
+    struct Unknown {
+        s_type: i32,
+        p_next: *mut c_void,
+        sentinel: u64,
+    }
+    let ci = buffer_create_info(2048);
+    let info = VkDeviceBufferMemoryRequirements {
+        s_type: 0,
+        p_next: core::ptr::null(),
+        p_create_info: &ci,
+    };
+    let mut dedicated = poisoned_dedicated();
+    let mut unknown = Unknown {
+        // A structure type this driver has never heard of.
+        s_type: 0x7FFF_0000,
+        p_next: &mut dedicated as *mut _ as *mut c_void,
+        sentinel: 0x0BAD_F00D,
+    };
+    let mut out: VkMemoryRequirements2 = unsafe { core::mem::zeroed() };
+    out.p_next = &mut unknown as *mut _ as *mut c_void;
+
+    crate::maintenance::vkGetDeviceBufferMemoryRequirements(
+        core::ptr::null_mut(),
+        &info as *const _ as *const c_void,
+        &mut out as *mut _ as *mut c_void,
+    );
+
+    assert_eq!(out.memory_requirements.size, 2048, "the query still ran");
+    assert_eq!(
+        unknown.sentinel, 0x0BAD_F00D,
+        "an unrecognised structure must be left untouched"
+    );
+    assert_eq!(
+        dedicated.prefers_dedicated_allocation, 0,
+        "the walk must continue past an unrecognised node"
+    );
+}
