@@ -181,6 +181,7 @@ impl GlContext {
         // TRANSACTIONAL: submit BEFORE resetting. On failure the draws (and the un-cleared pending destroys) are
         // retained and the error propagates; a rolled-back NACK re-emits the same destroys on the retry.
         if let Err(error) = sink.submit(&f.cmds) {
+            crate::service::frame::refusal::report(ctx, &error, &f.cmds);
             ctx.restore_frame_state(frame_state);
             return Err(error);
         }
@@ -359,6 +360,7 @@ impl GlContext {
             frame.cmds.extend(ready);
             let commands = frame.cmds.len();
             if let Err(error) = sink.submit(&frame.cmds) {
+                crate::service::frame::refusal::report(ctx, &error, &frame.cmds);
                 ctx.restore_frame_state(frame_state);
                 ctx.local.recording.draws = original_draws;
                 ctx.local.recording.blits = original_blits;
@@ -421,6 +423,7 @@ impl GlContext {
         let retained_shared = ctx.retain_shared_targets(&mut f);
         let cmds = f.cmds.len();
         if let Err(error) = sink.submit(&f.cmds) {
+            crate::service::frame::refusal::report(ctx, &error, &f.cmds);
             ctx.restore_frame_state(frame_state);
             return Err(error);
         }

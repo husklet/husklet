@@ -94,6 +94,15 @@ pub(crate) struct LocalState {
     /// drawn every frame, often hundreds of times, so the report must be bounded — but it must also
     /// survive a release build, which is why it is an ERROR rather than a warning.
     pub(crate) missing_shader_ir_reported: bool,
+    /// How many frames the HOST has refused on this context. Carried so the refusal report can say
+    /// whether a refusal happened once at startup or is happening on every frame — a latch alone cannot
+    /// distinguish those, and they call for opposite responses.
+    pub(crate) refused_frames: u64,
+    /// The `(program, variant)` pairs implicated by the most recent host refusal. Recorded because the
+    /// frame's residency is ROLLED BACK on a refusal (see `restore_frame_state`), which erases the
+    /// mapping from a refused shader module to the program it came from — so the attribution has to be
+    /// taken while the batch is still explicable, not reconstructed afterwards from the returned error.
+    pub(crate) refusal_candidates: Vec<(u32, u64)>,
 }
 
 impl LocalState {
@@ -161,6 +170,8 @@ impl Default for LocalState {
             default_present_pending: false,
             depth_stencil_blit_reported: false,
             missing_shader_ir_reported: false,
+            refused_frames: 0,
+            refusal_candidates: Vec::new(),
         }
     }
 }

@@ -367,6 +367,20 @@ impl GlContext {
         Ok((ir, true))
     }
 
+    /// The `(GL program name, variant)` a resident IR shader module belongs to, if any.
+    ///
+    /// The inverse of [`Self::program_shader_ir`], and the only way back from a command the host refused
+    /// to the GL object the application would recognise. The variant is part of the answer on purpose: a
+    /// program is translated once per specialisation (sampler types, `gl_FragCoord` correction, target
+    /// flip), so a refusal names ONE specialisation and reporting only the program name would read as
+    /// "this program is broken" when the other specialisations of it may translate perfectly well.
+    pub fn shader_ir_program(&self, shader_ir: u32) -> Option<(u32, u64)> {
+        self.prog_shader_cache
+            .iter()
+            .find(|(_, &(vs, fs, _))| vs == shader_ir || fs == shader_ir)
+            .map(|(&(program, variant), _)| (program, variant))
+    }
+
     pub fn is_resident_sampler(&self, ir: u32) -> bool {
         self.sampler_ir_cache
             .iter()

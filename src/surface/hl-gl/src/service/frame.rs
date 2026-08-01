@@ -674,6 +674,7 @@ mod passes;
 mod pipeline;
 mod range;
 mod rect_clear;
+pub(crate) mod refusal;
 mod texture;
 mod vertex;
 
