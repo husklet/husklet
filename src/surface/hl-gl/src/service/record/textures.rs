@@ -53,8 +53,11 @@ pub fn tex_image_2d_format(
         return;
     }
     let name = ctx.local.tex_unit[ctx.local.active_texture];
-    if name != 0 {
-        ctx.textures.image_2d(name, w, h, pixels, format);
+    if name != 0 && !ctx.textures.image_2d(name, w, h, pixels, format) {
+        // Supplied pixels that are not the size this plane's texel requires. The texture keeps the zeroed
+        // plane its format names; the application is told, rather than left with an image whose bytes and
+        // whose declared format disagree.
+        ctx.set_gl_error(GL_INVALID_VALUE);
     }
 }
 
@@ -64,13 +67,6 @@ pub fn tex_image_2d_format(
 /// model keeps the RGBA8 plane rather than failing: `glTexImage2D` accepts unsized spellings, and the
 /// declared format is still recorded for the completeness check either way.
 ///
-/// Restricted to a STORAGE-ONLY define (`pixels` empty), and that restriction is the honest half of an
-/// unfinished change rather than a design. Supplied pixels arrive here already converted to RGBA8 by the
-/// upload path, so handing them to a wider plane would put eight-bit bytes in a sixteen-bit-float buffer
-/// — a plane and its contents disagreeing, which is the defect one layer down that this same commit
-/// series fixed. Until the conversion can emit texels of the destination plane, an upload keeps the RGBA8
-/// plane it has always had. The render-target case, which is the one that allocates and never uploads, is
-/// the case that needed this.
 /// The plane a declared sized `internalformat` names, or the RGBA8 plane for a format this driver does
 /// not model — which is also the answer for the unsized `GL_RGB`/`GL_RGBA` spellings. One function so the
 /// texture and renderbuffer allocation paths cannot come to different conclusions about one enum.
@@ -78,6 +74,14 @@ pub fn declared_plane(internalformat: u32) -> TextureFormat {
     TextureFormat::try_from(InternalFormat(internalformat)).unwrap_or(TextureFormat::Rgba8Unorm)
 }
 
+/// `glTexImage2D` with the SIZED internal format the application declared, WITH OR WITHOUT pixels.
+///
+/// A supplied image used to force the RGBA8 plane regardless of what was declared, because the upload
+/// conversion narrowed every source to eight bits per channel before the destination was known — so
+/// `glTexImage2D(GL_RGBA16F, …, floats)` produced an eight-bit plane, and giving it the declared plane
+/// instead would only have put eight-bit bytes into a sixteen-bit-float buffer. The conversion now emits
+/// texels of the destination plane ([`crate::service::upload::Upload::plane`]), so the declared format
+/// selects the plane in both cases and this is the fourth allocation path that honours a float format.
 pub fn tex_image_2d_declared(
     ctx: &mut GlContext,
     internalformat: u32,
@@ -85,12 +89,7 @@ pub fn tex_image_2d_declared(
     h: i32,
     pixels: &[u8],
 ) {
-    let format = if pixels.is_empty() {
-        declared_plane(internalformat)
-    } else {
-        TextureFormat::Rgba8Unorm
-    };
-    tex_image_2d_format(ctx, w, h, pixels, format);
+    tex_image_2d_format(ctx, w, h, pixels, declared_plane(internalformat));
     tex_internal_format(ctx, internalformat);
 }
 

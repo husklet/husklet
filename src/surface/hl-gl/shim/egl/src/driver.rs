@@ -95,6 +95,7 @@ use hl_gl::result::{
 use hl_gl::service::{
     compute, config, es3, intro, map, query, readpixels, record, swap, sync, upload::Upload,
 };
+use hl_gpu::protocol::model::enums::TextureFormat;
 use hl_gpu::BufferId;
 
 use crate::state::{
@@ -215,16 +216,23 @@ impl Text {
     }
 }
 
-/// Convert an uploaded `glTexImage2D` image to the RGBA8 (`w*h*4`) plane the frame builder consumes.
-/// Handles the common RGBA/BGRA/RGB `UNSIGNED_BYTE` uploads; an unmodeled format uploads no pixels
-/// (returns empty — the texture stays data-less and is truthfully skipped at draw time).
-unsafe fn to_rgba8(
+/// Convert an uploaded `glTexImage2D` image to the plane `destination` names, which is the texel format
+/// the model's CPU shadow for that texture is allocated in. Handles the common RGBA/BGRA/RGB
+/// `UNSIGNED_BYTE` uploads and, for a float destination, the floating-point and normalized source types;
+/// an unmodeled combination uploads no pixels (returns empty — the texture stays data-less and is
+/// truthfully skipped at draw time).
+///
+/// The destination is a parameter rather than an assumption because the conversion is where precision is
+/// lost: narrowing to eight bits per channel first and widening afterwards recovers nothing, so a plane
+/// wider than RGBA8 has to be known here.
+unsafe fn to_plane(
     ctx: &GlContext,
     format: u32,
     type_: u32,
     w: i32,
     h: i32,
     pixels: *const c_void,
+    destination: TextureFormat,
 ) -> Vec<u8> {
     // GLES3.0 3.8.3: `width`/`height` above GL_MAX_TEXTURE_SIZE is GL_INVALID_VALUE, so the record layer
     // will reject this upload. Refuse the extent HERE, before the client pointer is read: the source span
@@ -293,7 +301,7 @@ unsafe fn to_rgba8(
         }
         RawBytes::read(pixels, span as isize)
     };
-    match upload.rgba8(src) {
+    match upload.plane(src, destination) {
         Some(rgba) => {
             hl_log::hl_add!(hl_log::tag::GL, "upload_rgba_bytes", rgba.len() as u64);
             crate::stub::Diagnostics::upload(format, type_, crate::stub::UploadOutcome::Converted);

@@ -304,7 +304,8 @@ pub extern "C" fn glTexImage3D(
     pixels: *const c_void,
 ) {
     GlobalState::context(|group| {
-        let rgba = unsafe { to_rgba8(&group.gl, format, type_, width, height, pixels) };
+        let destination = group.gl.bound_plane();
+        let rgba = unsafe { to_plane(&group.gl, format, type_, width, height, pixels, destination) };
         record::tex_image_3d(&mut group.gl, target, level, width, height, depth, &rgba)
     });
 }
@@ -330,7 +331,8 @@ pub extern "C" fn glTexSubImage2D(
             group.gl.set_gl_error(GL_INVALID_OPERATION);
             return;
         }
-        let rgba = unsafe { to_rgba8(&group.gl, format, type_, width, height, pixels) };
+        let destination = group.gl.bound_plane();
+        let rgba = unsafe { to_plane(&group.gl, format, type_, width, height, pixels, destination) };
         let texture = group.gl.bound_texture();
         let generation = group.gl.textures.get(texture).map(|texture| texture.gen);
         record::tex_sub_image_2d(
@@ -365,7 +367,8 @@ pub extern "C" fn glTexSubImage3D(
     pixels: *const c_void,
 ) {
     GlobalState::context(|group| {
-        let rgba = unsafe { to_rgba8(&group.gl, format, type_, width, height, pixels) };
+        let destination = group.gl.bound_plane();
+        let rgba = unsafe { to_plane(&group.gl, format, type_, width, height, pixels, destination) };
         record::tex_sub_image_3d(
             &mut group.gl,
             target,

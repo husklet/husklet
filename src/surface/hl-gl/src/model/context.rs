@@ -362,6 +362,18 @@ impl GlContext {
         self.local.tex_unit[self.local.active_texture]
     }
 
+    /// The texel format of the CPU shadow plane an upload into the active unit's texture must fill. An
+    /// unbound or unknown name answers `Rgba8Unorm`, which is the plane a texture materialized here would
+    /// be given anyway; the record layer refuses the upload for its own reasons in that case.
+    pub fn bound_plane(&self) -> hl_gpu::protocol::model::enums::TextureFormat {
+        self.textures
+            .get(self.bound_texture())
+            .map_or(
+                hl_gpu::protocol::model::enums::TextureFormat::Rgba8Unorm,
+                |texture| texture.ir_format,
+            )
+    }
+
     pub fn active_texture_unit(&self) -> usize {
         self.local.active_texture
     }

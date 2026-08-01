@@ -334,7 +334,10 @@ pub extern "C" fn glTexImage2D(
             s.gl.set_gl_error(GL_INVALID_VALUE);
             return;
         }
-        let rgba = unsafe { to_rgba8(&s.gl, format, type_, width, height, pixels) };
+        // The plane the declared internal format names IS the destination, so the conversion emits its
+        // texels rather than eight-bit ones that a wider plane would then have to reinterpret.
+        let declared = record::declared_plane(internalformat.max(0) as u32);
+        let rgba = unsafe { to_plane(&s.gl, format, type_, width, height, pixels, declared) };
         // `level` was ignored, so EVERY level of a mip chain redefined the BASE image and the last, 1×1
         // upload won — a mipmapped texture collapsed to a single texel and every draw sampling it came
         // back a flat colour, whatever its min filter. A non-base level now lands beside the base image

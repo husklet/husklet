@@ -560,10 +560,25 @@ impl Textures {
         )
     }
 
-    /// `glTexImage2D` — (re)define the texture's RGBA8 pixels + extent + neutral texel `format`, bumping
-    /// its generation. `pixels` is the already-converted RGBA8 image (`w*h*4` bytes) or empty for a
-    /// storage-only define (e.g. an FBO color attachment allocated before it is rendered into).
-    pub fn image_2d(&mut self, name: u32, w: i32, h: i32, pixels: &[u8], format: TextureFormat) {
+    /// `glTexImage2D` — (re)define the texture's plane + extent + neutral texel `format`, bumping its
+    /// generation. `pixels` is the already-converted image in the texel format `format` names
+    /// (`w * h * plane_bytes_per_texel(format)` bytes), or empty for a storage-only define (e.g. an FBO
+    /// color attachment allocated before it is rendered into).
+    ///
+    /// Returns whether the define was accepted. Supplied pixels of any other size are REFUSED, and the
+    /// texture is left with the zeroed plane its declared format names rather than with an image whose
+    /// bytes disagree with the format beside them — the disagreement every other site in this model was
+    /// just taught not to make. This is the fourth of the four allocation paths, and it is the one that
+    /// takes content: `glTexStorage2D`, a storage-only `glTexImage2D` and `glRenderbufferStorage` all
+    /// allocate and never fill, which is why they could honour a wide plane before the upload could.
+    pub fn image_2d(
+        &mut self,
+        name: u32,
+        w: i32,
+        h: i32,
+        pixels: &[u8],
+        format: TextureFormat,
+    ) -> bool {
         // The zeroed-storage byte size, computed in usize with a checked multiply so a large (or
         // adversarial) w*h never overflows an i32 and panics — an out-of-range extent saturates to a
         // no-alloc `None` rather than crashing the driver (the record layer raises GL_INVALID_VALUE).
@@ -577,7 +592,8 @@ impl Textures {
         t.w = w;
         t.h = h;
         t.ir_format = format;
-        if !pixels.is_empty() {
+        let mismatched = !pixels.is_empty() && Some(pixels.len()) != want;
+        if !pixels.is_empty() && !mismatched {
             t.data = Arc::new(pixels.to_vec());
             t.real_pixels = true;
         } else if let Some(want) = want {
@@ -590,6 +606,7 @@ impl Textures {
         }
         t.gpu_authoritative = false;
         t.gen = generation;
+        !mismatched
     }
 
     /// `glTexImage2D` at a level ABOVE the base — one image of a mip chain. Stored beside the base image

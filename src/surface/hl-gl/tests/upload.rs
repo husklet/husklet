@@ -213,3 +213,140 @@ fn integer_and_wide_component_uploads_are_accepted_not_refused() {
         );
     }
 }
+
+/// A `GL_FLOAT` source into a half-float plane keeps the values a float texture exists for.
+///
+/// Driven at the endpoints on purpose. Mid-range values survive the eight-bit round trip this replaces
+/// closely enough to look right — 0.5 comes back as 0.501961 — so a test at 0.5 would pass against the
+/// conversion that narrows first and prove nothing. Above 1.0 and below 0.0 are where the narrowing is
+/// visible: it clamped both, which is the entire reason a half-float texture is asked for.
+#[test]
+fn a_float_source_reaches_a_half_float_plane_unclamped() {
+    use hl_gpu::protocol::model::enums::TextureFormat;
+
+    let upload = Upload::new(GL_RGBA, GL_FLOAT, 2, 1, PixelStore::default()).unwrap();
+    let mut source = Vec::new();
+    for value in [4.0f32, -2.5, 0.0, 1.0, 65504.0, 0.5, -1.0, 2048.0] {
+        source.extend_from_slice(&value.to_le_bytes());
+    }
+    let plane = upload.plane(&source, TextureFormat::Rgba16Float).unwrap();
+    assert_eq!(plane.len(), 2 * 8, "two half-float texels");
+
+    let half = |index: usize| u16::from_le_bytes([plane[index * 2], plane[index * 2 + 1]]);
+    assert_eq!(half(0), 0x4400, "4.0");
+    assert_eq!(half(1), 0xc100, "-2.5 keeps its sign rather than clamping to zero");
+    assert_eq!(half(2), 0x0000, "0.0");
+    assert_eq!(half(3), 0x3c00, "1.0");
+    assert_eq!(half(4), 0x7bff, "65504.0 is half's largest finite value, not 1.0");
+    assert_eq!(half(5), 0x3800, "0.5");
+    assert_eq!(half(6), 0xbc00, "-1.0");
+    assert_eq!(half(7), 0x6800, "2048.0");
+
+    // The control: the same source through the eight-bit conversion, showing what the endpoints cost.
+    let narrowed = upload.rgba8(&source).unwrap();
+    assert_eq!(narrowed[0], 255, "4.0 narrows to the top of the byte range");
+    assert_eq!(narrowed[1], 0, "-2.5 narrows to zero");
+    assert_eq!(narrowed[4], 255, "and 65504.0 is indistinguishable from 4.0");
+}
+
+/// Values beyond half's range saturate to infinity rather than wrapping to a small finite number, and
+/// NaN stays NaN. A wrap here is invisible mid-range and catastrophic at the top, which is exactly the
+/// shape of error a conversion test is for.
+#[test]
+fn half_float_encoding_saturates_at_its_own_range() {
+    use hl_gpu::protocol::model::enums::TextureFormat;
+
+    let upload = Upload::new(GL_RGBA, GL_FLOAT, 1, 1, PixelStore::default()).unwrap();
+    let mut source = Vec::new();
+    for value in [1.0e30f32, -1.0e30, f32::NAN, 1.0e-9] {
+        source.extend_from_slice(&value.to_le_bytes());
+    }
+    let plane = upload.plane(&source, TextureFormat::Rgba16Float).unwrap();
+    let half = |index: usize| u16::from_le_bytes([plane[index * 2], plane[index * 2 + 1]]);
+    assert_eq!(half(0), 0x7c00, "+inf");
+    assert_eq!(half(1), 0xfc00, "-inf");
+    assert_eq!(half(2) & 0x7c00, 0x7c00, "NaN keeps the infinity exponent");
+    assert_ne!(half(2) & 0x03ff, 0, "and a non-zero mantissa, so it is not an infinity");
+    assert_eq!(half(3), 0x0000, "below the smallest subnormal, flushed to zero");
+}
+
+/// A `GL_HALF_FLOAT` source reaches a half-float plane as the values it carries.
+///
+/// This is the source type an application uploading into a half-float texture actually uses, and the one
+/// the eight-bit conversion could not read at all: its component width is two bytes, `narrowed` has no
+/// arm for it, and the per-format path then copied the whole multi-byte texel through verbatim. A
+/// four-channel source is therefore the WRONG case to test with — the verbatim copy produces the same
+/// eight bytes and the assertion passes while measuring nothing, which is what it did when first written.
+/// A three-channel source separates them: the correct answer is four half-float channels with an opaque
+/// alpha the source does not contain, and the byte copy produces six bytes of source.
+#[test]
+fn a_half_float_source_reaches_a_half_float_plane_as_values() {
+    use hl_gpu::protocol::model::enums::TextureFormat;
+
+    let upload = Upload::new(GL_RGB, GL_HALF_FLOAT, 1, 1, PixelStore::default()).unwrap();
+    let source: Vec<u8> = [0x4400u16, 0xc100, 0x7bff]
+        .iter()
+        .flat_map(|bits| bits.to_le_bytes())
+        .collect();
+    let plane = upload.plane(&source, TextureFormat::Rgba16Float).unwrap();
+    assert_eq!(plane.len(), 8, "one RGBA half-float texel, not the three channels supplied");
+    assert_eq!(&plane[..6], &source[..], "the three supplied channels pass through unchanged");
+    assert_eq!(
+        &plane[6..],
+        &[0x00, 0x3c],
+        "and the alpha the source does not carry is 1.0"
+    );
+}
+
+/// An 8-bit destination is unaffected: `plane` routes it to the same conversion it always used. Without
+/// this control the float assertions above would also pass against a conversion that emitted float texels
+/// for everything, which would break every ordinary texture in the driver.
+#[test]
+fn an_eight_bit_destination_still_takes_the_eight_bit_conversion() {
+    use hl_gpu::protocol::model::enums::TextureFormat;
+
+    let upload = Upload::new(GL_RGBA, GL_UNSIGNED_BYTE, 2, 1, PixelStore::default()).unwrap();
+    let source = [1u8, 2, 3, 4, 5, 6, 7, 8];
+    for destination in [
+        TextureFormat::Rgba8Unorm,
+        TextureFormat::Rgba8Srgb,
+        TextureFormat::Bgra8Unorm,
+        TextureFormat::R8Unorm,
+    ] {
+        assert_eq!(
+            upload.plane(&source, destination).unwrap(),
+            upload.rgba8(&source).unwrap(),
+            "{destination:?} takes the RGBA8 plane"
+        );
+    }
+}
+
+/// A source whose components are not values a float plane can hold is REFUSED, not filled with zeros.
+/// Paired with a source that must convert, because a `plane` that returned `None` for everything would
+/// satisfy the refusal on its own.
+#[test]
+fn a_float_plane_refuses_a_source_it_cannot_read_as_values() {
+    use hl_gpu::protocol::model::enums::TextureFormat;
+
+    // Control: an ordinary unsigned-byte source converts into the float plane.
+    let control = Upload::new(GL_RGBA, GL_UNSIGNED_BYTE, 1, 1, PixelStore::default()).unwrap();
+    assert_eq!(
+        control
+            .plane(&[255, 0, 0, 255], TextureFormat::Rgba16Float)
+            .unwrap(),
+        [0x00, 0x3c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3c],
+        "an unsigned normalized byte of 255 is 1.0, which is 0x3c00"
+    );
+
+    // A packed type carries a bit field, and this conversion does not decode the two packed FLOAT types.
+    let packed =
+        Upload::new(GL_RGB, GL_UNSIGNED_INT_10F_11F_11F_REV, 1, 1, PixelStore::default()).unwrap();
+    assert!(
+        packed.plane(&[0; 4], TextureFormat::Rgba16Float).is_none(),
+        "a packed float type is refused rather than guessed at"
+    );
+    assert!(
+        packed.rgba8(&[0; 4]).is_some(),
+        "and the same source is still accepted by the eight-bit plane, so the refusal is about the destination"
+    );
+}

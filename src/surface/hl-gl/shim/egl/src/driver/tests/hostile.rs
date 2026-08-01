@@ -295,7 +295,11 @@ fn a_storage_only_upload_allocates_the_plane_its_declared_format_names() {
         );
     }
 
-    // The upload arm: pixels are RGBA8 by the time they arrive, so the plane stays RGBA8 for now.
+    // The upload arm. This used to assert the opposite — that a supplied image keeps the RGBA8 plane —
+    // because the conversion narrowed every source to eight bits per channel before the destination was
+    // known, so giving the declared plane would only have put eight-bit bytes into a half-float buffer.
+    // The conversion now emits texels of the destination, so this is the fourth of the four allocation
+    // paths, and the only one that carries content.
     bind_current();
     let mut name = 0;
     glGenTextures(1, &mut name);
@@ -312,9 +316,27 @@ fn a_storage_only_upload_allocates_the_plane_its_declared_format_names() {
         GL_UNSIGNED_BYTE,
         pixels.as_ptr().cast(),
     );
+    assert_eq!(glGetError(), GL_NO_ERROR, "the half-float upload is accepted");
+    let (format, plane) = GlobalState::context(|state| {
+        let texture = state.gl.textures.get(name).expect("uploaded texture");
+        (Some(texture.ir_format), (*texture.data).clone())
+    });
     assert_eq!(
-        GlobalState::context(|state| state.gl.textures.get(name).map(|t| t.ir_format)),
-        Some(TextureFormat::Rgba8Unorm),
-        "an upload keeps the RGBA8 plane until the conversion can emit float texels"
+        format,
+        Some(TextureFormat::Rgba16Float),
+        "the declared plane is what it gets"
+    );
+    assert_eq!(plane.len(), 8 * 8 * 8, "and the plane is sized by that format's texel");
+    // 0x3C as an unsigned normalized byte is 60/255 = 0.23529412, which is 0x3388 in binary16. The value
+    // matters as much as the size: narrowing to eight bits and widening back would land here too, so a
+    // test that only checked the length would pass against the conversion this replaces.
+    assert_eq!(
+        &plane[..8],
+        &[0x88, 0x33, 0x88, 0x33, 0x88, 0x33, 0x88, 0x33],
+        "each channel is the half-float encoding of the source value, not a byte"
+    );
+    assert!(
+        plane.chunks_exact(8).all(|texel| texel == &plane[..8]),
+        "and every texel of the plane is written, not the first half of it"
     );
 }

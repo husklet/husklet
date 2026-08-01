@@ -6,6 +6,7 @@
 
 use crate::model::context::PixelStore;
 use crate::model::glconst::*;
+use hl_gpu::protocol::model::enums::TextureFormat;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Upload {
@@ -117,6 +118,112 @@ impl Upload {
         } else {
             4
         }
+    }
+
+    /// Convert this upload into texels of the DESTINATION plane's format.
+    ///
+    /// The narrowing to eight bits per channel that [`Self::rgba8`] performs happens BEFORE the
+    /// destination is known, which is why it cannot serve a float plane: a `GL_FLOAT` source routed
+    /// through it is clamped to `0..=1` and quantised to 256 levels, and re-widening that to half-float
+    /// afterwards recovers nothing. A float destination therefore reads its source as floating-point
+    /// channels and encodes them directly.
+    ///
+    /// A float destination whose source type this cannot read as a real value refuses the upload rather
+    /// than substituting narrowed bytes — the texture stays data-less and is truthfully skipped at draw
+    /// time, which is the same answer an unmodeled format has always received here.
+    pub fn plane(self, source: &[u8], destination: TextureFormat) -> Option<Vec<u8>> {
+        match destination {
+            TextureFormat::Rgba16Float => self.float_plane(source, FloatTexel::Half4),
+            TextureFormat::Rgba32Float => self.float_plane(source, FloatTexel::Single4),
+            TextureFormat::R32Float => self.float_plane(source, FloatTexel::Single1),
+            _ => self.rgba8(source),
+        }
+    }
+
+    fn float_plane(self, source: &[u8], texel: FloatTexel) -> Option<Vec<u8>> {
+        if source.len() < self.source_len {
+            return None;
+        }
+        // Refuse before allocating: a source whose components cannot be read as values has nothing to
+        // contribute to a float plane, and writing zeros would be indistinguishable from a black image.
+        if !self.reads_as_float() {
+            return None;
+        }
+        let mut out =
+            Vec::with_capacity(self.width.checked_mul(self.height)?.checked_mul(texel.bytes())?);
+        for y in 0..self.height {
+            let begin = self.start + y * self.stride;
+            let row = &source[begin..begin + self.width * self.source_bpp];
+            for pixel in row.chunks_exact(self.source_bpp) {
+                let rgba = self.rgba_f32(pixel)?;
+                texel.encode(rgba, &mut out);
+            }
+        }
+        Some(out)
+    }
+
+    /// One source texel as RGBA floating-point channels, with the source FORMAT's channel mapping applied
+    /// — the same mapping [`Self::rgba8`] applies to bytes (ES 2.0 table 3.11: a `GL_ALPHA` texel is
+    /// `(0, 0, 0, A)`, a `GL_LUMINANCE` texel is `(L, L, L, 1)`).
+    fn rgba_f32(self, pixel: &[u8]) -> Option<[f32; 4]> {
+        let mut source = [0.0f32; 4];
+        for channel in 0..self.channels {
+            source[channel] = self.component_value(pixel, channel)?;
+        }
+        let [a, b, c, d] = source;
+        Some(match self.format {
+            GL_RED | GL_RED_INTEGER | GL_DEPTH_COMPONENT => [a, 0.0, 0.0, 1.0],
+            GL_ALPHA => [0.0, 0.0, 0.0, a],
+            GL_LUMINANCE => [a, a, a, 1.0],
+            GL_RG | GL_RG_INTEGER => [a, b, 0.0, 1.0],
+            GL_LUMINANCE_ALPHA => [a, a, a, b],
+            GL_RGB | GL_RGB_INTEGER => [a, b, c, 1.0],
+            GL_BGRA_EXT => [c, b, a, d],
+            _ => [a, b, c, d],
+        })
+    }
+
+    /// Whether this upload's component type carries a value a float plane can hold. The packed and
+    /// integer-typed sources do not: their texels are bit fields or counts, and a float destination has no
+    /// meaning for them. `GL_UNSIGNED_INT_10F_11F_11F_REV` and `GL_UNSIGNED_INT_5_9_9_9_REV` are the two
+    /// packed types that genuinely carry floating-point values and are the obvious next additions here;
+    /// they are refused rather than guessed at, so an application using them gets a data-less texture it
+    /// can see instead of a plane of nonsense it cannot.
+    fn reads_as_float(self) -> bool {
+        matches!(
+            self.type_,
+            GL_UNSIGNED_BYTE | GL_BYTE | GL_UNSIGNED_SHORT | GL_SHORT | GL_HALF_FLOAT | GL_FLOAT
+        )
+    }
+
+    /// One component of a source texel as a floating-point value: normalized types are scaled to their
+    /// `0..=1` (or `-1..=1`) range, float types are read as they are, and an integer or packed type
+    /// answers `None` — it has no value a float plane can carry.
+    fn component_value(self, pixel: &[u8], channel: usize) -> Option<f32> {
+        let width = match self.type_ {
+            GL_UNSIGNED_BYTE | GL_BYTE => 1,
+            GL_UNSIGNED_SHORT | GL_SHORT | GL_HALF_FLOAT => 2,
+            GL_FLOAT => 4,
+            _ => return None,
+        };
+        let base = channel * width;
+        Some(match self.type_ {
+            GL_UNSIGNED_BYTE => *pixel.get(base)? as f32 / 255.0,
+            // ES 3.0 §2.3.5: a signed normalized value is `max(c / (2^(b-1) - 1), -1)`.
+            GL_BYTE => (*pixel.get(base)? as i8 as f32 / 127.0).max(-1.0),
+            GL_UNSIGNED_SHORT => {
+                u16::from_le_bytes(pixel.get(base..base + 2)?.try_into().ok()?) as f32 / 65535.0
+            }
+            GL_SHORT => {
+                (i16::from_le_bytes(pixel.get(base..base + 2)?.try_into().ok()?) as f32 / 32767.0)
+                    .max(-1.0)
+            }
+            GL_HALF_FLOAT => {
+                half_to_f32(u16::from_le_bytes(pixel.get(base..base + 2)?.try_into().ok()?))
+            }
+            GL_FLOAT => f32::from_le_bytes(pixel.get(base..base + 4)?.try_into().ok()?),
+            _ => return None,
+        })
     }
 
     pub fn rgba8(self, source: &[u8]) -> Option<Vec<u8>> {
@@ -307,6 +414,97 @@ impl Upload {
         // The low byte of the component: an integer wider than the plane truncates rather than scaling.
         pixel.get(channel * width).copied().unwrap_or(0)
     }
+}
+
+/// The texel encoding of a floating-point destination plane: how many channels it stores and at what
+/// width. One place so the plane's byte size and the bytes written into it cannot come apart, which is
+/// the disagreement the whole shadow change exists to remove.
+#[derive(Clone, Copy, Debug)]
+enum FloatTexel {
+    /// `Rgba16Float` — four IEEE 754 binary16 channels.
+    Half4,
+    /// `Rgba32Float` — four IEEE 754 binary32 channels.
+    Single4,
+    /// `R32Float` — one binary32 channel. The plane's four bytes are one float, not four unsigned bytes;
+    /// filling it with RGBA8 is how a `GL_R32F` texture came to hold colour bytes read as a float.
+    Single1,
+}
+
+impl FloatTexel {
+    fn bytes(self) -> usize {
+        match self {
+            Self::Half4 => 8,
+            Self::Single4 => 16,
+            Self::Single1 => 4,
+        }
+    }
+
+    fn encode(self, rgba: [f32; 4], out: &mut Vec<u8>) {
+        match self {
+            Self::Half4 => {
+                for channel in rgba {
+                    out.extend_from_slice(&f32_to_half(channel).to_le_bytes());
+                }
+            }
+            Self::Single4 => {
+                for channel in rgba {
+                    out.extend_from_slice(&channel.to_le_bytes());
+                }
+            }
+            Self::Single1 => out.extend_from_slice(&rgba[0].to_le_bytes()),
+        }
+    }
+}
+
+/// IEEE 754 binary16 → binary32. Subnormals and infinities/NaN are carried through rather than flushed,
+/// because a half-float texture is asked for precisely when values outside `0..=1` matter.
+fn half_to_f32(bits: u16) -> f32 {
+    let sign = ((bits >> 15) as u32) << 31;
+    let exponent = ((bits >> 10) & 0x1f) as u32;
+    let mantissa = (bits & 0x3ff) as u32;
+    let value = match exponent {
+        0 if mantissa == 0 => sign,
+        // Subnormal: normalize by shifting the mantissa up until its leading bit falls out.
+        0 => {
+            let shift = mantissa.leading_zeros() - 21;
+            sign | ((127 - 15 - shift) << 23) | ((mantissa << (shift + 1)) & 0x7f_ffff) << 13
+        }
+        0x1f => sign | 0x7f80_0000 | (mantissa << 13),
+        _ => sign | ((exponent + 127 - 15) << 23) | (mantissa << 13),
+    };
+    f32::from_bits(value)
+}
+
+/// IEEE 754 binary32 → binary16, rounding to nearest even. A magnitude above half's maximum saturates to
+/// infinity and one below its smallest subnormal flushes to zero, which is what the range of the format
+/// permits; NaN stays NaN rather than becoming an infinity.
+fn f32_to_half(value: f32) -> u16 {
+    let bits = value.to_bits();
+    let sign = ((bits >> 16) & 0x8000) as u16;
+    let exponent = ((bits >> 23) & 0xff) as i32;
+    let mantissa = bits & 0x7f_ffff;
+    if exponent == 0xff {
+        // Infinity, or a NaN whose payload must not round away to infinity.
+        return sign | 0x7c00 | if mantissa == 0 { 0 } else { 0x200 };
+    }
+    let unbiased = exponent - 127 + 15;
+    if unbiased >= 0x1f {
+        return sign | 0x7c00;
+    }
+    if unbiased <= 0 {
+        // Subnormal half, or an underflow to zero.
+        if unbiased < -10 {
+            return sign;
+        }
+        let full = mantissa | 0x80_0000;
+        let shift = (14 - unbiased) as u32;
+        let rounded = (full >> shift) + ((full >> (shift - 1)) & 1);
+        return sign | rounded as u16;
+    }
+    let rounded = ((unbiased as u32) << 10) + (mantissa >> 13) + ((mantissa >> 12) & 1);
+    // Rounding the mantissa up may carry into the exponent, which the addition above already handles;
+    // a carry past the largest finite exponent lands on the infinity encoding, which is correct.
+    sign | rounded as u16
 }
 
 /// Expand a `bits`-wide unsigned normalized integer to 8 bits.
