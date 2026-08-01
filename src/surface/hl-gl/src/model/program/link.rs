@@ -108,6 +108,9 @@ impl Program {
             if let Some(name) = glsl::compute_default_block_uniform(&cs_src)? {
                 return Err(glsl::UniformError::ComputeDefaultBlock(name));
             }
+            if !glsl::Source::new(&cs_src).has_main_body() {
+                return Err(glsl::UniformError::MainBody { stage: "compute" });
+            }
             let source = glsl::Translator::compute(&cs_src);
             self.compute_ir = Some(
                 GlslDescriptor {
@@ -121,6 +124,18 @@ impl Program {
             self.linked = true;
             self.link_error.clear();
             return Ok(());
+        }
+        // A stage the translator cannot find a complete `main` in must be refused BEFORE anything is
+        // regenerated from it. `translate_render` rebuilds a stage from its reflected declarations plus
+        // its main body; given a shader with a dropped closing brace it used to emit `void main() {}`,
+        // which the host front end correctly accepts. The frame then drew nothing, wrote no pixel, and
+        // reported success at every layer — the failure presents as a blank, fully transparent region
+        // rather than as an error. Measured over the corpus: every one of 42 real shaders with a single
+        // closing brace removed travelled the whole chain and rendered nothing.
+        for (stage, source) in [("vertex", &vs_src), ("fragment", &fs_src)] {
+            if !glsl::Source::new(source).has_main_body() {
+                return Err(glsl::UniformError::MainBody { stage });
+            }
         }
         glsl::StageSources::new(&vs_src, &fs_src).validate_sampler_array_uses()?;
         let (unis, ubuf_size) = glsl::StageSources::new(&vs_src, &fs_src).uniform_layout()?;

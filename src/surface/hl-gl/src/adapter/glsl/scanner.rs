@@ -282,8 +282,14 @@ pub(super) fn find_from(hay: &[u8], needle: &[u8], from: usize) -> Option<usize>
 /// boundary and must be followed by `(` — so a carried helper whose name merely CONTAINS "main" (e.g.
 /// `mainImage`) never hijacks the scan — and the closing brace is found by brace-depth counting rather than
 /// the last `}` in the source, so a helper function emitted AFTER `main` does not swallow the body.
+///
+/// `None` means the body could not be found: there is no `main(` at all, or its opening brace is never
+/// closed. That is DISTINCT from `Some("")`, which is the legitimately empty body of `void main(){}`.
+/// Both used to return the empty string, and the consequence was not a wrong error but a wrong RENDER —
+/// the translator regenerated `void main() {}` from a shader with a dropped brace, the host front end
+/// correctly accepted it, the draw executed and wrote nothing, and no layer reported anything.
 impl Source<'_> {
-    pub(super) fn main_body(self) -> String {
+    pub(super) fn main_body(self) -> Option<String> {
         let b = self.text.as_bytes();
         let n = b.len();
         let mut i = 0usize;
@@ -305,10 +311,7 @@ impl Source<'_> {
             }
             i = rel + 4;
         }
-        let p = match open {
-            Some(p) => p,
-            None => return String::new(),
-        };
+        let p = open?;
         let mut depth = 0i32;
         let mut k = p;
         while k < n {
@@ -317,14 +320,23 @@ impl Source<'_> {
                 b'}' => {
                     depth -= 1;
                     if depth == 0 {
-                        return String::from_utf8_lossy(&b[p + 1..k]).into_owned();
+                        return Some(String::from_utf8_lossy(&b[p + 1..k]).into_owned());
                     }
                 }
                 _ => {}
             }
             k += 1;
         }
-        String::new()
+        // The opening brace is never closed: the source is truncated or unbalanced.
+        None
+    }
+
+    /// Whether this stage has a `main` whose body can be found and is closed.
+    ///
+    /// The predicate `Program::link` refuses on. A stage that fails it is not translatable, and the
+    /// translator's regeneration would otherwise turn it into a shader that compiles and draws nothing.
+    pub fn has_main_body(self) -> bool {
+        self.main_body().is_some()
     }
 }
 

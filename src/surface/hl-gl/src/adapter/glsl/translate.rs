@@ -577,10 +577,17 @@ impl StageSources<'_> {
         Declarations::emit_uniform_block(&mut vs_out, &unis);
         Declarations::emit_sampler_decls(&mut vs_out, &samps);
         vs_out.push_str(&rewrite(&vs_funcs, &samps));
-        let mut vb = Source::new(&vs).main_body();
-        if vb.is_empty() {
-            hl_log::hl_warn!(hl_log::tag::GL, "glsl vs translate: no main body");
-        }
+        // `Program::link` refuses a stage whose body cannot be found, so this cannot be reached with a
+        // real program. Kept honest rather than silent: regenerating an empty body from a shader that HAS
+        // one is the wrong-render defect, and it must not come back through a caller that skips the gate.
+        let mut vb = Source::new(&vs).main_body().unwrap_or_else(|| {
+            hl_log::hl_error!(
+                hl_log::tag::GL,
+                "glsl vs translate: no findable main body — emitting an EMPTY main, which compiles \
+                 and draws NOTHING. The link gate should have refused this."
+            );
+            String::new()
+        });
         NormalizedSource::new(&mut vb).strip_precision();
         Declarations::rewrite_integer_sampler_fetches(&mut vb, &samps);
         Declarations::rewrite_sampler_refs(&mut vb, &samps);
@@ -632,10 +639,17 @@ impl StageSources<'_> {
         } else {
             fs_out.push_str(&format!("layout(location = 0) out vec4 {frag_name};\n"));
         }
-        let mut fb = Source::new(&fs).main_body();
-        if fb.is_empty() {
-            hl_log::hl_warn!(hl_log::tag::GL, "glsl fs translate: no main body");
-        }
+        // `Program::link` refuses a stage whose body cannot be found, so this cannot be reached with a
+        // real program. Kept honest rather than silent: regenerating an empty body from a shader that HAS
+        // one is the wrong-render defect, and it must not come back through a caller that skips the gate.
+        let mut fb = Source::new(&fs).main_body().unwrap_or_else(|| {
+            hl_log::hl_error!(
+                hl_log::tag::GL,
+                "glsl fs translate: no findable main body — emitting an EMPTY main, which compiles \
+                 and draws NOTHING. The link gate should have refused this."
+            );
+            String::new()
+        });
         NormalizedSource::new(&mut fb).strip_precision();
         Declarations::rewrite_integer_sampler_fetches(&mut fb, &samps);
         Declarations::rewrite_sampler_refs(&mut fb, &samps);
