@@ -280,8 +280,15 @@ fn an_uninitialized_display_backs_nothing_and_says_so() {
 /// is the largest amplifier in this driver: a lost group makes every later GL call a no-op reporting
 /// `GL_CONTEXT_LOST`, so one bad submission takes down every case behind it in the same process and the
 /// first failure disappears behind a cascade that has nothing to do with it. The refused submission is
-/// safe to continue from — `runtime::submit` rejects a batch atomically and the client's residency mirror
-/// records only acknowledged batches, so both sides agree the batch did not happen.
+/// safe to continue from as far as the TRANSPORT is concerned — `runtime::submit` rejects a batch
+/// atomically and the connection carried the answer.
+///
+/// This test asserts that and only that. It does NOT establish that both sides agree the batch did not
+/// happen, which an earlier version of this comment claimed: the residency mirror it cited is byte
+/// accounting, while the GL-object-to-IR-id caches are advanced optimistically at prepare time and are
+/// not rolled back on a NACK. A Chrome session died of exactly that gap on 2026-08-01. The missing test
+/// is named in `submit.rs`: a refusal followed by a succeeding submission that re-creates the same
+/// objects, asserting the second does not reference an id the first one's rollback discarded.
 #[test]
 fn a_refused_request_fails_the_call_and_keeps_the_share_group() {
     let sequencer = crate::transport::Sequencer::spawn(RemoteCommandSink::new(

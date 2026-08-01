@@ -107,11 +107,25 @@ impl GlobalState {
     /// cascade that has nothing to do with it.
     ///
     /// A host that received a complete request and refused it has not taken the connection with it: the
-    /// runtime rejects a batch atomically, so the id lifecycle and the residency ledger are exactly as
-    /// they were, the client's residency mirror records only acknowledged batches, and the next request
-    /// stands on the same ground the refused one did. That is an ordinary error and the call that caused
-    /// it is the call that reports it. A transport that is gone, ambiguous or retired is the opposite:
+    /// runtime rejects a batch atomically and the transport is still good, so the call that caused the
+    /// error is the call that reports it. A transport that is gone, ambiguous or retired is the opposite:
     /// nothing behind it is recoverable, and the group is right to die.
+    ///
+    /// DO NOT read "the next request stands on the same ground the refused one did" into this, which an
+    /// earlier version of this comment asserted on the strength of the client's residency MIRROR
+    /// recording only acknowledged batches. That is true and it is about byte accounting; it says
+    /// nothing about the GL-object-to-IR-id caches, which `gpu_submit_for` advances optimistically at
+    /// prepare time and does NOT roll back when the host NACKs. Measured 2026-08-01: one Chrome batch
+    /// failed on `render pipeline creation failed: Validation Error`, the host rolled back creates that
+    /// had already succeeded inside it, and the guest went on referencing them — eight consecutive
+    /// batches then NACKed with `unknown/freed sampler 2 / texture 68 / shader 81`, no frame was
+    /// published and no window was created. Returning `false` here is still correct; the group is not
+    /// lost. The desynchronisation is a separate hole in `gpu_submit_for`, which must restore
+    /// `GlContext::frame_state()` on a refusal the way `driver/storage/external.rs` already does.
+    ///
+    /// The check this claim needs and does not yet have: a refusal followed by a SUCCEEDING submission
+    /// that re-creates the same objects, asserting the second one does not reference an id the first
+    /// one's rollback discarded.
     ///
     /// The classification is on the failure's KIND rather than on where it was caught, because the two do
     /// not coincide — a refusal and a dropped socket both arrive here, from the same call.
