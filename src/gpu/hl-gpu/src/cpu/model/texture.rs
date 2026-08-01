@@ -120,3 +120,57 @@ impl Texture {
         self.plane_at(0, layer)
     }
 }
+
+#[cfg(test)]
+mod texel_size_agreement {
+    use super::*;
+    use crate::protocol::model::enums::TextureFormat;
+
+    /// `Texture::texel_bytes` and `TextureFormat::software_texel_bytes` must never disagree on a format
+    /// the software backend will actually index.
+    ///
+    /// Suspected 2026-08-01 as the cause of a blit regression and REFUTED here, which is why the test
+    /// exists rather than the fix. The two do differ: `texel_bytes` maps `Depth32Float` to 4 and
+    /// `Depth24PlusStencil8` to 8, while `bytes_per_texel` — and so `software_texel_bytes` — returns
+    /// nothing for both. That difference is SAFE only because the software path refuses those formats
+    /// outright before it indexes anything, so a plane sized by one function is never addressed with the
+    /// other's stride.
+    ///
+    /// "Safe by a refusal elsewhere" is exactly the property that rots quietly: the day a depth format is
+    /// given a software path, plane 0 will look correct and every plane after it will be misplaced by the
+    /// difference between 4 and 0. Single-plane textures cannot show it, which is most of this suite.
+    /// So the invariant is pinned as a REQUIREMENT — wherever the software backend can size a texel, both
+    /// functions must give the same answer.
+    #[test]
+    fn both_texel_sizes_agree_wherever_the_software_backend_can_size_one() {
+        let mut checked = 0;
+        for wire in 1..=64u32 {
+            let Ok(format) = TextureFormat::from_u32(wire) else {
+                continue;
+            };
+            let Ok(software) = format.software_texel_bytes() else {
+                continue; // the software backend refuses this format; it never indexes it
+            };
+            let desc = TextureDesc {
+                width: 1,
+                height: 1,
+                depth: 1,
+                mip_levels: 1,
+                sample_count: 1,
+                dim: crate::protocol::model::enums::TextureDim::D2,
+                format,
+                usage: 0,
+                label: String::new(),
+            };
+            assert_eq!(
+                Texture::texel_bytes(&desc),
+                Some(software),
+                "{format:?}: plane sizing and texel indexing disagree, so every plane after the first \
+                 would be misplaced"
+            );
+            checked += 1;
+        }
+        // An agreement test that checked nothing would pass just as loudly.
+        assert!(checked >= 12, "only {checked} formats exercised; the sweep found almost nothing");
+    }
+}

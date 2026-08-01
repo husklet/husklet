@@ -87,10 +87,27 @@ the attempt established is worth more than the diff:
   flip the caller asked for, which is exactly the failure it exists to catch.
 * **The unresolved regression**, for whoever picks this up: with per-plane addressing wired through
   `plane_at`, `blit::a_nearest_blit_converts_rather_than_reinterpreting_a_same_size_texel` read `0.0` where
-  it expected `1.0` — the destination looked unwritten. Suspicion, unverified: `plane_at` sizes planes with
-  `Texture::texel_bytes` while `blit_texture` indexes with `format.software_texel_bytes()`, and the two
-  disagreeing would misplace every offset past plane 0 while leaving plane 0 apparently fine. Check that
-  before rewriting anything.
+  it expected `1.0` — the destination looked unwritten.
+
+  **My suspicion about it was CHASED AND REFUTED — do not spend time on it.** I guessed that `plane_at`
+  sizing planes with `Texture::texel_bytes` while `blit_texture` indexes with `software_texel_bytes()`
+  would misplace every offset past plane 0. Checked across every declared format: **they agree on every
+  format the software backend can size.** Both delegate to `bytes_per_texel()`; `texel_bytes` differs only
+  by mapping `Depth32Float`→4 and `Depth24PlusStencil8`→8, where `software_texel_bytes` refuses outright,
+  so the software path never indexes with a stride the other sized. Pinned by
+  `cpu/model/texture.rs::texel_size_agreement`, which fails if either function moves alone.
+
+  So **the regression is something else and the next person should start fresh rather than anchored on
+  this lead.** Untried directions, in the order I would take them: whether `dst_plane_starts` was keyed on
+  `doz + dz` while the write offset already included the destination origin (a double-count that lands
+  outside the plane for any non-zero origin), and whether `plane_at(0, 0)` on a `depth: 1` D2 texture
+  returns the range the old code assumed implicitly. Both are cheap to check with a single-plane case,
+  which is where the failure actually appeared.
+
+  Note the shape of the invariant that survived: "safe because something else refuses first" is not the
+  same as "correct", and it is the kind that rots silently — the day a depth format gets a software path,
+  plane 0 will look right and every later plane will be off. That is why it is now a test rather than a
+  comment.
 
 ### Layers, once the oracle is in
 
