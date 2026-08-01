@@ -108,7 +108,22 @@ impl Status {
             // cannot be: the host knows which typed error it refused with and the acknowledgement byte
             // carries only "no", so the reason is destroyed at the wire. Widening that byte is what
             // would let this be exact.
-            GpuError::Transport(failure) if failure.refusal() => VK_ERROR_OUT_OF_DEVICE_MEMORY,
+            GpuError::Transport(failure) if failure.refusal() => {
+                // The acknowledgement now carries a reason CLASS, so a refusal maps to the same result
+                // the identical error would have produced had it been caught locally, instead of the
+                // nearest legal code. An older host states no class and still lands on
+                // OUT_OF_DEVICE_MEMORY, which is what this returned for every refusal before.
+                use hl_gpu::transport::model::header::RefusalKind;
+                match failure.refusal_kind() {
+                    Some(RefusalKind::Unsupported) => VK_ERROR_FEATURE_NOT_PRESENT,
+                    Some(RefusalKind::OutOfBounds) => VK_ERROR_MEMORY_MAP_FAILED,
+                    Some(RefusalKind::UnknownId) => VK_ERROR_UNKNOWN,
+                    Some(RefusalKind::Invalid) => VK_ERROR_INITIALIZATION_FAILED,
+                    Some(RefusalKind::ResourceLimit) | Some(RefusalKind::Unstated) | None => {
+                        VK_ERROR_OUT_OF_DEVICE_MEMORY
+                    }
+                }
+            }
             GpuError::Decode(_) | GpuError::Transport(_) | GpuError::Panicked(_) => {
                 VK_ERROR_DEVICE_LOST
             }
@@ -147,6 +162,69 @@ mod tests {
         );
         assert_eq!(Status::from_error(&refused), VK_ERROR_OUT_OF_DEVICE_MEMORY);
         assert_ne!(Status::from_error(&refused), VK_ERROR_DEVICE_LOST);
+    }
+
+    /// A classified refusal maps to the SAME result the identical error would have produced had the
+    /// driver caught it locally — that agreement is the point, because whether a limit was checked guest
+    /// side or host side is invisible to the application and must not change what it is told.
+    #[test]
+    fn a_classified_refusal_maps_like_the_local_error() {
+        use hl_gpu::transport::model::error::TransportPhase;
+        use hl_gpu::transport::model::header::{
+            ACK_FAIL, ACK_INVALID, ACK_OUT_OF_BOUNDS, ACK_RESOURCE_LIMIT, ACK_UNKNOWN_ID,
+            ACK_UNSUPPORTED,
+        };
+
+        let refused = |ack: u8| {
+            Status::from_error(&GpuError::Transport(TransportError::Rejected {
+                phase: TransportPhase::Acknowledgement,
+                acknowledgement: ack,
+            }))
+        };
+        assert_eq!(
+            refused(ACK_UNSUPPORTED),
+            Status::from_error(&GpuError::Unsupported("x"))
+        );
+        assert_eq!(
+            refused(ACK_RESOURCE_LIMIT),
+            Status::from_error(&GpuError::ResourceLimit("x"))
+        );
+        assert_eq!(
+            refused(ACK_OUT_OF_BOUNDS),
+            Status::from_error(&GpuError::OutOfBounds)
+        );
+        assert_eq!(
+            refused(ACK_INVALID),
+            Status::from_error(&GpuError::Invalid("x"))
+        );
+        assert_eq!(
+            refused(ACK_UNKNOWN_ID),
+            Status::from_error(&GpuError::UnknownId { kind: "x", id: 1 })
+        );
+        // An older host states no class. That must stay exactly what it was before classes existed, and
+        // it must never be a device loss.
+        assert_eq!(refused(ACK_FAIL), super::VK_ERROR_OUT_OF_DEVICE_MEMORY);
+        assert_ne!(refused(ACK_FAIL), VK_ERROR_DEVICE_LOST);
+    }
+
+    /// The consumer-side form of the protocol contract: NO acknowledgement value may turn a refusal into
+    /// a lost device — not the ones this host sends today, and not the ones it does not. A driver that
+    /// recognised only the current failure value would fall through to the terminal path the moment a
+    /// host began classifying, and would do it silently, looking like the classification working right
+    /// up until a newly classified refusal tore down a device.
+    #[test]
+    fn no_acknowledgement_value_makes_a_refusal_a_device_loss() {
+        use hl_gpu::transport::model::error::TransportPhase;
+        for ack in 0u8..=255 {
+            let result = Status::from_error(&GpuError::Transport(TransportError::Rejected {
+                phase: TransportPhase::Acknowledgement,
+                acknowledgement: ack,
+            }));
+            assert_ne!(
+                result, VK_ERROR_DEVICE_LOST,
+                "acknowledgement {ack} was treated as a lost device"
+            );
+        }
     }
 
     #[test]

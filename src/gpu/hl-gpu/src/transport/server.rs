@@ -14,17 +14,31 @@ use crate::protocol::model::capability::Capabilities;
 use crate::protocol::model::command::Cmd;
 use crate::transport::adapter::unix;
 use crate::transport::adapter::unix::FrameOutcome;
-use crate::transport::model::header::{SubmitHeader, ACK_FAIL, ACK_OK};
+use crate::transport::model::header::{RefusalKind, SubmitHeader, ACK_FAIL, ACK_OK};
 use crate::transport::model::readback::{
     readback_kind, ReadbackRequest, READBACK_FAIL, READBACK_MAGIC, READBACK_OK,
 };
 
 /// A handler's verdict for one decoded frame, mapped straight to the wire ack.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Verdict {
     /// The frame was accepted (replayed/committed) → [`ACK_OK`].
     Ack,
-    /// The frame was rejected (replay error / missing surface) → [`ACK_FAIL`].
-    Nack,
+    /// The frame was refused, carrying as much of the reason as one byte can hold. `Nack` is
+    /// [`RefusalKind::Unstated`] — a host that has a typed error should use [`Verdict::for_error`]
+    /// instead, because the reason is otherwise destroyed here and the guest can only guess.
+    Refused(RefusalKind),
+}
+
+#[allow(non_upper_case_globals)]
+impl Verdict {
+    /// The unclassified refusal, kept as a name so existing hosts and tests read unchanged.
+    pub const Nack: Verdict = Verdict::Refused(RefusalKind::Unstated);
+
+    /// Refuse a frame with the class of the error that caused it.
+    pub fn for_error(error: &crate::protocol::model::error::GpuError) -> Self {
+        Verdict::Refused(RefusalKind::for_error(error))
+    }
 }
 
 impl From<bool> for Verdict {
@@ -41,7 +55,7 @@ impl Verdict {
     fn ack_byte(&self) -> u8 {
         match self {
             Verdict::Ack => ACK_OK,
-            Verdict::Nack => ACK_FAIL,
+            Verdict::Refused(kind) => kind.ack(),
         }
     }
 }
@@ -238,27 +252,26 @@ fn serve_loop<H: ConnectionHandler>(
                         .map(|started| started.elapsed().as_micros())
                         .unwrap_or_default();
                     let handler_started = diagnostics.then(Instant::now);
-                    let verdict = match HandlerBoundary::call(|| {
-                        handler.submit(&frame.header, &batch)
-                    }) {
-                        Ok(verdict) => verdict,
-                        Err(panic) => {
-                            // Both outcomes write ACK_FAIL, so without this line a crashing backend looks
-                            // exactly like a cleanly-refused batch and the panic message is lost entirely.
-                            if Reported::first(&mut reported.panicked) {
-                                hl_log::hl_error!(
-                                    hl_log::tag::TRANSPORT,
-                                    "submit handler PANICKED surface={} commands={} bytes={} \
+                    let verdict =
+                        match HandlerBoundary::call(|| handler.submit(&frame.header, &batch)) {
+                            Ok(verdict) => verdict,
+                            Err(panic) => {
+                                // Both outcomes write ACK_FAIL, so without this line a crashing backend looks
+                                // exactly like a cleanly-refused batch and the panic message is lost entirely.
+                                if Reported::first(&mut reported.panicked) {
+                                    hl_log::hl_error!(
+                                        hl_log::tag::TRANSPORT,
+                                        "submit handler PANICKED surface={} commands={} bytes={} \
                                      (frame NACKed, connection kept): {}",
-                                    frame.header.surface_id,
-                                    batch.len(),
-                                    frame.payload.len(),
-                                    panic
-                                );
+                                        frame.header.surface_id,
+                                        batch.len(),
+                                        frame.payload.len(),
+                                        panic
+                                    );
+                                }
+                                Verdict::Nack
                             }
-                            Verdict::Nack
-                        }
-                    };
+                        };
                     let handler_us = handler_started
                         .map(|started| started.elapsed().as_micros())
                         .unwrap_or_default();

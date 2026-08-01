@@ -70,6 +70,20 @@ impl TransportError {
         }
     }
 
+    /// The class of a refusal, as far as the acknowledgement byte states it. `None` when this failure is
+    /// not a refusal at all — the connection is gone, ambiguous, or retired, and nothing behind it is
+    /// recoverable.
+    pub fn refusal_kind(&self) -> Option<crate::transport::model::header::RefusalKind> {
+        match self {
+            Self::Rejected {
+                acknowledgement, ..
+            } => Some(crate::transport::model::header::RefusalKind::from_ack(
+                *acknowledgement,
+            )),
+            _ => None,
+        }
+    }
+
     pub fn retryable_before_request(&self) -> bool {
         matches!(
             self,

@@ -202,7 +202,11 @@ impl ConnectionHandler for Connection {
                     encode_elapsed.as_micros(),
                     execute_started.elapsed().as_micros()
                 );
-                Verdict::Nack
+                // Classify the refusal from the typed error rather than collapsing it to a bare "no".
+                // The acknowledgement byte is the only thing the guest receives, so a reason discarded
+                // here is a reason the guest can never recover — which is why hundreds of refusals
+                // reached applications as an unexplained lost device.
+                Verdict::for_error(&error)
             }
         }
     }

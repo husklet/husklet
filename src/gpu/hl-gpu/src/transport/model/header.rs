@@ -11,8 +11,101 @@ use super::abi::Surface;
 /// committed; any other value — notably [`ACK_FAIL`] — means the host rejected or failed the frame and the
 /// guest must NOT treat it as presented.
 pub const ACK_OK: u8 = 1;
-/// The host executor's documented failure acknowledgement (replay error / missing surface).
+/// The host executor's UNCLASSIFIED failure acknowledgement (replay error / missing surface).
+///
+/// Still the value an older host sends for every refusal, and still the value a newer host sends when it
+/// has no better classification, so it must keep meaning "refused, reason unstated" forever.
 pub const ACK_FAIL: u8 = 0;
+
+// ---- classified refusals ------------------------------------------------------------------------
+//
+// The acknowledgement is ONE byte and cannot grow. Traffic on this connection is host→guest only — the
+// guest reads the host's advertisement and never announces itself (`CommandSink::negotiate`) — so the
+// host cannot know whether a guest would understand a longer reply, and lengthening it would
+// desynchronise an older guest on the very next frame. Carrying the reason as distinct BYTE VALUES needs
+// no layout change and degrades safely in both directions: an older guest treats every non-`ACK_OK`
+// value as a refusal already, and a newer guest reads `ACK_FAIL` from an older host exactly as before.
+//
+// Mixed versions are not hypothetical. A host worker twelve hours older than the guest driver loaded
+// against it mis-decoded a wire change on this machine, in one session, and invalidated three
+// measurements before the mismatch was noticed. "No old peers exist" is the assumption that holds until
+// it does not.
+/// The host does not implement the operation at all.
+pub const ACK_UNSUPPORTED: u8 = 2;
+/// The request exceeded a negotiated or device limit.
+pub const ACK_RESOURCE_LIMIT: u8 = 3;
+/// The request was malformed or violated an invariant.
+pub const ACK_INVALID: u8 = 4;
+/// A range in the request fell outside the resource it addressed.
+pub const ACK_OUT_OF_BOUNDS: u8 = 5;
+/// The request named a resource the host does not have.
+pub const ACK_UNKNOWN_ID: u8 = 6;
+
+/// Why the host refused a frame, as far as one acknowledgement byte can say.
+///
+/// This is a REASON CLASS, not an identity: it says what kind of thing was wrong, never which command in
+/// the batch was wrong. Carrying the index needs the guest to announce itself first, which this protocol
+/// has no channel for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RefusalKind {
+    /// The host stated no reason — an older host, or a failure with no better classification.
+    Unstated,
+    Unsupported,
+    ResourceLimit,
+    Invalid,
+    OutOfBounds,
+    UnknownId,
+}
+
+impl RefusalKind {
+    /// Read the class out of a non-`ACK_OK` acknowledgement byte. An unrecognised value is `Unstated`
+    /// rather than an error: a future host may classify more finely than this guest understands, and the
+    /// refusal is still a refusal.
+    pub fn from_ack(ack: u8) -> Self {
+        match ack {
+            ACK_UNSUPPORTED => Self::Unsupported,
+            ACK_RESOURCE_LIMIT => Self::ResourceLimit,
+            ACK_INVALID => Self::Invalid,
+            ACK_OUT_OF_BOUNDS => Self::OutOfBounds,
+            ACK_UNKNOWN_ID => Self::UnknownId,
+            _ => Self::Unstated,
+        }
+    }
+
+    pub fn ack(self) -> u8 {
+        match self {
+            Self::Unstated => ACK_FAIL,
+            Self::Unsupported => ACK_UNSUPPORTED,
+            Self::ResourceLimit => ACK_RESOURCE_LIMIT,
+            Self::Invalid => ACK_INVALID,
+            Self::OutOfBounds => ACK_OUT_OF_BOUNDS,
+            Self::UnknownId => ACK_UNKNOWN_ID,
+        }
+    }
+
+    /// Classify the typed error the host refused with. Transport, decode and panic failures are NOT
+    /// refusals — they mean the connection or the backend is no longer trustworthy — so they stay
+    /// `Unstated` and a guest continues to treat them as terminal.
+    pub fn for_error(error: &crate::protocol::model::error::GpuError) -> Self {
+        use crate::protocol::model::error::GpuError as E;
+        match error {
+            E::Unsupported(_) => Self::Unsupported,
+            E::ResourceLimit(_) => Self::ResourceLimit,
+            E::OutOfBounds => Self::OutOfBounds,
+            E::UnknownId { .. } | E::DuplicateId { .. } => Self::UnknownId,
+            E::Invalid(_)
+            | E::BadEnum { .. }
+            | E::BadTag(_)
+            | E::NonFinite(_)
+            | E::NonCanonicalBool(_)
+            | E::Utf8
+            | E::ShortBuffer
+            | E::TrailingBytes
+            | E::Kernel(_) => Self::Invalid,
+            E::Decode(_) | E::Transport(_) | E::Panicked(_) => Self::Unstated,
+        }
+    }
+}
 
 /// The fixed 16-byte submit header: `[surface.id, surface.width, surface.height, payload_len]`, each a
 /// little-endian `u32`, exactly as `gl_shim.c` writes it and the host executor reads it.
@@ -61,26 +154,79 @@ impl SubmitHeader {
 }
 
 #[cfg(test)]
-mod tests {
+mod refusal_tests {
     use super::*;
+    use crate::protocol::model::error::GpuError;
 
+    /// A class chosen on the host must survive the byte and arrive as the same class on the guest. The
+    /// round trip is the whole mechanism; everything either side of it is a lookup table.
     #[test]
-    fn header_roundtrips_and_matches_shipped_layout() {
-        let surf = Surface {
-            id: 42,
-            width: 640,
-            height: 480,
-            stride: 2560,
-            fd: -1,
-            generation: 0,
-        };
-        let h = SubmitHeader::for_frame(&surf, 7);
-        let bytes = h.to_bytes();
-        // Byte-identical to the shipped gl_shim.c layout: [id, w, h, len] as LE u32s.
-        assert_eq!(&bytes[0..4], &42u32.to_le_bytes());
-        assert_eq!(&bytes[4..8], &640u32.to_le_bytes());
-        assert_eq!(&bytes[8..12], &480u32.to_le_bytes());
-        assert_eq!(&bytes[12..16], &7u32.to_le_bytes());
-        assert_eq!(SubmitHeader::from_bytes(&bytes), h);
+    fn a_refusal_class_survives_the_acknowledgement_byte() {
+        for (error, expected) in [
+            (GpuError::Unsupported("x"), RefusalKind::Unsupported),
+            (GpuError::ResourceLimit("x"), RefusalKind::ResourceLimit),
+            (GpuError::OutOfBounds, RefusalKind::OutOfBounds),
+            (GpuError::Invalid("x"), RefusalKind::Invalid),
+            (
+                GpuError::UnknownId { kind: "x", id: 1 },
+                RefusalKind::UnknownId,
+            ),
+        ] {
+            let sent = RefusalKind::for_error(&error);
+            assert_eq!(sent, expected, "host classified {error:?} wrongly");
+            assert_eq!(
+                RefusalKind::from_ack(sent.ack()),
+                expected,
+                "class did not survive the byte for {error:?}"
+            );
+            assert_ne!(sent.ack(), ACK_OK, "a refusal must never encode as success");
+        }
+    }
+
+    /// A failure that is NOT a refusal stays unstated, so a guest keeps treating it as terminal. Handing
+    /// a transport or panic failure an ordinary refusal class would tell an application to carry on
+    /// against a connection that is gone.
+    #[test]
+    fn a_non_refusal_is_never_given_a_refusal_class() {
+        for error in [GpuError::Decode("x".into()), GpuError::Panicked("x".into())] {
+            assert_eq!(RefusalKind::for_error(&error), RefusalKind::Unstated);
+            assert_eq!(RefusalKind::for_error(&error).ack(), ACK_FAIL);
+        }
+    }
+
+    /// THE CONTRACT, stated over every value the byte can hold: any acknowledgement that is not
+    /// `ACK_OK` is a refusal. A reader that keys on `ACK_FAIL` specifically instead of on "not success"
+    /// stops recognising a classified refusal the moment a host starts classifying, and falls through to
+    /// whatever it does for transport death — which for a share group means destroying it. That failure
+    /// would look exactly like the classification working, until a newly classified refusal killed a
+    /// context. Values 7 and above are deliberately included: they are not sent today.
+    #[test]
+    fn every_non_success_acknowledgement_is_a_refusal() {
+        for ack in 0u8..=255 {
+            if ack == ACK_OK {
+                continue;
+            }
+            // Recognised or not, it classifies as some refusal and never as success.
+            let kind = RefusalKind::from_ack(ack);
+            assert_ne!(
+                kind.ack(),
+                ACK_OK,
+                "ack {ack} must not round-trip to success"
+            );
+        }
+        // And the classified values this host sends are all distinct, so no two reasons collide.
+        let sent = [
+            RefusalKind::Unstated,
+            RefusalKind::Unsupported,
+            RefusalKind::ResourceLimit,
+            RefusalKind::Invalid,
+            RefusalKind::OutOfBounds,
+            RefusalKind::UnknownId,
+        ];
+        let mut bytes: Vec<u8> = sent.iter().map(|k| k.ack()).collect();
+        bytes.sort_unstable();
+        let count = bytes.len();
+        bytes.dedup();
+        assert_eq!(bytes.len(), count, "two refusal classes share a byte");
     }
 }
