@@ -1,8 +1,9 @@
 //! GL texture objects + the texture table: `glGenTextures`/`glTexImage2D`/`glTexParameteri` tracking.
 //!
 //! Ported from `hl-shim-gl/src/state.rs` (`Texture`, the `MAXTEX` array) + the resource lowering in
-//! `hl-shim-gl/src/lower.rs`. A GL texture keeps its RGBA8 pixels (converted from the app's upload
-//! format) + filter/wrap state; the frame builder ([`crate::service::frame`]) lowers a sampled texture
+//! `hl-shim-gl/src/lower.rs`. A GL texture keeps a CPU shadow plane in the texel format its `ir_format`
+//! names (converted from the app's upload format) + filter/wrap state; the frame builder
+//! ([`crate::service::frame`]) lowers a sampled texture
 //! to a `CreateTexture` + `CreateSampler` + a staging `CreateBuffer`/`WriteBuffer` + a
 //! `CopyBufferToTexture`, exactly as `gl_shim.c` does at swap.
 
@@ -104,7 +105,8 @@ impl PartialEq for SharedPixels {
     }
 }
 
-/// One mip level above the base (see [`GlTexture::mips`]): its extent and RGBA8 pixels.
+/// One mip level above the base (see [`GlTexture::mips`]): its extent and pixels, in the texel format of
+/// the texture's plane.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct MipLevel {
     pub w: i32,
@@ -112,12 +114,19 @@ pub struct MipLevel {
     pub data: Arc<Vec<u8>>,
 }
 
-/// One live GL texture object: RGBA8 pixels + the min/mag filter + S/T wrap GL enums.
+/// One live GL texture object: its CPU shadow plane + the min/mag filter + S/T wrap GL enums.
 #[derive(Clone, PartialEq, Debug)]
 pub struct GlTexture {
     pub w: i32,
     pub h: i32,
-    /// RGBA8 pixels (`w*h*4` bytes), converted from the app's `glTexImage2D` upload format.
+    /// The CPU shadow plane: `w * h * `[`GlTexture::bytes_per_texel`] bytes, in the texel format
+    /// [`GlTexture::ir_format`] names.
+    ///
+    /// This was documented, and addressed, as RGBA8 (`w*h*4`) unconditionally. The size half stopped being
+    /// true once immutable storage started materializing real half-float and float planes, and the two
+    /// halves disagreeing is a silent corruption rather than an error: a full-extent `glTexSubImage2D` into
+    /// a 4x4 `Rgba16Float` plane wrote 64 of its 128 bytes, at a stride of four, and returned success.
+    /// Every reader and writer of this field asks the texture for its texel size instead.
     pub data: Arc<Vec<u8>>,
     pub min_filter: u32,
     pub mag_filter: u32,
@@ -239,6 +248,23 @@ impl GlTexture {
     /// Has this texture usable sampled content (materialized pixels)?
     pub fn has_data(&self) -> bool {
         !self.data.is_empty()
+    }
+
+    /// Bytes per texel of this texture's CPU shadow plane — a property of the plane, read from the format
+    /// it materializes, not the constant four every site used to assume. See [`plane_bytes_per_texel`] for
+    /// why four is still the floor.
+    pub fn bytes_per_texel(&self) -> usize {
+        plane_bytes_per_texel(self.ir_format)
+    }
+
+    /// Whether this plane is the four-byte-per-texel eight-bit image the RGBA8 pixel operations understand.
+    ///
+    /// The Chromium copy transforms, the box filter behind `glGenerateMipmap`, and the rect extractions
+    /// that feed a copy back into a texture all read texels as four unsigned bytes. On a half-float or
+    /// float plane that arithmetic is meaningless, so those paths ask this and decline rather than
+    /// producing a plausible wrong image. Sizing the plane correctly is what makes the question answerable.
+    pub fn is_rgba8_plane(&self) -> bool {
+        self.bytes_per_texel() == 4
     }
 
     /// The CONTIGUOUS mip chain above the base level, stopping at the first level the application never
@@ -435,7 +461,13 @@ impl Textures {
             return false;
         };
         source.resolve_shared();
-        if source.data.len() != source.w.max(0) as usize * source.h.max(0) as usize * 4 {
+        // `transform_rgba` reads texels as four unsigned bytes, so this operation is defined only over an
+        // RGBA8 plane. Refusing a wider one is not a new restriction — the length test below already
+        // excluded it, since a float plane's length is a multiple of its own texel — but stating it by the
+        // plane's texel says why, and keeps saying it if the length test is ever loosened.
+        if !source.is_rgba8_plane()
+            || source.data.len() != source.w.max(0) as usize * source.h.max(0) as usize * 4
+        {
             return false;
         }
         let mut pixels = (*source.data).clone();
@@ -504,7 +536,8 @@ impl Textures {
             height as usize,
         );
         let (source_width, source_height) = (source.w.max(0) as usize, source.h.max(0) as usize);
-        if sx + width > source_width
+        if !source.is_rgba8_plane()
+            || sx + width > source_width
             || sy + height > source_height
             || source.data.len() != source_width * source_height * 4
         {
@@ -616,10 +649,10 @@ impl Textures {
         texture.gen = generation;
     }
 
-    /// `glTexStorage2D`/`glTexStorage3D` — allocate immutable RGBA8 storage (`w*h*4` zeroed bytes),
+    /// `glTexStorage2D`/`glTexStorage3D` — allocate immutable zeroed storage for the plane `format` names,
     /// mark the texture immutable, and record the declared `levels`. Mirrors `gl_shim.c`, which allocates
-    /// the RGBA8 base plane so a later `glTexSubImage*` has a target (format/levels are not otherwise
-    /// materialized). Returns `false` if the `w*h*4` byte size overflows.
+    /// the base plane so a later `glTexSubImage*` has a target (levels are not otherwise materialized).
+    /// Returns `false` if the byte size overflows.
     pub fn storage_2d(
         &mut self,
         name: u32,
@@ -654,13 +687,20 @@ impl Textures {
         true
     }
 
-    /// Allocate (or grow to) a `w*h*4` RGBA8 base plane for a 2D-array / 3D texture upload
+    /// Allocate (or grow to) the layer-0 base plane for a 2D-array / 3D texture upload
     /// (`glTexImage3D`/`glTexStorage3D`) — `gl_shim.c` materializes only the layer-0 plane. Returns
     /// `false` on a size overflow.
-    pub fn alloc_rgba(&mut self, name: u32, w: i32, h: i32) -> bool {
+    ///
+    /// The plane is sized by the format the texture already declares rather than by a fixed four bytes, so
+    /// an array or 3D texture whose storage was declared as a float format gets the plane that format
+    /// names. This path does not itself choose a format: `glTexImage3D` carries an `internalformat` this
+    /// model does not yet plumb through, so a texture that has never declared one keeps the default
+    /// `Rgba8Unorm` and the four-byte plane it always had.
+    pub fn alloc_plane(&mut self, name: u32, w: i32, h: i32) -> bool {
+        let texel = self.map.get(&name).map_or(4, GlTexture::bytes_per_texel);
         let Some(size) = (w.max(0) as usize)
             .checked_mul(h.max(0) as usize)
-            .and_then(|n| n.checked_mul(4))
+            .and_then(|n| n.checked_mul(texel))
         else {
             return false;
         };
@@ -680,8 +720,15 @@ impl Textures {
     }
 
     /// `glTexSubImage2D` / `glCopyTexSubImage2D` — overwrite the `[xo,xo+w) × [yo,yo+h)` sub-rect of an
-    /// existing texture's RGBA8 plane with `rgba` (`w*h*4` tightly-packed bytes). Silently clips to the
-    /// texture bounds (the caller validates the range first). Returns `false` for an unknown/dataless name.
+    /// existing texture's plane with `pixels`: `w * h * `[`GlTexture::bytes_per_texel`] tightly-packed
+    /// bytes, in the DESTINATION plane's texel format. Silently clips to the texture bounds (the caller
+    /// validates the range first). Returns `false` for an unknown/dataless name, and for a `pixels` shorter
+    /// than the rect the destination plane's own texel requires.
+    ///
+    /// That last refusal is the fix for a silent corruption. The stride was a hardcoded four bytes per
+    /// texel on both sides, so an upload carrying four-byte texels into a half-float plane satisfied every
+    /// check, wrote half the rect, and returned success. Deriving the stride from the destination makes a
+    /// caller that supplies the wrong texel size fail the length test instead of half-filling the plane.
     pub fn sub_image_2d(
         &mut self,
         name: u32,
@@ -689,7 +736,7 @@ impl Textures {
         yo: i32,
         w: i32,
         h: i32,
-        rgba: &[u8],
+        pixels: &[u8],
     ) -> bool {
         let Some(texture) = self.map.get(&name) else {
             return false;
@@ -697,17 +744,26 @@ impl Textures {
         if texture.data.is_empty() || w <= 0 || h <= 0 || xo < 0 || yo < 0 {
             return false;
         }
+        let texel = texture.bytes_per_texel();
         let (tw, th) = (texture.w as usize, texture.h as usize);
         let (xo, yo, w, h) = (xo as usize, yo as usize, w as usize, h as usize);
-        let Some(row_bytes) = w.checked_mul(4) else {
+        let Some(row_bytes) = w.checked_mul(texel) else {
             return false;
         };
         let Some(upload_bytes) = row_bytes.checked_mul(h) else {
             return false;
         };
+        // The destination plane must be exactly the size its extent and texel require, or the row writes
+        // below index past its end. Every allocation path produces that size; a plane that does not have it
+        // was filled by something that disagreed with the texture's own format, and refusing is the only
+        // answer available here — the row write would panic and the alternative, clamping, is the
+        // half-filled plane this whole change exists to remove.
+        if tw.checked_mul(th).and_then(|n| n.checked_mul(texel)) != Some(texture.data.len()) {
+            return false;
+        }
         if xo.checked_add(w).is_none_or(|end| end > tw)
             || yo.checked_add(h).is_none_or(|end| end > th)
-            || rgba.len() < upload_bytes
+            || pixels.len() < upload_bytes
         {
             return false;
         }
@@ -723,9 +779,9 @@ impl Textures {
             && !texture.gpu_authoritative
             && texture.shared.is_none()
             && (0..h).all(|row| {
-                let dst = ((yo + row) * tw + xo) * 4;
+                let dst = ((yo + row) * tw + xo) * texel;
                 let src = row * row_bytes;
-                texture.data[dst..dst + row_bytes] == rgba[src..src + row_bytes]
+                texture.data[dst..dst + row_bytes] == pixels[src..src + row_bytes]
             });
         if unchanged {
             return true;
@@ -736,10 +792,10 @@ impl Textures {
             return false;
         };
         for row in 0..h {
-            let dst = ((yo + row) * tw + xo) * 4;
+            let dst = ((yo + row) * tw + xo) * texel;
             let src = row * row_bytes;
             Arc::make_mut(&mut texture.data)[dst..dst + row_bytes]
-                .copy_from_slice(&rgba[src..src + row_bytes]);
+                .copy_from_slice(&pixels[src..src + row_bytes]);
         }
         texture.real_pixels = true;
         texture.gpu_authoritative = false;

@@ -145,10 +145,17 @@ pub extern "C" fn glCopyImageSubData(
                 src_x as usize,
                 src_y as usize,
             );
-            let mut buf = Vec::with_capacity(w * h * 4);
+            // Rows come out at the SOURCE plane's own texel; `sub_image_2d` then measures them against the
+            // DESTINATION plane's texel, so a copy between planes of different width is refused rather
+            // than reinterpreting one format's bytes as another's.
+            let texel = st.bytes_per_texel();
+            if st.data.len() != sw * (sh as usize) * texel {
+                return None;
+            }
+            let mut buf = Vec::with_capacity(w * h * texel);
             for row in 0..h {
-                let base = ((y + row) * sw + x) * 4;
-                buf.extend_from_slice(&st.data[base..base + w * 4]);
+                let base = ((y + row) * sw + x) * texel;
+                buf.extend_from_slice(&st.data[base..base + w * texel]);
             }
             Some(buf)
         });

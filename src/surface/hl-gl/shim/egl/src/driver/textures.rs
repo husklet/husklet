@@ -463,7 +463,7 @@ pub extern "C" fn glCopyTexImage2D(
         group.redefine_texture(|ctx| {
             let name = ctx.bound_texture();
             if name != 0 && width >= 0 && height >= 0 {
-                ctx.textures.alloc_rgba(name, width, height);
+                ctx.textures.alloc_plane(name, width, height);
             } else {
                 ctx.set_gl_error(GL_INVALID_VALUE);
             }

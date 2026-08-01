@@ -34,7 +34,7 @@ pub extern "C" fn glCompressedTexImage2D(
         group.redefine_texture(|ctx| {
             let name = ctx.bound_texture();
             if name != 0 && width > 0 && height > 0 {
-                ctx.textures.alloc_rgba(name, width, height);
+                ctx.textures.alloc_plane(name, width, height);
             }
         });
     });
@@ -63,7 +63,7 @@ pub extern "C" fn glCompressedTexImage3D(
     GlobalState::context(|group| {
         let name = group.gl.bound_texture();
         if name != 0 && width > 0 && height > 0 {
-            group.gl.textures.alloc_rgba(name, width, height);
+            group.gl.textures.alloc_plane(name, width, height);
         }
     });
 }

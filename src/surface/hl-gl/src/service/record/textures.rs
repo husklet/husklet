@@ -176,6 +176,14 @@ impl GlContext {
         if !texture.has_data() || texture.w <= 0 || texture.h <= 0 {
             return;
         }
+        // `box_filter` averages texels as four unsigned bytes. On a half-float or float plane that
+        // arithmetic produces a plausible image made of nonsense — bytes of an IEEE encoding averaged as
+        // if they were colour channels — and the level extents would be wrong as well, since the reduction
+        // walks rows at four bytes a texel. Declining leaves the texture with the levels it has, which a
+        // completeness check can still see; the alternative writes a wrong answer no reader can question.
+        if !texture.is_rgba8_plane() {
+            return;
+        }
         let mut levels: Vec<(i32, i32, Vec<u8>)> = Vec::new();
         let (mut w, mut h, mut source) = (texture.w, texture.h, (*texture.data).clone());
         while w > 1 || h > 1 {
@@ -381,7 +389,7 @@ pub fn tex_image_3d(
     if name == 0 || ctx.textures.get(name).is_none() {
         return;
     }
-    if !ctx.textures.alloc_rgba(name, w, h) {
+    if !ctx.textures.alloc_plane(name, w, h) {
         return;
     }
     if !rgba.is_empty() && depth > 0 {
@@ -390,7 +398,9 @@ pub fn tex_image_3d(
 }
 
 /// `glTexSubImage2D(target, level, xo, yo, w, h, format, type, pixels)` — overwrite a sub-rect of the
-/// bound 2D texture with the already-converted `rgba` (`w*h*4`). Honest GL errors: bad `target` →
+/// bound 2D texture with the already-converted `rgba`, in the texel format of the destination plane
+/// (`w * h * GlTexture::bytes_per_texel`). An upload sized for a different texel is refused rather than
+/// laid down at the wrong stride, so it reaches the application as `GL_INVALID_VALUE`. Honest GL errors: bad `target` →
 /// `GL_INVALID_ENUM`; `level != 0`, negative extent/offset, no/unknown texture, or an out-of-bounds rect
 /// → `GL_INVALID_VALUE`.
 // The arguments intentionally mirror glTexSubImage2D after pixel-format conversion at the ABI adapter.
@@ -512,12 +522,19 @@ pub fn copy_tex_sub_image_2d(
         {
             return None;
         }
+        // Rows come out at the SOURCE plane's own texel. The destination decides whether they are
+        // acceptable: `sub_image_2d` measures the rect against its own plane's texel, so a copy between
+        // planes of different width fails the length test rather than reinterpreting one as the other.
+        let texel = st.bytes_per_texel();
         let (sw, w, h) = (st.w as usize, w as usize, h as usize);
         let (x, y) = (x as usize, y as usize);
-        let mut buf = Vec::with_capacity(w * h * 4);
+        if st.data.len() != sw * st.h as usize * texel {
+            return None;
+        }
+        let mut buf = Vec::with_capacity(w * h * texel);
         for row in 0..h {
-            let base = ((y + row) * sw + x) * 4;
-            buf.extend_from_slice(&st.data[base..base + w * 4]);
+            let base = ((y + row) * sw + x) * texel;
+            buf.extend_from_slice(&st.data[base..base + w * texel]);
         }
         Some(buf)
     });
