@@ -898,6 +898,24 @@ driver, and it was reported as one for hours. When results are internally implau
 before the subject — three harness defects in a single session all produced plausible-looking output, and
 the worst of them made the driver look broken in exactly the places a real driver plausibly breaks.
 
+The same test applies to ONE defect's shape, not only to a profile across families, and it is easier to
+miss there because a single wrong value looks like an ordinary bug rather than an implausible picture.
+Seven arms of an eight-arm select chain came back byte-exact and the eighth was wrong in one byte. That
+was written up as a value-merge defect at the join, with a real structural asymmetry to point at — the
+eighth arm was the only one reaching the store by falling through rather than by a taken branch — and the
+story survived a reduction to a repository test before the constant itself was checked. A driver that
+implements seven arms of one mechanism perfectly and the eighth wrongly by one bit is not a coherent
+subject; the harness had a hand-converted decimal in it, `4286545791` where its own comment said
+`0xFF7F7FFF`, and the driver had been emitting exactly what it was asked for.
+
+Two things generalise. Rank the cheaper hypothesis first by what is easy to get wrong rather than by what
+is interesting to find: a hand-typed constant is cheaper to check than a lowering, and checking it costs
+one line. And note that this was harness DATA, not harness code — a literal in a fixture, which no amount
+of reviewing the harness's logic would have caught, and which the harness's own well-written assertion
+correctly flagged while being powerless to attribute. Where a value must agree in two places, write it in
+a form where the two are textually identical, so drift is visible on the line instead of discoverable
+only by arithmetic.
+
 Compare each guard against the guard of the thing it guards. A boundary that asked whether any draws had
 been recorded stood in front of a builder that also accepted copies, so a frame whose only work was a copy
 was discarded before the builder ever saw it — and the same disagreement appeared again three lines above a
