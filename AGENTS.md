@@ -931,6 +931,16 @@ build. Several discard lines were added in one session specifically to make a fa
 they make it attributable in a debug build only. Before claiming an instrument exists, check the level it
 emits at and whether anything enables it.
 
+The reader's half of that rule: a harness that keys its verdict on a diagnostic it did not enable is
+measuring its own configuration, and it reports the subject as SILENT. That is a false negative wearing
+the costume of a finding, and it is worse than a missing measurement because it arrives with a plausible
+story about the thing being tested. A windowed case reported that its bundle emitted no presentation
+heartbeat; the heartbeat is at error level, survives release, and beats on a surface's first frame — it
+was suppressed only because the harness set no `HL_LOG` and the tag mask starts empty. Three candidates
+were separable and worth separating: wrong level, never emitted on that path, or nobody enabled the tag.
+Enable the tag from inside the harness rather than from the invoking shell, so the measurement cannot
+depend on how someone happened to launch it.
+
 Rank comments for audit by "claims a rule, cites no check". Six comments in one crate were found asserting
 rules the code did not implement — a rounding mode, a claim of matching another backend, a promise of
 refusals, and two sets described by a membership rule they did not follow. Every accurate comment in the
