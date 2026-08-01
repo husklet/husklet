@@ -413,10 +413,31 @@ fn emit_atomic(
         ),
         ATOM_MIN if unsigned => dst(body, &format!("atomicMin({ptr}, {})", Operand(val).u32())),
         ATOM_MAX if unsigned => dst(body, &format!("atomicMax({ptr}, {})", Operand(val).u32())),
+        // SIGNED min/max. The atomic word is `u32`, and WGSL's `atomicMin`/`atomicMax` on a `u32` atomic
+        // compare UNSIGNED — so they give the wrong answer the moment either operand's sign bit is set,
+        // which is why they cannot simply be reused here. This used to refuse instead, and the refusal
+        // reached a guest as a kernel that reported success and wrote nothing: the worst available shape
+        // for a compute primitive, since every downstream value is then quietly wrong.
+        //
+        // A compare-and-exchange loop expresses it exactly. The bits are reinterpreted as `i32` for the
+        // comparison only — the stored word is unchanged — so the ordering is the signed one while the
+        // storage stays `u32`. The loop exits immediately when the stored value already wins, which is the
+        // common case and costs a single atomic load; otherwise it retries until its exchange is the one
+        // that lands. `d` receives the OLD value, matching every other atomic here and the source ISA.
         ATOM_MIN | ATOM_MAX => {
-            return Err(Diagnostic::kernel(
-                "wgsl lowering: signed atomic min/max unsupported (atomic word is u32)",
-            ))
+            let v = Operand(val).u32();
+            // `<=` for min, `>=` for max: the stored value already satisfies the operation, leave it.
+            let settled = if op == ATOM_MIN { "<=" } else { ">=" };
+            let take = match d {
+                Some(dr) => format!("r{dr} = old; "),
+                None => String::new(),
+            };
+            body.push_str(&format!(
+                "loop {{ let old = atomicLoad({ptr}); \
+                 if (bitcast<i32>(old) {settled} bitcast<i32>({v})) {{ {take}break; }} \
+                 let res = atomicCompareExchangeWeak({ptr}, old, {v}); \
+                 if (res.exchanged) {{ {take}break; }} }}"
+            ));
         }
         ATOM_CAS => {
             let (c, v) = (Operand(cmp).u32(), Operand(val).u32());
