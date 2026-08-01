@@ -125,6 +125,62 @@ fn a_colour_renderable_attachment_is_complete() {
     }
 }
 
+/// The same question asked through the RENDERBUFFER path, which is the other way to reach a colour
+/// attachment and was not gated at all: `glRenderbufferStorage` dropped its `internalformat` on the
+/// floor, so completeness had nothing to consult and answered COMPLETE for every format there is. The
+/// texture path above has enforced ES 3.0 table 3.13 since the rule was written; two ways in, one rule,
+/// and only one of them applied it.
+///
+/// The pairing is the point. A test that only asserted the refusals would pass just as well against a
+/// path that refuses everything, so the renderable formats are asserted through the same helper.
+fn status_for_renderbuffer_attachment(internal_format: u32) -> u32 {
+    let mut c = ctx();
+    let rbo = c.gen_renderbuffer();
+    record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, rbo);
+    record::renderbuffer_storage(&mut c, GL_RENDERBUFFER, internal_format, 16, 16);
+    let fbo = c.gen_framebuffer();
+    record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
+    record::framebuffer_renderbuffer(
+        &mut c,
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_RENDERBUFFER,
+        rbo,
+    );
+    c.check_framebuffer_status(GL_FRAMEBUFFER)
+}
+
+#[test]
+fn a_non_colour_renderable_renderbuffer_is_incomplete() {
+    for format in [GL_RGB8_SNORM, GL_RGB9_E5, GL_SRGB8, GL_RGB8UI, GL_R11F_G11F_B10F] {
+        assert_eq!(
+            status_for_renderbuffer_attachment(format),
+            GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT,
+            "{format:#x} is not colour-renderable through a renderbuffer either"
+        );
+    }
+}
+
+#[test]
+fn a_colour_renderable_renderbuffer_is_complete() {
+    for format in [
+        GL_RGBA8,
+        GL_RGB8,
+        GL_RGB565,
+        GL_RGB5_A1,
+        GL_SRGB8_ALPHA8,
+        GL_R8UI,
+        GL_RGBA8UI,
+        GL_RGBA32I,
+    ] {
+        assert_eq!(
+            status_for_renderbuffer_attachment(format),
+            GL_FRAMEBUFFER_COMPLETE,
+            "{format:#x} is colour-renderable and must stay usable"
+        );
+    }
+}
+
 /// `GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE` must distinguish a renderbuffer attachment from a texture one.
 ///
 /// A renderbuffer is BACKED by a texture in this model, so reading the colour table alone reported

@@ -177,15 +177,19 @@ pub fn bind_renderbuffer(ctx: &mut GlContext, target: u32, name: u32) {
 
 /// `glRenderbufferStorage(GL_RENDERBUFFER, internalformat, w, h)` — size the bound renderbuffer's backing
 /// texture. The model materializes every renderbuffer as an RGBA8 color plane (its neutral render-target
-/// format), so `internalformat` selects only the extent here. Honest GL errors: bad `target` →
-/// `GL_INVALID_ENUM`; no bound renderbuffer → `GL_INVALID_OPERATION`; negative extent → `GL_INVALID_VALUE`.
-pub fn renderbuffer_storage(
-    ctx: &mut GlContext,
-    target: u32,
-    _internalformat: u32,
-    w: i32,
-    h: i32,
-) {
+/// format), so `internalformat` does not select the plane — but it IS recorded, because completeness is
+/// asked about the format the application declared, not the plane the model chose.
+///
+/// Dropping it made this path answer COMPLETE for every format there is. The texture path has checked
+/// `colour_renderable` since that rule was written and the renderbuffer path never did, which is the
+/// sibling disagreement in its usual shape: two ways to reach one attachment, one of them gated. A
+/// renderbuffer of `GL_RGB8_SNORM`, `GL_SRGB8`, `GL_RGB9_E5` or a three-component integer format is not
+/// colour-renderable in ES 3.0 §4.4.4, and an application that asks precisely so it can fall back was
+/// told yes.
+///
+/// Honest GL errors: bad `target` → `GL_INVALID_ENUM`; no bound renderbuffer → `GL_INVALID_OPERATION`;
+/// negative extent → `GL_INVALID_VALUE`.
+pub fn renderbuffer_storage(ctx: &mut GlContext, target: u32, internalformat: u32, w: i32, h: i32) {
     if target != GL_RENDERBUFFER {
         ctx.set_gl_error(GL_INVALID_ENUM);
         return;
@@ -212,6 +216,11 @@ pub fn renderbuffer_storage(
     };
     ctx.textures
         .image_2d(tex, w, h, &[], TextureFormat::Rgba8Unorm);
+    // The declared format rides on the backing texture, which is what `check_framebuffer_status` reads —
+    // so one table answers the question for both attachment paths instead of two rules drifting apart.
+    if let Some(texture) = ctx.textures.get_mut(tex) {
+        texture.internal_format = internalformat;
+    }
     ctx.renderbuffers.set_storage(rbo, tex, w, h);
 }
 
