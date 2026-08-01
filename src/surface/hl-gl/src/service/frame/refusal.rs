@@ -54,9 +54,22 @@ pub(crate) fn report(ctx: &mut GlContext, error: &GpuError, cmds: &[Cmd]) {
     // Only a REFUSAL is attributable. A transport that is gone, ambiguous or retired did not read the
     // frame, let alone judge it — blaming a program for a dropped socket would be the same mistake as
     // the escalation that used to kill the share group over one bad batch.
-    if !matches!(error, GpuError::Transport(failure) if failure.refusal()) {
+    let GpuError::Transport(failure) = error else {
+        return;
+    };
+    if !failure.refusal() {
         return;
     }
+    // The acknowledgement value VERBATIM. Today it carries only "not success", so it says nothing beyond
+    // the fact of the refusal — but it is the field the host is growing a reason CLASS into, one value per
+    // error kind it already holds typed. Printing it now means the class appears in this line the day it
+    // lands, and until then an operator can still tell two different refusal values apart.
+    let acknowledgement = match failure {
+        hl_gpu::transport::model::error::TransportError::Rejected {
+            acknowledgement, ..
+        } => *acknowledgement,
+        _ => 0,
+    };
     ctx.local.refused_frames = ctx.local.refused_frames.saturating_add(1);
     let count = ctx.local.refused_frames;
 
@@ -95,9 +108,10 @@ pub(crate) fn report(ctx: &mut GlContext, error: &GpuError, cmds: &[Cmd]) {
         "host REFUSED this frame; these programs had a shader TRANSLATED into it and are the \
          candidates: [{}]. The refusal names no command, so this is the set to examine and not a \
          verdict on any one of them — and a variant is one specialisation of a program, not the \
-         program, so its other specialisations may translate. cmds={} new_shaders={} count={count}. \
-         The reason is in the HOST log (`verdict=nack error=…`); the acknowledgement cannot carry it. \
-         Reported at each power of two.",
+         program, so its other specialisations may translate. cmds={} new_shaders={} \
+         ack={acknowledgement} count={count}. The reason itself is in the HOST log \
+         (`verdict=nack error=…`); the acknowledgement carries only its class. Reported at each power of \
+         two.",
         candidates.join(", "),
         cmds.len(),
         created

@@ -25,31 +25,34 @@ const FS: &str = "precision mediump float;\nvoid main(){ gl_FragColor = vec4(1.0
 /// REAL frame path and choose whether the host refused the frame or the transport died under it.
 struct FailingSink {
     inner: RecordingSink,
-    failure: fn() -> GpuError,
+    failure: Box<dyn Fn() -> GpuError>,
 }
 
 impl FailingSink {
-    fn refusing() -> Self {
+    /// A host that refused the frame, answering with `acknowledgement`. The value is the field the host
+    /// is growing a reason class into, so a test may vary it; today any non-success value means the same
+    /// thing to this driver, and that is asserted rather than assumed.
+    fn refusing(acknowledgement: u8) -> Self {
         Self {
             inner: RecordingSink::with_full_caps(),
-            failure: || {
+            failure: Box::new(move || {
                 GpuError::Transport(TransportError::Rejected {
                     phase: TransportPhase::Acknowledgement,
-                    acknowledgement: 0,
+                    acknowledgement,
                 })
-            },
+            }),
         }
     }
 
     fn dead() -> Self {
         Self {
             inner: RecordingSink::with_full_caps(),
-            failure: || {
+            failure: Box::new(|| {
                 GpuError::Transport(TransportError::Unavailable {
                     phase: TransportPhase::Acknowledgement,
                     detail: "socket closed".into(),
                 })
-            },
+            }),
         }
     }
 }
@@ -131,7 +134,7 @@ fn a_refused_frame_names_the_programs_it_translated() {
     );
 
     // Now the refusal. The frame is identical; only the host's answer differs.
-    let mut sink = FailingSink::refusing();
+    let mut sink = FailingSink::refusing(0);
     let outcome = swap::swap_buffers(&mut c, &mut sink);
     assert!(outcome.is_err(), "the host refused this frame");
     assert_eq!(
@@ -195,7 +198,7 @@ fn a_refused_frame_that_translated_nothing_names_nobody() {
     );
 
     record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
-    let mut sink = FailingSink::refusing();
+    let mut sink = FailingSink::refusing(0);
     assert!(swap::swap_buffers(&mut c, &mut sink).is_err());
     assert!(
         c.last_refusal_candidates().is_empty(),
@@ -204,4 +207,37 @@ fn a_refused_frame_that_translated_nothing_names_nobody() {
     );
     assert_eq!(c.refused_frames(), 1);
     let _ = program;
+}
+
+/// The acknowledgement byte is growing one value per host error kind, so this driver must key on the
+/// REFUSAL rather than on the particular value. A driver that recognised only today's value would stop
+/// attributing the moment the host began classifying — and worse, an unrecognised refusal would fall to
+/// the transport-death side of the classification and retire the whole share group over one bad frame.
+#[test]
+fn any_refusal_value_is_still_a_refusal() {
+    for acknowledgement in [0u8, 2, 3, 7, 255] {
+        let mut c = ctx_64();
+        let program = drawable(&mut c);
+        let mut sink = FailingSink::refusing(acknowledgement);
+        assert!(
+            swap::swap_buffers(&mut c, &mut sink).is_err(),
+            "ack={acknowledgement}"
+        );
+        assert_eq!(
+            c.refused_frames(),
+            1,
+            "ack={acknowledgement} must count as a refusal"
+        );
+        assert!(
+            c.last_refusal_candidates()
+                .iter()
+                .all(|(named, _)| *named == program),
+            "ack={acknowledgement} must still attribute: {:?}",
+            c.last_refusal_candidates()
+        );
+        assert!(
+            !c.last_refusal_candidates().is_empty(),
+            "ack={acknowledgement} named nobody"
+        );
+    }
 }
