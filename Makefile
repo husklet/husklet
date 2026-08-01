@@ -1,5 +1,5 @@
 # Husklet workspace product.
-.PHONY: all design-lint lint-cases fmt fmt-check shims test test-ci test-compiles mac-crates mac-gpu containers app dmg install uninstall clean
+.PHONY: all design-lint lint-cases clippy fmt fmt-check shims test test-ci test-compiles mac-crates mac-gpu containers app dmg install uninstall clean
 
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
 VERSION ?= $(or $(TAG),0.0.0-dev)
@@ -21,6 +21,13 @@ design-lint:
 
 lint-cases:
 	cargo run -q -p hl-design-lint -- --cases lint src
+
+# `cargo clippy` and `cargo fmt` are toolchain COMPONENTS. Where they are missing — a Linux workspace, for
+# which the flake provides no devShell — cargo answers "no such command" and a caller grepping the output
+# for warnings sees none and calls it clean. `tools/rust-tool.sh` finds a component matching the active
+# rustc and REFUSES loudly when there is none, so a check that could not run cannot read as one that passed.
+clippy:
+	bash tools/rust-tool.sh clippy --workspace --all-targets
 
 fmt:
 	cargo fmt --all
