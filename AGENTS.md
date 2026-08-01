@@ -857,6 +857,14 @@ that reported a confident defect through a capture path blind to its subject. Ev
 result, and the answer to the question was usually "exactly what it just printed". Asking is cheaper than
 any diagnosis it prevents.
 
+An instrument written to avoid a fault is not immune to that fault. A harness built specifically to
+report a frame-time DISTRIBUTION rather than a mean — because a mean hides a bimodal shape — then
+summarised the memory series it collected as `last - first` and reported 45% growth. The process had
+ramped during startup and been flat for ninety seconds afterwards, so the number was a ramp read as a
+trend, and it pointed at a growing structure that was not there. Measure growth from a SETTLED baseline
+and report the ramp separately. More generally: the discipline you applied to the subject does not
+transfer itself to the instrument you wrote next, and the summary statistic is where it goes missing.
+
 A pass condition satisfied by the ABSENCE of the measurement is not a pass condition. A windowed case
 was specified to require zero offscreen frames, which a bundle emitting no presentation heartbeat at all
 reports — the identical zero a perfect run reports, from an instrument that never spoke. The fix is not a
