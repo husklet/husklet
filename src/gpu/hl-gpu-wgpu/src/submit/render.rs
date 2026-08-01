@@ -357,7 +357,30 @@ impl WgpuExecutor {
                             );
                         }
                     }
-                    _ => {}
+                    // Consumed by the PLAN pass (`plan.rs`), which resolves the pipeline and bind groups
+                    // before this loop runs. Seeing them here again is expected and correct.
+                    Enc::SetPipeline(_) | Enc::SetBindGroup { .. } => {}
+                    // Anything else inside a render pass is work this executor cannot perform HERE, and
+                    // silently ignoring it is the failure mode that matters: a `ClearRect`, copy, blit,
+                    // resolve or fill encoded between Begin and End was dropped and the submit reported
+                    // success, so a region of a surface the guest asked to have written simply stayed as
+                    // it was minted. The CPU oracle executes those ops from the same position (its loop is
+                    // flat and state-driven), so the two executors silently disagreed — which no test
+                    // caught, because none of them puts such an op inside a pass.
+                    //
+                    // Refusing makes the disagreement visible rather than invisible. It is deliberately
+                    // not the last word: either the oracle should refuse too, or this path should split
+                    // the pass and perform the work. A NACK is the honest state until that is decided.
+                    other => {
+                        hl_log::hl_warn!(
+                            hl_log::tag::WGPU,
+                            "encoder op inside a render pass cannot be executed there: {:?}",
+                            std::mem::discriminant(other)
+                        );
+                        return Err(GpuError::Unsupported(
+                            "wgpu: this encoder op cannot be executed inside a render pass",
+                        ));
+                    }
                 }
             }
         }
