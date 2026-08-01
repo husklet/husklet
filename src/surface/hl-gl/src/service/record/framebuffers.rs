@@ -203,9 +203,15 @@ pub fn bind_renderbuffer(ctx: &mut GlContext, target: u32, name: u32) {
 }
 
 /// `glRenderbufferStorage(GL_RENDERBUFFER, internalformat, w, h)` — size the bound renderbuffer's backing
-/// texture. The model materializes every renderbuffer as an RGBA8 color plane (its neutral render-target
-/// format), so `internalformat` does not select the plane — but it IS recorded, because completeness is
-/// asked about the format the application declared, not the plane the model chose.
+/// texture, and give it the plane its `internalformat` names, through the same table the two texture
+/// allocation paths read.
+///
+/// A renderbuffer is the third way to reach a colour attachment and it was the last one still allocating
+/// RGBA8 whatever it was asked for, while recording the declared format for the completeness check — so
+/// it could report complete for a half-float renderbuffer over an eight-bit plane, which is a claim no
+/// caller can check. It is also the SAFEST of the three to derive, because a renderbuffer has no pixel
+/// upload at all: storage is always allocated and never filled, so there is no converted data that could
+/// disagree with a wider plane.
 ///
 /// Dropping it made this path answer COMPLETE for every format there is. The texture path has checked
 /// `colour_renderable` since that rule was written and the renderbuffer path never did, which is the
@@ -241,8 +247,8 @@ pub fn renderbuffer_storage(ctx: &mut GlContext, target: u32, internalformat: u3
         0 => ctx.textures.gen(),
         t => t,
     };
-    ctx.textures
-        .image_2d(tex, w, h, &[], TextureFormat::Rgba8Unorm);
+    let plane = crate::service::record::declared_plane(internalformat);
+    ctx.textures.image_2d(tex, w, h, &[], plane);
     // The declared format rides on the backing texture, which is what `check_framebuffer_status` reads —
     // so one table answers the question for both attachment paths instead of two rules drifting apart.
     if let Some(texture) = ctx.textures.get_mut(tex) {

@@ -342,3 +342,34 @@ fn a_float_texture_gets_a_float_plane_sized_by_its_own_texel() {
         );
     }
 }
+
+/// A renderbuffer allocates the plane its declared format names, through the same table the two texture
+/// paths read. It was the last of the three colour-attachment paths still allocating RGBA8 whatever it
+/// was asked for while recording the declared format for the completeness check — a combination that can
+/// report a half-float renderbuffer as complete over an eight-bit plane, which no caller can check.
+///
+/// It is also the safest of the three to derive, because a renderbuffer has no pixel upload: its storage
+/// is allocated and never filled, so no converted data can disagree with a wider plane.
+#[test]
+fn a_renderbuffer_allocates_the_plane_its_declared_format_names() {
+    use hl_gpu::protocol::model::enums::TextureFormat;
+
+    for (declared, plane) in [
+        (GL_RGBA16F, TextureFormat::Rgba16Float),
+        (GL_RGBA32F, TextureFormat::Rgba32Float),
+        (GL_R32F, TextureFormat::R32Float),
+        (GL_RGBA8, TextureFormat::Rgba8Unorm),
+        (GL_SRGB8_ALPHA8, TextureFormat::Rgba8Srgb),
+    ] {
+        let mut c = ctx();
+        let rbo = c.gen_renderbuffer();
+        record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, rbo);
+        record::renderbuffer_storage(&mut c, GL_RENDERBUFFER, declared, 8, 8);
+        let backing = c.renderbuffers.backing_tex(rbo);
+        assert_eq!(
+            c.textures.get(backing).map(|t| t.ir_format),
+            Some(plane),
+            "{declared:#x} renderbuffer plane"
+        );
+    }
+}

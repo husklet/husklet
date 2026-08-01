@@ -71,6 +71,13 @@ pub fn tex_image_2d_format(
 /// series fixed. Until the conversion can emit texels of the destination plane, an upload keeps the RGBA8
 /// plane it has always had. The render-target case, which is the one that allocates and never uploads, is
 /// the case that needed this.
+/// The plane a declared sized `internalformat` names, or the RGBA8 plane for a format this driver does
+/// not model — which is also the answer for the unsized `GL_RGB`/`GL_RGBA` spellings. One function so the
+/// texture and renderbuffer allocation paths cannot come to different conclusions about one enum.
+pub fn declared_plane(internalformat: u32) -> TextureFormat {
+    TextureFormat::try_from(InternalFormat(internalformat)).unwrap_or(TextureFormat::Rgba8Unorm)
+}
+
 pub fn tex_image_2d_declared(
     ctx: &mut GlContext,
     internalformat: u32,
@@ -79,7 +86,7 @@ pub fn tex_image_2d_declared(
     pixels: &[u8],
 ) {
     let format = if pixels.is_empty() {
-        TextureFormat::try_from(InternalFormat(internalformat)).unwrap_or(TextureFormat::Rgba8Unorm)
+        declared_plane(internalformat)
     } else {
         TextureFormat::Rgba8Unorm
     };
