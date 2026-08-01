@@ -135,10 +135,37 @@ impl GlContext {
             // to `GL_COLOR_ATTACHMENT0` hands the application a framebuffer that cannot work and gives it
             // no way to find out — the check it performs precisely to avoid that says yes.
             Some(t) if t.w > 0 && t.h > 0 && !colour_renderable(t.internal_format) => {
+                // At error level, because this refusal is the whole of a caller's failure and it is the one
+                // fact the caller cannot recover: the status names no format, so an application told
+                // INCOMPLETE_ATTACHMENT has no way to learn which attachment or which format was refused.
+                // A browser hit this thousands of times per minute and no reading of its own log could
+                // identify the format, because the format is only known here.
+                hl_log::hl_error!(
+                    hl_log::tag::GL,
+                    "framebuffer {fbo} incomplete: colour attachment texture {color} declares format \
+                     {:#06x}, which is not colour-renderable here",
+                    t.internal_format
+                );
                 GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT
             }
             Some(t) if t.w > 0 && t.h > 0 => GL_FRAMEBUFFER_COMPLETE,
-            _ => GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT,
+            other => {
+                match other {
+                    Some(t) => hl_log::hl_error!(
+                        hl_log::tag::GL,
+                        "framebuffer {fbo} incomplete: colour attachment texture {color} has no storage \
+                         ({}x{}), so nothing was allocated for it to render into",
+                        t.w,
+                        t.h
+                    ),
+                    None => hl_log::hl_error!(
+                        hl_log::tag::GL,
+                        "framebuffer {fbo} incomplete: colour attachment names texture {color}, which this \
+                         context does not have"
+                    ),
+                }
+                GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT
+            }
         }
     }
 }
