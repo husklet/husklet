@@ -10,7 +10,7 @@
 //! `DT_NEEDED` dependencies and for `dlopen` by soname alike.
 
 use hl_container::device::extension::{
-    BindAccess, DirectoryEntry, FileEntry, FileSource, HostBindEntry, Metadata, NamespaceEntry,
+    BindAccess, FileEntry, FileSource, HostBindEntry, Metadata, NamespaceEntry,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -32,6 +32,11 @@ impl Projection {
     ///
     /// It sits beside the multiarch directory rather than inside `/opt` so that a sandboxed
     /// process keeps the same filesystem policy surface it already has for `/usr/lib`.
+    ///
+    /// The directory itself is never projected. Each bind materializes its own mount point, and a
+    /// projected directory would instead become a mount of its own whose (empty) backing tree is
+    /// what `readdir` reports -- the drivers stay openable by exact path, but the directory lists
+    /// as empty and nothing that enumerates the search path can see them.
     pub(super) const fn directory(&self) -> &'static str {
         match self.arch {
             hl_ws::Arch::Arm64 => "/usr/lib/aarch64-linux-gnu/husklet",
@@ -93,18 +98,6 @@ impl Projection {
             path: Path::new(self.directory()).join(name),
             host,
             access: BindAccess::ReadOnly,
-        })
-    }
-
-    /// The driver directory itself, which must exist before anything is bound into it.
-    pub(super) fn root(&self) -> NamespaceEntry {
-        NamespaceEntry::Directory(DirectoryEntry {
-            path: self.directory().into(),
-            metadata: Metadata {
-                mode: 0o555,
-                uid: 0,
-                gid: 0,
-            },
         })
     }
 

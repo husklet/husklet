@@ -230,15 +230,12 @@ impl Graphics {
             })
             .transpose()?;
         let projection = Projection::new(workspace.arch);
-        let mut namespace = vec![
-            hl_container::device::extension::NamespaceEntry::Socket(
-                hl_container::device::extension::SocketEntry {
-                    path: "/run/hl-gpu.sock".into(),
-                    host: socket,
-                },
-            ),
-            projection.root(),
-        ];
+        let mut namespace = vec![hl_container::device::extension::NamespaceEntry::Socket(
+            hl_container::device::extension::SocketEntry {
+                path: "/run/hl-gpu.sock".into(),
+                host: socket,
+            },
+        )];
         let mut request = hl_container::DeviceRequest {
             environment: BTreeMap::from([(
                 "HL_GPU_EXEC".to_owned(),
@@ -273,7 +270,6 @@ impl Graphics {
         let host_bind = hl_container::device::extension::Feature::new("host-bind-read-only")?;
         let sockets = hl_container::device::extension::Feature::new("unix-sockets")?;
         let symlinks = hl_container::device::extension::Feature::new("symlinks")?;
-        let directories = hl_container::device::extension::Feature::new("directories")?;
         let immutable_files = hl_container::device::extension::Feature::new("immutable-files")?;
         request
             .extensions
@@ -281,13 +277,7 @@ impl Graphics {
                 provider,
                 version: hl_container::device::Version::new(1, 0),
                 required: true,
-                required_features: BTreeSet::from([
-                    directories,
-                    host_bind,
-                    immutable_files,
-                    sockets,
-                    symlinks,
-                ]),
+                required_features: BTreeSet::from([host_bind, immutable_files, sockets, symlinks]),
                 optional_features: BTreeSet::new(),
                 config: hl_container::device::extension::ExtensionConfig::empty(
                     "engine.namespace/v1",

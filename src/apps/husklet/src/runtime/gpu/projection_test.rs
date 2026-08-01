@@ -44,8 +44,10 @@ fn projection_leaves_every_distribution_library_path_to_the_package_manager() {
         let projection = Projection::new(arch);
         let directory = Path::new(projection.directory());
         let manifest = Path::new("/usr/share/vulkan/icd.d").join(projection.vulkan_manifest());
-        let entries = std::iter::once(projection.root())
-            .chain(projection.graphics(&drivers).unwrap())
+        let entries = projection
+            .graphics(&drivers)
+            .unwrap()
+            .into_iter()
             .chain(projection.accelerator(&drivers))
             .map(|entry| entry.path().to_path_buf())
             .filter(|path| path != directory && *path != manifest);
@@ -184,15 +186,29 @@ fn the_driver_directory_leads_the_inherited_loader_search_path() {
     );
 }
 
+/// The defect: projecting the driver directory itself turned it into a mount of the (empty)
+/// materialized tree, so `readdir` reported nothing inside it. The binds stayed openable by exact
+/// path, but every listing of the loader search path came back empty, which reads as "the drivers
+/// never arrived". Each bind materializes its own mount point, so the directory must stay unclaimed.
 #[test]
-fn the_projected_directory_is_created_before_anything_binds_into_it() {
+fn the_driver_directory_itself_is_never_projected() {
+    let root = tempfile::tempdir().unwrap();
+    let drivers = Fixture::open(root.path());
     let projection = Projection::new(hl_ws::Arch::Arm64);
-    let NamespaceEntry::Directory(root) = projection.root() else {
-        panic!("the driver directory must be a directory entry");
-    };
+    let namespace = projection
+        .graphics(&drivers)
+        .unwrap()
+        .into_iter()
+        .chain(projection.accelerator(&drivers));
 
-    assert_eq!(root.path, Path::new("/usr/lib/aarch64-linux-gnu/husklet"));
-    assert_eq!(root.metadata.mode, 0o555);
+    for entry in namespace {
+        assert!(
+            !matches!(entry, NamespaceEntry::Directory(_)),
+            "{} is projected as a directory",
+            entry.path().display()
+        );
+        assert_ne!(entry.path(), Path::new(projection.directory()));
+    }
 }
 
 /// The engine's alias projection forces every guest path carrying an aliased basename read-only,
