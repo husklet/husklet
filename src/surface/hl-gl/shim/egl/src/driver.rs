@@ -301,6 +301,43 @@ unsafe fn to_plane(
         }
         RawBytes::read(pixels, span as isize)
     };
+    // INSTRUMENTED BUILDS ONLY (`HL_DRIVER_FEATURES=verbose`). Names the branch taken and the first
+    // bytes actually read, which is the cut the counters cannot make: a wrong SOURCE POINTER and a
+    // wrong UNPACK-BUFFER RESOLUTION both end in "the texture holds someone else's memory", and only
+    // the branch plus the pointer distinguishes them. Latched to the first few uploads because a
+    // browser performs thousands and the question is answered by the first one.
+    #[cfg(feature = "verbose")]
+    {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static SEEN: AtomicUsize = AtomicUsize::new(0);
+        // The first few uploads are the browser's own startup and answer nothing about a probe that runs
+        // a minute later, so a plain count latch traces the wrong uploads. `HL_GL_UPLOAD_TRACE_SPAN`
+        // names the exact source length under investigation, which is how a harness points this at its
+        // own upload without the driver knowing anything about the harness.
+        let traced_span: Option<usize> = std::env::var("HL_GL_UPLOAD_TRACE_SPAN")
+            .ok()
+            .and_then(|value| value.parse().ok());
+        let count = SEEN.fetch_add(1, Ordering::Relaxed);
+        if count < 8 || traced_span == Some(span) {
+            let head: Vec<String> = src.iter().take(8).map(|b| format!("{b:02x}")).collect();
+            let text: String = src
+                .iter()
+                .take(16)
+                .map(|&b| if (32..127).contains(&b) { b as char } else { '.' })
+                .collect();
+            hl_log::hl_error!(
+                hl_log::tag::GL,
+                "upload branch={} pixels={:p} unpack={} span={} got={} head=[{}] text={:?}",
+                if unpack != 0 { "pbo" } else { "client" },
+                pixels,
+                unpack,
+                span,
+                src.len(),
+                head.join(" "),
+                text
+            );
+        }
+    }
     match upload.plane(src, destination) {
         Some(rgba) => {
             hl_log::hl_add!(hl_log::tag::GL, "upload_rgba_bytes", rgba.len() as u64);

@@ -62,6 +62,9 @@ fn main() {
     // restage the guest shim, or the staged `libGLESv2.so.2` the e2e loads keeps the OLD lowering.
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=HL_DRIVER_STAGE");
+    // Without this the instrumented and shipping drivers are the same cached artifact: flipping the
+    // variable would change nothing and the run would report counters from whichever was built first.
+    println!("cargo:rerun-if-env-changed=HL_DRIVER_FEATURES");
     println!("cargo:rerun-if-env-changed=HL_DRIVER_ARCHES");
     println!(
         "cargo:rerun-if-changed={}",
@@ -321,6 +324,15 @@ fn build_shim(
         // invalid for Linux ELF and must not cross the target boundary.
         .env_remove("NIX_LDFLAGS")
         .env_remove("NIX_CFLAGS_COMPILE");
+    // An INSTRUMENTED guest driver, opt-in and never the default. The shim's counters are compiled out
+    // of a release cdylib, so an investigation that needs them cannot switch them on at runtime — the
+    // code is absent, not gated. This is the seam that lets a harness build a driver that has them,
+    // while a shipping bundle keeps the small, quiet one.
+    if let Some(features) = std::env::var_os("HL_DRIVER_FEATURES") {
+        if !features.is_empty() {
+            cmd.arg("--features").arg(&features);
+        }
+    }
     if let Some(libdir) = egl_libdir {
         cmd.env("HL_SHIM_EGL_LIBDIR", libdir);
     }

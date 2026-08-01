@@ -42,3 +42,14 @@ opt-level = "z"
 
 # Empty table => own workspace root, excluded from every surrounding workspace.
 [workspace]
+
+[features]
+# Compile the `hl_count!` / `hl_add!` counters and verbose levels into the guest cdylib.
+#
+# Off by default and must stay that way: these macros are gated on
+# `any(debug_assertions, feature = "release-verbose")`, so in a shipping driver they expand to `{}` and
+# every counter reads zero no matter what the driver did. That is correct for the product and useless
+# for an investigation — `HL_LOG_COUNTERS` cannot switch them on, because the code is not in the binary
+# to be gated. Build with `HL_DRIVER_FEATURES=verbose` to get an INSTRUMENTED driver, and bind any
+# number it produces to that driver's own subtree hash rather than to the shipping one.
+verbose = ["hl-log/release-verbose"]
