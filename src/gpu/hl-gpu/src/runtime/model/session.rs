@@ -9,6 +9,7 @@
 
 use crate::protocol::model::capability::Capabilities;
 use crate::runtime::model::resources::{GlobalLedger, Ledger, SessionResources};
+use crate::runtime::model::sharing::{Exports, SessionId};
 use crate::runtime::model::timeline::FenceTimeline;
 use crate::runtime::port::clock::Clock;
 
@@ -114,6 +115,19 @@ impl Limits {
 /// The authoritative per-connection state. One per client connection; the injected executor is *not* part
 /// of it (a `Session` drives whichever `&mut dyn GpuExecutor` the host wired up).
 pub struct Session {
+    /// This connection's identity, minted by [`SessionId::next`] and unique for the life of the process.
+    /// Every cross-connection sharing rule keys on it.
+    pub id: SessionId,
+    /// The process-global export registry, when this connection is permitted to share.
+    ///
+    /// `None` — the default — means sharing is not wired for this connection, and every export/import is
+    /// refused as [`GpuError::Unsupported`]. It is deliberately NOT a private registry created per
+    /// session: that would compile, satisfy every registry test, and share nothing, which is the failure
+    /// this shape exists to make impossible. The composition root clones ONE [`Exports`] into every
+    /// session ([`with_exports`](Self::with_exports)); a `None` here fails closed and says so.
+    ///
+    /// [`GpuError::Unsupported`]: crate::protocol::model::error::GpuError::Unsupported
+    pub exports: Option<Exports>,
     /// Validation + accounting ceilings (its `caps` refreshed by `negotiate`).
     pub limits: Limits,
     /// The executor's advertised capabilities, once negotiated.
@@ -134,6 +148,8 @@ impl Session {
     /// A fresh connection session with the given ceilings, global account slice, and clock.
     pub fn new(limits: Limits, global: GlobalLedger, clock: Box<dyn Clock>) -> Self {
         Self {
+            id: SessionId::next(),
+            exports: None,
             limits,
             caps: None,
             resources: SessionResources::new(),
@@ -142,6 +158,14 @@ impl Session {
             timeline: FenceTimeline::new(),
             clock,
         }
+    }
+
+    /// Join this connection to the process-global export registry. The composition root clones ONE
+    /// [`Exports`] into every session it creates; a session that never gets one refuses to share rather
+    /// than sharing with nobody.
+    pub fn with_exports(mut self, exports: Exports) -> Self {
+        self.exports = Some(exports);
+        self
     }
 
     /// Cumulative bytes resident on this connection.
@@ -165,6 +189,11 @@ impl Session {
     pub fn release_all(&mut self) {
         self.global.refund(self.ledger.totals);
         self.ledger = Ledger::default();
+        // Dropping the tables below frees this connection's natives, so anything it exported has been
+        // released by its owner as of here — the registry retains the storage only for live importers.
+        if let Some(exports) = &self.exports {
+            exports.forget_session(self.id);
+        }
         // Dropping the old table frees every native handle behind it; a fresh table restores the
         // per-kind generation counters to their initial state for any reuse of this session object.
         self.resources = SessionResources::new();
@@ -177,5 +206,12 @@ impl Drop for Session {
     /// so a dropped connection cannot leak the shared budget.
     fn drop(&mut self) {
         self.global.refund(self.ledger.totals);
+        // Drop every reference this connection held in BOTH directions: its claims are released, its
+        // imports drop their refcount, and an export it owned is retained only while someone still
+        // imports it. Without this a departed connection pins storage forever and leaves a permanent
+        // `MappedBy` claim against a session that no longer exists.
+        if let Some(exports) = &self.exports {
+            exports.forget_session(self.id);
+        }
     }
 }

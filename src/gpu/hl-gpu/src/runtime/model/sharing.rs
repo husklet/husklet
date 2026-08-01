@@ -23,14 +23,60 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::protocol::model::error::{GpuError, Result};
+use crate::protocol::model::id::Access;
 
 /// A connection. Sessions are distinct per transport connection; two drivers in one guest workspace get
 /// two of these.
+///
+/// Mint one with [`SessionId::next`] rather than constructing it: identity is what every rule in this
+/// module keys on, and two connections sharing an id would each be able to unmap the other's claim.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub struct SessionId(pub u64);
+
+/// Source of [`SessionId`]s. Starts at 1 so no real session is `0`; monotonic and never rewound, for the
+/// same reason [`ExportId`]s are not reused — a recycled connection id would let a departed session's
+/// stale claim be mistaken for the new occupant's.
+static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
+
+impl SessionId {
+    /// The next unused connection identity in this process.
+    pub fn next() -> Self {
+        Self(NEXT_SESSION.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// The guard encoding: `holder + 1`, so `0` stays free to mean "unmapped" and session `0` — were one
+    /// ever constructed directly — is still visible. See [`Access`].
+    fn encoded(self) -> u64 {
+        self.0.saturating_add(1)
+    }
+}
+
+/// The lock-free mirror of one entry's [`MapState`], shared with every [`Access`] guard watching it.
+///
+/// It is the SINGLE representation of that fact rather than a cache beside a `MapState` field: two
+/// representations of one state drift, and the drift would be invisible because the guard reads only one
+/// of them. Every write happens under the registry mutex; the atomic exists so the resolution path — the
+/// hottest path in the service — can read it without taking that lock.
+type StateCell = Arc<AtomicU64>;
+
+fn load_state(cell: &StateCell) -> MapState {
+    match cell.load(Ordering::Acquire) {
+        0 => MapState::Unmapped,
+        holder => MapState::MappedBy(SessionId(holder - 1)),
+    }
+}
+
+fn store_state(cell: &StateCell, state: MapState) {
+    let encoded = match state {
+        MapState::Unmapped => 0,
+        MapState::MappedBy(session) => session.encoded(),
+    };
+    cell.store(encoded, Ordering::Release);
+}
 
 /// A process-global handle to a shared resource.
 ///
@@ -66,12 +112,21 @@ struct Entry {
     /// disagree about is an out-of-bounds kernel that no bounds check catches.
     bytes: u64,
     importers: Vec<SessionId>,
-    state: MapState,
+    /// The exclusive-use claim, as the guards see it. See [`StateCell`].
+    state: StateCell,
     /// The owner destroyed its id while importers remained. The storage is retained; see `release`.
     owner_released: bool,
 }
 
 impl Entry {
+    fn state(&self) -> MapState {
+        load_state(&self.state)
+    }
+
+    fn set_state(&self, state: MapState) {
+        store_state(&self.state, state);
+    }
+
     /// Who the retained bytes are charged to. The rule is "the charge follows the last live reference":
     /// while the owner holds the resource it pays, and once the owner has released, the importers keeping
     /// it alive pay. That is what stops a deferred release being a leak nobody can see — it lands in the
@@ -131,12 +186,33 @@ impl Exports {
                 resource,
                 bytes,
                 importers: Vec::new(),
-                state: MapState::Unmapped,
+                state: StateCell::default(),
                 owner_released: false,
             },
         );
         registry.by_resource.insert(key, id);
         Ok(id)
+    }
+
+    /// The exclusive-use guard on this export as seen from `session`'s own resource table.
+    ///
+    /// This is the bridge between the registry and [`ResourceTable::set_guard`]: the returned [`Access`]
+    /// watches the SAME cell [`map`](Self::map)/[`unmap`](Self::unmap) write, so a claim taken here is
+    /// visible to the resolution path with no further plumbing and no second copy of the state to drift.
+    /// Only a party to the export gets one — a guard for a session that can never touch the resource
+    /// would be a guard nothing consults.
+    ///
+    /// [`ResourceTable::set_guard`]: crate::protocol::model::id::ResourceTable::set_guard
+    pub fn access(&self, session: SessionId, id: ExportId) -> Result<Access> {
+        let registry = self.inner.lock().unwrap();
+        let entry = registry
+            .entries
+            .get(&id)
+            .ok_or(GpuError::Invalid("access: no such export"))?;
+        if !entry.importers.contains(&session) && entry.key.session != session {
+            return Err(GpuError::Invalid("access: not a party to this export"));
+        }
+        Ok(Access::new(Arc::clone(&entry.state), session.0))
     }
 
     /// Take a reference to an exported resource. Returns the native object and its authoritative length.
@@ -171,8 +247,8 @@ impl Exports {
         // Leaving "unregister while mapped" undefined is how a resource ends up permanently MappedBy a
         // session that has gone. It is defined here as an implicit unmap by the holder, and refused for
         // anyone else.
-        if entry.state == MapState::MappedBy(importer) {
-            entry.state = MapState::Unmapped;
+        if entry.state() == MapState::MappedBy(importer) {
+            entry.set_state(MapState::Unmapped);
         }
         let before = entry.importers.len();
         entry.importers.retain(|s| *s != importer);
@@ -212,9 +288,9 @@ impl Exports {
         if !entry.importers.contains(&session) && entry.key.session != session {
             return Err(GpuError::Invalid("map: not a party to this export"));
         }
-        match entry.state {
+        match entry.state() {
             MapState::Unmapped => {
-                entry.state = MapState::MappedBy(session);
+                entry.set_state(MapState::MappedBy(session));
                 Ok(())
             }
             MapState::MappedBy(_) => Err(GpuError::Invalid("map: already mapped")),
@@ -228,10 +304,10 @@ impl Exports {
             .entries
             .get_mut(&id)
             .ok_or(GpuError::Invalid("unmap: no such export"))?;
-        if entry.state != MapState::MappedBy(session) {
+        if entry.state() != MapState::MappedBy(session) {
             return Err(GpuError::Invalid("unmap: not held by this session"));
         }
-        entry.state = MapState::Unmapped;
+        entry.set_state(MapState::Unmapped);
         Ok(())
     }
 
@@ -247,7 +323,7 @@ impl Exports {
             .entries
             .get(&id)
             .ok_or(GpuError::Invalid("access: no such export"))?;
-        match entry.state {
+        match entry.state() {
             MapState::Unmapped => Ok(()),
             MapState::MappedBy(holder) if holder == session => Ok(()),
             MapState::MappedBy(_) => Err(GpuError::Invalid(
@@ -277,8 +353,8 @@ impl Exports {
         let ids: Vec<ExportId> = registry.entries.keys().copied().collect();
         for id in ids {
             if let Some(entry) = registry.entries.get_mut(&id) {
-                if entry.state == MapState::MappedBy(session) {
-                    entry.state = MapState::Unmapped;
+                if entry.state() == MapState::MappedBy(session) {
+                    entry.set_state(MapState::Unmapped);
                 }
                 entry.importers.retain(|s| *s != session);
                 if entry.key.session == session {

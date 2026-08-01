@@ -57,6 +57,14 @@ impl<E: GpuExecutor> InProcessCommandSink<E> {
         }
     }
 
+    /// Join this sink's session to the process-global export registry — the composition root's half of
+    /// cross-connection sharing. One [`Exports`] is cloned into every session; a sink that never gets one
+    /// refuses to export or import rather than sharing with nobody.
+    pub fn with_exports(mut self, exports: crate::runtime::model::sharing::Exports) -> Self {
+        self.session.exports = Some(exports);
+        self
+    }
+
     /// Build a sink over an explicit `session` + `exec`, for callers that need custom ceilings/clock.
     pub fn with_session(session: Session, exec: E) -> Self {
         Self {
