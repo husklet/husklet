@@ -82,6 +82,15 @@ fn attribute_stride(attribute: &Attr) -> u32 {
 ///
 /// `glVertexAttribIPointer` attributes (`integer`) are excluded: those legitimately deliver integers, and
 /// the 2-/4-component 32-bit forms they use are expressible.
+///
+/// That exclusion was unreachable for eight days and is the reason Chrome could not render a frame.
+/// `glVertexAttribIPointer` recorded through the FLOAT entry point's recorder, which hard-coded
+/// `integer = false`, so every integer array arrived here indistinguishable from
+/// `glVertexAttribPointer(GL_UNSIGNED_INT, normalized = FALSE)` — which this function correctly converts.
+/// The attribute was declared `Float32x2`, the shader's `uvec2` input required `Uint32x2`, and wgpu
+/// refused the pipeline. The exclusion is real now because `record::vertex_attrib_ipointer` sets the flag;
+/// the cross-check is `tests/lowering_extra/vformat.rs::an_ipointer_attribute_is_declared_integer_and_never_converted`,
+/// which was watched failing before that flag existed.
 fn needs_float_conversion(attribute: &Attr) -> bool {
     if attribute.integer {
         return false;
@@ -564,10 +573,14 @@ pub(super) fn lower_vertices(
                     .flat_map(|component| component.to_bits().to_le_bytes()),
             );
         }
-        let kind = match d.current_attr_kinds[location] {
-            1 => GL_INT,
-            2 => GL_UNSIGNED_INT,
-            _ => GL_FLOAT,
+        // Kind and integer-ness are decided together, from one discriminant. They were two expressions
+        // of one fact — the kind here and `kind != GL_FLOAT` at the format below — which is the third
+        // source of truth for "is this attribute an integer" and the shape that let the
+        // `glVertexAttribIPointer` defect survive since July. One match, one answer.
+        let (kind, integer) = match d.current_attr_kinds[location] {
+            1 => (GL_INT, true),
+            2 => (GL_UNSIGNED_INT, true),
+            _ => (GL_FLOAT, false),
         };
         let ir = ctx.alloc_buffer_ir()?;
         cmds.push(Cmd::CreateBuffer(
@@ -589,7 +602,7 @@ pub(super) fn lower_vertices(
             stride: size as u32 * size_of::<f32>() as u32,
             step_mode: 1,
             location: location as u32,
-            format: vertex_format_wire(kind, size, false, kind != GL_FLOAT),
+            format: vertex_format_wire(kind, size, false, integer),
         });
     }
 

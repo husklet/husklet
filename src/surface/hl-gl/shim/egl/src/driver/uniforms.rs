@@ -104,12 +104,11 @@ pub extern "C" fn glVertexAttribIPointer(
     pointer: *const c_void,
 ) {
     GlobalState::context(|s| {
-        record::vertex_attrib_pointer(
+        record::vertex_attrib_ipointer(
             &mut s.gl,
             index as usize,
             size,
             type_,
-            false,
             stride,
             pointer as usize,
         )

@@ -26,12 +26,46 @@ pub fn vertex_attrib_pointer(
     stride: i32,
     offset: usize,
 ) {
+    vertex_attrib_array(ctx, location, size, kind, normalized, false, stride, offset);
+}
+
+/// `glVertexAttribIPointer` — an array that delivers INTEGERS to the shader (ES 3.0 §2.8), never
+/// normalized. The distinction from [`vertex_attrib_pointer`] is the whole point of the entry point: GL
+/// converts an integer component type to float for `glVertexAttribPointer` and does not for this one, so
+/// a `uvec2` input must be fed a `Uint32x2` vertex format rather than the `Float32x2` the conversion path
+/// produces.
+pub fn vertex_attrib_ipointer(
+    ctx: &mut GlContext,
+    location: usize,
+    size: i32,
+    kind: u32,
+    stride: i32,
+    offset: usize,
+) {
+    vertex_attrib_array(ctx, location, size, kind, false, true, stride, offset);
+}
+
+/// The single writer of an array attribute's descriptor, so `integer` has ONE source of truth rather
+/// than one per entry point. It was two before, and the classic pointer path hard-coded `false` for both
+/// of its callers — which discarded `glVertexAttribIPointer`'s integer-ness at the door and made every
+/// integer-attribute pipeline unbuildable.
+#[allow(clippy::too_many_arguments)]
+fn vertex_attrib_array(
+    ctx: &mut GlContext,
+    location: usize,
+    size: i32,
+    kind: u32,
+    normalized: bool,
+    integer: bool,
+    stride: i32,
+    offset: usize,
+) {
     if vertex_attrib_arguments(ctx, location, size, stride) {
         let a = &mut ctx.local.attr[location];
         a.size = size;
         a.kind = kind;
         a.normalized = normalized;
-        a.integer = false;
+        a.integer = integer;
         a.stride = stride;
         a.offset = offset;
         a.buffer = ctx.local.array_buffer;

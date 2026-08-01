@@ -211,3 +211,98 @@ fn short_normalized_uploads_its_bytes_verbatim_and_declares_snorm16x4() {
     assert_eq!(attr.format, 4 | (4 << 8) | (1 << 16), "Snorm16x4");
     assert_eq!(attr.offset, 0);
 }
+
+// ---------------------------------------------------------------------------------------------------
+// glVertexAttribIPointer delivers INTEGERS, and the pipeline must say so
+//
+// This is the defect that cost a Chrome session. `glVertexAttribIPointer` routed into the recorder for
+// the FLOAT entry point, which hard-coded `integer = false`, so an integer array was indistinguishable
+// from `glVertexAttribPointer(GL_UNSIGNED_INT, normalized = FALSE)`. That combination legitimately
+// converts to float, so the attribute was converted and declared `Float32x2` while the shader's `uvec2`
+// input required `Uint32x2`, and wgpu refused the pipeline:
+//
+//     In Device::create_render_pipeline, label = 'hl-render'
+//       Error matching ShaderStages(VERTEX) shader requirements against the pipeline
+//         Location[2] Uint32x2 interpolated as Some(Flat) ... is not provided by the previous stage outputs
+//           Input type is not compatible with the provided Float32x2
+//
+// FAIL-FIRST: `vertex_attrib_ipointer` was landed passing `integer = false` — the rule deliberately
+// absent — and this test was watched failing with kind=5 comps=2 but the integer bit CLEAR and a
+// `gl-converted-vertex` buffer present. The flag was then set and it passed. The refusal is therefore
+// known to come from the flag and not from some other part of the path.
+//
+// `an_unnormalized_integer_attribute_becomes_its_plain_numeric_value` above is the control that must
+// keep passing: it drives `glVertexAttribPointer` with an integer type, where GL genuinely does convert
+// to float. If that test breaks, this fix has widened past the entry point it belongs to.
+// ---------------------------------------------------------------------------------------------------
+
+/// Lower a draw whose location-1 array was declared with `glVertexAttribIPointer`, and return
+/// `(the packed format the pipeline declared, whether a float-conversion buffer was emitted)`.
+fn ipointer_format(size: i32, kind: u32) -> (u32, bool) {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_tint(&mut c);
+    let ints = c.buffers.gen();
+    record::bind_buffer(&mut c, GL_ARRAY_BUFFER, ints);
+    record::buffer_data(&mut c, GL_ARRAY_BUFFER, &[0u8; 64], 0x88E4);
+    record::vertex_attrib_ipointer(&mut c, 1, size, kind, 0, 0);
+    record::enable_vertex_attrib(&mut c, 1);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+
+    let converted = sink.batches[0].iter().any(|cmd| {
+        matches!(cmd, Cmd::CreateBuffer(_, desc) if desc.label.starts_with("gl-converted-vertex"))
+    });
+    let pipe = sink.batches[0]
+        .iter()
+        .find_map(|cmd| match cmd {
+            Cmd::CreateRenderPipeline(_, d) => Some(d),
+            _ => None,
+        })
+        .expect("the positive control must build a pipeline; the assertions are vacuous otherwise");
+    let format = pipe
+        .vertex_buffers
+        .iter()
+        .flat_map(|vb| vb.attrs.iter())
+        .find(|a| a.location == 1)
+        .expect("location 1 must appear in some vertex slot")
+        .format;
+    (format, converted)
+}
+
+#[test]
+fn an_ipointer_attribute_is_declared_integer_and_never_converted() {
+    // Chrome's exact shape: GL_UNSIGNED_INT, two components, feeding a `uvec2`.
+    let (format, converted) = ipointer_format(2, GL_UNSIGNED_INT);
+
+    // Read the packing back through explicit shifts rather than by rebuilding it with the same helper
+    // that wrote it — a generator checked against itself agrees with itself.
+    // `comps | (kind << 8) | (normalized << 16) | (integer << 17)`, kind 5 = u32.
+    assert_eq!(format & 0xFF, 2, "two components");
+    assert_eq!((format >> 8) & 0xFF, 5, "GL_UNSIGNED_INT is kind 5");
+    assert_eq!(
+        (format >> 16) & 1,
+        0,
+        "glVertexAttribIPointer is never normalized"
+    );
+    assert_eq!(
+        (format >> 17) & 1,
+        1,
+        "the INTEGER bit is the entire reason this entry point exists: without it the pipeline \
+         declares Float32x2 and wgpu refuses the uvec2 shader input"
+    );
+    assert!(
+        !converted,
+        "an integer array must be handed over raw; converting it to f32 is what produced Float32x2"
+    );
+}
+
+#[test]
+fn a_signed_ipointer_attribute_is_declared_integer_too() {
+    // The sibling type, so the fix is not keyed to one enum. kind 6 = i32.
+    let (format, converted) = ipointer_format(4, GL_INT);
+    assert_eq!(format & 0xFF, 4);
+    assert_eq!((format >> 8) & 0xFF, 6, "GL_INT is kind 6");
+    assert_eq!((format >> 17) & 1, 1, "signed integers are integers too");
+    assert!(!converted);
+}
