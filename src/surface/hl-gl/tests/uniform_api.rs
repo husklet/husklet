@@ -1,6 +1,6 @@
 use hl_gl::model::context::GlContext;
 use hl_gl::model::glconst::*;
-use hl_gl::service::{query, record};
+use hl_gl::service::{intro, query, record};
 
 fn program(context: &mut GlContext, vertex: &str, fragment: &str) -> u32 {
     let vs = record::create_shader(context, GL_VERTEX_SHADER);
@@ -135,4 +135,44 @@ fn every_matrix_shape_reports_its_own_type() {
             reflected.gl_type
         );
     }
+}
+
+/// A matrix uniform reports the column stride an application must step by, not zero.
+///
+/// `GL_UNIFORM_MATRIX_STRIDE` was hardcoded to zero for every type. This is not a description an
+/// application can ignore: laying out a std140 block means writing column `n` at
+/// `offset + n * matrix_stride`, so a zero stacks all of them at the offset and the program overwrites
+/// its own uniform with the last column. The block genuinely is std140 here — every column is padded to
+/// sixteen bytes, which is where the type sizes come from — so the honest answer is sixteen.
+#[test]
+fn a_matrix_uniform_reports_its_std140_column_stride() {
+    for declared in [
+        "mat2", "mat3", "mat4", "mat2x3", "mat2x4", "mat3x2", "mat3x4", "mat4x2", "mat4x3",
+    ] {
+        let mut context = GlContext::new();
+        let program = program(
+            &mut context,
+            &format!("uniform {declared} m;\nvoid main(){{gl_Position=vec4(m[0][0]);}}"),
+            "void main(){gl_FragColor=vec4(1.0);}",
+        );
+        assert_eq!(
+            intro::active_uniformsiv(&context, program, 0, GL_UNIFORM_MATRIX_STRIDE),
+            Some(16),
+            "{declared} must report the stride between its columns"
+        );
+    }
+
+    // A non-matrix uniform has no columns, and GL reports zero for it. Asserted so the fix cannot be a
+    // constant sixteen applied to everything.
+    let mut context = GlContext::new();
+    let program = program(
+        &mut context,
+        "uniform vec4 v;\nvoid main(){gl_Position=v;}",
+        "void main(){gl_FragColor=vec4(1.0);}",
+    );
+    assert_eq!(
+        intro::active_uniformsiv(&context, program, 0, GL_UNIFORM_MATRIX_STRIDE),
+        Some(0),
+        "a vector has no column stride"
+    );
 }

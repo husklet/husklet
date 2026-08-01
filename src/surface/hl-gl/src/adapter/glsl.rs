@@ -376,6 +376,12 @@ pub use bindings::{prepare_verbatim_program, prepare_verbatim_program_with};
 pub use preprocess::PreprocessError;
 pub use uniforms::{compute_default_block_uniform, UniformBlockDecl};
 
+/// The std140 column stride `glGetActiveUniformsiv(GL_UNIFORM_MATRIX_STRIDE)` reports for a GLSL type
+/// keyword, or `0` when the type is not a matrix. Derived from the same rule that lays the block out.
+pub fn std140_matrix_stride(ty: &str) -> i32 {
+    TypeToken(ty).std140_matrix_stride()
+}
+
 use bindings::UniformBlockEdits;
 use constants::Constants;
 use normalize::NormalizedSource;

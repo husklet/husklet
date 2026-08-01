@@ -188,6 +188,24 @@ impl TypeToken<'_> {
             _ => return None,
         })
     }
+
+    /// The std140 distance in bytes between two columns of this type, or `0` when it is not a matrix.
+    ///
+    /// This is what `glGetActiveUniformsiv(GL_UNIFORM_MATRIX_STRIDE)` must report, and it lives beside
+    /// [`Self::layout`] because that is where the rule already is: a matrix is an array of column vectors
+    /// each padded to sixteen bytes, and the sizes above are derived from exactly that. Reporting it from
+    /// a second copy of the constant is how the two drift.
+    pub(super) fn std140_matrix_stride(&self) -> i32 {
+        match self.0 {
+            "mat2" | "mat2x2" | "mat3" | "mat3x3" | "mat4" | "mat4x4" | "mat2x3" | "mat2x4"
+            | "mat3x2" | "mat3x4" | "mat4x2" | "mat4x3" => MATRIX_COLUMN_STRIDE,
+            _ => 0,
+        }
+    }
 }
+
+/// std140 pads every matrix column to a `vec4`. The matrix sizes in [`TypeToken::layout`] are this times
+/// the column count.
+pub(super) const MATRIX_COLUMN_STRIDE: i32 = 16;
 
 // Uniform layout and block reflection continue in `uniforms`.

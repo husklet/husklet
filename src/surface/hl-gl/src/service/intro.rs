@@ -102,7 +102,12 @@ pub fn active_uniformsiv(ctx: &GlContext, program: u32, index: u32, pname: u32) 
             GL_UNIFORM_BLOCK_INDEX => 0,
             GL_UNIFORM_OFFSET => off,
             GL_UNIFORM_ARRAY_STRIDE => 0,
-            GL_UNIFORM_MATRIX_STRIDE => 0,
+            // Reported as zero for every type, matrices included. An application laying out a std140
+            // block reads this to step from one column to the next, so a zero stacks every column at the
+            // same address and it writes its own uniform data on top of itself — a wrong value the
+            // application acts on, not merely a wrong description. The block really is std140 here (see
+            // the layout rule this is derived from), so the answer for a matrix is its column stride.
+            GL_UNIFORM_MATRIX_STRIDE => glsl::std140_matrix_stride(&d.ty),
             GL_UNIFORM_IS_ROW_MAJOR => 0,
             _ => 0,
         });
