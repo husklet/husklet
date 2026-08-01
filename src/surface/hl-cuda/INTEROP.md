@@ -32,6 +32,11 @@ owns.* Nothing in the protocol expresses that today.
 That is the foundational piece and it is most of the work. It is also the piece worth designing once,
 because Vulkan↔CUDA (tier 3) needs the identical capability.
 
+**The design for it is `src/gpu/hl-gpu/SHARING.md`** — the mechanism belongs to `hl-gpu` because the
+limitation does. It covers identity, lifetime, and every failure edge (owner frees under a live import, a
+handle from a departed connection, and the two distinct races), and it states explicitly what it does not
+make safe.
+
 ## What is cheap, and the reason it is cheaper than it looks
 
 **Tier 1 needs no new memory-sharing mechanism whatsoever.** This is the load-bearing observation in this
@@ -94,14 +99,17 @@ any interop question is reached. IOSurface makes the host half tractable; the dr
 |---|---|
 | `cuImportExternalMemory`, `cuExternalMemoryGetMappedBuffer`, `cuDestroyExternalMemory` | CUDA↔Vulkan memory |
 | `cuImportExternalSemaphore` | cross-API synchronisation |
+| `cuSignalExternalSemaphoresAsync`, `cuWaitExternalSemaphoresAsync` | **not among the twenty-one, and required.** An imported semaphore is inert without them |
 
 This is how modern engines do interop, and it is the direction the ecosystem has moved. But `hl-vulkan`
 does not implement external memory either, so this needs both sides. It should reuse whatever cross-session
 handle tier 1 establishes rather than inventing a second one.
 
-Note that `probe.c` does not currently probe `cuSignalExternalSemaphoresAsync` or
-`cuWaitExternalSemaphoresAsync`; an imported semaphore is useless without them, so the honest count for a
-working tier 3 is twenty-three, not twenty-one.
+**The count for a working tier 3 is twenty-three, not twenty-one.** `probe.c` probes twenty-one entry
+points and neither signal nor wait is among them, so the harness's own number understates the work. That
+matters in the direction that hurts: an undercount produces an underestimate at exactly the moment
+someone is deciding whether the tier is affordable. The twenty-one figure is correct for "what is
+missing that we currently measure" and wrong for "what building this costs".
 
 ### Tier 4 — do not build without a named consumer.
 
