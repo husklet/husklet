@@ -96,6 +96,12 @@ impl<E: GpuExecutor> InProcessCommandSink<E> {
         &self.session
     }
 
+    /// Mutable access to the session's resource tables. Needed to attach a sharing guard to a live
+    /// resource; the sharing workflow owns when that happens.
+    pub fn resources_mut(&mut self) -> &mut SessionResources {
+        &mut self.session.resources
+    }
+
     /// The runtime-owned id → native resource table — the readback surface a result is read from.
     pub fn resources(&self) -> &SessionResources {
         &self.session.resources

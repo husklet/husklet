@@ -114,6 +114,11 @@ impl RefusalKind {
             | E::ShortBuffer
             | E::TrailingBytes => Self::Invalid,
             E::Kernel(_) => Self::Kernel,
+            // A TIMING refusal, not a malformed request. It is classified `Invalid` on the wire only
+            // because the wire has no code for "retry later"; the guest driver must not cache this as a
+            // permanent property of the command, because the identical command succeeds once the holder
+            // unmaps. Give it its own ACK code before any guest starts making decisions on this one.
+            E::MappedElsewhere { .. } => Self::Invalid,
             E::Decode(_) | E::Transport(_) | E::Panicked(_) => Self::Unstated,
         }
     }

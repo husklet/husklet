@@ -45,6 +45,39 @@ def_id!(/// A timeline fence for host↔guest synchronization.
 struct Slot<T> {
     gen: u32,
     val: T,
+    /// Set only on a resource shared across connections. `None` — the overwhelmingly common case — costs
+    /// one branch on the resolution path and no lookup at all.
+    guard: Option<Access>,
+}
+
+/// The exclusive-use guard on a shared resource, as seen from ONE session's table.
+///
+/// `state` is shared with the export registry: `0` means unmapped, any other value is `holder + 1`. It is
+/// an atomic rather than a lock because this is read on the hottest path in the service — a resolution
+/// that took a mutex would tax every command in every session to serve the rare shared one.
+#[derive(Clone)]
+pub struct Access {
+    state: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// The session this table belongs to, pre-encoded as `id + 1` so the check is one compare.
+    me: u64,
+}
+
+impl Access {
+    pub fn new(state: std::sync::Arc<std::sync::atomic::AtomicU64>, session: u64) -> Self {
+        Self {
+            state,
+            me: session + 1,
+        }
+    }
+
+    /// Whether this session may touch the resource right now.
+    fn check(&self, kind: &'static str, id: u32) -> Result<()> {
+        let holder = self.state.load(std::sync::atomic::Ordering::Acquire);
+        if holder == 0 || holder == self.me {
+            return Ok(());
+        }
+        Err(GpuError::MappedElsewhere { kind, id })
+    }
 }
 
 /// One recorded undo action for a table's in-flight transaction ([`ResourceTable::begin`]). The journal
@@ -126,7 +159,7 @@ impl<T> ResourceTable<T> {
         }
         let gen = self.next_gen;
         self.next_gen = self.next_gen.wrapping_add(1).max(1);
-        self.live.insert(id, Slot { gen, val });
+        self.live.insert(id, Slot { gen, val, guard: None });
         if let Some(journal) = &mut self.journal {
             journal.push(Undo::Inserted(id));
         }
@@ -135,21 +168,29 @@ impl<T> ResourceTable<T> {
 
     /// Look up a live resource. Errors (`UnknownId`) if it was never created or was freed.
     pub fn get(&self, id: u32) -> Result<&T> {
-        self.live
-            .get(&id)
-            .map(|s| &s.val)
-            .ok_or(GpuError::UnknownId {
-                kind: self.kind,
-                id,
-            })
+        let kind = self.kind;
+        let slot = self.live.get(&id).ok_or(GpuError::UnknownId { kind, id })?;
+        if let Some(access) = &slot.guard {
+            access.check(kind, id)?;
+        }
+        Ok(&slot.val)
     }
 
     pub fn get_mut(&mut self, id: u32) -> Result<&mut T> {
         let kind = self.kind;
-        self.live
-            .get_mut(&id)
-            .map(|s| &mut s.val)
-            .ok_or(GpuError::UnknownId { kind, id })
+        let slot = self.live.get_mut(&id).ok_or(GpuError::UnknownId { kind, id })?;
+        if let Some(access) = &slot.guard {
+            access.check(kind, id)?;
+        }
+        Ok(&mut slot.val)
+    }
+
+    /// Attach an exclusive-use guard to a live resource. Set when a resource becomes shared.
+    pub fn set_guard(&mut self, id: u32, guard: Access) -> Result<()> {
+        let kind = self.kind;
+        let slot = self.live.get_mut(&id).ok_or(GpuError::UnknownId { kind, id })?;
+        slot.guard = Some(guard);
+        Ok(())
     }
 
     /// Remove (destroy) a live resource. Errors on double-free / use-after-free (`UnknownId`).
@@ -187,8 +228,4 @@ impl<T> ResourceTable<T> {
         self.live.is_empty()
     }
 
-    /// Iterate live (id, &value) pairs — used by backends to release everything on teardown.
-    pub fn iter(&self) -> impl Iterator<Item = (u32, &T)> {
-        self.live.iter().map(|(k, s)| (*k, &s.val))
-    }
 }

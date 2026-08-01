@@ -42,6 +42,11 @@ pub enum GpuError {
     /// telling apart. A refusal is the backend doing its job; a panic is a backend defect, and one that
     /// reached this variant is a bug to fix rather than a guest to blame. Carries the panic's own message.
     Panicked(String),
+    /// A resource shared across connections was touched by a session other than the one currently
+    /// holding its exclusive map. Distinct from `Invalid` because it is a TIMING refusal, not a malformed
+    /// request: the same command from the same session succeeds once the holder unmaps, and a caller that
+    /// cannot tell those apart will "fix" a correct program.
+    MappedElsewhere { kind: &'static str, id: u32 },
     /// Higher-level decode context wrapped around a low-level wire error.
     Decode(String),
     /// A typed failure at the remote command transport boundary.
@@ -74,6 +79,10 @@ impl std::fmt::Display for GpuError {
             GpuError::Kernel(m) => write!(f, "kernel: {m}"),
             GpuError::Panicked(m) => write!(f, "executor panicked (backend defect): {m}"),
             GpuError::Decode(m) => write!(f, "decode: {m}"),
+            GpuError::MappedElsewhere { kind, id } => write!(
+                f,
+                "{kind} {id} is mapped by another connection; retry after it unmaps"
+            ),
             GpuError::Transport(error) => error.fmt(f),
         }
     }
