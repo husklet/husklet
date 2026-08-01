@@ -1155,3 +1155,49 @@ fn a_one_dimensional_image_is_supported_with_one_dimensional_limits() {
     );
     let _ = compressed_2d;
 }
+
+/// A 1D image must be VIEWABLE, not merely creatable. Creation and the format query learned 1D while
+/// vkCreateImageView did not, so every 1D image was made and then had no view — and an image clear needs
+/// one. 441 dEQP-VK.api.image_clearing cases that had previously been declined honestly as NotSupported
+/// became failures on exactly that gap, which is the "claimed and not honoured" shape.
+///
+/// And the layer claim is corrected here: WebGPU has no 1D array view dimension, so maxArrayLayers for a
+/// 1D image is 1. A layered 1D image would be creatable and permanently unviewable.
+#[test]
+fn a_one_dimensional_image_is_viewable_and_claims_one_layer() {
+    const R8G8B8A8_UNORM: i32 = 37;
+    const VK_IMAGE_TYPE_1D: i32 = 0;
+    const VK_IMAGE_TYPE_2D: i32 = 1;
+    const VK_IMAGE_TILING_OPTIMAL: i32 = 0;
+
+    let query = |image_type: i32| {
+        let mut p: VkImageFormatProperties = unsafe { core::mem::zeroed() };
+        let r = crate::instance::vkGetPhysicalDeviceImageFormatProperties(
+            core::ptr::null_mut(),
+            R8G8B8A8_UNORM,
+            image_type,
+            VK_IMAGE_TILING_OPTIMAL,
+            0,
+            0,
+            &mut p as *mut _ as *mut c_void,
+        );
+        (r, p)
+    };
+
+    // Positive control: 2D still reports many layers, so this is a statement about 1D and not a blanket
+    // collapse of the layer limit.
+    let (result, two_d) = query(VK_IMAGE_TYPE_2D);
+    assert_eq!(result, VK_SUCCESS);
+    assert!(
+        two_d.max_array_layers > 1,
+        "2D images are still layered: {}",
+        two_d.max_array_layers
+    );
+
+    let (result, one_d) = query(VK_IMAGE_TYPE_1D);
+    assert_eq!(result, VK_SUCCESS, "1D optimal is a required combination");
+    assert_eq!(
+        one_d.max_array_layers, 1,
+        "a 1D image has no array view dimension to be viewed through"
+    );
+}

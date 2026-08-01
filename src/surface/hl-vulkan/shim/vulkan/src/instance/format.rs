@@ -140,7 +140,12 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
                 depth: 1,
             },
             1,
-            2048,
+            // ONE array layer, not the 2048 this first reported. WebGPU has no 1D array view dimension,
+            // so a layered 1D image is creatable and then unviewable — and an image that cannot have a
+            // view cannot be cleared, sampled or rendered to. Claiming 2048 turned a capability the
+            // driver does not have into hundreds of conformance failures that had previously been
+            // declined honestly.
+            1,
         ),
         VK_IMAGE_TYPE_3D => (
             VkExtent3D {

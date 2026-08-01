@@ -216,6 +216,30 @@ pub extern "C" fn vkGetImageMemoryRequirements2KHR(
     vkGetImageMemoryRequirements2(device, p_info, p_memory_requirements)
 }
 
+/// Which wire texture dimension a `VkImageViewType` over an image of `image_dim` with `layer_count`
+/// layers resolves to, or `None` when this driver cannot view that combination.
+///
+/// Extracted from `vkCreateImageView` so it can be tested: the entry point needs a live device and a
+/// host sink, so an inline match here was reachable only from a running system, and the 1D arm below was
+/// missing for exactly as long as nothing could notice.
+///
+/// There is deliberately no `VK_IMAGE_VIEW_TYPE_1D_ARRAY` arm. WebGPU has no 1D array view dimension, so
+/// a layered 1D image would be creatable and permanently unviewable; `vkGetPhysicalDeviceImageFormatProperties`
+/// reports `maxArrayLayers == 1` for 1D to match.
+fn view_dimension(view_type: i32, image_dim: TextureDim, layer_count: u32) -> Option<TextureDim> {
+    Some(match view_type {
+        0 if image_dim == TextureDim::D1 && layer_count == 1 => TextureDim::D1,
+        1 if matches!(image_dim, TextureDim::D2 | TextureDim::Cube) && layer_count == 1 => {
+            TextureDim::D2
+        }
+        5 if matches!(image_dim, TextureDim::D2 | TextureDim::Cube) => TextureDim::D2,
+        3 if image_dim == TextureDim::Cube && layer_count == 6 => TextureDim::Cube,
+        6 if image_dim == TextureDim::Cube => TextureDim::Cube,
+        2 if image_dim == TextureDim::D3 => TextureDim::D3,
+        _ => return None,
+    })
+}
+
 pub extern "C" fn vkCreateImageView(
     _device: *mut c_void,
     p_create_info: *const c_void,
@@ -251,16 +275,7 @@ pub extern "C" fn vkCreateImageView(
             {
                 return None;
             }
-            let dim = match ci.view_type {
-                1 if matches!(image.dim, TextureDim::D2 | TextureDim::Cube) && layer_count == 1 => {
-                    TextureDim::D2
-                }
-                5 if matches!(image.dim, TextureDim::D2 | TextureDim::Cube) => TextureDim::D2,
-                3 if image.dim == TextureDim::Cube && layer_count == 6 => TextureDim::Cube,
-                6 if image.dim == TextureDim::Cube => TextureDim::Cube,
-                2 if image.dim == TextureDim::D3 => TextureDim::D3,
-                _ => return None,
-            };
+            let dim = view_dimension(ci.view_type, image.dim, layer_count)?;
             if image.dim == TextureDim::D3 && (base_layer != 0 || layer_count != 1) {
                 return None;
             }
@@ -401,4 +416,50 @@ pub extern "C" fn vkDestroySampler(
     ShimState::with_device(|dev| {
         dev.samplers.remove(&sampler);
     });
+}
+
+#[cfg(test)]
+mod view_dimension_tests {
+    use super::{view_dimension, TextureDim};
+
+    /// The 1D arm this file was missing. Image creation and the format query both learned 1D; the view
+    /// path did not, so a 1D image was creatable and then unviewable — and an image clear needs a view.
+    #[test]
+    fn a_single_layer_1d_image_has_a_1d_view() {
+        assert_eq!(
+            view_dimension(0, TextureDim::D1, 1),
+            Some(TextureDim::D1),
+            "VK_IMAGE_VIEW_TYPE_1D over a 1D image"
+        );
+    }
+
+    /// WebGPU has no 1D array view dimension, so these stay refused rather than becoming a view the
+    /// executor would reject later.
+    #[test]
+    fn a_layered_1d_view_is_refused() {
+        assert_eq!(view_dimension(0, TextureDim::D1, 2), None, "two layers");
+        assert_eq!(view_dimension(4, TextureDim::D1, 1), None, "1D_ARRAY type");
+    }
+
+    /// The pre-existing arms must be untouched by the extraction — this is the control that the refactor
+    /// moved the match rather than rewriting it.
+    #[test]
+    fn the_existing_view_types_still_resolve_as_before() {
+        assert_eq!(view_dimension(1, TextureDim::D2, 1), Some(TextureDim::D2));
+        assert_eq!(view_dimension(5, TextureDim::D2, 4), Some(TextureDim::D2));
+        assert_eq!(
+            view_dimension(3, TextureDim::Cube, 6),
+            Some(TextureDim::Cube)
+        );
+        assert_eq!(
+            view_dimension(6, TextureDim::Cube, 12),
+            Some(TextureDim::Cube)
+        );
+        assert_eq!(view_dimension(2, TextureDim::D3, 1), Some(TextureDim::D3));
+        // And the mismatches stay refused.
+        assert_eq!(view_dimension(1, TextureDim::D3, 1), None);
+        assert_eq!(view_dimension(3, TextureDim::D2, 6), None);
+        assert_eq!(view_dimension(2, TextureDim::D2, 1), None);
+        assert_eq!(view_dimension(99, TextureDim::D2, 1), None);
+    }
 }
