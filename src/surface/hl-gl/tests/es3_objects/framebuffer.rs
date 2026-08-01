@@ -597,3 +597,63 @@ fn the_float_renderable_set_is_exactly_what_the_extension_names() {
         );
     }
 }
+
+/// Every format this driver reports colour-renderable can actually be cleared.
+///
+/// This is the self-contradiction the float work surfaced, stated as an invariant instead of a list. One
+/// table in the GL layer (`colour_renderable`, ES 3.0 table 3.13) said an attachment was COMPLETE while
+/// another in the IR (`TextureFormat::clear_texel`) refused to pack a clear for its plane. A guest could
+/// therefore build a framebuffer the driver called complete and watch its clear fail — and fail
+/// CONDITIONALLY, because an unscissored clear folded into a render-pass load op succeeds while a
+/// scissored or clear-only frame lowers to a rectangle fill that did not. The six eight-bit integer
+/// formats were in that state with no extension involved, and the seven float formats joined them the
+/// moment `GL_EXT_color_buffer_float` was advertised.
+///
+/// Asserting the invariant rather than the two lists is the point: a format added to either table without
+/// the other fails here, which is what the two lists drifting apart looks like before it reaches anyone.
+#[test]
+fn every_colour_renderable_format_has_a_clear_packing() {
+    // Every sized internal format this driver models as a colour attachment, renderable or not — the
+    // input set has to be wider than the answer or the test only re-states the renderable list.
+    let candidates = [
+        GL_RGBA8, GL_RGB8, GL_R8, GL_RG8, GL_SRGB8_ALPHA8, GL_BGRA8_EXT, GL_RGB565, GL_RGBA4,
+        GL_RGB5_A1, GL_RGB10_A2, GL_R8UI, GL_R8I, GL_RG8UI, GL_RG8I, GL_RGBA8UI, GL_RGBA8I,
+        GL_R16F, GL_RG16F, GL_RGBA16F, GL_R32F, GL_RG32F, GL_RGBA32F, GL_R11F_G11F_B10F,
+        GL_RGB16F, GL_RGB32F, GL_RGB9_E5, GL_SRGB8, GL_RGB8_SNORM, GL_RGB8UI,
+        GL_DEPTH_COMPONENT16, GL_DEPTH_COMPONENT24,
+    ];
+
+    let mut renderable = 0;
+    for declared in candidates {
+        let mut c = ctx();
+        let tex = c.textures.gen();
+        record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
+        record::tex_image_2d_declared(&mut c, declared, 8, 8, &[]);
+        let fbo = c.gen_framebuffer();
+        record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
+        record::framebuffer_texture_2d(
+            &mut c,
+            GL_FRAMEBUFFER,
+            GL_COLOR_ATTACHMENT0,
+            GL_TEXTURE_2D,
+            tex,
+            0,
+        );
+        if record::check_framebuffer_status(&mut c, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE {
+            continue;
+        }
+        renderable += 1;
+        let plane = c.textures.get(tex).expect("attachment").ir_format;
+        assert!(
+            plane.clear_texel([1.0, 0.0, 0.0, 1.0]).is_some(),
+            "{declared:#x} is reported COMPLETE but its {plane:?} plane cannot be cleared"
+        );
+    }
+
+    // The denominator. Without it a completeness check that reported nothing renderable would satisfy
+    // every assertion above by never running one.
+    assert!(
+        renderable >= 20,
+        "the candidate set must actually exercise the renderable path; only {renderable} were complete"
+    );
+}

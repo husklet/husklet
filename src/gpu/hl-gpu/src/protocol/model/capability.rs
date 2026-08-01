@@ -106,10 +106,15 @@ pub const COLOR_FORMATS: &[TextureFormat] = &[
 /// `GL_RED_INTEGER`, `GL_RG_INTEGER`).
 ///
 /// Deliberately NOT part of [`COLOR_FORMATS`]: that set is the formats *every* host backend can
-/// materialize, and the software oracle cannot. Its clear/blend/sample paths are all defined on normalized
-/// float channels, and an integer format has no normalized reading — `clear_texel` and friends refuse it
-/// rather than inventing one. A backend advertises this set only if it can really carry raw integer texels,
-/// which today means the wgpu executor.
+/// materialize, and the software oracle cannot. Its BLEND and SAMPLE paths are defined on normalized float
+/// channels, and an integer format has no normalized reading. A backend advertises this set only if it can
+/// really carry raw integer texels, which today means the wgpu executor.
+///
+/// CLEARING them is no longer part of the gap. `TextureFormat::clear_texel` packs an integer target from
+/// raw values, because the hardware load-op clear already does — it passes the same `[f32; 4]` to
+/// `wgpu::Color`, which a Uint/Sint target reads as the integer. Leaving the emulated rectangle clear
+/// refusing what the load op accepts would have made one driver's two clear routes disagree. Being
+/// clearable is not being materializable in full, so this set is unchanged.
 pub const INTEGER_FORMATS: &[TextureFormat] = &[
     TextureFormat::Rgba8Uint,
     TextureFormat::Rgba8Sint,

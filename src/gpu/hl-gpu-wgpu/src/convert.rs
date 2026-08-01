@@ -133,18 +133,35 @@ mod clear_texel_tests {
         }
     }
 
-    /// An integer format is refused here too, with THIS backend's message so a refusal still says who
-    /// refused. Paired with the agreement test above as its positive control: a wrapper that failed for
-    /// everything would satisfy the refusal on its own.
+    /// An integer target packs here exactly as it does in the shared rule, and the refusal that remains
+    /// still carries THIS backend's message so it says who refused.
+    ///
+    /// This asserted the opposite an hour ago. Refusing an integer clear here while `LoadOp::Clear` hands
+    /// the same `[f32; 4]` to `wgpu::Color` — which a Uint/Sint target reads as the integer — left one
+    /// driver's two clear routes disagreeing, and the GL layer had been reporting integer colour
+    /// attachments COMPLETE the whole time.
     #[test]
-    fn an_integer_format_is_refused_with_this_backends_message() {
+    fn an_integer_target_packs_here_as_it_does_in_the_shared_rule() {
         for &format in INTEGER_FORMATS {
-            assert!(
+            let shared = format
+                .clear_texel([200.0, 1.0, 0.0, 255.0])
+                .expect("an integer target is clearable");
+            assert_eq!(
                 Format::from(format)
-                    .clear_texel([1.0, 0.0, 0.0, 1.0])
-                    .is_err(),
-                "{format:?} has no normalized clear packing"
+                    .clear_texel([200.0, 1.0, 0.0, 255.0])
+                    .expect("and this backend must serve it"),
+                shared,
+                "{format:?} must pack identically on both backends"
             );
         }
+
+        // The refusal that remains, with this backend's own message, so a caller can still tell who said
+        // no — and so the agreement above is not mistaken for "everything packs".
+        assert!(
+            Format::from(hl_gpu::protocol::model::enums::TextureFormat::Depth32Float)
+                .clear_texel([0.0; 4])
+                .is_err(),
+            "a format with no plain-colour texel is still refused"
+        );
     }
 }

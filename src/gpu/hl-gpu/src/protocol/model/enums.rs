@@ -124,10 +124,17 @@ impl TextureFormat {
     ///   range its storage can represent.
     /// * A FLOAT format is stored unclamped and ungamma'd. Clamping here would defeat the reason a float
     ///   target exists, and would disagree with the load-op clear, which carries the value through.
-    /// * An INTEGER format answers `None` on purpose, not by omission. Its texels are raw numbers with no
-    ///   normalized reading, so a `[f32; 4]` has no defined mapping onto them; inventing one would write
-    ///   plausible wrong pixels. See `INTEGER_FORMATS` in `protocol::model::capability`, which keeps them
-    ///   out of the set every backend claims to materialize for exactly this reason.
+    /// * An INTEGER format takes the colour as RAW VALUES, truncated toward zero and clamped to the
+    ///   channel's range — not as a normalized colour scaled by 255. This is not a mapping invented here:
+    ///   it is what the hardware clear already does. `LoadOp::Clear` hands this same `[f32; 4]` straight
+    ///   to `wgpu::Color`, which WebGPU interprets as the integer clear value for a Uint/Sint target, so
+    ///   packing it any other way would make the emulated rectangle clear disagree with the load-op clear
+    ///   inside one driver — the exact two-routes-disagree defect that the sRGB drift was.
+    ///
+    /// The integer formats stay out of `COLOR_FORMATS` (see `protocol::model::capability`) even so. That
+    /// set is what every backend can fully materialize, and the software oracle's SAMPLE and BLEND paths
+    /// are still defined on normalized channels. Being clearable is not being renderable-in-full, and the
+    /// capability set says the stronger thing.
     pub fn clear_texel(self, color: [f32; 4]) -> Option<Vec<u8>> {
         let unorm = |value: f32| (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
         let channel = |value: f32| {
@@ -158,6 +165,14 @@ impl TextureFormat {
             TextureFormat::Rgba32Float => {
                 color.iter().flat_map(|v| v.to_le_bytes()).collect()
             }
+            // Raw integer values, one byte a channel. `as` on a float already truncates toward zero and
+            // saturates at the integer type's bounds in Rust, which is the same clamp the hardware applies.
+            TextureFormat::R8Uint => vec![color[0] as u8],
+            TextureFormat::Rg8Uint => vec![color[0] as u8, color[1] as u8],
+            TextureFormat::Rgba8Uint => color.iter().map(|v| *v as u8).collect(),
+            TextureFormat::R8Sint => vec![color[0] as i8 as u8],
+            TextureFormat::Rg8Sint => vec![color[0] as i8 as u8, color[1] as i8 as u8],
+            TextureFormat::Rgba8Sint => color.iter().map(|v| *v as i8 as u8).collect(),
             _ => return None,
         })
     }
@@ -511,22 +526,77 @@ mod clear_texel_tests {
         );
     }
 
-    /// The integer formats answer "no packing" rather than inventing one, and that is a deliberate
-    /// refusal rather than an omission: their texels are raw numbers with no normalized reading, so a
-    /// `[f32; 4]` has no defined mapping onto them. The refusal is asserted together with the capability
-    /// set that justifies it, and the coverage test above is the positive control proving the path serves
-    /// everything that IS promised — without it, a rule that refused everything would pass this.
+    /// An integer target is cleared from RAW VALUES, and is still not promised as a fully materializable
+    /// format.
+    ///
+    /// This asserted the opposite an hour ago — that an integer format has no clear packing at all — and
+    /// that was right about the code and wrong about the driver it sat in. The hardware load-op clear
+    /// hands the same `[f32; 4]` to `wgpu::Color`, which a Uint/Sint target reads as the integer, so
+    /// refusing here left one driver's two clear routes disagreeing: a clear folded into a render pass
+    /// stored the value, and a scissored or clear-only frame refused. That is the same shape as the sRGB
+    /// drift, and the same shape as the mismatch this fixes — `colour_renderable` in the GL layer has
+    /// always reported an integer colour attachment COMPLETE, so a guest could reach a framebuffer whose
+    /// clear failed depending on whether anything was drawn after it.
+    ///
+    /// The capability set is deliberately NOT widened: being clearable is not being materializable in
+    /// full, and the oracle's blend and sample paths still have no normalized reading for these.
     #[test]
-    fn the_integer_formats_are_refused_and_promised_by_neither() {
+    fn an_integer_target_clears_from_raw_values_and_is_still_not_promised() {
+        // The value is the number, not a normalized colour: 200 stores 200, not 255.
+        assert_eq!(
+            TextureFormat::Rgba8Uint.clear_texel([200.0, 1.0, 0.0, 255.0]),
+            Some(vec![200, 1, 0, 255]),
+            "a Uint target stores the integers it was given"
+        );
+        assert_eq!(
+            TextureFormat::R8Uint.clear_texel([200.0, 0.0, 0.0, 0.0]),
+            Some(vec![200]),
+            "and only the channels it has"
+        );
+        assert_eq!(
+            TextureFormat::Rg8Sint.clear_texel([-120.0, 7.0, 0.0, 0.0]),
+            Some(vec![0x88, 7]),
+            "a Sint target keeps its two's-complement byte"
+        );
+        // Saturating at the channel's bounds, and truncating toward zero, is what a cast to the integer
+        // type does and what the hardware clear does.
+        assert_eq!(
+            TextureFormat::Rgba8Uint.clear_texel([300.0, -5.0, 3.9, -0.9]),
+            Some(vec![255, 0, 3, 0]),
+            "out of range saturates and a fraction truncates toward zero"
+        );
+        // The control that separates raw from normalized: 1.0 is ONE in an integer target and 255 in a
+        // unorm one. A packing that scaled by 255 would pass every assertion above that used 0 or 255.
+        assert_eq!(
+            TextureFormat::Rgba8Uint.clear_texel([1.0, 1.0, 1.0, 1.0]),
+            Some(vec![1, 1, 1, 1]),
+            "a Uint target reads 1.0 as the number one"
+        );
+        assert_eq!(
+            TextureFormat::Rgba8Unorm.clear_texel([1.0, 1.0, 1.0, 1.0]),
+            Some(vec![255, 255, 255, 255]),
+            "a unorm target reads the same 1.0 as full scale"
+        );
+
         for &format in INTEGER_FORMATS {
             assert!(
-                format.clear_texel([1.0, 0.0, 0.0, 1.0]).is_none(),
-                "{format:?} has no normalized clear packing and must not invent one"
+                format.clear_texel([1.0, 0.0, 0.0, 1.0]).is_some(),
+                "{format:?} is colour-renderable in the GL layer and must be clearable"
+            );
+            assert_eq!(
+                format.clear_texel([1.0, 0.0, 0.0, 1.0]).map(|t| t.len()),
+                format.bytes_per_texel(),
+                "{format:?} packs a texel of its own width"
             );
             assert!(
                 !COLOR_FORMATS.contains(&format),
-                "{format:?} must not be promised as a format every backend materializes"
+                "{format:?} is still not a format every backend materializes in full"
             );
         }
+
+        // The refusal that remains, so the positive cases above are not mistaken for "everything packs":
+        // a format with no plain-colour texel at all still answers None.
+        assert!(TextureFormat::Depth32Float.clear_texel([0.0; 4]).is_none());
+        assert!(TextureFormat::Bc1RgbaUnorm.clear_texel([0.0; 4]).is_none());
     }
 }
