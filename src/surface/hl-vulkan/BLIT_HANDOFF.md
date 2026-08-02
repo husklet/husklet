@@ -5,6 +5,36 @@ Written 2026-08-01 from the first scored Vulkan CTS baselines. Numbers here were
 what the bundle stages. Full results and method: `../../../e2e/husklet/apps/vk-cts/COPY_AND_BLIT.md` and
 `BASELINE.md` beside it.
 
+## READ THIS FIRST: the two sides disagree ON PURPOSE
+
+**The CPU oracle serves 3D blits. The wgpu executor still refuses them.** Read cold, that looks like a bug
+in one of them. It is neither — it is the intended intermediate state, and it is the thing that makes the
+remaining work measurable.
+
+A reference that cannot REPRESENT a case cannot validate the executor that will serve it: while both sides
+decline, a differential agrees by mutual refusal and establishes nothing at all. So the oracle went first
+deliberately, then the recorder. The executor is layer 3 and is UNSTARTED. The divergence closes when it
+lands, and not before. It is stated at both refusal sites in the source
+(`hl-gpu/src/cpu/executor/operation.rs`, `hl-gpu-wgpu/src/blit.rs`) so neither reads as an oversight.
+
+| layer | where | state |
+| --- | --- | --- |
+| 1. IR + CPU oracle | `hl-gpu` | **landed** `e9de8e48f` |
+| 2. Recorder + shim | `hl-vulkan` | **landed** `987aa7a79` |
+| 3. Executor | `hl-gpu-wgpu/src/blit.rs` | **unstarted** — one draw per destination slice |
+
+**Metal-side verification is cheap and proven, so there is no excuse for landing layer 3 unverified.**
+Measured 2026-08-01: `mac cargo test -p hl-gpu-wgpu --test blit_mirror` builds incrementally in about 12
+seconds and runs — `test mirrored_blit_reflects_each_axis_exactly ... ok`, `1 passed`. It genuinely
+executed rather than being filtered out, which is the thing to check: `0 passed; 0 filtered out` and a
+real pass look alike at a glance. `hl-gpu-wgpu`'s tests need Metal and CANNOT run in the Linux VM.
+
+**A refused blit still takes its whole command buffer down, and that is PRE-EXISTING.** It is not
+something these layers introduced — every one of the 54 `?` operators in `submit_cb_inner` has always
+aborted the entire batch, and layer 2 only added one more way to reach it. Do not treat it as fallout from
+this work or as a reason to unwind any of it. It is scoped, measured and handed over unstarted in
+`../../gpu/hl-gpu-wgpu/SUBMIT_PROPAGATION.md`, which says to do it as its own commit BEFORE layer 3.
+
 ## The state in one paragraph
 
 `dEQP-VK.api.copy_and_blit.core.*` is scored exhaustively: 134,125 cases, 0 unrun. 1,172 of its failures
@@ -65,10 +95,11 @@ slice, and **no new shader is required**. Leaves Z-scaled blits refused.
 not validated at all — while both sides decline, a differential agrees by mutual refusal and establishes
 nothing.
 
-### LANDED 2026-08-01 (`e9de8e48f`): the oracle slice is done. Layers 1–3 below are what remains.
+### LANDED 2026-08-01: layers 1 and 2 (`e9de8e48f`, `987aa7a79`). Layer 3 is unstarted.
 
-The CPU oracle now serves an unscaled depth-spanning blit and `Mirror` has its `z`. What changed against
-the plan, measured rather than assumed:
+The CPU oracle serves an unscaled depth-spanning blit, `Mirror` has its `z`, the recorder normalizes the
+depth axis, and the `vkCmdBlitImage: 3D region` / `vkCmdBlitImage2: 3D region` refusals are gone. What
+changed against the plan, measured rather than assumed:
 
 * **There were TWO gates, not four.** `check_copy_subresource`'s z refusal and the `D3` refusal were
   real. The other two were not: a `D3` texture's slices ARE its planes, so `CopyBufferToTexture` already
@@ -97,10 +128,41 @@ the plan, measured rather than assumed:
   trilinear on a 3D blit; nearest-slice selection would be a plausible wrong answer that reads as a
   filtering difference. Do not "fix" it by picking a slice.
 
-Not done, and not started: the recorder (layer 2) and the executor (layer 3). The shim's `BlitRect` now
-derives `inverted.z` from the offset pair, so the flip is carried the moment the offsets are read and
-lifting the `vkCmdBlitImage: 3D region` refusal cannot silently ship an unflipped blit — but the refusal
-itself is untouched, at `shim/vulkan/src/transfer/copy.rs:240` and `copy2.rs:213`.
+#### Layer 2 (`987aa7a79`), and what it cost to learn
+
+`BlitRect` normalizes z alongside x and y, so a depth-spanning region is expressible at all; both `3D
+region` refusals are deleted. Depth had been the raw `(a.z, b.z)` offset pair with a caller-side refusal
+of anything but `(0, 1)` — a shape with no origin, no extent and no flip, which could only ever be
+refused. A zero z span is now skipped as an empty region for the same reason a zero-width one is; before,
+it reported "3D region", the same answer a legal depth-spanning blit got.
+
+`cmd_blit_image` takes `Origin3d`/`Extent3d` instead of four `(u32, u32)` pairs. That is the
+required-shape form — the compiler enumerated all fifteen call sites and none could keep the old meaning
+by default. **It was landed on its own first**, with every hl-vulkan and shim test green, as the control
+proving it moved no behaviour; only then were the three new refusals watched failing against real
+plumbing. Recommended for layer 3 too: separate the plumbing from the rule, so the rule has something
+honest to fail against.
+
+Three rules, and the ORDER is load-bearing:
+
+1. a non-3D image has no depth axis to span, refused by NAME — this must precede the bounds check. A 2D
+   image's depth is one at every level, so a wider span would otherwise return `OutOfBounds`, which reads
+   as "your region is too big" about a region that is the right size on an image with no third axis.
+2. source and destination spans must be EQUAL, refused at record time where the caller can attribute it.
+3. the span must lie inside the image's depth AT THE NAMED MIP, both sides. `ImageRec::depth_at` mirrors
+   `extent_at` rather than returning `depth`, because Vulkan halves a 3D image's depth per level.
+
+**The strongest argument in this repo for reverting rules INDIVIDUALLY rather than as a group.** Seven
+rules were reverted one at a time and six were caught by their own test. The seventh — `Mirror::net`
+dropping its z axis — **survived**, guarded by nothing anywhere in the tree. The prediction that the
+recorder test would catch it was made from the code's shape and was WRONG: the recorder takes an
+already-combined `mirror` and never calls `net`, which is the shim's job. The two live one call apart. A
+z case now fails in the shim's own `a_mirrored_blit_region_keeps_its_flip_and_an_empty_one_is_skipped`.
+A matrix written by reading the code rather than by running each reversion would have claimed that
+coverage and been believed. Two other rules survived their first test for the same family of reason and
+are documented in `oracle_spec/blit3d.rs` and `lowering/blit3d.rs`.
+
+Not started: the executor (layer 3).
 
 ### An attempt was made and reverted. Read this before repeating it.
 
@@ -146,17 +208,28 @@ the attempt established is worth more than the diff:
   plane 0 will look right and every later plane will be off. That is why it is now a test rather than a
   comment.
 
-### Layers, once the oracle is in
+### Layers
 
-1. **IR** — `hl-gpu/src/protocol/model/descriptor.rs`. `BlitTexture` regions carry a 2D rect plus a layer
-   range; they need a depth extent and origin, plus `Mirror::z`. This is a wire change: take the form where
-   the compiler enumerates every construction site. That discipline caught an agent today who had checked
-   only one crate, so run `cargo check --workspace --all-targets`.
-2. **Recorder** — `hl-vulkan/src/service/record/image.rs` and `shim/vulkan/src/transfer/copy.rs:236`. Stop
-   collapsing the depth axis; delete the pre-recorder refusal that latches
-   `Unsupported("vkCmdBlitImage: 3D region")`.
-3. **Executor** — `hl-gpu-wgpu/src/blit.rs`. One draw per destination slice for the unscaled case. Z-scaled
-   blits need a `texture_3d<f32>` binding and Z interpolation; that is slice 2, not slice 1.
+1. ~~**IR**~~ — **DONE** (`e9de8e48f`). `Extent3d::depth` and `Origin3d::z` already existed; only
+   `Mirror::z` was missing, added as wire bit 2. NOT a `WIRE_VERSION` bump: it widens the accepted value
+   set with the framing unchanged, and `negotiate` demands exact version equality, so no peer can
+   mis-frame it and a bump would have invalidated other agents' in-flight bundles for nothing. The
+   reasoning lives on `Mirror::to_u32` so it can be reversed on its merits.
+2. ~~**Recorder**~~ — **DONE** (`987aa7a79`). See above.
+3. **Executor** — **UNSTARTED**, and the only thing between here and the 352 cases.
+   `hl-gpu-wgpu/src/blit.rs`. One draw per destination slice for the unscaled case; the refusal to delete
+   is the `TextureDim::D3` half of the `D1 | D3` match, which now carries a comment explaining why it is
+   still there. The recorder only ever emits `src.depth == dst.depth` (it refuses an unequal span by
+   name), so the executor does not have to handle z-scaling — that would need a `texture_3d<f32>` binding
+   and Z interpolation, and stays refused on both sides. Verify on the host; see the banner at the top of
+   this file for the exact command and its measured cost. Do
+   `../../gpu/hl-gpu-wgpu/SUBMIT_PROPAGATION.md` first, as its own commit.
+
+**One enumeration warning that cost time on layer 1.** `cargo check --workspace --all-targets` does NOT
+cover the shim crates — five of them declare their own `[workspace]`, sit outside the root `members` list,
+and every one depends on `hl-gpu`. A required field added to `Mirror` produced a clean workspace check
+while `shim/vulkan/src/transfer.rs` had an unbuildable literal in PRODUCTION code. This is now written up
+in `AGENTS.md`; check the shims separately or the enumeration argument is one radius short.
 
 ## Slice 2 — integer blits
 

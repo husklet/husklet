@@ -304,6 +304,23 @@ impl WgpuExecutor {
         //
         // A CUBE is deliberately absent: it is a 2D texture with six layers underneath, so a single-layer
         // 2D view of a face is exactly what this path builds, and it blits correctly today.
+        //
+        // THE `D3` HALF IS A KNOWN, DELIBERATE DIVERGENCE — NOT AN OVERSIGHT. As of 2026-08-01 the CPU
+        // oracle SERVES a depth-spanning blit (`hl-gpu/src/cpu/service/copy.rs::blit_texture`, pinned by
+        // `oracle_spec/blit3d.rs`) and the Vulkan recorder lowers one (`hl-vulkan`, pinned by
+        // `lowering/blit3d.rs`); this executor is the last layer and has not been done. Anyone reading
+        // the tree cold will see the two sides disagree and read it as a bug in one of them.
+        //
+        // The ordering is the point. A reference that cannot REPRESENT the case cannot validate the
+        // executor that will serve it: while both sides decline, a differential agrees by mutual refusal
+        // and establishes nothing. So the oracle went first on purpose, and this refusal is what makes
+        // the remaining work measurable rather than self-certifying.
+        //
+        // Closing it is layer 3 in `../../surface/hl-vulkan/BLIT_HANDOFF.md`: one draw per destination
+        // slice for the unscaled case (`src.depth == dst.depth`, which is all the recorder emits — it
+        // refuses an unequal span by name). Z-SCALED blits stay refused on both sides; `VK_FILTER_LINEAR`
+        // is trilinear on a 3D blit and a nearest-slice stand-in would read as a filtering difference.
+        // `D1` is not part of that work and stays refused: `create_view` rejects a `D2` view of it.
         for (id, side) in [(src, "source"), (dst, "destination")] {
             let dim = texture::WgpuTexture::get(res, id)?.dim;
             if matches!(
