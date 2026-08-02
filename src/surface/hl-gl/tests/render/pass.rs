@@ -393,7 +393,10 @@ fn clear_then_draw_folds_clear_into_the_pass_then_draws() {
     match &ops[0] {
         Enc::BeginRenderPass { color, .. } => {
             assert_eq!(color[0].load, LoadOp::Clear);
-            assert_eq!(color[0].clear, [0.2, 0.4, 0.6, 1.0]);
+            assert_eq!(
+                color[0].clear,
+                [0.2_f32, 0.4_f32, 0.6_f32, 1.0_f32].map(f64::from)
+            );
         }
         other => panic!("expected BeginRenderPass first, got {other:?}"),
     }
