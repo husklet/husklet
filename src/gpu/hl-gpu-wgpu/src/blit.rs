@@ -70,6 +70,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+const INTEGER_BLIT_WGSL: &str = r#"
+struct Xform { uv_off: vec2<f32>, uv_scale: vec2<f32> };
+struct Out { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
+@vertex fn vs_main(@builtin(vertex_index) i:u32)->Out { var p=array<vec2<f32>,3>(vec2(-1.,-1.),vec2(3.,-1.),vec2(-1.,3.)); let n=p[i]; var o:Out; o.pos=vec4(n,0.,1.); o.uv=vec2((n.x+1.)*.5,(1.-n.y)*.5); return o; }
+@group(0) @binding(0) var utex:texture_2d<u32>; @group(0) @binding(1) var<uniform> x:Xform;
+@fragment fn fs_uint(i:Out)->@location(0) vec4<u32> { let s=textureDimensions(utex); let p=clamp(vec2<i32>((x.uv_off+i.uv*x.uv_scale)*vec2<f32>(s)),vec2(0),vec2<i32>(s)-vec2(1)); return textureLoad(utex,p,0); }
+@group(0) @binding(2) var itex:texture_2d<i32>;
+@fragment fn fs_sint(i:Out)->@location(0) vec4<i32> { let s=textureDimensions(itex); let p=clamp(vec2<i32>((x.uv_off+i.uv*x.uv_scale)*vec2<f32>(s)),vec2(0),vec2<i32>(s)-vec2(1)); return textureLoad(itex,p,0); }
+"#;
+
 /// Cached, device-lifetime blit objects. The module + bind-group layout + samplers are built once; a render
 /// pipeline is memoized per destination `wgpu::TextureFormat` (a pipeline is bound to its color-target
 /// format). The FILTER keys the SAMPLER, not the pipeline — a single filtering sampler-binding-type serves
@@ -85,6 +95,10 @@ pub(crate) struct BlitCache {
     /// A non-filtering sampler, which is the only kind a `NonFiltering` binding accepts.
     non_filtering: wgpu::Sampler,
     pipelines: HashMap<(wgpu::TextureFormat, bool), wgpu::RenderPipeline>,
+    integer_module: wgpu::ShaderModule,
+    integer_layouts: [wgpu::BindGroupLayout; 2],
+    integer_pipeline_layouts: [wgpu::PipelineLayout; 2],
+    integer_pipelines: HashMap<(wgpu::TextureFormat, bool), wgpu::RenderPipeline>,
 }
 
 /// Whether a source format can be SAMPLED with filtering on this device.
@@ -110,6 +124,28 @@ fn integer(format: hl_gpu::protocol::model::enums::TextureFormat) -> bool {
         format,
         F::R8Uint | F::R8Sint | F::Rg8Uint | F::Rg8Sint | F::Rgba8Uint | F::Rgba8Sint
     )
+}
+
+fn signed_integer(format: hl_gpu::protocol::model::enums::TextureFormat) -> bool {
+    use hl_gpu::protocol::model::enums::TextureFormat as F;
+    matches!(format, F::R8Sint | F::Rg8Sint | F::Rgba8Sint)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NumericClass {
+    Float,
+    Uint,
+    Sint,
+}
+
+fn numeric_class(format: hl_gpu::protocol::model::enums::TextureFormat) -> NumericClass {
+    if !integer(format) {
+        NumericClass::Float
+    } else if signed_integer(format) {
+        NumericClass::Sint
+    } else {
+        NumericClass::Uint
+    }
 }
 
 impl BlitCache {
@@ -192,6 +228,49 @@ impl BlitCache {
                 ..Default::default()
             })
         };
+        let integer_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("hl-integer-blit"),
+            source: wgpu::ShaderSource::Wgsl(INTEGER_BLIT_WGSL.into()),
+        });
+        let integer_layout = |signed: bool| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("hl-integer-blit-bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: if signed { 2 } else { 0 },
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: if signed {
+                                wgpu::TextureSampleType::Sint
+                            } else {
+                                wgpu::TextureSampleType::Uint
+                            },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            })
+        };
+        let integer_layouts = [integer_layout(false), integer_layout(true)];
+        let integer_pipeline_layouts = [false, true].map(|signed| {
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("hl-integer-blit-pl"),
+                bind_group_layouts: &[&integer_layouts[usize::from(signed)]],
+                push_constant_ranges: &[],
+            })
+        });
         Self {
             module,
             bind_group_layout,
@@ -200,6 +279,10 @@ impl BlitCache {
             linear: sampler(wgpu::FilterMode::Linear, "hl-blit-linear"),
             non_filtering: sampler(wgpu::FilterMode::Nearest, "hl-blit-nonfiltering"),
             pipelines: HashMap::new(),
+            integer_module,
+            integer_layouts,
+            integer_pipeline_layouts,
+            integer_pipelines: HashMap::new(),
         }
     }
 
@@ -252,6 +335,46 @@ impl BlitCache {
             cache: None,
         });
         self.pipelines.insert((format, can_filter), pipeline);
+    }
+
+    fn ensure_integer_pipeline(
+        &mut self,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        signed: bool,
+    ) {
+        if self.integer_pipelines.contains_key(&(format, signed)) {
+            return;
+        }
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("hl-integer-blit-pipeline"),
+            layout: Some(&self.integer_pipeline_layouts[usize::from(signed)]),
+            vertex: wgpu::VertexState {
+                module: &self.integer_module,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &self.integer_module,
+                entry_point: Some(if signed { "fs_sint" } else { "fs_uint" }),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            multiview: None,
+            cache: None,
+        });
+        self.integer_pipelines.insert((format, signed), pipeline);
     }
 }
 
@@ -357,14 +480,6 @@ impl WgpuExecutor {
                 filterable(t.format),
             )
         };
-        // LINEAR genuinely needs a filterable source; NEAREST does not, and used to be refused anyway
-        // because the bind-group layout declared filterable unconditionally. Only the linear case is a
-        // real limit, and it is one this device could lift by enabling `FLOAT32_FILTERABLE`.
-        if !can_filter && filter == Filter::Linear {
-            return Err(GpuError::Unsupported(
-                "wgpu: linear blit filter for a non-filterable source format",
-            ));
-        }
         let (dw, dh, dd, dst_fmt, dst_wfmt) = {
             let t = texture::WgpuTexture::get(res, dst)?;
             let _ = Format::from(t.format).texel_bytes()?;
@@ -379,6 +494,22 @@ impl WgpuExecutor {
                 Format::from(t.format).native(),
             )
         };
+        let (src_class, dst_class) = (numeric_class(src_fmt), numeric_class(dst_fmt));
+        if src_class != dst_class {
+            return Err(GpuError::Invalid(
+                "wgpu: blit source and destination numeric classes differ",
+            ));
+        }
+        if src_class != NumericClass::Float && filter == Filter::Linear {
+            return Err(GpuError::Unsupported(
+                "wgpu: linear filtering is invalid for an integer blit source",
+            ));
+        }
+        if src_class == NumericClass::Float && !can_filter && filter == Filter::Linear {
+            return Err(GpuError::Unsupported(
+                "wgpu: linear blit filter for a non-filterable source format",
+            ));
+        }
 
         // Bounds: the source region must lie inside `src`, the destination region inside `dst`.
         let ok = |x: u32, y: u32, w: u32, h: u32, tw: u32, th: u32| {
@@ -410,7 +541,8 @@ impl WgpuExecutor {
             return Err(GpuError::OutOfBounds);
         }
 
-        if integer(src_fmt) || integer(dst_fmt) {
+        let integer_render = src_class != NumericClass::Float;
+        if integer_render {
             let source = texture::WgpuTexture::get(res, src)?;
             let destination = texture::WgpuTexture::get(res, dst)?;
             if source.usage & hl_gpu::protocol::model::enums::texture_usage::COPY_SRC == 0 {
@@ -430,48 +562,45 @@ impl WgpuExecutor {
                 && !mirror.x
                 && !mirror.y
                 && !mirror.z;
-            if !exact_copy {
-                return Err(GpuError::Unsupported(
-                    "wgpu: integer blit requires identical format and extent with nearest filtering and no mirror",
-                ));
-            }
-            let device = &self.gpu.device;
-            let src_texture = &source.texture;
-            let dst_texture = &destination.texture;
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("hl-integer-blit-copy"),
-            });
-            for z in 0..src_extent.depth {
-                encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: src_texture,
-                        mip_level: src_sub.mip,
-                        origin: wgpu::Origin3d {
-                            x: src_origin.x,
-                            y: src_origin.y,
-                            z: src_origin.z + z,
+            if exact_copy {
+                let device = &self.gpu.device;
+                let src_texture = &source.texture;
+                let dst_texture = &destination.texture;
+                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("hl-integer-blit-copy"),
+                });
+                for z in 0..src_extent.depth {
+                    encoder.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: src_texture,
+                            mip_level: src_sub.mip,
+                            origin: wgpu::Origin3d {
+                                x: src_origin.x,
+                                y: src_origin.y,
+                                z: src_origin.z + z,
+                            },
+                            aspect: wgpu::TextureAspect::All,
                         },
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: dst_texture,
-                        mip_level: dst_sub.mip,
-                        origin: wgpu::Origin3d {
-                            x: dst_origin.x,
-                            y: dst_origin.y,
-                            z: dst_origin.z + z,
+                        wgpu::TexelCopyTextureInfo {
+                            texture: dst_texture,
+                            mip_level: dst_sub.mip,
+                            origin: wgpu::Origin3d {
+                                x: dst_origin.x,
+                                y: dst_origin.y,
+                                z: dst_origin.z + z,
+                            },
+                            aspect: wgpu::TextureAspect::All,
                         },
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width: src_extent.width,
-                        height: src_extent.height,
-                        depth_or_array_layers: 1,
-                    },
-                );
+                        wgpu::Extent3d {
+                            width: src_extent.width,
+                            height: src_extent.height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
+                self.gpu.queue.submit(Some(encoder.finish()));
+                return Ok(());
             }
-            self.gpu.queue.submit(Some(encoder.finish()));
-            return Ok(());
         }
 
         let dst_texture = texture::WgpuTexture::get(res, dst)?;
@@ -509,7 +638,11 @@ impl WgpuExecutor {
         let device = &self.gpu.device;
         let queue = &self.gpu.queue;
         let cache = self.blit.as_mut().expect("blit cache initialized above");
-        cache.ensure_pipeline(device, dst_wfmt, can_filter);
+        if integer_render {
+            cache.ensure_integer_pipeline(device, dst_wfmt, signed_integer(src_fmt));
+        } else {
+            cache.ensure_pipeline(device, dst_wfmt, can_filter);
+        }
 
         // Per-call: the UV-transform uniform + the source-texture bind group.
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
@@ -563,10 +696,14 @@ impl WgpuExecutor {
                 ..Default::default()
             }))
         };
-        let pipeline = cache
-            .pipelines
-            .get(&(dst_wfmt, can_filter))
-            .expect("pipeline built by ensure_pipeline above");
+        let pipeline = if integer_render {
+            cache
+                .integer_pipelines
+                .get(&(dst_wfmt, signed_integer(src_fmt)))
+        } else {
+            cache.pipelines.get(&(dst_wfmt, can_filter))
+        }
+        .expect("pipeline built above");
 
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("hl-blit"),
@@ -672,23 +809,43 @@ impl WgpuExecutor {
                     None,
                 )
             };
+            let signed = signed_integer(src_fmt);
+            let integer_entries = [
+                wgpu::BindGroupEntry {
+                    binding: if signed { 2 } else { 0 },
+                    resource: wgpu::BindingResource::TextureView(&src_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: uniform.as_entire_binding(),
+                },
+            ];
+            let float_entries = [
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&src_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(cache.sampler(filter, can_filter)),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: uniform.as_entire_binding(),
+                },
+            ];
             let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("hl-blit-bg"),
-                layout: &cache.bind_group_layout[usize::from(!can_filter)],
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&src_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(cache.sampler(filter, can_filter)),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: uniform.as_entire_binding(),
-                    },
-                ],
+                layout: if integer_render {
+                    &cache.integer_layouts[usize::from(signed)]
+                } else {
+                    &cache.bind_group_layout[usize::from(!can_filter)]
+                },
+                entries: if integer_render {
+                    &integer_entries
+                } else {
+                    &float_entries
+                },
             });
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("hl-blit-pass"),
