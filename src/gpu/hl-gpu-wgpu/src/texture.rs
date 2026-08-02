@@ -121,8 +121,7 @@ impl WgpuExecutor {
         {
             return Err(GpuError::OutOfBounds);
         }
-        let emulate_1d_as_2d = source.dim == TextureDim::D1
-            && (source.depth > 1 || source.mip_levels > 1);
+        let emulate_1d_as_2d = source.dim == TextureDim::D1;
         let dimension = match desc.dim {
             TextureDim::D1 if emulate_1d_as_2d && desc.layer_count == 1 => {
                 wgpu::TextureViewDimension::D2
@@ -189,9 +188,8 @@ impl WgpuExecutor {
     /// Create a texture matching `desc.dim` — honoring the true texture shape, not collapsing everything to
     /// 2D. Each protocol `TextureDim` maps to its real wgpu texture + default-view dimension:
     ///
-    /// * `D1`   → a real wgpu 1D texture for the single-mip/single-layer sampled path; mipmapped or
-    ///   arrayed transfer-only images use a one-row `D2` / `D2Array` backing because Metal's
-    ///   `MTLTextureType1D` forbids both.
+    /// * `D1`   → a one-row `D2` / `D2Array` backing. Shader lowering expands Vulkan's scalar coordinate
+    ///   to `(x, 0.5)` for normalized sampling or `(x, 0)` for integer access, matching MoltenVK's strategy.
     /// * `D2`   → a wgpu 2D texture; `desc.depth` is the **array-layer** count (`1` = a plain 2D image), so
     ///   `depth > 1` is a 2D-array whose default view is `D2Array` (else `D2`).
     /// * `D3`   → a wgpu 3D texture, `desc.depth` depth slices, `D3` view.
@@ -213,18 +211,7 @@ impl WgpuExecutor {
         // Map the protocol dimension to (wgpu texture dimension, layer/slice count, default-view dimension).
         // `depth_or_array_layers` is the array-layer count for D1/D2/Cube and the slice count for D3.
         let layers = desc.depth.max(1);
-        let emulate_1d_as_2d = desc.dim == TextureDim::D1 && (layers > 1 || desc.mip_levels > 1);
-        if emulate_1d_as_2d
-            && desc.usage
-                & (hl_gpu::protocol::model::enums::texture_usage::SAMPLED
-                    | hl_gpu::protocol::model::enums::texture_usage::STORAGE
-                    | hl_gpu::protocol::model::enums::texture_usage::RENDER_TARGET)
-                != 0
-        {
-            return Err(GpuError::Unsupported(
-                "mipmapped or arrayed 1D textures currently support copy usage only",
-            ));
-        }
+        let emulate_1d_as_2d = desc.dim == TextureDim::D1;
         let (dimension, depth, view_dim) = match desc.dim {
             TextureDim::D1 if emulate_1d_as_2d => (
                 wgpu::TextureDimension::D2,
@@ -235,13 +222,11 @@ impl WgpuExecutor {
                     wgpu::TextureViewDimension::D2
                 },
             ),
-            TextureDim::D1 => {
-                (
-                    wgpu::TextureDimension::D1,
-                    1,
-                    wgpu::TextureViewDimension::D1,
-                )
-            }
+            TextureDim::D1 => (
+                wgpu::TextureDimension::D1,
+                1,
+                wgpu::TextureViewDimension::D1,
+            ),
             TextureDim::D2 if layers > 1 => (
                 wgpu::TextureDimension::D2,
                 layers,

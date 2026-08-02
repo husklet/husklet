@@ -470,3 +470,47 @@ fn a_vector_argument_to_a_nonfinite_predicate_is_refused_not_mistranslated() {
         "a vector predicate must be refused, never silently mistranslated: {outcome:?}"
     );
 }
+
+#[test]
+fn one_dimensional_sample_and_array_index_lower_to_2d() {
+    let src = r#"#version 460
+layout(set=0,binding=0) uniform texture1DArray t;
+layout(set=0,binding=1) uniform sampler s;
+layout(location=0) out vec4 o;
+void main(){ o = texture(sampler1DArray(t,s), vec2(0.25, 3.0)); }
+"#;
+    let wgsl = glsl_to_wgsl(src, naga::ShaderStage::Fragment, "fmain")
+        .expect("1D-array sample coordinates, gradients, and offsets lower together");
+    assert!(wgsl.contains("texture_2d_array"), "{wgsl}");
+    assert!(wgsl.contains("textureSample"), "{wgsl}");
+}
+
+#[test]
+fn one_dimensional_sample_gradient_lowers_to_2d() {
+    let src = r#"#version 460
+layout(set=0,binding=0) uniform texture1D t;
+layout(set=0,binding=1) uniform sampler s;
+layout(location=0) out vec4 o;
+void main(){ o = textureGrad(sampler1D(t,s), 0.25, 0.1, 0.2); }
+"#;
+    let wgsl = glsl_to_wgsl(src, naga::ShaderStage::Fragment, "fmain")
+        .expect("1D sample coordinate and gradients lower together");
+    assert!(wgsl.contains("texture_2d"), "{wgsl}");
+    assert!(wgsl.contains("textureSampleGrad"), "{wgsl}");
+}
+
+#[test]
+fn one_dimensional_storage_load_store_and_size_lower_to_2d() {
+    let src = r#"#version 460
+layout(local_size_x=1) in;
+layout(rgba8,set=0,binding=0) uniform image1D image;
+layout(std430,set=0,binding=1) buffer Out { int width; } out_data;
+void main(){ vec4 value = imageLoad(image, 3); imageStore(image, 4, value); out_data.width = imageSize(image); }
+"#;
+    let wgsl = glsl_to_wgsl(src, naga::ShaderStage::Compute, "cmain")
+        .expect("1D storage load/store and scalar size lower together");
+    assert!(wgsl.contains("texture_storage_2d"), "{wgsl}");
+    assert!(wgsl.contains("textureLoad"), "{wgsl}");
+    assert!(wgsl.contains("textureStore"), "{wgsl}");
+    assert!(wgsl.contains("textureDimensions"), "{wgsl}");
+}

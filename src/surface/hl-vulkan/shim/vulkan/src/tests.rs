@@ -1062,14 +1062,14 @@ fn image_format_queries_validate_every_requested_usage() {
     };
 
     let (result, supported) = query(R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
-    assert_eq!(result, VK_SUCCESS, "the positive control must remain creatable");
+    assert_eq!(
+        result, VK_SUCCESS,
+        "the positive control must remain creatable"
+    );
     assert_ne!(supported.max_extent.width, 0);
 
     for (format, usage) in [
-        (
-            R8G8B8A8_UNORM,
-            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-        ),
+        (R8G8B8A8_UNORM, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT),
         (B8G8R8A8_UNORM, VK_IMAGE_USAGE_STORAGE_BIT),
     ] {
         let (result, refused) = query(format, usage);
@@ -1158,8 +1158,7 @@ fn sample_counts_are_claimed_only_where_the_specification_permits() {
 /// driver has — 10 `dEQP-VK.api.info.image_format_properties` cases reported
 /// "VK_ERROR_FORMAT_NOT_SUPPORTED returned for required image parameter combination".
 ///
-/// Transfer-only 1D images use a one-row 2D backing and therefore carry a full width-derived mip chain;
-/// native sampled 1D remains single-mip. Neither path is multisampled.
+/// 1D images use a one-row 2D backing and therefore carry a full width-derived mip chain and array layers.
 #[test]
 fn a_one_dimensional_image_is_supported_with_one_dimensional_limits() {
     const R8G8B8A8_UNORM: i32 = 37;
@@ -1206,8 +1205,8 @@ fn a_one_dimensional_image_is_supported_with_one_dimensional_limits() {
 
     let (result, sampled_one_d) = query(R8G8B8A8_UNORM, VK_IMAGE_TYPE_1D, 0x4);
     assert_eq!(result, VK_SUCCESS);
-    assert_eq!(sampled_one_d.max_mip_levels, 1);
-    assert_eq!(sampled_one_d.max_array_layers, 1);
+    assert_eq!(sampled_one_d.max_mip_levels, one_d.max_mip_levels);
+    assert_eq!(sampled_one_d.max_array_layers, one_d.max_array_layers);
 
     // The two documented exceptions stay refused: 1D support is OPTIONAL for compressed and for
     // depth/stencil formats, and the executor's D1 path cannot carry either.

@@ -991,23 +991,21 @@ fn a_one_dimensional_image_lowers_to_d1_and_enforces_its_limits() {
     assert_eq!(mip_created.mip_levels, 4);
     assert!(d.images.contains_key(&mip_handle));
 
-    assert!(
-        create::create_image_geometry(
-            &mut d,
-            &mut sink,
-            64,
-            1,
-            1,
-            1,
-            4,
-            TextureDim::D1,
-            vk_format::R8G8B8A8_UNORM,
-            vk_image_usage::SAMPLED,
-            1,
-        )
-        .is_err(),
-        "sampled mipmapped 1D needs shader-side coordinate lowering"
-    );
+    let sampled_mip = create::create_image_geometry(
+        &mut d,
+        &mut sink,
+        64,
+        1,
+        1,
+        1,
+        4,
+        TextureDim::D1,
+        vk_format::R8G8B8A8_UNORM,
+        vk_image_usage::SAMPLED,
+        1,
+    )
+    .expect("sampled mipmapped 1D is backed by 2D with shader coordinate lowering");
+    assert!(d.images.contains_key(&sampled_mip));
 }
 
 // ---- recording errors and render-pass scope ------------------------------------------------------

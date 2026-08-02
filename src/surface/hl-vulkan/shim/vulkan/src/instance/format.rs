@@ -135,8 +135,7 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
         .any(|(usage_bit, feature_bit)| usage & usage_bit != 0 && features & feature_bit == 0)
         || (usage & INPUT_ATTACHMENT != 0
             && features
-                & (format_feature::COLOR_ATTACHMENT
-                    | format_feature::DEPTH_STENCIL_ATTACHMENT)
+                & (format_feature::COLOR_ATTACHMENT | format_feature::DEPTH_STENCIL_ATTACHMENT)
                 == 0);
     if unsupported {
         *out = VkImageFormatProperties::default();
@@ -168,7 +167,6 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
     // Each type reports the extent it can actually have: a 1D image is a row, so its height and depth
     // are 1; a 2D image has no depth; only a 3D image has all three, and it has no array layers. A 1D
     // image carries a width-derived mip chain but no multisampling.
-    let transfer_only = usage != 0 && usage & !(TRANSFER_SRC | TRANSFER_DST) == 0;
     let (max_extent, max_mip_levels, max_array_layers) = match image_type {
         VK_IMAGE_TYPE_1D => (
             VkExtent3D {
@@ -176,11 +174,10 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
                 height: 1,
                 depth: 1,
             },
-            if transfer_only { 1 + dim.ilog2() } else { 1 },
-            // Sampled/storage/attachment 1D stays single-layer because WebGPU has no 1D-array view.
-            // Transfer-only images use the same one-row D2Array strategy as MoltenVK and can expose the
-            // physical-device layer limit without making a shader-binding promise.
-            if transfer_only { 2048 } else { 1 },
+            1 + dim.ilog2(),
+            // The executor uses one-row D2/D2Array backing and rewrites shader coordinates, matching
+            // MoltenVK's texture1DAs2D strategy across transfer, sampled, storage, and attachment usage.
+            2048,
         ),
         VK_IMAGE_TYPE_3D => (
             VkExtent3D {
