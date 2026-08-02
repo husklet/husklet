@@ -462,6 +462,7 @@ impl<'a> Source<'a> {
         let mut toks = Tokens::from_source(self.text);
 
         toks.normalize_directives_and_precision();
+        toks.normalize_fixed_point_size(stage);
         toks.normalize_dual_source();
         toks.split_std140_mat2();
         toks.split_aggregate_io(stage);

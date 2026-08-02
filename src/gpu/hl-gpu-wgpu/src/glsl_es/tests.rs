@@ -82,6 +82,17 @@ fn rewrites_gl_vertexid_hidden_in_gsk_vertex_index_macro() {
 }
 
 #[test]
+fn unity_point_size_does_not_reach_the_wgsl_backend() {
+    let source = "#version 300 es\nvoid main(){ gl_Position = vec4(0.0); gl_PointSize = 1.0; }\n";
+    let normalized = Source::new(source).normalize(naga::ShaderStage::Vertex);
+    assert!(!normalized.contains("gl_PointSize"), "{normalized}");
+    assert!(
+        crate::wgsl::glsl_to_wgsl(&normalized, naga::ShaderStage::Vertex, "main").is_ok(),
+        "the fixed-unity point-size contract must not create WGSL's unsupported PointSize builtin"
+    );
+}
+
+#[test]
 fn adds_explicit_location_to_gsk_io_macros() {
     let src = "#version 320 es\n#define IN(_loc) in\n#define PASS(_loc) out\n#define PASS_FLAT(_loc) flat in\nvoid main(){}\n";
     let out = Source::new(src).normalize(naga::ShaderStage::Vertex);
@@ -294,7 +305,10 @@ fn pads_integer_and_vec2_std140_arrays_to_their_own_vector_types() {
     assert!(out.contains("vec4 v__arr[2]"), "vec2 → vec4: {out}");
     assert!(out.contains("k__arr[0].x"), "int use: {out}");
     assert!(out.contains("m__arr[1].x"), "uint use: {out}");
-    assert!(out.contains("v__arr[1].xy"), "vec2 use recovers two components: {out}");
+    assert!(
+        out.contains("v__arr[1].xy"),
+        "vec2 use recovers two components: {out}"
+    );
 }
 
 /// An element type whose array stride is ALREADY 16 must be left completely alone — padding it would

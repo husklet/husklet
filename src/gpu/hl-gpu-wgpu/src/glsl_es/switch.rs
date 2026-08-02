@@ -264,17 +264,47 @@ impl Tokens {
                     }
                     // skip the ';' too (loop's i += 1 below advances past it)
                 }
-                // NOTE: `gl_PointSize` is deliberately NOT rewritten. WGSL has no point-size builtin, so naga's
-                // `wgsl-out` genuinely cannot represent it (`Unsupported builtin PointSize`) — no textual
-                // normalization can lower it faithfully. Rather than silently STRIP the assignment (which would
-                // fake a green while discarding the point size the shader asked for), we let it reach naga and
-                // fail, documented as the corpus's one inherent naga-24 limit (`ubo__mat2_std140`, previously the
-                // documented limit, is now normalized; `builtin__gl_pointsize` is the honest remaining wall). The
-                // real Chrome/GskGpu path draws instanced quads (triangles), never points, so it never emits it.
                 other => out.push(other.clone()),
             }
             i += 1;
         }
         *toks = out;
+    }
+
+    /// WGSL cannot represent GLSL's `PointSize` builtin. The GL service advertises the only point-size range
+    /// wgpu can render, `[1, 1]`, so redirect the vertex-stage variable to ordinary private storage. This keeps
+    /// expression evaluation and shader-local reads intact while the rasterizer supplies the contracted unity
+    /// size. A declaration is inserted after directives because GLSL requires `#version` to remain first.
+    pub(super) fn normalize_fixed_point_size(&mut self, stage: naga::ShaderStage) {
+        if stage != naga::ShaderStage::Vertex
+            || !self
+                .0
+                .iter()
+                .any(|token| matches!(token, Tok::Word(word) if word == "gl_PointSize"))
+        {
+            return;
+        }
+
+        let mut name = "hl_point_size".to_string();
+        while self
+            .0
+            .iter()
+            .any(|token| matches!(token, Tok::Word(word) if word == &name))
+        {
+            name.push('_');
+        }
+        for token in &mut self.0 {
+            if matches!(token, Tok::Word(word) if word == "gl_PointSize") {
+                *token = Tok::Word(name.clone());
+            }
+        }
+
+        let declaration = Tokens::from_source(&format!("float {name} = 1.0;\n")).0;
+        let insertion = self
+            .0
+            .iter()
+            .position(|token| !matches!(token, Tok::Pp(_) | Tok::Ws(_)))
+            .unwrap_or(self.0.len());
+        self.0.splice(insertion..insertion, declaration);
     }
 }
