@@ -56,7 +56,13 @@ fn snapshot(s: &InProcessCommandSink<CpuExecutor>, global: &GlobalLedger) -> Acc
         conn_bytes: sess.residency_bytes(),
         conn_objects: sess.object_count(),
         conn_compiled: sess.compiled_cache_bytes(),
-        live: sess.ledger.live.iter().map(|(k, v)| (*k, *v)).collect(),
+        live: sess
+            .account
+            .ledger()
+            .live
+            .iter()
+            .map(|(k, v)| (*k, *v))
+            .collect(),
         global_bytes: global.residency_bytes(),
         global_objects: global.object_count(),
     }

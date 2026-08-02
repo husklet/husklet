@@ -23,11 +23,15 @@
 
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+
+#[cfg(all(debug_assertions, not(doc)))]
+use std::cell::Cell;
 
 use crate::protocol::model::error::{GpuError, Result};
 use crate::protocol::model::id::Access;
+use crate::runtime::model::resources::{Account, GlobalLedger, KIND_BUFFER};
 
 /// A connection. Sessions are distinct per transport connection; two drivers in one guest workspace get
 /// two of these.
@@ -112,13 +116,28 @@ struct Entry {
     /// disagree about is an out-of-bounds kernel that no bounds check catches.
     bytes: u64,
     importers: Vec<SessionId>,
+    party_access: HashMap<SessionId, Arc<AtomicBool>>,
+    accounts: HashMap<SessionId, (u32, Account)>,
+    owner_account: Option<Account>,
     /// The exclusive-use claim, as the guards see it. See [`StateCell`].
     state: StateCell,
     /// The owner destroyed its id while importers remained. The storage is retained; see `release`.
     owner_released: bool,
+    pending: Option<Pending>,
+    payer: Option<SessionId>,
 }
 
 impl Entry {
+    fn revoke(&mut self, session: SessionId) {
+        if let Some(active) = self.party_access.remove(&session) {
+            active.store(false, Ordering::Release);
+        }
+    }
+
+    fn is_party(&self, session: SessionId) -> bool {
+        self.importers.contains(&session) || (self.key.session == session && !self.owner_released)
+    }
+
     fn state(&self) -> MapState {
         load_state(&self.state)
     }
@@ -131,11 +150,11 @@ impl Entry {
     /// while the owner holds the resource it pays, and once the owner has released, the importers keeping
     /// it alive pay. That is what stops a deferred release being a leak nobody can see — it lands in the
     /// accounting that already exists, bounded by the budget of whoever is actually keeping it alive.
-    fn charged_to(&self) -> Vec<SessionId> {
+    fn charged_to(&self) -> Option<SessionId> {
         if self.owner_released {
-            self.importers.clone()
+            self.payer.or_else(|| self.importers.iter().copied().min())
         } else {
-            vec![self.key.session]
+            Some(self.key.session)
         }
     }
 
@@ -147,228 +166,267 @@ impl Entry {
 /// The process-global export table. Cloning shares the same registry, exactly as [`GlobalLedger`] does.
 ///
 /// [`GlobalLedger`]: super::resources::GlobalLedger
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Exports {
     inner: Arc<Mutex<Registry>>,
+    changed: Arc<Condvar>,
 }
 
+/// One-shot transaction interruption points used to prove release failure atomicity.
+#[cfg(all(debug_assertions, not(doc)))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReleaseFailpoint {
+    None = 0,
+    OwnerToPayer = 1,
+    OwnerFinalRefund = 2,
+    PayerToNext = 3,
+    FinalPayerRefund = 4,
+    NonPayerRelease = 5,
+}
+
+#[cfg(all(debug_assertions, not(doc)))]
+thread_local! {
+    static RELEASE_FAILPOINT: Cell<u8> = const { Cell::new(0) };
+}
+
+#[cfg(all(debug_assertions, not(doc)))]
+fn trip_release_failpoint(point: ReleaseFailpoint) {
+    RELEASE_FAILPOINT.with(|armed| {
+        if armed.replace(0) == point as u8 {
+            panic!("release transaction failpoint: {point:?}");
+        }
+    });
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TransitionPhase {
+    Prepared,
+    Committing,
+}
+
+#[derive(Clone, Copy)]
+struct Pending {
+    token: u64,
+    phase: TransitionPhase,
+    authority: Option<SessionId>,
+}
+
+struct CommitLease {
+    exports: Exports,
+    id: ExportId,
+    token: u64,
+    irreversible: bool,
+    complete: bool,
+}
+
+impl CommitLease {
+    fn irreversible(&mut self) {
+        self.irreversible = true;
+    }
+    fn complete(&mut self) {
+        self.complete = true;
+    }
+}
+
+impl Drop for CommitLease {
+    fn drop(&mut self) {
+        if self.complete {
+            return;
+        }
+        let mut registry = self
+            .exports
+            .inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(entry) = registry.entries.get_mut(&self.id) {
+            if entry
+                .pending
+                .is_some_and(|pending| pending.token == self.token)
+            {
+                if self.irreversible {
+                    entry.pending = None;
+                } else if let Some(pending) = entry.pending.as_mut() {
+                    pending.phase = TransitionPhase::Prepared;
+                }
+            }
+        }
+        drop(registry);
+        self.exports.changed.notify_all();
+    }
+}
+
+impl Default for Exports {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(Registry::default())),
+            changed: Arc::new(Condvar::new()),
+        }
+    }
+}
+
+mod release;
+pub(crate) use release::ImportPlan;
+#[cfg(all(debug_assertions, not(doc)))]
+pub use release::{DebugImportPlan, DebugImportReleasePlan, DebugOwnerReleasePlan};
 #[derive(Default)]
 struct Registry {
     entries: HashMap<ExportId, Entry>,
     by_resource: HashMap<ResourceKey, ExportId>,
     /// Monotonic. Never rewound, never recycled — see [`ExportId`].
     next: u64,
+    next_pending: u64,
+    authorities: HashMap<SessionId, Account>,
+    global: Option<GlobalLedger>,
 }
 
-impl Exports {
-    pub fn new() -> Self {
-        Self::default()
-    }
+mod import;
+mod lifecycle;
+#[cfg(test)]
+mod transition_lease_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
 
-    /// Offer a resource for import. Idempotent: re-exporting an already-exported resource returns the
-    /// existing [`ExportId`] rather than minting a second entry for it.
-    pub fn export(&self, key: ResourceKey, resource: Shared, bytes: u64) -> Result<ExportId> {
-        // The sibling creation paths refuse a zero or absurd size; the export path must not become the
-        // one that does not. That exact asymmetry was found and fixed in `hl-vulkan`.
-        if bytes == 0 {
-            return Err(GpuError::Invalid("export: a zero-length resource"));
-        }
-        let mut registry = self.inner.lock().unwrap();
-        if let Some(existing) = registry.by_resource.get(&key) {
-            return Ok(*existing);
-        }
-        registry.next += 1;
-        let id = ExportId(registry.next);
-        registry.entries.insert(
-            id,
-            Entry {
-                key,
-                resource,
-                bytes,
-                importers: Vec::new(),
-                state: StateCell::default(),
-                owner_released: false,
-            },
+    #[test]
+    fn commit_wins_race_cannot_be_cancelled_after_marking_committing() {
+        let exports = Exports::new();
+        let global = GlobalLedger::unbounded();
+        let owner = Account::new();
+        let id = exports
+            .export_accounted(
+                ResourceKey {
+                    session: SessionId(100),
+                    kind: "buffer",
+                    id: 1,
+                },
+                Arc::new(1u32),
+                4,
+                owner.clone(),
+                &global,
+            )
+            .unwrap();
+        let plan = exports.prepare_owner_release(SessionId(100), id).unwrap();
+        let owner_lock = owner.operation();
+        let commit = std::thread::spawn(move || plan.commit());
+        std::thread::sleep(Duration::from_millis(2));
+        let waiter_exports = exports.clone();
+        let (tx, rx) = mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            waiter_exports.settle_transition(id, Duration::from_millis(1));
+            tx.send(()).unwrap();
+        });
+        assert!(
+            rx.recv_timeout(Duration::from_millis(5)).is_err(),
+            "Committing lease must be waited out, not deadline-cancelled"
         );
-        registry.by_resource.insert(key, id);
-        Ok(id)
+        drop(owner_lock);
+        rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        commit.join().unwrap();
+        waiter.join().unwrap();
+        assert!(!exports.is_live(id));
     }
 
-    /// The exclusive-use guard on this export as seen from `session`'s own resource table.
-    ///
-    /// This is the bridge between the registry and [`ResourceTable::set_guard`]: the returned [`Access`]
-    /// watches the SAME cell [`map`](Self::map)/[`unmap`](Self::unmap) write, so a claim taken here is
-    /// visible to the resolution path with no further plumbing and no second copy of the state to drift.
-    /// Only a party to the export gets one — a guard for a session that can never touch the resource
-    /// would be a guard nothing consults.
-    ///
-    /// [`ResourceTable::set_guard`]: crate::protocol::model::id::ResourceTable::set_guard
-    pub fn access(&self, session: SessionId, id: ExportId) -> Result<Access> {
-        let registry = self.inner.lock().unwrap();
-        let entry = registry
-            .entries
-            .get(&id)
-            .ok_or(GpuError::Invalid("access: no such export"))?;
-        if !entry.importers.contains(&session) && entry.key.session != session {
-            return Err(GpuError::Invalid("access: not a party to this export"));
-        }
-        Ok(Access::new(Arc::clone(&entry.state), session.0))
+    #[test]
+    fn panicked_commit_lease_never_leaves_committing_stuck() {
+        let exports = Exports::new();
+        let global = GlobalLedger::unbounded();
+        let id = exports
+            .export_accounted(
+                ResourceKey {
+                    session: SessionId(101),
+                    kind: "buffer",
+                    id: 1,
+                },
+                Arc::new(1u32),
+                4,
+                Account::new(),
+                &global,
+            )
+            .unwrap();
+        let plan = exports.prepare_owner_release(SessionId(101), id).unwrap();
+        let token = plan.token;
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _lease = exports.begin_commit(id, token).unwrap();
+            panic!("before account mutation");
+        }));
+        exports.settle_transition(id, Duration::ZERO);
+        drop(plan);
+        assert!(
+            !exports
+                .inner
+                .lock()
+                .unwrap()
+                .entries
+                .get(&id)
+                .unwrap()
+                .pending
+                .is_some()
+        );
+
+        let plan = exports.prepare_owner_release(SessionId(101), id).unwrap();
+        let token = plan.token;
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut lease = exports.begin_commit(id, token).unwrap();
+            lease.irreversible();
+            panic!("after account mutation began");
+        }));
+        exports.settle_transition(id, Duration::from_millis(1));
+        drop(plan);
+        assert!(
+            !exports
+                .inner
+                .lock()
+                .unwrap()
+                .entries
+                .get(&id)
+                .unwrap()
+                .pending
+                .is_some()
+        );
     }
 
-    /// Take a reference to an exported resource. Returns the native object and its authoritative length.
-    ///
-    /// Refuses a stale or unknown id with a typed error rather than a default — "could not reach the
-    /// subject" must never be indistinguishable from "here is your buffer".
-    pub fn import(&self, importer: SessionId, id: ExportId) -> Result<(Shared, u64)> {
-        let mut registry = self.inner.lock().unwrap();
-        let entry = registry
-            .entries
-            .get_mut(&id)
-            .ok_or(GpuError::Invalid("import: no such export, or it is no longer live"))?;
-        if entry.key.session == importer {
-            return Err(GpuError::Invalid(
-                "import: a session cannot import its own export",
-            ));
+    #[test]
+    fn completed_session_churn_reclaims_authority_accounts() {
+        let exports = Exports::new();
+        let global = GlobalLedger::unbounded();
+        for raw in 1..=128 {
+            let session = SessionId(1_000 + raw);
+            let account = Account::new();
+            let weak = Arc::downgrade(&account.inner);
+            let id = exports
+                .export_accounted(
+                    ResourceKey {
+                        session,
+                        kind: "buffer",
+                        id: raw as u32,
+                    },
+                    Arc::new(raw),
+                    4,
+                    account,
+                    &global,
+                )
+                .unwrap();
+            exports.prepare_owner_release(session, id).unwrap().commit();
+            assert!(
+                weak.upgrade().is_none(),
+                "completed session {raw} retained its Account"
+            );
         }
-        if entry.importers.contains(&importer) {
-            return Err(GpuError::Invalid("import: already imported by this session"));
-        }
-        entry.importers.push(importer);
-        Ok((Arc::clone(&entry.resource), entry.bytes))
-    }
-
-    /// Drop an importer's reference. Frees the resource if it was the last one and the owner had released.
-    pub fn release_import(&self, importer: SessionId, id: ExportId) -> Result<()> {
-        let mut registry = self.inner.lock().unwrap();
-        let entry = registry
-            .entries
-            .get_mut(&id)
-            .ok_or(GpuError::Invalid("release: no such export"))?;
-        // Leaving "unregister while mapped" undefined is how a resource ends up permanently MappedBy a
-        // session that has gone. It is defined here as an implicit unmap by the holder, and refused for
-        // anyone else.
-        if entry.state() == MapState::MappedBy(importer) {
-            entry.set_state(MapState::Unmapped);
-        }
-        let before = entry.importers.len();
-        entry.importers.retain(|s| *s != importer);
-        if entry.importers.len() == before {
-            return Err(GpuError::Invalid("release: not an importer of this export"));
-        }
-        registry.collect(id);
-        Ok(())
-    }
-
-    /// The owner destroyed its id. The destroy SUCCEEDS and the storage is retained while importers
-    /// remain; the charge moves to them.
-    ///
-    /// Refusing the destroy was considered and rejected — deleting a buffer is legal application
-    /// behaviour and an application that gets an error there has no recourse. Silent retention was also
-    /// rejected: that is an invisible leak.
-    pub fn owner_release(&self, id: ExportId) -> Result<()> {
-        let mut registry = self.inner.lock().unwrap();
-        let entry = registry
-            .entries
-            .get_mut(&id)
-            .ok_or(GpuError::Invalid("owner release: no such export"))?;
-        entry.owner_released = true;
-        let key = entry.key;
-        registry.by_resource.remove(&key);
-        registry.collect(id);
-        Ok(())
-    }
-
-    /// Claim exclusive use. Refuses if already mapped by anyone, including the caller.
-    pub fn map(&self, session: SessionId, id: ExportId) -> Result<()> {
-        let mut registry = self.inner.lock().unwrap();
-        let entry = registry
-            .entries
-            .get_mut(&id)
-            .ok_or(GpuError::Invalid("map: no such export"))?;
-        if !entry.importers.contains(&session) && entry.key.session != session {
-            return Err(GpuError::Invalid("map: not a party to this export"));
-        }
-        match entry.state() {
-            MapState::Unmapped => {
-                entry.set_state(MapState::MappedBy(session));
-                Ok(())
-            }
-            MapState::MappedBy(_) => Err(GpuError::Invalid("map: already mapped")),
-        }
-    }
-
-    /// Release an exclusive claim. Only the holder may.
-    pub fn unmap(&self, session: SessionId, id: ExportId) -> Result<()> {
-        let mut registry = self.inner.lock().unwrap();
-        let entry = registry
-            .entries
-            .get_mut(&id)
-            .ok_or(GpuError::Invalid("unmap: no such export"))?;
-        if entry.state() != MapState::MappedBy(session) {
-            return Err(GpuError::Invalid("unmap: not held by this session"));
-        }
-        entry.set_state(MapState::Unmapped);
-        Ok(())
-    }
-
-    /// **The guard.** Whether `session` may touch this resource right now.
-    ///
-    /// This is the predicate the single resource-resolution point calls. While a resource is mapped, use
-    /// by any session other than the holder is refused. Slice 1 defines and tests the predicate; wiring
-    /// it into `ResourceTable::get`/`get_mut` — the one place every command resolves an id to its native
-    /// object — is the next slice, and is the gate the capability must not ship without.
-    pub fn check_access(&self, session: SessionId, id: ExportId) -> Result<()> {
-        let registry = self.inner.lock().unwrap();
-        let entry = registry
-            .entries
-            .get(&id)
-            .ok_or(GpuError::Invalid("access: no such export"))?;
-        match entry.state() {
-            MapState::Unmapped => Ok(()),
-            MapState::MappedBy(holder) if holder == session => Ok(()),
-            MapState::MappedBy(_) => Err(GpuError::Invalid(
-                "access: the resource is mapped by another session",
-            )),
-        }
-    }
-
-    /// Retained bytes currently charged to `session` by this registry.
-    pub fn bytes_charged_to(&self, session: SessionId) -> u64 {
-        let registry = self.inner.lock().unwrap();
-        registry
-            .entries
-            .values()
-            .filter(|e| e.charged_to().contains(&session))
-            .map(|e| e.bytes)
-            .sum()
-    }
-
-    pub fn is_live(&self, id: ExportId) -> bool {
-        self.inner.lock().unwrap().entries.contains_key(&id)
-    }
-
-    /// Drop every reference held by a departing session, in both directions.
-    pub fn forget_session(&self, session: SessionId) {
-        let mut registry = self.inner.lock().unwrap();
-        let ids: Vec<ExportId> = registry.entries.keys().copied().collect();
-        for id in ids {
-            if let Some(entry) = registry.entries.get_mut(&id) {
-                if entry.state() == MapState::MappedBy(session) {
-                    entry.set_state(MapState::Unmapped);
-                }
-                entry.importers.retain(|s| *s != session);
-                if entry.key.session == session {
-                    entry.owner_released = true;
-                    let key = entry.key;
-                    registry.by_resource.remove(&key);
-                }
-            }
-            registry.collect(id);
-        }
+        assert!(exports.inner.lock().unwrap().authorities.is_empty());
     }
 }
 
 impl Registry {
+    fn has_authority_claim(&self, session: SessionId) -> bool {
+        self.entries.values().any(|entry| {
+            (entry.key.session == session && !entry.owner_released)
+                || entry.importers.contains(&session)
+                || entry
+                    .pending
+                    .is_some_and(|pending| pending.authority == Some(session))
+        })
+    }
+
     /// Free an entry once nothing references it. Its `ExportId` is NOT returned to circulation.
     fn collect(&mut self, id: ExportId) {
         if self.entries.get(&id).is_some_and(Entry::is_dead) {

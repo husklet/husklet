@@ -17,11 +17,12 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::protocol::model::command::Cmd;
 use crate::protocol::model::descriptor::{BindResource, SurfaceDesc, TextureDesc};
-use crate::protocol::model::enums::{TextureDim, TextureFormat};
+use crate::protocol::model::enums::TextureDim;
 use crate::protocol::model::error::{GpuError, Result};
 use crate::protocol::model::id::{
     BindGroupId, BufferId, FenceId, PipelineId, ResourceTable, SamplerId, ShaderId, SurfaceId,
@@ -128,116 +129,8 @@ impl Default for SessionResources {
     }
 }
 
-// ---------------------------------------------------------------------------------------------------
-// residency accounting state (transaction workflow lives in service/account.rs)
-// ---------------------------------------------------------------------------------------------------
-
-/// Residency counters for one connection. `bytes`/`objects` are the aggregate charge; `compiled_bytes`
-/// is the subset attributable to the compiled-pipeline (PSO/AIR) cache, bounded by its own ceiling.
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub struct Totals {
-    pub bytes: u64,
-    pub objects: u64,
-    pub compiled_bytes: u64,
-}
-
-/// The per-connection accounting ledger: the live `(kind, id) → bytes` charges and their running
-/// [`Totals`]. Pure state — `service/account.rs` computes a proposed next ledger and commits it.
-#[derive(Clone, Default)]
-pub struct Ledger {
-    pub live: HashMap<(u8, u32), u64>,
-    pub totals: Totals,
-}
-
-impl Ledger {
-    /// Cumulative bytes resident on this connection.
-    pub fn residency_bytes(&self) -> u64 {
-        self.totals.bytes
-    }
-    /// Cumulative live object count charged to this connection.
-    pub fn object_count(&self) -> u64 {
-        self.totals.objects
-    }
-    /// Bytes of this connection's residency attributable to the compiled-pipeline cache.
-    pub fn compiled_cache_bytes(&self) -> u64 {
-        self.totals.compiled_bytes
-    }
-}
-
-/// The process-global residency ceiling shared across every connection (clone shares the same account).
-/// Enforces a fair global budget so one connection cannot starve the host of all GPU memory.
-#[derive(Clone)]
-pub struct GlobalLedger {
-    inner: Arc<Mutex<Totals>>,
-    max_bytes: u64,
-    max_objects: u64,
-}
-
-impl GlobalLedger {
-    pub fn new(max_bytes: u64, max_objects: u64) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(Totals::default())),
-            max_bytes,
-            max_objects,
-        }
-    }
-
-    /// An effectively-unbounded global account (per-connection ceilings still apply).
-    pub fn unbounded() -> Self {
-        Self::new(u64::MAX, u64::MAX)
-    }
-
-    /// Atomically swap this connection's global contribution from `old` to `next`, rejecting if the
-    /// resulting process-wide total would exceed a ceiling. On rejection the global account is unchanged.
-    /// `compiled_bytes` is a per-connection concern and is not tracked process-globally.
-    pub fn commit(&self, old: Totals, next: Totals) -> Result<()> {
-        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let without = Totals {
-            bytes: g.bytes.saturating_sub(old.bytes),
-            objects: g.objects.saturating_sub(old.objects),
-            compiled_bytes: 0,
-        };
-        let proposed = Totals {
-            bytes: without
-                .bytes
-                .checked_add(next.bytes)
-                .ok_or(GpuError::ResourceLimit("global residency overflow"))?,
-            objects: without
-                .objects
-                .checked_add(next.objects)
-                .ok_or(GpuError::ResourceLimit("global object overflow"))?,
-            compiled_bytes: 0,
-        };
-        if proposed.bytes > self.max_bytes || proposed.objects > self.max_objects {
-            return Err(GpuError::ResourceLimit("global residency"));
-        }
-        *g = proposed;
-        Ok(())
-    }
-
-    /// Release this connection's whole contribution back to the global account (on disconnect).
-    pub fn refund(&self, totals: Totals) {
-        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        g.bytes = g.bytes.saturating_sub(totals.bytes);
-        g.objects = g.objects.saturating_sub(totals.objects);
-    }
-
-    /// A snapshot of the process-wide residency currently charged across every connection sharing this
-    /// account. A leak check: it must return to its baseline once all sharing connections tear down.
-    pub fn snapshot(&self) -> Totals {
-        *self.inner.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    /// Process-wide bytes currently resident across every connection on this shared account.
-    pub fn residency_bytes(&self) -> u64 {
-        self.snapshot().bytes
-    }
-
-    /// Process-wide live object count across every connection on this shared account.
-    pub fn object_count(&self) -> u64 {
-        self.snapshot().objects
-    }
-}
+mod account;
+pub use account::{Account, GlobalLedger, Ledger, Totals};
 
 // ---------------------------------------------------------------------------------------------------
 // residency-cost model (charge kinds + byte-footprint math)

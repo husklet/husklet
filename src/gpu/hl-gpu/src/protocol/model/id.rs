@@ -58,6 +58,7 @@ struct Slot<T> {
 #[derive(Clone)]
 pub struct Access {
     state: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    active: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// The session this table belongs to, pre-encoded as `id + 1` so the check is one compare.
     me: u64,
 }
@@ -66,12 +67,32 @@ impl Access {
     pub fn new(state: std::sync::Arc<std::sync::atomic::AtomicU64>, session: u64) -> Self {
         Self {
             state,
+            active: None,
+            me: session + 1,
+        }
+    }
+
+    pub(crate) fn new_revocable(
+        state: std::sync::Arc<std::sync::atomic::AtomicU64>,
+        active: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        session: u64,
+    ) -> Self {
+        Self {
+            state,
+            active: Some(active),
             me: session + 1,
         }
     }
 
     /// Whether this session may touch the resource right now.
     fn check(&self, kind: &'static str, id: u32) -> Result<()> {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|active| !active.load(std::sync::atomic::Ordering::Acquire))
+        {
+            return Err(GpuError::Invalid("shared resource party released"));
+        }
         let holder = self.state.load(std::sync::atomic::Ordering::Acquire);
         if holder == 0 || holder == self.me {
             return Ok(());
@@ -151,6 +172,16 @@ impl<T> ResourceTable<T> {
 
     /// Insert a freshly-created resource. Errors if `id` is already live (a duplicate create).
     pub fn insert(&mut self, id: u32, val: T) -> Result<()> {
+        self.insert_with_guard(id, val, None)
+    }
+
+    /// Insert a resource and its access guard as one lifecycle mutation. Import paths use this so no
+    /// fallible operation remains after the native alias enters the table.
+    pub fn insert_guarded(&mut self, id: u32, val: T, guard: Access) -> Result<()> {
+        self.insert_with_guard(id, val, Some(guard))
+    }
+
+    fn insert_with_guard(&mut self, id: u32, val: T, guard: Option<Access>) -> Result<()> {
         if self.live.contains_key(&id) {
             return Err(GpuError::DuplicateId {
                 kind: self.kind,
@@ -159,7 +190,7 @@ impl<T> ResourceTable<T> {
         }
         let gen = self.next_gen;
         self.next_gen = self.next_gen.wrapping_add(1).max(1);
-        self.live.insert(id, Slot { gen, val, guard: None });
+        self.live.insert(id, Slot { gen, val, guard });
         if let Some(journal) = &mut self.journal {
             journal.push(Undo::Inserted(id));
         }
@@ -178,7 +209,10 @@ impl<T> ResourceTable<T> {
 
     pub fn get_mut(&mut self, id: u32) -> Result<&mut T> {
         let kind = self.kind;
-        let slot = self.live.get_mut(&id).ok_or(GpuError::UnknownId { kind, id })?;
+        let slot = self
+            .live
+            .get_mut(&id)
+            .ok_or(GpuError::UnknownId { kind, id })?;
         if let Some(access) = &slot.guard {
             access.check(kind, id)?;
         }
@@ -188,7 +222,10 @@ impl<T> ResourceTable<T> {
     /// Attach an exclusive-use guard to a live resource. Set when a resource becomes shared.
     pub fn set_guard(&mut self, id: u32, guard: Access) -> Result<()> {
         let kind = self.kind;
-        let slot = self.live.get_mut(&id).ok_or(GpuError::UnknownId { kind, id })?;
+        let slot = self
+            .live
+            .get_mut(&id)
+            .ok_or(GpuError::UnknownId { kind, id })?;
         slot.guard = Some(guard);
         Ok(())
     }
@@ -211,6 +248,11 @@ impl<T> ResourceTable<T> {
         Ok(())
     }
 
+    /// Infallible rollback for a caller that may have inserted `id` during a larger prepared operation.
+    pub(crate) fn discard(&mut self, id: u32) {
+        self.live.remove(&id);
+    }
+
     pub fn contains(&self, id: u32) -> bool {
         self.live.contains_key(&id)
     }
@@ -227,5 +269,4 @@ impl<T> ResourceTable<T> {
     pub fn is_empty(&self) -> bool {
         self.live.is_empty()
     }
-
 }

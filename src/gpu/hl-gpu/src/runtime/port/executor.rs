@@ -16,8 +16,8 @@ use crate::protocol::model::descriptor::{FrameSerial, SurfaceToken};
 use crate::protocol::model::error::{GpuError, Result};
 use crate::protocol::model::id::{BufferId, FenceId, SurfaceId, TextureId};
 use crate::protocol::port::sink::FenceWait;
-use crate::runtime::model::resources::SessionResources;
 use crate::runtime::model::resources::Native;
+use crate::runtime::model::resources::SessionResources;
 use crate::runtime::model::sharing::Shared;
 
 /// The outcome of a `Present` command executed within a batch: which surface presented which texture.
@@ -109,11 +109,7 @@ pub trait GpuExecutor {
     ///
     /// Additive and honestly unsupported by default: an executor must not satisfy this with a copy,
     /// because callers rely on writes through either session becoming visible through the other alias.
-    fn export_buffer(
-        &self,
-        resources: &SessionResources,
-        id: BufferId,
-    ) -> Result<(Shared, u64)> {
+    fn export_buffer(&self, resources: &SessionResources, id: BufferId) -> Result<(Shared, u64)> {
         let _ = (resources, id);
         Err(GpuError::Unsupported("executor: export_buffer"))
     }
@@ -139,13 +135,19 @@ mod tests {
             Ok(_) => panic!("CPU storage cannot be aliased safely"),
             Err(error) => error,
         };
-        assert!(matches!(error, GpuError::Unsupported("executor: export_buffer")));
+        assert!(matches!(
+            error,
+            GpuError::Unsupported("executor: export_buffer")
+        ));
 
         let shared: Shared = std::sync::Arc::new(());
         let error = match executor.import_buffer(shared, 4) {
             Ok(_) => panic!("CPU storage cannot import an alias safely"),
             Err(error) => error,
         };
-        assert!(matches!(error, GpuError::Unsupported("executor: import_buffer")));
+        assert!(matches!(
+            error,
+            GpuError::Unsupported("executor: import_buffer")
+        ));
     }
 }

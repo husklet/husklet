@@ -8,8 +8,15 @@
 //! per-connection accounting state `ExecutorBudget` carried (→ [`Ledger`] + [`GlobalLedger`]).
 
 use crate::protocol::model::capability::Capabilities;
-use crate::runtime::model::resources::{GlobalLedger, Ledger, SessionResources};
-use crate::runtime::model::sharing::{Exports, SessionId};
+use crate::runtime::model::resources::{Account, GlobalLedger, Ledger, SessionResources};
+use crate::runtime::model::sharing::{ExportId, Exports, SessionId};
+use std::collections::HashMap;
+
+#[derive(Clone, Copy)]
+pub(crate) enum BufferSharing {
+    Owner(ExportId),
+    Importer(ExportId),
+}
 use crate::runtime::model::timeline::FenceTimeline;
 use crate::runtime::port::clock::Clock;
 
@@ -128,14 +135,15 @@ pub struct Session {
     ///
     /// [`GpuError::Unsupported`]: crate::protocol::model::error::GpuError::Unsupported
     pub exports: Option<Exports>,
+    pub(crate) buffer_sharing: HashMap<u32, BufferSharing>,
     /// Validation + accounting ceilings (its `caps` refreshed by `negotiate`).
     pub limits: Limits,
     /// The executor's advertised capabilities, once negotiated.
     pub caps: Option<Capabilities>,
     /// The singular id → native-handle owner the executor mutates.
     pub resources: SessionResources,
-    /// This connection's residency accounting state.
-    pub ledger: Ledger,
+    /// Cloneable accounting authority shared with export-registry lifetime transitions.
+    pub account: Account,
     /// This connection's slice of the shared process-global residency ceiling.
     pub global: GlobalLedger,
     /// Timeline-fence high-water marks.
@@ -145,15 +153,60 @@ pub struct Session {
 }
 
 impl Session {
+    fn release_sharing(&mut self) {
+        let Some(exports) = self.exports.clone() else {
+            return;
+        };
+        let bindings: Vec<BufferSharing> = self.buffer_sharing.values().copied().collect();
+        for binding in bindings {
+            loop {
+                let result = match binding {
+                    BufferSharing::Owner(export) => {
+                        exports.prepare_owner_release(self.id, export).map(|plan| {
+                            plan.commit();
+                            Some(())
+                        })
+                    }
+                    BufferSharing::Importer(export) => exports
+                        .prepare_import_release(self.id, export)
+                        .map(|plan| Some(plan.commit())),
+                };
+                match result {
+                    Ok(_) => break,
+                    Err(crate::GpuError::MappedElsewhere { .. }) => {
+                        let export = match binding {
+                            BufferSharing::Owner(id) | BufferSharing::Importer(id) => id,
+                        };
+                        exports.settle_transition(export, std::time::Duration::from_millis(10));
+                    }
+                    // The binding map and registry are updated together. If teardown finds them divergent,
+                    // `forget_session` below is the only safe infallible recovery and still drops the native
+                    // references; do not spin forever on a state that cannot become valid.
+                    Err(_) => break,
+                }
+            }
+        }
+        // Clear a claim taken directly through the registry even when no local binding was installed.
+        // Accounted bindings were already transitioned above, so this is only orphan-state recovery.
+        exports.forget_session(self.id);
+        self.buffer_sharing.clear();
+    }
+
     /// A fresh connection session with the given ceilings, global account slice, and clock.
     pub fn new(limits: Limits, global: GlobalLedger, clock: Box<dyn Clock>) -> Self {
+        let id = SessionId::next();
+        let account = Account::new();
+        account
+            .bind_session(id)
+            .expect("fresh account binds to fresh session");
         Self {
-            id: SessionId::next(),
+            id,
             exports: None,
+            buffer_sharing: HashMap::new(),
             limits,
             caps: None,
             resources: SessionResources::new(),
-            ledger: Ledger::default(),
+            account,
             global,
             timeline: FenceTimeline::new(),
             clock,
@@ -170,15 +223,15 @@ impl Session {
 
     /// Cumulative bytes resident on this connection.
     pub fn residency_bytes(&self) -> u64 {
-        self.ledger.residency_bytes()
+        self.account.ledger().residency_bytes()
     }
     /// Cumulative live object count charged to this connection.
     pub fn object_count(&self) -> u64 {
-        self.ledger.object_count()
+        self.account.ledger().object_count()
     }
     /// Bytes of this connection's residency attributable to the compiled-pipeline cache.
     pub fn compiled_cache_bytes(&self) -> u64 {
-        self.ledger.compiled_cache_bytes()
+        self.account.ledger().compiled_cache_bytes()
     }
 
     /// Explicit teardown: drop every live native handle, clear the fence timeline, and refund this
@@ -187,16 +240,15 @@ impl Session {
     /// refunds `Totals::default()` (a no-op) and re-clears already-empty tables, so a `Drop` after an
     /// explicit `release_all` is safe. Leaves the `Session` a valid, empty connection.
     pub fn release_all(&mut self) {
-        self.global.refund(self.ledger.totals);
-        self.ledger = Ledger::default();
+        self.release_sharing();
+        self.global.refund(self.account.ledger().totals);
+        self.account.replace_ledger(Ledger::default());
         // Dropping the tables below frees this connection's natives, so anything it exported has been
         // released by its owner as of here — the registry retains the storage only for live importers.
-        if let Some(exports) = &self.exports {
-            exports.forget_session(self.id);
-        }
         // Dropping the old table frees every native handle behind it; a fresh table restores the
         // per-kind generation counters to their initial state for any reuse of this session object.
         self.resources = SessionResources::new();
+        self.buffer_sharing.clear();
         self.timeline = FenceTimeline::new();
     }
 }
@@ -205,13 +257,11 @@ impl Drop for Session {
     /// On disconnect, release this connection's whole residency contribution back to the global account
     /// so a dropped connection cannot leak the shared budget.
     fn drop(&mut self) {
-        self.global.refund(self.ledger.totals);
+        self.release_sharing();
+        self.global.refund(self.account.ledger().totals);
         // Drop every reference this connection held in BOTH directions: its claims are released, its
         // imports drop their refcount, and an export it owned is retained only while someone still
         // imports it. Without this a departed connection pins storage forever and leaves a permanent
         // `MappedBy` claim against a session that no longer exists.
-        if let Some(exports) = &self.exports {
-            exports.forget_session(self.id);
-        }
     }
 }

@@ -203,7 +203,7 @@ fn many_resources() {
          in {:.3}s — {} live objects, {} resident bytes",
         elapsed_s,
         live,
-        s.ledger.residency_bytes(),
+        s.account.ledger().residency_bytes(),
     );
     assert_eq!(
         bad, 0,

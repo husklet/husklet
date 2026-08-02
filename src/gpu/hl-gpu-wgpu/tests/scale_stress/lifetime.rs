@@ -11,7 +11,7 @@ fn no_resource_leak() {
     let mut s = new_session(&exec);
 
     let baseline_live = s.resources.live_count();
-    let baseline_bytes = s.ledger.residency_bytes();
+    let baseline_bytes = s.account.ledger().residency_bytes();
     let baseline_global = s.global.residency_bytes();
     let baseline_objs = s.global.object_count();
 
@@ -107,7 +107,7 @@ fn no_resource_leak() {
             "cycle {cycle}: live objects did not return to baseline (leak)"
         );
         assert_eq!(
-            s.ledger.residency_bytes(),
+            s.account.ledger().residency_bytes(),
             baseline_bytes,
             "cycle {cycle}: resident bytes did not return to baseline (leak)"
         );

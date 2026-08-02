@@ -113,7 +113,7 @@ fn steady_state_no_blowup() {
     .expect("steady-state setup must run cleanly");
 
     let baseline_live = s.resources.live_count();
-    let baseline_bytes = s.ledger.residency_bytes();
+    let baseline_bytes = s.account.ledger().residency_bytes();
 
     // The transient buffer uses a distinct id (99) created + destroyed every frame.
     const TEMP: u32 = 99;
@@ -182,7 +182,7 @@ fn steady_state_no_blowup() {
             "live objects drifted from baseline (leak)"
         );
         assert_eq!(
-            s.ledger.residency_bytes(),
+            s.account.ledger().residency_bytes(),
             baseline_bytes,
             "resident bytes drifted from baseline (leak)"
         );

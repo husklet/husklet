@@ -183,7 +183,15 @@ fn serve_loop<H: ConnectionHandler>(
             // length-prefixed response (never the 1-byte submit ack). A panicking readback op is contained
             // and failed rather than allowed to unwind the connection thread.
             let started = std::time::Instant::now();
-            let bytes = ReadbackRequest::from_bytes(&frame.payload).and_then(|req| {
+            let bytes = ReadbackRequest::from_bytes(&frame.payload)
+                .filter(|req| req.version == crate::transport::model::readback::READBACK_VERSION)
+                .filter(|req| match req.kind {
+                    readback_kind::BUFFER => true,
+                    readback_kind::FENCE => req.len == 0,
+                    readback_kind::FENCE_WAIT => true,
+                    _ => false,
+                })
+                .and_then(|req| {
                 let kind = req.kind;
                 match HandlerBoundary::call(|| match req.kind {
                     readback_kind::BUFFER => handler.read_buffer(&req),

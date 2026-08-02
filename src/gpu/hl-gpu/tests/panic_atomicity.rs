@@ -33,8 +33,8 @@ use hl_gpu::protocol::model::enums::buffer_usage;
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::runtime::port::executor::Presentation;
 use hl_gpu::{
-    Capabilities, Cmd, CpuExecutor, FakeClock, FenceId, GlobalLedger, GpuError, GpuExecutor, Limits,
-    Result, Session,
+    Capabilities, Cmd, CpuExecutor, FakeClock, FenceId, GlobalLedger, GpuError, GpuExecutor,
+    Limits, Result, Session,
 };
 
 /// The id whose creation the executor panics on — a stand-in for `create_shader_module`'s panic, reached
@@ -101,7 +101,7 @@ fn a_panic_after_an_allocation_leaves_no_trace() {
     let mut exec = PanicMidBatch(CpuExecutor::new());
     let mut s = session(&exec);
 
-    let before = s.ledger.totals;
+    let before = s.account.ledger().totals;
     assert_eq!(before.objects, 0, "the session starts unbilled");
 
     let refused = hl_gpu::runtime::submit(&mut s, &mut exec, 0, &[buffer(3), buffer(PANIC_ID)]);
@@ -117,7 +117,10 @@ fn a_panic_after_an_allocation_leaves_no_trace() {
         "the id-table transaction must be rolled back on the unwind path"
     );
     assert_eq!(
-        (s.ledger.totals.objects, s.ledger.totals.bytes),
+        (
+            s.account.ledger().totals.objects,
+            s.account.ledger().totals.bytes
+        ),
         (before.objects, before.bytes),
         "the aborted frame's residency charge must be released on the unwind path"
     );
@@ -159,7 +162,8 @@ fn a_clean_refusal_after_an_allocation_leaves_no_trace() {
     let mut s = session(&exec);
 
     // `DestroyBuffer` of an id that was never created is a clean typed error from the resource tables.
-    let refused = hl_gpu::runtime::submit(&mut s, &mut exec, 0, &[buffer(3), Cmd::DestroyBuffer(9)]);
+    let refused =
+        hl_gpu::runtime::submit(&mut s, &mut exec, 0, &[buffer(3), Cmd::DestroyBuffer(9)]);
     assert!(refused.is_err(), "the batch must be refused");
 
     hl_gpu::runtime::submit(&mut s, &mut exec, 0, &[buffer(3)])

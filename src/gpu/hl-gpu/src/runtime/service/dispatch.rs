@@ -11,26 +11,79 @@
 use crate::protocol::model::command::Cmd;
 use crate::protocol::model::error::Result;
 use crate::protocol::model::id::{BufferId, FenceId};
-use crate::runtime::model::session::Session;
+use crate::runtime::model::resources::SessionResources;
+use crate::runtime::model::session::{BufferSharing, Session};
+use crate::runtime::model::sharing::{ExportId, ResourceKey};
+use crate::runtime::model::timeline::FenceTimeline;
+use crate::runtime::port::clock::Clock;
 use crate::runtime::port::executor::{GpuExecutor, Presentation};
 
 /// Dispatch a validated, accounted batch. The executor performs the native work (creating/destroying
 /// resources behind `session.resources`, recording submits, presenting); afterwards the runtime records
 /// each fence's lifecycle and any completion-signal timeline values. Returns one [`Presentation`] per
 /// `Present` command, in order.
-pub fn dispatch(
-    session: &mut Session,
+struct ResourceTransaction<'a> {
+    resources: &'a mut SessionResources,
+    committed: bool,
+}
+
+impl<'a> ResourceTransaction<'a> {
+    fn begin(resources: &'a mut SessionResources) -> Self {
+        resources.begin_txn();
+        Self {
+            resources,
+            committed: false,
+        }
+    }
+
+    fn commit(&mut self) {
+        self.resources.commit_txn();
+        self.committed = true;
+    }
+}
+
+impl Drop for ResourceTransaction<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.resources.rollback_txn();
+        }
+    }
+}
+
+pub(crate) struct PreparedDispatch<'a> {
+    transaction: ResourceTransaction<'a>,
+    timeline: Option<FenceTimeline>,
+    presentations: Option<Vec<Presentation>>,
+}
+
+impl PreparedDispatch<'_> {
+    /// The accepted path's infallible tail: all validation and executor work completed before this call.
+    pub(crate) fn commit(mut self) -> (Vec<Presentation>, FenceTimeline) {
+        self.transaction.commit();
+        (
+            self.presentations.take().unwrap_or_default(),
+            self.timeline
+                .take()
+                .expect("prepared dispatch owns its timeline"),
+        )
+    }
+}
+
+pub(crate) fn prepare<'a>(
+    resources: &'a mut SessionResources,
+    timeline: &FenceTimeline,
+    clock: &dyn Clock,
     exec: &mut dyn GpuExecutor,
     batch: &[Cmd],
-) -> Result<Vec<Presentation>> {
+) -> Result<PreparedDispatch<'a>> {
     // Reflect the batch's fence lifecycle + completion signals onto a COPY of the timeline first. A signal
     // that moves a fence backwards is a typed rejection, and raising it after the executor already applied
     // (and committed) the batch would leave resources live on the executor that `runtime::submit` has just
     // un-charged from the ledger — an accounting divergence a guest could repeat to grow past its residency
     // bound. Pre-flighting makes the rejection happen before ANY mutation; the copy is then installed
     // wholesale once the executor has accepted the work, so the timeline moves exactly when the frame does.
-    let now = session.clock.now_nanos();
-    let mut next_timeline = session.timeline.clone();
+    let now = clock.now_nanos();
+    let mut next_timeline = timeline.clone();
     for cmd in batch {
         match cmd {
             Cmd::CreateFence(id) => next_timeline.register(*id),
@@ -83,51 +136,120 @@ pub fn dispatch(
     //
     // `Drop` runs during unwinding, so the guard restores the pre-frame tables on the panic path too, and
     // an abnormal abort becomes indistinguishable from a clean refusal.
-    let presents = {
-        let txn = Transaction::begin(&mut session.resources);
-        let presents = exec.execute(txn.resources, batch)?;
-        txn.commit();
-        presents
+    let transaction = ResourceTransaction::begin(resources);
+    let executed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        exec.execute(transaction.resources, batch)
+    }));
+    let presentations = match executed {
+        Ok(Ok(presentations)) => presentations,
+        Ok(Err(error)) => {
+            return Err(error);
+        }
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_owned())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "non-string panic payload".to_owned());
+            return Err(crate::GpuError::Panicked(message));
+        }
     };
-
-    // Install the pre-flighted timeline only after the executor accepted the work, so a failed execute
-    // leaves the timeline untouched (failure atomicity).
-    session.timeline = next_timeline;
-    Ok(presents)
+    Ok(PreparedDispatch {
+        transaction,
+        timeline: Some(next_timeline),
+        presentations: Some(presentations),
+    })
 }
 
-/// The in-flight all-tables transaction, scoped so it is resolved on EVERY exit path — including an
-/// unwind out of the executor.
-///
-/// Holding the `&mut SessionResources` is what makes this airtight: the tables cannot be reached except
-/// through the guard while a transaction is open, so no path can forget to end one. `commit` consumes the
-/// guard; anything else — an early `?`, a panic — drops it and rolls back.
-struct Transaction<'a> {
-    resources: &'a mut super::super::model::resources::SessionResources,
-    committed: bool,
-}
-
-impl<'a> Transaction<'a> {
-    fn begin(resources: &'a mut super::super::model::resources::SessionResources) -> Self {
-        resources.begin_txn();
-        Self {
-            resources,
-            committed: false,
-        }
+pub fn export_buffer(
+    session: &mut Session,
+    exec: &dyn GpuExecutor,
+    id: BufferId,
+) -> Result<ExportId> {
+    let exports = session
+        .exports
+        .as_ref()
+        .ok_or(crate::GpuError::Unsupported("sharing registry"))?;
+    if session.buffer_sharing.contains_key(&id.0) {
+        return Err(crate::GpuError::Invalid("buffer already shared"));
     }
-
-    /// Accept the batch: parked natives are freed for real and the tables keep the batch's mutations.
-    fn commit(mut self) {
-        self.resources.commit_txn();
-        self.committed = true;
+    let (native, bytes) = exec.export_buffer(&session.resources, id)?;
+    let export = exports.export_accounted(
+        ResourceKey {
+            session: session.id,
+            kind: BufferId::KIND,
+            id: id.0,
+        },
+        native,
+        bytes,
+        session.account.clone(),
+        &session.global,
+    )?;
+    let installed = (|| {
+        let guard = exports.access(session.id, export)?;
+        session.resources.buffers.set_guard(id.0, guard)
+    })();
+    if let Err(error) = installed {
+        exports.abort_export(session.id, export);
+        return Err(error);
     }
+    session
+        .buffer_sharing
+        .insert(id.0, BufferSharing::Owner(export));
+    Ok(export)
 }
 
-impl Drop for Transaction<'_> {
-    fn drop(&mut self) {
-        if !self.committed {
-            self.resources.rollback_txn();
-        }
+pub fn import_buffer(
+    session: &mut Session,
+    exec: &dyn GpuExecutor,
+    id: BufferId,
+    export: ExportId,
+) -> Result<u64> {
+    let exports = session
+        .exports
+        .as_ref()
+        .ok_or(crate::GpuError::Unsupported("sharing registry"))?
+        .clone();
+    if session.resources.buffers.contains(id.0) {
+        return Err(crate::GpuError::DuplicateId {
+            kind: BufferId::KIND,
+            id: id.0,
+        });
+    }
+    let plan =
+        exports.prepare_import(session.id, export, session.account.clone(), &session.global)?;
+    let shared = plan.resource();
+    let bytes = plan.bytes();
+    if let Err(error) = session.account.reserve(
+        export.0,
+        bytes,
+        session.limits.max_connection_bytes,
+        session.limits.max_connection_objects,
+    ) {
+        session.account.discard_reservation(export.0);
+        return Err(error);
+    }
+    let constructed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let guard = plan.access();
+        let native = exec.import_buffer(shared, bytes)?;
+        session
+            .resources
+            .buffers
+            .insert_guarded(id.0, native, guard)?;
+        session
+            .buffer_sharing
+            .insert(id.0, BufferSharing::Importer(export));
+        plan.commit(id.0)?;
+        Ok(bytes)
+    }));
+    if !matches!(&constructed, Ok(Ok(_))) {
+        session.buffer_sharing.remove(&id.0);
+        session.resources.buffers.discard(id.0);
+        session.account.discard_reservation(export.0);
+    }
+    match constructed {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
     }
 }
 
@@ -140,6 +262,176 @@ pub fn wait(
     value: u64,
 ) -> Result<()> {
     exec.wait(&mut session.resources, fence, value)
+}
+
+#[cfg(test)]
+mod sharing_atomicity_tests {
+    use super::*;
+    use crate::protocol::model::capability::Capabilities;
+    use crate::runtime::model::sharing::{ExportId, Exports, Shared};
+    use crate::{FakeClock, GlobalLedger, Limits};
+    use std::sync::Arc;
+
+    struct LyingExporter;
+    struct FailingImporter;
+    struct PanickingImporter;
+
+    impl GpuExecutor for LyingExporter {
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::permissive_fixture("lying exporter")
+        }
+        fn execute(&mut self, _: &mut SessionResources, _: &[Cmd]) -> Result<Vec<Presentation>> {
+            Ok(Vec::new())
+        }
+        fn wait(&mut self, _: &mut SessionResources, _: FenceId, _: u64) -> Result<()> {
+            Ok(())
+        }
+        fn export_buffer(&self, _: &SessionResources, _: BufferId) -> Result<(Shared, u64)> {
+            Ok((Arc::new(17u32), 4))
+        }
+    }
+
+    impl GpuExecutor for FailingImporter {
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::permissive_fixture("failing importer")
+        }
+        fn execute(&mut self, _: &mut SessionResources, _: &[Cmd]) -> Result<Vec<Presentation>> {
+            Ok(Vec::new())
+        }
+        fn wait(&mut self, _: &mut SessionResources, _: FenceId, _: u64) -> Result<()> {
+            Ok(())
+        }
+        fn import_buffer(
+            &self,
+            _: Shared,
+            _: u64,
+        ) -> Result<crate::runtime::model::resources::Native> {
+            Err(crate::GpuError::Unsupported(
+                "injected native import failure",
+            ))
+        }
+    }
+
+    impl GpuExecutor for PanickingImporter {
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::permissive_fixture("panicking importer")
+        }
+        fn execute(&mut self, _: &mut SessionResources, _: &[Cmd]) -> Result<Vec<Presentation>> {
+            Ok(Vec::new())
+        }
+        fn wait(&mut self, _: &mut SessionResources, _: FenceId, _: u64) -> Result<()> {
+            Ok(())
+        }
+        fn import_buffer(
+            &self,
+            _: Shared,
+            _: u64,
+        ) -> Result<crate::runtime::model::resources::Native> {
+            panic!("injected native import panic")
+        }
+    }
+
+    #[test]
+    fn failed_guard_install_rolls_back_the_zero_import_export_and_allows_retry() {
+        let exec = LyingExporter;
+        let exports = Exports::new();
+        let mut session = Session::new(
+            Limits::from_capabilities(exec.capabilities()),
+            GlobalLedger::unbounded(),
+            Box::new(FakeClock::new(0)),
+        )
+        .with_exports(exports.clone());
+        for expected in [ExportId(1), ExportId(2)] {
+            assert!(export_buffer(&mut session, &exec, BufferId(9)).is_err());
+            assert!(
+                !exports.is_live(expected),
+                "failed export must not leave a token reachable"
+            );
+        }
+    }
+
+    #[test]
+    fn native_import_failure_never_publishes_an_importer_or_payer() {
+        let exports = Exports::new();
+        let global = GlobalLedger::unbounded();
+        let owner_account = crate::runtime::model::resources::Account::new();
+        let export = exports
+            .export_accounted(
+                crate::runtime::model::sharing::ResourceKey {
+                    session: crate::runtime::model::sharing::SessionId(40),
+                    kind: BufferId::KIND,
+                    id: 1,
+                },
+                Arc::new(17u32),
+                4,
+                owner_account,
+                &global,
+            )
+            .unwrap();
+        let exec = FailingImporter;
+        let mut importer = Session::new(
+            Limits::from_capabilities(exec.capabilities()),
+            global.clone(),
+            Box::new(FakeClock::new(0)),
+        )
+        .with_exports(exports.clone());
+        assert!(import_buffer(&mut importer, &exec, BufferId(9), export).is_err());
+        assert!(!importer.resources.buffers.contains(9));
+        assert_eq!(importer.account.reserved_bytes(), 0);
+        let release = exports
+            .prepare_owner_release(crate::runtime::model::sharing::SessionId(40), export)
+            .unwrap();
+        release.commit();
+        assert!(
+            !exports.is_live(export),
+            "failed import was never published as a retained payer"
+        );
+    }
+
+    #[test]
+    fn native_import_panic_unwinds_every_prepublication_effect() {
+        let exports = Exports::new();
+        let global = GlobalLedger::unbounded();
+        let owner = crate::runtime::model::sharing::SessionId(41);
+        let export = exports
+            .export_accounted(
+                crate::runtime::model::sharing::ResourceKey {
+                    session: owner,
+                    kind: BufferId::KIND,
+                    id: 1,
+                },
+                Arc::new(17u32),
+                4,
+                crate::runtime::model::resources::Account::new(),
+                &global,
+            )
+            .unwrap();
+        let exec = PanickingImporter;
+        let mut importer = Session::new(
+            Limits::from_capabilities(exec.capabilities()),
+            global.clone(),
+            Box::new(FakeClock::new(0)),
+        )
+        .with_exports(exports.clone());
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = import_buffer(&mut importer, &exec, BufferId(9), export);
+        }));
+        assert!(
+            panic.is_err(),
+            "the executor panic must remain observable after cleanup"
+        );
+        assert!(!importer.resources.buffers.contains(9));
+        assert!(!importer.buffer_sharing.contains_key(&9));
+        assert_eq!(importer.account.reserved_bytes(), 0);
+
+        let release = exports.prepare_owner_release(owner, export).unwrap();
+        release.commit();
+        assert!(
+            !exports.is_live(export),
+            "the panicking import never retained a registry reference"
+        );
+    }
 }
 
 pub fn poll_fence(
