@@ -37,6 +37,7 @@
 mod config;
 mod counters;
 mod emit;
+mod event;
 mod level;
 mod macros;
 mod shard;
@@ -50,8 +51,9 @@ mod timing;
 pub use config::Config;
 pub use counters::Counters;
 pub use emit::emit;
+pub use event::{emit_event, emit_verdict, Value};
 pub use level::Level;
-pub use sink::{Output, Sink, StderrSink};
+pub use sink::{DiscardSink, Events, Output, Sink, StderrSink};
 pub use state::{Logging, Profiling};
 pub use tag::{Tag, Tags};
 pub use timing::{Span, TimingStat, Timings};

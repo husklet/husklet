@@ -24,7 +24,7 @@ static START: OnceLock<Instant> = OnceLock::new();
 
 /// Millis since the first log line was emitted.
 #[inline]
-fn millis_since_start() -> u128 {
+pub(crate) fn millis_since_start() -> u128 {
     START.get_or_init(Instant::now).elapsed().as_millis()
 }
 
@@ -51,7 +51,7 @@ pub fn emit(tags: Tags, level: Level, module: &str, line: u32, args: std::fmt::A
 
 /// A cheap, stable-per-thread numeric id. `ThreadId`'s `Debug` is `ThreadId(N)`;
 /// we extract just the number for a compact `tN` field.
-fn thread_id() -> u64 {
+pub(crate) fn thread_id() -> u64 {
     thread_local! {
         static ID: u64 = derive_thread_id();
     }

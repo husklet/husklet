@@ -265,3 +265,146 @@ macro_rules! hl_span {
         $crate::Span::disabled()
     }};
 }
+
+// ---------------------------------------------------------------------------------
+// Structured events. See `event.rs` for the record shape and the reasoning.
+// ---------------------------------------------------------------------------------
+
+/// Accumulate `key = value` fields into an array of `(&str, Value)`.
+///
+/// A token-muncher rather than one repetition, because `$($sigil:tt)? $value:expr` is ambiguous to the
+/// macro parser — it cannot tell a `tt` that might be absent from the start of an `expr`. One arm per
+/// form, each with and without a trailing rest, is the shape that compiles.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __hl_fields {
+    (@acc [$($acc:expr),*]) => { [$($acc),*] };
+
+    (@acc [$($acc:expr),*] $key:ident = % $value:expr) => {
+        $crate::__hl_fields!(@acc [$($acc,)*
+            (stringify!($key), $crate::Value::Text(format!("{}", $value)))])
+    };
+    (@acc [$($acc:expr),*] $key:ident = % $value:expr, $($rest:tt)*) => {
+        $crate::__hl_fields!(@acc [$($acc,)*
+            (stringify!($key), $crate::Value::Text(format!("{}", $value)))] $($rest)*)
+    };
+
+    (@acc [$($acc:expr),*] $key:ident = ? $value:expr) => {
+        $crate::__hl_fields!(@acc [$($acc,)*
+            (stringify!($key), $crate::Value::Text(format!("{:?}", $value)))])
+    };
+    (@acc [$($acc:expr),*] $key:ident = ? $value:expr, $($rest:tt)*) => {
+        $crate::__hl_fields!(@acc [$($acc,)*
+            (stringify!($key), $crate::Value::Text(format!("{:?}", $value)))] $($rest)*)
+    };
+
+    (@acc [$($acc:expr),*] $key:ident = $value:expr) => {
+        $crate::__hl_fields!(@acc [$($acc,)* (stringify!($key), $crate::Value::from($value))])
+    };
+    (@acc [$($acc:expr),*] $key:ident = $value:expr, $($rest:tt)*) => {
+        $crate::__hl_fields!(@acc [$($acc,)* (stringify!($key), $crate::Value::from($value))] $($rest)*)
+    };
+
+    ($($fields:tt)*) => { $crate::__hl_fields!(@acc [] $($fields)*) };
+}
+
+/// Emit a structured event: a stable name plus typed fields, machine-readable on the events channel.
+///
+/// ```
+/// # use hl_log::{hl_event, tag, Level};
+/// # let (id, bytes) = (7u32, 4096usize);
+/// hl_event!(tag::GPU, Level::Debug, "frame.submitted", id = id, bytes = bytes);
+/// ```
+///
+/// Gated exactly like every other macro — the same tag mask, the same level — and subject to the same
+/// compile-time policy, so a verbose event vanishes in release and a closed tag never evaluates a field.
+/// A record that is refused by the gate costs one relaxed load and a branch.
+///
+/// For an outcome the caller is entitled to regardless of which tags an operator happened to open, use
+/// [`hl_verdict!`] instead.
+#[cfg(not(feature = "disabled"))]
+#[macro_export]
+macro_rules! hl_event {
+    ($tag:expr, $level:expr, $event:expr) => {
+        $crate::hl_event!($tag, $level, $event,)
+    };
+    ($tag:expr, $level:expr, $event:expr, $($fields:tt)*) => {{
+        let tags = $crate::Tags::from($tag);
+        let level = $level;
+        if $crate::Logging::global().enabled(tags, level) {
+            $crate::emit_event(
+                tags,
+                level,
+                $event,
+                module_path!(),
+                line!(),
+                &$crate::__hl_fields!($($fields)*),
+            );
+        }
+    }};
+}
+
+#[cfg(feature = "disabled")]
+#[macro_export]
+macro_rules! hl_event {
+    ($tag:expr, $level:expr, $event:expr $(, $($fields:tt)*)?) => {{
+        if false {
+            let _ = (&$tag, &$level, &$event);
+        }
+    }};
+}
+
+/// Emit a VERDICT: a record that work the caller asked for did not happen.
+///
+/// A verdict is not narration and is deliberately **not subject to the tag mask**. Every other macro in
+/// this crate is a subscription — an operator opens a tag to hear a subsystem talk about itself, and a
+/// closed tag means "I am not listening to this". That is the right default for chatter and the wrong
+/// one for a refusal, because the operator who did not know to open `wgpu` is exactly the person whose
+/// frame was dropped. Measured: a run reported its bundle emitted no presentation heartbeat when the
+/// diagnostic was at error level and firing — the tag was simply never opened, and the absence read as
+/// a property of the subject.
+///
+/// The class is deliberately small, and the test is one question: **did the caller ask for something
+/// that did not happen, where the caller cannot otherwise tell?** That admits a refused frame, a dropped
+/// command, a resource that could not be created, a lost device or share group, and a capability
+/// advertised but not honoured. It excludes successes, state transitions, timings, counts, retries that
+/// later succeed, and anything the caller learns from a returned error — all of which stay behind their
+/// tags. If a class of event would be useful to have on by default, that is not enough: the question is
+/// whether omitting it makes a failure unattributable.
+///
+/// ```
+/// # use hl_log::{hl_verdict, tag};
+/// # let (id, reason) = (7u32, "no matching format");
+/// hl_verdict!(tag::WGPU, "frame.refused", id = id, reason = %reason);
+/// ```
+///
+/// Emits twice on purpose: the human sentence to the normal log at error level, so a person reading
+/// stderr sees it without configuring anything, and the structured record to the events channel for
+/// whoever is consuming one. It survives a release build for the same reason `hl_error!` does.
+#[cfg(not(feature = "disabled"))]
+#[macro_export]
+macro_rules! hl_verdict {
+    ($tag:expr, $event:expr) => {
+        $crate::hl_verdict!($tag, $event,)
+    };
+    ($tag:expr, $event:expr, $($fields:tt)*) => {{
+        let fields = $crate::__hl_fields!($($fields)*);
+        $crate::emit_verdict(
+            $crate::Tags::from($tag),
+            $event,
+            module_path!(),
+            line!(),
+            &fields,
+        );
+    }};
+}
+
+#[cfg(feature = "disabled")]
+#[macro_export]
+macro_rules! hl_verdict {
+    ($tag:expr, $event:expr $(, $key:ident = $($sigil:tt)? $value:expr)* $(,)?) => {{
+        if false {
+            let _ = (&$tag, &$event $(, &$value)*);
+        }
+    }};
+}
