@@ -1,6 +1,6 @@
 use super::*;
 
-fn clear_pass(texture: u32, clear: [f32; 4]) -> Cmd {
+fn clear_pass(texture: u32, clear: [f64; 4]) -> Cmd {
     Cmd::Submit(CommandBuffer {
         encoder: vec![
             Enc::BeginRenderPass {

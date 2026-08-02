@@ -29,7 +29,7 @@ fn layered(w: u32, h: u32, layers: u32, usage: u32) -> TextureDesc {
     }
 }
 
-fn clear(texture: u32, color: [f32; 4], base_array_layer: u32, layer_count: u32) -> Enc {
+fn clear(texture: u32, color: [f64; 4], base_array_layer: u32, layer_count: u32) -> Enc {
     Enc::ClearRect {
         texture,
         x: 0,
@@ -43,10 +43,10 @@ fn clear(texture: u32, color: [f32; 4], base_array_layer: u32, layer_count: u32)
     }
 }
 
-const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+const RED: [f64; 4] = [1.0, 0.0, 0.0, 1.0];
 
 /// A full-extent base-plane clear sized to whatever shape `desc` is.
-fn clear_of(desc: &TextureDesc, color: [f32; 4]) -> Enc {
+fn clear_of(desc: &TextureDesc, color: [f64; 4]) -> Enc {
     Enc::ClearRect {
         texture: 1,
         x: 0,
@@ -59,7 +59,7 @@ fn clear_of(desc: &TextureDesc, color: [f32; 4]) -> Enc {
         mip_level: 0,
     }
 }
-const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+const GREEN: [f64; 4] = [0.0, 1.0, 0.0, 1.0];
 
 /// A clear of a non-base layer must leave the base layer alone.
 ///

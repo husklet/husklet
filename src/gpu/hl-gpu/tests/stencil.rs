@@ -24,7 +24,7 @@ use hl_gpu::{Cmd, CommandBuffer, Enc, GpuExecutor, ShaderPayloadKind, TextureId}
 
 const N: u32 = 8; // NxN target — the centred [-0.5,0.5] quad marks the clean [2,6) 4x4 block.
 const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
-const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+const BLUE: [f64; 4] = [0.0, 0.0, 1.0, 1.0];
 const GREEN_PX: [u8; 4] = [0, 255, 0, 255];
 const BLUE_PX: [u8; 4] = [0, 0, 255, 255];
 
