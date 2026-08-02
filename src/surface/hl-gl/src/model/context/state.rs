@@ -322,9 +322,14 @@ impl GlContext {
     }
 
     /// `glBindVertexArray(vao)` — snapshot the live attribute array + element-buffer binding into the
-    /// currently-bound VAO, then load `vao`'s captured state into the live context. Binding an unknown
-    /// name creates that VAO on demand (matching GL's "first bind creates the object") with empty state.
+    /// currently-bound VAO, then load `vao`'s captured state into the live context. GLES3 requires every
+    /// nonzero name to have been returned by `glGenVertexArrays`; an unknown name is rejected without
+    /// changing the binding.
     pub fn bind_vertex_array(&mut self, vao: u32) {
+        if vao != 0 && !self.local.vaos.contains_key(&vao) {
+            self.set_gl_error(glconst::GL_INVALID_OPERATION);
+            return;
+        }
         self.local.vaos.insert(
             self.local.cur_vao,
             Vao {
@@ -340,12 +345,7 @@ impl GlContext {
                 self.local.vertex_bindings = v.vertex_bindings;
                 self.local.element_buffer = v.element_buffer;
             }
-            None => {
-                self.local.attr = [Attr::default(); MAX_ATTR];
-                self.local.vertex_bindings = [VertexBinding::default(); MAX_ATTR];
-                self.local.element_buffer = 0;
-                self.local.vaos.insert(vao, Vao::default());
-            }
+            None => unreachable!("VAO 0 and every generated VAO have stored state"),
         }
     }
 

@@ -272,6 +272,20 @@ fn deleting_a_program_reaps_its_pending_deleted_shaders() {
 }
 
 #[test]
+fn binding_an_ungenerated_vertex_array_is_rejected_without_creating_it() {
+    let mut context = ctx();
+    let unknown = 0x7654_3210;
+
+    record::bind_vertex_array(&mut context, unknown);
+
+    assert_eq!(context.take_gl_error(), GL_INVALID_OPERATION);
+    assert!(!record::is_vertex_array(&context, unknown));
+    let mut binding = [0; 4];
+    assert_eq!(query::get_integerv(&context, GL_VERTEX_ARRAY_BINDING, &mut binding), 1);
+    assert_eq!(binding[0], 0);
+}
+
+#[test]
 fn a_program_with_only_one_stage_attached_fails_to_link() {
     let mut context = ctx();
     let fragment = record::create_shader(&mut context, GL_FRAGMENT_SHADER);
