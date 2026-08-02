@@ -14,12 +14,46 @@ pub fn cmd_begin_render_pass(
     load_clear: bool,
     depth: Option<RenderingDepthAttachment>,
 ) -> Result<()> {
-    let (texture, extent) = {
-        let img = dev.images.get(&color_image).ok_or(GpuError::Invalid(
+    cmd_begin_render_pass_multi(
+        dev,
+        cb,
+        &[RenderingColorAttachment {
+            image: color_image,
+            clear,
+            load_clear,
+            store: true,
+        }],
+        depth,
+    )
+}
+
+/// Begin a classic render pass with every color attachment referenced by its first subpass.
+pub fn cmd_begin_render_pass_multi(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    colors: &[RenderingColorAttachment],
+    depth: Option<RenderingDepthAttachment>,
+) -> Result<()> {
+    let mut color_targets = Vec::with_capacity(colors.len());
+    let mut extent = (0, 0);
+    for color in colors {
+        let image = dev.images.get(&color.image).ok_or(GpuError::Invalid(
             "vkCmdBeginRenderPass: unknown color VkImage",
         ))?;
-        (img.ir_id, (img.width, img.height))
-    };
+        if extent == (0, 0) {
+            extent = (image.width, image.height);
+        }
+        color_targets.push(ColorAttachment {
+            texture: image.ir_id,
+            load: if color.load_clear {
+                LoadOp::Clear
+            } else {
+                LoadOp::Load
+            },
+            clear: color.clear.map(f64::from),
+            store: color.store,
+        });
+    }
     // Resolve the depth image → ir texture id up front (a bad handle fails before recording), exactly as
     // the dynamic-rendering path does for its inline pDepthAttachment.
     let depth_target = match depth {
@@ -45,24 +79,14 @@ pub fn cmd_begin_render_pass(
         None => None,
     };
     let rec = dev.require_recording(cb)?;
-    let color = vec![ColorAttachment {
-        texture,
-        load: if load_clear {
-            LoadOp::Clear
-        } else {
-            LoadOp::Load
-        },
-        clear: clear.map(f64::from),
-        store: true,
-    }];
     rec.enc.push(Enc::BeginRenderPass {
-        color: color.clone(),
+        color: color_targets.clone(),
         depth: depth_target.clone(),
     });
     rec.replay_buffer_bindings();
     rec.in_render_pass = true;
-    rec.active_pass = Some((color, depth_target));
-    rec.active_render_texture = Some(texture);
+    rec.active_pass = Some((color_targets.clone(), depth_target));
+    rec.active_render_texture = color_targets.first().map(|color| color.texture);
     rec.render_extent = extent;
     rec.scissor = None;
     Ok(())

@@ -16,12 +16,6 @@ pub extern "C" fn vkCmdBeginRenderPass(
     else {
         return;
     };
-    // The clear color is the first pClearValues entry (color aspect); default opaque black.
-    let clear = if bi.p_clear_values.is_null() || bi.clear_value_count == 0 {
-        [0.0, 0.0, 0.0, 1.0]
-    } else {
-        unsafe { (*bi.p_clear_values).float32 }
-    };
     // The per-attachment clear values are indexed by attachment slot (color at 0, depth at its own slot).
     let clear_values: &[VkClearValue] = if bi.p_clear_values.is_null() || bi.clear_value_count == 0
     {
@@ -30,18 +24,39 @@ pub extern "C" fn vkCmdBeginRenderPass(
         unsafe { std::slice::from_raw_parts(bi.p_clear_values, bi.clear_value_count as usize) }
     };
     StateStore::with(|s| {
-        // Resolve framebuffer → first attachment view → image handle; render pass → clear behaviour.
-        let views = s.framebuffers.get(&bi.framebuffer);
-        let image = views
-            .and_then(|v| v.first().copied())
-            .and_then(|view| s.image_views.get(&view).copied());
-        let rp = s.render_passes.get(&bi.render_pass);
-        let clears = rp.map(|r| r.first_attachment_clears).unwrap_or(true);
+        let views = s.framebuffers.get(&bi.framebuffer).cloned();
+        let rp = s.render_passes.get(&bi.render_pass).cloned();
+        let colors = rp
+            .as_ref()
+            .map(|render_pass| {
+                render_pass
+                    .colors
+                    .iter()
+                    .filter_map(|color| {
+                        let image = views
+                            .as_ref()?
+                            .get(color.index as usize)
+                            .and_then(|view| s.image_views.get(view))
+                            .copied()?;
+                        Some(record::RenderingColorAttachment {
+                            image,
+                            clear: clear_values
+                                .get(color.index as usize)
+                                .map(|value| value.float32)
+                                .unwrap_or([0.0, 0.0, 0.0, 1.0]),
+                            load_clear: color.clear,
+                            store: true,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         // Depth: the render pass's declared depth attachment picks the framebuffer's depth image view (by the
         // shared attachment index) and the pass's depth loadOp + clearValue — the classic-path mirror of the
         // dynamic-rendering pDepthAttachment. Its clearValue is read as depthStencil.depth (== float32[0]).
         let depth = rp.and_then(|r| r.depth).and_then(|d| {
             let image = views
+                .as_ref()
                 .and_then(|v| v.get(d.index as usize).copied())
                 .and_then(|view| s.image_views.get(&view).copied())?;
             let clear_depth = clear_values
@@ -54,9 +69,8 @@ pub extern "C" fn vkCmdBeginRenderPass(
                 load_clear: d.clear,
             })
         });
-        let Some(image) = image else { return };
         if let Some(dev) = s.device_mut() {
-            let recorded = record::cmd_begin_render_pass(dev, cb, image, clear, clears, depth);
+            let recorded = record::cmd_begin_render_pass_multi(dev, cb, &colors, depth);
             dev.latch(cb, recorded);
         }
     });

@@ -27,12 +27,18 @@ use core::ffi::c_void;
 /// color-target format), plus the depth/stencil attachment (when the pass declares one) so the classic
 /// `vkCmdBeginRenderPass` path can thread a real depth buffer — the mirror of the dynamic-rendering
 /// `pDepthAttachment`. Objects the `hl_vulkan` object model does not itself carry live here in the shim.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct RenderPassRec {
-    pub first_attachment_clears: bool,
-    pub color_format_vk: u32,
+    pub colors: Vec<RenderPassColor>,
     /// The depth/stencil attachment's bookkeeping, or `None` for a color-only pass.
     pub depth: Option<RenderPassDepth>,
+}
+
+#[derive(Clone, Copy)]
+pub struct RenderPassColor {
+    pub index: u32,
+    pub format_vk: u32,
+    pub clear: bool,
 }
 
 /// The depth/stencil attachment of a classic `VkRenderPass` (from its `VkAttachmentDescription` table).

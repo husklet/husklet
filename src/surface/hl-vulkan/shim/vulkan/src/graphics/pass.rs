@@ -4,15 +4,7 @@ use super::*;
 // render pass + framebuffer (bring-up bookkeeping resolved at vkCmdBeginRenderPass)
 // ==================================================================================================
 
-/// Whether a raw `VkFormat` is a depth/stencil format — the contiguous `VK_FORMAT_D16_UNORM`(124) …
-/// `VK_FORMAT_D32_SFLOAT_S8_UINT`(130) block (127 = `S8_UINT` is stencil-only, still a depth/stencil
-/// attachment). Used to pick the depth attachment out of a classic render pass's attachment table.
-struct AttachmentFormat;
-impl AttachmentFormat {
-    fn is_depth(f: u32) -> bool {
-        (124..=130).contains(&f)
-    }
-}
+const VK_ATTACHMENT_UNUSED: u32 = u32::MAX;
 
 pub extern "C" fn vkCreateRenderPass(
     _device: *mut c_void,
@@ -23,36 +15,54 @@ pub extern "C" fn vkCreateRenderPass(
     let Some(ci) = (unsafe { (p_create_info as *const VkRenderPassCreateInfo).as_ref() }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    // Record the first color attachment's clear behaviour + format (the bring-up single-target subset), and
-    // scan the attachment table for a depth/stencil attachment so the classic pass threads a real depth buffer.
-    let (clears, fmt, depth) = if ci.p_attachments.is_null() || ci.attachment_count == 0 {
-        (false, 0u32, None)
+    let (colors, depth) = if ci.p_attachments.is_null()
+        || ci.attachment_count == 0
+        || ci.p_subpasses.is_null()
+        || ci.subpass_count == 0
+    {
+        (Vec::new(), None)
     } else {
         let atts =
             unsafe { std::slice::from_raw_parts(ci.p_attachments, ci.attachment_count as usize) };
-        let a0 = &atts[0];
-        let depth = atts
+        let subpass = unsafe { &*(ci.p_subpasses as *const VkSubpassDescription) };
+        let refs = if subpass.p_color_attachments.is_null() {
+            &[][..]
+        } else {
+            unsafe {
+                std::slice::from_raw_parts(
+                    subpass.p_color_attachments,
+                    subpass.color_attachment_count as usize,
+                )
+            }
+        };
+        let colors = refs
             .iter()
-            .enumerate()
-            .find(|(_, a)| AttachmentFormat::is_depth(a.format as u32))
-            .map(|(i, a)| RenderPassDepth {
-                index: i as u32,
+            .filter(|r| r.attachment != VK_ATTACHMENT_UNUSED)
+            .filter_map(|r| {
+                let a = atts.get(r.attachment as usize)?;
+                Some(RenderPassColor {
+                    index: r.attachment,
+                    format_vk: a.format as u32,
+                    clear: a.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR,
+                })
+            })
+            .collect();
+        let depth = unsafe { subpass.p_depth_stencil_attachment.as_ref() }
+            .filter(|r| r.attachment != VK_ATTACHMENT_UNUSED)
+            .and_then(|r| atts.get(r.attachment as usize).map(|a| (r, a)))
+            .map(|(r, a)| RenderPassDepth {
+                index: r.attachment,
                 format_vk: a.format as u32,
                 clear: a.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR,
             });
-        (
-            a0.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR,
-            a0.format as u32,
-            depth,
-        )
+        (colors, depth)
     };
     let handle = StateStore::with(|s| {
         let h = s.device_mut()?.alloc_handle();
         s.render_passes.insert(
             h,
             RenderPassRec {
-                first_attachment_clears: clears,
-                color_format_vk: fmt,
+                colors,
                 depth,
             },
         );
@@ -136,34 +146,54 @@ pub extern "C" fn vkCreateRenderPass2(
     let Some(ci) = (unsafe { (p_create_info as *const VkRenderPassCreateInfo2).as_ref() }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    let (clears, fmt, depth) = if ci.p_attachments.is_null() || ci.attachment_count == 0 {
-        (false, 0u32, None)
+    let (colors, depth) = if ci.p_attachments.is_null()
+        || ci.attachment_count == 0
+        || ci.p_subpasses.is_null()
+        || ci.subpass_count == 0
+    {
+        (Vec::new(), None)
     } else {
         let atts =
             unsafe { std::slice::from_raw_parts(ci.p_attachments, ci.attachment_count as usize) };
-        let a0 = &atts[0];
-        let depth = atts
+        let subpass = unsafe { &*(ci.p_subpasses as *const VkSubpassDescription2) };
+        let refs = if subpass.p_color_attachments.is_null() {
+            &[][..]
+        } else {
+            unsafe {
+                std::slice::from_raw_parts(
+                    subpass.p_color_attachments,
+                    subpass.color_attachment_count as usize,
+                )
+            }
+        };
+        let colors = refs
             .iter()
-            .enumerate()
-            .find(|(_, a)| AttachmentFormat::is_depth(a.format as u32))
-            .map(|(i, a)| RenderPassDepth {
-                index: i as u32,
+            .filter(|r| r.attachment != VK_ATTACHMENT_UNUSED)
+            .filter_map(|r| {
+                let a = atts.get(r.attachment as usize)?;
+                Some(RenderPassColor {
+                    index: r.attachment,
+                    format_vk: a.format as u32,
+                    clear: a.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR,
+                })
+            })
+            .collect();
+        let depth = unsafe { subpass.p_depth_stencil_attachment.as_ref() }
+            .filter(|r| r.attachment != VK_ATTACHMENT_UNUSED)
+            .and_then(|r| atts.get(r.attachment as usize).map(|a| (r, a)))
+            .map(|(r, a)| RenderPassDepth {
+                index: r.attachment,
                 format_vk: a.format as u32,
                 clear: a.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR,
             });
-        (
-            a0.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR,
-            a0.format as u32,
-            depth,
-        )
+        (colors, depth)
     };
     let handle = StateStore::with(|s| {
         let h = s.device_mut()?.alloc_handle();
         s.render_passes.insert(
             h,
             RenderPassRec {
-                first_attachment_clears: clears,
-                color_format_vk: fmt,
+                colors,
                 depth,
             },
         );

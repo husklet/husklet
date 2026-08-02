@@ -557,8 +557,13 @@ pub extern "C" fn vkCreateGraphicsPipelines(
             StateStore::with(|s| {
                 s.render_passes
                     .get(&ci.render_pass)
-                    .and_then(|r| Format(r.color_format_vk).wire())
-                    .map(|format| vec![format])
+                    .map(|r| {
+                        r.colors
+                            .iter()
+                            .map(|color| Format(color.format_vk).wire())
+                            .collect::<Option<Vec<_>>>()
+                    })
+                    .flatten()
             })
         };
         let Some(color_formats) = color_formats else {

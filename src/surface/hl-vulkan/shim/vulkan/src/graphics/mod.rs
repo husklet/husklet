@@ -17,7 +17,7 @@ use hl_vulkan::service::record::{RenderingColorAttachment, RenderingDepthAttachm
 use hl_vulkan::service::{create, present, record};
 use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
 
-use crate::state::{RenderPassDepth, RenderPassRec, StateStore};
+use crate::state::{RenderPassColor, RenderPassDepth, RenderPassRec, StateStore};
 use crate::types::*;
 
 mod draw;

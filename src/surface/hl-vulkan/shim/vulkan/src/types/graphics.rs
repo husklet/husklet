@@ -183,6 +183,26 @@ pub struct VkAttachmentDescription {
 }
 
 #[repr(C)]
+pub struct VkAttachmentReference {
+    pub attachment: u32,
+    pub layout: i32,
+}
+
+#[repr(C)]
+pub struct VkSubpassDescription {
+    pub flags: VkFlags,
+    pub pipeline_bind_point: i32,
+    pub input_attachment_count: u32,
+    pub p_input_attachments: *const VkAttachmentReference,
+    pub color_attachment_count: u32,
+    pub p_color_attachments: *const VkAttachmentReference,
+    pub p_resolve_attachments: *const VkAttachmentReference,
+    pub p_depth_stencil_attachment: *const VkAttachmentReference,
+    pub preserve_attachment_count: u32,
+    pub p_preserve_attachments: *const u32,
+}
+
+#[repr(C)]
 pub struct VkRenderPassCreateInfo {
     pub s_type: i32,
     pub p_next: *const c_void,

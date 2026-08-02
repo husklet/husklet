@@ -118,6 +118,32 @@ pub struct VkAttachmentDescription2 {
     pub final_layout: i32,
 }
 
+#[repr(C)]
+pub struct VkAttachmentReference2 {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub attachment: u32,
+    pub layout: i32,
+    pub aspect_mask: VkFlags,
+}
+
+#[repr(C)]
+pub struct VkSubpassDescription2 {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub pipeline_bind_point: i32,
+    pub view_mask: u32,
+    pub input_attachment_count: u32,
+    pub p_input_attachments: *const VkAttachmentReference2,
+    pub color_attachment_count: u32,
+    pub p_color_attachments: *const VkAttachmentReference2,
+    pub p_resolve_attachments: *const VkAttachmentReference2,
+    pub p_depth_stencil_attachment: *const VkAttachmentReference2,
+    pub preserve_attachment_count: u32,
+    pub p_preserve_attachments: *const u32,
+}
+
 /// `VkRenderPassCreateInfo2` — the `vkCreateRenderPass2` argument (only the attachment table is read for
 /// the bring-up single-target clear/format bookkeeping).
 #[repr(C)]

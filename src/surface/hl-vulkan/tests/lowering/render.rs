@@ -143,6 +143,66 @@ fn buffer_bindings_before_render_pass_are_replayed_inside_it() {
 }
 
 #[test]
+fn classic_render_pass_preserves_multiple_color_attachments() {
+    use hl_vulkan::service::record::RenderingColorAttachment;
+
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let first = create::create_image(
+        &mut d,
+        &mut sink,
+        8,
+        8,
+        vk_format::R8G8B8A8_UNORM,
+        vk_image_usage::COLOR_ATTACHMENT,
+        1,
+    )
+    .unwrap();
+    let second = create::create_image(
+        &mut d,
+        &mut sink,
+        8,
+        8,
+        vk_format::R8G8B8A8_UINT,
+        vk_image_usage::COLOR_ATTACHMENT,
+        1,
+    )
+    .unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    record::cmd_begin_render_pass_multi(
+        &mut d,
+        cb,
+        &[
+            RenderingColorAttachment {
+                image: first,
+                clear: [0.1, 0.2, 0.3, 1.0],
+                load_clear: true,
+                store: true,
+            },
+            RenderingColorAttachment {
+                image: second,
+                clear: [1.0, 2.0, 3.0, 4.0],
+                load_clear: false,
+                store: true,
+            },
+        ],
+        None,
+    )
+    .unwrap();
+
+    let Enc::BeginRenderPass { color, depth: None } = &d.command_buffers.get(&cb).unwrap().enc[0]
+    else {
+        panic!("expected a color render pass");
+    };
+    assert_eq!(color.len(), 2);
+    assert_eq!(color[0].texture, img_ir(&d, first));
+    assert_eq!(color[0].load, LoadOp::Clear);
+    assert_eq!(color[1].texture, img_ir(&d, second));
+    assert_eq!(color[1].load, LoadOp::Load);
+}
+
+#[test]
 fn begin_rendering_lowers_to_begin_render_pass_with_clear_attachment() {
     // vkCmdBeginRendering (VK_KHR_dynamic_rendering) lowers to the SAME Enc::BeginRenderPass a classic
     // render pass does — the color target + CLEAR come from the inline VkRenderingInfo, with no
