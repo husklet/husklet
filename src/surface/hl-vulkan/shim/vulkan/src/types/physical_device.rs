@@ -376,6 +376,7 @@ pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES: i32 = 52;
 /// `VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES` (core value 54).
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES: i32 = 54;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PROPERTIES: i32 = 1_000_053_002;
+pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_POINT_CLIPPING_PROPERTIES: i32 = 1_000_117_000;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_PROPERTIES: i32 = 1_000_145_002;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_PROPERTIES: i32 = 1_000_207_001;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INLINE_UNIFORM_BLOCK_PROPERTIES: i32 = 1_000_138_001;
@@ -458,6 +459,13 @@ pub struct VkPhysicalDeviceMultiviewProperties {
     pub p_next: *mut c_void,
     pub max_multiview_view_count: u32,
     pub max_multiview_instance_index: u32,
+}
+
+#[repr(C)]
+pub struct VkPhysicalDevicePointClippingProperties {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub point_clipping_behavior: i32,
 }
 
 #[repr(C)]

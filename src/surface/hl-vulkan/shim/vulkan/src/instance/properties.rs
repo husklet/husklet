@@ -11,6 +11,7 @@ const SUBGROUP_FEATURE_BASIC: VkFlags = 0x0000_0001;
 const MAX_MULTIVIEW_VIEW_COUNT: u32 = 6;
 const MAX_MULTIVIEW_INSTANCE_INDEX: u32 = (1 << 27) - 1;
 const MAX_PER_SET_DESCRIPTORS: u32 = 1_000_000;
+const POINT_CLIPPING_BEHAVIOR_ALL_CLIP_PLANES: i32 = 0;
 const PROTECTED_NO_FAULT: VkBool32 = VK_FALSE;
 const MAX_TIMELINE_SEMAPHORE_VALUE_DIFFERENCE: u64 = u64::MAX;
 
@@ -94,6 +95,12 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
                 multiview.max_multiview_view_count = MAX_MULTIVIEW_VIEW_COUNT;
                 multiview.max_multiview_instance_index = MAX_MULTIVIEW_INSTANCE_INDEX;
             }
+        } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_POINT_CLIPPING_PROPERTIES {
+            if let Some(point) =
+                unsafe { (node as *mut VkPhysicalDevicePointClippingProperties).as_mut() }
+            {
+                point.point_clipping_behavior = POINT_CLIPPING_BEHAVIOR_ALL_CLIP_PLANES;
+            }
         } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_PROPERTIES {
             if let Some(protected) =
                 unsafe { (node as *mut VkPhysicalDeviceProtectedMemoryProperties).as_mut() }
@@ -126,6 +133,7 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
                 v11.subgroup_supported_stages = SHADER_STAGE_COMPUTE | SHADER_STAGE_FRAGMENT;
                 v11.subgroup_supported_operations = SUBGROUP_FEATURE_BASIC;
                 v11.subgroup_quad_operations_in_all_stages = VK_FALSE;
+                v11.point_clipping_behavior = POINT_CLIPPING_BEHAVIOR_ALL_CLIP_PLANES;
                 v11.max_multiview_view_count = MAX_MULTIVIEW_VIEW_COUNT;
                 v11.max_multiview_instance_index = MAX_MULTIVIEW_INSTANCE_INDEX;
                 v11.protected_no_fault = PROTECTED_NO_FAULT;
@@ -464,10 +472,17 @@ mod tests {
             1_000_145_002
         );
         assert_eq!(
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_POINT_CLIPPING_PROPERTIES,
+            1_000_117_000
+        );
+        assert_eq!(
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_PROPERTIES,
             1_000_207_001
         );
 
+        let mut point: VkPhysicalDevicePointClippingProperties = unsafe { core::mem::zeroed() };
+        point.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_POINT_CLIPPING_PROPERTIES;
+        point.point_clipping_behavior = 0x5a5a_5a5a;
         let mut protected: VkPhysicalDeviceProtectedMemoryProperties =
             unsafe { core::mem::zeroed() };
         protected.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_PROPERTIES;
@@ -480,9 +495,10 @@ mod tests {
 
         let mut v11: VkPhysicalDeviceVulkan11Properties = unsafe { core::mem::zeroed() };
         v11.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES;
-        v11.p_next = &mut protected as *mut _ as *mut c_void;
+        v11.p_next = &mut point as *mut _ as *mut c_void;
         let mut v12: VkPhysicalDeviceVulkan12Properties = unsafe { core::mem::zeroed() };
         v12.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES;
+        point.p_next = &mut protected as *mut _ as *mut c_void;
         timeline.p_next = &mut v12 as *mut _ as *mut c_void;
         let mut properties: VkPhysicalDeviceProperties2 = unsafe { core::mem::zeroed() };
         properties.p_next = &mut v11 as *mut _ as *mut c_void;
@@ -492,6 +508,11 @@ mod tests {
             &mut properties as *mut _ as *mut c_void,
         );
 
+        assert_eq!(point.point_clipping_behavior, v11.point_clipping_behavior);
+        assert_eq!(
+            point.point_clipping_behavior,
+            POINT_CLIPPING_BEHAVIOR_ALL_CLIP_PLANES
+        );
         assert_eq!(protected.protected_no_fault, v11.protected_no_fault);
         assert_eq!(protected.protected_no_fault, VK_FALSE);
         assert_eq!(
@@ -499,10 +520,16 @@ mod tests {
             v12.max_timeline_semaphore_value_difference
         );
         assert_eq!(timeline.max_timeline_semaphore_value_difference, u64::MAX);
+        assert_eq!(core::mem::size_of_val(&point), 24);
         assert_eq!(core::mem::size_of_val(&protected), 24);
         assert_eq!(core::mem::size_of_val(&timeline), 24);
+        let point_base = &point as *const _ as usize;
         let protected_base = &protected as *const _ as usize;
         let timeline_base = &timeline as *const _ as usize;
+        assert_eq!(
+            &point.point_clipping_behavior as *const _ as usize - point_base,
+            16
+        );
         assert_eq!(
             &protected.protected_no_fault as *const _ as usize - protected_base,
             16
