@@ -2,9 +2,7 @@
 
 use crate::model::device::IrIds;
 use crate::model::instance::Instance;
-use crate::model::memory::{
-    vk_image_usage, BufferRec, BufferUsage, Format, ImageRec, ImageUsage, MemRec, SamplerRec,
-};
+use crate::model::memory::{BufferRec, BufferUsage, Format, ImageRec, ImageUsage, MemRec, SamplerRec};
 use crate::model::queue::FenceRec;
 use crate::*;
 use hl_gpu::protocol::model::descriptor::{BufferDesc, SamplerDesc};
@@ -430,17 +428,6 @@ pub fn create_image_geometry(
     if dim == TextureDim::D1 && height != 1 {
         return Err(GpuError::Invalid(
             "vkCreateImage: 1D images require extent.height == 1",
-        ));
-    }
-    // Metal exposes mipmapped / arrayed Vulkan 1D images through a one-row 2D backing. The executor can
-    // serve that backing for transfers, but sampled/storage/attachment access also needs a shader-side
-    // 1D→2D coordinate rewrite which is not yet representable in the neutral IR. Refuse those mixed roles
-    // here instead of creating a texture that will fail only when bound.
-    let enhanced_1d = dim == TextureDim::D1 && (mip_levels > 1 || layers > 1);
-    let transfer_usage = vk_image_usage::TRANSFER_SRC | vk_image_usage::TRANSFER_DST;
-    if enhanced_1d && vk_usage & !transfer_usage != 0 {
-        return Err(GpuError::Unsupported(
-            "vkCreateImage: mipmapped or arrayed 1D images currently support transfer usage only",
         ));
     }
     // A multisampled image is a render target this backend draws into and resolves out of: it carries no

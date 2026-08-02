@@ -30,6 +30,7 @@ mod descriptor;
 mod diagnostic;
 mod module;
 mod nonfinite;
+mod oned;
 mod output;
 mod texel_buffer;
 
@@ -123,7 +124,10 @@ impl Spirv {
         layout: Option<&hl_gpu::protocol::model::descriptor::PipelineLayout>,
         sample_shading: bool,
         texel_specialization: Option<&[crate::texel_buffer::Specialization]>,
-        fragment_outputs: Option<(&str, &[hl_gpu::protocol::model::descriptor::ColorTargetState])>,
+        fragment_outputs: Option<(
+            &str,
+            &[hl_gpu::protocol::model::descriptor::ColorTargetState],
+        )>,
     ) -> Result<(String, crate::reflect::ModuleUsage)> {
         if words.first().copied() != Some(SPIRV_MAGIC) {
             return Err(GpuError::Invalid("wgpu: shader payload is not SPIR-V"));
@@ -226,6 +230,7 @@ impl Spirv {
             descriptor::ScalarArrays::lower(&mut module, layout)?;
         }
         texel_buffer::TexelBuffers::lower(&mut module, texel_specialization)?;
+        oned::Images::lower(&mut module)?;
         if let Some((entry, targets)) = fragment_outputs {
             output::FragmentOutputs::adapt(&mut module, entry, targets)?;
         }
@@ -337,6 +342,7 @@ pub fn glsl_to_wgsl_reflect(
     // marked each `index>=1` fragment output with `BLEND_SRC1_SUFFIX`. Flip `second_blend_source` on those
     // outputs (and strip the marker) so the two same-location outputs validate as the dual-source pair.
     shader.fix_dual_source_blend();
+    oned::Images::lower(shader.module)?;
     viewport::Shader::prepare(shader.module)?;
     let reflected = crate::reflect::ModuleUsage::from_module(shader.module);
     Ok((shader.wgsl()?, reflected))

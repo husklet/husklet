@@ -1,8 +1,7 @@
 //! DEMO — 1D texture texel selection: sample a 1D texture and assert the selected texel.
 //!
-//! A `TextureDim::D1` must materialize as a real wgpu 1D texture (`D1` view), not a collapsed 2D image — a
-//! `sampler1D` binding built from the shader's auto layout expects a `D1` view and rejects anything else at
-//! bind time. A 2-texel 1D texture gets two distinct colors; sampling `u = 0.25` lands on texel 0 and
+//! A mipmapped `TextureDim::D1` materializes as a one-row 2D texture, while shader lowering preserves
+//! Vulkan's scalar 1D sampling contract. A 2-texel 1D texture gets two distinct colors; sampling `u = 0.25` lands on texel 0 and
 //! `u = 0.75` on texel 1 (NEAREST), so each readback must equal that texel's exact color.
 
 mod gpu_harness;
@@ -38,6 +37,34 @@ layout(location = 0) out vec4 o;
 void main() { o = texture(sampler1D(t, s), u.c.x); }
 "#;
 
+fn glsl_to_spirv(src: &str, stage: naga::ShaderStage, entry: &str) -> Vec<u32> {
+    let mut frontend = naga::front::glsl::Frontend::default();
+    let mut module = frontend
+        .parse(&naga::front::glsl::Options::from(stage), src)
+        .expect("seed GLSL parses");
+    module.entry_points[0].name = entry.into();
+    let info = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .expect("seed GLSL validates");
+    naga::back::spv::write_vec(&module, &info, &naga::back::spv::Options::default(), None)
+        .expect("emit SPIR-V")
+}
+
+fn spirv_instructions(words: &[u32]) -> impl Iterator<Item = (u16, &[u32])> {
+    let mut offset = 5;
+    std::iter::from_fn(move || {
+        let first = *words.get(offset)?;
+        let count = (first >> 16) as usize;
+        let opcode = first as u16;
+        let operands = words.get(offset + 1..offset + count)?;
+        offset += count;
+        Some((opcode, operands))
+    })
+}
+
 fn nearest() -> SamplerDesc {
     SamplerDesc {
         min_filter: Filter::Nearest,
@@ -56,7 +83,7 @@ fn tex1d(width: u32, usage: u32) -> TextureDesc {
         width,
         height: 1,
         depth: 1,
-        mip_levels: 1,
+        mip_levels: 2,
         sample_count: 1,
         dim: TextureDim::D1,
         format: TextureFormat::Rgba8Unorm,
@@ -69,6 +96,16 @@ fn tex1d(width: u32, usage: u32) -> TextureDesc {
 fn sample_1d(exec: &mut WgpuExecutor, coord: f32) -> [u8; 4] {
     let mut s = new_session(exec);
     let row: Vec<u8> = TEXELS.iter().flatten().copied().collect(); // 2 texels
+    let fragment = glsl_to_spirv(FS, naga::ShaderStage::Fragment, "fmain");
+    assert!(
+        spirv_instructions(&fragment)
+            .any(|(opcode, operands)| opcode == 25 && operands.get(2) == Some(&0)),
+        "control must contain OpTypeImage Dim1D"
+    );
+    assert!(
+        spirv_instructions(&fragment).any(|(opcode, _)| matches!(opcode, 87 | 88)),
+        "control must execute OpImageSampleImplicitLod or OpImageSampleExplicitLod"
+    );
 
     hl_gpu::runtime::submit(
         &mut s,
@@ -116,8 +153,8 @@ fn sample_1d(exec: &mut WgpuExecutor, coord: f32) -> [u8; 4] {
             },
             Cmd::CreateShader {
                 id: 2,
-                kind: ShaderPayloadKind::Glsl,
-                spirv: glsl(glsl_stage::FRAGMENT, "fmain", FS),
+                kind: ShaderPayloadKind::SpirV,
+                spirv: fragment,
             },
             Cmd::CreateSampler(1, nearest()),
             Cmd::CreateRenderPipeline(
