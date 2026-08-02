@@ -218,7 +218,15 @@ impl Programs {
         if name == 0 {
             return false;
         }
-        self.programs.remove(&name).is_some()
+        let Some(program) = self.programs.remove(&name) else {
+            return false;
+        };
+        for shader in [program.vs, program.fs, program.cs] {
+            if self.shader_flagged(shader) && !self.shader_attached(shader) {
+                self.shaders.remove(&shader);
+            }
+        }
+        true
     }
 
     /// Set `GL_DELETE_STATUS` on a program, leaving the object live (ES 3.0 §7.3). Returns `false` for an

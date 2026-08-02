@@ -250,6 +250,28 @@ fn deleting_an_attached_shader_keeps_it_attached_until_it_is_detached() {
 }
 
 #[test]
+fn deleting_a_program_reaps_its_pending_deleted_shaders() {
+    let mut context = ctx();
+    let (program, vertex, fragment) = linked(&mut context);
+
+    record::delete_shader(&mut context, vertex);
+    record::delete_shader(&mut context, fragment);
+    assert_eq!(
+        query::get_shaderiv(&context, vertex, GL_DELETE_STATUS),
+        GL_TRUE as i32
+    );
+    assert_eq!(
+        query::get_shaderiv(&context, fragment, GL_DELETE_STATUS),
+        GL_TRUE as i32
+    );
+
+    record::delete_program(&mut context, program);
+
+    assert!(!context.programs.shader_exists(vertex));
+    assert!(!context.programs.shader_exists(fragment));
+}
+
+#[test]
 fn a_program_with_only_one_stage_attached_fails_to_link() {
     let mut context = ctx();
     let fragment = record::create_shader(&mut context, GL_FRAGMENT_SHADER);
