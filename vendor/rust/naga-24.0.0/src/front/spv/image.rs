@@ -261,13 +261,17 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn parse_image_atomic(
         &mut self,
+        result_type_id: spirv::Word,
+        result_id: spirv::Word,
+        block_id: spirv::Word,
         pointer_id: spirv::Word,
         value_id: spirv::Word,
+        compare_id: Option<spirv::Word>,
         ctx: &mut super::BlockContext,
         emitter: &mut crate::proc::Emitter,
         block: &mut crate::Block,
         body_idx: usize,
-        fun: crate::AtomicFunction,
+        mut fun: crate::AtomicFunction,
     ) -> Result<(), Error> {
         let pointer = self.lookup_image_texel_pointer.lookup(pointer_id)?.clone();
         let image_lexp = self.lookup_expression.lookup(pointer.image_id)?;
@@ -330,7 +334,37 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
         };
         let value_lexp = self.lookup_expression.lookup(value_id)?;
         let value = self.get_expr_handle(value_id, value_lexp, ctx, emitter, block, body_idx);
+        if let Some(compare_id) = compare_id {
+            let compare_lexp = self.lookup_expression.lookup(compare_id)?;
+            let compare = self.get_expr_handle(
+                compare_id,
+                compare_lexp,
+                ctx,
+                emitter,
+                block,
+                body_idx,
+            );
+            fun = crate::AtomicFunction::Exchange {
+                compare: Some(compare),
+            };
+        }
         block.extend(emitter.finish(ctx.expressions));
+        let result_ty = self.lookup_type.lookup(result_type_id)?.handle;
+        let result = ctx.expressions.append(
+            crate::Expression::AtomicResult {
+                ty: result_ty,
+                comparison: false,
+            },
+            crate::Span::default(),
+        );
+        self.lookup_expression.insert(
+            result_id,
+            LookupExpression {
+                handle: result,
+                type_id: result_type_id,
+                block_id,
+            },
+        );
         block.push(
             crate::Statement::ImageAtomic {
                 image,
@@ -338,6 +372,7 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
                 array_index,
                 fun,
                 value,
+                result: Some(result),
             },
             crate::Span::default(),
         );

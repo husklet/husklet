@@ -2068,6 +2068,12 @@ pub enum Statement {
 
         /// The value with which to perform the atomic operation.
         value: Handle<Expression>,
+
+        /// [`AtomicResult`] expression representing the value held by the texel before the operation.
+        /// This may be `None` when the SPIR-V result id has no uses.
+        ///
+        /// [`AtomicResult`]: Expression::AtomicResult
+        result: Option<Handle<Expression>>,
     },
     /// Load uniformly from a uniform pointer in the workgroup address space.
     ///

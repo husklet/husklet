@@ -729,9 +729,11 @@ fn spirv_compute_atomically_adds_r32uint_storage_texture() {
     let source = r#"
         @group(0) @binding(0)
         var image: texture_storage_2d<r32uint, atomic>;
+        @group(0) @binding(1) var<storage, read_write> output: array<u32>;
         @compute @workgroup_size(1)
         fn cs_main() {
-            textureAtomicAdd(image, vec2<i32>(0, 0), 7u);
+            output[0] = textureAtomicAdd(image, vec2<i32>(0, 0), 7u);
+            output[1] = textureAtomicCompareExchangeWeak(image, vec2<i32>(0, 0), 7u, 11u);
         }
     "#;
     let shader = wgsl_to_spirv(source);
@@ -756,12 +758,20 @@ fn spirv_compute_atomically_adds_r32uint_storage_texture() {
                     label: String::new(),
                 },
                 PipelineLayout {
-                    bindings: vec![PipelineBinding {
-                        group: 0,
-                        binding: 0,
-                        count: 1,
-                        kind: PipelineBindingKind::StorageTexture,
-                    }],
+                    bindings: vec![
+                        PipelineBinding {
+                            group: 0,
+                            binding: 0,
+                            count: 1,
+                            kind: PipelineBindingKind::StorageTexture,
+                        },
+                        PipelineBinding {
+                            group: 0,
+                            binding: 1,
+                            count: 1,
+                            kind: PipelineBindingKind::StorageBuffer,
+                        },
+                    ],
                 },
             ),
             Cmd::CreateTexture(
@@ -778,14 +788,25 @@ fn spirv_compute_atomically_adds_r32uint_storage_texture() {
                     label: "atomic-r32uint".into(),
                 },
             ),
+            Cmd::CreateBuffer(1, buf(8, buffer_usage::STORAGE | buffer_usage::COPY_SRC)),
             Cmd::CreateBindGroup(
                 1,
                 BindGroupDesc {
                     set: 0,
-                    entries: vec![BindEntry {
-                        binding: 0,
-                        resource: BindResource::Texture { id: 1 },
-                    }],
+                    entries: vec![
+                        BindEntry {
+                            binding: 0,
+                            resource: BindResource::Texture { id: 1 },
+                        },
+                        BindEntry {
+                            binding: 1,
+                            resource: BindResource::Buffer {
+                                id: 1,
+                                offset: 0,
+                                size: 8,
+                            },
+                        },
+                    ],
                 },
             ),
             Cmd::Submit(CommandBuffer {
@@ -800,7 +821,8 @@ fn spirv_compute_atomically_adds_r32uint_storage_texture() {
             }),
         ],
     );
-    assert_eq!(g.read_texture(&s.resources, 1).unwrap(), 7u32.to_le_bytes());
+    assert_eq!(read_u32s(&g, &s, 1, 2), vec![0, 7]);
+    assert_eq!(g.read_texture(&s.resources, 1).unwrap(), 11u32.to_le_bytes());
 }
 
 #[test]

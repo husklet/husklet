@@ -409,12 +409,14 @@ impl NonFinite {
                     array_index,
                     fun,
                     value: operand,
+                    result,
                 } => {
                     *image = at(image);
                     *coordinate = at(coordinate);
                     *array_index = maybe(array_index);
                     *fun = Self::remap_atomic(fun, value);
                     *operand = at(operand);
+                    *result = maybe(result);
                 }
                 Statement::WorkGroupUniformLoad { pointer, result } => {
                     *pointer = at(pointer);

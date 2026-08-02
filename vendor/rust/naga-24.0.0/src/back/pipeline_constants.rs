@@ -742,6 +742,7 @@ fn adjust_stmt(new_pos: &HandleVec<Expression, Handle<Expression>>, stmt: &mut S
             ref mut array_index,
             fun: _,
             ref mut value,
+            ref mut result,
         } => {
             adjust(image);
             adjust(coordinate);
@@ -749,6 +750,9 @@ fn adjust_stmt(new_pos: &HandleVec<Expression, Handle<Expression>>, stmt: &mut S
                 adjust(array_index);
             }
             adjust(value);
+            if let Some(ref mut result) = *result {
+                adjust(result);
+            }
         }
         Statement::WorkGroupUniformLoad {
             ref mut pointer,

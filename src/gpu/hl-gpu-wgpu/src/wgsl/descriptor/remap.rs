@@ -258,12 +258,14 @@ pub(in crate::wgsl) fn statement(
             coordinate,
             array_index,
             value,
+            result,
             ..
         } => {
             remap(image);
             remap(coordinate);
             array_index.iter_mut().for_each(remap);
             remap(value);
+            result.iter_mut().for_each(remap);
         }
         Statement::WorkGroupUniformLoad { pointer, result } => {
             remap(pointer);

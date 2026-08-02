@@ -1199,6 +1199,7 @@ impl super::Validator {
                     array_index,
                     fun,
                     value,
+                    result,
                 } => {
                     let var = match *context.get_expression(image) {
                         crate::Expression::GlobalVariable(var_handle) => {
@@ -1330,7 +1331,8 @@ impl super::Validator {
                                                 | crate::AtomicFunction::ExclusiveOr
                                                 | crate::AtomicFunction::InclusiveOr
                                                 | crate::AtomicFunction::Min
-                                                | crate::AtomicFunction::Max => {}
+                                                | crate::AtomicFunction::Max
+                                                | crate::AtomicFunction::Exchange { .. } => {}
                                                 _ => {
                                                     return Err(
                                                         FunctionError::InvalidImageAtomicFunction(
@@ -1374,6 +1376,32 @@ impl super::Validator {
                     if *context.resolve_type(value, &self.valid_expression_set)? != value_ty {
                         return Err(FunctionError::InvalidImageAtomicValue(value)
                             .with_span_handle(value, context.expressions));
+                    }
+                    if let crate::AtomicFunction::Exchange {
+                        compare: Some(compare),
+                    } = fun
+                    {
+                        if *context.resolve_type(compare, &self.valid_expression_set)? != value_ty {
+                            return Err(FunctionError::InvalidImageAtomicValue(compare)
+                                .with_span_handle(compare, context.expressions));
+                        }
+                    }
+                    if let Some(result) = result {
+                        let crate::Expression::AtomicResult {
+                            ty: result_ty,
+                            comparison: false,
+                        } = context.expressions[result]
+                        else {
+                            return Err(FunctionError::InvalidImageAtomicValue(result)
+                                .with_span_handle(result, context.expressions));
+                        };
+                        if context.types[result_ty].inner != value_ty
+                            || !self.needs_visit.remove(result)
+                        {
+                            return Err(FunctionError::InvalidImageAtomicValue(result)
+                                .with_span_handle(result, context.expressions));
+                        }
+                        self.emit_expression(result, context)?;
                     }
                 }
                 S::WorkGroupUniformLoad { pointer, result } => {

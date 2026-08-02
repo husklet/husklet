@@ -1212,11 +1212,57 @@ impl<W: Write> Writer<W> {
         address: &TexelAddress,
         fun: crate::AtomicFunction,
         value: Handle<crate::Expression>,
+        result: Option<Handle<crate::Expression>>,
         context: &StatementContext,
     ) -> BackendResult {
+        if let crate::AtomicFunction::Exchange {
+            compare: Some(compare),
+        } = fun
+        {
+            let expected = self.namer.call("image_atomic_expected");
+            let vector_type = match context.expression.resolve_type(value).scalar_kind() {
+                Some(crate::ScalarKind::Uint) => "metal::uint4",
+                Some(crate::ScalarKind::Sint) => "metal::int4",
+                _ => {
+                    return Err(Error::FeatureNotImplemented(
+                        "non-integer image compare-exchange".to_string(),
+                    ))
+                }
+            };
+            write!(self.out, "{level}{vector_type} {expected} = {vector_type}(")?;
+            self.put_expression(compare, &context.expression, true)?;
+            writeln!(self.out, ");")?;
+            write!(self.out, "{level}")?;
+            self.put_expression(image, &context.expression, false)?;
+            write!(self.out, ".atomic_compare_exchange_weak(")?;
+            self.put_cast_to_uint_scalar_or_vector(address.coordinate, &context.expression)?;
+            if let Some(array_index) = address.array_index {
+                write!(self.out, ", ")?;
+                self.put_expression(array_index, &context.expression, true)?;
+            }
+            write!(self.out, ", &{expected}, {vector_type}(")?;
+            self.put_expression(value, &context.expression, true)?;
+            writeln!(self.out, "));")?;
+            if let Some(result) = result {
+                write!(self.out, "{level}")?;
+                let name = self.namer.call("");
+                self.start_baking_expression(result, &context.expression, &name)?;
+                self.named_expressions.insert(result, name);
+                writeln!(self.out, "{expected}.x;")?;
+            }
+            return Ok(());
+        }
         write!(self.out, "{level}")?;
+        let has_result = result.is_some();
+        if let Some(result) = result {
+            let name = self.namer.call("");
+            self.start_baking_expression(result, &context.expression, &name)?;
+            self.named_expressions.insert(result, name);
+        }
         self.put_expression(image, &context.expression, false)?;
-        let op = if context.expression.resolve_type(value).scalar_width() == Some(8) {
+        let op = if matches!(fun, crate::AtomicFunction::Exchange { compare: Some(_) }) {
+            "compare_exchange_weak"
+        } else if context.expression.resolve_type(value).scalar_width() == Some(8) {
             fun.to_msl_64_bit()?
         } else {
             fun.to_msl()
@@ -1224,9 +1270,21 @@ impl<W: Write> Writer<W> {
         write!(self.out, ".atomic_{}(", op)?;
         // coordinates in IR are int, but Metal expects uint
         self.put_cast_to_uint_scalar_or_vector(address.coordinate, &context.expression)?;
+        if let Some(array_index) = address.array_index {
+            write!(self.out, ", ")?;
+            self.put_expression(array_index, &context.expression, true)?;
+        }
+        if let crate::AtomicFunction::Exchange { compare: Some(compare) } = fun {
+            write!(self.out, ", ")?;
+            self.put_expression(compare, &context.expression, true)?;
+        }
         write!(self.out, ", ")?;
         self.put_expression(value, &context.expression, true)?;
-        writeln!(self.out, ");")?;
+        write!(self.out, ")")?;
+        if has_result {
+            write!(self.out, ".x")?;
+        }
+        writeln!(self.out, ";")?;
 
         Ok(())
     }
@@ -3341,6 +3399,7 @@ impl<W: Write> Writer<W> {
                     array_index,
                     fun,
                     value,
+                    result,
                 } => {
                     let address = TexelAddress {
                         coordinate,
@@ -3348,7 +3407,7 @@ impl<W: Write> Writer<W> {
                         sample: None,
                         level: None,
                     };
-                    self.put_image_atomic(level, image, &address, fun, value, context)?
+                    self.put_image_atomic(level, image, &address, fun, value, result, context)?
                 }
                 crate::Statement::WorkGroupUniformLoad { pointer, result } => {
                     self.write_barrier(crate::Barrier::WORK_GROUP, level)?;
