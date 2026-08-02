@@ -260,6 +260,38 @@ pub fn read_mapped(
     Ok(())
 }
 
+/// Refresh one GPU-written buffer into its already-mapped HOST_COHERENT allocation.
+pub fn refresh_mapped_buffer(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    buffer: VkBuffer,
+) -> Result<()> {
+    let Some((ir_id, size, memory, bound_offset)) = dev.buffers.get(&buffer).and_then(|buffer| {
+        Some((
+            buffer.ir_id,
+            buffer.size,
+            buffer.bound_mem?,
+            buffer.bound_offset,
+        ))
+    }) else {
+        return Ok(());
+    };
+    let Some(mapped) = dev.memories.get(&memory).map(|memory| memory.mapped) else {
+        return Ok(());
+    };
+    if !mapped {
+        return Ok(());
+    }
+    let bytes = sink.read_buffer(BufferId(ir_id), 0, size as usize)?;
+    let memory = dev.memories.get_mut(&memory).expect("memory validated above");
+    let start = bound_offset as usize;
+    let len = bytes
+        .len()
+        .min(memory.data.len().saturating_sub(start));
+    memory.data[start..start + len].copy_from_slice(&bytes[..len]);
+    Ok(())
+}
+
 /// `vkUnmapMemory` — clear the mapped flag, but CAPTURE the still-mapped bytes as a pending host→device
 /// upload so the app's writes survive the unmap. Without this, a real app doing map → write → UNMAP
 /// (staging before submit) would silently drop its upload: the still-mapped submit flush no longer sees

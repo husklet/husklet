@@ -1,6 +1,11 @@
 use super::*;
 
-type RecordedCommands = (Vec<Enc>, Vec<(u32, u64, Vec<u8>)>, Vec<DeferredOp>);
+type RecordedCommands = (
+    Vec<Enc>,
+    Vec<(u32, u64, Vec<u8>)>,
+    Vec<DeferredOp>,
+    Vec<VkBuffer>,
+);
 
 /// Replay executable secondary command buffers into a recording primary in submission order.
 pub fn cmd_execute_commands(
@@ -29,15 +34,21 @@ pub fn cmd_execute_commands(
                 recording.enc.clone(),
                 recording.buffer_writes.clone(),
                 recording.deferred.clone(),
+                recording.gpu_written_buffers.clone(),
             )
         })
         .collect();
 
     let primary = dev.require_recording(primary)?;
-    for (encoder, writes, deferred) in recordings {
+    for (encoder, writes, deferred, gpu_written_buffers) in recordings {
         primary.enc.extend(encoder);
         primary.buffer_writes.extend(writes);
         primary.deferred.extend(deferred);
+        for buffer in gpu_written_buffers {
+            if !primary.gpu_written_buffers.contains(&buffer) {
+                primary.gpu_written_buffers.push(buffer);
+            }
+        }
     }
     Ok(())
 }

@@ -7,7 +7,7 @@
 
 use super::pipeline::PipelineKind;
 use super::sync::DeferredOp;
-use crate::VkQueryPool;
+use crate::{VkBuffer, VkQueryPool};
 use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::descriptor::{ColorAttachment, DepthAttachment};
 use hl_gpu::protocol::model::enums::IndexFormat;
@@ -248,6 +248,10 @@ pub struct CmdBufRec {
     /// as `Cmd::WriteBuffer`s at the start of the owning `vkQueueSubmit`. Kept out of the `Enc` encoder
     /// (there is no encoder-level write op) exactly as `hl-shim-vk` does.
     pub buffer_writes: Vec<(u32, u64, Vec<u8>)>,
+    /// Vulkan buffers written by GPU encoder commands. Host-coherent mapped allocations backing these
+    /// buffers are refreshed after the synchronous submit so an already-mapped CPU pointer observes
+    /// device writes without requiring a second `vkMapMemory` or an invalidate call.
+    pub gpu_written_buffers: Vec<VkBuffer>,
     /// Device event/query ops (`vkCmdSetEvent`/`vkCmdResetEvent`/`vkCmdResetQueryPool`/`vkCmdEndQuery`/
     /// `vkCmdWriteTimestamp`/`vkCmdCopyQueryPoolResults`) applied at (synchronous) submit completion.
     pub deferred: Vec<DeferredOp>,
@@ -341,6 +345,7 @@ impl CmdBufRec {
         self.render_extent = (0, 0);
         self.scissor = None;
         self.buffer_writes.clear();
+        self.gpu_written_buffers.clear();
         self.deferred.clear();
         self.dynamic = DynamicState::default();
         self.push_constants.clear();

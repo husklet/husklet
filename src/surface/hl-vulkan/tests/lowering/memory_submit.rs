@@ -50,6 +50,38 @@ fn mapped_memory_flushes_as_write_buffer_at_submit() {
 }
 
 #[test]
+fn gpu_written_coherent_mapping_is_refreshed_after_submit() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let src = create::create_buffer(
+        &mut d,
+        &mut sink,
+        vk_buffer_usage::TRANSFER_SRC,
+        4096,
+    )
+    .unwrap();
+    let dst = create::create_buffer(
+        &mut d,
+        &mut sink,
+        vk_buffer_usage::TRANSFER_DST,
+        4096,
+    )
+    .unwrap();
+    let dst_ir = d.buffers.get(&dst).unwrap().ir_id;
+    let memory = d.allocate_memory(4096).unwrap();
+    create::bind_buffer_memory(&mut d, dst, memory, 0).unwrap();
+    d.map_memory(memory).unwrap();
+
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    record::cmd_copy_buffer(&mut d, cb, src, dst, 0, 0, 4096).unwrap();
+    d.end_command_buffer(cb).unwrap();
+    submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
+
+    assert_eq!(sink.reads, vec![(hl_gpu::BufferId(dst_ir), 0, 4096)]);
+}
+
+#[test]
 fn arena_memory_flushes_every_bound_buffer_at_submit() {
     // Regression: a single allocation sub-allocated into MANY buffers (the gpu-alloc/VMA arena pattern
     // that blade/GPUI uses — hundreds of uniform/storage/vertex buffers in one HOST_COHERENT block).

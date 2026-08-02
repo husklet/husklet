@@ -33,6 +33,9 @@ pub fn cmd_copy_buffer(
         dst_offset,
         size,
     });
+    if !rec.gpu_written_buffers.contains(&dst) {
+        rec.gpu_written_buffers.push(dst);
+    }
     Ok(())
 }
 
@@ -378,6 +381,9 @@ pub fn cmd_copy_image_to_buffer_region(
         cb,
         "vkCmdCopyImageToBuffer: must be recorded outside a render pass",
     )?;
+    if !rec.gpu_written_buffers.contains(&dst) {
+        rec.gpu_written_buffers.push(dst);
+    }
     if mip == 0 && layer == 0 && x == 0 && y == 0 && origin_z == 0 && layers == 1 {
         rec.enc.push(Enc::CopyTextureToBuffer {
             src: src_ir,

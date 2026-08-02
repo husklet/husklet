@@ -10,6 +10,7 @@
 use crate::model::command::CommandBufferState;
 use crate::model::sync::{DeferredOp, QueryResult};
 use crate::*;
+use crate::service::create::refresh_mapped_buffer;
 use hl_gpu::{Cmd, CommandBuffer, CommandSink, FenceId, GpuError, Result};
 
 /// `vkQueueSubmit` — flush mapped memory, then submit each command buffer's encoder as a `Cmd::Submit`;
@@ -41,6 +42,7 @@ pub fn queue_submit(
     let mut encoders: Vec<Vec<hl_gpu::Enc>> = Vec::with_capacity(command_buffers.len());
     let mut buffer_writes: Vec<(u32, u64, Vec<u8>)> = Vec::new();
     let mut deferred: Vec<DeferredOp> = Vec::new();
+    let mut gpu_written_buffers: Vec<VkBuffer> = Vec::new();
     for &cb in command_buffers {
         let rec = dev
             .command_buffers
@@ -59,6 +61,11 @@ pub fn queue_submit(
         encoders.push(rec.enc.clone());
         buffer_writes.extend(rec.buffer_writes.iter().cloned());
         deferred.extend(rec.deferred.iter().cloned());
+        for &buffer in &rec.gpu_written_buffers {
+            if !gpu_written_buffers.contains(&buffer) {
+                gpu_written_buffers.push(buffer);
+            }
+        }
     }
 
     // Build the frame: mapped-buffer flushes first, then the recorded fill/update buffer writes, then one
@@ -112,6 +119,12 @@ pub fn queue_submit(
     hl_log::hl_count!(hl_log::tag::VULKAN, "submits");
     hl_log::hl_add!(hl_log::tag::VULKAN, "cmds", batch.len() as u64);
     sink.submit(&batch)?;
+
+    // HOST_COHERENT mappings remain valid across GPU execution. Refresh only buffers that the recorded
+    // encoder wrote, avoiding readbacks of persistently-mapped uniform/vertex inputs on every frame.
+    for buffer in gpu_written_buffers {
+        refresh_mapped_buffer(dev, sink, buffer)?;
+    }
 
     // The captured pending host→device uploads (from vkUnmapMemory / vkFlushMappedMemoryRanges) have now
     // reached the device in this frame — retire them so they are not re-flushed on the next submit.
