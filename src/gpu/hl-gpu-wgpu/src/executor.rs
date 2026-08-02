@@ -35,6 +35,26 @@ impl GpuExecutor for WgpuExecutor {
             self.presentation_retirements.clear();
         }
         let result = self.execute_batch(res, batch);
+        let sentinel_batch_results = self.diagnostic_sentinel_batch_results.get();
+        if sentinel_batch_results > 0 {
+            self.diagnostic_sentinel_batch_results
+                .set(sentinel_batch_results - 1);
+            match &result {
+                Ok(_) => hl_log::hl_error!(
+                    hl_log::tag::PRESENT,
+                    "sentinel_host phase=batch_result executor={:p} commands={} verdict=accepted",
+                    self,
+                    batch.len()
+                ),
+                Err(error) => hl_log::hl_error!(
+                    hl_log::tag::PRESENT,
+                    "sentinel_host phase=batch_result executor={:p} commands={} verdict=refused error={}",
+                    self,
+                    batch.len(),
+                    error
+                ),
+            }
+        }
         // `write_buffer` operations are queue ordered. One batch-boundary submit makes a write-only batch
         // observable and replaces the former empty submit after every aligned write. Flush on failure too:
         // queued writes cannot be cancelled, and retaining them past transactional resource rollback would
@@ -217,6 +237,7 @@ impl WgpuExecutor {
                     {
                         self.diagnostic_sentinel_buffer.set(Some(*id));
                         self.diagnostic_sentinel_submits.set(8);
+                        self.diagnostic_sentinel_batch_results.set(4);
                         hl_log::hl_error!(
                             hl_log::tag::PRESENT,
                             "sentinel_host phase=write_buffer executor={:p} buffer={} offset={} len={} head={:02x?}",

@@ -241,6 +241,7 @@ pub struct WgpuExecutor {
     diagnostic_sentinel_texture: Cell<Option<u32>>,
     diagnostic_sentinel_readback: Cell<Option<u32>>,
     diagnostic_sentinel_submits: Cell<u8>,
+    diagnostic_sentinel_batch_results: Cell<u8>,
     diagnostic_upload_candidates: Cell<u8>,
     modules: Arc<module::Modules>,
     /// Device-cache mutations accepted by the current protocol batch. They become visible to later
@@ -344,6 +345,7 @@ impl WgpuExecutor {
             diagnostic_sentinel_texture: Cell::new(None),
             diagnostic_sentinel_readback: Cell::new(None),
             diagnostic_sentinel_submits: Cell::new(0),
+            diagnostic_sentinel_batch_results: Cell::new(0),
             diagnostic_upload_candidates: Cell::new(16),
             modules,
             module_journal: Vec::new(),
