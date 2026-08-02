@@ -87,10 +87,10 @@ use core::ffi::{c_char, c_void};
 use hl_gl::model::context::GlContext;
 use hl_gl::model::glconst::*;
 use hl_gl::result::{
-    egl_error_from_gpu_error, gl_error_from_gpu_error, EGL_BAD_ACCESS, EGL_BAD_ATTRIBUTE, EGL_BAD_CONFIG, EGL_BAD_CONTEXT,
-    EGL_BAD_DISPLAY, EGL_BAD_MATCH, EGL_BAD_NATIVE_PIXMAP, EGL_BAD_PARAMETER, EGL_BAD_SURFACE,
-    EGL_CONTEXT_LOST, EGL_FALSE, EGL_NOT_INITIALIZED, EGL_TRUE, GL_INVALID_ENUM, GL_INVALID_VALUE,
-    GL_OUT_OF_MEMORY,
+    egl_error_from_gpu_error, gl_error_from_gpu_error, EGL_BAD_ACCESS, EGL_BAD_ATTRIBUTE,
+    EGL_BAD_CONFIG, EGL_BAD_CONTEXT, EGL_BAD_DISPLAY, EGL_BAD_MATCH, EGL_BAD_NATIVE_PIXMAP,
+    EGL_BAD_PARAMETER, EGL_BAD_SURFACE, EGL_CONTEXT_LOST, EGL_FALSE, EGL_NOT_INITIALIZED, EGL_TRUE,
+    GL_INVALID_ENUM, GL_INVALID_VALUE, GL_OUT_OF_MEMORY,
 };
 use hl_gl::service::{
     compute, config, es3, intro, map, query, readpixels, record, swap, sync, upload::Upload,
@@ -336,21 +336,29 @@ unsafe fn to_plane(
             .ok()
             .and_then(|value| value.parse().ok());
         let count = SEEN.fetch_add(1, Ordering::Relaxed);
-        if count < 8 || traced_span == Some(span) {
+        let extension_bytes = src.starts_with(b"L_OE");
+        if count < 8 || traced_span == Some(span) || extension_bytes {
             let head: Vec<String> = src.iter().take(8).map(|b| format!("{b:02x}")).collect();
             let text: String = src
                 .iter()
                 .take(16)
-                .map(|&b| if (32..127).contains(&b) { b as char } else { '.' })
+                .map(|&b| {
+                    if (32..127).contains(&b) {
+                        b as char
+                    } else {
+                        '.'
+                    }
+                })
                 .collect();
             hl_log::hl_error!(
                 hl_log::tag::GL,
-                "upload branch={} pixels={:p} unpack={} span={} got={} head=[{}] text={:?}",
+                "upload branch={} pixels={:p} unpack={} span={} got={} extension_bytes={} head=[{}] text={:?}",
                 if unpack != 0 { "pbo" } else { "client" },
                 pixels,
                 unpack,
                 span,
                 src.len(),
+                extension_bytes,
                 head.join(" "),
                 text
             );

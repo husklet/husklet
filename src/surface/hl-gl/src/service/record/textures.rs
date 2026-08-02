@@ -66,11 +66,16 @@ pub fn tex_image_2d_format(
         let traced: Option<usize> = std::env::var("HL_GL_UPLOAD_TRACE_SPAN")
             .ok()
             .and_then(|value| value.parse().ok());
-        if SEEN.fetch_add(1, Ordering::Relaxed) < 12 || traced == Some(pixels.len()) {
+        let extension_bytes = pixels.starts_with(b"L_OE");
+        if SEEN.fetch_add(1, Ordering::Relaxed) < 12
+            || traced == Some(pixels.len())
+            || extension_bytes
+        {
             let head: Vec<String> = pixels.iter().take(8).map(|b| format!("{b:02x}")).collect();
             hl_log::hl_error!(
                 hl_log::tag::GL,
-                "record tex_image name={name} {w}x{h} format={format:?} bytes={} stored={stored} head=[{}]",
+                "record tex_image name={name} {w}x{h} format={format:?} bytes={} stored={stored} \
+                 extension_bytes={extension_bytes} head=[{}]",
                 pixels.len(),
                 head.join(" ")
             );
@@ -296,7 +301,10 @@ pub fn tex_storage_2d(
             return;
         }
     }
-    if !ctx.textures.storage_2d(name, w, h, levels, fmt, internalformat) {
+    if !ctx
+        .textures
+        .storage_2d(name, w, h, levels, fmt, internalformat)
+    {
         ctx.set_gl_error(GL_INVALID_VALUE);
     }
 }
@@ -321,7 +329,9 @@ impl TryFrom<InternalFormat> for TextureFormat {
             // storage usable at all — `glTexStorage2D` was raising GL_INVALID_ENUM for twenty valid sized
             // formats. Which of them may back a colour attachment is a separate question, answered by
             // `colour_renderable` (ES 3.0 table 3.13), not by this mapping.
-            GL_R8_SNORM | GL_RG8_SNORM | GL_RGB8_SNORM | GL_RGBA8_SNORM => TextureFormat::Rgba8Unorm,
+            GL_R8_SNORM | GL_RG8_SNORM | GL_RGB8_SNORM | GL_RGBA8_SNORM => {
+                TextureFormat::Rgba8Unorm
+            }
             // The 8-bit INTEGER formats have real integer storage in the IR, so they keep it: an integer
             // texture carries raw texels a `usampler2D`/`isampler2D` reads with `texelFetch`, and routing
             // them onto an RGBA8 unorm plane would normalize values that have no normalized reading (a

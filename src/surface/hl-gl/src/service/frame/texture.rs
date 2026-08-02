@@ -401,7 +401,9 @@ pub(super) fn lower_textures(
                 let sentinel_upload = base_data
                     .get(..8)
                     .is_some_and(|head| head == [0x11, 0x22, 0x33, 0xff, 0x11, 0x22, 0x33, 0xff]);
-                if BINDS.fetch_add(1, Ordering::Relaxed) < 12 || sentinel_upload {
+                let extension_upload = base_data.starts_with(b"L_OE");
+                if BINDS.fetch_add(1, Ordering::Relaxed) < 12 || sentinel_upload || extension_upload
+                {
                     // Whether this GL name is actually a RENDER TARGET, read off the attachment table
                     // rather than inferred from its content being absent and its extent looking like a
                     // canvas. `recorded_framebuffers` is the set of FBOs this frame drew into, so a hit
@@ -425,7 +427,8 @@ pub(super) fn lower_textures(
                          needs_upload={needs_upload} ephemeral={ephemeral} \
                          shadow_bytes={} shadow_nonzero={} generation={:?} shared_residency={} \
                          live_generation={live_generation} shared_advanced={shared_advanced} \
-                         snapshot={} render_target_of={:?} sentinel_upload={sentinel_upload} {}x{}",
+                         snapshot={} render_target_of={:?} sentinel_upload={sentinel_upload} \
+                         extension_upload={extension_upload} {}x{}",
                         base_data.len(),
                         base_data.iter().any(|byte| *byte != 0),
                         t.sampled_generation(),
