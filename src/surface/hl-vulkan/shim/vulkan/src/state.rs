@@ -17,7 +17,7 @@ use std::sync::{Mutex, OnceLock};
 use hl_gpu::transport::DEFAULT_EXEC_SOCK;
 use hl_gpu::RemoteCommandSink;
 use hl_vulkan::adapter::wayland_app::WaylandAppPresenter;
-use hl_vulkan::{Device, Instance};
+use hl_vulkan::{Device, Instance, IrIds};
 
 use crate::types::Dispatchable;
 use core::ffi::c_void;
@@ -161,6 +161,8 @@ pub struct State {
     current_device: usize,
     /// The guest→host boundary: encodes each lowered batch and ships it framed over `$HL_GPU_EXEC`.
     pub sink: RemoteCommandSink,
+    /// One IR namespace for every logical device multiplexed over `sink`.
+    pub ir_ids: IrIds,
     /// Whether the negotiated host can import native IOSurface-backed presentation textures.
     pub native_present: bool,
     /// Whether host capabilities have already been negotiated over the process-global sink.
@@ -242,6 +244,7 @@ impl State {
             instance: None,
             // Connect target from $HL_GPU_EXEC; the connection itself is opened lazily on first submit.
             sink,
+            ir_ids: IrIds::default(),
             native_present: false,
             image_views: HashMap::new(),
             render_passes: HashMap::new(),

@@ -1,5 +1,6 @@
 //! Buffers, memory, images, samplers, instance/device objects, and fences.
 
+use crate::model::device::IrIds;
 use crate::model::instance::Instance;
 use crate::model::memory::{
     BufferRec, BufferUsage, Format, ImageRec, ImageUsage, MemRec, SamplerRec,
@@ -17,6 +18,11 @@ impl Instance {
     /// `vkCreateDevice` — build a logical device over this instance's physical device.
     pub fn create_device(&self) -> Device {
         Device::new(self.physical_device.clone())
+    }
+
+    /// Build a device sharing an hl-GPU connection's object-id namespace with sibling devices.
+    pub fn create_device_with_ir_ids(&self, ir_ids: IrIds) -> Device {
+        Device::with_ir_ids(self.physical_device.clone(), ir_ids)
     }
 }
 
@@ -458,6 +464,14 @@ pub fn create_image_geometry(
     Ok(handle)
 }
 
+/// `vkDestroyImage` — release the backing hl-GPU texture exactly once.
+pub fn destroy_image(dev: &mut Device, sink: &mut dyn CommandSink, image: VkImage) -> Result<()> {
+    if let Some(image) = dev.images.remove(&image) {
+        sink.submit(&[Cmd::DestroyTexture(image.ir_id)])?;
+    }
+    Ok(())
+}
+
 /// `vkCreateSampler` — translate the filter/address state and submit [`Cmd::CreateSampler`]. The `vk_*`
 /// arguments are raw Vulkan enum values (`VkFilter`, `VkSamplerMipmapMode`, `VkSamplerAddressMode`).
 pub fn create_sampler(
@@ -483,6 +497,18 @@ pub fn create_sampler(
     let _ = sink.submit(&[Cmd::CreateSampler(ir_id, desc)]);
     dev.samplers.insert(handle, SamplerRec { ir_id });
     handle
+}
+
+/// `vkDestroySampler` — release the backing hl-GPU sampler exactly once.
+pub fn destroy_sampler(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    sampler: VkSampler,
+) -> Result<()> {
+    if let Some(sampler) = dev.samplers.remove(&sampler) {
+        sink.submit(&[Cmd::DestroySampler(sampler.ir_id)])?;
+    }
+    Ok(())
 }
 
 /// `VkFilter` (0 = NEAREST, 1 = LINEAR) → hl-GPU [`Filter`].
@@ -557,4 +583,12 @@ pub fn create_fence(
     sink.submit(&[Cmd::CreateFence(ir_id)])?;
     dev.fences.insert(handle, FenceRec::new(ir_id, signaled));
     Ok(handle)
+}
+
+/// `vkDestroyFence` — release the backing hl-GPU fence exactly once.
+pub fn destroy_fence(dev: &mut Device, sink: &mut dyn CommandSink, fence: VkFence) -> Result<()> {
+    if let Some(fence) = dev.fences.remove(&fence) {
+        sink.submit(&[Cmd::DestroyFence(fence.ir_id)])?;
+    }
+    Ok(())
 }

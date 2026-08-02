@@ -141,6 +141,37 @@ fn create_sampler_emits_create_sampler() {
     assert!(matches!(sink.batches[0][0], Cmd::CreateSampler(1, _)));
 }
 
+#[test]
+fn image_sampler_and_fence_destruction_release_ir_objects_once() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let image = create::create_image(
+        &mut d,
+        &mut sink,
+        8,
+        8,
+        vk_format::R8G8B8A8_UNORM,
+        vk_image_usage::SAMPLED,
+        1,
+    )
+    .unwrap();
+    let sampler = create::create_sampler(&mut d, &mut sink, 0, 0, 0, [0, 0, 0]);
+    let fence = create::create_fence(&mut d, &mut sink, false).unwrap();
+
+    create::destroy_image(&mut d, &mut sink, image).unwrap();
+    create::destroy_sampler(&mut d, &mut sink, sampler).unwrap();
+    create::destroy_fence(&mut d, &mut sink, fence).unwrap();
+    assert!(matches!(sink.batches[3][0], Cmd::DestroyTexture(1)));
+    assert!(matches!(sink.batches[4][0], Cmd::DestroySampler(2)));
+    assert!(matches!(sink.batches[5][0], Cmd::DestroyFence(3)));
+
+    let before = sink.batches.len();
+    create::destroy_image(&mut d, &mut sink, image).unwrap();
+    create::destroy_sampler(&mut d, &mut sink, sampler).unwrap();
+    create::destroy_fence(&mut d, &mut sink, fence).unwrap();
+    assert_eq!(sink.batches.len(), before);
+}
+
 // ---------------------------------------------------------------------------------------------------
 // shader modules — the SPIR-V passthrough keystone
 // ---------------------------------------------------------------------------------------------------
@@ -161,6 +192,29 @@ fn shader_module_forwards_spirv_verbatim() {
         }
         other => panic!("expected CreateShader, got {other:?}"),
     }
+}
+
+#[test]
+fn shader_and_pipeline_destruction_release_ir_objects_once() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let shader = create::create_shader_module_words(
+        &mut d,
+        &mut sink,
+        spirv::Module::sample_compute("main"),
+    )
+    .unwrap();
+    let pipeline = create::create_compute_pipeline(&mut d, &mut sink, shader, "main").unwrap();
+
+    create::destroy_pipeline(&mut d, &mut sink, pipeline).unwrap();
+    create::destroy_shader_module(&mut d, &mut sink, shader).unwrap();
+    assert!(matches!(sink.batches[2][0], Cmd::DestroyPipeline(2)));
+    assert!(matches!(sink.batches[3][0], Cmd::DestroyShader(1)));
+
+    let before = sink.batches.len();
+    create::destroy_pipeline(&mut d, &mut sink, pipeline).unwrap();
+    create::destroy_shader_module(&mut d, &mut sink, shader).unwrap();
+    assert_eq!(sink.batches.len(), before);
 }
 
 #[test]

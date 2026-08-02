@@ -39,8 +39,8 @@ pub extern "C" fn vkDestroyShaderModule(
     shader_module: u64,
     _p_allocator: *const c_void,
 ) {
-    ShimState::with_sink(|dev, _| {
-        dev.shaders.remove(&shader_module);
+    ShimState::with_sink(|dev, sink| {
+        let _ = create::destroy_shader_module(dev, sink, shader_module);
     });
 }
 
@@ -126,8 +126,8 @@ pub extern "C" fn vkDestroyPipeline(
     pipeline: u64,
     _p_allocator: *const c_void,
 ) {
-    ShimState::with_sink(|dev, _| {
-        dev.pipelines.remove(&pipeline);
+    ShimState::with_sink(|dev, sink| {
+        let _ = create::destroy_pipeline(dev, sink, pipeline);
     });
 }
 

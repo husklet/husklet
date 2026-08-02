@@ -23,6 +23,58 @@ use super::sync::{EventRec, QueryPoolRec, SemaphoreRec};
 use crate::*;
 use hl_gpu::{GpuError, Result};
 use std::collections::HashMap;
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Arc,
+};
+
+/// The object-id namespace of one hl-GPU connection.
+///
+/// Several Vulkan logical devices can share one transport connection. Their Vulkan handles and object
+/// tables remain device-local, but every IR id sent over that connection must be unique. Cloning this
+/// value gives another device access to the same monotonic namespace.
+#[derive(Clone, Default)]
+pub struct IrIds(Arc<AtomicU32>);
+
+impl IrIds {
+    fn next(&self) -> u32 {
+        // A connection cannot retain four billion live protocol objects: the runtime's residency limit
+        // rejects it orders of magnitude earlier. Exhaustion therefore means the namespace invariant
+        // itself was violated, not recoverable Vulkan input.
+        self.0
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .expect("hl-GPU IR object id namespace exhausted")
+            + 1
+    }
+}
+
+#[cfg(test)]
+mod ir_id_tests {
+    use super::{Device, IrIds};
+    use crate::PhysicalDeviceDesc;
+
+    #[test]
+    fn sibling_devices_on_one_connection_mint_distinct_ir_ids() {
+        let ids = IrIds::default();
+        let physical = PhysicalDeviceDesc::hl_default();
+
+        // The CTS max-concurrent cases repeatedly construct logical devices in one process lineage.
+        // Exercise that scale here: a device-local counter would mint id 1 on every iteration.
+        for expected in 1..=16_384 {
+            let mut device = Device::with_ir_ids(physical.clone(), ids.clone());
+            assert_eq!(device.alloc_ir(), expected);
+        }
+    }
+
+    #[test]
+    fn standalone_devices_keep_an_independent_namespace() {
+        let mut first = Device::new(PhysicalDeviceDesc::hl_default());
+        let mut second = Device::new(PhysicalDeviceDesc::hl_default());
+
+        assert_eq!(first.alloc_ir(), 1);
+        assert_eq!(second.alloc_ir(), 1);
+    }
+}
 
 /// The per-device aggregate: the object model + the id counters the lowering mutates.
 pub struct Device {
@@ -61,7 +113,7 @@ pub struct Device {
     // ---- id counters (monotonic) ----
     /// hl-GPU IR object-id counter — one shared namespace across every resource kind (the host backend
     /// keys per-kind, so cross-kind overlap is irrelevant). Ported from `VkState::next_ir`.
-    next_ir: u32,
+    ir_ids: IrIds,
     /// Non-dispatchable Vulkan-handle counter (a monotonic `u64`, never 0 == `VK_NULL_HANDLE`).
     next_handle: u64,
     /// Timeline value for the next fence signal (monotonic across the device).
@@ -73,6 +125,11 @@ pub struct Device {
 impl Device {
     /// Create a fresh logical device over `physical_device`, with one primary queue and empty tables.
     pub fn new(physical_device: PhysicalDeviceDesc) -> Self {
+        Self::with_ir_ids(physical_device, IrIds::default())
+    }
+
+    /// Create a logical device in an existing hl-GPU connection's object-id namespace.
+    pub fn with_ir_ids(physical_device: PhysicalDeviceDesc, ir_ids: IrIds) -> Self {
         Self {
             physical_device,
             queue: Queue::primary(),
@@ -97,7 +154,7 @@ impl Device {
             surfaces: HashMap::new(),
             swapchains: HashMap::new(),
             image_layouts: HashMap::new(),
-            next_ir: 0,
+            ir_ids,
             next_handle: 0,
             fence_value: 1,
             timestamp: 1,
@@ -109,8 +166,7 @@ impl Device {
     /// Allocate a fresh IR object id (buffer/shader/pipeline/bind-group/texture/fence/surface — one
     /// shared namespace). Ported from `VkState::alloc_ir` (pre-increment: first id is 1).
     pub fn alloc_ir(&mut self) -> u32 {
-        self.next_ir += 1;
-        self.next_ir
+        self.ir_ids.next()
     }
 
     /// Allocate a fresh non-dispatchable Vulkan handle (a monotonic `u64`, never `VK_NULL_HANDLE`).

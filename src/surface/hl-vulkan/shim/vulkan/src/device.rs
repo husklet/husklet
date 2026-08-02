@@ -228,7 +228,7 @@ pub extern "C" fn vkCreateDevice(
         };
         s.native_present = native_present;
         // A device of its own, under a token of its own. Any device already live keeps its object model.
-        Some(s.insert_device(inst.create_device()))
+        Some(s.insert_device(inst.create_device_with_ir_ids(s.ir_ids.clone())))
     });
     let Some(token) = token else {
         return VK_ERROR_INITIALIZATION_FAILED;

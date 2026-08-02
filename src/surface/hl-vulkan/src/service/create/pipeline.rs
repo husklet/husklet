@@ -55,6 +55,30 @@ pub fn create_shader_module_words(
     Ok(handle)
 }
 
+/// `vkDestroyShaderModule` — release the backing hl-GPU shader exactly once.
+pub fn destroy_shader_module(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    shader: VkShaderModule,
+) -> Result<()> {
+    if let Some(shader) = dev.shaders.remove(&shader) {
+        sink.submit(&[Cmd::DestroyShader(shader.ir_id)])?;
+    }
+    Ok(())
+}
+
+/// `vkDestroyPipeline` — release the backing hl-GPU pipeline exactly once.
+pub fn destroy_pipeline(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    pipeline: VkPipeline,
+) -> Result<()> {
+    if let Some(pipeline) = dev.pipelines.remove(&pipeline) {
+        sink.submit(&[Cmd::DestroyPipeline(pipeline.ir_id)])?;
+    }
+    Ok(())
+}
+
 /// `vkCreateComputePipelines` (one pipeline) — resolve the compute stage's module + entry and submit
 /// [`Cmd::CreateComputePipeline`]. Errors (`VK_ERROR_UNKNOWN` analogue) if the module or entry is
 /// missing — no id-zero default. Ported from `pipeline.rs::vkCreateComputePipelines`.

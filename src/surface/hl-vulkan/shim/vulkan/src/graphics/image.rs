@@ -66,8 +66,8 @@ pub extern "C" fn vkCreateImage(
 }
 
 pub extern "C" fn vkDestroyImage(_device: *mut c_void, image: u64, _p_allocator: *const c_void) {
-    ShimState::with_device(|dev| {
-        dev.images.remove(&image);
+    ShimState::with_sink(|dev, sink| {
+        let _ = create::destroy_image(dev, sink, image);
     });
 }
 
@@ -413,8 +413,8 @@ pub extern "C" fn vkDestroySampler(
     sampler: u64,
     _p_allocator: *const c_void,
 ) {
-    ShimState::with_device(|dev| {
-        dev.samplers.remove(&sampler);
+    ShimState::with_sink(|dev, sink| {
+        let _ = create::destroy_sampler(dev, sink, sampler);
     });
 }
 

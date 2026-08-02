@@ -67,7 +67,7 @@ pub type VkPipelineCache = u64;
 pub const VK_NULL_HANDLE: u64 = 0;
 
 // Ergonomic re-exports: downstream (and the shim) read `hl_vulkan::{Device, PhysicalDeviceDesc, …}`.
-pub use model::device::Device;
+pub use model::device::{Device, IrIds};
 pub use model::instance::{Instance, PhysicalDeviceDesc};
 pub use model::memory::{ImageRec, SubresourceLayers, SubresourceRange};
 pub use model::pipeline::PipelineKind;
