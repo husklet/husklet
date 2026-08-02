@@ -90,6 +90,12 @@ fn unity_point_size_does_not_reach_the_wgsl_backend() {
         crate::wgsl::glsl_to_wgsl(&normalized, naga::ShaderStage::Vertex, "main").is_ok(),
         "the fixed-unity point-size contract must not create WGSL's unsupported PointSize builtin"
     );
+
+    let desktop = "#version 460\nvoid main(){ gl_Position = vec4(0.0); gl_PointSize = 1.0; }\n";
+    assert!(
+        crate::wgsl::glsl_to_wgsl(desktop, naga::ShaderStage::Vertex, "main").is_ok(),
+        "the GL driver's desktop-form shader must take the same fixed-unity lowering"
+    );
 }
 
 #[test]

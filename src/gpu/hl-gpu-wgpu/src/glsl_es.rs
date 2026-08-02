@@ -393,6 +393,13 @@ impl<'a> Source<'a> {
         toks.0.as_slice().source()
     }
 
+    /// Redirect the fixed-unity point-size builtin on both ES and driver-produced desktop routes.
+    pub(crate) fn normalize_fixed_point_size(&self, stage: naga::ShaderStage) -> String {
+        let mut toks = Tokens::from_source(self.text);
+        toks.normalize_fixed_point_size(stage);
+        toks.0.as_slice().source()
+    }
+
     /// Rewrite every narrow-element array member of a `std140` uniform block (`float u[4]`, `vec2 u[2]`,
     /// `int u[16]`, …) to the equivalent array of 4-component vectors (`vec4 u__arr[4]`), swizzling the
     /// original value back at each use. The uniform address space requires a 16-byte array stride in both

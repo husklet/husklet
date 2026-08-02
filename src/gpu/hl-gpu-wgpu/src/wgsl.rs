@@ -226,7 +226,8 @@ pub fn glsl_to_wgsl_reflect(
     // dialect; a fall-through switch case is something its `wgsl-out` cannot emit in any dialect. Both
     // previously ran only inside `normalize`, so the identical shader compiled as ES and was refused as
     // desktop. Both are byte-faithful when their construct is absent and idempotent after `normalize`.
-    let dual = crate::glsl_es::Source::new(src).normalize_dual_source();
+    let point_size = crate::glsl_es::Source::new(src).normalize_fixed_point_size(stage);
+    let dual = crate::glsl_es::Source::new(&point_size).normalize_dual_source();
     let lowered = crate::glsl_es::Source::new(&dual).lower_switch();
     let src = lowered.as_str();
     // A matrix cannot be a shader input or output in WGSL at all, so every matrix varying has to be split
