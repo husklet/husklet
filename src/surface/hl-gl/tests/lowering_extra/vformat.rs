@@ -111,6 +111,17 @@ fn a_three_component_normalized_byte_attribute_is_converted_not_refused() {
 }
 
 #[test]
+fn bound_float_attribute_is_padded_to_the_linked_shader_width() {
+    let values = [0.25f32, 0.5, 0.75, 1.0, -0.25, -0.5];
+    let bytes = values
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect::<Vec<_>>();
+    let out = converted_components(2, GL_FLOAT, false, &bytes);
+    assert_eq!(&out[..4], &[0.25, 0.5, 0.0, 1.0]);
+}
+
+#[test]
 fn converted_tightly_packed_vec3_leaves_no_empty_vertex_layout() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();

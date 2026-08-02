@@ -109,6 +109,13 @@ fn needs_float_conversion(attribute: &Attr) -> bool {
     }
 }
 
+fn needs_float_width_conversion(program: &Program, location: usize, attribute: &Attr) -> bool {
+    !attribute.integer
+        && program
+            .vertex_attr_components(location)
+            .is_some_and(|components| components != attribute.size.clamp(1, 4))
+}
+
 /// Decode one component of `attribute` from `bytes` at `offset` into the float GL says the shader sees.
 ///
 /// Normalized conversion follows ES 3.0 §2.9.1: unsigned `c / (2^b − 1)`, signed `max(c / (2^(b−1) − 1),
@@ -194,10 +201,6 @@ fn half_to_f32(bits: u16) -> f32 {
 
 /// De-interleave one attribute out of its vertex buffer into a tightly-packed `f32` array, one element per
 /// vertex the buffer can supply. Returns the bytes and the vertex count.
-fn convert_attribute_to_f32(attribute: &Attr, source: &[u8]) -> (Vec<u8>, usize) {
-    convert_attribute_to_f32_width(attribute, source, attribute.size.clamp(1, 4) as usize)
-}
-
 fn convert_attribute_to_f32_width(
     attribute: &Attr,
     source: &[u8],
@@ -499,18 +502,27 @@ pub(super) fn lower_vertices(
     // the lowering changes. Handing these to the IR raw declared an INTEGER format for a float shader
     // input, which wgpu rejects outright and which wedged the context for the rest of the process.
     for (location, attribute) in d.attrs.iter().enumerate() {
-        if !attribute.enabled || attr_slot[location] < 0 || !needs_float_conversion(attribute) {
+        if !attribute.enabled
+            || attr_slot[location] < 0
+            || !(needs_float_conversion(attribute)
+                || needs_float_width_conversion(program, location, attribute))
+        {
             continue;
         }
         let source = captured_buffer(attribute.buffer)
             .map(|buffer| buffer.data.clone())
             .or_else(|| ctx.buffers.get(attribute.buffer).map(|b| b.data.clone()))
             .unwrap_or_default();
-        let (data, vertices) = convert_attribute_to_f32(attribute, &source);
+        let components = program
+            .vertex_attr_components(location)
+            .unwrap_or(attribute.size)
+            .clamp(1, 4);
+        let (data, vertices) =
+            convert_attribute_to_f32_width(attribute, &source, components as usize);
         if vertices == 0 {
             continue;
         }
-        let comps = attribute.size.clamp(1, 4) as u32;
+        let comps = components as u32;
         let ir = ctx.alloc_buffer_ir()?;
         cmds.push(Cmd::CreateBuffer(
             ir,
@@ -794,7 +806,8 @@ pub(super) fn lower_vertices(
         let feeds_direct_attribute = d.attrs.iter().enumerate().any(|(location, attribute)| {
             attribute.enabled
                 && attr_slot[location] == slot as i32
-                && !needs_float_conversion(attribute)
+                && !(needs_float_conversion(attribute)
+                    || needs_float_width_conversion(program, location, attribute))
         });
         if feeds_direct_attribute {
             *mapped = Some(next_slot);
@@ -805,7 +818,9 @@ pub(super) fn lower_vertices(
         if *slot < 0 {
             continue;
         }
-        *slot = if needs_float_conversion(&d.attrs[location]) {
+        *slot = if needs_float_conversion(&d.attrs[location])
+            || needs_float_width_conversion(program, location, &d.attrs[location])
+        {
             -1
         } else {
             old_to_new[*slot as usize].map_or(-1, |mapped| mapped as i32)
