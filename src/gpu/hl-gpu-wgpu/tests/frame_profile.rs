@@ -2,10 +2,9 @@
 //! executor (task: per-draw cost hunt, 2026-07-30).
 //!
 //! `glmark2 -b ideas` measured 358 ms/frame at ~1782 encoder ops per submit — ~200 µs per command, which
-//! no GPU-bound scene looks like. This benchmark reproduces that SHAPE and times each stage separately so
-//! the cost is attributed rather than guessed: encode → decode → validate → account → executor dispatch,
-//! with the executor's own [`hl_gpu_wgpu::Profile`] splitting dispatch into buffer creates, bind-group
-//! creates, and the render pass itself.
+//! no GPU-bound scene looks like. This benchmark reproduces that SHAPE and times the public pipeline:
+//! encode → decode → runtime submit. The executor's own [`hl_gpu_wgpu::Profile`] splits submit into buffer
+//! creates, bind-group creates, and the render pass itself.
 //!
 //! Two shapes are measured, differing ONLY in resource reuse:
 //!   * `per_draw` — a fresh uniform buffer + a fresh bind group per draw. This is exactly what
@@ -65,8 +64,6 @@ use hl_gpu_wgpu::{DeviceConfig, WgpuExecutor};
 struct Stages {
     encode: Duration,
     decode: Duration,
-    validate: Duration,
-    account: Duration,
     dispatch: Duration,
 }
 
@@ -78,8 +75,6 @@ impl Stages {
             "perf[{label}]: frame = {:.0} us  ({commands} cmds, {DRAWS} draws)",
             (us(self.encode)
                 + us(self.decode)
-                + us(self.validate)
-                + us(self.account)
                 + us(self.dispatch))
                 / n
         );
@@ -94,17 +89,7 @@ impl Stages {
             per_cmd(self.decode)
         );
         println!(
-            "perf[{label}]:   validate {:8.1} us/frame  {:6.3} us/cmd",
-            us(self.validate) / n,
-            per_cmd(self.validate)
-        );
-        println!(
-            "perf[{label}]:   account  {:8.1} us/frame  {:6.3} us/cmd",
-            us(self.account) / n,
-            per_cmd(self.account)
-        );
-        println!(
-            "perf[{label}]:   dispatch {:8.1} us/frame  {:6.3} us/cmd",
+            "perf[{label}]:   submit   {:8.1} us/frame  {:6.3} us/cmd",
             us(self.dispatch) / n,
             per_cmd(self.dispatch)
         );
@@ -113,8 +98,6 @@ impl Stages {
     fn total_us_per_frame(&self, frames: usize) -> f64 {
         (us(self.encode)
             + us(self.decode)
-            + us(self.validate)
-            + us(self.account)
             + us(self.dispatch))
             / frames as f64
     }
@@ -194,16 +177,7 @@ fn run_frame(s: &mut hl_gpu::Session, exec: &mut WgpuExecutor, batch: &[Cmd], st
     stages.decode += t.elapsed();
 
     let t = Instant::now();
-    hl_gpu::runtime::service::validate::validate(&s.limits, wire.len(), &decoded)
-        .expect("validate");
-    stages.validate += t.elapsed();
-
-    let t = Instant::now();
-    s.charge_frame(&decoded).expect("account");
-    stages.account += t.elapsed();
-
-    let t = Instant::now();
-    hl_gpu::runtime::service::dispatch::dispatch(s, exec, &decoded).expect("dispatch");
+    hl_gpu::runtime::submit(s, exec, wire.len(), &decoded).expect("submit");
     stages.dispatch += t.elapsed();
 }
 
