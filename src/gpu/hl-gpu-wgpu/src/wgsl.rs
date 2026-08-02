@@ -30,6 +30,7 @@ mod descriptor;
 mod diagnostic;
 mod module;
 mod nonfinite;
+mod output;
 mod texel_buffer;
 
 use diagnostic::Diagnostic;
@@ -57,21 +58,24 @@ pub struct Spirv;
 
 impl Spirv {
     pub fn translate_reflect(words: &[u32]) -> Result<(String, crate::reflect::ModuleUsage)> {
-        Self::translate_reflect_options(words, None, false, None)
+        Self::translate_reflect_options(words, None, false, None, None)
     }
 
     pub fn translate_reflect_layout(
         words: &[u32],
         layout: Option<&hl_gpu::protocol::model::descriptor::PipelineLayout>,
     ) -> Result<(String, crate::reflect::ModuleUsage)> {
-        Self::translate_reflect_options(words, layout, false, None)
+        Self::translate_reflect_options(words, layout, false, None, None)
     }
 
-    pub fn translate_reflect_sample_shading(
+    pub fn translate_reflect_fragment_outputs(
         words: &[u32],
         layout: Option<&hl_gpu::protocol::model::descriptor::PipelineLayout>,
+        sample_shading: bool,
+        entry: &str,
+        targets: &[hl_gpu::protocol::model::descriptor::ColorTargetState],
     ) -> Result<(String, crate::reflect::ModuleUsage)> {
-        Self::translate_reflect_options(words, layout, true, None)
+        Self::translate_reflect_options(words, layout, sample_shading, None, Some((entry, targets)))
     }
 
     pub(crate) fn translate_reflect_texel(
@@ -93,6 +97,24 @@ impl Spirv {
             Some(layout),
             sample_shading,
             Some(specialization),
+            None,
+        )
+    }
+
+    pub(crate) fn translate_reflect_texel_fragment(
+        words: &[u32],
+        layout: &hl_gpu::protocol::model::descriptor::PipelineLayout,
+        specialization: &[crate::texel_buffer::Specialization],
+        sample_shading: bool,
+        entry: &str,
+        targets: &[hl_gpu::protocol::model::descriptor::ColorTargetState],
+    ) -> Result<(String, crate::reflect::ModuleUsage)> {
+        Self::translate_reflect_options(
+            words,
+            Some(layout),
+            sample_shading,
+            Some(specialization),
+            Some((entry, targets)),
         )
     }
 
@@ -101,6 +123,7 @@ impl Spirv {
         layout: Option<&hl_gpu::protocol::model::descriptor::PipelineLayout>,
         sample_shading: bool,
         texel_specialization: Option<&[crate::texel_buffer::Specialization]>,
+        fragment_outputs: Option<(&str, &[hl_gpu::protocol::model::descriptor::ColorTargetState])>,
     ) -> Result<(String, crate::reflect::ModuleUsage)> {
         if words.first().copied() != Some(SPIRV_MAGIC) {
             return Err(GpuError::Invalid("wgpu: shader payload is not SPIR-V"));
@@ -203,6 +226,9 @@ impl Spirv {
             descriptor::ScalarArrays::lower(&mut module, layout)?;
         }
         texel_buffer::TexelBuffers::lower(&mut module, texel_specialization)?;
+        if let Some((entry, targets)) = fragment_outputs {
+            output::FragmentOutputs::adapt(&mut module, entry, targets)?;
+        }
         viewport::Shader::prepare(&mut module)?;
         let reflected = crate::reflect::ModuleUsage::from_module(&module);
         // `OpIsInf`/`OpIsNan` survive `spv-in` as relational expressions naga's `wgsl-out` cannot emit.

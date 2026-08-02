@@ -15,7 +15,9 @@ use hl_gpu::protocol::model::descriptor::{
     ComputePipelineDesc, PipelineBindingKind, PipelineLayout, RenderPipelineDesc, StencilFaceState,
     VertexLayout,
 };
-use hl_gpu::protocol::model::enums::{compare, stencil_op, TextureFormat, Topology};
+use hl_gpu::protocol::model::enums::{
+    compare, stencil_op, TextureFormat, TextureNumericClass, Topology,
+};
 use hl_gpu::protocol::model::kernel::GlslDescriptor;
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
@@ -294,7 +296,11 @@ impl WgpuExecutor {
                 "wgpu: this backend does not honour a multisample sample mask",
             ));
         }
-        if multisample.sample_shading {
+        let integer_outputs = desc
+            .color_targets
+            .iter()
+            .any(|target| target.format.numeric_class() != TextureNumericClass::Float);
+        if multisample.sample_shading || integer_outputs {
             let Some((key, entry)) = fs_key.as_ref().zip(
                 desc.fragment
                     .as_ref()
@@ -305,17 +311,25 @@ impl WgpuExecutor {
                 ));
             };
             if key.kind != hl_gpu::ShaderPayloadKind::SpirV as u8 {
-                return Err(GpuError::Unsupported(
-                    "wgpu: forced sample shading currently requires SPIR-V",
+                if multisample.sample_shading {
+                    return Err(GpuError::Unsupported(
+                        "wgpu: forced sample shading currently requires SPIR-V",
+                    ));
+                }
+            } else {
+                let (source, reflected) = wgsl::Spirv::translate_reflect_fragment_outputs(
+                    &key.words,
+                    authoritative_layout,
+                    multisample.sample_shading,
+                    entry,
+                    &desc.color_targets,
+                )?;
+                fs = Some((
+                    self.gpu.shader_module("hl-spirv-fragment-output", source)?,
+                    entry.to_string(),
                 ));
+                fs_used = reflected.used_for(entry).to_vec();
             }
-            let (source, reflected) =
-                wgsl::Spirv::translate_reflect_sample_shading(&key.words, authoritative_layout)?;
-            fs = Some((
-                self.gpu.shader_module("hl-spirv-sample-shading", source)?,
-                entry.to_string(),
-            ));
-            fs_used = reflected.used_for(entry).to_vec();
         }
 
         // Content-dedup on the full pipeline identity: each stage's deduped shader CONTENT + entry point,
