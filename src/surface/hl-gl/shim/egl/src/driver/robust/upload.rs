@@ -236,6 +236,15 @@ pub extern "C" fn glReadPixelsRobustANGLE(
     rows: *mut i32,
     pixels: *mut c_void,
 ) {
+    #[cfg(feature = "verbose")]
+    {
+        let pbo = GlobalState::context(|state| state.gl.buffer_for_target(GL_PIXEL_PACK_BUFFER));
+        hl_log::hl_error!(
+            hl_log::tag::GL,
+            "glReadPixelsRobustANGLE entry region={width}x{height} format={format:#x} \
+             type={type_:#x} buf_size={buf_size} pixels={pixels:p} pbo={pbo}"
+        );
+    }
     let bpp = match (format, type_) {
         (GL_RGBA | GL_BGRA_EXT, GL_UNSIGNED_BYTE) => 4usize,
         (GL_RGB, GL_UNSIGNED_BYTE) => 3,
