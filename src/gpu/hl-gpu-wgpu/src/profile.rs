@@ -6,6 +6,7 @@ pub struct Profile {
     pub render_pipelines: Metric,
     pub render_pipeline_compilations: u64,
     pub compute_pipelines: Metric,
+    pub compute_pipeline_compilations: u64,
     pub bind_groups: Metric,
     /// `CreateBuffer` → `wgpu::Buffer` allocation. A driver that mints a fresh uniform buffer per draw
     /// pays this once per draw.

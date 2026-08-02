@@ -7,7 +7,7 @@ use std::sync::Mutex;
 
 use hl_gpu::protocol::model::enums::TextureFormat;
 
-use crate::dedup::RenderPipeKey;
+use crate::dedup::{ComputePipeKey, RenderPipeKey};
 
 const CAPACITY: usize = 128;
 
@@ -16,6 +16,13 @@ pub(crate) struct Artifact {
     pub(crate) pipeline: wgpu::RenderPipeline,
     pub(crate) color_formats: Vec<TextureFormat>,
     pub(crate) used_bindings: Vec<(u32, u32)>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ComputeArtifact {
+    pub(crate) pipeline: wgpu::ComputePipeline,
+    pub(crate) remap_group_zero: bool,
+    pub(crate) texel: Option<std::sync::Arc<crate::texel_buffer::ComputeSpecializer>>,
 }
 
 struct Entry<K, V> {
@@ -83,11 +90,14 @@ impl<K: Clone + PartialEq, V: Clone> Entries<K, V> {
 pub(crate) enum Mutation {
     Hit(RenderPipeKey),
     Install(RenderPipeKey, Artifact),
+    ComputeHit(ComputePipeKey),
+    ComputeInstall(ComputePipeKey, ComputeArtifact),
 }
 
 /// Bounded render pipelines compiled by one host device and reusable by its isolated executors.
 pub(crate) struct Residency {
     entries: Mutex<Entries<RenderPipeKey, Artifact>>,
+    compute_entries: Mutex<Entries<ComputePipeKey, ComputeArtifact>>,
     #[cfg(test)]
     hits: std::sync::atomic::AtomicU64,
     #[cfg(test)]
@@ -102,6 +112,7 @@ impl Residency {
     fn with_capacity(capacity: usize) -> Self {
         Self {
             entries: Mutex::new(Entries::new(capacity)),
+            compute_entries: Mutex::new(Entries::new(capacity)),
             #[cfg(test)]
             hits: std::sync::atomic::AtomicU64::new(0),
             #[cfg(test)]
@@ -112,6 +123,13 @@ impl Residency {
     /// Observe an artifact without mutating its eviction order. A successful batch later commits the hit.
     pub(crate) fn get(&self, key: &RenderPipeKey) -> Option<Artifact> {
         self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(key)
+    }
+
+    pub(crate) fn compute_get(&self, key: &ComputePipeKey) -> Option<ComputeArtifact> {
+        self.compute_entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(key)
@@ -131,6 +149,33 @@ impl Residency {
                 }
                 Mutation::Install(key, artifact) => {
                     entries.retain(key, artifact);
+                    #[cfg(test)]
+                    self.compilations
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                Mutation::ComputeHit(key) => {
+                    drop(entries);
+                    self.compute_entries
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .touch(&key);
+                    entries = self
+                        .entries
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    #[cfg(test)]
+                    self.hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                Mutation::ComputeInstall(key, artifact) => {
+                    drop(entries);
+                    self.compute_entries
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .retain(key, artifact);
+                    entries = self
+                        .entries
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     #[cfg(test)]
                     self.compilations
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -158,7 +203,9 @@ impl Residency {
 #[cfg(test)]
 mod tests {
     use hl_gpu::protocol::model::command::ShaderPayloadKind;
-    use hl_gpu::protocol::model::descriptor::{ColorTargetState, RenderPipelineDesc, ShaderRef};
+    use hl_gpu::protocol::model::descriptor::{
+        ColorTargetState, ComputePipelineDesc, RenderPipelineDesc, ShaderRef,
+    };
     use hl_gpu::protocol::model::enums::{TextureFormat, Topology};
     use hl_gpu::protocol::model::kernel::{glsl_stage, GlslDescriptor};
     use hl_gpu::{Cmd, GpuExecutor, SessionResources};
@@ -179,6 +226,10 @@ void main() { color = vec4(1.0, 0.0, 0.0, 1.0); }
     const BLUE: &str = r#"#version 450
 layout(location = 0) out vec4 color;
 void main() { color = vec4(0.0, 0.0, 1.0, 1.0); }
+"#;
+    const COMPUTE: &str = r#"#version 450
+layout(local_size_x = 1) in;
+void main() {}
 "#;
 
     fn shader(stage: u32, source: &str) -> Vec<u32> {
@@ -236,6 +287,26 @@ void main() { color = vec4(0.0, 0.0, 1.0, 1.0); }
         commands
     }
 
+    fn create_compute() -> Vec<Cmd> {
+        vec![
+            Cmd::CreateShader {
+                id: 1,
+                kind: ShaderPayloadKind::Glsl,
+                spirv: shader(glsl_stage::COMPUTE, COMPUTE),
+            },
+            Cmd::CreateComputePipeline(
+                1,
+                ComputePipelineDesc {
+                    compute: ShaderRef {
+                        module: 1,
+                        entry: "main".to_owned(),
+                    },
+                    label: String::new(),
+                },
+            ),
+        ]
+    }
+
     #[test]
     fn bounded_entries_evict_least_recently_used() {
         let mut entries = Entries::new(2);
@@ -267,6 +338,29 @@ void main() { color = vec4(0.0, 0.0, 1.0, 1.0); }
 
         assert_eq!(device.pipelines.stats(), (1, 1, 1));
         assert_eq!(second.pipeline_backing_count(), 1);
+    }
+
+    #[test]
+    fn sequential_connections_reuse_exact_compute_pipeline() {
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
+        let mut first = device.executor();
+        first.enable_profile();
+        first
+            .execute(&mut SessionResources::default(), &create_compute())
+            .unwrap();
+        assert_eq!(first.profile().unwrap().compute_pipeline_compilations, 1);
+
+        let mut second = device.executor();
+        second.enable_profile();
+        second
+            .execute(&mut SessionResources::default(), &create_compute())
+            .unwrap();
+        assert_eq!(
+            second.profile().unwrap().compute_pipeline_compilations,
+            0,
+            "a later connection on the same host device must reuse the committed immutable PSO"
+        );
     }
 
     #[test]

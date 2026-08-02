@@ -11,7 +11,8 @@
 //! crate's other GPU tests.
 
 use hl_gpu::protocol::model::descriptor::{
-    ColorAttachment, ColorTargetState, RenderPipelineDesc, ShaderRef, TextureDesc,
+    ColorAttachment, ColorTargetState, ComputePipelineDesc, RenderPipelineDesc, ShaderRef,
+    TextureDesc,
 };
 use hl_gpu::protocol::model::enums::{texture_usage, LoadOp, TextureDim, TextureFormat, Topology};
 use hl_gpu::protocol::model::kernel::{glsl_stage, GlslDescriptor};
@@ -38,6 +39,11 @@ void main() { color = vec4(1.0, 0.0, 0.0, 1.0); }
 const FS_GREEN: &str = r#"#version 460
 layout(location = 0) out vec4 color;
 void main() { color = vec4(0.0, 1.0, 0.0, 1.0); }
+"#;
+
+const CS: &str = r#"#version 450
+layout(local_size_x = 1) in;
+void main() {}
 "#;
 
 fn glsl(stage: u32, entry: &str, source: &str) -> Vec<u32> {
@@ -84,6 +90,16 @@ fn pipeline_desc(vs_id: u32, fs_id: u32) -> RenderPipelineDesc {
         cull: 0,
         front_face: 0,
         sample_count: 1,
+        label: String::new(),
+    }
+}
+
+fn compute_pipeline_desc(shader: u32) -> ComputePipelineDesc {
+    ComputePipelineDesc {
+        compute: ShaderRef {
+            module: shader,
+            entry: "main".into(),
+        },
         label: String::new(),
     }
 }
@@ -185,6 +201,48 @@ fn identical_pipelines_share_one_backing() {
         hl_gpu_wgpu_pipeline_backing_bytes(),
         "deduped pipeline residency must be a single pipeline's worth, not 200× that"
     );
+}
+
+/// Vulkan object_management.max_concurrent creates 16,384 identical compute pipelines. They are distinct
+/// protocol objects, but immutable native PSOs must be compiled and retained once by exact content.
+#[test]
+fn sixteen_thousand_compute_pipeline_aliases_compile_once() {
+    let mut exec = new_exec();
+    let mut s = session(&exec);
+    exec.enable_profile();
+
+    const N: u32 = 16_384;
+    let mut commands = Vec::with_capacity(N as usize + 1);
+    commands.push(Cmd::CreateShader {
+        id: 1,
+        kind: ShaderPayloadKind::Glsl,
+        spirv: glsl(glsl_stage::COMPUTE, "main", CS),
+    });
+    commands.extend((1..=N).map(|id| Cmd::CreateComputePipeline(id, compute_pipeline_desc(1))));
+    let started = std::time::Instant::now();
+    hl_gpu::runtime::submit(&mut s, &mut exec, 0, &commands)
+        .expect("16,384 identical compute pipelines create");
+    let elapsed = started.elapsed();
+
+    assert_eq!(exec.profile().unwrap().compute_pipeline_compilations, 1);
+    assert_eq!(exec.pipeline_backing_count(), 1);
+    assert_eq!(exec.pipeline_backing_resident_bytes(), 4096);
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "content aliases should not spend native-compile time per id: {elapsed:?}"
+    );
+
+    let destroy_half: Vec<_> = (1..=N / 2).map(Cmd::DestroyPipeline).collect();
+    hl_gpu::runtime::submit(&mut s, &mut exec, 0, &destroy_half).unwrap();
+    assert_eq!(
+        exec.pipeline_backing_count(),
+        1,
+        "live aliases retain backing"
+    );
+    let destroy_rest: Vec<_> = (N / 2 + 1..=N).map(Cmd::DestroyPipeline).collect();
+    hl_gpu::runtime::submit(&mut s, &mut exec, 0, &destroy_rest).unwrap();
+    assert_eq!(exec.pipeline_backing_count(), 0);
+    assert_eq!(exec.pipeline_backing_resident_bytes(), 0);
 }
 
 #[test]

@@ -35,11 +35,13 @@ pub enum PipelineNative {
     /// matches in both cases, and 2+ groups bind at their declared indices.
     Compute {
         pipeline: wgpu::ComputePipeline,
+        /// Executor-local shared backing released when this guest alias is destroyed.
+        backing: u64,
         /// Guest group-zero bindings were shifted to reserve the host viewport slot during shader lowering.
         remap_group_zero: bool,
         /// SPIR-V texel-buffer pipelines are specialized lazily from the formats actually bound at a
         /// dispatch. Ordinary pipelines keep this absent and use `pipeline` directly.
-        texel: Option<crate::texel_buffer::ComputeSpecializer>,
+        texel: Option<std::sync::Arc<crate::texel_buffer::ComputeSpecializer>>,
     },
 }
 

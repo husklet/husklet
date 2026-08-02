@@ -30,177 +30,245 @@ const SAMPLER_BINDING_OFFSET: u32 = 16;
 
 impl WgpuExecutor {
     pub(crate) fn create_compute_pipeline(
-        &self,
+        &mut self,
         res: &mut SessionResources,
         id: u32,
         desc: &ComputePipelineDesc,
         authoritative_layout: Option<&PipelineLayout>,
     ) -> Result<()> {
         let _sp = hl_log::hl_span!(hl_log::tag::WGPU, "pipeline_create");
+        let shader = shader::ShaderNative::get(res, desc.compute.module)?;
+        let pipe_key = match shader {
+            ShaderNative::Module { key, .. } => {
+                crate::dedup::ComputePipeKey::module(desc, key.clone(), authoritative_layout)
+            }
+            ShaderNative::Kernel(program) => crate::dedup::ComputePipeKey::Kernel {
+                program: (**program).clone(),
+                entry: desc.compute.entry.clone(),
+            },
+        };
+        if let Some((pipeline, remap_group_zero, texel, backing)) =
+            self.dedup.compute_pipeline_get(&pipe_key)
+        {
+            res.pipelines.insert(
+                id,
+                Box::new(PipelineNative::Compute {
+                    pipeline,
+                    backing,
+                    remap_group_zero,
+                    texel,
+                }),
+            )?;
+            self.pipeline_journal.push(Mutation::ComputeHit(pipe_key));
+            return Ok(());
+        }
+        if let Some(artifact) = self.pipelines.compute_get(&pipe_key) {
+            let backing = self.dedup.compute_pipeline_install(
+                pipe_key.clone(),
+                artifact.pipeline.clone(),
+                artifact.remap_group_zero,
+                artifact.texel.clone(),
+            );
+            if let Err(error) = res.pipelines.insert(
+                id,
+                Box::new(PipelineNative::Compute {
+                    pipeline: artifact.pipeline,
+                    backing,
+                    remap_group_zero: artifact.remap_group_zero,
+                    texel: artifact.texel,
+                }),
+            ) {
+                self.dedup.compute_pipeline_release(backing);
+                return Err(error);
+            }
+            self.pipeline_journal.push(Mutation::ComputeHit(pipe_key));
+            return Ok(());
+        }
+        if let Some(profile) = self.profile.borrow_mut().as_mut() {
+            profile.compute_pipeline_compilations =
+                profile.compute_pipeline_compilations.saturating_add(1);
+        }
         let mut texel = None;
-        let (pipeline, remap_group_zero) =
-            match shader::ShaderNative::get(res, desc.compute.module)? {
-                // PTX-kernel ABI: lower the neutral kernel IR to a WGSL compute entry point and build with an
-                // EXPLICIT group-0 layout — binding 0 the read-only param blob, binding r+1 the read_write
-                // pointer region r. Declaring every binding (even one the WGSL doesn't read) keeps the bind
-                // group the protocol builds in lock-step with the layout that `get_bind_group_layout(0)` returns.
-                ShaderNative::Kernel(p) => {
-                    let prog = p.clone();
-                    let src = wgsl::Kernel::translate(&prog)?;
-                    let module = self.gpu.shader_module("hl-kernel", src)?;
-                    let mut entries = vec![ComputeLayout::storage(0, true)];
-                    for r in 0..prog.num_regions {
-                        entries.push(ComputeLayout::storage(r + 1, false));
-                    }
-                    let layout = self.gpu.device.create_bind_group_layout(
-                        &wgpu::BindGroupLayoutDescriptor {
+        let (pipeline, remap_group_zero) = match shader {
+            // PTX-kernel ABI: lower the neutral kernel IR to a WGSL compute entry point and build with an
+            // EXPLICIT group-0 layout — binding 0 the read-only param blob, binding r+1 the read_write
+            // pointer region r. Declaring every binding (even one the WGSL doesn't read) keeps the bind
+            // group the protocol builds in lock-step with the layout that `get_bind_group_layout(0)` returns.
+            ShaderNative::Kernel(p) => {
+                let prog = p.clone();
+                let src = wgsl::Kernel::translate(&prog)?;
+                let module = self.gpu.shader_module("hl-kernel", src)?;
+                let mut entries = vec![ComputeLayout::storage(0, true)];
+                for r in 0..prog.num_regions {
+                    entries.push(ComputeLayout::storage(r + 1, false));
+                }
+                let layout =
+                    self.gpu
+                        .device
+                        .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                             label: Some("hl-compute-bgl"),
                             entries: &entries,
-                        },
-                    );
-                    let pipeline_layout =
-                        self.gpu
-                            .device
-                            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                                label: Some("hl-compute-pl"),
-                                bind_group_layouts: &[&layout],
-                                push_constant_ranges: &[],
-                            });
-                    (
-                        self.gpu
-                            .device
-                            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                                label: Some("hl-compute"),
-                                layout: Some(&pipeline_layout),
-                                module: &module,
-                                entry_point: Some(desc.compute.entry.as_str()),
-                                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                                cache: None,
-                            }),
-                        false,
-                    )
-                }
-                // SPIR-V / GLSL compute: naga already translated the payload to a wgpu `ShaderModule` carrying
-                // a compute entry point (`@compute @workgroup_size(..)`), exactly as it does for graphics
-                // stages. Build with an AUTO layout (`layout: None`): wgpu reflects the module and derives every
-                // bind-group layout AND the push-constant range from what the shader declares. This is the path
-                // wgpu-core's OWN internal indirect-draw-VALIDATION compute pipeline needs — the one Zed's guest
-                // wgpu builds during device creation (2 bind groups, a dynamic-offset buffer, a `var<push_constant>`).
-                // Restricting compute to Kernel here was what made that pipeline "needs-kernel-shader"-reject and
-                // cost Zed its device. Per-group layouts come from the pipeline itself at dispatch
-                // (`get_bind_group_layout(index)`), so 2+ groups bind at their declared set indices. Push
-                // constants require the PUSH_CONSTANTS feature, which `device::acquire` requests when the
-                // adapter advertises it (lavapipe does).
-                ShaderNative::Module {
-                    module: m,
-                    reflected,
-                    key,
-                } => {
-                    if let Some(layout) = authoritative_layout.filter(|layout| {
-                        key.kind == hl_gpu::ShaderPayloadKind::SpirV as u8
-                            &&
-                            layout.bindings.iter().any(|binding| {
-                                matches!(
-                                    binding.kind,
-                                    PipelineBindingKind::UniformTexelBuffer
-                                        | PipelineBindingKind::StorageTexelBuffer
-                                )
-                            })
+                        });
+                let pipeline_layout =
+                    self.gpu
+                        .device
+                        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                            label: Some("hl-compute-pl"),
+                            bind_group_layouts: &[&layout],
+                            push_constant_ranges: &[],
+                        });
+                (
+                    self.gpu
+                        .device
+                        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                            label: Some("hl-compute"),
+                            layout: Some(&pipeline_layout),
+                            module: &module,
+                            entry_point: Some(desc.compute.entry.as_str()),
+                            compilation_options: wgpu::PipelineCompilationOptions::default(),
+                            cache: None,
+                        }),
+                    false,
+                )
+            }
+            // SPIR-V / GLSL compute: naga already translated the payload to a wgpu `ShaderModule` carrying
+            // a compute entry point (`@compute @workgroup_size(..)`), exactly as it does for graphics
+            // stages. Build with an AUTO layout (`layout: None`): wgpu reflects the module and derives every
+            // bind-group layout AND the push-constant range from what the shader declares. This is the path
+            // wgpu-core's OWN internal indirect-draw-VALIDATION compute pipeline needs — the one Zed's guest
+            // wgpu builds during device creation (2 bind groups, a dynamic-offset buffer, a `var<push_constant>`).
+            // Restricting compute to Kernel here was what made that pipeline "needs-kernel-shader"-reject and
+            // cost Zed its device. Per-group layouts come from the pipeline itself at dispatch
+            // (`get_bind_group_layout(index)`), so 2+ groups bind at their declared set indices. Push
+            // constants require the PUSH_CONSTANTS feature, which `device::acquire` requests when the
+            // adapter advertises it (lavapipe does).
+            ShaderNative::Module {
+                module: m,
+                reflected,
+                key,
+            } => {
+                if let Some(layout) = authoritative_layout.filter(|layout| {
+                    key.kind == hl_gpu::ShaderPayloadKind::SpirV as u8
+                        && layout.bindings.iter().any(|binding| {
+                            matches!(
+                                binding.kind,
+                                PipelineBindingKind::UniformTexelBuffer
+                                    | PipelineBindingKind::StorageTexelBuffer
+                            )
                         })
-                    {
-                        texel = Some(crate::texel_buffer::ComputeSpecializer::new(
+                }) {
+                    texel = Some(std::sync::Arc::new(
+                        crate::texel_buffer::ComputeSpecializer::new(
                             desc.clone(),
                             layout.clone(),
                             key.words.clone(),
-                        ));
-                    }
-                    let (module, reflected_override);
-                    let reflected = if authoritative_layout.is_some_and(|layout| {
-                        layout.bindings.iter().any(|binding| binding.count > 1)
-                    }) && key.kind == hl_gpu::ShaderPayloadKind::SpirV as u8
-                    {
-                        let (source, reflected) = wgsl::Spirv::translate_reflect_layout(
-                            &key.words,
-                            authoritative_layout,
-                        )?;
-                        module = self.gpu.shader_module("hl-spirv-layout", source)?;
-                        reflected_override = reflected;
-                        &reflected_override
-                    } else {
-                        module = m.clone();
-                        reflected
-                    };
-                    let mut merged: BTreeMap<_, _> = reflected
-                        .used_for(&desc.compute.entry)
-                        .iter()
-                        .map(|binding| {
-                            (
-                                (binding.group, binding.binding),
-                                (wgpu::ShaderStages::COMPUTE, binding.kind, binding.count),
-                            )
-                        })
-                        .collect();
-                    Self::apply_authoritative_counts(&mut merged, authoritative_layout)?;
-                    let group_layouts = self.build_render_bind_group_layouts(&merged)?;
-                    let layout_refs: Vec<_> = group_layouts.iter().collect();
-                    let push_constant_ranges = self
-                        .gpu
-                        .device
-                        .features()
-                        .contains(wgpu::Features::PUSH_CONSTANTS)
-                        .then(|| wgpu::PushConstantRange {
-                            stages: wgpu::ShaderStages::COMPUTE,
-                            range: 0..self.gpu.device.limits().max_push_constant_size,
-                        })
-                        .into_iter()
-                        .collect::<Vec<_>>();
-                    let pipeline_layout =
-                        self.gpu
-                            .device
-                            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                                label: Some("hl-compute-module-pl"),
-                                bind_group_layouts: &layout_refs,
-                                push_constant_ranges: &push_constant_ranges,
-                            });
-                    // A validation error scope turns wgpu's async device error (raised when the module has no
-                    // compute entry point matching `entry` — e.g. a graphics-only SPIR-V module used for
-                    // compute) into a clean typed error, instead of the default uncaptured handler PANICKING.
+                        ),
+                    ));
+                }
+                let (module, reflected_override);
+                let reflected = if authoritative_layout
+                    .is_some_and(|layout| layout.bindings.iter().any(|binding| binding.count > 1))
+                    && key.kind == hl_gpu::ShaderPayloadKind::SpirV as u8
+                {
+                    let (source, reflected) =
+                        wgsl::Spirv::translate_reflect_layout(&key.words, authoritative_layout)?;
+                    module = self.gpu.shader_module("hl-spirv-layout", source)?;
+                    reflected_override = reflected;
+                    &reflected_override
+                } else {
+                    module = m.clone();
+                    reflected
+                };
+                let mut merged: BTreeMap<_, _> = reflected
+                    .used_for(&desc.compute.entry)
+                    .iter()
+                    .map(|binding| {
+                        (
+                            (binding.group, binding.binding),
+                            (wgpu::ShaderStages::COMPUTE, binding.kind, binding.count),
+                        )
+                    })
+                    .collect();
+                Self::apply_authoritative_counts(&mut merged, authoritative_layout)?;
+                let group_layouts = self.build_render_bind_group_layouts(&merged)?;
+                let layout_refs: Vec<_> = group_layouts.iter().collect();
+                let push_constant_ranges = self
+                    .gpu
+                    .device
+                    .features()
+                    .contains(wgpu::Features::PUSH_CONSTANTS)
+                    .then(|| wgpu::PushConstantRange {
+                        stages: wgpu::ShaderStages::COMPUTE,
+                        range: 0..self.gpu.device.limits().max_push_constant_size,
+                    })
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                let pipeline_layout =
                     self.gpu
                         .device
-                        .push_error_scope(wgpu::ErrorFilter::Validation);
-                    let pipeline =
-                        self.gpu
-                            .device
-                            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                                label: Some("hl-compute-spirv"),
-                                layout: Some(&pipeline_layout),
-                                module: &module,
-                                entry_point: Some(desc.compute.entry.as_str()),
-                                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                                cache: None,
-                            });
-                    if let Some(e) = pollster::block_on(self.gpu.device.pop_error_scope()) {
-                        hl_log::hl_warn!(
-                            hl_log::tag::WGPU,
-                            "pipeline rejected kind=compute reason=spirv-no-compute-entry err={}",
-                            e
-                        );
-                        return Err(GpuError::Kernel(format!(
-                            "wgpu: SPIR-V compute pipeline creation failed (entry {:?}): {e}",
-                            desc.compute.entry
-                        )));
-                    }
-                    (pipeline, true)
+                        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                            label: Some("hl-compute-module-pl"),
+                            bind_group_layouts: &layout_refs,
+                            push_constant_ranges: &push_constant_ranges,
+                        });
+                // A validation error scope turns wgpu's async device error (raised when the module has no
+                // compute entry point matching `entry` — e.g. a graphics-only SPIR-V module used for
+                // compute) into a clean typed error, instead of the default uncaptured handler PANICKING.
+                self.gpu
+                    .device
+                    .push_error_scope(wgpu::ErrorFilter::Validation);
+                let pipeline =
+                    self.gpu
+                        .device
+                        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                            label: Some("hl-compute-spirv"),
+                            layout: Some(&pipeline_layout),
+                            module: &module,
+                            entry_point: Some(desc.compute.entry.as_str()),
+                            compilation_options: wgpu::PipelineCompilationOptions::default(),
+                            cache: None,
+                        });
+                if let Some(e) = pollster::block_on(self.gpu.device.pop_error_scope()) {
+                    hl_log::hl_warn!(
+                        hl_log::tag::WGPU,
+                        "pipeline rejected kind=compute reason=spirv-no-compute-entry err={}",
+                        e
+                    );
+                    return Err(GpuError::Kernel(format!(
+                        "wgpu: SPIR-V compute pipeline creation failed (entry {:?}): {e}",
+                        desc.compute.entry
+                    )));
                 }
-            };
-        res.pipelines.insert(
+                (pipeline, true)
+            }
+        };
+        let backing = self.dedup.compute_pipeline_install(
+            pipe_key.clone(),
+            pipeline.clone(),
+            remap_group_zero,
+            texel.clone(),
+        );
+        if let Err(error) = res.pipelines.insert(
             id,
             Box::new(PipelineNative::Compute {
+                pipeline: pipeline.clone(),
+                backing,
+                remap_group_zero,
+                texel: texel.clone(),
+            }),
+        ) {
+            self.dedup.compute_pipeline_release(backing);
+            return Err(error);
+        }
+        self.pipeline_journal.push(Mutation::ComputeInstall(
+            pipe_key,
+            crate::pipeline::ComputeArtifact {
                 pipeline,
                 remap_group_zero,
                 texel,
-            }),
-        )
+            },
+        ));
+        Ok(())
     }
 
     pub(crate) fn create_render_pipeline(
@@ -268,9 +336,9 @@ impl WgpuExecutor {
                             | PipelineBindingKind::StorageTexelBuffer
                     )
                 }) && vs_key.kind == hl_gpu::ShaderPayloadKind::SpirV as u8
-                    && fs_key.as_ref().is_none_or(|key| {
-                        key.kind == hl_gpu::ShaderPayloadKind::SpirV as u8
-                    })
+                    && fs_key
+                        .as_ref()
+                        .is_none_or(|key| key.kind == hl_gpu::ShaderPayloadKind::SpirV as u8)
             })
             .map(|layout| {
                 std::sync::Arc::new(crate::texel_buffer::RenderSpecializer::new(
@@ -684,17 +752,22 @@ impl WgpuExecutor {
         Ok(())
     }
 
-    /// Destroy a pipeline id, releasing a render pipeline's alias of its shared compiled backing (a no-op
-    /// for a compute pipeline, which is not deduped). Reads the id's backing id BEFORE removing it, then
+    /// Destroy a pipeline id, releasing its alias of the shared compiled backing. Reads the backing id
+    /// BEFORE removing it, then
     /// removes (which may raise `UnknownId` for a double-free — propagated before any refcount change).
     pub(crate) fn destroy_pipeline(&mut self, res: &mut SessionResources, id: u32) -> Result<()> {
         let backing = match PipelineNative::get(res, id) {
-            Ok(PipelineNative::Render { backing, .. }) => Some(*backing),
+            Ok(PipelineNative::Render { backing, .. }) => Some((*backing, false)),
+            Ok(PipelineNative::Compute { backing, .. }) => Some((*backing, true)),
             _ => None,
         };
         res.pipelines.remove(id)?;
-        if let Some(backing) = backing {
-            self.dedup.pipeline_release(backing);
+        if let Some((backing, compute)) = backing {
+            if compute {
+                self.dedup.compute_pipeline_release(backing);
+            } else {
+                self.dedup.pipeline_release(backing);
+            }
         }
         Ok(())
     }
@@ -902,7 +975,7 @@ mod vertex;
 
 use layout::*;
 pub use native::PipelineNative;
-pub(crate) use residency::{Artifact, Mutation, Residency};
+pub(crate) use residency::{Artifact, ComputeArtifact, Mutation, Residency};
 use state::*;
 use vertex::*;
 

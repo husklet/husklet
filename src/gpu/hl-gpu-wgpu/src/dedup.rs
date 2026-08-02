@@ -23,9 +23,11 @@
 use std::collections::HashMap;
 
 use hl_gpu::protocol::model::descriptor::{
-    ColorTargetState, DepthState, RenderPipelineDesc, VertexLayout,
+    ColorTargetState, ComputePipelineDesc, DepthState, PipelineLayout, RenderPipelineDesc,
+    VertexLayout,
 };
 use hl_gpu::protocol::model::enums::{TextureFormat, Topology};
+use hl_gpu::protocol::model::kernel::KernelProgram;
 
 use crate::reflect::ModuleUsage;
 
@@ -67,6 +69,35 @@ pub struct RenderPipeKey {
     pub sample_count: u32,
     pub sample_mask: u64,
     pub sample_shading: bool,
+}
+
+/// Exact compilation identity of a compute pipeline. Labels and guest resource ids are deliberately
+/// excluded; shader content, entry point, and the authoritative Vulkan layout are compilation inputs.
+#[derive(Clone, PartialEq)]
+pub enum ComputePipeKey {
+    Module {
+        shader: ShaderKey,
+        entry: String,
+        layout: Option<PipelineLayout>,
+    },
+    Kernel {
+        program: KernelProgram,
+        entry: String,
+    },
+}
+
+impl ComputePipeKey {
+    pub fn module(
+        desc: &ComputePipelineDesc,
+        shader: ShaderKey,
+        layout: Option<&PipelineLayout>,
+    ) -> Self {
+        Self::Module {
+            shader,
+            entry: desc.compute.entry.clone(),
+            layout: layout.cloned(),
+        }
+    }
 }
 
 impl RenderPipeKey {
@@ -117,6 +148,15 @@ struct PipelineBacking {
     last_used: u64,
 }
 
+struct ComputePipelineBacking {
+    key: ComputePipeKey,
+    pipeline: wgpu::ComputePipeline,
+    remap_group_zero: bool,
+    texel: Option<std::sync::Arc<crate::texel_buffer::ComputeSpecializer>>,
+    bytes: u64,
+    refcount: u32,
+}
+
 /// The inverse of one cache mutation, recorded for transactional rollback of a failed batch.
 enum Undo {
     ShaderAcquire(ShaderKey),
@@ -125,6 +165,9 @@ enum Undo {
     PipelineAcquire(u64, u64),
     PipelineInstall(u64),
     PipelineRelease(u64, u64),
+    ComputeAcquire(u64),
+    ComputeInstall(u64),
+    ComputeRelease(u64),
 }
 
 /// The executor's content-dedup state: the shader + pipeline backing caches, the running residency
@@ -133,6 +176,7 @@ enum Undo {
 pub struct DedupCaches {
     shaders: HashMap<ShaderKey, ShaderBacking>,
     pipelines: HashMap<u64, PipelineBacking>,
+    compute_pipelines: HashMap<u64, ComputePipelineBacking>,
     next_pipeline_id: u64,
     pipeline_clock: u64,
     batch_pipeline_clock: u64,
@@ -167,7 +211,7 @@ impl DedupCaches {
 
     /// Count of distinct executor-local render-pipeline backings with live guest aliases.
     pub fn pipeline_backing_count(&self) -> usize {
-        self.pipelines.len()
+        self.pipelines.len() + self.compute_pipelines.len()
     }
 
     // ---- batch transaction hooks -------------------------------------------------------------------
@@ -194,6 +238,16 @@ impl DedupCaches {
             .collect();
         for id in released {
             if let Some(entry) = self.pipelines.remove(&id) {
+                self.pipeline_bytes = self.pipeline_bytes.saturating_sub(entry.bytes);
+            }
+        }
+        let released: Vec<_> = self
+            .compute_pipelines
+            .iter()
+            .filter_map(|(id, entry)| (entry.refcount == 0).then_some(*id))
+            .collect();
+        for id in released {
+            if let Some(entry) = self.compute_pipelines.remove(&id) {
                 self.pipeline_bytes = self.pipeline_bytes.saturating_sub(entry.bytes);
             }
         }
@@ -246,6 +300,21 @@ impl DedupCaches {
                     if let Some(e) = self.pipelines.get_mut(&id) {
                         e.refcount += 1;
                         e.last_used = last_used;
+                    }
+                }
+                Undo::ComputeAcquire(id) => {
+                    if let Some(e) = self.compute_pipelines.get_mut(&id) {
+                        e.refcount = e.refcount.saturating_sub(1);
+                    }
+                }
+                Undo::ComputeInstall(id) => {
+                    if let Some(e) = self.compute_pipelines.remove(&id) {
+                        self.pipeline_bytes = self.pipeline_bytes.saturating_sub(e.bytes);
+                    }
+                }
+                Undo::ComputeRelease(id) => {
+                    if let Some(e) = self.compute_pipelines.get_mut(&id) {
+                        e.refcount = e.refcount.saturating_add(1);
                     }
                 }
             }
@@ -389,6 +458,67 @@ impl DedupCaches {
             e.last_used = last_used;
             self.journal
                 .push(Undo::PipelineRelease(backing_id, previous_last_used));
+        }
+    }
+
+    pub fn compute_pipeline_get(
+        &mut self,
+        key: &ComputePipeKey,
+    ) -> Option<(
+        wgpu::ComputePipeline,
+        bool,
+        Option<std::sync::Arc<crate::texel_buffer::ComputeSpecializer>>,
+        u64,
+    )> {
+        let id = self
+            .compute_pipelines
+            .iter()
+            .find(|(_, entry)| entry.key == *key)
+            .map(|(id, _)| *id)?;
+        let entry = self.compute_pipelines.get_mut(&id).expect("id just found");
+        entry.refcount = entry.refcount.saturating_add(1);
+        let artifact = (
+            entry.pipeline.clone(),
+            entry.remap_group_zero,
+            entry.texel.clone(),
+            id,
+        );
+        self.journal.push(Undo::ComputeAcquire(id));
+        Some(artifact)
+    }
+
+    pub fn compute_pipeline_install(
+        &mut self,
+        key: ComputePipeKey,
+        pipeline: wgpu::ComputePipeline,
+        remap_group_zero: bool,
+        texel: Option<std::sync::Arc<crate::texel_buffer::ComputeSpecializer>>,
+    ) -> u64 {
+        let id = self.next_pipeline_id;
+        self.next_pipeline_id = self.next_pipeline_id.wrapping_add(1);
+        self.pipeline_bytes = self.pipeline_bytes.saturating_add(PIPELINE_BACKING_BYTES);
+        self.compute_pipelines.insert(
+            id,
+            ComputePipelineBacking {
+                key,
+                pipeline,
+                remap_group_zero,
+                texel,
+                bytes: PIPELINE_BACKING_BYTES,
+                refcount: 1,
+            },
+        );
+        self.journal.push(Undo::ComputeInstall(id));
+        id
+    }
+
+    pub fn compute_pipeline_release(&mut self, backing_id: u64) {
+        if let Some(entry) = self.compute_pipelines.get_mut(&backing_id) {
+            if entry.refcount == 0 {
+                return;
+            }
+            entry.refcount -= 1;
+            self.journal.push(Undo::ComputeRelease(backing_id));
         }
     }
 }
