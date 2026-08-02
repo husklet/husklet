@@ -603,6 +603,37 @@ fn an_ordinary_clear_still_lowers_to_a_load_op_and_no_draw() {
     }
 }
 
+/// A scissor box that covers the complete draw target is observably identical to no scissor for a clear.
+/// dEQP uses this exact state in every rasterizer-discard scissor case; routing it through the internal
+/// rect-clear draw needlessly introduces another pipeline and bind-group boundary.
+#[test]
+fn a_full_target_scissor_clear_uses_attachment_loads() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    record::enable(&mut c, GL_SCISSOR_TEST);
+    record::scissor(&mut c, [0, 0, 256, 256]);
+    record::clear_color(&mut c, [0.25, 0.5, 0.75, 1.0]);
+    record::clear_depth(&mut c, 0.5);
+    record::clear_stencil(&mut c, 0);
+    record::clear_buffers(
+        &mut c,
+        GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT,
+    );
+    swap::swap_buffers(&mut c, &mut sink).unwrap();
+
+    let ops = submit_ops(&sink.batches[0]);
+    assert!(
+        !used_rect_clear(&sink.batches[0]),
+        "a target-covering scissor must retain the attachment-load fast path: {ops:?}"
+    );
+    assert!(matches!(
+        ops.first(),
+        Some(Enc::BeginRenderPass { color, depth: Some(depth) })
+            if color[0].load == LoadOp::Clear && depth.load == LoadOp::Clear
+    ));
+}
+
 /// A SCISSORED but unmasked colour clear keeps its `Enc::ClearRect`: it already paints exactly its rect
 /// with every channel enabled, and a rect FILL is cheaper than a rect DRAW.
 #[test]

@@ -29,6 +29,20 @@ impl GlContext {
             clear_mask: mask,
             ..self.snapshot(false)
         };
+        // Scissoring a clear to a box that covers the complete draw target changes no observable pixel.
+        // Normalize that state here, where the bound target's dimensions are known, so lowering retains
+        // attachment load ops instead of manufacturing an internal rect-clear draw. Boxes may extend past
+        // either edge; GL intersects them with the framebuffer.
+        if d.scissor_enabled {
+            let [x, y, sw, sh] = d.scissor;
+            if x <= 0
+                && y <= 0
+                && x.saturating_add(sw) >= w
+                && y.saturating_add(sh) >= h
+            {
+                d.scissor_enabled = false;
+            }
+        }
         d.clear_rect = [0, 0, w, h];
         // Nothing left to write: every named plane is masked off entirely. Recording it would still be
         // harmless, but dropping it keeps a masked-off clear from becoming a pass boundary. A PARTIALLY
