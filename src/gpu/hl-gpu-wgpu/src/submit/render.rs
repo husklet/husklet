@@ -6,10 +6,16 @@ mod plan;
 ///
 /// Distinct from `render_attachment`, which records only that the usage was granted. A pass binds the
 /// default view, and wgpu requires an attachment view to name exactly one mip level and one array layer
-/// of a 2D image; a texture that is layered, multi-level, 1D or 3D is refused here rather than at
+/// of a physical 2D image. Protocol D1 is included because it is backed by a one-row D2 image and its
+/// D1 view is lowered to D2; a texture that is layered, multi-level or 3D is refused here rather than at
 /// `RenderPass::end`, where the message names the view it was handed instead of what the caller passed.
 fn bindable_as_attachment(t: &texture::WgpuTexture) -> bool {
-    t.dim == hl_gpu::protocol::model::enums::TextureDim::D2 && t.depth == 1 && t.mip_levels == 1
+    matches!(
+        t.dim,
+        hl_gpu::protocol::model::enums::TextureDim::D1
+            | hl_gpu::protocol::model::enums::TextureDim::D2
+    ) && t.depth == 1
+        && t.mip_levels == 1
 }
 
 impl WgpuExecutor {
@@ -81,8 +87,9 @@ impl WgpuExecutor {
             // `TextureViewIsNotRenderable { reason: MipLevelCount(3) }` at `RenderPass::end`.
             //
             // This is the predicate the grant/guard coupling test's own failure message prescribes: the
-            // bound view must be a single-layer, single-mip 2D view, because that is what a colour pass
-            // can target. An explicit `CreateTextureView` that selects one level of a multi-level
+            // bound view must be a single-layer, single-mip physical 2D view, because that is what a colour
+            // pass can target. Emulated D1 views satisfy this after lowering. An explicit
+            // `CreateTextureView` that selects one level of a multi-level
             // texture satisfies it and is deliberately still allowed.
             if !bindable_as_attachment(t) {
                 return Err(GpuError::Invalid(

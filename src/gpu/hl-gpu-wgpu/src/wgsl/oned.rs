@@ -71,17 +71,29 @@ impl Images {
                 variable.ty = *mapped;
             }
         }
-        for (_, function) in module.functions.iter_mut() {
-            Self::remap_function_types(function, &mapped_types);
+        let function_roots = module
+            .functions
+            .iter_mut()
+            .map(|(_, function)| {
+                let roots = Roots::from_function(function, &image_types);
+                Self::remap_function_types(function, &mapped_types);
+                roots
+            })
+            .collect::<Vec<_>>();
+        let entry_roots = module
+            .entry_points
+            .iter_mut()
+            .map(|entry| {
+                let roots = Roots::from_function(&entry.function, &image_types);
+                Self::remap_function_types(&mut entry.function, &mapped_types);
+                roots
+            })
+            .collect::<Vec<_>>();
+        for ((_, function), roots) in module.functions.iter_mut().zip(function_roots) {
+            FunctionLowering::new(&globals, roots, float2, sint2).lower(function)?;
         }
-        for entry in &mut module.entry_points {
-            Self::remap_function_types(&mut entry.function, &mapped_types);
-        }
-        for (_, function) in module.functions.iter_mut() {
-            FunctionLowering::new(&globals, float2, sint2).lower(function)?;
-        }
-        for entry in &mut module.entry_points {
-            FunctionLowering::new(&globals, float2, sint2).lower(&mut entry.function)?;
+        for (entry, roots) in module.entry_points.iter_mut().zip(entry_roots) {
+            FunctionLowering::new(&globals, roots, float2, sint2).lower(&mut entry.function)?;
         }
         Ok(())
     }
@@ -107,8 +119,32 @@ impl Images {
     }
 }
 
+struct Roots {
+    arguments: Vec<bool>,
+    locals: Vec<Handle<naga::LocalVariable>>,
+}
+
+impl Roots {
+    fn from_function(function: &naga::Function, image_types: &[Handle<Type>]) -> Self {
+        Self {
+            arguments: function
+                .arguments
+                .iter()
+                .map(|argument| image_types.contains(&argument.ty))
+                .collect(),
+            locals: function
+                .local_variables
+                .iter()
+                .filter_map(|(handle, local)| image_types.contains(&local.ty).then_some(handle))
+                .collect(),
+        }
+    }
+}
+
 struct FunctionLowering<'a> {
     globals: &'a [Handle<naga::GlobalVariable>],
+    arguments: Vec<bool>,
+    locals: Vec<Handle<naga::LocalVariable>>,
     float2: Handle<Type>,
     sint2: Handle<Type>,
     map: Vec<Handle<Expression>>,
@@ -119,11 +155,14 @@ struct FunctionLowering<'a> {
 impl<'a> FunctionLowering<'a> {
     fn new(
         globals: &'a [Handle<naga::GlobalVariable>],
+        roots: Roots,
         float2: Handle<Type>,
         sint2: Handle<Type>,
     ) -> Self {
         Self {
             globals,
+            arguments: roots.arguments,
+            locals: roots.locals,
             float2,
             sint2,
             map: Vec::new(),
@@ -170,6 +209,8 @@ impl<'a> FunctionLowering<'a> {
     fn is_oned(&self, expression: &Expression) -> bool {
         match expression {
             Expression::GlobalVariable(handle) => self.globals.contains(handle),
+            Expression::FunctionArgument(index) => self.arguments[*index as usize],
+            Expression::LocalVariable(handle) => self.locals.contains(handle),
             Expression::Access { base, .. }
             | Expression::AccessIndex { base, .. }
             | Expression::Load { pointer: base } => self.oned[base.index()],
