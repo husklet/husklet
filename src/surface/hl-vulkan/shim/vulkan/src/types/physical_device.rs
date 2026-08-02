@@ -378,6 +378,7 @@ pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES: i32 = 54;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PROPERTIES: i32 = 1_000_053_002;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_POINT_CLIPPING_PROPERTIES: i32 = 1_000_117_000;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_PROPERTIES: i32 = 1_000_145_002;
+pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES: i32 = 1_000_199_000;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_PROPERTIES: i32 = 1_000_207_001;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INLINE_UNIFORM_BLOCK_PROPERTIES: i32 = 1_000_138_001;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES: i32 = 1_000_225_000;
@@ -473,6 +474,16 @@ pub struct VkPhysicalDeviceProtectedMemoryProperties {
     pub s_type: i32,
     pub p_next: *mut c_void,
     pub protected_no_fault: VkBool32,
+}
+
+#[repr(C)]
+pub struct VkPhysicalDeviceDepthStencilResolveProperties {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub supported_depth_resolve_modes: VkFlags,
+    pub supported_stencil_resolve_modes: VkFlags,
+    pub independent_resolve_none: VkBool32,
+    pub independent_resolve: VkBool32,
 }
 
 #[repr(C)]
