@@ -360,8 +360,8 @@ pub struct VkPipelineColorBlendAttachmentState {
 
 /// `VkPipelineColorBlendStateCreateInfo` — the color-blend fixed-function state of a graphics pipeline.
 /// The first attachment's blend AND `colorWriteMask` are threaded (the software rasterizer applies one
-/// blend + one write mask to all targets), so the struct is truncated after `pAttachments`:
-/// `logicOp`/`blendConstants` are NOT modeled and no field past this prefix is ever accessed. A null
+/// blend + one write mask to all targets). `logicOp` and `blendConstants` are not yet lowered, but the
+/// externally visible declaration retains their complete registry layout. A null
 /// pointer / `blendEnable = VK_FALSE` => no blend (an opaque overwrite); an absent state => `colorWriteMask`
 /// defaults to `0xf` (write all channels).
 #[repr(C)]
@@ -373,7 +373,7 @@ pub struct VkPipelineColorBlendStateCreateInfo {
     pub logic_op: i32,
     pub attachment_count: u32,
     pub p_attachments: *const VkPipelineColorBlendAttachmentState,
-    // Remaining field (blendConstants[4]) is NOT modeled and is never read through this pointer.
+    pub blend_constants: [f32; 4],
 }
 
 /// `VkPipelineMultisampleStateCreateInfo` — the multisample fixed-function state of a graphics pipeline.
@@ -427,6 +427,19 @@ pub struct VkPhysicalDeviceDynamicRenderingFeatures {
     pub s_type: i32,
     pub p_next: *mut c_void,
     pub dynamic_rendering: VkBool32,
+}
+
+#[cfg(test)]
+mod abi_tests {
+    use super::*;
+
+    #[test]
+    fn color_blend_state_has_the_complete_lp64_registry_layout() {
+        let value: VkPipelineColorBlendStateCreateInfo = unsafe { core::mem::zeroed() };
+        let base = &value as *const _ as usize;
+        assert_eq!(value.blend_constants.as_ptr() as usize - base, 40);
+        assert_eq!(core::mem::size_of_val(&value), 56);
+    }
 }
 
 // ---- bind-memory-2 / memory-requirements-2 (core 1.1 / VK_KHR_bind_memory2 + get_memory_requirements2)
