@@ -104,6 +104,14 @@ fn filterable(format: hl_gpu::protocol::model::enums::TextureFormat) -> bool {
     !matches!(format, F::R32Float | F::Rgba32Float)
 }
 
+fn integer(format: hl_gpu::protocol::model::enums::TextureFormat) -> bool {
+    use hl_gpu::protocol::model::enums::TextureFormat as F;
+    matches!(
+        format,
+        F::R8Uint | F::R8Sint | F::Rg8Uint | F::Rg8Sint | F::Rgba8Uint | F::Rgba8Sint
+    )
+}
+
 impl BlitCache {
     fn new(device: &wgpu::Device) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -337,13 +345,14 @@ impl WgpuExecutor {
         // Source dims (for UV normalization) + destination wgpu format (the pipeline's color-target format).
         // A blit reads the source through a sampler and writes the destination as a color attachment, so both
         // must have a packed COLOR layout — the depth/stencil formats have none and are rejected honestly.
-        let (sw, sh, sd, src_wfmt, can_filter) = {
+        let (sw, sh, sd, src_fmt, src_wfmt, can_filter) = {
             let t = texture::WgpuTexture::get(res, src)?;
             let _ = Format::from(t.format).texel_bytes()?;
             (
                 t.width,
                 t.height,
                 t.depth,
+                t.format,
                 Format::from(t.format).native(),
                 filterable(t.format),
             )
@@ -356,18 +365,19 @@ impl WgpuExecutor {
                 "wgpu: linear blit filter for a non-filterable source format",
             ));
         }
-        let (dw, dh, dd, dst_wfmt) = {
+        let (dw, dh, dd, dst_fmt, dst_wfmt) = {
             let t = texture::WgpuTexture::get(res, dst)?;
             let _ = Format::from(t.format).texel_bytes()?;
             // A blit WRITES its destination as a colour attachment, so the destination needs the same
             // usage a render pass target needs. Refused here, where the caller can be told what it named,
             // rather than as a device-validation failure inside the pass below.
-            if !t.render_attachment && t.dim != hl_gpu::protocol::model::enums::TextureDim::D3 {
-                return Err(GpuError::Invalid(
-                    "wgpu: blit destination was not created as a render target",
-                ));
-            }
-            (t.width, t.height, t.depth, Format::from(t.format).native())
+            (
+                t.width,
+                t.height,
+                t.depth,
+                t.format,
+                Format::from(t.format).native(),
+            )
         };
 
         // Bounds: the source region must lie inside `src`, the destination region inside `dst`.
@@ -398,6 +408,79 @@ impl WgpuExecutor {
                 .is_none_or(|e| e > dd)
         {
             return Err(GpuError::OutOfBounds);
+        }
+
+        if integer(src_fmt) || integer(dst_fmt) {
+            let source = texture::WgpuTexture::get(res, src)?;
+            let destination = texture::WgpuTexture::get(res, dst)?;
+            if source.usage & hl_gpu::protocol::model::enums::texture_usage::COPY_SRC == 0 {
+                return Err(GpuError::Invalid(
+                    "wgpu: integer blit source lacks COPY_SRC",
+                ));
+            }
+            if destination.usage & hl_gpu::protocol::model::enums::texture_usage::COPY_DST == 0 {
+                return Err(GpuError::Invalid(
+                    "wgpu: integer blit destination lacks COPY_DST",
+                ));
+            }
+            let exact_copy = integer(src_fmt)
+                && src_fmt == dst_fmt
+                && src_extent == dst_extent
+                && filter == Filter::Nearest
+                && !mirror.x
+                && !mirror.y
+                && !mirror.z;
+            if !exact_copy {
+                return Err(GpuError::Unsupported(
+                    "wgpu: integer blit requires identical format and extent with nearest filtering and no mirror",
+                ));
+            }
+            let device = &self.gpu.device;
+            let src_texture = &source.texture;
+            let dst_texture = &destination.texture;
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("hl-integer-blit-copy"),
+            });
+            for z in 0..src_extent.depth {
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: src_texture,
+                        mip_level: src_sub.mip,
+                        origin: wgpu::Origin3d {
+                            x: src_origin.x,
+                            y: src_origin.y,
+                            z: src_origin.z + z,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: dst_texture,
+                        mip_level: dst_sub.mip,
+                        origin: wgpu::Origin3d {
+                            x: dst_origin.x,
+                            y: dst_origin.y,
+                            z: dst_origin.z + z,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: src_extent.width,
+                        height: src_extent.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+            self.gpu.queue.submit(Some(encoder.finish()));
+            return Ok(());
+        }
+
+        let dst_texture = texture::WgpuTexture::get(res, dst)?;
+        if !dst_texture.render_attachment
+            && dst_texture.dim != hl_gpu::protocol::model::enums::TextureDim::D3
+        {
+            return Err(GpuError::Invalid(
+                "wgpu: blit destination was not created as a render target",
+            ));
         }
 
         // Normalize the source rect into UV space: uv = uv_off + local_uv * uv_scale, with local_uv running

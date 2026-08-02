@@ -927,6 +927,10 @@ impl WgpuExecutor {
                         filter,
                         mirror,
                     } => {
+                        // `blit_texture` submits its own command encoder. Preserve the IR order by
+                        // submitting native copies/uploads accumulated before it first; otherwise the
+                        // standalone blit can execute against stale source contents.
+                        self.submit_encoded(&mut native);
                         self.blit_texture(
                             res, *src, src_sub, src_origin, src_extent, *dst, dst_sub, dst_origin,
                             dst_extent, *filter, *mirror,

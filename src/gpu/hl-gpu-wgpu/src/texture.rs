@@ -59,6 +59,9 @@ pub struct WgpuTexture {
     /// `ResolveTexture` op which averages its samples into a single-sample destination.
     pub sample_count: u32,
     pub format: TextureFormat,
+    /// Protocol usage declared when the texture was created. Native allocations deliberately carry a
+    /// broader mechanical usage set, so operation validation must consult this value rather than wgpu's.
+    pub usage: u32,
     /// Whether this texture was created with `RENDER_ATTACHMENT`, i.e. whether it can be a colour or
     /// depth attachment, a resolve target, or a blit destination.
     ///
@@ -168,6 +171,7 @@ impl WgpuExecutor {
             mip_levels: desc.mip_count,
             sample_count: source.sample_count,
             format: source.format,
+            usage: source.usage,
             // A view's attachability is the PARENT texture's: the usage lives on the wgpu texture, and a
             // view cannot add one its texture was not created with.
             render_attachment: source.render_attachment,
@@ -343,6 +347,7 @@ impl WgpuExecutor {
             mip_levels,
             sample_count,
             format: desc.format,
+            usage: desc.usage,
             render_attachment: usage.contains(wgpu::TextureUsages::RENDER_ATTACHMENT),
             #[cfg(target_os = "macos")]
             iosurface,
