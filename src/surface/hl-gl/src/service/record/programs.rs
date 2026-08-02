@@ -765,7 +765,7 @@ impl GlContext {
             color_mask: ctx.local.pipeline.color_mask,
             depth_range: ctx.local.pipeline.depth_range,
             draw_buffer_mask: ctx.draw_buffer_mask(),
-            clear: ctx.local.pipeline.clear_color,
+            clear: ctx.local.pipeline.clear_color.map(f64::from),
             clear_depth: ctx.local.pipeline.clear_depth,
             clear_stencil: ctx.local.pipeline.clear_stencil,
             elem_buf: ctx.local.element_buffer,

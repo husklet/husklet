@@ -306,6 +306,12 @@ impl GlContext {
         )
     }
 
+    pub fn read_colour_buffer_numeric_class(
+        &self,
+    ) -> hl_gpu::protocol::model::enums::TextureNumericClass {
+        self.read_colour_buffer_format().numeric_class()
+    }
+
     pub fn gen_framebuffer(&mut self) -> u32 {
         self.local.framebuffers.gen()
     }

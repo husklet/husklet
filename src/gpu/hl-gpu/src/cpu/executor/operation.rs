@@ -51,7 +51,7 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
                     ));
                 }
                 if c.load == LoadOp::Clear {
-                    t.desc.format.software_clear_texel(c.clear)?;
+                    t.desc.format.software_clear_texel_f64(c.clear)?;
                 }
                 agree(t)?;
                 formats.push(t.desc.format);
@@ -179,7 +179,7 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
             // Pack the clear color HERE so a format the oracle cannot clear is rejected before any op in
             // this command buffer runs: an unclearable format discovered mid-execution would leave earlier
             // ops' writes behind, which the runtime's id-table transaction cannot undo.
-            t.desc.format.software_clear_texel(*color)?;
+            t.desc.format.software_clear_texel_f64(*color)?;
         }
         Enc::Draw {
             vertex_count,

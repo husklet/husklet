@@ -44,14 +44,14 @@ fn out_of_range_enums_are_typed_bad_enum() {
         })
     ));
     // One past the LAST declared discriminant. This boundary moves whenever a format is added — it was 26
-    // before the integer formats (`Rgba8Uint` … `Rg8Sint` = 26..=31) took that range — and it must move,
+    // before the integer formats (`Rgba8Uint` … `Rgba32Sint` = 26..=33) took that range — and it must move,
     // because the property under test is that an undeclared value is refused rather than aliasing onto a
     // declared one.
     assert!(matches!(
-        TextureFormat::from_u32(32),
+        TextureFormat::from_u32(34),
         Err(GpuError::BadEnum { .. })
     ));
-    for v in 1..=31 {
+    for v in 1..=33 {
         assert_eq!(TextureFormat::from_u32(v).unwrap().to_u32(), v);
     }
     assert!(matches!(
@@ -204,7 +204,7 @@ fn non_finite_render_floats_are_rejected_at_the_wire() {
                 y: 0,
                 w: 1,
                 h: 1,
-                color: [bad, 0.0, 0.0, 1.0],
+                color: [f64::from(bad), 0.0, 0.0, 1.0],
                 base_array_layer: 0,
                 layer_count: 1,
                 mip_level: 0,
@@ -213,7 +213,7 @@ fn non_finite_render_floats_are_rejected_at_the_wire() {
                 color: vec![ColorAttachment {
                     texture: 1,
                     load: LoadOp::Clear,
-                    clear: [0.0, bad, 0.0, 1.0],
+                    clear: [0.0, f64::from(bad), 0.0, 1.0],
                     store: true,
                 }],
                 depth: None,

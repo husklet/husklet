@@ -155,10 +155,10 @@ impl WgpuExecutor {
                         ops: wgpu::Operations {
                             load: match c.load {
                                 LoadOp::Clear => wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: c.clear[0] as f64,
-                                    g: c.clear[1] as f64,
-                                    b: c.clear[2] as f64,
-                                    a: c.clear[3] as f64,
+                                    r: c.clear[0],
+                                    g: c.clear[1],
+                                    b: c.clear[2],
+                                    a: c.clear[3],
                                 }),
                                 _ => wgpu::LoadOp::Load,
                             },

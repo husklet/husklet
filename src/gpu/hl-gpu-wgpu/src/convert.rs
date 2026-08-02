@@ -52,6 +52,8 @@ impl Format {
             // texels — so nothing is normalized or reinterpreted across this map.
             TextureFormat::Rgba8Uint => W::Rgba8Uint,
             TextureFormat::Rgba8Sint => W::Rgba8Sint,
+            TextureFormat::Rgba32Uint => W::Rgba32Uint,
+            TextureFormat::Rgba32Sint => W::Rgba32Sint,
             TextureFormat::R8Uint => W::R8Uint,
             TextureFormat::R8Sint => W::R8Sint,
             TextureFormat::Rg8Uint => W::Rg8Uint,
@@ -85,6 +87,12 @@ impl Format {
     pub fn clear_texel(self, color: [f32; 4]) -> Result<Vec<u8>> {
         self.0
             .clear_texel(color)
+            .ok_or(GpuError::Unsupported("wgpu: ClearRect for this format"))
+    }
+
+    pub fn clear_texel_f64(self, color: [f64; 4]) -> Result<Vec<u8>> {
+        self.0
+            .clear_texel_f64(color)
             .ok_or(GpuError::Unsupported("wgpu: ClearRect for this format"))
     }
 }

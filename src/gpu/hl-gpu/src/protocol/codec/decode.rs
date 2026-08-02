@@ -273,16 +273,16 @@ impl<'a> Decoder<'a> {
         Ok(match d.u8()? {
             etag::BEGIN_RENDER_PASS => {
                 let n = d.u32()? as usize;
-                // each ColorAttachment = texture+load+clear[4]+store = 25 bytes
-                let mut color = Vec::with_capacity(d.cap_count(n, 25));
+                // each ColorAttachment = texture+load+clear[4]+store = 41 bytes
+                let mut color = Vec::with_capacity(d.cap_count(n, 41));
                 for _ in 0..n {
                     let texture = d.u32()?;
                     let load = LoadOp::from_u32(d.u32()?)?;
                     let clear = [
-                        d.f32_finite("color attachment clear r")?,
-                        d.f32_finite("color attachment clear g")?,
-                        d.f32_finite("color attachment clear b")?,
-                        d.f32_finite("color attachment clear a")?,
+                        d.f64_finite("color attachment clear r")?,
+                        d.f64_finite("color attachment clear g")?,
+                        d.f64_finite("color attachment clear b")?,
+                        d.f64_finite("color attachment clear a")?,
                     ];
                     let store = d.bool()?;
                     color.push(ColorAttachment {
@@ -341,10 +341,10 @@ impl<'a> Decoder<'a> {
                 w: d.u32()?,
                 h: d.u32()?,
                 color: [
-                    d.f32_finite("clear-rect r")?,
-                    d.f32_finite("clear-rect g")?,
-                    d.f32_finite("clear-rect b")?,
-                    d.f32_finite("clear-rect a")?,
+                    d.f64_finite("clear-rect r")?,
+                    d.f64_finite("clear-rect g")?,
+                    d.f64_finite("clear-rect b")?,
+                    d.f64_finite("clear-rect a")?,
                 ],
                 base_array_layer: d.u32()?,
                 layer_count: d.u32()?,

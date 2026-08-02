@@ -23,6 +23,11 @@ impl TextureFormat {
             .ok_or(GpuError::Unsupported("software: clear for this format"))
     }
 
+    pub(crate) fn software_clear_texel_f64(self, c: [f64; 4]) -> Result<Vec<u8>> {
+        TextureFormat::clear_texel_f64(self, c)
+            .ok_or(GpuError::Unsupported("software: clear for this format"))
+    }
+
     fn srgb_decode(v: u8) -> f32 {
         Self::srgb_to_linear(v as f32 / 255.0)
     }

@@ -34,6 +34,8 @@ const GL_RGB: u32 = 0x1907;
 const GL_BGRA_EXT: u32 = 0x80E1;
 
 const GL_FLOAT: u32 = 0x1406;
+const GL_INT: u32 = 0x1404;
+const GL_UNSIGNED_INT: u32 = 0x1405;
 
 /// The packed destination `glReadPixels` writes: its GL `format` and component `type`.
 ///
@@ -61,7 +63,12 @@ impl PixelFormat {
     }
 
     pub fn bytes_per_pixel(self) -> usize {
-        self.channels() * if self.type_ == GL_FLOAT { 4 } else { 1 }
+        self.channels()
+            * if matches!(self.type_, GL_FLOAT | GL_INT | GL_UNSIGNED_INT) {
+                4
+            } else {
+                1
+            }
     }
 }
 
@@ -138,6 +145,32 @@ impl TargetTexel {
         // says — only about how finely they can express it.
         self.rgba_f32(texel)
             .map(|value| (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8)
+    }
+
+    fn rgba_u32(self, texel: &[u8]) -> [u32; 4] {
+        let channel = |index: usize| {
+            texel
+                .get(index * 4..index * 4 + 4)
+                .and_then(|bytes| bytes.try_into().ok())
+                .map_or(0, u32::from_le_bytes)
+        };
+        match self.0 {
+            TextureFormat::Rgba32Uint => [channel(0), channel(1), channel(2), channel(3)],
+            _ => self.rgba8(texel).map(u32::from),
+        }
+    }
+
+    fn rgba_i32(self, texel: &[u8]) -> [i32; 4] {
+        let channel = |index: usize| {
+            texel
+                .get(index * 4..index * 4 + 4)
+                .and_then(|bytes| bytes.try_into().ok())
+                .map_or(0, i32::from_le_bytes)
+        };
+        match self.0 {
+            TextureFormat::Rgba32Sint => [channel(0), channel(1), channel(2), channel(3)],
+            _ => self.rgba8(texel).map(i32::from),
+        }
     }
 }
 
@@ -624,6 +657,18 @@ fn pack_region(
                 }
                 continue;
             }
+            if destination.type_ == GL_UNSIGNED_INT {
+                for (index, value) in target.rgba_u32(&raw[sp..sp + texel]).iter().enumerate() {
+                    out[dp + index * 4..dp + index * 4 + 4].copy_from_slice(&value.to_le_bytes());
+                }
+                continue;
+            }
+            if destination.type_ == GL_INT {
+                for (index, value) in target.rgba_i32(&raw[sp..sp + texel]).iter().enumerate() {
+                    out[dp + index * 4..dp + index * 4 + 4].copy_from_slice(&value.to_le_bytes());
+                }
+                continue;
+            }
             let [r, g, b, a] = target.rgba8(&raw[sp..sp + texel]);
             match format {
                 GL_BGRA_EXT => out[dp..dp + 4].copy_from_slice(&[b, g, r, a]),
@@ -746,6 +791,51 @@ mod tests {
         // it cannot interpret.
         let packed = pack_region(&raw, 2, 2, TextureFormat::Depth32Float, 0, 0, 2, 2, PixelFormat::new(0x1908, 0x1401));
         assert_eq!(packed, vec![0u8; 16], "an undescribable target packs zeros");
+    }
+
+    #[test]
+    fn rgba32_integer_readback_preserves_every_component_bit() {
+        let unsigned = [u32::MAX, 2_147_483_649, 16_777_217, 1_000];
+        let raw: Vec<u8> = unsigned
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        assert_eq!(
+            pack_region(
+                &raw,
+                1,
+                1,
+                TextureFormat::Rgba32Uint,
+                0,
+                0,
+                1,
+                1,
+                PixelFormat::new(0x8D99, GL_UNSIGNED_INT),
+            ),
+            raw,
+            "unsigned integer readback is raw numeric data, never normalized through bytes"
+        );
+
+        let signed = [i32::MIN, -16_777_217, 16_777_217, 1_000];
+        let raw: Vec<u8> = signed
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        assert_eq!(
+            pack_region(
+                &raw,
+                1,
+                1,
+                TextureFormat::Rgba32Sint,
+                0,
+                0,
+                1,
+                1,
+                PixelFormat::new(0x8D99, GL_INT),
+            ),
+            raw,
+            "signed integer readback preserves two's-complement components"
+        );
     }
 
     /// The `wl_shm` present path strides its source by the target texel too, and always emits four bytes

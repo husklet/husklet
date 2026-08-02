@@ -2,8 +2,9 @@
 //!
 //! `GL_RGBA_INTEGER` / `GL_RED_INTEGER` / `GL_RG_INTEGER` textures — the storage a `usampler2D` or
 //! `isampler2D` reads — had NO representation in the IR's `TextureFormat` at all, which made the whole
-//! integer-texture family unexpressible rather than merely unsupported. `INTEGER_FORMATS` adds the six
-//! 8-bit variants, and this module is the proof obligation that comes with advertising them: the
+//! integer-texture family unexpressible rather than merely unsupported. `INTEGER_FORMATS` carries the six
+//! 8-bit variants plus RGBA32UI/RGBA32I, and this module is the proof obligation that comes with
+//! advertising them: the
 //! neighbouring `executor_advertises_exactly_the_formats_this_suite_proves` fails if a format is advertised
 //! without being round-tripped here.
 //!
@@ -30,7 +31,10 @@ const IVALS: [i32; 4] = [-120, 7, -1, 127];
 fn is_signed(fmt: TextureFormat) -> bool {
     matches!(
         fmt,
-        TextureFormat::Rgba8Sint | TextureFormat::R8Sint | TextureFormat::Rg8Sint
+        TextureFormat::Rgba8Sint
+            | TextureFormat::R8Sint
+            | TextureFormat::Rg8Sint
+            | TextureFormat::Rgba32Sint
     )
 }
 
@@ -152,11 +156,28 @@ fn every_integer_format_stores_exact_integer_texels() {
             "format {fmt:?}: readback is width*height*bpt"
         );
         let texel = &raw[..bpt];
-        for channel in 0..bpt {
+        let channel_bytes = if matches!(fmt, TextureFormat::Rgba32Uint | TextureFormat::Rgba32Sint)
+        {
+            4
+        } else {
+            1
+        };
+        for channel in 0..bpt / channel_bytes {
             let (got, want) = if is_signed(fmt) {
-                (texel[channel] as i8 as i32, IVALS[channel])
+                let got = if channel_bytes == 4 {
+                    i32::from_le_bytes(texel[channel * 4..channel * 4 + 4].try_into().unwrap())
+                } else {
+                    texel[channel] as i8 as i32
+                };
+                (i64::from(got), i64::from(IVALS[channel]))
             } else {
-                (texel[channel] as i32, UVALS[channel] as i32)
+                let got = if channel_bytes == 4 {
+                    u32::from_le_bytes(texel[channel * 4..channel * 4 + 4].try_into().unwrap())
+                        as i64
+                } else {
+                    texel[channel] as i64
+                };
+                (got, i64::from(UVALS[channel]))
             };
             assert_eq!(
                 got, want,
@@ -164,6 +185,64 @@ fn every_integer_format_stores_exact_integer_texels() {
                  (raw texel {texel:?}) — an integer target must not normalize"
             );
         }
+    }
+}
+
+#[test]
+fn rgba32_integer_load_clear_preserves_values_above_f32_precision() {
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
+    for (format, clear, expected) in [
+        (
+            TextureFormat::Rgba32Uint,
+            [4_294_967_295.0, 2_147_483_649.0, 16_777_217.0, 1_000.0],
+            [u32::MAX, 2_147_483_649, 16_777_217, 1_000],
+        ),
+        (
+            TextureFormat::Rgba32Sint,
+            [-2_147_483_648.0, -16_777_217.0, 16_777_217.0, 1_000.0],
+            [0x8000_0000, (-16_777_217i32) as u32, 16_777_217, 1_000],
+        ),
+    ] {
+        let mut session = new_session(&exec);
+        hl_gpu::runtime::submit(
+            &mut session,
+            &mut exec,
+            0,
+            &[
+                Cmd::CreateTexture(
+                    1,
+                    tex(
+                        1,
+                        1,
+                        format,
+                        texture_usage::RENDER_TARGET | texture_usage::COPY_SRC,
+                    ),
+                ),
+                Cmd::Submit(CommandBuffer {
+                    encoder: vec![
+                        Enc::BeginRenderPass {
+                            color: vec![ColorAttachment {
+                                texture: 1,
+                                load: LoadOp::Clear,
+                                clear,
+                                store: true,
+                            }],
+                            depth: None,
+                        },
+                        Enc::EndRenderPass,
+                    ],
+                    signal: None,
+                }),
+            ],
+        )
+        .expect("full-width integer clear");
+        let raw = exec.read_texture(&session.resources, 1).expect("readback");
+        let got: Vec<u32> = raw
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect();
+        assert_eq!(got, expected, "{format:?} clear must preserve all 32 bits");
     }
 }
 

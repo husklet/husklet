@@ -368,6 +368,8 @@ fn a_renderbuffer_allocates_the_plane_its_declared_format_names() {
         (GL_R32F, TextureFormat::R32Float),
         (GL_RGBA8, TextureFormat::Rgba8Unorm),
         (GL_SRGB8_ALPHA8, TextureFormat::Rgba8Srgb),
+        (GL_RGBA32UI, TextureFormat::Rgba32Uint),
+        (GL_RGBA32I, TextureFormat::Rgba32Sint),
     ] {
         let mut c = ctx();
         let rbo = c.gen_renderbuffer();

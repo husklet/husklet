@@ -43,7 +43,7 @@ fn every_encoder_op() -> Vec<Enc> {
             color: vec![ColorAttachment {
                 texture: 2,
                 load: LoadOp::Clear,
-                clear: [0.0, 0.5, 1.0, 1.0],
+                clear: [4_294_967_295.0, -2_147_483_648.0, 16_777_217.0, 1_000.0],
                 store: true,
             }],
             depth: Some(DepthAttachment {
@@ -85,7 +85,7 @@ fn every_encoder_op() -> Vec<Enc> {
             y: 0,
             w: 2,
             h: 2,
-            color: [1.0, 0.0, 0.0, 1.0],
+            color: [4_294_967_295.0, -2_147_483_648.0, 16_777_217.0, 1_000.0],
             base_array_layer: 0,
             layer_count: 1,
             mip_level: 0,

@@ -190,7 +190,7 @@ pub struct DrawCall {
     /// app that never calls `glDrawBuffers` lowers unchanged.
     pub draw_buffer_mask: u32,
     /// The clear color in force for this draw / clear.
-    pub clear: [f32; 4],
+    pub clear: [f64; 4],
     /// The `glClearDepthf` / `glClearStencil` values in force for this draw / clear. Snapshotted with the
     /// call, exactly like [`Self::clear`]: reading them off live context state at lowering time gave a
     /// depth clear whatever value the app happened to set LAST in the frame, so a

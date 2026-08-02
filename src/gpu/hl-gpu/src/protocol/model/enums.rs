@@ -41,6 +41,7 @@ u32_enum!(
         // These are UNFILTERABLE and UNBLENDABLE by specification: a sampler reads them only through
         // `texelFetch` (WGSL `textureLoad`), and their texels are raw integers, never normalized.
         Rgba8Uint = 26, Rgba8Sint = 27, R8Uint = 28, R8Sint = 29, Rg8Uint = 30, Rg8Sint = 31,
+        Rgba32Uint = 32, Rgba32Sint = 33,
     } "TextureFormat"
 );
 
@@ -55,12 +56,14 @@ pub enum TextureNumericClass {
 impl TextureFormat {
     pub fn numeric_class(self) -> TextureNumericClass {
         match self {
-            TextureFormat::Rgba8Uint | TextureFormat::R8Uint | TextureFormat::Rg8Uint => {
-                TextureNumericClass::Uint
-            }
-            TextureFormat::Rgba8Sint | TextureFormat::R8Sint | TextureFormat::Rg8Sint => {
-                TextureNumericClass::Sint
-            }
+            TextureFormat::Rgba8Uint
+            | TextureFormat::R8Uint
+            | TextureFormat::Rg8Uint
+            | TextureFormat::Rgba32Uint => TextureNumericClass::Uint,
+            TextureFormat::Rgba8Sint
+            | TextureFormat::R8Sint
+            | TextureFormat::Rg8Sint
+            | TextureFormat::Rgba32Sint => TextureNumericClass::Sint,
             _ => TextureNumericClass::Float,
         }
     }
@@ -78,7 +81,9 @@ impl TextureFormat {
             | TextureFormat::Bgra8Srgb
             | TextureFormat::R32Float => 4,
             TextureFormat::Rgba16Float => 8,
-            TextureFormat::Rgba32Float => 16,
+            TextureFormat::Rgba32Float | TextureFormat::Rgba32Uint | TextureFormat::Rgba32Sint => {
+                16
+            }
             // depth/stencil are not plain-color; software backend won't clear-fill these
             TextureFormat::Depth32Float | TextureFormat::Depth24PlusStencil8 => return None,
             TextureFormat::Bc1RgbaUnorm
@@ -156,15 +161,20 @@ impl TextureFormat {
     /// are still defined on normalized channels. Being clearable is not being renderable-in-full, and the
     /// capability set says the stronger thing.
     pub fn clear_texel(self, color: [f32; 4]) -> Option<Vec<u8>> {
-        let unorm = |value: f32| (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-        let channel = |value: f32| {
+        self.clear_texel_f64(color.map(f64::from))
+    }
+
+    /// Pack a clear without narrowing full-width integer channels through `f32`.
+    pub fn clear_texel_f64(self, color: [f64; 4]) -> Option<Vec<u8>> {
+        let unorm = |value: f64| (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        let channel = |value: f64| {
             if self.is_srgb() {
-                Self::srgb_encode(value)
+                Self::srgb_encode(value as f32)
             } else {
                 unorm(value)
             }
         };
-        let half = |value: f32| crate::protocol::model::half::from_f32(value).to_le_bytes();
+        let half = |value: f64| crate::protocol::model::half::from_f32(value as f32).to_le_bytes();
         Some(match self {
             TextureFormat::Rgba8Unorm | TextureFormat::Rgba8Srgb => vec![
                 channel(color[0]),
@@ -180,11 +190,12 @@ impl TextureFormat {
             ],
             TextureFormat::R8Unorm => vec![unorm(color[0])],
             TextureFormat::Rg8Unorm => vec![unorm(color[0]), unorm(color[1])],
-            TextureFormat::R32Float => color[0].to_le_bytes().to_vec(),
+            TextureFormat::R32Float => (color[0] as f32).to_le_bytes().to_vec(),
             TextureFormat::Rgba16Float => color.iter().flat_map(|v| half(*v)).collect(),
-            TextureFormat::Rgba32Float => {
-                color.iter().flat_map(|v| v.to_le_bytes()).collect()
-            }
+            TextureFormat::Rgba32Float => color
+                .iter()
+                .flat_map(|v| (*v as f32).to_le_bytes())
+                .collect(),
             // Raw integer values, one byte a channel. `as` on a float already truncates toward zero and
             // saturates at the integer type's bounds in Rust, which is the same clamp the hardware applies.
             TextureFormat::R8Uint => vec![color[0] as u8],
@@ -193,6 +204,14 @@ impl TextureFormat {
             TextureFormat::R8Sint => vec![color[0] as i8 as u8],
             TextureFormat::Rg8Sint => vec![color[0] as i8 as u8, color[1] as i8 as u8],
             TextureFormat::Rgba8Sint => color.iter().map(|v| *v as i8 as u8).collect(),
+            TextureFormat::Rgba32Uint => color
+                .iter()
+                .flat_map(|v| (*v as u32).to_le_bytes())
+                .collect(),
+            TextureFormat::Rgba32Sint => color
+                .iter()
+                .flat_map(|v| (*v as i32).to_le_bytes())
+                .collect(),
             _ => return None,
         })
     }

@@ -4,10 +4,10 @@ use crate::cpu::model::texture::Texture;
 pub(crate) fn clear_target(
     res: &mut SessionResources,
     texture_id: u32,
-    color: [f32; 4],
+    color: [f64; 4],
 ) -> Result<()> {
     let fmt = texture(res, texture_id)?.desc.format;
-    let texel = fmt.software_clear_texel(color)?;
+    let texel = fmt.software_clear_texel_f64(color)?;
     let t = texture_mut(res, texture_id)?;
     // Fill IN PLACE rather than rebuilding the vector at `w * h * texel.len()`. The rebuild silently
     // resized the allocation to one single-sampled plane, which was invisible only because a multisampled
@@ -34,7 +34,7 @@ pub(crate) fn clear_rect(
     y: u32,
     w: u32,
     h: u32,
-    color: [f32; 4],
+    color: [f64; 4],
     base_array_layer: u32,
     layer_count: u32,
     mip_level: u32,
@@ -46,7 +46,7 @@ pub(crate) fn clear_rect(
         let (w, h) = Texture::level_size(&t.desc, mip_level);
         (t.desc.format, w, h)
     };
-    let texel = fmt.software_clear_texel(color)?;
+    let texel = fmt.software_clear_texel_f64(color)?;
     let bpt = texel.len();
     let x0 = x.min(tw) as usize;
     let y0 = y.min(th) as usize;

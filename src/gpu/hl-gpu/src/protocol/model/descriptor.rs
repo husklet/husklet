@@ -381,7 +381,9 @@ impl Mirror {
 pub struct ColorAttachment {
     pub texture: u32,
     pub load: super::enums::LoadOp,
-    pub clear: [f32; 4],
+    /// Numeric clear values. `f64` represents every `i32` and `u32` exactly, which is required by
+    /// integer render targets; narrowing these to `f32` silently changes values above 2^24.
+    pub clear: [f64; 4],
     pub store: bool,
 }
 

@@ -448,7 +448,7 @@ pub(super) fn set_cap(ctx: &mut GlContext, cap: u32, on: bool) {
 /// not consult — and must not disturb — `GL_COLOR_CLEAR_VALUE` (ES 3.0 §4.2.3): the value travels with the
 /// recorded clear.
 impl GlContext {
-    pub fn clear_buffer_color(&mut self, drawbuffer: u32, rgba: [f32; 4]) {
+    pub fn clear_buffer_color(&mut self, drawbuffer: u32, rgba: [f64; 4]) {
         if self.local.pipeline.rasterizer_discard {
             return;
         }
@@ -478,7 +478,7 @@ impl GlContext {
     }
 }
 
-pub const CLEAR_BUFFER_COLOR: fn(&mut GlContext, u32, [f32; 4]) = GlContext::clear_buffer_color;
+pub const CLEAR_BUFFER_COLOR: fn(&mut GlContext, u32, [f64; 4]) = GlContext::clear_buffer_color;
 pub const BLEND_EQUATION: fn(&mut GlContext, u32) = GlContext::set_blend_equation;
 pub use BLEND_EQUATION as blend_equation;
 pub use CLEAR_BUFFER_COLOR as clear_buffer_color;

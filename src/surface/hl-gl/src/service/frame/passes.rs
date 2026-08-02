@@ -801,7 +801,7 @@ pub(super) fn depth_attachment_for(
 /// an ordinary "clear then draw" frame lowers byte-identically. Callers that decide a `LoadOp` must ask
 /// [`full_clear`]: only `Some` there justifies clearing the attachment at all.
 impl RenderPasses {
-    pub(super) fn effective_clear(run: &[DrawCall]) -> ([f32; 4], usize) {
+    pub(super) fn effective_clear(run: &[DrawCall]) -> ([f64; 4], usize) {
         let (clear, start) = Self::full_clear(run);
         (clear.unwrap_or_else(|| Self::fallback_clear(run)), start)
     }
@@ -809,14 +809,14 @@ impl RenderPasses {
     /// `Some(color)` only when an UNSCISSORED clear in the run justifies clearing the WHOLE target, plus the
     /// index from which draws survive. `None` means nothing wiped the target: the pass must `LoadOp::Load`,
     /// not clear, or it destroys everything outside a scissored clear's rect.
-    pub(super) fn full_clear(run: &[DrawCall]) -> (Option<[f32; 4]>, usize) {
+    pub(super) fn full_clear(run: &[DrawCall]) -> (Option<[f64; 4]>, usize) {
         Self::full_clear_slot(run, 0)
     }
 
     /// [`full_clear`] for one color-attachment `slot`. A `glClearBuffer*`-scoped clear wipes only the
     /// attachment it names (see [`DrawCall::clear_draw_buffer`]), so asking per slot is what keeps a clear
     /// of attachment 1 from wiping attachment 0 — and from discarding the draws recorded before it there.
-    pub(super) fn full_clear_slot(run: &[DrawCall], slot: u32) -> (Option<[f32; 4]>, usize) {
+    pub(super) fn full_clear_slot(run: &[DrawCall], slot: u32) -> (Option<[f64; 4]>, usize) {
         let mut last_full: Option<usize> = None;
         for (i, d) in run.iter().enumerate() {
             if d.clears_color_slot(slot) && !d.scissor_enabled {
@@ -842,7 +842,7 @@ impl RenderPasses {
     /// The full-target clear color for a run with no unscissored clear: the first draw's recorded clear color
     /// (the prior leading-clear behavior), SKIPPING scissored clears. A scissored clear paints only its rect,
     /// so promoting its color to the whole attachment is exactly "scissor ignored".
-    pub(super) fn fallback_clear(run: &[DrawCall]) -> [f32; 4] {
+    pub(super) fn fallback_clear(run: &[DrawCall]) -> [f64; 4] {
         run.iter()
             .find(|d| !d.is_clear || (d.clears_color() && !d.scissor_enabled))
             .map(|d| d.clear)

@@ -37,7 +37,16 @@ pub extern "C" fn glClearBufferfv(buffer: u32, drawbuffer: i32, value: *const f3
         if buffer == GL_COLOR {
             // SAFETY: the GLES contract requires four color components and null was rejected above.
             let c = unsafe { std::slice::from_raw_parts(value, 4) };
-            record::clear_buffer_color(&mut s.gl, drawbuffer as u32, [c[0], c[1], c[2], c[3]]);
+            record::clear_buffer_color(
+                &mut s.gl,
+                drawbuffer as u32,
+                [
+                    f64::from(c[0]),
+                    f64::from(c[1]),
+                    f64::from(c[2]),
+                    f64::from(c[3]),
+                ],
+            );
         } else {
             // SAFETY: GL_DEPTH consumes exactly one component and null was rejected above.
             record::clear_depth(&mut s.gl, unsafe { *value });
@@ -64,7 +73,7 @@ pub extern "C" fn glClearBufferiv(buffer: u32, drawbuffer: i32, value: *const i3
             record::clear_buffer_color(
                 &mut s.gl,
                 drawbuffer as u32,
-                [c[0] as f32, c[1] as f32, c[2] as f32, c[3] as f32],
+                [c[0] as f64, c[1] as f64, c[2] as f64, c[3] as f64],
             );
         } else {
             // SAFETY: GL_STENCIL consumes exactly one component and null was rejected above.
@@ -90,7 +99,7 @@ pub extern "C" fn glClearBufferuiv(buffer: u32, drawbuffer: i32, value: *const u
         record::clear_buffer_color(
             &mut s.gl,
             drawbuffer as u32,
-            [c[0] as f32, c[1] as f32, c[2] as f32, c[3] as f32],
+            [c[0] as f64, c[1] as f64, c[2] as f64, c[3] as f64],
         );
     });
 }

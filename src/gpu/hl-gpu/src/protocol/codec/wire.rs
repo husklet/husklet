@@ -49,6 +49,10 @@ impl Encoder {
         self.u32(v.to_bits());
     }
     #[inline]
+    pub fn f64(&mut self, v: f64) {
+        self.u64(v.to_bits());
+    }
+    #[inline]
     pub fn bool(&mut self, v: bool) {
         self.u8(v as u8);
     }
@@ -138,6 +142,17 @@ impl<'a> Decoder<'a> {
     }
     pub fn f32(&mut self) -> Result<f32> {
         Ok(f32::from_bits(self.u32()?))
+    }
+    pub fn f64(&mut self) -> Result<f64> {
+        Ok(f64::from_bits(self.u64()?))
+    }
+    pub fn f64_finite(&mut self, field: &'static str) -> Result<f64> {
+        let v = self.f64()?;
+        if v.is_finite() {
+            Ok(v)
+        } else {
+            Err(GpuError::NonFinite(field))
+        }
     }
     /// Decode an `f32` that the IR contract requires to be **finite** — a viewport/scissor coordinate, a
     /// clear color/depth, any render-state value that indexes into pixels or a transform. A NaN or ±∞

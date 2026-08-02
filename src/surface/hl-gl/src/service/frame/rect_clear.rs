@@ -182,7 +182,9 @@ pub(super) fn lower_rect_clear(
         });
     }
     if blends_colour {
-        ops.push(Enc::SetBlendConstant { color: d.clear });
+        ops.push(Enc::SetBlendConstant {
+            color: d.clear.map(|value| value as f32),
+        });
     }
     ops.push(Enc::SetPipeline(pipeline_ir));
     ops.push(Enc::Draw {

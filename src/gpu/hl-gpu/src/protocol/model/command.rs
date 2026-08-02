@@ -64,7 +64,7 @@ pub enum Enc {
         y: u32,
         w: u32,
         h: u32,
-        color: [f32; 4],
+        color: [f64; 4],
         base_array_layer: u32,
         layer_count: u32,
         mip_level: u32,
@@ -354,7 +354,10 @@ pub enum Cmd {
 // Vulkan and was expressed there by inverting a rect's bounds, which an unsigned origin+extent cannot
 // carry; the surfaces normalized the rect and dropped the intent. A v14 decoder would mis-frame every
 // operation following a blit, so negotiation must reject mixed versions.
-pub const WIRE_VERSION: u32 = 15;
+// v16 widens render-pass and ClearRect color values from f32 to f64. Every i32/u32 is exactly
+// representable in f64, so RGBA32I/UI clears no longer lose low bits above 2^24. The payload grows and a
+// v15 decoder would mis-frame the following attachment/op, so exact-version negotiation remains required.
+pub const WIRE_VERSION: u32 = 16;
 
 // tag constants (stable wire) --------------------------------------------------------------------
 /// Top-level [`Cmd`] tag numbers.

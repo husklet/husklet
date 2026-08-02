@@ -1,6 +1,6 @@
 use super::*;
 
-fn survivors(draws: &[DrawCall]) -> ([f32; 4], &[DrawCall]) {
+fn survivors(draws: &[DrawCall]) -> ([f64; 4], &[DrawCall]) {
     let (clear, start) = RenderPasses::effective_clear(draws);
     (clear, &draws[start..])
 }
@@ -8,7 +8,7 @@ fn survivors(draws: &[DrawCall]) -> ([f32; 4], &[DrawCall]) {
 pub(super) fn build_clear_frame_color(
     ctx: &mut GlContext,
     fbo: u32,
-    clear: [f32; 4],
+    clear: [f64; 4],
     cmds: Vec<Cmd>,
 ) -> Frame {
     let snapshot = ctx
@@ -58,7 +58,7 @@ fn build_clear_frame_snapshot(
     ctx: &mut GlContext,
     fbo: u32,
     snapshot: Option<crate::model::program::TargetSnapshot>,
-    clear: [f32; 4],
+    clear: [f64; 4],
     colour_load: LoadOp,
     depth: DepthClear,
     mut cmds: Vec<Cmd>,
@@ -387,7 +387,7 @@ mod clone_tests {
         );
     }
 
-    fn clear_draw(color: [f32; 4], scissor: Option<[i32; 4]>) -> DrawCall {
+    fn clear_draw(color: [f64; 4], scissor: Option<[i32; 4]>) -> DrawCall {
         let mut draw = DrawCall::default();
         draw.is_clear = true;
         draw.clear = color;
@@ -651,7 +651,7 @@ pub(super) fn lower_segments(
     ctx: &mut GlContext,
     run: &[DrawCall],
     target: SegmentTarget,
-    clear: [f32; 4],
+    clear: [f64; 4],
     first_load: LoadOp,
     cmds: &mut Vec<Cmd>,
     ops: &mut Vec<Enc>,
@@ -745,7 +745,7 @@ pub(super) fn emit_segment_pass(
     target_fmt: TextureFormat,
     tw: i32,
     th: i32,
-    clear: [f32; 4],
+    clear: [f64; 4],
     load: LoadOp,
     depth_load: DepthClear,
     no_fbo_tex: &std::collections::HashMap<(u32, u64), u32>,

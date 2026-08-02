@@ -582,6 +582,8 @@ pub(super) fn is_integer_format(format: TextureFormat) -> bool {
             | TextureFormat::R8Sint
             | TextureFormat::Rg8Uint
             | TextureFormat::Rg8Sint
+            | TextureFormat::Rgba32Uint
+            | TextureFormat::Rgba32Sint
     )
 }
 

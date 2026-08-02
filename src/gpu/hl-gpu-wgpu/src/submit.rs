@@ -255,7 +255,7 @@ impl WgpuExecutor {
                         let cw = x.saturating_add(*w).min(tw).saturating_sub(x0);
                         let ch = y.saturating_add(*h).min(th).saturating_sub(y0);
                         if cw != 0 && ch != 0 && *layer_count != 0 {
-                            let texel = Format::from(fmt).clear_texel(*color)?;
+                            let texel = Format::from(fmt).clear_texel_f64(*color)?;
                             let texels = (cw as usize)
                                 .checked_mul(ch as usize)
                                 .and_then(|plane| plane.checked_mul(*layer_count as usize))

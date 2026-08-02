@@ -225,7 +225,7 @@ impl Encoder {
                     e.u32(c.texture);
                     e.u32(c.load.to_u32());
                     for v in c.clear {
-                        e.f32(v);
+                        e.f64(v);
                     }
                     e.bool(c.store);
                 }
@@ -308,7 +308,7 @@ impl Encoder {
                 e.u32(*w);
                 e.u32(*h);
                 for v in color {
-                    e.f32(*v);
+                    e.f64(*v);
                 }
                 // Appended after the existing payload, so the prefix every previous field occupied is
                 // byte-identical and the tag itself never moved.

@@ -456,12 +456,33 @@ pub extern "C" fn glReadPixels(
     crate::stub::trace("glReadPixels", "reading framebuffer pixels");
     // Record the first GL error and bail (GL keeps the first error until glGetError clears it).
     let fail = |e: u32| GlobalState::context(|s| s.gl.set_gl_error(e));
-    if type_ != GL_UNSIGNED_BYTE && type_ != GL_FLOAT {
+    if !matches!(
+        type_,
+        GL_UNSIGNED_BYTE | GL_FLOAT | GL_INT | GL_UNSIGNED_INT
+    ) {
         fail(GL_INVALID_ENUM);
         return;
     }
-    if !matches!(format, GL_RGBA | GL_BGRA_EXT | GL_RGB) {
+    if !matches!(format, GL_RGBA | GL_BGRA_EXT | GL_RGB | GL_RGBA_INTEGER) {
         fail(GL_INVALID_ENUM);
+        return;
+    }
+    let numeric_class = GlobalState::context(|s| match s.gl.read_colour_buffer_numeric_class() {
+        hl_gpu::protocol::model::enums::TextureNumericClass::Float => 0u8,
+        hl_gpu::protocol::model::enums::TextureNumericClass::Uint => 1,
+        hl_gpu::protocol::model::enums::TextureNumericClass::Sint => 2,
+    });
+    let integer_pair = match numeric_class {
+        1 => format == GL_RGBA_INTEGER && type_ == GL_UNSIGNED_INT,
+        2 => format == GL_RGBA_INTEGER && type_ == GL_INT,
+        _ => false,
+    };
+    if numeric_class != 0 && !integer_pair {
+        fail(GL_INVALID_OPERATION);
+        return;
+    }
+    if numeric_class == 0 && format == GL_RGBA_INTEGER {
+        fail(GL_INVALID_OPERATION);
         return;
     }
     // A float readback is defined against a float colour buffer. Asking for one out of a fixed-point

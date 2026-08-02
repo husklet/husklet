@@ -135,6 +135,8 @@ pub const INTEGER_FORMATS: &[TextureFormat] = &[
     TextureFormat::R8Sint,
     TextureFormat::Rg8Uint,
     TextureFormat::Rg8Sint,
+    TextureFormat::Rgba32Uint,
+    TextureFormat::Rgba32Sint,
 ];
 
 /// The depth/stencil formats a backend can materialize as a real depth target (the software oracle
