@@ -131,7 +131,7 @@ impl TransformFeedbackLayout {
                 .ok_or_else(|| "transform-feedback varying size overflow".to_string())?;
             let base_word = layout.strides[buffer as usize] / 4;
             for element in 0..elements {
-                let element_expression = if elements > 1 || decl.arr > 1 {
+                let element_expression = if elements > 1 || decl.arr > 0 {
                     format!("{expression}[{element}]")
                 } else {
                     expression.clone()
@@ -306,5 +306,22 @@ mod tests {
             capture.contains("floatBitsToUint(gl_PointSize)"),
             "{capture}"
         );
+    }
+
+    #[test]
+    fn deqp_separate_float_arrays_expand_to_scalar_capture_stores() {
+        let source = "#version 300 es\nin highp vec4 a_position;\nin highp float a_varA_e0;\nin highp float a_varB_e0;\nin highp float a_varB_e1;\nout highp float v_varA[1];\nout highp float v_varB[2];\nvoid main(void){ gl_Position=a_position; v_varA[0]=a_varA_e0; v_varB[0]=a_varB_e0; v_varB[1]=a_varB_e1; }";
+        let fragment = "#version 300 es\nprecision highp float; in highp float v_varA[1]; in highp float v_varB[2]; layout(location=0) out mediump vec4 o_color; void main(){o_color=vec4(v_varA[0]+v_varB[0]+v_varB[1]);}";
+        let (translated, _) = StageSources::new(source, fragment).translate_render();
+        let layout = TransformFeedbackLayout::reflect(
+            source,
+            &["v_varA".into(), "v_varB".into()],
+            GL_SEPARATE_ATTRIBS,
+        )
+        .unwrap();
+        let capture = layout.capture_source(&translated).unwrap();
+        assert_eq!(layout.strides, [4, 8, 0, 0]);
+        assert!(capture.contains("floatBitsToUint(v_varA[0])"));
+        assert!(capture.contains("floatBitsToUint(v_varB[1])"));
     }
 }

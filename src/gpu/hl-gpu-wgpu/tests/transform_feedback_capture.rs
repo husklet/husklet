@@ -20,6 +20,37 @@ void main(){ hl_tf_user_main(); tf.words[off.base_words.x]=floatBitsToUint(gl_Po
 const FS: &str = "#version 460\nlayout(location=0) out vec4 c; void main(){discard;}";
 
 #[test]
+fn separate_scalar_arrays_compile_with_raw_word_capture() {
+    let source = r#"#version 460
+layout(location=0) in vec4 a_position;
+layout(location=1) in float a_varA_e0;
+layout(location=2) in float a_varB_e0;
+layout(location=3) in float a_varB_e1;
+layout(location=0) out float v_varA[1];
+layout(location=1) out float v_varB[2];
+void hl_tf_user_main() {
+    gl_Position = a_position;
+    v_varA[0] = a_varA_e0;
+    v_varB[0] = a_varB_e0;
+    v_varB[1] = a_varB_e1;
+}
+layout(set=0,binding=64,std430) buffer OutA { uint words[]; } tf_a;
+layout(set=0,binding=65,std430) buffer OutB { uint words[]; } tf_b;
+layout(set=0,binding=68,std140) uniform Offsets { uvec4 base_words; } offsets;
+void main() {
+    hl_tf_user_main();
+    tf_a.words[offsets.base_words.x] = floatBitsToUint(v_varA[0]);
+    tf_b.words[offsets.base_words.y] = floatBitsToUint(v_varB[0]);
+    tf_b.words[offsets.base_words.y + 1u] = floatBitsToUint(v_varB[1]);
+}
+"#;
+    let mut parser = naga::front::glsl::Frontend::default();
+    parser
+        .parse(&naga::front::glsl::Options::from(naga::ShaderStage::Vertex), source)
+        .expect("separate transform-feedback array wrapper must compile");
+}
+
+#[test]
 fn vertex_stage_captures_actual_output_to_storage() {
     let mut gpu = WgpuExecutor::new(DeviceConfig::default()).expect("Metal adapter");
     let mut session = new_session(&gpu);

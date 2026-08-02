@@ -149,8 +149,11 @@ pub(super) fn lower_transform_feedback(
         offset: 0,
         data: offset_bytes,
     });
+    // `Frame::build` already retires uniform buffers and bind groups at the frame tail. Do not also put
+    // them in the readback-delayed cleanup: doing so destroys the offsets buffer twice, and the second
+    // destruction refuses the batch that maps the captured GL buffers. Output buffers must remain until
+    // readback; the private shader and pipeline objects are not covered by generic frame cleanup.
     ctx.local.transform_feedback_cleanup.extend([
-        Cmd::DestroyBuffer(offsets),
         Cmd::DestroyShader(shader),
         Cmd::DestroyShader(fragment_shader),
         Cmd::DestroyPipeline(pipeline),
@@ -180,9 +183,6 @@ pub(super) fn lower_transform_feedback(
             group,
             BindGroupDesc { set: 0, entries },
         ));
-        ctx.local
-            .transform_feedback_cleanup
-            .push(Cmd::DestroyBindGroup(group));
         groups.push(group);
     }
 
