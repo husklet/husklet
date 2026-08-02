@@ -60,6 +60,7 @@ pub fn cmd_clear_attachment_rect(
         color: reopened.clone(),
         depth: depth_reopened.clone(),
     });
+    rec.replay_buffer_bindings();
     // The pass stays open from the caller's point of view, but its attachments now LOAD — a second clear
     // in the same pass must not resurrect the original clear operations either.
     rec.active_pass = Some((reopened, depth_reopened));

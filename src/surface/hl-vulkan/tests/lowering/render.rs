@@ -99,6 +99,50 @@ fn graphics_render_pass_draw_lowers_to_expected_encoder_stream() {
 }
 
 #[test]
+fn buffer_bindings_before_render_pass_are_replayed_inside_it() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let target = create::create_image(
+        &mut d,
+        &mut sink,
+        8,
+        8,
+        vk_format::R8G8B8A8_UNORM,
+        vk_image_usage::COLOR_ATTACHMENT,
+        1,
+    )
+    .unwrap();
+    let vbuf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::VERTEX_BUFFER, 64).unwrap();
+    let ibuf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::INDEX_BUFFER, 64).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    record::cmd_bind_vertex_buffer(&mut d, cb, 3, vbuf, 12).unwrap();
+    record::cmd_bind_index_buffer(&mut d, cb, ibuf, 4, 1).unwrap();
+    record::cmd_begin_render_pass(&mut d, cb, target, [0.0; 4], false, None).unwrap();
+
+    let enc = &d.command_buffers.get(&cb).unwrap().enc;
+    let begin = enc
+        .iter()
+        .position(|op| matches!(op, Enc::BeginRenderPass { .. }))
+        .unwrap();
+    assert_eq!(
+        &enc[begin + 1..],
+        &[
+            Enc::SetVertexBuffer {
+                slot: 3,
+                buffer: 2,
+                offset: 12,
+            },
+            Enc::SetIndexBuffer {
+                buffer: 3,
+                offset: 4,
+                format: IndexFormat::U32,
+            },
+        ]
+    );
+}
+
+#[test]
 fn begin_rendering_lowers_to_begin_render_pass_with_clear_attachment() {
     // vkCmdBeginRendering (VK_KHR_dynamic_rendering) lowers to the SAME Enc::BeginRenderPass a classic
     // render pass does — the color target + CLEAR come from the inline VkRenderingInfo, with no

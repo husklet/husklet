@@ -10,7 +10,9 @@ use super::sync::DeferredOp;
 use crate::VkQueryPool;
 use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::descriptor::{ColorAttachment, DepthAttachment};
+use hl_gpu::protocol::model::enums::IndexFormat;
 use hl_gpu::{GpuError, Result};
+use std::collections::BTreeMap;
 
 /// The Vulkan command-buffer lifecycle state (spec §6). Ported from MoltenVK's flag model:
 /// * `Initial`    — freshly allocated or reset; can only be begun.
@@ -200,6 +202,12 @@ pub struct CmdBufRec {
     pub bound_pipeline_kind: Option<PipelineKind>,
     /// `(set index, bind-group IR id)` bound by `vkCmdBindDescriptorSets`, replayed into the next pass.
     pub pending_bind_groups: Vec<(u32, u32)>,
+    /// Vertex-buffer bindings are Vulkan command-buffer state, not render-pass-local state. Calls to
+    /// `vkCmdBindVertexBuffers` made before a render pass must therefore be replayed after each
+    /// `BeginRenderPass` in the neutral IR, whose executor only accepts the binding inside the pass.
+    pub bound_vertex_buffers: BTreeMap<u32, (u32, u64)>,
+    /// The current index-buffer binding, with the same lifetime as vertex-buffer bindings.
+    pub bound_index_buffer: Option<(u32, u64, IndexFormat)>,
     pub in_render_pass: bool,
     /// The IR texture id of the active render pass's color target (set at `vkCmdBeginRenderPass`) — the
     /// target `vkCmdClearAttachments` clears while inside the pass.
@@ -322,6 +330,8 @@ impl CmdBufRec {
         self.bound_pipeline = None;
         self.bound_pipeline_kind = None;
         self.pending_bind_groups.clear();
+        self.bound_vertex_buffers.clear();
+        self.bound_index_buffer = None;
         self.in_render_pass = false;
         self.active_render_texture = None;
         self.active_pass = None;

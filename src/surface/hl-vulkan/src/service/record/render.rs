@@ -59,6 +59,7 @@ pub fn cmd_begin_render_pass(
         color: color.clone(),
         depth: depth_target.clone(),
     });
+    rec.replay_buffer_bindings();
     rec.in_render_pass = true;
     rec.active_pass = Some((color, depth_target));
     rec.active_render_texture = Some(texture);
@@ -83,6 +84,7 @@ pub fn cmd_bind_vertex_buffer(
         ))?
         .ir_id;
     let rec = dev.require_recording(cb)?;
+    rec.bound_vertex_buffers.insert(slot, (ir, offset));
     rec.enc.push(Enc::SetVertexBuffer {
         slot,
         buffer: ir,
@@ -111,6 +113,7 @@ pub fn cmd_bind_index_buffer(
         IndexFormat::U16
     };
     let rec = dev.require_recording(cb)?;
+    rec.bound_index_buffer = Some((ir, offset, format));
     rec.enc.push(Enc::SetIndexBuffer {
         buffer: ir,
         offset,
@@ -151,6 +154,24 @@ pub fn cmd_draw(
 /// If an OCCLUSION query is open on this command buffer, add the draw's scissor-clipped sample footprint
 /// to its running total (see [`CmdBufRec::occlusion_coverage`]).
 impl CmdBufRec {
+    /// Replay Vulkan's persistent graphics buffer state into a newly opened neutral render pass.
+    pub(super) fn replay_buffer_bindings(&mut self) {
+        for (&slot, &(buffer, offset)) in &self.bound_vertex_buffers {
+            self.enc.push(Enc::SetVertexBuffer {
+                slot,
+                buffer,
+                offset,
+            });
+        }
+        if let Some((buffer, offset, format)) = self.bound_index_buffer {
+            self.enc.push(Enc::SetIndexBuffer {
+                buffer,
+                offset,
+                format,
+            });
+        }
+    }
+
     pub(super) fn accumulate_occlusion(&mut self, instance_count: u32) {
         if self.occlusion_accum.is_some() {
             let cov = self.occlusion_coverage(instance_count);
@@ -285,6 +306,7 @@ pub fn cmd_begin_rendering(
         color: color_targets.clone(),
         depth: depth_target.clone(),
     });
+    rec.replay_buffer_bindings();
     rec.in_render_pass = true;
     rec.active_pass = Some((color_targets, depth_target));
     rec.active_render_texture = active;
