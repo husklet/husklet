@@ -43,7 +43,7 @@ pub fn cmd_clear_attachment_rect(
         y,
         w,
         h,
-        color,
+        color: color.map(f64::from),
     });
     let reopened: Vec<ColorAttachment> = color_targets
         .iter()

@@ -52,7 +52,7 @@ pub fn cmd_begin_render_pass(
         } else {
             LoadOp::Load
         },
-        clear,
+        clear: clear.map(f64::from),
         store: true,
     }];
     rec.enc.push(Enc::BeginRenderPass {
@@ -253,7 +253,7 @@ pub fn cmd_begin_rendering(
             } else {
                 LoadOp::Load
             },
-            clear: c.clear,
+            clear: c.clear.map(f64::from),
             store: c.store,
         });
     }

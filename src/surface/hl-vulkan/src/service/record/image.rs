@@ -632,7 +632,7 @@ pub fn cmd_clear_color_image(
                 // level, and the clamp would then silently shrink the clear to whatever fitted.
                 w: (w >> level).max(1),
                 h: (h >> level).max(1),
-                color,
+                color: color.map(f64::from),
                 base_array_layer: range.base_array_layer,
                 layer_count: range.layer_count,
                 mip_level: level,
