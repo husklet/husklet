@@ -2,6 +2,7 @@ use super::*;
 use hl_gpu::protocol::model::enums::TextureFormat;
 use hl_gpu::{CommandSink, FeatureRequest, WIRE_VERSION};
 use hl_vulkan::model::capability::format_feature;
+use hl_vulkan::model::memory::VertexFormat;
 
 use crate::state::State;
 
@@ -12,7 +13,10 @@ use crate::state::State;
 impl State {
     fn advertises(&mut self, format: Format) -> bool {
         let Some(wire) = format.wire() else {
-            return false;
+            // A format may be a vertex-only format. Image lowering and vertex lowering are
+            // independent Vulkan capabilities; gating the whole query on an image encoding erased
+            // truthful VERTEX_BUFFER bits for every three-component 32-bit attribute format.
+            return VertexFormat(format.0).wire().is_some();
         };
         // Integer colour joins the negotiated set for the reason `hl_gpu`'s `INTEGER_FORMATS` states: a
         // backend carries raw integer texels only if it really can, and the software oracle — whose

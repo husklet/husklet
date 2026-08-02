@@ -208,6 +208,8 @@ impl Format {
                 T::Rgba8Unorm
                 | T::Rgba8Uint
                 | T::Rgba8Sint
+                | T::R32Uint
+                | T::R32Sint
                 | T::Rgba16Float
                 | T::R32Float
                 | T::Rgba32Float,

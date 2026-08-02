@@ -81,6 +81,38 @@ pub(super) fn test_guard() -> std::sync::MutexGuard<'static, ()> {
     TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+#[test]
+fn vertex_only_formats_survive_texture_capability_gating() {
+    let _g = test_guard();
+    let mut dev: *mut c_void = core::ptr::null_mut();
+    assert_eq!(
+        crate::device::vkCreateDevice(
+            core::ptr::null_mut(),
+            core::ptr::null(),
+            core::ptr::null(),
+            &mut dev,
+        ),
+        VK_SUCCESS
+    );
+
+    // R32G32B32_SFLOAT has no image encoding in hl-gpu, but it is a real vertex
+    // attribute encoding. The format query must preserve that independent capability.
+    const R32G32B32_SFLOAT: i32 = 106;
+    const VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT: u32 = 0x40;
+    let mut properties = VkFormatProperties::default();
+    crate::instance::vkGetPhysicalDeviceFormatProperties(
+        core::ptr::null_mut(),
+        R32G32B32_SFLOAT,
+        &mut properties as *mut _ as *mut c_void,
+    );
+    assert_eq!(properties.optimal_tiling_features, 0);
+    assert_eq!(properties.linear_tiling_features, 0);
+    assert_ne!(
+        properties.buffer_features & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT,
+        0,
+    );
+}
+
 /// Create a device, a command pool, one command buffer, and put it into the `Recording` state.
 /// Returns `(dispatchable VkCommandBuffer, its u64 handle)`. Caller must hold [`test_guard`].
 pub(super) fn recording_command_buffer() -> (*mut c_void, u64) {

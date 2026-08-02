@@ -11,6 +11,12 @@ pub(super) struct LookupSampledImage {
     sampler: Handle<crate::Expression>,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct LookupImageTexelPointer {
+    image_id: spirv::Word,
+    coordinate_id: spirv::Word,
+}
+
 bitflags::bitflags! {
     /// Flags describing sampling method.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -236,6 +242,109 @@ pub(super) fn patch_comparison_type(
 }
 
 impl<I: Iterator<Item = u32>> super::Frontend<I> {
+    pub(super) fn parse_image_texel_pointer(&mut self) -> Result<(), Error> {
+        let _result_type_id = self.next()?;
+        let result_id = self.next()?;
+        let image_id = self.next()?;
+        let coordinate_id = self.next()?;
+        let _sample_id = self.next()?;
+        self.lookup_image_texel_pointer.insert(
+            result_id,
+            LookupImageTexelPointer {
+                image_id,
+                coordinate_id,
+            },
+        );
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn parse_image_atomic(
+        &mut self,
+        pointer_id: spirv::Word,
+        value_id: spirv::Word,
+        ctx: &mut super::BlockContext,
+        emitter: &mut crate::proc::Emitter,
+        block: &mut crate::Block,
+        body_idx: usize,
+        fun: crate::AtomicFunction,
+    ) -> Result<(), Error> {
+        let pointer = self.lookup_image_texel_pointer.lookup(pointer_id)?.clone();
+        let image_lexp = self.lookup_expression.lookup(pointer.image_id)?;
+        let image = self.get_expr_handle(
+            pointer.image_id,
+            image_lexp,
+            ctx,
+            emitter,
+            block,
+            body_idx,
+        );
+        // SPIR-V expresses atomic eligibility through `OpImageTexelPointer` rather than
+        // through the image type's access decorations. Naga carries it on `ImageClass`, so
+        // upgrade the global's type when the first atomic operation proves the stronger use.
+        if let crate::Expression::GlobalVariable(global) = ctx.expressions[image] {
+            let old_ty = ctx.module.global_variables[global].ty;
+            let mut ty = ctx.module.types[old_ty].clone();
+            if let crate::TypeInner::Image {
+                class: crate::ImageClass::Storage { format, .. },
+                dim,
+                arrayed,
+            } = ty.inner
+            {
+                ty.inner = crate::TypeInner::Image {
+                    dim,
+                    arrayed,
+                    class: crate::ImageClass::Storage {
+                        format,
+                        access: crate::StorageAccess::ATOMIC,
+                    },
+                };
+                let span = ctx.module.types.get_span(old_ty);
+                ctx.module.global_variables[global].ty = ctx.module.types.insert(ty, span);
+            }
+        }
+        let image_ty = ctx.get_image_expr_ty(image)?;
+        let coord_lexp = self.lookup_expression.lookup(pointer.coordinate_id)?;
+        let coord_handle = self.get_expr_handle(
+            pointer.coordinate_id,
+            coord_lexp,
+            ctx,
+            emitter,
+            block,
+            body_idx,
+        );
+        let coord_type_handle = self.lookup_type.lookup(coord_lexp.type_id)?.handle;
+        let (coordinate, array_index) = match ctx.module.types[image_ty].inner {
+            crate::TypeInner::Image { dim, arrayed, .. } => extract_image_coordinates(
+                dim,
+                if arrayed {
+                    ExtraCoordinate::ArrayLayer
+                } else {
+                    ExtraCoordinate::Garbage
+                },
+                coord_handle,
+                coord_type_handle,
+                ctx,
+            ),
+            _ => return Err(Error::InvalidImage(image_ty)),
+        };
+        let value_lexp = self.lookup_expression.lookup(value_id)?;
+        let value = self.get_expr_handle(value_id, value_lexp, ctx, emitter, block, body_idx);
+        block.extend(emitter.finish(ctx.expressions));
+        block.push(
+            crate::Statement::ImageAtomic {
+                image,
+                coordinate,
+                array_index,
+                fun,
+                value,
+            },
+            crate::Span::default(),
+        );
+        emitter.start(ctx.expressions);
+        Ok(())
+    }
+
     pub(super) fn parse_image_couple(&mut self) -> Result<(), Error> {
         let _result_type_id = self.next()?;
         let result_id = self.next()?;
