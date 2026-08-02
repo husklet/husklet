@@ -56,7 +56,10 @@ fn clear_only_frame_lowers_to_clear_pass_and_present() {
             assert_eq!(color.len(), 1);
             assert_eq!(color[0].texture, 1);
             assert_eq!(color[0].load, LoadOp::Clear);
-            assert_eq!(color[0].clear, [0.1, 0.2, 0.3, 1.0]);
+            assert_eq!(
+                color[0].clear,
+                [0.1_f32, 0.2_f32, 0.3_f32, 1.0_f32].map(f64::from)
+            );
         }
         other => panic!("expected BeginRenderPass, got {other:?}"),
     }
