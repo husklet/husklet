@@ -485,3 +485,5 @@ mod enums;
 mod shader;
 #[path = "roundtrip/stream.rs"]
 mod stream;
+#[path = "roundtrip/texel_buffer.rs"]
+mod texel_buffer;

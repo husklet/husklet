@@ -38,7 +38,8 @@ pub(super) struct Bound {
 
 /// One planned draw: the pipeline it uses and every set it binds, in set order.
 pub(super) struct Draw {
-    pub pipeline: u32,
+    pub id: u32,
+    pub pipeline: wgpu::RenderPipeline,
     pub groups: Vec<Bound>,
 }
 
@@ -73,7 +74,10 @@ impl Plan {
             viewport_buffer,
         };
         // Memoized concrete bind groups for this pass, keyed on (pipeline id, set index, bind group id).
-        let mut cache: HashMap<(u32, u32, u32), wgpu::BindGroup> = HashMap::new();
+        let mut cache: HashMap<
+            (u32, u32, u32, Vec<crate::texel_buffer::Specialization>),
+            wgpu::BindGroup,
+        > = HashMap::new();
         let mut current: Option<u32> = None;
         // Sized to the advertised `max_bind_groups` (4); a higher index would have been rejected upstream.
         let mut bound: [Option<u32>; 4] = [None; 4];
@@ -119,20 +123,22 @@ impl Plan {
         &mut self,
         exec: &WgpuExecutor,
         res: &SessionResources,
-        cache: &mut HashMap<(u32, u32, u32), wgpu::BindGroup>,
+        cache: &mut HashMap<
+            (u32, u32, u32, Vec<crate::texel_buffer::Specialization>),
+            wgpu::BindGroup,
+        >,
         current: Option<u32>,
         bound: &[Option<u32>; 4],
         target_formats: &[TextureFormat],
         offset: u32,
     ) -> Result<()> {
         let pid = current.ok_or(GpuError::Invalid("draw with no pipeline bound"))?;
-        let (pipeline, pipeline_formats, used_bindings) = match PipelineNative::get(res, pid)? {
+        let (pipeline_formats, used_bindings) = match PipelineNative::get(res, pid)? {
             PipelineNative::Render {
-                pipeline,
                 color_formats,
                 used_bindings,
                 ..
-            } => (pipeline, color_formats, used_bindings),
+            } => (color_formats, used_bindings),
             PipelineNative::Compute { .. } => {
                 return Err(GpuError::Unsupported("wgpu: draw on a compute pipeline"))
             }
@@ -142,6 +148,13 @@ impl Plan {
                 "pipeline color format mismatches render attachment",
             ));
         }
+        let descriptors = bound
+            .iter()
+            .filter_map(|group| group.map(|id| exec.bind_group(res, id)))
+            .collect::<Result<Vec<_>>>()?;
+        let alignment = exec.gpu.device.limits().min_storage_buffer_offset_alignment as u64;
+        let specialization = crate::texel_buffer::key(descriptors.iter().copied(), alignment)?;
+        let pipeline = exec.render_pipeline_for(res, pid, &specialization)?;
         let viewport = self
             .viewport_buffer
             .as_ref()
@@ -150,23 +163,27 @@ impl Plan {
         for (index, group) in bound.iter().enumerate() {
             let Some(gid) = *group else { continue };
             let index = index as u32;
-            let group = match cache.get(&(pid, index, gid)) {
+            let cache_key = (pid, index, gid, specialization.clone());
+            let group = match cache.get(&cache_key) {
                 Some(hit) => hit.clone(),
                 None => {
                     let started = exec.profile_clock();
                     // Filter the driver's entries to the bindings this pipeline's shaders actually read in
                     // THIS set, so a bind group carrying an unsampled texture/sampler pair still matches
                     // (see `bindgroup::build_bind_group`).
+                    let descriptor = exec.bind_group(res, gid)?;
+                    let views = crate::texel_buffer::views(res, descriptor, alignment)?;
                     let built = exec.build_bind_group(
                         res,
                         &pipeline.get_bind_group_layout(index),
-                        exec.bind_group(res, gid)?,
+                        descriptor,
                         Some(used_bindings),
                         true,
+                        Some(&views),
                         (index == 0).then_some(viewport),
                     )?;
                     exec.profile_record(|p| &mut p.draw_bind_groups, started);
-                    cache.insert((pid, index, gid), built.clone());
+                    cache.insert(cache_key, built.clone());
                     built
                 }
             };
@@ -179,7 +196,8 @@ impl Plan {
         if bound[0].is_none() {
             // The bindingless draw still needs set 0 for the viewport-correction uniform. Keyed on bind
             // group id 0, which no live protocol bind group can be (ids start at 1).
-            let group = match cache.get(&(pid, 0, 0)) {
+            let cache_key = (pid, 0, 0, specialization.clone());
+            let group = match cache.get(&cache_key) {
                 Some(hit) => hit.clone(),
                 None => {
                     let started = exec.profile_clock();
@@ -193,10 +211,11 @@ impl Plan {
                         &empty,
                         Some(used_bindings),
                         true,
+                        None,
                         Some(viewport),
                     )?;
                     exec.profile_record(|p| &mut p.draw_bind_groups, started);
-                    cache.insert((pid, 0, 0), built.clone());
+                    cache.insert(cache_key, built.clone());
                     built
                 }
             };
@@ -207,7 +226,8 @@ impl Plan {
             });
         }
         self.draws.push(Draw {
-            pipeline: pid,
+            id: pid,
+            pipeline,
             groups,
         });
         Ok(())

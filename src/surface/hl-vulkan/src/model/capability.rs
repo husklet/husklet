@@ -10,7 +10,9 @@
 //! on. The format masks mirror `MVKPixelFormats::getVkFormatProperties` for the color/depth subset the
 //! render/transfer path materializes ([`crate::service::create::create_image`]).
 
-use super::memory::{vk_format, VertexFormat};
+#[cfg(test)]
+use super::memory::vk_format;
+use super::memory::VertexFormat;
 
 /// One advertised extension: its `VK_KHR_*`/`VK_EXT_*` name + spec version (the two fields
 /// `vkEnumerate{Instance,Device}ExtensionProperties` writes into each `VkExtensionProperties`).
@@ -151,9 +153,14 @@ impl Format {
             | T::Bgra8Srgb
             | T::R8Unorm
             | T::Rg8Unorm => FormatClass::NormalizedColor,
-            T::Rgba8Uint | T::Rgba8Sint | T::R8Uint | T::R8Sint | T::Rg8Uint | T::Rg8Sint => {
-                FormatClass::IntegerColor
-            }
+            T::Rgba8Uint
+            | T::Rgba8Sint
+            | T::R8Uint
+            | T::R8Sint
+            | T::Rg8Uint
+            | T::Rg8Sint
+            | T::R32Uint
+            | T::R32Sint => FormatClass::IntegerColor,
             T::Rgba16Float => FormatClass::FloatColor,
             T::R32Float | T::Rgba32Float => FormatClass::UnfilterableFloatColor,
             T::Depth32Float | T::Depth24PlusStencil8 => FormatClass::DepthStencil,
@@ -289,7 +296,10 @@ impl Format {
             // Restore this bit only together with a blit path that can actually resample a compressed
             // source, and re-run both suites — the two move in opposite directions.
             Some(FormatClass::Compressed) => {
-                f::SAMPLED_IMAGE | f::SAMPLED_IMAGE_FILTER_LINEAR | f::TRANSFER_SRC | f::TRANSFER_DST
+                f::SAMPLED_IMAGE
+                    | f::SAMPLED_IMAGE_FILTER_LINEAR
+                    | f::TRANSFER_SRC
+                    | f::TRANSFER_DST
             }
             Some(FormatClass::DepthStencil) => {
                 f::SAMPLED_IMAGE
@@ -322,7 +332,28 @@ impl Format {
         if VertexFormat(vk_format).wire().is_some() {
             buffer |= f::VERTEX_BUFFER;
         }
-        if self.is_color() {
+        if matches!(
+            self.wire(),
+            Some(
+                hl_gpu::protocol::model::enums::TextureFormat::Rgba8Unorm
+                    | hl_gpu::protocol::model::enums::TextureFormat::Bgra8Unorm
+                    | hl_gpu::protocol::model::enums::TextureFormat::R8Unorm
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rg8Unorm
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rgba16Float
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rgba32Float
+                    | hl_gpu::protocol::model::enums::TextureFormat::R32Float
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rgba8Uint
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rgba8Sint
+                    | hl_gpu::protocol::model::enums::TextureFormat::R8Uint
+                    | hl_gpu::protocol::model::enums::TextureFormat::R8Sint
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rg8Uint
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rg8Sint
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rgba32Uint
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rgba32Sint
+                    | hl_gpu::protocol::model::enums::TextureFormat::R32Uint
+                    | hl_gpu::protocol::model::enums::TextureFormat::R32Sint
+            )
+        ) {
             buffer |= f::UNIFORM_TEXEL_BUFFER | f::STORAGE_TEXEL_BUFFER;
         }
         FormatFeatures {
@@ -399,6 +430,37 @@ mod tests {
             features.buffer & format_feature::UNIFORM_TEXEL_BUFFER != 0,
             "a colour format is also a uniform texel buffer"
         );
+    }
+
+    #[test]
+    fn texel_buffer_claims_match_every_raw_lowerable_wire_format() {
+        use hl_gpu::protocol::model::enums::TextureFormat as T;
+
+        for format in 0..=250u32 {
+            let wire = Format(format).wire();
+            let supported = matches!(
+                wire,
+                Some(
+                    T::Rgba8Unorm | T::Bgra8Unorm | T::R8Unorm | T::Rg8Unorm
+                        | T::Rgba16Float | T::Rgba32Float | T::R32Float
+                        | T::Rgba8Uint | T::Rgba8Sint | T::R8Uint | T::R8Sint
+                        | T::Rg8Uint | T::Rg8Sint | T::Rgba32Uint | T::Rgba32Sint
+                        | T::R32Uint | T::R32Sint
+                )
+            );
+            let bits = Format(format).features().buffer
+                & (format_feature::UNIFORM_TEXEL_BUFFER | format_feature::STORAGE_TEXEL_BUFFER);
+            assert_eq!(bits != 0, supported, "VkFormat {format}, wire={wire:?}");
+            assert_eq!(
+                bits,
+                if supported {
+                    format_feature::UNIFORM_TEXEL_BUFFER | format_feature::STORAGE_TEXEL_BUFFER
+                } else {
+                    0
+                },
+                "VkFormat {format}, wire={wire:?}"
+            );
+        }
     }
 
     /// The advertisement and the lowering are now ONE source: every format the driver can lower is

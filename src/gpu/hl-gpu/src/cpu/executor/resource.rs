@@ -202,6 +202,16 @@ impl CpuExecutor {
                         gen: res.buffers.generation(*id).unwrap(),
                     });
                 }
+                BindResource::TexelBuffer {
+                    id, offset, size, ..
+                } => {
+                    let b = buffer(res, *id)?;
+                    copy::buffer_slice_bounds(b.data.len(), *offset, *size)?;
+                    buffers.push(GenRef {
+                        id: *id,
+                        gen: res.buffers.generation(*id).unwrap(),
+                    });
+                }
                 BindResource::Texture { id } => {
                     texture_with_usage(
                         res,

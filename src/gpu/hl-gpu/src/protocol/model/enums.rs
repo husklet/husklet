@@ -41,7 +41,7 @@ u32_enum!(
         // These are UNFILTERABLE and UNBLENDABLE by specification: a sampler reads them only through
         // `texelFetch` (WGSL `textureLoad`), and their texels are raw integers, never normalized.
         Rgba8Uint = 26, Rgba8Sint = 27, R8Uint = 28, R8Sint = 29, Rg8Uint = 30, Rg8Sint = 31,
-        Rgba32Uint = 32, Rgba32Sint = 33,
+        Rgba32Uint = 32, Rgba32Sint = 33, R32Uint = 34, R32Sint = 35,
     } "TextureFormat"
 );
 
@@ -59,10 +59,12 @@ impl TextureFormat {
             TextureFormat::Rgba8Uint
             | TextureFormat::R8Uint
             | TextureFormat::Rg8Uint
+            | TextureFormat::R32Uint
             | TextureFormat::Rgba32Uint => TextureNumericClass::Uint,
             TextureFormat::Rgba8Sint
             | TextureFormat::R8Sint
             | TextureFormat::Rg8Sint
+            | TextureFormat::R32Sint
             | TextureFormat::Rgba32Sint => TextureNumericClass::Sint,
             _ => TextureNumericClass::Float,
         }
@@ -79,7 +81,9 @@ impl TextureFormat {
             | TextureFormat::Bgra8Unorm
             | TextureFormat::Rgba8Srgb
             | TextureFormat::Bgra8Srgb
-            | TextureFormat::R32Float => 4,
+            | TextureFormat::R32Float
+            | TextureFormat::R32Uint
+            | TextureFormat::R32Sint => 4,
             TextureFormat::Rgba16Float => 8,
             TextureFormat::Rgba32Float | TextureFormat::Rgba32Uint | TextureFormat::Rgba32Sint => {
                 16
@@ -269,9 +273,12 @@ impl TextureFormat {
             // Raw integer values, matching the direction `clear_texel` packs them.
             TextureFormat::R8Uint => [byte(0) as f32, 0.0, 0.0, 1.0],
             TextureFormat::Rg8Uint => [byte(0) as f32, byte(1) as f32, 0.0, 1.0],
-            TextureFormat::Rgba8Uint => {
-                [byte(0) as f32, byte(1) as f32, byte(2) as f32, byte(3) as f32]
-            }
+            TextureFormat::Rgba8Uint => [
+                byte(0) as f32,
+                byte(1) as f32,
+                byte(2) as f32,
+                byte(3) as f32,
+            ],
             TextureFormat::R8Sint => [byte(0) as i8 as f32, 0.0, 0.0, 1.0],
             TextureFormat::Rg8Sint => [byte(0) as i8 as f32, byte(1) as i8 as f32, 0.0, 1.0],
             TextureFormat::Rgba8Sint => [
@@ -645,7 +652,9 @@ mod clear_texel_tests {
         for &format in COLOR_FORMATS {
             for &color in COLORS {
                 let packed = format.clear_texel(color).expect("promised");
-                let decoded = format.texel_to_f32(&packed).expect("its own inverse exists");
+                let decoded = format
+                    .texel_to_f32(&packed)
+                    .expect("its own inverse exists");
                 let repacked = format.clear_texel(decoded).expect("promised");
                 assert_eq!(
                     repacked, packed,

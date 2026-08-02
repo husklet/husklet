@@ -201,6 +201,8 @@ pub struct SamplerRec {
 pub mod vk_buffer_usage {
     pub const TRANSFER_SRC: u32 = 0x0000_0001;
     pub const TRANSFER_DST: u32 = 0x0000_0002;
+    pub const UNIFORM_TEXEL_BUFFER: u32 = 0x0000_0004;
+    pub const STORAGE_TEXEL_BUFFER: u32 = 0x0000_0008;
     pub const UNIFORM_BUFFER: u32 = 0x0000_0010;
     pub const STORAGE_BUFFER: u32 = 0x0000_0020;
     pub const INDEX_BUFFER: u32 = 0x0000_0040;
@@ -236,6 +238,8 @@ pub mod vk_format {
     pub const R8G8B8A8_SINT: u32 = 42;
     pub const R16G16B16A16_SFLOAT: u32 = 97;
     pub const R32G32B32A32_SFLOAT: u32 = 109;
+    pub const R32_UINT: u32 = 98;
+    pub const R32_SINT: u32 = 99;
     pub const R32_SFLOAT: u32 = 100;
     pub const D16_UNORM: u32 = 124;
     pub const D32_SFLOAT: u32 = 126;
@@ -401,6 +405,12 @@ impl BufferUsage {
         let u = self.0;
         use hl_gpu::protocol::model::enums::buffer_usage as bu;
         let mut out = bu::MAP;
+        if u & (vk_buffer_usage::UNIFORM_TEXEL_BUFFER | vk_buffer_usage::STORAGE_TEXEL_BUFFER) != 0
+        {
+            // Texel views bind the original allocation as packed raw storage; copy usage remains available
+            // to the executor's protocol-level transfer paths.
+            out |= bu::STORAGE | bu::COPY_SRC | bu::COPY_DST;
+        }
         if u & vk_buffer_usage::STORAGE_BUFFER != 0 {
             out |= bu::STORAGE;
         }
@@ -478,6 +488,8 @@ impl Format {
             vk_format::R16G16B16A16_SFLOAT => T::Rgba16Float,
             vk_format::R32G32B32A32_SFLOAT => T::Rgba32Float,
             vk_format::R32_SFLOAT => T::R32Float,
+            vk_format::R32_UINT => T::R32Uint,
+            vk_format::R32_SINT => T::R32Sint,
             // The integer color family. The neutral wire has carried these since the GL driver needed
             // `GL_RGBA_INTEGER`/`GL_RED_INTEGER`/`GL_RG_INTEGER` storage, and `hl-gpu-wgpu` maps each to its
             // exact wgpu counterpart, but this Vulkan lowering never learned them — so every `vkCreateImage`

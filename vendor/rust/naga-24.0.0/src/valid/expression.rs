@@ -466,6 +466,7 @@ impl super::Validator {
 
                 // check texture coordinates type
                 let num_components = match dim {
+                    crate::ImageDimension::Buffer => 1,
                     crate::ImageDimension::D1 => 1,
                     crate::ImageDimension::D2 => 2,
                     crate::ImageDimension::D3 | crate::ImageDimension::Cube => 3,
@@ -519,7 +520,9 @@ impl super::Validator {
                 if let Some(component) = gather {
                     match dim {
                         crate::ImageDimension::D2 | crate::ImageDimension::Cube => {}
-                        crate::ImageDimension::D1 | crate::ImageDimension::D3 => {
+                        crate::ImageDimension::Buffer
+                        | crate::ImageDimension::D1
+                        | crate::ImageDimension::D3 => {
                             return Err(ExpressionError::InvalidGatherDimension(dim))
                         }
                     };

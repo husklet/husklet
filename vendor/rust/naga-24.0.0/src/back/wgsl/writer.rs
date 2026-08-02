@@ -2006,6 +2006,7 @@ const fn image_dimension_str(dim: crate::ImageDimension) -> &'static str {
     use crate::ImageDimension as IDim;
 
     match dim {
+        IDim::Buffer => "buffer",
         IDim::D1 => "1d",
         IDim::D2 => "2d",
         IDim::D3 => "3d",

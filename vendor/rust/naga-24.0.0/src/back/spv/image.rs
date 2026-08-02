@@ -1059,6 +1059,7 @@ impl BlockContext<'_> {
         let id = match query {
             Iq::Size { level } => {
                 let dim_coords = match dim {
+                    Id::Buffer => 1,
                     Id::D1 => 1,
                     Id::D2 | Id::Cube => 2,
                     Id::D3 => 3,
@@ -1141,6 +1142,7 @@ impl BlockContext<'_> {
             }
             Iq::NumLayers => {
                 let vec_size = match dim {
+                    Id::Buffer => crate::VectorSize::Bi,
                     Id::D1 => crate::VectorSize::Bi,
                     Id::D2 | Id::Cube => crate::VectorSize::Tri,
                     Id::D3 => crate::VectorSize::Quad,

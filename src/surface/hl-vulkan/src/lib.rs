@@ -43,6 +43,7 @@ pub mod service;
 // Ported from `hl-shim-vk/src/types.rs`. The lowering layer works with plain `u64`s (as the C ABI
 // does) rather than `*mut c_void` dispatchable pointers, so it is testable without FFI.
 pub type VkBuffer = u64;
+pub type VkBufferView = u64;
 pub type VkDeviceMemory = u64;
 pub type VkImage = u64;
 pub type VkSampler = u64;

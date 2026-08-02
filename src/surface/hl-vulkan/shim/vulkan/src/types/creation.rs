@@ -110,6 +110,17 @@ pub struct VkDescriptorBufferInfo {
     pub range: VkDeviceSize,
 }
 
+#[repr(C)]
+pub struct VkBufferViewCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: u32,
+    pub buffer: u64,
+    pub format: i32,
+    pub offset: VkDeviceSize,
+    pub range: VkDeviceSize,
+}
+
 /// `VkDescriptorImageInfo` (`{ VkSampler sampler; VkImageView imageView; VkImageLayout imageLayout }`) —
 /// the ABI a `SAMPLER` / `COMBINED_IMAGE_SAMPLER` / `SAMPLED_IMAGE` write carries through `pImageInfo`.
 #[repr(C)]

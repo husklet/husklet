@@ -186,6 +186,20 @@ impl Encoder {
                         e.u32(*id);
                     }
                 }
+                BindResource::TexelBuffer {
+                    id,
+                    offset,
+                    size,
+                    format,
+                    writable,
+                } => {
+                    e.u8(6);
+                    e.u32(*id);
+                    e.u64(*offset);
+                    e.u64(*size);
+                    e.u32(format.to_u32());
+                    e.bool(*writable);
+                }
             }
         }
     }

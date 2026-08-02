@@ -357,7 +357,10 @@ pub enum Cmd {
 // v16 widens render-pass and ClearRect color values from f32 to f64. Every i32/u32 is exactly
 // representable in f64, so RGBA32I/UI clears no longer lose low bits above 2^24. The payload grows and a
 // v15 decoder would mis-frame the following attachment/op, so exact-version negotiation remains required.
-pub const WIRE_VERSION: u32 = 16;
+// v17 adds the UniformTexelBuffer and StorageTexelBuffer pipeline-binding kinds (stable tags 6/7) and
+// BindResource::TexelBuffer (stable tag 6 with its formatted byte-range payload). A v16 decoder would
+// reject or mis-frame those descriptors, so mixed v16/v17 peers must fail the exact-version handshake.
+pub const WIRE_VERSION: u32 = 17;
 
 // tag constants (stable wire) --------------------------------------------------------------------
 /// Top-level [`Cmd`] tag numbers.

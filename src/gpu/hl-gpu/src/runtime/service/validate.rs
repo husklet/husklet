@@ -149,6 +149,10 @@ pub fn validate(limits: &Limits, frame_bytes: usize, cmds: &[Cmd]) -> Result<()>
                         let required = match binding.kind {
                             PipelineBindingKind::UniformBuffer => binding_array::UNIFORM_BUFFER,
                             PipelineBindingKind::StorageBuffer => binding_array::STORAGE_BUFFER,
+                            PipelineBindingKind::UniformTexelBuffer
+                            | PipelineBindingKind::StorageTexelBuffer => {
+                                binding_array::STORAGE_BUFFER
+                            }
                             PipelineBindingKind::SampledTexture => binding_array::SAMPLED_TEXTURE,
                             PipelineBindingKind::StorageTexture => binding_array::STORAGE_TEXTURE,
                             PipelineBindingKind::Sampler => binding_array::SAMPLER,

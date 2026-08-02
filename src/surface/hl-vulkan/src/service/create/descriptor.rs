@@ -8,6 +8,63 @@ use crate::model::descriptor::{
 use crate::*;
 use hl_gpu::{GpuError, Result};
 
+/// Create an immutable formatted view over a buffer byte range. Vulkan requires
+/// the offset to satisfy `minTexelBufferOffsetAlignment`; Husklet advertises 16.
+pub fn create_buffer_view(
+    dev: &mut Device,
+    buffer: VkBuffer,
+    format: hl_gpu::protocol::model::enums::TextureFormat,
+    offset: u64,
+    range: u64,
+) -> Result<VkBufferView> {
+    let buffer_size = dev
+        .buffers
+        .get(&buffer)
+        .ok_or(GpuError::Invalid("vkCreateBufferView: unknown VkBuffer"))?
+        .size;
+    if offset % 16 != 0 || offset > buffer_size {
+        return Err(GpuError::Invalid(
+            "vkCreateBufferView: offset is misaligned or outside the buffer",
+        ));
+    }
+    let range = if range == u64::MAX {
+        buffer_size - offset
+    } else {
+        range
+    };
+    let texel = format.bytes_per_texel().ok_or(GpuError::Unsupported(
+        "vkCreateBufferView: format has no plain texel layout",
+    ))? as u64;
+    if range == 0
+        || range % texel != 0
+        || offset
+            .checked_add(range)
+            .is_none_or(|end| end > buffer_size)
+    {
+        return Err(GpuError::Invalid(
+            "vkCreateBufferView: range is empty, partial-texel, or outside the buffer",
+        ));
+    }
+    if range / texel > u64::from(dev.physical_device.limits.max_texel_buffer_elements) {
+        return Err(GpuError::OutOfBounds);
+    }
+    let handle = dev.alloc_handle();
+    dev.buffer_views.insert(
+        handle,
+        crate::model::descriptor::BufferViewRec {
+            buffer,
+            format,
+            offset,
+            range,
+        },
+    );
+    Ok(handle)
+}
+
+pub fn destroy_buffer_view(dev: &mut Device, view: VkBufferView) {
+    dev.buffer_views.remove(&view);
+}
+
 // ---- descriptor sets -----------------------------------------------------------------------------
 
 /// `vkCreateDescriptorSetLayout` — record the immutable binding table. No IR.
@@ -90,6 +147,29 @@ pub fn update_descriptor_buffer_element(
     ))?;
     rec.buffers
         .insert((binding, array_element), (buffer, offset, range));
+    Ok(())
+}
+
+pub fn update_descriptor_texel_buffer_element(
+    dev: &mut Device,
+    set: VkDescriptorSet,
+    binding: u32,
+    array_element: u32,
+    view: VkBufferView,
+) -> Result<()> {
+    validate_descriptor_element(dev, set, binding, array_element)?;
+    if !dev.buffer_views.contains_key(&view) {
+        return Err(GpuError::Invalid(
+            "vkUpdateDescriptorSets: unknown VkBufferView",
+        ));
+    }
+    dev.descriptor_sets
+        .get_mut(&set)
+        .ok_or(GpuError::Invalid(
+            "vkUpdateDescriptorSets: unknown VkDescriptorSet",
+        ))?
+        .texel_buffers
+        .insert((binding, array_element), view);
     Ok(())
 }
 
@@ -193,6 +273,8 @@ pub fn copy_descriptors(
             destination.buffers.insert(destination_key, *value);
         } else if let Some(value) = source.images.get(&source_key) {
             destination.images.insert(destination_key, *value);
+        } else if let Some(value) = source.texel_buffers.get(&source_key) {
+            destination.texel_buffers.insert(destination_key, *value);
         } else {
             return Err(GpuError::Invalid(
                 "vkUpdateDescriptorSets: source descriptor is unbound",

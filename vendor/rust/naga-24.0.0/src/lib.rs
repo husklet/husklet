@@ -576,6 +576,12 @@ pub struct StructMember {
 #[cfg_attr(feature = "deserialize", derive(Deserialize))]
 #[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
 pub enum ImageDimension {
+    /// One-dimensional texel buffer (`OpTypeImage` with SPIR-V `DimBuffer`).
+    ///
+    /// This is preserved by the SPIR-V frontend so consumers can lower the
+    /// resource to their host representation before emitting a target language
+    /// that has no native texture-buffer type (notably WGSL).
+    Buffer,
     /// 1D image
     D1,
     /// 2D image

@@ -15,7 +15,7 @@ Package `hl_gpu`, lib name `hl_gpu`.
 
 - `protocol/` — **done.** The neutral language + the port drivers submit through. `model/` (id, error,
   enums, descriptor, command, capability, kernel) · `codec/` (wire, encode, decode, tag) · `port/`
-  (`CommandSink`). Wire byte-identical to shipping `hl-gpu` (WIRE_VERSION=15; proven by cross-encode
+  (`CommandSink`). Wire byte-identical to shipping `hl-gpu` (WIRE_VERSION=17; proven by cross-encode
   golden vectors). No cuda/vulkan/gl/platform types. Shader payloads classified by neutral magic
   (`KERNEL_MAGIC`/`SPIRV_MAGIC`) — the old ptx leak is broken.
 - `transport/` — pending. framing + socket; `client` (RemoteCommandSink) + `server` serve-loop.

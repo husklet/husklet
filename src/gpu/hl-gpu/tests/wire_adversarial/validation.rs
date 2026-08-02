@@ -6,6 +6,33 @@ fn empty_stream_decodes_to_no_commands() {
 }
 
 #[test]
+fn texel_buffer_writable_rejects_a_noncanonical_bool() {
+    let commands = [Cmd::CreateBindGroup(
+        7,
+        BindGroupDesc {
+            set: 0,
+            entries: vec![BindEntry {
+                binding: 0,
+                resource: BindResource::TexelBuffer {
+                    id: 11,
+                    offset: 0,
+                    size: 4,
+                    format: TextureFormat::Rgba8Unorm,
+                    writable: true,
+                },
+            }],
+        },
+    )];
+    let mut bytes = Encoder::stream(&commands);
+    assert_eq!(bytes.pop(), Some(1), "writable is the descriptor's final field");
+    bytes.push(2);
+    assert!(matches!(
+        hl_gpu::Decoder::stream(&bytes),
+        Err(GpuError::Decode(message)) if message.contains("bool")
+    ));
+}
+
+#[test]
 fn unknown_top_level_tag_is_bad_tag() {
     for bad_tag in [0u8, 26, 100, 255] {
         let err = hl_gpu::Decoder::stream(&[bad_tag]).unwrap_err();
@@ -44,14 +71,14 @@ fn out_of_range_enums_are_typed_bad_enum() {
         })
     ));
     // One past the LAST declared discriminant. This boundary moves whenever a format is added — it was 26
-    // before the integer formats (`Rgba8Uint` … `Rgba32Sint` = 26..=33) took that range — and it must move,
+    // before the integer formats (`Rgba8Uint` … `R32Sint` = 26..=35) took that range — and it must move,
     // because the property under test is that an undeclared value is refused rather than aliasing onto a
     // declared one.
     assert!(matches!(
-        TextureFormat::from_u32(34),
+        TextureFormat::from_u32(36),
         Err(GpuError::BadEnum { .. })
     ));
-    for v in 1..=33 {
+    for v in 1..=35 {
         assert_eq!(TextureFormat::from_u32(v).unwrap().to_u32(), v);
     }
     assert!(matches!(

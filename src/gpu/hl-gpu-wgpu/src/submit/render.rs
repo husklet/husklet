@@ -323,19 +323,18 @@ impl WgpuExecutor {
                         first_instance,
                     } => {
                         let planned = &draws[di];
-                        let pid = &planned.pipeline;
+                        let pid = &planned.id;
                         di += 1;
-                        let (pipeline, layouts) = match PipelineNative::get(res, *pid)? {
+                        let layouts = match PipelineNative::get(res, *pid)? {
                             PipelineNative::Render {
-                                pipeline,
                                 vertex_buffers,
                                 ..
-                            } => (pipeline, vertex_buffers),
+                            } => vertex_buffers,
                             PipelineNative::Compute { .. } => {
                                 unreachable!("draw pipeline checked above")
                             }
                         };
-                        pass.set_pipeline(pipeline);
+                        pass.set_pipeline(&planned.pipeline);
                         for b in &planned.groups {
                             match b.offset {
                                 Some(offset) => pass.set_bind_group(b.index, &b.group, &[offset]),
@@ -376,13 +375,8 @@ impl WgpuExecutor {
                         first_instance,
                     } => {
                         let planned = &draws[di];
-                        let pid = &planned.pipeline;
                         di += 1;
-                        if let PipelineNative::Render { pipeline, .. } =
-                            PipelineNative::get(res, *pid)?
-                        {
-                            pass.set_pipeline(pipeline);
-                        }
+                        pass.set_pipeline(&planned.pipeline);
                         for b in &planned.groups {
                             match b.offset {
                                 Some(offset) => pass.set_bind_group(b.index, &b.group, &[offset]),

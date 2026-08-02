@@ -81,6 +81,7 @@ impl crate::TypeInner {
                 class,
             } => {
                 let dim_suffix = match dim {
+                    crate::ImageDimension::Buffer => "_buffer",
                     crate::ImageDimension::D1 => "_1d",
                     crate::ImageDimension::D2 => "_2d",
                     crate::ImageDimension::D3 => "_3d",

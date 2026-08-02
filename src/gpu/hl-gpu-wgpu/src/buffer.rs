@@ -18,8 +18,8 @@ use std::sync::atomic::Ordering;
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
 
-use crate::WgpuExecutor;
 use crate::device::Gpu;
+use crate::WgpuExecutor;
 
 /// The wgpu-native backing of one protocol buffer. `size` is the logical (guest-visible) length; the wgpu
 /// allocation is that rounded up to 4 bytes so storage-buffer / copy alignment always holds internally.
@@ -46,7 +46,7 @@ impl WgpuBuffer {
             .ok_or(GpuError::Invalid("wgpu: buffer native type mismatch"))
     }
 
-    fn allocation_size(size: u64) -> u64 {
+    pub(crate) fn allocation_size(size: u64) -> u64 {
         size.div_ceil(4) * 4
     }
 }
@@ -75,7 +75,9 @@ impl WgpuExecutor {
     ) -> Result<hl_gpu::runtime::model::resources::Native> {
         let shared = resource
             .downcast_ref::<SharedWgpuBuffer>()
-            .ok_or(GpuError::Invalid("wgpu: shared buffer native type mismatch"))?;
+            .ok_or(GpuError::Invalid(
+                "wgpu: shared buffer native type mismatch",
+            ))?;
         if !std::sync::Arc::ptr_eq(&shared.gpu, &self.gpu) {
             return Err(GpuError::Invalid(
                 "wgpu: shared buffer belongs to another device",

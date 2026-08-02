@@ -31,6 +31,8 @@ impl Format {
             TextureFormat::Rgba16Float => W::Rgba16Float,
             TextureFormat::Rgba32Float => W::Rgba32Float,
             TextureFormat::R32Float => W::R32Float,
+            TextureFormat::R32Uint => W::R32Uint,
+            TextureFormat::R32Sint => W::R32Sint,
             TextureFormat::Depth32Float => W::Depth32Float,
             TextureFormat::Depth24PlusStencil8 => W::Depth24PlusStencil8,
             TextureFormat::Bc1RgbaUnorm => W::Bc1RgbaUnorm,
@@ -129,7 +131,9 @@ mod clear_texel_tests {
     fn this_backend_packs_the_same_bytes_as_the_shared_rule() {
         for &format in COLOR_FORMATS {
             for &color in COLORS {
-                let shared = format.clear_texel(color).expect("promised by COLOR_FORMATS");
+                let shared = format
+                    .clear_texel(color)
+                    .expect("promised by COLOR_FORMATS");
                 let mine = Format::from(format)
                     .clear_texel(color)
                     .expect("this backend must serve every promised format");

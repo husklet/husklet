@@ -210,8 +210,29 @@ pub extern "C" fn vkUpdateDescriptorSets(
                         sampler,
                     );
                 }
+            } else if descriptor_type.is_texel_buffer() {
+                if w.p_texel_buffer_view.is_null() {
+                    continue;
+                }
+                let views = unsafe {
+                    std::slice::from_raw_parts(
+                        w.p_texel_buffer_view as *const u64,
+                        w.descriptor_count as usize,
+                    )
+                };
+                for (index, &view) in views.iter().enumerate() {
+                    let Some(element) = w.dst_array_element.checked_add(index as u32) else {
+                        break;
+                    };
+                    let _ = create::update_descriptor_texel_buffer_element(
+                        dev,
+                        w.dst_set,
+                        w.dst_binding,
+                        element,
+                        view,
+                    );
+                }
             }
-            // Texel-buffer descriptor classes are not modeled and remain a truthful no-op.
         }
         if !p_descriptor_copies.is_null() {
             let copies = unsafe {

@@ -39,6 +39,7 @@ mod sampler;
 mod shader;
 mod spirv_split;
 mod submit;
+mod texel_buffer;
 mod texture;
 mod wgsl;
 
@@ -746,7 +747,8 @@ mod device_tests {
         assert!(ceiling > 0 && ceiling < u64::MAX, "finite by construction");
         assert!(ceiling < 1u64 << 38, "far below the DoS request");
 
-        let limits = hl_gpu::runtime::model::session::Limits::from_capabilities(executor.caps.clone());
+        let limits =
+            hl_gpu::runtime::model::session::Limits::from_capabilities(executor.caps.clone());
         let absurd = Cmd::CreateBuffer(
             1,
             BufferDesc {
@@ -775,8 +777,7 @@ mod device_tests {
     fn frame_budget_and_buffer_ceiling_are_distinct() {
         assert_eq!(MAX_FRAME_BYTES, 256 << 20);
         assert!(
-            MAX_FRAME_BYTES
-                <= hl_gpu::transport::adapter::unix::MAX_FRAME_BYTES as u64,
+            MAX_FRAME_BYTES <= hl_gpu::transport::adapter::unix::MAX_FRAME_BYTES as u64,
             "the negotiated frame budget must stay under the transport pre-read guard",
         );
         assert!(

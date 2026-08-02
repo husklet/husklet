@@ -225,6 +225,13 @@ impl<'a> Decoder<'a> {
                     }
                     BindResource::SamplerArray { ids }
                 }
+                6 => BindResource::TexelBuffer {
+                    id: d.u32()?,
+                    offset: d.u64()?,
+                    size: d.u64()?,
+                    format: TextureFormat::from_u32(d.u32()?)?,
+                    writable: d.bool()?,
+                },
                 t => {
                     return Err(GpuError::BadEnum {
                         what: "BindResource",

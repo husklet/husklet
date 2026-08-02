@@ -178,7 +178,17 @@ impl BindingKind {
                     arrayed,
                     class,
                 } => {
+                    if *dim == naga::ImageDimension::Buffer {
+                        let read_only = match class {
+                            naga::ImageClass::Storage { access, .. } => {
+                                !access.contains(naga::StorageAccess::STORE)
+                            }
+                            _ => true,
+                        };
+                        return Some((BindingKind::StorageBuffer { read_only }, count));
+                    }
                     let dim = match (dim, arrayed) {
+                        (naga::ImageDimension::Buffer, _) => unreachable!(),
                         (naga::ImageDimension::D1, _) => TexDim::D1,
                         (naga::ImageDimension::D2, false) => TexDim::D2,
                         (naga::ImageDimension::D2, true) => TexDim::D2Array,

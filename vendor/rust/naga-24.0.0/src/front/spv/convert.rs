@@ -67,11 +67,25 @@ pub(super) const fn map_vector_size(word: spirv::Word) -> Result<crate::VectorSi
 pub(super) fn map_image_dim(word: spirv::Word) -> Result<crate::ImageDimension, Error> {
     use spirv::Dim as D;
     match D::from_u32(word) {
+        Some(D::DimBuffer) => Ok(crate::ImageDimension::Buffer),
         Some(D::Dim1D) => Ok(crate::ImageDimension::D1),
         Some(D::Dim2D) => Ok(crate::ImageDimension::D2),
         Some(D::Dim3D) => Ok(crate::ImageDimension::D3),
         Some(D::DimCube) => Ok(crate::ImageDimension::Cube),
         _ => Err(Error::UnsupportedImageDim(word)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::map_image_dim;
+
+    #[test]
+    fn spirv_buffer_dimension_is_preserved_for_host_lowering() {
+        assert_eq!(
+            map_image_dim(spirv::Dim::DimBuffer as u32).unwrap(),
+            crate::ImageDimension::Buffer
+        );
     }
 }
 

@@ -11,7 +11,7 @@ use hl_gpu::protocol::model::enums::*;
 use hl_gpu::WIRE_VERSION;
 
 #[test]
-fn wire_version_is_pinned_at_16() {
+fn wire_version_is_pinned_at_17() {
     // A change here must be intentional: it is the negotiated handshake version that keeps a stale
     // guest/backend pair from reinterpreting a tag it predates. Bumped 5 → 6 when the additive `Glsl`
     // shader-payload channel (leading `GLSL_MAGIC`) was introduced, and 6 → 7 when stencil test/write was
@@ -27,7 +27,9 @@ fn wire_version_is_pinned_at_16() {
     // encodes a blit, so every GOLDEN_* byte array remained valid unchanged. Bumped 15 → 16 when
     // colour-clear payloads widened from f32 to f64 so integer render targets retain exact values above
     // the f32 integer precision limit; stream B therefore has a deliberately updated snapshot below.
-    assert_eq!(WIRE_VERSION, 16);
+    // Bumped 16 → 17 when formatted texel-buffer descriptors became wire-visible. The frozen streams
+    // below carry no texel-buffer descriptor, so their bytes remain unchanged.
+    assert_eq!(WIRE_VERSION, 17);
 }
 
 /// Stream A: buffer create + write + fence create + wait + destroy.

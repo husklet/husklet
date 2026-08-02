@@ -232,6 +232,7 @@ impl Cmd {
                         BindResource::Buffer { id, .. } => refs.push((KIND_BUFFER, id)),
                         BindResource::Texture { id } => refs.push((KIND_TEXTURE, id)),
                         BindResource::Sampler { id } => refs.push((KIND_SAMPLER, id)),
+                        BindResource::TexelBuffer { id, .. } => refs.push((KIND_BUFFER, id)),
                         BindResource::BufferArray { ref elements } => {
                             refs.extend(elements.iter().map(|element| (KIND_BUFFER, element.id)));
                         }

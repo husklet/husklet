@@ -30,6 +30,7 @@ mod descriptor;
 mod diagnostic;
 mod module;
 mod nonfinite;
+mod texel_buffer;
 
 use diagnostic::Diagnostic;
 use module::ShaderModule;
@@ -56,27 +57,50 @@ pub struct Spirv;
 
 impl Spirv {
     pub fn translate_reflect(words: &[u32]) -> Result<(String, crate::reflect::ModuleUsage)> {
-        Self::translate_reflect_layout(words, None)
+        Self::translate_reflect_options(words, None, false, None)
     }
 
     pub fn translate_reflect_layout(
         words: &[u32],
         layout: Option<&hl_gpu::protocol::model::descriptor::PipelineLayout>,
     ) -> Result<(String, crate::reflect::ModuleUsage)> {
-        Self::translate_reflect_options(words, layout, false)
+        Self::translate_reflect_options(words, layout, false, None)
     }
 
     pub fn translate_reflect_sample_shading(
         words: &[u32],
         layout: Option<&hl_gpu::protocol::model::descriptor::PipelineLayout>,
     ) -> Result<(String, crate::reflect::ModuleUsage)> {
-        Self::translate_reflect_options(words, layout, true)
+        Self::translate_reflect_options(words, layout, true, None)
+    }
+
+    pub(crate) fn translate_reflect_texel(
+        words: &[u32],
+        layout: &hl_gpu::protocol::model::descriptor::PipelineLayout,
+        specialization: &[crate::texel_buffer::Specialization],
+    ) -> Result<(String, crate::reflect::ModuleUsage)> {
+        Self::translate_reflect_texel_sample(words, layout, specialization, false)
+    }
+
+    pub(crate) fn translate_reflect_texel_sample(
+        words: &[u32],
+        layout: &hl_gpu::protocol::model::descriptor::PipelineLayout,
+        specialization: &[crate::texel_buffer::Specialization],
+        sample_shading: bool,
+    ) -> Result<(String, crate::reflect::ModuleUsage)> {
+        Self::translate_reflect_options(
+            words,
+            Some(layout),
+            sample_shading,
+            Some(specialization),
+        )
     }
 
     fn translate_reflect_options(
         words: &[u32],
         layout: Option<&hl_gpu::protocol::model::descriptor::PipelineLayout>,
         sample_shading: bool,
+        texel_specialization: Option<&[crate::texel_buffer::Specialization]>,
     ) -> Result<(String, crate::reflect::ModuleUsage)> {
         if words.first().copied() != Some(SPIRV_MAGIC) {
             return Err(GpuError::Invalid("wgpu: shader payload is not SPIR-V"));
@@ -89,6 +113,17 @@ impl Spirv {
         let mut module =
             naga::front::spv::parse_u8_slice(bytes, &naga::front::spv::Options::default())
                 .map_err(|e| Diagnostic::kernel(format!("spirv-in: {e:?}")))?;
+        // WGSL offers read-only and read_write storage buffers, but no write-only address space. SPIR-V
+        // legitimately uses NonReadable on output SSBOs (including Vulkan CTS buffer-view results), which
+        // naga preserves as STORE-only and then rejects at WGSL validation. Granting LOAD in the host type
+        // does not add a shader read; it only selects WGSL's representable read_write spelling.
+        for (_, variable) in module.global_variables.iter_mut() {
+            if let naga::AddressSpace::Storage { access } = &mut variable.space {
+                if access.contains(naga::StorageAccess::STORE) {
+                    access.insert(naga::StorageAccess::LOAD);
+                }
+            }
+        }
         if let Some(layout) = layout {
             for (_, variable) in module.global_variables.iter_mut() {
                 let Some(resource) = &variable.binding else {
@@ -105,39 +140,38 @@ impl Spirv {
                     std::num::NonZeroU32::new(binding.count)
                         .ok_or(GpuError::Invalid("zero descriptor count"))?,
                 );
-                let _base = match module.types[variable.ty].inner {
-                    naga::TypeInner::Array { base, size, .. } => {
-                        if size != expected {
-                            return Err(GpuError::Invalid(
-                                "SPIR-V descriptor array count differs from pipeline layout",
-                            ));
+                let _base =
+                    match module.types[variable.ty].inner {
+                        naga::TypeInner::Array { base, size, .. } => {
+                            if size != expected {
+                                return Err(GpuError::Invalid(
+                                    "SPIR-V descriptor array count differs from pipeline layout",
+                                ));
+                            }
+                            variable.ty = module.types.insert(
+                                naga::Type {
+                                    name: None,
+                                    inner: naga::TypeInner::BindingArray { base, size },
+                                },
+                                naga::Span::default(),
+                            );
+                            base
                         }
-                        variable.ty = module.types.insert(
-                            naga::Type {
-                                name: None,
-                                inner: naga::TypeInner::BindingArray { base, size },
-                            },
-                            naga::Span::default(),
-                        );
-                        base
-                    }
-                    naga::TypeInner::BindingArray { base, size } => {
-                        if size != expected {
-                            return Err(GpuError::Invalid(
-                                "SPIR-V descriptor array count differs from pipeline layout",
-                            ));
+                        naga::TypeInner::BindingArray { base, size } => {
+                            if size != expected {
+                                return Err(GpuError::Invalid(
+                                    "SPIR-V descriptor array count differs from pipeline layout",
+                                ));
+                            }
+                            base
                         }
-                        base
-                    }
-                    // A layout that declares a descriptor ARRAY at this slot while the shader declares a
-                    // plain resource is the same shader/layout disagreement the two arms above refuse;
-                    // skipping it silently left the mismatch to be discovered, or not, downstream.
-                    _ => {
-                        return Err(GpuError::Invalid(
+                        // A layout that declares a descriptor ARRAY at this slot while the shader declares a
+                        // plain resource is the same shader/layout disagreement the two arms above refuse;
+                        // skipping it silently left the mismatch to be discovered, or not, downstream.
+                        _ => return Err(GpuError::Invalid(
                             "SPIR-V global is not an array where the pipeline layout declares one",
-                        ))
-                    }
-                };
+                        )),
+                    };
             }
         }
         if sample_shading {
@@ -168,6 +202,7 @@ impl Spirv {
         if let Some(layout) = layout {
             descriptor::ScalarArrays::lower(&mut module, layout)?;
         }
+        texel_buffer::TexelBuffers::lower(&mut module, texel_specialization)?;
         viewport::Shader::prepare(&mut module)?;
         let reflected = crate::reflect::ModuleUsage::from_module(&module);
         // `OpIsInf`/`OpIsNan` survive `spv-in` as relational expressions naga's `wgsl-out` cannot emit.

@@ -311,6 +311,12 @@ fn pipeline_bindings(dev: &Device, layout: VkPipelineLayout) -> Result<PipelineL
                 crate::model::descriptor::vk_descriptor_type::COMBINED_IMAGE_SAMPLER => {
                     PipelineBindingKind::CombinedImageSampler
                 }
+                crate::model::descriptor::vk_descriptor_type::UNIFORM_TEXEL_BUFFER => {
+                    PipelineBindingKind::UniformTexelBuffer
+                }
+                crate::model::descriptor::vk_descriptor_type::STORAGE_TEXEL_BUFFER => {
+                    PipelineBindingKind::StorageTexelBuffer
+                }
                 _ => {
                     return Err(GpuError::Unsupported(
                         "pipeline layout descriptor kind is unsupported",

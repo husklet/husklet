@@ -2331,6 +2331,7 @@ impl Frontend {
         } = *ctx.resolve_type(image, meta)?
         {
             let image_size = match dim {
+                Dim::Buffer => None,
                 Dim::D1 => None,
                 Dim::D2 => Some(VectorSize::Bi),
                 Dim::D3 => Some(VectorSize::Tri),

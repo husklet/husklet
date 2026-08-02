@@ -76,6 +76,8 @@ pub struct Limits {
     pub max_image_dimension_3d: u32,
     pub max_uniform_buffer_range: u32,
     pub max_storage_buffer_range: u32,
+    /// Largest formatted buffer view, conservatively bounded for 16-byte packed texels.
+    pub max_texel_buffer_elements: u32,
     pub max_push_constants_size: u32,
     pub max_bound_descriptor_sets: u32,
     pub max_per_stage_descriptor_storage_buffers: u32,
@@ -239,6 +241,8 @@ impl Limits {
             max_image_dimension_3d: 2048,
             max_uniform_buffer_range: 65536,
             max_storage_buffer_range: u32::MAX,
+            max_texel_buffer_elements: u32::try_from((1u64 << 30) / 16)
+                .expect("host texel-buffer ceiling fits u32"),
             max_push_constants_size: 4096,
             max_bound_descriptor_sets: 8,
             max_per_stage_descriptor_storage_buffers: 31,

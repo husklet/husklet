@@ -5,7 +5,8 @@
 //! `vkUpdateDescriptorSets` and resolved to an IR bind group at `vkCmdBindDescriptorSets`
 //! ([`crate::service::record`]) — dynamic offsets applied there.
 
-use crate::{VkBuffer, VkDescriptorPool, VkDescriptorSetLayout, VkImage, VkSampler};
+use crate::{VkBuffer, VkBufferView, VkDescriptorPool, VkDescriptorSetLayout, VkImage, VkSampler};
+use hl_gpu::protocol::model::enums::TextureFormat;
 use std::collections::HashMap;
 
 /// `VkDescriptorType` (stable enum values from vk.xml) for the buffer + image-descriptor classification.
@@ -14,6 +15,8 @@ pub mod vk_descriptor_type {
     pub const COMBINED_IMAGE_SAMPLER: i32 = 1;
     pub const SAMPLED_IMAGE: i32 = 2;
     pub const STORAGE_IMAGE: i32 = 3;
+    pub const UNIFORM_TEXEL_BUFFER: i32 = 4;
+    pub const STORAGE_TEXEL_BUFFER: i32 = 5;
     pub const UNIFORM_BUFFER: i32 = 6;
     pub const STORAGE_BUFFER: i32 = 7;
     pub const UNIFORM_BUFFER_DYNAMIC: i32 = 8;
@@ -34,6 +37,11 @@ impl DescriptorType {
             self.0,
             UNIFORM_BUFFER | STORAGE_BUFFER | UNIFORM_BUFFER_DYNAMIC | STORAGE_BUFFER_DYNAMIC
         )
+    }
+
+    pub fn is_texel_buffer(self) -> bool {
+        use vk_descriptor_type::*;
+        matches!(self.0, UNIFORM_TEXEL_BUFFER | STORAGE_TEXEL_BUFFER)
     }
 
     /// Whether this is a sampled-image or sampler descriptor materialized in [`DsetRec::images`].
@@ -162,6 +170,15 @@ pub struct ImageBinding {
     pub sampler: Option<VkSampler>,
 }
 
+/// Immutable interpretation of a byte range in a Vulkan buffer as formatted texels.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BufferViewRec {
+    pub buffer: VkBuffer,
+    pub format: TextureFormat,
+    pub offset: u64,
+    pub range: u64,
+}
+
 /// A `VkDescriptorSet`: the layout + owning pool it was allocated with, plus the descriptor tables
 /// `vkUpdateDescriptorSets` writes — `binding -> (buffer, offset, range)` for buffer descriptors and
 /// `binding -> (image, sampler)` for sampled-image / sampler descriptors. Both are resolved to one IR
@@ -175,6 +192,8 @@ pub struct DsetRec {
     pub buffers: HashMap<(u32, u32), (VkBuffer, u64, u64)>,
     /// `binding -> (image handle, sampler handle)` for sampled-image / sampler descriptors.
     pub images: HashMap<(u32, u32), ImageBinding>,
+    /// `binding, array element -> VkBufferView` for uniform/storage texel descriptors.
+    pub texel_buffers: HashMap<(u32, u32), VkBufferView>,
 }
 
 impl DsetRec {
@@ -185,6 +204,7 @@ impl DsetRec {
             pool,
             buffers: HashMap::new(),
             images: HashMap::new(),
+            texel_buffers: HashMap::new(),
         }
     }
 }

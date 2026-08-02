@@ -7,6 +7,46 @@
 use super::*;
 
 #[test]
+fn spirv_frontend_preserves_dim_buffer_for_explicit_lowering() {
+    let words = [
+        0x0723_0203,
+        0x0001_0000,
+        0,
+        3,
+        0, // header
+        0x0002_0011,
+        1, // OpCapability Shader
+        0x0003_000e,
+        0,
+        1, // OpMemoryModel Logical GLSL450
+        0x0003_0016,
+        1,
+        32, // %1 = OpTypeFloat 32
+        0x0009_0019,
+        2,
+        1,
+        5,
+        0,
+        0,
+        0,
+        1,
+        0, // %2 = OpTypeImage %1 Buffer
+    ];
+    let module = naga::front::spv::parse_u8_slice(
+        bytemuck::cast_slice(&words),
+        &naga::front::spv::Options::default(),
+    )
+    .unwrap();
+    assert!(module.types.iter().any(|(_, ty)| matches!(
+        ty.inner,
+        naga::TypeInner::Image {
+            dim: naga::ImageDimension::Buffer,
+            ..
+        }
+    )));
+}
+
+#[test]
 fn unknown_uniform_error_carries_bounded_original_and_normalized_context() {
     let original = "#version 460\n\
                     uniform float ublend_S3;\n\

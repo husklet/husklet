@@ -2,7 +2,7 @@ use std::mem;
 
 use naga::{Arena, Block, Expression, Handle, Range, Statement};
 
-pub(super) fn dedup_emits(block: &mut Block, expressions: &Arena<Expression>) {
+pub(in crate::wgsl) fn dedup_emits(block: &mut Block, expressions: &Arena<Expression>) {
     dedup_block(block, expressions, &std::collections::BTreeSet::new());
 }
 
@@ -65,7 +65,7 @@ fn dedup_block(
     *block = rebuilt;
 }
 
-pub(super) fn expression(map: &[Handle<Expression>], expression: &mut Expression) {
+pub(in crate::wgsl) fn expression(map: &[Handle<Expression>], expression: &mut Expression) {
     let remap = |handle: &mut Handle<Expression>| *handle = map[handle.index()];
     match expression {
         Expression::Compose { components, .. } => components.iter_mut().for_each(remap),
@@ -173,12 +173,12 @@ pub(super) fn block(
     spans: &[(Handle<Expression>, Handle<Expression>)],
     block: &mut Block,
 ) {
-    for statement in block.iter_mut() {
-        statement_handles(map, spans, statement);
+    for item in block.iter_mut() {
+        statement(map, spans, item);
     }
 }
 
-fn statement_handles(
+pub(in crate::wgsl) fn statement(
     map: &[Handle<Expression>],
     spans: &[(Handle<Expression>, Handle<Expression>)],
     statement: &mut Statement,

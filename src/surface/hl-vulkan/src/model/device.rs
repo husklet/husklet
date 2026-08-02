@@ -12,7 +12,9 @@
 //! [`hl_gpu::CommandSink`].
 
 use super::command::CmdBufRec;
-use super::descriptor::{DescriptorPoolRec, DescriptorUpdateTemplateRec, DsetRec, SetLayoutRec};
+use super::descriptor::{
+    BufferViewRec, DescriptorPoolRec, DescriptorUpdateTemplateRec, DsetRec, SetLayoutRec,
+};
 use super::instance::PhysicalDeviceDesc;
 use super::memory::{BufferRec, ImageRec, MemRec, SamplerRec};
 use super::pipeline::{PipelineCacheRec, PipelineLayoutRec, PipelineRec, ShaderRec};
@@ -29,6 +31,7 @@ pub struct Device {
 
     // ---- handle tables (non-dispatchable handle -> record) ----
     pub buffers: HashMap<VkBuffer, BufferRec>,
+    pub buffer_views: HashMap<VkBufferView, BufferViewRec>,
     pub memories: HashMap<VkDeviceMemory, MemRec>,
     pub images: HashMap<VkImage, ImageRec>,
     pub samplers: HashMap<VkSampler, SamplerRec>,
@@ -74,6 +77,7 @@ impl Device {
             physical_device,
             queue: Queue::primary(),
             buffers: HashMap::new(),
+            buffer_views: HashMap::new(),
             memories: HashMap::new(),
             images: HashMap::new(),
             samplers: HashMap::new(),

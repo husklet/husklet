@@ -201,8 +201,8 @@ impl WgpuExecutor {
                         if let Some(profile) = self.profile.borrow_mut().as_mut() {
                             profile.render_passes.add(started.elapsed());
                         }
-                        // Keep a successful pass available for batching with following native copies. A
-                        // refused pass drops only its private encoder, never earlier successful work.
+                        // The pass writes packed texels directly into their original buffers, so it can be
+                        // batched with following native work without a host wait or writeback boundary.
                         native = Some(encoder);
                     }
                     Enc::BeginComputePass => {
@@ -1216,7 +1216,7 @@ impl WgpuExecutor {
     /// return from `body`, so the scope stack never leaks): a captured wgpu error becomes `Err` and the
     /// device is NOT lost (a following valid program still runs); `body`'s own typed error takes precedence.
     /// A well-formed program raises no error, so this is a transparent pass-through.
-    fn with_validation_scope(&mut self, body: impl FnOnce(&mut Self) -> Result<()>) -> Result<()> {
+    fn with_validation_scope<T>(&mut self, body: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
         self.gpu
             .device
             .push_error_scope(wgpu::ErrorFilter::Validation);
@@ -1224,7 +1224,7 @@ impl WgpuExecutor {
         let captured = pollster::block_on(self.gpu.device.pop_error_scope());
         match (result, captured) {
             (Err(e), _) => Err(e),
-            (Ok(()), Some(e)) => {
+            (Ok(_), Some(e)) => {
                 // wgpu 24's `Display` for a validation error is the bare "Validation Error" — the ACTUAL
                 // rule violated (which attachment/pipeline/format) lives in the Debug form and the
                 // `std::error::Error::source()` chain, so surface both: `{e:?}` (Debug) plus every cause
@@ -1253,7 +1253,7 @@ impl WgpuExecutor {
                     "wgpu: pass failed device validation: {e:?}{chain}"
                 )))
             }
-            (Ok(()), None) => Ok(()),
+            (Ok(value), None) => Ok(value),
         }
     }
 }

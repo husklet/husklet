@@ -37,9 +37,13 @@ impl WgpuExecutor {
         // index would have been rejected by the runtime before reaching here.
         let mut cur_pipeline: Option<u32> = None;
         let mut cur_groups: [Option<u32>; 4] = [None; 4];
-        // (pipeline id, [(set index, bind group)], (x,y,z)) per Dispatch.
+        // (specialized pipeline, [(set index, bind group)], (x,y,z)) per Dispatch.
         #[allow(clippy::type_complexity)]
-        let mut dispatches: Vec<(u32, Vec<(u32, wgpu::BindGroup)>, (u32, u32, u32))> = Vec::new();
+        let mut dispatches: Vec<(
+            wgpu::ComputePipeline,
+            Vec<(u32, wgpu::BindGroup)>,
+            (u32, u32, u32),
+        )> = Vec::new();
         for op in ops {
             match op {
                 Enc::SetPipeline(p) => cur_pipeline = Some(*p),
@@ -58,27 +62,34 @@ impl WgpuExecutor {
                     if let PipelineNative::Render { .. } = PipelineNative::get(res, pid)? {
                         return Err(GpuError::Unsupported("wgpu: dispatch on a render pipeline"));
                     }
+                    let descriptors = cur_groups
+                        .iter()
+                        .filter_map(|group| group.map(|id| self.bind_group(res, id)))
+                        .collect::<Result<Vec<_>>>()?;
+                    let alignment = self.gpu.device.limits().min_storage_buffer_offset_alignment as u64;
+                    let specialization = crate::texel_buffer::key(descriptors.iter().copied(), alignment)?;
+                    let pipeline = self.compute_pipeline_for(res, pid, &specialization)?;
+                    let remap_group_zero = match PipelineNative::get(res, pid)? {
+                        PipelineNative::Compute {
+                            remap_group_zero, ..
+                        } => *remap_group_zero,
+                        PipelineNative::Render { .. } => unreachable!("checked above"),
+                    };
                     let mut groups = Vec::new();
                     for (idx, bound) in cur_groups.iter().enumerate() {
                         if let Some(g) = bound {
-                            let (layout, remap_group_zero) = match PipelineNative::get(res, pid)? {
-                                PipelineNative::Compute {
-                                    pipeline,
-                                    remap_group_zero,
-                                } => (
-                                    pipeline.get_bind_group_layout(idx as u32),
-                                    *remap_group_zero,
-                                ),
-                                PipelineNative::Render { .. } => unreachable!("checked above"),
-                            };
+                            let layout = pipeline.get_bind_group_layout(idx as u32);
                             // Compute bind groups already match their layout (the kernel path's explicit
                             // layout / the SPIR-V path's auto layout are built to), so no filter is applied.
+                            let descriptor = self.bind_group(res, *g)?;
+                            let views = crate::texel_buffer::views(res, descriptor, alignment)?;
                             let bg = self.build_bind_group(
                                 res,
                                 &layout,
-                                self.bind_group(res, *g)?,
+                                descriptor,
                                 None,
                                 remap_group_zero,
+                                Some(&views),
                                 None,
                             )?;
                             groups.push((idx as u32, bg));
@@ -99,7 +110,7 @@ impl WgpuExecutor {
                     if *x > max || *y > max || *z > max {
                         return Err(GpuError::OutOfBounds);
                     }
-                    dispatches.push((pid, groups, (*x, *y, *z)));
+                    dispatches.push((pipeline, groups, (*x, *y, *z)));
                 }
                 _ => {}
             }
@@ -110,10 +121,8 @@ impl WgpuExecutor {
                 label: Some("hl-compute-pass"),
                 timestamp_writes: None,
             });
-            for (pid, groups, (x, y, z)) in &dispatches {
-                if let PipelineNative::Compute { pipeline, .. } = PipelineNative::get(res, *pid)? {
-                    pass.set_pipeline(pipeline);
-                }
+            for (pipeline, groups, (x, y, z)) in &dispatches {
+                pass.set_pipeline(pipeline);
                 for (idx, bg) in groups {
                     pass.set_bind_group(*idx, bg, &[]);
                 }

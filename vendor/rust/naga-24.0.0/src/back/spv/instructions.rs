@@ -1230,6 +1230,7 @@ impl From<crate::ImageDimension> for spirv::Dim {
     fn from(dim: crate::ImageDimension) -> Self {
         use crate::ImageDimension as Id;
         match dim {
+            Id::Buffer => Self::DimBuffer,
             Id::D1 => Self::Dim1D,
             Id::D2 => Self::Dim2D,
             Id::D3 => Self::Dim3D,

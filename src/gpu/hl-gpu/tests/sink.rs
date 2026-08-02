@@ -82,6 +82,21 @@ fn recording_sink_negotiate_rejects_unsatisfiable_request() {
 }
 
 #[test]
+fn texel_buffer_wire_version_rejects_a_v16_peer_and_accepts_v17() {
+    assert_eq!(WIRE_VERSION, 17);
+    let mut sink = RecordingSink::with_full_caps();
+    let stale = FeatureRequest {
+        wire_version: 16,
+        ..feature_request()
+    };
+    assert_eq!(
+        sink.negotiate(&stale),
+        Err(GpuError::Unsupported("capability: wire version mismatch"))
+    );
+    assert_eq!(sink.negotiate(&feature_request()).unwrap().wire_version, 17);
+}
+
+#[test]
 fn command_sink_is_object_safe() {
     // The port must be usable as `&mut dyn CommandSink` (drivers hold a boxed sink).
     let mut sink = RecordingSink::with_full_caps();

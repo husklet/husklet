@@ -25,10 +25,13 @@ use core::ffi::c_void;
 
 use hl_gpu::CommandSink;
 use hl_vulkan::service::create;
-use hl_vulkan::Device;
+use hl_vulkan::{model::memory::Format, result::Status, Device};
 
 use crate::state::StateStore;
-use crate::types::{VkExtent2D, VkMappedMemoryRange, VkResult, VK_SUCCESS};
+use crate::types::{
+    VkBufferViewCreateInfo, VkExtent2D, VkMappedMemoryRange, VkResult, VK_ERROR_INITIALIZATION_FAILED,
+    VK_SUCCESS,
+};
 
 #[path = "corebits_command.rs"]
 mod command;
@@ -192,20 +195,30 @@ pub extern "C" fn vkGetDeviceImageSubresourceLayoutKHR(
 
 pub extern "C" fn vkCreateBufferView(
     _device: *mut c_void,
-    _p_create_info: *const c_void,
+    p_create_info: *const c_void,
     _p_allocator: *const c_void,
     p_view: *mut c_void,
 ) -> VkResult {
     if p_view.is_null() {
-        return VK_SUCCESS;
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
-    let handle = StateStore::with(|s| {
-        let h = s.mint_aux();
-        s.buffer_views.insert(h);
-        h
-    });
-    unsafe { *(p_view as *mut u64) = handle };
-    VK_SUCCESS
+    unsafe { *(p_view as *mut u64) = 0 };
+    let Some(ci) = (unsafe { (p_create_info as *const VkBufferViewCreateInfo).as_ref() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let Some(format) = Format(ci.format as u32).wire() else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    match ShimState::with_device(|dev| {
+        create::create_buffer_view(dev, ci.buffer, format, ci.offset, ci.range)
+    }) {
+        Some(Ok(handle)) => {
+            unsafe { *(p_view as *mut u64) = handle };
+            VK_SUCCESS
+        }
+        Some(Err(error)) => Status::from_error(&error),
+        None => VK_ERROR_INITIALIZATION_FAILED,
+    }
 }
 
 pub extern "C" fn vkDestroyBufferView(
@@ -213,9 +226,7 @@ pub extern "C" fn vkDestroyBufferView(
     buffer_view: u64,
     _p_allocator: *const c_void,
 ) {
-    StateStore::with(|s| {
-        s.buffer_views.remove(&buffer_view);
-    });
+    let _ = ShimState::with_device(|dev| create::destroy_buffer_view(dev, buffer_view));
 }
 
 // ---- descriptor pool free / reset --------------------------------------------------------------

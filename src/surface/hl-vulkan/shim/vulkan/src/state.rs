@@ -216,9 +216,6 @@ pub struct State {
     pub push_descriptor_sets: HashMap<(u64, u32), u64>,
     /// The unbounded pool those pushed sets are allocated from, minted on first push.
     pub push_descriptor_pool: u64,
-    /// Live `VkBufferView` handles (`vkCreateBufferView`). A buffer view is a pure host object in this
-    /// model (the color/compute lowering binds buffers directly), tracked so create/destroy balance.
-    pub buffer_views: std::collections::HashSet<u64>,
     /// Monotonic counter for the auxiliary non-dispatchable handles above (debug messengers/callbacks,
     /// buffer views), kept on a distinct high base so they never alias device object or surface handles.
     next_aux: u64,
@@ -259,7 +256,6 @@ impl State {
             debug_object_names: HashMap::new(),
             debug_messengers: std::collections::HashSet::new(),
             debug_report_callbacks: std::collections::HashSet::new(),
-            buffer_views: std::collections::HashSet::new(),
             push_descriptor_sets: HashMap::new(),
             push_descriptor_pool: 0,
             next_aux: 0,

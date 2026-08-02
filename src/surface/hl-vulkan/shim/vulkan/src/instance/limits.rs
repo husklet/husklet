@@ -7,6 +7,10 @@ pub const MAX_VERTEX_INPUT_BINDINGS: u32 = 31;
 
 pub(super) fn metal_limits() -> VkPhysicalDeviceLimits {
     let dim = 16384u32;
+    // Keep the formatted-view ceiling conservative for the largest packed format (RGBA32 = 16 bytes)
+    // under the checked 1-GiB host buffer cap. The executor binds the original packed buffer directly.
+    let max_texel_buffer_elements = u32::try_from((1u64 << 30) / 16)
+        .expect("the host texel-buffer ceiling fits VkPhysicalDeviceLimits");
     let per_stage_buffers = 31u32;
     let per_stage_samplers = 16u32;
     let per_stage_textures = 128u32;
@@ -20,7 +24,7 @@ pub(super) fn metal_limits() -> VkPhysicalDeviceLimits {
         max_image_dimension_3d: 2048,
         max_image_dimension_cube: dim,
         max_image_array_layers: 2048,
-        max_texel_buffer_elements: dim * 4096,
+        max_texel_buffer_elements,
         max_uniform_buffer_range: 65536,
         max_storage_buffer_range: u32::MAX,
         max_push_constants_size: 4096,

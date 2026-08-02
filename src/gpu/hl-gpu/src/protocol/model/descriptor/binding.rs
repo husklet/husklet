@@ -4,7 +4,10 @@
 //! Split out of [`super`] so the layout/binding vocabulary lives in one place; the parent re-exports
 //! these types, so `descriptor::*` is unchanged for callers.
 
-use super::super::error::{GpuError, Result};
+use super::super::{
+    enums::TextureFormat,
+    error::{GpuError, Result},
+};
 
 /// Authoritative descriptor cardinality from the API pipeline layout. Shader reflection still supplies
 /// binding kind and stage visibility; it cannot reliably recover Vulkan descriptor-array counts from
@@ -25,6 +28,10 @@ pub enum PipelineBindingKind {
     StorageTexture,
     Sampler,
     CombinedImageSampler,
+    /// SPIR-V `DimBuffer`, lowered to a read-only typed storage buffer before WGSL emission.
+    UniformTexelBuffer,
+    /// SPIR-V storage `DimBuffer`, lowered to a read-write typed storage buffer.
+    StorageTexelBuffer,
 }
 
 impl PipelineBindingKind {
@@ -40,6 +47,8 @@ impl PipelineBindingKind {
             3 => Ok(Self::StorageTexture),
             4 => Ok(Self::Sampler),
             5 => Ok(Self::CombinedImageSampler),
+            6 => Ok(Self::UniformTexelBuffer),
+            7 => Ok(Self::StorageTexelBuffer),
             _ => Err(GpuError::BadTag(value)),
         }
     }
@@ -98,12 +107,35 @@ impl PipelineLayout {
 /// A single binding within a bind group.
 #[derive(Clone, PartialEq, Debug)]
 pub enum BindResource {
-    Buffer { id: u32, offset: u64, size: u64 },
-    Texture { id: u32 },
-    Sampler { id: u32 },
-    BufferArray { elements: Vec<BufferBinding> },
-    TextureArray { ids: Vec<u32> },
-    SamplerArray { ids: Vec<u32> },
+    Buffer {
+        id: u32,
+        offset: u64,
+        size: u64,
+    },
+    Texture {
+        id: u32,
+    },
+    Sampler {
+        id: u32,
+    },
+    BufferArray {
+        elements: Vec<BufferBinding>,
+    },
+    TextureArray {
+        ids: Vec<u32>,
+    },
+    SamplerArray {
+        ids: Vec<u32>,
+    },
+    /// A Vulkan buffer view. The executor binds the original packed buffer and specializes the shader's
+    /// raw-buffer loads and stores for this format, preserving aliases without a shadow or writeback.
+    TexelBuffer {
+        id: u32,
+        offset: u64,
+        size: u64,
+        format: TextureFormat,
+        writable: bool,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

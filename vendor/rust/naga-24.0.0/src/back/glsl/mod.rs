@@ -3041,6 +3041,7 @@ impl<'a, W: Write> Writer<'a, W> {
                     _ => unreachable!(),
                 };
                 let components = match dim {
+                    crate::ImageDimension::Buffer => 1,
                     crate::ImageDimension::D1 => 1,
                     crate::ImageDimension::D2 => 2,
                     crate::ImageDimension::D3 => 3,
@@ -4025,6 +4026,7 @@ impl<'a, W: Write> Writer<'a, W> {
         let tex_1d_hack = dim == crate::ImageDimension::D1 && self.options.version.is_es();
         // Get how many components the coordinate vector needs for the dimensions only
         let tex_coord_size = match dim {
+            crate::ImageDimension::Buffer => 1,
             crate::ImageDimension::D1 => 1,
             crate::ImageDimension::D2 => 2,
             crate::ImageDimension::D3 => 3,
@@ -4908,6 +4910,7 @@ const fn glsl_dimension(dim: crate::ImageDimension) -> &'static str {
     use crate::ImageDimension as IDim;
 
     match dim {
+        IDim::Buffer => "Buffer",
         IDim::D1 => "1D",
         IDim::D2 => "2D",
         IDim::D3 => "3D",

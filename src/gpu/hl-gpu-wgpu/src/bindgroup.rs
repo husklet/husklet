@@ -37,6 +37,9 @@ impl WgpuExecutor {
                 BindResource::Buffer { id, .. } => {
                     buffer::WgpuBuffer::get(res, *id)?;
                 }
+                BindResource::TexelBuffer { id, .. } => {
+                    buffer::WgpuBuffer::get(res, *id)?;
+                }
                 BindResource::Texture { id } => {
                     texture::WgpuTexture::get(res, *id)?;
                 }
@@ -79,6 +82,7 @@ impl WgpuExecutor {
         d: &BindGroupDesc,
         filter: Option<&[(u32, u32)]>,
         remap_group_zero: bool,
+        texel_buffers: Option<&[crate::texel_buffer::View]>,
         internal: Option<&wgpu::Buffer>,
     ) -> Result<wgpu::BindGroup> {
         let binding = |binding: u32| -> Result<u32> {
@@ -110,7 +114,7 @@ impl WgpuExecutor {
                     views.push(texture::WgpuTexture::get(res, *id)?.view.clone())
                 }
                 BindResource::Sampler { id } => samplers.push(self.sampler(res, *id)?.clone()),
-                BindResource::Buffer { .. } => {}
+                BindResource::Buffer { .. } | BindResource::TexelBuffer { .. } => {}
                 BindResource::TextureArray { ids } => view_arrays.push(
                     ids.iter()
                         .map(|id| Ok(texture::WgpuTexture::get(res, *id)?.view.clone()))
@@ -168,6 +172,20 @@ impl WgpuExecutor {
                         buffer: &b.buffer,
                         offset: *offset,
                         size: NonZeroU64::new(*size),
+                    })
+                }
+                BindResource::TexelBuffer { .. } => {
+                    let view = texel_buffers
+                        .and_then(|views| {
+                            views.iter().find(|view| view.binding == e.binding)
+                        })
+                        .ok_or(GpuError::Unsupported(
+                            "wgpu: texel-buffer view was not prepared for this pass",
+                        ))?;
+                    wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &view.buffer,
+                        offset: view.offset,
+                        size: NonZeroU64::new(view.size),
                     })
                 }
                 BindResource::Texture { .. } => {

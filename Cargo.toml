@@ -97,6 +97,11 @@ pedantic = "warn"
 hl-engine = { path = "../engine/pkgs/rust" }
 smithay = { path = "vendor/smithay-0.7.0" }
 naga = { path = "vendor/rust/naga-24.0.0" }
+# Exact crates.io wgpu-core 24.0.5 source, vendored because Husklet's Naga patch
+# preserves SPIR-V DimBuffer as ImageDimension::Buffer. wgpu-core exhaustively
+# consumes that public enum; its validation boundary rejects an unlowered texel
+# buffer so the hl-gpu-wgpu pre-WGSL lowering remains load-bearing.
+wgpu-core = { path = "vendor/rust/wgpu-core-24.0.5" }
 
 [profile.release]
 opt-level = 2

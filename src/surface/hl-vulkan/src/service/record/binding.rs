@@ -51,6 +51,9 @@ pub fn cmd_bind_descriptor_sets(
         let mut img_pairs: Vec<((u32, u32), crate::model::descriptor::ImageBinding)> =
             rec.images.iter().map(|(b, v)| (*b, *v)).collect();
         img_pairs.sort_by_key(|(b, _)| *b);
+        let mut texel_pairs: Vec<((u32, u32), VkBufferView)> =
+            rec.texel_buffers.iter().map(|(b, v)| (*b, *v)).collect();
+        texel_pairs.sort_by_key(|(b, _)| *b);
         let expected_counts = dev
             .set_layouts
             .get(&layout_handle)
@@ -172,6 +175,36 @@ pub fn cmd_bind_descriptor_sets(
                     resource: BindResource::BufferArray { elements: values },
                 });
             }
+        }
+        for ((binding, element), view_handle) in texel_pairs {
+            let view = dev.buffer_views.get(&view_handle).ok_or(GpuError::Invalid(
+                "descriptor references unknown VkBufferView",
+            ))?;
+            let buffer = dev.buffers.get(&view.buffer).ok_or(GpuError::Invalid(
+                "VkBufferView references unknown VkBuffer",
+            ))?;
+            let expected = expected_counts.get(&binding).copied().unwrap_or(0);
+            if element >= expected {
+                return Err(GpuError::OutOfBounds);
+            }
+            let native_binding = if expected > 1 {
+                scalar_layout.scalar_binding(set_index, binding, element)?
+            } else {
+                binding
+            };
+            entries.push(BindEntry {
+                binding: native_binding,
+                resource: BindResource::TexelBuffer {
+                    id: buffer.ir_id,
+                    offset: view.offset,
+                    size: view.range,
+                    format: view.format,
+                    writable: descriptor_types.get(&binding)
+                        == Some(
+                            &crate::model::descriptor::vk_descriptor_type::STORAGE_TEXEL_BUFFER,
+                        ),
+                },
+            });
         }
         // Resolve each sampled-image / sampler descriptor to its hl-GPU id: a bound image → a
         // `BindResource::Texture` and a bound sampler → a `BindResource::Sampler`. A `COMBINED_IMAGE_SAMPLER`

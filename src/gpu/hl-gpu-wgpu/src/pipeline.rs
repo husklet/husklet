@@ -37,6 +37,7 @@ impl WgpuExecutor {
         authoritative_layout: Option<&PipelineLayout>,
     ) -> Result<()> {
         let _sp = hl_log::hl_span!(hl_log::tag::WGPU, "pipeline_create");
+        let mut texel = None;
         let (pipeline, remap_group_zero) =
             match shader::ShaderNative::get(res, desc.compute.module)? {
                 // PTX-kernel ABI: lower the neutral kernel IR to a WGSL compute entry point and build with an
@@ -95,6 +96,24 @@ impl WgpuExecutor {
                     reflected,
                     key,
                 } => {
+                    if let Some(layout) = authoritative_layout.filter(|layout| {
+                        key.kind == hl_gpu::ShaderPayloadKind::SpirV as u8
+                            &&
+                            layout.bindings.iter().any(|binding| {
+                                matches!(
+                                    binding.kind,
+                                    PipelineBindingKind::UniformTexelBuffer
+                                        | PipelineBindingKind::StorageTexelBuffer
+                                )
+                            })
+                        })
+                    {
+                        texel = Some(crate::texel_buffer::ComputeSpecializer::new(
+                            desc.clone(),
+                            layout.clone(),
+                            key.words.clone(),
+                        ));
+                    }
                     let (module, reflected_override);
                     let reflected = if authoritative_layout.is_some_and(|layout| {
                         layout.bindings.iter().any(|binding| binding.count > 1)
@@ -179,6 +198,7 @@ impl WgpuExecutor {
             Box::new(PipelineNative::Compute {
                 pipeline,
                 remap_group_zero,
+                texel,
             }),
         )
     }
@@ -239,6 +259,28 @@ impl WgpuExecutor {
             }
             None => (None, Vec::new(), None),
         };
+        let render_texel = authoritative_layout
+            .filter(|layout| {
+                layout.bindings.iter().any(|binding| {
+                    matches!(
+                        binding.kind,
+                        PipelineBindingKind::UniformTexelBuffer
+                            | PipelineBindingKind::StorageTexelBuffer
+                    )
+                }) && vs_key.kind == hl_gpu::ShaderPayloadKind::SpirV as u8
+                    && fs_key.as_ref().is_none_or(|key| {
+                        key.kind == hl_gpu::ShaderPayloadKind::SpirV as u8
+                    })
+            })
+            .map(|layout| {
+                std::sync::Arc::new(crate::texel_buffer::RenderSpecializer::new(
+                    desc.clone(),
+                    layout.clone(),
+                    multisample,
+                    vs_key.words.clone(),
+                    fs_key.as_ref().map(|key| key.words.clone()),
+                ))
+            });
         // wgpu's Metal backend does not program a raster sample mask at all (`wgpu-hal`'s
         // `metal::device` carries a literal `//TODO: handle sample mask`), so a non-default mask would be
         // silently dropped and the pass would shade every sample — wrong pixels with no error. Refuse it
@@ -292,6 +334,7 @@ impl WgpuExecutor {
                     color_formats,
                     used_bindings,
                     backing,
+                    texel: render_texel.clone(),
                 }),
             )?;
             // Local reuse is also real device-artifact use. Commit the shared LRU touch only after the guest
@@ -317,6 +360,7 @@ impl WgpuExecutor {
                     color_formats: artifact.color_formats,
                     used_bindings: artifact.used_bindings,
                     backing,
+                    texel: render_texel.clone(),
                 }),
             ) {
                 self.dedup.pipeline_release(backing);
@@ -627,6 +671,7 @@ impl WgpuExecutor {
                 color_formats,
                 used_bindings,
                 backing,
+                texel: render_texel,
             }),
         ) {
             // The id was already live: undo the backing we just installed so residency does not drift, then
@@ -658,7 +703,7 @@ impl WgpuExecutor {
     /// One layout per group index in `0..=max_group`; a group with no bindings gets an EMPTY layout so the
     /// returned vec is dense from index 0 (a `PipelineLayout`'s `bind_group_layouts` array must have no
     /// gaps). An empty map ⇒ no layouts (a bindingless pipeline, e.g. the conformance triangle).
-    fn build_render_bind_group_layouts(
+    pub(crate) fn build_render_bind_group_layouts(
         &self,
         merged: &BTreeMap<
             (u32, u32),
@@ -726,7 +771,7 @@ impl WgpuExecutor {
         Ok(layouts)
     }
 
-    fn apply_authoritative_counts(
+    pub(crate) fn apply_authoritative_counts(
         merged: &mut BTreeMap<
             (u32, u32),
             (
@@ -791,6 +836,14 @@ impl WgpuExecutor {
                     BindingKind::StorageBuffer { .. },
                     false,
                 ) | (
+                    PipelineBindingKind::UniformTexelBuffer,
+                    BindingKind::StorageBuffer { read_only: true },
+                    false,
+                ) | (
+                    PipelineBindingKind::StorageTexelBuffer,
+                    BindingKind::StorageBuffer { .. },
+                    false,
+                ) | (
                     PipelineBindingKind::SampledTexture,
                     BindingKind::Texture { .. },
                     false,
@@ -828,6 +881,8 @@ impl WgpuExecutor {
                     PipelineBindingKind::UniformBuffer
                         | PipelineBindingKind::StorageBuffer
                         | PipelineBindingKind::StorageTexture
+                        | PipelineBindingKind::UniformTexelBuffer
+                        | PipelineBindingKind::StorageTexelBuffer
                 ) {
                 std::num::NonZeroU32::new(declared.count)
             } else {
@@ -842,6 +897,7 @@ mod layout;
 mod native;
 mod residency;
 mod state;
+mod texel;
 mod vertex;
 
 use layout::*;

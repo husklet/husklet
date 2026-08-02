@@ -66,6 +66,7 @@ impl FunctionLowering<'_> {
         let components = match query {
             ImageQuery::Size { .. } => {
                 let coordinates = match dim {
+                    naga::ImageDimension::Buffer => 1,
                     naga::ImageDimension::D1 => 1,
                     naga::ImageDimension::D2 | naga::ImageDimension::Cube => 2,
                     naga::ImageDimension::D3 => 3,

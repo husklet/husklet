@@ -22,6 +22,9 @@ pub enum PipelineNative {
         /// compiled `wgpu::RenderPipeline`; this is the handle a `DestroyPipeline` releases so the backing
         /// is freed only when its last alias is gone (see [`crate::dedup`]).
         backing: u64,
+        /// Per-bound-format packed texel variants. The base pipeline remains the fast path when neither
+        /// stage declares a buffer image.
+        texel: Option<std::sync::Arc<crate::texel_buffer::RenderSpecializer>>,
     },
     /// A compute pipeline. Both the PTX-kernel ABI path (built with an *explicit* group-0 layout so a
     /// binding the WGSL doesn't read — e.g. a kernel's `params` blob — is still declared) and the SPIR-V/
@@ -34,6 +37,9 @@ pub enum PipelineNative {
         pipeline: wgpu::ComputePipeline,
         /// Guest group-zero bindings were shifted to reserve the host viewport slot during shader lowering.
         remap_group_zero: bool,
+        /// SPIR-V texel-buffer pipelines are specialized lazily from the formats actually bound at a
+        /// dispatch. Ordinary pipelines keep this absent and use `pipeline` directly.
+        texel: Option<crate::texel_buffer::ComputeSpecializer>,
     },
 }
 

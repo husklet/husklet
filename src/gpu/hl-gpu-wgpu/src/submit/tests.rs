@@ -733,6 +733,7 @@ void main() {
                 Some(&filter),
                 true,
                 None,
+                None,
             )
             .expect("building the descriptor does not itself return Err (the error surfaces via the scope)");
         let err = pollster::block_on(exec.gpu.device.pop_error_scope()).expect(

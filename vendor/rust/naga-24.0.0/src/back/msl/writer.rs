@@ -222,6 +222,7 @@ impl Display for TypeContext<'_> {
                     crate::ImageDimension::D2 => "2d",
                     crate::ImageDimension::D3 => "3d",
                     crate::ImageDimension::Cube => "cube",
+                    crate::ImageDimension::Buffer => "buffer",
                 };
                 let (texture_str, msaa_str, scalar, access) = match class {
                     crate::ImageClass::Sampled { kind, multi } => {
@@ -892,6 +893,9 @@ impl<W: Write> Writer<W> {
         let scalar = crate::Scalar { kind, width: 4 };
         let coordinate_type = scalar.to_msl_name();
         match dim {
+            crate::ImageDimension::Buffer => {
+                self.put_image_query(image, "width", None, context)?;
+            }
             crate::ImageDimension::D1 => {
                 // Since 1D textures never have mipmaps, MSL requires that the
                 // `level` argument be a constexpr 0. It's simplest for us just

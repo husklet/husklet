@@ -12,7 +12,7 @@ use naga::{
 mod image;
 mod mutation;
 mod pointer;
-mod remap;
+pub(super) mod remap;
 mod value;
 
 use remap::{block as remap_block, dedup_emits, expression as remap_expression};
@@ -55,6 +55,8 @@ impl ScalarArrays {
                     PipelineBindingKind::UniformBuffer
                         | PipelineBindingKind::StorageBuffer
                         | PipelineBindingKind::StorageTexture
+                        | PipelineBindingKind::UniformTexelBuffer
+                        | PipelineBindingKind::StorageTexelBuffer
                 ) && binding.count > 1
             })
             .copied()

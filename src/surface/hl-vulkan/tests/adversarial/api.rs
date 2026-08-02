@@ -1,6 +1,67 @@
 use super::*;
 
 #[test]
+fn buffer_view_preserves_format_range_and_rejects_bad_bounds() {
+    let mut d = dev();
+    let mut s = sink();
+    let buffer = create::create_buffer(
+        &mut d,
+        &mut s,
+        vk_buffer_usage::UNIFORM_TEXEL_BUFFER | vk_buffer_usage::STORAGE_TEXEL_BUFFER,
+        256,
+    )
+    .unwrap();
+    let view =
+        create::create_buffer_view(&mut d, buffer, TextureFormat::Rgba8Unorm, 16, 64).unwrap();
+    let record = d.buffer_views.get(&view).unwrap();
+    assert_eq!(record.buffer, buffer);
+    assert_eq!(record.format, TextureFormat::Rgba8Unorm);
+    assert_eq!((record.offset, record.range), (16, 64));
+
+    assert!(create::create_buffer_view(&mut d, buffer, TextureFormat::Rgba8Unorm, 4, 64).is_err());
+    assert!(
+        create::create_buffer_view(&mut d, buffer, TextureFormat::Rgba8Unorm, 240, 32).is_err()
+    );
+    create::destroy_buffer_view(&mut d, view);
+    assert!(!d.buffer_views.contains_key(&view));
+}
+
+#[test]
+fn texel_descriptor_binds_exact_view_metadata_into_ir() {
+    let mut d = dev();
+    let mut s = sink();
+    let buffer =
+        create::create_buffer(&mut d, &mut s, vk_buffer_usage::STORAGE_TEXEL_BUFFER, 256).unwrap();
+    let ir = buf_ir(&d, buffer);
+    let view =
+        create::create_buffer_view(&mut d, buffer, TextureFormat::Rgba8Unorm, 16, 64).unwrap();
+    let layout = d.create_descriptor_set_layout(vec![LayoutBinding {
+        binding: 3,
+        descriptor_type: vk_descriptor_type::STORAGE_TEXEL_BUFFER,
+        descriptor_count: 1,
+        stage_flags: 0,
+    }]);
+    let pool = d.create_descriptor_pool(1);
+    let set = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
+    create::update_descriptor_texel_buffer_element(&mut d, set, 3, 0, view).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    record::cmd_bind_descriptor_sets(&mut d, &mut s, cb, 0, &[set], &[]).unwrap();
+
+    let group = last_bind_group(&s);
+    assert!(matches!(
+        &group.entries[0].resource,
+        hl_gpu::protocol::model::descriptor::BindResource::TexelBuffer {
+            id,
+            offset: 16,
+            size: 64,
+            format: TextureFormat::Rgba8Unorm,
+            writable: true,
+        } if *id == ir
+    ));
+}
+
+#[test]
 fn submit_unknown_fence_errors_before_emitting() {
     let mut d = dev();
     let mut s = sink();
