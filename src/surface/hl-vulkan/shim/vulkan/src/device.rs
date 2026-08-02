@@ -11,6 +11,7 @@ use hl_gpu::protocol::model::capability::{binding_array, gpu_feature};
 use hl_gpu::{CommandSink, FeatureRequest, PresentKind, WIRE_VERSION};
 use hl_vulkan::Instance;
 
+use crate::feature_structs::FeatureStruct;
 use crate::promoted_features::PromotedFeatures;
 use crate::state::StateStore;
 use crate::types::*;
@@ -57,9 +58,14 @@ impl<'a> Request<'a> {
                 {
                     return false;
                 }
-            } else if header.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES
-            {
-                // Dynamic rendering is the one pNext feature currently advertised and lowered.
+            } else if let Some(feature) = FeatureStruct::matching(header.s_type) {
+                if let Some(index) = unsafe { feature.first_unimplemented_request(node) } {
+                    crate::stub::Call::unsupported(
+                        "vkCreateDevice",
+                        &format!("{} feature bit {index}", feature.name),
+                    );
+                    return false;
+                }
             } else if let Some(aggregate) = PromotedFeatures::matching(header.s_type) {
                 // A promoted feature enabled through `VkPhysicalDeviceVulkan1{1,2,3,4}Features`. Vulkan
                 // requires `VK_ERROR_FEATURE_NOT_PRESENT` here; ignoring the aggregate returned
@@ -203,7 +209,9 @@ pub extern "C" fn vkCreateDevice(
         // re-negotiating over a connection already in use is what put the driver into
         // VK_ERROR_DEVICE_LOST for every object created on a second device.
         let native_present = if !s.negotiated
-            && (std::env::var_os("HL_GPU_EXEC").is_some() || binding_arrays != 0 || gpu_features != 0)
+            && (std::env::var_os("HL_GPU_EXEC").is_some()
+                || binding_arrays != 0
+                || gpu_features != 0)
         {
             let Ok(capabilities) = s.sink.negotiate(&FeatureRequest {
                 wire_version: WIRE_VERSION,

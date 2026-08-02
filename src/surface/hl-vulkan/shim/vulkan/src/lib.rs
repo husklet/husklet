@@ -31,6 +31,7 @@ pub mod debug;
 pub mod devgroup;
 pub mod device;
 pub mod dynstate;
+mod feature_structs;
 pub mod graphics;
 pub mod hostcopy;
 pub mod icd;

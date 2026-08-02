@@ -144,12 +144,9 @@ pub extern "C" fn vkGetPhysicalDeviceFeatures2(
     vkGetPhysicalDeviceFeatures(physical_device, &mut out.features as *mut _ as *mut c_void);
     let mut node = out.p_next as *mut VkBaseOutStructure;
     while let Some(n) = unsafe { node.as_mut() } {
-        if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES {
-            if let Some(f) =
-                unsafe { (node as *mut VkPhysicalDeviceDynamicRenderingFeatures).as_mut() }
-            {
-                f.dynamic_rendering = VK_TRUE;
-            }
+        if let Some(feature) = crate::feature_structs::FeatureStruct::matching(n.s_type) {
+            // False answers must overwrite caller-poisoned payloads too.
+            unsafe { feature.report(node as *mut c_void) };
         } else if let Some(aggregate) =
             crate::promoted_features::PromotedFeatures::matching(n.s_type)
         {
