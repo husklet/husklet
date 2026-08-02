@@ -216,6 +216,8 @@ impl TextureFormat {
                 .iter()
                 .flat_map(|v| (*v as i32).to_le_bytes())
                 .collect(),
+            TextureFormat::R32Uint => (color[0] as u32).to_le_bytes().to_vec(),
+            TextureFormat::R32Sint => (color[0] as i32).to_le_bytes().to_vec(),
             _ => return None,
         })
     }

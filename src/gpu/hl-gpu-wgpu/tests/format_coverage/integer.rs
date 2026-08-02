@@ -2,8 +2,8 @@
 //!
 //! `GL_RGBA_INTEGER` / `GL_RED_INTEGER` / `GL_RG_INTEGER` textures — the storage a `usampler2D` or
 //! `isampler2D` reads — had NO representation in the IR's `TextureFormat` at all, which made the whole
-//! integer-texture family unexpressible rather than merely unsupported. `INTEGER_FORMATS` carries the six
-//! 8-bit variants plus RGBA32UI/RGBA32I, and this module is the proof obligation that comes with
+//! integer-texture family unexpressible rather than merely unsupported. `INTEGER_FORMATS` carries the
+//! 8-bit variants plus RGBA32UI/RGBA32I and R32UI/R32I. This module is the proof obligation that comes with
 //! advertising them: the
 //! neighbouring `executor_advertises_exactly_the_formats_this_suite_proves` fails if a format is advertised
 //! without being round-tripped here.
@@ -35,6 +35,7 @@ fn is_signed(fmt: TextureFormat) -> bool {
             | TextureFormat::R8Sint
             | TextureFormat::Rg8Sint
             | TextureFormat::Rgba32Sint
+            | TextureFormat::R32Sint
     )
 }
 
@@ -135,7 +136,9 @@ fn draw_const_integer(exec: &mut WgpuExecutor, fmt: TextureFormat) -> Vec<u8> {
             }),
         ],
     )
-    .unwrap_or_else(|e| panic!("format {fmt:?}: the constant-integer draw must run cleanly, got {e:?}"));
+    .unwrap_or_else(|e| {
+        panic!("format {fmt:?}: the constant-integer draw must run cleanly, got {e:?}")
+    });
     exec.read_texture(&s.resources, 1)
         .unwrap_or_else(|e| panic!("format {fmt:?}: readback failed: {e:?}"))
 }
@@ -156,8 +159,13 @@ fn every_integer_format_stores_exact_integer_texels() {
             "format {fmt:?}: readback is width*height*bpt"
         );
         let texel = &raw[..bpt];
-        let channel_bytes = if matches!(fmt, TextureFormat::Rgba32Uint | TextureFormat::Rgba32Sint)
-        {
+        let channel_bytes = if matches!(
+            fmt,
+            TextureFormat::Rgba32Uint
+                | TextureFormat::Rgba32Sint
+                | TextureFormat::R32Uint
+                | TextureFormat::R32Sint
+        ) {
             4
         } else {
             1
@@ -491,7 +499,8 @@ void main() { o = vec4(texelFetch(t, ivec2(0), 0)); }
 "#;
 
     let sampled = pipeline(&mut exec, SAMPLED);
-    let error = sampled.expect_err("sampling an integer texture must be refused, not silently filtered");
+    let error =
+        sampled.expect_err("sampling an integer texture must be refused, not silently filtered");
     assert!(
         error.to_string().contains("InvalidImageClass"),
         "the refusal must name the image class, got: {error}"
