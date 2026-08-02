@@ -85,6 +85,44 @@ fn client_side_vertex_array_lowers_a_transient_vertex_buffer_and_binds_slot_0() 
 }
 
 #[test]
+fn narrow_client_attribute_is_converted_to_an_expressible_float_slot() {
+    let mut c = ctx_64();
+    let mut sink = RecordingSink::with_full_caps();
+    let _prog = flat_program(&mut c);
+
+    let verts: [u8; 9] = [255, 128, 0, 0, 255, 128, 128, 0, 255];
+    record::vertex_attrib_pointer(
+        &mut c,
+        0,
+        3,
+        GL_UNSIGNED_BYTE,
+        true,
+        0,
+        verts.as_ptr() as usize,
+    );
+    record::enable_vertex_attrib(&mut c, 0);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let batch = &sink.batches[0];
+    let desc = batch
+        .iter()
+        .find_map(|command| match command {
+            Cmd::CreateRenderPipeline(_, desc) => Some(desc),
+            _ => None,
+        })
+        .expect("render pipeline");
+    assert_eq!(
+        desc.vertex_buffers[0].attrs[0].format & 0xffff,
+        3,
+        "the unsupported Unorm8x3 client array must become Float32x3"
+    );
+    let (_, bytes) = vertex_buffer_upload(batch);
+    assert_eq!(bytes.len(), 3 * 3 * size_of::<f32>());
+    assert_eq!(f32::from_le_bytes(bytes[0..4].try_into().unwrap()), 1.0);
+}
+
+#[test]
 fn client_side_index_array_lowers_a_transient_index_buffer() {
     // glDrawElements with a CLIENT index pointer (no element-array-buffer bound) + a client vertex array:
     // both must be captured into transient buffers, with the u8 indices promoted to u16.

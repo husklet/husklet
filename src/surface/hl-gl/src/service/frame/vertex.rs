@@ -523,28 +523,42 @@ pub(super) fn lower_vertices(
     }
 
     for ca in &d.client_vbufs {
+        let mut attribute = d.attrs[ca.location];
+        attribute.offset = 0;
+        attribute.stride = 0;
+        let (data, kind, normalized, integer) = if needs_float_conversion(&attribute) {
+            let (converted, _) = convert_attribute_to_f32(&attribute, &ca.data);
+            (converted, GL_FLOAT, false, false)
+        } else {
+            (ca.data.clone(), ca.kind, ca.normalized, ca.integer)
+        };
+        let bytes = data.len();
         let ir = ctx.alloc_buffer_ir()?;
         cmds.push(Cmd::CreateBuffer(
             ir,
             BufferDesc {
-                size: ca.data.len() as u64,
+                size: data.len() as u64,
                 usage: buffer_usage::VERTEX,
-                label: "gl-client-vertex".to_owned(),
+                label: if kind == GL_FLOAT && ca.kind != GL_FLOAT {
+                    "gl-converted-client-vertex".to_owned()
+                } else {
+                    "gl-client-vertex".to_owned()
+                },
             },
         ));
         cmds.push(Cmd::WriteBuffer {
             id: ir,
             offset: 0,
-            data: ca.data.clone(),
+            data,
         });
-        let elem = ca.size.clamp(1, 4) as u32 * GlType(ca.kind).component_size() as u32;
+        let elem = ca.size.clamp(1, 4) as u32 * GlType(kind).component_size() as u32;
         client_slots.push(ClientSlot {
             ir,
-            bytes: ca.data.len(),
+            bytes,
             stride: elem.max(1),
             step_mode: (ca.divisor > 0) as u32,
             location: ca.location as u32,
-            format: vertex_format_wire(ca.kind, ca.size, ca.normalized, ca.integer),
+            format: vertex_format_wire(kind, ca.size, normalized, integer),
         });
     }
     // A disabled GL attribute array reads the context's current generic attribute value. WebGPU has no
