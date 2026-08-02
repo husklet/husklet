@@ -58,6 +58,36 @@ impl GpuError {
     pub(crate) fn kernel(message: impl Into<String>) -> Self {
         Self::Kernel(message.into())
     }
+
+    /// Whether this failure makes the remainder of the current command buffer unsafe to execute.
+    ///
+    /// Decode failures describe a malformed stream, while a panic or transport failure can leave the
+    /// executor in an unknown state. Ordinary operation validation failures are attributable to one
+    /// operation and may be reported after the remaining independent operations have been attempted.
+    /// `Kernel` is non-fatal here because the wgpu executor uses it for validation-scope failures after
+    /// proving the device remains usable; codec failures carrying that variant are rejected before submit.
+    pub fn is_fatal(&self) -> bool {
+        match self {
+            Self::ShortBuffer
+            | Self::BadTag(_)
+            | Self::BadEnum { .. }
+            | Self::Utf8
+            | Self::TrailingBytes
+            | Self::NonCanonicalBool(_)
+            | Self::Panicked(_)
+            | Self::Decode(_)
+            | Self::Transport(_) => true,
+            Self::DuplicateId { .. }
+            | Self::UnknownId { .. }
+            | Self::Unsupported(_)
+            | Self::OutOfBounds
+            | Self::NonFinite(_)
+            | Self::Invalid(_)
+            | Self::ResourceLimit(_)
+            | Self::Kernel(_)
+            | Self::MappedElsewhere { .. } => false,
+        }
+    }
 }
 
 impl std::fmt::Display for GpuError {
