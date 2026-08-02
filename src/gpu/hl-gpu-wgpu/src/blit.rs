@@ -70,6 +70,47 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// D3 source variant. Each destination slice gets its own normalized source-z coordinate while x/y
+/// continue to come from the viewport. Sampling the volume (rather than a copied D2 source slice) is
+/// load-bearing for `Filter::Linear`: Vulkan requires interpolation between adjacent z slices.
+const BLIT_3D_WGSL: &str = r#"
+struct XformUniform {
+    uv_off: vec2<f32>,
+    uv_scale: vec2<f32>,
+    z: f32,
+    _pad: vec3<f32>,
+};
+
+@group(0) @binding(0) var src_tex: texture_3d<f32>;
+@group(0) @binding(1) var src_smp: sampler;
+@group(0) @binding(2) var<uniform> xform: XformUniform;
+
+struct VsOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
+    var p = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 3.0, -1.0),
+        vec2<f32>(-1.0,  3.0),
+    );
+    let ndc = p[vi];
+    var out: VsOut;
+    out.pos = vec4<f32>(ndc, 0.0, 1.0);
+    out.uv = vec2<f32>((ndc.x + 1.0) * 0.5, (1.0 - ndc.y) * 0.5);
+    return out;
+}
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    let uv = xform.uv_off + in.uv * xform.uv_scale;
+    return textureSample(src_tex, src_smp, vec3<f32>(uv, xform.z));
+}
+"#;
+
 const INTEGER_BLIT_WGSL: &str = r#"
 struct Xform { uv_off: vec2<f32>, uv_scale: vec2<f32> };
 struct Out { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
@@ -95,6 +136,10 @@ pub(crate) struct BlitCache {
     /// A non-filtering sampler, which is the only kind a `NonFiltering` binding accepts.
     non_filtering: wgpu::Sampler,
     pipelines: HashMap<(wgpu::TextureFormat, bool), wgpu::RenderPipeline>,
+    d3_module: wgpu::ShaderModule,
+    d3_bind_group_layout: [wgpu::BindGroupLayout; 2],
+    d3_pipeline_layout: [wgpu::PipelineLayout; 2],
+    d3_pipelines: HashMap<(wgpu::TextureFormat, bool), wgpu::RenderPipeline>,
     integer_module: wgpu::ShaderModule,
     integer_layouts: [wgpu::BindGroupLayout; 2],
     integer_pipeline_layouts: [wgpu::PipelineLayout; 2],
@@ -206,6 +251,57 @@ impl BlitCache {
                 ..Default::default()
             })
         };
+        let d3_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("hl-blit-3d"),
+            source: wgpu::ShaderSource::Wgsl(BLIT_3D_WGSL.into()),
+        });
+        let d3_layout_for = |can_filter: bool| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("hl-blit-3d-bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float {
+                                filterable: can_filter,
+                            },
+                            view_dimension: wgpu::TextureViewDimension::D3,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(if can_filter {
+                            wgpu::SamplerBindingType::Filtering
+                        } else {
+                            wgpu::SamplerBindingType::NonFiltering
+                        }),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            })
+        };
+        let d3_bind_group_layout = [d3_layout_for(true), d3_layout_for(false)];
+        let d3_pipeline_layout = [0, 1].map(|i| {
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("hl-blit-3d-pl"),
+                bind_group_layouts: &[&d3_bind_group_layout[i]],
+                push_constant_ranges: &[],
+            })
+        });
         let integer_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("hl-integer-blit"),
             source: wgpu::ShaderSource::Wgsl(INTEGER_BLIT_WGSL.into()),
@@ -257,6 +353,10 @@ impl BlitCache {
             linear: sampler(wgpu::FilterMode::Linear, "hl-blit-linear"),
             non_filtering: sampler(wgpu::FilterMode::Nearest, "hl-blit-nonfiltering"),
             pipelines: HashMap::new(),
+            d3_module,
+            d3_bind_group_layout,
+            d3_pipeline_layout,
+            d3_pipelines: HashMap::new(),
             integer_module,
             integer_layouts,
             integer_pipeline_layouts,
@@ -313,6 +413,46 @@ impl BlitCache {
             cache: None,
         });
         self.pipelines.insert((format, can_filter), pipeline);
+    }
+
+    fn ensure_d3_pipeline(
+        &mut self,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        can_filter: bool,
+    ) {
+        if self.d3_pipelines.contains_key(&(format, can_filter)) {
+            return;
+        }
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("hl-blit-3d-pipeline"),
+            layout: Some(&self.d3_pipeline_layout[usize::from(!can_filter)]),
+            vertex: wgpu::VertexState {
+                module: &self.d3_module,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &self.d3_module,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            multiview: None,
+            cache: None,
+        });
+        self.d3_pipelines.insert((format, can_filter), pipeline);
     }
 
     fn ensure_integer_pipeline(
@@ -393,9 +533,6 @@ impl WgpuExecutor {
         {
             return Err(GpuError::Unsupported("wgpu: 3D/layer texture blit"));
         }
-        if src_extent.depth != dst_extent.depth {
-            return Err(GpuError::Unsupported("wgpu: depth-scaled blit"));
-        }
         if src_extent.width == 0
             || src_extent.height == 0
             || dst_extent.width == 0
@@ -432,8 +569,9 @@ impl WgpuExecutor {
         // A CUBE is deliberately absent: it is a 2D texture with six layers underneath, so a single-layer
         // 2D view of a face is exactly what this path builds, and it blits correctly today.
         //
-        // D3 is served below as one D2 view and draw per destination slice. Z-scaled blits remain refused:
-        // linear filtering there is trilinear, which cannot be approximated by choosing one source slice.
+        // D3 is served below as one D2 destination draw per slice. Float sources remain a true D3 view so
+        // the sampler performs required trilinear filtering; integer sources select the nearest source
+        // slice and use the existing exact integer path.
         for (dim, side) in [(src_dim, "source"), (dst_dim, "destination")] {
             if matches!(dim, hl_gpu::protocol::model::enums::TextureDim::D1) {
                 return Err(GpuError::Unsupported(match side {
@@ -618,22 +756,11 @@ impl WgpuExecutor {
         let cache = self.blit.as_mut().expect("blit cache initialized above");
         if integer_render {
             cache.ensure_integer_pipeline(device, dst_wfmt, signed_integer(src_fmt));
+        } else if src_dim == hl_gpu::protocol::model::enums::TextureDim::D3 {
+            cache.ensure_d3_pipeline(device, dst_wfmt, can_filter);
         } else {
             cache.ensure_pipeline(device, dst_wfmt, can_filter);
         }
-
-        // Per-call: the UV-transform uniform + the source-texture bind group.
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("hl-blit-xform"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        // SAFETY: `[f32; 4]` is contiguous and the read-only byte slice has the same lifetime.
-        let bytes = unsafe {
-            std::slice::from_raw_parts(xform.as_ptr().cast::<u8>(), std::mem::size_of_val(&xform))
-        };
-        queue.write_buffer(&uniform, 0, bytes);
 
         // Build a SINGLE-LAYER 2D view of each side rather than binding the texture's default view.
         //
@@ -674,10 +801,13 @@ impl WgpuExecutor {
                 ..Default::default()
             }))
         };
+        let d3_float = !integer_render && src_dim == hl_gpu::protocol::model::enums::TextureDim::D3;
         let pipeline = if integer_render {
             cache
                 .integer_pipelines
                 .get(&(dst_wfmt, signed_integer(src_fmt)))
+        } else if d3_float {
+            cache.d3_pipelines.get(&(dst_wfmt, can_filter))
         } else {
             cache.pipelines.get(&(dst_wfmt, can_filter))
         }
@@ -687,11 +817,18 @@ impl WgpuExecutor {
             label: Some("hl-blit"),
         });
         for dz in 0..dst_extent.depth {
-            let src_z = if mirror.z {
-                src_origin.z + src_extent.depth - 1 - dz
+            // Vulkan maps destination texel centers through the continuous source region. Integer
+            // textures permit NEAREST only, so flooring this coordinate selects the same slice a nearest
+            // sampler would. Float D3 sources keep the continuous normalized coordinate for nearest or
+            // trilinear sampling in the volume shader.
+            let z_step = (dz as f32 + 0.5) * src_extent.depth as f32 / dst_extent.depth as f32;
+            let source_z = if mirror.z {
+                src_origin.z as f32 + src_extent.depth as f32 - z_step
             } else {
-                src_origin.z + dz
+                src_origin.z as f32 + z_step
             };
+            let src_z =
+                (source_z.floor() as u32).clamp(src_origin.z, src_origin.z + src_extent.depth - 1);
             let dst_z = dst_origin.z + dz;
             let staged = src_dim == hl_gpu::protocol::model::enums::TextureDim::D3;
             let (src_view, dst_view, staged_dst) = if staged {
@@ -711,13 +848,6 @@ impl WgpuExecutor {
                         view_formats: &[],
                     })
                 };
-                let src_temp = temp(
-                    "hl-blit-src-slice",
-                    sw,
-                    sh,
-                    src_wfmt,
-                    wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
-                );
                 let dst_temp = temp(
                     "hl-blit-dst-slice",
                     dw,
@@ -729,29 +859,47 @@ impl WgpuExecutor {
                 );
                 let src_tex = texture::WgpuTexture::get(res, src)?;
                 let dst_tex = texture::WgpuTexture::get(res, dst)?;
-                enc.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &src_tex.texture,
-                        mip_level: src_sub.mip,
-                        origin: wgpu::Origin3d {
-                            x: 0,
-                            y: 0,
-                            z: src_z,
+                let src_view = if d3_float {
+                    src_tex.texture.create_view(&wgpu::TextureViewDescriptor {
+                        label: Some("hl-blit-src-volume"),
+                        dimension: Some(wgpu::TextureViewDimension::D3),
+                        base_mip_level: src_sub.mip,
+                        mip_level_count: Some(1),
+                        ..Default::default()
+                    })
+                } else {
+                    let src_temp = temp(
+                        "hl-blit-src-slice",
+                        sw,
+                        sh,
+                        src_wfmt,
+                        wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+                    );
+                    enc.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &src_tex.texture,
+                            mip_level: src_sub.mip,
+                            origin: wgpu::Origin3d {
+                                x: 0,
+                                y: 0,
+                                z: src_z,
+                            },
+                            aspect: wgpu::TextureAspect::All,
                         },
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &src_temp,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width: sw,
-                        height: sh,
-                        depth_or_array_layers: 1,
-                    },
-                );
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &src_temp,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d {
+                            width: sw,
+                            height: sh,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                    src_temp.create_view(&wgpu::TextureViewDescriptor::default())
+                };
                 enc.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: &dst_tex.texture,
@@ -776,7 +924,7 @@ impl WgpuExecutor {
                     },
                 );
                 (
-                    src_temp.create_view(&wgpu::TextureViewDescriptor::default()),
+                    src_view,
                     dst_temp.create_view(&wgpu::TextureViewDescriptor::default()),
                     Some(dst_temp),
                 )
@@ -787,6 +935,24 @@ impl WgpuExecutor {
                     None,
                 )
             };
+            // WGSL aligns the trailing `vec3` to 16 bytes, making this structure 48 bytes.
+            let mut slice_xform = [0.0_f32; 12];
+            slice_xform[..4].copy_from_slice(&xform);
+            slice_xform[4] = source_z / sd as f32;
+            let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("hl-blit-xform"),
+                size: std::mem::size_of_val(&slice_xform) as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            // SAFETY: `[f32; 8]` is contiguous and the read-only byte slice has the same lifetime.
+            let bytes = unsafe {
+                std::slice::from_raw_parts(
+                    slice_xform.as_ptr().cast::<u8>(),
+                    std::mem::size_of_val(&slice_xform),
+                )
+            };
+            queue.write_buffer(&uniform, 0, bytes);
             let signed = signed_integer(src_fmt);
             let integer_entries = [
                 wgpu::BindGroupEntry {
@@ -816,6 +982,8 @@ impl WgpuExecutor {
                 label: Some("hl-blit-bg"),
                 layout: if integer_render {
                     &cache.integer_layouts[usize::from(signed)]
+                } else if d3_float {
+                    &cache.d3_bind_group_layout[usize::from(!can_filter)]
                 } else {
                     &cache.bind_group_layout[usize::from(!can_filter)]
                 },
