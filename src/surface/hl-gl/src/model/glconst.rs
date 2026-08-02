@@ -595,4 +595,18 @@ impl GlType {
             _ => 4,
         }
     }
+
+    /// Bytes occupied by one vertex attribute element. The 2/10/10/10 spellings contain all four
+    /// components in one `u32`; multiplying their nominal component count by four over-reads client
+    /// memory and advances tightly packed arrays by sixteen bytes instead of four.
+    pub fn vertex_element_size(self, components: i32) -> usize {
+        if matches!(
+            self.0,
+            GL_UNSIGNED_INT_2_10_10_10_REV | GL_INT_2_10_10_10_REV
+        ) {
+            4
+        } else {
+            components.clamp(1, 4) as usize * self.component_size()
+        }
+    }
 }

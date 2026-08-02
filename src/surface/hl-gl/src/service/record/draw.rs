@@ -107,8 +107,7 @@ unsafe fn read_client_attr(
     stride: i32,
     vert_end: usize,
 ) -> Vec<u8> {
-    let comp = size.clamp(1, 4) as usize;
-    let elem = comp * crate::model::glconst::GlType(kind).component_size();
+    let elem = crate::model::glconst::GlType(kind).vertex_element_size(size);
     let st = if stride > 0 { stride as usize } else { elem };
     let mut out = Vec::with_capacity(vert_end.saturating_mul(elem));
     for v in 0..vert_end {
@@ -541,4 +540,20 @@ pub fn draw_elements_indirect(ctx: &mut GlContext, mode: u32, index_type: u32, i
         instances,
         base_vertex,
     );
+}
+
+#[cfg(test)]
+mod client_attribute_tests {
+    use super::*;
+
+    #[test]
+    fn tightly_packed_2_10_10_10_client_vertices_advance_four_bytes() {
+        let words = [0x0123_4567u32, 0x89ab_cdef, 0xfeed_face, 0xcafe_babe];
+        let bytes =
+            unsafe { read_client_attr(words.as_ptr() as usize, 4, GL_INT_2_10_10_10_REV, 0, 2) };
+
+        assert_eq!(bytes.len(), 8);
+        assert_eq!(&bytes[..4], &words[0].to_le_bytes());
+        assert_eq!(&bytes[4..], &words[1].to_le_bytes());
+    }
 }

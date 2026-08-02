@@ -101,7 +101,10 @@ fn needs_float_conversion(attribute: &Attr) -> bool {
         GL_FLOAT => false,
         GL_HALF_FLOAT => matches!(comps, 1 | 3),
         GL_INT | GL_UNSIGNED_INT => true,
-        GL_UNSIGNED_INT_2_10_10_10_REV | GL_INT_2_10_10_10_REV => !attribute.normalized,
+        GL_UNSIGNED_INT_2_10_10_10_REV => !attribute.normalized,
+        // WebGPU exposes the unsigned normalized packed format only. Signed packed attributes must be
+        // decoded to float explicitly even when GL normalization is enabled.
+        GL_INT_2_10_10_10_REV => true,
         GL_BYTE | GL_UNSIGNED_BYTE | GL_SHORT | GL_UNSIGNED_SHORT => {
             !attribute.normalized || matches!(comps, 1 | 3)
         }
@@ -122,8 +125,10 @@ fn needs_integer_conversion(program: &Program, location: usize, attribute: &Attr
         return false;
     }
     let components = attribute.size.clamp(1, 4);
-    let narrow_unsupported = matches!(attribute.kind, GL_BYTE | GL_UNSIGNED_BYTE | GL_SHORT | GL_UNSIGNED_SHORT)
-        && matches!(components, 1 | 3);
+    let narrow_unsupported = matches!(
+        attribute.kind,
+        GL_BYTE | GL_UNSIGNED_BYTE | GL_SHORT | GL_UNSIGNED_SHORT
+    ) && matches!(components, 1 | 3);
     narrow_unsupported
         || attribute_stride(attribute) % 4 != 0
         || program
@@ -196,6 +201,39 @@ fn decode_component(attribute: &Attr, bytes: &[u8], offset: usize) -> f32 {
     }
 }
 
+fn decode_attribute_component(attribute: &Attr, bytes: &[u8], base: usize, index: usize) -> f32 {
+    if matches!(
+        attribute.kind,
+        GL_UNSIGNED_INT_2_10_10_10_REV | GL_INT_2_10_10_10_REV
+    ) {
+        let byte = |n: usize| bytes.get(base + n).copied().unwrap_or(0);
+        let packed = u32::from_le_bytes([byte(0), byte(1), byte(2), byte(3)]);
+        let bits = if index == 3 { 2 } else { 10 };
+        let shift = if index == 3 { 30 } else { index * 10 };
+        let mask = (1u32 << bits) - 1;
+        let raw = (packed >> shift) & mask;
+        if attribute.kind == GL_UNSIGNED_INT_2_10_10_10_REV {
+            let value = raw as f32;
+            if attribute.normalized {
+                value / mask as f32
+            } else {
+                value
+            }
+        } else {
+            let signed = ((raw << (32 - bits)) as i32) >> (32 - bits);
+            let value = signed as f32;
+            if attribute.normalized {
+                (value / ((1u32 << (bits - 1)) - 1) as f32).max(-1.0)
+            } else {
+                value
+            }
+        }
+    } else {
+        let component = GlType(attribute.kind).component_size().max(1);
+        decode_component(attribute, bytes, base + index * component)
+    }
+}
+
 /// IEEE 754 half → single. Only reached by the 1-/3-component half formats WebGPU cannot express.
 fn half_to_f32(bits: u16) -> f32 {
     let sign = u32::from(bits & 0x8000) << 16;
@@ -224,7 +262,6 @@ fn convert_attribute_to_f32_width(
     let source_components = attribute.size.clamp(1, 4) as usize;
     let stride = attribute_stride(attribute).max(1) as usize;
     let element = attribute_element_size(attribute) as usize;
-    let component = GlType(attribute.kind).component_size().max(1);
     // Every vertex whose whole element lies inside the buffer: one at `offset`, then one per stride.
     let vertices = match source.len().checked_sub(attribute.offset + element) {
         Some(remaining) => 1 + remaining / stride,
@@ -235,7 +272,7 @@ fn convert_attribute_to_f32_width(
         let base = attribute.offset + vertex * stride;
         for index in 0..output_components {
             let value = if index < source_components {
-                decode_component(attribute, source, base + index * component)
+                decode_attribute_component(attribute, source, base, index)
             } else if index == 3 {
                 1.0
             } else {
@@ -287,11 +324,7 @@ fn convert_attribute_to_integer_width(
 }
 
 fn attribute_element_size(attribute: &Attr) -> u32 {
-    if attribute.kind == GL_UNSIGNED_INT_2_10_10_10_REV || attribute.kind == GL_INT_2_10_10_10_REV {
-        4
-    } else {
-        attribute.size.clamp(1, 4) as u32 * GlType(attribute.kind).component_size().max(1) as u32
-    }
+    GlType(attribute.kind).vertex_element_size(attribute.size) as u32
 }
 pub(super) fn lower_vertices(
     ctx: &mut GlContext,
@@ -634,11 +667,8 @@ pub(super) fn lower_vertices(
         let (data, kind, normalized, integer, components) = if needs_float_conversion(&attribute)
             || float_layout_conversion
         {
-            let (converted, _) = convert_attribute_to_f32_width(
-                &attribute,
-                &ca.data,
-                linked_components as usize,
-            );
+            let (converted, _) =
+                convert_attribute_to_f32_width(&attribute, &ca.data, linked_components as usize);
             (converted, GL_FLOAT, false, false, linked_components)
         } else if integer_conversion {
             let (converted, _) = convert_attribute_to_integer_width(
@@ -674,7 +704,7 @@ pub(super) fn lower_vertices(
             offset: 0,
             data,
         });
-        let elem = components.clamp(1, 4) as u32 * GlType(kind).component_size() as u32;
+        let elem = GlType(kind).vertex_element_size(components) as u32;
         client_slots.push(ClientSlot {
             ir,
             bytes,
@@ -1053,5 +1083,26 @@ mod tests {
             vertex_format_wire(attribute.kind, 4, true, false),
             4 | (8 << 8) | (1 << 16)
         );
+    }
+
+    #[test]
+    fn signed_packed_attribute_converts_all_four_normalized_components() {
+        let attribute = Attr {
+            size: 4,
+            kind: GL_INT_2_10_10_10_REV,
+            normalized: true,
+            ..Attr::default()
+        };
+        // x=-512, y=511, z=-1, w=-2 in REV field order.
+        let packed = 0x200 | (0x1ff << 10) | (0x3ff << 20) | (0x2 << 30);
+        let (bytes, vertices) =
+            convert_attribute_to_f32_width(&attribute, &u32::to_le_bytes(packed), 4);
+        let values = bytes
+            .chunks_exact(4)
+            .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(vertices, 1);
+        assert_eq!(values, vec![-1.0, 1.0, -1.0 / 511.0, -1.0]);
     }
 }
