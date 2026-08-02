@@ -200,8 +200,10 @@ impl WgpuExecutor {
         batch: &[Cmd],
     ) -> Result<Vec<Presentation>> {
         let mut presents = Vec::new();
+        let mut first_refusal = None;
         for cmd in batch {
-            match cmd {
+            let outcome = (|| -> Result<()> {
+                match cmd {
                 Cmd::CreateBuffer(id, d) => {
                     let started = self.profile_clock();
                     let b = self.make_buffer(d.size);
@@ -360,7 +362,18 @@ impl WgpuExecutor {
                     self.flush_writes();
                     presents.push(present::present(self, res, *surface, *texture, *serial)?);
                 }
+                }
+                Ok(())
+            })();
+            if let Err(error) = outcome {
+                if error.is_fatal() {
+                    return Err(error);
+                }
+                first_refusal.get_or_insert(error);
             }
+        }
+        if let Some(error) = first_refusal {
+            return Err(error);
         }
         Ok(presents)
     }

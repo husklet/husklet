@@ -145,3 +145,74 @@ fn refusal_preserves_encoded_work_and_continues_to_later_operations() {
         "an independent operation after the refusal must still execute"
     );
 }
+
+#[test]
+fn top_level_refusal_preserves_submits_on_both_sides() {
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove native submission behavior");
+    let mut limits = Limits::from_capabilities(exec.capabilities());
+    limits.copy_alignment = 1;
+    let mut session = Session::new(
+        limits,
+        GlobalLedger::unbounded(),
+        Box::new(FakeClock::new(0)),
+    );
+
+    let usage = texture_usage::RENDER_TARGET | texture_usage::COPY_SRC;
+    hl_gpu::runtime::submit(
+        &mut session,
+        &mut exec,
+        0,
+        &[
+            Cmd::CreateTexture(1, texture(TextureDim::D2, 1, 1, usage)),
+            Cmd::CreateTexture(2, texture(TextureDim::D2, 1, 1, usage)),
+        ],
+    )
+    .expect("observation textures must exist before the refused batch");
+
+    let clear = |texture, color| {
+        Cmd::Submit(CommandBuffer {
+            encoder: vec![Enc::ClearRect {
+                texture,
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                color,
+                base_array_layer: 0,
+                layer_count: 1,
+                mip_level: 0,
+            }],
+            signal: None,
+        })
+    };
+    let result = hl_gpu::runtime::submit(
+        &mut session,
+        &mut exec,
+        1,
+        &[
+            clear(1, [1.0, 0.0, 0.0, 1.0]),
+            Cmd::DestroySampler(4),
+            clear(2, [0.0, 1.0, 0.0, 1.0]),
+        ],
+    );
+
+    assert_eq!(
+        result,
+        Err(GpuError::UnknownId {
+            kind: "sampler",
+            id: 4,
+        }),
+        "the first top-level refusal must remain visible to the caller"
+    );
+    assert_eq!(
+        exec.read_texture(&session.resources, 1).unwrap(),
+        [255, 0, 0, 255],
+        "valid native work before the stale sampler must execute"
+    );
+    assert_eq!(
+        exec.read_texture(&session.resources, 2).unwrap(),
+        [0, 255, 0, 255],
+        "valid native work after the stale sampler must execute"
+    );
+}
