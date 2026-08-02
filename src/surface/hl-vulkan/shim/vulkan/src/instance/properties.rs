@@ -11,6 +11,8 @@ const SUBGROUP_FEATURE_BASIC: VkFlags = 0x0000_0001;
 const MAX_MULTIVIEW_VIEW_COUNT: u32 = 6;
 const MAX_MULTIVIEW_INSTANCE_INDEX: u32 = (1 << 27) - 1;
 const MAX_PER_SET_DESCRIPTORS: u32 = 1_000_000;
+const PROTECTED_NO_FAULT: VkBool32 = VK_FALSE;
+const MAX_TIMELINE_SEMAPHORE_VALUE_DIFFERENCE: u64 = u64::MAX;
 
 /// The one source of truth for how this driver identifies itself, so every spelling of the query — the
 /// standalone `VkPhysicalDeviceDriverProperties`, the `VkPhysicalDeviceVulkan12Properties` aggregate a
@@ -92,6 +94,19 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
                 multiview.max_multiview_view_count = MAX_MULTIVIEW_VIEW_COUNT;
                 multiview.max_multiview_instance_index = MAX_MULTIVIEW_INSTANCE_INDEX;
             }
+        } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_PROPERTIES {
+            if let Some(protected) =
+                unsafe { (node as *mut VkPhysicalDeviceProtectedMemoryProperties).as_mut() }
+            {
+                protected.protected_no_fault = PROTECTED_NO_FAULT;
+            }
+        } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_PROPERTIES {
+            if let Some(timeline) =
+                unsafe { (node as *mut VkPhysicalDeviceTimelineSemaphoreProperties).as_mut() }
+            {
+                timeline.max_timeline_semaphore_value_difference =
+                    MAX_TIMELINE_SEMAPHORE_VALUE_DIFFERENCE;
+            }
         } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES {
             // The 1.1 aggregate carries the same identity + subgroup members. A client at the
             // advertised 1.1+ reads them from HERE, not from the standalone structs above.
@@ -113,6 +128,7 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
                 v11.subgroup_quad_operations_in_all_stages = VK_FALSE;
                 v11.max_multiview_view_count = MAX_MULTIVIEW_VIEW_COUNT;
                 v11.max_multiview_instance_index = MAX_MULTIVIEW_INSTANCE_INDEX;
+                v11.protected_no_fault = PROTECTED_NO_FAULT;
                 v11.max_per_set_descriptors = MAX_PER_SET_DESCRIPTORS;
                 v11.max_memory_allocation_size = desc.limits.max_buffer_size;
             }
@@ -130,7 +146,8 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
                 Name::write(&mut v12.driver_name, Identity::DRIVER_NAME);
                 Name::write(&mut v12.driver_info, Identity::DRIVER_INFO);
                 v12.conformance_version = Identity::CONFORMANCE;
-                v12.max_timeline_semaphore_value_difference = u64::MAX;
+                v12.max_timeline_semaphore_value_difference =
+                    MAX_TIMELINE_SEMAPHORE_VALUE_DIFFERENCE;
                 v12.framebuffer_integer_color_sample_counts = 1;
             }
         } else if vulkan13::try_fill(node) {
@@ -436,6 +453,64 @@ mod tests {
         );
         assert_eq!(v11.max_per_set_descriptors, MAX_PER_SET_DESCRIPTORS);
         assert!(v11.max_memory_allocation_size >= 1 << 30);
+    }
+
+    #[test]
+    fn standalone_promoted_properties_match_aggregates() {
+        // These are externally assigned registry values. Literal assertions ensure an internally
+        // consistent typo cannot make the query silently skip the structures applications send.
+        assert_eq!(
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_PROPERTIES,
+            1_000_145_002
+        );
+        assert_eq!(
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_PROPERTIES,
+            1_000_207_001
+        );
+
+        let mut protected: VkPhysicalDeviceProtectedMemoryProperties =
+            unsafe { core::mem::zeroed() };
+        protected.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_PROPERTIES;
+        protected.protected_no_fault = 0xa5a5_a5a5;
+        let mut timeline: VkPhysicalDeviceTimelineSemaphoreProperties =
+            unsafe { core::mem::zeroed() };
+        timeline.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_PROPERTIES;
+        timeline.max_timeline_semaphore_value_difference = 0xa5a5_a5a5_a5a5_a5a5;
+        protected.p_next = &mut timeline as *mut _ as *mut c_void;
+
+        let mut v11: VkPhysicalDeviceVulkan11Properties = unsafe { core::mem::zeroed() };
+        v11.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES;
+        v11.p_next = &mut protected as *mut _ as *mut c_void;
+        let mut v12: VkPhysicalDeviceVulkan12Properties = unsafe { core::mem::zeroed() };
+        v12.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES;
+        timeline.p_next = &mut v12 as *mut _ as *mut c_void;
+        let mut properties: VkPhysicalDeviceProperties2 = unsafe { core::mem::zeroed() };
+        properties.p_next = &mut v11 as *mut _ as *mut c_void;
+
+        vkGetPhysicalDeviceProperties2(
+            core::ptr::null_mut(),
+            &mut properties as *mut _ as *mut c_void,
+        );
+
+        assert_eq!(protected.protected_no_fault, v11.protected_no_fault);
+        assert_eq!(protected.protected_no_fault, VK_FALSE);
+        assert_eq!(
+            timeline.max_timeline_semaphore_value_difference,
+            v12.max_timeline_semaphore_value_difference
+        );
+        assert_eq!(timeline.max_timeline_semaphore_value_difference, u64::MAX);
+        assert_eq!(core::mem::size_of_val(&protected), 24);
+        assert_eq!(core::mem::size_of_val(&timeline), 24);
+        let protected_base = &protected as *const _ as usize;
+        let timeline_base = &timeline as *const _ as usize;
+        assert_eq!(
+            &protected.protected_no_fault as *const _ as usize - protected_base,
+            16
+        );
+        assert_eq!(
+            &timeline.max_timeline_semaphore_value_difference as *const _ as usize - timeline_base,
+            16
+        );
     }
 
     /// `subgroupSize` of 0 is not a conservative answer, it is an arithmetic trap: a client sizing a
