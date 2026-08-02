@@ -249,21 +249,29 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
 /// integer for `target` at `index`.
 pub fn get_integer_indexed(ctx: &GlContext, target: u32, index: u32) -> i64 {
     // Map the indexed *binding* pname to the buffer target whose indexed bindings it reads back.
-    let buffer_target = match target {
-        GL_UNIFORM_BUFFER_BINDING => Some(GL_UNIFORM_BUFFER),
-        GL_SHADER_STORAGE_BUFFER_BINDING => Some(GL_SHADER_STORAGE_BUFFER),
-        GL_TRANSFORM_FEEDBACK_BUFFER_BINDING => Some(GL_TRANSFORM_FEEDBACK_BUFFER),
+    let buffer_property = match target {
+        GL_UNIFORM_BUFFER_BINDING => Some((GL_UNIFORM_BUFFER, 0)),
+        GL_UNIFORM_BUFFER_START => Some((GL_UNIFORM_BUFFER, 1)),
+        GL_UNIFORM_BUFFER_SIZE => Some((GL_UNIFORM_BUFFER, 2)),
+        GL_SHADER_STORAGE_BUFFER_BINDING => Some((GL_SHADER_STORAGE_BUFFER, 0)),
+        GL_TRANSFORM_FEEDBACK_BUFFER_BINDING => Some((GL_TRANSFORM_FEEDBACK_BUFFER, 0)),
+        GL_TRANSFORM_FEEDBACK_BUFFER_START => Some((GL_TRANSFORM_FEEDBACK_BUFFER, 1)),
+        GL_TRANSFORM_FEEDBACK_BUFFER_SIZE => Some((GL_TRANSFORM_FEEDBACK_BUFFER, 2)),
         _ => None,
     };
     if let Some(value) = limits::CapabilityLimits::indexed(target, index) {
         return i64::from(value);
     }
-    if let Some(bt) = buffer_target {
+    if let Some((bt, property)) = buffer_property {
         return ctx
             .local
             .indexed_buffers
             .get(&(bt, index))
-            .map(|b| b.buffer as i64)
+            .map(|b| match property {
+                1 => b.offset as i64,
+                2 => b.size as i64,
+                _ => b.buffer as i64,
+            })
             .unwrap_or(0);
     }
     let mut buf = [0i32; 4];

@@ -227,15 +227,21 @@ fn bind_indexed_buffer(
     }
     if buffer == 0 {
         ctx.local.indexed_buffers.remove(&(target, index));
+        if target == GL_TRANSFORM_FEEDBACK_BUFFER {
+            ctx.local.transform_feedbacks.set_binding(index, None);
+        }
     } else {
-        ctx.local.indexed_buffers.insert(
-            (target, index),
-            IndexedBinding {
-                buffer,
-                offset,
-                size,
-            },
-        );
+        let binding = IndexedBinding {
+            buffer,
+            offset,
+            size,
+        };
+        ctx.local.indexed_buffers.insert((target, index), binding);
+        if target == GL_TRANSFORM_FEEDBACK_BUFFER {
+            ctx.local
+                .transform_feedbacks
+                .set_binding(index, Some(binding));
+        }
     }
 }
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::context::IndexedBinding;
 
 // ==================================================================================================
 // Transform-feedback objects (glGenTransformFeedbacks / glBindTransformFeedback / glBegin…)
@@ -10,6 +11,7 @@ use super::*;
 pub struct TransformFeedbackObj {
     pub active: bool,
     pub paused: bool,
+    pub bindings: [Option<IndexedBinding>; 4],
 }
 
 /// The per-context transform-feedback table + the bound object + the per-program varying capture list
@@ -90,6 +92,15 @@ impl TransformFeedbacks {
             self.objects.entry(id).or_default();
         }
         self.bound = id;
+    }
+
+    pub fn set_binding(&mut self, index: u32, binding: Option<IndexedBinding>) {
+        if let Some(slot) = self
+            .bound_mut()
+            .and_then(|object| object.bindings.get_mut(index as usize))
+        {
+            *slot = binding;
+        }
     }
 
     /// `glDeleteTransformFeedbacks` (one name). Deleting the bound object reverts to the default `0`.

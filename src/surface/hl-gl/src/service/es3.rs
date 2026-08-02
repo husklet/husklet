@@ -189,6 +189,24 @@ pub fn bind_transform_feedback(ctx: &mut GlContext, target: u32, id: u32) {
         return;
     }
     ctx.local.transform_feedbacks.bind(id);
+    ctx.local
+        .indexed_buffers
+        .retain(|(target, _), _| *target != GL_TRANSFORM_FEEDBACK_BUFFER);
+    for (index, binding) in ctx
+        .local
+        .transform_feedbacks
+        .bound_obj()
+        .bindings
+        .into_iter()
+        .enumerate()
+    {
+        if let Some(binding) = binding {
+            ctx.local.indexed_buffers.insert(
+                (GL_TRANSFORM_FEEDBACK_BUFFER, index as u32),
+                binding,
+            );
+        }
+    }
 }
 
 /// `glDeleteTransformFeedbacks` (one name). Deleting the default `0` is ignored; deleting an active

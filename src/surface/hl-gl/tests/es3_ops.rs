@@ -6,7 +6,7 @@
 
 use hl_gl::model::context::{GlContext, GlSurface};
 use hl_gl::model::glconst::*;
-use hl_gl::service::{compute, map, record, sync};
+use hl_gl::service::{compute, es3, map, query, record, sync};
 
 use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::descriptor::BindResource;
@@ -410,6 +410,38 @@ fn bind_buffer_base_and_range_record_the_indexed_binding() {
     assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
     record::bind_buffer_base(&mut c, GL_UNIFORM_BUFFER, MAX_UNIFORM_BUFFER_BINDINGS, 1);
     assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
+}
+
+#[test]
+fn indexed_ranges_round_trip_and_transform_feedback_objects_own_their_bindings() {
+    let mut c = ctx();
+    let first = c.gen_transform_feedback();
+    let second = c.gen_transform_feedback();
+    let buffer = c.buffers.gen();
+    record::bind_buffer(&mut c, GL_TRANSFORM_FEEDBACK_BUFFER, buffer);
+    record::buffer_data(&mut c, GL_TRANSFORM_FEEDBACK_BUFFER, &[0; 32], 0);
+
+    es3::bind_transform_feedback(&mut c, GL_TRANSFORM_FEEDBACK, first);
+    record::bind_buffer_range(&mut c, GL_TRANSFORM_FEEDBACK_BUFFER, 0, buffer, 4, 8);
+    assert_eq!(
+        query::get_integer_indexed(&c, GL_TRANSFORM_FEEDBACK_BUFFER_START, 0),
+        4
+    );
+    assert_eq!(
+        query::get_integer_indexed(&c, GL_TRANSFORM_FEEDBACK_BUFFER_SIZE, 0),
+        8
+    );
+
+    es3::bind_transform_feedback(&mut c, GL_TRANSFORM_FEEDBACK, second);
+    assert_eq!(
+        query::get_integer_indexed(&c, GL_TRANSFORM_FEEDBACK_BUFFER_BINDING, 0),
+        0
+    );
+    es3::bind_transform_feedback(&mut c, GL_TRANSFORM_FEEDBACK, first);
+    assert_eq!(
+        query::get_integer_indexed(&c, GL_TRANSFORM_FEEDBACK_BUFFER_BINDING, 0),
+        buffer as i64
+    );
 }
 
 // ---------------------------------------------------------------------------------------------------
