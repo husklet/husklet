@@ -370,12 +370,22 @@ pub extern "C" fn glFinish() {
     let max_buffer_bytes = GlobalState::access(|state| state.max_buffer_bytes);
     let result = GlobalState::gpu_submit(move |group, sink| {
         crate::stub::trace("glFinish.flush", "flushing offscreen work");
-        let result = flush_pending(group, sink, max_buffer_bytes).and_then(|flushed| {
-            sync::finish(&mut group.gl, sink)?;
-            Ok(flushed)
-        });
+        let result = flush_pending(group, sink, max_buffer_bytes);
         crate::stub::trace("glFinish.flushed", "offscreen flush returned");
         result
+    });
+    let result = result.and_then(|_| {
+        let completed = GlobalState::gpu_io(std::time::Duration::from_secs(31), |group, sink| {
+            sync::finish(&mut group.gl, sink)
+        })?;
+        if completed
+            .observations
+            .iter()
+            .any(|observation| matches!(observation, Observation::Timed(hl_gpu::FenceWait::Complete)))
+        {
+            GlobalState::context(|group| group.gl.mark_fence_signaled(completed.value));
+        }
+        Ok(())
     });
     if let Err(error) = result {
         GlobalState::access(|state| state.set_egl_error(egl_error_from_gpu_error(&error)));
