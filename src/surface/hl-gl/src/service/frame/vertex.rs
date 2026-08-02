@@ -28,13 +28,14 @@ fn vertex_slot_bytes(
     attributes: &[Attr],
     stride: u32,
     base: u32,
+    indexed_vertex_end: Option<u32>,
 ) -> Option<usize> {
     let per_instance = attributes.iter().any(|attribute| attribute.divisor > 0);
     let end = if per_instance {
         draw.first_instance
             .checked_add(draw.instance_count.max(1))?
     } else if draw.indexed {
-        return None;
+        indexed_vertex_end?
     } else {
         u32::try_from(draw.first.max(0))
             .ok()?
@@ -52,11 +53,18 @@ fn vertex_slot_bytes(
         })
         .max()
         .unwrap_or(0);
-    usize::try_from(
-        base.checked_add(end.checked_sub(1)?.checked_mul(stride)?)?
-            .checked_add(attribute_end)?,
-    )
-    .ok()
+    let addressed = base
+        .checked_add(end.checked_sub(1)?.checked_mul(stride)?)?
+        .checked_add(attribute_end)?;
+    let required = if draw.indexed {
+        // Metal's robust vertex fetch treats a final partial stride as inaccessible even when the
+        // attribute's own bytes are present. Complete the last addressed stride so an indexed fetch of
+        // vertex N cannot silently receive GL's robust zero value for bytes that the application supplied.
+        addressed.max(base.checked_add(end.checked_mul(stride)?)?)
+    } else {
+        addressed
+    };
+    usize::try_from(required).ok()
 }
 
 fn attribute_stride(attribute: &Attr) -> u32 {
@@ -333,6 +341,26 @@ pub(super) fn lower_vertices(
     cmds: &mut Vec<Cmd>,
 ) -> hl_gpu::Result<VertexLowering> {
     let captured_buffer = |name: u32| d.buffers.iter().find(|buffer| buffer.name == name);
+    let indexed_vertex_end = if d.indexed {
+        let source = if d.elem_buf != 0 {
+            captured_buffer(d.elem_buf)
+                .map(|buffer| buffer.data.as_slice())
+                .or_else(|| ctx.buffers.get(d.elem_buf).map(|buffer| buffer.data.as_slice()))
+        } else if d.client_indices.is_empty() {
+            None
+        } else {
+            Some(d.client_indices.as_slice())
+        };
+        let offset = if d.elem_buf != 0 { d.index_offset } else { 0 };
+        source
+            .and_then(|bytes| PrimitiveAssembly::decode_indices(bytes, offset, d.index_type, d.count))
+            .and_then(|indices| indices.into_iter().max())
+            .and_then(|maximum| {
+                u32::try_from(i64::from(maximum) + i64::from(d.base_vertex) + 1).ok()
+            })
+    } else {
+        None
+    };
     let has_data = |name: u32| {
         captured_buffer(name)
             .map(|buffer| !buffer.data.is_empty())
@@ -506,8 +534,14 @@ pub(super) fn lower_vertices(
             })
             .map(|(_, attribute)| *attribute)
             .collect::<Vec<_>>();
-        let required =
-            vertex_slot_bytes(d, &attributes, slot_stride[slot], slot_base[slot]).unwrap_or(0);
+        let required = vertex_slot_bytes(
+            d,
+            &attributes,
+            slot_stride[slot],
+            slot_base[slot],
+            indexed_vertex_end,
+        )
+        .unwrap_or(0);
         if required > data.len() {
             let shape = attributes
                 .iter()
@@ -1001,7 +1035,7 @@ mod tests {
             ..Attr::default()
         };
 
-        assert_eq!(vertex_slot_bytes(&draw, &[attribute], 16, 0), Some(1432));
+        assert_eq!(vertex_slot_bytes(&draw, &[attribute], 16, 0, None), Some(1432));
     }
 
     #[test]
@@ -1021,7 +1055,7 @@ mod tests {
         };
 
         assert_eq!(
-            vertex_slot_bytes(&draw, &[attribute], 16, 4_800),
+            vertex_slot_bytes(&draw, &[attribute], 16, 4_800, None),
             Some(6_240)
         );
     }
@@ -1041,7 +1075,7 @@ mod tests {
             ..Attr::default()
         };
 
-        assert_eq!(vertex_slot_bytes(&draw, &[attribute], 16, 0), None);
+        assert_eq!(vertex_slot_bytes(&draw, &[attribute], 16, 0, None), None);
     }
 
     #[test]
