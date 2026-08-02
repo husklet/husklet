@@ -350,6 +350,49 @@ fn gskgpu_aggregate_interface_members_split_into_ioshareable_slots() {
     );
 }
 
+#[test]
+fn matrix_array_outputs_split_every_element_and_column() {
+    let source = r#"#version 460
+layout(location = 0) in vec3 a0;
+layout(location = 1) in vec3 a1;
+layout(location = 2) in vec3 b0;
+layout(location = 3) in vec3 b1;
+layout(location = 0) out mat2x3 v_a[1];
+layout(location = 2) out mat2x3 v_b[2];
+void main() {
+    gl_Position = vec4(0.0);
+    v_a[0][0] = a0;
+    v_a[0][1] = a1;
+    v_b[0][0] = b0;
+    v_b[1][1] = b1;
+}
+"#;
+    let mut frontend = naga::front::glsl::Frontend::default();
+    let module = frontend
+        .parse(
+            &naga::front::glsl::Options::from(naga::ShaderStage::Vertex),
+            source,
+        )
+        .expect("raw matrix-array GLSL parses before validation");
+    assert!(
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .is_err(),
+        "matrix arrays must fail validation before aggregate-I/O lowering"
+    );
+    let wgsl = glsl_to_wgsl(source, naga::ShaderStage::Vertex, "vmain")
+        .expect("every matrix-array element and column must become an IO-shareable slot");
+    for slot in 0..4 {
+        assert!(
+            wgsl.contains(&format!("v_b_hlio{slot}")),
+            "missing v_b element/column slot {slot}: {wgsl}"
+        );
+    }
+}
+
 // A GLES fragment shader that gates its output color on `isinf()` — the exact Chrome shape that NACKed
 // the executor with `Kernel("wgsl-out: Unsupported relational function: IsInf")`.
 const ISINF_FRAG: &str = r#"#version 320 es

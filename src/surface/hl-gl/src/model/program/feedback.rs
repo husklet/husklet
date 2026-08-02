@@ -324,4 +324,20 @@ mod tests {
         assert!(capture.contains("floatBitsToUint(v_varA[0])"));
         assert!(capture.contains("floatBitsToUint(v_varB[1])"));
     }
+
+    #[test]
+    fn deqp_separate_matrix_arrays_compile_capture_wrapper() {
+        let source = "#version 300 es\nin highp vec4 a_position;\nin highp vec3 a_varA_e0_c0;\nin highp vec3 a_varA_e0_c1;\nin highp vec3 a_varB_e0_c0;\nin highp vec3 a_varB_e0_c1;\nin highp vec3 a_varB_e1_c0;\nin highp vec3 a_varB_e1_c1;\nout highp mat2x3 v_varA[1];\nout highp mat2x3 v_varB[2];\nvoid main(void){ gl_Position=a_position; v_varA[0][0]=a_varA_e0_c0; v_varA[0][1]=a_varA_e0_c1; v_varB[0][0]=a_varB_e0_c0; v_varB[0][1]=a_varB_e0_c1; v_varB[1][0]=a_varB_e1_c0; v_varB[1][1]=a_varB_e1_c1; }";
+        let fragment = "#version 300 es\nprecision highp float; in highp mat2x3 v_varA[1]; in highp mat2x3 v_varB[2]; layout(location=0) out mediump vec4 o_color; void main(){o_color=vec4(v_varA[0][0][0]+v_varB[0][0][0]+v_varB[1][0][0]);}";
+        let (translated, _) = StageSources::new(source, fragment).translate_render();
+        let layout = TransformFeedbackLayout::reflect(
+            source,
+            &["v_varA".into(), "v_varB".into()],
+            GL_SEPARATE_ATTRIBS,
+        )
+        .unwrap();
+        let capture = layout.capture_source(&translated).unwrap();
+        assert!(capture.contains("floatBitsToUint(v_varA[0][1][2])"));
+        assert!(capture.contains("floatBitsToUint(v_varB[1][1][2])"));
+    }
 }

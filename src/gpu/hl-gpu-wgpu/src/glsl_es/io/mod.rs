@@ -8,6 +8,7 @@ enum AggTy {
         tok: String,
         cols: u32,
         col_ty: String,
+        count: Option<u32>,
     },
     /// `elem[count]` array; global declared as `elem name[count]`.
     Array { elem: String, count: u32 },
@@ -15,14 +16,44 @@ enum AggTy {
 
 impl AggTy {
     /// (slot count, per-slot vector type, private-global declaration for `name`).
-    fn parts(&self, name: &str) -> (u32, String, String) {
+    fn parts(&self, name: &str) -> Option<(u32, String, String)> {
         match self {
-            AggTy::Matrix { tok, cols, col_ty } => {
-                (*cols, col_ty.clone(), format!("{tok} {name};"))
+            AggTy::Matrix {
+                tok,
+                cols,
+                col_ty,
+                count,
+            } => {
+                let declaration = if let Some(count) = count {
+                    format!("{tok} {name}[{count}];")
+                } else {
+                    format!("{tok} {name};")
+                };
+                Some((
+                    cols.checked_mul(count.unwrap_or(1))?,
+                    col_ty.clone(),
+                    declaration,
+                ))
             }
             AggTy::Array { elem, count } => {
-                (*count, elem.clone(), format!("{elem} {name}[{count}];"))
+                Some((*count, elem.clone(), format!("{elem} {name}[{count}];")))
             }
+        }
+    }
+
+    /// Access the aggregate slot represented by one interface location. Arrays of matrices are nested in
+    /// array-major, then column-major order: each array element consumes all matrix columns before the next
+    /// element, matching GLSL's interface-location allocation.
+    fn slot(&self, name: &str, slot: u32) -> String {
+        match self {
+            AggTy::Matrix {
+                cols,
+                count: Some(_),
+                ..
+            } => {
+                format!("{name}[{}][{}]", slot / cols, slot % cols)
+            }
+            AggTy::Matrix { .. } | AggTy::Array { .. } => format!("{name}[{slot}]"),
         }
     }
 }
@@ -130,6 +161,7 @@ impl TypeAliases {
                 tok: base.clone(),
                 cols: matrix.columns,
                 col_ty: format!("vec{}", matrix.rows),
+                count,
             })
         } else {
             count.map(|count| AggTy::Array { elem: base, count })

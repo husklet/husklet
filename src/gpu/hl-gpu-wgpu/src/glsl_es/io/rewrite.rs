@@ -127,7 +127,7 @@ fn build_io_split(
         _ => return None,
     };
     let base_loc: i64 = decl.loc.trim().parse().ok()?;
-    let (count, slot_ty, global_decl) = agg.parts(&decl.name);
+    let (count, slot_ty, global_decl) = agg.parts(&decl.name)?;
     let flatq = if flat { "flat " } else { "" };
     let mut s = String::new();
     for k in 0..count {
@@ -139,10 +139,11 @@ fn build_io_split(
     }
     s.push_str(&global_decl);
     for k in 0..count {
+        let aggregate_slot = agg.slot(&decl.name, k);
         if is_input {
-            recon.push(format!("{}[{k}] = {}_hlio{k};", decl.name, decl.name));
+            recon.push(format!("{aggregate_slot} = {}_hlio{k};", decl.name));
         } else {
-            scatter.push(format!("{}_hlio{k} = {}[{k}];", decl.name, decl.name));
+            scatter.push(format!("{}_hlio{k} = {aggregate_slot};", decl.name));
         }
     }
     Some(s)
