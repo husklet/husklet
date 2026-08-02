@@ -746,6 +746,21 @@ pub(super) fn lower_vertices(
         });
     }
 
+    // Conversion appends a new, aligned slot but deliberately leaves the source slot in place so the
+    // slot-to-buffer bindings remain stable. WebGPU validates array_stride even when that source layout
+    // has no attributes left; a tightly packed GL u8vec3 therefore still fails at stride 3 unless the
+    // now-empty layout is given an innocuous aligned stride.
+    for (slot, stride) in slot_stride.iter_mut().take(nslot).enumerate() {
+        let feeds_direct_attribute = d.attrs.iter().enumerate().any(|(location, attribute)| {
+            attribute.enabled
+                && attr_slot[location] == slot as i32
+                && !needs_float_conversion(attribute)
+        });
+        if !feeds_direct_attribute && *stride % 4 != 0 {
+            *stride = 4;
+        }
+    }
+
     Ok(VertexLowering {
         nslot,
         slot_stride,

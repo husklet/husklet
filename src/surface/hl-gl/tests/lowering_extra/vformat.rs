@@ -111,6 +111,35 @@ fn a_three_component_normalized_byte_attribute_is_converted_not_refused() {
 }
 
 #[test]
+fn converted_tightly_packed_vec3_leaves_no_unaligned_vertex_layout() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_tint(&mut c);
+    let tint = c.buffers.gen();
+    record::bind_buffer(&mut c, GL_ARRAY_BUFFER, tint);
+    record::buffer_data(&mut c, GL_ARRAY_BUFFER, &[255, 128, 0, 64, 32, 16, 8, 4, 2], 0x88E4);
+    record::vertex_attrib_pointer(&mut c, 1, 3, GL_UNSIGNED_BYTE, true, 0, 0);
+    record::enable_vertex_attrib(&mut c, 1);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+
+    let pipeline = pipeline_desc(&sink.batches[0]);
+    assert!(
+        pipeline
+            .vertex_buffers
+            .iter()
+            .all(|layout| layout.stride % 4 == 0),
+        "WebGPU validates every declared vertex layout, including a source slot left empty after conversion"
+    );
+    let converted = pipeline
+        .vertex_buffers
+        .iter()
+        .find(|layout| layout.attrs.iter().any(|attribute| attribute.location == 1))
+        .expect("the converted vec3 layout");
+    assert_eq!(converted.stride, 12);
+}
+
+#[test]
 fn signed_normalized_conversion_clamps_at_minus_one() {
     // ES 3.0 §2.9.1: signed normalized is max(c / (2^(b-1) - 1), -1), so -128/127 clamps to -1.0 and
     // 127 is exactly 1.0.
