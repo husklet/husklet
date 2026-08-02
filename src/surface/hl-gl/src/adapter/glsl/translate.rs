@@ -636,6 +636,11 @@ impl StageSources<'_> {
                     d.ty, d.name
                 ));
             }
+        } else if let Some(output) = fragouts.first() {
+            fs_out.push_str(&format!(
+                "layout(location = 0) out {} {frag_name};\n",
+                output.ty
+            ));
         } else {
             fs_out.push_str(&format!("layout(location = 0) out vec4 {frag_name};\n"));
         }
@@ -919,7 +924,22 @@ impl Source<'_> {
 
 #[cfg(test)]
 mod orientation_tests {
-    use super::{Source, Translator};
+    use super::{Source, StageSources, Translator};
+
+    #[test]
+    fn single_integer_fragment_output_preserves_its_scalar_class() {
+        let vertex = "attribute vec4 position; void main() { gl_Position = position; }";
+        for (ty, value) in [("ivec4", "ivec4(1)"), ("uvec4", "uvec4(1u)")] {
+            let fragment = format!(
+                "#version 300 es\nprecision highp float;\nlayout(location = 0) out {ty} color;\nvoid main() {{ color = {value}; }}"
+            );
+            let (_, translated) = StageSources::new(vertex, &fragment).translate_render();
+            assert!(
+                translated.contains(&format!("layout(location = 0) out {ty} color;")),
+                "{translated}"
+            );
+        }
+    }
 
     /// GL clips to `-w <= z <= w`, the host to `0 <= z <= w`. Without the remap every vertex at
     /// negative clip z is clipped away before rasterization, so a full-screen triangle at
