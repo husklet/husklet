@@ -187,8 +187,11 @@ impl Device {
             //
             // `error` level because a release build compiles out everything below it, and this is
             // precisely the line someone needs from a shipped driver.
-            hl_log::hl_error!(
+            hl_log::hl_verdict!(
                 hl_log::tag::VULKAN,
+                "command_buffer.refused",
+                buffer = command_buffer,
+                reason = %error;
                 "command buffer {:#x} refused at record time: {}",
                 command_buffer,
                 error

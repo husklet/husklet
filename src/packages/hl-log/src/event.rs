@@ -202,6 +202,23 @@ pub fn emit_event(
 ///
 /// The record and the sentence carry the same fields, so a person reading stderr and a tool reading the
 /// events channel are looking at one fact rather than two descriptions of it.
+/// A verdict whose human half is the caller's own sentence rather than a rendering of its fields.
+///
+/// The record and the sentence are the same fact for two readers, and the sentence is where the
+/// reasoning lives — a good diagnostic says what the refusal costs and what to look at next, which no
+/// set of key-value pairs reproduces.
+pub fn emit_verdict_with(
+    tags: Tags,
+    event: &str,
+    module: &str,
+    line: u32,
+    fields: &[(&str, Value)],
+    human: std::fmt::Arguments,
+) {
+    emit_event(tags, Level::Error, event, module, line, fields);
+    crate::emit::emit(tags, Level::Error, module, line, human);
+}
+
 pub fn emit_verdict(tags: Tags, event: &str, module: &str, line: u32, fields: &[(&str, Value)]) {
     emit_event(tags, Level::Error, event, module, line, fields);
     // The human half. Rendered here rather than at the call site so the two cannot drift, and so a

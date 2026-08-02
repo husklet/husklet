@@ -51,7 +51,7 @@ mod timing;
 pub use config::Config;
 pub use counters::Counters;
 pub use emit::emit;
-pub use event::{emit_event, emit_verdict, Value};
+pub use event::{emit_event, emit_verdict, emit_verdict_with, Value};
 pub use level::Level;
 pub use sink::{DiscardSink, Events, Output, Sink, StderrSink};
 pub use state::{Logging, Profiling};

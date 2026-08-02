@@ -387,15 +387,10 @@ macro_rules! hl_verdict {
     ($tag:expr, $event:expr) => {
         $crate::hl_verdict!($tag, $event,)
     };
-    ($tag:expr, $event:expr, $($fields:tt)*) => {{
-        let fields = $crate::__hl_fields!($($fields)*);
-        $crate::emit_verdict(
-            $crate::Tags::from($tag),
-            $event,
-            module_path!(),
-            line!(),
-            &fields,
-        );
+    ($tag:expr, $event:expr, $($rest:tt)*) => {{
+        let __hl_tag = $crate::Tags::from($tag);
+        let __hl_event = $event;
+        $crate::__hl_verdict_go!(__hl_tag, __hl_event, [] $($rest)*)
     }};
 }
 
@@ -407,4 +402,72 @@ macro_rules! hl_verdict {
             let _ = (&$tag, &$event $(, &$value)*);
         }
     }};
+}
+
+/// The verdict muncher.
+///
+/// Separate from [`__hl_fields`] because a verdict may carry a human sentence after `;`, and a `tt`
+/// repetition that could swallow the `;` is ambiguous to the macro parser. The separator therefore has
+/// to be matched explicitly everywhere a field can end, which is why there are three arms per field
+/// form rather than one.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __hl_verdict_go {
+    ($tag:ident, $event:ident, [$($acc:expr),*] $key:ident = % $value:expr, $($rest:tt)*) => {
+        $crate::__hl_verdict_go!($tag, $event, [$($acc,)* (stringify!($key), $crate::Value::Text(format!("{}", $value)))] $($rest)*)
+    };
+    ($tag:ident, $event:ident, [$($acc:expr),*] $key:ident = % $value:expr ; $($human:tt)+) => {
+        $crate::emit_verdict_with(
+            $tag, $event, module_path!(), line!(),
+            &[$($acc,)* (stringify!($key), $crate::Value::Text(format!("{}", $value)))],
+            format_args!($($human)+),
+        )
+    };
+    ($tag:ident, $event:ident, [$($acc:expr),*] $key:ident = % $value:expr) => {
+        $crate::emit_verdict(
+            $tag, $event, module_path!(), line!(),
+            &[$($acc,)* (stringify!($key), $crate::Value::Text(format!("{}", $value)))],
+        )
+    };
+    ($tag:ident, $event:ident, [$($acc:expr),*] $key:ident = ? $value:expr, $($rest:tt)*) => {
+        $crate::__hl_verdict_go!($tag, $event, [$($acc,)* (stringify!($key), $crate::Value::Text(format!("{:?}", $value)))] $($rest)*)
+    };
+    ($tag:ident, $event:ident, [$($acc:expr),*] $key:ident = ? $value:expr ; $($human:tt)+) => {
+        $crate::emit_verdict_with(
+            $tag, $event, module_path!(), line!(),
+            &[$($acc,)* (stringify!($key), $crate::Value::Text(format!("{:?}", $value)))],
+            format_args!($($human)+),
+        )
+    };
+    ($tag:ident, $event:ident, [$($acc:expr),*] $key:ident = ? $value:expr) => {
+        $crate::emit_verdict(
+            $tag, $event, module_path!(), line!(),
+            &[$($acc,)* (stringify!($key), $crate::Value::Text(format!("{:?}", $value)))],
+        )
+    };
+    ($tag:ident, $event:ident, [$($acc:expr),*] $key:ident = $value:expr, $($rest:tt)*) => {
+        $crate::__hl_verdict_go!($tag, $event, [$($acc,)* (stringify!($key), $crate::Value::from($value))] $($rest)*)
+    };
+    ($tag:ident, $event:ident, [$($acc:expr),*] $key:ident = $value:expr ; $($human:tt)+) => {
+        $crate::emit_verdict_with(
+            $tag, $event, module_path!(), line!(),
+            &[$($acc,)* (stringify!($key), $crate::Value::from($value))],
+            format_args!($($human)+),
+        )
+    };
+    ($tag:ident, $event:ident, [$($acc:expr),*] $key:ident = $value:expr) => {
+        $crate::emit_verdict(
+            $tag, $event, module_path!(), line!(),
+            &[$($acc,)* (stringify!($key), $crate::Value::from($value))],
+        )
+    };
+
+    ($tag:ident, $event:ident, [$($acc:expr),*]) => {
+        $crate::emit_verdict($tag, $event, module_path!(), line!(), &[$($acc),*])
+    };
+    ($tag:ident, $event:ident, [$($acc:expr),*] ; $($human:tt)+) => {
+        $crate::emit_verdict_with(
+            $tag, $event, module_path!(), line!(), &[$($acc),*], format_args!($($human)+),
+        )
+    };
 }

@@ -420,8 +420,14 @@ impl WgpuExecutor {
                     // not the last word: either the oracle should refuse too, or this path should split
                     // the pass and perform the work. A NACK is the honest state until that is decided.
                     other => {
-                        hl_log::hl_warn!(
+                        // A VERDICT: the guest asked for this work and it will not happen, and the ack
+                        // byte the guest receives cannot say which op it was. Previously `hl_warn!`,
+                        // which compiles out of release entirely — the build where this matters — and
+                        // was masked behind a tag nobody had opened even in debug.
+                        hl_log::hl_verdict!(
                             hl_log::tag::WGPU,
+                            "encoder_op.refused_in_pass",
+                            op = ?std::mem::discriminant(other);
                             "encoder op inside a render pass cannot be executed there: {:?}",
                             std::mem::discriminant(other)
                         );

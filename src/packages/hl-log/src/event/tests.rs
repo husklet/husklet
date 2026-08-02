@@ -12,6 +12,15 @@ impl Sink for Collect {
     }
 }
 
+/// The global gate and both sinks are process-wide, so every test that touches them takes turns. Two
+/// tests originally skipped this and read each other's records — the harness measuring its neighbour,
+/// which is the same failure these events exist to make visible.
+static SERIAL: Mutex<()> = Mutex::new(());
+
+fn turn() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL.lock().unwrap_or_else(|error| error.into_inner())
+}
+
 fn collector() -> (Arc<Mutex<Vec<String>>>, Box<Collect>) {
     let lines = Arc::new(Mutex::new(Vec::new()));
     (lines.clone(), Box::new(Collect(lines)))
@@ -37,6 +46,7 @@ fn fields_keep_their_types() {
 /// an embedded newline used to split a line in two, and two unparseable halves are worse than a sentence.
 #[test]
 fn a_hostile_payload_stays_one_parseable_line() {
+    let _turn = turn();
     let (lines, sink) = collector();
     crate::sink::Events::global().set(sink);
     emit_event(
@@ -73,6 +83,7 @@ fn a_non_finite_float_does_not_break_the_record() {
 /// sites did this come from" — the question that voided three conclusions in one session.
 #[test]
 fn every_record_names_where_it_came_from() {
+    let _turn = turn();
     let (lines, sink) = collector();
     crate::sink::Events::global().set(sink);
     emit_event(tag::VULKAN.into(), Level::Warn, "thing.happened", "a::b", 42, &[]);
@@ -92,15 +103,11 @@ fn every_record_names_where_it_came_from() {
     assert!(line.contains("\"thread\":"), "records carry a thread: {line}");
 }
 
-/// The global gate and both sinks are process-wide, so these tests take turns. Without this they
-/// interleave and each reads another's records — a harness that measures its neighbour.
-static SERIAL: Mutex<()> = Mutex::new(());
-
 /// An event is gated exactly like every other macro: a closed tag emits nothing. The structured channel
 /// is a second rendering of the same diagnostic, not a second policy for it.
 #[test]
 fn a_closed_tag_emits_no_event() {
-    let _turn = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let _turn = turn();
     let (lines, sink) = collector();
     crate::sink::Events::global().set(sink);
     crate::Logging::global().set(crate::Tags::NONE);
@@ -118,7 +125,7 @@ fn a_closed_tag_emits_no_event() {
 /// the test above, which would otherwise pass against a macro that emits nothing ever.
 #[test]
 fn an_open_tag_emits_the_record() {
-    let _turn = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let _turn = turn();
     let (lines, sink) = collector();
     crate::sink::Events::global().set(sink);
     crate::Logging::global().set(tag::GPU);
@@ -147,7 +154,7 @@ fn an_open_tag_emits_the_record() {
 /// the record for whoever is consuming one.
 #[test]
 fn a_verdict_is_not_maskable_and_reaches_both_channels() {
-    let _turn = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let _turn = turn();
     let (records, event_sink) = collector();
     let (sentences, human_sink) = collector();
     crate::sink::Events::global().set(event_sink);
@@ -171,6 +178,45 @@ fn a_verdict_is_not_maskable_and_reaches_both_channels() {
     assert!(
         sentences[0].contains("op=ClearRect") && sentences[0].contains("pass=3"),
         "the sentence carries the same fields as the record: {}",
+        sentences[0]
+    );
+}
+
+/// A verdict may carry the caller's own sentence after `;`, and it must keep BOTH halves distinct: the
+/// fields for a tool, the prose for a person. Converting a rich diagnostic to bare key-value pairs would
+/// throw away the reasoning the good ones carry — what the refusal costs and what to look at next — and
+/// the whole point of the second channel is to add a reader, not to replace one.
+#[test]
+fn a_verdict_keeps_its_human_sentence_and_its_fields() {
+    let _turn = turn();
+    let (records, event_sink) = collector();
+    let (sentences, human_sink) = collector();
+    crate::sink::Events::global().set(event_sink);
+    crate::sink::Output::global().set(human_sink);
+    crate::Logging::global().set(crate::Tags::NONE);
+
+    let buffer = 0x21u64;
+    crate::hl_verdict!(
+        tag::VULKAN,
+        "command_buffer.refused",
+        buffer = buffer,
+        reason = %"incompatible formats";
+        "command buffer {:#x} refused at record time: {}",
+        buffer,
+        "incompatible formats"
+    );
+
+    crate::sink::Events::global().reset();
+    crate::sink::Output::global().reset();
+
+    let records = records.lock().unwrap();
+    assert!(records[0].contains(r#""buffer":33"#), "typed field: {}", records[0]);
+    assert!(records[0].contains(r#""reason":"incompatible formats""#), "{}", records[0]);
+
+    let sentences = sentences.lock().unwrap();
+    assert!(
+        sentences[0].contains("command buffer 0x21 refused at record time"),
+        "the author's sentence survives verbatim: {}",
         sentences[0]
     );
 }

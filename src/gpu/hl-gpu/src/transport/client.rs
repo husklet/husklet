@@ -372,8 +372,15 @@ impl RemoteCommandSink {
                     // The single most explanatory line available for a guest-visible DEVICE_LOST: the
                     // host ran the frame and refused it. Latched per distinct ack per generation.
                     if self.first_report(REPORT_NACK, nack) {
-                        hl_log::hl_error!(
+                        hl_log::hl_verdict!(
                             hl_log::tag::TRANSPORT,
+                            "frame.rejected",
+                            ack = nack,
+                            submit = submit,
+                            generation = self.generation,
+                            surface = self.surface.id,
+                            commands = current.len(),
+                            bytes = ir.len();
                             "host executor REJECTED frame ack={} submit={} generation={} surface={} \
                              commands={} bytes={} (first for this ack on this connection)",
                             nack,
