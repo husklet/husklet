@@ -44,7 +44,27 @@ u32_enum!(
     } "TextureFormat"
 );
 
+/// Numeric class used by operations whose source and destination formats must agree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextureNumericClass {
+    Float,
+    Uint,
+    Sint,
+}
+
 impl TextureFormat {
+    pub fn numeric_class(self) -> TextureNumericClass {
+        match self {
+            TextureFormat::Rgba8Uint | TextureFormat::R8Uint | TextureFormat::Rg8Uint => {
+                TextureNumericClass::Uint
+            }
+            TextureFormat::Rgba8Sint | TextureFormat::R8Sint | TextureFormat::Rg8Sint => {
+                TextureNumericClass::Sint
+            }
+            _ => TextureNumericClass::Float,
+        }
+    }
+
     /// Bytes per texel for the color formats the software backend can materialize.
     pub fn bytes_per_texel(self) -> Option<usize> {
         Some(match self {

@@ -22,7 +22,7 @@
 use std::collections::HashMap;
 
 use hl_gpu::protocol::model::descriptor::{Extent3d, Mirror, Origin3d, TextureSubresource};
-use hl_gpu::protocol::model::enums::{Filter, TextureAspect};
+use hl_gpu::protocol::model::enums::{Filter, TextureAspect, TextureNumericClass};
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
 
@@ -119,33 +119,11 @@ fn filterable(format: hl_gpu::protocol::model::enums::TextureFormat) -> bool {
 }
 
 fn integer(format: hl_gpu::protocol::model::enums::TextureFormat) -> bool {
-    use hl_gpu::protocol::model::enums::TextureFormat as F;
-    matches!(
-        format,
-        F::R8Uint | F::R8Sint | F::Rg8Uint | F::Rg8Sint | F::Rgba8Uint | F::Rgba8Sint
-    )
+    format.numeric_class() != TextureNumericClass::Float
 }
 
 fn signed_integer(format: hl_gpu::protocol::model::enums::TextureFormat) -> bool {
-    use hl_gpu::protocol::model::enums::TextureFormat as F;
-    matches!(format, F::R8Sint | F::Rg8Sint | F::Rgba8Sint)
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum NumericClass {
-    Float,
-    Uint,
-    Sint,
-}
-
-fn numeric_class(format: hl_gpu::protocol::model::enums::TextureFormat) -> NumericClass {
-    if !integer(format) {
-        NumericClass::Float
-    } else if signed_integer(format) {
-        NumericClass::Sint
-    } else {
-        NumericClass::Uint
-    }
+    format.numeric_class() == TextureNumericClass::Sint
 }
 
 impl BlitCache {
@@ -494,18 +472,18 @@ impl WgpuExecutor {
                 Format::from(t.format).native(),
             )
         };
-        let (src_class, dst_class) = (numeric_class(src_fmt), numeric_class(dst_fmt));
+        let (src_class, dst_class) = (src_fmt.numeric_class(), dst_fmt.numeric_class());
         if src_class != dst_class {
             return Err(GpuError::Invalid(
                 "wgpu: blit source and destination numeric classes differ",
             ));
         }
-        if src_class != NumericClass::Float && filter == Filter::Linear {
+        if src_class != TextureNumericClass::Float && filter == Filter::Linear {
             return Err(GpuError::Unsupported(
                 "wgpu: linear filtering is invalid for an integer blit source",
             ));
         }
-        if src_class == NumericClass::Float && !can_filter && filter == Filter::Linear {
+        if src_class == TextureNumericClass::Float && !can_filter && filter == Filter::Linear {
             return Err(GpuError::Unsupported(
                 "wgpu: linear blit filter for a non-filterable source format",
             ));
@@ -541,7 +519,7 @@ impl WgpuExecutor {
             return Err(GpuError::OutOfBounds);
         }
 
-        let integer_render = src_class != NumericClass::Float;
+        let integer_render = src_class != TextureNumericClass::Float;
         if integer_render {
             let source = texture::WgpuTexture::get(res, src)?;
             let destination = texture::WgpuTexture::get(res, dst)?;

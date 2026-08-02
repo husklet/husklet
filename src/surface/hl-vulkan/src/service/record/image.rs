@@ -34,23 +34,6 @@ fn ir_aspect(format: TextureFormat, aspect_mask: u32, what: &'static str) -> Res
     }))
 }
 
-/// The colour formats whose texels are raw integers.
-///
-/// Vulkan requires a blit's two formats to share a numeric class — a signed-integer source needs a
-/// signed-integer destination, an unsigned one an unsigned destination — so a mixed integer/float pair is
-/// the APPLICATION's error. A matched integer pair is legal Vulkan and this driver still cannot serve it,
-/// because the host performs a blit by rendering: measured directly, an integer view cannot bind to the
-/// blit's filterable float sampler and the blit shader's float output is incompatible with an integer
-/// colour target. Those are two different answers and are reported as two different errors.
-const INTEGER_FORMATS: &[TextureFormat] = &[
-    TextureFormat::R8Uint,
-    TextureFormat::R8Sint,
-    TextureFormat::Rg8Uint,
-    TextureFormat::Rg8Sint,
-    TextureFormat::Rgba8Uint,
-    TextureFormat::Rgba8Sint,
-];
-
 /// The colour formats that support LINEAR filtering. The 32-bit float formats are absent: WebGPU makes
 /// them non-filterable without an optional feature, Vulkan requires the format to advertise linear
 /// filtering, and the host was measured refusing exactly these two.
@@ -76,10 +59,6 @@ const FILTERABLE: &[TextureFormat] = &[
     TextureFormat::Rg8Unorm,
     TextureFormat::Rgba16Float,
 ];
-
-fn is_integer(format: TextureFormat) -> bool {
-    INTEGER_FORMATS.contains(&format)
-}
 
 /// Refuse a region whose subresource does not exist on `image`. A copy is not a clear: clamping a
 /// too-large level or layer run would return the wrong texels rather than fewer of them, so this is a
@@ -322,19 +301,12 @@ pub fn cmd_blit_image(
     // texel-size change in both directions. Demanding identical formats was this surface's own rule, and
     // it refused the canonical case: blitting an image into a differently-formatted swapchain image.
     //
-    // The two refusals that remain are different in kind and say so. A mixed integer/float pair violates
-    // the specification's numeric-class rule and is the application's error. A MATCHED integer pair is
-    // legal Vulkan that this driver cannot serve, because the host blits by rendering and neither binds
-    // an integer view to a filterable sampler nor writes a float shader output into an integer target —
-    // an honest refusal here, where the caller can see it, rather than a device-validation failure later.
-    if is_integer(src_fmt) != is_integer(dst_fmt) {
+    // Vulkan requires both formats to have the same numeric class. Signed and unsigned integer formats
+    // are distinct classes just as integer and normalized/float formats are; the executor has matching
+    // sampler-less pipelines for valid Uint/Uint and Sint/Sint NEAREST pairs.
+    if src_fmt.numeric_class() != dst_fmt.numeric_class() {
         return Err(GpuError::Invalid(
             "vkCmdBlitImage: source and destination formats are not of the same numeric class",
-        ));
-    }
-    if is_integer(src_fmt) {
-        return Err(GpuError::Unsupported(
-            "vkCmdBlitImage: blit of an integer format",
         ));
     }
     // A format with no PACKED COLOUR TEXEL — every block-compressed format, and every depth/stencil one —

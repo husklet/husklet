@@ -1335,18 +1335,9 @@ fn a_format_with_no_packed_texel_is_refused_for_the_right_reason() {
     );
 }
 
-/// An INTEGER blit is refused, and the two reasons are reported as two different errors.
-///
-/// A mixed integer/float pair violates the specification's numeric-class rule and is the APPLICATION's
-/// mistake — `Invalid`. A matched integer pair is legal Vulkan that this driver cannot serve, because the
-/// host blits by rendering and neither binds an integer view to a filterable sampler nor writes a float
-/// shader output into an integer target — `Unsupported`. Collapsing those into one answer would tell an
-/// application it had made an error when the limitation is ours.
-///
-/// It matters that this is refused HERE. Before, a matched integer pair passed the format-equality check,
-/// lowered, and failed inside the executor as a device-validation error the caller could not attribute.
+/// Matched integer classes are legal and record; crossing numeric classes is invalid Vulkan.
 #[test]
-fn an_integer_blit_is_refused_and_says_whose_fault_it_is() {
+fn integer_blits_record_within_a_numeric_class_and_reject_mixed_classes() {
     let cases = [
         (
             vk_format::R8G8B8A8_UINT,
@@ -1357,11 +1348,23 @@ fn an_integer_blit_is_refused_and_says_whose_fault_it_is() {
         (
             vk_format::R8G8B8A8_UINT,
             vk_format::R8G8B8A8_UINT,
-            "matched integer pair",
+            "matched unsigned integer pair",
             true,
         ),
+        (
+            vk_format::R8G8B8A8_SINT,
+            vk_format::R8G8B8A8_SINT,
+            "matched signed integer pair",
+            true,
+        ),
+        (
+            vk_format::R8G8B8A8_UINT,
+            vk_format::R8G8B8A8_SINT,
+            "mixed integer classes",
+            false,
+        ),
     ];
-    for (src_format, dst_format, what, unsupported) in cases {
+    for (src_format, dst_format, what, should_record) in cases {
         let mut d = dev();
         let mut s = RecordingSink::with_full_caps();
         let a = create::create_image(
@@ -1399,11 +1402,77 @@ fn an_integer_blit_is_refused_and_says_whose_fault_it_is() {
             false,
             Mirror::NONE,
         );
-        match (unsupported, result) {
-            (true, Err(GpuError::Unsupported(_))) => {}
+        match (should_record, result) {
+            (true, Ok(())) => {
+                d.end_command_buffer(cb).unwrap();
+                submit::queue_submit(&mut d, &mut s, &[cb], None).unwrap();
+                let [Cmd::Submit(command_buffer)] = s.batches.last().unwrap().as_slice() else {
+                    panic!("{what}: expected one submitted command buffer");
+                };
+                assert!(
+                    matches!(
+                        command_buffer.encoder.as_slice(),
+                        [Enc::BlitTexture { src, dst, filter: Filter::Nearest, .. }]
+                            if *src == img_ir(&d, a) && *dst == img_ir(&d, b)
+                    ),
+                    "{what}: expected one nearest blit, got {:?}",
+                    command_buffer.encoder
+                );
+            }
             (false, Err(GpuError::Invalid(_))) => {}
             (_, other) => panic!("{what}: unexpected {other:?}"),
         }
+    }
+}
+
+#[test]
+fn a_linear_integer_blit_is_refused_but_nearest_records() {
+    for format in [vk_format::R8G8B8A8_UINT, vk_format::R8G8B8A8_SINT] {
+        let attempt = |linear| {
+            let mut d = dev();
+            let mut s = RecordingSink::with_full_caps();
+            let src = create::create_image(
+                &mut d,
+                &mut s,
+                4,
+                4,
+                format,
+                vk_image_usage::TRANSFER_SRC,
+                1,
+            )
+            .unwrap();
+            let dst = create::create_image(
+                &mut d,
+                &mut s,
+                4,
+                4,
+                format,
+                vk_image_usage::TRANSFER_DST,
+                1,
+            )
+            .unwrap();
+            let cb = recording_cb(&mut d);
+            record::cmd_blit_image(
+                &mut d,
+                cb,
+                src,
+                dst,
+                SubresourceLayers::base(),
+                SubresourceLayers::base(),
+                Origin3d { x: 0, y: 0, z: 0 },
+                Extent3d { width: 4, height: 4, depth: 1 },
+                Origin3d { x: 0, y: 0, z: 0 },
+                Extent3d { width: 4, height: 4, depth: 1 },
+                linear,
+                Mirror::NONE,
+            )
+        };
+
+        assert!(attempt(false).is_ok(), "nearest integer blit must record");
+        assert!(
+            matches!(attempt(true), Err(GpuError::Unsupported(message)) if message.contains("filter")),
+            "linear integer blit must be rejected as an unsupported filter"
+        );
     }
 }
 
