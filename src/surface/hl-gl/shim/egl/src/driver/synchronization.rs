@@ -194,6 +194,39 @@ pub extern "C" fn glMapBufferRange(
         "glMapBufferRange",
         &format!("target={target:#x} offset={offset} length={length} access={access:#x}"),
     );
+    if access & GL_MAP_READ_BIT != 0 {
+        if let Err(error) = GlobalState::gpu_submit(move |group, sink| group.gl.flush(sink)) {
+            GlobalState::access(|state| state.set_egl_error(egl_error_from_gpu_error(&error)));
+            return core::ptr::null_mut();
+        }
+        let read = GlobalState::gpu_io(std::time::Duration::from_secs(30), move |group, sink| {
+            swap::schedule_transform_feedback_reads(&group.gl, sink)
+        });
+        let Ok(read) = read else {
+            GlobalState::context(|group| group.gl.set_gl_error(GL_INVALID_OPERATION));
+            return core::ptr::null_mut();
+        };
+        let bytes = read
+            .observations
+            .into_iter()
+            .filter_map(|observation| match observation {
+                crate::state::Observation::Read(bytes) => Some(bytes),
+                _ => None,
+            })
+            .collect();
+        let applied = GlobalState::context(|group| {
+            Some(swap::apply_transform_feedback_reads(
+                &mut group.gl,
+                read.value,
+                bytes,
+            ))
+        })
+        .unwrap_or(Err(hl_gpu::GpuError::Invalid("EGL context")));
+        if applied.is_err() {
+            GlobalState::context(|group| group.gl.set_gl_error(GL_INVALID_OPERATION));
+            return core::ptr::null_mut();
+        }
+    }
     GlobalState::context(|s| {
         match map::map_buffer_range(&mut s.gl, target, offset, length, access) {
             Some((name, off)) => {

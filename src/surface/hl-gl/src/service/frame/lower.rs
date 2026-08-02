@@ -39,8 +39,17 @@ pub(super) fn lower_draw_n(
     let d = d.clone();
     // `glCullFace(GL_FRONT_AND_BACK)` discards every triangle in GL. There is no WebGPU cull mode for it,
     // so the draw produces no primitives and is dropped here rather than lowered as a back-face cull.
-    if d.discards_every_primitive() {
+    if d.discards_every_primitive() && d.transform_feedback.is_none() {
         return None;
+    }
+    if d.transform_feedback
+        .as_ref()
+        .is_some_and(|capture| capture.vertices == 0)
+    {
+        return Some(DrawCommands {
+            copies: Vec::new(),
+            ops: Vec::new(),
+        });
     }
     let prog_name = if d.prog != 0 {
         d.prog
@@ -459,8 +468,8 @@ pub(super) fn lower_draw_n(
                     module: fs_id,
                     entry: "fmain".into(),
                 }),
-                vertex_buffers: vbs,
-                color_targets,
+                vertex_buffers: vbs.clone(),
+                color_targets: color_targets.clone(),
                 depth,
                 topology,
                 cull,
@@ -529,6 +538,7 @@ pub(super) fn lower_draw_n(
         });
     }
     let mut bind_group_ir = 0u32;
+    let mut app_bind_entries = Vec::new();
     if has_bg {
         bind_group_ir = ctx.alloc_bind_group_ir().ok()?;
         // Binding scheme (single wgpu bind-group namespace, matching `adapter::glsl`'s emitted
@@ -560,6 +570,7 @@ pub(super) fn lower_draw_n(
                 resource: BindResource::Sampler { id: tb.samp_ir },
             });
         }
+        app_bind_entries = entries.clone();
         cmds.push(Cmd::CreateBindGroup(
             bind_group_ir,
             BindGroupDesc { set: 0, entries },
@@ -595,7 +606,28 @@ pub(super) fn lower_draw_n(
             });
         }
     }
-    let mut ops: Vec<Enc> = Vec::new();
+    let capture_ops = lower_transform_feedback(
+        ctx,
+        &d,
+        &prog,
+        CaptureInputs {
+            layouts: &vbs,
+            slot_ir: &slot_ir,
+            slot_base: &slot_base,
+            client_slots: &client_slots,
+            index_ir,
+            expanded_indices: expanded_indices.is_some(),
+            app_bind_entries: &app_bind_entries,
+            color_targets: &color_targets,
+            depth_format: depth_fmt,
+            sample_count,
+        },
+        cmds,
+    );
+    let mut ops: Vec<Enc> = capture_ops.unwrap_or_default();
+    if d.discards_every_primitive() {
+        return Some(DrawCommands { copies, ops });
+    }
     ops.push(Enc::SetPipeline(pipeline_ir));
     ops.push(emit_viewport(&d, tw, th, bottom_up));
     ops.push(emit_scissor(&d, tw, th, bottom_up));

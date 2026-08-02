@@ -521,7 +521,7 @@ impl StageSources<'_> {
                 let mut t = it.clone();
                 NormalizedSource::new(&mut t).strip_precision();
                 Declarations::rewrite_integer_sampler_fetches(&mut t, samps);
-        Declarations::rewrite_sampler_refs(&mut t, samps);
+                Declarations::rewrite_sampler_refs(&mut t, samps);
                 NormalizedSource::new(&mut t).lower_texture_builtins();
                 out.push_str(&t);
                 out.push('\n');
@@ -554,9 +554,14 @@ impl StageSources<'_> {
                 .get(&a.name)
                 .copied()
                 .unwrap_or_else(|| Declarations::reserve_run(&mut used, a.location_span()));
+            let name = if a.arr > 0 {
+                format!("{}[{}]", a.name, a.arr)
+            } else {
+                a.name.clone()
+            };
             vs_out.push_str(&format!(
                 "layout(location = {location}) in {} {};\n",
-                a.ty, a.name
+                a.ty, name
             ));
         }
         // Varyings are numbered by span for the same reason, and the fragment stage below repeats this
@@ -568,9 +573,14 @@ impl StageSources<'_> {
             } else {
                 ""
             };
+            let name = if v.arr > 0 {
+                format!("{}[{}]", v.name, v.arr)
+            } else {
+                v.name.clone()
+            };
             vs_out.push_str(&format!(
                 "layout(location = {varying_location}) {flat}out {} {};\n",
-                v.ty, v.name
+                v.ty, name
             ));
             varying_location += v.location_span();
         }
@@ -612,9 +622,14 @@ impl StageSources<'_> {
             } else {
                 ""
             };
+            let name = if v.arr > 0 {
+                format!("{}[{}]", v.name, v.arr)
+            } else {
+                v.name.clone()
+            };
             fs_out.push_str(&format!(
                 "layout(location = {varying_location}) {flat}in {} {};\n",
-                v.ty, v.name
+                v.ty, name
             ));
             varying_location += v.location_span();
         }
@@ -925,6 +940,15 @@ impl Source<'_> {
 #[cfg(test)]
 mod orientation_tests {
     use super::{Source, StageSources, Translator};
+
+    #[test]
+    fn translated_interfaces_preserve_array_declarators() {
+        let vertex = "#version 300 es\nin vec4 position; out float values[7]; void main(){ gl_Position=position; values[0]=1.0; }";
+        let fragment = "#version 300 es\nprecision highp float; in float values[7]; out vec4 color; void main(){ color=vec4(values[0]); }";
+        let (vertex, fragment) = StageSources::new(vertex, fragment).translate_render();
+        assert!(vertex.contains("out float values[7];"), "{vertex}");
+        assert!(fragment.contains("in float values[7];"), "{fragment}");
+    }
 
     #[test]
     fn single_integer_fragment_output_preserves_its_scalar_class() {

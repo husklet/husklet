@@ -11,18 +11,14 @@ use crate::model::context::IndexedBinding;
 pub struct TransformFeedbackObj {
     pub active: bool,
     pub paused: bool,
+    pub primitive_mode: u32,
+    pub cursors: [u64; 4],
     pub bindings: [Option<IndexedBinding>; 4],
 }
 
-/// The per-context transform-feedback table + the bound object + the per-program varying capture list
-/// (`glTransformFeedbackVaryings`, round-tripped through `glGetTransformFeedbackVarying`).
-///
-/// HONEST GAP (documented, not faked): the object LIFECYCLE (bind/begin/pause/resume/end) and the varying
-/// NAME reflection are real observable state, but per-vertex varying DATA capture into the bound
-/// `GL_TRANSFORM_FEEDBACK_BUFFER` is NOT modeled — this deferred driver lowers draws to GPU IR and has no
-/// CPU vertex-shader executor to evaluate each vertex's varyings, so the capture buffer is left untouched
-/// rather than filled with fabricated values. See `hl_wip/tests/gl_transform_feedback.rs`, which drives the
-/// lifecycle + reflection and asserts the buffer stays its sentinel (no fake capture).
+/// The per-context transform-feedback object table and the pending per-program varying lists supplied to
+/// `glTransformFeedbackVaryings`. A successful program link owns the reflected capture layout; keeping the
+/// pending list here preserves the GL rule that changing it does not mutate the last linked executable.
 #[derive(Debug)]
 pub struct TransformFeedbacks {
     reserved: HashSet<u32>,
@@ -134,6 +130,26 @@ impl TransformFeedbacks {
             o.active = active;
             o.paused = paused;
         }
+    }
+
+    pub fn begin(&mut self, primitive_mode: u32) {
+        if let Some(object) = self.bound_mut() {
+            object.active = true;
+            object.paused = false;
+            object.primitive_mode = primitive_mode;
+            object.cursors = [0; 4];
+        }
+    }
+
+    pub fn advance(&mut self, bytes: [u64; 4]) -> Option<[u64; 4]> {
+        let object = self.bound_mut()?;
+        let previous = object.cursors;
+        let mut next = previous;
+        for (slot, amount) in next.iter_mut().zip(bytes) {
+            *slot = slot.checked_add(amount)?;
+        }
+        object.cursors = next;
+        Some(previous)
     }
 
     /// Record a program's `glTransformFeedbackVaryings` capture list.

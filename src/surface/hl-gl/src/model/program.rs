@@ -4,13 +4,20 @@
 //! snapshot mutable GL state when recorded so deferred frame lowering observes the original resources.
 
 mod draw;
+mod feedback;
 mod link;
 mod object;
 mod reflection;
 mod shader;
 mod table;
 
-pub use draw::{Attr, BufferSnapshot, ClientArray, DrawCall, TargetSnapshot, TextureSnapshot};
+pub use draw::{
+    Attr, BufferSnapshot, ClientArray, DrawCall, TargetSnapshot, TextureSnapshot,
+    TransformFeedbackCapture,
+};
+pub use feedback::{
+    CaptureScalar, CaptureScalarKind, TransformFeedbackLayout, TransformFeedbackVarying,
+};
 pub use object::Program;
 pub use reflection::UniformLocation;
 pub use shader::Shader;

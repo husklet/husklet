@@ -240,6 +240,7 @@ pub enum UniformError {
     Samplers(usize),
     ConflictingDeclaration(String),
     AttributeLocation(String),
+    TransformFeedback(String),
     /// A compute shader declared a DEFAULT-BLOCK uniform. The compute path binds only the
     /// `glBindBufferBase`d UBO/SSBO bindings, so such a uniform would silently read zero — hence the
     /// advertised `GL_MAX_COMPUTE_UNIFORM_COMPONENTS = 0` and this loud refusal at link.
@@ -249,7 +250,9 @@ pub enum UniformError {
     /// body, so without this refusal a shader with a dropped brace became `void main() {}`: the host
     /// front end accepted it, the pipeline built, the draw ran, nothing was written, and no layer
     /// reported a thing. A wrong render with a clean status is worse than a refused one.
-    MainBody { stage: &'static str },
+    MainBody {
+        stage: &'static str,
+    },
 }
 
 impl std::fmt::Display for UniformError {
@@ -282,6 +285,7 @@ impl std::fmt::Display for UniformError {
             Self::AttributeLocation(name) => {
                 write!(f, "attribute `{name}` has a conflicting or invalid location")
             }
+            Self::TransformFeedback(reason) => write!(f, "transform feedback: {reason}"),
             Self::MainBody { stage } => write!(
                 f,
                 "{stage} shader has no complete `void main()` body — check for an unclosed brace"

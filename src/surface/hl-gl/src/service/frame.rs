@@ -30,8 +30,7 @@ use crate::model::program::DrawCall;
 use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BlendState, BufferDesc, ColorAttachment,
-    ColorTargetState, DepthAttachment, DepthState, Extent3d, Mirror, Origin3d,
-    RenderPipelineDesc,
+    ColorTargetState, DepthAttachment, DepthState, Extent3d, Mirror, Origin3d, RenderPipelineDesc,
     SamplerDesc, ShaderRef, StencilFaceState, SurfaceDesc, TextureDesc, TextureSubresource,
     VertexAttr, VertexLayout,
 };
@@ -664,6 +663,7 @@ impl Frame {
     }
 }
 
+mod feedback;
 /// Partition the draw-list into maximal contiguous runs that share a bound framebuffer, in record order,
 /// as `(fbo, start, end)` half-open index ranges into `draws`. Each run becomes one render pass targeting
 /// that FBO's color attachment (fbo `0` = the default window framebuffer). A clear carries the FBO bound
@@ -679,6 +679,7 @@ pub(crate) mod refusal;
 mod texture;
 mod vertex;
 
+use feedback::*;
 use geometry::*;
 use lower::*;
 use passes::*;

@@ -202,6 +202,14 @@ pub struct IndexedBinding {
     pub size: isize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TransformFeedbackReadback {
+    pub(crate) ir: u32,
+    pub(crate) buffer: u32,
+    pub(crate) offset: usize,
+    pub(crate) len: usize,
+}
+
 /// One named uniform block of a program (`glGetUniformBlockIndex`/`glUniformBlockBinding`). The block's
 /// member layout + data size live on the [`super::program::Program`] (the single implicit block this
 /// model reflects); this record carries the block's declared name and its app-assigned binding point.

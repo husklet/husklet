@@ -1,5 +1,6 @@
 //! Linked and unlinked program state.
 
+use super::TransformFeedbackLayout;
 use crate::adapter::glsl::Uni;
 use std::collections::BTreeMap;
 
@@ -22,6 +23,11 @@ pub struct Program {
     /// `GLSL_MAGIC`), lowered to two `CreateShader`s at swap — the host (naga) compiles the source.
     pub vs_ir: Option<Vec<u32>>,
     pub fs_ir: Option<Vec<u32>>,
+    /// The varyings requested for the next link and the linked, typed capture layout/source.
+    pub transform_feedback_names: Vec<String>,
+    pub transform_feedback_mode: u32,
+    pub transform_feedback_layout: Option<TransformFeedbackLayout>,
+    pub transform_feedback_ir: Option<Vec<u32>>,
     /// Attribute locations requested through `glBindAttribLocation` for the next link.
     pub attrib_bindings: BTreeMap<String, u32>,
     /// Active attribute name → location produced by the most recent successful link.

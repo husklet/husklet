@@ -201,10 +201,9 @@ pub fn bind_transform_feedback(ctx: &mut GlContext, target: u32, id: u32) {
         .enumerate()
     {
         if let Some(binding) = binding {
-            ctx.local.indexed_buffers.insert(
-                (GL_TRANSFORM_FEEDBACK_BUFFER, index as u32),
-                binding,
-            );
+            ctx.local
+                .indexed_buffers
+                .insert((GL_TRANSFORM_FEEDBACK_BUFFER, index as u32), binding);
         }
     }
 }
@@ -237,7 +236,7 @@ impl GlContext {
             self.set_gl_error(GL_INVALID_OPERATION);
             return;
         }
-        self.local.transform_feedbacks.set_active(true, false);
+        self.local.transform_feedbacks.begin(primitive_mode);
     }
 
     /// `glEndTransformFeedback()`. Not active → `GL_INVALID_OPERATION`.
@@ -288,7 +287,13 @@ pub fn transform_feedback_varyings(
     }
     ctx.local
         .transform_feedbacks
-        .set_varyings(program, names, buffer_mode);
+        .set_varyings(program, names.clone(), buffer_mode);
+    if let Some(linked) = ctx.programs.get_mut(program) {
+        linked.transform_feedback_names = names;
+        linked.transform_feedback_mode = buffer_mode;
+        // glTransformFeedbackVaryings applies to the next link. The old executable remains usable until
+        // that link succeeds, so do not replace its linked capture layout here.
+    }
 }
 
 /// The captured varying name at `index` for `program` (`glGetTransformFeedbackVarying`), or `None`
@@ -297,25 +302,20 @@ pub fn transform_feedback_varying(ctx: &GlContext, program: u32, index: u32) -> 
     transform_feedback_varying_info(ctx, program, index).map(|(name, _, _)| name)
 }
 
-/// Name, array size, and GL type reported by `glGetTransformFeedbackVarying`. The fixed built-in point
-/// size is a scalar float; other varyings retain the existing best-effort vec4 report until general shader
-/// output reflection is modeled.
+/// Name, array size, and GL type reported by `glGetTransformFeedbackVarying` from the last successfully
+/// linked executable. Pre-link changes made by `glTransformFeedbackVaryings` must not leak into queries.
 pub fn transform_feedback_varying_info(
     ctx: &GlContext,
     program: u32,
     index: u32,
 ) -> Option<(String, i32, u32)> {
-    ctx.local
-        .transform_feedbacks
-        .varying(program, index)
-        .map(|name| {
-            let type_ = if name == "gl_PointSize" {
-                GL_FLOAT
-            } else {
-                GL_FLOAT_VEC4
-            };
-            (name.to_string(), 1, type_)
-        })
+    ctx.programs
+        .program(program)?
+        .transform_feedback_layout
+        .as_ref()?
+        .varyings
+        .get(index as usize)
+        .map(|varying| (varying.name.clone(), varying.size, varying.gl_type))
 }
 
 // ==================================================================================================

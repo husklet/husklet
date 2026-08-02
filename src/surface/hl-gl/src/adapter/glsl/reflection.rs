@@ -1,6 +1,16 @@
 use super::*;
 
 impl StageSources<'_> {
+    /// Vertex-stage user outputs in declaration order. Both ES 3 `out` and ES 2 `varying` spellings are
+    /// accepted because transform-feedback link reflection operates on the application's source, before
+    /// the desktop-GLSL rewrite normalizes the interface.
+    pub fn vertex_outputs(self) -> Vec<Decl> {
+        let vertex = Source::new(self.vertex).expanded();
+        let mut outputs = Tokens(&vertex).collect("out");
+        append_decls_unique(&mut outputs, Tokens(&vertex).collect("varying"), usize::MAX);
+        outputs
+    }
+
     pub fn samplers(self) -> Vec<String> {
         let vs = Source::new(self.vertex).expanded();
         let fs = Source::new(self.fragment).expanded();

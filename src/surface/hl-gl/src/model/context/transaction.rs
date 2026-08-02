@@ -22,6 +22,8 @@ pub struct FrameState {
     prog_pipeline_cache: HashMap<(u32, u64), (u32, u64)>,
     sampler_ir_cache: Vec<(hl_gpu::protocol::model::descriptor::SamplerDesc, u32)>,
     pending_destroys: Vec<Cmd>,
+    transform_feedback_readbacks: Vec<TransformFeedbackReadback>,
+    transform_feedback_cleanup: Vec<Cmd>,
 }
 
 impl GlContext {
@@ -45,6 +47,8 @@ impl GlContext {
             prog_pipeline_cache: self.prog_pipeline_cache.clone(),
             sampler_ir_cache: self.sampler_ir_cache.clone(),
             pending_destroys: self.pending_destroys.clone(),
+            transform_feedback_readbacks: self.local.transform_feedback_readbacks.clone(),
+            transform_feedback_cleanup: self.local.transform_feedback_cleanup.clone(),
         }
     }
 
@@ -64,6 +68,8 @@ impl GlContext {
         self.prog_pipeline_cache = state.prog_pipeline_cache;
         self.sampler_ir_cache = state.sampler_ir_cache;
         self.pending_destroys = state.pending_destroys;
+        self.local.transform_feedback_readbacks = state.transform_feedback_readbacks;
+        self.local.transform_feedback_cleanup = state.transform_feedback_cleanup;
         // Return every IR name this frame issued. hl-gpu rolls its own id tables back exactly to the
         // pre-frame state on a NACK, so none of these reached a live host object; reissuing them lets the
         // retry emit the identical resource-creation stream rather than leaking a name per rejection.

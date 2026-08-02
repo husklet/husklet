@@ -248,7 +248,7 @@ impl Program {
             GlslDescriptor {
                 stage: glsl_stage::VERTEX,
                 entry: "vmain".into(),
-                source: vs_glsl,
+                source: vs_glsl.clone(),
             }
             .to_words(),
         );
@@ -260,6 +260,29 @@ impl Program {
             }
             .to_words(),
         );
+        if self.transform_feedback_names.is_empty() {
+            self.transform_feedback_layout = None;
+            self.transform_feedback_ir = None;
+        } else {
+            let layout = super::TransformFeedbackLayout::reflect(
+                &vs_src,
+                &self.transform_feedback_names,
+                self.transform_feedback_mode,
+            )
+            .map_err(glsl::UniformError::TransformFeedback)?;
+            let capture_source = layout
+                .capture_source(&vs_glsl)
+                .map_err(glsl::UniformError::TransformFeedback)?;
+            self.transform_feedback_ir = Some(
+                GlslDescriptor {
+                    stage: glsl_stage::VERTEX,
+                    entry: "vmain".into(),
+                    source: capture_source,
+                }
+                .to_words(),
+            );
+            self.transform_feedback_layout = Some(layout);
+        }
         self.unis = unis;
         self.ubuf_size = ubuf_size;
         self.ubuf = vec![0u8; ubuf_size.max(0) as usize];

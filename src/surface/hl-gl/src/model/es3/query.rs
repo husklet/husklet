@@ -35,6 +35,7 @@ pub struct Queries {
     /// a fake constant `0`. `None` when no occlusion query is open (a transform-feedback query never arms
     /// it — that counter is not modeled, honest `0`). Mirrors the Vulkan occlusion fix (commit 5551f63a).
     occlusion_accum: Option<u64>,
+    transform_feedback_accum: Option<u64>,
 }
 
 impl Queries {
@@ -54,6 +55,7 @@ impl Queries {
             active: HashMap::new(),
             next_name: 1,
             occlusion_accum: None,
+            transform_feedback_accum: None,
         }
     }
 
@@ -95,11 +97,14 @@ impl Queries {
         q.ended = false;
         q.result = 0;
         self.active.insert(target, id);
-        self.occlusion_accum = matches!(
+        if matches!(
             target,
             GL_ANY_SAMPLES_PASSED | GL_ANY_SAMPLES_PASSED_CONSERVATIVE
-        )
-        .then_some(0);
+        ) {
+            self.occlusion_accum = Some(0);
+        } else if target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN {
+            self.transform_feedback_accum = Some(0);
+        }
     }
 
     /// Add a draw's scissor-clipped sample footprint to the open occlusion query's running total (no-op if
@@ -107,6 +112,12 @@ impl Queries {
     pub fn accumulate(&mut self, coverage: u64) {
         if let Some(a) = self.occlusion_accum.as_mut() {
             *a = a.saturating_add(coverage);
+        }
+    }
+
+    pub(crate) fn accumulate_transform_feedback(&mut self, primitives: u32) {
+        if let Some(accumulator) = self.transform_feedback_accum.as_mut() {
+            *accumulator = accumulator.saturating_add(u64::from(primitives));
         }
     }
 
@@ -118,9 +129,14 @@ impl Queries {
     pub fn end(&mut self, target: u32) {
         let id = self.active_for(target);
         self.active.insert(target, 0);
-        let result = match self.occlusion_accum.take() {
-            Some(cov) => (cov > 0) as u32,
-            None => 0,
+        let result = if target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN {
+            self.transform_feedback_accum
+                .take()
+                .map_or(0, |count| count.min(u64::from(u32::MAX)) as u32)
+        } else {
+            self.occlusion_accum
+                .take()
+                .is_some_and(|coverage| coverage > 0) as u32
         };
         if let Some(q) = self.objects.get_mut(&id) {
             q.active = false;
@@ -142,5 +158,27 @@ impl Queries {
         }
         self.objects.remove(&id);
         self.reserved.remove(&id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simultaneous_occlusion_and_feedback_queries_end_independently() {
+        let mut queries = Queries::new();
+        let occlusion = queries.gen();
+        let feedback = queries.gen();
+        queries.begin(GL_ANY_SAMPLES_PASSED, occlusion);
+        queries.begin(GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN, feedback);
+        queries.accumulate(4);
+        queries.accumulate_transform_feedback(7);
+
+        queries.end(GL_ANY_SAMPLES_PASSED);
+        assert_eq!(queries.get(occlusion).unwrap().result, 1);
+        assert!(queries.get(feedback).unwrap().active);
+        queries.end(GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN);
+        assert_eq!(queries.get(feedback).unwrap().result, 7);
     }
 }

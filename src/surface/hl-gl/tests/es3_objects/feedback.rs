@@ -39,7 +39,7 @@ fn transform_feedback_varyings_round_trip() {
     record::shader_source(
         &mut c,
         vs,
-        "attribute vec2 aPos;\nvoid main(){ gl_Position = vec4(aPos,0.0,1.0); }\n",
+        "attribute vec2 aPos; varying vec4 vColor; varying vec3 vNormal;\nvoid main(){ gl_Position = vec4(aPos,0.0,1.0); vColor=vec4(1.0); vNormal=vec3(0.0); }\n",
     );
     record::compile_shader(&mut c, vs);
     let fs = record::create_shader(&mut c, GL_FRAGMENT_SHADER);
@@ -52,10 +52,9 @@ fn transform_feedback_varyings_round_trip() {
     let prog = record::create_program(&mut c);
     record::attach_shader(&mut c, prog, vs);
     record::attach_shader(&mut c, prog, fs);
-    assert!(record::link_program(&mut c, prog));
-
     let names = vec!["vColor".to_string(), "vNormal".to_string()];
     es3::transform_feedback_varyings(&mut c, prog, names, GL_INTERLEAVED_ATTRIBS);
+    assert!(record::link_program(&mut c, prog));
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
     assert_eq!(
         es3::transform_feedback_varying(&c, prog, 0).as_deref(),
@@ -111,11 +110,7 @@ fn transform_feedback_program_reflection_reports_point_size() {
         GL_INTERLEAVED_ATTRIBS as i32
     );
     assert_eq!(
-        query::get_programiv(
-            &c,
-            program,
-            GL_TRANSFORM_FEEDBACK_VARYING_MAX_LENGTH
-        ),
+        query::get_programiv(&c, program, GL_TRANSFORM_FEEDBACK_VARYING_MAX_LENGTH),
         "gl_PointSize".len() as i32 + 1
     );
     assert_eq!(
@@ -123,6 +118,56 @@ fn transform_feedback_program_reflection_reports_point_size() {
         Some(("gl_PointSize".to_string(), 1, GL_FLOAT))
     );
 
+    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
+}
+
+#[test]
+fn active_feedback_keeps_discarded_draw_and_advances_checked_cursor_and_query() {
+    let mut c = ctx();
+    let vs = record::create_shader(&mut c, GL_VERTEX_SHADER);
+    record::shader_source(
+        &mut c,
+        vs,
+        "#version 300 es\nvoid main(){ gl_Position=vec4(0.0); gl_PointSize=float(gl_VertexID+1); }",
+    );
+    record::compile_shader(&mut c, vs);
+    let fs = record::create_shader(&mut c, GL_FRAGMENT_SHADER);
+    record::shader_source(
+        &mut c,
+        fs,
+        "#version 300 es\nprecision mediump float; out vec4 c; void main(){ c=vec4(1.0); }",
+    );
+    record::compile_shader(&mut c, fs);
+    let program = record::create_program(&mut c);
+    record::attach_shader(&mut c, program, vs);
+    record::attach_shader(&mut c, program, fs);
+    es3::transform_feedback_varyings(
+        &mut c,
+        program,
+        vec!["gl_PointSize".into()],
+        GL_INTERLEAVED_ATTRIBS,
+    );
+    assert!(record::link_program(&mut c, program));
+    record::use_program(&mut c, program);
+
+    let buffer = c.buffers.gen();
+    record::bind_buffer(&mut c, GL_TRANSFORM_FEEDBACK_BUFFER, buffer);
+    record::buffer_data(&mut c, GL_TRANSFORM_FEEDBACK_BUFFER, &[0; 64], 0);
+    record::bind_buffer_base(&mut c, GL_TRANSFORM_FEEDBACK_BUFFER, 0, buffer);
+    let query = c.gen_query();
+    es3::begin_query(&mut c, GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN, query);
+    c.begin_transform_feedback(GL_POINTS);
+    c.enable(GL_RASTERIZER_DISCARD);
+    record::draw_arrays(&mut c, GL_POINTS, 0, 3);
+    c.end_transform_feedback();
+    c.end_query(GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN);
+
+    assert_eq!(c.recording_counts(), (1, 0));
+    assert_eq!(c.transform_feedback_state().cursors[0], 12);
+    assert_eq!(
+        es3::get_query_objectuiv(&mut c, query, GL_QUERY_RESULT),
+        Some(3)
+    );
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
 }
 

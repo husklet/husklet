@@ -1,10 +1,20 @@
 //! Immutable draw-time state snapshots.
 
-use super::MAX_ATTR;
+use super::{feedback::TransformFeedbackLayout, MAX_ATTR};
 use crate::model::glconst::MAX_TEXTURE_UNITS;
 use crate::model::texture::GlTexture;
 use hl_gpu::protocol::model::enums::TextureFormat;
 use std::sync::Arc;
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct TransformFeedbackCapture {
+    pub layout: TransformFeedbackLayout,
+    pub bindings: [Option<crate::model::context::IndexedBinding>; 4],
+    pub byte_offsets: [u64; 4],
+    pub byte_lengths: [u64; 4],
+    pub vertices: u32,
+    pub primitives: u32,
+}
 
 /// One vertex-attribute pointer's bound state (`glVertexAttribPointer` + enable flag).
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
@@ -142,8 +152,9 @@ pub struct DrawCall {
     pub scissor_enabled: bool,
     pub scissor: [i32; 4],
     /// `GL_RASTERIZER_DISCARD` at draw time. Vertex processing still occurs, but no primitive reaches
-    /// framebuffer rasterization; the current IR has no transform-feedback output to retain.
+    /// framebuffer rasterization. An active transform-feedback snapshot still retains the vertex work.
     pub rasterizer_discard: bool,
+    pub transform_feedback: Option<TransformFeedbackCapture>,
     pub blend: bool,
     /// Blend factors/equations in force (GL enums), lowered to the pipeline blend state when `blend`.
     pub blend_src_rgb: u32,
@@ -401,6 +412,7 @@ impl Default for DrawCall {
             scissor_enabled: false,
             scissor: [0; 4],
             rasterizer_discard: false,
+            transform_feedback: None,
             blend: false,
             blend_src_rgb: crate::model::glconst::GL_ONE,
             blend_dst_rgb: crate::model::glconst::GL_ZERO,

@@ -314,6 +314,10 @@ impl GlContext {
         self.pending_destroys.push(Cmd::DestroyBuffer(buffer));
     }
 
+    pub(crate) fn queue_destroy(&mut self, command: Cmd) {
+        self.pending_destroys.push(command);
+    }
+
     /// The shared placeholder sampler's IR id (`0` = not yet created). The frame builder must NOT free this
     /// among a frame's per-draw ephemeral samplers — it is created once and reused across every frame (see
     /// [`Self::default_placeholder`]).

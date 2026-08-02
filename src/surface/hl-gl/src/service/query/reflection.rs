@@ -121,21 +121,24 @@ pub fn get_programiv(ctx: &GlContext, program: u32, pname: u32) -> i32 {
             .map(|decl| decl.name.len() as i32 + 1)
             .max()
             .unwrap_or(0),
-        GL_TRANSFORM_FEEDBACK_VARYINGS => ctx
-            .local
-            .transform_feedbacks
-            .varying_info(program)
-            .map_or(0, |(names, _)| names.len() as i32),
-        GL_TRANSFORM_FEEDBACK_BUFFER_MODE => ctx
-            .local
-            .transform_feedbacks
-            .varying_info(program)
-            .map_or(0, |(_, mode)| mode as i32),
-        GL_TRANSFORM_FEEDBACK_VARYING_MAX_LENGTH => ctx
-            .local
-            .transform_feedbacks
-            .varying_info(program)
-            .and_then(|(names, _)| names.iter().map(|name| name.len() as i32 + 1).max())
+        GL_TRANSFORM_FEEDBACK_VARYINGS => p
+            .transform_feedback_layout
+            .as_ref()
+            .map_or(0, |layout| layout.varyings.len() as i32),
+        GL_TRANSFORM_FEEDBACK_BUFFER_MODE => p
+            .transform_feedback_layout
+            .as_ref()
+            .map_or(0, |layout| layout.mode as i32),
+        GL_TRANSFORM_FEEDBACK_VARYING_MAX_LENGTH => p
+            .transform_feedback_layout
+            .as_ref()
+            .and_then(|layout| {
+                layout
+                    .varyings
+                    .iter()
+                    .map(|varying| varying.name.len() as i32 + 1)
+                    .max()
+            })
             .unwrap_or(0),
         _ => 0,
     }

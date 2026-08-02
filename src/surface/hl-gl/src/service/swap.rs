@@ -15,6 +15,63 @@ use crate::service::frame::{self, FrameTarget};
 use hl_gpu::{Cmd, CommandSink, Result};
 use std::collections::HashSet;
 
+/// Opaque description of the reads scheduled by [`schedule_transform_feedback_reads`]. The EGL transport
+/// prepares I/O against a recording sink, then returns the actor's real observations later; keeping the
+/// captures opaque prevents callers from applying the recording sink's zero-filled placeholders.
+pub struct TransformFeedbackReads {
+    captures: Vec<crate::model::context::TransformFeedbackReadback>,
+}
+
+pub fn schedule_transform_feedback_reads(
+    ctx: &GlContext,
+    sink: &mut dyn CommandSink,
+) -> Result<TransformFeedbackReads> {
+    let captures = ctx.local.transform_feedback_readbacks.clone();
+    for capture in &captures {
+        let _ = sink.read_buffer(hl_gpu::BufferId(capture.ir), 0, capture.len)?;
+    }
+    Ok(TransformFeedbackReads { captures })
+}
+
+pub fn apply_transform_feedback_reads(
+    ctx: &mut GlContext,
+    scheduled: TransformFeedbackReads,
+    observations: Vec<Vec<u8>>,
+) -> Result<()> {
+    if observations.len() != scheduled.captures.len() {
+        return Err(hl_gpu::GpuError::Invalid(
+            "transform-feedback readback count mismatch",
+        ));
+    }
+    for (capture, bytes) in scheduled.captures.iter().zip(&observations) {
+        if bytes.len() != capture.len {
+            return Err(hl_gpu::GpuError::Invalid(
+                "short transform-feedback readback",
+            ));
+        }
+    }
+    if !ctx
+        .local
+        .transform_feedback_readbacks
+        .starts_with(&scheduled.captures)
+    {
+        return Err(hl_gpu::GpuError::Invalid(
+            "transform-feedback readback state changed",
+        ));
+    }
+    for (capture, bytes) in scheduled.captures.iter().zip(observations) {
+        ctx.buffers
+            .set_sub_data(capture.buffer, capture.offset, &bytes);
+    }
+    ctx.local
+        .transform_feedback_readbacks
+        .drain(..scheduled.captures.len());
+    for command in std::mem::take(&mut ctx.local.transform_feedback_cleanup) {
+        ctx.queue_destroy(command);
+    }
+    Ok(())
+}
+
 /// `eglSwapBuffers()` — lower + submit + present the recorded frame, then reset per-frame state. Returns
 /// `true` if a frame was presented, `false` if there was nothing (or nothing yet supported) to present
 /// (a no-op swap — matching the shim's behaviour on an uncovered frame shape).
@@ -448,3 +505,65 @@ pub const SWAP_BUFFERS: fn(&mut GlContext, &mut dyn CommandSink) -> Result<bool>
 pub const FLUSH: fn(&mut GlContext, &mut dyn CommandSink) -> Result<bool> = GlContext::flush;
 pub use FLUSH as flush;
 pub use SWAP_BUFFERS as swap_buffers;
+
+#[cfg(test)]
+mod transform_feedback_read_tests {
+    use super::*;
+    use crate::model::context::TransformFeedbackReadback;
+
+    #[test]
+    fn prepared_placeholder_is_not_applied_and_actor_bytes_are() {
+        let mut ctx = GlContext::new();
+        let buffer = ctx.buffers.gen();
+        ctx.buffers.set_data(
+            buffer,
+            crate::model::glconst::GL_TRANSFORM_FEEDBACK_BUFFER,
+            &[0x55; 8],
+            0,
+        );
+        ctx.local
+            .transform_feedback_readbacks
+            .push(TransformFeedbackReadback {
+                ir: 7,
+                buffer,
+                offset: 2,
+                len: 4,
+            });
+        let mut prepared = hl_gpu::RecordingSink::with_full_caps();
+        let scheduled = schedule_transform_feedback_reads(&ctx, &mut prepared).unwrap();
+        assert_eq!(ctx.buffers.get(buffer).unwrap().data.as_slice(), &[0x55; 8]);
+
+        apply_transform_feedback_reads(&mut ctx, scheduled, vec![vec![1, 2, 3, 4]]).unwrap();
+        assert_eq!(
+            ctx.buffers.get(buffer).unwrap().data.as_slice(),
+            &[0x55, 0x55, 1, 2, 3, 4, 0x55, 0x55]
+        );
+        assert!(ctx.local.transform_feedback_readbacks.is_empty());
+    }
+
+    #[test]
+    fn short_actor_read_keeps_pending_capture_and_mirror() {
+        let mut ctx = GlContext::new();
+        let buffer = ctx.buffers.gen();
+        ctx.buffers.set_data(
+            buffer,
+            crate::model::glconst::GL_TRANSFORM_FEEDBACK_BUFFER,
+            &[9; 4],
+            0,
+        );
+        ctx.local
+            .transform_feedback_readbacks
+            .push(TransformFeedbackReadback {
+                ir: 3,
+                buffer,
+                offset: 0,
+                len: 4,
+            });
+        let mut prepared = hl_gpu::RecordingSink::with_full_caps();
+        let scheduled = schedule_transform_feedback_reads(&ctx, &mut prepared).unwrap();
+
+        assert!(apply_transform_feedback_reads(&mut ctx, scheduled, vec![vec![1, 2]]).is_err());
+        assert_eq!(ctx.buffers.get(buffer).unwrap().data.as_slice(), &[9; 4]);
+        assert_eq!(ctx.local.transform_feedback_readbacks.len(), 1);
+    }
+}

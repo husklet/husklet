@@ -1,4 +1,5 @@
 use super::*;
+use crate::result::GL_OUT_OF_MEMORY;
 
 // ---- draw + clear recording ----------------------------------------------------------------------
 
@@ -35,11 +36,7 @@ impl GlContext {
         // either edge; GL intersects them with the framebuffer.
         if d.scissor_enabled {
             let [x, y, sw, sh] = d.scissor;
-            if x <= 0
-                && y <= 0
-                && x.saturating_add(sw) >= w
-                && y.saturating_add(sh) >= h
-            {
+            if x <= 0 && y <= 0 && x.saturating_add(sw) >= w && y.saturating_add(sh) >= h {
                 d.scissor_enabled = false;
             }
         }
@@ -73,16 +70,16 @@ pub const ENABLE: fn(&mut GlContext, u32) = GlContext::enable;
 pub const DISABLE: fn(&mut GlContext, u32) = GlContext::disable;
 pub const CLEAR: fn(&mut GlContext) = GlContext::record_clear;
 pub const CLEAR_BUFFERS: fn(&mut GlContext, u32) = GlContext::record_clear_buffers;
-pub use CLEAR_BUFFERS as clear_buffers;
 pub use BLEND_COLOR as blend_color;
 pub use CLEAR as clear;
+pub use CLEAR_BUFFERS as clear_buffers;
 pub use CLEAR_COLOR as clear_color;
 pub use CLEAR_DEPTH as clear_depth;
 pub use CLEAR_STENCIL as clear_stencil;
 pub use CULL_FACE as cull_face;
 pub use DEPTH_FUNC as depth_func;
-pub use DEPTH_RANGE as depth_range;
 pub use DEPTH_MASK as depth_mask;
+pub use DEPTH_RANGE as depth_range;
 pub use DISABLE as disable;
 pub use DISABLE_VERTEX_ATTRIB as disable_vertex_attrib;
 pub use ENABLE as enable;
@@ -301,6 +298,129 @@ impl GlContext {
     }
 }
 
+fn primitive_capture(mode: u32, count: u32) -> Option<(u32, u32, u32)> {
+    let (class, vertices, primitives) = match mode {
+        GL_POINTS => (GL_POINTS, count, count),
+        GL_LINES => (GL_LINES, count / 2 * 2, count / 2),
+        GL_LINE_STRIP => {
+            let complete = count >= 2;
+            (GL_LINES, if complete { count } else { 0 }, count.saturating_sub(1))
+        }
+        0x0002 /* GL_LINE_LOOP */ => {
+            let complete = count >= 2;
+            (GL_LINES, if complete { count } else { 0 }, if complete { count } else { 0 })
+        }
+        GL_TRIANGLES => (GL_TRIANGLES, count / 3 * 3, count / 3),
+        GL_TRIANGLE_STRIP | 0x0006 /* GL_TRIANGLE_FAN */ => {
+            let complete = count >= 3;
+            (
+                GL_TRIANGLES,
+                if complete { count } else { 0 },
+                count.saturating_sub(2),
+            )
+        }
+        _ => return None,
+    };
+    Some((class, vertices, primitives))
+}
+
+/// Attach the active transform-feedback destination to a completed draw snapshot. Cursor arithmetic and
+/// every bound range are validated before any cursor advances, so an overflowing/refused draw is atomic.
+fn capture_transform_feedback(ctx: &mut GlContext, draw: &mut DrawCall) -> bool {
+    let object = ctx.local.transform_feedbacks.bound_obj();
+    if !object.active || object.paused {
+        return true;
+    }
+    let Some(layout) = ctx
+        .programs
+        .program(draw.prog)
+        .and_then(|program| program.transform_feedback_layout.clone())
+    else {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return false;
+    };
+    let Some((class, vertices, primitives)) =
+        primitive_capture(draw.mode, draw.count.max(0) as u32)
+    else {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return false;
+    };
+    if class != object.primitive_mode {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return false;
+    }
+    let Some(vertices) = vertices.checked_mul(draw.instance_count) else {
+        ctx.set_gl_error(GL_OUT_OF_MEMORY);
+        return false;
+    };
+    let Some(primitives) = primitives.checked_mul(draw.instance_count) else {
+        ctx.set_gl_error(GL_OUT_OF_MEMORY);
+        return false;
+    };
+    let mut lengths = [0u64; 4];
+    let mut absolute = [0u64; 4];
+    for index in 0..layout.buffers as usize {
+        let Some(binding) = object.bindings[index] else {
+            ctx.set_gl_error(GL_INVALID_OPERATION);
+            return false;
+        };
+        let Some(buffer_len) = ctx
+            .buffers
+            .get(binding.buffer)
+            .map(|buffer| buffer.data.len() as u64)
+        else {
+            ctx.set_gl_error(GL_INVALID_OPERATION);
+            return false;
+        };
+        let Ok(binding_offset) = u64::try_from(binding.offset) else {
+            ctx.set_gl_error(GL_INVALID_OPERATION);
+            return false;
+        };
+        let binding_len = if binding.size == 0 {
+            buffer_len.saturating_sub(binding_offset)
+        } else {
+            binding.size as u64
+        };
+        let Some(length) = u64::from(layout.strides[index]).checked_mul(u64::from(vertices)) else {
+            ctx.set_gl_error(GL_OUT_OF_MEMORY);
+            return false;
+        };
+        let Some(end) = object.cursors[index].checked_add(length) else {
+            ctx.set_gl_error(GL_OUT_OF_MEMORY);
+            return false;
+        };
+        if end > binding_len {
+            ctx.set_gl_error(GL_INVALID_OPERATION);
+            return false;
+        }
+        let Some(offset) = binding_offset.checked_add(object.cursors[index]) else {
+            ctx.set_gl_error(GL_OUT_OF_MEMORY);
+            return false;
+        };
+        absolute[index] = offset;
+        lengths[index] = length;
+    }
+    let Some(previous) = ctx.local.transform_feedbacks.advance(lengths) else {
+        ctx.set_gl_error(GL_OUT_OF_MEMORY);
+        return false;
+    };
+    debug_assert!(previous
+        .iter()
+        .enumerate()
+        .all(|(index, cursor)| absolute[index]
+            == object.bindings[index].map_or(0, |binding| binding.offset as u64 + cursor)));
+    ctx.local.queries.accumulate_transform_feedback(primitives);
+    draw.transform_feedback = Some(crate::model::program::TransformFeedbackCapture {
+        layout,
+        bindings: object.bindings,
+        byte_offsets: absolute,
+        byte_lengths: lengths,
+        vertices,
+        primitives,
+    });
+    true
+}
+
 /// `glDrawArrays(mode, first, count)` — snapshot the bound state and append the draw (one instance).
 pub fn draw_arrays(ctx: &mut GlContext, mode: u32, first: i32, count: i32) {
     draw_arrays_instanced(ctx, mode, first, count, 1);
@@ -331,10 +451,7 @@ pub fn draw_arrays_instanced(
     if count == 0 || instances == 0 {
         return;
     }
-    // The current backend has no transform-feedback output, so a rasterizer-discarded draw has no
-    // observable GPU work. Drop it before snapshotting resources: retaining it until lowering made frame
-    // planning allocate app bind groups and collide with the internal scissored-clear pipeline.
-    if ctx.is_enabled(GL_RASTERIZER_DISCARD) {
+    if ctx.is_enabled(GL_RASTERIZER_DISCARD) && !ctx.local.transform_feedbacks.bound_obj().active {
         return;
     }
     let mut d = ctx.snapshot(true);
@@ -347,6 +464,9 @@ pub fn draw_arrays_instanced(
     // the client array is promised by the application and a guest must not be able to fault the driver.
     if !d.capture_client_vbufs(first.checked_add(count).map(|end| end as usize)) {
         ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if !capture_transform_feedback(ctx, &mut d) {
         return;
     }
     ctx.accumulate_occlusion(&d);
@@ -383,7 +503,7 @@ pub fn draw_elements_instanced(
     if count == 0 || instances == 0 {
         return;
     }
-    if ctx.is_enabled(GL_RASTERIZER_DISCARD) {
+    if ctx.is_enabled(GL_RASTERIZER_DISCARD) && !ctx.local.transform_feedbacks.bound_obj().active {
         return;
     }
     let mut d = ctx.snapshot(true);
@@ -396,6 +516,9 @@ pub fn draw_elements_instanced(
     d.elem_buf = ctx.local.element_buffer;
     if !capture_indexed(ctx, &mut d, count, index_type, offset, 0) {
         ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if !capture_transform_feedback(ctx, &mut d) {
         return;
     }
     ctx.accumulate_occlusion(&d);
@@ -440,7 +563,7 @@ pub fn draw_elements_instanced_base_vertex(
     if count == 0 || instances == 0 {
         return;
     }
-    if ctx.is_enabled(GL_RASTERIZER_DISCARD) {
+    if ctx.is_enabled(GL_RASTERIZER_DISCARD) && !ctx.local.transform_feedbacks.bound_obj().active {
         return;
     }
     let mut d = ctx.snapshot(true);
@@ -454,6 +577,9 @@ pub fn draw_elements_instanced_base_vertex(
     d.elem_buf = ctx.local.element_buffer;
     if !capture_indexed(ctx, &mut d, count, index_type, offset, base_vertex) {
         ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if !capture_transform_feedback(ctx, &mut d) {
         return;
     }
     ctx.accumulate_occlusion(&d);
