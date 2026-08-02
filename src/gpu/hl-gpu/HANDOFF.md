@@ -208,3 +208,90 @@ is not testable in-process against the CPU oracle, so the end-to-end proof has t
 
 Steps 1, 2 and 5, and therefore the copy-elimination distribution — there is still no closed path, so
 there is still no copy to have eliminated. It remains slice 3's to take, as a distribution.
+
+---
+
+# Session close — 2026-08-01
+
+## Slice 3 is NOT finished. Read this before treating the sharing work as done.
+
+| step | state |
+|---|---|
+| 1. `ExportBuffer`/`ImportBuffer` protocol surface | **not started.** See the decision above — it is not a `Cmd` pair. |
+| 2. Executor wiring | **not started.** |
+| 3. Session identity | **landed**, `605fb0498`. |
+| 4. `Exports` ownership | **landed**, `605fb0498`. `Option<Exports>`, `None` by default, fails closed. |
+| 5. Map/unmap as protocol commands | **not started.** |
+| the copy-elimination distribution | **never measured, and could not have been.** |
+
+Nothing is wired end to end, so nothing creates an export in production: `set_guard` has zero callers
+outside tests and `Exports` is never constructed outside tests. That was verified by enumeration when the
+sharing work was (correctly) cleared of causing a Chrome regression, and it is still true. **The gate is
+unreachable in a shipped bundle.** Slices 1–3 are preconditions with tests, not a working capability.
+
+The copy-elimination number has still never been taken, and the reason has not changed: there is no
+closed path, so there is no copy to have eliminated. When it is taken it must be a **distribution** — a
+mean and a median agreeing to 0.05 ms has already hidden a bimodal shape on this fleet.
+
+`605fb0498` also added the join slices 1 and 2 lacked: `Exports::access` hands a party an `Access` bound
+to the entry's own state cell, so a claim taken through the registry is visible on the resolution path.
+`Entry::state` IS that cell rather than sitting beside a `MapState` field, because two representations of
+one fact drift in the direction nobody tests. Nine tests, seven-row mutation matrix in
+`tests/sharing_session.rs`, observed attribution rather than predicted — two rows differed from the
+prediction, and a guard bound to the WRONG session was caught only by the positive control, because a
+wrongly-bound guard refuses *more* rather than less.
+
+## The `glVertexAttribIPointer` defect — `58d5c7b9f`
+
+Recorded here because it is the session's most consequential fix and the reasoning is not visible from
+the diff. It is in `hl-gl`, not this crate, but it was found from an `hl-gpu` NACK and the trail starts
+here.
+
+Chrome could not render a frame. `glVertexAttribIPointer` called `record::vertex_attrib_pointer` — the
+recorder for the FLOAT entry point — which took no `integer` parameter and hard-coded the flag `false`.
+An integer array therefore arrived at lowering indistinguishable from
+`glVertexAttribPointer(GL_UNSIGNED_INT, normalized = FALSE)`, a combination GL genuinely does convert to
+float. It was converted, declared `Float32x2`, and the shader's `uvec2` input required `Uint32x2`. wgpu
+refused the pipeline. Chrome is asking for ordinary GLES 3.0 §2.8; the fault was entirely ours.
+
+**The full wgpu message was in `domain.log` all along, four lines below the line everyone was grepping.**
+wgpu builds its description as `format!("Validation Error\n\nCaused by:\n{detail}")`, and
+`grep verdict=nack` returns the first line only. Three people read that log and saw a bare
+"Validation Error". If a wgpu error ever looks contentless, read the following lines before believing it.
+
+The blast radius came from `hl-gpu`: the refused pipeline was inside batch 12, Chrome's entire startup
+working set — 1121 commands, 36.5 MB. `Transaction::drop` rolled the whole batch back, discarding every
+`CreateSampler`/`CreateTexture`/`CreateShader` that had already succeeded, and every later reference came
+back `unknown/freed`. One bad pipeline, a dead tab.
+
+Measured, both sides bound. Before: installed binary `76c74e4f34db8008`, gl tree `907def965a4263b1`,
+workspace `vk-chrome1` — 9 NACKs (1 pipeline validation, 8 `unknown/freed`), no window. After: private
+bundle `81eec4cb77a50802`, gl tree `4977530831b41812`, fresh workspace `chrome-e2e-clean5`, domain started
+after the build — **0 NACKs**, a native toplevel window (`number=10951 visible=true on_screen=true`), and
+19 frames shown.
+
+One trap worth carrying: `grep -c verdict=ack` also returned 0, which is the shape of a mute instrument.
+It is not. **`verdict=ack` is `Level::Debug` and is compiled out of a release bundle; `verdict=nack` is
+`hl_error!` and survives.** A live `[gpu] E` line in the same log proved the tag and level were reaching
+the file, which is what makes the zero a measurement rather than a silence. Caveat on that run: the
+es2gears control did not execute (`not_measured`), so there is no in-session control — which weakens a
+negative reading, not this positive one.
+
+## Open, unstarted: one validation failure permanently desynchronises the id space
+
+The rollback above is correct in isolation and catastrophic in effect. `runtime::submit` guarantees that
+a rejected batch leaves the id lifecycle exactly as it was, which is what lets a connection retry — but
+**the guest has no way to learn which of its creates were undone.** The one-byte ack carries a refusal
+class and nothing else, the guest advances its object caches optimistically at prepare time, and
+`retires_share_group` correctly declines to kill the group for an ordinary refusal. So both sides behave
+reasonably and end up permanently disagreeing about which ids exist.
+
+This is not fixed and not started. Two shapes were discussed: a wire change that names the evaporated
+ids, or something narrower on the guest side that rolls its own caches back on a NACK.
+
+Related and adjacent, specified by another agent: `src/gpu/hl-gpu-wgpu/SUBMIT_PROPAGATION.md`, which
+covers per-operation refusal propagation in `submit_cb_inner`. Read it alongside this — a batch that
+reports which operation failed is a precondition for a guest ever being told what to undo.
+
+Also still open from earlier in the slice: guard behaviour under a transaction rollback. A guard attached
+inside a batch that then NACKs is covered by no test and the intended behaviour was never decided.
