@@ -188,8 +188,8 @@ impl RenderPasses {
 
         for &(fbo, start, end) in groups {
             let run = &draws[start..end];
-            let (surface, target_tex, tw, th, fmt) =
-                resolve_target(ctx, fbo, run.first().and_then(|d| d.target), &mut cmds);
+            let ((surface, target_tex, tw, th, fmt), resolved_attachment) =
+                resolve_target_with_identity(ctx, fbo, run.first().and_then(|d| d.target), &mut cmds);
             fbo_target.insert(fbo, (surface, target_tex, tw, th, fmt));
             if let Some(target) = frame_target(
                 ctx,
@@ -202,15 +202,10 @@ impl RenderPasses {
             ) {
                 push_final_target(&mut targets, target);
             }
-            // Register this run's offscreen attachment so a later run can sample its rendered pixels. Mirror
-            // resolve_target's offscreen condition (a sized attachment) so `target_tex` is the offscreen target.
-            if let Some(target) = run
-                .first()
-                .and_then(|d| d.target)
-                .filter(|target| target.texture != 0)
-            {
-                fbo_tex_ir.insert((target.texture, target.generation), target_tex);
-            }
+            // Register the attachment resolve_target ACTUALLY selected. Its live-attachment fallback is
+            // intentionally wider than the first draw's optional snapshot; re-deriving from that snapshot
+            // left a freshly minted target invisible to a later sampler in the same frame.
+            register_resolved_target(&mut fbo_tex_ir, resolved_attachment, target_tex);
             // Only an unscissored COLOUR clear wipes the run's target, so the pass clear-loads with the LAST
             // such clear's colour and replays only the draws recorded AFTER it (see [`full_clear`]). With no
             // such clear the pass load-preserves — unless this target has not been written yet in this frame,
@@ -385,7 +380,7 @@ fn lower_ordered_run(
 ) -> Option<ResolvedTarget> {
     let first = run.first()?;
     let fbo = first.fbo;
-    let target = resolve_target(ctx, fbo, first.target, cmds);
+    let (target, resolved_attachment) = resolve_target_with_identity(ctx, fbo, first.target, cmds);
     let bottom_up = RenderPasses::stores_bottom_up_rows(ctx, first.target);
     fbo_target.insert(fbo, target);
     if let Some(frame_target) = frame_target(
@@ -399,9 +394,7 @@ fn lower_ordered_run(
     ) {
         push_final_target(targets, frame_target);
     }
-    if let Some(snapshot) = first.target.filter(|target| target.texture != 0) {
-        fbo_tex_ir.insert((snapshot.texture, snapshot.generation), target.1);
-    }
+    register_resolved_target(fbo_tex_ir, resolved_attachment, target.1);
 
     // Only an UNSCISSORED color clear justifies wiping the whole attachment; with none, the first pass must
     // LOAD unless this target has not been written yet in this frame.
@@ -455,6 +448,15 @@ pub(super) fn resolve_target(
     snapshot: Option<crate::model::program::TargetSnapshot>,
     cmds: &mut Vec<Cmd>,
 ) -> (u32, u32, i32, i32, TextureFormat) {
+    resolve_target_with_identity(ctx, fbo, snapshot, cmds).0
+}
+
+fn resolve_target_with_identity(
+    ctx: &mut GlContext,
+    fbo: u32,
+    snapshot: Option<crate::model::program::TargetSnapshot>,
+    cmds: &mut Vec<Cmd>,
+) -> (ResolvedTarget, Option<crate::model::program::TargetSnapshot>) {
     // Try the FBO's color attachment; fall back to the default target if it is missing/unsized.
     if fbo != 0 {
         let target = snapshot.or_else(|| {
@@ -496,7 +498,7 @@ pub(super) fn resolve_target(
                     ctx.external_target(target.texture, target.generation),
                 );
             }
-            return (surface, texture, w, h, fmt);
+            return ((surface, texture, w, h, fmt), Some(target));
         }
     }
     let (w, h) = ctx.target_wh();
@@ -517,7 +519,118 @@ pub(super) fn resolve_target(
             ctx.local.present_token,
         );
     }
-    (surface, texture, w, h, fmt)
+    ((surface, texture, w, h, fmt), None)
+}
+
+fn register_resolved_target(
+    targets: &mut std::collections::HashMap<(u32, u64), u32>,
+    attachment: Option<crate::model::program::TargetSnapshot>,
+    texture: u32,
+) {
+    if let Some(attachment) = attachment.filter(|attachment| attachment.texture != 0) {
+        targets.insert((attachment.texture, attachment.generation), texture);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::context::FrameOp;
+    use crate::model::glconst::{GL_FRAGMENT_SHADER, GL_TEXTURE_2D, GL_TRIANGLES, GL_VERTEX_SHADER};
+    use crate::service::record::{attach_shader, bind_texture, shader_source};
+
+    fn fallback_then_sample() -> (GlContext, u32) {
+        let mut ctx = GlContext::new();
+        ctx.local.surf.have = true;
+        ctx.local.surf.width = 16;
+        ctx.local.surf.height = 16;
+
+        let texture = ctx.textures.gen();
+        assert!(ctx
+            .textures
+            .image_2d(texture, 8, 4, &[], TextureFormat::Rgba8Unorm));
+        let fbo = ctx.local.framebuffers.gen();
+        ctx.local.framebuffers.attach_color(fbo, texture);
+
+        let vertex = ctx.create_shader(GL_VERTEX_SHADER);
+        shader_source(
+            &mut ctx,
+            vertex,
+            "#version 300 es\nvoid main(){gl_Position=vec4(float((gl_VertexID<<1)&2)-1.0,float(gl_VertexID&2)-1.0,0.0,1.0);}",
+        );
+        ctx.compile_shader(vertex);
+        let fragment = ctx.create_shader(GL_FRAGMENT_SHADER);
+        shader_source(
+            &mut ctx,
+            fragment,
+            "#version 300 es\nprecision highp float; uniform sampler2D source; out vec4 color; void main(){color=texture(source,vec2(0.5));}",
+        );
+        ctx.compile_shader(fragment);
+        let program = ctx.create_program();
+        attach_shader(&mut ctx, program, vertex);
+        attach_shader(&mut ctx, program, fragment);
+        assert!(ctx.link_program(program));
+        ctx.use_program(program);
+        bind_texture(&mut ctx, GL_TEXTURE_2D, texture);
+
+        let first = DrawCall {
+            fbo,
+            target: None,
+            is_clear: true,
+            clear_mask: crate::model::glconst::GL_COLOR_BUFFER_BIT,
+            ..DrawCall::default()
+        };
+        crate::service::record::draw_arrays(&mut ctx, GL_TRIANGLES, 0, 3);
+        let sample = ctx.local.recording.draws.pop().unwrap();
+        ctx.local.recording.draws = vec![first, sample];
+        (ctx, texture)
+    }
+
+    fn assert_sampler_uses_fallback_target(frame: &Frame, target_ir: u32) {
+        assert!(frame.cmds.iter().any(|command| matches!(
+            command,
+            Cmd::CreateBindGroup(_, descriptor)
+                if descriptor.entries.iter().any(|entry| matches!(
+                    entry.resource,
+                    BindResource::Texture { id } if id == target_ir
+                ))
+        )));
+    }
+
+    #[test]
+    fn build_multi_later_sampler_uses_live_attachment_fallback_target() {
+        let (mut ctx, texture) = fallback_then_sample();
+        let generation = ctx.textures.get(texture).unwrap().gen;
+        let groups = RenderPasses::groups(&ctx.local.recording.draws);
+
+        let frame = RenderPasses::build_multi(&mut ctx, &groups).unwrap();
+        let target_ir = ctx
+            .resident_fbo_target_tex(texture, generation)
+            .unwrap();
+
+        assert_sampler_uses_fallback_target(&frame, target_ir);
+    }
+
+    #[test]
+    fn build_ordered_later_sampler_uses_live_attachment_fallback_target() {
+        let (mut ctx, texture) = fallback_then_sample();
+        let generation = ctx.textures.get(texture).unwrap().gen;
+        ctx.local.recording.operations = ctx
+            .local
+            .recording
+            .draws
+            .iter()
+            .cloned()
+            .map(|draw| FrameOp::Draw(Box::new(draw)))
+            .collect();
+
+        let frame = RenderPasses::build_ordered(&mut ctx).unwrap();
+        let target_ir = ctx
+            .resident_fbo_target_tex(texture, generation)
+            .unwrap();
+
+        assert_sampler_uses_fallback_target(&frame, target_ir);
+    }
 }
 
 /// Emit the `CreateTexture(RENDER_TARGET | PRESENT)` + matching `CreateSurface` for a render target. When
