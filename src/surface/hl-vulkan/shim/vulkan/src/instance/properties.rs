@@ -411,6 +411,9 @@ mod tests {
 
     #[test]
     fn vulkan_1_1_and_multiview_properties_share_required_limits() {
+        // This value is externally defined by Vulkan, so do not let an internally consistent typo make
+        // this test exercise a structure type that applications never send.
+        assert_eq!(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PROPERTIES, 1_000_053_002);
         let mut multiview: VkPhysicalDeviceMultiviewProperties = unsafe { core::mem::zeroed() };
         multiview.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PROPERTIES;
         let mut v11: VkPhysicalDeviceVulkan11Properties = unsafe { core::mem::zeroed() };
