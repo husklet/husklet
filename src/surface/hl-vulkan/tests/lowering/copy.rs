@@ -1,6 +1,6 @@
 use super::*;
-use hl_gpu::protocol::model::enums::{TextureAspect, TextureDim};
 use hl_gpu::protocol::model::descriptor::Mirror;
+use hl_gpu::protocol::model::enums::{TextureAspect, TextureDim};
 
 #[test]
 fn copy_buffer_lowers_to_copy_buffer_to_buffer() {
@@ -614,8 +614,8 @@ fn copy_image_addresses_the_mip_level_the_region_names() {
         mip_level: 2,
         base_array_layer: 0,
         layer_count: 1,
-            aspect_mask: SubresourceLayers::ASPECT_COLOR,
-        };
+        aspect_mask: SubresourceLayers::ASPECT_COLOR,
+    };
     let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
         record::cmd_copy_image(d, cb, src, dst, level, level, (0, 0), (0, 0), (8, 8)).unwrap();
     });
@@ -675,8 +675,8 @@ fn copy_image_bounds_check_uses_the_named_levels_extent() {
         mip_level: 3,
         base_array_layer: 0,
         layer_count: 1,
-            aspect_mask: SubresourceLayers::ASPECT_COLOR,
-        };
+        aspect_mask: SubresourceLayers::ASPECT_COLOR,
+    };
     let cb = begin(&mut d, &mut sink);
     assert!(
         record::cmd_copy_image(&mut d, cb, src, dst, level, level, (0, 0), (0, 0), (16, 16))
@@ -715,14 +715,14 @@ fn copy_image_expands_a_layer_run_into_one_op_per_layer() {
                 mip_level: 0,
                 base_array_layer: 1,
                 layer_count: 3,
-            aspect_mask: SubresourceLayers::ASPECT_COLOR,
-        },
+                aspect_mask: SubresourceLayers::ASPECT_COLOR,
+            },
             SubresourceLayers {
                 mip_level: 0,
                 base_array_layer: 2,
                 layer_count: 3,
-            aspect_mask: SubresourceLayers::ASPECT_COLOR,
-        },
+                aspect_mask: SubresourceLayers::ASPECT_COLOR,
+            },
             (0, 0),
             (0, 0),
             (8, 8),
@@ -754,8 +754,8 @@ fn copy_image_resolves_remaining_layers_and_refuses_an_overrun() {
         mip_level: 0,
         base_array_layer: 1,
         layer_count: u32::MAX,
-            aspect_mask: SubresourceLayers::ASPECT_COLOR,
-        };
+        aspect_mask: SubresourceLayers::ASPECT_COLOR,
+    };
     let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
         record::cmd_copy_image(
             d,
@@ -776,8 +776,8 @@ fn copy_image_resolves_remaining_layers_and_refuses_an_overrun() {
         mip_level: 0,
         base_array_layer: 2,
         layer_count: 3,
-            aspect_mask: SubresourceLayers::ASPECT_COLOR,
-        };
+        aspect_mask: SubresourceLayers::ASPECT_COLOR,
+    };
     let cb = begin(&mut d, &mut sink);
     assert!(
         record::cmd_copy_image(
@@ -820,8 +820,8 @@ fn copy_image_allows_a_same_image_copy_between_different_layers() {
         mip_level: 0,
         base_array_layer: n,
         layer_count: 1,
-            aspect_mask: SubresourceLayers::ASPECT_COLOR,
-        };
+        aspect_mask: SubresourceLayers::ASPECT_COLOR,
+    };
     assert!(
         record::cmd_copy_image(
             &mut d,
@@ -1195,9 +1195,17 @@ fn blit_between_different_formats_records() {
                 SubresourceLayers::base(),
                 SubresourceLayers::base(),
                 Origin3d { x: 0, y: 0, z: 0 },
-                Extent3d { width: 4, height: 4, depth: 1 },
+                Extent3d {
+                    width: 4,
+                    height: 4,
+                    depth: 1
+                },
                 Origin3d { x: 0, y: 0, z: 0 },
-                Extent3d { width: 4, height: 4, depth: 1 },
+                Extent3d {
+                    width: 4,
+                    height: 4,
+                    depth: 1
+                },
                 true,
                 Mirror::NONE,
             )
@@ -1205,6 +1213,68 @@ fn blit_between_different_formats_records() {
             "{src_format:#x} -> {dst_format:#x} is a legal converting blit"
         );
     }
+}
+
+#[test]
+fn depth_scaled_3d_blit_records() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let src = create::create_image_geometry(
+        &mut d,
+        &mut sink,
+        4,
+        4,
+        4,
+        1,
+        1,
+        TextureDim::D3,
+        vk_format::R8G8B8A8_UNORM,
+        vk_image_usage::TRANSFER_SRC,
+        1,
+    )
+    .unwrap();
+    let dst = create::create_image_geometry(
+        &mut d,
+        &mut sink,
+        4,
+        4,
+        2,
+        1,
+        1,
+        TextureDim::D3,
+        vk_format::R8G8B8A8_UNORM,
+        vk_image_usage::TRANSFER_DST,
+        1,
+    )
+    .unwrap();
+    let cb = recording_cb(&mut d);
+
+    assert!(
+        record::cmd_blit_image(
+            &mut d,
+            cb,
+            src,
+            dst,
+            SubresourceLayers::base(),
+            SubresourceLayers::base(),
+            Origin3d::default(),
+            Extent3d {
+                width: 4,
+                height: 4,
+                depth: 4,
+            },
+            Origin3d::default(),
+            Extent3d {
+                width: 4,
+                height: 4,
+                depth: 2,
+            },
+            true,
+            Mirror::NONE,
+        )
+        .is_ok(),
+        "core Vulkan 3D depth resampling must reach the executor"
+    );
 }
 
 /// A format with no packed colour texel is refused for the RIGHT reason, in every filter.
@@ -1256,7 +1326,11 @@ fn a_format_with_no_packed_texel_is_refused_for_the_right_reason() {
                     1,
                 )
                 .unwrap();
-                let (src, dst) = if as_source { (odd, plain) } else { (plain, odd) };
+                let (src, dst) = if as_source {
+                    (odd, plain)
+                } else {
+                    (plain, odd)
+                };
                 let cb = recording_cb(&mut d);
                 let err = record::cmd_blit_image(
                     &mut d,
@@ -1266,9 +1340,17 @@ fn a_format_with_no_packed_texel_is_refused_for_the_right_reason() {
                     SubresourceLayers::base(),
                     SubresourceLayers::base(),
                     Origin3d { x: 0, y: 0, z: 0 },
-                    Extent3d { width: 4, height: 4, depth: 1 },
+                    Extent3d {
+                        width: 4,
+                        height: 4,
+                        depth: 1,
+                    },
                     Origin3d { x: 0, y: 0, z: 0 },
-                    Extent3d { width: 4, height: 4, depth: 1 },
+                    Extent3d {
+                        width: 4,
+                        height: 4,
+                        depth: 1,
+                    },
                     linear,
                     Mirror::NONE,
                 )
@@ -1317,9 +1399,17 @@ fn a_format_with_no_packed_texel_is_refused_for_the_right_reason() {
             SubresourceLayers::base(),
             SubresourceLayers::base(),
             Origin3d { x: 0, y: 0, z: 0 },
-            Extent3d { width: 4, height: 4, depth: 1 },
+            Extent3d {
+                width: 4,
+                height: 4,
+                depth: 1,
+            },
             Origin3d { x: 0, y: 0, z: 0 },
-            Extent3d { width: 4, height: 4, depth: 1 },
+            Extent3d {
+                width: 4,
+                height: 4,
+                depth: 1,
+            },
             linear,
             Mirror::NONE,
         )
@@ -1396,9 +1486,17 @@ fn integer_blits_record_within_a_numeric_class_and_reject_mixed_classes() {
             SubresourceLayers::base(),
             SubresourceLayers::base(),
             Origin3d { x: 0, y: 0, z: 0 },
-            Extent3d { width: 4, height: 4, depth: 1 },
+            Extent3d {
+                width: 4,
+                height: 4,
+                depth: 1,
+            },
             Origin3d { x: 0, y: 0, z: 0 },
-            Extent3d { width: 4, height: 4, depth: 1 },
+            Extent3d {
+                width: 4,
+                height: 4,
+                depth: 1,
+            },
             false,
             Mirror::NONE,
         );
@@ -1460,9 +1558,17 @@ fn a_linear_integer_blit_is_refused_but_nearest_records() {
                 SubresourceLayers::base(),
                 SubresourceLayers::base(),
                 Origin3d { x: 0, y: 0, z: 0 },
-                Extent3d { width: 4, height: 4, depth: 1 },
+                Extent3d {
+                    width: 4,
+                    height: 4,
+                    depth: 1,
+                },
                 Origin3d { x: 0, y: 0, z: 0 },
-                Extent3d { width: 4, height: 4, depth: 1 },
+                Extent3d {
+                    width: 4,
+                    height: 4,
+                    depth: 1,
+                },
                 linear,
                 Mirror::NONE,
             )
@@ -1589,9 +1695,17 @@ fn a_linear_blit_from_a_non_filterable_format_is_refused_but_nearest_records() {
                 SubresourceLayers::base(),
                 SubresourceLayers::base(),
                 Origin3d { x: 0, y: 0, z: 0 },
-                Extent3d { width: 4, height: 4, depth: 1 },
+                Extent3d {
+                    width: 4,
+                    height: 4,
+                    depth: 1,
+                },
                 Origin3d { x: 0, y: 0, z: 0 },
-                Extent3d { width: 4, height: 4, depth: 1 },
+                Extent3d {
+                    width: 4,
+                    height: 4,
+                    depth: 1,
+                },
                 linear,
                 Mirror::NONE,
             )
@@ -1639,9 +1753,17 @@ fn a_linear_blit_from_a_non_filterable_format_is_refused_but_nearest_records() {
             SubresourceLayers::base(),
             SubresourceLayers::base(),
             Origin3d { x: 0, y: 0, z: 0 },
-            Extent3d { width: 4, height: 4, depth: 1 },
+            Extent3d {
+                width: 4,
+                height: 4,
+                depth: 1
+            },
             Origin3d { x: 0, y: 0, z: 0 },
-            Extent3d { width: 4, height: 4, depth: 1 },
+            Extent3d {
+                width: 4,
+                height: 4,
+                depth: 1
+            },
             true,
             Mirror::NONE,
         )

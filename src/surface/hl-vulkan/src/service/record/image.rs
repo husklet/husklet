@@ -369,25 +369,16 @@ pub fn cmd_blit_image(
     ] {
         if dim != TextureDim::D3 && extent.depth > 1 {
             return Err(GpuError::Invalid(match side {
-                "source" => "vkCmdBlitImage: source is not a 3D image and has no depth axis to span",
+                "source" => {
+                    "vkCmdBlitImage: source is not a 3D image and has no depth axis to span"
+                }
                 _ => "vkCmdBlitImage: destination is not a 3D image and has no depth axis to span",
             }));
         }
     }
-    // A depth-spanning blit is SERVED, and this is the shape of it that the host can serve: one
-    // destination slice per source slice, so the existing per-slice resample runs unchanged and no new
-    // filter is needed. An unequal span would need resampling ALONG z, which under `VK_FILTER_LINEAR` is
-    // trilinear; the host has no such filter, and approximating it by picking a nearest slice would
-    // produce a plausible image that disagrees with every real driver, as a difference that reads like
-    // filtering rather than like a missing capability.
-    //
-    // Refused HERE rather than at the host, for the same reason as the integer and linear-filter
-    // refusals above: the caller gets an answer naming what it passed.
-    if src_extent.depth != dst_extent.depth {
-        return Err(GpuError::Unsupported(
-            "vkCmdBlitImage: source and destination depth spans differ (no depth resampling)",
-        ));
-    }
+    // Unequal D3 spans are legal core Vulkan. The host samples the source as a true 3D texture, so
+    // NEAREST selects the source slice under each destination center and LINEAR interpolates along z.
+    // No capability query lets a driver withdraw this by image shape, so it must reach the executor.
     // Checked add: a hostile `origin` near `u32::MAX` must be a truthful OutOfBounds, never an
     // `origin + extent` add-overflow panic.
     let in_bounds = |o: u32, e: u32, dim: u32| o.checked_add(e).is_some_and(|end| end <= dim);
