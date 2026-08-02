@@ -320,11 +320,33 @@ pub extern "C" fn glReadnPixels(
         fail(GL_INVALID_OPERATION);
         return;
     }
-    let packed = gpu_read_pixels(x, y, width, height, readpixels::PixelFormat::new(format, GL_UNSIGNED_BYTE));
+    let packed = gpu_read_pixels(
+        x,
+        y,
+        width,
+        height,
+        readpixels::PixelFormat::new(format, GL_UNSIGNED_BYTE),
+    );
     match packed {
-        Ok(bytes) => unsafe {
-            crate::driver::drawing::write_packed_rows(&bytes, row, height as usize, data)
-        },
+        Ok(bytes) => {
+            #[cfg(feature = "verbose")]
+            {
+                let pbo = GlobalState::context(|s| s.gl.buffer_for_target(GL_PIXEL_PACK_BUFFER));
+                let head = bytes
+                    .iter()
+                    .take(16)
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                hl_log::hl_error!(
+                    hl_log::tag::GL,
+                    "glReadnPixels destination={data:p} pbo={pbo} region={width}x{height} \
+                     buf_size={buf_size} need={need} returned={} head=[{head}]",
+                    bytes.len()
+                );
+            }
+            unsafe { crate::driver::drawing::write_packed_rows(&bytes, row, height as usize, data) }
+        }
         Err(e) => {
             GlobalState::context(|s| s.gl.set_gl_error(GL_OUT_OF_MEMORY));
             GlobalState::access(|s| s.set_egl_error(egl_error_from_gpu_error(&e)));
