@@ -156,7 +156,7 @@ fn run(exec: &mut WgpuExecutor, src: [f32; 4], dst: [f32; 4], blend: BlendState)
                         color: vec![ColorAttachment {
                             texture: 1,
                             load: LoadOp::Clear,
-                            clear: dst,
+                            clear: dst.map(f64::from),
                             store: true,
                         }],
                         depth: None,

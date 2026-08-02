@@ -73,7 +73,7 @@ fn mask_prog(seed: u64, category: &'static str, mask: u32) -> Prog {
                     color: vec![ColorAttachment {
                         texture: 1,
                         load: LoadOp::Clear,
-                        clear: bg,
+                        clear: bg.map(f64::from),
                         store: true,
                     }],
                     depth: None,
@@ -204,7 +204,7 @@ fn cull_prog(
                     color: vec![ColorAttachment {
                         texture: 1,
                         load: LoadOp::Clear,
-                        clear: bg,
+                        clear: bg.map(f64::from),
                         store: true,
                     }],
                     depth: None,

@@ -19,7 +19,7 @@ pub(super) fn gen_clear_srgb(seed: u64) -> Prog {
                     color: vec![ColorAttachment {
                         texture: 1,
                         load: LoadOp::Clear,
-                        clear: c,
+                        clear: c.map(f64::from),
                         store: true,
                     }],
                     depth: None,
@@ -298,7 +298,7 @@ pub(super) fn gen_clear_narrow(seed: u64) -> Prog {
                     color: vec![ColorAttachment {
                         texture: 1,
                         load: LoadOp::Clear,
-                        clear: c,
+                        clear: c.map(f64::from),
                         store: true,
                     }],
                     depth: None,
@@ -359,7 +359,7 @@ pub(super) fn gen_clear_float(seed: u64) -> Prog {
                     color: vec![ColorAttachment {
                         texture: 1,
                         load: LoadOp::Clear,
-                        clear: c,
+                        clear: c.map(f64::from),
                         store: true,
                     }],
                     depth: None,

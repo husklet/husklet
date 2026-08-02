@@ -170,7 +170,7 @@ fn stencil_prog(seed: u64, category: &'static str, test_cmp: u32) -> Prog {
                     color: vec![ColorAttachment {
                         texture: 1,
                         load: LoadOp::Clear,
-                        clear: bg,
+                        clear: bg.map(f64::from),
                         store: true,
                     }],
                     depth: Some(DepthAttachment {

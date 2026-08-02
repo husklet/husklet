@@ -157,7 +157,7 @@ fn render_scissor(exec: &mut WgpuExecutor) -> Vec<u8> {
                         color: vec![ColorAttachment {
                             texture: 1,
                             load: LoadOp::Clear,
-                            clear: colf(BLUE),
+                            clear: colf(BLUE).map(f64::from),
                             store: true,
                         }],
                         depth: None,
@@ -315,7 +315,7 @@ fn render_alpha_mask(exec: &mut WgpuExecutor) -> Vec<u8> {
                         color: vec![ColorAttachment {
                             texture: 1,
                             load: LoadOp::Clear,
-                            clear: colf(BLUE),
+                            clear: colf(BLUE).map(f64::from),
                             store: true,
                         }],
                         depth: None,

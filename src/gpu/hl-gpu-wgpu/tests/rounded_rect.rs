@@ -162,7 +162,7 @@ fn render(exec: &mut WgpuExecutor) -> Vec<u8> {
                         color: vec![ColorAttachment {
                             texture: 1,
                             load: LoadOp::Clear,
-                            clear: colf(BG),
+                            clear: colf(BG).map(f64::from),
                             store: true,
                         }],
                         depth: None,

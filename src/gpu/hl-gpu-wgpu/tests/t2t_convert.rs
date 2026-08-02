@@ -124,7 +124,7 @@ fn copy_full(
                         y: 0,
                         w,
                         h,
-                        color: dst_clear,
+                        color: dst_clear.map(f64::from),
                         base_array_layer: 0,
                         layer_count: 1,
                         mip_level: 0,

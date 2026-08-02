@@ -298,7 +298,7 @@ fn blit_and_resolve_are_advertised_and_run() {
                         color: vec![ColorAttachment {
                             texture: 3,
                             load: LoadOp::Clear,
-                            clear,
+                            clear: clear.map(f64::from),
                             store: true,
                         }],
                         depth: None,

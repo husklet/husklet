@@ -121,9 +121,9 @@ fn assert_survives(g: &mut WgpuExecutor, label: &str) {
                         w: 2,
                         h: 2,
                         color: [
-                            TEXEL[0] as f32 / 255.0,
-                            TEXEL[1] as f32 / 255.0,
-                            TEXEL[2] as f32 / 255.0,
+                            TEXEL[0] as f64 / 255.0,
+                            TEXEL[1] as f64 / 255.0,
+                            TEXEL[2] as f64 / 255.0,
                             1.0,
                         ],
                         base_array_layer: 0,

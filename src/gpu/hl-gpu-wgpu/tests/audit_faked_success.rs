@@ -116,7 +116,7 @@ fn render(
                         color: vec![ColorAttachment {
                             texture: 1,
                             load: LoadOp::Clear,
-                            clear: clear_f,
+                            clear: clear_f.map(f64::from),
                             store: true,
                         }],
                         depth: None,
