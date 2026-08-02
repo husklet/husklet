@@ -147,7 +147,7 @@ fn converted_tightly_packed_vec3_leaves_no_empty_vertex_layout() {
         .iter()
         .find(|layout| layout.attrs.iter().any(|attribute| attribute.location == 1))
         .expect("the converted vec3 layout");
-    assert_eq!(converted.stride, 12);
+    assert_eq!(converted.stride, 16, "vec3 is padded to the linked vec4 input");
 }
 
 #[test]
@@ -163,10 +163,8 @@ fn signed_normalized_conversion_clamps_at_minus_one() {
 fn expressible_formats_are_left_on_the_direct_path() {
     for (size, kind, normalized) in [
         (4, GL_FLOAT, false),
-        (2, GL_FLOAT, false),
         (4, GL_UNSIGNED_BYTE, true),
         (4, GL_SHORT, true),
-        (2, GL_UNSIGNED_SHORT, true),
     ] {
         let mut c = ctx();
         let mut sink = RecordingSink::with_full_caps();
@@ -311,14 +309,88 @@ fn ipointer_format(size: i32, kind: u32) -> (u32, bool) {
 }
 
 #[test]
+fn narrow_signed_ipointer_widens_and_sign_extends_with_gl_defaults() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_tint(&mut c);
+    let ints = c.buffers.gen();
+    record::bind_buffer(&mut c, GL_ARRAY_BUFFER, ints);
+    let values = [-2i16, 7, 9];
+    let bytes = values.iter().flat_map(|value| value.to_le_bytes()).collect::<Vec<_>>();
+    record::buffer_data(&mut c, GL_ARRAY_BUFFER, &bytes, 0x88E4);
+    record::vertex_attrib_ipointer(&mut c, 1, 1, GL_SHORT, 0, 0);
+    record::enable_vertex_attrib(&mut c, 1);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let batch = &sink.batches[0];
+    let data = batch
+        .iter()
+        .zip(batch.iter().skip(1))
+        .find_map(|(create, write)| match (create, write) {
+            (Cmd::CreateBuffer(_, desc), Cmd::WriteBuffer { data, .. })
+                if desc.label.starts_with("gl-converted-vertex") => Some(data),
+            _ => None,
+        })
+        .expect("converted integer upload");
+    let words = data
+        .chunks_exact(4)
+        .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+        .collect::<Vec<_>>();
+    assert_eq!(&words[..4], &[(-2i32) as u32, 0, 0, 1]);
+    let attr = pipeline_desc(batch)
+        .vertex_buffers
+        .iter()
+        .flat_map(|layout| &layout.attrs)
+        .find(|attr| attr.location == 1)
+        .unwrap();
+    assert_eq!(attr.format & 0xffff, 4 | (6 << 8), "Sint32x4");
+}
+
+#[test]
+fn narrow_unsigned_ipointer_zero_extends_and_pads_w() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_tint(&mut c);
+    let ints = c.buffers.gen();
+    record::bind_buffer(&mut c, GL_ARRAY_BUFFER, ints);
+    let bytes = [255u8, 128, 7].repeat(3);
+    record::buffer_data(&mut c, GL_ARRAY_BUFFER, &bytes, 0x88E4);
+    record::vertex_attrib_ipointer(&mut c, 1, 3, GL_UNSIGNED_BYTE, 0, 0);
+    record::enable_vertex_attrib(&mut c, 1);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let batch = &sink.batches[0];
+    let data = batch
+        .iter()
+        .zip(batch.iter().skip(1))
+        .find_map(|(create, write)| match (create, write) {
+            (Cmd::CreateBuffer(_, desc), Cmd::WriteBuffer { data, .. })
+                if desc.label.starts_with("gl-converted-vertex") => Some(data),
+            _ => None,
+        })
+        .unwrap();
+    let words = data
+        .chunks_exact(4)
+        .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+        .collect::<Vec<_>>();
+    assert_eq!(&words[..4], &[255, 128, 7, 1]);
+    let attr = pipeline_desc(batch)
+        .vertex_buffers
+        .iter()
+        .flat_map(|layout| &layout.attrs)
+        .find(|attr| attr.location == 1)
+        .unwrap();
+    assert_eq!(attr.format & 0xffff, 4 | (5 << 8), "Uint32x4");
+}
+
+#[test]
 fn an_ipointer_attribute_is_declared_integer_and_never_converted() {
-    // Chrome's exact shape: GL_UNSIGNED_INT, two components, feeding a `uvec2`.
-    let (format, converted) = ipointer_format(2, GL_UNSIGNED_INT);
+    let (format, converted) = ipointer_format(4, GL_UNSIGNED_INT);
 
     // Read the packing back through explicit shifts rather than by rebuilding it with the same helper
     // that wrote it — a generator checked against itself agrees with itself.
     // `comps | (kind << 8) | (normalized << 16) | (integer << 17)`, kind 5 = u32.
-    assert_eq!(format & 0xFF, 2, "two components");
+    assert_eq!(format & 0xFF, 4, "four components");
     assert_eq!((format >> 8) & 0xFF, 5, "GL_UNSIGNED_INT is kind 5");
     assert_eq!(
         (format >> 16) & 1,

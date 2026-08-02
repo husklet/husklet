@@ -116,6 +116,19 @@ fn needs_float_width_conversion(program: &Program, location: usize, attribute: &
             .is_some_and(|components| components != attribute.size.clamp(1, 4))
 }
 
+fn needs_integer_conversion(program: &Program, location: usize, attribute: &Attr) -> bool {
+    if !attribute.integer {
+        return false;
+    }
+    let components = attribute.size.clamp(1, 4);
+    let narrow_unsupported = matches!(attribute.kind, GL_BYTE | GL_UNSIGNED_BYTE | GL_SHORT | GL_UNSIGNED_SHORT)
+        && matches!(components, 1 | 3);
+    narrow_unsupported
+        || program
+            .vertex_attr_components(location)
+            .is_some_and(|linked| linked != components)
+}
+
 /// Decode one component of `attribute` from `bytes` at `offset` into the float GL says the shader sees.
 ///
 /// Normalized conversion follows ES 3.0 §2.9.1: unsigned `c / (2^b − 1)`, signed `max(c / (2^(b−1) − 1),
@@ -225,6 +238,45 @@ fn convert_attribute_to_f32_width(
                 1.0
             } else {
                 0.0
+            };
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    (out, vertices)
+}
+
+fn convert_attribute_to_integer_width(
+    attribute: &Attr,
+    source: &[u8],
+    output_components: usize,
+) -> (Vec<u8>, usize) {
+    let source_components = attribute.size.clamp(1, 4) as usize;
+    let stride = attribute_stride(attribute).max(1) as usize;
+    let element = attribute_element_size(attribute) as usize;
+    let component = GlType(attribute.kind).component_size().max(1);
+    let vertices = match source.len().checked_sub(attribute.offset + element) {
+        Some(remaining) => 1 + remaining / stride,
+        None => 0,
+    };
+    let mut out = Vec::with_capacity(vertices * output_components * 4);
+    for vertex in 0..vertices {
+        let base = attribute.offset + vertex * stride;
+        for index in 0..output_components {
+            let value = if index >= source_components {
+                u32::from(index == 3)
+            } else {
+                let offset = base + index * component;
+                let byte = |n| source.get(offset + n).copied().unwrap_or(0);
+                match attribute.kind {
+                    GL_BYTE => byte(0) as i8 as i32 as u32,
+                    GL_UNSIGNED_BYTE => byte(0) as u32,
+                    GL_SHORT => i16::from_le_bytes([byte(0), byte(1)]) as i32 as u32,
+                    GL_UNSIGNED_SHORT => u16::from_le_bytes([byte(0), byte(1)]) as u32,
+                    GL_INT | GL_UNSIGNED_INT => {
+                        u32::from_le_bytes([byte(0), byte(1), byte(2), byte(3)])
+                    }
+                    _ => 0,
+                }
             };
             out.extend_from_slice(&value.to_le_bytes());
         }
@@ -505,7 +557,8 @@ pub(super) fn lower_vertices(
         if !attribute.enabled
             || attr_slot[location] < 0
             || !(needs_float_conversion(attribute)
-                || needs_float_width_conversion(program, location, attribute))
+                || needs_float_width_conversion(program, location, attribute)
+                || needs_integer_conversion(program, location, attribute))
         {
             continue;
         }
@@ -517,8 +570,12 @@ pub(super) fn lower_vertices(
             .vertex_attr_components(location)
             .unwrap_or(attribute.size)
             .clamp(1, 4);
-        let (data, vertices) =
-            convert_attribute_to_f32_width(attribute, &source, components as usize);
+        let integer = needs_integer_conversion(program, location, attribute);
+        let (data, vertices) = if integer {
+            convert_attribute_to_integer_width(attribute, &source, components as usize)
+        } else {
+            convert_attribute_to_f32_width(attribute, &source, components as usize)
+        };
         if vertices == 0 {
             continue;
         }
@@ -544,7 +601,20 @@ pub(super) fn lower_vertices(
             stride: comps * size_of::<f32>() as u32,
             step_mode: (attribute.divisor > 0) as u32,
             location: location as u32,
-            format: vertex_format_wire(GL_FLOAT, comps as i32, false, false),
+            format: vertex_format_wire(
+                if integer {
+                    if matches!(attribute.kind, GL_BYTE | GL_SHORT | GL_INT) {
+                        GL_INT
+                    } else {
+                        GL_UNSIGNED_INT
+                    }
+                } else {
+                    GL_FLOAT
+                },
+                comps as i32,
+                false,
+                integer,
+            ),
         });
     }
 
@@ -557,6 +627,7 @@ pub(super) fn lower_vertices(
             .unwrap_or(ca.size)
             .clamp(1, 4);
         let width_mismatch = !attribute.integer && linked_components != ca.size.clamp(1, 4);
+        let integer_conversion = needs_integer_conversion(program, ca.location, &attribute);
         let (data, kind, normalized, integer, components) = if needs_float_conversion(&attribute)
             || width_mismatch
         {
@@ -566,6 +637,18 @@ pub(super) fn lower_vertices(
                 linked_components as usize,
             );
             (converted, GL_FLOAT, false, false, linked_components)
+        } else if integer_conversion {
+            let (converted, _) = convert_attribute_to_integer_width(
+                &attribute,
+                &ca.data,
+                linked_components as usize,
+            );
+            let kind = if matches!(attribute.kind, GL_BYTE | GL_SHORT | GL_INT) {
+                GL_INT
+            } else {
+                GL_UNSIGNED_INT
+            };
+            (converted, kind, false, true, linked_components)
         } else {
             (ca.data.clone(), ca.kind, ca.normalized, ca.integer, ca.size)
         };
@@ -807,7 +890,8 @@ pub(super) fn lower_vertices(
             attribute.enabled
                 && attr_slot[location] == slot as i32
                 && !(needs_float_conversion(attribute)
-                    || needs_float_width_conversion(program, location, attribute))
+                    || needs_float_width_conversion(program, location, attribute)
+                    || needs_integer_conversion(program, location, attribute))
         });
         if feeds_direct_attribute {
             *mapped = Some(next_slot);
@@ -820,6 +904,7 @@ pub(super) fn lower_vertices(
         }
         *slot = if needs_float_conversion(&d.attrs[location])
             || needs_float_width_conversion(program, location, &d.attrs[location])
+            || needs_integer_conversion(program, location, &d.attrs[location])
         {
             -1
         } else {
