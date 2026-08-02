@@ -225,3 +225,209 @@ fn vertex_stage_captures_actual_output_to_storage() {
         .expect("readback");
     assert_eq!(bytes, expected.to_le_bytes());
 }
+
+#[test]
+fn wide_vertex_layout_coexists_with_multiple_transform_feedback_buffers() {
+    const WIDE_VS: &str = r#"#version 460
+layout(location=0) in float a0;
+layout(location=1) in float a1;
+layout(location=2) in float a2;
+layout(location=3) in float a3;
+layout(location=4) in float a4;
+layout(location=5) in float a5;
+layout(location=6) in float a6;
+layout(location=7) in float a7;
+layout(location=8) in float a8;
+layout(location=9) in float a9;
+layout(location=10) in float a10;
+layout(location=11) in float a11;
+layout(location=12) in float a12;
+layout(set=0,binding=64,std430) buffer OutA { uint words[]; } tf_a;
+layout(set=0,binding=65,std430) buffer OutB { uint words[]; } tf_b;
+layout(set=0,binding=68,std140) uniform Offsets { uvec4 base_words; } offsets;
+void main() {
+    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+    tf_a.words[offsets.base_words.x] = floatBitsToUint(a0);
+    tf_b.words[offsets.base_words.y] = floatBitsToUint(a12);
+}
+"#;
+
+    let mut gpu = WgpuExecutor::new(DeviceConfig::default()).expect("Metal adapter");
+    let mut session = new_session(&gpu);
+    let first = 3.25f32;
+    let last = -19.5f32;
+    let mut commands = vec![Cmd::CreateTexture(
+        1,
+        tex2d(1, 1, texture_usage::RENDER_TARGET),
+    )];
+    for slot in 0..13u32 {
+        let id = 10 + slot;
+        let value = if slot == 0 {
+            first
+        } else if slot == 12 {
+            last
+        } else {
+            slot as f32
+        };
+        commands.extend([
+            Cmd::CreateBuffer(
+                id,
+                BufferDesc {
+                    size: 4,
+                    usage: buffer_usage::VERTEX,
+                    label: format!("wide-vb-{slot}"),
+                },
+            ),
+            Cmd::WriteBuffer {
+                id,
+                offset: 0,
+                data: value.to_le_bytes().to_vec(),
+            },
+        ]);
+    }
+    for (id, label) in [(100, "output-a"), (101, "output-b")] {
+        commands.push(Cmd::CreateBuffer(
+            id,
+            BufferDesc {
+                size: 4,
+                usage: buffer_usage::STORAGE | buffer_usage::COPY_SRC,
+                label: label.into(),
+            },
+        ));
+    }
+    commands.extend([
+        Cmd::CreateBuffer(
+            102,
+            BufferDesc {
+                size: 16,
+                usage: buffer_usage::UNIFORM,
+                label: "offsets".into(),
+            },
+        ),
+        Cmd::WriteBuffer {
+            id: 102,
+            offset: 0,
+            data: vec![0; 16],
+        },
+        Cmd::CreateShader {
+            id: 1,
+            kind: ShaderPayloadKind::Glsl,
+            spirv: glsl(glsl_stage::VERTEX, "vmain", WIDE_VS),
+        },
+        Cmd::CreateShader {
+            id: 2,
+            kind: ShaderPayloadKind::Glsl,
+            spirv: glsl(glsl_stage::FRAGMENT, "fmain", FS),
+        },
+        Cmd::CreateRenderPipeline(
+            1,
+            RenderPipelineDesc {
+                vertex: ShaderRef {
+                    module: 1,
+                    entry: "vmain".into(),
+                },
+                fragment: Some(ShaderRef {
+                    module: 2,
+                    entry: "fmain".into(),
+                }),
+                vertex_buffers: (0..13)
+                    .map(|location| VertexLayout {
+                        stride: 4,
+                        step_mode: 0,
+                        attrs: vec![VertexAttr {
+                            location,
+                            format: 0x01,
+                            offset: 0,
+                        }],
+                    })
+                    .collect(),
+                color_targets: vec![ColorTargetState {
+                    format: TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: 0,
+                }],
+                depth: None,
+                topology: Topology::PointList,
+                cull: 0,
+                front_face: 0,
+                sample_count: 1,
+                label: "wide-tf".into(),
+            },
+        ),
+        Cmd::CreateBindGroup(
+            1,
+            BindGroupDesc {
+                set: 0,
+                entries: vec![
+                    BindEntry {
+                        binding: 64,
+                        resource: BindResource::Buffer {
+                            id: 100,
+                            offset: 0,
+                            size: 4,
+                        },
+                    },
+                    BindEntry {
+                        binding: 65,
+                        resource: BindResource::Buffer {
+                            id: 101,
+                            offset: 0,
+                            size: 4,
+                        },
+                    },
+                    BindEntry {
+                        binding: 68,
+                        resource: BindResource::Buffer {
+                            id: 102,
+                            offset: 0,
+                            size: 16,
+                        },
+                    },
+                ],
+            },
+        ),
+    ]);
+    let mut encoder = vec![
+        Enc::BeginRenderPass {
+            color: vec![ColorAttachment {
+                texture: 1,
+                load: LoadOp::Clear,
+                clear: [0.0; 4],
+                store: true,
+            }],
+            depth: None,
+        },
+        Enc::SetPipeline(1),
+        Enc::SetBindGroup { index: 0, group: 1 },
+    ];
+    encoder.extend((0..13u32).map(|slot| Enc::SetVertexBuffer {
+        slot,
+        buffer: 10 + slot,
+        offset: 0,
+    }));
+    encoder.extend([
+        Enc::Draw {
+            vertex_count: 1,
+            instance_count: 1,
+            first_vertex: 0,
+            first_instance: 0,
+        },
+        Enc::EndRenderPass,
+    ]);
+    commands.push(Cmd::Submit(CommandBuffer {
+        encoder,
+        signal: None,
+    }));
+
+    hl_gpu::runtime::submit(&mut session, &mut gpu, 0, &commands).expect("wide capture draw");
+    assert_eq!(
+        gpu.read_buffer(&session.resources, hl_gpu::BufferId(100), 0, 4)
+            .expect("first readback"),
+        first.to_le_bytes()
+    );
+    assert_eq!(
+        gpu.read_buffer(&session.resources, hl_gpu::BufferId(101), 0, 4)
+            .expect("last readback"),
+        last.to_le_bytes()
+    );
+}
