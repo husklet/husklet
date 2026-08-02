@@ -126,7 +126,7 @@ impl GpuExecutor for WgpuExecutor {
         let data = self.read_bytes(res, id.0, offset, len)?;
         if self.diagnostic_sentinel_readback.get() == Some(id.0) {
             hl_log::hl_error!(
-                hl_log::tag::GPU,
+                hl_log::tag::PRESENT,
                 "sentinel_host phase=read_buffer executor={:p} buffer={} offset={} len={} head={:02x?}",
                 self,
                 id.0,
@@ -201,7 +201,7 @@ impl WgpuExecutor {
                         self.diagnostic_upload_candidates
                             .set(self.diagnostic_upload_candidates.get() - 1);
                         hl_log::hl_error!(
-                            hl_log::tag::GPU,
+                            hl_log::tag::PRESENT,
                             "sentinel_host phase=write_candidate executor={:p} buffer={} offset={} len={} head={:02x?}",
                             self,
                             id,
@@ -218,7 +218,7 @@ impl WgpuExecutor {
                         self.diagnostic_sentinel_buffer.set(Some(*id));
                         self.diagnostic_sentinel_submits.set(8);
                         hl_log::hl_error!(
-                            hl_log::tag::GPU,
+                            hl_log::tag::PRESENT,
                             "sentinel_host phase=write_buffer executor={:p} buffer={} offset={} len={} head={:02x?}",
                             self,
                             id,

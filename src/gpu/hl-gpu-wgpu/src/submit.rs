@@ -497,7 +497,7 @@ impl WgpuExecutor {
                         if self.diagnostic_sentinel_texture.get() == Some(*src) {
                             self.diagnostic_sentinel_readback.set(Some(*dst));
                             hl_log::hl_error!(
-                                tag::GPU,
+                                tag::PRESENT,
                                 "sentinel_host phase=copy_texture_to_buffer executor={:p} texture={} buffer={} mip={} size={}x{}",
                                 self,
                                 src,
@@ -616,7 +616,7 @@ impl WgpuExecutor {
                         if sentinel {
                             self.diagnostic_sentinel_texture.set(Some(*dst));
                             hl_log::hl_error!(
-                                tag::GPU,
+                                tag::PRESENT,
                                 "sentinel_host phase=copy_buffer_to_texture executor={:p} buffer={} texture={} offset={} row={} size={}x{} mip={}",
                                 self,
                                 src,
@@ -688,7 +688,7 @@ impl WgpuExecutor {
                                     .is_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64));
                         if native_compatible {
                             if sentinel {
-                                hl_log::hl_error!(tag::GPU, "sentinel_host phase=upload_branch executor={:p} texture={} branch=native", self, dst);
+                                hl_log::hl_error!(tag::PRESENT, "sentinel_host phase=upload_branch executor={:p} texture={} branch=native", self, dst);
                             }
                             native
                                 .get_or_insert_with(|| {
@@ -733,7 +733,7 @@ impl WgpuExecutor {
                             && u64::from(src_stride).is_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT);
                         if staging_compatible {
                             if sentinel {
-                                hl_log::hl_error!(tag::GPU, "sentinel_host phase=upload_branch executor={:p} texture={} branch=staging", self, dst);
+                                hl_log::hl_error!(tag::PRESENT, "sentinel_host phase=upload_branch executor={:p} texture={} branch=staging", self, dst);
                             }
                             let padded_row = row
                                 .checked_next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
@@ -790,7 +790,7 @@ impl WgpuExecutor {
                         }
 
                         if sentinel {
-                            hl_log::hl_error!(tag::GPU, "sentinel_host phase=upload_branch executor={:p} texture={} branch=host_fallback", self, dst);
+                            hl_log::hl_error!(tag::PRESENT, "sentinel_host phase=upload_branch executor={:p} texture={} branch=host_fallback", self, dst);
                         }
                         self.submit_encoded(&mut native);
                         // Map the source buffer once, then compact padded rows in host memory. Mapping every
@@ -1026,7 +1026,7 @@ impl WgpuExecutor {
         if remaining != 0 {
             self.diagnostic_sentinel_submits.set(remaining - 1);
             hl_log::hl_error!(
-                tag::GPU,
+                tag::PRESENT,
                 "sentinel_host phase=queue_submit executor={:p} texture={:?} remaining={}",
                 self,
                 self.diagnostic_sentinel_texture.get(),
