@@ -369,9 +369,7 @@ pub fn cmd_blit_image(
     ] {
         if dim != TextureDim::D3 && extent.depth > 1 {
             return Err(GpuError::Invalid(match side {
-                "source" => {
-                    "vkCmdBlitImage: source is not a 3D image and has no depth axis to span"
-                }
+                "source" => "vkCmdBlitImage: source is not a 3D image and has no depth axis to span",
                 _ => "vkCmdBlitImage: destination is not a 3D image and has no depth axis to span",
             }));
         }
