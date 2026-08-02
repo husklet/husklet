@@ -80,6 +80,7 @@ impl GlContext {
         self.local
             .indexed_buffers
             .retain(|_, binding| binding.buffer != name);
+        self.local.transform_feedbacks.remove_buffer_from_bound(name);
         for attribute in &mut self.local.attr {
             if attribute.buffer == name {
                 attribute.buffer = 0;

@@ -103,6 +103,19 @@ impl TransformFeedbacks {
         }
     }
 
+    /// Detach a deleted buffer from the currently-bound object's indexed binding points. OpenGL buffer
+    /// deletion affects the active transform-feedback object; bindings stored by other objects remain
+    /// intact until those objects are rebound.
+    pub fn remove_buffer_from_bound(&mut self, buffer: u32) {
+        if let Some(object) = self.bound_mut() {
+            for binding in &mut object.bindings {
+                if binding.is_some_and(|binding| binding.buffer == buffer) {
+                    *binding = None;
+                }
+            }
+        }
+    }
+
     /// `glDeleteTransformFeedbacks` (one name). Deleting the bound object reverts to the default `0`.
     pub fn delete(&mut self, id: u32) {
         if id == 0 {
@@ -134,5 +147,32 @@ impl TransformFeedbacks {
             .get(&program)
             .and_then(|(v, _)| v.get(index as usize))
             .map(|s| s.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deleting_buffer_detaches_only_from_bound_transform_feedback() {
+        let mut feedbacks = TransformFeedbacks::new();
+        let first = feedbacks.gen();
+        let second = feedbacks.gen();
+        let binding = IndexedBinding {
+            buffer: 7,
+            offset: 0,
+            size: 0,
+        };
+
+        feedbacks.bind(first);
+        feedbacks.set_binding(0, Some(binding));
+        feedbacks.bind(second);
+        feedbacks.set_binding(0, Some(binding));
+        feedbacks.remove_buffer_from_bound(7);
+
+        assert_eq!(feedbacks.bound_obj().bindings[0], None);
+        feedbacks.bind(first);
+        assert_eq!(feedbacks.bound_obj().bindings[0], Some(binding));
     }
 }
