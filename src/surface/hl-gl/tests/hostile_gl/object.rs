@@ -9,12 +9,14 @@ use super::*;
 #[test]
 fn dangling_object_names_to_bind_use_attach_never_panic() {
     let mut c = ctx();
-    // Binding never-created names is a safe no-op (state stores the name; nothing dereferenced).
+    // Most bind targets create never-generated names on first bind. GLES3 vertex arrays are the exception:
+    // only a name returned by glGenVertexArrays may be bound.
     record::bind_buffer(&mut c, GL_ARRAY_BUFFER, 777);
     c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, 888);
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, 999);
     record::bind_vertex_array(&mut c, 4242);
+    assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
     // glUseProgram with a name GL never generated is GL_INVALID_VALUE (ES 3.0 §2.11.3) and leaves the
     // current program untouched — so the phantom is NOT bound and the draw below is program-less.
     record::use_program(&mut c, 31337);
