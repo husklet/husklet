@@ -195,6 +195,21 @@ impl WgpuExecutor {
                     self.profile_record(|p| &mut p.destroys, started);
                 }
                 Cmd::WriteBuffer { id, offset, data } => {
+                    if matches!(data.len(), 64 | 256)
+                        && self.diagnostic_upload_candidates.get() != 0
+                    {
+                        self.diagnostic_upload_candidates
+                            .set(self.diagnostic_upload_candidates.get() - 1);
+                        hl_log::hl_error!(
+                            hl_log::tag::GPU,
+                            "sentinel_host phase=write_candidate executor={:p} buffer={} offset={} len={} head={:02x?}",
+                            self,
+                            id,
+                            offset,
+                            data.len(),
+                            &data[..16]
+                        );
+                    }
                     if data.len() >= 16
                         && data[..16]
                             == [0x11, 0x22, 0x33, 0xff, 0x11, 0x22, 0x33, 0xff,
