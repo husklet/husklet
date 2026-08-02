@@ -131,6 +131,7 @@ impl FunctionLowering<'_> {
                     array_index,
                     fun,
                     value,
+                    result,
                 } => {
                     if let Some(Pointer::Selected {
                         pointers, selector, ..
@@ -139,6 +140,7 @@ impl FunctionLowering<'_> {
                         let coordinate = self.map[coordinate.index()];
                         let array_index = array_index.map(|value| self.map[value.index()]);
                         let value = self.map[value.index()];
+                        let result = result.map(|value| self.map[value.index()]);
                         rebuilt.push(
                             Statement::Switch {
                                 selector: *selector,
@@ -148,6 +150,7 @@ impl FunctionLowering<'_> {
                                     array_index,
                                     fun,
                                     value,
+                                    result,
                                 }),
                             },
                             span,
@@ -159,6 +162,7 @@ impl FunctionLowering<'_> {
                             array_index,
                             fun,
                             value,
+                            result,
                         }]);
                         remap_block(&self.map, &self.spans, &mut nested);
                         for (statement, span) in nested.span_into_iter() {

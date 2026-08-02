@@ -670,11 +670,13 @@ impl super::Validator {
                 array_index,
                 fun: _,
                 value,
+                result,
             } => {
                 validate_expr(image)?;
                 validate_expr(coordinate)?;
                 validate_expr_opt(array_index)?;
                 validate_expr(value)?;
+                validate_expr_opt(result)?;
                 Ok(())
             }
             crate::Statement::WorkGroupUniformLoad { pointer, result } => {

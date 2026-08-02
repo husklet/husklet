@@ -2413,7 +2413,8 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                             return Ok(Some(result));
                         }
                         "textureAtomicMin" | "textureAtomicMax" | "textureAtomicAdd"
-                        | "textureAtomicAnd" | "textureAtomicOr" | "textureAtomicXor" => {
+                        | "textureAtomicAnd" | "textureAtomicOr" | "textureAtomicXor"
+                        | "textureAtomicExchange" | "textureAtomicCompareExchangeWeak" => {
                             let mut args = ctx.prepare_args(arguments, 3, span);
 
                             let image = args.next()?;
@@ -2430,9 +2431,28 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                                 })
                                 .transpose()?;
 
+                            let compare = (function.name == "textureAtomicCompareExchangeWeak")
+                                .then(|| {
+                                    args.min_args += 1;
+                                    self.expression(args.next()?, ctx)
+                                })
+                                .transpose()?;
                             let value = self.expression(args.next()?, ctx)?;
 
                             args.finish()?;
+
+                            let result = if is_statement {
+                                None
+                            } else {
+                                let ty = ctx.register_type(value)?;
+                                Some(ctx.interrupt_emitter(
+                                    crate::Expression::AtomicResult {
+                                        ty,
+                                        comparison: false,
+                                    },
+                                    span,
+                                )?)
+                            };
 
                             let rctx = ctx.runtime_expression_ctx(span)?;
                             rctx.block
@@ -2449,12 +2469,19 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                                     "textureAtomicAnd" => crate::AtomicFunction::And,
                                     "textureAtomicOr" => crate::AtomicFunction::InclusiveOr,
                                     "textureAtomicXor" => crate::AtomicFunction::ExclusiveOr,
+                                    "textureAtomicExchange" => crate::AtomicFunction::Exchange {
+                                        compare: None,
+                                    },
+                                    "textureAtomicCompareExchangeWeak" => {
+                                        crate::AtomicFunction::Exchange { compare }
+                                    }
                                     _ => unreachable!(),
                                 },
                                 value,
+                                result,
                             };
                             rctx.block.push(stmt, span);
-                            return Ok(None);
+                            return Ok(result);
                         }
                         "storageBarrier" => {
                             ctx.prepare_args(arguments, 0, span).finish()?;

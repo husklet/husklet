@@ -1415,8 +1415,12 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
 
         if self.lookup_image_texel_pointer.contains_key(&pointer_id) {
             return self.parse_image_atomic(
+                result_type_id,
+                result_id,
+                block_id,
                 pointer_id,
                 value_id,
+                None,
                 ctx,
                 emitter,
                 block,
@@ -4269,6 +4273,23 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                     let _unequal_memory_semantics_id = self.next()?;
                     let value_id = self.next()?;
                     let comparator_id = self.next()?;
+
+                    if self.lookup_image_texel_pointer.contains_key(&pointer_id) {
+                        self.parse_image_atomic(
+                            result_type_id,
+                            result_id,
+                            block_id,
+                            pointer_id,
+                            value_id,
+                            Some(comparator_id),
+                            ctx,
+                            &mut emitter,
+                            &mut block,
+                            body_idx,
+                            crate::AtomicFunction::Exchange { compare: None },
+                        )?;
+                        continue;
+                    }
 
                     let (p_exp_h, p_base_ty_h) = self.get_exp_and_base_ty_handles(
                         pointer_id,
