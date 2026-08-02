@@ -485,14 +485,49 @@ pub extern "C" fn glReadPixels(
         let byte_off = pixels as usize; // GL: the offset is the `pixels` argument treated as an integer
         let packed = gpu_read_pixels(x, y, width, height, destination);
         match packed {
-            Ok(bytes) => GlobalState::context(|s| {
-                let row = width as usize * bpp;
-                let stride = s.gl.pixel_store_state().pack_stride(row);
-                for (index, source) in bytes.chunks(row).take(height as usize).enumerate() {
-                    s.gl.buffers
-                        .set_sub_data(pbo, byte_off + index * stride, source);
+            Ok(bytes) => {
+                #[cfg(feature = "verbose")]
+                let returned_head = bytes.iter().take(16).copied().collect::<Vec<_>>();
+                let stored = GlobalState::context(|s| {
+                    #[cfg(feature = "verbose")]
+                    let before = s.gl.buffers.get(pbo).map_or(0, |buffer| buffer.data.len());
+                    let row = width as usize * bpp;
+                    let stride = s.gl.pixel_store_state().pack_stride(row);
+                    for (index, source) in bytes.chunks(row).take(height as usize).enumerate() {
+                        s.gl.buffers
+                            .set_sub_data(pbo, byte_off + index * stride, source);
+                    }
+                    #[cfg(feature = "verbose")]
+                    {
+                        let after = s.gl.buffers.get(pbo).map_or(0, |buffer| buffer.data.len());
+                        let head =
+                            s.gl.buffers
+                                .range_bytes(pbo, byte_off, bytes.len().min(16))
+                                .unwrap_or_default();
+                        return (before, after, head);
+                    }
+                });
+                #[cfg(feature = "verbose")]
+                {
+                    let encode = |bytes: &[u8]| {
+                        bytes
+                            .iter()
+                            .map(|byte| format!("{byte:02x}"))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    };
+                    hl_log::hl_error!(
+                        hl_log::tag::GL,
+                        "glReadPixels pbo={pbo} offset={byte_off} region={width}x{height} bpp={bpp} \
+                         returned={} returned_head=[{}] buffer_before={} buffer_after={} stored_head=[{}]",
+                        bytes.len(),
+                        encode(&returned_head),
+                        stored.0,
+                        stored.1,
+                        encode(&stored.2)
+                    );
                 }
-            }),
+            }
             Err(e) => {
                 // Report what actually failed. Every readback failure used to be `GL_OUT_OF_MEMORY`,
                 // which names a cause the driver did not measure: a host refusal, a decode failure and a

@@ -197,9 +197,27 @@ pub extern "C" fn glMapBufferRange(
     GlobalState::context(|s| {
         match map::map_buffer_range(&mut s.gl, target, offset, length, access) {
             Some((name, off)) => {
-                s.gl.buffers
-                    .mapped_ptr(name, off)
-                    .map_or(core::ptr::null_mut(), |pointer| pointer.cast())
+                let pointer =
+                    s.gl.buffers
+                        .mapped_ptr(name, off)
+                        .map_or(core::ptr::null_mut(), |pointer| pointer.cast());
+                #[cfg(feature = "verbose")]
+                if access & GL_MAP_READ_BIT != 0 {
+                    let head =
+                        s.gl.buffers
+                            .range_bytes(name, off, (length as usize).min(16))
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|byte| format!("{byte:02x}"))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                    hl_log::hl_error!(
+                        hl_log::tag::GL,
+                        "glMapBufferRange read target={target:#x} buffer={name} offset={off} \
+                         length={length} pointer={pointer:p} head=[{head}]"
+                    );
+                }
+                pointer
             }
             None => core::ptr::null_mut(),
         }
