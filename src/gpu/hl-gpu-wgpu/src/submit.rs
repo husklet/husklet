@@ -612,6 +612,21 @@ impl WgpuExecutor {
                         width,
                         height,
                     } => {
+                        if (*width == 8 && *height == 8) || (*width == 4 && *height == 4) {
+                            hl_log::hl_error!(
+                                tag::PRESENT,
+                                "sentinel_host phase=copy_candidate executor={:p} buffer={} texture={} offset={} row={} size={}x{} mip={} matched_write={}",
+                                self,
+                                src,
+                                dst,
+                                src_offset,
+                                bytes_per_row,
+                                width,
+                                height,
+                                mip,
+                                self.diagnostic_sentinel_buffer.get() == Some(*src)
+                            );
+                        }
                         let sentinel = self.diagnostic_sentinel_buffer.get() == Some(*src);
                         if sentinel {
                             self.diagnostic_sentinel_texture.set(Some(*dst));
