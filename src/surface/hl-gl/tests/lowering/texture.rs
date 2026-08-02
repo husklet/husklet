@@ -22,10 +22,48 @@ fn lowered_texture_write_owns_the_exact_uploaded_bytes() {
     assert!(swap::swap_buffers(&mut context, &mut sink).unwrap());
 
     assert!(
-        sink.batches[0].iter().any(
-            |command| matches!(command, Cmd::WriteBuffer { data, .. } if data == &expected)
-        ),
+        sink.batches[0]
+            .iter()
+            .any(|command| matches!(command, Cmd::WriteBuffer { data, .. } if data == &expected)),
         "the pre-transport staging write must own exactly the upload accepted by the GL model"
+    );
+}
+
+#[test]
+fn uploaded_texture_copy_and_draw_binding_use_the_same_ir_identity() {
+    let mut context = ctx_640x480();
+    let mut sink = RecordingSink::with_full_caps();
+    record_textured_quad(&mut context);
+    let sentinel = [17, 34, 51, 255].repeat(64);
+    record::tex_image_2d(&mut context, 8, 8, &sentinel);
+    record::draw_arrays(&mut context, GL_TRIANGLES, 0, 6);
+
+    assert!(swap::swap_buffers(&mut context, &mut sink).unwrap());
+    let batch = &sink.batches[0];
+    let staging = batch
+        .iter()
+        .find_map(|command| match command {
+            Cmd::WriteBuffer { id, data, .. } if data == &sentinel => Some(*id),
+            _ => None,
+        })
+        .expect("sentinel staging buffer");
+    let texture = submit_ops(batch)
+        .iter()
+        .find_map(|operation| match operation {
+            Enc::CopyBufferToTexture { src, dst, .. } if *src == staging => Some(*dst),
+            _ => None,
+        })
+        .expect("sentinel upload copy");
+
+    assert!(
+        batch.iter().any(|command| matches!(
+            command,
+            Cmd::CreateBindGroup(_, descriptor) if descriptor.entries.iter().any(|entry| matches!(
+                entry.resource,
+                BindResource::Texture { id } if id == texture
+            ))
+        )),
+        "the draw must bind the exact texture that received the sentinel staging copy"
     );
 }
 
