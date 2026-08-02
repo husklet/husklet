@@ -11,7 +11,7 @@ fn clear_pass(texture: u32, clear: [f32; 4]) -> Cmd {
                 color: vec![ColorAttachment {
                     texture,
                     load: LoadOp::Clear,
-                    clear,
+                    clear: clear.map(f64::from),
                     store: true,
                 }],
                 depth: None,
