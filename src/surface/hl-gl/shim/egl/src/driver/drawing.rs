@@ -396,29 +396,33 @@ pub extern "C" fn glBlitFramebuffer(
 // GLES: readback (device→host — the GL equivalent of cuMemcpyDtoH)
 // ==================================================================================================
 
-/// Write a tightly packed readback into a caller's buffer at the row stride `GL_PACK_ALIGNMENT` demands.
+/// Write a tightly packed readback into a caller's buffer at the layout the current `GL_PACK_*` state
+/// demands.
 ///
 /// The readback service always produces rows with no padding between them; GL lets the application choose
 /// where each row starts. Only each row's own bytes are written — the padding belongs to the caller, and
-/// the last row has none, so a buffer sized [`PixelStore::pack_size`] is enough.
+/// the last row has none, so a buffer sized [`PackLayout::required_size`] is enough.
 ///
 /// # Safety
 ///
-/// `destination` must be writable for [`PixelStore::pack_size(row, rows)`] bytes.
+/// `destination` must be writable for [`PackLayout::required_size`] bytes.
 pub(crate) unsafe fn write_packed_rows(
     bytes: &[u8],
-    row: usize,
+    layout: PackLayout,
     rows: usize,
     destination: *mut c_void,
 ) {
-    if row == 0 {
+    if layout.row_bytes() == 0 {
         return;
     }
-    let stride = GlobalState::context(|s| s.gl.pixel_store_state().pack_stride(row));
-    let out = destination as *mut u8;
-    for (index, source) in bytes.chunks(row).take(rows).enumerate() {
+    let out = unsafe { (destination as *mut u8).add(layout.start_offset()) };
+    for (index, source) in bytes.chunks(layout.row_bytes()).take(rows).enumerate() {
         unsafe {
-            core::ptr::copy_nonoverlapping(source.as_ptr(), out.add(index * stride), source.len())
+            core::ptr::copy_nonoverlapping(
+                source.as_ptr(),
+                out.add(index * layout.row_stride()),
+                source.len(),
+            )
         };
     }
 }
@@ -475,6 +479,13 @@ pub extern "C" fn glReadPixels(
     if width == 0 || height == 0 {
         return;
     }
+    let Some(layout) = GlobalState::context(|s| {
+        s.gl.pixel_store_state()
+            .pack_layout(width as usize, height as usize, bpp)
+    }) else {
+        fail(GL_OUT_OF_MEMORY);
+        return;
+    };
     // ES3 PBO pack path: when a buffer is bound to `GL_PIXEL_PACK_BUFFER`, `glReadPixels` does NOT write to
     // a client pointer — `pixels` is reinterpreted as a BYTE OFFSET into that pack buffer and the packed
     // pixels are written into its host storage. The app then reads them back via `glMapBufferRange`
@@ -491,11 +502,16 @@ pub extern "C" fn glReadPixels(
                 let stored = GlobalState::context(|s| {
                     #[cfg(feature = "verbose")]
                     let before = s.gl.buffers.get(pbo).map_or(0, |buffer| buffer.data.len());
-                    let row = width as usize * bpp;
-                    let stride = s.gl.pixel_store_state().pack_stride(row);
-                    for (index, source) in bytes.chunks(row).take(height as usize).enumerate() {
-                        s.gl.buffers
-                            .set_sub_data(pbo, byte_off + index * stride, source);
+                    for (index, source) in bytes
+                        .chunks(layout.row_bytes())
+                        .take(height as usize)
+                        .enumerate()
+                    {
+                        s.gl.buffers.set_sub_data(
+                            pbo,
+                            byte_off + layout.start_offset() + index * layout.row_stride(),
+                            source,
+                        );
                     }
                     #[cfg(feature = "verbose")]
                     {
@@ -577,7 +593,7 @@ pub extern "C" fn glReadPixels(
                     bytes.len()
                 );
             }
-            unsafe { write_packed_rows(&bytes, width as usize * bpp, height as usize, pixels) }
+            unsafe { write_packed_rows(&bytes, layout, height as usize, pixels) }
         }
         Err(e) => {
             // See the PBO arm above: the code names the failure that happened, not memory by default.

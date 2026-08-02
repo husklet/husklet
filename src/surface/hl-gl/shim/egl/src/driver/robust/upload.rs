@@ -258,9 +258,14 @@ pub extern "C" fn glReadPixelsRobustANGLE(
     let required = usize::try_from(width)
         .ok()
         .zip(usize::try_from(height).ok())
-        .and_then(|(width, height)| Some((width.checked_mul(bpp)?, height)))
-        .map(|(row, height)| {
-            GlobalState::context(|state| state.gl.pixel_store_state().pack_size(row, height))
+        .and_then(|(width, height)| {
+            GlobalState::context(|state| {
+                state
+                    .gl
+                    .pixel_store_state()
+                    .pack_layout(width, height, bpp)
+                    .map(PackLayout::required_size)
+            })
         });
     let Some(required) = required else {
         reject(length);

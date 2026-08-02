@@ -3,7 +3,7 @@
 //! REAL `glGetError` register (first-error-wins) is asserted — a bulletproofing gate for the recording +
 //! object-lifecycle layer. Nothing here should ever panic.
 
-use hl_gl::model::context::{GlContext, GlSurface};
+use hl_gl::model::context::{GlContext, GlSurface, PixelStore};
 use hl_gl::model::glconst::*;
 use hl_gl::service::{compute, es3, intro, map, query, record, sync};
 use hl_gpu::RecordingSink;
@@ -377,6 +377,33 @@ fn pack_alignment_pads_between_readback_rows_but_not_after_the_last() {
     let store = c.pixel_store_state();
     assert_eq!(store.pack_stride(9), 9, "alignment 1 packs tightly");
     assert_eq!(store.pack_size(9, 4), 36);
+}
+
+#[test]
+fn pixel_pack_layout_honours_row_length_and_skips() {
+    let store = PixelStore {
+        pack_alignment: 4,
+        pack_row_length: 17,
+        pack_skip_rows: 3,
+        pack_skip_pixels: 5,
+        ..PixelStore::default()
+    };
+
+    let layout = store
+        .pack_layout(13, 13, 4)
+        .expect("the dEQP read-pixels layout is representable");
+    assert_eq!(layout.row_bytes(), 52, "only requested pixels are written");
+    assert_eq!(layout.row_stride(), 68, "row length controls row starts");
+    assert_eq!(
+        layout.start_offset(),
+        224,
+        "row and pixel skips precede output"
+    );
+    assert_eq!(
+        layout.required_size(),
+        1092,
+        "the last written byte is bounded"
+    );
 }
 
 #[test]

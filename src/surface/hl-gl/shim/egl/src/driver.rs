@@ -84,7 +84,7 @@ use uniforms::{
 
 use core::ffi::{c_char, c_void};
 
-use hl_gl::model::context::GlContext;
+use hl_gl::model::context::{GlContext, PackLayout};
 use hl_gl::model::glconst::*;
 use hl_gl::result::{
     egl_error_from_gpu_error, gl_error_from_gpu_error, EGL_BAD_ACCESS, EGL_BAD_ATTRIBUTE,

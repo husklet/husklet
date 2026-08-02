@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn readback_writer_preserves_pack_skips_and_row_gaps() {
+    let store = hl_gl::model::context::PixelStore {
+        pack_alignment: 4,
+        pack_row_length: 4,
+        pack_skip_rows: 1,
+        pack_skip_pixels: 1,
+        ..Default::default()
+    };
+    let layout = store.pack_layout(2, 2, 4).unwrap();
+    let pixels = [
+        1, 2, 3, 4, 5, 6, 7, 8, // row 0
+        9, 10, 11, 12, 13, 14, 15, 16, // row 1
+    ];
+    let mut destination = vec![0xA5; layout.required_size()];
+
+    unsafe {
+        write_packed_rows(
+            &pixels,
+            layout,
+            2,
+            destination.as_mut_ptr().cast::<c_void>(),
+        )
+    };
+
+    assert!(destination[..20].iter().all(|&byte| byte == 0xA5));
+    assert_eq!(&destination[20..28], &pixels[..8]);
+    assert!(destination[28..36].iter().all(|&byte| byte == 0xA5));
+    assert_eq!(&destination[36..44], &pixels[8..]);
+}
+
+#[test]
 fn matrix_marshalling_leaves_std140_padding_to_the_uniform_model() {
     let values = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
     let packed = unsafe { mat_bytes_cr(3, 3, 1, false, values.as_ptr()) };

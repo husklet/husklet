@@ -67,6 +67,33 @@ pub struct PixelStore {
     pub pack_skip_pixels: i32,
 }
 
+/// The byte placement of one pixel-pack operation after applying the current `GL_PACK_*` state.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct PackLayout {
+    row_bytes: usize,
+    row_stride: usize,
+    start_offset: usize,
+    required_size: usize,
+}
+
+impl PackLayout {
+    pub fn row_bytes(self) -> usize {
+        self.row_bytes
+    }
+
+    pub fn row_stride(self) -> usize {
+        self.row_stride
+    }
+
+    pub fn start_offset(self) -> usize {
+        self.start_offset
+    }
+
+    pub fn required_size(self) -> usize {
+        self.required_size
+    }
+}
+
 impl PixelStore {
     /// The distance in bytes between the starts of two consecutive rows a readback writes.
     ///
@@ -91,6 +118,45 @@ impl PixelStore {
             None => 0,
             Some(before) => self.pack_stride(row_bytes) * before + row_bytes,
         }
+    }
+
+    /// Resolve the complete destination layout for a `glReadPixels` pack operation.
+    ///
+    /// `GL_PACK_ROW_LENGTH` controls the distance between row starts, while `GL_PACK_SKIP_ROWS` and
+    /// `GL_PACK_SKIP_PIXELS` move the first destination texel. Arithmetic is checked because these values
+    /// originate in application state and are used to validate robust-buffer sizes before an unsafe copy.
+    pub fn pack_layout(
+        &self,
+        width: usize,
+        rows: usize,
+        bytes_per_pixel: usize,
+    ) -> Option<PackLayout> {
+        let row_pixels = if self.pack_row_length > 0 {
+            self.pack_row_length as usize
+        } else {
+            width
+        };
+        let row_bytes = width.checked_mul(bytes_per_pixel)?;
+        let storage_row_bytes = row_pixels.checked_mul(bytes_per_pixel)?;
+        let row_stride = self.pack_stride(storage_row_bytes);
+        let skip_rows = usize::try_from(self.pack_skip_rows).ok()?;
+        let skip_pixels = usize::try_from(self.pack_skip_pixels).ok()?;
+        let start_offset = skip_rows
+            .checked_mul(row_stride)?
+            .checked_add(skip_pixels.checked_mul(bytes_per_pixel)?)?;
+        let required_size = if rows == 0 || row_bytes == 0 {
+            start_offset
+        } else {
+            start_offset
+                .checked_add((rows - 1).checked_mul(row_stride)?)?
+                .checked_add(row_bytes)?
+        };
+        Some(PackLayout {
+            row_bytes,
+            row_stride,
+            start_offset,
+            required_size,
+        })
     }
 }
 

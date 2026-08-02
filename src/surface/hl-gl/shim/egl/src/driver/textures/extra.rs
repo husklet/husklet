@@ -312,10 +312,16 @@ pub extern "C" fn glReadnPixels(
         fail(GL_INVALID_VALUE);
         return;
     }
-    let row = width as usize * bpp;
     // The buffer has to hold the alignment padding between rows as well as the pixels; checking the
     // tightly packed size would accept a buffer the aligned write then runs past.
-    let need = GlobalState::context(|s| s.gl.pixel_store_state().pack_size(row, height as usize));
+    let Some(layout) = GlobalState::context(|s| {
+        s.gl.pixel_store_state()
+            .pack_layout(width as usize, height as usize, bpp)
+    }) else {
+        fail(GL_OUT_OF_MEMORY);
+        return;
+    };
+    let need = layout.required_size();
     if (buf_size as usize) < need {
         fail(GL_INVALID_OPERATION);
         return;
@@ -345,7 +351,9 @@ pub extern "C" fn glReadnPixels(
                     bytes.len()
                 );
             }
-            unsafe { crate::driver::drawing::write_packed_rows(&bytes, row, height as usize, data) }
+            unsafe {
+                crate::driver::drawing::write_packed_rows(&bytes, layout, height as usize, data)
+            }
         }
         Err(e) => {
             GlobalState::context(|s| s.gl.set_gl_error(GL_OUT_OF_MEMORY));
