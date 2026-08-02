@@ -489,8 +489,7 @@ pub extern "C" fn glReadPixels(
                 let row = width as usize * bpp;
                 let stride = s.gl.pixel_store_state().pack_stride(row);
                 for (index, source) in bytes.chunks(row).take(height as usize).enumerate() {
-                    s.gl
-                        .buffers
+                    s.gl.buffers
                         .set_sub_data(pbo, byte_off + index * stride, source);
                 }
             }),
@@ -510,9 +509,41 @@ pub extern "C" fn glReadPixels(
     }
     let packed = gpu_read_pixels(x, y, width, height, destination);
     match packed {
-        Ok(bytes) => unsafe {
-            write_packed_rows(&bytes, width as usize * bpp, height as usize, pixels)
-        },
+        Ok(bytes) => {
+            // INSTRUMENTED BUILDS ONLY. Chrome's upload probe has returned bytes spelling the driver's
+            // extension inventory even though the upload boundary saw the exact sentinel pixels. Name
+            // this readback boundary independently: a short/empty result leaves ANGLE's intermediate
+            // destination untouched, while an extension-shaped result proves the contamination already
+            // came back from the host. Both can otherwise surface as the same JavaScript Uint8Array.
+            #[cfg(feature = "verbose")]
+            {
+                let expected = width as usize * height as usize * bpp;
+                let head = bytes
+                    .iter()
+                    .take(16)
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let text = bytes
+                    .iter()
+                    .take(32)
+                    .map(|&byte| {
+                        if (32..127).contains(&byte) {
+                            byte as char
+                        } else {
+                            '.'
+                        }
+                    })
+                    .collect::<String>();
+                hl_log::hl_error!(
+                    hl_log::tag::GL,
+                    "glReadPixels client destination={pixels:p} region={width}x{height} bpp={bpp} \
+                     expected={expected} returned={} head=[{head}] text={text:?}",
+                    bytes.len()
+                );
+            }
+            unsafe { write_packed_rows(&bytes, width as usize * bpp, height as usize, pixels) }
+        }
         Err(e) => {
             // See the PBO arm above: the code names the failure that happened, not memory by default.
             GlobalState::context(|s| s.gl.set_gl_error(gl_error_from_gpu_error(&e)));

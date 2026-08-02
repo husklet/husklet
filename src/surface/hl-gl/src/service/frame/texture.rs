@@ -22,6 +22,7 @@ pub(super) type SnapshotTextures = std::collections::HashMap<SnapshotKey, u32>;
 #[cfg(test)]
 mod tests {
     use super::{SnapshotKey, SnapshotSource, TextureFormat};
+    use std::sync::Arc;
 
     #[test]
     fn snapshot_identity_distinguishes_storage_and_revision() {
@@ -53,6 +54,31 @@ mod tests {
                 },
                 ..key
             }
+        );
+    }
+
+    #[test]
+    fn pixel_snapshot_identity_cannot_alias_while_both_planes_are_live() {
+        let first = Arc::new(vec![0x11; 256]);
+        let second = Arc::new(vec![0x4c; 256]);
+        let key = |data: &Arc<Vec<u8>>| SnapshotKey {
+            source: SnapshotSource::Pixels {
+                data: Arc::as_ptr(data) as usize,
+            },
+            width: 8,
+            height: 8,
+            format: TextureFormat::Rgba8Unorm.to_u32(),
+        };
+
+        assert_ne!(
+            key(&first),
+            key(&second),
+            "two retained planes cannot share an allocation address while both Arcs are live"
+        );
+        assert_eq!(
+            key(&first),
+            key(&Arc::clone(&first)),
+            "two snapshots of the same immutable plane should share one upload"
         );
     }
 }
@@ -359,10 +385,11 @@ pub(super) fn lower_textures(
             // taken from one place.
             let levels = t.effective_levels();
             let mip_levels = levels.len().max(1) as u32;
-            let (base_w, base_h, base_data) = levels
-                .first()
-                .cloned()
-                .unwrap_or((t.w, t.h, Arc::clone(&t.data)));
+            let (base_w, base_h, base_data) =
+                levels
+                    .first()
+                    .cloned()
+                    .unwrap_or((t.w, t.h, Arc::clone(&t.data)));
             let mut mip_stages: Vec<(u32, u32, u32, u32)> = Vec::new();
             // INSTRUMENTED BUILDS ONLY. Both branches, so "no staging write was emitted" can be told
             // apart from "this lowering path never ran". The first is a defect; the second means the
@@ -371,7 +398,10 @@ pub(super) fn lower_textures(
             {
                 use std::sync::atomic::{AtomicUsize, Ordering};
                 static BINDS: AtomicUsize = AtomicUsize::new(0);
-                if BINDS.fetch_add(1, Ordering::Relaxed) < 12 {
+                let sentinel_upload = base_data
+                    .get(..8)
+                    .is_some_and(|head| head == [0x11, 0x22, 0x33, 0xff, 0x11, 0x22, 0x33, 0xff]);
+                if BINDS.fetch_add(1, Ordering::Relaxed) < 12 || sentinel_upload {
                     // Whether this GL name is actually a RENDER TARGET, read off the attachment table
                     // rather than inferred from its content being absent and its extent looking like a
                     // canvas. `recorded_framebuffers` is the set of FBOs this frame drew into, so a hit
@@ -395,7 +425,7 @@ pub(super) fn lower_textures(
                          needs_upload={needs_upload} ephemeral={ephemeral} \
                          shadow_bytes={} shadow_nonzero={} generation={:?} shared_residency={} \
                          live_generation={live_generation} shared_advanced={shared_advanced} \
-                         snapshot={} render_target_of={:?} {}x{}",
+                         snapshot={} render_target_of={:?} sentinel_upload={sentinel_upload} {}x{}",
                         base_data.len(),
                         base_data.iter().any(|byte| *byte != 0),
                         t.sampled_generation(),
@@ -458,8 +488,11 @@ pub(super) fn lower_textures(
                     static STAGED: AtomicUsize = AtomicUsize::new(0);
                     let count = STAGED.fetch_add(1, Ordering::Relaxed);
                     if traced == Some(base_data.len()) || count < 12 {
-                        let head: Vec<String> =
-                            base_data.iter().take(8).map(|b| format!("{b:02x}")).collect();
+                        let head: Vec<String> = base_data
+                            .iter()
+                            .take(8)
+                            .map(|b| format!("{b:02x}"))
+                            .collect();
                         hl_log::hl_error!(
                             hl_log::tag::GL,
                             "encode stage buffer={stage_ir} texture={tex_ir} {}x{} bytes={} head=[{}]",
