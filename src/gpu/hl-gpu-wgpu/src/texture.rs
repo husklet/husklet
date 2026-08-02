@@ -306,8 +306,8 @@ impl WgpuExecutor {
                 usage |= wgpu::TextureUsages::STORAGE_ATOMIC;
             }
         }
-        // Only a single-sampled plain 2D image gets RENDER_ATTACHMENT. A 3D volume cannot be a render
-        // attachment and neither can a 1D texture. A cube / 2D-array is excluded because every consumer of
+        // Only a single-sampled physical 2D image gets RENDER_ATTACHMENT. A 3D volume cannot be a render
+        // attachment. A native cube / 2D-array is excluded because every consumer of
         // this usage except the blit binds the texture's DEFAULT view, which for those shapes is a Cube /
         // D2Array — not a single-layer 2D view a colour pass can target.
         //
@@ -319,10 +319,15 @@ impl WgpuExecutor {
         // layered texture at all — so widening this would be an executor-only capability the differential
         // could never compare. Both are encoding questions, not usage-bit questions.
         //
+        // Emulated Vulkan 1D arrays are the deliberate exception to the default-view rule: their physical
+        // backing is D2Array, and Vulkan selects a renderable layer through a D1 image view. That view is
+        // lowered to a single-layer D2 view by `make_texture_view`, so the parent allocation must carry the
+        // usage even though its default view is not itself an attachment.
+        //
         // This decides only the usage set. It is NOT a guard: a texture without the bit can still be named
         // as an attachment, which `submit::render` refuses by consulting `render_attachment` below.
         if dimension == wgpu::TextureDimension::D2
-            && view_dim == wgpu::TextureViewDimension::D2
+            && (view_dim == wgpu::TextureViewDimension::D2 || desc.dim == TextureDim::D1)
             && sample_count == 1
             && !compressed
         {
