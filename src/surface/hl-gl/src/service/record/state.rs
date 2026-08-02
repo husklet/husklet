@@ -433,6 +433,7 @@ pub(super) fn set_cap(ctx: &mut GlContext, cap: u32, on: bool) {
         GL_DEPTH_TEST => ctx.local.pipeline.depth = on,
         GL_STENCIL_TEST => ctx.local.pipeline.stencil = on,
         GL_SCISSOR_TEST => ctx.local.pipeline.scissor_enabled = on,
+        GL_RASTERIZER_DISCARD => ctx.local.pipeline.rasterizer_discard = on,
         GL_CULL_FACE => ctx.local.pipeline.cull_enabled = on,
         _ => {}
     }

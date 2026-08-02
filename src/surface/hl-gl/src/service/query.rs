@@ -203,6 +203,7 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         GL_CULL_FACE_MODE => one(ctx.local.pipeline.cull_face as i32),
         GL_FRONT_FACE => one(ctx.local.pipeline.front_face as i32),
         GL_SCISSOR_TEST => one(ctx.local.pipeline.scissor_enabled as i32),
+        GL_RASTERIZER_DISCARD => one(ctx.local.pipeline.rasterizer_discard as i32),
         // ES 3.0 §2.2.2: every state value must read back the same through each Get* variant.
         GL_DEPTH_WRITEMASK => one(ctx.local.pipeline.depth_write as i32),
         GL_DEPTH_RANGE => {
@@ -377,6 +378,7 @@ pub fn get_booleanv(ctx: &GlContext, pname: u32, out: &mut [u8; 4]) -> usize {
         GL_BLEND => b(ctx.local.pipeline.blend),
         GL_CULL_FACE => b(ctx.local.pipeline.cull_enabled),
         GL_SCISSOR_TEST => b(ctx.local.pipeline.scissor_enabled),
+        GL_RASTERIZER_DISCARD => b(ctx.local.pipeline.rasterizer_discard),
         GL_DEPTH_WRITEMASK => b(ctx.local.pipeline.depth_write),
         GL_SHADER_COMPILER => b(true),
         _ => 0,

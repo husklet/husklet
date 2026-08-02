@@ -256,6 +256,9 @@ pub(super) fn capture_indexed(
 /// boolean `GL_ANY_SAMPLES_PASSED` needs — nonzero iff the draw could rasterize any sample.
 impl DrawCall {
     pub(super) fn coverage(&self) -> u64 {
+        if self.rasterizer_discard {
+            return 0;
+        }
         let [vx, vy, vw, vh] = self.viewport;
         let (mut x0, mut y0, mut x1, mut y1) =
             (vx, vy, vx.saturating_add(vw), vy.saturating_add(vh));

@@ -141,6 +141,9 @@ pub struct DrawCall {
     pub viewport: [i32; 4],
     pub scissor_enabled: bool,
     pub scissor: [i32; 4],
+    /// `GL_RASTERIZER_DISCARD` at draw time. Vertex processing still occurs, but no primitive reaches
+    /// framebuffer rasterization; the current IR has no transform-feedback output to retain.
+    pub rasterizer_discard: bool,
     pub blend: bool,
     /// Blend factors/equations in force (GL enums), lowered to the pipeline blend state when `blend`.
     pub blend_src_rgb: u32,
@@ -318,14 +321,15 @@ impl DrawCall {
     /// pipeline state and is dropped before lowering instead. Culling applies to triangles alone — points
     /// and lines are never culled — so the primitive mode is part of the test.
     pub fn discards_every_primitive(&self) -> bool {
-        self.cull_enabled
-            && self.cull_face == crate::model::glconst::GL_FRONT_AND_BACK
-            && matches!(
-                self.mode,
-                crate::model::glconst::GL_TRIANGLES
-                    | crate::model::glconst::GL_TRIANGLE_STRIP
-                    | 0x0006 /* GL_TRIANGLE_FAN */
-            )
+        (!self.is_clear && self.rasterizer_discard)
+            || (self.cull_enabled
+                && self.cull_face == crate::model::glconst::GL_FRONT_AND_BACK
+                && matches!(
+                    self.mode,
+                    crate::model::glconst::GL_TRIANGLES
+                        | crate::model::glconst::GL_TRIANGLE_STRIP
+                        | 0x0006 /* GL_TRIANGLE_FAN */
+                ))
     }
 
     /// Whether this GEOMETRY draw leaves a result in the depth or stencil plane — a result a later colour
@@ -396,6 +400,7 @@ impl Default for DrawCall {
             viewport: [0; 4],
             scissor_enabled: false,
             scissor: [0; 4],
+            rasterizer_discard: false,
             blend: false,
             blend_src_rgb: crate::model::glconst::GL_ONE,
             blend_dst_rgb: crate::model::glconst::GL_ZERO,

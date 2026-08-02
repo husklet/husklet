@@ -732,6 +732,7 @@ impl GlContext {
             viewport: ctx.local.pipeline.viewport,
             scissor_enabled: ctx.local.pipeline.scissor_enabled,
             scissor: ctx.local.pipeline.scissor,
+            rasterizer_discard: ctx.local.pipeline.rasterizer_discard,
             blend: ctx.local.pipeline.blend,
             blend_src_rgb: ctx.local.pipeline.blend_src_rgb,
             blend_dst_rgb: ctx.local.pipeline.blend_dst_rgb,

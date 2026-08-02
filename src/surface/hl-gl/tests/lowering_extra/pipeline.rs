@@ -121,6 +121,48 @@ fn no_cull_when_disabled() {
     );
 }
 
+#[test]
+fn rasterizer_discard_suppresses_geometry_until_disabled() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+
+    record::enable(&mut c, GL_RASTERIZER_DISCARD);
+    assert!(c.is_enabled(GL_RASTERIZER_DISCARD));
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(
+        !swap::swap_buffers(&mut c, &mut sink).unwrap(),
+        "enabled rasterizer discard must produce no framebuffer work"
+    );
+
+    record::disable(&mut c, GL_RASTERIZER_DISCARD);
+    assert!(!c.is_enabled(GL_RASTERIZER_DISCARD));
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    assert!(sink
+        .batches
+        .last()
+        .unwrap()
+        .iter()
+        .any(|cmd| matches!(cmd, Cmd::CreateRenderPipeline(..))));
+}
+
+#[test]
+fn rasterizer_discard_does_not_suppress_clears() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    record::enable(&mut c, GL_RASTERIZER_DISCARD);
+    record::clear_color(&mut c, [0.25, 0.5, 0.75, 1.0]);
+    record::clear(&mut c);
+
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    assert!(submit_ops(&sink.batches[0]).iter().any(|op| matches!(
+        op,
+        Enc::BeginRenderPass { color, .. }
+            if color[0].load == LoadOp::Clear && color[0].clear == [0.25, 0.5, 0.75, 1.0]
+    )));
+}
+
 // ---------------------------------------------------------------------------------------------------
 // glBlendEquation (non-separate) sets the SAME op for color + alpha
 // ---------------------------------------------------------------------------------------------------

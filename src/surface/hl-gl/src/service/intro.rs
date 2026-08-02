@@ -244,6 +244,7 @@ impl GlContext {
             GL_BLEND => self.local.pipeline.blend,
             GL_CULL_FACE => self.local.pipeline.cull_enabled,
             GL_SCISSOR_TEST => self.local.pipeline.scissor_enabled,
+            GL_RASTERIZER_DISCARD => self.local.pipeline.rasterizer_discard,
             _ => false,
         }
     }

@@ -60,6 +60,7 @@ pub const GL_STENCIL_TEST: u32 = 0x0B90;
 pub const GL_BLEND: u32 = 0x0BE2;
 pub const GL_CULL_FACE: u32 = 0x0B44;
 pub const GL_SCISSOR_TEST: u32 = 0x0C11;
+pub const GL_RASTERIZER_DISCARD: u32 = 0x8C89;
 
 // stencil operations (glStencilOp / glStencilOpSeparate). GL_ZERO (0) doubles as the ZERO stencil op.
 pub const GL_KEEP: u32 = 0x1E00;
