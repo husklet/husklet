@@ -377,7 +377,10 @@ pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES: i32 = 52;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES: i32 = 54;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PROPERTIES: i32 = 1_000_053_002;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_POINT_CLIPPING_PROPERTIES: i32 = 1_000_117_000;
+pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_FILTER_MINMAX_PROPERTIES: i32 = 1_000_130_000;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_PROPERTIES: i32 = 1_000_145_002;
+pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES: i32 = 1_000_161_002;
+pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FLOAT_CONTROLS_PROPERTIES: i32 = 1_000_197_000;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES: i32 = 1_000_199_000;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_PROPERTIES: i32 = 1_000_207_001;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INLINE_UNIFORM_BLOCK_PROPERTIES: i32 = 1_000_138_001;
@@ -470,10 +473,70 @@ pub struct VkPhysicalDevicePointClippingProperties {
 }
 
 #[repr(C)]
+pub struct VkPhysicalDeviceSamplerFilterMinmaxProperties {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub filter_minmax_single_component_formats: VkBool32,
+    pub filter_minmax_image_component_mapping: VkBool32,
+}
+
+#[repr(C)]
 pub struct VkPhysicalDeviceProtectedMemoryProperties {
     pub s_type: i32,
     pub p_next: *mut c_void,
     pub protected_no_fault: VkBool32,
+}
+
+#[repr(C)]
+pub struct VkPhysicalDeviceDescriptorIndexingProperties {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub max_update_after_bind_descriptors_in_all_pools: u32,
+    pub shader_uniform_buffer_array_non_uniform_indexing_native: VkBool32,
+    pub shader_sampled_image_array_non_uniform_indexing_native: VkBool32,
+    pub shader_storage_buffer_array_non_uniform_indexing_native: VkBool32,
+    pub shader_storage_image_array_non_uniform_indexing_native: VkBool32,
+    pub shader_input_attachment_array_non_uniform_indexing_native: VkBool32,
+    pub robust_buffer_access_update_after_bind: VkBool32,
+    pub quad_divergent_implicit_lod: VkBool32,
+    pub max_per_stage_descriptor_update_after_bind_samplers: u32,
+    pub max_per_stage_descriptor_update_after_bind_uniform_buffers: u32,
+    pub max_per_stage_descriptor_update_after_bind_storage_buffers: u32,
+    pub max_per_stage_descriptor_update_after_bind_sampled_images: u32,
+    pub max_per_stage_descriptor_update_after_bind_storage_images: u32,
+    pub max_per_stage_descriptor_update_after_bind_input_attachments: u32,
+    pub max_per_stage_update_after_bind_resources: u32,
+    pub max_descriptor_set_update_after_bind_samplers: u32,
+    pub max_descriptor_set_update_after_bind_uniform_buffers: u32,
+    pub max_descriptor_set_update_after_bind_uniform_buffers_dynamic: u32,
+    pub max_descriptor_set_update_after_bind_storage_buffers: u32,
+    pub max_descriptor_set_update_after_bind_storage_buffers_dynamic: u32,
+    pub max_descriptor_set_update_after_bind_sampled_images: u32,
+    pub max_descriptor_set_update_after_bind_storage_images: u32,
+    pub max_descriptor_set_update_after_bind_input_attachments: u32,
+}
+
+#[repr(C)]
+pub struct VkPhysicalDeviceFloatControlsProperties {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub denorm_behavior_independence: i32,
+    pub rounding_mode_independence: i32,
+    pub shader_signed_zero_inf_nan_preserve_float16: VkBool32,
+    pub shader_signed_zero_inf_nan_preserve_float32: VkBool32,
+    pub shader_signed_zero_inf_nan_preserve_float64: VkBool32,
+    pub shader_denorm_preserve_float16: VkBool32,
+    pub shader_denorm_preserve_float32: VkBool32,
+    pub shader_denorm_preserve_float64: VkBool32,
+    pub shader_denorm_flush_to_zero_float16: VkBool32,
+    pub shader_denorm_flush_to_zero_float32: VkBool32,
+    pub shader_denorm_flush_to_zero_float64: VkBool32,
+    pub shader_rounding_mode_rte_float16: VkBool32,
+    pub shader_rounding_mode_rte_float32: VkBool32,
+    pub shader_rounding_mode_rte_float64: VkBool32,
+    pub shader_rounding_mode_rtz_float16: VkBool32,
+    pub shader_rounding_mode_rtz_float32: VkBool32,
+    pub shader_rounding_mode_rtz_float64: VkBool32,
 }
 
 #[repr(C)]

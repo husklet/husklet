@@ -101,11 +101,41 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
             {
                 point.point_clipping_behavior = POINT_CLIPPING_BEHAVIOR_ALL_CLIP_PLANES;
             }
+        } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_FILTER_MINMAX_PROPERTIES {
+            if let Some(minmax) =
+                unsafe { (node as *mut VkPhysicalDeviceSamplerFilterMinmaxProperties).as_mut() }
+            {
+                let s_type = minmax.s_type;
+                let p_next = minmax.p_next;
+                *minmax = unsafe { core::mem::zeroed() };
+                minmax.s_type = s_type;
+                minmax.p_next = p_next;
+            }
         } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_PROPERTIES {
             if let Some(protected) =
                 unsafe { (node as *mut VkPhysicalDeviceProtectedMemoryProperties).as_mut() }
             {
                 protected.protected_no_fault = PROTECTED_NO_FAULT;
+            }
+        } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES {
+            if let Some(indexing) =
+                unsafe { (node as *mut VkPhysicalDeviceDescriptorIndexingProperties).as_mut() }
+            {
+                let s_type = indexing.s_type;
+                let p_next = indexing.p_next;
+                *indexing = unsafe { core::mem::zeroed() };
+                indexing.s_type = s_type;
+                indexing.p_next = p_next;
+            }
+        } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FLOAT_CONTROLS_PROPERTIES {
+            if let Some(float) =
+                unsafe { (node as *mut VkPhysicalDeviceFloatControlsProperties).as_mut() }
+            {
+                let s_type = float.s_type;
+                let p_next = float.p_next;
+                *float = unsafe { core::mem::zeroed() };
+                float.s_type = s_type;
+                float.p_next = p_next;
             }
         } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES {
             if let Some(resolve) =
@@ -492,6 +522,18 @@ mod tests {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES,
             1_000_199_000
         );
+        assert_eq!(
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FLOAT_CONTROLS_PROPERTIES,
+            1_000_197_000
+        );
+        assert_eq!(
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES,
+            1_000_161_002
+        );
+        assert_eq!(
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_FILTER_MINMAX_PROPERTIES,
+            1_000_130_000
+        );
 
         let mut point: VkPhysicalDevicePointClippingProperties = unsafe { core::mem::zeroed() };
         point.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_POINT_CLIPPING_PROPERTIES;
@@ -500,6 +542,15 @@ mod tests {
             unsafe { core::mem::zeroed() };
         protected.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_PROPERTIES;
         protected.protected_no_fault = 0xa5a5_a5a5;
+        let mut indexing: VkPhysicalDeviceDescriptorIndexingProperties =
+            unsafe { core::mem::zeroed() };
+        indexing.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES;
+        indexing.max_update_after_bind_descriptors_in_all_pools = u32::MAX;
+        indexing.max_descriptor_set_update_after_bind_input_attachments = u32::MAX;
+        let mut float: VkPhysicalDeviceFloatControlsProperties = unsafe { core::mem::zeroed() };
+        float.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FLOAT_CONTROLS_PROPERTIES;
+        float.denorm_behavior_independence = -1;
+        float.shader_rounding_mode_rtz_float64 = u32::MAX;
         let mut resolve: VkPhysicalDeviceDepthStencilResolveProperties =
             unsafe { core::mem::zeroed() };
         resolve.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES;
@@ -507,12 +558,20 @@ mod tests {
         resolve.supported_stencil_resolve_modes = u32::MAX;
         resolve.independent_resolve_none = u32::MAX;
         resolve.independent_resolve = u32::MAX;
+        let mut minmax: VkPhysicalDeviceSamplerFilterMinmaxProperties =
+            unsafe { core::mem::zeroed() };
+        minmax.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_FILTER_MINMAX_PROPERTIES;
+        minmax.filter_minmax_single_component_formats = u32::MAX;
+        minmax.filter_minmax_image_component_mapping = u32::MAX;
         let mut timeline: VkPhysicalDeviceTimelineSemaphoreProperties =
             unsafe { core::mem::zeroed() };
         timeline.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_PROPERTIES;
         timeline.max_timeline_semaphore_value_difference = 0xa5a5_a5a5_a5a5_a5a5;
-        protected.p_next = &mut resolve as *mut _ as *mut c_void;
-        resolve.p_next = &mut timeline as *mut _ as *mut c_void;
+        protected.p_next = &mut indexing as *mut _ as *mut c_void;
+        indexing.p_next = &mut float as *mut _ as *mut c_void;
+        float.p_next = &mut resolve as *mut _ as *mut c_void;
+        resolve.p_next = &mut minmax as *mut _ as *mut c_void;
+        minmax.p_next = &mut timeline as *mut _ as *mut c_void;
 
         let mut v11: VkPhysicalDeviceVulkan11Properties = unsafe { core::mem::zeroed() };
         v11.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES;
@@ -536,6 +595,19 @@ mod tests {
         );
         assert_eq!(protected.protected_no_fault, v11.protected_no_fault);
         assert_eq!(protected.protected_no_fault, VK_FALSE);
+        assert_eq!(
+            indexing.max_update_after_bind_descriptors_in_all_pools,
+            v12.max_update_after_bind_descriptors_in_all_pools
+        );
+        assert_eq!(
+            indexing.max_descriptor_set_update_after_bind_input_attachments,
+            v12.max_descriptor_set_update_after_bind_input_attachments
+        );
+        assert_eq!(float.denorm_behavior_independence, v12.denorm_behavior_independence);
+        assert_eq!(
+            float.shader_rounding_mode_rtz_float64,
+            v12.shader_rounding_mode_rtz_float64
+        );
         assert_eq!(resolve.supported_depth_resolve_modes, v12.supported_depth_resolve_modes);
         assert_eq!(
             resolve.supported_stencil_resolve_modes,
@@ -544,13 +616,24 @@ mod tests {
         assert_eq!(resolve.independent_resolve_none, v12.independent_resolve_none);
         assert_eq!(resolve.independent_resolve, v12.independent_resolve);
         assert_eq!(
+            minmax.filter_minmax_single_component_formats,
+            v12.filter_minmax_single_component_formats
+        );
+        assert_eq!(
+            minmax.filter_minmax_image_component_mapping,
+            v12.filter_minmax_image_component_mapping
+        );
+        assert_eq!(
             timeline.max_timeline_semaphore_value_difference,
             v12.max_timeline_semaphore_value_difference
         );
         assert_eq!(timeline.max_timeline_semaphore_value_difference, u64::MAX);
         assert_eq!(core::mem::size_of_val(&point), 24);
         assert_eq!(core::mem::size_of_val(&protected), 24);
+        assert_eq!(core::mem::size_of_val(&indexing), 112);
+        assert_eq!(core::mem::size_of_val(&float), 88);
         assert_eq!(core::mem::size_of_val(&resolve), 32);
+        assert_eq!(core::mem::size_of_val(&minmax), 24);
         assert_eq!(core::mem::size_of_val(&timeline), 24);
         let point_base = &point as *const _ as usize;
         let protected_base = &protected as *const _ as usize;
