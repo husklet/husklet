@@ -4,6 +4,32 @@ use hl_gpu::protocol::model::enums::{texture_usage, TextureFormat};
 use std::sync::Arc;
 
 #[test]
+fn lowered_texture_write_owns_the_exact_uploaded_bytes() {
+    let mut context = ctx_640x480();
+    let mut sink = RecordingSink::with_full_caps();
+    let mut pixels = vec![
+        17, 34, 51, 255, 61, 78, 95, 255, 109, 126, 143, 255, 157, 174, 191, 255,
+    ];
+
+    record_textured_quad(&mut context);
+    record::tex_image_2d(&mut context, 2, 2, &pixels);
+    record::draw_arrays(&mut context, GL_TRIANGLES, 0, 6);
+
+    let expected = pixels.clone();
+    // If any deferred layer retained the caller's slice, this mutation would change the command bytes.
+    pixels.fill(0xD6);
+    drop(pixels);
+    assert!(swap::swap_buffers(&mut context, &mut sink).unwrap());
+
+    assert!(
+        sink.batches[0].iter().any(
+            |command| matches!(command, Cmd::WriteBuffer { data, .. } if data == &expected)
+        ),
+        "the pre-transport staging write must own exactly the upload accepted by the GL model"
+    );
+}
+
+#[test]
 fn textured_quad_encoder_sequence_and_present() {
     let mut c = ctx_640x480();
     let mut sink = RecordingSink::with_full_caps();
