@@ -42,11 +42,13 @@ impl WgpuExecutor {
         let vertex = self.gpu.shader_module("hl-render-texel-vertex", vertex_source)?;
         let (fragment, fragment_usage) = match (&recipe.desc.fragment, &recipe.fragment_words) {
             (Some(stage), Some(words)) => {
-                let (source, usage) = crate::wgsl::Spirv::translate_reflect_texel_sample(
+                let (source, usage) = crate::wgsl::Spirv::translate_reflect_texel_fragment(
                     words,
                     &recipe.layout,
                     specialization,
                     recipe.multisample.sample_shading,
+                    &stage.entry,
+                    &recipe.desc.color_targets,
                 )?;
                 (Some((self.gpu.shader_module("hl-render-texel-fragment", source)?, stage)), usage)
             }
