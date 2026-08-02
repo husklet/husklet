@@ -60,7 +60,7 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
     format: i32,
     image_type: i32,
     tiling: i32,
-    _usage: VkFlags,
+    usage: VkFlags,
     flags: VkFlags,
     p_image_format_properties: *mut c_void,
 ) -> VkResult {
@@ -106,6 +106,42 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
         *out = VkImageFormatProperties::default();
         return VK_ERROR_FORMAT_NOT_SUPPORTED;
     }
+    // `usage` is part of the queried combination, not advisory metadata. A successful answer promises
+    // that `vkCreateImage` may use this format for every requested role. Returning success for, e.g., a
+    // BC colour attachment or an RGBA depth attachment contradicts the feature mask returned by
+    // `vkGetPhysicalDeviceFormatProperties` and sends a careful application into a creation path the
+    // implementation cannot honour.
+    const TRANSFER_SRC: VkFlags = 0x0000_0001;
+    const TRANSFER_DST: VkFlags = 0x0000_0002;
+    const SAMPLED: VkFlags = 0x0000_0004;
+    const STORAGE: VkFlags = 0x0000_0008;
+    const COLOR_ATTACHMENT: VkFlags = 0x0000_0010;
+    const DEPTH_STENCIL_ATTACHMENT: VkFlags = 0x0000_0020;
+    const INPUT_ATTACHMENT: VkFlags = 0x0000_0080;
+    let features = Format(format as u32).features().optimal_tiling;
+    let requires = [
+        (TRANSFER_SRC, format_feature::TRANSFER_SRC),
+        (TRANSFER_DST, format_feature::TRANSFER_DST),
+        (SAMPLED, format_feature::SAMPLED_IMAGE),
+        (STORAGE, format_feature::STORAGE_IMAGE),
+        (COLOR_ATTACHMENT, format_feature::COLOR_ATTACHMENT),
+        (
+            DEPTH_STENCIL_ATTACHMENT,
+            format_feature::DEPTH_STENCIL_ATTACHMENT,
+        ),
+    ];
+    let unsupported = requires
+        .iter()
+        .any(|(usage_bit, feature_bit)| usage & usage_bit != 0 && features & feature_bit == 0)
+        || (usage & INPUT_ATTACHMENT != 0
+            && features
+                & (format_feature::COLOR_ATTACHMENT
+                    | format_feature::DEPTH_STENCIL_ATTACHMENT)
+                == 0);
+    if unsupported {
+        *out = VkImageFormatProperties::default();
+        return VK_ERROR_FORMAT_NOT_SUPPORTED;
+    }
     // Multisampling is available only where the specification permits it to be reported. sampleCounts
     // must be exactly VK_SAMPLE_COUNT_1_BIT unless the image is optimally tiled, two-dimensional, not
     // cube-compatible, and its format can be an attachment. Type and tiling are already settled above,
@@ -119,7 +155,7 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
     let attachment = format_feature::COLOR_ATTACHMENT | format_feature::DEPTH_STENCIL_ATTACHMENT;
     let multisamplable = image_type == VK_IMAGE_TYPE_2D
         && flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT == 0
-        && Format(format as u32).features().optimal_tiling & attachment != 0;
+        && features & attachment != 0;
     let sample_counts = if multisamplable {
         VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_4_BIT
     } else {

@@ -1023,6 +1023,67 @@ fn a_refused_image_format_query_zeroes_the_properties() {
     assert_eq!(refused.max_resource_size, 0);
 }
 
+/// Image-format queries must reject a requested usage whose required format feature is absent. The
+/// format alone being lowerable is not enough: RGBA8 is a valid colour image but never a depth target,
+/// and BGRA8 is sampled/renderable but is deliberately not advertised as a storage image.
+#[test]
+fn image_format_queries_validate_every_requested_usage() {
+    const R8G8B8A8_UNORM: i32 = 37;
+    const B8G8R8A8_UNORM: i32 = 44;
+    const VK_IMAGE_TYPE_2D: i32 = 1;
+    const VK_IMAGE_TILING_OPTIMAL: i32 = 0;
+    const VK_IMAGE_USAGE_STORAGE_BIT: VkFlags = 0x8;
+    const VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT: VkFlags = 0x10;
+    const VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT: VkFlags = 0x20;
+    const VK_ERROR_FORMAT_NOT_SUPPORTED: VkResult = -11;
+
+    let query = |format: i32, usage: VkFlags| {
+        let mut properties = VkImageFormatProperties {
+            max_extent: VkExtent3D {
+                width: 0xDEAD,
+                height: 0xDEAD,
+                depth: 0xDEAD,
+            },
+            max_mip_levels: 0xDEAD,
+            max_array_layers: 0xDEAD,
+            sample_counts: 0xDEAD,
+            max_resource_size: 0xDEAD,
+        };
+        let result = crate::instance::vkGetPhysicalDeviceImageFormatProperties(
+            core::ptr::null_mut(),
+            format,
+            VK_IMAGE_TYPE_2D,
+            VK_IMAGE_TILING_OPTIMAL,
+            usage,
+            0,
+            &mut properties as *mut _ as *mut c_void,
+        );
+        (result, properties)
+    };
+
+    let (result, supported) = query(R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+    assert_eq!(result, VK_SUCCESS, "the positive control must remain creatable");
+    assert_ne!(supported.max_extent.width, 0);
+
+    for (format, usage) in [
+        (
+            R8G8B8A8_UNORM,
+            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        ),
+        (B8G8R8A8_UNORM, VK_IMAGE_USAGE_STORAGE_BIT),
+    ] {
+        let (result, refused) = query(format, usage);
+        assert_eq!(result, VK_ERROR_FORMAT_NOT_SUPPORTED);
+        assert_eq!(refused.max_extent.width, 0);
+        assert_eq!(refused.max_extent.height, 0);
+        assert_eq!(refused.max_extent.depth, 0);
+        assert_eq!(refused.max_mip_levels, 0);
+        assert_eq!(refused.max_array_layers, 0);
+        assert_eq!(refused.sample_counts, 0);
+        assert_eq!(refused.max_resource_size, 0);
+    }
+}
+
 /// `sampleCounts` must be exactly `VK_SAMPLE_COUNT_1_BIT` unless the image is optimally tiled,
 /// two-dimensional, NOT cube-compatible, and its format can be an attachment. The query used to report
 /// `1|4` for every supported combination and ignored `flags` entirely, which is an over-claim — the
