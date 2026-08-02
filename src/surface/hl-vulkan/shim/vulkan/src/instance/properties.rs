@@ -8,6 +8,9 @@ const VK_DRIVER_ID_UNKNOWN: i32 = 0;
 const SHADER_STAGE_FRAGMENT: VkFlags = 0x0000_0010;
 const SHADER_STAGE_COMPUTE: VkFlags = 0x0000_0020;
 const SUBGROUP_FEATURE_BASIC: VkFlags = 0x0000_0001;
+const MAX_MULTIVIEW_VIEW_COUNT: u32 = 6;
+const MAX_MULTIVIEW_INSTANCE_INDEX: u32 = (1 << 27) - 1;
+const MAX_PER_SET_DESCRIPTORS: u32 = 1_000_000;
 
 /// The one source of truth for how this driver identifies itself, so every spelling of the query — the
 /// standalone `VkPhysicalDeviceDriverProperties`, the `VkPhysicalDeviceVulkan12Properties` aggregate a
@@ -64,7 +67,7 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
             if let Some(m) =
                 unsafe { (node as *mut VkPhysicalDeviceMaintenance3Properties).as_mut() }
             {
-                m.max_per_set_descriptors = 1_000_000;
+                m.max_per_set_descriptors = MAX_PER_SET_DESCRIPTORS;
                 // Read from the same constant `create_buffer` refuses against, so the advertised
                 // ceiling and the enforced one cannot drift apart again.
                 m.max_memory_allocation_size =
@@ -82,12 +85,22 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
                 sub.supported_operations = SUBGROUP_FEATURE_BASIC;
                 sub.quad_operations_in_all_stages = VK_FALSE;
             }
+        } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PROPERTIES {
+            if let Some(multiview) =
+                unsafe { (node as *mut VkPhysicalDeviceMultiviewProperties).as_mut() }
+            {
+                multiview.max_multiview_view_count = MAX_MULTIVIEW_VIEW_COUNT;
+                multiview.max_multiview_instance_index = MAX_MULTIVIEW_INSTANCE_INDEX;
+            }
         } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES {
             // The 1.1 aggregate carries the same identity + subgroup members. A client at the
             // advertised 1.1+ reads them from HERE, not from the standalone structs above.
-            if let Some(v11) =
-                unsafe { (node as *mut VkPhysicalDeviceVulkan11PropertiesPrefix).as_mut() }
-            {
+            if let Some(v11) = unsafe { (node as *mut VkPhysicalDeviceVulkan11Properties).as_mut() } {
+                let s_type = v11.s_type;
+                let p_next = v11.p_next;
+                *v11 = unsafe { core::mem::zeroed() };
+                v11.s_type = s_type;
+                v11.p_next = p_next;
                 let desc = StateStore::with(|s| s.physical_device());
                 v11.device_uuid = desc.device_uuid;
                 v11.driver_uuid = desc.driver_uuid;
@@ -98,18 +111,27 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
                 v11.subgroup_supported_stages = SHADER_STAGE_COMPUTE | SHADER_STAGE_FRAGMENT;
                 v11.subgroup_supported_operations = SUBGROUP_FEATURE_BASIC;
                 v11.subgroup_quad_operations_in_all_stages = VK_FALSE;
+                v11.max_multiview_view_count = MAX_MULTIVIEW_VIEW_COUNT;
+                v11.max_multiview_instance_index = MAX_MULTIVIEW_INSTANCE_INDEX;
+                v11.max_per_set_descriptors = MAX_PER_SET_DESCRIPTORS;
+                v11.max_memory_allocation_size = desc.limits.max_buffer_size;
             }
         } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES {
             // The 1.2 aggregate carries the driver identity. This — not
             // `VkPhysicalDeviceDriverProperties` — is where a client at the advertised 1.2+ reads the
             // driver name, which is why leaving it untouched reported a blank driver.
-            if let Some(v12) =
-                unsafe { (node as *mut VkPhysicalDeviceVulkan12PropertiesPrefix).as_mut() }
-            {
+            if let Some(v12) = unsafe { (node as *mut VkPhysicalDeviceVulkan12Properties).as_mut() } {
+                let s_type = v12.s_type;
+                let p_next = v12.p_next;
+                *v12 = unsafe { core::mem::zeroed() };
+                v12.s_type = s_type;
+                v12.p_next = p_next;
                 v12.driver_id = VK_DRIVER_ID_UNKNOWN;
                 Name::write(&mut v12.driver_name, Identity::DRIVER_NAME);
                 Name::write(&mut v12.driver_info, Identity::DRIVER_INFO);
                 v12.conformance_version = Identity::CONFORMANCE;
+                v12.max_timeline_semaphore_value_difference = u64::MAX;
+                v12.framebuffer_integer_color_sample_counts = 1;
             }
         } else if vulkan13::try_fill(node) {
             // Filled by the core-1.3 property owner, including promoted spellings.
@@ -365,7 +387,7 @@ mod tests {
     /// driver name, so tools could not identify the driver at all.
     #[test]
     fn vulkan_1_2_aggregate_reports_the_driver_identity() {
-        let mut v12: VkPhysicalDeviceVulkan12PropertiesPrefix = unsafe { core::mem::zeroed() };
+        let mut v12: VkPhysicalDeviceVulkan12Properties = unsafe { core::mem::zeroed() };
         v12.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES;
         let mut properties: VkPhysicalDeviceProperties2 = unsafe { core::mem::zeroed() };
         properties.p_next = &mut v12 as *mut _ as *mut c_void;
@@ -383,6 +405,34 @@ mod tests {
             .collect();
         assert_eq!(String::from_utf8_lossy(&name), "hl");
         assert_eq!(v12.driver_id, VK_DRIVER_ID_UNKNOWN);
+        assert_eq!(v12.framebuffer_integer_color_sample_counts, 1);
+        assert_eq!(v12.max_timeline_semaphore_value_difference, u64::MAX);
+    }
+
+    #[test]
+    fn vulkan_1_1_and_multiview_properties_share_required_limits() {
+        let mut multiview: VkPhysicalDeviceMultiviewProperties = unsafe { core::mem::zeroed() };
+        multiview.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PROPERTIES;
+        let mut v11: VkPhysicalDeviceVulkan11Properties = unsafe { core::mem::zeroed() };
+        v11.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES;
+        v11.p_next = &mut multiview as *mut _ as *mut c_void;
+        let mut properties: VkPhysicalDeviceProperties2 = unsafe { core::mem::zeroed() };
+        properties.p_next = &mut v11 as *mut _ as *mut c_void;
+
+        vkGetPhysicalDeviceProperties2(
+            core::ptr::null_mut(),
+            &mut properties as *mut _ as *mut c_void,
+        );
+
+        assert_eq!(v11.max_multiview_view_count, MAX_MULTIVIEW_VIEW_COUNT);
+        assert_eq!(v11.max_multiview_instance_index, MAX_MULTIVIEW_INSTANCE_INDEX);
+        assert_eq!(v11.max_multiview_view_count, multiview.max_multiview_view_count);
+        assert_eq!(
+            v11.max_multiview_instance_index,
+            multiview.max_multiview_instance_index
+        );
+        assert_eq!(v11.max_per_set_descriptors, MAX_PER_SET_DESCRIPTORS);
+        assert!(v11.max_memory_allocation_size >= 1 << 30);
     }
 
     /// `subgroupSize` of 0 is not a conservative answer, it is an arithmetic trap: a client sizing a

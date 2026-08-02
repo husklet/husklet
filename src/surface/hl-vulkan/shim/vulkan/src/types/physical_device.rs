@@ -375,6 +375,7 @@ pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES: i32 = 50;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES: i32 = 52;
 /// `VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES` (core value 54).
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES: i32 = 54;
+pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PROPERTIES: i32 = 1_000_053_001;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INLINE_UNIFORM_BLOCK_PROPERTIES: i32 = 1_000_138_001;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES: i32 = 1_000_225_000;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_PROPERTIES: i32 =
@@ -428,6 +429,35 @@ pub struct VkPhysicalDeviceVulkan11PropertiesPrefix {
     pub subgroup_quad_operations_in_all_stages: VkBool32,
 }
 
+#[repr(C)]
+pub struct VkPhysicalDeviceVulkan11Properties {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub device_uuid: [u8; VK_UUID_SIZE],
+    pub driver_uuid: [u8; VK_UUID_SIZE],
+    pub device_luid: [u8; VK_LUID_SIZE],
+    pub device_node_mask: u32,
+    pub device_luid_valid: VkBool32,
+    pub subgroup_size: u32,
+    pub subgroup_supported_stages: VkFlags,
+    pub subgroup_supported_operations: VkFlags,
+    pub subgroup_quad_operations_in_all_stages: VkBool32,
+    pub point_clipping_behavior: i32,
+    pub max_multiview_view_count: u32,
+    pub max_multiview_instance_index: u32,
+    pub protected_no_fault: VkBool32,
+    pub max_per_set_descriptors: u32,
+    pub max_memory_allocation_size: VkDeviceSize,
+}
+
+#[repr(C)]
+pub struct VkPhysicalDeviceMultiviewProperties {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub max_multiview_view_count: u32,
+    pub max_multiview_instance_index: u32,
+}
+
 /// The leading members of `VkPhysicalDeviceVulkan12Properties`, in exact `vk.xml` order — the driver
 /// identity quartet. A deliberate prefix for the same reason as
 /// [`VkPhysicalDeviceVulkan11PropertiesPrefix`]. This is where a client at the advertised Vulkan 1.2+
@@ -440,4 +470,62 @@ pub struct VkPhysicalDeviceVulkan12PropertiesPrefix {
     pub driver_name: [c_char; VK_MAX_DRIVER_NAME_SIZE],
     pub driver_info: [c_char; VK_MAX_DRIVER_INFO_SIZE],
     pub conformance_version: VkConformanceVersion,
+}
+
+#[repr(C)]
+pub struct VkPhysicalDeviceVulkan12Properties {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub driver_id: i32,
+    pub driver_name: [c_char; VK_MAX_DRIVER_NAME_SIZE],
+    pub driver_info: [c_char; VK_MAX_DRIVER_INFO_SIZE],
+    pub conformance_version: VkConformanceVersion,
+    pub denorm_behavior_independence: i32,
+    pub rounding_mode_independence: i32,
+    pub shader_signed_zero_inf_nan_preserve_float16: VkBool32,
+    pub shader_signed_zero_inf_nan_preserve_float32: VkBool32,
+    pub shader_signed_zero_inf_nan_preserve_float64: VkBool32,
+    pub shader_denorm_preserve_float16: VkBool32,
+    pub shader_denorm_preserve_float32: VkBool32,
+    pub shader_denorm_preserve_float64: VkBool32,
+    pub shader_denorm_flush_to_zero_float16: VkBool32,
+    pub shader_denorm_flush_to_zero_float32: VkBool32,
+    pub shader_denorm_flush_to_zero_float64: VkBool32,
+    pub shader_rounding_mode_rte_float16: VkBool32,
+    pub shader_rounding_mode_rte_float32: VkBool32,
+    pub shader_rounding_mode_rte_float64: VkBool32,
+    pub shader_rounding_mode_rtz_float16: VkBool32,
+    pub shader_rounding_mode_rtz_float32: VkBool32,
+    pub shader_rounding_mode_rtz_float64: VkBool32,
+    pub max_update_after_bind_descriptors_in_all_pools: u32,
+    pub shader_uniform_buffer_array_non_uniform_indexing_native: VkBool32,
+    pub shader_sampled_image_array_non_uniform_indexing_native: VkBool32,
+    pub shader_storage_buffer_array_non_uniform_indexing_native: VkBool32,
+    pub shader_storage_image_array_non_uniform_indexing_native: VkBool32,
+    pub shader_input_attachment_array_non_uniform_indexing_native: VkBool32,
+    pub robust_buffer_access_update_after_bind: VkBool32,
+    pub quad_divergent_implicit_lod: VkBool32,
+    pub max_per_stage_descriptor_update_after_bind_samplers: u32,
+    pub max_per_stage_descriptor_update_after_bind_uniform_buffers: u32,
+    pub max_per_stage_descriptor_update_after_bind_storage_buffers: u32,
+    pub max_per_stage_descriptor_update_after_bind_sampled_images: u32,
+    pub max_per_stage_descriptor_update_after_bind_storage_images: u32,
+    pub max_per_stage_descriptor_update_after_bind_input_attachments: u32,
+    pub max_per_stage_update_after_bind_resources: u32,
+    pub max_descriptor_set_update_after_bind_samplers: u32,
+    pub max_descriptor_set_update_after_bind_uniform_buffers: u32,
+    pub max_descriptor_set_update_after_bind_uniform_buffers_dynamic: u32,
+    pub max_descriptor_set_update_after_bind_storage_buffers: u32,
+    pub max_descriptor_set_update_after_bind_storage_buffers_dynamic: u32,
+    pub max_descriptor_set_update_after_bind_sampled_images: u32,
+    pub max_descriptor_set_update_after_bind_storage_images: u32,
+    pub max_descriptor_set_update_after_bind_input_attachments: u32,
+    pub supported_depth_resolve_modes: VkFlags,
+    pub supported_stencil_resolve_modes: VkFlags,
+    pub independent_resolve_none: VkBool32,
+    pub independent_resolve: VkBool32,
+    pub filter_minmax_single_component_formats: VkBool32,
+    pub filter_minmax_image_component_mapping: VkBool32,
+    pub max_timeline_semaphore_value_difference: u64,
+    pub framebuffer_integer_color_sample_counts: VkFlags,
 }
