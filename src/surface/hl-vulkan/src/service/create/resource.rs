@@ -3,7 +3,7 @@
 use crate::model::device::IrIds;
 use crate::model::instance::Instance;
 use crate::model::memory::{
-    BufferRec, BufferUsage, Format, ImageRec, ImageUsage, MemRec, SamplerRec,
+    vk_image_usage, BufferRec, BufferUsage, Format, ImageRec, ImageUsage, MemRec, SamplerRec,
 };
 use crate::model::queue::FenceRec;
 use crate::*;
@@ -425,13 +425,22 @@ pub fn create_image_geometry(
             "vkCreateImage: non-3D images require extent.depth == 1",
         ));
     }
-    // A 1D image is a single row with no mip chain: the executor's D1 path forbids both a second row
-    // and a mip pyramid, and `vkGetPhysicalDeviceImageFormatProperties` reports exactly that
-    // (maxExtent.height == 1, maxMipLevels == 1). Refusing here keeps the creation path and the
-    // advertised limits saying the same thing.
-    if dim == TextureDim::D1 && (height != 1 || mip_levels != 1) {
+    // A 1D image is a single row. Its mip chain shrinks width while height stays one; the executor
+    // materializes enhanced 1D transfer images through a one-row 2D backing.
+    if dim == TextureDim::D1 && height != 1 {
         return Err(GpuError::Invalid(
-            "vkCreateImage: 1D images require extent.height == 1 and mipLevels == 1",
+            "vkCreateImage: 1D images require extent.height == 1",
+        ));
+    }
+    // Metal exposes mipmapped / arrayed Vulkan 1D images through a one-row 2D backing. The executor can
+    // serve that backing for transfers, but sampled/storage/attachment access also needs a shader-side
+    // 1D→2D coordinate rewrite which is not yet representable in the neutral IR. Refuse those mixed roles
+    // here instead of creating a texture that will fail only when bound.
+    let enhanced_1d = dim == TextureDim::D1 && (mip_levels > 1 || layers > 1);
+    let transfer_usage = vk_image_usage::TRANSFER_SRC | vk_image_usage::TRANSFER_DST;
+    if enhanced_1d && vk_usage & !transfer_usage != 0 {
+        return Err(GpuError::Unsupported(
+            "vkCreateImage: mipmapped or arrayed 1D images currently support transfer usage only",
         ));
     }
     // A multisampled image is a render target this backend draws into and resolves out of: it carries no

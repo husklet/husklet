@@ -21,7 +21,7 @@ use hl_gpu::protocol::model::descriptor::{
     BufferDesc, ColorAttachment, ColorTargetState, RenderPipelineDesc, ShaderRef,
 };
 use hl_gpu::protocol::model::enums::{
-    buffer_usage, texture_usage, LoadOp, TextureFormat, Topology,
+    buffer_usage, texture_usage, LoadOp, TextureDim, TextureFormat, Topology,
 };
 use hl_gpu::protocol::model::kernel::glsl_stage;
 use hl_gpu::{BufferId, Cmd, CommandBuffer, Enc, GpuExecutor, ShaderPayloadKind};
@@ -146,13 +146,20 @@ fn render(
 const M0: [u8; 4] = [210, 50, 60, 255]; // base-mip texel
 const M1: [u8; 4] = [50, 200, 90, 255]; // mip-1 texel (distinct from M0)
 
-#[test]
-fn copy_texture_to_buffer_reads_the_named_mip_level() {
+fn copy_texture_to_buffer_reads_the_named_mip_level(dim: TextureDim) {
     let mut exec = WgpuExecutor::new(DeviceConfig::default())
         .expect("a GPU adapter is required to prove the wgpu executor");
     let mut s = new_session(&exec);
 
-    let m0_plane: Vec<u8> = M0.iter().cycle().take(16).copied().collect(); // 2×2 of M0
+    let height = if dim == TextureDim::D1 { 1 } else { 2 };
+    let m0_plane: Vec<u8> = M0
+        .iter()
+        .cycle()
+        .take((2 * height * 4) as usize)
+        .copied()
+        .collect();
+    let mut texture = tex2d_mips(2, height, 2, texture_usage::COPY_DST | texture_usage::COPY_SRC);
+    texture.dim = dim;
 
     hl_gpu::runtime::submit(
         &mut s,
@@ -162,7 +169,7 @@ fn copy_texture_to_buffer_reads_the_named_mip_level() {
             // A 2×2 texture with 2 mip levels; both copy directions used.
             Cmd::CreateTexture(
                 1,
-                tex2d_mips(2, 2, 2, texture_usage::COPY_DST | texture_usage::COPY_SRC),
+                texture,
             ),
             Cmd::CreateBuffer(
                 1,
@@ -217,7 +224,7 @@ fn copy_texture_to_buffer_reads_the_named_mip_level() {
                         dst: 1,
                         mip: 0,
                         width: 2,
-                        height: 2,
+                        height,
                     },
                     Enc::CopyBufferToTexture {
                         src: 2,
@@ -267,6 +274,16 @@ fn copy_texture_to_buffer_reads_the_named_mip_level() {
         M0.as_slice(),
         "CopyTextureToBuffer {{ mip: 0 }} must still read the base texel"
     );
+}
+
+#[test]
+fn copy_texture_to_buffer_reads_the_named_2d_mip_level() {
+    copy_texture_to_buffer_reads_the_named_mip_level(TextureDim::D2);
+}
+
+#[test]
+fn copy_texture_to_buffer_reads_the_named_1d_mip_level() {
+    copy_texture_to_buffer_reads_the_named_mip_level(TextureDim::D1);
 }
 
 #[test]

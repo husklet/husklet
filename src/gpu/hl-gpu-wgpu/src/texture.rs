@@ -121,7 +121,13 @@ impl WgpuExecutor {
         {
             return Err(GpuError::OutOfBounds);
         }
+        let emulate_1d_as_2d = source.dim == TextureDim::D1
+            && (source.depth > 1 || source.mip_levels > 1);
         let dimension = match desc.dim {
+            TextureDim::D1 if emulate_1d_as_2d && desc.layer_count == 1 => {
+                wgpu::TextureViewDimension::D2
+            }
+            TextureDim::D1 if emulate_1d_as_2d => wgpu::TextureViewDimension::D2Array,
             TextureDim::D1 if desc.layer_count == 1 => wgpu::TextureViewDimension::D1,
             TextureDim::D2 if desc.layer_count == 1 => wgpu::TextureViewDimension::D2,
             TextureDim::D2 => wgpu::TextureViewDimension::D2Array,
@@ -183,7 +189,9 @@ impl WgpuExecutor {
     /// Create a texture matching `desc.dim` — honoring the true texture shape, not collapsing everything to
     /// 2D. Each protocol `TextureDim` maps to its real wgpu texture + default-view dimension:
     ///
-    /// * `D1`   → a wgpu 1D texture (`desc.height` must be 1; 1D forbids mips/MSAA), `D1` view.
+    /// * `D1`   → a real wgpu 1D texture for the single-mip/single-layer sampled path; mipmapped or
+    ///   arrayed transfer-only images use a one-row `D2` / `D2Array` backing because Metal's
+    ///   `MTLTextureType1D` forbids both.
     /// * `D2`   → a wgpu 2D texture; `desc.depth` is the **array-layer** count (`1` = a plain 2D image), so
     ///   `depth > 1` is a 2D-array whose default view is `D2Array` (else `D2`).
     /// * `D3`   → a wgpu 3D texture, `desc.depth` depth slices, `D3` view.
@@ -199,14 +207,35 @@ impl WgpuExecutor {
             return Err(GpuError::Invalid("zero-sized texture"));
         }
         let wfmt = Format::from(desc.format).native();
+        if desc.dim == TextureDim::D1 && desc.height != 1 {
+            return Err(GpuError::Invalid("1D texture must have height == 1"));
+        }
         // Map the protocol dimension to (wgpu texture dimension, layer/slice count, default-view dimension).
         // `depth_or_array_layers` is the array-layer count for D1/D2/Cube and the slice count for D3.
         let layers = desc.depth.max(1);
+        let emulate_1d_as_2d = desc.dim == TextureDim::D1 && (layers > 1 || desc.mip_levels > 1);
+        if emulate_1d_as_2d
+            && desc.usage
+                & (hl_gpu::protocol::model::enums::texture_usage::SAMPLED
+                    | hl_gpu::protocol::model::enums::texture_usage::STORAGE
+                    | hl_gpu::protocol::model::enums::texture_usage::RENDER_TARGET)
+                != 0
+        {
+            return Err(GpuError::Unsupported(
+                "mipmapped or arrayed 1D textures currently support copy usage only",
+            ));
+        }
         let (dimension, depth, view_dim) = match desc.dim {
+            TextureDim::D1 if emulate_1d_as_2d => (
+                wgpu::TextureDimension::D2,
+                layers,
+                if layers > 1 {
+                    wgpu::TextureViewDimension::D2Array
+                } else {
+                    wgpu::TextureViewDimension::D2
+                },
+            ),
             TextureDim::D1 => {
-                if desc.height != 1 {
-                    return Err(GpuError::Invalid("1D texture must have height == 1"));
-                }
                 (
                     wgpu::TextureDimension::D1,
                     1,
@@ -262,8 +291,8 @@ impl WgpuExecutor {
         // A multisampled texture is a MSAA render target only: WebGPU forbids `mipLevelCount > 1` and any
         // COPY usage on a `sampleCount > 1` texture (you resolve it, never copy it), so those are dropped —
         // it is exclusively a `RENDER_ATTACHMENT` drawn into then resolved by a `ResolveTexture` op. A 1D
-        // texture likewise forbids `mipLevelCount > 1`.
-        let mip_levels = if sample_count > 1 || dimension == wgpu::TextureDimension::D1 {
+        // texture is single-sampled but may carry the full width-derived mip chain.
+        let mip_levels = if sample_count > 1 {
             1
         } else {
             desc.mip_levels.max(1)

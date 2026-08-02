@@ -1158,9 +1158,8 @@ fn sample_counts_are_claimed_only_where_the_specification_permits() {
 /// driver has — 10 `dEQP-VK.api.info.image_format_properties` cases reported
 /// "VK_ERROR_FORMAT_NOT_SUPPORTED returned for required image parameter combination".
 ///
-/// The reported limits must match what a 1D image can actually be: a single row, no mip chain, no
-/// multisampling. Advertising a 1D mip pyramid the executor's D1 path forbids would be the over-claim
-/// this driver has been removing everywhere else.
+/// Transfer-only 1D images use a one-row 2D backing and therefore carry a full width-derived mip chain;
+/// native sampled 1D remains single-mip. Neither path is multisampled.
 #[test]
 fn a_one_dimensional_image_is_supported_with_one_dimensional_limits() {
     const R8G8B8A8_UNORM: i32 = 37;
@@ -1171,14 +1170,14 @@ fn a_one_dimensional_image_is_supported_with_one_dimensional_limits() {
     const VK_IMAGE_TILING_OPTIMAL: i32 = 0;
     const VK_ERROR_FORMAT_NOT_SUPPORTED: VkResult = -11;
 
-    let query = |format: i32, image_type: i32| {
+    let query = |format: i32, image_type: i32, usage: VkFlags| {
         let mut p: VkImageFormatProperties = unsafe { core::mem::zeroed() };
         let r = crate::instance::vkGetPhysicalDeviceImageFormatProperties(
             core::ptr::null_mut(),
             format,
             image_type,
             VK_IMAGE_TILING_OPTIMAL,
-            0,
+            usage,
             0,
             &mut p as *mut _ as *mut c_void,
         );
@@ -1186,11 +1185,11 @@ fn a_one_dimensional_image_is_supported_with_one_dimensional_limits() {
     };
 
     // The 2D answer is unchanged — a positive control that widening the type set did not disturb it.
-    let (result, two_d) = query(R8G8B8A8_UNORM, VK_IMAGE_TYPE_2D);
+    let (result, two_d) = query(R8G8B8A8_UNORM, VK_IMAGE_TYPE_2D, 0);
     assert_eq!(result, VK_SUCCESS);
     assert!(two_d.max_extent.height > 1 && two_d.max_mip_levels > 1);
 
-    let (result, one_d) = query(R8G8B8A8_UNORM, VK_IMAGE_TYPE_1D);
+    let (result, one_d) = query(R8G8B8A8_UNORM, VK_IMAGE_TYPE_1D, 0x2);
     assert_eq!(result, VK_SUCCESS, "1D optimal is a required combination");
     assert!(one_d.max_extent.width >= 1, "a 1D image has a width");
     assert_eq!(
@@ -1198,19 +1197,28 @@ fn a_one_dimensional_image_is_supported_with_one_dimensional_limits() {
         "Invalid dimensions for 1D image"
     );
     assert_eq!(one_d.max_extent.depth, 1, "Invalid dimensions for 1D image");
-    assert_eq!(one_d.max_mip_levels, 1, "the D1 path carries no mip chain");
+    assert_eq!(
+        one_d.max_mip_levels,
+        1 + one_d.max_extent.width.ilog2(),
+        "a 1D image carries the full width-derived mip chain"
+    );
     assert_eq!(one_d.sample_counts, 0x1, "1D is never multisampled");
+
+    let (result, sampled_one_d) = query(R8G8B8A8_UNORM, VK_IMAGE_TYPE_1D, 0x4);
+    assert_eq!(result, VK_SUCCESS);
+    assert_eq!(sampled_one_d.max_mip_levels, 1);
+    assert_eq!(sampled_one_d.max_array_layers, 1);
 
     // The two documented exceptions stay refused: 1D support is OPTIONAL for compressed and for
     // depth/stencil formats, and the executor's D1 path cannot carry either.
     assert_eq!(
-        query(D32_SFLOAT, VK_IMAGE_TYPE_1D).0,
+        query(D32_SFLOAT, VK_IMAGE_TYPE_1D, 0).0,
         VK_ERROR_FORMAT_NOT_SUPPORTED,
         "1D depth/stencil is optional and unsupported here"
     );
-    let compressed_2d = query(BC1_RGBA_UNORM_BLOCK, VK_IMAGE_TYPE_2D).0;
+    let compressed_2d = query(BC1_RGBA_UNORM_BLOCK, VK_IMAGE_TYPE_2D, 0).0;
     assert_eq!(
-        query(BC1_RGBA_UNORM_BLOCK, VK_IMAGE_TYPE_1D).0,
+        query(BC1_RGBA_UNORM_BLOCK, VK_IMAGE_TYPE_1D, 0).0,
         VK_ERROR_FORMAT_NOT_SUPPORTED,
         "1D compressed is optional and unsupported here"
     );
