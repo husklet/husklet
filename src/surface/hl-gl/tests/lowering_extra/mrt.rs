@@ -27,7 +27,7 @@ fn bind_mrt(c: &mut GlContext, n: u32) -> u32 {
     fbo
 }
 
-fn pass_color(batch: &[Cmd]) -> Vec<(hl_gpu::protocol::model::enums::LoadOp, [f32; 4])> {
+fn pass_color(batch: &[Cmd]) -> Vec<(hl_gpu::protocol::model::enums::LoadOp, [f64; 4])> {
     submit_ops(batch)
         .iter()
         .find_map(|e| match e {
