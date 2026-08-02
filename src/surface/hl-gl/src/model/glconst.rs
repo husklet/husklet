@@ -439,6 +439,9 @@ pub const GL_QUERY_RESULT_AVAILABLE: u32 = 0x8867;
 
 // transform-feedback objects (glBindTransformFeedback / glTransformFeedbackVaryings).
 pub const GL_TRANSFORM_FEEDBACK: u32 = 0x8E22;
+pub const GL_TRANSFORM_FEEDBACK_VARYING_MAX_LENGTH: u32 = 0x8C76;
+pub const GL_TRANSFORM_FEEDBACK_BUFFER_MODE: u32 = 0x8C7F;
+pub const GL_TRANSFORM_FEEDBACK_VARYINGS: u32 = 0x8C83;
 pub const GL_INTERLEAVED_ATTRIBS: u32 = 0x8C8C;
 pub const GL_SEPARATE_ATTRIBS: u32 = 0x8C8D;
 

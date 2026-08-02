@@ -155,9 +155,8 @@ pub extern "C" fn glTransformFeedbackVaryings(
     });
 }
 
-/// `glGetTransformFeedbackVarying(program, index, …)` — report the captured varying's name (real state)
-/// plus a best-effort `size = 1`, `type = GL_FLOAT_VEC4` (no GLSL reflection). Out of range →
-/// `GL_INVALID_VALUE` + empty name.
+/// `glGetTransformFeedbackVarying(program, index, …)` — report the captured varying's stored name and
+/// best available size/type metadata. Out of range → `GL_INVALID_VALUE` + empty name.
 #[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glGetTransformFeedbackVarying(
@@ -169,14 +168,15 @@ pub extern "C" fn glGetTransformFeedbackVarying(
     type_: *mut u32,
     name: *mut c_char,
 ) {
-    let varying = GlobalState::context(|s| es3::transform_feedback_varying(&s.gl, program, index));
+    let varying =
+        GlobalState::context(|s| es3::transform_feedback_varying_info(&s.gl, program, index));
     match varying {
-        Some(vname) => unsafe {
+        Some((vname, varying_size, varying_type)) => unsafe {
             if !size.is_null() {
-                *size = 1;
+                *size = varying_size;
             }
             if !type_.is_null() {
-                *type_ = GL_FLOAT_VEC4;
+                *type_ = varying_type;
             }
             write_c_name(vname.as_bytes(), buf_size, length, name);
         },

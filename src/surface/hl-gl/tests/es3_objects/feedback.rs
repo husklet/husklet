@@ -74,6 +74,58 @@ fn transform_feedback_varyings_round_trip() {
     assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
 }
 
+#[test]
+fn transform_feedback_program_reflection_reports_point_size() {
+    let mut c = ctx();
+    let vs = record::create_shader(&mut c, GL_VERTEX_SHADER);
+    record::shader_source(
+        &mut c,
+        vs,
+        "#version 300 es\nvoid main(){ gl_Position=vec4(0.0); gl_PointSize=1.0; }\n",
+    );
+    record::compile_shader(&mut c, vs);
+    let fs = record::create_shader(&mut c, GL_FRAGMENT_SHADER);
+    record::shader_source(
+        &mut c,
+        fs,
+        "#version 300 es\nprecision mediump float; out vec4 c; void main(){ c=vec4(1.0); }\n",
+    );
+    record::compile_shader(&mut c, fs);
+    let program = record::create_program(&mut c);
+    record::attach_shader(&mut c, program, vs);
+    record::attach_shader(&mut c, program, fs);
+    es3::transform_feedback_varyings(
+        &mut c,
+        program,
+        vec!["gl_PointSize".to_string()],
+        GL_INTERLEAVED_ATTRIBS,
+    );
+    assert!(record::link_program(&mut c, program));
+
+    assert_eq!(
+        query::get_programiv(&c, program, GL_TRANSFORM_FEEDBACK_VARYINGS),
+        1
+    );
+    assert_eq!(
+        query::get_programiv(&c, program, GL_TRANSFORM_FEEDBACK_BUFFER_MODE),
+        GL_INTERLEAVED_ATTRIBS as i32
+    );
+    assert_eq!(
+        query::get_programiv(
+            &c,
+            program,
+            GL_TRANSFORM_FEEDBACK_VARYING_MAX_LENGTH
+        ),
+        "gl_PointSize".len() as i32 + 1
+    );
+    assert_eq!(
+        es3::transform_feedback_varying_info(&c, program, 0),
+        Some(("gl_PointSize".to_string(), 1, GL_FLOAT))
+    );
+
+    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
+}
+
 // ---- program pipeline objects --------------------------------------------------------------------
 #[test]
 fn delete_transform_feedback_object_makes_it_no_longer_a_tf() {

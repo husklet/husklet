@@ -148,6 +148,12 @@ impl TransformFeedbacks {
             .and_then(|(v, _)| v.get(index as usize))
             .map(|s| s.as_str())
     }
+
+    pub fn varying_info(&self, program: u32) -> Option<(&[String], u32)> {
+        self.varyings
+            .get(&program)
+            .map(|(names, mode)| (names.as_slice(), *mode))
+    }
 }
 
 #[cfg(test)]

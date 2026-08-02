@@ -294,10 +294,28 @@ pub fn transform_feedback_varyings(
 /// The captured varying name at `index` for `program` (`glGetTransformFeedbackVarying`), or `None`
 /// (out-of-range / never specified) — the caller raises `GL_INVALID_VALUE` and reports an empty name.
 pub fn transform_feedback_varying(ctx: &GlContext, program: u32, index: u32) -> Option<String> {
+    transform_feedback_varying_info(ctx, program, index).map(|(name, _, _)| name)
+}
+
+/// Name, array size, and GL type reported by `glGetTransformFeedbackVarying`. The fixed built-in point
+/// size is a scalar float; other varyings retain the existing best-effort vec4 report until general shader
+/// output reflection is modeled.
+pub fn transform_feedback_varying_info(
+    ctx: &GlContext,
+    program: u32,
+    index: u32,
+) -> Option<(String, i32, u32)> {
     ctx.local
         .transform_feedbacks
         .varying(program, index)
-        .map(|s| s.to_string())
+        .map(|name| {
+            let type_ = if name == "gl_PointSize" {
+                GL_FLOAT
+            } else {
+                GL_FLOAT_VEC4
+            };
+            (name.to_string(), 1, type_)
+        })
 }
 
 // ==================================================================================================
