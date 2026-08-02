@@ -113,44 +113,52 @@ impl BlitCache {
         // Two layouts, because the source's sample type is part of the layout and a non-filterable float
         // view cannot bind to a filterable declaration. Built as a pair rather than lazily so the choice
         // is visible in one place.
-        let layout_for = |can_filter: bool| device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some(if can_filter { "hl-blit-bgl" } else { "hl-blit-bgl-nonfilterable" }),
-            entries: &[
-                // 0: the source texture (float 2D, filterable or not).
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: can_filter },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
+        let layout_for = |can_filter: bool| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some(if can_filter {
+                    "hl-blit-bgl"
+                } else {
+                    "hl-blit-bgl-nonfilterable"
+                }),
+                entries: &[
+                    // 0: the source texture (float 2D, filterable or not).
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float {
+                                filterable: can_filter,
+                            },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // 1: the sampler. A non-filterable source admits only a NonFiltering sampler.
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(if can_filter {
-                        wgpu::SamplerBindingType::Filtering
-                    } else {
-                        wgpu::SamplerBindingType::NonFiltering
-                    }),
-                    count: None,
-                },
-                // 2: the uv_off / uv_scale transform (16 bytes).
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    // 1: the sampler. A non-filterable source admits only a NonFiltering sampler.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(if can_filter {
+                            wgpu::SamplerBindingType::Filtering
+                        } else {
+                            wgpu::SamplerBindingType::NonFiltering
+                        }),
+                        count: None,
                     },
-                    count: None,
-                },
-            ],
-        });
+                    // 2: the uv_off / uv_scale transform (16 bytes).
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            })
+        };
         let bind_group_layout = [layout_for(true), layout_for(false)];
         let pipeline_layout = [
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -266,8 +274,18 @@ impl WgpuExecutor {
                 return Err(GpuError::Unsupported("wgpu: non-base subresource blit"));
             }
         }
-        if src_origin.z != 0 || dst_origin.z != 0 || src_extent.depth > 1 || dst_extent.depth > 1 {
+        let src_dim = texture::WgpuTexture::get(res, src)?.dim;
+        let dst_dim = texture::WgpuTexture::get(res, dst)?.dim;
+        let depth_spanning =
+            src_extent.depth > 1 || dst_extent.depth > 1 || src_origin.z != 0 || dst_origin.z != 0;
+        if depth_spanning
+            && (!matches!(src_dim, hl_gpu::protocol::model::enums::TextureDim::D3)
+                || !matches!(dst_dim, hl_gpu::protocol::model::enums::TextureDim::D3))
+        {
             return Err(GpuError::Unsupported("wgpu: 3D/layer texture blit"));
+        }
+        if src_extent.depth != dst_extent.depth {
+            return Err(GpuError::Unsupported("wgpu: depth-scaled blit"));
         }
         if src_extent.width == 0
             || src_extent.height == 0
@@ -295,9 +313,9 @@ impl WgpuExecutor {
                 return Err(GpuError::Unsupported(refusal));
             }
         }
-        // A 1D or 3D texture on either side cannot take part, for the same reason as the multisample
-        // pair: this blit resamples by RENDERING through a single-layer 2D view of each side, and
-        // `create_view` rejects a `D2` view of a `D1` or `D3` texture outright. Measured before this
+        // A 1D texture on either side cannot take part: this blit resamples by RENDERING through a
+        // single-layer 2D view of each side, and `create_view` rejects a `D2` view of a `D1` texture.
+        // Measured before this
         // existed, a 1D source produced `InvalidTextureViewDimension { view: D2, texture: D1 }` from
         // `Texture::create_view` — the graphics API answering for the driver, naming the view it was
         // handed rather than the texture the caller passed.
@@ -305,32 +323,13 @@ impl WgpuExecutor {
         // A CUBE is deliberately absent: it is a 2D texture with six layers underneath, so a single-layer
         // 2D view of a face is exactly what this path builds, and it blits correctly today.
         //
-        // THE `D3` HALF IS A KNOWN, DELIBERATE DIVERGENCE — NOT AN OVERSIGHT. As of 2026-08-01 the CPU
-        // oracle SERVES a depth-spanning blit (`hl-gpu/src/cpu/service/copy.rs::blit_texture`, pinned by
-        // `oracle_spec/blit3d.rs`) and the Vulkan recorder lowers one (`hl-vulkan`, pinned by
-        // `lowering/blit3d.rs`); this executor is the last layer and has not been done. Anyone reading
-        // the tree cold will see the two sides disagree and read it as a bug in one of them.
-        //
-        // The ordering is the point. A reference that cannot REPRESENT the case cannot validate the
-        // executor that will serve it: while both sides decline, a differential agrees by mutual refusal
-        // and establishes nothing. So the oracle went first on purpose, and this refusal is what makes
-        // the remaining work measurable rather than self-certifying.
-        //
-        // Closing it is layer 3 in `../../surface/hl-vulkan/BLIT_HANDOFF.md`: one draw per destination
-        // slice for the unscaled case (`src.depth == dst.depth`, which is all the recorder emits — it
-        // refuses an unequal span by name). Z-SCALED blits stay refused on both sides; `VK_FILTER_LINEAR`
-        // is trilinear on a 3D blit and a nearest-slice stand-in would read as a filtering difference.
-        // `D1` is not part of that work and stays refused: `create_view` rejects a `D2` view of it.
-        for (id, side) in [(src, "source"), (dst, "destination")] {
-            let dim = texture::WgpuTexture::get(res, id)?.dim;
-            if matches!(
-                dim,
-                hl_gpu::protocol::model::enums::TextureDim::D1
-                    | hl_gpu::protocol::model::enums::TextureDim::D3
-            ) {
+        // D3 is served below as one D2 view and draw per destination slice. Z-scaled blits remain refused:
+        // linear filtering there is trilinear, which cannot be approximated by choosing one source slice.
+        for (dim, side) in [(src_dim, "source"), (dst_dim, "destination")] {
+            if matches!(dim, hl_gpu::protocol::model::enums::TextureDim::D1) {
                 return Err(GpuError::Unsupported(match side {
-                    "source" => "wgpu: 1D/3D blit source",
-                    _ => "wgpu: 1D/3D blit destination",
+                    "source" => "wgpu: 1D blit source",
+                    _ => "wgpu: 1D blit destination",
                 }));
             }
         }
@@ -338,10 +337,16 @@ impl WgpuExecutor {
         // Source dims (for UV normalization) + destination wgpu format (the pipeline's color-target format).
         // A blit reads the source through a sampler and writes the destination as a color attachment, so both
         // must have a packed COLOR layout — the depth/stencil formats have none and are rejected honestly.
-        let (sw, sh, can_filter) = {
+        let (sw, sh, sd, src_wfmt, can_filter) = {
             let t = texture::WgpuTexture::get(res, src)?;
             let _ = Format::from(t.format).texel_bytes()?;
-            (t.width, t.height, filterable(t.format))
+            (
+                t.width,
+                t.height,
+                t.depth,
+                Format::from(t.format).native(),
+                filterable(t.format),
+            )
         };
         // LINEAR genuinely needs a filterable source; NEAREST does not, and used to be refused anyway
         // because the bind-group layout declared filterable unconditionally. Only the linear case is a
@@ -351,18 +356,18 @@ impl WgpuExecutor {
                 "wgpu: linear blit filter for a non-filterable source format",
             ));
         }
-        let (dw, dh, dst_wfmt) = {
+        let (dw, dh, dd, dst_wfmt) = {
             let t = texture::WgpuTexture::get(res, dst)?;
             let _ = Format::from(t.format).texel_bytes()?;
             // A blit WRITES its destination as a colour attachment, so the destination needs the same
             // usage a render pass target needs. Refused here, where the caller can be told what it named,
             // rather than as a device-validation failure inside the pass below.
-            if !t.render_attachment {
+            if !t.render_attachment && t.dim != hl_gpu::protocol::model::enums::TextureDim::D3 {
                 return Err(GpuError::Invalid(
                     "wgpu: blit destination was not created as a render target",
                 ));
             }
-            (t.width, t.height, Format::from(t.format).native())
+            (t.width, t.height, t.depth, Format::from(t.format).native())
         };
 
         // Bounds: the source region must lie inside `src`, the destination region inside `dst`.
@@ -383,7 +388,15 @@ impl WgpuExecutor {
             dst_extent.height,
             dw,
             dh,
-        ) {
+        ) || src_origin
+            .z
+            .checked_add(src_extent.depth)
+            .is_none_or(|e| e > sd)
+            || dst_origin
+                .z
+                .checked_add(dst_extent.depth)
+                .is_none_or(|e| e > dd)
+        {
             return Err(GpuError::OutOfBounds);
         }
 
@@ -440,12 +453,16 @@ impl WgpuExecutor {
         // oracle materializes one plane per texture and has no array-layer concept, so serving layered
         // blits here alone would make the executor perform what the reference refuses — a false
         // divergence in the direction this project has spent the night removing.
-        let layer_view = |id: u32, sub: &TextureSubresource, label: &str| -> Result<wgpu::TextureView> {
+        let layer_view = |id: u32,
+                          sub: &TextureSubresource,
+                          layer: u32,
+                          label: &str|
+         -> Result<wgpu::TextureView> {
             let t = texture::WgpuTexture::get(res, id)?;
             Ok(t.texture.create_view(&wgpu::TextureViewDescriptor {
                 label: Some(label),
                 dimension: Some(wgpu::TextureViewDimension::D2),
-                base_array_layer: sub.layer,
+                base_array_layer: layer,
                 array_layer_count: Some(1),
                 // Name the MIP LEVEL too, not only the layer. The view used to span every level the
                 // texture had, and the blit samples with `textureSample`, whose level of detail comes
@@ -463,26 +480,6 @@ impl WgpuExecutor {
                 ..Default::default()
             }))
         };
-        let src_view = &layer_view(src, src_sub, "hl-blit-src")?;
-        let dst_view = &layer_view(dst, dst_sub, "hl-blit-dst")?;
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("hl-blit-bg"),
-            layout: &cache.bind_group_layout[usize::from(!can_filter)],
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(src_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(cache.sampler(filter, can_filter)),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: uniform.as_entire_binding(),
-                },
-            ],
-        });
         let pipeline = cache
             .pipelines
             .get(&(dst_wfmt, can_filter))
@@ -491,11 +488,129 @@ impl WgpuExecutor {
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("hl-blit"),
         });
-        {
+        for dz in 0..dst_extent.depth {
+            let src_z = if mirror.z {
+                src_origin.z + src_extent.depth - 1 - dz
+            } else {
+                src_origin.z + dz
+            };
+            let dst_z = dst_origin.z + dz;
+            let staged = src_dim == hl_gpu::protocol::model::enums::TextureDim::D3;
+            let (src_view, dst_view, staged_dst) = if staged {
+                let temp = |label, width, height, format, usage| {
+                    device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some(label),
+                        size: wgpu::Extent3d {
+                            width,
+                            height,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format,
+                        usage,
+                        view_formats: &[],
+                    })
+                };
+                let src_temp = temp(
+                    "hl-blit-src-slice",
+                    sw,
+                    sh,
+                    src_wfmt,
+                    wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+                );
+                let dst_temp = temp(
+                    "hl-blit-dst-slice",
+                    dw,
+                    dh,
+                    dst_wfmt,
+                    wgpu::TextureUsages::COPY_SRC
+                        | wgpu::TextureUsages::COPY_DST
+                        | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                );
+                let src_tex = texture::WgpuTexture::get(res, src)?;
+                let dst_tex = texture::WgpuTexture::get(res, dst)?;
+                enc.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &src_tex.texture,
+                        mip_level: src_sub.mip,
+                        origin: wgpu::Origin3d {
+                            x: 0,
+                            y: 0,
+                            z: src_z,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &src_temp,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: sw,
+                        height: sh,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                enc.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &dst_tex.texture,
+                        mip_level: dst_sub.mip,
+                        origin: wgpu::Origin3d {
+                            x: 0,
+                            y: 0,
+                            z: dst_z,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &dst_temp,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: dw,
+                        height: dh,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                (
+                    src_temp.create_view(&wgpu::TextureViewDescriptor::default()),
+                    dst_temp.create_view(&wgpu::TextureViewDescriptor::default()),
+                    Some(dst_temp),
+                )
+            } else {
+                (
+                    layer_view(src, src_sub, src_z, "hl-blit-src")?,
+                    layer_view(dst, dst_sub, dst_z, "hl-blit-dst")?,
+                    None,
+                )
+            };
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("hl-blit-bg"),
+                layout: &cache.bind_group_layout[usize::from(!can_filter)],
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&src_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(cache.sampler(filter, can_filter)),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: uniform.as_entire_binding(),
+                    },
+                ],
+            });
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("hl-blit-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: dst_view,
+                    view: &dst_view,
                     resolve_target: None,
                     // LOAD (not clear): a blit writes only the destination rect (the scissor clips the draw
                     // to it), so every destination texel OUTSIDE that rect must survive unchanged.
@@ -528,6 +643,33 @@ impl WgpuExecutor {
                 dst_extent.height,
             );
             pass.draw(0..3, 0..1);
+            drop(pass);
+            if let Some(dst_temp) = staged_dst {
+                let dst_tex = texture::WgpuTexture::get(res, dst)?;
+                enc.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &dst_temp,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &dst_tex.texture,
+                        mip_level: dst_sub.mip,
+                        origin: wgpu::Origin3d {
+                            x: 0,
+                            y: 0,
+                            z: dst_z,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: dw,
+                        height: dh,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
         }
         queue.submit(Some(enc.finish()));
         Ok(())
