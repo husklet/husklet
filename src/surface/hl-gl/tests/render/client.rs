@@ -114,12 +114,32 @@ fn narrow_client_attribute_is_converted_to_an_expressible_float_slot() {
         .expect("render pipeline");
     assert_eq!(
         desc.vertex_buffers[0].attrs[0].format & 0xffff,
-        3,
-        "the unsupported Unorm8x3 client array must become Float32x3"
+        2,
+        "the unsupported Unorm8x3 client array must become the shader's Float32x2"
     );
     let (_, bytes) = vertex_buffer_upload(batch);
-    assert_eq!(bytes.len(), 3 * 3 * size_of::<f32>());
+    assert_eq!(bytes.len(), 3 * 2 * size_of::<f32>());
     assert_eq!(f32::from_le_bytes(bytes[0..4].try_into().unwrap()), 1.0);
+}
+
+#[test]
+fn client_attribute_width_matches_the_linked_shader_input() {
+    let mut c = ctx_64();
+    let mut sink = RecordingSink::with_full_caps();
+    let _prog = flat_program(&mut c);
+    let verts = [0.0f32; 12];
+    record::vertex_attrib_pointer(&mut c, 0, 4, GL_FLOAT, false, 0, verts.as_ptr() as usize);
+    record::enable_vertex_attrib(&mut c, 0);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let desc = sink.batches[0]
+        .iter()
+        .find_map(|command| match command {
+            Cmd::CreateRenderPipeline(_, desc) => Some(desc),
+            _ => None,
+        })
+        .expect("render pipeline");
+    assert_eq!(desc.vertex_buffers[0].attrs[0].format & 0xff, 2);
 }
 
 #[test]

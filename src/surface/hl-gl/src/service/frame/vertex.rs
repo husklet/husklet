@@ -195,7 +195,15 @@ fn half_to_f32(bits: u16) -> f32 {
 /// De-interleave one attribute out of its vertex buffer into a tightly-packed `f32` array, one element per
 /// vertex the buffer can supply. Returns the bytes and the vertex count.
 fn convert_attribute_to_f32(attribute: &Attr, source: &[u8]) -> (Vec<u8>, usize) {
-    let comps = attribute.size.clamp(1, 4) as usize;
+    convert_attribute_to_f32_width(attribute, source, attribute.size.clamp(1, 4) as usize)
+}
+
+fn convert_attribute_to_f32_width(
+    attribute: &Attr,
+    source: &[u8],
+    output_components: usize,
+) -> (Vec<u8>, usize) {
+    let source_components = attribute.size.clamp(1, 4) as usize;
     let stride = attribute_stride(attribute).max(1) as usize;
     let element = attribute_element_size(attribute) as usize;
     let component = GlType(attribute.kind).component_size().max(1);
@@ -204,11 +212,17 @@ fn convert_attribute_to_f32(attribute: &Attr, source: &[u8]) -> (Vec<u8>, usize)
         Some(remaining) => 1 + remaining / stride,
         None => 0,
     };
-    let mut out = Vec::with_capacity(vertices * comps * size_of::<f32>());
+    let mut out = Vec::with_capacity(vertices * output_components * size_of::<f32>());
     for vertex in 0..vertices {
         let base = attribute.offset + vertex * stride;
-        for index in 0..comps {
-            let value = decode_component(attribute, source, base + index * component);
+        for index in 0..output_components {
+            let value = if index < source_components {
+                decode_component(attribute, source, base + index * component)
+            } else if index == 3 {
+                1.0
+            } else {
+                0.0
+            };
             out.extend_from_slice(&value.to_le_bytes());
         }
     }
@@ -526,11 +540,22 @@ pub(super) fn lower_vertices(
         let mut attribute = d.attrs[ca.location];
         attribute.offset = 0;
         attribute.stride = 0;
-        let (data, kind, normalized, integer) = if needs_float_conversion(&attribute) {
-            let (converted, _) = convert_attribute_to_f32(&attribute, &ca.data);
-            (converted, GL_FLOAT, false, false)
+        let linked_components = program
+            .vertex_attr_components(ca.location)
+            .unwrap_or(ca.size)
+            .clamp(1, 4);
+        let width_mismatch = !attribute.integer && linked_components != ca.size.clamp(1, 4);
+        let (data, kind, normalized, integer, components) = if needs_float_conversion(&attribute)
+            || width_mismatch
+        {
+            let (converted, _) = convert_attribute_to_f32_width(
+                &attribute,
+                &ca.data,
+                linked_components as usize,
+            );
+            (converted, GL_FLOAT, false, false, linked_components)
         } else {
-            (ca.data.clone(), ca.kind, ca.normalized, ca.integer)
+            (ca.data.clone(), ca.kind, ca.normalized, ca.integer, ca.size)
         };
         let bytes = data.len();
         let ir = ctx.alloc_buffer_ir()?;
@@ -551,14 +576,14 @@ pub(super) fn lower_vertices(
             offset: 0,
             data,
         });
-        let elem = ca.size.clamp(1, 4) as u32 * GlType(kind).component_size() as u32;
+        let elem = components.clamp(1, 4) as u32 * GlType(kind).component_size() as u32;
         client_slots.push(ClientSlot {
             ir,
             bytes,
             stride: elem.max(1),
             step_mode: (ca.divisor > 0) as u32,
             location: ca.location as u32,
-            format: vertex_format_wire(kind, ca.size, normalized, integer),
+            format: vertex_format_wire(kind, components, normalized, integer),
         });
     }
     // A disabled GL attribute array reads the context's current generic attribute value. WebGPU has no
