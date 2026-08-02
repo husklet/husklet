@@ -18,6 +18,11 @@ impl GlContext {
             self.set_gl_error(GL_INVALID_VALUE);
             return;
         }
+        // ES 3.0 rasterizer discard suppresses both primitive rasterization and framebuffer clear
+        // operations. Keep validation above observable, but record no framebuffer work while enabled.
+        if self.local.pipeline.rasterizer_discard {
+            return;
+        }
         let (w, h) = self.target_wh();
         let mut d = DrawCall {
             is_clear: true,
@@ -313,6 +318,12 @@ pub fn draw_arrays_instanced(
     if count == 0 || instances == 0 {
         return;
     }
+    // The current backend has no transform-feedback output, so a rasterizer-discarded draw has no
+    // observable GPU work. Drop it before snapshotting resources: retaining it until lowering made frame
+    // planning allocate app bind groups and collide with the internal scissored-clear pipeline.
+    if ctx.is_enabled(GL_RASTERIZER_DISCARD) {
+        return;
+    }
     let mut d = ctx.snapshot(true);
     d.mode = mode;
     d.first = first;
@@ -357,6 +368,9 @@ pub fn draw_elements_instanced(
         return;
     }
     if count == 0 || instances == 0 {
+        return;
+    }
+    if ctx.is_enabled(GL_RASTERIZER_DISCARD) {
         return;
     }
     let mut d = ctx.snapshot(true);
@@ -411,6 +425,9 @@ pub fn draw_elements_instanced_base_vertex(
         return;
     }
     if count == 0 || instances == 0 {
+        return;
+    }
+    if ctx.is_enabled(GL_RASTERIZER_DISCARD) {
         return;
     }
     let mut d = ctx.snapshot(true);

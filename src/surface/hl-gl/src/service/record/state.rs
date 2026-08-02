@@ -449,6 +449,9 @@ pub(super) fn set_cap(ctx: &mut GlContext, cap: u32, on: bool) {
 /// recorded clear.
 impl GlContext {
     pub fn clear_buffer_color(&mut self, drawbuffer: u32, rgba: [f32; 4]) {
+        if self.local.pipeline.rasterizer_discard {
+            return;
+        }
         let (w, h) = self.target_wh();
         let mut d = DrawCall {
             is_clear: true,
