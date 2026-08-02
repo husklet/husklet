@@ -125,6 +125,22 @@ impl GpuExecutor for WgpuExecutor {
     ) -> Result<Vec<u8>> {
         self.read_bytes(res, id.0, offset, len)
     }
+
+    fn export_buffer(
+        &self,
+        res: &SessionResources,
+        id: BufferId,
+    ) -> Result<(hl_gpu::runtime::model::sharing::Shared, u64)> {
+        self.export_buffer_native(res, id.0)
+    }
+
+    fn import_buffer(
+        &self,
+        resource: hl_gpu::runtime::model::sharing::Shared,
+        bytes: u64,
+    ) -> Result<hl_gpu::runtime::model::resources::Native> {
+        self.import_buffer_native(resource, bytes)
+    }
 }
 
 impl WgpuExecutor {

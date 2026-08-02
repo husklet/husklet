@@ -19,12 +19,22 @@ use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
 
 use crate::WgpuExecutor;
+use crate::device::Gpu;
 
 /// The wgpu-native backing of one protocol buffer. `size` is the logical (guest-visible) length; the wgpu
 /// allocation is that rounded up to 4 bytes so storage-buffer / copy alignment always holds internally.
+#[derive(Clone)]
 pub struct WgpuBuffer {
     pub buffer: wgpu::Buffer,
     pub size: u64,
+}
+
+/// An exported buffer is valid only for executors built from this exact acquired device. A wgpu handle
+/// cloned across independently acquired devices remains a Rust value, but using it with the wrong queue is
+/// not a supported alias and must be refused before it reaches a session resource table.
+struct SharedWgpuBuffer {
+    gpu: std::sync::Arc<Gpu>,
+    buffer: WgpuBuffer,
 }
 
 impl WgpuBuffer {
@@ -42,6 +52,43 @@ impl WgpuBuffer {
 }
 
 impl WgpuExecutor {
+    pub(crate) fn export_buffer_native(
+        &self,
+        res: &SessionResources,
+        id: u32,
+    ) -> Result<(hl_gpu::runtime::model::sharing::Shared, u64)> {
+        let buffer = WgpuBuffer::get(res, id)?.clone();
+        let size = buffer.size;
+        Ok((
+            std::sync::Arc::new(SharedWgpuBuffer {
+                gpu: std::sync::Arc::clone(&self.gpu),
+                buffer,
+            }),
+            size,
+        ))
+    }
+
+    pub(crate) fn import_buffer_native(
+        &self,
+        resource: hl_gpu::runtime::model::sharing::Shared,
+        bytes: u64,
+    ) -> Result<hl_gpu::runtime::model::resources::Native> {
+        let shared = resource
+            .downcast_ref::<SharedWgpuBuffer>()
+            .ok_or(GpuError::Invalid("wgpu: shared buffer native type mismatch"))?;
+        if !std::sync::Arc::ptr_eq(&shared.gpu, &self.gpu) {
+            return Err(GpuError::Invalid(
+                "wgpu: shared buffer belongs to another device",
+            ));
+        }
+        if shared.buffer.size != bytes {
+            return Err(GpuError::Invalid(
+                "wgpu: shared buffer authoritative size mismatch",
+            ));
+        }
+        Ok(Box::new(shared.buffer.clone()))
+    }
+
     /// Allocate a zero-initialized device buffer for `size` logical bytes (wgpu zero-inits lazily).
     pub(crate) fn make_buffer(&self, size: u64) -> WgpuBuffer {
         let alloc = WgpuBuffer::allocation_size(size).max(4);

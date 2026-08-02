@@ -17,6 +17,8 @@ use crate::protocol::model::error::{GpuError, Result};
 use crate::protocol::model::id::{BufferId, FenceId, SurfaceId, TextureId};
 use crate::protocol::port::sink::FenceWait;
 use crate::runtime::model::resources::SessionResources;
+use crate::runtime::model::resources::Native;
+use crate::runtime::model::sharing::Shared;
 
 /// The outcome of a `Present` command executed within a batch: which surface presented which texture.
 /// (The out-of-band presentable-image handle is delivered to the compositor on a separate channel; the
@@ -101,5 +103,49 @@ pub trait GpuExecutor {
     ) -> Result<Vec<u8>> {
         let _ = (resources, id, offset, len);
         Err(GpuError::Unsupported("executor: read_buffer"))
+    }
+
+    /// Return a shareable native alias and its authoritative logical byte length for `id`.
+    ///
+    /// Additive and honestly unsupported by default: an executor must not satisfy this with a copy,
+    /// because callers rely on writes through either session becoming visible through the other alias.
+    fn export_buffer(
+        &self,
+        resources: &SessionResources,
+        id: BufferId,
+    ) -> Result<(Shared, u64)> {
+        let _ = (resources, id);
+        Err(GpuError::Unsupported("executor: export_buffer"))
+    }
+
+    /// Turn a previously exported native into the owned value an importing session can insert into its
+    /// resource table. `bytes` is the registry's authoritative length and must agree with the native.
+    fn import_buffer(&self, resource: Shared, bytes: u64) -> Result<Native> {
+        let _ = (resource, bytes);
+        Err(GpuError::Unsupported("executor: import_buffer"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::CpuExecutor;
+
+    #[test]
+    fn cpu_executor_honestly_refuses_buffer_aliasing() {
+        let executor = CpuExecutor::new();
+        let resources = SessionResources::new();
+        let error = match executor.export_buffer(&resources, BufferId(1)) {
+            Ok(_) => panic!("CPU storage cannot be aliased safely"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, GpuError::Unsupported("executor: export_buffer")));
+
+        let shared: Shared = std::sync::Arc::new(());
+        let error = match executor.import_buffer(shared, 4) {
+            Ok(_) => panic!("CPU storage cannot import an alias safely"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, GpuError::Unsupported("executor: import_buffer")));
     }
 }
