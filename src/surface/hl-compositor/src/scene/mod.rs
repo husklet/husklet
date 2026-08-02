@@ -413,7 +413,11 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
             CompletionOutcome::Delivered {
                 serial: _,
                 timing: _,
-            } if pending.failed => (FramePacing::TerminalFailure, None, 0),
+            } if pending.failed => (
+                FramePacing::TerminalFailure,
+                None,
+                pending.callbacks.values().copied().sum(),
+            ),
             CompletionOutcome::Delivered {
                 serial: _,
                 timing: _,
@@ -434,9 +438,11 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
             CompletionOutcome::RetryableFailure if !pending.failed => {
                 (FramePacing::RetryableFailure, None, 0)
             }
-            CompletionOutcome::RetryableFailure | CompletionOutcome::TerminalFailure => {
-                (FramePacing::TerminalFailure, None, 0)
-            }
+            CompletionOutcome::RetryableFailure | CompletionOutcome::TerminalFailure => (
+                FramePacing::TerminalFailure,
+                None,
+                pending.callbacks.values().copied().sum(),
+            ),
         };
         // Retryable pacing means RETAIN — the same contract `pace_tree` honours on the synchronous path.
         // Without this the callbacks a frame carried were simply dropped when its submission came back
@@ -495,7 +501,7 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
     /// Name a frame the policy dropped before it ever reached the presenter, once per root per reason.
     ///
     /// These two branches were the last places a frame could vanish in complete silence: they return
-    /// `TerminalFailure`, which drops the client's `wl_surface.frame` callbacks, and they do it without
+    /// `TerminalFailure`, which releases the client's `wl_surface.frame` callbacks, and they do it without
     /// touching the port — so no presenter attribution can ever fire for them and a window simply stops.
     /// Counted always, logged once, so a permanently unpresentable root costs two lines rather than one
     /// per commit for the life of the process.
@@ -508,7 +514,7 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
             tag::PRESENT,
             hl_log::Level::Error,
             "present unpresentable root={} reason={reason} count={} over_ms={} — the frame never \
-             reached the presenter and this client's frame callbacks are dropped; read the rate, not \
+             reached the presenter and this client's frame callbacks are released for recovery; read the rate, not \
              the count",
             root.0,
             seen.count,
@@ -531,7 +537,6 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
                 let q = self.retained_callbacks.entry(sid).or_insert(0);
                 *q = (*q + pending).min(MAX_RETAINED_CALLBACKS);
             } else {
-                // Terminal: drop retained + pending without firing.
                 self.retained_callbacks.remove(&sid);
             }
         }

@@ -10,7 +10,9 @@ use crate::scene::port::PresentOutcome;
 
 /// How a presented tree should advance its per-surface frame pacing. Exact port of the ported enum:
 /// `Presented` (a new frame reached the screen), `Skipped` (clean tree — the last frame still stands),
-/// `RetryableFailure` (retain callbacks + feedback for retry), `TerminalFailure` (drop them).
+/// `RetryableFailure` retains callbacks + feedback for retry. `TerminalFailure` releases frame callbacks
+/// so a client may produce a replacement, while discarding presentation feedback because these pixels did
+/// not reach the screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FramePacing {
     Pending,
@@ -63,7 +65,11 @@ impl FramePacing {
                 terminal_cleanup: false,
             },
             FramePacing::TerminalFailure => PacingPolicy {
-                complete_callbacks: false,
+                // `wl_surface.frame` is permission to produce the next frame, not evidence that this one
+                // was displayed. Dropping it makes one failed host submission permanently starve clients
+                // such as Chrome that wait for the callback before drawing again. Presentation feedback
+                // below still reports the failed frame honestly as discarded.
+                complete_callbacks: true,
                 retain: false,
                 present_feedback: false,
                 terminal_cleanup: true,

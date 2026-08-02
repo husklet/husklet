@@ -186,6 +186,16 @@ impl HlState {
                 self.repaint_surface(host.root);
             }
             crate::scene::service::FramePacing::TerminalFailure => {
+                // A frame callback only tells the client it may draw again; it is not a claim that these
+                // pixels were presented. Release it even when this submission failed, otherwise one
+                // terminal drawable can permanently stop Chrome's requestAnimationFrame loop. The
+                // presentation feedback below remains the truthful failure signal.
+                let time_ms = crate::scene::port::clock::monotonic_nanos()
+                    .map(|nanos| (nanos / 1_000_000) as u32)
+                    .unwrap_or(0);
+                for callback in host.callbacks.into_values().flatten() {
+                    callback.done(time_ms);
+                }
                 discard_all(host.feedbacks, "terminal_pacing");
                 self.repaint_surface(host.root);
             }

@@ -205,7 +205,7 @@ fn a_burst_of_throttled_commits_coalesces_to_one_shipped_frame() {
 }
 
 #[test]
-fn terminal_failure_drops_retained_callbacks() {
+fn terminal_failure_releases_retained_callbacks_for_recovery() {
     let mut c = compositor();
     let top = map_toplevel(&mut c.scene, 100, 100);
     // Retain a callback via a retryable failure.
@@ -214,7 +214,8 @@ fn terminal_failure_drops_retained_callbacks() {
     attach.frame_callback = true;
     c.commit(top, attach);
     assert_eq!(c.retained_callbacks(top), 1);
-    // Now a terminal failure: retained callbacks are dropped, not fired.
+    // A terminal failure discards presentation feedback, but a frame callback is only permission to draw
+    // again. Releasing it is what lets the client replace the failed frame.
     c.clock().set(1_000_000_000);
     c.presenter_mut().script(PresentOutcome::TerminalFailure);
     c.apply_commit(
@@ -227,7 +228,7 @@ fn terminal_failure_drops_retained_callbacks() {
     );
     let out = c.present_root(top);
     assert_eq!(out.pacing, FramePacing::TerminalFailure);
-    assert_eq!(out.callbacks_fired, 0, "terminal failure fires nothing");
+    assert_eq!(out.callbacks_fired, 1, "terminal failure permits recovery");
     assert_eq!(
         c.retained_callbacks(top),
         0,

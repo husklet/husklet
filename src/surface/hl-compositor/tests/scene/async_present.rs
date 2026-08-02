@@ -60,21 +60,23 @@ fn one_layer_failure_terminates_atomic_frame_after_all_receipts_retire() {
     script_two(&mut compositor, 21, 22);
     assert_eq!(compositor.present_root(root).pacing, FramePacing::Pending);
 
-    assert!(compositor
-        .complete_presentation(PresentationCompletion {
-            id: PresentationId(21),
-            outcome: CompletionOutcome::TerminalFailure,
-        })
-        .is_none());
+    assert!(
+        compositor
+            .complete_presentation(PresentationCompletion {
+                id: PresentationId(21),
+                outcome: CompletionOutcome::TerminalFailure,
+            })
+            .is_none()
+    );
     let (_, completed) = compositor
         .complete_presentation(delivered(22))
         .expect("remaining submission retired");
     assert_eq!(completed.pacing, FramePacing::TerminalFailure);
-    assert_eq!(completed.callbacks_fired, 0);
+    assert_eq!(completed.callbacks_fired, 1);
 }
 
 #[test]
-fn a_retryable_completion_retains_the_frame_callbacks_a_terminal_one_drops() {
+fn retryable_retains_callbacks_and_terminal_releases_them() {
     // A drawable the host never displayed is not a dead frame. Retaining its callbacks is what lets the
     // next accepted present fire them; dropping them leaves the client waiting forever on a callback that
     // will never arrive, which is indistinguishable to the user from a frozen window.
@@ -83,12 +85,14 @@ fn a_retryable_completion_retains_the_frame_callbacks_a_terminal_one_drops() {
     script_two(&mut compositor, 91, 92);
     assert_eq!(compositor.present_root(root).pacing, FramePacing::Pending);
 
-    assert!(compositor
-        .complete_presentation(PresentationCompletion {
-            id: PresentationId(91),
-            outcome: CompletionOutcome::RetryableFailure,
-        })
-        .is_none());
+    assert!(
+        compositor
+            .complete_presentation(PresentationCompletion {
+                id: PresentationId(91),
+                outcome: CompletionOutcome::RetryableFailure,
+            })
+            .is_none()
+    );
     let (_, completed) = compositor
         .complete_presentation(delivered(92))
         .expect("remaining submission retired");
@@ -109,12 +113,14 @@ fn a_retryable_completion_retains_the_frame_callbacks_a_terminal_one_drops() {
     );
     script_two(&mut compositor, 93, 94);
     assert_eq!(compositor.present_root(root).pacing, FramePacing::Pending);
-    assert!(compositor
-        .complete_presentation(PresentationCompletion {
-            id: PresentationId(93),
-            outcome: CompletionOutcome::RetryableFailure,
-        })
-        .is_none());
+    assert!(
+        compositor
+            .complete_presentation(PresentationCompletion {
+                id: PresentationId(93),
+                outcome: CompletionOutcome::RetryableFailure,
+            })
+            .is_none()
+    );
     let (_, mixed) = compositor
         .complete_presentation(PresentationCompletion {
             id: PresentationId(94),
@@ -122,6 +128,10 @@ fn a_retryable_completion_retains_the_frame_callbacks_a_terminal_one_drops() {
         })
         .expect("remaining submission retired");
     assert_eq!(mixed.pacing, FramePacing::TerminalFailure);
+    assert_eq!(
+        mixed.callbacks_fired, 2,
+        "terminal recovery releases both the retained and current callbacks"
+    );
     assert_eq!(compositor.retained_callbacks(root), 0);
 }
 
@@ -140,9 +150,11 @@ fn duplicate_stale_and_new_generation_completions_do_not_cross() {
     let (_, first) = compositor.complete_presentation(delivered(32)).unwrap();
     assert_eq!(first.callbacks_fired, 1);
     assert!(compositor.complete_presentation(delivered(31)).is_none());
-    assert!(compositor
-        .complete_presentation(delivered(u64::MAX))
-        .is_none());
+    assert!(
+        compositor
+            .complete_presentation(delivered(u64::MAX))
+            .is_none()
+    );
 
     let refresh = compositor.scene.primary_output().unwrap().refresh_nanos();
     compositor.clock().set(refresh);
@@ -188,12 +200,14 @@ fn cancelling_root_detaches_every_submission_and_late_completion() {
 
     compositor.cancel_root(root);
     assert!(compositor.complete_presentation(delivered(71)).is_none());
-    assert!(compositor
-        .complete_presentation(PresentationCompletion {
-            id: PresentationId(72),
-            outcome: CompletionOutcome::TerminalFailure,
-        })
-        .is_none());
+    assert!(
+        compositor
+            .complete_presentation(PresentationCompletion {
+                id: PresentationId(72),
+                outcome: CompletionOutcome::TerminalFailure,
+            })
+            .is_none()
+    );
 }
 
 #[test]

@@ -143,6 +143,7 @@ fn pacing_policy_matches_the_ported_state_machine() {
     assert!(FramePacing::Skipped.policy().complete_callbacks);
     assert!(!FramePacing::Skipped.policy().present_feedback);
     assert!(FramePacing::RetryableFailure.policy().retain);
+    assert!(FramePacing::TerminalFailure.policy().complete_callbacks);
     assert!(FramePacing::TerminalFailure.policy().terminal_cleanup);
     // Outcome → pacing mapping: Offscreen is a retryable failure, not a delivery.
     assert_eq!(
