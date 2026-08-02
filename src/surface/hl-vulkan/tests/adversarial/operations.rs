@@ -1,5 +1,5 @@
 use super::*;
-use hl_gpu::protocol::model::descriptor::Mirror;
+use hl_gpu::protocol::model::descriptor::{Extent3d, Mirror, Origin3d};
 #[test]
 fn copy_buffer_to_image_usage_and_bounds_errors() {
     let mut d = dev();
@@ -164,10 +164,10 @@ fn blit_same_image_rejected_and_zero_extent_rejected() {
             a,
             SubresourceLayers::base(),
             SubresourceLayers::base(),
-            (0, 0),
-            (4, 4),
-            (0, 0),
-            (4, 4),
+            Origin3d { x: 0, y: 0, z: 0 },
+            Extent3d { width: 4, height: 4, depth: 1 },
+            Origin3d { x: 0, y: 0, z: 0 },
+            Extent3d { width: 4, height: 4, depth: 1 },
             true,
             Mirror::NONE,
         ),
@@ -181,10 +181,10 @@ fn blit_same_image_rejected_and_zero_extent_rejected() {
             b,
             SubresourceLayers::base(),
             SubresourceLayers::base(),
-            (0, 0),
-            (0, 4),
-            (0, 0),
-            (4, 4),
+            Origin3d { x: 0, y: 0, z: 0 },
+            Extent3d { width: 0, height: 4, depth: 1 },
+            Origin3d { x: 0, y: 0, z: 0 },
+            Extent3d { width: 4, height: 4, depth: 1 },
             false,
             Mirror::NONE,
         ),

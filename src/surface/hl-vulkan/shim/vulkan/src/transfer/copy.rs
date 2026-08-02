@@ -232,15 +232,12 @@ pub extern "C" fn vkCmdBlitImage(
             ) else {
                 continue;
             };
-            // A region spanning depth is legal and unrepresentable: the lowering carries a 2D rect per
-            // array layer and the host refuses a 3D blit outright.
-            if source.depth != (0, 1) || destination.depth != (0, 1) {
-                device.latch::<()>(
-                    command_buffer,
-                    Err(hl_gpu::GpuError::Unsupported("vkCmdBlitImage: 3D region")),
-                );
-                continue;
-            }
+            // A region spanning depth used to be refused here as "vkCmdBlitImage: 3D region" — 352 of the
+            // `dEQP-VK.api.copy_and_blit.core` failures. It was the only unannounceable gap in this
+            // driver: `VkFormatFeatureFlags` is per FORMAT, not per image type, so there was no bit to
+            // withdraw and no query through which an application could have discovered the refusal.
+            // `BlitRect` now normalizes z alongside x and y, so the region is expressible and the
+            // recorder judges it. What the recorder still declines, it declines by name.
             let recorded = record::cmd_blit_image(
                 device,
                 command_buffer,

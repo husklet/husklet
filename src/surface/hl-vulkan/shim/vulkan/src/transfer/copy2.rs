@@ -207,13 +207,9 @@ impl Transfer2 {
                 ) else {
                     continue;
                 };
-                if source.depth != (0, 1) || destination.depth != (0, 1) {
-                    device.latch::<()>(
-                        command_buffer,
-                        Err(hl_gpu::GpuError::Unsupported("vkCmdBlitImage2: 3D region")),
-                    );
-                    continue;
-                }
+                // The depth refusal is gone for the same reason as in `vkCmdBlitImage`: `BlitRect` now
+                // normalizes z, so a 3D region reaches the recorder and is judged there rather than
+                // being declined by a rule the application had no query to discover.
                 let recorded = record::cmd_blit_image(
                     device,
                     command_buffer,

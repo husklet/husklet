@@ -12,7 +12,8 @@ use hl_gpu::protocol::model::descriptor::{
     Extent3d, Mirror, Origin3d, TextureSubresource,
 };
 use hl_gpu::protocol::model::enums::{
-    buffer_usage, texture_usage, Filter, IndexFormat, LoadOp, TextureAspect, TextureFormat,
+    buffer_usage, texture_usage, Filter, IndexFormat, LoadOp, TextureAspect, TextureDim,
+    TextureFormat,
 };
 use hl_gpu::{Cmd, CommandSink, GpuError, Result};
 use std::collections::HashMap;

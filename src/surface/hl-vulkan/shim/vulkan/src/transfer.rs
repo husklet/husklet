@@ -6,7 +6,7 @@
 
 use core::ffi::c_void;
 
-use hl_gpu::protocol::model::descriptor::Mirror;
+use hl_gpu::protocol::model::descriptor::{Extent3d, Mirror, Origin3d};
 use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
 
 use crate::state::StateStore;
@@ -27,36 +27,45 @@ pub use copy2::*;
 /// Vulkan gives a blit two corners rather than an origin and an extent, and `offsets[1]` before
 /// `offsets[0]` on an axis is how it expresses a MIRROR. Normalizing with a min/max is unavoidable — the
 /// IR's origin and extent are unsigned — so the comparison that the normalization performs is recorded
-/// as `inverted` rather than thrown away. `depth` is carried unnormalized because a region spanning depth
-/// is refused rather than mirrored.
+/// as `inverted` rather than thrown away.
+///
+/// All THREE axes are treated identically. Depth used to be carried as the raw `(a.z, b.z)` pair with a
+/// caller-side refusal of anything but `(0, 1)`, which meant the z axis had no origin, no extent and no
+/// flip — a shape that could only ever be refused. It is now normalized exactly as x and y are, so a
+/// depth-spanning region is expressible and the depth flip rides in `inverted.z`.
 pub(super) struct BlitRect {
-    pub origin: (u32, u32),
-    pub extent: (u32, u32),
+    pub origin: Origin3d,
+    pub extent: Extent3d,
     pub inverted: Mirror,
-    pub depth: (i32, i32),
 }
 
 impl BlitRect {
-    /// `None` for an EMPTY rect (zero extent on an axis) — nothing to do, and skipping it is right.
+    /// `None` for an EMPTY region (zero span on ANY axis) — nothing to do, and skipping it is right.
+    ///
+    /// z is included in that test rather than exempted from it. Vulkan requires a non-3D image's
+    /// `srcOffsets` to be z = 0 and z = 1, so a legal 2D region always spans one slice and is unaffected;
+    /// a zero z span is a degenerate region and is skipped for the same reason a zero-width one is.
     pub fn of(offsets: &[VkOffset3D; 2]) -> Option<Self> {
         let [a, b] = offsets;
-        if a.x == b.x || a.y == b.y {
+        if a.x == b.x || a.y == b.y || a.z == b.z {
             return None;
         }
         Some(BlitRect {
-            origin: (a.x.min(b.x) as u32, a.y.min(b.y) as u32),
-            extent: (a.x.abs_diff(b.x), a.y.abs_diff(b.y)),
-            // `z` is derived from the same offset pair as x and y. It has no consumer yet — a 3D region
-            // is still refused above this — but deriving it here rather than defaulting it to `false`
-            // means the depth flip is CARRIED from the moment the offsets are read, so lifting that
-            // refusal cannot silently ship an unflipped blit. A default would have been the same
-            // discard the x/y bits were added to stop, one axis later.
+            origin: Origin3d {
+                x: a.x.min(b.x) as u32,
+                y: a.y.min(b.y) as u32,
+                z: a.z.min(b.z) as u32,
+            },
+            extent: Extent3d {
+                width: a.x.abs_diff(b.x),
+                height: a.y.abs_diff(b.y),
+                depth: a.z.abs_diff(b.z),
+            },
             inverted: Mirror {
                 x: b.x < a.x,
                 y: b.y < a.y,
                 z: b.z < a.z,
             },
-            depth: (a.z, b.z),
         })
     }
 }

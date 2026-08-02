@@ -261,10 +261,10 @@ pub fn cmd_blit_image(
     dst: VkImage,
     src_sub: SubresourceLayers,
     dst_sub: SubresourceLayers,
-    src_origin: (u32, u32),
-    src_extent: (u32, u32),
-    dst_origin: (u32, u32),
-    dst_extent: (u32, u32),
+    src_origin: Origin3d,
+    src_extent: Extent3d,
+    dst_origin: Origin3d,
+    dst_extent: Extent3d,
     linear: bool,
     mirror: Mirror,
 ) -> Result<()> {
@@ -273,7 +273,7 @@ pub fn cmd_blit_image(
             "vkCmdBlitImage: src and dst image must differ",
         ));
     }
-    let (src_ir, src_fmt, src_usage, src_sub, siw, sih) = {
+    let (src_ir, src_fmt, src_usage, src_sub, siw, sih, sid, src_dim) = {
         let i = dev
             .images
             .get(&src)
@@ -281,9 +281,18 @@ pub fn cmd_blit_image(
         let sub = SubresourceLayers::resolve(i, src_sub);
         subresource_in_bounds(i, sub, "vkCmdBlitImage: source")?;
         let (w, h) = i.extent_at(sub.mip_level);
-        (i.ir_id, i.format, i.usage, sub, w, h)
+        (
+            i.ir_id,
+            i.format,
+            i.usage,
+            sub,
+            w,
+            h,
+            i.depth_at(sub.mip_level),
+            i.dim,
+        )
     };
-    let (dst_ir, dst_fmt, dst_usage, dst_sub, diw, dih) = {
+    let (dst_ir, dst_fmt, dst_usage, dst_sub, diw, dih, did, dst_dim) = {
         let i = dev
             .images
             .get(&dst)
@@ -291,7 +300,16 @@ pub fn cmd_blit_image(
         let sub = SubresourceLayers::resolve(i, dst_sub);
         subresource_in_bounds(i, sub, "vkCmdBlitImage: destination")?;
         let (w, h) = i.extent_at(sub.mip_level);
-        (i.ir_id, i.format, i.usage, sub, w, h)
+        (
+            i.ir_id,
+            i.format,
+            i.usage,
+            sub,
+            w,
+            h,
+            i.depth_at(sub.mip_level),
+            i.dim,
+        )
     };
     if src_sub.layer_count != dst_sub.layer_count {
         return Err(GpuError::Invalid(
@@ -357,16 +375,56 @@ pub fn cmd_blit_image(
             "vkCmdBlitImage: missing COPY_SRC/COPY_DST usage",
         ));
     }
-    if src_extent.0 == 0 || src_extent.1 == 0 || dst_extent.0 == 0 || dst_extent.1 == 0 {
+    if src_extent.width == 0
+        || src_extent.height == 0
+        || src_extent.depth == 0
+        || dst_extent.width == 0
+        || dst_extent.height == 0
+        || dst_extent.depth == 0
+    {
         return Err(GpuError::OutOfBounds);
+    }
+    // Only a 3D image has a depth axis to span. Vulkan pins a non-3D region's z offsets at 0 and 1, so a
+    // wider span is the application's error rather than a capability question.
+    //
+    // This has to come BEFORE the bounds check, and the ordering is the point rather than a detail — the
+    // same lesson the packed-texel refusal above records. A 2D image's depth is one at every level, so a
+    // two-slice span would otherwise fall through and come back `OutOfBounds`, which reads as "your
+    // region is too big" about a region that is the right size on an image with no third axis at all.
+    for (dim, extent, side) in [
+        (src_dim, src_extent, "source"),
+        (dst_dim, dst_extent, "destination"),
+    ] {
+        if dim != TextureDim::D3 && extent.depth > 1 {
+            return Err(GpuError::Invalid(match side {
+                "source" => "vkCmdBlitImage: source is not a 3D image and has no depth axis to span",
+                _ => "vkCmdBlitImage: destination is not a 3D image and has no depth axis to span",
+            }));
+        }
+    }
+    // A depth-spanning blit is SERVED, and this is the shape of it that the host can serve: one
+    // destination slice per source slice, so the existing per-slice resample runs unchanged and no new
+    // filter is needed. An unequal span would need resampling ALONG z, which under `VK_FILTER_LINEAR` is
+    // trilinear; the host has no such filter, and approximating it by picking a nearest slice would
+    // produce a plausible image that disagrees with every real driver, as a difference that reads like
+    // filtering rather than like a missing capability.
+    //
+    // Refused HERE rather than at the host, for the same reason as the integer and linear-filter
+    // refusals above: the caller gets an answer naming what it passed.
+    if src_extent.depth != dst_extent.depth {
+        return Err(GpuError::Unsupported(
+            "vkCmdBlitImage: source and destination depth spans differ (no depth resampling)",
+        ));
     }
     // Checked add: a hostile `origin` near `u32::MAX` must be a truthful OutOfBounds, never an
     // `origin + extent` add-overflow panic.
     let in_bounds = |o: u32, e: u32, dim: u32| o.checked_add(e).is_some_and(|end| end <= dim);
-    if !in_bounds(src_origin.0, src_extent.0, siw)
-        || !in_bounds(src_origin.1, src_extent.1, sih)
-        || !in_bounds(dst_origin.0, dst_extent.0, diw)
-        || !in_bounds(dst_origin.1, dst_extent.1, dih)
+    if !in_bounds(src_origin.x, src_extent.width, siw)
+        || !in_bounds(src_origin.y, src_extent.height, sih)
+        || !in_bounds(src_origin.z, src_extent.depth, sid)
+        || !in_bounds(dst_origin.x, dst_extent.width, diw)
+        || !in_bounds(dst_origin.y, dst_extent.height, dih)
+        || !in_bounds(dst_origin.z, dst_extent.depth, did)
     {
         return Err(GpuError::OutOfBounds);
     }
@@ -386,32 +444,16 @@ pub fn cmd_blit_image(
                 layer: src_sub.base_array_layer + layer,
                 aspect: src_aspect,
             },
-            src_origin: Origin3d {
-                x: src_origin.0,
-                y: src_origin.1,
-                z: 0,
-            },
-            src_extent: Extent3d {
-                width: src_extent.0,
-                height: src_extent.1,
-                depth: 1,
-            },
+            src_origin,
+            src_extent,
             dst: dst_ir,
             dst_sub: TextureSubresource {
                 mip: dst_sub.mip_level,
                 layer: dst_sub.base_array_layer + layer,
                 aspect: dst_aspect,
             },
-            dst_origin: Origin3d {
-                x: dst_origin.0,
-                y: dst_origin.1,
-                z: 0,
-            },
-            dst_extent: Extent3d {
-                width: dst_extent.0,
-                height: dst_extent.1,
-                depth: 1,
-            },
+            dst_origin,
+            dst_extent,
             filter: if linear {
                 Filter::Linear
             } else {

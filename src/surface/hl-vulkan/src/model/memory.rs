@@ -79,6 +79,16 @@ impl ImageRec {
     pub fn extent_at(&self, mip: u32) -> (u32, u32) {
         ((self.width >> mip).max(1), (self.height >> mip).max(1))
     }
+
+    /// This image's DEPTH at `mip` — the bound a depth-spanning blit region is measured against.
+    ///
+    /// Vulkan halves a 3D image's depth per level exactly as it halves width and height, floored and
+    /// never below one, which is why this mirrors [`Self::extent_at`] rather than returning `depth`.
+    /// `depth` is one for every non-3D image (`vkCreateImage` refuses anything else), so this returns
+    /// one for them at every level, which is the correct bound for a region Vulkan pins at z 0..1.
+    pub fn depth_at(&self, mip: u32) -> u32 {
+        (self.depth >> mip).max(1)
+    }
 }
 
 /// A `VkImageSubresourceLayers` — the single mip level and array-layer run a copy, blit or resolve

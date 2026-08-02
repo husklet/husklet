@@ -90,6 +90,8 @@ fn record_and_submit(
     }
 }
 
+#[path = "lowering/blit3d.rs"]
+mod blit3d;
 #[path = "lowering/clear.rs"]
 mod clear;
 #[path = "lowering/compute_descriptors.rs"]
