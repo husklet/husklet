@@ -270,6 +270,24 @@ unsafe fn to_plane(
         }
     }
     let Some(upload) = Upload::new(format, type_, w, h, ctx.pixel_store_state()) else {
+        // An unmodelled (format, type) combination. The guest gets an empty plane, the upload path
+        // reports nothing, and the texture samples as whatever the plane was minted with — a capability
+        // not taken, reported as success at every layer above. The counter beside this cannot say WHICH
+        // combination was refused, which is the only fact that identifies the gap.
+        hl_log::hl_verdict!(
+            hl_log::tag::GL,
+            "upload.unmodelled_format",
+            format = format,
+            type_ = type_,
+            width = w,
+            height = h;
+            "upload of format {:#06x} type {:#06x} ({}x{}) is not modelled, so no texels are produced \
+             and the plane keeps whatever it was minted with",
+            format,
+            type_,
+            w,
+            h
+        );
         hl_log::hl_count!(hl_log::tag::GL, "upload_layout_rejected");
         crate::stub::Diagnostics::upload(format, type_, crate::stub::UploadOutcome::Rejected);
         return Vec::new();

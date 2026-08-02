@@ -641,6 +641,22 @@ impl WgpuExecutor {
             .remove(&(presentation.token.get(), presentation.serial.get()));
         let texture = texture::WgpuTexture::get(resources, presentation.texture.0)?;
         let Some(surface) = texture.iosurface.as_ref() else {
+            // A capability quietly NOT taken. The caller reads `Ok(None)` as "no native frame this
+            // time" and continues, every layer reports success, and the window shows nothing — the
+            // shape that reports a blank result as a working one. Nothing else on the path can name
+            // the texture that had no IOSurface backing.
+            hl_log::hl_verdict!(
+                hl_log::tag::WGPU,
+                "presentation.no_iosurface_backing",
+                texture = presentation.texture.0,
+                token = presentation.token.get(),
+                serial = presentation.serial.get();
+                "presentation texture {} has no IOSurface backing, so no native frame is published \
+                 for token {} serial {} — the frame is silently not presented",
+                presentation.texture.0,
+                presentation.token.get(),
+                presentation.serial.get()
+            );
             return Ok(None);
         };
         let completion = completion.ok_or(hl_gpu::GpuError::Invalid(

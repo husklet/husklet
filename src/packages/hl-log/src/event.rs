@@ -106,6 +106,28 @@ macro_rules! from_uint {
 from_int!(i8, i16, i32, i64, isize);
 from_uint!(u8, u16, u32, u64, usize);
 
+/// `u128`/`i128` are what `Duration::as_micros` returns, so they reach fields constantly. A value that
+/// fits a `u64` stays a JSON number; one that does not becomes a string naming itself, for the same
+/// reason a non-finite float does — losing precision silently is worse than a consumer seeing a quoted
+/// integer, and truncating would report a wrong number as a right one.
+impl From<u128> for Value {
+    fn from(v: u128) -> Self {
+        match u64::try_from(v) {
+            Ok(fits) => Value::Uint(fits),
+            Err(_) => Value::Text(v.to_string()),
+        }
+    }
+}
+
+impl From<i128> for Value {
+    fn from(v: i128) -> Self {
+        match i64::try_from(v) {
+            Ok(fits) => Value::Int(fits),
+            Err(_) => Value::Text(v.to_string()),
+        }
+    }
+}
+
 impl From<f32> for Value {
     fn from(v: f32) -> Self {
         Value::Float(v as f64)

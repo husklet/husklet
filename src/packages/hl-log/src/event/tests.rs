@@ -220,3 +220,15 @@ fn a_verdict_keeps_its_human_sentence_and_its_fields() {
         sentences[0]
     );
 }
+
+/// `Duration::as_micros` returns `u128`, so oversized integers reach fields in ordinary use. One that
+/// fits stays a number; one that does not becomes a string naming itself rather than being truncated,
+/// because a wrong number reported as a right one is the failure this channel exists to remove.
+#[test]
+fn an_oversized_integer_keeps_its_value_rather_than_its_type() {
+    let mut out = String::new();
+    Value::from(1_234u128).write(&mut out);
+    out.push(' ');
+    Value::from(u128::MAX).write(&mut out);
+    assert_eq!(out, r#"1234 "340282366920938463463374607431768211455""#);
+}

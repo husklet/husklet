@@ -1148,8 +1148,17 @@ impl WgpuExecutor {
                     chain.push_str(&s.to_string());
                     src = s.source();
                 }
-                hl_log::hl_error!(
+                // The line that cost most of a day on the Chrome window. `grep verdict=nack` returned
+                // its FIRST line while the rule actually violated sat four lines below, in the `source()`
+                // chain — a line-oriented reader cannot see past the first newline of a multi-line
+                // message. As fields, the display form, the debug form and the whole cause chain are
+                // three values a consumer selects, and none of them can be truncated by a `head`.
+                hl_log::hl_verdict!(
                     tag::EXEC,
+                    "pass.rejected_at_validation",
+                    display = %e,
+                    debug = ?e,
+                    causes = %chain.trim_start();
                     "wgpu rejected a pass at validation: {e}\n  debug: {e:?}{chain}"
                 );
                 Err(GpuError::Kernel(format!(

@@ -343,6 +343,30 @@ impl RemoteCommandSink {
                 .map(|started| started.elapsed().as_micros())
                 .unwrap_or_default();
             if diagnostics {
+                // The ACCEPTED half of the pair, as a structured event rather than a verdict, because
+                // it does not meet the verdict test: nothing the caller asked for failed to happen, and
+                // an accepted frame is narration. It is worth noting what that leaves unfixed, since it
+                // cost an agent a near-miss today: this line is `Debug` and compiles out of release,
+                // while its rejected counterpart is a verdict and survives — so `grep -c ack` returning
+                // zero on a release log is indistinguishable from an instrument that was never there.
+                // The asymmetry is deliberate policy, not an oversight, and the resolution is to select
+                // on the VERDICT channel, where an absent `frame.rejected` means no frame was rejected.
+                hl_log::hl_event!(
+                    hl_log::tag::TRANSPORT,
+                    hl_log::Level::Debug,
+                    "frame.acknowledged",
+                    outcome = "ack",
+                    submit = submit,
+                    generation = self.generation,
+                    commands = current.len(),
+                    bytes = payload.len(),
+                    replay_bytes = payload.len().saturating_sub(ir.len()),
+                    encode_us = encode_us,
+                    write_us = write_us,
+                    ack_us = ack_us,
+                    total_us = total_us,
+                    ack = ack,
+                );
                 hl_log::hl_debug!(
                     hl_log::tag::TRANSPORT,
                     "gpu transport submit={} generation={} commands={} bytes={} replay_bytes={} \
@@ -375,6 +399,7 @@ impl RemoteCommandSink {
                         hl_log::hl_verdict!(
                             hl_log::tag::TRANSPORT,
                             "frame.rejected",
+                            outcome = "nack",
                             ack = nack,
                             submit = submit,
                             generation = self.generation,
