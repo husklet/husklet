@@ -1,5 +1,7 @@
 use super::*;
 
+mod vulkan13;
+
 const VK_DRIVER_ID_UNKNOWN: i32 = 0;
 
 /// `VkShaderStageFlagBits` / `VkSubgroupFeatureFlagBits` values used by the subgroup report.
@@ -109,6 +111,8 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
                 Name::write(&mut v12.driver_info, Identity::DRIVER_INFO);
                 v12.conformance_version = Identity::CONFORMANCE;
             }
+        } else if vulkan13::try_fill(node) {
+            // Filled by the core-1.3 property owner, including promoted spellings.
         } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES {
             if let Some(m) =
                 unsafe { (node as *mut VkPhysicalDeviceMaintenance4Properties).as_mut() }
