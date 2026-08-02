@@ -187,7 +187,8 @@ impl GlContext {
     pub fn gen_renderbuffer(&mut self) -> u32 {
         let name = self.renderbuffers.gen();
         let tex = self.textures.gen();
-        self.renderbuffers.set_storage(name, tex, 0, 0);
+        self.renderbuffers
+            .set_storage(name, tex, 0, 0, GL_RGBA4, 0);
         name
     }
 }
@@ -223,6 +224,17 @@ pub fn bind_renderbuffer(ctx: &mut GlContext, target: u32, name: u32) {
 /// Honest GL errors: bad `target` → `GL_INVALID_ENUM`; no bound renderbuffer → `GL_INVALID_OPERATION`;
 /// negative extent → `GL_INVALID_VALUE`.
 pub fn renderbuffer_storage(ctx: &mut GlContext, target: u32, internalformat: u32, w: i32, h: i32) {
+    renderbuffer_storage_multisample(ctx, target, 0, internalformat, w, h);
+}
+
+pub fn renderbuffer_storage_multisample(
+    ctx: &mut GlContext,
+    target: u32,
+    samples: i32,
+    internalformat: u32,
+    w: i32,
+    h: i32,
+) {
     if target != GL_RENDERBUFFER {
         ctx.set_gl_error(GL_INVALID_ENUM);
         return;
@@ -234,7 +246,9 @@ pub fn renderbuffer_storage(ctx: &mut GlContext, target: u32, internalformat: u3
     }
     // A negative extent, or one beyond the advertised GL_MAX_RENDERBUFFER_SIZE, is GL_INVALID_VALUE (real
     // GL rejects an oversized renderbuffer). This also bounds the backing-plane allocation to a sane size.
-    if w < 0
+    if samples < 0
+        || samples > crate::service::query::MAX_SAMPLES
+        || w < 0
         || h < 0
         || w > crate::service::query::MAX_TEXTURE_SIZE
         || h > crate::service::query::MAX_TEXTURE_SIZE
@@ -254,7 +268,8 @@ pub fn renderbuffer_storage(ctx: &mut GlContext, target: u32, internalformat: u3
     if let Some(texture) = ctx.textures.get_mut(tex) {
         texture.internal_format = internalformat;
     }
-    ctx.renderbuffers.set_storage(rbo, tex, w, h);
+    ctx.renderbuffers
+        .set_storage(rbo, tex, w, h, internalformat, samples);
 }
 
 /// `glDeleteRenderbuffers` (one name). Detaches the backing texture from every FBO color slot and drops

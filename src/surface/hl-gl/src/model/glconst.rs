@@ -497,6 +497,13 @@ pub const GL_TEXTURE_INTERNAL_FORMAT: u32 = 0x1003;
 pub const GL_RENDERBUFFER_WIDTH: u32 = 0x8D42;
 pub const GL_RENDERBUFFER_HEIGHT: u32 = 0x8D43;
 pub const GL_RENDERBUFFER_INTERNAL_FORMAT: u32 = 0x8D44;
+pub const GL_RENDERBUFFER_RED_SIZE: u32 = 0x8D50;
+pub const GL_RENDERBUFFER_GREEN_SIZE: u32 = 0x8D51;
+pub const GL_RENDERBUFFER_BLUE_SIZE: u32 = 0x8D52;
+pub const GL_RENDERBUFFER_ALPHA_SIZE: u32 = 0x8D53;
+pub const GL_RENDERBUFFER_DEPTH_SIZE: u32 = 0x8D54;
+pub const GL_RENDERBUFFER_STENCIL_SIZE: u32 = 0x8D55;
+pub const GL_RENDERBUFFER_SAMPLES: u32 = 0x8CAB;
 pub const GL_RGBA8: u32 = 0x8058;
 
 // GLES3 sized (and lenient) color/depth internal formats accepted by glTexStorage2D/3D +

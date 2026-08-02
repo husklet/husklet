@@ -19,6 +19,8 @@ pub struct Renderbuffer {
     pub tex: u32,
     pub width: i32,
     pub height: i32,
+    pub internal_format: u32,
+    pub samples: i32,
 }
 
 /// The per-context renderbuffer table: RBO name → [`Renderbuffer`], with a monotonic name counter. Name
@@ -70,11 +72,32 @@ impl Renderbuffers {
         self.map.get(&name).map(|r| (r.width, r.height))
     }
 
+    pub fn get(&self, name: u32) -> Option<&Renderbuffer> {
+        self.map.get(&name)
+    }
+
     /// Record `glRenderbufferStorage`: bind `tex` (a texture-table name) as the RBO's backing storage at
     /// the given extent. Creates the RBO entry on demand (matching GL's first-bind-creates behavior).
-    pub fn set_storage(&mut self, name: u32, tex: u32, width: i32, height: i32) {
+    pub fn set_storage(
+        &mut self,
+        name: u32,
+        tex: u32,
+        width: i32,
+        height: i32,
+        internal_format: u32,
+        samples: i32,
+    ) {
         if name != 0 {
-            self.map.insert(name, Renderbuffer { tex, width, height });
+            self.map.insert(
+                name,
+                Renderbuffer {
+                    tex,
+                    width,
+                    height,
+                    internal_format,
+                    samples,
+                },
+            );
         }
     }
 

@@ -280,20 +280,53 @@ pub fn tex_level_parameter(ctx: &GlContext, target: u32, level: i32, pname: u32)
     }
 }
 
-/// `glGetRenderbufferParameteriv(target, pname)` — the bound renderbuffer's extent + internal format (this
-/// model materializes every renderbuffer as an RGBA8 plane). A bad target / no bound RBO reads `0`.
+fn renderbuffer_component_bits(format: u32) -> [i32; 6] {
+    match format {
+        GL_R8 | GL_R8I | GL_R8UI => [8, 0, 0, 0, 0, 0],
+        GL_R16I | GL_R16UI => [16, 0, 0, 0, 0, 0],
+        GL_R32I | GL_R32UI => [32, 0, 0, 0, 0, 0],
+        GL_RG8 | GL_RG8I | GL_RG8UI => [8, 8, 0, 0, 0, 0],
+        GL_RG16I | GL_RG16UI => [16, 16, 0, 0, 0, 0],
+        GL_RG32I | GL_RG32UI => [32, 32, 0, 0, 0, 0],
+        GL_RGB8 => [8, 8, 8, 0, 0, 0],
+        GL_RGB565 => [5, 6, 5, 0, 0, 0],
+        GL_RGBA4 => [4, 4, 4, 4, 0, 0],
+        GL_RGB5_A1 => [5, 5, 5, 1, 0, 0],
+        GL_RGB10_A2 | GL_RGB10_A2UI => [10, 10, 10, 2, 0, 0],
+        GL_RGBA8 | GL_SRGB8_ALPHA8 | GL_RGBA8I | GL_RGBA8UI => [8, 8, 8, 8, 0, 0],
+        GL_RGBA16I | GL_RGBA16UI => [16, 16, 16, 16, 0, 0],
+        GL_RGBA32I | GL_RGBA32UI => [32, 32, 32, 32, 0, 0],
+        GL_DEPTH_COMPONENT16 => [0, 0, 0, 0, 16, 0],
+        GL_DEPTH_COMPONENT24 => [0, 0, 0, 0, 24, 0],
+        GL_DEPTH_COMPONENT32F => [0, 0, 0, 0, 32, 0],
+        GL_DEPTH24_STENCIL8 => [0, 0, 0, 0, 24, 8],
+        GL_DEPTH32F_STENCIL8 => [0, 0, 0, 0, 32, 8],
+        GL_STENCIL_INDEX8 => [0, 0, 0, 0, 0, 8],
+        _ => [0; 6],
+    }
+}
+
+/// `glGetRenderbufferParameteriv(target, pname)` — properties of the bound renderbuffer storage.
+/// A bad target / no bound RBO reads `0`.
 pub fn renderbuffer_parameter(ctx: &GlContext, target: u32, pname: u32) -> i32 {
     if target != GL_RENDERBUFFER || ctx.local.bound_rbo == 0 {
         return 0;
     }
-    let (w, h) = ctx
-        .renderbuffers
-        .dims(ctx.local.bound_rbo)
-        .unwrap_or((0, 0));
+    let Some(renderbuffer) = ctx.renderbuffers.get(ctx.local.bound_rbo) else {
+        return 0;
+    };
+    let bits = renderbuffer_component_bits(renderbuffer.internal_format);
     match pname {
-        GL_RENDERBUFFER_WIDTH => w,
-        GL_RENDERBUFFER_HEIGHT => h,
-        GL_RENDERBUFFER_INTERNAL_FORMAT => GL_RGBA8 as i32,
+        GL_RENDERBUFFER_WIDTH => renderbuffer.width,
+        GL_RENDERBUFFER_HEIGHT => renderbuffer.height,
+        GL_RENDERBUFFER_INTERNAL_FORMAT => renderbuffer.internal_format as i32,
+        GL_RENDERBUFFER_RED_SIZE => bits[0],
+        GL_RENDERBUFFER_GREEN_SIZE => bits[1],
+        GL_RENDERBUFFER_BLUE_SIZE => bits[2],
+        GL_RENDERBUFFER_ALPHA_SIZE => bits[3],
+        GL_RENDERBUFFER_DEPTH_SIZE => bits[4],
+        GL_RENDERBUFFER_STENCIL_SIZE => bits[5],
+        GL_RENDERBUFFER_SAMPLES => renderbuffer.samples,
         _ => 0,
     }
 }

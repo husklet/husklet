@@ -338,6 +338,34 @@ fn renderbuffer_and_tex_level_parameters_report_real_extents() {
         intro::renderbuffer_parameter(&c, GL_RENDERBUFFER, GL_RENDERBUFFER_INTERNAL_FORMAT),
         GL_RGBA8 as i32
     );
+    assert_eq!(
+        intro::renderbuffer_parameter(&c, GL_RENDERBUFFER, GL_RENDERBUFFER_RED_SIZE),
+        8
+    );
+    assert_eq!(
+        intro::renderbuffer_parameter(&c, GL_RENDERBUFFER, GL_RENDERBUFFER_DEPTH_SIZE),
+        0
+    );
+    record::renderbuffer_storage_multisample(
+        &mut c,
+        GL_RENDERBUFFER,
+        1,
+        GL_DEPTH24_STENCIL8,
+        32,
+        24,
+    );
+    assert_eq!(
+        intro::renderbuffer_parameter(&c, GL_RENDERBUFFER, GL_RENDERBUFFER_DEPTH_SIZE),
+        24
+    );
+    assert_eq!(
+        intro::renderbuffer_parameter(&c, GL_RENDERBUFFER, GL_RENDERBUFFER_STENCIL_SIZE),
+        8
+    );
+    assert_eq!(
+        intro::renderbuffer_parameter(&c, GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES),
+        1
+    );
 
     // A bound texture's level-0 extent round-trips through glGetTexLevelParameteriv.
     let tex = c.textures.gen();

@@ -38,19 +38,26 @@ pub extern "C" fn glTexStorage3DMultisample(
 ) {
     GlobalState::context(|s| record::tex_storage_3d(&mut s.gl, target, 1, width, height, depth));
 }
-/// `glRenderbufferStorageMultisample` — a multisample renderbuffer; single-sample in this model, so the
-/// backing RGBA8 plane is sized (delegating to `glRenderbufferStorage`) and `samples` is ignored.
+/// `glRenderbufferStorageMultisample` — allocate renderbuffer storage and retain its requested sample
+/// count for the GLES state-query contract. The advertised maximum is one, matching the backing plane.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glRenderbufferStorageMultisample(
     target: u32,
-    _samples: i32,
+    samples: i32,
     internalformat: u32,
     width: i32,
     height: i32,
 ) {
     GlobalState::context(|s| {
         s.redefine_renderbuffer(|ctx| {
-            record::renderbuffer_storage(ctx, target, internalformat, width, height)
+            record::renderbuffer_storage_multisample(
+                ctx,
+                target,
+                samples,
+                internalformat,
+                width,
+                height,
+            )
         })
     });
 }
