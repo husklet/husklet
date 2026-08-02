@@ -103,6 +103,15 @@ pub fn client_wait_sync(
     if ctx.fence_signaled_through >= value {
         return GL_ALREADY_SIGNALED;
     }
+    if timeout == 0 {
+        return match sink.poll_fence(FenceId(ctx.fence_ir), value) {
+            Ok(true) => {
+                ctx.fence_signaled_through = ctx.fence_signaled_through.max(value);
+                GL_CONDITION_SATISFIED
+            }
+            Ok(false) | Err(_) => GL_TIMEOUT_EXPIRED,
+        };
+    }
     if flags & GL_SYNC_FLUSH_COMMANDS_BIT != 0 || timeout != 0 {
         return match sink.wait_timeout(FenceId(ctx.fence_ir), value, timeout) {
             Ok(hl_gpu::FenceWait::Complete) => {
@@ -114,6 +123,19 @@ pub fn client_wait_sync(
         };
     }
     GL_TIMEOUT_EXPIRED
+}
+
+/// Complete the latest fence submitted by this context. `glFinish` uses this after flushing recorded
+/// draws so a subsequent zero-time client wait observes `GL_ALREADY_SIGNALED`.
+pub fn finish(ctx: &mut GlContext, sink: &mut dyn CommandSink) -> hl_gpu::Result<()> {
+    let value = ctx.fence_next_value.saturating_sub(1);
+    if ctx.fence_ir == 0 || value == 0 || ctx.fence_signaled_through >= value {
+        return Ok(());
+    }
+    if sink.wait_timeout(FenceId(ctx.fence_ir), value, u64::MAX)? == hl_gpu::FenceWait::Complete {
+        ctx.mark_fence_signaled(value);
+    }
+    Ok(())
 }
 
 /// `glWaitSync(sync, flags, timeout)` — a device-side (queue) wait: the GPU defers subsequent work until

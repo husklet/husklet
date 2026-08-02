@@ -370,7 +370,10 @@ pub extern "C" fn glFinish() {
     let max_buffer_bytes = GlobalState::access(|state| state.max_buffer_bytes);
     let result = GlobalState::gpu_submit(move |group, sink| {
         crate::stub::trace("glFinish.flush", "flushing offscreen work");
-        let result = flush_pending(group, sink, max_buffer_bytes);
+        let result = flush_pending(group, sink, max_buffer_bytes).and_then(|flushed| {
+            sync::finish(&mut group.gl, sink)?;
+            Ok(flushed)
+        });
         crate::stub::trace("glFinish.flushed", "offscreen flush returned");
         result
     });

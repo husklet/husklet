@@ -354,6 +354,29 @@ fn fence_status_becomes_signaled_from_nonblocking_executor_poll() {
     );
 }
 
+#[test]
+fn zero_timeout_flush_wait_is_a_poll_and_finish_marks_the_fence_complete() {
+    let mut c = ctx();
+    let mut sink = DelayedSink {
+        recording: RecordingSink::with_full_caps(),
+        complete: false,
+    };
+    let token = sync::fence_sync(&mut c, &mut sink, GL_SYNC_GPU_COMMANDS_COMPLETE, 0).unwrap();
+
+    assert_eq!(
+        sync::client_wait_sync(&mut c, &mut sink, token, GL_SYNC_FLUSH_COMMANDS_BIT, 0),
+        GL_TIMEOUT_EXPIRED
+    );
+    assert!(sink.recording.waits.is_empty(), "a zero-time wait must not block");
+
+    sink.complete = true;
+    sync::finish(&mut c, &mut sink).unwrap();
+    assert_eq!(
+        sync::client_wait_sync(&mut c, &mut sink, token, 0, 0),
+        GL_ALREADY_SIGNALED
+    );
+}
+
 // ---------------------------------------------------------------------------------------------------
 // indexed buffer bindings: glBindBufferBase / glBindBufferRange
 // ---------------------------------------------------------------------------------------------------
