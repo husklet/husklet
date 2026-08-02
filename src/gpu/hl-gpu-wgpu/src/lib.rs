@@ -42,7 +42,6 @@ mod submit;
 mod texture;
 mod wgsl;
 
-#[cfg(test)]
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -237,6 +236,11 @@ pub struct WgpuExecutor {
     /// The executor flushes the whole run once when the protocol batch ends. Any real command-buffer
     /// submission in between also makes the writes visible to the GPU in their original order.
     pending_writes: AtomicBool,
+    /// Diagnostic-only lineage for Chrome's `[11 22 33 ff]` upload sentinel.
+    diagnostic_sentinel_buffer: Cell<Option<u32>>,
+    diagnostic_sentinel_texture: Cell<Option<u32>>,
+    diagnostic_sentinel_readback: Cell<Option<u32>>,
+    diagnostic_sentinel_submits: Cell<u8>,
     modules: Arc<module::Modules>,
     /// Device-cache mutations accepted by the current protocol batch. They become visible to later
     /// connections only when the batch commits.
@@ -335,6 +339,10 @@ impl WgpuExecutor {
         Self {
             gpu,
             pending_writes: AtomicBool::new(false),
+            diagnostic_sentinel_buffer: Cell::new(None),
+            diagnostic_sentinel_texture: Cell::new(None),
+            diagnostic_sentinel_readback: Cell::new(None),
+            diagnostic_sentinel_submits: Cell::new(0),
             modules,
             module_journal: Vec::new(),
             pipelines,

@@ -123,7 +123,19 @@ impl GpuExecutor for WgpuExecutor {
         offset: u64,
         len: usize,
     ) -> Result<Vec<u8>> {
-        self.read_bytes(res, id.0, offset, len)
+        let data = self.read_bytes(res, id.0, offset, len)?;
+        if self.diagnostic_sentinel_readback.get() == Some(id.0) {
+            hl_log::hl_error!(
+                hl_log::tag::GPU,
+                "sentinel_host phase=read_buffer executor={:p} buffer={} offset={} len={} head={:02x?}",
+                self,
+                id.0,
+                offset,
+                len,
+                &data[..data.len().min(16)]
+            );
+        }
+        Ok(data)
     }
 
     fn export_buffer(
@@ -183,6 +195,23 @@ impl WgpuExecutor {
                     self.profile_record(|p| &mut p.destroys, started);
                 }
                 Cmd::WriteBuffer { id, offset, data } => {
+                    if data.len() >= 16
+                        && data[..16]
+                            == [0x11, 0x22, 0x33, 0xff, 0x11, 0x22, 0x33, 0xff,
+                                0x11, 0x22, 0x33, 0xff, 0x11, 0x22, 0x33, 0xff]
+                    {
+                        self.diagnostic_sentinel_buffer.set(Some(*id));
+                        self.diagnostic_sentinel_submits.set(8);
+                        hl_log::hl_error!(
+                            hl_log::tag::GPU,
+                            "sentinel_host phase=write_buffer executor={:p} buffer={} offset={} len={} head={:02x?}",
+                            self,
+                            id,
+                            offset,
+                            data.len(),
+                            &data[..16]
+                        );
+                    }
                     let started = self.profile_clock();
                     self.write_bytes(res, *id, *offset, data)?;
                     self.profile_record(|p| &mut p.buffer_writes, started);
