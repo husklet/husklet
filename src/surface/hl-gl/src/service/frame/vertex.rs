@@ -111,9 +111,10 @@ fn needs_float_conversion(attribute: &Attr) -> bool {
 
 fn needs_float_width_conversion(program: &Program, location: usize, attribute: &Attr) -> bool {
     !attribute.integer
-        && program
-            .vertex_attr_components(location)
-            .is_some_and(|components| components != attribute.size.clamp(1, 4))
+        && (attribute_stride(attribute) % 4 != 0
+            || program
+                .vertex_attr_components(location)
+                .is_some_and(|components| components != attribute.size.clamp(1, 4)))
 }
 
 fn needs_integer_conversion(program: &Program, location: usize, attribute: &Attr) -> bool {
@@ -124,6 +125,7 @@ fn needs_integer_conversion(program: &Program, location: usize, attribute: &Attr
     let narrow_unsupported = matches!(attribute.kind, GL_BYTE | GL_UNSIGNED_BYTE | GL_SHORT | GL_UNSIGNED_SHORT)
         && matches!(components, 1 | 3);
     narrow_unsupported
+        || attribute_stride(attribute) % 4 != 0
         || program
             .vertex_attr_components(location)
             .is_some_and(|linked| linked != components)
@@ -626,10 +628,11 @@ pub(super) fn lower_vertices(
             .vertex_attr_components(ca.location)
             .unwrap_or(ca.size)
             .clamp(1, 4);
-        let width_mismatch = !attribute.integer && linked_components != ca.size.clamp(1, 4);
+        let float_layout_conversion =
+            needs_float_width_conversion(program, ca.location, &attribute);
         let integer_conversion = needs_integer_conversion(program, ca.location, &attribute);
         let (data, kind, normalized, integer, components) = if needs_float_conversion(&attribute)
-            || width_mismatch
+            || float_layout_conversion
         {
             let (converted, _) = convert_attribute_to_f32_width(
                 &attribute,

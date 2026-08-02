@@ -122,6 +122,26 @@ fn bound_float_attribute_is_padded_to_the_linked_shader_width() {
 }
 
 #[test]
+fn unaligned_bound_stride_is_repacked_to_a_webgpu_aligned_slot() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_tint(&mut c);
+    let tint = c.buffers.gen();
+    record::bind_buffer(&mut c, GL_ARRAY_BUFFER, tint);
+    record::buffer_data(&mut c, GL_ARRAY_BUFFER, &[0u8; 51], 0x88E4);
+    record::vertex_attrib_pointer(&mut c, 1, 4, GL_FLOAT, false, 17, 0);
+    record::enable_vertex_attrib(&mut c, 1);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let attr = pipeline_desc(&sink.batches[0])
+        .vertex_buffers
+        .iter()
+        .find(|layout| layout.attrs.iter().any(|attr| attr.location == 1))
+        .expect("repacked attribute");
+    assert_eq!(attr.stride, 16);
+}
+
+#[test]
 fn converted_tightly_packed_vec3_leaves_no_empty_vertex_layout() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();
