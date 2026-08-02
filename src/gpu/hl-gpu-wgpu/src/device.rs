@@ -113,6 +113,7 @@ impl Gpu {
                 | wgpu::Features::BUFFER_BINDING_ARRAY
                 | wgpu::Features::STORAGE_RESOURCE_BINDING_ARRAY
                 | wgpu::Features::VERTEX_WRITABLE_STORAGE
+                | wgpu::Features::TEXTURE_ATOMIC
                 | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
                 | wgpu::Features::TEXTURE_COMPRESSION_BC
                 | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING);

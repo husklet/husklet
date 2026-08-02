@@ -309,6 +309,17 @@ impl WgpuExecutor {
             && desc.usage & hl_gpu::protocol::model::enums::texture_usage::STORAGE != 0
         {
             usage |= wgpu::TextureUsages::STORAGE_BINDING;
+            // Vulkan image atomics use the ordinary STORAGE usage bit; atomic eligibility is a
+            // per-format property. wgpu expresses that eligibility as an additional native usage,
+            // and only the two 32-bit scalar integer formats can carry it.
+            if self
+                .device()
+                .features()
+                .contains(wgpu::Features::TEXTURE_ATOMIC)
+                && matches!(desc.format, TextureFormat::R32Uint | TextureFormat::R32Sint)
+            {
+                usage |= wgpu::TextureUsages::STORAGE_ATOMIC;
+            }
         }
         // Only a single-sampled plain 2D image gets RENDER_ATTACHMENT. A 3D volume cannot be a render
         // attachment and neither can a 1D texture. A cube / 2D-array is excluded because every consumer of

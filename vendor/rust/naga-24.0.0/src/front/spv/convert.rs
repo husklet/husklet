@@ -187,6 +187,11 @@ pub(super) fn map_storage_class(word: spirv::Word) -> Result<super::ExtendedClas
         Some(Sc::Output) => Ec::Output,
         Some(Sc::Private) => Ec::Global(crate::AddressSpace::Private),
         Some(Sc::UniformConstant) => Ec::Global(crate::AddressSpace::Handle),
+        // `OpImageTexelPointer` uses the dedicated Image storage class for its transient
+        // pointer result. Naga represents the operation as `Statement::ImageAtomic`, not as
+        // an address-space pointer, so treat the pointer type as handle-like until the two
+        // SPIR-V instructions are folded by the image parser.
+        Some(Sc::Image) => Ec::Global(crate::AddressSpace::Handle),
         Some(Sc::StorageBuffer) => Ec::Global(crate::AddressSpace::Storage {
             //Note: this is restricted by decorations later
             access: crate::StorageAccess::LOAD | crate::StorageAccess::STORE,

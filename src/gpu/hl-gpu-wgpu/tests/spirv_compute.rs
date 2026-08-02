@@ -725,6 +725,184 @@ fn spirv_compute_dynamically_writes_second_storage_texture() {
 }
 
 #[test]
+fn spirv_compute_atomically_adds_r32uint_storage_texture() {
+    let source = r#"
+        @group(0) @binding(0)
+        var image: texture_storage_2d<r32uint, atomic>;
+        @compute @workgroup_size(1)
+        fn cs_main() {
+            textureAtomicAdd(image, vec2<i32>(0, 0), 7u);
+        }
+    "#;
+    let shader = wgsl_to_spirv(source);
+    // Keep this native-feature probe on its own device so the assertion covers feature negotiation,
+    // texture creation, dispatch and readback as one isolated device lifetime.
+    let mut g = WgpuExecutor::new(DeviceConfig::default()).expect("acquire atomic-capable Metal device");
+    let s = run_batch(
+        &mut g,
+        &[
+            Cmd::CreateShader {
+                id: 1,
+                kind: ShaderPayloadKind::SpirV,
+                spirv: shader,
+            },
+            Cmd::CreateComputePipelineLayout(
+                1,
+                ComputePipelineDesc {
+                    compute: ShaderRef {
+                        module: 1,
+                        entry: "cs_main".into(),
+                    },
+                    label: String::new(),
+                },
+                PipelineLayout {
+                    bindings: vec![PipelineBinding {
+                        group: 0,
+                        binding: 0,
+                        count: 1,
+                        kind: PipelineBindingKind::StorageTexture,
+                    }],
+                },
+            ),
+            Cmd::CreateTexture(
+                1,
+                TextureDesc {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                    mip_levels: 1,
+                    sample_count: 1,
+                    dim: TextureDim::D2,
+                    format: TextureFormat::R32Uint,
+                    usage: texture_usage::STORAGE | texture_usage::COPY_SRC,
+                    label: "atomic-r32uint".into(),
+                },
+            ),
+            Cmd::CreateBindGroup(
+                1,
+                BindGroupDesc {
+                    set: 0,
+                    entries: vec![BindEntry {
+                        binding: 0,
+                        resource: BindResource::Texture { id: 1 },
+                    }],
+                },
+            ),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginComputePass,
+                    Enc::SetPipeline(1),
+                    Enc::SetBindGroup { index: 0, group: 1 },
+                    Enc::Dispatch { x: 1, y: 1, z: 1 },
+                    Enc::EndComputePass,
+                ],
+                signal: None,
+            }),
+        ],
+    );
+    assert_eq!(g.read_texture(&s.resources, 1).unwrap(), 7u32.to_le_bytes());
+}
+
+#[test]
+fn spirv_compute_loads_and_stores_r32sint_storage_texture() {
+    let source = r#"
+        @group(0) @binding(0)
+        var image: texture_storage_2d<r32sint, read_write>;
+        @group(0) @binding(1) var<storage, read_write> output: array<i32>;
+        @compute @workgroup_size(1)
+        fn cs_main() {
+            output[0] = textureLoad(image, vec2<i32>(0, 0)).x;
+            textureStore(image, vec2<i32>(0, 0), vec4<i32>(-13, 0, 0, 0));
+        }
+    "#;
+    let shader = wgsl_to_spirv(source);
+    let mut g = exec();
+    let s = run_batch(
+        &mut g,
+        &[
+            Cmd::CreateShader {
+                id: 1,
+                kind: ShaderPayloadKind::SpirV,
+                spirv: shader,
+            },
+            Cmd::CreateComputePipelineLayout(
+                1,
+                ComputePipelineDesc {
+                    compute: ShaderRef {
+                        module: 1,
+                        entry: "cs_main".into(),
+                    },
+                    label: String::new(),
+                },
+                PipelineLayout {
+                    bindings: vec![
+                        PipelineBinding {
+                            group: 0,
+                            binding: 0,
+                            count: 1,
+                            kind: PipelineBindingKind::StorageTexture,
+                        },
+                        PipelineBinding {
+                            group: 0,
+                            binding: 1,
+                            count: 1,
+                            kind: PipelineBindingKind::StorageBuffer,
+                        },
+                    ],
+                },
+            ),
+            Cmd::CreateTexture(
+                1,
+                TextureDesc {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                    mip_levels: 1,
+                    sample_count: 1,
+                    dim: TextureDim::D2,
+                    format: TextureFormat::R32Sint,
+                    usage: texture_usage::STORAGE | texture_usage::COPY_SRC,
+                    label: "read-write-r32sint".into(),
+                },
+            ),
+            Cmd::CreateBuffer(1, buf(4, buffer_usage::STORAGE | buffer_usage::COPY_SRC)),
+            Cmd::CreateBindGroup(
+                1,
+                BindGroupDesc {
+                    set: 0,
+                    entries: vec![
+                        BindEntry {
+                            binding: 0,
+                            resource: BindResource::Texture { id: 1 },
+                        },
+                        BindEntry {
+                            binding: 1,
+                            resource: BindResource::Buffer {
+                                id: 1,
+                                offset: 0,
+                                size: 4,
+                            },
+                        },
+                    ],
+                },
+            ),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginComputePass,
+                    Enc::SetPipeline(1),
+                    Enc::SetBindGroup { index: 0, group: 1 },
+                    Enc::Dispatch { x: 1, y: 1, z: 1 },
+                    Enc::EndComputePass,
+                ],
+                signal: None,
+            }),
+        ],
+    );
+    assert_eq!(read_u32s(&g, &s, 1, 1), vec![0]);
+    assert_eq!(g.read_texture(&s.resources, 1).unwrap(), (-13i32).to_le_bytes());
+}
+
+#[test]
 fn spirv_compute_samples_native_bc1_and_bc3_uploads() {
     let source = r#"
         @group(0) @binding(0) var image: texture_2d<f32>;

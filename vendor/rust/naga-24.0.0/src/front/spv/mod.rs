@@ -593,6 +593,7 @@ pub struct Frontend<I> {
     // Load overrides are used to work around row-major matrices
     lookup_load_override: FastHashMap<spirv::Word, LookupLoadOverride>,
     lookup_sampled_image: FastHashMap<spirv::Word, image::LookupSampledImage>,
+    lookup_image_texel_pointer: FastHashMap<spirv::Word, image::LookupImageTexelPointer>,
     lookup_function_type: FastHashMap<spirv::Word, LookupFunctionType>,
     lookup_function: FastHashMap<spirv::Word, LookupFunction>,
     lookup_entry_point: FastHashMap<spirv::Word, EntryPoint>,
@@ -648,6 +649,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
             lookup_expression: FastHashMap::default(),
             lookup_load_override: FastHashMap::default(),
             lookup_sampled_image: FastHashMap::default(),
+            lookup_image_texel_pointer: FastHashMap::default(),
             lookup_function_type: FastHashMap::default(),
             lookup_function: FastHashMap::default(),
             lookup_entry_point: FastHashMap::default(),
@@ -1410,6 +1412,18 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
         let _memory_semantics_id = self.next()?;
         let value_id = self.next()?;
         let span = self.span_from_with_op(start);
+
+        if self.lookup_image_texel_pointer.contains_key(&pointer_id) {
+            return self.parse_image_atomic(
+                pointer_id,
+                value_id,
+                ctx,
+                emitter,
+                block,
+                body_idx,
+                atomic_function,
+            );
+        }
 
         let (p_lexp_handle, p_base_ty_handle) =
             self.get_exp_and_base_ty_handles(pointer_id, ctx, emitter, block, body_idx)?;
@@ -2767,6 +2781,10 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                     block.extend(emitter.finish(ctx.expressions));
                     block.push(stmt, span);
                     emitter.start(ctx.expressions);
+                }
+                Op::ImageTexelPointer => {
+                    inst.expect(6)?;
+                    self.parse_image_texel_pointer()?;
                 }
                 Op::ImageFetch | Op::ImageRead => {
                     let extra = inst.expect_at_least(5)?;
