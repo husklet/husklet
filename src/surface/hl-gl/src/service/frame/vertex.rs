@@ -746,20 +746,55 @@ pub(super) fn lower_vertices(
         });
     }
 
-    // Conversion appends a new, aligned slot but deliberately leaves the source slot in place so the
-    // slot-to-buffer bindings remain stable. WebGPU validates array_stride even when that source layout
-    // has no attributes left; a tightly packed GL u8vec3 therefore still fails at stride 3 unless the
-    // now-empty layout is given an innocuous aligned stride.
-    for (slot, stride) in slot_stride.iter_mut().take(nslot).enumerate() {
+    // Conversion appends a replacement slot. Remove a source slot when every attribute it fed was
+    // converted: WebGPU validates even an empty layout's stride, and backends need no placeholder between
+    // the remaining direct layouts and their actual buffer bindings.
+    let mut old_to_new = vec![None; nslot];
+    let mut next_slot = 0usize;
+    for (slot, mapped) in old_to_new.iter_mut().enumerate() {
         let feeds_direct_attribute = d.attrs.iter().enumerate().any(|(location, attribute)| {
             attribute.enabled
                 && attr_slot[location] == slot as i32
                 && !needs_float_conversion(attribute)
         });
-        if !feeds_direct_attribute && *stride % 4 != 0 {
-            *stride = 4;
+        if feeds_direct_attribute {
+            *mapped = Some(next_slot);
+            next_slot += 1;
         }
     }
+    for (location, slot) in attr_slot.iter_mut().enumerate() {
+        if *slot < 0 {
+            continue;
+        }
+        *slot = if needs_float_conversion(&d.attrs[location]) {
+            -1
+        } else {
+            old_to_new[*slot as usize].map_or(-1, |mapped| mapped as i32)
+        };
+    }
+    slot_stride.truncate(nslot);
+    slot_base.truncate(nslot);
+    slot_stride = slot_stride
+        .into_iter()
+        .enumerate()
+        .filter_map(|(slot, value)| old_to_new[slot].map(|_| value))
+        .collect();
+    slot_base = slot_base
+        .into_iter()
+        .enumerate()
+        .filter_map(|(slot, value)| old_to_new[slot].map(|_| value))
+        .collect();
+    slot_ir = slot_ir
+        .into_iter()
+        .enumerate()
+        .filter_map(|(slot, value)| old_to_new[slot].map(|_| value))
+        .collect();
+    slot_bytes = slot_bytes
+        .into_iter()
+        .enumerate()
+        .filter_map(|(slot, value)| old_to_new[slot].map(|_| value))
+        .collect();
+    nslot = next_slot;
 
     Ok(VertexLowering {
         nslot,

@@ -111,7 +111,7 @@ fn a_three_component_normalized_byte_attribute_is_converted_not_refused() {
 }
 
 #[test]
-fn converted_tightly_packed_vec3_leaves_no_unaligned_vertex_layout() {
+fn converted_tightly_packed_vec3_leaves_no_empty_vertex_layout() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();
     setup_tint(&mut c);
@@ -128,8 +128,8 @@ fn converted_tightly_packed_vec3_leaves_no_unaligned_vertex_layout() {
         pipeline
             .vertex_buffers
             .iter()
-            .all(|layout| layout.stride % 4 == 0),
-        "WebGPU validates every declared vertex layout, including a source slot left empty after conversion"
+            .all(|layout| !layout.attrs.is_empty()),
+        "the converted replacement slot makes its source layout unnecessary"
     );
     let converted = pipeline
         .vertex_buffers
