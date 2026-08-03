@@ -421,3 +421,51 @@ fn global_draw_buffer_setters_broadcast_over_independent_state() {
         }
     }
 }
+
+#[test]
+fn conflicting_constant_factors_replay_each_target_with_its_own_constant() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    bind_mrt(&mut c, 2);
+    record::draw_buffers(
+        &mut c,
+        &[GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT0 + 1],
+    );
+    record::set_cap_indexed(&mut c, GL_BLEND, 0, true);
+    record::set_cap_indexed(&mut c, GL_BLEND, 1, true);
+    record::blend_color(&mut c, [0.2, 0.3, 0.4, 0.7]);
+    record::blend_func_indexed(&mut c, 0, 0x8001, 0x8003);
+    record::blend_func_indexed(&mut c, 1, 0x8003, 0x8001);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let ops = submit_ops(&sink.batches[0]);
+    let constants: Vec<_> = ops
+        .iter()
+        .filter_map(|op| match op {
+            Enc::SetBlendConstant { color } => Some(*color),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(constants, vec![[0.7; 4], [0.2, 0.3, 0.4, 0.7]]);
+    assert_eq!(
+        ops.iter().filter(|op| matches!(op, Enc::Draw { .. })).count(),
+        2,
+        "one isolated raster replay per writable target"
+    );
+    let replay_masks: Vec<Vec<u32>> = sink.batches[0]
+        .iter()
+        .filter_map(|cmd| match cmd {
+            Cmd::CreateRenderPipeline(_, desc) if desc.label.is_empty() => Some(
+                desc.color_targets
+                    .iter()
+                    .map(|target| target.write_mask)
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .collect();
+    assert!(replay_masks.contains(&vec![0xf, 0]));
+    assert!(replay_masks.contains(&vec![0, 0xf]));
+}

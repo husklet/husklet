@@ -683,6 +683,32 @@ mod clone_tests {
                 if descriptor.format == TextureFormat::Depth24PlusStencil8
         )));
     }
+
+    #[test]
+    fn constant_replays_keep_transform_feedback_on_the_first_draw_only() {
+        let mut draw = DrawCall::default();
+        draw.transform_feedback = Some(crate::model::program::TransformFeedbackCapture {
+            layout: crate::model::program::TransformFeedbackLayout {
+                mode: 0,
+                buffers: 0,
+                strides: [0; 4],
+                varyings: Vec::new(),
+                scalars: Vec::new(),
+            },
+            bindings: [None; 4],
+            byte_offsets: [0; 4],
+            byte_lengths: [0; 4],
+            vertices: 3,
+            primitives: 1,
+        });
+
+        assert!(isolate_mrt_draw(&draw, 0, false)
+            .transform_feedback
+            .is_some());
+        assert!(isolate_mrt_draw(&draw, 1, true)
+            .transform_feedback
+            .is_none());
+    }
 }
 
 /// The one render target a run of draws lowers into.
@@ -1103,19 +1129,40 @@ pub(super) fn build_mrt_geometry_frame(
             continue;
         }
         // MRT passes carry no depth/stencil attachment in this model, so no depth pipeline format.
-        if let Some(lowered) = lower_draw_n(
-            ctx,
-            d,
-            &target_formats,
-            None,
-            tw,
-            th,
-            &mut cmds,
-            &no_fbo_tex,
-            &mut snapshots,
-        ) {
-            copies.extend(lowered.copies);
-            draw_ops.extend(lowered.ops);
+        let split_slots = constant_blend_slots(d, n);
+        if split_slots.is_empty() {
+            if let Some(lowered) = lower_draw_n(
+                ctx,
+                d,
+                &target_formats,
+                None,
+                tw,
+                th,
+                &mut cmds,
+                &no_fbo_tex,
+                &mut snapshots,
+            ) {
+                copies.extend(lowered.copies);
+                draw_ops.extend(lowered.ops);
+            }
+        } else {
+            for (replay, slot) in split_slots.into_iter().enumerate() {
+                let isolated = isolate_mrt_draw(d, slot, replay != 0);
+                if let Some(lowered) = lower_draw_n(
+                    ctx,
+                    &isolated,
+                    &target_formats,
+                    None,
+                    tw,
+                    th,
+                    &mut cmds,
+                    &no_fbo_tex,
+                    &mut snapshots,
+                ) {
+                    copies.extend(lowered.copies);
+                    draw_ops.extend(lowered.ops);
+                }
+            }
         }
     }
     // A frame of nothing but `glClearBufferfv`s is still a frame: its pass carries the attachment loads and
@@ -1175,6 +1222,49 @@ pub(super) fn build_mrt_geometry_frame(
         color_attachments: targets,
         targets: frame_targets,
     })
+}
+
+fn constant_blend_slots(draw: &DrawCall, target_count: usize) -> Vec<usize> {
+    const CONSTANT_COLOR: u32 = 0x8001;
+    const ONE_MINUS_CONSTANT_ALPHA: u32 = 0x8004;
+    let active: Vec<_> = (0..target_count.min(draw.draw_buffer_states.len()))
+        .filter(|&slot| {
+            draw.draw_buffer_mask & (1u32 << slot) != 0
+                && draw.draw_buffer_states[slot].color_mask != 0
+        })
+        .collect();
+    let references_constant = active.iter().any(|&slot| {
+        let state = draw.draw_buffer_states[slot];
+        state.blend
+            && [state.src_rgb, state.dst_rgb, state.src_alpha, state.dst_alpha]
+                .iter()
+                .any(|factor| matches!(*factor, CONSTANT_COLOR..=ONE_MINUS_CONSTANT_ALPHA))
+    });
+    references_constant.then_some(active).unwrap_or_default()
+}
+
+fn isolate_mrt_draw(draw: &DrawCall, slot: usize, suppress_side_effects: bool) -> DrawCall {
+    let mut isolated = draw.clone();
+    let selected = isolated.draw_buffer_states[slot];
+    for (index, state) in isolated.draw_buffer_states.iter_mut().enumerate() {
+        if index != slot {
+            state.blend = false;
+            state.color_mask = 0;
+        }
+    }
+    isolated.draw_buffer_mask = 1u32 << slot;
+    isolated.blend = selected.blend;
+    isolated.blend_src_rgb = selected.src_rgb;
+    isolated.blend_dst_rgb = selected.dst_rgb;
+    isolated.blend_src_alpha = selected.src_alpha;
+    isolated.blend_dst_alpha = selected.dst_alpha;
+    isolated.blend_eq_rgb = selected.eq_rgb;
+    isolated.blend_eq_alpha = selected.eq_alpha;
+    isolated.color_mask = selected.color_mask;
+    if suppress_side_effects {
+        isolated.transform_feedback = None;
+    }
+    isolated
 }
 
 // Draw lowering continues in `lower`.
