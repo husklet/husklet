@@ -354,7 +354,9 @@ pub fn attach_shader(ctx: &mut GlContext, program: u32, shader: u32) {
         });
         return;
     }
-    ctx.programs.attach(program, shader);
+    if !ctx.programs.attach(program, shader) {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+    }
 }
 
 /// `glBindAttribLocation(program, index, name)` — set the location used by the next program link.

@@ -3,14 +3,13 @@
 use super::{Program, Shader};
 use std::collections::HashMap;
 
-/// The per-context shader + program tables: GL name → object, each with a monotonic name counter. GL
-/// shares one name space per object kind; name `0` is the reserved sentinel.
+/// The per-context shader + program tables. Shader and program objects share one name namespace; name
+/// `0` is the reserved sentinel.
 #[derive(Debug, Default)]
 pub struct Programs {
     shaders: HashMap<u32, Shader>,
     programs: HashMap<u32, Program>,
-    next_shader: u32,
-    next_program: u32,
+    next_object: u32,
 }
 
 impl Programs {
@@ -18,15 +17,14 @@ impl Programs {
         Self {
             shaders: HashMap::new(),
             programs: HashMap::new(),
-            next_shader: 1,
-            next_program: 1,
+            next_object: 1,
         }
     }
 
     /// `glCreateShader(kind)` — mint a shader name.
     pub fn create_shader(&mut self, kind: u32) -> u32 {
-        let name = self.next_shader;
-        self.next_shader += 1;
+        let name = self.next_object;
+        self.next_object += 1;
         self.shaders.insert(
             name,
             Shader {
@@ -79,23 +77,29 @@ impl Programs {
 
     /// `glCreateProgram()` — mint a program name.
     pub fn create(&mut self) -> u32 {
-        let name = self.next_program;
-        self.next_program += 1;
+        let name = self.next_object;
+        self.next_object += 1;
         self.programs.insert(name, Program::default());
         name
     }
 
     /// `glAttachShader(program, shader)` — record the attachment by the shader's kind.
-    pub fn attach(&mut self, program: u32, shader: u32) {
+    pub fn attach(&mut self, program: u32, shader: u32) -> bool {
         let kind = self.shaders.get(&shader).map(|s| s.kind).unwrap_or(0);
-        if let Some(p) = self.programs.get_mut(&program) {
-            match kind {
-                crate::model::glconst::GL_VERTEX_SHADER => p.vs = shader,
-                crate::model::glconst::GL_FRAGMENT_SHADER => p.fs = shader,
-                crate::model::glconst::GL_COMPUTE_SHADER => p.cs = shader,
-                _ => {}
-            }
+        let Some(p) = self.programs.get_mut(&program) else {
+            return false;
+        };
+        let slot = match kind {
+            crate::model::glconst::GL_VERTEX_SHADER => &mut p.vs,
+            crate::model::glconst::GL_FRAGMENT_SHADER => &mut p.fs,
+            crate::model::glconst::GL_COMPUTE_SHADER => &mut p.cs,
+            _ => return false,
+        };
+        if *slot != 0 {
+            return false;
         }
+        *slot = shader;
+        true
     }
 
     /// Why an attached shader bars this program from linking, if one does.
@@ -117,7 +121,9 @@ impl Programs {
                 return None;
             }
             match self.shaders.get(&name) {
-                None => Some(format!("attached {stage} shader {name} is not a shader object")),
+                None => Some(format!(
+                    "attached {stage} shader {name} is not a shader object"
+                )),
                 Some(shader) if shader.compiled => None,
                 Some(shader) if shader.info_log.is_empty() => {
                     Some(format!("attached {stage} shader {name} was never compiled"))
