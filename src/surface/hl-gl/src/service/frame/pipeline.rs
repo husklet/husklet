@@ -671,8 +671,20 @@ impl Pipeline {
             stencil_back,
             stencil_read_mask: read_mask,
             stencil_write_mask: write_mask,
-            bias_constant: 0,
-            bias_slope_scale: 0.0,
+            bias_constant: if d.polygon_offset_fill
+                && matches!(d.mode, GL_TRIANGLES | GL_TRIANGLE_STRIP | 0x0006)
+            {
+                d.polygon_offset_units.round() as i32
+            } else {
+                0
+            },
+            bias_slope_scale: if d.polygon_offset_fill
+                && matches!(d.mode, GL_TRIANGLES | GL_TRIANGLE_STRIP | 0x0006)
+            {
+                d.polygon_offset_factor
+            } else {
+                0.0
+            },
             bias_clamp: 0.0,
         }
     }

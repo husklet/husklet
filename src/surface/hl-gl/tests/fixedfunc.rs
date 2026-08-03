@@ -134,6 +134,50 @@ fn depth_test_lowers_to_pipeline_depth_state() {
 }
 
 #[test]
+fn polygon_offset_lowers_to_depth_bias_and_changes_pipeline_identity() {
+    let mut c = ctx_64();
+    let mut sink = RecordingSink::with_full_caps();
+    flat_program(&mut c, FS);
+    tri_vbo(&mut c);
+    record::enable(&mut c, GL_DEPTH_TEST);
+    record::enable(&mut c, GL_POLYGON_OFFSET_FILL);
+    record::polygon_offset(&mut c, 2.5, -3.6);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    record::polygon_offset(&mut c, -1.25, 7.4);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let pipelines: Vec<_> = sink.batches[0]
+        .iter()
+        .filter_map(|command| match command {
+            Cmd::CreateRenderPipeline(id, descriptor) => Some((*id, descriptor)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(pipelines.len(), 2, "different polygon offsets need distinct pipelines");
+    assert_ne!(pipelines[0].0, pipelines[1].0);
+    let first = pipelines[0].1.depth.as_ref().expect("depth state");
+    let second = pipelines[1].1.depth.as_ref().expect("depth state");
+    assert_eq!((first.bias_slope_scale, first.bias_constant), (2.5, -4));
+    assert_eq!((second.bias_slope_scale, second.bias_constant), (-1.25, 7));
+}
+
+#[test]
+fn disabled_polygon_offset_emits_zero_depth_bias() {
+    let mut c = ctx_64();
+    let mut sink = RecordingSink::with_full_caps();
+    flat_program(&mut c, FS);
+    tri_vbo(&mut c);
+    record::enable(&mut c, GL_DEPTH_TEST);
+    record::polygon_offset(&mut c, 8.0, 9.0);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let depth = pipeline_desc(&sink.batches[0]).depth.as_ref().expect("depth state");
+    assert_eq!((depth.bias_slope_scale, depth.bias_constant), (0.0, 0));
+}
+
+#[test]
 fn cull_face_lowers_to_pipeline_cull_and_winding() {
     let mut c = ctx_64();
     // Exercise the direct fixed-function mapping. A presented window target deliberately reflects clip Y

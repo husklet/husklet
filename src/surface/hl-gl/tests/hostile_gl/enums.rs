@@ -5,15 +5,14 @@ use super::*;
 // ===================================================================================================
 
 /// `glEnable`/`glDisable`/`glBindTexture`/`glTexParameter`/`glBlendFunc` with junk enums must never panic.
-/// Unmodeled-but-legal caps (and the untargeted texture target) are honest no-ops (the model tracks only
-/// the fixed-function subset it lowers); a following valid call still takes effect.
+/// Invalid capability and target enums report the standard error; a following valid call still takes effect.
 #[test]
 fn junk_enums_to_state_setters_never_panic_and_valid_still_works() {
     let mut c = ctx();
-    // A bogus capability is a safe no-op (no error, no state change).
+    // A bogus capability is rejected without changing state.
     record::enable(&mut c, 0xDEAD_BEEF);
     record::disable(&mut c, 0x0000_0001);
-    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
+    assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
     assert!(!c.blend_enabled());
 
     // A bogus glBindTexture target is rejected without materializing the supplied texture name.

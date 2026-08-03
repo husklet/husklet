@@ -308,6 +308,51 @@ fn get_floatv_and_booleanv_read_state() {
 }
 
 #[test]
+fn polygon_offset_state_round_trips_and_invalid_caps_are_rejected() {
+    let mut c = ctx_800x600();
+    let mut floats = [0.0f32; 4];
+    let mut integers = [0i32; 4];
+    let mut booleans = [0u8; 4];
+
+    assert!(!c.is_enabled(GL_POLYGON_OFFSET_FILL));
+    record::polygon_offset(&mut c, 2.25, -3.75);
+    assert_eq!(query::get_floatv(&c, GL_POLYGON_OFFSET_FACTOR, &mut floats), 1);
+    assert_eq!(floats[0], 2.25);
+    assert_eq!(query::get_floatv(&c, GL_POLYGON_OFFSET_UNITS, &mut floats), 1);
+    assert_eq!(floats[0], -3.75);
+    assert_eq!(query::get_integerv(&c, GL_POLYGON_OFFSET_FACTOR, &mut integers), 1);
+    assert_eq!(integers[0], 2);
+    assert_eq!(query::get_integerv(&c, GL_POLYGON_OFFSET_UNITS, &mut integers), 1);
+    assert_eq!(integers[0], -4);
+    assert_eq!(query::get_booleanv(&c, GL_POLYGON_OFFSET_FACTOR, &mut booleans), 1);
+    assert_eq!(booleans[0], GL_TRUE as u8);
+
+    c.enable(GL_POLYGON_OFFSET_FILL);
+    assert!(c.is_enabled(GL_POLYGON_OFFSET_FILL));
+    c.disable(GL_POLYGON_OFFSET_FILL);
+    assert!(!c.is_enabled(GL_POLYGON_OFFSET_FILL));
+
+    c.enable(u32::MAX);
+    assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
+    assert!(!c.is_enabled(GL_TRIANGLES));
+    assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
+}
+
+#[test]
+fn dither_defaults_enabled_and_toggles() {
+    let mut c = ctx_800x600();
+    let mut integers = [0i32; 4];
+    assert!(c.is_enabled(GL_DITHER));
+    assert_eq!(query::get_integerv(&c, GL_DITHER, &mut integers), 1);
+    assert_eq!(integers[0], GL_TRUE as i32);
+    c.disable(GL_DITHER);
+    assert!(!c.is_enabled(GL_DITHER));
+    c.enable(GL_DITHER);
+    assert!(c.is_enabled(GL_DITHER));
+    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
+}
+
+#[test]
 fn integer_state_converts_through_float_and_boolean_queries_with_full_arity() {
     let mut c = ctx_800x600();
     c.active_texture(GL_TEXTURE0 + 3);

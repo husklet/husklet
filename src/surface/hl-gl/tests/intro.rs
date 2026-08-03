@@ -360,8 +360,9 @@ fn is_enabled_and_shader_source_reflect_state() {
     record::enable(&mut c, GL_BLEND);
     assert!(c.is_enabled(GL_BLEND));
     assert!(!c.is_enabled(GL_DEPTH_TEST));
-    // An unmodeled cap is honestly false.
+    // An invalid capability reports the GLES error as well as returning false.
     assert!(!c.is_enabled(0xBEEF));
+    assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
 
     let vs = record::create_shader(&mut c, GL_VERTEX_SHADER);
     record::shader_source(&mut c, vs, VS);

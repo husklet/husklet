@@ -202,6 +202,14 @@ impl GlContext {
     }
 }
 
+/// `glPolygonOffset(factor, units)` — retain both finite or non-finite floating-point values exactly as
+/// ordinary GL state. The backend conversion to its integer constant representation happens only while
+/// building a pipeline, so GetFloatv still returns the values the application supplied.
+pub fn polygon_offset(ctx: &mut GlContext, factor: f32, units: f32) {
+    ctx.local.pipeline.polygon_offset_factor = factor;
+    ctx.local.pipeline.polygon_offset_units = units;
+}
+
 /// `glBlendFunc(src, dst)` — set the same factor pair for RGB and alpha.
 pub fn blend_func(ctx: &mut GlContext, src: u32, dst: u32) {
     ctx.local.pipeline.blend_src_rgb = src;
@@ -459,12 +467,17 @@ impl GlContext {
 pub(super) fn set_cap(ctx: &mut GlContext, cap: u32, on: bool) {
     match cap {
         GL_BLEND => ctx.local.pipeline.blend = on,
+        GL_DITHER => ctx.local.pipeline.dither = on,
+        GL_POLYGON_OFFSET_FILL => ctx.local.pipeline.polygon_offset_fill = on,
         GL_DEPTH_TEST => ctx.local.pipeline.depth = on,
         GL_STENCIL_TEST => ctx.local.pipeline.stencil = on,
         GL_SCISSOR_TEST => ctx.local.pipeline.scissor_enabled = on,
         GL_RASTERIZER_DISCARD => ctx.local.pipeline.rasterizer_discard = on,
         GL_CULL_FACE => ctx.local.pipeline.cull_enabled = on,
-        _ => {}
+        // These multisample capabilities are legal GLES enums, but a single-sample target gives them no
+        // raster effect. Keep accepting them without inventing query state until MSAA coverage is lowered.
+        GL_SAMPLE_ALPHA_TO_COVERAGE | GL_SAMPLE_COVERAGE => {}
+        _ => ctx.set_gl_error(GL_INVALID_ENUM),
     }
 }
 

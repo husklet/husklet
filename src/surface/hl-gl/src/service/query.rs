@@ -223,6 +223,10 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         GL_STENCIL_BACK_PASS_DEPTH_FAIL => one(ctx.local.pipeline.stencil_zfail_back as i32),
         GL_STENCIL_BACK_PASS_DEPTH_PASS => one(ctx.local.pipeline.stencil_zpass_back as i32),
         GL_BLEND => one(ctx.local.pipeline.blend as i32),
+        GL_DITHER => one(ctx.local.pipeline.dither as i32),
+        GL_POLYGON_OFFSET_FILL => one(ctx.local.pipeline.polygon_offset_fill as i32),
+        GL_POLYGON_OFFSET_FACTOR => one(ctx.local.pipeline.polygon_offset_factor.round() as i32),
+        GL_POLYGON_OFFSET_UNITS => one(ctx.local.pipeline.polygon_offset_units.round() as i32),
         GL_CULL_FACE => one(ctx.local.pipeline.cull_enabled as i32),
         // The culled face and the front-face winding themselves, not just the enable. Both were absent
         // from this table and fell through to `0`, which is not even a legal enum — an application that
@@ -383,6 +387,14 @@ pub fn get_floatv(ctx: &GlContext, pname: u32, out: &mut [f32; 4]) -> usize {
             out.copy_from_slice(&ctx.local.pipeline.blend_color);
             4
         }
+        GL_POLYGON_OFFSET_FACTOR => {
+            out[0] = ctx.local.pipeline.polygon_offset_factor;
+            1
+        }
+        GL_POLYGON_OFFSET_UNITS => {
+            out[0] = ctx.local.pipeline.polygon_offset_units;
+            1
+        }
         // ES 2.0 table 6.19: two floats — the range `glDepthRangef` set. This reported a permanent
         // `[0, 1]` alongside a comment asserting the call was a no-op; it is not, and the viewport
         // transform now applies it.
@@ -434,6 +446,8 @@ pub fn get_booleanv(ctx: &GlContext, pname: u32, out: &mut [u8; 4]) -> usize {
         GL_RASTERIZER_DISCARD => Some(b(ctx.local.pipeline.rasterizer_discard)),
         GL_DEPTH_WRITEMASK => Some(b(ctx.local.pipeline.depth_write)),
         GL_SHADER_COMPILER => Some(b(true)),
+        GL_POLYGON_OFFSET_FACTOR => Some(b(ctx.local.pipeline.polygon_offset_factor != 0.0)),
+        GL_POLYGON_OFFSET_UNITS => Some(b(ctx.local.pipeline.polygon_offset_units != 0.0)),
         _ => None,
     };
     if let Some(value) = value {
