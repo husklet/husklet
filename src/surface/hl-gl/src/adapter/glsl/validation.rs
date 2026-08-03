@@ -878,6 +878,9 @@ pub fn invalid_vector_constructor(source: &str) -> Option<String> {
     let declarations = source_tokens
         .windows(2)
         .filter_map(|pair| {
+            if !is_word_token(&pair[1]) {
+                return None;
+            }
             vector_width(&pair[0])
                 .or_else(|| matches!(pair[0].as_str(), "float" | "int" | "bool").then_some(1))
                 .map(|width| (pair[1].as_str(), width))

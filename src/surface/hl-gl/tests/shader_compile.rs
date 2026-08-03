@@ -245,6 +245,14 @@ fn legal_vector_splats_conversions_and_component_composition_remain_accepted() {
 }
 
 #[test]
+fn parenthesized_constructor_arguments_are_not_inferred_as_vector_declarations() {
+    let source = "void main(){ const bvec4 h = bvec4(0, (abs(exp2(float(0.5)) * float(int(-1.0)) - (vec3(-1, -4.5, false).x - cos(1.125))) < 0.001) == true, 1.0, (ivec4(-16, -5, 12, -1.5).g) - -6 * 1); }";
+    let mut context = GlContext::new();
+    let (status, log) = compile(&mut context, GL_VERTEX_SHADER, source);
+    assert_eq!(status, GL_TRUE as i32, "{log}\n{source}");
+}
+
+#[test]
 fn es2_rejects_invalid_lexical_scope_and_symbol_namespace_uses() {
     let invalid = [
         "int value; float value; void main(){}",
