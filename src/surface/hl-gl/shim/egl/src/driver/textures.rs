@@ -335,6 +335,22 @@ pub extern "C" fn glTexSubImage2D(
     pixels: *const c_void,
 ) {
     GlobalState::context(|group| {
+        if !record::validate_tex_sub_image_2d_call(
+            &mut group.gl,
+            target,
+            level,
+            xoffset,
+            yoffset,
+            width,
+            height,
+            format,
+            type_,
+        ) {
+            return;
+        }
+        if width == 0 || height == 0 {
+            return;
+        }
         // ES 3.0 §3.8.3: `glTexSubImage2D` has no "allocate without data" form — a null `pixels` is only
         // an OFFSET into a bound `GL_PIXEL_UNPACK_BUFFER`. With no such buffer it is
         // `GL_INVALID_OPERATION`, not an invitation to read address zero.

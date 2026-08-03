@@ -746,6 +746,59 @@ pub fn tex_sub_image_2d(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn validate_tex_sub_image_2d_call(
+    ctx: &mut GlContext,
+    target: u32,
+    level: i32,
+    xoffset: i32,
+    yoffset: i32,
+    width: i32,
+    height: i32,
+    format: u32,
+    type_: u32,
+) -> bool {
+    if target != GL_TEXTURE_2D && cube_face_index(target).is_none() {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return false;
+    }
+    if !matches!(format, GL_RGB | GL_RGBA | GL_BGRA_EXT)
+        || !matches!(
+            type_,
+            GL_UNSIGNED_BYTE
+                | GL_UNSIGNED_SHORT_5_6_5
+                | GL_UNSIGNED_SHORT_4_4_4_4
+                | GL_UNSIGNED_SHORT_5_5_5_1
+        )
+    {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return false;
+    }
+    let max_level = (crate::service::query::MAX_TEXTURE_SIZE as u32).ilog2() as i32;
+    if level < 0
+        || level > max_level
+        || xoffset < 0
+        || yoffset < 0
+        || width < 0
+        || height < 0
+    {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return false;
+    }
+    if level == 0 {
+        let name = ctx.bound_texture();
+        if let Some(texture) = ctx.textures.get(name) {
+            let xend = xoffset.checked_add(width);
+            let yend = yoffset.checked_add(height);
+            if xend.is_none_or(|end| end > texture.w) || yend.is_none_or(|end| end > texture.h) {
+                ctx.set_gl_error(GL_INVALID_VALUE);
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// `glTexSubImage3D` — layer-0 sub-image update for a 2D-array / 3D texture (`gl_shim.c` parity). A bad
 /// `target` / `level != 0` / `zoffset != 0` / non-positive depth / dataless texture is an honest no-op.
 // The arguments intentionally mirror glTexSubImage3D after pixel-format conversion at the ABI adapter.

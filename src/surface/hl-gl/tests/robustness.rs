@@ -433,6 +433,35 @@ fn negative_tex_image_2d_error_matrix_precedes_allocation() {
 }
 
 #[test]
+fn negative_tex_sub_image_2d_matrix_precedes_pixel_access() {
+    let mut c = ctx();
+    c.active_texture(GL_TEXTURE0);
+    record::bind_texture(&mut c, GL_TEXTURE_2D, 9);
+    record::tex_image_2d(&mut c, 16, 16, &vec![0; 16 * 16 * 4]);
+    let before = c.textures.get(9).expect("texture").data.clone();
+    let cases = [
+        ((0, 0, 0, 0, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE), GL_INVALID_ENUM),
+        ((GL_TEXTURE_2D, 0, 0, 0, 0, 0, 0, GL_UNSIGNED_BYTE), GL_INVALID_ENUM),
+        ((GL_TEXTURE_2D, 0, 0, 0, 0, 0, GL_RGB, 0), GL_INVALID_ENUM),
+        ((GL_TEXTURE_2D, -1, 0, 0, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE), GL_INVALID_VALUE),
+        ((GL_TEXTURE_2D, 31, 0, 0, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE), GL_INVALID_VALUE),
+        ((GL_TEXTURE_2D, 0, -1, 0, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE), GL_INVALID_VALUE),
+        ((GL_TEXTURE_2D, 0, 0, 0, -1, 0, GL_RGBA, GL_UNSIGNED_BYTE), GL_INVALID_VALUE),
+        ((GL_TEXTURE_2D, 0, 8, 4, 10, 10, GL_RGBA, GL_UNSIGNED_BYTE), GL_INVALID_VALUE),
+    ];
+    for (args, expected) in cases {
+        assert!(!record::validate_tex_sub_image_2d_call(
+            &mut c, args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7,
+        ));
+        assert_eq!(c.take_gl_error(), expected);
+        assert_eq!(c.textures.get(9).expect("texture").data, before);
+    }
+    assert!(record::validate_tex_sub_image_2d_call(
+        &mut c, GL_TEXTURE_2D, 0, 4, 4, 8, 8, GL_RGBA, GL_UNSIGNED_BYTE,
+    ));
+}
+
+#[test]
 fn pack_alignment_pads_between_readback_rows_but_not_after_the_last() {
     let mut c = ctx();
     let store = c.pixel_store_state();
