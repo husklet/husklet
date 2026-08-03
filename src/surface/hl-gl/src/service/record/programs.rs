@@ -815,6 +815,7 @@ impl GlContext {
     /// Remove a program object and retire its host resources. Used once the program stops being current.
     pub(crate) fn destroy_program(&mut self, program: u32) {
         if self.programs.delete(program) {
+            self.clear_object_label(GL_PROGRAM_OBJECT, program);
             // Retire the program's resident IR shader modules + render pipelines (queued Destroy for the next
             // frame), so a deleted Skia/GskGpu program stops holding host residency and a recycled GL program
             // name cannot collide with the dead program's cached ids. See `GlContext::retire_program`.
@@ -829,6 +830,7 @@ impl GlContext {
     /// source and compile status survive until the last `glDetachShader`.
     pub fn delete_shader(&mut self, shader: u32) {
         self.programs.delete_shader(shader);
+        self.clear_object_label(GL_SHADER_OBJECT, shader);
     }
 }
 

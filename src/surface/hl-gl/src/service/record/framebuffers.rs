@@ -98,6 +98,7 @@ pub fn framebuffer_texture_2d(
 /// `glDeleteFramebuffers` (one name). Deleting the bound draw/read FBO reverts that binding to the default.
 impl GlContext {
     pub fn delete_framebuffer(&mut self, name: u32) -> bool {
+        self.clear_object_label(GL_FRAMEBUFFER, name);
         if self.local.bound_fbo == name {
             self.local.bound_fbo = 0;
         }
@@ -330,6 +331,7 @@ pub fn renderbuffer_storage_multisample(
 /// containers retain the old renderbuffer storage after the public name is deleted.
 impl GlContext {
     pub fn delete_renderbuffer(&mut self, name: u32) -> bool {
+        self.clear_object_label(GL_RENDERBUFFER, name);
         if self.local.bound_rbo == name {
             self.local.bound_rbo = 0;
         }

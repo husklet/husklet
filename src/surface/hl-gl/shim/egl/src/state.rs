@@ -78,6 +78,7 @@ pub struct ContextAttributes {
     pub robust_access: bool,
     pub reset_strategy: i32,
     pub no_error: bool,
+    pub debug: bool,
     /// The `EGLConfig` id the context was created on — its depth/stencil sizes become the context's
     /// `GL_DEPTH_BITS` / `GL_STENCIL_BITS`. `EGL_NO_CONFIG_KHR` keeps the primary config's sizes.
     pub config_id: i32,
@@ -98,6 +99,7 @@ impl Default for ContextAttributes {
             config_id: hl_gl::service::config::CONFIG_ID,
             reset_strategy: 0x31BE,
             no_error: false,
+            debug: false,
         }
     }
 }

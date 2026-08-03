@@ -1205,6 +1205,7 @@ pub fn copy_tex_image_2d(
 /// `glDeleteTextures` (one name).
 impl GlContext {
     pub fn delete_texture(&mut self, name: u32) -> bool {
+        self.clear_object_label(GL_TEXTURE, name);
         for u in self.local.tex_unit.iter_mut() {
             if *u == name {
                 *u = 0;

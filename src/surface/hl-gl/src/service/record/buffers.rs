@@ -68,6 +68,7 @@ pub fn buffer_sub_data(ctx: &mut GlContext, target: u32, offset: usize, data: &[
 /// `glDeleteBuffers` (one name).
 impl GlContext {
     pub fn delete_buffer(&mut self, name: u32) -> bool {
+        self.clear_object_label(GL_BUFFER_OBJECT, name);
         if self.local.array_buffer == name {
             self.local.array_buffer = 0;
         }

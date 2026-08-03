@@ -33,9 +33,7 @@ pub extern "C" fn glBlendFuncSeparatei(
     dst_alpha: u32,
 ) {
     GlobalState::context(|s| {
-        record::blend_func_separate_indexed(
-            &mut s.gl, buf, src_rgb, dst_rgb, src_alpha, dst_alpha,
-        )
+        record::blend_func_separate_indexed(&mut s.gl, buf, src_rgb, dst_rgb, src_alpha, dst_alpha)
     });
 }
 /// `glBlendColor` — the constant blend color used by `GL_*_CONSTANT_*` factors.
@@ -227,14 +225,13 @@ pub extern "C" fn glGetBooleani_v(target: u32, index: u32, data: *mut u8) {
     if data.is_null() {
         return;
     }
-    if target == GL_COLOR_WRITEMASK
-        && index >= hl_gl::model::program::MAX_DRAW_BUFFERS as u32
-    {
+    if target == GL_COLOR_WRITEMASK && index >= hl_gl::model::program::MAX_DRAW_BUFFERS as u32 {
         GlobalState::context(|state| state.gl.set_gl_error(GL_INVALID_VALUE));
         return;
     }
     let mut values = [0u8; 4];
-    let count = GlobalState::context(|s| query::get_boolean_indexed(&s.gl, target, index, &mut values));
+    let count =
+        GlobalState::context(|s| query::get_boolean_indexed(&s.gl, target, index, &mut values));
     unsafe {
         for (offset, value) in values.into_iter().take(count).enumerate() {
             *data.add(offset) = value;
@@ -401,10 +398,22 @@ pub extern "C" fn glGetBufferPointervOES(target: u32, pname: u32, params: *mut *
 }
 /// `glGetPointerv(pname, params)` — a KHR_debug callback/pointer query; no such pointer state is modeled.
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glGetPointerv(_pname: u32, params: *mut *mut c_void) {
-    if !params.is_null() {
-        unsafe { *params = core::ptr::null_mut() };
+pub extern "C" fn glGetPointerv(pname: u32, params: *mut *mut c_void) {
+    if params.is_null() {
+        return;
     }
+    GlobalState::context(|s| {
+        let (callback, user) = s.gl.debug_callback();
+        let value = match pname {
+            GL_DEBUG_CALLBACK_FUNCTION => callback,
+            GL_DEBUG_CALLBACK_USER_PARAM => user,
+            _ => {
+                s.gl.set_gl_error(GL_INVALID_ENUM);
+                return;
+            }
+        };
+        unsafe { *params = value as *mut c_void };
+    });
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetPointervKHR(pname: u32, params: *mut *mut c_void) {

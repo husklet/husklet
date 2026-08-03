@@ -1,5 +1,272 @@
 use super::*;
 
+fn bind_debug_context() {
+    let display = initialized_display();
+    let attributes = [
+        EGL_CONTEXT_CLIENT_VERSION,
+        3,
+        EGL_CONTEXT_MINOR_VERSION_KHR,
+        1,
+        EGL_CONTEXT_FLAGS_KHR,
+        EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR,
+        EGL_NONE,
+    ];
+    let context = eglCreateContext(
+        display,
+        CONFIG_TOKEN as *mut c_void,
+        core::ptr::null_mut(),
+        attributes.as_ptr(),
+    );
+    assert!(!context.is_null());
+    let surface = WindowSurface::create(core::ptr::null_mut());
+    assert_eq!(eglMakeCurrent(display, surface, surface, context), EGL_TRUE);
+    while glGetError() != GL_NO_ERROR {}
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct CallbackRecord {
+    source: u32,
+    type_: u32,
+    id: u32,
+    severity: u32,
+    message: String,
+    user: usize,
+}
+
+static DEBUG_CALLBACK_RECORD: std::sync::Mutex<Option<CallbackRecord>> =
+    std::sync::Mutex::new(None);
+
+unsafe extern "C" fn record_debug_callback(
+    source: u32,
+    type_: u32,
+    id: u32,
+    severity: u32,
+    length: i32,
+    message: *const c_char,
+    user: *const c_void,
+) {
+    let bytes = unsafe { std::slice::from_raw_parts(message.cast::<u8>(), length as usize) };
+    *DEBUG_CALLBACK_RECORD.lock().unwrap() = Some(CallbackRecord {
+        source,
+        type_,
+        id,
+        severity,
+        message: String::from_utf8(bytes.to_vec()).unwrap(),
+        user: user as usize,
+    });
+}
+
+#[test]
+fn khr_debug_callback_pointer_and_application_message_are_exact() {
+    bind_debug_context();
+
+    let mut flags = 0;
+    glGetIntegerv(GL_CONTEXT_FLAGS, &mut flags);
+    assert_eq!(flags as u32, GL_CONTEXT_FLAG_DEBUG_BIT);
+    assert_ne!(glIsEnabled(GL_DEBUG_OUTPUT), 0);
+    for (pname, expected) in [
+        (GL_MAX_DEBUG_MESSAGE_LENGTH, 1024),
+        (GL_MAX_DEBUG_LOGGED_MESSAGES, 64),
+        (GL_MAX_DEBUG_GROUP_STACK_DEPTH, 64),
+        (GL_MAX_LABEL_LENGTH, 256),
+    ] {
+        let mut value = 0;
+        glGetIntegerv(pname, &mut value);
+        assert_eq!(value, expected, "{pname:#x}");
+    }
+
+    let user = 0x1234usize as *const c_void;
+    glDebugMessageCallbackKHR(record_debug_callback as *mut c_void, user);
+    let mut callback = core::ptr::null_mut();
+    let mut reported_user = core::ptr::null_mut();
+    glGetPointervKHR(GL_DEBUG_CALLBACK_FUNCTION, &mut callback);
+    glGetPointervKHR(GL_DEBUG_CALLBACK_USER_PARAM, &mut reported_user);
+    assert_eq!(callback, record_debug_callback as *mut c_void);
+    assert_eq!(reported_user, user as *mut c_void);
+
+    let message = b"application marker";
+    glDebugMessageInsertKHR(
+        GL_DEBUG_SOURCE_APPLICATION,
+        GL_DEBUG_TYPE_MARKER,
+        77,
+        GL_DEBUG_SEVERITY_HIGH,
+        message.len() as i32,
+        message.as_ptr().cast(),
+    );
+    assert_eq!(glGetError(), GL_NO_ERROR);
+    assert_eq!(
+        DEBUG_CALLBACK_RECORD.lock().unwrap().take(),
+        Some(CallbackRecord {
+            source: GL_DEBUG_SOURCE_APPLICATION,
+            type_: GL_DEBUG_TYPE_MARKER,
+            id: 77,
+            severity: GL_DEBUG_SEVERITY_HIGH,
+            message: "application marker".into(),
+            user: 0x1234,
+        })
+    );
+
+    glGetPointervKHR(GL_TEXTURE, &mut callback);
+    assert_eq!(glGetError(), GL_INVALID_ENUM);
+
+    glDebugMessageInsertKHR(
+        GL_DEBUG_SOURCE_APPLICATION,
+        GL_DEBUG_TYPE_PUSH_GROUP,
+        78,
+        GL_DEBUG_SEVERITY_HIGH,
+        message.len() as i32,
+        message.as_ptr().cast(),
+    );
+    assert_eq!(glGetError(), GL_INVALID_ENUM);
+}
+
+#[test]
+fn khr_debug_log_groups_filters_and_label_lifetime_are_observable() {
+    bind_debug_context();
+    glDebugMessageCallbackKHR(core::ptr::null_mut(), core::ptr::null());
+
+    let message = b"logged marker";
+    glDebugMessageInsertKHR(
+        GL_DEBUG_SOURCE_APPLICATION,
+        GL_DEBUG_TYPE_MARKER,
+        9,
+        GL_DEBUG_SEVERITY_HIGH,
+        message.len() as i32,
+        message.as_ptr().cast(),
+    );
+    let mut logged = 0;
+    let mut next = 0;
+    glGetIntegerv(GL_DEBUG_LOGGED_MESSAGES, &mut logged);
+    glGetIntegerv(GL_DEBUG_NEXT_LOGGED_MESSAGE_LENGTH, &mut next);
+    assert_eq!(logged, 1);
+    assert_eq!(next, message.len() as i32 + 1);
+
+    let (mut source, mut type_, mut id, mut severity, mut length) = (0, 0, 0, 0, 0);
+    let mut output = [0u8; 32];
+    assert_eq!(
+        glGetDebugMessageLogKHR(
+            1,
+            output.len() as i32,
+            &mut source,
+            &mut type_,
+            &mut id,
+            &mut severity,
+            &mut length,
+            output.as_mut_ptr(),
+        ),
+        1
+    );
+    assert_eq!(
+        (source, type_, id, severity, length),
+        (
+            GL_DEBUG_SOURCE_APPLICATION,
+            GL_DEBUG_TYPE_MARKER,
+            9,
+            GL_DEBUG_SEVERITY_HIGH,
+            message.len() as i32 + 1,
+        )
+    );
+    assert_eq!(&output[..message.len()], message);
+
+    glDebugMessageInsertKHR(
+        GL_DEBUG_SOURCE_APPLICATION,
+        GL_DEBUG_TYPE_MARKER,
+        10,
+        GL_DEBUG_SEVERITY_HIGH,
+        message.len() as i32,
+        message.as_ptr().cast(),
+    );
+    assert_eq!(
+        glGetDebugMessageLogKHR(
+            1,
+            0,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            &mut id,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+        ),
+        1,
+        "a null messageLog ignores bufSize"
+    );
+    assert_eq!(id, 10);
+
+    let group = b"filtered group";
+    glPushDebugGroupKHR(
+        GL_DEBUG_SOURCE_APPLICATION,
+        11,
+        group.len() as i32,
+        group.as_ptr().cast(),
+    );
+    glDebugMessageControlKHR(
+        GL_DONT_CARE,
+        GL_DONT_CARE,
+        GL_DONT_CARE,
+        0,
+        core::ptr::null(),
+        0,
+    );
+    glDebugMessageInsertKHR(
+        GL_DEBUG_SOURCE_APPLICATION,
+        GL_DEBUG_TYPE_MARKER,
+        12,
+        GL_DEBUG_SEVERITY_HIGH,
+        message.len() as i32,
+        message.as_ptr().cast(),
+    );
+    glPopDebugGroupKHR();
+    glGetIntegerv(GL_DEBUG_GROUP_STACK_DEPTH, &mut logged);
+    assert_eq!(logged, 1);
+
+    let mut buffer = 0;
+    glGenBuffers(1, &mut buffer);
+    let label = b"vertex bytes";
+    glObjectLabelKHR(
+        GL_BUFFER_OBJECT,
+        buffer,
+        label.len() as i32,
+        label.as_ptr().cast(),
+    );
+    let mut label_length = 0;
+    let mut label_output = [0u8; 32];
+    glGetObjectLabelKHR(
+        GL_BUFFER_OBJECT,
+        buffer,
+        label_output.len() as i32,
+        &mut label_length,
+        label_output.as_mut_ptr(),
+    );
+    assert_eq!(label_length, label.len() as i32);
+
+    glObjectLabelKHR(
+        GL_TEXTURE,
+        buffer,
+        label.len() as i32,
+        label.as_ptr().cast(),
+    );
+    assert_eq!(glGetError(), GL_INVALID_VALUE, "wrong object namespace");
+    glObjectLabelKHR(0xdead, buffer, label.len() as i32, label.as_ptr().cast());
+    assert_eq!(glGetError(), GL_INVALID_ENUM, "unknown object namespace");
+    let overlong = [b'x'; 256];
+    glObjectLabelKHR(
+        GL_BUFFER_OBJECT,
+        buffer,
+        overlong.len() as i32,
+        overlong.as_ptr().cast(),
+    );
+    assert_eq!(glGetError(), GL_INVALID_VALUE, "label limit is exclusive");
+    glDeleteBuffers(1, &buffer);
+    glGetObjectLabelKHR(
+        GL_BUFFER_OBJECT,
+        buffer,
+        label_output.len() as i32,
+        &mut label_length,
+        label_output.as_mut_ptr(),
+    );
+    assert_eq!(glGetError(), GL_INVALID_VALUE);
+}
+
 #[test]
 fn readback_writer_preserves_pack_skips_and_row_gaps() {
     let store = hl_gl::model::context::PixelStore {
