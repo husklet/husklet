@@ -1,4 +1,5 @@
 use super::*;
+use hl_gpu::protocol::model::enums::TextureFormat;
 
 // ---------------------------------------------------------------------------------------------------
 // Multiple render targets: which attachment a scoped clear reaches, and which ones a draw may write.
@@ -19,6 +20,25 @@ fn bind_mrt(c: &mut GlContext, n: u32) -> u32 {
             c,
             GL_FRAMEBUFFER,
             GL_COLOR_ATTACHMENT0 + index,
+            GL_TEXTURE_2D,
+            tex,
+            0,
+        );
+    }
+    fbo
+}
+
+fn bind_mrt_formats(c: &mut GlContext, formats: &[TextureFormat]) -> u32 {
+    let fbo = c.gen_framebuffer();
+    record::bind_framebuffer(c, GL_FRAMEBUFFER, fbo);
+    for (index, &format) in formats.iter().enumerate() {
+        let tex = c.textures.gen();
+        record::bind_texture(c, GL_TEXTURE_2D, tex);
+        record::tex_image_2d_format(c, 32, 32, &[], format);
+        record::framebuffer_texture_2d(
+            c,
+            GL_FRAMEBUFFER,
+            GL_COLOR_ATTACHMENT0 + index as u32,
             GL_TEXTURE_2D,
             tex,
             0,
@@ -101,6 +121,38 @@ fn every_slot_writes_when_draw_buffers_was_never_called() {
     for target in &pipeline_desc(&sink.batches[0]).color_targets {
         assert_eq!(target.write_mask, 0xf, "the initial selection writes every slot");
     }
+}
+
+#[test]
+fn mrt_pipeline_preserves_each_attachment_format() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    let formats = [
+        TextureFormat::Rgba8Unorm,
+        TextureFormat::Rgba16Float,
+        TextureFormat::Rgba8Srgb,
+        TextureFormat::Rgba32Float,
+    ];
+    bind_mrt_formats(&mut c, &formats);
+    record::draw_buffers(
+        &mut c,
+        &[
+            GL_COLOR_ATTACHMENT0,
+            GL_COLOR_ATTACHMENT0 + 1,
+            GL_COLOR_ATTACHMENT0 + 2,
+            GL_COLOR_ATTACHMENT0 + 3,
+        ],
+    );
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let actual: Vec<_> = pipeline_desc(&sink.batches[0])
+        .color_targets
+        .iter()
+        .map(|target| target.format)
+        .collect();
+    assert_eq!(actual, formats);
 }
 
 #[test]
