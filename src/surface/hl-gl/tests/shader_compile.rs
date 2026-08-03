@@ -75,6 +75,29 @@ fn es2_rejects_integer_literal_for_float_function_parameter() {
 }
 
 #[test]
+fn es2_rejects_static_use_of_both_fragment_output_interfaces() {
+    let mut context = GlContext::new();
+    for body in [
+        "gl_FragColor=vec4(1.0); gl_FragData[0]=vec4(1.0);",
+        "if(false) gl_FragColor=vec4(1.0); else gl_FragData[0]=vec4(1.0);",
+        "gl_FragColor=vec4(1.0); } void unused(){gl_FragData[0]=vec4(1.0);",
+    ] {
+        let source = format!("void main(){{{body}}}");
+        let (status, log) = compile(&mut context, GL_FRAGMENT_SHADER, &source);
+        assert_eq!(status, GL_FALSE as i32, "accepted mixed outputs: {source}");
+        assert!(log.contains("gl_FragColor") && log.contains("gl_FragData"));
+    }
+    for body in ["gl_FragColor=vec4(1.0);", "gl_FragData[0]=vec4(1.0);"] {
+        let (status, log) = compile(
+            &mut context,
+            GL_FRAGMENT_SHADER,
+            &format!("void main(){{{body}}}"),
+        );
+        assert_eq!(status, GL_TRUE as i32, "rejected one output: {log}");
+    }
+}
+
+#[test]
 fn lexical_shapes_do_not_create_false_implicit_conversion_diagnostics() {
     let mut context = GlContext::new();
     let controls = [

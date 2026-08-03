@@ -322,6 +322,12 @@ impl GlContext {
                 self.programs.fail_compile(shader, reason);
                 return;
             }
+            if kind == GL_FRAGMENT_SHADER {
+                if let Some(reason) = crate::adapter::glsl::invalid_fragment_output_mix(source) {
+                    self.programs.fail_compile(shader, reason);
+                    return;
+                }
+            }
             if let Some(builtin) = crate::adapter::glsl::builtin_above_declared_version(source) {
                 let version = crate::adapter::glsl::declared_es_version(source);
                 self.programs.fail_compile(
@@ -580,6 +586,7 @@ pub fn set_uniform(
             let compatible = match setter {
                 UniformSetter::Float(width) => {
                     vector_width(&uniform.ty, "float", "vec") == Some(width)
+                        || vector_width(&uniform.ty, "bool", "bvec") == Some(width)
                 }
                 UniformSetter::Int(width) => {
                     vector_width(&uniform.ty, "int", "ivec") == Some(width)
@@ -592,7 +599,23 @@ pub fn set_uniform(
                 ctx.set_gl_error(GL_INVALID_OPERATION);
                 return;
             }
-            uniform_at(ctx, location as usize, bytes);
+            if vector_width(&uniform.ty, "bool", "bvec").is_some() {
+                let normalized = bytes
+                    .chunks_exact(4)
+                    .flat_map(|word| {
+                        let word = [word[0], word[1], word[2], word[3]];
+                        let value = match setter {
+                            UniformSetter::Float(_) => f32::from_le_bytes(word) != 0.0,
+                            UniformSetter::Int(_) => i32::from_le_bytes(word) != 0,
+                            UniformSetter::Matrix(_) => unreachable!("boolean matrices do not exist"),
+                        };
+                        u32::from(value).to_le_bytes()
+                    })
+                    .collect::<Vec<_>>();
+                uniform_at(ctx, location as usize, &normalized);
+            } else {
+                uniform_at(ctx, location as usize, bytes);
+            }
         }
         crate::model::program::UniformLocation::Sampler { element } => {
             if setter != UniformSetter::Int(1) {

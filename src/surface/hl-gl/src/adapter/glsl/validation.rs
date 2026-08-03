@@ -467,6 +467,15 @@ pub fn invalid_function_argument_basetype(source: &str) -> Option<String> {
     None
 }
 
+/// ES 1.00 forbids statically writing both legacy fragment-output interfaces in one shader, including
+/// writes in mutually exclusive branches or an otherwise unused function.
+pub fn invalid_fragment_output_mix(source: &str) -> Option<String> {
+    let source_tokens = tokens(source);
+    (source_tokens.iter().any(|token| token == "gl_FragColor")
+        && source_tokens.iter().any(|token| token == "gl_FragData"))
+        .then(|| "a fragment shader may not statically write both gl_FragColor and gl_FragData".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::invalid_implicit_arithmetic;
