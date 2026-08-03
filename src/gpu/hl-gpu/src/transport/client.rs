@@ -69,7 +69,8 @@ pub struct RemoteCommandSink {
     trace: bool,
     config: TransportConfig,
     terminal: Option<TransportError>,
-    last_partial_commands: Option<Vec<Cmd>>,
+    last_partial_sources: Option<Vec<usize>>,
+    last_partial_commands: Option<Vec<(usize, Cmd)>>,
     /// Error-level diagnostics already emitted for the CURRENT connection generation, so a persistent
     /// failure on the per-frame submit path prints a handful of legible lines rather than one per frame.
     /// Keyed `(class, code)`; cleared whenever `generation` advances, because a fresh executor is a fresh
@@ -108,6 +109,7 @@ impl RemoteCommandSink {
             trace: false,
             config: TransportConfig::default(),
             terminal: None,
+            last_partial_sources: None,
             last_partial_commands: None,
             reported: HashSet::new(),
             reported_generation: 0,
@@ -414,22 +416,22 @@ impl RemoteCommandSink {
                 }
                 partial if crate::transport::model::header::is_partial_ack(partial) => {
                     self.residency_reset = false;
-                    let (commands, replayable) = committed_delta.expect("partial acknowledgement carries a committed delta");
+                    let (commands, sources, replayable) = committed_delta.expect("partial acknowledgement carries a committed delta");
+                    self.last_partial_sources = Some(sources.iter().filter_map(|source| source.checked_sub(replay_prefix_commands)).collect());
                     self.last_partial_commands = Some(
                         commands
                             .iter()
-                            .skip(replay_prefix_commands)
-                            .cloned()
+                            .filter_map(|(source, command)| source.checked_sub(replay_prefix_commands).map(|source| (source, command.clone())))
                             .collect(),
                     );
                     if replaying {
                         // The host executed `replay-prefix + current` as one batch, so this is the complete
                         // authoritative post-frame state. Replacing avoids duplicating the replay prefix.
-                        self.residency.replace_committed(commands, replayable);
+                        self.residency.replace_committed(commands.iter().map(|(_, command)| command.clone()).collect(), replayable);
                     } else {
                         // On an uninterrupted connection the host saw only this frame; preserve residency
                         // from older acknowledgements and append exactly this frame's committed mutation.
-                        self.residency.append(&commands);
+                        self.residency.append(&commands.iter().map(|(_, command)| command.clone()).collect::<Vec<_>>());
                         if !replayable {
                             self.residency.mark_nonreplayable();
                         }
@@ -514,6 +516,7 @@ impl CommandSink for RemoteCommandSink {
 
     fn submit(&mut self, batch: &[Cmd]) -> Result<()> {
         self.last_partial_commands = None;
+        self.last_partial_sources = None;
         let diagnostics = self.diagnostics();
         let encode_started = diagnostics.then(std::time::Instant::now);
         let ir = crate::protocol::codec::Encoder::stream(batch);
@@ -526,11 +529,13 @@ impl CommandSink for RemoteCommandSink {
     fn submit_outcome(&mut self, batch: &[Cmd]) -> crate::SinkSubmitOutcome {
         match self.submit(batch) {
             Ok(()) => crate::SinkSubmitOutcome {
-                committed: batch.to_vec(),
+                committed_sources: (0..batch.len()).collect(),
+                replay_commands: batch.iter().cloned().enumerate().collect(),
                 error: None,
             },
             Err(error) => crate::SinkSubmitOutcome {
-                committed: self.last_partial_commands.take().unwrap_or_default(),
+                committed_sources: self.last_partial_sources.take().unwrap_or_default(),
+                replay_commands: self.last_partial_commands.take().unwrap_or_default(),
                 error: Some(error),
             },
         }

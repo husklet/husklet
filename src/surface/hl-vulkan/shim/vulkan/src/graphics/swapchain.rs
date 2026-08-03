@@ -97,7 +97,8 @@ pub extern "C" fn vkCreateSwapchainKHR(
                 return Status::from_error(&error);
             }
         }
-        if !old_presenter_matches(&s.presenters, ci.old_swapchain, presenter_id) {
+        let device_token = s.current_device_token();
+        if !old_presenter_matches(&s.presenters, device_token, ci.old_swapchain, presenter_id) {
             return VK_ERROR_INITIALIZATION_FAILED;
         }
         {
@@ -175,7 +176,7 @@ pub extern "C" fn vkCreateSwapchainKHR(
         })();
         match r {
             Ok(h) => {
-                s.presenters.bind(h, presenter_id);
+                s.presenters.bind(device_token, h, presenter_id);
                 if !p_swapchain.is_null() {
                     unsafe { *p_swapchain = h };
                 }
@@ -199,10 +200,11 @@ fn application_surface_status(live: &std::collections::HashSet<u64>, surface: u6
 
 fn old_presenter_matches(
     presenters: &crate::state::Presenters,
+    device: usize,
     old_swapchain: u64,
     target: PresenterId,
 ) -> bool {
-    old_swapchain == 0 || presenters.surface(old_swapchain) == Some(target)
+    old_swapchain == 0 || presenters.surface(device, old_swapchain) == Some(target)
 }
 
 fn active_target_status(old_swapchain: u64, active: bool) -> VkResult {
@@ -247,7 +249,7 @@ pub extern "C" fn vkDestroySwapchainKHR(
             destroy_error = dev.destroy_swapchain(sink, swapchain).err();
         }
         if destroy_error.is_none() {
-            s.presenters.unbind(swapchain);
+            s.presenters.unbind(s.current_device_token(), swapchain);
         } else {
             let error = destroy_error.unwrap();
             hl_log::hl_error!(
@@ -262,7 +264,7 @@ pub extern "C" fn vkDestroySwapchainKHR(
             if transport_lost {
                 let device = s.current_device_token() as *mut c_void;
                 s.remove_device(device);
-                s.presenters.unbind(swapchain);
+                s.presenters.unbind(device as usize, swapchain);
                 return;
             }
             s.enqueue_swapchain_destroy(swapchain);
@@ -462,6 +464,7 @@ pub extern "C" fn vkQueuePresentKHR(
             return VK_ERROR_INITIALIZATION_FAILED;
         };
         let crate::state::PresentParts {
+            device_token,
             device: dev,
             sink,
             presenters,
@@ -487,7 +490,7 @@ pub extern "C" fn vkQueuePresentKHR(
             PresentResults::write(&mut per_swapchain_results, position, VK_SUCCESS);
             let native = if native_present {
                 presenters
-                    .get_mut(sc)
+                    .get_mut(device_token, sc)
                     .and_then(Option::as_mut)
                     .and_then(WaylandAppPresenter::reserve_native_frame)
             } else {
@@ -526,7 +529,7 @@ pub extern "C" fn vkQueuePresentKHR(
                     continue;
                 };
                 let commit = presenters
-                    .get_mut(sc)
+                    .get_mut(device_token, sc)
                     .and_then(Option::as_mut)
                     .expect("native frame requires its presenter")
                     .commit_native(frame, w, h);
@@ -540,13 +543,13 @@ pub extern "C" fn vkQueuePresentKHR(
                             error
                         );
                     }
-                    let owner = presenters.surface(sc);
+                    let owner = presenters.surface(device_token, sc);
                     if let Some(surface) = owner {
-                        for swapchain in presenters.swapchains(surface) {
+                        for swapchain in presenters.swapchains(device_token, surface) {
                             let _ = present::demote_swapchain(dev, sink, swapchain);
                         }
                     }
-                    if let Some(Some(presenter)) = presenters.get_mut(sc) {
+                    if let Some(Some(presenter)) = presenters.get_mut(device_token, sc) {
                         presenter.retire_native();
                     }
                     let result = error.to_vk_result();
@@ -575,7 +578,7 @@ pub extern "C" fn vkQueuePresentKHR(
             // 3) Marshal that plane onto the app's OWN `wl_surface`. No live presenter for a surface
             //    that names a window ⇒ VK_ERROR_SURFACE_LOST_KHR; a hard marshal/flush failure ⇒
             //    VK_ERROR_OUT_OF_DATE/SURFACE_LOST. Only a deliberately offscreen target is VK_SUCCESS.
-            let vk = Presentation::frame_to_app_surface(presenters, sc, plane);
+            let vk = Presentation::frame_to_app_surface(presenters, device_token, sc, plane);
             if vk != VK_SUCCESS {
                 if SHM_COMMIT_FAILED.fires(sc) {
                     hl_log::hl_error!(
@@ -622,15 +625,16 @@ struct Presentation;
 impl Presentation {
     fn frame_to_app_surface(
         presenters: &mut crate::state::Presenters,
+        device: usize,
         swapchain: u64,
         plane: (Vec<u8>, u32, u32),
     ) -> VkResult {
         let (xrgb, w, h) = plane;
         // Resolved before the mutable borrow below: what this swapchain was supposed to present to.
         let expects_window = presenters
-            .surface(swapchain)
+            .surface(device, swapchain)
             .is_some_and(|target| target.expects_window());
-        match presenters.get_mut(swapchain) {
+        match presenters.get_mut(device, swapchain) {
             Some(Some(p)) => match p.present(&xrgb, w, h) {
                 Ok(()) => VK_SUCCESS,
                 Err(e) => e.to_vk_result(),
@@ -677,12 +681,12 @@ mod tests {
         let first = PresenterId::Surface(0x5000);
         let foreign = PresenterId::Surface(0x5001);
         presenters.ensure(first, || None);
-        presenters.bind(7, first);
+        presenters.bind(1, 7, first);
 
-        assert!(old_presenter_matches(&presenters, 0, foreign));
-        assert!(old_presenter_matches(&presenters, 7, first));
-        assert!(!old_presenter_matches(&presenters, 7, foreign));
-        assert!(!old_presenter_matches(&presenters, 8, first));
+        assert!(old_presenter_matches(&presenters, 1, 0, foreign));
+        assert!(old_presenter_matches(&presenters, 1, 7, first));
+        assert!(!old_presenter_matches(&presenters, 1, 7, foreign));
+        assert!(!old_presenter_matches(&presenters, 1, 8, first));
     }
 
     #[test]
@@ -754,7 +758,7 @@ mod tests {
         let mut presenters = crate::state::Presenters::new();
 
         assert_eq!(
-            Presentation::frame_to_app_surface(&mut presenters, 0xABC, plane()),
+            Presentation::frame_to_app_surface(&mut presenters, 1, 0xABC, plane()),
             VK_SUCCESS
         );
     }
@@ -768,10 +772,10 @@ mod tests {
         let target = PresenterId::Wayland(0x515);
         let mut presenters = crate::state::Presenters::new();
         presenters.ensure(target, || None);
-        presenters.bind(swapchain, target);
+        presenters.bind(1, swapchain, target);
 
         assert_eq!(
-            Presentation::frame_to_app_surface(&mut presenters, swapchain, plane()),
+            Presentation::frame_to_app_surface(&mut presenters, 1, swapchain, plane()),
             VK_ERROR_SURFACE_LOST_KHR,
             "a present that commits nothing to a real window must not report success"
         );
@@ -785,11 +789,11 @@ mod tests {
         let target = PresenterId::Wayland(0x515);
         let mut presenters = crate::state::Presenters::new();
         presenters.ensure(target, || None);
-        presenters.bind(swapchain, target);
+        presenters.bind(1, swapchain, target);
 
         for _ in 0..3 {
             assert_eq!(
-                Presentation::frame_to_app_surface(&mut presenters, swapchain, plane()),
+                Presentation::frame_to_app_surface(&mut presenters, 1, swapchain, plane()),
                 VK_ERROR_SURFACE_LOST_KHR
             );
         }
@@ -803,10 +807,10 @@ mod tests {
         let target = PresenterId::Surface(0x5000_0000_0000_0001);
         let mut presenters = crate::state::Presenters::new();
         presenters.ensure(target, || None);
-        presenters.bind(swapchain, target);
+        presenters.bind(1, swapchain, target);
 
         assert_eq!(
-            Presentation::frame_to_app_surface(&mut presenters, swapchain, plane()),
+            Presentation::frame_to_app_surface(&mut presenters, 1, swapchain, plane()),
             VK_SUCCESS
         );
     }
@@ -818,10 +822,10 @@ mod tests {
         let target = PresenterId::Wayland(0);
         let mut presenters = crate::state::Presenters::new();
         presenters.ensure(target, || None);
-        presenters.bind(swapchain, target);
+        presenters.bind(1, swapchain, target);
 
         assert_eq!(
-            Presentation::frame_to_app_surface(&mut presenters, swapchain, plane()),
+            Presentation::frame_to_app_surface(&mut presenters, 1, swapchain, plane()),
             VK_SUCCESS
         );
     }

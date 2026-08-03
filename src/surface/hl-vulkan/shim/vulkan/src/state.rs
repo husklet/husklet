@@ -88,7 +88,7 @@ impl PresenterId {
 /// identity therefore belongs to the surface, while swapchains only hold leases to it.
 pub struct Presenters {
     surfaces: HashMap<PresenterId, Option<WaylandAppPresenter>>,
-    swapchains: HashMap<u64, PresenterId>,
+    swapchains: HashMap<(usize, u64), PresenterId>,
 }
 
 impl Presenters {
@@ -107,8 +107,8 @@ impl Presenters {
         self.surfaces.entry(surface).or_insert_with(create)
     }
 
-    pub fn bind(&mut self, swapchain: u64, surface: PresenterId) {
-        self.swapchains.insert(swapchain, surface);
+    pub fn bind(&mut self, device: usize, swapchain: u64, surface: PresenterId) {
+        self.swapchains.insert((device, swapchain), surface);
     }
 
     pub fn discard_unbound(&mut self, surface: PresenterId) {
@@ -117,24 +117,24 @@ impl Presenters {
         }
     }
 
-    pub fn get_mut(&mut self, swapchain: u64) -> Option<&mut Option<WaylandAppPresenter>> {
-        let surface = *self.swapchains.get(&swapchain)?;
+    pub fn get_mut(&mut self, device: usize, swapchain: u64) -> Option<&mut Option<WaylandAppPresenter>> {
+        let surface = *self.swapchains.get(&(device, swapchain))?;
         self.surfaces.get_mut(&surface)
     }
 
-    pub fn surface(&self, swapchain: u64) -> Option<PresenterId> {
-        self.swapchains.get(&swapchain).copied()
+    pub fn surface(&self, device: usize, swapchain: u64) -> Option<PresenterId> {
+        self.swapchains.get(&(device, swapchain)).copied()
     }
 
-    pub fn swapchains(&self, surface: PresenterId) -> Vec<u64> {
+    pub fn swapchains(&self, device: usize, surface: PresenterId) -> Vec<u64> {
         self.swapchains
             .iter()
-            .filter_map(|(swapchain, owner)| (*owner == surface).then_some(*swapchain))
+            .filter_map(|((owner_device, swapchain), owner)| (*owner_device == device && *owner == surface).then_some(*swapchain))
             .collect()
     }
 
-    pub fn unbind(&mut self, swapchain: u64) {
-        let Some(surface) = self.swapchains.remove(&swapchain) else {
+    pub fn unbind(&mut self, device: usize, swapchain: u64) {
+        let Some(surface) = self.swapchains.remove(&(device, swapchain)) else {
             return;
         };
         if !self.swapchains.values().any(|owner| *owner == surface) {
@@ -156,6 +156,8 @@ pub struct State {
     /// passed — leaving the application holding a handle the loader then rejected, which ABORTED the
     /// process. That is what took whole CTS runs down rather than failing one case.
     devices: HashMap<usize, Device>,
+    /// Removed devices retained solely while sink-backed deferred destruction is retried.
+    retiring_devices: HashMap<usize, Device>,
     /// The token of the device untyped accessors resolve — the most recently created live device.
     ///
     /// HONEST LIMITATION: the generated `vk*` entry points receive their `VkDevice` and discard it, so
@@ -273,6 +275,7 @@ impl State {
             phys_dev: 0,
             negotiated: false,
             devices: HashMap::new(),
+            retiring_devices: HashMap::new(),
             current_device: 0,
             queue_handle: 0,
         }
@@ -324,18 +327,14 @@ impl State {
     /// remaining handle stays usable.
     pub fn remove_device(&mut self, token: *mut c_void) {
         let token = token as usize;
-        if self.devices.remove(&token).is_none() {
+        let Some(device) = self.devices.remove(&token) else {
             return;
-        }
-        let abandoned: Vec<_> = self
-            .pending_swapchain_destroys
-            .iter()
-            .filter_map(|(owner, swapchain)| (*owner == token).then_some(*swapchain))
-            .collect();
-        self.pending_swapchain_destroys
-            .retain(|(owner, _)| *owner != token);
-        for swapchain in abandoned {
-            self.presenters.unbind(swapchain);
+        };
+        // A pending destroy has already reached the sink and may be ambiguous.
+        // Transfer its complete model to the recovery owner; never retry it in
+        // this removal call or drop the only state capable of later cleanup.
+        if self.pending_swapchain_destroys.iter().any(|(owner, _)| *owner == token) {
+            self.retiring_devices.insert(token, device);
         }
         if self.current_device == token {
             self.current_device = self.devices.keys().copied().next().unwrap_or(0);
@@ -369,6 +368,7 @@ impl State {
     pub fn present_parts(&mut self) -> Option<PresentParts<'_>> {
         let device = self.devices.get_mut(&self.current_device)?;
         Some(PresentParts {
+            device_token: self.current_device,
             device,
             sink: &mut self.sink,
             presenters: &mut self.presenters,
@@ -384,14 +384,16 @@ impl State {
     pub fn retry_swapchain_destroys(&mut self) {
         let pending: Vec<_> = self.pending_swapchain_destroys.iter().copied().collect();
         for (device_token, swapchain) in pending {
-            let completed = self
-                .devices
-                .get_mut(&device_token)
+            let completed = self.devices.get_mut(&device_token)
+                .or_else(|| self.retiring_devices.get_mut(&device_token))
                 .is_some_and(|device| device.destroy_swapchain(&mut self.sink, swapchain).is_ok());
             if completed {
                 self.pending_swapchain_destroys
                     .remove(&(device_token, swapchain));
-                self.presenters.unbind(swapchain);
+                self.presenters.unbind(device_token, swapchain);
+                if !self.pending_swapchain_destroys.iter().any(|(owner, _)| *owner == device_token) {
+                    self.retiring_devices.remove(&device_token);
+                }
             }
         }
     }
@@ -412,6 +414,7 @@ impl State {
     #[cfg(test)]
     pub fn clear_devices(&mut self) {
         self.devices.clear();
+        self.retiring_devices.clear();
         self.current_device = 0;
     }
 
@@ -454,7 +457,8 @@ impl StateStore {
 
 #[cfg(test)]
 mod presenter_tests {
-    use super::{PresenterId, Presenters};
+    use super::{PresenterId, Presenters, State};
+    use std::ffi::c_void;
 
     #[test]
     fn overlapping_swapchains_keep_one_surface_owner_until_the_last_destroy() {
@@ -463,21 +467,53 @@ mod presenter_tests {
         let new = 12;
         let mut presenters = Presenters::new();
         presenters.ensure(surface, || None);
-        presenters.bind(old, surface);
-        presenters.bind(new, surface);
+        presenters.bind(1, old, surface);
+        presenters.bind(1, new, surface);
 
-        presenters.unbind(old);
-        assert_eq!(presenters.surface(new), Some(surface));
-        assert!(matches!(presenters.get_mut(new), Some(None)));
+        presenters.unbind(1, old);
+        assert_eq!(presenters.surface(1, new), Some(surface));
+        assert!(matches!(presenters.get_mut(1, new), Some(None)));
 
-        presenters.unbind(new);
-        assert!(presenters.get_mut(new).is_none());
-        assert!(presenters.swapchains(surface).is_empty());
+        presenters.unbind(1, new);
+        assert!(presenters.get_mut(1, new).is_none());
+        assert!(presenters.swapchains(1, surface).is_empty());
+    }
+
+    #[test]
+    fn equal_swapchain_handles_on_distinct_devices_do_not_alias() {
+        let mut presenters = Presenters::new();
+        let first = PresenterId::Surface(11);
+        let second = PresenterId::Surface(22);
+        presenters.ensure(first, || None);
+        presenters.ensure(second, || None);
+        presenters.bind(1, 7, first);
+        presenters.bind(2, 7, second);
+        assert_eq!(presenters.surface(1, 7), Some(first));
+        assert_eq!(presenters.surface(2, 7), Some(second));
+        presenters.unbind(1, 7);
+        assert_eq!(presenters.surface(2, 7), Some(second));
+    }
+
+    #[test]
+    fn removing_device_retains_failed_pending_cleanup() {
+        let mut state = State::new();
+        let instance = hl_vulkan::Instance::new(hl_vulkan::result::HL_API_VERSION);
+        let mut device = instance.create_device();
+        let mut setup = hl_gpu::RecordingSink::with_full_caps();
+        let surface = hl_vulkan::service::present::create_surface(&mut device, &mut setup, 16, 16, 44, None).unwrap();
+        let swapchain = hl_vulkan::service::present::create_swapchain(&mut device, &mut setup, surface, 2).unwrap();
+        let token = state.insert_device(device) as usize;
+        state.pending_swapchain_destroys.insert((token, swapchain));
+        state.remove_device(token as *mut c_void);
+        assert!(!state.devices.contains_key(&token));
+        assert!(state.retiring_devices.contains_key(&token));
+        assert!(state.pending_swapchain_destroys.contains(&(token, swapchain)));
     }
 }
 
 /// The present path's working set, borrowed disjointly from [`State`].
 pub struct PresentParts<'a> {
+    pub device_token: usize,
     pub device: &'a mut Device,
     pub sink: &'a mut RemoteCommandSink,
     pub presenters: &'a mut Presenters,

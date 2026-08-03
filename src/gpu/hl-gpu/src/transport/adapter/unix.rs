@@ -297,27 +297,44 @@ impl Connection<'_> {
     /// Write the executor-produced normalized persistent delta following a partial acknowledgement.
     /// Framing is `[replayable:u8][encoded_len:u32][encoded commands]`; the ordinary frame cap also
     /// bounds this peer-controlled allocation.
-    pub fn write_partial_delta(&self, commands: &[Cmd], replayable: bool) -> io::Result<()> {
-        let encoded = crate::protocol::codec::Encoder::stream(commands);
+    pub fn write_partial_delta(&self, commands: &[(usize, Cmd)], sources: &[usize], replayable: bool) -> io::Result<()> {
+        let encoded = crate::protocol::codec::Encoder::stream(&commands.iter().map(|(_, command)| command.clone()).collect::<Vec<_>>());
         if encoded.len() > MAX_FRAME_BYTES as usize {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "partial delta exceeds frame limit"));
         }
         let mut stream = self.stream;
         stream.write_all(&[u8::from(replayable)])?;
+        stream.write_all(&(sources.len() as u32).to_le_bytes())?;
+        for &source in sources { stream.write_all(&(source as u32).to_le_bytes())?; }
+        stream.write_all(&(commands.len() as u32).to_le_bytes())?;
+        for &(source, _) in commands { stream.write_all(&(source as u32).to_le_bytes())?; }
         stream.write_all(&(encoded.len() as u32).to_le_bytes())?;
         stream.write_all(&encoded)
     }
 
-    pub fn read_partial_delta(&self) -> io::Result<(Vec<Cmd>, bool)> {
+    pub fn read_partial_delta(&self) -> io::Result<(Vec<(usize, Cmd)>, Vec<usize>, bool)> {
         let mut stream = self.stream;
-        let mut header = [0u8; 5];
-        stream.read_exact(&mut header)?;
-        let replayable = match header[0] {
+        let mut flag = [0u8; 1];
+        stream.read_exact(&mut flag)?;
+        let replayable = match flag[0] {
             0 => false,
             1 => true,
             _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid partial delta replayability flag")),
         };
-        let len = u32::from_le_bytes(header[1..5].try_into().unwrap()) as usize;
+        let read_indices = |stream: &mut &UnixStream| -> io::Result<Vec<usize>> {
+            let mut word = [0u8; 4];
+            stream.read_exact(&mut word)?;
+            let count = u32::from_le_bytes(word) as usize;
+            if count > MAX_FRAME_BYTES as usize / 4 { return Err(io::Error::new(io::ErrorKind::InvalidData, "partial delta index list exceeds frame limit")); }
+            let mut indices = Vec::with_capacity(count);
+            for _ in 0..count { stream.read_exact(&mut word)?; indices.push(u32::from_le_bytes(word) as usize); }
+            Ok(indices)
+        };
+        let sources = read_indices(&mut stream)?;
+        let replay_sources = read_indices(&mut stream)?;
+        let mut len_bytes = [0u8; 4];
+        stream.read_exact(&mut len_bytes)?;
+        let len = u32::from_le_bytes(len_bytes) as usize;
         if len > MAX_FRAME_BYTES as usize {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "partial delta exceeds frame limit"));
         }
@@ -328,7 +345,8 @@ impl Connection<'_> {
         if commands.iter().any(|command| matches!(command, Cmd::Submit(_) | Cmd::Present { .. } | Cmd::WaitFence { .. })) {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "partial delta contains a non-persistent command"));
         }
-        Ok((commands, replayable))
+        if commands.len() != replay_sources.len() { return Err(io::Error::new(io::ErrorKind::InvalidData, "partial delta source count mismatch")); }
+        Ok((replay_sources.into_iter().zip(commands).collect(), sources, replayable))
     }
 
     // ---------------------------------------------------------------------------------------------------
@@ -506,21 +524,18 @@ mod partial_delta_tests {
     #[test]
     fn partial_delta_round_trips_persistent_commands() {
         let (writer, reader) = UnixStream::pair().unwrap();
-        Connection::new(&writer).write_partial_delta(&[Cmd::CreateFence(7)], true).unwrap();
-        assert_eq!(Connection::new(&reader).read_partial_delta().unwrap(), (vec![Cmd::CreateFence(7)], true));
+        Connection::new(&writer).write_partial_delta(&[(3, Cmd::CreateFence(7))], &[2, 3], true).unwrap();
+        assert_eq!(Connection::new(&reader).read_partial_delta().unwrap(), (vec![(3, Cmd::CreateFence(7))], vec![2, 3], true));
     }
 
     #[test]
     fn partial_delta_rejects_submit_and_bad_flag() {
         let (mut writer, reader) = UnixStream::pair().unwrap();
-        let encoded = crate::protocol::codec::Encoder::stream(&[Cmd::Submit(CommandBuffer::default())]);
-        writer.write_all(&[1]).unwrap();
-        writer.write_all(&(encoded.len() as u32).to_le_bytes()).unwrap();
-        writer.write_all(&encoded).unwrap();
+        Connection::new(&writer).write_partial_delta(&[(0, Cmd::Submit(CommandBuffer::default()))], &[0], false).unwrap();
         assert_eq!(Connection::new(&reader).read_partial_delta().unwrap_err().kind(), io::ErrorKind::InvalidData);
 
         let (mut writer, reader) = UnixStream::pair().unwrap();
-        writer.write_all(&[2, 0, 0, 0, 0]).unwrap();
+        writer.write_all(&[2]).unwrap();
         assert_eq!(Connection::new(&reader).read_partial_delta().unwrap_err().kind(), io::ErrorKind::InvalidData);
     }
 
