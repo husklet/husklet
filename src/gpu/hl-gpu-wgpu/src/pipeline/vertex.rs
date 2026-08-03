@@ -37,11 +37,19 @@ impl VertexState {
             (6, 2) => F::Sint32x2,
             (6, 3) => F::Sint32x3,
             (6, 4) => F::Sint32x4,
-            // 16-bit float (x2 / x4 only)
+            // 16-bit float
+            (7, 1) => F::Float16,
             (7, 2) => F::Float16x2,
             (7, 4) => F::Float16x4,
             (8, 4) if normalized => F::Unorm10_10_10_2,
+            (9, 4) if normalized => F::Unorm8x4Bgra,
             // 8-bit (x2 / x4 only), normalized → Unorm/Snorm else Uint/Sint
+            (1, 1) => {
+                if normalized { F::Unorm8 } else { F::Uint8 }
+            }
+            (2, 1) => {
+                if normalized { F::Snorm8 } else { F::Sint8 }
+            }
             (1, 2) => {
                 if normalized {
                     F::Unorm8x2
@@ -70,7 +78,13 @@ impl VertexState {
                     F::Sint8x4
                 }
             }
-            // 16-bit integer (x2 / x4 only), normalized → Unorm/Snorm else Uint/Sint
+            // 16-bit integer, normalized → Unorm/Snorm else Uint/Sint
+            (3, 1) => {
+                if normalized { F::Unorm16 } else { F::Uint16 }
+            }
+            (4, 1) => {
+                if normalized { F::Snorm16 } else { F::Sint16 }
+            }
             (3, 2) => {
                 if normalized {
                     F::Unorm16x2
