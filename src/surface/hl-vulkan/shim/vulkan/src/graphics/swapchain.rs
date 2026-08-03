@@ -256,6 +256,9 @@ pub extern "C" fn vkQueuePresentKHR(
         unsafe { std::slice::from_raw_parts(pi.p_swapchains, pi.swapchain_count as usize) };
     let indices =
         unsafe { std::slice::from_raw_parts(pi.p_image_indices, pi.swapchain_count as usize) };
+    let mut per_swapchain_results = (!pi.p_results.is_null()).then(|| unsafe {
+        std::slice::from_raw_parts_mut(pi.p_results, pi.swapchain_count as usize)
+    });
     StateStore::with(|s| {
         let Some(parts) = s.present_parts() else {
             return VK_ERROR_INITIALIZATION_FAILED;
@@ -276,7 +279,8 @@ pub extern "C" fn vkQueuePresentKHR(
         static NATIVE_COMMIT_FAILED: crate::logging::Latch = crate::logging::Latch::new();
         static READBACK_FAILED: crate::logging::Latch = crate::logging::Latch::new();
         static SHM_COMMIT_FAILED: crate::logging::Latch = crate::logging::Latch::new();
-        for (&sc, &idx) in swapchains.iter().zip(indices) {
+        for (position, (&sc, &idx)) in swapchains.iter().zip(indices).enumerate() {
+            PresentResults::write(&mut per_swapchain_results, position, VK_SUCCESS);
             let native = if native_present {
                 presenters
                     .get_mut(sc)
@@ -296,7 +300,9 @@ pub extern "C" fn vkQueuePresentKHR(
                         Status::from_error(&e)
                     );
                 }
-                res = Status::from_error(&e);
+                let result = Status::from_error(&e);
+                PresentResults::write(&mut per_swapchain_results, position, result);
+                res = result;
                 continue;
             }
             if let Some(frame) = native {
@@ -307,6 +313,11 @@ pub extern "C" fn vkQueuePresentKHR(
                             "present reserved a native frame for an unknown swapchain sc={sc:#x}"
                         );
                     }
+                    PresentResults::write(
+                        &mut per_swapchain_results,
+                        position,
+                        VK_ERROR_OUT_OF_DATE_KHR,
+                    );
                     res = VK_ERROR_OUT_OF_DATE_KHR;
                     continue;
                 };
@@ -334,7 +345,9 @@ pub extern "C" fn vkQueuePresentKHR(
                     if let Some(Some(presenter)) = presenters.get_mut(sc) {
                         presenter.retire_native();
                     }
-                    res = error.to_vk_result();
+                    let result = error.to_vk_result();
+                    PresentResults::write(&mut per_swapchain_results, position, result);
+                    res = result;
                 }
                 continue;
             }
@@ -365,11 +378,21 @@ pub extern "C" fn vkQueuePresentKHR(
                         vk
                     );
                 }
+                PresentResults::write(&mut per_swapchain_results, position, vk);
                 res = vk;
             }
         }
         res
     })
+}
+
+struct PresentResults;
+impl PresentResults {
+    fn write(results: &mut Option<&mut [VkResult]>, index: usize, result: VkResult) {
+        if let Some(slot) = results.as_deref_mut().and_then(|results| results.get_mut(index)) {
+            *slot = result;
+        }
+    }
 }
 
 /// Marshal one presented frame's XRGB plane onto the app's OWN `wl_surface` via a cached
@@ -427,6 +450,17 @@ mod tests {
 
     fn plane() -> (Vec<u8>, u32, u32) {
         (vec![0xFFu8; 16], 2, 2)
+    }
+
+    #[test]
+    fn per_swapchain_results_replace_every_caller_sentinel() {
+        let mut values = [VK_ERROR_DEVICE_LOST, VK_ERROR_DEVICE_LOST];
+        let mut results = Some(values.as_mut_slice());
+
+        PresentResults::write(&mut results, 0, VK_SUCCESS);
+        PresentResults::write(&mut results, 1, VK_ERROR_OUT_OF_DATE_KHR);
+
+        assert_eq!(values, [VK_SUCCESS, VK_ERROR_OUT_OF_DATE_KHR]);
     }
 
     /// An unbound swapchain has no known target, so nothing was promised — readback-only is truthful.
