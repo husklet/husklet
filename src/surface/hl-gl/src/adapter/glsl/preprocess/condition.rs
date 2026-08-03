@@ -144,7 +144,7 @@ impl<'a, V: Values> Expression<'a, V> {
         if depth > MAX_DEPTH {
             return None;
         }
-        let condition = self.binary(0, depth + 1)?;
+        let condition = self.binary(0, depth)?;
         if !self.take("?") {
             return Some(condition);
         }
@@ -176,7 +176,9 @@ impl<'a, V: Values> Expression<'a, V> {
         let Some(operators) = LEVELS.get(level) else {
             return self.unary(depth + 1);
         };
-        let mut left = self.binary(level + 1, depth + 1)?;
+        // Walking the fixed precedence table is parser machinery, not nesting in the source. Counting every
+        // level against MAX_DEPTH rejected ordinary parenthesized expressions before reaching their token.
+        let mut left = self.binary(level + 1, depth)?;
         loop {
             let Some(symbol) = operators
                 .iter()
@@ -186,7 +188,7 @@ impl<'a, V: Values> Expression<'a, V> {
                 return Some(left);
             };
             self.at += 1;
-            let right = self.binary(level + 1, depth + 1)?;
+            let right = self.binary(level + 1, depth)?;
             left = apply(symbol, left, right)?;
         }
     }

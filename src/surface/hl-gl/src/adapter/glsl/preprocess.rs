@@ -199,6 +199,10 @@ impl Preprocessor {
         }
         let resolved = self.macros.resolve_defined(tail);
         let expanded = self.macros.expand(&resolved, line)?;
+        // Expansion can itself produce `defined` (for example `#define HAS_FOO defined(FOO)`). Direct
+        // operands were resolved before expansion so their names were not substituted; resolve this second
+        // generation afterwards as required by the rescan rules.
+        let expanded = self.macros.resolve_defined(&expanded);
         Expression::evaluate(&expanded, Unknown::Zero, &())
             .map(|value| value != 0)
             .ok_or(PreprocessError::Condition {

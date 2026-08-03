@@ -219,6 +219,31 @@ void main() { gl_FragColor = SCALE(base, 3); }
     assert_naga_parses(&translated, naga::ShaderStage::Fragment);
 }
 
+/// dEQP uses both a `defined` operator produced by an object macro and shallow unary/shift expressions.
+/// Neither shape is deeply nested source, and both must select the live branch.
+#[test]
+fn expanded_defined_and_unary_shift_conditions() {
+    for (source, selected) in [
+        (
+            "#define HAS_MISSING defined(MISSING)\n#if !HAS_MISSING\nint live;\n#endif\n",
+            "int live;",
+        ),
+        (
+            "#if !((~2 >> 1) & 1)\nint live;\n#endif\n",
+            "int live;",
+        ),
+        (
+            "#if !((~(- - - - - 1 + + + + + +1) >> 1) & 1)\nint first;\n#else\nint second;\n#endif\n",
+            "int second;",
+        ),
+    ] {
+        let preprocessed = glsl::Source::new(source)
+            .preprocessed()
+            .unwrap_or_else(|error| panic!("condition rejected for {source:?}: {error}"));
+        assert!(preprocessed.contains(selected), "{preprocessed}");
+    }
+}
+
 /// A rejected construct must produce an attributed diagnostic naming the line and the construct — never a
 /// silent pass-through that fails later in the host compiler.
 #[test]
