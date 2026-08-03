@@ -1,4 +1,6 @@
 use super::*;
+use hl_gpu::protocol::model::descriptor::TextureSubresource;
+use hl_gpu::protocol::model::enums::TextureAspect;
 
 #[test]
 fn disabled_arrays_lower_current_generic_attributes() {
@@ -702,8 +704,25 @@ fn replacing_fbo_color_preserves_attached_depth_storage() {
         GL_RENDERBUFFER,
         depth,
     );
+    let stencil = c.gen_renderbuffer();
+    record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, stencil);
+    record::renderbuffer_storage(
+        &mut c,
+        GL_RENDERBUFFER,
+        GL_STENCIL_INDEX8,
+        64,
+        64,
+    );
+    record::framebuffer_renderbuffer(
+        &mut c,
+        GL_FRAMEBUFFER,
+        GL_STENCIL_ATTACHMENT,
+        GL_RENDERBUFFER,
+        stencil,
+    );
 
     record::enable(&mut c, GL_DEPTH_TEST);
+    record::enable(&mut c, GL_STENCIL_TEST);
     flat_program(&mut c);
     tri_vbo(&mut c, 8);
     record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
@@ -768,4 +787,45 @@ fn replacing_fbo_color_preserves_attached_depth_storage() {
         .expect("redefined depth attachment");
     assert_ne!(redefined.texture, second.texture);
     assert_eq!(redefined.depth_load, LoadOp::Clear);
+    assert_eq!(redefined.stencil_load, LoadOp::Load);
+    assert!(submit_ops(&sink.batches[2]).iter().any(|op| matches!(
+        op,
+        Enc::CopyTextureToTexture {
+            src,
+            dst,
+            src_sub: TextureSubresource { aspect: TextureAspect::StencilOnly, .. },
+            dst_sub: TextureSubresource { aspect: TextureAspect::StencilOnly, .. },
+            ..
+        } if *src == second.texture && *dst == redefined.texture
+    )));
+
+    record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, stencil);
+    record::renderbuffer_storage(
+        &mut c,
+        GL_RENDERBUFFER,
+        GL_STENCIL_INDEX8,
+        64,
+        64,
+    );
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let recreated_stencil = submit_ops(&sink.batches[3])
+        .iter()
+        .find_map(|op| match op {
+            Enc::BeginRenderPass { depth: Some(depth), .. } => Some(depth.clone()),
+            _ => None,
+        })
+        .expect("stencil-recreated depth attachment");
+    assert_eq!(recreated_stencil.depth_load, LoadOp::Load);
+    assert_eq!(recreated_stencil.stencil_load, LoadOp::Clear);
+    assert!(submit_ops(&sink.batches[3]).iter().any(|op| matches!(
+        op,
+        Enc::CopyTextureToTexture {
+            src,
+            dst,
+            src_sub: TextureSubresource { aspect: TextureAspect::DepthOnly, .. },
+            dst_sub: TextureSubresource { aspect: TextureAspect::DepthOnly, .. },
+            ..
+        } if *src == redefined.texture && *dst == recreated_stencil.texture
+    )));
 }
