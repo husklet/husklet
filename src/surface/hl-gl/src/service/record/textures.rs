@@ -41,21 +41,55 @@ pub fn validate_tex_image_2d(
     if ctx.client_version().0 >= 3 {
         return true;
     }
-    let valid = (internalformat == format
-        && matches!(
-            (format, type_),
-            (GL_RGB, GL_UNSIGNED_BYTE | GL_UNSIGNED_SHORT_5_6_5)
-                | (
-                    GL_RGBA,
-                    GL_UNSIGNED_BYTE | GL_UNSIGNED_SHORT_4_4_4_4 | GL_UNSIGNED_SHORT_5_5_5_1
-                )
-                | (GL_BGRA_EXT, GL_UNSIGNED_BYTE)
-        ))
+    let valid = valid_tex_image_2d_es2(internalformat, format, type_)
         || (internalformat == GL_BGRA8_EXT && format == GL_BGRA_EXT && type_ == GL_UNSIGNED_BYTE);
     if !valid {
         ctx.set_gl_error(GL_INVALID_ENUM);
     }
     valid
+}
+
+/// ES 2.0 table 3.4 legal unsized `glTexImage2D` format/type triples.
+fn valid_tex_image_2d_es2(internalformat: u32, format: u32, type_: u32) -> bool {
+    internalformat == format
+        && matches!(
+            (format, type_),
+            (
+                GL_ALPHA | GL_LUMINANCE | GL_LUMINANCE_ALPHA,
+                GL_UNSIGNED_BYTE
+            ) | (GL_RGB, GL_UNSIGNED_BYTE | GL_UNSIGNED_SHORT_5_6_5)
+                | (
+                    GL_RGBA,
+                    GL_UNSIGNED_BYTE | GL_UNSIGNED_SHORT_4_4_4_4 | GL_UNSIGNED_SHORT_5_5_5_1
+                )
+                | (GL_BGRA_EXT, GL_UNSIGNED_BYTE)
+        )
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    #[test]
+    fn es2_accepts_legacy_single_and_dual_channel_uploads() {
+        for format in [GL_ALPHA, GL_LUMINANCE, GL_LUMINANCE_ALPHA] {
+            assert!(valid_tex_image_2d_es2(format, format, GL_UNSIGNED_BYTE));
+        }
+    }
+
+    #[test]
+    fn es2_legacy_formats_still_require_matching_unsigned_byte_input() {
+        assert!(!valid_tex_image_2d_es2(
+            GL_LUMINANCE,
+            GL_ALPHA,
+            GL_UNSIGNED_BYTE
+        ));
+        assert!(!valid_tex_image_2d_es2(
+            GL_LUMINANCE,
+            GL_LUMINANCE,
+            GL_FLOAT
+        ));
+    }
 }
 
 /// `glTexImage2D` — `pixels` is the already-RGBA8-converted image (`w*h*4`) bound to the active unit; the
