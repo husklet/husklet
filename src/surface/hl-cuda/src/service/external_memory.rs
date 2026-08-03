@@ -144,6 +144,59 @@ mod tests {
     }
 
     #[test]
+    fn mapped_range_writes_its_full_view_at_the_backing_offset() {
+        let mut ctx = context();
+        let mut sink = Sink {
+            bytes: 64,
+            imports: Vec::new(),
+            batches: Vec::new(),
+        };
+        let memory = import(&mut ctx, &mut sink, ExportId(7), 64).unwrap();
+        let pointer = mapped_buffer(&mut ctx, memory, 8, 16).unwrap();
+        let pattern = [0x5a; 16];
+        crate::service::transfer::memcpy_htod(&mut ctx, &mut sink, pointer, &pattern).unwrap();
+        assert!(matches!(
+            sink.batches.last().unwrap().as_slice(),
+            [Cmd::WriteBuffer { offset: 8, data, .. }] if data == &pattern
+        ));
+
+        let tail = [0x6b; 12];
+        crate::service::transfer::memcpy_htod(
+            &mut ctx,
+            &mut sink,
+            DevicePtr(pointer.0 + 4),
+            &tail,
+        )
+        .unwrap();
+        assert!(matches!(
+            sink.batches.last().unwrap().as_slice(),
+            [Cmd::WriteBuffer { offset: 12, data, .. }] if data == &tail
+        ));
+
+        assert!(crate::service::transfer::memcpy_htod(
+            &mut ctx,
+            &mut sink,
+            DevicePtr(pointer.0 + 4),
+            &[0; 13],
+        )
+        .is_err());
+        assert!(crate::service::transfer::memcpy_htod(
+            &mut ctx,
+            &mut sink,
+            DevicePtr(pointer.0 + 15),
+            &[0; 2],
+        )
+        .is_err());
+        assert!(crate::service::transfer::memcpy_htod(
+            &mut ctx,
+            &mut sink,
+            DevicePtr(u64::MAX),
+            &[0],
+        )
+        .is_err());
+    }
+
+    #[test]
     fn mapped_pointer_must_be_freed_before_external_handle() {
         let mut ctx = context();
         let mut sink = Sink {

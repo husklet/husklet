@@ -42,11 +42,15 @@ fn resolve_range(
     let (buf, off) = resolve(ctx, p, what)?;
     // `containing` returns the allocation base+size; `off` = p - base, so `size - off` (the bytes from `p`
     // to the allocation end) never underflows — `resolve` already proved `off < size.max(1)`.
-    let (_base, size) = ctx
+    let (base, size) = ctx
         .mem
         .containing(p)
         .expect("a resolved device pointer always has a containing allocation");
-    let avail = size.saturating_sub(off);
+    // `off` is the offset in the backing buffer. Imported external-memory mappings may start at a
+    // non-zero backing offset, so it is not the pointer's offset within this CUDA allocation. Bounds
+    // belong to the CUDA view: subtract its device-pointer base, then retain `off` only for lowering.
+    let pointer_offset = p.0 - base;
+    let avail = size.saturating_sub(pointer_offset);
     if len > avail {
         hl_log::hl_error!(
             hl_log::tag::CUDA,
