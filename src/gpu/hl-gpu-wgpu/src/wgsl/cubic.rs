@@ -43,10 +43,14 @@ fn _hl_cubic_mip_linear(t:texture_2d<f32>,uv:vec2<f32>,lod:f32,au:u32,av:u32,bc:
 }
 fn _hl_sample_auto(t: texture_2d<f32>, s: sampler, uv: vec2<f32>, mn:u32, mg:u32, mm:u32, au:u32, av:u32, aw:u32, bc:u32, lmin:u32, lmax:u32) -> vec4<f32> {
     let size = vec2<f32>(textureDimensions(t, 0));
-    let rho = max(length(dpdx(uv*size)), length(dpdy(uv*size)));
+    let gx=dpdx(uv); let gy=dpdy(uv);
+    let rho = max(length(gx*size), length(gy*size));
     let lod = clamp(log2(max(rho, 0.000001)), bitcast<f32>(lmin), bitcast<f32>(lmax));
     let filter_mode = select(mg, mn, lod > 0.0);
-    if filter_mode != 2u { return textureSample(t, s, _hl_mirror_clamp_uv(uv,au,av)); }
+    if filter_mode != 2u {
+        let sign=vec2(select(1.0,-1.0,uv.x<0.0 && au==3u),select(1.0,-1.0,uv.y<0.0 && av==3u));
+        return textureSampleGrad(t,s,_hl_mirror_clamp_uv(uv,au,av),gx*sign,gy*sign);
+    }
     if mm == 1u {
         return _hl_cubic_mip_linear(t,uv,lod,au,av,bc);
     }
@@ -119,6 +123,7 @@ mod tests {
 @fragment fn main()->@location(0) vec4<f32>{return textureSample(t,_hl_sampler_g0_b1,vec2(0.5));}"#.into();
         let output=rewrite(source,&[SamplerMetadataLayout{group:0,binding:2,samplers:vec![SamplerMetadataSlot{binding:1,base_ordinal:0,count:1}]}]).unwrap();
         assert!(output.contains("_hl_sample_auto(t, _hl_sampler_g0_b1"));
+        assert!(output.contains("textureSampleGrad(t,s,_hl_mirror_clamp_uv(uv,au,av),gx*sign,gy*sign)"));
         let module=naga::front::wgsl::parse_str(&output).unwrap();
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(),naga::valid::Capabilities::all()).validate(&module).unwrap();
     }
