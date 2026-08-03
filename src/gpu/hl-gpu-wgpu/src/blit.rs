@@ -76,6 +76,44 @@ fn fs_bgra4(in: VsOut) -> @location(0) vec4<f32> {
     let uv = xform.uv_off + in.uv * xform.uv_scale;
     return textureSample(src_tex, src_smp, uv).bgra;
 }
+
+fn cubic_weights(t: f32) -> vec4<f32> {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    return vec4<f32>(
+        -0.5 * t + t2 - 0.5 * t3,
+        1.0 - 2.5 * t2 + 1.5 * t3,
+        0.5 * t + 2.0 * t2 - 1.5 * t3,
+        -0.5 * t2 + 0.5 * t3,
+    );
+}
+
+fn sample_cubic(uv: vec2<f32>) -> vec4<f32> {
+    let size = vec2<i32>(textureDimensions(src_tex));
+    let coord = uv * vec2<f32>(size);
+    let base = vec2<i32>(floor(coord - vec2<f32>(1.5)));
+    let phase = fract(coord - vec2<f32>(0.5));
+    let wx = cubic_weights(phase.x);
+    let wy = cubic_weights(phase.y);
+    var result = vec4<f32>(0.0);
+    for (var y = 0; y < 4; y++) {
+        for (var x = 0; x < 4; x++) {
+            let p = clamp(base + vec2<i32>(x, y), vec2<i32>(0), size - vec2<i32>(1));
+            result += textureLoad(src_tex, p, 0) * wx[x] * wy[y];
+        }
+    }
+    return result;
+}
+
+@fragment
+fn fs_cubic(in: VsOut) -> @location(0) vec4<f32> {
+    return sample_cubic(xform.uv_off + in.uv * xform.uv_scale);
+}
+
+@fragment
+fn fs_cubic_bgra4(in: VsOut) -> @location(0) vec4<f32> {
+    return sample_cubic(xform.uv_off + in.uv * xform.uv_scale).bgra;
+}
 "#;
 
 /// D3 source variant. Each destination slice gets its own normalized source-z coordinate while x/y
@@ -143,7 +181,7 @@ pub(crate) struct BlitCache {
     linear: wgpu::Sampler,
     /// A non-filtering sampler, which is the only kind a `NonFiltering` binding accepts.
     non_filtering: wgpu::Sampler,
-    pipelines: HashMap<(wgpu::TextureFormat, bool), wgpu::RenderPipeline>,
+    pipelines: HashMap<(wgpu::TextureFormat, bool, bool), wgpu::RenderPipeline>,
     d3_module: wgpu::ShaderModule,
     d3_bind_group_layout: [wgpu::BindGroupLayout; 2],
     d3_pipeline_layout: [wgpu::PipelineLayout; 2],
@@ -379,7 +417,7 @@ impl BlitCache {
             (false, _) => &self.non_filtering,
             (true, Filter::Nearest) => &self.nearest,
             (true, Filter::Linear) => &self.linear,
-            (true, Filter::Cubic) => unreachable!("cubic rejected before sampler selection"),
+            (true, Filter::Cubic) => &self.nearest,
         }
     }
 
@@ -389,8 +427,9 @@ impl BlitCache {
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
         can_filter: bool,
+        cubic: bool,
     ) {
-        if self.pipelines.contains_key(&(format, can_filter)) {
+        if self.pipelines.contains_key(&(format, can_filter, cubic)) {
             return;
         }
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -410,10 +449,11 @@ impl BlitCache {
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &self.module,
-                entry_point: Some(if format == wgpu::TextureFormat::B4g4r4a4Unorm {
-                    "fs_bgra4"
-                } else {
-                    "fs_main"
+                entry_point: Some(match (cubic, format == wgpu::TextureFormat::B4g4r4a4Unorm) {
+                    (true, true) => "fs_cubic_bgra4",
+                    (true, false) => "fs_cubic",
+                    (false, true) => "fs_bgra4",
+                    (false, false) => "fs_main",
                 }),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
@@ -425,7 +465,7 @@ impl BlitCache {
             multiview: None,
             cache: None,
         });
-        self.pipelines.insert((format, can_filter), pipeline);
+        self.pipelines.insert((format, can_filter, cubic), pipeline);
     }
 
     fn ensure_d3_pipeline(
@@ -627,17 +667,12 @@ impl WgpuExecutor {
             )
         };
         let (src_class, dst_class) = (src_fmt.numeric_class(), dst_fmt.numeric_class());
-        if filter == Filter::Cubic {
-            return Err(GpuError::Unsupported(
-                "wgpu: cubic blit filtering is not implemented",
-            ));
-        }
         if src_class != dst_class {
             return Err(GpuError::Invalid(
                 "wgpu: blit source and destination numeric classes differ",
             ));
         }
-        if src_class != TextureNumericClass::Float && filter == Filter::Linear {
+        if src_class != TextureNumericClass::Float && filter != Filter::Nearest {
             return Err(GpuError::Unsupported(
                 "wgpu: linear filtering is invalid for an integer blit source",
             ));
@@ -679,6 +714,11 @@ impl WgpuExecutor {
         }
 
         let integer_render = src_class != TextureNumericClass::Float;
+        if filter == Filter::Cubic
+            && src_dim == hl_gpu::protocol::model::enums::TextureDim::D3
+        {
+            return Err(GpuError::Unsupported("wgpu: cubic 3D blit filtering"));
+        }
         if integer_render {
             let source = texture::WgpuTexture::get(res, src)?;
             let destination = texture::WgpuTexture::get(res, dst)?;
@@ -781,7 +821,7 @@ impl WgpuExecutor {
         } else if src_dim == hl_gpu::protocol::model::enums::TextureDim::D3 {
             cache.ensure_d3_pipeline(device, dst_wfmt, can_filter);
         } else {
-            cache.ensure_pipeline(device, dst_wfmt, can_filter);
+            cache.ensure_pipeline(device, dst_wfmt, can_filter, filter == Filter::Cubic);
         }
 
         // Build a SINGLE-LAYER 2D view of each side rather than binding the texture's default view.
@@ -827,7 +867,9 @@ impl WgpuExecutor {
         } else if d3_float {
             cache.d3_pipelines.get(&(dst_wfmt, can_filter))
         } else {
-            cache.pipelines.get(&(dst_wfmt, can_filter))
+            cache
+                .pipelines
+                .get(&(dst_wfmt, can_filter, filter == Filter::Cubic))
         }
         .expect("pipeline built above");
 

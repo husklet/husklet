@@ -249,6 +249,23 @@ fn scaling_blit_upscales_exact_pixels() {
     }
 }
 
+#[test]
+fn cubic_blit_matches_the_cts_catmull_rom_impulse_weight() {
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a Metal adapter is required to prove cubic execution");
+    let mut source = vec![0_u8; 4 * 4 * 4];
+    source[(2 * 4 + 2) * 4] = 255;
+    for alpha in source[3..].iter_mut().step_by(4) {
+        *alpha = 255;
+    }
+    let cubic = blit_scaled(&mut exec, 4, 4, &source, 2, 2, Filter::Cubic);
+    assert_eq!(
+        px(&cubic, 2, 1, 1),
+        [81, 0, 0, 255],
+        "half-phase Catmull-Rom impulse weight is (9/16)^2"
+    );
+}
+
 // -------------------------------------------------------------------------------------------------
 // Minimal dependency-free PNG writer (uncompressed/stored zlib) — copied from the stencil demo. Writes an
 // EXACT-size RGBA image (no host re-scaling): the pixels are the real blit readback.
