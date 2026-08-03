@@ -172,6 +172,13 @@ pub const NATIVE_FORMATS: &[TextureFormat] = &[
     TextureFormat::R5g6b5Unorm,
     TextureFormat::A1r5g5b5Unorm,
     TextureFormat::B4g4r4a4Unorm,
+    // Vulkan spellings lowered through the exact packed formats above. These remain distinct protocol
+    // values because their channel order controls transfer conversion even though their physical wgpu
+    // allocation is shared.
+    TextureFormat::R4g4b4a4Unorm,
+    TextureFormat::R5g5b5a1Unorm,
+    TextureFormat::A4r4g4b4Unorm,
+    TextureFormat::A4b4g4r4Unorm,
 ];
 
 /// The depth/stencil formats a backend can materialize as a real depth target (the software oracle

@@ -197,6 +197,24 @@ fn every_advertised_texture_format_is_really_creatable() {
 }
 
 #[test]
+fn packed_vulkan_aliases_are_advertised() {
+    let exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
+    let caps = exec.capabilities();
+    for format in [
+        TextureFormat::R4g4b4a4Unorm,
+        TextureFormat::R5g5b5a1Unorm,
+        TextureFormat::A4r4g4b4Unorm,
+        TextureFormat::A4b4g4r4Unorm,
+    ] {
+        assert!(
+            caps.supports_format(format),
+            "packed Vulkan alias {format:?} must survive batch validation"
+        );
+    }
+}
+
+#[test]
 fn timeline_fences_advertised_false_but_emulated_wait_services_a_signal() {
     let mut exec = WgpuExecutor::new(DeviceConfig::default())
         .expect("a GPU adapter is required to prove the wgpu executor");
