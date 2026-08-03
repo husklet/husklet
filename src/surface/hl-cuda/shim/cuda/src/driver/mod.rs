@@ -13,6 +13,7 @@ use platform::{write_cstr, CInput};
 
 mod device;
 mod extended;
+mod external_memory;
 mod external_semaphore;
 mod graphics;
 mod launch;
@@ -24,6 +25,7 @@ mod sync;
 
 pub use device::*;
 pub use extended::*;
+pub use external_memory::*;
 pub use external_semaphore::*;
 pub use graphics::*;
 pub use launch::*;

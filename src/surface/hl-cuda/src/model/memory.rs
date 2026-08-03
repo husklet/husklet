@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 pub struct Alloc {
     pub buffer: u32,
     pub size: u64,
+    pub buffer_offset: u64,
 }
 
 /// Base device-pointer → allocation map with a monotonic, page-aligned bump cursor.
@@ -41,7 +42,29 @@ impl Allocations {
     pub fn insert(&mut self, buffer: u32, size: u64) -> DevicePtr {
         let ptr = self.next_ptr;
         self.next_ptr = (self.next_ptr + size.max(1) + 255) & !255;
-        self.map.insert(ptr, Alloc { buffer, size });
+        self.map.insert(
+            ptr,
+            Alloc {
+                buffer,
+                size,
+                buffer_offset: 0,
+            },
+        );
+        DevicePtr(ptr)
+    }
+
+    /// Record a device-pointer view into an already-existing imported buffer.
+    pub fn insert_alias(&mut self, buffer: u32, size: u64, buffer_offset: u64) -> DevicePtr {
+        let ptr = self.next_ptr;
+        self.next_ptr = (self.next_ptr + size.max(1) + 255) & !255;
+        self.map.insert(
+            ptr,
+            Alloc {
+                buffer,
+                size,
+                buffer_offset,
+            },
+        );
         DevicePtr(ptr)
     }
 
@@ -68,7 +91,7 @@ impl Allocations {
     pub fn resolve(&self, p: DevicePtr) -> Option<(BufferId, u64)> {
         for (&base, a) in &self.map {
             if p.0 >= base && p.0 < base + a.size.max(1) {
-                return Some((BufferId(a.buffer), p.0 - base));
+                return Some((BufferId(a.buffer), a.buffer_offset + p.0 - base));
             }
         }
         None

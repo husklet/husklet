@@ -20,8 +20,10 @@ mod doorbell;
 pub use doorbell::Doorbell;
 mod readback;
 pub use readback::ReadbackResponseError;
+mod resource_token;
 #[cfg(target_os = "linux")]
 mod sync_token;
+pub use resource_token::OpaqueResourceFd;
 #[cfg(target_os = "linux")]
 pub use sync_token::OpaqueSyncFd;
 mod write;

@@ -3,7 +3,7 @@
 //! For each shim (`cuda` -> libcuda.so.1, `cudart` -> libcudart.so.1, `nvml` -> libnvidia-ml.so.1) this:
 //!   1. natively builds the aarch64 cdylib (the host arch — the build MUST succeed here), then
 //!   2. `nm -D`s its exported dynamic symbols and asserts the API surface EQUALS the committed golden
-//!      symbol list exactly (no missing, no extra) and the count matches (145 / 62 / 62), and
+//!      symbol list exactly (no missing, no extra) and the count matches (148 / 62 / 62), and
 //!   3. cross-checks the generator's source: the shim's manifest names equal the same golden.
 //!
 //! The build shares the dedicated `target/shim-build` dir with `build.rs`, so after the crate's build
@@ -42,7 +42,7 @@ fn shims() -> Vec<Shim> {
             lib: "libhl_cuda_guest.so",
             golden: "shim/cuda/tests/golden/abi_symbols.txt",
             manifest: "shim/cuda/registry/cuda_driver.manifest",
-            expected: 145,
+            expected: 148,
             is_api: cuda_api,
         },
         Shim {

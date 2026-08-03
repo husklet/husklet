@@ -39,6 +39,7 @@ cuDevicePrimaryCtxReset_v2
 cuDevicePrimaryCtxRetain
 cuDevicePrimaryCtxSetFlags_v2
 cuDeviceTotalMem_v2
+cuDestroyExternalMemory
 cuDestroyExternalSemaphore
 cuDriverGetVersion
 cuEventCreate
@@ -48,6 +49,7 @@ cuEventQuery
 cuEventRecord
 cuEventRecordWithFlags
 cuEventSynchronize
+cuExternalMemoryGetMappedBuffer
 cuFuncGetAttribute
 cuFuncGetModule
 cuFuncGetName
@@ -69,6 +71,7 @@ cuGetProcAddress
 cuGetProcAddress_v2
 cuInit
 cuImportExternalSemaphore
+cuImportExternalMemory
 cuLaunchCooperativeKernel
 cuLaunchHostFunc
 cuLaunchKernel

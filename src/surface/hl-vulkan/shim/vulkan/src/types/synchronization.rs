@@ -104,6 +104,29 @@ pub struct VkExternalSemaphoreProperties {
 }
 
 #[repr(C)]
+pub struct VkPhysicalDeviceExternalBufferInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: u32,
+    pub usage: u32,
+    pub handle_type: u32,
+}
+
+#[repr(C)]
+pub struct VkExternalMemoryProperties {
+    pub external_memory_features: u32,
+    pub export_from_imported_handle_types: u32,
+    pub compatible_handle_types: u32,
+}
+
+#[repr(C)]
+pub struct VkExternalBufferProperties {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub external_memory_properties: VkExternalMemoryProperties,
+}
+
+#[repr(C)]
 pub struct VkQueryPoolCreateInfo {
     pub s_type: i32,
     pub p_next: *const c_void,

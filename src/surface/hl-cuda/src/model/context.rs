@@ -12,6 +12,7 @@
 
 use super::device::{CudaDeviceDesc, DevicePtr};
 use super::event::EventTable;
+use super::external_memory::ExternalMemories;
 use super::external_semaphore::ExternalSemaphores;
 use super::graphics::GraphicsResources;
 use super::memory::{Allocations, HostMemory};
@@ -34,6 +35,8 @@ pub struct CudaContext {
     pub events: EventTable,
     /// Cross-API timeline semaphores imported into this CUDA context.
     pub external_semaphores: ExternalSemaphores,
+    /// Vulkan buffer memory imported through an opaque FD.
+    pub external_memories: ExternalMemories,
     /// CUDA graphics-interop registrations imported into this context.
     pub graphics: GraphicsResources,
     /// Launch pipeline cache: `(module, entry, block)` → `(shader id, pipeline id)`, so a repeated
@@ -67,6 +70,7 @@ impl CudaContext {
             streams: StreamTable::new(),
             events: EventTable::new(),
             external_semaphores: ExternalSemaphores::new(),
+            external_memories: ExternalMemories::new(),
             graphics: GraphicsResources::new(),
             pipelines: HashMap::new(),
             global_allocs: HashMap::new(),

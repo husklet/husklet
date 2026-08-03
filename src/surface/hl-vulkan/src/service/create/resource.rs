@@ -2,7 +2,9 @@
 
 use crate::model::device::IrIds;
 use crate::model::instance::Instance;
-use crate::model::memory::{BufferRec, BufferUsage, Format, ImageRec, ImageUsage, MemRec, SamplerRec};
+use crate::model::memory::{
+    BufferRec, BufferUsage, Format, ImageRec, ImageUsage, MemRec, SamplerRec,
+};
 use crate::model::queue::FenceRec;
 use crate::*;
 use hl_gpu::protocol::model::descriptor::{BufferDesc, SamplerDesc};
@@ -116,10 +118,60 @@ impl Device {
                 bound_buffers: Vec::new(),
                 mapped: false,
                 pending_flush: None,
+                export_handle_types: 0,
             },
         );
         Ok(handle)
     }
+
+    /// Record the allocation's validated external handle types before it can be bound or exported.
+    pub fn set_memory_export_handle_types(
+        &mut self,
+        memory: VkDeviceMemory,
+        types: u32,
+    ) -> Result<()> {
+        let record = self.memories.get_mut(&memory).ok_or(GpuError::Invalid(
+            "vkAllocateMemory: unknown VkDeviceMemory after allocation",
+        ))?;
+        record.export_handle_types = types;
+        Ok(())
+    }
+}
+
+/// Export the single whole buffer dedicated to an opaque-FD allocation.
+pub fn export_memory_buffer(
+    dev: &Device,
+    sink: &mut dyn CommandSink,
+    memory: VkDeviceMemory,
+) -> Result<hl_gpu::ExportId> {
+    let allocation = dev.memories.get(&memory).ok_or(GpuError::Invalid(
+        "vkGetMemoryFdKHR: unknown VkDeviceMemory",
+    ))?;
+    if allocation.export_handle_types != 0x1 {
+        return Err(GpuError::Invalid(
+            "vkGetMemoryFdKHR: allocation was not created for opaque fd export",
+        ));
+    }
+    if allocation.mapped || allocation.bound_buffers.len() != 1 {
+        return Err(GpuError::Invalid(
+            "vkGetMemoryFdKHR: export requires one unmapped dedicated buffer",
+        ));
+    }
+    let buffer = dev
+        .buffers
+        .get(&allocation.bound_buffers[0])
+        .ok_or(GpuError::Invalid(
+            "vkGetMemoryFdKHR: bound buffer no longer exists",
+        ))?;
+    if buffer.bound_mem != Some(memory)
+        || buffer.bound_offset != 0
+        || buffer.size != allocation.size
+    {
+        return Err(GpuError::Invalid(
+            "vkGetMemoryFdKHR: allocation must exactly match its dedicated buffer",
+        ));
+    }
+    sink.export_buffer(hl_gpu::BufferId(buffer.ir_id))
 }
 
 /// `vkBindBufferMemory` — bind `memory` to `buffer` at `offset`. Errors on an unknown handle. No IR
@@ -281,11 +333,12 @@ pub fn refresh_mapped_buffer(
         return Ok(());
     }
     let bytes = sink.read_buffer(BufferId(ir_id), 0, size as usize)?;
-    let memory = dev.memories.get_mut(&memory).expect("memory validated above");
+    let memory = dev
+        .memories
+        .get_mut(&memory)
+        .expect("memory validated above");
     let start = bound_offset as usize;
-    let len = bytes
-        .len()
-        .min(memory.data.len().saturating_sub(start));
+    let len = bytes.len().min(memory.data.len().saturating_sub(start));
     memory.data[start..start + len].copy_from_slice(&bytes[..len]);
     Ok(())
 }
@@ -550,12 +603,24 @@ pub fn create_sampler_full(
 }
 
 pub fn create_sampler(
-    dev: &mut Device, sink: &mut dyn CommandSink, vk_min_filter: u32, vk_mag_filter: u32,
-    vk_mipmap_mode: u32, vk_address_uvw: [u32; 3], vk_compare: Option<u32>,
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    vk_min_filter: u32,
+    vk_mag_filter: u32,
+    vk_mipmap_mode: u32,
+    vk_address_uvw: [u32; 3],
+    vk_compare: Option<u32>,
 ) -> VkSampler {
     create_sampler_full(
-        dev, sink, vk_min_filter, vk_mag_filter, vk_mipmap_mode, vk_address_uvw,
-        [0.0, 32.0], 0, vk_compare,
+        dev,
+        sink,
+        vk_min_filter,
+        vk_mag_filter,
+        vk_mipmap_mode,
+        vk_address_uvw,
+        [0.0, 32.0],
+        0,
+        vk_compare,
     )
 }
 
@@ -588,7 +653,7 @@ struct SamplerAddress;
 impl SamplerAddress {
     fn from_vk(v: u32) -> AddressMode {
         match v {
-            0 => AddressMode::Repeat,           // REPEAT
+            0 => AddressMode::Repeat, // REPEAT
             1 => AddressMode::MirrorRepeat,
             4 => AddressMode::MirrorClampToEdge,
             3 => AddressMode::ClampToBorder,

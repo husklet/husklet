@@ -144,6 +144,7 @@ pub fn mem_free(ctx: &mut CudaContext, sink: &mut dyn CommandSink, ptr: DevicePt
         GpuError::Invalid("cuMemFree: pointer is not a live allocation base")
     })?;
     sink.submit(&[Cmd::DestroyBuffer(buffer)])?;
+    ctx.external_memories.release_pointer(ptr);
     hl_log::hl_debug!(
         hl_log::tag::CUDA,
         "mem_free buf={} ptr={:#x}",

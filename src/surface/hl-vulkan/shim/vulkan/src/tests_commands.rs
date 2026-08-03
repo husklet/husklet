@@ -214,15 +214,68 @@ fn debug_utils_object_name_is_stored() {
 }
 
 #[test]
-fn external_buffer_properties_report_no_handle_types() {
-    let mut properties = [0u64; 8];
-    properties[2] = u64::MAX;
+fn external_buffer_properties_are_export_only_opaque_fd() {
+    let info = VkPhysicalDeviceExternalBufferInfo {
+        s_type: 0,
+        p_next: core::ptr::null(),
+        flags: 0,
+        usage: 0x20,
+        handle_type: VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
+    };
+    let mut properties = VkExternalBufferProperties {
+        s_type: 0,
+        p_next: core::ptr::null_mut(),
+        external_memory_properties: VkExternalMemoryProperties {
+            external_memory_features: u32::MAX,
+            export_from_imported_handle_types: u32::MAX,
+            compatible_handle_types: u32::MAX,
+        },
+    };
     crate::devgroup::vkGetPhysicalDeviceExternalBufferProperties(
         core::ptr::null_mut(),
-        core::ptr::null(),
-        properties.as_mut_ptr() as *mut c_void,
+        &info as *const _ as *const c_void,
+        &mut properties as *mut _ as *mut c_void,
     );
-    assert_eq!(properties[2], 0);
+    assert_eq!(
+        properties
+            .external_memory_properties
+            .external_memory_features,
+        0x2
+    );
+    assert_eq!(
+        properties
+            .external_memory_properties
+            .export_from_imported_handle_types,
+        0
+    );
+    assert_eq!(
+        properties
+            .external_memory_properties
+            .compatible_handle_types,
+        1
+    );
+
+    let unsupported = VkPhysicalDeviceExternalBufferInfo {
+        handle_type: 2,
+        ..info
+    };
+    crate::devgroup::vkGetPhysicalDeviceExternalBufferPropertiesKHR(
+        core::ptr::null_mut(),
+        &unsupported as *const _ as *const c_void,
+        &mut properties as *mut _ as *mut c_void,
+    );
+    assert_eq!(
+        properties
+            .external_memory_properties
+            .external_memory_features,
+        0
+    );
+    assert_eq!(
+        properties
+            .external_memory_properties
+            .compatible_handle_types,
+        0
+    );
 }
 
 #[test]
@@ -495,7 +548,11 @@ fn a_mirrored_blit_region_keeps_its_flip_and_an_empty_one_is_skipped() {
         (forward.origin, forward.extent),
         (
             Origin3d { x: 1, y: 2, z: 0 },
-            Extent3d { width: 4, height: 6, depth: 1 }
+            Extent3d {
+                width: 4,
+                height: 6,
+                depth: 1
+            }
         )
     );
     assert_eq!(forward.inverted, Mirror::NONE);
@@ -507,16 +564,41 @@ fn a_mirrored_blit_region_keeps_its_flip_and_an_empty_one_is_skipped() {
         (inverted.origin, inverted.extent),
         (
             Origin3d { x: 1, y: 2, z: 0 },
-            Extent3d { width: 4, height: 6, depth: 1 }
+            Extent3d {
+                width: 4,
+                height: 6,
+                depth: 1
+            }
         )
     );
-    assert_eq!(inverted.inverted, Mirror { x: true, y: true, z: false });
+    assert_eq!(
+        inverted.inverted,
+        Mirror {
+            x: true,
+            y: true,
+            z: false
+        }
+    );
 
     // One axis each, to prove the two are independent rather than moving together.
     let flip_x = BlitRect::of(&offsets(5, 2, 1, 8)).expect("a non-empty region");
-    assert_eq!(flip_x.inverted, Mirror { x: true, y: false, z: false });
+    assert_eq!(
+        flip_x.inverted,
+        Mirror {
+            x: true,
+            y: false,
+            z: false
+        }
+    );
     let flip_y = BlitRect::of(&offsets(1, 8, 5, 2)).expect("a non-empty region");
-    assert_eq!(flip_y.inverted, Mirror { x: false, y: true, z: false });
+    assert_eq!(
+        flip_y.inverted,
+        Mirror {
+            x: false,
+            y: true,
+            z: false
+        }
+    );
 
     // The net rule: source XOR destination. Both inverted is the identity.
     assert_eq!(
@@ -526,12 +608,20 @@ fn a_mirrored_blit_region_keeps_its_flip_and_an_empty_one_is_skipped() {
     );
     assert_eq!(
         Mirror::net(flip_x.inverted, forward.inverted),
-        Mirror { x: true, y: false, z: false },
+        Mirror {
+            x: true,
+            y: false,
+            z: false
+        },
         "one inverted side is a real flip"
     );
     assert_eq!(
         Mirror::net(flip_x.inverted, flip_y.inverted),
-        Mirror { x: true, y: true, z: false },
+        Mirror {
+            x: true,
+            y: true,
+            z: false
+        },
         "the two axes combine independently"
     );
     // The DEPTH axis obeys the same net rule, and is asserted separately because nothing above can see

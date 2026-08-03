@@ -67,6 +67,82 @@ fn every_implemented_command_resolves() {
     }
 }
 
+#[test]
+fn external_memory_allocation_records_only_opaque_fd_and_refuses_undedicated_export() {
+    let _guard = test_guard();
+    let mut device = core::ptr::null_mut();
+    assert_eq!(
+        crate::device::vkCreateDevice(
+            core::ptr::null_mut(),
+            core::ptr::null(),
+            core::ptr::null(),
+            &mut device
+        ),
+        VK_SUCCESS
+    );
+    let export = VkExportMemoryAllocateInfo {
+        s_type: VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO,
+        p_next: core::ptr::null(),
+        handle_types: VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
+    };
+    let allocate = VkMemoryAllocateInfo {
+        s_type: 0,
+        p_next: &export as *const _ as *const c_void,
+        allocation_size: 64,
+        memory_type_index: 0,
+    };
+    let mut memory = 0;
+    assert_eq!(
+        crate::compute::vkAllocateMemory(
+            device,
+            &allocate as *const _ as *const c_void,
+            core::ptr::null(),
+            &mut memory
+        ),
+        VK_SUCCESS
+    );
+    assert_eq!(
+        crate::state::StateStore::with(
+            |state| state.device_mut().unwrap().memories[&memory].export_handle_types
+        ),
+        1
+    );
+    let info = VkMemoryGetFdInfoKHR {
+        s_type: 0,
+        p_next: core::ptr::null(),
+        memory,
+        handle_type: 1,
+    };
+    let mut fd = 99;
+    assert_ne!(
+        crate::compute::vkGetMemoryFdKHR(
+            device,
+            &info as *const _ as *const c_void,
+            &mut fd as *mut _ as *mut c_void
+        ),
+        VK_SUCCESS
+    );
+    assert_eq!(fd, -1, "failed export must overwrite caller sentinel");
+
+    let unsupported = VkExportMemoryAllocateInfo {
+        handle_types: 2,
+        ..export
+    };
+    let unsupported_allocate = VkMemoryAllocateInfo {
+        p_next: &unsupported as *const _ as *const c_void,
+        ..allocate
+    };
+    assert_eq!(
+        crate::compute::vkAllocateMemory(
+            device,
+            &unsupported_allocate as *const _ as *const c_void,
+            core::ptr::null(),
+            &mut memory
+        ),
+        VK_ERROR_INVALID_EXTERNAL_HANDLE
+    );
+}
+
 // ---- hand-written maintenance / host-copy / not-supported bodies ------------------------------
 
 use crate::types::*;
@@ -117,16 +193,59 @@ fn vertex_only_formats_survive_texture_capability_gating() {
 fn cubic_image_view_properties_gate_2d_and_minmax() {
     let _g = test_guard();
     let mut dev: *mut c_void = core::ptr::null_mut();
-    assert_eq!(crate::device::vkCreateDevice(core::ptr::null_mut(), core::ptr::null(), core::ptr::null(), &mut dev), VK_SUCCESS);
-    let mut view = VkPhysicalDeviceImageViewImageFormatInfoEXT { s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_VIEW_IMAGE_FORMAT_INFO_EXT, p_next: core::ptr::null(), image_view_type: 1 };
-    let info = VkPhysicalDeviceImageFormatInfo2 { s_type: 0, p_next: &view as *const _ as *const c_void, format: 37, image_type: 1, tiling: 0, usage: 4, flags: 0 };
-    let mut cubic = VkFilterCubicImageViewImageFormatPropertiesEXT { s_type: VK_STRUCTURE_TYPE_FILTER_CUBIC_IMAGE_VIEW_IMAGE_FORMAT_PROPERTIES_EXT, p_next: core::ptr::null_mut(), filter_cubic: 99, filter_cubic_minmax: 99 };
-    let mut out = VkImageFormatProperties2 { s_type: 0, p_next: &mut cubic as *mut _ as *mut c_void, image_format_properties: VkImageFormatProperties::default() };
-    assert_eq!(crate::instance::vkGetPhysicalDeviceImageFormatProperties2(core::ptr::null_mut(), &info as *const _ as *const c_void, &mut out as *mut _ as *mut c_void), VK_SUCCESS);
+    assert_eq!(
+        crate::device::vkCreateDevice(
+            core::ptr::null_mut(),
+            core::ptr::null(),
+            core::ptr::null(),
+            &mut dev
+        ),
+        VK_SUCCESS
+    );
+    let mut view = VkPhysicalDeviceImageViewImageFormatInfoEXT {
+        s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_VIEW_IMAGE_FORMAT_INFO_EXT,
+        p_next: core::ptr::null(),
+        image_view_type: 1,
+    };
+    let info = VkPhysicalDeviceImageFormatInfo2 {
+        s_type: 0,
+        p_next: &view as *const _ as *const c_void,
+        format: 37,
+        image_type: 1,
+        tiling: 0,
+        usage: 4,
+        flags: 0,
+    };
+    let mut cubic = VkFilterCubicImageViewImageFormatPropertiesEXT {
+        s_type: VK_STRUCTURE_TYPE_FILTER_CUBIC_IMAGE_VIEW_IMAGE_FORMAT_PROPERTIES_EXT,
+        p_next: core::ptr::null_mut(),
+        filter_cubic: 99,
+        filter_cubic_minmax: 99,
+    };
+    let mut out = VkImageFormatProperties2 {
+        s_type: 0,
+        p_next: &mut cubic as *mut _ as *mut c_void,
+        image_format_properties: VkImageFormatProperties::default(),
+    };
+    assert_eq!(
+        crate::instance::vkGetPhysicalDeviceImageFormatProperties2(
+            core::ptr::null_mut(),
+            &info as *const _ as *const c_void,
+            &mut out as *mut _ as *mut c_void
+        ),
+        VK_SUCCESS
+    );
     assert_eq!((cubic.filter_cubic, cubic.filter_cubic_minmax), (1, 0));
     view.image_view_type = 2;
     cubic.filter_cubic = 99;
-    assert_eq!(crate::instance::vkGetPhysicalDeviceImageFormatProperties2(core::ptr::null_mut(), &info as *const _ as *const c_void, &mut out as *mut _ as *mut c_void), VK_SUCCESS);
+    assert_eq!(
+        crate::instance::vkGetPhysicalDeviceImageFormatProperties2(
+            core::ptr::null_mut(),
+            &info as *const _ as *const c_void,
+            &mut out as *mut _ as *mut c_void
+        ),
+        VK_SUCCESS
+    );
     assert_eq!((cubic.filter_cubic, cubic.filter_cubic_minmax), (0, 0));
 }
 

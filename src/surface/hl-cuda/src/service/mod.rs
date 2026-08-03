@@ -12,6 +12,7 @@
 
 pub mod allocate;
 pub mod event;
+pub mod external_memory;
 pub mod external_semaphore;
 pub mod graph;
 pub mod graphics;

@@ -36,6 +36,9 @@ CU	cuGraphicsSubResourceGetMappedArray	CUresult	CUarray*|array;CUgraphicsResourc
 CU	cuGraphicsUnmapResources	CUresult	unsigned int|count;CUgraphicsResource*|resources;CUstream|stream
 CU	cuGraphicsUnregisterResource	CUresult	CUgraphicsResource|resource
 CU	cuGraphicsResourceSetMapFlags_v2	CUresult	CUgraphicsResource|resource;unsigned int|flags
+CU	cuImportExternalMemory	CUresult	void**|externalMemory_out;const void*|memHandleDesc
+CU	cuExternalMemoryGetMappedBuffer	CUresult	CUdeviceptr*|devPtr;void*|externalMemory;const void*|bufferDesc
+CU	cuDestroyExternalMemory	CUresult	void*|externalMemory
 CU	cuImportExternalSemaphore	CUresult	void**|externalSemaphore_out;const void*|semHandleDesc
 CU	cuDestroyExternalSemaphore	CUresult	void*|extSem
 CU	cuSignalExternalSemaphoresAsync	CUresult	void*const*|extSemArray;const void*|paramsArray;unsigned int|numExtSems;CUstream|stream

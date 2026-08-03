@@ -93,3 +93,29 @@ fn opaque_sync_fd_rejects_unsealed_and_forged_identities() {
     assert!(exports.import(SessionId(2), decoded).is_err());
     assert!(exports.import(SessionId(2), live).is_ok());
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn opaque_resource_fd_is_sealed_exact_and_consuming() {
+    let id = crate::ExportId(0x1234_5678_9abc_def0);
+    let token = OpaqueResourceFd::create(id).unwrap();
+    let raw = token.as_raw_fd();
+    assert_eq!(token.id().unwrap(), id);
+    assert_eq!(token.consume().unwrap(), id);
+    assert_eq!(unsafe { libc::fcntl(raw, libc::F_GETFD) }, -1);
+    assert!(OpaqueResourceFd::create(crate::ExportId(0)).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn opaque_resource_fd_rejects_unsealed_input() {
+    let raw = unsafe {
+        libc::memfd_create(
+            b"forged-resource\0".as_ptr().cast(),
+            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+        )
+    };
+    assert!(raw >= 0);
+    let forged = unsafe { OwnedFd::from_raw_fd(raw) };
+    assert!(OpaqueResourceFd::from_owned(forged).is_err());
+}

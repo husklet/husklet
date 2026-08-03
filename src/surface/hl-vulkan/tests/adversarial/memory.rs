@@ -1,8 +1,61 @@
 use super::*;
+use hl_gpu::{Capabilities, CommandSink, ExportId, FeatureRequest, FenceId, Result as GpuResult};
+
+struct ExportSink {
+    batches: Vec<Vec<Cmd>>,
+    exports: Vec<BufferId>,
+}
+impl CommandSink for ExportSink {
+    fn negotiate(&mut self, _: &FeatureRequest) -> GpuResult<Capabilities> {
+        Ok(Capabilities::permissive_fixture(
+            "vulkan-external-memory-test",
+        ))
+    }
+    fn submit(&mut self, batch: &[Cmd]) -> GpuResult<()> {
+        self.batches.push(batch.to_vec());
+        Ok(())
+    }
+    fn wait(&mut self, _: FenceId, _: u64) -> GpuResult<()> {
+        Ok(())
+    }
+    fn export_buffer(&mut self, id: BufferId) -> GpuResult<ExportId> {
+        self.exports.push(id);
+        Ok(ExportId(77))
+    }
+}
 
 // =====================================================================================================
 // memory: bind-offset flush + readback math (the suballocated-buffer path)
 // =====================================================================================================
+
+#[test]
+fn external_memory_export_requires_one_exact_dedicated_buffer() {
+    let mut d = dev();
+    let mut s = ExportSink {
+        batches: Vec::new(),
+        exports: Vec::new(),
+    };
+    let buffer =
+        create::create_buffer(&mut d, &mut s, vk_buffer_usage::STORAGE_BUFFER, 64).unwrap();
+    let memory = d.allocate_memory(64).unwrap();
+    assert!(create::export_memory_buffer(&d, &mut s, memory).is_err());
+    d.set_memory_export_handle_types(memory, 1).unwrap();
+    create::bind_buffer_memory(&mut d, buffer, memory, 0).unwrap();
+    assert_eq!(
+        create::export_memory_buffer(&d, &mut s, memory).unwrap(),
+        ExportId(77)
+    );
+    assert_eq!(s.exports, vec![BufferId(buf_ir(&d, buffer))]);
+
+    let offset_memory = d.allocate_memory(65).unwrap();
+    d.set_memory_export_handle_types(offset_memory, 1).unwrap();
+    let offset_buffer =
+        create::create_buffer(&mut d, &mut s, vk_buffer_usage::STORAGE_BUFFER, 64).unwrap();
+    create::bind_buffer_memory(&mut d, offset_buffer, offset_memory, 1).unwrap();
+    assert!(create::export_memory_buffer(&d, &mut s, offset_memory).is_err());
+    d.map_memory(memory).unwrap();
+    assert!(create::export_memory_buffer(&d, &mut s, memory).is_err());
+}
 
 /// REGRESSION: a persistently-mapped buffer bound at a NON-ZERO offset into its allocation must flush the
 /// buffer's own footprint (`data[bound_offset..bound_offset+size]`), NOT the arena from offset 0. Before

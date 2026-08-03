@@ -105,6 +105,14 @@ pub const DEVICE_EXTENSIONS: &[ExtensionProp] = &[
         name: "VK_KHR_external_semaphore_fd",
         spec_version: 1,
     },
+    ExtensionProp {
+        name: "VK_KHR_external_memory",
+        spec_version: 1,
+    },
+    ExtensionProp {
+        name: "VK_KHR_external_memory_fd",
+        spec_version: 1,
+    },
 ];
 
 /// `VkFormatFeatureFlagBits` (stable bit values from vk.xml) — the per-format capability bits reported
@@ -272,7 +280,8 @@ impl Format {
     /// the executor projects its single-sample shadow after every ROP store; a multisampled texture cannot
     /// enter that copy/readback projection path and is therefore deliberately single-sample.
     pub fn supports_multisample(&self) -> bool {
-        self.wire() != Some(hl_gpu::protocol::model::enums::TextureFormat::R10x6g10x6b10x6a10x6Unorm)
+        self.wire()
+            != Some(hl_gpu::protocol::model::enums::TextureFormat::R10x6g10x6b10x6a10x6Unorm)
     }
 
     /// `STORAGE_IMAGE` when the host really permits a storage binding of this format. The core WebGPU
@@ -1050,11 +1059,12 @@ mod tests {
     }
 
     #[test]
-    fn device_extensions_advertise_only_external_semaphores() {
+    fn device_extensions_advertise_only_opaque_fd_interop() {
         let names: Vec<&str> = DEVICE_EXTENSIONS.iter().map(|e| e.name).collect();
         assert!(names.contains(&"VK_KHR_external_semaphore"));
         assert!(names.contains(&"VK_KHR_external_semaphore_fd"));
-        assert!(!names.iter().any(|name| name.contains("external_memory")));
+        assert!(names.contains(&"VK_KHR_external_memory"));
+        assert!(names.contains(&"VK_KHR_external_memory_fd"));
         assert!(!names.iter().any(|name| name.contains("external_fence")));
     }
 

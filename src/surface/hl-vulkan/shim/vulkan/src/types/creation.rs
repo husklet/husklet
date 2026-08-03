@@ -57,6 +57,31 @@ pub struct VkMemoryAllocateInfo {
     pub memory_type_index: u32,
 }
 
+pub const VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO: i32 = 1_000_072_002;
+pub const VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT: u32 = 0x1;
+
+#[repr(C)]
+pub struct VkExportMemoryAllocateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub handle_types: u32,
+}
+
+#[repr(C)]
+pub struct VkMemoryGetFdInfoKHR {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub memory: u64,
+    pub handle_type: u32,
+}
+
+#[repr(C)]
+pub struct VkMemoryFdPropertiesKHR {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub memory_type_bits: u32,
+}
+
 #[repr(C)]
 pub struct VkShaderModuleCreateInfo {
     pub s_type: i32,

@@ -171,32 +171,6 @@ pub extern "C" fn vkGetMemoryAndroidHardwareBufferANDROID(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-pub extern "C" fn vkGetMemoryFdKHR(
-    device: *mut core::ffi::c_void,
-    pGetFdInfo: *const core::ffi::c_void,
-    pFd: *mut core::ffi::c_void,
-) -> i32 {
-    let _ = device;
-    let _ = pGetFdInfo;
-    let _ = pFd;
-    crate::stub::Call::unsupported("vkGetMemoryFdKHR", "extension not advertised");
-    VK_ERROR_EXTENSION_NOT_PRESENT
-}
-
-pub extern "C" fn vkGetMemoryFdPropertiesKHR(
-    device: *mut core::ffi::c_void,
-    handleType: i32,
-    fd: i32,
-    pMemoryFdProperties: *mut core::ffi::c_void,
-) -> i32 {
-    let _ = device;
-    let _ = handleType;
-    let _ = fd;
-    let _ = pMemoryFdProperties;
-    crate::stub::Call::unsupported("vkGetMemoryFdPropertiesKHR", "extension not advertised");
-    VK_ERROR_EXTENSION_NOT_PRESENT
-}
-
 pub extern "C" fn vkGetMemorySciBufNV(
     device: *mut core::ffi::c_void,
     pGetSciBufInfo: *const core::ffi::c_void,

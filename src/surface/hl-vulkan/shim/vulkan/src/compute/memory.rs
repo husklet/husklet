@@ -1,4 +1,5 @@
 use super::*;
+use hl_gpu::transport::adapter::unix::OpaqueResourceFd;
 
 // ==================================================================================================
 // memory + buffers
@@ -65,7 +66,21 @@ pub extern "C" fn vkAllocateMemory(
     };
     // `allocate_memory` is fallible: a zero/over-heap `allocationSize` surfaces as the honest VkResult
     // (`VK_ERROR_OUT_OF_DEVICE_MEMORY` for an over-budget request), never a fake success.
-    match ShimState::with_sink(|dev, _| dev.allocate_memory(ai.allocation_size)) {
+    let export_info =
+        unsafe { ExtensionChain::find(ai.p_next, VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO) };
+    let export_types = if export_info.is_null() {
+        0
+    } else {
+        unsafe { (*(export_info as *const VkExportMemoryAllocateInfo)).handle_types }
+    };
+    if export_types & !VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT != 0 {
+        return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+    }
+    match ShimState::with_sink(|dev, _| {
+        let memory = dev.allocate_memory(ai.allocation_size)?;
+        dev.set_memory_export_handle_types(memory, export_types)?;
+        Ok(memory)
+    }) {
         Some(Ok(handle)) => {
             if !p_memory.is_null() {
                 unsafe { *p_memory = handle };
@@ -75,6 +90,51 @@ pub extern "C" fn vkAllocateMemory(
         Some(Err(e)) => Status::from_error(&e),
         None => VK_ERROR_INITIALIZATION_FAILED,
     }
+}
+
+/// Export one whole, dedicated buffer allocation as a sealed guest-local opaque fd token.
+pub extern "C" fn vkGetMemoryFdKHR(
+    _device: *mut c_void,
+    p_get_fd_info: *const c_void,
+    p_fd: *mut c_void,
+) -> VkResult {
+    let (Some(info), Some(output)) = (
+        unsafe { (p_get_fd_info as *const VkMemoryGetFdInfoKHR).as_ref() },
+        unsafe { (p_fd as *mut i32).as_mut() },
+    ) else {
+        return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+    };
+    *output = -1;
+    if info.handle_type != VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT {
+        return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+    }
+    let export = match ShimState::with_sink(|dev, sink| {
+        create::export_memory_buffer(dev, sink, info.memory)
+    }) {
+        Some(Ok(export)) => export,
+        Some(Err(error)) => return Status::from_error(&error),
+        None => return VK_ERROR_INITIALIZATION_FAILED,
+    };
+    match OpaqueResourceFd::create(export) {
+        Ok(token) => {
+            *output = token.into_raw_fd();
+            VK_SUCCESS
+        }
+        Err(_) => VK_ERROR_INVALID_EXTERNAL_HANDLE,
+    }
+}
+
+/// Vulkan import is intentionally absent; opaque FDs exported by this driver are CUDA-import only.
+pub extern "C" fn vkGetMemoryFdPropertiesKHR(
+    _device: *mut c_void,
+    _handle_type: i32,
+    _fd: i32,
+    p_properties: *mut c_void,
+) -> VkResult {
+    if let Some(properties) = unsafe { (p_properties as *mut VkMemoryFdPropertiesKHR).as_mut() } {
+        properties.memory_type_bits = 0;
+    }
+    VK_ERROR_INVALID_EXTERNAL_HANDLE
 }
 
 pub extern "C" fn vkFreeMemory(_device: *mut c_void, memory: u64, _p_allocator: *const c_void) {

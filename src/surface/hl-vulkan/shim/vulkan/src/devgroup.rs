@@ -16,7 +16,9 @@ use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
 
 use crate::state::StateStore;
 use crate::types::{
-    Dispatchable, VkExternalSemaphoreProperties, VkPhysicalDeviceExternalSemaphoreInfo, VkResult,
+    Dispatchable, VkExternalBufferProperties, VkExternalMemoryProperties,
+    VkExternalSemaphoreProperties, VkPhysicalDeviceExternalBufferInfo,
+    VkPhysicalDeviceExternalSemaphoreInfo, VkResult, VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
     VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT, VK_SUCCESS,
 };
 
@@ -275,10 +277,32 @@ impl ExternalProperties {
 
 pub extern "C" fn vkGetPhysicalDeviceExternalBufferProperties(
     _physical_device: *mut c_void,
-    _p_external_buffer_info: *const c_void,
+    p_external_buffer_info: *const c_void,
     p_external_buffer_properties: *mut c_void,
 ) {
-    unsafe { ExternalProperties::zero(p_external_buffer_properties) };
+    let Some(properties) =
+        (unsafe { (p_external_buffer_properties as *mut VkExternalBufferProperties).as_mut() })
+    else {
+        return;
+    };
+    properties.external_memory_properties = VkExternalMemoryProperties {
+        external_memory_features: 0,
+        export_from_imported_handle_types: 0,
+        compatible_handle_types: 0,
+    };
+    let Some(info) =
+        (unsafe { (p_external_buffer_info as *const VkPhysicalDeviceExternalBufferInfo).as_ref() })
+    else {
+        return;
+    };
+    if info.flags == 0 && info.handle_type == VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT {
+        properties
+            .external_memory_properties
+            .external_memory_features = 0x2; // EXPORTABLE
+        properties
+            .external_memory_properties
+            .compatible_handle_types = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+    }
 }
 pub extern "C" fn vkGetPhysicalDeviceExternalBufferPropertiesKHR(
     physical_device: *mut c_void,

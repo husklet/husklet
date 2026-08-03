@@ -48,6 +48,8 @@ pub struct MemRec {
     /// VK_WHOLE_SIZE` → to the end) that must still flush at the next submit even though the app may
     /// have unmapped. `None` when there is nothing pending. Only meaningful for buffer-bound memory.
     pub pending_flush: Option<(u64, u64)>,
+    /// Handle types requested through `VkExportMemoryAllocateInfo`; zero for ordinary allocations.
+    pub export_handle_types: u32,
 }
 
 /// One `VkImage`: its backing hl-GPU texture id + geometry/format/(translated) usage. Mirrors `MVKImage`.
