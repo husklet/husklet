@@ -50,6 +50,7 @@ impl Format {
             TextureFormat::A1r5g5b5Unorm => W::A1r5g5b5Unorm,
             TextureFormat::B4g4r4a4Unorm => W::B4g4r4a4Unorm,
             TextureFormat::Rgba16Float => W::Rgba16Float,
+            TextureFormat::Rgba16Unorm => W::Rgba16Unorm,
             TextureFormat::Rgba32Float => W::Rgba32Float,
             TextureFormat::R32Float => W::R32Float,
             TextureFormat::R32Uint => W::R32Uint,

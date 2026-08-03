@@ -254,6 +254,7 @@ pub mod vk_format {
     pub const R16_SFLOAT: u32 = 76;
     pub const R16G16_UINT: u32 = 81;
     pub const R16G16_SINT: u32 = 82;
+    pub const R16G16B16A16_UNORM: u32 = 91;
     pub const R16G16B16A16_UINT: u32 = 95;
     pub const R16G16B16A16_SINT: u32 = 96;
     pub const R32G32B32A32_SFLOAT: u32 = 109;
@@ -562,6 +563,7 @@ impl Format {
             vk_format::R16G16B16A16_UINT => T::Rgba16Uint,
             vk_format::R16G16B16A16_SINT => T::Rgba16Sint,
             vk_format::R16G16B16A16_SFLOAT => T::Rgba16Float,
+            vk_format::R16G16B16A16_UNORM => T::Rgba16Unorm,
             vk_format::R32G32B32A32_SFLOAT => T::Rgba32Float,
             vk_format::R32_SFLOAT => T::R32Float,
             vk_format::R32_UINT => T::R32Uint,

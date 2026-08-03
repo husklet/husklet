@@ -114,6 +114,7 @@ impl Gpu {
                 | wgpu::Features::STORAGE_RESOURCE_BINDING_ARRAY
                 | wgpu::Features::VERTEX_WRITABLE_STORAGE
                 | wgpu::Features::TEXTURE_ATOMIC
+                | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
                 | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
                 | wgpu::Features::TEXTURE_COMPRESSION_BC
                 | wgpu::Features::TEXTURE_COMPRESSION_ETC2

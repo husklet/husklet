@@ -275,3 +275,11 @@ fn assert_packed_red_blit(format: TextureFormat, expected: &[u8]) {
 fn metal_executes_rg11b10_float_as_a_blit_destination() {
     assert_packed_red_blit(TextureFormat::Rg11b10Ufloat, &[0xc0, 0x03, 0x00, 0x00]);
 }
+
+#[test]
+fn metal_executes_rgba16_unorm_as_a_blit_destination() {
+    assert_packed_red_blit(
+        TextureFormat::Rgba16Unorm,
+        &[0xff, 0xff, 0, 0, 0, 0, 0xff, 0xff],
+    );
+}
