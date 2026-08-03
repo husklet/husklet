@@ -149,6 +149,7 @@ pub fn cmd_draw_indirect(
         if let Some(p) = pipeline {
             rec.enc.push(Enc::SetPipeline(p));
         }
+        rec.replay_rebased_vertex_bindings()?;
         for (index, group) in &groups {
             rec.enc.push(Enc::SetBindGroup {
                 index: *index,
@@ -199,6 +200,7 @@ pub fn cmd_draw_indexed_indirect(
         if let Some(p) = pipeline {
             rec.enc.push(Enc::SetPipeline(p));
         }
+        rec.replay_rebased_vertex_bindings()?;
         for (index, group) in &groups {
             rec.enc.push(Enc::SetBindGroup {
                 index: *index,

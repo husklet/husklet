@@ -137,6 +137,7 @@ pub fn create_compute_pipeline_with_layout(
         PipelineRec {
             ir_id,
             kind: PipelineKind::Compute,
+            vertex_buffer_bases: [0; 31],
         },
     );
     Ok(handle)
@@ -213,6 +214,7 @@ pub fn create_graphics_pipeline(
         vertex,
         fragment,
         vertex_layouts,
+        [0; 31],
         color_targets,
         depth,
         sample_count,
@@ -231,6 +233,7 @@ pub fn create_graphics_pipeline_with_layout(
     vertex: (VkShaderModule, &str),
     fragment: Option<(VkShaderModule, &str)>,
     vertex_layouts: Vec<VertexLayout>,
+    vertex_buffer_bases: [u32; 31],
     color_targets: Vec<hl_gpu::protocol::model::descriptor::ColorTargetState>,
     depth: Option<DepthState>,
     sample_count: u32,
@@ -294,6 +297,7 @@ pub fn create_graphics_pipeline_with_layout(
         PipelineRec {
             ir_id,
             kind: PipelineKind::Graphics,
+            vertex_buffer_bases,
         },
     );
     Ok(handle)

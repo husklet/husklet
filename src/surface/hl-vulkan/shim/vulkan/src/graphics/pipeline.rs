@@ -7,15 +7,21 @@ use super::*;
 /// Translate a `VkPipelineVertexInputStateCreateInfo` into the neutral per-binding vertex layouts (the
 /// host rasterizer fetches slot-0 positions/colors from these).
 struct VertexLayouts;
+struct ParsedVertexLayouts {
+    layouts: Vec<VertexLayout>,
+    bases: [u32; crate::instance::limits::MAX_VERTEX_INPUT_BINDINGS as usize],
+}
+
 impl VertexLayouts {
     /// `Err(format)` names the first `VkFormat` the wire cannot encode, so the caller can refuse the
     /// pipeline and say which attribute did it. Never approximates: a format the executor would
     /// reinterpret must not reach it.
-    fn parse(
-        vi: *const VkPipelineVertexInputStateCreateInfo,
-    ) -> Result<Vec<VertexLayout>, u32> {
+    fn parse(vi: *const VkPipelineVertexInputStateCreateInfo) -> Result<ParsedVertexLayouts, u32> {
         let Some(vi) = (unsafe { vi.as_ref() }) else {
-            return Ok(Vec::new());
+            return Ok(ParsedVertexLayouts {
+                layouts: Vec::new(),
+                bases: [0; 31],
+            });
         };
         let bindings: &[VkVertexInputBindingDescription] =
             if vi.p_vertex_binding_descriptions.is_null()
@@ -56,6 +62,7 @@ impl VertexLayouts {
         // silent hole: the executor's own draw validation requires a buffer for every slot it is given,
         // so an unbound placeholder is refused loudly rather than shifting the slots beneath it.
         let mut layouts: Vec<VertexLayout> = Vec::new();
+        let mut bases = [0; crate::instance::limits::MAX_VERTEX_INPUT_BINDINGS as usize];
         for b in bindings {
             // `maxVertexInputBindings` is advertised as 31, so a binding number past it is a guest
             // error and must be refused rather than allowed to size this vector.
@@ -66,28 +73,35 @@ impl VertexLayouts {
             if layouts.len() <= slot {
                 layouts.resize_with(slot + 1, VertexLayout::unused);
             }
+            let mut lowered_attrs = attrs
+                .iter()
+                .filter(|a| a.binding == b.binding)
+                .map(|a| {
+                    Ok(VertexAttr {
+                        location: a.location,
+                        format: VertexFormat(a.format as u32)
+                            .wire()
+                            .ok_or(a.format as u32)?,
+                        offset: a.offset,
+                    })
+                })
+                .collect::<Result<Vec<_>, u32>>()?;
+            // Vulkan attribute offsets are relative to the bound buffer and may exceed the binding's
+            // stride. WebGPU requires each attribute to fit inside one stride. Move a common aligned
+            // prefix into the buffer binding; this is identity-preserving because
+            // `bind_offset + attr_offset == (bind_offset + base) + (attr_offset - base)`.
+            let base = lowered_attrs.iter().map(|a| a.offset).min().unwrap_or(0) & !3;
+            for attr in &mut lowered_attrs {
+                attr.offset -= base;
+            }
+            bases[slot] = base;
             layouts[slot] = VertexLayout {
                 stride: b.stride,
                 step_mode: b.input_rate as u32,
-                attrs: attrs
-                    .iter()
-                    .filter(|a| a.binding == b.binding)
-                    .map(|a| {
-                        // The wire field is a PACKED (comps, kind, normalized, integer) quadruple,
-                        // not a format enum. Forwarding `a.format` raw shipped a VkFormat number
-                        // into it, which the executor decoded as a component count.
-                        Ok(VertexAttr {
-                            location: a.location,
-                            format: VertexFormat(a.format as u32)
-                                .wire()
-                                .ok_or(a.format as u32)?,
-                            offset: a.offset,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, u32>>()?,
+                attrs: lowered_attrs,
             };
         }
-        Ok(layouts)
+        Ok(ParsedVertexLayouts { layouts, bases })
     }
 }
 
@@ -102,6 +116,13 @@ mod vertex_layout_tests {
         bindings: &[VkVertexInputBindingDescription],
         attrs: &[VkVertexInputAttributeDescription],
     ) -> Result<Vec<VertexLayout>, u32> {
+        parse_with_bases(bindings, attrs).map(|parsed| parsed.layouts)
+    }
+
+    fn parse_with_bases(
+        bindings: &[VkVertexInputBindingDescription],
+        attrs: &[VkVertexInputAttributeDescription],
+    ) -> Result<ParsedVertexLayouts, u32> {
         let vi = VkPipelineVertexInputStateCreateInfo {
             s_type: 0,
             p_next: std::ptr::null(),
@@ -115,11 +136,43 @@ mod vertex_layout_tests {
     }
 
     fn binding(binding: u32, stride: u32) -> VkVertexInputBindingDescription {
-        VkVertexInputBindingDescription { binding, stride, input_rate: 0 }
+        VkVertexInputBindingDescription {
+            binding,
+            stride,
+            input_rate: 0,
+        }
     }
 
     fn attribute(location: u32, binding: u32) -> VkVertexInputAttributeDescription {
-        VkVertexInputAttributeDescription { location, binding, format: RGBA32F, offset: 0 }
+        VkVertexInputAttributeDescription {
+            location,
+            binding,
+            format: RGBA32F,
+            offset: 0,
+        }
+    }
+
+    #[test]
+    fn cts_texture_coordinates_rebase_offset_beyond_stride_without_changing_address() {
+        let bindings = [binding(0, 16), binding(1, 8)];
+        let attrs = [
+            attribute(0, 0),
+            VkVertexInputAttributeDescription {
+                location: 1,
+                binding: 1,
+                format: 103, // VK_FORMAT_R32G32_SFLOAT
+                offset: 64,
+            },
+        ];
+        let parsed = parse_with_bases(&bindings, &attrs).unwrap();
+        assert_eq!(parsed.bases[0], 0);
+        assert_eq!(parsed.bases[1], 64);
+        assert_eq!(parsed.layouts[1].stride, 8);
+        assert_eq!(parsed.layouts[1].attrs[0].offset, 0);
+        assert_eq!(
+            parsed.bases[1] + parsed.layouts[1].attrs[0].offset,
+            attrs[1].offset
+        );
     }
 
     /// A single binding numbered 1 must land at SLOT 1, leaving slot 0 unused.
@@ -130,7 +183,11 @@ mod vertex_layout_tests {
     #[test]
     fn a_lone_nonzero_binding_keeps_its_slot_number() {
         let layouts = parse(&[binding(1, 16)], &[attribute(0, 1)]).unwrap();
-        assert_eq!(layouts.len(), 2, "slot 1 must exist as slot 1, not be shifted to slot 0");
+        assert_eq!(
+            layouts.len(),
+            2,
+            "slot 1 must exist as slot 1, not be shifted to slot 0"
+        );
         assert_eq!(layouts[0], VertexLayout::unused());
         assert_eq!(layouts[1].stride, 16);
         assert_eq!(layouts[1].attrs.len(), 1);
@@ -145,7 +202,10 @@ mod vertex_layout_tests {
         )
         .unwrap();
         assert_eq!(layouts.len(), 2);
-        assert_eq!(layouts[0].stride, 32, "binding 0 belongs at slot 0 whenever it was declared");
+        assert_eq!(
+            layouts[0].stride, 32,
+            "binding 0 belongs at slot 0 whenever it was declared"
+        );
         assert_eq!(layouts[1].stride, 16);
         assert_eq!(layouts[0].attrs[0].location, 0);
         assert_eq!(layouts[1].attrs[0].location, 1);
@@ -534,7 +594,7 @@ pub extern "C" fn vkCreateGraphicsPipelines(
             result = VK_ERROR_UNKNOWN;
             continue;
         };
-        let layouts = match VertexLayouts::parse(ci.p_vertex_input_state) {
+        let parsed_layouts = match VertexLayouts::parse(ci.p_vertex_input_state) {
             Ok(layouts) => layouts,
             Err(format) => {
                 // Refused, not approximated: the executor has no encoding for this attribute, and
@@ -628,7 +688,8 @@ pub extern "C" fn vkCreateGraphicsPipelines(
                 sink,
                 (vmod, ventry.as_str()),
                 frag,
-                layouts,
+                parsed_layouts.layouts,
+                parsed_layouts.bases,
                 color_targets,
                 depth,
                 sample_count,

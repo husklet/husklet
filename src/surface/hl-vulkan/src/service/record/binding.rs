@@ -10,16 +10,17 @@ pub fn cmd_bind_pipeline(
     cb: VkCommandBuffer,
     pipeline: VkPipeline,
 ) -> Result<()> {
-    let (ir, kind) = {
+    let (ir, kind, vertex_buffer_bases) = {
         let p = dev
             .pipelines
             .get(&pipeline)
             .ok_or(GpuError::Invalid("vkCmdBindPipeline: unknown VkPipeline"))?;
-        (p.ir_id, p.kind)
+        (p.ir_id, p.kind, p.vertex_buffer_bases)
     };
     let rec = dev.require_recording(cb)?;
     rec.bound_pipeline = Some(ir);
     rec.bound_pipeline_kind = Some(kind);
+    rec.vertex_buffer_bases = vertex_buffer_bases;
     Ok(())
 }
 

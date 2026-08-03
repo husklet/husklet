@@ -200,6 +200,7 @@ pub struct CmdBufRec {
     /// hl-GPU pipeline id of the last `vkCmdBindPipeline` (replayed into the next pass).
     pub bound_pipeline: Option<u32>,
     pub bound_pipeline_kind: Option<PipelineKind>,
+    pub vertex_buffer_bases: [u32; 31],
     /// `(set index, bind-group IR id)` bound by `vkCmdBindDescriptorSets`, replayed into the next pass.
     pub pending_bind_groups: Vec<(u32, u32)>,
     /// Vertex-buffer bindings are Vulkan command-buffer state, not render-pass-local state. Calls to

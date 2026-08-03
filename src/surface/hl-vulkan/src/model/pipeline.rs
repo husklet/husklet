@@ -36,6 +36,9 @@ pub enum PipelineKind {
 pub struct PipelineRec {
     pub ir_id: u32,
     pub kind: PipelineKind,
+    /// Per Vulkan vertex binding, the byte prefix moved from attribute offsets into the bound buffer
+    /// offset so the same legal Vulkan layout fits WebGPU's stricter `attribute.offset < stride` rule.
+    pub vertex_buffer_bases: [u32; 31],
 }
 
 /// One `VkPipelineLayout`: the descriptor-set layouts it composes (compatibility is by set-layout).

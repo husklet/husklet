@@ -1,6 +1,54 @@
 use super::*;
 
 #[test]
+fn draw_rebases_cts_vertex_stream_and_preserves_the_vulkan_binding_offset() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let vbuf =
+        create::create_buffer(&mut d, &mut sink, vk_buffer_usage::VERTEX_BUFFER, 256).unwrap();
+    let mut bases = [0; 31];
+    bases[1] = 64;
+    let pipeline = 0x777;
+    d.pipelines.insert(
+        pipeline,
+        hl_vulkan::model::pipeline::PipelineRec {
+            ir_id: 99,
+            kind: hl_vulkan::model::pipeline::PipelineKind::Graphics,
+            vertex_buffer_bases: bases,
+        },
+    );
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    record::cmd_bind_pipeline(&mut d, cb, pipeline).unwrap();
+    record::cmd_bind_vertex_buffer(&mut d, cb, 1, vbuf, 12).unwrap();
+    record::cmd_draw(&mut d, cb, 4, 3, 2, 1).unwrap();
+
+    let enc = &d.command_buffers.get(&cb).unwrap().enc;
+    assert_eq!(
+        enc,
+        &[
+            Enc::SetVertexBuffer {
+                slot: 1,
+                buffer: 1,
+                offset: 12
+            },
+            Enc::SetPipeline(99),
+            Enc::SetVertexBuffer {
+                slot: 1,
+                buffer: 1,
+                offset: 76
+            },
+            Enc::Draw {
+                vertex_count: 4,
+                instance_count: 3,
+                first_vertex: 2,
+                first_instance: 1,
+            },
+        ]
+    );
+}
+
+#[test]
 fn graphics_render_pass_draw_lowers_to_expected_encoder_stream() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
@@ -112,7 +160,8 @@ fn buffer_bindings_before_render_pass_are_replayed_inside_it() {
         1,
     )
     .unwrap();
-    let vbuf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::VERTEX_BUFFER, 64).unwrap();
+    let vbuf =
+        create::create_buffer(&mut d, &mut sink, vk_buffer_usage::VERTEX_BUFFER, 64).unwrap();
     let ibuf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::INDEX_BUFFER, 64).unwrap();
     let cb = d.allocate_command_buffer();
     d.begin_command_buffer(cb, false).unwrap();

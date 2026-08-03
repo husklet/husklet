@@ -162,6 +162,7 @@ pub fn cmd_draw(
     if let Some(p) = pipeline {
         rec.enc.push(Enc::SetPipeline(p));
     }
+    rec.replay_rebased_vertex_bindings()?;
     for (index, group) in groups {
         rec.enc.push(Enc::SetBindGroup { index, group });
     }
@@ -178,6 +179,33 @@ pub fn cmd_draw(
 /// If an OCCLUSION query is open on this command buffer, add the draw's scissor-clipped sample footprint
 /// to its running total (see [`CmdBufRec::occlusion_coverage`]).
 impl CmdBufRec {
+    /// Rebind for the current pipeline after moving its normalized attribute prefixes into Vulkan's
+    /// buffer offsets. Pipeline and vertex-buffer bindings are independently dynamic state, so this is
+    /// deliberately replayed immediately before every draw.
+    pub(super) fn replay_rebased_vertex_bindings(&mut self) -> Result<()> {
+        for (&slot, &(buffer, offset)) in &self.bound_vertex_buffers {
+            let base = self
+                .vertex_buffer_bases
+                .get(slot as usize)
+                .copied()
+                .unwrap_or(0);
+            if base == 0 {
+                continue;
+            }
+            let offset = offset
+                .checked_add(u64::from(base))
+                .ok_or(GpuError::Invalid(
+                    "vkCmdDraw: rebased vertex buffer offset overflow",
+                ))?;
+            self.enc.push(Enc::SetVertexBuffer {
+                slot,
+                buffer,
+                offset,
+            });
+        }
+        Ok(())
+    }
+
     /// Replay Vulkan's persistent graphics buffer state into a newly opened neutral render pass.
     pub(super) fn replay_buffer_bindings(&mut self) {
         for (&slot, &(buffer, offset)) in &self.bound_vertex_buffers {
@@ -223,6 +251,7 @@ pub fn cmd_draw_indexed(
     if let Some(p) = pipeline {
         rec.enc.push(Enc::SetPipeline(p));
     }
+    rec.replay_rebased_vertex_bindings()?;
     for (index, group) in groups {
         rec.enc.push(Enc::SetBindGroup { index, group });
     }
