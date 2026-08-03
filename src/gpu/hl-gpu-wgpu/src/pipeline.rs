@@ -199,6 +199,18 @@ impl WgpuExecutor {
                 let reflected_bindings = merged.iter().map(|(&(group, binding), &(_, kind, count))| crate::reflect::Binding { group, binding, kind, count }).collect::<Vec<_>>();
                 let sampler_metadata = crate::reflect::sampler_metadata(&reflected_bindings);
                 Self::insert_sampler_metadata_bindings(&mut merged, &sampler_metadata)?;
+                let module = if key.kind == hl_gpu::ShaderPayloadKind::SpirV as u8 {
+                    let (source, _) = wgsl::Spirv::translate_reflect_pipeline(
+                        &key.words,
+                        authoritative_layout,
+                        false,
+                        None,
+                        &sampler_metadata,
+                    )?;
+                    self.gpu.shader_module("hl-spirv-pipeline-compute", source)?
+                } else {
+                    module
+                };
                 let group_layouts = self.build_render_bind_group_layouts(&merged)?;
                 let layout_refs: Vec<_> = group_layouts.iter().collect();
                 let push_constant_ranges = self
@@ -297,7 +309,7 @@ impl WgpuExecutor {
         // explicit layout's exact bindings for the draw-time bind-group filter (see `PipelineNative::Render`).
         // Also capture each stage module's CONTENT key so identical descriptors built from different shader
         // ids (but the same source) dedup to one compiled pipeline.
-        let (vs, vs_used, vs_push_constant, vs_key) =
+        let (mut vs, vs_used, vs_push_constant, vs_key) =
             match shader::ShaderNative::get(res, desc.vertex.module)? {
             ShaderNative::Module {
                 module,
@@ -418,7 +430,7 @@ impl WgpuExecutor {
         // plus every fixed-function state field. An identical descriptor ALIASES the already-compiled
         // `wgpu::RenderPipeline` (a cheap `Arc` clone, ~0 incremental residency) and skips the naga merge +
         // layout build + PSO compile entirely. Distinct descriptors never share (full-value key compare).
-        let pipe_key = crate::dedup::RenderPipeKey::from_desc(desc, vs_key, fs_key, multisample);
+        let pipe_key = crate::dedup::RenderPipeKey::from_desc(desc, vs_key.clone(), fs_key.clone(), multisample, authoritative_layout);
         if let Some((pipeline, color_formats, used_bindings, sampler_metadata, backing)) =
             self.dedup.pipeline_get(&pipe_key)
         {
@@ -578,6 +590,31 @@ impl WgpuExecutor {
             .collect::<Vec<_>>();
         let sampler_metadata = crate::reflect::sampler_metadata(&merged_bindings);
         Self::insert_sampler_metadata_bindings(&mut merged, &sampler_metadata)?;
+
+        if vs_key.kind == hl_gpu::ShaderPayloadKind::SpirV as u8 {
+            let (source, _) = wgsl::Spirv::translate_reflect_pipeline(
+                &vs_key.words,
+                authoritative_layout,
+                false,
+                None,
+                &sampler_metadata,
+            )?;
+            vs = self.gpu.shader_module("hl-spirv-pipeline-vertex", source)?;
+        }
+        if let Some((key, fragment)) = fs_key.as_ref().zip(desc.fragment.as_ref()) {
+            if key.kind == hl_gpu::ShaderPayloadKind::SpirV as u8 {
+                let adapt_outputs = multisample.sample_shading || integer_outputs;
+                let outputs = adapt_outputs.then_some((fragment.entry.as_str(), desc.color_targets.as_slice()));
+                let (source, _) = wgsl::Spirv::translate_reflect_pipeline(
+                    &key.words,
+                    authoritative_layout,
+                    multisample.sample_shading,
+                    outputs,
+                    &sampler_metadata,
+                )?;
+                fs = Some((self.gpu.shader_module("hl-spirv-pipeline-fragment", source)?, fragment.entry.clone()));
+            }
+        }
 
         // Build one `BindGroupLayout` per group in `0..=max_group` (a gap group gets an empty layout, so the
         // `PipelineLayout`'s array stays dense from index 0), then the `PipelineLayout`. `submit` binds group

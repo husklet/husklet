@@ -314,4 +314,16 @@ mod sampler_metadata_tests {
             ],
         }]);
     }
+
+    #[test]
+    fn merged_stage_namespace_allocates_after_every_stage_binding() {
+        let bindings = vec![
+            Binding { group: 0, binding: 3, kind: BindingKind::Sampler { comparison: false }, count: None },
+            Binding { group: 0, binding: 17, kind: BindingKind::UniformBuffer, count: None },
+            Binding { group: 0, binding: 11, kind: BindingKind::Sampler { comparison: false }, count: None },
+        ];
+        let layouts = sampler_metadata(&bindings);
+        assert_eq!(layouts[0].binding, 18);
+        assert_eq!(layouts[0].samplers.iter().map(|slot| slot.binding).collect::<Vec<_>>(), vec![3, 11]);
+    }
 }

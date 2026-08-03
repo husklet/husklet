@@ -69,6 +69,9 @@ pub struct RenderPipeKey {
     pub sample_count: u32,
     pub sample_mask: u64,
     pub sample_shading: bool,
+    /// Authoritative descriptor namespace used for pipeline-time shader specialization, including the
+    /// collision-free sampler-metadata allocation derived from it.
+    pub layout: Option<PipelineLayout>,
 }
 
 /// Exact compilation identity of a compute pipeline. Labels and guest resource ids are deliberately
@@ -107,6 +110,7 @@ impl RenderPipeKey {
         vertex_key: ShaderKey,
         fragment_key: Option<ShaderKey>,
         multisample: hl_gpu::protocol::model::descriptor::RenderMultisample,
+        layout: Option<&PipelineLayout>,
     ) -> Self {
         RenderPipeKey {
             vertex: (vertex_key, desc.vertex.entry.clone()),
@@ -124,6 +128,7 @@ impl RenderPipeKey {
             sample_count: desc.sample_count,
             sample_mask: multisample.mask,
             sample_shading: multisample.sample_shading,
+            layout: layout.cloned(),
         }
     }
 }

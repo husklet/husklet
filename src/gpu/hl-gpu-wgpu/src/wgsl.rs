@@ -29,6 +29,7 @@ use hl_gpu::{GpuError, Result};
 mod descriptor;
 mod diagnostic;
 mod module;
+mod sampler_metadata;
 mod nonfinite;
 mod oned;
 mod output;
@@ -59,14 +60,14 @@ pub struct Spirv;
 
 impl Spirv {
     pub fn translate_reflect(words: &[u32]) -> Result<(String, crate::reflect::ModuleUsage)> {
-        Self::translate_reflect_options(words, None, false, None, None)
+        Self::translate_reflect_options(words, None, false, None, None, None)
     }
 
     pub fn translate_reflect_layout(
         words: &[u32],
         layout: Option<&hl_gpu::protocol::model::descriptor::PipelineLayout>,
     ) -> Result<(String, crate::reflect::ModuleUsage)> {
-        Self::translate_reflect_options(words, layout, false, None, None)
+        Self::translate_reflect_options(words, layout, false, None, None, None)
     }
 
     pub fn translate_reflect_fragment_outputs(
@@ -76,7 +77,7 @@ impl Spirv {
         entry: &str,
         targets: &[hl_gpu::protocol::model::descriptor::ColorTargetState],
     ) -> Result<(String, crate::reflect::ModuleUsage)> {
-        Self::translate_reflect_options(words, layout, sample_shading, None, Some((entry, targets)))
+        Self::translate_reflect_options(words, layout, sample_shading, None, Some((entry, targets)), None)
     }
 
     pub(crate) fn translate_reflect_texel(
@@ -99,6 +100,7 @@ impl Spirv {
             sample_shading,
             Some(specialization),
             None,
+            None,
         )
     }
 
@@ -116,7 +118,18 @@ impl Spirv {
             sample_shading,
             Some(specialization),
             Some((entry, targets)),
+            None,
         )
+    }
+
+    pub(crate) fn translate_reflect_pipeline(
+        words: &[u32],
+        layout: Option<&hl_gpu::protocol::model::descriptor::PipelineLayout>,
+        sample_shading: bool,
+        fragment_outputs: Option<(&str, &[hl_gpu::protocol::model::descriptor::ColorTargetState])>,
+        sampler_metadata: &[crate::reflect::SamplerMetadataLayout],
+    ) -> Result<(String, crate::reflect::ModuleUsage)> {
+        Self::translate_reflect_options(words, layout, sample_shading, None, fragment_outputs, Some(sampler_metadata))
     }
 
     fn translate_reflect_options(
@@ -128,6 +141,7 @@ impl Spirv {
             &str,
             &[hl_gpu::protocol::model::descriptor::ColorTargetState],
         )>,
+        sampler_metadata: Option<&[crate::reflect::SamplerMetadataLayout]>,
     ) -> Result<(String, crate::reflect::ModuleUsage)> {
         if words.first().copied() != Some(SPIRV_MAGIC) {
             return Err(GpuError::Invalid("wgpu: shader payload is not SPIR-V"));
@@ -236,6 +250,9 @@ impl Spirv {
         }
         viewport::Shader::prepare(&mut module)?;
         let reflected = crate::reflect::ModuleUsage::from_module(&module);
+        if let Some(layouts) = sampler_metadata {
+            sampler_metadata::inject(&mut module, layouts);
+        }
         // `OpIsInf`/`OpIsNan` survive `spv-in` as relational expressions naga's `wgsl-out` cannot emit.
         // The GLSL route rewrites those in the source text, which a SPIR-V payload never has, so the
         // lowering has to happen on the IR both front ends share.
