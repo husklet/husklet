@@ -32,7 +32,8 @@ pub use protocol::port::sink::{CommandSink, FenceWait, RecordingSink};
 // to an injected GpuExecutor (built on top of `protocol`).
 pub use runtime::{
     Clock, ExportId, Exports, FakeClock, GlobalLedger, GpuExecutor, InProcessCommandSink, Ledger,
-    Limits, Presentation, Session, SessionResources, SystemClock,
+    Limits, Presentation, Session, SessionResources, SharedSync, SyncExportId, SyncExports,
+    SystemClock,
 };
 pub use transport::{
     serve, serve_connection, serve_connection_with_handler, ConnectionHandler, GpuAlloc,

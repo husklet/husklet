@@ -5,4 +5,5 @@
 pub mod resources;
 pub mod session;
 pub mod sharing;
+pub mod sync_sharing;
 pub mod timeline;
