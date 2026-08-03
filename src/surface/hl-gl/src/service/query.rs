@@ -244,6 +244,7 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         GL_CULL_FACE_MODE => one(ctx.local.pipeline.cull_face as i32),
         GL_FRONT_FACE => one(ctx.local.pipeline.front_face as i32),
         GL_SCISSOR_TEST => one(ctx.local.pipeline.scissor_enabled as i32),
+        GL_PRIMITIVE_RESTART_FIXED_INDEX => one(1),
         GL_DEBUG_OUTPUT => one(ctx.local.pipeline.debug_output as i32),
         GL_DEBUG_OUTPUT_SYNCHRONOUS => one(ctx.local.pipeline.debug_output_synchronous as i32),
         // KHR_debug defines an implicit default group at the bottom of the stack.
@@ -506,6 +507,7 @@ pub fn get_booleanv(ctx: &GlContext, pname: u32, out: &mut [u8; 4]) -> usize {
         GL_CULL_FACE => Some(b(ctx.local.pipeline.cull_enabled)),
         GL_SCISSOR_TEST => Some(b(ctx.local.pipeline.scissor_enabled)),
         GL_RASTERIZER_DISCARD => Some(b(ctx.local.pipeline.rasterizer_discard)),
+        GL_PRIMITIVE_RESTART_FIXED_INDEX => Some(b(true)),
         GL_DEBUG_OUTPUT => Some(b(ctx.local.pipeline.debug_output)),
         GL_DEBUG_OUTPUT_SYNCHRONOUS => Some(b(ctx.local.pipeline.debug_output_synchronous)),
         GL_DEPTH_WRITEMASK => Some(b(ctx.local.pipeline.depth_write)),

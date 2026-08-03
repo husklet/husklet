@@ -603,6 +603,9 @@ pub(super) fn set_cap(ctx: &mut GlContext, cap: u32, on: bool) {
         GL_STENCIL_TEST => ctx.local.pipeline.stencil = on,
         GL_SCISSOR_TEST => ctx.local.pipeline.scissor_enabled = on,
         GL_RASTERIZER_DISCARD => ctx.local.pipeline.rasterizer_discard = on,
+        // GLES uses the fixed restart index unconditionally. The enable is therefore immutable, but
+        // Enable/Disable still accept the core capability enum rather than poisoning later state reset.
+        GL_PRIMITIVE_RESTART_FIXED_INDEX => {}
         GL_DEBUG_OUTPUT => ctx.local.pipeline.debug_output = on,
         GL_DEBUG_OUTPUT_SYNCHRONOUS => ctx.local.pipeline.debug_output_synchronous = on,
         GL_CULL_FACE => ctx.local.pipeline.cull_enabled = on,
