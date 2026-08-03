@@ -107,11 +107,21 @@ pub fn cmd_bind_descriptor_sets(
         let mut buffers = std::collections::BTreeMap::<u32, Vec<(u32, BufferBinding)>>::new();
         for ((binding, element), (buf_handle, offset, size)) in pairs {
             if let Some(buffer) = dev.buffers.get(&buf_handle) {
+                let offset = offset
+                    .checked_add(extra.get(&(binding, element)).copied().unwrap_or(0))
+                    .ok_or(GpuError::OutOfBounds)?;
+                if size == 0
+                    || offset
+                        .checked_add(size)
+                        .is_none_or(|end| end > buffer.size)
+                {
+                    return Err(GpuError::OutOfBounds);
+                }
                 buffers.entry(binding).or_default().push((
                     element,
                     BufferBinding {
                         id: buffer.ir_id,
-                        offset: offset + extra.get(&(binding, element)).copied().unwrap_or(0),
+                        offset,
                         size,
                     },
                 ));

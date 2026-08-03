@@ -142,6 +142,28 @@ pub fn update_descriptor_buffer_element(
     range: u64,
 ) -> Result<()> {
     validate_descriptor_element(dev, set, binding, array_element)?;
+    let range = match dev.buffers.get(&buffer) {
+        Some(buffer) => {
+            if offset > buffer.size {
+                return Err(GpuError::OutOfBounds);
+            }
+            let range = if range == u64::MAX { buffer.size - offset } else { range };
+            if range == 0
+                || offset
+                    .checked_add(range)
+                    .is_none_or(|end| end > buffer.size)
+            {
+                return Err(GpuError::OutOfBounds);
+            }
+            range
+        }
+        // A valid Vulkan call always names a live buffer. Preserve the recorder's historical explicit
+        // handle staging for push-descriptor tests, but WHOLE_SIZE cannot be resolved without a size.
+        None if range == u64::MAX => {
+            return Err(GpuError::Invalid("vkUpdateDescriptorSets: unknown VkBuffer"));
+        }
+        None => range,
+    };
     let rec = dev.descriptor_sets.get_mut(&set).ok_or(GpuError::Invalid(
         "vkUpdateDescriptorSets: unknown VkDescriptorSet",
     ))?;

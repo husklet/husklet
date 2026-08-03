@@ -1,4 +1,36 @@
 use super::*;
+
+#[test]
+fn compute_descriptor_whole_size_resolves_the_cts_52_byte_buffer() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let buffer =
+        create::create_buffer(&mut d, &mut sink, vk_buffer_usage::UNIFORM_BUFFER, 52).unwrap();
+    let layout = d.create_descriptor_set_layout(vec![LayoutBinding {
+        binding: 0,
+        descriptor_type: vk_descriptor_type::UNIFORM_BUFFER,
+        descriptor_count: 1,
+        stage_flags: 0,
+    }]);
+    let pool = d.create_descriptor_pool(1);
+    let set = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
+    create::update_descriptor_buffer(&mut d, set, 0, buffer, 4, u64::MAX).unwrap();
+    assert_eq!(d.descriptor_sets[&set].buffers[&(0, 0)], (buffer, 4, 48));
+
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    record::cmd_bind_descriptor_sets(&mut d, &mut sink, cb, 0, &[set], &[]).unwrap();
+    assert!(matches!(
+        sink.batches.last().unwrap()[0],
+        Cmd::CreateBindGroup(
+            _,
+            hl_gpu::protocol::model::descriptor::BindGroupDesc {
+                ref entries,
+                ..
+            }
+        ) if matches!(entries[0].resource, BindResource::Buffer { offset: 4, size: 48, .. })
+    ));
+}
 use hl_gpu::protocol::model::descriptor::PipelineBindingKind;
 
 #[test]

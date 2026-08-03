@@ -1,6 +1,43 @@
 use super::*;
 
 #[test]
+fn render_descriptor_whole_size_preserves_explicit_range_and_checks_dynamic_offset() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let buffer =
+        create::create_buffer(&mut d, &mut sink, vk_buffer_usage::UNIFORM_BUFFER, 52).unwrap();
+    let layout = d.create_descriptor_set_layout(vec![LayoutBinding {
+        binding: 0,
+        descriptor_type: vk_descriptor_type::UNIFORM_BUFFER_DYNAMIC,
+        descriptor_count: 1,
+        stage_flags: 0,
+    }]);
+    let pool = d.create_descriptor_pool(1);
+    let set = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
+    create::update_descriptor_buffer(&mut d, set, 0, buffer, 4, u64::MAX).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    assert_eq!(
+        record::cmd_bind_descriptor_sets(&mut d, &mut sink, cb, 0, &[set], &[4]),
+        Err(GpuError::OutOfBounds),
+        "WHOLE_SIZE resolves at update; a later dynamic offset may not overrun it"
+    );
+
+    create::update_descriptor_buffer(&mut d, set, 0, buffer, 4, 40).unwrap();
+    record::cmd_bind_descriptor_sets(&mut d, &mut sink, cb, 0, &[set], &[4]).unwrap();
+    assert!(matches!(
+        sink.batches.last().unwrap()[0],
+        Cmd::CreateBindGroup(
+            _,
+            hl_gpu::protocol::model::descriptor::BindGroupDesc {
+                ref entries,
+                ..
+            }
+        ) if matches!(entries[0].resource, BindResource::Buffer { offset: 8, size: 40, .. })
+    ));
+}
+
+#[test]
 fn draw_rebases_cts_vertex_stream_and_preserves_the_vulkan_binding_offset() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
