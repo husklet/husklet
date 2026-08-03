@@ -66,7 +66,11 @@ fn es2_attribute_varying_fragcolor_shader_is_fully_desktopized() {
         v.contains("layout(std140, binding = 0) uniform HlUniforms {"),
         "{v}"
     );
-    assert!(v.contains("mat4 uMVP;"), "{v}");
+    assert!(v.contains("vec4 uMVP_hle0_hlc0;"), "{v}");
+    assert!(
+        v.contains("mat4(uMVP_hle0_hlc0, uMVP_hle0_hlc1, uMVP_hle0_hlc2, uMVP_hle0_hlc3)"),
+        "{v}"
+    );
     assert!(
         f.contains("layout(binding = 1) uniform texture2D uTex_hltex;"),
         "{f}"
@@ -263,6 +267,19 @@ fn fragment_of(fs: &str) -> String {
     const VS: &str = "#version 300 es\nin vec2 position;\nout vec2 uv;\n\
                       void main() { uv = position; gl_Position = vec4(position, 0.0, 1.0); }\n";
     glsl::StageSources::new(VS, fs).translate_render().1
+}
+
+#[test]
+fn es100_matrix_negation_compiles_for_every_square_shape() {
+    for ty in ["mat2", "mat3", "mat4"] {
+        let translated = fragment_of(&format!(
+            "precision highp float; uniform {ty} value; void main() {{ {ty} negated = -value; gl_FragColor = vec4(negated[0][0]); }}"
+        ));
+        assert!(!translated.contains(&format!("    {ty} value;")), "{translated}");
+        assert!(translated.contains("vec4 value_hle0_hlc0;"), "{translated}");
+        assert!(translated.contains(&format!("{ty}(value_hle0_hlc0")), "{translated}");
+        assert_naga_parses(&translated, naga::ShaderStage::Fragment);
+    }
 }
 
 #[test]

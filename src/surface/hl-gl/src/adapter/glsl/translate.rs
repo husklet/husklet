@@ -438,7 +438,7 @@ impl Declarations<'_> {
                 padding += 1;
             }
             let name = Self::storage_name(&u.name);
-            if let Some((columns, _)) = matrix_shape(&u.ty).filter(|_| name != u.name) {
+            if let Some((columns, _)) = matrix_shape(&u.ty) {
                 for element in 0..u.arr.max(1) {
                     for column in 0..columns {
                         out.push_str(&format!("    vec4 {name}_hle{element}_hlc{column};\n"));
@@ -682,9 +682,7 @@ impl Declarations<'_> {
     fn rewrite_data_refs(body: &mut String, uniforms: &[Uni]) {
         for uniform in uniforms.iter().rev() {
             let replacement = Self::storage_name(&uniform.name);
-            if let Some((columns, rows)) =
-                matrix_shape(&uniform.ty).filter(|_| replacement != uniform.name)
-            {
+            if let Some((columns, rows)) = matrix_shape(&uniform.ty) {
                 let swizzle = match rows {
                     2 => ".xy",
                     3 => ".xyz",
