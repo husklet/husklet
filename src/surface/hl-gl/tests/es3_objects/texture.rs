@@ -137,30 +137,35 @@ fn tex_storage_3d_sizes_and_seals_the_array_texture() {
 }
 
 #[test]
-fn tex_image_3d_then_sub_image_3d_write_the_layer0_plane() {
+fn tex_image_3d_then_sub_image_3d_preserve_distinct_layers() {
     let mut c = ctx();
     let t = c.textures.gen();
     c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_3D, t);
 
-    // A full 4x4x2 upload of a solid blue layer-0 plane.
+    // A full 4x4x2 upload with distinct blue and green layers.
     let blue = [0u8, 0, 255, 255].repeat(4 * 4);
-    record::tex_image_3d(&mut c, GL_TEXTURE_3D, 0, 4, 4, 2, &blue);
+    let green = [0u8, 255, 0, 255].repeat(4 * 4);
+    let volume = [blue.as_slice(), green.as_slice()].concat();
+    record::tex_image_3d(&mut c, GL_TEXTURE_3D, 0, 4, 4, 2, &volume);
     {
         let tex = c.textures.get(t).expect("3D texture allocated");
         assert_eq!((tex.w, tex.h), (4, 4));
         assert_eq!(&tex.data[0..4], &[0, 0, 255, 255], "texel (0,0) is blue");
+        assert_eq!(tex.depth, 2);
+        assert_eq!(&tex.layer(1).unwrap()[0..4], &[0, 255, 0, 255]);
     }
 
     // Overwrite the top-left 2x2 with red (zoffset 0, layer-0 plane).
     let red = [255u8, 0, 0, 255].repeat(2 * 2);
-    record::tex_sub_image_3d(&mut c, GL_TEXTURE_3D, 0, 0, 0, 0, 2, 2, 1, &red);
+    record::tex_sub_image_3d(&mut c, GL_TEXTURE_3D, 0, 0, 0, 1, 2, 2, 1, &red);
     let tex = c.textures.get(t).unwrap();
     assert_eq!(
-        &tex.data[0..4],
+        &tex.layer(1).unwrap()[0..4],
         &[255, 0, 0, 255],
-        "sub-image overwrote texel (0,0) to red"
+        "sub-image overwrote layer 1 texel (0,0) to red"
     );
+    assert_eq!(&tex.data[0..4], &[0, 0, 255, 255]);
 }
 
 // ---- glGetTexParameteriv: filter/wrap state of the bound texture round-trips ---------------------

@@ -119,6 +119,7 @@ pub struct MipLevel {
 pub struct GlTexture {
     pub w: i32,
     pub h: i32,
+    pub depth: i32,
     /// The CPU shadow plane: `w * h * `[`GlTexture::bytes_per_texel`] bytes, in the texel format
     /// [`GlTexture::ir_format`] names.
     ///
@@ -131,6 +132,7 @@ pub struct GlTexture {
     /// Base-level cube faces in GL order (+X, -X, +Y, -Y, +Z, -Z). `data` remains the canonical 2D
     /// plane for existing image/FBO paths; cube sampling lowers these six distinct planes as layers.
     pub(crate) cube_faces: [Option<Arc<Vec<u8>>>; 6],
+    pub(crate) layers: Vec<Arc<Vec<u8>>>,
     pub min_filter: u32,
     pub mag_filter: u32,
     pub wrap_s: u32,
@@ -190,8 +192,10 @@ impl Default for GlTexture {
         Self {
             w: 0,
             h: 0,
+            depth: 1,
             data: Arc::new(Vec::new()),
             cube_faces: std::array::from_fn(|_| None),
+            layers: Vec::new(),
             min_filter: GL_NEAREST_MIPMAP_LINEAR,
             mag_filter: GL_LINEAR,
             wrap_s: GL_REPEAT,
@@ -216,6 +220,16 @@ impl Default for GlTexture {
 impl GlTexture {
     pub(crate) fn cube_faces(&self) -> &[Option<Arc<Vec<u8>>>; 6] {
         &self.cube_faces
+    }
+    pub(crate) fn layers(&self) -> &[Arc<Vec<u8>>] {
+        &self.layers
+    }
+    pub fn layer(&self, layer: usize) -> Option<&[u8]> {
+        if layer == 0 {
+            Some(self.data.as_slice())
+        } else {
+            self.layers.get(layer - 1).map(|data| data.as_slice())
+        }
     }
     /// The neutral min-filter for this texture's GL min-filter (`gl_shim.c`: Linear for LINEAR /
     /// LINEAR_MIPMAP_*, else Nearest).
@@ -815,12 +829,75 @@ impl Textures {
         t.shared_version = 0;
         t.w = w;
         t.h = h;
+        t.depth = 1;
+        t.layers.clear();
         if t.data.len() != size {
             t.data = Arc::new(vec![0u8; size]);
         }
         t.real_pixels = false;
         t.gpu_authoritative = false;
         t.gen = generation;
+        true
+    }
+
+    pub fn alloc_volume(&mut self, name: u32, w: i32, h: i32, depth: i32, pixels: &[u8]) -> bool {
+        if depth <= 0 || !self.alloc_plane(name, w, h) {
+            return false;
+        }
+        let Some(texture) = self.map.get_mut(&name) else { return false; };
+        let plane = texture.data.len();
+        let Some(total) = plane.checked_mul(depth as usize) else { return false; };
+        if !pixels.is_empty() && pixels.len() < total {
+            return false;
+        }
+        texture.depth = depth;
+        if pixels.is_empty() {
+            texture.data = Arc::new(vec![0; plane]);
+            texture.layers = (1..depth).map(|_| Arc::new(vec![0; plane])).collect();
+            texture.real_pixels = false;
+        } else {
+            texture.data = Arc::new(pixels[..plane].to_vec());
+            texture.layers = pixels[plane..total]
+                .chunks_exact(plane)
+                .map(|slice| Arc::new(slice.to_vec()))
+                .collect();
+            texture.real_pixels = true;
+        }
+        true
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn sub_image_3d(&mut self, name: u32, xo: i32, yo: i32, zo: i32, w: i32, h: i32, depth: i32, pixels: &[u8]) -> bool {
+        let Some(texture) = self.map.get(&name) else { return false; };
+        if zo < 0 || depth <= 0 || zo.checked_add(depth).is_none_or(|end| end > texture.depth) {
+            return false;
+        }
+        let Some(plane_bytes) = (w.max(0) as usize).checked_mul(h.max(0) as usize).and_then(|n| n.checked_mul(texture.bytes_per_texel())) else { return false; };
+        if pixels.len() < plane_bytes.saturating_mul(depth as usize) { return false; }
+        for layer in 0..depth {
+            let z = (zo + layer) as usize;
+            if z == 0 {
+                if !self.sub_image_2d(name, xo, yo, w, h, &pixels[layer as usize * plane_bytes..][..plane_bytes]) { return false; }
+            } else {
+                let Some(texture) = self.map.get_mut(&name) else { return false; };
+                let texel = texture.bytes_per_texel();
+                let tw = texture.w as usize;
+                let Some(target) = texture.layers.get_mut(z - 1) else { return false; };
+                let mut owned = (**target).clone();
+                for row in 0..h as usize {
+                    let dst = ((yo as usize + row) * tw + xo as usize) * texel;
+                    let src = layer as usize * plane_bytes + row * w as usize * texel;
+                    owned[dst..dst + w as usize * texel].copy_from_slice(&pixels[src..src + w as usize * texel]);
+                }
+                *target = Arc::new(owned);
+            }
+        }
+        let generation = self.generation();
+        if let Some(texture) = self.map.get_mut(&name) {
+            texture.real_pixels = true;
+            texture.gpu_authoritative = false;
+            texture.gen = generation;
+        }
         true
     }
 

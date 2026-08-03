@@ -489,11 +489,8 @@ pub fn tex_image_3d(
     if name == 0 || ctx.textures.get(name).is_none() {
         return;
     }
-    if !ctx.textures.alloc_plane(name, w, h) {
-        return;
-    }
-    if !rgba.is_empty() && depth > 0 {
-        ctx.textures.sub_image_2d(name, 0, 0, w, h, rgba);
+    if !ctx.textures.alloc_volume(name, w, h, depth, rgba) {
+        ctx.set_gl_error(GL_INVALID_VALUE);
     }
 }
 
@@ -549,7 +546,6 @@ pub fn tex_sub_image_3d(
     rgba: &[u8],
 ) {
     if level != 0
-        || zo != 0
         || depth <= 0
         || (target != GL_TEXTURE_2D_ARRAY && target != GL_TEXTURE_3D)
     {
@@ -559,7 +555,9 @@ pub fn tex_sub_image_3d(
     if name == 0 {
         return;
     }
-    ctx.textures.sub_image_2d(name, xo, yo, w, h, rgba);
+    if !ctx.textures.sub_image_3d(name, xo, yo, zo, w, h, depth, rgba) {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+    }
 }
 
 /// `glCopyTexSubImage2D(target, level, xo, yo, x, y, w, h)` — copy a rect of the READ framebuffer's color

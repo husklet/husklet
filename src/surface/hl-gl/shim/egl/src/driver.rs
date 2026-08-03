@@ -234,11 +234,30 @@ unsafe fn to_plane(
     pixels: *const c_void,
     destination: TextureFormat,
 ) -> Vec<u8> {
+    unsafe { to_plane_depth(ctx, format, type_, w, h, 1, pixels, destination) }
+}
+
+unsafe fn to_plane_depth(
+    ctx: &GlContext,
+    format: u32,
+    type_: u32,
+    w: i32,
+    h: i32,
+    depth: i32,
+    pixels: *const c_void,
+    destination: TextureFormat,
+) -> Vec<u8> {
     // GLES3.0 3.8.3: `width`/`height` above GL_MAX_TEXTURE_SIZE is GL_INVALID_VALUE, so the record layer
     // will reject this upload. Refuse the extent HERE, before the client pointer is read: the source span
     // is `w * h * bpp`, and a guest passing 65536x65536 with a small buffer made the shim read ~17 GiB out
     // of bounds and segfault before the record layer ever saw the size.
-    if w < 0 || h < 0 || w > query::MAX_TEXTURE_SIZE || h > query::MAX_TEXTURE_SIZE {
+    if w < 0
+        || h < 0
+        || depth < 0
+        || w > query::MAX_TEXTURE_SIZE
+        || h > query::MAX_TEXTURE_SIZE
+        || depth > query::MAX_3D_TEXTURE_SIZE
+    {
         hl_log::hl_count!(hl_log::tag::GL, "upload_extent_rejected");
         crate::stub::Diagnostics::upload(format, type_, crate::stub::UploadOutcome::Rejected);
         return Vec::new();
@@ -269,7 +288,7 @@ unsafe fn to_plane(
             hl_log::hl_count!(hl_log::tag::GL, "upload_unsupported");
         }
     }
-    let Some(upload) = Upload::new(format, type_, w, h, ctx.pixel_store_state()) else {
+    let Some(upload) = Upload::new_3d(format, type_, w, h, depth, ctx.pixel_store_state()) else {
         // An unmodelled (format, type) combination. The guest gets an empty plane, the upload path
         // reports nothing, and the texture samples as whatever the plane was minted with — a capability
         // not taken, reported as success at every layer above. The counter beside this cannot say WHICH

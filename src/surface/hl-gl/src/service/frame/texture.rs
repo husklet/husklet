@@ -470,7 +470,11 @@ pub(super) fn lower_textures(
                     TextureDesc {
                         width: base_w as u32,
                         height: base_h as u32,
-                        depth: if texture_dim == TextureDim::Cube { 6 } else { 1 },
+                        depth: if texture_dim == TextureDim::Cube {
+                            6
+                        } else {
+                            t.depth.max(1) as u32
+                        },
                         mip_levels,
                         sample_count: 1,
                         dim: texture_dim,
@@ -550,6 +554,24 @@ pub(super) fn lower_textures(
                         });
                         layer_stages.push((face_ir, layer as u32));
                     }
+                } else {
+                    for (layer, data) in t.layers().iter().enumerate() {
+                        let layer_ir = ctx.alloc_buffer_ir()?;
+                        cmds.push(Cmd::CreateBuffer(
+                            layer_ir,
+                            BufferDesc {
+                                size: data.len() as u64,
+                                usage: buffer_usage::COPY_SRC,
+                                label: String::new(),
+                            },
+                        ));
+                        cmds.push(Cmd::WriteBuffer {
+                            id: layer_ir,
+                            offset: 0,
+                            data: data.as_ref().clone(),
+                        });
+                        layer_stages.push((layer_ir, layer as u32 + 1));
+                    }
                 }
                 // One staging buffer per declared level above the base. A host texture must have every
                 // level it declares, so this walks exactly the levels `mip_levels` counted.
@@ -590,7 +612,11 @@ pub(super) fn lower_textures(
                 mip_stages,
                 layer_stages,
                 bytes_per_texel: upload_format.bytes_per_texel().unwrap_or(4) as u32,
-                layers: if texture_dim == TextureDim::Cube { 6 } else { 1 },
+                layers: if texture_dim == TextureDim::Cube {
+                    6
+                } else {
+                    t.depth.max(1) as u32
+                },
             });
         }
         sampler_base += elements as usize;

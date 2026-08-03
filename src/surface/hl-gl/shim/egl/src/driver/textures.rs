@@ -305,7 +305,18 @@ pub extern "C" fn glTexImage3D(
 ) {
     GlobalState::context(|group| {
         let destination = group.gl.bound_plane();
-        let rgba = unsafe { to_plane(&group.gl, format, type_, width, height, pixels, destination) };
+        let rgba = unsafe {
+            to_plane_depth(
+                &group.gl,
+                format,
+                type_,
+                width,
+                height,
+                depth,
+                pixels,
+                destination,
+            )
+        };
         record::tex_image_3d(&mut group.gl, target, level, width, height, depth, &rgba)
     });
 }
@@ -368,7 +379,11 @@ pub extern "C" fn glTexSubImage3D(
 ) {
     GlobalState::context(|group| {
         let destination = group.gl.bound_plane();
-        let rgba = unsafe { to_plane(&group.gl, format, type_, width, height, pixels, destination) };
+        let rgba = unsafe {
+            to_plane_depth(
+                &group.gl, format, type_, width, height, depth, pixels, destination,
+            )
+        };
         record::tex_sub_image_3d(
             &mut group.gl,
             target,
