@@ -58,6 +58,12 @@ impl FeatureStruct {
             1,
         ),
         feature(1_000_295_000, "VkPhysicalDevicePrivateDataFeatures", 1),
+        Self {
+            s_type: 1_000_344_000,
+            name: "VkPhysicalDeviceRGBA10X6FormatsFeaturesEXT",
+            count: 1,
+            implemented: &[0],
+        },
         feature(1_000_145_001, "VkPhysicalDeviceProtectedMemoryFeatures", 1),
         feature(
             1_000_156_004,
@@ -201,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn table_has_unique_stypes_and_only_dynamic_rendering_true() {
+    fn table_has_unique_stypes_and_only_backed_features_true() {
         let mut stypes = FeatureStruct::ALL
             .iter()
             .map(|feature| feature.s_type)
@@ -215,7 +221,39 @@ mod tests {
                 .iter()
                 .map(|feature| feature.implemented.len())
                 .sum::<usize>(),
-            1
+            2
+        );
+    }
+
+    #[test]
+    fn rgba10x6_feature_query_and_device_request_agree() {
+        let feature = FeatureStruct::matching(1_000_344_000).unwrap();
+        assert_eq!(feature.name, "VkPhysicalDeviceRGBA10X6FormatsFeaturesEXT");
+
+        let mut node = HeaderWithBits::<1> {
+            s_type: feature.s_type,
+            p_next: core::ptr::null_mut(),
+            bits: [0xcdcd_cdcd],
+        };
+        let mut query = crate::types::VkPhysicalDeviceFeatures2 {
+            s_type: crate::types::VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+            p_next: &mut node as *mut _ as *mut c_void,
+            features: crate::types::VkPhysicalDeviceFeatures {
+                bits: [VK_FALSE; 55],
+            },
+        };
+        crate::instance::vkGetPhysicalDeviceFeatures2(
+            core::ptr::null_mut(),
+            &mut query as *mut _ as *mut c_void,
+        );
+        assert_eq!(node.bits, [VK_TRUE]);
+        assert_eq!(
+            unsafe {
+                feature.first_unimplemented_request(
+                    &node as *const _ as *const VkBaseInStructure,
+                )
+            },
+            None
         );
     }
 

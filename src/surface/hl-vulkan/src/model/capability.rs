@@ -93,6 +93,10 @@ pub const DEVICE_EXTENSIONS: &[ExtensionProp] = &[
         name: "VK_KHR_sampler_mirror_clamp_to_edge",
         spec_version: 3,
     },
+    ExtensionProp {
+        name: "VK_EXT_rgba10x6_formats",
+        spec_version: 1,
+    },
 ];
 
 /// `VkFormatFeatureFlagBits` (stable bit values from vk.xml) — the per-format capability bits reported
@@ -1052,6 +1056,9 @@ mod tests {
 
     #[test]
     fn exact_packed_formats_support_the_cts_combined_image_usage() {
+        assert!(DEVICE_EXTENSIONS.iter().any(|extension| {
+            extension.name == "VK_EXT_rgba10x6_formats" && extension.spec_version == 1
+        }));
         let required = format_feature::COLOR_ATTACHMENT
             | format_feature::TRANSFER_SRC
             | format_feature::TRANSFER_DST;
