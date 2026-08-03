@@ -28,6 +28,11 @@ CU	cuDeviceGetAttribute	CUresult	int*|pi;CUdevice_attribute|attrib;CUdevice|dev
 CU	cuDeviceGetByPCIBusId	CUresult	CUdevice*|dev;const char*|s
 CU	cuDeviceGetCount	CUresult	int*|c
 CU	cuDeviceGetLuid	CUresult	char*|luid;unsigned int*|mask;CUdevice|dev
+CU	cuGraphicsGLRegisterBuffer	CUresult	CUgraphicsResource*|resource;unsigned int|buffer;unsigned int|flags
+CU	cuGraphicsMapResources	CUresult	unsigned int|count;CUgraphicsResource*|resources;CUstream|stream
+CU	cuGraphicsResourceGetMappedPointer_v2	CUresult	CUdeviceptr*|devPtr;size_t*|size;CUgraphicsResource|resource
+CU	cuGraphicsUnmapResources	CUresult	unsigned int|count;CUgraphicsResource*|resources;CUstream|stream
+CU	cuGraphicsUnregisterResource	CUresult	CUgraphicsResource|resource
 CU	cuDeviceGetName	CUresult	char*|name;int|len;CUdevice|dev
 CU	cuDeviceGetPCIBusId	CUresult	char*|s;int|len;CUdevice|dev
 CU	cuDeviceGetProperties	CUresult	CUdevprop*|prop;CUdevice|dev

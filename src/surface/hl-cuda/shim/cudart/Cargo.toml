@@ -1,7 +1,7 @@
 # hl-cuda shim: the guest CUDA Runtime API front-end, deployed as `libcudart.so.1`.
 #
 # A cdylib whose exported `cuda*`/`__cuda*` C-ABI surface is code-generated from `registry/cudart.manifest`
-# (build.rs) so it can never drift from the golden (49 entry points). The memory + device basics have
+# (build.rs) so it can never drift from the golden (54 entry points). The memory + device basics have
 # real bodies that call the `hl_cuda` lowering services through a process-global `hl_gpu::RemoteCommandSink`;
 # the fatbin-registration launch tail are benign, correct-ABI stubs (that path needs the registration
 # machinery, deferred).

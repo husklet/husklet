@@ -12,6 +12,7 @@
 
 use super::device::{CudaDeviceDesc, DevicePtr};
 use super::event::EventTable;
+use super::graphics::GraphicsResources;
 use super::memory::{Allocations, HostMemory};
 use super::module::{Function, Modules};
 use super::stream::StreamTable;
@@ -30,6 +31,8 @@ pub struct CudaContext {
     pub streams: StreamTable,
     /// CUDA events (cross-stream ordering markers: `cuEventRecord` / `cuStreamWaitEvent`).
     pub events: EventTable,
+    /// CUDA graphics-interop registrations imported into this context.
+    pub graphics: GraphicsResources,
     /// Launch pipeline cache: `(module, entry, block)` → `(shader id, pipeline id)`, so a repeated
     /// launch of the same kernel+block reuses the compiled shader/pipeline and emits no new
     /// `CreateShader`/`CreateComputePipeline`. The block dims are part of the key because they bake into
@@ -59,6 +62,7 @@ impl CudaContext {
             modules: Modules::new(),
             streams: StreamTable::new(),
             events: EventTable::new(),
+            graphics: GraphicsResources::new(),
             pipelines: HashMap::new(),
             global_allocs: HashMap::new(),
             next_buffer: 1,

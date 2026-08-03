@@ -71,3 +71,41 @@ pub extern "C" fn hl_shim_external_buffers_enabled() -> i32 {
         i32::from(state.external_buffers_enabled())
     })
 }
+
+/// Process-local bridge used by the CUDA shim to turn a GL name into the host resource capability.
+/// Returns zero on success and never exposes the GL name as a cross-connection resource identity.
+#[cfg(not(gles_client))]
+#[no_mangle]
+pub unsafe extern "C" fn hl_gl_export_buffer(name: u32, export_out: *mut u64) -> i32 {
+    if name == 0 || export_out.is_null() {
+        return -1;
+    }
+    let result = GlobalState::gpu_io(std::time::Duration::from_secs(31), move |group, sink| {
+        let bytes = group.gl.buffers.get(name)
+            .ok_or(hl_gpu::GpuError::Invalid("GL buffer"))?.data.as_ref().clone();
+        let (buffer, create) = group.gl.interop_buffer_ir(name)?;
+        if create {
+            use hl_gpu::protocol::model::descriptor::BufferDesc;
+            use hl_gpu::protocol::model::enums::buffer_usage;
+            use hl_gpu::Cmd;
+            sink.submit(&[
+                Cmd::CreateBuffer(buffer, BufferDesc {
+                    size: bytes.len() as u64,
+                    usage: buffer_usage::COPY_SRC | buffer_usage::COPY_DST | buffer_usage::VERTEX
+                        | buffer_usage::INDEX | buffer_usage::STORAGE | buffer_usage::MAP,
+                    label: "GL/CUDA interop buffer".into(),
+                }),
+                Cmd::WriteBuffer { id: buffer, offset: 0, data: bytes },
+            ])?;
+        }
+        sink.export_buffer(hl_gpu::BufferId(buffer))?;
+        Ok(())
+    });
+    match result {
+        Ok(result) => match result.observations.last() {
+            Some(super::io::Observation::Export(export)) => { *export_out = export.0; 0 }
+            _ => -1,
+        },
+        Err(_) => -1,
+    }
+}

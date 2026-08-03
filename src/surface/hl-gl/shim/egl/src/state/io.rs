@@ -1,5 +1,5 @@
 use hl_gpu::{
-    BufferId, Capabilities, Cmd, CommandSink, FeatureRequest, FenceId, FenceWait, GpuError,
+    BufferId, Capabilities, Cmd, CommandSink, ExportId, FeatureRequest, FenceId, FenceWait, GpuError,
 };
 
 pub(crate) enum Observation {
@@ -7,6 +7,7 @@ pub(crate) enum Observation {
     Timed(FenceWait),
     Poll(bool),
     Read(Vec<u8>),
+    Export(ExportId),
 }
 
 pub(crate) struct IoResult<T> {
@@ -25,6 +26,7 @@ enum Operation {
     Timed(FenceId, u64, u64),
     Poll(FenceId, u64),
     Read(BufferId, u64, usize),
+    Export(BufferId),
 }
 
 impl<T> IoPlan<T> {
@@ -56,6 +58,9 @@ impl<T> IoPlan<T> {
                 }
                 Operation::Read(buffer, offset, len) => {
                     observations.push(Observation::Read(sink.read_buffer(buffer, offset, len)?))
+                }
+                Operation::Export(buffer) => {
+                    observations.push(Observation::Export(sink.export_buffer(buffer)?))
                 }
             }
         }
@@ -106,6 +111,11 @@ impl CommandSink for IoSink {
         self.operations.push(Operation::Read(id, offset, len));
         Ok(vec![0; len])
     }
+
+    fn export_buffer(&mut self, id: BufferId) -> hl_gpu::Result<ExportId> {
+        self.operations.push(Operation::Export(id));
+        Ok(ExportId(0))
+    }
 }
 
 #[cfg(test)]
@@ -139,6 +149,10 @@ mod tests {
         fn read_buffer(&mut self, _: BufferId, _: u64, len: usize) -> hl_gpu::Result<Vec<u8>> {
             Ok((1..=len as u8).collect())
         }
+
+        fn export_buffer(&mut self, id: BufferId) -> hl_gpu::Result<ExportId> {
+            Ok(ExportId(id.0 as u64 + 100))
+        }
     }
 
     #[test]
@@ -147,6 +161,7 @@ mod tests {
             assert_eq!(sink.wait_timeout(FenceId(1), 2, 3)?, FenceWait::Timeout);
             assert!(!sink.poll_fence(FenceId(4), 5)?);
             assert_eq!(sink.read_buffer(BufferId(6), 7, 3)?, [0, 0, 0]);
+            assert_eq!(sink.export_buffer(BufferId(8))?, ExportId(0));
             Ok(11)
         })
         .expect("prepare");
@@ -159,7 +174,8 @@ mod tests {
             [
                 Observation::Timed(FenceWait::Complete),
                 Observation::Poll(true),
-                Observation::Read(bytes)
+                Observation::Read(bytes),
+                Observation::Export(ExportId(108))
             ] if bytes == &[1, 2, 3]
         ));
     }

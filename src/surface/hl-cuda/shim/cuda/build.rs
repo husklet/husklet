@@ -1,5 +1,5 @@
 //! Codegen for the guest `libcuda.so.1` shim: turn `registry/cuda_driver.manifest` into the complete
-//! `#[no_mangle] extern "C"` `cu*` export surface (132 entry points).
+//! `#[no_mangle] extern "C"` `cu*` export surface (137 entry points).
 //!
 //! Every entry point NOT hand-written in `src/driver.rs` (`IMPLEMENTED` below) is emitted here as a
 //! spec-faithful default stub: correct C-ABI signature (so the symbol resolves and the guest app links +
@@ -275,6 +275,11 @@ const IMPLEMENTED: &[&str] = &[
     "cuStreamWaitEvent",
     // IR-wired compute path
     "cuMemAlloc_v2",
+    "cuGraphicsGLRegisterBuffer",
+    "cuGraphicsMapResources",
+    "cuGraphicsResourceGetMappedPointer_v2",
+    "cuGraphicsUnmapResources",
+    "cuGraphicsUnregisterResource",
     "cuMemFree_v2",
     "cuMemcpyHtoD_v2",
     "cuMemcpyDtoH_v2",

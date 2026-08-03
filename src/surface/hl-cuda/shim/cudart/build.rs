@@ -232,6 +232,11 @@ const IMPLEMENTED: &[&str] = &[
     "cudaLaunchKernel",
     // memory (device / managed / pinned)
     "cudaMalloc",
+    "cudaGraphicsGLRegisterBuffer",
+    "cudaGraphicsMapResources",
+    "cudaGraphicsResourceGetMappedPointer",
+    "cudaGraphicsUnmapResources",
+    "cudaGraphicsUnregisterResource",
     "cudaFree",
     "cudaMallocManaged",
     "cudaMallocHost",

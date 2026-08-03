@@ -13,6 +13,7 @@
 pub mod allocate;
 pub mod event;
 pub mod graph;
+pub mod graphics;
 pub mod launch;
 pub mod load_module;
 pub mod register;

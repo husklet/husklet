@@ -36,6 +36,7 @@ impl GlContext {
             shared_tex_ir_cache: HashMap::new(),
             shared_target_cache: HashMap::new(),
             buf_ir_cache: HashMap::new(),
+            interop_buf_ir: HashMap::new(),
             prog_shader_cache: HashMap::new(),
             prog_pipeline_cache: HashMap::new(),
             sampler_ir_cache: Vec::new(),
@@ -148,6 +149,9 @@ impl GlContext {
             }
         });
         for ir in dead {
+            self.pending_destroys.push(Cmd::DestroyBuffer(ir));
+        }
+        if let Some((ir, _)) = self.interop_buf_ir.remove(&gl_name) {
             self.pending_destroys.push(Cmd::DestroyBuffer(ir));
         }
     }
@@ -600,6 +604,9 @@ impl GlContext {
         usage: u32,
         gen: u64,
     ) -> hl_gpu::Result<(u32, bool)> {
+        if let Some(&(ir, _)) = self.interop_buf_ir.get(&gl_name) {
+            return Ok((ir, false));
+        }
         if let Some(&(ir, up_gen)) = self.buf_ir_cache.get(&(gl_name, usage)) {
             if up_gen == gen {
                 hl_log::hl_count!(hl_log::tag::GL, "buf_cache_hit");
@@ -619,5 +626,36 @@ impl GlContext {
         Ok((ir, true))
     }
 
+    /// Mint or return the single IR backing used while a GL buffer is registered with CUDA.
+    pub fn interop_buffer_ir(&mut self, gl_name: u32) -> hl_gpu::Result<(u32, bool)> {
+        let gl_buffer = self.buffers.get(gl_name).ok_or(hl_gpu::GpuError::Invalid("GL buffer"))?;
+        if gl_buffer.mapped.is_some() {
+            return Err(hl_gpu::GpuError::Invalid("mapped GL buffer"));
+        }
+        if let Some(&(ir, _)) = self.interop_buf_ir.get(&gl_name) {
+            return Ok((ir, false));
+        }
+        let ir = self.alloc_buffer_ir()?;
+        self.interop_buf_ir.insert(gl_name, (ir, gl_buffer.gen));
+        Ok((ir, true))
+    }
+
     // ---- IR id minting ---------------------------------------------------------------------------
+}
+
+#[cfg(test)]
+mod interop_tests {
+    use super::*;
+    use hl_gpu::protocol::model::enums::buffer_usage;
+
+    #[test]
+    fn cuda_export_becomes_the_canonical_backing_for_later_gl_draws() {
+        let mut context = GlContext::new();
+        context.buffers.ensure(7);
+        context.buffers.set_data(7, glconst::GL_ARRAY_BUFFER, &[1, 2, 3, 4], 0);
+        let (interop, create) = context.interop_buffer_ir(7).unwrap();
+        assert!(create);
+        assert_eq!(context.data_buffer_ir(7, buffer_usage::VERTEX, 1).unwrap(), (interop, false));
+        assert_eq!(context.data_buffer_ir(7, buffer_usage::INDEX, 1).unwrap(), (interop, false));
+    }
 }

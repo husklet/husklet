@@ -2,7 +2,7 @@
 //!
 //! A CUDA app (or `libcudart`) that links `-lcuda` loads these `cu*` symbols as its driver. The exported
 //! surface is code-generated from `registry/cuda_driver.manifest` (`build.rs`) so it can never drift from
-//! the golden 132-entry `cu*` set. Bring-up + the compute path have real hand-written bodies in
+//! the golden 137-entry `cu*` set. Bring-up + the compute path have real hand-written bodies in
 //! [`driver`] that marshal the C ABI and call the `hl_cuda` lowering services through a process-global
 //! [`hl_gpu::RemoteCommandSink`] over `$HL_GPU_EXEC` ([`state`]); the long tail are benign, correct-ABI
 //! default stubs ([`stub`]) ported to real bodies incrementally without ever changing the surface.
@@ -29,8 +29,8 @@ mod tests {
     #[test]
     fn surface_is_complete_and_matches_the_census() {
         assert_eq!(
-            CUDA_DRIVER_ENTRYPOINTS, 132,
-            "CUDA driver surface drifted from the golden 132"
+            CUDA_DRIVER_ENTRYPOINTS, 137,
+            "CUDA driver surface drifted from the golden 137"
         );
         assert_eq!(GENERATED_STUBS + IMPLEMENTED_ENTRYPOINTS, TOTAL_ENTRYPOINTS);
     }

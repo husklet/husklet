@@ -8,6 +8,7 @@ pub mod context;
 pub mod device;
 pub mod event;
 pub mod graph;
+pub mod graphics;
 pub mod memory;
 pub mod module;
 pub mod stream;

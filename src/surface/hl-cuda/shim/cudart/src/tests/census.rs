@@ -9,8 +9,8 @@ use super::support::*;
 #[test]
 fn surface_is_complete_and_matches_the_census() {
     assert_eq!(
-        CUDART_ENTRYPOINTS, 49,
-        "CUDA runtime surface drifted from the golden 49"
+        CUDART_ENTRYPOINTS, 54,
+        "CUDA runtime surface drifted from the golden 54"
     );
     assert_eq!(GENERATED_STUBS + IMPLEMENTED_ENTRYPOINTS, TOTAL_ENTRYPOINTS);
     // The whole surface has real hand-written bodies — no generated default stubs remain.
