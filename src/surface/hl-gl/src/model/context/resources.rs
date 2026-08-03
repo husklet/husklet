@@ -166,7 +166,7 @@ impl GlContext {
     /// Retire one exact image generation after the last container reference to a deleted texture object
     /// disappears. A reused GL name may already own a newer object, so broad name-based retirement would
     /// destroy the replacement's resources.
-    pub(crate) fn retire_texture_generation(&mut self, gl_name: u32, generation: u64) {
+    pub fn retire_texture_generation(&mut self, gl_name: u32, generation: u64) {
         self.retire_sampled_texture_generation(gl_name, generation);
         let key = (gl_name, generation);
         let Some((surface, texture)) = self.fbo_targets.remove(&key) else {

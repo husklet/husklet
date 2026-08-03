@@ -7,6 +7,48 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+#[test]
+fn redefining_reused_texture_name_preserves_retained_framebuffer_object() {
+    use hl_gl::model::glconst::{GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER, GL_TEXTURE0, GL_TEXTURE_2D};
+    use hl_gl::service::record;
+
+    let mut group = GroupData::new(Arc::new(IrAllocator::new()));
+    let texture = group.gl.textures.gen();
+    group.gl.active_texture(GL_TEXTURE0);
+    record::bind_texture(&mut group.gl, GL_TEXTURE_2D, texture);
+    record::tex_image_2d(&mut group.gl, 3, 5, &[]);
+    let retained_generation = group.gl.textures.get(texture).expect("texture").gen;
+    let retained_target = group
+        .gl
+        .fbo_target(texture, retained_generation)
+        .expect("retained target")
+        .1;
+    let framebuffer = group.gl.gen_framebuffer();
+    record::bind_framebuffer(&mut group.gl, GL_FRAMEBUFFER, framebuffer);
+    record::framebuffer_texture_2d(
+        &mut group.gl,
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D,
+        texture,
+        0,
+    );
+    record::bind_framebuffer(&mut group.gl, GL_FRAMEBUFFER, 0);
+    assert!(group.gl.delete_texture(texture));
+
+    record::bind_texture(&mut group.gl, GL_TEXTURE_2D, texture);
+    record::tex_image_2d(&mut group.gl, 7, 9, &[]);
+    group.redefine_texture(|context| record::tex_image_2d(context, 11, 13, &[]));
+
+    assert_eq!(
+        group
+            .gl
+            .resident_fbo_target_tex(texture, retained_generation),
+        Some(retained_target),
+        "redefining the replacement object must not retire the deleted object retained by an FBO"
+    );
+}
+
 fn group(allocator: &Arc<IrAllocator>) -> Arc<GroupSlot> {
     GroupSlot::new(Arc::clone(allocator))
 }

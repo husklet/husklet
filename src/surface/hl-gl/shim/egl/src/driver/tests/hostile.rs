@@ -9,6 +9,9 @@ const GL_STATIC_DRAW: u32 = 0x88E4;
 const GL_TEXTURE_2D: u32 = 0x0DE1;
 const GL_RGBA: u32 = 0x1908;
 const GL_UNSIGNED_BYTE: u32 = 0x1401;
+const GL_FRAMEBUFFER: u32 = 0x8D40;
+const GL_COLOR_ATTACHMENT0: u32 = 0x8CE0;
+const GL_FRAMEBUFFER_COMPLETE: u32 = 0x8CD5;
 const GL_COMPRESSED_RGBA8_ETC2_EAC: u32 = 0x9278;
 const OVER_MAX: i32 = query::MAX_TEXTURE_SIZE + 1;
 
@@ -43,6 +46,57 @@ fn bound_buffer_bytes(target: u32) -> Vec<u8> {
             .map(|buffer| buffer.data.to_vec())
             .unwrap_or_default()
     })
+}
+
+#[test]
+fn deleted_texture_name_reuse_does_not_retarget_unbound_framebuffer() {
+    bind_current();
+    let mut texture = 0;
+    let mut framebuffer = 0;
+    glGenTextures(1, &mut texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGBA as i32,
+        8,
+        8,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        core::ptr::null(),
+    );
+    glGenFramebuffers(1, &mut framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glFramebufferTexture2D(
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D,
+        texture,
+        0,
+    );
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDeleteTextures(1, &texture);
+    assert_eq!(glGetError(), GL_NO_ERROR, "deleting while the FBO is unbound");
+
+    glBindTexture(GL_TEXTURE_2D, texture);
+    assert_eq!(glGetError(), GL_NO_ERROR, "the deleted name is reusable immediately");
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGBA as i32,
+        16,
+        16,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        core::ptr::null(),
+    );
+    assert_eq!(glGetError(), GL_NO_ERROR, "the replacement gets independent storage");
+
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    assert_eq!(glCheckFramebufferStatus(GL_FRAMEBUFFER), GL_FRAMEBUFFER_COMPLETE);
+    assert_eq!(glGetError(), GL_NO_ERROR, "the old attachment remains valid");
 }
 
 /// `glBufferData(target, size, NULL, usage)` reserves `size` bytes. GLES3.0 2.9.2 makes a store the GL

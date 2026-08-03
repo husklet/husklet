@@ -235,7 +235,9 @@ impl GroupData {
         let generation = self.gl.textures.get(texture).map(|texture| texture.gen);
         define(&mut self.gl);
         if generation != self.gl.textures.get(texture).map(|texture| texture.gen) {
-            self.gl.retire_texture(texture);
+            if let Some(generation) = generation {
+                self.gl.retire_texture_generation(texture, generation);
+            }
             self.images.remove(&texture);
         }
     }
@@ -247,7 +249,9 @@ impl GroupData {
         define(&mut self.gl);
         let texture = self.gl.renderbuffers.backing_tex(renderbuffer);
         if generation != self.gl.textures.get(texture).map(|texture| texture.gen) {
-            self.gl.retire_texture(texture);
+            if let Some(generation) = generation {
+                self.gl.retire_texture_generation(texture, generation);
+            }
             self.images.remove(&texture);
         }
     }
