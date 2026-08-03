@@ -734,15 +734,40 @@ pub fn program_uniform_at(ctx: &mut GlContext, program: u32, location: i32, byte
     }
 }
 
-pub fn program_uniform_i32_at(ctx: &mut GlContext, program: u32, location: i32, values: &[i32]) {
+pub fn program_uniform_i32_at(
+    ctx: &mut GlContext,
+    program: u32,
+    location: i32,
+    count: i32,
+    values: &[i32],
+) {
+    if count < 0 {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
     let resolved = ctx
         .programs
         .program(program)
         .and_then(|program| program.location(location));
     match resolved {
         Some(crate::model::program::UniformLocation::Sampler { element }) => {
+            let Some((declaration_elements, writable_elements)) = ctx
+                .programs
+                .program(program)
+                .and_then(|program| program.sampler_location_extent(element))
+            else {
+                return;
+            };
+            if count > 1 && declaration_elements == 1 {
+                ctx.set_gl_error(GL_INVALID_OPERATION);
+                return;
+            }
             if let Some(program) = ctx.programs.get_mut(program) {
-                for (unit, value) in program.samp_units[element..].iter_mut().zip(values) {
+                for (unit, value) in program.samp_units[element..]
+                    .iter_mut()
+                    .take(writable_elements)
+                    .zip(values.iter().take(count as usize))
+                {
                     *unit = *value;
                 }
             }
@@ -764,7 +789,7 @@ pub fn program_uniform_sampler(ctx: &mut GlContext, program: u32, location: usiz
     let Ok(location) = i32::try_from(location) else {
         return;
     };
-    program_uniform_i32_at(ctx, program, location, &[unit]);
+    program_uniform_i32_at(ctx, program, location, 1, &[unit]);
 }
 
 // ---- program / shader lifecycle (glDeleteProgram / glDeleteShader / glDetachShader) ---------------
