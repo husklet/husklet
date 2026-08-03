@@ -891,6 +891,350 @@ pub fn invalid_vector_constructor(source: &str) -> Option<String> {
     None
 }
 
+#[derive(Clone, Debug)]
+struct Variable {
+    name: String,
+    declaration: usize,
+    visible_from: usize,
+    visible_until: usize,
+    scope: usize,
+}
+
+fn brace_ranges(source_tokens: &[String]) -> Vec<(usize, usize)> {
+    let mut stack = Vec::new();
+    let mut ranges = Vec::new();
+    for (at, token) in source_tokens.iter().enumerate() {
+        if token == "{" {
+            stack.push(at);
+        } else if token == "}" {
+            if let Some(open) = stack.pop() {
+                ranges.push((open, at));
+            }
+        }
+    }
+    ranges
+}
+
+fn enclosing_range(ranges: &[(usize, usize)], at: usize) -> Option<(usize, usize)> {
+    ranges
+        .iter()
+        .copied()
+        .filter(|(open, close)| *open < at && at < *close)
+        .min_by_key(|(open, close)| close - open)
+}
+
+fn statement_end(source_tokens: &[String], at: usize) -> usize {
+    source_tokens[at..]
+        .iter()
+        .position(|token| token == ";")
+        .map_or(source_tokens.len(), |offset| at + offset)
+}
+
+fn is_builtin_function(name: &str) -> bool {
+    matches!(
+        name,
+        "radians"
+            | "degrees"
+            | "sin"
+            | "cos"
+            | "tan"
+            | "asin"
+            | "acos"
+            | "atan"
+            | "pow"
+            | "exp"
+            | "log"
+            | "exp2"
+            | "log2"
+            | "sqrt"
+            | "inversesqrt"
+            | "abs"
+            | "sign"
+            | "floor"
+            | "ceil"
+            | "fract"
+            | "mod"
+            | "min"
+            | "max"
+            | "clamp"
+            | "mix"
+            | "step"
+            | "smoothstep"
+            | "length"
+            | "distance"
+            | "dot"
+            | "cross"
+            | "normalize"
+            | "faceforward"
+            | "reflect"
+            | "refract"
+            | "matrixCompMult"
+            | "lessThan"
+            | "lessThanEqual"
+            | "greaterThan"
+            | "greaterThanEqual"
+            | "equal"
+            | "notEqual"
+            | "any"
+            | "all"
+            | "not"
+            | "texture2D"
+            | "texture2DProj"
+            | "texture2DLod"
+            | "texture2DProjLod"
+            | "textureCube"
+            | "textureCubeLod"
+            | "dFdx"
+            | "dFdy"
+            | "fwidth"
+    )
+}
+
+/// Validate lexical scopes and the single ordinary-identifier namespace required by GLSL ES 1.00.
+///
+/// This deliberately models declaration visibility intervals rather than searching source spelling:
+/// braces, function bodies, loop scopes and single-statement branches each own a lifetime. As a result a
+/// legal shadow in a child block remains distinct from a redeclaration in the same scope.
+pub fn invalid_scope_semantics(source: &str) -> Option<String> {
+    let source_tokens = tokens(source);
+    let ranges = brace_ranges(&source_tokens);
+    let functions = parse_functions(&source_tokens).ok()?;
+    let structs = source_tokens
+        .windows(2)
+        .enumerate()
+        .filter_map(|(at, pair)| (pair[0] == "struct").then_some((pair[1].clone(), at + 1)))
+        .collect::<Vec<_>>();
+    let struct_ranges = structs
+        .iter()
+        .filter_map(|(_, at)| {
+            let open = source_tokens[*at..].iter().position(|token| token == "{")? + at;
+            Some((open, matching(&source_tokens, open, "{", "}")?))
+        })
+        .collect::<Vec<_>>();
+    let loops = source_tokens
+        .iter()
+        .enumerate()
+        .filter(|(_, token)| matches!(token.as_str(), "for" | "while"))
+        .filter_map(|(at, _)| {
+            let open =
+                (source_tokens.get(at + 1).map(String::as_str) == Some("(")).then_some(at + 1)?;
+            let condition_end = matching(&source_tokens, open, "(", ")")?;
+            let body_start = condition_end + 1;
+            let body_end = if source_tokens.get(body_start).map(String::as_str) == Some("{") {
+                matching(&source_tokens, body_start, "{", "}")?
+            } else {
+                statement_end(&source_tokens, body_start)
+            };
+            Some((at, open, condition_end, body_start, body_end))
+        })
+        .collect::<Vec<_>>();
+
+    for function in &functions {
+        if is_builtin_function(&function.name) {
+            return Some(format!(
+                "'{}' : built-in functions may not be redeclared",
+                function.name
+            ));
+        }
+    }
+    for (name, declaration) in &structs {
+        if source_tokens[..*declaration]
+            .iter()
+            .enumerate()
+            .any(|(at, token)| {
+                token == name
+                    && source_tokens.get(at + 1).map(String::as_str) == Some("(")
+                    && source_tokens.get(at.wrapping_sub(1)).map(String::as_str) != Some("struct")
+            })
+        {
+            return Some(format!(
+                "'{name}' : structure type used before its declaration"
+            ));
+        }
+    }
+
+    let parameter_names = functions
+        .iter()
+        .flat_map(|function| {
+            function
+                .parameters
+                .iter()
+                .map(|parameter| parameter.name.as_str())
+        })
+        .collect::<std::collections::HashSet<_>>();
+    let parameter_name_indices = functions
+        .iter()
+        .flat_map(|function| {
+            let open = function.declaration_at + 1;
+            let close = matching(&source_tokens, open, "(", ")").unwrap_or(open);
+            (open + 1..close).filter(|at| parameter_names.contains(source_tokens[*at].as_str()))
+        })
+        .collect::<std::collections::HashSet<_>>();
+
+    let mut variables = Vec::new();
+    for at in 0..source_tokens.len().saturating_sub(1) {
+        let ty = source_tokens[at].as_str();
+        if ty == "void"
+            || !(type_token(ty) || structs.iter().any(|(name, _)| name == ty))
+            || !is_identifier_token(&source_tokens[at + 1])
+            || source_tokens.get(at + 2).map(String::as_str) == Some("(")
+            || parameter_name_indices.contains(&(at + 1))
+            || struct_ranges
+                .iter()
+                .any(|(open, close)| *open < at && at < *close)
+        {
+            continue;
+        }
+        let declaration = at + 1;
+        let (mut scope, mut visible_until) = enclosing_range(&ranges, declaration)
+            .map_or((usize::MAX, source_tokens.len()), |(open, close)| {
+                (open, close)
+            });
+        let end = statement_end(&source_tokens, declaration);
+        let mut visible_from = end.saturating_add(1);
+        if let Some((loop_at, _, condition_end, _, loop_end)) =
+            loops.iter().find(|(_, open, condition_end, _, _)| {
+                *open < declaration && declaration < *condition_end
+            })
+        {
+            scope = *loop_at;
+            visible_until = *loop_end;
+            if source_tokens[*loop_at] == "while" {
+                visible_from = condition_end.saturating_add(1);
+            }
+        }
+
+        // A declaration controlled by an unbraced branch is scoped to that one statement.
+        let boundary = (0..at)
+            .rev()
+            .find(|index| matches!(source_tokens[*index].as_str(), ";" | "{" | "}"));
+        let statement_start = boundary.map_or(0, |index| index + 1);
+        if source_tokens[statement_start..at]
+            .iter()
+            .any(|token| token == "else")
+            || source_tokens[statement_start..at]
+                .iter()
+                .any(|token| token == "if")
+                && !source_tokens[statement_start..at]
+                    .iter()
+                    .any(|token| token == "{")
+        {
+            scope = statement_start;
+            visible_until = end;
+        }
+        variables.push(Variable {
+            name: source_tokens[declaration].clone(),
+            declaration,
+            visible_from,
+            visible_until,
+            scope,
+        });
+    }
+
+    // Function parameters live in the definition body, not in a preceding prototype and not globally.
+    for function in &functions {
+        let Some((body_start, body_end)) = function.body else {
+            continue;
+        };
+        let body_scope = body_start.saturating_sub(1);
+        for parameter in &function.parameters {
+            variables.push(Variable {
+                name: parameter.name.clone(),
+                declaration: function.declaration_at,
+                visible_from: body_start,
+                visible_until: body_end,
+                scope: body_scope,
+            });
+        }
+    }
+    for prototype in functions.iter().filter(|function| function.body.is_none()) {
+        let Some(definition) = functions.iter().find(|function| {
+            function.body.is_some()
+                && function.name == prototype.name
+                && overload_key(function) == overload_key(prototype)
+        }) else {
+            continue;
+        };
+        let (body_start, body_end) = definition.body.unwrap();
+        for parameter in &prototype.parameters {
+            if definition
+                .parameters
+                .iter()
+                .any(|defined| defined.name == parameter.name)
+            {
+                continue;
+            }
+            if source_tokens[body_start..body_end]
+                .iter()
+                .any(|token| token == &parameter.name)
+            {
+                return Some(format!(
+                    "'{}' : prototype parameter names are not visible in the definition",
+                    parameter.name
+                ));
+            }
+        }
+    }
+
+    for (index, left) in variables.iter().enumerate() {
+        if variables[..index]
+            .iter()
+            .any(|right| right.name == left.name && right.scope == left.scope)
+        {
+            return Some(format!(
+                "'{}' : redeclared in the same lexical scope",
+                left.name
+            ));
+        }
+        if left.scope == usize::MAX && functions.iter().any(|function| function.name == left.name) {
+            return Some(format!(
+                "'{}' : variable conflicts with a function",
+                left.name
+            ));
+        }
+        if let Some((_, _, _, body_start, body_end)) = loops
+            .iter()
+            .find(|(loop_at, _, _, _, _)| *loop_at == left.scope)
+        {
+            if variables.iter().any(|right| {
+                right.name == left.name
+                    && *body_start < right.declaration
+                    && right.declaration < *body_end
+            }) {
+                return Some(format!(
+                    "'{}' : loop variable redeclared in its body",
+                    left.name
+                ));
+            }
+        }
+    }
+
+    let declared_names = variables
+        .iter()
+        .map(|variable| variable.name.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    for (at, token) in source_tokens.iter().enumerate() {
+        if !declared_names.contains(token.as_str())
+            || variables.iter().any(|variable| variable.declaration == at)
+            || parameter_name_indices.contains(&at)
+            || at > 0 && source_tokens[at - 1] == "."
+            || struct_ranges
+                .iter()
+                .any(|(open, close)| *open < at && at < *close)
+        {
+            continue;
+        }
+        if !variables.iter().any(|variable| {
+            variable.name == *token && variable.visible_from <= at && at < variable.visible_until
+        }) {
+            return Some(format!(
+                "'{token}' : identifier is outside its lexical scope"
+            ));
+        }
+    }
+    None
+}
+
 /// The first operator reserved by GLSL ES 1.00 that occurs as a source token.
 ///
 /// Integer remainder and bitwise operators were deliberately reserved in ES 1.00 and became language

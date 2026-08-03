@@ -233,6 +233,62 @@ fn legal_vector_splats_conversions_and_component_composition_remain_accepted() {
 }
 
 #[test]
+fn es2_rejects_invalid_lexical_scope_and_symbol_namespace_uses() {
+    let invalid = [
+        "int value; float value; void main(){}",
+        "void main(){int value; float value;}",
+        "float func(float x); float func(float x); float func(float x){return x;} void main(){}",
+        "float sin(float x); void main(){}",
+        "float sin(float x){return x;} void main(){}",
+        "void item(int x); struct item{int x;}; void main(){}",
+        "void item(int x); float item; void main(){}",
+        "void func(){value=2.0;} float value; void main(){func();}",
+        "void main(){float left=1.0; left=right; float right=2.0;}",
+        "float func(float x){return Shape(x).value;} struct Shape{float value;}; void main(){}",
+        "void main(){{float inner=1.0;} float result=inner;}",
+        "void main(){if(true) float inner=1.0; float result=inner;}",
+        "void main(){if(false) float left=1.0; else float right=2.0; float result=right;}",
+        "void main(){float result; if(true){float inner=1.0;}else{result=inner;}}",
+        "void main(){float value=value;}",
+        "float func(float before); float func(float actual){return before;} void main(){}",
+        "void main(){for(int index=0;index<2;index++){int index=1;}}",
+        "void main(){for(int index=0;int condition=(index<2);index++){int condition=1;}}",
+        "void main(){for(int index=0;int index=(index<2);index++){}}",
+        "void main(){int count=0;while(bool active=(count<2)){bool active=false;count++;}}",
+        "void main(){for(int index=0;index<2;index++){} int result=index;}",
+        "void main(){int count=0;while(bool active=(count<2)){count++;} bool result=active;}",
+    ];
+    for source in invalid {
+        let mut context = GlContext::new();
+        let (status, log) = compile(&mut context, GL_VERTEX_SHADER, source);
+        assert_eq!(status, GL_FALSE as i32, "accepted invalid scope:\n{source}");
+        assert!(!log.is_empty(), "missing scope diagnostic: {source}");
+    }
+}
+
+#[test]
+fn legal_nested_shadowing_and_symbol_lifetimes_remain_accepted() {
+    let valid = [
+        "float global_value; void func(){global_value=1.0;} void main(){func();}",
+        "void main(){float value=1.0; {float value=2.0;} value=3.0;}",
+        "void main(){if(true){float branch=1.0; branch=2.0;}else{float branch=3.0; branch=4.0;}}",
+        "float func(float value){return value;} void main(){float value=func(1.0);}",
+        "struct Pair{float value;}; float func(Pair pair){return pair.value;} void main(){}",
+        "void main(){float first=1.0; float second=first;}",
+        "void main(){float result=0.0; for(int index=0;index<2;index++){result+=float(index);}}",
+        "void main(){int count=0; while(bool active=(count<2)){if(active){count++;}}}",
+    ];
+    for source in valid {
+        let mut context = GlContext::new();
+        let (status, log) = compile(&mut context, GL_FRAGMENT_SHADER, source);
+        assert_eq!(
+            status, GL_TRUE as i32,
+            "false scope rejection: {log}\n{source}"
+        );
+    }
+}
+
+#[test]
 fn es2_rejects_static_use_of_both_fragment_output_interfaces() {
     let mut context = GlContext::new();
     for body in [
