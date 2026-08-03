@@ -586,6 +586,58 @@ impl<'a> Context<'a> {
             HirExprKind::Literal(literal) if pos != ExprPos::Lhs => {
                 self.add_expression(Expression::Literal(literal), meta)?
             }
+            HirExprKind::Binary { left, op, right }
+                if pos != ExprPos::Lhs
+                    && matches!(op, BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr) =>
+            {
+                let (left, left_meta) =
+                    self.lower_expect_inner(stmt, frontend, left, ExprPos::Rhs)?;
+                let ty = self.resolve_type_handle(left, left_meta)?;
+                let local = self.locals.append(
+                    LocalVariable {
+                        name: None,
+                        ty,
+                        init: None,
+                    },
+                    meta,
+                );
+                let local_expr = self.add_expression(Expression::LocalVariable(local), meta)?;
+                self.body.push(
+                    Statement::Store {
+                        pointer: local_expr,
+                        value: left,
+                    },
+                    left_meta,
+                );
+                let right_body = self.new_body(|ctx| {
+                    let (right, right_meta) =
+                        ctx.lower_expect_inner(stmt, frontend, right, ExprPos::Rhs)?;
+                    let branch_local =
+                        ctx.add_expression(Expression::LocalVariable(local), Span::default())?;
+                    ctx.body.push(
+                        Statement::Store {
+                            pointer: branch_local,
+                            value: right,
+                        },
+                        right_meta,
+                    );
+                    Ok(())
+                })?;
+                let (accept, reject) = if op == BinaryOperator::LogicalAnd {
+                    (right_body, Block::new())
+                } else {
+                    (Block::new(), right_body)
+                };
+                self.body.push(
+                    Statement::If {
+                        condition: left,
+                        accept,
+                        reject,
+                    },
+                    meta,
+                );
+                self.add_expression(Expression::Load { pointer: local_expr }, meta)?
+            }
             HirExprKind::Binary { left, op, right } if pos != ExprPos::Lhs => {
                 let (mut left, left_meta) =
                     self.lower_expect_inner(stmt, frontend, left, ExprPos::Rhs)?;

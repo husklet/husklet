@@ -643,6 +643,18 @@ fn deqp_rejects_function_argument_basetype_mismatch() {
 }
 
 #[test]
+fn deqp_sequence_short_circuit_preserves_side_effect_order() {
+    let source = "#version 460\nlayout(location=0) out vec4 color; bool u_false=false; bool sideEffectA=false; bool funcA(){sideEffectA=true;return true;} bool sideEffectB=false; bool funcB(){sideEffectB=true;return true;} void main(){bool b=(funcA(),u_false==sideEffectA&&funcB()); color=(!b&&sideEffectA&&!sideEffectB)?vec4(0,1,0,1):vec4(1,0,0,1);}";
+    let wgsl = glsl_to_wgsl(source, naga::ShaderStage::Fragment, "main")
+        .unwrap_or_else(|error| panic!("dEQP sequence side effects were refused: {error}"));
+    let main = wgsl.find("fn main_1").expect("translated main");
+    let body = &wgsl[main..];
+    let call = body.find("funcB()").expect("conditional RHS call");
+    let branch = body[..call].rfind("if ").expect("short-circuit branch");
+    assert!(branch < call, "funcB must be called inside the branch: {wgsl}");
+}
+
+#[test]
 fn constant_all_and_any_relations_fold() {
     let source = "#version 460\nlayout(location=0) out vec4 color;\nconst bool a=all(bvec3(true,true,true)); const bool b=any(bvec3(false,true,false)); void main(){ color=vec4(float(a),float(b),0,1); }";
     glsl_to_wgsl(source, naga::ShaderStage::Fragment, "main")
