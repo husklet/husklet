@@ -1,21 +1,27 @@
 use super::*;
 
 pub fn bind_buffer(ctx: &mut GlContext, target: u32, name: u32) -> bool {
-    if !matches!(
-        target,
-        GL_ARRAY_BUFFER
-            | GL_ELEMENT_ARRAY_BUFFER
-            | GL_PIXEL_PACK_BUFFER
-            | GL_PIXEL_UNPACK_BUFFER
-            | GL_UNIFORM_BUFFER
-            | GL_SHADER_STORAGE_BUFFER
-            | GL_ATOMIC_COUNTER_BUFFER
-            | GL_TRANSFORM_FEEDBACK_BUFFER
-            | GL_DISPATCH_INDIRECT_BUFFER
-            | GL_COPY_READ_BUFFER
-            | GL_COPY_WRITE_BUFFER
-            | GL_DRAW_INDIRECT_BUFFER
-    ) {
+    let version = ctx.client_version();
+    let core = matches!(target, GL_ARRAY_BUFFER | GL_ELEMENT_ARRAY_BUFFER);
+    let es3 = version.0 >= 3
+        && matches!(
+            target,
+            GL_PIXEL_PACK_BUFFER
+                | GL_PIXEL_UNPACK_BUFFER
+                | GL_UNIFORM_BUFFER
+                | GL_TRANSFORM_FEEDBACK_BUFFER
+                | GL_COPY_READ_BUFFER
+                | GL_COPY_WRITE_BUFFER
+        );
+    let es31 = version >= (3, 1)
+        && matches!(
+            target,
+            GL_SHADER_STORAGE_BUFFER
+                | GL_ATOMIC_COUNTER_BUFFER
+                | GL_DISPATCH_INDIRECT_BUFFER
+                | GL_DRAW_INDIRECT_BUFFER
+        );
+    if !core && !es3 && !es31 {
         ctx.set_gl_error(GL_INVALID_ENUM);
         return false;
     }
