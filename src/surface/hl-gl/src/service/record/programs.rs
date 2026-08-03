@@ -322,6 +322,14 @@ impl GlContext {
                 self.programs.fail_compile(shader, reason);
                 return;
             }
+            if let Some(reason) = crate::adapter::glsl::invalid_function_semantics(source) {
+                self.programs.fail_compile(shader, reason);
+                return;
+            }
+            if let Some(reason) = crate::adapter::glsl::invalid_vector_constructor(source) {
+                self.programs.fail_compile(shader, reason);
+                return;
+            }
             if kind == GL_FRAGMENT_SHADER {
                 if let Some(reason) = crate::adapter::glsl::invalid_fragment_output_mix(source) {
                     self.programs.fail_compile(shader, reason);
@@ -607,7 +615,9 @@ pub fn set_uniform(
                         let value = match setter {
                             UniformSetter::Float(_) => f32::from_le_bytes(word) != 0.0,
                             UniformSetter::Int(_) => i32::from_le_bytes(word) != 0,
-                            UniformSetter::Matrix(_) => unreachable!("boolean matrices do not exist"),
+                            UniformSetter::Matrix(_) => {
+                                unreachable!("boolean matrices do not exist")
+                            }
                         };
                         u32::from(value).to_le_bytes()
                     })

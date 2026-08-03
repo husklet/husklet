@@ -393,9 +393,9 @@ mod uniforms;
 mod validation;
 
 pub use validation::{
-    invalid_declaration_identifier, invalid_fragment_output_mix, invalid_function_argument_basetype,
-    invalid_implicit_arithmetic, invalid_storage_declaration,
-    reserved_operator,
+    invalid_declaration_identifier, invalid_fragment_output_mix,
+    invalid_function_argument_basetype, invalid_function_semantics, invalid_implicit_arithmetic,
+    invalid_storage_declaration, invalid_vector_constructor, reserved_operator,
 };
 
 pub use bindings::{prepare_verbatim_program, prepare_verbatim_program_with};

@@ -75,6 +75,124 @@ fn es2_rejects_integer_literal_for_float_function_parameter() {
 }
 
 #[test]
+fn es2_rejects_function_declaration_definition_and_call_contract_violations() {
+    let invalid = [
+        "void func(float f){} void main(){func(1.0,2.0);}",
+        "void func(float f){} void main(){func();}",
+        "void func(vec2 f){} void main(){func(2.0);}",
+        "void func(vec3 f){} void main(){func(vec2(2.0));}",
+        "void func(vec3 f); void func(vec3 f){} void func(vec3 f){} void main(){}",
+        "void func(vec3 f); float func(vec3 f){return f.x;} void main(){}",
+        "void func(vec3 f); void func(const vec3 f){} void main(){}",
+        "void func(out vec3 f); void func(inout vec3 f){} void main(){}",
+        "void func(vec3 f[]); void main(){}",
+        "void func(vec3 f[3]); void func(vec3 f[3]){} void main(){vec3 values[4];func(values);}",
+        "void main(){func(1.0);} void func(float f){}",
+        "float func(float f){return;} void main(){}",
+        "void func(){return 1.0;} void main(){}",
+        "float func(float f){return f;} int func(float f){return int(f);} void main(){}",
+        "lowp float func(float f){return f;} mediump float func(float f){return f;} void main(){}",
+        "void main(float f){}",
+        "float main(){}",
+        "main(){}",
+        "void main(){float nested(float f);}",
+        "void main(){float nested(float f){return f;}}",
+        "struct Foo { float value; float array[2]; }; Foo func(){Foo f; return f;} void main(){}",
+        "struct Foo { float value; }; float Foo(float f){return f;} void main(){}",
+        "void func(const float f){f=1.0;} void main(){}",
+        "void func(const float f[3]){f[0]=1.0;} void main(){}",
+        "int func(const int a){const int b=-a; return b;} void main(){}",
+        "int func(const int a){int values[a]; return values[0];} void main(){}",
+        "void func(uniform float f){} void main(){}",
+        "uniform float func(float f){return f;} void main(){}",
+        "void func(){break;} void main(){}",
+        "void func(){continue;} void main(){}",
+    ];
+    for source in invalid {
+        for kind in [GL_VERTEX_SHADER, GL_FRAGMENT_SHADER] {
+            let mut context = GlContext::new();
+            let (status, log) = compile(&mut context, kind, source);
+            assert_eq!(
+                status, GL_FALSE as i32,
+                "accepted invalid function source:\n{source}"
+            );
+            assert!(!log.is_empty(), "missing diagnostic for:\n{source}");
+        }
+    }
+}
+
+#[test]
+fn valid_function_overloads_prototypes_calls_and_const_reads_remain_accepted() {
+    let valid = [
+        "float func(float value); float func(float other){return other;} void main(){float x=func(1.0);}",
+        "float func(float f){return f;} int func(int i){return i;} void main(){float x=func(1.0);}",
+        "int func(const int a){return 2*a;} void main(){int x=func(3);}",
+        "void func(){for(int i=0;i<1;i++){continue;break;}} void main(){}",
+        "struct Pair{float x;}; float func(Pair pair){return pair.x;} void main(){}",
+    ];
+    for source in valid {
+        let mut context = GlContext::new();
+        let (status, log) = compile(&mut context, GL_VERTEX_SHADER, source);
+        assert_eq!(
+            status, GL_TRUE as i32,
+            "false function rejection: {log}\n{source}"
+        );
+    }
+}
+
+#[test]
+fn es2_vector_constructors_require_the_exact_component_count() {
+    let mut context = GlContext::new();
+    for source_type in ["vec2", "ivec2", "bvec2"] {
+        for destination_type in ["vec3", "ivec3", "bvec3", "vec4", "ivec4", "bvec4"] {
+            let source = format!(
+                "void main(){{ {source_type} source_value; {destination_type} result={destination_type}(source_value); }}"
+            );
+            let (status, log) = compile(&mut context, GL_VERTEX_SHADER, &source);
+            assert_eq!(
+                status, GL_FALSE as i32,
+                "accepted undersized constructor: {source}"
+            );
+            assert!(
+                log.contains("components"),
+                "missing component diagnostic: {log}"
+            );
+        }
+    }
+    for source_type in ["vec3", "ivec3", "bvec3"] {
+        for destination_type in ["vec4", "ivec4", "bvec4"] {
+            let source = format!(
+                "void main(){{ {source_type} source_value; {destination_type} result={destination_type}(source_value); }}"
+            );
+            let (status, _) = compile(&mut context, GL_FRAGMENT_SHADER, &source);
+            assert_eq!(
+                status, GL_FALSE as i32,
+                "accepted undersized constructor: {source}"
+            );
+        }
+    }
+}
+
+#[test]
+fn legal_vector_splats_conversions_and_component_composition_remain_accepted() {
+    let mut context = GlContext::new();
+    for source in [
+        "void main(){vec4 value=vec4(1.0);}",
+        "void main(){ivec3 source_value; vec3 value=vec3(source_value);}",
+        "void main(){vec2 source_value; vec3 value=vec3(source_value,1.0);}",
+        "void main(){vec2 left; vec2 right; vec4 value=vec4(left,right);}",
+        "void main(){vec4 source_value; vec4 value=vec4(source_value.xyz,1.0);}",
+        "vec3 helper(){return vec3(1.0);} void main(){vec4 value=vec4(helper(),1.0);}",
+    ] {
+        let (status, log) = compile(&mut context, GL_VERTEX_SHADER, source);
+        assert_eq!(
+            status, GL_TRUE as i32,
+            "false constructor rejection: {log}\n{source}"
+        );
+    }
+}
+
+#[test]
 fn es2_rejects_static_use_of_both_fragment_output_interfaces() {
     let mut context = GlContext::new();
     for body in [
