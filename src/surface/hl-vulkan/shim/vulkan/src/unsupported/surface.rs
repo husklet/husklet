@@ -191,35 +191,3 @@ pub extern "C" fn vkGetPhysicalDeviceSurfaceCapabilities2EXT(
     );
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
-
-pub extern "C" fn vkGetPhysicalDeviceSurfaceCapabilities2KHR(
-    physicalDevice: *mut core::ffi::c_void,
-    pSurfaceInfo: *const core::ffi::c_void,
-    pSurfaceCapabilities: *mut core::ffi::c_void,
-) -> i32 {
-    let _ = physicalDevice;
-    let _ = pSurfaceInfo;
-    let _ = pSurfaceCapabilities;
-    crate::stub::Call::unsupported(
-        "vkGetPhysicalDeviceSurfaceCapabilities2KHR",
-        "extension not advertised",
-    );
-    VK_ERROR_EXTENSION_NOT_PRESENT
-}
-
-pub extern "C" fn vkGetPhysicalDeviceSurfaceFormats2KHR(
-    physicalDevice: *mut core::ffi::c_void,
-    pSurfaceInfo: *const core::ffi::c_void,
-    pSurfaceFormatCount: *mut core::ffi::c_void,
-    pSurfaceFormats: *mut core::ffi::c_void,
-) -> i32 {
-    let _ = physicalDevice;
-    let _ = pSurfaceInfo;
-    let _ = pSurfaceFormatCount;
-    let _ = pSurfaceFormats;
-    crate::stub::Call::unsupported(
-        "vkGetPhysicalDeviceSurfaceFormats2KHR",
-        "extension not advertised",
-    );
-    VK_ERROR_EXTENSION_NOT_PRESENT
-}

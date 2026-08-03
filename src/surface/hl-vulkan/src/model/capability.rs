@@ -25,8 +25,9 @@ pub struct ExtensionProp {
 /// Instance-level extensions the ICD really backs: the WSI base (`VK_KHR_surface`), the Wayland WSI
 /// surface platform (`VK_KHR_wayland_surface`, really backed by `vkCreateWaylandSurfaceKHR` +
 /// `vkGetPhysicalDeviceWaylandPresentationSupportKHR` in [`crate::shim`]'s `surface` + the present path in
-/// [`crate::adapter::wayland_app`]), and the `...2` physical-device property queries
-/// (`VK_KHR_get_physical_device_properties2`). A real app (wgpu/ash/vkcube-wayland) gates its init on
+/// [`crate::adapter::wayland_app`]), and the `...2` physical-device property/surface queries
+/// (`VK_KHR_get_physical_device_properties2`, `VK_KHR_get_surface_capabilities2`). A real app
+/// (wgpu/ash/vkcube-wayland) gates its init on
 /// these being enumerated and aborts otherwise — and the Vulkan loader only reports a platform WSI
 /// surface extension when an ICD advertises it — so advertising them is the key unblock past instance
 /// setup + Wayland-surface creation.
@@ -43,6 +44,10 @@ pub const INSTANCE_EXTENSIONS: &[ExtensionProp] = &[
         name: "VK_KHR_get_physical_device_properties2",
         spec_version: 2,
     },
+    ExtensionProp {
+        name: "VK_KHR_get_surface_capabilities2",
+        spec_version: 1,
+    },
     // The external-capability QUERY trio. All three were promoted to core in Vulkan 1.1 and this ICD
     // advertises 1.3, so their core entry points
     // (`vkGetPhysicalDeviceExternalBufferProperties`/`…SemaphoreProperties`/`…FenceProperties`, in
@@ -54,9 +59,9 @@ pub const INSTANCE_EXTENSIONS: &[ExtensionProp] = &[
     // running backwards — under-advertising something we do honour. A client targeting 1.0/1.1 asks for
     // the `KHR` spelling rather than the core one and was refused `VK_ERROR_EXTENSION_NOT_PRESENT` at
     // `vkCreateInstance` for a capability this driver genuinely has. Measured against the installed
-    // bundle: these three were the only refused instance extensions whose entry points are really
-    // implemented (`VK_KHR_get_surface_capabilities2`'s are in the refused list, and there is no X11 or
-    // display path at all, so those stay unadvertised).
+    // bundle: these three were refused instance extensions whose entry points were already really
+    // implemented. Surface-capabilities2 was subsequently implemented as a typed wrapper over the
+    // same surface model and is advertised separately above; X11/display remain unimplemented.
     ExtensionProp {
         name: "VK_KHR_external_memory_capabilities",
         spec_version: 1,
@@ -1008,6 +1013,7 @@ mod tests {
                 "VK_KHR_surface",
                 "VK_KHR_wayland_surface",
                 "VK_KHR_get_physical_device_properties2",
+                "VK_KHR_get_surface_capabilities2",
                 "VK_KHR_external_memory_capabilities",
                 "VK_KHR_external_semaphore_capabilities",
                 "VK_KHR_external_fence_capabilities",
@@ -1028,8 +1034,6 @@ mod tests {
     fn extensions_without_a_body_are_not_advertised() {
         let names: Vec<&str> = INSTANCE_EXTENSIONS.iter().map(|e| e.name).collect();
         for forbidden in [
-            // Entry points are in the shim's refused list.
-            "VK_KHR_get_surface_capabilities2",
             // No X11 path exists; only wayland surfaces are created.
             "VK_KHR_xcb_surface",
             "VK_KHR_xlib_surface",

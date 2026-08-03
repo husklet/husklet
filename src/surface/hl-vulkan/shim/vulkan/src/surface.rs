@@ -228,6 +228,88 @@ pub extern "C" fn vkGetPhysicalDeviceSurfacePresentModesKHR(
     unsafe { write_enumeration(&modes, p_present_mode_count, p_present_modes) }
 }
 
+/// Input wrapper used by `VK_KHR_get_surface_capabilities2`. The extension deliberately keeps the
+/// surface query model unchanged and adds an extensible input chain around the `VkSurfaceKHR`.
+#[repr(C)]
+pub struct VkPhysicalDeviceSurfaceInfo2KHR {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub surface: u64,
+}
+
+/// Output wrapper used by `vkGetPhysicalDeviceSurfaceCapabilities2KHR`. The caller owns `s_type` and
+/// `p_next`; the driver writes only the base capability payload so extension structs remain available
+/// to their owning extensions.
+#[repr(C)]
+pub struct VkSurfaceCapabilities2KHR {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub surface_capabilities: VkSurfaceCapabilitiesKHR,
+}
+
+/// Output wrapper used by `vkGetPhysicalDeviceSurfaceFormats2KHR`.
+#[repr(C)]
+pub struct VkSurfaceFormat2KHR {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub surface_format: VkSurfaceFormatKHR,
+}
+
+pub extern "C" fn vkGetPhysicalDeviceSurfaceCapabilities2KHR(
+    physical_device: *mut c_void,
+    p_surface_info: *const VkPhysicalDeviceSurfaceInfo2KHR,
+    p_surface_capabilities: *mut VkSurfaceCapabilities2KHR,
+) -> VkResult {
+    let Some(info) = (unsafe { p_surface_info.as_ref() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let Some(out) = (unsafe { p_surface_capabilities.as_mut() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+        physical_device,
+        info.surface,
+        &mut out.surface_capabilities,
+    )
+}
+
+pub extern "C" fn vkGetPhysicalDeviceSurfaceFormats2KHR(
+    _physical_device: *mut c_void,
+    p_surface_info: *const VkPhysicalDeviceSurfaceInfo2KHR,
+    p_surface_format_count: *mut u32,
+    p_surface_formats: *mut VkSurfaceFormat2KHR,
+) -> VkResult {
+    let Some(info) = (unsafe { p_surface_info.as_ref() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    if !StateStore::with(|s| s.surface_valid(info.surface)) {
+        return VK_ERROR_SURFACE_LOST_KHR;
+    }
+    let formats = present::surface_formats();
+    let available = formats.len();
+    let Some(count) = (unsafe { p_surface_format_count.as_mut() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    if p_surface_formats.is_null() {
+        *count = formats.len() as u32;
+        return VK_SUCCESS;
+    }
+    let n = (*count as usize).min(formats.len());
+    let outputs = unsafe { core::slice::from_raw_parts_mut(p_surface_formats, n) };
+    for (output, format) in outputs.iter_mut().zip(formats) {
+        output.surface_format = VkSurfaceFormatKHR {
+            format: format.format as i32,
+            color_space: format.color_space,
+        };
+    }
+    *count = n as u32;
+    if n < available {
+        VK_INCOMPLETE
+    } else {
+        VK_SUCCESS
+    }
+}
+
 /// The `count`/`data` two-call enumeration pattern (`p_data` NULL = size query; else fill min(cap, len)
 /// and report `VK_INCOMPLETE` on truncation). Mirrors the instance-layer `write_enumeration`.
 unsafe fn write_enumeration<T: Copy>(items: &[T], p_count: *mut u32, p_data: *mut T) -> VkResult {
@@ -252,6 +334,10 @@ unsafe fn write_enumeration<T: Copy>(items: &[T], p_count: *mut u32, p_data: *mu
 mod tests {
     use super::*;
     use crate::state::StateStore;
+
+    fn modeled_surface() -> u64 {
+        StateStore::with(|state| state.mint_surface())
+    }
 
     /// `vkCreateWaylandSurfaceKHR` records the app's OWN `wl_display*` + `wl_surface*` (from
     /// `VkWaylandSurfaceCreateInfoKHR`) against the minted `VkSurfaceKHR`, so a later present can marshal
@@ -349,5 +435,76 @@ mod tests {
             ),
             VK_FALSE
         );
+    }
+
+    #[test]
+    fn surface_capabilities2_wraps_the_base_query_without_clobbering_its_chain() {
+        let surface = modeled_surface();
+        let info = VkPhysicalDeviceSurfaceInfo2KHR {
+            s_type: 1000119000,
+            p_next: core::ptr::null(),
+            surface,
+        };
+        let marker = 0xCAFEusize as *mut c_void;
+        let mut out = VkSurfaceCapabilities2KHR {
+            s_type: 1000119001,
+            p_next: marker,
+            surface_capabilities: unsafe { core::mem::zeroed() },
+        };
+        assert_eq!(
+            vkGetPhysicalDeviceSurfaceCapabilities2KHR(core::ptr::null_mut(), &info, &mut out,),
+            VK_SUCCESS
+        );
+        assert_eq!(out.s_type, 1000119001);
+        assert_eq!(out.p_next, marker);
+        assert_eq!(out.surface_capabilities.min_image_count, 2);
+        assert_eq!(out.surface_capabilities.max_image_count, 3);
+        vkDestroySurfaceKHR(core::ptr::null_mut(), surface, core::ptr::null());
+    }
+
+    #[test]
+    fn surface_formats2_obeys_two_call_enumeration_and_preserves_output_headers() {
+        let surface = modeled_surface();
+        let info = VkPhysicalDeviceSurfaceInfo2KHR {
+            s_type: 1000119000,
+            p_next: core::ptr::null(),
+            surface,
+        };
+        let mut count = 0;
+        assert_eq!(
+            vkGetPhysicalDeviceSurfaceFormats2KHR(
+                core::ptr::null_mut(),
+                &info,
+                &mut count,
+                core::ptr::null_mut(),
+            ),
+            VK_SUCCESS
+        );
+        assert_eq!(count, present::surface_formats().len() as u32);
+
+        let marker = 0xFACEusize as *mut c_void;
+        let mut one = [VkSurfaceFormat2KHR {
+            s_type: 1000119002,
+            p_next: marker,
+            surface_format: VkSurfaceFormatKHR {
+                format: -1,
+                color_space: -1,
+            },
+        }];
+        count = 1;
+        assert_eq!(
+            vkGetPhysicalDeviceSurfaceFormats2KHR(
+                core::ptr::null_mut(),
+                &info,
+                &mut count,
+                one.as_mut_ptr(),
+            ),
+            VK_INCOMPLETE
+        );
+        assert_eq!(count, 1);
+        assert_eq!(one[0].s_type, 1000119002);
+        assert_eq!(one[0].p_next, marker);
+        assert_ne!(one[0].surface_format.format, -1);
+        vkDestroySurfaceKHR(core::ptr::null_mut(), surface, core::ptr::null());
     }
 }
