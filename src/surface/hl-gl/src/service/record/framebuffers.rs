@@ -179,9 +179,16 @@ impl GlContext {
             ("stencil", stencil_source),
         ] {
             let Some(source) = source else { continue };
-            let attachment_info = if point == "colour" && !source.1 {
+            let attachment_info = if point == "colour" {
                 self.framebuffer_color_texture(fbo, 0)
-                    .map(|(_, texture)| (texture.w, texture.h, texture.internal_format, 0))
+                    .map(|(_, texture)| {
+                        let samples = source
+                            .1
+                            .then(|| self.renderbuffers.get(source.0).map(|r| r.samples))
+                            .flatten()
+                            .unwrap_or(0);
+                        (texture.w, texture.h, texture.internal_format, samples)
+                    })
             } else {
                 info(source)
             };
@@ -318,8 +325,8 @@ pub fn renderbuffer_storage_multisample(
         .set_storage(rbo, tex, w, h, internalformat, samples);
 }
 
-/// `glDeleteRenderbuffers` (one name). Detaches the backing texture from every FBO color slot and drops
-/// the backing texture. Returns `false` for an unknown / zero name.
+/// `glDeleteRenderbuffers` (one name). The bound framebuffer releases its attachment; unbound framebuffer
+/// containers retain the old renderbuffer storage after the public name is deleted.
 impl GlContext {
     pub fn delete_renderbuffer(&mut self, name: u32) -> bool {
         if self.local.bound_rbo == name {
@@ -327,10 +334,24 @@ impl GlContext {
         }
         match self.renderbuffers.delete(name) {
             Some(rb) => {
-                self.local.framebuffers.detach_color_texture(rb.tex);
-                // The renderbuffer's backing texture owns the offscreen render-target IR — retire it too.
-                self.retire_texture(rb.tex);
-                self.textures.delete(rb.tex);
+                let object = self.textures.object(rb.tex);
+                self.local
+                    .framebuffers
+                    .detach_color_renderbuffer_from(self.local.bound_fbo, name);
+                if self.local.read_fbo != self.local.bound_fbo {
+                    self.local
+                        .framebuffers
+                        .detach_color_renderbuffer_from(self.local.read_fbo, name);
+                }
+                if object.is_some_and(|object| self.local.framebuffers.references_object(object)) {
+                    if let Some(generation) = self.textures.get(rb.tex).map(|texture| texture.gen) {
+                        self.retire_sampled_texture_generation(rb.tex, generation);
+                    }
+                    self.textures.retire_name(rb.tex);
+                } else {
+                    self.retire_texture(rb.tex);
+                    self.textures.delete(rb.tex);
+                }
                 true
             }
             None => false,

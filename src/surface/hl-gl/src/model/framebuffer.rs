@@ -305,6 +305,25 @@ impl Framebuffers {
             });
     }
 
+    pub fn detach_color_renderbuffer_from(&mut self, fbo: u32, renderbuffer: u32) {
+        let indexes = self
+            .color_source
+            .iter()
+            .filter_map(|(&(owner, index), &(name, is_renderbuffer))| {
+                (owner == fbo && is_renderbuffer && name == renderbuffer).then_some(index)
+            })
+            .collect::<Vec<_>>();
+        for index in indexes {
+            if index == 0 {
+                self.color.insert(fbo, TextureAttachment::default());
+            } else {
+                self.color_extra
+                    .insert((fbo, index), TextureAttachment::default());
+            }
+            self.color_source.remove(&(fbo, index));
+        }
+    }
+
     /// `glDeleteFramebuffers` — drop the object. Returns `false` for an unknown name.
     pub fn delete(&mut self, name: u32) -> bool {
         self.color_extra.retain(|&(fbo, _), _| fbo != name);

@@ -127,6 +127,51 @@ fn deleting_an_attached_renderbuffer_detaches_it_from_the_bound_framebuffer() {
 }
 
 #[test]
+fn deleting_renderbuffer_preserves_unbound_fbo_storage() {
+    use hl_gpu::protocol::model::enums::texture_usage;
+    use hl_gpu::Cmd;
+
+    let mut context = ctx();
+    let renderbuffer = context.gen_renderbuffer();
+    record::bind_renderbuffer(&mut context, GL_RENDERBUFFER, renderbuffer);
+    record::renderbuffer_storage(&mut context, GL_RENDERBUFFER, GL_RGBA4, 3, 5);
+    let framebuffer = context.gen_framebuffer();
+    record::bind_framebuffer(&mut context, GL_FRAMEBUFFER, framebuffer);
+    record::framebuffer_renderbuffer(
+        &mut context,
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_RENDERBUFFER,
+        renderbuffer,
+    );
+    record::bind_framebuffer(&mut context, GL_FRAMEBUFFER, 0);
+    assert!(context.delete_renderbuffer(renderbuffer));
+
+    let replacement = context.gen_renderbuffer();
+    record::bind_renderbuffer(&mut context, GL_RENDERBUFFER, replacement);
+    record::renderbuffer_storage(&mut context, GL_RENDERBUFFER, GL_RGBA4, 7, 9);
+    record::bind_framebuffer(&mut context, GL_FRAMEBUFFER, framebuffer);
+    assert_eq!(context.check_framebuffer_status(GL_FRAMEBUFFER), GL_FRAMEBUFFER_COMPLETE);
+    record::clear_color(&mut context, [0.1, 0.2, 0.3, 1.0]);
+    record::clear(&mut context);
+    let frame = hl_gl::service::frame::Frame::build(&mut context).expect("retained RBO frame");
+    assert!(frame.cmds.iter().any(|command| matches!(
+        command,
+        Cmd::CreateTexture(_, descriptor)
+            if descriptor.usage & texture_usage::RENDER_TARGET != 0
+                && descriptor.width == 3
+                && descriptor.height == 5
+    )));
+    assert!(!frame.cmds.iter().any(|command| matches!(
+        command,
+        Cmd::CreateTexture(_, descriptor)
+            if descriptor.usage & texture_usage::RENDER_TARGET != 0
+                && descriptor.width == 7
+                && descriptor.height == 9
+    )));
+}
+
+#[test]
 fn deleting_an_attached_texture_detaches_it_from_the_bound_framebuffer() {
     let mut context = ctx();
     let texture = context.textures.gen();
