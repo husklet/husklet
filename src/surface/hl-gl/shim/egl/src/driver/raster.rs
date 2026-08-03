@@ -10,25 +10,19 @@ pub extern "C" fn glBlendEquation(mode: u32) {
 pub extern "C" fn glBlendEquationSeparate(mode_rgb: u32, mode_alpha: u32) {
     GlobalState::context(|s| record::blend_equation_separate(&mut s.gl, mode_rgb, mode_alpha));
 }
-/// Per-draw-buffer blend variants: this model has a single color target, so buffer 0 delegates to the
-/// global blend state and any other buffer index is an honest no-op.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBlendEquationi(buf: u32, mode: u32) {
-    if buf == 0 {
-        GlobalState::context(|s| record::blend_equation(&mut s.gl, mode));
-    }
+    GlobalState::context(|s| record::blend_equation_indexed(&mut s.gl, buf, mode));
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBlendEquationSeparatei(buf: u32, mode_rgb: u32, mode_alpha: u32) {
-    if buf == 0 {
-        GlobalState::context(|s| record::blend_equation_separate(&mut s.gl, mode_rgb, mode_alpha));
-    }
+    GlobalState::context(|s| {
+        record::blend_equation_separate_indexed(&mut s.gl, buf, mode_rgb, mode_alpha)
+    });
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBlendFunci(buf: u32, src: u32, dst: u32) {
-    if buf == 0 {
-        GlobalState::context(|s| record::blend_func(&mut s.gl, src, dst));
-    }
+    GlobalState::context(|s| record::blend_func_indexed(&mut s.gl, buf, src, dst));
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBlendFuncSeparatei(
@@ -38,11 +32,11 @@ pub extern "C" fn glBlendFuncSeparatei(
     src_alpha: u32,
     dst_alpha: u32,
 ) {
-    if buf == 0 {
-        GlobalState::context(|s| {
-            record::blend_func_separate(&mut s.gl, src_rgb, dst_rgb, src_alpha, dst_alpha)
-        });
-    }
+    GlobalState::context(|s| {
+        record::blend_func_separate_indexed(
+            &mut s.gl, buf, src_rgb, dst_rgb, src_alpha, dst_alpha,
+        )
+    });
 }
 /// `glBlendColor` — the constant blend color used by `GL_*_CONSTANT_*` factors.
 #[cfg_attr(gles_client, no_mangle)]
@@ -52,8 +46,6 @@ pub extern "C" fn glBlendColor(red: f32, green: f32, blue: f32, alpha: f32) {
 /// `glColorMask` / `glColorMaski` — record the per-channel framebuffer write mask; it lowers into every
 /// color target's `ColorTargetState::write_mask`, so a masked channel (e.g. `glColorMask(1,1,1,0)` to
 /// preserve framebuffer alpha, or an all-false mask for a depth-only pass) is honored rather than dropped.
-/// `glColorMaski` targets one draw buffer; this single-target model routes buffer 0 to the global mask and
-/// ignores other indices.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glColorMask(red: u8, green: u8, blue: u8, alpha: u8) {
     GlobalState::context(|s| {
@@ -62,9 +54,9 @@ pub extern "C" fn glColorMask(red: u8, green: u8, blue: u8, alpha: u8) {
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glColorMaski(index: u32, r: u8, g: u8, b: u8, a: u8) {
-    if index == 0 {
-        GlobalState::context(|s| record::color_mask(&mut s.gl, r != 0, g != 0, b != 0, a != 0));
-    }
+    GlobalState::context(|s| {
+        record::color_mask_indexed(&mut s.gl, index, r != 0, g != 0, b != 0, a != 0)
+    });
 }
 /// `glDepthRangef(n, f)` — the window-depth range the viewport transform maps device depth onto.
 ///
@@ -162,19 +154,13 @@ pub extern "C" fn glPrimitiveBoundingBox(
 /// advanced blend, so there is nothing to order: an honest no-op.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBlendBarrier() {}
-/// `glEnablei` / `glDisablei` — indexed enable; this single-target model routes buffer 0 to the global
-/// capability and ignores other indices.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glEnablei(target: u32, index: u32) {
-    if index == 0 {
-        GlobalState::context(|s| record::enable(&mut s.gl, target));
-    }
+    GlobalState::context(|s| record::set_cap_indexed(&mut s.gl, target, index, true));
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDisablei(target: u32, index: u32) {
-    if index == 0 {
-        GlobalState::context(|s| record::disable(&mut s.gl, target));
-    }
+    GlobalState::context(|s| record::set_cap_indexed(&mut s.gl, target, index, false));
 }
 
 // ==================================================================================================
@@ -199,12 +185,38 @@ pub extern "C" fn glGetIntegeri_v(target: u32, index: u32, data: *mut i32) {
     if data.is_null() {
         return;
     }
+    if matches!(
+        target,
+        GL_BLEND_SRC_RGB
+            | GL_BLEND_DST_RGB
+            | GL_BLEND_SRC_ALPHA_STATE
+            | GL_BLEND_DST_ALPHA
+            | GL_BLEND_EQUATION_RGB
+            | GL_BLEND_EQUATION_ALPHA
+    ) && index >= hl_gl::model::program::MAX_DRAW_BUFFERS as u32
+    {
+        GlobalState::context(|state| state.gl.set_gl_error(GL_INVALID_VALUE));
+        return;
+    }
     let v = GlobalState::context(|s| query::get_integer_indexed(&s.gl, target, index));
     unsafe { *data = v as i32 };
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetInteger64i_v(target: u32, index: u32, data: *mut i64) {
     if data.is_null() {
+        return;
+    }
+    if matches!(
+        target,
+        GL_BLEND_SRC_RGB
+            | GL_BLEND_DST_RGB
+            | GL_BLEND_SRC_ALPHA_STATE
+            | GL_BLEND_DST_ALPHA
+            | GL_BLEND_EQUATION_RGB
+            | GL_BLEND_EQUATION_ALPHA
+    ) && index >= hl_gl::model::program::MAX_DRAW_BUFFERS as u32
+    {
+        GlobalState::context(|state| state.gl.set_gl_error(GL_INVALID_VALUE));
         return;
     }
     let v = GlobalState::context(|s| query::get_integer_indexed(&s.gl, target, index));
@@ -215,8 +227,19 @@ pub extern "C" fn glGetBooleani_v(target: u32, index: u32, data: *mut u8) {
     if data.is_null() {
         return;
     }
-    let v = GlobalState::context(|s| query::get_integer_indexed(&s.gl, target, index));
-    unsafe { *data = (v != 0) as u8 };
+    if target == GL_COLOR_WRITEMASK
+        && index >= hl_gl::model::program::MAX_DRAW_BUFFERS as u32
+    {
+        GlobalState::context(|state| state.gl.set_gl_error(GL_INVALID_VALUE));
+        return;
+    }
+    let mut values = [0u8; 4];
+    let count = GlobalState::context(|s| query::get_boolean_indexed(&s.gl, target, index, &mut values));
+    unsafe {
+        for (offset, value) in values.into_iter().take(count).enumerate() {
+            *data.add(offset) = value;
+        }
+    }
 }
 /// `glGetInternalformativ(target, internalformat, pname, bufSize, params)` — supported sample counts for
 /// an internal format. This model advertises single-sample rendering with `GL_MAX_SAMPLES` as the peak.

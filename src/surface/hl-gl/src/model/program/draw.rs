@@ -6,6 +6,36 @@ use crate::model::texture::GlTexture;
 use hl_gpu::protocol::model::enums::TextureFormat;
 use std::sync::Arc;
 
+pub const MAX_DRAW_BUFFERS: usize = 4;
+
+/// Blend and channel-write state owned by one fragment-output/draw-buffer slot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DrawBufferState {
+    pub blend: bool,
+    pub src_rgb: u32,
+    pub dst_rgb: u32,
+    pub src_alpha: u32,
+    pub dst_alpha: u32,
+    pub eq_rgb: u32,
+    pub eq_alpha: u32,
+    pub color_mask: u32,
+}
+
+impl Default for DrawBufferState {
+    fn default() -> Self {
+        Self {
+            blend: false,
+            src_rgb: crate::model::glconst::GL_ONE,
+            dst_rgb: crate::model::glconst::GL_ZERO,
+            src_alpha: crate::model::glconst::GL_ONE,
+            dst_alpha: crate::model::glconst::GL_ZERO,
+            eq_rgb: crate::model::glconst::GL_FUNC_ADD,
+            eq_alpha: crate::model::glconst::GL_FUNC_ADD,
+            color_mask: 0xf,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct TransformFeedbackCapture {
     pub layout: TransformFeedbackLayout,
@@ -31,8 +61,7 @@ pub struct Attr {
     /// The GL array-buffer name this attribute fetches from.
     pub buffer: u32,
     /// The instance-step divisor (`glVertexAttribDivisor`): `0` = advance per vertex, `>0` = per
-    /// instance. This model has a single step rate per vertex-buffer slot, so a non-zero divisor marks
-    /// the slot instance-stepped (the exact rate `N>1` is not modeled — see `service::frame`).
+    /// instance. The lowering materializes divisors above one into an exact per-instance stream.
     pub divisor: u32,
     /// Separate-format (`glVertexAttribFormat`) attributes fetch through this VAO binding index.
     /// Legacy `glVertexAttribPointer` attributes keep fetching directly from `buffer`.
@@ -178,6 +207,8 @@ pub struct DrawCall {
     pub blend_dst_alpha: u32,
     pub blend_eq_rgb: u32,
     pub blend_eq_alpha: u32,
+    /// Independent state for each advertised draw-buffer slot.
+    pub draw_buffer_states: [DrawBufferState; MAX_DRAW_BUFFERS],
     /// Constant blend color snapshotted at draw time (`glBlendColor`).
     pub blend_color: [f32; 4],
     pub depth: bool,
@@ -452,6 +483,7 @@ impl Default for DrawCall {
             blend_dst_alpha: crate::model::glconst::GL_ZERO,
             blend_eq_rgb: crate::model::glconst::GL_FUNC_ADD,
             blend_eq_alpha: crate::model::glconst::GL_FUNC_ADD,
+            draw_buffer_states: [DrawBufferState::default(); MAX_DRAW_BUFFERS],
             blend_color: [0.0; 4],
             depth: false,
             depth_func: crate::model::glconst::GL_LESS,

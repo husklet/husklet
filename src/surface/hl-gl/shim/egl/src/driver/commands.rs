@@ -342,11 +342,19 @@ pub extern "C" fn glIsTexture(texture: u32) -> u32 {
 pub extern "C" fn glIsEnabled(cap: u32) -> u32 {
     GlobalState::context(|s| s.gl.is_enabled(cap)) as u32
 }
-/// `glIsEnabledi(target, index)` — this model tracks no per-index (indexed) enable state, so it reports
-/// the non-indexed capability's state (the honest answer for a single-target model).
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glIsEnabledi(target: u32, _index: u32) -> u32 {
-    GlobalState::context(|s| s.gl.is_enabled(target)) as u32
+pub extern "C" fn glIsEnabledi(target: u32, index: u32) -> u32 {
+    GlobalState::context(|state| match query::is_enabled_indexed(&state.gl, target, index) {
+        Some(enabled) => enabled as u32,
+        None => {
+            state.gl.set_gl_error(if target == GL_BLEND {
+                GL_INVALID_VALUE
+            } else {
+                GL_INVALID_ENUM
+            });
+            0
+        }
+    })
 }
 /// `glGetAttachedShaders(program, maxCount, count, shaders)` — the program's attached vertex/fragment/
 /// compute shader names (real reflection of the attachment slots).

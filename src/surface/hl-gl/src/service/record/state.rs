@@ -228,6 +228,12 @@ pub fn blend_func(ctx: &mut GlContext, src: u32, dst: u32) {
     ctx.local.pipeline.blend_dst_rgb = dst;
     ctx.local.pipeline.blend_src_alpha = src;
     ctx.local.pipeline.blend_dst_alpha = dst;
+    for state in &mut ctx.local.pipeline.draw_buffers {
+        state.src_rgb = src;
+        state.dst_rgb = dst;
+        state.src_alpha = src;
+        state.dst_alpha = dst;
+    }
 }
 
 /// `glBlendFuncSeparate(srcRGB, dstRGB, srcAlpha, dstAlpha)`.
@@ -242,6 +248,40 @@ pub fn blend_func_separate(
     ctx.local.pipeline.blend_dst_rgb = dst_rgb;
     ctx.local.pipeline.blend_src_alpha = src_a;
     ctx.local.pipeline.blend_dst_alpha = dst_a;
+    for state in &mut ctx.local.pipeline.draw_buffers {
+        state.src_rgb = src_rgb;
+        state.dst_rgb = dst_rgb;
+        state.src_alpha = src_a;
+        state.dst_alpha = dst_a;
+    }
+}
+
+pub fn blend_func_separate_indexed(
+    ctx: &mut GlContext,
+    index: u32,
+    src_rgb: u32,
+    dst_rgb: u32,
+    src_alpha: u32,
+    dst_alpha: u32,
+) {
+    let Some(state) = ctx.local.pipeline.draw_buffers.get_mut(index as usize) else {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    };
+    state.src_rgb = src_rgb;
+    state.dst_rgb = dst_rgb;
+    state.src_alpha = src_alpha;
+    state.dst_alpha = dst_alpha;
+    if index == 0 {
+        ctx.local.pipeline.blend_src_rgb = src_rgb;
+        ctx.local.pipeline.blend_dst_rgb = dst_rgb;
+        ctx.local.pipeline.blend_src_alpha = src_alpha;
+        ctx.local.pipeline.blend_dst_alpha = dst_alpha;
+    }
+}
+
+pub fn blend_func_indexed(ctx: &mut GlContext, index: u32, src: u32, dst: u32) {
+    blend_func_separate_indexed(ctx, index, src, dst, src, dst);
 }
 
 /// `glBlendColor` — set the constant color used by the CONSTANT blend factors. GLES clamps each channel.
@@ -366,8 +406,23 @@ impl GlContext {
 /// the low 4 bits (`R<<0 | G<<1 | B<<2 | A<<3`), the exact `ColorTargetState::write_mask` encoding, so a
 /// masked channel is dropped by the lowered pipeline instead of being silently written anyway.
 pub fn color_mask(ctx: &mut GlContext, r: bool, g: bool, b: bool, a: bool) {
-    ctx.local.pipeline.color_mask =
+    let mask = (r as u32) | ((g as u32) << 1) | ((b as u32) << 2) | ((a as u32) << 3);
+    ctx.local.pipeline.color_mask = mask;
+    for state in &mut ctx.local.pipeline.draw_buffers {
+        state.color_mask = mask;
+    }
+}
+
+pub fn color_mask_indexed(ctx: &mut GlContext, index: u32, r: bool, g: bool, b: bool, a: bool) {
+    let Some(state) = ctx.local.pipeline.draw_buffers.get_mut(index as usize) else {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    };
+    state.color_mask =
         (r as u32) | ((g as u32) << 1) | ((b as u32) << 2) | ((a as u32) << 3);
+    if index == 0 {
+        ctx.local.pipeline.color_mask = state.color_mask;
+    }
 }
 
 /// `glViewport(x, y, w, h)` — a negative width or height is `GL_INVALID_VALUE` and leaves the viewport
@@ -478,7 +533,12 @@ impl GlContext {
 
 pub(super) fn set_cap(ctx: &mut GlContext, cap: u32, on: bool) {
     match cap {
-        GL_BLEND => ctx.local.pipeline.blend = on,
+        GL_BLEND => {
+            ctx.local.pipeline.blend = on;
+            for state in &mut ctx.local.pipeline.draw_buffers {
+                state.blend = on;
+            }
+        }
         GL_DITHER => ctx.local.pipeline.dither = on,
         GL_POLYGON_OFFSET_FILL => ctx.local.pipeline.polygon_offset_fill = on,
         GL_SAMPLE_ALPHA_TO_COVERAGE => ctx.local.pipeline.sample_alpha_to_coverage = on,
@@ -489,6 +549,21 @@ pub(super) fn set_cap(ctx: &mut GlContext, cap: u32, on: bool) {
         GL_RASTERIZER_DISCARD => ctx.local.pipeline.rasterizer_discard = on,
         GL_CULL_FACE => ctx.local.pipeline.cull_enabled = on,
         _ => ctx.set_gl_error(GL_INVALID_ENUM),
+    }
+}
+
+pub fn set_cap_indexed(ctx: &mut GlContext, cap: u32, index: u32, on: bool) {
+    if cap != GL_BLEND {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
+    let Some(state) = ctx.local.pipeline.draw_buffers.get_mut(index as usize) else {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    };
+    state.blend = on;
+    if index == 0 {
+        ctx.local.pipeline.blend = on;
     }
 }
 
@@ -528,6 +603,10 @@ impl GlContext {
     pub fn set_blend_equation(&mut self, mode: u32) {
         self.local.pipeline.blend_eq_rgb = mode;
         self.local.pipeline.blend_eq_alpha = mode;
+        for state in &mut self.local.pipeline.draw_buffers {
+            state.eq_rgb = mode;
+            state.eq_alpha = mode;
+        }
     }
 }
 
@@ -540,4 +619,25 @@ pub use CLEAR_BUFFER_COLOR as clear_buffer_color;
 pub fn blend_equation_separate(ctx: &mut GlContext, rgb: u32, alpha: u32) {
     ctx.local.pipeline.blend_eq_rgb = rgb;
     ctx.local.pipeline.blend_eq_alpha = alpha;
+    for state in &mut ctx.local.pipeline.draw_buffers {
+        state.eq_rgb = rgb;
+        state.eq_alpha = alpha;
+    }
+}
+
+pub fn blend_equation_separate_indexed(ctx: &mut GlContext, index: u32, rgb: u32, alpha: u32) {
+    let Some(state) = ctx.local.pipeline.draw_buffers.get_mut(index as usize) else {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    };
+    state.eq_rgb = rgb;
+    state.eq_alpha = alpha;
+    if index == 0 {
+        ctx.local.pipeline.blend_eq_rgb = rgb;
+        ctx.local.pipeline.blend_eq_alpha = alpha;
+    }
+}
+
+pub fn blend_equation_indexed(ctx: &mut GlContext, index: u32, mode: u32) {
+    blend_equation_separate_indexed(ctx, index, mode, mode);
 }

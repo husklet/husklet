@@ -987,6 +987,7 @@ impl GlContext {
             blend_dst_alpha: ctx.local.pipeline.blend_dst_alpha,
             blend_eq_rgb: ctx.local.pipeline.blend_eq_rgb,
             blend_eq_alpha: ctx.local.pipeline.blend_eq_alpha,
+            draw_buffer_states: ctx.local.pipeline.draw_buffers,
             blend_color: ctx.local.pipeline.blend_color,
             // ES 3.0 §4.1.5/§4.1.6: with no depth (resp. stencil) attachment on the DRAW framebuffer the
             // test behaves as though it always passes and nothing is written — it is not the enable alone
