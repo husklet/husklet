@@ -144,12 +144,13 @@ Not proposed for build — recorded so the criteria exist when it is:
 - the owning session disconnecting under a live mapping does something defined and testable.
 # Current status — 2026-08-03
 
-The implementation census below is historical. The driver and runtime shims now expose the Tier 1–3
-entry points, and the product composition root constructs the shared export registry. GL buffer sharing,
-GL image registration, external memory, and external semaphores are wired through the host executor.
+The census below is historical. Buffer interop and external memory/semaphore paths have landed. GL image
+registration remains deliberately unsupported: the current export boundary cannot prove that the native
+residency's dimension, mip count, and layers exactly match the GL object, and the returned `CUarray` would
+not be consumable by the implemented CUDA memcpy, surface, texture-object, or kernel-binding paths.
+`cuGraphicsGLRegisterImage` and its runtime twin therefore return `NOT_SUPPORTED` for valid image targets;
+they do not import a texture or allocate a graphics-resource handle.
 
-GL images support `GL_TEXTURE_2D`, cube maps, 2D arrays, and 3D textures when GL has materialized a
-layered native residency. A previously unmaterialized layered texture is declined rather than flattened
-into a false 2D export. Ordinary 2D CPU-backed textures are materialized with their complete effective
-mip chain. CUDA mapped-array handles validate the registered mip and face/layer range; 3D textures use
-`arrayIndex == 0`, because the mapped CUDA array represents the volume rather than one Z slice.
+Multi-resource map/unmap is transactional when rollback succeeds. If compensating map/unmap itself fails,
+every resource in the operation becomes poisoned and all later map, unmap, flag-change, pointer, and
+unregister operations refuse it rather than guessing host ownership.

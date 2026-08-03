@@ -297,8 +297,8 @@ Also still open from earlier in the slice: guard behaviour under a transaction r
 inside a batch that then NACKs is covered by no test and the intended behaviour was never decided.
 # Status correction — 2026-08-03
 
-This handoff records the 2026-08-01 state and is no longer a current implementation census. Export/import,
-map/unmap, wgpu aliasing, session-global `Exports` construction, GL buffer and image bridges, and CUDA
-external memory/semaphore operations have since landed. The access gate is reachable in the shipped
-composition root. Current image limits are documented in `src/surface/hl-cuda/INTEROP.md`; notably, an
-unmaterialized layered GL texture is truthfully declined instead of being exported as a flattened 2D copy.
+This document records the 2026-08-01 state, not the current census. Buffer export/import, map/unmap, wgpu
+aliasing, session-global `Exports`, external memory, and external semaphores have since landed. The access
+gate is reachable in the product composition root. GL image interop remains honestly unsupported pending
+an authoritative native texture descriptor and a CUDA array path that can consume imported subresources;
+see `src/surface/hl-cuda/INTEROP.md`.

@@ -1,5 +1,5 @@
 use hl_gpu::{
-    BufferId, Capabilities, Cmd, CommandSink, ExportId, FeatureRequest, FenceId, FenceWait, GpuError, TextureId,
+    BufferId, Capabilities, Cmd, CommandSink, ExportId, FeatureRequest, FenceId, FenceWait, GpuError,
 };
 
 pub(crate) enum Observation {
@@ -8,7 +8,6 @@ pub(crate) enum Observation {
     Poll(bool),
     Read(Vec<u8>),
     Export(ExportId),
-    TextureExport(ExportId),
 }
 
 pub(crate) struct IoResult<T> {
@@ -28,7 +27,6 @@ enum Operation {
     Poll(FenceId, u64),
     Read(BufferId, u64, usize),
     Export(BufferId),
-    ExportTexture(TextureId),
 }
 
 impl<T> IoPlan<T> {
@@ -63,9 +61,6 @@ impl<T> IoPlan<T> {
                 }
                 Operation::Export(buffer) => {
                     observations.push(Observation::Export(sink.export_buffer(buffer)?))
-                }
-                Operation::ExportTexture(texture) => {
-                    observations.push(Observation::TextureExport(sink.export_texture(texture)?))
                 }
             }
         }
@@ -122,10 +117,6 @@ impl CommandSink for IoSink {
         Ok(ExportId(0))
     }
 
-    fn export_texture(&mut self, id: TextureId) -> hl_gpu::Result<ExportId> {
-        self.operations.push(Operation::ExportTexture(id));
-        Ok(ExportId(0))
-    }
 }
 
 #[cfg(test)]
