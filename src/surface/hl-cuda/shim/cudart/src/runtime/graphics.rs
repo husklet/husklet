@@ -69,9 +69,12 @@ pub unsafe extern "C" fn cudaGraphicsGLRegisterImage(resource: *mut *mut c_void,
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn cudaGraphicsMapResources(count: i32, list: *mut *mut c_void, _stream: *mut c_void) -> i32 {
+pub unsafe extern "C" fn cudaGraphicsMapResources(count: i32, list: *mut *mut c_void, stream: *mut c_void) -> i32 {
     let Some(resources) = resources(list, count) else { return CUDART_ERROR_INVALID_VALUE; };
-    ShimState::with(|state| match graphics::map_resources(&mut state.ctx, &mut state.sink, &resources) { Ok(()) => CUDART_SUCCESS, Err(e) => state.fail(RuntimeStatus::from(&e).code()) })
+    ShimState::with(|state| {
+        let Some(stream) = state.stream(stream) else { return state.fail(CUDART_ERROR_INVALID_RESOURCE_HANDLE); };
+        match graphics::map_resources(&mut state.ctx, &mut state.sink, &resources, stream) { Ok(()) => CUDART_SUCCESS, Err(e) => state.fail(RuntimeStatus::from(&e).code()) }
+    })
 }
 
 #[no_mangle]
@@ -93,9 +96,12 @@ pub unsafe extern "C" fn cudaGraphicsSubResourceGetMappedArray(array: *mut *mut 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn cudaGraphicsUnmapResources(count: i32, list: *mut *mut c_void, _stream: *mut c_void) -> i32 {
+pub unsafe extern "C" fn cudaGraphicsUnmapResources(count: i32, list: *mut *mut c_void, stream: *mut c_void) -> i32 {
     let Some(resources) = resources(list, count) else { return CUDART_ERROR_INVALID_VALUE; };
-    ShimState::with(|state| match graphics::unmap_resources(&mut state.ctx, &mut state.sink, &resources) { Ok(()) => CUDART_SUCCESS, Err(e) => state.fail(RuntimeStatus::from(&e).code()) })
+    ShimState::with(|state| {
+        let Some(stream) = state.stream(stream) else { return state.fail(CUDART_ERROR_INVALID_RESOURCE_HANDLE); };
+        match graphics::unmap_resources(&mut state.ctx, &mut state.sink, &resources, stream) { Ok(()) => CUDART_SUCCESS, Err(e) => state.fail(RuntimeStatus::from(&e).code()) }
+    })
 }
 
 #[no_mangle]

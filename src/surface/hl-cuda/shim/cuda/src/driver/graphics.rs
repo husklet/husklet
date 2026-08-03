@@ -94,11 +94,14 @@ pub unsafe extern "C" fn cuGraphicsGLRegisterImage(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn cuGraphicsMapResources(count: u32, list: *mut *mut c_void, _stream: *mut c_void) -> i32 {
+pub unsafe extern "C" fn cuGraphicsMapResources(count: u32, list: *mut *mut c_void, stream: *mut c_void) -> i32 {
     let Some(resources) = resources(list, count) else { return CUDA_ERROR_INVALID_VALUE; };
-    ShimState::with_context(|state| match graphics::map_resources(&mut state.ctx, &mut state.sink, &resources) {
+    ShimState::with_context(|state| {
+        let Some(stream) = state.stream(stream) else { return CUDA_ERROR_INVALID_HANDLE; };
+        match graphics::map_resources(&mut state.ctx, &mut state.sink, &resources, stream) {
         Ok(()) => CUDA_SUCCESS,
         Err(error) => DriverStatus::from(&error).code(),
+        }
     })
 }
 
@@ -135,11 +138,14 @@ pub unsafe extern "C" fn cuGraphicsSubResourceGetMappedArray(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn cuGraphicsUnmapResources(count: u32, list: *mut *mut c_void, _stream: *mut c_void) -> i32 {
+pub unsafe extern "C" fn cuGraphicsUnmapResources(count: u32, list: *mut *mut c_void, stream: *mut c_void) -> i32 {
     let Some(resources) = resources(list, count) else { return CUDA_ERROR_INVALID_VALUE; };
-    ShimState::with_context(|state| match graphics::unmap_resources(&mut state.ctx, &mut state.sink, &resources) {
+    ShimState::with_context(|state| {
+        let Some(stream) = state.stream(stream) else { return CUDA_ERROR_INVALID_HANDLE; };
+        match graphics::unmap_resources(&mut state.ctx, &mut state.sink, &resources, stream) {
         Ok(()) => CUDA_SUCCESS,
         Err(error) => DriverStatus::from(&error).code(),
+        }
     })
 }
 

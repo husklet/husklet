@@ -3,6 +3,7 @@
 use crate::model::context::CudaContext;
 use crate::model::device::DevicePtr;
 use crate::model::graphics::{GraphicsBuffer, GraphicsImage, GraphicsObject, GraphicsResource, ImportedArrayHandle};
+use crate::model::stream::Stream;
 use hl_gpu::{BufferId, Cmd, CommandSink, ExportId, GpuError, Result, TextureId};
 
 pub fn register_buffer(
@@ -42,7 +43,9 @@ pub fn map_resources(
     ctx: &mut CudaContext,
     sink: &mut dyn CommandSink,
     resources: &[GraphicsResource],
+    stream: Stream,
 ) -> Result<()> {
+    validate_stream(ctx, stream)?;
     validate_distinct(resources)?;
     for resource in resources {
         let entry = ctx.graphics.object(*resource).ok_or(GpuError::Invalid("CUDA graphics resource"))?;
@@ -76,7 +79,9 @@ pub fn unmap_resources(
     ctx: &mut CudaContext,
     sink: &mut dyn CommandSink,
     resources: &[GraphicsResource],
+    stream: Stream,
 ) -> Result<()> {
+    validate_stream(ctx, stream)?;
     validate_distinct(resources)?;
     for resource in resources {
         let entry = ctx.graphics.object(*resource).ok_or(GpuError::Invalid("CUDA graphics resource"))?;
@@ -122,6 +127,10 @@ fn validate_distinct(resources: &[GraphicsResource]) -> Result<()> {
     Ok(())
 }
 
+fn validate_stream(ctx: &CudaContext, stream: Stream) -> Result<()> {
+    ctx.streams.is_valid(stream).then_some(()).ok_or(GpuError::Invalid("CUDA graphics resource stream"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,11 +157,11 @@ mod tests {
         let (mut ctx, mut sink) = (context(), Sink::default());
         let resource = register_buffer(&mut ctx, &mut sink, ExportId(9)).unwrap();
         assert!(mapped_pointer(&ctx, resource).is_err());
-        map_resources(&mut ctx, &mut sink, &[resource]).unwrap();
+        map_resources(&mut ctx, &mut sink, &[resource], Stream(0)).unwrap();
         let (pointer, bytes) = mapped_pointer(&ctx, resource).unwrap();
         assert_eq!(bytes, 4096);
         assert_eq!(ctx.resolve(pointer), Some((sink.imports[0].0, 0)));
-        unmap_resources(&mut ctx, &mut sink, &[resource]).unwrap();
+        unmap_resources(&mut ctx, &mut sink, &[resource], Stream(0)).unwrap();
         assert!(mapped_pointer(&ctx, resource).is_err());
         unregister_resource(&mut ctx, &mut sink, resource).unwrap();
         assert!(ctx.resolve(pointer).is_none());
@@ -165,7 +174,7 @@ mod tests {
         let a = register_buffer(&mut ctx, &mut sink, ExportId(1)).unwrap();
         let b = register_buffer(&mut ctx, &mut sink, ExportId(2)).unwrap();
         sink.fail_map = Some(ctx.graphics.get(b).unwrap().buffer);
-        assert!(map_resources(&mut ctx, &mut sink, &[a, b]).is_err());
+        assert!(map_resources(&mut ctx, &mut sink, &[a, b], Stream(0)).is_err());
         assert_eq!(sink.unmapped, vec![ctx.graphics.get(a).unwrap().buffer]);
         assert!(!ctx.graphics.get(a).unwrap().mapped && !ctx.graphics.get(b).unwrap().mapped);
     }
@@ -174,8 +183,8 @@ mod tests {
     fn duplicate_and_mapped_unregister_are_refused_without_mutation() {
         let (mut ctx, mut sink) = (context(), Sink::default());
         let resource = register_buffer(&mut ctx, &mut sink, ExportId(1)).unwrap();
-        assert!(map_resources(&mut ctx, &mut sink, &[resource, resource]).is_err());
-        map_resources(&mut ctx, &mut sink, &[resource]).unwrap();
+        assert!(map_resources(&mut ctx, &mut sink, &[resource, resource], Stream(0)).is_err());
+        map_resources(&mut ctx, &mut sink, &[resource], Stream(0)).unwrap();
         assert!(unregister_resource(&mut ctx, &mut sink, resource).is_err());
         assert!(ctx.graphics.get(resource).is_some());
     }
@@ -188,7 +197,7 @@ mod tests {
         assert_eq!(ctx.graphics.get(resource).unwrap().map_flags, 2);
         assert!(set_map_flags(&mut ctx, resource, 3).is_err());
         assert_eq!(ctx.graphics.get(resource).unwrap().map_flags, 2);
-        map_resources(&mut ctx, &mut sink, &[resource]).unwrap();
+        map_resources(&mut ctx, &mut sink, &[resource], Stream(0)).unwrap();
         assert!(set_map_flags(&mut ctx, resource, 1).is_err());
         assert_eq!(ctx.graphics.get(resource).unwrap().map_flags, 2);
         assert!(set_map_flags(&mut ctx, GraphicsResource(u64::MAX), 0).is_err());
@@ -202,7 +211,7 @@ mod tests {
         assert!(matches!(ctx.graphics.object(resource), Some(GraphicsObject::Image(image)) if image.registration_flags == 4));
         assert_eq!(sink.texture_imports.len(), 1);
         assert!(mapped_array(&mut ctx, resource, 0, 0).is_err());
-        map_resources(&mut ctx, &mut sink, &[resource]).unwrap();
+        map_resources(&mut ctx, &mut sink, &[resource], Stream(0)).unwrap();
         assert!(mapped_pointer(&ctx, resource).is_err());
         let array = mapped_array(&mut ctx, resource, 0, 0).unwrap();
         assert_eq!(mapped_array(&mut ctx, resource, 0, 0).unwrap(), array);
@@ -212,11 +221,24 @@ mod tests {
         assert_eq!((imported.resource, imported.mip, imported.layer), (resource, 0, 0));
         assert_eq!(sink.mapped_textures, vec![imported.texture]);
         assert!(unregister_resource(&mut ctx, &mut sink, resource).is_err());
-        unmap_resources(&mut ctx, &mut sink, &[resource]).unwrap();
+        unmap_resources(&mut ctx, &mut sink, &[resource], Stream(0)).unwrap();
         assert!(ctx.graphics.array(array).is_none());
         assert!(mapped_array(&mut ctx, resource, 0, 0).is_err());
         unregister_resource(&mut ctx, &mut sink, resource).unwrap();
         assert_eq!(sink.unmapped_textures, vec![imported.texture]);
         assert!(matches!(sink.batches.last().unwrap().as_slice(), [Cmd::DestroyTexture(_)]));
+    }
+
+    #[test]
+    fn map_and_unmap_reject_unknown_stream_before_touching_the_resource() {
+        let (mut ctx, mut sink) = (context(), Sink::default());
+        let resource = register_buffer(&mut ctx, &mut sink, ExportId(1)).unwrap();
+        assert!(map_resources(&mut ctx, &mut sink, &[resource], Stream(u32::MAX)).is_err());
+        assert!(sink.mapped.is_empty());
+        assert!(!ctx.graphics.get(resource).unwrap().mapped);
+        map_resources(&mut ctx, &mut sink, &[resource], Stream(0)).unwrap();
+        assert!(unmap_resources(&mut ctx, &mut sink, &[resource], Stream(u32::MAX)).is_err());
+        assert!(sink.unmapped.is_empty());
+        assert!(ctx.graphics.get(resource).unwrap().mapped);
     }
 }
