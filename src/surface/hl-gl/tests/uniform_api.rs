@@ -218,3 +218,34 @@ fn aggregate_uniforms_reflect_real_leaf_names_indices_and_layout() {
         );
     }
 }
+
+#[test]
+fn sampler_struct_leaves_have_real_locations_and_units() {
+    let mut context = GlContext::new();
+    let program = program(
+        &mut context,
+        "void main(){gl_Position=vec4(0.0);}",
+        "struct Images { sampler2D image; samplerCube cube; };\n\
+         uniform Images u_var;\n\
+         void main(){gl_FragColor=texture2D(u_var.image,vec2(0.5))+textureCube(u_var.cube,vec3(1.0));}",
+    );
+
+    for (name, index, gl_type) in [
+        ("u_var.image", 0, GL_SAMPLER_2D),
+        ("u_var.cube", 1, GL_SAMPLER_CUBE),
+    ] {
+        assert_eq!(intro::uniform_index(&context, program, name), index);
+        assert_eq!(
+            query::uniform_location(&context, program, name),
+            index as i32
+        );
+        let active = query::active_uniform(&context, program, index).expect("sampler leaf");
+        assert_eq!((active.name.as_str(), active.gl_type), (name, gl_type));
+    }
+
+    record::use_program(&mut context, program);
+    record::uniform_i32_at(&mut context, 0, &[4]);
+    record::uniform_i32_at(&mut context, 1, &[7]);
+    assert_eq!(intro::get_sampler_unit(&context, program, 0), Some(4));
+    assert_eq!(intro::get_sampler_unit(&context, program, 1), Some(7));
+}

@@ -142,6 +142,36 @@ fn nested_structures_align_each_aggregate_and_preserve_leaf_arrays() {
 }
 
 #[test]
+fn sampler_only_struct_lowers_leaves_to_standalone_bindings() {
+    let fs = "#version 300 es\nprecision highp float;\n\
+              struct Images { sampler2D image; samplerCube cube; };\n\
+              uniform Images u_var;\nout vec4 color;\n\
+              void main(){ color = texture(u_var.image, vec2(0.5)) + texture(u_var.cube, vec3(0.0, 0.0, 1.0)); }\n";
+    let (uniforms, total) = glsl::StageSources::new("void main(){}", fs)
+        .uniform_layout()
+        .expect("opaque aggregate leaves are standalone uniforms");
+    assert!(uniforms.is_empty());
+    assert_eq!(total, 0);
+    assert_eq!(
+        glsl::StageSources::new("void main(){}", fs)
+            .sampler_decls()
+            .iter()
+            .map(|sampler| (sampler.name.as_str(), sampler.ty.as_str()))
+            .collect::<Vec<_>>(),
+        [("u_var.image", "sampler2D"), ("u_var.cube", "samplerCube")]
+    );
+
+    let (_, translated) = glsl::StageSources::new("void main(){}", fs).translate_render();
+    assert!(!translated.contains("Images u_var"));
+    assert!(translated.contains("u_var_image_hltex"), "{translated}");
+    assert!(
+        translated.contains("sampler2D(u_var_image_hltex, u_var_image_hlsmp)"),
+        "{translated}"
+    );
+    assert_naga_parses(&translated, naga::ShaderStage::Fragment);
+}
+
+#[test]
 fn conflicting_cross_stage_uniform_declarations_are_rejected() {
     let error = glsl::StageSources::new(
         "uniform float value;\nvoid main(){ gl_Position = vec4(value); }\n",

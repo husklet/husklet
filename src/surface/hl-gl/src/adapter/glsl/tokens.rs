@@ -163,11 +163,59 @@ impl<'a> Declarations<'a> {
         out
     }
 
+    pub(super) fn sampler_structs(self) -> std::collections::HashSet<String> {
+        let structs = self.struct_members();
+        let mut opaque = std::collections::HashSet::new();
+        loop {
+            let before = opaque.len();
+            for (name, members) in &structs {
+                if members
+                    .iter()
+                    .any(|member| member.is_sampler() || opaque.contains(&member.ty))
+                {
+                    opaque.insert(name.clone());
+                }
+            }
+            if opaque.len() == before {
+                return opaque;
+            }
+        }
+    }
+
     /// Source-level declarations used to regenerate the shader's uniform storage. Struct uniforms stay
     /// aggregate here: their type definition is carried before `HlUniforms`, so preserving the aggregate
     /// makes the host compiler calculate the same std140 structure layout the guest reflects leaf-by-leaf.
     pub(super) fn storage_uniforms(self) -> (Vec<Decl>, Vec<Decl>) {
-        split_uniforms(self.raw_uniforms())
+        let structs = self.struct_members();
+        let mut data = Vec::new();
+        let mut samplers = Vec::new();
+        for declaration in self.raw_uniforms() {
+            if !structs.contains_key(&declaration.ty) {
+                if declaration.is_sampler() {
+                    samplers.push(declaration);
+                } else {
+                    data.push(declaration);
+                }
+                continue;
+            }
+            let mut leaves = Vec::new();
+            let flattened = flatten_aggregate(
+                &declaration,
+                &declaration.name,
+                &structs,
+                &mut Vec::new(),
+                &mut leaves,
+            );
+            if flattened && leaves.iter().all(Decl::is_sampler) {
+                samplers.extend(leaves);
+            } else {
+                // Data structures retain their aggregate declaration so the host compiler owns their
+                // std140 storage layout. A mixed data/opaque structure remains aggregate and is rejected
+                // by the reflection gate; lowering it requires splitting both storage classes.
+                data.push(declaration);
+            }
+        }
+        (data, samplers)
     }
 
     pub(super) fn uniforms(self) -> (Vec<Decl>, Vec<Decl>) {
@@ -189,6 +237,12 @@ impl<'a> Declarations<'a> {
                 flattened.push(declaration);
                 continue;
             }
+            let has_sampler = leaves.iter().any(Decl::is_sampler);
+            let has_data = leaves.iter().any(|leaf| !leaf.is_sampler());
+            if has_sampler && has_data {
+                flattened.push(declaration);
+                continue;
+            }
             flattened.extend(leaves);
         }
         split_uniforms(flattened)
@@ -203,7 +257,7 @@ fn flatten_aggregate(
     out: &mut Vec<Decl>,
 ) -> bool {
     let Some(members) = structs.get(&declaration.ty) else {
-        if TypeToken(&declaration.ty).layout().is_none() || declaration.is_sampler() {
+        if TypeToken(&declaration.ty).layout().is_none() && !declaration.is_sampler() {
             return false;
         }
         let mut leaf = declaration.clone();

@@ -221,10 +221,11 @@ impl Declarations<'_> {
                     wreplace(body, &source, &replacement);
                 }
             } else {
+                let name = Self::sampler_element_name(s, 0);
                 let repl = if integer {
-                    format!("{}_hltex", s.name)
+                    format!("{name}_hltex")
                 } else {
-                    format!("{ctor}({}_hltex, {}_hlsmp)", s.name, s.name)
+                    format!("{ctor}({name}_hltex, {name}_hlsmp)")
                 };
                 wreplace(body, &s.name, &repl);
             }
@@ -314,10 +315,21 @@ impl Declarations<'_> {
     }
 
     fn sampler_element_name(sampler: &Decl, element: u32) -> String {
+        let base = sampler
+            .name
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || character == '_' {
+                    character
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
         if sampler.arr == 0 {
-            sampler.name.clone()
+            base
         } else {
-            format!("{}_{}", sampler.name, element)
+            format!("{base}_{element}")
         }
     }
 }
@@ -516,9 +528,23 @@ impl StageSources<'_> {
         // `texture2D`/`textureCube` builtins lowered) so a helper that samples a texture stays valid.
         let (vs_structs, vs_funcs) = Source::new(&vs).partition_globals();
         let (fs_structs, fs_funcs) = Source::new(&fs).partition_globals();
+        let sampler_structs = Declarations::from_stages(&vs, &fs).sampler_structs();
         let rewrite = |items: &[String], samps: &[Decl]| -> String {
             let mut out = String::new();
             for it in items {
+                let mut words = it
+                    .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+                    .filter(|word| !word.is_empty());
+                if words.next() == Some("struct")
+                    && words
+                        .next()
+                        .is_some_and(|name| sampler_structs.contains(name))
+                {
+                    // Opaque aggregate uniforms are lowered to standalone texture/sampler bindings below.
+                    // Desktop GLSL/naga does not admit a combined sampler type inside a structure even when
+                    // that structure is otherwise unused, so do not carry the now-unreferenced type through.
+                    continue;
+                }
                 let mut t = it.clone();
                 NormalizedSource::new(&mut t).strip_precision();
                 Declarations::rewrite_integer_sampler_fetches(&mut t, samps);
