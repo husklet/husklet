@@ -216,6 +216,12 @@ pub extern "C" fn glBufferData(target: u32, size: isize, data: *const c_void, us
         GlobalState::context(|s| s.gl.set_gl_error(error));
         return;
     }
+    let name = GlobalState::context(|s| s.gl.buffer_for_target(target));
+    let registered_size = GlobalState::context(|s| s.gl.interop_buffer(name).map(|(_, bytes)| bytes));
+    if registered_size.is_some_and(|bytes| bytes != size as usize) {
+        GlobalState::context(|s| s.gl.set_gl_error(GL_INVALID_OPERATION));
+        return;
+    }
     let d = if data.is_null() && size > 0 {
         // GLES3.0 2.9.2: a data store the GL cannot create is GL_OUT_OF_MEMORY, not a crash. The
         // reservation is driver-side arithmetic on a guest-supplied length, so allocate fallibly —
@@ -231,6 +237,7 @@ pub extern "C" fn glBufferData(target: u32, size: isize, data: *const c_void, us
         unsafe { RawBytes::read(data, size) }.to_vec()
     };
     GlobalState::context(|s| record::buffer_data(&mut s.gl, target, &d, usage));
+    flush_interop_buffer(name, 0, d);
 }
 
 /// The storage size of the buffer bound to `target`, or `None` when no buffer is bound there. A guest
@@ -273,7 +280,31 @@ pub extern "C" fn glBufferSubData(target: u32, offset: isize, size: isize, data:
         return;
     }
     let d = unsafe { RawBytes::read(data, size) }.to_vec();
+    let name = GlobalState::context(|s| s.gl.buffer_for_target(target));
     GlobalState::context(|s| record::buffer_sub_data(&mut s.gl, target, offset as usize, &d));
+    flush_interop_buffer(name, offset as u64, d);
+}
+
+/// Keep CPU-side GL mutations coherent with an already-exported CUDA allocation. The update runs only
+/// for a registered name and completes before the GL call returns, so a following CUDA map observes it.
+fn flush_interop_buffer(name: u32, offset: u64, data: Vec<u8>) {
+    if name == 0 || GlobalState::context(|s| s.gl.interop_buffer(name)).is_none() {
+        return;
+    }
+    let result = GlobalState::gpu_submit(move |group, sink| {
+        let (buffer, _) = group
+            .gl
+            .interop_buffer(name)
+            .ok_or(hl_gpu::GpuError::Invalid("GL/CUDA interop buffer"))?;
+        sink.submit(&[hl_gpu::Cmd::WriteBuffer {
+            id: buffer,
+            offset,
+            data,
+        }])
+    });
+    if let Err(error) = result {
+        hl_log::hl_error!(hl_log::tag::GL, "GL/CUDA buffer update failed: {error}");
+    }
 }
 
 #[cfg_attr(gles_client, no_mangle)]

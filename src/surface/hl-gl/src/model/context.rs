@@ -129,7 +129,7 @@ pub struct GlContext {
     /// as BOTH a vertex and an index source gets a correctly-typed IR buffer for each role.
     buf_ir_cache: HashMap<(u32, u32), (u32, u64)>,
     /// Canonical backing exported to CUDA, shared by every later GL use of this buffer name.
-    interop_buf_ir: HashMap<u32, (u32, u64)>,
+    interop_buf_ir: HashMap<u32, (u32, u64, usize)>,
 
     /// Residency cache for a linked GL program's two IR shader MODULES, keyed by GL program name →
     /// `(vs_shader_ir, fs_shader_ir, link_gen)`. GskGpu compiles + links each of its programs ONCE and then

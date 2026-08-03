@@ -167,7 +167,7 @@ impl GlContext {
         for ir in dead {
             self.pending_destroys.push(Cmd::DestroyBuffer(ir));
         }
-        if let Some((ir, _)) = self.interop_buf_ir.remove(&gl_name) {
+        if let Some((ir, _, _)) = self.interop_buf_ir.remove(&gl_name) {
             self.pending_destroys.push(Cmd::DestroyBuffer(ir));
         }
     }
@@ -620,7 +620,7 @@ impl GlContext {
         usage: u32,
         gen: u64,
     ) -> hl_gpu::Result<(u32, bool)> {
-        if let Some(&(ir, _)) = self.interop_buf_ir.get(&gl_name) {
+        if let Some(&(ir, _, _)) = self.interop_buf_ir.get(&gl_name) {
             return Ok((ir, false));
         }
         if let Some(&(ir, up_gen)) = self.buf_ir_cache.get(&(gl_name, usage)) {
@@ -648,12 +648,20 @@ impl GlContext {
         if gl_buffer.mapped.is_some() {
             return Err(hl_gpu::GpuError::Invalid("mapped GL buffer"));
         }
-        if let Some(&(ir, _)) = self.interop_buf_ir.get(&gl_name) {
+        if let Some(&(ir, _, _)) = self.interop_buf_ir.get(&gl_name) {
             return Ok((ir, false));
         }
         let ir = self.alloc_buffer_ir()?;
-        self.interop_buf_ir.insert(gl_name, (ir, gl_buffer.gen));
+        self.interop_buf_ir
+            .insert(gl_name, (ir, gl_buffer.gen, gl_buffer.data.len()));
         Ok((ir, true))
+    }
+
+    /// The live CUDA-exported backing and its immutable allocation size.
+    pub fn interop_buffer(&self, gl_name: u32) -> Option<(u32, usize)> {
+        self.interop_buf_ir
+            .get(&gl_name)
+            .map(|&(buffer, _, bytes)| (buffer, bytes))
     }
 
     // ---- IR id minting ---------------------------------------------------------------------------
