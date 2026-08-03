@@ -27,7 +27,15 @@ impl GlContext {
 
     pub fn with_allocator(allocator: std::sync::Arc<IrAllocator>) -> Self {
         let mut textures = Textures::new();
-        textures.ensure_default(DEFAULT_TEXTURE_CUBE);
+        for key in [
+            DEFAULT_TEXTURE_2D,
+            DEFAULT_TEXTURE_CUBE,
+            DEFAULT_TEXTURE_2D_ARRAY,
+            DEFAULT_TEXTURE_3D,
+            DEFAULT_TEXTURE_2D_MULTISAMPLE,
+        ] {
+            textures.ensure_default(key);
+        }
         Self {
             local: LocalState::default(),
             buffers: Buffers::new(),

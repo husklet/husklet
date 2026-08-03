@@ -29,6 +29,7 @@ pub const GL_RG_INTEGER: u32 = 0x8228;
 pub const GL_RGB_INTEGER: u32 = 0x8D98;
 pub const GL_RGBA_INTEGER: u32 = 0x8D99;
 pub const GL_DEPTH_COMPONENT: u32 = 0x1902;
+pub const GL_STENCIL_INDEX: u32 = 0x1901;
 
 // buffer targets
 pub const GL_ARRAY_BUFFER: u32 = 0x8892;

@@ -24,6 +24,10 @@ use std::sync::Arc;
 
 /// Private texture key outside the complete public `GLuint` namespace.
 pub(crate) const DEFAULT_TEXTURE_CUBE: u64 = u64::MAX;
+pub(crate) const DEFAULT_TEXTURE_2D: u64 = u64::MAX - 1;
+pub(crate) const DEFAULT_TEXTURE_2D_ARRAY: u64 = u64::MAX - 2;
+pub(crate) const DEFAULT_TEXTURE_3D: u64 = u64::MAX - 3;
+pub(crate) const DEFAULT_TEXTURE_2D_MULTISAMPLE: u64 = u64::MAX - 4;
 
 #[derive(Clone)]
 pub(super) struct SharedTextureResidency {
@@ -438,22 +442,23 @@ impl GlContext {
     }
 
     pub fn bound_texture_for_target(&self, target: u32) -> u32 {
-        let cube = matches!(
-            target,
+        match target {
             glconst::GL_TEXTURE_CUBE_MAP
                 | glconst::GL_TEXTURE_CUBE_MAP_POSITIVE_X
                 | glconst::GL_TEXTURE_CUBE_MAP_NEGATIVE_X
                 | glconst::GL_TEXTURE_CUBE_MAP_POSITIVE_Y
                 | glconst::GL_TEXTURE_CUBE_MAP_NEGATIVE_Y
                 | glconst::GL_TEXTURE_CUBE_MAP_POSITIVE_Z
-                | glconst::GL_TEXTURE_CUBE_MAP_NEGATIVE_Z
-        );
-        let name = if cube {
-            self.local.cube_tex_unit[self.local.active_texture]
-        } else {
-            self.local.tex_unit[self.local.active_texture]
-        };
-        name
+                | glconst::GL_TEXTURE_CUBE_MAP_NEGATIVE_Z => {
+                    self.local.cube_tex_unit[self.local.active_texture]
+                }
+            glconst::GL_TEXTURE_2D_ARRAY => self.local.array_tex_unit[self.local.active_texture],
+            glconst::GL_TEXTURE_3D => self.local.tex_3d_unit[self.local.active_texture],
+            glconst::GL_TEXTURE_2D_MULTISAMPLE => {
+                self.local.multisample_tex_unit[self.local.active_texture]
+            }
+            _ => self.local.tex_unit[self.local.active_texture],
+        }
     }
 
     /// The texel format of the CPU shadow plane an upload into the active unit's texture must fill. An
