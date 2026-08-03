@@ -634,6 +634,15 @@ fn deqp_aliasing_inout_arrays_use_independent_parameter_copies() {
 }
 
 #[test]
+fn deqp_rejects_function_argument_basetype_mismatch() {
+    let source = "#version 460\n#define HL_GLSL_ES100 1\nlayout(location=0) out vec4 color; void func(float value){} void main(){ func(2); color=vec4(1); }";
+    assert!(
+        glsl_to_wgsl(source, naga::ShaderStage::Fragment, "main").is_err(),
+        "GLSL ES must not implicitly convert an int function argument to float"
+    );
+}
+
+#[test]
 fn constant_all_and_any_relations_fold() {
     let source = "#version 460\nlayout(location=0) out vec4 color;\nconst bool a=all(bvec3(true,true,true)); const bool b=any(bvec3(false,true,false)); void main(){ color=vec4(float(a),float(b),0,1); }";
     glsl_to_wgsl(source, naga::ShaderStage::Fragment, "main")

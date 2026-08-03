@@ -652,6 +652,10 @@ impl Frontend {
                     continue;
                 }
 
+                if self.strict_function_argument_types && !overload.internal {
+                    continue 'outer;
+                }
+
                 // Glsl defines that inout follows both the conversions for input parameters and
                 // output parameters, this means that the type must have a conversion from both the
                 // call argument to the function parameter and the function parameter to the call

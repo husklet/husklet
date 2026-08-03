@@ -324,8 +324,10 @@ pub fn glsl_to_wgsl_reflect(
         src
     };
     let mut frontend = naga::front::glsl::Frontend::default();
+    let mut options = naga::front::glsl::Options::from(stage);
+    options.strict_function_argument_types = src.contains("HL_GLSL_ES100");
     let mut module = frontend
-        .parse(&naga::front::glsl::Options::from(stage), src)
+        .parse(&options, src)
         .map_err(|error| Diagnostic::glsl(stage, entry, original, src, &error))?;
     if let Some(ep) = module.entry_points.first_mut() {
         ep.name = entry.to_string();

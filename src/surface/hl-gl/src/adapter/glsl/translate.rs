@@ -640,6 +640,13 @@ impl StageSources<'_> {
     ) -> (String, String) {
         let vs = Source::new(self.vertex).expanded();
         let fs = Source::new(self.fragment).expanded();
+        let declares_modern_es = |source: &str| {
+            source.lines().any(|line| {
+                let version = line.trim_start();
+                version.starts_with("#version") && !version.starts_with("#version 100")
+            })
+        };
+        let strict_es100_calls = !declares_modern_es(&vs) && !declares_modern_es(&fs);
 
         let attrs = Source::new(&vs).vertex_attrs();
         let mut vary = Tokens(&vs).collect("varying");
@@ -701,6 +708,9 @@ impl StageSources<'_> {
         // ---- vertex stage ----
         let mut vs_out = String::new();
         vs_out.push_str(GLSL_VERSION);
+        if strict_es100_calls {
+            vs_out.push_str("#define HL_GLSL_ES100 1\n");
+        }
         for c in &consts {
             vs_out.push_str(c);
             vs_out.push('\n');
@@ -778,6 +788,9 @@ impl StageSources<'_> {
         // ---- fragment stage ----
         let mut fs_out = String::new();
         fs_out.push_str(GLSL_VERSION);
+        if strict_es100_calls {
+            fs_out.push_str("#define HL_GLSL_ES100 1\n");
+        }
         for c in &consts {
             fs_out.push_str(c);
             fs_out.push('\n');

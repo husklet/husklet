@@ -51,6 +51,8 @@ fn es2_attribute_varying_fragcolor_shader_is_fully_desktopized() {
 
     assert_no_es_leaks(&v);
     assert_no_es_leaks(&f);
+    assert!(v.contains("#define HL_GLSL_ES100 1"), "{v}");
+    assert!(f.contains("#define HL_GLSL_ES100 1"), "{f}");
 
     // Both attributes get sequential explicit locations in declaration order.
     assert!(v.contains("layout(location = 0) in vec3 aPos;"), "{v}");
@@ -106,6 +108,8 @@ fn es3_in_out_shader_with_explicit_frag_output_keeps_the_named_output() {
     let (v, f) = glsl::StageSources::new(vs, fs).translate_render();
     assert_no_es_leaks(&v);
     assert_no_es_leaks(&f);
+    assert!(!v.contains("HL_GLSL_ES100"), "{v}");
+    assert!(!f.contains("HL_GLSL_ES100"), "{f}");
 
     // ES3 `in` attribute recognized (no `attribute` keyword) and located.
     assert!(v.contains("layout(location = 0) in vec3 aPos;"), "{v}");

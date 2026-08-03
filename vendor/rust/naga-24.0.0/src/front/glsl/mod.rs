@@ -56,6 +56,8 @@ pub struct Options {
     /// ```
     /// for each key value pair in the map.
     pub defines: FastHashMap<String, String>,
+    /// Require exact argument types for user-defined functions, as GLSL ES 1.00 does.
+    pub strict_function_argument_types: bool,
 }
 
 impl From<ShaderStage> for Options {
@@ -63,6 +65,7 @@ impl From<ShaderStage> for Options {
         Options {
             stage,
             defines: FastHashMap::default(),
+            strict_function_argument_types: false,
         }
     }
 }
@@ -175,11 +178,13 @@ pub struct Frontend {
     layouter: Layouter,
 
     errors: Vec<Error>,
+    strict_function_argument_types: bool,
 }
 
 impl Frontend {
-    fn reset(&mut self, stage: ShaderStage) {
+    fn reset(&mut self, stage: ShaderStage, strict_function_argument_types: bool) {
         self.meta.reset(stage);
+        self.strict_function_argument_types = strict_function_argument_types;
 
         self.lookup_function.clear();
         self.lookup_type.clear();
@@ -197,7 +202,7 @@ impl Frontend {
         options: &Options,
         source: &str,
     ) -> std::result::Result<Module, ParseErrors> {
-        self.reset(options.stage);
+        self.reset(options.stage, options.strict_function_argument_types);
 
         let lexer = lex::Lexer::new(source, &options.defines);
         let mut ctx = ParsingContext::new(lexer);
