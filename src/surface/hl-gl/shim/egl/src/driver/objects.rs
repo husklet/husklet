@@ -236,8 +236,14 @@ pub extern "C" fn glBufferData(target: u32, size: isize, data: *const c_void, us
     } else {
         unsafe { RawBytes::read(data, size) }.to_vec()
     };
-    GlobalState::context(|s| record::buffer_data(&mut s.gl, target, &d, usage));
-    flush_interop_buffer(name, 0, d);
+    if let Err(error) = commit_after_gpu_write(write_interop_buffer(name, 0, d.clone()), || {
+        GlobalState::context(|s| record::buffer_data(&mut s.gl, target, &d, usage));
+    }) {
+        hl_log::hl_error!(hl_log::tag::GL, "GL/CUDA buffer update failed: {error}");
+        let gl_error = gl_error_from_gpu_error(&error);
+        GlobalState::context(|s| s.gl.set_gl_error(gl_error));
+        return;
+    }
 }
 
 /// The storage size of the buffer bound to `target`, or `None` when no buffer is bound there. A guest
@@ -281,17 +287,24 @@ pub extern "C" fn glBufferSubData(target: u32, offset: isize, size: isize, data:
     }
     let d = unsafe { RawBytes::read(data, size) }.to_vec();
     let name = GlobalState::context(|s| s.gl.buffer_for_target(target));
-    GlobalState::context(|s| record::buffer_sub_data(&mut s.gl, target, offset as usize, &d));
-    flush_interop_buffer(name, offset as u64, d);
+    if let Err(error) = commit_after_gpu_write(
+        write_interop_buffer(name, offset as u64, d.clone()),
+        || GlobalState::context(|s| record::buffer_sub_data(&mut s.gl, target, offset as usize, &d)),
+    ) {
+        hl_log::hl_error!(hl_log::tag::GL, "GL/CUDA buffer update failed: {error}");
+        let gl_error = gl_error_from_gpu_error(&error);
+        GlobalState::context(|s| s.gl.set_gl_error(gl_error));
+        return;
+    }
 }
 
 /// Keep CPU-side GL mutations coherent with an already-exported CUDA allocation. The update runs only
 /// for a registered name and completes before the GL call returns, so a following CUDA map observes it.
-fn flush_interop_buffer(name: u32, offset: u64, data: Vec<u8>) {
+fn write_interop_buffer(name: u32, offset: u64, data: Vec<u8>) -> hl_gpu::Result<()> {
     if name == 0 || GlobalState::context(|s| s.gl.interop_buffer(name)).is_none() {
-        return;
+        return Ok(());
     }
-    let result = GlobalState::gpu_submit(move |group, sink| {
+    GlobalState::gpu_submit(move |group, sink| {
         let (buffer, _) = group
             .gl
             .interop_buffer(name)
@@ -301,9 +314,37 @@ fn flush_interop_buffer(name: u32, offset: u64, data: Vec<u8>) {
             offset,
             data,
         }])
-    });
-    if let Err(error) = result {
-        hl_log::hl_error!(hl_log::tag::GL, "GL/CUDA buffer update failed: {error}");
+    })
+}
+
+fn commit_after_gpu_write(
+    write: hl_gpu::Result<()>,
+    commit: impl FnOnce(),
+) -> hl_gpu::Result<()> {
+    write?;
+    commit();
+    Ok(())
+}
+
+#[cfg(test)]
+mod interop_transaction_tests {
+    use super::*;
+
+    #[test]
+    fn refused_gpu_write_neither_mutates_the_mirror_nor_hides_the_gl_error() {
+        let mut mirror = vec![1u8, 2, 3];
+        let error = hl_gpu::GpuError::Invalid("injected interop write refusal");
+        let result = commit_after_gpu_write(Err(error), || mirror.copy_from_slice(&[4, 5, 6]));
+        let error = result.unwrap_err();
+        assert_eq!(mirror, [1, 2, 3]);
+        assert_eq!(gl_error_from_gpu_error(&error), GL_INVALID_VALUE);
+    }
+
+    #[test]
+    fn acknowledged_gpu_write_commits_the_cpu_mirror() {
+        let mut mirror = vec![1u8, 2, 3];
+        commit_after_gpu_write(Ok(()), || mirror.copy_from_slice(&[4, 5, 6])).unwrap();
+        assert_eq!(mirror, [4, 5, 6]);
     }
 }
 
