@@ -5,16 +5,44 @@ use hl_gl::model::context::{
 
 type DebugCallback = unsafe extern "C" fn(u32, u32, u32, u32, i32, *const c_char, *const c_void);
 
-unsafe fn input_string(pointer: *const c_char, length: i32) -> Option<String> {
+enum InputBytes {
+    Value(Vec<u8>),
+    Null,
+    TooLong,
+}
+
+unsafe fn input_bytes(pointer: *const c_char, length: i32, limit: usize) -> InputBytes {
     if pointer.is_null() {
-        return None;
+        return InputBytes::Null;
     }
-    let bytes = if length < 0 {
-        unsafe { std::ffi::CStr::from_ptr(pointer) }.to_bytes()
-    } else {
-        unsafe { std::slice::from_raw_parts(pointer.cast::<u8>(), length as usize) }
-    };
-    Some(String::from_utf8_lossy(bytes).into_owned())
+    if length >= 0 {
+        let length = length as usize;
+        if length >= limit {
+            return InputBytes::TooLong;
+        }
+        return InputBytes::Value(
+            unsafe { std::slice::from_raw_parts(pointer.cast::<u8>(), length) }.to_vec(),
+        );
+    }
+    let mut bytes = Vec::new();
+    while bytes.len() < limit {
+        let byte = unsafe { *pointer.cast::<u8>().add(bytes.len()) };
+        if byte == 0 {
+            return InputBytes::Value(bytes);
+        }
+        bytes.push(byte);
+    }
+    InputBytes::TooLong
+}
+
+fn input_or_error(gl: &mut hl_gl::model::context::GlContext, input: InputBytes) -> Option<Vec<u8>> {
+    match input {
+        InputBytes::Value(bytes) => Some(bytes),
+        InputBytes::Null | InputBytes::TooLong => {
+            gl.set_gl_error(GL_INVALID_VALUE);
+            None
+        }
+    }
 }
 
 fn dispatch(delivery: DebugDelivery) {
@@ -26,9 +54,9 @@ fn dispatch(delivery: DebugDelivery) {
     else {
         return;
     };
-    let Ok(text) = std::ffi::CString::new(message.text) else {
-        return;
-    };
+    let mut text = message.text;
+    let length = text.len() as i32;
+    text.push(0);
     let callback: DebugCallback = unsafe { std::mem::transmute(callback) };
     unsafe {
         callback(
@@ -36,7 +64,7 @@ fn dispatch(delivery: DebugDelivery) {
             message.type_,
             message.id,
             message.severity,
-            text.as_bytes().len() as i32,
+            length,
             text.as_ptr(),
             user_param as *const c_void,
         )
@@ -151,7 +179,7 @@ pub extern "C" fn glDebugMessageInsertKHR(
     length: i32,
     buf: *const c_char,
 ) {
-    let text = unsafe { input_string(buf, length) };
+    let text = unsafe { input_bytes(buf, length, MAX_DEBUG_MESSAGE_LENGTH_VALUE) };
     let delivery = GlobalState::context(|s| {
         if !matches!(
             source_,
@@ -162,14 +190,9 @@ pub extern "C" fn glDebugMessageInsertKHR(
             s.gl.set_gl_error(GL_INVALID_ENUM);
             return None;
         }
-        let Some(text) = text else {
-            s.gl.set_gl_error(GL_INVALID_VALUE);
+        let Some(text) = input_or_error(&mut s.gl, text) else {
             return None;
         };
-        if text.len() >= MAX_DEBUG_MESSAGE_LENGTH_VALUE {
-            s.gl.set_gl_error(GL_INVALID_VALUE);
-            return None;
-        }
         Some(s.gl.deliver_debug_message(DebugMessage {
             source: source_,
             type_: type__,
@@ -199,7 +222,7 @@ pub extern "C" fn glGetDebugMessageLogKHR(
     lengths: *mut i32,
     log: *mut c_char,
 ) -> u32 {
-    if buf_size < 0 {
+    if !log.is_null() && buf_size < 0 {
         GlobalState::context(|s| s.gl.set_gl_error(GL_INVALID_VALUE));
         return 0;
     }
@@ -262,7 +285,7 @@ pub extern "C" fn glGetDebugMessageLog(
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glPushDebugGroupKHR(source_: u32, id: u32, length: i32, message: *const c_char) {
-    let text = unsafe { input_string(message, length) };
+    let text = unsafe { input_bytes(message, length, MAX_DEBUG_MESSAGE_LENGTH_VALUE) };
     let delivery = GlobalState::context(|s| {
         if !matches!(
             source_,
@@ -271,14 +294,9 @@ pub extern "C" fn glPushDebugGroupKHR(source_: u32, id: u32, length: i32, messag
             s.gl.set_gl_error(GL_INVALID_ENUM);
             return None;
         }
-        let Some(text) = text else {
-            s.gl.set_gl_error(GL_INVALID_VALUE);
+        let Some(text) = input_or_error(&mut s.gl, text) else {
             return None;
         };
-        if text.len() >= MAX_DEBUG_MESSAGE_LENGTH_VALUE {
-            s.gl.set_gl_error(GL_INVALID_VALUE);
-            return None;
-        }
         if !s.gl.debug_group_can_push() {
             s.gl.set_gl_error(GL_STACK_OVERFLOW);
             return None;
@@ -321,20 +339,23 @@ pub extern "C" fn glPopDebugGroup() {
 }
 
 fn label_object(identifier: u32, name: u32, length: i32, label: *const c_char) {
-    let text = unsafe { input_string(label, length) };
+    let text = if label.is_null() {
+        None
+    } else {
+        match unsafe { input_bytes(label, length, MAX_LABEL_LENGTH_VALUE) } {
+            InputBytes::Value(bytes) => Some(bytes),
+            InputBytes::Null | InputBytes::TooLong => {
+                GlobalState::context(|s| s.gl.set_gl_error(GL_INVALID_VALUE));
+                return;
+            }
+        }
+    };
     GlobalState::context(|s| {
         if !hl_gl::model::context::GlContext::debug_identifier_valid(identifier) {
             s.gl.set_gl_error(GL_INVALID_ENUM);
             return;
         }
         if !s.gl.debug_object_valid(identifier, name) {
-            s.gl.set_gl_error(GL_INVALID_VALUE);
-            return;
-        }
-        if text
-            .as_ref()
-            .is_some_and(|v| v.len() >= MAX_LABEL_LENGTH_VALUE)
-        {
             s.gl.set_gl_error(GL_INVALID_VALUE);
             return;
         }
@@ -350,9 +371,14 @@ pub extern "C" fn glObjectLabel(a: u32, b: u32, c: i32, d: *const c_char) {
     label_object(a, b, c, d)
 }
 
-unsafe fn write_label(text: &str, size: i32, length: *mut i32, out: *mut c_char) {
+unsafe fn write_label(text: &[u8], size: i32, length: *mut i32, out: *mut c_char) {
     if !length.is_null() {
-        unsafe { *length = text.len().min(size.saturating_sub(1) as usize) as i32 }
+        let reported = if out.is_null() {
+            text.len()
+        } else {
+            text.len().min(size.saturating_sub(1) as usize)
+        };
+        unsafe { *length = reported as i32 }
     }
     if size > 0 && !out.is_null() {
         let n = text.len().min(size as usize - 1);
@@ -393,17 +419,19 @@ pub extern "C" fn glGetObjectLabel(a: u32, b: u32, c: i32, d: *mut i32, e: *mut 
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glObjectPtrLabelKHR(ptr: *const c_void, length: i32, label: *const c_char) {
-    let text = unsafe { input_string(label, length) };
-    let valid = GlobalState::access(|s| s.sync(ptr as usize).is_some());
-    GlobalState::context(|s| {
-        if !valid {
-            s.gl.set_gl_error(GL_INVALID_VALUE);
-            return;
+    let text = if label.is_null() {
+        None
+    } else {
+        match unsafe { input_bytes(label, length, MAX_LABEL_LENGTH_VALUE) } {
+            InputBytes::Value(bytes) => Some(bytes),
+            InputBytes::Null | InputBytes::TooLong => {
+                GlobalState::context(|s| s.gl.set_gl_error(GL_INVALID_VALUE));
+                return;
+            }
         }
-        if text
-            .as_ref()
-            .is_some_and(|v| v.len() >= MAX_LABEL_LENGTH_VALUE)
-        {
+    };
+    GlobalState::context(|s| {
+        if !s.gl.has_sync(ptr as usize) {
             s.gl.set_gl_error(GL_INVALID_VALUE);
             return;
         }
@@ -421,9 +449,8 @@ pub extern "C" fn glGetObjectPtrLabelKHR(
     length: *mut i32,
     out: *mut c_char,
 ) {
-    let valid = GlobalState::access(|s| s.sync(ptr as usize).is_some());
     GlobalState::context(|s| {
-        if !valid || size < 0 {
+        if !s.gl.has_sync(ptr as usize) || size < 0 {
             s.gl.set_gl_error(GL_INVALID_VALUE);
             return;
         }

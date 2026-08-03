@@ -216,6 +216,12 @@ impl Programs {
         name != 0 && self.shaders.contains_key(&name)
     }
 
+    pub fn attached_shaders(&self, program: u32) -> [u32; 3] {
+        self.programs
+            .get(&program)
+            .map_or([0; 3], |program| [program.vs, program.fs, program.cs])
+    }
+
     /// Remove the program object outright (deleting `0` is a silent no-op; GL defines it so). The
     /// deferred-deletion rule of ES 3.0 §7.3 lives one layer up in
     /// [`crate::model::context::GlContext::delete_program`]; this is the unconditional removal it calls once

@@ -273,6 +273,8 @@ mod buffer;
 mod clear;
 #[path = "so_ffi_marshalling/config.rs"]
 mod config;
+#[path = "so_ffi_marshalling/debug.rs"]
+mod debug;
 #[path = "so_ffi_marshalling/draw.rs"]
 mod draw;
 #[path = "so_ffi_marshalling/query.rs"]

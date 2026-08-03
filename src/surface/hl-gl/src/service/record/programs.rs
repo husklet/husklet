@@ -814,8 +814,14 @@ impl GlContext {
 
     /// Remove a program object and retire its host resources. Used once the program stops being current.
     pub(crate) fn destroy_program(&mut self, program: u32) {
+        let shaders = self.programs.attached_shaders(program);
         if self.programs.delete(program) {
             self.clear_object_label(GL_PROGRAM_OBJECT, program);
+            for shader in shaders {
+                if shader != 0 && !self.programs.shader_exists(shader) {
+                    self.clear_object_label(GL_SHADER_OBJECT, shader);
+                }
+            }
             // Retire the program's resident IR shader modules + render pipelines (queued Destroy for the next
             // frame), so a deleted Skia/GskGpu program stops holding host residency and a recycled GL program
             // name cannot collide with the dead program's cached ids. See `GlContext::retire_program`.
@@ -830,7 +836,9 @@ impl GlContext {
     /// source and compile status survive until the last `glDetachShader`.
     pub fn delete_shader(&mut self, shader: u32) {
         self.programs.delete_shader(shader);
-        self.clear_object_label(GL_SHADER_OBJECT, shader);
+        if !self.programs.shader_exists(shader) {
+            self.clear_object_label(GL_SHADER_OBJECT, shader);
+        }
     }
 }
 
@@ -860,6 +868,8 @@ pub fn detach_shader(ctx: &mut GlContext, program: u32, shader: u32) {
     }
     if !ctx.programs.detach(program, shader) {
         ctx.set_gl_error(GL_INVALID_OPERATION);
+    } else if !ctx.programs.shader_exists(shader) {
+        ctx.clear_object_label(GL_SHADER_OBJECT, shader);
     }
 }
 
@@ -1055,7 +1065,9 @@ impl GlContext {
                     } else {
                         name
                     };
-                    ctx.textures.get(texture).map(|object| (texture, object.gen))
+                    ctx.textures
+                        .get(texture)
+                        .map(|object| (texture, object.gen))
                 })
             };
             d.depth_stencil = crate::model::program::DepthStencilSnapshot {
