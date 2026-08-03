@@ -97,6 +97,8 @@ impl RenderPasses {
                     index += 1;
                 }
                 FrameOp::CopyTex(copy) => {
+                    let source_bottom_up =
+                        RenderPasses::stores_bottom_up_rows(ctx, copy.read_target);
                     let src = resolve_ordered_target(
                         ctx, copy.read_fbo, copy.read_target, copy.read_ir, &mut cmds,
                         &mut fbo_target, &mut targets,
@@ -106,7 +108,11 @@ impl RenderPasses {
                     )?;
                     let width = copy.extent[0].max(0) as u32;
                     let height = copy.extent[1].max(0) as u32;
-                    let src_y = src.3.saturating_sub(copy.src[1]).saturating_sub(copy.extent[1]);
+                    let src_y = if source_bottom_up {
+                        copy.src[1]
+                    } else {
+                        src.3.saturating_sub(copy.src[1]).saturating_sub(copy.extent[1])
+                    };
                     cmds.push(Cmd::Submit(CommandBuffer {
                         encoder: vec![Enc::BlitTexture {
                             src: src.1,
@@ -130,7 +136,18 @@ impl RenderPasses {
                             },
                             dst_extent: Extent3d { width, height, depth: 1 },
                             filter: Filter::Nearest,
-                            mirror: Mirror::NONE,
+                            // Internal framebuffer targets store rows top-down, while ordinary GL
+                            // textures store upload/copy rows in GL's bottom-up order. `src_y` selects
+                            // the right framebuffer rectangle; the Y mirror converts the row order as
+                            // the pixels cross that boundary. Imported external targets already store
+                            // GL rows bottom-up and need neither conversion. Without this distinction
+                            // every full CopyTexImage result from an internal target is the CTS reference
+                            // flipped vertically, pixel-for-pixel.
+                            mirror: Mirror {
+                                x: false,
+                                y: !source_bottom_up,
+                                z: false,
+                            },
                         }],
                         signal: None,
                     }));
@@ -717,6 +734,7 @@ mod tests {
                 dst_sub: TextureSubresource { mip: 1, .. },
                 dst_origin: Origin3d { x: 2, y: 1, z: 0 },
                 src_extent: Extent3d { width: 3, height: 2, depth: 1 },
+                mirror: Mirror { x: false, y: true, z: false },
                 ..
             }
         ))).unwrap();
