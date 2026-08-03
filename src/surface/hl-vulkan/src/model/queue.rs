@@ -103,11 +103,16 @@ pub struct SwapImage {
 /// returning image 0 (which would re-hand the app an image the presentation engine still owns).
 #[derive(Clone, PartialEq, Debug)]
 pub struct SwapchainRec {
+    /// Instance-level application surface supplied in `VkSwapchainCreateInfoKHR::surface`.
+    pub application_surface: crate::VkSurfaceKHR,
     pub surface: crate::VkSurfaceKHR,
     pub width: u32,
     pub height: u32,
     pub format: TextureFormat,
     pub images: Vec<SwapImage>,
+    /// A replacement retires this chain: already-acquired images remain presentable, but no new image
+    /// may be acquired from it.
+    pub retired: bool,
     /// The index the next round-robin acquire starts its scan at (mod `images.len()`).
     pub acquire_cursor: u32,
 }

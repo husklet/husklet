@@ -120,12 +120,68 @@ fn surface_queries_report_modeled_values() {
     let caps = present::surface_capabilities();
     assert_eq!(caps.min_image_count, 2);
     assert_eq!(caps.max_image_count, 3);
-    assert_eq!(present::surface_present_modes(), vec![2, 1, 0]); // FIFO, MAILBOX, IMMEDIATE
+    assert_eq!(present::surface_present_modes(), vec![2]); // FIFO only
     assert_eq!(present::surface_formats().len(), 4);
+}
+
+#[test]
+fn replacement_retires_only_the_matching_application_surface() {
+    let mut d = dev();
+    let mut s = sink();
+    let app_surface = 0x5000;
+    let old_surface =
+        present::create_surface(&mut d, &mut s, 64, 64, vk_format::B8G8R8A8_UNORM, None).unwrap();
+    let old = present::create_swapchain_for_surface(&mut d, &mut s, old_surface, app_surface, 2, 0)
+        .unwrap();
+    let acquired = d.acquire_next_image(old).unwrap();
+
+    let matching = present::SwapchainConfig {
+        old_swapchain: old,
+        ..valid_swapchain_config()
+    };
+    assert!(present::validate_swapchain(&d, matching).is_ok());
+    assert!(present::validate_swapchain(
+        &d,
+        present::SwapchainConfig {
+            application_surface: app_surface + 1,
+            old_swapchain: old,
+            ..valid_swapchain_config()
+        }
+    )
+    .is_err());
+
+    let foreign_surface =
+        present::create_surface(&mut d, &mut s, 64, 64, vk_format::B8G8R8A8_UNORM, None).unwrap();
+    let swapchain_count = d.swapchains.len();
+    assert!(present::create_swapchain_for_surface(
+        &mut d,
+        &mut s,
+        foreign_surface,
+        app_surface + 1,
+        2,
+        old,
+    )
+    .is_err());
+    assert_eq!(d.swapchains.len(), swapchain_count);
+    assert!(!d.swapchains.get(&old).unwrap().retired);
+
+    let replacement_surface =
+        present::create_surface(&mut d, &mut s, 64, 64, vk_format::B8G8R8A8_UNORM, None).unwrap();
+    present::create_swapchain_for_surface(&mut d, &mut s, replacement_surface, app_surface, 2, old)
+        .unwrap();
+
+    assert!(d.swapchains.get(&old).unwrap().retired);
+    assert!(d.acquire_next_image(old).is_err());
+    present::queue_present(&mut d, &mut s, old, acquired, None)
+        .expect("an image acquired before retirement remains presentable");
+    assert!(d.acquire_next_image(old).is_err());
+    assert!(present::validate_swapchain(&d, matching).is_err());
 }
 
 fn valid_swapchain_config() -> present::SwapchainConfig {
     present::SwapchainConfig {
+        application_surface: 0x5000,
+        application_surface_live: true,
         flags: 0,
         min_image_count: 2,
         image_format: vk_format::B8G8R8A8_UNORM,
@@ -166,6 +222,10 @@ fn swapchain_validation_accepts_exactly_advertised_parameters() {
     }
 
     let invalid = [
+        present::SwapchainConfig {
+            application_surface_live: false,
+            ..valid_swapchain_config()
+        },
         present::SwapchainConfig {
             flags: 1,
             ..valid_swapchain_config()

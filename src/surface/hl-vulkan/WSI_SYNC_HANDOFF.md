@@ -43,3 +43,9 @@ currently exposes only queue family 0.
 
 This validation is deliberately not presented as semaphore support. The synchronization work above remains
 required before acquire, submit, or present wait/signal parameters can be honored.
+
+Swapchains retain the application `VkSurfaceKHR` separately from their internal GPU surface. A successful
+same-surface replacement retires the old chain: images acquired before retirement may still be presented,
+but no further acquire is accepted. Dead surfaces and cross-surface `oldSwapchain` handles are rejected
+before presenter or GPU allocation. Only FIFO is advertised until MAILBOX and IMMEDIATE have distinct
+queueing behavior.
