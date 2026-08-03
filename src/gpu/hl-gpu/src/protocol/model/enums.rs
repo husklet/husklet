@@ -54,7 +54,7 @@ u32_enum!(
         Rgb9e5Ufloat = 60,
         Rgb10a2Unorm = 61, Rgb10a2Uint = 62, Rg11b10Ufloat = 63,
         R5g6b5Unorm = 64, A1r5g5b5Unorm = 65, B4g4r4a4Unorm = 66,
-        Rgba16Unorm = 67, Rg16Unorm = 68, R16Unorm = 69,
+        Rgba16Unorm = 67, Rg16Unorm = 68, R16Unorm = 69, R16Snorm = 70,
     } "TextureFormat"
 );
 
@@ -122,7 +122,7 @@ impl TextureFormat {
             | TextureFormat::Rgb10a2Unorm
             | TextureFormat::Rgb10a2Uint
             | TextureFormat::Rg11b10Ufloat => 4,
-            TextureFormat::R16Unorm => 2,
+            TextureFormat::R16Unorm | TextureFormat::R16Snorm => 2,
             TextureFormat::Rgba8Snorm
             | TextureFormat::Rg16Float
             | TextureFormat::Rg16Unorm
@@ -241,6 +241,7 @@ impl TextureFormat {
         let half = |value: f64| crate::protocol::model::half::from_f32(value as f32).to_le_bytes();
         let unorm_bits =
             |value: f64, max: u16| (value.clamp(0.0, 1.0) * f64::from(max) + 0.5) as u16;
+        let snorm16 = |value: f64| (value.clamp(-1.0, 1.0) * f64::from(i16::MAX)).round() as i16;
         Some(match self {
             TextureFormat::Rgba8Unorm | TextureFormat::Rgba8Srgb => vec![
                 channel(color[0]),
@@ -258,6 +259,7 @@ impl TextureFormat {
             TextureFormat::Rg8Unorm => vec![unorm(color[0]), unorm(color[1])],
             TextureFormat::R32Float => (color[0] as f32).to_le_bytes().to_vec(),
             TextureFormat::R16Unorm => unorm_bits(color[0], u16::MAX).to_le_bytes().to_vec(),
+            TextureFormat::R16Snorm => snorm16(color[0]).to_le_bytes().to_vec(),
             TextureFormat::Rgba16Unorm => color
                 .iter()
                 .flat_map(|v| unorm_bits(*v, u16::MAX).to_le_bytes())
@@ -358,6 +360,14 @@ impl TextureFormat {
                 .and_then(|b| b.try_into().ok())
                 .map_or(0.0, |b| u16::from_le_bytes(b) as f32 / u16::MAX as f32)
         };
+        let snorm16 = |index: usize| {
+            texel
+                .get(index * 2..index * 2 + 2)
+                .and_then(|b| b.try_into().ok())
+                .map_or(0.0, |b| {
+                    (i16::from_le_bytes(b) as f32 / i16::MAX as f32).max(-1.0)
+                })
+        };
         Some(match self {
             TextureFormat::Rgba8Unorm | TextureFormat::Rgba8Srgb => {
                 [colour(0), colour(1), colour(2), unorm(3)]
@@ -369,6 +379,7 @@ impl TextureFormat {
             TextureFormat::Rg8Unorm => [unorm(0), unorm(1), 0.0, 1.0],
             TextureFormat::R32Float => [single(0), 0.0, 0.0, 1.0],
             TextureFormat::R16Unorm => [unorm16(0), 0.0, 0.0, 1.0],
+            TextureFormat::R16Snorm => [snorm16(0), 0.0, 0.0, 1.0],
             TextureFormat::Rgba16Unorm => [unorm16(0), unorm16(1), unorm16(2), unorm16(3)],
             TextureFormat::Rg16Unorm => [unorm16(0), unorm16(1), 0.0, 1.0],
             TextureFormat::Rg32Float => [single(0), single(1), 0.0, 1.0],
@@ -717,6 +728,16 @@ mod clear_texel_tests {
             TextureFormat::R8Unorm.clear_texel([1.0, 0.5, 0.5, 0.5]),
             Some(vec![255]),
             "a one-channel target packs one byte"
+        );
+        assert_eq!(
+            TextureFormat::R16Snorm.clear_texel([-1.0, 0.0, 0.0, 1.0]),
+            Some(i16::MIN.saturating_add(1).to_le_bytes().to_vec()),
+            "a signed normalized endpoint uses the canonical -32767 encoding"
+        );
+        assert_eq!(
+            TextureFormat::R16Snorm.texel_to_f32(&i16::MIN.to_le_bytes()),
+            Some([-1.0, 0.0, 0.0, 1.0]),
+            "both signed-normalized negative endpoint encodings decode to -1"
         );
         assert_eq!(
             TextureFormat::Rgba8Unorm.clear_texel([4.0, -2.5, 0.0, 1.0]),
