@@ -110,10 +110,13 @@ pub extern "C" fn glPolygonOffset(factor: f32, units: f32) {
 pub extern "C" fn glHint(target: u32, mode: u32) {
     GlobalState::context(|state| record::hint(&mut state.gl, target, mode));
 }
-/// `glSampleCoverage` / `glSampleMaski` / `glMinSampleShading` — no MSAA is materialized (single-sample
-/// render targets), so multisample coverage/mask carry no state: honest no-ops.
+/// `glSampleCoverage` retains queryable value/invert state. With zero sample buffers it has no raster
+/// effect, but the state remains part of the GLES context.
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glSampleCoverage(_value: f32, _invert: u8) {}
+pub extern "C" fn glSampleCoverage(value: f32, invert: u8) {
+    GlobalState::context(|state| record::sample_coverage(&mut state.gl, value, invert != 0));
+}
+/// `glSampleMaski` / `glMinSampleShading` have no raster effect while all targets are single-sampled.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glSampleMaski(_mask_number: u32, _mask: u32) {}
 #[cfg_attr(gles_client, no_mangle)]
