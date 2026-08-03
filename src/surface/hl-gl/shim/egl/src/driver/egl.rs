@@ -131,6 +131,7 @@ impl ContextAttributeList {
             robust_access: false,
             reset_strategy: EGL_NO_RESET_NOTIFICATION_EXT,
             no_error: false,
+            debug: false,
             config_id: config::CONFIG_ID,
         };
         if attrib_list.is_null() {
@@ -190,6 +191,7 @@ impl ContextAttributeList {
                             | EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR)
                         == 0 =>
                 {
+                    attributes.debug |= value & EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR != 0;
                     attributes.robust_access |=
                         value & EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR != 0;
                 }

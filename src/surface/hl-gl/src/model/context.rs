@@ -161,6 +161,9 @@ pub struct GlContext {
     /// Immutable GPU samplers keyed by their complete descriptor. GL sampler and texture parameter
     /// mutations resolve to a different descriptor, so an existing resident sampler never changes.
     sampler_ir_cache: Vec<(SamplerDesc, u32)>,
+    /// KHR_debug labels belong to shared objects, not the binding context.
+    debug_labels: HashMap<(u32, u32), String>,
+    debug_pointer_labels: HashMap<usize, String>,
     /// The INTERNAL clear shaders — a `gl_VertexID` full-target triangle and a fragment stage emitting
     /// `vec4(1.0)` — created once per context and shared by every rect clear. `None` until first use.
     clear_shader_ir: HashMap<u32, (u32, u32)>,
@@ -390,6 +393,7 @@ impl GlContext {
     }
 
     pub fn delete_query(&mut self, query: u32) {
+        self.clear_object_label(glconst::GL_QUERY_OBJECT, query);
         self.local.queries.delete(query);
     }
 
@@ -414,6 +418,7 @@ impl GlContext {
     }
 
     pub fn delete_program_pipeline(&mut self, pipeline: u32) {
+        self.clear_object_label(glconst::GL_PROGRAM_PIPELINE_OBJECT, pipeline);
         self.local.program_pipelines.delete(pipeline);
     }
 
@@ -545,6 +550,8 @@ impl GlContext {
 mod allocator;
 mod local;
 use local::LocalState;
+mod debug;
+pub use debug::*;
 pub use local::SurfaceTarget;
 mod pipeline;
 use pipeline::PipelineState;

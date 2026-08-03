@@ -223,6 +223,7 @@ impl GlContext {
             return;
         }
         self.local.transform_feedbacks.delete(id);
+        self.clear_object_label(GL_TRANSFORM_FEEDBACK, id);
     }
 
     /// `glBeginTransformFeedback(primitiveMode)`. A bad mode → `GL_INVALID_ENUM`; already active →

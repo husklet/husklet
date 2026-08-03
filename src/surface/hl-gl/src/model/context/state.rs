@@ -25,6 +25,12 @@ impl ContextState {
         }
     }
 
+    pub fn with_debug(mut self, debug: bool) -> Self {
+        self.local.debug = DebugState::new(debug);
+        self.local.pipeline.debug_output = debug;
+        self
+    }
+
     /// Adopt the depth/stencil sizes of the `EGLConfig` the context was created on (see
     /// [`LocalState::on_config`]).
     pub fn on_config(mut self, depth_bits: i32, stencil_bits: i32) -> Self {
@@ -130,6 +136,7 @@ impl GlContext {
                 .detach_color_texture_from(self.local.read_fbo, name);
         }
         self.pending_texture_deletes.insert(name);
+        self.clear_object_label(glconst::GL_TEXTURE, name);
         true
     }
 
@@ -161,6 +168,7 @@ impl GlContext {
             }
         }
         self.pending_buffer_deletes.insert(name);
+        self.clear_object_label(glconst::GL_BUFFER_OBJECT, name);
         true
     }
 
@@ -170,6 +178,7 @@ impl GlContext {
         }
         self.samplers.unbind(name);
         self.pending_sampler_deletes.insert(name);
+        self.clear_object_label(glconst::GL_SAMPLER_OBJECT, name);
         true
     }
 
@@ -409,7 +418,11 @@ impl GlContext {
             self.local.vertex_bindings = def.vertex_bindings;
             self.local.element_buffer = def.element_buffer;
         }
-        self.local.vaos.remove(&vao).is_some()
+        let deleted = self.local.vaos.remove(&vao).is_some();
+        if deleted {
+            self.clear_object_label(glconst::GL_VERTEX_ARRAY_OBJECT, vao);
+        }
+        deleted
     }
 
     /// `glIsVertexArray(vao)` — true once `vao` names a generated (non-default) VAO object.

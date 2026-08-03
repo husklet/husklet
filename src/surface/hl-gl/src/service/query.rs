@@ -9,6 +9,10 @@
 //! `glGetUniformLocation`/…), keeping the same advertised values.
 
 use crate::model::context::GlContext;
+use crate::model::context::{
+    MAX_DEBUG_GROUP_STACK_DEPTH_VALUE, MAX_DEBUG_LOGGED_MESSAGES_VALUE,
+    MAX_DEBUG_MESSAGE_LENGTH_VALUE, MAX_LABEL_LENGTH_VALUE,
+};
 use crate::model::glconst::*;
 
 mod limits;
@@ -187,7 +191,9 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         }
         GL_TRANSFORM_FEEDBACK_BINDING => one(ctx.local.transform_feedbacks.bound() as i32),
         GL_TEXTURE_BINDING_2D => one(ctx.local.tex_unit[ctx.local.active_texture] as i32),
-        GL_TEXTURE_BINDING_CUBE_MAP => one(ctx.local.cube_tex_unit[ctx.local.active_texture] as i32),
+        GL_TEXTURE_BINDING_CUBE_MAP => {
+            one(ctx.local.cube_tex_unit[ctx.local.active_texture] as i32)
+        }
         // GL_DRAW_FRAMEBUFFER_BINDING shares GL_FRAMEBUFFER_BINDING's enum value (0x8CA6).
         GL_FRAMEBUFFER_BINDING => one(ctx.local.bound_fbo as i32),
         GL_READ_FRAMEBUFFER_BINDING => one(ctx.local.read_fbo as i32),
@@ -247,8 +253,14 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         GL_PRIMITIVE_RESTART_FIXED_INDEX => one(1),
         GL_DEBUG_OUTPUT => one(ctx.local.pipeline.debug_output as i32),
         GL_DEBUG_OUTPUT_SYNCHRONOUS => one(ctx.local.pipeline.debug_output_synchronous as i32),
-        // KHR_debug defines an implicit default group at the bottom of the stack.
-        GL_DEBUG_GROUP_STACK_DEPTH => one(1),
+        GL_CONTEXT_FLAGS => one(ctx.context_flags() as i32),
+        GL_MAX_DEBUG_MESSAGE_LENGTH => one(MAX_DEBUG_MESSAGE_LENGTH_VALUE as i32),
+        GL_MAX_DEBUG_LOGGED_MESSAGES => one(MAX_DEBUG_LOGGED_MESSAGES_VALUE as i32),
+        GL_DEBUG_LOGGED_MESSAGES => one(ctx.debug_log_len() as i32),
+        GL_DEBUG_NEXT_LOGGED_MESSAGE_LENGTH => one(ctx.next_debug_message_length() as i32),
+        GL_MAX_DEBUG_GROUP_STACK_DEPTH => one(MAX_DEBUG_GROUP_STACK_DEPTH_VALUE as i32),
+        GL_DEBUG_GROUP_STACK_DEPTH => one(ctx.debug_group_depth() as i32),
+        GL_MAX_LABEL_LENGTH => one(MAX_LABEL_LENGTH_VALUE as i32),
         GL_RASTERIZER_DISCARD => one(ctx.local.pipeline.rasterizer_discard as i32),
         // ES 3.0 §2.2.2: every state value must read back the same through each Get* variant.
         GL_DEPTH_WRITEMASK => one(ctx.local.pipeline.depth_write as i32),
@@ -343,12 +355,7 @@ pub fn get_integer_indexed(ctx: &GlContext, target: u32, index: u32) -> i64 {
     }
 }
 
-pub fn get_boolean_indexed(
-    ctx: &GlContext,
-    target: u32,
-    index: u32,
-    out: &mut [u8; 4],
-) -> usize {
+pub fn get_boolean_indexed(ctx: &GlContext, target: u32, index: u32, out: &mut [u8; 4]) -> usize {
     let Some(state) = ctx.local.pipeline.draw_buffers.get(index as usize) else {
         return 0;
     };

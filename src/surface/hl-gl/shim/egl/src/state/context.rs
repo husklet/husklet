@@ -72,6 +72,7 @@ impl Contexts {
                 attributes.minor_version,
                 attributes.no_error,
             )
+            .with_debug(attributes.debug)
             .on_config(
                 config_attrib(attributes.config_id, config::EGL_DEPTH_SIZE),
                 config_attrib(attributes.config_id, config::EGL_STENCIL_SIZE),

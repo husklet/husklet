@@ -67,6 +67,8 @@ impl GlContext {
             prog_shader_cache: HashMap::new(),
             prog_pipeline_cache: HashMap::new(),
             sampler_ir_cache: Vec::new(),
+            debug_labels: HashMap::new(),
+            debug_pointer_labels: HashMap::new(),
             clear_shader_ir: HashMap::new(),
             clear_pipeline_cache: std::collections::HashMap::new(),
             pending_destroys: Vec::new(),
@@ -576,7 +578,10 @@ impl GlContext {
             // Requiring the policy bit to match exactly replaced a framebuffer-copied pyramid with its
             // stale CPU shadow when an application later selected a non-mip sampler.
             if up_gen == generation
-                || (up_gen.0 == generation.0 && up_gen.1 == generation.1 && up_gen.2 && !generation.2)
+                || (up_gen.0 == generation.0
+                    && up_gen.1 == generation.1
+                    && up_gen.2
+                    && !generation.2)
             {
                 hl_log::hl_count!(hl_log::tag::GL, "tex_cache_hit");
                 return Ok((ir, false));
@@ -600,7 +605,10 @@ impl GlContext {
 
     /// Make an already-created render target the sampled residency for one exact texture generation.
     pub(crate) fn install_sampled_texture_ir(
-        &mut self, gl_name: u32, generation: (u64, u64, bool), texture: u32,
+        &mut self,
+        gl_name: u32,
+        generation: (u64, u64, bool),
+        texture: u32,
     ) {
         if let Some((old, _)) = self.tex_ir_cache.insert(gl_name, (texture, generation)) {
             if old != texture {
