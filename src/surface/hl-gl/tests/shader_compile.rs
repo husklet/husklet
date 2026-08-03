@@ -181,6 +181,60 @@ fn es2_enforces_parameter_qualifier_grammar_order() {
 }
 
 #[test]
+fn deqp_qualification_order_residual_variable_cases() {
+    let invalid = [
+        "invariant lowp varying float x0;",
+        "varying invariant lowp float x0;",
+        "varying lowp invariant float x0;",
+        "lowp invariant varying float x0;",
+        "lowp varying invariant float x0;",
+        "lowp varying float x0;",
+        "varying invariant float x0;",
+    ];
+    for declaration in invalid {
+        let source = format!(
+            "precision mediump float; {declaration} void main(){{x0=1.0;gl_Position=vec4(0.0);}}"
+        );
+        let mut context = GlContext::new();
+        let (status, log) = compile(&mut context, GL_VERTEX_SHADER, &source);
+        assert_eq!(status, GL_FALSE as i32, "accepted {declaration}: {log}");
+    }
+}
+
+#[test]
+fn deqp_qualification_order_residual_valid_sources_compile() {
+    let parameters = [
+        "const in float x",
+        "out float x",
+        "inout float x",
+        "const lowp float x",
+        "mediump float x",
+        "in lowp float x",
+    ];
+    for parameter in parameters {
+        let source = format!(
+            "precision mediump float; float foo({parameter}){{return x;}} attribute highp vec4 dEQP_Position; void main(){{gl_Position=dEQP_Position;}}"
+        );
+        let mut context = GlContext::new();
+        let (status, log) = compile(&mut context, GL_VERTEX_SHADER, &source);
+        assert_eq!(status, GL_TRUE as i32, "rejected {parameter}: {log}");
+    }
+
+    for declaration in [
+        "invariant varying lowp float x0;",
+        "invariant varying float x0;",
+        "varying lowp float x0;",
+    ] {
+        let source = format!(
+            "precision mediump float; attribute highp vec4 dEQP_Position; {declaration} void main(){{x0=1.0;gl_Position=dEQP_Position;}}"
+        );
+        let mut context = GlContext::new();
+        let (status, log) = compile(&mut context, GL_VERTEX_SHADER, &source);
+        assert_eq!(status, GL_TRUE as i32, "rejected {declaration}: {log}");
+    }
+}
+
+#[test]
 fn es2_vector_constructors_reject_an_undersized_component_count() {
     let mut context = GlContext::new();
     for shader_kind in [GL_VERTEX_SHADER, GL_FRAGMENT_SHADER] {
