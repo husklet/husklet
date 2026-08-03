@@ -21,6 +21,8 @@ pub struct FrameState {
     prog_shader_cache: HashMap<(u32, u64), (u32, u32, u64)>,
     prog_pipeline_cache: HashMap<(u32, u64), (u32, u64)>,
     sampler_ir_cache: Vec<(hl_gpu::protocol::model::descriptor::SamplerDesc, u32)>,
+    clear_shader_ir: Option<(u32, u32)>,
+    clear_pipeline_cache: HashMap<ClearPipelineKey, u32>,
     pending_destroys: Vec<Cmd>,
     transform_feedback_readbacks: Vec<TransformFeedbackReadback>,
     transform_feedback_cleanup: Vec<Cmd>,
@@ -46,6 +48,8 @@ impl GlContext {
             prog_shader_cache: self.prog_shader_cache.clone(),
             prog_pipeline_cache: self.prog_pipeline_cache.clone(),
             sampler_ir_cache: self.sampler_ir_cache.clone(),
+            clear_shader_ir: self.clear_shader_ir,
+            clear_pipeline_cache: self.clear_pipeline_cache.clone(),
             pending_destroys: self.pending_destroys.clone(),
             transform_feedback_readbacks: self.local.transform_feedback_readbacks.clone(),
             transform_feedback_cleanup: self.local.transform_feedback_cleanup.clone(),
@@ -67,6 +71,8 @@ impl GlContext {
         self.prog_shader_cache = state.prog_shader_cache;
         self.prog_pipeline_cache = state.prog_pipeline_cache;
         self.sampler_ir_cache = state.sampler_ir_cache;
+        self.clear_shader_ir = state.clear_shader_ir;
+        self.clear_pipeline_cache = state.clear_pipeline_cache;
         self.pending_destroys = state.pending_destroys;
         self.local.transform_feedback_readbacks = state.transform_feedback_readbacks;
         self.local.transform_feedback_cleanup = state.transform_feedback_cleanup;
@@ -77,5 +83,37 @@ impl GlContext {
         for (kind, id) in released {
             self.allocator.release(kind, id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejected_frame_recreates_internal_clear_resources_on_retry() {
+        let mut context = GlContext::new();
+        let before = context.frame_state();
+        let (vertex, fragment, create_shaders) = context.clear_shader_ir().unwrap();
+        let key = ClearPipelineKey {
+            color_format: 1,
+            depth_format: 2,
+            color_write_mask: 0xf,
+            depth_write: true,
+            stencil_write_mask: 0xff,
+        };
+        let (pipeline, create_pipeline) = context.clear_pipeline_ir(key).unwrap();
+        assert!(create_shaders);
+        assert!(create_pipeline);
+
+        context.restore_frame_state(before);
+
+        let (retry_vertex, retry_fragment, recreate_shaders) =
+            context.clear_shader_ir().unwrap();
+        let (retry_pipeline, recreate_pipeline) = context.clear_pipeline_ir(key).unwrap();
+        assert_eq!((retry_vertex, retry_fragment), (vertex, fragment));
+        assert_eq!(retry_pipeline, pipeline);
+        assert!(recreate_shaders, "the rejected shader modules do not exist on the host");
+        assert!(recreate_pipeline, "the rejected pipeline does not exist on the host");
     }
 }
