@@ -7,7 +7,7 @@ use super::{
     Frontend, Result,
 };
 use crate::{
-    front::glsl::types::type_power, proc::ensure_block_returns, AddressSpace, Block, EntryPoint,
+    front::glsl::types::type_power, proc::ensure_block_returns, Block, EntryPoint,
     Expression, Function, FunctionArgument, FunctionResult, Handle, Literal, LocalVariable, Scalar,
     ScalarKind, Span, Statement, StructMember, Type, TypeInner,
 };
@@ -917,40 +917,10 @@ impl Frontend {
         let original_ty = ctx.resolve_type(original, meta)?;
         let original_pointer_space = original_ty.pointer_space();
 
-        // The type of a possible spill variable needed for a proxy write
-        let mut maybe_ty = match *original_ty {
-            // If the argument is to be passed as a pointer but the type of the
-            // expression returns a vector it must mean that it was for example
-            // swizzled and it must be spilled into a local before calling
-            TypeInner::Vector { size, scalar } => Some(ctx.module.types.insert(
-                Type {
-                    name: None,
-                    inner: TypeInner::Vector { size, scalar },
-                },
-                Span::default(),
-            )),
-            // If the argument is a pointer whose address space isn't `Function`, an
-            // indirection through a local variable is needed to align the address
-            // spaces of the call argument and the overload parameter.
-            TypeInner::Pointer { base, space } if space != AddressSpace::Function => Some(base),
-            TypeInner::ValuePointer {
-                size,
-                scalar,
-                space,
-            } if space != AddressSpace::Function => {
-                let inner = match size {
-                    Some(size) => TypeInner::Vector { size, scalar },
-                    None => TypeInner::Scalar(scalar),
-                };
-
-                Some(
-                    ctx.module
-                        .types
-                        .insert(Type { name: None, inner }, Span::default()),
-                )
-            }
-            _ => None,
-        };
+        // GLSL out/inout parameters always have copy-out/copy-in-out semantics. Even an exact-typed local
+        // must be spilled: passing its pointer directly makes aliased arguments observe each other's writes
+        // inside the callee, contrary to GLSL's independent parameter copies.
+        let mut maybe_ty = Some(parameter_ty);
 
         // Since the original expression might be a pointer and we want a value
         // for the proxy writes, we might need to load the pointer.

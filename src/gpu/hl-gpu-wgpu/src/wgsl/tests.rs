@@ -625,6 +625,15 @@ fn deqp_vector_to_scalar_constructor_uses_first_component() {
 }
 
 #[test]
+fn deqp_aliasing_inout_arrays_use_independent_parameter_copies() {
+    let source = "#version 460\nlayout(location=0) out vec4 color; float func(inout float a[4], inout float b[4]){ a[0]=-a[0]; return a[0]==b[0]?1.0:-1.0; } void main(){ float arr[4]; arr[0]=2.0; float result=func(arr,arr); color=vec4(result); }";
+    let wgsl = glsl_to_wgsl(source, naga::ShaderStage::Fragment, "main")
+        .unwrap_or_else(|error| panic!("dEQP aliased inout arrays were refused: {error}"));
+    assert!(!wgsl.contains("func((&arr), (&arr))"), "{wgsl}");
+    assert_eq!(wgsl.matches("= arr;").count(), 2, "{wgsl}");
+}
+
+#[test]
 fn constant_all_and_any_relations_fold() {
     let source = "#version 460\nlayout(location=0) out vec4 color;\nconst bool a=all(bvec3(true,true,true)); const bool b=any(bvec3(false,true,false)); void main(){ color=vec4(float(a),float(b),0,1); }";
     glsl_to_wgsl(source, naga::ShaderStage::Fragment, "main")
