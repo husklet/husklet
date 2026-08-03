@@ -1,9 +1,7 @@
 //! A refused encoder operation does not erase earlier native work or prevent later independent work.
 
-use hl_gpu::protocol::model::descriptor::{
-    ColorAttachment, Extent3d, Mirror, Origin3d, TextureDesc, TextureSubresource,
-};
-use hl_gpu::protocol::model::enums::{texture_usage, Filter, LoadOp, TextureDim, TextureFormat};
+use hl_gpu::protocol::model::descriptor::{ColorAttachment, TextureDesc};
+use hl_gpu::protocol::model::enums::{texture_usage, LoadOp, TextureDim, TextureFormat};
 use hl_gpu::{
     Cmd, CommandBuffer, Enc, FakeClock, GlobalLedger, GpuError, GpuExecutor, Limits, Session,
 };
@@ -43,11 +41,6 @@ fn refusal_preserves_encoded_work_and_continues_to_later_operations() {
         &[
             Cmd::CreateTexture(1, texture(TextureDim::D2, 1, 1, observation_usage)),
             Cmd::CreateTexture(2, texture(TextureDim::D2, 1, 1, observation_usage)),
-            Cmd::CreateTexture(3, texture(TextureDim::D1, 1, 1, texture_usage::SAMPLED)),
-            Cmd::CreateTexture(
-                4,
-                texture(TextureDim::D1, 1, 1, texture_usage::RENDER_TARGET),
-            ),
             Cmd::Submit(CommandBuffer {
                 encoder: vec![
                     Enc::ClearRect {
@@ -97,26 +90,27 @@ fn refusal_preserves_encoded_work_and_continues_to_later_operations() {
                     depth: None,
                 },
                 Enc::EndRenderPass,
-                Enc::BlitTexture {
-                    src: 3,
-                    src_sub: TextureSubresource::base(),
-                    src_origin: Origin3d::default(),
-                    src_extent: Extent3d {
-                        width: 1,
-                        height: 1,
-                        depth: 1,
-                    },
-                    dst: 4,
-                    dst_sub: TextureSubresource::base(),
-                    dst_origin: Origin3d::default(),
-                    dst_extent: Extent3d {
-                        width: 1,
-                        height: 1,
-                        depth: 1,
-                    },
-                    filter: Filter::Nearest,
-                    mirror: Mirror::NONE,
+                // A refused pass is deliberately used instead of a currently unsupported feature: as
+                // coverage grows, unsupported operations become valid and stop exercising this path. The
+                // missing attachment is a stable protocol error, and the body proves that advancing after
+                // refusal skips to EndRenderPass rather than reinterpreting pass-local operations or
+                // leaving the loop index unchanged.
+                Enc::BeginRenderPass {
+                    color: vec![ColorAttachment {
+                        texture: 999,
+                        load: LoadOp::Clear,
+                        clear: [0.0, 0.0, 1.0, 1.0],
+                        store: true,
+                    }],
+                    depth: None,
                 },
+                Enc::Draw {
+                    vertex_count: 3,
+                    instance_count: 1,
+                    first_vertex: 0,
+                    first_instance: 0,
+                },
+                Enc::EndRenderPass,
                 Enc::ClearRect {
                     texture: 2,
                     x: 0,
@@ -133,7 +127,13 @@ fn refusal_preserves_encoded_work_and_continues_to_later_operations() {
         })],
     );
 
-    assert_eq!(result, Err(GpuError::Unsupported("wgpu: 1D blit source")));
+    assert_eq!(
+        result,
+        Err(GpuError::UnknownId {
+            kind: "texture",
+            id: 999,
+        })
+    );
     assert_eq!(
         exec.read_texture(&session.resources, 1).unwrap(),
         [255, 0, 0, 255],
