@@ -15,8 +15,8 @@ use crate::model::memory::{vk_format, Format};
 use crate::model::queue::{
     ImageState, SurfaceCapabilities, SurfaceFormat, SurfaceRec, SwapImage, SwapchainRec,
     COMPOSITE_ALPHA_OPAQUE_BIT, CURRENT_EXTENT_UNDEFINED, SURFACE_IMAGE_USAGE,
-    SURFACE_TRANSFORM_IDENTITY_BIT, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
-    VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_MAILBOX_KHR,
+    SURFACE_TRANSFORM_IDENTITY_BIT, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, VK_PRESENT_MODE_FIFO_KHR,
+    VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_MAILBOX_KHR,
 };
 use crate::*;
 use hl_gpu::protocol::model::command::Enc;
@@ -85,6 +85,71 @@ pub fn surface_present_modes() -> Vec<i32> {
         VK_PRESENT_MODE_MAILBOX_KHR,
         VK_PRESENT_MODE_IMMEDIATE_KHR,
     ]
+}
+
+/// The application-controlled part of `VkSwapchainCreateInfoKHR`. Keeping validation here makes the
+/// advertised surface capabilities and accepted swapchains one domain fact instead of duplicating WSI
+/// policy in the C ABI shim.
+#[derive(Clone, Copy, Debug)]
+pub struct SwapchainConfig {
+    pub flags: u32,
+    pub min_image_count: u32,
+    pub image_format: u32,
+    pub image_color_space: i32,
+    pub image_extent: (u32, u32),
+    pub image_array_layers: u32,
+    pub image_usage: u32,
+    pub image_sharing_mode: i32,
+    pub queue_family_index_count: u32,
+    pub queue_family_indices_valid: bool,
+    pub pre_transform: u32,
+    pub composite_alpha: u32,
+    pub present_mode: i32,
+    pub old_swapchain: VkSwapchainKHR,
+}
+
+/// Reject a swapchain request outside the exact capability set returned by the surface queries. This
+/// runs before creating the internal surface, so a refused request cannot leak host resources.
+pub fn validate_swapchain(dev: &Device, config: SwapchainConfig) -> Result<()> {
+    let caps = surface_capabilities();
+    let (width, height) = config.image_extent;
+    let count_valid = config.min_image_count >= caps.min_image_count
+        && (caps.max_image_count == 0 || config.min_image_count <= caps.max_image_count);
+    let extent_valid = width >= caps.min_image_extent.0
+        && height >= caps.min_image_extent.1
+        && width <= caps.max_image_extent.0
+        && height <= caps.max_image_extent.1;
+    let format_valid = surface_formats().iter().any(|format| {
+        format.format == config.image_format && format.color_space == config.image_color_space
+    });
+    let usage_valid =
+        config.image_usage != 0 && config.image_usage & !caps.supported_usage_flags == 0;
+    let sharing_valid = match config.image_sharing_mode {
+        0 => true, // VK_SHARING_MODE_EXCLUSIVE
+        // Vulkan requires more than one unique queue family for CONCURRENT. Husklet exposes one
+        // family, so the ABI-derived configuration can never satisfy this branch today.
+        1 => config.queue_family_index_count > 1 && config.queue_family_indices_valid,
+        _ => false,
+    };
+    let old_valid = config.old_swapchain == 0 || dev.swapchains.contains_key(&config.old_swapchain);
+    if config.flags == 0
+        && count_valid
+        && extent_valid
+        && format_valid
+        && config.image_array_layers == 1
+        && usage_valid
+        && sharing_valid
+        && config.pre_transform == SURFACE_TRANSFORM_IDENTITY_BIT
+        && config.composite_alpha == COMPOSITE_ALPHA_OPAQUE_BIT
+        && surface_present_modes().contains(&config.present_mode)
+        && old_valid
+    {
+        Ok(())
+    } else {
+        Err(GpuError::Invalid(
+            "vkCreateSwapchainKHR: create info exceeds advertised surface capabilities",
+        ))
+    }
 }
 
 /// `vkCreate*SurfaceKHR` — mint an hl-GPU surface id and submit [`Cmd::CreateSurface`]. `hlp_surface`
@@ -182,7 +247,8 @@ pub fn create_swapchain(
     // (`RENDER_TARGET | PRESENT | COPY_SRC`)" — while the code beside it omitted `PRESENT`. A comment
     // asserting a rule its code does not implement is the cheapest defect in this repository to find
     // and among the most expensive to chase.
-    let usage = crate::model::memory::ImageUsage(SURFACE_IMAGE_USAGE).wire() | texture_usage::PRESENT;
+    let usage =
+        crate::model::memory::ImageUsage(SURFACE_IMAGE_USAGE).wire() | texture_usage::PRESENT;
     let mut images = Vec::with_capacity(image_count.max(1) as usize);
     for _ in 0..image_count.max(1) {
         let ir_texture_id = dev.alloc_ir();

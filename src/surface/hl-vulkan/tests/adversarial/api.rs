@@ -124,6 +124,117 @@ fn surface_queries_report_modeled_values() {
     assert_eq!(present::surface_formats().len(), 4);
 }
 
+fn valid_swapchain_config() -> present::SwapchainConfig {
+    present::SwapchainConfig {
+        flags: 0,
+        min_image_count: 2,
+        image_format: vk_format::B8G8R8A8_UNORM,
+        image_color_space: 0,
+        image_extent: (64, 64),
+        image_array_layers: 1,
+        image_usage: vk_image_usage::COLOR_ATTACHMENT,
+        image_sharing_mode: 0,
+        queue_family_index_count: 0,
+        queue_family_indices_valid: true,
+        pre_transform: 1,
+        composite_alpha: 1,
+        present_mode: 2,
+        old_swapchain: 0,
+    }
+}
+
+#[test]
+fn swapchain_validation_accepts_exactly_advertised_parameters() {
+    let d = dev();
+    assert!(present::validate_swapchain(&d, valid_swapchain_config()).is_ok());
+    for format in present::surface_formats() {
+        for present_mode in present::surface_present_modes() {
+            let config = present::SwapchainConfig {
+                min_image_count: present::surface_capabilities().max_image_count,
+                image_format: format.format,
+                image_color_space: format.color_space,
+                image_extent: present::surface_capabilities().max_image_extent,
+                image_usage: present::surface_capabilities().supported_usage_flags,
+                present_mode,
+                ..valid_swapchain_config()
+            };
+            assert!(
+                present::validate_swapchain(&d, config).is_ok(),
+                "rejected advertised combination {config:?}"
+            );
+        }
+    }
+
+    let invalid = [
+        present::SwapchainConfig {
+            flags: 1,
+            ..valid_swapchain_config()
+        },
+        present::SwapchainConfig {
+            min_image_count: 1,
+            ..valid_swapchain_config()
+        },
+        present::SwapchainConfig {
+            min_image_count: 4,
+            ..valid_swapchain_config()
+        },
+        present::SwapchainConfig {
+            image_format: vk_format::R8_UNORM,
+            ..valid_swapchain_config()
+        },
+        present::SwapchainConfig {
+            image_color_space: 1,
+            ..valid_swapchain_config()
+        },
+        present::SwapchainConfig {
+            image_extent: (0, 64),
+            ..valid_swapchain_config()
+        },
+        present::SwapchainConfig {
+            image_array_layers: 2,
+            ..valid_swapchain_config()
+        },
+        present::SwapchainConfig {
+            image_usage: vk_image_usage::SAMPLED,
+            ..valid_swapchain_config()
+        },
+        present::SwapchainConfig {
+            image_sharing_mode: 1,
+            queue_family_index_count: 1,
+            queue_family_indices_valid: true,
+            ..valid_swapchain_config()
+        },
+        present::SwapchainConfig {
+            image_sharing_mode: 1,
+            queue_family_index_count: 2,
+            queue_family_indices_valid: false,
+            ..valid_swapchain_config()
+        },
+        present::SwapchainConfig {
+            pre_transform: 2,
+            ..valid_swapchain_config()
+        },
+        present::SwapchainConfig {
+            composite_alpha: 2,
+            ..valid_swapchain_config()
+        },
+        present::SwapchainConfig {
+            present_mode: 3,
+            ..valid_swapchain_config()
+        },
+        present::SwapchainConfig {
+            old_swapchain: 0xdead,
+            ..valid_swapchain_config()
+        },
+    ];
+    for config in invalid {
+        assert!(
+            present::validate_swapchain(&d, config).is_err(),
+            "accepted {config:?}"
+        );
+    }
+}
+
 // =====================================================================================================
 // pipeline cache
 // =====================================================================================================

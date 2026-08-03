@@ -23,6 +23,48 @@ pub extern "C" fn vkCreateSwapchainKHR(
     // window (captured at `vkCreateWaylandSurfaceKHR` under `ci.surface`) onto the swapchain so a present
     // can marshal the readback onto the app's own `wl_surface`.
     StateStore::with(|s| {
+        let queue_family_indices_valid = if ci.image_sharing_mode == 1 {
+            if ci.queue_family_index_count <= 1 || ci.p_queue_family_indices.is_null() {
+                false
+            } else {
+                let indices = unsafe {
+                    std::slice::from_raw_parts(
+                        ci.p_queue_family_indices,
+                        ci.queue_family_index_count as usize,
+                    )
+                };
+                indices.iter().enumerate().all(|(position, &family)| {
+                    present::QueueFamily(family).supports_present()
+                        && !indices[..position].contains(&family)
+                })
+            }
+        } else {
+            true
+        };
+        let config = present::SwapchainConfig {
+            flags: ci.flags,
+            min_image_count: ci.min_image_count,
+            image_format: ci.image_format as u32,
+            image_color_space: ci.image_color_space,
+            image_extent: (ci.image_extent.width, ci.image_extent.height),
+            image_array_layers: ci.image_array_layers,
+            image_usage: ci.image_usage,
+            image_sharing_mode: ci.image_sharing_mode,
+            queue_family_index_count: ci.queue_family_index_count,
+            queue_family_indices_valid,
+            pre_transform: ci.pre_transform,
+            composite_alpha: ci.composite_alpha,
+            present_mode: ci.present_mode,
+            old_swapchain: ci.old_swapchain,
+        };
+        {
+            let Some((dev, _)) = s.device_and_sink() else {
+                return VK_ERROR_INITIALIZATION_FAILED;
+            };
+            if let Err(error) = present::validate_swapchain(dev, config) {
+                return Status::from_error(&error);
+            }
+        }
         let window = s.wayland_surfaces.get(&ci.surface).copied();
         let presenter_id = window
             .map(|window| PresenterId::Wayland(window.surface))
@@ -389,7 +431,10 @@ pub extern "C" fn vkQueuePresentKHR(
 struct PresentResults;
 impl PresentResults {
     fn write(results: &mut Option<&mut [VkResult]>, index: usize, result: VkResult) {
-        if let Some(slot) = results.as_deref_mut().and_then(|results| results.get_mut(index)) {
+        if let Some(slot) = results
+            .as_deref_mut()
+            .and_then(|results| results.get_mut(index))
+        {
             *slot = result;
         }
     }
