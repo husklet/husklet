@@ -3,6 +3,7 @@ use super::*;
 struct CommitThenLoseResponse {
     inner: RecordingSink,
     texture_creates: usize,
+    texture_destroys: usize,
 }
 
 impl hl_gpu::CommandSink for CommitThenLoseResponse {
@@ -14,6 +15,12 @@ impl hl_gpu::CommandSink for CommitThenLoseResponse {
     }
 
     fn submit(&mut self, batch: &[Cmd]) -> hl_gpu::Result<()> {
+        if batch.len() == 1 && matches!(batch[0], Cmd::DestroyTexture(_)) {
+            self.texture_destroys += 1;
+            if self.texture_destroys == 2 {
+                return Err(GpuError::Kernel("injected cleanup refusal".into()));
+            }
+        }
         let texture_create = batch
             .iter()
             .any(|command| matches!(command, Cmd::CreateTexture(..)));
@@ -328,6 +335,7 @@ fn failed_replacement_still_retires_old_and_preserves_acquired_present() {
     let mut failing = CommitThenLoseResponse {
         inner: sink(),
         texture_creates: 0,
+        texture_destroys: 0,
     };
     assert!(present::create_swapchain_for_target(
         &mut d,
@@ -340,7 +348,7 @@ fn failed_replacement_still_retires_old_and_preserves_acquired_present() {
     )
     .is_err());
     assert_eq!(d.surfaces.len(), surfaces_before);
-    assert_eq!(d.images.len(), images_before);
+    assert_eq!(d.images.len(), images_before + 1);
     assert_eq!(
         failing
             .inner
@@ -356,9 +364,13 @@ fn failed_replacement_still_retires_old_and_preserves_acquired_present() {
             .commands()
             .filter(|command| matches!(command, Cmd::DestroyTexture(..)))
             .count(),
-        2,
-        "reconciliation includes every attempted texture id"
+        1,
+        "the acknowledged cleanup prefix is not replayed"
     );
+    assert_eq!(d.pending_wsi_textures.len(), 1);
+    present::retry_wsi_cleanup(&mut d, &mut s).unwrap();
+    assert!(d.pending_wsi_textures.is_empty());
+    assert_eq!(d.images.len(), images_before);
     assert!(d.swapchains.get(&old).unwrap().retired);
     assert!(d.acquire_next_image(old).is_err());
     present::queue_present(&mut d, &mut s, old, acquired, None)
