@@ -284,11 +284,23 @@ pub extern "C" fn glDrawElementsIndirect(mode: u32, type_: u32, indirect: *const
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDeleteProgram(program: u32) {
-    GlobalState::context(|s| s.delete_program(program));
+    GlobalState::context(|s| {
+        if program != 0 && !s.gl.programs.contains(program) {
+            s.gl.set_gl_error(GL_INVALID_VALUE);
+        } else {
+            s.delete_program(program);
+        }
+    });
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDeleteShader(shader: u32) {
-    GlobalState::context(|s| record::delete_shader(&mut s.gl, shader));
+    GlobalState::context(|s| {
+        if shader != 0 && !s.gl.programs.shader_exists(shader) {
+            s.gl.set_gl_error(GL_INVALID_VALUE);
+        } else {
+            record::delete_shader(&mut s.gl, shader);
+        }
+    });
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDetachShader(program: u32, shader: u32) {
@@ -300,7 +312,11 @@ pub extern "C" fn glDetachShader(program: u32, shader: u32) {
 pub extern "C" fn glValidateProgram(program: u32) {
     GlobalState::context(|s| {
         if !s.gl.programs.contains(program) {
-            s.gl.set_gl_error(GL_INVALID_VALUE);
+            s.gl.set_gl_error(if s.gl.programs.has_shader(program) {
+                GL_INVALID_OPERATION
+            } else {
+                GL_INVALID_VALUE
+            });
         }
     });
 }

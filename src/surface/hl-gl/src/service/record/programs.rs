@@ -6,6 +6,13 @@ use crate::model::glconst::MAX_TEXTURE_UNITS;
 /// `glCreateShader(kind)`.
 impl GlContext {
     pub fn create_shader(&mut self, kind: u32) -> u32 {
+        if !matches!(
+            kind,
+            GL_VERTEX_SHADER | GL_FRAGMENT_SHADER | GL_COMPUTE_SHADER
+        ) {
+            self.set_gl_error(GL_INVALID_ENUM);
+            return 0;
+        }
         self.programs.create_shader(kind)
     }
 }
@@ -265,6 +272,14 @@ mod buffer_snapshot_tests {
 
 /// `glShaderSource(shader, src)`.
 pub fn shader_source(ctx: &mut GlContext, shader: u32, src: &str) {
+    if !ctx.programs.has_shader(shader) {
+        ctx.set_gl_error(if ctx.programs.contains(shader) {
+            GL_INVALID_OPERATION
+        } else {
+            GL_INVALID_VALUE
+        });
+        return;
+    }
     ctx.programs.shader_source(shader, src);
 }
 
@@ -369,14 +384,28 @@ pub fn bind_attrib(ctx: &mut GlContext, program: u32, index: u32, name: &str) {
         ctx.set_gl_error(GL_INVALID_OPERATION);
         return;
     }
-    if !ctx.programs.bind_attrib(program, index, name) {
-        ctx.set_gl_error(GL_INVALID_VALUE);
+    if !ctx.programs.contains(program) {
+        ctx.set_gl_error(if ctx.programs.has_shader(program) {
+            GL_INVALID_OPERATION
+        } else {
+            GL_INVALID_VALUE
+        });
+        return;
     }
+    ctx.programs.bind_attrib(program, index, name);
 }
 
 /// `glLinkProgram(program)` — translate the attached GLSL-ES pair to shader-IR + reflect the layout.
 impl GlContext {
     pub fn link_program(&mut self, program: u32) -> bool {
+        if !self.programs.contains(program) {
+            self.set_gl_error(if self.programs.has_shader(program) {
+                GL_INVALID_OPERATION
+            } else {
+                GL_INVALID_VALUE
+            });
+            return false;
+        }
         let linked = self.programs.link(program);
         if linked {
             self.reflect_uniform_blocks(program);
@@ -422,7 +451,11 @@ impl GlContext {
     /// `glUseProgram(program)`.
     pub fn use_program(&mut self, program: u32) {
         if program != 0 && (self.program_is_deleted(program) || !self.programs.contains(program)) {
-            self.set_gl_error(GL_INVALID_VALUE);
+            self.set_gl_error(if self.programs.has_shader(program) {
+                GL_INVALID_OPERATION
+            } else {
+                GL_INVALID_VALUE
+            });
             return;
         }
         let outgoing = self.local.cur_prog;
@@ -727,8 +760,20 @@ pub use DELETE_SHADER as delete_shader;
 /// `glDetachShader(program, shader)` — clear the matching attachment slot. Honest GL errors: an unknown
 /// program or shader → `GL_INVALID_VALUE`; a shader not attached to the program → `GL_INVALID_OPERATION`.
 pub fn detach_shader(ctx: &mut GlContext, program: u32, shader: u32) {
-    if !ctx.programs.contains(program) || !ctx.programs.shader_exists(shader) {
-        ctx.set_gl_error(GL_INVALID_VALUE);
+    if !ctx.programs.contains(program) {
+        ctx.set_gl_error(if ctx.programs.has_shader(program) {
+            GL_INVALID_OPERATION
+        } else {
+            GL_INVALID_VALUE
+        });
+        return;
+    }
+    if !ctx.programs.shader_exists(shader) {
+        ctx.set_gl_error(if ctx.programs.contains(shader) {
+            GL_INVALID_OPERATION
+        } else {
+            GL_INVALID_VALUE
+        });
         return;
     }
     if !ctx.programs.detach(program, shader) {

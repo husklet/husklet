@@ -11,6 +11,10 @@ pub extern "C" fn glShaderSource(
     string: *const *const c_char,
     length: *const i32,
 ) {
+    if count < 0 {
+        GlobalState::context(|s| s.gl.set_gl_error(GL_INVALID_VALUE));
+        return;
+    }
     let src = unsafe { join_source(count, string, length) };
     GlobalState::context(|s| record::shader_source(&mut s.gl, shader, &src));
 }
