@@ -1402,6 +1402,40 @@ pub fn invalid_declaration_identifier(source: &str) -> Option<String> {
 /// Diagnose storage/invariance qualifiers used outside their GLSL ES 1.00 declaration grammar.
 pub fn invalid_storage_declaration(source: &str, shader_kind: u32) -> Option<String> {
     let tokens = tokens(source);
+    let mut declaration_start = 0usize;
+    let mut declaration_depth = 0usize;
+    for (at, token) in tokens.iter().enumerate() {
+        match token.as_str() {
+            "{" => declaration_depth += 1,
+            "}" => {
+                declaration_depth = declaration_depth.saturating_sub(1);
+                if declaration_depth == 0 {
+                    declaration_start = at + 1;
+                }
+            }
+            ";" if declaration_depth == 0 => {
+                let declaration = &tokens[declaration_start..at];
+                if declaration.iter().any(|token| {
+                    matches!(token.as_str(), "attribute" | "uniform" | "varying")
+                }) {
+                    let mut previous = 0u8;
+                    for rank in declaration.iter().filter_map(|token| match token.as_str() {
+                        "invariant" => Some(1),
+                        "attribute" | "uniform" | "varying" => Some(2),
+                        "lowp" | "mediump" | "highp" => Some(3),
+                        _ => None,
+                    }) {
+                        if rank < previous {
+                            return Some("declaration qualifiers are out of order".into());
+                        }
+                        previous = rank;
+                    }
+                }
+                declaration_start = at + 1;
+            }
+            _ => {}
+        }
+    }
     let mut depth = 0usize;
     for (at, token) in tokens.iter().enumerate() {
         match token.as_str() {

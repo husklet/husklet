@@ -700,6 +700,61 @@ fn active_attrib_reflects_declared_name_and_type() {
     assert!(query::active_attrib(&c, prog, 2).is_none());
 }
 
+#[test]
+fn deqp_qualification_order_valid_sources_keep_position_attribute_live() {
+    let parameter_sets = [
+        ("const in float x", "out float x", "inout float x"),
+        (
+            "const in lowp float x",
+            "out mediump float x",
+            "inout mediump float x",
+        ),
+        ("const lowp float x", "mediump float x", "mediump float x"),
+    ];
+    for (input, output, inout) in parameter_sets {
+        let vertex = format!(
+            "precision mediump float;\nattribute highp vec4 dEQP_Position;\nfloat foo0({input}){{return x+1.0;}}\nvoid foo1({output}){{x=1.0;}}\nfloat foo2({inout}){{return x+1.0;}}\nvoid main(){{float result;foo1(result);float x0=foo0(1.0);foo2(result);gl_Position=dEQP_Position+vec4(x0*0.0);}}"
+        );
+        let mut c = ctx_800x600();
+        let vs = record::create_shader(&mut c, GL_VERTEX_SHADER);
+        record::shader_source(&mut c, vs, &vertex);
+        record::compile_shader(&mut c, vs);
+        let fs = record::create_shader(&mut c, GL_FRAGMENT_SHADER);
+        record::shader_source(&mut c, fs, "precision mediump float;void main(){gl_FragColor=vec4(1.0);}");
+        record::compile_shader(&mut c, fs);
+        let prog = record::create_program(&mut c);
+        record::attach_shader(&mut c, prog, vs);
+        record::attach_shader(&mut c, prog, fs);
+        assert!(record::link_program(&mut c, prog));
+        assert!(query::attrib_location(&c, prog, "dEQP_Position") >= 0);
+    }
+
+    for declaration in [
+        "invariant varying lowp float x0;",
+        "invariant varying float x0;",
+        "varying lowp float x0;",
+    ] {
+        let vertex = format!(
+            "precision mediump float;\nattribute highp vec4 dEQP_Position;\n{declaration}\nvoid main(){{x0=1.0;gl_Position=dEQP_Position;}}"
+        );
+        let fragment = format!(
+            "precision mediump float;\n{declaration}\nvoid main(){{gl_FragColor=vec4(x0);}}"
+        );
+        let mut c = ctx_800x600();
+        let vs = record::create_shader(&mut c, GL_VERTEX_SHADER);
+        record::shader_source(&mut c, vs, &vertex);
+        record::compile_shader(&mut c, vs);
+        let fs = record::create_shader(&mut c, GL_FRAGMENT_SHADER);
+        record::shader_source(&mut c, fs, &fragment);
+        record::compile_shader(&mut c, fs);
+        let prog = record::create_program(&mut c);
+        record::attach_shader(&mut c, prog, vs);
+        record::attach_shader(&mut c, prog, fs);
+        assert!(record::link_program(&mut c, prog), "{declaration}");
+        assert!(query::attrib_location(&c, prog, "dEQP_Position") >= 0);
+    }
+}
+
 // ---- glGetStringi --------------------------------------------------------------------------------
 
 /// `glGetStringi` agrees with `GL_NUM_EXTENSIONS` and refuses what it should.

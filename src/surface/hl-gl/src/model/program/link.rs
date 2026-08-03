@@ -249,6 +249,29 @@ impl Program {
                 public_attributes.insert(declaration.name.clone(), location);
             }
         }
+        // The verbatim route preserves helper functions, but its prepared-source location scan can omit
+        // legacy ES `attribute PRECISION TYPE name` declarations. They are still active GL attributes and
+        // need an automatically allocated public location just like the regenerated ES2 route provides.
+        for declaration in &declarations {
+            if public_attributes.contains_key(&declaration.name) {
+                continue;
+            }
+            let span = declaration.location_span() as usize;
+            let location = (0..=super::MAX_ATTR.saturating_sub(span))
+                .find(|&candidate| {
+                    public_attributes.iter().all(|(name, &base)| {
+                        let occupied_span = declarations
+                            .iter()
+                            .find(|other| other.name == *name)
+                            .map_or(1, |other| other.location_span())
+                            as usize;
+                        candidate + span <= base as usize
+                            || candidate >= base as usize + occupied_span
+                    })
+                })
+                .ok_or_else(|| glsl::UniformError::AttributeLocation(declaration.name.clone()))?;
+            public_attributes.insert(declaration.name.clone(), location as u32);
+        }
         // GL permits names to alias one public attribute location. WebGPU does not permit duplicate
         // shader locations, so give every declaration a collision-free host-only range. Draw lowering
         // duplicates the public GL array into each host range that consumes it.
