@@ -20,8 +20,15 @@ fn sampler_3d_lowers_uploaded_depth_slices() {
     record::use_program(&mut context, program);
     let texture = context.textures.gen();
     record::bind_texture(&mut context, GL_TEXTURE_3D, texture);
-    let slices = [[1, 2, 3, 255].repeat(4), [5, 6, 7, 255].repeat(4), [9, 10, 11, 255].repeat(4)];
-    record::tex_image_3d(&mut context, GL_TEXTURE_3D, 0, 2, 2, 3, &slices.concat());
+    // The CTS `basic_teximage3d` case reuses one client allocation while defining every mip level.
+    // Capturing only level zero makes the texture incomplete and loses all later client bytes.
+    let mut expected_copies = 0;
+    for level in 0..6 {
+        let (w, h, depth) = ((63 >> level).max(1), (29 >> level).max(1), (11 >> level).max(1));
+        let pixels = [level as u8 + 1, 2, 3, 255].repeat((w * h * depth) as usize);
+        record::tex_image_3d(&mut context, GL_TEXTURE_3D, level, w, h, depth, &pixels);
+        expected_copies += depth;
+    }
     let buffer = context.buffers.gen();
     record::bind_buffer(&mut context, GL_ARRAY_BUFFER, buffer);
     record::buffer_data(&mut context, GL_ARRAY_BUFFER, &[0; 24], 0x88E4);
@@ -31,9 +38,11 @@ fn sampler_3d_lowers_uploaded_depth_slices() {
     assert!(swap::swap_buffers(&mut context, &mut sink).unwrap());
     let batch = &sink.batches[0];
     let texture_ir = batch.iter().find_map(|command| match command {
-        Cmd::CreateTexture(id, desc) if desc.dim == TextureDim::D3 && desc.depth == 3 => Some(*id), _ => None,
-    }).expect("three-slice texture");
-    assert_eq!(submit_ops(batch).iter().filter(|op| matches!(op, Enc::CopyBufferToTextureRegion { dst, .. } if *dst == texture_ir)).count(), 3);
+        Cmd::CreateTexture(id, desc)
+            if desc.dim == TextureDim::D3 && desc.depth == 11 && desc.mip_levels == 6 => Some(*id),
+        _ => None,
+    }).expect("complete client-memory 3D mip chain");
+    assert_eq!(submit_ops(batch).iter().filter(|op| matches!(op, Enc::CopyBufferToTextureRegion { dst, .. } if *dst == texture_ir)).count(), expected_copies as usize);
 }
 
 #[test]

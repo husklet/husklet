@@ -482,14 +482,19 @@ pub fn tex_image_3d(
     depth: i32,
     rgba: &[u8],
 ) {
-    if level != 0 || (target != GL_TEXTURE_2D_ARRAY && target != GL_TEXTURE_3D) {
+    if level < 0 || (target != GL_TEXTURE_2D_ARRAY && target != GL_TEXTURE_3D) {
         return;
     }
     let name = ctx.local.tex_unit[ctx.local.active_texture];
     if name == 0 || ctx.textures.get(name).is_none() {
         return;
     }
-    if !ctx.textures.alloc_volume(name, w, h, depth, rgba) {
+    let accepted = if level == 0 {
+        ctx.textures.alloc_volume(name, w, h, depth, rgba)
+    } else {
+        ctx.textures.image_3d_level(name, level as u32, w, h, depth, rgba)
+    };
+    if !accepted {
         ctx.set_gl_error(GL_INVALID_VALUE);
     }
 }
@@ -545,7 +550,7 @@ pub fn tex_sub_image_3d(
     depth: i32,
     rgba: &[u8],
 ) {
-    if level != 0
+    if level < 0
         || depth <= 0
         || (target != GL_TEXTURE_2D_ARRAY && target != GL_TEXTURE_3D)
     {
@@ -555,7 +560,7 @@ pub fn tex_sub_image_3d(
     if name == 0 {
         return;
     }
-    if !ctx.textures.sub_image_3d(name, xo, yo, zo, w, h, depth, rgba) {
+    if !ctx.textures.sub_image_3d_level(name, level as u32, xo, yo, zo, w, h, depth, rgba) {
         ctx.set_gl_error(GL_INVALID_VALUE);
     }
 }

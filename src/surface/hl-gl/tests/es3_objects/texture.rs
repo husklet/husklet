@@ -166,6 +166,25 @@ fn tex_image_3d_then_sub_image_3d_preserve_distinct_layers() {
         "sub-image overwrote layer 1 texel (0,0) to red"
     );
     assert_eq!(&tex.data[0..4], &[0, 0, 255, 255]);
+
+    // Client-memory mip definitions and sub-updates retain every depth slice independently.
+    let mip_blue = [1u8, 2, 3, 255].repeat(2 * 2);
+    let mip_green = [4u8, 5, 6, 255].repeat(2 * 2);
+    record::tex_image_3d(
+        &mut c,
+        GL_TEXTURE_3D,
+        1,
+        2,
+        2,
+        2,
+        &[mip_blue.as_slice(), mip_green.as_slice()].concat(),
+    );
+    let mip_red = [9u8, 8, 7, 255].repeat(2 * 2);
+    record::tex_sub_image_3d(&mut c, GL_TEXTURE_3D, 1, 0, 0, 1, 2, 2, 1, &mip_red);
+    let mip = &c.textures.get(t).unwrap().mips[0];
+    assert_eq!((mip.w, mip.h, mip.depth), (2, 2, 2));
+    assert_eq!(&mip.data[..4], &[1, 2, 3, 255]);
+    assert_eq!(&mip.layer(1).unwrap()[..4], &[9, 8, 7, 255]);
 }
 
 // ---- glGetTexParameteriv: filter/wrap state of the bound texture round-trips ---------------------

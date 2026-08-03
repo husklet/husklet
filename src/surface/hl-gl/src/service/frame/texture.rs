@@ -90,9 +90,9 @@ pub(super) struct TexBind {
     pub(super) stage_ir: u32,
     pub(super) w: u32,
     pub(super) h: u32,
-    /// Staging buffers for the mip levels ABOVE the base, as `(buffer, level, width, height)`. EMPTY for
+    /// Staging buffers for the mip levels ABOVE the base, as `(buffer, level, width, height, layer)`. EMPTY for
     /// the single-level textures that are the overwhelming majority, so their lowering is unchanged.
-    pub(super) mip_stages: Vec<(u32, u32, u32, u32)>,
+    pub(super) mip_stages: Vec<(u32, u32, u32, u32, u32)>,
     /// Additional base-level cube-face staging buffers as `(buffer, layer)`; layer zero uses `stage_ir`.
     pub(super) layer_stages: Vec<(u32, u32)>,
     /// Bytes per texel of the staged plane. Four for every normalized shadow; one or two for an integer
@@ -406,7 +406,7 @@ pub(super) fn lower_textures(
                     .first()
                     .cloned()
                     .unwrap_or((t.w, t.h, Arc::clone(&t.data)));
-            let mut mip_stages: Vec<(u32, u32, u32, u32)> = Vec::new();
+            let mut mip_stages: Vec<(u32, u32, u32, u32, u32)> = Vec::new();
             let mut layer_stages: Vec<(u32, u32)> = Vec::new();
             // INSTRUMENTED BUILDS ONLY. Both branches, so "no staging write was emitted" can be told
             // apart from "this lowering path never ran". The first is a defect; the second means the
@@ -591,7 +591,34 @@ pub(super) fn lower_textures(
                         offset: 0,
                         data: (**data).clone(),
                     });
-                    mip_stages.push((level_ir, index as u32, *lw as u32, *lh as u32));
+                    mip_stages.push((level_ir, index as u32, *lw as u32, *lh as u32, 0));
+                    if t.depth > 1 {
+                        if let Some(level) = t.mip_chain().get(index - 1) {
+                            for (layer, data) in level.layers.iter().enumerate() {
+                                let layer_ir = ctx.alloc_buffer_ir()?;
+                                cmds.push(Cmd::CreateBuffer(
+                                    layer_ir,
+                                    BufferDesc {
+                                        size: data.len() as u64,
+                                        usage: buffer_usage::COPY_SRC,
+                                        label: String::new(),
+                                    },
+                                ));
+                                cmds.push(Cmd::WriteBuffer {
+                                    id: layer_ir,
+                                    offset: 0,
+                                    data: data.as_ref().clone(),
+                                });
+                                mip_stages.push((
+                                    layer_ir,
+                                    index as u32,
+                                    *lw as u32,
+                                    *lh as u32,
+                                    layer as u32 + 1,
+                                ));
+                            }
+                        }
+                    }
                 }
                 stage_ir
             } else {

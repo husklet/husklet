@@ -111,7 +111,19 @@ impl PartialEq for SharedPixels {
 pub struct MipLevel {
     pub w: i32,
     pub h: i32,
+    pub depth: i32,
     pub data: Arc<Vec<u8>>,
+    pub(crate) layers: Vec<Arc<Vec<u8>>>,
+}
+
+impl MipLevel {
+    pub fn layer(&self, layer: usize) -> Option<&[u8]> {
+        if layer == 0 {
+            Some(self.data.as_slice())
+        } else {
+            self.layers.get(layer - 1).map(|pixels| pixels.as_slice())
+        }
+    }
 }
 
 /// One live GL texture object: its CPU shadow plane + the min/mag filter + S/T wrap GL enums.
@@ -740,7 +752,52 @@ impl Textures {
         t.mips[index] = MipLevel {
             w,
             h,
+            depth: 1,
             data: Arc::new(pixels.to_vec()),
+            layers: Vec::new(),
+        };
+        t.gen = generation;
+        true
+    }
+
+    pub fn image_3d_level(
+        &mut self,
+        name: u32,
+        level: u32,
+        w: i32,
+        h: i32,
+        depth: i32,
+        pixels: &[u8],
+    ) -> bool {
+        const MAX_LEVELS: usize = 16;
+        if level == 0 || level as usize > MAX_LEVELS || w <= 0 || h <= 0 || depth <= 0 {
+            return false;
+        }
+        let generation = self.generation();
+        let Some(t) = self.map.get_mut(&name) else { return false; };
+        let Some(plane) = (w as usize)
+            .checked_mul(h as usize)
+            .and_then(|n| n.checked_mul(t.bytes_per_texel()))
+        else {
+            return false;
+        };
+        let Some(total) = plane.checked_mul(depth as usize) else { return false; };
+        if pixels.len() < total {
+            return false;
+        }
+        let index = level as usize - 1;
+        if t.mips.len() <= index {
+            t.mips.resize(index + 1, MipLevel::default());
+        }
+        t.mips[index] = MipLevel {
+            w,
+            h,
+            depth,
+            data: Arc::new(pixels[..plane].to_vec()),
+            layers: pixels[plane..total]
+                .chunks_exact(plane)
+                .map(|slice| Arc::new(slice.to_vec()))
+                .collect(),
         };
         t.gen = generation;
         true
@@ -898,6 +955,49 @@ impl Textures {
             texture.gpu_authoritative = false;
             texture.gen = generation;
         }
+        true
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn sub_image_3d_level(&mut self, name: u32, level: u32, xo: i32, yo: i32, zo: i32, w: i32, h: i32, depth: i32, pixels: &[u8]) -> bool {
+        if level == 0 {
+            return self.sub_image_3d(name, xo, yo, zo, w, h, depth, pixels);
+        }
+        let generation = self.generation();
+        let Some(texture) = self.map.get_mut(&name) else { return false; };
+        let texel = texture.bytes_per_texel();
+        let Some(mip) = texture.mips.get_mut(level as usize - 1) else { return false; };
+        if xo < 0 || yo < 0 || zo < 0 || w < 0 || h < 0 || depth <= 0
+            || xo.checked_add(w).is_none_or(|end| end > mip.w)
+            || yo.checked_add(h).is_none_or(|end| end > mip.h)
+            || zo.checked_add(depth).is_none_or(|end| end > mip.depth)
+        {
+            return false;
+        }
+        let Some(plane_bytes) = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(texel)) else { return false; };
+        if pixels.len() < plane_bytes.saturating_mul(depth as usize) {
+            return false;
+        }
+        for layer in 0..depth {
+            let z = (zo + layer) as usize;
+            let target = if z == 0 {
+                &mut mip.data
+            } else {
+                let Some(target) = mip.layers.get_mut(z - 1) else { return false; };
+                target
+            };
+            let mut owned = (**target).clone();
+            for row in 0..h as usize {
+                let dst = ((yo as usize + row) * mip.w as usize + xo as usize) * texel;
+                let src = layer as usize * plane_bytes + row * w as usize * texel;
+                owned[dst..dst + w as usize * texel]
+                    .copy_from_slice(&pixels[src..src + w as usize * texel]);
+            }
+            *target = Arc::new(owned);
+        }
+        texture.real_pixels = true;
+        texture.gpu_authoritative = false;
+        texture.gen = generation;
         true
     }
 
