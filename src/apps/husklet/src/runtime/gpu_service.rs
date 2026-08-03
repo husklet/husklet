@@ -4,8 +4,8 @@ use std::io;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -106,13 +106,9 @@ impl Connection {
         #[cfg(target_os = "macos")] presentations: Option<Producer>,
     ) -> Self {
         let limits = Limits::from_capabilities(executor.capabilities());
-        let session = Session::new(
-            limits,
-            global,
-            Box::new(SystemClock::new()),
-        )
-        .with_exports(exports)
-        .with_sync_exports(sync_exports);
+        let session = Session::new(limits, global, Box::new(SystemClock::new()))
+            .with_exports(exports)
+            .with_sync_exports(sync_exports);
         Self {
             session,
             executor,
@@ -164,12 +160,14 @@ impl ConnectionHandler for Connection {
                 if let (Some(capture), Some(encoded)) = (&mut self.capture, encoded.as_deref()) {
                     if outcome.refusal.is_none() {
                         capture.record(batch, encoded);
-                    } else if outcome.committed.replayable {
-                        let commands: Vec<Cmd> = outcome.committed.replay_commands().cloned().collect();
-                        let encoded = hl_gpu::Encoder::stream(&commands);
-                        capture.record(&commands, &encoded);
                     } else {
-                        capture.invalidate();
+                        let commands: Vec<Cmd> =
+                            outcome.committed.replay_commands().cloned().collect();
+                        capture.record_partial(
+                            &commands,
+                            outcome.committed.replayable,
+                            outcome.committed.presentations.len(),
+                        );
                     }
                 }
                 hl_log::hl_add!(
@@ -208,9 +206,16 @@ impl ConnectionHandler for Connection {
                             );
                         }
                     }
-                    let produced: Vec<(u64, u64)> = presentations.iter().map(|p| (p.token.get(), p.serial.get())).collect();
+                    let produced: Vec<(u64, u64)> = presentations
+                        .iter()
+                        .map(|p| (p.token.get(), p.serial.get()))
+                        .collect();
                     producer.publish(&self.session, &self.executor, presentations);
-                    let cancelled: Vec<_> = native_reservations.iter().copied().filter(|r| !produced.contains(r)).collect();
+                    let cancelled: Vec<_> = native_reservations
+                        .iter()
+                        .copied()
+                        .filter(|r| !produced.contains(r))
+                        .collect();
                     producer.cancel(&cancelled);
                 }
                 hl_log::hl_log!(
@@ -364,7 +369,8 @@ impl ConnectionHandler for Connection {
                 hl_log::hl_error!(
                     hl_log::tag::GPU,
                     "GPU buffer import refused buffer={} export={} error={error}",
-                    request.id, request.offset
+                    request.id,
+                    request.offset
                 );
                 None
             }
@@ -372,31 +378,59 @@ impl ConnectionHandler for Connection {
     }
 
     fn export_texture(&mut self, request: &ReadbackRequest) -> Option<ExportId> {
-        match hl_gpu::runtime::service::dispatch::export_texture(&mut self.session, &self.executor, TextureId(request.id)) {
+        match hl_gpu::runtime::service::dispatch::export_texture(
+            &mut self.session,
+            &self.executor,
+            TextureId(request.id),
+        ) {
             Ok(export) => Some(export),
             Err(error) => {
-                hl_log::hl_error!(hl_log::tag::GPU, "GPU texture export refused texture={} error={error}", request.id);
+                hl_log::hl_error!(
+                    hl_log::tag::GPU,
+                    "GPU texture export refused texture={} error={error}",
+                    request.id
+                );
                 None
             }
         }
     }
 
     fn import_texture(&mut self, request: &ReadbackRequest) -> Option<u64> {
-        match hl_gpu::runtime::service::dispatch::import_texture(&mut self.session, &self.executor, TextureId(request.id), ExportId(request.offset)) {
+        match hl_gpu::runtime::service::dispatch::import_texture(
+            &mut self.session,
+            &self.executor,
+            TextureId(request.id),
+            ExportId(request.offset),
+        ) {
             Ok(bytes) => Some(bytes),
             Err(error) => {
-                hl_log::hl_error!(hl_log::tag::GPU, "GPU texture import refused texture={} export={} error={error}", request.id, request.offset);
+                hl_log::hl_error!(
+                    hl_log::tag::GPU,
+                    "GPU texture import refused texture={} export={} error={error}",
+                    request.id,
+                    request.offset
+                );
                 None
             }
         }
     }
 
     fn map_texture(&mut self, request: &ReadbackRequest) -> Option<()> {
-        hl_gpu::runtime::service::dispatch::map_texture(&mut self.session, &mut self.executor, TextureId(request.id)).ok()
+        hl_gpu::runtime::service::dispatch::map_texture(
+            &mut self.session,
+            &mut self.executor,
+            TextureId(request.id),
+        )
+        .ok()
     }
 
     fn unmap_texture(&mut self, request: &ReadbackRequest) -> Option<()> {
-        hl_gpu::runtime::service::dispatch::unmap_texture(&mut self.session, &mut self.executor, TextureId(request.id)).ok()
+        hl_gpu::runtime::service::dispatch::unmap_texture(
+            &mut self.session,
+            &mut self.executor,
+            TextureId(request.id),
+        )
+        .ok()
     }
 
     fn map_buffer(&mut self, request: &ReadbackRequest) -> Option<()> {
