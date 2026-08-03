@@ -172,6 +172,7 @@ impl Format {
             | T::Rg8Unorm
             | T::Rg8Snorm
             | T::Rgba16Unorm
+            | T::Rg16Unorm
             | T::Rgba8Snorm => FormatClass::NormalizedColor,
             T::Rgba8Uint
             | T::Rgba8Sint
@@ -853,6 +854,16 @@ mod tests {
         let optimal = Format(vk_format::R16G16B16A16_UNORM)
             .features()
             .optimal_tiling;
+        assert_ne!(optimal & format_feature::SAMPLED_IMAGE, 0);
+        assert_ne!(optimal & format_feature::SAMPLED_IMAGE_FILTER_LINEAR, 0);
+        assert_ne!(optimal & format_feature::COLOR_ATTACHMENT, 0);
+        assert_ne!(optimal & format_feature::BLIT_SRC, 0);
+        assert_ne!(optimal & format_feature::BLIT_DST, 0);
+    }
+
+    #[test]
+    fn rg16_unorm_is_a_full_native_color_format() {
+        let optimal = Format(vk_format::R16G16_UNORM).features().optimal_tiling;
         assert_ne!(optimal & format_feature::SAMPLED_IMAGE, 0);
         assert_ne!(optimal & format_feature::SAMPLED_IMAGE_FILTER_LINEAR, 0);
         assert_ne!(optimal & format_feature::COLOR_ATTACHMENT, 0);

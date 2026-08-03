@@ -171,6 +171,14 @@ fn every_color_format_roundtrips_exact_stored_bytes() {
                 let expected = C.map(|value| (value * u16::MAX as f32 + 0.5) as u16);
                 assert_eq!(got, expected, "Rgba16Unorm stores exact normalized u16 channels");
             }
+            TextureFormat::Rg16Unorm => {
+                let got = [le_u16(&t0[0..2]), le_u16(&t0[2..4])];
+                let expected = [
+                    (C[0] * u16::MAX as f32 + 0.5) as u16,
+                    (C[1] * u16::MAX as f32 + 0.5) as u16,
+                ];
+                assert_eq!(got, expected, "Rg16Unorm stores exact normalized R/G channels");
+            }
             TextureFormat::Rgba32Float => {
                 let got = [
                     le_f32_at(&t0[0..4]),

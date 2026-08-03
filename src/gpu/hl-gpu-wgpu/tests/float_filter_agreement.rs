@@ -283,3 +283,8 @@ fn metal_executes_rgba16_unorm_as_a_blit_destination() {
         &[0xff, 0xff, 0, 0, 0, 0, 0xff, 0xff],
     );
 }
+
+#[test]
+fn metal_executes_rg16_unorm_as_a_blit_destination() {
+    assert_packed_red_blit(TextureFormat::Rg16Unorm, &[0xff, 0xff, 0, 0]);
+}
