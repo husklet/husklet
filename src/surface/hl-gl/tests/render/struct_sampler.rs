@@ -39,6 +39,33 @@ fn historical_sampler_structures_compile_on_both_stages() {
     }
 }
 
+#[test]
+fn mixed_helper_companions_preserve_nested_data_and_runtime_array_indexing() {
+    let shapes = [
+        (
+            "mixed_helper",
+            "struct S { float scale; sampler2D source; }; vec4 fun(S value) { return texture2D(value.source, vec2(0.5)) * value.scale; } uniform S s;",
+            "vec4 result=fun(s);",
+        ),
+        (
+            "nested_mixed_helper",
+            "struct T { vec2 offset; }; struct S { T data; sampler2D source; }; vec4 fun(S value) { return texture2D(value.source, value.data.offset); } uniform S s;",
+            "vec4 result=fun(s);",
+        ),
+        (
+            "runtime_data_array_helper",
+            "struct S { float values[2]; sampler2D source; }; vec4 fun(S value) { int i=int(value.values[0]); return texture2D(value.source, vec2(0.5))*value.values[i]; } uniform S s;",
+            "vec4 result=fun(s);",
+        ),
+    ];
+    for (name, declarations, body) in shapes {
+        let (vs, fs) = stage_sources(true, declarations, body);
+        let (vs_out, fs_out) = link_and_forward(&vs, &fs);
+        compile_translated(&vs_out, &fs_out).unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert!(vs_out.contains("struct hl_data_S"), "{name}: {vs_out}");
+    }
+}
+
 fn stage_sources(vertex: bool, declarations: &str, body: &str) -> (String, String) {
     if vertex {
         return (

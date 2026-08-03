@@ -9,12 +9,21 @@ struct Leaf {
 }
 
 #[derive(Clone)]
+struct ValueLeaf {
+    path: String,
+    name: String,
+    ty: String,
+    dimensions: Vec<Option<usize>>,
+}
+
+#[derive(Clone)]
 struct Parameter {
     structure: String,
     function: String,
     name: String,
     elements: usize,
     leaves: Vec<Leaf>,
+    values: Vec<ValueLeaf>,
     start: usize,
     end: usize,
 }
@@ -32,9 +41,12 @@ impl StructSamplers {
             if !Lexical::function_parameter(&tokens, at) {
                 continue;
             }
-            let Some(leaves) = Self::sampler_leaves(&types, &Type::named(&token.text), "") else {
+            let Some((values, leaves)) = Self::leaves(&types, &Type::named(&token.text), "") else {
                 continue;
             };
+            if leaves.is_empty() {
+                continue;
+            }
             let Some(name) = tokens.get(at + 1).filter(|token| token.identifier()) else {
                 continue;
             };
@@ -56,35 +68,52 @@ impl StructSamplers {
             } else {
                 (1, name.end)
             };
+            if !values.is_empty() && elements != 1 {
+                continue;
+            }
             parameters.push(Parameter {
                 structure: token.text.clone(),
                 function: function.text.clone(),
                 name: name.text.clone(),
                 elements,
                 leaves,
+                values,
                 start: token.start,
                 end,
             });
         }
 
         for parameter in parameters.iter().rev() {
-            let declaration = (0..parameter.elements)
-                .flat_map(|element| {
-                    parameter.leaves.iter().flat_map(move |leaf| {
-                        let name = Self::parameter_name(parameter, element, &leaf.path);
-                        let (texture, sampler, _) = Self::split(&leaf.ty);
-                        [
-                            format!("{texture} {name}_hltex"),
-                            format!("{sampler} {name}_hlsmp"),
-                        ]
-                    })
+            let mut declarations = Vec::new();
+            if !parameter.values.is_empty() {
+                declarations.push(format!(
+                    "{} {}_hldata",
+                    Self::companion_name(&parameter.structure),
+                    parameter.name
+                ));
+            }
+            declarations.extend((0..parameter.elements).flat_map(|element| {
+                parameter.leaves.iter().flat_map(move |leaf| {
+                    let name = Self::parameter_name(parameter, element, &leaf.path);
+                    let (texture, sampler, _) = Self::split(&leaf.ty);
+                    [
+                        format!("{texture} {name}_hltex"),
+                        format!("{sampler} {name}_hlsmp"),
+                    ]
                 })
-                .collect::<Vec<_>>()
-                .join(", ");
+            }));
+            let declaration = declarations.join(", ");
             source.replace_range(parameter.start..parameter.end, &declaration);
         }
 
         for parameter in &parameters {
+            for value in &parameter.values {
+                super::super::wreplace(
+                    source,
+                    &format!("{}.{}", parameter.name, value.path),
+                    &format!("{}_hldata.{}", parameter.name, value.name),
+                );
+            }
             for element in 0..parameter.elements {
                 for leaf in &parameter.leaves {
                     let member = if parameter.elements == 1 {
@@ -104,6 +133,18 @@ impl StructSamplers {
             for uniform in Self::uniforms_of(source, &parameter.structure, parameter.elements) {
                 let call = format!("{}({uniform})", parameter.function);
                 let mut arguments = Vec::new();
+                if !parameter.values.is_empty() {
+                    let values = parameter
+                        .values
+                        .iter()
+                        .map(|value| format!("{uniform}.{}", value.path))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    arguments.push(format!(
+                        "{}({values})",
+                        Self::companion_name(&parameter.structure)
+                    ));
+                }
                 for element in 0..parameter.elements {
                     for leaf in &parameter.leaves {
                         let path = if parameter.elements == 1 {
@@ -124,11 +165,36 @@ impl StructSamplers {
                 );
             }
         }
+
+        let mut companions = String::new();
+        let mut emitted = std::collections::BTreeSet::new();
+        for parameter in &parameters {
+            if parameter.values.is_empty() || !emitted.insert(parameter.structure.clone()) {
+                continue;
+            }
+            companions.push_str(&format!(
+                "struct {} {{\n",
+                Self::companion_name(&parameter.structure)
+            ));
+            for value in &parameter.values {
+                companions.push_str(&format!("{} {}", value.ty, value.name));
+                for dimension in &value.dimensions {
+                    let Some(dimension) = dimension else {
+                        continue;
+                    };
+                    companions.push_str(&format!("[{dimension}]"));
+                }
+                companions.push_str(";\n");
+            }
+            companions.push_str("};\n");
+        }
+        source.insert_str(0, &companions);
     }
 
-    fn sampler_leaves(types: &Types, ty: &Type, prefix: &str) -> Option<Vec<Leaf>> {
+    fn leaves(types: &Types, ty: &Type, prefix: &str) -> Option<(Vec<ValueLeaf>, Vec<Leaf>)> {
         let structure = types.structure(ty.name())?;
-        let mut out = Vec::new();
+        let mut values = Vec::new();
+        let mut samplers = Vec::new();
         for (name, field) in structure.fields() {
             let path = if prefix.is_empty() {
                 name.to_owned()
@@ -136,6 +202,15 @@ impl StructSamplers {
                 format!("{prefix}.{name}")
             };
             let dimensions = field.array_dimensions();
+            if !field.name().contains("sampler") && types.structure(field.name()).is_none() {
+                values.push(ValueLeaf {
+                    path: path.clone(),
+                    name: Self::binding_name(&path),
+                    ty: field.name().to_owned(),
+                    dimensions: dimensions.to_vec(),
+                });
+                continue;
+            }
             let elements = dimensions.first().copied().flatten().unwrap_or(1);
             for element in 0..elements {
                 let element_path = if dimensions.is_empty() {
@@ -143,18 +218,20 @@ impl StructSamplers {
                 } else {
                     format!("{path}[{element}]")
                 };
-                if field.name().starts_with("sampler") {
-                    out.push(Leaf {
+                if field.name().contains("sampler") {
+                    samplers.push(Leaf {
                         path: element_path,
                         ty: field.name().to_owned(),
                     });
                 } else {
-                    let nested = Self::sampler_leaves(types, field, &element_path)?;
-                    out.extend(nested);
+                    let (nested_values, nested_samplers) =
+                        Self::leaves(types, field, &element_path)?;
+                    values.extend(nested_values);
+                    samplers.extend(nested_samplers);
                 }
             }
         }
-        (!out.is_empty()).then_some(out)
+        Some((values, samplers))
     }
 
     fn parameter_name(parameter: &Parameter, element: usize, path: &str) -> String {
@@ -185,6 +262,10 @@ impl StructSamplers {
                 }
             })
             .collect()
+    }
+
+    fn companion_name(structure: &str) -> String {
+        format!("hl_data_{structure}")
     }
 
     fn split(ty: &str) -> (&'static str, &'static str, &'static str) {
@@ -235,14 +316,28 @@ mod tests {
     }
 
     #[test]
-    fn mixed_and_data_only_parameters_are_not_partially_lowered() {
-        for original in [
-            "struct S { float value; sampler2D source; }; vec4 fun(S value){ return vec4(value.value); }",
-            "struct S { float value; }; vec4 fun(S value){ return vec4(value.value); }",
-        ] {
-            let mut source = original.to_owned();
-            StructSamplers::lower(&mut source);
-            assert_eq!(source, original);
-        }
+    fn mixed_parameter_gets_a_data_companion_while_data_only_stays_native() {
+        let mut mixed = "struct S { float value; sampler2D source; }; vec4 fun(S value){ return vec4(value.value); } uniform S item; void main(){ vec4 c=fun(item); }".to_owned();
+        StructSamplers::lower(&mut mixed);
+        assert!(mixed.contains("struct hl_data_S"), "{mixed}");
+        assert!(mixed.contains("fun(hl_data_S value_hldata, texture2D value_source_hltex, sampler value_source_hlsmp)"), "{mixed}");
+        assert!(
+            mixed.contains("fun(hl_data_S(item.value), item_source_hltex, item_source_hlsmp)"),
+            "{mixed}"
+        );
+
+        let original = "struct S { float value; }; vec4 fun(S value){ return vec4(value.value); }";
+        let mut data = original.to_owned();
+        StructSamplers::lower(&mut data);
+        assert_eq!(data, original);
+    }
+
+    #[test]
+    fn nested_mixed_parameter_flattens_its_data_companion_path() {
+        let mut source = "struct T { vec2 offset; }; struct S { T data; sampler2D source; }; vec4 fun(S value) { return texture2D(value.source, value.data.offset); } uniform S item; void main(){ vec4 c=fun(item); }".to_owned();
+        StructSamplers::lower(&mut source);
+        assert!(source.contains("struct hl_data_S"), "{source}");
+        assert!(source.contains("vec2 data_offset"), "{source}");
+        assert!(source.contains("value_hldata.data_offset"), "{source}");
     }
 }
