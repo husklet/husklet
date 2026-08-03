@@ -61,6 +61,7 @@ impl TypeToken<'_> {
             self.0,
             "sampler2D"
                 | "samplerCube"
+                | "sampler3D"
                 | "sampler2DArray"
                 | "sampler2DShadow"
                 | "samplerExternalOES"
@@ -76,7 +77,7 @@ impl TypeToken<'_> {
     fn is_integer_sampler(&self) -> bool {
         matches!(
             self.0,
-            "usampler2D" | "isampler2D" | "usampler2DArray" | "isampler2DArray"
+            "usampler2D" | "isampler2D" | "usampler3D" | "isampler3D" | "usampler2DArray" | "isampler2DArray"
         )
     }
 

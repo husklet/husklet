@@ -245,6 +245,7 @@ impl Declarations<'_> {
     pub(super) fn split_sampler(ty: &str) -> (&'static str, &'static str, &'static str) {
         match ty {
             "samplerCube" => ("textureCube", "sampler", "samplerCube"),
+            "sampler3D" => ("texture3D", "sampler", "sampler3D"),
             "sampler2DArray" => ("texture2DArray", "sampler", "sampler2DArray"),
             "sampler2DShadow" => ("texture2D", "samplerShadow", "sampler2DShadow"),
             // Integer textures. Their uses are rewritten to `texelFetch` by
@@ -253,6 +254,8 @@ impl Declarations<'_> {
             // declared sampler and a bind group short of its layout is refused outright.
             "usampler2D" => ("utexture2D", "sampler", "usampler2D"),
             "isampler2D" => ("itexture2D", "sampler", "isampler2D"),
+            "usampler3D" => ("utexture3D", "sampler", "usampler3D"),
+            "isampler3D" => ("itexture3D", "sampler", "isampler3D"),
             "usampler2DArray" => ("utexture2DArray", "sampler", "usampler2DArray"),
             "isampler2DArray" => ("itexture2DArray", "sampler", "isampler2DArray"),
             // `samplerExternalOES` (ANGLE's YUV external image) maps to a plain 2D sampler for this bring-up —

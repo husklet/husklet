@@ -1,6 +1,34 @@
 use super::*;
 
 #[test]
+fn layered_samplers_keep_dimension_across_sampling_size_and_lod() {
+    let vs = "#version 300 es\nvoid main(){gl_Position=vec4(0);}";
+    let fs = "#version 300 es\nprecision highp float;\n\
+              uniform sampler3D volume;\n\
+              uniform sampler2DArray layers;\n\
+              out vec4 color;\n\
+              void main(){\
+                ivec3 size3d=textureSize(volume,0);\
+                ivec3 size_array=textureSize(layers,0);\
+                color=textureLod(volume,vec3(.5),0.0)\
+                    +texture(layers,vec3(.5),0.0)\
+                    +vec4(size3d+size_array,0);\
+              }";
+    let (_, output) = glsl::StageSources::new(vs, fs).translate_render();
+    for expected in [
+        "uniform texture3D volume_hltex;",
+        "uniform texture2DArray layers_hltex;",
+        "textureSize(sampler3D(volume_hltex, volume_hlsmp),0)",
+        "textureSize(sampler2DArray(layers_hltex, layers_hlsmp),0)",
+        "textureLod(sampler3D(volume_hltex, volume_hlsmp),vec3(.5),0.0)",
+        "texture(sampler2DArray(layers_hltex, layers_hlsmp),vec3(.5),0.0)",
+    ] {
+        assert!(output.contains(expected), "missing {expected}:\n{output}");
+    }
+    assert_naga_parses(&output, naga::ShaderStage::Fragment);
+}
+
+#[test]
 fn the_advertised_per_stage_sampler_count_is_supported_and_one_more_is_rejected() {
     let mut accepted = String::new();
     for index in 0..16 {

@@ -4,6 +4,39 @@ use hl_gpu::protocol::model::enums::{texture_usage, TextureDim, TextureFormat};
 use std::sync::Arc;
 
 #[test]
+fn sampler_3d_lowers_uploaded_depth_slices() {
+    let mut context = ctx_640x480();
+    let mut sink = RecordingSink::with_full_caps();
+    let vertex = record::create_shader(&mut context, GL_VERTEX_SHADER);
+    record::shader_source(&mut context, vertex, "attribute vec2 p;varying vec3 d;void main(){d=vec3(.5);gl_Position=vec4(p,0,1);}");
+    record::compile_shader(&mut context, vertex);
+    let fragment = record::create_shader(&mut context, GL_FRAGMENT_SHADER);
+    record::shader_source(&mut context, fragment, "precision mediump float;varying vec3 d;uniform sampler3D s;void main(){gl_FragColor=texture3D(s,d);}");
+    record::compile_shader(&mut context, fragment);
+    let program = record::create_program(&mut context);
+    record::attach_shader(&mut context, program, vertex);
+    record::attach_shader(&mut context, program, fragment);
+    assert!(record::link_program(&mut context, program));
+    record::use_program(&mut context, program);
+    let texture = context.textures.gen();
+    record::bind_texture(&mut context, GL_TEXTURE_3D, texture);
+    let slices = [[1, 2, 3, 255].repeat(4), [5, 6, 7, 255].repeat(4), [9, 10, 11, 255].repeat(4)];
+    record::tex_image_3d(&mut context, GL_TEXTURE_3D, 0, 2, 2, 3, &slices.concat());
+    let buffer = context.buffers.gen();
+    record::bind_buffer(&mut context, GL_ARRAY_BUFFER, buffer);
+    record::buffer_data(&mut context, GL_ARRAY_BUFFER, &[0; 24], 0x88E4);
+    record::vertex_attrib_pointer(&mut context, 0, 2, GL_FLOAT, false, 8, 0);
+    record::enable_vertex_attrib(&mut context, 0);
+    record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut context, &mut sink).unwrap());
+    let batch = &sink.batches[0];
+    let texture_ir = batch.iter().find_map(|command| match command {
+        Cmd::CreateTexture(id, desc) if desc.dim == TextureDim::D3 && desc.depth == 3 => Some(*id), _ => None,
+    }).expect("three-slice texture");
+    assert_eq!(submit_ops(batch).iter().filter(|op| matches!(op, Enc::CopyBufferToTextureRegion { dst, .. } if *dst == texture_ir)).count(), 3);
+}
+
+#[test]
 fn sampler_cube_lowers_to_six_initialized_cube_layers() {
     let mut context = ctx_640x480();
     let mut sink = RecordingSink::with_full_caps();

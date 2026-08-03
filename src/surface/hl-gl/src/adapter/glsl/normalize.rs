@@ -78,9 +78,11 @@ impl<'a> NormalizedSource<'a> {
             ("texture2DProjLod(", "textureProjLod("),
             ("texture2DLod(", "textureLod("),
             ("textureCubeLod(", "textureLod("),
+            ("texture3DLod(", "textureLod("),
             ("texture2DProj(", "textureProj("),
             ("texture2D(", "texture("),
             ("textureCube(", "texture("),
+            ("texture3D(", "texture("),
         ] {
             sreplace(self.text, from, to);
         }

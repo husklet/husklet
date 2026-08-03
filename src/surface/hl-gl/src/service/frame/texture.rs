@@ -121,6 +121,7 @@ pub(super) fn lower_textures(
     for (declaration, name) in prog.samp_names.iter().enumerate() {
         let texture_dim = match prog.samp_types.get(declaration).map(String::as_str) {
             Some("samplerCube" | "isamplerCube" | "usamplerCube") => TextureDim::Cube,
+            Some("sampler3D" | "isampler3D" | "usampler3D") => TextureDim::D3,
             _ => TextureDim::D2,
         };
         let elements = prog

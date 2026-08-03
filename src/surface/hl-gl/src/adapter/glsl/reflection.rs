@@ -28,7 +28,7 @@ impl StageSources<'_> {
 impl TypeToken<'_> {
     pub(super) fn host_sampler(&self) -> Option<bool> {
         match self.0 {
-            "sampler2D" | "samplerCube" | "sampler2DArray" | "sampler2DShadow" => Some(false),
+            "sampler2D" | "samplerCube" | "sampler3D" | "sampler2DArray" | "sampler2DShadow" => Some(false),
             "samplerExternalOES" => Some(true),
             _ => None,
         }
