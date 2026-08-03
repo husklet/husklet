@@ -40,9 +40,10 @@ impl Verdict {
     /// Refuse a frame with the class of the error that caused it.
     pub fn for_error(error: &crate::protocol::model::error::GpuError) -> Self {
         match error {
-            crate::GpuError::Partial(error) if !error.is_fatal() => {
-                Verdict::Partial { kind: RefusalKind::for_error(error), commands: Vec::new(), replayable: false }
-            }
+            // Only an ExecutionOutcome owns the committed-prefix delta. A legacy Partial error carries
+            // no commands, so synthesizing an empty delta would tell the client to discard residency
+            // that may still exist on the host. Preserve only its refusal class here.
+            crate::GpuError::Partial(error) => Verdict::Refused(RefusalKind::for_error(error)),
             error => Verdict::Refused(RefusalKind::for_error(error)),
         }
     }

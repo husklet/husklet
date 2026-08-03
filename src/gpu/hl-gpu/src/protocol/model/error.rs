@@ -78,8 +78,8 @@ impl GpuError {
             | Self::TrailingBytes
             | Self::NonCanonicalBool(_)
             | Self::Panicked(_)
-            | Self::Decode(_)
-            | Self::Transport(_) => true,
+            | Self::Decode(_) => true,
+            Self::Transport(error) => !error.refusal(),
             Self::DuplicateId { .. }
             | Self::UnknownId { .. }
             | Self::Unsupported(_)

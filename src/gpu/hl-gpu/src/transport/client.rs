@@ -397,11 +397,8 @@ impl RemoteCommandSink {
             match ack {
                 ACK_OK => {
                     self.residency_reset = false;
-                    let persistent: Vec<Cmd> = current.iter().filter(|command| !matches!(command, Cmd::Submit(_) | Cmd::Present { .. } | Cmd::WaitFence { .. })).cloned().collect();
+                    let persistent: Vec<Cmd> = current.iter().filter(|command| !matches!(command, Cmd::Present { .. } | Cmd::WaitFence { .. })).cloned().collect();
                     self.residency.append(&persistent);
-                    if current.iter().any(|command| matches!(command, Cmd::Submit(_))) {
-                        self.residency.mark_nonreplayable();
-                    }
                     return Ok(());
                 }
                 partial if crate::transport::model::header::is_partial_ack(partial) => {
