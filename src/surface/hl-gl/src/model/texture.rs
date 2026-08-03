@@ -678,6 +678,10 @@ impl Textures {
         }
     }
 
+    pub(crate) fn ensure_default(&mut self, name: u32) {
+        self.materialize(name);
+    }
+
     /// Stable identity of the texture object currently named by `name`.
     pub fn object(&self, name: u32) -> Option<u64> {
         self.objects.get(&name).copied()

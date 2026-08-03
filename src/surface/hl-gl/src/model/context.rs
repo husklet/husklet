@@ -22,6 +22,9 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+/// Internal identities for the mutable default texture objects whose public binding name is zero.
+pub(crate) const DEFAULT_TEXTURE_CUBE: u32 = u32::MAX;
+
 #[derive(Clone)]
 pub(super) struct SharedTextureResidency {
     texture: u32,
@@ -435,7 +438,7 @@ impl GlContext {
     }
 
     pub fn bound_texture_for_target(&self, target: u32) -> u32 {
-        if matches!(
+        let cube = matches!(
             target,
             glconst::GL_TEXTURE_CUBE_MAP
                 | glconst::GL_TEXTURE_CUBE_MAP_POSITIVE_X
@@ -444,10 +447,16 @@ impl GlContext {
                 | glconst::GL_TEXTURE_CUBE_MAP_NEGATIVE_Y
                 | glconst::GL_TEXTURE_CUBE_MAP_POSITIVE_Z
                 | glconst::GL_TEXTURE_CUBE_MAP_NEGATIVE_Z
-        ) {
+        );
+        let name = if cube {
             self.local.cube_tex_unit[self.local.active_texture]
         } else {
             self.local.tex_unit[self.local.active_texture]
+        };
+        if name == 0 {
+            if cube { DEFAULT_TEXTURE_CUBE } else { 0 }
+        } else {
+            name
         }
     }
 
