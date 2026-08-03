@@ -1168,7 +1168,7 @@ mod tests {
             "the color half remains eligible for the attachment-load fast path"
         );
         let depth = depth_load(&run);
-        assert_eq!(depth.load, LoadOp::Clear);
+        assert_eq!(depth.stencil_load, LoadOp::Clear);
         assert_eq!(depth.stencil, 123);
     }
 
@@ -1205,7 +1205,9 @@ mod tests {
             };
             let run = [clear];
             assert!(RenderPasses::full_clear(&run).0.is_some());
-            assert_eq!(depth_load(&run).load, LoadOp::Clear);
+            let depth = depth_load(&run);
+            assert!(matches!(depth.depth_load, LoadOp::Clear)
+                || matches!(depth.stencil_load, LoadOp::Clear));
         }
     }
 
@@ -1347,7 +1349,7 @@ impl RenderPasses {
         let any_depth = draws
             .iter()
             .any(|d| !d.is_clear && d.depth || d.needs_rect_clear() && d.clears_depth())
-            || matches!(clear.load, LoadOp::Clear);
+            || matches!(clear.depth_load, LoadOp::Clear);
         if any_stencil {
             Some(TextureFormat::Depth24PlusStencil8)
         } else if any_depth {
@@ -1389,10 +1391,15 @@ pub(super) fn depth_attachment_for(
         ctx.depth_target(fbo, color_tex, w, h, with_stencil, attachments).ok()?;
     // A depth texture minted this frame has no prior contents to preserve — and a zero-initialized depth
     // plane fails every `GL_LESS` test — so its first pass always clear-loads regardless of the caller's op.
-    let load = if needs_create {
+    let depth_load = if needs_create {
         LoadOp::Clear
     } else {
-        clear.load
+        clear.depth_load
+    };
+    let stencil_load = if needs_create {
+        LoadOp::Clear
+    } else {
+        clear.stencil_load
     };
     if needs_create {
         cmds.push(Cmd::CreateTexture(
@@ -1434,12 +1441,12 @@ pub(super) fn depth_attachment_for(
     let depth_load = if preserve.iter().any(|(_, aspect)| *aspect == TextureAspect::DepthOnly) {
         LoadOp::Load
     } else {
-        load
+        depth_load
     };
     let stencil_load = if preserve.iter().any(|(_, aspect)| *aspect == TextureAspect::StencilOnly) {
         LoadOp::Load
     } else {
-        load
+        stencil_load
     };
     Some(DepthAttachment {
         texture: depth_tex,
@@ -1558,7 +1565,9 @@ impl Frame {
         // the pass with the colour attachment LOADing and the depth attachment carrying the clear.
         let depth = depth_load(&ctx.local.recording.draws);
         if !ctx.local.recording.draws.iter().any(DrawCall::clears_color) {
-            if !matches!(depth.load, LoadOp::Clear) {
+            if !matches!(depth.depth_load, LoadOp::Clear)
+                && !matches!(depth.stencil_load, LoadOp::Clear)
+            {
                 return None;
             }
             let cmds: Vec<Cmd> = Vec::new();

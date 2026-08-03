@@ -459,7 +459,7 @@ mod clone_tests {
 
         let (_, initial_depth, selected) = survivors(&draws);
 
-        assert_eq!(initial_depth.load, LoadOp::Clear);
+        assert_eq!(initial_depth.depth_load, LoadOp::Clear);
         assert_eq!(initial_depth.depth, 0.25);
         assert_eq!(selected.len(), 2);
         assert_eq!(depth_load(selected).depth, 0.75);
@@ -651,7 +651,8 @@ mod clone_tests {
             &mut ctx,
             &[],
             DepthClear {
-                load: LoadOp::Clear,
+                depth_load: LoadOp::Clear,
+                stencil_load: LoadOp::Clear,
                 depth: 0.25,
                 stencil: 37,
                 stencil_armed: true,
@@ -735,7 +736,8 @@ pub(super) fn segment_boundary_non_colour(d: &DrawCall) -> bool {
 /// time gave every depth clear in a frame the frame's final `glClearDepthf` value.
 #[derive(Clone, Copy)]
 pub(super) struct DepthClear {
-    pub(super) load: LoadOp,
+    pub(super) depth_load: LoadOp,
+    pub(super) stencil_load: LoadOp,
     pub(super) depth: f32,
     pub(super) stencil: i32,
     /// Whether a STENCIL clear armed this, so the pass takes a stencil-carrying format even when no draw
@@ -748,7 +750,8 @@ impl DepthClear {
     /// texture minted this frame still has to clear-load; see [`depth_attachment_for`]).
     pub(super) fn preserving() -> Self {
         Self {
-            load: LoadOp::Load,
+            depth_load: LoadOp::Load,
+            stencil_load: LoadOp::Load,
             depth: 1.0,
             stencil: 0,
             stencil_armed: false,
@@ -765,11 +768,11 @@ pub(super) fn depth_load(draws: &[DrawCall]) -> DepthClear {
             continue;
         }
         if d.clears_depth() {
-            clear.load = LoadOp::Clear;
+            clear.depth_load = LoadOp::Clear;
             clear.depth = d.clear_depth;
         }
         if d.clears_stencil() {
-            clear.load = LoadOp::Clear;
+            clear.stencil_load = LoadOp::Clear;
             clear.stencil = d.clear_stencil;
             clear.stencil_armed = true;
         }
@@ -859,11 +862,11 @@ pub(super) fn lower_segments(
             }
         }
         if d.clears_depth() {
-            dload.load = LoadOp::Clear;
+            dload.depth_load = LoadOp::Clear;
             dload.depth = d.clear_depth;
         }
         if d.clears_stencil() {
-            dload.load = LoadOp::Clear;
+            dload.stencil_load = LoadOp::Clear;
             dload.stencil = d.clear_stencil;
             dload.stencil_armed = true;
         }

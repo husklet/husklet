@@ -445,6 +445,108 @@ fn all_depth_loads(batch: &[Cmd]) -> Vec<LoadOp> {
         .collect()
 }
 
+fn wire_round_trip(batch: &[Cmd]) -> Vec<Cmd> {
+    let encoded = hl_gpu::Encoder::stream(batch);
+    hl_gpu::Decoder::stream(&encoded).expect("GL command stream must decode at the executor boundary")
+}
+
+fn combined_default_frame(clear_mask: u32, depth: f32, stencil: i32) -> Vec<Cmd> {
+    let mut context = ctx_64();
+    let mut sink = RecordingSink::with_full_caps();
+    flat_program(&mut context);
+    tri_vbo(&mut context, 8);
+    record::enable(&mut context, GL_DEPTH_TEST);
+    record::enable(&mut context, GL_STENCIL_TEST);
+
+    // Materialize and initialize the combined default-framebuffer storage first. The following frame must
+    // preserve the aspect that its clear mask does not name.
+    record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut context, &mut sink).unwrap());
+
+    record::clear_depth(&mut context, depth);
+    record::clear_stencil(&mut context, stencil);
+    record::clear_buffers(&mut context, clear_mask);
+    record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut context, &mut sink).unwrap());
+    wire_round_trip(&sink.batches[1])
+}
+
+fn cleared_depth_attachment(batch: &[Cmd]) -> &hl_gpu::protocol::model::descriptor::DepthAttachment {
+    batch
+        .iter()
+        .find_map(|command| match command {
+            Cmd::Submit(buffer) => buffer.encoder.iter().find_map(|operation| match operation {
+                Enc::BeginRenderPass {
+                    depth: Some(depth),
+                    ..
+                } if depth.depth_load == LoadOp::Clear
+                    || depth.stencil_load == LoadOp::Clear => Some(depth),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("a clear-loading depth/stencil executor descriptor")
+}
+
+#[test]
+fn default_fbo_depth_only_clear_survives_gl_wire_executor_boundary() {
+    let batch = combined_default_frame(GL_DEPTH_BUFFER_BIT, 0.25, 73);
+    let attachment = cleared_depth_attachment(&batch);
+    assert_eq!(attachment.depth_load, LoadOp::Clear);
+    assert_eq!(attachment.stencil_load, LoadOp::Load);
+    assert_eq!(attachment.clear_depth, 0.25);
+
+    let descriptor = batch.iter().find_map(|command| match command {
+        Cmd::CreateTexture(_, descriptor)
+            if descriptor.format == TextureFormat::Depth24PlusStencil8 => Some(descriptor),
+        _ => None,
+    });
+    assert!(
+        descriptor.is_none(),
+        "the second frame must reuse the executor's combined attachment"
+    );
+}
+
+#[test]
+fn default_fbo_stencil_only_clear_survives_gl_wire_executor_boundary() {
+    let batch = combined_default_frame(GL_STENCIL_BUFFER_BIT, 0.25, 73);
+    let attachment = cleared_depth_attachment(&batch);
+    assert_eq!(attachment.depth_load, LoadOp::Load);
+    assert_eq!(attachment.stencil_load, LoadOp::Clear);
+    assert_eq!(attachment.clear_stencil, 73);
+}
+
+#[test]
+fn default_fbo_without_depth_or_stencil_has_no_executor_attachment() {
+    let mut context = ctx_64();
+    let mut sink = RecordingSink::with_full_caps();
+    flat_program(&mut context);
+    tri_vbo(&mut context, 8);
+    record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut context, &mut sink).unwrap());
+    let batch = wire_round_trip(&sink.batches[0]);
+
+    assert!(!batch.iter().any(|command| matches!(
+        command,
+        Cmd::CreateTexture(_, descriptor)
+            if matches!(
+                descriptor.format,
+                TextureFormat::Depth32Float | TextureFormat::Depth24PlusStencil8
+            )
+    )));
+    assert!(batch
+        .iter()
+        .filter_map(|command| match command {
+            Cmd::Submit(buffer) => Some(&buffer.encoder),
+            _ => None,
+        })
+        .flatten()
+        .all(|operation| !matches!(
+            operation,
+            Enc::BeginRenderPass { depth: Some(_), .. }
+        )));
+}
+
 /// `glClear(GL_DEPTH_BUFFER_BIT)` clears DEPTH. It must not repaint the color buffer with the current
 /// `glClearColor` — the shim used to drop the mask, so every clear became a color clear.
 #[test]
