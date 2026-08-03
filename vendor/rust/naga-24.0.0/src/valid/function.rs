@@ -533,29 +533,30 @@ impl super::Validator {
                             .into_other());
                     }
 
-                    // The result expression must be an `__atomic_compare_exchange_result`
-                    // struct whose `old_value` member is of the same type as the atomic
-                    // we're operating on.
-                    let crate::TypeInner::Struct { ref members, .. } =
-                        context.types[result_ty].inner
-                    else {
+                    if comparison {
+                        // WGSL compare-exchange returns a struct containing the old value and success.
+                        let crate::TypeInner::Struct { ref members, .. } =
+                            context.types[result_ty].inner
+                        else {
+                            return Err(AtomicError::ResultTypeMismatch(result)
+                                .with_span_handle(result, context.expressions)
+                                .into_other());
+                        };
+                        if !validate_atomic_compare_exchange_struct(
+                            context.types,
+                            members,
+                            |ty: &crate::TypeInner| *ty == crate::TypeInner::Scalar(pointer_scalar),
+                        ) {
+                            return Err(AtomicError::ResultTypeMismatch(result)
+                                .with_span_handle(result, context.expressions)
+                                .into_other());
+                        }
+                    } else if !context.types[result_ty]
+                        .inner
+                        .equivalent(value_inner, context.types)
+                    {
+                        // Vulkan image/texel atomics expose only the old scalar value.
                         return Err(AtomicError::ResultTypeMismatch(result)
-                            .with_span_handle(result, context.expressions)
-                            .into_other());
-                    };
-                    if !validate_atomic_compare_exchange_struct(
-                        context.types,
-                        members,
-                        |ty: &crate::TypeInner| *ty == crate::TypeInner::Scalar(pointer_scalar),
-                    ) {
-                        return Err(AtomicError::ResultTypeMismatch(result)
-                            .with_span_handle(result, context.expressions)
-                            .into_other());
-                    }
-
-                    // The result expression must be for a comparison operation.
-                    if !comparison {
-                        return Err(AtomicError::ResultExpressionNotExchange(result)
                             .with_span_handle(result, context.expressions)
                             .into_other());
                     }

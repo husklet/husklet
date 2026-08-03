@@ -259,13 +259,19 @@ pub(in crate::wgsl) fn statement(
             array_index,
             value,
             result,
-            ..
+            fun,
         } => {
             remap(image);
             remap(coordinate);
             array_index.iter_mut().for_each(remap);
             remap(value);
             result.iter_mut().for_each(remap);
+            if let naga::AtomicFunction::Exchange {
+                compare: Some(compare),
+            } = fun
+            {
+                remap(compare);
+            }
         }
         Statement::WorkGroupUniformLoad { pointer, result } => {
             remap(pointer);

@@ -1,4 +1,4 @@
-use naga::{Expression, Handle, Span};
+use naga::{Arena, Expression, Handle, Span};
 
 pub(super) fn raw_words(
     function: &mut naga::Function,
@@ -7,13 +7,26 @@ pub(super) fn raw_words(
     bytes: u32,
     count: u32,
     prefix_words: u32,
+    atomic_kind: naga::ScalarKind,
 ) -> Vec<Handle<Expression>> {
     (0..count)
         .map(|word| {
             let pointer = raw_pointer(function, global, index, bytes, word, prefix_words);
-            function
+            let loaded = function
                 .expressions
-                .append(Expression::Load { pointer }, Span::default())
+                .append(Expression::Load { pointer }, Span::default());
+            if atomic_kind == naga::ScalarKind::Uint {
+                loaded
+            } else {
+                function.expressions.append(
+                    Expression::As {
+                        expr: loaded,
+                        kind: naga::ScalarKind::Uint,
+                        convert: None,
+                    },
+                    Span::default(),
+                )
+            }
         })
         .collect()
 }
@@ -26,7 +39,25 @@ pub(super) fn raw_pointer(
     word: u32,
     prefix_words: u32,
 ) -> Handle<Expression> {
-    let index = function.expressions.append(
+    raw_pointer_in(
+        &mut function.expressions,
+        global,
+        index,
+        bytes,
+        word,
+        prefix_words,
+    )
+}
+
+pub(super) fn raw_pointer_in(
+    expressions: &mut Arena<Expression>,
+    global: Handle<naga::GlobalVariable>,
+    index: Handle<Expression>,
+    bytes: u32,
+    word: u32,
+    prefix_words: u32,
+) -> Handle<Expression> {
+    let index = expressions.append(
         Expression::As {
             expr: index,
             kind: naga::ScalarKind::Uint,
@@ -34,20 +65,16 @@ pub(super) fn raw_pointer(
         },
         Span::default(),
     );
-    let source = function
-        .expressions
-        .append(Expression::GlobalVariable(global), Span::default());
-    let field = function.expressions.append(
+    let source = expressions.append(Expression::GlobalVariable(global), Span::default());
+    let field = expressions.append(
         Expression::AccessIndex {
             base: source,
             index: 0,
         },
         Span::default(),
     );
-    let bytes = function
-        .expressions
-        .append(Expression::Literal(naga::Literal::U32(bytes)), Span::default());
-    let base = function.expressions.append(
+    let bytes = expressions.append(Expression::Literal(naga::Literal::U32(bytes)), Span::default());
+    let base = expressions.append(
         Expression::Binary {
             op: naga::BinaryOperator::Multiply,
             left: index,
@@ -55,10 +82,8 @@ pub(super) fn raw_pointer(
         },
         Span::default(),
     );
-    let four = function
-        .expressions
-        .append(Expression::Literal(naga::Literal::U32(4)), Span::default());
-    let base = function.expressions.append(
+    let four = expressions.append(Expression::Literal(naga::Literal::U32(4)), Span::default());
+    let base = expressions.append(
         Expression::Binary {
             op: naga::BinaryOperator::Divide,
             left: base,
@@ -66,11 +91,11 @@ pub(super) fn raw_pointer(
         },
         Span::default(),
     );
-    let offset = function.expressions.append(
+    let offset = expressions.append(
         Expression::Literal(naga::Literal::U32(word + prefix_words)),
         Span::default(),
     );
-    let at = function.expressions.append(
+    let at = expressions.append(
         Expression::Binary {
             op: naga::BinaryOperator::Add,
             left: base,
@@ -78,7 +103,5 @@ pub(super) fn raw_pointer(
         },
         Span::default(),
     );
-    function
-        .expressions
-        .append(Expression::Access { base: field, index: at }, Span::default())
+    expressions.append(Expression::Access { base: field, index: at }, Span::default())
 }
