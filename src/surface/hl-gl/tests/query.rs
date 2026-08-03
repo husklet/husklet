@@ -129,6 +129,24 @@ fn num_extensions_matches_the_extension_string() {
 }
 
 #[test]
+fn gles3_vertex_array_reset_accepts_fixed_restart_capability() {
+    let mut context = ctx_800x600();
+
+    record::bind_vertex_array(&mut context, 0);
+    record::disable(&mut context, GL_PRIMITIVE_RESTART_FIXED_INDEX);
+    record::bind_buffer(&mut context, GL_DRAW_INDIRECT_BUFFER, 0);
+    context.disable_vertex_attrib(0);
+    record::vertex_attrib_pointer(&mut context, 0, 4, GL_FLOAT, false, 0, 0);
+    record::vertex_attrib_divisor(&mut context, 0, 0);
+
+    assert_eq!(context.take_gl_error(), GL_NO_ERROR);
+    assert!(context.is_enabled(GL_PRIMITIVE_RESTART_FIXED_INDEX));
+    record::enable(&mut context, GL_PRIMITIVE_RESTART_FIXED_INDEX);
+    assert!(context.is_enabled(GL_PRIMITIVE_RESTART_FIXED_INDEX));
+    assert_eq!(context.take_gl_error(), GL_NO_ERROR);
+}
+
+#[test]
 fn advertised_khr_debug_accepts_the_cts_reset_sequence() {
     assert!(ADVERTISED.contains(&"GL_KHR_debug"));
 
