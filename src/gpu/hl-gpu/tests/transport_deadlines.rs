@@ -2,6 +2,7 @@ use hl_gpu::{
     Capabilities, Cmd, CommandBuffer, CommandSink, FenceId, GpuError, ReadbackRequest,
     RemoteCommandSink, TransportConfig, TransportError, TransportPhase,
 };
+use hl_gpu::transport::model::readback::readback_kind;
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -300,6 +301,43 @@ fn unbounded_fence_wait_uses_bounded_requests_until_complete() {
 
     let mut sink = RemoteCommandSink::with_config(socket.0.to_string_lossy(), config());
     sink.wait(FenceId(1), 1).unwrap();
+    server.join().unwrap();
+}
+
+#[test]
+fn observer_preserves_sync_authorization_for_import_wait_release() {
+    let socket = Socket::new("observer-sync-auth");
+    let listener = UnixListener::bind(&socket.0).unwrap();
+    let export = hl_gpu::SyncExportId::from_parts(0x1122, 0x3344_5566_7788_99aa);
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        handshake(&stream);
+        for (kind, response) in [
+            (readback_kind::IMPORT_SYNC, &[][..]),
+            (readback_kind::WAIT_SYNC, &[1][..]),
+            (readback_kind::RELEASE_SYNC, &[][..]),
+        ] {
+            let request = readback(&mut stream);
+            assert_eq!(request.kind, kind);
+            assert_eq!(request.offset, export.serial());
+            assert_eq!(request.authenticity, export.authenticity());
+            hl_gpu::transport::adapter::unix::Connection::new(&stream)
+                .write_readback_response(
+                    hl_gpu::transport::model::readback::READBACK_OK,
+                    response,
+                )
+                .unwrap();
+        }
+    });
+
+    let sink = RemoteCommandSink::with_config(socket.0.to_string_lossy(), config());
+    let mut observer = sink.observer();
+    observer.import_sync(export).unwrap();
+    assert_eq!(
+        observer.wait_sync(export, 7, 1_000_000).unwrap(),
+        hl_gpu::TimelineWait::Reached
+    );
+    observer.release_sync(export).unwrap();
     server.join().unwrap();
 }
 

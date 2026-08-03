@@ -148,12 +148,27 @@ pub fn queue_submit_outcome(
     );
     hl_log::hl_count!(hl_log::tag::VULKAN, "submits");
     hl_log::hl_add!(hl_log::tag::VULKAN, "cmds", batch.len() as u64);
-    sink.submit(&batch).map_err(QueueSubmitError::Uncommitted)?;
+    let outcome = sink.submit_outcome(&batch);
+    let committed_error = match outcome.error {
+        None => None,
+        Some(error @ GpuError::Partial(_)) => Some(error),
+        Some(error) if outcome.committed.is_empty() => {
+            return Err(QueueSubmitError::Uncommitted(error))
+        }
+        Some(error) => Some(error),
+    };
+    let committed_submits = outcome
+        .committed
+        .iter()
+        .filter(|command| matches!(command, Cmd::Submit(_)))
+        .count();
 
     // From this point the host work is committed. Publish completion state before fallible readback
     // refreshes so callers can never roll queue synchronization back over work that already executed.
-    dev.clear_pending_uploads();
-    for &cb in command_buffers {
+    if committed_error.is_none() {
+        dev.clear_pending_uploads();
+    }
+    for &cb in command_buffers.iter().take(committed_submits) {
         if let Some(rec) = dev.command_buffers.get_mut(&cb) {
             rec.state = if rec.one_time_submit {
                 CommandBufferState::Pending
@@ -162,11 +177,20 @@ pub fn queue_submit_outcome(
             };
         }
     }
-    if let Some((f, _, value)) = signal {
+    let fence_committed = signal.is_some_and(|(_, ir, value)| {
+        outcome.committed.iter().any(|command| {
+            matches!(command, Cmd::Submit(buffer) if buffer.signal == Some((ir, value)))
+        })
+    });
+    if fence_committed {
+        let (f, _, value) = signal.unwrap();
         if let Some(fence) = dev.fences.get_mut(&f) {
             fence.value = value;
             fence.signaled = true;
         }
+    }
+    if let Some(error) = committed_error {
+        return Err(QueueSubmitError::Committed(error));
     }
 
     // HOST_COHERENT mappings remain valid across GPU execution. Refresh only buffers that the recorded

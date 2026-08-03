@@ -69,6 +69,7 @@ pub struct RemoteCommandSink {
     trace: bool,
     config: TransportConfig,
     terminal: Option<TransportError>,
+    last_partial_commands: Option<Vec<Cmd>>,
     /// Error-level diagnostics already emitted for the CURRENT connection generation, so a persistent
     /// failure on the per-frame submit path prints a handful of legible lines rather than one per frame.
     /// Keyed `(class, code)`; cleared whenever `generation` advances, because a fresh executor is a fresh
@@ -107,6 +108,7 @@ impl RemoteCommandSink {
             trace: false,
             config: TransportConfig::default(),
             terminal: None,
+            last_partial_commands: None,
             reported: HashSet::new(),
             reported_generation: 0,
             _single_writer: PhantomData,
@@ -281,6 +283,7 @@ impl RemoteCommandSink {
                 continue;
             }
             let replaying = self.residency_reset;
+            let replay_prefix_commands = replaying.then_some(self.residency.cmds.len()).unwrap_or(0);
             let mut payload = if replaying {
                 match self.residency.replay_bytes() {
                     Ok(payload) => payload,
@@ -412,6 +415,13 @@ impl RemoteCommandSink {
                 partial if crate::transport::model::header::is_partial_ack(partial) => {
                     self.residency_reset = false;
                     let (commands, replayable) = committed_delta.expect("partial acknowledgement carries a committed delta");
+                    self.last_partial_commands = Some(
+                        commands
+                            .iter()
+                            .skip(replay_prefix_commands)
+                            .cloned()
+                            .collect(),
+                    );
                     if replaying {
                         // The host executed `replay-prefix + current` as one batch, so this is the complete
                         // authoritative post-frame state. Replacing avoids duplicating the replay prefix.
@@ -503,6 +513,7 @@ impl CommandSink for RemoteCommandSink {
     }
 
     fn submit(&mut self, batch: &[Cmd]) -> Result<()> {
+        self.last_partial_commands = None;
         let diagnostics = self.diagnostics();
         let encode_started = diagnostics.then(std::time::Instant::now);
         let ir = crate::protocol::codec::Encoder::stream(batch);
@@ -510,6 +521,19 @@ impl CommandSink for RemoteCommandSink {
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
         self.submit_ir(&ir, batch, encode_us)
+    }
+
+    fn submit_outcome(&mut self, batch: &[Cmd]) -> crate::SinkSubmitOutcome {
+        match self.submit(batch) {
+            Ok(()) => crate::SinkSubmitOutcome {
+                committed: batch.to_vec(),
+                error: None,
+            },
+            Err(error) => crate::SinkSubmitOutcome {
+                committed: self.last_partial_commands.take().unwrap_or_default(),
+                error: Some(error),
+            },
+        }
     }
 
     fn wait(&mut self, fence: FenceId, value: u64) -> Result<()> {

@@ -148,6 +148,32 @@ impl<E: GpuExecutor> CommandSink for InProcessCommandSink<E> {
         Ok(())
     }
 
+    fn submit_outcome(&mut self, batch: &[Cmd]) -> crate::SinkSubmitOutcome {
+        if let Err(error) = self.ensure_open() {
+            return crate::SinkSubmitOutcome { committed: Vec::new(), error: Some(error) };
+        }
+        let frame_bytes = crate::protocol::codec::Encoder::stream(batch).len();
+        match crate::runtime::submit_outcome(
+            &mut self.session,
+            &mut self.exec,
+            frame_bytes,
+            batch,
+        ) {
+            Ok(outcome) => crate::SinkSubmitOutcome {
+                committed: outcome
+                    .committed
+                    .commands
+                    .into_iter()
+                    .map(|command| command.command)
+                    .collect(),
+                error: outcome
+                    .refusal
+                    .map(|error| crate::GpuError::Partial(Box::new(error))),
+            },
+            Err(error) => crate::SinkSubmitOutcome { committed: Vec::new(), error: Some(error) },
+        }
+    }
+
     fn wait(&mut self, fence: FenceId, value: u64) -> Result<()> {
         self.ensure_open()?;
         dispatch::wait(&mut self.session, &mut self.exec, fence, value)

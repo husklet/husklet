@@ -1,5 +1,6 @@
 use super::*;
 use hl_gpu::protocol::model::descriptor::{Extent3d, Mirror, Origin3d};
+use hl_vulkan::model::command::CommandBufferState;
 #[test]
 fn copy_buffer_to_image_usage_and_bounds_errors() {
     let mut d = dev();
@@ -648,4 +649,50 @@ fn fence_status_reset_and_fence_only_submit_signals() {
     submit::wait_for_fence(&mut d, &mut s, fence).unwrap();
     assert!(d.is_fence_signaled(fence).unwrap());
     assert!(!s.waits.is_empty());
+}
+
+#[test]
+fn partial_submit_commits_only_the_reported_prefix() {
+    struct PartialSink(RecordingSink);
+    impl hl_gpu::CommandSink for PartialSink {
+        fn negotiate(&mut self, request: &hl_gpu::FeatureRequest) -> hl_gpu::Result<hl_gpu::Capabilities> {
+            self.0.negotiate(request)
+        }
+        fn submit(&mut self, batch: &[Cmd]) -> hl_gpu::Result<()> {
+            self.0.submit(batch)
+        }
+        fn submit_outcome(&mut self, batch: &[Cmd]) -> hl_gpu::SinkSubmitOutcome {
+            self.0.batches.push(batch.to_vec());
+            let committed = batch
+                .iter()
+                .find(|command| matches!(command, Cmd::Submit(_)))
+                .cloned()
+                .into_iter()
+                .collect();
+            hl_gpu::SinkSubmitOutcome {
+                committed,
+                error: Some(GpuError::Partial(Box::new(GpuError::Kernel(
+                    "injected second submit refusal".into(),
+                )))),
+            }
+        }
+        fn wait(&mut self, fence: hl_gpu::FenceId, value: u64) -> hl_gpu::Result<()> {
+            self.0.wait(fence, value)
+        }
+    }
+
+    let mut d = dev();
+    let mut sink = PartialSink(sink());
+    let first = d.allocate_command_buffer();
+    let second = d.allocate_command_buffer();
+    for cb in [first, second] {
+        d.begin_command_buffer(cb, true).unwrap();
+        d.end_command_buffer(cb).unwrap();
+    }
+    let fence = create::create_fence(&mut d, &mut sink, false).unwrap();
+    let outcome = submit::queue_submit_outcome(&mut d, &mut sink, &[first, second], Some(fence));
+    assert!(matches!(outcome, Err(submit::QueueSubmitError::Committed(_))));
+    assert_eq!(d.command_buffers[&first].state, CommandBufferState::Pending);
+    assert_eq!(d.command_buffers[&second].state, CommandBufferState::Executable);
+    assert!(!d.is_fence_signaled(fence).unwrap());
 }
