@@ -21,7 +21,7 @@ impl Format {
     pub fn is_shadow(self) -> bool {
         matches!(
             self.0,
-            TextureFormat::R10x6g10x6b10x6a10x6Unorm | TextureFormat::Rgb9e5Ufloat
+            TextureFormat::R10x6g10x6b10x6a10x6Unorm
         )
     }
 
@@ -137,7 +137,7 @@ impl Format {
             TextureFormat::Rg32Float => W::Rg32Float,
             TextureFormat::Rg32Uint => W::Rg32Uint,
             TextureFormat::Rg32Sint => W::Rg32Sint,
-            TextureFormat::Rgb9e5Ufloat => W::Rgba16Float,
+            TextureFormat::Rgb9e5Ufloat => W::Rgb9e5Ufloat,
             TextureFormat::Rgb10a2Unorm => W::Rgb10a2Unorm,
             TextureFormat::Rgb10a2Uint => W::Rgb10a2Uint,
             TextureFormat::Rg11b10Ufloat => W::Rg11b10Ufloat,
@@ -311,7 +311,7 @@ mod clear_texel_tests {
 }
 
 #[cfg(test)]
-mod shadow_format_tests {
+mod packed_format_tests {
     use super::Format;
     use hl_gpu::protocol::model::enums::TextureFormat;
 
@@ -357,8 +357,8 @@ mod shadow_format_tests {
             (
                 TextureFormat::Rgb9e5Ufloat,
                 &[0x00, 0x01, 0x02, 0x84],
-                wgpu::TextureFormat::Rgba16Float,
-                8,
+                wgpu::TextureFormat::Rgb9e5Ufloat,
+                4,
             ),
         ];
         for &(logical, bytes, native_format, native_len) in cases {
@@ -372,5 +372,13 @@ mod shadow_format_tests {
                 "{logical:?}"
             );
         }
+    }
+
+    #[test]
+    fn rgb9e5_uses_its_exact_native_layout() {
+        let format = Format::from(TextureFormat::Rgb9e5Ufloat);
+        assert_eq!(format.native(), wgpu::TextureFormat::Rgb9e5Ufloat);
+        assert_eq!(format.native_texel_bytes().unwrap(), 4);
+        assert!(!format.needs_transfer_conversion());
     }
 }
