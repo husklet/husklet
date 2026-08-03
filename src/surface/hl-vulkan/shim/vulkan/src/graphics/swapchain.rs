@@ -31,6 +31,26 @@ pub extern "C" fn vkCreateSwapchainKHR(
         let presenter_id = window
             .map(|window| PresenterId::Wayland(window.surface))
             .unwrap_or(PresenterId::Surface(ci.surface));
+        let presentation_target = match presenter_id {
+            PresenterId::Surface(surface) => {
+                hl_vulkan::model::queue::PresentationTarget::Surface(surface)
+            }
+            PresenterId::Wayland(window) => {
+                hl_vulkan::model::queue::PresentationTarget::Window(window as u64)
+            }
+        };
+        if ci.old_swapchain == 0 {
+            let Some((dev, _)) = s.device_and_sink() else {
+                return VK_ERROR_INITIALIZATION_FAILED;
+            };
+            let status = active_target_status(
+                ci.old_swapchain,
+                present::has_active_swapchain(dev, presentation_target),
+            );
+            if status != VK_SUCCESS {
+                return status;
+            }
+        }
         let queue_family_indices_valid = if ci.image_sharing_mode == 1 {
             if ci.queue_family_index_count <= 1 || ci.p_queue_family_indices.is_null() {
                 false
@@ -52,6 +72,7 @@ pub extern "C" fn vkCreateSwapchainKHR(
         let config = present::SwapchainConfig {
             application_surface: ci.surface,
             application_surface_live: s.surfaces.contains(&ci.surface),
+            presentation_target,
             flags: ci.flags,
             min_image_count: ci.min_image_count,
             image_format: ci.image_format as u32,
@@ -77,6 +98,14 @@ pub extern "C" fn vkCreateSwapchainKHR(
         }
         if !old_presenter_matches(&s.presenters, ci.old_swapchain, presenter_id) {
             return VK_ERROR_INITIALIZATION_FAILED;
+        }
+        {
+            let Some((dev, _)) = s.device_and_sink() else {
+                return VK_ERROR_INITIALIZATION_FAILED;
+            };
+            if let Err(error) = present::retire_swapchain(dev, ci.old_swapchain) {
+                return Status::from_error(&error);
+            }
         }
         let mut hard_error = None;
         s.presenters.ensure(presenter_id, || {
@@ -133,13 +162,14 @@ pub extern "C" fn vkCreateSwapchainKHR(
         };
         let r = (|| {
             let surface = Swapchain::create_surface(dev, sink, ci, token)?;
-            present::create_swapchain_for_surface(
+            present::create_swapchain_for_target(
                 dev,
                 sink,
                 surface,
                 ci.surface,
+                presentation_target,
                 ci.min_image_count,
-                ci.old_swapchain,
+                0,
             )
         })();
         match r {
@@ -169,6 +199,14 @@ fn old_presenter_matches(
     target: PresenterId,
 ) -> bool {
     old_swapchain == 0 || presenters.surface(old_swapchain) == Some(target)
+}
+
+fn active_target_status(old_swapchain: u64, active: bool) -> VkResult {
+    if old_swapchain == 0 && active {
+        VK_ERROR_NATIVE_WINDOW_IN_USE_KHR
+    } else {
+        VK_SUCCESS
+    }
 }
 
 /// Create the GPU surface a swapchain presents through (extent/format from the swapchain create info).
@@ -551,6 +589,16 @@ mod tests {
         assert!(old_presenter_matches(&presenters, 7, first));
         assert!(!old_presenter_matches(&presenters, 7, foreign));
         assert!(!old_presenter_matches(&presenters, 8, first));
+    }
+
+    #[test]
+    fn duplicate_active_target_without_old_swapchain_reports_native_window_in_use() {
+        assert_eq!(
+            active_target_status(0, true),
+            VK_ERROR_NATIVE_WINDOW_IN_USE_KHR
+        );
+        assert_eq!(active_target_status(0, false), VK_SUCCESS);
+        assert_eq!(active_target_status(7, true), VK_SUCCESS);
     }
 
     #[test]

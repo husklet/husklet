@@ -44,8 +44,10 @@ currently exposes only queue family 0.
 This validation is deliberately not presented as semaphore support. The synchronization work above remains
 required before acquire, submit, or present wait/signal parameters can be honored.
 
-Swapchains retain the application `VkSurfaceKHR` separately from their internal GPU surface. A successful
-same-surface replacement retires the old chain: images acquired before retirement may still be presented,
-but no further acquire is accepted. Dead surfaces and cross-surface `oldSwapchain` handles are rejected
-before presenter or GPU allocation. Only FIFO is advertised until MAILBOX and IMMEDIATE have distinct
+Swapchains retain both the application `VkSurfaceKHR` and the underlying native presentation target
+separately from their internal GPU surface. Replacement follows the native target, so two Vulkan surface
+wrappers around one window are compatible. Once a replacement request is validated, the old chain is
+retired before any fallible allocation—even if creation later fails. Images acquired before retirement may
+still be presented, but no further acquire is accepted. A second active chain without `oldSwapchain` returns
+`VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`. Only FIFO is advertised until MAILBOX and IMMEDIATE have distinct
 queueing behavior.

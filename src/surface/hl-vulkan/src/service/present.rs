@@ -13,8 +13,8 @@ use crate::model::instance::QUEUE_FAMILY_INDEX;
 use crate::model::memory::ImageRec;
 use crate::model::memory::{vk_format, Format};
 use crate::model::queue::{
-    ImageState, SurfaceCapabilities, SurfaceFormat, SurfaceRec, SwapImage, SwapchainRec,
-    COMPOSITE_ALPHA_OPAQUE_BIT, CURRENT_EXTENT_UNDEFINED, SURFACE_IMAGE_USAGE,
+    ImageState, PresentationTarget, SurfaceCapabilities, SurfaceFormat, SurfaceRec, SwapImage,
+    SwapchainRec, COMPOSITE_ALPHA_OPAQUE_BIT, CURRENT_EXTENT_UNDEFINED, SURFACE_IMAGE_USAGE,
     SURFACE_TRANSFORM_IDENTITY_BIT, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, VK_PRESENT_MODE_FIFO_KHR,
 };
 use crate::*;
@@ -88,6 +88,7 @@ pub fn surface_present_modes() -> Vec<i32> {
 pub struct SwapchainConfig {
     pub application_surface: VkSurfaceKHR,
     pub application_surface_live: bool,
+    pub presentation_target: PresentationTarget,
     pub flags: u32,
     pub min_image_count: u32,
     pub image_format: u32,
@@ -127,13 +128,17 @@ pub fn validate_swapchain(dev: &Device, config: SwapchainConfig) -> Result<()> {
         1 => config.queue_family_index_count > 1 && config.queue_family_indices_valid,
         _ => false,
     };
-    let old_valid = config.old_swapchain == 0
-        || dev
-            .swapchains
+    let old_valid = if config.old_swapchain == 0 {
+        !dev.swapchains.values().any(|swapchain| {
+            !swapchain.retired && swapchain.presentation_target == config.presentation_target
+        })
+    } else {
+        dev.swapchains
             .get(&config.old_swapchain)
             .is_some_and(|old| {
-                !old.retired && old.application_surface == config.application_surface
-            });
+                !old.retired && old.presentation_target == config.presentation_target
+            })
+    };
     if config.application_surface_live
         && config.flags == 0
         && count_valid
@@ -153,6 +158,12 @@ pub fn validate_swapchain(dev: &Device, config: SwapchainConfig) -> Result<()> {
             "vkCreateSwapchainKHR: create info exceeds advertised surface capabilities",
         ))
     }
+}
+
+pub fn has_active_swapchain(dev: &Device, target: PresentationTarget) -> bool {
+    dev.swapchains
+        .values()
+        .any(|swapchain| !swapchain.retired && swapchain.presentation_target == target)
 }
 
 /// `vkCreate*SurfaceKHR` — mint an hl-GPU surface id and submit [`Cmd::CreateSurface`]. `hlp_surface`
@@ -205,29 +216,43 @@ pub fn create_swapchain(
     surface: VkSurfaceKHR,
     image_count: u32,
 ) -> Result<VkSwapchainKHR> {
-    create_swapchain_for_surface(dev, sink, surface, surface, image_count, 0)
+    create_swapchain_for_target(
+        dev,
+        sink,
+        surface,
+        surface,
+        PresentationTarget::Surface(surface),
+        image_count,
+        0,
+    )
 }
 
 /// Create a swapchain associated with the application-visible surface and optionally replace an active
 /// chain. The old chain is retired only after the replacement and all of its images are live.
-pub fn create_swapchain_for_surface(
+pub fn create_swapchain_for_target(
     dev: &mut Device,
     sink: &mut dyn CommandSink,
     surface: VkSurfaceKHR,
     application_surface: VkSurfaceKHR,
+    presentation_target: PresentationTarget,
     image_count: u32,
     old_swapchain: VkSwapchainKHR,
 ) -> Result<VkSwapchainKHR> {
-    if old_swapchain != 0
-        && !dev
-            .swapchains
+    let replacement_valid = if old_swapchain == 0 {
+        !dev.swapchains.values().any(|swapchain| {
+            !swapchain.retired && swapchain.presentation_target == presentation_target
+        })
+    } else {
+        dev.swapchains
             .get(&old_swapchain)
-            .is_some_and(|old| !old.retired && old.application_surface == application_surface)
-    {
+            .is_some_and(|old| !old.retired && old.presentation_target == presentation_target)
+    };
+    if !replacement_valid {
         return Err(GpuError::Invalid(
-            "vkCreateSwapchainKHR: old swapchain is retired or belongs to another surface",
+            "vkCreateSwapchainKHR: presentation target already has an active swapchain",
         ));
     }
+    retire_swapchain(dev, old_swapchain)?;
     let (width, height, format) = {
         let s = dev.surfaces.get(&surface).ok_or(GpuError::Invalid(
             "vkCreateSwapchainKHR: unknown VkSurfaceKHR",
@@ -318,18 +343,11 @@ pub fn create_swapchain_for_surface(
         });
     }
     let handle = dev.alloc_handle();
-    if old_swapchain != 0 {
-        // Validated before allocation and the swapchain table has not been mutated since. All fallible
-        // replacement work is complete, so retirement and insertion below form the infallible commit.
-        dev.swapchains
-            .get_mut(&old_swapchain)
-            .expect("validated old swapchain remains live until replacement commit")
-            .retired = true;
-    }
     dev.swapchains.insert(
         handle,
         SwapchainRec {
             application_surface,
+            presentation_target,
             surface,
             width,
             height,
@@ -340,6 +358,27 @@ pub fn create_swapchain_for_surface(
         },
     );
     Ok(handle)
+}
+
+/// Retire an old swapchain before replacement allocation. Vulkan retires it even if creation subsequently
+/// fails; acquired images remain presentable because retirement changes only acquisition eligibility.
+pub fn retire_swapchain(dev: &mut Device, old_swapchain: VkSwapchainKHR) -> Result<()> {
+    if old_swapchain == 0 {
+        return Ok(());
+    }
+    let old = dev
+        .swapchains
+        .get_mut(&old_swapchain)
+        .ok_or(GpuError::Invalid(
+            "vkCreateSwapchainKHR: unknown old swapchain",
+        ))?;
+    if old.retired {
+        return Err(GpuError::Invalid(
+            "vkCreateSwapchainKHR: old swapchain is already retired",
+        ));
+    }
+    old.retired = true;
+    Ok(())
 }
 
 /// `vkGetSwapchainImagesKHR` — the `VkImage` handles for the swapchain's presentable images, in index
