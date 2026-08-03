@@ -15,6 +15,8 @@ pub struct FrameState {
     fbo_targets: HashMap<(u32, u64), (u32, u32)>,
     depth_targets: HashMap<DepthTargetKey, u32>,
     depth_target_current: HashMap<(u32, bool), (DepthTargetKey, u32)>,
+    depth_aspect_current: HashMap<(u32, u64), u32>,
+    stencil_aspect_current: HashMap<(u32, u64), u32>,
     tex_ir_cache: HashMap<u32, (u32, (u64, u64, bool))>,
     shared_tex_ir_cache: HashMap<(u64, u64, u32, u32, u32), SharedTextureResidency>,
     shared_target_cache: HashMap<u64, SharedTargetResidency>,
@@ -43,6 +45,8 @@ impl GlContext {
             fbo_targets: self.fbo_targets.clone(),
             depth_targets: self.depth_targets.clone(),
             depth_target_current: self.depth_target_current.clone(),
+            depth_aspect_current: self.depth_aspect_current.clone(),
+            stencil_aspect_current: self.stencil_aspect_current.clone(),
             tex_ir_cache: self.tex_ir_cache.clone(),
             shared_tex_ir_cache: self.shared_tex_ir_cache.clone(),
             shared_target_cache: self.shared_target_cache.clone(),
@@ -67,6 +71,8 @@ impl GlContext {
         self.fbo_targets = state.fbo_targets;
         self.depth_targets = state.depth_targets;
         self.depth_target_current = state.depth_target_current;
+        self.depth_aspect_current = state.depth_aspect_current;
+        self.stencil_aspect_current = state.stencil_aspect_current;
         self.tex_ir_cache = state.tex_ir_cache;
         self.shared_tex_ir_cache = state.shared_tex_ir_cache;
         self.shared_target_cache = state.shared_target_cache;

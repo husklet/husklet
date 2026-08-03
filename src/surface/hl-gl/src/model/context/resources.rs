@@ -8,6 +8,8 @@ impl Default for GlContext {
 
 impl GlContext {
     pub(crate) fn retire_sampled_texture_generation(&mut self, gl_name: u32, generation: u64) {
+        self.depth_aspect_current.remove(&(gl_name, generation));
+        self.stencil_aspect_current.remove(&(gl_name, generation));
         if self
             .tex_ir_cache
             .get(&gl_name)
@@ -45,6 +47,8 @@ impl GlContext {
             external_targets: HashMap::new(),
             depth_targets: HashMap::new(),
             depth_target_current: HashMap::new(),
+            depth_aspect_current: HashMap::new(),
+            stencil_aspect_current: HashMap::new(),
             tex_ir_cache: HashMap::new(),
             shared_tex_ir_cache: HashMap::new(),
             shared_target_cache: HashMap::new(),
@@ -105,6 +109,10 @@ impl GlContext {
     /// removed from the residency caches (so a subsequent bind of the same GL name re-resolves to a fresh id)
     /// and their `Destroy*` are queued for the next submitted frame. A no-op when the name owns no IR yet.
     pub fn retire_texture(&mut self, gl_name: u32) {
+        self.depth_aspect_current
+            .retain(|(name, _), _| *name != gl_name);
+        self.stencil_aspect_current
+            .retain(|(name, _), _| *name != gl_name);
         if let Some((ir, _)) = self.tex_ir_cache.remove(&gl_name) {
             self.pending_destroys.push(Cmd::DestroyTexture(ir));
         }

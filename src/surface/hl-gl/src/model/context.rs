@@ -112,6 +112,8 @@ pub struct GlContext {
     /// attachment while a plain depth pass keeps its depth-only one (the two carry different formats).
     depth_targets: HashMap<DepthTargetKey, u32>,
     depth_target_current: HashMap<(u32, bool), (DepthTargetKey, u32)>,
+    depth_aspect_current: HashMap<(u32, u64), u32>,
+    stencil_aspect_current: HashMap<(u32, u64), u32>,
 
     /// Residency cache for sampled GL textures uploaded from CPU pixels: GL texture name → `(texture_ir,
     /// uploaded_gen)`. A texture is `CreateTexture`d + staged + `CopyBufferToTexture`d ONCE (per content

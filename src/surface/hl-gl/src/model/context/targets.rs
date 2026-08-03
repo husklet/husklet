@@ -1,6 +1,6 @@
 use super::local::SurfaceTarget;
 use super::*;
-use hl_gpu::protocol::model::enums::{TextureDim, TextureFormat};
+use hl_gpu::protocol::model::enums::{TextureAspect, TextureDim, TextureFormat};
 
 impl GlContext {
     pub(crate) fn forget_framebuffer_depth_target(&mut self, fbo: u32) {
@@ -324,7 +324,11 @@ impl GlContext {
         fbo: u32,
         color_tex: u32,
         with_stencil: bool,
-    ) -> hl_gpu::Result<(u32, bool, Option<(u32, hl_gpu::protocol::model::enums::TextureAspect)>)> {
+    ) -> hl_gpu::Result<(
+        u32,
+        bool,
+        Vec<(u32, hl_gpu::protocol::model::enums::TextureAspect)>,
+    )> {
         let attachment = |source: Option<(u32, bool)>| {
             source.and_then(|(name, renderbuffer)| {
                 let texture = if renderbuffer {
@@ -354,21 +358,36 @@ impl GlContext {
             with_stencil,
         };
         let current_key = (fbo, with_stencil);
-        if let Some(&depth) = self.depth_targets.get(&key) {
-            self.depth_target_current.insert(current_key, (key, depth));
-            Ok((depth, false, None))
+        let (depth, needs_create) = if let Some(&depth) = self.depth_targets.get(&key) {
+            (depth, false)
         } else {
             let depth = self.alloc_texture_ir()?;
-            let preserve = self.depth_target_current.get(&current_key).and_then(|(old, old_ir)| {
-                preserved_aspect(*old, key).map(|aspect| (*old_ir, aspect))
-            });
             self.depth_targets.insert(key, depth);
-            self.depth_target_current.insert(current_key, (key, depth));
-            Ok((depth, true, preserve))
+            (depth, true)
+        };
+        let mut preserve = Vec::with_capacity(2);
+        if let Some(storage) = key.depth {
+            if let Some(&source) = self.depth_aspect_current.get(&storage) {
+                if source != depth {
+                    preserve.push((source, TextureAspect::DepthOnly));
+                }
+            }
+            self.depth_aspect_current.insert(storage, depth);
         }
+        if let Some(storage) = key.stencil {
+            if let Some(&source) = self.stencil_aspect_current.get(&storage) {
+                if source != depth {
+                    preserve.push((source, TextureAspect::StencilOnly));
+                }
+            }
+            self.stencil_aspect_current.insert(storage, depth);
+        }
+        self.depth_target_current.insert(current_key, (key, depth));
+        Ok((depth, needs_create, preserve))
     }
 }
 
+#[cfg(test)]
 fn preserved_aspect(
     old: DepthTargetKey,
     new: DepthTargetKey,
@@ -412,5 +431,36 @@ mod depth_preservation_tests {
     #[test]
     fn shared_attachments_reuse_without_copy() {
         assert_eq!(preserved_aspect(key(1, 1), key(1, 1)), None);
+    }
+
+    #[test]
+    fn shared_depth_tracks_the_latest_target_across_framebuffers() {
+        let mut ctx = GlContext::new();
+        let depth = ctx.textures.gen();
+        let stencil_a = ctx.textures.gen();
+        let stencil_b = ctx.textures.gen();
+        for texture in [depth, stencil_a, stencil_b] {
+            assert!(ctx.textures.image_2d(
+                texture,
+                8,
+                8,
+                &[],
+                TextureFormat::Rgba8Unorm,
+            ));
+        }
+        let a = ctx.local.framebuffers.gen();
+        let b = ctx.local.framebuffers.gen();
+        ctx.local.framebuffers.attach_depth(a, depth, false);
+        ctx.local.framebuffers.attach_stencil(a, stencil_a, false);
+        ctx.local.framebuffers.attach_depth(b, depth, false);
+        ctx.local.framebuffers.attach_stencil(b, stencil_b, false);
+
+        let (target_a, _, first) = ctx.depth_target(a, 0, true).unwrap();
+        assert!(first.is_empty());
+        let (target_b, _, into_b) = ctx.depth_target(b, 0, true).unwrap();
+        assert_eq!(into_b, vec![(target_a, TextureAspect::DepthOnly)]);
+        let (target_a_again, _, back_into_a) = ctx.depth_target(a, 0, true).unwrap();
+        assert_eq!(target_a_again, target_a);
+        assert_eq!(back_into_a, vec![(target_b, TextureAspect::DepthOnly)]);
     }
 }

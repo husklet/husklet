@@ -1401,23 +1401,28 @@ pub(super) fn depth_attachment_for(
                 },
             },
         ));
-        if let Some((source, aspect)) = preserve {
-            let subresource = TextureSubresource { mip: 0, layer: 0, aspect };
-            copies.push(Enc::CopyTextureToTexture {
-                src: source,
-                src_sub: subresource,
-                src_origin: Origin3d::default(),
-                dst: depth_tex,
-                dst_sub: subresource,
-                dst_origin: Origin3d::default(),
-                extent: Extent3d { width: w.max(1) as u32, height: h.max(1) as u32, depth: 1 },
-            });
-        }
     }
-    let (depth_load, stencil_load) = match preserve.map(|(_, aspect)| aspect) {
-        Some(TextureAspect::DepthOnly) => (LoadOp::Load, load),
-        Some(TextureAspect::StencilOnly) => (load, LoadOp::Load),
-        _ => (load, load),
+    for &(source, aspect) in &preserve {
+        let subresource = TextureSubresource { mip: 0, layer: 0, aspect };
+        copies.push(Enc::CopyTextureToTexture {
+            src: source,
+            src_sub: subresource,
+            src_origin: Origin3d::default(),
+            dst: depth_tex,
+            dst_sub: subresource,
+            dst_origin: Origin3d::default(),
+            extent: Extent3d { width: w.max(1) as u32, height: h.max(1) as u32, depth: 1 },
+        });
+    }
+    let depth_load = if preserve.iter().any(|(_, aspect)| *aspect == TextureAspect::DepthOnly) {
+        LoadOp::Load
+    } else {
+        load
+    };
+    let stencil_load = if preserve.iter().any(|(_, aspect)| *aspect == TextureAspect::StencilOnly) {
+        LoadOp::Load
+    } else {
+        load
     };
     Some(DepthAttachment {
         texture: depth_tex,
