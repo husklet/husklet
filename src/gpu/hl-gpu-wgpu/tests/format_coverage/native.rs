@@ -88,6 +88,10 @@ fn native_formats_transfer_roundtrip_exact_bytes() {
         (TextureFormat::R5g6b5Unorm, &[0x08, 0xbc]),
         (TextureFormat::A1r5g5b5Unorm, &[0x08, 0xde]),
         (TextureFormat::B4g4r4a4Unorm, &[0xbf, 0x48]),
+        (TextureFormat::R4g4b4a4Unorm, &[0x5a, 0xc3]),
+        (TextureFormat::R5g5b5a1Unorm, &[0x5b, 0xc3]),
+        (TextureFormat::A4r4g4b4Unorm, &[0x5a, 0xc3]),
+        (TextureFormat::A4b4g4r4Unorm, &[0x5a, 0xc3]),
     ];
     assert_eq!(
         cases.len(),
@@ -98,6 +102,16 @@ fn native_formats_transfer_roundtrip_exact_bytes() {
         assert!(NATIVE_FORMATS.contains(format));
         transfer_roundtrip(&mut exec, *format, bytes);
     }
+}
+
+#[test]
+fn rgb9e5_native_transfer_roundtrips_exact_bytes() {
+    let mut exec = WgpuExecutor::new(DeviceConfig::default()).expect("wgpu adapter");
+    transfer_roundtrip(
+        &mut exec,
+        TextureFormat::Rgb9e5Ufloat,
+        &[0x00, 0x01, 0x02, 0x84],
+    );
 }
 
 #[test]
