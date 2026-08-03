@@ -135,6 +135,14 @@ impl GpuExecutor for Executor {
         }
     }
 
+    fn export_texture(&self, resources: &SessionResources, id: hl_gpu::TextureId) -> Result<(hl_gpu::runtime::model::sharing::Shared, u64)> {
+        match self { Self::Cpu(executor) => GpuExecutor::export_texture(executor, resources, id), Self::Wgpu(executor) => GpuExecutor::export_texture(executor, resources, id) }
+    }
+
+    fn import_texture(&self, resource: hl_gpu::runtime::model::sharing::Shared, bytes: u64) -> Result<hl_gpu::runtime::model::resources::Native> {
+        match self { Self::Cpu(executor) => GpuExecutor::import_texture(executor, resource, bytes), Self::Wgpu(executor) => GpuExecutor::import_texture(executor, resource, bytes) }
+    }
+
     fn sharing_barrier(&mut self) -> hl_gpu::Result<()> {
         match self {
             Self::Cpu(executor) => GpuExecutor::sharing_barrier(executor),

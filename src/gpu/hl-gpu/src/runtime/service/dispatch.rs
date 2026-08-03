@@ -10,9 +10,9 @@
 
 use crate::protocol::model::command::Cmd;
 use crate::protocol::model::error::Result;
-use crate::protocol::model::id::{BufferId, FenceId};
+use crate::protocol::model::id::{BufferId, FenceId, TextureId};
 use crate::runtime::model::resources::SessionResources;
-use crate::runtime::model::session::{BufferSharing, Session};
+use crate::runtime::model::session::{ResourceSharing, Session};
 use crate::runtime::model::sharing::{ExportId, ResourceKey};
 use crate::runtime::model::timeline::FenceTimeline;
 use crate::runtime::port::clock::Clock;
@@ -172,8 +172,8 @@ pub fn export_buffer(
         .ok_or(crate::GpuError::Unsupported("sharing registry"))?;
     if let Some(sharing) = session.buffer_sharing.get(&id.0) {
         return match sharing {
-            BufferSharing::Owner(export) => Ok(*export),
-            BufferSharing::Importer(_) => Err(crate::GpuError::Invalid(
+            ResourceSharing::Owner(export) => Ok(*export),
+            ResourceSharing::Importer(_) => Err(crate::GpuError::Invalid(
                 "an imported buffer cannot be exported by its importer",
             )),
         };
@@ -200,7 +200,7 @@ pub fn export_buffer(
     }
     session
         .buffer_sharing
-        .insert(id.0, BufferSharing::Owner(export));
+        .insert(id.0, ResourceSharing::Owner(export));
     Ok(export)
 }
 
@@ -243,7 +243,7 @@ pub fn import_buffer(
             .insert_guarded(id.0, native, guard)?;
         session
             .buffer_sharing
-            .insert(id.0, BufferSharing::Importer(export));
+            .insert(id.0, ResourceSharing::Importer(export));
         plan.commit(id.0)?;
         Ok(bytes)
     }));
@@ -258,12 +258,76 @@ pub fn import_buffer(
     }
 }
 
+pub fn export_texture(
+    session: &mut Session,
+    exec: &dyn GpuExecutor,
+    id: TextureId,
+) -> Result<ExportId> {
+    let exports = session.exports.as_ref().ok_or(crate::GpuError::Unsupported("sharing registry"))?;
+    if let Some(sharing) = session.texture_sharing.get(&id.0) {
+        return match sharing {
+            ResourceSharing::Owner(export) => Ok(*export),
+            ResourceSharing::Importer(_) => Err(crate::GpuError::Invalid("an imported texture cannot be exported by its importer")),
+        };
+    }
+    let (native, bytes) = exec.export_texture(&session.resources, id)?;
+    let export = exports.export_accounted(
+        ResourceKey { session: session.id, kind: TextureId::KIND, id: id.0 },
+        native,
+        bytes,
+        session.account.clone(),
+        &session.global,
+    )?;
+    let installed = (|| {
+        let guard = exports.access(session.id, export)?;
+        session.resources.textures.set_guard(id.0, guard)
+    })();
+    if let Err(error) = installed {
+        exports.abort_export(session.id, export);
+        return Err(error);
+    }
+    session.texture_sharing.insert(id.0, ResourceSharing::Owner(export));
+    Ok(export)
+}
+
+pub fn import_texture(
+    session: &mut Session,
+    exec: &dyn GpuExecutor,
+    id: TextureId,
+    export: ExportId,
+) -> Result<u64> {
+    let exports = session.exports.as_ref().ok_or(crate::GpuError::Unsupported("sharing registry"))?.clone();
+    if session.resources.textures.contains(id.0) {
+        return Err(crate::GpuError::DuplicateId { kind: TextureId::KIND, id: id.0 });
+    }
+    let plan = exports.prepare_import(session.id, export, session.account.clone(), &session.global)?;
+    let shared = plan.resource();
+    let bytes = plan.bytes();
+    if let Err(error) = session.account.reserve(export.0, bytes, session.limits.max_connection_bytes, session.limits.max_connection_objects) {
+        session.account.discard_reservation(export.0);
+        return Err(error);
+    }
+    let constructed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let native = exec.import_texture(shared, bytes)?;
+        session.resources.textures.insert_guarded(id.0, native, plan.access())?;
+        session.texture_sharing.insert(id.0, ResourceSharing::Importer(export));
+        plan.commit(id.0)?;
+        Ok(bytes)
+    }));
+    if !matches!(&constructed, Ok(Ok(_))) {
+        session.texture_sharing.remove(&id.0);
+        session.resources.textures.discard(id.0);
+        session.account.discard_reservation(export.0);
+    }
+    match constructed { Ok(result) => result, Err(payload) => std::panic::resume_unwind(payload) }
+}
+
 fn buffer_export(session: &Session, id: BufferId) -> Result<ExportId> {
     session
         .buffer_sharing
         .get(&id.0)
         .map(|sharing| match sharing {
-            BufferSharing::Owner(export) | BufferSharing::Importer(export) => *export,
+            ResourceSharing::Owner(export) | ResourceSharing::Importer(export) => *export,
         })
         .ok_or(crate::GpuError::Invalid("buffer is not shared"))
 }
@@ -416,7 +480,7 @@ mod sharing_atomicity_tests {
             .unwrap();
         session
             .buffer_sharing
-            .insert(7, BufferSharing::Owner(export));
+            .insert(7, ResourceSharing::Owner(export));
 
         assert!(map_buffer(&mut session, &mut exec, BufferId(7)).is_err());
         exports

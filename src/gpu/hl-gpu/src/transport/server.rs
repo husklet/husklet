@@ -100,6 +100,16 @@ pub trait ConnectionHandler {
         None
     }
 
+    fn export_texture(&mut self, req: &ReadbackRequest) -> Option<crate::runtime::model::sharing::ExportId> {
+        let _ = req;
+        None
+    }
+
+    fn import_texture(&mut self, req: &ReadbackRequest) -> Option<u64> {
+        let _ = req;
+        None
+    }
+
     fn map_buffer(&mut self, req: &ReadbackRequest) -> Option<()> {
         let _ = req;
         None
@@ -214,6 +224,8 @@ fn serve_loop<H: ConnectionHandler>(
                     readback_kind::FENCE_WAIT => true,
                     readback_kind::EXPORT_BUFFER => req.offset == 0 && req.len == 0,
                     readback_kind::IMPORT_BUFFER => req.len == 0,
+                    readback_kind::EXPORT_TEXTURE => req.offset == 0 && req.len == 0,
+                    readback_kind::IMPORT_TEXTURE => req.len == 0,
                     readback_kind::MAP_BUFFER | readback_kind::UNMAP_BUFFER => {
                         req.offset == 0 && req.len == 0
                     }
@@ -233,6 +245,10 @@ fn serve_loop<H: ConnectionHandler>(
                     readback_kind::IMPORT_BUFFER => handler
                         .import_buffer(&req)
                         .map(|bytes| bytes.to_le_bytes().to_vec()),
+                    readback_kind::EXPORT_TEXTURE => handler
+                        .export_texture(&req).map(|id| id.0.to_le_bytes().to_vec()),
+                    readback_kind::IMPORT_TEXTURE => handler
+                        .import_texture(&req).map(|bytes| bytes.to_le_bytes().to_vec()),
                     readback_kind::MAP_BUFFER => handler.map_buffer(&req).map(|()| Vec::new()),
                     readback_kind::UNMAP_BUFFER => handler.unmap_buffer(&req).map(|()| Vec::new()),
                     _ => None,

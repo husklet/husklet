@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use hl_gpu::transport::{SubmitHeader, Verdict};
 use hl_gpu::{
     BufferId, Cmd, ConnectionHandler, ExportId, Exports, FenceId, GlobalLedger, GpuExecutor,
-    Limits, ReadbackRequest, Session, SystemClock,
+    Limits, ReadbackRequest, Session, SystemClock, TextureId,
 };
 
 use super::capture;
@@ -345,6 +345,26 @@ impl ConnectionHandler for Connection {
                     "GPU buffer import refused buffer={} export={} error={error}",
                     request.id, request.offset
                 );
+                None
+            }
+        }
+    }
+
+    fn export_texture(&mut self, request: &ReadbackRequest) -> Option<ExportId> {
+        match hl_gpu::runtime::service::dispatch::export_texture(&mut self.session, &self.executor, TextureId(request.id)) {
+            Ok(export) => Some(export),
+            Err(error) => {
+                hl_log::hl_error!(hl_log::tag::GPU, "GPU texture export refused texture={} error={error}", request.id);
+                None
+            }
+        }
+    }
+
+    fn import_texture(&mut self, request: &ReadbackRequest) -> Option<u64> {
+        match hl_gpu::runtime::service::dispatch::import_texture(&mut self.session, &self.executor, TextureId(request.id), ExportId(request.offset)) {
+            Ok(bytes) => Some(bytes),
+            Err(error) => {
+                hl_log::hl_error!(hl_log::tag::GPU, "GPU texture import refused texture={} export={} error={error}", request.id, request.offset);
                 None
             }
         }

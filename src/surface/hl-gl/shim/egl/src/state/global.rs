@@ -112,3 +112,44 @@ pub unsafe extern "C" fn hl_gl_export_buffer(name: u32, export_out: *mut u64) ->
         Err(_) => -1,
     }
 }
+
+
+/// Process-local bridge used by CUDA image registration. Materializes the GL texture in the host
+/// executor, then exports that exact native allocation; the GL name itself never crosses sessions.
+#[cfg(not(gles_client))]
+#[no_mangle]
+pub unsafe extern "C" fn hl_gl_export_texture(name: u32, export_out: *mut u64) -> i32 {
+    if name == 0 || export_out.is_null() { return -1; }
+    let result = GlobalState::gpu_io(std::time::Duration::from_secs(31), move |group, sink| {
+        use hl_gpu::protocol::model::descriptor::{BufferDesc, TextureDesc};
+        use hl_gpu::protocol::model::enums::{buffer_usage, texture_usage, TextureDim, TextureFormat};
+        use hl_gpu::Cmd;
+        let texture = group.gl.textures.get(name).cloned().ok_or(hl_gpu::GpuError::Invalid("GL texture"))?;
+        if texture.w <= 0 || texture.h <= 0 { return Err(hl_gpu::GpuError::Invalid("GL texture has no storage")); }
+        let (texture_ir, upload) = match group.gl.resident_fbo_target_tex(name, texture.gen) {
+            Some(texture_ir) => (texture_ir, false),
+            None => group.gl.sampled_texture_ir(name, texture.sampled_generation())?,
+        };
+        if upload {
+            let stage = group.gl.alloc_buffer_ir()?;
+            let format = match texture.ir_format { TextureFormat::Rgba8Srgb | TextureFormat::Bgra8Srgb => TextureFormat::Rgba8Srgb, _ => TextureFormat::Rgba8Unorm };
+            let bytes = texture.data.as_ref().clone();
+            sink.submit(&[
+                Cmd::CreateTexture(texture_ir, TextureDesc { width: texture.w as u32, height: texture.h as u32, depth: 1, mip_levels: 1, sample_count: 1, dim: TextureDim::D2, format, usage: texture_usage::SAMPLED | texture_usage::COPY_DST | texture_usage::COPY_SRC, label: "GL/CUDA interop texture".into() }),
+                Cmd::CreateBuffer(stage, BufferDesc { size: bytes.len() as u64, usage: buffer_usage::COPY_SRC, label: String::new() }),
+                Cmd::WriteBuffer { id: stage, offset: 0, data: bytes },
+                Cmd::Submit(hl_gpu::CommandBuffer { encoder: vec![hl_gpu::Enc::CopyBufferToTexture { src: stage, src_offset: 0, bytes_per_row: texture.w as u32 * 4, dst: texture_ir, mip: 0, width: texture.w as u32, height: texture.h as u32 }], signal: None }),
+                Cmd::DestroyBuffer(stage),
+            ])?;
+        }
+        sink.export_texture(hl_gpu::TextureId(texture_ir))?;
+        Ok(())
+    });
+    match result {
+        Ok(result) => match result.observations.last() {
+            Some(super::io::Observation::TextureExport(export)) => { *export_out = export.0; 0 }
+            _ => -1,
+        },
+        Err(_) => -1,
+    }
+}

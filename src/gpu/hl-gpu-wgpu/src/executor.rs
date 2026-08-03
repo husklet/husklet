@@ -7,7 +7,7 @@ use hl_gpu::protocol::model::capability::Capabilities;
 use hl_gpu::protocol::model::command::Cmd;
 #[cfg(target_os = "macos")]
 use hl_gpu::protocol::model::descriptor::SurfaceDesc;
-use hl_gpu::protocol::model::id::{BufferId, FenceId};
+use hl_gpu::protocol::model::id::{BufferId, FenceId, TextureId};
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::runtime::port::executor::{GpuExecutor, Presentation};
 use hl_gpu::{GpuError, Result};
@@ -172,6 +172,14 @@ impl GpuExecutor for WgpuExecutor {
         bytes: u64,
     ) -> Result<hl_gpu::runtime::model::resources::Native> {
         self.import_buffer_native(resource, bytes)
+    }
+
+    fn export_texture(&self, res: &SessionResources, id: TextureId) -> Result<(hl_gpu::runtime::model::sharing::Shared, u64)> {
+        self.export_texture_native(res, id.0)
+    }
+
+    fn import_texture(&self, resource: hl_gpu::runtime::model::sharing::Shared, bytes: u64) -> Result<hl_gpu::runtime::model::resources::Native> {
+        self.import_texture_native(resource, bytes)
     }
 
     fn sharing_barrier(&mut self) -> Result<()> {

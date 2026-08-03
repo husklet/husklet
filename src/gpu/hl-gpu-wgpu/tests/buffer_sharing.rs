@@ -8,6 +8,30 @@ use hl_gpu::{FakeClock, GlobalLedger, Limits, Session};
 use hl_gpu_wgpu::{Device, DeviceConfig};
 
 #[test]
+fn two_sessions_alias_one_metal_texture_without_a_copy() {
+    use hl_gpu::protocol::model::descriptor::TextureDesc;
+    use hl_gpu::protocol::model::enums::{texture_usage, TextureDim, TextureFormat};
+    use hl_gpu::{CommandBuffer, Enc, TextureId};
+    let device = Device::new(DeviceConfig::default()).expect("Metal adapter");
+    let mut owner_exec = device.executor();
+    let mut importer_exec = device.executor();
+    let exports = Exports::new();
+    let global = GlobalLedger::unbounded();
+    let mut owner = session(&owner_exec, exports.clone(), global.clone());
+    let mut importer = session(&importer_exec, exports, global);
+    let desc = TextureDesc { width: 2, height: 1, depth: 1, mip_levels: 1, sample_count: 1, dim: TextureDim::D2, format: TextureFormat::Rgba8Unorm, usage: texture_usage::RENDER_TARGET | texture_usage::COPY_SRC | texture_usage::SAMPLED, label: String::new() };
+    hl_gpu::runtime::submit(&mut owner, &mut owner_exec, 0, &[
+        Cmd::CreateTexture(1, desc),
+        Cmd::Submit(CommandBuffer { encoder: vec![Enc::ClearRect { texture: 1, x: 0, y: 0, w: 2, h: 1, color: [1.0, 0.0, 0.0, 1.0], base_array_layer: 0, layer_count: 1, mip_level: 0 }], signal: None }),
+    ]).unwrap();
+    let export = hl_gpu::runtime::service::dispatch::export_texture(&mut owner, &owner_exec, TextureId(1)).unwrap();
+    assert_eq!(hl_gpu::runtime::service::dispatch::import_texture(&mut importer, &importer_exec, TextureId(9), export).unwrap(), 8);
+    assert_eq!(importer_exec.read_texture(&importer.resources, 9).unwrap(), [255, 0, 0, 255, 255, 0, 0, 255]);
+    hl_gpu::runtime::submit(&mut owner, &mut owner_exec, 0, &[Cmd::DestroyTexture(1)]).unwrap();
+    assert_eq!(importer_exec.read_texture(&importer.resources, 9).unwrap(), [255, 0, 0, 255, 255, 0, 0, 255]);
+}
+
+#[test]
 fn two_sessions_alias_one_metal_buffer_at_its_authoritative_size() {
     let device = Device::new(DeviceConfig::default()).expect("Metal adapter");
     let mut owner_executor = device.executor();

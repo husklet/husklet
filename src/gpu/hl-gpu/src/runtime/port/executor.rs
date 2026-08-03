@@ -121,6 +121,18 @@ pub trait GpuExecutor {
         Err(GpuError::Unsupported("executor: import_buffer"))
     }
 
+    /// Return a zero-copy shareable alias for a live texture and its authoritative residency size.
+    fn export_texture(&self, resources: &SessionResources, id: TextureId) -> Result<(Shared, u64)> {
+        let _ = (resources, id);
+        Err(GpuError::Unsupported("executor: export_texture"))
+    }
+
+    /// Turn a texture export into a native texture for an importing session.
+    fn import_texture(&self, resource: Shared, bytes: u64) -> Result<Native> {
+        let _ = (resource, bytes);
+        Err(GpuError::Unsupported("executor: import_texture"))
+    }
+
     /// Flush and complete all device work submitted before this call.
     fn sharing_barrier(&mut self) -> Result<()> {
         Err(GpuError::Unsupported("executor: sharing_barrier"))

@@ -13,7 +13,7 @@ use crate::runtime::model::sharing::{ExportId, Exports, SessionId};
 use std::collections::HashMap;
 
 #[derive(Clone, Copy)]
-pub(crate) enum BufferSharing {
+pub(crate) enum ResourceSharing {
     Owner(ExportId),
     Importer(ExportId),
 }
@@ -135,7 +135,8 @@ pub struct Session {
     ///
     /// [`GpuError::Unsupported`]: crate::protocol::model::error::GpuError::Unsupported
     pub exports: Option<Exports>,
-    pub(crate) buffer_sharing: HashMap<u32, BufferSharing>,
+    pub(crate) buffer_sharing: HashMap<u32, ResourceSharing>,
+    pub(crate) texture_sharing: HashMap<u32, ResourceSharing>,
     /// Validation + accounting ceilings (its `caps` refreshed by `negotiate`).
     pub limits: Limits,
     /// The executor's advertised capabilities, once negotiated.
@@ -157,17 +158,17 @@ impl Session {
         let Some(exports) = self.exports.clone() else {
             return;
         };
-        let bindings: Vec<BufferSharing> = self.buffer_sharing.values().copied().collect();
+        let bindings: Vec<ResourceSharing> = self.buffer_sharing.values().chain(self.texture_sharing.values()).copied().collect();
         for binding in bindings {
             loop {
                 let result = match binding {
-                    BufferSharing::Owner(export) => {
+                    ResourceSharing::Owner(export) => {
                         exports.prepare_owner_release(self.id, export).map(|plan| {
                             plan.commit();
                             Some(())
                         })
                     }
-                    BufferSharing::Importer(export) => exports
+                    ResourceSharing::Importer(export) => exports
                         .prepare_import_release(self.id, export)
                         .map(|plan| Some(plan.commit())),
                 };
@@ -175,7 +176,7 @@ impl Session {
                     Ok(_) => break,
                     Err(crate::GpuError::MappedElsewhere { .. }) => {
                         let export = match binding {
-                            BufferSharing::Owner(id) | BufferSharing::Importer(id) => id,
+                            ResourceSharing::Owner(id) | ResourceSharing::Importer(id) => id,
                         };
                         exports.settle_transition(export, std::time::Duration::from_millis(10));
                     }
@@ -190,6 +191,7 @@ impl Session {
         // Accounted bindings were already transitioned above, so this is only orphan-state recovery.
         exports.forget_session(self.id);
         self.buffer_sharing.clear();
+        self.texture_sharing.clear();
     }
 
     /// A fresh connection session with the given ceilings, global account slice, and clock.
@@ -203,6 +205,7 @@ impl Session {
             id,
             exports: None,
             buffer_sharing: HashMap::new(),
+            texture_sharing: HashMap::new(),
             limits,
             caps: None,
             resources: SessionResources::new(),
@@ -249,6 +252,7 @@ impl Session {
         // per-kind generation counters to their initial state for any reuse of this session object.
         self.resources = SessionResources::new();
         self.buffer_sharing.clear();
+        self.texture_sharing.clear();
         self.timeline = FenceTimeline::new();
     }
 }

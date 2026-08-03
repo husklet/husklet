@@ -10,7 +10,7 @@
 use crate::protocol::model::capability::{Capabilities, FeatureRequest};
 use crate::protocol::model::command::Cmd;
 use crate::protocol::model::error::{GpuError, Result};
-use crate::protocol::model::id::{BufferId, FenceId};
+use crate::protocol::model::id::{BufferId, FenceId, TextureId};
 use crate::runtime::model::sharing::ExportId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,6 +75,16 @@ pub trait CommandSink {
     fn import_buffer(&mut self, id: BufferId, export: ExportId) -> Result<u64> {
         let _ = (id, export);
         Err(GpuError::Unsupported("command sink: import_buffer"))
+    }
+
+    fn export_texture(&mut self, id: TextureId) -> Result<ExportId> {
+        let _ = id;
+        Err(GpuError::Unsupported("command sink: export_texture"))
+    }
+
+    fn import_texture(&mut self, id: TextureId, export: ExportId) -> Result<u64> {
+        let _ = (id, export);
+        Err(GpuError::Unsupported("command sink: import_texture"))
     }
 
     fn map_buffer(&mut self, id: BufferId) -> Result<()> {

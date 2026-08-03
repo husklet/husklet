@@ -45,6 +45,8 @@ pub mod readback_kind {
     pub const MAP_BUFFER: u8 = 5;
     /// Complete holder work and release shared local buffer `id`; response is empty success.
     pub const UNMAP_BUFFER: u8 = 6;
+    pub const EXPORT_TEXTURE: u8 = 7;
+    pub const IMPORT_TEXTURE: u8 = 8;
 }
 
 /// A device→host readback request: "return `len` bytes of resource `id` starting at `offset`". Serialized
@@ -117,6 +119,14 @@ impl ReadbackRequest {
             offset: export,
             len: 0,
         }
+    }
+
+    pub fn export_texture(id: u32) -> Self {
+        Self { version: READBACK_VERSION, kind: readback_kind::EXPORT_TEXTURE, id, offset: 0, len: 0 }
+    }
+
+    pub fn import_texture(id: u32, export: u64) -> Self {
+        Self { version: READBACK_VERSION, kind: readback_kind::IMPORT_TEXTURE, id, offset: export, len: 0 }
     }
 
     pub fn map_buffer(id: u32) -> Self {

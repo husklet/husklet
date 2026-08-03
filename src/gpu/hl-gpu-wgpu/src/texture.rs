@@ -39,6 +39,7 @@ fn view_aspect(format: TextureFormat, aspect: TextureAspect) -> Result<wgpu::Tex
 }
 
 /// The wgpu-native backing of one protocol texture.
+#[derive(Clone)]
 pub struct WgpuTexture {
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
@@ -75,6 +76,12 @@ pub struct WgpuTexture {
     shadow_base_layer: u32,
     #[cfg(target_os = "macos")]
     pub iosurface: Option<Arc<hl_iosurface::Surface>>,
+}
+
+struct SharedWgpuTexture {
+    gpu: Arc<crate::device::Gpu>,
+    texture: WgpuTexture,
+    bytes: u64,
 }
 
 struct Bc1RgbShadow {
@@ -118,6 +125,37 @@ impl WgpuTexture {
 }
 
 impl WgpuExecutor {
+    pub(crate) fn export_texture_native(
+        &self,
+        res: &SessionResources,
+        id: u32,
+    ) -> Result<(hl_gpu::runtime::model::sharing::Shared, u64)> {
+        let texture = WgpuTexture::get(res, id)?.clone();
+        let texel = texture.format.footprint_bytes_per_texel() as u64;
+        let mut width = u64::from(texture.width);
+        let mut height = u64::from(texture.height);
+        let mut depth = u64::from(texture.depth);
+        let mut bytes = 0u64;
+        for _ in 0..texture.mip_levels {
+            bytes = bytes.checked_add(width.max(1).checked_mul(height.max(1)).and_then(|v| v.checked_mul(depth.max(1))).and_then(|v| v.checked_mul(u64::from(texture.sample_count))).and_then(|v| v.checked_mul(texel)).ok_or(GpuError::OutOfBounds)?).ok_or(GpuError::OutOfBounds)?;
+            width /= 2;
+            height /= 2;
+            if texture.dim == TextureDim::D3 { depth /= 2; }
+        }
+        Ok((Arc::new(SharedWgpuTexture { gpu: Arc::clone(&self.gpu), texture, bytes }), bytes))
+    }
+
+    pub(crate) fn import_texture_native(
+        &self,
+        resource: hl_gpu::runtime::model::sharing::Shared,
+        bytes: u64,
+    ) -> Result<hl_gpu::runtime::model::resources::Native> {
+        let shared = resource.downcast_ref::<SharedWgpuTexture>().ok_or(GpuError::Invalid("wgpu: shared texture native type mismatch"))?;
+        if !Arc::ptr_eq(&shared.gpu, &self.gpu) { return Err(GpuError::Invalid("wgpu: shared texture belongs to another device")); }
+        if shared.bytes != bytes { return Err(GpuError::Invalid("wgpu: shared texture authoritative size mismatch")); }
+        Ok(Box::new(shared.texture.clone()))
+    }
+
     pub(crate) fn make_texture_view(
         &self,
         res: &SessionResources,

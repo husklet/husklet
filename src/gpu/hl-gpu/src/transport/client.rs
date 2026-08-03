@@ -591,6 +591,16 @@ impl CommandSink for RemoteCommandSink {
         })?))
     }
 
+    fn export_texture(&mut self, id: crate::TextureId) -> Result<crate::runtime::model::sharing::ExportId> {
+        let response = self.request(&ReadbackRequest::export_texture(id.raw()), 8, self.config.response_timeout())?;
+        Ok(crate::runtime::model::sharing::ExportId(u64::from_le_bytes(response.try_into().map_err(|_| self.protocol(TransportPhase::ResponseRead, "invalid export texture response"))?)))
+    }
+
+    fn import_texture(&mut self, id: crate::TextureId, export: crate::runtime::model::sharing::ExportId) -> Result<u64> {
+        let response = self.request(&ReadbackRequest::import_texture(id.raw(), export.0), 8, self.config.response_timeout())?;
+        Ok(u64::from_le_bytes(response.try_into().map_err(|_| self.protocol(TransportPhase::ResponseRead, "invalid import texture response"))?))
+    }
+
     fn map_buffer(&mut self, id: BufferId) -> Result<()> {
         self.request(
             &ReadbackRequest::map_buffer(id.raw()),

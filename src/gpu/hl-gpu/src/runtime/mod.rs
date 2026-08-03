@@ -50,7 +50,7 @@ pub fn submit(
     // Unshared sessions cannot race a sharing transition. Keeping them out of the
     // process-wide operation lock preserves parallel submission across ordinary
     // GL/Vulkan connections while shared sessions retain ordered ownership.
-    let sharing_exports = (!session.buffer_sharing.is_empty())
+    let sharing_exports = (!session.buffer_sharing.is_empty() || !session.texture_sharing.is_empty())
         .then(|| session.exports.clone())
         .flatten();
     let _sharing_operation = sharing_exports.as_ref().map(Exports::operation);
@@ -58,16 +58,19 @@ pub fn submit(
     let account_operation = account.operation();
     service::validate::validate(&session.limits, frame_bytes, batch)?;
     let future_replacements = future_buffer_replacements(batch);
+    let future_texture_replacements = future_texture_replacements(batch);
     let mut retained = std::collections::HashSet::new();
     let mut releases = Vec::new();
     let mut import_releases = Vec::new();
+    let mut texture_releases = Vec::new();
+    let mut texture_import_releases = Vec::new();
     if let Some(exports) = session.exports.clone() {
         let mut sharing = session.buffer_sharing.clone();
         for (index, command) in batch.iter().enumerate() {
             if let Cmd::DestroyBuffer(id) = command {
                 let replacement_survives = future_replacements.contains(&index);
                 match sharing.remove(id) {
-                    Some(model::session::BufferSharing::Owner(export)) => {
+                    Some(model::session::ResourceSharing::Owner(export)) => {
                         let mut plan = exports.prepare_owner_release(session.id, export)?;
                         if replacement_survives {
                             plan = plan.preserve_owner_id();
@@ -75,7 +78,7 @@ pub fn submit(
                         retained.insert(index);
                         releases.push((*id, plan));
                     }
-                    Some(model::session::BufferSharing::Importer(export)) => {
+                    Some(model::session::ResourceSharing::Importer(export)) => {
                         let mut plan = exports.prepare_import_release(session.id, export)?;
                         if replacement_survives {
                             plan = plan.preserve_importer_id();
@@ -84,6 +87,24 @@ pub fn submit(
                             retained.insert(index);
                         }
                         import_releases.push((*id, plan));
+                    }
+                    None => {}
+                }
+            }
+            if let Cmd::DestroyTexture(id) = command {
+                let replacement_survives = future_texture_replacements.contains(&index);
+                match session.texture_sharing.get(id).copied() {
+                    Some(model::session::ResourceSharing::Owner(export)) => {
+                        let mut plan = exports.prepare_owner_release(session.id, export)?;
+                        if replacement_survives { plan = plan.preserve_owner_id(); }
+                        retained.insert(index);
+                        texture_releases.push((*id, plan));
+                    }
+                    Some(model::session::ResourceSharing::Importer(export)) => {
+                        let mut plan = exports.prepare_import_release(session.id, export)?;
+                        if replacement_survives { plan = plan.preserve_importer_id(); }
+                        if plan.retains_global_charge() { retained.insert(index); }
+                        texture_import_releases.push((*id, plan));
                     }
                     None => {}
                 }
@@ -139,6 +160,14 @@ pub fn submit(
                 release.commit();
                 session.buffer_sharing.remove(&id);
             }
+            for (id, release) in texture_releases {
+                release.commit();
+                session.texture_sharing.remove(&id);
+            }
+            for (id, release) in texture_import_releases {
+                release.commit();
+                session.texture_sharing.remove(&id);
+            }
             let (presents, timeline) = prepared.commit();
             session.timeline = timeline;
             Ok(presents)
@@ -169,6 +198,22 @@ fn future_buffer_replacements(batch: &[Cmd]) -> std::collections::HashSet<usize>
                 if live.contains(id) {
                     replacements.insert(index);
                 }
+                live.remove(id);
+            }
+            _ => {}
+        }
+    }
+    replacements
+}
+
+fn future_texture_replacements(batch: &[Cmd]) -> std::collections::HashSet<usize> {
+    let mut live = std::collections::HashSet::new();
+    let mut replacements = std::collections::HashSet::new();
+    for (index, command) in batch.iter().enumerate().rev() {
+        match command {
+            Cmd::CreateTexture(id, _) => { live.insert(*id); }
+            Cmd::DestroyTexture(id) => {
+                if live.contains(id) { replacements.insert(index); }
                 live.remove(id);
             }
             _ => {}
