@@ -24,6 +24,52 @@ impl<'a> NormalizedSource<'a> {
         wreplace(self.text, "highp", "");
     }
 
+    /// GLES2 exposes a single color attachment, but permits it to be addressed through
+    /// `gl_FragData[index]`. Every defined index therefore resolves to attachment zero. Desktop GLSL and
+    /// WGSL have no dynamically indexed fragment-output array, so redirect the whole indexed lvalue to the
+    /// synthesized location-zero output. An out-of-range runtime index is undefined by GLES and needs no
+    /// distinct host representation.
+    pub(super) fn lower_single_output_frag_data(&mut self, output: &str) {
+        let source = self.text.clone();
+        let bytes = source.as_bytes();
+        let name = b"gl_FragData";
+        let mut edits = Vec::new();
+        let mut cursor = 0usize;
+        while let Some(relative) = source[cursor..].find("gl_FragData") {
+            let start = cursor + relative;
+            cursor = start + name.len();
+            let before = start.checked_sub(1).map(|at| bytes[at]).unwrap_or(b' ');
+            let after = bytes.get(cursor).copied().unwrap_or(b' ');
+            if Tokens::is_word(before) || Tokens::is_word(after) {
+                continue;
+            }
+            let mut open = cursor;
+            while bytes.get(open).is_some_and(u8::is_ascii_whitespace) {
+                open += 1;
+            }
+            if bytes.get(open) != Some(&b'[') {
+                continue;
+            }
+            let mut depth = 1usize;
+            let mut close = open + 1;
+            while close < bytes.len() && depth != 0 {
+                match bytes[close] {
+                    b'[' => depth += 1,
+                    b']' => depth -= 1,
+                    _ => {}
+                }
+                close += 1;
+            }
+            if depth == 0 {
+                edits.push((start, close));
+                cursor = close;
+            }
+        }
+        for (start, end) in edits.into_iter().rev() {
+            self.text.replace_range(start..end, output);
+        }
+    }
+
     /// Lower the GLSL ES texture builtins onto their desktop overloads. The explicit-LOD ES forms
     /// (`texture2DLod`/`textureCubeLod`, GLSL ES 1.00 §8.7 vertex-shader lookups) map to `textureLod` and must
     /// be rewritten BEFORE the implicit forms, whose names are their prefixes.

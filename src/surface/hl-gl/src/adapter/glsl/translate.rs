@@ -847,6 +847,7 @@ impl StageSources<'_> {
         NormalizedSource::new(&mut fb).lower_texture_builtins();
         if fragouts.is_empty() {
             wreplace(&mut fb, "gl_FragColor", &frag_name);
+            NormalizedSource::new(&mut fb).lower_single_output_frag_data(&frag_name);
         }
         fs_out.push_str(&rewrite(&fs_funcs, &samps));
         fs_out.push_str(&format!("void main() {{\n{fb}\n}}\n"));

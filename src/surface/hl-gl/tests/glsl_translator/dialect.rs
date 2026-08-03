@@ -88,6 +88,16 @@ fn es2_attribute_varying_fragcolor_shader_is_fully_desktopized() {
 }
 
 #[test]
+fn es2_fragdata_dynamic_zero_index_targets_the_single_color_output() {
+    let vs = "attribute vec4 a_position; varying float v_index; void main(){ gl_Position=a_position; v_index=0.0; }";
+    let fs = "varying mediump float v_index; void main(){ gl_FragData[int(v_index)] = vec4(0.0,1.0,0.0,1.0); }";
+    let (_, translated) = glsl::StageSources::new(vs, fs).translate_render();
+    assert!(!translated.contains("gl_FragData"), "{translated}");
+    assert!(translated.contains("hl_FragColor = vec4"), "{translated}");
+    assert_naga_parses(&translated, naga::ShaderStage::Fragment);
+}
+
+#[test]
 fn es3_in_out_shader_with_explicit_frag_output_keeps_the_named_output() {
     let vs = "#version 300 es\nin vec3 aPos;\nout vec3 vColor;\n\
               void main(){ vColor = aPos; gl_Position = vec4(aPos, 1.0); }\n";
