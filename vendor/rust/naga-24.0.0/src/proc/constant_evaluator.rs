@@ -932,9 +932,50 @@ impl<'a> ConstantEvaluator<'a> {
                     )),
                 }
             }
-            Expression::Relational { fun, .. } => Err(ConstantEvaluatorError::NotImplemented(
-                format!("{fun:?} built-in function"),
-            )),
+            Expression::Relational { fun, argument } => {
+                let argument = self.check_and_get(argument)?;
+                if !matches!(fun, crate::RelationalFunction::All | crate::RelationalFunction::Any) {
+                    return Err(ConstantEvaluatorError::NotImplemented(format!(
+                        "{fun:?} built-in function"
+                    )));
+                }
+                let components = match self.expressions[argument].clone() {
+                    Expression::Literal(Literal::Bool(value)) => vec![value],
+                    Expression::ZeroValue(_) => vec![false],
+                    Expression::Splat { size, value } => {
+                        let value = self.check_and_get(value)?;
+                        let Expression::Literal(Literal::Bool(value)) = self.expressions[value] else {
+                            return Err(ConstantEvaluatorError::NotImplemented(format!(
+                                "{fun:?} built-in function"
+                            )));
+                        };
+                        vec![value; size as usize]
+                    }
+                    Expression::Compose { components, .. } => components
+                        .into_iter()
+                        .map(|component| {
+                            let component = self.check_and_get(component)?;
+                            match self.expressions[component] {
+                                Expression::Literal(Literal::Bool(value)) => Ok(value),
+                                _ => Err(ConstantEvaluatorError::NotImplemented(format!(
+                                    "{fun:?} built-in function"
+                                ))),
+                            }
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                    _ => {
+                        return Err(ConstantEvaluatorError::NotImplemented(format!(
+                            "{fun:?} built-in function"
+                        )))
+                    }
+                };
+                let value = match fun {
+                    crate::RelationalFunction::All => components.into_iter().all(|value| value),
+                    crate::RelationalFunction::Any => components.into_iter().any(|value| value),
+                    _ => unreachable!(),
+                };
+                self.register_evaluated_expr(Expression::Literal(Literal::Bool(value)), span)
+            }
             Expression::ArrayLength(expr) => match self.behavior {
                 Behavior::Wgsl(_) => Err(ConstantEvaluatorError::ArrayLength),
                 Behavior::Glsl(_) => {

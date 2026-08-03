@@ -560,3 +560,10 @@ fn scalar_conversion_selects_fold_in_constant_initializers() {
     glsl_to_wgsl(source, naga::ShaderStage::Fragment, "main")
         .unwrap_or_else(|error| panic!("constant scalar conversions were refused: {error}"));
 }
+
+#[test]
+fn constant_all_and_any_relations_fold() {
+    let source = "#version 460\nlayout(location=0) out vec4 color;\nconst bool a=all(bvec3(true,true,true)); const bool b=any(bvec3(false,true,false)); void main(){ color=vec4(float(a),float(b),0,1); }";
+    glsl_to_wgsl(source, naga::ShaderStage::Fragment, "main")
+        .unwrap_or_else(|error| panic!("constant all/any was refused: {error}"));
+}
