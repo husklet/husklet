@@ -31,7 +31,7 @@ use std::cell::Cell;
 
 use crate::protocol::model::error::{GpuError, Result};
 use crate::protocol::model::id::Access;
-use crate::runtime::model::resources::{Account, GlobalLedger, KIND_BUFFER};
+use crate::runtime::model::resources::{Account, GlobalLedger, KIND_BUFFER, KIND_TEXTURE};
 
 /// A connection. Sessions are distinct per transport connection; two drivers in one guest workspace get
 /// two of these.

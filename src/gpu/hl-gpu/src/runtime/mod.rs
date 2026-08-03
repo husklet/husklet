@@ -64,8 +64,6 @@ pub fn submit_outcome(
     let account = session.account.clone();
     let account_operation = account.operation();
     service::validate::validate(&session.limits, frame_bytes, batch)?;
-    let future_replacements = future_buffer_replacements(batch);
-    let future_texture_replacements = future_texture_replacements(batch);
     let mut retained = std::collections::HashSet::new();
     let mut releases = Vec::new();
     let mut import_releases = Vec::new();
@@ -75,21 +73,14 @@ pub fn submit_outcome(
         let mut sharing = session.buffer_sharing.clone();
         for (index, command) in batch.iter().enumerate() {
             if let Cmd::DestroyBuffer(id) = command {
-                let replacement_survives = future_replacements.contains(&index);
                 match sharing.remove(id) {
                     Some(model::session::ResourceSharing::Owner(export)) => {
-                        let mut plan = exports.prepare_owner_release(session.id, export)?;
-                        if replacement_survives {
-                            plan = plan.preserve_owner_id();
-                        }
+                        let plan = exports.prepare_owner_release(session.id, export)?;
                         retained.insert(index);
                         releases.push((index, *id, plan));
                     }
                     Some(model::session::ResourceSharing::Importer(export)) => {
-                        let mut plan = exports.prepare_import_release(session.id, export)?;
-                        if replacement_survives {
-                            plan = plan.preserve_importer_id();
-                        }
+                        let plan = exports.prepare_import_release(session.id, export)?;
                         if plan.retains_global_charge() {
                             retained.insert(index);
                         }
@@ -99,17 +90,14 @@ pub fn submit_outcome(
                 }
             }
             if let Cmd::DestroyTexture(id) = command {
-                let replacement_survives = future_texture_replacements.contains(&index);
                 match session.texture_sharing.get(id).copied() {
                     Some(model::session::ResourceSharing::Owner(export)) => {
-                        let mut plan = exports.prepare_owner_release(session.id, export)?;
-                        if replacement_survives { plan = plan.preserve_owner_id(); }
+                        let plan = exports.prepare_owner_release(session.id, export)?;
                         retained.insert(index);
                         texture_releases.push((index, *id, plan));
                     }
                     Some(model::session::ResourceSharing::Importer(export)) => {
-                        let mut plan = exports.prepare_import_release(session.id, export)?;
-                        if replacement_survives { plan = plan.preserve_importer_id(); }
+                        let plan = exports.prepare_import_release(session.id, export)?;
                         if plan.retains_global_charge() { retained.insert(index); }
                         texture_import_releases.push((index, *id, plan));
                     }
@@ -166,6 +154,8 @@ pub fn submit_outcome(
             // No fallible work may follow this point. The prepared dispatch still owns the open resource
             // transaction; committing it and installing the already-preflighted timeline cannot fail.
             let (committed, timeline, refusal) = prepared.commit();
+            let buffer_replacements = committed_buffer_replacements(&committed);
+            let texture_replacements = committed_texture_replacements(&committed);
             if refusal.is_some() {
                 session.account.restore_ledger(ledger_before.clone(), &session.global);
                 let committed_sources: std::collections::HashSet<usize> = committed.sources.iter().copied().collect();
@@ -174,23 +164,27 @@ pub fn submit_outcome(
                     .expect("committed delta was validated and precharged as part of the full batch");
             }
             drop(account_operation);
-            for (index, id, release) in releases {
+            for (index, id, mut release) in releases {
                 if !committed.contains_source(index) { continue; }
+                if buffer_replacements.contains(&index) { release = release.preserve_owner_id(); }
                 release.commit();
                 session.buffer_sharing.remove(&id);
             }
-            for (index, id, release) in import_releases {
+            for (index, id, mut release) in import_releases {
                 if !committed.contains_source(index) { continue; }
+                if buffer_replacements.contains(&index) { release = release.preserve_importer_id(); }
                 release.commit();
                 session.buffer_sharing.remove(&id);
             }
-            for (index, id, release) in texture_releases {
+            for (index, id, mut release) in texture_releases {
                 if !committed.contains_source(index) { continue; }
+                if texture_replacements.contains(&index) { release = release.preserve_owner_id(); }
                 release.commit();
                 session.texture_sharing.remove(&id);
             }
-            for (index, id, release) in texture_import_releases {
+            for (index, id, mut release) in texture_import_releases {
                 if !committed.contains_source(index) { continue; }
+                if texture_replacements.contains(&index) { release = release.preserve_importer_id(); }
                 release.commit();
                 session.texture_sharing.remove(&id);
             }
@@ -212,10 +206,12 @@ pub fn submit(
     }
 }
 
-fn future_buffer_replacements(batch: &[Cmd]) -> std::collections::HashSet<usize> {
+fn committed_buffer_replacements(committed: &CommittedDelta) -> std::collections::HashSet<usize> {
     let mut live = std::collections::HashSet::new();
     let mut replacements = std::collections::HashSet::new();
-    for (index, command) in batch.iter().enumerate().rev() {
+    for entry in committed.commands.iter().rev() {
+        let index = entry.source;
+        let command = &entry.command;
         match command {
             Cmd::CreateBuffer(id, _) => {
                 live.insert(*id);
@@ -232,10 +228,12 @@ fn future_buffer_replacements(batch: &[Cmd]) -> std::collections::HashSet<usize>
     replacements
 }
 
-fn future_texture_replacements(batch: &[Cmd]) -> std::collections::HashSet<usize> {
+fn committed_texture_replacements(committed: &CommittedDelta) -> std::collections::HashSet<usize> {
     let mut live = std::collections::HashSet::new();
     let mut replacements = std::collections::HashSet::new();
-    for (index, command) in batch.iter().enumerate().rev() {
+    for entry in committed.commands.iter().rev() {
+        let index = entry.source;
+        let command = &entry.command;
         match command {
             Cmd::CreateTexture(id, _) => { live.insert(*id); }
             Cmd::DestroyTexture(id) => {
@@ -266,9 +264,17 @@ mod lifecycle_scan_tests {
             batch.push(Cmd::DestroyBuffer(7));
             batch.push(Cmd::CreateBuffer(7, desc.clone()));
         }
-        let replacements = future_buffer_replacements(&batch);
+        let batch_len = batch.len();
+        let committed = CommittedDelta {
+            commands: batch.into_iter().enumerate().map(|(source, command)| CommittedCommand { source, command }).collect(),
+            fence_signals: Vec::new(),
+            presentations: Vec::new(),
+            replayable: true,
+            sources: (0..batch_len).collect(),
+        };
+        let replacements = committed_buffer_replacements(&committed);
         assert_eq!(replacements.len(), 10_000);
-        assert!((1..batch.len())
+        assert!((1..batch_len)
             .step_by(2)
             .all(|index| replacements.contains(&index)));
     }

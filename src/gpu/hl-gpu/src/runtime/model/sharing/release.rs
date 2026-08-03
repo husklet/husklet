@@ -6,6 +6,7 @@ pub(crate) struct OwnerReleasePlan {
     owner: (SessionId, u32, Account),
     payer: Option<(SessionId, u32, Account)>,
     bytes: u64,
+    kind: u8,
     global: GlobalLedger,
     preserve_owner_id: bool,
     committed: bool,
@@ -29,6 +30,7 @@ pub(crate) struct ImportReleasePlan {
     transfer: Option<((SessionId, u32, Account), (SessionId, u32, Account), u64)>,
     final_payer: Option<(u32, Account, u64)>,
     global: GlobalLedger,
+    kind: u8,
     preserve_importer_id: bool,
     committed: bool,
 }
@@ -159,12 +161,12 @@ impl ImportReleasePlan {
                 trip_release_failpoint(ReleaseFailpoint::PayerToNext);
                 lease.irreversible();
                 if !self.preserve_importer_id {
-                    source.ledger.live.remove(&(KIND_BUFFER, from.1));
+                    source.ledger.live.remove(&(self.kind, from.1));
                 }
                 source.ledger.totals.bytes = source.ledger.totals.bytes.saturating_sub(*bytes);
                 source.ledger.totals.objects = source.ledger.totals.objects.saturating_sub(1);
                 target.reservations.remove(&self.id.0);
-                target.ledger.live.insert((KIND_BUFFER, to.1), *bytes);
+                target.ledger.live.insert((self.kind, to.1), *bytes);
                 target.ledger.totals.bytes = target.ledger.totals.bytes.saturating_add(*bytes);
                 target.ledger.totals.objects = target.ledger.totals.objects.saturating_add(1);
             } else if let Some((local, account, bytes)) = &self.final_payer {
@@ -178,7 +180,7 @@ impl ImportReleasePlan {
                 trip_release_failpoint(ReleaseFailpoint::FinalPayerRefund);
                 lease.irreversible();
                 if !self.preserve_importer_id {
-                    state.ledger.live.remove(&(KIND_BUFFER, *local));
+                    state.ledger.live.remove(&(self.kind, *local));
                 }
                 state.ledger.totals.bytes = state.ledger.totals.bytes.saturating_sub(*bytes);
                 state.ledger.totals.objects = state.ledger.totals.objects.saturating_sub(1);
@@ -270,7 +272,7 @@ impl OwnerReleasePlan {
                 trip_release_failpoint(ReleaseFailpoint::OwnerToPayer);
                 lease.irreversible();
                 if !self.preserve_owner_id {
-                    owner.ledger.live.remove(&(KIND_BUFFER, self.owner.1));
+                    owner.ledger.live.remove(&(self.kind, self.owner.1));
                 }
                 owner.ledger.totals.bytes = owner.ledger.totals.bytes.saturating_sub(self.bytes);
                 owner.ledger.totals.objects = owner.ledger.totals.objects.saturating_sub(1);
@@ -278,7 +280,7 @@ impl OwnerReleasePlan {
                 payer
                     .ledger
                     .live
-                    .insert((KIND_BUFFER, payer_info.1), self.bytes);
+                    .insert((self.kind, payer_info.1), self.bytes);
                 payer.ledger.totals.bytes = payer.ledger.totals.bytes.saturating_add(self.bytes);
                 payer.ledger.totals.objects = payer.ledger.totals.objects.saturating_add(1);
             } else {
@@ -294,7 +296,7 @@ impl OwnerReleasePlan {
                 trip_release_failpoint(ReleaseFailpoint::OwnerFinalRefund);
                 lease.irreversible();
                 if !self.preserve_owner_id {
-                    owner.ledger.live.remove(&(KIND_BUFFER, self.owner.1));
+                    owner.ledger.live.remove(&(self.kind, self.owner.1));
                 }
                 owner.ledger.totals.bytes = owner.ledger.totals.bytes.saturating_sub(self.bytes);
                 owner.ledger.totals.objects = owner.ledger.totals.objects.saturating_sub(1);
@@ -386,6 +388,11 @@ impl Exports {
                 .cloned()
                 .map(|(local_id, account)| (payer_id, local_id, account))
         });
+        let kind = match entry.key.kind {
+            "buffer" => KIND_BUFFER,
+            "texture" => KIND_TEXTURE,
+            _ => return Err(GpuError::Invalid("release: unsupported shared resource kind")),
+        };
         entry.pending = Some(Pending {
             token,
             phase: TransitionPhase::Prepared,
@@ -398,6 +405,7 @@ impl Exports {
             owner: (owner, entry.key.id, owner_account),
             payer,
             bytes: entry.bytes,
+            kind,
             global,
             preserve_owner_id: false,
             committed: false,
@@ -467,6 +475,11 @@ impl Exports {
         } else {
             None
         };
+        let kind = match entry.key.kind {
+            "buffer" => KIND_BUFFER,
+            "texture" => KIND_TEXTURE,
+            _ => return Err(GpuError::Invalid("release: unsupported shared resource kind")),
+        };
         entry.pending = Some(Pending {
             token,
             phase: TransitionPhase::Prepared,
@@ -480,6 +493,7 @@ impl Exports {
             transfer,
             final_payer,
             global,
+            kind,
             preserve_importer_id: false,
             committed: false,
         })

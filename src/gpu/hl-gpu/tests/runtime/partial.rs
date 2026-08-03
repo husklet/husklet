@@ -93,7 +93,7 @@ impl GpuExecutor for RefuseAll {
     }
     fn export_texture(&self, resources: &SessionResources, id: TextureId) -> Result<(hl_gpu::runtime::model::sharing::Shared, u64)> {
         resources.textures.get(id.0)?;
-        Ok((std::sync::Arc::new(()), 4))
+        Ok((std::sync::Arc::new(()), 16))
     }
 }
 
@@ -188,4 +188,105 @@ fn refused_shared_texture_destroy_keeps_export_and_charge() {
     assert!(exports.is_live(export));
     assert!(session.resources.textures.contains(2));
     assert!(session.residency_bytes() > 0);
+}
+
+struct DestroyThenRefuse(Capabilities);
+
+impl GpuExecutor for DestroyThenRefuse {
+    fn capabilities(&self) -> Capabilities { self.0.clone() }
+    fn execute(&mut self, resources: &mut SessionResources, batch: &[Cmd]) -> Result<hl_gpu::Execution> {
+        match &batch[0] {
+            Cmd::DestroyBuffer(id) => { resources.buffers.remove(*id)?; }
+            Cmd::DestroyTexture(id) => { resources.textures.remove(*id)?; }
+            _ => panic!("fixture requires a destroy first"),
+        }
+        Ok(hl_gpu::Execution::partial(Vec::new(), GpuError::Invalid("replacement refused"), batch, vec![0]))
+    }
+    fn wait(&mut self, _: &mut SessionResources, _: FenceId, _: u64) -> Result<()> { Ok(()) }
+    fn export_buffer(&self, resources: &SessionResources, id: hl_gpu::BufferId) -> Result<(hl_gpu::runtime::model::sharing::Shared, u64)> {
+        resources.buffers.get(id.0)?;
+        Ok((std::sync::Arc::new(()), 64))
+    }
+    fn import_buffer(&self, resource: hl_gpu::runtime::model::sharing::Shared, _: u64) -> Result<hl_gpu::runtime::Native> { Ok(Box::new(resource)) }
+    fn export_texture(&self, resources: &SessionResources, id: TextureId) -> Result<(hl_gpu::runtime::model::sharing::Shared, u64)> {
+        resources.textures.get(id.0)?;
+        Ok((std::sync::Arc::new(()), 16))
+    }
+    fn import_texture(&self, resource: hl_gpu::runtime::model::sharing::Shared, _: u64) -> Result<hl_gpu::runtime::Native> { Ok(Box::new(resource)) }
+}
+
+#[test]
+fn committed_owner_buffer_destroy_does_not_preserve_a_refused_replacement() {
+    use hl_gpu::runtime::model::sharing::Exports;
+    let caps = Capabilities::permissive_fixture("owner buffer replacement");
+    let exports = Exports::new();
+    let mut session = session(Limits::from_capabilities(caps.clone()), GlobalLedger::unbounded()).with_exports(exports.clone());
+    let mut executor = DestroyThenRefuse(caps);
+    session.resources.buffers.insert(1, Box::new(())).unwrap();
+    session.charge_frame(&[buffer(1, 64)]).unwrap();
+    let export = hl_gpu::runtime::service::dispatch::export_buffer(&mut session, &executor, hl_gpu::BufferId(1)).unwrap();
+    let batch = [Cmd::DestroyBuffer(1), buffer(1, 32)];
+    hl_gpu::runtime::submit_outcome(&mut session, &mut executor, 0, &batch).unwrap();
+    assert!(!session.resources.buffers.contains(1));
+    assert!(!exports.is_live(export));
+    assert_eq!(session.residency_bytes(), 0);
+}
+
+#[test]
+fn committed_owner_texture_destroy_does_not_preserve_a_refused_replacement() {
+    use hl_gpu::runtime::model::sharing::Exports;
+    let caps = Capabilities::permissive_fixture("owner texture replacement");
+    let exports = Exports::new();
+    let mut session = session(Limits::from_capabilities(caps.clone()), GlobalLedger::unbounded()).with_exports(exports.clone());
+    let mut executor = DestroyThenRefuse(caps);
+    session.resources.textures.insert(2, Box::new(())).unwrap();
+    session.charge_frame(&[texture(2, 2)]).unwrap();
+    let export = hl_gpu::runtime::service::dispatch::export_texture(&mut session, &executor, TextureId(2)).unwrap();
+    let batch = [Cmd::DestroyTexture(2), texture(2, 1)];
+    hl_gpu::runtime::submit_outcome(&mut session, &mut executor, 0, &batch).unwrap();
+    assert!(!session.resources.textures.contains(2));
+    assert!(!exports.is_live(export));
+    assert_eq!(session.residency_bytes(), 0);
+}
+
+#[test]
+fn committed_importer_buffer_destroy_does_not_preserve_a_refused_replacement() {
+    use hl_gpu::runtime::model::sharing::Exports;
+    let caps = Capabilities::permissive_fixture("importer buffer replacement");
+    let exports = Exports::new();
+    let global = GlobalLedger::unbounded();
+    let mut owner = session(Limits::from_capabilities(caps.clone()), global.clone()).with_exports(exports.clone());
+    let mut importer = session(Limits::from_capabilities(caps.clone()), global).with_exports(exports.clone());
+    let mut executor = DestroyThenRefuse(caps);
+    owner.resources.buffers.insert(1, Box::new(())).unwrap();
+    owner.charge_frame(&[buffer(1, 64)]).unwrap();
+    let export = hl_gpu::runtime::service::dispatch::export_buffer(&mut owner, &executor, hl_gpu::BufferId(1)).unwrap();
+    hl_gpu::runtime::service::dispatch::import_buffer(&mut importer, &executor, hl_gpu::BufferId(1), export).unwrap();
+    let batch = [Cmd::DestroyBuffer(1), buffer(1, 32)];
+    hl_gpu::runtime::submit_outcome(&mut importer, &mut executor, 0, &batch).unwrap();
+    assert!(!importer.resources.buffers.contains(1));
+    assert!(exports.is_live(export), "the owner's identity remains live");
+    assert_eq!(importer.residency_bytes(), 0);
+    assert_eq!(owner.residency_bytes(), 64);
+}
+
+#[test]
+fn committed_importer_texture_destroy_does_not_preserve_a_refused_replacement() {
+    use hl_gpu::runtime::model::sharing::Exports;
+    let caps = Capabilities::permissive_fixture("importer texture replacement");
+    let exports = Exports::new();
+    let global = GlobalLedger::unbounded();
+    let mut owner = session(Limits::from_capabilities(caps.clone()), global.clone()).with_exports(exports.clone());
+    let mut importer = session(Limits::from_capabilities(caps.clone()), global).with_exports(exports.clone());
+    let mut executor = DestroyThenRefuse(caps);
+    owner.resources.textures.insert(2, Box::new(())).unwrap();
+    owner.charge_frame(&[texture(2, 2)]).unwrap();
+    let export = hl_gpu::runtime::service::dispatch::export_texture(&mut owner, &executor, TextureId(2)).unwrap();
+    hl_gpu::runtime::service::dispatch::import_texture(&mut importer, &executor, TextureId(2), export).unwrap();
+    let batch = [Cmd::DestroyTexture(2), texture(2, 1)];
+    hl_gpu::runtime::submit_outcome(&mut importer, &mut executor, 0, &batch).unwrap();
+    assert!(!importer.resources.textures.contains(2));
+    assert!(exports.is_live(export), "the owner's identity remains live");
+    assert_eq!(importer.residency_bytes(), 0);
+    assert!(owner.residency_bytes() > 0);
 }
