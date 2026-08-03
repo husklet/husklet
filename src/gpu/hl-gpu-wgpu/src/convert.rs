@@ -381,4 +381,18 @@ mod packed_format_tests {
         assert_eq!(format.native_texel_bytes().unwrap(), 4);
         assert!(!format.needs_transfer_conversion());
     }
+
+    #[test]
+    fn rgb9e5_transfer_bytes_are_never_repacked() {
+        let format = Format::from(TextureFormat::Rgb9e5Ufloat);
+        let texels = [
+            [0x00, 0x00, 0x00, 0x00],
+            [0x00, 0x01, 0x00, 0x80], // (1, 0, 0), shared exponent 16
+            [0x00, 0x01, 0x02, 0x84], // (1, 1, 1), shared exponent 16
+            [0xff, 0xff, 0xff, 0xff],
+        ]
+        .concat();
+        assert_eq!(format.logical_to_native(&texels).unwrap(), texels);
+        assert_eq!(format.native_to_logical(&texels).unwrap(), texels);
+    }
 }
