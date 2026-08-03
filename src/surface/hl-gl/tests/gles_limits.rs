@@ -467,6 +467,38 @@ fn every_advertised_combined_texture_unit_binds() {
     }
 }
 
+#[test]
+fn texture_units_keep_independent_2d_and_cube_bindings() {
+    let mut c = ctx(2, 0);
+    let texture_2d = c.textures.gen();
+    let texture_cube = c.textures.gen();
+
+    record::bind_texture(&mut c, GL_TEXTURE_2D, texture_2d);
+    record::bind_texture(&mut c, GL_TEXTURE_CUBE_MAP, texture_cube);
+    record::tex_parameter_target(&mut c, GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    record::tex_parameter_target(
+        &mut c,
+        GL_TEXTURE_CUBE_MAP,
+        GL_TEXTURE_MIN_FILTER,
+        GL_LINEAR,
+    );
+
+    assert_eq!(integer(&c, GL_TEXTURE_BINDING_2D) as u32, texture_2d);
+    assert_eq!(
+        integer(&c, GL_TEXTURE_BINDING_CUBE_MAP) as u32,
+        texture_cube
+    );
+    assert_eq!(
+        query::get_tex_parameteriv(&c, GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER),
+        GL_NEAREST as i32
+    );
+    assert_eq!(
+        query::get_tex_parameteriv(&c, GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER),
+        GL_LINEAR as i32
+    );
+    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
+}
+
 /// A texture at the advertised `GL_MAX_TEXTURE_SIZE` must be accepted, and one edge past it rejected:
 /// the advertised ceiling is the same one the record path validates against.
 #[test]

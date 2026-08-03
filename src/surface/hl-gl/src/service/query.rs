@@ -182,7 +182,7 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
             one(ctx.buffer_for_target(GL_TRANSFORM_FEEDBACK_BUFFER) as i32)
         }
         GL_TEXTURE_BINDING_2D => one(ctx.local.tex_unit[ctx.local.active_texture] as i32),
-        GL_TEXTURE_BINDING_CUBE_MAP => one(ctx.local.tex_unit[ctx.local.active_texture] as i32),
+        GL_TEXTURE_BINDING_CUBE_MAP => one(ctx.local.cube_tex_unit[ctx.local.active_texture] as i32),
         // GL_DRAW_FRAMEBUFFER_BINDING shares GL_FRAMEBUFFER_BINDING's enum value (0x8CA6).
         GL_FRAMEBUFFER_BINDING => one(ctx.local.bound_fbo as i32),
         GL_READ_FRAMEBUFFER_BINDING => one(ctx.local.read_fbo as i32),
