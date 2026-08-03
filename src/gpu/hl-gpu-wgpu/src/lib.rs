@@ -558,6 +558,10 @@ impl WgpuExecutor {
                 // is why `INTEGER_FORMATS` is advertised here rather than shared through `COLOR_FORMATS`.
                 | TextureFormat::bits(hl_gpu::protocol::model::capability::INTEGER_FORMATS)
                 | TextureFormat::bits(hl_gpu::protocol::model::capability::NATIVE_FORMATS)
+                // R10X6 has no native wgpu spelling, but this executor serves it through an RGBA16Unorm
+                // backing plus exact per-draw GPU quantization. It is therefore an executor capability,
+                // not a member of the protocol's native-format census.
+                | TextureFormat::bits(&[TextureFormat::R10x6g10x6b10x6a10x6Unorm])
                 | if features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC) {
                     TextureFormat::bits(hl_gpu::protocol::model::capability::BC_FORMATS)
                 } else {
@@ -716,6 +720,18 @@ mod device_tests {
     };
 
     use super::{Device, DeviceConfig, WgpuExecutor, MAX_ADVERTISED_BUFFER_BYTES, MAX_FRAME_BYTES};
+
+    #[test]
+    fn capabilities_include_gpu_quantized_r10x6() {
+        let device = Device::new(DeviceConfig::default())
+            .expect("a GPU adapter is required to prove the wgpu executor");
+        assert!(
+            device
+                .executor()
+                .caps
+                .supports_format(TextureFormat::R10x6g10x6b10x6a10x6Unorm)
+        );
+    }
 
     /// The single-allocation ceiling comes from the bound device, not from a constant that happened to be
     /// the frame budget. It is `min(device max_buffer_size, MAX_ADVERTISED_BUFFER_BYTES)` — never larger
