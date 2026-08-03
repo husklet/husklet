@@ -222,8 +222,10 @@ pub mod vk_image_usage {
 
 /// `VkFormat` (stable enum values from vk.xml) for the color/depth subset the render path needs.
 pub mod vk_format {
+    pub const R4G4B4A4_UNORM_PACK16: u32 = 2;
     pub const B4G4R4A4_UNORM_PACK16: u32 = 3;
     pub const R5G6B5_UNORM_PACK16: u32 = 4;
+    pub const R5G5B5A1_UNORM_PACK16: u32 = 6;
     pub const A1R5G5B5_UNORM_PACK16: u32 = 8;
     pub const R8G8B8A8_UNORM: u32 = 37;
     pub const R8G8B8A8_SRGB: u32 = 43;
@@ -304,6 +306,9 @@ pub mod vk_format {
     pub const A2B10G10R10_UNORM_PACK32: u32 = 64;
     pub const A2B10G10R10_UINT_PACK32: u32 = 68;
     pub const B10G11R11_UFLOAT_PACK32: u32 = 122;
+    pub const R10X6G10X6B10X6A10X6_UNORM_4PACK16: u32 = 1_000_156_009;
+    pub const A4R4G4B4_UNORM_PACK16_EXT: u32 = 1_000_340_000;
+    pub const A4B4G4R4_UNORM_PACK16_EXT: u32 = 1_000_340_001;
 }
 
 /// `VkFormat` values that appear as VERTEX ATTRIBUTE formats. Distinct from the image formats above
@@ -630,6 +635,11 @@ impl Format {
             vk_format::R5G6B5_UNORM_PACK16 => T::R5g6b5Unorm,
             vk_format::A1R5G5B5_UNORM_PACK16 => T::A1r5g5b5Unorm,
             vk_format::B4G4R4A4_UNORM_PACK16 => T::B4g4r4a4Unorm,
+            vk_format::R4G4B4A4_UNORM_PACK16 => T::R4g4b4a4Unorm,
+            vk_format::R5G5B5A1_UNORM_PACK16 => T::R5g5b5a1Unorm,
+            vk_format::A4R4G4B4_UNORM_PACK16_EXT => T::A4r4g4b4Unorm,
+            vk_format::A4B4G4R4_UNORM_PACK16_EXT => T::A4b4g4r4Unorm,
+            vk_format::R10X6G10X6B10X6A10X6_UNORM_4PACK16 => T::R10x6g10x6b10x6a10x6Unorm,
             _ => return None,
         })
     }
@@ -725,11 +735,7 @@ mod vertex_format_tests {
     /// would mean handing the executor an attribute that reads different bytes than the app declared.
     #[test]
     fn a_format_without_a_wire_encoding_is_refused_rather_than_approximated() {
-        for format in [
-            f::B8G8R8A8_SINT,
-            0,
-            u32::MAX,
-        ] {
+        for format in [f::B8G8R8A8_SINT, 0, u32::MAX] {
             assert!(
                 VertexFormat(format).wire().is_none(),
                 "VkFormat {format} has no wire encoding and must be refused"
@@ -754,7 +760,53 @@ mod vertex_format_tests {
                 !(normalized && integer),
                 "VkFormat {format} is both normalized and integer"
             );
-            assert!(kind <= VertexFormat::BGRA_U8, "VkFormat {format} lowered to unknown kind {kind}");
+            assert!(
+                kind <= VertexFormat::BGRA_U8,
+                "VkFormat {format} lowered to unknown kind {kind}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod shadow_format_tests {
+    use super::{vk_format, Format};
+    use hl_gpu::protocol::model::enums::TextureFormat;
+
+    #[test]
+    fn packed_shadow_formats_keep_distinct_wire_layouts() {
+        let cases = [
+            (
+                vk_format::R4G4B4A4_UNORM_PACK16,
+                TextureFormat::R4g4b4a4Unorm,
+            ),
+            (
+                vk_format::R5G5B5A1_UNORM_PACK16,
+                TextureFormat::R5g5b5a1Unorm,
+            ),
+            (
+                vk_format::A4R4G4B4_UNORM_PACK16_EXT,
+                TextureFormat::A4r4g4b4Unorm,
+            ),
+            (
+                vk_format::A4B4G4R4_UNORM_PACK16_EXT,
+                TextureFormat::A4b4g4r4Unorm,
+            ),
+            (
+                vk_format::R10X6G10X6B10X6A10X6_UNORM_4PACK16,
+                TextureFormat::R10x6g10x6b10x6a10x6Unorm,
+            ),
+            (
+                vk_format::B10G11R11_UFLOAT_PACK32,
+                TextureFormat::Rg11b10Ufloat,
+            ),
+            (
+                vk_format::E5B9G9R9_UFLOAT_PACK32,
+                TextureFormat::Rgb9e5Ufloat,
+            ),
+        ];
+        for (vk, wire) in cases {
+            assert_eq!(Format(vk).wire(), Some(wire), "VkFormat {vk}");
         }
     }
 }

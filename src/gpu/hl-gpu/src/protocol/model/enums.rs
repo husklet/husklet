@@ -56,6 +56,12 @@ u32_enum!(
         R5g6b5Unorm = 64, A1r5g5b5Unorm = 65, B4g4r4a4Unorm = 66,
         Rgba16Unorm = 67, Rg16Unorm = 68, R16Unorm = 69, R16Snorm = 70, Rg16Snorm = 71,
         Rgba16Snorm = 72,
+        // Logical Vulkan layouts whose native Metal counterparts are absent or not color-renderable.
+        // Executors may back these with a wider shadow texture, but the wire value preserves the exact
+        // byte layout required at transfer boundaries.
+        R4g4b4a4Unorm = 73, R5g5b5a1Unorm = 74,
+        A4r4g4b4Unorm = 75, A4b4g4r4Unorm = 76,
+        R10x6g10x6b10x6a10x6Unorm = 77,
     } "TextureFormat"
 );
 
@@ -105,7 +111,12 @@ impl TextureFormat {
             | TextureFormat::R16Sint
             | TextureFormat::R5g6b5Unorm
             | TextureFormat::A1r5g5b5Unorm
-            | TextureFormat::B4g4r4a4Unorm => 2,
+            | TextureFormat::B4g4r4a4Unorm
+            | TextureFormat::R4g4b4a4Unorm
+            | TextureFormat::R5g5b5a1Unorm
+            | TextureFormat::A4r4g4b4Unorm
+            | TextureFormat::A4b4g4r4Unorm => 2,
+            TextureFormat::R10x6g10x6b10x6a10x6Unorm => 8,
             TextureFormat::Rg8Unorm
             | TextureFormat::Rg8Snorm
             | TextureFormat::Rg8Uint
@@ -324,6 +335,34 @@ impl TextureFormat {
                 | (unorm_bits(color[2], 15) << 12))
                 .to_le_bytes()
                 .to_vec(),
+            TextureFormat::R4g4b4a4Unorm => (unorm_bits(color[3], 15)
+                | (unorm_bits(color[2], 15) << 4)
+                | (unorm_bits(color[1], 15) << 8)
+                | (unorm_bits(color[0], 15) << 12))
+                .to_le_bytes()
+                .to_vec(),
+            TextureFormat::R5g5b5a1Unorm => (unorm_bits(color[3], 1)
+                | (unorm_bits(color[2], 31) << 1)
+                | (unorm_bits(color[1], 31) << 6)
+                | (unorm_bits(color[0], 31) << 11))
+                .to_le_bytes()
+                .to_vec(),
+            TextureFormat::A4r4g4b4Unorm => (unorm_bits(color[2], 15)
+                | (unorm_bits(color[1], 15) << 4)
+                | (unorm_bits(color[0], 15) << 8)
+                | (unorm_bits(color[3], 15) << 12))
+                .to_le_bytes()
+                .to_vec(),
+            TextureFormat::A4b4g4r4Unorm => (unorm_bits(color[0], 15)
+                | (unorm_bits(color[1], 15) << 4)
+                | (unorm_bits(color[2], 15) << 8)
+                | (unorm_bits(color[3], 15) << 12))
+                .to_le_bytes()
+                .to_vec(),
+            TextureFormat::R10x6g10x6b10x6a10x6Unorm => color
+                .iter()
+                .flat_map(|value| (unorm_bits(*value, 1023) << 6).to_le_bytes())
+                .collect(),
             _ => return None,
         })
     }
@@ -380,6 +419,22 @@ impl TextureFormat {
                     (i16::from_le_bytes(b) as f32 / i16::MAX as f32).max(-1.0)
                 })
         };
+        let packed16 = u16::from_le_bytes([byte(0), byte(1)]);
+        let bits = |shift: u32, mask: u16| f32::from((packed16 >> shift) & mask) / f32::from(mask);
+        let ufloat = |bits: u32, mantissa_bits: u32| {
+            let mantissa_mask = (1 << mantissa_bits) - 1;
+            let mantissa = bits & mantissa_mask;
+            let exponent = (bits >> mantissa_bits) & 0x1f;
+            match exponent {
+                0 => (mantissa as f32) * 2.0f32.powi(1 - 15 - mantissa_bits as i32),
+                31 if mantissa == 0 => f32::INFINITY,
+                31 => f32::NAN,
+                _ => {
+                    (1.0 + mantissa as f32 / (1 << mantissa_bits) as f32)
+                        * 2.0f32.powi(exponent as i32 - 15)
+                }
+            }
+        };
         Some(match self {
             TextureFormat::Rgba8Unorm | TextureFormat::Rgba8Srgb => {
                 [colour(0), colour(1), colour(2), unorm(3)]
@@ -400,6 +455,37 @@ impl TextureFormat {
             TextureFormat::Rg32Float => [single(0), single(1), 0.0, 1.0],
             TextureFormat::Rgba16Float => [half(0), half(1), half(2), half(3)],
             TextureFormat::Rgba32Float => [single(0), single(1), single(2), single(3)],
+            TextureFormat::R4g4b4a4Unorm => [bits(12, 15), bits(8, 15), bits(4, 15), bits(0, 15)],
+            TextureFormat::R5g5b5a1Unorm => [bits(11, 31), bits(6, 31), bits(1, 31), bits(0, 1)],
+            TextureFormat::A4r4g4b4Unorm => [bits(8, 15), bits(4, 15), bits(0, 15), bits(12, 15)],
+            TextureFormat::A4b4g4r4Unorm => [bits(0, 15), bits(4, 15), bits(8, 15), bits(12, 15)],
+            TextureFormat::R10x6g10x6b10x6a10x6Unorm => {
+                let channel = |index: usize| {
+                    let offset = index * 2;
+                    let word = u16::from_le_bytes([byte(offset), byte(offset + 1)]);
+                    f32::from(word >> 6) / 1023.0
+                };
+                [channel(0), channel(1), channel(2), channel(3)]
+            }
+            TextureFormat::Rg11b10Ufloat => {
+                let word = u32::from_le_bytes([byte(0), byte(1), byte(2), byte(3)]);
+                [
+                    ufloat(word & 0x7ff, 6),
+                    ufloat((word >> 11) & 0x7ff, 6),
+                    ufloat(word >> 22, 5),
+                    1.0,
+                ]
+            }
+            TextureFormat::Rgb9e5Ufloat => {
+                let word = u32::from_le_bytes([byte(0), byte(1), byte(2), byte(3)]);
+                let scale = 2.0f32.powi(((word >> 27) & 0x1f) as i32 - 24);
+                [
+                    (word & 0x1ff) as f32 * scale,
+                    ((word >> 9) & 0x1ff) as f32 * scale,
+                    ((word >> 18) & 0x1ff) as f32 * scale,
+                    1.0,
+                ]
+            }
             // Raw integer values, matching the direction `clear_texel` packs them.
             TextureFormat::R8Uint => [byte(0) as f32, 0.0, 0.0, 1.0],
             TextureFormat::Rg8Uint => [byte(0) as f32, byte(1) as f32, 0.0, 1.0],
@@ -546,8 +632,14 @@ mod address_mode_tests {
         assert_eq!(AddressMode::Repeat.to_u32(), 1);
         assert_eq!(AddressMode::MirrorRepeat.to_u32(), 2);
         assert_eq!(AddressMode::MirrorClampToEdge.to_u32(), 3);
-        assert_eq!(AddressMode::from_u32(3).unwrap(), AddressMode::MirrorClampToEdge);
-        assert_eq!(AddressMode::from_u32(4).unwrap(), AddressMode::ClampToBorder);
+        assert_eq!(
+            AddressMode::from_u32(3).unwrap(),
+            AddressMode::MirrorClampToEdge
+        );
+        assert_eq!(
+            AddressMode::from_u32(4).unwrap(),
+            AddressMode::ClampToBorder
+        );
     }
 }
 
@@ -708,6 +800,81 @@ mod clear_texel_tests {
         [4.0, -2.5, 65504.0, 1.0e-9],
         [-1.0, 2.0, 0.0, 1.0],
     ];
+
+    #[test]
+    fn shadow_packed_formats_decode_their_logical_vulkan_layout() {
+        let rg11_one = ((15u32 << 6) | ((15u32 << 6) << 11) | ((15u32 << 5) << 22)).to_le_bytes();
+        let rgb9e5_one = (256u32 | (256 << 9) | (256 << 18) | (16 << 27)).to_le_bytes();
+        let rgba10x6 = [0xffffu16, 0x0000, 0x8040, 0x4000]
+            .into_iter()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        let cases: &[(TextureFormat, &[u8], [f32; 4])] = &[
+            (
+                TextureFormat::R4g4b4a4Unorm,
+                &[0x0f, 0xf0],
+                [1.0, 0.0, 0.0, 1.0],
+            ),
+            (
+                TextureFormat::R5g5b5a1Unorm,
+                &[0x01, 0xf8],
+                [1.0, 0.0, 0.0, 1.0],
+            ),
+            (
+                TextureFormat::A4r4g4b4Unorm,
+                &[0x00, 0xff],
+                [1.0, 0.0, 0.0, 1.0],
+            ),
+            (
+                TextureFormat::A4b4g4r4Unorm,
+                &[0x0f, 0xf0],
+                [1.0, 0.0, 0.0, 1.0],
+            ),
+            (
+                TextureFormat::Rg11b10Ufloat,
+                &rg11_one,
+                [1.0, 1.0, 1.0, 1.0],
+            ),
+            (
+                TextureFormat::Rgb9e5Ufloat,
+                &rgb9e5_one,
+                [1.0, 1.0, 1.0, 1.0],
+            ),
+            (
+                TextureFormat::R10x6g10x6b10x6a10x6Unorm,
+                &rgba10x6,
+                [1.0, 0.0, 513.0 / 1023.0, 256.0 / 1023.0],
+            ),
+        ];
+
+        for &(format, bytes, expected) in cases {
+            let actual = format.texel_to_f32(bytes).expect("packed color format");
+            for channel in 0..4 {
+                assert!(
+                    (actual[channel] - expected[channel]).abs() <= f32::EPSILON,
+                    "{format:?} channel {channel}: {actual:?} != {expected:?}"
+                );
+            }
+            assert_eq!(format.bytes_per_texel(), Some(bytes.len()), "{format:?}");
+        }
+    }
+
+    #[test]
+    fn shadow_unorm_packing_is_the_inverse_of_decoding() {
+        let formats = [
+            TextureFormat::R4g4b4a4Unorm,
+            TextureFormat::R5g5b5a1Unorm,
+            TextureFormat::A4r4g4b4Unorm,
+            TextureFormat::A4b4g4r4Unorm,
+            TextureFormat::R10x6g10x6b10x6a10x6Unorm,
+        ];
+        let color = [1.0, 0.0, 0.5, 1.0];
+        for format in formats {
+            let packed = format.clear_texel(color).expect("packed unorm format");
+            let decoded = format.texel_to_f32(&packed).expect("packed unorm format");
+            assert_eq!(format.clear_texel(decoded), Some(packed), "{format:?}");
+        }
+    }
 
     /// Every format the capability set claims EVERY backend can materialize must have a clear packing.
     ///
