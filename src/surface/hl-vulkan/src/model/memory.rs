@@ -226,6 +226,11 @@ pub mod vk_format {
     pub const R8G8B8A8_SRGB: u32 = 43;
     pub const B8G8R8A8_UNORM: u32 = 44;
     pub const B8G8R8A8_SRGB: u32 = 50;
+    pub const A8B8G8R8_UNORM_PACK32: u32 = 51;
+    pub const A8B8G8R8_SNORM_PACK32: u32 = 52;
+    pub const A8B8G8R8_UINT_PACK32: u32 = 55;
+    pub const A8B8G8R8_SINT_PACK32: u32 = 56;
+    pub const A8B8G8R8_SRGB_PACK32: u32 = 57;
     pub const R8_UNORM: u32 = 9;
     pub const R8_SNORM: u32 = 10;
     pub const R8G8_UNORM: u32 = 16;
@@ -309,6 +314,10 @@ pub mod vk_vertex_format {
     pub const B8G8R8A8_SNORM: u32 = 45;
     pub const B8G8R8A8_UINT: u32 = 48;
     pub const B8G8R8A8_SINT: u32 = 49;
+    pub const A8B8G8R8_UNORM_PACK32: u32 = 51;
+    pub const A8B8G8R8_SNORM_PACK32: u32 = 52;
+    pub const A8B8G8R8_UINT_PACK32: u32 = 55;
+    pub const A8B8G8R8_SINT_PACK32: u32 = 56;
     // packed
     pub const A2B10G10R10_UNORM_PACK32: u32 = 64;
     // 16-bit
@@ -410,6 +419,11 @@ impl VertexFormat {
             f::B8G8R8A8_UNORM => (Self::BGRA_U8, 4, true, false),
             f::R8G8_SINT => (Self::I8, 2, false, true),
             f::R8G8B8A8_SINT => (Self::I8, 4, false, true),
+            // Vulkan's A8B8G8R8_PACK32 has little-endian bytes R,G,B,A, exactly the executor's x4 layout.
+            f::A8B8G8R8_UNORM_PACK32 => (Self::U8, 4, true, false),
+            f::A8B8G8R8_SNORM_PACK32 => (Self::I8, 4, true, false),
+            f::A8B8G8R8_UINT_PACK32 => (Self::U8, 4, false, true),
+            f::A8B8G8R8_SINT_PACK32 => (Self::I8, 4, false, true),
             // 16-bit integer — x2/x4 only.
             f::R16_UINT => (Self::U16, 1, false, true),
             f::R16_SINT => (Self::I16, 1, false, true),
@@ -520,6 +534,11 @@ impl Format {
             vk_format::R8G8B8A8_SRGB => T::Rgba8Srgb,
             vk_format::B8G8R8A8_UNORM => T::Bgra8Unorm,
             vk_format::B8G8R8A8_SRGB => T::Bgra8Srgb,
+            vk_format::A8B8G8R8_UNORM_PACK32 => T::Rgba8Unorm,
+            vk_format::A8B8G8R8_SNORM_PACK32 => T::Rgba8Snorm,
+            vk_format::A8B8G8R8_UINT_PACK32 => T::Rgba8Uint,
+            vk_format::A8B8G8R8_SINT_PACK32 => T::Rgba8Sint,
+            vk_format::A8B8G8R8_SRGB_PACK32 => T::Rgba8Srgb,
             vk_format::R8_UNORM => T::R8Unorm,
             vk_format::R8_SNORM => T::R8Snorm,
             vk_format::R8G8_UNORM => T::Rg8Unorm,
@@ -658,6 +677,10 @@ mod vertex_format_tests {
         assert_eq!(
             decode(VertexFormat(f::R16_SNORM).wire().unwrap()),
             (1, VertexFormat::I16, true, false)
+        );
+        assert_eq!(
+            decode(VertexFormat(f::A8B8G8R8_UNORM_PACK32).wire().unwrap()),
+            (4, VertexFormat::U8, true, false)
         );
         assert_eq!(
             decode(VertexFormat(f::R16G16B16A16_SFLOAT).wire().unwrap()),
