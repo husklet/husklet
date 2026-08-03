@@ -2482,8 +2482,16 @@ impl<'a, W: Write> Writer<'a, W> {
                 array_index,
                 fun,
                 value,
+                result,
             } => {
                 write!(self.out, "{level}")?;
+                if let Some(result) = result {
+                    let res_name = Baked(result).to_string();
+                    let res_ty = ctx.resolve_type(result, &self.module.types);
+                    self.write_value_type(res_ty)?;
+                    write!(self.out, " {res_name} = ")?;
+                    self.named_expressions.insert(result, res_name);
+                }
                 self.write_image_atomic(ctx, image, coordinate, array_index, fun, value)?
             }
             Statement::RayQuery { .. } => unreachable!(),
