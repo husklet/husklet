@@ -252,6 +252,92 @@ impl Tokens {
             self.0.insert(index, Tok::Word(swizzle));
         }
     }
+
+    /// WGSL exposes these geometric builtins only for vectors while GLSL ES also defines scalar overloads.
+    /// Lift scalar calls to `vec2(x, 0)`; the x component is the original scalar result.
+    fn lift_scalar_geometric_builtins(&mut self) {
+        let mut scalars = std::collections::BTreeSet::new();
+        for index in 0..self.len() {
+            if !matches!(&self[index], Tok::Word(ty) if ty == "float") {
+                continue;
+            }
+            let Some(name) = self.next_significant(index + 1) else { continue };
+            if let Tok::Word(name) = &self[name] {
+                scalars.insert(name.clone());
+            }
+        }
+
+        let mut edits = Vec::new();
+        for index in 0..self.len() {
+            let Tok::Word(function) = &self[index] else { continue };
+            let required = match function.as_str() {
+                "dot" | "reflect" => 2,
+                "normalize" => 1,
+                "faceforward" | "refract" => 3,
+                _ => continue,
+            };
+            let Some(open) = self.next_significant(index + 1) else { continue };
+            if self[open] != Tok::Punct('(') {
+                continue;
+            }
+            let mut arguments = Vec::new();
+            let mut cursor = open + 1;
+            let mut depth = 0usize;
+            let mut start = self.next_significant(cursor).unwrap_or(cursor);
+            let close = loop {
+                let Some(at) = self.next_significant(cursor) else { break None };
+                match self[at] {
+                    Tok::Punct('(') => depth += 1,
+                    Tok::Punct(')') if depth == 0 => {
+                        arguments.push((start, at));
+                        break Some(at);
+                    }
+                    Tok::Punct(')') => depth -= 1,
+                    Tok::Punct(',') if depth == 0 => {
+                        arguments.push((start, at));
+                        start = self.next_significant(at + 1).unwrap_or(at + 1);
+                    }
+                    _ => {}
+                }
+                cursor = at + 1;
+            };
+            let Some(close) = close else { continue };
+            if arguments.len() != required {
+                continue;
+            }
+            let scalar_count = if function == "refract" { 2 } else { required };
+            if !(0..scalar_count).all(|argument| {
+                let (start, end) = arguments[argument];
+                self.next_significant(start + 1).is_some_and(|next| next == end)
+                    && matches!(&self[start], Tok::Word(name) if scalars.contains(name))
+            }) {
+                continue;
+            }
+            let mut replacement = function.clone();
+            replacement.push('(');
+            for (argument, (start, end)) in arguments.iter().copied().enumerate() {
+                if argument != 0 {
+                    replacement.push(',');
+                }
+                let value = self[start..end].source();
+                if argument < scalar_count {
+                    replacement.push_str("vec2(");
+                    replacement.push_str(&value);
+                    replacement.push_str(",0.0)");
+                } else {
+                    replacement.push_str(&value);
+                }
+            }
+            replacement.push(')');
+            if function != "dot" {
+                replacement.push_str(".x");
+            }
+            edits.push((index, close + 1, Tokens::from_source(&replacement).0));
+        }
+        for (start, end, replacement) in edits.into_iter().rev() {
+            self.0.splice(start..end, replacement);
+        }
+    }
 }
 
 fn vector_width(ty: &str) -> Option<usize> {
@@ -532,6 +618,12 @@ impl<'a> Source<'a> {
     pub(crate) fn truncate_vector_constructors(&self) -> String {
         let mut tokens = Tokens::from_source(self.text);
         tokens.truncate_vector_constructors();
+        tokens.0.as_slice().source()
+    }
+
+    pub(crate) fn lift_scalar_geometric_builtins(&self) -> String {
+        let mut tokens = Tokens::from_source(self.text);
+        tokens.lift_scalar_geometric_builtins();
         tokens.0.as_slice().source()
     }
 

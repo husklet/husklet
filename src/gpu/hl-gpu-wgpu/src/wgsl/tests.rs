@@ -538,3 +538,18 @@ fn larger_vector_constructor_is_explicitly_truncated_for_naga() {
     glsl_to_wgsl(source, naga::ShaderStage::Fragment, "main")
         .unwrap_or_else(|error| panic!("truncated vector constructor was refused: {error}"));
 }
+
+#[test]
+fn scalar_geometric_overloads_are_lifted_for_naga() {
+    for expression in [
+        "dot(a,b)",
+        "normalize(a)",
+        "faceforward(a,b,c)",
+        "reflect(a,b)",
+        "refract(a,b,c)",
+    ] {
+        let source = format!("#version 460\nlayout(location=0) out vec4 color;\nvoid main(){{ float a=0.5; float b=0.25; float c=0.75; float value={expression}; color=vec4(value); }}");
+        glsl_to_wgsl(&source, naga::ShaderStage::Fragment, "main")
+            .unwrap_or_else(|error| panic!("scalar {expression} was refused: {error}"));
+    }
+}
