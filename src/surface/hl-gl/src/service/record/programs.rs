@@ -935,6 +935,7 @@ impl GlContext {
             current_attrs: ctx.local.current_attr,
             current_attr_kinds: ctx.local.current_attr_kind,
             tex_units: ctx.local.tex_unit,
+            cube_tex_units: ctx.local.cube_tex_unit,
             samp_objs,
             viewport: ctx.local.pipeline.viewport,
             scissor_enabled: ctx.local.pipeline.scissor_enabled,
@@ -1017,6 +1018,10 @@ impl GlContext {
                 d.tex_generations[unit] = texture.gen;
                 d.tex_swizzles[unit] = texture.sampled_swizzle();
             }
+            if let Some(texture) = ctx.textures.get(d.cube_tex_units[unit]) {
+                d.cube_tex_generations[unit] = texture.gen;
+                d.cube_tex_swizzles[unit] = texture.sampled_swizzle();
+            }
         }
         if let Some(p) = ctx.programs.program(ctx.local.cur_prog) {
             d.samp_units.clone_from(&p.samp_units);
@@ -1032,7 +1037,10 @@ impl GlContext {
             .iter()
             .copied()
             .filter(|unit| (0..d.tex_units.len() as i32).contains(unit))
-            .map(|unit| d.tex_units[unit as usize])
+            .flat_map(|unit| {
+                let unit = unit as usize;
+                [d.tex_units[unit], d.cube_tex_units[unit]]
+            })
             .filter(|name| *name != 0)
             .filter_map(|name| ctx.texture_snapshot(name))
             .collect();

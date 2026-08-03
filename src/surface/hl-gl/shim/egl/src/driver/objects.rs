@@ -460,7 +460,7 @@ pub extern "C" fn glTexImage2D(
 pub extern "C" fn glTexParameteri(target: u32, pname: u32, param: i32) {
     GlobalState::context(|s| {
         if record::validate_tex_parameter(&mut s.gl, target, pname, param as u32) {
-            record::tex_parameter(&mut s.gl, pname, param as u32);
+            record::tex_parameter_target(&mut s.gl, target, pname, param as u32);
         }
     });
 }
@@ -472,7 +472,7 @@ pub extern "C" fn glTexParameteri(target: u32, pname: u32, param: i32) {
 pub extern "C" fn glTexParameterf(target: u32, pname: u32, param: f32) {
     GlobalState::context(|s| {
         if record::validate_tex_parameter(&mut s.gl, target, pname, param as u32) {
-            record::tex_parameter(&mut s.gl, pname, param as u32);
+            record::tex_parameter_target(&mut s.gl, target, pname, param as u32);
         }
     });
 }
@@ -495,7 +495,7 @@ pub extern "C" fn glTexParameterfv(target: u32, pname: u32, params: *const f32) 
         .collect::<Vec<_>>();
     GlobalState::context(|s| {
         if record::validate_tex_parameter(&mut s.gl, target, pname, values[0]) {
-            record::tex_parameter_vector(&mut s.gl, pname, &values);
+            record::tex_parameter_vector_target(&mut s.gl, target, pname, &values);
         }
     });
 }
@@ -517,7 +517,7 @@ pub extern "C" fn glTexParameteriv(target: u32, pname: u32, params: *const i32) 
         .collect::<Vec<_>>();
     GlobalState::context(|s| {
         if record::validate_tex_parameter(&mut s.gl, target, pname, values[0]) {
-            record::tex_parameter_vector(&mut s.gl, pname, &values);
+            record::tex_parameter_vector_target(&mut s.gl, target, pname, &values);
         }
     });
 }

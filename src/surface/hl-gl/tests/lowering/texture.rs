@@ -106,6 +106,16 @@ fn sampler_cube_lowers_to_six_initialized_cube_layers() {
             pixels,
         );
     }
+    // GL keeps one binding per target on each texture unit. Binding a 2D texture after the cube must not
+    // replace the cube selected by this program's samplerCube uniform.
+    let texture_2d = context.textures.gen();
+    assert_ne!(texture, texture_2d);
+    record::bind_texture(&mut context, GL_TEXTURE_2D, texture_2d);
+    record::tex_image_2d(&mut context, 2, 2, &[0xee; 16]);
+    assert!(context
+        .textures
+        .get(texture)
+        .is_some_and(|texture| texture.has_data() && texture.w == 2));
     let replacement = [0xaa, 0xbb, 0xcc, 0xdd];
     record::tex_sub_image_2d(
         &mut context,

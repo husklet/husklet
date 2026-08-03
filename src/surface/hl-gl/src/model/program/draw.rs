@@ -146,12 +146,16 @@ pub struct DrawCall {
     pub current_attr_kinds: [u8; MAX_ATTR],
     /// Bound texture (GL name) per texture unit, at draw time.
     pub tex_units: [u32; MAX_TEXTURE_UNITS],
+    /// Bound cube-map texture (GL name) per texture unit, at draw time.
+    pub cube_tex_units: [u32; MAX_TEXTURE_UNITS],
     /// Content generation for each snapshotted texture-unit name.
     pub tex_generations: [u64; MAX_TEXTURE_UNITS],
+    pub cube_tex_generations: [u64; MAX_TEXTURE_UNITS],
     /// Exact object state and resident resources for the generations bound to this draw.
     pub textures: Vec<TextureSnapshot>,
     /// Texture component mappings captured with the draw.
     pub tex_swizzles: [[u32; 4]; MAX_TEXTURE_UNITS],
+    pub cube_tex_swizzles: [[u32; 4]; MAX_TEXTURE_UNITS],
     /// The ES3 sampler OBJECT bound to each texture unit (`glBindSampler`), captured at draw time. A bound
     /// sampler object OVERRIDES the texture's own filter/wrap (ES 3.0 §3.8.13) — the frame builder lowers
     /// its params into the `SamplerDesc` instead of the texture's. `None` = no sampler object bound at the
@@ -413,9 +417,17 @@ impl Default for DrawCall {
             current_attrs: [[0.0, 0.0, 0.0, 1.0]; MAX_ATTR],
             current_attr_kinds: [0; MAX_ATTR],
             tex_units: [0; MAX_TEXTURE_UNITS],
+            cube_tex_units: [0; MAX_TEXTURE_UNITS],
             tex_generations: [0; MAX_TEXTURE_UNITS],
+            cube_tex_generations: [0; MAX_TEXTURE_UNITS],
             textures: Vec::new(),
             tex_swizzles: [[
+                crate::model::glconst::GL_RED,
+                crate::model::glconst::GL_GREEN,
+                crate::model::glconst::GL_BLUE,
+                crate::model::glconst::GL_ALPHA,
+            ]; MAX_TEXTURE_UNITS],
+            cube_tex_swizzles: [[
                 crate::model::glconst::GL_RED,
                 crate::model::glconst::GL_GREEN,
                 crate::model::glconst::GL_BLUE,

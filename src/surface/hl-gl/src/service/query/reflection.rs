@@ -164,10 +164,10 @@ pub fn get_buffer_parameteriv(ctx: &GlContext, target: u32, pname: u32) -> i32 {
 /// `glGetTexParameteriv(target, pname)` — scalar texture state of the bound texture.
 /// An unknown pname / no bound texture reads `0`.
 pub fn get_tex_parameteriv(ctx: &GlContext, target: u32, pname: u32) -> i32 {
-    if target != GL_TEXTURE_2D {
+    if !matches!(target, GL_TEXTURE_2D | GL_TEXTURE_CUBE_MAP) {
         return 0;
     }
-    let name = ctx.local.tex_unit[ctx.local.active_texture];
+    let name = ctx.bound_texture_for_target(target);
     let Some(t) = ctx.textures.get(name) else {
         return 0;
     };

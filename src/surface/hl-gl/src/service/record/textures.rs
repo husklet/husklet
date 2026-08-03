@@ -41,7 +41,11 @@ pub fn bind_texture(ctx: &mut GlContext, target: u32, name: u32) {
     }
     let unit = ctx.local.active_texture;
     if unit < ctx.local.tex_unit.len() {
-        ctx.local.tex_unit[unit] = name;
+        if target == GL_TEXTURE_CUBE_MAP {
+            ctx.local.cube_tex_unit[unit] = name;
+        } else {
+            ctx.local.tex_unit[unit] = name;
+        }
     }
 }
 
@@ -324,13 +328,15 @@ pub fn tex_image_2d_target_declared(
         tex_image_2d_declared(ctx, internalformat, w, h, pixels);
         return;
     };
-    let name = ctx.local.tex_unit[ctx.local.active_texture];
+    let name = ctx.local.cube_tex_unit[ctx.local.active_texture];
     let format = declared_plane(internalformat);
     let stored = name != 0
         && ctx
             .textures
             .image_cube_face(name, face, w, h, pixels, format, internalformat);
-    tex_internal_format(ctx, internalformat);
+    if let Some(texture) = ctx.textures.get_mut(name) {
+        texture.internal_format = internalformat;
+    }
     if name != 0 && !stored {
         ctx.set_gl_error(GL_INVALID_VALUE);
     }
@@ -396,7 +402,7 @@ pub fn tex_image_2d_target_level(
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
-    let name = ctx.local.tex_unit[ctx.local.active_texture];
+    let name = ctx.local.cube_tex_unit[ctx.local.active_texture];
     if name != 0
         && !ctx
             .textures
@@ -450,7 +456,11 @@ pub fn validate_tex_parameter(ctx: &mut GlContext, target: u32, pname: u32, valu
 /// `glTexParameteri(GL_TEXTURE_2D, pname, value)` on the active unit's texture. Callers crossing the GL
 /// API boundary validate target/pname/value with [`validate_tex_parameter`] first.
 pub fn tex_parameter(ctx: &mut GlContext, pname: u32, value: u32) {
-    let name = ctx.local.tex_unit[ctx.local.active_texture];
+    tex_parameter_target(ctx, GL_TEXTURE_2D, pname, value);
+}
+
+pub fn tex_parameter_target(ctx: &mut GlContext, target: u32, pname: u32, value: u32) {
+    let name = ctx.bound_texture_for_target(target);
     if name != 0 {
         ctx.textures.set_param(name, pname, value);
     }
@@ -458,7 +468,16 @@ pub fn tex_parameter(ctx: &mut GlContext, pname: u32, value: u32) {
 
 /// Vector texture parameter setter. Only `GL_TEXTURE_SWIZZLE_RGBA` consumes four values.
 pub fn tex_parameter_vector(ctx: &mut GlContext, pname: u32, values: &[u32]) {
-    let name = ctx.local.tex_unit[ctx.local.active_texture];
+    tex_parameter_vector_target(ctx, GL_TEXTURE_2D, pname, values);
+}
+
+pub fn tex_parameter_vector_target(
+    ctx: &mut GlContext,
+    target: u32,
+    pname: u32,
+    values: &[u32],
+) {
+    let name = ctx.bound_texture_for_target(target);
     if name == 0 {
         return;
     }
@@ -486,7 +505,7 @@ impl GlContext {
             self.set_gl_error(GL_INVALID_ENUM);
             return;
         }
-        let name = self.local.tex_unit[self.local.active_texture];
+        let name = self.bound_texture_for_target(target);
         if name == 0 {
             self.set_gl_error(GL_INVALID_OPERATION);
             return;
@@ -624,7 +643,7 @@ pub fn tex_storage_2d(
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
-    let name = ctx.local.tex_unit[ctx.local.active_texture];
+    let name = ctx.bound_texture_for_target(target);
     match ctx.textures.get(name) {
         _ if name == 0 => {
             ctx.set_gl_error(GL_INVALID_OPERATION);
@@ -796,7 +815,7 @@ pub fn tex_sub_image_2d(
         ctx.set_gl_error(GL_INVALID_ENUM);
         return;
     }
-    let name = ctx.local.tex_unit[ctx.local.active_texture];
+    let name = ctx.bound_texture_for_target(target);
     if level < 0 || w < 0 || h < 0 || xo < 0 || yo < 0 || name == 0 {
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
@@ -904,7 +923,7 @@ pub fn validate_tex_sub_image_2d_call(
         return false;
     }
     if level == 0 {
-        let name = ctx.bound_texture();
+        let name = ctx.bound_texture_for_target(target);
         if let Some(texture) = ctx.textures.get(name) {
             let xend = xoffset.checked_add(width);
             let yend = yoffset.checked_add(height);
@@ -974,7 +993,7 @@ pub fn copy_tex_sub_image_2d(
         ctx.set_gl_error(GL_INVALID_ENUM);
         return;
     }
-    let dst = ctx.local.tex_unit[ctx.local.active_texture];
+    let dst = ctx.bound_texture_for_target(target);
     let max_level = (crate::service::query::MAX_TEXTURE_SIZE as u32).ilog2() as i32;
     if level < 0
         || level > max_level
@@ -1145,7 +1164,7 @@ pub fn copy_tex_image_2d(
         ctx.set_gl_error(GL_INVALID_FRAMEBUFFER_OPERATION);
         return;
     }
-    let name = ctx.local.tex_unit[ctx.local.active_texture];
+    let name = ctx.bound_texture_for_target(target);
     if name == 0 {
         ctx.set_gl_error(GL_INVALID_OPERATION);
         return;
@@ -1176,6 +1195,11 @@ pub fn copy_tex_image_2d(
 impl GlContext {
     pub fn delete_texture(&mut self, name: u32) -> bool {
         for u in self.local.tex_unit.iter_mut() {
+            if *u == name {
+                *u = 0;
+            }
+        }
+        for u in self.local.cube_tex_unit.iter_mut() {
             if *u == name {
                 *u = 0;
             }

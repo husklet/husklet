@@ -416,10 +416,23 @@ impl GlContext {
 /// format. Only level 0 of a 2D-family target is modeled (a single mip); other levels / an unbound texture
 /// read `0`.
 pub fn tex_level_parameter(ctx: &GlContext, target: u32, level: i32, pname: u32) -> i32 {
-    if level != 0 || !matches!(target, GL_TEXTURE_2D | GL_TEXTURE_2D_ARRAY | GL_TEXTURE_3D) {
+    if level != 0
+        || !matches!(
+            target,
+            GL_TEXTURE_2D
+                | GL_TEXTURE_2D_ARRAY
+                | GL_TEXTURE_3D
+                | GL_TEXTURE_CUBE_MAP_POSITIVE_X
+                | GL_TEXTURE_CUBE_MAP_NEGATIVE_X
+                | GL_TEXTURE_CUBE_MAP_POSITIVE_Y
+                | GL_TEXTURE_CUBE_MAP_NEGATIVE_Y
+                | GL_TEXTURE_CUBE_MAP_POSITIVE_Z
+                | GL_TEXTURE_CUBE_MAP_NEGATIVE_Z
+        )
+    {
         return 0;
     }
-    let name = ctx.local.tex_unit[ctx.local.active_texture];
+    let name = ctx.bound_texture_for_target(target);
     let Some(t) = ctx.textures.get(name) else {
         return 0;
     };

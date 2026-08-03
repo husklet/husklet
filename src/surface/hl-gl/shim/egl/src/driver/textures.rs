@@ -304,7 +304,7 @@ pub extern "C" fn glTexImage3D(
     pixels: *const c_void,
 ) {
     GlobalState::context(|group| {
-        let destination = group.gl.bound_plane();
+        let destination = group.gl.bound_plane_for_target(target);
         let rgba = unsafe {
             to_plane_depth(
                 &group.gl,
@@ -358,9 +358,9 @@ pub extern "C" fn glTexSubImage2D(
             group.gl.set_gl_error(GL_INVALID_OPERATION);
             return;
         }
-        let destination = group.gl.bound_plane();
+        let destination = group.gl.bound_plane_for_target(target);
         let rgba = unsafe { to_plane(&group.gl, format, type_, width, height, pixels, destination) };
-        let texture = group.gl.bound_texture();
+        let texture = group.gl.bound_texture_for_target(target);
         let generation = group.gl.textures.get(texture).map(|texture| texture.gen);
         record::tex_sub_image_2d(
             &mut group.gl,
@@ -428,7 +428,7 @@ pub extern "C" fn glCopyTexSubImage2D(
     height: i32,
 ) {
     GlobalState::context(|group| {
-        let texture = group.gl.bound_texture();
+        let texture = group.gl.bound_texture_for_target(target);
         let generation = group.gl.textures.get(texture).map(|texture| texture.gen);
         record::copy_tex_sub_image_2d(
             &mut group.gl,

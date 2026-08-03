@@ -230,8 +230,20 @@ pub(super) fn lower_textures(
                 .copied()
                 .filter(|unit| (0..MAX_TEXTURE_UNITS as i32).contains(unit))
                 .unwrap_or(0) as usize;
-            let gl_tex = d.tex_units[unit];
-            let texture_generation = d.tex_generations[unit];
+            let (gl_tex, texture_generation, texture_swizzle) =
+                if texture_dim == TextureDim::Cube {
+                    (
+                        d.cube_tex_units[unit],
+                        d.cube_tex_generations[unit],
+                        d.cube_tex_swizzles[unit],
+                    )
+                } else {
+                    (
+                        d.tex_units[unit],
+                        d.tex_generations[unit],
+                        d.tex_swizzles[unit],
+                    )
+                };
             let snapshot = d
                 .textures
                 .iter()
@@ -291,7 +303,7 @@ pub(super) fn lower_textures(
                     h: height,
                     sampler: sampler_name(name, element, elements),
                     flip_y: true,
-                    swizzle: d.tex_swizzles[unit],
+                    swizzle: texture_swizzle,
                     mip_stages: Vec::new(),
                     layer_stages: Vec::new(),
                     bytes_per_texel: 4,
@@ -329,7 +341,7 @@ pub(super) fn lower_textures(
                             h: t.h as u32,
                             sampler: sampler_name(name, element, elements),
                             flip_y: true,
-                            swizzle: d.tex_swizzles[unit],
+                            swizzle: texture_swizzle,
                             mip_stages: Vec::new(),
                             layer_stages: Vec::new(),
                             bytes_per_texel: 4,
@@ -417,7 +429,7 @@ pub(super) fn lower_textures(
                         h: 1,
                         sampler: sampler_name(name, element, elements),
                         flip_y: false,
-                        swizzle: d.tex_swizzles[unit],
+                        swizzle: texture_swizzle,
                         mip_stages: Vec::new(),
                         // A cube placeholder is one opaque-black texel repeated across all six faces.
                         // Reusing the same staging buffer is sufficient, but every destination layer
@@ -773,7 +785,7 @@ pub(super) fn lower_textures(
                 h: base_h as u32,
                 sampler: sampler_name(name, element, elements),
                 flip_y: false,
-                swizzle: d.tex_swizzles[unit],
+                swizzle: texture_swizzle,
                 mip_stages,
                 layer_stages,
                 bytes_per_texel: upload_format.bytes_per_texel().unwrap_or(4) as u32,
