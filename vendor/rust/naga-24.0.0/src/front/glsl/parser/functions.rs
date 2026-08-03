@@ -381,9 +381,18 @@ impl ParsingContext<'_> {
                 let mut meta = self.bump(frontend)?.meta;
 
                 let loop_body = ctx.new_body(|ctx| {
-                    let mut terminator = None;
-                    self.parse_statement(frontend, ctx, &mut terminator, true)?;
+                    if let Some(body_meta) = self.parse_statement(frontend, ctx, &mut None, true)? {
+                        meta.subsume(body_meta);
+                    }
+                    Ok(())
+                })?;
 
+                // The condition belongs to the continuing block: GLSL `continue` in a do-while must
+                // still evaluate it before beginning the next iteration. Appending this to `body` made
+                // `parse_statement`'s terminator cull delete the condition after a continue, turning a
+                // finite loop into an infinite one on the GPU.
+                let mut break_if = None;
+                let continuing = ctx.new_body(|ctx| {
                     let mut stmt = ctx.stmt_ctx();
 
                     self.expect(frontend, TokenValue::While)?;
@@ -404,26 +413,16 @@ impl ParsingContext<'_> {
 
                     ctx.emit_restart();
 
-                    ctx.body.push(
-                        Statement::If {
-                            condition,
-                            accept: new_break(),
-                            reject: Block::new(),
-                        },
-                        Span::default(),
-                    );
+                    break_if = Some(condition);
 
-                    if let Some(idx) = terminator {
-                        ctx.body.cull(idx..)
-                    }
                     Ok(())
                 })?;
 
                 ctx.body.push(
                     Statement::Loop {
                         body: loop_body,
-                        continuing: Block::new(),
-                        break_if: None,
+                        continuing,
+                        break_if,
                     },
                     meta,
                 );

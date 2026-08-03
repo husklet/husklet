@@ -514,3 +514,19 @@ void main(){ vec4 value = imageLoad(image, 3); imageStore(image, 4, value); out_
     assert!(wgsl.contains("textureStore"), "{wgsl}");
     assert!(wgsl.contains("textureDimensions"), "{wgsl}");
 }
+
+#[test]
+fn do_while_continue_keeps_the_condition_in_the_continuing_block() {
+    let src = r#"#version 460
+layout(location=0) out vec4 color;
+void main(){ int i=0; do { if(i==2) continue; color=vec4(1.0); } while(++i<3); }
+"#;
+    let wgsl = glsl_to_wgsl(src, naga::ShaderStage::Fragment, "fmain")
+        .expect("finite do-while with continue");
+    let continuing = wgsl.find("continuing {").expect("WGSL continuing block");
+    assert!(
+        wgsl[continuing..].contains("i ="),
+        "condition increment must execute on continue: {wgsl}"
+    );
+    assert!(wgsl[continuing..].contains("break if"), "{wgsl}");
+}
