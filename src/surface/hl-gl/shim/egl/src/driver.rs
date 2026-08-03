@@ -118,7 +118,7 @@ fn gpu_read_pixels(
         .into_iter()
         .find_map(|observation| match observation {
             Observation::Read(bytes) => Some(bytes),
-            Observation::Wait | Observation::Timed(_) | Observation::Poll(_) | Observation::Export(_) | Observation::TextureExport(_) => None,
+            Observation::Wait | Observation::Timed(_) | Observation::Poll(_) | Observation::Export(_) => None,
         });
     Ok(completed.value.complete(raw))
 }
