@@ -14,9 +14,15 @@ impl GlContext {
 
 /// `glBindTexture(GL_TEXTURE_2D, name)` — binds to the active texture unit.
 pub fn bind_texture(ctx: &mut GlContext, _target: u32, name: u32) {
-    if ctx.texture_is_deleted(name) {
-        ctx.set_gl_error(GL_INVALID_OPERATION);
-        return;
+    // Deletion immediately releases the public name. Container references retain the OLD object by stable
+    // identity, so binding the same spelling creates a distinct texture rather than resurrecting it.
+    if ctx.take_deleted_texture_name(name) {
+        // Any unbound framebuffer attachments already carry this object's stable identity. Move it out of
+        // the public name table before materializing the replacement.
+        if let Some(generation) = ctx.textures.get(name).map(|texture| texture.gen) {
+            ctx.retire_sampled_texture_generation(name, generation);
+        }
+        ctx.textures.retire_name(name);
     }
     ctx.textures.ensure(name);
     let unit = ctx.local.active_texture;
@@ -45,9 +51,7 @@ pub fn validate_tex_image_2d(
                 )
                 | (GL_BGRA_EXT, GL_UNSIGNED_BYTE)
         ))
-        || (internalformat == GL_BGRA8_EXT
-            && format == GL_BGRA_EXT
-            && type_ == GL_UNSIGNED_BYTE);
+        || (internalformat == GL_BGRA8_EXT && format == GL_BGRA_EXT && type_ == GL_UNSIGNED_BYTE);
     if !valid {
         ctx.set_gl_error(GL_INVALID_ENUM);
     }
@@ -581,8 +585,9 @@ pub fn copy_tex_sub_image_2d(
     }
     // Source: the read framebuffer's color-attachment texture (if any). Copy the overlapping RGBA rows;
     // an absent/dataless source (default framebuffer, or an FBO not yet rendered) is the honest no-op.
-    let src = ctx.local.framebuffers.color_attachment(ctx.local.read_fbo);
-    let src_rows: Option<Vec<u8>> = ctx.textures.get(src).and_then(|st| {
+    let src_rows: Option<Vec<u8>> = ctx
+        .framebuffer_color_texture(ctx.local.read_fbo, 0)
+        .and_then(|(_, st)| {
         if st.data.is_empty()
             || x as i64 + w as i64 > st.w as i64
             || y as i64 + h as i64 > st.h as i64
@@ -604,7 +609,7 @@ pub fn copy_tex_sub_image_2d(
             buf.extend_from_slice(&st.data[base..base + w * texel]);
         }
         Some(buf)
-    });
+        });
     if let Some(buf) = src_rows {
         ctx.textures.sub_image_2d(dst, xo, yo, w, h, &buf);
     }
@@ -618,13 +623,26 @@ impl GlContext {
                 *u = 0;
             }
         }
-        // ES 3.0 §4.4.2.3: a deleted texture is detached from every attachment point of the bound
-        // framebuffer, as if glFramebufferTexture2D(..., 0, 0) had been called for it. Leaving it attached
-        // makes the framebuffer name a dead texture.
-        self.local.framebuffers.detach_color_texture(name);
-        // Retire the texture's resident IR ids (sampled texture + FBO render target + depth), queued Destroy for
-        // the next frame, so Chrome's fresh-tile churn does not climb the host residency ledger to its cap.
-        self.retire_texture(name);
-        self.textures.delete(name)
+        // ES 3.0 §4.4.2.3 detaches the deleted object from attachment points of the CURRENTLY bound
+        // framebuffer. Other framebuffer containers retain the object itself. Its public name is nevertheless
+        // released immediately and may identify a distinct new texture on the next bind.
+        let object = self.textures.object(name);
+        self.local
+            .framebuffers
+            .detach_color_texture_from(self.local.bound_fbo, name);
+        if self.local.read_fbo != self.local.bound_fbo {
+            self.local
+                .framebuffers
+                .detach_color_texture_from(self.local.read_fbo, name);
+        }
+        if object.is_some_and(|object| self.local.framebuffers.references_object(object)) {
+            if let Some(generation) = self.textures.get(name).map(|texture| texture.gen) {
+                self.retire_sampled_texture_generation(name, generation);
+            }
+            self.textures.retire_name(name)
+        } else {
+            self.retire_texture(name);
+            self.textures.delete(name)
+        }
     }
 }

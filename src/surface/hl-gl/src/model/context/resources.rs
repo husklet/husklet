@@ -7,6 +7,18 @@ impl Default for GlContext {
 }
 
 impl GlContext {
+    pub(crate) fn retire_sampled_texture_generation(&mut self, gl_name: u32, generation: u64) {
+        if self
+            .tex_ir_cache
+            .get(&gl_name)
+            .is_some_and(|(_, resident_generation)| resident_generation.0 == generation)
+        {
+            if let Some((ir, _)) = self.tex_ir_cache.remove(&gl_name) {
+                self.pending_destroys.push(Cmd::DestroyTexture(ir));
+            }
+        }
+    }
+
     pub fn new() -> Self {
         Self::with_allocator(std::sync::Arc::new(IrAllocator::new()))
     }
@@ -149,6 +161,54 @@ impl GlContext {
         }
         self.external_targets
             .retain(|(name, _), _| *name != gl_name);
+    }
+
+    /// Retire one exact image generation after the last container reference to a deleted texture object
+    /// disappears. A reused GL name may already own a newer object, so broad name-based retirement would
+    /// destroy the replacement's resources.
+    pub(crate) fn retire_texture_generation(&mut self, gl_name: u32, generation: u64) {
+        self.retire_sampled_texture_generation(gl_name, generation);
+        let key = (gl_name, generation);
+        let Some((surface, texture)) = self.fbo_targets.remove(&key) else {
+            self.external_targets.remove(&key);
+            return;
+        };
+        let external = self.external_targets.remove(&key);
+        let still_live = external.is_some_and(|token| {
+            self.external_targets.iter().any(|(other, candidate)| {
+                *candidate == token && self.fbo_targets.contains_key(other)
+            })
+        });
+        if still_live {
+            return;
+        }
+        let mut dead_depth = Vec::new();
+        self.depth_targets.retain(|depth_key, &mut depth| {
+            let exact_attachment = depth_key.depth == Some(key) || depth_key.stencil == Some(key);
+            let fallback = depth_key.fallback_color == texture;
+            if exact_attachment || fallback {
+                dead_depth.push(depth);
+            }
+            !exact_attachment && !fallback
+        });
+        for depth in dead_depth {
+            self.pending_destroys.push(Cmd::DestroyTexture(depth));
+        }
+        if external.is_some() {
+            self.pending_destroys.push(Cmd::DestroySurface(surface));
+        }
+        let mut transferred = false;
+        for residency in self
+            .shared_target_cache
+            .values_mut()
+            .filter(|residency| residency.texture == texture)
+        {
+            residency.owned = true;
+            transferred = true;
+        }
+        if !transferred {
+            self.pending_destroys.push(Cmd::DestroyTexture(texture));
+        }
     }
 
     /// Retire GL data buffer `gl_name`'s resident IR buffers (`glDeleteBuffers`) — a buffer can be cached
@@ -644,7 +704,10 @@ impl GlContext {
 
     /// Mint or return the single IR backing used while a GL buffer is registered with CUDA.
     pub fn interop_buffer_ir(&mut self, gl_name: u32) -> hl_gpu::Result<(u32, bool)> {
-        let gl_buffer = self.buffers.get(gl_name).ok_or(hl_gpu::GpuError::Invalid("GL buffer"))?;
+        let gl_buffer = self
+            .buffers
+            .get(gl_name)
+            .ok_or(hl_gpu::GpuError::Invalid("GL buffer"))?;
         if gl_buffer.mapped.is_some() {
             return Err(hl_gpu::GpuError::Invalid("mapped GL buffer"));
         }
@@ -676,10 +739,18 @@ mod interop_tests {
     fn cuda_export_becomes_the_canonical_backing_for_later_gl_draws() {
         let mut context = GlContext::new();
         context.buffers.ensure(7);
-        context.buffers.set_data(7, glconst::GL_ARRAY_BUFFER, &[1, 2, 3, 4], 0);
+        context
+            .buffers
+            .set_data(7, glconst::GL_ARRAY_BUFFER, &[1, 2, 3, 4], 0);
         let (interop, create) = context.interop_buffer_ir(7).unwrap();
         assert!(create);
-        assert_eq!(context.data_buffer_ir(7, buffer_usage::VERTEX, 1).unwrap(), (interop, false));
-        assert_eq!(context.data_buffer_ir(7, buffer_usage::INDEX, 1).unwrap(), (interop, false));
+        assert_eq!(
+            context.data_buffer_ir(7, buffer_usage::VERTEX, 1).unwrap(),
+            (interop, false)
+        );
+        assert_eq!(
+            context.data_buffer_ir(7, buffer_usage::INDEX, 1).unwrap(),
+            (interop, false)
+        );
     }
 }

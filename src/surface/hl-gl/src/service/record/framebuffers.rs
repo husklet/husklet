@@ -71,10 +71,27 @@ pub fn framebuffer_texture_2d(
             ctx.local.framebuffers.attach_depth(fbo, tex, false);
             ctx.local.framebuffers.attach_stencil(fbo, tex, false);
         }
-        _ => ctx
-            .local
-            .framebuffers
-            .attach_color_index(fbo, attachment - GL_COLOR_ATTACHMENT0, tex),
+        _ => {
+            let index = attachment - GL_COLOR_ATTACHMENT0;
+            let retired = ctx
+                .local
+                .framebuffers
+                .color_attachment_object(fbo, index)
+                .map(|attachment| attachment.object);
+            let object = (tex != 0)
+                .then(|| ctx.textures.object(tex))
+                .flatten()
+                .unwrap_or(0);
+            ctx.local.framebuffers.attach_color_object(
+                fbo,
+                index,
+                tex,
+                object,
+            );
+            if let Some(retired) = retired {
+                ctx.reclaim_retired_texture_object(retired);
+            }
+        }
     }
 }
 
@@ -87,7 +104,12 @@ impl GlContext {
         if self.local.read_fbo == name {
             self.local.read_fbo = 0;
         }
-        self.local.framebuffers.delete(name)
+        let retained = self.local.framebuffers.attached_objects(name);
+        let deleted = self.local.framebuffers.delete(name);
+        for object in retained {
+            self.reclaim_retired_texture_object(object);
+        }
+        deleted
     }
 
     /// `glIsFramebuffer(name)` — true once `name` names a generated (non-default) framebuffer object.
@@ -157,7 +179,13 @@ impl GlContext {
             ("stencil", stencil_source),
         ] {
             let Some(source) = source else { continue };
-            let Some((w, h, format, attachment_samples)) = info(source) else {
+            let attachment_info = if point == "colour" && !source.1 {
+                self.framebuffer_color_texture(fbo, 0)
+                    .map(|(_, texture)| (texture.w, texture.h, texture.internal_format, 0))
+            } else {
+                info(source)
+            };
+            let Some((w, h, format, attachment_samples)) = attachment_info else {
                 return GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT;
             };
             let renderable = match (es3, point) {
@@ -206,8 +234,7 @@ impl GlContext {
     pub fn gen_renderbuffer(&mut self) -> u32 {
         let name = self.renderbuffers.gen();
         let tex = self.textures.gen();
-        self.renderbuffers
-            .set_storage(name, tex, 0, 0, GL_RGBA4, 0);
+        self.renderbuffers.set_storage(name, tex, 0, 0, GL_RGBA4, 0);
         name
     }
 }
@@ -361,8 +388,19 @@ pub fn framebuffer_renderbuffer(
             // The renderbuffer's texture-backed storage becomes the FBO's color target (`0` detaches) —
             // but the ATTACHED OBJECT is the renderbuffer, and the attachment queries must say so.
             let tex = ctx.renderbuffers.backing_tex(rbo);
-            ctx.local.framebuffers.attach_color(fbo, tex);
+            let retired = ctx
+                .local
+                .framebuffers
+                .color_attachment_object(fbo, 0)
+                .map(|attachment| attachment.object);
+            let object = ctx.textures.object(tex).unwrap_or(0);
+            ctx.local
+                .framebuffers
+                .attach_color_object(fbo, 0, tex, object);
             ctx.local.framebuffers.set_color_source(fbo, 0, rbo, true);
+            if let Some(retired) = retired {
+                ctx.reclaim_retired_texture_object(retired);
+            }
         }
         // This model has no depth/stencil PLANE — the frame builder mints one for any depth/stencil-tested
         // pass — but WHETHER the framebuffer has such an attachment is load-bearing GL state: without an
@@ -437,12 +475,10 @@ pub fn blit_framebuffer(
     };
     let target = |ctx: &GlContext, fbo| {
         (fbo != 0).then(|| {
-            let texture = ctx.local.framebuffers.color_attachment(fbo);
-            ctx.textures
-                .get(texture)
-                .filter(|texture| texture.w > 0 && texture.h > 0)
-                .map(|texture| crate::model::program::TargetSnapshot {
-                    texture: ctx.local.framebuffers.color_attachment(fbo),
+            ctx.framebuffer_color_texture(fbo, 0)
+                .filter(|(_, texture)| texture.w > 0 && texture.h > 0)
+                .map(|(name, texture)| crate::model::program::TargetSnapshot {
+                    texture: name,
                     generation: texture.gen,
                     shared_storage: texture.shared_storage(),
                     shared_revision: texture
@@ -576,13 +612,7 @@ fn colour_renderable_es2(internal_format: u32, renderbuffer: bool) -> bool {
     if renderbuffer {
         matches!(
             internal_format,
-            GL_RGB565
-                | GL_RGBA4
-                | GL_RGB5_A1
-                | GL_RGB8
-                | GL_RGBA8
-                | GL_BGRA_EXT
-                | GL_BGRA8_EXT
+            GL_RGB565 | GL_RGBA4 | GL_RGB5_A1 | GL_RGB8 | GL_RGBA8 | GL_BGRA_EXT | GL_BGRA8_EXT
         )
     } else {
         matches!(

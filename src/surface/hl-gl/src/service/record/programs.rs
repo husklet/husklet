@@ -943,11 +943,9 @@ impl GlContext {
         d.target = if ctx.local.bound_fbo == 0 {
             None
         } else {
-            let texture = ctx.local.framebuffers.color_attachment(ctx.local.bound_fbo);
-            ctx.textures
-                .get(texture)
-                .filter(|t| t.w > 0 && t.h > 0)
-                .map(|t| crate::model::program::TargetSnapshot {
+            ctx.framebuffer_color_texture(ctx.local.bound_fbo, 0)
+                .filter(|(_, t)| t.w > 0 && t.h > 0)
+                .map(|(texture, t)| crate::model::program::TargetSnapshot {
                     texture,
                     generation: t.gen,
                     shared_storage: t.shared_storage(),

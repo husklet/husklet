@@ -304,8 +304,7 @@ impl GlTexture {
     /// magnifying draw under `base = 2` returned level 0: no LOD computation is involved in magnification,
     /// so there was no latitude to hide behind.
     pub fn effective_levels(&self) -> Vec<(i32, i32, Arc<Vec<u8>>)> {
-        let mut all: Vec<(i32, i32, Arc<Vec<u8>>)> =
-            Vec::with_capacity(1 + self.mip_chain().len());
+        let mut all: Vec<(i32, i32, Arc<Vec<u8>>)> = Vec::with_capacity(1 + self.mip_chain().len());
         all.push((self.w, self.h, Arc::clone(&self.data)));
         for level in self.mip_chain() {
             all.push((level.w, level.h, Arc::clone(&level.data)));
@@ -403,7 +402,16 @@ impl GlTexture {
 #[derive(Debug)]
 pub struct Textures {
     map: HashMap<u32, GlTexture>,
+    /// Stable object identities for the live public names in `map`.
+    ///
+    /// GL object names are reusable. An FBO attachment retains the object, not the spelling of the name,
+    /// after `glDeleteTextures`; `retired` therefore keeps objects whose public name has already become
+    /// available to a distinct texture.
+    objects: HashMap<u32, u64>,
+    live_objects: HashMap<u64, u32>,
+    retired: HashMap<u64, (u32, GlTexture)>,
     next_name: u32,
+    next_object: u64,
     next_generation: u64,
 }
 
@@ -411,9 +419,24 @@ impl Textures {
     pub fn new() -> Self {
         Self {
             map: HashMap::new(),
+            objects: HashMap::new(),
+            live_objects: HashMap::new(),
+            retired: HashMap::new(),
             next_name: 1,
+            next_object: 1,
             next_generation: 1,
         }
+    }
+
+    fn materialize(&mut self, name: u32) {
+        if self.map.contains_key(&name) {
+            return;
+        }
+        let object = self.next_object;
+        self.next_object = self.next_object.saturating_add(1);
+        self.map.insert(name, GlTexture::default());
+        self.objects.insert(name, object);
+        self.live_objects.insert(object, name);
     }
 
     pub(crate) fn shared_residency(&self, storage: u64) -> Option<(u64, Weak<SharedPixels>)> {
@@ -436,16 +459,60 @@ impl Textures {
     pub fn gen(&mut self) -> u32 {
         let name = self.next_name;
         self.next_name += 1;
-        self.map.entry(name).or_default();
+        self.materialize(name);
         name
     }
 
     /// Materialize a non-zero name bound through `GL_CHROMIUM_bind_generates_resource`.
     pub fn ensure(&mut self, name: u32) {
         if name != 0 {
-            self.map.entry(name).or_default();
+            self.materialize(name);
             self.next_name = self.next_name.max(name.saturating_add(1));
         }
+    }
+
+    /// Stable identity of the texture object currently named by `name`.
+    pub fn object(&self, name: u32) -> Option<u64> {
+        self.objects.get(&name).copied()
+    }
+
+    /// Resolve an attachment's stable object identity, including an object whose public name was deleted
+    /// and subsequently reused for a different texture.
+    pub fn get_object(&self, object: u64) -> Option<&GlTexture> {
+        self.live_objects
+            .get(&object)
+            .and_then(|name| self.map.get(name))
+            .or_else(|| self.retired.get(&object).map(|(_, texture)| texture))
+    }
+
+    pub fn get_object_mut(&mut self, object: u64) -> Option<&mut GlTexture> {
+        if let Some(name) = self.live_objects.get(&object).copied() {
+            return self.map.get_mut(&name);
+        }
+        self.retired.get_mut(&object).map(|(_, texture)| texture)
+    }
+
+    /// Remove `name` from the public namespace while retaining its object for container references.
+    pub fn retire_name(&mut self, name: u32) -> bool {
+        let Some(texture) = self.map.remove(&name) else {
+            return false;
+        };
+        let Some(object) = self.objects.remove(&name) else {
+            self.map.insert(name, texture);
+            return false;
+        };
+        self.live_objects.remove(&object);
+        self.retired.insert(object, (name, texture));
+        true
+    }
+
+    /// Drop an object after its last container reference has gone.
+    pub fn delete_object(&mut self, object: u64) -> bool {
+        self.retired.remove(&object).is_some()
+    }
+
+    pub(crate) fn take_retired_object(&mut self, object: u64) -> Option<(u32, GlTexture)> {
+        self.retired.remove(&object)
     }
 
     /// Copy one texture's base-level RGBA8 plane into another, applying Chromium's upload transforms.
@@ -615,14 +682,7 @@ impl Textures {
     ///
     /// A level far past any plausible chain is ignored rather than allowed to allocate: the level index is
     /// application input, and `1 << level` is the extent it implies.
-    pub fn image_2d_level(
-        &mut self,
-        name: u32,
-        level: u32,
-        w: i32,
-        h: i32,
-        pixels: &[u8],
-    ) -> bool {
+    pub fn image_2d_level(&mut self, name: u32, level: u32, w: i32, h: i32, pixels: &[u8]) -> bool {
         const MAX_LEVELS: usize = 16;
         if level == 0 || level as usize > MAX_LEVELS || w <= 0 || h <= 0 {
             return false;
@@ -899,6 +959,9 @@ impl Textures {
 
     /// `glDeleteTextures` — drop the object.
     pub fn delete(&mut self, name: u32) -> bool {
+        if let Some(object) = self.objects.remove(&name) {
+            self.live_objects.remove(&object);
+        }
         self.map.remove(&name).is_some()
     }
 

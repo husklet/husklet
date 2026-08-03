@@ -869,13 +869,8 @@ pub(super) fn build_mrt_geometry_frame(
     let mut dims: Option<(i32, i32)> = None;
     let mut fmt0 = TextureFormat::Rgba8Unorm;
     for idx in 0..n {
-        let gl_tex = ctx
-            .local
-            .framebuffers
-            .color_attachment_index(fbo, idx as u32);
-        let (w, h, fmt) = ctx
-            .textures
-            .get(gl_tex)
+        let (gl_tex, attached) = ctx.framebuffer_color_texture(fbo, idx as u32)?;
+        let (w, h, fmt) = Some(attached)
             .filter(|t| t.w > 0 && t.h > 0)
             .map(|t| (t.w, t.h, t.ir_format))?;
         match dims {
@@ -886,7 +881,7 @@ pub(super) fn build_mrt_geometry_frame(
             Some((dw, dh)) if dw == w && dh == h => {}
             Some(_) => return None, // mismatched attachment sizes → not a lowerable MRT pass here
         }
-        let generation = ctx.textures.get(gl_tex).map(|t| t.gen).unwrap_or(0);
+        let generation = attached.gen;
         let (surface, texture, needs_create, ephemeral) =
             ctx.recorded_fbo_target(gl_tex, generation).ok()?;
         if needs_create {

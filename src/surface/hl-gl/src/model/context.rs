@@ -15,7 +15,7 @@ use super::es3::Samplers;
 use super::glconst;
 use super::program::{Attr, DrawCall, Programs, MAX_ATTR};
 use super::renderbuffer::Renderbuffers;
-use super::texture::Textures;
+use super::texture::{GlTexture, Textures};
 use hl_gpu::protocol::model::descriptor::SamplerDesc;
 use hl_gpu::Cmd;
 use std::collections::HashMap;
@@ -291,6 +291,25 @@ impl GlContext {
         self.local.framebuffers.color_attachment(framebuffer)
     }
 
+    /// Resolve the texture OBJECT retained by a colour attachment. Its GL-visible name may already have
+    /// been deleted and reused, so an FBO cannot safely resolve through the current name table.
+    pub fn framebuffer_color_texture(
+        &self,
+        framebuffer: u32,
+        index: u32,
+    ) -> Option<(u32, &GlTexture)> {
+        let attachment = self
+            .local
+            .framebuffers
+            .color_attachment_object(framebuffer, index)?;
+        let texture = if attachment.object == 0 {
+            self.textures.get(attachment.name)
+        } else {
+            self.textures.get_object(attachment.object)
+        }?;
+        Some((attachment.name, texture))
+    }
+
     /// The texel format of the colour buffer `glReadPixels` would read: the READ framebuffer's colour
     /// attachment, or the default surface's plane when no framebuffer is bound.
     ///
@@ -304,8 +323,8 @@ impl GlContext {
             // (`service::frame::passes`). It is fixed-point, so no readback pair changes because of it.
             return TextureFormat::Bgra8Unorm;
         }
-        self.textures
-            .get(self.local.framebuffers.color_attachment(self.local.read_fbo))
+        self.framebuffer_color_texture(self.local.read_fbo, 0)
+            .map(|(_, texture)| texture)
             .map_or(TextureFormat::Rgba8Unorm, |texture| texture.ir_format)
     }
 
@@ -413,12 +432,10 @@ impl GlContext {
     /// unbound or unknown name answers `Rgba8Unorm`, which is the plane a texture materialized here would
     /// be given anyway; the record layer refuses the upload for its own reasons in that case.
     pub fn bound_plane(&self) -> hl_gpu::protocol::model::enums::TextureFormat {
-        self.textures
-            .get(self.bound_texture())
-            .map_or(
-                hl_gpu::protocol::model::enums::TextureFormat::Rgba8Unorm,
-                |texture| texture.ir_format,
-            )
+        self.textures.get(self.bound_texture()).map_or(
+            hl_gpu::protocol::model::enums::TextureFormat::Rgba8Unorm,
+            |texture| texture.ir_format,
+        )
     }
 
     pub fn active_texture_unit(&self) -> usize {

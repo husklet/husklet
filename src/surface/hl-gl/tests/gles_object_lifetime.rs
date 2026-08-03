@@ -3,8 +3,9 @@
 //!
 //! Two different rules live here and are easy to conflate, which is why they are pinned side by side:
 //!
-//! * Buffers, textures, renderbuffers and framebuffers are deleted IMMEDIATELY and every binding /
-//!   attachment naming them reverts to zero (ES 3.0 §2.9, §4.4.2.3, §4.4.1).
+//! * Buffers, textures, renderbuffers and framebuffers release their public name immediately. The current
+//!   binding is reset, while an unbound framebuffer container retains the old texture OBJECT until that
+//!   attachment is explicitly replaced or the framebuffer is deleted.
 //! * Programs and shaders are NOT: deleting one that is still current or still attached only FLAGS it
 //!   (`GL_DELETE_STATUS` becomes `GL_TRUE`) and it keeps working until it stops being referenced
 //!   (ES 3.0 §7.1, §7.3). The "use then immediately release" idiom depends on this — Skia,
@@ -157,6 +158,122 @@ fn deleting_an_attached_texture_detaches_it_from_the_bound_framebuffer() {
     );
 }
 
+#[test]
+fn deleting_texture_preserves_unbound_fbo_object_across_name_reuse() {
+    let mut context = ctx();
+    let name = context.textures.gen();
+    record::bind_texture(&mut context, GL_TEXTURE_2D, name);
+    record::tex_image_2d(&mut context, 2, 2, &[0x11; 16]);
+    let old_object = context.textures.object(name).expect("old object");
+
+    let framebuffer = context.gen_framebuffer();
+    record::bind_framebuffer(&mut context, GL_FRAMEBUFFER, framebuffer);
+    record::framebuffer_texture_2d(
+        &mut context,
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D,
+        name,
+        0,
+    );
+    record::bind_framebuffer(&mut context, GL_FRAMEBUFFER, 0);
+
+    assert!(context.delete_texture(name));
+    record::bind_texture(&mut context, GL_TEXTURE_2D, name);
+    record::tex_image_2d(&mut context, 2, 2, &[0x22; 16]);
+
+    assert_ne!(context.textures.object(name), Some(old_object));
+    assert_eq!(context.textures.get(name).expect("replacement").data.as_slice(), &[0x22; 16]);
+    let (attached_name, attached) = context
+        .framebuffer_color_texture(framebuffer, 0)
+        .expect("retained attachment");
+    assert_eq!(attached_name, name, "the attachment query keeps the original GL spelling");
+    assert_eq!(attached.data.as_slice(), &[0x11; 16], "the FBO retains the old object, not the replacement");
+
+    record::bind_framebuffer(&mut context, GL_FRAMEBUFFER, framebuffer);
+    assert_eq!(context.check_framebuffer_status(GL_FRAMEBUFFER), GL_FRAMEBUFFER_COMPLETE);
+}
+
+#[test]
+fn deferred_guest_deletion_reuses_name_without_retargeting_unbound_fbo() {
+    let mut context = ctx();
+    let name = context.textures.gen();
+    record::bind_texture(&mut context, GL_TEXTURE_2D, name);
+    record::tex_image_2d(&mut context, 2, 2, &[0x31; 16]);
+    let framebuffer = context.gen_framebuffer();
+    record::bind_framebuffer(&mut context, GL_FRAMEBUFFER, framebuffer);
+    record::framebuffer_texture_2d(
+        &mut context,
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D,
+        name,
+        0,
+    );
+    record::bind_framebuffer(&mut context, GL_FRAMEBUFFER, 0);
+
+    assert!(context.delete_texture_later(name));
+    record::bind_texture(&mut context, GL_TEXTURE_2D, name);
+    record::tex_image_2d(&mut context, 2, 2, &[0x42; 16]);
+
+    assert_eq!(context.textures.get(name).expect("replacement").data.as_slice(), &[0x42; 16]);
+    assert_eq!(
+        context
+            .framebuffer_color_texture(framebuffer, 0)
+            .expect("retained old object")
+            .1
+            .data
+            .as_slice(),
+        &[0x31; 16]
+    );
+}
+
+#[test]
+fn lowering_renders_to_retained_object_not_reused_name() {
+    use hl_gpu::protocol::model::enums::texture_usage;
+    use hl_gpu::Cmd;
+
+    let mut context = ctx();
+    let name = context.textures.gen();
+    record::bind_texture(&mut context, GL_TEXTURE_2D, name);
+    record::tex_image_2d(&mut context, 2, 3, &[]);
+    let old_generation = context.textures.get(name).expect("old texture").gen;
+    let framebuffer = context.gen_framebuffer();
+    record::bind_framebuffer(&mut context, GL_FRAMEBUFFER, framebuffer);
+    record::framebuffer_texture_2d(
+        &mut context,
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D,
+        name,
+        0,
+    );
+    record::bind_framebuffer(&mut context, GL_FRAMEBUFFER, 0);
+    assert!(context.delete_texture_later(name));
+    record::bind_texture(&mut context, GL_TEXTURE_2D, name);
+    record::tex_image_2d(&mut context, 7, 9, &[]);
+    assert_ne!(context.textures.get(name).expect("replacement").gen, old_generation);
+
+    record::bind_framebuffer(&mut context, GL_FRAMEBUFFER, framebuffer);
+    record::clear_color(&mut context, [0.25, 0.5, 0.75, 1.0]);
+    record::clear(&mut context);
+    let frame = hl_gl::service::frame::Frame::build(&mut context).expect("retained FBO frame");
+    assert!(frame.cmds.iter().any(|command| matches!(
+        command,
+        Cmd::CreateTexture(_, descriptor)
+            if descriptor.usage & texture_usage::RENDER_TARGET != 0
+                && descriptor.width == 2
+                && descriptor.height == 3
+    )));
+    assert!(!frame.cmds.iter().any(|command| matches!(
+        command,
+        Cmd::CreateTexture(_, descriptor)
+            if descriptor.usage & texture_usage::RENDER_TARGET != 0
+                && descriptor.width == 7
+                && descriptor.height == 9
+    )));
+}
+
 // ---- deferred deletion: programs and shaders ------------------------------------------------------
 
 #[test]
@@ -281,7 +398,10 @@ fn binding_an_ungenerated_vertex_array_is_rejected_without_creating_it() {
     assert_eq!(context.take_gl_error(), GL_INVALID_OPERATION);
     assert!(!record::is_vertex_array(&context, unknown));
     let mut binding = [0; 4];
-    assert_eq!(query::get_integerv(&context, GL_VERTEX_ARRAY_BINDING, &mut binding), 1);
+    assert_eq!(
+        query::get_integerv(&context, GL_VERTEX_ARRAY_BINDING, &mut binding),
+        1
+    );
     assert_eq!(binding[0], 0);
 }
 

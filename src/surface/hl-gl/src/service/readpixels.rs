@@ -267,11 +267,7 @@ pub fn prepare_pixels(
         .filter(|index| *index < 16)
         .unwrap_or(0);
     let requested = (ctx.local.read_fbo != 0).then(|| {
-        let name = ctx
-            .local
-            .framebuffers
-            .color_attachment_index(ctx.local.read_fbo, attachment);
-        let target = ctx.textures.get(name)?;
+        let (name, target) = ctx.framebuffer_color_texture(ctx.local.read_fbo, attachment)?;
         Some((name, target.gen, target.w, target.h, target.ir_format))
     });
     let requested = requested.flatten();
@@ -652,8 +648,7 @@ fn pack_region(
                     _ => &[r, g, b, a],
                 };
                 for (index, value) in channels.iter().enumerate() {
-                    out[dp + index * 4..dp + index * 4 + 4]
-                        .copy_from_slice(&value.to_le_bytes());
+                    out[dp + index * 4..dp + index * 4 + 4].copy_from_slice(&value.to_le_bytes());
                 }
                 continue;
             }
@@ -704,7 +699,10 @@ mod tests {
         // cannot describe the format" indistinguishable from a real four-byte target, which is the shape
         // of failure that makes a wrong readback unattributable.
         assert_eq!(TargetTexel(TextureFormat::Depth32Float).bytes(), None);
-        assert_eq!(TargetTexel(TextureFormat::Depth24PlusStencil8).bytes(), None);
+        assert_eq!(
+            TargetTexel(TextureFormat::Depth24PlusStencil8).bytes(),
+            None
+        );
         assert_eq!(TargetTexel(TextureFormat::Bc1RgbaUnorm).bytes(), None);
     }
 
@@ -770,7 +768,17 @@ mod tests {
     fn pack_region_strides_the_source_by_the_target_texel() {
         // A 2x2 R8 target whose four texels are distinguishable, so a wrong stride cannot coincide.
         let raw = [10u8, 20, 30, 40];
-        let packed = pack_region(&raw, 2, 2, TextureFormat::R8Unorm, 0, 0, 2, 2, PixelFormat::new(0x1908, 0x1401));
+        let packed = pack_region(
+            &raw,
+            2,
+            2,
+            TextureFormat::R8Unorm,
+            0,
+            0,
+            2,
+            2,
+            PixelFormat::new(0x1908, 0x1401),
+        );
         assert_eq!(
             packed,
             // GL row 0 is the BOTTOM, which is target row 1: texels 30 and 40.
@@ -780,7 +788,17 @@ mod tests {
 
         // The control: the same call shape over an RGBA8 target is unchanged.
         let raw: Vec<u8> = (0u8..16).collect();
-        let packed = pack_region(&raw, 2, 2, TextureFormat::Rgba8Unorm, 0, 0, 2, 2, PixelFormat::new(0x1908, 0x1401));
+        let packed = pack_region(
+            &raw,
+            2,
+            2,
+            TextureFormat::Rgba8Unorm,
+            0,
+            0,
+            2,
+            2,
+            PixelFormat::new(0x1908, 0x1401),
+        );
         assert_eq!(
             packed,
             [8, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3, 4, 5, 6, 7],
@@ -789,7 +807,17 @@ mod tests {
 
         // A format with no plain-colour texel yields the zero-filled rectangle rather than reading bytes
         // it cannot interpret.
-        let packed = pack_region(&raw, 2, 2, TextureFormat::Depth32Float, 0, 0, 2, 2, PixelFormat::new(0x1908, 0x1401));
+        let packed = pack_region(
+            &raw,
+            2,
+            2,
+            TextureFormat::Depth32Float,
+            0,
+            0,
+            2,
+            2,
+            PixelFormat::new(0x1908, 0x1401),
+        );
         assert_eq!(packed, vec![0u8; 16], "an undescribable target packs zeros");
     }
 

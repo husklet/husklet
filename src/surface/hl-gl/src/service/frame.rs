@@ -459,11 +459,9 @@ fn frame_target(
         return None;
     }
     let target = snapshot.or_else(|| {
-        let name = ctx.local.framebuffers.color_attachment(fbo);
-        ctx.textures
-            .get(name)
-            .filter(|texture| texture.w > 0 && texture.h > 0)
-            .map(|texture| crate::model::program::TargetSnapshot {
+        ctx.framebuffer_color_texture(fbo, 0)
+            .filter(|(_, texture)| texture.w > 0 && texture.h > 0)
+            .map(|(name, texture)| crate::model::program::TargetSnapshot {
                 texture: name,
                 generation: texture.gen,
                 shared_storage: texture.shared_storage(),

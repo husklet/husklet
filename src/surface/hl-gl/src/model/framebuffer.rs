@@ -10,16 +10,24 @@
 
 use std::collections::HashMap;
 
+/// One texture object retained by an FBO attachment. `name` is the GL-visible spelling reported by
+/// attachment queries; `object` is the stable identity used internally after that name is deleted/reused.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TextureAttachment {
+    pub name: u32,
+    pub object: u64,
+}
+
 /// The per-context framebuffer table: FBO name → attached color-texture GL name (`0` = no attachment),
 /// with a monotonic name counter. Name `0` is the reserved default framebuffer.
 #[derive(Debug, Default)]
 pub struct Framebuffers {
     /// FBO name → its `GL_COLOR_ATTACHMENT0` texture GL name (the single-target fast path, unchanged).
-    color: HashMap<u32, u32>,
+    color: HashMap<u32, TextureAttachment>,
     /// FBO name → its extra `GL_COLOR_ATTACHMENT{i}` (i ≥ 1) texture GL names, for multiple render targets
     /// (`glDrawBuffers` MRT). Keyed `(fbo, attachment_index)`; attachment 0 stays in `color` above so a
     /// single-attachment FBO is byte-identical to before. `0` = no attachment at that index.
-    color_extra: HashMap<(u32, u32), u32>,
+    color_extra: HashMap<(u32, u32), TextureAttachment>,
     /// FBO name → the object attached at `GL_DEPTH_ATTACHMENT` / `GL_STENCIL_ATTACHMENT` (`0` = none).
     ///
     /// This model has no depth or stencil PLANE of its own — the frame builder mints one whenever a draw
@@ -60,22 +68,32 @@ impl Framebuffers {
     pub fn gen(&mut self) -> u32 {
         let name = self.next_name;
         self.next_name += 1;
-        self.color.entry(name).or_insert(0);
+        self.color.entry(name).or_default();
         name
     }
 
     /// Materialize a non-zero name bound through `GL_CHROMIUM_bind_generates_resource`.
     pub fn ensure(&mut self, name: u32) {
         if name != 0 {
-            self.color.entry(name).or_insert(0);
+            self.color.entry(name).or_default();
             self.next_name = self.next_name.max(name.saturating_add(1));
         }
     }
 
     /// `glFramebufferTexture2D(GL_COLOR_ATTACHMENT0, tex)` — attach `tex` as `fbo`'s color target.
     pub fn attach_color(&mut self, fbo: u32, tex: u32) {
+        self.attach_color_object(fbo, 0, tex, 0);
+    }
+
+    pub fn attach_color_object(&mut self, fbo: u32, index: u32, name: u32, object: u64) {
         if fbo != 0 {
-            self.color.insert(fbo, tex);
+            self.set_color_source(fbo, index, name, false);
+            let attachment = TextureAttachment { name, object };
+            if index == 0 {
+                self.color.insert(fbo, attachment);
+            } else {
+                self.color_extra.insert((fbo, index), attachment);
+            }
         }
     }
 
@@ -87,9 +105,21 @@ impl Framebuffers {
         }
         self.set_color_source(fbo, index, tex, false);
         if index == 0 {
-            self.color.insert(fbo, tex);
+            self.color.insert(
+                fbo,
+                TextureAttachment {
+                    name: tex,
+                    object: 0,
+                },
+            );
         } else {
-            self.color_extra.insert((fbo, index), tex);
+            self.color_extra.insert(
+                (fbo, index),
+                TextureAttachment {
+                    name: tex,
+                    object: 0,
+                },
+            );
         }
     }
 
@@ -131,7 +161,10 @@ impl Framebuffers {
     }
 
     pub fn stencil_source(&self, fbo: u32) -> Option<(u32, bool)> {
-        self.stencil.get(&fbo).copied().filter(|(name, _)| *name != 0)
+        self.stencil
+            .get(&fbo)
+            .copied()
+            .filter(|(name, _)| *name != 0)
     }
 
     /// Whether `fbo` carries a depth attachment. The default framebuffer's answer belongs to its
@@ -147,16 +180,27 @@ impl Framebuffers {
 
     /// The GL texture attached as `fbo`'s color target (`0` = default framebuffer or no attachment).
     pub fn color_attachment(&self, fbo: u32) -> u32 {
-        self.color.get(&fbo).copied().unwrap_or(0)
+        self.color.get(&fbo).map_or(0, |attachment| attachment.name)
+    }
+
+    pub fn color_attachment_object(&self, fbo: u32, index: u32) -> Option<TextureAttachment> {
+        let attachment = if index == 0 {
+            self.color.get(&fbo)
+        } else {
+            self.color_extra.get(&(fbo, index))
+        }?;
+        (attachment.name != 0).then_some(*attachment)
     }
 
     /// The GL texture attached at `fbo`'s `GL_COLOR_ATTACHMENT{index}` (`0` = none). Index 0 is the
     /// single-target slot; index ≥ 1 an MRT extra attachment.
     pub fn color_attachment_index(&self, fbo: u32, index: u32) -> u32 {
         if index == 0 {
-            self.color.get(&fbo).copied().unwrap_or(0)
+            self.color.get(&fbo).map_or(0, |attachment| attachment.name)
         } else {
-            self.color_extra.get(&(fbo, index)).copied().unwrap_or(0)
+            self.color_extra
+                .get(&(fbo, index))
+                .map_or(0, |attachment| attachment.name)
         }
     }
 
@@ -164,11 +208,16 @@ impl Framebuffers {
     /// attachments 0 and 1 returns 2). Stops at the first missing index — the MRT frame path renders this
     /// many targets.
     pub fn color_attachment_count(&self, fbo: u32) -> u32 {
-        if fbo == 0 || self.color.get(&fbo).copied().unwrap_or(0) == 0 {
+        if fbo == 0 || self.color.get(&fbo).map_or(0, |attachment| attachment.name) == 0 {
             return 0;
         }
         let mut n = 1;
-        while self.color_extra.get(&(fbo, n)).copied().unwrap_or(0) != 0 {
+        while self
+            .color_extra
+            .get(&(fbo, n))
+            .map_or(0, |attachment| attachment.name)
+            != 0
+        {
             n += 1;
         }
         n
@@ -187,14 +236,14 @@ impl Framebuffers {
         if tex == 0 {
             return;
         }
-        for v in self.color.values_mut() {
-            if *v == tex {
-                *v = 0;
+        for attachment in self.color.values_mut() {
+            if attachment.name == tex {
+                *attachment = TextureAttachment::default();
             }
         }
-        for v in self.color_extra.values_mut() {
-            if *v == tex {
-                *v = 0;
+        for attachment in self.color_extra.values_mut() {
+            if attachment.name == tex {
+                *attachment = TextureAttachment::default();
             }
         }
         // A texture attachment's source name IS the texture, so deleting it empties the slot. A
@@ -205,8 +254,55 @@ impl Framebuffers {
 
     pub(crate) fn references_texture(&self, texture: u32) -> bool {
         texture != 0
-            && (self.color.values().any(|value| *value == texture)
-                || self.color_extra.values().any(|value| *value == texture))
+            && (self.color.values().any(|value| value.name == texture)
+                || self.color_extra.values().any(|value| value.name == texture))
+    }
+
+    pub(crate) fn references_object(&self, object: u64) -> bool {
+        object != 0
+            && (self.color.values().any(|value| value.object == object)
+                || self
+                    .color_extra
+                    .values()
+                    .any(|value| value.object == object))
+    }
+
+    pub(crate) fn attached_objects(&self, fbo: u32) -> Vec<u64> {
+        let mut objects = Vec::new();
+        if let Some(attachment) = self.color.get(&fbo) {
+            if attachment.object != 0 {
+                objects.push(attachment.object);
+            }
+        }
+        objects.extend(
+            self.color_extra
+                .iter()
+                .filter_map(|(&(owner, _), attachment)| {
+                    (owner == fbo && attachment.object != 0).then_some(attachment.object)
+                }),
+        );
+        objects.sort_unstable();
+        objects.dedup();
+        objects
+    }
+
+    /// Detach `texture` only from `fbo`. GL deletion affects attachment points of the currently bound FBO;
+    /// an unbound FBO retains its object reference even though the public texture name becomes reusable.
+    pub fn detach_color_texture_from(&mut self, fbo: u32, texture: u32) {
+        if let Some(attachment) = self.color.get_mut(&fbo) {
+            if attachment.name == texture {
+                *attachment = TextureAttachment::default();
+            }
+        }
+        for (&(owner, _), attachment) in &mut self.color_extra {
+            if owner == fbo && attachment.name == texture {
+                *attachment = TextureAttachment::default();
+            }
+        }
+        self.color_source
+            .retain(|&(owner, _), (name, renderbuffer)| {
+                owner != fbo || *renderbuffer || *name != texture
+            });
     }
 
     /// `glDeleteFramebuffers` — drop the object. Returns `false` for an unknown name.

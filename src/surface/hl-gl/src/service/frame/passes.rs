@@ -189,7 +189,12 @@ impl RenderPasses {
         for &(fbo, start, end) in groups {
             let run = &draws[start..end];
             let ((surface, target_tex, tw, th, fmt), resolved_attachment) =
-                resolve_target_with_identity(ctx, fbo, run.first().and_then(|d| d.target), &mut cmds);
+                resolve_target_with_identity(
+                    ctx,
+                    fbo,
+                    run.first().and_then(|d| d.target),
+                    &mut cmds,
+                );
             fbo_target.insert(fbo, (surface, target_tex, tw, th, fmt));
             if let Some(target) = frame_target(
                 ctx,
@@ -458,15 +463,16 @@ fn resolve_target_with_identity(
     fbo: u32,
     snapshot: Option<crate::model::program::TargetSnapshot>,
     cmds: &mut Vec<Cmd>,
-) -> (ResolvedTarget, Option<crate::model::program::TargetSnapshot>) {
+) -> (
+    ResolvedTarget,
+    Option<crate::model::program::TargetSnapshot>,
+) {
     // Try the FBO's color attachment; fall back to the default target if it is missing/unsized.
     if fbo != 0 {
         let target = snapshot.or_else(|| {
-            let texture = ctx.local.framebuffers.color_attachment(fbo);
-            ctx.textures
-                .get(texture)
-                .filter(|t| t.w > 0 && t.h > 0)
-                .map(|t| crate::model::program::TargetSnapshot {
+            ctx.framebuffer_color_texture(fbo, 0)
+                .filter(|(_, t)| t.w > 0 && t.h > 0)
+                .map(|(texture, t)| crate::model::program::TargetSnapshot {
                     texture,
                     generation: t.gen,
                     shared_storage: t.shared_storage(),
@@ -538,7 +544,9 @@ fn register_resolved_target(
 mod tests {
     use super::*;
     use crate::model::context::FrameOp;
-    use crate::model::glconst::{GL_FRAGMENT_SHADER, GL_TEXTURE_2D, GL_TRIANGLES, GL_VERTEX_SHADER};
+    use crate::model::glconst::{
+        GL_FRAGMENT_SHADER, GL_TEXTURE_2D, GL_TRIANGLES, GL_VERTEX_SHADER,
+    };
     use crate::service::record::{attach_shader, bind_texture, shader_source};
 
     fn fallback_then_sample() -> (GlContext, u32) {
@@ -606,9 +614,7 @@ mod tests {
         let groups = RenderPasses::groups(&ctx.local.recording.draws);
 
         let frame = RenderPasses::build_multi(&mut ctx, &groups).unwrap();
-        let target_ir = ctx
-            .resident_fbo_target_tex(texture, generation)
-            .unwrap();
+        let target_ir = ctx.resident_fbo_target_tex(texture, generation).unwrap();
 
         assert_sampler_uses_fallback_target(&frame, target_ir);
     }
@@ -627,9 +633,7 @@ mod tests {
             .collect();
 
         let frame = RenderPasses::build_ordered(&mut ctx).unwrap();
-        let target_ir = ctx
-            .resident_fbo_target_tex(texture, generation)
-            .unwrap();
+        let target_ir = ctx.resident_fbo_target_tex(texture, generation).unwrap();
 
         assert_sampler_uses_fallback_target(&frame, target_ir);
     }
@@ -758,7 +762,11 @@ pub(super) fn depth_attachment_for(
     let (depth_tex, needs_create) = ctx.depth_target(fbo, color_tex, with_stencil).ok()?;
     // A depth texture minted this frame has no prior contents to preserve — and a zero-initialized depth
     // plane fails every `GL_LESS` test — so its first pass always clear-loads regardless of the caller's op.
-    let load = if needs_create { LoadOp::Clear } else { clear.load };
+    let load = if needs_create {
+        LoadOp::Clear
+    } else {
+        clear.load
+    };
     if needs_create {
         cmds.push(Cmd::CreateTexture(
             depth_tex,

@@ -119,7 +119,10 @@ impl GlContext {
             // re-mints at UNCHANGED size — and a native-to-readback transition is a token change too,
             // since the readback path carries no token at all. A browser recreating a layer or the
             // presentation path flipping mode looks like this; a resize looks different.
-            let trigger = match (target.size != (w, h), target.token != self.local.present_token) {
+            let trigger = match (
+                target.size != (w, h),
+                target.token != self.local.present_token,
+            ) {
                 (true, true) => "size and present token",
                 (true, false) => "size",
                 _ => "present token",
@@ -289,11 +292,7 @@ impl GlContext {
         if fbo == 0 {
             return self.resident_default_read_target();
         }
-        let name = self
-            .local
-            .framebuffers
-            .color_attachment_index(fbo, attachment);
-        let texture = self.textures.get(name)?;
+        let (name, texture) = self.framebuffer_color_texture(fbo, attachment)?;
         let target = self.resident_fbo_target_tex(name, texture.gen)?;
         Some((target, texture.w, texture.h, texture.ir_format))
     }

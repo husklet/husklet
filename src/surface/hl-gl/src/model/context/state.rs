@@ -100,7 +100,14 @@ impl GlContext {
                 *texture = 0;
             }
         }
-        self.local.framebuffers.detach_color_texture(name);
+        self.local
+            .framebuffers
+            .detach_color_texture_from(self.local.bound_fbo, name);
+        if self.local.read_fbo != self.local.bound_fbo {
+            self.local
+                .framebuffers
+                .detach_color_texture_from(self.local.read_fbo, name);
+        }
         self.pending_texture_deletes.insert(name);
         true
     }
@@ -192,8 +199,10 @@ impl GlContext {
         !self.pending_program_deletes.contains(&name) && self.programs.contains(name)
     }
 
-    pub(crate) fn texture_is_deleted(&self, name: u32) -> bool {
-        self.pending_texture_deletes.contains(&name)
+    /// A deleted texture name is reusable immediately; deferred deletion retains the old OBJECT, not its
+    /// public namespace entry.
+    pub(crate) fn take_deleted_texture_name(&mut self, name: u32) -> bool {
+        self.pending_texture_deletes.remove(&name)
     }
 
     pub(crate) fn buffer_is_deleted(&self, name: u32) -> bool {
@@ -262,6 +271,17 @@ impl GlContext {
         }
         self.retire_texture(name);
         self.textures.delete(name)
+    }
+
+    pub(crate) fn reclaim_retired_texture_object(&mut self, object: u64) -> bool {
+        if self.local.framebuffers.references_object(object) {
+            return false;
+        }
+        let Some((name, texture)) = self.textures.take_retired_object(object) else {
+            return false;
+        };
+        self.retire_texture_generation(name, texture.gen);
+        true
     }
 
     pub fn reclaim_buffer(&mut self, name: u32) -> bool {
