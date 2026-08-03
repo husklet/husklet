@@ -364,7 +364,9 @@ pub enum Cmd {
 // command, so peers must negotiate the new exact version.
 // v19 gives a depth/stencil attachment independent depth and stencil load operations; a v18 decoder
 // would mis-frame the clear values that follow them.
-pub const WIRE_VERSION: u32 = 19;
+// v20 gives acknowledgements an explicit partial-commit bit. An older guest would report the refusal but
+// incorrectly discard its residency stream, so exact-version negotiation must reject mixed v19/v20 peers.
+pub const WIRE_VERSION: u32 = 20;
 
 // tag constants (stable wire) --------------------------------------------------------------------
 /// Top-level [`Cmd`] tag numbers.

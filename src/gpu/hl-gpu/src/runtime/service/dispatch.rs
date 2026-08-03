@@ -54,17 +54,19 @@ pub(crate) struct PreparedDispatch<'a> {
     transaction: ResourceTransaction<'a>,
     timeline: Option<FenceTimeline>,
     presentations: Option<Vec<Presentation>>,
+    refusal: Option<crate::GpuError>,
 }
 
 impl PreparedDispatch<'_> {
     /// The accepted path's infallible tail: all validation and executor work completed before this call.
-    pub(crate) fn commit(mut self) -> (Vec<Presentation>, FenceTimeline) {
+    pub(crate) fn commit(mut self) -> (Vec<Presentation>, FenceTimeline, Option<crate::GpuError>) {
         self.transaction.commit();
         (
             self.presentations.take().unwrap_or_default(),
             self.timeline
                 .take()
                 .expect("prepared dispatch owns its timeline"),
+            self.refusal.take(),
         )
     }
 }
@@ -99,8 +101,9 @@ pub(crate) fn prepare<'a>(
 
     // SCOPE OF THE TRANSACTION — the contract, stated exactly:
     //
-    //   A rejected batch leaves the ID LIFECYCLE and the RESIDENCY LEDGER precisely as they were.
-    //   Resource CONTENTS are NOT transactional.
+    //   A fatal batch leaves the ID LIFECYCLE and RESIDENCY LEDGER precisely as they were.
+    //   A partial execution commits lifecycle, ledger and contents, then reports its refusal.
+    //   Resource CONTENTS are never transactional.
     //
     // The table journal reverts inserts and removes, so a NACKed frame's creates disappear and its destroys
     // come back — that is what lets a connection retry. It cannot revert a write made THROUGH a handle that
@@ -116,14 +119,10 @@ pub(crate) fn prepare<'a>(
     // `EncoderState::validate`), which is why a single `Submit` is content-atomic even though a
     // multi-command batch is not.
     //
-    // Execute inside an all-tables transaction so the batch's resource-lifecycle mutations are atomic:
-    // an executor that fails PART-WAY through a batch (a Submit that fails device validation, an unknown
-    // resource ref, a shader the backend can't compile — i.e. a NACK) would otherwise leave the id tables
-    // half-mutated (some creates applied, some destroys already dropped) while `account` has already
-    // committed the whole frame's residency charge. Rolling the tables back on failure restores them
-    // EXACTLY to the pre-frame state (the ledger is rolled back by `runtime::submit`), so the connection
-    // recovers: a subsequent destroy of a still-live id no longer `UnknownId`s and a retry no longer
-    // `DuplicateId`s. This is the executor-side "swap-reset-on-NACK".
+    // Execute inside an all-tables transaction so a FATAL executor failure cannot leave lifecycle state
+    // half-mutated. Nonfatal per-operation refusal is an explicit `Execution::partial`: the executor has
+    // continued through the batch and the runtime commits the transaction and its already-installed
+    // ledger. Fatal `Err` rolls tables and ledger back to the exact pre-frame state.
     // The transaction is scoped by an RAII guard rather than by matching on the result, because an
     // executor can leave this stage in a THIRD way that the match could not see: by PANICKING. A panic
     // unwinds straight past a rollback written on the error arm, so every mutation the batch had already
@@ -134,14 +133,13 @@ pub(crate) fn prepare<'a>(
     // costs nothing when the aborted batch had allocated nothing — which is why the same defect presented
     // as "cost a thread" on one run and "killed the session" on another.
     //
-    // `Drop` runs during unwinding, so the guard restores the pre-frame tables on the panic path too, and
-    // an abnormal abort becomes indistinguishable from a clean refusal.
+    // `Drop` runs during unwinding, so the guard restores the pre-frame tables on the panic path too.
     let transaction = ResourceTransaction::begin(resources);
     let executed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         exec.execute(transaction.resources, batch)
     }));
-    let presentations = match executed {
-        Ok(Ok(presentations)) => presentations,
+    let execution = match executed {
+        Ok(Ok(execution)) => execution,
         Ok(Err(error)) => {
             return Err(error);
         }
@@ -154,10 +152,12 @@ pub(crate) fn prepare<'a>(
             return Err(crate::GpuError::Panicked(message));
         }
     };
+    let (presentations, refusal) = execution.into_parts();
     Ok(PreparedDispatch {
         transaction,
         timeline: Some(next_timeline),
         presentations: Some(presentations),
+        refusal,
     })
 }
 
@@ -412,8 +412,8 @@ mod sharing_atomicity_tests {
         fn capabilities(&self) -> Capabilities {
             Capabilities::permissive_fixture("lying exporter")
         }
-        fn execute(&mut self, _: &mut SessionResources, _: &[Cmd]) -> Result<Vec<Presentation>> {
-            Ok(Vec::new())
+        fn execute(&mut self, _: &mut SessionResources, _: &[Cmd]) -> Result<crate::Execution> {
+            Ok(crate::Execution::accepted(Vec::new()))
         }
         fn wait(&mut self, _: &mut SessionResources, _: FenceId, _: u64) -> Result<()> {
             Ok(())
@@ -427,8 +427,8 @@ mod sharing_atomicity_tests {
         fn capabilities(&self) -> Capabilities {
             Capabilities::permissive_fixture("failing importer")
         }
-        fn execute(&mut self, _: &mut SessionResources, _: &[Cmd]) -> Result<Vec<Presentation>> {
-            Ok(Vec::new())
+        fn execute(&mut self, _: &mut SessionResources, _: &[Cmd]) -> Result<crate::Execution> {
+            Ok(crate::Execution::accepted(Vec::new()))
         }
         fn wait(&mut self, _: &mut SessionResources, _: FenceId, _: u64) -> Result<()> {
             Ok(())
@@ -448,8 +448,8 @@ mod sharing_atomicity_tests {
         fn capabilities(&self) -> Capabilities {
             Capabilities::permissive_fixture("panicking importer")
         }
-        fn execute(&mut self, _: &mut SessionResources, _: &[Cmd]) -> Result<Vec<Presentation>> {
-            Ok(Vec::new())
+        fn execute(&mut self, _: &mut SessionResources, _: &[Cmd]) -> Result<crate::Execution> {
+            Ok(crate::Execution::accepted(Vec::new()))
         }
         fn wait(&mut self, _: &mut SessionResources, _: FenceId, _: u64) -> Result<()> {
             Ok(())
@@ -467,8 +467,8 @@ mod sharing_atomicity_tests {
         fn capabilities(&self) -> Capabilities {
             Capabilities::permissive_fixture("failing barrier")
         }
-        fn execute(&mut self, _: &mut SessionResources, _: &[Cmd]) -> Result<Vec<Presentation>> {
-            Ok(Vec::new())
+        fn execute(&mut self, _: &mut SessionResources, _: &[Cmd]) -> Result<crate::Execution> {
+            Ok(crate::Execution::accepted(Vec::new()))
         }
         fn wait(&mut self, _: &mut SessionResources, _: FenceId, _: u64) -> Result<()> {
             Ok(())

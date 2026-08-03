@@ -44,7 +44,7 @@ impl GpuExecutor for FakeExecutor {
         self.caps.clone()
     }
 
-    fn execute(&mut self, res: &mut SessionResources, batch: &[Cmd]) -> Result<Vec<Presentation>> {
+    fn execute(&mut self, res: &mut SessionResources, batch: &[Cmd]) -> Result<hl_gpu::Execution> {
         self.executed.push(batch.to_vec());
         let native = || -> Box<dyn Any> { Box::new(()) };
         let mut presents = Vec::new();
@@ -83,7 +83,7 @@ impl GpuExecutor for FakeExecutor {
                 _ => {}
             }
         }
-        Ok(presents)
+        Ok(hl_gpu::Execution::accepted(presents))
     }
 
     fn wait(&mut self, _res: &mut SessionResources, fence: FenceId, value: u64) -> Result<()> {
@@ -142,7 +142,7 @@ impl GpuExecutor for NackOnPresentExecutor {
         self.caps.clone()
     }
 
-    fn execute(&mut self, res: &mut SessionResources, batch: &[Cmd]) -> Result<Vec<Presentation>> {
+    fn execute(&mut self, res: &mut SessionResources, batch: &[Cmd]) -> Result<hl_gpu::Execution> {
         let native = || -> Box<dyn Any> { Box::new(()) };
         for cmd in batch {
             match cmd {
@@ -162,7 +162,7 @@ impl GpuExecutor for NackOnPresentExecutor {
                 _ => {}
             }
         }
-        Ok(Vec::new())
+        Ok(hl_gpu::Execution::accepted(Vec::new()))
     }
 
     fn wait(&mut self, _res: &mut SessionResources, _fence: FenceId, _value: u64) -> Result<()> {
@@ -176,6 +176,8 @@ fn session(limits: Limits, global: GlobalLedger) -> Session {
 
 #[path = "runtime/negotiation.rs"]
 mod negotiation;
+#[path = "runtime/partial.rs"]
+mod partial;
 #[path = "runtime/recovery.rs"]
 mod recovery;
 #[path = "runtime/residency.rs"]

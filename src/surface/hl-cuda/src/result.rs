@@ -164,6 +164,7 @@ impl<'a> From<&'a GpuError> for DriverStatus<'a> {
 impl DriverStatus<'_> {
     pub fn code(self) -> i32 {
         let code = match self.0 {
+            GpuError::Partial(error) => DriverStatus(error.as_ref()).code(),
             GpuError::Unsupported(_) => CUDA_ERROR_NOT_SUPPORTED,
             GpuError::Kernel(_) => CUDA_ERROR_INVALID_PTX,
             GpuError::UnknownId { .. } | GpuError::DuplicateId { .. } => CUDA_ERROR_INVALID_HANDLE,
@@ -226,6 +227,7 @@ impl<'a> From<&'a GpuError> for RuntimeStatus<'a> {
 impl RuntimeStatus<'_> {
     pub fn code(self) -> i32 {
         let code = match self.0 {
+            GpuError::Partial(error) => RuntimeStatus(error.as_ref()).code(),
             GpuError::Unsupported(_) => CUDART_ERROR_NOT_SUPPORTED,
             GpuError::Kernel(_) => CUDART_ERROR_INVALID_PTX,
             GpuError::UnknownId { .. } | GpuError::DuplicateId { .. } => {
@@ -309,6 +311,17 @@ mod tests {
                 DriverStatus::from(&refused(kind.ack())).code(),
                 DriverStatus::from(&local).code(),
                 "refusal class {kind:?} must report what the local error reports"
+            );
+            let partial = GpuError::Partial(Box::new(refused(kind.ack())));
+            assert_eq!(
+                DriverStatus::from(&partial).code(),
+                DriverStatus::from(&local).code(),
+                "partial refusal class {kind:?} must preserve the local driver code"
+            );
+            assert_eq!(
+                RuntimeStatus::from(&partial).code(),
+                RuntimeStatus::from(&local).code(),
+                "partial refusal class {kind:?} must preserve the local runtime code"
             );
         }
     }

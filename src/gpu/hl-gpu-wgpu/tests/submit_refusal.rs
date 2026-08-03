@@ -129,10 +129,10 @@ fn refusal_preserves_encoded_work_and_continues_to_later_operations() {
 
     assert_eq!(
         result,
-        Err(GpuError::UnknownId {
+        Err(GpuError::Partial(Box::new(GpuError::UnknownId {
             kind: "texture",
             id: 999,
-        })
+        })))
     );
     assert_eq!(
         exec.read_texture(&session.resources, 1).unwrap(),
@@ -199,10 +199,10 @@ fn top_level_refusal_preserves_submits_on_both_sides() {
 
     assert_eq!(
         result,
-        Err(GpuError::UnknownId {
+        Err(GpuError::Partial(Box::new(GpuError::UnknownId {
             kind: "sampler",
             id: 4,
-        }),
+        }))),
         "the first top-level refusal must remain visible to the caller"
     );
     assert_eq!(
@@ -214,5 +214,73 @@ fn top_level_refusal_preserves_submits_on_both_sides() {
         exec.read_texture(&session.resources, 2).unwrap(),
         [0, 255, 0, 255],
         "valid native work after the stale sampler must execute"
+    );
+}
+
+#[test]
+fn resource_created_before_refusal_is_usable_by_the_next_batch() {
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove native resource continuity");
+    let mut limits = Limits::from_capabilities(exec.capabilities());
+    limits.copy_alignment = 1;
+    let mut session = Session::new(
+        limits,
+        GlobalLedger::unbounded(),
+        Box::new(FakeClock::new(0)),
+    );
+    let usage = texture_usage::RENDER_TARGET | texture_usage::COPY_SRC;
+    let refused = hl_gpu::runtime::submit(
+        &mut session,
+        &mut exec,
+        0,
+        &[
+            Cmd::CreateTexture(7, texture(TextureDim::D2, 1, 1, usage)),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![Enc::ClearRect {
+                    texture: 999,
+                    x: 0,
+                    y: 0,
+                    w: 1,
+                    h: 1,
+                    color: [1.0, 0.0, 0.0, 1.0],
+                    base_array_layer: 0,
+                    layer_count: 1,
+                    mip_level: 0,
+                }],
+                signal: None,
+            }),
+        ],
+    );
+    assert_eq!(
+        refused,
+        Err(GpuError::Partial(Box::new(GpuError::UnknownId {
+            kind: "texture",
+            id: 999,
+        })))
+    );
+
+    hl_gpu::runtime::submit(
+        &mut session,
+        &mut exec,
+        0,
+        &[Cmd::Submit(CommandBuffer {
+            encoder: vec![Enc::ClearRect {
+                texture: 7,
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                color: [0.0, 1.0, 0.0, 1.0],
+                base_array_layer: 0,
+                layer_count: 1,
+                mip_level: 0,
+            }],
+            signal: None,
+        })],
+    )
+    .expect("the next batch must resolve the resource committed before the refusal");
+    assert_eq!(
+        exec.read_texture(&session.resources, 7).unwrap(),
+        [0, 255, 0, 255]
     );
 }

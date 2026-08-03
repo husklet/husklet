@@ -4,7 +4,10 @@ use super::*;
 fn empty_batch_is_a_clean_noop() {
     let mut exec = CpuExecutor::new();
     let mut res = SessionResources::new();
-    assert_eq!(exec.execute(&mut res, &[]).unwrap(), vec![]);
+    assert_eq!(
+        exec.execute(&mut res, &[]).unwrap(),
+        hl_gpu::Execution::accepted(vec![])
+    );
     assert_eq!(res.live_count(), 0);
 }
 

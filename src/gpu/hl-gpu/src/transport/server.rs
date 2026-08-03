@@ -14,7 +14,7 @@ use crate::protocol::model::capability::Capabilities;
 use crate::protocol::model::command::Cmd;
 use crate::transport::adapter::unix;
 use crate::transport::adapter::unix::FrameOutcome;
-use crate::transport::model::header::{RefusalKind, SubmitHeader, ACK_FAIL, ACK_OK};
+use crate::transport::model::header::{RefusalKind, SubmitHeader, ACK_FAIL, ACK_OK, ACK_PARTIAL};
 use crate::transport::model::readback::{
     readback_kind, ReadbackRequest, READBACK_FAIL, READBACK_MAGIC, READBACK_OK,
 };
@@ -28,6 +28,8 @@ pub enum Verdict {
     /// [`RefusalKind::Unstated`] — a host that has a typed error should use [`Verdict::for_error`]
     /// instead, because the reason is otherwise destroyed here and the guest can only guess.
     Refused(RefusalKind),
+    /// The named operation was refused, but successful commands in the frame were committed.
+    Partial(RefusalKind),
 }
 
 #[allow(non_upper_case_globals)]
@@ -37,7 +39,12 @@ impl Verdict {
 
     /// Refuse a frame with the class of the error that caused it.
     pub fn for_error(error: &crate::protocol::model::error::GpuError) -> Self {
-        Verdict::Refused(RefusalKind::for_error(error))
+        match error {
+            crate::GpuError::Partial(error) if !error.is_fatal() => {
+                Verdict::Partial(RefusalKind::for_error(error))
+            }
+            error => Verdict::Refused(RefusalKind::for_error(error)),
+        }
     }
 }
 
@@ -56,6 +63,7 @@ impl Verdict {
         match self {
             Verdict::Ack => ACK_OK,
             Verdict::Refused(kind) => kind.ack(),
+            Verdict::Partial(kind) => kind.ack() | ACK_PARTIAL,
         }
     }
 }
@@ -413,18 +421,22 @@ fn serve_loop<H: ConnectionHandler>(
                     (Verdict::Nack, 0, decode_us, 0)
                 }
             };
-        if matches!(verdict, Verdict::Nack) {
+        if matches!(verdict, Verdict::Refused(_) | Verdict::Partial(_)) {
             hl_log::hl_count!(hl_log::tag::TRANSPORT, "nacks");
+            if matches!(verdict, Verdict::Partial(_)) {
+                hl_log::hl_count!(hl_log::tag::TRANSPORT, "partial_refusals");
+            }
             // The guest turns this ack into DEVICE_LOST. It is the host's only chance to say a frame was
             // refused; the counter alone is invisible in a shipped build. Latched: a backend that refuses
             // every frame prints once, not at frame rate.
             if Reported::first(&mut reported.nacked) {
                 hl_log::hl_error!(
                     hl_log::tag::TRANSPORT,
-                    "frame REFUSED surface={} commands={} bytes={} (first on this connection)",
+                    "frame REFUSED surface={} commands={} bytes={} partial={} (first on this connection)",
                     frame.header.surface_id,
                     commands,
-                    frame.payload.len()
+                    frame.payload.len(),
+                    matches!(verdict, Verdict::Partial(_))
                 );
             }
         }

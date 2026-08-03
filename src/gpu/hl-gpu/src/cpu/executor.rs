@@ -37,7 +37,7 @@ use crate::protocol::model::error::{GpuError, Result};
 use crate::protocol::model::id::{BufferId, FenceId, SurfaceId, TextureId};
 use crate::protocol::model::kernel::{KernelDescriptor, KernelProgram, SPIRV_MAGIC};
 use crate::runtime::model::resources::SessionResources;
-use crate::runtime::port::executor::{GpuExecutor, Presentation};
+use crate::runtime::port::executor::{Execution, GpuExecutor, Presentation};
 
 mod api;
 mod operation;

@@ -25,7 +25,7 @@ pub use model::sharing::{ExportId, Exports};
 pub use model::sync_sharing::{SharedSync, SyncExportId, SyncExports, TimelineSync, TimelineWait};
 pub use model::timeline::{FenceState, FenceTimeline};
 pub use port::clock::{Clock, FakeClock, SystemClock};
-pub use port::executor::{GpuExecutor, Presentation};
+pub use port::executor::{Execution, GpuExecutor, Presentation};
 pub use sink::InProcessCommandSink;
 
 use crate::protocol::model::command::Cmd;
@@ -169,14 +169,18 @@ pub fn submit(
                 release.commit();
                 session.texture_sharing.remove(&id);
             }
-            let (presents, timeline) = prepared.commit();
+            let (presents, timeline, refusal) = prepared.commit();
             session.timeline = timeline;
-            Ok(presents)
+            match refusal {
+                Some(error) => Err(crate::GpuError::Partial(Box::new(error))),
+                None => Ok(presents),
+            }
         }
         Err(e) => {
-            // Executor NACK: `dispatch` already rolled the id tables back to the pre-frame state; roll the
-            // account charge back to match so the whole submit is atomic — the connection is left EXACTLY
-            // as before the frame (ledger + global + tables), ready for a retry or a subsequent destroy.
+            // Fatal executor failure: `dispatch` already rolled the id tables back to the pre-frame state;
+            // roll the account charge back to match so the whole submit is atomic — the connection is left
+            // exactly as before the frame (ledger + global + tables), ready for retry or later destroy.
+            // Nonfatal refusals arrive as prepared partial executions and commit in the branch above.
             // The account operation lock excludes transfer plans, so this infallible restore swaps exactly
             // the contribution installed above back to the previously committed snapshot.
             session

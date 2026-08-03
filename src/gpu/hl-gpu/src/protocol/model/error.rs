@@ -47,6 +47,9 @@ pub enum GpuError {
     /// request: the same command from the same session succeeds once the holder unmaps, and a caller that
     /// cannot tell those apart will "fix" a correct program.
     MappedElsewhere { kind: &'static str, id: u32 },
+    /// One or more nonfatal operations were refused, while every successful command in the batch was
+    /// committed. The guest must advance its resource stream before surfacing the enclosed refusal.
+    Partial(Box<GpuError>),
     /// Higher-level decode context wrapped around a low-level wire error.
     Decode(String),
     /// A typed failure at the remote command transport boundary.
@@ -86,6 +89,7 @@ impl GpuError {
             | Self::ResourceLimit(_)
             | Self::Kernel(_)
             | Self::MappedElsewhere { .. } => false,
+            Self::Partial(error) => error.is_fatal(),
         }
     }
 }
@@ -113,6 +117,7 @@ impl std::fmt::Display for GpuError {
                 f,
                 "{kind} {id} is mapped by another connection; retry after it unmaps"
             ),
+            GpuError::Partial(error) => write!(f, "partially committed batch: {error}"),
             GpuError::Transport(error) => error.fmt(f),
         }
     }
