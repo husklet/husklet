@@ -20,38 +20,81 @@ fn replace_identifier(source: &mut String, from: &str, to: &str) {
     *source = output;
 }
 
-/// Replace a global identifier without mistaking a member selector or vector swizzle for that global.
-/// GLSL permits whitespace around `.`, so inspect the previous non-whitespace token rather than only the
-/// byte immediately before the name. Random dEQP shaders deliberately use one-letter sampler names such as
-/// `g` alongside expressions such as `b.g`; rewriting both turns the swizzle into an invalid sampler
-/// constructor call.
-fn replace_global_identifier(source: &mut String, from: &str, to: &str) {
-    let bytes = source.as_bytes();
-    let mut output = String::with_capacity(source.len());
-    let mut at = 0usize;
-    while at < bytes.len() {
-        if Tokens::is_word(bytes[at]) {
-            let start = at;
-            while at < bytes.len() && Tokens::is_word(bytes[at]) {
-                at += 1;
+/// Replace one reflected global sampler access, without capturing a selector suffix or a lexically
+/// shadowing declaration. The translator calls this on one regenerated global item or `main` body at a
+/// time. Parameter shadows extend through the following function body; local/member shadows begin at their
+/// declaration and end with their enclosing brace scope.
+fn replace_sampler_reference(source: &mut String, from: &str, to: &str) {
+    let tokens = lexemes(source);
+    let pattern = lexemes(from);
+    let Some(root) = pattern.first().map(|token| token.text.as_str()) else {
+        return;
+    };
+    let mut stack = Vec::new();
+    let mut enclosing = vec![None; tokens.len()];
+    let mut closes = std::collections::HashMap::new();
+    for (index, token) in tokens.iter().enumerate() {
+        enclosing[index] = stack.last().copied();
+        if token.text == "{" {
+            stack.push(index);
+        } else if token.text == "}" {
+            if let Some(open) = stack.pop() {
+                closes.insert(open, index);
             }
-            let word = &source[start..at];
-            let previous = bytes[..start]
-                .iter()
-                .rev()
-                .copied()
-                .find(|byte| !byte.is_ascii_whitespace());
-            output.push_str(if word == from && previous != Some(b'.') {
-                to
-            } else {
-                word
-            });
-        } else {
-            output.push(char::from(bytes[at]));
-            at += 1;
         }
     }
-    *source = output;
+    let shadows = tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(index, token)| {
+            if token.text != root || index == 0 {
+                return None;
+            }
+            let previous = &tokens[index - 1].text;
+            if previous == "." || !previous.bytes().all(Tokens::is_word) {
+                return None;
+            }
+            // The reflected top-level uniform declaration is the global itself, not a shadow. It can be
+            // present on the verbatim sampler-array path.
+            if tokens[..index]
+                .iter()
+                .rev()
+                .take_while(|candidate| candidate.text != ";" && candidate.text != "{")
+                .any(|candidate| candidate.text == "uniform")
+            {
+                return None;
+            }
+            let end = enclosing[index]
+                .and_then(|open| closes.get(&open).copied())
+                .or_else(|| {
+                    tokens[index + 1..]
+                        .iter()
+                        .position(|candidate| candidate.text == "{")
+                        .map(|relative| index + 1 + relative)
+                        .and_then(|open| closes.get(&open).copied())
+                })
+                .unwrap_or(tokens.len());
+            Some(index..=end)
+        })
+        .collect::<Vec<_>>();
+
+    let mut edits = Vec::new();
+    for start in 0..tokens.len() {
+        if start + pattern.len() > tokens.len()
+            || tokens[start..start + pattern.len()]
+                .iter()
+                .zip(&pattern)
+                .any(|(actual, expected)| actual.text != expected.text)
+            || start.checked_sub(1).is_some_and(|before| tokens[before].text == ".")
+            || shadows.iter().any(|scope| scope.contains(&start))
+        {
+            continue;
+        }
+        edits.push((tokens[start].start, tokens[start + pattern.len() - 1].end));
+    }
+    for (start, end) in edits.into_iter().rev() {
+        source.replace_range(start..end, to);
+    }
 }
 
 #[derive(Clone)]
@@ -567,7 +610,7 @@ impl Declarations<'_> {
                     } else {
                         format!("{ctor}({name}_hltex, {name}_hlsmp)")
                     };
-                    wreplace(body, &source, &replacement);
+                    replace_sampler_reference(body, &source, &replacement);
                 }
             } else {
                 let name = Self::sampler_element_name(s, 0);
@@ -576,13 +619,7 @@ impl Declarations<'_> {
                 } else {
                     format!("{ctor}({name}_hltex, {name}_hlsmp)")
                 };
-                if s.name.bytes().all(Tokens::is_word) {
-                    replace_global_identifier(body, &s.name, &repl);
-                } else {
-                    // Flattened aggregate sampler names contain member selectors. They name the complete
-                    // access path, so the ordinary boundary-aware replacement remains the right operation.
-                    wreplace(body, &s.name, &repl);
-                }
+                replace_sampler_reference(body, &s.name, &repl);
             }
         }
     }

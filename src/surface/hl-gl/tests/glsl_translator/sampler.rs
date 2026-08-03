@@ -79,6 +79,56 @@ fn one_letter_sampler_names_do_not_replace_swizzles() {
 }
 
 #[test]
+fn sampler_name_does_not_capture_local_parameter_or_struct_member() {
+    let fs = "uniform sampler2D g;\n\
+              struct Value { float g; };\n\
+              float helper(float g) { Value value; value.g = g; return value.g; }\n\
+              vec4 mixed() { vec4 sampled = texture2D(g, vec2(0.0)); \
+              { float g = 1.0; sampled += vec4(g); } return sampled; }\n\
+              void main(){ gl_FragColor = texture2D(g, vec2(0.0)) + vec4(helper(1.0)) + mixed(); }";
+    let (_, translated) =
+        glsl::StageSources::new("void main(){gl_Position=vec4(0.0);}", fs).translate_render();
+
+    assert!(translated.contains("float helper(float g)"), "{translated}");
+    assert!(translated.contains("value.g = g"), "{translated}");
+    assert!(translated.contains("float g = 1.0"), "{translated}");
+    assert!(
+        translated.contains("texture(sampler2D(g_hltex, g_hlsmp)"),
+        "{translated}"
+    );
+    assert_naga_parses(&translated, naga::ShaderStage::Fragment);
+}
+
+#[test]
+fn sampler_array_name_does_not_capture_member_array() {
+    let fs = "uniform sampler2D g[2];\n\
+              struct Value { vec2 g[2]; };\n\
+              void main(){ Value value; value.g[0] = vec2(0.0); \
+              gl_FragColor = texture2D(g[0], value.g[0]); }";
+    let (_, translated) =
+        glsl::StageSources::new("void main(){gl_Position=vec4(0.0);}", fs).translate_render();
+
+    assert!(translated.contains("value.g[0]"), "{translated}");
+    assert!(translated.contains("sampler2D(g_0_hltex, g_0_hlsmp)"), "{translated}");
+    assert_naga_parses(&translated, naga::ShaderStage::Fragment);
+}
+
+#[test]
+fn aggregate_sampler_path_does_not_suffix_match_another_object() {
+    let fs = "struct Texture { sampler2D g; };\n\
+              struct Inner { float g; }; struct Outer { Inner u; };\n\
+              uniform Texture u;\n\
+              void main(){ Outer other; other.u.g = 1.0; \
+              gl_FragColor = texture2D(u.g, vec2(other.u.g)); }";
+    let (_, translated) =
+        glsl::StageSources::new("void main(){gl_Position=vec4(0.0);}", fs).translate_render();
+
+    assert!(translated.contains("other.u.g = 1.0"), "{translated}");
+    assert!(translated.contains("sampler2D(u_g_hltex, u_g_hlsmp)"), "{translated}");
+    assert_naga_parses(&translated, naga::ShaderStage::Fragment);
+}
+
+#[test]
 fn layered_samplers_keep_dimension_across_sampling_size_and_lod() {
     let vs = "#version 300 es\nvoid main(){gl_Position=vec4(0);}";
     let fs = "#version 300 es\nprecision highp float;\n\
