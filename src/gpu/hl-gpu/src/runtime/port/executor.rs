@@ -36,8 +36,8 @@ pub struct Presentation {
 /// `commands` contains only replay-safe persistent commands; observations (`WaitFence`), GPU work
 /// (`Submit`) and presentation are represented separately and are never smuggled into a reconnect
 /// journal. `source` preserves the original command position solely for runtime accounting and sharing
-/// release plans. A committed submit makes `replayable` false because its successful inner prefix cannot
-/// be represented as a top-level command without executing refused operations again.
+/// release plans. A partially committed submit makes `replayable` false because its successful inner
+/// prefix cannot be represented as a top-level command without executing refused operations again.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommittedCommand {
     pub source: usize,
@@ -69,8 +69,12 @@ impl CommittedDelta {
             let command = batch.get(source).unwrap_or_else(|| panic!("committed command index is out of range"));
             match command {
                 Cmd::Submit(cb) => {
-                    replayable = false;
-                    if scheduled_signals.is_none() {
+                    if scheduled_signals.is_some() {
+                        // A partially lowered Submit cannot be reconstructed from the original command:
+                        // replay would also rerun its refused suffix.
+                        replayable = false;
+                    } else {
+                        commands.push(CommittedCommand { source, command: command.clone() });
                         if let Some(signal) = cb.signal { fence_signals.push(signal); }
                     }
                 }

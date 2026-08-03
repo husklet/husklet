@@ -107,6 +107,10 @@ pub(crate) struct SubmitCommit {
     pub(crate) signal_scheduled: bool,
 }
 
+fn should_schedule_signal(refusal: &Option<GpuError>, signal: Option<(u32, u64)>) -> bool {
+    refusal.is_none() && signal.is_some()
+}
+
 impl WgpuExecutor {
     pub(crate) fn submit_cb(
         &mut self,
@@ -1055,7 +1059,8 @@ impl WgpuExecutor {
             i = next;
         }
         self.submit_encoded(&mut native);
-        if let Some((f, v)) = cb.signal {
+        let signal_scheduled = should_schedule_signal(&first_refusal, cb.signal);
+        if let Some((f, v)) = cb.signal.filter(|_| signal_scheduled) {
             let slot = fence::Fence::schedule(res, f, v)?;
             self.gpu.queue.on_submitted_work_done(move || {
                 fence::Fence::signal(&slot, v);
@@ -1063,7 +1068,7 @@ impl WgpuExecutor {
         }
         Ok(SubmitCommit {
             refusal: first_refusal,
-            signal_scheduled: cb.signal.is_some(),
+            signal_scheduled,
         })
     }
 

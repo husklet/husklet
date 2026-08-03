@@ -185,6 +185,24 @@ fn committed_submit_does_not_imply_its_fence_signal_was_scheduled() {
 }
 
 #[test]
+fn fully_accepted_submit_remains_replayable() {
+    let caps = Capabilities::permissive_fixture("accepted replayable submit");
+    let mut session = session(Limits::from_capabilities(caps.clone()), GlobalLedger::unbounded());
+    let mut executor = PartialExecutor { caps, refused: true, used_committed_buffer: false };
+    let submit = Cmd::Submit(CommandBuffer::default());
+    let batch = [buffer(7, 64), submit.clone()];
+    let outcome = hl_gpu::runtime::submit_outcome(
+        &mut session,
+        &mut executor,
+        0,
+        &batch,
+    )
+    .unwrap();
+    assert!(outcome.committed.replayable);
+    assert_eq!(outcome.committed.replay_commands().collect::<Vec<_>>(), [&batch[0], &submit]);
+}
+
+#[test]
 fn refused_shared_buffer_destroy_keeps_export_and_charge() {
     use hl_gpu::runtime::model::sharing::Exports;
     let caps = Capabilities::permissive_fixture("shared partial");

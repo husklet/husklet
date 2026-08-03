@@ -1,3 +1,14 @@
+use super::should_schedule_signal;
+use hl_gpu::GpuError;
+
+#[test]
+fn refused_submit_never_schedules_its_fence_signal() {
+    let refusal = Some(GpuError::Invalid("operation refused"));
+    assert!(!should_schedule_signal(&refusal, Some((7, 9))));
+    assert!(should_schedule_signal(&None, Some((7, 9))));
+    assert!(!should_schedule_signal(&None, None));
+}
+
 mod native_texture_copy {
     use hl_gpu::protocol::model::descriptor::{BufferDesc, TextureDesc};
     use hl_gpu::protocol::model::enums::{buffer_usage, texture_usage, TextureDim, TextureFormat};

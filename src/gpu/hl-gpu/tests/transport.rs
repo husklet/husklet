@@ -270,6 +270,28 @@ fn server_and_client_preserve_a_partial_refusal_on_the_wire() {
 }
 
 #[test]
+fn legacy_partial_error_is_an_ordinary_refusal_without_a_fake_delta() {
+    let error = hl_gpu::GpuError::Partial(Box::new(hl_gpu::GpuError::UnknownId {
+        kind: "buffer",
+        id: 7,
+    }));
+    assert_eq!(
+        hl_gpu::transport::Verdict::for_error(&error),
+        hl_gpu::transport::Verdict::Refused(RefusalKind::UnknownId)
+    );
+}
+
+#[test]
+fn acknowledged_transport_refusals_are_nonfatal_even_when_partial() {
+    let rejected = hl_gpu::GpuError::Transport(hl_gpu::TransportError::Rejected {
+        phase: hl_gpu::TransportPhase::Acknowledgement,
+        acknowledgement: ACK_PARTIAL | RefusalKind::Invalid.ack(),
+    });
+    assert!(!rejected.is_fatal());
+    assert!(!hl_gpu::GpuError::Partial(Box::new(rejected)).is_fatal());
+}
+
+#[test]
 fn partial_refusal_is_reported_and_replayed_as_committed_residency() {
     use std::io::Write;
 
@@ -363,6 +385,7 @@ fn reconnect_replays_acknowledged_residency_once_before_new_work() {
             offset: 0,
             data: vec![1, 2, 3, 4],
         },
+        Cmd::Submit(CommandBuffer::default()),
     ];
     let draw = vec![
         Cmd::Submit(CommandBuffer::default()),
