@@ -10,9 +10,8 @@
 //!   * `vkGetPhysicalDeviceFeatures2` must report the same answer through the aggregate spelling as
 //!     through the single-feature spelling, or a client sees a self-contradicting device.
 //!
-//! Only `VkPhysicalDeviceVulkan13Features::dynamicRendering` is implemented (lowered by
-//! `cmd_begin_rendering` to `Enc::BeginRenderPass`, and matching the advertised
-//! `VK_KHR_dynamic_rendering` device extension). Every other member is reported and treated as absent.
+//! Implemented members match capabilities actually served by the driver: Vulkan 1.2
+//! `samplerMirrorClampToEdge` and Vulkan 1.3 `dynamicRendering`. Every other member is absent.
 
 use core::ffi::c_void;
 
@@ -26,6 +25,8 @@ pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES: i32 = 55;
 
 /// `VkPhysicalDeviceVulkan13Features::dynamicRendering` — index 12 in `vk.xml` declaration order.
 pub const VULKAN_1_3_DYNAMIC_RENDERING: usize = 12;
+/// `VkPhysicalDeviceVulkan12Features::samplerMirrorClampToEdge` — first member in `vk.xml` order.
+pub const VULKAN_1_2_SAMPLER_MIRROR_CLAMP_TO_EDGE: usize = 0;
 
 /// One promoted-feature aggregate laid out as the C ABI declares it. `N` is the member count, so the
 /// trailing bool array is typed rather than reached by hand-computed offsets.
@@ -171,7 +172,7 @@ impl PromotedFeatures {
             s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
             struct_name: "VkPhysicalDeviceVulkan12Features",
             members: VULKAN_1_2,
-            implemented: &[],
+            implemented: &[VULKAN_1_2_SAMPLER_MIRROR_CLAMP_TO_EDGE],
         },
         Self {
             s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
@@ -359,6 +360,32 @@ mod tests {
         assert_eq!(aggregate.bits[14], VK_FALSE, "maintenance4");
     }
 
+    /// CTS treats this promoted extension as supported only when the Vulkan 1.2 aggregate bit is true;
+    /// enumerating the KHR name alone is deliberately insufficient in Vulkan 1.2+.
+    #[test]
+    fn features2_reports_sampler_mirror_clamp_through_the_vulkan12_aggregate() {
+        let _guard = crate::tests::test_guard();
+        let mut aggregate = Aggregate::<47> {
+            s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+            p_next: core::ptr::null_mut(),
+            bits: [VK_TRUE; 47],
+        };
+        let mut query = crate::types::VkPhysicalDeviceFeatures2 {
+            s_type: crate::types::VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+            p_next: &mut aggregate as *mut _ as *mut c_void,
+            features: crate::types::VkPhysicalDeviceFeatures { bits: [VK_FALSE; 55] },
+        };
+
+        crate::instance::vkGetPhysicalDeviceFeatures2(
+            core::ptr::null_mut(),
+            &mut query as *mut _ as *mut c_void,
+        );
+
+        assert_eq!(aggregate.bits[VULKAN_1_2_SAMPLER_MIRROR_CLAMP_TO_EDGE], VK_TRUE);
+        assert_eq!(aggregate.bits[1], VK_FALSE, "drawIndirectCount");
+        assert_eq!(aggregate.bits[46], VK_FALSE, "subgroupBroadcastDynamicId");
+    }
+
     fn create_info(p_next: *const c_void) -> crate::types::VkDeviceCreateInfo {
         crate::types::VkDeviceCreateInfo {
             s_type: 0,
@@ -375,12 +402,18 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_rendering_is_the_only_implemented_member() {
+    fn implemented_members_match_the_two_served_promoted_features() {
         let total: usize = PromotedFeatures::ALL
             .iter()
             .map(|entry| entry.implemented.len())
             .sum();
-        assert_eq!(total, 1);
+        assert_eq!(total, 2);
+        let v12 = PromotedFeatures::matching(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES)
+            .expect("1.2 aggregate is recognized");
+        assert_eq!(
+            v12.members[VULKAN_1_2_SAMPLER_MIRROR_CLAMP_TO_EDGE],
+            "samplerMirrorClampToEdge"
+        );
         let v13 = PromotedFeatures::matching(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES)
             .expect("1.3 aggregate is recognized");
         assert_eq!(
