@@ -126,8 +126,8 @@ fn distinct_face_masks_lower_to_face_culled_pipeline_draws() {
     let mut sink = RecordingSink::with_full_caps();
     setup_geometry(&mut c);
     record::enable(&mut c, GL_STENCIL_TEST);
-    record::stencil_func_separate(&mut c, GL_FRONT, GL_ALWAYS, 7, 0xf0);
-    record::stencil_func_separate(&mut c, GL_BACK, GL_ALWAYS, 3, 0x0f);
+    record::stencil_func_separate(&mut c, GL_FRONT, GL_ALWAYS, 260, 0xf0);
+    record::stencil_func_separate(&mut c, GL_BACK, GL_ALWAYS, -3, 0x0f);
     record::stencil_mask_separate(&mut c, GL_FRONT, 0xcc);
     record::stencil_mask_separate(&mut c, GL_BACK, 0x33);
     record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
@@ -163,7 +163,7 @@ fn distinct_face_masks_lower_to_face_culled_pipeline_draws() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(references, [7, 3]);
+    assert_eq!(references, [255, 0]);
 }
 
 // ---------------------------------------------------------------------------------------------------

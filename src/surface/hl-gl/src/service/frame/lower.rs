@@ -720,7 +720,7 @@ pub(super) fn lower_draw_n(
             ops.push(Enc::SetPipeline(pipeline));
             if d.stencil {
                 ops.push(Enc::SetStencilReference {
-                    reference: (stencil_ref.max(0) as u32) & 0xff,
+                    reference: stencil_ref.clamp(0, 0xff) as u32,
                 });
             }
             ops.push(Enc::DrawIndexed {
@@ -747,7 +747,7 @@ pub(super) fn lower_draw_n(
             ops.push(Enc::SetPipeline(pipeline));
             if d.stencil {
                 ops.push(Enc::SetStencilReference {
-                    reference: (stencil_ref.max(0) as u32) & 0xff,
+                    reference: stencil_ref.clamp(0, 0xff) as u32,
                 });
             }
             ops.push(Enc::Draw {
