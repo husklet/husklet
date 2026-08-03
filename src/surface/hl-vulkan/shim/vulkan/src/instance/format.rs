@@ -158,7 +158,8 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
     let attachment = format_feature::COLOR_ATTACHMENT | format_feature::DEPTH_STENCIL_ATTACHMENT;
     let multisamplable = image_type == VK_IMAGE_TYPE_2D
         && flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT == 0
-        && features & attachment != 0;
+        && features & attachment != 0
+        && Format(format as u32).supports_multisample();
     let sample_counts = if multisamplable {
         VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_4_BIT
     } else {

@@ -1187,6 +1187,7 @@ fn exact_packed_formats_accept_the_cubic_cts_combined_usage() {
 fn sample_counts_are_claimed_only_where_the_specification_permits() {
     const R8G8B8A8_UNORM: i32 = 37;
     const BC1_RGBA_UNORM_BLOCK: i32 = 133;
+    const R10X6G10X6B10X6A10X6_UNORM_4PACK16: i32 = 1_000_156_009;
     const VK_IMAGE_TYPE_2D: i32 = 1;
     const VK_IMAGE_TILING_OPTIMAL: i32 = 0;
     const CUBE_COMPATIBLE: VkFlags = 0x10;
@@ -1219,6 +1220,13 @@ fn sample_counts_are_claimed_only_where_the_specification_permits() {
     let (result, counts) = query(R8G8B8A8_UNORM, CUBE_COMPATIBLE);
     assert_eq!(result, VK_SUCCESS);
     assert_eq!(counts, 0x1, "a cube-compatible image is single-sample only");
+
+    let (result, counts) = query(R10X6G10X6B10X6A10X6_UNORM_4PACK16, 0);
+    assert_eq!(result, VK_SUCCESS);
+    assert_eq!(
+        counts, 0x1,
+        "expanded R10X6 attachment semantics are proven only for single-sample images"
+    );
 
     // The attachment-capability half cannot be driven through this entry point in a unit test, and
     // saying so is better than a conditional assertion that quietly measures nothing — an earlier draft

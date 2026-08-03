@@ -186,7 +186,8 @@ impl Format {
             | T::Rgba16Snorm
             | T::Rgba16Unorm
             | T::Rg16Unorm
-            | T::Rgba8Snorm => FormatClass::NormalizedColor,
+            | T::Rgba8Snorm
+            | T::R10x6g10x6b10x6a10x6Unorm => FormatClass::NormalizedColor,
             T::Rgba8Uint
             | T::Rgba8Sint
             | T::R8Uint
@@ -253,6 +254,13 @@ impl Format {
     /// and anything wider promises a format the executor would reject.
     pub fn is_image_supported(&self) -> bool {
         self.class().is_some()
+    }
+
+    /// Whether this format has exact multisample attachment storage. Expanded R10X6 is exact only because
+    /// the executor projects its single-sample shadow after every ROP store; a multisampled texture cannot
+    /// enter that copy/readback projection path and is therefore deliberately single-sample.
+    pub fn supports_multisample(&self) -> bool {
+        self.wire() != Some(hl_gpu::protocol::model::enums::TextureFormat::R10x6g10x6b10x6a10x6Unorm)
     }
 
     /// `STORAGE_IMAGE` when the host really permits a storage binding of this format. The core WebGPU
@@ -1059,13 +1067,10 @@ mod tests {
             assert_eq!(features & required, required, "VkFormat {format}");
             assert_ne!(features & format_feature::SAMPLED_IMAGE_FILTER_CUBIC, 0);
         }
-        for format in [vk_format::R10X6G10X6B10X6A10X6_UNORM_4PACK16] {
-            assert_ne!(
-                Format(format).features().optimal_tiling & required,
-                required,
-                "VkFormat {format} still lacks exact render-target semantics"
-            );
-        }
+        let r10x6 = Format(vk_format::R10X6G10X6B10X6A10X6_UNORM_4PACK16);
+        assert_eq!(r10x6.features().optimal_tiling & required, required);
+        assert!(!r10x6.supports_multisample());
+        assert!(Format(vk_format::R8G8B8A8_UNORM).supports_multisample());
     }
 
     #[test]

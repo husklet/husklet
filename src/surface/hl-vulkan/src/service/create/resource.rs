@@ -440,6 +440,11 @@ pub fn create_image_geometry(
             "vkCreateImage: a multisampled image must be 2D with one array layer and one mip level",
         ));
     }
+    if vk_samples.max(1) > 1 && !Format(vk_format).supports_multisample() {
+        return Err(GpuError::Unsupported(
+            "vkCreateImage: this format supports only a single sample",
+        ));
+    }
     let max_dim = if dim == TextureDim::D3 {
         dev.physical_device.limits.max_image_dimension_3d
     } else {
