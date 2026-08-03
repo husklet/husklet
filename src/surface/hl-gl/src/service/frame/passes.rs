@@ -822,6 +822,9 @@ mod tests {
     #[test]
     fn copy_tex_image_defines_nonzero_mip_then_records_the_full_copy() {
         let mut ctx = GlContext::new();
+        ctx.local.surf.have = true;
+        ctx.local.surf.width = 32;
+        ctx.local.surf.height = 32;
         let texture = ctx.textures.gen();
         ctx.local.tex_unit[ctx.local.active_texture] = texture;
         assert!(ctx.textures.image_2d(
@@ -853,6 +856,72 @@ mod tests {
             [GL_RED, GL_RED, GL_RED, GL_ALPHA],
             "the legacy LA conversion is sampled without changing explicit swizzle state",
         );
+    }
+
+    #[test]
+    fn cpu_authoritative_fbo_copy_does_not_queue_a_blank_gpu_overwrite() {
+        let mut ctx = GlContext::new();
+        let source = ctx.textures.gen();
+        assert!(ctx.textures.image_2d(
+            source,
+            2,
+            2,
+            &[0x7b; 2 * 2 * 4],
+            TextureFormat::Rgba8Unorm,
+        ));
+        let fbo = ctx.local.framebuffers.gen();
+        ctx.local.framebuffers.attach_color(fbo, source);
+        ctx.local.read_fbo = fbo;
+        let destination = ctx.textures.gen();
+        assert!(ctx.textures.image_2d(
+            destination,
+            2,
+            2,
+            &[0; 2 * 2 * 4],
+            TextureFormat::Rgba8Unorm,
+        ));
+        ctx.local.tex_unit[ctx.local.active_texture] = destination;
+
+        crate::service::record::copy_tex_sub_image_2d(
+            &mut ctx, GL_TEXTURE_2D, 0, 0, 0, 0, 0, 2, 2,
+        );
+
+        assert_eq!(ctx.textures.get(destination).unwrap().data.as_ref(), &[0x7b; 16]);
+        assert!(ctx.local.recording.operations.is_empty());
+    }
+
+    #[test]
+    fn copy_tex_rejects_an_incomplete_read_framebuffer() {
+        let mut ctx = GlContext::new();
+        ctx.local.read_fbo = ctx.local.framebuffers.gen();
+        let destination = ctx.textures.gen();
+        assert!(ctx.textures.image_2d(
+            destination,
+            2,
+            2,
+            &[0; 16],
+            TextureFormat::Rgba8Unorm,
+        ));
+        ctx.local.tex_unit[ctx.local.active_texture] = destination;
+        crate::service::record::copy_tex_sub_image_2d(
+            &mut ctx, GL_TEXTURE_2D, 0, 0, 0, 0, 0, 1, 1,
+        );
+        assert_eq!(ctx.take_gl_error(), GL_INVALID_FRAMEBUFFER_OPERATION);
+        assert!(ctx.local.recording.operations.is_empty());
+        let before = ctx.textures.get(destination).unwrap().clone();
+        crate::service::record::copy_tex_image_2d(
+            &mut ctx,
+            GL_TEXTURE_2D,
+            0,
+            GL_RGBA,
+            0,
+            0,
+            1,
+            1,
+            0,
+        );
+        assert_eq!(ctx.take_gl_error(), GL_INVALID_FRAMEBUFFER_OPERATION);
+        assert_eq!(ctx.textures.get(destination).unwrap(), &before);
     }
 
     #[test]

@@ -708,6 +708,10 @@ pub fn copy_tex_sub_image_2d(
     if w == 0 || h == 0 {
         return;
     }
+    if ctx.framebuffer_status(ctx.local.read_fbo) != GL_FRAMEBUFFER_COMPLETE {
+        ctx.set_gl_error(GL_INVALID_FRAMEBUFFER_OPERATION);
+        return;
+    }
     // Validate the destination rect fits the bound texture. The `+` are widened to i64 so a huge (or
     // adversarial) offset/extent can never overflow an i32 and panic — it just fails the fit and raises
     // GL_INVALID_VALUE.
@@ -732,8 +736,17 @@ pub fn copy_tex_sub_image_2d(
     }
     // Source: the read framebuffer's color-attachment texture (if any). Copy the overlapping RGBA rows;
     // an absent/dataless source (default framebuffer, or an FBO not yet rendered) is the honest no-op.
-    let src_rows: Option<Vec<u8>> = ctx
+    let source_written_in_frame = ctx.local.recording.operations.iter().any(|operation| match operation {
+        crate::model::context::FrameOp::Draw(draw) => draw.fbo == ctx.local.read_fbo,
+        crate::model::context::FrameOp::Blit(blit) => blit.draw_fbo == ctx.local.read_fbo,
+        crate::model::context::FrameOp::CopyTex(_) => false,
+    });
+    let source_gpu_authoritative = ctx
         .framebuffer_color_texture(ctx.local.read_fbo, 0)
+        .is_some_and(|(_, texture)| texture.gpu_authoritative());
+    let src_rows: Option<Vec<u8>> = (!source_written_in_frame && !source_gpu_authoritative)
+        .then(|| ctx.framebuffer_color_texture(ctx.local.read_fbo, 0))
+        .flatten()
         .and_then(|(_, st)| {
             if st.data.is_empty()
                 || x as i64 + w as i64 > st.w as i64
@@ -759,7 +772,9 @@ pub fn copy_tex_sub_image_2d(
         });
     if level == 0 && face.is_none() {
         if let Some(buf) = src_rows {
-            ctx.textures.sub_image_2d(dst, xo, yo, w, h, &buf);
+            if ctx.textures.sub_image_2d(dst, xo, yo, w, h, &buf) {
+                return;
+            }
         }
     }
     let generation = ctx.textures.get(dst).map(|texture| texture.gen).unwrap_or(0);
@@ -810,6 +825,12 @@ pub fn copy_tex_image_2d(
     }
     if level < 0 || border != 0 || x < 0 || y < 0 || width < 0 || height < 0 {
         ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    // Completeness is validated before redefining the destination. A refused framebuffer copy cannot
+    // partially mutate texture storage and then report failure.
+    if ctx.framebuffer_status(ctx.local.read_fbo) != GL_FRAMEBUFFER_COMPLETE {
+        ctx.set_gl_error(GL_INVALID_FRAMEBUFFER_OPERATION);
         return;
     }
     let name = ctx.local.tex_unit[ctx.local.active_texture];

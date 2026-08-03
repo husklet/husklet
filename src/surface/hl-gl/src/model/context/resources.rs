@@ -71,12 +71,16 @@ impl GlContext {
             .tex_ir_cache
             .get(&gl_name)
             .and_then(|&(ir, resident_generation)| {
-                (resident_generation
+                ((resident_generation
                     == (
                         sampled_generation.0,
                         sampled_generation.1,
                         texture.uses_mipmaps(),
                     ))
+                    || (resident_generation.0 == sampled_generation.0
+                        && resident_generation.1 == sampled_generation.1
+                        && resident_generation.2
+                        && !texture.uses_mipmaps()))
                 .then_some(ir)
             });
         let fbo_ir = self
@@ -540,7 +544,12 @@ impl GlContext {
         generation: (u64, u64, bool),
     ) -> hl_gpu::Result<(u32, bool)> {
         if let Some(&(ir, up_gen)) = self.tex_ir_cache.get(&gl_name) {
-            if up_gen == generation {
+            // A full-pyramid residency also satisfies a base-only sampler. The reverse is not true.
+            // Requiring the policy bit to match exactly replaced a framebuffer-copied pyramid with its
+            // stale CPU shadow when an application later selected a non-mip sampler.
+            if up_gen == generation
+                || (up_gen.0 == generation.0 && up_gen.1 == generation.1 && up_gen.2 && !generation.2)
+            {
                 hl_log::hl_count!(hl_log::tag::GL, "tex_cache_hit");
                 return Ok((ir, false));
             }
@@ -761,5 +770,32 @@ mod interop_tests {
             context.data_buffer_ir(7, buffer_usage::INDEX, 1).unwrap(),
             (interop, false)
         );
+    }
+}
+
+#[cfg(test)]
+mod texture_residency_tests {
+    use super::*;
+
+    #[test]
+    fn full_mip_residency_satisfies_base_only_sampling() {
+        let mut context = GlContext::new();
+        let (full, create) = context.sampled_texture_ir(7, (11, 13, true)).unwrap();
+        assert!(create);
+        assert_eq!(
+            context.sampled_texture_ir(7, (11, 13, false)).unwrap(),
+            (full, false),
+        );
+        assert!(context.pending_destroys().is_empty());
+    }
+
+    #[test]
+    fn base_only_residency_cannot_satisfy_mip_sampling() {
+        let mut context = GlContext::new();
+        let (base, create) = context.sampled_texture_ir(7, (11, 13, false)).unwrap();
+        assert!(create);
+        let (full, recreate) = context.sampled_texture_ir(7, (11, 13, true)).unwrap();
+        assert!(recreate);
+        assert_ne!(base, full);
     }
 }
