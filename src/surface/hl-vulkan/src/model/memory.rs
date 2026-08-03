@@ -349,6 +349,7 @@ impl VertexFormat {
     const I32: u32 = 6;
     const F16: u32 = 7;
     const PACKED_2_10_10_10: u32 = 8;
+    const BGRA_U8: u32 = 9;
 
     pub fn wire(&self) -> Option<u32> {
         use vk_vertex_format as f;
@@ -369,18 +370,25 @@ impl VertexFormat {
             f::R32G32B32_SINT => (Self::I32, 3, false, true),
             f::R32G32B32A32_SINT => (Self::I32, 4, false, true),
             // 16-bit float — x2/x4 only.
+            f::R16_SFLOAT => (Self::F16, 1, false, false),
             f::R16G16_SFLOAT => (Self::F16, 2, false, false),
             f::R16G16B16A16_SFLOAT => (Self::F16, 4, false, false),
             // 8-bit — x2/x4 only.
+            f::R8_UNORM => (Self::U8, 1, true, false),
+            f::R8_UINT => (Self::U8, 1, false, true),
+            f::R8_SINT => (Self::I8, 1, false, true),
             f::R8G8_UNORM => (Self::U8, 2, true, false),
             f::R8G8B8A8_UNORM => (Self::U8, 4, true, false),
             f::R8G8_UINT => (Self::U8, 2, false, true),
             f::R8G8B8A8_UINT => (Self::U8, 4, false, true),
             f::R8G8_SNORM => (Self::I8, 2, true, false),
             f::R8G8B8A8_SNORM => (Self::I8, 4, true, false),
+            f::B8G8R8A8_UNORM => (Self::BGRA_U8, 4, true, false),
             f::R8G8_SINT => (Self::I8, 2, false, true),
             f::R8G8B8A8_SINT => (Self::I8, 4, false, true),
             // 16-bit integer — x2/x4 only.
+            f::R16_UINT => (Self::U16, 1, false, true),
+            f::R16_SINT => (Self::I16, 1, false, true),
             f::R16G16_UNORM => (Self::U16, 2, true, false),
             f::R16G16B16A16_UNORM => (Self::U16, 4, true, false),
             f::R16G16_UINT => (Self::U16, 2, false, true),
@@ -606,11 +614,7 @@ mod vertex_format_tests {
     #[test]
     fn a_format_without_a_wire_encoding_is_refused_rather_than_approximated() {
         for format in [
-            f::R8_UNORM,
-            f::R8_SINT,
-            f::R16_SFLOAT,
             f::R16_UNORM,
-            f::B8G8R8A8_UNORM,
             f::B8G8R8A8_SINT,
             0,
             u32::MAX,
@@ -626,13 +630,6 @@ mod vertex_format_tests {
     /// accepts. Catches a transcription slip in the table that a per-format assertion would miss.
     #[test]
     fn every_lowered_format_decodes_to_a_legal_attribute() {
-        let widths_needing_two_or_four = [
-            VertexFormat::U8,
-            VertexFormat::I8,
-            VertexFormat::U16,
-            VertexFormat::I16,
-            VertexFormat::F16,
-        ];
         for format in 0..=200u32 {
             let Some(wire) = VertexFormat(format).wire() else {
                 continue;
@@ -646,12 +643,7 @@ mod vertex_format_tests {
                 !(normalized && integer),
                 "VkFormat {format} is both normalized and integer"
             );
-            if widths_needing_two_or_four.contains(&kind) {
-                assert!(
-                    comps == 2 || comps == 4,
-                    "VkFormat {format} lowered to a {comps}-component narrow format the executor rejects"
-                );
-            }
+            assert!(kind <= VertexFormat::BGRA_U8, "VkFormat {format} lowered to unknown kind {kind}");
         }
     }
 }

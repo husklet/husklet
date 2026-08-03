@@ -34,7 +34,7 @@ impl Draw<'_> {
         }
         let components = u64::from(format & 0xff);
         let component = match (format >> 8) & 0xff {
-            1 | 2 => 1,
+            1 | 2 | 9 => 1,
             3 | 4 | 7 => 2,
             _ => 4,
         };
