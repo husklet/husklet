@@ -282,6 +282,31 @@ fn indexed_draw_buffer_state_rejects_bad_targets_and_indices_without_mutation() 
         hl_gl::service::query::is_enabled_indexed(&c, GL_BLEND, 4),
         None
     );
+
+    record::blend_func_indexed(&mut c, 0, 0xdead_beef, GL_ONE);
+    assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
+    assert_eq!(
+        hl_gl::service::query::get_integer_indexed(&c, GL_BLEND_SRC_RGB, 0),
+        i64::from(GL_ONE)
+    );
+    record::blend_func_indexed(&mut c, 0, GL_ONE, GL_SRC_ALPHA_SATURATE);
+    assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
+    assert_eq!(
+        hl_gl::service::query::get_integer_indexed(&c, GL_BLEND_DST_RGB, 0),
+        i64::from(GL_ZERO)
+    );
+    record::blend_equation_separate_indexed(&mut c, 0, GL_FUNC_SUBTRACT, 0xdead_beef);
+    assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
+    assert_eq!(
+        hl_gl::service::query::get_integer_indexed(&c, GL_BLEND_EQUATION_RGB, 0),
+        i64::from(GL_FUNC_ADD)
+    );
+
+    // Enumerants are validated before the index, matching the extension command's error precedence.
+    record::blend_func_indexed(&mut c, 4, 0xdead_beef, GL_ONE);
+    assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
+    record::blend_func_indexed(&mut c, 4, GL_ONE, GL_ZERO);
+    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
 }
 
 #[test]
