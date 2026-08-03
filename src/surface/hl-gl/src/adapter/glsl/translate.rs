@@ -132,16 +132,55 @@ impl Source<'_> {
 /// anonymous block puts its members in global scope so the shader body references them by their plain name.
 /// The sampler texture/sampler bindings start at 1 ([`emit_sampler_decls`]) so the UBO never collides.
 impl Declarations<'_> {
+    pub(super) fn emit_uniform_layout(out: &mut String, unis: &[Uni]) {
+        if unis.is_empty() {
+            return;
+        }
+        out.push_str("layout(std140, binding = 0) uniform HlUniforms {\n");
+        let mut cursor = 0usize;
+        let mut padding = 0usize;
+        for u in unis {
+            let offset = u.off.max(0) as usize;
+            while cursor < offset {
+                out.push_str(&format!("    uint _hlpad{padding};\n"));
+                cursor += 4;
+                padding += 1;
+            }
+            let name = Self::storage_name(&u.name);
+            if let Some((columns, _)) = matrix_shape(&u.ty).filter(|_| name != u.name) {
+                for element in 0..u.arr.max(1) {
+                    for column in 0..columns {
+                        out.push_str(&format!("    vec4 {name}_hle{element}_hlc{column};\n"));
+                    }
+                }
+            } else if u.arr > 0 {
+                out.push_str(&format!(
+                    "    {} {}[{}];\n",
+                    Self::storage_type(&u.ty),
+                    name,
+                    u.arr
+                ));
+            } else {
+                out.push_str(&format!("    {} {};\n", Self::storage_type(&u.ty), name));
+            }
+            cursor = offset.saturating_add(u.sz.max(0) as usize);
+        }
+        out.push_str("};\n");
+    }
+
     pub(super) fn emit_uniform_block(out: &mut String, unis: &[Decl]) {
         if unis.is_empty() {
             return;
         }
         out.push_str("layout(std140, binding = 0) uniform HlUniforms {\n");
-        for u in unis {
-            if u.arr > 0 {
-                out.push_str(&format!("    {} {}[{}];\n", u.ty, u.name, u.arr));
+        for uniform in unis {
+            if uniform.arr > 0 {
+                out.push_str(&format!(
+                    "    {} {}[{}];\n",
+                    uniform.ty, uniform.name, uniform.arr
+                ));
             } else {
-                out.push_str(&format!("    {} {};\n", u.ty, u.name));
+                out.push_str(&format!("    {} {};\n", uniform.ty, uniform.name));
             }
         }
         out.push_str("};\n");
@@ -315,8 +354,16 @@ impl Declarations<'_> {
     }
 
     fn sampler_element_name(sampler: &Decl, element: u32) -> String {
-        let base = sampler
-            .name
+        let base = Self::storage_name(&sampler.name);
+        if sampler.arr == 0 {
+            base
+        } else {
+            format!("{base}_{element}")
+        }
+    }
+
+    fn storage_name(source: &str) -> String {
+        source
             .chars()
             .map(|character| {
                 if character.is_ascii_alphanumeric() || character == '_' {
@@ -325,11 +372,71 @@ impl Declarations<'_> {
                     '_'
                 }
             })
-            .collect::<String>();
-        if sampler.arr == 0 {
-            base
-        } else {
-            format!("{base}_{element}")
+            .collect()
+    }
+
+    fn storage_type(source: &str) -> &str {
+        match source {
+            "bool" => "uint",
+            "bvec2" => "uvec2",
+            "bvec3" => "uvec3",
+            "bvec4" => "uvec4",
+            _ => source,
+        }
+    }
+
+    fn rewrite_data_refs(body: &mut String, uniforms: &[Uni]) {
+        for uniform in uniforms.iter().rev() {
+            let replacement = Self::storage_name(&uniform.name);
+            if let Some((columns, rows)) =
+                matrix_shape(&uniform.ty).filter(|_| replacement != uniform.name)
+            {
+                let swizzle = match rows {
+                    2 => ".xy",
+                    3 => ".xyz",
+                    _ => "",
+                };
+                for element in (0..uniform.arr.max(1)).rev() {
+                    let source = if uniform.arr > 0 {
+                        format!("{}[{element}]", uniform.name)
+                    } else {
+                        uniform.name.clone()
+                    };
+                    let columns = (0..columns)
+                        .map(|column| format!("{replacement}_hle{element}_hlc{column}{swizzle}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    wreplace(body, &source, &format!("{}({columns})", uniform.ty));
+                }
+                continue;
+            }
+            if matches!(uniform.ty.as_str(), "bool" | "bvec2" | "bvec3" | "bvec4") {
+                for element in (0..uniform.arr.max(1)).rev() {
+                    let source = if uniform.arr > 0 {
+                        format!("{}[{element}]", uniform.name)
+                    } else {
+                        uniform.name.clone()
+                    };
+                    let stored = if uniform.arr > 0 {
+                        format!("{replacement}[{element}]")
+                    } else {
+                        replacement.clone()
+                    };
+                    let value = if uniform.ty == "bool" {
+                        format!("({stored} != 0u)")
+                    } else {
+                        format!(
+                            "notEqual({stored}, {}(0u))",
+                            Self::storage_type(&uniform.ty)
+                        )
+                    };
+                    wreplace(body, &source, &value);
+                }
+                continue;
+            }
+            if replacement != uniform.name {
+                wreplace(body, &uniform.name, &replacement);
+            }
         }
     }
 }
@@ -507,7 +614,10 @@ impl StageSources<'_> {
         let mut vary = Tokens(&vs).collect("varying");
         vary.truncate(16);
         append_decls_unique(&mut vary, Tokens(&vs).collect("out"), 16);
-        let unis = Declarations::from_stages(&vs, &fs).storage_uniforms().0;
+        let unis = StageSources::new(&vs, &fs)
+            .uniform_layout()
+            .map(|(uniforms, _)| uniforms)
+            .unwrap_or_default();
         let samps = Declarations::from_stages(&vs, &fs).uniforms().1;
         let mut fragouts = Tokens(&fs).collect("out");
         fragouts.truncate(4);
@@ -528,7 +638,7 @@ impl StageSources<'_> {
         // `texture2D`/`textureCube` builtins lowered) so a helper that samples a texture stays valid.
         let (vs_structs, vs_funcs) = Source::new(&vs).partition_globals();
         let (fs_structs, fs_funcs) = Source::new(&fs).partition_globals();
-        let sampler_structs = Declarations::from_stages(&vs, &fs).sampler_structs();
+        let uniform_structs = Declarations::from_stages(&vs, &fs).uniform_structs();
         let rewrite = |items: &[String], samps: &[Decl]| -> String {
             let mut out = String::new();
             for it in items {
@@ -538,7 +648,7 @@ impl StageSources<'_> {
                 if words.next() == Some("struct")
                     && words
                         .next()
-                        .is_some_and(|name| sampler_structs.contains(name))
+                        .is_some_and(|name| uniform_structs.contains(name))
                 {
                     // Opaque aggregate uniforms are lowered to standalone texture/sampler bindings below.
                     // Desktop GLSL/naga does not admit a combined sampler type inside a structure even when
@@ -547,6 +657,7 @@ impl StageSources<'_> {
                 }
                 let mut t = it.clone();
                 NormalizedSource::new(&mut t).strip_precision();
+                Declarations::rewrite_data_refs(&mut t, &unis);
                 Declarations::rewrite_integer_sampler_fetches(&mut t, samps);
                 Declarations::rewrite_sampler_refs(&mut t, samps);
                 NormalizedSource::new(&mut t).lower_texture_builtins();
@@ -611,7 +722,7 @@ impl StageSources<'_> {
             ));
             varying_location += v.location_span();
         }
-        Declarations::emit_uniform_block(&mut vs_out, &unis);
+        Declarations::emit_uniform_layout(&mut vs_out, &unis);
         Declarations::emit_sampler_decls(&mut vs_out, &samps);
         vs_out.push_str(&rewrite(&vs_funcs, &samps));
         // `Program::link` refuses a stage whose body cannot be found, so this cannot be reached with a
@@ -626,6 +737,7 @@ impl StageSources<'_> {
             String::new()
         });
         NormalizedSource::new(&mut vb).strip_precision();
+        Declarations::rewrite_data_refs(&mut vb, &unis);
         Declarations::rewrite_integer_sampler_fetches(&mut vb, &samps);
         Declarations::rewrite_sampler_refs(&mut vb, &samps);
         NormalizedSource::new(&mut vb).lower_texture_builtins();
@@ -660,7 +772,7 @@ impl StageSources<'_> {
             ));
             varying_location += v.location_span();
         }
-        Declarations::emit_uniform_block(&mut fs_out, &unis);
+        Declarations::emit_uniform_layout(&mut fs_out, &unis);
         Declarations::emit_sampler_decls(&mut fs_out, &samps);
         // The fragment output(s). One output (the common case, ES2 `gl_FragColor` or a single ES3 `out`) stays
         // byte-identical: reuse the ES3 `out vec4 NAME;` if declared, else synthesize one and rewrite the ES2
@@ -698,6 +810,7 @@ impl StageSources<'_> {
             String::new()
         });
         NormalizedSource::new(&mut fb).strip_precision();
+        Declarations::rewrite_data_refs(&mut fb, &unis);
         Declarations::rewrite_integer_sampler_fetches(&mut fb, &samps);
         Declarations::rewrite_sampler_refs(&mut fb, &samps);
         NormalizedSource::new(&mut fb).lower_texture_builtins();

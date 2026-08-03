@@ -84,10 +84,9 @@ fn struct_uniform_reflects_leaf_names_and_std140_offsets() {
     );
 
     let (_, translated) = glsl::StageSources::new("void main(){}", fs).translate_render();
-    assert!(
-        translated.contains("struct structType") && translated.contains("structType u_var;"),
-        "storage retains the aggregate declaration:\n{translated}"
-    );
+    assert!(!translated.contains("structType u_var"), "{translated}");
+    assert!(translated.contains("int u_var_m2[3]"), "{translated}");
+    assert!(translated.contains("u_var_m3[1]"), "{translated}");
     assert_naga_parses(&translated, naga::ShaderStage::Fragment);
 }
 
@@ -166,6 +165,44 @@ fn sampler_only_struct_lowers_leaves_to_standalone_bindings() {
     assert!(translated.contains("u_var_image_hltex"), "{translated}");
     assert!(
         translated.contains("sampler2D(u_var_image_hltex, u_var_image_hlsmp)"),
+        "{translated}"
+    );
+    assert_naga_parses(&translated, naga::ShaderStage::Fragment);
+}
+
+#[test]
+fn aggregate_non_square_matrices_flatten_before_host_validation() {
+    let fs = "#version 300 es\nstruct Matrices { mat3x2 wide; mat2 square[2]; };\n\
+              uniform Matrices u_var;\nout vec4 color;\n\
+              void main(){ color=vec4(u_var.wide[0][0]+u_var.square[1][0][0]); }\n";
+    let (_, translated) = glsl::StageSources::new("void main(){}", fs).translate_render();
+    assert!(!translated.contains("Matrices u_var"), "{translated}");
+    assert!(
+        translated.contains("vec4 u_var_wide_hle0_hlc2"),
+        "{translated}"
+    );
+    assert!(
+        translated.contains("mat3x2(u_var_wide_hle0_hlc0.xy"),
+        "{translated}"
+    );
+    assert!(
+        translated.contains("u_var_square_hle1_hlc1"),
+        "{translated}"
+    );
+    assert_naga_parses(&translated, naga::ShaderStage::Fragment);
+}
+
+#[test]
+fn aggregate_booleans_use_host_shareable_integer_storage() {
+    let fs = "#version 300 es\nstruct Flags { bool enabled; bvec4 mask[2]; };\n\
+              uniform Flags u_var;\nout vec4 color;\n\
+              void main(){ color=(u_var.enabled && all(u_var.mask[1])) ? vec4(1.0) : vec4(0.0); }\n";
+    let (_, translated) = glsl::StageSources::new("void main(){}", fs).translate_render();
+    assert!(translated.contains("uint u_var_enabled"), "{translated}");
+    assert!(translated.contains("uvec4 u_var_mask[2]"), "{translated}");
+    assert!(translated.contains("u_var_enabled != 0u"), "{translated}");
+    assert!(
+        translated.contains("notEqual(u_var_mask[1]"),
         "{translated}"
     );
     assert_naga_parses(&translated, naga::ShaderStage::Fragment);

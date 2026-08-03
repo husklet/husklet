@@ -163,21 +163,28 @@ impl<'a> Declarations<'a> {
         out
     }
 
-    pub(super) fn sampler_structs(self) -> std::collections::HashSet<String> {
+    pub(super) fn uniform_structs(self) -> std::collections::HashSet<String> {
         let structs = self.struct_members();
-        let mut opaque = std::collections::HashSet::new();
+        let mut used = self
+            .raw_uniforms()
+            .into_iter()
+            .filter(|declaration| structs.contains_key(&declaration.ty))
+            .map(|declaration| declaration.ty)
+            .collect::<std::collections::HashSet<_>>();
         loop {
-            let before = opaque.len();
-            for (name, members) in &structs {
-                if members
-                    .iter()
-                    .any(|member| member.is_sampler() || opaque.contains(&member.ty))
-                {
-                    opaque.insert(name.clone());
+            let before = used.len();
+            for name in used.clone() {
+                if let Some(members) = structs.get(&name) {
+                    used.extend(
+                        members
+                            .iter()
+                            .filter(|member| structs.contains_key(&member.ty))
+                            .map(|member| member.ty.clone()),
+                    );
                 }
             }
-            if opaque.len() == before {
-                return opaque;
+            if used.len() == before {
+                return used;
             }
         }
     }
