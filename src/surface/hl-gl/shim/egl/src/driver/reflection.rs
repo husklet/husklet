@@ -3,76 +3,60 @@ use super::*;
 // GLES3.0: uniform value readback (glGetUniform* / glGetnUniform*)
 // ==================================================================================================
 
-/// Read the current bytes of the uniform at `location` in `program` and write up to `max_bytes` of them
-/// into `out` reinterpreted as `T`-sized elements. Falls back to a sampler's bound texture unit (for the
-/// integer getters) or leaves `out[0]` at `0` when the value is not modeled — an honest readback.
-unsafe fn read_uniform(program: u32, location: i32, out: *mut u8, elem: usize, max_bytes: usize) {
+/// Convert the uniform at `location` to the getter's requested scalar type and write as many complete
+/// elements as fit. Unknown values leave one zero, matching the existing fail-soft ABI behavior.
+unsafe fn read_uniform<T: Copy>(
+    program: u32,
+    location: i32,
+    out: *mut T,
+    max_bytes: usize,
+    read: impl FnOnce(&GlContext, u32, i32) -> Option<Vec<T>>,
+) {
     if out.is_null() {
         return;
     }
-    let bytes = GlobalState::context(|s| intro::get_uniform_bytes(&s.gl, program, location));
-    match bytes {
-        Some(b) => {
-            let n = b.len().min(max_bytes);
-            core::ptr::copy_nonoverlapping(b.as_ptr(), out, n);
+    let values = GlobalState::context(|s| read(&s.gl, program, location));
+    match values {
+        Some(values) => {
+            let count = values.len().min(max_bytes / core::mem::size_of::<T>());
+            core::ptr::copy_nonoverlapping(values.as_ptr(), out, count);
         }
         None => {
-            // A sampler uniform reads back its bound texture unit (an integer); otherwise zero-fill one.
-            let unit = GlobalState::context(|s| intro::get_sampler_unit(&s.gl, program, location));
-            let v = unit.unwrap_or(0);
-            let src = v.to_le_bytes();
-            let n = elem.min(max_bytes).min(4);
-            core::ptr::copy_nonoverlapping(src.as_ptr(), out, n);
+            if max_bytes >= core::mem::size_of::<T>() {
+                core::ptr::write_bytes(out, 0, 1);
+            }
         }
     }
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetUniformfv(program: u32, location: i32, params: *mut f32) {
-    unsafe { read_uniform(program, location, params as *mut u8, 4, usize::MAX) };
+    unsafe { read_uniform(program, location, params, usize::MAX, intro::get_uniform_f32) };
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetUniformiv(program: u32, location: i32, params: *mut i32) {
-    unsafe { read_uniform(program, location, params as *mut u8, 4, usize::MAX) };
+    unsafe { read_uniform(program, location, params, usize::MAX, intro::get_uniform_i32) };
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetUniformuiv(program: u32, location: i32, params: *mut u32) {
-    unsafe { read_uniform(program, location, params as *mut u8, 4, usize::MAX) };
+    unsafe { read_uniform(program, location, params, usize::MAX, intro::get_uniform_u32) };
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetnUniformfv(program: u32, location: i32, buf_size: i32, params: *mut f32) {
     unsafe {
-        read_uniform(
-            program,
-            location,
-            params as *mut u8,
-            4,
-            buf_size.max(0) as usize,
-        )
+        read_uniform(program, location, params, buf_size.max(0) as usize, intro::get_uniform_f32)
     };
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetnUniformiv(program: u32, location: i32, buf_size: i32, params: *mut i32) {
     unsafe {
-        read_uniform(
-            program,
-            location,
-            params as *mut u8,
-            4,
-            buf_size.max(0) as usize,
-        )
+        read_uniform(program, location, params, buf_size.max(0) as usize, intro::get_uniform_i32)
     };
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetnUniformuiv(program: u32, location: i32, buf_size: i32, params: *mut u32) {
     unsafe {
-        read_uniform(
-            program,
-            location,
-            params as *mut u8,
-            4,
-            buf_size.max(0) as usize,
-        )
+        read_uniform(program, location, params, buf_size.max(0) as usize, intro::get_uniform_u32)
     };
 }
 

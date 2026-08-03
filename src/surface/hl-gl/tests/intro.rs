@@ -201,6 +201,53 @@ fn program_uniform_writes_into_the_named_program_block() {
 }
 
 #[test]
+fn uniform_getters_convert_declared_scalar_types_instead_of_reinterpreting_bits() {
+    const TYPED_FS: &str = "#version 300 es\nprecision mediump float;\nuniform bool uBool;\nuniform int uInt;\nuniform float uFloat;\nout vec4 color;\nvoid main(){ color = vec4(uBool ? 1.0 : 0.0, float(uInt), uFloat, 1.0); }\n";
+    let mut c = ctx_800x600();
+    let vs = record::create_shader(&mut c, GL_VERTEX_SHADER);
+    record::shader_source(&mut c, vs, VS);
+    record::compile_shader(&mut c, vs);
+    let fs = record::create_shader(&mut c, GL_FRAGMENT_SHADER);
+    record::shader_source(&mut c, fs, TYPED_FS);
+    record::compile_shader(&mut c, fs);
+    let program = record::create_program(&mut c);
+    record::attach_shader(&mut c, program, vs);
+    record::attach_shader(&mut c, program, fs);
+    assert!(record::link_program(&mut c, program));
+    record::use_program(&mut c, program);
+
+    let bool_location = query::uniform_location(&c, program, "uBool");
+    let int_location = query::uniform_location(&c, program, "uInt");
+    let float_location = query::uniform_location(&c, program, "uFloat");
+    record::set_uniform(
+        &mut c,
+        bool_location,
+        record::UniformSetter::Int(1),
+        1,
+        &(-7_i32).to_le_bytes(),
+    );
+    record::set_uniform(
+        &mut c,
+        int_location,
+        record::UniformSetter::Int(1),
+        1,
+        &(-3_i32).to_le_bytes(),
+    );
+    record::set_uniform(
+        &mut c,
+        float_location,
+        record::UniformSetter::Float(1),
+        1,
+        &2.75_f32.to_le_bytes(),
+    );
+
+    assert_eq!(intro::get_uniform_f32(&c, program, bool_location), Some(vec![1.0]));
+    assert_eq!(intro::get_uniform_i32(&c, program, bool_location), Some(vec![1]));
+    assert_eq!(intro::get_uniform_f32(&c, program, int_location), Some(vec![-3.0]));
+    assert_eq!(intro::get_uniform_i32(&c, program, float_location), Some(vec![2]));
+}
+
+#[test]
 fn program_uniform_sampler_binds_texture_unit_on_the_named_program() {
     let mut c = ctx_800x600();
     let prog = linked_program(&mut c);
@@ -226,7 +273,11 @@ fn clear_buffer_color_records_a_scoped_clear() {
     assert!(d.is_clear);
     assert_eq!(d.clear, [0.1, 0.2, 0.3, 0.4]);
     assert_eq!(d.clear_rect, [0, 0, 800, 600]);
-    assert_eq!(d.clear_draw_buffer, Some(0), "the clear is scoped to its attachment");
+    assert_eq!(
+        d.clear_draw_buffer,
+        Some(0),
+        "the clear is scoped to its attachment"
+    );
     // ES 3.0 §4.2.3: the value travels with the call. Only `glClearColor` sets GL_COLOR_CLEAR_VALUE, so
     // a `glClearBufferfv` must leave it at the initial (0, 0, 0, 0) — this test asserted the opposite,
     // which let the recording clobber state the app had set for its own `glClear`s.

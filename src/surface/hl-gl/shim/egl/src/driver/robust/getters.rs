@@ -225,12 +225,10 @@ fn uniform<T: Copy + Default>(
     buf_size: i32,
     length: *mut i32,
     params: *mut T,
+    read: impl FnOnce(&GlContext, u32, i32) -> Option<Vec<T>>,
 ) {
-    let bytes =
-        GlobalState::context(|state| intro::get_uniform_bytes(&state.gl, program, location));
-    let count = bytes
-        .as_ref()
-        .map_or(1, |value| value.len().div_ceil(core::mem::size_of::<T>()));
+    let values = GlobalState::context(|state| read(&state.gl, program, location));
+    let count = values.as_ref().map_or(1, Vec::len);
     let required = count.saturating_mul(core::mem::size_of::<T>());
     if params.is_null() || buf_size < 0 || (buf_size as usize) < required {
         reject(length);
@@ -238,8 +236,8 @@ fn uniform<T: Copy + Default>(
     }
     unsafe {
         core::ptr::write_bytes(params, 0, count);
-        if let Some(bytes) = bytes {
-            core::ptr::copy_nonoverlapping(bytes.as_ptr(), params.cast(), bytes.len());
+        if let Some(values) = values {
+            core::ptr::copy_nonoverlapping(values.as_ptr(), params, values.len());
         }
         write_length(length, count);
     }
@@ -253,7 +251,7 @@ pub extern "C" fn glGetUniformfvRobustANGLE(
     length: *mut i32,
     params: *mut f32,
 ) {
-    uniform(program, location, buf_size, length, params);
+    uniform(program, location, buf_size, length, params, intro::get_uniform_f32);
 }
 
 #[cfg_attr(gles_client, no_mangle)]
@@ -264,7 +262,7 @@ pub extern "C" fn glGetUniformivRobustANGLE(
     length: *mut i32,
     params: *mut i32,
 ) {
-    uniform(program, location, buf_size, length, params);
+    uniform(program, location, buf_size, length, params, intro::get_uniform_i32);
 }
 
 #[cfg_attr(gles_client, no_mangle)]
@@ -275,6 +273,6 @@ pub extern "C" fn glGetUniformuivRobustANGLE(
     length: *mut i32,
     params: *mut u32,
 ) {
-    uniform(program, location, buf_size, length, params);
+    uniform(program, location, buf_size, length, params, intro::get_uniform_u32);
 }
 use super::*;

@@ -43,6 +43,104 @@ pub fn get_uniform_bytes(ctx: &GlContext, program: u32, location: i32) -> Option
     p.unis.get(declaration)?.read_element(&p.ubuf, element)
 }
 
+#[derive(Clone, Copy)]
+enum UniformScalar {
+    Float,
+    Int,
+    UInt,
+    Bool,
+}
+
+fn uniform_value(ctx: &GlContext, program: u32, location: i32) -> Option<(UniformScalar, Vec<u8>)> {
+    if location < 0 {
+        return None;
+    }
+    let p = ctx.programs.program(program)?;
+    if !p.linked {
+        return None;
+    }
+    match p.location(location)? {
+        crate::model::program::UniformLocation::Data {
+            declaration,
+            element,
+        } => {
+            let uniform = p.unis.get(declaration)?;
+            let scalar = if uniform.ty == "bool" || uniform.ty.starts_with("bvec") {
+                UniformScalar::Bool
+            } else if uniform.ty == "int" || uniform.ty.starts_with("ivec") {
+                UniformScalar::Int
+            } else if uniform.ty == "uint" || uniform.ty.starts_with("uvec") {
+                UniformScalar::UInt
+            } else {
+                UniformScalar::Float
+            };
+            Some((scalar, uniform.read_element(&p.ubuf, element)?))
+        }
+        crate::model::program::UniformLocation::Sampler { element } => Some((
+            UniformScalar::Int,
+            p.samp_units.get(element)?.to_le_bytes().to_vec(),
+        )),
+    }
+}
+
+fn uniform_words(ctx: &GlContext, program: u32, location: i32) -> Option<(UniformScalar, Vec<[u8; 4]>)> {
+    let (scalar, bytes) = uniform_value(ctx, program, location)?;
+    let words = bytes
+        .chunks_exact(4)
+        .map(|word| [word[0], word[1], word[2], word[3]])
+        .collect();
+    Some((scalar, words))
+}
+
+/// `glGetUniformfv` conversion of the current uniform value. GL getters convert from the uniform's
+/// declared scalar class; they do not reinterpret the std140 storage bits as the requested result type.
+pub fn get_uniform_f32(ctx: &GlContext, program: u32, location: i32) -> Option<Vec<f32>> {
+    let (scalar, words) = uniform_words(ctx, program, location)?;
+    Some(
+        words
+            .into_iter()
+            .map(|word| match scalar {
+                UniformScalar::Float => f32::from_le_bytes(word),
+                UniformScalar::Int => i32::from_le_bytes(word) as f32,
+                UniformScalar::UInt => u32::from_le_bytes(word) as f32,
+                UniformScalar::Bool => (u32::from_le_bytes(word) != 0) as u8 as f32,
+            })
+            .collect(),
+    )
+}
+
+/// `glGetUniformiv` conversion of the current uniform value.
+pub fn get_uniform_i32(ctx: &GlContext, program: u32, location: i32) -> Option<Vec<i32>> {
+    let (scalar, words) = uniform_words(ctx, program, location)?;
+    Some(
+        words
+            .into_iter()
+            .map(|word| match scalar {
+                UniformScalar::Float => f32::from_le_bytes(word) as i32,
+                UniformScalar::Int => i32::from_le_bytes(word),
+                UniformScalar::UInt => u32::from_le_bytes(word) as i32,
+                UniformScalar::Bool => (u32::from_le_bytes(word) != 0) as i32,
+            })
+            .collect(),
+    )
+}
+
+/// `glGetUniformuiv` conversion of the current uniform value.
+pub fn get_uniform_u32(ctx: &GlContext, program: u32, location: i32) -> Option<Vec<u32>> {
+    let (scalar, words) = uniform_words(ctx, program, location)?;
+    Some(
+        words
+            .into_iter()
+            .map(|word| match scalar {
+                UniformScalar::Float => f32::from_le_bytes(word) as u32,
+                UniformScalar::Int => i32::from_le_bytes(word) as u32,
+                UniformScalar::UInt => u32::from_le_bytes(word),
+                UniformScalar::Bool => (u32::from_le_bytes(word) != 0) as u32,
+            })
+            .collect(),
+    )
+}
+
 /// The texture unit a sampler uniform (declaration index `location`) is bound to (`glUniform1i` writes
 /// it), or `None` if `location` is not a sampler of `program`. Lets `glGetUniformiv` on a sampler report
 /// its bound unit truthfully.
