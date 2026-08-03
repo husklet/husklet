@@ -222,10 +222,11 @@ fn uniform_getters_convert_declared_scalar_types_instead_of_reinterpreting_bits(
     record::set_uniform(
         &mut c,
         bool_location,
-        record::UniformSetter::Int(1),
+        record::UniformSetter::Float(1),
         1,
-        &(-7_i32).to_le_bytes(),
+        &(-7.0_f32).to_le_bytes(),
     );
+    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
     record::set_uniform(
         &mut c,
         int_location,
