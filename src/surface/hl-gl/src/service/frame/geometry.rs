@@ -1,8 +1,11 @@
 use super::*;
 
-fn survivors(draws: &[DrawCall]) -> ([f64; 4], &[DrawCall]) {
+fn survivors(draws: &[DrawCall]) -> ([f64; 4], DepthClear, &[DrawCall]) {
     let (clear, start) = RenderPasses::effective_clear(draws);
-    (clear, &draws[start..])
+    // A folded color clear is removed from the survivor list, but the same call may also clear depth or
+    // stencil. Carry only the removed prefix into the first pass: a later depth/stencil clear remains an
+    // ordered segment boundary and must not be hoisted ahead of preceding geometry.
+    (clear, depth_load(&draws[..start]), &draws[start..])
 }
 
 pub(super) fn build_clear_frame_color(
@@ -126,7 +129,7 @@ impl Frame {
         // window frame clears the default framebuffer to `#ff7700` (the page background) partway through its
         // draw-list, then composites tiles — replaying the wiped pre-clear draws or using the leading transparent
         // clear (the old behavior) dropped that background and read back blank.
-        let (clear, survivors) = survivors(draws);
+        let (clear, initial_depth_load, survivors) = survivors(draws);
         // Only an UNSCISSORED clear may clear-load the whole attachment. With none, the frame's first render
         // pass must LOAD what is already there — clearing it would wipe the previous frame's content outside a
         // scissored clear's rect (and, with the clear color taken from that scissored clear, read as "scissor
@@ -313,6 +316,7 @@ impl Frame {
         lower_segments(
             ctx,
             survivors,
+            initial_depth_load,
             SegmentTarget {
                 fbo,
                 texture: target_tex,
@@ -383,7 +387,7 @@ mod clone_tests {
         let refs_before = Arc::strong_count(&storage);
         let first = draws.as_ptr();
 
-        let (_, selected) = survivors(&draws);
+        let (_, _, selected) = survivors(&draws);
 
         assert_eq!(selected.len(), 20_000);
         assert_eq!(selected.as_ptr(), first);
@@ -392,6 +396,35 @@ mod clone_tests {
             refs_before,
             "selecting a Chrome-sized draw list must not clone per-draw snapshots"
         );
+    }
+
+    #[test]
+    fn folded_combined_clear_does_not_hoist_a_later_depth_clear() {
+        let folded = DrawCall {
+            is_clear: true,
+            clear_mask: crate::model::glconst::GL_COLOR_BUFFER_BIT
+                | crate::model::glconst::GL_DEPTH_BUFFER_BIT,
+            color_mask: 0xf,
+            depth_write: true,
+            clear_depth: 0.25,
+            ..DrawCall::default()
+        };
+        let geometry = DrawCall::default();
+        let later = DrawCall {
+            is_clear: true,
+            clear_mask: crate::model::glconst::GL_DEPTH_BUFFER_BIT,
+            depth_write: true,
+            clear_depth: 0.75,
+            ..DrawCall::default()
+        };
+        let draws = [folded, geometry, later];
+
+        let (_, initial_depth, selected) = survivors(&draws);
+
+        assert_eq!(initial_depth.load, LoadOp::Clear);
+        assert_eq!(initial_depth.depth, 0.25);
+        assert_eq!(selected.len(), 2);
+        assert_eq!(depth_load(selected).depth, 0.75);
     }
 
     fn clear_draw(color: [f64; 4], scissor: Option<[i32; 4]>) -> DrawCall {
@@ -658,6 +691,7 @@ pub(super) fn depth_load(draws: &[DrawCall]) -> DepthClear {
 pub(super) fn lower_segments(
     ctx: &mut GlContext,
     run: &[DrawCall],
+    initial_depth_load: DepthClear,
     target: SegmentTarget,
     clear: [f64; 4],
     first_load: LoadOp,
@@ -668,7 +702,7 @@ pub(super) fn lower_segments(
 ) {
     let mut load = first_load;
     // The run's leading depth clear (if any) applies to the first segment; later depth clears re-arm it.
-    let mut dload = depth_load(run);
+    let mut dload = initial_depth_load;
     let mut segment: Vec<DrawCall> = Vec::new();
     let mut emit = |ctx: &mut GlContext,
                     cmds: &mut Vec<Cmd>,

@@ -229,6 +229,7 @@ impl RenderPasses {
             lower_segments(
                 ctx,
                 survivors,
+                depth_load(&run[..rstart]),
                 SegmentTarget {
                     fbo,
                     texture: target_tex,
@@ -416,6 +417,7 @@ fn lower_ordered_run(
     lower_segments(
         ctx,
         survivors,
+        depth_load(&run[..start]),
         SegmentTarget {
             fbo,
             texture: target.1,
@@ -637,6 +639,117 @@ mod tests {
 
         assert_sampler_uses_fallback_target(&frame, target_ir);
     }
+
+    #[test]
+    fn combined_color_depth_stencil_clear_is_not_discarded_by_color_fold() {
+        let clear = DrawCall {
+            is_clear: true,
+            clear_mask: crate::model::glconst::GL_COLOR_BUFFER_BIT
+                | crate::model::glconst::GL_DEPTH_BUFFER_BIT
+                | crate::model::glconst::GL_STENCIL_BUFFER_BIT,
+            color_mask: 0xf,
+            depth_write: true,
+            stencil_write_mask_front: 0xff,
+            stencil_write_mask_back: 0xff,
+            clear: [0.125, 0.25, 0.5, 1.0],
+            clear_stencil: 123,
+            ..DrawCall::default()
+        };
+
+        let run = [clear];
+        assert_eq!(
+            RenderPasses::full_clear(&run),
+            (Some([0.125, 0.25, 0.5, 1.0]), 1),
+            "the color half remains eligible for the attachment-load fast path"
+        );
+        let depth = depth_load(&run);
+        assert_eq!(depth.load, LoadOp::Clear);
+        assert_eq!(depth.stencil, 123);
+    }
+
+    #[test]
+    fn color_only_clear_still_uses_the_folded_fast_path() {
+        let clear = DrawCall {
+            is_clear: true,
+            clear_mask: crate::model::glconst::GL_COLOR_BUFFER_BIT,
+            color_mask: 0xf,
+            clear: [0.125, 0.25, 0.5, 1.0],
+            ..DrawCall::default()
+        };
+
+        assert_eq!(
+            RenderPasses::full_clear(&[clear]),
+            (Some([0.125, 0.25, 0.5, 1.0]), 1)
+        );
+    }
+
+    #[test]
+    fn color_depth_and_color_stencil_clears_each_keep_the_non_color_half() {
+        for extra in [
+            crate::model::glconst::GL_DEPTH_BUFFER_BIT,
+            crate::model::glconst::GL_STENCIL_BUFFER_BIT,
+        ] {
+            let clear = DrawCall {
+                is_clear: true,
+                clear_mask: crate::model::glconst::GL_COLOR_BUFFER_BIT | extra,
+                color_mask: 0xf,
+                depth_write: true,
+                stencil_write_mask_front: 0xff,
+                stencil_write_mask_back: 0xff,
+                ..DrawCall::default()
+            };
+            let run = [clear];
+            assert!(RenderPasses::full_clear(&run).0.is_some());
+            assert_eq!(depth_load(&run).load, LoadOp::Clear);
+        }
+    }
+
+    #[test]
+    fn clear_only_combined_clear_emits_each_attachment_effect_once() {
+        let mut ctx = GlContext::new();
+        ctx.local.surf.have = true;
+        ctx.local.surf.width = 16;
+        ctx.local.surf.height = 16;
+        ctx.local.recording.draws.push(DrawCall {
+            is_clear: true,
+            clear_mask: crate::model::glconst::GL_COLOR_BUFFER_BIT
+                | crate::model::glconst::GL_DEPTH_BUFFER_BIT
+                | crate::model::glconst::GL_STENCIL_BUFFER_BIT,
+            color_mask: 0xf,
+            depth_write: true,
+            stencil_write_mask_front: 0xff,
+            stencil_write_mask_back: 0xff,
+            clear: [0.125, 0.25, 0.5, 1.0],
+            clear_depth: 0.25,
+            clear_stencil: 123,
+            ..DrawCall::default()
+        });
+
+        let frame = Frame::build_clear(&mut ctx).expect("combined clear produces a frame");
+        let submits: Vec<_> = frame
+            .cmds
+            .iter()
+            .filter_map(|cmd| match cmd {
+                Cmd::Submit(buffer) => Some(buffer),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(submits.len(), 1, "one clear call needs one render pass");
+        let begins: Vec<_> = submits[0]
+            .encoder
+            .iter()
+            .filter_map(|op| match op {
+                Enc::BeginRenderPass { color, depth } => Some((color, depth)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(begins.len(), 1, "no duplicate attachment clear pass");
+        assert_eq!(begins[0].0[0].load, LoadOp::Clear);
+        let depth = begins[0].1.as_ref().expect("depth/stencil attachment");
+        assert_eq!(depth.load, LoadOp::Clear);
+        assert_eq!(depth.clear_depth, 0.25);
+        assert_eq!(depth.clear_stencil, 123);
+    }
 }
 
 /// Emit the `CreateTexture(RENDER_TARGET | PRESENT)` + matching `CreateSurface` for a render target. When
@@ -843,13 +956,14 @@ impl RenderPasses {
         let Some(index) = last_full else {
             return (None, 0);
         };
-        // Folding the clear into the pass load op DISCARDS every draw before it — which is only sound if
-        // those draws affected nothing but colour. A draw that wrote the stencil or depth plane leaves a
-        // result the colour clear does not erase, and a later draw may test against it: dropping it
-        // silently dropped the side effect. Three `GL_INCR` draws followed by a `glClear(GL_COLOR)` and a
-        // `GL_EQUAL` test read black for exactly this reason. Refusing the fold sends the run down the
-        // segmented path, where the clear becomes a full-target `Enc::ClearRect` between two passes and
-        // the stencil plane load-preserves across it.
+        // Folding the clear into the pass load op DISCARDS every call before it — which is only sound if
+        // those earlier calls affected nothing but colour. A draw that wrote the stencil or depth plane
+        // leaves a result the colour clear does not erase, and a later draw may test against it: dropping
+        // it silently dropped the side effect. The selected clear's own depth/stencil halves are carried
+        // separately by `depth_load` even though its color half is folded. Three `GL_INCR` draws followed
+        // by a `glClear(GL_COLOR)` and a `GL_EQUAL` test read black for exactly this reason. Refusing the
+        // fold sends the run down the segmented path, where the clear becomes a full-target `Enc::ClearRect`
+        // between two passes and the stencil plane load-preserves across it.
         if run[..index].iter().any(|draw| {
             draw.writes_depth_or_stencil() || draw.clears_depth() || draw.clears_stencil()
         }) {
