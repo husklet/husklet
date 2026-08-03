@@ -13,7 +13,7 @@ pub extern "C" fn glProgramUniform1i(program: u32, location: i32, v0: i32) {
     if location < 0 {
         return;
     }
-    GlobalState::context(|s| record::program_uniform_i32_at(&mut s.gl, program, location, &[v0]));
+    GlobalState::context(|s| record::program_uniform_i32_at(&mut s.gl, program, location, 1, &[v0]));
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform2i(program: u32, location: i32, v0: i32, v1: i32) {
@@ -116,7 +116,7 @@ pub extern "C" fn glProgramUniform4fv(program: u32, location: i32, count: i32, v
 pub extern "C" fn glProgramUniform1iv(program: u32, location: i32, count: i32, value: *const i32) {
     let values = unsafe { slice_i32(value, count, 1) };
     GlobalState::context(|state| {
-        record::program_uniform_i32_at(&mut state.gl, program, location, values)
+        record::program_uniform_i32_at(&mut state.gl, program, location, count, values)
     });
 }
 #[cfg_attr(gles_client, no_mangle)]
