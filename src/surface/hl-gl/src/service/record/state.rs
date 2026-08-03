@@ -224,6 +224,10 @@ pub fn sample_coverage(ctx: &mut GlContext, value: f32, invert: bool) {
 
 /// `glBlendFunc(src, dst)` — set the same factor pair for RGB and alpha.
 pub fn blend_func(ctx: &mut GlContext, src: u32, dst: u32) {
+    if !valid_blend_src_factor(src) || !valid_blend_dst_factor(dst) {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
     ctx.local.pipeline.blend_src_rgb = src;
     ctx.local.pipeline.blend_dst_rgb = dst;
     ctx.local.pipeline.blend_src_alpha = src;
@@ -244,6 +248,14 @@ pub fn blend_func_separate(
     src_a: u32,
     dst_a: u32,
 ) {
+    if !valid_blend_src_factor(src_rgb)
+        || !valid_blend_dst_factor(dst_rgb)
+        || !valid_blend_src_factor(src_a)
+        || !valid_blend_dst_factor(dst_a)
+    {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
     ctx.local.pipeline.blend_src_rgb = src_rgb;
     ctx.local.pipeline.blend_dst_rgb = dst_rgb;
     ctx.local.pipeline.blend_src_alpha = src_a;
@@ -264,6 +276,14 @@ pub fn blend_func_separate_indexed(
     src_alpha: u32,
     dst_alpha: u32,
 ) {
+    if !valid_blend_src_factor(src_rgb)
+        || !valid_blend_dst_factor(dst_rgb)
+        || !valid_blend_src_factor(src_alpha)
+        || !valid_blend_dst_factor(dst_alpha)
+    {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
     let Some(state) = ctx.local.pipeline.draw_buffers.get_mut(index as usize) else {
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
@@ -278,6 +298,42 @@ pub fn blend_func_separate_indexed(
         ctx.local.pipeline.blend_src_alpha = src_alpha;
         ctx.local.pipeline.blend_dst_alpha = dst_alpha;
     }
+}
+
+fn valid_blend_src_factor(factor: u32) -> bool {
+    const CONSTANT_COLOR: u32 = 0x8001;
+    const ONE_MINUS_CONSTANT_COLOR: u32 = 0x8002;
+    const CONSTANT_ALPHA: u32 = 0x8003;
+    const ONE_MINUS_CONSTANT_ALPHA: u32 = 0x8004;
+    matches!(
+        factor,
+        GL_ZERO
+            | GL_ONE
+            | GL_SRC_COLOR
+            | GL_ONE_MINUS_SRC_COLOR
+            | GL_DST_COLOR
+            | GL_ONE_MINUS_DST_COLOR
+            | GL_SRC_ALPHA
+            | GL_ONE_MINUS_SRC_ALPHA
+            | GL_DST_ALPHA
+            | GL_ONE_MINUS_DST_ALPHA
+            | CONSTANT_COLOR
+            | ONE_MINUS_CONSTANT_COLOR
+            | CONSTANT_ALPHA
+            | ONE_MINUS_CONSTANT_ALPHA
+            | GL_SRC_ALPHA_SATURATE
+    )
+}
+
+fn valid_blend_dst_factor(factor: u32) -> bool {
+    valid_blend_src_factor(factor) && factor != GL_SRC_ALPHA_SATURATE
+}
+
+fn valid_blend_equation(equation: u32) -> bool {
+    matches!(
+        equation,
+        GL_FUNC_ADD | GL_FUNC_SUBTRACT | GL_FUNC_REVERSE_SUBTRACT | GL_MIN | GL_MAX
+    )
 }
 
 pub fn blend_func_indexed(ctx: &mut GlContext, index: u32, src: u32, dst: u32) {
@@ -601,6 +657,10 @@ impl GlContext {
 
     /// `glBlendEquation(mode)` — set the same blend equation for RGB and alpha.
     pub fn set_blend_equation(&mut self, mode: u32) {
+        if !valid_blend_equation(mode) {
+            self.set_gl_error(GL_INVALID_ENUM);
+            return;
+        }
         self.local.pipeline.blend_eq_rgb = mode;
         self.local.pipeline.blend_eq_alpha = mode;
         for state in &mut self.local.pipeline.draw_buffers {
@@ -617,6 +677,10 @@ pub use CLEAR_BUFFER_COLOR as clear_buffer_color;
 
 /// `glBlendEquationSeparate(modeRGB, modeAlpha)`.
 pub fn blend_equation_separate(ctx: &mut GlContext, rgb: u32, alpha: u32) {
+    if !valid_blend_equation(rgb) || !valid_blend_equation(alpha) {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
     ctx.local.pipeline.blend_eq_rgb = rgb;
     ctx.local.pipeline.blend_eq_alpha = alpha;
     for state in &mut ctx.local.pipeline.draw_buffers {
@@ -626,6 +690,10 @@ pub fn blend_equation_separate(ctx: &mut GlContext, rgb: u32, alpha: u32) {
 }
 
 pub fn blend_equation_separate_indexed(ctx: &mut GlContext, index: u32, rgb: u32, alpha: u32) {
+    if !valid_blend_equation(rgb) || !valid_blend_equation(alpha) {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
     let Some(state) = ctx.local.pipeline.draw_buffers.get_mut(index as usize) else {
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
