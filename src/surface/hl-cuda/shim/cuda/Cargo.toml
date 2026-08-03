@@ -1,7 +1,7 @@
 # hl-cuda shim: the guest CUDA Driver API front-end, deployed as `libcuda.so.1`.
 #
 # A cdylib whose exported `cu*` C-ABI surface is code-generated from `registry/cuda_driver.manifest`
-# (build.rs) so it can never drift from the golden (145 entry points). The compute/bring-up core has
+# (build.rs) so it can never drift from the golden (148 entry points). The compute/bring-up core has
 # real bodies that marshal C args and call the `hl_cuda` lowering services through a process-global
 # `hl_gpu::RemoteCommandSink` ($HL_GPU_EXEC); the long tail are benign, correct-ABI stubs.
 #
