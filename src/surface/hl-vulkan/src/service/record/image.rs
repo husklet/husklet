@@ -310,35 +310,26 @@ pub fn cmd_blit_image(
             "vkCmdBlitImage: source and destination formats are not of the same numeric class",
         ));
     }
-    // A format with no PACKED COLOUR TEXEL — every block-compressed format, and every depth/stencil one —
-    // cannot take part in a blit on either side, whatever the filter. The host settles this and says so
-    // in one voice: measured across BC1, BC3, BC7, BC6H and `Depth32Float`, as source and as destination,
-    // under both filters, it returns "no packed texel layout for this format" every time.
-    //
-    // This refusal has to come BEFORE the filter check, and that ordering is the point rather than a
-    // detail. A compressed source used to fall through to the linear-filter rule and be refused as
-    // "a source format that cannot be linearly filtered" — true of the format but not the reason, and
-    // actively misleading: a caller reading it switches to VK_FILTER_NEAREST and gets a different error
-    // for the same underlying cause. With this in front, the filter message can only ever be about
-    // filtering.
-    //
-    // It narrows nothing that worked. Every format it refuses is one the host already refuses in every
-    // role, so this turns a late error naming the host's internals into a record-time one naming what
-    // the caller passed; it does not turn legal work into errors.
-    for (format, side) in [(src_fmt, "source"), (dst_fmt, "destination")] {
-        if format.bytes_per_texel().is_none() {
-            return Err(GpuError::Unsupported(match side {
-                "source" => "vkCmdBlitImage: source format has no packed colour texel (compressed or depth/stencil)",
-                _ => "vkCmdBlitImage: destination format has no packed colour texel (compressed or depth/stencil)",
-            }));
-        }
+    // Compressed sources have no per-texel byte layout, but the host sampler decodes them natively. They
+    // can therefore feed the draw-based blit. Destinations still require a writable color attachment.
+    // A compressed source is sampled natively by the host and therefore is a legal blit source. A
+    // compressed destination is still impossible because the executor writes through a color attachment.
+    if dst_fmt.bytes_per_texel().is_none() {
+        return Err(GpuError::Unsupported(
+            "vkCmdBlitImage: destination format has no packed colour texel (compressed or depth/stencil)",
+        ));
+    }
+    if src_fmt.bytes_per_texel().is_none() && src_fmt.block_geometry().is_none() {
+        return Err(GpuError::Unsupported(
+            "vkCmdBlitImage: source format is depth/stencil",
+        ));
     }
     // VK_FILTER_LINEAR requires the source format to support linear filtering, which the 32-bit float
     // formats do not without an optional device feature — measured on the host, which refuses exactly
     // these. Refused HERE so the caller gets an attributable answer at record time instead of a device
     // validation failure later, which is the same improvement the integer refusal above makes. A NEAREST
     // blit from one of these formats is fine and deliberately still records.
-    if linear && !FILTERABLE.contains(&src_fmt) {
+    if linear && !FILTERABLE.contains(&src_fmt) && src_fmt.block_geometry().is_none() {
         return Err(GpuError::Unsupported(
             "vkCmdBlitImage: VK_FILTER_LINEAR for a source format that cannot be linearly filtered",
         ));

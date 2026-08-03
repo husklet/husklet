@@ -586,7 +586,9 @@ impl WgpuExecutor {
         // must have a packed COLOR layout — the depth/stencil formats have none and are rejected honestly.
         let (sw, sh, sd, src_fmt, src_wfmt, can_filter) = {
             let t = texture::WgpuTexture::get(res, src)?;
-            let _ = Format::from(t.format).texel_bytes()?;
+            if Format::from(t.format).texel_bytes().is_err() && t.format.block_geometry().is_none() {
+                return Err(GpuError::Unsupported("wgpu: depth/stencil blit source"));
+            }
             (
                 t.width,
                 t.height,

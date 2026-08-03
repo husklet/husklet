@@ -289,29 +289,12 @@ impl Format {
             // 32-bit float sampling needs the host `float32-filterable` feature, which this driver does not
             // request, and 32-bit float blending is not a core host capability either.
             Some(FormatClass::UnfilterableFloatColor) => COLOR_BASE | self.storage(),
-            // Block-compressed texels are decoded by the sampler and cannot be written by a render pass or
-            // a blit destination, so only the read side is claimed.
-            //
-            // BLIT_SRC is not claimed either, and that is the correction rather than the obvious part.
-            // It WAS claimed, and the blit recorder refuses every compressed format outright because a
-            // block-compressed texel has no packed colour layout to resample — so the driver promised a
-            // capability at query time and refused it at record time, which is worse than never
-            // promising it: an application that checks `VkFormatProperties` correctly still failed.
-            // That cost 636 cases in `dEQP-VK.api.copy_and_blit.core`, every one refused at
-            // `vkEndCommandBuffer` with VK_ERROR_FEATURE_NOT_PRESENT.
-            //
-            // Dropping it is free here and was MEASURED to be, not assumed: BLIT_SRC becomes mandatory
-            // for a compressed format only when that format's required set includes
-            // SAMPLED_IMAGE_FILTER_LINEAR (CTS `getRequiredOptimalTilingFeatures`), which follows from
-            // `textureCompressionBC`, which this driver does not advertise. Re-running
-            // `dEQP-VK.api.info.*` with the bit removed left the failure count at exactly 184, and the
-            // 624-case BC blit groups went from wholly failing to wholly NotSupported.
-            //
-            // Restore this bit only together with a blit path that can actually resample a compressed
-            // source, and re-run both suites — the two move in opposite directions.
+            // Block-compressed texels are decoded by the native sampler, including for the draw-based
+            // blit source path. They cannot be written by a render pass or used as a blit destination.
             Some(FormatClass::Compressed) => {
                 f::SAMPLED_IMAGE
                     | f::SAMPLED_IMAGE_FILTER_LINEAR
+                    | f::BLIT_SRC
                     | f::TRANSFER_SRC
                     | f::TRANSFER_DST
             }
@@ -683,9 +666,7 @@ mod tests {
         assert_ne!(optimal & format_feature::SAMPLED_IMAGE, 0);
         assert_eq!(optimal & format_feature::COLOR_ATTACHMENT, 0);
         assert_eq!(optimal & format_feature::BLIT_DST, 0);
-        // Nor BLIT_SRC: the recorder refuses a compressed blit on either side, so claiming the source
-        // half was a promise the driver could not keep. Measured free to drop — see `features`.
-        assert_eq!(optimal & format_feature::BLIT_SRC, 0);
+        assert_ne!(optimal & format_feature::BLIT_SRC, 0);
     }
 
     #[test]
