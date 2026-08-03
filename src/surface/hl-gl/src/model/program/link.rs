@@ -98,7 +98,7 @@ impl Program {
         fs_src: String,
         cs_src: String,
     ) -> Result<(), glsl::UniformError> {
-        use hl_gpu::protocol::model::kernel::{GlslDescriptor, glsl_stage};
+        use hl_gpu::protocol::model::kernel::{glsl_stage, GlslDescriptor};
         // A (re)link produces fresh shader IR + reflection; bump the generation so the frame builder's
         // program-keyed shader/pipeline cache invalidates any IR it created for the previous link.
         self.link_gen += 1;
@@ -143,6 +143,10 @@ impl Program {
         self.samp_names = sampler_decls
             .iter()
             .map(|declaration| declaration.name.clone())
+            .collect();
+        self.samp_types = sampler_decls
+            .iter()
+            .map(|declaration| declaration.ty.clone())
             .collect();
         self.samp_arrays = sampler_decls
             .iter()

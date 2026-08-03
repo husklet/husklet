@@ -1,7 +1,76 @@
 use super::*;
 use hl_gl::model::texture::SharedPixels;
-use hl_gpu::protocol::model::enums::{texture_usage, TextureFormat};
+use hl_gpu::protocol::model::enums::{texture_usage, TextureDim, TextureFormat};
 use std::sync::Arc;
+
+#[test]
+fn sampler_cube_lowers_to_six_initialized_cube_layers() {
+    let mut context = ctx_640x480();
+    let mut sink = RecordingSink::with_full_caps();
+    let vertex = record::create_shader(&mut context, GL_VERTEX_SHADER);
+    record::shader_source(
+        &mut context,
+        vertex,
+        "attribute vec2 p;varying vec3 d;void main(){d=vec3(1,0,0);gl_Position=vec4(p,0,1);}",
+    );
+    record::compile_shader(&mut context, vertex);
+    let fragment = record::create_shader(&mut context, GL_FRAGMENT_SHADER);
+    record::shader_source(
+        &mut context,
+        fragment,
+        "precision mediump float;varying vec3 d;uniform samplerCube c;void main(){gl_FragColor=textureCube(c,d);}",
+    );
+    record::compile_shader(&mut context, fragment);
+    let program = record::create_program(&mut context);
+    record::attach_shader(&mut context, program, vertex);
+    record::attach_shader(&mut context, program, fragment);
+    assert!(record::link_program(&mut context, program));
+    record::use_program(&mut context, program);
+
+    let texture = context.textures.gen();
+    record::bind_texture(&mut context, GL_TEXTURE_CUBE_MAP, texture);
+    let pixels = [0x11, 0x22, 0x33, 0xff].repeat(4);
+    record::tex_image_2d(&mut context, 2, 2, &pixels);
+    let buffer = context.buffers.gen();
+    record::bind_buffer(&mut context, GL_ARRAY_BUFFER, buffer);
+    record::buffer_data(&mut context, GL_ARRAY_BUFFER, &[0; 24], 0x88E4);
+    record::vertex_attrib_pointer(&mut context, 0, 2, GL_FLOAT, false, 8, 0);
+    record::enable_vertex_attrib(&mut context, 0);
+    record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut context, &mut sink).unwrap());
+
+    let batch = &sink.batches[0];
+    let texture_ir = batch
+        .iter()
+        .find_map(|command| match command {
+            Cmd::CreateTexture(id, descriptor)
+                if descriptor.dim == TextureDim::Cube && descriptor.depth == 6 =>
+            {
+                Some(*id)
+            }
+            _ => None,
+        })
+        .expect("six-layer cube texture");
+    let staging_ir = batch
+        .iter()
+        .find_map(|command| match command {
+            Cmd::WriteBuffer { id, data, .. } if data == &pixels => Some(*id),
+            _ => None,
+        })
+        .expect("exact cube pixel staging write");
+    let layers = submit_ops(batch)
+        .iter()
+        .filter_map(|operation| match operation {
+            Enc::CopyBufferToTextureRegion { src, dst, dst_origin, extent, .. }
+                if *src == staging_ir && *dst == texture_ir && extent.depth == 1 =>
+            {
+                Some(dst_origin.z)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(layers, vec![0, 1, 2, 3, 4, 5]);
+}
 
 #[test]
 fn lowered_texture_write_owns_the_exact_uploaded_bytes() {

@@ -97,6 +97,9 @@ pub(super) struct TexBind {
     /// format whose texels are stored raw at their own channel count. The upload's row pitch is derived
     /// from this rather than assuming RGBA8, which would read an `R8Uint` plane four times too wide.
     pub(super) bytes_per_texel: u32,
+    /// Array layers receiving the staged base image. Cube textures need six initialized faces even when
+    /// the current GL model has only one canonical CPU plane.
+    pub(super) layers: u32,
     pub(super) sampler: String,
     pub(super) flip_y: bool,
     pub(super) swizzle: [u32; 4],
@@ -114,6 +117,10 @@ pub(super) fn lower_textures(
     let mut texbinds: Vec<TexBind> = Vec::new();
     let mut sampler_base = 0usize;
     for (declaration, name) in prog.samp_names.iter().enumerate() {
+        let texture_dim = match prog.samp_types.get(declaration).map(String::as_str) {
+            Some("samplerCube" | "isamplerCube" | "usamplerCube") => TextureDim::Cube,
+            _ => TextureDim::D2,
+        };
         let elements = prog
             .samp_arrays
             .get(declaration)
@@ -195,6 +202,7 @@ pub(super) fn lower_textures(
                     swizzle: d.tex_swizzles[unit],
                     mip_stages: Vec::new(),
                     bytes_per_texel: 4,
+                    layers: 1,
                 });
                 continue;
             }
@@ -231,6 +239,7 @@ pub(super) fn lower_textures(
                             swizzle: d.tex_swizzles[unit],
                             mip_stages: Vec::new(),
                             bytes_per_texel: 4,
+                            layers: 1,
                         });
                         continue;
                     }
@@ -260,10 +269,10 @@ pub(super) fn lower_textures(
                             TextureDesc {
                                 width: 1,
                                 height: 1,
-                                depth: 1,
+                                depth: if texture_dim == TextureDim::Cube { 6 } else { 1 },
                                 mip_levels: 1,
                                 sample_count: 1,
-                                dim: TextureDim::D2,
+                                dim: texture_dim,
                                 format: TextureFormat::Rgba8Unorm,
                                 usage: texture_usage::SAMPLED | texture_usage::COPY_DST,
                                 label: "gl-placeholder-tex".into(),
@@ -310,6 +319,7 @@ pub(super) fn lower_textures(
                         swizzle: d.tex_swizzles[unit],
                         mip_stages: Vec::new(),
                         bytes_per_texel: 4,
+                        layers: if texture_dim == TextureDim::Cube { 6 } else { 1 },
                     });
                     continue;
                 }
@@ -454,10 +464,10 @@ pub(super) fn lower_textures(
                     TextureDesc {
                         width: base_w as u32,
                         height: base_h as u32,
-                        depth: 1,
+                        depth: if texture_dim == TextureDim::Cube { 6 } else { 1 },
                         mip_levels,
                         sample_count: 1,
-                        dim: TextureDim::D2,
+                        dim: texture_dim,
                         format: upload_format,
                         usage: texture_usage::SAMPLED | texture_usage::COPY_DST,
                         label: if ephemeral {
@@ -549,6 +559,7 @@ pub(super) fn lower_textures(
                 swizzle: d.tex_swizzles[unit],
                 mip_stages,
                 bytes_per_texel: upload_format.bytes_per_texel().unwrap_or(4) as u32,
+                layers: if texture_dim == TextureDim::Cube { 6 } else { 1 },
             });
         }
         sampler_base += elements as usize;

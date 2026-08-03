@@ -612,15 +612,33 @@ pub(super) fn lower_draw_n(
         if tb.stage_ir == 0 {
             continue;
         }
-        copies.push(Enc::CopyBufferToTexture {
-            src: tb.stage_ir,
-            src_offset: 0,
-            bytes_per_row: tb.w * tb.bytes_per_texel,
-            dst: tb.tex_ir,
-            mip: 0,
-            width: tb.w,
-            height: tb.h,
-        });
+        if tb.layers == 1 {
+            copies.push(Enc::CopyBufferToTexture {
+                src: tb.stage_ir,
+                src_offset: 0,
+                bytes_per_row: tb.w * tb.bytes_per_texel,
+                dst: tb.tex_ir,
+                mip: 0,
+                width: tb.w,
+                height: tb.h,
+            });
+        } else {
+            // GL cube faces are currently represented by one canonical CPU shadow. Initialize every face
+            // from that plane so the cube view is complete and deterministic; leaving five layers
+            // uninitialized is both invalid sampling state and observably nondeterministic.
+            for layer in 0..tb.layers {
+                copies.push(Enc::CopyBufferToTextureRegion {
+                    src: tb.stage_ir,
+                    src_offset: 0,
+                    bytes_per_row: tb.w * tb.bytes_per_texel,
+                    rows_per_image: tb.h,
+                    dst: tb.tex_ir,
+                    dst_sub: TextureSubresource::base(),
+                    dst_origin: Origin3d { x: 0, y: 0, z: layer },
+                    extent: Extent3d { width: tb.w, height: tb.h, depth: 1 },
+                });
+            }
+        }
         // The mip levels above the base, each into its own level of the same host texture.
         for &(src, mip, width, height) in &tb.mip_stages {
             copies.push(Enc::CopyBufferToTexture {

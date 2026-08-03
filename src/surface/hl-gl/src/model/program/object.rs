@@ -45,6 +45,9 @@ pub struct Program {
     pub ubuf: Vec<u8>,
     /// Sampler uniform names in declaration order (for the bind-group texture bindings).
     pub samp_names: Vec<String>,
+    /// GLSL sampler type parallel to `samp_names`. The type determines the neutral texture view shape;
+    /// in particular a `samplerCube` must bind a cube view rather than the otherwise-default 2D view.
+    pub samp_types: Vec<String>,
     /// Array length for each sampler declaration (`1` for a non-array sampler).
     pub samp_arrays: Vec<u32>,
     /// Flattened sampler-element index → GL texture unit. Every element starts at unit 0 and may be
