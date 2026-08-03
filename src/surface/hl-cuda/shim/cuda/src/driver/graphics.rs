@@ -102,9 +102,10 @@ pub unsafe extern "C" fn cuGraphicsSubResourceGetMappedArray(
     array_index: u32,
     mip_level: u32,
 ) -> i32 {
-    if array.is_null() || resource.is_null() { return CUDA_ERROR_INVALID_VALUE; }
+    if array.is_null() { return CUDA_ERROR_INVALID_VALUE; }
     let _ = (array_index, mip_level);
-    ShimState::with_context(|_| CUDA_ERROR_NOT_SUPPORTED)
+    let _ = resource;
+    ShimState::with_context(|_| CUDA_ERROR_INVALID_HANDLE)
 }
 
 #[no_mangle]

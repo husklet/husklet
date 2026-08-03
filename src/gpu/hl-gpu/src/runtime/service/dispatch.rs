@@ -377,11 +377,8 @@ pub fn map_texture(session: &mut Session, exec: &mut dyn GpuExecutor, id: Textur
     let exports = session.exports.clone().ok_or(crate::GpuError::Unsupported("sharing registry"))?;
     let _operation = exports.operation();
     let export = texture_export(session, id)?;
+    exec.sharing_barrier()?;
     exports.map(session.id, export)?;
-    if let Err(error) = exec.sharing_barrier() {
-        let _ = exports.unmap(session.id, export);
-        return Err(error);
-    }
     Ok(())
 }
 
@@ -521,6 +518,41 @@ mod sharing_atomicity_tests {
         exports
             .map(session.id, export)
             .expect("failed pre-map barrier must leave the resource unmapped");
+        exports.unmap(session.id, export).unwrap();
+    }
+
+    #[test]
+    fn first_texture_map_barrier_failure_never_takes_the_exclusive_claim() {
+        let exports = Exports::new();
+        let global = GlobalLedger::unbounded();
+        let mut exec = FailingBarrier;
+        let mut session = Session::new(
+            Limits::from_capabilities(exec.capabilities()),
+            global.clone(),
+            Box::new(FakeClock::new(0)),
+        )
+        .with_exports(exports.clone());
+        let export = exports
+            .export_accounted(
+                crate::runtime::model::sharing::ResourceKey {
+                    session: session.id,
+                    kind: TextureId::KIND,
+                    id: 9,
+                },
+                Arc::new(17u32),
+                4,
+                session.account.clone(),
+                &global,
+            )
+            .unwrap();
+        session
+            .texture_sharing
+            .insert(9, ResourceSharing::Owner(export));
+
+        assert!(map_texture(&mut session, &mut exec, TextureId(9)).is_err());
+        exports
+            .map(session.id, export)
+            .expect("failed pre-map barrier must leave the texture unmapped");
         exports.unmap(session.id, export).unwrap();
     }
 

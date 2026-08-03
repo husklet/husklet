@@ -121,13 +121,28 @@ fn bringup_device_and_context_queries() {
     );
     assert_eq!(graphics_resource, 1usize as *mut c_void);
     let mut mapped_array = 1usize as *mut c_void;
+    for resource in [
+        core::ptr::null_mut(),
+        1usize as *mut c_void,
+        usize::MAX as *mut c_void,
+    ] {
+        assert_eq!(
+            unsafe { cuGraphicsSubResourceGetMappedArray(&mut mapped_array, resource, 0, 0) },
+            CUDA_ERROR_INVALID_HANDLE
+        );
+        assert_eq!(mapped_array, 1usize as *mut c_void);
+    }
     assert_eq!(
         unsafe {
-            cuGraphicsSubResourceGetMappedArray(&mut mapped_array, core::ptr::null_mut(), 0, 0)
+            cuGraphicsSubResourceGetMappedArray(
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+                0,
+                0,
+            )
         },
         CUDA_ERROR_INVALID_VALUE
     );
-    assert_eq!(mapped_array, 1usize as *mut c_void);
 
     let want = ShimState::with(|s| s.ctx.device.clone());
     let mut name = [0 as c_char; 128];
