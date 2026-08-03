@@ -420,6 +420,11 @@ fn a_destroyed_context_stops_every_entry_point_that_needs_one() {
     );
     assert_eq!(cuMemcpyDtoD_v2(ptr, ptr, 16), CUDA_ERROR_INVALID_CONTEXT);
     assert_eq!(cuMemsetD32_v2(ptr, 0, 4), CUDA_ERROR_INVALID_CONTEXT);
+    let mut image_resource = core::ptr::null_mut();
+    assert_eq!(
+        unsafe { cuGraphicsGLRegisterImage(&mut image_resource, 7, 0x0de1, 0) },
+        CUDA_ERROR_INVALID_CONTEXT
+    );
     assert_eq!(
         cuMemGetInfo_v2(&mut free, &mut total),
         CUDA_ERROR_INVALID_CONTEXT

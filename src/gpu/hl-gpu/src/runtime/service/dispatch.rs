@@ -352,12 +352,8 @@ pub fn map_buffer(session: &mut Session, exec: &mut dyn GpuExecutor, id: BufferI
         .ok_or(crate::GpuError::Unsupported("sharing registry"))?;
     let _operation = exports.operation();
     let export = buffer_export(session, id)?;
-    exports.map(session.id, export)?;
-    if let Err(error) = exec.sharing_barrier() {
-        let _ = exports.unmap(session.id, export);
-        return Err(error);
-    }
-    Ok(())
+    exec.sharing_barrier()?;
+    exports.map(session.id, export)
 }
 
 pub fn unmap_buffer(session: &mut Session, exec: &mut dyn GpuExecutor, id: BufferId) -> Result<()> {
@@ -494,7 +490,7 @@ mod sharing_atomicity_tests {
     }
 
     #[test]
-    fn failed_map_barrier_rolls_back_the_exclusive_claim() {
+    fn first_map_barrier_failure_never_takes_the_exclusive_claim() {
         let exports = Exports::new();
         let global = GlobalLedger::unbounded();
         let mut exec = FailingBarrier;
@@ -524,7 +520,7 @@ mod sharing_atomicity_tests {
         assert!(map_buffer(&mut session, &mut exec, BufferId(7)).is_err());
         exports
             .map(session.id, export)
-            .expect("failed completion barrier must restore the unmapped state");
+            .expect("failed pre-map barrier must leave the resource unmapped");
         exports.unmap(session.id, export).unwrap();
     }
 

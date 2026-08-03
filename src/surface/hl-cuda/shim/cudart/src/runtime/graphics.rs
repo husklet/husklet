@@ -11,6 +11,8 @@ const GL_TEXTURE_2D: u32 = 0x0de1;
 const GL_TEXTURE_3D: u32 = 0x806f;
 const GL_TEXTURE_CUBE_MAP: u32 = 0x8513;
 const GL_TEXTURE_2D_ARRAY: u32 = 0x8c1a;
+const GL_TEXTURE_RECTANGLE: u32 = 0x84f5;
+const GL_RENDERBUFFER: u32 = 0x8d41;
 #[link(name = "dl")]
 extern "C" { fn dlopen(name: *const c_char, flags: i32) -> *mut c_void; fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void; }
 
@@ -43,10 +45,10 @@ pub unsafe extern "C" fn cudaGraphicsGLRegisterBuffer(resource: *mut *mut c_void
 
 #[no_mangle]
 pub unsafe extern "C" fn cudaGraphicsGLRegisterImage(resource: *mut *mut c_void, image: u32, target: u32, flags: u32) -> i32 {
-    if resource.is_null() || image == 0 || !matches!(target, GL_TEXTURE_2D | GL_TEXTURE_3D | GL_TEXTURE_CUBE_MAP | GL_TEXTURE_2D_ARRAY) || !matches!(flags, 0 | 1 | 2 | 4 | 8) {
+    if resource.is_null() || image == 0 || !matches!(target, GL_TEXTURE_2D | GL_TEXTURE_3D | GL_TEXTURE_CUBE_MAP | GL_TEXTURE_2D_ARRAY | GL_TEXTURE_RECTANGLE | GL_RENDERBUFFER) || !matches!(flags, 0 | 1 | 2 | 4 | 8) {
         return CUDART_ERROR_INVALID_VALUE;
     }
-    CUDART_ERROR_NOT_SUPPORTED
+    ShimState::with(|state| state.fail(CUDART_ERROR_NOT_SUPPORTED))
 }
 
 #[no_mangle]
@@ -70,10 +72,8 @@ pub unsafe extern "C" fn cudaGraphicsResourceGetMappedPointer(pointer: *mut *mut
 #[no_mangle]
 pub unsafe extern "C" fn cudaGraphicsSubResourceGetMappedArray(array: *mut *mut c_void, resource: *mut c_void, array_index: u32, mip_level: u32) -> i32 {
     if array.is_null() || resource.is_null() { return CUDART_ERROR_INVALID_VALUE; }
-    ShimState::with(|state| match graphics::mapped_array(&mut state.ctx, GraphicsResource(resource as u64), array_index, mip_level) {
-        Ok(mapped) => { *array = mapped.0 as *mut c_void; CUDART_SUCCESS }
-        Err(error) => state.fail(RuntimeStatus::from(&error).code()),
-    })
+    let _ = (array_index, mip_level);
+    ShimState::with(|state| state.fail(CUDART_ERROR_NOT_SUPPORTED))
 }
 
 #[no_mangle]

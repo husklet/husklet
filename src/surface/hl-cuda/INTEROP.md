@@ -1,5 +1,10 @@
 # CUDA graphics interop — the map
 
+> Status, 2026-08-03: this document is historical design. Buffer interop is implemented. GL image
+> registration is not: valid 2D, 3D, cube, 2D-array, rectangle, and renderbuffer targets return
+> `NOT_SUPPORTED` after normal driver/runtime state gates. The dormant image import and synthetic
+> `CUarray` model were removed because no implemented CUDA operation could consume those handles.
+
 Scoping only. Nothing here is implemented and nothing here proposes that it should be until the ordering
 below is agreed.
 
