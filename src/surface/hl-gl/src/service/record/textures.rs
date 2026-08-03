@@ -215,33 +215,6 @@ pub fn tex_image_2d_level(ctx: &mut GlContext, level: u32, w: i32, h: i32, pixel
     }
 }
 
-/// Target-aware non-base define. Cube faces retain independent mip chains.
-pub fn tex_image_2d_target_level(
-    ctx: &mut GlContext,
-    target: u32,
-    level: u32,
-    w: i32,
-    h: i32,
-    pixels: &[u8],
-) {
-    let Some(face) = cube_face_index(target) else {
-        tex_image_2d_level(ctx, level, w, h, pixels);
-        return;
-    };
-    if w < 0
-        || h < 0
-        || w > crate::service::query::MAX_TEXTURE_SIZE
-        || h > crate::service::query::MAX_TEXTURE_SIZE
-    {
-        ctx.set_gl_error(GL_INVALID_VALUE);
-        return;
-    }
-    let name = ctx.local.tex_unit[ctx.local.active_texture];
-    if name != 0 && !ctx.textures.image_cube_level(name, face, level, w, h, pixels) {
-        ctx.set_gl_error(GL_INVALID_VALUE);
-    }
-}
-
 /// `glTexParameteri(GL_TEXTURE_2D, pname, value)` on the active unit's texture.
 pub fn tex_parameter(ctx: &mut GlContext, pname: u32, value: u32) {
     let name = ctx.local.tex_unit[ctx.local.active_texture];
@@ -300,33 +273,18 @@ impl GlContext {
         if !texture.is_rgba8_plane() {
             return;
         }
-        let faces = if target == GL_TEXTURE_CUBE_MAP {
-            texture
-                .cube_faces()
-                .iter()
-                .map(|face| face.as_ref().cloned())
-                .collect::<Option<Vec<_>>>()
-        } else {
-            Some(vec![std::sync::Arc::clone(&texture.data)])
-        };
-        let Some(faces) = faces else { return };
-        let (base_w, base_h) = (texture.w, texture.h);
-        for (face, base) in faces.into_iter().enumerate() {
-            let (mut w, mut h, mut source) = (base_w, base_h, (*base).clone());
-            let mut level = 1u32;
-            while w > 1 || h > 1 {
-                let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
-                source = box_filter(&source, w, h, nw, nh);
-                if target == GL_TEXTURE_CUBE_MAP {
-                    self.textures
-                        .image_cube_level(name, face, level, nw, nh, &source);
-                } else {
-                    self.textures.image_2d_level(name, level, nw, nh, &source);
-                }
-                w = nw;
-                h = nh;
-                level += 1;
-            }
+        let mut levels: Vec<(i32, i32, Vec<u8>)> = Vec::new();
+        let (mut w, mut h, mut source) = (texture.w, texture.h, (*texture.data).clone());
+        while w > 1 || h > 1 {
+            let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+            source = box_filter(&source, w, h, nw, nh);
+            levels.push((nw, nh, source.clone()));
+            w = nw;
+            h = nh;
+        }
+        for (index, (lw, lh, data)) in levels.into_iter().enumerate() {
+            self.textures
+                .image_2d_level(name, index as u32 + 1, lw, lh, &data);
         }
     }
 }

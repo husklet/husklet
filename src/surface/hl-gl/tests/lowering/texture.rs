@@ -42,19 +42,6 @@ fn sampler_cube_lowers_to_six_initialized_cube_layers() {
             pixels,
         );
     }
-    let mip_faces = (0..6)
-        .map(|face| vec![0x80 + face, 0x44, 0x55, 0xff])
-        .collect::<Vec<_>>();
-    for (face, pixels) in mip_faces.iter().enumerate() {
-        record::tex_image_2d_target_level(
-            &mut context,
-            GL_TEXTURE_CUBE_MAP_POSITIVE_X + face as u32,
-            1,
-            1,
-            1,
-            pixels,
-        );
-    }
     let buffer = context.buffers.gen();
     record::bind_buffer(&mut context, GL_ARRAY_BUFFER, buffer);
     record::buffer_data(&mut context, GL_ARRAY_BUFFER, &[0; 24], 0x88E4);
@@ -85,8 +72,8 @@ fn sampler_cube_lowers_to_six_initialized_cube_layers() {
     let layers = submit_ops(batch)
         .iter()
         .filter_map(|operation| match operation {
-            Enc::CopyBufferToTextureRegion { src, dst, dst_sub, dst_origin, extent, .. }
-                if *dst == texture_ir && dst_sub.mip == 0 && extent.depth == 1 =>
+            Enc::CopyBufferToTextureRegion { src, dst, dst_origin, extent, .. }
+                if *dst == texture_ir && extent.depth == 1 =>
             {
                 Some((dst_origin.z, *src))
             }
@@ -96,21 +83,6 @@ fn sampler_cube_lowers_to_six_initialized_cube_layers() {
     assert_eq!(layers.iter().map(|(layer, _)| *layer).collect::<Vec<_>>(), vec![0, 1, 2, 3, 4, 5]);
     for (layer, source) in layers {
         assert_eq!(staged[&source], &faces[layer as usize]);
-    }
-    let mip_layers = submit_ops(batch)
-        .iter()
-        .filter_map(|operation| match operation {
-            Enc::CopyBufferToTextureRegion { src, dst, dst_sub, dst_origin, extent, .. }
-                if *dst == texture_ir && dst_sub.mip == 1 && extent.depth == 1 =>
-            {
-                Some((dst_origin.z, *src))
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(mip_layers.iter().map(|(layer, _)| *layer).collect::<Vec<_>>(), vec![0, 1, 2, 3, 4, 5]);
-    for (layer, source) in mip_layers {
-        assert_eq!(staged[&source], &mip_faces[layer as usize]);
     }
 }
 
