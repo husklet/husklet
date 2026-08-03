@@ -65,7 +65,7 @@ fn dispatch(delivery: DebugDelivery) {
             message.id,
             message.severity,
             length,
-            text.as_ptr(),
+            text.as_ptr().cast::<c_char>(),
             user_param as *const c_void,
         )
     };
