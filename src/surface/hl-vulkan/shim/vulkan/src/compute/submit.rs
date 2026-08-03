@@ -7,11 +7,17 @@ struct QueueSubmission {
     signals: Vec<(u64, u64)>,
 }
 
-fn resolve_external_waits(submissions: &[QueueSubmission]) -> VkResult {
+fn resolve_external_waits(
+    submissions: &[QueueSubmission],
+) -> std::result::Result<usize, VkResult> {
+    let device_token = StateStore::with(|state| state.current_device_token());
     for submission in submissions {
         for &(semaphore, value) in &submission.waits {
             loop {
                 let snapshot = StateStore::with(|state| {
+                    if state.current_device_token() != device_token {
+                        return None;
+                    }
                     let record = state.device_ref()?.semaphores.get(&semaphore)?;
                     let export = record.shared?;
                     (record.counter < value).then(|| {
@@ -21,12 +27,23 @@ fn resolve_external_waits(submissions: &[QueueSubmission]) -> VkResult {
                 let Some((export, generation, mut observer)) = snapshot else {
                     break;
                 };
-                match observer.wait_sync(export, value, u64::MAX) {
+                if let Err(error) = observer.import_sync(export) {
+                    return Err(Status::from_error(&error));
+                }
+                let wait_result = observer.wait_sync(export, value, u64::MAX);
+                let release_result = observer.release_sync(export);
+                if let Err(error) = release_result {
+                    return Err(Status::from_error(&error));
+                }
+                match wait_result {
                     Ok(TimelineWait::Reached) => {}
-                    Ok(TimelineWait::Timeout) => return VK_TIMEOUT,
-                    Err(error) => return Status::from_error(&error),
+                    Ok(TimelineWait::Timeout) => return Err(VK_TIMEOUT),
+                    Err(error) => return Err(Status::from_error(&error)),
                 }
                 let committed = StateStore::with(|state| {
+                    if state.current_device_token() != device_token {
+                        return false;
+                    }
                     let Some(record) = state
                         .device_mut()
                         .and_then(|device| device.semaphores.get_mut(&semaphore))
@@ -46,7 +63,7 @@ fn resolve_external_waits(submissions: &[QueueSubmission]) -> VkResult {
             }
         }
     }
-    VK_SUCCESS
+    Ok(device_token)
 }
 
 fn execute_submissions(
@@ -89,6 +106,35 @@ fn execute_submissions(
         }
         if let Err(error) = dev.signal_queue_semaphores(sink, &submission.signals) {
             return Status::from_error(&error);
+        }
+    }
+    VK_SUCCESS
+}
+
+fn execute_in_queue_order(submissions: &[QueueSubmission], fence: Option<u64>) -> VkResult {
+    if submissions.is_empty() {
+        return ShimState::with_sink(|device, sink| {
+            execute_submissions(device, sink, submissions, fence)
+        })
+        .unwrap_or(VK_ERROR_INITIALIZATION_FAILED);
+    }
+    for (index, submission) in submissions.iter().enumerate() {
+        let device_token = match resolve_external_waits(std::slice::from_ref(submission)) {
+            Ok(token) => token,
+            Err(status) => return status,
+        };
+        let signal_fence = (index + 1 == submissions.len()).then_some(fence).flatten();
+        let result = StateStore::with(|state| {
+            if state.current_device_token() != device_token {
+                return VK_ERROR_DEVICE_LOST;
+            }
+            let Some((device, sink)) = state.device_and_sink() else {
+                return VK_ERROR_DEVICE_LOST;
+            };
+            execute_submissions(device, sink, std::slice::from_ref(submission), signal_fence)
+        });
+        if result != VK_SUCCESS {
+            return result;
         }
     }
     VK_SUCCESS
@@ -166,12 +212,7 @@ pub extern "C" fn vkQueueSubmit(
     }
     let signal = if fence != 0 { Some(fence) } else { None };
     let cb_count: usize = lowered.iter().map(|submission| submission.command_buffers.len()).sum();
-    let wait_status = resolve_external_waits(&lowered);
-    if wait_status != VK_SUCCESS {
-        return wait_status;
-    }
-    let r = ShimState::with_sink(|dev, sink| execute_submissions(dev, sink, &lowered, signal))
-    .unwrap_or(VK_ERROR_INITIALIZATION_FAILED);
+    let r = execute_in_queue_order(&lowered, signal);
     // Error: a refused submit means the recorded work never ran. Latched by result code — submit runs
     // per frame and a persistent failure repeats every frame, but the set of `VkResult`s is small and
     // bounded, so each distinct reason still gets to say itself once.
@@ -260,12 +301,7 @@ pub extern "C" fn vkQueueSubmit2(
         });
     }
     let signal = if fence != 0 { Some(fence) } else { None };
-    let wait_status = resolve_external_waits(&lowered);
-    if wait_status != VK_SUCCESS {
-        return wait_status;
-    }
-    ShimState::with_sink(|dev, sink| execute_submissions(dev, sink, &lowered, signal))
-    .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
+    execute_in_queue_order(&lowered, signal)
 }
 
 /// `vkQueueSubmit2KHR` — the `VK_KHR_synchronization2` alias.

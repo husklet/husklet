@@ -1,5 +1,6 @@
 use super::*;
 use crate::state::PresenterId;
+use hl_gpu::GpuError;
 use hl_vulkan::result::{VK_ERROR_OUT_OF_DATE_KHR, VK_ERROR_SURFACE_LOST_KHR};
 
 // ==================================================================================================
@@ -238,20 +239,32 @@ pub extern "C" fn vkDestroySwapchainKHR(
     _p_allocator: *const c_void,
 ) {
     StateStore::with(|s| {
-        let mut completed = false;
+        let mut destroy_error = None;
         if let Some((dev, sink)) = s.device_and_sink() {
             // Retire the swapchain AND its presentable images + presentation surface (dropping their
             // `dev.images`/`dev.surfaces` bookkeeping + freeing the host textures/surface). Removing only the
             // `SwapchainRec` would orphan the images in `dev.images` forever — a per-resize handle leak.
-            completed = dev.destroy_swapchain(sink, swapchain).is_ok();
+            destroy_error = dev.destroy_swapchain(sink, swapchain).err();
         }
-        if completed {
+        if destroy_error.is_none() {
             s.presenters.unbind(swapchain);
         } else {
+            let error = destroy_error.unwrap();
             hl_log::hl_error!(
                 hl_log::tag::PRESENT,
-                "swapchain destroy deferred sc={swapchain:#x}; cleanup ownership retained"
+                "swapchain destroy deferred sc={swapchain:#x}; cleanup ownership retained: {error}"
             );
+            let transport_lost = matches!(
+                &error,
+                GpuError::Transport(transport)
+                    if !transport.refusal() && !transport.retryable_before_request()
+            );
+            if transport_lost {
+                let device = s.current_device_token() as *mut c_void;
+                s.remove_device(device);
+                s.presenters.unbind(swapchain);
+                return;
+            }
             s.enqueue_swapchain_destroy(swapchain);
             // Retry once in the void ABI call; persistent failures remain queued and are retried at the
             // start of every later Vulkan entry point.
