@@ -459,12 +459,16 @@ impl GlContext {
 pub(super) fn set_cap(ctx: &mut GlContext, cap: u32, on: bool) {
     match cap {
         GL_BLEND => ctx.local.pipeline.blend = on,
+        GL_DITHER => ctx.local.pipeline.dither = on,
+        GL_POLYGON_OFFSET_FILL => ctx.local.pipeline.polygon_offset_fill = on,
+        GL_SAMPLE_ALPHA_TO_COVERAGE => ctx.local.pipeline.sample_alpha_to_coverage = on,
+        GL_SAMPLE_COVERAGE => ctx.local.pipeline.sample_coverage = on,
         GL_DEPTH_TEST => ctx.local.pipeline.depth = on,
         GL_STENCIL_TEST => ctx.local.pipeline.stencil = on,
         GL_SCISSOR_TEST => ctx.local.pipeline.scissor_enabled = on,
         GL_RASTERIZER_DISCARD => ctx.local.pipeline.rasterizer_discard = on,
         GL_CULL_FACE => ctx.local.pipeline.cull_enabled = on,
-        _ => {}
+        _ => ctx.set_gl_error(GL_INVALID_ENUM),
     }
 }
 

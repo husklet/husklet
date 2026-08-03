@@ -12,6 +12,12 @@ pub(crate) struct PipelineState {
     pub(crate) scissor: [i32; 4],
     pub(crate) rasterizer_discard: bool,
     pub(crate) blend: bool,
+    /// `GL_DITHER` is enabled in the initial GLES state. The fixed target formats may make its raster
+    /// effect unobservable, but the enable remains queryable state and must round-trip.
+    pub(crate) dither: bool,
+    pub(crate) polygon_offset_fill: bool,
+    pub(crate) sample_alpha_to_coverage: bool,
+    pub(crate) sample_coverage: bool,
     pub(crate) blend_src_rgb: u32,
     pub(crate) blend_dst_rgb: u32,
     pub(crate) blend_src_alpha: u32,
@@ -57,6 +63,10 @@ impl Default for PipelineState {
             scissor: [0; 4],
             rasterizer_discard: false,
             blend: false,
+            dither: true,
+            polygon_offset_fill: false,
+            sample_alpha_to_coverage: false,
+            sample_coverage: false,
             blend_src_rgb: glconst::GL_ONE,
             blend_dst_rgb: glconst::GL_ZERO,
             blend_src_alpha: glconst::GL_ONE,

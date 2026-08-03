@@ -385,18 +385,25 @@ pub fn frag_data_location(ctx: &GlContext, program: u32, name: &str) -> i32 {
         .unwrap_or(-1)
 }
 
-/// `glIsEnabled(cap)` — the live enable state of a modeled fixed-function capability. An unmodeled cap
-/// reads `false` (the honest answer for a capability this deferred model does not track).
+/// `glIsEnabled(cap)` — the live enable state of a modeled fixed-function capability. GLES defines the
+/// accepted capability vocabulary; any other enum raises `GL_INVALID_ENUM`.
 impl GlContext {
-    pub fn is_enabled(&self, cap: u32) -> bool {
+    pub fn is_enabled(&mut self, cap: u32) -> bool {
         match cap {
             GL_DEPTH_TEST => self.local.pipeline.depth,
             GL_STENCIL_TEST => self.local.pipeline.stencil,
             GL_BLEND => self.local.pipeline.blend,
+            GL_DITHER => self.local.pipeline.dither,
+            GL_POLYGON_OFFSET_FILL => self.local.pipeline.polygon_offset_fill,
+            GL_SAMPLE_ALPHA_TO_COVERAGE => self.local.pipeline.sample_alpha_to_coverage,
+            GL_SAMPLE_COVERAGE => self.local.pipeline.sample_coverage,
             GL_CULL_FACE => self.local.pipeline.cull_enabled,
             GL_SCISSOR_TEST => self.local.pipeline.scissor_enabled,
             GL_RASTERIZER_DISCARD => self.local.pipeline.rasterizer_discard,
-            _ => false,
+            _ => {
+                self.set_gl_error(GL_INVALID_ENUM);
+                false
+            }
         }
     }
 }
