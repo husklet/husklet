@@ -2,7 +2,7 @@
 //! validation and the copy execution both use. Ported from the copy arms of `SoftwareBackend::submit` and
 //! the free layout helpers in `hl-gpu/src/software.rs`.
 
-use crate::cpu::format::{sample_bilinear, texel_at};
+use crate::cpu::format::{sample_bilinear, sample_cubic, texel_at};
 use crate::cpu::model::texture::Texture;
 use crate::cpu::model::{buffer, buffer_mut, texture, texture_mut};
 use crate::protocol::model::descriptor::{Extent3d, Mirror, Origin3d, TextureSubresource};
@@ -483,6 +483,18 @@ pub(crate) fn blit_texture(
                         src_fmt.texel_to_f32(texel_at(src_plane, sw, sx, sy, src_bpt))
                     }
                     Filter::Linear => sample_bilinear(
+                        src_plane,
+                        sw,
+                        src_bpt,
+                        fx,
+                        fy,
+                        sox,
+                        sox + sew - 1,
+                        soy,
+                        soy + seh - 1,
+                        src_fmt,
+                    ),
+                    Filter::Cubic => sample_cubic(
                         src_plane,
                         sw,
                         src_bpt,

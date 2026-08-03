@@ -513,7 +513,7 @@ u32_enum!(
 
 u32_enum!(
     /// Texture filtering mode.
-    Filter { Nearest = 0, Linear = 1 } "Filter"
+    Filter { Nearest = 0, Linear = 1, Cubic = 2 } "Filter"
 );
 
 u32_enum!(

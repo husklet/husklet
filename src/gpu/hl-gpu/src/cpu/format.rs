@@ -133,6 +133,54 @@ pub(crate) fn sample_bilinear(
     Some(rgba)
 }
 
+/// Sample the Catmull-Rom cubic kernel required by `VK_EXT_filter_cubic` and used by the Vulkan CTS
+/// reference. The four taps begin at `floor(coord - 1.5)` and each tap is independently clamped to the
+/// source region, matching the CTS `sampleCubic2D` clamp-to-edge path.
+pub(crate) fn sample_cubic(
+    pixels: &[u8],
+    tex_w: usize,
+    bpt: usize,
+    fx: f32,
+    fy: f32,
+    x_lo: usize,
+    x_hi: usize,
+    y_lo: usize,
+    y_hi: usize,
+    format: TextureFormat,
+) -> Option<[f32; 4]> {
+    if INTEGER_FILTER_REFUSED.contains(&format) || FILTERABLE_REFUSED.contains(&format) {
+        return None;
+    }
+    let weights = |coord: f32| {
+        let t = (coord - 0.5).fract();
+        let t2 = t * t;
+        let t3 = t2 * t;
+        [
+            -0.5 * t + t2 - 0.5 * t3,
+            1.0 - 2.5 * t2 + 1.5 * t3,
+            0.5 * t + 2.0 * t2 - 1.5 * t3,
+            -0.5 * t2 + 0.5 * t3,
+        ]
+    };
+    let wx = weights(fx);
+    let wy = weights(fy);
+    let x0 = (fx - 1.5).floor() as isize;
+    let y0 = (fy - 1.5).floor() as isize;
+    let clamp = |value: isize, lo: usize, hi: usize| value.clamp(lo as isize, hi as isize) as usize;
+    let mut rgba = [0.0; 4];
+    for (ny, &yw) in wy.iter().enumerate() {
+        for (nx, &xw) in wx.iter().enumerate() {
+            let x = clamp(x0 + nx as isize, x_lo, x_hi);
+            let y = clamp(y0 + ny as isize, y_lo, y_hi);
+            let texel = format.texel_to_f32(texel_at(pixels, tex_w, x, y, bpt))?;
+            for channel in 0..4 {
+                rgba[channel] += texel[channel] * xw * yw;
+            }
+        }
+    }
+    Some(rgba)
+}
+
 /// Formats whose texels are raw integers, for which a linear filter has no defined meaning. Both GL and
 /// Vulkan forbid linear filtering of an integer texture; averaging the values would produce a plausible
 /// number that no specification asks for.
@@ -163,3 +211,52 @@ const INTEGER_FILTER_REFUSED: &[TextureFormat] = &[
     TextureFormat::Rgba8Uint,
     TextureFormat::Rgba8Sint,
 ];
+
+#[cfg(test)]
+mod cubic_tests {
+    use super::sample_cubic;
+    use crate::protocol::model::enums::TextureFormat;
+
+    #[test]
+    fn catmull_rom_uses_the_cts_sixteen_tap_weights() {
+        // At a half phase the CTS Catmull-Rom weights are [-1, 9, 9, -1] / 16 on each axis.
+        // A single red impulse at tap (1,1) must therefore contribute (9/16)^2 exactly.
+        let mut pixels = vec![0_u8; 16];
+        pixels[1 * 4 + 1] = 255;
+        let got = sample_cubic(
+            &pixels,
+            4,
+            1,
+            2.0,
+            2.0,
+            0,
+            3,
+            0,
+            3,
+            TextureFormat::R8Unorm,
+        )
+        .expect("R8Unorm is cubic-filterable");
+        assert!((got[0] - 81.0 / 256.0).abs() < f32::EPSILON);
+        assert_eq!(got[1..], [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn catmull_rom_clamps_each_edge_tap() {
+        let mut pixels = vec![0_u8; 16];
+        pixels[0] = 255;
+        let got = sample_cubic(
+            &pixels,
+            4,
+            1,
+            0.5,
+            0.5,
+            0,
+            3,
+            0,
+            3,
+            TextureFormat::R8Unorm,
+        )
+        .expect("R8Unorm is cubic-filterable");
+        assert_eq!(got, [1.0, 0.0, 0.0, 1.0]);
+    }
+}

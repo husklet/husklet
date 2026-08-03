@@ -54,7 +54,7 @@ fn every_enum_value_round_trips_through_to_from_u32() {
     for l in [LoadOp::Load, LoadOp::Clear, LoadOp::DontCare] {
         assert_eq!(LoadOp::from_u32(l.to_u32()).unwrap(), l);
     }
-    for f in [Filter::Nearest, Filter::Linear] {
+    for f in [Filter::Nearest, Filter::Linear, Filter::Cubic] {
         assert_eq!(Filter::from_u32(f.to_u32()).unwrap(), f);
     }
     for a in [

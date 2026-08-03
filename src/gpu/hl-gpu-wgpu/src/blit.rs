@@ -379,6 +379,7 @@ impl BlitCache {
             (false, _) => &self.non_filtering,
             (true, Filter::Nearest) => &self.nearest,
             (true, Filter::Linear) => &self.linear,
+            (true, Filter::Cubic) => unreachable!("cubic rejected before sampler selection"),
         }
     }
 
@@ -626,6 +627,11 @@ impl WgpuExecutor {
             )
         };
         let (src_class, dst_class) = (src_fmt.numeric_class(), dst_fmt.numeric_class());
+        if filter == Filter::Cubic {
+            return Err(GpuError::Unsupported(
+                "wgpu: cubic blit filtering is not implemented",
+            ));
+        }
         if src_class != dst_class {
             return Err(GpuError::Invalid(
                 "wgpu: blit source and destination numeric classes differ",

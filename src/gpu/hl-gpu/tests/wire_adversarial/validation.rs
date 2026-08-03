@@ -75,10 +75,10 @@ fn out_of_range_enums_are_typed_bad_enum() {
     // because the property under test is that an undeclared value is refused rather than aliasing onto a
     // declared one.
     assert!(matches!(
-        TextureFormat::from_u32(36),
+        TextureFormat::from_u32(73),
         Err(GpuError::BadEnum { .. })
     ));
-    for v in 1..=35 {
+    for v in 1..=72 {
         assert_eq!(TextureFormat::from_u32(v).unwrap().to_u32(), v);
     }
     assert!(matches!(
@@ -115,7 +115,7 @@ fn out_of_range_enums_are_typed_bad_enum() {
         Err(GpuError::BadEnum { what: "LoadOp", .. })
     ));
     assert!(matches!(
-        Filter::from_u32(2),
+        Filter::from_u32(3),
         Err(GpuError::BadEnum { what: "Filter", .. })
     ));
     assert!(matches!(
