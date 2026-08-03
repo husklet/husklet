@@ -35,24 +35,29 @@ fn _hl_cubic_level(t: texture_2d<f32>, uv: vec2<f32>, level: i32, au: u32, av: u
     }}
     return out;
 }
+fn _hl_cubic_mip_linear(t:texture_2d<f32>,uv:vec2<f32>,lod:f32,au:u32,av:u32,bc:u32)->vec4<f32>{
+    let levels=i32(textureNumLevels(t));
+    let mip_lod=clamp(lod,0.0,f32(levels-1));
+    let lo=i32(floor(mip_lod)); let hi=min(lo+1,levels-1);
+    return mix(_hl_cubic_level(t,uv,lo,au,av,bc),_hl_cubic_level(t,uv,hi,au,av,bc),fract(mip_lod));
+}
 fn _hl_sample_auto(t: texture_2d<f32>, s: sampler, uv: vec2<f32>, mn:u32, mg:u32, mm:u32, au:u32, av:u32, aw:u32, bc:u32, lmin:u32, lmax:u32) -> vec4<f32> {
     let size = vec2<f32>(textureDimensions(t, 0));
     let rho = max(length(dpdx(uv*size)), length(dpdy(uv*size)));
     let lod = clamp(log2(max(rho, 0.000001)), bitcast<f32>(lmin), bitcast<f32>(lmax));
     let filter_mode = select(mg, mn, lod > 0.0);
     if filter_mode != 2u { return textureSample(t, s, _hl_mirror_clamp_uv(uv,au,av)); }
-    let levels = i32(textureNumLevels(t));
     if mm == 1u {
-        let lo = clamp(i32(floor(lod)), 0, levels-1); let hi = min(lo+1, levels-1);
-        return mix(_hl_cubic_level(t,uv,lo,au,av,bc), _hl_cubic_level(t,uv,hi,au,av,bc), fract(lod));
+        return _hl_cubic_mip_linear(t,uv,lod,au,av,bc);
     }
+    let levels = i32(textureNumLevels(t));
     return _hl_cubic_level(t, uv, clamp(i32(round(lod)),0,levels-1), au, av,bc);
 }
 fn _hl_sample_level(t: texture_2d<f32>, s: sampler, uv: vec2<f32>, lod0:f32, mn:u32, mg:u32, mm:u32, au:u32, av:u32, aw:u32, bc:u32, lmin:u32, lmax:u32) -> vec4<f32> {
     let lod = clamp(lod0, bitcast<f32>(lmin), bitcast<f32>(lmax));
     if select(mg,mn,lod > 0.0) != 2u { return textureSampleLevel(t,s,_hl_mirror_clamp_uv(uv,au,av),lod); }
     let levels=i32(textureNumLevels(t));
-    if mm==1u { let lo=clamp(i32(floor(lod)),0,levels-1); let hi=min(lo+1,levels-1); return mix(_hl_cubic_level(t,uv,lo,au,av,bc),_hl_cubic_level(t,uv,hi,au,av,bc),fract(lod)); }
+    if mm==1u { return _hl_cubic_mip_linear(t,uv,lod,au,av,bc); }
     return _hl_cubic_level(t,uv,clamp(i32(round(lod)),0,levels-1),au,av,bc);
 }
 fn _hl_sample_grad(t:texture_2d<f32>,s:sampler,uv:vec2<f32>,gx:vec2<f32>,gy:vec2<f32>,mn:u32,mg:u32,mm:u32,au:u32,av:u32,aw:u32,bc:u32,lmin:u32,lmax:u32)->vec4<f32>{
@@ -61,7 +66,8 @@ fn _hl_sample_grad(t:texture_2d<f32>,s:sampler,uv:vec2<f32>,gx:vec2<f32>,gy:vec2
         let sign=vec2(select(1.0,-1.0,uv.x<0.0 && au==3u),select(1.0,-1.0,uv.y<0.0 && av==3u));
         return textureSampleGrad(t,s,_hl_mirror_clamp_uv(uv,au,av),gx*sign,gy*sign);
     }
-    let levels=i32(textureNumLevels(t)); if mm==1u{let lo=clamp(i32(floor(lod)),0,levels-1);let hi=min(lo+1,levels-1);return mix(_hl_cubic_level(t,uv,lo,au,av,bc),_hl_cubic_level(t,uv,hi,au,av,bc),fract(lod));}
+    if mm==1u{return _hl_cubic_mip_linear(t,uv,lod,au,av,bc);}
+    let levels=i32(textureNumLevels(t));
     return _hl_cubic_level(t,uv,clamp(i32(round(lod)),0,levels-1),au,av,bc);
 }
 "#;

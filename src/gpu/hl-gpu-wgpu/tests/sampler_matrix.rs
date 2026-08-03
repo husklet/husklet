@@ -314,14 +314,14 @@ fn linear_mipmap_filter_blends_between_levels() {
     // blend the two levels (~ the average), while a NEAREST filter would snap to one level.
     let x = [200u8, 200, 200, 255];
     let y = [40u8, 40, 40, 255];
-    let run_lod = |exec: &mut WgpuExecutor, mip: Filter| -> [u8; 4] {
+    let run_lod = |exec: &mut WgpuExecutor, mip: Filter, mag: Filter, lod: f32| -> [u8; 4] {
         let mut s = session(exec);
         let mut base = Vec::new();
         for _ in 0..4 {
             base.extend_from_slice(&x);
         } // 2×2
         let mip1: Vec<u8> = y.to_vec(); // 1×1
-        let uv = [0.5_f32, 0.5, 0.5, 0.0]; // p.z = lod 0.5
+        let uv = [0.5_f32, 0.5, lod, 0.0];
         hl_gpu::runtime::submit(
             &mut s,
             exec,
@@ -378,7 +378,13 @@ fn linear_mipmap_filter_blends_between_levels() {
                     kind: ShaderPayloadKind::Glsl,
                     spirv: glsl(glsl_stage::FRAGMENT, FS_LOD),
                 },
-                Cmd::CreateSampler(1, sampler(AddressMode::ClampToEdge, mip)),
+                Cmd::CreateSampler(
+                    1,
+                    SamplerDesc {
+                        mag_filter: mag,
+                        ..sampler(AddressMode::ClampToEdge, mip)
+                    },
+                ),
                 pipe(2),
                 Cmd::CreateBindGroup(
                     1,
@@ -452,7 +458,7 @@ fn linear_mipmap_filter_blends_between_levels() {
         [px[0], px[1], px[2], px[3]]
     };
 
-    let linear = run_lod(&mut exec, Filter::Linear);
+    let linear = run_lod(&mut exec, Filter::Linear, Filter::Nearest, 0.5);
     let avg = [(200 + 40) / 2, (200 + 40) / 2, (200 + 40) / 2, 255];
     assert!(
         near(linear, avg, 6),
@@ -462,6 +468,12 @@ fn linear_mipmap_filter_blends_between_levels() {
     assert!(
         !near(linear, x, 6) && !near(linear, y, 6),
         "linear-mip result {linear:?} must differ from both levels"
+    );
+
+    let negative_cubic = run_lod(&mut exec, Filter::Linear, Filter::Cubic, -0.25);
+    assert!(
+        near(negative_cubic, x, 6),
+        "negative LOD must clamp to mip 0 before linear mip interpolation; expected {x:?}, got {negative_cubic:?}"
     );
 }
 
