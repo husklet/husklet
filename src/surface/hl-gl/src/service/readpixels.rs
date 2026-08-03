@@ -358,6 +358,11 @@ pub fn prepare_pixels(
         ctx.set_gl_error(crate::model::glconst::GL_INVALID_OPERATION);
         return Ok(PreparedPixels::empty(vec![0u8; out_len]));
     };
+    // `Frame::build` appends cleanup at its tail. A deleted texture retained only by the framebuffer is
+    // lowered as an ephemeral `gl-retired-fbo`, so that cleanup can contain `DestroyTexture(texture)`.
+    // Readback is added after the frame was built; move that one destroy behind the copy or the executor
+    // observes create -> render -> destroy -> copy and rejects the copy as a use-after-free.
+    let deferred_target_destroys = defer_texture_destroy(&mut cmds, texture);
     let readback = ctx.alloc_buffer_ir()?;
     let row_bytes = tw as u64 * target_texel as u64;
     let size = row_bytes * th as u64;
@@ -381,6 +386,9 @@ pub fn prepare_pixels(
         }],
         signal: None,
     }));
+    cmds.extend(
+        std::iter::repeat_n(Cmd::DestroyTexture(texture), deferred_target_destroys),
+    );
 
     if let Err(error) = sink.submit(&cmds) {
         ctx.restore_frame_state(frame_state);
@@ -423,6 +431,32 @@ pub fn prepare_pixels(
             destination,
         }),
     })
+}
+
+fn defer_texture_destroy(commands: &mut Vec<Cmd>, texture: u32) -> usize {
+    let mut count = 0;
+    commands.retain(|command| {
+        let selected = matches!(command, Cmd::DestroyTexture(id) if *id == texture);
+        count += usize::from(selected);
+        !selected
+    });
+    count
+}
+
+#[cfg(test)]
+mod destroy_order_tests {
+    use super::*;
+
+    #[test]
+    fn readback_target_destroy_is_deferred_past_the_copy() {
+        let mut commands = vec![Cmd::DestroyTexture(7), Cmd::DestroyTexture(9)];
+
+        assert_eq!(defer_texture_destroy(&mut commands, 7), 1);
+        assert_eq!(
+            commands,
+            vec![Cmd::DestroyTexture(9)]
+        );
+    }
 }
 
 /// Present a window frame and return the XRGB8888 plane needed by the `wl_shm` compatibility path.
