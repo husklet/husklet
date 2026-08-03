@@ -3,6 +3,10 @@ use super::*;
 use hl_gpu::protocol::model::enums::{TextureDim, TextureFormat};
 
 impl GlContext {
+    pub(crate) fn forget_framebuffer_depth_target(&mut self, fbo: u32) {
+        self.depth_target_current.retain(|(name, _), _| *name != fbo);
+    }
+
     pub fn validate_external_target(
         &self,
         token: hl_gpu::protocol::model::descriptor::SurfaceToken,
@@ -320,7 +324,7 @@ impl GlContext {
         fbo: u32,
         color_tex: u32,
         with_stencil: bool,
-    ) -> hl_gpu::Result<(u32, bool)> {
+    ) -> hl_gpu::Result<(u32, bool, Option<(u32, hl_gpu::protocol::model::enums::TextureAspect)>)> {
         let attachment = |source: Option<(u32, bool)>| {
             source.and_then(|(name, renderbuffer)| {
                 let texture = if renderbuffer {
@@ -349,12 +353,64 @@ impl GlContext {
             stencil,
             with_stencil,
         };
+        let current_key = (fbo, with_stencil);
         if let Some(&depth) = self.depth_targets.get(&key) {
-            Ok((depth, false))
+            self.depth_target_current.insert(current_key, (key, depth));
+            Ok((depth, false, None))
         } else {
             let depth = self.alloc_texture_ir()?;
+            let preserve = self.depth_target_current.get(&current_key).and_then(|(old, old_ir)| {
+                preserved_aspect(*old, key).map(|aspect| (*old_ir, aspect))
+            });
             self.depth_targets.insert(key, depth);
-            Ok((depth, true))
+            self.depth_target_current.insert(current_key, (key, depth));
+            Ok((depth, true, preserve))
         }
+    }
+}
+
+fn preserved_aspect(
+    old: DepthTargetKey,
+    new: DepthTargetKey,
+) -> Option<hl_gpu::protocol::model::enums::TextureAspect> {
+    use hl_gpu::protocol::model::enums::TextureAspect;
+    if old == new {
+        None
+    } else if old.depth == new.depth && old.stencil != new.stencil {
+        Some(TextureAspect::DepthOnly)
+    } else if old.stencil == new.stencil && old.depth != new.depth {
+        Some(TextureAspect::StencilOnly)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod depth_preservation_tests {
+    use super::*;
+    use hl_gpu::protocol::model::enums::TextureAspect;
+
+    fn key(depth_gen: u64, stencil_gen: u64) -> DepthTargetKey {
+        DepthTargetKey {
+            fallback_color: 0,
+            depth: Some((10, depth_gen)),
+            stencil: Some((20, stencil_gen)),
+            with_stencil: true,
+        }
+    }
+
+    #[test]
+    fn recreate_depth_preserves_stencil() {
+        assert_eq!(preserved_aspect(key(1, 1), key(2, 1)), Some(TextureAspect::StencilOnly));
+    }
+
+    #[test]
+    fn recreate_stencil_preserves_depth() {
+        assert_eq!(preserved_aspect(key(1, 1), key(1, 2)), Some(TextureAspect::DepthOnly));
+    }
+
+    #[test]
+    fn shared_attachments_reuse_without_copy() {
+        assert_eq!(preserved_aspect(key(1, 1), key(1, 1)), None);
     }
 }

@@ -249,7 +249,8 @@ impl Encoder {
                     Some(dp) => {
                         e.bool(true);
                         e.u32(dp.texture);
-                        e.u32(dp.load.to_u32());
+                        e.u32(dp.depth_load.to_u32());
+                        e.u32(dp.stencil_load.to_u32());
                         e.f32(dp.clear_depth);
                         e.u32(dp.clear_stencil); // v7
                     }

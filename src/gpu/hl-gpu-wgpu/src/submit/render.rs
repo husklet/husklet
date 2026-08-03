@@ -84,7 +84,8 @@ impl WgpuExecutor {
                     attachment.load = LoadOp::Load;
                 }
                 if let Some(attachment) = &mut split_depth {
-                    attachment.load = LoadOp::Load;
+                    attachment.depth_load = LoadOp::Load;
+                    attachment.stencil_load = LoadOp::Load;
                 }
             }
             // Intermediate stores are load-bearing even when the guest discards the attachment at the end
@@ -263,7 +264,8 @@ impl WgpuExecutor {
                 target_h = target_h.min(t.height);
                 Some((
                     t.view.clone(),
-                    d.load,
+                    d.depth_load,
+                    d.stencil_load,
                     d.clear_depth,
                     d.clear_stencil,
                     has_stencil,
@@ -313,11 +315,11 @@ impl WgpuExecutor {
                 label: Some("hl-render-pass"),
                 color_attachments: &attachments,
                 depth_stencil_attachment: depth_view.as_ref().map(
-                    |(view, load, clear, clear_stencil, has_stencil)| {
+                    |(view, depth_load, stencil_load, clear, clear_stencil, has_stencil)| {
                         wgpu::RenderPassDepthStencilAttachment {
                             view,
                             depth_ops: Some(wgpu::Operations {
-                                load: match load {
+                                load: match depth_load {
                                     LoadOp::Clear => wgpu::LoadOp::Clear(*clear),
                                     _ => wgpu::LoadOp::Load,
                                 },
@@ -327,7 +329,7 @@ impl WgpuExecutor {
                             // aspect; `LoadOp::Load` preserves a stencil written by an earlier pass (what a
                             // two-pass stencil-mask-then-test IR relies on).
                             stencil_ops: has_stencil.then(|| wgpu::Operations {
-                                load: match load {
+                                load: match stencil_load {
                                     LoadOp::Clear => wgpu::LoadOp::Clear(*clear_stencil),
                                     _ => wgpu::LoadOp::Load,
                                 },

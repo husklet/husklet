@@ -72,8 +72,9 @@ fn build_clear_frame_snapshot(
     // a frame with no colour work, and returning no frame at all — which is what happened — DROPPED the
     // cleared depth value: the next frame to enable the depth test minted the plane fresh and cleared it
     // to the GL initial 1.0. The colour attachment LOADs here so a depth-only clear cannot repaint colour.
-    let depth_attachment = depth_attachment_for(ctx, fbo, texture, w, h, &[], &mut cmds, depth);
-    let ops = vec![
+    let mut ops = Vec::new();
+    let depth_attachment = depth_attachment_for(ctx, fbo, texture, w, h, &[], &mut cmds, &mut ops, depth);
+    ops.extend([
         Enc::BeginRenderPass {
             color: vec![ColorAttachment {
                 texture,
@@ -84,7 +85,7 @@ fn build_clear_frame_snapshot(
             depth: depth_attachment,
         },
         Enc::EndRenderPass,
-    ];
+    ]);
     cmds.push(Cmd::Submit(CommandBuffer {
         encoder: ops,
         signal: None,
@@ -262,6 +263,7 @@ impl Frame {
                 th,
                 survivors,
                 &mut cmds,
+                &mut copies,
                 depth_load(draws),
             );
             let mut ops: Vec<Enc> = copies;
@@ -552,7 +554,7 @@ mod clone_tests {
                 "mask {mask:#x} must not repaint the colour plane"
             );
             assert_eq!(
-                pass.1.map(|d| d.load),
+                pass.1.map(|d| d.depth_load),
                 Some(LoadOp::Clear),
                 "mask {mask:#x} clears the plane it names"
             );
@@ -821,7 +823,7 @@ pub(super) fn emit_segment_pass(
             draw_ops.extend(lowered.ops);
         }
     }
-    let depth = depth_attachment_for(ctx, fbo, target_tex, tw, th, seg, cmds, depth_load);
+    let depth = depth_attachment_for(ctx, fbo, target_tex, tw, th, seg, cmds, &mut copies, depth_load);
     ops.extend(copies);
     ops.push(Enc::BeginRenderPass {
         color: vec![ColorAttachment {

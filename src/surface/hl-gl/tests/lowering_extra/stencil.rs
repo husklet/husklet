@@ -218,7 +218,7 @@ fn a_colour_clear_does_not_discard_earlier_stencil_writing_draws() {
     let depth_loads = ops
         .iter()
         .filter_map(|e| match e {
-            Enc::BeginRenderPass { depth, .. } => depth.as_ref().map(|d| d.load),
+            Enc::BeginRenderPass { depth, .. } => depth.as_ref().map(|d| d.depth_load),
             _ => false.then_some(LoadOp::Load),
         })
         .collect::<Vec<_>>();

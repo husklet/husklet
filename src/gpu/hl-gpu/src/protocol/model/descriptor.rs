@@ -392,9 +392,10 @@ pub struct ColorAttachment {
 #[derive(Clone, PartialEq, Debug)]
 pub struct DepthAttachment {
     pub texture: u32,
-    pub load: super::enums::LoadOp,
+    pub depth_load: super::enums::LoadOp,
+    pub stencil_load: super::enums::LoadOp,
     pub clear_depth: f32,
-    /// Stencil clear value, used when `load == Clear` and the attachment format carries a stencil aspect
+    /// Stencil clear value, used when `stencil_load == Clear` and the attachment format carries a stencil aspect
     /// (`Depth24PlusStencil8`); ignored for a depth-only format. Defaults to `0` — the value the executor
     /// clears the stencil plane to for a pass that marks it (see the executor's `run_render_pass`).
     pub clear_stencil: u32,

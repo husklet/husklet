@@ -710,7 +710,8 @@ pub fn cmd_clear_depth_stencil_image(
         color: Vec::new(),
         depth: Some(DepthAttachment {
             texture: ir,
-            load: LoadOp::Clear,
+            depth_load: LoadOp::Clear,
+            stencil_load: LoadOp::Clear,
             clear_depth,
             clear_stencil,
         }),

@@ -106,6 +106,7 @@ impl GlContext {
         }
         let retained = self.local.framebuffers.attached_objects(name);
         let deleted = self.local.framebuffers.delete(name);
+        self.forget_framebuffer_depth_target(name);
         for object in retained {
             self.reclaim_retired_texture_object(object);
         }

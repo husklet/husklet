@@ -180,7 +180,8 @@ fn run(exec: &mut WgpuExecutor, op: u32, stored: u8, reference: u32, verify_ref:
                         }],
                         depth: Some(DepthAttachment {
                             texture: 2,
-                            load: LoadOp::Clear,
+                            depth_load: LoadOp::Clear,
+                            stencil_load: LoadOp::Clear,
                             clear_depth: 1.0,
                             clear_stencil: stored as u32,
                         }),
@@ -204,7 +205,8 @@ fn run(exec: &mut WgpuExecutor, op: u32, stored: u8, reference: u32, verify_ref:
                         }],
                         depth: Some(DepthAttachment {
                             texture: 2,
-                            load: LoadOp::Load,
+                            depth_load: LoadOp::Load,
+                            stencil_load: LoadOp::Load,
                             clear_depth: 0.0,
                             clear_stencil: 0,
                         }),

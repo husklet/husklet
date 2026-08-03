@@ -1239,7 +1239,7 @@ mod tests {
         assert_eq!(begins.len(), 1, "no duplicate attachment clear pass");
         assert_eq!(begins[0].0[0].load, LoadOp::Clear);
         let depth = begins[0].1.as_ref().expect("depth/stencil attachment");
-        assert_eq!(depth.load, LoadOp::Clear);
+        assert_eq!(depth.depth_load, LoadOp::Clear);
         assert_eq!(depth.clear_depth, 0.25);
         assert_eq!(depth.clear_stencil, 123);
     }
@@ -1363,6 +1363,7 @@ pub(super) fn depth_attachment_for(
     h: i32,
     draws: &[DrawCall],
     cmds: &mut Vec<Cmd>,
+    copies: &mut Vec<Enc>,
     clear: DepthClear,
 ) -> Option<DepthAttachment> {
     let stencil_available = fbo == 0 || ctx.local.framebuffers.has_stencil(fbo);
@@ -1371,7 +1372,7 @@ pub(super) fn depth_attachment_for(
     let clear_depth = clear.depth;
     // GL clears the stencil plane to `glClearStencil`'s value (default 0), masked to the 8-bit buffer.
     let clear_stencil = (clear.stencil as u32) & 0xff;
-    let (depth_tex, needs_create) = ctx.depth_target(fbo, color_tex, with_stencil).ok()?;
+    let (depth_tex, needs_create, preserve) = ctx.depth_target(fbo, color_tex, with_stencil).ok()?;
     // A depth texture minted this frame has no prior contents to preserve — and a zero-initialized depth
     // plane fails every `GL_LESS` test — so its first pass always clear-loads regardless of the caller's op.
     let load = if needs_create {
@@ -1390,7 +1391,9 @@ pub(super) fn depth_attachment_for(
                 sample_count: 1,
                 dim: TextureDim::D2,
                 format,
-                usage: texture_usage::RENDER_TARGET,
+                usage: texture_usage::RENDER_TARGET
+                    | texture_usage::COPY_SRC
+                    | texture_usage::COPY_DST,
                 label: if with_stencil {
                     "gl-depth-stencil".into()
                 } else {
@@ -1398,10 +1401,28 @@ pub(super) fn depth_attachment_for(
                 },
             },
         ));
+        if let Some((source, aspect)) = preserve {
+            let subresource = TextureSubresource { mip: 0, layer: 0, aspect };
+            copies.push(Enc::CopyTextureToTexture {
+                src: source,
+                src_sub: subresource,
+                src_origin: Origin3d::default(),
+                dst: depth_tex,
+                dst_sub: subresource,
+                dst_origin: Origin3d::default(),
+                extent: Extent3d { width: w.max(1) as u32, height: h.max(1) as u32, depth: 1 },
+            });
+        }
     }
+    let (depth_load, stencil_load) = match preserve.map(|(_, aspect)| aspect) {
+        Some(TextureAspect::DepthOnly) => (LoadOp::Load, load),
+        Some(TextureAspect::StencilOnly) => (load, LoadOp::Load),
+        _ => (load, load),
+    };
     Some(DepthAttachment {
         texture: depth_tex,
-        load,
+        depth_load,
+        stencil_load,
         clear_depth,
         clear_stencil,
     })

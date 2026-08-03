@@ -111,6 +111,7 @@ pub struct GlContext {
     /// `Depth24PlusStencil8` depth+stencil buffer, so a stencil-testing pass gets a stencil-aspect
     /// attachment while a plain depth pass keeps its depth-only one (the two carry different formats).
     depth_targets: HashMap<DepthTargetKey, u32>,
+    depth_target_current: HashMap<(u32, bool), (DepthTargetKey, u32)>,
 
     /// Residency cache for sampled GL textures uploaded from CPU pixels: GL texture name → `(texture_ir,
     /// uploaded_gen)`. A texture is `CreateTexture`d + staged + `CopyBufferToTexture`d ONCE (per content

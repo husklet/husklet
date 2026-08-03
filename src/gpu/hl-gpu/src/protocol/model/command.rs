@@ -362,7 +362,9 @@ pub enum Cmd {
 // reject or mis-frame those descriptors, so mixed v16/v17 peers must fail the exact-version handshake.
 // v18 appends the typed Vulkan border color to `SamplerDesc`; a v17 decoder would mis-frame the next
 // command, so peers must negotiate the new exact version.
-pub const WIRE_VERSION: u32 = 18;
+// v19 gives a depth/stencil attachment independent depth and stencil load operations; a v18 decoder
+// would mis-frame the clear values that follow them.
+pub const WIRE_VERSION: u32 = 19;
 
 // tag constants (stable wire) --------------------------------------------------------------------
 /// Top-level [`Cmd`] tag numbers.

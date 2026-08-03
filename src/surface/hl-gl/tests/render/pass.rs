@@ -437,7 +437,7 @@ fn all_depth_loads(batch: &[Cmd]) -> Vec<LoadOp> {
         })
         .flatten()
         .filter_map(|e| match e {
-            Enc::BeginRenderPass { depth, .. } => depth.as_ref().map(|d| d.load),
+            Enc::BeginRenderPass { depth, .. } => depth.as_ref().map(|d| d.depth_load),
             _ => None,
         })
         .collect()
@@ -568,7 +568,7 @@ fn depth_only_clear_frame_clears_depth_without_repainting_colour() {
         "the magenta clear colour must not reach the window: {ops:?}"
     );
     let depth = depth.expect("the depth plane the clear names");
-    assert_eq!(depth.load, LoadOp::Clear);
+    assert_eq!(depth.depth_load, LoadOp::Clear);
     assert_eq!(depth.clear_depth, 0.5);
 }
 
@@ -718,7 +718,7 @@ fn replacing_fbo_color_preserves_attached_depth_storage() {
             _ => None,
         })
         .expect("first depth attachment");
-    assert_eq!(first.load, LoadOp::Clear);
+    assert_eq!(first.depth_load, LoadOp::Clear);
 
     let replacement = c.textures.gen();
     record::bind_texture(&mut c, GL_TEXTURE_2D, replacement);
@@ -744,7 +744,7 @@ fn replacing_fbo_color_preserves_attached_depth_storage() {
         })
         .expect("second depth attachment");
     assert_eq!(second.texture, first.texture);
-    assert_eq!(second.load, LoadOp::Load);
+    assert_eq!(second.depth_load, LoadOp::Load);
 
     record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, depth);
     record::renderbuffer_storage(
@@ -767,5 +767,5 @@ fn replacing_fbo_color_preserves_attached_depth_storage() {
         })
         .expect("redefined depth attachment");
     assert_ne!(redefined.texture, second.texture);
-    assert_eq!(redefined.load, LoadOp::Clear);
+    assert_eq!(redefined.depth_load, LoadOp::Clear);
 }

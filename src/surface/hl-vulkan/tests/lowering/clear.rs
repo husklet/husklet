@@ -452,7 +452,8 @@ fn clear_depth_stencil_image_lowers_to_depth_clear_render_pass() {
                 color: vec![],
                 depth: Some(DepthAttachment {
                     texture: ir,
-                    load: LoadOp::Clear,
+                    depth_load: LoadOp::Clear,
+                    stencil_load: LoadOp::Clear,
                     clear_depth: 0.5,
                     clear_stencil: 0
                 }),
@@ -484,7 +485,8 @@ fn clear_depth_stencil_image_lowers_to_depth_clear_render_pass() {
                 color: vec![],
                 depth: Some(DepthAttachment {
                     texture: ds_ir,
-                    load: LoadOp::Clear,
+                    depth_load: LoadOp::Clear,
+                    stencil_load: LoadOp::Clear,
                     clear_depth: 1.0,
                     clear_stencil: 0x2a,
                 }),
@@ -676,7 +678,7 @@ fn an_interrupted_clearing_pass_reopens_loading_on_every_attachment() {
         .iter()
         .filter_map(|e| match e {
             Enc::BeginRenderPass { color, depth } => {
-                Some((color[0].load, depth.as_ref().map(|dep| dep.load)))
+                Some((color[0].load, depth.as_ref().map(|dep| dep.depth_load)))
             }
             _ => None,
         })

@@ -35,7 +35,8 @@ use hl_gpu::protocol::model::descriptor::{
     VertexAttr, VertexLayout,
 };
 use hl_gpu::protocol::model::enums::{
-    buffer_usage, texture_usage, AddressMode, Filter, LoadOp, TextureDim, TextureFormat, Topology,
+    buffer_usage, texture_usage, AddressMode, Filter, LoadOp, TextureAspect, TextureDim,
+    TextureFormat, Topology,
 };
 use hl_gpu::{Cmd, CommandBuffer, ShaderPayloadKind};
 use hl_log::{hl_add, hl_count, hl_debug, tag};

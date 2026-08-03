@@ -67,11 +67,12 @@ pub fn cmd_begin_render_pass_multi(
                 .ir_id;
             Some(DepthAttachment {
                 texture: depth_tex,
-                load: if d.load_clear {
+                depth_load: if d.load_clear {
                     LoadOp::Clear
                 } else {
                     LoadOp::Load
                 },
+                stencil_load: LoadOp::Load,
                 clear_depth: d.clear_depth,
                 clear_stencil: 0,
             })
@@ -342,11 +343,12 @@ pub fn cmd_begin_rendering(
                 .ir_id;
             Some(DepthAttachment {
                 texture,
-                load: if d.load_clear {
+                depth_load: if d.load_clear {
                     LoadOp::Clear
                 } else {
                     LoadOp::Load
                 },
+                stencil_load: LoadOp::Load,
                 clear_depth: d.clear_depth,
                 clear_stencil: 0,
             })

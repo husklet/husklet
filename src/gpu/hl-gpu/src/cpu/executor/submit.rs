@@ -109,15 +109,12 @@ impl CpuExecutor {
                     cur_depth = None;
                     if let Some(dp) = depth {
                         cur_depth = Some(dp.texture);
-                        if dp.load == LoadOp::Clear {
-                            // Clears both the depth plane (to `clear_depth`) and, for a combined
-                            // depth+stencil attachment, the stencil plane (to `clear_stencil`); a
-                            // `LoadOp::Load` preserves both, which a two-pass mark-then-test IR relies on.
+                        if dp.depth_load == LoadOp::Clear || dp.stencil_load == LoadOp::Clear {
                             raster::clear_depth_stencil_target(
                                 res,
                                 dp.texture,
-                                dp.clear_depth,
-                                dp.clear_stencil,
+                                (dp.depth_load == LoadOp::Clear).then_some(dp.clear_depth),
+                                (dp.stencil_load == LoadOp::Clear).then_some(dp.clear_stencil),
                             )?;
                         }
                     }

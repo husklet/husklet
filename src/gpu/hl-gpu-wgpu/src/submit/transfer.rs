@@ -86,6 +86,47 @@ impl WgpuExecutor {
                 "texture copy between incompatible texel sizes",
             ));
         }
+        if src_sub.aspect != TextureAspect::All || dst_sub.aspect != TextureAspect::All {
+            if src_sub.aspect != dst_sub.aspect
+                || src_sub.mip != 0
+                || dst_sub.mip != 0
+                || src_sub.layer != 0
+                || dst_sub.layer != 0
+                || src_origin != &Origin3d::default()
+                || dst_origin != &Origin3d::default()
+                || extent.depth != 1
+            {
+                return Err(GpuError::Unsupported("wgpu: depth/stencil copy shape"));
+            }
+            let (src, dst) = (
+                texture::WgpuTexture::get(res, src)?,
+                texture::WgpuTexture::get(res, dst)?,
+            );
+            if src.format != TextureFormat::Depth24PlusStencil8
+                || dst.format != TextureFormat::Depth24PlusStencil8
+                || extent.width != src.width
+                || extent.height != src.height
+                || extent.width != dst.width
+                || extent.height != dst.height
+            {
+                return Err(GpuError::Invalid("wgpu: incompatible depth/stencil aspect copy"));
+            }
+            let aspect = match src_sub.aspect {
+                TextureAspect::DepthOnly => wgpu::TextureAspect::DepthOnly,
+                TextureAspect::StencilOnly => wgpu::TextureAspect::StencilOnly,
+                TextureAspect::All => unreachable!(),
+            };
+            let mut encoder = self.gpu.device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor { label: Some("hl-depth-stencil-aspect-copy") },
+            );
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo { texture: &src.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect },
+                wgpu::TexelCopyTextureInfo { texture: &dst.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect },
+                wgpu::Extent3d { width: extent.width, height: extent.height, depth_or_array_layers: 1 },
+            );
+            self.gpu.queue.submit(Some(encoder.finish()));
+            return Ok(());
+        }
         let src_opaque = texture::WgpuTexture::get(res, src)?.is_opaque_bc1_rgb();
         let dst_opaque = texture::WgpuTexture::get(res, dst)?.is_opaque_bc1_rgb();
         if src_opaque || dst_opaque {

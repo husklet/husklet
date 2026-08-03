@@ -147,7 +147,8 @@ fn render(depth: bool) -> [[u8; 4]; 2] {
     };
     let depth_att = depth.then_some(DepthAttachment {
         texture: 2,
-        load: LoadOp::Clear,
+        depth_load: LoadOp::Clear,
+        stencil_load: LoadOp::Clear,
         clear_depth: 1.0,
         clear_stencil: 0,
     });
@@ -350,7 +351,8 @@ fn depth_buffer_stores_written_depth() {
                 }],
                 depth: Some(DepthAttachment {
                     texture: 2,
-                    load: LoadOp::Clear,
+                    depth_load: LoadOp::Clear,
+                    stencil_load: LoadOp::Clear,
                     clear_depth: 1.0,
                     clear_stencil: 0,
                 }),

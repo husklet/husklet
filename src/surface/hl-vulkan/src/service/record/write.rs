@@ -53,7 +53,8 @@ pub fn cmd_clear_attachment_rect(
         })
         .collect();
     let depth_reopened = depth_target.as_ref().map(|d| DepthAttachment {
-        load: LoadOp::Load,
+        depth_load: LoadOp::Load,
+        stencil_load: LoadOp::Load,
         ..d.clone()
     });
     rec.enc.push(Enc::BeginRenderPass {

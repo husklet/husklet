@@ -48,7 +48,8 @@ fn every_encoder_op() -> Vec<Enc> {
             }],
             depth: Some(DepthAttachment {
                 texture: 3,
-                load: LoadOp::Load,
+                depth_load: LoadOp::Load,
+                stencil_load: LoadOp::Clear,
                 clear_depth: 1.0,
                 clear_stencil: 7,
             }),

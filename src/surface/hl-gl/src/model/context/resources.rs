@@ -44,6 +44,7 @@ impl GlContext {
             fbo_targets: HashMap::new(),
             external_targets: HashMap::new(),
             depth_targets: HashMap::new(),
+            depth_target_current: HashMap::new(),
             tex_ir_cache: HashMap::new(),
             shared_tex_ir_cache: HashMap::new(),
             shared_target_cache: HashMap::new(),

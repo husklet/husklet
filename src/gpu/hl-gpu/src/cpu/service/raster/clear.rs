@@ -77,8 +77,8 @@ pub(crate) fn clear_rect(
 pub(crate) fn clear_depth_stencil_target(
     res: &mut SessionResources,
     texture_id: u32,
-    clear_depth: f32,
-    clear_stencil: u32,
+    clear_depth: Option<f32>,
+    clear_stencil: Option<u32>,
 ) -> Result<()> {
     let (fmt, w, h) = {
         let t = texture(res, texture_id)?;
@@ -88,6 +88,7 @@ pub(crate) fn clear_depth_stencil_target(
     let t = texture_mut(res, texture_id)?;
     match fmt {
         TextureFormat::Depth32Float => {
+            let Some(clear_depth) = clear_depth else { return Ok(()) };
             let bytes = clear_depth.to_le_bytes();
             t.pixels.clear();
             t.pixels.reserve(n * 4);
@@ -96,13 +97,16 @@ pub(crate) fn clear_depth_stencil_target(
             }
         }
         TextureFormat::Depth24PlusStencil8 => {
-            let d = clear_depth.to_le_bytes();
-            let s = clear_stencil as u8;
-            let texel = [d[0], d[1], d[2], d[3], s, 0, 0, 0];
-            t.pixels.clear();
-            t.pixels.reserve(n * 8);
-            for _ in 0..n {
-                t.pixels.extend_from_slice(&texel);
+            if t.pixels.len() < n * 8 {
+                t.pixels.resize(n * 8, 0);
+            }
+            for texel in t.pixels.chunks_exact_mut(8) {
+                if let Some(depth) = clear_depth {
+                    texel[..4].copy_from_slice(&depth.to_le_bytes());
+                }
+                if let Some(stencil) = clear_stencil {
+                    texel[4] = stencil as u8;
+                }
             }
         }
         _ => {}

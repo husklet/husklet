@@ -119,7 +119,8 @@ pub(super) fn gen_draw_depth(seed: u64) -> Prog {
                     }],
                     depth: Some(DepthAttachment {
                         texture: 2,
-                        load: LoadOp::Clear,
+                        depth_load: LoadOp::Clear,
+                        stencil_load: LoadOp::Clear,
                         clear_depth: 1.0,
                         clear_stencil: 0,
                     }),

@@ -66,7 +66,8 @@ fn shadow_mapping_depth_only_pass_then_samples_depth_map() {
         vec![
             Enc::BeginRenderPass {
                 color: vec![],
-                depth: Some(DepthAttachment { texture: shadow_ir, load: LoadOp::Clear, clear_depth: 1.0, clear_stencil: 0 }),
+                depth: Some(DepthAttachment { texture: shadow_ir, depth_load: LoadOp::Clear,
+            stencil_load: LoadOp::Clear, clear_depth: 1.0, clear_stencil: 0 }),
             },
             Enc::SetPipeline(d.pipelines.get(&occluder).unwrap().ir_id),
             Enc::Draw { vertex_count: 24, instance_count: 1, first_vertex: 0, first_instance: 0 },

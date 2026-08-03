@@ -14,6 +14,7 @@ pub struct FrameState {
     default_placeholder_samp: u32,
     fbo_targets: HashMap<(u32, u64), (u32, u32)>,
     depth_targets: HashMap<DepthTargetKey, u32>,
+    depth_target_current: HashMap<(u32, bool), (DepthTargetKey, u32)>,
     tex_ir_cache: HashMap<u32, (u32, (u64, u64, bool))>,
     shared_tex_ir_cache: HashMap<(u64, u64, u32, u32, u32), SharedTextureResidency>,
     shared_target_cache: HashMap<u64, SharedTargetResidency>,
@@ -41,6 +42,7 @@ impl GlContext {
             default_placeholder_samp: self.default_placeholder_samp,
             fbo_targets: self.fbo_targets.clone(),
             depth_targets: self.depth_targets.clone(),
+            depth_target_current: self.depth_target_current.clone(),
             tex_ir_cache: self.tex_ir_cache.clone(),
             shared_tex_ir_cache: self.shared_tex_ir_cache.clone(),
             shared_target_cache: self.shared_target_cache.clone(),
@@ -64,6 +66,7 @@ impl GlContext {
         self.default_placeholder_samp = state.default_placeholder_samp;
         self.fbo_targets = state.fbo_targets;
         self.depth_targets = state.depth_targets;
+        self.depth_target_current = state.depth_target_current;
         self.tex_ir_cache = state.tex_ir_cache;
         self.shared_tex_ir_cache = state.shared_tex_ir_cache;
         self.shared_target_cache = state.shared_target_cache;

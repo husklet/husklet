@@ -227,7 +227,8 @@ fn run(exec: &mut WgpuExecutor, stencil_enabled: bool) -> Vec<u8> {
                         }],
                         depth: Some(DepthAttachment {
                             texture: 2,
-                            load: LoadOp::Clear,
+                            depth_load: LoadOp::Clear,
+                            stencil_load: LoadOp::Clear,
                             clear_depth: 1.0,
                             clear_stencil: 0,
                         }),
@@ -252,7 +253,8 @@ fn run(exec: &mut WgpuExecutor, stencil_enabled: bool) -> Vec<u8> {
                         }],
                         depth: Some(DepthAttachment {
                             texture: 2,
-                            load: LoadOp::Load,
+                            depth_load: LoadOp::Load,
+                            stencil_load: LoadOp::Load,
                             clear_depth: 1.0,
                             clear_stencil: 0,
                         }),

@@ -249,7 +249,8 @@ fn non_finite_render_floats_are_rejected_at_the_wire() {
                 color: vec![],
                 depth: Some(DepthAttachment {
                     texture: 1,
-                    load: LoadOp::Clear,
+                    depth_load: LoadOp::Clear,
+                    stencil_load: LoadOp::Clear,
                     clear_depth: bad,
                     clear_stencil: 0,
                 }),

@@ -261,7 +261,7 @@ fn a_depth_clear_materializes_the_plane_even_with_no_depth_tested_draw() {
     let load = ops
         .iter()
         .find_map(|e| match e {
-            Enc::BeginRenderPass { depth, .. } => depth.as_ref().map(|d| d.load),
+            Enc::BeginRenderPass { depth, .. } => depth.as_ref().map(|d| d.depth_load),
             _ => None,
         })
         .expect("frame 2 is depth-tested and must carry the depth attachment");
@@ -332,7 +332,7 @@ fn a_depth_clear_alone_survives_a_frame_boundary() {
     let load = ops
         .iter()
         .find_map(|e| match e {
-            Enc::BeginRenderPass { depth, .. } => depth.as_ref().map(|d| d.load),
+            Enc::BeginRenderPass { depth, .. } => depth.as_ref().map(|d| d.depth_load),
             _ => None,
         })
         .expect("the depth attachment");
@@ -427,7 +427,7 @@ fn a_stencil_only_clear_lands_without_a_stencil_tested_draw() {
 /// The depth attachment's load op, and whether any pass in the frame carries one.
 fn depth_load(batch: &[Cmd]) -> Option<LoadOp> {
     submit_ops(batch).iter().find_map(|e| match e {
-        Enc::BeginRenderPass { depth, .. } => depth.as_ref().map(|d| d.load),
+        Enc::BeginRenderPass { depth, .. } => depth.as_ref().map(|d| d.depth_load),
         _ => None,
     })
 }
@@ -596,7 +596,7 @@ fn an_ordinary_clear_still_lowers_to_a_load_op_and_no_draw() {
             assert_eq!(color[0].load, LoadOp::Clear, "colour clear-loads");
             assert_eq!(color[0].clear, [0.25, 0.5, 0.75, 1.0]);
             let depth = depth.as_ref().expect("the depth attachment");
-            assert_eq!(depth.load, LoadOp::Clear);
+            assert_eq!(depth.depth_load, LoadOp::Clear);
             assert_eq!(depth.clear_depth, 0.5);
         }
         other => panic!("expected the pass to open the frame, got {other:?}"),
@@ -630,7 +630,7 @@ fn a_full_target_scissor_clear_uses_attachment_loads() {
     assert!(matches!(
         ops.first(),
         Some(Enc::BeginRenderPass { color, depth: Some(depth) })
-            if color[0].load == LoadOp::Clear && depth.load == LoadOp::Clear
+            if color[0].load == LoadOp::Clear && depth.depth_load == LoadOp::Clear
     ));
 }
 

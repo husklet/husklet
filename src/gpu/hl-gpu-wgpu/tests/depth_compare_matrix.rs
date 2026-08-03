@@ -179,7 +179,8 @@ fn drew_through(exec: &mut WgpuExecutor, frag: f32, stored: f32, depth_compare: 
                         }],
                         depth: Some(DepthAttachment {
                             texture: 2,
-                            load: LoadOp::Clear,
+                            depth_load: LoadOp::Clear,
+                            stencil_load: LoadOp::Clear,
                             clear_depth: stored,
                             clear_stencil: 0,
                         }),

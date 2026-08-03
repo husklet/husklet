@@ -132,7 +132,8 @@ fn a_render_pass_whose_attachments_disagree_on_extent_is_rejected() {
                     }],
                     depth: Some(DepthAttachment {
                         texture: 2,
-                        load: LoadOp::Clear,
+                        depth_load: LoadOp::Clear,
+                        stencil_load: LoadOp::Clear,
                         clear_depth: 1.0,
                         clear_stencil: 0,
                     }),

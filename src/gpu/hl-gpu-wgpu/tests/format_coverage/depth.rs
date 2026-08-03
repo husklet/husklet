@@ -63,7 +63,8 @@ fn depth_run(exec: &mut WgpuExecutor, ds_fmt: TextureFormat, cmp: u32) -> [u8; 4
         }],
         depth: Some(DepthAttachment {
             texture: 2,
-            load: LoadOp::Clear,
+            depth_load: LoadOp::Clear,
+            stencil_load: LoadOp::Clear,
             clear_depth: 1.0,
             clear_stencil: 0,
         }),

@@ -113,7 +113,8 @@ fn draw_cmds(
 ) -> Vec<Cmd> {
     let depth_att = depth.as_ref().map(|_| DepthAttachment {
         texture: 2,
-        load: LoadOp::Clear,
+        depth_load: LoadOp::Clear,
+        stencil_load: LoadOp::Clear,
         clear_depth: 1.0,
         clear_stencil: 0,
     });

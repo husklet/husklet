@@ -303,7 +303,8 @@ impl<'a> Decoder<'a> {
                 let depth = if d.bool()? {
                     Some(DepthAttachment {
                         texture: d.u32()?,
-                        load: LoadOp::from_u32(d.u32()?)?,
+                        depth_load: LoadOp::from_u32(d.u32()?)?,
+                        stencil_load: LoadOp::from_u32(d.u32()?)?,
                         clear_depth: d.f32_finite("depth attachment clear")?,
                         clear_stencil: d.u32()?, // v7
                     })

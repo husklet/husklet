@@ -2157,7 +2157,8 @@ fn external_spirv_depth_bias_clamp_limits_a_large_positive_bias() {
                 }],
                 depth: Some(DepthAttachment {
                     texture: depth,
-                    load: LoadOp::Clear,
+                    depth_load: LoadOp::Clear,
+                    stencil_load: LoadOp::Clear,
                     clear_depth: 0.5,
                     clear_stencil: 0,
                 }),
