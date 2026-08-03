@@ -68,6 +68,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let uv = xform.uv_off + in.uv * xform.uv_scale;
     return textureSample(src_tex, src_smp, uv);
 }
+
+// Metal exposes Vulkan B4G4R4A4 through its native ABGR4 attachment spelling. Sampled views carry the
+// inverse component swizzle, but attachment writes do not, so swap R/B at the write boundary.
+@fragment
+fn fs_bgra4(in: VsOut) -> @location(0) vec4<f32> {
+    let uv = xform.uv_off + in.uv * xform.uv_scale;
+    return textureSample(src_tex, src_smp, uv).bgra;
+}
 "#;
 
 /// D3 source variant. Each destination slice gets its own normalized source-z coordinate while x/y
@@ -401,7 +409,11 @@ impl BlitCache {
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &self.module,
-                entry_point: Some("fs_main"),
+                entry_point: Some(if format == wgpu::TextureFormat::B4g4r4a4Unorm {
+                    "fs_bgra4"
+                } else {
+                    "fs_main"
+                }),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: None,

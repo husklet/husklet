@@ -40,9 +40,11 @@ mod gpu_harness;
 use gpu_harness::*;
 
 use hl_gpu::protocol::model::descriptor::{
-    Extent3d, Mirror, Origin3d, TextureDesc, TextureSubresource,
+    BufferDesc, Extent3d, Mirror, Origin3d, TextureDesc, TextureSubresource,
 };
-use hl_gpu::protocol::model::enums::{texture_usage, Filter, TextureDim, TextureFormat};
+use hl_gpu::protocol::model::enums::{
+    buffer_usage, texture_usage, Filter, TextureDim, TextureFormat,
+};
 use hl_gpu::{
     Cmd, CommandBuffer, CpuExecutor, Enc, FakeClock, GlobalLedger, GpuExecutor, Limits, Session,
 };
@@ -185,4 +187,82 @@ fn metal_executes_every_linear_format_the_vulkan_surface_advertises() {
         on_executor(&mut exec, format, Filter::Linear)
             .unwrap_or_else(|error| panic!("{format:?} is advertised filterable: {error}"));
     }
+}
+
+#[test]
+fn metal_executes_b4g4r4a4_as_a_blit_destination() {
+    let mut exec = WgpuExecutor::new(DeviceConfig::default()).expect("Metal adapter");
+    let mut session = new_session(&exec);
+    let source = vec![0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 0, 0, 255];
+    let src = tex(TextureFormat::Rgba8Unorm);
+    let mut dst = tex(TextureFormat::B4g4r4a4Unorm);
+    dst.width = 1;
+    dst.height = 1;
+    hl_gpu::runtime::submit(
+        &mut session,
+        &mut exec,
+        0,
+        &[
+            Cmd::CreateTexture(1, src),
+            Cmd::CreateTexture(2, dst),
+            Cmd::CreateBuffer(
+                1,
+                BufferDesc {
+                    size: source.len() as u64,
+                    usage: buffer_usage::COPY_SRC,
+                    label: String::new(),
+                },
+            ),
+            Cmd::WriteBuffer {
+                id: 1,
+                offset: 0,
+                data: source,
+            },
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::CopyBufferToTextureRegion {
+                        src: 1,
+                        src_offset: 0,
+                        bytes_per_row: 8,
+                        rows_per_image: 2,
+                        dst: 1,
+                        dst_sub: TextureSubresource::base(),
+                        dst_origin: Origin3d::default(),
+                        extent: Extent3d {
+                            width: 2,
+                            height: 2,
+                            depth: 1,
+                        },
+                    },
+                    Enc::BlitTexture {
+                        src: 1,
+                        src_sub: TextureSubresource::base(),
+                        src_origin: Origin3d::default(),
+                        src_extent: Extent3d {
+                            width: 2,
+                            height: 2,
+                            depth: 1,
+                        },
+                        dst: 2,
+                        dst_sub: TextureSubresource::base(),
+                        dst_origin: Origin3d::default(),
+                        dst_extent: Extent3d {
+                            width: 1,
+                            height: 1,
+                            depth: 1,
+                        },
+                        filter: Filter::Nearest,
+                        mirror: Mirror::NONE,
+                    },
+                ],
+                signal: None,
+            }),
+        ],
+    )
+    .expect("B4G4R4A4 is a native Metal blit destination");
+    assert_eq!(
+        exec.read_texture(&session.resources, 2).unwrap(),
+        vec![0xff, 0x00],
+        "red and blue nibbles must retain Vulkan B4G4R4A4 order",
+    );
 }

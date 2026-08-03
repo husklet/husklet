@@ -150,6 +150,8 @@ pub enum FormatClass {
     UnfilterableFloatColor,
     /// Filterable sampled color without a render-target representation.
     SampledColor,
+    /// Filterable sampled color writable only through the blit executor's corrected attachment path.
+    BlitColor,
     /// Block-compressed color: sampled and copied only — never a render target.
     Compressed,
     /// Depth/stencil: a depth-stencil attachment, never a color one.
@@ -177,19 +179,27 @@ impl Format {
             | T::Rg8Uint
             | T::Rg8Sint
             | T::R32Uint
-            | T::R32Sint | T::R16Uint | T::R16Sint | T::Rg16Uint | T::Rg16Sint
-            | T::Rgba16Uint | T::Rgba16Sint | T::Rg32Uint | T::Rg32Sint
-            | T::Rgba32Uint | T::Rgba32Sint => FormatClass::IntegerColor,
+            | T::R32Sint
+            | T::R16Uint
+            | T::R16Sint
+            | T::Rg16Uint
+            | T::Rg16Sint
+            | T::Rgba16Uint
+            | T::Rgba16Sint
+            | T::Rg32Uint
+            | T::Rg32Sint
+            | T::Rgba32Uint
+            | T::Rgba32Sint => FormatClass::IntegerColor,
             T::R16Float | T::Rg16Float | T::Rgba16Float => FormatClass::FloatColor,
             T::R32Float | T::Rg32Float | T::Rgba32Float => FormatClass::UnfilterableFloatColor,
             T::Rgb9e5Ufloat => FormatClass::SampledColor,
             T::Rg11b10Ufloat => FormatClass::SampledColor,
             T::Rgb10a2Unorm => FormatClass::NormalizedColor,
             T::R5g6b5Unorm | T::A1r5g5b5Unorm => FormatClass::NormalizedColor,
-            // Metal exposes B4G4R4A4 through ABGR4 plus a sampled-view swizzle. Metal applies that
-            // swizzle to reads but not attachment writes, so advertising it as renderable would corrupt
-            // the packed red/blue nibbles. Vulkan requires its sampled/copy roles, which are exact.
-            T::B4g4r4a4Unorm => FormatClass::SampledColor,
+            // Metal exposes B4G4R4A4 through ABGR4 plus a sampled-view swizzle. The blit executor applies
+            // the matching R/B correction at its attachment write boundary; ordinary color attachments
+            // still cannot promise Vulkan component order.
+            T::B4g4r4a4Unorm => FormatClass::BlitColor,
             T::Rgb10a2Uint => FormatClass::IntegerColor,
             T::Depth32Float | T::Depth24PlusStencil8 => FormatClass::DepthStencil,
             other if other.block_geometry().is_some() => FormatClass::Compressed,
@@ -209,6 +219,7 @@ impl Format {
                     | FormatClass::FloatColor
                     | FormatClass::UnfilterableFloatColor
                     | FormatClass::SampledColor
+                    | FormatClass::BlitColor
             )
         )
     }
@@ -242,9 +253,13 @@ impl Format {
                 | T::Rgba8Uint
                 | T::Rgba8Sint
                 | T::Rgba16Float
-                | T::Rgba16Uint | T::Rgba16Sint | T::Rg32Uint | T::Rg32Sint
+                | T::Rgba16Uint
+                | T::Rgba16Sint
+                | T::Rg32Uint
+                | T::Rg32Sint
                 | T::Rg32Float
-                | T::Rgba32Uint | T::Rgba32Sint
+                | T::Rgba32Uint
+                | T::Rgba32Sint
                 | T::R32Float
                 | T::Rgba32Float,
             ) => format_feature::STORAGE_IMAGE,
@@ -312,8 +327,19 @@ impl Format {
             // request, and 32-bit float blending is not a core host capability either.
             Some(FormatClass::UnfilterableFloatColor) => COLOR_BASE | self.storage(),
             Some(FormatClass::SampledColor) => {
-                f::SAMPLED_IMAGE | f::SAMPLED_IMAGE_FILTER_LINEAR | f::BLIT_SRC
-                    | f::TRANSFER_SRC | f::TRANSFER_DST
+                f::SAMPLED_IMAGE
+                    | f::SAMPLED_IMAGE_FILTER_LINEAR
+                    | f::BLIT_SRC
+                    | f::TRANSFER_SRC
+                    | f::TRANSFER_DST
+            }
+            Some(FormatClass::BlitColor) => {
+                f::SAMPLED_IMAGE
+                    | f::SAMPLED_IMAGE_FILTER_LINEAR
+                    | f::BLIT_SRC
+                    | f::BLIT_DST
+                    | f::TRANSFER_SRC
+                    | f::TRANSFER_DST
             }
             // Block-compressed texels are decoded by the native sampler, including for the draw-based
             // blit source path. They cannot be written by a render pass or used as a blit destination.
@@ -407,16 +433,18 @@ impl Format {
         }
         if matches!(
             self.wire(),
-            Some(hl_gpu::protocol::model::enums::TextureFormat::Rg16Float
-                | hl_gpu::protocol::model::enums::TextureFormat::R8Snorm
-                | hl_gpu::protocol::model::enums::TextureFormat::R16Float
-                | hl_gpu::protocol::model::enums::TextureFormat::R16Uint
-                | hl_gpu::protocol::model::enums::TextureFormat::R16Sint
-                | hl_gpu::protocol::model::enums::TextureFormat::Rg16Uint
-                | hl_gpu::protocol::model::enums::TextureFormat::Rg16Sint
-                | hl_gpu::protocol::model::enums::TextureFormat::Rgb10a2Unorm
-                | hl_gpu::protocol::model::enums::TextureFormat::Rgb10a2Uint
-                | hl_gpu::protocol::model::enums::TextureFormat::Rg11b10Ufloat)
+            Some(
+                hl_gpu::protocol::model::enums::TextureFormat::Rg16Float
+                    | hl_gpu::protocol::model::enums::TextureFormat::R8Snorm
+                    | hl_gpu::protocol::model::enums::TextureFormat::R16Float
+                    | hl_gpu::protocol::model::enums::TextureFormat::R16Uint
+                    | hl_gpu::protocol::model::enums::TextureFormat::R16Sint
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rg16Uint
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rg16Sint
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rgb10a2Unorm
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rgb10a2Uint
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rg11b10Ufloat
+            )
         ) {
             buffer &= !f::STORAGE_TEXEL_BUFFER;
             buffer |= f::UNIFORM_TEXEL_BUFFER;
@@ -521,14 +549,40 @@ mod tests {
             let supported = matches!(
                 wire,
                 Some(
-                    T::Rgba8Unorm | T::Bgra8Unorm | T::R8Unorm | T::Rg8Unorm
-                        | T::R8Snorm | T::Rgba16Float | T::Rgba32Float | T::R32Float
-                        | T::Rgba8Uint | T::Rgba8Sint | T::R8Uint | T::R8Sint
-                        | T::Rg8Uint | T::Rg8Sint | T::Rgba32Uint | T::Rgba32Sint
-                        | T::R32Uint | T::R32Sint | T::Rg8Snorm | T::Rgba8Snorm | T::Rg16Float
-                        | T::R16Float | T::R16Uint | T::R16Sint | T::Rg16Uint | T::Rg16Sint
-                        | T::Rgba16Uint | T::Rgba16Sint | T::Rg32Float | T::Rg32Uint | T::Rg32Sint
-                        | T::Rgb10a2Unorm | T::Rgb10a2Uint | T::Rg11b10Ufloat
+                    T::Rgba8Unorm
+                        | T::Bgra8Unorm
+                        | T::R8Unorm
+                        | T::Rg8Unorm
+                        | T::R8Snorm
+                        | T::Rgba16Float
+                        | T::Rgba32Float
+                        | T::R32Float
+                        | T::Rgba8Uint
+                        | T::Rgba8Sint
+                        | T::R8Uint
+                        | T::R8Sint
+                        | T::Rg8Uint
+                        | T::Rg8Sint
+                        | T::Rgba32Uint
+                        | T::Rgba32Sint
+                        | T::R32Uint
+                        | T::R32Sint
+                        | T::Rg8Snorm
+                        | T::Rgba8Snorm
+                        | T::Rg16Float
+                        | T::R16Float
+                        | T::R16Uint
+                        | T::R16Sint
+                        | T::Rg16Uint
+                        | T::Rg16Sint
+                        | T::Rgba16Uint
+                        | T::Rgba16Sint
+                        | T::Rg32Float
+                        | T::Rg32Uint
+                        | T::Rg32Sint
+                        | T::Rgb10a2Unorm
+                        | T::Rgb10a2Uint
+                        | T::Rg11b10Ufloat
                 )
             );
             let bits = Format(format).features().buffer
@@ -536,7 +590,21 @@ mod tests {
             assert_eq!(bits != 0, supported, "VkFormat {format}, wire={wire:?}");
             assert_eq!(
                 bits,
-                if matches!(wire, Some(T::R8Snorm | T::Rg16Float | T::R16Float | T::R16Uint | T::R16Sint | T::Rg16Uint | T::Rg16Sint | T::Rgb10a2Unorm | T::Rgb10a2Uint | T::Rg11b10Ufloat)) {
+                if matches!(
+                    wire,
+                    Some(
+                        T::R8Snorm
+                            | T::Rg16Float
+                            | T::R16Float
+                            | T::R16Uint
+                            | T::R16Sint
+                            | T::Rg16Uint
+                            | T::Rg16Sint
+                            | T::Rgb10a2Unorm
+                            | T::Rgb10a2Uint
+                            | T::Rg11b10Ufloat
+                    )
+                ) {
                     format_feature::UNIFORM_TEXEL_BUFFER
                 } else if supported {
                     format_feature::UNIFORM_TEXEL_BUFFER | format_feature::STORAGE_TEXEL_BUFFER
@@ -722,13 +790,25 @@ mod tests {
     fn atomic_storage_is_claimed_only_for_executed_r32_integer_formats() {
         for format in [vk_format::R32_UINT, vk_format::R32_SINT] {
             let features = Format(format).features();
-            assert_ne!(features.optimal_tiling & format_feature::STORAGE_IMAGE_ATOMIC, 0);
-            assert_ne!(features.buffer & format_feature::STORAGE_TEXEL_BUFFER_ATOMIC, 0);
+            assert_ne!(
+                features.optimal_tiling & format_feature::STORAGE_IMAGE_ATOMIC,
+                0
+            );
+            assert_ne!(
+                features.buffer & format_feature::STORAGE_TEXEL_BUFFER_ATOMIC,
+                0
+            );
         }
         for format in [vk_format::R8G8B8A8_UINT, vk_format::R8G8B8A8_SINT] {
             let features = Format(format).features();
-            assert_eq!(features.optimal_tiling & format_feature::STORAGE_IMAGE_ATOMIC, 0);
-            assert_eq!(features.buffer & format_feature::STORAGE_TEXEL_BUFFER_ATOMIC, 0);
+            assert_eq!(
+                features.optimal_tiling & format_feature::STORAGE_IMAGE_ATOMIC,
+                0
+            );
+            assert_eq!(
+                features.buffer & format_feature::STORAGE_TEXEL_BUFFER_ATOMIC,
+                0
+            );
         }
     }
 
@@ -745,6 +825,16 @@ mod tests {
         assert_eq!(optimal & format_feature::COLOR_ATTACHMENT, 0);
         assert_eq!(optimal & format_feature::BLIT_DST, 0);
         assert_ne!(optimal & format_feature::BLIT_SRC, 0);
+    }
+
+    #[test]
+    fn b4g4r4a4_advertises_only_the_corrected_blit_write_path() {
+        let optimal = Format(vk_format::B4G4R4A4_UNORM_PACK16)
+            .features()
+            .optimal_tiling;
+        assert_ne!(optimal & format_feature::BLIT_SRC, 0);
+        assert_ne!(optimal & format_feature::BLIT_DST, 0);
+        assert_eq!(optimal & format_feature::COLOR_ATTACHMENT, 0);
     }
 
     #[test]
