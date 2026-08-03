@@ -71,29 +71,38 @@ impl GlContext {
 
     /// Capture the exact texture generation currently named by `gl_name` for a deferred draw.
     pub fn texture_snapshot(&self, gl_name: u32) -> Option<crate::model::program::TextureSnapshot> {
-        let texture = self.textures.get(gl_name)?.clone();
+        self.texture_snapshot_internal(u64::from(gl_name))
+    }
+
+    pub(crate) fn texture_snapshot_internal(
+        &self,
+        gl_name: u64,
+    ) -> Option<crate::model::program::TextureSnapshot> {
+        let texture = self.textures.get_internal(gl_name)?.clone();
         let generation = texture.gen;
         let sampled_generation = texture.sampled_generation();
-        let sampled_ir = self
-            .tex_ir_cache
-            .get(&gl_name)
-            .and_then(|&(ir, resident_generation)| {
-                ((resident_generation
-                    == (
-                        sampled_generation.0,
-                        sampled_generation.1,
-                        texture.uses_mipmaps(),
-                    ))
-                    || (resident_generation.0 == sampled_generation.0
-                        && resident_generation.1 == sampled_generation.1
-                        && resident_generation.2
-                        && !texture.uses_mipmaps()))
-                .then_some(ir)
-            });
-        let fbo_ir = self
-            .fbo_targets
-            .get(&(gl_name, generation))
-            .map(|&(_, texture)| texture);
+        let sampled_ir = u32::try_from(gl_name).ok().and_then(|gl_name| {
+            self.tex_ir_cache
+                .get(&gl_name)
+                .and_then(|&(ir, resident_generation)| {
+                    ((resident_generation
+                        == (
+                            sampled_generation.0,
+                            sampled_generation.1,
+                            texture.uses_mipmaps(),
+                        ))
+                        || (resident_generation.0 == sampled_generation.0
+                            && resident_generation.1 == sampled_generation.1
+                            && resident_generation.2
+                            && !texture.uses_mipmaps()))
+                    .then_some(ir)
+                })
+        });
+        let fbo_ir = u32::try_from(gl_name).ok().and_then(|gl_name| {
+            self.fbo_targets
+                .get(&(gl_name, generation))
+                .map(|&(_, texture)| texture)
+        });
         Some(crate::model::program::TextureSnapshot {
             name: gl_name,
             generation,

@@ -22,8 +22,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-/// Internal identities for the mutable default texture objects whose public binding name is zero.
-pub(crate) const DEFAULT_TEXTURE_CUBE: u32 = u32::MAX;
+/// Private texture key outside the complete public `GLuint` namespace.
+pub(crate) const DEFAULT_TEXTURE_CUBE: u64 = u64::MAX;
 
 #[derive(Clone)]
 pub(super) struct SharedTextureResidency {
@@ -453,11 +453,7 @@ impl GlContext {
         } else {
             self.local.tex_unit[self.local.active_texture]
         };
-        if name == 0 {
-            if cube { DEFAULT_TEXTURE_CUBE } else { 0 }
-        } else {
-            name
-        }
+        name
     }
 
     /// The texel format of the CPU shadow plane an upload into the active unit's texture must fill. An

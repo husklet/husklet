@@ -607,8 +607,56 @@ fn write_sub_rect(
 }
 
 #[derive(Debug)]
+struct TextureMap(HashMap<u64, GlTexture>);
+
+impl TextureMap {
+    fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    fn get(&self, name: &u32) -> Option<&GlTexture> {
+        self.0.get(&u64::from(*name))
+    }
+
+    fn get_mut(&mut self, name: &u32) -> Option<&mut GlTexture> {
+        self.0.get_mut(&u64::from(*name))
+    }
+
+    fn entry(&mut self, name: u32) -> std::collections::hash_map::Entry<'_, u64, GlTexture> {
+        self.0.entry(u64::from(name))
+    }
+
+    fn insert(&mut self, name: u32, texture: GlTexture) -> Option<GlTexture> {
+        self.0.insert(u64::from(name), texture)
+    }
+
+    fn remove(&mut self, name: &u32) -> Option<GlTexture> {
+        self.0.remove(&u64::from(*name))
+    }
+
+    fn values(&self) -> std::collections::hash_map::Values<'_, u64, GlTexture> {
+        self.0.values()
+    }
+
+    fn contains_internal(&self, key: u64) -> bool {
+        self.0.contains_key(&key)
+    }
+
+    fn insert_internal(&mut self, key: u64, texture: GlTexture) {
+        self.0.insert(key, texture);
+    }
+
+    fn get_internal(&self, key: u64) -> Option<&GlTexture> {
+        self.0.get(&key)
+    }
+
+    fn get_internal_mut(&mut self, key: u64) -> Option<&mut GlTexture> {
+        self.0.get_mut(&key)
+    }
+}
+
 pub struct Textures {
-    map: HashMap<u32, GlTexture>,
+    map: TextureMap,
     /// Stable object identities for the live public names in `map`.
     ///
     /// GL object names are reusable. An FBO attachment retains the object, not the spelling of the name,
@@ -625,7 +673,7 @@ pub struct Textures {
 impl Textures {
     pub fn new() -> Self {
         Self {
-            map: HashMap::new(),
+            map: TextureMap::new(),
             objects: HashMap::new(),
             live_objects: HashMap::new(),
             retired: HashMap::new(),
@@ -635,15 +683,17 @@ impl Textures {
         }
     }
 
-    fn materialize(&mut self, name: u32) {
-        if self.map.contains_key(&name) {
+    fn materialize(&mut self, name: u64) {
+        if self.map.contains_internal(name) {
             return;
         }
         let object = self.next_object;
         self.next_object = self.next_object.saturating_add(1);
-        self.map.insert(name, GlTexture::default());
-        self.objects.insert(name, object);
-        self.live_objects.insert(object, name);
+        self.map.insert_internal(name, GlTexture::default());
+        if let Ok(public_name) = u32::try_from(name) {
+            self.objects.insert(public_name, object);
+            self.live_objects.insert(object, public_name);
+        }
     }
 
     pub(crate) fn shared_residency(&self, storage: u64) -> Option<(u64, Weak<SharedPixels>)> {
@@ -666,20 +716,28 @@ impl Textures {
     pub fn gen(&mut self) -> u32 {
         let name = self.next_name;
         self.next_name += 1;
-        self.materialize(name);
+        self.materialize(u64::from(name));
         name
     }
 
     /// Materialize a non-zero name bound through `GL_CHROMIUM_bind_generates_resource`.
     pub fn ensure(&mut self, name: u32) {
         if name != 0 {
-            self.materialize(name);
+            self.materialize(u64::from(name));
             self.next_name = self.next_name.max(name.saturating_add(1));
         }
     }
 
-    pub(crate) fn ensure_default(&mut self, name: u32) {
+    pub(crate) fn ensure_default(&mut self, name: u64) {
         self.materialize(name);
+    }
+
+    pub(crate) fn get_internal(&self, name: u64) -> Option<&GlTexture> {
+        self.map.get_internal(name)
+    }
+
+    pub(crate) fn get_internal_mut(&mut self, name: u64) -> Option<&mut GlTexture> {
+        self.map.get_internal_mut(name)
     }
 
     /// Stable identity of the texture object currently named by `name`.
@@ -857,6 +915,17 @@ impl Textures {
         pixels: &[u8],
         format: TextureFormat,
     ) -> bool {
+        self.image_2d_internal(u64::from(name), w, h, pixels, format)
+    }
+
+    fn image_2d_internal(
+        &mut self,
+        name: u64,
+        w: i32,
+        h: i32,
+        pixels: &[u8],
+        format: TextureFormat,
+    ) -> bool {
         // The zeroed-storage byte size, computed in usize with a checked multiply so a large (or
         // adversarial) w*h never overflows an i32 and panics — an out-of-range extent saturates to a
         // no-alloc `None` rather than crashing the driver (the record layer raises GL_INVALID_VALUE).
@@ -864,7 +933,7 @@ impl Textures {
             .checked_mul(h.max(0) as usize)
             .and_then(|n| n.checked_mul(plane_bytes_per_texel(format)));
         let generation = self.generation();
-        let t = self.map.entry(name).or_default();
+        let t = self.map.0.entry(name).or_default();
         t.shared = None;
         t.shared_version = 0;
         t.w = w;
@@ -890,7 +959,7 @@ impl Textures {
     /// Define one base-level cube face while retaining the other five faces of the same texture object.
     pub fn image_cube_face(
         &mut self,
-        name: u32,
+        name: u64,
         face: usize,
         w: i32,
         h: i32,
@@ -901,11 +970,11 @@ impl Textures {
         if face >= 6 {
             return false;
         }
-        let accepted = self.image_2d(name, w, h, pixels, format);
+        let accepted = self.image_2d_internal(name, w, h, pixels, format);
         if accepted {
             let t = self
                 .map
-                .get_mut(&name)
+                .get_internal_mut(name)
                 .expect("image_2d materialized texture");
             t.cube_faces[face] = Some(Arc::clone(&t.data));
             t.cube_face_descs[face] = Some(CubeImageDesc {
@@ -964,7 +1033,7 @@ impl Textures {
     /// Define one non-base mip level of one cube face while retaining every sibling face.
     pub fn image_cube_level(
         &mut self,
-        name: u32,
+        name: u64,
         face: usize,
         level: u32,
         w: i32,
@@ -976,7 +1045,7 @@ impl Textures {
         if face >= 6 || level == 0 || level as usize > MAX_LEVELS || w <= 0 || h <= 0 {
             return false;
         }
-        let Some(texel) = self.map.get(&name).map(GlTexture::bytes_per_texel) else {
+        let Some(texel) = self.map.get_internal(name).map(GlTexture::bytes_per_texel) else {
             return false;
         };
         let Some(size) = (w as usize)
@@ -994,7 +1063,7 @@ impl Textures {
             pixels.to_vec()
         });
         let generation = self.generation();
-        let texture = self.map.get_mut(&name).expect("texture remained present");
+        let texture = self.map.get_internal_mut(name).expect("texture remained present");
         let index = level as usize - 1;
         if texture.mips.len() <= index {
             texture.mips.resize(index + 1, MipLevel::default());
@@ -1556,9 +1625,13 @@ impl Textures {
 
     /// `glTexParameteri` — set one filter/wrap parameter.
     pub fn set_param(&mut self, name: u32, pname: u32, value: u32) {
+        self.set_param_internal(u64::from(name), pname, value);
+    }
+
+    pub(crate) fn set_param_internal(&mut self, name: u64, pname: u32, value: u32) {
         let generation = self.generation();
         let mut bump = false;
-        if let Some(t) = self.map.get_mut(&name) {
+        if let Some(t) = self.map.get_internal_mut(name) {
             match pname {
                 GL_TEXTURE_MIN_FILTER => t.min_filter = value,
                 GL_TEXTURE_MAG_FILTER => t.mag_filter = value,
@@ -1606,11 +1679,11 @@ impl Textures {
     }
 
     pub fn len(&self) -> usize {
-        self.map.len()
+        self.objects.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
+        self.objects.is_empty()
     }
 }
 

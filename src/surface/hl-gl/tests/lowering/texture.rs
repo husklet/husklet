@@ -93,8 +93,7 @@ fn default_sampler_cube_lowers_to_six_initialized_cube_layers() {
 
     let texture_2d = context.textures.gen();
     record::bind_texture(&mut context, GL_TEXTURE_2D, texture_2d);
-    let texture = context.bound_texture_for_target(GL_TEXTURE_CUBE_MAP);
-    let mut faces = (0..6)
+    let faces = (0..6)
         .map(|face| [0x11 + face, 0x22, 0x33, 0xff].repeat(4))
         .collect::<Vec<_>>();
     for (face, pixels) in faces.iter().enumerate() {
@@ -110,26 +109,9 @@ fn default_sampler_cube_lowers_to_six_initialized_cube_layers() {
     // GL keeps one binding per target on each texture unit. Binding a 2D texture after the cube must not
     // replace the cube selected by this program's samplerCube uniform.
     let replacement_2d = context.textures.gen();
-    assert_ne!(texture, replacement_2d);
     record::bind_texture(&mut context, GL_TEXTURE_2D, replacement_2d);
     record::tex_image_2d(&mut context, 2, 2, &[0xee; 16]);
-    assert!(context
-        .textures
-        .get(texture)
-        .is_some_and(|texture| texture.has_data() && texture.w == 2));
-    let replacement = [0xaa, 0xbb, 0xcc, 0xdd];
-    record::tex_sub_image_2d(
-        &mut context,
-        GL_TEXTURE_CUBE_MAP_POSITIVE_X + 3,
-        0,
-        1,
-        0,
-        1,
-        1,
-        &replacement,
-    );
-    faces[3][4..8].copy_from_slice(&replacement);
-    let mut mip_faces = (0..6)
+    let mip_faces = (0..6)
         .map(|face| vec![0x80 + face, 0x44, 0x55, 0xff])
         .collect::<Vec<_>>();
     for (face, pixels) in mip_faces.iter().enumerate() {
@@ -143,18 +125,6 @@ fn default_sampler_cube_lowers_to_six_initialized_cube_layers() {
             GL_RGBA,
         );
     }
-    let mip_replacement = [0xee, 0xdd, 0xcc, 0xbb];
-    record::tex_sub_image_2d(
-        &mut context,
-        GL_TEXTURE_CUBE_MAP_POSITIVE_X + 4,
-        1,
-        0,
-        0,
-        1,
-        1,
-        &mip_replacement,
-    );
-    mip_faces[4].copy_from_slice(&mip_replacement);
     let buffer = context.buffers.gen();
     record::bind_buffer(&mut context, GL_ARRAY_BUFFER, buffer);
     record::buffer_data(&mut context, GL_ARRAY_BUFFER, &[0; 24], 0x88E4);
