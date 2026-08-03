@@ -56,10 +56,7 @@ impl Texture {
     /// 1x1, not 1x0, and a plane of zero rows would make the level occupy no bytes and every level after
     /// it start in the wrong place. The executor uses exactly this expression for its own readback.
     pub fn level_size(desc: &TextureDesc, mip: u32) -> (u32, u32) {
-        (
-            (desc.width >> mip).max(1),
-            (desc.height >> mip).max(1),
-        )
+        ((desc.width >> mip).max(1), (desc.height >> mip).max(1))
     }
 
     /// Bytes per texel AS THIS REFERENCE MATERIALIZES IT.
@@ -95,8 +92,8 @@ impl Texture {
             let (w, h) = Self::level_size(&self.desc, m);
             w as usize * h as usize * bpt * samples
         };
-        let start: usize = (0..mip).map(|m| plane_of(m) * layers).sum::<usize>()
-            + layer as usize * plane_of(mip);
+        let start: usize =
+            (0..mip).map(|m| plane_of(m) * layers).sum::<usize>() + layer as usize * plane_of(mip);
         Some(start..start + plane_of(mip))
     }
 
@@ -177,6 +174,9 @@ mod texel_size_agreement {
             checked += 1;
         }
         // An agreement test that checked nothing would pass just as loudly.
-        assert!(checked >= 12, "only {checked} formats exercised; the sweep found almost nothing");
+        assert!(
+            checked >= 12,
+            "only {checked} formats exercised; the sweep found almost nothing"
+        );
     }
 }

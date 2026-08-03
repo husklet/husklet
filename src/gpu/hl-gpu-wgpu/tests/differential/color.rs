@@ -322,7 +322,6 @@ pub(super) fn gen_clear_narrow(seed: u64) -> Prog {
     }
 }
 
-
 // -------------------------------------------------------------------------------------------------
 // Float colour targets — compared as VALUES in ULPs of the plane's own encoding, not as bytes
 // -------------------------------------------------------------------------------------------------

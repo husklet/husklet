@@ -392,8 +392,14 @@ mod uniforms;
 mod validation;
 
 pub use validation::{
+<<<<<<< HEAD
     invalid_declaration_identifier, invalid_fragment_output_mix, invalid_function_argument_basetype,
     invalid_implicit_arithmetic, invalid_storage_declaration,
+=======
+    invalid_declaration_identifier, invalid_fragment_output_mix,
+    invalid_function_argument_basetype, invalid_function_semantics, invalid_implicit_arithmetic,
+    invalid_scope_semantics, invalid_storage_declaration, invalid_vector_constructor,
+>>>>>>> abab99da8 (fix(glsl): validate lexical scopes)
     reserved_operator,
 };
 

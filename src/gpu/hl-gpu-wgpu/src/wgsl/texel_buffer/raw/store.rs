@@ -25,32 +25,82 @@ pub(super) fn build_partial_store(
         Span::default(),
     );
     let pointer = raw_pointer(function, global, index, bytes, 0, prefix_words);
-    let current = function.expressions.append(Expression::Load { pointer }, Span::default());
-    let local_pointer = function.expressions.append(Expression::LocalVariable(current_local), Span::default());
-    function.body.push(Statement::Emit(naga::Range::new_from_bounds(index, local_pointer)), Span::default());
-    function.body.push(Statement::Store { pointer: local_pointer, value: current }, Span::default());
+    let current = function
+        .expressions
+        .append(Expression::Load { pointer }, Span::default());
+    let local_pointer = function
+        .expressions
+        .append(Expression::LocalVariable(current_local), Span::default());
+    function.body.push(
+        Statement::Emit(naga::Range::new_from_bounds(index, local_pointer)),
+        Span::default(),
+    );
+    function.body.push(
+        Statement::Store {
+            pointer: local_pointer,
+            value: current,
+        },
+        Span::default(),
+    );
 
-    let loop_current = function.expressions.append(Expression::Load { pointer: local_pointer }, Span::default());
+    let loop_current = function.expressions.append(
+        Expression::Load {
+            pointer: local_pointer,
+        },
+        Span::default(),
+    );
     let desired = encode_partial_bytes(function, format, index, value, loop_current, bytes);
     let result_ty = module.generate_predeclared_type(
         naga::PredeclaredType::AtomicCompareExchangeWeakResult(naga::Scalar::U32),
     );
-    let result = function.expressions.append(Expression::AtomicResult { ty: result_ty, comparison: true }, Span::default());
-    let old = function.expressions.append(Expression::AccessIndex { base: result, index: 0 }, Span::default());
-    let exchanged = function.expressions.append(Expression::AccessIndex { base: result, index: 1 }, Span::default());
+    let result = function.expressions.append(
+        Expression::AtomicResult {
+            ty: result_ty,
+            comparison: true,
+        },
+        Span::default(),
+    );
+    let old = function.expressions.append(
+        Expression::AccessIndex {
+            base: result,
+            index: 0,
+        },
+        Span::default(),
+    );
+    let exchanged = function.expressions.append(
+        Expression::AccessIndex {
+            base: result,
+            index: 1,
+        },
+        Span::default(),
+    );
     let mut body = naga::Block::new();
-    body.push(Statement::Emit(naga::Range::new_from_bounds(loop_current, desired)), Span::default());
+    body.push(
+        Statement::Emit(naga::Range::new_from_bounds(loop_current, desired)),
+        Span::default(),
+    );
     body.push(
         Statement::Atomic {
             pointer,
-            fun: naga::AtomicFunction::Exchange { compare: Some(loop_current) },
+            fun: naga::AtomicFunction::Exchange {
+                compare: Some(loop_current),
+            },
             value: desired,
             result: Some(result),
         },
         Span::default(),
     );
-    body.push(Statement::Emit(naga::Range::new_from_bounds(old, exchanged)), Span::default());
-    body.push(Statement::Store { pointer: local_pointer, value: old }, Span::default());
+    body.push(
+        Statement::Emit(naga::Range::new_from_bounds(old, exchanged)),
+        Span::default(),
+    );
+    body.push(
+        Statement::Store {
+            pointer: local_pointer,
+            value: old,
+        },
+        Span::default(),
+    );
     body.push(
         Statement::If {
             condition: exchanged,

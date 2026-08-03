@@ -75,6 +75,223 @@ fn es2_rejects_integer_literal_for_float_function_parameter() {
 }
 
 #[test]
+<<<<<<< HEAD
+=======
+fn es2_rejects_function_declaration_definition_and_call_contract_violations() {
+    let invalid = [
+        "void func(float f){} void main(){func(1.0,2.0);}",
+        "void func(float f){} void main(){func();}",
+        "void func(vec2 f){} void main(){func(2.0);}",
+        "void func(vec3 f){} void main(){func(vec2(2.0));}",
+        "void func(vec3 f); void func(vec3 f){} void func(vec3 f){} void main(){}",
+        "void func(vec3 f); float func(vec3 f){return f.x;} void main(){}",
+        "void func(vec3 f); void func(const vec3 f){} void main(){}",
+        "void func(out vec3 f); void func(inout vec3 f){} void main(){}",
+        "void func(vec3 f[]); void main(){}",
+        "void func(vec3 f[3]); void func(vec3 f[3]){} void main(){vec3 values[4];func(values);}",
+        "void main(){func(1.0);} void func(float f){}",
+        "float func(float f){return;} void main(){}",
+        "void func(){return 1.0;} void main(){}",
+        "float func(float f){return f;} int func(float f){return int(f);} void main(){}",
+        "lowp float func(float f){return f;} mediump float func(float f){return f;} void main(){}",
+        "void main(float f){}",
+        "float main(){}",
+        "main(){}",
+        "void main(){float nested(float f);}",
+        "void main(){float nested(float f){return f;}}",
+        "struct Foo { float value; float array[2]; }; Foo func(){Foo f; return f;} void main(){}",
+        "struct Foo { float value; }; float Foo(float f){return f;} void main(){}",
+        "void func(const float f){f=1.0;} void main(){}",
+        "void func(const float f[3]){f[0]=1.0;} void main(){}",
+        "int func(const int a){const int b=-a; return b;} void main(){}",
+        "int func(const int a){int values[a]; return values[0];} void main(){}",
+        "void func(uniform float f){} void main(){}",
+        "uniform float func(float f){return f;} void main(){}",
+        "void func(){break;} void main(){}",
+        "void func(){continue;} void main(){}",
+    ];
+    for source in invalid {
+        for kind in [GL_VERTEX_SHADER, GL_FRAGMENT_SHADER] {
+            let mut context = GlContext::new();
+            let (status, log) = compile(&mut context, kind, source);
+            assert_eq!(
+                status, GL_FALSE as i32,
+                "accepted invalid function source:\n{source}"
+            );
+            assert!(!log.is_empty(), "missing diagnostic for:\n{source}");
+        }
+    }
+}
+
+#[test]
+fn valid_function_overloads_prototypes_calls_and_const_reads_remain_accepted() {
+    let valid = [
+        "float func(float value); float func(float other){return other;} void main(){float x=func(1.0);}",
+        "float func(float f){return f;} int func(int i){return i;} void main(){float x=func(1.0);}",
+        "int func(const int a){return 2*a;} void main(){int x=func(3);}",
+        "void func(){for(int i=0;i<1;i++){continue;break;}} void main(){}",
+        "struct Pair{float x;}; float func(Pair pair){return pair.x;} void main(){}",
+    ];
+    for source in valid {
+        let mut context = GlContext::new();
+        let (status, log) = compile(&mut context, GL_VERTEX_SHADER, source);
+        assert_eq!(
+            status, GL_TRUE as i32,
+            "false function rejection: {log}\n{source}"
+        );
+    }
+}
+
+#[test]
+fn es2_enforces_parameter_qualifier_grammar_order() {
+    let invalid = [
+        "lowp const in float value",
+        "const lowp in float value",
+        "in const lowp float value",
+        "lowp in const float value",
+        "in lowp const float value",
+        "lowp const float value",
+        "lowp in float value",
+    ];
+    for parameter in invalid {
+        let source = format!("void func({parameter}){{}} void main(){{}}");
+        let mut context = GlContext::new();
+        let (status, log) = compile(&mut context, GL_VERTEX_SHADER, &source);
+        assert_eq!(
+            status, GL_FALSE as i32,
+            "accepted qualifier order: {parameter}"
+        );
+        assert!(log.contains("out of order"), "bad diagnostic: {log}");
+    }
+
+    for parameter in [
+        "const in lowp float value",
+        "out mediump float value",
+        "inout mediump float value",
+        "const lowp float value",
+        "mediump float value",
+        "in lowp float value",
+    ] {
+        let source = format!("void func({parameter}){{}} void main(){{}}");
+        let mut context = GlContext::new();
+        let (status, log) = compile(&mut context, GL_VERTEX_SHADER, &source);
+        assert_eq!(
+            status, GL_TRUE as i32,
+            "rejected valid qualifier order: {log}"
+        );
+    }
+}
+
+#[test]
+fn es2_vector_constructors_require_the_exact_component_count() {
+    let mut context = GlContext::new();
+    for source_type in ["vec2", "ivec2", "bvec2"] {
+        for destination_type in ["vec3", "ivec3", "bvec3", "vec4", "ivec4", "bvec4"] {
+            let source = format!(
+                "void main(){{ {source_type} source_value; {destination_type} result={destination_type}(source_value); }}"
+            );
+            let (status, log) = compile(&mut context, GL_VERTEX_SHADER, &source);
+            assert_eq!(
+                status, GL_FALSE as i32,
+                "accepted undersized constructor: {source}"
+            );
+            assert!(
+                log.contains("components"),
+                "missing component diagnostic: {log}"
+            );
+        }
+    }
+    for source_type in ["vec3", "ivec3", "bvec3"] {
+        for destination_type in ["vec4", "ivec4", "bvec4"] {
+            let source = format!(
+                "void main(){{ {source_type} source_value; {destination_type} result={destination_type}(source_value); }}"
+            );
+            let (status, _) = compile(&mut context, GL_FRAGMENT_SHADER, &source);
+            assert_eq!(
+                status, GL_FALSE as i32,
+                "accepted undersized constructor: {source}"
+            );
+        }
+    }
+}
+
+#[test]
+fn legal_vector_splats_conversions_and_component_composition_remain_accepted() {
+    let mut context = GlContext::new();
+    for source in [
+        "void main(){vec4 value=vec4(1.0);}",
+        "void main(){ivec3 source_value; vec3 value=vec3(source_value);}",
+        "void main(){vec2 source_value; vec3 value=vec3(source_value,1.0);}",
+        "void main(){vec2 left; vec2 right; vec4 value=vec4(left,right);}",
+        "void main(){vec4 source_value; vec4 value=vec4(source_value.xyz,1.0);}",
+        "vec3 helper(){return vec3(1.0);} void main(){vec4 value=vec4(helper(),1.0);}",
+    ] {
+        let (status, log) = compile(&mut context, GL_VERTEX_SHADER, source);
+        assert_eq!(
+            status, GL_TRUE as i32,
+            "false constructor rejection: {log}\n{source}"
+        );
+    }
+}
+
+#[test]
+fn es2_rejects_invalid_lexical_scope_and_symbol_namespace_uses() {
+    let invalid = [
+        "int value; float value; void main(){}",
+        "void main(){int value; float value;}",
+        "float func(float x); float func(float x); float func(float x){return x;} void main(){}",
+        "float sin(float x); void main(){}",
+        "float sin(float x){return x;} void main(){}",
+        "void item(int x); struct item{int x;}; void main(){}",
+        "void item(int x); float item; void main(){}",
+        "void func(){value=2.0;} float value; void main(){func();}",
+        "void main(){float left=1.0; left=right; float right=2.0;}",
+        "float func(float x){return Shape(x).value;} struct Shape{float value;}; void main(){}",
+        "void main(){{float inner=1.0;} float result=inner;}",
+        "void main(){if(true) float inner=1.0; float result=inner;}",
+        "void main(){if(false) float left=1.0; else float right=2.0; float result=right;}",
+        "void main(){float result; if(true){float inner=1.0;}else{result=inner;}}",
+        "void main(){float value=value;}",
+        "float func(float before); float func(float actual){return before;} void main(){}",
+        "void main(){for(int index=0;index<2;index++){int index=1;}}",
+        "void main(){for(int index=0;int condition=(index<2);index++){int condition=1;}}",
+        "void main(){for(int index=0;int index=(index<2);index++){}}",
+        "void main(){int count=0;while(bool active=(count<2)){bool active=false;count++;}}",
+        "void main(){for(int index=0;index<2;index++){} int result=index;}",
+        "void main(){int count=0;while(bool active=(count<2)){count++;} bool result=active;}",
+    ];
+    for source in invalid {
+        let mut context = GlContext::new();
+        let (status, log) = compile(&mut context, GL_VERTEX_SHADER, source);
+        assert_eq!(status, GL_FALSE as i32, "accepted invalid scope:\n{source}");
+        assert!(!log.is_empty(), "missing scope diagnostic: {source}");
+    }
+}
+
+#[test]
+fn legal_nested_shadowing_and_symbol_lifetimes_remain_accepted() {
+    let valid = [
+        "float global_value; void func(){global_value=1.0;} void main(){func();}",
+        "void main(){float value=1.0; {float value=2.0;} value=3.0;}",
+        "void main(){if(true){float branch=1.0; branch=2.0;}else{float branch=3.0; branch=4.0;}}",
+        "float func(float value){return value;} void main(){float value=func(1.0);}",
+        "struct Pair{float value;}; float func(Pair pair){return pair.value;} void main(){}",
+        "void main(){float first=1.0; float second=first;}",
+        "void main(){float result=0.0; for(int index=0;index<2;index++){result+=float(index);}}",
+        "void main(){int count=0; while(bool active=(count<2)){if(active){count++;}}}",
+    ];
+    for source in valid {
+        let mut context = GlContext::new();
+        let (status, log) = compile(&mut context, GL_FRAGMENT_SHADER, source);
+        assert_eq!(
+            status, GL_TRUE as i32,
+            "false scope rejection: {log}\n{source}"
+        );
+    }
+}
+
+#[test]
+>>>>>>> abab99da8 (fix(glsl): validate lexical scopes)
 fn es2_rejects_static_use_of_both_fragment_output_interfaces() {
     let mut context = GlContext::new();
     for body in [

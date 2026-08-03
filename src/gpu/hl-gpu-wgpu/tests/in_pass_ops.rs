@@ -181,10 +181,18 @@ fn a_copy_inside_a_render_pass_is_refused_not_dropped() {
             Enc::SetPipeline(1),
             Enc::CopyTextureToTexture {
                 src: 1,
-                src_sub: TextureSubresource { mip: 0, layer: 0, aspect: TextureAspect::All },
+                src_sub: TextureSubresource {
+                    mip: 0,
+                    layer: 0,
+                    aspect: TextureAspect::All,
+                },
                 src_origin: Origin3d { x: 0, y: 0, z: 0 },
                 dst: 2,
-                dst_sub: TextureSubresource { mip: 0, layer: 0, aspect: TextureAspect::All },
+                dst_sub: TextureSubresource {
+                    mip: 0,
+                    layer: 0,
+                    aspect: TextureAspect::All,
+                },
                 dst_origin: Origin3d { x: 0, y: 0, z: 0 },
                 extent: Extent3d {
                     width: W,

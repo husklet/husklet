@@ -156,7 +156,15 @@ fn drawing_with_a_program_that_failed_to_link_lowers_presents_and_reads_back() {
     );
 
     // And the readback path over the same state is equally safe.
-    let pixels = readpixels::read_pixels(&mut c, &mut sink, 0, 0, 320, 240, readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE))
-        .expect("glReadPixels after a failed-link frame");
+    let pixels = readpixels::read_pixels(
+        &mut c,
+        &mut sink,
+        0,
+        0,
+        320,
+        240,
+        readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE),
+    )
+    .expect("glReadPixels after a failed-link frame");
     assert_eq!(pixels.len(), 320 * 240 * 4);
 }

@@ -355,7 +355,7 @@ fn oracle_refuses_a_clear_of_a_non_base_subresource() {
         let ok = match expected {
             Refusal::OutOfBounds => matches!(err, hl_gpu::GpuError::OutOfBounds),
             Refusal::Unsupported => matches!(err, hl_gpu::GpuError::Unsupported(_)),
-            };
+        };
         assert!(ok, "{label} must be refused as {expected:?}, got {err:?}");
     }
 

@@ -11,16 +11,24 @@ fn heartbeat_reports_first_then_on_cadence_and_never_goes_quiet() {
         assert!(hb.record("a").is_none(), "reported inside the interval");
     }
     std::thread::sleep(Duration::from_millis(45));
-    let beat = hb.record("a").expect("must report once the interval elapsed");
+    let beat = hb
+        .record("a")
+        .expect("must report once the interval elapsed");
     assert_eq!(beat.total, 52);
-    assert_eq!(beat.in_window, 51, "the window count is since the last report");
+    assert_eq!(
+        beat.in_window, 51,
+        "the window count is since the last report"
+    );
     // Unlike a power-of-ten latch, it keeps speaking however long it runs.
     for round in 0..3 {
         std::thread::sleep(Duration::from_millis(45));
         assert!(hb.record("a").is_some(), "went quiet on round {round}");
     }
     // Distinct keys are independent, which is what makes shown/offscreen separable per surface.
-    assert!(hb.record("b").is_some(), "a new key must report immediately");
+    assert!(
+        hb.record("b").is_some(),
+        "a new key must report immediately"
+    );
 }
 
 /// The route change is what gets reported, not the route.
@@ -68,6 +76,10 @@ fn a_route_is_reported_on_change_and_not_repeated() {
          came from so a reader can see the recovery",
     );
     // The distinguishing property: the racing surface has a `shown` line and the stuck one does not.
-    assert!(reported.iter().any(|(sid, route, _)| *sid == 1 && *route == "shown"));
-    assert!(!reported.iter().any(|(sid, route, _)| *sid == 2 && *route == "shown"));
+    assert!(reported
+        .iter()
+        .any(|(sid, route, _)| *sid == 1 && *route == "shown"));
+    assert!(!reported
+        .iter()
+        .any(|(sid, route, _)| *sid == 2 && *route == "shown"));
 }

@@ -87,8 +87,16 @@ fn a_clear_writes_the_layers_it_names_and_no_others() {
     let green = vec![0u8, 255, 0, 255];
 
     // Positive control: a range covering the base layer changes it.
-    assert_eq!(program(0, 1), green, "a clear of layer 0 must write layer 0");
-    assert_eq!(program(0, 3), green, "a clear of every layer includes layer 0");
+    assert_eq!(
+        program(0, 1),
+        green,
+        "a clear of layer 0 must write layer 0"
+    );
+    assert_eq!(
+        program(0, 3),
+        green,
+        "a clear of every layer includes layer 0"
+    );
 
     // The real assertion: a range that excludes the base layer must not touch it.
     assert_eq!(
@@ -302,8 +310,14 @@ fn a_multisampled_texture_cannot_be_layered() {
         )])
     };
     // Positive controls: each on its own is fine, so the refusal is about the COMBINATION.
-    assert!(msaa(4, 1).is_ok(), "a multisampled single-layer texture is fine");
-    assert!(msaa(1, 4).is_ok(), "a layered single-sampled texture is fine");
+    assert!(
+        msaa(4, 1).is_ok(),
+        "a multisampled single-layer texture is fine"
+    );
+    assert!(
+        msaa(1, 4).is_ok(),
+        "a layered single-sampled texture is fine"
+    );
 
     let err = msaa(4, 2).expect_err("multisampled and layered together is refused");
     assert!(
@@ -450,7 +464,6 @@ fn every_dimension_is_materialized_and_refused_where_the_executor_refuses_it() {
     );
 }
 
-
 /// A texture VIEW is refused, because this reference cannot alias and a snapshot is worse than nothing.
 ///
 /// The base view — whole mip, whole layer — used to be accepted by cloning the texture into the view's
@@ -558,7 +571,10 @@ fn a_multisampled_texture_is_refused_by_a_blit_on_both_sides() {
     };
 
     // Positive control: plain to plain runs, so the refusals are about the sample count.
-    assert!(attempt(blit(2, 2)).is_ok(), "a single-sampled blit must run");
+    assert!(
+        attempt(blit(2, 2)).is_ok(),
+        "a single-sampled blit must run"
+    );
 
     for (op, side) in [(blit(1, 2), "source"), (blit(2, 1), "destination")] {
         let err = attempt(op).expect_err("a multisampled side must be refused");

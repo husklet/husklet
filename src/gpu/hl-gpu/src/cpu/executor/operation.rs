@@ -324,7 +324,6 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
             dst_offset,
             bytes_per_row,
         } => {
-
             let t = texture_with_usage(
                 res,
                 *src,
@@ -532,17 +531,13 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
             // and `Rgba16Float` into `Rgba8Unorm` both run there, and refusing them here produced a
             // divergence that belonged to the oracle rather than to either backend.
             let d_fmt = d.desc.format;
-            let (_, _) = (
-                s_fmt.software_texel_bytes()?,
-                d_fmt.software_texel_bytes()?,
-            );
+            let (_, _) = (s_fmt.software_texel_bytes()?, d_fmt.software_texel_bytes()?);
             if s_fmt.numeric_class() != d_fmt.numeric_class() {
                 return Err(GpuError::Invalid(
                     "software: blit source and destination numeric classes differ",
                 ));
             }
-            if s_fmt.numeric_class()
-                != crate::protocol::model::enums::TextureNumericClass::Float
+            if s_fmt.numeric_class() != crate::protocol::model::enums::TextureNumericClass::Float
                 && *filter == Filter::Linear
             {
                 return Err(GpuError::Unsupported(

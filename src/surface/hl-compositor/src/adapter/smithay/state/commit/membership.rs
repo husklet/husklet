@@ -17,7 +17,11 @@ impl HlState {
         // A buffer, for the same reason as `was_mapped`: output membership follows content that has
         // ARRIVED, and a token is a promise that it will. Entering an output before the first commit
         // told a client its scale and output before it had mapped anything.
-        let mapped = self.engine.scene.get(root).is_some_and(|s| s.buffer.is_some());
+        let mapped = self
+            .engine
+            .scene
+            .get(root)
+            .is_some_and(|s| s.buffer.is_some());
         let current = self.entered_outputs.get(&root).copied();
         let target = self.engine.scene.selected_output(root).map(|o| o.id);
         if mapped {

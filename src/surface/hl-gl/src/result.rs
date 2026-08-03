@@ -210,10 +210,22 @@ mod tests {
     fn a_classified_refusal_reports_what_the_same_failure_would_report_locally() {
         for (kind, egl, gl) in [
             (RefusalKind::ResourceLimit, EGL_BAD_ALLOC, GL_OUT_OF_MEMORY),
-            (RefusalKind::Unsupported, EGL_BAD_MATCH, GL_INVALID_OPERATION),
-            (RefusalKind::UnknownId, EGL_BAD_SURFACE, GL_INVALID_OPERATION),
+            (
+                RefusalKind::Unsupported,
+                EGL_BAD_MATCH,
+                GL_INVALID_OPERATION,
+            ),
+            (
+                RefusalKind::UnknownId,
+                EGL_BAD_SURFACE,
+                GL_INVALID_OPERATION,
+            ),
             (RefusalKind::Invalid, EGL_BAD_PARAMETER, GL_INVALID_VALUE),
-            (RefusalKind::OutOfBounds, EGL_BAD_PARAMETER, GL_INVALID_VALUE),
+            (
+                RefusalKind::OutOfBounds,
+                EGL_BAD_PARAMETER,
+                GL_INVALID_VALUE,
+            ),
             (RefusalKind::Unstated, EGL_BAD_ACCESS, GL_INVALID_OPERATION),
         ] {
             let error = refused_as(kind);

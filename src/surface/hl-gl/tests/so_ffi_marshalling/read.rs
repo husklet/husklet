@@ -52,15 +52,7 @@ fn gl_readpixels_and_vertex_attrib_getters_marshal() {
 
     // A type that is not a readback type at all still fails the enum check, which is what keeps the
     // assertion above from being satisfied by a driver that simply renamed one error to the other.
-    gl_read_pixels(
-        0,
-        0,
-        2,
-        2,
-        GL_RGBA,
-        0xBEEF,
-        px.as_mut_ptr() as *mut c_void,
-    );
+    gl_read_pixels(0, 0, 2, 2, GL_RGBA, 0xBEEF, px.as_mut_ptr() as *mut c_void);
     assert_eq!(
         gl_get_error(),
         GL_INVALID_ENUM,

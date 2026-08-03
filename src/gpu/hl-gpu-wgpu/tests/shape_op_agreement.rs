@@ -31,36 +31,165 @@ use hl_gpu::{
 use hl_gpu_wgpu::{DeviceConfig, WgpuExecutor};
 
 fn d(dim: TextureDim, w: u32, h: u32, depth: u32) -> TextureDesc {
-    TextureDesc { width:w, height:h, depth, mip_levels:1, sample_count:1, dim,
+    TextureDesc {
+        width: w,
+        height: h,
+        depth,
+        mip_levels: 1,
+        sample_count: 1,
+        dim,
         format: TextureFormat::Rgba8Unorm,
         usage: texture_usage::RENDER_TARGET | texture_usage::COPY_SRC | texture_usage::COPY_DST,
-        label: String::new() }
+        label: String::new(),
+    }
 }
-fn sb() -> TextureSubresource { TextureSubresource::base() }
-fn sub1() -> TextureSubresource { TextureSubresource { mip:0, layer:1, aspect: TextureAspect::All } }
+fn sb() -> TextureSubresource {
+    TextureSubresource::base()
+}
+fn sub1() -> TextureSubresource {
+    TextureSubresource {
+        mip: 0,
+        layer: 1,
+        aspect: TextureAspect::All,
+    }
+}
 
 fn programs(desc: &TextureDesc) -> Vec<(&'static str, Vec<Cmd>)> {
     let (w, h) = (desc.width, desc.height);
-    let ext = Extent3d { width:w, height:h, depth:1 };
-    let pre = |extra: Vec<Enc>| vec![
-        Cmd::CreateTexture(1, desc.clone()),
-        Cmd::CreateTexture(2, d(TextureDim::D2, w, h, 1)),
-        Cmd::CreateBuffer(1, BufferDesc { size: (w*h*4) as u64, usage: buffer_usage::COPY_SRC|buffer_usage::COPY_DST, label:String::new() }),
-        Cmd::Submit(CommandBuffer { encoder: extra, signal: None }),
-    ];
+    let ext = Extent3d {
+        width: w,
+        height: h,
+        depth: 1,
+    };
+    let pre = |extra: Vec<Enc>| {
+        vec![
+            Cmd::CreateTexture(1, desc.clone()),
+            Cmd::CreateTexture(2, d(TextureDim::D2, w, h, 1)),
+            Cmd::CreateBuffer(
+                1,
+                BufferDesc {
+                    size: (w * h * 4) as u64,
+                    usage: buffer_usage::COPY_SRC | buffer_usage::COPY_DST,
+                    label: String::new(),
+                },
+            ),
+            Cmd::Submit(CommandBuffer {
+                encoder: extra,
+                signal: None,
+            }),
+        ]
+    };
     vec![
-        ("ClearRect", pre(vec![Enc::ClearRect { texture:1, x:0,y:0,w,h, color:[1.0,0.0,0.0,1.0], base_array_layer:0, layer_count:1, mip_level:0 }])),
-        ("B2T",  pre(vec![Enc::CopyBufferToTexture { src:1, src_offset:0, bytes_per_row:w*4, dst:1, mip:0, width:w, height:h }])),
-        ("T2B",  pre(vec![Enc::CopyTextureToBuffer { src:1, mip:0, width:w, height:h, dst:1, dst_offset:0, bytes_per_row:w*4 }])),
-        ("T2T",  pre(vec![Enc::CopyTextureToTexture { src:1, src_sub:sb(), src_origin:Origin3d::default(), dst:2, dst_sub:sb(), dst_origin:Origin3d::default(), extent:ext }])),
-        ("Blit", pre(vec![Enc::BlitTexture { src:1, src_sub:sb(), src_origin:Origin3d::default(), src_extent:ext, dst:2, dst_sub:sb(), dst_origin:Origin3d::default(), dst_extent:ext, filter:Filter::Nearest, mirror:Mirror::NONE }])),
+        (
+            "ClearRect",
+            pre(vec![Enc::ClearRect {
+                texture: 1,
+                x: 0,
+                y: 0,
+                w,
+                h,
+                color: [1.0, 0.0, 0.0, 1.0],
+                base_array_layer: 0,
+                layer_count: 1,
+                mip_level: 0,
+            }]),
+        ),
+        (
+            "B2T",
+            pre(vec![Enc::CopyBufferToTexture {
+                src: 1,
+                src_offset: 0,
+                bytes_per_row: w * 4,
+                dst: 1,
+                mip: 0,
+                width: w,
+                height: h,
+            }]),
+        ),
+        (
+            "T2B",
+            pre(vec![Enc::CopyTextureToBuffer {
+                src: 1,
+                mip: 0,
+                width: w,
+                height: h,
+                dst: 1,
+                dst_offset: 0,
+                bytes_per_row: w * 4,
+            }]),
+        ),
+        (
+            "T2T",
+            pre(vec![Enc::CopyTextureToTexture {
+                src: 1,
+                src_sub: sb(),
+                src_origin: Origin3d::default(),
+                dst: 2,
+                dst_sub: sb(),
+                dst_origin: Origin3d::default(),
+                extent: ext,
+            }]),
+        ),
+        (
+            "Blit",
+            pre(vec![Enc::BlitTexture {
+                src: 1,
+                src_sub: sb(),
+                src_origin: Origin3d::default(),
+                src_extent: ext,
+                dst: 2,
+                dst_sub: sb(),
+                dst_origin: Origin3d::default(),
+                dst_extent: ext,
+                filter: Filter::Nearest,
+                mirror: Mirror::NONE,
+            }]),
+        ),
         // The REGION copies at a NON-BASE layer, which is the only channel that observes a plane the
         // whole-texture readback cannot reach. On a single-plane shape layer 1 does not exist and both
         // backends must say so — agreement about the bound is as much the subject as agreement about
         // the transfer.
-        ("B2Trgn", pre(vec![Enc::CopyBufferToTextureRegion { src:1, src_offset:0, bytes_per_row:w*4, rows_per_image:h, dst:1, dst_sub:sub1(), dst_origin:Origin3d::default(), extent:ext }])),
-        ("T2Brgn", pre(vec![Enc::CopyTextureToBufferRegion { src:1, src_sub:sub1(), src_origin:Origin3d::default(), extent:ext, dst:1, dst_offset:0, bytes_per_row:w*4, rows_per_image:h }])),
-        ("Pass", pre(vec![Enc::BeginRenderPass { color: vec![ColorAttachment { texture:1, load:LoadOp::Clear, clear:[0.0,0.0,0.0,1.0], store:true }], depth: None }, Enc::EndRenderPass])),
+        (
+            "B2Trgn",
+            pre(vec![Enc::CopyBufferToTextureRegion {
+                src: 1,
+                src_offset: 0,
+                bytes_per_row: w * 4,
+                rows_per_image: h,
+                dst: 1,
+                dst_sub: sub1(),
+                dst_origin: Origin3d::default(),
+                extent: ext,
+            }]),
+        ),
+        (
+            "T2Brgn",
+            pre(vec![Enc::CopyTextureToBufferRegion {
+                src: 1,
+                src_sub: sub1(),
+                src_origin: Origin3d::default(),
+                extent: ext,
+                dst: 1,
+                dst_offset: 0,
+                bytes_per_row: w * 4,
+                rows_per_image: h,
+            }]),
+        ),
+        (
+            "Pass",
+            pre(vec![
+                Enc::BeginRenderPass {
+                    color: vec![ColorAttachment {
+                        texture: 1,
+                        load: LoadOp::Clear,
+                        clear: [0.0, 0.0, 0.0, 1.0],
+                        store: true,
+                    }],
+                    depth: None,
+                },
+                Enc::EndRenderPass,
+            ]),
+        ),
     ]
 }
 
@@ -93,16 +222,22 @@ fn every_shape_and_op_agrees_on_what_is_legal() {
     let mut compared = 0usize;
     let mut accepted = 0usize;
     for (name, desc) in [
-        ("1D",    d(TextureDim::D1, 4, 1, 1)),
-        ("3D",    d(TextureDim::D3, 2, 2, 3)),
-        ("Cube",  d(TextureDim::Cube, 2, 2, 6)),
+        ("1D", d(TextureDim::D1, 4, 1, 1)),
+        ("3D", d(TextureDim::D3, 2, 2, 3)),
+        ("Cube", d(TextureDim::Cube, 2, 2, 6)),
         ("2Darr", d(TextureDim::D2, 2, 2, 3)),
-        ("2D",    d(TextureDim::D2, 2, 2, 1)),
+        ("2D", d(TextureDim::D2, 2, 2, 1)),
         // A MULTI-LEVEL texture. Every shape above declares one mip level, which is why this matrix
         // did not reach the level axis at all: a three-level texture named as a colour attachment
         // reached `RenderPass::end` as `TextureViewIsNotRenderable { reason: MipLevelCount(3) }`, and
         // nothing here could see it because nothing here had more than one level.
-        ("2Dmip", TextureDesc { mip_levels: 3, ..d(TextureDim::D2, 4, 4, 1) }),
+        (
+            "2Dmip",
+            TextureDesc {
+                mip_levels: 3,
+                ..d(TextureDim::D2, 4, 4, 1)
+            },
+        ),
     ] {
         let mut line = format!("{name:6}");
         for (op, cmds) in programs(&desc) {
@@ -114,7 +249,11 @@ fn every_shape_and_op_agrees_on_what_is_legal() {
                 "executor",
             );
             let mut cpu = CpuExecutor::new();
-            let mut s2 = Session::new(Limits::from_capabilities(cpu.capabilities()), GlobalLedger::unbounded(), Box::new(FakeClock::new(0)));
+            let mut s2 = Session::new(
+                Limits::from_capabilities(cpu.capabilities()),
+                GlobalLedger::unbounded(),
+                Box::new(FakeClock::new(0)),
+            );
             let refr = answered(
                 hl_gpu::runtime::submit(&mut s2, &mut cpu, 0, &cmds).map(|_| ()),
                 name,
@@ -125,13 +264,27 @@ fn every_shape_and_op_agrees_on_what_is_legal() {
             if host {
                 accepted += 1;
             }
-            let mark = if host == refr { if host {"ok "} else {"REF"} } else {
+            let mark = if host == refr {
+                if host {
+                    "ok "
+                } else {
+                    "REF"
+                }
+            } else {
                 mismatches += 1;
                 let mut s3 = new_session(&exec);
-                let he = hl_gpu::runtime::submit(&mut s3, &mut exec, 0, &cmds).err().map(|e| format!("{e:?}").chars().take(90).collect::<String>());
+                let he = hl_gpu::runtime::submit(&mut s3, &mut exec, 0, &cmds)
+                    .err()
+                    .map(|e| format!("{e:?}").chars().take(90).collect::<String>());
                 let mut cpu2 = CpuExecutor::new();
-                let mut s4 = Session::new(Limits::from_capabilities(cpu2.capabilities()), GlobalLedger::unbounded(), Box::new(FakeClock::new(0)));
-                let re = hl_gpu::runtime::submit(&mut s4, &mut cpu2, 0, &cmds).err().map(|e| format!("{e:?}").chars().take(70).collect::<String>());
+                let mut s4 = Session::new(
+                    Limits::from_capabilities(cpu2.capabilities()),
+                    GlobalLedger::unbounded(),
+                    Box::new(FakeClock::new(0)),
+                );
+                let re = hl_gpu::runtime::submit(&mut s4, &mut cpu2, 0, &cmds)
+                    .err()
+                    .map(|e| format!("{e:?}").chars().take(70).collect::<String>());
                 eprintln!("  MISMATCH {name}/{op}: host_ok={host} ref_ok={refr}\n    host_err={he:?}\n    ref_err={re:?}");
                 "!!!"
             };

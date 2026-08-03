@@ -108,12 +108,17 @@ mod tests {
 
         context.restore_frame_state(before);
 
-        let (retry_vertex, retry_fragment, recreate_shaders) =
-            context.clear_shader_ir().unwrap();
+        let (retry_vertex, retry_fragment, recreate_shaders) = context.clear_shader_ir().unwrap();
         let (retry_pipeline, recreate_pipeline) = context.clear_pipeline_ir(key).unwrap();
         assert_eq!((retry_vertex, retry_fragment), (vertex, fragment));
         assert_eq!(retry_pipeline, pipeline);
-        assert!(recreate_shaders, "the rejected shader modules do not exist on the host");
-        assert!(recreate_pipeline, "the rejected pipeline does not exist on the host");
+        assert!(
+            recreate_shaders,
+            "the rejected shader modules do not exist on the host"
+        );
+        assert!(
+            recreate_pipeline,
+            "the rejected pipeline does not exist on the host"
+        );
     }
 }

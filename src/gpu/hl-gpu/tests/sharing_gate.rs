@@ -39,9 +39,7 @@ use hl_gpu::protocol::model::descriptor::BufferDesc;
 use hl_gpu::protocol::model::enums::TextureFormat;
 use hl_gpu::protocol::model::error::GpuError;
 use hl_gpu::protocol::model::id::Access;
-use hl_gpu::{
-    Cmd, CommandSink, CpuExecutor, FeatureRequest, InProcessCommandSink, WIRE_VERSION,
-};
+use hl_gpu::{Cmd, CommandSink, CpuExecutor, FeatureRequest, InProcessCommandSink, WIRE_VERSION};
 
 /// Session identities as the guard encodes them. `Access::new` stores `session + 1`, so `0` stays free
 /// to mean "unmapped" and the check is one compare against a single atomic.
@@ -64,8 +62,22 @@ fn sink() -> InProcessCommandSink<CpuExecutor> {
 /// Create two buffers and return the shared map-state cell the guard on `guarded` watches.
 fn buffers(sink: &mut InProcessCommandSink<CpuExecutor>) -> Arc<AtomicU64> {
     sink.submit(&[
-        Cmd::CreateBuffer(1, BufferDesc { size: 256, usage: 0, label: String::new() }),
-        Cmd::CreateBuffer(2, BufferDesc { size: 256, usage: 0, label: String::new() }),
+        Cmd::CreateBuffer(
+            1,
+            BufferDesc {
+                size: 256,
+                usage: 0,
+                label: String::new(),
+            },
+        ),
+        Cmd::CreateBuffer(
+            2,
+            BufferDesc {
+                size: 256,
+                usage: 0,
+                label: String::new(),
+            },
+        ),
     ])
     .expect("the positive control must create; every refusal below is vacuous otherwise");
     let state = Arc::new(AtomicU64::new(0));
@@ -94,7 +106,8 @@ fn a_mapped_buffer_is_refused_through_a_real_command() {
 
     // Positive control FIRST. A refusal proves nothing without a path that otherwise works, and this
     // exact test shape has previously passed against a setup where every submission failed.
-    touch(&mut sink).expect("unmapped: the command must succeed, or the refusal below means nothing");
+    touch(&mut sink)
+        .expect("unmapped: the command must succeed, or the refusal below means nothing");
 
     // CUDA takes the map. GL's table must now refuse to resolve buffer 1.
     state.store(CUDA + 1, std::sync::atomic::Ordering::Release);
@@ -140,8 +153,22 @@ fn an_unguarded_resource_is_never_affected_by_anyone_elses_map() {
 fn the_gate_covers_a_resource_used_as_a_destination() {
     let mut sink = sink();
     sink.submit(&[
-        Cmd::CreateBuffer(3, BufferDesc { size: 256, usage: 0, label: String::new() }),
-        Cmd::CreateBuffer(4, BufferDesc { size: 256, usage: 0, label: String::new() }),
+        Cmd::CreateBuffer(
+            3,
+            BufferDesc {
+                size: 256,
+                usage: 0,
+                label: String::new(),
+            },
+        ),
+        Cmd::CreateBuffer(
+            4,
+            BufferDesc {
+                size: 256,
+                usage: 0,
+                label: String::new(),
+            },
+        ),
     ])
     .expect("create");
     let state = Arc::new(AtomicU64::new(0));
@@ -163,7 +190,10 @@ fn the_gate_covers_a_resource_used_as_a_destination() {
     assert!(
         matches!(
             write(&mut sink),
-            Err(GpuError::MappedElsewhere { kind: "buffer", id: 4 })
+            Err(GpuError::MappedElsewhere {
+                kind: "buffer",
+                id: 4
+            })
         ),
         "a mapped resource must be refused as a destination, not only as a source"
     );
@@ -291,5 +321,9 @@ fn an_older_guest_reads_a_newer_code_as_unstated() {
         "a positive control — if the current decoder also said Unstated, the test above would pass \
          while the feature did nothing"
     );
-    assert_eq!(RefusalKind::MappedElsewhere.ack(), ACK_MAPPED_ELSEWHERE, "round trip");
+    assert_eq!(
+        RefusalKind::MappedElsewhere.ack(),
+        ACK_MAPPED_ELSEWHERE,
+        "round trip"
+    );
 }

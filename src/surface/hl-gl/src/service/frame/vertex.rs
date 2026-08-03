@@ -345,7 +345,11 @@ pub(super) fn lower_vertices(
         let source = if d.elem_buf != 0 {
             captured_buffer(d.elem_buf)
                 .map(|buffer| buffer.data.as_slice())
-                .or_else(|| ctx.buffers.get(d.elem_buf).map(|buffer| buffer.data.as_slice()))
+                .or_else(|| {
+                    ctx.buffers
+                        .get(d.elem_buf)
+                        .map(|buffer| buffer.data.as_slice())
+                })
         } else if d.client_indices.is_empty() {
             None
         } else {
@@ -353,7 +357,9 @@ pub(super) fn lower_vertices(
         };
         let offset = if d.elem_buf != 0 { d.index_offset } else { 0 };
         source
-            .and_then(|bytes| PrimitiveAssembly::decode_indices(bytes, offset, d.index_type, d.count))
+            .and_then(|bytes| {
+                PrimitiveAssembly::decode_indices(bytes, offset, d.index_type, d.count)
+            })
             .and_then(|indices| indices.into_iter().max())
             .and_then(|maximum| {
                 u32::try_from(i64::from(maximum) + i64::from(d.base_vertex) + 1).ok()
@@ -1035,7 +1041,10 @@ mod tests {
             ..Attr::default()
         };
 
-        assert_eq!(vertex_slot_bytes(&draw, &[attribute], 16, 0, None), Some(1432));
+        assert_eq!(
+            vertex_slot_bytes(&draw, &[attribute], 16, 0, None),
+            Some(1432)
+        );
     }
 
     #[test]

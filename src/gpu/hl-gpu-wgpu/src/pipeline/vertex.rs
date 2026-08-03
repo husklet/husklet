@@ -45,10 +45,18 @@ impl VertexState {
             (9, 4) if normalized => F::Unorm8x4Bgra,
             // 8-bit (x2 / x4 only), normalized → Unorm/Snorm else Uint/Sint
             (1, 1) => {
-                if normalized { F::Unorm8 } else { F::Uint8 }
+                if normalized {
+                    F::Unorm8
+                } else {
+                    F::Uint8
+                }
             }
             (2, 1) => {
-                if normalized { F::Snorm8 } else { F::Sint8 }
+                if normalized {
+                    F::Snorm8
+                } else {
+                    F::Sint8
+                }
             }
             (1, 2) => {
                 if normalized {
@@ -80,10 +88,18 @@ impl VertexState {
             }
             // 16-bit integer, normalized → Unorm/Snorm else Uint/Sint
             (3, 1) => {
-                if normalized { F::Unorm16 } else { F::Uint16 }
+                if normalized {
+                    F::Unorm16
+                } else {
+                    F::Uint16
+                }
             }
             (4, 1) => {
-                if normalized { F::Snorm16 } else { F::Sint16 }
+                if normalized {
+                    F::Snorm16
+                } else {
+                    F::Sint16
+                }
             }
             (3, 2) => {
                 if normalized {

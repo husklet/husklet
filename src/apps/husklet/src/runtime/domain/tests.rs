@@ -95,8 +95,9 @@ fn live_domain_without_configuration_identity_is_rejected() {
 }
 
 /// A workspace whose runtime directory exists, with a bound socket standing in for a live domain.
-fn live_domain(root: &std::path::Path) -> (WorkspaceConfig, Domain, std::os::unix::net::UnixListener)
-{
+fn live_domain(
+    root: &std::path::Path,
+) -> (WorkspaceConfig, Domain, std::os::unix::net::UnixListener) {
     let mut workspace = WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64);
     workspace.storage = Some(root.to_owned());
     let domain = Domain::new(&workspace);
@@ -219,7 +220,10 @@ fn a_restart_marks_its_boundary_in_the_appended_domain_log() {
     let workspace = WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64);
     let path = root.path().join("domain.log");
     std::fs::write(&path, "previous domain output\n").unwrap();
-    let log = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+    let log = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
 
     Domain::mark_restart(&log, &workspace, "stale socket").unwrap();
 

@@ -158,7 +158,12 @@ fn copy_texture_to_buffer_reads_the_named_mip_level(dim: TextureDim) {
         .take((2 * height * 4) as usize)
         .copied()
         .collect();
-    let mut texture = tex2d_mips(2, height, 2, texture_usage::COPY_DST | texture_usage::COPY_SRC);
+    let mut texture = tex2d_mips(
+        2,
+        height,
+        2,
+        texture_usage::COPY_DST | texture_usage::COPY_SRC,
+    );
     texture.dim = dim;
 
     hl_gpu::runtime::submit(
@@ -167,10 +172,7 @@ fn copy_texture_to_buffer_reads_the_named_mip_level(dim: TextureDim) {
         0,
         &[
             // A 2×2 texture with 2 mip levels; both copy directions used.
-            Cmd::CreateTexture(
-                1,
-                texture,
-            ),
+            Cmd::CreateTexture(1, texture),
             Cmd::CreateBuffer(
                 1,
                 BufferDesc {

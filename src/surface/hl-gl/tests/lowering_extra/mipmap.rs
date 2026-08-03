@@ -53,7 +53,11 @@ fn a_single_level_texture_declares_one_level_and_no_chain() {
     record::tex_image_2d(&mut c, 8, 8, &[0x22u8; 8 * 8 * 4]);
     let t = c.textures.get(tex).expect("the texture");
     assert!(t.mip_chain().is_empty());
-    assert_eq!(t.mip_levels(), 1, "the overwhelmingly common case is unchanged");
+    assert_eq!(
+        t.mip_levels(),
+        1,
+        "the overwhelmingly common case is unchanged"
+    );
 }
 
 /// A chain with a gap, or one whose extents do not halve, is not a chain: the host texture must not
@@ -68,7 +72,11 @@ fn a_broken_chain_stops_at_the_first_bad_level() {
     // Level 2 should be 2x2; a 3x3 upload breaks the halving.
     record::tex_image_2d_level(&mut c, 2, 3, 3, &[0u8; 3 * 3 * 4]);
     let t = c.textures.get(tex).expect("the texture");
-    assert_eq!(t.mip_chain().len(), 1, "only level 1 is a valid continuation");
+    assert_eq!(
+        t.mip_chain().len(),
+        1,
+        "only level 1 is a valid continuation"
+    );
     assert_eq!(t.mip_levels(), 2);
 }
 
@@ -79,7 +87,11 @@ fn max_level_clamps_the_declared_level_count() {
     record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
     record::tex_parameter(&mut c, GL_TEXTURE_MAX_LEVEL, 1);
     let t = c.textures.get(tex).expect("the texture");
-    assert_eq!(t.mip_levels(), 2, "GL_TEXTURE_MAX_LEVEL = 1 means levels 0 and 1");
+    assert_eq!(
+        t.mip_levels(),
+        2,
+        "GL_TEXTURE_MAX_LEVEL = 1 means levels 0 and 1"
+    );
 }
 
 #[test]
@@ -170,7 +182,10 @@ fn changing_the_level_window_bumps_the_generation() {
     let before = c.textures.get(tex).expect("the texture").gen;
     record::tex_parameter(&mut c, GL_TEXTURE_BASE_LEVEL, 2);
     let after = c.textures.get(tex).expect("the texture").gen;
-    assert_ne!(before, after, "the resident upload is stale and must be re-sent");
+    assert_ne!(
+        before, after,
+        "the resident upload is stale and must be re-sent"
+    );
 
     // A filter change is NOT a storage change and must leave the generation alone.
     let before = after;

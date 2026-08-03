@@ -227,7 +227,10 @@ fn surfaceless_display_and_config_enumeration_end_to_end() {
         egl_choose_config(dpy, request.as_ptr(), &mut chosen, 1, &mut nchosen),
         EGL_TRUE
     );
-    assert_eq!(nchosen, 1, "exactly one config carries depth 24 + stencil 8");
+    assert_eq!(
+        nchosen, 1,
+        "exactly one config carries depth 24 + stencil 8"
+    );
     assert!(!chosen.is_null(), "eglChooseConfig returns a config handle");
 
     // 6) eglGetConfigAttrib returns TRUTHFUL attributes for our config (RGBA8 / D24 / S8, ES2+ES3).

@@ -108,14 +108,29 @@ fn rejected_readback_retries_semantic_frame_then_retires_temporary_buffer() {
     record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
 
     assert_eq!(
-        hl_gl::service::readpixels::read_pixels(&mut context, &mut sink, 0, 0, 1, 1, hl_gl::service::readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE),),
+        hl_gl::service::readpixels::read_pixels(
+            &mut context,
+            &mut sink,
+            0,
+            0,
+            1,
+            1,
+            hl_gl::service::readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE),
+        ),
         Err(GpuError::ResourceLimit("reject-once"))
     );
     assert_eq!(context.draws().len(), 1);
 
-    let pixels =
-        hl_gl::service::readpixels::read_pixels(&mut context, &mut sink, 0, 0, 1, 1, hl_gl::service::readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE))
-            .expect("retry");
+    let pixels = hl_gl::service::readpixels::read_pixels(
+        &mut context,
+        &mut sink,
+        0,
+        0,
+        1,
+        1,
+        hl_gl::service::readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE),
+    )
+    .expect("retry");
     assert_eq!(pixels.len(), 4);
     assert!(context.draws().is_empty());
     let rejected = sink.rejected.expect("rejected readback frame");
@@ -151,9 +166,16 @@ fn accepted_frame_is_not_replayed_when_separate_read_target_is_absent() {
     tri_vbo(&mut context, 8);
     record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
 
-    let pixels =
-        hl_gl::service::readpixels::read_pixels(&mut context, &mut sink, 0, 0, 1, 1, hl_gl::service::readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE))
-            .expect("separate read");
+    let pixels = hl_gl::service::readpixels::read_pixels(
+        &mut context,
+        &mut sink,
+        0,
+        0,
+        1,
+        1,
+        hl_gl::service::readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE),
+    )
+    .expect("separate read");
 
     assert_eq!(pixels, [0; 4]);
     assert!(context.draws().is_empty());
@@ -172,9 +194,16 @@ fn read_failure_after_submit_keeps_frame_committed_and_retires_buffer() {
     tri_vbo(&mut context, 8);
     record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
 
-    let error =
-        hl_gl::service::readpixels::read_pixels(&mut context, &mut sink, 0, 0, 1, 1, hl_gl::service::readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE))
-            .expect_err("read failure");
+    let error = hl_gl::service::readpixels::read_pixels(
+        &mut context,
+        &mut sink,
+        0,
+        0,
+        1,
+        1,
+        hl_gl::service::readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE),
+    )
+    .expect_err("read failure");
 
     assert!(error.to_string().contains("expected read failure"));
     assert!(context.draws().is_empty());

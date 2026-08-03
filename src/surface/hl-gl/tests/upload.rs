@@ -162,7 +162,10 @@ fn integer_and_wide_component_uploads_are_accepted_not_refused() {
         PixelStore::default(),
     )
     .expect("R16UI must be accepted");
-    assert_eq!(r16ui.rgba8(&200u16.to_le_bytes()).unwrap(), [200, 0, 0, 255]);
+    assert_eq!(
+        r16ui.rgba8(&200u16.to_le_bytes()).unwrap(),
+        [200, 0, 0, 255]
+    );
     assert_eq!(
         r16ui.rgba8(&5000u16.to_le_bytes()).unwrap(),
         [255, 0, 0, 255],
@@ -234,10 +237,18 @@ fn a_float_source_reaches_a_half_float_plane_unclamped() {
 
     let half = |index: usize| u16::from_le_bytes([plane[index * 2], plane[index * 2 + 1]]);
     assert_eq!(half(0), 0x4400, "4.0");
-    assert_eq!(half(1), 0xc100, "-2.5 keeps its sign rather than clamping to zero");
+    assert_eq!(
+        half(1),
+        0xc100,
+        "-2.5 keeps its sign rather than clamping to zero"
+    );
     assert_eq!(half(2), 0x0000, "0.0");
     assert_eq!(half(3), 0x3c00, "1.0");
-    assert_eq!(half(4), 0x7bff, "65504.0 is half's largest finite value, not 1.0");
+    assert_eq!(
+        half(4),
+        0x7bff,
+        "65504.0 is half's largest finite value, not 1.0"
+    );
     assert_eq!(half(5), 0x3800, "0.5");
     assert_eq!(half(6), 0xbc00, "-1.0");
     assert_eq!(half(7), 0x6800, "2048.0");
@@ -246,7 +257,10 @@ fn a_float_source_reaches_a_half_float_plane_unclamped() {
     let narrowed = upload.rgba8(&source).unwrap();
     assert_eq!(narrowed[0], 255, "4.0 narrows to the top of the byte range");
     assert_eq!(narrowed[1], 0, "-2.5 narrows to zero");
-    assert_eq!(narrowed[4], 255, "and 65504.0 is indistinguishable from 4.0");
+    assert_eq!(
+        narrowed[4], 255,
+        "and 65504.0 is indistinguishable from 4.0"
+    );
 }
 
 /// Values beyond half's range saturate to infinity rather than wrapping to a small finite number, and
@@ -266,8 +280,16 @@ fn half_float_encoding_saturates_at_its_own_range() {
     assert_eq!(half(0), 0x7c00, "+inf");
     assert_eq!(half(1), 0xfc00, "-inf");
     assert_eq!(half(2) & 0x7c00, 0x7c00, "NaN keeps the infinity exponent");
-    assert_ne!(half(2) & 0x03ff, 0, "and a non-zero mantissa, so it is not an infinity");
-    assert_eq!(half(3), 0x0000, "below the smallest subnormal, flushed to zero");
+    assert_ne!(
+        half(2) & 0x03ff,
+        0,
+        "and a non-zero mantissa, so it is not an infinity"
+    );
+    assert_eq!(
+        half(3),
+        0x0000,
+        "below the smallest subnormal, flushed to zero"
+    );
 }
 
 /// A `GL_HALF_FLOAT` source reaches a half-float plane as the values it carries.
@@ -289,8 +311,16 @@ fn a_half_float_source_reaches_a_half_float_plane_as_values() {
         .flat_map(|bits| bits.to_le_bytes())
         .collect();
     let plane = upload.plane(&source, TextureFormat::Rgba16Float).unwrap();
-    assert_eq!(plane.len(), 8, "one RGBA half-float texel, not the three channels supplied");
-    assert_eq!(&plane[..6], &source[..], "the three supplied channels pass through unchanged");
+    assert_eq!(
+        plane.len(),
+        8,
+        "one RGBA half-float texel, not the three channels supplied"
+    );
+    assert_eq!(
+        &plane[..6],
+        &source[..],
+        "the three supplied channels pass through unchanged"
+    );
     assert_eq!(
         &plane[6..],
         &[0x00, 0x3c],
@@ -339,8 +369,14 @@ fn a_float_plane_refuses_a_source_it_cannot_read_as_values() {
     );
 
     // A packed type carries a bit field, and this conversion does not decode the two packed FLOAT types.
-    let packed =
-        Upload::new(GL_RGB, GL_UNSIGNED_INT_10F_11F_11F_REV, 1, 1, PixelStore::default()).unwrap();
+    let packed = Upload::new(
+        GL_RGB,
+        GL_UNSIGNED_INT_10F_11F_11F_REV,
+        1,
+        1,
+        PixelStore::default(),
+    )
+    .unwrap();
     assert!(
         packed.plane(&[0; 4], TextureFormat::Rgba16Float).is_none(),
         "a packed float type is refused rather than guessed at"

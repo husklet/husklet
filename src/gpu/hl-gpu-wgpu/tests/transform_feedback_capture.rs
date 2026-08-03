@@ -46,7 +46,10 @@ void main() {
 "#;
     let mut parser = naga::front::glsl::Frontend::default();
     parser
-        .parse(&naga::front::glsl::Options::from(naga::ShaderStage::Vertex), source)
+        .parse(
+            &naga::front::glsl::Options::from(naga::ShaderStage::Vertex),
+            source,
+        )
         .expect("separate transform-feedback array wrapper must compile");
 }
 

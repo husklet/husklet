@@ -75,7 +75,10 @@ fn read_slice(cmds: &[Cmd], id: u32, z: u32) -> Vec<u8> {
     let mut program = cmds.to_vec();
     program.push(Cmd::CreateBuffer(
         900,
-        buf(SLICE as u64, buffer_usage::COPY_DST | buffer_usage::COPY_SRC),
+        buf(
+            SLICE as u64,
+            buffer_usage::COPY_DST | buffer_usage::COPY_SRC,
+        ),
     ));
     program.push(Cmd::Submit(CommandBuffer {
         encoder: vec![Enc::CopyTextureToBufferRegion {
@@ -108,10 +111,7 @@ fn read_slice(cmds: &[Cmd], id: u32, z: u32) -> Vec<u8> {
 /// Upload `volume_bytes()` into texture 1 (a 2x1x3 volume) and create texture 2 as an empty one.
 fn seeded() -> Vec<Cmd> {
     vec![
-        Cmd::CreateBuffer(
-            1,
-            buf(24, buffer_usage::COPY_SRC | buffer_usage::COPY_DST),
-        ),
+        Cmd::CreateBuffer(1, buf(24, buffer_usage::COPY_SRC | buffer_usage::COPY_DST)),
         Cmd::WriteBuffer {
             id: 1,
             offset: 0,
@@ -257,8 +257,14 @@ fn the_mirrored_and_unmirrored_slice_expectations_do_not_coincide() {
         .map(|z| [texel((z * 2) as u8), texel((z * 2 + 1) as u8)].concat())
         .collect();
     let flipped: Vec<Vec<u8>> = (0..D).rev().map(|z| plain[z as usize].clone()).collect();
-    assert_ne!(plain[0], flipped[0], "the first slice must move under a z flip");
-    assert_ne!(plain[2], flipped[2], "the last slice must move under a z flip");
+    assert_ne!(
+        plain[0], flipped[0],
+        "the first slice must move under a z flip"
+    );
+    assert_ne!(
+        plain[2], flipped[2],
+        "the last slice must move under a z flip"
+    );
     assert_eq!(
         plain[1], flipped[1],
         "the centre of an odd slice count is its own mirror; stated so it is not read as a defect"

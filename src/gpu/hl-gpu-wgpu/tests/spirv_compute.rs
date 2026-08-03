@@ -116,28 +116,48 @@ fn wgsl_2d_to_spirv_1d(src: &str) -> Vec<u32> {
     )
     .validate(&module)
     .expect("seed wgsl validates");
-    let images = module.global_variables.iter().filter_map(|(handle, variable)| {
-        matches!(module.types[variable.ty].inner, naga::TypeInner::Image { .. })
+    let images = module
+        .global_variables
+        .iter()
+        .filter_map(|(handle, variable)| {
+            matches!(
+                module.types[variable.ty].inner,
+                naga::TypeInner::Image { .. }
+            )
             .then_some((handle, variable.ty))
-    }).collect::<Vec<_>>();
+        })
+        .collect::<Vec<_>>();
     for (global, old_ty) in images {
         let mut ty = module.types[old_ty].clone();
-        let naga::TypeInner::Image { ref mut dim, .. } = ty.inner else { unreachable!() };
+        let naga::TypeInner::Image { ref mut dim, .. } = ty.inner else {
+            unreachable!()
+        };
         *dim = naga::ImageDimension::D1;
         module.global_variables[global].ty = module.types.insert(ty, naga::Span::default());
     }
     let function = &mut module.entry_points[0].function;
-    let coordinates = function.body.iter().filter_map(|statement| match statement {
-        naga::Statement::ImageAtomic { coordinate, .. } => {
-            let naga::Expression::Compose { components, .. } = &function.expressions[*coordinate]
-                else { return None };
-            Some((*coordinate, components[0]))
-        }
-        _ => None,
-    }).collect::<Vec<_>>();
+    let coordinates = function
+        .body
+        .iter()
+        .filter_map(|statement| match statement {
+            naga::Statement::ImageAtomic { coordinate, .. } => {
+                let naga::Expression::Compose { components, .. } =
+                    &function.expressions[*coordinate]
+                else {
+                    return None;
+                };
+                Some((*coordinate, components[0]))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
     for statement in function.body.iter_mut() {
         if let naga::Statement::ImageAtomic { coordinate, .. } = statement {
-            *coordinate = coordinates.iter().find(|(vector, _)| vector == coordinate).unwrap().1;
+            *coordinate = coordinates
+                .iter()
+                .find(|(vector, _)| vector == coordinate)
+                .unwrap()
+                .1;
         }
     }
     naga::back::spv::write_vec(&module, &info, &naga::back::spv::Options::default(), None)
@@ -779,90 +799,94 @@ fn spirv_compute_atomically_adds_r32uint_storage_texture() {
     // Keep this native-feature probe on its own device so the assertion covers feature negotiation,
     // texture creation, dispatch and readback as one isolated device lifetime.
     for (dim, shader) in shaders {
-        let mut g = WgpuExecutor::new(DeviceConfig::default()).expect("acquire atomic-capable Metal device");
+        let mut g = WgpuExecutor::new(DeviceConfig::default())
+            .expect("acquire atomic-capable Metal device");
         let s = run_batch(
             &mut g,
             &[
-            Cmd::CreateShader {
-                id: 1,
-                kind: ShaderPayloadKind::SpirV,
-                spirv: shader,
-            },
-            Cmd::CreateComputePipelineLayout(
-                1,
-                ComputePipelineDesc {
-                    compute: ShaderRef {
-                        module: 1,
-                        entry: "cs_main".into(),
+                Cmd::CreateShader {
+                    id: 1,
+                    kind: ShaderPayloadKind::SpirV,
+                    spirv: shader,
+                },
+                Cmd::CreateComputePipelineLayout(
+                    1,
+                    ComputePipelineDesc {
+                        compute: ShaderRef {
+                            module: 1,
+                            entry: "cs_main".into(),
+                        },
+                        label: String::new(),
                     },
-                    label: String::new(),
-                },
-                PipelineLayout {
-                    bindings: vec![
-                        PipelineBinding {
-                            group: 0,
-                            binding: 0,
-                            count: 1,
-                            kind: PipelineBindingKind::StorageTexture,
-                        },
-                        PipelineBinding {
-                            group: 0,
-                            binding: 1,
-                            count: 1,
-                            kind: PipelineBindingKind::StorageBuffer,
-                        },
-                    ],
-                },
-            ),
-            Cmd::CreateTexture(
-                1,
-                TextureDesc {
-                    width: 1,
-                    height: 1,
-                    depth: 1,
-                    mip_levels: 1,
-                    sample_count: 1,
-                    dim,
-                    format: TextureFormat::R32Uint,
-                    usage: texture_usage::STORAGE | texture_usage::COPY_SRC,
-                    label: "atomic-r32uint".into(),
-                },
-            ),
-            Cmd::CreateBuffer(1, buf(8, buffer_usage::STORAGE | buffer_usage::COPY_SRC)),
-            Cmd::CreateBindGroup(
-                1,
-                BindGroupDesc {
-                    set: 0,
-                    entries: vec![
-                        BindEntry {
-                            binding: 0,
-                            resource: BindResource::Texture { id: 1 },
-                        },
-                        BindEntry {
-                            binding: 1,
-                            resource: BindResource::Buffer {
-                                id: 1,
-                                offset: 0,
-                                size: 8,
+                    PipelineLayout {
+                        bindings: vec![
+                            PipelineBinding {
+                                group: 0,
+                                binding: 0,
+                                count: 1,
+                                kind: PipelineBindingKind::StorageTexture,
                             },
-                        },
+                            PipelineBinding {
+                                group: 0,
+                                binding: 1,
+                                count: 1,
+                                kind: PipelineBindingKind::StorageBuffer,
+                            },
+                        ],
+                    },
+                ),
+                Cmd::CreateTexture(
+                    1,
+                    TextureDesc {
+                        width: 1,
+                        height: 1,
+                        depth: 1,
+                        mip_levels: 1,
+                        sample_count: 1,
+                        dim,
+                        format: TextureFormat::R32Uint,
+                        usage: texture_usage::STORAGE | texture_usage::COPY_SRC,
+                        label: "atomic-r32uint".into(),
+                    },
+                ),
+                Cmd::CreateBuffer(1, buf(8, buffer_usage::STORAGE | buffer_usage::COPY_SRC)),
+                Cmd::CreateBindGroup(
+                    1,
+                    BindGroupDesc {
+                        set: 0,
+                        entries: vec![
+                            BindEntry {
+                                binding: 0,
+                                resource: BindResource::Texture { id: 1 },
+                            },
+                            BindEntry {
+                                binding: 1,
+                                resource: BindResource::Buffer {
+                                    id: 1,
+                                    offset: 0,
+                                    size: 8,
+                                },
+                            },
+                        ],
+                    },
+                ),
+                Cmd::Submit(CommandBuffer {
+                    encoder: vec![
+                        Enc::BeginComputePass,
+                        Enc::SetPipeline(1),
+                        Enc::SetBindGroup { index: 0, group: 1 },
+                        Enc::Dispatch { x: 1, y: 1, z: 1 },
+                        Enc::EndComputePass,
                     ],
-                },
-            ),
-            Cmd::Submit(CommandBuffer {
-                encoder: vec![
-                    Enc::BeginComputePass,
-                    Enc::SetPipeline(1),
-                    Enc::SetBindGroup { index: 0, group: 1 },
-                    Enc::Dispatch { x: 1, y: 1, z: 1 },
-                    Enc::EndComputePass,
-                ],
-                signal: None,
-            }),
+                    signal: None,
+                }),
             ],
         );
         assert_eq!(read_u32s(&g, &s, 1, 2), vec![0, 7]);
-        assert_eq!(g.read_texture(&s.resources, 1).unwrap(), 11u32.to_le_bytes());
+        assert_eq!(
+            g.read_texture(&s.resources, 1).unwrap(),
+            11u32.to_le_bytes()
+        );
     }
 }
 
@@ -962,7 +986,10 @@ fn spirv_compute_loads_and_stores_r32sint_storage_texture() {
         ],
     );
     assert_eq!(read_u32s(&g, &s, 1, 1), vec![0]);
-    assert_eq!(g.read_texture(&s.resources, 1).unwrap(), (-13i32).to_le_bytes());
+    assert_eq!(
+        g.read_texture(&s.resources, 1).unwrap(),
+        (-13i32).to_le_bytes()
+    );
 }
 
 #[test]
@@ -1094,7 +1121,10 @@ fn spirv_compute_samples_native_bc1_and_bc3_uploads() {
         );
         assert_eq!(read_u32s(&g, &s, 2, 4), expected, "{format:?}");
         if extra_usage == texture_usage::OPAQUE_BC1_RGB {
-            assert_eq!(g.read_texture(&s.resources, 1).unwrap(), [0x1f, 0x00, 0x00, 0xf8, 0xff, 0xff, 0xff, 0xff]);
+            assert_eq!(
+                g.read_texture(&s.resources, 1).unwrap(),
+                [0x1f, 0x00, 0x00, 0xf8, 0xff, 0xff, 0xff, 0xff]
+            );
         }
     }
 }

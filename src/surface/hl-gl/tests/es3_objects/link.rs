@@ -13,7 +13,8 @@ const REFUSED_FS: &str = "#version 300 es\nprecision highp float;\nout vec4 o;\n
                           void main() { o = vec4(float(bitCount(7))); }\n";
 const GOOD_FS: &str = "#version 300 es\nprecision highp float;\nuniform vec4 uTint;\nout vec4 o;\n\
                        void main() { o = uTint; }\n";
-const GOOD_VS: &str = "#version 300 es\nin vec2 aPos;\nvoid main(){ gl_Position = vec4(aPos,0.0,1.0); }\n";
+const GOOD_VS: &str =
+    "#version 300 es\nin vec2 aPos;\nvoid main(){ gl_Position = vec4(aPos,0.0,1.0); }\n";
 
 fn shader(c: &mut GlContext, kind: u32, source: &str) -> u32 {
     let name = record::create_shader(c, kind);

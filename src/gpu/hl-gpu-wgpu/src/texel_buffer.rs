@@ -82,11 +82,7 @@ impl RenderSpecializer {
 }
 
 impl ComputeSpecializer {
-    pub(crate) fn new(
-        desc: ComputePipelineDesc,
-        layout: PipelineLayout,
-        words: Vec<u32>,
-    ) -> Self {
+    pub(crate) fn new(desc: ComputePipelineDesc, layout: PipelineLayout, words: Vec<u32>) -> Self {
         Self {
             desc,
             layout,
@@ -262,7 +258,9 @@ pub(crate) fn views(
     alignment: u64,
 ) -> Result<Vec<View>> {
     if alignment == 0 || !alignment.is_multiple_of(4) {
-        return Err(GpuError::Invalid("wgpu: zero storage-buffer offset alignment"));
+        return Err(GpuError::Invalid(
+            "wgpu: zero storage-buffer offset alignment",
+        ));
     }
     descriptor
         .entries
@@ -284,8 +282,11 @@ pub(crate) fn views(
             let native_size = prefix
                 .checked_add(size)
                 .ok_or(GpuError::OutOfBounds)?
-                .div_ceil(4) * 4;
-            let native_end = native_offset.checked_add(native_size).ok_or(GpuError::OutOfBounds)?;
+                .div_ceil(4)
+                * 4;
+            let native_end = native_offset
+                .checked_add(native_size)
+                .ok_or(GpuError::OutOfBounds)?;
             if native_end > WgpuBuffer::allocation_size(source.size).max(4) {
                 return Err(GpuError::OutOfBounds);
             }
@@ -304,14 +305,20 @@ pub(crate) fn key<'a>(
     alignment: u64,
 ) -> Result<Vec<Specialization>> {
     if alignment == 0 || !alignment.is_multiple_of(4) {
-        return Err(GpuError::Invalid("wgpu: zero storage-buffer offset alignment"));
+        return Err(GpuError::Invalid(
+            "wgpu: zero storage-buffer offset alignment",
+        ));
     }
     let mut key = groups
         .into_iter()
         .flat_map(|descriptor| {
             descriptor.entries.iter().filter_map(move |entry| {
                 let BindResource::TexelBuffer {
-                    offset, size, format, writable, ..
+                    offset,
+                    size,
+                    format,
+                    writable,
+                    ..
                 } = entry.resource
                 else {
                     return None;
@@ -355,6 +362,9 @@ mod tests {
         }
         assert_eq!(cache.variants.len(), MAX_PIPELINE_VARIANTS);
         assert!(cache.get(&specialization(0)).is_none());
-        assert_eq!(cache.get(&specialization(MAX_PIPELINE_VARIANTS as u32)), Some(MAX_PIPELINE_VARIANTS as u32));
+        assert_eq!(
+            cache.get(&specialization(MAX_PIPELINE_VARIANTS as u32)),
+            Some(MAX_PIPELINE_VARIANTS as u32)
+        );
     }
 }

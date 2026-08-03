@@ -22,13 +22,13 @@
 
 use std::io::Write;
 
+use hl_gpu::protocol::model::descriptor::Mirror;
 use hl_gpu::protocol::model::descriptor::{Extent3d, Origin3d, TextureDesc, TextureSubresource};
 use hl_gpu::protocol::model::enums::{
     buffer_usage, texture_usage, Filter, TextureDim, TextureFormat,
 };
 use hl_gpu::{Cmd, CommandBuffer, Enc, FakeClock, GlobalLedger, GpuExecutor, Limits, Session};
 use hl_gpu_wgpu::{DeviceConfig, WgpuExecutor};
-use hl_gpu::protocol::model::descriptor::Mirror;
 
 const RT: u32 = texture_usage::RENDER_TARGET | texture_usage::COPY_SRC | texture_usage::COPY_DST;
 

@@ -63,15 +63,17 @@ fn depth_with_face(face: StencilFaceState) -> DepthState {
 fn every_defined_depth_and_stencil_code_is_accepted() {
     let limits = limits();
     for code in compare::NEVER..=compare::ALWAYS {
-        validate(&limits, 0, &pipeline(depth_with(code)))
-            .unwrap_or_else(|e| panic!("depth_compare={code} is defined and must be accepted: {e}"));
+        validate(&limits, 0, &pipeline(depth_with(code))).unwrap_or_else(|e| {
+            panic!("depth_compare={code} is defined and must be accepted: {e}")
+        });
 
         let face = StencilFaceState {
             compare: code,
             ..StencilFaceState::DISABLED
         };
-        validate(&limits, 0, &pipeline(depth_with_face(face)))
-            .unwrap_or_else(|e| panic!("stencil compare={code} is defined and must be accepted: {e}"));
+        validate(&limits, 0, &pipeline(depth_with_face(face))).unwrap_or_else(|e| {
+            panic!("stencil compare={code} is defined and must be accepted: {e}")
+        });
     }
     for op in stencil_op::KEEP..=stencil_op::DECREMENT_WRAP {
         for face in [

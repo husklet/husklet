@@ -105,12 +105,8 @@ impl Connection {
         #[cfg(target_os = "macos")] presentations: Option<Producer>,
     ) -> Self {
         let limits = Limits::from_capabilities(executor.capabilities());
-        let session = Session::new(
-            limits,
-            global,
-            Box::new(SystemClock::new()),
-        )
-        .with_exports(exports);
+        let session =
+            Session::new(limits, global, Box::new(SystemClock::new())).with_exports(exports);
         Self {
             session,
             executor,
@@ -343,7 +339,8 @@ impl ConnectionHandler for Connection {
                 hl_log::hl_error!(
                     hl_log::tag::GPU,
                     "GPU buffer import refused buffer={} export={} error={error}",
-                    request.id, request.offset
+                    request.id,
+                    request.offset
                 );
                 None
             }

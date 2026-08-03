@@ -142,10 +142,10 @@ impl Status {
                     // NOTHING about correctness; do not read it as evidence the mapping is good.
                     Some(RefusalKind::MappedElsewhere) => VK_ERROR_UNKNOWN,
                     // Grouped with `Invalid`, which is the class a kernel-lowering refusal carried before
-                // `RefusalKind::Kernel` existed; Vulkan's reported codes are unchanged by that split.
-                Some(RefusalKind::Invalid) | Some(RefusalKind::Kernel) => {
-                    VK_ERROR_INITIALIZATION_FAILED
-                }
+                    // `RefusalKind::Kernel` existed; Vulkan's reported codes are unchanged by that split.
+                    Some(RefusalKind::Invalid) | Some(RefusalKind::Kernel) => {
+                        VK_ERROR_INITIALIZATION_FAILED
+                    }
                     Some(RefusalKind::ResourceLimit) | Some(RefusalKind::Unstated) | None => {
                         VK_ERROR_OUT_OF_DEVICE_MEMORY
                     }

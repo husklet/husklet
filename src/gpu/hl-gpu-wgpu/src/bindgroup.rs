@@ -176,9 +176,7 @@ impl WgpuExecutor {
                 }
                 BindResource::TexelBuffer { .. } => {
                     let view = texel_buffers
-                        .and_then(|views| {
-                            views.iter().find(|view| view.binding == e.binding)
-                        })
+                        .and_then(|views| views.iter().find(|view| view.binding == e.binding))
                         .ok_or(GpuError::Unsupported(
                             "wgpu: texel-buffer view was not prepared for this pass",
                         ))?;

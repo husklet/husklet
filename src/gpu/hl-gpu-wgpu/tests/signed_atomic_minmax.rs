@@ -66,7 +66,7 @@ fn lower(exec: &mut WgpuExecutor, program: KernelProgram) -> hl_gpu::Result<()> 
             Cmd::CreateShader {
                 id: 1,
                 kind: ShaderPayloadKind::PtxKernel,
-                spirv: vec![0],  // non-empty placeholder; the program comes from define_kernel
+                spirv: vec![0], // non-empty placeholder; the program comes from define_kernel
             },
             Cmd::CreateComputePipeline(
                 1,

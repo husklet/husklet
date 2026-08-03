@@ -60,14 +60,12 @@ fn one_layer_failure_terminates_atomic_frame_after_all_receipts_retire() {
     script_two(&mut compositor, 21, 22);
     assert_eq!(compositor.present_root(root).pacing, FramePacing::Pending);
 
-    assert!(
-        compositor
-            .complete_presentation(PresentationCompletion {
-                id: PresentationId(21),
-                outcome: CompletionOutcome::TerminalFailure,
-            })
-            .is_none()
-    );
+    assert!(compositor
+        .complete_presentation(PresentationCompletion {
+            id: PresentationId(21),
+            outcome: CompletionOutcome::TerminalFailure,
+        })
+        .is_none());
     let (_, completed) = compositor
         .complete_presentation(delivered(22))
         .expect("remaining submission retired");
@@ -85,14 +83,12 @@ fn retryable_retains_callbacks_and_terminal_releases_them() {
     script_two(&mut compositor, 91, 92);
     assert_eq!(compositor.present_root(root).pacing, FramePacing::Pending);
 
-    assert!(
-        compositor
-            .complete_presentation(PresentationCompletion {
-                id: PresentationId(91),
-                outcome: CompletionOutcome::RetryableFailure,
-            })
-            .is_none()
-    );
+    assert!(compositor
+        .complete_presentation(PresentationCompletion {
+            id: PresentationId(91),
+            outcome: CompletionOutcome::RetryableFailure,
+        })
+        .is_none());
     let (_, completed) = compositor
         .complete_presentation(delivered(92))
         .expect("remaining submission retired");
@@ -113,14 +109,12 @@ fn retryable_retains_callbacks_and_terminal_releases_them() {
     );
     script_two(&mut compositor, 93, 94);
     assert_eq!(compositor.present_root(root).pacing, FramePacing::Pending);
-    assert!(
-        compositor
-            .complete_presentation(PresentationCompletion {
-                id: PresentationId(93),
-                outcome: CompletionOutcome::RetryableFailure,
-            })
-            .is_none()
-    );
+    assert!(compositor
+        .complete_presentation(PresentationCompletion {
+            id: PresentationId(93),
+            outcome: CompletionOutcome::RetryableFailure,
+        })
+        .is_none());
     let (_, mixed) = compositor
         .complete_presentation(PresentationCompletion {
             id: PresentationId(94),
@@ -150,11 +144,9 @@ fn duplicate_stale_and_new_generation_completions_do_not_cross() {
     let (_, first) = compositor.complete_presentation(delivered(32)).unwrap();
     assert_eq!(first.callbacks_fired, 1);
     assert!(compositor.complete_presentation(delivered(31)).is_none());
-    assert!(
-        compositor
-            .complete_presentation(delivered(u64::MAX))
-            .is_none()
-    );
+    assert!(compositor
+        .complete_presentation(delivered(u64::MAX))
+        .is_none());
 
     let refresh = compositor.scene.primary_output().unwrap().refresh_nanos();
     compositor.clock().set(refresh);
@@ -200,14 +192,12 @@ fn cancelling_root_detaches_every_submission_and_late_completion() {
 
     compositor.cancel_root(root);
     assert!(compositor.complete_presentation(delivered(71)).is_none());
-    assert!(
-        compositor
-            .complete_presentation(PresentationCompletion {
-                id: PresentationId(72),
-                outcome: CompletionOutcome::TerminalFailure,
-            })
-            .is_none()
-    );
+    assert!(compositor
+        .complete_presentation(PresentationCompletion {
+            id: PresentationId(72),
+            outcome: CompletionOutcome::TerminalFailure,
+        })
+        .is_none());
 }
 
 #[test]

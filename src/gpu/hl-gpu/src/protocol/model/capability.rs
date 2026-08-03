@@ -148,13 +148,23 @@ pub const NATIVE_FORMATS: &[TextureFormat] = &[
     TextureFormat::Rg8Snorm,
     TextureFormat::Rgba8Snorm,
     TextureFormat::Rg16Float,
-    TextureFormat::R16Float, TextureFormat::R16Uint, TextureFormat::R16Sint,
-    TextureFormat::Rg16Uint, TextureFormat::Rg16Sint,
-    TextureFormat::Rgba16Uint, TextureFormat::Rgba16Sint,
-    TextureFormat::Rg32Float, TextureFormat::Rg32Uint, TextureFormat::Rg32Sint,
+    TextureFormat::R16Float,
+    TextureFormat::R16Uint,
+    TextureFormat::R16Sint,
+    TextureFormat::Rg16Uint,
+    TextureFormat::Rg16Sint,
+    TextureFormat::Rgba16Uint,
+    TextureFormat::Rgba16Sint,
+    TextureFormat::Rg32Float,
+    TextureFormat::Rg32Uint,
+    TextureFormat::Rg32Sint,
     TextureFormat::Rgb9e5Ufloat,
-    TextureFormat::Rgb10a2Unorm, TextureFormat::Rgb10a2Uint, TextureFormat::Rg11b10Ufloat,
-    TextureFormat::R5g6b5Unorm, TextureFormat::A1r5g5b5Unorm, TextureFormat::B4g4r4a4Unorm,
+    TextureFormat::Rgb10a2Unorm,
+    TextureFormat::Rgb10a2Uint,
+    TextureFormat::Rg11b10Ufloat,
+    TextureFormat::R5g6b5Unorm,
+    TextureFormat::A1r5g5b5Unorm,
+    TextureFormat::B4g4r4a4Unorm,
 ];
 
 /// The depth/stencil formats a backend can materialize as a real depth target (the software oracle
@@ -179,11 +189,16 @@ pub const BC_FORMATS: &[TextureFormat] = &[
 ];
 
 pub const ETC2_FORMATS: &[TextureFormat] = &[
-    TextureFormat::Etc2Rgb8Unorm, TextureFormat::Etc2Rgb8Srgb,
-    TextureFormat::Etc2Rgb8A1Unorm, TextureFormat::Etc2Rgb8A1Srgb,
-    TextureFormat::Etc2Rgba8Unorm, TextureFormat::Etc2Rgba8Srgb,
-    TextureFormat::EacR11Unorm, TextureFormat::EacR11Snorm,
-    TextureFormat::EacRg11Unorm, TextureFormat::EacRg11Snorm,
+    TextureFormat::Etc2Rgb8Unorm,
+    TextureFormat::Etc2Rgb8Srgb,
+    TextureFormat::Etc2Rgb8A1Unorm,
+    TextureFormat::Etc2Rgb8A1Srgb,
+    TextureFormat::Etc2Rgba8Unorm,
+    TextureFormat::Etc2Rgba8Srgb,
+    TextureFormat::EacR11Unorm,
+    TextureFormat::EacR11Snorm,
+    TextureFormat::EacRg11Unorm,
+    TextureFormat::EacRg11Snorm,
 ];
 
 /// Every encoder-op tag in the current IR (a backend that replays the whole set advertises this).

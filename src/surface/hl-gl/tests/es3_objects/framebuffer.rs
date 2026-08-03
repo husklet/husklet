@@ -247,7 +247,13 @@ fn the_attachment_query_names_the_object_that_was_attached() {
     let rbo = c.gen_renderbuffer();
     record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, rbo);
     record::renderbuffer_storage(&mut c, GL_RENDERBUFFER, GL_RGBA4, 16, 16);
-    record::framebuffer_renderbuffer(&mut c, GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rbo);
+    record::framebuffer_renderbuffer(
+        &mut c,
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_RENDERBUFFER,
+        rbo,
+    );
     assert_eq!(
         intro::framebuffer_attachment_parameter(
             &c,
@@ -273,7 +279,14 @@ fn the_attachment_query_names_the_object_that_was_attached() {
     let tex = c.textures.gen();
     record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
     record::tex_image_2d(&mut c, 16, 16, &[]);
-    record::framebuffer_texture_2d(&mut c, GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    record::framebuffer_texture_2d(
+        &mut c,
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D,
+        tex,
+        0,
+    );
     assert_eq!(
         intro::framebuffer_attachment_parameter(
             &c,
@@ -294,7 +307,14 @@ fn the_attachment_query_names_the_object_that_was_attached() {
     );
 
     // Detaching leaves NONE — the post-delete case that also already agreed.
-    record::framebuffer_texture_2d(&mut c, GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+    record::framebuffer_texture_2d(
+        &mut c,
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D,
+        0,
+        0,
+    );
     assert_eq!(
         intro::framebuffer_attachment_parameter(
             &c,
@@ -401,7 +421,11 @@ fn a_sub_image_upload_fills_a_float_plane_completely() {
     record::tex_storage_2d(&mut c, GL_TEXTURE_2D, 1, GL_RGBA16F, 4, 4);
 
     let plane = c.textures.get(tex).expect("immutable storage");
-    assert_eq!(plane.data.len(), 4 * 4 * 8, "a half-float 4x4 plane is 128 bytes");
+    assert_eq!(
+        plane.data.len(),
+        4 * 4 * 8,
+        "a half-float 4x4 plane is 128 bytes"
+    );
     assert_eq!(plane.bytes_per_texel(), 8, "and its texel is eight bytes");
 
     let upload = vec![0xABu8; 4 * 4 * 8];
@@ -442,7 +466,12 @@ fn a_sub_image_upload_sized_for_the_wrong_plane_is_refused() {
         "an RGBA8-sized upload into an RGBA8 plane must succeed"
     );
     assert!(
-        c.textures.get(control).expect("plane").data.iter().all(|b| *b == 0xAB),
+        c.textures
+            .get(control)
+            .expect("plane")
+            .data
+            .iter()
+            .all(|b| *b == 0xAB),
         "and must cover the whole plane"
     );
 
@@ -455,7 +484,12 @@ fn a_sub_image_upload_sized_for_the_wrong_plane_is_refused() {
         "an upload sized for four bytes a texel must not be accepted by an eight-byte plane"
     );
     assert!(
-        c.textures.get(float).expect("plane").data.iter().all(|b| *b == 0),
+        c.textures
+            .get(float)
+            .expect("plane")
+            .data
+            .iter()
+            .all(|b| *b == 0),
         "a refused upload must leave the plane untouched, not partly written"
     );
 }
@@ -475,7 +509,11 @@ fn a_wrongly_sized_upload_raises_invalid_value() {
     record::bind_texture(&mut c, GL_TEXTURE_2D, control);
     record::tex_storage_2d(&mut c, GL_TEXTURE_2D, 1, GL_RGBA8, 4, 4);
     record::tex_sub_image_2d(&mut c, GL_TEXTURE_2D, 0, 0, 0, 4, 4, &rgba8_sized);
-    assert_eq!(c.take_gl_error(), GL_NO_ERROR, "the control upload raises nothing");
+    assert_eq!(
+        c.take_gl_error(),
+        GL_NO_ERROR,
+        "the control upload raises nothing"
+    );
 
     let float = c.textures.gen();
     record::bind_texture(&mut c, GL_TEXTURE_2D, float);
@@ -500,7 +538,8 @@ fn generate_mipmap_declines_a_plane_it_cannot_filter() {
     let control = c.textures.gen();
     record::bind_texture(&mut c, GL_TEXTURE_2D, control);
     record::tex_storage_2d(&mut c, GL_TEXTURE_2D, 1, GL_RGBA8, 4, 4);
-    c.textures.sub_image_2d(control, 0, 0, 4, 4, &vec![0xABu8; 4 * 4 * 4]);
+    c.textures
+        .sub_image_2d(control, 0, 0, 4, 4, &vec![0xABu8; 4 * 4 * 4]);
     c.generate_mipmap(GL_TEXTURE_2D);
     assert_eq!(
         c.textures.get(control).expect("plane").mips.len(),
@@ -511,7 +550,8 @@ fn generate_mipmap_declines_a_plane_it_cannot_filter() {
     let float = c.textures.gen();
     record::bind_texture(&mut c, GL_TEXTURE_2D, float);
     record::tex_storage_2d(&mut c, GL_TEXTURE_2D, 1, GL_RGBA16F, 4, 4);
-    c.textures.sub_image_2d(float, 0, 0, 4, 4, &vec![0xABu8; 4 * 4 * 8]);
+    c.textures
+        .sub_image_2d(float, 0, 0, 4, 4, &vec![0xABu8; 4 * 4 * 8]);
     c.generate_mipmap(GL_TEXTURE_2D);
     assert!(
         c.textures.get(float).expect("plane").mips.is_empty(),
@@ -618,11 +658,37 @@ fn every_colour_renderable_format_has_a_clear_packing() {
     // Every sized internal format this driver models as a colour attachment, renderable or not — the
     // input set has to be wider than the answer or the test only re-states the renderable list.
     let candidates = [
-        GL_RGBA8, GL_RGB8, GL_R8, GL_RG8, GL_SRGB8_ALPHA8, GL_BGRA8_EXT, GL_RGB565, GL_RGBA4,
-        GL_RGB5_A1, GL_RGB10_A2, GL_R8UI, GL_R8I, GL_RG8UI, GL_RG8I, GL_RGBA8UI, GL_RGBA8I,
-        GL_R16F, GL_RG16F, GL_RGBA16F, GL_R32F, GL_RG32F, GL_RGBA32F, GL_R11F_G11F_B10F,
-        GL_RGB16F, GL_RGB32F, GL_RGB9_E5, GL_SRGB8, GL_RGB8_SNORM, GL_RGB8UI,
-        GL_DEPTH_COMPONENT16, GL_DEPTH_COMPONENT24,
+        GL_RGBA8,
+        GL_RGB8,
+        GL_R8,
+        GL_RG8,
+        GL_SRGB8_ALPHA8,
+        GL_BGRA8_EXT,
+        GL_RGB565,
+        GL_RGBA4,
+        GL_RGB5_A1,
+        GL_RGB10_A2,
+        GL_R8UI,
+        GL_R8I,
+        GL_RG8UI,
+        GL_RG8I,
+        GL_RGBA8UI,
+        GL_RGBA8I,
+        GL_R16F,
+        GL_RG16F,
+        GL_RGBA16F,
+        GL_R32F,
+        GL_RG32F,
+        GL_RGBA32F,
+        GL_R11F_G11F_B10F,
+        GL_RGB16F,
+        GL_RGB32F,
+        GL_RGB9_E5,
+        GL_SRGB8,
+        GL_RGB8_SNORM,
+        GL_RGB8UI,
+        GL_DEPTH_COMPONENT16,
+        GL_DEPTH_COMPONENT24,
     ];
 
     let mut renderable = 0;

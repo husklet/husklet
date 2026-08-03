@@ -243,7 +243,11 @@ impl Tokens {
                 if let Some(b) = Std140Block::parse(toks, i) {
                     let before = members.len();
                     let body = toks[b.lb + 1..b.rb].source();
-                    let skip: &[String] = if b.instance.is_none() { &unsafe_bare } else { &[] };
+                    let skip: &[String] = if b.instance.is_none() {
+                        &unsafe_bare
+                    } else {
+                        &[]
+                    };
                     let new_body =
                         rewrite_std140_body(&body, b.instance.as_deref(), skip, &mut members);
                     if members.len() == before {
@@ -476,9 +480,7 @@ impl Tokens {
         }
         let declined: Vec<String> = candidates
             .iter()
-            .filter(|name| {
-                Self::shadowed(toks, name) || !Self::every_use_is_subscript(toks, name)
-            })
+            .filter(|name| Self::shadowed(toks, name) || !Self::every_use_is_subscript(toks, name))
             .cloned()
             .collect();
 
@@ -630,10 +632,8 @@ fn rewrite_small_arrays(
 /// use. Deliberately broad: a false positive only costs the mat2 workaround for that name (naga then
 /// reports the unsupported type), while a false negative would rewrite a shadowed local.
 fn is_type_word(w: &str) -> bool {
-    matches!(
-        w,
-        "float" | "int" | "uint" | "bool" | "double" | "void"
-    ) || w.starts_with("vec")
+    matches!(w, "float" | "int" | "uint" | "bool" | "double" | "void")
+        || w.starts_with("vec")
         || w.starts_with("ivec")
         || w.starts_with("uvec")
         || w.starts_with("bvec")

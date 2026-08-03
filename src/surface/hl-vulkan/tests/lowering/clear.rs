@@ -36,9 +36,17 @@ fn blit_image_lowers_to_blit_texture_with_filter() {
             SubresourceLayers::base(),
             SubresourceLayers::base(),
             Origin3d { x: 0, y: 0, z: 0 },
-            Extent3d { width: 8, height: 8, depth: 1 },
+            Extent3d {
+                width: 8,
+                height: 8,
+                depth: 1,
+            },
             Origin3d { x: 0, y: 0, z: 0 },
-            Extent3d { width: 16, height: 16, depth: 1 },
+            Extent3d {
+                width: 16,
+                height: 16,
+                depth: 1,
+            },
             true,
             Mirror::NONE,
         )
@@ -127,9 +135,17 @@ fn blit_image_carries_a_mirror_per_axis() {
                 SubresourceLayers::base(),
                 SubresourceLayers::base(),
                 Origin3d { x: 0, y: 0, z: 0 },
-                Extent3d { width: 8, height: 8, depth: 1 },
+                Extent3d {
+                    width: 8,
+                    height: 8,
+                    depth: 1,
+                },
                 Origin3d { x: 0, y: 0, z: 0 },
-                Extent3d { width: 8, height: 8, depth: 1 },
+                Extent3d {
+                    width: 8,
+                    height: 8,
+                    depth: 1,
+                },
                 false,
                 mirror,
             )

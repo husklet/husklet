@@ -15,8 +15,8 @@ use crate::model::memory::{vk_format, Format};
 use crate::model::queue::{
     ImageState, SurfaceCapabilities, SurfaceFormat, SurfaceRec, SwapImage, SwapchainRec,
     COMPOSITE_ALPHA_OPAQUE_BIT, CURRENT_EXTENT_UNDEFINED, SURFACE_IMAGE_USAGE,
-    SURFACE_TRANSFORM_IDENTITY_BIT, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
-    VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_MAILBOX_KHR,
+    SURFACE_TRANSFORM_IDENTITY_BIT, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, VK_PRESENT_MODE_FIFO_KHR,
+    VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_MAILBOX_KHR,
 };
 use crate::*;
 use hl_gpu::protocol::model::command::Enc;
@@ -182,7 +182,8 @@ pub fn create_swapchain(
     // (`RENDER_TARGET | PRESENT | COPY_SRC`)" — while the code beside it omitted `PRESENT`. A comment
     // asserting a rule its code does not implement is the cheapest defect in this repository to find
     // and among the most expensive to chase.
-    let usage = crate::model::memory::ImageUsage(SURFACE_IMAGE_USAGE).wire() | texture_usage::PRESENT;
+    let usage =
+        crate::model::memory::ImageUsage(SURFACE_IMAGE_USAGE).wire() | texture_usage::PRESENT;
     let mut images = Vec::with_capacity(image_count.max(1) as usize);
     for _ in 0..image_count.max(1) {
         let ir_texture_id = dev.alloc_ir();

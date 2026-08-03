@@ -165,9 +165,17 @@ fn blit_same_image_rejected_and_zero_extent_rejected() {
             SubresourceLayers::base(),
             SubresourceLayers::base(),
             Origin3d { x: 0, y: 0, z: 0 },
-            Extent3d { width: 4, height: 4, depth: 1 },
+            Extent3d {
+                width: 4,
+                height: 4,
+                depth: 1
+            },
             Origin3d { x: 0, y: 0, z: 0 },
-            Extent3d { width: 4, height: 4, depth: 1 },
+            Extent3d {
+                width: 4,
+                height: 4,
+                depth: 1
+            },
             true,
             Mirror::NONE,
         ),
@@ -182,9 +190,17 @@ fn blit_same_image_rejected_and_zero_extent_rejected() {
             SubresourceLayers::base(),
             SubresourceLayers::base(),
             Origin3d { x: 0, y: 0, z: 0 },
-            Extent3d { width: 0, height: 4, depth: 1 },
+            Extent3d {
+                width: 0,
+                height: 4,
+                depth: 1
+            },
             Origin3d { x: 0, y: 0, z: 0 },
-            Extent3d { width: 4, height: 4, depth: 1 },
+            Extent3d {
+                width: 4,
+                height: 4,
+                depth: 1
+            },
             false,
             Mirror::NONE,
         ),

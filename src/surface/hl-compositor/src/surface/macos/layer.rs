@@ -43,7 +43,8 @@ pub(super) fn can_acquire(queue_depth: usize) -> bool {
 }
 
 /// Drawables the layer refused to hand out, counted by queue depth.
-static ACQUIRE_FAILED: crate::diagnostic::SharedTally<usize> = crate::diagnostic::SharedTally::new();
+static ACQUIRE_FAILED: crate::diagnostic::SharedTally<usize> =
+    crate::diagnostic::SharedTally::new();
 
 pub(super) fn record_acquire(elapsed: Duration, queue_depth: usize, acquired: bool) {
     // Failing to acquire a drawable costs the frame outright, so it reports in a release build. A slow

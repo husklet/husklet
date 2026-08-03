@@ -218,25 +218,25 @@ impl WgpuExecutor {
         for cmd in batch {
             let outcome = (|| -> Result<()> {
                 match cmd {
-                Cmd::CreateBuffer(id, d) => {
-                    let started = self.profile_clock();
-                    let b = self.make_buffer(d.size);
-                    self.profile_record(|p| &mut p.buffers, started);
-                    res.buffers.insert(*id, Box::new(b))?;
-                }
-                Cmd::DestroyBuffer(id) => {
-                    let started = self.profile_clock();
-                    self.flush_writes();
-                    res.buffers.remove(*id)?;
-                    self.profile_record(|p| &mut p.destroys, started);
-                }
-                Cmd::WriteBuffer { id, offset, data } => {
-                    if matches!(data.len(), 64 | 256)
-                        && self.diagnostic_upload_candidates.get() != 0
-                    {
-                        self.diagnostic_upload_candidates
-                            .set(self.diagnostic_upload_candidates.get() - 1);
-                        hl_log::hl_error!(
+                    Cmd::CreateBuffer(id, d) => {
+                        let started = self.profile_clock();
+                        let b = self.make_buffer(d.size);
+                        self.profile_record(|p| &mut p.buffers, started);
+                        res.buffers.insert(*id, Box::new(b))?;
+                    }
+                    Cmd::DestroyBuffer(id) => {
+                        let started = self.profile_clock();
+                        self.flush_writes();
+                        res.buffers.remove(*id)?;
+                        self.profile_record(|p| &mut p.destroys, started);
+                    }
+                    Cmd::WriteBuffer { id, offset, data } => {
+                        if matches!(data.len(), 64 | 256)
+                            && self.diagnostic_upload_candidates.get() != 0
+                        {
+                            self.diagnostic_upload_candidates
+                                .set(self.diagnostic_upload_candidates.get() - 1);
+                            hl_log::hl_error!(
                             hl_log::tag::PRESENT,
                             "sentinel_host phase=write_candidate executor={:p} buffer={} offset={} len={} head={:02x?}",
                             self,
@@ -245,16 +245,18 @@ impl WgpuExecutor {
                             data.len(),
                             &data[..16]
                         );
-                    }
-                    if data.len() >= 16
-                        && data[..16]
-                            == [0x11, 0x22, 0x33, 0xff, 0x11, 0x22, 0x33, 0xff,
-                                0x11, 0x22, 0x33, 0xff, 0x11, 0x22, 0x33, 0xff]
-                    {
-                        self.diagnostic_sentinel_buffer.set(Some(*id));
-                        self.diagnostic_sentinel_submits.set(8);
-                        self.diagnostic_sentinel_batch_results.set(4);
-                        hl_log::hl_error!(
+                        }
+                        if data.len() >= 16
+                            && data[..16]
+                                == [
+                                    0x11, 0x22, 0x33, 0xff, 0x11, 0x22, 0x33, 0xff, 0x11, 0x22,
+                                    0x33, 0xff, 0x11, 0x22, 0x33, 0xff,
+                                ]
+                        {
+                            self.diagnostic_sentinel_buffer.set(Some(*id));
+                            self.diagnostic_sentinel_submits.set(8);
+                            self.diagnostic_sentinel_batch_results.set(4);
+                            hl_log::hl_error!(
                             hl_log::tag::PRESENT,
                             "sentinel_host phase=write_buffer executor={:p} buffer={} offset={} len={} head={:02x?}",
                             self,
@@ -263,119 +265,121 @@ impl WgpuExecutor {
                             data.len(),
                             &data[..16]
                         );
+                        }
+                        let started = self.profile_clock();
+                        self.write_bytes(res, *id, *offset, data)?;
+                        self.profile_record(|p| &mut p.buffer_writes, started);
                     }
-                    let started = self.profile_clock();
-                    self.write_bytes(res, *id, *offset, data)?;
-                    self.profile_record(|p| &mut p.buffer_writes, started);
-                }
-                Cmd::CreateTexture(id, d) => {
-                    let t = self.make_texture(d)?;
-                    res.textures.insert(*id, Box::new(t))?;
-                }
-                Cmd::DestroyTexture(id) => {
-                    res.textures.remove(*id)?;
-                }
-                Cmd::CreateTextureView(id, desc) => {
-                    let view = self.make_texture_view(res, desc)?;
-                    res.textures.insert(*id, Box::new(view))?;
-                }
-                Cmd::DestroyTextureView(id) => {
-                    res.textures.remove(*id)?;
-                }
-                Cmd::CreateSampler(id, d) => self.create_sampler(res, *id, d)?,
-                Cmd::DestroySampler(id) => {
-                    res.samplers.remove(*id)?;
-                }
-                Cmd::CreateShader { id, kind, spirv } => {
-                    let started = std::time::Instant::now();
-                    self.create_shader(res, *id, *kind, spirv)?;
-                    if let Some(profile) = self.profile.borrow_mut().as_mut() {
-                        profile.shaders.add(started.elapsed());
+                    Cmd::CreateTexture(id, d) => {
+                        let t = self.make_texture(d)?;
+                        res.textures.insert(*id, Box::new(t))?;
                     }
-                }
-                Cmd::DestroyShader(id) => self.destroy_shader(res, *id)?,
-                Cmd::CreateRenderPipeline(id, d) => {
-                    let started = std::time::Instant::now();
-                    self.create_render_pipeline(res, *id, d, None, Default::default())?;
-                    if let Some(profile) = self.profile.borrow_mut().as_mut() {
-                        profile.render_pipelines.add(started.elapsed());
+                    Cmd::DestroyTexture(id) => {
+                        res.textures.remove(*id)?;
                     }
-                }
-                Cmd::CreateComputePipeline(id, d) => {
-                    let started = std::time::Instant::now();
-                    self.create_compute_pipeline(res, *id, d, None)?;
-                    if let Some(profile) = self.profile.borrow_mut().as_mut() {
-                        profile.compute_pipelines.add(started.elapsed());
+                    Cmd::CreateTextureView(id, desc) => {
+                        let view = self.make_texture_view(res, desc)?;
+                        res.textures.insert(*id, Box::new(view))?;
                     }
-                }
-                Cmd::CreateRenderPipelineLayout(id, d, layout, multisample) => {
-                    let started = std::time::Instant::now();
-                    self.create_render_pipeline(res, *id, d, Some(layout), *multisample)?;
-                    if let Some(profile) = self.profile.borrow_mut().as_mut() {
-                        profile.render_pipelines.add(started.elapsed());
+                    Cmd::DestroyTextureView(id) => {
+                        res.textures.remove(*id)?;
                     }
-                }
-                Cmd::CreateComputePipelineLayout(id, d, layout) => {
-                    let started = std::time::Instant::now();
-                    self.create_compute_pipeline(res, *id, d, Some(layout))?;
-                    if let Some(profile) = self.profile.borrow_mut().as_mut() {
-                        profile.compute_pipelines.add(started.elapsed());
+                    Cmd::CreateSampler(id, d) => self.create_sampler(res, *id, d)?,
+                    Cmd::DestroySampler(id) => {
+                        res.samplers.remove(*id)?;
                     }
-                }
-                Cmd::DestroyPipeline(id) => self.destroy_pipeline(res, *id)?,
-                Cmd::CreateBindGroup(id, d) => {
-                    let started = std::time::Instant::now();
-                    self.create_bind_group(res, *id, d)?;
-                    if let Some(profile) = self.profile.borrow_mut().as_mut() {
-                        profile.bind_groups.add(started.elapsed());
-                    }
-                }
-                Cmd::DestroyBindGroup(id) => {
-                    let started = self.profile_clock();
-                    res.bind_groups.remove(*id)?;
-                    self.profile_record(|p| &mut p.destroys, started);
-                }
-                Cmd::CreateSurface(id, d) => res.surfaces.insert(*id, Box::new(d.clone()))?,
-                Cmd::DestroySurface(id) => {
-                    #[cfg(target_os = "macos")]
-                    if let Ok(surface) = res.surfaces.get(*id) {
-                        if let Some(desc) = surface.downcast_ref::<SurfaceDesc>() {
-                            self.presentation_completions
-                                .lock()
-                                .unwrap_or_else(|error| error.into_inner())
-                                .retain(|(token, _), _| *token != desc.token.get());
+                    Cmd::CreateShader { id, kind, spirv } => {
+                        let started = std::time::Instant::now();
+                        self.create_shader(res, *id, *kind, spirv)?;
+                        if let Some(profile) = self.profile.borrow_mut().as_mut() {
+                            profile.shaders.add(started.elapsed());
                         }
                     }
-                    res.surfaces.remove(*id)?;
-                }
-                Cmd::CreateFence(id) => res.fences.insert(*id, Box::new(fence::Fence::state()))?,
-                Cmd::DestroyFence(id) => {
-                    res.fences.remove(*id)?;
-                }
-                Cmd::Submit(cb) => {
-                    // Preserve the protocol's host-write-before-command-buffer ordering. One flush covers
-                    // the entire consecutive write run instead of issuing one empty submission per write.
-                    self.flush_writes();
-                    let started = std::time::Instant::now();
-                    self.submit_cb(res, cb)?;
-                    if let Some(profile) = self.profile.borrow_mut().as_mut() {
-                        profile.logical_submissions.add(started.elapsed());
+                    Cmd::DestroyShader(id) => self.destroy_shader(res, *id)?,
+                    Cmd::CreateRenderPipeline(id, d) => {
+                        let started = std::time::Instant::now();
+                        self.create_render_pipeline(res, *id, d, None, Default::default())?;
+                        if let Some(profile) = self.profile.borrow_mut().as_mut() {
+                            profile.render_pipelines.add(started.elapsed());
+                        }
                     }
-                }
-                Cmd::WaitFence { id, value } => {
-                    self.flush_writes();
-                    if fence::Fence::scheduled(res, *id)? < *value {
-                        return Err(GpuError::Invalid("wait on a fence value never signalled"));
+                    Cmd::CreateComputePipeline(id, d) => {
+                        let started = std::time::Instant::now();
+                        self.create_compute_pipeline(res, *id, d, None)?;
+                        if let Some(profile) = self.profile.borrow_mut().as_mut() {
+                            profile.compute_pipelines.add(started.elapsed());
+                        }
                     }
-                }
-                Cmd::Present {
-                    surface,
-                    texture,
-                    serial,
-                } => {
-                    self.flush_writes();
-                    presents.push(present::present(self, res, *surface, *texture, *serial)?);
-                }
+                    Cmd::CreateRenderPipelineLayout(id, d, layout, multisample) => {
+                        let started = std::time::Instant::now();
+                        self.create_render_pipeline(res, *id, d, Some(layout), *multisample)?;
+                        if let Some(profile) = self.profile.borrow_mut().as_mut() {
+                            profile.render_pipelines.add(started.elapsed());
+                        }
+                    }
+                    Cmd::CreateComputePipelineLayout(id, d, layout) => {
+                        let started = std::time::Instant::now();
+                        self.create_compute_pipeline(res, *id, d, Some(layout))?;
+                        if let Some(profile) = self.profile.borrow_mut().as_mut() {
+                            profile.compute_pipelines.add(started.elapsed());
+                        }
+                    }
+                    Cmd::DestroyPipeline(id) => self.destroy_pipeline(res, *id)?,
+                    Cmd::CreateBindGroup(id, d) => {
+                        let started = std::time::Instant::now();
+                        self.create_bind_group(res, *id, d)?;
+                        if let Some(profile) = self.profile.borrow_mut().as_mut() {
+                            profile.bind_groups.add(started.elapsed());
+                        }
+                    }
+                    Cmd::DestroyBindGroup(id) => {
+                        let started = self.profile_clock();
+                        res.bind_groups.remove(*id)?;
+                        self.profile_record(|p| &mut p.destroys, started);
+                    }
+                    Cmd::CreateSurface(id, d) => res.surfaces.insert(*id, Box::new(d.clone()))?,
+                    Cmd::DestroySurface(id) => {
+                        #[cfg(target_os = "macos")]
+                        if let Ok(surface) = res.surfaces.get(*id) {
+                            if let Some(desc) = surface.downcast_ref::<SurfaceDesc>() {
+                                self.presentation_completions
+                                    .lock()
+                                    .unwrap_or_else(|error| error.into_inner())
+                                    .retain(|(token, _), _| *token != desc.token.get());
+                            }
+                        }
+                        res.surfaces.remove(*id)?;
+                    }
+                    Cmd::CreateFence(id) => {
+                        res.fences.insert(*id, Box::new(fence::Fence::state()))?
+                    }
+                    Cmd::DestroyFence(id) => {
+                        res.fences.remove(*id)?;
+                    }
+                    Cmd::Submit(cb) => {
+                        // Preserve the protocol's host-write-before-command-buffer ordering. One flush covers
+                        // the entire consecutive write run instead of issuing one empty submission per write.
+                        self.flush_writes();
+                        let started = std::time::Instant::now();
+                        self.submit_cb(res, cb)?;
+                        if let Some(profile) = self.profile.borrow_mut().as_mut() {
+                            profile.logical_submissions.add(started.elapsed());
+                        }
+                    }
+                    Cmd::WaitFence { id, value } => {
+                        self.flush_writes();
+                        if fence::Fence::scheduled(res, *id)? < *value {
+                            return Err(GpuError::Invalid("wait on a fence value never signalled"));
+                        }
+                    }
+                    Cmd::Present {
+                        surface,
+                        texture,
+                        serial,
+                    } => {
+                        self.flush_writes();
+                        presents.push(present::present(self, res, *surface, *texture, *serial)?);
+                    }
                 }
                 Ok(())
             })();

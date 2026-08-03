@@ -91,7 +91,11 @@ fn extreme_viewport_and_scissor_dims_do_not_panic() {
     record::viewport(&mut c, [-1, -1, i32::MAX, i32::MAX]);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR, "a huge extent is legal");
     record::scissor(&mut c, [i32::MIN, i32::MIN, -4, -4]);
-    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE, "a negative extent is not");
+    assert_eq!(
+        c.take_gl_error(),
+        GL_INVALID_VALUE,
+        "a negative extent is not"
+    );
     record::viewport(&mut c, [0, 0, 320, 240]);
     assert_eq!(c.viewport(), [0, 0, 320, 240]);
 }
@@ -144,7 +148,11 @@ fn a_draw_whose_buffer_binding_reverted_is_refused_on_a_user_vao() {
 
     // Deleting the buffer correctly reverts the binding to zero — that part was never in doubt.
     assert!(c.delete_buffer_later(vbo));
-    assert_eq!(c.attributes()[0].buffer, 0, "deletion unbinds, as it should");
+    assert_eq!(
+        c.attributes()[0].buffer,
+        0,
+        "deletion unbinds, as it should"
+    );
 
     record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
     assert_eq!(

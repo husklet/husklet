@@ -185,15 +185,13 @@ fn runtime_sharing_lifecycle_is_atomic_and_retains_live_imports() {
     let export =
         hl_gpu::runtime::service::dispatch::export_buffer(&mut owner, &owner_exec, BufferId(1))
             .unwrap();
-    assert!(
-        hl_gpu::runtime::service::dispatch::import_buffer(
-            &mut importer,
-            &importer_exec,
-            BufferId(7),
-            ExportId(u64::MAX)
-        )
-        .is_err()
-    );
+    assert!(hl_gpu::runtime::service::dispatch::import_buffer(
+        &mut importer,
+        &importer_exec,
+        BufferId(7),
+        ExportId(u64::MAX)
+    )
+    .is_err());
     assert_eq!(
         hl_gpu::runtime::service::dispatch::import_buffer(
             &mut importer,
@@ -204,15 +202,13 @@ fn runtime_sharing_lifecycle_is_atomic_and_retains_live_imports() {
         .unwrap(),
         4
     );
-    assert!(
-        hl_gpu::runtime::service::dispatch::import_buffer(
-            &mut importer,
-            &importer_exec,
-            BufferId(7),
-            export
-        )
-        .is_err()
-    );
+    assert!(hl_gpu::runtime::service::dispatch::import_buffer(
+        &mut importer,
+        &importer_exec,
+        BufferId(7),
+        export
+    )
+    .is_err());
     assert_eq!(
         importer_exec
             .read_buffer(&importer.resources, BufferId(7), 0, 4)

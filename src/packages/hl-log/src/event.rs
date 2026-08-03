@@ -256,13 +256,7 @@ pub fn emit_verdict(tags: Tags, event: &str, module: &str, line: u32, fields: &[
             other => other.write(&mut sentence),
         }
     }
-    crate::emit::emit(
-        tags,
-        Level::Error,
-        module,
-        line,
-        format_args!("{sentence}"),
-    );
+    crate::emit::emit(tags, Level::Error, module, line, format_args!("{sentence}"));
 }
 
 #[cfg(test)]

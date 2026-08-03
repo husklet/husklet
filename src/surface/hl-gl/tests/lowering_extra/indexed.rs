@@ -115,10 +115,10 @@ fn indexed_draw_pads_the_final_partial_vertex_stride() {
     let padded = sink.batches[0]
         .windows(2)
         .find_map(|commands| match commands {
-            [Cmd::CreateBuffer(id, descriptor), Cmd::WriteBuffer { id: write, data, .. }]
-                if id == write
-                    && descriptor.usage
-                        == hl_gpu::protocol::model::enums::buffer_usage::VERTEX =>
+            [Cmd::CreateBuffer(id, descriptor), Cmd::WriteBuffer {
+                id: write, data, ..
+            }] if id == write
+                && descriptor.usage == hl_gpu::protocol::model::enums::buffer_usage::VERTEX =>
             {
                 Some((descriptor.size, data))
             }

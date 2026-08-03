@@ -531,7 +531,10 @@ pub(crate) fn region_layout(
     // next one — levels are contiguous in this allocation, so that would corrupt a neighbour rather than
     // fail.
     let (lw, lh) = Texture::level_size(&t.desc, sub.mip);
-    let x_end = origin.x.checked_add(extent.width).ok_or(GpuError::OutOfBounds)?;
+    let x_end = origin
+        .x
+        .checked_add(extent.width)
+        .ok_or(GpuError::OutOfBounds)?;
     let y_end = origin
         .y
         .checked_add(extent.height)
@@ -584,7 +587,14 @@ pub(crate) fn copy_buffer_to_texture_region(
 ) -> Result<()> {
     let (plane, row_bytes, stride, _) = {
         let t = texture(res, dst)?;
-        region_layout(t, dst_sub, dst_origin, extent, bytes_per_row, rows_per_image)?
+        region_layout(
+            t,
+            dst_sub,
+            dst_origin,
+            extent,
+            bytes_per_row,
+            rows_per_image,
+        )?
     };
     let bpt = row_bytes / (extent.width as usize).max(1);
     let tw = Texture::level_size(&texture(res, dst)?.desc, dst_sub.mip).0 as usize;
@@ -626,7 +636,14 @@ pub(crate) fn copy_texture_to_buffer_region(
 ) -> Result<()> {
     let (plane, row_bytes, stride, _) = {
         let t = texture(res, src)?;
-        region_layout(t, src_sub, src_origin, extent, bytes_per_row, rows_per_image)?
+        region_layout(
+            t,
+            src_sub,
+            src_origin,
+            extent,
+            bytes_per_row,
+            rows_per_image,
+        )?
     };
     let bpt = row_bytes / (extent.width as usize).max(1);
     let t = texture(res, src)?;

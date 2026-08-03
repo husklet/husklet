@@ -2,7 +2,9 @@
 
 use crate::model::device::IrIds;
 use crate::model::instance::Instance;
-use crate::model::memory::{BufferRec, BufferUsage, Format, ImageRec, ImageUsage, MemRec, SamplerRec};
+use crate::model::memory::{
+    BufferRec, BufferUsage, Format, ImageRec, ImageUsage, MemRec, SamplerRec,
+};
 use crate::model::queue::FenceRec;
 use crate::*;
 use hl_gpu::protocol::model::descriptor::{BufferDesc, SamplerDesc};
@@ -281,11 +283,12 @@ pub fn refresh_mapped_buffer(
         return Ok(());
     }
     let bytes = sink.read_buffer(BufferId(ir_id), 0, size as usize)?;
-    let memory = dev.memories.get_mut(&memory).expect("memory validated above");
+    let memory = dev
+        .memories
+        .get_mut(&memory)
+        .expect("memory validated above");
     let start = bound_offset as usize;
-    let len = bytes
-        .len()
-        .min(memory.data.len().saturating_sub(start));
+    let len = bytes.len().min(memory.data.len().saturating_sub(start));
     memory.data[start..start + len].copy_from_slice(&bytes[..len]);
     Ok(())
 }

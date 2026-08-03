@@ -53,20 +53,10 @@ fn mapped_memory_flushes_as_write_buffer_at_submit() {
 fn gpu_written_coherent_mapping_is_refreshed_after_submit() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
-    let src = create::create_buffer(
-        &mut d,
-        &mut sink,
-        vk_buffer_usage::TRANSFER_SRC,
-        4096,
-    )
-    .unwrap();
-    let dst = create::create_buffer(
-        &mut d,
-        &mut sink,
-        vk_buffer_usage::TRANSFER_DST,
-        4096,
-    )
-    .unwrap();
+    let src =
+        create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_SRC, 4096).unwrap();
+    let dst =
+        create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_DST, 4096).unwrap();
     let dst_ir = d.buffers.get(&dst).unwrap().ir_id;
     let memory = d.allocate_memory(4096).unwrap();
     create::bind_buffer_memory(&mut d, dst, memory, 0).unwrap();

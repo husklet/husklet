@@ -11,6 +11,7 @@
 mod gpu_harness;
 use gpu_harness::*;
 
+use hl_gpu::protocol::model::descriptor::Mirror;
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BufferDesc, ColorAttachment, RenderPipelineDesc,
     SamplerDesc, ShaderRef, TextureDesc,
@@ -21,7 +22,6 @@ use hl_gpu::protocol::model::enums::{
 use hl_gpu::protocol::model::kernel::glsl_stage;
 use hl_gpu::{Cmd, CommandBuffer, Enc, ShaderPayloadKind};
 use hl_gpu_wgpu::{DeviceConfig, WgpuExecutor};
-use hl_gpu::protocol::model::descriptor::Mirror;
 
 const LAYERS: [[u8; 4]; 4] = [
     [210, 20, 20, 255],  // layer 0
@@ -388,14 +388,21 @@ fn a_texture_that_is_not_a_render_target_is_refused_where_the_caller_can_see_it(
 
     // Positive control FIRST: the ordinary path works, so a refusal below means something.
     run(&mut exec, 1, pass(1)).expect("a plain 2D texture is a colour target");
-    run(&mut exec, 1, pass(2)).expect("a single-layer view of a plain 2D texture is a colour target");
+    run(&mut exec, 1, pass(2))
+        .expect("a single-layer view of a plain 2D texture is a colour target");
     run(&mut exec, 1, blit_into(1)).expect("a plain 2D texture is a blit destination");
 
     // The array texture, by its default D2Array view: previously `MissingFeatures(MULTIVIEW)`.
     // The array texture, through a single-layer D2 view: previously `TextureViewIsNotRenderable(Usage)`.
     // Both are now one answer that names what the caller did.
-    for (target, what) in [(1u32, "the array texture"), (2, "a single-layer view of it")] {
-        for (encoder, path) in [(pass(target), "colour attachment"), (blit_into(target), "blit destination")] {
+    for (target, what) in [
+        (1u32, "the array texture"),
+        (2, "a single-layer view of it"),
+    ] {
+        for (encoder, path) in [
+            (pass(target), "colour attachment"),
+            (blit_into(target), "blit destination"),
+        ] {
             let err = run(&mut exec, 3, encoder).expect_err(
                 "an array texture has no RENDER_ATTACHMENT and must be refused as a render target",
             );

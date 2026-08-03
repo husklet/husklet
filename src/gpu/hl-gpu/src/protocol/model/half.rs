@@ -122,7 +122,11 @@ mod tests {
     fn a_tie_rounds_to_the_even_significand() {
         let ulp = 2.0f32.powi(-10);
         // 1.0 is even (significand 0x000); 1.0 + half an ulp ties and must stay at 1.0.
-        assert_eq!(from_f32(1.0 + ulp / 2.0), 0x3c00, "tie down to the even significand");
+        assert_eq!(
+            from_f32(1.0 + ulp / 2.0),
+            0x3c00,
+            "tie down to the even significand"
+        );
         // 1.0 + 1 ulp is odd (significand 0x001); + half an ulp ties and must round UP to even 0x002.
         assert_eq!(
             from_f32(1.0 + ulp + ulp / 2.0),
@@ -135,7 +139,11 @@ mod tests {
             "past the tie rounds up even from an even significand"
         );
         // Symmetric for negatives: ties go to even, not away from zero.
-        assert_eq!(from_f32(-(1.0 + ulp / 2.0)), 0xbc00, "negative tie also goes to even");
+        assert_eq!(
+            from_f32(-(1.0 + ulp / 2.0)),
+            0xbc00,
+            "negative tie also goes to even"
+        );
     }
 
     /// The endpoints, named. A conversion that divides or shifts by the wrong constant is invisible in
@@ -146,7 +154,11 @@ mod tests {
         assert_eq!(from_f32(1.0), 0x3c00);
         assert_eq!(from_f32(-1.0), 0xbc00);
         assert_eq!(from_f32(65504.0), 0x7bff, "half's largest finite value");
-        assert_eq!(from_f32(65520.0), 0x7c00, "just above it saturates to infinity");
+        assert_eq!(
+            from_f32(65520.0),
+            0x7c00,
+            "just above it saturates to infinity"
+        );
         assert_eq!(from_f32(6.103_515_6e-5), 0x0400, "smallest normal");
         assert_eq!(from_f32(5.960_464_5e-8), 0x0001, "smallest subnormal");
         assert_eq!(from_f32(2.9e-8), 0x0000, "below it flushes to zero");

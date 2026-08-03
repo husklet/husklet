@@ -21,8 +21,8 @@
 //!
 //! A test whose reversion was never observed to fail is a claim, not evidence; every row above was run.
 
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use hl_gpu::runtime::model::resources::Account;

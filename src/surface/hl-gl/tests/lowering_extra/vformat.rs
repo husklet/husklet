@@ -148,7 +148,12 @@ fn converted_tightly_packed_vec3_leaves_no_empty_vertex_layout() {
     setup_tint(&mut c);
     let tint = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ARRAY_BUFFER, tint);
-    record::buffer_data(&mut c, GL_ARRAY_BUFFER, &[255, 128, 0, 64, 32, 16, 8, 4, 2], 0x88E4);
+    record::buffer_data(
+        &mut c,
+        GL_ARRAY_BUFFER,
+        &[255, 128, 0, 64, 32, 16, 8, 4, 2],
+        0x88E4,
+    );
     record::vertex_attrib_pointer(&mut c, 1, 3, GL_UNSIGNED_BYTE, true, 0, 0);
     record::enable_vertex_attrib(&mut c, 1);
     record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
@@ -167,7 +172,10 @@ fn converted_tightly_packed_vec3_leaves_no_empty_vertex_layout() {
         .iter()
         .find(|layout| layout.attrs.iter().any(|attribute| attribute.location == 1))
         .expect("the converted vec3 layout");
-    assert_eq!(converted.stride, 16, "vec3 is padded to the linked vec4 input");
+    assert_eq!(
+        converted.stride, 16,
+        "vec3 is padded to the linked vec4 input"
+    );
 }
 
 #[test]
@@ -336,7 +344,10 @@ fn narrow_signed_ipointer_widens_and_sign_extends_with_gl_defaults() {
     let ints = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ARRAY_BUFFER, ints);
     let values = [-2i16, 7, 9];
-    let bytes = values.iter().flat_map(|value| value.to_le_bytes()).collect::<Vec<_>>();
+    let bytes = values
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect::<Vec<_>>();
     record::buffer_data(&mut c, GL_ARRAY_BUFFER, &bytes, 0x88E4);
     record::vertex_attrib_ipointer(&mut c, 1, 1, GL_SHORT, 0, 0);
     record::enable_vertex_attrib(&mut c, 1);
@@ -348,7 +359,10 @@ fn narrow_signed_ipointer_widens_and_sign_extends_with_gl_defaults() {
         .zip(batch.iter().skip(1))
         .find_map(|(create, write)| match (create, write) {
             (Cmd::CreateBuffer(_, desc), Cmd::WriteBuffer { data, .. })
-                if desc.label.starts_with("gl-converted-vertex") => Some(data),
+                if desc.label.starts_with("gl-converted-vertex") =>
+            {
+                Some(data)
+            }
             _ => None,
         })
         .expect("converted integer upload");
@@ -385,7 +399,10 @@ fn narrow_unsigned_ipointer_zero_extends_and_pads_w() {
         .zip(batch.iter().skip(1))
         .find_map(|(create, write)| match (create, write) {
             (Cmd::CreateBuffer(_, desc), Cmd::WriteBuffer { data, .. })
-                if desc.label.starts_with("gl-converted-vertex") => Some(data),
+                if desc.label.starts_with("gl-converted-vertex") =>
+            {
+                Some(data)
+            }
             _ => None,
         })
         .unwrap();

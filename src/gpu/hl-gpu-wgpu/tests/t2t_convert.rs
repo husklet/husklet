@@ -189,11 +189,7 @@ fn rgba_to_bgra_copy_reinterprets_bytes_exact() {
         A,
         "texel (0,0) keeps its bytes; a copy does not convert"
     );
-    assert_eq!(
-        px(&out, 2, 1, 0),
-        B,
-        "texel (1,0) keeps its bytes"
-    );
+    assert_eq!(px(&out, 2, 1, 0), B, "texel (1,0) keeps its bytes");
     assert_eq!(px(&out, 2, 0, 1), C, "texel (0,1) keeps its bytes");
     assert_eq!(px(&out, 2, 1, 1), D, "texel (1,1) keeps its bytes");
 }

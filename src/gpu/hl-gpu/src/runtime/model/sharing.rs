@@ -269,7 +269,9 @@ impl Default for Exports {
 impl Exports {
     /// Serialize command execution with map-state transitions across every session sharing this registry.
     pub(crate) fn operation(&self) -> MutexGuard<'_, ()> {
-        self.operation.lock().unwrap_or_else(|error| error.into_inner())
+        self.operation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
     }
 }
 
@@ -360,17 +362,15 @@ mod transition_lease_tests {
         }));
         exports.settle_transition(id, Duration::ZERO);
         drop(plan);
-        assert!(
-            !exports
-                .inner
-                .lock()
-                .unwrap()
-                .entries
-                .get(&id)
-                .unwrap()
-                .pending
-                .is_some()
-        );
+        assert!(!exports
+            .inner
+            .lock()
+            .unwrap()
+            .entries
+            .get(&id)
+            .unwrap()
+            .pending
+            .is_some());
 
         let plan = exports.prepare_owner_release(SessionId(101), id).unwrap();
         let token = plan.token;
@@ -381,17 +381,15 @@ mod transition_lease_tests {
         }));
         exports.settle_transition(id, Duration::from_millis(1));
         drop(plan);
-        assert!(
-            !exports
-                .inner
-                .lock()
-                .unwrap()
-                .entries
-                .get(&id)
-                .unwrap()
-                .pending
-                .is_some()
-        );
+        assert!(!exports
+            .inner
+            .lock()
+            .unwrap()
+            .entries
+            .get(&id)
+            .unwrap()
+            .pending
+            .is_some());
     }
 
     #[test]

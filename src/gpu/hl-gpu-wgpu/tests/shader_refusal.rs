@@ -23,9 +23,7 @@ use hl_gpu::protocol::model::enums::buffer_usage;
 use hl_gpu::protocol::model::kernel::{glsl_stage, GlslDescriptor};
 use hl_gpu::transport::{SubmitHeader, Verdict};
 use hl_gpu::CommandSink as _;
-use hl_gpu::{
-    Cmd, FakeClock, GlobalLedger, GpuExecutor, Limits, Session, ShaderPayloadKind,
-};
+use hl_gpu::{Cmd, FakeClock, GlobalLedger, GpuExecutor, Limits, Session, ShaderPayloadKind};
 use hl_gpu_wgpu::{DeviceConfig, WgpuExecutor};
 
 /// A shader whose WGSL translation wgpu REFUSES, reached through the ordinary guest GLSL payload channel.
@@ -101,16 +99,14 @@ impl Service {
                             let _ = hl_gpu::serve_connection(
                                 &stream,
                                 &capabilities,
-                                |header: &SubmitHeader, batch: &[Cmd]| {
-                                    match hl_gpu::runtime::submit(
-                                        &mut session,
-                                        &mut executor,
-                                        header.len as usize,
-                                        batch,
-                                    ) {
-                                        Ok(_) => Verdict::Ack,
-                                        Err(_) => Verdict::Nack,
-                                    }
+                                |header: &SubmitHeader, batch: &[Cmd]| match hl_gpu::runtime::submit(
+                                    &mut session,
+                                    &mut executor,
+                                    header.len as usize,
+                                    batch,
+                                ) {
+                                    Ok(_) => Verdict::Ack,
+                                    Err(_) => Verdict::Nack,
                                 },
                             );
                         });

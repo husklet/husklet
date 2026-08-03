@@ -363,10 +363,7 @@ fn a_combined_depth_stencil_clear_keeps_both_halves() {
     setup_geometry(&mut c);
     record::clear_depth(&mut c, 0.25);
     record::clear_stencil(&mut c, 7);
-    record::clear_buffers(
-        &mut c,
-        GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT,
-    );
+    record::clear_buffers(&mut c, GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
     // A DEPTH-tested (but not stencil-tested) draw: the pass would otherwise take a depth-only format and
     // silently drop the stencil half of the clear above.
     record::enable(&mut c, GL_DEPTH_TEST);
@@ -435,16 +432,16 @@ fn depth_load(batch: &[Cmd]) -> Option<LoadOp> {
 /// The depth state of the first render pipeline created in the batch.
 fn pipeline_depth(batch: &[Cmd]) -> Option<hl_gpu::protocol::model::descriptor::DepthState> {
     batch.iter().find_map(|c| match c {
-        Cmd::CreateRenderPipeline(_, desc)
-        | Cmd::CreateRenderPipelineLayout(_, desc, _, _) => desc.depth.clone(),
+        Cmd::CreateRenderPipeline(_, desc) | Cmd::CreateRenderPipelineLayout(_, desc, _, _) => {
+            desc.depth.clone()
+        }
         _ => None,
     })
 }
 
 fn pipeline_color_write_mask(batch: &[Cmd]) -> Option<u32> {
     batch.iter().find_map(|c| match c {
-        Cmd::CreateRenderPipeline(_, desc)
-        | Cmd::CreateRenderPipelineLayout(_, desc, _, _) => {
+        Cmd::CreateRenderPipeline(_, desc) | Cmd::CreateRenderPipelineLayout(_, desc, _, _) => {
             desc.color_targets.first().map(|t| t.write_mask)
         }
         _ => None,
@@ -690,11 +687,7 @@ fn two_clears_at_different_values_share_one_pipeline() {
     // Two shader modules for the app's program, two for the internal clear — and nothing on the second
     // frame, whose clear value differs but whose pipeline does not.
     assert_eq!(creates, 4, "the clear shaders are created once per context");
-    let clear_pipelines: usize = sink
-        .batches
-        .iter()
-        .filter(|b| used_rect_clear(b))
-        .count();
+    let clear_pipelines: usize = sink.batches.iter().filter(|b| used_rect_clear(b)).count();
     assert_eq!(clear_pipelines, 1, "and so is the pipeline");
 }
 
@@ -798,7 +791,10 @@ fn a_scissored_clear_fill_is_emitted_outside_any_render_pass() {
             _ => {}
         }
     }
-    assert!(saw_fill, "the scissored clear must still lower to a fill: {ops:?}");
+    assert!(
+        saw_fill,
+        "the scissored clear must still lower to a fill: {ops:?}"
+    );
     assert_eq!(depth, 0, "every pass is closed");
 }
 

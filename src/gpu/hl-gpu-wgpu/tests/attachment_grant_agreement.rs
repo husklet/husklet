@@ -31,8 +31,7 @@ use hl_gpu::protocol::model::enums::{texture_usage, Filter, LoadOp, TextureDim, 
 use hl_gpu::{Cmd, CommandBuffer, Enc, GpuError};
 use hl_gpu_wgpu::{DeviceConfig, WgpuExecutor};
 
-const USAGE: u32 =
-    texture_usage::RENDER_TARGET | texture_usage::COPY_SRC | texture_usage::COPY_DST;
+const USAGE: u32 = texture_usage::RENDER_TARGET | texture_usage::COPY_SRC | texture_usage::COPY_DST;
 
 /// One texture shape and whether the grant is expected to admit it as a render target.
 struct Shape {
@@ -196,7 +195,8 @@ fn no_texture_shape_reaches_device_validation_as_an_attachment() {
         let ran = classify(pass, what, "colour attachment");
         accepted_somewhere |= ran;
         assert_eq!(
-            ran, granted,
+            ran,
+            granted,
             "{what}: expected the colour pass to {} — if the grant in texture.rs changed, this \
              expectation must change WITH the attachment path, not instead of it",
             if granted { "run" } else { "be refused" }

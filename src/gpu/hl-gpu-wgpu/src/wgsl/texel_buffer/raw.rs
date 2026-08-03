@@ -41,11 +41,12 @@ pub(super) fn lower(module: &mut naga::Module, specialization: &[Specialization]
             let binding = variable.binding.as_ref().ok_or(GpuError::Invalid(
                 "wgpu: texel-buffer shader global has no resource binding",
             ))?;
-            let spec = specialization.iter().find(|spec| {
-                spec.group == binding.group && spec.binding == binding.binding
-            }).ok_or(GpuError::Invalid(
-                "wgpu: texel-buffer shader global has no bound specialization",
-            ))?;
+            let spec = specialization
+                .iter()
+                .find(|spec| spec.group == binding.group && spec.binding == binding.binding)
+                .ok_or(GpuError::Invalid(
+                    "wgpu: texel-buffer shader global has no bound specialization",
+                ))?;
             Ok(Some((handle, *spec)))
         })
         .collect::<Result<Vec<_>>>()?
@@ -66,7 +67,10 @@ pub(super) fn lower(module: &mut naga::Module, specialization: &[Specialization]
             module.types.insert(
                 Type {
                     name: None,
-                    inner: TypeInner::Atomic(naga::Scalar { kind: atomic_kind, width: 4 }),
+                    inner: TypeInner::Atomic(naga::Scalar {
+                        kind: atomic_kind,
+                        width: 4,
+                    }),
                 },
                 Span::default(),
             )
@@ -86,7 +90,10 @@ pub(super) fn lower(module: &mut naga::Module, specialization: &[Specialization]
         );
         let structure = module.types.insert(
             Type {
-                name: Some(format!("_hl_packed_texel_buffer_{}_{}", spec.group, spec.binding)),
+                name: Some(format!(
+                    "_hl_packed_texel_buffer_{}_{}",
+                    spec.group, spec.binding
+                )),
                 inner: TypeInner::Struct {
                     members: vec![naga::StructMember {
                         name: Some("words".into()),
@@ -198,7 +205,11 @@ fn scalar(module: &mut naga::Module, kind: naga::ScalarKind) -> Handle<Type> {
     )
 }
 
-fn vector(module: &mut naga::Module, kind: naga::ScalarKind, size: naga::VectorSize) -> Handle<Type> {
+fn vector(
+    module: &mut naga::Module,
+    kind: naga::ScalarKind,
+    size: naga::VectorSize,
+) -> Handle<Type> {
     module.types.insert(
         Type {
             name: None,
@@ -241,7 +252,15 @@ fn build_helpers(
     } else {
         naga::ScalarKind::Uint
     };
-    let values = raw_words(&mut load, global, index, bytes, words, spec.prefix_words, atomic_kind);
+    let values = raw_words(
+        &mut load,
+        global,
+        index,
+        bytes,
+        words,
+        spec.prefix_words,
+        atomic_kind,
+    );
     let decoded = decode(&mut load, spec.format, vec4, index, &values)?;
     load.body.push(
         Statement::Emit(naga::Range::new_from_bounds(index, decoded)),
@@ -297,16 +316,34 @@ fn build_helpers(
                 tail_padding: u32::from(spec.tail_padding),
             });
         }
-        let current = raw_words(&mut store, global, index, bytes, words, spec.prefix_words, atomic_kind);
+        let current = raw_words(
+            &mut store,
+            global,
+            index,
+            bytes,
+            words,
+            spec.prefix_words,
+            atomic_kind,
+        );
         let packed = encode(&mut store, spec.format, index, value, &current)?;
         for (word, packed) in packed.into_iter().enumerate() {
-            let pointer = raw_pointer(&mut store, global, index, bytes, word as u32, spec.prefix_words);
+            let pointer = raw_pointer(
+                &mut store,
+                global,
+                index,
+                bytes,
+                word as u32,
+                spec.prefix_words,
+            );
             let packed = if atomic_kind == naga::ScalarKind::Sint {
-                store.expressions.append(Expression::As {
-                    expr: packed,
-                    kind: naga::ScalarKind::Sint,
-                    convert: None,
-                }, Span::default())
+                store.expressions.append(
+                    Expression::As {
+                        expr: packed,
+                        kind: naga::ScalarKind::Sint,
+                        convert: None,
+                    },
+                    Span::default(),
+                )
             } else {
                 packed
             };
@@ -314,7 +351,13 @@ fn build_helpers(
                 Statement::Emit(naga::Range::new_from_bounds(index, packed)),
                 Span::default(),
             );
-            store.body.push(Statement::Store { pointer, value: packed }, Span::default());
+            store.body.push(
+                Statement::Store {
+                    pointer,
+                    value: packed,
+                },
+                Span::default(),
+            );
         }
         Some(module.functions.append(store, Span::default()))
     } else {
@@ -334,12 +377,22 @@ struct FunctionLowering<'a> {
     map: Vec<Handle<Expression>>,
     spans: Vec<(Handle<Expression>, Handle<Expression>)>,
     texel: Vec<Option<Handle<naga::GlobalVariable>>>,
-    calls: Vec<(Handle<Expression>, Handle<naga::Function>, Vec<Handle<Expression>>)>,
+    calls: Vec<(
+        Handle<Expression>,
+        Handle<naga::Function>,
+        Vec<Handle<Expression>>,
+    )>,
 }
 
 impl<'a> FunctionLowering<'a> {
     fn new(helpers: &'a HashMap<Handle<naga::GlobalVariable>, Helpers>) -> Self {
-        Self { helpers, map: Vec::new(), spans: Vec::new(), texel: Vec::new(), calls: Vec::new() }
+        Self {
+            helpers,
+            map: Vec::new(),
+            spans: Vec::new(),
+            texel: Vec::new(),
+            calls: Vec::new(),
+        }
     }
 
     fn lower(mut self, function: &mut naga::Function) -> Result<()> {
@@ -353,24 +406,37 @@ impl<'a> FunctionLowering<'a> {
             self.texel.push(global);
             let last = expressions.len();
             self.spans.push(if last > first {
-                (expressions.iter().nth(first).unwrap().0, expressions.iter().nth(last - 1).unwrap().0)
-            } else { (mapped, mapped) });
+                (
+                    expressions.iter().nth(first).unwrap().0,
+                    expressions.iter().nth(last - 1).unwrap().0,
+                )
+            } else {
+                (mapped, mapped)
+            });
         }
         self.block(&mut function.body, &mut expressions)?;
         remap::dedup_emits(&mut function.body, &expressions);
         for (_, local) in function.local_variables.iter_mut() {
-            if let Some(init) = &mut local.init { *init = self.map[init.index()]; }
+            if let Some(init) = &mut local.init {
+                *init = self.map[init.index()];
+            }
         }
         function.named_expressions = mem::take(&mut function.named_expressions)
-            .into_iter().map(|(handle, name)| (self.map[handle.index()], name)).collect();
+            .into_iter()
+            .map(|(handle, name)| (self.map[handle.index()], name))
+            .collect();
         function.expressions = expressions;
         Ok(())
     }
 
     fn texel_global(&self, expression: &Expression) -> Option<Handle<naga::GlobalVariable>> {
         match expression {
-            Expression::GlobalVariable(handle) if self.helpers.contains_key(handle) => Some(*handle),
-            Expression::Access { base, .. } | Expression::AccessIndex { base, .. } => self.texel[base.index()],
+            Expression::GlobalVariable(handle) if self.helpers.contains_key(handle) => {
+                Some(*handle)
+            }
+            Expression::Access { base, .. } | Expression::AccessIndex { base, .. } => {
+                self.texel[base.index()]
+            }
             _ => None,
         }
     }
@@ -386,28 +452,67 @@ impl<'a> FunctionLowering<'a> {
         let original = expression.clone();
         remap::expression(&self.map, &mut expression);
         match original {
-            Expression::ImageLoad { image, coordinate, .. }
-                if self.texel[image.index()].is_some() => {
+            Expression::ImageLoad {
+                image, coordinate, ..
+            } if self.texel[image.index()].is_some() => {
                 let helper = self.helpers[&self.texel[image.index()].unwrap()].load;
                 let result = expressions.append(Expression::CallResult(helper), span);
-                self.calls.push((old, helper, vec![self.map[coordinate.index()]]));
+                self.calls
+                    .push((old, helper, vec![self.map[coordinate.index()]]));
                 Ok(result)
             }
-            Expression::ImageQuery { image, query: naga::ImageQuery::Size { level: None } }
-                if self.texel[image.index()].is_some() => {
+            Expression::ImageQuery {
+                image,
+                query: naga::ImageQuery::Size { level: None },
+            } if self.texel[image.index()].is_some() => {
                 let global = self.texel[image.index()].unwrap();
                 let source = expressions.append(Expression::GlobalVariable(global), span);
-                let field = expressions.append(Expression::AccessIndex { base: source, index: 0 }, span);
+                let field = expressions.append(
+                    Expression::AccessIndex {
+                        base: source,
+                        index: 0,
+                    },
+                    span,
+                );
                 let words = expressions.append(Expression::ArrayLength(field), span);
                 let four = expressions.append(Expression::Literal(naga::Literal::U32(4)), span);
-                let total_bytes = expressions.append(Expression::Binary { op: naga::BinaryOperator::Multiply, left: words, right: four }, span);
+                let total_bytes = expressions.append(
+                    Expression::Binary {
+                        op: naga::BinaryOperator::Multiply,
+                        left: words,
+                        right: four,
+                    },
+                    span,
+                );
                 let helper = self.helpers[&global];
-                let excluded = expressions.append(Expression::Literal(naga::Literal::U32(helper.prefix_bytes + helper.tail_padding)), span);
-                let logical_bytes = expressions.append(Expression::Binary { op: naga::BinaryOperator::Subtract, left: total_bytes, right: excluded }, span);
-                let divisor = expressions.append(Expression::Literal(naga::Literal::U32(helper.bytes)), span);
-                Ok(expressions.append(Expression::Binary { op: naga::BinaryOperator::Divide, left: logical_bytes, right: divisor }, span))
+                let excluded = expressions.append(
+                    Expression::Literal(naga::Literal::U32(
+                        helper.prefix_bytes + helper.tail_padding,
+                    )),
+                    span,
+                );
+                let logical_bytes = expressions.append(
+                    Expression::Binary {
+                        op: naga::BinaryOperator::Subtract,
+                        left: total_bytes,
+                        right: excluded,
+                    },
+                    span,
+                );
+                let divisor =
+                    expressions.append(Expression::Literal(naga::Literal::U32(helper.bytes)), span);
+                Ok(expressions.append(
+                    Expression::Binary {
+                        op: naga::BinaryOperator::Divide,
+                        left: logical_bytes,
+                        right: divisor,
+                    },
+                    span,
+                ))
             }
-            Expression::ImageSample { image, .. } if self.texel[image.index()].is_some() => Err(GpuError::Unsupported("sampling a texel buffer")),
+            Expression::ImageSample { image, .. } if self.texel[image.index()].is_some() => {
+                Err(GpuError::Unsupported("sampling a texel buffer"))
+            }
             _ => Ok(expressions.append(expression, span)),
         }
     }
@@ -418,7 +523,9 @@ impl<'a> FunctionLowering<'a> {
             match &mut statement {
                 Statement::Emit(_) => {
                     remap::statement(&self.map, &self.spans, &mut statement);
-                    let Statement::Emit(range) = statement else { unreachable!() };
+                    let Statement::Emit(range) = statement else {
+                        unreachable!()
+                    };
                     let results = self
                         .calls
                         .iter()
@@ -430,7 +537,10 @@ impl<'a> FunctionLowering<'a> {
                     for handle in range {
                         if let Some((function, args)) = results.get(&handle) {
                             if let Some((first, last)) = run.take() {
-                                rebuilt.push(Statement::Emit(naga::Range::new_from_bounds(first, last)), span);
+                                rebuilt.push(
+                                    Statement::Emit(naga::Range::new_from_bounds(first, last)),
+                                    span,
+                                );
                             }
                             rebuilt.push(
                                 Statement::Call {
@@ -447,25 +557,51 @@ impl<'a> FunctionLowering<'a> {
                         }
                     }
                     if let Some((first, last)) = run {
-                        rebuilt.push(Statement::Emit(naga::Range::new_from_bounds(first, last)), span);
+                        rebuilt.push(
+                            Statement::Emit(naga::Range::new_from_bounds(first, last)),
+                            span,
+                        );
                     }
                 }
-                Statement::ImageStore { image, coordinate, array_index, value } if self.texel[image.index()].is_some() => {
-                    if array_index.is_some() { return Err(GpuError::Unsupported("arrayed texel-buffer store")); }
+                Statement::ImageStore {
+                    image,
+                    coordinate,
+                    array_index,
+                    value,
+                } if self.texel[image.index()].is_some() => {
+                    if array_index.is_some() {
+                        return Err(GpuError::Unsupported("arrayed texel-buffer store"));
+                    }
                     let global = self.texel[image.index()].unwrap();
-                    let helper = self.helpers[&global].store.ok_or(GpuError::Invalid("write through read-only texel buffer"))?;
-                    rebuilt.push(Statement::Call { function: helper, arguments: vec![self.map[coordinate.index()], self.map[value.index()]], result: None }, span);
+                    let helper = self.helpers[&global]
+                        .store
+                        .ok_or(GpuError::Invalid("write through read-only texel buffer"))?;
+                    rebuilt.push(
+                        Statement::Call {
+                            function: helper,
+                            arguments: vec![self.map[coordinate.index()], self.map[value.index()]],
+                            result: None,
+                        },
+                        span,
+                    );
                 }
-                Statement::ImageAtomic { image, coordinate, array_index, fun, value, result }
-                    if self.texel[image.index()].is_some() =>
-                {
+                Statement::ImageAtomic {
+                    image,
+                    coordinate,
+                    array_index,
+                    fun,
+                    value,
+                    result,
+                } if self.texel[image.index()].is_some() => {
                     if array_index.is_some() {
                         return Err(GpuError::Unsupported("arrayed texel-buffer atomic"));
                     }
                     let global = self.texel[image.index()].unwrap();
                     let helper = self.helpers[&global];
                     if helper.bytes != 4 {
-                        return Err(GpuError::Unsupported("atomic operation on a packed texel-buffer format"));
+                        return Err(GpuError::Unsupported(
+                            "atomic operation on a packed texel-buffer format",
+                        ));
                     }
                     let first = expressions.len();
                     let pointer = raw_pointer_in(
@@ -478,32 +614,66 @@ impl<'a> FunctionLowering<'a> {
                     );
                     if expressions.len() > first {
                         let first = expressions.iter().nth(first).unwrap().0;
-                        rebuilt.push(Statement::Emit(naga::Range::new_from_bounds(first, pointer)), span);
+                        rebuilt.push(
+                            Statement::Emit(naga::Range::new_from_bounds(first, pointer)),
+                            span,
+                        );
                     }
                     let fun = match *fun {
-                        naga::AtomicFunction::Exchange { compare } => naga::AtomicFunction::Exchange {
-                            compare: compare.map(|handle| self.map[handle.index()]),
-                        },
+                        naga::AtomicFunction::Exchange { compare } => {
+                            naga::AtomicFunction::Exchange {
+                                compare: compare.map(|handle| self.map[handle.index()]),
+                            }
+                        }
                         other => other,
                     };
-                    rebuilt.push(Statement::Atomic {
-                        pointer,
-                        fun,
-                        value: self.map[value.index()],
-                        result: result.map(|handle| self.map[handle.index()]),
-                    }, span);
+                    rebuilt.push(
+                        Statement::Atomic {
+                            pointer,
+                            fun,
+                            value: self.map[value.index()],
+                            result: result.map(|handle| self.map[handle.index()]),
+                        },
+                        span,
+                    );
                 }
-                Statement::Block(nested) => { self.block(nested, expressions)?; rebuilt.push(statement, span); }
-                Statement::If { condition, accept, reject } => {
-                    *condition = self.map[condition.index()]; self.block(accept, expressions)?; self.block(reject, expressions)?; rebuilt.push(statement, span);
+                Statement::Block(nested) => {
+                    self.block(nested, expressions)?;
+                    rebuilt.push(statement, span);
+                }
+                Statement::If {
+                    condition,
+                    accept,
+                    reject,
+                } => {
+                    *condition = self.map[condition.index()];
+                    self.block(accept, expressions)?;
+                    self.block(reject, expressions)?;
+                    rebuilt.push(statement, span);
                 }
                 Statement::Switch { selector, cases } => {
-                    *selector = self.map[selector.index()]; for case in cases { self.block(&mut case.body, expressions)?; } rebuilt.push(statement, span);
+                    *selector = self.map[selector.index()];
+                    for case in cases {
+                        self.block(&mut case.body, expressions)?;
+                    }
+                    rebuilt.push(statement, span);
                 }
-                Statement::Loop { body, continuing, break_if } => {
-                    self.block(body, expressions)?; self.block(continuing, expressions)?; if let Some(value) = break_if { *value = self.map[value.index()]; } rebuilt.push(statement, span);
+                Statement::Loop {
+                    body,
+                    continuing,
+                    break_if,
+                } => {
+                    self.block(body, expressions)?;
+                    self.block(continuing, expressions)?;
+                    if let Some(value) = break_if {
+                        *value = self.map[value.index()];
+                    }
+                    rebuilt.push(statement, span);
                 }
-                _ => { remap::statement(&self.map, &self.spans, &mut statement); rebuilt.push(statement, span); }
+                _ => {
+                    remap::statement(&self.map, &self.spans, &mut statement);
+                    rebuilt.push(statement, span);
+                }
             }
         }
         *block = rebuilt;
@@ -536,7 +706,10 @@ mod tests {
             naga::GlobalVariable {
                 name: None,
                 space: naga::AddressSpace::Handle,
-                binding: Some(naga::ResourceBinding { group: 0, binding: 3 }),
+                binding: Some(naga::ResourceBinding {
+                    group: 0,
+                    binding: 3,
+                }),
                 ty: image,
                 init: None,
             },

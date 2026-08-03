@@ -303,7 +303,10 @@ fn a_linear_blit_of_a_float_plane_interpolates_values() {
     }
     let bytes = src.len() as u64;
     let (exec, s) = run(&[
-        Cmd::CreateBuffer(1, buf(bytes, buffer_usage::COPY_SRC | buffer_usage::COPY_DST)),
+        Cmd::CreateBuffer(
+            1,
+            buf(bytes, buffer_usage::COPY_SRC | buffer_usage::COPY_DST),
+        ),
         Cmd::WriteBuffer {
             id: 1,
             offset: 0,
@@ -474,7 +477,6 @@ fn an_integer_plane_cannot_reach_the_linear_filter_because_it_cannot_be_created(
             "refused by the capability set, not by the filter: {refused:?} under {filter:?}"
         );
     }
-
 }
 
 /// A blit between DIFFERENT formats converts, and the two texel sizes need not match.
@@ -639,7 +641,8 @@ fn a_nearest_blit_converts_rather_than_reinterpreting_a_same_size_texel() {
         .expect("the float destination is readable");
     let got = f32::from_le_bytes(out.clone().try_into().expect("four bytes"));
     assert_eq!(
-        got, 1.0,
+        got,
+        1.0,
         "a red unorm texel is 1.0 in a float plane; a byte copy would give {:e}",
         f32::from_le_bytes([255, 0, 0, 255])
     );

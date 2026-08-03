@@ -128,7 +128,11 @@ impl VertexLayout {
     /// with nothing in it. This is that hole, stated rather than closed by shifting slot 1 down, which
     /// would put every attribute on the wrong buffer.
     pub fn unused() -> Self {
-        Self { stride: 0, step_mode: 0, attrs: Vec::new() }
+        Self {
+            stride: 0,
+            step_mode: 0,
+            attrs: Vec::new(),
+        }
     }
 }
 

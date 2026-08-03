@@ -87,7 +87,9 @@ impl FailureCause {
             // climbed immediately, reaching count=10 within nine seconds on the same surface. Nothing
             // observed sat between the two, so the first repeat is the earliest point that separates
             // them and it separates them with margin.
-            FailureCause::CallbackDeadlineExpired if seen <= 1 => CompletionOutcome::RetryableFailure,
+            FailureCause::CallbackDeadlineExpired if seen <= 1 => {
+                CompletionOutcome::RetryableFailure
+            }
             FailureCause::CallbackDeadlineExpired => CompletionOutcome::TerminalFailure,
         }
     }
@@ -109,7 +111,10 @@ static ANNOUNCED: std::sync::Mutex<Option<crate::diagnostic::Tally<(SurfaceId, u
 
 /// The running count for `(surface, cause)` when this occurrence should speak. A poisoned lock reports
 /// rather than goes silent — over-reporting a failure is recoverable, losing it is what this path is for.
-fn claim_announcement(surface: SurfaceId, cause: FailureCause) -> Option<crate::diagnostic::Occurrence> {
+fn claim_announcement(
+    surface: SurfaceId,
+    cause: FailureCause,
+) -> Option<crate::diagnostic::Occurrence> {
     let Ok(mut announced) = ANNOUNCED.lock() else {
         return Some(crate::diagnostic::Occurrence {
             count: 0,
@@ -261,8 +266,7 @@ fn monotonic_domain_nanos(drawable_ns: u64) -> Option<u64> {
 /// Admitting it as `Some(0)` sent it on to `sane_presented_time` as if it were a real presentation.
 fn presented_nanos(seconds: f64) -> Option<u64> {
     let nanos = seconds * 1_000_000_000.0;
-    (seconds.is_finite() && seconds > 0.0 && nanos <= u64::MAX as f64)
-        .then(|| nanos.round() as u64)
+    (seconds.is_finite() && seconds > 0.0 && nanos <= u64::MAX as f64).then(|| nanos.round() as u64)
 }
 
 /// What the host display can be ASKED about a submission, gathered at submit time.
@@ -514,7 +518,11 @@ impl NativePresent {
             } else {
                 FailureCause::CallbackDeadlineExpired
             };
-            publish(&self.events, &self.wake, failed_completion(self.id, self.surface, cause));
+            publish(
+                &self.events,
+                &self.wake,
+                failed_completion(self.id, self.surface, cause),
+            );
         }
         true
     }
@@ -644,7 +652,10 @@ mod tests {
             Instant::now() - CALLBACK_DEADLINE,
             sender,
         );
-        assert!(present.poll(Instant::now()), "an expired submission retires");
+        assert!(
+            present.poll(Instant::now()),
+            "an expired submission retires"
+        );
         receiver.try_iter().find_map(|event| match event {
             PresenterEvent::Presentation(completion) => Some(completion.outcome),
             _ => None,

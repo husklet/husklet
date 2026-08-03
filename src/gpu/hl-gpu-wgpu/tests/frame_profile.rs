@@ -73,10 +73,7 @@ impl Stages {
         let per_cmd = |d: Duration| us(d) / n / commands as f64;
         println!(
             "perf[{label}]: frame = {:.0} us  ({commands} cmds, {DRAWS} draws)",
-            (us(self.encode)
-                + us(self.decode)
-                + us(self.dispatch))
-                / n
+            (us(self.encode) + us(self.decode) + us(self.dispatch)) / n
         );
         println!(
             "perf[{label}]:   encode   {:8.1} us/frame  {:6.3} us/cmd",
@@ -96,10 +93,7 @@ impl Stages {
     }
 
     fn total_us_per_frame(&self, frames: usize) -> f64 {
-        (us(self.encode)
-            + us(self.decode)
-            + us(self.dispatch))
-            / frames as f64
+        (us(self.encode) + us(self.decode) + us(self.dispatch)) / frames as f64
     }
 }
 

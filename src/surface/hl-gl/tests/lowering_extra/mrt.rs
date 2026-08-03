@@ -99,6 +99,9 @@ fn every_slot_writes_when_draw_buffers_was_never_called() {
 
     swap::swap_buffers(&mut c, &mut sink).unwrap();
     for target in &pipeline_desc(&sink.batches[0]).color_targets {
-        assert_eq!(target.write_mask, 0xf, "the initial selection writes every slot");
+        assert_eq!(
+            target.write_mask, 0xf,
+            "the initial selection writes every slot"
+        );
     }
 }

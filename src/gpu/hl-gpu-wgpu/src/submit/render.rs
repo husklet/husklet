@@ -333,10 +333,7 @@ impl WgpuExecutor {
                         let pid = &planned.id;
                         di += 1;
                         let layouts = match PipelineNative::get(res, *pid)? {
-                            PipelineNative::Render {
-                                vertex_buffers,
-                                ..
-                            } => vertex_buffers,
+                            PipelineNative::Render { vertex_buffers, .. } => vertex_buffers,
                             PipelineNative::Compute { .. } => {
                                 unreachable!("draw pipeline checked above")
                             }

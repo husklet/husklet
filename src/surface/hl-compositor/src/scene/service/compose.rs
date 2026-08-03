@@ -330,9 +330,15 @@ mod tests {
     fn whole_surface_opaque_region_presents_argb_as_opaque() {
         // Chrome's case: an AR24 buffer whose alpha is unwritten in places, plus a whole-window
         // `set_opaque_region`. Honouring the declaration is what stops those pixels reaching the desktop.
-        assert_eq!(presented_format(Some(Rect::new(0, 0, 100, 80))), Format::Xrgb8888);
+        assert_eq!(
+            presented_format(Some(Rect::new(0, 0, 100, 80))),
+            Format::Xrgb8888
+        );
         // A larger declared region still covers the surface.
-        assert_eq!(presented_format(Some(Rect::new(0, 0, 200, 200))), Format::Xrgb8888);
+        assert_eq!(
+            presented_format(Some(Rect::new(0, 0, 200, 200))),
+            Format::Xrgb8888
+        );
     }
 
     #[test]
@@ -340,7 +346,13 @@ mod tests {
         // Nothing declared: a translucent cursor / rounded popup must keep its alpha.
         assert_eq!(presented_format(None), Format::Argb8888);
         // Partially declared: the presenter forces opacity per surface, so a partial claim is not honoured.
-        assert_eq!(presented_format(Some(Rect::new(0, 0, 100, 40))), Format::Argb8888);
-        assert_eq!(presented_format(Some(Rect::new(10, 0, 100, 80))), Format::Argb8888);
+        assert_eq!(
+            presented_format(Some(Rect::new(0, 0, 100, 40))),
+            Format::Argb8888
+        );
+        assert_eq!(
+            presented_format(Some(Rect::new(10, 0, 100, 80))),
+            Format::Argb8888
+        );
     }
 }

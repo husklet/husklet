@@ -22,8 +22,16 @@ fn glreadpixels_reads_the_rendered_default_target_back() {
 
     // glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, …) — the whole default (Bgra8) target, returned
     // converted to RGBA in GL's bottom-left row order.
-    let px = readpixels::read_pixels(&mut c, &mut sink, 0, 0, W as i32, H as i32, readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE))
-        .expect("glReadPixels device->host readback");
+    let px = readpixels::read_pixels(
+        &mut c,
+        &mut sink,
+        0,
+        0,
+        W as i32,
+        H as i32,
+        readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE),
+    )
+    .expect("glReadPixels device->host readback");
     assert_eq!(px.len(), W * H * 4, "packed RGBA rectangle is w*h*4 bytes");
 
     // The centered triangle covers the center → red; a corner is the blue clear. (A vertical flip maps a
@@ -107,8 +115,16 @@ fn glreadpixels_of_a_subrectangle_in_bgra() {
 
     // A 2x2 rectangle around the center, read back as GL_BGRA_EXT (bytes [B, G, R, A]).
     let (rx, ry) = (W as i32 / 2 - 1, H as i32 / 2 - 1);
-    let px = readpixels::read_pixels(&mut c, &mut sink, rx, ry, 2, 2, readpixels::PixelFormat::new(GL_BGRA_EXT, GL_UNSIGNED_BYTE))
-        .expect("glReadPixels sub-rectangle in BGRA");
+    let px = readpixels::read_pixels(
+        &mut c,
+        &mut sink,
+        rx,
+        ry,
+        2,
+        2,
+        readpixels::PixelFormat::new(GL_BGRA_EXT, GL_UNSIGNED_BYTE),
+    )
+    .expect("glReadPixels sub-rectangle in BGRA");
     assert_eq!(px.len(), 2 * 2 * 4);
     // Red triangle in BGRA is [0, 0, 255, 255]; the center rectangle is fully covered.
     for t in px.chunks_exact(4) {

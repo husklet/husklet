@@ -146,10 +146,7 @@ fn gles2_texture_images_reject_unadvertised_format_type_pairs() {
     let mut es2 = hl_gl::model::context::ContextState::with_version(2, 0, false);
     c.switch_state(&mut es2);
     assert!(!record::validate_tex_image_2d(
-        &mut c,
-        GL_RGB,
-        GL_RGB,
-        GL_FLOAT
+        &mut c, GL_RGB, GL_RGB, GL_FLOAT
     ));
     assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
     assert!(record::validate_tex_image_2d(

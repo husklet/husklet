@@ -77,15 +77,15 @@ mod clear;
 mod indexed;
 #[path = "lowering_extra/indirect.rs"]
 mod indirect;
+#[path = "lowering_extra/mipmap.rs"]
+mod mipmap;
+#[path = "lowering_extra/mrt.rs"]
+mod mrt;
 #[path = "lowering_extra/pipeline.rs"]
 mod pipeline;
 #[path = "lowering_extra/stencil.rs"]
 mod stencil;
 #[path = "lowering_extra/unlinked.rs"]
 mod unlinked;
-#[path = "lowering_extra/mrt.rs"]
-mod mrt;
 #[path = "lowering_extra/vformat.rs"]
 mod vformat;
-#[path = "lowering_extra/mipmap.rs"]
-mod mipmap;

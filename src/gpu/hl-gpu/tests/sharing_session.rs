@@ -48,9 +48,7 @@ use hl_gpu::protocol::model::descriptor::BufferDesc;
 use hl_gpu::protocol::model::enums::TextureFormat;
 use hl_gpu::protocol::model::error::GpuError;
 use hl_gpu::runtime::model::sharing::{Exports, ResourceKey, SessionId};
-use hl_gpu::{
-    Cmd, CommandSink, CpuExecutor, FeatureRequest, InProcessCommandSink, WIRE_VERSION,
-};
+use hl_gpu::{Cmd, CommandSink, CpuExecutor, FeatureRequest, InProcessCommandSink, WIRE_VERSION};
 use std::sync::Arc;
 
 fn sink() -> InProcessCommandSink<CpuExecutor> {
@@ -111,7 +109,11 @@ fn session_ids_are_distinct() {
     let mut sorted = ids.clone();
     sorted.sort();
     sorted.dedup();
-    assert_eq!(sorted.len(), ids.len(), "every minted session id must be distinct");
+    assert_eq!(
+        sorted.len(),
+        ids.len(),
+        "every minted session id must be distinct"
+    );
     assert!(
         ids.iter().all(|s| s.0 != 0),
         "0 is reserved: the guard encodes a holder as holder+1 and reads 0 as unmapped"
@@ -179,10 +181,18 @@ fn a_registry_map_is_visible_to_the_gate() {
     // POSITIVE CONTROL FIRST. A refusal below proves nothing unless this path otherwise works.
     touch(&mut sink).expect("unmapped: the owner's own command must succeed");
 
-    exports.map(other, id).expect("the importer claims the resource");
+    exports
+        .map(other, id)
+        .expect("the importer claims the resource");
     let refused = touch(&mut sink).expect_err("mapped elsewhere: the owner must be refused");
     assert!(
-        matches!(refused, GpuError::MappedElsewhere { kind: "buffer", id: 1 }),
+        matches!(
+            refused,
+            GpuError::MappedElsewhere {
+                kind: "buffer",
+                id: 1
+            }
+        ),
         "the refusal must be the timing-class one a caller recovers from by WAITING, not an \
          invalid-argument error that tells a correct program it is wrong: got {refused:?}"
     );
@@ -207,7 +217,10 @@ fn the_gate_reopens_when_the_registry_unmaps() {
         .expect("attach");
 
     exports.map(other, id).expect("claim");
-    assert!(touch(&mut sink).is_err(), "refused while the other session holds it");
+    assert!(
+        touch(&mut sink).is_err(),
+        "refused while the other session holds it"
+    );
     exports.unmap(other, id).expect("release the claim");
     touch(&mut sink).expect("the identical call must succeed once the holder unmaps");
 }
@@ -243,7 +256,10 @@ fn a_stranger_gets_no_guard_and_a_party_does() {
     exports.import(importer, id).expect("import");
 
     assert!(exports.access(owner, id).is_ok(), "the owner is a party");
-    assert!(exports.access(importer, id).is_ok(), "the importer is a party");
+    assert!(
+        exports.access(importer, id).is_ok(),
+        "the importer is a party"
+    );
     assert!(
         exports.access(stranger, id).is_err(),
         "a session that can never touch the resource must not be handed a guard nothing consults"

@@ -229,7 +229,8 @@ fn one_ulp_across_a_byte_boundary_is_one_ulp_not_two_hundred_and_fifty_five() {
         diff(&a, &b, Tolerance::Ulps(1), plane).is_none(),
         "value-wise they are one ULP apart and within a one-ULP tolerance"
     );
-    let exact = diff(&a, &b, Tolerance::Ulps(0), plane).expect("one ULP exceeds an exact tolerance");
+    let exact =
+        diff(&a, &b, Tolerance::Ulps(0), plane).expect("one ULP exceeds an exact tolerance");
     assert!(
         exact.contains("1 ulp"),
         "and the report says how far apart they are in ULPs: {exact}"
@@ -245,7 +246,11 @@ fn a_one_ulp_tolerance_still_refuses_a_wrong_exponent() {
     // 0x3c00 is 1.0; 0x4000 is 2.0 — one exponent apart, 1024 ULPs.
     let a = halves(&[0x3c00]);
     let b = halves(&[0x4000]);
-    assert_eq!((a[1] as i16 - b[1] as i16).abs(), 4, "byte-wise a small delta");
+    assert_eq!(
+        (a[1] as i16 - b[1] as i16).abs(),
+        4,
+        "byte-wise a small delta"
+    );
     let report = diff(&a, &b, Tolerance::Ulps(1), plane).expect("a doubled value is not one ULP");
     assert!(
         report.contains("1024 ulp"),
@@ -258,15 +263,33 @@ fn a_one_ulp_tolerance_still_refuses_a_wrong_exponent() {
 fn zeroes_agree_across_sign_and_nan_only_agrees_with_nan() {
     let plane = Some(TextureFormat::Rgba16Float);
     assert!(
-        diff(&halves(&[0x0000]), &halves(&[0x8000]), Tolerance::Ulps(0), plane).is_none(),
+        diff(
+            &halves(&[0x0000]),
+            &halves(&[0x8000]),
+            Tolerance::Ulps(0),
+            plane
+        )
+        .is_none(),
         "-0.0 and +0.0 are zero ULPs apart, not a sign bit apart"
     );
     assert!(
-        diff(&halves(&[0x7e00]), &halves(&[0x7c01]), Tolerance::Ulps(0), plane).is_none(),
+        diff(
+            &halves(&[0x7e00]),
+            &halves(&[0x7c01]),
+            Tolerance::Ulps(0),
+            plane
+        )
+        .is_none(),
         "two NaNs agree; no arithmetic here distinguishes payloads"
     );
     assert!(
-        diff(&halves(&[0x7e00]), &halves(&[0x3c00]), Tolerance::Ulps(0), plane).is_some(),
+        diff(
+            &halves(&[0x7e00]),
+            &halves(&[0x3c00]),
+            Tolerance::Ulps(0),
+            plane
+        )
+        .is_some(),
         "a NaN against a number is always a divergence"
     );
 }
@@ -295,7 +318,13 @@ fn a_ulp_tolerance_refuses_a_plane_it_cannot_compare() {
     // The control: the same identical planes DO compare clean under the tolerance they belong to, so the
     // refusals above are about the unit and not about the comparator failing everything.
     assert!(
-        diff(&bytes, &bytes, Tolerance::Unorm(0), Some(TextureFormat::Rgba8Unorm)).is_none(),
+        diff(
+            &bytes,
+            &bytes,
+            Tolerance::Unorm(0),
+            Some(TextureFormat::Rgba8Unorm)
+        )
+        .is_none(),
         "identical byte planes agree exactly"
     );
 }

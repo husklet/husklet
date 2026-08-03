@@ -516,7 +516,10 @@ fn the_advertised_uniform_ceiling_is_exactly_what_the_linker_accepts() {
 
     let c = ctx(3, 1);
     for (vectors, components) in [
-        (GL_MAX_VERTEX_UNIFORM_VECTORS, GL_MAX_VERTEX_UNIFORM_COMPONENTS),
+        (
+            GL_MAX_VERTEX_UNIFORM_VECTORS,
+            GL_MAX_VERTEX_UNIFORM_COMPONENTS,
+        ),
         (
             GL_MAX_FRAGMENT_UNIFORM_VECTORS,
             GL_MAX_FRAGMENT_UNIFORM_COMPONENTS,
@@ -529,7 +532,8 @@ fn the_advertised_uniform_ceiling_is_exactly_what_the_linker_accepts() {
     // Exactly the advertised count links, in EITHER stage and in BOTH at once (the two are flattened into
     // one std140 block, so "both at once" is the case a per-stage-only budget would miss).
     let at_limit = format!("uniform vec4 v[{advertised}];\nvoid main(){{ gl_Position = v[0]; }}\n");
-    let fragment = format!("uniform vec4 f[{advertised}];\nvoid main(){{ gl_FragColor = f[0]; }}\n");
+    let fragment =
+        format!("uniform vec4 f[{advertised}];\nvoid main(){{ gl_FragColor = f[0]; }}\n");
     assert!(
         glsl::StageSources::new(&at_limit, &fragment)
             .uniform_layout()
@@ -546,7 +550,13 @@ fn the_advertised_uniform_ceiling_is_exactly_what_the_linker_accepts() {
         .uniform_layout()
         .expect_err("one vector past the advertised ceiling must be refused");
     assert!(
-        matches!(error, glsl::UniformError::StageComponents { stage: "vertex", .. }),
+        matches!(
+            error,
+            glsl::UniformError::StageComponents {
+                stage: "vertex",
+                ..
+            }
+        ),
         "expected a component-count diagnostic, got {error}"
     );
 

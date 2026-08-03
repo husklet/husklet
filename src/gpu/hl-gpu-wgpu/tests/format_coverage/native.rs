@@ -72,10 +72,16 @@ fn native_formats_transfer_roundtrip_exact_bytes() {
         (TextureFormat::Rg16Uint, &[1, 0, 2, 0]),
         (TextureFormat::Rg16Sint, &[0xff, 0xff, 2, 0]),
         (TextureFormat::Rgba16Uint, &[1, 0, 2, 0, 3, 0, 4, 0]),
-        (TextureFormat::Rgba16Sint, &[0xff, 0xff, 2, 0, 0xfd, 0xff, 4, 0]),
+        (
+            TextureFormat::Rgba16Sint,
+            &[0xff, 0xff, 2, 0, 0xfd, 0xff, 4, 0],
+        ),
         (TextureFormat::Rg32Float, &[0, 0, 0, 0x3f, 0, 0, 0x80, 0xbe]),
         (TextureFormat::Rg32Uint, &[1, 0, 0, 0, 2, 0, 0, 0]),
-        (TextureFormat::Rg32Sint, &[0xff, 0xff, 0xff, 0xff, 2, 0, 0, 0]),
+        (
+            TextureFormat::Rg32Sint,
+            &[0xff, 0xff, 0xff, 0xff, 2, 0, 0, 0],
+        ),
         (TextureFormat::Rgb9e5Ufloat, &[0x01, 0x02, 0x03, 0x04]),
         (TextureFormat::Rgb10a2Unorm, &[0x01, 0x02, 0x03, 0x04]),
         (TextureFormat::Rgb10a2Uint, &[0x01, 0x02, 0x03, 0x04]),

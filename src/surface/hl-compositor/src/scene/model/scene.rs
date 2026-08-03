@@ -489,7 +489,10 @@ mod window_visibility {
         let id = toplevel(&mut scene);
         scene.set_native_token(id, Some(0x5EED));
         let surface = scene.get(id).expect("surface");
-        assert!(surface.has_content(), "a token means the surface may be shown");
+        assert!(
+            surface.has_content(),
+            "a token means the surface may be shown"
+        );
         assert!(
             surface.buffer.is_none(),
             "a token must NOT count as committed content: `was_mapped` and output membership ask \

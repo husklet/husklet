@@ -1,6 +1,6 @@
 use super::*;
-use hl_gpu::protocol::model::enums::TextureAspect;
 use hl_gpu::protocol::model::descriptor::Mirror;
+use hl_gpu::protocol::model::enums::TextureAspect;
 
 pub(super) fn gen_clear(seed: u64) -> Prog {
     let w = 3 + (seed % 6) as u32; // 3..=8
@@ -361,9 +361,21 @@ pub(super) fn gen_blit_mirror(seed: u64) -> Prog {
     let (dw, dh) = (n * k, n * k);
     // Cycle the three non-identity mirrors so every seed batch exercises x, y and both.
     let mirror = match seed % 3 {
-        0 => Mirror { x: true, y: false, z: false },
-        1 => Mirror { x: false, y: true, z: false },
-        _ => Mirror { x: true, y: true, z: false },
+        0 => Mirror {
+            x: true,
+            y: false,
+            z: false,
+        },
+        1 => Mirror {
+            x: false,
+            y: true,
+            z: false,
+        },
+        _ => Mirror {
+            x: true,
+            y: true,
+            z: false,
+        },
     };
     let src: Vec<u8> = (0..n * n)
         .flat_map(|i| texel(seed.wrapping_add(i as u64 * 13)))
@@ -484,8 +496,8 @@ fn blit_cmds(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32, filter: Filter) -> 
 pub(super) fn gen_clear_layered(seed: u64) -> Prog {
     let layers = 2 + (seed % 3) as u32; // 2..=4
     let n = 2 + (seed % 2) as u32; // 2..=3
-    // A range that sometimes covers the base layer and sometimes deliberately does not — the case that
-    // separates "cleared the named layers" from "cleared everything".
+                                   // A range that sometimes covers the base layer and sometimes deliberately does not — the case that
+                                   // separates "cleared the named layers" from "cleared everything".
     let base = (seed % layers as u64) as u32;
     let count = 1 + (seed % (layers - base) as u64) as u32;
     let first = texel(seed.wrapping_add(3));
@@ -558,7 +570,7 @@ pub(super) fn gen_clear_layered(seed: u64) -> Prog {
 pub(super) fn gen_region_nonbase(seed: u64) -> Prog {
     let layers = 2 + (seed % 3) as u32; // 2..=4
     let n = 1 + (seed % 2) as u32; // 1..=2
-    // Never layer 0 — the base plane is what every other program already covers.
+                                   // Never layer 0 — the base plane is what every other program already covers.
     let layer = 1 + (seed % (layers - 1) as u64) as u32;
     let bytes = (n * n * 4) as usize;
     let colour = |i: u32| {
@@ -607,7 +619,13 @@ pub(super) fn gen_region_nonbase(seed: u64) -> Prog {
         ops: vec!["ClearRect", "CopyTextureToBufferRegion"],
         cmds: vec![
             Cmd::CreateTexture(1, tex_layers(n, n, layers)),
-            Cmd::CreateBuffer(1, buf(bytes as u64, buffer_usage::COPY_SRC | buffer_usage::COPY_DST)),
+            Cmd::CreateBuffer(
+                1,
+                buf(
+                    bytes as u64,
+                    buffer_usage::COPY_SRC | buffer_usage::COPY_DST,
+                ),
+            ),
             Cmd::Submit(CommandBuffer {
                 encoder,
                 signal: None,
@@ -648,7 +666,11 @@ pub(super) fn gen_region_nonbase(seed: u64) -> Prog {
 /// passed until the base stopped being square.
 pub(super) fn gen_mip_level(seed: u64) -> Prog {
     // Non-square, and deep enough that the last level's height floors to zero without the max.
-    let (bw, bh, levels) = if seed % 2 == 0 { (5u32, 3u32, 3u32) } else { (6, 2, 3) };
+    let (bw, bh, levels) = if seed % 2 == 0 {
+        (5u32, 3u32, 3u32)
+    } else {
+        (6, 2, 3)
+    };
     // Every third program reads the BASE level, which is what detects a shifted chain.
     let level = if seed % 3 == 0 {
         0
@@ -711,7 +733,13 @@ pub(super) fn gen_mip_level(seed: u64) -> Prog {
                     ..tex(bw, bh)
                 },
             ),
-            Cmd::CreateBuffer(1, buf(bytes as u64, buffer_usage::COPY_SRC | buffer_usage::COPY_DST)),
+            Cmd::CreateBuffer(
+                1,
+                buf(
+                    bytes as u64,
+                    buffer_usage::COPY_SRC | buffer_usage::COPY_DST,
+                ),
+            ),
             Cmd::Submit(CommandBuffer {
                 encoder,
                 signal: None,

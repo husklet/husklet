@@ -62,10 +62,17 @@ fn a_hostile_payload_stays_one_parseable_line() {
     let captured = lines.lock().unwrap();
     assert_eq!(captured.len(), 1, "one record, whatever the payload holds");
     let line = &captured[0];
-    assert_eq!(line.matches('\n').count(), 1, "the only newline is the terminator");
+    assert_eq!(
+        line.matches('\n').count(),
+        1,
+        "the only newline is the terminator"
+    );
     assert!(line.contains(r#"\"no\""#), "quotes escaped: {line}");
     assert!(line.contains(r"\nline two"), "newline escaped: {line}");
-    assert!(line.contains(r"\tand\\back"), "tab and backslash escaped: {line}");
+    assert!(
+        line.contains(r"\tand\\back"),
+        "tab and backslash escaped: {line}"
+    );
 }
 
 /// Non-finite floats have no JSON spelling. Emitting a bare `NaN` produces a record no parser accepts,
@@ -86,7 +93,14 @@ fn every_record_names_where_it_came_from() {
     let _turn = turn();
     let (lines, sink) = collector();
     crate::sink::Events::global().set(sink);
-    emit_event(tag::VULKAN.into(), Level::Warn, "thing.happened", "a::b", 42, &[]);
+    emit_event(
+        tag::VULKAN.into(),
+        Level::Warn,
+        "thing.happened",
+        "a::b",
+        42,
+        &[],
+    );
     crate::sink::Events::global().reset();
 
     let captured = lines.lock().unwrap();
@@ -99,8 +113,14 @@ fn every_record_names_where_it_came_from() {
     ] {
         assert!(line.contains(required), "missing {required} in {line}");
     }
-    assert!(line.contains("\"ms\":"), "records carry a timestamp: {line}");
-    assert!(line.contains("\"thread\":"), "records carry a thread: {line}");
+    assert!(
+        line.contains("\"ms\":"),
+        "records carry a timestamp: {line}"
+    );
+    assert!(
+        line.contains("\"thread\":"),
+        "records carry a thread: {line}"
+    );
 }
 
 /// An event is gated exactly like every other macro: a closed tag emits nothing. The structured channel
@@ -137,9 +157,21 @@ fn an_open_tag_emits_the_record() {
     crate::Logging::global().set(crate::Tags::NONE);
     let captured = lines.lock().unwrap();
     assert_eq!(captured.len(), 1);
-    assert!(captured[0].contains(r#""event":"frame.refused""#), "{}", captured[0]);
-    assert!(captured[0].contains(r#""id":7"#), "a number stays a number: {}", captured[0]);
-    assert!(captured[0].contains(r#""why":"no format""#), "{}", captured[0]);
+    assert!(
+        captured[0].contains(r#""event":"frame.refused""#),
+        "{}",
+        captured[0]
+    );
+    assert!(
+        captured[0].contains(r#""id":7"#),
+        "a number stays a number: {}",
+        captured[0]
+    );
+    assert!(
+        captured[0].contains(r#""why":"no format""#),
+        "{}",
+        captured[0]
+    );
 }
 
 /// A verdict ignores the tag mask, and that is the whole reason it exists as a separate macro.
@@ -168,13 +200,25 @@ fn a_verdict_is_not_maskable_and_reaches_both_channels() {
     crate::sink::Output::global().reset();
 
     let records = records.lock().unwrap();
-    assert_eq!(records.len(), 1, "the record is emitted with every tag closed");
-    assert!(records[0].contains(r#""event":"encoder_op.refused_in_pass""#), "{}", records[0]);
+    assert_eq!(
+        records.len(),
+        1,
+        "the record is emitted with every tag closed"
+    );
+    assert!(
+        records[0].contains(r#""event":"encoder_op.refused_in_pass""#),
+        "{}",
+        records[0]
+    );
     assert!(records[0].contains(r#""pass":3"#), "{}", records[0]);
 
     let sentences = sentences.lock().unwrap();
     assert_eq!(sentences.len(), 1, "and so is the human sentence");
-    assert!(sentences[0].contains("encoder_op.refused_in_pass"), "{}", sentences[0]);
+    assert!(
+        sentences[0].contains("encoder_op.refused_in_pass"),
+        "{}",
+        sentences[0]
+    );
     assert!(
         sentences[0].contains("op=ClearRect") && sentences[0].contains("pass=3"),
         "the sentence carries the same fields as the record: {}",
@@ -210,8 +254,16 @@ fn a_verdict_keeps_its_human_sentence_and_its_fields() {
     crate::sink::Output::global().reset();
 
     let records = records.lock().unwrap();
-    assert!(records[0].contains(r#""buffer":33"#), "typed field: {}", records[0]);
-    assert!(records[0].contains(r#""reason":"incompatible formats""#), "{}", records[0]);
+    assert!(
+        records[0].contains(r#""buffer":33"#),
+        "typed field: {}",
+        records[0]
+    );
+    assert!(
+        records[0].contains(r#""reason":"incompatible formats""#),
+        "{}",
+        records[0]
+    );
 
     let sentences = sentences.lock().unwrap();
     assert!(

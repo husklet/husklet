@@ -142,7 +142,15 @@ const RENDER_VERTEX: &[u32] = &[
     3, 131320, 5, 262205, 17, 20, 19, 262205, 14, 23, 22, 262244, 16, 24, 20, 327775, 7, 25, 24,
     23, 327745, 26, 27, 13, 15, 196670, 27, 25, 65789, 65592,
 ];
-const RENDER_FRAGMENT: &[u32] = &[119734787,65536,524299,17,0,131089,1,131089,47,393227,1,1280527431,1685353262,808793134,0,196622,0,1,393231,4,4,1852399981,0,9,196624,4,7,196611,2,450,262149,4,1852399981,0,196613,9,111,262149,12,1869377379,29554,262215,9,30,0,196679,12,24,262215,12,33,1,262215,12,34,0,131091,2,196641,3,2,196630,6,32,262167,7,6,4,262176,8,3,7,262203,8,9,3,589849,10,6,5,0,0,0,2,4,262176,11,0,10,262203,11,12,0,262165,14,32,1,262187,14,15,0,327734,2,4,0,3,131320,5,262205,10,13,12,327778,7,16,13,15,196670,9,16,65789,65592,];
+const RENDER_FRAGMENT: &[u32] = &[
+    119734787, 65536, 524299, 17, 0, 131089, 1, 131089, 47, 393227, 1, 1280527431, 1685353262,
+    808793134, 0, 196622, 0, 1, 393231, 4, 4, 1852399981, 0, 9, 196624, 4, 7, 196611, 2, 450,
+    262149, 4, 1852399981, 0, 196613, 9, 111, 262149, 12, 1869377379, 29554, 262215, 9, 30, 0,
+    196679, 12, 24, 262215, 12, 33, 1, 262215, 12, 34, 0, 131091, 2, 196641, 3, 2, 196630, 6, 32,
+    262167, 7, 6, 4, 262176, 8, 3, 7, 262203, 8, 9, 3, 589849, 10, 6, 5, 0, 0, 0, 2, 4, 262176, 11,
+    0, 10, 262203, 11, 12, 0, 262165, 14, 32, 1, 262187, 14, 15, 0, 327734, 2, 4, 0, 3, 131320, 5,
+    262205, 10, 13, 12, 327778, 7, 16, 13, 15, 196670, 9, 16, 65789, 65592,
+];
 
 fn buffer(size: u64) -> BufferDesc {
     BufferDesc {
@@ -171,7 +179,9 @@ fn uniform_texel_load(format: TextureFormat, bytes: Vec<u8>) -> Vec<u8> {
 
 fn uint_uniform_shader() -> Vec<u32> {
     let mut words = UNIFORM.to_vec();
-    let index = words.windows(3).position(|w| w == [196630, 6, 32])
+    let index = words
+        .windows(3)
+        .position(|w| w == [196630, 6, 32])
         .expect("fixture contains OpTypeFloat %6 32");
     // Replace `OpTypeFloat %6 32` with `OpTypeInt %6 32 0`. Every vector/image/output type in this
     // fixture is rooted at %6, so this produces a real uint sampled-image program without changing the
@@ -182,51 +192,145 @@ fn uint_uniform_shader() -> Vec<u32> {
 
 fn uniform_texel_load_shader(format: TextureFormat, bytes: Vec<u8>, spirv: Vec<u32>) -> Vec<u8> {
     let commands = vec![
-        Cmd::CreateShader { id: 1, kind: ShaderPayloadKind::SpirV, spirv },
-        Cmd::CreateComputePipelineLayout(1,
-            ComputePipelineDesc { compute: ShaderRef { module: 1, entry: "main".into() }, label: String::new() },
-            PipelineLayout { bindings: vec![
-                PipelineBinding { group: 0, binding: 0, count: 1, kind: PipelineBindingKind::UniformTexelBuffer },
-                PipelineBinding { group: 0, binding: 1, count: 1, kind: PipelineBindingKind::StorageBuffer },
-            ] },
+        Cmd::CreateShader {
+            id: 1,
+            kind: ShaderPayloadKind::SpirV,
+            spirv,
+        },
+        Cmd::CreateComputePipelineLayout(
+            1,
+            ComputePipelineDesc {
+                compute: ShaderRef {
+                    module: 1,
+                    entry: "main".into(),
+                },
+                label: String::new(),
+            },
+            PipelineLayout {
+                bindings: vec![
+                    PipelineBinding {
+                        group: 0,
+                        binding: 0,
+                        count: 1,
+                        kind: PipelineBindingKind::UniformTexelBuffer,
+                    },
+                    PipelineBinding {
+                        group: 0,
+                        binding: 1,
+                        count: 1,
+                        kind: PipelineBindingKind::StorageBuffer,
+                    },
+                ],
+            },
         ),
         Cmd::CreateBuffer(1, buffer(bytes.len() as u64)),
-        Cmd::WriteBuffer { id: 1, offset: 0, data: bytes.clone() },
+        Cmd::WriteBuffer {
+            id: 1,
+            offset: 0,
+            data: bytes.clone(),
+        },
         Cmd::CreateBuffer(2, buffer(16)),
-        Cmd::CreateBindGroup(1, BindGroupDesc { set: 0, entries: vec![
-            BindEntry { binding: 0, resource: BindResource::TexelBuffer {
-                id: 1, offset: 0, size: bytes.len() as u64, format, writable: false,
-            } },
-            BindEntry { binding: 1, resource: BindResource::Buffer { id: 2, offset: 0, size: 16 } },
-        ] }),
-        Cmd::Submit(CommandBuffer { encoder: vec![
-            Enc::BeginComputePass, Enc::SetPipeline(1), Enc::SetBindGroup { index: 0, group: 1 },
-            Enc::Dispatch { x: 1, y: 1, z: 1 }, Enc::EndComputePass,
-        ], signal: None }),
+        Cmd::CreateBindGroup(
+            1,
+            BindGroupDesc {
+                set: 0,
+                entries: vec![
+                    BindEntry {
+                        binding: 0,
+                        resource: BindResource::TexelBuffer {
+                            id: 1,
+                            offset: 0,
+                            size: bytes.len() as u64,
+                            format,
+                            writable: false,
+                        },
+                    },
+                    BindEntry {
+                        binding: 1,
+                        resource: BindResource::Buffer {
+                            id: 2,
+                            offset: 0,
+                            size: 16,
+                        },
+                    },
+                ],
+            },
+        ),
+        Cmd::Submit(CommandBuffer {
+            encoder: vec![
+                Enc::BeginComputePass,
+                Enc::SetPipeline(1),
+                Enc::SetBindGroup { index: 0, group: 1 },
+                Enc::Dispatch { x: 1, y: 1, z: 1 },
+                Enc::EndComputePass,
+            ],
+            signal: None,
+        }),
     ];
     let (executor, session) = run(&commands);
-    executor.read_buffer(&session.resources, BufferId(2), 0, 16).unwrap()
+    executor
+        .read_buffer(&session.resources, BufferId(2), 0, 16)
+        .unwrap()
 }
 
 #[test]
 fn vulkan_native_formats_uniform_texel_load_exact_values() {
-    let f32s = |bytes: Vec<u8>| bytes.chunks_exact(4)
-        .map(|v| f32::from_le_bytes(v.try_into().unwrap())).collect::<Vec<_>>();
+    let f32s = |bytes: Vec<u8>| {
+        bytes
+            .chunks_exact(4)
+            .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
+            .collect::<Vec<_>>()
+    };
     let r8 = f32s(uniform_texel_load(TextureFormat::R8Snorm, vec![0xc0]));
     assert!((r8[0] + 64.0 / 127.0).abs() < 1e-6 && r8[1..] == [0.0, 0.0, 1.0]);
-    let rg8 = f32s(uniform_texel_load(TextureFormat::Rg8Snorm, vec![0x40, 0xc0]));
-    assert!((rg8[0] - 64.0 / 127.0).abs() < 1e-6 && (rg8[1] + 64.0 / 127.0).abs() < 1e-6 && rg8[2..] == [0.0, 1.0]);
-    let rgba8 = f32s(uniform_texel_load(TextureFormat::Rgba8Snorm, vec![0x20, 0x40, 0x60, 0x7f]));
+    let rg8 = f32s(uniform_texel_load(
+        TextureFormat::Rg8Snorm,
+        vec![0x40, 0xc0],
+    ));
+    assert!(
+        (rg8[0] - 64.0 / 127.0).abs() < 1e-6
+            && (rg8[1] + 64.0 / 127.0).abs() < 1e-6
+            && rg8[2..] == [0.0, 1.0]
+    );
+    let rgba8 = f32s(uniform_texel_load(
+        TextureFormat::Rgba8Snorm,
+        vec![0x20, 0x40, 0x60, 0x7f],
+    ));
     assert!((rgba8[0] - 32.0 / 127.0).abs() < 1e-6 && rgba8[3] == 1.0);
-    let rg16f = f32s(uniform_texel_load(TextureFormat::Rg16Float, vec![0x00, 0x38, 0x00, 0xb4]));
+    let rg16f = f32s(uniform_texel_load(
+        TextureFormat::Rg16Float,
+        vec![0x00, 0x38, 0x00, 0xb4],
+    ));
     assert_eq!(rg16f, [0.5, -0.25, 0.0, 1.0]);
-    assert_eq!(f32s(uniform_texel_load(TextureFormat::R16Float, vec![0x00, 0x38])), [0.5, 0.0, 0.0, 1.0]);
-    let rgb10a2 = f32s(uniform_texel_load(TextureFormat::Rgb10a2Unorm, vec![0xff, 0x03, 0x08, 0xc0]));
+    assert_eq!(
+        f32s(uniform_texel_load(
+            TextureFormat::R16Float,
+            vec![0x00, 0x38]
+        )),
+        [0.5, 0.0, 0.0, 1.0]
+    );
+    let rgb10a2 = f32s(uniform_texel_load(
+        TextureFormat::Rgb10a2Unorm,
+        vec![0xff, 0x03, 0x08, 0xc0],
+    ));
     assert_eq!(rgb10a2[0], 1.0);
     assert!((rgb10a2[1] - 512.0 / 1023.0).abs() < 1e-6 && rgb10a2[2] == 0.0 && rgb10a2[3] == 1.0);
-    assert_eq!(f32s(uniform_texel_load(TextureFormat::Rg11b10Ufloat, vec![0xc0, 0x03, 0x1c, 0x80])), [1.0, 0.5, 2.0, 1.0]);
-    let uints = uniform_texel_load_shader(TextureFormat::Rgb10a2Uint, vec![0xff, 0x03, 0x08, 0xc0], uint_uniform_shader());
-    let uints = uints.chunks_exact(4).map(|v| u32::from_le_bytes(v.try_into().unwrap())).collect::<Vec<_>>();
+    assert_eq!(
+        f32s(uniform_texel_load(
+            TextureFormat::Rg11b10Ufloat,
+            vec![0xc0, 0x03, 0x1c, 0x80]
+        )),
+        [1.0, 0.5, 2.0, 1.0]
+    );
+    let uints = uniform_texel_load_shader(
+        TextureFormat::Rgb10a2Uint,
+        vec![0xff, 0x03, 0x08, 0xc0],
+        uint_uniform_shader(),
+    );
+    let uints = uints
+        .chunks_exact(4)
+        .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
+        .collect::<Vec<_>>();
     assert_eq!(uints, [1023, 512, 0, 3]);
 }
 
@@ -288,13 +392,22 @@ fn atomic_texel_spirv(format: &str, signed: bool) -> Vec<u32> {
     )
     .validate(&module)
     .expect("atomic texel seed validates");
-    let images = module.global_variables.iter().filter_map(|(handle, variable)| {
-        matches!(module.types[variable.ty].inner, naga::TypeInner::Image { .. })
+    let images = module
+        .global_variables
+        .iter()
+        .filter_map(|(handle, variable)| {
+            matches!(
+                module.types[variable.ty].inner,
+                naga::TypeInner::Image { .. }
+            )
             .then_some((handle, variable.ty))
-    }).collect::<Vec<_>>();
+        })
+        .collect::<Vec<_>>();
     for (global, old_ty) in images {
         let mut ty = module.types[old_ty].clone();
-        let naga::TypeInner::Image { ref mut dim, .. } = ty.inner else { unreachable!() };
+        let naga::TypeInner::Image { ref mut dim, .. } = ty.inner else {
+            unreachable!()
+        };
         *dim = naga::ImageDimension::Buffer;
         module.global_variables[global].ty = module.types.insert(ty, naga::Span::default());
     }
@@ -304,8 +417,11 @@ fn atomic_texel_spirv(format: &str, signed: bool) -> Vec<u32> {
         .iter()
         .filter_map(|statement| match statement {
             naga::Statement::ImageAtomic { coordinate, .. } => {
-                let naga::Expression::Compose { components, .. } = &function.expressions[*coordinate]
-                    else { return None };
+                let naga::Expression::Compose { components, .. } =
+                    &function.expressions[*coordinate]
+                else {
+                    return None;
+                };
                 Some((*coordinate, components[0]))
             }
             _ => None,
@@ -323,32 +439,49 @@ fn atomic_texel_spirv(format: &str, signed: bool) -> Vec<u32> {
 }
 
 fn atomic_texel_case(format: TextureFormat, signed: bool) -> Vec<u8> {
-    let shader = atomic_texel_spirv(
-        if signed { "r32sint" } else { "r32uint" },
-        signed,
-    );
+    let shader = atomic_texel_spirv(if signed { "r32sint" } else { "r32uint" }, signed);
     let mut commands = pipeline(&shader, PipelineBindingKind::StorageTexelBuffer, false);
     commands.extend([
         Cmd::CreateBuffer(1, buffer(20)),
-        Cmd::WriteBuffer { id: 1, offset: 0, data: [5u32, 0, 0, 0, 0].into_iter().flat_map(u32::to_le_bytes).collect() },
-        Cmd::CreateBindGroup(1, BindGroupDesc {
-            set: 0,
-            entries: vec![
-                BindEntry { binding: 0, resource: BindResource::TexelBuffer {
-                    id: 1, offset: 0, size: 20, format, writable: true,
-                }},
+        Cmd::WriteBuffer {
+            id: 1,
+            offset: 0,
+            data: [5u32, 0, 0, 0, 0]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect(),
+        },
+        Cmd::CreateBindGroup(
+            1,
+            BindGroupDesc {
+                set: 0,
+                entries: vec![BindEntry {
+                    binding: 0,
+                    resource: BindResource::TexelBuffer {
+                        id: 1,
+                        offset: 0,
+                        size: 20,
+                        format,
+                        writable: true,
+                    },
+                }],
+            },
+        ),
+        Cmd::Submit(CommandBuffer {
+            encoder: vec![
+                Enc::BeginComputePass,
+                Enc::SetPipeline(1),
+                Enc::SetBindGroup { index: 0, group: 1 },
+                Enc::Dispatch { x: 1, y: 1, z: 1 },
+                Enc::EndComputePass,
             ],
+            signal: None,
         }),
-        Cmd::Submit(CommandBuffer { encoder: vec![
-            Enc::BeginComputePass,
-            Enc::SetPipeline(1),
-            Enc::SetBindGroup { index: 0, group: 1 },
-            Enc::Dispatch { x: 1, y: 1, z: 1 },
-            Enc::EndComputePass,
-        ], signal: None }),
     ]);
     let (executor, session) = run(&commands);
-    executor.read_buffer(&session.resources, BufferId(1), 0, 20).unwrap()
+    executor
+        .read_buffer(&session.resources, BufferId(1), 0, 20)
+        .unwrap()
 }
 
 #[test]
@@ -356,13 +489,19 @@ fn r32_storage_texel_atomics_return_old_values_with_signed_ordering() {
     let uint = atomic_texel_case(TextureFormat::R32Uint, false);
     assert_eq!(
         uint,
-        [13u32, 5, 12, 3, 11].into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>()
+        [13u32, 5, 12, 3, 11]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>()
     );
 
     let sint = atomic_texel_case(TextureFormat::R32Sint, true);
     assert_eq!(
         sint,
-        [13i32, 5, 12, -3, 11].into_iter().flat_map(i32::to_le_bytes).collect::<Vec<_>>()
+        [13i32, 5, 12, -3, 11]
+            .into_iter()
+            .flat_map(i32::to_le_bytes)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -591,7 +730,11 @@ fn vertex_stage_uniform_texel_buffer_renders_on_the_native_device() {
             data: positions,
         },
         Cmd::CreateBuffer(2, buffer(4)),
-        Cmd::WriteBuffer { id: 2, offset: 0, data: vec![0, 255, 0, 255] },
+        Cmd::WriteBuffer {
+            id: 2,
+            offset: 0,
+            data: vec![0, 255, 0, 255],
+        },
         Cmd::CreateTexture(
             1,
             TextureDesc {

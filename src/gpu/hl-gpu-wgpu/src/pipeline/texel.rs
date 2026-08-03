@@ -39,7 +39,9 @@ impl WgpuExecutor {
             specialization,
             false,
         )?;
-        let vertex = self.gpu.shader_module("hl-render-texel-vertex", vertex_source)?;
+        let vertex = self
+            .gpu
+            .shader_module("hl-render-texel-vertex", vertex_source)?;
         let (fragment, fragment_usage) = match (&recipe.desc.fragment, &recipe.fragment_words) {
             (Some(stage), Some(words)) => {
                 let (source, usage) = crate::wgsl::Spirv::translate_reflect_texel_fragment(
@@ -50,10 +52,20 @@ impl WgpuExecutor {
                     &stage.entry,
                     &recipe.desc.color_targets,
                 )?;
-                (Some((self.gpu.shader_module("hl-render-texel-fragment", source)?, stage)), usage)
+                (
+                    Some((
+                        self.gpu.shader_module("hl-render-texel-fragment", source)?,
+                        stage,
+                    )),
+                    usage,
+                )
             }
             (None, None) => (None, crate::reflect::ModuleUsage::default()),
-            _ => return Err(GpuError::Invalid("wgpu: render texel fragment recipe mismatch")),
+            _ => {
+                return Err(GpuError::Invalid(
+                    "wgpu: render texel fragment recipe mismatch",
+                ))
+            }
         };
         let mut merged = BTreeMap::new();
         for (stage, bindings) in [
@@ -134,22 +146,26 @@ impl WgpuExecutor {
                 attributes,
             })
             .collect::<Vec<_>>();
-        let depth_stencil = recipe.desc.depth.as_ref().map(|state| wgpu::DepthStencilState {
-            format: Format::from(state.format).native(),
-            depth_write_enabled: state.depth_write,
-            depth_compare: CompareFunction(state.depth_compare).native(),
-            stencil: wgpu::StencilState {
-                front: StencilState::face(&state.stencil_front),
-                back: StencilState::face(&state.stencil_back),
-                read_mask: state.stencil_read_mask,
-                write_mask: state.stencil_write_mask,
-            },
-            bias: wgpu::DepthBiasState {
-                constant: state.bias_constant,
-                slope_scale: state.bias_slope_scale,
-                clamp: state.bias_clamp,
-            },
-        });
+        let depth_stencil = recipe
+            .desc
+            .depth
+            .as_ref()
+            .map(|state| wgpu::DepthStencilState {
+                format: Format::from(state.format).native(),
+                depth_write_enabled: state.depth_write,
+                depth_compare: CompareFunction(state.depth_compare).native(),
+                stencil: wgpu::StencilState {
+                    front: StencilState::face(&state.stencil_front),
+                    back: StencilState::face(&state.stencil_back),
+                    read_mask: state.stencil_read_mask,
+                    write_mask: state.stencil_write_mask,
+                },
+                bias: wgpu::DepthBiasState {
+                    constant: state.bias_constant,
+                    slope_scale: state.bias_slope_scale,
+                    clamp: state.bias_clamp,
+                },
+            });
         let targets = recipe
             .desc
             .color_targets
@@ -189,12 +205,14 @@ impl WgpuExecutor {
                     mask: recipe.multisample.mask,
                     ..Default::default()
                 },
-                fragment: fragment.as_ref().map(|(module, stage)| wgpu::FragmentState {
-                    module,
-                    entry_point: Some(stage.entry.as_str()),
-                    targets: &targets,
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
+                fragment: fragment
+                    .as_ref()
+                    .map(|(module, stage)| wgpu::FragmentState {
+                        module,
+                        entry_point: Some(stage.entry.as_str()),
+                        targets: &targets,
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    }),
                 multiview: None,
                 cache: None,
             });

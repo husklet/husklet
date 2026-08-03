@@ -149,8 +149,11 @@ impl Upload {
         if !self.reads_as_float() {
             return None;
         }
-        let mut out =
-            Vec::with_capacity(self.width.checked_mul(self.height)?.checked_mul(texel.bytes())?);
+        let mut out = Vec::with_capacity(
+            self.width
+                .checked_mul(self.height)?
+                .checked_mul(texel.bytes())?,
+        );
         for y in 0..self.height {
             let begin = self.start + y * self.stride;
             let row = &source[begin..begin + self.width * self.source_bpp];
@@ -214,15 +217,12 @@ impl Upload {
             GL_UNSIGNED_SHORT => {
                 u16::from_le_bytes(pixel.get(base..base + 2)?.try_into().ok()?) as f32 / 65535.0
             }
-            GL_SHORT => {
-                (i16::from_le_bytes(pixel.get(base..base + 2)?.try_into().ok()?) as f32 / 32767.0)
-                    .max(-1.0)
-            }
-            GL_HALF_FLOAT => {
-                hl_gpu::protocol::model::half::to_f32(u16::from_le_bytes(
-                    pixel.get(base..base + 2)?.try_into().ok()?,
-                ))
-            }
+            GL_SHORT => (i16::from_le_bytes(pixel.get(base..base + 2)?.try_into().ok()?) as f32
+                / 32767.0)
+                .max(-1.0),
+            GL_HALF_FLOAT => hl_gpu::protocol::model::half::to_f32(u16::from_le_bytes(
+                pixel.get(base..base + 2)?.try_into().ok()?,
+            )),
             GL_FLOAT => f32::from_le_bytes(pixel.get(base..base + 4)?.try_into().ok()?),
             _ => return None,
         })
@@ -364,8 +364,7 @@ impl Upload {
                     raw.clamp(0, 255) as u8
                 }
                 GL_UNSIGNED_INT => {
-                    let raw =
-                        u32::from_le_bytes(pixel[base..base + 4].try_into().ok()?);
+                    let raw = u32::from_le_bytes(pixel[base..base + 4].try_into().ok()?);
                     raw.min(255) as u8
                 }
                 GL_INT => {
@@ -445,7 +444,9 @@ impl FloatTexel {
         match self {
             Self::Half4 => {
                 for channel in rgba {
-                    out.extend_from_slice(&hl_gpu::protocol::model::half::from_f32(channel).to_le_bytes());
+                    out.extend_from_slice(
+                        &hl_gpu::protocol::model::half::from_f32(channel).to_le_bytes(),
+                    );
                 }
             }
             Self::Single4 => {

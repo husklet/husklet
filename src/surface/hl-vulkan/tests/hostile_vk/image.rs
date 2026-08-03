@@ -122,10 +122,22 @@ fn blit_image_extent_overflow_is_out_of_bounds_then_valid() {
             b,
             SubresourceLayers::base(),
             SubresourceLayers::base(),
-            Origin3d { x: u32::MAX, y: 0, z: 0 },
-            Extent3d { width: 4, height: 4, depth: 1 },
+            Origin3d {
+                x: u32::MAX,
+                y: 0,
+                z: 0
+            },
+            Extent3d {
+                width: 4,
+                height: 4,
+                depth: 1
+            },
             Origin3d { x: 0, y: 0, z: 0 },
-            Extent3d { width: 4, height: 4, depth: 1 },
+            Extent3d {
+                width: 4,
+                height: 4,
+                depth: 1
+            },
             false,
             Mirror::NONE,
         ),
@@ -140,9 +152,21 @@ fn blit_image_extent_overflow_is_out_of_bounds_then_valid() {
             SubresourceLayers::base(),
             SubresourceLayers::base(),
             Origin3d { x: 0, y: 0, z: 0 },
-            Extent3d { width: 4, height: 4, depth: 1 },
-            Origin3d { x: 0, y: u32::MAX, z: 0 },
-            Extent3d { width: 4, height: 4, depth: 1 },
+            Extent3d {
+                width: 4,
+                height: 4,
+                depth: 1
+            },
+            Origin3d {
+                x: 0,
+                y: u32::MAX,
+                z: 0
+            },
+            Extent3d {
+                width: 4,
+                height: 4,
+                depth: 1
+            },
             true,
             Mirror::NONE,
         ),
@@ -157,9 +181,17 @@ fn blit_image_extent_overflow_is_out_of_bounds_then_valid() {
             SubresourceLayers::base(),
             SubresourceLayers::base(),
             Origin3d { x: 4, y: 4, z: 0 },
-            Extent3d { width: u32::MAX, height: 1, depth: 1 },
+            Extent3d {
+                width: u32::MAX,
+                height: 1,
+                depth: 1
+            },
             Origin3d { x: 0, y: 0, z: 0 },
-            Extent3d { width: 4, height: 4, depth: 1 },
+            Extent3d {
+                width: 4,
+                height: 4,
+                depth: 1
+            },
             false,
             Mirror::NONE,
         ),
@@ -174,9 +206,17 @@ fn blit_image_extent_overflow_is_out_of_bounds_then_valid() {
         SubresourceLayers::base(),
         SubresourceLayers::base(),
         Origin3d { x: 0, y: 0, z: 0 },
-        Extent3d { width: 4, height: 4, depth: 1 },
+        Extent3d {
+            width: 4,
+            height: 4,
+            depth: 1
+        },
         Origin3d { x: 0, y: 0, z: 0 },
-        Extent3d { width: 8, height: 8, depth: 1 },
+        Extent3d {
+            width: 8,
+            height: 8,
+            depth: 1
+        },
         true,
         Mirror::NONE,
     )

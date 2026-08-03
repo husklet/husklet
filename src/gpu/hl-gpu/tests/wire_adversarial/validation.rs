@@ -24,7 +24,11 @@ fn texel_buffer_writable_rejects_a_noncanonical_bool() {
         },
     )];
     let mut bytes = Encoder::stream(&commands);
-    assert_eq!(bytes.pop(), Some(1), "writable is the descriptor's final field");
+    assert_eq!(
+        bytes.pop(),
+        Some(1),
+        "writable is the descriptor's final field"
+    );
     bytes.push(2);
     assert!(matches!(
         hl_gpu::Decoder::stream(&bytes),

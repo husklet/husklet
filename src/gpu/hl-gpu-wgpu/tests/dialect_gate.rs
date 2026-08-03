@@ -40,7 +40,10 @@ fn compile(exec: &mut WgpuExecutor, source: &str) -> hl_gpu::Result<()> {
 /// The same shader body in both spellings: ES (which takes `normalize`) and desktop (which does not).
 fn both_routes(body: &str) -> [(&'static str, String); 2] {
     [
-        ("es", format!("#version 300 es\nprecision highp float;\n{body}")),
+        (
+            "es",
+            format!("#version 300 es\nprecision highp float;\n{body}"),
+        ),
         ("desktop", format!("#version 460\n{body}")),
     ]
 }

@@ -66,8 +66,10 @@ impl WgpuExecutor {
                         .iter()
                         .filter_map(|group| group.map(|id| self.bind_group(res, id)))
                         .collect::<Result<Vec<_>>>()?;
-                    let alignment = self.gpu.device.limits().min_storage_buffer_offset_alignment as u64;
-                    let specialization = crate::texel_buffer::key(descriptors.iter().copied(), alignment)?;
+                    let alignment =
+                        self.gpu.device.limits().min_storage_buffer_offset_alignment as u64;
+                    let specialization =
+                        crate::texel_buffer::key(descriptors.iter().copied(), alignment)?;
                     let pipeline = self.compute_pipeline_for(res, pid, &specialization)?;
                     let remap_group_zero = match PipelineNative::get(res, pid)? {
                         PipelineNative::Compute {

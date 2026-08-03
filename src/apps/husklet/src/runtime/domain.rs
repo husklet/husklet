@@ -87,11 +87,9 @@ impl Domain {
                     "replacing workspace '{}' execution domain: {reason}",
                     workspace.name
                 );
-                peer.stop(
-                    libc::SIGTERM,
-                    std::time::Duration::from_secs(10),
-                    || std::os::unix::net::UnixStream::connect(self.socket()),
-                )?;
+                peer.stop(libc::SIGTERM, std::time::Duration::from_secs(10), || {
+                    std::os::unix::net::UnixStream::connect(self.socket())
+                })?;
                 reason
             }
             Decision::Start(reason) => reason,
@@ -150,9 +148,7 @@ impl Domain {
                 Publication::Mismatched(published) => {
                     return Ok(Decision::Replace(
                         Peer::new(connection)?,
-                        format!(
-                            "domain speaks protocol {published}, this build speaks {PROTOCOL}"
-                        ),
+                        format!("domain speaks protocol {published}, this build speaks {PROTOCOL}"),
                     ));
                 }
                 // A live socket with nothing published means the owner is still starting up or

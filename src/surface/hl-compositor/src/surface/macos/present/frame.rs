@@ -636,7 +636,11 @@ impl MacPresenter {
             );
         }
 
-        let outcome = if shown.is_some() { "shown" } else { "offscreen" };
+        let outcome = if shown.is_some() {
+            "shown"
+        } else {
+            "offscreen"
+        };
         if let Some(beat) = self.presented.record((sid, outcome)) {
             hl_log::hl_log!(
                 tag::PRESENT,

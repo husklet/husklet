@@ -95,7 +95,8 @@ fn emit_panicking_handler() {
 }
 
 fn run_child(body: &str, tags: Option<&str>) -> String {
-    let mut command = std::process::Command::new(std::env::current_exe().expect("test binary path"));
+    let mut command =
+        std::process::Command::new(std::env::current_exe().expect("test binary path"));
     command.args(["--exact", "--ignored", "--nocapture", body]);
     match tags {
         Some(value) => command.env(TAGS_VARIABLE, value),

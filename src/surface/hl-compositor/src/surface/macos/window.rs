@@ -297,7 +297,7 @@ impl MetalWindow {
             // The frame is dropped here and retried. Once, mid-resize, that is normal; every frame means
             // a window whose drawable never agrees with its composite and so never updates again.
             if let Some(seen) = SKIPPED_MISMATCH.record((source_size, drawable_size)) {
-            hl_log::hl_error!(
+                hl_log::hl_error!(
                 hl_log::tag::PRESENT,
                 "skip native frame count={} over_ms={} composite={}x{} drawable={}x{} logical={}x{}",
                 seen.count,

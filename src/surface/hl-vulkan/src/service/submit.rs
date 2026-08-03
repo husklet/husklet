@@ -9,8 +9,8 @@
 
 use crate::model::command::CommandBufferState;
 use crate::model::sync::{DeferredOp, QueryResult};
-use crate::*;
 use crate::service::create::refresh_mapped_buffer;
+use crate::*;
 use hl_gpu::{Cmd, CommandBuffer, CommandSink, FenceId, GpuError, Result};
 
 /// `vkQueueSubmit` — flush mapped memory, then submit each command buffer's encoder as a `Cmd::Submit`;

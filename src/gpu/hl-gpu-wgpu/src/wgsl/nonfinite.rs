@@ -319,14 +319,16 @@ impl NonFinite {
             naga::SampleLevel::Zero => naga::SampleLevel::Zero,
             naga::SampleLevel::Exact(handle) => naga::SampleLevel::Exact(at(handle)),
             naga::SampleLevel::Bias(handle) => naga::SampleLevel::Bias(at(handle)),
-            naga::SampleLevel::Gradient { x, y } => naga::SampleLevel::Gradient {
-                x: at(x),
-                y: at(y),
-            },
+            naga::SampleLevel::Gradient { x, y } => {
+                naga::SampleLevel::Gradient { x: at(x), y: at(y) }
+            }
         }
     }
 
-    fn remap_atomic(function: &naga::AtomicFunction, value: &[Handle<Expression>]) -> naga::AtomicFunction {
+    fn remap_atomic(
+        function: &naga::AtomicFunction,
+        value: &[Handle<Expression>],
+    ) -> naga::AtomicFunction {
         match function {
             naga::AtomicFunction::Exchange { compare } => naga::AtomicFunction::Exchange {
                 compare: compare.as_ref().map(|handle| value[handle.index()]),
@@ -345,10 +347,7 @@ impl NonFinite {
                 // replaced predicate's intermediates are in scope, and CLOSE at the value of its old last.
                 Statement::Emit(range) => {
                     if let Some((first, last)) = range.first_and_last() {
-                        *range = Range::new_from_bounds(
-                            start[first.index()],
-                            value[last.index()],
-                        );
+                        *range = Range::new_from_bounds(start[first.index()], value[last.index()]);
                     }
                 }
                 Statement::Block(inner) => Self::remap_block(inner, value, start),
@@ -377,7 +376,10 @@ impl NonFinite {
                     *break_if = maybe(break_if);
                 }
                 Statement::Return { value: returned } => *returned = maybe(returned),
-                Statement::Store { pointer, value: stored } => {
+                Statement::Store {
+                    pointer,
+                    value: stored,
+                } => {
                     *pointer = at(pointer);
                     *stored = at(stored);
                 }

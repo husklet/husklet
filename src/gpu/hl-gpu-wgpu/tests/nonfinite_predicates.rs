@@ -223,8 +223,9 @@ fn isnan_and_isinf_answer_correctly_for_runtime_values() {
         .expect("a GPU adapter is required to prove the wgpu executor");
 
     for payload in [Payload::Glsl, Payload::SpirV] {
-        let pixels = render(&mut exec, payload, FS)
-            .unwrap_or_else(|e| panic!("{payload:?}: a shader using isnan/isinf must compile and draw: {e}"));
+        let pixels = render(&mut exec, payload, FS).unwrap_or_else(|e| {
+            panic!("{payload:?}: a shader using isnan/isinf must compile and draw: {e}")
+        });
         let expected = [255, 255, 0, 255];
         for y in 0..H {
             for x in 0..W {
@@ -278,8 +279,9 @@ fn predicates_survive_the_arena_rebuild_through_calls_and_control_flow() {
     // handles shows up as a wrong colour rather than a wrong shape.
     let expected = [255, 191, 128, 255];
     for payload in [Payload::Glsl, Payload::SpirV] {
-        let pixels = render(&mut exec, payload, FS_CONTROL_FLOW)
-            .unwrap_or_else(|e| panic!("{payload:?}: the control-flow shader must compile and draw: {e}"));
+        let pixels = render(&mut exec, payload, FS_CONTROL_FLOW).unwrap_or_else(|e| {
+            panic!("{payload:?}: the control-flow shader must compile and draw: {e}")
+        });
         for y in 0..H {
             for x in 0..W {
                 let got = px(&pixels, W, x, y);

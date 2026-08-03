@@ -209,7 +209,11 @@ fn stock_glmark2_scores_at_least_one_advertised_config_as_acceptable() {
         }
         let difference = scale.abs() * (component - target);
         if difference > 0 {
-            let score = if scale < 0 { 32 - difference } else { difference };
+            let score = if scale < 0 {
+                32 - difference
+            } else {
+                difference
+            };
             score.min(32).max(0)
         } else {
             0

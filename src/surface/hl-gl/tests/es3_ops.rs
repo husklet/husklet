@@ -367,7 +367,10 @@ fn zero_timeout_flush_wait_is_a_poll_and_finish_marks_the_fence_complete() {
         sync::client_wait_sync(&mut c, &mut sink, token, GL_SYNC_FLUSH_COMMANDS_BIT, 0),
         GL_TIMEOUT_EXPIRED
     );
-    assert!(sink.recording.waits.is_empty(), "a zero-time wait must not block");
+    assert!(
+        sink.recording.waits.is_empty(),
+        "a zero-time wait must not block"
+    );
 
     sink.complete = true;
     sync::finish(&mut c, &mut sink).unwrap();

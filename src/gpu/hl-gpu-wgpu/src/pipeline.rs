@@ -289,26 +289,26 @@ impl WgpuExecutor {
         // ids (but the same source) dedup to one compiled pipeline.
         let (vs, vs_used, vs_push_constant, vs_key) =
             match shader::ShaderNative::get(res, desc.vertex.module)? {
-            ShaderNative::Module {
-                module,
-                reflected,
-                key,
-            } => (
-                module.clone(),
-                reflected.used_for(&desc.vertex.entry).to_vec(),
-                reflected.uses_push_constant(&desc.vertex.entry),
-                key.clone(),
-            ),
-            ShaderNative::Kernel(_) => {
-                hl_log::hl_warn!(
-                    hl_log::tag::WGPU,
-                    "pipeline rejected kind=render stage=vertex reason=needs-graphics-shader"
-                );
-                return Err(GpuError::Unsupported(
-                    "wgpu: render pipeline vertex needs a graphics shader",
-                ));
-            }
-        };
+                ShaderNative::Module {
+                    module,
+                    reflected,
+                    key,
+                } => (
+                    module.clone(),
+                    reflected.used_for(&desc.vertex.entry).to_vec(),
+                    reflected.uses_push_constant(&desc.vertex.entry),
+                    key.clone(),
+                ),
+                ShaderNative::Kernel(_) => {
+                    hl_log::hl_warn!(
+                        hl_log::tag::WGPU,
+                        "pipeline rejected kind=render stage=vertex reason=needs-graphics-shader"
+                    );
+                    return Err(GpuError::Unsupported(
+                        "wgpu: render pipeline vertex needs a graphics shader",
+                    ));
+                }
+            };
         let (mut fs, mut fs_used, mut fs_push_constant, fs_key) = match &desc.fragment {
             Some(f) => {
                 match shader::ShaderNative::get(res, f.module)? {

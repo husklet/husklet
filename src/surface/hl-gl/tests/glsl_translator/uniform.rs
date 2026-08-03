@@ -355,7 +355,8 @@ fn declared_blocks_are_identified_by_name_not_by_binding_point() {
     let vs = "#version 300 es\nlayout(std140) uniform Matrices { mat4 uMvp; };\n\
               layout(std140) uniform Material { vec4 uTint; };\n\
               void main(){ gl_Position = uMvp * uTint; }\n";
-    let fs = "#version 300 es\nprecision highp float;\nout vec4 o;\nvoid main(){ o = vec4(1.0); }\n";
+    let fs =
+        "#version 300 es\nprecision highp float;\nout vec4 o;\nvoid main(){ o = vec4(1.0); }\n";
 
     let declared = glsl::StageSources::new(vs, fs).declared_uniform_blocks();
     assert_eq!(

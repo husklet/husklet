@@ -283,16 +283,17 @@ impl WgpuExecutor {
         if desc.width == 0 || desc.height == 0 {
             return Err(GpuError::Invalid("zero-sized texture"));
         }
-        let opaque_bc1 = desc.usage
-            & hl_gpu::protocol::model::enums::texture_usage::OPAQUE_BC1_RGB
-            != 0;
+        let opaque_bc1 =
+            desc.usage & hl_gpu::protocol::model::enums::texture_usage::OPAQUE_BC1_RGB != 0;
         if opaque_bc1
             && !matches!(
                 desc.format,
                 TextureFormat::Bc1RgbaUnorm | TextureFormat::Bc1RgbaSrgb
             )
         {
-            return Err(GpuError::Invalid("opaque BC1 semantic requires a BC1 format"));
+            return Err(GpuError::Invalid(
+                "opaque BC1 semantic requires a BC1 format",
+            ));
         }
         let wfmt = if opaque_bc1 {
             match desc.format {
@@ -544,8 +545,8 @@ impl WgpuExecutor {
             let shadow = shadow
                 .lock()
                 .map_err(|_| GpuError::Invalid("BC1 RGB shadow lock poisoned"))?;
-            let level = usize::try_from(t.shadow_base_mip + mip)
-                .map_err(|_| GpuError::OutOfBounds)?;
+            let level =
+                usize::try_from(t.shadow_base_mip + mip).map_err(|_| GpuError::OutOfBounds)?;
             let layer = usize::try_from(t.shadow_base_layer).map_err(|_| GpuError::OutOfBounds)?;
             return shadow
                 .levels
@@ -667,14 +668,14 @@ impl WgpuExecutor {
         if let Some(raw) = &t.bc1_rgb {
             let blocks_w = width.div_ceil(4);
             let blocks_h = height.div_ceil(4);
-            let blocks_per_layer = usize::try_from(blocks_w * blocks_h)
-                .map_err(|_| GpuError::OutOfBounds)?;
+            let blocks_per_layer =
+                usize::try_from(blocks_w * blocks_h).map_err(|_| GpuError::OutOfBounds)?;
             let mut decoded = vec![0u8; width as usize * height as usize * depth as usize * 4];
             let mut shadow = raw
                 .lock()
                 .map_err(|_| GpuError::Invalid("BC1 RGB shadow lock poisoned"))?;
-            let level_index = usize::try_from(t.shadow_base_mip + mip)
-                .map_err(|_| GpuError::OutOfBounds)?;
+            let level_index =
+                usize::try_from(t.shadow_base_mip + mip).map_err(|_| GpuError::OutOfBounds)?;
             let (level_width, _) = *shadow
                 .dimensions
                 .get(level_index)
@@ -696,16 +697,18 @@ impl WgpuExecutor {
                         let block: [u8; 8] = data[source_offset..source_offset + 8]
                             .try_into()
                             .map_err(|_| GpuError::OutOfBounds)?;
-                        let destination_block = ((y / 4) as usize + by) * level_blocks_w
-                            + (x / 4) as usize
-                            + bx;
+                        let destination_block =
+                            ((y / 4) as usize + by) * level_blocks_w + (x / 4) as usize + bx;
                         plane[destination_block * 8..destination_block * 8 + 8]
                             .copy_from_slice(&block);
-                        for (pixel, rgba) in crate::bc1::decode_opaque(block).into_iter().enumerate() {
+                        for (pixel, rgba) in
+                            crate::bc1::decode_opaque(block).into_iter().enumerate()
+                        {
                             let px = bx * 4 + pixel % 4;
                             let py = by * 4 + pixel / 4;
                             if px < width as usize && py < height as usize {
-                                let destination = ((layer * height as usize + py) * width as usize + px) * 4;
+                                let destination =
+                                    ((layer * height as usize + py) * width as usize + px) * 4;
                                 decoded[destination..destination + 4].copy_from_slice(&rgba);
                             }
                         }
@@ -805,8 +808,8 @@ impl WgpuExecutor {
             let shadow = raw
                 .lock()
                 .map_err(|_| GpuError::Invalid("BC1 RGB shadow lock poisoned"))?;
-            let level_index = usize::try_from(t.shadow_base_mip + mip)
-                .map_err(|_| GpuError::OutOfBounds)?;
+            let level_index =
+                usize::try_from(t.shadow_base_mip + mip).map_err(|_| GpuError::OutOfBounds)?;
             let (level_width, _) = *shadow
                 .dimensions
                 .get(level_index)

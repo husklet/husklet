@@ -143,7 +143,9 @@ fn blit_mirrored(exec: &mut WgpuExecutor, mirror: Mirror) -> Vec<u8> {
             }),
         ],
     )
-    .expect("a mirrored BlitTexture must lower and run; the Vulkan surface used to refuse it outright");
+    .expect(
+        "a mirrored BlitTexture must lower and run; the Vulkan surface used to refuse it outright",
+    );
 
     let plane = exec
         .read_texture(&s.resources, 2)
@@ -163,9 +165,21 @@ fn mirrored_blit_reflects_each_axis_exactly() {
 
     let states = [
         Mirror::NONE,
-        Mirror { x: true, y: false, z: false },
-        Mirror { x: false, y: true, z: false },
-        Mirror { x: true, y: true, z: false },
+        Mirror {
+            x: true,
+            y: false,
+            z: false,
+        },
+        Mirror {
+            x: false,
+            y: true,
+            z: false,
+        },
+        Mirror {
+            x: true,
+            y: true,
+            z: false,
+        },
     ];
 
     // The four expectations must be pairwise distinct, or the assertions below would pass for an executor
@@ -197,29 +211,84 @@ fn etc2_source_blits_through_native_sampler() {
     let mut exec = WgpuExecutor::new(DeviceConfig::default()).expect("wgpu adapter");
     let mut limits = Limits::from_capabilities(exec.capabilities());
     limits.copy_alignment = 1;
-    let mut session = Session::new(limits, GlobalLedger::unbounded(), Box::new(FakeClock::new(0)));
+    let mut session = Session::new(
+        limits,
+        GlobalLedger::unbounded(),
+        Box::new(FakeClock::new(0)),
+    );
     let compressed = TextureDesc {
-        width: 4, height: 4, depth: 1, mip_levels: 1, sample_count: 1,
-        dim: TextureDim::D2, format: TextureFormat::Etc2Rgb8Unorm,
-        usage: texture_usage::SAMPLED | texture_usage::COPY_DST, label: String::new(),
+        width: 4,
+        height: 4,
+        depth: 1,
+        mip_levels: 1,
+        sample_count: 1,
+        dim: TextureDim::D2,
+        format: TextureFormat::Etc2Rgb8Unorm,
+        usage: texture_usage::SAMPLED | texture_usage::COPY_DST,
+        label: String::new(),
     };
-    hl_gpu::runtime::submit(&mut session, &mut exec, 0, &[
-        Cmd::CreateTexture(1, compressed),
-        Cmd::CreateTexture(2, tex(4, 4)),
-        Cmd::CreateBuffer(1, BufferDesc { size: 8, usage: buffer_usage::COPY_SRC, label: String::new() }),
-        Cmd::WriteBuffer { id: 1, offset: 0, data: vec![0; 8] },
-        Cmd::Submit(CommandBuffer { encoder: vec![
-            Enc::CopyBufferToTexture { src: 1, src_offset: 0, bytes_per_row: 8, dst: 1, mip: 0, width: 4, height: 4 },
-            Enc::BlitTexture {
-                src: 1, src_sub: TextureSubresource::base(), src_origin: Origin3d::default(),
-                src_extent: Extent3d { width: 4, height: 4, depth: 1 },
-                dst: 2, dst_sub: TextureSubresource::base(), dst_origin: Origin3d::default(),
-                dst_extent: Extent3d { width: 4, height: 4, depth: 1 },
-                filter: Filter::Nearest, mirror: Mirror::NONE,
+    hl_gpu::runtime::submit(
+        &mut session,
+        &mut exec,
+        0,
+        &[
+            Cmd::CreateTexture(1, compressed),
+            Cmd::CreateTexture(2, tex(4, 4)),
+            Cmd::CreateBuffer(
+                1,
+                BufferDesc {
+                    size: 8,
+                    usage: buffer_usage::COPY_SRC,
+                    label: String::new(),
+                },
+            ),
+            Cmd::WriteBuffer {
+                id: 1,
+                offset: 0,
+                data: vec![0; 8],
             },
-        ], signal: None }),
-    ]).expect("ETC2 source blit must execute");
-    let pixels = exec.read_texture(&session.resources, 2).expect("read destination");
-    assert!(pixels.chunks_exact(4).all(|pixel| pixel == [2, 2, 2, 255]),
-        "the all-zero ETC2 block decodes to exact RGB(2), proving sampler decode plus blit write");
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::CopyBufferToTexture {
+                        src: 1,
+                        src_offset: 0,
+                        bytes_per_row: 8,
+                        dst: 1,
+                        mip: 0,
+                        width: 4,
+                        height: 4,
+                    },
+                    Enc::BlitTexture {
+                        src: 1,
+                        src_sub: TextureSubresource::base(),
+                        src_origin: Origin3d::default(),
+                        src_extent: Extent3d {
+                            width: 4,
+                            height: 4,
+                            depth: 1,
+                        },
+                        dst: 2,
+                        dst_sub: TextureSubresource::base(),
+                        dst_origin: Origin3d::default(),
+                        dst_extent: Extent3d {
+                            width: 4,
+                            height: 4,
+                            depth: 1,
+                        },
+                        filter: Filter::Nearest,
+                        mirror: Mirror::NONE,
+                    },
+                ],
+                signal: None,
+            }),
+        ],
+    )
+    .expect("ETC2 source blit must execute");
+    let pixels = exec
+        .read_texture(&session.resources, 2)
+        .expect("read destination");
+    assert!(
+        pixels.chunks_exact(4).all(|pixel| pixel == [2, 2, 2, 255]),
+        "the all-zero ETC2 block decodes to exact RGB(2), proving sampler decode plus blit write"
+    );
 }

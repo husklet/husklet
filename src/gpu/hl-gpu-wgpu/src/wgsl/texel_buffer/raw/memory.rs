@@ -73,7 +73,10 @@ pub(super) fn raw_pointer_in(
         },
         Span::default(),
     );
-    let bytes = expressions.append(Expression::Literal(naga::Literal::U32(bytes)), Span::default());
+    let bytes = expressions.append(
+        Expression::Literal(naga::Literal::U32(bytes)),
+        Span::default(),
+    );
     let base = expressions.append(
         Expression::Binary {
             op: naga::BinaryOperator::Multiply,
@@ -103,5 +106,11 @@ pub(super) fn raw_pointer_in(
         },
         Span::default(),
     );
-    expressions.append(Expression::Access { base: field, index: at }, Span::default())
+    expressions.append(
+        Expression::Access {
+            base: field,
+            index: at,
+        },
+        Span::default(),
+    )
 }

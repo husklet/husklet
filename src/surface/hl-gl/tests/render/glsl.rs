@@ -74,8 +74,16 @@ fn render_triangle(vs: &str, fs: &str, color: [f32; 4]) -> Vec<u8> {
     record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
 
     // glReadPixels drives the full render + device→host readback (build_frame_ir → submit → execute).
-    let px = readpixels::read_pixels(&mut c, &mut sink, 0, 0, W as i32, H as i32, readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE))
-        .expect("glReadPixels of the rendered corpus frame");
+    let px = readpixels::read_pixels(
+        &mut c,
+        &mut sink,
+        0,
+        0,
+        W as i32,
+        H as i32,
+        readpixels::PixelFormat::new(GL_RGBA, GL_UNSIGNED_BYTE),
+    )
+    .expect("glReadPixels of the rendered corpus frame");
     assert_eq!(sink.executor().draws, 1, "exactly one draw executed");
     px
 }

@@ -98,8 +98,14 @@ fn a_refused_compile_reports_false_and_a_diagnostic() {
         "a 3.10 built-in under #version 300 es must not compile"
     );
     let log = query::shader_info_log(&c, sh);
-    assert!(log.contains("bitCount"), "the log names the construct: {log:?}");
-    assert!(log.contains("3.10"), "and the version that introduced it: {log:?}");
+    assert!(
+        log.contains("bitCount"),
+        "the log names the construct: {log:?}"
+    );
+    assert!(
+        log.contains("3.10"),
+        "and the version that introduced it: {log:?}"
+    );
     assert_eq!(
         query::get_shaderiv(&c, sh, GL_INFO_LOG_LENGTH),
         log.len() as i32 + 1,
@@ -114,6 +120,9 @@ fn a_refused_compile_reports_false_and_a_diagnostic() {
         "#version 300 es\nprecision highp float;\nout vec4 o;\nvoid main() { o = vec4(1.0); }\n",
     );
     record::compile_shader(&mut c, ok);
-    assert_eq!(query::get_shaderiv(&c, ok, GL_COMPILE_STATUS), GL_TRUE as i32);
+    assert_eq!(
+        query::get_shaderiv(&c, ok, GL_COMPILE_STATUS),
+        GL_TRUE as i32
+    );
     assert_eq!(query::get_shaderiv(&c, ok, GL_INFO_LOG_LENGTH), 0);
 }

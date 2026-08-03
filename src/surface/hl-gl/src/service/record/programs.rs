@@ -322,6 +322,21 @@ impl GlContext {
                 self.programs.fail_compile(shader, reason);
                 return;
             }
+<<<<<<< HEAD
+=======
+            if let Some(reason) = crate::adapter::glsl::invalid_function_semantics(source) {
+                self.programs.fail_compile(shader, reason);
+                return;
+            }
+            if let Some(reason) = crate::adapter::glsl::invalid_vector_constructor(source) {
+                self.programs.fail_compile(shader, reason);
+                return;
+            }
+            if let Some(reason) = crate::adapter::glsl::invalid_scope_semantics(source) {
+                self.programs.fail_compile(shader, reason);
+                return;
+            }
+>>>>>>> abab99da8 (fix(glsl): validate lexical scopes)
             if kind == GL_FRAGMENT_SHADER {
                 if let Some(reason) = crate::adapter::glsl::invalid_fragment_output_mix(source) {
                     self.programs.fail_compile(shader, reason);

@@ -713,11 +713,7 @@ mod vertex_format_tests {
     /// would mean handing the executor an attribute that reads different bytes than the app declared.
     #[test]
     fn a_format_without_a_wire_encoding_is_refused_rather_than_approximated() {
-        for format in [
-            f::B8G8R8A8_SINT,
-            0,
-            u32::MAX,
-        ] {
+        for format in [f::B8G8R8A8_SINT, 0, u32::MAX] {
             assert!(
                 VertexFormat(format).wire().is_none(),
                 "VkFormat {format} has no wire encoding and must be refused"
@@ -742,7 +738,10 @@ mod vertex_format_tests {
                 !(normalized && integer),
                 "VkFormat {format} is both normalized and integer"
             );
-            assert!(kind <= VertexFormat::BGRA_U8, "VkFormat {format} lowered to unknown kind {kind}");
+            assert!(
+                kind <= VertexFormat::BGRA_U8,
+                "VkFormat {format} lowered to unknown kind {kind}"
+            );
         }
     }
 }

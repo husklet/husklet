@@ -114,9 +114,33 @@ fn a_mirrored_blit_lowers_to_a_mirrored_blit_texture() {
     // `(src rect, dst rect)` in GL window coordinates, and the net mirror each must produce.
     let cases: [([i32; 4], [i32; 4], Mirror); 5] = [
         ([0, 0, 16, 16], [0, 0, 16, 16], Mirror::NONE),
-        ([16, 0, 0, 16], [0, 0, 16, 16], Mirror { x: true, y: false, z: false }),
-        ([0, 16, 16, 0], [0, 0, 16, 16], Mirror { x: false, y: true, z: false }),
-        ([16, 16, 0, 0], [0, 0, 16, 16], Mirror { x: true, y: true, z: false }),
+        (
+            [16, 0, 0, 16],
+            [0, 0, 16, 16],
+            Mirror {
+                x: true,
+                y: false,
+                z: false,
+            },
+        ),
+        (
+            [0, 16, 16, 0],
+            [0, 0, 16, 16],
+            Mirror {
+                x: false,
+                y: true,
+                z: false,
+            },
+        ),
+        (
+            [16, 16, 0, 0],
+            [0, 0, 16, 16],
+            Mirror {
+                x: true,
+                y: true,
+                z: false,
+            },
+        ),
         // Both sides inverted on x: two reflections are the identity, so this is NOT a mirror.
         ([16, 0, 0, 16], [16, 0, 0, 16], Mirror::NONE),
     ];
@@ -609,7 +633,11 @@ fn a_blit_only_frame_is_flushed() {
         }),
         _ => false,
     });
-    assert!(copied, "the blit must reach the encoder: {:?}", sink.batches);
+    assert!(
+        copied,
+        "the blit must reach the encoder: {:?}",
+        sink.batches
+    );
 }
 
 /// The WINDOW-surface branch of `swap::flush` has the same disagreement in a different shape. It splits
@@ -635,7 +663,17 @@ fn a_window_frame_flushes_an_offscreen_blit_with_no_offscreen_draw() {
     record::bind_framebuffer(&mut context, GL_READ_FRAMEBUFFER, source);
     record::bind_framebuffer(&mut context, GL_DRAW_FRAMEBUFFER, destination);
     record::blit_framebuffer(
-        &mut context, 0, 0, 16, 16, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT, GL_NEAREST,
+        &mut context,
+        0,
+        0,
+        16,
+        16,
+        0,
+        0,
+        16,
+        16,
+        GL_COLOR_BUFFER_BIT,
+        GL_NEAREST,
     );
     record::bind_framebuffer(&mut context, GL_FRAMEBUFFER, 0);
     record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
@@ -646,11 +684,18 @@ fn a_window_frame_flushes_an_offscreen_blit_with_no_offscreen_draw() {
     );
     let copied = sink.batches.iter().flatten().any(|cmd| match cmd {
         Cmd::Submit(batch) => batch.encoder.iter().any(|e| {
-            matches!(e, Enc::CopyTextureToTexture { .. } | Enc::BlitTexture { .. })
+            matches!(
+                e,
+                Enc::CopyTextureToTexture { .. } | Enc::BlitTexture { .. }
+            )
         }),
         _ => false,
     });
-    assert!(copied, "the blit must reach the encoder: {:?}", sink.batches);
+    assert!(
+        copied,
+        "the blit must reach the encoder: {:?}",
+        sink.batches
+    );
     assert_eq!(
         context.recording_counts().0,
         1,
@@ -697,5 +742,9 @@ fn a_surfaceless_frame_keeps_its_offscreen_work_beside_a_default_framebuffer_dra
             .any(|e| matches!(e, Enc::Draw { .. } | Enc::DrawIndexed { .. })),
         _ => false,
     });
-    assert!(drew, "the offscreen draw must reach the encoder: {:?}", sink.batches);
+    assert!(
+        drew,
+        "the offscreen draw must reach the encoder: {:?}",
+        sink.batches
+    );
 }
