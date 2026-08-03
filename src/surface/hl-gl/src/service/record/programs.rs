@@ -1025,6 +1025,11 @@ impl GlContext {
             elem_buf: ctx.local.element_buffer,
             ..DrawCall::default()
         };
+        for name in &mut d.cube_tex_units {
+            if *name == 0 {
+                *name = crate::model::context::DEFAULT_TEXTURE_CUBE;
+            }
+        }
         d.target = if ctx.local.bound_fbo == 0 {
             None
         } else {
