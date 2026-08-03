@@ -468,6 +468,8 @@ pub const GL_COMPARE_REF_TO_TEXTURE: u32 = 0x884E;
 // ES3 array/3D texture targets (glTexStorage3D / glTexImage3D / glTexSubImage3D).
 pub const GL_TEXTURE_3D: u32 = 0x806F;
 pub const GL_TEXTURE_2D_ARRAY: u32 = 0x8C1A;
+pub const GL_TEXTURE_2D_MULTISAMPLE: u32 = 0x9100;
+pub const GL_DEPTH_STENCIL_TEXTURE_MODE: u32 = 0x90EA;
 
 // glGetBufferParameteriv pnames.
 pub const GL_BUFFER_SIZE: u32 = 0x8764;
