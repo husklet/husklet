@@ -240,10 +240,22 @@ pub mod vk_format {
     pub const R8G8B8A8_SINT: u32 = 42;
     pub const R16G16B16A16_SFLOAT: u32 = 97;
     pub const R16G16_SFLOAT: u32 = 83;
+    pub const R16_UINT: u32 = 74;
+    pub const R16_SINT: u32 = 75;
+    pub const R16_SFLOAT: u32 = 76;
+    pub const R16G16_UINT: u32 = 81;
+    pub const R16G16_SINT: u32 = 82;
+    pub const R16G16B16A16_UINT: u32 = 95;
+    pub const R16G16B16A16_SINT: u32 = 96;
     pub const R32G32B32A32_SFLOAT: u32 = 109;
     pub const R32_UINT: u32 = 98;
     pub const R32_SINT: u32 = 99;
     pub const R32_SFLOAT: u32 = 100;
+    pub const R32G32_UINT: u32 = 101;
+    pub const R32G32_SINT: u32 = 102;
+    pub const R32G32_SFLOAT: u32 = 103;
+    pub const R32G32B32A32_UINT: u32 = 107;
+    pub const R32G32B32A32_SINT: u32 = 108;
     pub const D16_UNORM: u32 = 124;
     pub const D32_SFLOAT: u32 = 126;
     pub const D24_UNORM_S8_UINT: u32 = 129;
@@ -499,11 +511,23 @@ impl Format {
             vk_format::R8G8_SNORM => T::Rg8Snorm,
             vk_format::R8G8B8A8_SNORM => T::Rgba8Snorm,
             vk_format::R16G16_SFLOAT => T::Rg16Float,
+            vk_format::R16_UINT => T::R16Uint,
+            vk_format::R16_SINT => T::R16Sint,
+            vk_format::R16_SFLOAT => T::R16Float,
+            vk_format::R16G16_UINT => T::Rg16Uint,
+            vk_format::R16G16_SINT => T::Rg16Sint,
+            vk_format::R16G16B16A16_UINT => T::Rgba16Uint,
+            vk_format::R16G16B16A16_SINT => T::Rgba16Sint,
             vk_format::R16G16B16A16_SFLOAT => T::Rgba16Float,
             vk_format::R32G32B32A32_SFLOAT => T::Rgba32Float,
             vk_format::R32_SFLOAT => T::R32Float,
             vk_format::R32_UINT => T::R32Uint,
             vk_format::R32_SINT => T::R32Sint,
+            vk_format::R32G32_UINT => T::Rg32Uint,
+            vk_format::R32G32_SINT => T::Rg32Sint,
+            vk_format::R32G32_SFLOAT => T::Rg32Float,
+            vk_format::R32G32B32A32_UINT => T::Rgba32Uint,
+            vk_format::R32G32B32A32_SINT => T::Rgba32Sint,
             // The integer color family. The neutral wire has carried these since the GL driver needed
             // `GL_RGBA_INTEGER`/`GL_RED_INTEGER`/`GL_RG_INTEGER` storage, and `hl-gpu-wgpu` maps each to its
             // exact wgpu counterpart, but this Vulkan lowering never learned them — so every `vkCreateImage`
