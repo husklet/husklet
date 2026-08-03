@@ -7,9 +7,8 @@ what the bundle stages. Full results and method: `../../../e2e/husklet/apps/vk-c
 
 ## READ THIS FIRST: the two sides disagree ON PURPOSE
 
-**The CPU oracle serves 3D blits. The wgpu executor still refuses them.** Read cold, that looks like a bug
-in one of them. It is neither — it is the intended intermediate state, and it is the thing that makes the
-remaining work measurable.
+**Historical note:** the CPU-oracle/executor divergence described in the 2026-08-01 text below was an
+intentional intermediate state. It has now closed; both executors serve 3D blits.
 
 A reference that cannot REPRESENT a case cannot validate the executor that will serve it: while both sides
 decline, a differential agrees by mutual refusal and establishes nothing at all. So the oracle went first
@@ -21,7 +20,27 @@ lands, and not before. It is stated at both refusal sites in the source
 | --- | --- | --- |
 | 1. IR + CPU oracle | `hl-gpu` | **landed** `e9de8e48f` |
 | 2. Recorder + shim | `hl-vulkan` | **landed** `987aa7a79` |
-| 3. Executor | `hl-gpu-wgpu/src/blit.rs` | **unstarted** — one draw per destination slice |
+| 3. Executor | `hl-gpu-wgpu/src/blit.rs` | **landed** — unscaled `fce39bc42`, depth-scaled `89086aceb` |
+
+## Current-state correction — 2026-08-03
+
+This handoff originally froze the 2026-08-01 intermediate state. Do not use the older "unstarted" text
+below as a work queue: the executor and the integer follow-up have since landed on `main`.
+
+The completed blit stack now includes:
+
+* unscaled D3 execution, one draw per destination slice (`fce39bc42`);
+* depth-scaled D3 execution with nearest selection, trilinear Z interpolation, and Z mirroring
+  (`89086aceb`);
+* exact and scaled signed/unsigned integer blits, including 1D and D3 staging (`68d3914af`, `7ffc14955`,
+  `b0b7c3bb8`, `b1f5a3ca5`);
+* compressed sources, named mip levels and array layers, and cubic 2D filtering.
+
+The remaining explicit executor refusals are not the old 352-case or 100-case gaps: non-colour aspects,
+multisampled blits, unsupported linear filtering of non-filterable formats, and cubic filtering of D3
+sources. Cubic image-view capability is deliberately exposed only for 2D views by
+`shim/vulkan/src/instance/format.rs`, so the D3 cubic refusal is not a claimed capability. Re-measure the
+current CTS before assigning new case counts; the 2026-08-01 projections below predate this landed stack.
 
 **Metal-side verification is cheap and proven, so there is no excuse for landing layer 3 unverified.**
 Measured 2026-08-01: `mac cargo test -p hl-gpu-wgpu --test blit_mirror` builds incrementally in about 12
@@ -95,7 +114,7 @@ slice, and **no new shader is required**. Leaves Z-scaled blits refused.
 not validated at all — while both sides decline, a differential agrees by mutual refusal and establishes
 nothing.
 
-### LANDED 2026-08-01: layers 1 and 2 (`e9de8e48f`, `987aa7a79`). Layer 3 is unstarted.
+### LANDED: all three layers (`e9de8e48f`, `987aa7a79`, `fce39bc42`, `89086aceb`)
 
 The CPU oracle serves an unscaled depth-spanning blit, `Mirror` has its `z`, the recorder normalizes the
 depth axis, and the `vkCmdBlitImage: 3D region` / `vkCmdBlitImage2: 3D region` refusals are gone. What
@@ -162,7 +181,8 @@ A matrix written by reading the code rather than by running each reversion would
 coverage and been believed. Two other rules survived their first test for the same family of reason and
 are documented in `oracle_spec/blit3d.rs` and `lowering/blit3d.rs`.
 
-Not started: the executor (layer 3).
+The executor is complete for both equal and unequal depth spans. The historical attempt notes below remain
+useful evidence, but no longer describe the current implementation state.
 
 ### An attempt was made and reverted. Read this before repeating it.
 
@@ -216,14 +236,9 @@ the attempt established is worth more than the diff:
    mis-frame it and a bump would have invalidated other agents' in-flight bundles for nothing. The
    reasoning lives on `Mirror::to_u32` so it can be reversed on its merits.
 2. ~~**Recorder**~~ — **DONE** (`987aa7a79`). See above.
-3. **Executor** — **UNSTARTED**, and the only thing between here and the 352 cases.
-   `hl-gpu-wgpu/src/blit.rs`. One draw per destination slice for the unscaled case; the refusal to delete
-   is the `TextureDim::D3` half of the `D1 | D3` match, which now carries a comment explaining why it is
-   still there. The recorder only ever emits `src.depth == dst.depth` (it refuses an unequal span by
-   name), so the executor does not have to handle z-scaling — that would need a `texture_3d<f32>` binding
-   and Z interpolation, and stays refused on both sides. Verify on the host; see the banner at the top of
-   this file for the exact command and its measured cost. Do
-   `../../gpu/hl-gpu-wgpu/SUBMIT_PROPAGATION.md` first, as its own commit.
+3. ~~**Executor**~~ — **DONE** (`fce39bc42`, `89086aceb`). `hl-gpu-wgpu/src/blit.rs` renders one draw per
+   destination slice. Its D3 shader binds `texture_3d<f32>` and carries the continuous Z coordinate needed
+   for depth scaling and linear interpolation. Verify changes on the host with the `blit_3d` test.
 
 **One enumeration warning that cost time on layer 1.** `cargo check --workspace --all-targets` does NOT
 cover the shim crates — five of them declare their own `[workspace]`, sit outside the root `members` list,
