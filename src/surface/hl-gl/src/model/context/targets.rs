@@ -397,7 +397,8 @@ impl GlContext {
             .map(|(source, _)| *source)
             .chain(previous.map(|(_, target)| target))
             .filter(|source| {
-                !self.depth_aspect_current.values().any(|current| current == source)
+                *source != depth
+                    && !self.depth_aspect_current.values().any(|current| current == source)
                     && !self.stencil_aspect_current.values().any(|current| current == source)
             })
             .collect::<std::collections::HashSet<_>>();
@@ -549,5 +550,25 @@ mod depth_preservation_tests {
             .pending_destroys()
             .iter()
             .any(|command| matches!(command, Cmd::DestroyTexture(target) if *target == old_target)));
+    }
+
+    #[test]
+    fn repeated_default_target_lookup_does_not_retire_the_live_target() {
+        let mut ctx = GlContext::new();
+        let attachments = crate::model::program::DepthStencilSnapshot::default();
+        let (target, created, preserve) =
+            ctx.depth_target(0, 7, 64, 64, true, attachments).unwrap();
+        assert!(created);
+        assert!(preserve.is_empty());
+
+        let (same_target, created_again, preserve_again) =
+            ctx.depth_target(0, 7, 64, 64, true, attachments).unwrap();
+        assert_eq!(same_target, target);
+        assert!(!created_again);
+        assert!(preserve_again.is_empty());
+        assert!(!ctx
+            .pending_destroys()
+            .iter()
+            .any(|command| matches!(command, Cmd::DestroyTexture(candidate) if *candidate == target)));
     }
 }
