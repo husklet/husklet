@@ -429,6 +429,15 @@ impl Source<'_> {
                 p = at + 5;
                 continue;
             }
+            // A `const` parameter is not a global constant declaration. Treating
+            // `float f(const in float x) { return ...; }` as one copied the source from
+            // `const` through the function body's first semicolon into the emitted global
+            // scope, before the correctly carried helper function. The host then rejected
+            // both that malformed declaration and the legal ES parameter spelling.
+            if Tokens::depth_at(b, at) != (0, 0) {
+                p = at + 5;
+                continue;
+            }
             match b[at..].iter().position(|&c| c == b';') {
                 Some(semi_rel) => {
                     let semi = at + semi_rel;

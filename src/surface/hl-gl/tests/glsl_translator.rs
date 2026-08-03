@@ -59,6 +59,8 @@ mod location;
 mod metadata;
 #[path = "glsl_translator/preprocess.rs"]
 mod preprocess;
+#[path = "glsl_translator/qualification.rs"]
+mod qualification;
 #[path = "glsl_translator/robustness.rs"]
 mod robustness;
 #[path = "glsl_translator/sampler.rs"]
