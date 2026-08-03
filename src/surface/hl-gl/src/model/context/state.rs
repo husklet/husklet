@@ -445,6 +445,10 @@ impl GlContext {
         self.local.recording.push_copy_tex(copy);
     }
 
+    pub(crate) fn record_tex_sub_image(&mut self, upload: TexSubImageOp) {
+        self.local.recording.push_tex_sub_image(upload);
+    }
+
     // ---- error register (glGetError) -------------------------------------------------------------
 
     /// Record a GL error. GL keeps the FIRST error raised until `glGetError` clears it, so a later error

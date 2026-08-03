@@ -309,6 +309,7 @@ impl GlContext {
                     FrameOp::Draw(draw) => draw.fbo != 0,
                     FrameOp::Blit(blit) => blit.read_fbo != 0 && blit.draw_fbo != 0,
                     FrameOp::CopyTex(copy) => copy.read_fbo != 0,
+                    FrameOp::TexSubImage(upload) => upload.fbo != 0,
                 })
                 .cloned()
                 .collect();
@@ -321,6 +322,7 @@ impl GlContext {
                     FrameOp::Blit(blit) => Some(*blit),
                     FrameOp::Draw(_) => None,
                     FrameOp::CopyTex(_) => None,
+                    FrameOp::TexSubImage(_) => None,
                 })
                 .collect();
             ctx.local.recording.copy_tex = ctx.local.recording.operations.iter().filter_map(|operation| match operation {
@@ -336,6 +338,7 @@ impl GlContext {
                     FrameOp::Draw(draw) => draw.fbo == 0,
                     FrameOp::Blit(blit) => blit.read_fbo == 0 || blit.draw_fbo == 0,
                     FrameOp::CopyTex(copy) => copy.read_fbo == 0,
+                    FrameOp::TexSubImage(_) => false,
                 })
                 .cloned()
                 .collect();
@@ -348,6 +351,7 @@ impl GlContext {
                     FrameOp::Blit(blit) => Some(*blit),
                     FrameOp::Draw(_) => None,
                     FrameOp::CopyTex(_) => None,
+                    FrameOp::TexSubImage(_) => None,
                 })
                 .collect();
             ctx.local.recording.copy_tex = ctx.local.recording.operations.iter().filter_map(|operation| match operation {
@@ -412,6 +416,7 @@ impl GlContext {
                             }
                         }
                         FrameOp::Draw(_) => {}
+                        FrameOp::TexSubImage(_) => {}
                     }
                 }
             }
@@ -424,6 +429,7 @@ impl GlContext {
                     FrameOp::Blit(blit) => Some(*blit),
                     FrameOp::Draw(_) => None,
                     FrameOp::CopyTex(_) => None,
+                    FrameOp::TexSubImage(_) => None,
                 })
                 .collect();
             ctx.local.recording.copy_tex = ctx.local.recording.operations.iter().filter_map(|operation| match operation {

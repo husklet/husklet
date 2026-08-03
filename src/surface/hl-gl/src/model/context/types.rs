@@ -44,12 +44,28 @@ pub struct CopyTexOp {
     pub extent: [i32; 2],
 }
 
+/// A CPU sub-image write whose destination already has newer GPU-rendered content. The old generation's
+/// render target is copied into the replacement generation before `pixels` overlays the requested rect.
+#[derive(Clone, PartialEq, Debug)]
+pub struct TexSubImageOp {
+    pub fbo: u32,
+    pub texture: u32,
+    pub source_generation: u64,
+    pub destination_generation: u64,
+    pub offset: [i32; 2],
+    pub extent: [i32; 2],
+    pub texture_extent: [i32; 2],
+    pub format: hl_gpu::protocol::model::enums::TextureFormat,
+    pub pixels: std::sync::Arc<Vec<u8>>,
+}
+
 /// One framebuffer-affecting GL operation in exact call order.
 #[derive(Clone, PartialEq, Debug)]
 pub enum FrameOp {
     Draw(Box<crate::model::program::DrawCall>),
     Blit(BlitOp),
     CopyTex(CopyTexOp),
+    TexSubImage(TexSubImageOp),
 }
 
 /// The presented window surface (the default framebuffer). Ported from `hl-shim-gl`'s `Surface`.

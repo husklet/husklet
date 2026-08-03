@@ -1,6 +1,6 @@
 use crate::model::program::DrawCall;
 
-use super::{BlitOp, CopyTexOp, FrameOp};
+use super::{BlitOp, CopyTexOp, FrameOp, TexSubImageOp};
 
 /// Deferred commands recorded by one GL context.
 ///
@@ -35,6 +35,10 @@ impl Recording {
     pub(super) fn push_copy_tex(&mut self, copy: CopyTexOp) {
         self.operations.push(FrameOp::CopyTex(copy));
         self.copy_tex.push(copy);
+    }
+
+    pub(super) fn push_tex_sub_image(&mut self, upload: TexSubImageOp) {
+        self.operations.push(FrameOp::TexSubImage(upload));
     }
 
     pub(super) fn replace_last_draw_program(&mut self, program: u32) -> bool {

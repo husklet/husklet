@@ -612,6 +612,7 @@ impl Frame {
                         blit.read_fbo != 0 && blit.draw_fbo != 0
                     }
                     crate::model::context::FrameOp::CopyTex(copy) => copy.read_fbo != 0,
+                    crate::model::context::FrameOp::TexSubImage(upload) => upload.fbo != 0,
                 });
             ctx.local
                 .recording

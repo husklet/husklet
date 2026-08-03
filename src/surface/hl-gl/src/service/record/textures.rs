@@ -804,6 +804,16 @@ pub fn tex_sub_image_2d(
     if w == 0 || h == 0 {
         return;
     }
+    let before = ctx.textures.get(name).cloned();
+    let producer = before.as_ref().and_then(|texture| {
+        ctx.local.recording.operations.iter().rev().find_map(|operation| match operation {
+            crate::model::context::FrameOp::Draw(draw)
+                if draw.target.is_some_and(|target| {
+                    target.texture == name && target.generation == texture.gen
+                }) => Some(draw.fbo),
+            _ => None,
+        })
+    });
     let stored = match (level, face) {
         (0, Some(face)) => ctx
             .textures
@@ -822,6 +832,22 @@ pub fn tex_sub_image_2d(
     };
     if !stored {
         ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    if level == 0 && face.is_none() {
+        if let (Some(before), Some(fbo), Some(after)) = (before, producer, ctx.textures.get(name)) {
+            ctx.record_tex_sub_image(crate::model::context::TexSubImageOp {
+                fbo,
+                texture: name,
+                source_generation: before.gen,
+                destination_generation: after.gen,
+                offset: [xo, yo],
+                extent: [w, h],
+                texture_extent: [after.w, after.h],
+                format: after.ir_format,
+                pixels: std::sync::Arc::new(rgba.to_vec()),
+            });
+        }
     }
 }
 
@@ -998,6 +1024,7 @@ pub fn copy_tex_sub_image_2d(
         crate::model::context::FrameOp::Draw(draw) => draw.fbo == ctx.local.read_fbo,
         crate::model::context::FrameOp::Blit(blit) => blit.draw_fbo == ctx.local.read_fbo,
         crate::model::context::FrameOp::CopyTex(_) => false,
+        crate::model::context::FrameOp::TexSubImage(_) => false,
     });
     let source_gpu_authoritative = ctx
         .framebuffer_color_texture(ctx.local.read_fbo, 0)

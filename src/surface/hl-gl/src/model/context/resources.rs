@@ -570,6 +570,17 @@ impl GlContext {
         Ok((ir, true))
     }
 
+    /// Make an already-created render target the sampled residency for one exact texture generation.
+    pub(crate) fn install_sampled_texture_ir(
+        &mut self, gl_name: u32, generation: (u64, u64, bool), texture: u32,
+    ) {
+        if let Some((old, _)) = self.tex_ir_cache.insert(gl_name, (texture, generation)) {
+            if old != texture {
+                self.pending_destroys.push(Cmd::DestroyTexture(old));
+            }
+        }
+    }
+
     pub(crate) fn shared_texture_ir(
         &mut self,
         key: (u64, u64, u32, u32, u32),

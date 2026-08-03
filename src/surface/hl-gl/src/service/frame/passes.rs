@@ -36,7 +36,7 @@ impl RenderPasses {
                         .iter()
                         .filter_map(|operation| match operation {
                             FrameOp::Draw(draw) => Some((**draw).clone()),
-                            FrameOp::Blit(_) | FrameOp::CopyTex(_) => None,
+                            FrameOp::Blit(_) | FrameOp::CopyTex(_) | FrameOp::TexSubImage(_) => None,
                         })
                         .collect::<Vec<_>>();
                     let target = lower_ordered_run(
@@ -154,6 +154,114 @@ impl RenderPasses {
                     last = Some(src);
                     if copy.read_fbo == 0 {
                         present = Some(src);
+                    }
+                    index += 1;
+                }
+                FrameOp::TexSubImage(upload) => {
+                    let source = fbo_tex_ir
+                        .get(&(upload.texture, upload.source_generation))
+                        .copied()
+                        .or_else(|| ctx.resident_fbo_target_tex(upload.texture, upload.source_generation))?;
+                    let (surface, destination, create) =
+                        ctx.fbo_target(upload.texture, upload.destination_generation).ok()?;
+                    if create {
+                        push_target_creates(
+                            &mut cmds,
+                            surface,
+                            destination,
+                            upload.texture_extent[0],
+                            upload.texture_extent[1],
+                            upload.format,
+                            "gl-texsubimage-merge",
+                            true,
+                            None,
+                        );
+                    }
+                    let texture = ctx.textures.get(upload.texture)?;
+                    let sampled_generation = texture.sampled_generation();
+                    ctx.install_sampled_texture_ir(
+                        upload.texture,
+                        (sampled_generation.0, sampled_generation.1, texture.uses_mipmaps()),
+                        destination,
+                    );
+                    let texel = upload.format.bytes_per_texel().unwrap_or(4) as usize;
+                    let row_bytes = upload.extent[0].max(0) as usize * texel;
+                    let rows = upload.extent[1].max(0) as usize;
+                    let mut top_down = Vec::with_capacity(row_bytes * rows);
+                    for row in (0..rows).rev() {
+                        let start = row * row_bytes;
+                        top_down.extend_from_slice(&upload.pixels[start..start + row_bytes]);
+                    }
+                    let stage = ctx.alloc_buffer_ir().ok()?;
+                    cmds.push(Cmd::CreateBuffer(
+                        stage,
+                        BufferDesc {
+                            size: top_down.len() as u64,
+                            usage: buffer_usage::COPY_SRC,
+                            label: "gl-texsubimage-merge".into(),
+                        },
+                    ));
+                    cmds.push(Cmd::WriteBuffer { id: stage, offset: 0, data: top_down });
+                    cmds.push(Cmd::Submit(CommandBuffer {
+                        encoder: vec![
+                            Enc::CopyTextureToTexture {
+                                src: source,
+                                src_sub: TextureSubresource::base(),
+                                src_origin: Origin3d::default(),
+                                dst: destination,
+                                dst_sub: TextureSubresource::base(),
+                                dst_origin: Origin3d::default(),
+                                extent: Extent3d {
+                                    width: upload.texture_extent[0].max(0) as u32,
+                                    height: upload.texture_extent[1].max(0) as u32,
+                                    depth: 1,
+                                },
+                            },
+                            Enc::CopyBufferToTextureRegion {
+                                src: stage,
+                                src_offset: 0,
+                                bytes_per_row: row_bytes as u32,
+                                rows_per_image: rows as u32,
+                                dst: destination,
+                                dst_sub: TextureSubresource::base(),
+                                dst_origin: Origin3d {
+                                    x: upload.offset[0].max(0) as u32,
+                                    y: upload.texture_extent[1]
+                                        .saturating_sub(upload.offset[1])
+                                        .saturating_sub(upload.extent[1])
+                                        .max(0) as u32,
+                                    z: 0,
+                                },
+                                extent: Extent3d {
+                                    width: upload.extent[0].max(0) as u32,
+                                    height: upload.extent[1].max(0) as u32,
+                                    depth: 1,
+                                },
+                            },
+                        ],
+                        signal: None,
+                    }));
+                    fbo_tex_ir.insert((upload.texture, upload.destination_generation), destination);
+                    initialized.insert(destination);
+                    let snapshot = crate::model::program::TargetSnapshot {
+                        texture: upload.texture,
+                        generation: upload.destination_generation,
+                        shared_storage: None,
+                        shared_revision: None,
+                        width: upload.texture_extent[0],
+                        height: upload.texture_extent[1],
+                        format: upload.format,
+                    };
+                    if let Some(target) = frame_target(
+                        ctx,
+                        upload.fbo,
+                        Some(snapshot),
+                        destination,
+                        upload.texture_extent[0],
+                        upload.texture_extent[1],
+                        upload.format,
+                    ) {
+                        push_final_target(&mut targets, target);
                     }
                     index += 1;
                 }
@@ -668,6 +776,89 @@ mod tests {
                     BindResource::Texture { id } if id == target_ir
                 ))
         )));
+    }
+
+    fn render_tex_sub_image_sample(internal_format: u32, render_after_upload: bool) -> Frame {
+        let (mut ctx, texture) = fallback_then_sample();
+        ctx.textures.get_mut(texture).unwrap().internal_format = internal_format;
+        let mut first = ctx.local.recording.draws[0].clone();
+        let mut sample = ctx.local.recording.draws[1].clone();
+        let before = ctx.textures.get(texture).unwrap().clone();
+        first.target = Some(crate::model::program::TargetSnapshot {
+            texture,
+            generation: before.gen,
+            shared_storage: None,
+            shared_revision: None,
+            width: before.w,
+            height: before.h,
+            format: before.ir_format,
+        });
+        ctx.reset_frame();
+        ctx.record_draw(first.clone());
+        crate::service::record::tex_sub_image_2d(
+            &mut ctx, GL_TEXTURE_2D, 0, 2, 1, 3, 2, &[0x7b; 3 * 2 * 4],
+        );
+        let after = ctx.textures.get(texture).unwrap().clone();
+        assert_ne!(before.gen, after.gen);
+        if render_after_upload {
+            let mut second = first;
+            second.target = Some(crate::model::program::TargetSnapshot {
+                texture,
+                generation: after.gen,
+                shared_storage: None,
+                shared_revision: None,
+                width: after.w,
+                height: after.h,
+                format: after.ir_format,
+            });
+            ctx.record_draw(second);
+        }
+        sample.tex_generations[0] = after.gen;
+        sample.textures = vec![ctx.texture_snapshot(texture).unwrap()];
+        ctx.record_draw(sample);
+        Frame::build(&mut ctx).expect("ordered render/subimage/sample frame")
+    }
+
+    #[test]
+    fn rendered_rgb_and_rgba_targets_merge_tex_sub_image_before_sampling() {
+        for format in [crate::model::glconst::GL_RGB, crate::model::glconst::GL_RGBA] {
+            let frame = render_tex_sub_image_sample(format, false);
+            let destination = frame.cmds.iter().find_map(|command| match command {
+                Cmd::Submit(buffer) => buffer.encoder.iter().find_map(|operation| match operation {
+                    Enc::CopyTextureToTexture { dst, .. } => Some(*dst),
+                    _ => None,
+                }),
+                _ => None,
+            }).expect("rendered target copied into replacement generation");
+            assert!(frame.cmds.iter().any(|command| matches!(
+                command,
+                Cmd::Submit(buffer) if buffer.encoder.iter().any(|operation| matches!(
+                    operation,
+                    Enc::CopyBufferToTextureRegion { dst, dst_origin, extent, .. }
+                        if *dst == destination && dst_origin.x == 2 && dst_origin.y == 1
+                            && extent.width == 3 && extent.height == 2
+                ))
+            )));
+            assert_sampler_uses_fallback_target(&frame, destination);
+        }
+    }
+
+    #[test]
+    fn tex_sub_image_replacement_is_the_target_of_a_following_render() {
+        for format in [crate::model::glconst::GL_RGB, crate::model::glconst::GL_RGBA] {
+            let frame = render_tex_sub_image_sample(format, true);
+            let destination = frame.targets.iter().max_by_key(|target| target.generation)
+                .expect("replacement generation retained").texture;
+            assert_sampler_uses_fallback_target(&frame, destination);
+            assert!(frame.cmds.iter().any(|command| matches!(
+                command,
+                Cmd::Submit(buffer) if buffer.encoder.iter().any(|operation| matches!(
+                    operation,
+                    Enc::BeginRenderPass { color, .. }
+                        if color.first().is_some_and(|attachment| attachment.texture == destination)
+                ))
+            )));
+        }
     }
 
     #[test]
