@@ -112,6 +112,24 @@ impl Program {
         (location < self.samp_units.len()).then_some(UniformLocation::Sampler { element: location })
     }
 
+    /// The declaration size and writable suffix for a flattened sampler element.
+    ///
+    /// Sampler locations share one flat namespace in `samp_units`, but an array update may only
+    /// advance through the declaration containing its starting location. Elements beyond that
+    /// declaration are ignored rather than spilling into the next sampler uniform.
+    pub fn sampler_location_extent(&self, element: usize) -> Option<(usize, usize)> {
+        let mut base = 0usize;
+        for &array_elements in &self.samp_arrays {
+            let elements = array_elements.max(1) as usize;
+            let end = base.checked_add(elements)?;
+            if element < end {
+                return Some((elements, end - element));
+            }
+            base = end;
+        }
+        None
+    }
+
     /// `glGetAttribLocation(name)` — the location assigned by the most recent successful link.
     pub fn attrib_location(&self, name: &str) -> i32 {
         if !self.linked {

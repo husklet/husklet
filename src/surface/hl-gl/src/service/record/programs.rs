@@ -636,14 +636,21 @@ pub fn set_uniform(
                 ctx.set_gl_error(GL_INVALID_OPERATION);
                 return;
             }
-            let values = bytes
-                .chunks_exact(4)
-                .map(|bytes| i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-                .collect::<Vec<_>>();
-            if element + values.len() > program.samp_units.len() {
+            let Some((declaration_elements, writable_elements)) =
+                program.sampler_location_extent(element)
+            else {
+                ctx.set_gl_error(GL_INVALID_OPERATION);
+                return;
+            };
+            if count > 1 && declaration_elements == 1 {
                 ctx.set_gl_error(GL_INVALID_OPERATION);
                 return;
             }
+            let values = bytes
+                .chunks_exact(4)
+                .map(|bytes| i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+                .take(writable_elements)
+                .collect::<Vec<_>>();
             uniform_i32_at(ctx, location, &values);
         }
     }
@@ -676,7 +683,14 @@ pub fn uniform_i32_at(ctx: &mut GlContext, location: i32, values: &[i32]) {
     match resolved {
         Some(crate::model::program::UniformLocation::Sampler { element }) => {
             if let Some(program) = ctx.programs.get_mut(ctx.local.cur_prog) {
-                for (unit, value) in program.samp_units[element..].iter_mut().zip(values) {
+                let Some((_, writable_elements)) = program.sampler_location_extent(element) else {
+                    return;
+                };
+                for (unit, value) in program.samp_units[element..]
+                    .iter_mut()
+                    .take(writable_elements)
+                    .zip(values)
+                {
                     *unit = *value;
                 }
             }
