@@ -555,6 +555,34 @@ fn scalar_geometric_overloads_are_lifted_for_naga() {
 }
 
 #[test]
+fn deqp_scalar_geometric_constant_spellings_are_lifted_for_naga() {
+    for expression in [
+        "dot(1.0,1.0)",
+        "length(1.0)",
+        "distance(1.0,2.0)",
+        "normalize(1.0)",
+        "faceforward(float(1.0),float(1.0),float(1.0))",
+        "reflect(1.0,1.0)",
+        "refract(1.0,1.0,0.5)",
+    ] {
+        let source = format!("#version 460\nlayout(location=0) out vec4 color;\nvoid main(){{ float value={expression}; color=vec4(value); }}");
+        glsl_to_wgsl(&source, naga::ShaderStage::Fragment, "main")
+            .unwrap_or_else(|error| panic!("dEQP scalar {expression} was refused: {error}"));
+    }
+
+    let scalar = "void main(){ float v=dot(float(1.0),float(1.0)); }";
+    let lifted = crate::glsl_es::Source::new(scalar).lift_scalar_geometric_builtins();
+    assert_eq!(lifted.matches("vec2(").count(), 2, "{lifted}");
+
+    let vector = "void main(){ float v=dot(vec2(1.0),vec2(1.0)); }";
+    assert_eq!(
+        crate::glsl_es::Source::new(vector).lift_scalar_geometric_builtins(),
+        vector,
+        "a vector overload must remain byte-identical"
+    );
+}
+
+#[test]
 fn scalar_conversion_selects_fold_in_constant_initializers() {
     let source = "#version 460\nlayout(location=0) out vec4 color;\nconst float a=float(true); const int b=int(true); const bool c=bool(1); const vec4 d=vec4(c,a,float(b),bool(0)); void main(){ color=d; }";
     glsl_to_wgsl(source, naga::ShaderStage::Fragment, "main")

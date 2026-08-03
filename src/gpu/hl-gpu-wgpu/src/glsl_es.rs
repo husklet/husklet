@@ -308,8 +308,7 @@ impl Tokens {
             let scalar_count = if function == "refract" { 2 } else { required };
             if !(0..scalar_count).all(|argument| {
                 let (start, end) = arguments[argument];
-                self.next_significant(start + 1).is_some_and(|next| next == end)
-                    && matches!(&self[start], Tok::Word(name) if scalars.contains(name))
+                scalar_argument(&self[start..end], &scalars)
             }) {
                 continue;
             }
@@ -338,6 +337,29 @@ impl Tokens {
             self.0.splice(start..end, replacement);
         }
     }
+}
+
+/// Whether a geometric-builtin argument has an explicitly scalar spelling. This deliberately recognizes
+/// only forms whose type is knowable without reproducing GLSL's expression type checker: a declared float,
+/// a floating literal (with an optional unary sign), or a `float(...)` constructor. Naga performs the full
+/// validation after the rewrite; this predicate only decides when GLSL's scalar overload must be lifted to
+/// the vector-only host IR.
+fn scalar_argument(tokens: &[Tok], scalars: &std::collections::BTreeSet<String>) -> bool {
+    let significant = tokens
+        .iter()
+        .filter(|token| !matches!(token, Tok::Ws(_) | Tok::Pp(_)))
+        .collect::<Vec<_>>();
+    let atom = match significant.as_slice() {
+        [atom] => *atom,
+        [Tok::Punct('+') | Tok::Punct('-'), atom] => *atom,
+        [Tok::Word(constructor), Tok::Punct('('), .., Tok::Punct(')')]
+            if constructor == "float" =>
+        {
+            return true;
+        }
+        _ => return false,
+    };
+    matches!(atom, Tok::Word(word) if scalars.contains(word) || word.parse::<f64>().is_ok())
 }
 
 fn vector_width(ty: &str) -> Option<usize> {
