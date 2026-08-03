@@ -3,8 +3,8 @@
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use hl_gpu::Cmd;
 
@@ -145,6 +145,24 @@ impl Capture {
 
     pub(super) fn invalidate(&mut self) {
         self.finish(false);
+    }
+
+    pub(super) fn record_partial(
+        &mut self,
+        commands: &[Cmd],
+        replayable: bool,
+        presentations: usize,
+    ) {
+        // A normalized residency delta deliberately excludes Present. If one actually succeeded, writing
+        // only the persistent commands would produce a syntactically valid trace that silently omits an
+        // externally visible effect. Until captures carry presentation outcomes separately, name that
+        // limitation honestly by finalizing the trace as nonreplayable.
+        if !replayable || presentations != 0 {
+            self.invalidate();
+            return;
+        }
+        let encoded = hl_gpu::Encoder::stream(commands);
+        self.record(commands, &encoded);
     }
 
     pub(super) fn active(&self) -> bool {
@@ -318,6 +336,24 @@ mod tests {
         let path = root
             .path()
             .join(format!("gpu-{}-9.incomplete", std::process::id()));
+        assert_eq!(
+            Trace::read(&path).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
+
+    #[test]
+    fn successful_partial_presentation_marks_capture_nonreplayable() {
+        let root = tempfile::tempdir().unwrap();
+        let config = Config::testing(root.path().to_owned(), 4, 4096);
+        let mut capture = config.open(11).unwrap();
+        capture.record_partial(&[Cmd::CreateFence(7)], true, 1);
+        assert!(!capture.active());
+        drop(capture);
+
+        let path = root
+            .path()
+            .join(format!("gpu-{}-11.incomplete", std::process::id()));
         assert_eq!(
             Trace::read(&path).unwrap_err().kind(),
             io::ErrorKind::InvalidData
