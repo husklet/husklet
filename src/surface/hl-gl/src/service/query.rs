@@ -191,6 +191,8 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         GL_UNPACK_ROW_LENGTH => one(ctx.local.pixel_store.unpack_row_length),
         GL_UNPACK_SKIP_ROWS => one(ctx.local.pixel_store.unpack_skip_rows),
         GL_UNPACK_SKIP_PIXELS => one(ctx.local.pixel_store.unpack_skip_pixels),
+        GL_UNPACK_IMAGE_HEIGHT => one(ctx.local.pixel_store.unpack_image_height),
+        GL_UNPACK_SKIP_IMAGES => one(ctx.local.pixel_store.unpack_skip_images),
         GL_PACK_ROW_LENGTH => one(ctx.local.pixel_store.pack_row_length),
         GL_PACK_SKIP_ROWS => one(ctx.local.pixel_store.pack_skip_rows),
         GL_PACK_SKIP_PIXELS => one(ctx.local.pixel_store.pack_skip_pixels),

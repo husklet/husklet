@@ -383,6 +383,14 @@ pub fn pixel_store(ctx: &mut GlContext, pname: u32, value: i32) {
             ps.unpack_skip_pixels = value;
             true
         }
+        GL_UNPACK_IMAGE_HEIGHT if value >= 0 => {
+            ps.unpack_image_height = value;
+            true
+        }
+        GL_UNPACK_SKIP_IMAGES if value >= 0 => {
+            ps.unpack_skip_images = value;
+            true
+        }
         GL_PACK_ROW_LENGTH if value >= 0 => {
             ps.pack_row_length = value;
             true
@@ -401,6 +409,8 @@ pub fn pixel_store(ctx: &mut GlContext, pname: u32, value: i32) {
         | GL_UNPACK_ROW_LENGTH
         | GL_UNPACK_SKIP_ROWS
         | GL_UNPACK_SKIP_PIXELS
+        | GL_UNPACK_IMAGE_HEIGHT
+        | GL_UNPACK_SKIP_IMAGES
         | GL_PACK_ROW_LENGTH
         | GL_PACK_SKIP_ROWS
         | GL_PACK_SKIP_PIXELS => {
