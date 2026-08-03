@@ -81,7 +81,7 @@ impl GpuExecutor for Executor {
         &mut self,
         resources: &mut SessionResources,
         batch: &[Cmd],
-    ) -> hl_gpu::Result<Vec<Presentation>> {
+    ) -> hl_gpu::Result<hl_gpu::Execution> {
         match self {
             Self::Cpu(executor) => executor.execute(resources, batch),
             Self::Wgpu(executor) => executor.execute(resources, batch),
