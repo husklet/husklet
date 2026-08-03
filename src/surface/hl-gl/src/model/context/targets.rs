@@ -298,22 +298,52 @@ impl GlContext {
         Some((target, texture.w, texture.h, texture.ir_format))
     }
 
-    /// The depth-buffer texture IR for the render pass whose COLOR target is texture IR `color_tex`, at the
-    /// depth format selected by `with_stencil` (`false` = `Depth32Float`, `true` = `Depth24PlusStencil8`).
+    /// The depth-buffer texture IR for the storage attached to `fbo`, at the depth format selected by
+    /// `with_stencil` (`false` = `Depth32Float`, `true` = `Depth24PlusStencil8`).
     /// Returns `(depth_texture, needs_create)`: `needs_create` is true exactly on the first request for this
-    /// `(color target, format)` pair, so the frame builder emits the depth `CreateTexture` once and reuses
+    /// `(attached storage generation, format)` pair, so the frame builder emits the depth `CreateTexture`
+    /// once and reuses
     /// the id on later frames. Only allocated when a depth- or stencil-tested draw actually needs an
     /// attachment.
     pub fn depth_target(
         &mut self,
+        fbo: u32,
         color_tex: u32,
         with_stencil: bool,
     ) -> hl_gpu::Result<(u32, bool)> {
-        if let Some(&depth) = self.depth_targets.get(&(color_tex, with_stencil)) {
+        let attachment = |source: Option<(u32, bool)>| {
+            source.and_then(|(name, renderbuffer)| {
+                let texture = if renderbuffer {
+                    self.renderbuffers.backing_tex(name)
+                } else {
+                    name
+                };
+                self.textures
+                    .get(texture)
+                    .map(|object| (texture, object.gen))
+            })
+        };
+        let depth = (fbo != 0)
+            .then(|| attachment(self.local.framebuffers.depth_source(fbo)))
+            .flatten();
+        let stencil = (fbo != 0)
+            .then(|| attachment(self.local.framebuffers.stencil_source(fbo)))
+            .flatten();
+        let key = DepthTargetKey {
+            fallback_color: if depth.is_none() && stencil.is_none() {
+                color_tex
+            } else {
+                0
+            },
+            depth,
+            stencil,
+            with_stencil,
+        };
+        if let Some(&depth) = self.depth_targets.get(&key) {
             Ok((depth, false))
         } else {
             let depth = self.alloc_texture_ir()?;
-            self.depth_targets.insert((color_tex, with_stencil), depth);
+            self.depth_targets.insert(key, depth);
             Ok((depth, true))
         }
     }

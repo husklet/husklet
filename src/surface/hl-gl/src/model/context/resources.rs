@@ -85,6 +85,21 @@ impl GlContext {
         if let Some((ir, _)) = self.tex_ir_cache.remove(&gl_name) {
             self.pending_destroys.push(Cmd::DestroyTexture(ir));
         }
+        // A texture image or a renderbuffer's backing texture can own an explicit depth/stencil
+        // attachment. Retire that host plane when the attached storage generation dies. Color-fallback
+        // planes are handled below because their key contains the host color target, not this GL name.
+        let mut dead_attached_depth = Vec::new();
+        self.depth_targets.retain(|key, &mut depth| {
+            let attached = key.depth.is_some_and(|(name, _)| name == gl_name)
+                || key.stencil.is_some_and(|(name, _)| name == gl_name);
+            if attached {
+                dead_attached_depth.push(depth);
+            }
+            !attached
+        });
+        for depth in dead_attached_depth {
+            self.pending_destroys.push(Cmd::DestroyTexture(depth));
+        }
         let targets: Vec<_> = self
             .fbo_targets
             .keys()
@@ -102,10 +117,11 @@ impl GlContext {
             if still_live {
                 continue;
             }
-            // Any depth/stencil buffers minted for this color target die with it.
+            // Only fallback depth storage is owned by the color target. Explicit FBO depth/stencil
+            // attachments have independent lifetime and survive color attachment replacement.
             let mut dead_depth: Vec<u32> = Vec::new();
-            self.depth_targets.retain(|&(color, _), &mut depth| {
-                if color == texture {
+            self.depth_targets.retain(|key, &mut depth| {
+                if key.fallback_color == texture {
                     dead_depth.push(depth);
                     false
                 } else {

@@ -69,7 +69,7 @@ fn build_clear_frame_snapshot(
     // a frame with no colour work, and returning no frame at all — which is what happened — DROPPED the
     // cleared depth value: the next frame to enable the depth test minted the plane fresh and cleared it
     // to the GL initial 1.0. The colour attachment LOADs here so a depth-only clear cannot repaint colour.
-    let depth_attachment = depth_attachment_for(ctx, texture, w, h, &[], &mut cmds, depth);
+    let depth_attachment = depth_attachment_for(ctx, fbo, texture, w, h, &[], &mut cmds, depth);
     let ops = vec![
         Enc::BeginRenderPass {
             color: vec![ColorAttachment {
@@ -248,6 +248,7 @@ impl Frame {
             }
             let depth = depth_attachment_for(
                 ctx,
+                fbo,
                 target_tex,
                 tw,
                 th,
@@ -308,6 +309,7 @@ impl Frame {
             ctx,
             survivors,
             SegmentTarget {
+                fbo,
                 texture: target_tex,
                 format: target_fmt,
                 width: tw,
@@ -553,6 +555,7 @@ mod clone_tests {
 /// The one render target a run of draws lowers into.
 #[derive(Clone, Copy)]
 pub(super) struct SegmentTarget {
+    pub(super) fbo: u32,
     pub(super) texture: u32,
     pub(super) format: TextureFormat,
     pub(super) width: i32,
@@ -673,6 +676,7 @@ pub(super) fn lower_segments(
             cmds,
             ops,
             segment,
+            target.fbo,
             target.texture,
             target.format,
             target.width,
@@ -741,6 +745,7 @@ pub(super) fn emit_segment_pass(
     cmds: &mut Vec<Cmd>,
     ops: &mut Vec<Enc>,
     seg: &[DrawCall],
+    fbo: u32,
     target_tex: u32,
     target_fmt: TextureFormat,
     tw: i32,
@@ -776,7 +781,7 @@ pub(super) fn emit_segment_pass(
             draw_ops.extend(lowered.ops);
         }
     }
-    let depth = depth_attachment_for(ctx, target_tex, tw, th, seg, cmds, depth_load);
+    let depth = depth_attachment_for(ctx, fbo, target_tex, tw, th, seg, cmds, depth_load);
     ops.extend(copies);
     ops.push(Enc::BeginRenderPass {
         color: vec![ColorAttachment {

@@ -225,6 +225,7 @@ impl RenderPasses {
                 ctx,
                 survivors,
                 SegmentTarget {
+                    fbo,
                     texture: target_tex,
                     format: fmt,
                     width: tw,
@@ -411,6 +412,7 @@ fn lower_ordered_run(
         ctx,
         survivors,
         SegmentTarget {
+            fbo,
             texture: target.1,
             format: target.4,
             width: target.2,
@@ -740,6 +742,7 @@ impl RenderPasses {
 /// exactly as before.
 pub(super) fn depth_attachment_for(
     ctx: &mut GlContext,
+    fbo: u32,
     color_tex: u32,
     w: i32,
     h: i32,
@@ -752,7 +755,7 @@ pub(super) fn depth_attachment_for(
     let clear_depth = clear.depth;
     // GL clears the stencil plane to `glClearStencil`'s value (default 0), masked to the 8-bit buffer.
     let clear_stencil = (clear.stencil as u32) & 0xff;
-    let (depth_tex, needs_create) = ctx.depth_target(color_tex, with_stencil).ok()?;
+    let (depth_tex, needs_create) = ctx.depth_target(fbo, color_tex, with_stencil).ok()?;
     // A depth texture minted this frame has no prior contents to preserve — and a zero-initialized depth
     // plane fails every `GL_LESS` test — so its first pass always clear-loads regardless of the caller's op.
     let load = if needs_create { LoadOp::Clear } else { clear.load };

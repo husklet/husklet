@@ -664,3 +664,108 @@ fn depth_pass_without_a_depth_clear_loads_the_depth_attachment() {
         "with no depth clear recorded, the second frame must preserve the depth buffer"
     );
 }
+
+/// A framebuffer's depth renderbuffer is independent storage. Replacing only the color attachment must
+/// keep both the depth texture identity and its contents; dEQP's recreate_colorbuffer cases rely on the
+/// second draw testing against depth written before the color replacement.
+#[test]
+fn replacing_fbo_color_preserves_attached_depth_storage() {
+    let mut c = ctx_64();
+    let mut sink = RecordingSink::with_full_caps();
+    let fbo = c.gen_framebuffer();
+    record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
+
+    let color = c.textures.gen();
+    record::bind_texture(&mut c, GL_TEXTURE_2D, color);
+    record::tex_image_2d(&mut c, 64, 64, &[]);
+    record::framebuffer_texture_2d(
+        &mut c,
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D,
+        color,
+        0,
+    );
+    let depth = c.gen_renderbuffer();
+    record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, depth);
+    record::renderbuffer_storage(
+        &mut c,
+        GL_RENDERBUFFER,
+        GL_DEPTH_COMPONENT16,
+        64,
+        64,
+    );
+    record::framebuffer_renderbuffer(
+        &mut c,
+        GL_FRAMEBUFFER,
+        GL_DEPTH_ATTACHMENT,
+        GL_RENDERBUFFER,
+        depth,
+    );
+
+    record::enable(&mut c, GL_DEPTH_TEST);
+    flat_program(&mut c);
+    tri_vbo(&mut c, 8);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let first = submit_ops(&sink.batches[0])
+        .iter()
+        .find_map(|op| match op {
+            Enc::BeginRenderPass {
+                depth: Some(depth),
+                ..
+            } => Some(depth.clone()),
+            _ => None,
+        })
+        .expect("first depth attachment");
+    assert_eq!(first.load, LoadOp::Clear);
+
+    let replacement = c.textures.gen();
+    record::bind_texture(&mut c, GL_TEXTURE_2D, replacement);
+    record::tex_image_2d(&mut c, 64, 64, &[]);
+    record::framebuffer_texture_2d(
+        &mut c,
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D,
+        replacement,
+        0,
+    );
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let second = submit_ops(&sink.batches[1])
+        .iter()
+        .find_map(|op| match op {
+            Enc::BeginRenderPass {
+                depth: Some(depth),
+                ..
+            } => Some(depth.clone()),
+            _ => None,
+        })
+        .expect("second depth attachment");
+    assert_eq!(second.texture, first.texture);
+    assert_eq!(second.load, LoadOp::Load);
+
+    record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, depth);
+    record::renderbuffer_storage(
+        &mut c,
+        GL_RENDERBUFFER,
+        GL_DEPTH_COMPONENT16,
+        64,
+        64,
+    );
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let redefined = submit_ops(&sink.batches[2])
+        .iter()
+        .find_map(|op| match op {
+            Enc::BeginRenderPass {
+                depth: Some(depth),
+                ..
+            } => Some(depth.clone()),
+            _ => None,
+        })
+        .expect("redefined depth attachment");
+    assert_ne!(redefined.texture, second.texture);
+    assert_eq!(redefined.load, LoadOp::Clear);
+}

@@ -98,15 +98,18 @@ pub struct GlContext {
     /// Host-external identity for imported EGLImage texture generations.
     external_targets: HashMap<(u32, u64), hl_gpu::protocol::model::descriptor::SurfaceToken>,
 
-    /// Per-render-target depth-buffer IR ids, keyed by `(color-target texture IR, with_stencil)` → the
-    /// depth texture IR. A depth-tested draw (`glEnable(GL_DEPTH_TEST)`) builds a pipeline with a
+    /// Persistent depth-buffer IR ids, keyed by the attached depth/stencil storage generations rather
+    /// than by the color target. Replacing an FBO's color attachment does not replace its independently
+    /// attached depth renderbuffer, so keying this cache by color silently discarded depth contents.
+    /// `fallback_color` is non-zero only for the default framebuffer or an attachment-less legacy path.
+    /// A depth-tested draw (`glEnable(GL_DEPTH_TEST)`) builds a pipeline with a
     /// depth-stencil state, and wgpu REQUIRES the render pass to carry a matching depth attachment; the
-    /// frame builder mints one depth texture per color target here, `CreateTexture`s it once, and reuses its
-    /// id on later frames (so re-rendering the same target does not re-create the depth buffer). The
+    /// frame builder mints one host depth texture per attached storage generation, `CreateTexture`s it once,
+    /// and reuses its id on later frames. The
     /// `with_stencil` half of the key separates a `Depth32Float` depth-only buffer from a
     /// `Depth24PlusStencil8` depth+stencil buffer, so a stencil-testing pass gets a stencil-aspect
     /// attachment while a plain depth pass keeps its depth-only one (the two carry different formats).
-    depth_targets: HashMap<(u32, bool), u32>,
+    depth_targets: HashMap<DepthTargetKey, u32>,
 
     /// Residency cache for sampled GL textures uploaded from CPU pixels: GL texture name → `(texture_ir,
     /// uploaded_gen)`. A texture is `CreateTexture`d + staged + `CopyBufferToTexture`d ONCE (per content
@@ -174,6 +177,14 @@ pub struct GlContext {
     pending_buffer_deletes: HashSet<u32>,
     pending_sampler_deletes: HashSet<u32>,
     pending_program_deletes: HashSet<u32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct DepthTargetKey {
+    fallback_color: u32,
+    depth: Option<(u32, u64)>,
+    stencil: Option<(u32, u64)>,
+    with_stencil: bool,
 }
 
 impl GlContext {
