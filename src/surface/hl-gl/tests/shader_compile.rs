@@ -611,3 +611,16 @@ fn deqp_sampler_cube_uniform_value_shader_compiles() {
     let (status, log) = compile(&mut context, GL_VERTEX_SHADER, source);
     assert_eq!(status, GL_TRUE as i32, "false rejection: {log}");
 }
+
+#[test]
+fn deqp_boolean_uniform_array_value_shader_compiles() {
+    let mut context = GlContext::new();
+    for source in [
+        "attribute highp vec4 a_position; varying mediump float v_vtxOut; uniform bool u_var[3]; mediump float compare_bool(bool a, bool b){return a==b?1.0:0.0;} void main(){gl_Position=a_position;v_vtxOut=1.0;v_vtxOut*=compare_bool(u_var[0],false);v_vtxOut*=compare_bool(u_var[1],true);v_vtxOut*=compare_bool(u_var[2],true);}",
+        "uniform vec4 values[2]; void take(float value){} void main(){take(values[0].x);}",
+        "uniform bvec4 values[2]; void take(bool value){} void main(){take(values[0][1]);}",
+    ] {
+        let (status, log) = compile(&mut context, GL_VERTEX_SHADER, source);
+        assert_eq!(status, GL_TRUE as i32, "false rejection: {log}\n{source}");
+    }
+}

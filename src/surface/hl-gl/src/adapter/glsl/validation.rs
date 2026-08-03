@@ -143,6 +143,33 @@ fn vector_width(token: &str) -> Option<usize> {
     }
 }
 
+fn vector_scalar_type(token: &str) -> Option<&'static str> {
+    match token {
+        "vec2" | "vec3" | "vec4" => Some("float"),
+        "ivec2" | "ivec3" | "ivec4" => Some("int"),
+        "bvec2" | "bvec3" | "bvec4" => Some("bool"),
+        _ => None,
+    }
+}
+
+fn vector_type(scalar: &str, width: usize) -> Option<&'static str> {
+    match (scalar, width) {
+        ("float", 1) => Some("float"),
+        ("float", 2) => Some("vec2"),
+        ("float", 3) => Some("vec3"),
+        ("float", 4) => Some("vec4"),
+        ("int", 1) => Some("int"),
+        ("int", 2) => Some("ivec2"),
+        ("int", 3) => Some("ivec3"),
+        ("int", 4) => Some("ivec4"),
+        ("bool", 1) => Some("bool"),
+        ("bool", 2) => Some("bvec2"),
+        ("bool", 3) => Some("bvec3"),
+        ("bool", 4) => Some("bvec4"),
+        _ => None,
+    }
+}
+
 fn resolve<'a>(
     scopes: &[HashMap<&'a str, (&'a str, ScalarKind)>],
     name: &str,
@@ -799,31 +826,29 @@ pub fn invalid_function_semantics(source: &str) -> Option<String> {
                 if first.parse::<f64>().is_ok() {
                     return Some(("float", None));
                 }
-                let (ty, array) = declarations.get(first).copied()?;
-                if segment.get(1).map(String::as_str) != Some(".") {
-                    return Some((ty, array));
+                let (mut ty, mut array) = declarations.get(first).copied()?;
+                let mut index = 1;
+                while index < segment.len() {
+                    match segment[index].as_str() {
+                        "[" => {
+                            let close = matching(segment, index, "[", "]")?;
+                            if array.is_some() {
+                                array = None;
+                            } else {
+                                ty = vector_scalar_type(ty)?;
+                            }
+                            index = close + 1;
+                        }
+                        "." => {
+                            let swizzle = segment.get(index + 1)?;
+                            ty = vector_type(vector_scalar_type(ty)?, swizzle.len())?;
+                            array = None;
+                            index += 2;
+                        }
+                        _ => return None,
+                    }
                 }
-                let swizzle = segment.get(2)?;
-                let scalar = match ty {
-                    "vec2" | "vec3" | "vec4" => "float",
-                    "ivec2" | "ivec3" | "ivec4" => "int",
-                    "bvec2" | "bvec3" | "bvec4" => "bool",
-                    _ => return None,
-                };
-                let ty = match (scalar, swizzle.len()) {
-                    (scalar, 1) => scalar,
-                    ("float", 2) => "vec2",
-                    ("float", 3) => "vec3",
-                    ("float", 4) => "vec4",
-                    ("int", 2) => "ivec2",
-                    ("int", 3) => "ivec3",
-                    ("int", 4) => "ivec4",
-                    ("bool", 2) => "bvec2",
-                    ("bool", 3) => "bvec3",
-                    ("bool", 4) => "bvec4",
-                    _ => return None,
-                };
-                Some((ty, None))
+                Some((ty, array))
             })
             .collect::<Vec<_>>();
         if !candidates.iter().any(|function| {
