@@ -380,6 +380,8 @@ mod packed_format_tests {
         assert_eq!(format.native(), wgpu::TextureFormat::Rgb9e5Ufloat);
         assert_eq!(format.native_texel_bytes().unwrap(), 4);
         assert!(!format.needs_transfer_conversion());
+        assert_eq!(format.native().target_pixel_byte_cost(), Some(8));
+        assert_eq!(format.native().target_component_alignment(), Some(4));
     }
 
     #[test]

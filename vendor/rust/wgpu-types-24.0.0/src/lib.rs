@@ -3874,7 +3874,8 @@ impl TextureFormat {
             | Self::Rg32Float
             | Self::Rgb10a2Uint
             | Self::Rgb10a2Unorm
-            | Self::Rg11b10Ufloat => Some(8),
+            | Self::Rg11b10Ufloat
+            | Self::Rgb9e5Ufloat => Some(8),
             Self::R5g6b5Unorm | Self::A1r5g5b5Unorm | Self::B4g4r4a4Unorm => Some(8),
             Self::Rgba32Uint | Self::Rgba32Sint | Self::Rgba32Float => Some(16),
             // ⚠️ If you add formats with larger sizes, make sure you change `MAX_TARGET_PIXEL_BYTE_COST`` ⚠️
@@ -3885,7 +3886,6 @@ impl TextureFormat {
             | Self::Depth32Float
             | Self::Depth32FloatStencil8
             | Self::NV12
-            | Self::Rgb9e5Ufloat
             | Self::Bc1RgbaUnorm
             | Self::Bc1RgbaUnormSrgb
             | Self::Bc2RgbaUnorm
@@ -3961,7 +3961,8 @@ impl TextureFormat {
             | Self::Rgba32Float
             | Self::Rgb10a2Uint
             | Self::Rgb10a2Unorm
-            | Self::Rg11b10Ufloat => Some(4),
+            | Self::Rg11b10Ufloat
+            | Self::Rgb9e5Ufloat => Some(4),
             Self::Stencil8
             | Self::Depth16Unorm
             | Self::Depth24Plus
@@ -3969,7 +3970,6 @@ impl TextureFormat {
             | Self::Depth32Float
             | Self::Depth32FloatStencil8
             | Self::NV12
-            | Self::Rgb9e5Ufloat
             | Self::Bc1RgbaUnorm
             | Self::Bc1RgbaUnormSrgb
             | Self::Bc2RgbaUnorm
