@@ -39,7 +39,15 @@ fn deqp_valid_varying_qualifiers_generate_a_matching_interface() {
             "precision mediump float; {declaration} uniform mediump float x1; \
              void main() {{ float result = x0 + x1; gl_FragColor = vec4(result); }}"
         );
-        let (vertex, fragment) = glsl::StageSources::new(&vertex, &fragment).translate_render();
+        // Program::link's second translation pass supplies host locations for both the
+        // live position and dEQP's deliberately-unused `x2` attribute. Reproduce that
+        // exact route: vertex-input location 1 must not shift the varying interface.
+        let bindings = std::collections::BTreeMap::from([
+            ("dEQP_Position".to_string(), 0),
+            ("x2".to_string(), 1),
+        ]);
+        let (vertex, fragment) =
+            glsl::StageSources::new(&vertex, &fragment).translate_render_with(&bindings);
         assert_naga_parses(&vertex, naga::ShaderStage::Vertex);
         assert_naga_parses(&fragment, naga::ShaderStage::Fragment);
         assert!(
