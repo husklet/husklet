@@ -208,10 +208,11 @@ impl WgpuExecutor {
                         .iter()
                         .map(|element| {
                             let buffer = buffer::WgpuBuffer::get(res, element.id)?;
+                            let size = buffer.binding_size(element.offset, element.size)?;
                             Ok(wgpu::BufferBinding {
                                 buffer: &buffer.buffer,
                                 offset: element.offset,
-                                size: NonZeroU64::new(element.size),
+                                size: NonZeroU64::new(size),
                             })
                         })
                         .collect::<Result<Vec<_>>>()?,
@@ -260,10 +261,11 @@ impl WgpuExecutor {
             let resource = match &e.resource {
                 BindResource::Buffer { id, offset, size } => {
                     let b = buffer::WgpuBuffer::get(res, *id)?;
+                    let size = b.binding_size(*offset, *size)?;
                     wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: &b.buffer,
                         offset: *offset,
-                        size: NonZeroU64::new(*size),
+                        size: NonZeroU64::new(size),
                     })
                 }
                 BindResource::TexelBuffer { .. } => {

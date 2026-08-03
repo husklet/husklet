@@ -21,8 +21,9 @@ use hl_gpu::{GpuError, Result};
 use crate::device::Gpu;
 use crate::WgpuExecutor;
 
-/// The wgpu-native backing of one protocol buffer. `size` is the logical (guest-visible) length; the wgpu
-/// allocation is that rounded up to 4 bytes so storage-buffer / copy alignment always holds internally.
+/// The wgpu-native backing of one protocol buffer. `size` is the logical (guest-visible) length. The native
+/// allocation includes zeroed tail padding for WGSL's 16-byte aggregate layout; logical operations remain
+/// limited to `size`.
 #[derive(Clone)]
 pub struct WgpuBuffer {
     pub buffer: wgpu::Buffer,
@@ -47,7 +48,38 @@ impl WgpuBuffer {
     }
 
     pub(crate) fn allocation_size(size: u64) -> u64 {
-        size.div_ceil(4) * 4
+        size.div_ceil(16) * 16
+    }
+
+    /// Only a range ending at logical EOF may include native tail padding. Interior ranges must not acquire
+    /// bytes belonging to a later guest-visible region.
+    pub(crate) fn binding_size(&self, offset: u64, size: u64) -> Result<u64> {
+        Self::binding_size_for(self.size, offset, size)
+    }
+
+    fn binding_size_for(logical_size: u64, offset: u64, size: u64) -> Result<u64> {
+        let end = offset.checked_add(size).filter(|end| *end <= logical_size)
+            .ok_or(GpuError::OutOfBounds)?;
+        if end == logical_size {
+            Ok(Self::allocation_size(logical_size) - offset)
+        } else {
+            Ok(size)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WgpuBuffer;
+
+    #[test]
+    fn eof_binding_includes_only_native_struct_tail_padding() {
+        assert_eq!(WgpuBuffer::allocation_size(52), 64);
+        assert_eq!(WgpuBuffer::binding_size_for(52, 0, 52).unwrap(), 64);
+        assert_eq!(WgpuBuffer::binding_size_for(52, 16, 36).unwrap(), 48);
+        assert_eq!(WgpuBuffer::binding_size_for(52, 0, 36).unwrap(), 36);
+        assert!(WgpuBuffer::binding_size_for(52, 16, 37).is_err());
+        assert!(WgpuBuffer::binding_size_for(52, u64::MAX, 1).is_err());
     }
 }
 

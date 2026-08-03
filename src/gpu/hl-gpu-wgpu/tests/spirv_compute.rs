@@ -221,6 +221,38 @@ fn spirv_compute_doubles_storage_buffer() {
     );
 }
 
+/// Vulkan may end this range at the last member (byte 52), while WGSL rounds the struct extent to 64.
+#[test]
+fn spirv_compute_binds_native_tail_padding_for_52_byte_uniform_block() {
+    let spirv = wgsl_to_spirv(r#"
+        struct Params { vectors: array<vec4<u32>, 3>, tail: u32 }
+        @group(0) @binding(0) var<uniform> params: Params;
+        @group(0) @binding(1) var<storage, read_write> result: array<u32>;
+        @compute @workgroup_size(1) fn cs_main() { result[0] = params.tail; }
+    "#);
+    let mut g = exec();
+    let s = run_batch(&mut g, &[
+        Cmd::CreateShader { id: 1, kind: ShaderPayloadKind::SpirV, spirv },
+        Cmd::CreateComputePipeline(1, ComputePipelineDesc {
+            compute: ShaderRef { module: 1, entry: "cs_main".into() }, label: String::new(),
+        }),
+        Cmd::CreateBuffer(1, buf(52, buffer_usage::UNIFORM | buffer_usage::COPY_DST)),
+        Cmd::WriteBuffer { id: 1, offset: 0,
+            data: u32s(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x52]) },
+        Cmd::CreateBuffer(2, buf(4, buffer_usage::STORAGE | buffer_usage::COPY_SRC)),
+        Cmd::CreateBindGroup(1, BindGroupDesc { set: 0, entries: vec![
+            BindEntry { binding: 0, resource: BindResource::Buffer { id: 1, offset: 0, size: 52 } },
+            BindEntry { binding: 1, resource: BindResource::Buffer { id: 2, offset: 0, size: 4 } },
+        ]}),
+        Cmd::Submit(CommandBuffer { encoder: vec![
+            Enc::BeginComputePass, Enc::SetPipeline(1), Enc::SetBindGroup { index: 0, group: 1 },
+            Enc::Dispatch { x: 1, y: 1, z: 1 }, Enc::EndComputePass,
+        ], signal: None }),
+    ]);
+    assert_eq!(read_u32s(&g, &s, 2, 1), vec![0x52]);
+    assert!(g.read_buffer(&s.resources, BufferId(1), 52, 1).is_err());
+}
+
 #[test]
 fn spirv_compute_dynamically_selects_second_storage_buffer() {
     let seed = r#"
