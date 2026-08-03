@@ -156,6 +156,72 @@ fn mrt_pipeline_preserves_each_attachment_format() {
 }
 
 #[test]
+fn indexed_masks_lower_scissored_clear_to_each_mrt_target() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    let formats = [
+        TextureFormat::Rgba8Unorm,
+        TextureFormat::Rgba16Float,
+        TextureFormat::Rgba8Srgb,
+        TextureFormat::Rgba32Float,
+    ];
+    bind_mrt_formats(&mut c, &formats);
+    record::draw_buffers(
+        &mut c,
+        &[
+            GL_COLOR_ATTACHMENT0,
+            GL_COLOR_ATTACHMENT0 + 1,
+            GL_COLOR_ATTACHMENT0 + 2,
+            GL_COLOR_ATTACHMENT0 + 3,
+        ],
+    );
+    for (index, mask) in [0x1u32, 0x0, 0x5, 0xf].into_iter().enumerate() {
+        record::color_mask_indexed(
+            &mut c,
+            index as u32,
+            mask & 1 != 0,
+            mask & 2 != 0,
+            mask & 4 != 0,
+            mask & 8 != 0,
+        );
+    }
+    record::enable(&mut c, GL_SCISSOR_TEST);
+    record::scissor(&mut c, [2, 3, 11, 7]);
+    record::clear_color(&mut c, [0.25, 0.5, 0.75, 1.0]);
+    record::clear(&mut c);
+
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let clear_pipeline = sink.batches[0]
+        .iter()
+        .find_map(|cmd| match cmd {
+            Cmd::CreateRenderPipeline(_, desc) if desc.label == "gl-mrt-rect-clear" => Some(desc),
+            _ => None,
+        })
+        .expect("MRT clear pipeline");
+    let actual: Vec<_> = clear_pipeline
+        .color_targets
+        .iter()
+        .map(|target| (target.format, target.write_mask))
+        .collect();
+    assert_eq!(
+        actual,
+        formats
+            .into_iter()
+            .zip([0x1u32, 0x0, 0x5, 0xf])
+            .collect::<Vec<_>>()
+    );
+    assert!(submit_ops(&sink.batches[0]).iter().any(|op| matches!(
+        op,
+        Enc::SetScissor { x: 2, y: 22, w: 11, h: 7 }
+    )));
+    let loads: Vec<_> = pass_color(&sink.batches[0])
+        .into_iter()
+        .map(|(load, _)| load)
+        .collect();
+    assert!(loads.iter().all(|load| *load == hl_gpu::protocol::model::enums::LoadOp::Load));
+}
+
+#[test]
 fn four_draw_buffers_keep_independent_blend_mask_equation_and_factor_state() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();

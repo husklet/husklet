@@ -323,13 +323,32 @@ impl DrawCall {
     /// This clear writes color attachment `slot`: an unscoped `glClear` reaches every attachment the
     /// draw-buffer selection still names, a `glClearBuffer*` only the one it was given.
     pub fn clears_color_slot(&self, slot: u32) -> bool {
-        if !self.clears_color() {
+        if !self.is_clear
+            || self.clear_mask & crate::model::glconst::GL_COLOR_BUFFER_BIT == 0
+            || self.color_mask_for_slot(slot) != 0xf
+        {
             return false;
         }
         match self.clear_draw_buffer {
             Some(index) => index == slot,
             None => self.draw_buffer_mask & (1u32 << slot.min(31)) != 0,
         }
+    }
+
+    pub fn color_mask_for_slot(&self, slot: u32) -> u32 {
+        self.draw_buffer_states
+            .get(slot as usize)
+            .map_or(0, |state| state.color_mask & 0xf)
+    }
+
+    pub fn color_clear_is_partial_slot(&self, slot: u32) -> bool {
+        self.is_clear
+            && self.clear_mask & crate::model::glconst::GL_COLOR_BUFFER_BIT != 0
+            && !matches!(self.color_mask_for_slot(slot), 0 | 0xf)
+            && match self.clear_draw_buffer {
+                Some(index) => index == slot,
+                None => self.draw_buffer_mask & (1u32 << slot.min(31)) != 0,
+            }
     }
 
     /// This clear names the STENCIL plane but only some of its bits. GL applies `glStencilMask` to a
@@ -345,8 +364,9 @@ impl DrawCall {
     /// This clear writes something, by any route — a whole plane through a load op, or a subset through
     /// the rect draw. A clear that writes nothing at all never needs recording.
     pub fn writes_any_plane(&self) -> bool {
-        self.clears_color()
-            || self.color_clear_is_partial()
+        let writes_any_color = (0..self.draw_buffer_states.len() as u32)
+            .any(|slot| self.clears_color_slot(slot) || self.color_clear_is_partial_slot(slot));
+        writes_any_color
             || self.clears_depth()
             || self.clears_stencil()
     }
