@@ -232,6 +232,11 @@ impl WgpuExecutor {
                         layer_count,
                         mip_level,
                     } => {
+                        // `ClearRect` is implemented with `Queue::write_texture`, outside the command
+                        // encoder. Submit all earlier encoded render/copy work first: otherwise the queue
+                        // write is enqueued before that work and an earlier pass overwrites a logically
+                        // later clear (GL's draw; clear; draw ordering).
+                        self.submit_encoded(&mut native);
                         let (fmt, tw, th) = {
                             let t = texture::WgpuTexture::get(res, *texture)?;
                             // Clamp against the addressed MIP LEVEL's extent, not the base level's. Using the
