@@ -64,6 +64,7 @@ const FILTERABLE: &[TextureFormat] = &[
     TextureFormat::Rgba16Float,
     TextureFormat::Rgba16Unorm,
     TextureFormat::Rg16Unorm,
+    TextureFormat::R16Unorm,
     TextureFormat::Rgb10a2Unorm,
     TextureFormat::B4g4r4a4Unorm,
     TextureFormat::Rgb9e5Ufloat,
