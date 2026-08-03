@@ -279,8 +279,24 @@ impl GlContext {
             .shader(shader)
             .and_then(|sh| sh.src.as_deref())
         {
+            let kind = self
+                .programs
+                .shader(shader)
+                .map(|shader| shader.kind)
+                .unwrap_or(0);
             if let Some(reason) = crate::adapter::glsl::invalid_declaration_identifier(source) {
                 self.programs.fail_compile(shader, reason);
+                return;
+            }
+            if let Some(reason) = crate::adapter::glsl::invalid_storage_declaration(source, kind) {
+                self.programs.fail_compile(shader, reason);
+                return;
+            }
+            if let Some(operator) = crate::adapter::glsl::reserved_operator(source) {
+                self.programs.fail_compile(
+                    shader,
+                    format!("'{operator}' : reserved operator is not available in GLSL ES 1.00"),
+                );
                 return;
             }
             if let Some(reason) = crate::adapter::glsl::invalid_implicit_arithmetic(source) {

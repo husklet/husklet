@@ -168,9 +168,42 @@ fn tokens(source: &str) -> Vec<String> {
             }
             out.push(source[start..at].to_string());
         } else {
+            let remaining = &source[at..];
+            if let Some(operator) = ["<<=", ">>=", "%=", "&=", "^=", "|="]
+                .into_iter()
+                .find(|operator| remaining.starts_with(operator))
+            {
+                out.push(operator.to_string());
+                at += operator.len();
+                continue;
+            }
+            if let Some(operator) = ["<<", ">>", "&&", "||", "<=", ">="]
+                .into_iter()
+                .find(|operator| remaining.starts_with(operator))
+            {
+                out.push(operator.to_string());
+                at += operator.len();
+                continue;
+            }
             if matches!(
                 bytes[at],
-                b'+' | b'-' | b'*' | b'/' | b';' | b'{' | b'}' | b'=' | b',' | b'(' | b')'
+                b'+' | b'-'
+                    | b'*'
+                    | b'/'
+                    | b'%'
+                    | b'~'
+                    | b'<'
+                    | b'>'
+                    | b'&'
+                    | b'^'
+                    | b'|'
+                    | b';'
+                    | b'{'
+                    | b'}'
+                    | b'='
+                    | b','
+                    | b'('
+                    | b')'
             ) {
                 out.push((bytes[at] as char).to_string());
             }
@@ -178,6 +211,23 @@ fn tokens(source: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// The first operator reserved by GLSL ES 1.00 that occurs as a source token.
+///
+/// Integer remainder and bitwise operators were deliberately reserved in ES 1.00 and became language
+/// operators in ES 3.00.  Comments do not contribute tokens, and the legal ES 1.00 relational/logical
+/// operators (`<`, `>`, `<=`, `>=`, `&&`, `||`) remain distinct tokens.
+pub fn reserved_operator(source: &str) -> Option<String> {
+    if super::declared_es_version(source) >= 300 {
+        return None;
+    }
+    tokens(source).into_iter().find(|token| {
+        matches!(
+            token.as_str(),
+            "%" | "~" | "<<" | ">>" | "&" | "^" | "|" | "%=" | "<<=" | ">>=" | "&=" | "^=" | "|="
+        )
+    })
 }
 
 fn identifier_is_reserved(identifier: &str) -> bool {
@@ -214,6 +264,42 @@ pub fn invalid_declaration_identifier(source: &str) -> Option<String> {
                 "'{}' : reserved word may not be used as an identifier in GLSL ES 1.00",
                 declaration[1]
             ));
+        }
+    }
+    None
+}
+
+/// Diagnose storage/invariance qualifiers used outside their GLSL ES 1.00 declaration grammar.
+pub fn invalid_storage_declaration(source: &str, shader_kind: u32) -> Option<String> {
+    let tokens = tokens(source);
+    let mut depth = 0usize;
+    for (at, token) in tokens.iter().enumerate() {
+        match token.as_str() {
+            "{" => depth += 1,
+            "}" => depth = depth.saturating_sub(1),
+            "attribute" if depth != 0 || shader_kind != crate::model::glconst::GL_VERTEX_SHADER => {
+                return Some(
+                    "'attribute' : only vertex-shader global declarations may use this qualifier"
+                        .into(),
+                );
+            }
+            "uniform" | "varying" if depth != 0 => {
+                return Some(format!(
+                    "'{token}' : storage qualifier is not allowed in a local declaration"
+                ));
+            }
+            "invariant"
+                if matches!(
+                    tokens.get(at + 1).map(String::as_str),
+                    Some("attribute" | "uniform")
+                ) =>
+            {
+                return Some(format!(
+                    "'invariant' : may not qualify a {} declaration",
+                    tokens[at + 1]
+                ));
+            }
+            _ => {}
         }
     }
     None

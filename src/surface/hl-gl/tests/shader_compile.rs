@@ -215,3 +215,120 @@ fn keyword_tokens_in_their_grammar_roles_remain_accepted() {
         );
     }
 }
+
+#[test]
+fn es2_rejects_every_reserved_integer_operator() {
+    let operators = [
+        "%", "~", "<<", ">>", "&", "^", "|", "%=", "<<=", ">>=", "&=", "^=", "|=",
+    ];
+    let mut context = GlContext::new();
+    for operator in operators {
+        for kind in [GL_VERTEX_SHADER, GL_FRAGMENT_SHADER] {
+            let statement = if operator == "~" {
+                "value = ~value;".to_string()
+            } else {
+                format!("value {operator} 1;")
+            };
+            let source = format!("void main(){{ int value=100; {statement} }}");
+            let (status, log) = compile(&mut context, kind, &source);
+            assert_eq!(status, GL_FALSE as i32, "accepted ES2 operator {operator}");
+            assert!(
+                log.contains(operator) && log.contains("reserved operator"),
+                "bad log: {log:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn legal_es2_operators_and_non_tokens_remain_accepted() {
+    let mut context = GlContext::new();
+    let controls = [
+        "void main(){ int a=1; int b=2; bool c=a<b || a>=b; c=c && a<=b; }",
+        "void main(){ int value=1; /* value %= 1; value << 2; */ value += 1; }",
+        "#version 300 es\nvoid main(){ int value=1; value%=1; value<<=2; value=~value; }",
+    ];
+    for source in controls {
+        let (status, log) = compile(&mut context, GL_VERTEX_SHADER, source);
+        assert_eq!(
+            status, GL_TRUE as i32,
+            "false operator rejection: {log}\n{source}"
+        );
+    }
+}
+
+#[test]
+fn es2_rejects_invalid_storage_qualifier_declarations() {
+    let mut context = GlContext::new();
+    let invalid = [
+        (
+            GL_VERTEX_SHADER,
+            "void main(){ attribute mediump float val; }",
+        ),
+        (
+            GL_FRAGMENT_SHADER,
+            "attribute mediump float val; void main(){}",
+        ),
+        (
+            GL_VERTEX_SHADER,
+            "void main(){ uniform mediump float val; }",
+        ),
+        (
+            GL_FRAGMENT_SHADER,
+            "void main(){ uniform mediump float val; }",
+        ),
+        (
+            GL_VERTEX_SHADER,
+            "void main(){ varying mediump float val; }",
+        ),
+        (
+            GL_FRAGMENT_SHADER,
+            "void main(){ varying mediump float val; }",
+        ),
+        (
+            GL_VERTEX_SHADER,
+            "invariant attribute mediump float val; void main(){}",
+        ),
+        (
+            GL_VERTEX_SHADER,
+            "invariant uniform mediump float val; void main(){}",
+        ),
+    ];
+    for (kind, source) in invalid {
+        let (status, log) = compile(&mut context, kind, source);
+        assert_eq!(
+            status, GL_FALSE as i32,
+            "accepted invalid declaration: {source}"
+        );
+        assert!(!log.is_empty(), "missing declaration diagnostic: {source}");
+    }
+}
+
+#[test]
+fn legal_global_storage_and_invariance_declarations_remain_accepted() {
+    let mut context = GlContext::new();
+    let controls = [
+        (
+            GL_VERTEX_SHADER,
+            "attribute mediump vec4 position; void main(){}",
+        ),
+        (
+            GL_VERTEX_SHADER,
+            "uniform mediump float scale; void main(){}",
+        ),
+        (GL_FRAGMENT_SHADER, "uniform sampler2D image; void main(){}"),
+        (
+            GL_VERTEX_SHADER,
+            "invariant varying mediump vec2 uv; void main(){}",
+        ),
+        (GL_FRAGMENT_SHADER, "varying mediump vec2 uv; void main(){}"),
+        (GL_VERTEX_SHADER, "invariant gl_Position; void main(){}"),
+    ];
+    for (kind, source) in controls {
+        let (status, log) = compile(&mut context, kind, source);
+        assert_eq!(
+            status, GL_TRUE as i32,
+            "false declaration rejection: {log}\n{source}"
+        );
+    }
+}
