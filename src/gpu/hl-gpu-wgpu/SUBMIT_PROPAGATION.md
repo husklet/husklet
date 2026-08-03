@@ -63,8 +63,8 @@ that actually desynchronised. The comment is the defect's hiding place; this doc
    The refusal **must still reach the caller.** The point of this change is that it is *reported* rather than
    *swallowed*. This fleet has found four defects in one day that were a capability quietly not taken; do not
    add a fifth. The later partial-execution protocol makes this submitted partial command buffer a committed
-   outcome, so its fence is scheduled after `submit_encoded` and before returning the refusal. That keeps the
-   executor's native completion and the runtime timeline consistent.
+   outcome. Its completion fence is not scheduled: a refused submit did not complete as requested, even
+   when its successfully encoded prefix reaches the GPU.
 
 4. **Add `GpuError::is_fatal()`** in `src/gpu/hl-gpu/src/protocol/model/error.rs`:
    * fatal (abort the whole buffer): `Panicked` — the executor is in an unknown state and its partial
