@@ -554,10 +554,10 @@ pub fn destroy_sampler(
 struct SamplerFilter;
 impl SamplerFilter {
     fn from_vk(v: u32) -> Filter {
-        if v == 1 {
-            Filter::Linear
-        } else {
-            Filter::Nearest
+        match v {
+            1 => Filter::Linear,
+            1_000_015_000 => Filter::Cubic, // VK_FILTER_CUBIC_EXT
+            _ => Filter::Nearest,
         }
     }
 }

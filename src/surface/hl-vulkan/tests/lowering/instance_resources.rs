@@ -153,6 +153,26 @@ fn create_sampler_emits_create_sampler() {
 }
 
 #[test]
+fn create_sampler_preserves_vk_filter_cubic_ext() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    create::create_sampler(
+        &mut d,
+        &mut sink,
+        1_000_015_000,
+        1_000_015_000,
+        0,
+        [2, 2, 2],
+        None,
+    );
+    let Cmd::CreateSampler(_, desc) = &sink.batches[0][0] else {
+        panic!("expected CreateSampler");
+    };
+    assert_eq!(desc.min_filter, hl_gpu::protocol::model::enums::Filter::Cubic);
+    assert_eq!(desc.mag_filter, hl_gpu::protocol::model::enums::Filter::Cubic);
+}
+
+#[test]
 fn image_sampler_and_fence_destruction_release_ir_objects_once() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
