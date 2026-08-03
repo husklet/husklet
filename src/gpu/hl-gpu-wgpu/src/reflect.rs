@@ -86,6 +86,45 @@ pub struct EntryUsage {
     pub bindings: Vec<Binding>,
     /// Whether this entry point reads a module-scope `var<push_constant>`.
     pub push_constant: bool,
+    /// Collision-free runtime sampler-metadata layouts, one per group that reads ordinary samplers.
+    pub sampler_metadata: Vec<SamplerMetadataLayout>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SamplerMetadataLayout {
+    pub group: u32,
+    pub binding: u32,
+    pub samplers: Vec<SamplerMetadataSlot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SamplerMetadataSlot {
+    pub binding: u32,
+    pub base_ordinal: u32,
+    pub count: u32,
+}
+
+pub(crate) fn sampler_metadata(bindings: &[Binding]) -> Vec<SamplerMetadataLayout> {
+    let mut groups = std::collections::BTreeMap::<u32, Vec<&Binding>>::new();
+    for binding in bindings {
+        if matches!(binding.kind, BindingKind::Sampler { comparison: false }) {
+            groups.entry(binding.group).or_default().push(binding);
+        }
+    }
+    groups.into_iter().map(|(group, mut samplers)| {
+        samplers.sort_by_key(|binding| binding.binding);
+        let binding = bindings.iter().filter(|candidate| candidate.group == group)
+            .map(|candidate| candidate.binding).max().unwrap_or(0).checked_add(1)
+            .expect("validated binding index");
+        let mut ordinal = 0;
+        let samplers = samplers.into_iter().map(|sampler| {
+            let count = sampler.count.map_or(1, std::num::NonZeroU32::get);
+            let slot = SamplerMetadataSlot { binding: sampler.binding, base_ordinal: ordinal, count };
+            ordinal += count;
+            slot
+        }).collect();
+        SamplerMetadataLayout { group, binding, samplers }
+    }).collect()
 }
 
 /// A module's per-entry-point resource usage.
@@ -134,7 +173,7 @@ impl ModuleUsage {
                     variable.space == naga::AddressSpace::PushConstant
                         && !entry_info[handle].is_empty()
                 });
-                let bindings = module
+                let bindings: Vec<Binding> = module
                     .global_variables
                     .iter()
                     .filter_map(|(handle, variable)| {
@@ -151,10 +190,12 @@ impl ModuleUsage {
                         })
                     })
                     .collect();
+                let sampler_metadata = sampler_metadata(&bindings);
                 EntryUsage {
                     entry: entry.name.clone(),
                     bindings,
                     push_constant,
+                    sampler_metadata,
                 }
             })
             .collect();
@@ -248,5 +289,29 @@ impl BindingKind {
             },
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod sampler_metadata_tests {
+    use super::*;
+    use std::num::NonZeroU32;
+
+    #[test]
+    fn metadata_binding_is_collision_free_and_arrays_reserve_dense_ordinals() {
+        let bindings = vec![
+            Binding { group: 2, binding: 7, kind: BindingKind::UniformBuffer, count: None },
+            Binding { group: 2, binding: 3, kind: BindingKind::Sampler { comparison: false }, count: NonZeroU32::new(4) },
+            Binding { group: 2, binding: 5, kind: BindingKind::Sampler { comparison: false }, count: None },
+            Binding { group: 2, binding: 9, kind: BindingKind::Sampler { comparison: true }, count: None },
+        ];
+        assert_eq!(sampler_metadata(&bindings), vec![SamplerMetadataLayout {
+            group: 2,
+            binding: 10,
+            samplers: vec![
+                SamplerMetadataSlot { binding: 3, base_ordinal: 0, count: 4 },
+                SamplerMetadataSlot { binding: 5, base_ordinal: 4, count: 1 },
+            ],
+        }]);
     }
 }

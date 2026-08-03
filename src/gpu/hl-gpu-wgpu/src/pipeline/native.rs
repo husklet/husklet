@@ -18,6 +18,7 @@ pub enum PipelineNative {
         /// textures/samplers the compiled shader never samples) match the layout's set instead of NACKing
         /// (5-vs-3). Empty ⇒ no filtering (a bindingless pipeline, e.g. the conformance triangle).
         used_bindings: Vec<(u32, u32)>,
+        sampler_metadata: Vec<crate::reflect::SamplerMetadataLayout>,
         /// The dedup-cache backing id this render pipeline aliases. Identical descriptors share one
         /// compiled `wgpu::RenderPipeline`; this is the handle a `DestroyPipeline` releases so the backing
         /// is freed only when its last alias is gone (see [`crate::dedup`]).
@@ -39,6 +40,7 @@ pub enum PipelineNative {
         backing: u64,
         /// Guest group-zero bindings were shifted to reserve the host viewport slot during shader lowering.
         remap_group_zero: bool,
+        sampler_metadata: Vec<crate::reflect::SamplerMetadataLayout>,
         /// SPIR-V texel-buffer pipelines are specialized lazily from the formats actually bound at a
         /// dispatch. Ordinary pipelines keep this absent and use `pipeline` directly.
         texel: Option<std::sync::Arc<crate::texel_buffer::ComputeSpecializer>>,

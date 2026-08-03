@@ -49,7 +49,7 @@ impl WgpuExecutor {
                 entry: desc.compute.entry.clone(),
             },
         };
-        if let Some((pipeline, remap_group_zero, texel, backing)) =
+        if let Some((pipeline, remap_group_zero, sampler_metadata, texel, backing)) =
             self.dedup.compute_pipeline_get(&pipe_key)
         {
             res.pipelines.insert(
@@ -58,6 +58,7 @@ impl WgpuExecutor {
                     pipeline,
                     backing,
                     remap_group_zero,
+                    sampler_metadata,
                     texel,
                 }),
             )?;
@@ -69,6 +70,7 @@ impl WgpuExecutor {
                 pipe_key.clone(),
                 artifact.pipeline.clone(),
                 artifact.remap_group_zero,
+                artifact.sampler_metadata.clone(),
                 artifact.texel.clone(),
             );
             if let Err(error) = res.pipelines.insert(
@@ -77,6 +79,7 @@ impl WgpuExecutor {
                     pipeline: artifact.pipeline,
                     backing,
                     remap_group_zero: artifact.remap_group_zero,
+                    sampler_metadata: artifact.sampler_metadata,
                     texel: artifact.texel,
                 }),
             ) {
@@ -91,7 +94,7 @@ impl WgpuExecutor {
                 profile.compute_pipeline_compilations.saturating_add(1);
         }
         let mut texel = None;
-        let (pipeline, remap_group_zero) = match shader {
+        let (pipeline, remap_group_zero, sampler_metadata) = match shader {
             // PTX-kernel ABI: lower the neutral kernel IR to a WGSL compute entry point and build with an
             // EXPLICIT group-0 layout — binding 0 the read-only param blob, binding r+1 the read_write
             // pointer region r. Declaring every binding (even one the WGSL doesn't read) keeps the bind
@@ -131,6 +134,7 @@ impl WgpuExecutor {
                             cache: None,
                         }),
                     false,
+                    Vec::new(),
                 )
             }
             // SPIR-V / GLSL compute: naga already translated the payload to a wgpu `ShaderModule` carrying
@@ -241,13 +245,20 @@ impl WgpuExecutor {
                         desc.compute.entry
                     )));
                 }
-                (pipeline, true)
+                let sampler_metadata = reflected
+                    .entries
+                    .iter()
+                    .find(|usage| usage.entry == desc.compute.entry)
+                    .map(|usage| usage.sampler_metadata.clone())
+                    .unwrap_or_default();
+                (pipeline, true, sampler_metadata)
             }
         };
         let backing = self.dedup.compute_pipeline_install(
             pipe_key.clone(),
             pipeline.clone(),
             remap_group_zero,
+            sampler_metadata.clone(),
             texel.clone(),
         );
         if let Err(error) = res.pipelines.insert(
@@ -256,6 +267,7 @@ impl WgpuExecutor {
                 pipeline: pipeline.clone(),
                 backing,
                 remap_group_zero,
+                sampler_metadata: sampler_metadata.clone(),
                 texel: texel.clone(),
             }),
         ) {
@@ -267,6 +279,7 @@ impl WgpuExecutor {
             crate::pipeline::ComputeArtifact {
                 pipeline,
                 remap_group_zero,
+                sampler_metadata,
                 texel,
             },
         ));
@@ -409,7 +422,7 @@ impl WgpuExecutor {
         // `wgpu::RenderPipeline` (a cheap `Arc` clone, ~0 incremental residency) and skips the naga merge +
         // layout build + PSO compile entirely. Distinct descriptors never share (full-value key compare).
         let pipe_key = crate::dedup::RenderPipeKey::from_desc(desc, vs_key, fs_key, multisample);
-        if let Some((pipeline, color_formats, used_bindings, backing)) =
+        if let Some((pipeline, color_formats, used_bindings, sampler_metadata, backing)) =
             self.dedup.pipeline_get(&pipe_key)
         {
             res.pipelines.insert(
@@ -419,6 +432,7 @@ impl WgpuExecutor {
                     vertex_buffers: desc.vertex_buffers.clone(),
                     color_formats,
                     used_bindings,
+                    sampler_metadata,
                     backing,
                     texel: render_texel.clone(),
                 }),
@@ -436,6 +450,7 @@ impl WgpuExecutor {
                 artifact.pipeline.clone(),
                 artifact.color_formats.clone(),
                 artifact.used_bindings.clone(),
+                artifact.sampler_metadata.clone(),
                 crate::dedup::PIPELINE_BACKING_BYTES,
             );
             if let Err(error) = res.pipelines.insert(
@@ -445,6 +460,7 @@ impl WgpuExecutor {
                     vertex_buffers: desc.vertex_buffers.clone(),
                     color_formats: artifact.color_formats,
                     used_bindings: artifact.used_bindings,
+                    sampler_metadata: artifact.sampler_metadata,
                     backing,
                     texel: render_texel.clone(),
                 }),
@@ -554,6 +570,16 @@ impl WgpuExecutor {
         // filtered to these (see `PipelineNative::Render.used_bindings`), so it matches this explicit layout
         // EXACTLY even when the GL driver binds resources the compiled shader never samples.
         let used_bindings: Vec<(u32, u32)> = merged.keys().copied().collect();
+        let merged_bindings = merged
+            .iter()
+            .map(|(&(group, binding), &(_, kind, count))| crate::reflect::Binding {
+                group,
+                binding,
+                kind,
+                count,
+            })
+            .collect::<Vec<_>>();
+        let sampler_metadata = crate::reflect::sampler_metadata(&merged_bindings);
 
         // Build one `BindGroupLayout` per group in `0..=max_group` (a gap group gets an empty layout, so the
         // `PipelineLayout`'s array stays dense from index 0), then the `PipelineLayout`. `submit` binds group
@@ -755,12 +781,14 @@ impl WgpuExecutor {
             pipeline: pipeline.clone(),
             color_formats: color_formats.clone(),
             used_bindings: used_bindings.clone(),
+            sampler_metadata: sampler_metadata.clone(),
         };
         let backing = self.dedup.pipeline_install(
             pipe_key.clone(),
             pipeline.clone(),
             color_formats.clone(),
             used_bindings.clone(),
+            sampler_metadata.clone(),
             crate::dedup::PIPELINE_BACKING_BYTES,
         );
         if let Err(e) = res.pipelines.insert(
@@ -770,6 +798,7 @@ impl WgpuExecutor {
                 vertex_buffers: desc.vertex_buffers.clone(),
                 color_formats,
                 used_bindings,
+                sampler_metadata,
                 backing,
                 texel: render_texel,
             }),

@@ -16,12 +16,14 @@ pub(crate) struct Artifact {
     pub(crate) pipeline: wgpu::RenderPipeline,
     pub(crate) color_formats: Vec<TextureFormat>,
     pub(crate) used_bindings: Vec<(u32, u32)>,
+    pub(crate) sampler_metadata: Vec<crate::reflect::SamplerMetadataLayout>,
 }
 
 #[derive(Clone)]
 pub(crate) struct ComputeArtifact {
     pub(crate) pipeline: wgpu::ComputePipeline,
     pub(crate) remap_group_zero: bool,
+    pub(crate) sampler_metadata: Vec<crate::reflect::SamplerMetadataLayout>,
     pub(crate) texel: Option<std::sync::Arc<crate::texel_buffer::ComputeSpecializer>>,
 }
 

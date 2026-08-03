@@ -143,6 +143,7 @@ struct PipelineBacking {
     pipeline: wgpu::RenderPipeline,
     color_formats: Vec<TextureFormat>,
     used_bindings: Vec<(u32, u32)>,
+    sampler_metadata: Vec<crate::reflect::SamplerMetadataLayout>,
     bytes: u64,
     refcount: u32,
     last_used: u64,
@@ -152,6 +153,7 @@ struct ComputePipelineBacking {
     key: ComputePipeKey,
     pipeline: wgpu::ComputePipeline,
     remap_group_zero: bool,
+    sampler_metadata: Vec<crate::reflect::SamplerMetadataLayout>,
     texel: Option<std::sync::Arc<crate::texel_buffer::ComputeSpecializer>>,
     bytes: u64,
     refcount: u32,
@@ -391,6 +393,7 @@ impl DedupCaches {
         wgpu::RenderPipeline,
         Vec<TextureFormat>,
         Vec<(u32, u32)>,
+        Vec<crate::reflect::SamplerMetadataLayout>,
         u64,
     )> {
         let id = self
@@ -408,6 +411,7 @@ impl DedupCaches {
             e.pipeline.clone(),
             e.color_formats.clone(),
             e.used_bindings.clone(),
+            e.sampler_metadata.clone(),
             id,
         );
         self.journal
@@ -423,6 +427,7 @@ impl DedupCaches {
         pipeline: wgpu::RenderPipeline,
         color_formats: Vec<TextureFormat>,
         used_bindings: Vec<(u32, u32)>,
+        sampler_metadata: Vec<crate::reflect::SamplerMetadataLayout>,
         bytes: u64,
     ) -> u64 {
         let id = self.next_pipeline_id;
@@ -436,6 +441,7 @@ impl DedupCaches {
                 pipeline,
                 color_formats,
                 used_bindings,
+                sampler_metadata,
                 bytes,
                 refcount: 1,
                 last_used: self.pipeline_clock,
@@ -467,6 +473,7 @@ impl DedupCaches {
     ) -> Option<(
         wgpu::ComputePipeline,
         bool,
+        Vec<crate::reflect::SamplerMetadataLayout>,
         Option<std::sync::Arc<crate::texel_buffer::ComputeSpecializer>>,
         u64,
     )> {
@@ -480,6 +487,7 @@ impl DedupCaches {
         let artifact = (
             entry.pipeline.clone(),
             entry.remap_group_zero,
+            entry.sampler_metadata.clone(),
             entry.texel.clone(),
             id,
         );
@@ -492,6 +500,7 @@ impl DedupCaches {
         key: ComputePipeKey,
         pipeline: wgpu::ComputePipeline,
         remap_group_zero: bool,
+        sampler_metadata: Vec<crate::reflect::SamplerMetadataLayout>,
         texel: Option<std::sync::Arc<crate::texel_buffer::ComputeSpecializer>>,
     ) -> u64 {
         let id = self.next_pipeline_id;
@@ -503,6 +512,7 @@ impl DedupCaches {
                 key,
                 pipeline,
                 remap_group_zero,
+                sampler_metadata,
                 texel,
                 bytes: PIPELINE_BACKING_BYTES,
                 refcount: 1,
