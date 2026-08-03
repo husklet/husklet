@@ -84,13 +84,28 @@ fn runtime_entry_points_roundtrip() {
     );
     assert_eq!(graphics_resource, 1usize as *mut c_void);
     let mut mapped_array = 1usize as *mut c_void;
+    for resource in [
+        core::ptr::null_mut(),
+        1usize as *mut c_void,
+        usize::MAX as *mut c_void,
+    ] {
+        assert_eq!(
+            unsafe { cudaGraphicsSubResourceGetMappedArray(&mut mapped_array, resource, 0, 0) },
+            CUDART_ERR_INVALID_RESOURCE_HANDLE
+        );
+        assert_eq!(mapped_array, 1usize as *mut c_void);
+    }
     assert_eq!(
         unsafe {
-            cudaGraphicsSubResourceGetMappedArray(&mut mapped_array, core::ptr::null_mut(), 0, 0)
+            cudaGraphicsSubResourceGetMappedArray(
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+                0,
+                0,
+            )
         },
         CUDART_ERR_INVALID_VALUE
     );
-    assert_eq!(mapped_array, 1usize as *mut c_void);
 
     // versions
     let mut ver = 0i32;

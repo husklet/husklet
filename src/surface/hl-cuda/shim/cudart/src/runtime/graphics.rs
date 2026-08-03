@@ -71,9 +71,10 @@ pub unsafe extern "C" fn cudaGraphicsResourceGetMappedPointer(pointer: *mut *mut
 
 #[no_mangle]
 pub unsafe extern "C" fn cudaGraphicsSubResourceGetMappedArray(array: *mut *mut c_void, resource: *mut c_void, array_index: u32, mip_level: u32) -> i32 {
-    if array.is_null() || resource.is_null() { return CUDART_ERROR_INVALID_VALUE; }
+    if array.is_null() { return CUDART_ERROR_INVALID_VALUE; }
     let _ = (array_index, mip_level);
-    ShimState::with(|state| state.fail(CUDART_ERROR_NOT_SUPPORTED))
+    let _ = resource;
+    ShimState::with(|state| state.fail(CUDART_ERROR_INVALID_RESOURCE_HANDLE))
 }
 
 #[no_mangle]
