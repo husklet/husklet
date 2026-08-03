@@ -100,6 +100,15 @@ fn es2_fragdata_dynamic_zero_index_targets_the_single_color_output() {
 }
 
 #[test]
+fn es2_builtin_invariance_declaration_survives_translation() {
+    let vs = "attribute highp vec4 a_input; invariant gl_Position; void main(){ gl_Position=a_input; }";
+    let fs = "void main(){ gl_FragColor=vec4(1); }";
+    let (translated, _) = glsl::StageSources::new(vs, fs).translate_render();
+    assert!(translated.contains("invariant gl_Position;"), "{translated}");
+    assert_naga_parses(&translated, naga::ShaderStage::Vertex);
+}
+
+#[test]
 fn es3_in_out_shader_with_explicit_frag_output_keeps_the_named_output() {
     let vs = "#version 300 es\nin vec3 aPos;\nout vec3 vColor;\n\
               void main(){ vColor = aPos; gl_Position = vec4(aPos, 1.0); }\n";

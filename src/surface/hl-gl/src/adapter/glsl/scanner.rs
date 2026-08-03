@@ -289,6 +289,32 @@ pub(super) fn find_from(hay: &[u8], needle: &[u8], from: usize) -> Option<usize>
 /// the translator regenerated `void main() {}` from a shader with a dropped brace, the host front end
 /// correctly accepted it, the draw executed and wrote nothing, and no layer reported anything.
 impl Source<'_> {
+    /// Whether this stage declares the built-in position output invariant. The translator regenerates
+    /// top-level declarations, so this declaration must be carried explicitly rather than left behind with
+    /// the original source text.
+    pub(super) fn has_invariant_position(self) -> bool {
+        let bytes = self.text.as_bytes();
+        let mut cursor = 0usize;
+        while let Some(relative) = self.text[cursor..].find("invariant") {
+            let start = cursor + relative;
+            cursor = start + "invariant".len();
+            if start > 0 && Tokens::is_word(bytes[start - 1]) {
+                continue;
+            }
+            let mut name = cursor;
+            while bytes.get(name).is_some_and(|byte| Tokens::is_space(*byte)) {
+                name += 1;
+            }
+            if self.text[name..].starts_with("gl_Position") {
+                let end = name + "gl_Position".len();
+                if !bytes.get(end).is_some_and(|byte| Tokens::is_word(*byte)) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub(super) fn main_body(self) -> Option<String> {
         let b = self.text.as_bytes();
         let n = b.len();

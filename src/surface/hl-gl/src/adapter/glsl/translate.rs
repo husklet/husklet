@@ -640,6 +640,7 @@ impl StageSources<'_> {
     ) -> (String, String) {
         let vs = Source::new(self.vertex).expanded();
         let fs = Source::new(self.fragment).expanded();
+        let invariant_position = Source::new(&vs).has_invariant_position();
         let declares_modern_es = |source: &str| {
             source.lines().any(|line| {
                 let version = line.trim_start();
@@ -710,6 +711,9 @@ impl StageSources<'_> {
         vs_out.push_str(GLSL_VERSION);
         if strict_es100_calls {
             vs_out.push_str("#define HL_GLSL_ES100 1\n");
+        }
+        if invariant_position {
+            vs_out.push_str("invariant gl_Position;\n");
         }
         for c in &consts {
             vs_out.push_str(c);
