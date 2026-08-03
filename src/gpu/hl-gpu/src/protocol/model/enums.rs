@@ -558,6 +558,9 @@ pub mod texture_usage {
     pub const COPY_DST: u32 = 1 << 4;
     /// Presentable to an HLP surface.
     pub const PRESENT: u32 = 1 << 5;
+    /// BC1 blocks use Vulkan's opaque RGB interpretation. Internal protocol semantic bit; it does not
+    /// grant an operation and must be combined with the ordinary usage flags above.
+    pub const OPAQUE_BC1_RGB: u32 = 1 << 31;
 }
 
 #[cfg(test)]

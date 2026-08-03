@@ -86,6 +86,38 @@ impl WgpuExecutor {
                 "texture copy between incompatible texel sizes",
             ));
         }
+        let src_opaque = texture::WgpuTexture::get(res, src)?.is_opaque_bc1_rgb();
+        let dst_opaque = texture::WgpuTexture::get(res, dst)?.is_opaque_bc1_rgb();
+        if src_opaque || dst_opaque {
+            if src_opaque != dst_opaque {
+                return Err(GpuError::Invalid(
+                    "BC1 RGB copies require matching opaque semantics",
+                ));
+            }
+            let bytes = self.read_region(
+                res,
+                src,
+                src_origin.x,
+                src_origin.y,
+                src_sub.layer + src_origin.z,
+                extent.width,
+                extent.height,
+                extent.depth,
+                src_sub.mip,
+            )?;
+            return self.write_region(
+                res,
+                dst,
+                dst_origin.x,
+                dst_origin.y,
+                dst_sub.layer + dst_origin.z,
+                extent.width,
+                extent.height,
+                extent.depth,
+                dst_sub.mip,
+                &bytes,
+            );
+        }
         for sub in [src_sub, dst_sub] {
             if sub.mip != 0 || sub.layer != 0 || sub.aspect != TextureAspect::All {
                 return Err(GpuError::Unsupported(

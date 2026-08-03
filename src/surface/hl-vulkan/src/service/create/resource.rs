@@ -455,7 +455,14 @@ pub fn create_image_geometry(
         .ok_or(GpuError::Invalid("vkCreateImage: unsupported VkFormat"))?;
     let ir_id = dev.alloc_ir();
     let handle = dev.alloc_handle();
-    let usage = ImageUsage(vk_usage).wire();
+    let mut usage = ImageUsage(vk_usage).wire();
+    if matches!(
+        vk_format,
+        crate::model::memory::vk_format::BC1_RGB_UNORM_BLOCK
+            | crate::model::memory::vk_format::BC1_RGB_SRGB_BLOCK
+    ) {
+        usage |= hl_gpu::protocol::model::enums::texture_usage::OPAQUE_BC1_RGB;
+    }
     // `VkSampleCountFlagBits` encodes the count AS its bit value (1/2/4/8/16/32/64); an absent/`_1_BIT`
     // field is single-sample. Anything else threads through as the requested multisample count.
     let sample_count = vk_samples.max(1);

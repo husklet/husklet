@@ -981,16 +981,28 @@ fn spirv_compute_samples_native_bc1_and_bc3_uploads() {
     "#;
     let shader = wgsl_to_spirv(source);
     let mut g = exec();
-    for (format, block) in [
+    for (format, block, extra_usage, expected) in [
         (
             TextureFormat::Bc1RgbaUnorm,
             vec![0x00, 0xf8, 0x00, 0x00, 0, 0, 0, 0],
+            0,
+            vec![255, 0, 0, 255],
+        ),
+        (
+            // c0 < c1 selects BC1's three-colour palette. Selector 3 is transparent for RGBA but
+            // opaque black for Vulkan's RGB spelling, carried by the internal semantic usage bit.
+            TextureFormat::Bc1RgbaUnorm,
+            vec![0x1f, 0x00, 0x00, 0xf8, 0xff, 0xff, 0xff, 0xff],
+            texture_usage::OPAQUE_BC1_RGB,
+            vec![0, 0, 0, 255],
         ),
         (
             TextureFormat::Bc3RgbaUnorm,
             vec![
                 0xff, 0x00, 0, 0, 0, 0, 0, 0, 0x00, 0xf8, 0x00, 0x00, 0, 0, 0, 0,
             ],
+            0,
+            vec![255, 0, 0, 255],
         ),
     ] {
         if !g.capabilities().supports_format(format) {
@@ -1025,7 +1037,7 @@ fn spirv_compute_samples_native_bc1_and_bc3_uploads() {
                         sample_count: 1,
                         dim: TextureDim::D2,
                         format,
-                        usage: texture_usage::SAMPLED | texture_usage::COPY_DST,
+                        usage: texture_usage::SAMPLED | texture_usage::COPY_DST | extra_usage,
                         label: "bc".into(),
                     },
                 ),
@@ -1080,8 +1092,95 @@ fn spirv_compute_samples_native_bc1_and_bc3_uploads() {
                 }),
             ],
         );
-        assert_eq!(read_u32s(&g, &s, 2, 4), vec![255, 0, 0, 255], "{format:?}");
+        assert_eq!(read_u32s(&g, &s, 2, 4), expected, "{format:?}");
+        if extra_usage == texture_usage::OPAQUE_BC1_RGB {
+            assert_eq!(g.read_texture(&s.resources, 1).unwrap(), [0x1f, 0x00, 0x00, 0xf8, 0xff, 0xff, 0xff, 0xff]);
+        }
     }
+}
+
+#[test]
+fn opaque_bc1_shadow_tracks_mip_layer_view_and_texture_copy() {
+    let mut g = exec();
+    let block = vec![0x1f, 0x00, 0x00, 0xf8, 0xff, 0xff, 0xff, 0xff];
+    let texture = |label: &str| TextureDesc {
+        width: 8,
+        height: 8,
+        depth: 2,
+        mip_levels: 2,
+        sample_count: 1,
+        dim: TextureDim::D2,
+        format: TextureFormat::Bc1RgbaUnorm,
+        usage: texture_usage::SAMPLED
+            | texture_usage::COPY_SRC
+            | texture_usage::COPY_DST
+            | texture_usage::OPAQUE_BC1_RGB,
+        label: label.into(),
+    };
+    let sub = TextureSubresource {
+        mip: 1,
+        layer: 1,
+        aspect: hl_gpu::protocol::model::enums::TextureAspect::All,
+    };
+    let view = |texture| TextureViewDesc {
+        texture,
+        dim: TextureDim::D2,
+        format: TextureFormat::Bc1RgbaUnorm,
+        aspect: hl_gpu::protocol::model::enums::TextureAspect::All,
+        base_mip: 1,
+        mip_count: 1,
+        base_layer: 1,
+        layer_count: 1,
+    };
+    let s = run_batch(
+        &mut g,
+        &[
+            Cmd::CreateTexture(1, texture("opaque-bc1-source")),
+            Cmd::CreateTexture(2, texture("opaque-bc1-destination")),
+            Cmd::CreateBuffer(1, buf(8, buffer_usage::COPY_SRC)),
+            Cmd::WriteBuffer {
+                id: 1,
+                offset: 0,
+                data: block.clone(),
+            },
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::CopyBufferToTextureRegion {
+                        src: 1,
+                        src_offset: 0,
+                        bytes_per_row: 8,
+                        rows_per_image: 1,
+                        dst: 1,
+                        dst_sub: sub.clone(),
+                        dst_origin: Origin3d::default(),
+                        extent: Extent3d {
+                            width: 4,
+                            height: 4,
+                            depth: 1,
+                        },
+                    },
+                    Enc::CopyTextureToTexture {
+                        src: 1,
+                        src_sub: sub.clone(),
+                        src_origin: Origin3d::default(),
+                        dst: 2,
+                        dst_sub: sub,
+                        dst_origin: Origin3d::default(),
+                        extent: Extent3d {
+                            width: 4,
+                            height: 4,
+                            depth: 1,
+                        },
+                    },
+                ],
+                signal: None,
+            }),
+            Cmd::CreateTextureView(3, view(1)),
+            Cmd::CreateTextureView(4, view(2)),
+        ],
+    );
+    assert_eq!(g.read_texture(&s.resources, 3).unwrap(), block);
+    assert_eq!(g.read_texture(&s.resources, 4).unwrap(), block);
 }
 
 #[test]

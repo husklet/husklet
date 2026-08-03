@@ -265,6 +265,8 @@ pub mod vk_format {
     pub const D16_UNORM: u32 = 124;
     pub const D32_SFLOAT: u32 = 126;
     pub const D24_UNORM_S8_UINT: u32 = 129;
+    pub const BC1_RGB_UNORM_BLOCK: u32 = 131;
+    pub const BC1_RGB_SRGB_BLOCK: u32 = 132;
     pub const BC1_RGBA_UNORM_BLOCK: u32 = 133;
     pub const BC1_RGBA_SRGB_BLOCK: u32 = 134;
     pub const BC2_UNORM_BLOCK: u32 = 135;
@@ -582,8 +584,8 @@ impl Format {
             vk_format::D16_UNORM => T::Depth32Float,
             vk_format::D32_SFLOAT => T::Depth32Float,
             vk_format::D24_UNORM_S8_UINT => T::Depth24PlusStencil8,
-            vk_format::BC1_RGBA_UNORM_BLOCK => T::Bc1RgbaUnorm,
-            vk_format::BC1_RGBA_SRGB_BLOCK => T::Bc1RgbaSrgb,
+            vk_format::BC1_RGB_UNORM_BLOCK | vk_format::BC1_RGBA_UNORM_BLOCK => T::Bc1RgbaUnorm,
+            vk_format::BC1_RGB_SRGB_BLOCK | vk_format::BC1_RGBA_SRGB_BLOCK => T::Bc1RgbaSrgb,
             vk_format::BC2_UNORM_BLOCK => T::Bc2RgbaUnorm,
             vk_format::BC2_SRGB_BLOCK => T::Bc2RgbaSrgb,
             vk_format::BC3_UNORM_BLOCK => T::Bc3RgbaUnorm,

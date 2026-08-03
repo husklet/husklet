@@ -100,11 +100,14 @@ impl VkPhysicalDeviceFeatures {
         }
         features.enable_binding_arrays(caps.map_or(0, |caps| caps.binding_arrays));
         features.enable_shader_guarantees(caps.map_or(0, |caps| caps.gpu_features));
-        // `textureCompressionBC` promises the complete Vulkan BC family, including the BC1 RGB
-        // spellings. The neutral protocol currently carries the BC1 RGBA spellings only. Even though
-        // Metal materializes every protocol BC format, that is not enough to claim this Vulkan-wide
-        // feature: BC1 RGB has different alpha semantics for the same compressed bits. Keep it false
-        // until the missing spellings have exact executor representations.
+        // BC1 RGB shares the negotiated BC1 storage bit with BC1 RGBA. The Vulkan lowering marks the RGB
+        // spelling explicitly; the executor preserves its raw blocks while sampling from opaque RGBA backing.
+        let required_bc = hl_gpu::protocol::model::enums::TextureFormat::bits(
+            hl_gpu::protocol::model::capability::BC_FORMATS,
+        );
+        if caps.is_some_and(|caps| caps.texture_formats & required_bc == required_bc) {
+            features.bits[22] = VK_TRUE;
+        }
         let required_etc2 = hl_gpu::protocol::model::enums::TextureFormat::bits(
             hl_gpu::protocol::model::capability::ETC2_FORMATS,
         );

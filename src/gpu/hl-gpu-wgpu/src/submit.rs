@@ -643,7 +643,7 @@ impl WgpuExecutor {
                                 mip
                             );
                         }
-                        let (row, image_rows, dst_depth, destination) = {
+                        let (row, image_rows, dst_depth, destination, opaque_bc1) = {
                             let t = texture::WgpuTexture::get(res, *dst)?;
                             // The destination region (`mip`, `width`, `height`) must fit the texture: an
                             // out-of-range mip or a `width`/`height` overhanging the mip level would be handed
@@ -666,7 +666,13 @@ impl WgpuExecutor {
                             }
                             let (row, image_rows) =
                                 Format::from(t.format).copy_layout(*width, *height)?;
-                            (row, image_rows, t.depth, t.texture.clone())
+                            (
+                                row,
+                                image_rows,
+                                t.depth,
+                                t.texture.clone(),
+                                t.is_opaque_bc1_rgb(),
+                            )
                         };
                         // `bytes_per_row == 0` means the source rows are tightly packed (the oracle convention).
                         let src_stride = if *bytes_per_row == 0 {
@@ -697,7 +703,8 @@ impl WgpuExecutor {
                         // Keep representable uploads entirely on the GPU. WebGPU requires a four-byte source
                         // offset and, when more than one row is copied, a 256-byte row pitch. The final row may
                         // be tight, so the exact protocol span validated above remains authoritative.
-                        let native_compatible = potential_native_texture_upload
+                        let native_compatible = !opaque_bc1
+                            && potential_native_texture_upload
                             && (rows == 1
                                 || u64::from(src_stride)
                                     .is_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64));
@@ -742,7 +749,8 @@ impl WgpuExecutor {
                         // the GPU: ordinary buffer copies retain only the four-byte rule, so copy each logical
                         // row into a transient 256-byte-pitched buffer and upload that buffer in this same
                         // command encoder. Padding is never observed by the destination texture.
-                        let staging_compatible = potential_native_texture_upload
+                        let staging_compatible = !opaque_bc1
+                            && potential_native_texture_upload
                             && rows > 1
                             && u64::from(row).is_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT)
                             && u64::from(src_stride).is_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT);
@@ -858,6 +866,8 @@ impl WgpuExecutor {
                         let source = texture::WgpuTexture::get(res, *src)?;
                         let destination = texture::WgpuTexture::get(res, *dst)?;
                         let native_compatible = potential_native_texture_copy
+                            && !source.is_opaque_bc1_rgb()
+                            && !destination.is_opaque_bc1_rgb()
                             && source.format == destination.format
                             && source.sample_count == 1
                             && destination.sample_count == 1
@@ -1098,6 +1108,9 @@ impl WgpuExecutor {
         }
 
         let source = texture::WgpuTexture::get(res, src)?;
+        if source.is_opaque_bc1_rgb() {
+            return Ok(false);
+        }
         let destination = buffer::WgpuBuffer::get(res, dst)?;
         let mut encoder = self
             .gpu
