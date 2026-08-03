@@ -371,6 +371,42 @@ fn negative_texture_api_rejects_invalid_closed_enums() {
 }
 
 #[test]
+fn negative_texture_parameter_matrix_rejects_without_mutation() {
+    for bound in [false, true] {
+        let mut c = ctx();
+        c.active_texture(GL_TEXTURE0);
+        if bound {
+            record::bind_texture(&mut c, GL_TEXTURE_2D, 7);
+        }
+        let before = c.bound_texture();
+        for (target, pname, value) in [
+            (0, GL_TEXTURE_MIN_FILTER, GL_LINEAR),
+            (GL_TEXTURE_2D, 0, GL_LINEAR),
+            (0, 0, GL_LINEAR),
+            (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, 0),
+            (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_REPEAT),
+            (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, 0),
+            (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_NEAREST),
+        ] {
+            assert!(!record::validate_tex_parameter(&mut c, target, pname, value));
+            assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
+            assert_eq!(c.bound_texture(), before);
+        }
+    }
+
+    let mut c = ctx();
+    for (pname, value) in [
+        (GL_TEXTURE_MAG_FILTER, GL_LINEAR),
+        (GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR),
+        (GL_TEXTURE_WRAP_S, GL_REPEAT),
+        (GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT),
+    ] {
+        assert!(record::validate_tex_parameter(&mut c, GL_TEXTURE_2D, pname, value));
+        assert_eq!(c.take_gl_error(), GL_NO_ERROR);
+    }
+}
+
+#[test]
 fn pack_alignment_pads_between_readback_rows_but_not_after_the_last() {
     let mut c = ctx();
     let store = c.pixel_store_state();

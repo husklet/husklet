@@ -291,6 +291,48 @@ pub fn tex_image_2d_target_level(
 }
 
 /// `glTexParameteri(GL_TEXTURE_2D, pname, value)` on the active unit's texture.
+pub fn validate_tex_parameter(ctx: &mut GlContext, target: u32, pname: u32, value: u32) -> bool {
+    let valid_target = matches!(target, GL_TEXTURE_2D | GL_TEXTURE_CUBE_MAP);
+    let valid_value = match pname {
+        GL_TEXTURE_MAG_FILTER => matches!(value, GL_NEAREST | GL_LINEAR),
+        GL_TEXTURE_MIN_FILTER => matches!(
+            value,
+            GL_NEAREST
+                | GL_LINEAR
+                | GL_NEAREST_MIPMAP_NEAREST
+                | GL_LINEAR_MIPMAP_NEAREST
+                | GL_NEAREST_MIPMAP_LINEAR
+                | GL_LINEAR_MIPMAP_LINEAR
+        ),
+        GL_TEXTURE_WRAP_S | GL_TEXTURE_WRAP_T => {
+            matches!(value, GL_CLAMP_TO_EDGE | GL_REPEAT | GL_MIRRORED_REPEAT)
+        }
+        GL_TEXTURE_SWIZZLE_R
+        | GL_TEXTURE_SWIZZLE_G
+        | GL_TEXTURE_SWIZZLE_B
+        | GL_TEXTURE_SWIZZLE_A
+        | GL_TEXTURE_SWIZZLE_RGBA
+        | GL_TEXTURE_BASE_LEVEL
+        | GL_TEXTURE_MAX_LEVEL
+        | GL_TEXTURE_MIN_LOD
+        | GL_TEXTURE_MAX_LOD
+        | GL_TEXTURE_COMPARE_MODE
+        | GL_TEXTURE_COMPARE_FUNC
+            if ctx.client_version().0 >= 3 =>
+        {
+            true
+        }
+        _ => false,
+    };
+    if !valid_target || !valid_value {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return false;
+    }
+    true
+}
+
+/// `glTexParameteri(GL_TEXTURE_2D, pname, value)` on the active unit's texture. Callers crossing the GL
+/// API boundary validate target/pname/value with [`validate_tex_parameter`] first.
 pub fn tex_parameter(ctx: &mut GlContext, pname: u32, value: u32) {
     let name = ctx.local.tex_unit[ctx.local.active_texture];
     if name != 0 {

@@ -448,22 +448,30 @@ pub extern "C" fn glTexImage2D(
 }
 
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glTexParameteri(_target: u32, pname: u32, param: i32) {
-    GlobalState::context(|s| record::tex_parameter(&mut s.gl, pname, param as u32));
+pub extern "C" fn glTexParameteri(target: u32, pname: u32, param: i32) {
+    GlobalState::context(|s| {
+        if record::validate_tex_parameter(&mut s.gl, target, pname, param as u32) {
+            record::tex_parameter(&mut s.gl, pname, param as u32);
+        }
+    });
 }
 
 /// `glTexParameterf(target, pname, param)` — the float-typed setter. GL's texture filter/wrap parameters
 /// are enum-valued; the app passes the enum as a float, so it is truncated back to the `GLenum` the
 /// integer path records (`glTexParameteri` parity).
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glTexParameterf(_target: u32, pname: u32, param: f32) {
-    GlobalState::context(|s| record::tex_parameter(&mut s.gl, pname, param as u32));
+pub extern "C" fn glTexParameterf(target: u32, pname: u32, param: f32) {
+    GlobalState::context(|s| {
+        if record::validate_tex_parameter(&mut s.gl, target, pname, param as u32) {
+            record::tex_parameter(&mut s.gl, pname, param as u32);
+        }
+    });
 }
 
 /// `glTexParameterfv(target, pname, params)` — vector form. `GL_TEXTURE_SWIZZLE_RGBA` consumes four
 /// components; all scalar parameters consume the first.
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glTexParameterfv(_target: u32, pname: u32, params: *const f32) {
+pub extern "C" fn glTexParameterfv(target: u32, pname: u32, params: *const f32) {
     if params.is_null() {
         return;
     }
@@ -476,12 +484,16 @@ pub extern "C" fn glTexParameterfv(_target: u32, pname: u32, params: *const f32)
         .iter()
         .map(|value| *value as u32)
         .collect::<Vec<_>>();
-    GlobalState::context(|s| record::tex_parameter_vector(&mut s.gl, pname, &values));
+    GlobalState::context(|s| {
+        if record::validate_tex_parameter(&mut s.gl, target, pname, values[0]) {
+            record::tex_parameter_vector(&mut s.gl, pname, &values);
+        }
+    });
 }
 
 /// `glTexParameteriv(target, pname, params)` — vector form.
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glTexParameteriv(_target: u32, pname: u32, params: *const i32) {
+pub extern "C" fn glTexParameteriv(target: u32, pname: u32, params: *const i32) {
     if params.is_null() {
         return;
     }
@@ -494,7 +506,11 @@ pub extern "C" fn glTexParameteriv(_target: u32, pname: u32, params: *const i32)
         .iter()
         .map(|value| *value as u32)
         .collect::<Vec<_>>();
-    GlobalState::context(|s| record::tex_parameter_vector(&mut s.gl, pname, &values));
+    GlobalState::context(|s| {
+        if record::validate_tex_parameter(&mut s.gl, target, pname, values[0]) {
+            record::tex_parameter_vector(&mut s.gl, pname, &values);
+        }
+    });
 }
 
 /// `glGenerateMipmap(target)` — validate + record (an honest no-op on the pixel data; this model samples
