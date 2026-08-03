@@ -170,8 +170,13 @@ pub fn export_buffer(
         .exports
         .as_ref()
         .ok_or(crate::GpuError::Unsupported("sharing registry"))?;
-    if session.buffer_sharing.contains_key(&id.0) {
-        return Err(crate::GpuError::Invalid("buffer already shared"));
+    if let Some(sharing) = session.buffer_sharing.get(&id.0) {
+        return match sharing {
+            BufferSharing::Owner(export) => Ok(*export),
+            BufferSharing::Importer(_) => Err(crate::GpuError::Invalid(
+                "an imported buffer cannot be exported by its importer",
+            )),
+        };
     }
     let (native, bytes) = exec.export_buffer(&session.resources, id)?;
     let export = exports.export_accounted(

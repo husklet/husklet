@@ -416,6 +416,81 @@ fn readback_frame_routes_to_readback_never_to_submit() {
     );
 }
 
+struct SharingRequestHost {
+    calls: u32,
+}
+
+impl ConnectionHandler for SharingRequestHost {
+    fn submit(&mut self, _: &SubmitHeader, _: &[Cmd]) -> Verdict {
+        Verdict::Ack
+    }
+
+    fn export_buffer(
+        &mut self,
+        _: &ReadbackRequest,
+    ) -> Option<hl_gpu::runtime::model::sharing::ExportId> {
+        self.calls += 1;
+        Some(hl_gpu::runtime::model::sharing::ExportId(77))
+    }
+}
+
+#[test]
+fn malformed_or_unknown_sharing_requests_never_reach_the_handler() {
+    let sock = TempSock::new("sharing-request-validation");
+    let listener = UnixListener::bind(&sock.0).unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let caps = Capabilities::permissive_fixture("host");
+        let mut host = SharingRequestHost { calls: 0 };
+        serve_connection_with_handler(&stream, &caps, &mut host).unwrap();
+        host.calls
+    });
+
+    let mut client = UnixStream::connect(&sock.0).unwrap();
+    let mut len_bytes = [0u8; 4];
+    client.read_exact(&mut len_bytes).unwrap();
+    let mut handshake = vec![0; u32::from_le_bytes(len_bytes) as usize];
+    client.read_exact(&mut handshake).unwrap();
+
+    let mut requests = Vec::new();
+    let mut wrong_version = ReadbackRequest::export_buffer(1);
+    wrong_version.version += 1;
+    requests.push(wrong_version);
+    let mut malformed_export = ReadbackRequest::export_buffer(1);
+    malformed_export.offset = 1;
+    requests.push(malformed_export);
+    let mut malformed_import = ReadbackRequest::import_buffer(2, 77);
+    malformed_import.len = 1;
+    requests.push(malformed_import);
+    let mut unknown_kind = ReadbackRequest::export_buffer(1);
+    unknown_kind.kind = 0xff;
+    requests.push(unknown_kind);
+
+    for request in requests {
+        Connection::new(&client)
+            .write_readback_request(&request)
+            .unwrap();
+        assert!(
+            Connection::new(&client).read_readback_response(8).is_err(),
+            "invalid request {request:?} must be rejected"
+        );
+    }
+
+    Connection::new(&client)
+        .write_readback_request(&ReadbackRequest::export_buffer(1))
+        .unwrap();
+    assert_eq!(
+        Connection::new(&client).read_readback_response(8).unwrap(),
+        77u64.to_le_bytes()
+    );
+    drop(client);
+    assert_eq!(
+        server.join().unwrap(),
+        1,
+        "only the valid request was dispatched"
+    );
+}
+
 #[test]
 fn serve_loop_returns_cleanly_when_the_peer_closes() {
     // The serve loop must return Ok when the client drops after the handshake (clean EOF), not hang or err.

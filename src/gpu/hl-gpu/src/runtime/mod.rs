@@ -21,7 +21,7 @@ pub use model::resources::{
     KIND_TEXTURE,
 };
 pub use model::session::{Limits, Session};
-pub use model::sharing::Exports;
+pub use model::sharing::{ExportId, Exports};
 pub use model::timeline::{FenceState, FenceTimeline};
 pub use port::clock::{Clock, FakeClock, SystemClock};
 pub use port::executor::{GpuExecutor, Presentation};

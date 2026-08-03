@@ -19,6 +19,7 @@ use crate::protocol::model::id::{BufferId, FenceId};
 use crate::protocol::port::sink::CommandSink;
 use crate::runtime::model::resources::{GlobalLedger, SessionResources};
 use crate::runtime::model::session::{Limits, Session};
+use crate::runtime::model::sharing::ExportId;
 use crate::runtime::port::clock::FakeClock;
 use crate::runtime::port::executor::GpuExecutor;
 use crate::runtime::service::{dispatch, negotiate};
@@ -170,6 +171,16 @@ impl<E: GpuExecutor> CommandSink for InProcessCommandSink<E> {
         let _span = hl_log::hl_span!(hl_log::tag::EXEC, "readback");
         hl_log::hl_add!(hl_log::tag::EXEC, "readback_bytes", len as u64);
         dispatch::read_buffer(&self.session, &self.exec, id, offset, len)
+    }
+
+    fn export_buffer(&mut self, id: BufferId) -> Result<ExportId> {
+        self.ensure_open()?;
+        dispatch::export_buffer(&mut self.session, &self.exec, id)
+    }
+
+    fn import_buffer(&mut self, id: BufferId, export: ExportId) -> Result<u64> {
+        self.ensure_open()?;
+        dispatch::import_buffer(&mut self.session, &self.exec, id, export)
     }
 }
 

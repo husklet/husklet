@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 
 use hl_gpu::transport::{SubmitHeader, Verdict};
 use hl_gpu::{
-    BufferId, Cmd, ConnectionHandler, Exports, FenceId, GlobalLedger, GpuExecutor, Limits,
-    ReadbackRequest, Session, SystemClock,
+    BufferId, Cmd, ConnectionHandler, ExportId, Exports, FenceId, GlobalLedger, GpuExecutor,
+    Limits, ReadbackRequest, Session, SystemClock,
 };
 
 use super::capture;
@@ -308,6 +308,25 @@ impl ConnectionHandler for Connection {
             FenceId(request.id),
             request.offset,
             request.len,
+        )
+        .ok()
+    }
+
+    fn export_buffer(&mut self, request: &ReadbackRequest) -> Option<ExportId> {
+        hl_gpu::runtime::service::dispatch::export_buffer(
+            &mut self.session,
+            &self.executor,
+            BufferId(request.id),
+        )
+        .ok()
+    }
+
+    fn import_buffer(&mut self, request: &ReadbackRequest) -> Option<u64> {
+        hl_gpu::runtime::service::dispatch::import_buffer(
+            &mut self.session,
+            &self.executor,
+            BufferId(request.id),
+            ExportId(request.offset),
         )
         .ok()
     }

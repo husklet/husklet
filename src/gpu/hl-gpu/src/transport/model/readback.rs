@@ -37,6 +37,10 @@ pub mod readback_kind {
     pub const FENCE: u8 = 1;
     /// Wait for a timeline fence for at most `len` nanoseconds.
     pub const FENCE_WAIT: u8 = 2;
+    /// Export `id` as a process-global buffer capability. Response: `ExportId` as little-endian u64.
+    pub const EXPORT_BUFFER: u8 = 3;
+    /// Import `offset` (`ExportId`) at caller-minted local buffer `id`. Response: authoritative bytes.
+    pub const IMPORT_BUFFER: u8 = 4;
 }
 
 /// A device→host readback request: "return `len` bytes of resource `id` starting at `offset`". Serialized
@@ -91,6 +95,26 @@ impl ReadbackRequest {
         }
     }
 
+    pub fn export_buffer(id: u32) -> Self {
+        Self {
+            version: READBACK_VERSION,
+            kind: readback_kind::EXPORT_BUFFER,
+            id,
+            offset: 0,
+            len: 0,
+        }
+    }
+
+    pub fn import_buffer(id: u32, export: u64) -> Self {
+        Self {
+            version: READBACK_VERSION,
+            kind: readback_kind::IMPORT_BUFFER,
+            id,
+            offset: export,
+            len: 0,
+        }
+    }
+
     /// Serialize to the fixed little-endian request bytes.
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
         let mut b = [0u8; Self::SIZE];
@@ -129,6 +153,26 @@ mod tests {
         let bytes = req.to_bytes();
         assert_eq!(bytes.len(), ReadbackRequest::SIZE);
         assert_eq!(ReadbackRequest::from_bytes(&bytes), Some(req));
+    }
+
+    #[test]
+    fn sharing_requests_roundtrip_without_overloading_lengths() {
+        let export = ReadbackRequest::export_buffer(7);
+        assert_eq!(
+            ReadbackRequest::from_bytes(&export.to_bytes()),
+            Some(export)
+        );
+        assert_eq!((export.id, export.offset, export.len), (7, 0, 0));
+
+        let import = ReadbackRequest::import_buffer(11, 0x1234_5678_9abc_def0);
+        assert_eq!(
+            ReadbackRequest::from_bytes(&import.to_bytes()),
+            Some(import)
+        );
+        assert_eq!(
+            (import.id, import.offset, import.len),
+            (11, 0x1234_5678_9abc_def0, 0)
+        );
     }
 
     #[test]

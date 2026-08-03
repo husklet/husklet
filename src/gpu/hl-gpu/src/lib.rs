@@ -31,8 +31,8 @@ pub use protocol::port::sink::{CommandSink, FenceWait, RecordingSink};
 // Runtime layer: the per-connection Session that validates + accounts a decoded batch and dispatches it
 // to an injected GpuExecutor (built on top of `protocol`).
 pub use runtime::{
-    Clock, Exports, FakeClock, GlobalLedger, GpuExecutor, InProcessCommandSink, Ledger, Limits,
-    Presentation, Session, SessionResources, SystemClock,
+    Clock, ExportId, Exports, FakeClock, GlobalLedger, GpuExecutor, InProcessCommandSink, Ledger,
+    Limits, Presentation, Session, SessionResources, SystemClock,
 };
 pub use transport::{
     serve, serve_connection, serve_connection_with_handler, ConnectionHandler, GpuAlloc,

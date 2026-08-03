@@ -11,6 +11,7 @@ use crate::protocol::model::capability::{Capabilities, FeatureRequest};
 use crate::protocol::model::command::Cmd;
 use crate::protocol::model::error::{GpuError, Result};
 use crate::protocol::model::id::{BufferId, FenceId};
+use crate::runtime::model::sharing::ExportId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FenceWait {
@@ -62,6 +63,18 @@ pub trait CommandSink {
     fn read_buffer(&mut self, id: BufferId, offset: u64, len: usize) -> Result<Vec<u8>> {
         let _ = (id, offset, len);
         Err(GpuError::Unsupported("command sink: read_buffer"))
+    }
+
+    /// Export a live local buffer and return the host-minted, process-global capability.
+    fn export_buffer(&mut self, id: BufferId) -> Result<ExportId> {
+        let _ = id;
+        Err(GpuError::Unsupported("command sink: export_buffer"))
+    }
+
+    /// Import `export` at caller-minted local `id`, returning the registry's authoritative byte length.
+    fn import_buffer(&mut self, id: BufferId, export: ExportId) -> Result<u64> {
+        let _ = (id, export);
+        Err(GpuError::Unsupported("command sink: import_buffer"))
     }
 }
 

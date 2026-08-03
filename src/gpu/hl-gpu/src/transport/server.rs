@@ -86,6 +86,19 @@ pub trait ConnectionHandler {
         let _ = req;
         None
     }
+
+    fn export_buffer(
+        &mut self,
+        req: &ReadbackRequest,
+    ) -> Option<crate::runtime::model::sharing::ExportId> {
+        let _ = req;
+        None
+    }
+
+    fn import_buffer(&mut self, req: &ReadbackRequest) -> Option<u64> {
+        let _ = req;
+        None
+    }
 }
 
 /// Adapts a bare submit closure into a [`ConnectionHandler`] whose readback half always fails — the
@@ -189,6 +202,8 @@ fn serve_loop<H: ConnectionHandler>(
                     readback_kind::BUFFER => true,
                     readback_kind::FENCE => req.len == 0,
                     readback_kind::FENCE_WAIT => true,
+                    readback_kind::EXPORT_BUFFER => req.offset == 0 && req.len == 0,
+                    readback_kind::IMPORT_BUFFER => req.len == 0,
                     _ => false,
                 })
                 .and_then(|req| {
@@ -199,6 +214,12 @@ fn serve_loop<H: ConnectionHandler>(
                     readback_kind::FENCE_WAIT => handler
                         .wait_fence(&req)
                         .map(|status| vec![matches!(status, crate::FenceWait::Complete) as u8]),
+                    readback_kind::EXPORT_BUFFER => {
+                        handler.export_buffer(&req).map(|id| id.0.to_le_bytes().to_vec())
+                    }
+                    readback_kind::IMPORT_BUFFER => handler
+                        .import_buffer(&req)
+                        .map(|bytes| bytes.to_le_bytes().to_vec()),
                     _ => None,
                 }) {
                     Ok(bytes) => bytes,

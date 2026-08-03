@@ -557,4 +557,37 @@ impl CommandSink for RemoteCommandSink {
         }
         Ok(bytes)
     }
+
+    fn export_buffer(&mut self, id: BufferId) -> Result<crate::runtime::model::sharing::ExportId> {
+        let response = self.request(
+            &ReadbackRequest::export_buffer(id.raw()),
+            8,
+            self.config.response_timeout(),
+        )?;
+        let raw = u64::from_le_bytes(response.try_into().map_err(|_| {
+            self.protocol(
+                TransportPhase::ResponseRead,
+                "invalid export buffer response",
+            )
+        })?);
+        Ok(crate::runtime::model::sharing::ExportId(raw))
+    }
+
+    fn import_buffer(
+        &mut self,
+        id: BufferId,
+        export: crate::runtime::model::sharing::ExportId,
+    ) -> Result<u64> {
+        let response = self.request(
+            &ReadbackRequest::import_buffer(id.raw(), export.0),
+            8,
+            self.config.response_timeout(),
+        )?;
+        Ok(u64::from_le_bytes(response.try_into().map_err(|_| {
+            self.protocol(
+                TransportPhase::ResponseRead,
+                "invalid import buffer response",
+            )
+        })?))
+    }
 }
