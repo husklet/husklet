@@ -38,6 +38,7 @@ pub fn bind_texture(ctx: &mut GlContext, target: u32, name: u32) {
             return;
         }
         texture.target = target;
+        ctx.mark_debug_object_materialized(GL_TEXTURE, name);
     }
     let unit = ctx.local.active_texture;
     if unit < ctx.local.tex_unit.len() {
@@ -69,10 +70,7 @@ pub fn validate_tex_image_2d(
 
 /// Validate the implementation-defined compressed-format vocabulary. This driver advertises zero
 /// compressed formats to ES2, so accepting any spelling would contradict `GL_COMPRESSED_TEXTURE_FORMATS`.
-pub fn validate_compressed_tex_image_2d_format(
-    ctx: &mut GlContext,
-    internalformat: u32,
-) -> bool {
+pub fn validate_compressed_tex_image_2d_format(ctx: &mut GlContext, internalformat: u32) -> bool {
     if ctx.client_version().0 < 3 {
         let _ = internalformat;
         ctx.set_gl_error(GL_INVALID_ENUM);
@@ -127,7 +125,10 @@ pub fn validate_tex_image_2d_call(
                     | GL_RGBA
                     | GL_BGRA_EXT
                     | GL_BGRA8_EXT
-            ) => value,
+            ) =>
+        {
+            value
+        }
         _ => {
             ctx.set_gl_error(GL_INVALID_VALUE);
             return false;
@@ -136,25 +137,30 @@ pub fn validate_tex_image_2d_call(
     if !matches!(
         format,
         GL_ALPHA | GL_LUMINANCE | GL_LUMINANCE_ALPHA | GL_RGB | GL_RGBA | GL_BGRA_EXT
-    )
-        || !matches!(
-            type_,
-            GL_UNSIGNED_BYTE
-                | GL_UNSIGNED_SHORT_5_6_5
-                | GL_UNSIGNED_SHORT_4_4_4_4
-                | GL_UNSIGNED_SHORT_5_5_5_1
-        )
-    {
+    ) || !matches!(
+        type_,
+        GL_UNSIGNED_BYTE
+            | GL_UNSIGNED_SHORT_5_6_5
+            | GL_UNSIGNED_SHORT_4_4_4_4
+            | GL_UNSIGNED_SHORT_5_5_5_1
+    ) {
         ctx.set_gl_error(GL_INVALID_ENUM);
         return false;
     }
-    let internal_matches = internalformat == format
-        || (internalformat == GL_BGRA8_EXT && format == GL_BGRA_EXT);
-    let type_matches = matches!((format, type_),
-        (GL_ALPHA | GL_LUMINANCE | GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE)
-            | (GL_RGB, GL_UNSIGNED_BYTE | GL_UNSIGNED_SHORT_5_6_5)
-            | (GL_RGBA, GL_UNSIGNED_BYTE | GL_UNSIGNED_SHORT_4_4_4_4 | GL_UNSIGNED_SHORT_5_5_5_1)
-            | (GL_BGRA_EXT, GL_UNSIGNED_BYTE));
+    let internal_matches =
+        internalformat == format || (internalformat == GL_BGRA8_EXT && format == GL_BGRA_EXT);
+    let type_matches = matches!(
+        (format, type_),
+        (
+            GL_ALPHA | GL_LUMINANCE | GL_LUMINANCE_ALPHA,
+            GL_UNSIGNED_BYTE
+        ) | (GL_RGB, GL_UNSIGNED_BYTE | GL_UNSIGNED_SHORT_5_6_5)
+            | (
+                GL_RGBA,
+                GL_UNSIGNED_BYTE | GL_UNSIGNED_SHORT_4_4_4_4 | GL_UNSIGNED_SHORT_5_5_5_1
+            )
+            | (GL_BGRA_EXT, GL_UNSIGNED_BYTE)
+    );
     if !internal_matches || !type_matches {
         ctx.set_gl_error(GL_INVALID_OPERATION);
         return false;
@@ -482,12 +488,7 @@ pub fn tex_parameter_vector(ctx: &mut GlContext, pname: u32, values: &[u32]) {
     tex_parameter_vector_target(ctx, GL_TEXTURE_2D, pname, values);
 }
 
-pub fn tex_parameter_vector_target(
-    ctx: &mut GlContext,
-    target: u32,
-    pname: u32,
-    values: &[u32],
-) {
+pub fn tex_parameter_vector_target(ctx: &mut GlContext, target: u32, pname: u32, values: &[u32]) {
     let name = ctx.bound_texture_for_target(target);
     if name == 0 {
         return;
@@ -836,29 +837,31 @@ pub fn tex_sub_image_2d(
     }
     let before = ctx.textures.get(name).cloned();
     let producer = before.as_ref().and_then(|texture| {
-        ctx.local.recording.operations.iter().rev().find_map(|operation| match operation {
-            crate::model::context::FrameOp::Draw(draw)
-                if draw.target.is_some_and(|target| {
-                    target.texture == name && target.generation == texture.gen
-                }) => Some(draw.fbo),
-            _ => None,
-        })
+        ctx.local
+            .recording
+            .operations
+            .iter()
+            .rev()
+            .find_map(|operation| match operation {
+                crate::model::context::FrameOp::Draw(draw)
+                    if draw.target.is_some_and(|target| {
+                        target.texture == name && target.generation == texture.gen
+                    }) =>
+                {
+                    Some(draw.fbo)
+                }
+                _ => None,
+            })
     });
     let stored = match (level, face) {
         (0, Some(face)) => ctx
             .textures
             .sub_image_cube_face(name, face, xo, yo, w, h, rgba),
         (0, None) => ctx.textures.sub_image_2d(name, xo, yo, w, h, rgba),
-        (level, face) => ctx.textures.sub_image_2d_level(
-            name,
-            face,
-            level as u32,
-            xo,
-            yo,
-            w,
-            h,
-            rgba,
-        ),
+        (level, face) => {
+            ctx.textures
+                .sub_image_2d_level(name, face, level as u32, xo, yo, w, h, rgba)
+        }
     };
     if !stored {
         ctx.set_gl_error(GL_INVALID_VALUE);
@@ -923,13 +926,7 @@ pub fn validate_tex_sub_image_2d_call(
         return false;
     }
     let max_level = (crate::service::query::MAX_TEXTURE_SIZE as u32).ilog2() as i32;
-    if level < 0
-        || level > max_level
-        || xoffset < 0
-        || yoffset < 0
-        || width < 0
-        || height < 0
-    {
+    if level < 0 || level > max_level || xoffset < 0 || yoffset < 0 || width < 0 || height < 0 {
         ctx.set_gl_error(GL_INVALID_VALUE);
         return false;
     }
@@ -1033,7 +1030,10 @@ pub fn copy_tex_sub_image_2d(
         if level == 0 {
             Some((texture.w, texture.h))
         } else {
-            texture.mips.get(level as usize - 1).map(|mip| (mip.w, mip.h))
+            texture
+                .mips
+                .get(level as usize - 1)
+                .map(|mip| (mip.w, mip.h))
         }
     });
     match image_extent {
@@ -1050,12 +1050,17 @@ pub fn copy_tex_sub_image_2d(
     }
     // Source: the read framebuffer's color-attachment texture (if any). Copy the overlapping RGBA rows;
     // an absent/dataless source (default framebuffer, or an FBO not yet rendered) is the honest no-op.
-    let source_written_in_frame = ctx.local.recording.operations.iter().any(|operation| match operation {
-        crate::model::context::FrameOp::Draw(draw) => draw.fbo == ctx.local.read_fbo,
-        crate::model::context::FrameOp::Blit(blit) => blit.draw_fbo == ctx.local.read_fbo,
-        crate::model::context::FrameOp::CopyTex(_) => false,
-        crate::model::context::FrameOp::TexSubImage(_) => false,
-    });
+    let source_written_in_frame =
+        ctx.local
+            .recording
+            .operations
+            .iter()
+            .any(|operation| match operation {
+                crate::model::context::FrameOp::Draw(draw) => draw.fbo == ctx.local.read_fbo,
+                crate::model::context::FrameOp::Blit(blit) => blit.draw_fbo == ctx.local.read_fbo,
+                crate::model::context::FrameOp::CopyTex(_) => false,
+                crate::model::context::FrameOp::TexSubImage(_) => false,
+            });
     let source_gpu_authoritative = ctx
         .framebuffer_color_texture(ctx.local.read_fbo, 0)
         .is_some_and(|(_, texture)| texture.gpu_authoritative());
@@ -1092,7 +1097,11 @@ pub fn copy_tex_sub_image_2d(
             }
         }
     }
-    let generation = ctx.textures.get(dst).map(|texture| texture.gen).unwrap_or(0);
+    let generation = ctx
+        .textures
+        .get(dst)
+        .map(|texture| texture.gen)
+        .unwrap_or(0);
     let read_target = (ctx.local.read_fbo != 0)
         .then(|| ctx.framebuffer_color_texture(ctx.local.read_fbo, 0))
         .flatten()
@@ -1100,7 +1109,9 @@ pub fn copy_tex_sub_image_2d(
             texture: name,
             generation: texture.gen,
             shared_storage: texture.shared_storage(),
-            shared_revision: texture.shared_current_identity().map(|(_, revision)| revision),
+            shared_revision: texture
+                .shared_current_identity()
+                .map(|(_, revision)| revision),
             width: texture.w,
             height: texture.h,
             format: texture.ir_format,
@@ -1184,7 +1195,13 @@ pub fn copy_tex_image_2d(
         tex_image_2d_target_declared(ctx, target, internalformat, width, height, &[]);
     } else if let Some(face) = face {
         if !ctx.textures.image_cube_level(
-            u64::from(name), face, level as u32, width, height, &[], internalformat,
+            u64::from(name),
+            face,
+            level as u32,
+            width,
+            height,
+            &[],
+            internalformat,
         ) {
             ctx.set_gl_error(GL_INVALID_VALUE);
             return;

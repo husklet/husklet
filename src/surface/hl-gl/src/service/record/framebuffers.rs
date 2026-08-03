@@ -6,15 +6,27 @@ use super::*;
 /// `GL_FRAMEBUFFER` binds both; the split `GL_DRAW_FRAMEBUFFER`/`GL_READ_FRAMEBUFFER` bind one. A recorded
 /// draw's render target follows the draw binding; the read binding is the `glReadPixels`/blit source.
 pub fn bind_framebuffer(ctx: &mut GlContext, target: u32, name: u32) {
-    ctx.local.framebuffers.ensure(name);
     match target {
         GL_FRAMEBUFFER => {
+            ctx.local.framebuffers.ensure(name);
             ctx.local.bound_fbo = name;
             ctx.local.read_fbo = name;
         }
-        GL_DRAW_FRAMEBUFFER => ctx.local.bound_fbo = name,
-        GL_READ_FRAMEBUFFER => ctx.local.read_fbo = name,
+        GL_DRAW_FRAMEBUFFER => {
+            ctx.local.framebuffers.ensure(name);
+            ctx.local.bound_fbo = name;
+        }
+        GL_READ_FRAMEBUFFER => {
+            ctx.local.framebuffers.ensure(name);
+            ctx.local.read_fbo = name;
+        }
         _ => ctx.set_gl_error(GL_INVALID_ENUM),
+    }
+    if matches!(
+        target,
+        GL_FRAMEBUFFER | GL_DRAW_FRAMEBUFFER | GL_READ_FRAMEBUFFER
+    ) {
+        ctx.mark_debug_object_materialized(GL_FRAMEBUFFER, name);
     }
 }
 
@@ -82,12 +94,9 @@ pub fn framebuffer_texture_2d(
                 .then(|| ctx.textures.object(tex))
                 .flatten()
                 .unwrap_or(0);
-            ctx.local.framebuffers.attach_color_object(
-                fbo,
-                index,
-                tex,
-                object,
-            );
+            ctx.local
+                .framebuffers
+                .attach_color_object(fbo, index, tex, object);
             if let Some(retired) = retired {
                 ctx.reclaim_retired_texture_object(retired);
             }
@@ -182,15 +191,14 @@ impl GlContext {
         ] {
             let Some(source) = source else { continue };
             let attachment_info = if point == "colour" {
-                self.framebuffer_color_texture(fbo, 0)
-                    .map(|(_, texture)| {
-                        let samples = source
-                            .1
-                            .then(|| self.renderbuffers.get(source.0).map(|r| r.samples))
-                            .flatten()
-                            .unwrap_or(0);
-                        (texture.w, texture.h, texture.internal_format, samples)
-                    })
+                self.framebuffer_color_texture(fbo, 0).map(|(_, texture)| {
+                    let samples = source
+                        .1
+                        .then(|| self.renderbuffers.get(source.0).map(|r| r.samples))
+                        .flatten()
+                        .unwrap_or(0);
+                    (texture.w, texture.h, texture.internal_format, samples)
+                })
             } else {
                 info(source)
             };
@@ -256,6 +264,7 @@ pub fn bind_renderbuffer(ctx: &mut GlContext, target: u32, name: u32) {
     }
     ctx.renderbuffers.ensure(name);
     ctx.local.bound_rbo = name;
+    ctx.mark_debug_object_materialized(GL_RENDERBUFFER, name);
 }
 
 /// `glRenderbufferStorage(GL_RENDERBUFFER, internalformat, w, h)` — size the bound renderbuffer's backing

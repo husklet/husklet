@@ -377,6 +377,7 @@ impl GlContext {
             },
         );
         self.local.cur_vao = vao;
+        self.mark_debug_object_materialized(glconst::GL_VERTEX_ARRAY_OBJECT, vao);
         match self.local.vaos.get(&vao) {
             Some(v) => {
                 self.local.attr = v.attrs;

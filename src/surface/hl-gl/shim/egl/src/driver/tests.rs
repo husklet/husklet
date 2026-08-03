@@ -221,6 +221,7 @@ fn khr_debug_log_groups_filters_and_label_lifetime_are_observable() {
 
     let mut buffer = 0;
     glGenBuffers(1, &mut buffer);
+    glBindBuffer(GL_ARRAY_BUFFER, buffer);
     let label = b"vertex bytes";
     glObjectLabelKHR(
         GL_BUFFER_OBJECT,
@@ -275,9 +276,10 @@ fn khr_debug_log_groups_filters_and_label_lifetime_are_observable() {
     );
     assert_eq!(glGetError(), GL_INVALID_VALUE);
 
-    let sync = 0x5151usize as *mut c_void;
-    GlobalState::context(|state| {
-        state.gl.syncs.insert(sync as usize, 1);
+    let mut sink = hl_gpu::RecordingSink::with_full_caps();
+    let sync = GlobalState::context(|state| {
+        sync::fence_sync(&mut state.gl, &mut sink, GL_SYNC_GPU_COMMANDS_COMPLETE, 0)
+            .expect("recording sink accepts glFenceSync") as *mut c_void
     });
     glObjectPtrLabelKHR(sync, label.len() as i32, label.as_ptr().cast());
     label_length = 0;
@@ -332,6 +334,59 @@ fn khr_debug_log_groups_filters_and_label_lifetime_are_observable() {
         GL_INVALID_VALUE,
         "actual destruction clears label"
     );
+
+    let vertex = glCreateShader(GL_VERTEX_SHADER);
+    let fragment = glCreateShader(GL_FRAGMENT_SHADER);
+    let vertex_source =
+        std::ffi::CString::new("#version 300 es\nvoid main(){gl_Position=vec4(0.0);}").unwrap();
+    let fragment_source = std::ffi::CString::new(
+        "#version 300 es\nprecision mediump float; out vec4 color; void main(){color=vec4(1.0);}",
+    )
+    .unwrap();
+    let vertex_pointer = vertex_source.as_ptr();
+    let fragment_pointer = fragment_source.as_ptr();
+    glShaderSource(vertex, 1, &vertex_pointer, core::ptr::null());
+    glShaderSource(fragment, 1, &fragment_pointer, core::ptr::null());
+    glCompileShader(vertex);
+    glCompileShader(fragment);
+    let pending_program = glCreateProgram();
+    glAttachShader(pending_program, vertex);
+    glAttachShader(pending_program, fragment);
+    glLinkProgram(pending_program);
+    glUseProgram(pending_program);
+    assert_eq!(glGetError(), GL_NO_ERROR);
+    glObjectLabelKHR(
+        GL_PROGRAM_OBJECT,
+        pending_program,
+        label.len() as i32,
+        label.as_ptr().cast(),
+    );
+    glDeleteProgram(pending_program);
+    glGetObjectLabelKHR(
+        GL_PROGRAM_OBJECT,
+        pending_program,
+        label_output.len() as i32,
+        &mut label_length,
+        label_output.as_mut_ptr(),
+    );
+    assert_eq!(
+        glGetError(),
+        GL_NO_ERROR,
+        "current delete-pending program is live"
+    );
+    glUseProgram(0);
+    glGetObjectLabelKHR(
+        GL_PROGRAM_OBJECT,
+        pending_program,
+        label_output.len() as i32,
+        &mut label_length,
+        label_output.as_mut_ptr(),
+    );
+    assert_eq!(
+        glGetError(),
+        GL_INVALID_VALUE,
+        "unbinding destroys pending program"
+    );
 }
 
 #[test]
@@ -357,6 +412,8 @@ fn khr_debug_local_and_share_group_label_namespaces_do_not_leak() {
     let mut buffer = 0;
     glGenFramebuffers(1, &mut framebuffer);
     glGenBuffers(1, &mut buffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glBindBuffer(GL_ARRAY_BUFFER, buffer);
     glObjectLabelKHR(GL_FRAMEBUFFER, framebuffer, 5, b"first".as_ptr().cast());
     glObjectLabelKHR(GL_BUFFER_OBJECT, buffer, 6, b"shared".as_ptr().cast());
 
@@ -364,6 +421,7 @@ fn khr_debug_local_and_share_group_label_namespaces_do_not_leak() {
     let mut second_framebuffer = 0;
     glGenFramebuffers(1, &mut second_framebuffer);
     assert_eq!(second_framebuffer, framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, second_framebuffer);
     glObjectLabelKHR(
         GL_FRAMEBUFFER,
         second_framebuffer,
@@ -399,6 +457,65 @@ fn khr_debug_local_and_share_group_label_namespaces_do_not_leak() {
         output.as_mut_ptr(),
     );
     assert_eq!(&output[..length as usize], b"first");
+}
+
+#[test]
+fn khr_debug_rejects_reserved_names_until_object_creation() {
+    bind_debug_context();
+    let label = b"materialized";
+    let mut names = [0u32; 7];
+    glGenBuffers(1, &mut names[0]);
+    glGenTextures(1, &mut names[1]);
+    glGenFramebuffers(1, &mut names[2]);
+    glGenVertexArrays(1, &mut names[3]);
+    glGenQueries(1, &mut names[4]);
+    glGenProgramPipelines(1, &mut names[5]);
+    glGenTransformFeedbacks(1, &mut names[6]);
+    let identifiers = [
+        GL_BUFFER_OBJECT,
+        GL_TEXTURE,
+        GL_FRAMEBUFFER,
+        GL_VERTEX_ARRAY_OBJECT,
+        GL_QUERY_OBJECT,
+        GL_PROGRAM_PIPELINE_OBJECT,
+        GL_TRANSFORM_FEEDBACK,
+    ];
+    for (identifier, name) in identifiers.into_iter().zip(names) {
+        glObjectLabelKHR(identifier, name, label.len() as i32, label.as_ptr().cast());
+        assert_eq!(glGetError(), GL_INVALID_VALUE, "{identifier:#x}");
+        let mut length = 0;
+        let mut output = [0u8; 16];
+        glGetObjectLabelKHR(
+            identifier,
+            name,
+            output.len() as i32,
+            &mut length,
+            output.as_mut_ptr(),
+        );
+        assert_eq!(glGetError(), GL_INVALID_VALUE, "get {identifier:#x}");
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, names[0]);
+    glBindTexture(GL_TEXTURE_2D, names[1]);
+    glBindFramebuffer(GL_FRAMEBUFFER, names[2]);
+    glBindVertexArray(names[3]);
+    glBeginQuery(GL_ANY_SAMPLES_PASSED, names[4]);
+    glEndQuery(GL_ANY_SAMPLES_PASSED);
+    glBindProgramPipeline(names[5]);
+    glBindTransformFeedback(GL_TRANSFORM_FEEDBACK, names[6]);
+    for (identifier, name) in identifiers.into_iter().zip(names) {
+        glObjectLabelKHR(identifier, name, label.len() as i32, label.as_ptr().cast());
+        assert_eq!(glGetError(), GL_NO_ERROR, "{identifier:#x}");
+    }
+    let mut sampler = 0;
+    glGenSamplers(1, &mut sampler);
+    glObjectLabelKHR(
+        GL_SAMPLER_OBJECT,
+        sampler,
+        label.len() as i32,
+        label.as_ptr().cast(),
+    );
+    assert_eq!(glGetError(), GL_NO_ERROR, "samplers are created by Gen");
 }
 
 #[test]

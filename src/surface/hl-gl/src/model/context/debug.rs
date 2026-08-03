@@ -117,19 +117,47 @@ impl GlContext {
     }
 
     pub fn debug_object_valid(&self, identifier: u32, name: u32) -> bool {
-        match identifier {
+        let exists = match identifier {
             GL_BUFFER_OBJECT => self.is_buffer_name(name),
             GL_SHADER_OBJECT => self.programs.shader_exists(name),
-            GL_PROGRAM_OBJECT => self.is_program_name(name),
+            GL_PROGRAM_OBJECT => self.programs.contains(name),
             GL_VERTEX_ARRAY_OBJECT => self.is_vertex_array(name),
             GL_QUERY_OBJECT => self.is_query(name),
             GL_PROGRAM_PIPELINE_OBJECT => self.is_program_pipeline(name),
             GL_TRANSFORM_FEEDBACK => self.is_transform_feedback(name),
-            GL_SAMPLER_OBJECT => self.is_sampler_name(name),
+            GL_SAMPLER_OBJECT => {
+                !self.pending_sampler_deletes.contains(&name) && self.samplers.known(name)
+            }
             GL_TEXTURE => self.is_texture_name(name),
             GL_RENDERBUFFER => self.is_renderbuffer(name),
             GL_FRAMEBUFFER => self.has_framebuffer(name),
             _ => false,
+        };
+        if !exists {
+            return false;
+        }
+        matches!(
+            identifier,
+            GL_SHADER_OBJECT | GL_PROGRAM_OBJECT | GL_SAMPLER_OBJECT
+        ) || self.debug_object_materialized(identifier, name)
+    }
+
+    fn debug_object_materialized(&self, identifier: u32, name: u32) -> bool {
+        if Self::local_label_namespace(identifier) {
+            self.local.debug_materialized.contains(&(identifier, name))
+        } else {
+            self.debug_materialized.contains(&(identifier, name))
+        }
+    }
+
+    pub fn mark_debug_object_materialized(&mut self, identifier: u32, name: u32) {
+        if name == 0 {
+            return;
+        }
+        if Self::local_label_namespace(identifier) {
+            self.local.debug_materialized.insert((identifier, name));
+        } else {
+            self.debug_materialized.insert((identifier, name));
         }
     }
     pub fn set_debug_context(&mut self, debug: bool) {
@@ -266,8 +294,10 @@ impl GlContext {
     pub fn clear_object_label(&mut self, identifier: u32, name: u32) {
         if Self::local_label_namespace(identifier) {
             self.local.debug_labels.remove(&(identifier, name));
+            self.local.debug_materialized.remove(&(identifier, name));
         } else {
             self.debug_labels.remove(&(identifier, name));
+            self.debug_materialized.remove(&(identifier, name));
         }
     }
     pub fn object_label(&self, identifier: u32, name: u32) -> &[u8] {

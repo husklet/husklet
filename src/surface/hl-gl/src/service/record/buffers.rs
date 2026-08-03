@@ -6,6 +6,7 @@ pub fn bind_buffer(ctx: &mut GlContext, target: u32, name: u32) -> bool {
         return false;
     }
     ctx.buffers.ensure(name);
+    ctx.mark_debug_object_materialized(GL_BUFFER_OBJECT, name);
     match target {
         GL_ARRAY_BUFFER => ctx.local.array_buffer = name,
         GL_ELEMENT_ARRAY_BUFFER => ctx.local.element_buffer = name,
@@ -81,7 +82,9 @@ impl GlContext {
         self.local
             .indexed_buffers
             .retain(|_, binding| binding.buffer != name);
-        self.local.transform_feedbacks.remove_buffer_from_bound(name);
+        self.local
+            .transform_feedbacks
+            .remove_buffer_from_bound(name);
         for attribute in &mut self.local.attr {
             if attribute.buffer == name {
                 attribute.buffer = 0;

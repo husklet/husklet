@@ -27,9 +27,15 @@ unsafe extern "C" fn callback(
 #[test]
 fn khr_debug_round_trips_through_dlopened_shim_abi() {
     let _serial = SERIAL.lock().unwrap_or_else(|poison| poison.into_inner());
-    let Some(shim) = load() else { return };
+    let shim = load().expect("staged GL/EGL libraries are mandatory for KHR_debug ABI coverage");
 
     let enable = f!(shim.gles, "glEnable", extern "C" fn(u32));
+    let push_group = f!(
+        shim.gles,
+        "glPushDebugGroupKHR",
+        extern "C" fn(u32, u32, i32, *const c_char)
+    );
+    let pop_group = f!(shim.gles, "glPopDebugGroupKHR", extern "C" fn());
     let callback_fn = f!(
         shim.gles,
         "glDebugMessageCallbackKHR",
@@ -65,6 +71,7 @@ fn khr_debug_round_trips_through_dlopened_shim_abi() {
         ) -> u32
     );
     let gen_buffers = f!(shim.gles, "glGenBuffers", extern "C" fn(i32, *mut u32));
+    let bind_buffer = f!(shim.gles, "glBindBuffer", extern "C" fn(u32, u32));
     let object_label = f!(
         shim.gles,
         "glObjectLabelKHR",
@@ -75,7 +82,26 @@ fn khr_debug_round_trips_through_dlopened_shim_abi() {
         "glGetObjectLabelKHR",
         extern "C" fn(u32, u32, i32, *mut i32, *mut c_char)
     );
+    let get_error = f!(shim.gles, "glGetError", extern "C" fn() -> u32);
+    let object_ptr_label = f!(
+        shim.gles,
+        "glObjectPtrLabelKHR",
+        extern "C" fn(*const c_void, i32, *const c_char)
+    );
+    let get_object_ptr_label = f!(
+        shim.gles,
+        "glGetObjectPtrLabelKHR",
+        extern "C" fn(*const c_void, i32, *mut i32, *mut c_char)
+    );
 
+    let group = b"abi group";
+    push_group(
+        GL_DEBUG_SOURCE_APPLICATION,
+        70,
+        group.len() as i32,
+        group.as_ptr().cast(),
+    );
+    pop_group();
     enable(GL_DEBUG_OUTPUT);
     let user = 0x5a5ausize as *const c_void;
     callback_fn(callback as *mut c_void, user);
@@ -155,6 +181,7 @@ fn khr_debug_round_trips_through_dlopened_shim_abi() {
 
     let mut buffer = 0;
     gen_buffers(1, &mut buffer);
+    bind_buffer(GL_ARRAY_BUFFER, buffer);
     object_label(
         GL_BUFFER_OBJECT,
         buffer,
@@ -178,4 +205,15 @@ fn khr_debug_round_trips_through_dlopened_shim_abi() {
         output.as_mut_ptr().cast(),
     );
     assert_eq!(&output[..bytes.len()], &bytes);
+
+    let sync = 0x5151usize as *mut c_void;
+    object_ptr_label(sync, bytes.len() as i32, bytes.as_ptr().cast());
+    assert_eq!(get_error(), GL_INVALID_VALUE);
+    get_object_ptr_label(
+        sync,
+        output.len() as i32,
+        &mut length,
+        output.as_mut_ptr().cast(),
+    );
+    assert_eq!(get_error(), GL_INVALID_VALUE);
 }
