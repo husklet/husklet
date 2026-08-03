@@ -164,9 +164,11 @@ impl Format {
             | T::Rg8Uint
             | T::Rg8Sint
             | T::R32Uint
-            | T::R32Sint => FormatClass::IntegerColor,
-            T::Rg16Float | T::Rgba16Float => FormatClass::FloatColor,
-            T::R32Float | T::Rgba32Float => FormatClass::UnfilterableFloatColor,
+            | T::R32Sint | T::R16Uint | T::R16Sint | T::Rg16Uint | T::Rg16Sint
+            | T::Rgba16Uint | T::Rgba16Sint | T::Rg32Uint | T::Rg32Sint
+            | T::Rgba32Uint | T::Rgba32Sint => FormatClass::IntegerColor,
+            T::R16Float | T::Rg16Float | T::Rgba16Float => FormatClass::FloatColor,
+            T::R32Float | T::Rg32Float | T::Rgba32Float => FormatClass::UnfilterableFloatColor,
             T::Depth32Float | T::Depth24PlusStencil8 => FormatClass::DepthStencil,
             other if other.block_geometry().is_some() => FormatClass::Compressed,
             // Unreachable by construction: every variant above is enumerated. A new wire format reaches
@@ -217,6 +219,9 @@ impl Format {
                 | T::Rgba8Uint
                 | T::Rgba8Sint
                 | T::Rgba16Float
+                | T::Rgba16Uint | T::Rgba16Sint | T::Rg32Uint | T::Rg32Sint
+                | T::Rg32Float
+                | T::Rgba32Uint | T::Rgba32Sint
                 | T::R32Float
                 | T::Rgba32Float,
             ) => format_feature::STORAGE_IMAGE,
@@ -363,6 +368,16 @@ impl Format {
                     | hl_gpu::protocol::model::enums::TextureFormat::Rgba32Sint
                     | hl_gpu::protocol::model::enums::TextureFormat::R32Uint
                     | hl_gpu::protocol::model::enums::TextureFormat::R32Sint
+                    | hl_gpu::protocol::model::enums::TextureFormat::R16Float
+                    | hl_gpu::protocol::model::enums::TextureFormat::R16Uint
+                    | hl_gpu::protocol::model::enums::TextureFormat::R16Sint
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rg16Uint
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rg16Sint
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rgba16Uint
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rgba16Sint
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rg32Float
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rg32Uint
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rg32Sint
             )
         ) {
             buffer |= f::UNIFORM_TEXEL_BUFFER | f::STORAGE_TEXEL_BUFFER;
@@ -378,7 +393,12 @@ impl Format {
         }
         if matches!(
             self.wire(),
-            Some(hl_gpu::protocol::model::enums::TextureFormat::Rg16Float)
+            Some(hl_gpu::protocol::model::enums::TextureFormat::Rg16Float
+                | hl_gpu::protocol::model::enums::TextureFormat::R16Float
+                | hl_gpu::protocol::model::enums::TextureFormat::R16Uint
+                | hl_gpu::protocol::model::enums::TextureFormat::R16Sint
+                | hl_gpu::protocol::model::enums::TextureFormat::Rg16Uint
+                | hl_gpu::protocol::model::enums::TextureFormat::Rg16Sint)
         ) {
             buffer &= !f::STORAGE_TEXEL_BUFFER;
             buffer |= f::UNIFORM_TEXEL_BUFFER;
@@ -473,6 +493,8 @@ mod tests {
                         | T::Rgba8Uint | T::Rgba8Sint | T::R8Uint | T::R8Sint
                         | T::Rg8Uint | T::Rg8Sint | T::Rgba32Uint | T::Rgba32Sint
                         | T::R32Uint | T::R32Sint | T::Rg8Snorm | T::Rgba8Snorm | T::Rg16Float
+                        | T::R16Float | T::R16Uint | T::R16Sint | T::Rg16Uint | T::Rg16Sint
+                        | T::Rgba16Uint | T::Rgba16Sint | T::Rg32Float | T::Rg32Uint | T::Rg32Sint
                 )
             );
             let bits = Format(format).features().buffer
@@ -480,7 +502,7 @@ mod tests {
             assert_eq!(bits != 0, supported, "VkFormat {format}, wire={wire:?}");
             assert_eq!(
                 bits,
-                if matches!(wire, Some(T::Rg16Float)) {
+                if matches!(wire, Some(T::Rg16Float | T::R16Float | T::R16Uint | T::R16Sint | T::Rg16Uint | T::Rg16Sint)) {
                     format_feature::UNIFORM_TEXEL_BUFFER
                 } else if supported {
                     format_feature::UNIFORM_TEXEL_BUFFER | format_feature::STORAGE_TEXEL_BUFFER

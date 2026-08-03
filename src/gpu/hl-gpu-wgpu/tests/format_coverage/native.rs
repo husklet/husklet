@@ -64,6 +64,16 @@ fn native_formats_transfer_roundtrip_exact_bytes() {
         (TextureFormat::Rg8Snorm, &[0x81, 0x7f]),
         (TextureFormat::Rgba8Snorm, &[0x81, 0xc0, 0x40, 0x7f]),
         (TextureFormat::Rg16Float, &[0x00, 0x38, 0x00, 0xb4]),
+        (TextureFormat::R16Float, &[0x00, 0x38]),
+        (TextureFormat::R16Uint, &[0x34, 0x12]),
+        (TextureFormat::R16Sint, &[0xcc, 0xff]),
+        (TextureFormat::Rg16Uint, &[1, 0, 2, 0]),
+        (TextureFormat::Rg16Sint, &[0xff, 0xff, 2, 0]),
+        (TextureFormat::Rgba16Uint, &[1, 0, 2, 0, 3, 0, 4, 0]),
+        (TextureFormat::Rgba16Sint, &[0xff, 0xff, 2, 0, 0xfd, 0xff, 4, 0]),
+        (TextureFormat::Rg32Float, &[0, 0, 0, 0x3f, 0, 0, 0x80, 0xbe]),
+        (TextureFormat::Rg32Uint, &[1, 0, 0, 0, 2, 0, 0, 0]),
+        (TextureFormat::Rg32Sint, &[0xff, 0xff, 0xff, 0xff, 2, 0, 0, 0]),
     ];
     assert_eq!(
         cases.len(),

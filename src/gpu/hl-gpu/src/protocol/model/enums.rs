@@ -45,6 +45,8 @@ u32_enum!(
         // Exact native Metal/WebGPU formats used by Vulkan. Keep these neutral: their numbers are
         // protocol values, not VkFormat or wgpu discriminants.
         Rg8Snorm = 36, Rgba8Snorm = 37, Rg16Float = 38,
+        R16Float = 39, R16Uint = 40, R16Sint = 41, Rg16Uint = 42, Rg16Sint = 43,
+        Rgba16Uint = 44, Rgba16Sint = 45, Rg32Float = 46, Rg32Uint = 47, Rg32Sint = 48,
     } "TextureFormat"
 );
 
@@ -63,11 +65,13 @@ impl TextureFormat {
             | TextureFormat::R8Uint
             | TextureFormat::Rg8Uint
             | TextureFormat::R32Uint
+            | TextureFormat::R16Uint | TextureFormat::Rg16Uint | TextureFormat::Rgba16Uint | TextureFormat::Rg32Uint
             | TextureFormat::Rgba32Uint => TextureNumericClass::Uint,
             TextureFormat::Rgba8Sint
             | TextureFormat::R8Sint
             | TextureFormat::Rg8Sint
             | TextureFormat::R32Sint
+            | TextureFormat::R16Sint | TextureFormat::Rg16Sint | TextureFormat::Rgba16Sint | TextureFormat::Rg32Sint
             | TextureFormat::Rgba32Sint => TextureNumericClass::Sint,
             _ => TextureNumericClass::Float,
         }
@@ -77,6 +81,7 @@ impl TextureFormat {
     pub fn bytes_per_texel(self) -> Option<usize> {
         Some(match self {
             TextureFormat::R8Unorm | TextureFormat::R8Uint | TextureFormat::R8Sint => 1,
+            TextureFormat::R16Float | TextureFormat::R16Uint | TextureFormat::R16Sint => 2,
             TextureFormat::Rg8Unorm
             | TextureFormat::Rg8Snorm
             | TextureFormat::Rg8Uint
@@ -90,8 +95,8 @@ impl TextureFormat {
             | TextureFormat::R32Float
             | TextureFormat::R32Uint
             | TextureFormat::R32Sint => 4,
-            TextureFormat::Rgba8Snorm | TextureFormat::Rg16Float => 4,
-            TextureFormat::Rgba16Float => 8,
+            TextureFormat::Rgba8Snorm | TextureFormat::Rg16Float | TextureFormat::Rg16Uint | TextureFormat::Rg16Sint => 4,
+            TextureFormat::Rgba16Float | TextureFormat::Rgba16Uint | TextureFormat::Rgba16Sint | TextureFormat::Rg32Float | TextureFormat::Rg32Uint | TextureFormat::Rg32Sint => 8,
             TextureFormat::Rgba32Float | TextureFormat::Rgba32Uint | TextureFormat::Rgba32Sint => {
                 16
             }

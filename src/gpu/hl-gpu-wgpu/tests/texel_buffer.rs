@@ -166,8 +166,12 @@ fn run(commands: &[Cmd]) -> (WgpuExecutor, Session) {
 }
 
 fn uniform_texel_load(format: TextureFormat, bytes: Vec<u8>) -> Vec<u8> {
+    uniform_texel_load_shader(format, bytes, UNIFORM.to_vec())
+}
+
+fn uniform_texel_load_shader(format: TextureFormat, bytes: Vec<u8>, spirv: Vec<u32>) -> Vec<u8> {
     let commands = vec![
-        Cmd::CreateShader { id: 1, kind: ShaderPayloadKind::SpirV, spirv: UNIFORM.to_vec() },
+        Cmd::CreateShader { id: 1, kind: ShaderPayloadKind::SpirV, spirv },
         Cmd::CreateComputePipelineLayout(1,
             ComputePipelineDesc { compute: ShaderRef { module: 1, entry: "main".into() }, label: String::new() },
             PipelineLayout { bindings: vec![
@@ -203,6 +207,7 @@ fn vulkan_native_formats_uniform_texel_load_exact_values() {
     assert!((rgba8[0] - 32.0 / 127.0).abs() < 1e-6 && rgba8[3] == 1.0);
     let rg16f = f32s(uniform_texel_load(TextureFormat::Rg16Float, vec![0x00, 0x38, 0x00, 0xb4]));
     assert_eq!(rg16f, [0.5, -0.25, 0.0, 1.0]);
+    assert_eq!(f32s(uniform_texel_load(TextureFormat::R16Float, vec![0x00, 0x38])), [0.5, 0.0, 0.0, 1.0]);
 }
 
 fn pipeline(shader: &[u32], kind: PipelineBindingKind, extra_output: bool) -> Vec<Cmd> {
