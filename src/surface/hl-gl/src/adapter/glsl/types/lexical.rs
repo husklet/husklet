@@ -34,7 +34,15 @@ impl TokenStream {
                     at += 1;
                 }
             } else {
-                at += 1;
+                // `start` and `at` are byte offsets because they are also source-rewrite ranges. Keep
+                // them on UTF-8 boundaries even for input that GLSL will ultimately reject: shader
+                // source is guest-controlled, and slicing one byte into a non-ASCII scalar must not
+                // panic the driver while recovering lexical expression types.
+                at += source[at..]
+                    .chars()
+                    .next()
+                    .map(char::len_utf8)
+                    .unwrap_or(1);
             }
             out.push(Token {
                 text: source[start..at].to_owned(),

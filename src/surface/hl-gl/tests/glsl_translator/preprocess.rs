@@ -597,3 +597,15 @@ fn hostile_shader_source_is_rejected_not_fatal() {
         );
     }
 }
+
+/// Lexical type recovery uses byte offsets as rewrite ranges. A rejected non-ASCII macro identifier must
+/// therefore advance by one Unicode scalar, not one byte: the latter leaves the next token start inside
+/// UTF-8 and used to panic while slicing the guest-controlled shader source.
+#[test]
+fn non_ascii_macro_identifier_does_not_fault_lexical_type_recovery() {
+    let source = "#define \u{e9} 1\nvoid main(){ float value = \u{e9}; }";
+    let _ = glsl::StageSources::new(source, source).uniform_layout();
+    let (vertex, fragment) = glsl::StageSources::new(source, source).translate_render();
+    assert!(vertex.starts_with("#version 460"));
+    assert!(fragment.starts_with("#version 460"));
+}
