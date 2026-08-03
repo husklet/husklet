@@ -128,6 +128,9 @@ pub struct GlTexture {
     /// a 4x4 `Rgba16Float` plane wrote 64 of its 128 bytes, at a stride of four, and returned success.
     /// Every reader and writer of this field asks the texture for its texel size instead.
     pub data: Arc<Vec<u8>>,
+    /// Base-level cube faces in GL order (+X, -X, +Y, -Y, +Z, -Z). `data` remains the canonical 2D
+    /// plane for existing image/FBO paths; cube sampling lowers these six distinct planes as layers.
+    pub(crate) cube_faces: [Option<Arc<Vec<u8>>>; 6],
     pub min_filter: u32,
     pub mag_filter: u32,
     pub wrap_s: u32,
@@ -188,6 +191,7 @@ impl Default for GlTexture {
             w: 0,
             h: 0,
             data: Arc::new(Vec::new()),
+            cube_faces: std::array::from_fn(|_| None),
             min_filter: GL_NEAREST_MIPMAP_LINEAR,
             mag_filter: GL_LINEAR,
             wrap_s: GL_REPEAT,
@@ -210,6 +214,9 @@ impl Default for GlTexture {
 }
 
 impl GlTexture {
+    pub(crate) fn cube_faces(&self) -> &[Option<Arc<Vec<u8>>>; 6] {
+        &self.cube_faces
+    }
     /// The neutral min-filter for this texture's GL min-filter (`gl_shim.c`: Linear for LINEAR /
     /// LINEAR_MIPMAP_*, else Nearest).
     pub fn ir_min_filter(&self) -> Filter {
@@ -674,6 +681,27 @@ impl Textures {
         t.gpu_authoritative = false;
         t.gen = generation;
         !mismatched
+    }
+
+    /// Define one base-level cube face while retaining the other five faces of the same texture object.
+    pub fn image_cube_face(
+        &mut self,
+        name: u32,
+        face: usize,
+        w: i32,
+        h: i32,
+        pixels: &[u8],
+        format: TextureFormat,
+    ) -> bool {
+        if face >= 6 {
+            return false;
+        }
+        let accepted = self.image_2d(name, w, h, pixels, format);
+        if accepted {
+            let t = self.map.get_mut(&name).expect("image_2d materialized texture");
+            t.cube_faces[face] = Some(Arc::clone(&t.data));
+        }
+        accepted
     }
 
     /// `glTexImage2D` at a level ABOVE the base — one image of a mip chain. Stored beside the base image

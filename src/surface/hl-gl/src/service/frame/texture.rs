@@ -93,6 +93,8 @@ pub(super) struct TexBind {
     /// Staging buffers for the mip levels ABOVE the base, as `(buffer, level, width, height)`. EMPTY for
     /// the single-level textures that are the overwhelming majority, so their lowering is unchanged.
     pub(super) mip_stages: Vec<(u32, u32, u32, u32)>,
+    /// Additional base-level cube-face staging buffers as `(buffer, layer)`; layer zero uses `stage_ir`.
+    pub(super) layer_stages: Vec<(u32, u32)>,
     /// Bytes per texel of the staged plane. Four for every normalized shadow; one or two for an integer
     /// format whose texels are stored raw at their own channel count. The upload's row pitch is derived
     /// from this rather than assuming RGBA8, which would read an `R8Uint` plane four times too wide.
@@ -201,6 +203,7 @@ pub(super) fn lower_textures(
                     flip_y: true,
                     swizzle: d.tex_swizzles[unit],
                     mip_stages: Vec::new(),
+                    layer_stages: Vec::new(),
                     bytes_per_texel: 4,
                     layers: 1,
                 });
@@ -238,6 +241,7 @@ pub(super) fn lower_textures(
                             flip_y: true,
                             swizzle: d.tex_swizzles[unit],
                             mip_stages: Vec::new(),
+                            layer_stages: Vec::new(),
                             bytes_per_texel: 4,
                             layers: 1,
                         });
@@ -318,6 +322,7 @@ pub(super) fn lower_textures(
                         flip_y: false,
                         swizzle: d.tex_swizzles[unit],
                         mip_stages: Vec::new(),
+                        layer_stages: Vec::new(),
                         bytes_per_texel: 4,
                         layers: if texture_dim == TextureDim::Cube { 6 } else { 1 },
                     });
@@ -401,6 +406,7 @@ pub(super) fn lower_textures(
                     .cloned()
                     .unwrap_or((t.w, t.h, Arc::clone(&t.data)));
             let mut mip_stages: Vec<(u32, u32, u32, u32)> = Vec::new();
+            let mut layer_stages: Vec<(u32, u32)> = Vec::new();
             // INSTRUMENTED BUILDS ONLY. Both branches, so "no staging write was emitted" can be told
             // apart from "this lowering path never ran". The first is a defect; the second means the
             // trace is in the wrong place, and only reporting both distinguishes them.
@@ -519,8 +525,32 @@ pub(super) fn lower_textures(
                 cmds.push(Cmd::WriteBuffer {
                     id: stage_ir,
                     offset: 0,
-                    data: (*base_data).clone(),
+                    data: if texture_dim == TextureDim::Cube {
+                        t.cube_faces()[0].as_ref().unwrap_or(&base_data).as_ref().clone()
+                    } else {
+                        (*base_data).clone()
+                    },
                 });
+                if texture_dim == TextureDim::Cube {
+                    for (layer, face) in t.cube_faces().iter().enumerate().skip(1) {
+                        let face_ir = ctx.alloc_buffer_ir()?;
+                        let data = face.as_ref().unwrap_or(&base_data);
+                        cmds.push(Cmd::CreateBuffer(
+                            face_ir,
+                            BufferDesc {
+                                size: data.len() as u64,
+                                usage: buffer_usage::COPY_SRC,
+                                label: String::new(),
+                            },
+                        ));
+                        cmds.push(Cmd::WriteBuffer {
+                            id: face_ir,
+                            offset: 0,
+                            data: data.as_ref().clone(),
+                        });
+                        layer_stages.push((face_ir, layer as u32));
+                    }
+                }
                 // One staging buffer per declared level above the base. A host texture must have every
                 // level it declares, so this walks exactly the levels `mip_levels` counted.
                 for (index, (lw, lh, data)) in levels.iter().enumerate().skip(1) {
@@ -558,6 +588,7 @@ pub(super) fn lower_textures(
                 flip_y: false,
                 swizzle: d.tex_swizzles[unit],
                 mip_stages,
+                layer_stages,
                 bytes_per_texel: upload_format.bytes_per_texel().unwrap_or(4) as u32,
                 layers: if texture_dim == TextureDim::Cube { 6 } else { 1 },
             });

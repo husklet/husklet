@@ -626,9 +626,9 @@ pub(super) fn lower_draw_n(
             // GL cube faces are currently represented by one canonical CPU shadow. Initialize every face
             // from that plane so the cube view is complete and deterministic; leaving five layers
             // uninitialized is both invalid sampling state and observably nondeterministic.
-            for layer in 0..tb.layers {
+            for (src, layer) in std::iter::once((tb.stage_ir, 0)).chain(tb.layer_stages.iter().copied()) {
                 copies.push(Enc::CopyBufferToTextureRegion {
-                    src: tb.stage_ir,
+                    src,
                     src_offset: 0,
                     bytes_per_row: tb.w * tb.bytes_per_texel,
                     rows_per_image: tb.h,

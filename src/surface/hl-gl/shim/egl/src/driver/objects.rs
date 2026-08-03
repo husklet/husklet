@@ -390,7 +390,7 @@ pub extern "C" fn glBindTexture(target: u32, texture: u32) {
 #[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glTexImage2D(
-    _target: u32,
+    target: u32,
     level: i32,
     internalformat: i32,
     width: i32,
@@ -431,7 +431,14 @@ pub extern "C" fn glTexImage2D(
             // for the completeness check either way (see `record::tex_image_2d_declared`). It used to be
             // metadata only, so `glTexImage2D(GL_RGBA16F, …, NULL)` — how a render target is allocated
             // through the classic call — produced an eight-bit plane for a texture declared half-float.
-            record::tex_image_2d_declared(ctx, internalformat.max(0) as u32, width, height, &rgba);
+            record::tex_image_2d_target_declared(
+                ctx,
+                target,
+                internalformat.max(0) as u32,
+                width,
+                height,
+                &rgba,
+            );
         })
     });
 }

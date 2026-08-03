@@ -154,6 +154,35 @@ pub fn tex_image_2d_declared(
     tex_internal_format(ctx, internalformat);
 }
 
+/// Target-aware base-level define. Cube-face targets retain six independent planes; ordinary 2D targets
+/// use the established single-plane path.
+pub fn tex_image_2d_target_declared(
+    ctx: &mut GlContext,
+    target: u32,
+    internalformat: u32,
+    w: i32,
+    h: i32,
+    pixels: &[u8],
+) {
+    let Some(face) = cube_face_index(target) else {
+        tex_image_2d_declared(ctx, internalformat, w, h, pixels);
+        return;
+    };
+    let name = ctx.local.tex_unit[ctx.local.active_texture];
+    let format = declared_plane(internalformat);
+    let stored = name != 0 && ctx.textures.image_cube_face(name, face, w, h, pixels, format);
+    tex_internal_format(ctx, internalformat);
+    if name != 0 && !stored {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+    }
+}
+
+fn cube_face_index(target: u32) -> Option<usize> {
+    (GL_TEXTURE_CUBE_MAP_POSITIVE_X..=GL_TEXTURE_CUBE_MAP_NEGATIVE_Z)
+        .contains(&target)
+        .then_some((target - GL_TEXTURE_CUBE_MAP_POSITIVE_X) as usize)
+}
+
 /// Record the SIZED internal format the application declared for the active unit's texture. Kept as
 /// metadata beside the neutral `ir_format` (which stays RGBA8, the plane this model materializes) so a
 /// framebuffer completeness check can ask what the format actually WAS — `GL_SRGB8`, `GL_RGB9_E5`,

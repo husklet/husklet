@@ -29,8 +29,19 @@ fn sampler_cube_lowers_to_six_initialized_cube_layers() {
 
     let texture = context.textures.gen();
     record::bind_texture(&mut context, GL_TEXTURE_CUBE_MAP, texture);
-    let pixels = [0x11, 0x22, 0x33, 0xff].repeat(4);
-    record::tex_image_2d(&mut context, 2, 2, &pixels);
+    let faces = (0..6)
+        .map(|face| [0x11 + face, 0x22, 0x33, 0xff].repeat(4))
+        .collect::<Vec<_>>();
+    for (face, pixels) in faces.iter().enumerate() {
+        record::tex_image_2d_target_declared(
+            &mut context,
+            GL_TEXTURE_CUBE_MAP_POSITIVE_X + face as u32,
+            GL_RGBA,
+            2,
+            2,
+            pixels,
+        );
+    }
     let buffer = context.buffers.gen();
     record::bind_buffer(&mut context, GL_ARRAY_BUFFER, buffer);
     record::buffer_data(&mut context, GL_ARRAY_BUFFER, &[0; 24], 0x88E4);
@@ -51,25 +62,28 @@ fn sampler_cube_lowers_to_six_initialized_cube_layers() {
             _ => None,
         })
         .expect("six-layer cube texture");
-    let staging_ir = batch
+    let staged = batch
         .iter()
-        .find_map(|command| match command {
-            Cmd::WriteBuffer { id, data, .. } if data == &pixels => Some(*id),
+        .filter_map(|command| match command {
+            Cmd::WriteBuffer { id, data, .. } => Some((*id, data)),
             _ => None,
         })
-        .expect("exact cube pixel staging write");
+        .collect::<std::collections::HashMap<_, _>>();
     let layers = submit_ops(batch)
         .iter()
         .filter_map(|operation| match operation {
             Enc::CopyBufferToTextureRegion { src, dst, dst_origin, extent, .. }
-                if *src == staging_ir && *dst == texture_ir && extent.depth == 1 =>
+                if *dst == texture_ir && extent.depth == 1 =>
             {
-                Some(dst_origin.z)
+                Some((dst_origin.z, *src))
             }
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(layers, vec![0, 1, 2, 3, 4, 5]);
+    assert_eq!(layers.iter().map(|(layer, _)| *layer).collect::<Vec<_>>(), vec![0, 1, 2, 3, 4, 5]);
+    for (layer, source) in layers {
+        assert_eq!(staged[&source], &faces[layer as usize]);
+    }
 }
 
 #[test]

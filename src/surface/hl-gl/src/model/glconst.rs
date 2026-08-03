@@ -326,6 +326,12 @@ pub const GL_SAMPLER_CUBE: u32 = 0x8B60;
 
 // glGenerateMipmap texture targets.
 pub const GL_TEXTURE_CUBE_MAP: u32 = 0x8513;
+pub const GL_TEXTURE_CUBE_MAP_POSITIVE_X: u32 = 0x8515;
+pub const GL_TEXTURE_CUBE_MAP_NEGATIVE_X: u32 = 0x8516;
+pub const GL_TEXTURE_CUBE_MAP_POSITIVE_Y: u32 = 0x8517;
+pub const GL_TEXTURE_CUBE_MAP_NEGATIVE_Y: u32 = 0x8518;
+pub const GL_TEXTURE_CUBE_MAP_POSITIVE_Z: u32 = 0x8519;
+pub const GL_TEXTURE_CUBE_MAP_NEGATIVE_Z: u32 = 0x851A;
 
 // GLenum error codes (returned by glGetError; re-declared from result.rs for the model layer).
 pub const GL_NO_ERROR: u32 = 0;
