@@ -52,6 +52,7 @@ u32_enum!(
         Etc2Rgba8Unorm = 54, Etc2Rgba8Srgb = 55, EacR11Unorm = 56, EacR11Snorm = 57,
         EacRg11Unorm = 58, EacRg11Snorm = 59,
         Rgb9e5Ufloat = 60,
+        Rgb10a2Unorm = 61, Rgb10a2Uint = 62, Rg11b10Ufloat = 63,
     } "TextureFormat"
 );
 
@@ -72,6 +73,7 @@ impl TextureFormat {
             | TextureFormat::R32Uint
             | TextureFormat::R16Uint | TextureFormat::Rg16Uint | TextureFormat::Rgba16Uint | TextureFormat::Rg32Uint
             | TextureFormat::Rgba32Uint => TextureNumericClass::Uint,
+            TextureFormat::Rgb10a2Uint => TextureNumericClass::Uint,
             TextureFormat::Rgba8Sint
             | TextureFormat::R8Sint
             | TextureFormat::Rg8Sint
@@ -100,7 +102,8 @@ impl TextureFormat {
             | TextureFormat::R32Float
             | TextureFormat::R32Uint
             | TextureFormat::R32Sint => 4,
-            TextureFormat::Rgb9e5Ufloat => 4,
+            TextureFormat::Rgb9e5Ufloat | TextureFormat::Rgb10a2Unorm
+            | TextureFormat::Rgb10a2Uint | TextureFormat::Rg11b10Ufloat => 4,
             TextureFormat::Rgba8Snorm | TextureFormat::Rg16Float | TextureFormat::Rg16Uint | TextureFormat::Rg16Sint => 4,
             TextureFormat::Rgba16Float | TextureFormat::Rgba16Uint | TextureFormat::Rgba16Sint | TextureFormat::Rg32Float | TextureFormat::Rg32Uint | TextureFormat::Rg32Sint => 8,
             TextureFormat::Rgba32Float | TextureFormat::Rgba32Uint | TextureFormat::Rgba32Sint => {

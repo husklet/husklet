@@ -210,6 +210,10 @@ fn vulkan_native_formats_uniform_texel_load_exact_values() {
     let rg16f = f32s(uniform_texel_load(TextureFormat::Rg16Float, vec![0x00, 0x38, 0x00, 0xb4]));
     assert_eq!(rg16f, [0.5, -0.25, 0.0, 1.0]);
     assert_eq!(f32s(uniform_texel_load(TextureFormat::R16Float, vec![0x00, 0x38])), [0.5, 0.0, 0.0, 1.0]);
+    let rgb10a2 = f32s(uniform_texel_load(TextureFormat::Rgb10a2Unorm, vec![0xff, 0x03, 0x08, 0xc0]));
+    assert_eq!(rgb10a2[0], 1.0);
+    assert!((rgb10a2[1] - 512.0 / 1023.0).abs() < 1e-6 && rgb10a2[2] == 0.0 && rgb10a2[3] == 1.0);
+    assert_eq!(f32s(uniform_texel_load(TextureFormat::Rg11b10Ufloat, vec![0xc0, 0x03, 0x1c, 0x80])), [1.0, 0.5, 2.0, 1.0]);
 }
 
 fn pipeline(shader: &[u32], kind: PipelineBindingKind, extra_output: bool) -> Vec<Cmd> {

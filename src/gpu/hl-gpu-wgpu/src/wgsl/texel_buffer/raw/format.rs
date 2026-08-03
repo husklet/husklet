@@ -10,6 +10,9 @@ pub(super) fn format_shape(format: TextureFormat) -> Result<(naga::ScalarKind, u
         TextureFormat::Rg8Unorm | TextureFormat::Rg8Snorm | TextureFormat::Rg8Uint | TextureFormat::Rg8Sint =>
             (if format == TextureFormat::Rg8Uint { Uint } else if format == TextureFormat::Rg8Sint { Sint } else { Float }, 2),
         TextureFormat::Rgba8Unorm | TextureFormat::Bgra8Unorm | TextureFormat::Rgba8Snorm => (Float, 4),
+        TextureFormat::Rgb10a2Unorm => (Float, 4),
+        TextureFormat::Rgb10a2Uint => (Uint, 4),
+        TextureFormat::Rg11b10Ufloat => (Float, 4),
         TextureFormat::Rg16Float => (Float, 4),
         TextureFormat::R16Float | TextureFormat::R16Uint | TextureFormat::R16Sint =>
             (if format == TextureFormat::R16Uint { Uint } else if format == TextureFormat::R16Sint { Sint } else { Float }, 2),
@@ -79,6 +82,36 @@ pub(super) fn decode(
             let components = (0..4)
                 .map(|component| byte_component(function, words[0], component, format == TextureFormat::Rgba8Sint))
                 .collect();
+            function.expressions.append(Expression::Compose { ty: vec4, components }, Span::default())
+        }
+        TextureFormat::Rgb10a2Unorm | TextureFormat::Rgb10a2Uint => {
+            let widths = [10, 10, 10, 2];
+            let shifts = [0, 10, 20, 30];
+            let mut components = Vec::with_capacity(4);
+            for component in 0..4 {
+                let shift = function.expressions.append(Expression::Literal(naga::Literal::U32(shifts[component])), Span::default());
+                let shifted = function.expressions.append(Expression::Binary { op: naga::BinaryOperator::ShiftRight, left: words[0], right: shift }, Span::default());
+                let max = (1u32 << widths[component]) - 1;
+                let mask = function.expressions.append(Expression::Literal(naga::Literal::U32(max)), Span::default());
+                let bits = function.expressions.append(Expression::Binary { op: naga::BinaryOperator::And, left: shifted, right: mask }, Span::default());
+                let value = if format == TextureFormat::Rgb10a2Uint {
+                    bits
+                } else {
+                    let float = function.expressions.append(Expression::As { expr: bits, kind: naga::ScalarKind::Float, convert: Some(4) }, Span::default());
+                    let max = function.expressions.append(Expression::Literal(naga::Literal::F32(max as f32)), Span::default());
+                    function.expressions.append(Expression::Binary { op: naga::BinaryOperator::Divide, left: float, right: max }, Span::default())
+                };
+                components.push(value);
+            }
+            function.expressions.append(Expression::Compose { ty: vec4, components }, Span::default())
+        }
+        TextureFormat::Rg11b10Ufloat => {
+            let components = vec![
+                decode_unsigned_float(function, words[0], 0, 6),
+                decode_unsigned_float(function, words[0], 11, 6),
+                decode_unsigned_float(function, words[0], 22, 5),
+                scalar_literal(function, naga::ScalarKind::Float, 1),
+            ];
             function.expressions.append(Expression::Compose { ty: vec4, components }, Span::default())
         }
         TextureFormat::R32Float | TextureFormat::R32Uint | TextureFormat::R32Sint => {
@@ -166,6 +199,43 @@ pub(super) fn decode(
     } else {
         Ok(value)
     }
+}
+
+fn decode_unsigned_float(function: &mut naga::Function, word: Handle<Expression>, shift: u32, mantissa_bits: u32) -> Handle<Expression> {
+    let shift = function.expressions.append(Expression::Literal(naga::Literal::U32(shift)), Span::default());
+    let bits = function.expressions.append(Expression::Binary { op: naga::BinaryOperator::ShiftRight, left: word, right: shift }, Span::default());
+    let mantissa_mask = (1u32 << mantissa_bits) - 1;
+    let mask = function.expressions.append(Expression::Literal(naga::Literal::U32(mantissa_mask)), Span::default());
+    let mantissa = function.expressions.append(Expression::Binary { op: naga::BinaryOperator::And, left: bits, right: mask }, Span::default());
+    let exp_shift = function.expressions.append(Expression::Literal(naga::Literal::U32(mantissa_bits)), Span::default());
+    let exponent = function.expressions.append(Expression::Binary { op: naga::BinaryOperator::ShiftRight, left: bits, right: exp_shift }, Span::default());
+    let exp_mask = function.expressions.append(Expression::Literal(naga::Literal::U32(31)), Span::default());
+    let exponent = function.expressions.append(Expression::Binary { op: naga::BinaryOperator::And, left: exponent, right: exp_mask }, Span::default());
+    let mantissa_f = function.expressions.append(Expression::As { expr: mantissa, kind: naga::ScalarKind::Float, convert: Some(4) }, Span::default());
+    let exponent_f = function.expressions.append(Expression::As { expr: exponent, kind: naga::ScalarKind::Float, convert: Some(4) }, Span::default());
+    let scale = function.expressions.append(Expression::Literal(naga::Literal::F32((1u32 << mantissa_bits) as f32)), Span::default());
+    let fraction = function.expressions.append(Expression::Binary { op: naga::BinaryOperator::Divide, left: mantissa_f, right: scale }, Span::default());
+    let one = function.expressions.append(Expression::Literal(naga::Literal::F32(1.0)), Span::default());
+    let significand = function.expressions.append(Expression::Binary { op: naga::BinaryOperator::Add, left: one, right: fraction }, Span::default());
+    let bias = function.expressions.append(Expression::Literal(naga::Literal::F32(15.0)), Span::default());
+    let power = function.expressions.append(Expression::Binary { op: naga::BinaryOperator::Subtract, left: exponent_f, right: bias }, Span::default());
+    let two = function.expressions.append(Expression::Literal(naga::Literal::F32(2.0)), Span::default());
+    let factor = function.expressions.append(Expression::Math { fun: naga::MathFunction::Pow, arg: two, arg1: Some(power), arg2: None, arg3: None }, Span::default());
+    let normal = function.expressions.append(Expression::Binary { op: naga::BinaryOperator::Multiply, left: significand, right: factor }, Span::default());
+    let denorm_scale = 2.0f32.powi(1 - 15 - mantissa_bits as i32);
+    let denorm_scale = function.expressions.append(Expression::Literal(naga::Literal::F32(denorm_scale)), Span::default());
+    let denorm = function.expressions.append(Expression::Binary { op: naga::BinaryOperator::Multiply, left: mantissa_f, right: denorm_scale }, Span::default());
+    let zero_u = function.expressions.append(Expression::Literal(naga::Literal::U32(0)), Span::default());
+    let exp_zero = function.expressions.append(Expression::Binary { op: naga::BinaryOperator::Equal, left: exponent, right: zero_u }, Span::default());
+    let finite = function.expressions.append(Expression::Select { condition: exp_zero, accept: denorm, reject: normal }, Span::default());
+    let mant_shift = function.expressions.append(Expression::Literal(naga::Literal::U32(23 - mantissa_bits)), Span::default());
+    let special_mantissa = function.expressions.append(Expression::Binary { op: naga::BinaryOperator::ShiftLeft, left: mantissa, right: mant_shift }, Span::default());
+    let infinity = function.expressions.append(Expression::Literal(naga::Literal::U32(0x7f80_0000)), Span::default());
+    let special_bits = function.expressions.append(Expression::Binary { op: naga::BinaryOperator::InclusiveOr, left: infinity, right: special_mantissa }, Span::default());
+    let special = function.expressions.append(Expression::As { expr: special_bits, kind: naga::ScalarKind::Float, convert: None }, Span::default());
+    let thirty_one = function.expressions.append(Expression::Literal(naga::Literal::U32(31)), Span::default());
+    let exp_special = function.expressions.append(Expression::Binary { op: naga::BinaryOperator::Equal, left: exponent, right: thirty_one }, Span::default());
+    function.expressions.append(Expression::Select { condition: exp_special, accept: special, reject: finite }, Span::default())
 }
 
 fn unpack_half(function: &mut naga::Function, word: Handle<Expression>) -> Handle<Expression> {

@@ -60,6 +60,7 @@ const FILTERABLE: &[TextureFormat] = &[
     TextureFormat::Rg8Unorm,
     TextureFormat::Rgba16Float,
     TextureFormat::Rgb9e5Ufloat,
+    TextureFormat::Rg11b10Ufloat,
 ];
 
 /// Refuse a region whose subresource does not exist on `image`. A copy is not a clear: clamping a

@@ -153,6 +153,7 @@ pub const NATIVE_FORMATS: &[TextureFormat] = &[
     TextureFormat::Rgba16Uint, TextureFormat::Rgba16Sint,
     TextureFormat::Rg32Float, TextureFormat::Rg32Uint, TextureFormat::Rg32Sint,
     TextureFormat::Rgb9e5Ufloat,
+    TextureFormat::Rgb10a2Unorm, TextureFormat::Rgb10a2Uint, TextureFormat::Rg11b10Ufloat,
 ];
 
 /// The depth/stencil formats a backend can materialize as a real depth target (the software oracle
