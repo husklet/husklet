@@ -294,6 +294,38 @@ mod tests {
     }
 
     #[test]
+    fn every_supported_selected_array_shape_expands_in_both_buffer_modes() {
+        let types = [
+            "float", "vec2", "vec3", "vec4", "int", "ivec2", "ivec3", "ivec4", "uint",
+            "uvec2", "uvec3", "uvec4", "mat2", "mat3", "mat4", "mat2x3", "mat2x4",
+            "mat3x2", "mat3x4", "mat4x2", "mat4x3",
+        ];
+        for ty in types {
+            let source = format!("#version 300 es\nout {ty} v[3]; void main(){{}}");
+            let shape = Shape::of(ty).unwrap();
+            for mode in [GL_INTERLEAVED_ATTRIBS, GL_SEPARATE_ATTRIBS] {
+                let layout =
+                    TransformFeedbackLayout::reflect(&source, &["v[1]".into()], mode).unwrap();
+                assert_eq!(layout.buffers, 1, "{ty} mode={mode:#x}");
+                assert_eq!(layout.strides[0], shape.words() * 4, "{ty} mode={mode:#x}");
+                assert_eq!(layout.varyings[0].size, 1, "{ty} mode={mode:#x}");
+                assert_eq!(layout.scalars.len(), shape.words() as usize, "{ty} mode={mode:#x}");
+                for column in 0..shape.columns {
+                    for row in 0..shape.rows {
+                        let index = (column * shape.rows + row) as usize;
+                        let expected = match (shape.columns, shape.rows) {
+                            (1, 1) => "v[1]".to_string(),
+                            (1, _) => format!("v[1][{row}]"),
+                            _ => format!("v[1][{column}][{row}]"),
+                        };
+                        assert_eq!(layout.scalars[index].expression, expected, "{ty} mode={mode:#x}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn separate_mode_assigns_one_buffer_and_stride_per_varying() {
         let source = "#version 300 es\nout vec2 a; flat out uvec3 b; void main(){}";
         let layout =

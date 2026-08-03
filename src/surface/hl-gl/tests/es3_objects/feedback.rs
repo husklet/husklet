@@ -193,6 +193,52 @@ fn active_feedback_keeps_discarded_draw_and_advances_checked_cursor_and_query() 
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
 }
 
+#[test]
+fn selected_array_element_records_for_every_primitive_and_buffer_mode() {
+    for buffer_mode in [GL_INTERLEAVED_ATTRIBS, GL_SEPARATE_ATTRIBS] {
+        for (primitive_mode, vertex_count) in [(GL_POINTS, 3), (GL_LINES, 4), (GL_TRIANGLES, 6)] {
+            let mut c = ctx();
+            let vs = record::create_shader(&mut c, GL_VERTEX_SHADER);
+            record::shader_source(
+                &mut c,
+                vs,
+                "#version 300 es\nout vec3 v[2]; void main(){ gl_Position=vec4(0.0); v[1]=vec3(float(gl_VertexID)); }",
+            );
+            record::compile_shader(&mut c, vs);
+            let fs = record::create_shader(&mut c, GL_FRAGMENT_SHADER);
+            record::shader_source(
+                &mut c,
+                fs,
+                "#version 300 es\nprecision mediump float; out vec4 c; void main(){ c=vec4(1.0); }",
+            );
+            record::compile_shader(&mut c, fs);
+            let program = record::create_program(&mut c);
+            record::attach_shader(&mut c, program, vs);
+            record::attach_shader(&mut c, program, fs);
+            es3::transform_feedback_varyings(&mut c, program, vec!["v[1]".into()], buffer_mode);
+            assert!(record::link_program(&mut c, program));
+            record::use_program(&mut c, program);
+
+            let buffer = c.buffers.gen();
+            record::bind_buffer(&mut c, GL_TRANSFORM_FEEDBACK_BUFFER, buffer);
+            record::buffer_data(&mut c, GL_TRANSFORM_FEEDBACK_BUFFER, &[0; 128], 0);
+            record::bind_buffer_base(&mut c, GL_TRANSFORM_FEEDBACK_BUFFER, 0, buffer);
+            c.begin_transform_feedback(primitive_mode);
+            c.enable(GL_RASTERIZER_DISCARD);
+            record::draw_arrays(&mut c, primitive_mode, 0, vertex_count);
+            c.end_transform_feedback();
+
+            let capture = c.draws()[0].transform_feedback.as_ref().unwrap();
+            assert_eq!(capture.layout.strides[0], 12);
+            assert_eq!(capture.layout.varyings[0].size, 1);
+            assert_eq!(capture.layout.scalars[0].expression, "v[1][0]");
+            assert_eq!(capture.layout.scalars[2].expression, "v[1][2]");
+            assert_eq!(capture.vertices, vertex_count as u32);
+            assert_eq!(c.take_gl_error(), GL_NO_ERROR);
+        }
+    }
+}
+
 // ---- program pipeline objects --------------------------------------------------------------------
 #[test]
 fn delete_transform_feedback_object_makes_it_no_longer_a_tf() {
