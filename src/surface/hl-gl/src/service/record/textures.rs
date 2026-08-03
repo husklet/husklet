@@ -595,8 +595,8 @@ pub fn tex_image_3d(
 /// bound 2D texture with the already-converted `rgba`, in the texel format of the destination plane
 /// (`w * h * GlTexture::bytes_per_texel`). An upload sized for a different texel is refused rather than
 /// laid down at the wrong stride, so it reaches the application as `GL_INVALID_VALUE`. Honest GL errors: bad `target` →
-/// `GL_INVALID_ENUM`; `level != 0`, negative extent/offset, no/unknown texture, or an out-of-bounds rect
-/// → `GL_INVALID_VALUE`.
+/// `GL_INVALID_ENUM`; a negative level/extent/offset, no/unknown texture, or an out-of-bounds rect →
+/// `GL_INVALID_VALUE`.
 // The arguments intentionally mirror glTexSubImage2D after pixel-format conversion at the ABI adapter.
 #[allow(clippy::too_many_arguments)]
 pub fn tex_sub_image_2d(
@@ -615,18 +615,28 @@ pub fn tex_sub_image_2d(
         return;
     }
     let name = ctx.local.tex_unit[ctx.local.active_texture];
-    if level != 0 || w < 0 || h < 0 || xo < 0 || yo < 0 || name == 0 {
+    if level < 0 || w < 0 || h < 0 || xo < 0 || yo < 0 || name == 0 {
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
     if w == 0 || h == 0 {
         return;
     }
-    let stored = match face {
-        Some(face) => ctx
+    let stored = match (level, face) {
+        (0, Some(face)) => ctx
             .textures
             .sub_image_cube_face(name, face, xo, yo, w, h, rgba),
-        None => ctx.textures.sub_image_2d(name, xo, yo, w, h, rgba),
+        (0, None) => ctx.textures.sub_image_2d(name, xo, yo, w, h, rgba),
+        (level, face) => ctx.textures.sub_image_2d_level(
+            name,
+            face,
+            level as u32,
+            xo,
+            yo,
+            w,
+            h,
+            rgba,
+        ),
     };
     if !stored {
         ctx.set_gl_error(GL_INVALID_VALUE);

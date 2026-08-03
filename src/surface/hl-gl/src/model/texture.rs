@@ -496,6 +496,65 @@ impl GlTexture {
 /// binding, so the first `glGenTextures` through it would hand the application a name that means "unbind"
 /// and every upload would land on the default texture. `next_generation` has the same problem — `0` is
 /// the generation a never-uploaded texture carries. [`Textures::new`] is the only way to build one.
+#[allow(clippy::too_many_arguments)]
+fn sub_rect_fits(
+    plane: &[u8],
+    tw: i32,
+    th: i32,
+    texel: usize,
+    xo: i32,
+    yo: i32,
+    w: i32,
+    h: i32,
+    pixels: &[u8],
+) -> bool {
+    if plane.is_empty() || tw <= 0 || th <= 0 || xo < 0 || yo < 0 || w <= 0 || h <= 0 {
+        return false;
+    }
+    let (tw, th, xo, yo, w, h) = (
+        tw as usize,
+        th as usize,
+        xo as usize,
+        yo as usize,
+        w as usize,
+        h as usize,
+    );
+    tw.checked_mul(th).and_then(|n| n.checked_mul(texel)) == Some(plane.len())
+        && xo.checked_add(w).is_some_and(|end| end <= tw)
+        && yo.checked_add(h).is_some_and(|end| end <= th)
+        && w
+            .checked_mul(h)
+            .and_then(|n| n.checked_mul(texel))
+            .is_some_and(|needed| pixels.len() >= needed)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_sub_rect(
+    plane: &mut Arc<Vec<u8>>,
+    tw: i32,
+    texel: usize,
+    xo: i32,
+    yo: i32,
+    w: i32,
+    h: i32,
+    pixels: &[u8],
+) {
+    let (tw, xo, yo, w, h) = (
+        tw as usize,
+        xo as usize,
+        yo as usize,
+        w as usize,
+        h as usize,
+    );
+    let row_bytes = w * texel;
+    for row in 0..h {
+        let dst = ((yo + row) * tw + xo) * texel;
+        let src = row * row_bytes;
+        Arc::make_mut(plane)[dst..dst + row_bytes]
+            .copy_from_slice(&pixels[src..src + row_bytes]);
+    }
+}
+
 #[derive(Debug)]
 pub struct Textures {
     map: HashMap<u32, GlTexture>,
@@ -814,10 +873,20 @@ impl Textures {
         if level == 0 || level as usize > MAX_LEVELS || w <= 0 || h <= 0 {
             return false;
         }
-        let generation = self.generation();
-        let Some(t) = self.map.get_mut(&name) else {
+        let Some(texel) = self.map.get(&name).map(GlTexture::bytes_per_texel) else {
             return false;
         };
+        let Some(size) = (w as usize)
+            .checked_mul(h as usize)
+            .and_then(|n| n.checked_mul(texel))
+        else {
+            return false;
+        };
+        if !pixels.is_empty() && pixels.len() != size {
+            return false;
+        }
+        let generation = self.generation();
+        let t = self.map.get_mut(&name).expect("texture remained present");
         let index = level as usize - 1;
         if t.mips.len() <= index {
             t.mips.resize(index + 1, MipLevel::default());
@@ -826,7 +895,11 @@ impl Textures {
             w,
             h,
             depth: 1,
-            data: Arc::new(pixels.to_vec()),
+            data: Arc::new(if pixels.is_empty() {
+                vec![0; size]
+            } else {
+                pixels.to_vec()
+            }),
             layers: Vec::new(),
         };
         t.gen = generation;
@@ -848,10 +921,25 @@ impl Textures {
         if face >= 6 || level == 0 || level as usize > MAX_LEVELS || w <= 0 || h <= 0 {
             return false;
         }
-        let generation = self.generation();
-        let Some(texture) = self.map.get_mut(&name) else {
+        let Some(texel) = self.map.get(&name).map(GlTexture::bytes_per_texel) else {
             return false;
         };
+        let Some(size) = (w as usize)
+            .checked_mul(h as usize)
+            .and_then(|n| n.checked_mul(texel))
+        else {
+            return false;
+        };
+        if !pixels.is_empty() && pixels.len() != size {
+            return false;
+        }
+        let data = Arc::new(if pixels.is_empty() {
+            vec![0; size]
+        } else {
+            pixels.to_vec()
+        });
+        let generation = self.generation();
+        let texture = self.map.get_mut(&name).expect("texture remained present");
         let index = level as usize - 1;
         if texture.mips.len() <= index {
             texture.mips.resize(index + 1, MipLevel::default());
@@ -864,9 +952,9 @@ impl Textures {
             mip.layers.resize_with(5, || Arc::new(Vec::new()));
         }
         if face == 0 {
-            mip.data = Arc::new(pixels.to_vec());
+            mip.data = data;
         } else {
-            mip.layers[face - 1] = Arc::new(pixels.to_vec());
+            mip.layers[face - 1] = data;
         }
         texture.gen = generation;
         if texture.cube_mip_descs.len() <= index {
@@ -1325,6 +1413,55 @@ impl Textures {
                 .copy_from_slice(&pixels[src..src + row_bytes]);
         }
         texture.data = Arc::clone(plane);
+        texture.real_pixels = true;
+        texture.gpu_authoritative = false;
+        texture.gen = generation;
+        true
+    }
+
+    /// Overwrite a sub-rectangle of one image above the base level. `face` selects a cube layer; `None`
+    /// selects the ordinary 2D image.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sub_image_2d_level(
+        &mut self,
+        name: u32,
+        face: Option<usize>,
+        level: u32,
+        xo: i32,
+        yo: i32,
+        w: i32,
+        h: i32,
+        pixels: &[u8],
+    ) -> bool {
+        if level == 0 || face.is_some_and(|face| face >= 6) {
+            return false;
+        }
+        let Some(texture) = self.map.get(&name) else {
+            return false;
+        };
+        let Some(mip) = texture.mips.get(level as usize - 1) else {
+            return false;
+        };
+        let plane = match face {
+            None | Some(0) => &mip.data,
+            Some(face) => match mip.layers.get(face - 1) {
+                Some(plane) => plane,
+                None => return false,
+            },
+        };
+        let texel = texture.bytes_per_texel();
+        if !sub_rect_fits(plane, mip.w, mip.h, texel, xo, yo, w, h, pixels) {
+            return false;
+        }
+
+        let generation = self.generation();
+        let texture = self.map.get_mut(&name).expect("texture remained present");
+        let mip = &mut texture.mips[level as usize - 1];
+        let plane = match face {
+            None | Some(0) => &mut mip.data,
+            Some(face) => &mut mip.layers[face - 1],
+        };
+        write_sub_rect(plane, mip.w, texel, xo, yo, w, h, pixels);
         texture.real_pixels = true;
         texture.gpu_authoritative = false;
         texture.gen = generation;

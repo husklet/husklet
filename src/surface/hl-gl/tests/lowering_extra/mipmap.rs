@@ -46,6 +46,32 @@ fn a_mip_chain_keeps_its_base_image_and_every_level() {
 }
 
 #[test]
+fn subimage_updates_nonzero_mip_storage() {
+    let mut c = ctx();
+    let tex = c.textures.gen();
+    record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
+    record::tex_image_2d(&mut c, 4, 4, &[0x10; 4 * 4 * 4]);
+    record::tex_image_2d_level(&mut c, 1, 2, 2, &[]);
+    record::tex_sub_image_2d(
+        &mut c,
+        GL_TEXTURE_2D,
+        1,
+        1,
+        0,
+        1,
+        2,
+        &[0xaa; 2 * 4],
+    );
+
+    let level = &c.textures.get(tex).unwrap().mip_chain()[0];
+    assert_eq!(level.data.len(), 2 * 2 * 4, "NULL define allocated the mip plane");
+    assert_eq!(&level.data[0..4], &[0; 4], "unwritten left texel stays zero");
+    assert_eq!(&level.data[4..8], &[0xaa; 4]);
+    assert_eq!(&level.data[8..12], &[0; 4], "the second row keeps its left texel");
+    assert_eq!(&level.data[12..16], &[0xaa; 4]);
+}
+
+#[test]
 fn a_single_level_texture_declares_one_level_and_no_chain() {
     let mut c = ctx();
     let tex = c.textures.gen();
