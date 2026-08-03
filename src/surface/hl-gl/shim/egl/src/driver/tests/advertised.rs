@@ -44,6 +44,14 @@ fn every_command_of_an_advertised_extension_resolves() {
         "glMapBufferOES",
         "glUnmapBufferOES",
         "glGetBufferPointerv",
+        "glBlendEquationiEXT",
+        "glBlendEquationSeparateiEXT",
+        "glBlendFunciEXT",
+        "glBlendFuncSeparateiEXT",
+        "glColorMaskiEXT",
+        "glEnableiEXT",
+        "glDisableiEXT",
+        "glIsEnablediEXT",
     ] {
         assert!(resolves(name), "{name} is advertised and must resolve");
     }
