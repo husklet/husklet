@@ -11,6 +11,7 @@
 mod gpu_harness;
 use gpu_harness::*;
 
+use hl_gpu::protocol::model::descriptor::Mirror;
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BufferDesc, ColorAttachment, RenderPipelineDesc,
     SamplerDesc, ShaderRef, TextureDesc,
@@ -21,7 +22,6 @@ use hl_gpu::protocol::model::enums::{
 use hl_gpu::protocol::model::kernel::glsl_stage;
 use hl_gpu::{Cmd, CommandBuffer, Enc, ShaderPayloadKind};
 use hl_gpu_wgpu::{DeviceConfig, WgpuExecutor};
-use hl_gpu::protocol::model::descriptor::Mirror;
 
 const LAYERS: [[u8; 4]; 4] = [
     [210, 20, 20, 255],  // layer 0
@@ -228,63 +228,6 @@ fn sampling_an_array_layer_returns_that_layers_texel() {
     eprintln!("demo `array_texture`: all 4 array layers sampled to their exact texels");
 }
 
-/// A BLIT whose source is an ARRAY texture runs, at the base layer both backends support.
-///
-/// It did not. The blit bound the source texture's DEFAULT view, which for an array texture is
-/// `D2Array`, into a bind-group layout declaring `D2` — so every blit from an array or cube source failed
-/// device validation with `InvalidTextureDimension`, regardless of which layer it named, including layer
-/// 0, which is the case both backends otherwise support. Nothing caught it because no test blitted from
-/// an array texture and the differential's blit programs all use plain 2D sources.
-///
-/// A blit addresses ONE layer of each side by definition, so the view now names that layer. That is both
-/// the fix and the more accurate description of the operation.
-///
-/// The destination here is a plain 2D texture on purpose, and the reason is worth recording: an array
-/// texture is denied `RENDER_ATTACHMENT` at creation, on the stated grounds that its default view is not
-/// "a single-layer 2D view a color pass could target". This change makes that premise false — such a view
-/// is exactly what the blit now builds — but widening the usage set touches every array and cube texture
-/// in the driver, not only blit destinations, so it is left alone and written down rather than done at
-/// the end of an audit.
-///
-/// FOLLOW-UP, measured. The premise is false and by a wider margin than the paragraph above supposed: the
-/// IR already carries the layer selector the render pass would need. `CreateTextureView` takes a
-/// `base_layer`/`layer_count` and a `dim`, its result is stored in the SAME resource table as a texture,
-/// and a `ColorAttachment` names it by that id — so a single-layer `D2` view of an array texture is
-/// already expressible and is already a shape wgpu accepts as a colour target. Probed directly, such a
-/// view failed for exactly one reason and it was not the shape: `TextureViewIsNotRenderable { reason:
-/// Usage(..) }`, the parent texture's missing usage bit.
-///
-/// It is still not widened, and the reason moved. It is not that the mechanism is missing; it is that the
-/// software reference refuses to create a layered texture at all ("software: only 2D single-layer
-/// textures"), so every program that used the capability would be executor-only — performed by one
-/// backend and refused by the other, with the differential unable to compare a single one of them. That
-/// is the divergence shape this project spends its nights removing, and it would be self-inflicted. The
-/// reference is the thing to change first, not the usage bit.
-///
-/// What the probe DID justify fixing is beside it: see
-/// `a_texture_that_is_not_a_render_target_is_refused_where_the_caller_can_see_it`.
-///
-/// SECOND FOLLOW-UP, measured, after the reference learned layered textures. The blocker recorded above
-/// no longer holds — the reference creates a layered texture now — and the widening is STILL not done,
-/// because the blocker moved rather than cleared. With the usage granted to a 2D-array texture the
-/// executor serves exactly two new things: a blit into layer 0 of a layered destination, which the
-/// reference already computes correctly, and an explicit single-layer `D2` view of an array texture as a
-/// colour target, which it does not. The array's own default view still fails, so the widening also
-/// requires the attachment guard to refuse a bound view that is not single-layer `D2`, or the
-/// `MissingFeatures(MULTIVIEW)` message comes straight back — the guard consults the grant, so widening
-/// the grant re-opens the path it closed.
-///
-/// The explicit-view half is what the reference cannot follow, and the reason is one layer deeper than
-/// the usage: its texture VIEW is a whole-texture snapshot clone rather than an alias, so it cannot
-/// represent "layer 1 of this texture" at all. That was a live divergence on its own — measured on a
-/// program needing no widening whatever — and is now an honest refusal (`oracle_spec::layered`,
-/// `a_texture_view_is_refused_rather_than_modelled_as_a_copy`), which carries the retirement condition:
-/// the resource table must be able to let two ids name one object.
-///
-/// So the widening's both-sides-servable surface is one case, the blit destination, and it would cost a
-/// grant change plus a new attachment predicate plus a way to keep the executor from accepting the
-/// view case the reference must refuse. That is more machinery than the one case earns, and it would
-/// deliberately suppress a capability the executor genuinely has. Left undone on purpose, again.
 /// A texture that is not a render target is refused by name, not by device validation.
 ///
 /// The creation-time usage rule decides only which textures GET `RENDER_ATTACHMENT`. It is not a guard:
@@ -388,27 +331,37 @@ fn a_texture_that_is_not_a_render_target_is_refused_where_the_caller_can_see_it(
 
     // Positive control FIRST: the ordinary path works, so a refusal below means something.
     run(&mut exec, 1, pass(1)).expect("a plain 2D texture is a colour target");
-    run(&mut exec, 1, pass(2)).expect("a single-layer view of a plain 2D texture is a colour target");
+    run(&mut exec, 1, pass(2))
+        .expect("a single-layer view of a plain 2D texture is a colour target");
     run(&mut exec, 1, blit_into(1)).expect("a plain 2D texture is a blit destination");
 
-    // The array texture, by its default D2Array view: previously `MissingFeatures(MULTIVIEW)`.
-    // The array texture, through a single-layer D2 view: previously `TextureViewIsNotRenderable(Usage)`.
-    // Both are now one answer that names what the caller did.
-    for (target, what) in [(1u32, "the array texture"), (2, "a single-layer view of it")] {
-        for (encoder, path) in [(pass(target), "colour attachment"), (blit_into(target), "blit destination")] {
-            let err = run(&mut exec, 3, encoder).expect_err(
-                "an array texture has no RENDER_ATTACHMENT and must be refused as a render target",
-            );
-            assert!(
-                matches!(err, hl_gpu::GpuError::Invalid(m) if m.contains("not created as a render target")),
-                "{what} as a {path} must be refused by name, got {err:?}"
-            );
-        }
+    // The array's default D2Array view and an explicit single-layer view remain invalid ordinary colour
+    // attachments. A blit into the array itself is different: it stages the named layer through a private
+    // D2 target and copies it back, without granting the default view attachment usage.
+    for (target, what) in [
+        (1u32, "the array texture"),
+        (2, "a single-layer view of it"),
+    ] {
+        let err = run(&mut exec, 3, pass(target))
+            .expect_err("an array texture must remain invalid as an ordinary colour attachment");
+        assert!(
+            matches!(err, hl_gpu::GpuError::Invalid(m) if m.contains("not created as a render target")),
+            "{what} as a colour attachment must be refused by name, got {err:?}"
+        );
     }
+    run(&mut exec, 3, blit_into(1)).expect("a blit stages the array's named destination layer");
+    let err = run(&mut exec, 3, blit_into(2))
+        .expect_err("an explicit view is not the array parent the blit staging path addresses");
+    assert!(
+        matches!(err, hl_gpu::GpuError::Invalid(m) if m.contains("not created as a render target"))
+    );
 }
 
+/// A blit names one array layer, so its sampled view must name that layer rather than the array's default
+/// `D2Array` view. Destinations use a temporary renderable D2 slice and copy it back into the named layer;
+/// this avoids granting the array's default view attachment usage.
 #[test]
-fn a_blit_from_an_array_source_runs_at_the_base_layer() {
+fn a_blit_from_an_array_source_runs_at_the_named_layer() {
     use hl_gpu::protocol::model::descriptor::{Extent3d, Origin3d, TextureSubresource};
     use hl_gpu::protocol::model::enums::TextureAspect;
 
@@ -482,14 +435,8 @@ fn a_blit_from_an_array_source_runs_at_the_base_layer() {
         "a plain 2D source is unaffected"
     );
 
-    // And a non-base layer stays refused, deliberately: the software oracle materializes one plane per
-    // texture and has no array-layer concept, so serving layered blits here alone would make the executor
-    // perform what the reference refuses.
     assert!(
-        matches!(
-            run(&mut exec, array_src, blit(sub(1), sub(0))),
-            Err(hl_gpu::GpuError::Unsupported(_))
-        ),
-        "layer 1 is refused, in agreement with the reference"
+        run(&mut exec, array_src, blit(sub(1), sub(0))).is_ok(),
+        "a blit samples the array layer named by its source subresource"
     );
 }

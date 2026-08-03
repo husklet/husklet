@@ -8,8 +8,8 @@
 //!
 //! What the executor genuinely does with a layered texture was measured before any of this was written,
 //! rather than decided from what the contract ought to be. It clears any layer range; it reads a named
-//! layer out through a region copy; and it refuses a non-base subresource on texture-to-texture copy, on
-//! blit, and on resolve, and refuses a layered render attachment outright. The reference now matches that
+//! layer out through a region copy and blit; and it refuses a non-base subresource on texture-to-texture
+//! copy and resolve, and refuses a layered render attachment outright. The reference now matches that
 //! set on both sides of the line. Matching the refusals matters as much as matching the service: a
 //! reference that accepted what the subject refuses is a false divergence in the other direction.
 
@@ -87,8 +87,16 @@ fn a_clear_writes_the_layers_it_names_and_no_others() {
     let green = vec![0u8, 255, 0, 255];
 
     // Positive control: a range covering the base layer changes it.
-    assert_eq!(program(0, 1), green, "a clear of layer 0 must write layer 0");
-    assert_eq!(program(0, 3), green, "a clear of every layer includes layer 0");
+    assert_eq!(
+        program(0, 1),
+        green,
+        "a clear of layer 0 must write layer 0"
+    );
+    assert_eq!(
+        program(0, 3),
+        green,
+        "a clear of every layer includes layer 0"
+    );
 
     // The real assertion: a range that excludes the base layer must not touch it.
     assert_eq!(
@@ -162,7 +170,7 @@ fn a_layer_range_past_the_end_is_refused_rather_than_clamped() {
 /// The reference refuses a layered texture everywhere the EXECUTOR refuses one, and says so.
 ///
 /// Each of these was measured on the executor directly rather than assumed: a non-base subresource is
-/// `Unsupported` on texture-to-texture copy, on blit and on resolve, and a layered colour attachment is
+/// `Unsupported` on texture-to-texture copy and resolve, and a layered colour attachment is
 /// refused because every render pass there binds the texture's default view, which for an array is a
 /// `D2Array` no colour pass can target.
 ///
@@ -215,29 +223,6 @@ fn the_reference_refuses_a_layered_texture_wherever_the_executor_does() {
             Err(GpuError::Unsupported(_))
         ),
         "a non-base layer copy is refused by the executor and must be refused here"
-    );
-
-    // A non-base LAYER on a blit.
-    assert!(
-        matches!(
-            attempt(
-                COPYABLE,
-                Enc::BlitTexture {
-                    src: 1,
-                    src_sub: layer1,
-                    src_origin: Origin3d::default(),
-                    src_extent: extent,
-                    dst: 2,
-                    dst_sub: base,
-                    dst_origin: Origin3d::default(),
-                    dst_extent: extent,
-                    filter: Filter::Nearest,
-                    mirror: Mirror::NONE,
-                }
-            ),
-            Err(GpuError::Unsupported(_))
-        ),
-        "a non-base layer blit is refused by the executor and must be refused here"
     );
 
     // A LAYERED colour attachment. The reference's rasterizer would happily write layer 0.
@@ -302,8 +287,14 @@ fn a_multisampled_texture_cannot_be_layered() {
         )])
     };
     // Positive controls: each on its own is fine, so the refusal is about the COMBINATION.
-    assert!(msaa(4, 1).is_ok(), "a multisampled single-layer texture is fine");
-    assert!(msaa(1, 4).is_ok(), "a layered single-sampled texture is fine");
+    assert!(
+        msaa(4, 1).is_ok(),
+        "a multisampled single-layer texture is fine"
+    );
+    assert!(
+        msaa(1, 4).is_ok(),
+        "a layered single-sampled texture is fine"
+    );
 
     let err = msaa(4, 2).expect_err("multisampled and layered together is refused");
     assert!(
@@ -450,7 +441,6 @@ fn every_dimension_is_materialized_and_refused_where_the_executor_refuses_it() {
     );
 }
 
-
 /// A texture VIEW is refused, because this reference cannot alias and a snapshot is worse than nothing.
 ///
 /// The base view — whole mip, whole layer — used to be accepted by cloning the texture into the view's
@@ -558,7 +548,10 @@ fn a_multisampled_texture_is_refused_by_a_blit_on_both_sides() {
     };
 
     // Positive control: plain to plain runs, so the refusals are about the sample count.
-    assert!(attempt(blit(2, 2)).is_ok(), "a single-sampled blit must run");
+    assert!(
+        attempt(blit(2, 2)).is_ok(),
+        "a single-sampled blit must run"
+    );
 
     for (op, side) in [(blit(1, 2), "source"), (blit(2, 1), "destination")] {
         let err = attempt(op).expect_err("a multisampled side must be refused");

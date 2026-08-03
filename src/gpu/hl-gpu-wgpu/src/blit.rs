@@ -519,14 +519,23 @@ impl WgpuExecutor {
     ) -> Result<()> {
         let _sp = hl_log::hl_span!(hl_log::tag::WGPU, "blit");
         for sub in [src_sub, dst_sub] {
-            if sub.layer != 0 || sub.aspect != TextureAspect::All {
-                return Err(GpuError::Unsupported("wgpu: non-base layer/aspect blit"));
+            if sub.aspect != TextureAspect::All {
+                return Err(GpuError::Unsupported("wgpu: non-color aspect blit"));
             }
         }
         let source = texture::WgpuTexture::get(res, src)?;
         let destination = texture::WgpuTexture::get(res, dst)?;
         if src_sub.mip >= source.mip_levels || dst_sub.mip >= destination.mip_levels {
             return Err(GpuError::OutOfBounds);
+        }
+        for (texture, sub) in [(source, src_sub), (destination, dst_sub)] {
+            if texture.dim == hl_gpu::protocol::model::enums::TextureDim::D3 {
+                if sub.layer != 0 {
+                    return Err(GpuError::OutOfBounds);
+                }
+            } else if sub.layer >= texture.depth {
+                return Err(GpuError::OutOfBounds);
+            }
         }
         let src_dim = source.dim;
         let dst_dim = destination.dim;
@@ -569,7 +578,8 @@ impl WgpuExecutor {
         // must have a packed COLOR layout — the depth/stencil formats have none and are rejected honestly.
         let (sw, sh, sd, src_fmt, src_wfmt, can_filter) = {
             let t = texture::WgpuTexture::get(res, src)?;
-            if Format::from(t.format).texel_bytes().is_err() && t.format.block_geometry().is_none() {
+            if Format::from(t.format).texel_bytes().is_err() && t.format.block_geometry().is_none()
+            {
                 return Err(GpuError::Unsupported("wgpu: depth/stencil blit source"));
             }
             (
@@ -715,6 +725,9 @@ impl WgpuExecutor {
         let dst_texture = texture::WgpuTexture::get(res, dst)?;
         if !dst_texture.render_attachment
             && dst_texture.dim != hl_gpu::protocol::model::enums::TextureDim::D3
+            && !(dst_texture.depth > 1
+                && dst_texture.usage & hl_gpu::protocol::model::enums::texture_usage::RENDER_TARGET
+                    != 0)
         {
             return Err(GpuError::Invalid(
                 "wgpu: blit destination was not created as a render target",
@@ -763,10 +776,6 @@ impl WgpuExecutor {
         // backends otherwise support. A blit addresses one layer of each side by definition, so naming
         // that layer in the view is both the fix and the more accurate description of the operation.
         //
-        // This deliberately does not unlock `layer != 0`, which is still refused above: the software
-        // oracle materializes one plane per texture and has no array-layer concept, so serving layered
-        // blits here alone would make the executor perform what the reference refuses — a false
-        // divergence in the direction this project has spent the night removing.
         let layer_view = |id: u32,
                           sub: &TextureSubresource,
                           layer: u32,
@@ -820,10 +829,22 @@ impl WgpuExecutor {
             } else {
                 src_origin.z as f32 + z_step
             };
-            let src_z =
-                (source_z.floor() as u32).clamp(src_origin.z, src_origin.z + src_extent.depth - 1);
-            let dst_z = dst_origin.z + dz;
-            let staged = src_dim == hl_gpu::protocol::model::enums::TextureDim::D3;
+            let src_z = if src_dim == hl_gpu::protocol::model::enums::TextureDim::D3 {
+                (source_z.floor() as u32).clamp(src_origin.z, src_origin.z + src_extent.depth - 1)
+            } else {
+                src_sub.layer
+            };
+            let dst_z = if dst_dim == hl_gpu::protocol::model::enums::TextureDim::D3 {
+                dst_origin.z + dz
+            } else {
+                dst_sub.layer
+            };
+            // Array parents deliberately lack RENDER_ATTACHMENT because their default D2Array/Cube view
+            // is not a scalar color target. Stage the named destination layer through a renderable D2
+            // texture, exactly as the 3D-slice path does, then copy it back into that layer.
+            let staged = src_dim == hl_gpu::protocol::model::enums::TextureDim::D3
+                || dst_dim == hl_gpu::protocol::model::enums::TextureDim::D3
+                || dd > 1;
             let (src_view, dst_view, staged_dst) = if staged {
                 let temp = |label, width, height, format, usage| {
                     device.create_texture(&wgpu::TextureDescriptor {

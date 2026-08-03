@@ -102,7 +102,11 @@ fn blit_uses_the_named_source_and_destination_mips() {
         Cmd::CreateTexture(2, destination_texture),
         Cmd::CreateBuffer(1, buf(source.len() as u64, buffer_usage::COPY_SRC)),
         Cmd::CreateBuffer(2, buf(16, buffer_usage::COPY_DST)),
-        Cmd::WriteBuffer { id: 1, offset: 0, data: source },
+        Cmd::WriteBuffer {
+            id: 1,
+            offset: 0,
+            data: source,
+        },
         Cmd::Submit(CommandBuffer {
             encoder: vec![
                 Enc::CopyBufferToTextureRegion {
@@ -111,27 +115,55 @@ fn blit_uses_the_named_source_and_destination_mips() {
                     bytes_per_row: 16,
                     rows_per_image: 4,
                     dst: 1,
-                    dst_sub: TextureSubresource { mip: 1, ..TextureSubresource::base() },
+                    dst_sub: TextureSubresource {
+                        mip: 1,
+                        ..TextureSubresource::base()
+                    },
                     dst_origin: Origin3d::default(),
-                    extent: Extent3d { width: 4, height: 4, depth: 1 },
+                    extent: Extent3d {
+                        width: 4,
+                        height: 4,
+                        depth: 1,
+                    },
                 },
                 Enc::BlitTexture {
                     src: 1,
-                    src_sub: TextureSubresource { mip: 1, ..TextureSubresource::base() },
+                    src_sub: TextureSubresource {
+                        mip: 1,
+                        ..TextureSubresource::base()
+                    },
                     src_origin: Origin3d::default(),
-                    src_extent: Extent3d { width: 4, height: 4, depth: 1 },
+                    src_extent: Extent3d {
+                        width: 4,
+                        height: 4,
+                        depth: 1,
+                    },
                     dst: 2,
-                    dst_sub: TextureSubresource { mip: 2, ..TextureSubresource::base() },
+                    dst_sub: TextureSubresource {
+                        mip: 2,
+                        ..TextureSubresource::base()
+                    },
                     dst_origin: Origin3d::default(),
-                    dst_extent: Extent3d { width: 2, height: 2, depth: 1 },
+                    dst_extent: Extent3d {
+                        width: 2,
+                        height: 2,
+                        depth: 1,
+                    },
                     filter: Filter::Nearest,
                     mirror: Mirror::NONE,
                 },
                 Enc::CopyTextureToBufferRegion {
                     src: 2,
-                    src_sub: TextureSubresource { mip: 2, ..TextureSubresource::base() },
+                    src_sub: TextureSubresource {
+                        mip: 2,
+                        ..TextureSubresource::base()
+                    },
                     src_origin: Origin3d::default(),
-                    extent: Extent3d { width: 2, height: 2, depth: 1 },
+                    extent: Extent3d {
+                        width: 2,
+                        height: 2,
+                        depth: 1,
+                    },
                     dst: 2,
                     dst_offset: 0,
                     bytes_per_row: 8,
@@ -142,8 +174,95 @@ fn blit_uses_the_named_source_and_destination_mips() {
         }),
     ]);
     let mut pixels = vec![0; 16];
-    exec.read_buffer(&s.resources, hl_gpu::BufferId(2), 0, &mut pixels).unwrap();
+    exec.read_buffer(&s.resources, hl_gpu::BufferId(2), 0, &mut pixels)
+        .unwrap();
     assert_eq!(pixels, red.repeat(4));
+}
+
+#[test]
+fn blit_uses_the_named_mip_and_array_layer_together() {
+    let mut texture = tex(
+        8,
+        8,
+        TextureFormat::Rgba8Unorm,
+        texture_usage::COPY_SRC | texture_usage::COPY_DST | texture_usage::RENDER_TARGET,
+    );
+    texture.depth = 6;
+    texture.mip_levels = 4;
+    let cyan = [9, 181, 207, 255];
+    let source = cyan.repeat(16);
+    let layer = |mip| TextureSubresource {
+        mip,
+        layer: 5,
+        ..TextureSubresource::base()
+    };
+    let (exec, s) = run(&[
+        Cmd::CreateTexture(1, texture),
+        Cmd::CreateBuffer(1, buf(source.len() as u64, buffer_usage::COPY_SRC)),
+        Cmd::CreateBuffer(2, buf(16, buffer_usage::COPY_DST)),
+        Cmd::WriteBuffer {
+            id: 1,
+            offset: 0,
+            data: source,
+        },
+        Cmd::Submit(CommandBuffer {
+            encoder: vec![
+                Enc::CopyBufferToTextureRegion {
+                    src: 1,
+                    src_offset: 0,
+                    bytes_per_row: 16,
+                    rows_per_image: 4,
+                    dst: 1,
+                    dst_sub: layer(1),
+                    dst_origin: Origin3d::default(),
+                    extent: Extent3d {
+                        width: 4,
+                        height: 4,
+                        depth: 1,
+                    },
+                },
+                Enc::BlitTexture {
+                    src: 1,
+                    src_sub: layer(1),
+                    src_origin: Origin3d::default(),
+                    src_extent: Extent3d {
+                        width: 4,
+                        height: 4,
+                        depth: 1,
+                    },
+                    dst: 1,
+                    dst_sub: layer(2),
+                    dst_origin: Origin3d::default(),
+                    dst_extent: Extent3d {
+                        width: 2,
+                        height: 2,
+                        depth: 1,
+                    },
+                    filter: Filter::Nearest,
+                    mirror: Mirror::NONE,
+                },
+                Enc::CopyTextureToBufferRegion {
+                    src: 1,
+                    src_sub: layer(2),
+                    src_origin: Origin3d::default(),
+                    extent: Extent3d {
+                        width: 2,
+                        height: 2,
+                        depth: 1,
+                    },
+                    dst: 2,
+                    dst_offset: 0,
+                    bytes_per_row: 8,
+                    rows_per_image: 2,
+                },
+            ],
+            signal: None,
+        }),
+    ]);
+    let mut pixels = vec![0; 16];
+    exec.read_buffer(&s.resources, hl_gpu::BufferId(2), 0, &mut pixels)
+        .unwrap();
+    assert_eq!(pixels, cyan.repeat(4));
 }
 
 /// A MIRRORED blit — the reference side.
@@ -365,7 +484,10 @@ fn a_linear_blit_of_a_float_plane_interpolates_values() {
     }
     let bytes = src.len() as u64;
     let (exec, s) = run(&[
-        Cmd::CreateBuffer(1, buf(bytes, buffer_usage::COPY_SRC | buffer_usage::COPY_DST)),
+        Cmd::CreateBuffer(
+            1,
+            buf(bytes, buffer_usage::COPY_SRC | buffer_usage::COPY_DST),
+        ),
         Cmd::WriteBuffer {
             id: 1,
             offset: 0,
@@ -536,7 +658,6 @@ fn an_integer_plane_cannot_reach_the_linear_filter_because_it_cannot_be_created(
             "refused by the capability set, not by the filter: {refused:?} under {filter:?}"
         );
     }
-
 }
 
 /// A blit between DIFFERENT formats converts, and the two texel sizes need not match.
@@ -701,7 +822,8 @@ fn a_nearest_blit_converts_rather_than_reinterpreting_a_same_size_texel() {
         .expect("the float destination is readable");
     let got = f32::from_le_bytes(out.clone().try_into().expect("four bytes"));
     assert_eq!(
-        got, 1.0,
+        got,
+        1.0,
         "a red unorm texel is 1.0 in a float plane; a byte copy would give {:e}",
         f32::from_le_bytes([255, 0, 0, 255])
     );

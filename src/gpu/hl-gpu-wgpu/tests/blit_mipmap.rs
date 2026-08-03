@@ -89,7 +89,11 @@ fn packed_two_byte_texture_rows_cross_the_default_runtime_alignment() {
                     label: String::new(),
                 },
             ),
-            Cmd::WriteBuffer { id: 1, offset: 0, data: half_one.to_vec() },
+            Cmd::WriteBuffer {
+                id: 1,
+                offset: 0,
+                data: half_one.to_vec(),
+            },
             Cmd::Submit(CommandBuffer {
                 encoder: vec![
                     Enc::CopyBufferToTextureRegion {
@@ -100,13 +104,21 @@ fn packed_two_byte_texture_rows_cross_the_default_runtime_alignment() {
                         dst: 1,
                         dst_sub: sub(0),
                         dst_origin: Origin3d::default(),
-                        extent: Extent3d { width: 1, height: 1, depth: 1 },
+                        extent: Extent3d {
+                            width: 1,
+                            height: 1,
+                            depth: 1,
+                        },
                     },
                     Enc::CopyTextureToBufferRegion {
                         src: 1,
                         src_sub: sub(0),
                         src_origin: Origin3d::default(),
-                        extent: Extent3d { width: 1, height: 1, depth: 1 },
+                        extent: Extent3d {
+                            width: 1,
+                            height: 1,
+                            depth: 1,
+                        },
                         dst: 2,
                         dst_offset: 0,
                         bytes_per_row: 2,
@@ -119,7 +131,9 @@ fn packed_two_byte_texture_rows_cross_the_default_runtime_alignment() {
     )
     .expect("packed R16 texture transfers must use the executor fallback, not fail validation");
     assert_eq!(
-        executor.read_buffer(&session.resources, BufferId(2), 0, 2).unwrap(),
+        executor
+            .read_buffer(&session.resources, BufferId(2), 0, 2)
+            .unwrap(),
         half_one,
     );
 }
@@ -153,7 +167,11 @@ fn blit_reads_and_writes_the_named_mip_levels() {
                     label: String::new(),
                 },
             ),
-            Cmd::WriteBuffer { id: 1, offset: 0, data: source },
+            Cmd::WriteBuffer {
+                id: 1,
+                offset: 0,
+                data: source,
+            },
             Cmd::Submit(CommandBuffer {
                 encoder: vec![
                     Enc::CopyBufferToTextureRegion {
@@ -164,7 +182,11 @@ fn blit_reads_and_writes_the_named_mip_levels() {
                         dst: 1,
                         dst_sub: sub(1),
                         dst_origin: Origin3d::default(),
-                        extent: Extent3d { width: 4, height: 4, depth: 1 },
+                        extent: Extent3d {
+                            width: 4,
+                            height: 4,
+                            depth: 1,
+                        },
                     },
                     Enc::ClearRect {
                         texture: 2,
@@ -181,11 +203,19 @@ fn blit_reads_and_writes_the_named_mip_levels() {
                         src: 1,
                         src_sub: sub(1),
                         src_origin: Origin3d::default(),
-                        src_extent: Extent3d { width: 4, height: 4, depth: 1 },
+                        src_extent: Extent3d {
+                            width: 4,
+                            height: 4,
+                            depth: 1,
+                        },
                         dst: 2,
                         dst_sub: sub(2),
                         dst_origin: Origin3d::default(),
-                        dst_extent: Extent3d { width: 2, height: 2, depth: 1 },
+                        dst_extent: Extent3d {
+                            width: 2,
+                            height: 2,
+                            depth: 1,
+                        },
                         filter: Filter::Nearest,
                         mirror: Mirror::NONE,
                     },
@@ -193,7 +223,11 @@ fn blit_reads_and_writes_the_named_mip_levels() {
                         src: 2,
                         src_sub: sub(2),
                         src_origin: Origin3d::default(),
-                        extent: Extent3d { width: 2, height: 2, depth: 1 },
+                        extent: Extent3d {
+                            width: 2,
+                            height: 2,
+                            depth: 1,
+                        },
                         dst: 2,
                         dst_offset: 0,
                         bytes_per_row: 8,
@@ -206,7 +240,9 @@ fn blit_reads_and_writes_the_named_mip_levels() {
     )
     .expect("non-base mip blit must execute");
     assert_eq!(
-        executor.read_buffer(&session.resources, BufferId(2), 0, 16).unwrap(),
+        executor
+            .read_buffer(&session.resources, BufferId(2), 0, 16)
+            .unwrap(),
         red.repeat(4),
     );
 }
@@ -239,7 +275,11 @@ fn blit_between_disjoint_mips_of_one_texture_is_exact() {
                     label: String::new(),
                 },
             ),
-            Cmd::WriteBuffer { id: 1, offset: 0, data: source },
+            Cmd::WriteBuffer {
+                id: 1,
+                offset: 0,
+                data: source,
+            },
             Cmd::Submit(CommandBuffer {
                 encoder: vec![
                     Enc::CopyBufferToTextureRegion {
@@ -250,17 +290,29 @@ fn blit_between_disjoint_mips_of_one_texture_is_exact() {
                         dst: 1,
                         dst_sub: sub(1),
                         dst_origin: Origin3d::default(),
-                        extent: Extent3d { width: 4, height: 4, depth: 1 },
+                        extent: Extent3d {
+                            width: 4,
+                            height: 4,
+                            depth: 1,
+                        },
                     },
                     Enc::BlitTexture {
                         src: 1,
                         src_sub: sub(1),
                         src_origin: Origin3d::default(),
-                        src_extent: Extent3d { width: 4, height: 4, depth: 1 },
+                        src_extent: Extent3d {
+                            width: 4,
+                            height: 4,
+                            depth: 1,
+                        },
                         dst: 1,
                         dst_sub: sub(2),
                         dst_origin: Origin3d::default(),
-                        dst_extent: Extent3d { width: 2, height: 2, depth: 1 },
+                        dst_extent: Extent3d {
+                            width: 2,
+                            height: 2,
+                            depth: 1,
+                        },
                         filter: Filter::Nearest,
                         mirror: Mirror::NONE,
                     },
@@ -268,7 +320,11 @@ fn blit_between_disjoint_mips_of_one_texture_is_exact() {
                         src: 1,
                         src_sub: sub(2),
                         src_origin: Origin3d::default(),
-                        extent: Extent3d { width: 2, height: 2, depth: 1 },
+                        extent: Extent3d {
+                            width: 2,
+                            height: 2,
+                            depth: 1,
+                        },
                         dst: 2,
                         dst_offset: 0,
                         bytes_per_row: 8,
@@ -281,8 +337,114 @@ fn blit_between_disjoint_mips_of_one_texture_is_exact() {
     )
     .expect("disjoint mip views of one texture must not alias");
     assert_eq!(
-        executor.read_buffer(&session.resources, BufferId(2), 0, 16).unwrap(),
+        executor
+            .read_buffer(&session.resources, BufferId(2), 0, 16)
+            .unwrap(),
         green.repeat(4),
+    );
+}
+
+#[test]
+fn blit_between_mips_of_a_named_array_layer_is_exact() {
+    let mut executor = WgpuExecutor::new(DeviceConfig::default()).expect("Metal adapter");
+    let mut session = session(&executor);
+    let violet = [119, 23, 201, 255];
+    let source = violet.repeat(16);
+    let mut array = texture();
+    array.depth = 6;
+    let layer = |mip| TextureSubresource {
+        mip,
+        layer: 5,
+        aspect: TextureAspect::All,
+    };
+    hl_gpu::runtime::submit(
+        &mut session,
+        &mut executor,
+        0,
+        &[
+            Cmd::CreateTexture(1, array),
+            Cmd::CreateBuffer(
+                1,
+                BufferDesc {
+                    size: source.len() as u64,
+                    usage: buffer_usage::COPY_SRC,
+                    label: String::new(),
+                },
+            ),
+            Cmd::CreateBuffer(
+                2,
+                BufferDesc {
+                    size: 16,
+                    usage: buffer_usage::COPY_DST,
+                    label: String::new(),
+                },
+            ),
+            Cmd::WriteBuffer {
+                id: 1,
+                offset: 0,
+                data: source,
+            },
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::CopyBufferToTextureRegion {
+                        src: 1,
+                        src_offset: 0,
+                        bytes_per_row: 16,
+                        rows_per_image: 4,
+                        dst: 1,
+                        dst_sub: layer(1),
+                        dst_origin: Origin3d::default(),
+                        extent: Extent3d {
+                            width: 4,
+                            height: 4,
+                            depth: 1,
+                        },
+                    },
+                    Enc::BlitTexture {
+                        src: 1,
+                        src_sub: layer(1),
+                        src_origin: Origin3d::default(),
+                        src_extent: Extent3d {
+                            width: 4,
+                            height: 4,
+                            depth: 1,
+                        },
+                        dst: 1,
+                        dst_sub: layer(2),
+                        dst_origin: Origin3d::default(),
+                        dst_extent: Extent3d {
+                            width: 2,
+                            height: 2,
+                            depth: 1,
+                        },
+                        filter: Filter::Nearest,
+                        mirror: Mirror::NONE,
+                    },
+                    Enc::CopyTextureToBufferRegion {
+                        src: 1,
+                        src_sub: layer(2),
+                        src_origin: Origin3d::default(),
+                        extent: Extent3d {
+                            width: 2,
+                            height: 2,
+                            depth: 1,
+                        },
+                        dst: 2,
+                        dst_offset: 0,
+                        bytes_per_row: 8,
+                        rows_per_image: 2,
+                    },
+                ],
+                signal: None,
+            }),
+        ],
+    )
+    .expect("an array layer is one independently addressable Vulkan blit subresource");
+    assert_eq!(
+        executor
+            .read_buffer(&session.resources, BufferId(2), 0, 16)
+            .unwrap(),
+        violet.repeat(4),
     );
 }
 
@@ -302,11 +464,19 @@ fn blit_refuses_a_mip_outside_the_allocated_chain() {
                     src: 1,
                     src_sub: sub(4),
                     src_origin: Origin3d::default(),
-                    src_extent: Extent3d { width: 1, height: 1, depth: 1 },
+                    src_extent: Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth: 1,
+                    },
                     dst: 2,
                     dst_sub: sub(0),
                     dst_origin: Origin3d::default(),
-                    dst_extent: Extent3d { width: 1, height: 1, depth: 1 },
+                    dst_extent: Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth: 1,
+                    },
                     filter: Filter::Nearest,
                     mirror: Mirror::NONE,
                 }],

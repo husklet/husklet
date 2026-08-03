@@ -148,27 +148,42 @@ pub(crate) fn check_blit_subresource(
     origin: &Origin3d,
     extent: &Extent3d,
 ) -> Result<()> {
-    if sub.layer != 0 {
-        return Err(GpuError::Unsupported("software: array-layer texture blit"));
-    }
     if sub.aspect != TextureAspect::All {
-        return Err(GpuError::Unsupported("software: non-color aspect texture blit"));
+        return Err(GpuError::Unsupported(
+            "software: non-color aspect texture blit",
+        ));
     }
     if sub.mip >= texture.levels() {
         return Err(GpuError::OutOfBounds);
     }
     let (width, height) = Texture::level_size(&texture.desc, sub.mip);
-    if origin.x.checked_add(extent.width).is_none_or(|end| end > width)
-        || origin.y.checked_add(extent.height).is_none_or(|end| end > height)
+    if origin
+        .x
+        .checked_add(extent.width)
+        .is_none_or(|end| end > width)
+        || origin
+            .y
+            .checked_add(extent.height)
+            .is_none_or(|end| end > height)
     {
         return Err(GpuError::OutOfBounds);
     }
     let depth = if texture.desc.dim == TextureDim::D3 {
+        if sub.layer != 0 {
+            return Err(GpuError::OutOfBounds);
+        }
         (texture.desc.depth >> sub.mip).max(1)
     } else {
-        texture.desc.depth
+        if sub.layer >= texture.desc.depth {
+            return Err(GpuError::OutOfBounds);
+        }
+        1
     };
-    if origin.z.checked_add(extent.depth).is_none_or(|end| end > depth) {
+    if origin
+        .z
+        .checked_add(extent.depth)
+        .is_none_or(|end| end > depth)
+    {
         return Err(GpuError::OutOfBounds);
     }
     Ok(())
@@ -411,15 +426,29 @@ pub(crate) fn blit_texture(
     // resolves to `plane_at(0, 0)`, which begins at zero and is the full plane, so every 2D blit sees
     // byte-for-byte the arithmetic it saw before slices existed.
     let depth = dst_extent.depth.max(1) as usize;
-    let plane_ranges =
-        |res: &SessionResources, id: u32, mip: u32, base: u32| -> Result<Vec<std::ops::Range<usize>>> {
-            let t = texture(res, id)?;
-            (0..depth)
-                .map(|z| t.plane_at(mip, base + z as u32).ok_or(GpuError::OutOfBounds))
-                .collect()
-        };
-    let src_planes = plane_ranges(res, src, src_sub.mip, src_origin.z)?;
-    let dst_planes = plane_ranges(res, dst, dst_sub.mip, dst_origin.z)?;
+    let plane_ranges = |res: &SessionResources,
+                        id: u32,
+                        mip: u32,
+                        base: u32|
+     -> Result<Vec<std::ops::Range<usize>>> {
+        let t = texture(res, id)?;
+        (0..depth)
+            .map(|z| {
+                t.plane_at(mip, base + z as u32)
+                    .ok_or(GpuError::OutOfBounds)
+            })
+            .collect()
+    };
+    let src_base = src_sub
+        .layer
+        .checked_add(src_origin.z)
+        .ok_or(GpuError::OutOfBounds)?;
+    let dst_base = dst_sub
+        .layer
+        .checked_add(dst_origin.z)
+        .ok_or(GpuError::OutOfBounds)?;
+    let src_planes = plane_ranges(res, src, src_sub.mip, src_base)?;
+    let dst_planes = plane_ranges(res, dst, dst_sub.mip, dst_base)?;
     let t = texture_mut(res, dst)?;
     // A MIRRORED axis reverses the sample coordinate WITHIN the source rect: destination step `d` reads
     // `dext - d - 0.5` steps in instead of `d + 0.5`. Mirroring the coordinate rather than the destination
@@ -546,7 +575,10 @@ pub(crate) fn region_layout(
     // next one — levels are contiguous in this allocation, so that would corrupt a neighbour rather than
     // fail.
     let (lw, lh) = Texture::level_size(&t.desc, sub.mip);
-    let x_end = origin.x.checked_add(extent.width).ok_or(GpuError::OutOfBounds)?;
+    let x_end = origin
+        .x
+        .checked_add(extent.width)
+        .ok_or(GpuError::OutOfBounds)?;
     let y_end = origin
         .y
         .checked_add(extent.height)
@@ -599,7 +631,14 @@ pub(crate) fn copy_buffer_to_texture_region(
 ) -> Result<()> {
     let (plane, row_bytes, stride, _) = {
         let t = texture(res, dst)?;
-        region_layout(t, dst_sub, dst_origin, extent, bytes_per_row, rows_per_image)?
+        region_layout(
+            t,
+            dst_sub,
+            dst_origin,
+            extent,
+            bytes_per_row,
+            rows_per_image,
+        )?
     };
     let bpt = row_bytes / (extent.width as usize).max(1);
     let tw = Texture::level_size(&texture(res, dst)?.desc, dst_sub.mip).0 as usize;
@@ -641,7 +680,14 @@ pub(crate) fn copy_texture_to_buffer_region(
 ) -> Result<()> {
     let (plane, row_bytes, stride, _) = {
         let t = texture(res, src)?;
-        region_layout(t, src_sub, src_origin, extent, bytes_per_row, rows_per_image)?
+        region_layout(
+            t,
+            src_sub,
+            src_origin,
+            extent,
+            bytes_per_row,
+            rows_per_image,
+        )?
     };
     let bpt = row_bytes / (extent.width as usize).max(1);
     let t = texture(res, src)?;
