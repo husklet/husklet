@@ -90,3 +90,22 @@ pub unsafe extern "C" fn cuGraphicsUnregisterResource(resource: *mut c_void) -> 
         Err(error) => DriverStatus::from(&error).code(),
     })
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn cuGraphicsResourceSetMapFlags_v2(resource: *mut c_void, flags: u32) -> i32 {
+    if resource.is_null() { return CUDA_ERROR_INVALID_HANDLE; }
+    ShimState::with_context(|state| match graphics::set_map_flags(&mut state.ctx, GraphicsResource(resource as u64), flags) {
+        Ok(()) => CUDA_SUCCESS,
+        Err(error) => DriverStatus::from(&error).code(),
+    })
+}
+
+/// GL and CUDA replay through Husklet's same single logical GPU, device 0.
+#[no_mangle]
+pub unsafe extern "C" fn cuGLGetDevices_v2(count: *mut u32, devices: *mut i32, capacity: u32, list: u32) -> i32 {
+    if count.is_null() || !(1..=3).contains(&list) || (capacity > 0 && devices.is_null()) { return CUDA_ERROR_INVALID_VALUE; }
+    let written = u32::from(capacity > 0);
+    *count = written;
+    if written != 0 { *devices = 0; }
+    CUDA_SUCCESS
+}

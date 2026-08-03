@@ -26,6 +26,13 @@ cudaGetDeviceProperties_v2
 cudaGetErrorName
 cudaGetErrorString
 cudaGetLastError
+cudaGLSetGLDevice
+cudaGraphicsGLRegisterBuffer
+cudaGraphicsMapResources
+cudaGraphicsResourceGetMappedPointer
+cudaGraphicsResourceSetMapFlags
+cudaGraphicsUnmapResources
+cudaGraphicsUnregisterResource
 cudaHostAlloc
 cudaHostGetDevicePointer
 cudaLaunchKernel

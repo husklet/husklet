@@ -280,6 +280,8 @@ const IMPLEMENTED: &[&str] = &[
     "cuGraphicsResourceGetMappedPointer_v2",
     "cuGraphicsUnmapResources",
     "cuGraphicsUnregisterResource",
+    "cuGraphicsResourceSetMapFlags_v2",
+    "cuGLGetDevices_v2",
     "cuMemFree_v2",
     "cuMemcpyHtoD_v2",
     "cuMemcpyDtoH_v2",

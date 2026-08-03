@@ -13,7 +13,16 @@ pub fn register_buffer(
     let buffer = BufferId(ctx.alloc_buffer());
     let bytes = sink.import_buffer(buffer, export)?;
     let pointer = ctx.mem.insert(buffer.0, bytes);
-    Ok(ctx.graphics.insert(GraphicsBuffer { buffer, export, pointer, bytes, mapped: false }))
+    Ok(ctx.graphics.insert(GraphicsBuffer { buffer, export, pointer, bytes, mapped: false, map_flags: 0 }))
+}
+
+/// Set NONE, READ_ONLY, or WRITE_DISCARD for a registered, currently-unmapped resource.
+pub fn set_map_flags(ctx: &mut CudaContext, resource: GraphicsResource, flags: u32) -> Result<()> {
+    if flags > 2 { return Err(GpuError::Invalid("CUDA graphics map flags")); }
+    let entry = ctx.graphics.get_mut(resource).ok_or(GpuError::Invalid("CUDA graphics resource"))?;
+    if entry.mapped { return Err(GpuError::Invalid("CUDA graphics resource still mapped")); }
+    entry.map_flags = flags;
+    Ok(())
 }
 
 pub fn map_resources(
@@ -137,5 +146,19 @@ mod tests {
         map_resources(&mut ctx, &mut sink, &[resource]).unwrap();
         assert!(unregister_resource(&mut ctx, &mut sink, resource).is_err());
         assert!(ctx.graphics.get(resource).is_some());
+    }
+
+    #[test]
+    fn map_flags_validate_resource_value_and_mapping_state() {
+        let (mut ctx, mut sink) = (context(), Sink::default());
+        let resource = register_buffer(&mut ctx, &mut sink, ExportId(1)).unwrap();
+        set_map_flags(&mut ctx, resource, 2).unwrap();
+        assert_eq!(ctx.graphics.get(resource).unwrap().map_flags, 2);
+        assert!(set_map_flags(&mut ctx, resource, 3).is_err());
+        assert_eq!(ctx.graphics.get(resource).unwrap().map_flags, 2);
+        map_resources(&mut ctx, &mut sink, &[resource]).unwrap();
+        assert!(set_map_flags(&mut ctx, resource, 1).is_err());
+        assert_eq!(ctx.graphics.get(resource).unwrap().map_flags, 2);
+        assert!(set_map_flags(&mut ctx, GraphicsResource(u64::MAX), 0).is_err());
     }
 }

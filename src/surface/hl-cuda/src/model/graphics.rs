@@ -12,6 +12,7 @@ pub struct GraphicsBuffer {
     pub pointer: DevicePtr,
     pub bytes: u64,
     pub mapped: bool,
+    pub map_flags: u32,
 }
 
 #[derive(Default)]
@@ -50,7 +51,7 @@ mod tests {
     use super::*;
 
     fn buffer(id: u32) -> GraphicsBuffer {
-        GraphicsBuffer { buffer: BufferId(id), export: ExportId(id as u64), pointer: DevicePtr(id as u64), bytes: 4, mapped: false }
+        GraphicsBuffer { buffer: BufferId(id), export: ExportId(id as u64), pointer: DevicePtr(id as u64), bytes: 4, mapped: false, map_flags: 0 }
     }
 
     #[test]

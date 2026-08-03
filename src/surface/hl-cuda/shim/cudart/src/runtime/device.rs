@@ -35,6 +35,12 @@ pub extern "C" fn cudaSetDevice(device: i32) -> i32 {
     CUDART_SUCCESS
 }
 
+/// Select the CUDA device used for GL interoperability; the only logical device is device 0.
+#[no_mangle]
+pub extern "C" fn cudaGLSetGLDevice(device: i32) -> i32 {
+    cudaSetDevice(device)
+}
+
 /// `cudaDeviceProp` — a faithful clean-room reconstruction of the CUDA 12.x layout (`driver_types.h`). The
 /// exact `#[repr(C)]` field order/type/size is the load-bearing ABI contract; fields the model does not
 /// populate stay zeroed, which is the spec-faithful "feature absent" answer.

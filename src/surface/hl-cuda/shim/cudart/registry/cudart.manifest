@@ -63,6 +63,8 @@ RT	cudaGraphicsMapResources	cudaError_t	int|count;cudaGraphicsResource**|resourc
 RT	cudaGraphicsResourceGetMappedPointer	cudaError_t	void**|devPtr;size_t*|size;cudaGraphicsResource*|resource
 RT	cudaGraphicsUnmapResources	cudaError_t	int|count;cudaGraphicsResource**|resources;cudaStream_t|stream
 RT	cudaGraphicsUnregisterResource	cudaError_t	cudaGraphicsResource*|resource
+RT	cudaGraphicsResourceSetMapFlags	cudaError_t	cudaGraphicsResource*|resource;unsigned int|flags
+RT	cudaGLSetGLDevice	cudaError_t	int|device
 RT	cudaDeviceReset	cudaError_t
 RT	cudaThreadSynchronize	cudaError_t
 RT	cudaStreamWaitEvent	cudaError_t	cudaStream_t|stream;cudaEvent_t|event;unsigned int|flags

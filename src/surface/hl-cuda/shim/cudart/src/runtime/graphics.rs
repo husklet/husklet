@@ -63,3 +63,12 @@ pub unsafe extern "C" fn cudaGraphicsUnregisterResource(resource: *mut c_void) -
     if resource.is_null() { return CUDART_ERROR_INVALID_RESOURCE_HANDLE; }
     ShimState::with(|state| match graphics::unregister_resource(&mut state.ctx, &mut state.sink, GraphicsResource(resource as u64)) { Ok(()) => CUDART_SUCCESS, Err(e) => state.fail(RuntimeStatus::from(&e).code()) })
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn cudaGraphicsResourceSetMapFlags(resource: *mut c_void, flags: u32) -> i32 {
+    if resource.is_null() { return CUDART_ERROR_INVALID_RESOURCE_HANDLE; }
+    ShimState::with(|state| match graphics::set_map_flags(&mut state.ctx, GraphicsResource(resource as u64), flags) {
+        Ok(()) => CUDART_SUCCESS,
+        Err(error) => state.fail(RuntimeStatus::from(&error).code()),
+    })
+}

@@ -29,8 +29,8 @@ mod tests {
     #[test]
     fn surface_is_complete_and_matches_the_census() {
         assert_eq!(
-            CUDA_DRIVER_ENTRYPOINTS, 137,
-            "CUDA driver surface drifted from the golden 137"
+            CUDA_DRIVER_ENTRYPOINTS, 139,
+            "CUDA driver surface drifted from the golden 139"
         );
         assert_eq!(GENERATED_STUBS + IMPLEMENTED_ENTRYPOINTS, TOTAL_ENTRYPOINTS);
     }

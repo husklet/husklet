@@ -237,6 +237,8 @@ const IMPLEMENTED: &[&str] = &[
     "cudaGraphicsResourceGetMappedPointer",
     "cudaGraphicsUnmapResources",
     "cudaGraphicsUnregisterResource",
+    "cudaGraphicsResourceSetMapFlags",
+    "cudaGLSetGLDevice",
     "cudaFree",
     "cudaMallocManaged",
     "cudaMallocHost",

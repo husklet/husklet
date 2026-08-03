@@ -9,8 +9,8 @@ use super::support::*;
 #[test]
 fn surface_is_complete_and_matches_the_census() {
     assert_eq!(
-        CUDART_ENTRYPOINTS, 54,
-        "CUDA runtime surface drifted from the golden 54"
+        CUDART_ENTRYPOINTS, 56,
+        "CUDA runtime surface drifted from the golden 56"
     );
     assert_eq!(GENERATED_STUBS + IMPLEMENTED_ENTRYPOINTS, TOTAL_ENTRYPOINTS);
     // The whole surface has real hand-written bodies — no generated default stubs remain.
@@ -31,6 +31,12 @@ fn runtime_entry_points_roundtrip() {
     assert_eq!(dev, 0);
     assert_eq!(cudaSetDevice(0), 0);
     assert_eq!(cudaSetDevice(1), CUDART_ERR_INVALID_DEVICE); // no second device
+    assert_eq!(cudaGLSetGLDevice(0), 0);
+    assert_eq!(cudaGLSetGLDevice(1), CUDART_ERR_INVALID_DEVICE);
+    assert_eq!(
+        unsafe { cudaGraphicsResourceSetMapFlags(core::ptr::null_mut(), 0) },
+        CUDART_ERR_INVALID_RESOURCE_HANDLE
+    );
 
     // versions
     let mut ver = 0i32;

@@ -71,6 +71,35 @@ fn bringup_device_and_context_queries() {
     assert_eq!(d, 0);
     assert_eq!(cuDeviceGet(&mut d, 1), CUDA_ERROR_INVALID_VALUE); // no second device
 
+    // GL interop enumerates that same logical device for each defined selector and obeys capacity.
+    for list in 1..=3 {
+        let mut gl_count = u32::MAX;
+        let mut gl_device = -1;
+        assert_eq!(
+            unsafe { cuGLGetDevices_v2(&mut gl_count, &mut gl_device, 1, list) },
+            CUDA_SUCCESS
+        );
+        assert_eq!((gl_count, gl_device), (1, 0));
+    }
+    let mut gl_count = u32::MAX;
+    assert_eq!(
+        unsafe { cuGLGetDevices_v2(&mut gl_count, core::ptr::null_mut(), 0, 1) },
+        CUDA_SUCCESS
+    );
+    assert_eq!(gl_count, 0);
+    assert_eq!(
+        unsafe { cuGLGetDevices_v2(core::ptr::null_mut(), &mut d, 1, 1) },
+        CUDA_ERROR_INVALID_VALUE
+    );
+    assert_eq!(
+        unsafe { cuGLGetDevices_v2(&mut gl_count, &mut d, 1, 0) },
+        CUDA_ERROR_INVALID_VALUE
+    );
+    assert_eq!(
+        unsafe { cuGraphicsResourceSetMapFlags_v2(core::ptr::null_mut(), 0) },
+        CUDA_ERROR_INVALID_HANDLE
+    );
+
     let want = ShimState::with(|s| s.ctx.device.clone());
     let mut name = [0 as c_char; 128];
     assert_eq!(cuDeviceGetName(name.as_mut_ptr(), 128, 0), CUDA_SUCCESS);

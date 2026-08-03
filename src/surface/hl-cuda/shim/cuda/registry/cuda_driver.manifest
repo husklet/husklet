@@ -33,6 +33,8 @@ CU	cuGraphicsMapResources	CUresult	unsigned int|count;CUgraphicsResource*|resour
 CU	cuGraphicsResourceGetMappedPointer_v2	CUresult	CUdeviceptr*|devPtr;size_t*|size;CUgraphicsResource|resource
 CU	cuGraphicsUnmapResources	CUresult	unsigned int|count;CUgraphicsResource*|resources;CUstream|stream
 CU	cuGraphicsUnregisterResource	CUresult	CUgraphicsResource|resource
+CU	cuGraphicsResourceSetMapFlags_v2	CUresult	CUgraphicsResource|resource;unsigned int|flags
+CU	cuGLGetDevices_v2	CUresult	unsigned int*|pCudaDeviceCount;CUdevice*|pCudaDevices;unsigned int|cudaDeviceCount;CUGLDeviceList|deviceList
 CU	cuDeviceGetName	CUresult	char*|name;int|len;CUdevice|dev
 CU	cuDeviceGetPCIBusId	CUresult	char*|s;int|len;CUdevice|dev
 CU	cuDeviceGetProperties	CUresult	CUdevprop*|prop;CUdevice|dev

@@ -53,8 +53,15 @@ cuFuncGetName
 cuFuncSetAttribute
 cuFuncSetCacheConfig
 cuFuncSetSharedMemConfig
+cuGLGetDevices_v2
 cuGetErrorName
 cuGetErrorString
+cuGraphicsGLRegisterBuffer
+cuGraphicsMapResources
+cuGraphicsResourceGetMappedPointer_v2
+cuGraphicsResourceSetMapFlags_v2
+cuGraphicsUnmapResources
+cuGraphicsUnregisterResource
 cuGetProcAddress
 cuGetProcAddress_v2
 cuInit
