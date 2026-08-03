@@ -5,7 +5,7 @@ use naga::{Expression, Handle, Span, Type};
 pub(super) fn format_shape(format: TextureFormat) -> Result<(naga::ScalarKind, u32)> {
     use naga::ScalarKind::{Float, Sint, Uint};
     let shape = match format {
-        TextureFormat::R8Unorm | TextureFormat::R8Uint | TextureFormat::R8Sint =>
+        TextureFormat::R8Unorm | TextureFormat::R8Snorm | TextureFormat::R8Uint | TextureFormat::R8Sint =>
             (if format == TextureFormat::R8Uint { Uint } else if format == TextureFormat::R8Sint { Sint } else { Float }, 1),
         TextureFormat::Rg8Unorm | TextureFormat::Rg8Snorm | TextureFormat::Rg8Uint | TextureFormat::Rg8Sint =>
             (if format == TextureFormat::Rg8Uint { Uint } else if format == TextureFormat::Rg8Sint { Sint } else { Float }, 2),
@@ -51,10 +51,10 @@ pub(super) fn decode(
             },
             Span::default(),
         ),
-        TextureFormat::R8Unorm | TextureFormat::Rg8Unorm | TextureFormat::Rg8Snorm => {
-            let count = if format == TextureFormat::R8Unorm { 1 } else { 2 };
+        TextureFormat::R8Unorm | TextureFormat::R8Snorm | TextureFormat::Rg8Unorm | TextureFormat::Rg8Snorm => {
+            let count = if matches!(format, TextureFormat::R8Unorm | TextureFormat::R8Snorm) { 1 } else { 2 };
             let mut components = (0..count)
-                .map(|component| normalized_byte(function, words[0], index, count, component, format == TextureFormat::Rg8Snorm))
+                .map(|component| normalized_byte(function, words[0], index, count, component, matches!(format, TextureFormat::R8Snorm | TextureFormat::Rg8Snorm)))
                 .collect::<Vec<_>>();
             components.push(scalar_literal(function, naga::ScalarKind::Float, 0));
             if count == 1 {

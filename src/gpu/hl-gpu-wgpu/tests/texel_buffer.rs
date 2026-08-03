@@ -201,6 +201,8 @@ fn uniform_texel_load_shader(format: TextureFormat, bytes: Vec<u8>, spirv: Vec<u
 fn vulkan_native_formats_uniform_texel_load_exact_values() {
     let f32s = |bytes: Vec<u8>| bytes.chunks_exact(4)
         .map(|v| f32::from_le_bytes(v.try_into().unwrap())).collect::<Vec<_>>();
+    let r8 = f32s(uniform_texel_load(TextureFormat::R8Snorm, vec![0xc0]));
+    assert!((r8[0] + 64.0 / 127.0).abs() < 1e-6 && r8[1..] == [0.0, 0.0, 1.0]);
     let rg8 = f32s(uniform_texel_load(TextureFormat::Rg8Snorm, vec![0x40, 0xc0]));
     assert!((rg8[0] - 64.0 / 127.0).abs() < 1e-6 && (rg8[1] + 64.0 / 127.0).abs() < 1e-6 && rg8[2..] == [0.0, 1.0]);
     let rgba8 = f32s(uniform_texel_load(TextureFormat::Rgba8Snorm, vec![0x20, 0x40, 0x60, 0x7f]));

@@ -144,6 +144,7 @@ pub const INTEGER_FORMATS: &[TextureFormat] = &[
 /// Additional formats with exact native wgpu/Metal representations. They are executor-specific rather
 /// than part of `COLOR_FORMATS`: the CPU oracle does not implement their normalized/half-width storage.
 pub const NATIVE_FORMATS: &[TextureFormat] = &[
+    TextureFormat::R8Snorm,
     TextureFormat::Rg8Snorm,
     TextureFormat::Rgba8Snorm,
     TextureFormat::Rg16Float,

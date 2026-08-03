@@ -61,6 +61,7 @@ fn transfer_roundtrip(exec: &mut WgpuExecutor, format: TextureFormat, bytes: &[u
 fn native_formats_transfer_roundtrip_exact_bytes() {
     let mut exec = WgpuExecutor::new(DeviceConfig::default()).expect("wgpu adapter");
     let cases: &[(TextureFormat, &[u8])] = &[
+        (TextureFormat::R8Snorm, &[0x81]),
         (TextureFormat::Rg8Snorm, &[0x81, 0x7f]),
         (TextureFormat::Rgba8Snorm, &[0x81, 0xc0, 0x40, 0x7f]),
         (TextureFormat::Rg16Float, &[0x00, 0x38, 0x00, 0xb4]),

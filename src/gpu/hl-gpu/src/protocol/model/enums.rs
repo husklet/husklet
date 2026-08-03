@@ -47,6 +47,7 @@ u32_enum!(
         Rg8Snorm = 36, Rgba8Snorm = 37, Rg16Float = 38,
         R16Float = 39, R16Uint = 40, R16Sint = 41, Rg16Uint = 42, Rg16Sint = 43,
         Rgba16Uint = 44, Rgba16Sint = 45, Rg32Float = 46, Rg32Uint = 47, Rg32Sint = 48,
+        R8Snorm = 49,
     } "TextureFormat"
 );
 
@@ -80,7 +81,7 @@ impl TextureFormat {
     /// Bytes per texel for the color formats the software backend can materialize.
     pub fn bytes_per_texel(self) -> Option<usize> {
         Some(match self {
-            TextureFormat::R8Unorm | TextureFormat::R8Uint | TextureFormat::R8Sint => 1,
+            TextureFormat::R8Unorm | TextureFormat::R8Snorm | TextureFormat::R8Uint | TextureFormat::R8Sint => 1,
             TextureFormat::R16Float | TextureFormat::R16Uint | TextureFormat::R16Sint => 2,
             TextureFormat::Rg8Unorm
             | TextureFormat::Rg8Snorm

@@ -227,6 +227,7 @@ pub mod vk_format {
     pub const B8G8R8A8_UNORM: u32 = 44;
     pub const B8G8R8A8_SRGB: u32 = 50;
     pub const R8_UNORM: u32 = 9;
+    pub const R8_SNORM: u32 = 10;
     pub const R8G8_UNORM: u32 = 16;
     pub const R8G8_SNORM: u32 = 17;
     pub const R8G8B8A8_SNORM: u32 = 38;
@@ -510,6 +511,7 @@ impl Format {
             vk_format::B8G8R8A8_UNORM => T::Bgra8Unorm,
             vk_format::B8G8R8A8_SRGB => T::Bgra8Srgb,
             vk_format::R8_UNORM => T::R8Unorm,
+            vk_format::R8_SNORM => T::R8Snorm,
             vk_format::R8G8_UNORM => T::Rg8Unorm,
             vk_format::R8G8_SNORM => T::Rg8Snorm,
             vk_format::R8G8B8A8_SNORM => T::Rgba8Snorm,

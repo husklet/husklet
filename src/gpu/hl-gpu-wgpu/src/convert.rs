@@ -27,6 +27,7 @@ impl Format {
             TextureFormat::Rgba8Srgb => W::Rgba8UnormSrgb,
             TextureFormat::Bgra8Srgb => W::Bgra8UnormSrgb,
             TextureFormat::R8Unorm => W::R8Unorm,
+            TextureFormat::R8Snorm => W::R8Snorm,
             TextureFormat::Rg8Unorm => W::Rg8Unorm,
             TextureFormat::Rg8Snorm => W::Rg8Snorm,
             TextureFormat::Rgba8Snorm => W::Rgba8Snorm,
