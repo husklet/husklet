@@ -271,6 +271,90 @@ fn server_and_client_preserve_a_partial_refusal_on_the_wire() {
 }
 
 #[test]
+fn submit_outcome_rebases_partial_sources_after_residency_replay() {
+    fn handshake_then_batch(stream: &mut UnixStream, caps: &Capabilities) -> Vec<Cmd> {
+        hl_gpu::transport::adapter::unix::Connection::new(stream)
+            .write_handshake(caps)
+            .unwrap();
+        let mut header = [0; 16];
+        stream.read_exact(&mut header).unwrap();
+        let len = u32::from_le_bytes(header[12..16].try_into().unwrap()) as usize;
+        let mut body = vec![0; len];
+        stream.read_exact(&mut body).unwrap();
+        hl_gpu::protocol::codec::Decoder::stream(&body).unwrap()
+    }
+
+    let sock = TempSock::new("partial-outcome-rebase");
+    let listener = UnixListener::bind(&sock.0).unwrap();
+    let caps = Capabilities::permissive_fixture("host");
+    let (closed_tx, closed_rx) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let (mut first, _) = listener.accept().unwrap();
+        let first_batch = handshake_then_batch(&mut first, &caps);
+        assert_eq!(first_batch.len(), 1);
+        first.write_all(&[ACK_OK]).unwrap();
+        drop(first);
+        closed_tx.send(()).unwrap();
+
+        let (mut second, _) = listener.accept().unwrap();
+        let replayed = handshake_then_batch(&mut second, &caps);
+        assert_eq!(replayed.len(), 3, "residency prefix plus two current commands");
+        second
+            .write_all(&[ACK_PARTIAL | RefusalKind::Invalid.ack()])
+            .unwrap();
+        hl_gpu::transport::adapter::unix::Connection::new(&second)
+            .write_partial_delta(
+                &[(0, replayed[0].clone()), (2, replayed[2].clone())],
+                &[0, 1, 2],
+                false,
+            )
+            .unwrap();
+    });
+
+    let mut sink = RemoteCommandSink::new(sock.path());
+    sink.submit(&[Cmd::CreateFence(7)]).unwrap();
+    closed_rx.recv().unwrap();
+    let current = [
+        Cmd::Submit(CommandBuffer::default()),
+        Cmd::CreateFence(9),
+    ];
+    let outcome = sink.submit_outcome(&current);
+    assert_eq!(outcome.committed_sources, vec![0, 1], "{:?}", outcome.error);
+    assert_eq!(outcome.replay_commands, vec![(1, Cmd::CreateFence(9))]);
+    assert!(matches!(outcome.error, Some(hl_gpu::GpuError::Partial(_))));
+    drop(sink);
+    server.join().unwrap();
+}
+
+#[test]
+fn submit_outcome_rejects_partial_source_outside_submitted_batch() {
+    let sock = TempSock::new("partial-outcome-bounds");
+    let listener = UnixListener::bind(&sock.0).unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let caps = Capabilities::permissive_fixture("host");
+        serve_connection(&stream, &caps, |_header, _batch: &[Cmd]| {
+            hl_gpu::transport::Verdict::Partial {
+                kind: RefusalKind::Invalid,
+                commands: Vec::new(),
+                sources: vec![9],
+                replayable: false,
+            }
+        })
+        .unwrap();
+    });
+    let mut sink = RemoteCommandSink::new(sock.path());
+    let outcome = sink.submit_outcome(&[Cmd::CreateFence(1)]);
+    assert!(outcome.committed_sources.is_empty());
+    assert!(matches!(
+        outcome.error,
+        Some(hl_gpu::GpuError::Transport(hl_gpu::TransportError::Ambiguous { .. }))
+    ));
+    drop(sink);
+    server.join().unwrap();
+}
+
+#[test]
 fn legacy_partial_error_is_an_ordinary_refusal_without_a_fake_delta() {
     let error = hl_gpu::GpuError::Partial(Box::new(hl_gpu::GpuError::UnknownId {
         kind: "buffer",
