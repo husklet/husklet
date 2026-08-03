@@ -397,6 +397,7 @@ pub extern "C" fn vkCreateSampler(
                 ci.address_mode_v as u32,
                 ci.address_mode_w as u32,
             ],
+            (ci.compare_enable != 0).then_some(ci.compare_op as u32),
         )
     });
     match h {

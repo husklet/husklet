@@ -382,7 +382,7 @@ fn combined_image_sampler_descriptor_lowers_to_texture_and_sampler_binds() {
         1,
     )
     .unwrap();
-    let sampler = create::create_sampler(&mut d, &mut sink, 1, 1, 1, [0, 0, 0]);
+    let sampler = create::create_sampler(&mut d, &mut sink, 1, 1, 1, [0, 0, 0], None);
 
     // A set with a single COMBINED_IMAGE_SAMPLER binding at binding 0.
     let layout = d.create_descriptor_set_layout(vec![LayoutBinding {
@@ -444,7 +444,7 @@ fn separate_sampled_image_and_sampler_descriptors_lower_at_their_own_bindings() 
         1,
     )
     .unwrap();
-    let sampler = create::create_sampler(&mut d, &mut sink, 0, 0, 0, [0, 0, 0]);
+    let sampler = create::create_sampler(&mut d, &mut sink, 0, 0, 0, [0, 0, 0], None);
 
     // A SAMPLED_IMAGE at binding 0 and a separate SAMPLER at binding 1.
     let layout = d.create_descriptor_set_layout(vec![

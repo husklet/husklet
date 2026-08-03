@@ -137,8 +137,19 @@ fn create_sampler_emits_create_sampler() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
     // min=LINEAR(1) mag=LINEAR(1) mip=LINEAR(1) address=REPEAT(0)
-    create::create_sampler(&mut d, &mut sink, 1, 1, 1, [0, 0, 0]);
-    assert!(matches!(sink.batches[0][0], Cmd::CreateSampler(1, _)));
+    create::create_sampler(&mut d, &mut sink, 1, 1, 1, [0, 0, 0], Some(3));
+    match &sink.batches[0][0] {
+        Cmd::CreateSampler(1, desc) => assert_eq!(desc.compare, Some(3)),
+        other => panic!("expected comparison sampler, got {other:?}"),
+    }
+
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    create::create_sampler(&mut d, &mut sink, 1, 1, 1, [0, 0, 0], None);
+    match &sink.batches[0][0] {
+        Cmd::CreateSampler(1, desc) => assert_eq!(desc.compare, None),
+        other => panic!("expected ordinary sampler, got {other:?}"),
+    }
 }
 
 #[test]
@@ -155,7 +166,7 @@ fn image_sampler_and_fence_destruction_release_ir_objects_once() {
         1,
     )
     .unwrap();
-    let sampler = create::create_sampler(&mut d, &mut sink, 0, 0, 0, [0, 0, 0]);
+    let sampler = create::create_sampler(&mut d, &mut sink, 0, 0, 0, [0, 0, 0], None);
     let fence = create::create_fence(&mut d, &mut sink, false).unwrap();
 
     create::destroy_image(&mut d, &mut sink, image).unwrap();

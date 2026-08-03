@@ -516,6 +516,7 @@ pub fn create_sampler(
     vk_mag_filter: u32,
     vk_mipmap_mode: u32,
     vk_address_uvw: [u32; 3],
+    vk_compare: Option<u32>,
 ) -> VkSampler {
     let desc = SamplerDesc {
         min_filter: SamplerFilter::from_vk(vk_min_filter),
@@ -524,6 +525,9 @@ pub fn create_sampler(
         address_u: SamplerAddress::from_vk(vk_address_uvw[0]),
         address_v: SamplerAddress::from_vk(vk_address_uvw[1]),
         address_w: SamplerAddress::from_vk(vk_address_uvw[2]),
+        // VkCompareOp deliberately uses the same stable 0..=7 numbering as the neutral vocabulary.
+        // `None` creates an ordinary sampler; every enabled comparison creates a comparison sampler.
+        compare: vk_compare,
         ..SamplerDesc::default()
     };
     let ir_id = dev.alloc_ir();

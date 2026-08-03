@@ -105,6 +105,8 @@ pub mod format_feature {
     pub const SAMPLED_IMAGE_FILTER_LINEAR: u32 = 0x0000_1000;
     pub const TRANSFER_SRC: u32 = 0x0000_4000;
     pub const TRANSFER_DST: u32 = 0x0000_8000;
+    /// `VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_DEPTH_COMPARISON_BIT`, available only in 64-bit flags2.
+    pub const SAMPLED_IMAGE_DEPTH_COMPARISON: u64 = 0x0000_0002_0000_0000;
 }
 
 /// The three `VkFormatProperties` feature masks for a format: what it supports when linearly tiled,
@@ -115,6 +117,14 @@ pub struct FormatFeatures {
     pub linear_tiling: u32,
     pub optimal_tiling: u32,
     pub buffer: u32,
+}
+
+/// The Vulkan 1.3 / `VK_KHR_format_feature_flags2` form of [`FormatFeatures`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct FormatFeatures2 {
+    pub linear_tiling: u64,
+    pub optimal_tiling: u64,
+    pub buffer: u64,
 }
 
 use crate::model::memory::Format;
@@ -425,6 +435,21 @@ impl Format {
             buffer,
         }
     }
+
+    /// The 64-bit feature view. Vulkan's depth-comparison bit has no legacy 32-bit representation.
+    pub fn features2(&self) -> FormatFeatures2 {
+        let legacy = self.features();
+        let depth_comparison = if self.is_depth() {
+            format_feature::SAMPLED_IMAGE_DEPTH_COMPARISON
+        } else {
+            0
+        };
+        FormatFeatures2 {
+            linear_tiling: u64::from(legacy.linear_tiling),
+            optimal_tiling: u64::from(legacy.optimal_tiling) | depth_comparison,
+            buffer: u64::from(legacy.buffer),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -636,6 +661,36 @@ mod tests {
         ] {
             assert!(Format(format).is_depth(), "VkFormat {format} is not depth");
             assert!(!Format(format).is_color());
+        }
+    }
+
+    #[test]
+    fn only_depth_formats_advertise_depth_comparison_sampling() {
+        for format in [
+            vk_format::D16_UNORM,
+            vk_format::D32_SFLOAT,
+            vk_format::D24_UNORM_S8_UINT,
+        ] {
+            assert_ne!(
+                Format(format).features2().optimal_tiling
+                    & format_feature::SAMPLED_IMAGE_DEPTH_COMPARISON,
+                0,
+                "VkFormat {format}"
+            );
+            assert_eq!(
+                u64::from(Format(format).features().optimal_tiling),
+                Format(format).features2().optimal_tiling
+                    & !format_feature::SAMPLED_IMAGE_DEPTH_COMPARISON,
+                "the extended query may add only the 64-bit comparison bit"
+            );
+        }
+        for format in [vk_format::R8G8B8A8_UNORM, vk_format::R32_SFLOAT, 0] {
+            assert_eq!(
+                Format(format).features2().optimal_tiling
+                    & format_feature::SAMPLED_IMAGE_DEPTH_COMPARISON,
+                0,
+                "non-depth VkFormat {format}"
+            );
         }
     }
 

@@ -17,7 +17,7 @@ fn post_process_chain_ping_pongs_sampler_and_target() {
     let (a_ir, b_ir, c_ir) = (img_ir(&d, a), img_ir(&d, b), img_ir(&d, c));
     let scene = pipeline(&mut d, &mut sink, vec![TextureFormat::Rgba8Unorm], None);
     let blur = pipeline(&mut d, &mut sink, vec![TextureFormat::Rgba8Unorm], None);
-    let sampler = create::create_sampler(&mut d, &mut sink, 1, 1, 1, [0, 0, 0]);
+    let sampler = create::create_sampler(&mut d, &mut sink, 1, 1, 1, [0, 0, 0], None);
 
     // ---- Stage 0: render the scene into A.
     let cb0 = d.allocate_command_buffer();

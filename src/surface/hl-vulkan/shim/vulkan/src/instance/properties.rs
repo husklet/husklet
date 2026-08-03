@@ -317,10 +317,19 @@ pub extern "C" fn vkGetPhysicalDeviceFormatProperties2(
     while let Some(n) = unsafe { node.as_mut() } {
         if n.s_type == VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3 {
             if let Some(p3) = unsafe { (node as *mut VkFormatProperties3).as_mut() } {
-                p3.linear_tiling_features = u64::from(out.format_properties.linear_tiling_features);
-                p3.optimal_tiling_features =
-                    u64::from(out.format_properties.optimal_tiling_features);
-                p3.buffer_features = u64::from(out.format_properties.buffer_features);
+                // The 1.0 query above already applied host-capability negotiation. Preserve a refusal
+                // instead of reintroducing the unnegotiated table through the extended query.
+                let advertised = out.format_properties.linear_tiling_features != 0
+                    || out.format_properties.optimal_tiling_features != 0
+                    || out.format_properties.buffer_features != 0;
+                let features = if advertised {
+                    Format(format as u32).features2()
+                } else {
+                    Default::default()
+                };
+                p3.linear_tiling_features = features.linear_tiling;
+                p3.optimal_tiling_features = features.optimal_tiling;
+                p3.buffer_features = features.buffer;
             }
         }
         node = n.p_next;
@@ -424,6 +433,51 @@ mod tests {
             u64::from(ten.optimal_tiling_features)
         );
         assert_eq!(p3.buffer_features, u64::from(ten.buffer_features));
+    }
+
+    #[test]
+    fn format_properties3_adds_depth_comparison_only_for_depth_formats() {
+        let _g = crate::tests::test_guard();
+        const DEPTH_COMPARISON: u64 = 0x0000_0002_0000_0000;
+
+        for format in [
+            hl_vulkan::model::memory::vk_format::D16_UNORM as i32,
+            hl_vulkan::model::memory::vk_format::D32_SFLOAT as i32,
+            hl_vulkan::model::memory::vk_format::D24_UNORM_S8_UINT as i32,
+        ] {
+            let mut p3: VkFormatProperties3 = unsafe { core::mem::zeroed() };
+            p3.s_type = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3;
+            let mut properties: VkFormatProperties2 = unsafe { core::mem::zeroed() };
+            properties.p_next = &mut p3 as *mut _ as *mut c_void;
+            vkGetPhysicalDeviceFormatProperties2(
+                core::ptr::null_mut(),
+                format,
+                &mut properties as *mut _ as *mut c_void,
+            );
+            assert_ne!(p3.optimal_tiling_features & DEPTH_COMPARISON, 0);
+            assert_eq!(
+                u64::from(properties.format_properties.optimal_tiling_features)
+                    & DEPTH_COMPARISON,
+                0,
+                "the legacy 32-bit query cannot expose a 64-bit feature"
+            );
+        }
+
+        for format in [
+            hl_vulkan::model::memory::vk_format::R8G8B8A8_UNORM as i32,
+            0,
+        ] {
+            let mut p3: VkFormatProperties3 = unsafe { core::mem::zeroed() };
+            p3.s_type = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3;
+            let mut properties: VkFormatProperties2 = unsafe { core::mem::zeroed() };
+            properties.p_next = &mut p3 as *mut _ as *mut c_void;
+            vkGetPhysicalDeviceFormatProperties2(
+                core::ptr::null_mut(),
+                format,
+                &mut properties as *mut _ as *mut c_void,
+            );
+            assert_eq!(p3.optimal_tiling_features & DEPTH_COMPARISON, 0);
+        }
     }
 
     #[test]

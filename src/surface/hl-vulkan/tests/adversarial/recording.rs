@@ -438,7 +438,7 @@ fn separate_image_and_sampler_writes_compose_on_one_binding() {
         1,
     )
     .unwrap();
-    let samp = create::create_sampler(&mut d, &mut s, 1, 1, 1, [0, 0, 0]);
+    let samp = create::create_sampler(&mut d, &mut s, 1, 1, 1, [0, 0, 0], None);
     let img_ir = d.images.get(&img).unwrap().ir_id;
     let samp_ir = d.samplers.get(&samp).unwrap().ir_id;
     let layout = d.create_descriptor_set_layout(vec![LayoutBinding {

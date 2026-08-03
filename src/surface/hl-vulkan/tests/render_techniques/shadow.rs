@@ -39,7 +39,7 @@ fn shadow_mapping_depth_only_pass_then_samples_depth_map() {
     let main = pipeline(&mut d, &mut sink, vec![TextureFormat::Rgba8Unorm], None);
     let scene = sampled_color(&mut d, &mut sink, 800, 600);
     let scene_ir = img_ir(&d, scene);
-    let sampler = create::create_sampler(&mut d, &mut sink, 1, 1, 1, [0, 0, 0]);
+    let sampler = create::create_sampler(&mut d, &mut sink, 1, 1, 1, [0, 0, 0], None);
 
     // ---- Pass 1: depth-only shadow pass. No color attachment, one CLEAR depth attachment.
     let cb1 = d.allocate_command_buffer();

@@ -22,7 +22,7 @@ fn deferred_shading_mrt_gbuffer_then_lighting_samples_three_targets() {
     let light = pipeline(&mut d, &mut sink, vec![TextureFormat::Rgba8Unorm], None);
     let out = sampled_color(&mut d, &mut sink, 128, 128);
     let out_ir = img_ir(&d, out);
-    let sampler = create::create_sampler(&mut d, &mut sink, 1, 1, 1, [0, 0, 0]);
+    let sampler = create::create_sampler(&mut d, &mut sink, 1, 1, 1, [0, 0, 0], None);
 
     // ---- Pass 1: fill the G-buffer with a geometry draw (MRT: 3 color attachments, all CLEAR+STORE).
     let cb1 = d.allocate_command_buffer();
