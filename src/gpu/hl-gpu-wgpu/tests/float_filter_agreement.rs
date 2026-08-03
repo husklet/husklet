@@ -303,3 +303,11 @@ fn metal_executes_r16_snorm_as_a_blit_destination() {
 fn metal_executes_rg16_snorm_as_a_blit_destination() {
     assert_packed_red_blit(TextureFormat::Rg16Snorm, &[0xff, 0x7f, 0, 0]);
 }
+
+#[test]
+fn metal_executes_rgba16_snorm_as_a_blit_destination() {
+    assert_packed_red_blit(
+        TextureFormat::Rgba16Snorm,
+        &[0xff, 0x7f, 0, 0, 0, 0, 0xff, 0x7f],
+    );
+}

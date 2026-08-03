@@ -34,6 +34,7 @@ impl Format {
             TextureFormat::Rg16Float => W::Rg16Float,
             TextureFormat::Rg16Unorm => W::Rg16Unorm,
             TextureFormat::Rg16Snorm => W::Rg16Snorm,
+            TextureFormat::Rgba16Snorm => W::Rgba16Snorm,
             TextureFormat::R16Unorm => W::R16Unorm,
             TextureFormat::R16Snorm => W::R16Snorm,
             TextureFormat::R16Float => W::R16Float,

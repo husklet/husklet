@@ -1810,6 +1810,7 @@ fn every_advertised_native_filterable_format_records_a_linear_blit() {
         vk_format::R16_UNORM,
         vk_format::R16_SNORM,
         vk_format::R16G16_SNORM,
+        vk_format::R16G16B16A16_SNORM,
     ] {
         let mut d = dev();
         let mut s = RecordingSink::with_full_caps();
