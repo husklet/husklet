@@ -308,6 +308,38 @@ fn get_floatv_and_booleanv_read_state() {
 }
 
 #[test]
+fn integer_state_converts_through_float_and_boolean_queries_with_full_arity() {
+    let mut c = ctx_800x600();
+    c.active_texture(GL_TEXTURE0 + 3);
+    record::viewport(&mut c, [0, 20, 320, 240]);
+
+    let mut floats = [-1.0; 4];
+    assert_eq!(query::get_floatv(&c, GL_ACTIVE_TEXTURE, &mut floats), 1);
+    assert_eq!(floats[0], (GL_TEXTURE0 + 3) as f32);
+    assert_eq!(query::get_floatv(&c, GL_VIEWPORT, &mut floats), 4);
+    assert_eq!(floats, [0.0, 20.0, 320.0, 240.0]);
+
+    let mut booleans = [9; 4];
+    assert_eq!(query::get_booleanv(&c, GL_ACTIVE_TEXTURE, &mut booleans), 1);
+    assert_eq!(booleans[0], GL_TRUE as u8);
+    assert_eq!(query::get_booleanv(&c, GL_VIEWPORT, &mut booleans), 4);
+    assert_eq!(
+        booleans,
+        [GL_FALSE as u8, GL_TRUE as u8, GL_TRUE as u8, GL_TRUE as u8]
+    );
+
+    // Capability limits use the same conversion path as mutable state, covering the CTS cases whose
+    // GetIntegerv control already passed while GetFloatv/GetBooleanv returned zero.
+    assert_eq!(query::get_floatv(&c, GL_MAX_TEXTURE_SIZE, &mut floats), 1);
+    assert!(floats[0] > 0.0);
+    assert_eq!(
+        query::get_booleanv(&c, GL_MAX_TEXTURE_SIZE, &mut booleans),
+        1
+    );
+    assert_eq!(booleans[0], GL_TRUE as u8);
+}
+
+#[test]
 fn webgl_range_and_color_mask_queries_have_complete_arity() {
     let c = ctx_800x600();
     let mut floats = [0.0; 4];

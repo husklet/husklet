@@ -375,8 +375,14 @@ pub fn get_floatv(ctx: &GlContext, pname: u32, out: &mut [f32; 4]) -> usize {
             2
         }
         _ => {
-            out[0] = 0.0;
-            1
+            // ES 2.0 §6.1.1 permits every integer-valued state to be queried through GetFloatv; the
+            // implementation converts each component instead of returning an unrelated float default.
+            let mut integers = [0; 4];
+            let count = get_integerv(ctx, pname, &mut integers);
+            for index in 0..count {
+                out[index] = integers[index] as f32;
+            }
+            count
         }
     }
 }
@@ -391,16 +397,27 @@ pub fn get_booleanv(ctx: &GlContext, pname: u32, out: &mut [u8; 4]) -> usize {
         }
         return 4;
     }
-    out[0] = match pname {
-        GL_DEPTH_TEST => b(ctx.local.pipeline.depth),
-        GL_STENCIL_TEST => b(ctx.local.pipeline.stencil),
-        GL_BLEND => b(ctx.local.pipeline.blend),
-        GL_CULL_FACE => b(ctx.local.pipeline.cull_enabled),
-        GL_SCISSOR_TEST => b(ctx.local.pipeline.scissor_enabled),
-        GL_RASTERIZER_DISCARD => b(ctx.local.pipeline.rasterizer_discard),
-        GL_DEPTH_WRITEMASK => b(ctx.local.pipeline.depth_write),
-        GL_SHADER_COMPILER => b(true),
-        _ => 0,
+    let value = match pname {
+        GL_DEPTH_TEST => Some(b(ctx.local.pipeline.depth)),
+        GL_STENCIL_TEST => Some(b(ctx.local.pipeline.stencil)),
+        GL_BLEND => Some(b(ctx.local.pipeline.blend)),
+        GL_CULL_FACE => Some(b(ctx.local.pipeline.cull_enabled)),
+        GL_SCISSOR_TEST => Some(b(ctx.local.pipeline.scissor_enabled)),
+        GL_RASTERIZER_DISCARD => Some(b(ctx.local.pipeline.rasterizer_discard)),
+        GL_DEPTH_WRITEMASK => Some(b(ctx.local.pipeline.depth_write)),
+        GL_SHADER_COMPILER => Some(b(true)),
+        _ => None,
     };
-    1
+    if let Some(value) = value {
+        out[0] = value;
+        return 1;
+    }
+    // ES 2.0 §6.1.1 defines GetBooleanv as the same state query with component-wise conversion: zero is
+    // false and every non-zero integer is true. Preserve vector arity as well as scalar values.
+    let mut integers = [0; 4];
+    let count = get_integerv(ctx, pname, &mut integers);
+    for index in 0..count {
+        out[index] = b(integers[index] != 0);
+    }
+    count
 }
