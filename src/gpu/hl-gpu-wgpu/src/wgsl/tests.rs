@@ -606,6 +606,25 @@ fn deqp_scalar_to_matrix_bool_spelling_compiles() {
 }
 
 #[test]
+fn deqp_vector_to_scalar_constructor_uses_first_component() {
+    for (source_type, value, destination_type) in [
+        ("bvec2", "bvec2(true,false)", "float"),
+        ("bvec3", "bvec3(true,false,true)", "int"),
+        ("ivec4", "ivec4(1)", "bool"),
+        ("vec2", "vec2(1)", "float"),
+    ] {
+        let source = format!("#version 460\nlayout(location=0) out vec4 color;\nvoid main(){{ {source_type} input_value={value}; {destination_type} result={destination_type}(input_value); color=vec4(float(result)); }}");
+        glsl_to_wgsl(&source, naga::ShaderStage::Fragment, "main").unwrap_or_else(|error| {
+            panic!("dEQP {source_type}-to-{destination_type} conversion was refused: {error}")
+        });
+    }
+
+    let source = "void main(){ bvec2 input_value=bvec2(true); float result=float(input_value); }";
+    let normalized = crate::glsl_es::Source::new(source).select_vector_to_scalar_component();
+    assert!(normalized.contains("float(input_value.x)"), "{normalized}");
+}
+
+#[test]
 fn constant_all_and_any_relations_fold() {
     let source = "#version 460\nlayout(location=0) out vec4 color;\nconst bool a=all(bvec3(true,true,true)); const bool b=any(bvec3(false,true,false)); void main(){ color=vec4(float(a),float(b),0,1); }";
     glsl_to_wgsl(source, naga::ShaderStage::Fragment, "main")

@@ -253,6 +253,42 @@ impl Tokens {
         }
     }
 
+    /// A scalar constructor applied to a vector consumes its first component in GLSL ES. Naga keeps the
+    /// vector width through the cast and later rejects the scalar store, so spell the component selection
+    /// explicitly before parsing.
+    fn select_vector_to_scalar_component(&mut self) {
+        let mut vectors = std::collections::BTreeSet::new();
+        for index in 0..self.len() {
+            let Tok::Word(ty) = &self[index] else { continue };
+            if vector_width(ty).is_none() {
+                continue;
+            }
+            let Some(name) = self.next_significant(index + 1) else { continue };
+            if let Tok::Word(name) = &self[name] {
+                vectors.insert(name.clone());
+            }
+        }
+
+        let mut inserts = Vec::new();
+        for index in 0..self.len() {
+            if !matches!(&self[index], Tok::Word(ty) if matches!(ty.as_str(), "bool" | "int" | "uint" | "float")) {
+                continue;
+            }
+            let Some(open) = self.next_significant(index + 1) else { continue };
+            let Some(argument_index) = self.next_significant(open + 1) else { continue };
+            let Some(close) = self.next_significant(argument_index + 1) else { continue };
+            if self[open] != Tok::Punct('(') || self[close] != Tok::Punct(')') {
+                continue;
+            }
+            if matches!(&self[argument_index], Tok::Word(argument) if vectors.contains(argument)) {
+                inserts.push((close, Tok::Word(".x".into())));
+            }
+        }
+        for (index, token) in inserts.into_iter().rev() {
+            self.0.insert(index, token);
+        }
+    }
+
     /// WGSL exposes these geometric builtins only for vectors while GLSL ES also defines scalar overloads.
     /// Lift scalar calls to `vec2(x, 0)`; the x component is the original scalar result.
     fn lift_scalar_geometric_builtins(&mut self) {
@@ -693,6 +729,12 @@ impl<'a> Source<'a> {
     pub(crate) fn truncate_vector_constructors(&self) -> String {
         let mut tokens = Tokens::from_source(self.text);
         tokens.truncate_vector_constructors();
+        tokens.0.as_slice().source()
+    }
+
+    pub(crate) fn select_vector_to_scalar_component(&self) -> String {
+        let mut tokens = Tokens::from_source(self.text);
+        tokens.select_vector_to_scalar_component();
         tokens.0.as_slice().source()
     }
 
