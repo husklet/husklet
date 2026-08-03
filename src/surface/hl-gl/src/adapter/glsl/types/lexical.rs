@@ -179,7 +179,7 @@ impl TokenStream {
         start: usize,
         end: usize,
         known: impl Fn(&str) -> bool,
-    ) -> Option<(Type, Vec<(String, usize)>)> {
+    ) -> Option<(Type, Vec<(String, Vec<Option<usize>>)>)> {
         let type_at = (start..end).find(|at| known(&tokens[*at].text))?;
         let ty = Type::named(&tokens[type_at].text);
         let mut names = Vec::new();
@@ -191,12 +191,16 @@ impl TokenStream {
             }
             let name = tokens[at].text.clone();
             at += 1;
-            let mut array_depth = 0;
+            let mut dimensions = Vec::new();
             while tokens.get(at).is_some_and(|token| token.text == "[") {
-                at = Self::matching(tokens, at, "[", "]")? + 1;
-                array_depth += 1;
+                let close = Self::matching(tokens, at, "[", "]")?;
+                let extent = (close == at + 2)
+                    .then(|| tokens[at + 1].text.parse::<usize>().ok())
+                    .flatten();
+                dimensions.push(extent);
+                at = close + 1;
             }
-            names.push((name, array_depth));
+            names.push((name, dimensions));
 
             let mut depth = 0usize;
             while at < end {
@@ -226,8 +230,8 @@ impl TokenStream {
         for at in start..=end {
             if at == end || tokens[at].text == "," {
                 if let Some((ty, names)) = Self::declaration(tokens, segment, at, known) {
-                    if let Some((name, array_depth)) = names.into_iter().next() {
-                        out.push((name, ty.arrays(array_depth)));
+                    if let Some((name, dimensions)) = names.into_iter().next() {
+                        out.push((name, ty.arrays(dimensions)));
                     }
                 }
                 segment = at + 1;

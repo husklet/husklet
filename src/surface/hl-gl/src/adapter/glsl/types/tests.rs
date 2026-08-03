@@ -10,7 +10,10 @@ fn records_struct_schemas_including_arrays_and_nested_members() {
         Types::parse("struct Leaf { vec3 color; }; struct Node { Leaf leaves[2]; int id; };");
     let node = types.structure("Node").unwrap();
     assert_eq!(node.field("id"), Some(&Type::named("int")));
-    assert_eq!(node.field("leaves"), Some(&Type::named("Leaf").arrays(1)));
+    assert_eq!(
+        node.field("leaves"),
+        Some(&Type::named("Leaf").arrays(vec![Some(2)]))
+    );
     assert_eq!(
         types.structure("Leaf").unwrap().field("color"),
         Some(&Type::named("vec3"))

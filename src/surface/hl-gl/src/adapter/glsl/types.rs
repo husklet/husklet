@@ -6,20 +6,22 @@
 
 use std::collections::BTreeMap;
 
+mod equality;
 mod lexical;
+pub(super) use equality::StructEquality;
 use lexical::TokenStream as Lexical;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct Type {
     name: String,
-    array_depth: usize,
+    arrays: Vec<Option<usize>>,
 }
 
 impl Type {
     fn named(name: &str) -> Self {
         Self {
             name: name.to_owned(),
-            array_depth: 0,
+            arrays: Vec::new(),
         }
     }
 
@@ -28,17 +30,21 @@ impl Type {
     }
 
     pub(super) fn is_array(&self) -> bool {
-        self.array_depth != 0
+        !self.arrays.is_empty()
     }
 
-    fn arrays(mut self, depth: usize) -> Self {
-        self.array_depth += depth;
+    pub(super) fn array_dimensions(&self) -> &[Option<usize>] {
+        &self.arrays
+    }
+
+    fn arrays(mut self, dimensions: Vec<Option<usize>>) -> Self {
+        self.arrays.extend(dimensions);
         self
     }
 
     fn indexed(mut self) -> Option<Self> {
-        if self.array_depth != 0 {
-            self.array_depth -= 1;
+        if !self.arrays.is_empty() {
+            self.arrays.remove(0);
             return Some(self);
         }
         match self.name.as_str() {
@@ -174,9 +180,18 @@ impl Types {
     /// Resolve an expression as it appears at `at` in the original source.
     pub(super) fn expression(&self, at: usize, expression: &str) -> Option<Type> {
         let tokens = Lexical::tokenize(expression);
+        self.expression_tokens(at, &tokens)
+    }
+
+    fn expression_tokens(&self, at: usize, tokens: &[Token]) -> Option<Type> {
         let mut cursor = 0usize;
         let first = tokens.get(cursor)?;
-        let mut ty = if tokens.get(1).is_some_and(|token| token.text == "(") {
+        let mut ty = if first.text == "(" {
+            let close = Lexical::matching(tokens, 0, "(", ")")?;
+            let ty = self.expression_tokens(at, &tokens[1..close])?;
+            cursor = close + 1;
+            ty
+        } else if tokens.get(1).is_some_and(|token| token.text == "(") {
             let close = Lexical::matching(&tokens, 1, "(", ")")?;
             cursor = close + 1;
             if self.known_type(&first.text) {
@@ -300,8 +315,8 @@ impl Types {
                 if let Some((ty, names)) = Lexical::declaration(tokens, cursor, end, |name| {
                     Type::builtin(name) || self.structs.contains_key(name)
                 }) {
-                    for (name, array_depth) in names {
-                        fields.insert(name, ty.clone().arrays(array_depth));
+                    for (name, dimensions) in names {
+                        fields.insert(name, ty.clone().arrays(dimensions));
                     }
                 }
                 cursor = end + 1;
@@ -401,10 +416,10 @@ impl Types {
                 Lexical::declaration(tokens, type_at, end, |name| self.known_type(name))
             {
                 let scope = token_scopes[type_at];
-                for (name, array_depth) in names {
+                for (name, dimensions) in names {
                     self.variables.push(Variable {
                         name,
-                        ty: ty.clone().arrays(array_depth),
+                        ty: ty.clone().arrays(dimensions),
                         declared_at: tokens[type_at].start,
                         scope,
                     });

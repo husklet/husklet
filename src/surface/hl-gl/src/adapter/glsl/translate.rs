@@ -905,6 +905,8 @@ impl StageSources<'_> {
         let mut fs = Source::new(self.fragment).expanded();
         disambiguate_struct_value_shadows(&mut vs);
         disambiguate_struct_value_shadows(&mut fs);
+        super::types::StructEquality::lower(&mut vs);
+        super::types::StructEquality::lower(&mut fs);
         lower_while_condition_declarations(&mut vs);
         lower_while_condition_declarations(&mut fs);
         brace_unbraced_if_declarations(&mut vs);

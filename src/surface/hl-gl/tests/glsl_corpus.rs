@@ -379,6 +379,8 @@ include!("render/corpus.rs");
 
 #[path = "render/glsl.rs"]
 mod render;
+#[path = "render/struct_equality.rs"]
+mod struct_equality;
 
 #[test]
 fn corpus_compiles_and_routes() {
