@@ -256,6 +256,18 @@ impl TextureFormat {
         let unorm_bits =
             |value: f64, max: u16| (value.clamp(0.0, 1.0) * f64::from(max) + 0.5) as u16;
         let snorm16 = |value: f64| (value.clamp(-1.0, 1.0) * f64::from(i16::MAX)).round() as i16;
+        let ufloat = |value: f64, mantissa_bits: u32| {
+            let half = crate::protocol::model::half::from_f32(value.max(0.0) as f32);
+            let exponent = u32::from((half >> 10) & 0x1f);
+            let mantissa = u32::from(half & 0x3ff);
+            let shift = 10 - mantissa_bits;
+            let rounded = (mantissa + (1 << (shift - 1))) >> shift;
+            if rounded == 1 << mantissa_bits && exponent < 31 {
+                (exponent + 1) << mantissa_bits
+            } else {
+                (exponent << mantissa_bits) | rounded.min((1 << mantissa_bits) - 1)
+            }
+        };
         Some(match self {
             TextureFormat::Rgba8Unorm | TextureFormat::Rgba8Srgb => vec![
                 channel(color[0]),
@@ -363,6 +375,33 @@ impl TextureFormat {
                 .iter()
                 .flat_map(|value| (unorm_bits(*value, 1023) << 6).to_le_bytes())
                 .collect(),
+            TextureFormat::Rg11b10Ufloat => {
+                (ufloat(color[0], 6) | (ufloat(color[1], 6) << 11) | (ufloat(color[2], 5) << 22))
+                    .to_le_bytes()
+                    .to_vec()
+            }
+            TextureFormat::Rgb9e5Ufloat => {
+                let rgb = [color[0], color[1], color[2]].map(|value| value.clamp(0.0, 65_408.0));
+                let largest = rgb.iter().copied().fold(0.0, f64::max);
+                let mut exponent = if largest < 2.0f64.powi(-16) {
+                    0
+                } else {
+                    (largest.log2().floor() as i32 + 16).clamp(0, 31) as u32
+                };
+                let mut scale = 2.0f64.powi(exponent as i32 - 24);
+                let mut mantissas = rgb.map(|value| (value / scale).round() as u32);
+                if mantissas.iter().any(|&mantissa| mantissa > 0x1ff) && exponent < 31 {
+                    exponent += 1;
+                    scale *= 2.0;
+                    mantissas = rgb.map(|value| (value / scale).round() as u32);
+                }
+                (mantissas[0].min(0x1ff)
+                    | (mantissas[1].min(0x1ff) << 9)
+                    | (mantissas[2].min(0x1ff) << 18)
+                    | (exponent << 27))
+                    .to_le_bytes()
+                    .to_vec()
+            }
             _ => return None,
         })
     }

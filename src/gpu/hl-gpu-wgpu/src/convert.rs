@@ -18,6 +18,67 @@ impl From<TextureFormat> for Format {
 }
 
 impl Format {
+    pub fn is_shadow(self) -> bool {
+        matches!(
+            self.0,
+            TextureFormat::R4g4b4a4Unorm
+                | TextureFormat::R5g5b5a1Unorm
+                | TextureFormat::A4r4g4b4Unorm
+                | TextureFormat::A4b4g4r4Unorm
+                | TextureFormat::R10x6g10x6b10x6a10x6Unorm
+                | TextureFormat::Rg11b10Ufloat
+                | TextureFormat::Rgb9e5Ufloat
+        )
+    }
+
+    pub fn logical_to_shadow(self, logical: &[u8]) -> Result<Vec<u8>> {
+        let logical_bytes = self.texel_bytes()?;
+        if !self.is_shadow() {
+            return Ok(logical.to_vec());
+        }
+        if !logical.len().is_multiple_of(logical_bytes) {
+            return Err(GpuError::OutOfBounds);
+        }
+        let mut shadow = Vec::with_capacity(logical.len() / logical_bytes * 8);
+        for texel in logical.chunks_exact(logical_bytes) {
+            let color = self
+                .0
+                .texel_to_f32(texel)
+                .ok_or(GpuError::Unsupported("wgpu: shadow decode"))?;
+            shadow.extend(
+                color
+                    .into_iter()
+                    .flat_map(|value| hl_gpu::protocol::model::half::from_f32(value).to_le_bytes()),
+            );
+        }
+        Ok(shadow)
+    }
+
+    pub fn shadow_to_logical(self, shadow: &[u8]) -> Result<Vec<u8>> {
+        if !self.is_shadow() {
+            return Ok(shadow.to_vec());
+        }
+        if !shadow.len().is_multiple_of(8) {
+            return Err(GpuError::OutOfBounds);
+        }
+        let mut logical = Vec::with_capacity(shadow.len() / 8 * self.texel_bytes()?);
+        for texel in shadow.chunks_exact(8) {
+            let mut color = [0.0f64; 4];
+            for (channel, bytes) in texel.chunks_exact(2).enumerate() {
+                color[channel] =
+                    f64::from(hl_gpu::protocol::model::half::to_f32(u16::from_le_bytes([
+                        bytes[0], bytes[1],
+                    ])));
+            }
+            logical.extend(
+                self.0
+                    .clear_texel_f64(color)
+                    .ok_or(GpuError::Unsupported("wgpu: shadow encode"))?,
+            );
+        }
+        Ok(logical)
+    }
+
     /// Return the native allocation format.
     pub fn native(self) -> wgpu::TextureFormat {
         use wgpu::TextureFormat as W;
@@ -47,13 +108,18 @@ impl Format {
             TextureFormat::Rg32Float => W::Rg32Float,
             TextureFormat::Rg32Uint => W::Rg32Uint,
             TextureFormat::Rg32Sint => W::Rg32Sint,
-            TextureFormat::Rgb9e5Ufloat => W::Rgb9e5Ufloat,
+            TextureFormat::Rgb9e5Ufloat => W::Rgba16Float,
             TextureFormat::Rgb10a2Unorm => W::Rgb10a2Unorm,
             TextureFormat::Rgb10a2Uint => W::Rgb10a2Uint,
-            TextureFormat::Rg11b10Ufloat => W::Rg11b10Ufloat,
+            TextureFormat::Rg11b10Ufloat => W::Rgba16Float,
             TextureFormat::R5g6b5Unorm => W::R5g6b5Unorm,
             TextureFormat::A1r5g5b5Unorm => W::A1r5g5b5Unorm,
             TextureFormat::B4g4r4a4Unorm => W::B4g4r4a4Unorm,
+            TextureFormat::R4g4b4a4Unorm
+            | TextureFormat::R5g5b5a1Unorm
+            | TextureFormat::A4r4g4b4Unorm
+            | TextureFormat::A4b4g4r4Unorm
+            | TextureFormat::R10x6g10x6b10x6a10x6Unorm => W::Rgba16Float,
             TextureFormat::Rgba16Float => W::Rgba16Float,
             TextureFormat::Rgba16Unorm => W::Rgba16Unorm,
             TextureFormat::Rgba32Float => W::Rgba32Float,
@@ -212,5 +278,38 @@ mod clear_texel_tests {
                 .is_err(),
             "a format with no plain-colour texel is still refused"
         );
+    }
+}
+
+#[cfg(test)]
+mod shadow_format_tests {
+    use super::Format;
+    use hl_gpu::protocol::model::enums::TextureFormat;
+
+    #[test]
+    fn logical_shadow_roundtrip_preserves_every_packed_encoding() {
+        let cases: &[(TextureFormat, &[u8])] = &[
+            (TextureFormat::R4g4b4a4Unorm, &[0x5a, 0xc3]),
+            (TextureFormat::R5g5b5a1Unorm, &[0x5b, 0xc3]),
+            (TextureFormat::A4r4g4b4Unorm, &[0x5a, 0xc3]),
+            (TextureFormat::A4b4g4r4Unorm, &[0x5a, 0xc3]),
+            (
+                TextureFormat::R10x6g10x6b10x6a10x6Unorm,
+                &[0xc0, 0x55, 0x80, 0xaa, 0x40, 0x33, 0x00, 0xff],
+            ),
+            (TextureFormat::Rg11b10Ufloat, &[0xc0, 0x03, 0x1e, 0x78]),
+            (TextureFormat::Rgb9e5Ufloat, &[0x00, 0x01, 0x02, 0x84]),
+        ];
+        for &(logical, bytes) in cases {
+            let format = Format::from(logical);
+            assert_eq!(format.native(), wgpu::TextureFormat::Rgba16Float);
+            let shadow = format.logical_to_shadow(bytes).expect("logical decode");
+            assert_eq!(shadow.len(), 8);
+            assert_eq!(
+                format.shadow_to_logical(&shadow).expect("logical encode"),
+                bytes,
+                "{logical:?}"
+            );
+        }
     }
 }

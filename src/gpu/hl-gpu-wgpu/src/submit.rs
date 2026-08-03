@@ -643,7 +643,7 @@ impl WgpuExecutor {
                                 mip
                             );
                         }
-                        let (row, image_rows, dst_depth, destination, opaque_bc1) = {
+                        let (row, image_rows, dst_depth, destination, opaque_bc1, shadow_format) = {
                             let t = texture::WgpuTexture::get(res, *dst)?;
                             // The destination region (`mip`, `width`, `height`) must fit the texture: an
                             // out-of-range mip or a `width`/`height` overhanging the mip level would be handed
@@ -672,6 +672,7 @@ impl WgpuExecutor {
                                 t.depth,
                                 t.texture.clone(),
                                 t.is_opaque_bc1_rgb(),
+                                t.is_shadow_format(),
                             )
                         };
                         // `bytes_per_row == 0` means the source rows are tightly packed (the oracle convention).
@@ -704,6 +705,7 @@ impl WgpuExecutor {
                         // offset and, when more than one row is copied, a 256-byte row pitch. The final row may
                         // be tight, so the exact protocol span validated above remains authoritative.
                         let native_compatible = !opaque_bc1
+                            && !shadow_format
                             && potential_native_texture_upload
                             && (rows == 1
                                 || u64::from(src_stride)
@@ -750,6 +752,7 @@ impl WgpuExecutor {
                         // row into a transient 256-byte-pitched buffer and upload that buffer in this same
                         // command encoder. Padding is never observed by the destination texture.
                         let staging_compatible = !opaque_bc1
+                            && !shadow_format
                             && potential_native_texture_upload
                             && rows > 1
                             && u64::from(row).is_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT)
@@ -1109,6 +1112,9 @@ impl WgpuExecutor {
 
         let source = texture::WgpuTexture::get(res, src)?;
         if source.is_opaque_bc1_rgb() {
+            return Ok(false);
+        }
+        if source.is_shadow_format() {
             return Ok(false);
         }
         let destination = buffer::WgpuBuffer::get(res, dst)?;

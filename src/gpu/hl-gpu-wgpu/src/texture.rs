@@ -122,6 +122,10 @@ impl WgpuTexture {
     pub(crate) fn is_opaque_bc1_rgb(&self) -> bool {
         self.bc1_rgb.is_some()
     }
+
+    pub(crate) fn is_shadow_format(&self) -> bool {
+        Format::from(self.format).is_shadow()
+    }
 }
 
 impl WgpuExecutor {
@@ -131,18 +135,41 @@ impl WgpuExecutor {
         id: u32,
     ) -> Result<(hl_gpu::runtime::model::sharing::Shared, u64)> {
         let texture = WgpuTexture::get(res, id)?.clone();
-        let texel = texture.format.footprint_bytes_per_texel() as u64;
+        let texel = if texture.is_shadow_format() {
+            8
+        } else {
+            texture.format.footprint_bytes_per_texel() as u64
+        };
         let mut width = u64::from(texture.width);
         let mut height = u64::from(texture.height);
         let mut depth = u64::from(texture.depth);
         let mut bytes = 0u64;
         for _ in 0..texture.mip_levels {
-            bytes = bytes.checked_add(width.max(1).checked_mul(height.max(1)).and_then(|v| v.checked_mul(depth.max(1))).and_then(|v| v.checked_mul(u64::from(texture.sample_count))).and_then(|v| v.checked_mul(texel)).ok_or(GpuError::OutOfBounds)?).ok_or(GpuError::OutOfBounds)?;
+            bytes = bytes
+                .checked_add(
+                    width
+                        .max(1)
+                        .checked_mul(height.max(1))
+                        .and_then(|v| v.checked_mul(depth.max(1)))
+                        .and_then(|v| v.checked_mul(u64::from(texture.sample_count)))
+                        .and_then(|v| v.checked_mul(texel))
+                        .ok_or(GpuError::OutOfBounds)?,
+                )
+                .ok_or(GpuError::OutOfBounds)?;
             width /= 2;
             height /= 2;
-            if texture.dim == TextureDim::D3 { depth /= 2; }
+            if texture.dim == TextureDim::D3 {
+                depth /= 2;
+            }
         }
-        Ok((Arc::new(SharedWgpuTexture { gpu: Arc::clone(&self.gpu), texture, bytes }), bytes))
+        Ok((
+            Arc::new(SharedWgpuTexture {
+                gpu: Arc::clone(&self.gpu),
+                texture,
+                bytes,
+            }),
+            bytes,
+        ))
     }
 
     pub(crate) fn import_texture_native(
@@ -150,9 +177,21 @@ impl WgpuExecutor {
         resource: hl_gpu::runtime::model::sharing::Shared,
         bytes: u64,
     ) -> Result<hl_gpu::runtime::model::resources::Native> {
-        let shared = resource.downcast_ref::<SharedWgpuTexture>().ok_or(GpuError::Invalid("wgpu: shared texture native type mismatch"))?;
-        if !Arc::ptr_eq(&shared.gpu, &self.gpu) { return Err(GpuError::Invalid("wgpu: shared texture belongs to another device")); }
-        if shared.bytes != bytes { return Err(GpuError::Invalid("wgpu: shared texture authoritative size mismatch")); }
+        let shared = resource
+            .downcast_ref::<SharedWgpuTexture>()
+            .ok_or(GpuError::Invalid(
+                "wgpu: shared texture native type mismatch",
+            ))?;
+        if !Arc::ptr_eq(&shared.gpu, &self.gpu) {
+            return Err(GpuError::Invalid(
+                "wgpu: shared texture belongs to another device",
+            ));
+        }
+        if shared.bytes != bytes {
+            return Err(GpuError::Invalid(
+                "wgpu: shared texture authoritative size mismatch",
+            ));
+        }
         Ok(Box::new(shared.texture.clone()))
     }
 
@@ -283,16 +322,17 @@ impl WgpuExecutor {
         if desc.width == 0 || desc.height == 0 {
             return Err(GpuError::Invalid("zero-sized texture"));
         }
-        let opaque_bc1 = desc.usage
-            & hl_gpu::protocol::model::enums::texture_usage::OPAQUE_BC1_RGB
-            != 0;
+        let opaque_bc1 =
+            desc.usage & hl_gpu::protocol::model::enums::texture_usage::OPAQUE_BC1_RGB != 0;
         if opaque_bc1
             && !matches!(
                 desc.format,
                 TextureFormat::Bc1RgbaUnorm | TextureFormat::Bc1RgbaSrgb
             )
         {
-            return Err(GpuError::Invalid("opaque BC1 semantic requires a BC1 format"));
+            return Err(GpuError::Invalid(
+                "opaque BC1 semantic requires a BC1 format",
+            ));
         }
         let wfmt = if opaque_bc1 {
             match desc.format {
@@ -540,12 +580,15 @@ impl WgpuExecutor {
         if mip >= t.mip_levels {
             return Err(GpuError::OutOfBounds);
         }
+        // The mip level's own dimensions (base extent halved per level, floored at 1).
+        let mw = (t.width >> mip).max(1);
+        let mh = (t.height >> mip).max(1);
         if let Some(shadow) = &t.bc1_rgb {
             let shadow = shadow
                 .lock()
                 .map_err(|_| GpuError::Invalid("BC1 RGB shadow lock poisoned"))?;
-            let level = usize::try_from(t.shadow_base_mip + mip)
-                .map_err(|_| GpuError::OutOfBounds)?;
+            let level =
+                usize::try_from(t.shadow_base_mip + mip).map_err(|_| GpuError::OutOfBounds)?;
             let layer = usize::try_from(t.shadow_base_layer).map_err(|_| GpuError::OutOfBounds)?;
             return shadow
                 .levels
@@ -554,9 +597,9 @@ impl WgpuExecutor {
                 .cloned()
                 .ok_or(GpuError::OutOfBounds);
         }
-        // The mip level's own dimensions (base extent halved per level, floored at 1).
-        let mw = (t.width >> mip).max(1);
-        let mh = (t.height >> mip).max(1);
+        if Format::from(t.format).is_shadow() {
+            return self.read_region(res, id, 0, 0, 0, mw, mh, 1, mip);
+        }
         let (tight_bpr, block_rows) = Format::from(t.format).copy_layout(mw, mh)?;
         let padded_bpr = WgpuTexture::row_pitch(tight_bpr);
         hl_log::hl_add!(
@@ -667,14 +710,14 @@ impl WgpuExecutor {
         if let Some(raw) = &t.bc1_rgb {
             let blocks_w = width.div_ceil(4);
             let blocks_h = height.div_ceil(4);
-            let blocks_per_layer = usize::try_from(blocks_w * blocks_h)
-                .map_err(|_| GpuError::OutOfBounds)?;
+            let blocks_per_layer =
+                usize::try_from(blocks_w * blocks_h).map_err(|_| GpuError::OutOfBounds)?;
             let mut decoded = vec![0u8; width as usize * height as usize * depth as usize * 4];
             let mut shadow = raw
                 .lock()
                 .map_err(|_| GpuError::Invalid("BC1 RGB shadow lock poisoned"))?;
-            let level_index = usize::try_from(t.shadow_base_mip + mip)
-                .map_err(|_| GpuError::OutOfBounds)?;
+            let level_index =
+                usize::try_from(t.shadow_base_mip + mip).map_err(|_| GpuError::OutOfBounds)?;
             let (level_width, _) = *shadow
                 .dimensions
                 .get(level_index)
@@ -696,16 +739,18 @@ impl WgpuExecutor {
                         let block: [u8; 8] = data[source_offset..source_offset + 8]
                             .try_into()
                             .map_err(|_| GpuError::OutOfBounds)?;
-                        let destination_block = ((y / 4) as usize + by) * level_blocks_w
-                            + (x / 4) as usize
-                            + bx;
+                        let destination_block =
+                            ((y / 4) as usize + by) * level_blocks_w + (x / 4) as usize + bx;
                         plane[destination_block * 8..destination_block * 8 + 8]
                             .copy_from_slice(&block);
-                        for (pixel, rgba) in crate::bc1::decode_opaque(block).into_iter().enumerate() {
+                        for (pixel, rgba) in
+                            crate::bc1::decode_opaque(block).into_iter().enumerate()
+                        {
                             let px = bx * 4 + pixel % 4;
                             let py = by * 4 + pixel / 4;
                             if px < width as usize && py < height as usize {
-                                let destination = ((layer * height as usize + py) * width as usize + px) * 4;
+                                let destination =
+                                    ((layer * height as usize + py) * width as usize + px) * 4;
                                 decoded[destination..destination + 4].copy_from_slice(&rgba);
                             }
                         }
@@ -739,6 +784,16 @@ impl WgpuExecutor {
             self.gpu.queue.submit(None::<wgpu::CommandBuffer>);
             return Ok(());
         }
+        let shadow_data;
+        let (upload, upload_bytes_per_row) = if Format::from(t.format).is_shadow() {
+            shadow_data = Format::from(t.format).logical_to_shadow(&data[..expected])?;
+            (
+                &shadow_data[..],
+                width.checked_mul(8).ok_or(GpuError::OutOfBounds)?,
+            )
+        } else {
+            (data, bytes_per_row)
+        };
         self.gpu.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &t.texture,
@@ -746,10 +801,10 @@ impl WgpuExecutor {
                 origin: wgpu::Origin3d { x, y, z },
                 aspect: wgpu::TextureAspect::All,
             },
-            data,
+            upload,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(bytes_per_row),
+                bytes_per_row: Some(upload_bytes_per_row),
                 rows_per_image: Some(rows_per_image),
             },
             wgpu::Extent3d {
@@ -805,8 +860,8 @@ impl WgpuExecutor {
             let shadow = raw
                 .lock()
                 .map_err(|_| GpuError::Invalid("BC1 RGB shadow lock poisoned"))?;
-            let level_index = usize::try_from(t.shadow_base_mip + mip)
-                .map_err(|_| GpuError::OutOfBounds)?;
+            let level_index =
+                usize::try_from(t.shadow_base_mip + mip).map_err(|_| GpuError::OutOfBounds)?;
             let (level_width, _) = *shadow
                 .dimensions
                 .get(level_index)
@@ -831,7 +886,13 @@ impl WgpuExecutor {
             }
             return Ok(out);
         }
-        let (tight_bpr, rows_per_image) = Format::from(t.format).copy_layout(width, height)?;
+        let format = Format::from(t.format);
+        let (logical_bpr, rows_per_image) = format.copy_layout(width, height)?;
+        let tight_bpr = if format.is_shadow() {
+            width.checked_mul(8).ok_or(GpuError::OutOfBounds)?
+        } else {
+            logical_bpr
+        };
         let padded_bpr = WgpuTexture::row_pitch(tight_bpr);
         let staging_size = u64::from(padded_bpr)
             .checked_mul(u64::from(rows_per_image))
@@ -895,7 +956,11 @@ impl WgpuExecutor {
         }
         drop(mapped);
         staging.unmap();
-        Ok(output)
+        if format.is_shadow() {
+            format.shadow_to_logical(&output)
+        } else {
+            Ok(output)
+        }
     }
 }
 
