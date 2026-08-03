@@ -298,12 +298,18 @@ impl<'a> Declarations<'a> {
                 &mut Vec::new(),
                 &mut leaves,
             );
-            if flattened && leaves.iter().all(Decl::is_sampler) {
-                samplers.extend(leaves);
+            if flattened && leaves.iter().any(Decl::is_sampler) {
+                for leaf in leaves {
+                    if leaf.is_sampler() {
+                        samplers.push(leaf);
+                    } else {
+                        data.push(leaf);
+                    }
+                }
             } else {
                 // Data structures retain their aggregate declaration so the host compiler owns their
-                // std140 storage layout. A mixed data/opaque structure remains aggregate and is rejected
-                // by the reflection gate; lowering it requires splitting both storage classes.
+                // std140 storage layout. Mixed data/opaque structures take the branch above and split into
+                // reflected data leaves plus standalone sampler bindings.
                 data.push(declaration);
             }
         }
@@ -326,12 +332,6 @@ impl<'a> Declarations<'a> {
                 &mut Vec::new(),
                 &mut leaves,
             ) {
-                flattened.push(declaration);
-                continue;
-            }
-            let has_sampler = leaves.iter().any(Decl::is_sampler);
-            let has_data = leaves.iter().any(|leaf| !leaf.is_sampler());
-            if has_sampler && has_data {
                 flattened.push(declaration);
                 continue;
             }

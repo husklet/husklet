@@ -383,6 +383,8 @@ mod render;
 mod struct_equality;
 #[path = "render/struct_uniform.rs"]
 mod struct_uniform;
+#[path = "render/struct_sampler.rs"]
+mod struct_sampler;
 
 #[test]
 fn corpus_compiles_and_routes() {

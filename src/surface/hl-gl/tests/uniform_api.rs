@@ -349,3 +349,25 @@ fn sampler_struct_leaves_have_real_locations_and_units() {
     assert_eq!(intro::get_sampler_unit(&context, program, 0), Some(4));
     assert_eq!(intro::get_sampler_unit(&context, program, 1), Some(7));
 }
+
+#[test]
+fn mixed_struct_data_and_sampler_leaves_share_the_public_location_space() {
+    let mut context = GlContext::new();
+    let program = program(
+        &mut context,
+        "void main(){gl_Position=vec4(0.0);}",
+        "struct Material { vec4 tint; sampler2D image; }; uniform Material material; \
+         void main(){gl_FragColor=material.tint+texture2D(material.image,vec2(0.5));}",
+    );
+    assert_eq!(
+        query::uniform_location(&context, program, "material.tint"),
+        0
+    );
+    assert_eq!(
+        query::uniform_location(&context, program, "material.image"),
+        1
+    );
+    record::use_program(&mut context, program);
+    record::uniform_i32_at(&mut context, 1, &[6]);
+    assert_eq!(intro::get_sampler_unit(&context, program, 1), Some(6));
+}

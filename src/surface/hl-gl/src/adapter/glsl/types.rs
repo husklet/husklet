@@ -8,8 +8,10 @@ use std::collections::BTreeMap;
 
 mod equality;
 mod lexical;
+mod sampler;
 pub(super) use equality::StructEquality;
 use lexical::TokenStream as Lexical;
+pub(super) use sampler::StructSamplers;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct Type {

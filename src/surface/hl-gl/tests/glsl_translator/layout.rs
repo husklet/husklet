@@ -175,14 +175,24 @@ fn sampler_only_struct_lowers_leaves_to_standalone_bindings() {
 }
 
 #[test]
-fn mixed_sampler_data_struct_stays_out_of_the_data_reconstruction_abi() {
+fn mixed_sampler_data_struct_splits_reflection_storage_classes() {
     let fs = "#version 300 es\nstruct Mixed { vec4 tint; sampler2D image; };\n\
               uniform Mixed u_var;\nout vec4 color;\n\
               void main(){ color = u_var.tint + texture(u_var.image, vec2(0.5)); }\n";
+    let (uniforms, _) = glsl::StageSources::new("void main(){}", fs)
+        .uniform_layout()
+        .expect("data leaves have a default-block layout");
+    assert_eq!(uniforms.len(), 1);
+    assert_eq!(uniforms[0].name, "u_var.tint");
     assert_eq!(
-        glsl::StageSources::new("void main(){}", fs).uniform_layout(),
-        Err(glsl::UniformError::UnsupportedType("Mixed".into()))
+        glsl::StageSources::new("void main(){}", fs).sampler_decls()[0].name,
+        "u_var.image"
     );
+    let (_, translated) = glsl::StageSources::new("void main(){}", fs).translate_render();
+    assert!(!translated.contains("struct Mixed"), "{translated}");
+    assert!(translated.contains("u_var_tint"), "{translated}");
+    assert!(translated.contains("u_var_image_hltex"), "{translated}");
+    assert_naga_parses(&translated, naga::ShaderStage::Fragment);
 }
 
 #[test]
