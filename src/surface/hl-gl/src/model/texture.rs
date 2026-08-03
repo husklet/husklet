@@ -1276,6 +1276,61 @@ impl Textures {
         true
     }
 
+    /// Overwrite a sub-rectangle of one base-level cube face without changing the other five faces.
+    pub fn sub_image_cube_face(
+        &mut self,
+        name: u32,
+        face: usize,
+        xo: i32,
+        yo: i32,
+        w: i32,
+        h: i32,
+        pixels: &[u8],
+    ) -> bool {
+        let Some(texture) = self.map.get(&name) else {
+            return false;
+        };
+        let Some(plane) = texture.cube_faces.get(face).and_then(Option::as_ref) else {
+            return false;
+        };
+        if plane.is_empty() || w <= 0 || h <= 0 || xo < 0 || yo < 0 {
+            return false;
+        }
+        let texel = texture.bytes_per_texel();
+        let (tw, th) = (texture.w as usize, texture.h as usize);
+        let (xo, yo, w, h) = (xo as usize, yo as usize, w as usize, h as usize);
+        let Some(row_bytes) = w.checked_mul(texel) else {
+            return false;
+        };
+        let Some(upload_bytes) = row_bytes.checked_mul(h) else {
+            return false;
+        };
+        if tw.checked_mul(th).and_then(|n| n.checked_mul(texel)) != Some(plane.len())
+            || xo.checked_add(w).is_none_or(|end| end > tw)
+            || yo.checked_add(h).is_none_or(|end| end > th)
+            || pixels.len() < upload_bytes
+        {
+            return false;
+        }
+
+        let generation = self.generation();
+        let texture = self.map.get_mut(&name).expect("cube texture remained present");
+        let plane = texture.cube_faces[face]
+            .as_mut()
+            .expect("validated cube face remained defined");
+        for row in 0..h {
+            let dst = ((yo + row) * tw + xo) * texel;
+            let src = row * row_bytes;
+            Arc::make_mut(plane)[dst..dst + row_bytes]
+                .copy_from_slice(&pixels[src..src + row_bytes]);
+        }
+        texture.data = Arc::clone(plane);
+        texture.real_pixels = true;
+        texture.gpu_authoritative = false;
+        texture.gen = generation;
+        true
+    }
+
     /// Attach one GL texture view to shared linear-EGLImage storage without changing its object generation
     /// or sampler state.
     pub fn bind_shared(&mut self, name: u32, shared: Arc<SharedPixels>) -> bool {

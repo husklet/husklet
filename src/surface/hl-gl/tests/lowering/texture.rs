@@ -93,7 +93,7 @@ fn sampler_cube_lowers_to_six_initialized_cube_layers() {
 
     let texture = context.textures.gen();
     record::bind_texture(&mut context, GL_TEXTURE_CUBE_MAP, texture);
-    let faces = (0..6)
+    let mut faces = (0..6)
         .map(|face| [0x11 + face, 0x22, 0x33, 0xff].repeat(4))
         .collect::<Vec<_>>();
     for (face, pixels) in faces.iter().enumerate() {
@@ -106,6 +106,18 @@ fn sampler_cube_lowers_to_six_initialized_cube_layers() {
             pixels,
         );
     }
+    let replacement = [0xaa, 0xbb, 0xcc, 0xdd];
+    record::tex_sub_image_2d(
+        &mut context,
+        GL_TEXTURE_CUBE_MAP_POSITIVE_X + 3,
+        0,
+        1,
+        0,
+        1,
+        1,
+        &replacement,
+    );
+    faces[3][4..8].copy_from_slice(&replacement);
     let mip_faces = (0..6)
         .map(|face| vec![0x80 + face, 0x44, 0x55, 0xff])
         .collect::<Vec<_>>();

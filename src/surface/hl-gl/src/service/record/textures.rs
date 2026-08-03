@@ -217,7 +217,7 @@ pub fn tex_image_2d_target_declared(
 fn cube_face_index(target: u32) -> Option<usize> {
     (GL_TEXTURE_CUBE_MAP_POSITIVE_X..=GL_TEXTURE_CUBE_MAP_NEGATIVE_Z)
         .contains(&target)
-        .then_some((target - GL_TEXTURE_CUBE_MAP_POSITIVE_X) as usize)
+        .then(|| (target - GL_TEXTURE_CUBE_MAP_POSITIVE_X) as usize)
 }
 
 /// Record the SIZED internal format the application declared for the active unit's texture. Kept as
@@ -609,7 +609,8 @@ pub fn tex_sub_image_2d(
     h: i32,
     rgba: &[u8],
 ) {
-    if target != GL_TEXTURE_2D {
+    let face = cube_face_index(target);
+    if target != GL_TEXTURE_2D && face.is_none() {
         ctx.set_gl_error(GL_INVALID_ENUM);
         return;
     }
@@ -621,7 +622,13 @@ pub fn tex_sub_image_2d(
     if w == 0 || h == 0 {
         return;
     }
-    if !ctx.textures.sub_image_2d(name, xo, yo, w, h, rgba) {
+    let stored = match face {
+        Some(face) => ctx
+            .textures
+            .sub_image_cube_face(name, face, xo, yo, w, h, rgba),
+        None => ctx.textures.sub_image_2d(name, xo, yo, w, h, rgba),
+    };
+    if !stored {
         ctx.set_gl_error(GL_INVALID_VALUE);
     }
 }
