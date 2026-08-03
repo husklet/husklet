@@ -23,6 +23,27 @@ fn bind_debug_context() {
     while glGetError() != GL_NO_ERROR {}
 }
 
+fn bind_context_version(major: i32, minor: i32) {
+    let display = initialized_display();
+    let attributes = [
+        EGL_CONTEXT_CLIENT_VERSION,
+        major,
+        EGL_CONTEXT_MINOR_VERSION_KHR,
+        minor,
+        EGL_NONE,
+    ];
+    let context = eglCreateContext(
+        display,
+        CONFIG_TOKEN as *mut c_void,
+        core::ptr::null_mut(),
+        attributes.as_ptr(),
+    );
+    assert!(!context.is_null(), "create ES {major}.{minor}");
+    let surface = WindowSurface::create(core::ptr::null_mut());
+    assert_eq!(eglMakeCurrent(display, surface, surface, context), EGL_TRUE);
+    while glGetError() != GL_NO_ERROR {}
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct CallbackRecord {
     source: u32,
@@ -568,6 +589,49 @@ fn khr_debug_rejects_reserved_names_until_object_creation() {
         GL_NO_ERROR,
         "ActiveShaderProgram creates pipeline"
     );
+}
+
+#[test]
+fn buffer_targets_materialize_only_in_their_client_version() {
+    let label = b"buffer";
+    for (major, minor, rejected) in [(2, 0, GL_UNIFORM_BUFFER), (3, 0, GL_SHADER_STORAGE_BUFFER)] {
+        bind_context_version(major, minor);
+        let mut buffer = 0;
+        glGenBuffers(1, &mut buffer);
+        glBindBuffer(rejected, buffer);
+        assert_eq!(glGetError(), GL_INVALID_ENUM, "ES {major}.{minor}");
+        glObjectLabelKHR(
+            GL_BUFFER_OBJECT,
+            buffer,
+            label.len() as i32,
+            label.as_ptr().cast(),
+        );
+        assert_eq!(
+            glGetError(),
+            GL_INVALID_VALUE,
+            "rejected ES {major}.{minor} target must not create the buffer"
+        );
+    }
+
+    bind_context_version(3, 1);
+    for target in [
+        GL_ATOMIC_COUNTER_BUFFER,
+        GL_DISPATCH_INDIRECT_BUFFER,
+        GL_DRAW_INDIRECT_BUFFER,
+        GL_SHADER_STORAGE_BUFFER,
+    ] {
+        let mut buffer = 0;
+        glGenBuffers(1, &mut buffer);
+        glBindBuffer(target, buffer);
+        assert_eq!(glGetError(), GL_NO_ERROR, "ES 3.1 target {target:#x}");
+        glObjectLabelKHR(
+            GL_BUFFER_OBJECT,
+            buffer,
+            label.len() as i32,
+            label.as_ptr().cast(),
+        );
+        assert_eq!(glGetError(), GL_NO_ERROR, "materialized {target:#x}");
+    }
 }
 
 #[test]
