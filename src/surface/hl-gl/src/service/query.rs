@@ -223,7 +223,6 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         GL_STENCIL_BACK_PASS_DEPTH_FAIL => one(ctx.local.pipeline.stencil_zfail_back as i32),
         GL_STENCIL_BACK_PASS_DEPTH_PASS => one(ctx.local.pipeline.stencil_zpass_back as i32),
         GL_BLEND => one(ctx.local.pipeline.blend as i32),
-        GL_DITHER => one(ctx.local.pipeline.dither as i32),
         GL_POLYGON_OFFSET_FILL => one(ctx.local.pipeline.polygon_offset_fill as i32),
         GL_POLYGON_OFFSET_FACTOR => one(ctx.local.pipeline.polygon_offset_factor.round() as i32),
         GL_POLYGON_OFFSET_UNITS => one(ctx.local.pipeline.polygon_offset_units.round() as i32),
