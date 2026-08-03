@@ -303,7 +303,7 @@ pub fn create_swapchain_for_target(
     let mut images = Vec::with_capacity(image_count.max(1) as usize);
     for _ in 0..image_count.max(1) {
         let ir_texture_id = dev.alloc_ir();
-        sink.submit(&[Cmd::CreateTexture(
+        if let Err(error) = sink.submit(&[Cmd::CreateTexture(
             ir_texture_id,
             TextureDesc {
                 width,
@@ -316,7 +316,10 @@ pub fn create_swapchain_for_target(
                 usage,
                 label: format!("swapimg{ir_texture_id}"),
             },
-        )])?;
+        )]) {
+            rollback_swapchain_allocation(dev, sink, surface, &images);
+            return Err(error);
+        }
         let handle = dev.alloc_handle();
         dev.images.insert(
             handle,
@@ -360,6 +363,24 @@ pub fn create_swapchain_for_target(
     Ok(handle)
 }
 
+fn rollback_swapchain_allocation(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    surface: VkSurfaceKHR,
+    images: &[SwapImage],
+) {
+    for image in images {
+        let _ = sink.submit(&[Cmd::DestroyTexture(image.ir_texture_id)]);
+        dev.images.remove(&image.handle);
+        dev.image_layouts.remove(&image.handle);
+    }
+    if let Some(surface) = dev.surfaces.remove(&surface) {
+        if surface.token.is_some() {
+            let _ = sink.submit(&[Cmd::DestroySurface(surface.ir_id)]);
+        }
+    }
+}
+
 /// Retire an old swapchain before replacement allocation. Vulkan retires it even if creation subsequently
 /// fails; acquired images remain presentable because retirement changes only acquisition eligibility.
 pub fn retire_swapchain(dev: &mut Device, old_swapchain: VkSwapchainKHR) -> Result<()> {
@@ -386,6 +407,43 @@ pub fn retire_swapchain(dev: &mut Device, old_swapchain: VkSwapchainKHR) -> Resu
 /// handles on every call); `vkAcquireNextImageKHR`'s returned index selects one of them. Errors on an
 /// unknown swapchain.
 impl Device {
+    pub fn acquire_next_image_with_timeout(
+        &mut self,
+        swapchain: VkSwapchainKHR,
+        timeout: u64,
+    ) -> std::result::Result<u32, AcquireImageError> {
+        let sc = self
+            .swapchains
+            .get_mut(&swapchain)
+            .ok_or(AcquireImageError::Invalid(GpuError::Invalid(
+                "vkAcquireNextImageKHR: unknown VkSwapchainKHR",
+            )))?;
+        if sc.retired {
+            return Err(AcquireImageError::Retired);
+        }
+        let count = sc.images.len();
+        if count == 0 {
+            return Err(AcquireImageError::Invalid(GpuError::Invalid(
+                "vkAcquireNextImageKHR: swapchain has no images",
+            )));
+        }
+        let start = (sc.acquire_cursor as usize) % count;
+        let Some(index) = (0..count)
+            .map(|off| (start + off) % count)
+            .find(|&i| sc.images[i].state == ImageState::Available)
+        else {
+            return Err(if timeout == 0 {
+                AcquireImageError::NotReady
+            } else {
+                AcquireImageError::Timeout
+            });
+        };
+        sc.images[index].state = ImageState::Acquired;
+        sc.acquire_cursor = ((index + 1) % count) as u32;
+        hl_log::hl_debug!(hl_log::tag::PRESENT, "acquire idx={} of={}", index, count);
+        Ok(index as u32)
+    }
+
     pub fn swapchain_images(&self, swapchain: VkSwapchainKHR) -> Result<Vec<VkImage>> {
         let sc = self.swapchains.get(&swapchain).ok_or(GpuError::Invalid(
             "vkGetSwapchainImagesKHR: unknown VkSwapchainKHR",
@@ -436,42 +494,29 @@ impl Device {
     /// index — so a real present loop cycles `0,1,..,N-1,0,..` instead of being pinned to image 0 (which would
     /// re-hand the app an image the presentation engine still owns, aborting the loop after one frame).
     ///
-    /// If NO image is currently available (the app acquired more than it presented), the headless model —
-    /// where a present completes immediately — would normally already have returned one; as a defensive
-    /// fallback it returns the cursor image anyway (re-marking it acquired) so acquisition still makes forward
-    /// progress rather than failing. Errors on an unknown or empty swapchain.
-    ///
-    /// The `_semaphore`/`_fence` the app may pass are signalled by the shim's existing sync path (unchanged);
-    /// this driver-level entry only advances the acquire cursor and image ownership.
+    /// If no image is available, the timeout-aware entry reports `NotReady` for a zero timeout and `Timeout`
+    /// for a non-zero timeout. It never reissues an image still owned by the application. Acquire semaphore
+    /// and fence signaling remains part of the WSI synchronization gap documented in `WSI_SYNC_HANDOFF.md`.
     pub fn acquire_next_image(&mut self, swapchain: VkSwapchainKHR) -> Result<u32> {
-        let sc = self
-            .swapchains
-            .get_mut(&swapchain)
-            .ok_or(GpuError::Invalid(
-                "vkAcquireNextImageKHR: unknown VkSwapchainKHR",
-            ))?;
-        let count = sc.images.len();
-        if sc.retired {
-            return Err(GpuError::Invalid(
-                "vkAcquireNextImageKHR: swapchain is retired",
-            ));
-        }
-        if count == 0 {
-            return Err(GpuError::Invalid(
-                "vkAcquireNextImageKHR: swapchain has no images",
-            ));
-        }
-        let start = (sc.acquire_cursor as usize) % count;
-        // Scan cyclically from the cursor for the first pool image; fall back to the cursor image itself.
-        let index = (0..count)
-            .map(|off| (start + off) % count)
-            .find(|&i| sc.images[i].state == ImageState::Available)
-            .unwrap_or(start);
-        sc.images[index].state = ImageState::Acquired;
-        sc.acquire_cursor = ((index + 1) % count) as u32;
-        hl_log::hl_debug!(hl_log::tag::PRESENT, "acquire idx={} of={}", index, count);
-        Ok(index as u32)
+        self.acquire_next_image_with_timeout(swapchain, u64::MAX)
+            .map_err(|error| match error {
+                AcquireImageError::Invalid(error) => error,
+                AcquireImageError::Retired => {
+                    GpuError::Invalid("vkAcquireNextImageKHR: swapchain is retired")
+                }
+                AcquireImageError::NotReady | AcquireImageError::Timeout => {
+                    GpuError::Invalid("vkAcquireNextImageKHR: no image is available")
+                }
+            })
     }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum AcquireImageError {
+    Retired,
+    NotReady,
+    Timeout,
+    Invalid(GpuError),
 }
 
 /// `vkQueuePresentKHR` (one swapchain) — submit [`Cmd::Present`] naming the swapchain's surface + the

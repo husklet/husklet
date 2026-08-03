@@ -44,6 +44,11 @@ currently exposes only queue family 0.
 This validation is deliberately not presented as semaphore support. The synchronization work above remains
 required before acquire, submit, or present wait/signal parameters can be honored.
 
+Pool exhaustion no longer reissues an acquired image: a zero timeout reports `VK_NOT_READY` and a finite
+non-zero timeout reports `VK_TIMEOUT`. This does not implement asynchronous availability or acquire
+semaphore/fence signaling. In particular, an infinite timeout still needs the pending-operation scheduler
+described above rather than blocking while holding the shim's global state lock.
+
 Swapchains retain both the application `VkSurfaceKHR` and the underlying native presentation target
 separately from their internal GPU surface. Replacement follows the native target, so two Vulkan surface
 wrappers around one window are compatible. Once a replacement request is validated, the old chain is
