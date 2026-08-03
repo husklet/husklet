@@ -2,6 +2,16 @@ pub(super) fn inject(module: &mut naga::Module, layouts: &[crate::reflect::Sampl
     if layouts.is_empty() {
         return;
     }
+    for (_, variable) in module.global_variables.iter_mut() {
+        let Some(binding) = variable.binding.as_ref() else { continue };
+        let mut ty = variable.ty;
+        if let naga::TypeInner::BindingArray { base, .. } = module.types[ty].inner {
+            ty = base;
+        }
+        if matches!(module.types[ty].inner, naga::TypeInner::Sampler { comparison: false }) {
+            variable.name = Some(format!("_hl_sampler_g{}_b{}", binding.group, binding.binding));
+        }
+    }
     let scalar = module.types.insert(
         naga::Type {
             name: None,
@@ -61,5 +71,21 @@ mod tests {
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)
             .expect("metadata storage declaration must validate");
+    }
+
+    #[test]
+    fn wgsl_helpers_may_accept_texture_and_sampler_handles() {
+        let source = r#"
+            fn sample(t: texture_2d<f32>, s: sampler, uv: vec2<f32>) -> vec4<f32> {
+                return textureSampleLevel(t, s, uv, 0.0);
+            }
+            @group(0) @binding(0) var t: texture_2d<f32>;
+            @group(0) @binding(1) var s: sampler;
+            @fragment fn main() -> @location(0) vec4<f32> { return sample(t, s, vec2(0.5)); }
+        "#;
+        let module = naga::front::wgsl::parse_str(source).expect("handle parameters parse");
+        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+            .validate(&module)
+            .expect("handle parameters validate");
     }
 }
