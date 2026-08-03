@@ -850,7 +850,9 @@ impl RenderPasses {
         // `GL_EQUAL` test read black for exactly this reason. Refusing the fold sends the run down the
         // segmented path, where the clear becomes a full-target `Enc::ClearRect` between two passes and
         // the stencil plane load-preserves across it.
-        if run[..index].iter().any(DrawCall::writes_depth_or_stencil) {
+        if run[..index].iter().any(|draw| {
+            draw.writes_depth_or_stencil() || draw.clears_depth() || draw.clears_stencil()
+        }) {
             return (None, 0);
         }
         (Some(run[index].clear), index + 1)

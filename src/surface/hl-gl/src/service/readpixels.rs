@@ -185,6 +185,7 @@ pub struct PreparedPixels {
 
 struct Packing {
     target: (i32, i32, TextureFormat),
+    force_opaque_alpha: bool,
     region: (i32, i32, i32, i32),
     destination: PixelFormat,
 }
@@ -206,7 +207,18 @@ impl PreparedPixels {
         };
         let (tw, th, target_format) = packing.target;
         let (x, y, w, h) = packing.region;
-        pack_region(&raw, tw, th, target_format, x, y, w, h, packing.destination)
+        pack_region(
+            &raw,
+            tw,
+            th,
+            target_format,
+            x,
+            y,
+            w,
+            h,
+            packing.destination,
+            packing.force_opaque_alpha,
+        )
     }
 }
 
@@ -266,6 +278,18 @@ pub fn prepare_pixels(
         .checked_sub(GL_COLOR_ATTACHMENT0)
         .filter(|index| *index < 16)
         .unwrap_or(0);
+    let force_opaque_alpha = ctx.local.read_fbo != 0
+        && ctx
+            .framebuffer_color_texture(ctx.local.read_fbo, attachment)
+            .is_some_and(|(_, texture)| {
+                matches!(
+                    texture.internal_format,
+                    GL_RGB
+                        | crate::model::glconst::GL_RGB8
+                        | crate::model::glconst::GL_RGB565
+                        | crate::model::glconst::GL_SRGB8
+                )
+            });
     let requested = (ctx.local.read_fbo != 0).then(|| {
         let (name, target) = ctx.framebuffer_color_texture(ctx.local.read_fbo, attachment)?;
         Some((name, target.gen, target.w, target.h, target.ir_format))
@@ -424,9 +448,21 @@ pub fn prepare_pixels(
     hl_log::hl_add!(hl_log::tag::PRESENT, "readback_bytes", raw.len() as u64);
 
     Ok(PreparedPixels {
-        bytes: pack_region(&raw, tw, th, fmt, x, y, w, h, destination),
+        bytes: pack_region(
+            &raw,
+            tw,
+            th,
+            fmt,
+            x,
+            y,
+            w,
+            h,
+            destination,
+            force_opaque_alpha,
+        ),
         packing: Some(Packing {
             target: (tw, th, fmt),
+            force_opaque_alpha,
             region: (x, y, w, h),
             destination,
         }),
@@ -641,6 +677,7 @@ fn pack_region(
     w: i32,
     h: i32,
     destination: PixelFormat,
+    force_opaque_alpha: bool,
 ) -> Vec<u8> {
     let bpp = destination.bytes_per_pixel();
     let format = destination.format;
@@ -675,7 +712,10 @@ fn pack_region(
                 // The target's channels as VALUES, unclamped: a float colour buffer's whole purpose is
                 // to hold what a unorm cannot, and this is the pair ES 3.0 requires it be readable
                 // through.
-                let [r, g, b, a] = target.rgba_f32(&raw[sp..sp + texel]);
+                let [r, g, b, mut a] = target.rgba_f32(&raw[sp..sp + texel]);
+                if force_opaque_alpha {
+                    a = 1.0;
+                }
                 let channels: &[f32] = match format {
                     GL_BGRA_EXT => &[b, g, r, a],
                     GL_RGB => &[r, g, b],
@@ -698,7 +738,10 @@ fn pack_region(
                 }
                 continue;
             }
-            let [r, g, b, a] = target.rgba8(&raw[sp..sp + texel]);
+            let [r, g, b, mut a] = target.rgba8(&raw[sp..sp + texel]);
+            if force_opaque_alpha {
+                a = u8::MAX;
+            }
             match format {
                 GL_BGRA_EXT => out[dp..dp + 4].copy_from_slice(&[b, g, r, a]),
                 GL_RGB => out[dp..dp + 3].copy_from_slice(&[r, g, b]),
@@ -812,6 +855,7 @@ mod tests {
             2,
             2,
             PixelFormat::new(0x1908, 0x1401),
+            false,
         );
         assert_eq!(
             packed,
@@ -832,12 +876,27 @@ mod tests {
             2,
             2,
             PixelFormat::new(0x1908, 0x1401),
+            false,
         );
         assert_eq!(
             packed,
             [8, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3, 4, 5, 6, 7],
             "an RGBA8 target packs exactly as it always did"
         );
+
+        let packed = pack_region(
+            &[1, 2, 3, 0],
+            1,
+            1,
+            TextureFormat::Rgba8Unorm,
+            0,
+            0,
+            1,
+            1,
+            PixelFormat::new(0x1908, 0x1401),
+            true,
+        );
+        assert_eq!(packed, [1, 2, 3, 255], "an RGB attachment reads alpha as one");
 
         // A format with no plain-colour texel yields the zero-filled rectangle rather than reading bytes
         // it cannot interpret.
@@ -851,6 +910,7 @@ mod tests {
             2,
             2,
             PixelFormat::new(0x1908, 0x1401),
+            false,
         );
         assert_eq!(packed, vec![0u8; 16], "an undescribable target packs zeros");
     }
@@ -873,6 +933,7 @@ mod tests {
                 1,
                 1,
                 PixelFormat::new(0x8D99, GL_UNSIGNED_INT),
+                false,
             ),
             raw,
             "unsigned integer readback is raw numeric data, never normalized through bytes"
@@ -894,6 +955,7 @@ mod tests {
                 1,
                 1,
                 PixelFormat::new(0x8D99, GL_INT),
+                false,
             ),
             raw,
             "signed integer readback preserves two's-complement components"
