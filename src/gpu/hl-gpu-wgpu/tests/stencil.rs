@@ -23,10 +23,10 @@ use std::io::Write;
 
 use hl_gpu::protocol::model::descriptor::{
     ColorAttachment, ColorTargetState, DepthAttachment, DepthState, RenderPipelineDesc, ShaderRef,
-    StencilFaceState, TextureDesc,
+    StencilFaceState, TextureDesc, TextureSubresource, Extent3d, Origin3d,
 };
 use hl_gpu::protocol::model::enums::{
-    compare, stencil_op, texture_usage, LoadOp, TextureDim, TextureFormat, Topology,
+    compare, stencil_op, texture_usage, LoadOp, TextureAspect, TextureDim, TextureFormat, Topology,
 };
 use hl_gpu::{
     Cmd, CommandBuffer, Enc, FakeClock, GlobalLedger, GpuExecutor, Limits, Session,
@@ -137,7 +137,7 @@ fn pipeline(module: u32, depth: DepthState, topology: Topology) -> RenderPipelin
 
 /// Run the two-pass mark-then-test IR and return the color plane. `stencil_enabled` selects pass B's
 /// stencil: `EQUAL` (gated) vs fully `DISABLED` (the regression control — draws everywhere).
-fn run(exec: &mut WgpuExecutor, stencil_enabled: bool) -> Vec<u8> {
+fn run(exec: &mut WgpuExecutor, stencil_enabled: bool, copy_stencil: bool) -> Vec<u8> {
     let ds_fmt = TextureFormat::Depth24PlusStencil8;
 
     // Pass A pipeline: mark the rect — ALWAYS compare, REPLACE on pass, write the whole 0xFF stencil mask.
@@ -202,7 +202,8 @@ fn run(exec: &mut WgpuExecutor, stencil_enabled: bool) -> Vec<u8> {
                     texture_usage::RENDER_TARGET | texture_usage::COPY_SRC,
                 ),
             ),
-            Cmd::CreateTexture(2, tex(ds_fmt, texture_usage::RENDER_TARGET)),
+            Cmd::CreateTexture(2, tex(ds_fmt, texture_usage::RENDER_TARGET | texture_usage::COPY_SRC)),
+            Cmd::CreateTexture(3, tex(ds_fmt, texture_usage::RENDER_TARGET | texture_usage::COPY_DST)),
             Cmd::CreateShader {
                 id: 1,
                 kind: ShaderPayloadKind::SpirV,
@@ -242,6 +243,15 @@ fn run(exec: &mut WgpuExecutor, stencil_enabled: bool) -> Vec<u8> {
                         first_instance: 0,
                     },
                     Enc::EndRenderPass,
+                    Enc::CopyTextureToTexture {
+                        src: 2,
+                        src_sub: TextureSubresource { mip: 0, layer: 0, aspect: TextureAspect::StencilOnly },
+                        src_origin: Origin3d::default(),
+                        dst: 3,
+                        dst_sub: TextureSubresource { mip: 0, layer: 0, aspect: TextureAspect::StencilOnly },
+                        dst_origin: Origin3d::default(),
+                        extent: Extent3d { width: N, height: N, depth: 1 },
+                    },
                     // Pass B — re-clear color to blue, LOAD (preserve) the stencil, draw fullscreen green
                     // gated by stencil EQUAL 1. Only the marked rect passes.
                     Enc::BeginRenderPass {
@@ -252,7 +262,7 @@ fn run(exec: &mut WgpuExecutor, stencil_enabled: bool) -> Vec<u8> {
                             store: true,
                         }],
                         depth: Some(DepthAttachment {
-                            texture: 2,
+                            texture: if copy_stencil { 3 } else { 2 },
                             depth_load: LoadOp::Load,
                             stencil_load: LoadOp::Load,
                             clear_depth: 1.0,
@@ -283,13 +293,77 @@ fn count_color(px: &[u8], want: [u8; 4]) -> usize {
     px.chunks_exact(4).filter(|c| *c == want).count()
 }
 
+fn run_depth_aspect_copy(exec: &mut WgpuExecutor) -> Vec<u8> {
+    let format = TextureFormat::Depth24PlusStencil8;
+    let depth = |write, compare| DepthState {
+        format,
+        depth_write: write,
+        depth_compare: compare,
+        stencil_front: StencilFaceState::DISABLED,
+        stencil_back: StencilFaceState::DISABLED,
+        stencil_read_mask: 0,
+        stencil_write_mask: 0,
+        bias_constant: 0,
+        bias_slope_scale: 0.0,
+        bias_clamp: 0.0,
+    };
+    let mut session = Session::new(
+        Limits::from_capabilities(exec.capabilities()),
+        GlobalLedger::unbounded(),
+        Box::new(FakeClock::new(0)),
+    );
+    hl_gpu::runtime::submit(
+        &mut session,
+        exec,
+        0,
+        &[
+            Cmd::CreateTexture(1, tex(TextureFormat::Rgba8Unorm, texture_usage::RENDER_TARGET | texture_usage::COPY_SRC)),
+            Cmd::CreateTexture(2, tex(format, texture_usage::RENDER_TARGET | texture_usage::COPY_SRC)),
+            Cmd::CreateTexture(3, tex(format, texture_usage::RENDER_TARGET | texture_usage::COPY_DST)),
+            Cmd::CreateShader { id: 1, kind: ShaderPayloadKind::SpirV, spirv: wgsl_to_spirv(MARK_WGSL) },
+            Cmd::CreateShader { id: 2, kind: ShaderPayloadKind::SpirV, spirv: wgsl_to_spirv(TEST_WGSL) },
+            Cmd::CreateRenderPipeline(1, pipeline(1, depth(true, compare::ALWAYS), Topology::TriangleList)),
+            Cmd::CreateRenderPipeline(2, pipeline(2, depth(false, compare::EQUAL), Topology::TriangleList)),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginRenderPass {
+                        color: vec![ColorAttachment { texture: 1, load: LoadOp::Clear, clear: [0.0, 0.0, 0.0, 1.0], store: true }],
+                        depth: Some(DepthAttachment { texture: 2, depth_load: LoadOp::Clear, stencil_load: LoadOp::Clear, clear_depth: 1.0, clear_stencil: 0 }),
+                    },
+                    Enc::SetPipeline(1),
+                    Enc::Draw { vertex_count: 6, instance_count: 1, first_vertex: 0, first_instance: 0 },
+                    Enc::EndRenderPass,
+                    Enc::CopyTextureToTexture {
+                        src: 2,
+                        src_sub: TextureSubresource { mip: 0, layer: 0, aspect: TextureAspect::DepthOnly },
+                        src_origin: Origin3d::default(),
+                        dst: 3,
+                        dst_sub: TextureSubresource { mip: 0, layer: 0, aspect: TextureAspect::DepthOnly },
+                        dst_origin: Origin3d::default(),
+                        extent: Extent3d { width: N, height: N, depth: 1 },
+                    },
+                    Enc::BeginRenderPass {
+                        color: vec![ColorAttachment { texture: 1, load: LoadOp::Clear, clear: [0.0, 0.0, 1.0, 1.0], store: true }],
+                        depth: Some(DepthAttachment { texture: 3, depth_load: LoadOp::Load, stencil_load: LoadOp::Clear, clear_depth: 1.0, clear_stencil: 0 }),
+                    },
+                    Enc::SetPipeline(2),
+                    Enc::Draw { vertex_count: 3, instance_count: 1, first_vertex: 0, first_instance: 0 },
+                    Enc::EndRenderPass,
+                ],
+                signal: None,
+            }),
+        ],
+    ).expect("depth aspect preservation must execute without a wgpu refusal");
+    exec.read_texture(&session.resources, 1).expect("read color target")
+}
+
 #[test]
 fn stencil_test_gates_the_draw_to_the_marked_rect() {
     let mut exec = WgpuExecutor::new(DeviceConfig::default())
         .expect("a GPU adapter is required to prove the wgpu executor");
 
     // ---- ENABLED: only the marked rect is green; everything else is the pass-B blue clear. ----
-    let enabled = run(&mut exec, true);
+    let enabled = run(&mut exec, true, false);
     write_png("/tmp/hl-demo/stencil_gated.png", &enabled);
 
     for y in 0..N {
@@ -317,7 +391,7 @@ fn stencil_test_gates_the_draw_to_the_marked_rect() {
     );
 
     // ---- DISABLED control: the SAME geometry with pass B's stencil off floods the whole screen green. ----
-    let disabled = run(&mut exec, false);
+    let disabled = run(&mut exec, false, false);
     let green_disabled = count_color(&disabled, GREEN);
     assert_eq!(
         green_disabled, (N * N) as usize,
@@ -332,6 +406,34 @@ fn stencil_test_gates_the_draw_to_the_marked_rect() {
         green_enabled < green_disabled,
         "enabled ({green_enabled}) must gate strictly fewer pixels than disabled ({green_disabled})"
     );
+}
+
+#[test]
+fn stencil_aspect_copy_preserves_the_exact_mask() {
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
+    let copied = run(&mut exec, true, true);
+    for y in 0..N {
+        for x in 0..N {
+            let px = &copied[((y * N + x) * 4) as usize..][..4];
+            let want = if inside_rect(x, y) { GREEN } else { BLUE };
+            assert_eq!(px, want, "copied stencil at ({x},{y})");
+        }
+    }
+}
+
+#[test]
+fn depth_aspect_copy_preserves_the_exact_plane() {
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove the wgpu executor");
+    let copied = run_depth_aspect_copy(&mut exec);
+    for y in 0..N {
+        for x in 0..N {
+            let px = &copied[((y * N + x) * 4) as usize..][..4];
+            let want = if inside_rect(x, y) { GREEN } else { BLUE };
+            assert_eq!(px, want, "copied depth at ({x},{y})");
+        }
+    }
 }
 
 // -------------------------------------------------------------------------------------------------

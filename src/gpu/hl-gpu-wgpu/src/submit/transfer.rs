@@ -1,6 +1,188 @@
 use super::*;
 
 impl WgpuExecutor {
+    /// Preserve the stencil plane of a combined depth/stencil texture through the buffer-copy path that
+    /// WebGPU exposes for a single stencil aspect. Texture-to-texture copies require the FULL aspect set,
+    /// so issuing one with `StencilOnly` is rejected before it reaches Metal.
+    fn copy_stencil_aspect(
+        &self,
+        src: &texture::WgpuTexture,
+        dst: &texture::WgpuTexture,
+    ) -> Result<()> {
+        let bytes_per_row = src.width.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let size = u64::from(bytes_per_row) * u64::from(src.height);
+        let staging = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("hl-stencil-aspect-copy"),
+            size,
+            usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let layout = wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(bytes_per_row),
+            rows_per_image: Some(src.height),
+        };
+        let extent = wgpu::Extent3d {
+            width: src.width,
+            height: src.height,
+            depth_or_array_layers: 1,
+        };
+        let mut encoder = self.gpu.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor {
+                label: Some("hl-stencil-aspect-copy"),
+            },
+        );
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &src.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::StencilOnly,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout,
+            },
+            extent,
+        );
+        encoder.copy_buffer_to_texture(
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &dst.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::StencilOnly,
+            },
+            extent,
+        );
+        self.gpu.queue.submit(Some(encoder.finish()));
+        Ok(())
+    }
+
+    /// Preserve depth by sampling the source depth view and writing `frag_depth` into the destination.
+    /// `Depth24Plus` deliberately has no portable buffer-copy representation, and WebGPU forbids a
+    /// depth-only texture copy, so a render is the exact public operation available for this aspect.
+    fn copy_depth_aspect(
+        &self,
+        src: &texture::WgpuTexture,
+        dst: &texture::WgpuTexture,
+    ) -> Result<()> {
+        const SHADER: &str = r#"
+@group(0) @binding(0) var source: texture_depth_2d;
+
+@vertex
+fn vs_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
+    var positions = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 3.0, -1.0),
+        vec2<f32>(-1.0,  3.0),
+    );
+    return vec4<f32>(positions[index], 0.0, 1.0);
+}
+
+@fragment
+fn fs_main(@builtin(position) position: vec4<f32>) -> @builtin(frag_depth) f32 {
+    return textureLoad(source, vec2<i32>(position.xy), 0);
+}
+"#;
+        let source_view = src.texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("hl-depth-aspect-copy-source"),
+            aspect: wgpu::TextureAspect::DepthOnly,
+            ..Default::default()
+        });
+        let layout = self.gpu.device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("hl-depth-aspect-copy"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                }],
+            },
+        );
+        let bind_group = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("hl-depth-aspect-copy"),
+            layout: &layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&source_view),
+            }],
+        });
+        let pipeline_layout = self.gpu.device.create_pipeline_layout(
+            &wgpu::PipelineLayoutDescriptor {
+                label: Some("hl-depth-aspect-copy"),
+                bind_group_layouts: &[&layout],
+                push_constant_ranges: &[],
+            },
+        );
+        let shader = self.gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("hl-depth-aspect-copy"),
+            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+        });
+        let pipeline = self.gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("hl-depth-aspect-copy"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[],
+            }),
+            primitive: Default::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24PlusStencil8,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+        let mut encoder = self.gpu.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor {
+                label: Some("hl-depth-aspect-copy"),
+            },
+        );
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("hl-depth-aspect-copy"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &dst.view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        self.gpu.queue.submit(Some(encoder.finish()));
+        Ok(())
+    }
+
     /// Fill `[offset, offset+size)` of buffer `id` with the repeating little-endian pattern of `value`
     /// (device memset). Read-modify-write over the 4-aligned window preserves neighbour bytes and matches
     /// the oracle's tiling (buffer byte `offset+i` takes pattern byte `i % 4`).
@@ -111,21 +293,11 @@ impl WgpuExecutor {
             {
                 return Err(GpuError::Invalid("wgpu: incompatible depth/stencil aspect copy"));
             }
-            let aspect = match src_sub.aspect {
-                TextureAspect::DepthOnly => wgpu::TextureAspect::DepthOnly,
-                TextureAspect::StencilOnly => wgpu::TextureAspect::StencilOnly,
+            return match src_sub.aspect {
+                TextureAspect::DepthOnly => self.copy_depth_aspect(src, dst),
+                TextureAspect::StencilOnly => self.copy_stencil_aspect(src, dst),
                 TextureAspect::All => unreachable!(),
             };
-            let mut encoder = self.gpu.device.create_command_encoder(
-                &wgpu::CommandEncoderDescriptor { label: Some("hl-depth-stencil-aspect-copy") },
-            );
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo { texture: &src.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect },
-                wgpu::TexelCopyTextureInfo { texture: &dst.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect },
-                wgpu::Extent3d { width: extent.width, height: extent.height, depth_or_array_layers: 1 },
-            );
-            self.gpu.queue.submit(Some(encoder.finish()));
-            return Ok(());
         }
         let src_opaque = texture::WgpuTexture::get(res, src)?.is_opaque_bc1_rgb();
         let dst_opaque = texture::WgpuTexture::get(res, dst)?.is_opaque_bc1_rgb();
