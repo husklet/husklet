@@ -93,3 +93,5 @@ pub const TOTAL_ENTRYPOINTS: usize = VK_ENTRYPOINTS;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod queue_tests;
