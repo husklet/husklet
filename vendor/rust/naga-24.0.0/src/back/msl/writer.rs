@@ -1842,6 +1842,19 @@ impl<W: Write> Writer<W> {
                 }
             },
             crate::Expression::Unary { op, expr } => {
+                // Metal rejects unary `-` for matrices even though Naga IR and
+                // the source languages accept it. Scalar multiplication has
+                // the same component-wise result and is supported by MSL's
+                // matrix operators.
+                if op == crate::UnaryOperator::Negate
+                    && matches!(context.resolve_type(expr), crate::TypeInner::Matrix { .. })
+                {
+                    write!(self.out, "(")?;
+                    self.put_expression(expr, context, false)?;
+                    write!(self.out, " * -1.0)")?;
+                    return Ok(());
+                }
+
                 let op_str = match op {
                     crate::UnaryOperator::Negate => "-",
                     crate::UnaryOperator::LogicalNot => "!",
