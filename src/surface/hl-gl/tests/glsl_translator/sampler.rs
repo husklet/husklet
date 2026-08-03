@@ -1,6 +1,84 @@
 use super::*;
 
 #[test]
+fn deqp_random_texture_sampler_name_does_not_capture_swizzle() {
+    let vs = r#"attribute vec4 dEQP_Position;
+attribute vec2 a_b;
+attribute float a_d;
+attribute vec4 a_i;
+attribute vec4 a_j;
+varying mediump vec2 b;
+varying mediump float d;
+varying mediump vec4 i;
+varying mediump vec4 j;
+void main() {
+    gl_Position = dEQP_Position;
+    b = a_b;
+    d = a_d;
+    i = a_i;
+    j = a_j;
+}"#;
+    let fs = r#"precision mediump float;
+uniform samplerCube a;
+varying mediump vec2 b;
+uniform mediump float c;
+varying mediump float d;
+const int f = ivec4(10.0, -2.25, -9.25, 0.5).qspt.t;
+uniform sampler2D g;
+varying mediump vec4 i;
+varying mediump vec4 j;
+float k = vec4(-10.0, true, -0.75, true).r - float(float(-1.75));
+const bool l = true;
+const float m = 0.75;
+int n = (int(-7.0) - -8);
+const int o = ((int(-7)));
+void main() {
+    gl_FragColor = vec4(b.s, int(m) * int(n), d * float(-1.75), int(c));
+    gl_FragColor = gl_FragColor;
+    k = k;
+    k = (float(k) - -6.0);
+    gl_FragColor = vec4(o, -0.125, 12, n) * vec4(m, l, -1.0, k) - gl_FragColor;
+    gl_FragColor = j.rabg.abgr;
+    vec4 h = i;
+    gl_FragColor = h.xywz;
+    vec4 e = texture2D(g, (b));
+    e = vec4(c, f, bool(1), false).wxyz;
+    gl_FragColor = textureCube(a, vec3(c, d, float(c)), b.g);
+}"#;
+
+    let (_, translated) = glsl::StageSources::new(vs, fs).translate_render();
+    assert!(
+        translated.contains(", b.g)"),
+        "cube bias swizzle changed: {translated}"
+    );
+    assert!(
+        !translated.contains("b.sampler2D"),
+        "sampler name g must not replace the unrelated .g swizzle: {translated}"
+    );
+    assert_naga_parses(&translated, naga::ShaderStage::Fragment);
+}
+
+#[test]
+fn one_letter_sampler_names_do_not_replace_swizzles() {
+    let fs = "uniform sampler2D a;\nvoid main(){\n\
+              vec4 value = vec4(1.0);\n\
+              gl_FragColor = texture2D(a, vec2(0.0)) + vec4(value.a, value . a, 0.0, 0.0);\n}";
+    let (_, translated) =
+        glsl::StageSources::new("void main(){gl_Position=vec4(0.0);}", fs).translate_render();
+
+    assert!(translated.contains("value.a"), "{translated}");
+    assert!(translated.contains("value . a"), "{translated}");
+    assert_eq!(
+        translated
+            .matches("sampler2D(a_hltex, a_hlsmp)")
+            .count(),
+        1,
+        "{translated}"
+    );
+    assert_naga_parses(&translated, naga::ShaderStage::Fragment);
+}
+
+#[test]
 fn layered_samplers_keep_dimension_across_sampling_size_and_lod() {
     let vs = "#version 300 es\nvoid main(){gl_Position=vec4(0);}";
     let fs = "#version 300 es\nprecision highp float;\n\
