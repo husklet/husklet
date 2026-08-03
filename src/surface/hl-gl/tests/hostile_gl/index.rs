@@ -18,6 +18,7 @@ fn out_of_range_indices_are_guarded_no_ops() {
     assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
     // A texture unit far past the modeled bank leaves the active unit unchanged.
     c.active_texture(GL_TEXTURE0 + 9999);
+    assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
     assert_eq!(
         c.active_texture_unit(),
         0,

@@ -16,9 +16,10 @@ fn junk_enums_to_state_setters_never_panic_and_valid_still_works() {
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
     assert!(!c.blend_enabled());
 
-    // A bogus glBindTexture target + a junk texture name: no panic, no crash.
+    // A bogus glBindTexture target is rejected without materializing the supplied texture name.
     c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, 0xDEAD, 424242);
+    assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
     // A junk glBlendFunc factor pair is stored verbatim (validated at lowering); no panic.
     record::blend_func(&mut c, 0xDEAD, 0xBEEF);
     record::tex_parameter(&mut c, 0xDEAD, 0xBEEF);

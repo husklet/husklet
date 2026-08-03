@@ -8,12 +8,18 @@ impl GlContext {
         let unit = texture.wrapping_sub(GL_TEXTURE0) as usize;
         if unit < self.local.tex_unit.len() {
             self.local.active_texture = unit;
+        } else {
+            self.set_gl_error(GL_INVALID_ENUM);
         }
     }
 }
 
 /// `glBindTexture(GL_TEXTURE_2D, name)` — binds to the active texture unit.
-pub fn bind_texture(ctx: &mut GlContext, _target: u32, name: u32) {
+pub fn bind_texture(ctx: &mut GlContext, target: u32, name: u32) {
+    if !matches!(target, GL_TEXTURE_2D | GL_TEXTURE_CUBE_MAP) {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
     // Deletion immediately releases the public name. Container references retain the OLD object by stable
     // identity, so binding the same spelling creates a distinct texture rather than resurrecting it.
     if ctx.take_deleted_texture_name(name) {

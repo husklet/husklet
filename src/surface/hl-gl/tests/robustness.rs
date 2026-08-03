@@ -353,6 +353,24 @@ fn pixel_store_rejects_bad_alignment_and_leaves_state_unchanged() {
 }
 
 #[test]
+fn negative_texture_api_rejects_invalid_closed_enums() {
+    let mut c = ctx();
+
+    c.active_texture(u32::MAX);
+    assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
+    c.active_texture(GL_TEXTURE0 + query::MAX_COMBINED_TEXTURE_IMAGE_UNITS as u32);
+    assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
+    assert_eq!(c.active_texture_unit(), 0);
+
+    record::bind_texture(&mut c, 0, 1);
+    assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
+    assert_eq!(c.bound_texture(), 0);
+
+    record::pixel_store(&mut c, 0, 4);
+    assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
+}
+
+#[test]
 fn pack_alignment_pads_between_readback_rows_but_not_after_the_last() {
     let mut c = ctx();
     let store = c.pixel_store_state();

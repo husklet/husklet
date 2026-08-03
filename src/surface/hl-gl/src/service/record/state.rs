@@ -424,8 +424,12 @@ pub fn pixel_store(ctx: &mut GlContext, pname: u32, value: i32) {
             ctx.set_gl_error(GL_INVALID_VALUE);
             return;
         }
-        // Unrecognized pname: an untracked pack/unpack parameter — leave state unchanged.
-        _ => true,
+        // `pname` is a closed API vocabulary. Silently accepting an unknown enum makes the application
+        // believe state changed and violates the negative API contract.
+        _ => {
+            ctx.set_gl_error(GL_INVALID_ENUM);
+            return;
+        }
     };
     let _ = ok;
 }
