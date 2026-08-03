@@ -60,6 +60,25 @@ void main(void)
 }
 ";
 
+#[test]
+fn preprocessing_does_not_expand_identifiers_inside_number_tokens() {
+    let vs = "#define e +1\nattribute vec4 position; void main(){ int n=1e; gl_Position=position; }";
+    let fs = "void main(){ gl_FragColor=vec4(1); }";
+    let (translated, _) = glsl::StageSources::new(vs, fs).translate_render();
+    assert!(translated.contains("int n=1e;"), "{translated}");
+    assert!(!translated.contains("1+1"), "{translated}");
+    let mut frontend = naga::front::glsl::Frontend::default();
+    assert!(
+        frontend
+            .parse(
+                &naga::front::glsl::Options::from(naga::ShaderStage::Vertex),
+                &translated
+            )
+            .is_err(),
+        "the invalid pp-number must reach lexical validation: {translated}"
+    );
+}
+
 /// The defect: a `#define`d precision qualifier must be expanded before reflection, so no macro identifier
 /// survives into the emitted desktop GLSL and the host compiler accepts both stages.
 #[test]

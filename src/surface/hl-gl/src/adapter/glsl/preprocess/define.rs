@@ -115,6 +115,11 @@ impl Macros {
         let bytes = text.as_bytes();
         let mut at = 0usize;
         while at < bytes.len() {
+            if let Some(end) = Words(text).number_end(at) {
+                out.push_str(&text[at..end]);
+                at = end;
+                continue;
+            }
             let Some(word) = Words(text).at(at) else {
                 at = Words(text).copy(at, &mut out);
                 continue;
@@ -176,6 +181,11 @@ impl Macros {
         let bytes = text.as_bytes();
         let mut at = 0usize;
         while at < bytes.len() {
+            if let Some(end) = Words(text).number_end(at) {
+                out.push_str(&text[at..end]);
+                at = end;
+                continue;
+            }
             let Some(word) = Words(text).at(at) else {
                 at = Words(text).copy(at, out);
                 continue;
@@ -284,6 +294,11 @@ fn replace_params(body: &str, params: &[String], arguments: &[String]) -> String
     let bytes = body.as_bytes();
     let mut at = 0usize;
     while at < bytes.len() {
+        if let Some(end) = Words(body).number_end(at) {
+            out.push_str(&body[at..end]);
+            at = end;
+            continue;
+        }
         let Some(word) = Words(body).at(at) else {
             at = Words(body).copy(at, &mut out);
             continue;

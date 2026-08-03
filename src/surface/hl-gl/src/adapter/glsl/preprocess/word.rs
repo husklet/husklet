@@ -7,6 +7,32 @@
 pub(crate) struct Words<'a>(pub(crate) &'a str);
 
 impl<'a> Words<'a> {
+    /// End of the preprocessing-number token beginning at `at`. Identifiers embedded in such a token are
+    /// not separate macro-expansion candidates: preprocessing-token formation precedes macro replacement.
+    pub(crate) fn number_end(&self, at: usize) -> Option<usize> {
+        let bytes = self.0.as_bytes();
+        let first = *bytes.get(at)?;
+        if !first.is_ascii_digit()
+            && !(first == b'.' && bytes.get(at + 1).is_some_and(u8::is_ascii_digit))
+        {
+            return None;
+        }
+        let mut end = at + 1;
+        while end < bytes.len() {
+            let byte = bytes[end];
+            if byte == b'_' || byte == b'.' || byte.is_ascii_alphanumeric() {
+                end += 1;
+            } else if matches!(byte, b'+' | b'-')
+                && matches!(bytes.get(end - 1), Some(b'e' | b'E' | b'p' | b'P'))
+            {
+                end += 1;
+            } else {
+                break;
+            }
+        }
+        Some(end)
+    }
+
     /// The identifier starting exactly at `at`, or `None` when the byte there does not begin one.
     pub(crate) fn at(&self, at: usize) -> Option<&'a str> {
         let bytes = self.0.as_bytes();
