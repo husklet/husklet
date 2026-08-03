@@ -69,6 +69,75 @@ fn blit_image_lowers_to_blit_texture_with_filter() {
     );
 }
 
+#[test]
+fn blit_image_allows_disjoint_mips_of_one_image_and_rejects_overlap() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let image = create::create_image_layers(
+        &mut d,
+        &mut sink,
+        8,
+        8,
+        1,
+        4,
+        false,
+        vk_format::R8G8B8A8_UNORM,
+        vk_image_usage::TRANSFER_SRC | vk_image_usage::TRANSFER_DST,
+        1,
+    )
+    .unwrap();
+    let ir = img_ir(&d, image);
+    let mut mip1 = SubresourceLayers::base();
+    mip1.mip_level = 1;
+    let mut mip2 = SubresourceLayers::base();
+    mip2.mip_level = 2;
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_blit_image(
+            d,
+            cb,
+            image,
+            image,
+            mip1,
+            mip2,
+            Origin3d::default(),
+            Extent3d { width: 4, height: 4, depth: 1 },
+            Origin3d::default(),
+            Extent3d { width: 2, height: 2, depth: 1 },
+            false,
+            Mirror::NONE,
+        )
+        .unwrap();
+    });
+    assert!(matches!(
+        enc.as_slice(),
+        [Enc::BlitTexture { src, src_sub, dst, dst_sub, .. }]
+            if *src == ir && *dst == ir && src_sub.mip == 1 && dst_sub.mip == 2
+    ));
+
+    let cb = recording_cb(&mut d);
+    let error = record::cmd_blit_image(
+        &mut d,
+        cb,
+        image,
+        image,
+        mip1,
+        mip1,
+        Origin3d::default(),
+        Extent3d { width: 4, height: 4, depth: 1 },
+        Origin3d::default(),
+        Extent3d { width: 4, height: 4, depth: 1 },
+        false,
+        Mirror::NONE,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        GpuError::Invalid(
+            "vkCmdBlitImage: overlapping source and destination subresources of one image"
+        )
+    );
+}
+
 /// A MIRRORED region reaches the IR as a mirror, on the axes the caller inverted.
 ///
 /// `vkCmdBlitImage` expresses a flip by putting `offsets[1]` before `offsets[0]` on an axis, and it is

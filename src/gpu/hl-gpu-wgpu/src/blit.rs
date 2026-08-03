@@ -499,9 +499,9 @@ impl BlitCache {
 impl WgpuExecutor {
     /// Execute one `Enc::BlitTexture`: resample the `src_extent` region of `src` into the `dst_extent`
     /// region of `dst` with `filter`, by rendering a viewport-clipped textured triangle (see the module
-    /// docs). Only the base subresource (mip 0 / layer 0 / whole color aspect) of a 2D color texture is
-    /// supported; a non-base subresource, a 3D/layer region, a zero-sized rect, or an out-of-range region is
-    /// a clean typed error (mirroring `copy_texture_to_texture`), never a panic.
+    /// docs). Named mip levels are supported; array layers and non-color aspects remain typed refusals.
+    /// A zero-sized or out-of-range region is a clean typed error (mirroring
+    /// `copy_texture_to_texture`), never a panic.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn blit_texture(
         &mut self,
@@ -519,12 +519,17 @@ impl WgpuExecutor {
     ) -> Result<()> {
         let _sp = hl_log::hl_span!(hl_log::tag::WGPU, "blit");
         for sub in [src_sub, dst_sub] {
-            if sub.mip != 0 || sub.layer != 0 || sub.aspect != TextureAspect::All {
-                return Err(GpuError::Unsupported("wgpu: non-base subresource blit"));
+            if sub.layer != 0 || sub.aspect != TextureAspect::All {
+                return Err(GpuError::Unsupported("wgpu: non-base layer/aspect blit"));
             }
         }
-        let src_dim = texture::WgpuTexture::get(res, src)?.dim;
-        let dst_dim = texture::WgpuTexture::get(res, dst)?.dim;
+        let source = texture::WgpuTexture::get(res, src)?;
+        let destination = texture::WgpuTexture::get(res, dst)?;
+        if src_sub.mip >= source.mip_levels || dst_sub.mip >= destination.mip_levels {
+            return Err(GpuError::OutOfBounds);
+        }
+        let src_dim = source.dim;
+        let dst_dim = destination.dim;
         let depth_spanning =
             src_extent.depth > 1 || dst_extent.depth > 1 || src_origin.z != 0 || dst_origin.z != 0;
         if depth_spanning
@@ -568,9 +573,13 @@ impl WgpuExecutor {
                 return Err(GpuError::Unsupported("wgpu: depth/stencil blit source"));
             }
             (
-                t.width,
-                t.height,
-                t.depth,
+                (t.width >> src_sub.mip).max(1),
+                (t.height >> src_sub.mip).max(1),
+                if t.dim == hl_gpu::protocol::model::enums::TextureDim::D3 {
+                    (t.depth >> src_sub.mip).max(1)
+                } else {
+                    t.depth
+                },
                 t.format,
                 Format::from(t.format).native(),
                 filterable(t.format),
@@ -583,9 +592,13 @@ impl WgpuExecutor {
             // usage a render pass target needs. Refused here, where the caller can be told what it named,
             // rather than as a device-validation failure inside the pass below.
             (
-                t.width,
-                t.height,
-                t.depth,
+                (t.width >> dst_sub.mip).max(1),
+                (t.height >> dst_sub.mip).max(1),
+                if t.dim == hl_gpu::protocol::model::enums::TextureDim::D3 {
+                    (t.depth >> dst_sub.mip).max(1)
+                } else {
+                    t.depth
+                },
                 t.format,
                 Format::from(t.format).native(),
             )

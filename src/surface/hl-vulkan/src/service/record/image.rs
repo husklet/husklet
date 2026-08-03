@@ -229,7 +229,8 @@ pub fn cmd_copy_image(
 }
 
 /// `vkCmdBlitImage` (one region) — record a scaled/filtered `BlitTexture` per array layer. Distinct
-/// images, matching formats, both usages present, positive src/dst extents in-bounds. `linear` selects
+/// images or provably disjoint subresources of one image, matching numeric format classes, both usages
+/// present, positive src/dst extents in-bounds. `linear` selects
 /// the resampling filter (`VK_FILTER_LINEAR` → [`Filter::Linear`], else [`Filter::Nearest`]).
 ///
 /// `mirror` is the NET per-axis flip the caller derived from its two offset pairs. Vulkan expresses a
@@ -250,11 +251,6 @@ pub fn cmd_blit_image(
     linear: bool,
     mirror: Mirror,
 ) -> Result<()> {
-    if src == dst {
-        return Err(GpuError::Invalid(
-            "vkCmdBlitImage: src and dst image must differ",
-        ));
-    }
     let (src_ir, src_fmt, src_usage, src_sub, siw, sih, sid, src_dim) = {
         let i = dev
             .images
@@ -297,6 +293,23 @@ pub fn cmd_blit_image(
         return Err(GpuError::Invalid(
             "vkCmdBlitImage: source and destination layer counts differ",
         ));
+    }
+    if src == dst {
+        let src_layer_end = src_sub
+            .base_array_layer
+            .checked_add(src_sub.layer_count)
+            .ok_or(GpuError::OutOfBounds)?;
+        let dst_layer_end = dst_sub
+            .base_array_layer
+            .checked_add(dst_sub.layer_count)
+            .ok_or(GpuError::OutOfBounds)?;
+        let layers_overlap = src_sub.base_array_layer < dst_layer_end
+            && dst_sub.base_array_layer < src_layer_end;
+        if src_sub.mip_level == dst_sub.mip_level && layers_overlap {
+            return Err(GpuError::Invalid(
+                "vkCmdBlitImage: overlapping source and destination subresources of one image",
+            ));
+        }
     }
     // A BLIT converts; that is what distinguishes it from a copy. The specification lets the two formats
     // differ freely except in numeric class, and the host does exactly that — measured directly, it

@@ -472,8 +472,8 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
             filter,
             ..
         } => {
-            copy::check_plane_subresource(src_sub)?;
-            copy::check_plane_subresource(dst_sub)?;
+            copy::check_blit_subresource(texture(res, *src)?, src_sub, src_origin, src_extent)?;
+            copy::check_blit_subresource(texture(res, *dst)?, dst_sub, dst_origin, dst_extent)?;
             // A DEPTH-SPANNING blit is served, and it is the one gap on this operation that cannot be
             // closed by advertising less. `VkFormatFeatureFlags` is per FORMAT, not per image type, so
             // no bit exists for a driver to withdraw and no query exists through which an application
@@ -549,12 +549,6 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
                     "software: linear filtering of an integer blit",
                 ));
             }
-            let s = texture(res, *src)?;
-            copy::check_region_in_texture(s, src_origin, src_extent)?;
-            copy::check_depth_span_in_texture(s, src_origin, src_extent)?;
-            let d = texture(res, *dst)?;
-            copy::check_region_in_texture(d, dst_origin, dst_extent)?;
-            copy::check_depth_span_in_texture(d, dst_origin, dst_extent)?;
         }
         Enc::ResolveTexture {
             src,

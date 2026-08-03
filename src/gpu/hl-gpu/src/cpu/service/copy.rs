@@ -6,7 +6,7 @@ use crate::cpu::format::{sample_bilinear, texel_at};
 use crate::cpu::model::texture::Texture;
 use crate::cpu::model::{buffer, buffer_mut, texture, texture_mut};
 use crate::protocol::model::descriptor::{Extent3d, Mirror, Origin3d, TextureSubresource};
-use crate::protocol::model::enums::{Filter, TextureAspect};
+use crate::protocol::model::enums::{Filter, TextureAspect, TextureDim};
 use crate::protocol::model::error::{GpuError, Result};
 use crate::runtime::model::resources::SessionResources;
 
@@ -140,6 +140,40 @@ pub(crate) fn check_plane_subresource(sub: &TextureSubresource) -> Result<()> {
     Ok(())
 }
 
+/// Validate the independently-addressed mip used by a blit while retaining the oracle's deliberate
+/// array-layer and color-aspect limits.
+pub(crate) fn check_blit_subresource(
+    texture: &Texture,
+    sub: &TextureSubresource,
+    origin: &Origin3d,
+    extent: &Extent3d,
+) -> Result<()> {
+    if sub.layer != 0 {
+        return Err(GpuError::Unsupported("software: array-layer texture blit"));
+    }
+    if sub.aspect != TextureAspect::All {
+        return Err(GpuError::Unsupported("software: non-color aspect texture blit"));
+    }
+    if sub.mip >= texture.levels() {
+        return Err(GpuError::OutOfBounds);
+    }
+    let (width, height) = Texture::level_size(&texture.desc, sub.mip);
+    if origin.x.checked_add(extent.width).is_none_or(|end| end > width)
+        || origin.y.checked_add(extent.height).is_none_or(|end| end > height)
+    {
+        return Err(GpuError::OutOfBounds);
+    }
+    let depth = if texture.desc.dim == TextureDim::D3 {
+        (texture.desc.depth >> sub.mip).max(1)
+    } else {
+        texture.desc.depth
+    };
+    if origin.z.checked_add(extent.depth).is_none_or(|end| end > depth) {
+        return Err(GpuError::OutOfBounds);
+    }
+    Ok(())
+}
+
 /// [`check_plane_subresource`] plus the depth refusal a texture-to-texture COPY still carries.
 ///
 /// `copy_texture_to_texture` addresses one plane with a flat `(y * width + x)` offset and has no notion
@@ -156,27 +190,6 @@ pub(crate) fn check_copy_subresource(
         return Err(GpuError::Unsupported(
             "software: 3D/depth-slice texture copy",
         ));
-    }
-    Ok(())
-}
-
-/// Bounds-check a blit's DEPTH span against the planes `t` actually materializes.
-///
-/// A 3D texture's planes are its slices, so `origin.z + depth` must fit inside `Texture::layers`. This
-/// is separate from [`check_region_in_texture`], which judges the in-plane rect and is silent about z —
-/// an overhanging depth span would otherwise resolve to a plane index `plane_at` refuses, turning a
-/// bounds error into whatever the first failing slice happened to report, part-way through a write.
-pub(crate) fn check_depth_span_in_texture(
-    t: &Texture,
-    origin: &Origin3d,
-    extent: &Extent3d,
-) -> Result<()> {
-    let z_end = origin
-        .z
-        .checked_add(extent.depth.max(1))
-        .ok_or(GpuError::OutOfBounds)?;
-    if z_end > t.layers() {
-        return Err(GpuError::OutOfBounds);
     }
     Ok(())
 }
@@ -358,9 +371,11 @@ pub(crate) fn copy_texture_to_texture(
 pub(crate) fn blit_texture(
     res: &mut SessionResources,
     src: u32,
+    src_sub: &TextureSubresource,
     src_origin: &Origin3d,
     src_extent: &Extent3d,
     dst: u32,
+    dst_sub: &TextureSubresource,
     dst_origin: &Origin3d,
     dst_extent: &Extent3d,
     filter: Filter,
@@ -369,7 +384,7 @@ pub(crate) fn blit_texture(
     let (sw, src_bpt, src_fmt) = {
         let t = texture(res, src)?;
         (
-            t.desc.width as usize,
+            Texture::level_size(&t.desc, src_sub.mip).0 as usize,
             t.desc.format.software_texel_bytes()?,
             t.desc.format,
         )
@@ -381,7 +396,7 @@ pub(crate) fn blit_texture(
     let (dw, dst_bpt, dst_fmt) = {
         let t = texture(res, dst)?;
         (
-            t.desc.width as usize,
+            Texture::level_size(&t.desc, dst_sub.mip).0 as usize,
             t.desc.format.software_texel_bytes()?,
             t.desc.format,
         )
@@ -397,14 +412,14 @@ pub(crate) fn blit_texture(
     // byte-for-byte the arithmetic it saw before slices existed.
     let depth = dst_extent.depth.max(1) as usize;
     let plane_ranges =
-        |res: &SessionResources, id: u32, base: u32| -> Result<Vec<std::ops::Range<usize>>> {
+        |res: &SessionResources, id: u32, mip: u32, base: u32| -> Result<Vec<std::ops::Range<usize>>> {
             let t = texture(res, id)?;
             (0..depth)
-                .map(|z| t.plane_at(0, base + z as u32).ok_or(GpuError::OutOfBounds))
+                .map(|z| t.plane_at(mip, base + z as u32).ok_or(GpuError::OutOfBounds))
                 .collect()
         };
-    let src_planes = plane_ranges(res, src, src_origin.z)?;
-    let dst_planes = plane_ranges(res, dst, dst_origin.z)?;
+    let src_planes = plane_ranges(res, src, src_sub.mip, src_origin.z)?;
+    let dst_planes = plane_ranges(res, dst, dst_sub.mip, dst_origin.z)?;
     let t = texture_mut(res, dst)?;
     // A MIRRORED axis reverses the sample coordinate WITHIN the source rect: destination step `d` reads
     // `dext - d - 0.5` steps in instead of `d + 0.5`. Mirroring the coordinate rather than the destination
