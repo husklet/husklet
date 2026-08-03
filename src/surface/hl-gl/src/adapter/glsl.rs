@@ -390,7 +390,7 @@ mod translate;
 mod uniforms;
 mod validation;
 
-pub use validation::invalid_implicit_arithmetic;
+pub use validation::{invalid_declaration_identifier, invalid_implicit_arithmetic};
 
 pub use bindings::{prepare_verbatim_program, prepare_verbatim_program_with};
 pub use preprocess::PreprocessError;

@@ -78,3 +78,140 @@ fn lexical_shapes_do_not_create_false_implicit_conversion_diagnostics() {
         assert_eq!(status, GL_TRUE as i32, "false rejection: {log}\n{source}");
     }
 }
+
+#[test]
+fn es2_rejects_keywords_reserved_words_and_reserved_identifier_forms() {
+    let keywords = [
+        "attribute",
+        "const",
+        "uniform",
+        "varying",
+        "break",
+        "continue",
+        "do",
+        "for",
+        "while",
+        "if",
+        "else",
+        "in",
+        "out",
+        "inout",
+        "float",
+        "int",
+        "void",
+        "bool",
+        "true",
+        "false",
+        "lowp",
+        "mediump",
+        "highp",
+        "precision",
+        "invariant",
+        "discard",
+        "return",
+        "mat2",
+        "mat3",
+        "mat4",
+        "vec2",
+        "vec3",
+        "vec4",
+        "ivec2",
+        "ivec3",
+        "ivec4",
+        "bvec2",
+        "bvec3",
+        "bvec4",
+        "sampler2D",
+        "samplerCube",
+        "struct",
+    ];
+    let reserved = [
+        "asm",
+        "class",
+        "union",
+        "enum",
+        "typedef",
+        "template",
+        "this",
+        "packed",
+        "goto",
+        "switch",
+        "default",
+        "inline",
+        "noinline",
+        "volatile",
+        "public",
+        "static",
+        "extern",
+        "external",
+        "interface",
+        "flat",
+        "long",
+        "short",
+        "double",
+        "half",
+        "fixed",
+        "unsigned",
+        "superp",
+        "input",
+        "output",
+        "hvec2",
+        "hvec3",
+        "hvec4",
+        "dvec2",
+        "dvec3",
+        "dvec4",
+        "fvec2",
+        "fvec3",
+        "fvec4",
+        "sampler1D",
+        "sampler3D",
+        "sampler1DShadow",
+        "sampler2DShadow",
+        "sampler2DRect",
+        "sampler3DRect",
+        "sampler2DRectShadow",
+        "sizeof",
+        "cast",
+        "namespace",
+        "using",
+    ];
+    let invalid = [
+        "__invalid",
+        "in__valid",
+        "invalid__",
+        "gl_Invalid",
+        "0123",
+        "0invalid",
+    ];
+    let mut context = GlContext::new();
+    for identifier in keywords.into_iter().chain(reserved).chain(invalid) {
+        for kind in [GL_VERTEX_SHADER, GL_FRAGMENT_SHADER] {
+            let source = format!("void main(){{ float {identifier} = 1.0; }}");
+            let (status, log) = compile(&mut context, kind, &source);
+            assert_eq!(status, GL_FALSE as i32, "accepted identifier {identifier}");
+            assert!(
+                log.contains(identifier) && log.contains("identifier"),
+                "bad log: {log:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn keyword_tokens_in_their_grammar_roles_remain_accepted() {
+    let mut context = GlContext::new();
+    let controls = [
+        "attribute vec4 position; varying vec2 uv; void main(){ if(true){ gl_Position=position; } else { discard; } }",
+        "precision mediump float; uniform sampler2D image; void main(){ for(int i=0;i<1;i++){ continue; } return; }",
+        "struct Pair { float left; int right; }; void helper(in float a, out float b){ b=a; } void main(){ float x; helper(1.0,x); }",
+        "void main(){ /* float class; */ float classic=1.0; float assembly=classic; }",
+    ];
+    for source in controls {
+        let (status, log) = compile(&mut context, GL_VERTEX_SHADER, source);
+        assert_eq!(
+            status, GL_TRUE as i32,
+            "false keyword rejection: {log}\n{source}"
+        );
+    }
+}

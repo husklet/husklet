@@ -6,6 +6,126 @@ enum ScalarKind {
     Int,
 }
 
+const TYPES: &[&str] = &[
+    "void",
+    "float",
+    "int",
+    "bool",
+    "mat2",
+    "mat3",
+    "mat4",
+    "vec2",
+    "vec3",
+    "vec4",
+    "ivec2",
+    "ivec3",
+    "ivec4",
+    "bvec2",
+    "bvec3",
+    "bvec4",
+    "sampler2D",
+    "samplerCube",
+];
+
+// GLSL ES 1.00 section 3.6.  The second set is reserved for possible future use and therefore has the
+// same identifier restriction as the language keywords in an ES 1.00 shader.
+const KEYWORDS: &[&str] = &[
+    "attribute",
+    "const",
+    "uniform",
+    "varying",
+    "break",
+    "continue",
+    "do",
+    "for",
+    "while",
+    "if",
+    "else",
+    "in",
+    "out",
+    "inout",
+    "float",
+    "int",
+    "void",
+    "bool",
+    "true",
+    "false",
+    "lowp",
+    "mediump",
+    "highp",
+    "precision",
+    "invariant",
+    "discard",
+    "return",
+    "mat2",
+    "mat3",
+    "mat4",
+    "vec2",
+    "vec3",
+    "vec4",
+    "ivec2",
+    "ivec3",
+    "ivec4",
+    "bvec2",
+    "bvec3",
+    "bvec4",
+    "sampler2D",
+    "samplerCube",
+    "struct",
+];
+
+const RESERVED_WORDS: &[&str] = &[
+    "asm",
+    "class",
+    "union",
+    "enum",
+    "typedef",
+    "template",
+    "this",
+    "packed",
+    "goto",
+    "switch",
+    "default",
+    "inline",
+    "noinline",
+    "volatile",
+    "public",
+    "static",
+    "extern",
+    "external",
+    "interface",
+    "flat",
+    "long",
+    "short",
+    "double",
+    "half",
+    "fixed",
+    "unsigned",
+    "superp",
+    "input",
+    "output",
+    "hvec2",
+    "hvec3",
+    "hvec4",
+    "dvec2",
+    "dvec3",
+    "dvec4",
+    "fvec2",
+    "fvec3",
+    "fvec4",
+    "sampler1D",
+    "sampler3D",
+    "sampler1DShadow",
+    "sampler2DShadow",
+    "sampler2DRect",
+    "sampler3DRect",
+    "sampler2DRectShadow",
+    "sizeof",
+    "cast",
+    "namespace",
+    "using",
+];
+
 fn scalar_kind(token: &str) -> Option<ScalarKind> {
     match token {
         "float" | "vec2" | "vec3" | "vec4" => Some(ScalarKind::Float),
@@ -58,6 +178,45 @@ fn tokens(source: &str) -> Vec<String> {
         }
     }
     out
+}
+
+fn identifier_is_reserved(identifier: &str) -> bool {
+    KEYWORDS.contains(&identifier)
+        || RESERVED_WORDS.contains(&identifier)
+        || identifier.contains("__")
+        || identifier.starts_with("gl_")
+        || !identifier
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| *byte == b'_' || byte.is_ascii_alphabetic())
+}
+
+fn is_word_token(token: &str) -> bool {
+    token
+        .as_bytes()
+        .first()
+        .is_some_and(|byte| *byte == b'_' || byte.is_ascii_alphanumeric())
+}
+
+/// Return an ES 1.00 identifier used illegally as a declaration name.
+///
+/// This deliberately checks DECLARATOR position, not mere token presence: `if`, `return`, `float`, and
+/// every other language keyword remain legal in their grammatical roles.  Names beginning `gl_`, names
+/// containing two consecutive underscores, and digit-led tokens are reserved by section 3.6 too.
+pub fn invalid_declaration_identifier(source: &str) -> Option<String> {
+    let tokens = tokens(source);
+    for declaration in tokens.windows(2) {
+        if TYPES.contains(&declaration[0].as_str())
+            && is_word_token(&declaration[1])
+            && identifier_is_reserved(&declaration[1])
+        {
+            return Some(format!(
+                "'{}' : reserved word may not be used as an identifier in GLSL ES 1.00",
+                declaration[1]
+            ));
+        }
+    }
+    None
 }
 
 /// Diagnose arithmetic whose operands require an implicit integer/floating-point conversion.

@@ -279,6 +279,10 @@ impl GlContext {
             .shader(shader)
             .and_then(|sh| sh.src.as_deref())
         {
+            if let Some(reason) = crate::adapter::glsl::invalid_declaration_identifier(source) {
+                self.programs.fail_compile(shader, reason);
+                return;
+            }
             if let Some(reason) = crate::adapter::glsl::invalid_implicit_arithmetic(source) {
                 self.programs.fail_compile(shader, reason);
                 return;
