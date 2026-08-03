@@ -223,12 +223,14 @@ pub extern "C" fn vkGetImageMemoryRequirements2KHR(
 /// host sink, so an inline match here was reachable only from a running system, and the 1D arm below was
 /// missing for exactly as long as nothing could notice.
 ///
-/// There is deliberately no `VK_IMAGE_VIEW_TYPE_1D_ARRAY` arm. WebGPU has no 1D array view dimension, so
-/// a layered 1D image would be creatable and permanently unviewable; `vkGetPhysicalDeviceImageFormatProperties`
-/// reports `maxArrayLayers == 1` for 1D to match.
+/// Vulkan 1D images are represented by one-row 2D textures in the executor. A plain 1D view selects one
+/// layer and becomes a D2 view; a 1D-array view remains logical [`TextureDim::D1`] here and becomes a
+/// D2Array view when its range has multiple layers. Keeping the logical dimension is load-bearing: shader
+/// lowering uses it to expand scalar 1D coordinates while preserving the separate array index.
 fn view_dimension(view_type: i32, image_dim: TextureDim, layer_count: u32) -> Option<TextureDim> {
     Some(match view_type {
         0 if image_dim == TextureDim::D1 && layer_count == 1 => TextureDim::D1,
+        4 if image_dim == TextureDim::D1 => TextureDim::D1,
         1 if matches!(image_dim, TextureDim::D2 | TextureDim::Cube) && layer_count == 1 => {
             TextureDim::D2
         }
@@ -433,12 +435,21 @@ mod view_dimension_tests {
         );
     }
 
-    /// WebGPU has no 1D array view dimension, so these stay refused rather than becoming a view the
-    /// executor would reject later.
+    /// Vulkan 1D arrays are backed by one-row 2D arrays. The neutral D1 view keeps Vulkan's logical
+    /// dimension while the executor selects D2Array when more than one layer is named.
     #[test]
-    fn a_layered_1d_view_is_refused() {
-        assert_eq!(view_dimension(0, TextureDim::D1, 2), None, "two layers");
-        assert_eq!(view_dimension(4, TextureDim::D1, 1), None, "1D_ARRAY type");
+    fn a_layered_1d_image_has_a_1d_array_view() {
+        assert_eq!(view_dimension(0, TextureDim::D1, 2), None, "plain 1D type");
+        assert_eq!(
+            view_dimension(4, TextureDim::D1, 1),
+            Some(TextureDim::D1),
+            "single-layer 1D_ARRAY type"
+        );
+        assert_eq!(
+            view_dimension(4, TextureDim::D1, 4),
+            Some(TextureDim::D1),
+            "layered 1D_ARRAY type"
+        );
     }
 
     /// The pre-existing arms must be untouched by the extraction — this is the control that the refactor

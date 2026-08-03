@@ -1261,10 +1261,10 @@ fn a_one_dimensional_image_is_supported_with_one_dimensional_limits() {
 /// one. 441 dEQP-VK.api.image_clearing cases that had previously been declined honestly as NotSupported
 /// became failures on exactly that gap, which is the "claimed and not honoured" shape.
 ///
-/// And the layer claim is corrected here: WebGPU has no 1D array view dimension, so maxArrayLayers for a
-/// 1D image is 1. A layered 1D image would be creatable and permanently unviewable.
+/// The executor represents a 1D array as a one-row 2D array, so the query may expose the same array-layer
+/// limit as other image types. `vkCreateImageView` lowers 1D-array views through that representation.
 #[test]
-fn a_one_dimensional_image_is_viewable_and_claims_one_layer() {
+fn a_one_dimensional_image_is_viewable_and_claims_array_layers() {
     const R8G8B8A8_UNORM: i32 = 37;
     const VK_IMAGE_TYPE_1D: i32 = 0;
     const VK_IMAGE_TYPE_2D: i32 = 1;
@@ -1296,8 +1296,5 @@ fn a_one_dimensional_image_is_viewable_and_claims_one_layer() {
 
     let (result, one_d) = query(VK_IMAGE_TYPE_1D);
     assert_eq!(result, VK_SUCCESS, "1D optimal is a required combination");
-    assert_eq!(
-        one_d.max_array_layers, 1,
-        "a 1D image has no array view dimension to be viewed through"
-    );
+    assert_eq!(one_d.max_array_layers, two_d.max_array_layers);
 }
