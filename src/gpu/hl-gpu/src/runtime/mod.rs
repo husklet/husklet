@@ -47,7 +47,12 @@ pub fn submit(
     frame_bytes: usize,
     batch: &[Cmd],
 ) -> Result<Vec<Presentation>> {
-    let sharing_exports = session.exports.clone();
+    // Unshared sessions cannot race a sharing transition. Keeping them out of the
+    // process-wide operation lock preserves parallel submission across ordinary
+    // GL/Vulkan connections while shared sessions retain ordered ownership.
+    let sharing_exports = (!session.buffer_sharing.is_empty())
+        .then(|| session.exports.clone())
+        .flatten();
     let _sharing_operation = sharing_exports.as_ref().map(Exports::operation);
     let account = session.account.clone();
     let account_operation = account.operation();
