@@ -255,6 +255,82 @@ impl Device {
             )),
         }
     }
+
+    pub fn validate_binary_semaphores(&self, semaphores: &[VkSemaphore]) -> Result<()> {
+        for semaphore in semaphores {
+            match self.semaphores.get(semaphore) {
+                Some(record) if !record.timeline => {}
+                Some(_) => return Err(GpuError::Invalid("binary semaphore required")),
+                None => return Err(GpuError::Invalid("unknown VkSemaphore")),
+            }
+        }
+        Ok(())
+    }
+
+    pub fn consume_binary_semaphores(&mut self, semaphores: &[VkSemaphore]) -> Result<()> {
+        self.validate_binary_semaphores(semaphores)?;
+        if semaphores.iter().any(|semaphore| {
+            !self
+                .semaphores
+                .get(semaphore)
+                .is_some_and(|record| record.signaled)
+        }) {
+            return Err(GpuError::Invalid("waited binary VkSemaphore is unsignaled"));
+        }
+        for semaphore in semaphores {
+            self.semaphores.get_mut(semaphore).unwrap().signaled = false;
+        }
+        Ok(())
+    }
+
+    pub fn consume_queue_waits(&mut self, waits: &[(VkSemaphore, u64)]) -> Result<()> {
+        for &(semaphore, value) in waits {
+            match self.semaphores.get(&semaphore) {
+                Some(record) if record.timeline && record.counter >= value => {}
+                Some(record) if record.timeline => {
+                    return Err(GpuError::Invalid("timeline semaphore wait is unsatisfied"))
+                }
+                Some(record) if record.signaled => {}
+                Some(_) => return Err(GpuError::Invalid("binary semaphore wait is unsatisfied")),
+                None => return Err(GpuError::Invalid("unknown VkSemaphore")),
+            }
+        }
+        for &(semaphore, _) in waits {
+            let record = self.semaphores.get_mut(&semaphore).unwrap();
+            if !record.timeline {
+                record.signaled = false;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate_queue_signals(&self, signals: &[(VkSemaphore, u64)]) -> Result<()> {
+        for &(semaphore, _) in signals {
+            match self.semaphores.get(&semaphore) {
+                Some(record) if record.timeline || !record.signaled => {}
+                Some(_) => {
+                    return Err(GpuError::Invalid(
+                        "binary VkSemaphore already has a pending signal",
+                    ))
+                }
+                None => return Err(GpuError::Invalid("unknown VkSemaphore")),
+            }
+        }
+        Ok(())
+    }
+
+    pub fn signal_queue_semaphores(&mut self, signals: &[(VkSemaphore, u64)]) -> Result<()> {
+        self.validate_queue_signals(signals)?;
+        for &(semaphore, value) in signals {
+            let record = self.semaphores.get_mut(&semaphore).unwrap();
+            if record.timeline {
+                record.counter = record.counter.max(value);
+            } else {
+                record.signaled = true;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// `vkWaitSemaphores` — whether the timeline wait is satisfied NOW (`any` = `VK_SEMAPHORE_WAIT_ANY_BIT`,

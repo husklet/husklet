@@ -16,7 +16,8 @@ pub extern "C" fn vkQueueSubmit(
     // Gather every submitted command buffer (unwrapping each dispatchable to its u64 handle) plus every
     // queue-side timeline signal from each batch's VkTimelineSemaphoreSubmitInfo pNext.
     let mut cbs: Vec<VkCbHandle> = Vec::new();
-    let mut timeline_signals: Vec<(u64, u64)> = Vec::new();
+    let mut waits: Vec<(u64, u64)> = Vec::new();
+    let mut signals: Vec<(u64, u64)> = Vec::new();
     for si in submits {
         if !si.p_command_buffers.is_null() {
             let ptrs = unsafe {
@@ -33,24 +34,52 @@ pub extern "C" fn vkQueueSubmit(
         let node = unsafe {
             ExtensionChain::find(si.p_next, VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO)
         };
-        if !node.is_null() && !si.p_signal_semaphores.is_null() {
-            let ts = unsafe { &*(node as *const VkTimelineSemaphoreSubmitInfo) };
-            if !ts.p_signal_semaphore_values.is_null() {
-                let n = (si.signal_semaphore_count as usize)
-                    .min(ts.signal_semaphore_value_count as usize);
-                let sems = unsafe { std::slice::from_raw_parts(si.p_signal_semaphores, n) };
-                let vals = unsafe { std::slice::from_raw_parts(ts.p_signal_semaphore_values, n) };
-                for i in 0..n {
-                    timeline_signals.push((sems[i], vals[i]));
-                }
+        let timeline = (!node.is_null()).then(|| unsafe {
+            &*(node as *const VkTimelineSemaphoreSubmitInfo)
+        });
+        if !si.p_wait_semaphores.is_null() {
+            let sems = unsafe {
+                std::slice::from_raw_parts(si.p_wait_semaphores, si.wait_semaphore_count as usize)
+            };
+            for (index, &semaphore) in sems.iter().enumerate() {
+                let value = timeline
+                    .filter(|info| !info.p_wait_semaphore_values.is_null())
+                    .filter(|info| index < info.wait_semaphore_value_count as usize)
+                    .map(|info| unsafe { *info.p_wait_semaphore_values.add(index) })
+                    .unwrap_or(0);
+                waits.push((semaphore, value));
+            }
+        }
+        if !si.p_signal_semaphores.is_null() {
+            let sems = unsafe {
+                std::slice::from_raw_parts(si.p_signal_semaphores, si.signal_semaphore_count as usize)
+            };
+            for (index, &semaphore) in sems.iter().enumerate() {
+                let value = timeline
+                    .filter(|info| !info.p_signal_semaphore_values.is_null())
+                    .filter(|info| index < info.signal_semaphore_value_count as usize)
+                    .map(|info| unsafe { *info.p_signal_semaphore_values.add(index) })
+                    .unwrap_or(0);
+                signals.push((semaphore, value));
             }
         }
     }
     let signal = if fence != 0 { Some(fence) } else { None };
     let r = ShimState::with_sink(|dev, sink| {
+        if let Err(error) = dev.validate_queue_signals(&signals) {
+            return Status::from_error(&error);
+        }
+        let semaphore_snapshot = dev.semaphores.clone();
+        if let Err(error) = dev.consume_queue_waits(&waits) {
+            return Status::from_error(&error);
+        }
         let r = ResultStatus::from_gpu(submit_service::queue_submit(dev, sink, &cbs, signal));
         if r == VK_SUCCESS {
-            dev.signal_timeline_values(&timeline_signals);
+            if let Err(error) = dev.signal_queue_semaphores(&signals) {
+                return Status::from_error(&error);
+            }
+        } else {
+            dev.semaphores = semaphore_snapshot;
         }
         r
     })
@@ -98,7 +127,8 @@ pub extern "C" fn vkQueueSubmit2(
         }
     };
     let mut cbs: Vec<VkCbHandle> = Vec::new();
-    let mut timeline_signals: Vec<(u64, u64)> = Vec::new();
+    let mut waits: Vec<(u64, u64)> = Vec::new();
+    let mut signals: Vec<(u64, u64)> = Vec::new();
     for si in submits {
         if !si.p_command_buffer_infos.is_null() {
             let infos = unsafe {
@@ -113,6 +143,15 @@ pub extern "C" fn vkQueueSubmit2(
                 }
             }
         }
+        if !si.p_wait_semaphore_infos.is_null() {
+            let infos = unsafe {
+                std::slice::from_raw_parts(
+                    si.p_wait_semaphore_infos as *const VkSemaphoreSubmitInfo,
+                    si.wait_semaphore_info_count as usize,
+                )
+            };
+            waits.extend(infos.iter().map(|info| (info.semaphore, info.value)));
+        }
         // sync2 carries the timeline value inline on each VkSemaphoreSubmitInfo (queue-side signal).
         if !si.p_signal_semaphore_infos.is_null() {
             let infos = unsafe {
@@ -122,15 +161,26 @@ pub extern "C" fn vkQueueSubmit2(
                 )
             };
             for info in infos {
-                timeline_signals.push((info.semaphore, info.value));
+                signals.push((info.semaphore, info.value));
             }
         }
     }
     let signal = if fence != 0 { Some(fence) } else { None };
     ShimState::with_sink(|dev, sink| {
+        if let Err(error) = dev.validate_queue_signals(&signals) {
+            return Status::from_error(&error);
+        }
+        let semaphore_snapshot = dev.semaphores.clone();
+        if let Err(error) = dev.consume_queue_waits(&waits) {
+            return Status::from_error(&error);
+        }
         let r = ResultStatus::from_gpu(submit_service::queue_submit(dev, sink, &cbs, signal));
         if r == VK_SUCCESS {
-            dev.signal_timeline_values(&timeline_signals);
+            if let Err(error) = dev.signal_queue_semaphores(&signals) {
+                return Status::from_error(&error);
+            }
+        } else {
+            dev.semaphores = semaphore_snapshot;
         }
         r
     })

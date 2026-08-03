@@ -228,7 +228,8 @@ pub fn create_swapchain(
 }
 
 /// Create a swapchain associated with the application-visible surface and optionally replace an active
-/// chain. The old chain is retired only after the replacement and all of its images are live.
+/// chain. A validated old chain is retired before replacement allocation, as Vulkan requires even when
+/// replacement creation later fails.
 pub fn create_swapchain_for_target(
     dev: &mut Device,
     sink: &mut dyn CommandSink,
@@ -301,9 +302,10 @@ pub fn create_swapchain_for_target(
     let usage =
         crate::model::memory::ImageUsage(SURFACE_IMAGE_USAGE).wire() | texture_usage::PRESENT;
     let mut images = Vec::with_capacity(image_count.max(1) as usize);
+    let mut creates = Vec::with_capacity(image_count.max(1) as usize);
     for _ in 0..image_count.max(1) {
         let ir_texture_id = dev.alloc_ir();
-        if let Err(error) = sink.submit(&[Cmd::CreateTexture(
+        creates.push(Cmd::CreateTexture(
             ir_texture_id,
             TextureDesc {
                 width,
@@ -316,15 +318,38 @@ pub fn create_swapchain_for_target(
                 usage,
                 label: format!("swapimg{ir_texture_id}"),
             },
-        )]) {
-            rollback_swapchain_allocation(dev, sink, surface, &images);
-            return Err(error);
-        }
+        ));
         let handle = dev.alloc_handle();
-        dev.images.insert(
+        images.push(SwapImage {
+            ir_texture_id,
             handle,
+            state: ImageState::Available,
+        });
+    }
+    // One command batch is one authoritative runtime transaction: either every attempted texture id
+    // is committed, or an explicit refusal commits none. A transport failure with an ambiguous outcome
+    // poisons the sink, so cleanup is still attempted and its failure is surfaced rather than hidden.
+    if let Err(create_error) = sink.submit(&creates) {
+        let outcome_ambiguous = matches!(
+            &create_error,
+            GpuError::Transport(error) if !error.refusal() && !error.retryable_before_request()
+        );
+        return match rollback_swapchain_allocation(
+            dev,
+            sink,
+            surface,
+            &images,
+            outcome_ambiguous,
+        ) {
+            Ok(()) => Err(create_error),
+            Err(cleanup_error) => Err(cleanup_error),
+        };
+    }
+    for image in &images {
+        dev.images.insert(
+            image.handle,
             ImageRec {
-                ir_id: ir_texture_id,
+                ir_id: image.ir_texture_id,
                 width,
                 height,
                 depth: 1,
@@ -339,11 +364,6 @@ pub fn create_swapchain_for_target(
                     .is_render_target(),
             },
         );
-        images.push(SwapImage {
-            ir_texture_id,
-            handle,
-            state: ImageState::Available,
-        });
     }
     let handle = dev.alloc_handle();
     dev.swapchains.insert(
@@ -368,16 +388,34 @@ fn rollback_swapchain_allocation(
     sink: &mut dyn CommandSink,
     surface: VkSurfaceKHR,
     images: &[SwapImage],
-) {
+    destroy_attempted_textures: bool,
+) -> Result<()> {
+    let mut cleanup_error = None;
+    if destroy_attempted_textures && !images.is_empty() {
+        let destroys: Vec<_> = images
+            .iter()
+            .map(|image| Cmd::DestroyTexture(image.ir_texture_id))
+            .collect();
+        if let Err(error) = sink.submit(&destroys) {
+            cleanup_error = Some(error);
+        }
+    }
     for image in images {
-        let _ = sink.submit(&[Cmd::DestroyTexture(image.ir_texture_id)]);
         dev.images.remove(&image.handle);
         dev.image_layouts.remove(&image.handle);
     }
-    if let Some(surface) = dev.surfaces.remove(&surface) {
-        if surface.token.is_some() {
-            let _ = sink.submit(&[Cmd::DestroySurface(surface.ir_id)]);
+    if let Some(surface_record) = dev.surfaces.get(&surface) {
+        if surface_record.token.is_some() {
+            if let Err(error) = sink.submit(&[Cmd::DestroySurface(surface_record.ir_id)]) {
+                cleanup_error.get_or_insert(error);
+            }
         }
+    }
+    dev.surfaces.remove(&surface);
+    if let Some(error) = cleanup_error {
+        Err(error)
+    } else {
+        Ok(())
     }
 }
 
@@ -442,6 +480,58 @@ impl Device {
         sc.acquire_cursor = ((index + 1) % count) as u32;
         hl_log::hl_debug!(hl_log::tag::PRESENT, "acquire idx={} of={}", index, count);
         Ok(index as u32)
+    }
+
+    /// Acquire and publish its completion payloads as one device-state transition.
+    pub fn try_acquire_next_image(
+        &mut self,
+        swapchain: VkSwapchainKHR,
+        semaphore: VkSemaphore,
+        fence: VkFence,
+    ) -> std::result::Result<u32, AcquireImageError> {
+        if semaphore != 0 {
+            match self.semaphores.get(&semaphore) {
+                Some(record) if !record.timeline && !record.signaled => {}
+                Some(record) if !record.timeline => {
+                    return Err(AcquireImageError::Invalid(GpuError::Invalid(
+                        "vkAcquireNextImageKHR: semaphore already signaled",
+                    )))
+                }
+                Some(_) => {
+                    return Err(AcquireImageError::Invalid(GpuError::Invalid(
+                        "vkAcquireNextImageKHR: timeline semaphore is invalid",
+                    )))
+                }
+                None => {
+                    return Err(AcquireImageError::Invalid(GpuError::Invalid(
+                        "vkAcquireNextImageKHR: unknown VkSemaphore",
+                    )))
+                }
+            }
+        }
+        if fence != 0 {
+            match self.fences.get(&fence) {
+                Some(record) if !record.signaled => {}
+                Some(_) => {
+                    return Err(AcquireImageError::Invalid(GpuError::Invalid(
+                        "vkAcquireNextImageKHR: fence already signaled",
+                    )))
+                }
+                None => {
+                    return Err(AcquireImageError::Invalid(GpuError::Invalid(
+                        "vkAcquireNextImageKHR: unknown VkFence",
+                    )))
+                }
+            }
+        }
+        let index = self.acquire_next_image_with_timeout(swapchain, 0)?;
+        if semaphore != 0 {
+            self.semaphores.get_mut(&semaphore).unwrap().signaled = true;
+        }
+        if fence != 0 {
+            self.fences.get_mut(&fence).unwrap().signaled = true;
+        }
+        Ok(index)
     }
 
     pub fn swapchain_images(&self, swapchain: VkSwapchainKHR) -> Result<Vec<VkImage>> {
