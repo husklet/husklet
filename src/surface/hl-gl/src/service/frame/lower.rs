@@ -351,9 +351,8 @@ pub(super) fn lower_draw_n(
             }
         }
         let stride = if sl < nslot { slot_stride[sl] } else { 16 };
-        // A vertex-buffer slot steps per-instance (step_mode 1) when any attribute it feeds carries a
-        // non-zero `glVertexAttribDivisor`. This model has one step rate per slot, so a divisor `N>1`
-        // (fractional instancing rate) collapses to per-instance stepping — an honest partial lowering.
+        // Divisors above one were materialized into an exact per-instance stream during vertex lowering;
+        // every remaining non-zero rate therefore uses the host's per-instance step mode.
         let step_mode = (0..crate::model::program::MAX_ATTR)
             .any(|l| attr_slot[l] == sl as i32 && d.attrs[l].enabled && d.attrs[l].divisor > 0)
             as u32;
@@ -381,23 +380,6 @@ pub(super) fn lower_draw_n(
     }
     // Fixed-function state → the pipeline's blend / depth / cull descriptor (the values a real app set via
     // glBlendFunc / glDepthFunc / glCullFace / glFrontFace, mapped to their opaque WebGPU wire enums).
-    let blend = if d.blend {
-        let src_rgb = if blend_source_scale.is_some() {
-            GL_ONE
-        } else {
-            d.blend_src_rgb
-        };
-        Some(BlendState {
-            src_color: Pipeline::blend_factor(src_rgb),
-            dst_color: Pipeline::blend_factor(d.blend_dst_rgb),
-            op_color: Pipeline::blend_op(d.blend_eq_rgb),
-            src_alpha: Pipeline::blend_factor(d.blend_src_alpha),
-            dst_alpha: Pipeline::blend_factor(d.blend_dst_alpha),
-            op_alpha: Pipeline::blend_op(d.blend_eq_alpha),
-        })
-    } else {
-        None
-    };
     // Depth/stencil test → a pipeline depth state carrying the depth compare + write mask AND the front/back
     // stencil test+ops + read/write masks. When the PASS has a depth(+stencil) attachment (`depth_fmt` is
     // `Some`, because SOME draw in it is depth/stencil-tested), EVERY pipeline in the pass MUST carry a depth
@@ -412,20 +394,33 @@ pub(super) fn lower_draw_n(
     // analogue of the Vulkan `sample_count` drop). Sourced from the bound draw framebuffer's attachments;
     // see `framebuffer_sample_count` for this model's (single-sampled-only) status.
     let sample_count = ctx.local.framebuffers.sample_count(d.fbo);
-    // One color target for the ordinary path; `n_color_targets` identical targets for a `glDrawBuffers` MRT
-    // pass (each attachment shares the draw's format + blend). The fragment shader's `layout(location = k)`
-    // outputs map onto target `k` (see `adapter::glsl::translate_render`).
+    // One color target for the ordinary path; MRT carries independent blend/write state per output.
     // A slot deselected by `glDrawBuffers(…, GL_NONE, …)` receives no fragment output at all, which is a
     // zero write mask on that target — the attachment keeps whatever it already held.
     let color_targets: Vec<ColorTargetState> = (0..n_color_targets.max(1))
-        .map(|slot| ColorTargetState {
-            format: target_fmt,
-            blend: blend.clone(),
-            write_mask: if d.draw_buffer_mask & (1u32 << slot.min(31)) != 0 {
-                d.color_mask & 0xf
-            } else {
-                0
-            },
+        .map(|slot| {
+            let state = d.draw_buffer_states[slot.min(d.draw_buffer_states.len() - 1)];
+            let blend = state.blend.then(|| BlendState {
+                src_color: Pipeline::blend_factor(if blend_source_scale.is_some() {
+                    GL_ONE
+                } else {
+                    state.src_rgb
+                }),
+                dst_color: Pipeline::blend_factor(state.dst_rgb),
+                op_color: Pipeline::blend_op(state.eq_rgb),
+                src_alpha: Pipeline::blend_factor(state.src_alpha),
+                dst_alpha: Pipeline::blend_factor(state.dst_alpha),
+                op_alpha: Pipeline::blend_op(state.eq_alpha),
+            });
+            ColorTargetState {
+                format: target_fmt,
+                blend,
+                write_mask: if d.draw_buffer_mask & (1u32 << slot.min(31)) != 0 {
+                    state.color_mask & 0xf
+                } else {
+                    0
+                },
+            }
         })
         .collect();
     let cull = if d.cull_enabled {

@@ -12,8 +12,8 @@ mod shader;
 mod table;
 
 pub use draw::{
-    Attr, BufferSnapshot, ClientArray, DepthStencilSnapshot, DrawCall, TargetSnapshot, TextureSnapshot,
-    TransformFeedbackCapture,
+    Attr, BufferSnapshot, ClientArray, DepthStencilSnapshot, DrawBufferState, DrawCall,
+    TargetSnapshot, TextureSnapshot, TransformFeedbackCapture, MAX_DRAW_BUFFERS,
 };
 pub use feedback::{
     CaptureScalar, CaptureScalarKind, TransformFeedbackLayout, TransformFeedbackVarying,

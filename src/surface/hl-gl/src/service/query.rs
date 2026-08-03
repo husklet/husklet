@@ -288,6 +288,20 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
 /// other target falls back to the non-indexed scalar value (matches the reference shim). Returns the single
 /// integer for `target` at `index`.
 pub fn get_integer_indexed(ctx: &GlContext, target: u32, index: u32) -> i64 {
+    if let Some(state) = ctx.local.pipeline.draw_buffers.get(index as usize) {
+        let value = match target {
+            GL_BLEND_SRC_RGB => Some(state.src_rgb),
+            GL_BLEND_DST_RGB => Some(state.dst_rgb),
+            GL_BLEND_SRC_ALPHA_STATE => Some(state.src_alpha),
+            GL_BLEND_DST_ALPHA => Some(state.dst_alpha),
+            GL_BLEND_EQUATION_RGB => Some(state.eq_rgb),
+            GL_BLEND_EQUATION_ALPHA => Some(state.eq_alpha),
+            _ => None,
+        };
+        if let Some(value) = value {
+            return i64::from(value);
+        }
+    }
     // Map the indexed *binding* pname to the buffer target whose indexed bindings it reads back.
     let buffer_property = match target {
         GL_UNIFORM_BUFFER_BINDING => Some((GL_UNIFORM_BUFFER, 0)),
@@ -321,6 +335,37 @@ pub fn get_integer_indexed(ctx: &GlContext, target: u32, index: u32) -> i64 {
     } else {
         0
     }
+}
+
+pub fn get_boolean_indexed(
+    ctx: &GlContext,
+    target: u32,
+    index: u32,
+    out: &mut [u8; 4],
+) -> usize {
+    let Some(state) = ctx.local.pipeline.draw_buffers.get(index as usize) else {
+        return 0;
+    };
+    if target == GL_COLOR_WRITEMASK {
+        for (channel, value) in out.iter_mut().enumerate() {
+            *value = u8::from(state.color_mask & (1 << channel) != 0);
+        }
+        4
+    } else {
+        out[0] = u8::from(get_integer_indexed(ctx, target, index) != 0);
+        1
+    }
+}
+
+pub fn is_enabled_indexed(ctx: &GlContext, target: u32, index: u32) -> Option<bool> {
+    if target != GL_BLEND {
+        return None;
+    }
+    ctx.local
+        .pipeline
+        .draw_buffers
+        .get(index as usize)
+        .map(|state| state.blend)
 }
 
 /// `glGetVertexAttrib{i,f}v(index, pname)` — one enabled/format/stride/binding value of vertex attribute

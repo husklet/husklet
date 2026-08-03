@@ -102,3 +102,179 @@ fn every_slot_writes_when_draw_buffers_was_never_called() {
         assert_eq!(target.write_mask, 0xf, "the initial selection writes every slot");
     }
 }
+
+#[test]
+fn four_draw_buffers_keep_independent_blend_mask_equation_and_factor_state() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    bind_mrt(&mut c, 4);
+    record::draw_buffers(
+        &mut c,
+        &[
+            GL_COLOR_ATTACHMENT0,
+            GL_COLOR_ATTACHMENT0 + 1,
+            GL_COLOR_ATTACHMENT0 + 2,
+            GL_COLOR_ATTACHMENT0 + 3,
+        ],
+    );
+
+    let enabled = [false, true, false, true];
+    let masks = [0x1u32, 0x3, 0x5, 0xf];
+    let src_rgb = [GL_ZERO, GL_ONE, GL_SRC_ALPHA, GL_DST_ALPHA];
+    let dst_rgb = [GL_ONE, GL_ZERO, GL_ONE_MINUS_SRC_ALPHA, GL_ONE_MINUS_DST_ALPHA];
+    let src_alpha = [GL_ONE, GL_ZERO, GL_DST_ALPHA, GL_SRC_ALPHA];
+    let dst_alpha = [GL_ZERO, GL_ONE, GL_ONE_MINUS_DST_ALPHA, GL_ONE_MINUS_SRC_ALPHA];
+    let eq_rgb = [GL_FUNC_ADD, GL_FUNC_SUBTRACT, GL_FUNC_REVERSE_SUBTRACT, GL_MIN];
+    let eq_alpha = [GL_MAX, GL_FUNC_REVERSE_SUBTRACT, GL_FUNC_SUBTRACT, GL_FUNC_ADD];
+    for index in 0..4usize {
+        record::set_cap_indexed(&mut c, GL_BLEND, index as u32, enabled[index]);
+        record::color_mask_indexed(
+            &mut c,
+            index as u32,
+            masks[index] & 1 != 0,
+            masks[index] & 2 != 0,
+            masks[index] & 4 != 0,
+            masks[index] & 8 != 0,
+        );
+        record::blend_func_separate_indexed(
+            &mut c,
+            index as u32,
+            src_rgb[index],
+            dst_rgb[index],
+            src_alpha[index],
+            dst_alpha[index],
+        );
+        record::blend_equation_separate_indexed(
+            &mut c,
+            index as u32,
+            eq_rgb[index],
+            eq_alpha[index],
+        );
+        assert_eq!(
+            hl_gl::service::query::is_enabled_indexed(&c, GL_BLEND, index as u32),
+            Some(enabled[index])
+        );
+        let mut mask = [0; 4];
+        assert_eq!(
+            hl_gl::service::query::get_boolean_indexed(
+                &c,
+                GL_COLOR_WRITEMASK,
+                index as u32,
+                &mut mask,
+            ),
+            4
+        );
+        assert_eq!(
+            mask,
+            std::array::from_fn(|channel| u8::from(masks[index] & (1 << channel) != 0))
+        );
+        for (pname, expected) in [
+            (GL_BLEND_SRC_RGB, src_rgb[index]),
+            (GL_BLEND_DST_RGB, dst_rgb[index]),
+            (GL_BLEND_SRC_ALPHA_STATE, src_alpha[index]),
+            (GL_BLEND_DST_ALPHA, dst_alpha[index]),
+            (GL_BLEND_EQUATION_RGB, eq_rgb[index]),
+            (GL_BLEND_EQUATION_ALPHA, eq_alpha[index]),
+        ] {
+            assert_eq!(
+                hl_gl::service::query::get_integer_indexed(&c, pname, index as u32),
+                i64::from(expected)
+            );
+        }
+    }
+
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let targets = &pipeline_desc(&sink.batches[0]).color_targets;
+    assert_eq!(targets.len(), 4);
+    let src_rgb_wire = [0, 1, 4, 8];
+    let dst_rgb_wire = [1, 0, 5, 9];
+    let src_alpha_wire = [1, 0, 8, 4];
+    let dst_alpha_wire = [0, 1, 9, 5];
+    let eq_rgb_wire = [0, 1, 2, 3];
+    let eq_alpha_wire = [4, 2, 1, 0];
+    for index in 0..4 {
+        assert_eq!(targets[index].blend.is_some(), enabled[index]);
+        assert_eq!(targets[index].write_mask, masks[index]);
+        if let Some(blend) = &targets[index].blend {
+            assert_eq!(blend.src_color, src_rgb_wire[index]);
+            assert_eq!(blend.dst_color, dst_rgb_wire[index]);
+            assert_eq!(blend.src_alpha, src_alpha_wire[index]);
+            assert_eq!(blend.dst_alpha, dst_alpha_wire[index]);
+            assert_eq!(blend.op_color, eq_rgb_wire[index]);
+            assert_eq!(blend.op_alpha, eq_alpha_wire[index]);
+        }
+    }
+}
+
+#[test]
+fn indexed_draw_buffer_state_rejects_bad_targets_and_indices_without_mutation() {
+    let mut c = ctx();
+    record::color_mask_indexed(&mut c, 4, false, false, false, false);
+    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
+    let mut mask = [0; 4];
+    assert_eq!(
+        hl_gl::service::query::get_boolean_indexed(&c, GL_COLOR_WRITEMASK, 0, &mut mask),
+        4
+    );
+    assert_eq!(mask, [1, 1, 1, 1]);
+
+    record::set_cap_indexed(&mut c, GL_DEPTH_TEST, 0, true);
+    assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
+    assert_eq!(
+        hl_gl::service::query::is_enabled_indexed(&c, GL_BLEND, 0),
+        Some(false)
+    );
+    assert_eq!(
+        hl_gl::service::query::is_enabled_indexed(&c, GL_BLEND, 4),
+        None
+    );
+}
+
+#[test]
+fn global_draw_buffer_setters_broadcast_over_independent_state() {
+    let mut c = ctx();
+    for index in 0..4 {
+        record::set_cap_indexed(&mut c, GL_BLEND, index, index % 2 == 0);
+        record::color_mask_indexed(&mut c, index, false, false, false, false);
+        record::blend_func_indexed(&mut c, index, GL_ZERO, GL_ONE);
+        record::blend_equation_indexed(&mut c, index, GL_FUNC_SUBTRACT);
+    }
+
+    record::enable(&mut c, GL_BLEND);
+    record::color_mask(&mut c, true, false, true, false);
+    record::blend_func(&mut c, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    record::blend_equation_separate(&mut c, GL_MAX, GL_FUNC_REVERSE_SUBTRACT);
+
+    for index in 0..4 {
+        assert_eq!(
+            hl_gl::service::query::is_enabled_indexed(&c, GL_BLEND, index),
+            Some(true)
+        );
+        let mut mask = [0; 4];
+        assert_eq!(
+            hl_gl::service::query::get_boolean_indexed(
+                &c,
+                GL_COLOR_WRITEMASK,
+                index,
+                &mut mask,
+            ),
+            4
+        );
+        assert_eq!(mask, [1, 0, 1, 0]);
+        for (pname, expected) in [
+            (GL_BLEND_SRC_RGB, GL_SRC_ALPHA),
+            (GL_BLEND_DST_RGB, GL_ONE_MINUS_SRC_ALPHA),
+            (GL_BLEND_SRC_ALPHA_STATE, GL_SRC_ALPHA),
+            (GL_BLEND_DST_ALPHA, GL_ONE_MINUS_SRC_ALPHA),
+            (GL_BLEND_EQUATION_RGB, GL_MAX),
+            (GL_BLEND_EQUATION_ALPHA, GL_FUNC_REVERSE_SUBTRACT),
+        ] {
+            assert_eq!(
+                hl_gl::service::query::get_integer_indexed(&c, pname, index),
+                i64::from(expected)
+            );
+        }
+    }
+}

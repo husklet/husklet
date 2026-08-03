@@ -1,4 +1,7 @@
-use crate::model::glconst;
+use crate::model::{
+    glconst,
+    program::{DrawBufferState, MAX_DRAW_BUFFERS},
+};
 
 /// Fixed-function state captured when a draw or clear is recorded.
 ///
@@ -26,6 +29,7 @@ pub(crate) struct PipelineState {
     pub(crate) blend_dst_alpha: u32,
     pub(crate) blend_eq_rgb: u32,
     pub(crate) blend_eq_alpha: u32,
+    pub(crate) draw_buffers: [DrawBufferState; MAX_DRAW_BUFFERS],
     pub(crate) blend_color: [f32; 4],
     pub(crate) depth: bool,
     pub(crate) depth_func: u32,
@@ -79,6 +83,7 @@ impl Default for PipelineState {
             blend_dst_alpha: glconst::GL_ZERO,
             blend_eq_rgb: glconst::GL_FUNC_ADD,
             blend_eq_alpha: glconst::GL_FUNC_ADD,
+            draw_buffers: [DrawBufferState::default(); MAX_DRAW_BUFFERS],
             blend_color: [0.0; 4],
             depth: false,
             depth_func: glconst::GL_LESS,
