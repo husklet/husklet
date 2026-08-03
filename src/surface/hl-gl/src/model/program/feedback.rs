@@ -117,7 +117,7 @@ impl TransformFeedbackLayout {
             scalars: Vec::new(),
         };
         for (varying_index, requested) in names.iter().enumerate() {
-            let (decl, expression, elements) = resolve(&outputs, requested)?;
+            let (decl, expression, elements, expand_array) = resolve(&outputs, requested)?;
             let shape = Shape::of(&decl.ty)
                 .ok_or_else(|| format!("unsupported transform-feedback type {}", decl.ty))?;
             let buffer = if mode == GL_SEPARATE_ATTRIBS {
@@ -131,7 +131,7 @@ impl TransformFeedbackLayout {
                 .ok_or_else(|| "transform-feedback varying size overflow".to_string())?;
             let base_word = layout.strides[buffer as usize] / 4;
             for element in 0..elements {
-                let element_expression = if elements > 1 || decl.arr > 0 {
+                let element_expression = if expand_array {
                     format!("{expression}[{element}]")
                 } else {
                     expression.clone()
@@ -211,7 +211,10 @@ impl TransformFeedbackLayout {
     }
 }
 
-fn resolve<'a>(outputs: &'a [Decl], requested: &str) -> Result<(&'a Decl, String, u32), String> {
+fn resolve<'a>(
+    outputs: &'a [Decl],
+    requested: &str,
+) -> Result<(&'a Decl, String, u32, bool), String> {
     let (base, selected) = requested
         .strip_suffix(']')
         .and_then(|name| name.rsplit_once('['))
@@ -228,9 +231,9 @@ fn resolve<'a>(outputs: &'a [Decl], requested: &str) -> Result<(&'a Decl, String
                 "transform-feedback array index out of range: {requested}"
             ));
         }
-        return Ok((declaration, requested.into(), 1));
+        return Ok((declaration, requested.into(), 1, false));
     }
-    Ok((declaration, requested.into(), array))
+    Ok((declaration, requested.into(), array, declaration.arr > 0))
 }
 
 #[cfg(test)]
@@ -263,6 +266,31 @@ mod tests {
         assert_eq!(layout.scalars[6].expression, "m[1][0][0]");
         assert_eq!(layout.varyings[0].size, 2);
         assert_eq!(layout.varyings[0].gl_type, 0x8B65);
+    }
+
+    #[test]
+    fn selected_array_elements_are_not_indexed_twice() {
+        let source = "#version 300 es\nout float f[2]; out vec3 v[2]; out mat2 m[2]; void main(){}";
+        let layout = TransformFeedbackLayout::reflect(
+            source,
+            &["f[1]".into(), "v[1]".into(), "m[1]".into()],
+            GL_INTERLEAVED_ATTRIBS,
+        )
+        .unwrap();
+
+        assert_eq!(layout.varyings[0].size, 1);
+        assert_eq!(layout.varyings[1].size, 1);
+        assert_eq!(layout.varyings[2].size, 1);
+        assert_eq!(layout.strides[0], 32);
+        assert_eq!(layout.scalars[0].expression, "f[1]");
+        assert_eq!(layout.scalars[1].expression, "v[1][0]");
+        assert_eq!(layout.scalars[3].expression, "v[1][2]");
+        assert_eq!(layout.scalars[4].expression, "m[1][0][0]");
+        assert_eq!(layout.scalars[7].expression, "m[1][1][1]");
+        assert!(layout
+            .scalars
+            .iter()
+            .all(|scalar| !scalar.expression.contains("[1][0][0][")));
     }
 
     #[test]
