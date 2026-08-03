@@ -8,6 +8,13 @@ use hl_gpu::{GpuError, Result};
 
 use crate::WgpuExecutor;
 
+/// The native handle and the neutral state that created it. wgpu's sampler object is opaque, while cubic
+/// emulation must inspect filtering, address, and LOD state when descriptor sets are bound.
+pub(crate) struct NativeSampler {
+    pub(crate) handle: wgpu::Sampler,
+    pub(crate) desc: SamplerDesc,
+}
+
 impl WgpuExecutor {
     /// Downcast a live sampler id to its native handle.
     pub(crate) fn sampler<'a>(
@@ -18,7 +25,21 @@ impl WgpuExecutor {
         resources
             .samplers
             .get(id)?
-            .downcast_ref::<wgpu::Sampler>()
+            .downcast_ref::<NativeSampler>()
+            .map(|sampler| &sampler.handle)
+            .ok_or(GpuError::Invalid("wgpu: sampler native type mismatch"))
+    }
+
+    pub(crate) fn sampler_desc<'a>(
+        &self,
+        resources: &'a SessionResources,
+        id: u32,
+    ) -> Result<&'a SamplerDesc> {
+        resources
+            .samplers
+            .get(id)?
+            .downcast_ref::<NativeSampler>()
+            .map(|sampler| &sampler.desc)
             .ok_or(GpuError::Invalid("wgpu: sampler native type mismatch"))
     }
 
@@ -94,6 +115,12 @@ impl WgpuExecutor {
             compare,
             ..Default::default()
         });
-        res.samplers.insert(id, Box::new(s))
+        res.samplers.insert(
+            id,
+            Box::new(NativeSampler {
+                handle: s,
+                desc: d.clone(),
+            }),
+        )
     }
 }
