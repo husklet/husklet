@@ -100,9 +100,11 @@ pub extern "C" fn glPrimitiveRestartIndex(_index: u32) {}
 /// `glLineWidth` — `GL_LINE_WIDTH` is fixed at `1.0` (see `query::get_floatv`); an honest no-op.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glLineWidth(_width: f32) {}
-/// `glPolygonOffset` — no depth-bias pipeline state is lowered: an honest no-op.
+/// `glPolygonOffset` — fixed depth bias for filled polygons.
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glPolygonOffset(_factor: f32, _units: f32) {}
+pub extern "C" fn glPolygonOffset(factor: f32, units: f32) {
+    GlobalState::context(|state| record::polygon_offset(&mut state.gl, factor, units));
+}
 /// `glHint` — hints remain advisory for rendering, but their query-observable state is retained.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glHint(target: u32, mode: u32) {

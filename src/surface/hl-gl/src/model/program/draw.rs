@@ -184,6 +184,11 @@ pub struct DrawCall {
     /// Depth-compare function (GL enum) + depth-write mask, lowered to the pipeline depth state.
     pub depth_func: u32,
     pub depth_write: bool,
+    /// Filled-polygon depth bias captured at draw time. WebGPU expresses the GL `units` term as an
+    /// integer constant in minimum-depth increments and the `factor` term as a slope scale.
+    pub polygon_offset_fill: bool,
+    pub polygon_offset_factor: f32,
+    pub polygon_offset_units: f32,
     /// `GL_STENCIL_TEST` enabled at draw time, and the front/back stencil test snapshot: per-face compare
     /// func + stencil-fail/depth-fail/depth-pass ops (GL enums), plus the front-face reference value and
     /// read/write masks (WebGPU carries a single reference + read/write mask for both faces). Lowered to the
@@ -451,6 +456,9 @@ impl Default for DrawCall {
             depth: false,
             depth_func: crate::model::glconst::GL_LESS,
             depth_write: true,
+            polygon_offset_fill: false,
+            polygon_offset_factor: 0.0,
+            polygon_offset_units: 0.0,
             stencil: false,
             stencil_func_front: crate::model::glconst::GL_ALWAYS,
             stencil_func_back: crate::model::glconst::GL_ALWAYS,
