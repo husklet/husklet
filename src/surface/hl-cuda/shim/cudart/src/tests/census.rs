@@ -63,7 +63,7 @@ fn runtime_entry_points_roundtrip() {
     let mut graphics_resource = 1usize as *mut c_void;
     assert_eq!(
         unsafe { cudaGraphicsGLRegisterImage(&mut graphics_resource, 7, 0x8513, 0) },
-        CUDART_ERR_INVALID_VALUE
+        CUDART_ERR_NOT_SUPPORTED
     );
     assert_eq!(graphics_resource, 1usize as *mut c_void);
     assert_eq!(

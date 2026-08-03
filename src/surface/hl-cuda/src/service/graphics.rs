@@ -2,7 +2,7 @@
 
 use crate::model::context::CudaContext;
 use crate::model::device::DevicePtr;
-use crate::model::graphics::{GraphicsBuffer, GraphicsImage, GraphicsObject, GraphicsResource, ImportedArrayHandle};
+use crate::model::graphics::{GraphicsBuffer, GraphicsImage, GraphicsImageKind, GraphicsObject, GraphicsResource, ImportedArrayHandle};
 use crate::model::stream::Stream;
 use hl_gpu::{BufferId, Cmd, CommandSink, ExportId, GpuError, Result, TextureId};
 
@@ -19,13 +19,14 @@ pub fn register_buffer(
 
 /// Register the narrow image shape the GL bridge can truthfully export today: one `GL_TEXTURE_2D`
 /// image. Mip/layer selection is validated later by [`mapped_array`].
-pub fn register_image(ctx: &mut CudaContext, sink: &mut dyn CommandSink, export: ExportId, flags: u32) -> Result<GraphicsResource> {
+pub fn register_image(ctx: &mut CudaContext, sink: &mut dyn CommandSink, export: ExportId, flags: u32, kind: GraphicsImageKind, mip_levels: u32, layers: u32) -> Result<GraphicsResource> {
     if !matches!(flags, 0 | 1 | 2 | 4 | 8) {
         return Err(GpuError::Invalid("CUDA graphics image registration flags"));
     }
     let texture = TextureId(ctx.alloc_texture());
     sink.import_texture(texture, export)?;
-    Ok(ctx.graphics.insert_image(GraphicsImage { texture, export, mapped: false, map_flags: 0, registration_flags: flags, array: None }))
+    if mip_levels == 0 || layers == 0 { return Err(GpuError::Invalid("CUDA graphics image shape")); }
+    Ok(ctx.graphics.insert_image(GraphicsImage { texture, export, mapped: false, map_flags: 0, registration_flags: flags, kind, mip_levels, layers }))
 }
 
 /// Set NONE, READ_ONLY, or WRITE_DISCARD for a registered, currently-unmapped resource.
@@ -206,8 +207,8 @@ mod tests {
     #[test]
     fn imported_image_array_exists_only_for_the_mapped_base_subresource() {
         let (mut ctx, mut sink) = (context(), Sink::default());
-        assert!(register_image(&mut ctx, &mut sink, ExportId(7), 3).is_err());
-        let resource = register_image(&mut ctx, &mut sink, ExportId(7), 4).unwrap();
+        assert!(register_image(&mut ctx, &mut sink, ExportId(7), 3, GraphicsImageKind::D2, 1, 1).is_err());
+        let resource = register_image(&mut ctx, &mut sink, ExportId(7), 4, GraphicsImageKind::D2, 1, 1).unwrap();
         assert!(matches!(ctx.graphics.object(resource), Some(GraphicsObject::Image(image)) if image.registration_flags == 4));
         assert_eq!(sink.texture_imports.len(), 1);
         assert!(mapped_array(&mut ctx, resource, 0, 0).is_err());
@@ -227,6 +228,23 @@ mod tests {
         unregister_resource(&mut ctx, &mut sink, resource).unwrap();
         assert_eq!(sink.unmapped_textures, vec![imported.texture]);
         assert!(matches!(sink.batches.last().unwrap().as_slice(), [Cmd::DestroyTexture(_)]));
+    }
+
+    #[test]
+    fn mapped_image_subresources_follow_the_registered_shape() {
+        let (mut ctx, mut sink) = (context(), Sink::default());
+        let cube = register_image(&mut ctx, &mut sink, ExportId(7), 0, GraphicsImageKind::Cube, 3, 6).unwrap();
+        map_resources(&mut ctx, &mut sink, &[cube], Stream(0)).unwrap();
+        let face = mapped_array(&mut ctx, cube, 5, 2).unwrap();
+        assert_ne!(face, mapped_array(&mut ctx, cube, 0, 2).unwrap());
+        assert_eq!(face, mapped_array(&mut ctx, cube, 5, 2).unwrap());
+        assert!(mapped_array(&mut ctx, cube, 6, 2).is_err());
+        assert!(mapped_array(&mut ctx, cube, 0, 3).is_err());
+
+        let volume = register_image(&mut ctx, &mut sink, ExportId(8), 0, GraphicsImageKind::D3, 4, 8).unwrap();
+        map_resources(&mut ctx, &mut sink, &[volume], Stream(0)).unwrap();
+        assert!(mapped_array(&mut ctx, volume, 0, 3).is_ok());
+        assert!(mapped_array(&mut ctx, volume, 1, 0).is_err());
     }
 
     #[test]

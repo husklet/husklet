@@ -102,7 +102,7 @@ fn bringup_device_and_context_queries() {
     let mut graphics_resource = 1usize as *mut c_void;
     assert_eq!(
         unsafe { cuGraphicsGLRegisterImage(&mut graphics_resource, 7, 0x8513, 0) },
-        CUDA_ERROR_INVALID_VALUE
+        CUDA_ERROR_NOT_SUPPORTED
     );
     assert_eq!(graphics_resource, 1usize as *mut c_void);
     assert_eq!(

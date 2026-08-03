@@ -1,7 +1,7 @@
 use core::ffi::{c_char, c_void};
 use std::sync::OnceLock;
 
-use hl_cuda::model::graphics::GraphicsResource;
+use hl_cuda::model::graphics::{GraphicsImageKind, GraphicsResource};
 use hl_cuda::result::*;
 use hl_cuda::service::graphics;
 use hl_gpu::ExportId;
@@ -9,9 +9,16 @@ use hl_gpu::ExportId;
 use crate::state::ShimState;
 
 type GlExportBuffer = unsafe extern "C" fn(u32, *mut u64) -> i32;
-type GlExportTexture = unsafe extern "C" fn(u32, *mut u64) -> i32;
+type GlExportTexture = unsafe extern "C" fn(u32, u32, *mut u64, *mut u32, *mut u32) -> i32;
 
 const GL_TEXTURE_2D: u32 = 0x0de1;
+const GL_TEXTURE_3D: u32 = 0x806f;
+const GL_TEXTURE_CUBE_MAP: u32 = 0x8513;
+const GL_TEXTURE_2D_ARRAY: u32 = 0x8c1a;
+
+fn image_kind(target: u32) -> Option<GraphicsImageKind> {
+    Some(match target { GL_TEXTURE_2D => GraphicsImageKind::D2, GL_TEXTURE_CUBE_MAP => GraphicsImageKind::Cube, GL_TEXTURE_2D_ARRAY => GraphicsImageKind::D2Array, GL_TEXTURE_3D => GraphicsImageKind::D3, _ => return None })
+}
 
 #[link(name = "dl")]
 extern "C" {
@@ -76,17 +83,22 @@ pub unsafe extern "C" fn cuGraphicsGLRegisterImage(
     target: u32,
     flags: u32,
 ) -> i32 {
-    if resource.is_null() || image == 0 || target != GL_TEXTURE_2D || !matches!(flags, 0 | 1 | 2 | 4 | 8) {
+    let Some(kind) = image_kind(target) else { return CUDA_ERROR_INVALID_VALUE; };
+    if resource.is_null() || image == 0 || !matches!(flags, 0 | 1 | 2 | 4 | 8) {
         return CUDA_ERROR_INVALID_VALUE;
     }
     let Some(export_texture) = gl_export_texture() else { return CUDA_ERROR_NOT_SUPPORTED; };
     let mut export = 0;
-    if export_texture(image, &mut export) != 0 { return CUDA_ERROR_INVALID_HANDLE; }
+    let (mut mip_levels, mut layers) = (0, 0);
+    if export_texture(image, target, &mut export, &mut mip_levels, &mut layers) != 0 { return CUDA_ERROR_INVALID_HANDLE; }
     ShimState::with_context(|state| match graphics::register_image(
         &mut state.ctx,
         &mut state.sink,
         ExportId(export),
         flags,
+        kind,
+        mip_levels,
+        layers,
     ) {
         Ok(handle) => { *resource = handle.0 as *mut c_void; CUDA_SUCCESS }
         Err(error) => DriverStatus::from(&error).code(),

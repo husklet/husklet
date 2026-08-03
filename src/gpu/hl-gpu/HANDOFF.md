@@ -295,3 +295,10 @@ reports which operation failed is a precondition for a guest ever being told wha
 
 Also still open from earlier in the slice: guard behaviour under a transaction rollback. A guard attached
 inside a batch that then NACKs is covered by no test and the intended behaviour was never decided.
+# Status correction — 2026-08-03
+
+This handoff records the 2026-08-01 state and is no longer a current implementation census. Export/import,
+map/unmap, wgpu aliasing, session-global `Exports` construction, GL buffer and image bridges, and CUDA
+external memory/semaphore operations have since landed. The access gate is reachable in the shipped
+composition root. Current image limits are documented in `src/surface/hl-cuda/INTEROP.md`; notably, an
+unmaterialized layered GL texture is truthfully declined instead of being exported as a flattened 2D copy.

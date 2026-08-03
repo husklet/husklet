@@ -1,14 +1,18 @@
 use core::ffi::{c_char, c_void};
 use std::sync::OnceLock;
-use hl_cuda::model::graphics::GraphicsResource;
+use hl_cuda::model::graphics::{GraphicsImageKind, GraphicsResource};
 use hl_cuda::result::{RuntimeStatus, CUDART_ERROR_INVALID_RESOURCE_HANDLE, CUDART_ERROR_INVALID_VALUE, CUDART_ERROR_NOT_SUPPORTED, CUDART_SUCCESS};
 use hl_cuda::service::graphics;
 use hl_gpu::ExportId;
 use crate::state::ShimState;
 
 type GlExportBuffer = unsafe extern "C" fn(u32, *mut u64) -> i32;
-type GlExportTexture = unsafe extern "C" fn(u32, *mut u64) -> i32;
+type GlExportTexture = unsafe extern "C" fn(u32, u32, *mut u64, *mut u32, *mut u32) -> i32;
 const GL_TEXTURE_2D: u32 = 0x0de1;
+const GL_TEXTURE_3D: u32 = 0x806f;
+const GL_TEXTURE_CUBE_MAP: u32 = 0x8513;
+const GL_TEXTURE_2D_ARRAY: u32 = 0x8c1a;
+fn image_kind(target: u32) -> Option<GraphicsImageKind> { Some(match target { GL_TEXTURE_2D => GraphicsImageKind::D2, GL_TEXTURE_CUBE_MAP => GraphicsImageKind::Cube, GL_TEXTURE_2D_ARRAY => GraphicsImageKind::D2Array, GL_TEXTURE_3D => GraphicsImageKind::D3, _ => return None }) }
 #[link(name = "dl")]
 extern "C" { fn dlopen(name: *const c_char, flags: i32) -> *mut c_void; fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void; }
 
@@ -56,13 +60,15 @@ pub unsafe extern "C" fn cudaGraphicsGLRegisterBuffer(resource: *mut *mut c_void
 
 #[no_mangle]
 pub unsafe extern "C" fn cudaGraphicsGLRegisterImage(resource: *mut *mut c_void, image: u32, target: u32, flags: u32) -> i32 {
-    if resource.is_null() || image == 0 || target != GL_TEXTURE_2D || !matches!(flags, 0 | 1 | 2 | 4 | 8) {
+    let Some(kind) = image_kind(target) else { return CUDART_ERROR_INVALID_VALUE; };
+    if resource.is_null() || image == 0 || !matches!(flags, 0 | 1 | 2 | 4 | 8) {
         return CUDART_ERROR_INVALID_VALUE;
     }
     let Some(bridge) = gl_export_texture() else { return CUDART_ERROR_NOT_SUPPORTED; };
     let mut export = 0;
-    if bridge(image, &mut export) != 0 { return CUDART_ERROR_INVALID_RESOURCE_HANDLE; }
-    ShimState::with(|state| match graphics::register_image(&mut state.ctx, &mut state.sink, ExportId(export), flags) {
+    let (mut mip_levels, mut layers) = (0, 0);
+    if bridge(image, target, &mut export, &mut mip_levels, &mut layers) != 0 { return CUDART_ERROR_INVALID_RESOURCE_HANDLE; }
+    ShimState::with(|state| match graphics::register_image(&mut state.ctx, &mut state.sink, ExportId(export), flags, kind, mip_levels, layers) {
         Ok(handle) => { *resource = handle.0 as *mut c_void; CUDART_SUCCESS }
         Err(error) => state.fail(RuntimeStatus::from(&error).code()),
     })

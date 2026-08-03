@@ -6,6 +6,7 @@ use core::ffi::c_void;
 pub(super) const CUDART_ERR_INVALID_VALUE: i32 = 1;
 pub(super) const CUDART_ERR_INVALID_DEVICE: i32 = 101;
 pub(super) const CUDART_ERR_INVALID_RESOURCE_HANDLE: i32 = 400;
+pub(super) const CUDART_ERR_NOT_SUPPORTED: i32 = 801;
 pub(super) const CUDART_ERR_NOT_READY: i32 = 600;
 
 /// The default-stream handle (null token).
