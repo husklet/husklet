@@ -12,7 +12,9 @@ use crate::protocol::model::enums::{compare, stencil_op};
 use crate::protocol::model::error::{GpuError, Result};
 use crate::runtime::model::session::Limits;
 
-/// The negotiated copy alignment must divide every buffer/image copy offset, size, and row stride.
+/// The negotiated copy alignment applies to native buffer-to-buffer copies. Texture transfers are
+/// byte-addressable at the protocol boundary: executors repack rows or use their host fallback when a
+/// layout cannot satisfy the native API's stricter offset and pitch requirements.
 impl Enc {
     fn validate_copy_alignment(&self, alignment: u64) -> Result<()> {
         if alignment <= 1 {
@@ -26,26 +28,6 @@ impl Enc {
                 size,
                 ..
             } => src_offset % a != 0 || dst_offset % a != 0 || size % a != 0,
-            Enc::CopyBufferToTexture {
-                src_offset,
-                bytes_per_row,
-                ..
-            }
-            | Enc::CopyBufferToTextureRegion {
-                src_offset,
-                bytes_per_row,
-                ..
-            } => src_offset % a != 0 || !(*bytes_per_row as u64).is_multiple_of(a),
-            Enc::CopyTextureToBuffer {
-                dst_offset,
-                bytes_per_row,
-                ..
-            }
-            | Enc::CopyTextureToBufferRegion {
-                dst_offset,
-                bytes_per_row,
-                ..
-            } => dst_offset % a != 0 || !(*bytes_per_row as u64).is_multiple_of(a),
             _ => false,
         };
         if misaligned {

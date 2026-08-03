@@ -49,6 +49,81 @@ fn session(executor: &WgpuExecutor) -> Session {
     )
 }
 
+fn default_alignment_session(executor: &WgpuExecutor) -> Session {
+    Session::new(
+        Limits::from_capabilities(executor.capabilities()),
+        GlobalLedger::unbounded(),
+        Box::new(FakeClock::new(0)),
+    )
+}
+
+#[test]
+fn packed_two_byte_texture_rows_cross_the_default_runtime_alignment() {
+    let mut executor = WgpuExecutor::new(DeviceConfig::default()).expect("Metal adapter");
+    let mut session = default_alignment_session(&executor);
+    let mut descriptor = texture();
+    descriptor.width = 1;
+    descriptor.height = 1;
+    descriptor.mip_levels = 1;
+    descriptor.format = TextureFormat::R16Float;
+    let half_one = [0x00, 0x3c];
+    hl_gpu::runtime::submit(
+        &mut session,
+        &mut executor,
+        0,
+        &[
+            Cmd::CreateTexture(1, descriptor),
+            Cmd::CreateBuffer(
+                1,
+                BufferDesc {
+                    size: 2,
+                    usage: buffer_usage::COPY_SRC,
+                    label: String::new(),
+                },
+            ),
+            Cmd::CreateBuffer(
+                2,
+                BufferDesc {
+                    size: 2,
+                    usage: buffer_usage::COPY_DST,
+                    label: String::new(),
+                },
+            ),
+            Cmd::WriteBuffer { id: 1, offset: 0, data: half_one.to_vec() },
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::CopyBufferToTextureRegion {
+                        src: 1,
+                        src_offset: 0,
+                        bytes_per_row: 2,
+                        rows_per_image: 1,
+                        dst: 1,
+                        dst_sub: sub(0),
+                        dst_origin: Origin3d::default(),
+                        extent: Extent3d { width: 1, height: 1, depth: 1 },
+                    },
+                    Enc::CopyTextureToBufferRegion {
+                        src: 1,
+                        src_sub: sub(0),
+                        src_origin: Origin3d::default(),
+                        extent: Extent3d { width: 1, height: 1, depth: 1 },
+                        dst: 2,
+                        dst_offset: 0,
+                        bytes_per_row: 2,
+                        rows_per_image: 1,
+                    },
+                ],
+                signal: None,
+            }),
+        ],
+    )
+    .expect("packed R16 texture transfers must use the executor fallback, not fail validation");
+    assert_eq!(
+        executor.read_buffer(&session.resources, BufferId(2), 0, 2).unwrap(),
+        half_one,
+    );
+}
+
 #[test]
 fn blit_reads_and_writes_the_named_mip_levels() {
     let mut executor = WgpuExecutor::new(DeviceConfig::default()).expect("Metal adapter");

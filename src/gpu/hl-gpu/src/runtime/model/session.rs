@@ -28,9 +28,10 @@ pub struct Limits {
     pub caps: Capabilities,
     pub max_connection_bytes: u64,
     pub max_connection_objects: u64,
-    /// Negotiated backend copy alignment (bytes): buffer-copy offsets/sizes and image-copy
-    /// `bytes_per_row`/offsets must be a multiple of this or the transfer is rejected before the executor
-    /// decodes it. `<= 1` disables the check (byte-addressable).
+    /// Negotiated backend buffer-copy alignment (bytes): buffer-to-buffer offsets and sizes must be a
+    /// multiple of this or the transfer is rejected before the executor decodes it. Texture transfers
+    /// remain byte-addressable and are repacked by the executor when native texture-copy rules are stricter.
+    /// `<= 1` disables the check.
     pub copy_alignment: u64,
     /// Negotiated per-connection compiled-pipeline (PSO/AIR) cache ceiling in bytes.
     pub max_compiled_cache_bytes: u64,

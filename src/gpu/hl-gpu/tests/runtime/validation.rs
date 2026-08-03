@@ -49,3 +49,42 @@ fn validation_rejects_unnegotiated_command_before_any_execute() {
     assert_eq!(exec.command_count(), 0);
     assert_eq!(s.residency_bytes(), 0);
 }
+
+#[test]
+fn validation_keeps_buffer_copy_alignment_without_rejecting_packed_texture_rows() {
+    use hl_gpu::protocol::model::descriptor::{Extent3d, Origin3d, TextureSubresource};
+
+    let caps = Capabilities::permissive_fixture("fake");
+    let mut exec = FakeExecutor::new(caps.clone());
+    let mut s = session(Limits::from_capabilities(caps), GlobalLedger::unbounded());
+    let packed_texture_row = vec![Cmd::Submit(CommandBuffer {
+        encoder: vec![Enc::CopyBufferToTextureRegion {
+            src: 1,
+            src_offset: 0,
+            bytes_per_row: 2,
+            rows_per_image: 1,
+            dst: 1,
+            dst_sub: TextureSubresource::base(),
+            dst_origin: Origin3d::default(),
+            extent: Extent3d { width: 1, height: 1, depth: 1 },
+        }],
+        signal: None,
+    })];
+    hl_gpu::runtime::submit(&mut s, &mut exec, 64, &packed_texture_row)
+        .expect("a packed two-byte texel row is valid even though buffer copies require four bytes");
+    assert_eq!(exec.command_count(), 1, "the packed texture upload reached the executor");
+
+    let unaligned_buffer_copy = vec![Cmd::Submit(CommandBuffer {
+        encoder: vec![Enc::CopyBufferToBuffer {
+            src: 1,
+            src_offset: 0,
+            dst: 2,
+            dst_offset: 0,
+            size: 2,
+        }],
+        signal: None,
+    })];
+    let error = hl_gpu::runtime::submit(&mut s, &mut exec, 64, &unaligned_buffer_copy).unwrap_err();
+    assert_eq!(error, GpuError::ResourceLimit("copy alignment"));
+    assert_eq!(exec.command_count(), 1, "the unaligned buffer copy was rejected before execute");
+}
