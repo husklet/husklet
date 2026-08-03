@@ -791,8 +791,10 @@ pub(super) fn lower_draw_n(
 /// this costs nothing and needs no new factor. Without it `GL_CONSTANT_ALPHA` silently behaved as
 /// `GL_CONSTANT_COLOR` and a `(0, 0, 0, 200)` constant scaled RGB by zero.
 ///
-/// A draw that references BOTH forms cannot be expressed by one constant; the colour form wins, because it
-/// is the one whose meaning the IR factor already has.
+/// Alpha blending only consumes the constant's alpha component, where GL's colour and alpha spellings are
+/// identical. Therefore only the RGB factors decide whether broadcasting is required. A draw whose RGB
+/// source and destination themselves mix both forms remains unexpressible by fixed-function WebGPU; the
+/// colour form wins in that case because it is the IR factor's native meaning.
 fn blend_constant(d: &DrawCall) -> Option<[f32; 4]> {
     const CONSTANT_COLOR: u32 = 0x8001;
     const ONE_MINUS_CONSTANT_COLOR: u32 = 0x8002;
@@ -810,14 +812,42 @@ fn blend_constant(d: &DrawCall) -> Option<[f32; 4]> {
     {
         return None;
     }
-    let colour_form = factors
+    let rgb_factors = [d.blend_src_rgb, d.blend_dst_rgb];
+    let colour_form = rgb_factors
         .iter()
         .any(|factor| matches!(*factor, CONSTANT_COLOR | ONE_MINUS_CONSTANT_COLOR));
-    let alpha_form = factors
+    let alpha_form = rgb_factors
         .iter()
         .any(|factor| matches!(*factor, CONSTANT_ALPHA | ONE_MINUS_CONSTANT_ALPHA));
     if alpha_form && !colour_form {
         return Some([d.blend_color[3]; 4]);
     }
     Some(d.blend_color)
+}
+
+#[cfg(test)]
+mod blend_constant_tests {
+    use super::*;
+
+    #[test]
+    fn alpha_equation_constant_colour_does_not_hide_rgb_constant_alpha() {
+        let mut draw = DrawCall::default();
+        draw.blend_color = [0.1, 0.2, 0.3, 0.75];
+        draw.blend_src_rgb = 0x8003; // GL_CONSTANT_ALPHA
+        draw.blend_dst_rgb = GL_ONE;
+        draw.blend_src_alpha = 0x8001; // GL_CONSTANT_COLOR; alpha component is still 0.75.
+
+        assert_eq!(blend_constant(&draw), Some([0.75; 4]));
+    }
+
+    #[test]
+    fn alpha_equation_constant_alpha_does_not_broadcast_rgb_constant_colour() {
+        let mut draw = DrawCall::default();
+        draw.blend_color = [0.1, 0.2, 0.3, 0.75];
+        draw.blend_src_rgb = 0x8001; // GL_CONSTANT_COLOR
+        draw.blend_dst_rgb = GL_ONE;
+        draw.blend_src_alpha = 0x8003; // GL_CONSTANT_ALPHA
+
+        assert_eq!(blend_constant(&draw), Some(draw.blend_color));
+    }
 }
