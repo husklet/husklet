@@ -389,6 +389,7 @@ mod reflection;
 mod scanner;
 mod tokens;
 mod translate;
+mod types;
 mod uniforms;
 mod validation;
 
