@@ -324,29 +324,14 @@ impl GlContext {
         fbo: u32,
         color_tex: u32,
         with_stencil: bool,
+        attachments: crate::model::program::DepthStencilSnapshot,
     ) -> hl_gpu::Result<(
         u32,
         bool,
         Vec<(u32, hl_gpu::protocol::model::enums::TextureAspect)>,
     )> {
-        let attachment = |source: Option<(u32, bool)>| {
-            source.and_then(|(name, renderbuffer)| {
-                let texture = if renderbuffer {
-                    self.renderbuffers.backing_tex(name)
-                } else {
-                    name
-                };
-                self.textures
-                    .get(texture)
-                    .map(|object| (texture, object.gen))
-            })
-        };
-        let depth = (fbo != 0)
-            .then(|| attachment(self.local.framebuffers.depth_source(fbo)))
-            .flatten();
-        let stencil = (fbo != 0)
-            .then(|| attachment(self.local.framebuffers.stencil_source(fbo)))
-            .flatten();
+        let depth = (fbo != 0).then_some(attachments.depth).flatten();
+        let stencil = (fbo != 0).then_some(attachments.stencil).flatten();
         let key = DepthTargetKey {
             fallback_color: if depth.is_none() && stencil.is_none() {
                 color_tex
@@ -382,7 +367,39 @@ impl GlContext {
             }
             self.stencil_aspect_current.insert(storage, depth);
         }
-        self.depth_target_current.insert(current_key, (key, depth));
+        let previous = self.depth_target_current.insert(current_key, (key, depth));
+        if let Some((old, _)) = previous {
+            if let Some(storage) = old.depth.filter(|storage| Some(*storage) != key.depth) {
+                let still_attached = self
+                    .depth_target_current
+                    .values()
+                    .any(|(current, _)| current.depth == Some(storage));
+                if !still_attached {
+                    self.depth_aspect_current.remove(&storage);
+                }
+            }
+            if let Some(storage) = old.stencil.filter(|storage| Some(*storage) != key.stencil) {
+                let still_attached = self
+                    .depth_target_current
+                    .values()
+                    .any(|(current, _)| current.stencil == Some(storage));
+                if !still_attached {
+                    self.stencil_aspect_current.remove(&storage);
+                }
+            }
+        }
+        let obsolete = preserve
+            .iter()
+            .map(|(source, _)| *source)
+            .filter(|source| {
+                !self.depth_aspect_current.values().any(|current| current == source)
+                    && !self.stencil_aspect_current.values().any(|current| current == source)
+            })
+            .collect::<std::collections::HashSet<_>>();
+        for source in obsolete {
+            self.depth_targets.retain(|_, target| *target != source);
+            self.queue_texture_destroy(source);
+        }
         Ok((depth, needs_create, preserve))
     }
 }
@@ -455,12 +472,48 @@ mod depth_preservation_tests {
         ctx.local.framebuffers.attach_depth(b, depth, false);
         ctx.local.framebuffers.attach_stencil(b, stencil_b, false);
 
-        let (target_a, _, first) = ctx.depth_target(a, 0, true).unwrap();
+        let attachments_a = crate::model::program::DepthStencilSnapshot {
+            depth: Some((10, 1)),
+            stencil: Some((20, 1)),
+        };
+        let attachments_b = crate::model::program::DepthStencilSnapshot {
+            depth: Some((10, 1)),
+            stencil: Some((21, 1)),
+        };
+        let (target_a, _, first) = ctx.depth_target(a, 0, true, attachments_a).unwrap();
         assert!(first.is_empty());
-        let (target_b, _, into_b) = ctx.depth_target(b, 0, true).unwrap();
+        let (target_b, _, into_b) = ctx.depth_target(b, 0, true, attachments_b).unwrap();
         assert_eq!(into_b, vec![(target_a, TextureAspect::DepthOnly)]);
-        let (target_a_again, _, back_into_a) = ctx.depth_target(a, 0, true).unwrap();
+        let (target_a_again, _, back_into_a) = ctx.depth_target(a, 0, true, attachments_a).unwrap();
         assert_eq!(target_a_again, target_a);
         assert_eq!(back_into_a, vec![(target_b, TextureAspect::DepthOnly)]);
+    }
+
+    #[test]
+    fn rejected_recreation_restores_aspect_lifetime_state() {
+        let mut ctx = GlContext::new();
+        let before = ctx.frame_state();
+        let old = crate::model::program::DepthStencilSnapshot {
+            depth: Some((10, 1)),
+            stencil: Some((20, 1)),
+        };
+        let new = crate::model::program::DepthStencilSnapshot {
+            depth: Some((10, 2)),
+            stencil: Some((20, 1)),
+        };
+        let (old_target, _, _) = ctx.depth_target(1, 0, true, old).unwrap();
+        let (_, _, preserve) = ctx.depth_target(1, 0, true, new).unwrap();
+        assert_eq!(preserve, vec![(old_target, TextureAspect::StencilOnly)]);
+        assert!(ctx
+            .pending_destroys()
+            .iter()
+            .any(|command| matches!(command, Cmd::DestroyTexture(target) if *target == old_target)));
+
+        ctx.restore_frame_state(before);
+        assert!(ctx.depth_targets.is_empty());
+        assert!(ctx.depth_target_current.is_empty());
+        assert!(ctx.depth_aspect_current.is_empty());
+        assert!(ctx.stencil_aspect_current.is_empty());
+        assert!(ctx.pending_destroys().is_empty());
     }
 }

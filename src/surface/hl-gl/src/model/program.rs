@@ -12,7 +12,7 @@ mod shader;
 mod table;
 
 pub use draw::{
-    Attr, BufferSnapshot, ClientArray, DrawCall, TargetSnapshot, TextureSnapshot,
+    Attr, BufferSnapshot, ClientArray, DepthStencilSnapshot, DrawCall, TargetSnapshot, TextureSnapshot,
     TransformFeedbackCapture,
 };
 pub use feedback::{

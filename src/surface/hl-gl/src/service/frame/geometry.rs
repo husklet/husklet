@@ -14,17 +14,28 @@ pub(super) fn build_clear_frame_color(
     clear: [f64; 4],
     cmds: Vec<Cmd>,
 ) -> Frame {
-    let snapshot = ctx
+    let draw = ctx
         .local
         .recording
         .draws
         .iter()
         .rev()
-        .find(|d| d.fbo == fbo)
-        .and_then(|d| d.target);
+        .find(|d| d.fbo == fbo);
+    let snapshot = draw.and_then(|d| d.target);
+    let depth_stencil = draw.map(|d| d.depth_stencil).unwrap_or_default();
     let depth = depth_load(&ctx.local.recording.draws);
     let count = ctx.local.recording.draws.len();
-    build_clear_frame_snapshot(ctx, fbo, snapshot, clear, LoadOp::Clear, depth, cmds, count)
+    build_clear_frame_snapshot(
+        ctx,
+        fbo,
+        snapshot,
+        depth_stencil,
+        clear,
+        LoadOp::Clear,
+        depth,
+        cmds,
+        count,
+    )
 }
 
 /// A frame whose only work is a DEPTH/STENCIL clear: the colour attachment load-preserves, so nothing
@@ -35,19 +46,21 @@ pub(super) fn build_clear_frame_depth(
     depth: DepthClear,
     cmds: Vec<Cmd>,
 ) -> Frame {
-    let snapshot = ctx
+    let draw = ctx
         .local
         .recording
         .draws
         .iter()
         .rev()
-        .find(|d| d.fbo == fbo)
-        .and_then(|d| d.target);
+        .find(|d| d.fbo == fbo);
+    let snapshot = draw.and_then(|d| d.target);
+    let depth_stencil = draw.map(|d| d.depth_stencil).unwrap_or_default();
     let count = ctx.local.recording.draws.len();
     build_clear_frame_snapshot(
         ctx,
         fbo,
         snapshot,
+        depth_stencil,
         [0.0; 4],
         LoadOp::Load,
         depth,
@@ -61,6 +74,7 @@ fn build_clear_frame_snapshot(
     ctx: &mut GlContext,
     fbo: u32,
     snapshot: Option<crate::model::program::TargetSnapshot>,
+    depth_stencil: crate::model::program::DepthStencilSnapshot,
     clear: [f64; 4],
     colour_load: LoadOp,
     depth: DepthClear,
@@ -73,7 +87,18 @@ fn build_clear_frame_snapshot(
     // cleared depth value: the next frame to enable the depth test minted the plane fresh and cleared it
     // to the GL initial 1.0. The colour attachment LOADs here so a depth-only clear cannot repaint colour.
     let mut ops = Vec::new();
-    let depth_attachment = depth_attachment_for(ctx, fbo, texture, w, h, &[], &mut cmds, &mut ops, depth);
+    let depth_attachment = depth_attachment_for(
+        ctx,
+        fbo,
+        texture,
+        w,
+        h,
+        &[],
+        &mut cmds,
+        &mut ops,
+        depth,
+        depth_stencil,
+    );
     ops.extend([
         Enc::BeginRenderPass {
             color: vec![ColorAttachment {
@@ -178,6 +203,7 @@ impl Frame {
                 ctx,
                 fbo,
                 last.and_then(|draw| draw.target),
+                last.map(|draw| draw.depth_stencil).unwrap_or_default(),
                 clear,
                 LoadOp::Clear,
                 depth_load(draws),
@@ -211,7 +237,8 @@ impl Frame {
             // built at this format to match the attachment (wgpu requirement). A depth/stencil CLEAR counts
             // as well as a depth/stencil-tested draw: the clear has to land even in a frame whose draws are
             // all untested, or the value it wrote is lost (see [`RenderPasses::depth_format_with`]).
-            let stencil_available = fbo == 0 || ctx.local.framebuffers.has_stencil(fbo);
+            let attachments = survivors.first().map(|draw| draw.depth_stencil).unwrap_or_default();
+            let stencil_available = fbo == 0 || attachments.stencil.is_some();
             let depth_fmt = RenderPasses::depth_format_with(
                 survivors,
                 depth_load(draws),
@@ -248,6 +275,10 @@ impl Frame {
                     ctx,
                     fbo,
                     snapshot,
+                    first_geometry
+                        .or_else(|| survivors.first())
+                        .map(|draw| draw.depth_stencil)
+                        .unwrap_or_default(),
                     clear,
                     LoadOp::Clear,
                     depth_load(draws),
@@ -265,6 +296,7 @@ impl Frame {
                 &mut cmds,
                 &mut copies,
                 depth_load(draws),
+                attachments,
             );
             let mut ops: Vec<Enc> = copies;
             ops.push(Enc::BeginRenderPass {
@@ -800,7 +832,8 @@ pub(super) fn emit_segment_pass(
     // The pass's depth format must account for the CLEAR that armed it as well as the draws in it: a
     // pipeline built without a depth state cannot run in a pass that has a depth attachment, and vice
     // versa, so both decisions read the same answer.
-    let stencil_available = fbo == 0 || ctx.local.framebuffers.has_stencil(fbo);
+    let attachments = seg.first().map(|draw| draw.depth_stencil).unwrap_or_default();
+    let stencil_available = fbo == 0 || attachments.stencil.is_some();
     let depth_fmt = RenderPasses::depth_format_with(seg, depth_load, stencil_available);
     let mut copies: Vec<Enc> = Vec::new();
     let mut draw_ops: Vec<Enc> = Vec::new();
@@ -823,7 +856,18 @@ pub(super) fn emit_segment_pass(
             draw_ops.extend(lowered.ops);
         }
     }
-    let depth = depth_attachment_for(ctx, fbo, target_tex, tw, th, seg, cmds, &mut copies, depth_load);
+    let depth = depth_attachment_for(
+        ctx,
+        fbo,
+        target_tex,
+        tw,
+        th,
+        seg,
+        cmds,
+        &mut copies,
+        depth_load,
+        attachments,
+    );
     ops.extend(copies);
     ops.push(Enc::BeginRenderPass {
         color: vec![ColorAttachment {

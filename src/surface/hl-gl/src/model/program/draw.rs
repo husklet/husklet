@@ -87,6 +87,16 @@ pub struct TargetSnapshot {
     pub format: TextureFormat,
 }
 
+/// Exact depth/stencil storage generations attached when framebuffer work was recorded.
+///
+/// Lowering is deferred until swap, so an application may delete and recreate an attached renderbuffer
+/// before the earlier draw is lowered. Public GL names alone cannot distinguish those storage objects.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct DepthStencilSnapshot {
+    pub depth: Option<(u32, u64)>,
+    pub stencil: Option<(u32, u64)>,
+}
+
 /// The exact sampled texture generation visible when a draw was recorded.
 ///
 /// GL object state remains mutable until the deferred frame boundary. Keeping the object plus any
@@ -126,6 +136,7 @@ pub struct DrawCall {
     pub fbo: u32,
     /// Offscreen color attachment captured at draw time; `None` for the default framebuffer.
     pub target: Option<TargetSnapshot>,
+    pub depth_stencil: DepthStencilSnapshot,
     /// Bound element-array-buffer name (for an indexed draw).
     pub elem_buf: u32,
     /// Per-location vertex-attribute snapshot.
@@ -396,6 +407,7 @@ impl Default for DrawCall {
             prog: 0,
             fbo: 0,
             target: None,
+            depth_stencil: DepthStencilSnapshot::default(),
             elem_buf: 0,
             attrs: [Attr::default(); MAX_ATTR],
             current_attrs: [[0.0, 0.0, 0.0, 1.0]; MAX_ATTR],

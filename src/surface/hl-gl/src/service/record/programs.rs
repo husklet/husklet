@@ -996,6 +996,22 @@ impl GlContext {
                     format: t.ir_format,
                 })
         };
+        if ctx.local.bound_fbo != 0 {
+            let attachment = |source: Option<(u32, bool)>| {
+                source.and_then(|(name, renderbuffer)| {
+                    let texture = if renderbuffer {
+                        ctx.renderbuffers.backing_tex(name)
+                    } else {
+                        name
+                    };
+                    ctx.textures.get(texture).map(|object| (texture, object.gen))
+                })
+            };
+            d.depth_stencil = crate::model::program::DepthStencilSnapshot {
+                depth: attachment(ctx.local.framebuffers.depth_source(ctx.local.bound_fbo)),
+                stencil: attachment(ctx.local.framebuffers.stencil_source(ctx.local.bound_fbo)),
+            };
+        }
         for unit in 0..d.tex_units.len() {
             if let Some(texture) = ctx.textures.get(d.tex_units[unit]) {
                 d.tex_generations[unit] = texture.gen;

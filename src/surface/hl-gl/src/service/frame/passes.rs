@@ -22,11 +22,15 @@ impl RenderPasses {
                 FrameOp::Draw(first) => {
                     let fbo = first.fbo;
                     let target = first.target;
+                    let depth_stencil = first.depth_stencil;
                     let start = index;
                     index += 1;
                     while index < operations.len() {
                         match &operations[index] {
-                            FrameOp::Draw(draw) if draw.fbo == fbo && draw.target == target => {
+                            FrameOp::Draw(draw)
+                                if draw.fbo == fbo
+                                    && draw.target == target
+                                    && draw.depth_stencil == depth_stencil => {
                                 index += 1
                             }
                             _ => break,
@@ -314,7 +318,10 @@ impl RenderPasses {
         let mut groups: Vec<(u32, usize, usize)> = Vec::new();
         for (i, d) in draws.iter().enumerate() {
             match groups.last_mut() {
-                Some((fbo, start, end)) if *fbo == d.fbo && draws[*start].target == d.target => {
+                Some((fbo, start, end))
+                    if *fbo == d.fbo
+                        && draws[*start].target == d.target
+                        && draws[*start].depth_stencil == d.depth_stencil => {
                     *end = i + 1
                 }
                 _ => groups.push((d.fbo, i, i + 1)),
@@ -1365,14 +1372,16 @@ pub(super) fn depth_attachment_for(
     cmds: &mut Vec<Cmd>,
     copies: &mut Vec<Enc>,
     clear: DepthClear,
+    attachments: crate::model::program::DepthStencilSnapshot,
 ) -> Option<DepthAttachment> {
-    let stencil_available = fbo == 0 || ctx.local.framebuffers.has_stencil(fbo);
+    let stencil_available = fbo == 0 || attachments.stencil.is_some();
     let format = RenderPasses::depth_format_with(draws, clear, stencil_available)?;
     let with_stencil = matches!(format, TextureFormat::Depth24PlusStencil8);
     let clear_depth = clear.depth;
     // GL clears the stencil plane to `glClearStencil`'s value (default 0), masked to the 8-bit buffer.
     let clear_stencil = (clear.stencil as u32) & 0xff;
-    let (depth_tex, needs_create, preserve) = ctx.depth_target(fbo, color_tex, with_stencil).ok()?;
+    let (depth_tex, needs_create, preserve) =
+        ctx.depth_target(fbo, color_tex, with_stencil, attachments).ok()?;
     // A depth texture minted this frame has no prior contents to preserve — and a zero-initialized depth
     // plane fails every `GL_LESS` test — so its first pass always clear-loads regardless of the caller's op.
     let load = if needs_create {
