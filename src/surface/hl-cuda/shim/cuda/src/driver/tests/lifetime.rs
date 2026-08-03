@@ -85,6 +85,14 @@ fn a_destroyed_stream_is_invalid_everywhere_and_a_live_one_still_works() {
             cuMemcpyHtoDAsync_v2(live_ptr, [0u8; 4].as_ptr() as *const c_void, 4, dead),
         ),
         ("cuMemsetD32Async", cuMemsetD32Async(live_ptr, 0, 1, dead)),
+        (
+            "cuGraphicsMapResources",
+            unsafe { cuGraphicsMapResources(0, core::ptr::null_mut(), dead) },
+        ),
+        (
+            "cuGraphicsUnmapResources",
+            unsafe { cuGraphicsUnmapResources(0, core::ptr::null_mut(), dead) },
+        ),
     ] {
         assert_eq!(
             code, CUDA_ERROR_INVALID_HANDLE,

@@ -39,4 +39,22 @@ fn device_properties_report_the_configured_identity_and_no_cooperative_launch() 
     crate::state::reset();
 }
 
+#[test]
+fn graphics_map_and_unmap_reject_a_destroyed_stream() {
+    let _serial = crate::state::serial();
+    crate::state::reset();
+    let mut stream = core::ptr::null_mut();
+    assert_eq!(cudaStreamCreate(&mut stream), 0);
+    assert_eq!(cudaStreamDestroy(stream), 0);
+
+    assert_eq!(
+        unsafe { cudaGraphicsMapResources(0, core::ptr::null_mut(), stream) },
+        400
+    );
+    assert_eq!(
+        unsafe { cudaGraphicsUnmapResources(0, core::ptr::null_mut(), stream) },
+        400
+    );
+}
+
 // Local copies of the result codes the assertions above reference (kept crate-private).
