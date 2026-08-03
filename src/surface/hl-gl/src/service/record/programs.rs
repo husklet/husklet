@@ -497,6 +497,101 @@ pub fn uniform_at(ctx: &mut GlContext, location: usize, bytes: &[u8]) {
     }
 }
 
+/// The type and width encoded by one `glUniform*` entry point. Keeping this at the service boundary makes
+/// every shim entry point use the same linked-program reflection and error rules.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UniformSetter {
+    Float(u8),
+    Int(u8),
+    Matrix(u8),
+}
+
+/// Validate and apply an ES2 `glUniform*` update to the current program.
+pub fn set_uniform(
+    ctx: &mut GlContext,
+    location: i32,
+    setter: UniformSetter,
+    count: i32,
+    bytes: &[u8],
+) {
+    if count < 0 {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    let Some(program) = ctx.programs.program(ctx.local.cur_prog) else {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    };
+    if location == -1 {
+        return;
+    }
+    if location < -1 {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+    let Some(resolved) = program.location(location) else {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    };
+
+    match resolved {
+        crate::model::program::UniformLocation::Data {
+            declaration,
+            element,
+        } => {
+            let uniform = &program.unis[declaration];
+            let compatible = match setter {
+                UniformSetter::Float(width) => {
+                    vector_width(&uniform.ty, "float", "vec") == Some(width)
+                }
+                UniformSetter::Int(width) => {
+                    vector_width(&uniform.ty, "int", "ivec") == Some(width)
+                        || vector_width(&uniform.ty, "bool", "bvec") == Some(width)
+                }
+                UniformSetter::Matrix(width) => matrix_width(&uniform.ty) == Some(width),
+            };
+            let elements = uniform.arr.max(1) as usize;
+            if !compatible || count > 1 && uniform.arr == 0 || element + count as usize > elements {
+                ctx.set_gl_error(GL_INVALID_OPERATION);
+                return;
+            }
+            uniform_at(ctx, location as usize, bytes);
+        }
+        crate::model::program::UniformLocation::Sampler { element } => {
+            if setter != UniformSetter::Int(1) {
+                ctx.set_gl_error(GL_INVALID_OPERATION);
+                return;
+            }
+            let values = bytes
+                .chunks_exact(4)
+                .map(|bytes| i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+                .collect::<Vec<_>>();
+            if element + values.len() > program.samp_units.len() {
+                ctx.set_gl_error(GL_INVALID_OPERATION);
+                return;
+            }
+            uniform_i32_at(ctx, location, &values);
+        }
+    }
+}
+
+fn vector_width(ty: &str, scalar: &str, vector: &str) -> Option<u8> {
+    if ty == scalar {
+        Some(1)
+    } else {
+        ty.strip_prefix(vector)?.parse().ok()
+    }
+}
+
+fn matrix_width(ty: &str) -> Option<u8> {
+    let rest = ty.strip_prefix("mat")?;
+    if rest.len() == 1 {
+        rest.parse().ok()
+    } else {
+        None
+    }
+}
+
 /// `glUniform1i[v]` dispatches by the linked uniform's type: sampler locations update texture units while
 /// integer/bool data locations update std140 bytes.
 pub fn uniform_i32_at(ctx: &mut GlContext, location: i32, values: &[i32]) {

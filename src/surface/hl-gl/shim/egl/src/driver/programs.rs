@@ -249,10 +249,12 @@ fn emit_active_var(
 /// type associated with the collision-free location.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform1i(location: i32, v0: i32) {
-    if location < 0 {
-        return;
-    }
-    GlobalState::context(|s| record::uniform_i32_at(&mut s.gl, location, &[v0]));
+    Uniform::set_es2(
+        location,
+        record::UniformSetter::Int(1),
+        1,
+        &LittleEndian::encode(&[v0]),
+    );
 }
 
 // ---- data uniforms (record into the bound program's uniform block; shipped at binding 1 at draw) -----
@@ -270,6 +272,12 @@ impl Uniform {
             return;
         }
         GlobalState::context(|state| record::uniform_at(&mut state.gl, location as usize, bytes));
+    }
+
+    pub(super) fn set_es2(location: i32, setter: record::UniformSetter, count: i32, bytes: &[u8]) {
+        GlobalState::context(|state| {
+            record::set_uniform(&mut state.gl, location, setter, count, bytes)
+        });
     }
 }
 
@@ -321,105 +329,165 @@ pub(super) unsafe fn slice_i32<'a>(value: *const i32, count: i32, n: usize) -> &
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform1f(location: i32, v0: f32) {
-    Uniform::set(location, &LittleEndian::encode(&[v0]));
+    Uniform::set_es2(
+        location,
+        record::UniformSetter::Float(1),
+        1,
+        &LittleEndian::encode(&[v0]),
+    );
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform2f(location: i32, v0: f32, v1: f32) {
-    Uniform::set(location, &LittleEndian::encode(&[v0, v1]));
+    Uniform::set_es2(
+        location,
+        record::UniformSetter::Float(2),
+        1,
+        &LittleEndian::encode(&[v0, v1]),
+    );
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform3f(location: i32, v0: f32, v1: f32, v2: f32) {
-    Uniform::set(location, &LittleEndian::encode(&[v0, v1, v2]));
+    Uniform::set_es2(
+        location,
+        record::UniformSetter::Float(3),
+        1,
+        &LittleEndian::encode(&[v0, v1, v2]),
+    );
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform4f(location: i32, v0: f32, v1: f32, v2: f32, v3: f32) {
-    Uniform::set(location, &LittleEndian::encode(&[v0, v1, v2, v3]));
+    Uniform::set_es2(
+        location,
+        record::UniformSetter::Float(4),
+        1,
+        &LittleEndian::encode(&[v0, v1, v2, v3]),
+    );
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform2i(location: i32, v0: i32, v1: i32) {
-    Uniform::set(location, &LittleEndian::encode(&[v0, v1]));
+    Uniform::set_es2(
+        location,
+        record::UniformSetter::Int(2),
+        1,
+        &LittleEndian::encode(&[v0, v1]),
+    );
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform3i(location: i32, v0: i32, v1: i32, v2: i32) {
-    Uniform::set(location, &LittleEndian::encode(&[v0, v1, v2]));
+    Uniform::set_es2(
+        location,
+        record::UniformSetter::Int(3),
+        1,
+        &LittleEndian::encode(&[v0, v1, v2]),
+    );
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform4i(location: i32, v0: i32, v1: i32, v2: i32, v3: i32) {
-    Uniform::set(location, &LittleEndian::encode(&[v0, v1, v2, v3]));
+    Uniform::set_es2(
+        location,
+        record::UniformSetter::Int(4),
+        1,
+        &LittleEndian::encode(&[v0, v1, v2, v3]),
+    );
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform1fv(location: i32, count: i32, value: *const f32) {
-    Uniform::set(
+    Uniform::set_es2(
         location,
+        record::UniformSetter::Float(1),
+        count,
         &LittleEndian::encode(unsafe { slice_f32(value, count, 1) }),
     );
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform2fv(location: i32, count: i32, value: *const f32) {
-    Uniform::set(
+    Uniform::set_es2(
         location,
+        record::UniformSetter::Float(2),
+        count,
         &LittleEndian::encode(unsafe { slice_f32(value, count, 2) }),
     );
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform3fv(location: i32, count: i32, value: *const f32) {
-    Uniform::set(
+    Uniform::set_es2(
         location,
+        record::UniformSetter::Float(3),
+        count,
         &LittleEndian::encode(unsafe { slice_f32(value, count, 3) }),
     );
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform4fv(location: i32, count: i32, value: *const f32) {
-    Uniform::set(
+    Uniform::set_es2(
         location,
+        record::UniformSetter::Float(4),
+        count,
         &LittleEndian::encode(unsafe { slice_f32(value, count, 4) }),
     );
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform1iv(location: i32, count: i32, value: *const i32) {
-    let values = unsafe { slice_i32(value, count, 1) };
-    GlobalState::context(|state| record::uniform_i32_at(&mut state.gl, location, values));
+    Uniform::set_es2(
+        location,
+        record::UniformSetter::Int(1),
+        count,
+        &LittleEndian::encode(unsafe { slice_i32(value, count, 1) }),
+    );
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform2iv(location: i32, count: i32, value: *const i32) {
-    Uniform::set(
+    Uniform::set_es2(
         location,
+        record::UniformSetter::Int(2),
+        count,
         &LittleEndian::encode(unsafe { slice_i32(value, count, 2) }),
     );
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform3iv(location: i32, count: i32, value: *const i32) {
-    Uniform::set(
+    Uniform::set_es2(
         location,
+        record::UniformSetter::Int(3),
+        count,
         &LittleEndian::encode(unsafe { slice_i32(value, count, 3) }),
     );
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform4iv(location: i32, count: i32, value: *const i32) {
-    Uniform::set(
+    Uniform::set_es2(
         location,
+        record::UniformSetter::Int(4),
+        count,
         &LittleEndian::encode(unsafe { slice_i32(value, count, 4) }),
     );
 }
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniformMatrix2fv(location: i32, count: i32, transpose: u8, value: *const f32) {
-    Uniform::set(location, &unsafe {
-        mat_bytes_cr(2, 2, count, transpose != 0, value)
-    });
+    uniform_matrix(location, count, transpose, 2, value);
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniformMatrix3fv(location: i32, count: i32, transpose: u8, value: *const f32) {
-    Uniform::set(location, &unsafe {
-        mat_bytes_cr(3, 3, count, transpose != 0, value)
-    });
+    uniform_matrix(location, count, transpose, 3, value);
 }
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniformMatrix4fv(location: i32, count: i32, transpose: u8, value: *const f32) {
-    Uniform::set(location, &unsafe {
-        mat_bytes_cr(4, 4, count, transpose != 0, value)
-    });
+    uniform_matrix(location, count, transpose, 4, value);
+}
+
+fn uniform_matrix(location: i32, count: i32, transpose: u8, width: usize, value: *const f32) {
+    if transpose != 0 {
+        GlobalState::context(|state| state.gl.set_gl_error(GL_INVALID_VALUE));
+        return;
+    }
+    Uniform::set_es2(
+        location,
+        record::UniformSetter::Matrix(width as u8),
+        count,
+        &unsafe { mat_bytes_cr(width, width, count, false, value) },
+    );
 }

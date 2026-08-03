@@ -83,6 +83,106 @@ fn integer_and_sampler_setters_dispatch_by_location() {
 }
 
 #[test]
+fn uniform_setters_validate_program_location_type_width_and_count() {
+    let mut context = GlContext::new();
+    let program = program(
+        &mut context,
+        "uniform vec4 vector; uniform ivec4 integer; uniform mat4 matrix; uniform float values[2];\nvoid main(){gl_Position=vector+vec4(integer)+matrix*vec4(values[1]);}",
+        "uniform sampler2D image;\nvoid main(){gl_FragColor=texture2D(image,vec2(0));}",
+    );
+    let vector = query::uniform_location(&context, program, "vector");
+    let integer = query::uniform_location(&context, program, "integer");
+    let matrix = query::uniform_location(&context, program, "matrix");
+    let values = query::uniform_location(&context, program, "values");
+    let image = query::uniform_location(&context, program, "image");
+    let zeros = [0_u8; 64];
+
+    record::set_uniform(
+        &mut context,
+        -1,
+        record::UniformSetter::Float(1),
+        1,
+        &zeros[..4],
+    );
+    assert_eq!(context.take_gl_error(), GL_INVALID_OPERATION);
+    record::set_uniform(
+        &mut context,
+        -2,
+        record::UniformSetter::Float(1),
+        1,
+        &zeros[..4],
+    );
+    assert_eq!(context.take_gl_error(), GL_INVALID_OPERATION);
+    record::set_uniform(
+        &mut context,
+        vector,
+        record::UniformSetter::Float(4),
+        1,
+        &zeros[..16],
+    );
+    assert_eq!(
+        context.take_gl_error(),
+        GL_INVALID_OPERATION,
+        "no current program"
+    );
+
+    record::use_program(&mut context, program);
+    record::set_uniform(
+        &mut context,
+        -1,
+        record::UniformSetter::Float(1),
+        1,
+        &zeros[..4],
+    );
+    assert_eq!(context.take_gl_error(), GL_NO_ERROR);
+    for (location, setter) in [
+        (vector, record::UniformSetter::Float(3)),
+        (vector, record::UniformSetter::Int(4)),
+        (integer, record::UniformSetter::Int(3)),
+        (matrix, record::UniformSetter::Matrix(3)),
+        (image, record::UniformSetter::Float(1)),
+    ] {
+        record::set_uniform(&mut context, location, setter, 1, &zeros);
+        assert_eq!(context.take_gl_error(), GL_INVALID_OPERATION, "{setter:?}");
+    }
+    record::set_uniform(
+        &mut context,
+        vector,
+        record::UniformSetter::Float(4),
+        2,
+        &zeros,
+    );
+    assert_eq!(context.take_gl_error(), GL_INVALID_OPERATION);
+    record::set_uniform(
+        &mut context,
+        values,
+        record::UniformSetter::Float(1),
+        3,
+        &zeros[..12],
+    );
+    assert_eq!(context.take_gl_error(), GL_INVALID_OPERATION);
+    record::set_uniform(
+        &mut context,
+        values,
+        record::UniformSetter::Float(1),
+        -1,
+        &[],
+    );
+    assert_eq!(context.take_gl_error(), GL_INVALID_VALUE);
+
+    for (location, setter, count, bytes) in [
+        (vector, record::UniformSetter::Float(4), 1, &zeros[..16]),
+        (integer, record::UniformSetter::Int(4), 1, &zeros[..16]),
+        (matrix, record::UniformSetter::Matrix(4), 1, &zeros[..64]),
+        (values, record::UniformSetter::Float(1), 2, &zeros[..8]),
+        (image, record::UniformSetter::Int(1), 1, &zeros[..4]),
+    ] {
+        record::set_uniform(&mut context, location, setter, count, bytes);
+        assert_eq!(context.take_gl_error(), GL_NO_ERROR, "{setter:?}");
+    }
+}
+
+#[test]
 fn mandatory_uniform_limits_are_nonzero_and_coherent() {
     let context = GlContext::new();
     let mut values = [0; 4];
