@@ -14,22 +14,28 @@ pub(super) fn lower_draw(
     snapshots: &mut SnapshotTextures,
 ) -> Option<DrawCommands> {
     lower_draw_n(
-        ctx, d, target_fmt, depth_fmt, 1, tw, th, cmds, fbo_tex_ir, snapshots,
+        ctx,
+        d,
+        &[target_fmt],
+        depth_fmt,
+        tw,
+        th,
+        cmds,
+        fbo_tex_ir,
+        snapshots,
     )
 }
 
-/// [`lower_draw`] with an explicit color-target count `n_color_targets` (≥ 1). One target is the ordinary
-/// path (every caller but the MRT frame passes 1, byte-identical to before); `n > 1` builds a pipeline with
-/// `n` identical color targets so a `glDrawBuffers` MRT draw writes all attachments of a multi-target pass.
+/// [`lower_draw`] with the format of every color target. One target is the ordinary path; multiple formats
+/// preserve heterogeneous MRT attachments in the pipeline descriptor.
 /// `depth_fmt` is the pass's depth-attachment format ([`pass_depth_format`]) that every depth/stencil
 /// pipeline in the pass must share; `None` for a pass with no depth attachment.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn lower_draw_n(
     ctx: &mut GlContext,
     d: &DrawCall,
-    target_fmt: TextureFormat,
+    target_formats: &[TextureFormat],
     depth_fmt: Option<TextureFormat>,
-    n_color_targets: usize,
     tw: i32,
     th: i32,
     cmds: &mut Vec<Cmd>,
@@ -397,8 +403,11 @@ pub(super) fn lower_draw_n(
     // One color target for the ordinary path; MRT carries independent blend/write state per output.
     // A slot deselected by `glDrawBuffers(…, GL_NONE, …)` receives no fragment output at all, which is a
     // zero write mask on that target — the attachment keeps whatever it already held.
-    let color_targets: Vec<ColorTargetState> = (0..n_color_targets.max(1))
-        .map(|slot| {
+    let color_targets: Vec<ColorTargetState> = target_formats
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(slot, format)| {
             let state = d.draw_buffer_states[slot.min(d.draw_buffer_states.len() - 1)];
             let blend = state.blend.then(|| BlendState {
                 src_color: Pipeline::blend_factor(if blend_source_scale.is_some() {
@@ -413,7 +422,7 @@ pub(super) fn lower_draw_n(
                 op_alpha: Pipeline::blend_op(state.eq_alpha),
             });
             ColorTargetState {
-                format: target_fmt,
+                format,
                 blend,
                 write_mask: if d.draw_buffer_mask & (1u32 << slot.min(31)) != 0 {
                     state.color_mask & 0xf

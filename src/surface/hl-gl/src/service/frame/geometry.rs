@@ -1015,6 +1015,7 @@ pub(super) fn build_mrt_geometry_frame(
     // requires). Attachment 0 sets the pass size/format.
     let mut cmds: Vec<Cmd> = Vec::new();
     let mut targets: Vec<u32> = Vec::with_capacity(n);
+    let mut target_formats: Vec<TextureFormat> = Vec::with_capacity(n);
     let mut frame_targets: Vec<FrameTarget> = Vec::with_capacity(n);
     let mut dims: Option<(i32, i32)> = None;
     let mut fmt0 = TextureFormat::Rgba8Unorm;
@@ -1052,6 +1053,7 @@ pub(super) fn build_mrt_geometry_frame(
             );
         }
         targets.push(texture);
+        target_formats.push(fmt);
         frame_targets.push(FrameTarget {
             name: gl_tex,
             generation,
@@ -1093,9 +1095,8 @@ pub(super) fn build_mrt_geometry_frame(
         if let Some(lowered) = lower_draw_n(
             ctx,
             d,
-            fmt0,
+            &target_formats,
             None,
-            n,
             tw,
             th,
             &mut cmds,
