@@ -64,6 +64,8 @@ fn fragment(value: f64) -> String {
 fn two_blended_draws_consume_the_ten_bit_destination() {
     let mut executor = WgpuExecutor::new(DeviceConfig::default()).expect("GPU adapter");
     let mut resources = SessionResources::default();
+    let waits = executor.completion_wait_count();
+    let submissions = executor.command_submission_count();
     let additive = BlendState {
         src_color: blend_factor::ONE,
         dst_color: blend_factor::ONE,
@@ -116,6 +118,17 @@ fn two_blended_draws_consume_the_ten_bit_destination() {
             ],
         )
         .unwrap();
+
+    assert_eq!(
+        executor.completion_wait_count(),
+        waits,
+        "draw-boundary quantization must remain queue-ordered GPU work"
+    );
+    assert_eq!(
+        executor.command_submission_count(),
+        submissions + 2,
+        "two split draws each submit one encoder containing draw, quantizer, and copy-back"
+    );
 
     let bytes = executor.read_texture(&resources, 1).unwrap();
     assert_eq!(u16::from_le_bytes([bytes[0], bytes[1]]) >> 6, 825);

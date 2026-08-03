@@ -62,8 +62,11 @@ impl WgpuExecutor {
                 },
             );
             self.run_render_pass(res, color, depth, ops, &mut encoder)?;
+            self.quantize_shadow_attachments(res, color, &mut encoder)?;
             self.gpu.queue.submit(Some(encoder.finish()));
-            return self.quantize_shadow_attachments(res, color);
+            self.command_submissions
+                .set(self.command_submissions.get().saturating_add(1));
+            return Ok(());
         }
 
         for (draw_number, draw_index) in draw_indices.into_iter().enumerate() {
@@ -102,8 +105,10 @@ impl WgpuExecutor {
                 &replay,
                 &mut encoder,
             )?;
+            self.quantize_shadow_attachments(res, color, &mut encoder)?;
             self.gpu.queue.submit(Some(encoder.finish()));
-            self.quantize_shadow_attachments(res, color)?;
+            self.command_submissions
+                .set(self.command_submissions.get().saturating_add(1));
         }
         Ok(())
     }
@@ -112,15 +117,18 @@ impl WgpuExecutor {
         &mut self,
         res: &SessionResources,
         color: &[ColorAttachment],
+        encoder: &mut wgpu::CommandEncoder,
     ) -> Result<()> {
         for attachment in color {
-            let (format, width, height, sample_count) = {
+            let (format, width, height, sample_count, view, texture) = {
                 let texture = texture::WgpuTexture::get(res, attachment.texture)?;
                 (
                     texture.format,
                     texture.width,
                     texture.height,
                     texture.sample_count,
+                    texture.view.clone(),
+                    texture.texture.clone(),
                 )
             };
             if !Format::from(format).is_shadow() {
@@ -131,22 +139,7 @@ impl WgpuExecutor {
                     "wgpu: multisampled shadow attachment quantization",
                 ));
             }
-            // `read_texture` converts physical RGBA16Unorm to logical R10X6; `write_region` converts that
-            // exact logical plane back. This is intentionally the first, correctness-first lowering. A
-            // device-side quantizer may replace it once it has the same adversarial blend/sample proofs.
-            let logical = self.read_texture(res, attachment.texture)?;
-            self.write_region(
-                res,
-                attachment.texture,
-                0,
-                0,
-                0,
-                width,
-                height,
-                1,
-                0,
-                &logical,
-            )?;
+            self.encode_r10x6_quantization(encoder, &view, &texture, width, height)?;
         }
         Ok(())
     }

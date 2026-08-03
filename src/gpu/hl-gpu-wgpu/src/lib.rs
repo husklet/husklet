@@ -35,6 +35,7 @@ mod module;
 mod pipeline;
 mod present;
 mod profile;
+mod quantize;
 mod reflect;
 mod sampler;
 mod shader;
@@ -269,7 +270,6 @@ pub struct WgpuExecutor {
     /// Test-only observation of host-blocking device waits. Keeping the counter beside the one helper that
     /// performs `Maintain::Wait` lets focused tests distinguish queue-ordered submission from CPU-visible
     /// completion without timing assertions.
-    #[cfg(test)]
     completion_waits: Cell<u64>,
     /// Test observation of native texture-to-buffer queue submissions. A qualifying copy must enqueue one
     /// command buffer regardless of its height; the old CPU bridge enqueued one upload per row.
@@ -282,7 +282,6 @@ pub struct WgpuExecutor {
     #[cfg(test)]
     write_flushes: Cell<u64>,
     /// Test-only count of native command buffers submitted by logical command-buffer replay.
-    #[cfg(test)]
     command_submissions: Cell<u64>,
     /// Pre-compiled kernels keyed by the shader id a later `CreateShader { PtxKernel, .. }` uses. Stands
     /// in for a driver's PTX front-end for hand-built [`KernelProgram`]s (the `define_kernel` convenience).
@@ -296,6 +295,9 @@ pub struct WgpuExecutor {
     /// native wgpu image blit, so it is implemented by rendering — see [`blit`]). Built on first blit and
     /// reused for the executor's lifetime; `None` until a blit is executed.
     blit: Option<blit::BlitCache>,
+    /// GPU-only projection for expanded fixed-point attachment formats. Lazily built because ordinary
+    /// workloads never need a shadow-target quantizer.
+    quantizer: Option<quantize::QuantizeCache>,
     /// Content-dedup caches for `CreateShader` / `CreateRenderPipeline`: an identical source or descriptor
     /// aliases an already-compiled backing (shared `Arc` handle, ~0 incremental residency) instead of
     /// recompiling and re-charging. See [`dedup`].
@@ -362,7 +364,6 @@ impl WgpuExecutor {
             presentation_journal: Vec::new(),
             #[cfg(target_os = "macos")]
             presentation_retirements: Vec::new(),
-            #[cfg(test)]
             completion_waits: Cell::new(0),
             #[cfg(test)]
             native_copy_submissions: Cell::new(0),
@@ -370,12 +371,12 @@ impl WgpuExecutor {
             direct_copy_submissions: Cell::new(0),
             #[cfg(test)]
             write_flushes: Cell::new(0),
-            #[cfg(test)]
             command_submissions: Cell::new(0),
             profile: RefCell::new(None),
             kernels: HashMap::new(),
             kernel_compiler: None,
             blit: None,
+            quantizer: None,
             dedup: dedup::DedupCaches::default(),
         }
     }
@@ -394,7 +395,6 @@ impl WgpuExecutor {
             .borrow()
             .as_ref()
             .map(|_| std::time::Instant::now());
-        #[cfg(test)]
         self.completion_waits
             .set(self.completion_waits.get().saturating_add(1));
         self.gpu.device.poll(wgpu::Maintain::Wait);
@@ -423,8 +423,9 @@ impl WgpuExecutor {
         }
     }
 
-    #[cfg(test)]
-    fn completion_wait_count(&self) -> u64 {
+    /// Number of host-blocking device waits performed by this executor. Primarily a diagnostic/test seam
+    /// for distinguishing queue-ordered GPU work from CPU-mediated transfers.
+    pub fn completion_wait_count(&self) -> u64 {
         self.completion_waits.get()
     }
 
@@ -451,8 +452,8 @@ impl WgpuExecutor {
         self.write_flushes.get()
     }
 
-    #[cfg(test)]
-    fn command_submission_count(&self) -> u64 {
+    /// Number of native command buffers submitted by logical command-buffer replay.
+    pub fn command_submission_count(&self) -> u64 {
         self.command_submissions.get()
     }
 

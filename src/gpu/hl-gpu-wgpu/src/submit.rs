@@ -1086,7 +1086,6 @@ impl WgpuExecutor {
         if let Some(profile) = self.profile.borrow_mut().as_mut() {
             profile.native_submissions = profile.native_submissions.saturating_add(1);
         }
-        #[cfg(test)]
         self.command_submissions
             .set(self.command_submissions.get().saturating_add(1));
     }
