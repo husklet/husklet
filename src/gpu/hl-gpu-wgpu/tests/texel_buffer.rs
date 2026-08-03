@@ -169,6 +169,17 @@ fn uniform_texel_load(format: TextureFormat, bytes: Vec<u8>) -> Vec<u8> {
     uniform_texel_load_shader(format, bytes, UNIFORM.to_vec())
 }
 
+fn uint_uniform_shader() -> Vec<u32> {
+    let mut words = UNIFORM.to_vec();
+    let index = words.windows(3).position(|w| w == [196630, 6, 32])
+        .expect("fixture contains OpTypeFloat %6 32");
+    // Replace `OpTypeFloat %6 32` with `OpTypeInt %6 32 0`. Every vector/image/output type in this
+    // fixture is rooted at %6, so this produces a real uint sampled-image program without changing the
+    // descriptor or control-flow shape.
+    words.splice(index..index + 3, [262165, 6, 32, 0]);
+    words
+}
+
 fn uniform_texel_load_shader(format: TextureFormat, bytes: Vec<u8>, spirv: Vec<u32>) -> Vec<u8> {
     let commands = vec![
         Cmd::CreateShader { id: 1, kind: ShaderPayloadKind::SpirV, spirv },
@@ -214,6 +225,9 @@ fn vulkan_native_formats_uniform_texel_load_exact_values() {
     assert_eq!(rgb10a2[0], 1.0);
     assert!((rgb10a2[1] - 512.0 / 1023.0).abs() < 1e-6 && rgb10a2[2] == 0.0 && rgb10a2[3] == 1.0);
     assert_eq!(f32s(uniform_texel_load(TextureFormat::Rg11b10Ufloat, vec![0xc0, 0x03, 0x1c, 0x80])), [1.0, 0.5, 2.0, 1.0]);
+    let uints = uniform_texel_load_shader(TextureFormat::Rgb10a2Uint, vec![0xff, 0x03, 0x08, 0xc0], uint_uniform_shader());
+    let uints = uints.chunks_exact(4).map(|v| u32::from_le_bytes(v.try_into().unwrap())).collect::<Vec<_>>();
+    assert_eq!(uints, [1023, 512, 0, 3]);
 }
 
 fn pipeline(shader: &[u32], kind: PipelineBindingKind, extra_output: bool) -> Vec<Cmd> {

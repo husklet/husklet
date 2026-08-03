@@ -375,6 +375,7 @@ impl Format {
                     | hl_gpu::protocol::model::enums::TextureFormat::Rg32Uint
                     | hl_gpu::protocol::model::enums::TextureFormat::Rg32Sint
                     | hl_gpu::protocol::model::enums::TextureFormat::Rgb10a2Unorm
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rgb10a2Uint
                     | hl_gpu::protocol::model::enums::TextureFormat::Rg11b10Ufloat
             )
         ) {
@@ -399,6 +400,7 @@ impl Format {
                 | hl_gpu::protocol::model::enums::TextureFormat::Rg16Uint
                 | hl_gpu::protocol::model::enums::TextureFormat::Rg16Sint
                 | hl_gpu::protocol::model::enums::TextureFormat::Rgb10a2Unorm
+                | hl_gpu::protocol::model::enums::TextureFormat::Rgb10a2Uint
                 | hl_gpu::protocol::model::enums::TextureFormat::Rg11b10Ufloat)
         ) {
             buffer &= !f::STORAGE_TEXEL_BUFFER;
@@ -496,7 +498,7 @@ mod tests {
                         | T::R32Uint | T::R32Sint | T::Rg8Snorm | T::Rgba8Snorm | T::Rg16Float
                         | T::R16Float | T::R16Uint | T::R16Sint | T::Rg16Uint | T::Rg16Sint
                         | T::Rgba16Uint | T::Rgba16Sint | T::Rg32Float | T::Rg32Uint | T::Rg32Sint
-                        | T::Rgb10a2Unorm | T::Rg11b10Ufloat
+                        | T::Rgb10a2Unorm | T::Rgb10a2Uint | T::Rg11b10Ufloat
                 )
             );
             let bits = Format(format).features().buffer
@@ -504,7 +506,7 @@ mod tests {
             assert_eq!(bits != 0, supported, "VkFormat {format}, wire={wire:?}");
             assert_eq!(
                 bits,
-                if matches!(wire, Some(T::R8Snorm | T::Rg16Float | T::R16Float | T::R16Uint | T::R16Sint | T::Rg16Uint | T::Rg16Sint | T::Rgb10a2Unorm | T::Rg11b10Ufloat)) {
+                if matches!(wire, Some(T::R8Snorm | T::Rg16Float | T::R16Float | T::R16Uint | T::R16Sint | T::Rg16Uint | T::Rg16Sint | T::Rgb10a2Unorm | T::Rgb10a2Uint | T::Rg11b10Ufloat)) {
                     format_feature::UNIFORM_TEXEL_BUFFER
                 } else if supported {
                     format_feature::UNIFORM_TEXEL_BUFFER | format_feature::STORAGE_TEXEL_BUFFER
