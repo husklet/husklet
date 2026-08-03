@@ -420,6 +420,53 @@ pub fn invalid_implicit_arithmetic(source: &str) -> Option<String> {
     None
 }
 
+/// Diagnose an ES 1.00 call whose scalar argument has a different basic type from its parameter.
+pub fn invalid_function_argument_basetype(source: &str) -> Option<String> {
+    let tokens = tokens(source);
+    let mut functions = HashMap::<&str, (&str, ScalarKind)>::new();
+    for at in 0..tokens.len().saturating_sub(6) {
+        let Some(parameter_kind) = tokens.get(at + 3).and_then(|token| scalar_kind(token)) else {
+            continue;
+        };
+        if TYPES.contains(&tokens[at].as_str())
+            && is_word_token(&tokens[at + 1])
+            && tokens[at + 2] == "("
+            && is_word_token(&tokens[at + 4])
+            && tokens[at + 5] == ")"
+            && tokens[at + 6] == "{"
+        {
+            functions.insert(&tokens[at + 1], (&tokens[at + 3], parameter_kind));
+        }
+    }
+    for at in 0..tokens.len().saturating_sub(3) {
+        let Some(&(parameter_type, parameter_kind)) = functions.get(tokens[at].as_str()) else {
+            continue;
+        };
+        if tokens[at + 1] != "(" || tokens[at + 3] != ")" {
+            continue;
+        }
+        // Skip the function definition itself.
+        if at > 0 && TYPES.contains(&tokens[at - 1].as_str()) {
+            continue;
+        }
+        let argument = tokens[at + 2].as_str();
+        let argument_kind = if argument.as_bytes().iter().all(u8::is_ascii_digit) {
+            Some(ScalarKind::Int)
+        } else if argument.parse::<f64>().is_ok() {
+            Some(ScalarKind::Float)
+        } else {
+            None
+        };
+        if argument_kind.is_some_and(|kind| kind != parameter_kind) {
+            return Some(format!(
+                "'{}' : cannot convert argument to parameter type '{parameter_type}' in GLSL ES 1.00",
+                tokens[at]
+            ));
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::invalid_implicit_arithmetic;

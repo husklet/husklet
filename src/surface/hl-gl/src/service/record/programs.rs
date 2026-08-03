@@ -318,6 +318,10 @@ impl GlContext {
                 self.programs.fail_compile(shader, reason);
                 return;
             }
+            if let Some(reason) = crate::adapter::glsl::invalid_function_argument_basetype(source) {
+                self.programs.fail_compile(shader, reason);
+                return;
+            }
             if let Some(builtin) = crate::adapter::glsl::builtin_above_declared_version(source) {
                 let version = crate::adapter::glsl::declared_es_version(source);
                 self.programs.fail_compile(

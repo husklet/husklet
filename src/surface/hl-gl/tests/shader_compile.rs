@@ -59,6 +59,22 @@ fn same_basic_kind_arithmetic_remains_accepted() {
 }
 
 #[test]
+fn es2_rejects_integer_literal_for_float_function_parameter() {
+    let mut context = GlContext::new();
+    let source = "precision mediump float; precision mediump int; void func(float f){} void main(){func(2); gl_FragColor=vec4(1.0);}";
+    let (status, log) = compile(&mut context, GL_FRAGMENT_SHADER, source);
+    assert_eq!(status, GL_FALSE as i32);
+    assert!(log.contains("parameter type 'float'"), "{log}");
+
+    let (status, log) = compile(
+        &mut context,
+        GL_FRAGMENT_SHADER,
+        "precision mediump float; void func(float f){} void main(){func(2.0);}",
+    );
+    assert_eq!(status, GL_TRUE as i32, "rejected matching call: {log}");
+}
+
+#[test]
 fn lexical_shapes_do_not_create_false_implicit_conversion_diagnostics() {
     let mut context = GlContext::new();
     let controls = [

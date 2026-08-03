@@ -392,7 +392,8 @@ mod uniforms;
 mod validation;
 
 pub use validation::{
-    invalid_declaration_identifier, invalid_implicit_arithmetic, invalid_storage_declaration,
+    invalid_declaration_identifier, invalid_function_argument_basetype, invalid_implicit_arithmetic,
+    invalid_storage_declaration,
     reserved_operator,
 };
 
