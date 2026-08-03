@@ -391,6 +391,17 @@ pub fn get_floatv(ctx: &GlContext, pname: u32, out: &mut [f32; 4]) -> usize {
             out[1] = ctx.local.pipeline.depth_range[1];
             2
         }
+        // These two states are GLuint masks. Routing them through GetIntegerv first changes
+        // `0xffff_ffff` into signed `-1`, and then GetFloatv incorrectly reports `-1.0` instead of the
+        // unsigned mask's floating-point representation.
+        GL_STENCIL_VALUE_MASK => {
+            out[0] = ctx.local.pipeline.stencil_read_mask_front as f32;
+            1
+        }
+        GL_STENCIL_BACK_VALUE_MASK => {
+            out[0] = ctx.local.pipeline.stencil_read_mask_back as f32;
+            1
+        }
         _ => {
             // ES 2.0 §6.1.1 permits every integer-valued state to be queried through GetFloatv; the
             // implementation converts each component instead of returning an unrelated float default.

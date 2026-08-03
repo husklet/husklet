@@ -1063,3 +1063,24 @@ fn depth_hint_cube_and_stencil_state_read_back_live() {
         }
     }
 }
+
+#[test]
+fn unsigned_stencil_value_masks_convert_to_float_without_signed_narrowing() {
+    let mut c = ctx_800x600();
+    let mut out = [0.0f32; 4];
+
+    for pname in [GL_STENCIL_VALUE_MASK, GL_STENCIL_BACK_VALUE_MASK] {
+        assert_eq!(query::get_floatv(&c, pname, &mut out), 1);
+        assert_eq!(out[0], u32::MAX as f32, "default pname {pname:#x}");
+    }
+
+    record::stencil_func_separate(&mut c, GL_FRONT, GL_ALWAYS, 0, 0x8000_0000);
+    record::stencil_func_separate(&mut c, GL_BACK, GL_ALWAYS, 0, 0x7fff_ffff);
+    for (pname, expected) in [
+        (GL_STENCIL_VALUE_MASK, 0x8000_0000u32),
+        (GL_STENCIL_BACK_VALUE_MASK, 0x7fff_ffffu32),
+    ] {
+        assert_eq!(query::get_floatv(&c, pname, &mut out), 1);
+        assert_eq!(out[0], expected as f32, "live pname {pname:#x}");
+    }
+}
