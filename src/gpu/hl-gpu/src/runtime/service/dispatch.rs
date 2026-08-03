@@ -55,11 +55,12 @@ pub(crate) struct PreparedDispatch<'a> {
     timeline: Option<FenceTimeline>,
     presentations: Option<Vec<Presentation>>,
     refusal: Option<crate::GpuError>,
+    accepted: Option<Vec<bool>>,
 }
 
 impl PreparedDispatch<'_> {
     /// The accepted path's infallible tail: all validation and executor work completed before this call.
-    pub(crate) fn commit(mut self) -> (Vec<Presentation>, FenceTimeline, Option<crate::GpuError>) {
+    pub(crate) fn commit(mut self) -> (Vec<Presentation>, FenceTimeline, Option<crate::GpuError>, Vec<bool>) {
         self.transaction.commit();
         (
             self.presentations.take().unwrap_or_default(),
@@ -67,6 +68,7 @@ impl PreparedDispatch<'_> {
                 .take()
                 .expect("prepared dispatch owns its timeline"),
             self.refusal.take(),
+            self.accepted.take().unwrap_or_default(),
         )
     }
 }
@@ -152,12 +154,25 @@ pub(crate) fn prepare<'a>(
             return Err(crate::GpuError::Panicked(message));
         }
     };
-    let (presentations, refusal) = execution.into_parts();
+    let (presentations, refusal, accepted) = execution.into_parts(batch.len());
+    if refusal.is_some() {
+        next_timeline = timeline.clone();
+        for (index, cmd) in batch.iter().enumerate() {
+            if !accepted[index] { continue; }
+            match cmd {
+                Cmd::CreateFence(id) => next_timeline.register(*id),
+                Cmd::DestroyFence(id) => next_timeline.retire(*id),
+                Cmd::Submit(cb) => if let Some((fence, value)) = cb.signal { next_timeline.signal(fence, value, now).expect("accepted signal was preflighted"); },
+                _ => {}
+            }
+        }
+    }
     Ok(PreparedDispatch {
         transaction,
         timeline: Some(next_timeline),
         presentations: Some(presentations),
         refusal,
+        accepted: Some(accepted),
     })
 }
 

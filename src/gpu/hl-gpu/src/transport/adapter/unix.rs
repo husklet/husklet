@@ -293,6 +293,23 @@ impl Connection<'_> {
         s.write_all(&[ack])
     }
 
+    pub fn write_partial_mask(&self, commands: u32, mask: &[u8]) -> io::Result<()> {
+        let mut stream = self.stream;
+        stream.write_all(&commands.to_le_bytes())?;
+        stream.write_all(mask)
+    }
+
+    pub fn read_partial_mask(&self, expected_commands: usize) -> io::Result<Vec<bool>> {
+        let mut stream = self.stream;
+        let mut count = [0u8; 4];
+        stream.read_exact(&mut count)?;
+        let count = u32::from_le_bytes(count) as usize;
+        if count != expected_commands { return Err(io::Error::new(io::ErrorKind::InvalidData, "partial mask command count mismatch")); }
+        let mut bytes = vec![0u8; count.div_ceil(8)];
+        stream.read_exact(&mut bytes)?;
+        Ok((0..count).map(|i| bytes[i / 8] & (1 << (i % 8)) != 0).collect())
+    }
+
     // ---------------------------------------------------------------------------------------------------
     // handshake IO (length-prefixed protocol capability descriptor)
     // ---------------------------------------------------------------------------------------------------

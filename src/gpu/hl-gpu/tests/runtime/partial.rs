@@ -23,6 +23,7 @@ impl GpuExecutor for PartialExecutor {
                             kind: "texture",
                             id: 999,
                         },
+                        vec![0],
                     ));
                 }
                 Cmd::Submit(_) => {

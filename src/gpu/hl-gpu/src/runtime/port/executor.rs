@@ -37,6 +37,7 @@ pub struct Presentation {
 pub struct Execution {
     presentations: Vec<Presentation>,
     refusal: Option<GpuError>,
+    accepted: Option<Vec<usize>>,
 }
 
 impl std::ops::Deref for Execution {
@@ -52,10 +53,15 @@ impl Execution {
         Self {
             presentations,
             refusal: None,
+            accepted: None,
         }
     }
 
-    pub fn partial(presentations: Vec<Presentation>, refusal: GpuError) -> Self {
+    pub fn partial(
+        presentations: Vec<Presentation>,
+        refusal: GpuError,
+        accepted: Vec<usize>,
+    ) -> Self {
         assert!(
             !refusal.is_fatal(),
             "a partial execution cannot contain a fatal error"
@@ -63,6 +69,7 @@ impl Execution {
         Self {
             presentations,
             refusal: Some(refusal),
+            accepted: Some(accepted),
         }
     }
 
@@ -70,8 +77,18 @@ impl Execution {
         &self.presentations
     }
 
-    pub(crate) fn into_parts(self) -> (Vec<Presentation>, Option<GpuError>) {
-        (self.presentations, self.refusal)
+    pub(crate) fn into_parts(
+        self,
+        command_count: usize,
+    ) -> (Vec<Presentation>, Option<GpuError>, Vec<bool>) {
+        let mut accepted = vec![self.accepted.is_none(); command_count];
+        if let Some(indices) = self.accepted {
+            for index in indices {
+                assert!(index < command_count, "accepted command index is out of range");
+                accepted[index] = true;
+            }
+        }
+        (self.presentations, self.refusal, accepted)
     }
 }
 

@@ -158,8 +158,9 @@ impl ConnectionHandler for Connection {
             .map(|producer| producer.reservations(&self.session, batch))
             .unwrap_or_default();
         let execute_started = Instant::now();
-        match hl_gpu::runtime::submit(&mut self.session, &mut self.executor, bytes, batch) {
-            Ok(presentations) => {
+        match hl_gpu::runtime::submit_outcome(&mut self.session, &mut self.executor, bytes, batch) {
+            Ok(outcome) => {
+                let presentations = outcome.presentations;
                 if let (Some(capture), Some(encoded)) = (&mut self.capture, encoded.as_deref()) {
                     capture.record(batch, encoded);
                 }
@@ -199,7 +200,10 @@ impl ConnectionHandler for Connection {
                             );
                         }
                     }
+                    let produced: Vec<(u64, u64)> = presentations.iter().map(|p| (p.token.get(), p.serial.get())).collect();
                     producer.publish(&self.session, &self.executor, presentations);
+                    let cancelled: Vec<_> = native_reservations.iter().copied().filter(|r| !produced.contains(r)).collect();
+                    producer.cancel(&cancelled);
                 }
                 hl_log::hl_log!(
                     hl_log::tag::GPU,
@@ -215,7 +219,10 @@ impl ConnectionHandler for Connection {
                 if self.trace {
                     eprintln!("husklet gpu: submit ack");
                 }
-                Verdict::Ack
+                match outcome.refusal {
+                    Some(error) => Verdict::Partial { kind: hl_gpu::transport::model::header::RefusalKind::for_error(&error), accepted: outcome.accepted },
+                    None => Verdict::Ack,
+                }
             }
             Err(error) => {
                 #[cfg(target_os = "macos")]
