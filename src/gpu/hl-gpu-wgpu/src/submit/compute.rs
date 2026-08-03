@@ -69,10 +69,10 @@ impl WgpuExecutor {
                     let alignment = self.gpu.device.limits().min_storage_buffer_offset_alignment as u64;
                     let specialization = crate::texel_buffer::key(descriptors.iter().copied(), alignment)?;
                     let pipeline = self.compute_pipeline_for(res, pid, &specialization)?;
-                    let remap_group_zero = match PipelineNative::get(res, pid)? {
+                    let (remap_group_zero, sampler_metadata) = match PipelineNative::get(res, pid)? {
                         PipelineNative::Compute {
-                            remap_group_zero, ..
-                        } => *remap_group_zero,
+                            remap_group_zero, sampler_metadata, ..
+                        } => (*remap_group_zero, sampler_metadata),
                         PipelineNative::Render { .. } => unreachable!("checked above"),
                     };
                     let mut groups = Vec::new();
@@ -91,7 +91,7 @@ impl WgpuExecutor {
                                 remap_group_zero,
                                 Some(&views),
                                 None,
-                                None,
+                                sampler_metadata.iter().find(|metadata| metadata.group == idx as u32),
                             )?;
                             groups.push((idx as u32, bg));
                         }

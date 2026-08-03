@@ -38,10 +38,14 @@ fn sampler_metadata_words(
     res: &SessionResources,
     d: &BindGroupDesc,
     layout: &crate::reflect::SamplerMetadataLayout,
+    remap_group_zero: bool,
 ) -> Result<Vec<u32>> {
     let mut words = vec![0; layout.samplers.iter().map(|slot| slot.base_ordinal + slot.count).max().unwrap_or(0) as usize * SAMPLER_METADATA_WORDS];
     for slot in &layout.samplers {
-        let entry = d.entries.iter().find(|entry| entry.binding == slot.binding)
+        let guest_binding = if remap_group_zero && d.set == 0 {
+            slot.binding.checked_sub(crate::wgsl::viewport::GUEST_OFFSET).ok_or(GpuError::Invalid("wgpu: invalid sampler metadata binding shift"))?
+        } else { slot.binding };
+        let entry = d.entries.iter().find(|entry| entry.binding == guest_binding)
             .ok_or(GpuError::Invalid("wgpu: sampler metadata binding is absent"))?;
         let ids: Vec<u32> = match &entry.resource {
             BindResource::Sampler { id } => vec![*id],
@@ -227,7 +231,7 @@ impl WgpuExecutor {
         let mut sai = 0usize;
         let mut bai = 0usize;
         let metadata_buffer = sampler_metadata.map(|metadata| -> Result<wgpu::Buffer> {
-            let words = sampler_metadata_words(self, res, d, metadata)?;
+            let words = sampler_metadata_words(self, res, d, metadata, remap_group_zero)?;
             Ok(self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("hl-sampler-metadata"),
                 contents: bytemuck::cast_slice(&words),

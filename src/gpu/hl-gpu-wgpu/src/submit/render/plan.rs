@@ -133,12 +133,13 @@ impl Plan {
         offset: u32,
     ) -> Result<()> {
         let pid = current.ok_or(GpuError::Invalid("draw with no pipeline bound"))?;
-        let (pipeline_formats, used_bindings) = match PipelineNative::get(res, pid)? {
+        let (pipeline_formats, used_bindings, sampler_metadata) = match PipelineNative::get(res, pid)? {
             PipelineNative::Render {
                 color_formats,
                 used_bindings,
+                sampler_metadata,
                 ..
-            } => (color_formats, used_bindings),
+            } => (color_formats, used_bindings, sampler_metadata),
             PipelineNative::Compute { .. } => {
                 return Err(GpuError::Unsupported("wgpu: draw on a compute pipeline"))
             }
@@ -181,7 +182,7 @@ impl Plan {
                         true,
                         Some(&views),
                         (index == 0).then_some(viewport),
-                        None,
+                        sampler_metadata.iter().find(|metadata| metadata.group == index),
                     )?;
                     exec.profile_record(|p| &mut p.draw_bind_groups, started);
                     cache.insert(cache_key, built.clone());
@@ -214,7 +215,7 @@ impl Plan {
                         true,
                         None,
                         Some(viewport),
-                        None,
+                        sampler_metadata.iter().find(|metadata| metadata.group == 0),
                     )?;
                     exec.profile_record(|p| &mut p.draw_bind_groups, started);
                     cache.insert(cache_key, built.clone());

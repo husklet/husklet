@@ -94,6 +94,9 @@ impl WgpuExecutor {
             }
         }
         Self::apply_authoritative_counts(&mut merged, Some(&recipe.layout))?;
+        let reflected_bindings = merged.iter().map(|(&(group, binding), &(_, kind, count))| crate::reflect::Binding { group, binding, kind, count }).collect::<Vec<_>>();
+        let sampler_metadata = crate::reflect::sampler_metadata(&reflected_bindings);
+        Self::insert_sampler_metadata_bindings(&mut merged, &sampler_metadata)?;
         let group_layouts = self.build_render_bind_group_layouts(&merged)?;
         let layout_refs = group_layouts.iter().collect::<Vec<_>>();
         let layout = self

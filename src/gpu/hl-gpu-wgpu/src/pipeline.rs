@@ -196,6 +196,9 @@ impl WgpuExecutor {
                     })
                     .collect();
                 Self::apply_authoritative_counts(&mut merged, authoritative_layout)?;
+                let reflected_bindings = merged.iter().map(|(&(group, binding), &(_, kind, count))| crate::reflect::Binding { group, binding, kind, count }).collect::<Vec<_>>();
+                let sampler_metadata = crate::reflect::sampler_metadata(&reflected_bindings);
+                Self::insert_sampler_metadata_bindings(&mut merged, &sampler_metadata)?;
                 let group_layouts = self.build_render_bind_group_layouts(&merged)?;
                 let layout_refs: Vec<_> = group_layouts.iter().collect();
                 let push_constant_ranges = self
@@ -245,12 +248,6 @@ impl WgpuExecutor {
                         desc.compute.entry
                     )));
                 }
-                let sampler_metadata = reflected
-                    .entries
-                    .iter()
-                    .find(|usage| usage.entry == desc.compute.entry)
-                    .map(|usage| usage.sampler_metadata.clone())
-                    .unwrap_or_default();
                 (pipeline, true, sampler_metadata)
             }
         };
@@ -580,6 +577,7 @@ impl WgpuExecutor {
             })
             .collect::<Vec<_>>();
         let sampler_metadata = crate::reflect::sampler_metadata(&merged_bindings);
+        Self::insert_sampler_metadata_bindings(&mut merged, &sampler_metadata)?;
 
         // Build one `BindGroupLayout` per group in `0..=max_group` (a gap group gets an empty layout, so the
         // `PipelineLayout`'s array stays dense from index 0), then the `PipelineLayout`. `submit` binds group
@@ -1022,6 +1020,22 @@ impl WgpuExecutor {
             } else {
                 None
             };
+        }
+        Ok(())
+    }
+
+    pub(crate) fn insert_sampler_metadata_bindings(
+        merged: &mut BTreeMap<(u32, u32), (wgpu::ShaderStages, BindingKind, Option<std::num::NonZeroU32>)>,
+        layouts: &[crate::reflect::SamplerMetadataLayout],
+    ) -> Result<()> {
+        for layout in layouts {
+            let visibility = layout.samplers.iter().try_fold(wgpu::ShaderStages::empty(), |visibility, sampler| {
+                merged.get(&(layout.group, sampler.binding)).map(|entry| visibility | entry.0)
+                    .ok_or(GpuError::Invalid("wgpu: sampler metadata references an absent sampler"))
+            })?;
+            if merged.insert((layout.group, layout.binding), (visibility, BindingKind::StorageBuffer { read_only: true }, None)).is_some() {
+                return Err(GpuError::Invalid("wgpu: sampler metadata binding collides"));
+            }
         }
         Ok(())
     }
