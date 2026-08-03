@@ -125,15 +125,26 @@ fn surface_queries_report_modeled_values() {
 }
 
 #[test]
-fn replacement_retires_only_the_matching_application_surface() {
+fn replacement_retires_only_the_matching_native_window() {
     let mut d = dev();
     let mut s = sink();
     let app_surface = 0x5000;
+    let target = hl_vulkan::model::queue::PresentationTarget::Window(0x777);
     let old_surface =
         present::create_surface(&mut d, &mut s, 64, 64, vk_format::B8G8R8A8_UNORM, None).unwrap();
-    let old = present::create_swapchain_for_surface(&mut d, &mut s, old_surface, app_surface, 2, 0)
-        .unwrap();
+    let old = present::create_swapchain_for_target(
+        &mut d,
+        &mut s,
+        old_surface,
+        app_surface,
+        target,
+        2,
+        0,
+    )
+    .unwrap();
     let acquired = d.acquire_next_image(old).unwrap();
+    assert!(present::has_active_swapchain(&d, target));
+    assert!(present::validate_swapchain(&d, valid_swapchain_config()).is_err());
 
     let matching = present::SwapchainConfig {
         old_swapchain: old,
@@ -144,6 +155,7 @@ fn replacement_retires_only_the_matching_application_surface() {
         &d,
         present::SwapchainConfig {
             application_surface: app_surface + 1,
+            presentation_target: hl_vulkan::model::queue::PresentationTarget::Window(0x778),
             old_swapchain: old,
             ..valid_swapchain_config()
         }
@@ -153,11 +165,12 @@ fn replacement_retires_only_the_matching_application_surface() {
     let foreign_surface =
         present::create_surface(&mut d, &mut s, 64, 64, vk_format::B8G8R8A8_UNORM, None).unwrap();
     let swapchain_count = d.swapchains.len();
-    assert!(present::create_swapchain_for_surface(
+    assert!(present::create_swapchain_for_target(
         &mut d,
         &mut s,
         foreign_surface,
         app_surface + 1,
+        hl_vulkan::model::queue::PresentationTarget::Window(0x778),
         2,
         old,
     )
@@ -167,8 +180,16 @@ fn replacement_retires_only_the_matching_application_surface() {
 
     let replacement_surface =
         present::create_surface(&mut d, &mut s, 64, 64, vk_format::B8G8R8A8_UNORM, None).unwrap();
-    present::create_swapchain_for_surface(&mut d, &mut s, replacement_surface, app_surface, 2, old)
-        .unwrap();
+    present::create_swapchain_for_target(
+        &mut d,
+        &mut s,
+        replacement_surface,
+        app_surface + 1,
+        target,
+        2,
+        old,
+    )
+    .unwrap();
 
     assert!(d.swapchains.get(&old).unwrap().retired);
     assert!(d.acquire_next_image(old).is_err());
@@ -178,10 +199,33 @@ fn replacement_retires_only_the_matching_application_surface() {
     assert!(present::validate_swapchain(&d, matching).is_err());
 }
 
+#[test]
+fn failed_replacement_still_retires_old_and_preserves_acquired_present() {
+    let mut d = dev();
+    let mut s = sink();
+    let target = hl_vulkan::model::queue::PresentationTarget::Window(0x900);
+    let old_surface =
+        present::create_surface(&mut d, &mut s, 64, 64, vk_format::B8G8R8A8_UNORM, None).unwrap();
+    let old =
+        present::create_swapchain_for_target(&mut d, &mut s, old_surface, 0x5000, target, 2, 0)
+            .unwrap();
+    let acquired = d.acquire_next_image(old).unwrap();
+
+    assert!(
+        present::create_swapchain_for_target(&mut d, &mut s, 0xdead, 0x5001, target, 2, old,)
+            .is_err()
+    );
+    assert!(d.swapchains.get(&old).unwrap().retired);
+    assert!(d.acquire_next_image(old).is_err());
+    present::queue_present(&mut d, &mut s, old, acquired, None)
+        .expect("an image acquired before failed replacement remains presentable");
+}
+
 fn valid_swapchain_config() -> present::SwapchainConfig {
     present::SwapchainConfig {
         application_surface: 0x5000,
         application_surface_live: true,
+        presentation_target: hl_vulkan::model::queue::PresentationTarget::Window(0x777),
         flags: 0,
         min_image_count: 2,
         image_format: vk_format::B8G8R8A8_UNORM,

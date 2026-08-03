@@ -97,6 +97,14 @@ pub struct SwapImage {
     pub state: ImageState,
 }
 
+/// Native presentation identity. Multiple Vulkan surface handles may wrap the same application window;
+/// swapchain replacement and exclusivity follow that window, not the wrapper handle.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum PresentationTarget {
+    Surface(crate::VkSurfaceKHR),
+    Window(u64),
+}
+
 /// A `VkSwapchainKHR`: the surface it presents through, its geometry/format, its presentable images, and
 /// the round-robin acquire cursor. Mirrors `MVKSwapchain`. `acquire_cursor` is the next index
 /// `vkAcquireNextImageKHR` scans from, so successive acquires cycle `0,1,..,N-1,0,..` instead of always
@@ -105,6 +113,7 @@ pub struct SwapImage {
 pub struct SwapchainRec {
     /// Instance-level application surface supplied in `VkSwapchainCreateInfoKHR::surface`.
     pub application_surface: crate::VkSurfaceKHR,
+    pub presentation_target: PresentationTarget,
     pub surface: crate::VkSurfaceKHR,
     pub width: u32,
     pub height: u32,
