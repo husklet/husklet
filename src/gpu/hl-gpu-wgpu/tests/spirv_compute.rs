@@ -108,6 +108,42 @@ fn wgsl_to_spirv(src: &str) -> Vec<u32> {
         .expect("emit spir-v")
 }
 
+fn wgsl_2d_to_spirv_1d(src: &str) -> Vec<u32> {
+    let mut module = naga::front::wgsl::parse_str(src).expect("seed wgsl parses");
+    let info = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .expect("seed wgsl validates");
+    let images = module.global_variables.iter().filter_map(|(handle, variable)| {
+        matches!(module.types[variable.ty].inner, naga::TypeInner::Image { .. })
+            .then_some((handle, variable.ty))
+    }).collect::<Vec<_>>();
+    for (global, old_ty) in images {
+        let mut ty = module.types[old_ty].clone();
+        let naga::TypeInner::Image { ref mut dim, .. } = ty.inner else { unreachable!() };
+        *dim = naga::ImageDimension::D1;
+        module.global_variables[global].ty = module.types.insert(ty, naga::Span::default());
+    }
+    let function = &mut module.entry_points[0].function;
+    let coordinates = function.body.iter().filter_map(|statement| match statement {
+        naga::Statement::ImageAtomic { coordinate, .. } => {
+            let naga::Expression::Compose { components, .. } = &function.expressions[*coordinate]
+                else { return None };
+            Some((*coordinate, components[0]))
+        }
+        _ => None,
+    }).collect::<Vec<_>>();
+    for statement in function.body.iter_mut() {
+        if let naga::Statement::ImageAtomic { coordinate, .. } = statement {
+            *coordinate = coordinates.iter().find(|(vector, _)| vector == coordinate).unwrap().1;
+        }
+    }
+    naga::back::spv::write_vec(&module, &info, &naga::back::spv::Options::default(), None)
+        .expect("emit 1D SPIR-V")
+}
+
 // -------------------------------------------------------------------------------------------------
 // cases
 // -------------------------------------------------------------------------------------------------
@@ -736,13 +772,17 @@ fn spirv_compute_atomically_adds_r32uint_storage_texture() {
             output[1] = textureAtomicCompareExchangeWeak(image, vec2<i32>(0, 0), 7u, 11u);
         }
     "#;
-    let shader = wgsl_to_spirv(source);
+    let shaders = [
+        (TextureDim::D2, wgsl_to_spirv(source)),
+        (TextureDim::D1, wgsl_2d_to_spirv_1d(source)),
+    ];
     // Keep this native-feature probe on its own device so the assertion covers feature negotiation,
     // texture creation, dispatch and readback as one isolated device lifetime.
-    let mut g = WgpuExecutor::new(DeviceConfig::default()).expect("acquire atomic-capable Metal device");
-    let s = run_batch(
-        &mut g,
-        &[
+    for (dim, shader) in shaders {
+        let mut g = WgpuExecutor::new(DeviceConfig::default()).expect("acquire atomic-capable Metal device");
+        let s = run_batch(
+            &mut g,
+            &[
             Cmd::CreateShader {
                 id: 1,
                 kind: ShaderPayloadKind::SpirV,
@@ -782,7 +822,7 @@ fn spirv_compute_atomically_adds_r32uint_storage_texture() {
                     depth: 1,
                     mip_levels: 1,
                     sample_count: 1,
-                    dim: TextureDim::D2,
+                    dim,
                     format: TextureFormat::R32Uint,
                     usage: texture_usage::STORAGE | texture_usage::COPY_SRC,
                     label: "atomic-r32uint".into(),
@@ -819,10 +859,11 @@ fn spirv_compute_atomically_adds_r32uint_storage_texture() {
                 ],
                 signal: None,
             }),
-        ],
-    );
-    assert_eq!(read_u32s(&g, &s, 1, 2), vec![0, 7]);
-    assert_eq!(g.read_texture(&s.resources, 1).unwrap(), 11u32.to_le_bytes());
+            ],
+        );
+        assert_eq!(read_u32s(&g, &s, 1, 2), vec![0, 7]);
+        assert_eq!(g.read_texture(&s.resources, 1).unwrap(), 11u32.to_le_bytes());
+    }
 }
 
 #[test]
