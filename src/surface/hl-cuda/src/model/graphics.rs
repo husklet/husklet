@@ -22,14 +22,18 @@ pub struct GraphicsImage {
     pub mapped: bool,
     pub map_flags: u32,
     pub registration_flags: u32,
-    pub array: Option<ImportedArrayHandle>,
+    pub kind: GraphicsImageKind,
+    pub mip_levels: u32,
+    pub layers: u32,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GraphicsImageKind { D2, Cube, D2Array, D3 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ImportedArrayHandle(pub u64);
 
-/// A mapped view of the only image shape currently exported by the GL bridge: mip 0, layer 0 of a
-/// single-layer `GL_TEXTURE_2D`. It aliases the imported hl-GPU texture; it owns no pixel copy.
+/// A mapped subresource view that aliases the imported hl-GPU texture; it owns no pixel copy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ImportedArray {
     pub texture: TextureId,
@@ -88,24 +92,19 @@ impl GraphicsResources {
     pub fn remove_object(&mut self, resource: GraphicsResource) -> Option<GraphicsObject> { self.entries.remove(&resource) }
 
     pub fn mapped_array(&mut self, resource: GraphicsResource, mip: u32, layer: u32) -> Option<ImportedArrayHandle> {
-        if mip != 0 || layer != 0 { return None; }
-        let image = match self.entries.get_mut(&resource)? { GraphicsObject::Image(image) if image.mapped => image, _ => return None };
-        if let Some(handle) = image.array { return Some(handle); }
+        let image = match self.entries.get(&resource)? { GraphicsObject::Image(image) if image.mapped => image, _ => return None };
+        if mip >= image.mip_levels || match image.kind { GraphicsImageKind::D2 | GraphicsImageKind::D3 => layer != 0, GraphicsImageKind::Cube | GraphicsImageKind::D2Array => layer >= image.layers } { return None; }
+        if let Some((&handle, _)) = self.arrays.iter().find(|(_, array)| array.resource == resource && array.mip == mip && array.layer == layer) { return Some(handle); }
         let handle = ImportedArrayHandle(self.next_array);
         self.next_array += 1;
         self.arrays.insert(handle, ImportedArray { texture: image.texture, resource, mip, layer });
-        image.array = Some(handle);
         Some(handle)
     }
 
     pub fn array(&self, handle: ImportedArrayHandle) -> Option<&ImportedArray> { self.arrays.get(&handle) }
 
     pub fn invalidate_array(&mut self, resource: GraphicsResource) {
-        let handle = match self.entries.get_mut(&resource) {
-            Some(GraphicsObject::Image(image)) => image.array.take(),
-            _ => None,
-        };
-        if let Some(handle) = handle { self.arrays.remove(&handle); }
+        self.arrays.retain(|_, array| array.resource != resource);
     }
 }
 

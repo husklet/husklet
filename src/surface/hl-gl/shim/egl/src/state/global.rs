@@ -118,14 +118,23 @@ pub unsafe extern "C" fn hl_gl_export_buffer(name: u32, export_out: *mut u64) ->
 /// executor, then exports that exact native allocation; the GL name itself never crosses sessions.
 #[cfg(not(gles_client))]
 #[no_mangle]
-pub unsafe extern "C" fn hl_gl_export_texture(name: u32, export_out: *mut u64) -> i32 {
-    if name == 0 || export_out.is_null() { return -1; }
+pub unsafe extern "C" fn hl_gl_export_texture(name: u32, target: u32, export_out: *mut u64, mip_levels_out: *mut u32, layers_out: *mut u32) -> i32 {
+    if name == 0 || export_out.is_null() || mip_levels_out.is_null() || layers_out.is_null() { return -1; }
     let result = GlobalState::gpu_io(std::time::Duration::from_secs(31), move |group, sink| {
         use hl_gpu::protocol::model::descriptor::{BufferDesc, TextureDesc};
         use hl_gpu::protocol::model::enums::{buffer_usage, texture_usage, TextureDim, TextureFormat};
         use hl_gpu::Cmd;
         let texture = group.gl.textures.get(name).cloned().ok_or(hl_gpu::GpuError::Invalid("GL texture"))?;
-        if texture.w <= 0 || texture.h <= 0 { return Err(hl_gpu::GpuError::Invalid("GL texture has no storage")); }
+        if texture.w <= 0 || texture.h <= 0 || texture.target != target { return Err(hl_gpu::GpuError::Invalid("GL texture target or storage")); }
+        let (dim, layers) = match target {
+            hl_gl::model::glconst::GL_TEXTURE_2D => (TextureDim::D2, 1),
+            hl_gl::model::glconst::GL_TEXTURE_CUBE_MAP => (TextureDim::Cube, 6),
+            hl_gl::model::glconst::GL_TEXTURE_2D_ARRAY => (TextureDim::D2, texture.depth.max(1) as u32),
+            hl_gl::model::glconst::GL_TEXTURE_3D => (TextureDim::D3, texture.depth.max(1) as u32),
+            _ => return Err(hl_gpu::GpuError::Unsupported("CUDA GL image target")),
+        };
+        let levels = texture.effective_levels();
+        let mip_levels = levels.len().max(1) as u32;
         let (texture_ir, upload) = match group.gl.resident_fbo_target_tex(name, texture.gen) {
             Some(texture_ir) => (texture_ir, false),
             None => {
@@ -136,23 +145,39 @@ pub unsafe extern "C" fn hl_gl_export_texture(name: u32, export_out: *mut u64) -
             }
         };
         if upload {
-            let stage = group.gl.alloc_buffer_ir()?;
+            // Non-2D uploads need the same per-face/per-layer lowering as a sampled draw. Do not invent
+            // a flattened 2D allocation: only export those shapes once GL has materialized their native
+            // residency through its ordinary texture lowering.
+            if dim != TextureDim::D2 || layers != 1 {
+                return Err(hl_gpu::GpuError::Unsupported("CUDA export requires materialized layered GL texture"));
+            }
             let format = match texture.ir_format { TextureFormat::Rgba8Srgb | TextureFormat::Bgra8Srgb => TextureFormat::Rgba8Srgb, _ => TextureFormat::Rgba8Unorm };
-            let bytes = texture.data.as_ref().clone();
-            sink.submit(&[
-                Cmd::CreateTexture(texture_ir, TextureDesc { width: texture.w as u32, height: texture.h as u32, depth: 1, mip_levels: 1, sample_count: 1, dim: TextureDim::D2, format, usage: texture_usage::SAMPLED | texture_usage::COPY_DST | texture_usage::COPY_SRC, label: "GL/CUDA interop texture".into() }),
-                Cmd::CreateBuffer(stage, BufferDesc { size: bytes.len() as u64, usage: buffer_usage::COPY_SRC, label: String::new() }),
-                Cmd::WriteBuffer { id: stage, offset: 0, data: bytes },
-                Cmd::Submit(hl_gpu::CommandBuffer { encoder: vec![hl_gpu::Enc::CopyBufferToTexture { src: stage, src_offset: 0, bytes_per_row: texture.w as u32 * 4, dst: texture_ir, mip: 0, width: texture.w as u32, height: texture.h as u32 }], signal: None }),
-                Cmd::DestroyBuffer(stage),
-            ])?;
+            let mut cmds = vec![Cmd::CreateTexture(texture_ir, TextureDesc { width: levels[0].0 as u32, height: levels[0].1 as u32, depth: 1, mip_levels, sample_count: 1, dim, format, usage: texture_usage::SAMPLED | texture_usage::COPY_DST | texture_usage::COPY_SRC, label: "GL/CUDA interop texture".into() })];
+            let mut copies = Vec::new();
+            let mut stages = Vec::new();
+            for (mip, (width, height, pixels)) in levels.iter().enumerate() {
+                let stage = group.gl.alloc_buffer_ir()?;
+                stages.push(stage);
+                cmds.push(Cmd::CreateBuffer(stage, BufferDesc { size: pixels.len() as u64, usage: buffer_usage::COPY_SRC, label: String::new() }));
+                cmds.push(Cmd::WriteBuffer { id: stage, offset: 0, data: pixels.as_ref().clone() });
+                copies.push(hl_gpu::Enc::CopyBufferToTexture { src: stage, src_offset: 0, bytes_per_row: *width as u32 * 4, dst: texture_ir, mip: mip as u32, width: *width as u32, height: *height as u32 });
+            }
+            cmds.push(Cmd::Submit(hl_gpu::CommandBuffer { encoder: copies, signal: None }));
+            cmds.extend(stages.into_iter().map(Cmd::DestroyBuffer));
+            sink.submit(&cmds)?;
         }
         sink.export_texture(hl_gpu::TextureId(texture_ir))?;
-        Ok(())
+        Ok((mip_levels, layers))
     });
     match result {
         Ok(result) => match result.observations.last() {
-            Some(super::io::Observation::TextureExport(export)) => { *export_out = export.0; 0 }
+            Some(super::io::Observation::TextureExport(export)) => {
+                let (mip_levels, layers) = result.value;
+                *export_out = export.0;
+                *mip_levels_out = mip_levels;
+                *layers_out = layers;
+                0
+            }
             _ => -1,
         },
         Err(_) => -1,
