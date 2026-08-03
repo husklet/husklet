@@ -26,7 +26,7 @@ pub use protocol::model::id::{
     BindGroupId, BufferId, FenceId, PipelineId, ResourceTable, SamplerId, ShaderId, SurfaceId,
     TextureId,
 };
-pub use protocol::port::sink::{CommandSink, FenceWait, RecordingSink};
+pub use protocol::port::sink::{CommandSink, FenceWait, RecordingSink, SinkSubmitOutcome};
 
 // Runtime layer: the per-connection Session that validates + accounts a decoded batch and dispatches it
 // to an injected GpuExecutor (built on top of `protocol`).

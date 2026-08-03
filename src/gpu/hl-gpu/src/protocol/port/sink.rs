@@ -20,6 +20,12 @@ pub enum FenceWait {
     Timeout,
 }
 
+#[derive(Debug)]
+pub struct SinkSubmitOutcome {
+    pub committed: Vec<Cmd>,
+    pub error: Option<GpuError>,
+}
+
 /// The contract a driver submits through. A batch is a slice of protocol [`Cmd`]s; the sink validates,
 /// transports, and (eventually) executes them — the driver neither knows nor cares which.
 pub trait CommandSink {
@@ -31,6 +37,13 @@ pub trait CommandSink {
 
     /// Submit a batch of protocol commands for validation + execution.
     fn submit(&mut self, batch: &[Cmd]) -> Result<()>;
+
+    fn submit_outcome(&mut self, batch: &[Cmd]) -> SinkSubmitOutcome {
+        match self.submit(batch) {
+            Ok(()) => SinkSubmitOutcome { committed: batch.to_vec(), error: None },
+            Err(error) => SinkSubmitOutcome { committed: Vec::new(), error: Some(error) },
+        }
+    }
 
     /// Block until fence `fence` reaches timeline `value`.
     fn wait(&mut self, fence: FenceId, value: u64) -> Result<()>;
@@ -202,6 +215,11 @@ impl CommandSink for RecordingSink {
     fn submit(&mut self, batch: &[Cmd]) -> Result<()> {
         self.batches.push(batch.to_vec());
         Ok(())
+    }
+
+    fn submit_outcome(&mut self, batch: &[Cmd]) -> SinkSubmitOutcome {
+        self.batches.push(batch.to_vec());
+        SinkSubmitOutcome { committed: batch.to_vec(), error: None }
     }
 
     fn wait(&mut self, fence: FenceId, value: u64) -> Result<()> {
