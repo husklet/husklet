@@ -636,6 +636,118 @@ fn integer_nearest_scaling_conversion_and_xy_mirror_are_exact() {
 }
 
 #[test]
+fn integer_mipmap_generation_reads_the_previous_level_of_the_same_texture() {
+    let mut executor = WgpuExecutor::new(DeviceConfig::default()).expect("Metal adapter");
+    let mut limits = Limits::from_capabilities(executor.capabilities());
+    limits.copy_alignment = 1;
+    let mut session = Session::new(
+        limits,
+        GlobalLedger::unbounded(),
+        Box::new(FakeClock::new(0)),
+    );
+    let mut image = texture(TextureFormat::Rgba8Uint);
+    image.width = 2;
+    image.height = 2;
+    image.depth = 6;
+    image.mip_levels = 2;
+    let source = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+    let mip = |level| TextureSubresource {
+        mip: level,
+        layer: 5,
+        ..TextureSubresource::base()
+    };
+    hl_gpu::runtime::submit(
+        &mut session,
+        &mut executor,
+        0,
+        &[
+            Cmd::CreateTexture(1, image),
+            Cmd::CreateBuffer(
+                1,
+                BufferDesc {
+                    size: source.len() as u64,
+                    usage: buffer_usage::COPY_SRC,
+                    label: String::new(),
+                },
+            ),
+            Cmd::CreateBuffer(
+                2,
+                BufferDesc {
+                    size: 4,
+                    usage: buffer_usage::COPY_DST,
+                    label: String::new(),
+                },
+            ),
+            Cmd::WriteBuffer {
+                id: 1,
+                offset: 0,
+                data: source,
+            },
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::CopyBufferToTextureRegion {
+                        src: 1,
+                        src_offset: 0,
+                        bytes_per_row: 8,
+                        rows_per_image: 2,
+                        dst: 1,
+                        dst_sub: mip(0),
+                        dst_origin: Origin3d::default(),
+                        extent: Extent3d {
+                            width: 2,
+                            height: 2,
+                            depth: 1,
+                        },
+                    },
+                    Enc::BlitTexture {
+                        src: 1,
+                        src_sub: mip(0),
+                        src_origin: Origin3d::default(),
+                        src_extent: Extent3d {
+                            width: 2,
+                            height: 2,
+                            depth: 1,
+                        },
+                        dst: 1,
+                        dst_sub: mip(1),
+                        dst_origin: Origin3d::default(),
+                        dst_extent: Extent3d {
+                            width: 1,
+                            height: 1,
+                            depth: 1,
+                        },
+                        filter: Filter::Nearest,
+                        mirror: Mirror::NONE,
+                    },
+                    Enc::CopyTextureToBufferRegion {
+                        src: 1,
+                        src_sub: mip(1),
+                        src_origin: Origin3d::default(),
+                        extent: Extent3d {
+                            width: 1,
+                            height: 1,
+                            depth: 1,
+                        },
+                        dst: 2,
+                        dst_offset: 0,
+                        bytes_per_row: 4,
+                        rows_per_image: 1,
+                    },
+                ],
+                signal: None,
+            }),
+        ],
+    )
+    .expect("integer mip generation must execute");
+    assert_eq!(
+        executor
+            .read_buffer(&session.resources, BufferId(2), 0, 4)
+            .unwrap(),
+        vec![13, 14, 15, 16],
+    );
+}
+
+#[test]
 fn integer_nonintegral_subrect_blit_preserves_destination_sentinels() {
     let mut executor = WgpuExecutor::new(DeviceConfig::default()).unwrap();
     let mut limits = Limits::from_capabilities(executor.capabilities());
