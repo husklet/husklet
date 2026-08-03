@@ -193,7 +193,7 @@ impl Format {
             T::R16Float | T::Rg16Float | T::Rgba16Float => FormatClass::FloatColor,
             T::R32Float | T::Rg32Float | T::Rgba32Float => FormatClass::UnfilterableFloatColor,
             T::Rgb9e5Ufloat => FormatClass::SampledColor,
-            T::Rg11b10Ufloat => FormatClass::SampledColor,
+            T::Rg11b10Ufloat => FormatClass::BlitColor,
             T::Rgb10a2Unorm => FormatClass::NormalizedColor,
             T::R5g6b5Unorm | T::A1r5g5b5Unorm => FormatClass::NormalizedColor,
             // Metal exposes B4G4R4A4 through ABGR4 plus a sampled-view swizzle. The blit executor applies
@@ -830,6 +830,16 @@ mod tests {
     #[test]
     fn b4g4r4a4_advertises_only_the_corrected_blit_write_path() {
         let optimal = Format(vk_format::B4G4R4A4_UNORM_PACK16)
+            .features()
+            .optimal_tiling;
+        assert_ne!(optimal & format_feature::BLIT_SRC, 0);
+        assert_ne!(optimal & format_feature::BLIT_DST, 0);
+        assert_eq!(optimal & format_feature::COLOR_ATTACHMENT, 0);
+    }
+
+    #[test]
+    fn rg11b10_float_advertises_native_blit_without_color_attachment() {
+        let optimal = Format(vk_format::B10G11R11_UFLOAT_PACK32)
             .features()
             .optimal_tiling;
         assert_ne!(optimal & format_feature::BLIT_SRC, 0);

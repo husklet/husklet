@@ -191,11 +191,15 @@ fn metal_executes_every_linear_format_the_vulkan_surface_advertises() {
 
 #[test]
 fn metal_executes_b4g4r4a4_as_a_blit_destination() {
+    assert_packed_red_blit(TextureFormat::B4g4r4a4Unorm, &[0xff, 0x00]);
+}
+
+fn assert_packed_red_blit(format: TextureFormat, expected: &[u8]) {
     let mut exec = WgpuExecutor::new(DeviceConfig::default()).expect("Metal adapter");
     let mut session = new_session(&exec);
     let source = vec![0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 0, 0, 255];
     let src = tex(TextureFormat::Rgba8Unorm);
-    let mut dst = tex(TextureFormat::B4g4r4a4Unorm);
+    let mut dst = tex(format);
     dst.width = 1;
     dst.height = 1;
     hl_gpu::runtime::submit(
@@ -259,10 +263,15 @@ fn metal_executes_b4g4r4a4_as_a_blit_destination() {
             }),
         ],
     )
-    .expect("B4G4R4A4 is a native Metal blit destination");
+    .unwrap_or_else(|error| panic!("{format:?} native Metal blit destination: {error}"));
     assert_eq!(
         exec.read_texture(&session.resources, 2).unwrap(),
-        vec![0xff, 0x00],
-        "red and blue nibbles must retain Vulkan B4G4R4A4 order",
+        expected,
+        "{format:?} must retain its Vulkan packed component order",
     );
+}
+
+#[test]
+fn metal_executes_rg11b10_float_as_a_blit_destination() {
+    assert_packed_red_blit(TextureFormat::Rg11b10Ufloat, &[0xc0, 0x03, 0x00, 0x00]);
 }
