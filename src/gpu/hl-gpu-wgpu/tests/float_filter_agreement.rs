@@ -183,6 +183,8 @@ fn metal_executes_every_linear_format_the_vulkan_surface_advertises() {
         TextureFormat::Rgba8Snorm,
         TextureFormat::Rg16Float,
         TextureFormat::Rgb10a2Unorm,
+        TextureFormat::R5g6b5Unorm,
+        TextureFormat::A1r5g5b5Unorm,
     ] {
         on_executor(&mut exec, format, Filter::Linear)
             .unwrap_or_else(|error| panic!("{format:?} is advertised filterable: {error}"));
@@ -192,6 +194,12 @@ fn metal_executes_every_linear_format_the_vulkan_surface_advertises() {
 #[test]
 fn metal_executes_b4g4r4a4_as_a_blit_destination() {
     assert_packed_red_blit(TextureFormat::B4g4r4a4Unorm, &[0xff, 0x00]);
+}
+
+#[test]
+fn metal_executes_native_16_bit_packed_blit_destinations() {
+    assert_packed_red_blit(TextureFormat::R5g6b5Unorm, &[0x00, 0xf8]);
+    assert_packed_red_blit(TextureFormat::A1r5g5b5Unorm, &[0x00, 0xfc]);
 }
 
 fn assert_packed_red_blit(format: TextureFormat, expected: &[u8]) {
