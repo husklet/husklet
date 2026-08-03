@@ -108,6 +108,8 @@ fn insert_type(value: u32) -> bool {
             | GL_DEBUG_TYPE_PERFORMANCE
             | GL_DEBUG_TYPE_OTHER
             | GL_DEBUG_TYPE_MARKER
+            | GL_DEBUG_TYPE_PUSH_GROUP
+            | GL_DEBUG_TYPE_POP_GROUP
     )
 }
 fn severity(value: u32, any: bool) -> bool {
