@@ -176,3 +176,45 @@ fn a_matrix_uniform_reports_its_std140_column_stride() {
         "a vector has no column stride"
     );
 }
+
+#[test]
+fn aggregate_uniforms_reflect_real_leaf_names_indices_and_layout() {
+    let mut context = GlContext::new();
+    let program = program(
+        &mut context,
+        "struct Inner { int scalar; };\n\
+         struct Outer { int before; Inner inner; int values[2]; };\n\
+         uniform Outer u_var[2];\n\
+         void main(){gl_Position=vec4(float(u_var[1].inner.scalar+u_var[0].values[1]));}",
+        "void main(){gl_FragColor=vec4(1.0);}",
+    );
+
+    let expected = [
+        ("u_var[0].before", 0, 0, 0),
+        ("u_var[0].inner.scalar", 1, 16, 0),
+        ("u_var[0].values[0]", 2, 32, 16),
+        ("u_var[1].before", 3, 64, 0),
+        ("u_var[1].inner.scalar", 4, 80, 0),
+        ("u_var[1].values[0]", 5, 96, 16),
+    ];
+    for (name, index, offset, stride) in expected {
+        assert_eq!(intro::uniform_index(&context, program, name), index);
+        assert_eq!(
+            intro::active_uniformsiv(&context, program, index, GL_UNIFORM_OFFSET),
+            Some(offset)
+        );
+        assert_eq!(
+            intro::active_uniformsiv(&context, program, index, GL_UNIFORM_ARRAY_STRIDE),
+            Some(stride)
+        );
+    }
+
+    for index in [2, 5] {
+        let active = query::active_uniform(&context, program, index).expect("array leaf");
+        assert_eq!(active.size, 2);
+        assert_eq!(
+            intro::active_uniformsiv(&context, program, index, GL_UNIFORM_SIZE),
+            Some(2)
+        );
+    }
+}

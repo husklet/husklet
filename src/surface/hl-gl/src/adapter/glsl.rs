@@ -283,7 +283,10 @@ impl std::fmt::Display for UniformError {
                 write!(f, "uniform `{name}` has conflicting stage declarations")
             }
             Self::AttributeLocation(name) => {
-                write!(f, "attribute `{name}` has a conflicting or invalid location")
+                write!(
+                    f,
+                    "attribute `{name}` has a conflicting or invalid location"
+                )
             }
             Self::TransformFeedback(reason) => write!(f, "transform feedback: {reason}"),
             Self::MainBody { stage } => write!(
@@ -388,7 +391,7 @@ mod uniforms;
 
 pub use bindings::{prepare_verbatim_program, prepare_verbatim_program_with};
 pub use preprocess::PreprocessError;
-pub use uniforms::{compute_default_block_uniform, UniformBlockDecl};
+pub use uniforms::{UniformBlockDecl, compute_default_block_uniform, std140_array_stride};
 
 /// The std140 column stride `glGetActiveUniformsiv(GL_UNIFORM_MATRIX_STRIDE)` reports for a GLSL type
 /// keyword, or `0` when the type is not a matrix. Derived from the same rule that lays the block out.

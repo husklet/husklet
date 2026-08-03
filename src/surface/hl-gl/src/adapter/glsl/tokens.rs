@@ -174,29 +174,64 @@ impl<'a> Declarations<'a> {
         let structs = self.struct_members();
         let mut flattened = Vec::new();
         for declaration in self.raw_uniforms() {
-            let Some(members) = structs.get(&declaration.ty) else {
-                flattened.push(declaration);
-                continue;
-            };
-            // Arrays of structures, nested structures, and structures containing opaque samplers need a
-            // richer location/storage model than one leaf declaration. Keep those aggregate so the link
-            // gate rejects them honestly instead of manufacturing a layout. The ordinary one-level data
-            // structures exercised by GLES2/3 uniform reflection are flattened exactly.
-            let modelable = declaration.arr == 0
-                && members
-                    .iter()
-                    .all(|member| TypeToken(&member.ty).layout().is_some() && !member.is_sampler());
-            if !modelable {
+            if !structs.contains_key(&declaration.ty) {
                 flattened.push(declaration);
                 continue;
             }
-            flattened.extend(members.iter().cloned().map(|mut member| {
-                member.name = format!("{}.{}", declaration.name, member.name);
-                member
-            }));
+            let mut leaves = Vec::new();
+            if !flatten_aggregate(
+                &declaration,
+                &declaration.name,
+                &structs,
+                &mut Vec::new(),
+                &mut leaves,
+            ) {
+                flattened.push(declaration);
+                continue;
+            }
+            flattened.extend(leaves);
         }
         split_uniforms(flattened)
     }
+}
+
+fn flatten_aggregate(
+    declaration: &Decl,
+    name: &str,
+    structs: &std::collections::HashMap<String, Vec<Decl>>,
+    stack: &mut Vec<String>,
+    out: &mut Vec<Decl>,
+) -> bool {
+    let Some(members) = structs.get(&declaration.ty) else {
+        if TypeToken(&declaration.ty).layout().is_none() || declaration.is_sampler() {
+            return false;
+        }
+        let mut leaf = declaration.clone();
+        leaf.name = name.to_string();
+        out.push(leaf);
+        return true;
+    };
+    if stack.contains(&declaration.ty) || !declaration.array_literal {
+        return false;
+    }
+    stack.push(declaration.ty.clone());
+    let elements = declaration.arr.max(1);
+    for element in 0..elements {
+        let aggregate_name = if declaration.arr > 0 {
+            format!("{name}[{element}]")
+        } else {
+            name.to_string()
+        };
+        for member in members {
+            let member_name = format!("{aggregate_name}.{}", member.name);
+            if !flatten_aggregate(member, &member_name, structs, stack, out) {
+                stack.pop();
+                return false;
+            }
+        }
+    }
+    stack.pop();
+    true
 }
 
 fn split_uniforms(all: Vec<Decl>) -> (Vec<Decl>, Vec<Decl>) {

@@ -40,7 +40,7 @@ impl StageSources<'_> {
         let mut out = Vec::new();
         let mut aggregate: Option<&str> = None;
         for d in &unis {
-            let group = d.name.split_once('.').map(|(name, _)| name);
+            let group = d.name.rsplit_once('.').map(|(name, _)| name);
             if group != aggregate {
                 if aggregate.is_some() || group.is_some() {
                     // A std140 structure's base alignment and occupied size are both rounded to vec4.
@@ -233,6 +233,15 @@ fn sampler_elements(declarations: &[Decl]) -> Result<usize, UniformError> {
             .checked_add(declaration.arr.max(1) as usize)
             .ok_or(UniformError::ArithmeticOverflow)
     })
+}
+
+/// std140 stride between elements of a basic-type default-block array.
+pub fn std140_array_stride(ty: &str) -> i32 {
+    TypeToken(ty)
+        .layout()
+        .and_then(|(size, _, _)| size.checked_add(15))
+        .map(|size| (size & !15) as i32)
+        .unwrap_or(0)
 }
 
 /// One declared uniform BLOCK: its declared NAME, its `layout(binding = N)` point, and its ordered member

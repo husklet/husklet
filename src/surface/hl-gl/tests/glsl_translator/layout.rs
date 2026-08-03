@@ -92,15 +92,53 @@ fn struct_uniform_reflects_leaf_names_and_std140_offsets() {
 }
 
 #[test]
-fn array_of_struct_is_not_misreported_as_one_primitive_array() {
-    let fs = "#version 300 es\nstruct structType { int member; };\n\
-              uniform structType u_var[2];\nout vec4 color;\n\
-              void main(){ color = vec4(float(u_var[1].member)); }\n";
+fn array_of_struct_reflects_each_element_member_and_stride() {
+    let fs = "#version 300 es\nstruct structType { int m0; ivec4 m1; };\n\
+              uniform structType u_var[3];\nout vec4 color;\n\
+              void main(){ color = vec4(float(u_var[1].m0)) + vec4(u_var[2].m1); }\n";
+    let (uniforms, total) = glsl::StageSources::new("void main(){}", fs)
+        .uniform_layout()
+        .expect("an array of legal data structures must link");
 
     assert_eq!(
-        glsl::StageSources::new("void main(){}", fs).uniform_layout(),
-        Err(glsl::UniformError::UnsupportedType("structType".into()))
+        uniforms
+            .iter()
+            .map(|uniform| (uniform.name.as_str(), uniform.arr, uniform.off, uniform.sz))
+            .collect::<Vec<_>>(),
+        [
+            ("u_var[0].m0", 0, 0, 4),
+            ("u_var[0].m1", 0, 16, 16),
+            ("u_var[1].m0", 0, 32, 4),
+            ("u_var[1].m1", 0, 48, 16),
+            ("u_var[2].m0", 0, 64, 4),
+            ("u_var[2].m1", 0, 80, 16),
+        ]
     );
+    assert_eq!(total, 96);
+}
+
+#[test]
+fn nested_structures_align_each_aggregate_and_preserve_leaf_arrays() {
+    let fs = "#version 300 es\nstruct Inner { int scalar; };\n\
+              struct Outer { int before; Inner inner; int values[2]; };\n\
+              uniform Outer u_var;\nout vec4 color;\n\
+              void main(){ color = vec4(float(u_var.before + u_var.inner.scalar + u_var.values[1])); }\n";
+    let (uniforms, total) = glsl::StageSources::new("void main(){}", fs)
+        .uniform_layout()
+        .expect("nested legal data structures must link");
+
+    assert_eq!(
+        uniforms
+            .iter()
+            .map(|uniform| (uniform.name.as_str(), uniform.arr, uniform.off, uniform.sz))
+            .collect::<Vec<_>>(),
+        [
+            ("u_var.before", 0, 0, 4),
+            ("u_var.inner.scalar", 0, 16, 4),
+            ("u_var.values", 2, 32, 32),
+        ]
+    );
+    assert_eq!(total, 64);
 }
 
 #[test]
