@@ -1,10 +1,52 @@
 use super::*;
-use hl_gpu::GpuError;
+use hl_gpu::{CommandSink, GpuError, TimelineWait};
 
 struct QueueSubmission {
     command_buffers: Vec<VkCbHandle>,
     waits: Vec<(u64, u64)>,
     signals: Vec<(u64, u64)>,
+}
+
+fn resolve_external_waits(submissions: &[QueueSubmission]) -> VkResult {
+    for submission in submissions {
+        for &(semaphore, value) in &submission.waits {
+            loop {
+                let snapshot = StateStore::with(|state| {
+                    let record = state.device_ref()?.semaphores.get(&semaphore)?;
+                    let export = record.shared?;
+                    (record.counter < value).then(|| {
+                        (export, record.generation, state.sink.observer())
+                    })
+                });
+                let Some((export, generation, mut observer)) = snapshot else {
+                    break;
+                };
+                match observer.wait_sync(export, value, u64::MAX) {
+                    Ok(TimelineWait::Reached) => {}
+                    Ok(TimelineWait::Timeout) => return VK_TIMEOUT,
+                    Err(error) => return Status::from_error(&error),
+                }
+                let committed = StateStore::with(|state| {
+                    let Some(record) = state
+                        .device_mut()
+                        .and_then(|device| device.semaphores.get_mut(&semaphore))
+                    else {
+                        return false;
+                    };
+                    if record.shared == Some(export) && record.generation == generation {
+                        record.counter = record.counter.max(value);
+                        true
+                    } else {
+                        false
+                    }
+                });
+                if committed {
+                    break;
+                }
+            }
+        }
+    }
+    VK_SUCCESS
 }
 
 fn execute_submissions(
@@ -26,14 +68,15 @@ fn execute_submissions(
             return Status::from_error(&error);
         }
         let signal_fence = (index + 1 == submissions.len()).then_some(fence).flatten();
-        let submit_result = submit_service::queue_submit(
+        let submit_result = submit_service::queue_submit_outcome(
             dev,
             sink,
             &submission.command_buffers,
             signal_fence,
         );
-        if let Err(error) = submit_result {
-            let definitely_not_committed = match &error {
+        if let Err(outcome) = submit_result {
+            let error = outcome.error();
+            let definitely_not_committed = !outcome.committed() && match error {
                 GpuError::Transport(transport) => {
                     transport.refusal() || transport.retryable_before_request()
                 }
@@ -42,7 +85,7 @@ fn execute_submissions(
             if definitely_not_committed {
                 dev.semaphores = semaphore_snapshot;
             }
-            return Status::from_error(&error);
+            return Status::from_error(error);
         }
         if let Err(error) = dev.signal_queue_semaphores(sink, &submission.signals) {
             return Status::from_error(&error);
@@ -123,6 +166,10 @@ pub extern "C" fn vkQueueSubmit(
     }
     let signal = if fence != 0 { Some(fence) } else { None };
     let cb_count: usize = lowered.iter().map(|submission| submission.command_buffers.len()).sum();
+    let wait_status = resolve_external_waits(&lowered);
+    if wait_status != VK_SUCCESS {
+        return wait_status;
+    }
     let r = ShimState::with_sink(|dev, sink| execute_submissions(dev, sink, &lowered, signal))
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED);
     // Error: a refused submit means the recorded work never ran. Latched by result code — submit runs
@@ -213,6 +260,10 @@ pub extern "C" fn vkQueueSubmit2(
         });
     }
     let signal = if fence != 0 { Some(fence) } else { None };
+    let wait_status = resolve_external_waits(&lowered);
+    if wait_status != VK_SUCCESS {
+        return wait_status;
+    }
     ShimState::with_sink(|dev, sink| execute_submissions(dev, sink, &lowered, signal))
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
