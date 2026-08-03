@@ -43,6 +43,7 @@ fn replace_sampler_reference(source: &mut String, from: &str, to: &str) {
             }
         }
     }
+    let statement_end = |start: usize| sampler_shadow_statement_end(&tokens, start);
     let shadows = tokens
         .iter()
         .enumerate()
@@ -51,7 +52,7 @@ fn replace_sampler_reference(source: &mut String, from: &str, to: &str) {
                 return None;
             }
             let previous = &tokens[index - 1].text;
-            if previous == "." || !previous.bytes().all(Tokens::is_word) {
+            if previous == "." || !sampler_shadow_declaration(&tokens, index) {
                 return None;
             }
             // The reflected top-level uniform declaration is the global itself, not a shadow. It can be
@@ -64,8 +65,15 @@ fn replace_sampler_reference(source: &mut String, from: &str, to: &str) {
             {
                 return None;
             }
-            let end = enclosing[index]
-                .and_then(|open| closes.get(&open).copied())
+            let for_end = (0..index).rev().find_map(|at| {
+                (tokens[at].text == "for" && tokens.get(at + 1)?.text == "(")
+                    .then(|| matching_lexeme(&tokens, at + 1, "(", ")"))
+                    .flatten()
+                    .filter(|close| index < *close)
+                    .and_then(|close| statement_end(close + 1))
+            });
+            let end = for_end
+                .or_else(|| enclosing[index].and_then(|open| closes.get(&open).copied()))
                 .or_else(|| {
                     tokens[index + 1..]
                         .iter()
@@ -95,6 +103,69 @@ fn replace_sampler_reference(source: &mut String, from: &str, to: &str) {
     for (start, end) in edits.into_iter().rev() {
         source.replace_range(start..end, to);
     }
+}
+
+fn sampler_shadow_declaration(tokens: &[Lexeme], name: usize) -> bool {
+    let previous = &tokens[name - 1].text;
+    if previous.bytes().all(Tokens::is_word) {
+        return true;
+    }
+    if previous != "," {
+        return false;
+    }
+
+    // A comma continues a declaration only when the surrounding statement began with a type and a first
+    // declarator. Ignore commas nested in calls, constructors and array subscripts while walking back.
+    let mut depth = 0usize;
+    let start = (0..name - 1)
+        .rev()
+        .find_map(|at| match tokens[at].text.as_str() {
+            ")" | "]" => {
+                depth += 1;
+                None
+            }
+            "(" | "[" if depth != 0 => {
+                depth -= 1;
+                None
+            }
+            ";" | "{" | "}" if depth == 0 => Some(at + 1),
+            _ => None,
+        })
+        .unwrap_or(0);
+    let words = tokens[start..name - 1]
+        .iter()
+        .filter(|token| token.text.bytes().all(Tokens::is_word))
+        .collect::<Vec<_>>();
+    words.len() >= 2
+        && !matches!(
+            words[0].text.as_str(),
+            "return" | "if" | "while" | "switch" | "case" | "discard"
+        )
+}
+
+fn sampler_shadow_statement_end(tokens: &[Lexeme], start: usize) -> Option<usize> {
+    let first = tokens.get(start)?;
+    if first.text == "{" {
+        return matching_lexeme(tokens, start, "{", "}");
+    }
+    if matches!(first.text.as_str(), "for" | "while" | "switch")
+        && tokens.get(start + 1)?.text == "("
+    {
+        let condition = matching_lexeme(tokens, start + 1, "(", ")")?;
+        return sampler_shadow_statement_end(tokens, condition + 1);
+    }
+    if first.text == "if" && tokens.get(start + 1)?.text == "(" {
+        let condition = matching_lexeme(tokens, start + 1, "(", ")")?;
+        let then_end = sampler_shadow_statement_end(tokens, condition + 1)?;
+        if tokens.get(then_end + 1).is_some_and(|token| token.text == "else") {
+            return sampler_shadow_statement_end(tokens, then_end + 2);
+        }
+        return Some(then_end);
+    }
+    tokens[start..]
+        .iter()
+        .position(|token| token.text == ";")
+        .map(|relative| start + relative)
 }
 
 #[derive(Clone)]

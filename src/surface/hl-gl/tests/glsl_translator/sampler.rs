@@ -100,6 +100,61 @@ fn sampler_name_does_not_capture_local_parameter_or_struct_member() {
 }
 
 #[test]
+fn comma_declarator_shadows_sampler_only_in_its_nested_scope() {
+    let fs = "uniform sampler2D g;\n\
+              void main(){ vec4 color = texture2D(g, vec2(0.0)); \
+              { float other = 0.0, g = 1.0; color += vec4(g + other); } \
+              color += texture2D(g, vec2(0.5)); gl_FragColor = color; }";
+    let (_, translated) =
+        glsl::StageSources::new("void main(){gl_Position=vec4(0.0);}", fs).translate_render();
+
+    assert!(translated.contains("float other = 0.0, g = 1.0"), "{translated}");
+    assert!(translated.contains("vec4(g + other)"), "{translated}");
+    assert_eq!(
+        translated.matches("sampler2D(g_hltex, g_hlsmp)").count(),
+        2,
+        "{translated}"
+    );
+    assert_naga_parses(&translated, naga::ShaderStage::Fragment);
+}
+
+#[test]
+fn for_initializer_shadow_ends_after_braced_loop() {
+    let fs = "uniform sampler2D g;\n\
+              void main(){ vec4 color = texture2D(g, vec2(0.0)); \
+              for (int g = 0; g < 1; ++g) { color += vec4(float(g)); } \
+              color += texture2D(g, vec2(0.5)); gl_FragColor = color; }";
+    let (_, translated) =
+        glsl::StageSources::new("void main(){gl_Position=vec4(0.0);}", fs).translate_render();
+
+    assert!(translated.contains("for (int g = 0; g < 1; ++g)"), "{translated}");
+    assert_eq!(
+        translated.matches("sampler2D(g_hltex, g_hlsmp)").count(),
+        2,
+        "{translated}"
+    );
+    assert_naga_parses(&translated, naga::ShaderStage::Fragment);
+}
+
+#[test]
+fn for_initializer_shadow_ends_after_unbraced_loop() {
+    let fs = "uniform sampler2D g;\n\
+              void main(){ vec4 color = texture2D(g, vec2(0.0)); \
+              for (int g = 0; g < 1; ++g) color += vec4(float(g)); \
+              color += texture2D(g, vec2(0.5)); gl_FragColor = color; }";
+    let (_, translated) =
+        glsl::StageSources::new("void main(){gl_Position=vec4(0.0);}", fs).translate_render();
+
+    assert!(translated.contains("for (int g = 0; g < 1; ++g)"), "{translated}");
+    assert_eq!(
+        translated.matches("sampler2D(g_hltex, g_hlsmp)").count(),
+        2,
+        "{translated}"
+    );
+    assert_naga_parses(&translated, naga::ShaderStage::Fragment);
+}
+
+#[test]
 fn sampler_array_name_does_not_capture_member_array() {
     let fs = "uniform sampler2D g[2];\n\
               struct Value { vec2 g[2]; };\n\
