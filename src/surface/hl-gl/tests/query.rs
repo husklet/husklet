@@ -462,7 +462,7 @@ fn attrib_location_honors_pre_link_name_binding() {
 }
 
 #[test]
-fn conflicting_attribute_bindings_fail_link() {
+fn aliased_attribute_bindings_keep_public_location_and_get_distinct_host_locations() {
     let mut c = ctx_800x600();
     let vs = record::create_shader(&mut c, GL_VERTEX_SHADER);
     record::shader_source(&mut c, vs, VS);
@@ -476,6 +476,90 @@ fn conflicting_attribute_bindings_fail_link() {
     record::bind_attrib(&mut c, prog, 2, "aPos");
     record::bind_attrib(&mut c, prog, 2, "aColor");
 
+    assert!(record::link_program(&mut c, prog));
+    assert_eq!(query::attrib_location(&c, prog, "aPos"), 2);
+    assert_eq!(query::attrib_location(&c, prog, "aColor"), 2);
+    let program = c.programs.program(prog).unwrap();
+    assert_ne!(
+        program.attrib_host_locations["aPos"],
+        program.attrib_host_locations["aColor"]
+    );
+    let mut hosts = program.host_attr_locations(2);
+    hosts.sort_unstable();
+    hosts.dedup();
+    assert_eq!(hosts.len(), 2);
+}
+
+#[test]
+fn inactive_aliased_attribute_is_legal_and_still_has_an_internal_slot() {
+    let mut c = ctx_800x600();
+    let vs = record::create_shader(&mut c, GL_VERTEX_SHADER);
+    record::shader_source(
+        &mut c,
+        vs,
+        "attribute vec4 live; attribute vec4 inactive; void main(){ vec4 p=live; if(0 != 0) p += inactive; gl_Position=p; }",
+    );
+    record::compile_shader(&mut c, vs);
+    let fs = record::create_shader(&mut c, GL_FRAGMENT_SHADER);
+    record::shader_source(&mut c, fs, "void main(){gl_FragColor=vec4(1.0);}");
+    record::compile_shader(&mut c, fs);
+    let prog = record::create_program(&mut c);
+    record::attach_shader(&mut c, prog, vs);
+    record::attach_shader(&mut c, prog, fs);
+    record::bind_attrib(&mut c, prog, 15, "live");
+    record::bind_attrib(&mut c, prog, 15, "inactive");
+    assert!(record::link_program(&mut c, prog));
+    assert_eq!(query::attrib_location(&c, prog, "live"), 15);
+    assert_eq!(query::attrib_location(&c, prog, "inactive"), 15);
+}
+
+#[test]
+fn sixteen_public_aliases_fill_but_do_not_exceed_the_host_location_limit() {
+    let mut c = ctx_800x600();
+    let declarations = (0..16)
+        .map(|index| format!("attribute vec4 a{index};"))
+        .collect::<String>();
+    let sum = (0..16)
+        .map(|index| format!("a{index}"))
+        .collect::<Vec<_>>()
+        .join("+");
+    let vs_source = format!("{declarations} void main(){{gl_Position={sum};}}");
+    let vs = record::create_shader(&mut c, GL_VERTEX_SHADER);
+    record::shader_source(&mut c, vs, &vs_source);
+    record::compile_shader(&mut c, vs);
+    let fs = record::create_shader(&mut c, GL_FRAGMENT_SHADER);
+    record::shader_source(&mut c, fs, "void main(){gl_FragColor=vec4(1.0);}");
+    record::compile_shader(&mut c, fs);
+    let prog = record::create_program(&mut c);
+    record::attach_shader(&mut c, prog, vs);
+    record::attach_shader(&mut c, prog, fs);
+    for index in 0..16 {
+        record::bind_attrib(&mut c, prog, 15, &format!("a{index}"));
+    }
+    assert!(record::link_program(&mut c, prog));
+    let program = c.programs.program(prog).unwrap();
+    let unique = program
+        .attrib_host_locations
+        .values()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(unique.len(), 16);
+    assert!(unique.iter().all(|location| *location < 16));
+}
+
+#[test]
+fn public_attribute_span_beyond_the_limit_still_fails_link() {
+    let mut c = ctx_800x600();
+    let vs = record::create_shader(&mut c, GL_VERTEX_SHADER);
+    record::shader_source(&mut c, vs, "attribute mat2 a; void main(){gl_Position=vec4(a[0], a[1]);}");
+    record::compile_shader(&mut c, vs);
+    let fs = record::create_shader(&mut c, GL_FRAGMENT_SHADER);
+    record::shader_source(&mut c, fs, "void main(){gl_FragColor=vec4(1.0);}");
+    record::compile_shader(&mut c, fs);
+    let prog = record::create_program(&mut c);
+    record::attach_shader(&mut c, prog, vs);
+    record::attach_shader(&mut c, prog, fs);
+    record::bind_attrib(&mut c, prog, 15, "a");
     assert!(!record::link_program(&mut c, prog));
     assert!(query::program_info_log(&c, prog).contains("attribute"));
 }

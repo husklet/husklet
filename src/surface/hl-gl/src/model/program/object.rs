@@ -32,6 +32,9 @@ pub struct Program {
     pub attrib_bindings: BTreeMap<String, u32>,
     /// Active attribute name → location produced by the most recent successful link.
     pub attrib_locations: BTreeMap<String, u32>,
+    /// Active attribute name → collision-free location used only by the translated host shader.
+    /// Multiple names may share one public GL location; each still needs a distinct WebGPU input.
+    pub attrib_host_locations: BTreeMap<String, u32>,
     /// The captured compute GLSL-ES source (for a compute program), translated to `compute_ir` at link.
     pub cs_src: String,
     /// The forwarded compute GLSL `Glsl` shader payload — lowered to a `CreateShader` +

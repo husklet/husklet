@@ -10,6 +10,26 @@ pub enum UniformLocation {
 }
 
 impl Program {
+    /// Host shader locations fed by one public GL attribute location.
+    pub fn host_attr_locations(&self, public: usize) -> Vec<u32> {
+        let declarations = crate::adapter::glsl::Source::new(&self.vs_src).vertex_attrs();
+        self.attrib_locations
+            .iter()
+            .filter_map(|(name, location)| {
+                let declaration = declarations
+                    .iter()
+                    .find(|declaration| declaration.name == *name)?;
+                let offset = public.checked_sub(*location as usize)?;
+                (offset < declaration.location_span() as usize).then(|| {
+                    self.attrib_host_locations
+                        .get(name)
+                        .copied()
+                        .map(|host| host + offset as u32)
+                })?
+            })
+            .collect()
+    }
+
     /// Component count of the active vertex input at `location`.
     pub fn vertex_attr_components(&self, location: usize) -> Option<i32> {
         // A matrix or array attribute occupies one location PER COLUMN / PER ELEMENT, and each of those is

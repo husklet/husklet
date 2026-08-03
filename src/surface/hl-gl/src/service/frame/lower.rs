@@ -342,11 +342,13 @@ pub(super) fn lower_draw_n(
                     };
                     (Pipeline::decl_format(t), 0)
                 };
-            attrs.push(VertexAttr {
-                location: l as u32,
-                format: fmt,
-                offset: off,
-            });
+            for location in prog.host_attr_locations(l) {
+                attrs.push(VertexAttr {
+                    location,
+                    format: fmt,
+                    offset: off,
+                });
+            }
         }
         let stride = if sl < nslot { slot_stride[sl] } else { 16 };
         // A vertex-buffer slot steps per-instance (step_mode 1) when any attribute it feeds carries a
@@ -366,11 +368,15 @@ pub(super) fn lower_draw_n(
         vbs.push(VertexLayout {
             stride: cs.stride,
             step_mode: cs.step_mode,
-            attrs: vec![VertexAttr {
-                location: cs.location,
-                format: cs.format,
-                offset: 0,
-            }],
+            attrs: prog
+                .host_attr_locations(cs.location as usize)
+                .into_iter()
+                .map(|location| VertexAttr {
+                    location,
+                    format: cs.format,
+                    offset: 0,
+                })
+                .collect(),
         });
     }
     // Fixed-function state → the pipeline's blend / depth / cull descriptor (the values a real app set via

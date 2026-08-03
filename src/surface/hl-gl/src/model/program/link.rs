@@ -178,11 +178,57 @@ impl Program {
         attribute_bindings.retain(|name, _| active_attributes.contains(name));
         // A shader's explicit location overrides a pre-link API binding.
         attribute_bindings.extend(glsl::Source::new(&vs_src).vertex_locations());
-        let mut occupied = std::collections::BTreeMap::new();
+        let declarations = glsl::Source::new(&vs_src).vertex_attrs();
         for (name, &location) in &attribute_bindings {
-            if location as usize >= super::MAX_ATTR || occupied.insert(location, name).is_some() {
+            let span = declarations
+                .iter()
+                .find(|declaration| declaration.name == *name)
+                .map_or(1, |declaration| declaration.location_span());
+            if location as usize >= super::MAX_ATTR
+                || location.saturating_add(span) as usize > super::MAX_ATTR
+            {
                 return Err(glsl::UniformError::AttributeLocation(name.clone()));
             }
+        }
+        let public_attributes = if verbatim {
+            // Verbatim preparation performs the same span-aware allocation for unbound names.
+            let combined = glsl::StageSources::new(&vs_src, &fs_src).storage_uniform_decls();
+            let (vertex, _) = glsl::prepare_verbatim_program_with(
+                &vs_src,
+                &fs_src,
+                &combined,
+                &attribute_bindings,
+            );
+            glsl::Source::new(&vertex).vertex_locations()
+        } else {
+            let (vertex, _) = glsl::StageSources::new(&vs_src, &fs_src)
+                .translate_render_with(&attribute_bindings);
+            glsl::Source::new(&vertex).vertex_locations()
+        };
+        // GL permits names to alias one public attribute location. WebGPU does not permit duplicate
+        // shader locations, so give every declaration a collision-free host-only range. Draw lowering
+        // duplicates the public GL array into each host range that consumes it.
+        let mut host_bindings = std::collections::BTreeMap::new();
+        let mut host_occupied = [false; super::MAX_ATTR];
+        for declaration in &declarations {
+            let Some(&public) = public_attributes.get(&declaration.name) else {
+                continue;
+            };
+            let span = declaration.location_span() as usize;
+            let preferred = public as usize;
+            let host = (0..=super::MAX_ATTR.saturating_sub(span))
+                .find(|&base| {
+                    let preferred_free = base == preferred
+                        && host_occupied[base..base + span].iter().all(|used| !used);
+                    preferred_free
+                })
+                .or_else(|| {
+                    (0..=super::MAX_ATTR.saturating_sub(span))
+                        .find(|&base| host_occupied[base..base + span].iter().all(|used| !used))
+                })
+                .ok_or_else(|| glsl::UniformError::AttributeLocation(declaration.name.clone()))?;
+            host_occupied[host..host + span].fill(true);
+            host_bindings.insert(declaration.name.clone(), host as u32);
         }
         if !attribute_bindings.is_empty() {
             let sample = attribute_bindings.iter().take(8).collect::<Vec<_>>();
@@ -210,9 +256,9 @@ impl Program {
             // vertex `out` to the fragment `in` varying). GskGpu's `IN()`/`PASS()` macro varyings already
             // carry a location, so its stages stay byte-identical.
             let combined = glsl::StageSources::new(&vs_src, &fs_src).storage_uniform_decls();
-            glsl::prepare_verbatim_program_with(&vs_src, &fs_src, &combined, &attribute_bindings)
+            glsl::prepare_verbatim_program_with(&vs_src, &fs_src, &combined, &host_bindings)
         } else {
-            glsl::StageSources::new(&vs_src, &fs_src).translate_render_with(&attribute_bindings)
+            glsl::StageSources::new(&vs_src, &fs_src).translate_render_with(&host_bindings)
         };
         if verbatim {
             vs_glsl = glsl::Source::new(&vs_glsl).expand_sampler_arrays();
@@ -247,7 +293,8 @@ impl Program {
             &self.samp_names,
             &self.samp_bindings,
         );
-        self.attrib_locations = glsl::Source::new(&vs_glsl).vertex_locations();
+        self.attrib_locations = public_attributes;
+        self.attrib_host_locations = host_bindings;
         self.vs_ir = Some(
             GlslDescriptor {
                 stage: glsl_stage::VERTEX,
