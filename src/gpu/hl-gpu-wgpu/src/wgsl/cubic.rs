@@ -59,7 +59,7 @@ pub(super) fn rewrite(mut source: String, layouts: &[crate::reflect::SamplerMeta
             let Some(layout) = layouts.iter().find(|layout| layout.group == group) else { at=end+1; continue };
             let Some(slot) = layout.samplers.iter().find(|slot| slot.binding == binding) else { at=end+1; continue };
             let ordinal = index.map_or(format!("{}u", slot.base_ordinal), |i| format!("({}u+u32({i}))", slot.base_ordinal));
-            let meta = (0..8).map(|word| format!("_hl_sampler_metadata_g{group}[{ordinal}*8u+{word}u]")).collect::<Vec<_>>().join(", ");
+            let meta = (0..8).map(|word| format!("_hl_sampler_metadata_g{group}_[{ordinal}*8u+{word}u]")).collect::<Vec<_>>().join(", ");
             let original = args[..argc].join(", ");
             source.replace_range(start..=end, &format!("{helper}({original}, {meta})"));
             at = start + helper.len();
@@ -71,7 +71,7 @@ pub(super) fn rewrite(mut source: String, layouts: &[crate::reflect::SamplerMeta
 fn sampler(value: &str) -> Option<(u32,u32,Option<&str>)> {
     let value=value.trim(); let tail=value.strip_prefix("_hl_sampler_g")?;
     let (g,tail)=tail.split_once("_b")?; let digits=tail.find(|c:char| !c.is_ascii_digit()).unwrap_or(tail.len());
-    let suffix=&tail[digits..];
+    let suffix=tail[digits..].strip_prefix('_').unwrap_or(&tail[digits..]);
     let index=if suffix.is_empty(){None}else{Some(suffix.strip_prefix('[')?.strip_suffix(']')?)};
     Some((g.parse().ok()?,tail[..digits].parse().ok()?,index))
 }

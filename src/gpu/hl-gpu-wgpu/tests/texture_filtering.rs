@@ -20,26 +20,20 @@ use hl_gpu::protocol::model::descriptor::{
 use hl_gpu::protocol::model::enums::{
     buffer_usage, texture_usage, AddressMode, Filter, LoadOp, Topology,
 };
-use hl_gpu::protocol::model::kernel::glsl_stage;
 use hl_gpu::{Cmd, CommandBuffer, Enc, ShaderPayloadKind};
 use hl_gpu_wgpu::{DeviceConfig, WgpuExecutor};
 
 const A: [u8; 4] = [200, 60, 40, 255]; // left texel
 const B: [u8; 4] = [40, 80, 220, 255]; // right texel
 
-const VS: &str = r#"#version 460
-void main() {
-    vec2 p[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
-    gl_Position = vec4(p[gl_VertexIndex], 0.0, 1.0);
+const VS_WGSL: &str = r#"@vertex fn vmain(@builtin(vertex_index) i:u32)->@builtin(position) vec4<f32>{let p=array<vec2<f32>,3>(vec2(-1.,-1.),vec2(3.,-1.),vec2(-1.,3.));return vec4(p[i],0.,1.);}"#;
+const FS_WGSL: &str = r#"struct U{uv:vec2<f32>}; @group(0) @binding(0) var<uniform> u:U; @group(0) @binding(1) var t:texture_2d<f32>; @group(0) @binding(2) var s:sampler; @fragment fn fmain()->@location(0) vec4<f32>{return textureSample(t,s,u.uv);}"#;
+
+fn wgsl_to_spirv(src:&str)->Vec<u32>{
+    let module=naga::front::wgsl::parse_str(src).unwrap();
+    let info=naga::valid::Validator::new(naga::valid::ValidationFlags::all(),naga::valid::Capabilities::all()).validate(&module).unwrap();
+    naga::back::spv::write_vec(&module,&info,&naga::back::spv::Options::default(),None).unwrap()
 }
-"#;
-const FS: &str = r#"#version 460
-layout(std140, set = 0, binding = 0) uniform U { vec2 uv; } u;
-layout(set = 0, binding = 1) uniform texture2D t;
-layout(set = 0, binding = 2) uniform sampler   s;
-layout(location = 0) out vec4 o;
-void main() { o = texture(sampler2D(t, s), u.uv); }
-"#;
 
 fn sampler(f: Filter) -> SamplerDesc {
     SamplerDesc {
@@ -100,13 +94,13 @@ fn tap(exec: &mut WgpuExecutor, filter: Filter, u: f32) -> [u8; 4] {
             },
             Cmd::CreateShader {
                 id: 1,
-                kind: ShaderPayloadKind::Glsl,
-                spirv: glsl(glsl_stage::VERTEX, "vmain", VS),
+                kind: ShaderPayloadKind::SpirV,
+                spirv: wgsl_to_spirv(VS_WGSL),
             },
             Cmd::CreateShader {
                 id: 2,
-                kind: ShaderPayloadKind::Glsl,
-                spirv: glsl(glsl_stage::FRAGMENT, "fmain", FS),
+                kind: ShaderPayloadKind::SpirV,
+                spirv: wgsl_to_spirv(FS_WGSL),
             },
             Cmd::CreateSampler(1, sampler(filter)),
             Cmd::CreateRenderPipeline(
@@ -202,6 +196,7 @@ fn nearest_taps_exact_texels_and_linear_interpolates_midpoint() {
     let near_left = tap(&mut exec, Filter::Nearest, 0.25);
     let near_right = tap(&mut exec, Filter::Nearest, 0.75);
     let lin_mid = tap(&mut exec, Filter::Linear, 0.5);
+    let cubic_quarter = tap(&mut exec, Filter::Cubic, 0.375);
 
     let mid = [
         ((A[0] as u16 + B[0] as u16) / 2) as u8,
@@ -227,6 +222,7 @@ fn nearest_taps_exact_texels_and_linear_interpolates_midpoint() {
         near(lin_mid, mid),
         "LINEAR @0.5 must be the exact midpoint {mid:?}, got {lin_mid:?}"
     );
+    assert!(near(cubic_quarter, [168, 64, 77, 255]), "CUBIC Catmull-Rom quarter phase must be [168,64,77,255], got {cubic_quarter:?}");
     // The midpoint must genuinely differ from both taps — proving interpolation, not a rounded nearest tap.
     assert!(
         !near(lin_mid, A) && !near(lin_mid, B),
