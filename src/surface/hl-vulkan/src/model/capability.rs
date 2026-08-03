@@ -92,8 +92,10 @@ pub const DEVICE_EXTENSIONS: &[ExtensionProp] = &[
 pub mod format_feature {
     pub const SAMPLED_IMAGE: u32 = 0x0000_0001;
     pub const STORAGE_IMAGE: u32 = 0x0000_0002;
+    pub const STORAGE_IMAGE_ATOMIC: u32 = 0x0000_0004;
     pub const UNIFORM_TEXEL_BUFFER: u32 = 0x0000_0008;
     pub const STORAGE_TEXEL_BUFFER: u32 = 0x0000_0010;
+    pub const STORAGE_TEXEL_BUFFER_ATOMIC: u32 = 0x0000_0020;
     pub const VERTEX_BUFFER: u32 = 0x0000_0040;
     pub const COLOR_ATTACHMENT: u32 = 0x0000_0080;
     pub const COLOR_ATTACHMENT_BLEND: u32 = 0x0000_0100;
@@ -204,12 +206,13 @@ impl Format {
     fn storage(&self) -> u32 {
         use hl_gpu::protocol::model::enums::TextureFormat as T;
         match self.wire() {
+            Some(T::R32Uint | T::R32Sint) => {
+                format_feature::STORAGE_IMAGE | format_feature::STORAGE_IMAGE_ATOMIC
+            }
             Some(
                 T::Rgba8Unorm
                 | T::Rgba8Uint
                 | T::Rgba8Sint
-                | T::R32Uint
-                | T::R32Sint
                 | T::Rgba16Float
                 | T::R32Float
                 | T::Rgba32Float,
@@ -357,6 +360,15 @@ impl Format {
             )
         ) {
             buffer |= f::UNIFORM_TEXEL_BUFFER | f::STORAGE_TEXEL_BUFFER;
+            if matches!(
+                self.wire(),
+                Some(
+                    hl_gpu::protocol::model::enums::TextureFormat::R32Uint
+                        | hl_gpu::protocol::model::enums::TextureFormat::R32Sint
+                )
+            ) {
+                buffer |= f::STORAGE_TEXEL_BUFFER_ATOMIC;
+            }
         }
         FormatFeatures {
             // LINEAR tiling advertises NOTHING materializable. Vulkan's linear tiling exists so an app can
@@ -603,6 +615,20 @@ mod tests {
                 & format_feature::STORAGE_IMAGE,
             0
         );
+    }
+
+    #[test]
+    fn atomic_storage_is_claimed_only_for_executed_r32_integer_formats() {
+        for format in [vk_format::R32_UINT, vk_format::R32_SINT] {
+            let features = Format(format).features();
+            assert_ne!(features.optimal_tiling & format_feature::STORAGE_IMAGE_ATOMIC, 0);
+            assert_ne!(features.buffer & format_feature::STORAGE_TEXEL_BUFFER_ATOMIC, 0);
+        }
+        for format in [vk_format::R8G8B8A8_UINT, vk_format::R8G8B8A8_SINT] {
+            let features = Format(format).features();
+            assert_eq!(features.optimal_tiling & format_feature::STORAGE_IMAGE_ATOMIC, 0);
+            assert_eq!(features.buffer & format_feature::STORAGE_TEXEL_BUFFER_ATOMIC, 0);
+        }
     }
 
     /// Block-compressed texels are produced by an offline encoder, not by a render pass or a blit
