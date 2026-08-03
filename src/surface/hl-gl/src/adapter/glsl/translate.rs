@@ -680,7 +680,20 @@ impl Declarations<'_> {
     }
 
     fn rewrite_data_refs(body: &mut String, uniforms: &[Uni]) {
+        Self::rewrite_data_refs_except(body, uniforms, &[]);
+    }
+
+    fn rewrite_data_refs_except(body: &mut String, uniforms: &[Uni], aggregate_roots: &[&str]) {
         for uniform in uniforms.iter().rev() {
+            if aggregate_roots.iter().any(|root| {
+                uniform.name == *root
+                    || uniform
+                        .name
+                        .strip_prefix(root)
+                        .is_some_and(|tail| tail.starts_with('.') || tail.starts_with('['))
+            }) {
+                continue;
+            }
             let replacement = Self::storage_name(&uniform.name);
             if let Some((columns, rows)) =
                 matrix_shape(&uniform.ty).filter(|_| replacement != uniform.name)
@@ -732,6 +745,40 @@ impl Declarations<'_> {
                 wreplace(body, &uniform.name, &replacement);
             }
         }
+    }
+
+    fn emit_data_aggregate_globals(out: &mut String, aggregates: &[DataAggregate]) {
+        for aggregate in aggregates {
+            let declaration = &aggregate.declaration;
+            if declaration.arr > 0 {
+                out.push_str(&format!(
+                    "{} {}[{}];\n",
+                    declaration.ty, declaration.name, declaration.arr
+                ));
+            } else {
+                out.push_str(&format!("{} {};\n", declaration.ty, declaration.name));
+            }
+        }
+    }
+
+    fn data_aggregate_initializers(aggregates: &[DataAggregate], uniforms: &[Uni]) -> String {
+        let mut out = String::new();
+        for aggregate in aggregates {
+            for leaf in &aggregate.leaves {
+                let Some(uniform) = uniforms
+                    .iter()
+                    .find(|uniform| uniform.name == leaf.declaration.name)
+                else {
+                    continue;
+                };
+                for target in leaf.targets() {
+                    let mut value = target.clone();
+                    Self::rewrite_data_refs(&mut value, std::slice::from_ref(uniform));
+                    out.push_str(&format!("{target} = {value};\n"));
+                }
+            }
+        }
+        out
     }
 }
 
@@ -966,16 +1013,23 @@ impl StageSources<'_> {
         let (vs_structs, vs_funcs) = Source::new(&vs).partition_globals();
         let (fs_structs, fs_funcs) = Source::new(&fs).partition_globals();
         let uniform_structs = Declarations::from_stages(&vs, &fs).uniform_structs();
-        let rewrite = |items: &[String], samps: &[Decl]| -> String {
+        let data_uniform_structs = Declarations::from_stages(&vs, &fs).data_uniform_structs();
+        let vs_aggregates = Declarations::from_stages(&vs, "").data_aggregates();
+        let fs_aggregates = Declarations::from_stages(&fs, "").data_aggregates();
+        let rewrite = |items: &[String], samps: &[Decl], aggregates: &[DataAggregate]| -> String {
             let mut out = String::new();
+            let roots = aggregates
+                .iter()
+                .map(|aggregate| aggregate.declaration.name.as_str())
+                .collect::<Vec<_>>();
             for it in items {
                 let mut words = it
                     .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
                     .filter(|word| !word.is_empty());
                 if words.next() == Some("struct")
-                    && words
-                        .next()
-                        .is_some_and(|name| uniform_structs.contains(name))
+                    && words.next().is_some_and(|name| {
+                        uniform_structs.contains(name) && !data_uniform_structs.contains(name)
+                    })
                 {
                     // Opaque aggregate uniforms are lowered to standalone texture/sampler bindings below.
                     // Desktop GLSL/naga does not admit a combined sampler type inside a structure even when
@@ -984,7 +1038,7 @@ impl StageSources<'_> {
                 }
                 let mut t = it.clone();
                 NormalizedSource::new(&mut t).strip_precision();
-                Declarations::rewrite_data_refs(&mut t, &unis);
+                Declarations::rewrite_data_refs_except(&mut t, &unis, &roots);
                 Declarations::rewrite_integer_sampler_fetches(&mut t, samps);
                 Declarations::rewrite_sampler_refs(&mut t, samps);
                 NormalizedSource::new(&mut t).lower_texture_builtins();
@@ -1007,7 +1061,7 @@ impl StageSources<'_> {
             vs_out.push_str(c);
             vs_out.push('\n');
         }
-        vs_out.push_str(&rewrite(&vs_structs, &samps));
+        vs_out.push_str(&rewrite(&vs_structs, &samps, &vs_aggregates));
         // Locations are allocated by SPAN, not by declaration: a matrix occupies one location per column
         // and an array one per element, so numbering them sequentially makes the next declaration overlap
         // the previous one. naga rejects that as `BindingCollision`, and the program then links, draws
@@ -1060,7 +1114,8 @@ impl StageSources<'_> {
         }
         Declarations::emit_uniform_layout(&mut vs_out, &unis);
         Declarations::emit_sampler_decls(&mut vs_out, &samps);
-        vs_out.push_str(&rewrite(&vs_funcs, &samps));
+        Declarations::emit_data_aggregate_globals(&mut vs_out, &vs_aggregates);
+        vs_out.push_str(&rewrite(&vs_funcs, &samps, &vs_aggregates));
         // `Program::link` refuses a stage whose body cannot be found, so this cannot be reached with a
         // real program. Kept honest rather than silent: regenerating an empty body from a shader that HAS
         // one is the wrong-render defect, and it must not come back through a caller that skips the gate.
@@ -1076,11 +1131,16 @@ impl StageSources<'_> {
             replace_identifier(&mut vb, alias, canonical);
         }
         NormalizedSource::new(&mut vb).strip_precision();
-        Declarations::rewrite_data_refs(&mut vb, &unis);
+        let vs_roots = vs_aggregates
+            .iter()
+            .map(|aggregate| aggregate.declaration.name.as_str())
+            .collect::<Vec<_>>();
+        Declarations::rewrite_data_refs_except(&mut vb, &unis, &vs_roots);
         Declarations::rewrite_integer_sampler_fetches(&mut vb, &samps);
         Declarations::rewrite_sampler_refs(&mut vb, &samps);
         NormalizedSource::new(&mut vb).lower_texture_builtins();
-        vs_out.push_str(&format!("void main() {{\n{vb}\n}}\n"));
+        let vs_initializers = Declarations::data_aggregate_initializers(&vs_aggregates, &unis);
+        vs_out.push_str(&format!("void main() {{\n{vs_initializers}{vb}\n}}\n"));
         NormalizedSource::new(&mut vs_out).pin_vertex_lod();
 
         // ---- fragment stage ----
@@ -1093,7 +1153,7 @@ impl StageSources<'_> {
             fs_out.push_str(c);
             fs_out.push('\n');
         }
-        fs_out.push_str(&rewrite(&fs_structs, &samps));
+        fs_out.push_str(&rewrite(&fs_structs, &samps, &fs_aggregates));
         // The SAME span walk as the vertex stage: the two must agree declaration for declaration, or the
         // inter-stage interface stops matching at the first multi-location varying.
         let mut varying_location = 0u32;
@@ -1116,6 +1176,7 @@ impl StageSources<'_> {
         }
         Declarations::emit_uniform_layout(&mut fs_out, &unis);
         Declarations::emit_sampler_decls(&mut fs_out, &samps);
+        Declarations::emit_data_aggregate_globals(&mut fs_out, &fs_aggregates);
         // The fragment output(s). One output (the common case, ES2 `gl_FragColor` or a single ES3 `out`) stays
         // byte-identical: reuse the ES3 `out vec4 NAME;` if declared, else synthesize one and rewrite the ES2
         // `gl_FragColor` builtin onto it (desktop core GLSL has no `gl_FragColor`). TWO+ declared ES3 outputs
@@ -1152,7 +1213,11 @@ impl StageSources<'_> {
             String::new()
         });
         NormalizedSource::new(&mut fb).strip_precision();
-        Declarations::rewrite_data_refs(&mut fb, &unis);
+        let fs_roots = fs_aggregates
+            .iter()
+            .map(|aggregate| aggregate.declaration.name.as_str())
+            .collect::<Vec<_>>();
+        Declarations::rewrite_data_refs_except(&mut fb, &unis, &fs_roots);
         Declarations::rewrite_integer_sampler_fetches(&mut fb, &samps);
         Declarations::rewrite_sampler_refs(&mut fb, &samps);
         NormalizedSource::new(&mut fb).lower_texture_builtins();
@@ -1160,8 +1225,9 @@ impl StageSources<'_> {
             wreplace(&mut fb, "gl_FragColor", &frag_name);
             NormalizedSource::new(&mut fb).lower_single_output_frag_data(&frag_name);
         }
-        fs_out.push_str(&rewrite(&fs_funcs, &samps));
-        fs_out.push_str(&format!("void main() {{\n{fb}\n}}\n"));
+        fs_out.push_str(&rewrite(&fs_funcs, &samps, &fs_aggregates));
+        let fs_initializers = Declarations::data_aggregate_initializers(&fs_aggregates, &unis);
+        fs_out.push_str(&format!("void main() {{\n{fs_initializers}{fb}\n}}\n"));
 
         (vs_out, fs_out)
     }

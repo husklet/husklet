@@ -117,6 +117,32 @@ pub(super) struct Declarations<'a> {
     fragment: &'a str,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct DataAggregate {
+    pub(super) declaration: Decl,
+    pub(super) leaves: Vec<UniformLeaf>,
+}
+
+/// One reflected basic leaf of an aggregate uniform. The declaration retains the GLSL type and fixed array
+/// extent; `targets` expands only that leaf's final array dimension, preserving every enclosing struct/array
+/// segment as part of the path.
+#[derive(Clone, Debug)]
+pub(super) struct UniformLeaf {
+    pub(super) declaration: Decl,
+}
+
+impl UniformLeaf {
+    pub(super) fn targets(&self) -> impl Iterator<Item = String> + '_ {
+        (0..self.declaration.arr.max(1)).map(|element| {
+            if self.declaration.arr > 0 {
+                format!("{}[{element}]", self.declaration.name)
+            } else {
+                self.declaration.name.clone()
+            }
+        })
+    }
+}
+
 impl<'a> Declarations<'a> {
     pub(super) fn from_stages(vertex: &'a str, fragment: &'a str) -> Self {
         Self { vertex, fragment }
@@ -170,6 +196,65 @@ impl<'a> Declarations<'a> {
             .into_iter()
             .filter(|declaration| structs.contains_key(&declaration.ty))
             .map(|declaration| declaration.ty)
+            .collect::<std::collections::HashSet<_>>();
+        loop {
+            let before = used.len();
+            for name in used.clone() {
+                if let Some(members) = structs.get(&name) {
+                    used.extend(
+                        members
+                            .iter()
+                            .filter(|member| structs.contains_key(&member.ty))
+                            .map(|member| member.ty.clone()),
+                    );
+                }
+            }
+            if used.len() == before {
+                return used;
+            }
+        }
+    }
+
+    /// Pure-data aggregate uniforms declared by these stages. Reflection exposes their basic leaves, while
+    /// translated shader code needs the original aggregate shape for runtime indexing and function calls.
+    /// Opaque or mixed aggregates deliberately stay out of this model: splitting sampler and data storage is
+    /// a separate ABI operation. Matrix leaves also keep the existing direct reconstruction because naga
+    /// rejects a matrix member merely appearing in a private structure (`UnsupportedMatrixTypeInStd140`).
+    pub(super) fn data_aggregates(self) -> Vec<DataAggregate> {
+        let structs = self.struct_members();
+        self.raw_uniforms()
+            .into_iter()
+            .filter_map(|declaration| {
+                structs.contains_key(&declaration.ty).then_some(())?;
+                let mut leaves = Vec::new();
+                flatten_aggregate(
+                    &declaration,
+                    &declaration.name,
+                    &structs,
+                    &mut Vec::new(),
+                    &mut leaves,
+                )
+                .then_some(())?;
+                leaves
+                    .iter()
+                    .all(|leaf| !leaf.is_sampler() && matrix_shape(&leaf.ty).is_none())
+                    .then_some(DataAggregate {
+                        declaration,
+                        leaves: leaves
+                            .into_iter()
+                            .map(|declaration| UniformLeaf { declaration })
+                            .collect(),
+                    })
+            })
+            .collect()
+    }
+
+    pub(super) fn data_uniform_structs(self) -> std::collections::HashSet<String> {
+        let structs = self.struct_members();
+        let mut used = self
+            .data_aggregates()
+            .into_iter()
+            .map(|aggregate| aggregate.declaration.ty)
             .collect::<std::collections::HashSet<_>>();
         loop {
             let before = used.len();

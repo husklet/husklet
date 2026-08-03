@@ -84,7 +84,11 @@ fn struct_uniform_reflects_leaf_names_and_std140_offsets() {
     );
 
     let (_, translated) = glsl::StageSources::new("void main(){}", fs).translate_render();
-    assert!(!translated.contains("structType u_var"), "{translated}");
+    assert!(translated.contains("structType u_var"), "{translated}");
+    assert!(
+        translated.contains("u_var.m2[2] = u_var_m2[2]"),
+        "{translated}"
+    );
     assert!(translated.contains("int u_var_m2[3]"), "{translated}");
     assert!(translated.contains("u_var_m3[1]"), "{translated}");
     assert_naga_parses(&translated, naga::ShaderStage::Fragment);
@@ -168,6 +172,17 @@ fn sampler_only_struct_lowers_leaves_to_standalone_bindings() {
         "{translated}"
     );
     assert_naga_parses(&translated, naga::ShaderStage::Fragment);
+}
+
+#[test]
+fn mixed_sampler_data_struct_stays_out_of_the_data_reconstruction_abi() {
+    let fs = "#version 300 es\nstruct Mixed { vec4 tint; sampler2D image; };\n\
+              uniform Mixed u_var;\nout vec4 color;\n\
+              void main(){ color = u_var.tint + texture(u_var.image, vec2(0.5)); }\n";
+    assert_eq!(
+        glsl::StageSources::new("void main(){}", fs).uniform_layout(),
+        Err(glsl::UniformError::UnsupportedType("Mixed".into()))
+    );
 }
 
 #[test]
