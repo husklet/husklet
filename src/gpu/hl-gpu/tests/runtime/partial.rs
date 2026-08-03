@@ -26,6 +26,7 @@ impl GpuExecutor for PartialExecutor {
                         batch,
                         vec![0],
                         Vec::new(),
+                        Vec::new(),
                     ));
                 }
                 Cmd::Submit(_) => {
@@ -85,7 +86,14 @@ struct RefuseAll(Capabilities);
 impl GpuExecutor for RefuseAll {
     fn capabilities(&self) -> Capabilities { self.0.clone() }
     fn execute(&mut self, _: &mut SessionResources, batch: &[Cmd]) -> Result<hl_gpu::Execution> {
-        Ok(hl_gpu::Execution::partial(Vec::new(), GpuError::Invalid("refused"), batch, Vec::new(), Vec::new()))
+        Ok(hl_gpu::Execution::partial(
+            Vec::new(),
+            GpuError::Invalid("refused"),
+            batch,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ))
     }
     fn wait(&mut self, _: &mut SessionResources, _: FenceId, _: u64) -> Result<()> { Ok(()) }
     fn export_buffer(&self, resources: &SessionResources, id: hl_gpu::BufferId) -> Result<(hl_gpu::runtime::model::sharing::Shared, u64)> {
@@ -120,7 +128,7 @@ fn successful_presentation_survives_a_later_refusal() {
                 surface: SurfaceId(1), texture: TextureId(2),
                 token: hl_gpu::SurfaceToken::new(3).unwrap(),
                 serial: hl_gpu::FrameSerial::new(4).unwrap(),
-            }], GpuError::Invalid("later refusal"), batch, vec![0], Vec::new()))
+            }], GpuError::Invalid("later refusal"), batch, vec![0], Vec::new(), Vec::new()))
         }
         fn wait(&mut self, _: &mut SessionResources, _: FenceId, _: u64) -> Result<()> { Ok(()) }
     }
@@ -134,13 +142,20 @@ fn successful_presentation_survives_a_later_refusal() {
 }
 
 #[test]
-fn partial_delta_carries_only_the_fence_signal_that_was_scheduled() {
+fn accepted_submit_before_later_refusal_remains_replayable() {
     struct FencePartial(Capabilities);
     impl GpuExecutor for FencePartial {
         fn capabilities(&self) -> Capabilities { self.0.clone() }
         fn execute(&mut self, resources: &mut SessionResources, batch: &[Cmd]) -> Result<hl_gpu::Execution> {
             resources.fences.insert(5, Box::new(()))?;
-            Ok(hl_gpu::Execution::partial(Vec::new(), GpuError::Invalid("later refusal"), batch, vec![0, 1], vec![(5, 9)]))
+            Ok(hl_gpu::Execution::partial(
+                Vec::new(),
+                GpuError::Invalid("later refusal"),
+                batch,
+                vec![0, 1],
+                Vec::new(),
+                vec![(5, 9)],
+            ))
         }
         fn wait(&mut self, _: &mut SessionResources, _: FenceId, _: u64) -> Result<()> { Ok(()) }
     }
@@ -153,9 +168,9 @@ fn partial_delta_carries_only_the_fence_signal_that_was_scheduled() {
         Cmd::DestroyFence(5),
     ];
     let outcome = hl_gpu::runtime::submit_outcome(&mut session, &mut executor, 0, &batch).unwrap();
-    assert_eq!(outcome.committed.replay_commands().collect::<Vec<_>>(), [&Cmd::CreateFence(5)]);
+    assert_eq!(outcome.committed.replay_commands().collect::<Vec<_>>(), [&batch[0], &batch[1]]);
     assert_eq!(outcome.committed.fence_signals, [(5, 9)]);
-    assert!(!outcome.committed.replayable);
+    assert!(outcome.committed.replayable);
     assert_eq!(session.timeline.get(5), Some(9));
 }
 
@@ -169,6 +184,7 @@ fn committed_submit_does_not_imply_its_fence_signal_was_scheduled() {
                 Vec::new(),
                 GpuError::UnknownId { kind: "fence", id: 9 },
                 batch,
+                vec![0],
                 vec![0],
                 Vec::new(),
             ))
@@ -244,7 +260,14 @@ impl GpuExecutor for DestroyThenRefuse {
             Cmd::DestroyTexture(id) => { resources.textures.remove(*id)?; }
             _ => panic!("fixture requires a destroy first"),
         }
-        Ok(hl_gpu::Execution::partial(Vec::new(), GpuError::Invalid("replacement refused"), batch, vec![0], Vec::new()))
+        Ok(hl_gpu::Execution::partial(
+            Vec::new(),
+            GpuError::Invalid("replacement refused"),
+            batch,
+            vec![0],
+            Vec::new(),
+            Vec::new(),
+        ))
     }
     fn wait(&mut self, _: &mut SessionResources, _: FenceId, _: u64) -> Result<()> { Ok(()) }
     fn export_buffer(&self, resources: &SessionResources, id: hl_gpu::BufferId) -> Result<(hl_gpu::runtime::model::sharing::Shared, u64)> {

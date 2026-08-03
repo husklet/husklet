@@ -217,6 +217,7 @@ impl WgpuExecutor {
         let mut presents = Vec::new();
         let mut first_refusal = None;
         let mut accepted = Vec::with_capacity(batch.len());
+        let mut partially_lowered_submits = Vec::new();
         let mut scheduled_signals = Vec::new();
         for (index, cmd) in batch.iter().enumerate() {
             let outcome = (|| -> Result<()> {
@@ -390,11 +391,12 @@ impl WgpuExecutor {
                 if error.is_fatal() {
                     return Err(error);
                 }
-                // A partially lowered Submit flushes all successfully encoded work and schedules its
-                // completion fence before returning the refusal. It is therefore committed even though
-                // one inner operation was omitted. Other failed top-level commands made no commitment.
+                // A partially lowered Submit flushes all successfully encoded work but does not schedule
+                // its completion fence. It is committed even though one inner operation was omitted.
+                // Other failed top-level commands made no commitment.
                 if matches!(cmd, Cmd::Submit(_)) {
                     accepted.push(index);
+                    partially_lowered_submits.push(index);
                 }
                 first_refusal.get_or_insert(error);
             } else {
@@ -402,7 +404,14 @@ impl WgpuExecutor {
             }
         }
         Ok(match first_refusal {
-            Some(error) => Execution::partial(presents, error, batch, accepted, scheduled_signals),
+            Some(error) => Execution::partial(
+                presents,
+                error,
+                batch,
+                accepted,
+                partially_lowered_submits,
+                scheduled_signals,
+            ),
             None => Execution::accepted(presents),
         })
     }

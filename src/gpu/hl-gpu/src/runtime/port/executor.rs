@@ -33,11 +33,10 @@ pub struct Presentation {
 
 /// The durable state an executor actually committed from a batch.
 ///
-/// `commands` contains only replay-safe persistent commands; observations (`WaitFence`), GPU work
-/// (`Submit`) and presentation are represented separately and are never smuggled into a reconnect
-/// journal. `source` preserves the original command position solely for runtime accounting and sharing
-/// release plans. A partially committed submit makes `replayable` false because its successful inner
-/// prefix cannot be represented as a top-level command without executing refused operations again.
+/// `commands` contains only replay-safe commands. Observations (`WaitFence`) and presentation are not
+/// journaled; a fully accepted `Submit` is, while a partially lowered one makes `replayable` false because
+/// its successful inner prefix cannot be represented without executing refused operations again. `source`
+/// preserves the original command position solely for runtime accounting and sharing release plans.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommittedCommand {
     pub source: usize,
@@ -58,6 +57,7 @@ impl CommittedDelta {
         batch: &[Cmd],
         indices: impl IntoIterator<Item = usize>,
         presentations: Vec<Presentation>,
+        partially_lowered_submits: &[usize],
         scheduled_signals: Option<Vec<(u32, u64)>>,
     ) -> Self {
         let mut commands = Vec::new();
@@ -65,11 +65,21 @@ impl CommittedDelta {
         let mut replayable = true;
         let sources: Vec<usize> = indices.into_iter().collect();
         assert!(sources.windows(2).all(|pair| pair[0] < pair[1]), "committed command indices must be strictly ordered and unique");
+        assert!(
+            partially_lowered_submits.windows(2).all(|pair| pair[0] < pair[1]),
+            "partially lowered submit indices must be strictly ordered and unique"
+        );
+        assert!(
+            partially_lowered_submits.iter().all(|source| {
+                sources.contains(source) && matches!(batch.get(*source), Some(Cmd::Submit(_)))
+            }),
+            "a partially lowered submit must name a committed Submit command"
+        );
         for &source in &sources {
             let command = batch.get(source).unwrap_or_else(|| panic!("committed command index is out of range"));
             match command {
                 Cmd::Submit(cb) => {
-                    if scheduled_signals.is_some() {
+                    if partially_lowered_submits.contains(&source) {
                         // A partially lowered Submit cannot be reconstructed from the original command:
                         // replay would also rerun its refused suffix.
                         replayable = false;
@@ -131,6 +141,7 @@ impl Execution {
         refusal: GpuError,
         batch: &[Cmd],
         committed: Vec<usize>,
+        partially_lowered_submits: Vec<usize>,
         scheduled_signals: Vec<(u32, u64)>,
     ) -> Self {
         assert!(
@@ -138,7 +149,13 @@ impl Execution {
             "a partial execution cannot contain a fatal error"
         );
         Self {
-            committed: CommittedDelta::from_indices(batch, committed, presentations, Some(scheduled_signals)),
+            committed: CommittedDelta::from_indices(
+                batch,
+                committed,
+                presentations,
+                &partially_lowered_submits,
+                Some(scheduled_signals),
+            ),
             refusal: Some(refusal),
             complete: false,
         }
@@ -150,7 +167,13 @@ impl Execution {
 
     pub(crate) fn into_parts(mut self, batch: &[Cmd]) -> (CommittedDelta, Option<GpuError>) {
         if self.complete {
-            self.committed = CommittedDelta::from_indices(batch, 0..batch.len(), self.committed.presentations, None);
+            self.committed = CommittedDelta::from_indices(
+                batch,
+                0..batch.len(),
+                self.committed.presentations,
+                &[],
+                None,
+            );
         }
         (self.committed, self.refusal)
     }
