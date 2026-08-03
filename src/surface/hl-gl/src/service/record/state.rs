@@ -323,6 +323,13 @@ pub fn stencil_mask_separate(ctx: &mut GlContext, face: u32, mask: u32) {
     }
 }
 
+/// `glHint(GL_GENERATE_MIPMAP_HINT, mode)` — retain the advisory value because it is queryable state.
+pub fn hint(ctx: &mut GlContext, target: u32, mode: u32) {
+    if target == GL_GENERATE_MIPMAP_HINT {
+        ctx.local.generate_mipmap_hint = mode;
+    }
+}
+
 /// `glCullFace(mode)` — select the culled face (`GL_FRONT` / `GL_BACK` / `GL_FRONT_AND_BACK`).
 impl GlContext {
     pub fn set_cull_face(&mut self, mode: u32) {

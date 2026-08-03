@@ -108,6 +108,13 @@ pub const GL_GREATER: u32 = 0x0204;
 pub const GL_NOTEQUAL: u32 = 0x0205;
 pub const GL_GEQUAL: u32 = 0x0206;
 pub const GL_ALWAYS: u32 = 0x0207;
+pub const GL_DEPTH_FUNC: u32 = 0x0B74;
+
+// Hint modes + the ES2 mipmap-generation hint target/state.
+pub const GL_DONT_CARE: u32 = 0x1100;
+pub const GL_FASTEST: u32 = 0x1101;
+pub const GL_NICEST: u32 = 0x1102;
+pub const GL_GENERATE_MIPMAP_HINT: u32 = 0x8192;
 
 // cull faces + winding (glCullFace / glFrontFace)
 pub const GL_FRONT: u32 = 0x0404;
@@ -126,6 +133,7 @@ pub const GL_COMPUTE_SHADER: u32 = 0x91B9;
 
 // texture enums
 pub const GL_TEXTURE_2D: u32 = 0x0DE1;
+pub const GL_TEXTURE_BINDING_CUBE_MAP: u32 = 0x8514;
 pub const GL_TEXTURE0: u32 = 0x84C0;
 pub const GL_RGBA: u32 = 0x1908;
 pub const GL_RGB: u32 = 0x1907;
@@ -226,6 +234,20 @@ pub const GL_SCISSOR_BOX: u32 = 0x0C10;
 pub const GL_COLOR_CLEAR_VALUE: u32 = 0x0C22;
 pub const GL_DEPTH_CLEAR_VALUE: u32 = 0x0B73;
 pub const GL_STENCIL_CLEAR_VALUE: u32 = 0x0B91;
+pub const GL_STENCIL_FUNC: u32 = 0x0B92;
+pub const GL_STENCIL_VALUE_MASK: u32 = 0x0B93;
+pub const GL_STENCIL_FAIL: u32 = 0x0B94;
+pub const GL_STENCIL_PASS_DEPTH_FAIL: u32 = 0x0B95;
+pub const GL_STENCIL_PASS_DEPTH_PASS: u32 = 0x0B96;
+pub const GL_STENCIL_REF: u32 = 0x0B97;
+pub const GL_STENCIL_WRITEMASK: u32 = 0x0B98;
+pub const GL_STENCIL_BACK_FUNC: u32 = 0x8800;
+pub const GL_STENCIL_BACK_FAIL: u32 = 0x8801;
+pub const GL_STENCIL_BACK_PASS_DEPTH_FAIL: u32 = 0x8802;
+pub const GL_STENCIL_BACK_PASS_DEPTH_PASS: u32 = 0x8803;
+pub const GL_STENCIL_BACK_REF: u32 = 0x8CA3;
+pub const GL_STENCIL_BACK_VALUE_MASK: u32 = 0x8CA4;
+pub const GL_STENCIL_BACK_WRITEMASK: u32 = 0x8CA5;
 pub const GL_LINE_WIDTH: u32 = 0x0B21;
 pub const GL_ALIASED_POINT_SIZE_RANGE: u32 = 0x846D;
 pub const GL_ALIASED_LINE_WIDTH_RANGE: u32 = 0x846E;

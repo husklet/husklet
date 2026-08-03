@@ -987,3 +987,79 @@ fn the_depth_range_reads_back_through_both_getters() {
     assert_eq!(query::get_integerv(&c, GL_DEPTH_RANGE, &mut ints), 2);
     assert_eq!(&ints[..2], &[0, 0], "0.25 and 0.75 both truncate to 0");
 }
+
+#[test]
+fn depth_hint_cube_and_stencil_state_read_back_live() {
+    let mut c = ctx_800x600();
+    let mut out = [0i32; 4];
+
+    for (pname, expected) in [
+        (GL_DEPTH_FUNC, GL_LESS as i32),
+        (GL_GENERATE_MIPMAP_HINT, GL_DONT_CARE as i32),
+        (GL_STENCIL_FUNC, GL_ALWAYS as i32),
+        (GL_STENCIL_BACK_FUNC, GL_ALWAYS as i32),
+        (GL_STENCIL_REF, 0),
+        (GL_STENCIL_BACK_REF, 0),
+        (GL_STENCIL_VALUE_MASK, -1),
+        (GL_STENCIL_BACK_VALUE_MASK, -1),
+        (GL_STENCIL_WRITEMASK, -1),
+        (GL_STENCIL_BACK_WRITEMASK, -1),
+        (GL_STENCIL_FAIL, GL_KEEP as i32),
+        (GL_STENCIL_BACK_FAIL, GL_KEEP as i32),
+    ] {
+        assert_eq!(query::get_integerv(&c, pname, &mut out), 1);
+        assert_eq!(out[0], expected, "default pname {pname:#x}");
+    }
+
+    record::depth_func(&mut c, GL_GREATER);
+    record::hint(&mut c, GL_GENERATE_MIPMAP_HINT, GL_NICEST);
+    let cube = c.textures.gen();
+    record::bind_texture(&mut c, GL_TEXTURE_CUBE_MAP, cube);
+    record::stencil_func_separate(&mut c, GL_FRONT, GL_LESS, 3, 0x12);
+    record::stencil_func_separate(&mut c, GL_BACK, GL_GREATER, 7, 0x34);
+    record::stencil_op_separate(&mut c, GL_FRONT, GL_REPLACE, GL_INCR, GL_DECR);
+    record::stencil_op_separate(&mut c, GL_BACK, GL_INVERT, GL_INCR_WRAP, GL_DECR_WRAP);
+    record::stencil_mask_separate(&mut c, GL_FRONT, 0x56);
+    record::stencil_mask_separate(&mut c, GL_BACK, 0x78);
+
+    for (pname, expected) in [
+        (GL_DEPTH_FUNC, GL_GREATER as i32),
+        (GL_GENERATE_MIPMAP_HINT, GL_NICEST as i32),
+        (GL_TEXTURE_BINDING_CUBE_MAP, cube as i32),
+        (GL_STENCIL_FUNC, GL_LESS as i32),
+        (GL_STENCIL_BACK_FUNC, GL_GREATER as i32),
+        (GL_STENCIL_REF, 3),
+        (GL_STENCIL_BACK_REF, 7),
+        (GL_STENCIL_VALUE_MASK, 0x12),
+        (GL_STENCIL_BACK_VALUE_MASK, 0x34),
+        (GL_STENCIL_WRITEMASK, 0x56),
+        (GL_STENCIL_BACK_WRITEMASK, 0x78),
+        (GL_STENCIL_FAIL, GL_REPLACE as i32),
+        (GL_STENCIL_BACK_FAIL, GL_INVERT as i32),
+        (GL_STENCIL_PASS_DEPTH_FAIL, GL_INCR as i32),
+        (GL_STENCIL_BACK_PASS_DEPTH_FAIL, GL_INCR_WRAP as i32),
+        (GL_STENCIL_PASS_DEPTH_PASS, GL_DECR as i32),
+        (GL_STENCIL_BACK_PASS_DEPTH_PASS, GL_DECR_WRAP as i32),
+    ] {
+        assert_eq!(query::get_integerv(&c, pname, &mut out), 1);
+        assert_eq!(out[0], expected, "live pname {pname:#x}");
+    }
+
+    record::stencil_func(&mut c, GL_ALWAYS, 9, 0xaa);
+    record::stencil_op(&mut c, GL_KEEP, GL_REPLACE, GL_INVERT);
+    c.set_stencil_mask(0xbb);
+    for (front, back, expected) in [
+        (GL_STENCIL_FUNC, GL_STENCIL_BACK_FUNC, GL_ALWAYS as i32),
+        (GL_STENCIL_REF, GL_STENCIL_BACK_REF, 9),
+        (GL_STENCIL_VALUE_MASK, GL_STENCIL_BACK_VALUE_MASK, 0xaa),
+        (GL_STENCIL_WRITEMASK, GL_STENCIL_BACK_WRITEMASK, 0xbb),
+        (GL_STENCIL_FAIL, GL_STENCIL_BACK_FAIL, GL_KEEP as i32),
+        (GL_STENCIL_PASS_DEPTH_FAIL, GL_STENCIL_BACK_PASS_DEPTH_FAIL, GL_REPLACE as i32),
+        (GL_STENCIL_PASS_DEPTH_PASS, GL_STENCIL_BACK_PASS_DEPTH_PASS, GL_INVERT as i32),
+    ] {
+        for pname in [front, back] {
+            query::get_integerv(&c, pname, &mut out);
+            assert_eq!(out[0], expected, "joined pname {pname:#x}");
+        }
+    }
+}

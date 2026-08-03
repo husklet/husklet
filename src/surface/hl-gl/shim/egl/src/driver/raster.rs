@@ -103,9 +103,11 @@ pub extern "C" fn glLineWidth(_width: f32) {}
 /// `glPolygonOffset` — no depth-bias pipeline state is lowered: an honest no-op.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glPolygonOffset(_factor: f32, _units: f32) {}
-/// `glHint` — every hint is advisory; this model honors none observably: an honest no-op.
+/// `glHint` — hints remain advisory for rendering, but their query-observable state is retained.
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glHint(_target: u32, _mode: u32) {}
+pub extern "C" fn glHint(target: u32, mode: u32) {
+    GlobalState::context(|state| record::hint(&mut state.gl, target, mode));
+}
 /// `glSampleCoverage` / `glSampleMaski` / `glMinSampleShading` — no MSAA is materialized (single-sample
 /// render targets), so multisample coverage/mask carry no state: honest no-ops.
 #[cfg_attr(gles_client, no_mangle)]

@@ -182,6 +182,7 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
             one(ctx.buffer_for_target(GL_TRANSFORM_FEEDBACK_BUFFER) as i32)
         }
         GL_TEXTURE_BINDING_2D => one(ctx.local.tex_unit[ctx.local.active_texture] as i32),
+        GL_TEXTURE_BINDING_CUBE_MAP => one(ctx.local.tex_unit[ctx.local.active_texture] as i32),
         // GL_DRAW_FRAMEBUFFER_BINDING shares GL_FRAMEBUFFER_BINDING's enum value (0x8CA6).
         GL_FRAMEBUFFER_BINDING => one(ctx.local.bound_fbo as i32),
         GL_READ_FRAMEBUFFER_BINDING => one(ctx.local.read_fbo as i32),
@@ -203,8 +204,24 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         GL_PACK_SKIP_PIXELS => one(ctx.local.pixel_store.pack_skip_pixels),
         // Fixed-function caps read back as 1/0.
         GL_DEPTH_TEST => one(ctx.local.pipeline.depth as i32),
+        GL_DEPTH_FUNC => one(ctx.local.pipeline.depth_func as i32),
+        GL_GENERATE_MIPMAP_HINT => one(ctx.local.generate_mipmap_hint as i32),
         GL_STENCIL_TEST => one(ctx.local.pipeline.stencil as i32),
         GL_STENCIL_CLEAR_VALUE => one(ctx.local.pipeline.clear_stencil),
+        GL_STENCIL_FUNC => one(ctx.local.pipeline.stencil_func_front as i32),
+        GL_STENCIL_REF => one(ctx.local.pipeline.stencil_ref_front),
+        GL_STENCIL_VALUE_MASK => one(ctx.local.pipeline.stencil_read_mask_front as i32),
+        GL_STENCIL_WRITEMASK => one(ctx.local.pipeline.stencil_write_mask_front as i32),
+        GL_STENCIL_FAIL => one(ctx.local.pipeline.stencil_fail_front as i32),
+        GL_STENCIL_PASS_DEPTH_FAIL => one(ctx.local.pipeline.stencil_zfail_front as i32),
+        GL_STENCIL_PASS_DEPTH_PASS => one(ctx.local.pipeline.stencil_zpass_front as i32),
+        GL_STENCIL_BACK_FUNC => one(ctx.local.pipeline.stencil_func_back as i32),
+        GL_STENCIL_BACK_REF => one(ctx.local.pipeline.stencil_ref_back),
+        GL_STENCIL_BACK_VALUE_MASK => one(ctx.local.pipeline.stencil_read_mask_back as i32),
+        GL_STENCIL_BACK_WRITEMASK => one(ctx.local.pipeline.stencil_write_mask_back as i32),
+        GL_STENCIL_BACK_FAIL => one(ctx.local.pipeline.stencil_fail_back as i32),
+        GL_STENCIL_BACK_PASS_DEPTH_FAIL => one(ctx.local.pipeline.stencil_zfail_back as i32),
+        GL_STENCIL_BACK_PASS_DEPTH_PASS => one(ctx.local.pipeline.stencil_zpass_back as i32),
         GL_BLEND => one(ctx.local.pipeline.blend as i32),
         GL_CULL_FACE => one(ctx.local.pipeline.cull_enabled as i32),
         // The culled face and the front-face winding themselves, not just the enable. Both were absent
