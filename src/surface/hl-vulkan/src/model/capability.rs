@@ -207,7 +207,7 @@ impl Format {
             | T::Rgba32Sint => FormatClass::IntegerColor,
             T::R16Float | T::Rg16Float | T::Rgba16Float => FormatClass::FloatColor,
             T::R32Float | T::Rg32Float | T::Rgba32Float => FormatClass::UnfilterableFloatColor,
-            T::Rgb9e5Ufloat => FormatClass::SampledColor,
+            T::Rgb9e5Ufloat => FormatClass::FloatColor,
             T::Rg11b10Ufloat => FormatClass::FloatColor,
             T::Rgb10a2Unorm => FormatClass::NormalizedColor,
             T::R5g6b5Unorm | T::A1r5g5b5Unorm => FormatClass::NormalizedColor,
@@ -883,6 +883,19 @@ mod tests {
     }
 
     #[test]
+    fn rgb9e5_float_advertises_native_render_and_blit() {
+        let optimal = Format(vk_format::E5B9G9R9_UFLOAT_PACK32)
+            .features()
+            .optimal_tiling;
+        assert_ne!(optimal & format_feature::SAMPLED_IMAGE, 0);
+        assert_ne!(optimal & format_feature::SAMPLED_IMAGE_FILTER_LINEAR, 0);
+        assert_ne!(optimal & format_feature::BLIT_SRC, 0);
+        assert_ne!(optimal & format_feature::BLIT_DST, 0);
+        assert_ne!(optimal & format_feature::COLOR_ATTACHMENT, 0);
+        assert_ne!(optimal & format_feature::COLOR_ATTACHMENT_BLEND, 0);
+    }
+
+    #[test]
     fn rgba16_unorm_is_a_full_native_color_format() {
         let optimal = Format(vk_format::R16G16B16A16_UNORM)
             .features()
@@ -1040,15 +1053,13 @@ mod tests {
             vk_format::A4R4G4B4_UNORM_PACK16_EXT,
             vk_format::A4B4G4R4_UNORM_PACK16_EXT,
             vk_format::B10G11R11_UFLOAT_PACK32,
+            vk_format::E5B9G9R9_UFLOAT_PACK32,
         ] {
             let features = Format(format).features().optimal_tiling;
             assert_eq!(features & required, required, "VkFormat {format}");
             assert_ne!(features & format_feature::SAMPLED_IMAGE_FILTER_CUBIC, 0);
         }
-        for format in [
-            vk_format::E5B9G9R9_UFLOAT_PACK32,
-            vk_format::R10X6G10X6B10X6A10X6_UNORM_4PACK16,
-        ] {
+        for format in [vk_format::R10X6G10X6B10X6A10X6_UNORM_4PACK16] {
             assert_ne!(
                 Format(format).features().optimal_tiling & required,
                 required,
