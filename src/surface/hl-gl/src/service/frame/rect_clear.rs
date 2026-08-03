@@ -22,9 +22,20 @@ void main() {\n\
     gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n\
 }\n";
 
-const CLEAR_FS: &str = "#version 460\n\
-layout(location = 0) out vec4 hl_clear_colour;\n\
-void main() { hl_clear_colour = vec4(1.0); }\n";
+fn clear_fs(color_target_count: usize) -> String {
+    let mut source = String::from("#version 460\n");
+    for slot in 0..color_target_count {
+        source.push_str(&format!(
+            "layout(location = {slot}) out vec4 hl_clear_colour{slot};\n"
+        ));
+    }
+    source.push_str("void main() {\n");
+    for slot in 0..color_target_count {
+        source.push_str(&format!(" hl_clear_colour{slot} = vec4(1.0);\n"));
+    }
+    source.push_str("}\n");
+    source
+}
 
 /// `src = CONSTANT, dst = ZERO, op = ADD`, so the written value is exactly the blend constant.
 fn clear_blend() -> BlendState {
@@ -88,11 +99,11 @@ pub(super) fn lower_rect_clear(
         return None;
     }
 
-    let (vs_ir, fs_ir, needs_shaders) = ctx.clear_shader_ir().ok()?;
+    let (vs_ir, fs_ir, needs_shaders) = ctx.clear_shader_ir(1).ok()?;
     if needs_shaders {
         for (id, stage, entry, source) in [
-            (vs_ir, glsl_stage::VERTEX, "vmain", CLEAR_VS),
-            (fs_ir, glsl_stage::FRAGMENT, "fmain", CLEAR_FS),
+            (vs_ir, glsl_stage::VERTEX, "vmain", CLEAR_VS.to_string()),
+            (fs_ir, glsl_stage::FRAGMENT, "fmain", clear_fs(1)),
         ] {
             cmds.push(Cmd::CreateShader {
                 id,
@@ -100,7 +111,7 @@ pub(super) fn lower_rect_clear(
                 spirv: GlslDescriptor {
                     stage,
                     entry: entry.into(),
-                    source: source.into(),
+                    source,
                 }
                 .to_words(),
             });
@@ -122,9 +133,10 @@ pub(super) fn lower_rect_clear(
         bias_clamp: 0.0,
     });
     let key = ClearPipelineKey {
-        color_format: target_fmt.to_u32(),
+        color_formats: [target_fmt.to_u32(), 0, 0, 0],
+        color_target_count: 1,
         depth_format: depth_fmt.map(|f| f.to_u32()).unwrap_or(0),
-        color_write_mask,
+        color_write_masks: [color_write_mask, 0, 0, 0],
         depth_write: writes_depth,
         stencil_write_mask,
     };
@@ -194,6 +206,117 @@ pub(super) fn lower_rect_clear(
         first_instance: 0,
     });
     Some(ops)
+}
+
+/// Lower the color portion of an MRT clear as one fullscreen/scissored draw. Each target receives its own
+/// write mask; zero masks preserve attachments that the clear did not select.
+pub(super) fn lower_mrt_color_clear(
+    ctx: &mut GlContext,
+    d: &DrawCall,
+    target_formats: &[TextureFormat],
+    tw: i32,
+    th: i32,
+    bottom_up: bool,
+    cmds: &mut Vec<Cmd>,
+) -> Option<Vec<Enc>> {
+    let mut masks = [0u32; 4];
+    for slot in 0..target_formats.len().min(4) {
+        let selected = match d.clear_draw_buffer {
+            Some(index) => index as usize == slot,
+            None => d.draw_buffer_mask & (1u32 << slot) != 0,
+        };
+        if selected {
+            masks[slot] = d.color_mask_for_slot(slot as u32);
+        }
+    }
+    if masks.iter().all(|mask| *mask == 0) {
+        return None;
+    }
+
+    let target_count = target_formats.len().min(4);
+    let (vs_ir, fs_ir, needs_shaders) = ctx.clear_shader_ir(target_count as u32).ok()?;
+    if needs_shaders {
+        for (id, stage, entry, source) in [
+            (vs_ir, glsl_stage::VERTEX, "vmain", CLEAR_VS.to_string()),
+            (fs_ir, glsl_stage::FRAGMENT, "fmain", clear_fs(target_count)),
+        ] {
+            cmds.push(Cmd::CreateShader {
+                id,
+                kind: ShaderPayloadKind::Glsl,
+                spirv: GlslDescriptor {
+                    stage,
+                    entry: entry.into(),
+                    source,
+                }
+                .to_words(),
+            });
+        }
+    }
+    let mut formats = [0u32; 4];
+    for (slot, format) in target_formats.iter().take(4).enumerate() {
+        formats[slot] = format.to_u32();
+    }
+    let key = ClearPipelineKey {
+        color_formats: formats,
+        color_target_count: target_formats.len().min(4) as u32,
+        depth_format: 0,
+        color_write_masks: masks,
+        depth_write: false,
+        stencil_write_mask: 0,
+    };
+    let (pipeline_ir, needs_pipeline) = ctx.clear_pipeline_ir(key).ok()?;
+    if needs_pipeline {
+        cmds.push(Cmd::CreateRenderPipeline(
+            pipeline_ir,
+            RenderPipelineDesc {
+                vertex: ShaderRef {
+                    module: vs_ir,
+                    entry: "vmain".into(),
+                },
+                fragment: Some(ShaderRef {
+                    module: fs_ir,
+                    entry: "fmain".into(),
+                }),
+                vertex_buffers: Vec::new(),
+                color_targets: target_formats
+                    .iter()
+                    .enumerate()
+                    .map(|(slot, &format)| ColorTargetState {
+                        format,
+                        blend: (masks[slot] != 0).then(clear_blend),
+                        write_mask: masks[slot],
+                    })
+                    .collect(),
+                depth: None,
+                topology: Topology::TriangleList,
+                cull: 0,
+                front_face: 0,
+                sample_count: 1,
+                label: "gl-mrt-rect-clear".into(),
+            },
+        ));
+    }
+    Some(vec![
+        Enc::SetViewport {
+            x: 0.0,
+            y: 0.0,
+            w: tw as f32,
+            h: th as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        },
+        clear_scissor_enc(d, tw, th, bottom_up),
+        Enc::SetBlendConstant {
+            color: d.clear.map(|value| value as f32),
+        },
+        Enc::SetPipeline(pipeline_ir),
+        Enc::Draw {
+            vertex_count: 3,
+            instance_count: 1,
+            first_vertex: 0,
+            first_instance: 0,
+        },
+    ])
 }
 
 /// `ALWAYS`/`REPLACE` when this clear writes stencil, and a face that changes nothing when it does not.

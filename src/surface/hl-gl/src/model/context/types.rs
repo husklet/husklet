@@ -283,9 +283,10 @@ impl Default for PixelStore {
 /// pipeline — the target format and the write masks — can vary the pipeline.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ClearPipelineKey {
-    pub color_format: u32,
+    pub color_formats: [u32; 4],
+    pub color_target_count: u32,
     pub depth_format: u32,
-    pub color_write_mask: u32,
+    pub color_write_masks: [u32; 4],
     pub depth_write: bool,
     pub stencil_write_mask: u32,
 }

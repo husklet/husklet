@@ -57,7 +57,7 @@ impl GlContext {
             prog_shader_cache: HashMap::new(),
             prog_pipeline_cache: HashMap::new(),
             sampler_ir_cache: Vec::new(),
-            clear_shader_ir: None,
+            clear_shader_ir: HashMap::new(),
             clear_pipeline_cache: std::collections::HashMap::new(),
             pending_destroys: Vec::new(),
             pending_texture_deletes: HashSet::new(),
@@ -450,13 +450,13 @@ impl GlContext {
     /// The two INTERNAL clear shader modules, `(vs_ir, fs_ir, needs_create)`. Created once per context
     /// and shared by every rect clear: the values a clear carries are all dynamic encoder state, so one
     /// shader pair serves every depth, stencil and colour clear at every value.
-    pub fn clear_shader_ir(&mut self) -> hl_gpu::Result<(u32, u32, bool)> {
-        if let Some((vs, fs)) = self.clear_shader_ir {
+    pub fn clear_shader_ir(&mut self, color_target_count: u32) -> hl_gpu::Result<(u32, u32, bool)> {
+        if let Some(&(vs, fs)) = self.clear_shader_ir.get(&color_target_count) {
             return Ok((vs, fs, false));
         }
         let vs = self.alloc_shader_ir()?;
         let fs = self.alloc_shader_ir()?;
-        self.clear_shader_ir = Some((vs, fs));
+        self.clear_shader_ir.insert(color_target_count, (vs, fs));
         Ok((vs, fs, true))
     }
 

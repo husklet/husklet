@@ -24,7 +24,7 @@ pub struct FrameState {
     prog_shader_cache: HashMap<(u32, u64), (u32, u32, u64)>,
     prog_pipeline_cache: HashMap<(u32, u64), (u32, u64)>,
     sampler_ir_cache: Vec<(hl_gpu::protocol::model::descriptor::SamplerDesc, u32)>,
-    clear_shader_ir: Option<(u32, u32)>,
+    clear_shader_ir: HashMap<u32, (u32, u32)>,
     clear_pipeline_cache: HashMap<ClearPipelineKey, u32>,
     pending_destroys: Vec<Cmd>,
     transform_feedback_readbacks: Vec<TransformFeedbackReadback>,
@@ -54,7 +54,7 @@ impl GlContext {
             prog_shader_cache: self.prog_shader_cache.clone(),
             prog_pipeline_cache: self.prog_pipeline_cache.clone(),
             sampler_ir_cache: self.sampler_ir_cache.clone(),
-            clear_shader_ir: self.clear_shader_ir,
+            clear_shader_ir: self.clear_shader_ir.clone(),
             clear_pipeline_cache: self.clear_pipeline_cache.clone(),
             pending_destroys: self.pending_destroys.clone(),
             transform_feedback_readbacks: self.local.transform_feedback_readbacks.clone(),
@@ -103,11 +103,12 @@ mod tests {
     fn rejected_frame_recreates_internal_clear_resources_on_retry() {
         let mut context = GlContext::new();
         let before = context.frame_state();
-        let (vertex, fragment, create_shaders) = context.clear_shader_ir().unwrap();
+        let (vertex, fragment, create_shaders) = context.clear_shader_ir(1).unwrap();
         let key = ClearPipelineKey {
-            color_format: 1,
+            color_formats: [1, 0, 0, 0],
+            color_target_count: 1,
             depth_format: 2,
-            color_write_mask: 0xf,
+            color_write_masks: [0xf, 0, 0, 0],
             depth_write: true,
             stencil_write_mask: 0xff,
         };
@@ -118,7 +119,7 @@ mod tests {
         context.restore_frame_state(before);
 
         let (retry_vertex, retry_fragment, recreate_shaders) =
-            context.clear_shader_ir().unwrap();
+            context.clear_shader_ir(1).unwrap();
         let (retry_pipeline, recreate_pipeline) = context.clear_pipeline_ir(key).unwrap();
         assert_eq!((retry_vertex, retry_fragment), (vertex, fragment));
         assert_eq!(retry_pipeline, pipeline);

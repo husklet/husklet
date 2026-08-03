@@ -643,6 +643,7 @@ impl GlContext {
             clear_draw_buffer: Some(drawbuffer),
             ..self.snapshot(false)
         };
+        d.color_mask = d.color_mask_for_slot(drawbuffer);
         d.clear = rgba;
         d.clear_rect = [0, 0, w, h];
         // A clear that writes no channel at all is a no-op, exactly as for `glClear`; a channel-masked one

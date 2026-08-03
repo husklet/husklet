@@ -602,6 +602,7 @@ mod clone_tests {
     fn channel_masked_color_clear_is_not_a_color_clear() {
         let mut draw = clear_draw([1.0, 0.0, 0.0, 1.0], None);
         draw.color_mask = 0x8; // alpha only — Skia's `glColorMask(0,0,0,1); glClear(...)`
+        draw.draw_buffer_states[0].color_mask = 0x8;
         assert!(!draw.clears_color());
         assert!(draw.color_clear_is_partial());
         assert_eq!(RenderPasses::full_clear(&[draw]).0, None);
@@ -1079,18 +1080,28 @@ pub(super) fn build_mrt_geometry_frame(
     // An UNSCOPED unscissored `glClear` wipes every selected attachment, so the draws recorded before it
     // are gone and the pass starts there. A `glClearBuffer*` is scoped to one attachment and supersedes
     // nothing, which is why it does not move this boundary.
-    let start = geom
-        .iter()
-        .rposition(|d| d.clears_color() && !d.scissor_enabled && d.clear_draw_buffer.is_none())
-        .unwrap_or(0);
-    let geom = &geom[start..];
-
-    // Lower each draw with N color targets so the pipeline writes every attachment.
+    // Lower each operation in order. Clear load ops below remain a useful initialization optimization, but
+    // the clear draw is retained as well: that is what preserves ordering for clears between draws and
+    // expresses per-target masks/scissors that an attachment load cannot represent.
     let no_fbo_tex = std::collections::HashMap::new();
     let mut snapshots = SnapshotTextures::new();
     let mut copies: Vec<Enc> = Vec::new();
     let mut draw_ops: Vec<Enc> = Vec::new();
-    for d in geom.iter().filter(|d| !d.is_clear) {
+    for d in geom {
+        if d.is_clear {
+            if let Some(ops) = lower_mrt_color_clear(
+                ctx,
+                d,
+                &target_formats,
+                tw,
+                th,
+                false,
+                &mut cmds,
+            ) {
+                draw_ops.extend(ops);
+            }
+            continue;
+        }
         // MRT passes carry no depth/stencil attachment in this model, so no depth pipeline format.
         if let Some(lowered) = lower_draw_n(
             ctx,

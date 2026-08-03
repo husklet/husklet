@@ -156,7 +156,7 @@ pub struct GlContext {
     sampler_ir_cache: Vec<(SamplerDesc, u32)>,
     /// The INTERNAL clear shaders — a `gl_VertexID` full-target triangle and a fragment stage emitting
     /// `vec4(1.0)` — created once per context and shared by every rect clear. `None` until first use.
-    clear_shader_ir: Option<(u32, u32)>,
+    clear_shader_ir: HashMap<u32, (u32, u32)>,
     /// Internal clear pipelines, keyed by everything that distinguishes one: the colour target format,
     /// the pass's depth format, and the colour/depth/stencil write masks. The clear VALUES are not part
     /// of the key — depth rides the viewport's collapsed range, stencil the dynamic reference, and colour
