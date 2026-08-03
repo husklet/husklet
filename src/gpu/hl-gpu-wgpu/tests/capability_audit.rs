@@ -163,9 +163,10 @@ fn every_advertised_texture_format_is_really_creatable() {
             TextureFormat::Depth32Float | TextureFormat::Depth24PlusStencil8
         );
         let compressed = fmt.block_geometry().is_some();
+        let sampled_only = matches!(fmt, TextureFormat::Rgb9e5Ufloat | TextureFormat::Rg11b10Ufloat);
         let usage = if is_depth {
             texture_usage::RENDER_TARGET
-        } else if compressed {
+        } else if compressed || sampled_only {
             texture_usage::SAMPLED | texture_usage::COPY_SRC | texture_usage::COPY_DST
         } else {
             texture_usage::SAMPLED
