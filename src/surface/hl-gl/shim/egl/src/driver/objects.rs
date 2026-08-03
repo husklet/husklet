@@ -368,7 +368,10 @@ pub extern "C" fn glDeleteBuffers(n: i32, buffers: *const u32) {
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGenTextures(n: i32, textures: *mut u32) {
     crate::stub::trace("glGenTextures", "allocating texture names");
-    if textures.is_null() || n <= 0 {
+    if !GlobalState::context(|s| record::validate_texture_object_count(&mut s.gl, n)) {
+        return;
+    }
+    if textures.is_null() || n == 0 {
         return;
     }
     GlobalState::context(|s| unsafe {
@@ -529,7 +532,10 @@ pub extern "C" fn glGenerateMipmap(target: u32) {
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDeleteTextures(n: i32, textures: *const u32) {
     crate::stub::trace("glDeleteTextures", "deleting texture names");
-    if textures.is_null() || n <= 0 {
+    if !GlobalState::context(|s| record::validate_texture_object_count(&mut s.gl, n)) {
+        return;
+    }
+    if textures.is_null() || n == 0 {
         return;
     }
     GlobalState::context(|s| unsafe {

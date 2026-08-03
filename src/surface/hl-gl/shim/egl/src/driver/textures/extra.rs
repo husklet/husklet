@@ -17,13 +17,18 @@ fn allocatable_extent(width: i32, height: i32) -> bool {
 pub extern "C" fn glCompressedTexImage2D(
     target: u32,
     level: i32,
-    _internalformat: u32,
+    internalformat: u32,
     width: i32,
     height: i32,
     _border: i32,
     _image_size: i32,
     _data: *const c_void,
 ) {
+    if !GlobalState::context(|group| {
+        record::validate_compressed_tex_image_2d_format(&mut group.gl, internalformat)
+    }) {
+        return;
+    }
     if target != GL_TEXTURE_2D || level != 0 {
         return;
     }

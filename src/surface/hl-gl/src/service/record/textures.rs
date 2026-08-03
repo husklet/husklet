@@ -31,6 +31,14 @@ pub fn bind_texture(ctx: &mut GlContext, target: u32, name: u32) {
         ctx.textures.retire_name(name);
     }
     ctx.textures.ensure(name);
+    if name != 0 {
+        let texture = ctx.textures.get_mut(name).expect("ensured texture");
+        if texture.target != 0 && texture.target != target {
+            ctx.set_gl_error(GL_INVALID_OPERATION);
+            return;
+        }
+        texture.target = target;
+    }
     let unit = ctx.local.active_texture;
     if unit < ctx.local.tex_unit.len() {
         ctx.local.tex_unit[unit] = name;
@@ -55,6 +63,20 @@ pub fn validate_tex_image_2d(
     valid
 }
 
+/// Validate the implementation-defined compressed-format vocabulary. This driver advertises zero
+/// compressed formats to ES2, so accepting any spelling would contradict `GL_COMPRESSED_TEXTURE_FORMATS`.
+pub fn validate_compressed_tex_image_2d_format(
+    ctx: &mut GlContext,
+    internalformat: u32,
+) -> bool {
+    if ctx.client_version().0 < 3 {
+        let _ = internalformat;
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return false;
+    }
+    true
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn validate_tex_image_2d_call(
     ctx: &mut GlContext,
@@ -73,19 +95,44 @@ pub fn validate_tex_image_2d_call(
         return false;
     }
     let max_level = (crate::service::query::MAX_TEXTURE_SIZE as u32).ilog2() as i32;
-    if level < 0 || level > max_level || border != 0 || (cube_face && width != height) {
+    let max_extent = level
+        .try_into()
+        .ok()
+        .and_then(|level: u32| crate::service::query::MAX_TEXTURE_SIZE.checked_shr(level))
+        .unwrap_or(0);
+    if level < 0
+        || level > max_level
+        || width < 0
+        || height < 0
+        || width > max_extent
+        || height > max_extent
+        || border != 0
+        || (cube_face && width != height)
+    {
         ctx.set_gl_error(GL_INVALID_VALUE);
         return false;
     }
     let internalformat = match u32::try_from(internalformat) {
         Ok(value)
-            if matches!(value, GL_RGB | GL_RGBA | GL_BGRA_EXT | GL_BGRA8_EXT) => value,
+            if matches!(
+                value,
+                GL_ALPHA
+                    | GL_LUMINANCE
+                    | GL_LUMINANCE_ALPHA
+                    | GL_RGB
+                    | GL_RGBA
+                    | GL_BGRA_EXT
+                    | GL_BGRA8_EXT
+            ) => value,
         _ => {
             ctx.set_gl_error(GL_INVALID_VALUE);
             return false;
         }
     };
-    if !matches!(format, GL_RGB | GL_RGBA | GL_BGRA_EXT)
+    if !matches!(
+        format,
+        GL_ALPHA | GL_LUMINANCE | GL_LUMINANCE_ALPHA | GL_RGB | GL_RGBA | GL_BGRA_EXT
+    )
         || !matches!(
             type_,
             GL_UNSIGNED_BYTE
@@ -100,7 +147,8 @@ pub fn validate_tex_image_2d_call(
     let internal_matches = internalformat == format
         || (internalformat == GL_BGRA8_EXT && format == GL_BGRA_EXT);
     let type_matches = matches!((format, type_),
-        (GL_RGB, GL_UNSIGNED_BYTE | GL_UNSIGNED_SHORT_5_6_5)
+        (GL_ALPHA | GL_LUMINANCE | GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE)
+            | (GL_RGB, GL_UNSIGNED_BYTE | GL_UNSIGNED_SHORT_5_6_5)
             | (GL_RGBA, GL_UNSIGNED_BYTE | GL_UNSIGNED_SHORT_4_4_4_4 | GL_UNSIGNED_SHORT_5_5_5_1)
             | (GL_BGRA_EXT, GL_UNSIGNED_BYTE));
     if !internal_matches || !type_matches {
@@ -135,6 +183,19 @@ mod validation_tests {
     fn es2_accepts_legacy_single_and_dual_channel_uploads() {
         for format in [GL_ALPHA, GL_LUMINANCE, GL_LUMINANCE_ALPHA] {
             assert!(valid_tex_image_2d_es2(format, format, GL_UNSIGNED_BYTE));
+            let mut context = GlContext::new();
+            assert!(validate_tex_image_2d_call(
+                &mut context,
+                GL_TEXTURE_2D,
+                0,
+                format as i32,
+                1,
+                1,
+                0,
+                format,
+                GL_UNSIGNED_BYTE,
+            ));
+            assert_eq!(context.take_gl_error(), GL_NO_ERROR);
         }
     }
 
@@ -434,6 +495,16 @@ impl GlContext {
             self.set_gl_error(GL_INVALID_OPERATION);
             return;
         };
+        if self.client_version().0 < 3 {
+            if target == GL_TEXTURE_CUBE_MAP && !texture.cube_complete(false) {
+                self.set_gl_error(GL_INVALID_OPERATION);
+                return;
+            }
+            if !(texture.w as u32).is_power_of_two() || !(texture.h as u32).is_power_of_two() {
+                self.set_gl_error(GL_INVALID_OPERATION);
+                return;
+            }
+        }
         if !texture.has_data() || texture.w <= 0 || texture.h <= 0 {
             return;
         }
@@ -481,6 +552,14 @@ impl GlContext {
             }
         }
     }
+}
+
+pub fn validate_texture_object_count(ctx: &mut GlContext, count: i32) -> bool {
+    if count < 0 {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return false;
+    }
+    true
 }
 
 /// Average each 2x2 source block into one destination texel (the standard box reduction ES 3.0 §3.8.10
@@ -774,6 +853,19 @@ pub fn validate_tex_sub_image_2d_call(
         ctx.set_gl_error(GL_INVALID_ENUM);
         return false;
     }
+    let type_matches = matches!(
+        (format, type_),
+        (GL_RGB, GL_UNSIGNED_BYTE | GL_UNSIGNED_SHORT_5_6_5)
+            | (
+                GL_RGBA,
+                GL_UNSIGNED_BYTE | GL_UNSIGNED_SHORT_4_4_4_4 | GL_UNSIGNED_SHORT_5_5_5_1
+            )
+            | (GL_BGRA_EXT, GL_UNSIGNED_BYTE)
+    );
+    if !type_matches {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return false;
+    }
     let max_level = (crate::service::query::MAX_TEXTURE_SIZE as u32).ilog2() as i32;
     if level < 0
         || level > max_level
@@ -857,15 +949,25 @@ pub fn copy_tex_sub_image_2d(
         return;
     }
     let dst = ctx.local.tex_unit[ctx.local.active_texture];
-    if level < 0 || w < 0 || h < 0 || xo < 0 || yo < 0 || x < 0 || y < 0 || dst == 0 {
+    let max_level = (crate::service::query::MAX_TEXTURE_SIZE as u32).ilog2() as i32;
+    if level < 0
+        || level > max_level
+        || w < 0
+        || h < 0
+        || xo < 0
+        || yo < 0
+        || x < 0
+        || y < 0
+        || dst == 0
+    {
         ctx.set_gl_error(GL_INVALID_VALUE);
-        return;
-    }
-    if w == 0 || h == 0 {
         return;
     }
     if ctx.framebuffer_status(ctx.local.read_fbo) != GL_FRAMEBUFFER_COMPLETE {
         ctx.set_gl_error(GL_INVALID_FRAMEBUFFER_OPERATION);
+        return;
+    }
+    if w == 0 || h == 0 {
         return;
     }
     // Validate the destination rect fits the bound texture. The `+` are widened to i64 so a huge (or
@@ -979,7 +1081,34 @@ pub fn copy_tex_image_2d(
         ctx.set_gl_error(GL_INVALID_ENUM);
         return;
     }
-    if level < 0 || border != 0 || x < 0 || y < 0 || width < 0 || height < 0 {
+    let max_level = (crate::service::query::MAX_TEXTURE_SIZE as u32).ilog2() as i32;
+    let max_extent = level
+        .try_into()
+        .ok()
+        .and_then(|level: u32| crate::service::query::MAX_TEXTURE_SIZE.checked_shr(level))
+        .unwrap_or(0);
+    if level < 0
+        || level > max_level
+        || border != 0
+        || width < 0
+        || height < 0
+        || width > max_extent
+        || height > max_extent
+        || (face.is_some() && width != height)
+    {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    if !matches!(
+        internalformat,
+        GL_ALPHA
+            | GL_LUMINANCE
+            | GL_LUMINANCE_ALPHA
+            | GL_RGB
+            | GL_RGBA
+            | GL_BGRA_EXT
+            | GL_BGRA8_EXT
+    ) {
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }

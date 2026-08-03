@@ -136,6 +136,8 @@ impl MipLevel {
 /// One live GL texture object: its CPU shadow plane + the min/mag filter + S/T wrap GL enums.
 #[derive(Clone, PartialEq, Debug)]
 pub struct GlTexture {
+    /// First texture target this object was bound to; zero until the first bind.
+    pub target: u32,
     pub w: i32,
     pub h: i32,
     pub depth: i32,
@@ -215,6 +217,7 @@ impl Default for GlTexture {
     fn default() -> Self {
         // GL's default sampler state: NEAREST_MIPMAP_LINEAR min, LINEAR mag, REPEAT wrap.
         Self {
+            target: 0,
             w: 0,
             h: 0,
             depth: 1,

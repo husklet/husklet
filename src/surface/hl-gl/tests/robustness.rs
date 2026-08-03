@@ -3,7 +3,7 @@
 //! REAL `glGetError` register (first-error-wins) is asserted — a bulletproofing gate for the recording +
 //! object-lifecycle layer. Nothing here should ever panic.
 
-use hl_gl::model::context::{GlContext, GlSurface, PixelStore};
+use hl_gl::model::context::{ContextState, GlContext, GlSurface, PixelStore};
 use hl_gl::model::glconst::*;
 use hl_gl::service::{compute, es3, intro, map, query, record, sync};
 use hl_gpu::RecordingSink;
@@ -443,6 +443,7 @@ fn negative_tex_sub_image_2d_matrix_precedes_pixel_access() {
         ((0, 0, 0, 0, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE), GL_INVALID_ENUM),
         ((GL_TEXTURE_2D, 0, 0, 0, 0, 0, 0, GL_UNSIGNED_BYTE), GL_INVALID_ENUM),
         ((GL_TEXTURE_2D, 0, 0, 0, 0, 0, GL_RGB, 0), GL_INVALID_ENUM),
+        ((GL_TEXTURE_2D, 0, 0, 0, 0, 0, GL_RGB, GL_UNSIGNED_SHORT_4_4_4_4), GL_INVALID_OPERATION),
         ((GL_TEXTURE_2D, -1, 0, 0, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE), GL_INVALID_VALUE),
         ((GL_TEXTURE_2D, 31, 0, 0, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE), GL_INVALID_VALUE),
         ((GL_TEXTURE_2D, 0, -1, 0, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE), GL_INVALID_VALUE),
@@ -459,6 +460,147 @@ fn negative_tex_sub_image_2d_matrix_precedes_pixel_access() {
     assert!(record::validate_tex_sub_image_2d_call(
         &mut c, GL_TEXTURE_2D, 0, 4, 4, 8, 8, GL_RGBA, GL_UNSIGNED_BYTE,
     ));
+}
+
+#[test]
+fn negative_texture_object_and_mipmap_rules_preserve_state() {
+    let mut c = GlContext::new();
+    let mut es2 = ContextState::with_version(2, 0, false);
+    c.switch_state(&mut es2);
+    assert!(!record::validate_texture_object_count(&mut c, -1));
+    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
+    assert!(record::validate_texture_object_count(&mut c, 0));
+
+    c.active_texture(GL_TEXTURE0);
+    record::bind_texture(&mut c, GL_TEXTURE_2D, 5);
+    record::bind_texture(&mut c, GL_TEXTURE_CUBE_MAP, 5);
+    assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
+    assert_eq!(c.bound_texture(), 5);
+
+    record::bind_texture(&mut c, GL_TEXTURE_2D, 6);
+    record::tex_image_2d(&mut c, 3, 4, &vec![0; 3 * 4 * 4]);
+    c.generate_mipmap(GL_TEXTURE_2D);
+    assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
+
+    record::bind_texture(&mut c, GL_TEXTURE_CUBE_MAP, 7);
+    record::tex_image_2d_target_declared(
+        &mut c, GL_TEXTURE_CUBE_MAP_POSITIVE_X, GL_RGBA, 4, 4, &vec![0; 4 * 4 * 4],
+    );
+    c.generate_mipmap(GL_TEXTURE_CUBE_MAP);
+    assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
+}
+
+#[test]
+fn negative_compressed_and_copy_texture_calls_report_exact_errors() {
+    let mut c = GlContext::new();
+    let mut es2 = ContextState::with_version(2, 0, false);
+    c.switch_state(&mut es2);
+
+    assert!(!record::validate_compressed_tex_image_2d_format(&mut c, 0xdead));
+    assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
+
+    c.set_surface(GlSurface { have: true, width: 4, height: 4 });
+    record::bind_texture(&mut c, GL_TEXTURE_CUBE_MAP, 4);
+    record::copy_tex_image_2d(
+        &mut c,
+        GL_TEXTURE_CUBE_MAP_POSITIVE_X,
+        0,
+        GL_RGBA,
+        0,
+        0,
+        4,
+        3,
+        0,
+    );
+    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
+
+    record::copy_tex_image_2d(&mut c, 0xdead, 0, GL_RGBA, 0, 0, 4, 4, 0);
+    assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
+
+    record::copy_tex_image_2d(&mut c, GL_TEXTURE_2D, 0, 0xdead, 0, 0, 4, 4, 0);
+    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
+    record::copy_tex_image_2d(&mut c, GL_TEXTURE_2D, 14, GL_RGBA, 0, 0, 1, 1, 0);
+    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
+    record::copy_tex_image_2d(
+        &mut c,
+        GL_TEXTURE_2D,
+        0,
+        GL_RGBA,
+        0,
+        0,
+        query::MAX_TEXTURE_SIZE + 1,
+        1,
+        0,
+    );
+    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
+
+    assert!(!record::validate_tex_image_2d_call(
+        &mut c,
+        GL_TEXTURE_CUBE_MAP_POSITIVE_X,
+        0,
+        GL_RGBA as i32,
+        -1,
+        -1,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+    ));
+    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
+    assert!(!record::validate_tex_image_2d_call(
+        &mut c,
+        GL_TEXTURE_CUBE_MAP_POSITIVE_X,
+        0,
+        GL_RGBA as i32,
+        query::MAX_TEXTURE_SIZE + 1,
+        query::MAX_TEXTURE_SIZE + 1,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+    ));
+    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
+
+    record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, 3);
+    record::copy_tex_image_2d(&mut c, GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, 4, 4, 0);
+    assert_eq!(c.take_gl_error(), GL_INVALID_FRAMEBUFFER_OPERATION);
+
+    record::bind_texture(&mut c, GL_TEXTURE_CUBE_MAP, 8);
+    record::copy_tex_sub_image_2d(
+        &mut c,
+        GL_TEXTURE_CUBE_MAP_POSITIVE_X,
+        -1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        1,
+    );
+    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
+    record::copy_tex_sub_image_2d(
+        &mut c,
+        GL_TEXTURE_CUBE_MAP_POSITIVE_X,
+        32,
+        0,
+        0,
+        0,
+        0,
+        1,
+        1,
+    );
+    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
+
+    record::copy_tex_sub_image_2d(
+        &mut c,
+        GL_TEXTURE_CUBE_MAP_POSITIVE_X,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    );
+    assert_eq!(c.take_gl_error(), GL_INVALID_FRAMEBUFFER_OPERATION);
 }
 
 #[test]
