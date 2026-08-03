@@ -28,8 +28,8 @@ pub const READBACK_OK: u8 = 1;
 /// Response status byte: the readback failed (unknown/unsupported/out-of-bounds); zero bytes follow.
 pub const READBACK_FAIL: u8 = 0;
 
-/// The resource kind a [`ReadbackRequest`] targets. Only buffers are supported today; the field reserves
-/// room to add textures without changing the request layout.
+/// The operation a [`ReadbackRequest`] targets. Buffer readback and cross-session buffer/texture
+/// lifecycle operations share this fixed request layout.
 pub mod readback_kind {
     /// Read back a GPU buffer's bytes.
     pub const BUFFER: u8 = 0;
@@ -47,6 +47,8 @@ pub mod readback_kind {
     pub const UNMAP_BUFFER: u8 = 6;
     pub const EXPORT_TEXTURE: u8 = 7;
     pub const IMPORT_TEXTURE: u8 = 8;
+    pub const MAP_TEXTURE: u8 = 9;
+    pub const UNMAP_TEXTURE: u8 = 10;
 }
 
 /// A device→host readback request: "return `len` bytes of resource `id` starting at `offset`". Serialized
@@ -129,6 +131,14 @@ impl ReadbackRequest {
         Self { version: READBACK_VERSION, kind: readback_kind::IMPORT_TEXTURE, id, offset: export, len: 0 }
     }
 
+    pub fn map_texture(id: u32) -> Self {
+        Self { version: READBACK_VERSION, kind: readback_kind::MAP_TEXTURE, id, offset: 0, len: 0 }
+    }
+
+    pub fn unmap_texture(id: u32) -> Self {
+        Self { version: READBACK_VERSION, kind: readback_kind::UNMAP_TEXTURE, id, offset: 0, len: 0 }
+    }
+
     pub fn map_buffer(id: u32) -> Self {
         Self {
             version: READBACK_VERSION,
@@ -208,9 +218,17 @@ mod tests {
             (11, 0x1234_5678_9abc_def0, 0)
         );
 
+        let texture_export = ReadbackRequest::export_texture(13);
+        let texture_import = ReadbackRequest::import_texture(17, 0xfeed_beef);
+        assert_eq!(ReadbackRequest::from_bytes(&texture_export.to_bytes()), Some(texture_export));
+        assert_eq!(ReadbackRequest::from_bytes(&texture_import.to_bytes()), Some(texture_import));
+        assert_eq!((texture_import.id, texture_import.offset, texture_import.len), (17, 0xfeed_beef, 0));
+
         for request in [
             ReadbackRequest::map_buffer(11),
             ReadbackRequest::unmap_buffer(11),
+            ReadbackRequest::map_texture(11),
+            ReadbackRequest::unmap_texture(11),
         ] {
             assert_eq!(
                 ReadbackRequest::from_bytes(&request.to_bytes()),

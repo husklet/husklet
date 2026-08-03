@@ -358,6 +358,32 @@ pub fn unmap_buffer(session: &mut Session, exec: &mut dyn GpuExecutor, id: Buffe
     exports.unmap(session.id, export)
 }
 
+fn texture_export(session: &Session, id: TextureId) -> Result<ExportId> {
+    session.texture_sharing.get(&id.0).map(|sharing| match sharing {
+        ResourceSharing::Owner(export) | ResourceSharing::Importer(export) => *export,
+    }).ok_or(crate::GpuError::Invalid("texture is not shared"))
+}
+
+pub fn map_texture(session: &mut Session, exec: &mut dyn GpuExecutor, id: TextureId) -> Result<()> {
+    let exports = session.exports.clone().ok_or(crate::GpuError::Unsupported("sharing registry"))?;
+    let _operation = exports.operation();
+    let export = texture_export(session, id)?;
+    exports.map(session.id, export)?;
+    if let Err(error) = exec.sharing_barrier() {
+        let _ = exports.unmap(session.id, export);
+        return Err(error);
+    }
+    Ok(())
+}
+
+pub fn unmap_texture(session: &mut Session, exec: &mut dyn GpuExecutor, id: TextureId) -> Result<()> {
+    let exports = session.exports.clone().ok_or(crate::GpuError::Unsupported("sharing registry"))?;
+    let _operation = exports.operation();
+    let export = texture_export(session, id)?;
+    exec.sharing_barrier()?;
+    exports.unmap(session.id, export)
+}
+
 /// Service the `CommandSink::wait` path: block on the executor until fence `fence` reaches `value`. Not
 /// part of a command batch — an out-of-band wait the transport layer forwards.
 pub fn wait(

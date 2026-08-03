@@ -110,6 +110,9 @@ pub trait ConnectionHandler {
         None
     }
 
+    fn map_texture(&mut self, req: &ReadbackRequest) -> Option<()> { let _ = req; None }
+    fn unmap_texture(&mut self, req: &ReadbackRequest) -> Option<()> { let _ = req; None }
+
     fn map_buffer(&mut self, req: &ReadbackRequest) -> Option<()> {
         let _ = req;
         None
@@ -226,6 +229,7 @@ fn serve_loop<H: ConnectionHandler>(
                     readback_kind::IMPORT_BUFFER => req.len == 0,
                     readback_kind::EXPORT_TEXTURE => req.offset == 0 && req.len == 0,
                     readback_kind::IMPORT_TEXTURE => req.len == 0,
+                    readback_kind::MAP_TEXTURE | readback_kind::UNMAP_TEXTURE => req.offset == 0 && req.len == 0,
                     readback_kind::MAP_BUFFER | readback_kind::UNMAP_BUFFER => {
                         req.offset == 0 && req.len == 0
                     }
@@ -249,6 +253,8 @@ fn serve_loop<H: ConnectionHandler>(
                         .export_texture(&req).map(|id| id.0.to_le_bytes().to_vec()),
                     readback_kind::IMPORT_TEXTURE => handler
                         .import_texture(&req).map(|bytes| bytes.to_le_bytes().to_vec()),
+                    readback_kind::MAP_TEXTURE => handler.map_texture(&req).map(|()| Vec::new()),
+                    readback_kind::UNMAP_TEXTURE => handler.unmap_texture(&req).map(|()| Vec::new()),
                     readback_kind::MAP_BUFFER => handler.map_buffer(&req).map(|()| Vec::new()),
                     readback_kind::UNMAP_BUFFER => handler.unmap_buffer(&req).map(|()| Vec::new()),
                     _ => None,

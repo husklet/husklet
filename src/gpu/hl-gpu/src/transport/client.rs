@@ -601,6 +601,16 @@ impl CommandSink for RemoteCommandSink {
         Ok(u64::from_le_bytes(response.try_into().map_err(|_| self.protocol(TransportPhase::ResponseRead, "invalid import texture response"))?))
     }
 
+    fn map_texture(&mut self, id: crate::TextureId) -> Result<()> {
+        self.request(&ReadbackRequest::map_texture(id.raw()), 0, self.config.response_timeout())?;
+        Ok(())
+    }
+
+    fn unmap_texture(&mut self, id: crate::TextureId) -> Result<()> {
+        self.request(&ReadbackRequest::unmap_texture(id.raw()), 0, self.config.response_timeout())?;
+        Ok(())
+    }
+
     fn map_buffer(&mut self, id: BufferId) -> Result<()> {
         self.request(
             &ReadbackRequest::map_buffer(id.raw()),

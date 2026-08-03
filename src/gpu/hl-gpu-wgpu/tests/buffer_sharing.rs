@@ -27,6 +27,18 @@ fn two_sessions_alias_one_metal_texture_without_a_copy() {
     let export = hl_gpu::runtime::service::dispatch::export_texture(&mut owner, &owner_exec, TextureId(1)).unwrap();
     assert_eq!(hl_gpu::runtime::service::dispatch::import_texture(&mut importer, &importer_exec, TextureId(9), export).unwrap(), 8);
     assert_eq!(importer_exec.read_texture(&importer.resources, 9).unwrap(), [255, 0, 0, 255, 255, 0, 0, 255]);
+    hl_gpu::runtime::service::dispatch::map_texture(&mut importer, &mut importer_exec, TextureId(9)).unwrap();
+    assert!(matches!(
+        owner_exec.read_texture(&owner.resources, 1),
+        Err(GpuError::MappedElsewhere { .. })
+    ));
+    assert_eq!(importer_exec.read_texture(&importer.resources, 9).unwrap(), [255, 0, 0, 255, 255, 0, 0, 255]);
+    assert!(hl_gpu::runtime::service::dispatch::map_texture(&mut importer, &mut importer_exec, TextureId(9)).is_err());
+    let destroy_while_mapped = hl_gpu::runtime::submit(&mut owner, &mut owner_exec, 0, &[Cmd::DestroyTexture(1)]).unwrap_err();
+    assert!(matches!(destroy_while_mapped, GpuError::MappedElsewhere { .. }), "{destroy_while_mapped:?}");
+    assert!(hl_gpu::runtime::service::dispatch::unmap_texture(&mut owner, &mut owner_exec, TextureId(1)).is_err());
+    hl_gpu::runtime::service::dispatch::unmap_texture(&mut importer, &mut importer_exec, TextureId(9)).unwrap();
+    assert_eq!(owner_exec.read_texture(&owner.resources, 1).unwrap(), [255, 0, 0, 255, 255, 0, 0, 255]);
     hl_gpu::runtime::submit(&mut owner, &mut owner_exec, 0, &[Cmd::DestroyTexture(1)]).unwrap();
     assert_eq!(importer_exec.read_texture(&importer.resources, 9).unwrap(), [255, 0, 0, 255, 255, 0, 0, 255]);
 }

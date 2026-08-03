@@ -87,6 +87,16 @@ pub trait CommandSink {
         Err(GpuError::Unsupported("command sink: import_texture"))
     }
 
+    fn map_texture(&mut self, id: TextureId) -> Result<()> {
+        let _ = id;
+        Err(GpuError::Unsupported("command sink: map_texture"))
+    }
+
+    fn unmap_texture(&mut self, id: TextureId) -> Result<()> {
+        let _ = id;
+        Err(GpuError::Unsupported("command sink: unmap_texture"))
+    }
+
     fn map_buffer(&mut self, id: BufferId) -> Result<()> {
         let _ = id;
         Err(GpuError::Unsupported("command sink: map_buffer"))

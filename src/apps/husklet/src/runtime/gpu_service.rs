@@ -370,6 +370,14 @@ impl ConnectionHandler for Connection {
         }
     }
 
+    fn map_texture(&mut self, request: &ReadbackRequest) -> Option<()> {
+        hl_gpu::runtime::service::dispatch::map_texture(&mut self.session, &mut self.executor, TextureId(request.id)).ok()
+    }
+
+    fn unmap_texture(&mut self, request: &ReadbackRequest) -> Option<()> {
+        hl_gpu::runtime::service::dispatch::unmap_texture(&mut self.session, &mut self.executor, TextureId(request.id)).ok()
+    }
+
     fn map_buffer(&mut self, request: &ReadbackRequest) -> Option<()> {
         hl_gpu::runtime::service::dispatch::map_buffer(
             &mut self.session,

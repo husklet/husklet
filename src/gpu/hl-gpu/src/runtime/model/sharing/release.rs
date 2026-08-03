@@ -363,6 +363,12 @@ impl Exports {
         if entry.key.session != owner || entry.owner_released {
             return Err(GpuError::Invalid("release: not export owner"));
         }
+        if entry.state() != MapState::Unmapped {
+            return Err(GpuError::MappedElsewhere {
+                kind: "shared resource",
+                id: id.0 as u32,
+            });
+        }
         if entry.pending.is_some() {
             return Err(GpuError::MappedElsewhere {
                 kind: "shared buffer transition",
@@ -423,6 +429,12 @@ impl Exports {
             .entries
             .get_mut(&id)
             .ok_or(GpuError::Invalid("release: no such export"))?;
+        if entry.state() != MapState::Unmapped {
+            return Err(GpuError::MappedElsewhere {
+                kind: "shared resource",
+                id: id.0 as u32,
+            });
+        }
         if entry.pending.is_some() {
             return Err(GpuError::MappedElsewhere {
                 kind: "shared buffer transition",
