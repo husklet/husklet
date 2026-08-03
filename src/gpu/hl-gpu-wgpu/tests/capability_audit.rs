@@ -123,6 +123,7 @@ fn every_advertised_texture_format_is_really_creatable() {
     // The advertisement is exactly color ∪ integer ∪ depth ∪ combined-depth-stencil.
     let expect = TextureFormat::bits(COLOR_FORMATS)
         | TextureFormat::bits(hl_gpu::protocol::model::capability::INTEGER_FORMATS)
+        | TextureFormat::bits(hl_gpu::protocol::model::capability::NATIVE_FORMATS)
         | TextureFormat::bits(DEPTH_FORMATS)
         | TextureFormat::bits(&[TextureFormat::Depth24PlusStencil8])
         | (caps.texture_formats
@@ -150,6 +151,7 @@ fn every_advertised_texture_format_is_really_creatable() {
         TextureFormat::Depth24PlusStencil8,
     ];
     all.extend_from_slice(hl_gpu::protocol::model::capability::INTEGER_FORMATS);
+    all.extend_from_slice(hl_gpu::protocol::model::capability::NATIVE_FORMATS);
     all.extend_from_slice(hl_gpu::protocol::model::capability::BC_FORMATS);
     all.extend_from_slice(hl_gpu::protocol::model::capability::ETC2_FORMATS);
     for fmt in all {
