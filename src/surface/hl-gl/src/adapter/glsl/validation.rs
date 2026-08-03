@@ -1136,7 +1136,9 @@ pub fn invalid_scope_semantics(source: &str) -> Option<String> {
         let Some((body_start, body_end)) = function.body else {
             continue;
         };
-        let body_scope = body_start.saturating_sub(1);
+        // Parameters form the function-declaration scope. The outermost compound statement is a child
+        // scope, so GLSL ES permits a local declaration there to hide a parameter.
+        let body_scope = function.declaration_at;
         for parameter in &function.parameters {
             variables.push(Variable {
                 name: parameter.name.clone(),
@@ -1218,6 +1220,7 @@ pub fn invalid_scope_semantics(source: &str) -> Option<String> {
             || variables.iter().any(|variable| variable.declaration == at)
             || parameter_name_indices.contains(&at)
             || at > 0 && source_tokens[at - 1] == "."
+            || source_tokens.get(at + 1).map(String::as_str) == Some("(")
             || struct_ranges
                 .iter()
                 .any(|(open, close)| *open < at && at < *close)

@@ -275,6 +275,9 @@ fn legal_nested_shadowing_and_symbol_lifetimes_remain_accepted() {
         "float func(float value){return value;} void main(){float value=func(1.0);}",
         "struct Pair{float value;}; float func(Pair pair){return pair.value;} void main(){}",
         "void main(){float first=1.0; float second=first;}",
+        "int func(int func){return func;} void main(){int value=func(1);}",
+        "int func(int input_value,int value){int value=5;return input_value+value;} void main(){}",
+        "int outer_value; void main(){int outer_value=1;{int outer_value=outer_value+5;}}",
         "void main(){float result=0.0; for(int index=0;index<2;index++){result+=float(index);}}",
         "void main(){int count=0; while(bool active=(count<2)){if(active){count++;}}}",
     ];
