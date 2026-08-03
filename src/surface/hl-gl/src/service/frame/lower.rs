@@ -665,15 +665,19 @@ pub(super) fn lower_draw_n(
             }
         }
         // The mip levels above the base, each into its own level of the same host texture.
-        for &(src, mip, width, height) in &tb.mip_stages {
-            copies.push(Enc::CopyBufferToTexture {
+        for &(src, mip, layer, width, height) in &tb.mip_stages {
+            copies.push(Enc::CopyBufferToTextureRegion {
                 src,
                 src_offset: 0,
                 bytes_per_row: width * tb.bytes_per_texel,
+                rows_per_image: height,
                 dst: tb.tex_ir,
-                mip,
-                width,
-                height,
+                dst_sub: TextureSubresource {
+                    mip,
+                    ..TextureSubresource::base()
+                },
+                dst_origin: Origin3d { x: 0, y: 0, z: layer },
+                extent: Extent3d { width, height, depth: 1 },
             });
         }
     }

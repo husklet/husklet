@@ -131,6 +131,8 @@ pub struct GlTexture {
     /// Base-level cube faces in GL order (+X, -X, +Y, -Y, +Z, -Z). `data` remains the canonical 2D
     /// plane for existing image/FBO paths; cube sampling lowers these six distinct planes as layers.
     pub(crate) cube_faces: [Option<Arc<Vec<u8>>>; 6],
+    /// Per-face mip images above level zero, in the same GL face order as `cube_faces`.
+    pub(crate) cube_mips: [Vec<MipLevel>; 6],
     pub min_filter: u32,
     pub mag_filter: u32,
     pub wrap_s: u32,
@@ -192,6 +194,7 @@ impl Default for GlTexture {
             h: 0,
             data: Arc::new(Vec::new()),
             cube_faces: std::array::from_fn(|_| None),
+            cube_mips: std::array::from_fn(|_| Vec::new()),
             min_filter: GL_NEAREST_MIPMAP_LINEAR,
             mag_filter: GL_LINEAR,
             wrap_s: GL_REPEAT,
@@ -216,6 +219,10 @@ impl Default for GlTexture {
 impl GlTexture {
     pub(crate) fn cube_faces(&self) -> &[Option<Arc<Vec<u8>>>; 6] {
         &self.cube_faces
+    }
+
+    pub(crate) fn cube_mips(&self) -> &[Vec<MipLevel>; 6] {
+        &self.cube_mips
     }
     /// The neutral min-filter for this texture's GL min-filter (`gl_shim.c`: Linear for LINEAR /
     /// LINEAR_MIPMAP_*, else Nearest).
@@ -729,6 +736,37 @@ impl Textures {
             data: Arc::new(pixels.to_vec()),
         };
         t.gen = generation;
+        true
+    }
+
+    /// Define one non-base mip level of one cube face without overwriting any sibling face.
+    pub fn image_cube_level(
+        &mut self,
+        name: u32,
+        face: usize,
+        level: u32,
+        w: i32,
+        h: i32,
+        pixels: &[u8],
+    ) -> bool {
+        const MAX_LEVELS: usize = 16;
+        if face >= 6 || level == 0 || level as usize > MAX_LEVELS || w <= 0 || h <= 0 {
+            return false;
+        }
+        let generation = self.generation();
+        let Some(texture) = self.map.get_mut(&name) else {
+            return false;
+        };
+        let index = level as usize - 1;
+        if texture.cube_mips[face].len() <= index {
+            texture.cube_mips[face].resize(index + 1, MipLevel::default());
+        }
+        texture.cube_mips[face][index] = MipLevel {
+            w,
+            h,
+            data: Arc::new(pixels.to_vec()),
+        };
+        texture.gen = generation;
         true
     }
 

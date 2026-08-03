@@ -92,7 +92,7 @@ pub(super) struct TexBind {
     pub(super) h: u32,
     /// Staging buffers for the mip levels ABOVE the base, as `(buffer, level, width, height)`. EMPTY for
     /// the single-level textures that are the overwhelming majority, so their lowering is unchanged.
-    pub(super) mip_stages: Vec<(u32, u32, u32, u32)>,
+    pub(super) mip_stages: Vec<(u32, u32, u32, u32, u32)>,
     /// Additional base-level cube-face staging buffers as `(buffer, layer)`; layer zero uses `stage_ir`.
     pub(super) layer_stages: Vec<(u32, u32)>,
     /// Bytes per texel of the staged plane. Four for every normalized shadow; one or two for an integer
@@ -399,13 +399,22 @@ pub(super) fn lower_textures(
             // host's level 0. Every declared level must be uploaded, so the window and the level count are
             // taken from one place.
             let levels = t.effective_levels();
-            let mip_levels = levels.len().max(1) as u32;
+            let mip_levels = if texture_dim == TextureDim::Cube {
+                t.cube_mips()
+                    .iter()
+                    .map(Vec::len)
+                    .max()
+                    .unwrap_or(0)
+                    .saturating_add(1) as u32
+            } else {
+                levels.len().max(1) as u32
+            };
             let (base_w, base_h, base_data) =
                 levels
                     .first()
                     .cloned()
                     .unwrap_or((t.w, t.h, Arc::clone(&t.data)));
-            let mut mip_stages: Vec<(u32, u32, u32, u32)> = Vec::new();
+            let mut mip_stages: Vec<(u32, u32, u32, u32, u32)> = Vec::new();
             let mut layer_stages: Vec<(u32, u32)> = Vec::new();
             // INSTRUMENTED BUILDS ONLY. Both branches, so "no staging write was emitted" can be told
             // apart from "this lowering path never ran". The first is a defect; the second means the
@@ -553,7 +562,27 @@ pub(super) fn lower_textures(
                 }
                 // One staging buffer per declared level above the base. A host texture must have every
                 // level it declares, so this walks exactly the levels `mip_levels` counted.
-                for (index, (lw, lh, data)) in levels.iter().enumerate().skip(1) {
+                let mip_images = if texture_dim == TextureDim::Cube {
+                    t.cube_mips()
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(layer, levels)| {
+                            levels.iter().enumerate().map(move |(index, level)| {
+                                (index as u32 + 1, layer as u32, level.w, level.h, Arc::clone(&level.data))
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    levels
+                        .iter()
+                        .enumerate()
+                        .skip(1)
+                        .map(|(index, (w, h, data))| {
+                            (index as u32, 0, *w, *h, Arc::clone(data))
+                        })
+                        .collect()
+                };
+                for (mip, layer, lw, lh, data) in mip_images {
                     let level_ir = ctx.alloc_buffer_ir()?;
                     cmds.push(Cmd::CreateBuffer(
                         level_ir,
@@ -566,9 +595,9 @@ pub(super) fn lower_textures(
                     cmds.push(Cmd::WriteBuffer {
                         id: level_ir,
                         offset: 0,
-                        data: (**data).clone(),
+                        data: (*data).clone(),
                     });
-                    mip_stages.push((level_ir, index as u32, *lw as u32, *lh as u32));
+                    mip_stages.push((level_ir, mip, layer, lw as u32, lh as u32));
                 }
                 stage_ir
             } else {

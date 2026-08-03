@@ -423,7 +423,14 @@ pub extern "C" fn glTexImage2D(
         // back a flat colour, whatever its min filter. A non-base level now lands beside the base image
         // instead of replacing it (see `GlTexture::mips`).
         if level > 0 {
-            record::tex_image_2d_level(&mut s.gl, level as u32, width, height, &rgba);
+            record::tex_image_2d_target_level(
+                &mut s.gl,
+                target,
+                level as u32,
+                width,
+                height,
+                &rgba,
+            );
             return;
         }
         s.redefine_texture(|ctx| {
