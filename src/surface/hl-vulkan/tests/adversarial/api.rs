@@ -1,5 +1,38 @@
 use super::*;
 
+struct FailTextureCreate {
+    inner: RecordingSink,
+    remaining: usize,
+}
+
+impl hl_gpu::CommandSink for FailTextureCreate {
+    fn negotiate(
+        &mut self,
+        request: &hl_gpu::FeatureRequest,
+    ) -> hl_gpu::Result<hl_gpu::Capabilities> {
+        self.inner.negotiate(request)
+    }
+
+    fn submit(&mut self, batch: &[Cmd]) -> hl_gpu::Result<()> {
+        if batch
+            .iter()
+            .any(|command| matches!(command, Cmd::CreateTexture(..)))
+        {
+            self.remaining -= 1;
+            if self.remaining == 0 {
+                return Err(GpuError::Kernel(
+                    "injected texture allocation failure".into(),
+                ));
+            }
+        }
+        self.inner.submit(batch)
+    }
+
+    fn wait(&mut self, fence: hl_gpu::FenceId, value: u64) -> hl_gpu::Result<()> {
+        self.inner.wait(fence, value)
+    }
+}
+
 #[test]
 fn buffer_view_preserves_format_range_and_rejects_bad_bounds() {
     let mut d = dev();
@@ -210,15 +243,53 @@ fn failed_replacement_still_retires_old_and_preserves_acquired_present() {
         present::create_swapchain_for_target(&mut d, &mut s, old_surface, 0x5000, target, 2, 0)
             .unwrap();
     let acquired = d.acquire_next_image(old).unwrap();
-
-    assert!(
-        present::create_swapchain_for_target(&mut d, &mut s, 0xdead, 0x5001, target, 2, old,)
-            .is_err()
-    );
+    let surfaces_before = d.surfaces.len();
+    let images_before = d.images.len();
+    let replacement_surface =
+        present::create_surface(&mut d, &mut s, 64, 64, vk_format::B8G8R8A8_UNORM, None).unwrap();
+    let mut failing = FailTextureCreate {
+        inner: sink(),
+        remaining: 2,
+    };
+    assert!(present::create_swapchain_for_target(
+        &mut d,
+        &mut failing,
+        replacement_surface,
+        0x5001,
+        target,
+        2,
+        old,
+    )
+    .is_err());
+    assert_eq!(d.surfaces.len(), surfaces_before);
+    assert_eq!(d.images.len(), images_before);
     assert!(d.swapchains.get(&old).unwrap().retired);
     assert!(d.acquire_next_image(old).is_err());
     present::queue_present(&mut d, &mut s, old, acquired, None)
         .expect("an image acquired before failed replacement remains presentable");
+}
+
+#[test]
+fn exhausted_swapchain_pool_never_reissues_an_owned_image() {
+    let mut d = dev();
+    let mut s = sink();
+    let surface =
+        present::create_surface(&mut d, &mut s, 64, 64, vk_format::B8G8R8A8_UNORM, None).unwrap();
+    let swapchain = present::create_swapchain(&mut d, &mut s, surface, 2).unwrap();
+    assert_eq!(d.acquire_next_image_with_timeout(swapchain, 0).unwrap(), 0);
+    assert_eq!(d.acquire_next_image_with_timeout(swapchain, 0).unwrap(), 1);
+    assert_eq!(
+        d.acquire_next_image_with_timeout(swapchain, 0),
+        Err(present::AcquireImageError::NotReady)
+    );
+    assert_eq!(
+        d.acquire_next_image_with_timeout(swapchain, 17),
+        Err(present::AcquireImageError::Timeout)
+    );
+    assert!(d.swapchains[&swapchain]
+        .images
+        .iter()
+        .all(|image| image.state == hl_vulkan::model::queue::ImageState::Acquired));
 }
 
 fn valid_swapchain_config() -> present::SwapchainConfig {

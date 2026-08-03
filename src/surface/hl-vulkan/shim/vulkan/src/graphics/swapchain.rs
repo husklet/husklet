@@ -286,34 +286,50 @@ pub extern "C" fn vkGetSwapchainImagesKHR(
 pub extern "C" fn vkAcquireNextImageKHR(
     _device: *mut c_void,
     swapchain: u64,
-    _timeout: u64,
+    timeout: u64,
     _semaphore: u64,
     _fence: u64,
     p_image_index: *mut u32,
 ) -> VkResult {
-    ShimState::with_device(|dev| match dev.acquire_next_image(swapchain) {
-        Ok(idx) => {
-            if !p_image_index.is_null() {
-                unsafe { *p_image_index = idx };
+    ShimState::with_device(
+        |dev| match dev.acquire_next_image_with_timeout(swapchain, timeout) {
+            Ok(idx) => {
+                if !p_image_index.is_null() {
+                    unsafe { *p_image_index = idx };
+                }
+                VK_SUCCESS
             }
-            VK_SUCCESS
-        }
-        Err(e) => {
-            // Error: the app cannot get an image to render into, so the frame is lost. Latched per
-            // swapchain — acquire runs at display rate and a swapchain that cannot acquire keeps
-            // failing until it is recreated, so an unlatched line would be sixty a second.
-            static REFUSED: crate::logging::Latch = crate::logging::Latch::new();
-            if REFUSED.fires(swapchain) {
-                hl_log::hl_error!(
-                    hl_log::tag::SHIM,
-                    "vkAcquireNextImageKHR sc={swapchain:#x} -> {:?}",
-                    Status::from_error(&e)
-                );
+            Err(
+                error @ (present::AcquireImageError::Retired
+                | present::AcquireImageError::NotReady
+                | present::AcquireImageError::Timeout),
+            ) => acquire_error_status(&error),
+            Err(present::AcquireImageError::Invalid(e)) => {
+                // Error: the app cannot get an image to render into, so the frame is lost. Latched per
+                // swapchain — acquire runs at display rate and a swapchain that cannot acquire keeps
+                // failing until it is recreated, so an unlatched line would be sixty a second.
+                static REFUSED: crate::logging::Latch = crate::logging::Latch::new();
+                if REFUSED.fires(swapchain) {
+                    hl_log::hl_error!(
+                        hl_log::tag::SHIM,
+                        "vkAcquireNextImageKHR sc={swapchain:#x} -> {:?}",
+                        Status::from_error(&e)
+                    );
+                }
+                Status::from_error(&e)
             }
-            Status::from_error(&e)
-        }
-    })
+        },
+    )
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
+}
+
+fn acquire_error_status(error: &present::AcquireImageError) -> VkResult {
+    match error {
+        present::AcquireImageError::Retired => VK_ERROR_OUT_OF_DATE_KHR,
+        present::AcquireImageError::NotReady => VK_NOT_READY,
+        present::AcquireImageError::Timeout => VK_TIMEOUT,
+        present::AcquireImageError::Invalid(error) => Status::from_error(error),
+    }
 }
 
 /// `VkAcquireNextImageInfoKHR` — the struct `vkAcquireNextImage2KHR` takes in place of the positional
@@ -599,6 +615,22 @@ mod tests {
         );
         assert_eq!(active_target_status(0, false), VK_SUCCESS);
         assert_eq!(active_target_status(7, true), VK_SUCCESS);
+    }
+
+    #[test]
+    fn acquire_pool_outcomes_map_to_exact_wsi_results() {
+        assert_eq!(
+            acquire_error_status(&present::AcquireImageError::Retired),
+            VK_ERROR_OUT_OF_DATE_KHR
+        );
+        assert_eq!(
+            acquire_error_status(&present::AcquireImageError::NotReady),
+            VK_NOT_READY
+        );
+        assert_eq!(
+            acquire_error_status(&present::AcquireImageError::Timeout),
+            VK_TIMEOUT
+        );
     }
 
     #[test]
