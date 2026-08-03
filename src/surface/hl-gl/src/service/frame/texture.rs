@@ -274,7 +274,11 @@ pub(super) fn lower_textures(
                             TextureDesc {
                                 width: 1,
                                 height: 1,
-                                depth: if texture_dim == TextureDim::Cube { 6 } else { 1 },
+                                depth: if texture_dim == TextureDim::Cube {
+                                    6
+                                } else {
+                                    1
+                                },
                                 mip_levels: 1,
                                 sample_count: 1,
                                 dim: texture_dim,
@@ -325,7 +329,11 @@ pub(super) fn lower_textures(
                         mip_stages: Vec::new(),
                         layer_stages: Vec::new(),
                         bytes_per_texel: 4,
-                        layers: if texture_dim == TextureDim::Cube { 6 } else { 1 },
+                        layers: if texture_dim == TextureDim::Cube {
+                            6
+                        } else {
+                            1
+                        },
                     });
                     continue;
                 }
@@ -383,10 +391,8 @@ pub(super) fn lower_textures(
                 }
                 None if live_generation => {
                     let generation = t.sampled_generation();
-                    let (texture, upload) = ctx.sampled_texture_ir(
-                        gl_tex,
-                        (generation.0, generation.1, uses_mipmaps),
-                    )?;
+                    let (texture, upload) =
+                        ctx.sampled_texture_ir(gl_tex, (generation.0, generation.1, uses_mipmaps))?;
                     (texture, upload, false, "live-generation")
                 }
                 None => match snapshot_key.and_then(|key| snapshots.get(&key).copied()) {
@@ -406,7 +412,15 @@ pub(super) fn lower_textures(
             // `[BASE_LEVEL, MAX_LEVEL]` window, which re-indexes the pyramid so the base level becomes the
             // host's level 0. Every declared level must be uploaded, so the window and the level count are
             // taken from one place.
-            let levels = t.sampled_levels(uses_mipmaps);
+            // GL defines sampling an incomplete texture as opaque black. A host cube view cannot itself
+            // represent missing/mismatched faces or holes in a mip pyramid, so materialize a complete
+            // 1x1 black cube instead of silently copying a surviving face into every invalid slot.
+            let incomplete_cube = texture_dim == TextureDim::Cube && !t.cube_complete(uses_mipmaps);
+            let cube_fallback = incomplete_cube.then(|| Arc::new(vec![0, 0, 0, 0xff]));
+            let levels = cube_fallback.as_ref().map_or_else(
+                || t.sampled_levels(uses_mipmaps),
+                |pixels| vec![(1, 1, Arc::clone(pixels))],
+            );
             let mip_levels = levels.len().max(1) as u32;
             let (base_w, base_h, base_data) =
                 levels
@@ -537,8 +551,18 @@ pub(super) fn lower_textures(
                 cmds.push(Cmd::WriteBuffer {
                     id: stage_ir,
                     offset: 0,
-                    data: if texture_dim == TextureDim::Cube {
-                        t.cube_faces()[0].as_ref().unwrap_or(&base_data).as_ref().clone()
+                    data: if incomplete_cube {
+                        cube_fallback
+                            .as_ref()
+                            .expect("incomplete cube has fallback")
+                            .as_ref()
+                            .clone()
+                    } else if texture_dim == TextureDim::Cube {
+                        t.cube_faces()[0]
+                            .as_ref()
+                            .unwrap_or(&base_data)
+                            .as_ref()
+                            .clone()
                     } else {
                         (*base_data).clone()
                     },
@@ -546,7 +570,13 @@ pub(super) fn lower_textures(
                 if texture_dim == TextureDim::Cube {
                     for (layer, face) in t.cube_faces().iter().enumerate().skip(1) {
                         let face_ir = ctx.alloc_buffer_ir()?;
-                        let data = face.as_ref().unwrap_or(&base_data);
+                        let data = if incomplete_cube {
+                            cube_fallback
+                                .as_ref()
+                                .expect("incomplete cube has fallback")
+                        } else {
+                            face.as_ref().unwrap_or(&base_data)
+                        };
                         cmds.push(Cmd::CreateBuffer(
                             face_ir,
                             BufferDesc {

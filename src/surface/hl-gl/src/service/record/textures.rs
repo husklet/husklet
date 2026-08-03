@@ -204,7 +204,10 @@ pub fn tex_image_2d_target_declared(
     };
     let name = ctx.local.tex_unit[ctx.local.active_texture];
     let format = declared_plane(internalformat);
-    let stored = name != 0 && ctx.textures.image_cube_face(name, face, w, h, pixels, format);
+    let stored = name != 0
+        && ctx
+            .textures
+            .image_cube_face(name, face, w, h, pixels, format, internalformat);
     tex_internal_format(ctx, internalformat);
     if name != 0 && !stored {
         ctx.set_gl_error(GL_INVALID_VALUE);
@@ -257,6 +260,7 @@ pub fn tex_image_2d_target_level(
     w: i32,
     h: i32,
     pixels: &[u8],
+    internalformat: u32,
 ) {
     let Some(face) = cube_face_index(target) else {
         tex_image_2d_level(ctx, level, w, h, pixels);
@@ -271,7 +275,11 @@ pub fn tex_image_2d_target_level(
         return;
     }
     let name = ctx.local.tex_unit[ctx.local.active_texture];
-    if name != 0 && !ctx.textures.image_cube_level(name, face, level, w, h, pixels) {
+    if name != 0
+        && !ctx
+            .textures
+            .image_cube_level(name, face, level, w, h, pixels, internalformat)
+    {
         ctx.set_gl_error(GL_INVALID_VALUE);
     }
 }
@@ -344,7 +352,7 @@ impl GlContext {
             Some(vec![std::sync::Arc::clone(&texture.data)])
         };
         let Some(faces) = faces else { return };
-        let (base_w, base_h) = (texture.w, texture.h);
+        let (base_w, base_h, internal_format) = (texture.w, texture.h, texture.internal_format);
         for (face, base) in faces.into_iter().enumerate() {
             let (mut w, mut h, mut source) = (base_w, base_h, (*base).clone());
             let mut level = 1u32;
@@ -352,8 +360,15 @@ impl GlContext {
                 let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
                 source = box_filter(&source, w, h, nw, nh);
                 if target == GL_TEXTURE_CUBE_MAP {
-                    self.textures
-                        .image_cube_level(name, face, level, nw, nh, &source);
+                    self.textures.image_cube_level(
+                        name,
+                        face,
+                        level,
+                        nw,
+                        nh,
+                        &source,
+                        internal_format,
+                    );
                 } else {
                     self.textures.image_2d_level(name, level, nw, nh, &source);
                 }
@@ -568,7 +583,8 @@ pub fn tex_image_3d(
     let accepted = if level == 0 {
         ctx.textures.alloc_volume(name, w, h, depth, rgba)
     } else {
-        ctx.textures.image_3d_level(name, level as u32, w, h, depth, rgba)
+        ctx.textures
+            .image_3d_level(name, level as u32, w, h, depth, rgba)
     };
     if !accepted {
         ctx.set_gl_error(GL_INVALID_VALUE);
@@ -626,17 +642,17 @@ pub fn tex_sub_image_3d(
     depth: i32,
     rgba: &[u8],
 ) {
-    if level < 0
-        || depth <= 0
-        || (target != GL_TEXTURE_2D_ARRAY && target != GL_TEXTURE_3D)
-    {
+    if level < 0 || depth <= 0 || (target != GL_TEXTURE_2D_ARRAY && target != GL_TEXTURE_3D) {
         return;
     }
     let name = ctx.local.tex_unit[ctx.local.active_texture];
     if name == 0 {
         return;
     }
-    if !ctx.textures.sub_image_3d_level(name, level as u32, xo, yo, zo, w, h, depth, rgba) {
+    if !ctx
+        .textures
+        .sub_image_3d_level(name, level as u32, xo, yo, zo, w, h, depth, rgba)
+    {
         ctx.set_gl_error(GL_INVALID_VALUE);
     }
 }
@@ -696,27 +712,27 @@ pub fn copy_tex_sub_image_2d(
     let src_rows: Option<Vec<u8>> = ctx
         .framebuffer_color_texture(ctx.local.read_fbo, 0)
         .and_then(|(_, st)| {
-        if st.data.is_empty()
-            || x as i64 + w as i64 > st.w as i64
-            || y as i64 + h as i64 > st.h as i64
-        {
-            return None;
-        }
-        // Rows come out at the SOURCE plane's own texel. The destination decides whether they are
-        // acceptable: `sub_image_2d` measures the rect against its own plane's texel, so a copy between
-        // planes of different width fails the length test rather than reinterpreting one as the other.
-        let texel = st.bytes_per_texel();
-        let (sw, w, h) = (st.w as usize, w as usize, h as usize);
-        let (x, y) = (x as usize, y as usize);
-        if st.data.len() != sw * st.h as usize * texel {
-            return None;
-        }
-        let mut buf = Vec::with_capacity(w * h * texel);
-        for row in 0..h {
-            let base = ((y + row) * sw + x) * texel;
-            buf.extend_from_slice(&st.data[base..base + w * texel]);
-        }
-        Some(buf)
+            if st.data.is_empty()
+                || x as i64 + w as i64 > st.w as i64
+                || y as i64 + h as i64 > st.h as i64
+            {
+                return None;
+            }
+            // Rows come out at the SOURCE plane's own texel. The destination decides whether they are
+            // acceptable: `sub_image_2d` measures the rect against its own plane's texel, so a copy between
+            // planes of different width fails the length test rather than reinterpreting one as the other.
+            let texel = st.bytes_per_texel();
+            let (sw, w, h) = (st.w as usize, w as usize, h as usize);
+            let (x, y) = (x as usize, y as usize);
+            if st.data.len() != sw * st.h as usize * texel {
+                return None;
+            }
+            let mut buf = Vec::with_capacity(w * h * texel);
+            for row in 0..h {
+                let base = ((y + row) * sw + x) * texel;
+                buf.extend_from_slice(&st.data[base..base + w * texel]);
+            }
+            Some(buf)
         });
     if let Some(buf) = src_rows {
         ctx.textures.sub_image_2d(dst, xo, yo, w, h, &buf);

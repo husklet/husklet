@@ -8,7 +8,11 @@ fn sampler_3d_lowers_uploaded_depth_slices() {
     let mut context = ctx_640x480();
     let mut sink = RecordingSink::with_full_caps();
     let vertex = record::create_shader(&mut context, GL_VERTEX_SHADER);
-    record::shader_source(&mut context, vertex, "attribute vec2 p;varying vec3 d;void main(){d=vec3(.5);gl_Position=vec4(p,0,1);}");
+    record::shader_source(
+        &mut context,
+        vertex,
+        "attribute vec2 p;varying vec3 d;void main(){d=vec3(.5);gl_Position=vec4(p,0,1);}",
+    );
     record::compile_shader(&mut context, vertex);
     let fragment = record::create_shader(&mut context, GL_FRAGMENT_SHADER);
     record::shader_source(&mut context, fragment, "precision mediump float;varying vec3 d;uniform sampler3D s;void main(){gl_FragColor=texture3D(s,d);}");
@@ -24,7 +28,11 @@ fn sampler_3d_lowers_uploaded_depth_slices() {
     // Capturing only level zero makes the texture incomplete and loses all later client bytes.
     let mut expected_copies = 0;
     for level in 0..6 {
-        let (w, h, depth) = ((63 >> level).max(1), (29 >> level).max(1), (11 >> level).max(1));
+        let (w, h, depth) = (
+            (63 >> level).max(1),
+            (29 >> level).max(1),
+            (11 >> level).max(1),
+        );
         let pixels = [level as u8 + 1, 2, 3, 255].repeat((w * h * depth) as usize);
         record::tex_image_3d(&mut context, GL_TEXTURE_3D, level, w, h, depth, &pixels);
         expected_copies += depth;
@@ -37,12 +45,26 @@ fn sampler_3d_lowers_uploaded_depth_slices() {
     record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
     assert!(swap::swap_buffers(&mut context, &mut sink).unwrap());
     let batch = &sink.batches[0];
-    let texture_ir = batch.iter().find_map(|command| match command {
-        Cmd::CreateTexture(id, desc)
-            if desc.dim == TextureDim::D3 && desc.depth == 11 && desc.mip_levels == 6 => Some(*id),
-        _ => None,
-    }).expect("complete client-memory 3D mip chain");
-    assert_eq!(submit_ops(batch).iter().filter(|op| matches!(op, Enc::CopyBufferToTextureRegion { dst, .. } if *dst == texture_ir)).count(), expected_copies as usize);
+    let texture_ir = batch
+        .iter()
+        .find_map(|command| match command {
+            Cmd::CreateTexture(id, desc)
+                if desc.dim == TextureDim::D3 && desc.depth == 11 && desc.mip_levels == 6 =>
+            {
+                Some(*id)
+            }
+            _ => None,
+        })
+        .expect("complete client-memory 3D mip chain");
+    assert_eq!(
+        submit_ops(batch)
+            .iter()
+            .filter(
+                |op| matches!(op, Enc::CopyBufferToTextureRegion { dst, .. } if *dst == texture_ir)
+            )
+            .count(),
+        expected_copies as usize
+    );
 }
 
 #[test]
@@ -95,6 +117,7 @@ fn sampler_cube_lowers_to_six_initialized_cube_layers() {
             1,
             1,
             pixels,
+            GL_RGBA,
         );
     }
     let buffer = context.buffers.gen();
@@ -127,30 +150,49 @@ fn sampler_cube_lowers_to_six_initialized_cube_layers() {
     let layers = submit_ops(batch)
         .iter()
         .filter_map(|operation| match operation {
-            Enc::CopyBufferToTextureRegion { src, dst, dst_sub, dst_origin, extent, .. }
-                if *dst == texture_ir && dst_sub.mip == 0 && extent.depth == 1 =>
-            {
+            Enc::CopyBufferToTextureRegion {
+                src,
+                dst,
+                dst_sub,
+                dst_origin,
+                extent,
+                ..
+            } if *dst == texture_ir && dst_sub.mip == 0 && extent.depth == 1 => {
                 Some((dst_origin.z, *src))
             }
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(layers.iter().map(|(layer, _)| *layer).collect::<Vec<_>>(), vec![0, 1, 2, 3, 4, 5]);
+    assert_eq!(
+        layers.iter().map(|(layer, _)| *layer).collect::<Vec<_>>(),
+        vec![0, 1, 2, 3, 4, 5]
+    );
     for (layer, source) in layers {
         assert_eq!(staged[&source], &faces[layer as usize]);
     }
     let mip_layers = submit_ops(batch)
         .iter()
         .filter_map(|operation| match operation {
-            Enc::CopyBufferToTextureRegion { src, dst, dst_sub, dst_origin, extent, .. }
-                if *dst == texture_ir && dst_sub.mip == 1 && extent.depth == 1 =>
-            {
+            Enc::CopyBufferToTextureRegion {
+                src,
+                dst,
+                dst_sub,
+                dst_origin,
+                extent,
+                ..
+            } if *dst == texture_ir && dst_sub.mip == 1 && extent.depth == 1 => {
                 Some((dst_origin.z, *src))
             }
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(mip_layers.iter().map(|(layer, _)| *layer).collect::<Vec<_>>(), vec![0, 1, 2, 3, 4, 5]);
+    assert_eq!(
+        mip_layers
+            .iter()
+            .map(|(layer, _)| *layer)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2, 3, 4, 5]
+    );
     for (layer, source) in mip_layers {
         assert_eq!(staged[&source], &mip_faces[layer as usize]);
     }

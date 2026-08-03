@@ -15,6 +15,13 @@ use std::sync::{Arc, RwLock, Weak};
 
 static NEXT_SHARED_PIXELS_ID: AtomicU64 = AtomicU64::new(1);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CubeImageDesc {
+    w: i32,
+    h: i32,
+    internal_format: u32,
+}
+
 /// Pixel storage shared by every GL texture sibling created from one linear EGLImage allocation.
 ///
 /// The GL texture object remains a distinct view with its own sampler state and object generation. Pixel
@@ -144,6 +151,12 @@ pub struct GlTexture {
     /// Base-level cube faces in GL order (+X, -X, +Y, -Y, +Z, -Z). `data` remains the canonical 2D
     /// plane for existing image/FBO paths; cube sampling lowers these six distinct planes as layers.
     pub(crate) cube_faces: [Option<Arc<Vec<u8>>>; 6],
+    /// Per-face declarations retain the GL spelling as well as the extent. The neutral plane cannot
+    /// distinguish RGB from RGBA or LUMINANCE from LUMINANCE_ALPHA, but cube completeness must.
+    pub(crate) cube_face_descs: [Option<CubeImageDesc>; 6],
+    /// Per-level, per-face declarations above the base. `mips` owns the bytes used by lowering; this
+    /// parallel metadata owns the GL completeness rules that cannot be recovered from those bytes.
+    pub(crate) cube_mip_descs: Vec<[Option<CubeImageDesc>; 6]>,
     pub(crate) layers: Vec<Arc<Vec<u8>>>,
     pub min_filter: u32,
     pub mag_filter: u32,
@@ -207,6 +220,8 @@ impl Default for GlTexture {
             depth: 1,
             data: Arc::new(Vec::new()),
             cube_faces: std::array::from_fn(|_| None),
+            cube_face_descs: [None; 6],
+            cube_mip_descs: Vec::new(),
             layers: Vec::new(),
             min_filter: GL_NEAREST_MIPMAP_LINEAR,
             mag_filter: GL_LINEAR,
@@ -366,6 +381,40 @@ impl GlTexture {
             levels.truncate(1);
         }
         levels
+    }
+
+    /// Whether a cube sampler may use this texture. ES 2.0 requires all six faces at every required
+    /// level, square and identically sized/formatted, with a complete halving chain when the min filter
+    /// uses mipmaps. Incomplete sampling returns opaque black; lowering materializes that fallback.
+    pub fn cube_complete(&self, uses_mipmaps: bool) -> bool {
+        let Some(base) = self.cube_face_descs[0] else {
+            return false;
+        };
+        if base.w <= 0
+            || base.w != base.h
+            || self.cube_face_descs.iter().any(|face| *face != Some(base))
+        {
+            return false;
+        }
+        if !uses_mipmaps {
+            return true;
+        }
+        let required_levels = (i32::BITS - base.w.max(1).leading_zeros()) as usize;
+        for level in 1..required_levels {
+            let extent = (base.w >> level).max(1);
+            let expected = CubeImageDesc {
+                w: extent,
+                h: extent,
+                internal_format: base.internal_format,
+            };
+            let Some(faces) = self.cube_mip_descs.get(level - 1) else {
+                return false;
+            };
+            if faces.iter().any(|face| *face != Some(expected)) {
+                return false;
+            }
+        }
+        true
     }
 
     /// Has this texture received a REAL pixel upload (`glTexImage2D`-with-pixels / `glTexSubImage2D` /
@@ -733,14 +782,23 @@ impl Textures {
         h: i32,
         pixels: &[u8],
         format: TextureFormat,
+        internal_format: u32,
     ) -> bool {
         if face >= 6 {
             return false;
         }
         let accepted = self.image_2d(name, w, h, pixels, format);
         if accepted {
-            let t = self.map.get_mut(&name).expect("image_2d materialized texture");
+            let t = self
+                .map
+                .get_mut(&name)
+                .expect("image_2d materialized texture");
             t.cube_faces[face] = Some(Arc::clone(&t.data));
+            t.cube_face_descs[face] = Some(CubeImageDesc {
+                w,
+                h,
+                internal_format,
+            });
         }
         accepted
     }
@@ -784,6 +842,7 @@ impl Textures {
         w: i32,
         h: i32,
         pixels: &[u8],
+        internal_format: u32,
     ) -> bool {
         const MAX_LEVELS: usize = 16;
         if face >= 6 || level == 0 || level as usize > MAX_LEVELS || w <= 0 || h <= 0 {
@@ -810,6 +869,14 @@ impl Textures {
             mip.layers[face - 1] = Arc::new(pixels.to_vec());
         }
         texture.gen = generation;
+        if texture.cube_mip_descs.len() <= index {
+            texture.cube_mip_descs.resize(index + 1, [None; 6]);
+        }
+        texture.cube_mip_descs[index][face] = Some(CubeImageDesc {
+            w,
+            h,
+            internal_format,
+        });
         true
     }
 
@@ -827,14 +894,18 @@ impl Textures {
             return false;
         }
         let generation = self.generation();
-        let Some(t) = self.map.get_mut(&name) else { return false; };
+        let Some(t) = self.map.get_mut(&name) else {
+            return false;
+        };
         let Some(plane) = (w as usize)
             .checked_mul(h as usize)
             .and_then(|n| n.checked_mul(t.bytes_per_texel()))
         else {
             return false;
         };
-        let Some(total) = plane.checked_mul(depth as usize) else { return false; };
+        let Some(total) = plane.checked_mul(depth as usize) else {
+            return false;
+        };
         if pixels.len() < total {
             return false;
         }
@@ -954,9 +1025,13 @@ impl Textures {
         if depth <= 0 || !self.alloc_plane(name, w, h) {
             return false;
         }
-        let Some(texture) = self.map.get_mut(&name) else { return false; };
+        let Some(texture) = self.map.get_mut(&name) else {
+            return false;
+        };
         let plane = texture.data.len();
-        let Some(total) = plane.checked_mul(depth as usize) else { return false; };
+        let Some(total) = plane.checked_mul(depth as usize) else {
+            return false;
+        };
         if !pixels.is_empty() && pixels.len() < total {
             return false;
         }
@@ -977,27 +1052,60 @@ impl Textures {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn sub_image_3d(&mut self, name: u32, xo: i32, yo: i32, zo: i32, w: i32, h: i32, depth: i32, pixels: &[u8]) -> bool {
-        let Some(texture) = self.map.get(&name) else { return false; };
+    pub fn sub_image_3d(
+        &mut self,
+        name: u32,
+        xo: i32,
+        yo: i32,
+        zo: i32,
+        w: i32,
+        h: i32,
+        depth: i32,
+        pixels: &[u8],
+    ) -> bool {
+        let Some(texture) = self.map.get(&name) else {
+            return false;
+        };
         if zo < 0 || depth <= 0 || zo.checked_add(depth).is_none_or(|end| end > texture.depth) {
             return false;
         }
-        let Some(plane_bytes) = (w.max(0) as usize).checked_mul(h.max(0) as usize).and_then(|n| n.checked_mul(texture.bytes_per_texel())) else { return false; };
-        if pixels.len() < plane_bytes.saturating_mul(depth as usize) { return false; }
+        let Some(plane_bytes) = (w.max(0) as usize)
+            .checked_mul(h.max(0) as usize)
+            .and_then(|n| n.checked_mul(texture.bytes_per_texel()))
+        else {
+            return false;
+        };
+        if pixels.len() < plane_bytes.saturating_mul(depth as usize) {
+            return false;
+        }
         for layer in 0..depth {
             let z = (zo + layer) as usize;
             if z == 0 {
-                if !self.sub_image_2d(name, xo, yo, w, h, &pixels[layer as usize * plane_bytes..][..plane_bytes]) { return false; }
+                if !self.sub_image_2d(
+                    name,
+                    xo,
+                    yo,
+                    w,
+                    h,
+                    &pixels[layer as usize * plane_bytes..][..plane_bytes],
+                ) {
+                    return false;
+                }
             } else {
-                let Some(texture) = self.map.get_mut(&name) else { return false; };
+                let Some(texture) = self.map.get_mut(&name) else {
+                    return false;
+                };
                 let texel = texture.bytes_per_texel();
                 let tw = texture.w as usize;
-                let Some(target) = texture.layers.get_mut(z - 1) else { return false; };
+                let Some(target) = texture.layers.get_mut(z - 1) else {
+                    return false;
+                };
                 let mut owned = (**target).clone();
                 for row in 0..h as usize {
                     let dst = ((yo as usize + row) * tw + xo as usize) * texel;
                     let src = layer as usize * plane_bytes + row * w as usize * texel;
-                    owned[dst..dst + w as usize * texel].copy_from_slice(&pixels[src..src + w as usize * texel]);
+                    owned[dst..dst + w as usize * texel]
+                        .copy_from_slice(&pixels[src..src + w as usize * texel]);
                 }
                 *target = Arc::new(owned);
             }
@@ -1012,22 +1120,47 @@ impl Textures {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn sub_image_3d_level(&mut self, name: u32, level: u32, xo: i32, yo: i32, zo: i32, w: i32, h: i32, depth: i32, pixels: &[u8]) -> bool {
+    pub fn sub_image_3d_level(
+        &mut self,
+        name: u32,
+        level: u32,
+        xo: i32,
+        yo: i32,
+        zo: i32,
+        w: i32,
+        h: i32,
+        depth: i32,
+        pixels: &[u8],
+    ) -> bool {
         if level == 0 {
             return self.sub_image_3d(name, xo, yo, zo, w, h, depth, pixels);
         }
         let generation = self.generation();
-        let Some(texture) = self.map.get_mut(&name) else { return false; };
+        let Some(texture) = self.map.get_mut(&name) else {
+            return false;
+        };
         let texel = texture.bytes_per_texel();
-        let Some(mip) = texture.mips.get_mut(level as usize - 1) else { return false; };
-        if xo < 0 || yo < 0 || zo < 0 || w < 0 || h < 0 || depth <= 0
+        let Some(mip) = texture.mips.get_mut(level as usize - 1) else {
+            return false;
+        };
+        if xo < 0
+            || yo < 0
+            || zo < 0
+            || w < 0
+            || h < 0
+            || depth <= 0
             || xo.checked_add(w).is_none_or(|end| end > mip.w)
             || yo.checked_add(h).is_none_or(|end| end > mip.h)
             || zo.checked_add(depth).is_none_or(|end| end > mip.depth)
         {
             return false;
         }
-        let Some(plane_bytes) = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(texel)) else { return false; };
+        let Some(plane_bytes) = (w as usize)
+            .checked_mul(h as usize)
+            .and_then(|n| n.checked_mul(texel))
+        else {
+            return false;
+        };
         if pixels.len() < plane_bytes.saturating_mul(depth as usize) {
             return false;
         }
@@ -1036,7 +1169,9 @@ impl Textures {
             let target = if z == 0 {
                 &mut mip.data
             } else {
-                let Some(target) = mip.layers.get_mut(z - 1) else { return false; };
+                let Some(target) = mip.layers.get_mut(z - 1) else {
+                    return false;
+                };
                 target
             };
             let mut owned = (**target).clone();
@@ -1301,10 +1436,76 @@ mod sampled_level_tests {
     #[test]
     fn mipmapped_sampling_keeps_the_complete_pyramid() {
         let levels = three_level_texture().sampled_levels(true);
-        assert_eq!(levels.iter().map(|(w, h, _)| (*w, *h)).collect::<Vec<_>>(), [
-            (4, 4),
-            (2, 2),
-            (1, 1),
-        ]);
+        assert_eq!(
+            levels.iter().map(|(w, h, _)| (*w, *h)).collect::<Vec<_>>(),
+            [(4, 4), (2, 2), (1, 1),]
+        );
+    }
+
+    fn complete_cube(size: i32) -> GlTexture {
+        let base = CubeImageDesc {
+            w: size,
+            h: size,
+            internal_format: GL_RGBA,
+        };
+        let mut texture = GlTexture {
+            w: size,
+            h: size,
+            data: Arc::new(vec![0; size as usize * size as usize * 4]),
+            cube_face_descs: [Some(base); 6],
+            ..Default::default()
+        };
+        let mut extent = size / 2;
+        while extent > 0 {
+            let level = CubeImageDesc {
+                w: extent,
+                h: extent,
+                internal_format: GL_RGBA,
+            };
+            texture.cube_mip_descs.push([Some(level); 6]);
+            extent /= 2;
+        }
+        texture
+    }
+
+    #[test]
+    fn cube_requires_all_six_square_matching_base_faces() {
+        let mut texture = complete_cube(4);
+        assert!(texture.cube_complete(false));
+        texture.cube_face_descs[3] = None;
+        assert!(!texture.cube_complete(false));
+
+        let mut texture = complete_cube(4);
+        texture.cube_face_descs[2] = Some(CubeImageDesc {
+            w: 4,
+            h: 3,
+            internal_format: GL_RGBA,
+        });
+        assert!(!texture.cube_complete(false));
+
+        let mut texture = complete_cube(4);
+        texture.cube_face_descs[5] = Some(CubeImageDesc {
+            w: 4,
+            h: 4,
+            internal_format: GL_RGB,
+        });
+        assert!(!texture.cube_complete(false));
+    }
+
+    #[test]
+    fn cube_mipmap_completeness_requires_every_face_of_the_halving_chain() {
+        let mut texture = complete_cube(4);
+        assert!(texture.cube_complete(true));
+        texture.cube_mip_descs[0][4] = None;
+        assert!(!texture.cube_complete(true));
+
+        let mut texture = complete_cube(4);
+        texture.cube_mip_descs[1][0] = Some(CubeImageDesc {
+            w: 2,
+            h: 2,
+            internal_format: GL_RGBA,
+        });
+        assert!(!texture.cube_complete(true));
+        assert!(texture.cube_complete(false));
     }
 }

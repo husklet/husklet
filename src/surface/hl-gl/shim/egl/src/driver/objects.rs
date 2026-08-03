@@ -217,7 +217,8 @@ pub extern "C" fn glBufferData(target: u32, size: isize, data: *const c_void, us
         return;
     }
     let name = GlobalState::context(|s| s.gl.buffer_for_target(target));
-    let registered_size = GlobalState::context(|s| s.gl.interop_buffer(name).map(|(_, bytes)| bytes));
+    let registered_size =
+        GlobalState::context(|s| s.gl.interop_buffer(name).map(|(_, bytes)| bytes));
     if registered_size.is_some_and(|bytes| bytes != size as usize) {
         GlobalState::context(|s| s.gl.set_gl_error(GL_INVALID_OPERATION));
         return;
@@ -287,10 +288,13 @@ pub extern "C" fn glBufferSubData(target: u32, offset: isize, size: isize, data:
     }
     let d = unsafe { RawBytes::read(data, size) }.to_vec();
     let name = GlobalState::context(|s| s.gl.buffer_for_target(target));
-    if let Err(error) = commit_after_gpu_write(
-        write_interop_buffer(name, offset as u64, d.clone()),
-        || GlobalState::context(|s| record::buffer_sub_data(&mut s.gl, target, offset as usize, &d)),
-    ) {
+    if let Err(error) =
+        commit_after_gpu_write(write_interop_buffer(name, offset as u64, d.clone()), || {
+            GlobalState::context(|s| {
+                record::buffer_sub_data(&mut s.gl, target, offset as usize, &d)
+            })
+        })
+    {
         hl_log::hl_error!(hl_log::tag::GL, "GL/CUDA buffer update failed: {error}");
         let gl_error = gl_error_from_gpu_error(&error);
         GlobalState::context(|s| s.gl.set_gl_error(gl_error));
@@ -317,10 +321,7 @@ fn write_interop_buffer(name: u32, offset: u64, data: Vec<u8>) -> hl_gpu::Result
     })
 }
 
-fn commit_after_gpu_write(
-    write: hl_gpu::Result<()>,
-    commit: impl FnOnce(),
-) -> hl_gpu::Result<()> {
+fn commit_after_gpu_write(write: hl_gpu::Result<()>, commit: impl FnOnce()) -> hl_gpu::Result<()> {
     write?;
     commit();
     Ok(())
@@ -406,12 +407,7 @@ pub extern "C" fn glTexImage2D(
             s.gl.set_gl_error(GL_INVALID_VALUE);
             return;
         }
-        if !record::validate_tex_image_2d(
-            &mut s.gl,
-            internalformat.max(0) as u32,
-            format,
-            type_,
-        ) {
+        if !record::validate_tex_image_2d(&mut s.gl, internalformat.max(0) as u32, format, type_) {
             return;
         }
         // The plane the declared internal format names IS the destination, so the conversion emits its
@@ -430,6 +426,7 @@ pub extern "C" fn glTexImage2D(
                 width,
                 height,
                 &rgba,
+                internalformat.max(0) as u32,
             );
             return;
         }
