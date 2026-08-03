@@ -820,6 +820,42 @@ mod tests {
     }
 
     #[test]
+    fn copy_tex_image_defines_nonzero_mip_then_records_the_full_copy() {
+        let mut ctx = GlContext::new();
+        let texture = ctx.textures.gen();
+        ctx.local.tex_unit[ctx.local.active_texture] = texture;
+        assert!(ctx.textures.image_2d(
+            texture,
+            16,
+            8,
+            &[0; 16 * 8 * 4],
+            TextureFormat::Rgba8Unorm,
+        ));
+        crate::service::record::copy_tex_image_2d(
+            &mut ctx,
+            GL_TEXTURE_2D,
+            1,
+            GL_LUMINANCE_ALPHA,
+            5,
+            7,
+            8,
+            4,
+            0,
+        );
+        let mip = &ctx.textures.get(texture).unwrap().mips[0];
+        assert_eq!((mip.w, mip.h, mip.data.len()), (8, 4, 8 * 4 * 4));
+        assert!(matches!(ctx.local.recording.operations.last(),
+            Some(FrameOp::CopyTex(copy)) if copy.texture == texture && copy.level == 1
+                && copy.src == [5, 7] && copy.dst == [0, 0] && copy.extent == [8, 4]
+        ));
+        assert_eq!(
+            ctx.textures.get(texture).unwrap().sampled_swizzle(),
+            [GL_RED, GL_RED, GL_RED, GL_ALPHA],
+            "the legacy LA conversion is sampled without changing explicit swizzle state",
+        );
+    }
+
+    #[test]
     fn combined_color_depth_stencil_clear_is_not_discarded_by_color_fold() {
         let clear = DrawCall {
             is_clear: true,

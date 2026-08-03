@@ -833,6 +833,9 @@ pub fn copy_tex_image_2d(
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
+    if level != 0 {
+        tex_internal_format(ctx, internalformat);
+    }
     copy_tex_sub_image_2d(ctx, target, level, 0, 0, x, y, width, height);
 }
 
