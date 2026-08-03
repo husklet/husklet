@@ -352,6 +352,9 @@ fn blit_between_mips_of_a_named_array_layer_is_exact() {
     let source = violet.repeat(16);
     let mut array = texture();
     array.depth = 6;
+    // Vulkan requires only TRANSFER_SRC/TRANSFER_DST for vkCmdBlitImage. The executor's private
+    // render staging must not leak a RENDER_TARGET requirement into the protocol texture.
+    array.usage = texture_usage::COPY_SRC | texture_usage::COPY_DST;
     let layer = |mip| TextureSubresource {
         mip,
         layer: 5,

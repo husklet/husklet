@@ -185,7 +185,7 @@ fn blit_uses_the_named_mip_and_array_layer_together() {
         8,
         8,
         TextureFormat::Rgba8Unorm,
-        texture_usage::COPY_SRC | texture_usage::COPY_DST | texture_usage::RENDER_TARGET,
+        texture_usage::COPY_SRC | texture_usage::COPY_DST,
     );
     texture.depth = 6;
     texture.mip_levels = 4;

@@ -725,9 +725,7 @@ impl WgpuExecutor {
         let dst_texture = texture::WgpuTexture::get(res, dst)?;
         if !dst_texture.render_attachment
             && dst_texture.dim != hl_gpu::protocol::model::enums::TextureDim::D3
-            && !(dst_texture.depth > 1
-                && dst_texture.usage & hl_gpu::protocol::model::enums::texture_usage::RENDER_TARGET
-                    != 0)
+            && dst_texture.depth <= 1
         {
             return Err(GpuError::Invalid(
                 "wgpu: blit destination was not created as a render target",
@@ -841,7 +839,9 @@ impl WgpuExecutor {
             };
             // Array parents deliberately lack RENDER_ATTACHMENT because their default D2Array/Cube view
             // is not a scalar color target. Stage the named destination layer through a renderable D2
-            // texture, exactly as the 3D-slice path does, then copy it back into that layer.
+            // texture, exactly as the 3D-slice path does, then copy it back into that layer. This private
+            // implementation detail requires no protocol RENDER_TARGET usage: Vulkan vkCmdBlitImage
+            // requires only TRANSFER_DST on the destination.
             let staged = src_dim == hl_gpu::protocol::model::enums::TextureDim::D3
                 || dst_dim == hl_gpu::protocol::model::enums::TextureDim::D3
                 || dd > 1;
