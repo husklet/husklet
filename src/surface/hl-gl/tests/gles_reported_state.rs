@@ -268,6 +268,7 @@ fn the_default_framebuffer_bit_depths_are_a_consistent_color_buffer() {
     assert_eq!(integer(&context, GL_STENCIL_BITS), 8);
     // A driver that resolves no multisampling must report neither sample buffers nor samples.
     assert_eq!(integer(&context, GL_SAMPLES), 0);
+    assert_eq!(integer(&context, GL_SAMPLE_BUFFERS), 0);
 }
 
 #[test]
