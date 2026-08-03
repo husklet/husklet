@@ -372,6 +372,47 @@ fn single_sample_limits_and_multisample_enables_report_truthful_state() {
 }
 
 #[test]
+fn sample_coverage_value_and_invert_default_clamp_and_convert() {
+    let mut c = ctx_800x600();
+    let mut floats = [0.0f32; 4];
+    let mut integers = [0i32; 4];
+    let mut booleans = [0u8; 4];
+
+    assert_eq!(query::get_floatv(&c, GL_SAMPLE_COVERAGE_VALUE, &mut floats), 1);
+    assert_eq!(floats[0], 1.0);
+    assert_eq!(query::get_booleanv(&c, GL_SAMPLE_COVERAGE_INVERT, &mut booleans), 1);
+    assert_eq!(booleans[0], GL_FALSE as u8);
+
+    for (input, expected) in [
+        (-1.5, 0.0),
+        (0.45, 0.45),
+        (1.45, 1.0),
+        (f32::NEG_INFINITY, 0.0),
+        (f32::INFINITY, 1.0),
+        (f32::NAN, 0.0),
+    ] {
+        record::sample_coverage(&mut c, input, true);
+        query::get_floatv(&c, GL_SAMPLE_COVERAGE_VALUE, &mut floats);
+        assert_eq!(floats[0], expected, "input {input:?}");
+        query::get_integerv(&c, GL_SAMPLE_COVERAGE_VALUE, &mut integers);
+        assert_eq!(integers[0], expected.round() as i32, "input {input:?}");
+        query::get_booleanv(&c, GL_SAMPLE_COVERAGE_VALUE, &mut booleans);
+        assert_eq!(booleans[0] != GL_FALSE as u8, expected != 0.0, "input {input:?}");
+        query::get_floatv(&c, GL_SAMPLE_COVERAGE_INVERT, &mut floats);
+        assert_eq!(floats[0], 1.0);
+        query::get_integerv(&c, GL_SAMPLE_COVERAGE_INVERT, &mut integers);
+        assert_eq!(integers[0], 1);
+        query::get_booleanv(&c, GL_SAMPLE_COVERAGE_INVERT, &mut booleans);
+        assert_eq!(booleans[0], GL_TRUE as u8);
+        assert_eq!(c.take_gl_error(), GL_NO_ERROR);
+    }
+
+    record::sample_coverage(&mut c, 0.5, false);
+    query::get_booleanv(&c, GL_SAMPLE_COVERAGE_INVERT, &mut booleans);
+    assert_eq!(booleans[0], GL_FALSE as u8);
+}
+
+#[test]
 fn integer_state_converts_through_float_and_boolean_queries_with_full_arity() {
     let mut c = ctx_800x600();
     c.active_texture(GL_TEXTURE0 + 3);

@@ -210,6 +210,18 @@ pub fn polygon_offset(ctx: &mut GlContext, factor: f32, units: f32) {
     ctx.local.pipeline.polygon_offset_units = units;
 }
 
+/// `glSampleCoverage(value, invert)` — queryable state even on a single-sample framebuffer. GLES clamps
+/// finite values to `[0, 1]`; NaN has no ordered position in that interval, so canonicalize it to the
+/// lower endpoint rather than retaining a value outside the command's bounded state domain.
+pub fn sample_coverage(ctx: &mut GlContext, value: f32, invert: bool) {
+    ctx.local.pipeline.sample_coverage_value = if value.is_nan() {
+        0.0
+    } else {
+        value.clamp(0.0, 1.0)
+    };
+    ctx.local.pipeline.sample_coverage_invert = invert;
+}
+
 /// `glBlendFunc(src, dst)` — set the same factor pair for RGB and alpha.
 pub fn blend_func(ctx: &mut GlContext, src: u32, dst: u32) {
     ctx.local.pipeline.blend_src_rgb = src;

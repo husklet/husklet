@@ -230,6 +230,8 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         GL_POLYGON_OFFSET_FILL => one(ctx.local.pipeline.polygon_offset_fill as i32),
         GL_SAMPLE_ALPHA_TO_COVERAGE => one(ctx.local.pipeline.sample_alpha_to_coverage as i32),
         GL_SAMPLE_COVERAGE => one(ctx.local.pipeline.sample_coverage as i32),
+        GL_SAMPLE_COVERAGE_VALUE => one(ctx.local.pipeline.sample_coverage_value.round() as i32),
+        GL_SAMPLE_COVERAGE_INVERT => one(ctx.local.pipeline.sample_coverage_invert as i32),
         GL_POLYGON_OFFSET_FACTOR => one(ctx.local.pipeline.polygon_offset_factor.round() as i32),
         GL_POLYGON_OFFSET_UNITS => one(ctx.local.pipeline.polygon_offset_units.round() as i32),
         GL_CULL_FACE => one(ctx.local.pipeline.cull_enabled as i32),
@@ -400,6 +402,10 @@ pub fn get_floatv(ctx: &GlContext, pname: u32, out: &mut [f32; 4]) -> usize {
             out[0] = ctx.local.pipeline.polygon_offset_units;
             1
         }
+        GL_SAMPLE_COVERAGE_VALUE => {
+            out[0] = ctx.local.pipeline.sample_coverage_value;
+            1
+        }
         // ES 2.0 table 6.19: two floats — the range `glDepthRangef` set. This reported a permanent
         // `[0, 1]` alongside a comment asserting the call was a no-op; it is not, and the viewport
         // transform now applies it.
@@ -453,6 +459,7 @@ pub fn get_booleanv(ctx: &GlContext, pname: u32, out: &mut [u8; 4]) -> usize {
         GL_SHADER_COMPILER => Some(b(true)),
         GL_POLYGON_OFFSET_FACTOR => Some(b(ctx.local.pipeline.polygon_offset_factor != 0.0)),
         GL_POLYGON_OFFSET_UNITS => Some(b(ctx.local.pipeline.polygon_offset_units != 0.0)),
+        GL_SAMPLE_COVERAGE_VALUE => Some(b(ctx.local.pipeline.sample_coverage_value != 0.0)),
         _ => None,
     };
     if let Some(value) = value {
