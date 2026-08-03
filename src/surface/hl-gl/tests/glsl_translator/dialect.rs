@@ -101,10 +101,14 @@ fn es2_fragdata_dynamic_zero_index_targets_the_single_color_output() {
 
 #[test]
 fn es2_builtin_invariance_declaration_survives_translation() {
-    let vs = "attribute highp vec4 a_input; invariant gl_Position; void main(){ gl_Position=a_input; }";
+    let vs =
+        "attribute highp vec4 a_input; invariant gl_Position; void main(){ gl_Position=a_input; }";
     let fs = "void main(){ gl_FragColor=vec4(1); }";
     let (translated, _) = glsl::StageSources::new(vs, fs).translate_render();
-    assert!(translated.contains("invariant gl_Position;"), "{translated}");
+    assert!(
+        translated.contains("invariant gl_Position;"),
+        "{translated}"
+    );
     assert_naga_parses(&translated, naga::ShaderStage::Vertex);
 }
 
@@ -248,7 +252,10 @@ fn a_float_sampler_still_recombines_and_samples() {
     let out = fragment_of(fs);
     assert!(out.contains("uniform texture2D tex_hltex"), "{out}");
     assert!(out.contains("sampler2D(tex_hltex, tex_hlsmp)"), "{out}");
-    assert!(!out.contains("texelFetch"), "no fetch rewrite on a float sampler: {out}");
+    assert!(
+        !out.contains("texelFetch"),
+        "no fetch rewrite on a float sampler: {out}"
+    );
 }
 
 /// Translate a fragment shader alongside a trivial vertex stage and return the emitted fragment source.
@@ -256,6 +263,36 @@ fn fragment_of(fs: &str) -> String {
     const VS: &str = "#version 300 es\nin vec2 position;\nout vec2 uv;\n\
                       void main() { uv = position; gl_Position = vec4(position, 0.0, 1.0); }\n";
     glsl::StageSources::new(VS, fs).translate_render().1
+}
+
+#[test]
+fn es100_scoping_constructs_compile_after_translation() {
+    let cases = [
+        "struct S { int val; }; void main(){ int S = S(1).val; gl_FragColor=vec4(float(S)); }",
+        "struct S { int val; }; void main(){ S S = S(1); gl_FragColor=vec4(float(S.val)); }",
+        "struct S { int val; }; int f(int S){ return S; } void main(){ gl_FragColor=vec4(float(f(1))); }",
+        "int a=1; void main(){ if(true) int a=42; gl_FragColor=vec4(float(a)); }",
+        "int a=1; void main(){ int i=0; while(bool a=(i<1)){i++;} gl_FragColor=vec4(float(a)); }",
+        "void main(){ int a=1; int i=0; while(bool a=(i<1)){i++;} gl_FragColor=vec4(float(a)); }",
+    ];
+    for source in cases {
+        let translated = fragment_of(source);
+        assert_naga_parses(&translated, naga::ShaderStage::Fragment);
+    }
+}
+
+#[test]
+fn scoping_lowering_does_not_rewrite_types_constructors_or_expression_loops() {
+    let source = "struct S { int val; }; void main(){ S value=S(1); int i=0; while(i<1){i++;} gl_FragColor=vec4(float(value.val)); }";
+    let translated = fragment_of(source);
+    assert!(
+        translated.contains("struct S { int val; };"),
+        "{translated}"
+    );
+    assert!(translated.contains("S value=S(1)"), "{translated}");
+    assert!(translated.contains("while(i<1)"), "{translated}");
+    assert!(!translated.contains("hl_shadow_"), "{translated}");
+    assert_naga_parses(&translated, naga::ShaderStage::Fragment);
 }
 
 /// A guest may write `texelFetch`/`textureSize` on an integer sampler itself. Those uses want the bare

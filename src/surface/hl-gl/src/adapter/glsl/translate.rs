@@ -20,6 +20,193 @@ fn replace_identifier(source: &mut String, from: &str, to: &str) {
     *source = output;
 }
 
+#[derive(Clone)]
+struct Lexeme {
+    start: usize,
+    end: usize,
+    text: String,
+}
+
+fn lexemes(source: &str) -> Vec<Lexeme> {
+    let bytes = source.as_bytes();
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at].is_ascii_whitespace() {
+            at += 1;
+            continue;
+        }
+        let start = at;
+        if bytes[at].is_ascii_alphanumeric() || bytes[at] == b'_' {
+            while at < bytes.len() && (bytes[at].is_ascii_alphanumeric() || bytes[at] == b'_') {
+                at += 1;
+            }
+        } else {
+            at += source[at..].chars().next().map_or(1, char::len_utf8);
+        }
+        out.push(Lexeme {
+            start,
+            end: at,
+            text: source[start..at].to_string(),
+        });
+    }
+    out
+}
+
+fn matching_lexeme(tokens: &[Lexeme], open: usize, left: &str, right: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    for (at, token) in tokens.iter().enumerate().skip(open) {
+        if token.text == left {
+            depth += 1;
+        } else if token.text == right {
+            depth = depth.checked_sub(1)?;
+            if depth == 0 {
+                return Some(at);
+            }
+        }
+    }
+    None
+}
+
+/// Naga's desktop GLSL parser keeps structure types visible even after an ES value declaration shadows
+/// the type. Consequently a later value use is parsed as a constructor. Give only the shadowing value a
+/// private spelling; constructor/type occurrences retain the source spelling and semantics.
+fn disambiguate_struct_value_shadows(source: &mut String) {
+    let mut serial = 0usize;
+    loop {
+        let tokens = lexemes(source);
+        let structs = tokens
+            .windows(2)
+            .filter(|pair| pair[0].text == "struct")
+            .map(|pair| pair[1].text.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let Some((declaration, name)) = (1..tokens.len()).find_map(|at| {
+            let name = &tokens[at].text;
+            (structs.contains(name)
+                && tokens[at - 1].text != "struct"
+                && (structs.contains(&tokens[at - 1].text)
+                    || matches!(
+                        tokens[at - 1].text.as_str(),
+                        "bool"
+                            | "int"
+                            | "uint"
+                            | "float"
+                            | "vec2"
+                            | "vec3"
+                            | "vec4"
+                            | "ivec2"
+                            | "ivec3"
+                            | "ivec4"
+                            | "uvec2"
+                            | "uvec3"
+                            | "uvec4"
+                            | "bvec2"
+                            | "bvec3"
+                            | "bvec4"
+                            | "mat2"
+                            | "mat3"
+                            | "mat4"
+                    ))
+                && tokens.get(at + 1).map(|token| token.text.as_str()) != Some("("))
+            .then(|| (at, name.clone()))
+        }) else {
+            break;
+        };
+
+        let enclosing = (0..declaration).rev().find(|at| {
+            tokens[*at].text == "{"
+                && matching_lexeme(&tokens, *at, "{", "}").is_some_and(|close| declaration < close)
+        });
+        let close = if let Some(open) = enclosing {
+            matching_lexeme(&tokens, open, "{", "}").unwrap()
+        } else {
+            let body = tokens[declaration..]
+                .iter()
+                .position(|token| token.text == "{")
+                .map(|offset| declaration + offset);
+            let Some(body) = body else { break };
+            let Some(close) = matching_lexeme(&tokens, body, "{", "}") else {
+                break;
+            };
+            close
+        };
+        let replacement = format!("hl_shadow_{name}_{serial}");
+        serial += 1;
+        let edits = (declaration..close)
+            .filter(|at| {
+                tokens[*at].text == name
+                    && (*at == declaration
+                        || (tokens.get(*at + 1).map(|token| token.text.as_str()) != Some("(")
+                            && tokens
+                                .get(at.wrapping_sub(1))
+                                .map(|token| token.text.as_str())
+                                != Some("struct")
+                            && !tokens
+                                .get(*at + 1)
+                                .is_some_and(|next| Tokens::is_word(next.text.as_bytes()[0]))))
+            })
+            .map(|at| tokens[at].start..tokens[at].end)
+            .collect::<Vec<_>>();
+        for range in edits.into_iter().rev() {
+            source.replace_range(range, &replacement);
+        }
+    }
+}
+
+/// Desktop GLSL/Naga does not parse the ES declaration form in a while condition. Lower it to the same
+/// per-iteration initialization and lifetime: the condition variable is recreated before each test, is
+/// visible in the body, and disappears when the loop finishes.
+fn lower_while_condition_declarations(source: &mut String) {
+    loop {
+        let tokens = lexemes(source);
+        let Some((while_at, open, close)) = tokens.iter().enumerate().find_map(|(at, token)| {
+            if token.text != "while" || tokens.get(at + 1)?.text != "(" {
+                return None;
+            }
+            let close = matching_lexeme(&tokens, at + 1, "(", ")")?;
+            (tokens.get(at + 2).is_some_and(|token| {
+                matches!(token.text.as_str(), "bool" | "int" | "uint" | "float")
+            }) && tokens
+                .get(at + 3)
+                .is_some_and(|token| Tokens::is_word(token.text.as_bytes()[0]))
+                && tokens.get(at + 4).is_some_and(|token| token.text == "="))
+            .then_some((at, at + 1, close))
+        }) else {
+            break;
+        };
+        let body_start = close + 1;
+        let Some(first_body) = tokens.get(body_start) else {
+            break;
+        };
+        let body_end = if first_body.text == "{" {
+            let Some(end) = matching_lexeme(&tokens, body_start, "{", "}") else {
+                break;
+            };
+            end
+        } else {
+            let Some(offset) = tokens[body_start..]
+                .iter()
+                .position(|token| token.text == ";")
+            else {
+                break;
+            };
+            body_start + offset
+        };
+        let ty = &tokens[open + 1].text;
+        let name = &tokens[open + 2].text;
+        let expression = &source[tokens[open + 3].end..tokens[close].start];
+        let body = if first_body.text == "{" {
+            &source[first_body.end..tokens[body_end].start]
+        } else {
+            &source[first_body.start..tokens[body_end].end]
+        };
+        let replacement = format!(
+            "{{ while (true) {{ {ty} {name} = {expression}; if (!{name}) break; {body} }} }}"
+        );
+        source.replace_range(tokens[while_at].start..tokens[body_end].end, &replacement);
+    }
+}
+
 // ---------------------------------------------------------------------------------------------------
 
 /// GLSL-ES compute (`GL_COMPUTE_SHADER`) → desktop GLSL the host compiles. We FORWARD the source (the host
@@ -661,8 +848,12 @@ impl StageSources<'_> {
         self,
         attribute_bindings: &std::collections::BTreeMap<String, u32>,
     ) -> (String, String) {
-        let vs = Source::new(self.vertex).expanded();
-        let fs = Source::new(self.fragment).expanded();
+        let mut vs = Source::new(self.vertex).expanded();
+        let mut fs = Source::new(self.fragment).expanded();
+        disambiguate_struct_value_shadows(&mut vs);
+        disambiguate_struct_value_shadows(&mut fs);
+        lower_while_condition_declarations(&mut vs);
+        lower_while_condition_declarations(&mut fs);
         let invariant_position = Source::new(&vs).has_invariant_position();
         let declares_modern_es = |source: &str| {
             source.lines().any(|line| {
