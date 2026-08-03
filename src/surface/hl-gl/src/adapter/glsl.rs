@@ -388,10 +388,13 @@ mod scanner;
 mod tokens;
 mod translate;
 mod uniforms;
+mod validation;
+
+pub use validation::invalid_implicit_arithmetic;
 
 pub use bindings::{prepare_verbatim_program, prepare_verbatim_program_with};
 pub use preprocess::PreprocessError;
-pub use uniforms::{UniformBlockDecl, compute_default_block_uniform, std140_array_stride};
+pub use uniforms::{compute_default_block_uniform, std140_array_stride, UniformBlockDecl};
 
 /// The std140 column stride `glGetActiveUniformsiv(GL_UNIFORM_MATRIX_STRIDE)` reports for a GLSL type
 /// keyword, or `0` when the type is not a matrix. Derived from the same rule that lays the block out.

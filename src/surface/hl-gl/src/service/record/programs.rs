@@ -279,6 +279,10 @@ impl GlContext {
             .shader(shader)
             .and_then(|sh| sh.src.as_deref())
         {
+            if let Some(reason) = crate::adapter::glsl::invalid_implicit_arithmetic(source) {
+                self.programs.fail_compile(shader, reason);
+                return;
+            }
             if let Some(builtin) = crate::adapter::glsl::builtin_above_declared_version(source) {
                 let version = crate::adapter::glsl::declared_es_version(source);
                 self.programs.fail_compile(
