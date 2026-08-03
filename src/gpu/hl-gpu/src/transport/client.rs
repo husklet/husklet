@@ -352,11 +352,18 @@ impl RemoteCommandSink {
             };
             let committed_delta = if crate::transport::model::header::is_partial_ack(ack) {
                 let socket = self.sock.as_ref().expect("frame socket remains installed");
-                Some(
+                let delta =
                     unix::Connection::new(socket)
                         .read_partial_delta()
-                        .map_err(|error| self.ambiguous(TransportPhase::Acknowledgement, error))?,
-                )
+                        .map_err(|error| self.ambiguous(TransportPhase::Acknowledgement, error))?;
+                let submitted_commands = replay_prefix_commands + current.len();
+                if delta.1.iter().chain(delta.0.iter().map(|(source, _)| source)).any(|&source| source >= submitted_commands) {
+                    return Err(self.ambiguous(
+                        TransportPhase::Acknowledgement,
+                        std::io::Error::new(std::io::ErrorKind::InvalidData, "partial delta source is outside submitted batch"),
+                    ));
+                }
+                Some(delta)
             } else {
                 None
             };
