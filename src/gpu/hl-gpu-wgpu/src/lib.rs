@@ -19,6 +19,7 @@
 //! println!("bound adapter: {}", exec.adapter_name());
 //! ```
 
+mod bc1;
 mod bindgroup;
 mod blit;
 mod buffer;
