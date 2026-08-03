@@ -1,6 +1,10 @@
 use super::*;
 
-fn sample_stored(exec: &mut WgpuExecutor, src_fmt: TextureFormat, stored: &[u8]) -> [u8; 4] {
+pub(super) fn sample_stored(
+    exec: &mut WgpuExecutor,
+    src_fmt: TextureFormat,
+    stored: &[u8],
+) -> [u8; 4] {
     let mut s = new_session(exec);
     hl_gpu::runtime::submit(
         &mut s,

@@ -141,6 +141,14 @@ pub const INTEGER_FORMATS: &[TextureFormat] = &[
     TextureFormat::R32Sint,
 ];
 
+/// Additional formats with exact native wgpu/Metal representations. They are executor-specific rather
+/// than part of `COLOR_FORMATS`: the CPU oracle does not implement their normalized/half-width storage.
+pub const NATIVE_FORMATS: &[TextureFormat] = &[
+    TextureFormat::Rg8Snorm,
+    TextureFormat::Rgba8Snorm,
+    TextureFormat::Rg16Float,
+];
+
 /// The depth/stencil formats a backend can materialize as a real depth target (the software oracle
 /// runs the per-fragment depth test against a `Depth32Float` plane).
 pub const DEPTH_FORMATS: &[TextureFormat] = &[TextureFormat::Depth32Float];

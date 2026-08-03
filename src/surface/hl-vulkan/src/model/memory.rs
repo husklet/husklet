@@ -228,6 +228,8 @@ pub mod vk_format {
     pub const B8G8R8A8_SRGB: u32 = 50;
     pub const R8_UNORM: u32 = 9;
     pub const R8G8_UNORM: u32 = 16;
+    pub const R8G8_SNORM: u32 = 17;
+    pub const R8G8B8A8_SNORM: u32 = 38;
     // Integer color. Unfilterable and unblendable by specification: a shader reads them only through
     // `texelFetch`/`textureLoad` and their texels are raw integers, never normalized.
     pub const R8_UINT: u32 = 13;
@@ -237,6 +239,7 @@ pub mod vk_format {
     pub const R8G8B8A8_UINT: u32 = 41;
     pub const R8G8B8A8_SINT: u32 = 42;
     pub const R16G16B16A16_SFLOAT: u32 = 97;
+    pub const R16G16_SFLOAT: u32 = 83;
     pub const R32G32B32A32_SFLOAT: u32 = 109;
     pub const R32_UINT: u32 = 98;
     pub const R32_SINT: u32 = 99;
@@ -485,6 +488,9 @@ impl Format {
             vk_format::B8G8R8A8_SRGB => T::Bgra8Srgb,
             vk_format::R8_UNORM => T::R8Unorm,
             vk_format::R8G8_UNORM => T::Rg8Unorm,
+            vk_format::R8G8_SNORM => T::Rg8Snorm,
+            vk_format::R8G8B8A8_SNORM => T::Rgba8Snorm,
+            vk_format::R16G16_SFLOAT => T::Rg16Float,
             vk_format::R16G16B16A16_SFLOAT => T::Rgba16Float,
             vk_format::R32G32B32A32_SFLOAT => T::Rgba32Float,
             vk_format::R32_SFLOAT => T::R32Float,

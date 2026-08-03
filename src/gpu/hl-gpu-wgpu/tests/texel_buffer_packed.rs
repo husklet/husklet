@@ -167,6 +167,11 @@ fn rgba16float_store_packs_each_half_component() {
 }
 
 #[test]
+fn rgba8snorm_store_packs_signed_normalized_components() {
+    assert_eq!(store_constant(TextureFormat::Rgba8Snorm, 4), vec![32, 64, 95, 127]);
+}
+
+#[test]
 fn ssbo_and_texel_alias_are_visible_in_both_ordered_directions() {
     // One invocation performs each write then read in program order through coherent storage variables.
     // This deliberately proves defined intra-invocation visibility in both alias directions; it does not

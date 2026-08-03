@@ -42,6 +42,9 @@ u32_enum!(
         // `texelFetch` (WGSL `textureLoad`), and their texels are raw integers, never normalized.
         Rgba8Uint = 26, Rgba8Sint = 27, R8Uint = 28, R8Sint = 29, Rg8Uint = 30, Rg8Sint = 31,
         Rgba32Uint = 32, Rgba32Sint = 33, R32Uint = 34, R32Sint = 35,
+        // Exact native Metal/WebGPU formats used by Vulkan. Keep these neutral: their numbers are
+        // protocol values, not VkFormat or wgpu discriminants.
+        Rg8Snorm = 36, Rgba8Snorm = 37, Rg16Float = 38,
     } "TextureFormat"
 );
 
@@ -74,7 +77,10 @@ impl TextureFormat {
     pub fn bytes_per_texel(self) -> Option<usize> {
         Some(match self {
             TextureFormat::R8Unorm | TextureFormat::R8Uint | TextureFormat::R8Sint => 1,
-            TextureFormat::Rg8Unorm | TextureFormat::Rg8Uint | TextureFormat::Rg8Sint => 2,
+            TextureFormat::Rg8Unorm
+            | TextureFormat::Rg8Snorm
+            | TextureFormat::Rg8Uint
+            | TextureFormat::Rg8Sint => 2,
             TextureFormat::Rgba8Uint
             | TextureFormat::Rgba8Sint
             | TextureFormat::Rgba8Unorm
@@ -84,6 +90,7 @@ impl TextureFormat {
             | TextureFormat::R32Float
             | TextureFormat::R32Uint
             | TextureFormat::R32Sint => 4,
+            TextureFormat::Rgba8Snorm | TextureFormat::Rg16Float => 4,
             TextureFormat::Rgba16Float => 8,
             TextureFormat::Rgba32Float | TextureFormat::Rgba32Uint | TextureFormat::Rgba32Sint => {
                 16
