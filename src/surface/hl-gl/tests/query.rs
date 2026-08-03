@@ -339,6 +339,39 @@ fn polygon_offset_state_round_trips_and_invalid_caps_are_rejected() {
 }
 
 #[test]
+fn single_sample_limits_and_multisample_enables_report_truthful_state() {
+    let mut c = ctx_800x600();
+    let mut integers = [0i32; 4];
+    let mut floats = [0.0f32; 4];
+    let mut booleans = [0u8; 4];
+
+    for pname in [GL_SAMPLE_BUFFERS, GL_SAMPLES] {
+        assert_eq!(query::get_integerv(&c, pname, &mut integers), 1);
+        assert_eq!(integers[0], 0, "pname {pname:#x}");
+    }
+
+    for (capability, initial) in [
+        (GL_DITHER, true),
+        (GL_SAMPLE_ALPHA_TO_COVERAGE, false),
+        (GL_SAMPLE_COVERAGE, false),
+    ] {
+        assert_eq!(c.is_enabled(capability), initial);
+        assert_eq!(query::get_integerv(&c, capability, &mut integers), 1);
+        assert_eq!(integers[0] != 0, initial);
+        assert_eq!(query::get_floatv(&c, capability, &mut floats), 1);
+        assert_eq!(floats[0] != 0.0, initial);
+        assert_eq!(query::get_booleanv(&c, capability, &mut booleans), 1);
+        assert_eq!(booleans[0] != GL_FALSE as u8, initial);
+
+        c.enable(capability);
+        assert!(c.is_enabled(capability));
+        c.disable(capability);
+        assert!(!c.is_enabled(capability));
+    }
+    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
+}
+
+#[test]
 fn integer_state_converts_through_float_and_boolean_queries_with_full_arity() {
     let mut c = ctx_800x600();
     c.active_texture(GL_TEXTURE0 + 3);
