@@ -1,8 +1,8 @@
 # `submit_cb_inner`: per-operation refusal instead of whole-batch abort
 
-Written 2026-08-01. **Nothing here is implemented.** This is a scoped, measured fix handed over unstarted so
-the next person can execute it cold. Do it as its own commit, before layer 3 of the 3D blit work described in
-`../hl-vulkan/BLIT_HANDOFF.md`.
+Written 2026-08-01. **Implemented on 2026-08-02** by `161d26cfc` (in-pass refusal handling) and
+`faaa28df0` (top-level continuation), with positive-control coverage in `tests/submit_refusal.rs`. The
+original specification remains below as the rationale and regression checklist.
 
 Subject: `src/gpu/hl-gpu-wgpu/src/submit.rs`, `WgpuExecutor::submit_cb_inner` (~840 lines, the
 `while i < ops.len()` loop that begins at `submit.rs:121` and ends at `submit.rs:948`).
