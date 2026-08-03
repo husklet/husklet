@@ -44,11 +44,17 @@ fn _hl_sample_level(t: texture_2d<f32>, s: sampler, uv: vec2<f32>, lod0:f32, mn:
     if mm==1u { let lo=clamp(i32(floor(lod)),0,levels-1); let hi=min(lo+1,levels-1); return mix(_hl_cubic_level(t,uv,lo,au,av),_hl_cubic_level(t,uv,hi,au,av),fract(lod)); }
     return _hl_cubic_level(t,uv,clamp(i32(round(lod)),0,levels-1),au,av);
 }
+fn _hl_sample_grad(t:texture_2d<f32>,s:sampler,uv:vec2<f32>,gx:vec2<f32>,gy:vec2<f32>,mn:u32,mg:u32,mm:u32,au:u32,av:u32,aw:u32,lmin:u32,lmax:u32)->vec4<f32>{
+    let size=vec2<f32>(textureDimensions(t,0)); let lod=clamp(log2(max(max(length(gx*size),length(gy*size)),0.000001)),bitcast<f32>(lmin),bitcast<f32>(lmax));
+    if select(mg,mn,lod>0.0)!=2u{return textureSampleGrad(t,s,uv,gx,gy);}
+    let levels=i32(textureNumLevels(t)); if mm==1u{let lo=clamp(i32(floor(lod)),0,levels-1);let hi=min(lo+1,levels-1);return mix(_hl_cubic_level(t,uv,lo,au,av),_hl_cubic_level(t,uv,hi,au,av),fract(lod));}
+    return _hl_cubic_level(t,uv,clamp(i32(round(lod)),0,levels-1),au,av);
+}
 "#;
 
 pub(super) fn rewrite(mut source: String, layouts: &[crate::reflect::SamplerMetadataLayout]) -> Result<String> {
     if layouts.is_empty() { return Ok(source); }
-    for (needle, helper, argc) in [("textureSampleLevel(", "_hl_sample_level", 4usize), ("textureSample(", "_hl_sample_auto", 3usize)] {
+    for (needle, helper, argc) in [("textureSampleGrad(","_hl_sample_grad",5usize),("textureSampleLevel(", "_hl_sample_level", 4usize), ("textureSample(", "_hl_sample_auto", 3usize)] {
         let mut at = 0;
         while let Some(relative) = source[at..].find(needle) {
             let start = at + relative;
@@ -89,7 +95,7 @@ mod tests {
     fn implicit_sample_rewrites_and_validates() {
         let source=r#"@group(0) @binding(0) var t:texture_2d<f32>;
 @group(0) @binding(1) var _hl_sampler_g0_b1:sampler;
-@group(0) @binding(2) var<storage,read> _hl_sampler_metadata_g0:array<u32>;
+@group(0) @binding(2) var<storage,read> _hl_sampler_metadata_g0_:array<u32>;
 @fragment fn main()->@location(0) vec4<f32>{return textureSample(t,_hl_sampler_g0_b1,vec2(0.5));}"#.into();
         let output=rewrite(source,&[SamplerMetadataLayout{group:0,binding:2,samplers:vec![SamplerMetadataSlot{binding:1,base_ordinal:0,count:1}]}]).unwrap();
         assert!(output.contains("_hl_sample_auto(t, _hl_sampler_g0_b1"));
