@@ -20,6 +20,40 @@ fn replace_identifier(source: &mut String, from: &str, to: &str) {
     *source = output;
 }
 
+/// Replace a global identifier without mistaking a member selector or vector swizzle for that global.
+/// GLSL permits whitespace around `.`, so inspect the previous non-whitespace token rather than only the
+/// byte immediately before the name. Random dEQP shaders deliberately use one-letter sampler names such as
+/// `g` alongside expressions such as `b.g`; rewriting both turns the swizzle into an invalid sampler
+/// constructor call.
+fn replace_global_identifier(source: &mut String, from: &str, to: &str) {
+    let bytes = source.as_bytes();
+    let mut output = String::with_capacity(source.len());
+    let mut at = 0usize;
+    while at < bytes.len() {
+        if Tokens::is_word(bytes[at]) {
+            let start = at;
+            while at < bytes.len() && Tokens::is_word(bytes[at]) {
+                at += 1;
+            }
+            let word = &source[start..at];
+            let previous = bytes[..start]
+                .iter()
+                .rev()
+                .copied()
+                .find(|byte| !byte.is_ascii_whitespace());
+            output.push_str(if word == from && previous != Some(b'.') {
+                to
+            } else {
+                word
+            });
+        } else {
+            output.push(char::from(bytes[at]));
+            at += 1;
+        }
+    }
+    *source = output;
+}
+
 #[derive(Clone)]
 struct Lexeme {
     start: usize,
@@ -542,7 +576,13 @@ impl Declarations<'_> {
                 } else {
                     format!("{ctor}({name}_hltex, {name}_hlsmp)")
                 };
-                wreplace(body, &s.name, &repl);
+                if s.name.bytes().all(Tokens::is_word) {
+                    replace_global_identifier(body, &s.name, &repl);
+                } else {
+                    // Flattened aggregate sampler names contain member selectors. They name the complete
+                    // access path, so the ordinary boundary-aware replacement remains the right operation.
+                    wreplace(body, &s.name, &repl);
+                }
             }
         }
     }
