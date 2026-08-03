@@ -208,13 +208,16 @@ impl Format {
             T::R16Float | T::Rg16Float | T::Rgba16Float => FormatClass::FloatColor,
             T::R32Float | T::Rg32Float | T::Rgba32Float => FormatClass::UnfilterableFloatColor,
             T::Rgb9e5Ufloat => FormatClass::SampledColor,
-            T::Rg11b10Ufloat => FormatClass::BlitColor,
+            T::Rg11b10Ufloat => FormatClass::FloatColor,
             T::Rgb10a2Unorm => FormatClass::NormalizedColor,
             T::R5g6b5Unorm | T::A1r5g5b5Unorm => FormatClass::NormalizedColor,
             // Metal exposes B4G4R4A4 through ABGR4 plus a sampled-view swizzle. The blit executor applies
             // the matching R/B correction at its attachment write boundary; ordinary color attachments
             // still cannot promise Vulkan component order.
             T::B4g4r4a4Unorm => FormatClass::BlitColor,
+            T::R4g4b4a4Unorm | T::R5g5b5a1Unorm | T::A4r4g4b4Unorm | T::A4b4g4r4Unorm => {
+                FormatClass::NormalizedColor
+            }
             T::Rgb10a2Uint => FormatClass::IntegerColor,
             T::Depth32Float | T::Depth24PlusStencil8 => FormatClass::DepthStencil,
             other if other.block_geometry().is_some() => FormatClass::Compressed,
@@ -375,7 +378,15 @@ impl Format {
             }
             None => 0,
         };
-        if matches!(self.class(), Some(FormatClass::NormalizedColor | FormatClass::FloatColor | FormatClass::SampledColor | FormatClass::BlitColor)) {
+        if matches!(
+            self.class(),
+            Some(
+                FormatClass::NormalizedColor
+                    | FormatClass::FloatColor
+                    | FormatClass::SampledColor
+                    | FormatClass::BlitColor
+            )
+        ) {
             optimal |= f::SAMPLED_IMAGE_FILTER_CUBIC;
         }
         // Buffer features are INDEPENDENT bits, not alternatives. The previous `match` was exclusive, so
@@ -861,13 +872,14 @@ mod tests {
     }
 
     #[test]
-    fn rg11b10_float_advertises_native_blit_without_color_attachment() {
+    fn rg11b10_float_advertises_native_render_and_blit() {
         let optimal = Format(vk_format::B10G11R11_UFLOAT_PACK32)
             .features()
             .optimal_tiling;
         assert_ne!(optimal & format_feature::BLIT_SRC, 0);
         assert_ne!(optimal & format_feature::BLIT_DST, 0);
-        assert_eq!(optimal & format_feature::COLOR_ATTACHMENT, 0);
+        assert_ne!(optimal & format_feature::COLOR_ATTACHMENT, 0);
+        assert_ne!(optimal & format_feature::COLOR_ATTACHMENT_BLEND, 0);
     }
 
     #[test]
@@ -1006,7 +1018,9 @@ mod tests {
 
     #[test]
     fn cubic_extension_and_format_gate_are_exact() {
-        assert!(DEVICE_EXTENSIONS.iter().any(|e| e.name == "VK_EXT_filter_cubic" && e.spec_version == 3));
+        assert!(DEVICE_EXTENSIONS
+            .iter()
+            .any(|e| e.name == "VK_EXT_filter_cubic" && e.spec_version == 3));
         let rgba = Format(vk_format::R8G8B8A8_UNORM).features().optimal_tiling;
         assert_ne!(rgba & format_feature::SAMPLED_IMAGE_FILTER_CUBIC, 0);
         let integer = Format(vk_format::R8G8B8A8_UINT).features().optimal_tiling;
@@ -1016,10 +1030,37 @@ mod tests {
     }
 
     #[test]
+    fn exact_packed_formats_support_the_cts_combined_image_usage() {
+        let required = format_feature::COLOR_ATTACHMENT
+            | format_feature::TRANSFER_SRC
+            | format_feature::TRANSFER_DST;
+        for format in [
+            vk_format::R4G4B4A4_UNORM_PACK16,
+            vk_format::R5G5B5A1_UNORM_PACK16,
+            vk_format::A4R4G4B4_UNORM_PACK16_EXT,
+            vk_format::A4B4G4R4_UNORM_PACK16_EXT,
+            vk_format::B10G11R11_UFLOAT_PACK32,
+        ] {
+            let features = Format(format).features().optimal_tiling;
+            assert_eq!(features & required, required, "VkFormat {format}");
+            assert_ne!(features & format_feature::SAMPLED_IMAGE_FILTER_CUBIC, 0);
+        }
+        for format in [
+            vk_format::E5B9G9R9_UFLOAT_PACK32,
+            vk_format::R10X6G10X6B10X6A10X6_UNORM_4PACK16,
+        ] {
+            assert_ne!(
+                Format(format).features().optimal_tiling & required,
+                required,
+                "VkFormat {format} still lacks exact render-target semantics"
+            );
+        }
+    }
+
+    #[test]
     fn mirror_clamp_extension_is_advertised_only_with_its_distinct_address_mode() {
         assert!(DEVICE_EXTENSIONS.iter().any(|extension| {
-            extension.name == "VK_KHR_sampler_mirror_clamp_to_edge"
-                && extension.spec_version == 3
+            extension.name == "VK_KHR_sampler_mirror_clamp_to_edge" && extension.spec_version == 3
         }));
         assert_ne!(
             hl_gpu::protocol::model::enums::AddressMode::MirrorClampToEdge,

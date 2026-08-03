@@ -672,7 +672,7 @@ impl WgpuExecutor {
                                 t.depth,
                                 t.texture.clone(),
                                 t.is_opaque_bc1_rgb(),
-                                t.is_shadow_format(),
+                                t.needs_transfer_conversion(),
                             )
                         };
                         // `bytes_per_row == 0` means the source rows are tightly packed (the oracle convention).
@@ -1114,7 +1114,7 @@ impl WgpuExecutor {
         if source.is_opaque_bc1_rgb() {
             return Ok(false);
         }
-        if source.is_shadow_format() {
+        if source.needs_transfer_conversion() {
             return Ok(false);
         }
         let destination = buffer::WgpuBuffer::get(res, dst)?;

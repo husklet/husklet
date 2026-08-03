@@ -123,8 +123,8 @@ impl WgpuTexture {
         self.bc1_rgb.is_some()
     }
 
-    pub(crate) fn is_shadow_format(&self) -> bool {
-        Format::from(self.format).is_shadow()
+    pub(crate) fn needs_transfer_conversion(&self) -> bool {
+        Format::from(self.format).needs_transfer_conversion()
     }
 }
 
@@ -135,11 +135,7 @@ impl WgpuExecutor {
         id: u32,
     ) -> Result<(hl_gpu::runtime::model::sharing::Shared, u64)> {
         let texture = WgpuTexture::get(res, id)?.clone();
-        let texel = if texture.is_shadow_format() {
-            8
-        } else {
-            texture.format.footprint_bytes_per_texel() as u64
-        };
+        let texel = Format::from(texture.format).native_texel_bytes()? as u64;
         let mut width = u64::from(texture.width);
         let mut height = u64::from(texture.height);
         let mut depth = u64::from(texture.depth);
@@ -597,7 +593,7 @@ impl WgpuExecutor {
                 .cloned()
                 .ok_or(GpuError::OutOfBounds);
         }
-        if Format::from(t.format).is_shadow() {
+        if Format::from(t.format).needs_transfer_conversion() {
             return self.read_region(res, id, 0, 0, 0, mw, mh, 1, mip);
         }
         let (tight_bpr, block_rows) = Format::from(t.format).copy_layout(mw, mh)?;
@@ -785,11 +781,14 @@ impl WgpuExecutor {
             return Ok(());
         }
         let shadow_data;
-        let (upload, upload_bytes_per_row) = if Format::from(t.format).is_shadow() {
-            shadow_data = Format::from(t.format).logical_to_shadow(&data[..expected])?;
+        let format = Format::from(t.format);
+        let (upload, upload_bytes_per_row) = if format.needs_transfer_conversion() {
+            shadow_data = format.logical_to_native(&data[..expected])?;
             (
                 &shadow_data[..],
-                width.checked_mul(8).ok_or(GpuError::OutOfBounds)?,
+                width
+                    .checked_mul(format.native_texel_bytes()? as u32)
+                    .ok_or(GpuError::OutOfBounds)?,
             )
         } else {
             (data, bytes_per_row)
@@ -888,8 +887,10 @@ impl WgpuExecutor {
         }
         let format = Format::from(t.format);
         let (logical_bpr, rows_per_image) = format.copy_layout(width, height)?;
-        let tight_bpr = if format.is_shadow() {
-            width.checked_mul(8).ok_or(GpuError::OutOfBounds)?
+        let tight_bpr = if format.needs_transfer_conversion() {
+            width
+                .checked_mul(format.native_texel_bytes()? as u32)
+                .ok_or(GpuError::OutOfBounds)?
         } else {
             logical_bpr
         };
@@ -956,8 +957,8 @@ impl WgpuExecutor {
         }
         drop(mapped);
         staging.unmap();
-        if format.is_shadow() {
-            format.shadow_to_logical(&output)
+        if format.needs_transfer_conversion() {
+            format.native_to_logical(&output)
         } else {
             Ok(output)
         }

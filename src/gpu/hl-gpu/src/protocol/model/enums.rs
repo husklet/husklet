@@ -495,7 +495,9 @@ impl TextureFormat {
             TextureFormat::Rgba16Float => [half(0), half(1), half(2), half(3)],
             TextureFormat::Rgba32Float => [single(0), single(1), single(2), single(3)],
             TextureFormat::R4g4b4a4Unorm => [bits(12, 15), bits(8, 15), bits(4, 15), bits(0, 15)],
+            TextureFormat::B4g4r4a4Unorm => [bits(4, 15), bits(8, 15), bits(12, 15), bits(0, 15)],
             TextureFormat::R5g5b5a1Unorm => [bits(11, 31), bits(6, 31), bits(1, 31), bits(0, 1)],
+            TextureFormat::A1r5g5b5Unorm => [bits(10, 31), bits(5, 31), bits(0, 31), bits(15, 1)],
             TextureFormat::A4r4g4b4Unorm => [bits(8, 15), bits(4, 15), bits(0, 15), bits(12, 15)],
             TextureFormat::A4b4g4r4Unorm => [bits(0, 15), bits(4, 15), bits(8, 15), bits(12, 15)],
             TextureFormat::R10x6g10x6b10x6a10x6Unorm => {

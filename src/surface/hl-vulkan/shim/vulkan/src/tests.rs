@@ -1133,6 +1133,50 @@ fn image_format_queries_validate_every_requested_usage() {
     }
 }
 
+#[test]
+fn exact_packed_formats_accept_the_cubic_cts_combined_usage() {
+    const VK_IMAGE_TYPE_2D: i32 = 1;
+    const VK_IMAGE_TILING_OPTIMAL: i32 = 0;
+    const CTS_USAGE: VkFlags = 0x1 | 0x2 | 0x10;
+    const FORMATS: [i32; 5] = [2, 6, 1_000_340_000, 1_000_340_001, 122];
+    const STILL_INEXACT: [i32; 2] = [123, 1_000_156_009];
+    const VK_ERROR_FORMAT_NOT_SUPPORTED: VkResult = -11;
+
+    for format in FORMATS {
+        let mut properties = VkImageFormatProperties::default();
+        assert_eq!(
+            crate::instance::vkGetPhysicalDeviceImageFormatProperties(
+                core::ptr::null_mut(),
+                format,
+                VK_IMAGE_TYPE_2D,
+                VK_IMAGE_TILING_OPTIMAL,
+                CTS_USAGE,
+                0,
+                &mut properties as *mut _ as *mut c_void,
+            ),
+            VK_SUCCESS,
+            "VkFormat {format}"
+        );
+        assert_ne!(properties.max_extent.width, 0, "VkFormat {format}");
+    }
+    for format in STILL_INEXACT {
+        let mut properties = VkImageFormatProperties::default();
+        assert_eq!(
+            crate::instance::vkGetPhysicalDeviceImageFormatProperties(
+                core::ptr::null_mut(),
+                format,
+                VK_IMAGE_TYPE_2D,
+                VK_IMAGE_TILING_OPTIMAL,
+                CTS_USAGE,
+                0,
+                &mut properties as *mut _ as *mut c_void,
+            ),
+            VK_ERROR_FORMAT_NOT_SUPPORTED,
+            "VkFormat {format}"
+        );
+    }
+}
+
 /// `sampleCounts` must be exactly `VK_SAMPLE_COUNT_1_BIT` unless the image is optimally tiled,
 /// two-dimensional, NOT cube-compatible, and its format can be an attachment. The query used to report
 /// `1|4` for every supported combination and ignored `flags` entirely, which is an over-claim — the
