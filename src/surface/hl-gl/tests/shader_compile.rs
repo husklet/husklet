@@ -603,3 +603,11 @@ fn deqp_struct_type_shadowing_compiles() {
         assert_eq!(status, GL_TRUE as i32, "false rejection: {log}\n{source}");
     }
 }
+
+#[test]
+fn deqp_sampler_cube_uniform_value_shader_compiles() {
+    let mut context = GlContext::new();
+    let source = "attribute highp vec4 a_position; varying mediump float v_vtxOut; uniform mediump samplerCube u_var; mediump float compare_float(mediump float a, mediump float b){return abs(a-b)<0.05?1.0:0.0;} mediump float compare_vec4(mediump vec4 a, mediump vec4 b){return compare_float(a.x,b.x)*compare_float(a.y,b.y)*compare_float(a.z,b.z)*compare_float(a.w,b.w);} void main(){gl_Position=a_position;v_vtxOut=1.0;v_vtxOut*=compare_vec4(textureCube(u_var,vec3(0.0)),vec4(0.28,0.51,0.88,0.18));}";
+    let (status, log) = compile(&mut context, GL_VERTEX_SHADER, source);
+    assert_eq!(status, GL_TRUE as i32, "false rejection: {log}");
+}

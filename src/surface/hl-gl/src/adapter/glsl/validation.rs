@@ -799,7 +799,31 @@ pub fn invalid_function_semantics(source: &str) -> Option<String> {
                 if first.parse::<f64>().is_ok() {
                     return Some(("float", None));
                 }
-                declarations.get(first).copied()
+                let (ty, array) = declarations.get(first).copied()?;
+                if segment.get(1).map(String::as_str) != Some(".") {
+                    return Some((ty, array));
+                }
+                let swizzle = segment.get(2)?;
+                let scalar = match ty {
+                    "vec2" | "vec3" | "vec4" => "float",
+                    "ivec2" | "ivec3" | "ivec4" => "int",
+                    "bvec2" | "bvec3" | "bvec4" => "bool",
+                    _ => return None,
+                };
+                let ty = match (scalar, swizzle.len()) {
+                    (scalar, 1) => scalar,
+                    ("float", 2) => "vec2",
+                    ("float", 3) => "vec3",
+                    ("float", 4) => "vec4",
+                    ("int", 2) => "ivec2",
+                    ("int", 3) => "ivec3",
+                    ("int", 4) => "ivec4",
+                    ("bool", 2) => "bvec2",
+                    ("bool", 3) => "bvec3",
+                    ("bool", 4) => "bvec4",
+                    _ => return None,
+                };
+                Some((ty, None))
             })
             .collect::<Vec<_>>();
         if !candidates.iter().any(|function| {
