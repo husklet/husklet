@@ -29,7 +29,7 @@ struct CallbackRecord {
     type_: u32,
     id: u32,
     severity: u32,
-    message: String,
+    message: Vec<u8>,
     user: usize,
 }
 
@@ -51,7 +51,7 @@ unsafe extern "C" fn record_debug_callback(
         type_,
         id,
         severity,
-        message: String::from_utf8(bytes.to_vec()).unwrap(),
+        message: bytes.to_vec(),
         user: user as usize,
     });
 }
@@ -101,7 +101,7 @@ fn khr_debug_callback_pointer_and_application_message_are_exact() {
             type_: GL_DEBUG_TYPE_MARKER,
             id: 77,
             severity: GL_DEBUG_SEVERITY_HIGH,
-            message: "application marker".into(),
+            message: b"application marker".to_vec(),
             user: 0x1234,
         })
     );
@@ -125,7 +125,7 @@ fn khr_debug_log_groups_filters_and_label_lifetime_are_observable() {
     bind_debug_context();
     glDebugMessageCallbackKHR(core::ptr::null_mut(), core::ptr::null());
 
-    let message = b"logged marker";
+    let message = [0xff, 0, 0x80];
     glDebugMessageInsertKHR(
         GL_DEBUG_SOURCE_APPLICATION,
         GL_DEBUG_TYPE_MARKER,
@@ -166,7 +166,7 @@ fn khr_debug_log_groups_filters_and_label_lifetime_are_observable() {
             message.len() as i32 + 1,
         )
     );
-    assert_eq!(&output[..message.len()], message);
+    assert_eq!(&output[..message.len()], &message);
 
     glDebugMessageInsertKHR(
         GL_DEBUG_SOURCE_APPLICATION,
@@ -179,7 +179,7 @@ fn khr_debug_log_groups_filters_and_label_lifetime_are_observable() {
     assert_eq!(
         glGetDebugMessageLogKHR(
             1,
-            0,
+            -1,
             core::ptr::null_mut(),
             core::ptr::null_mut(),
             &mut id,
@@ -188,7 +188,7 @@ fn khr_debug_log_groups_filters_and_label_lifetime_are_observable() {
             core::ptr::null_mut(),
         ),
         1,
-        "a null messageLog ignores bufSize"
+        "a null messageLog ignores even a negative bufSize"
     );
     assert_eq!(id, 10);
 
@@ -238,6 +238,15 @@ fn khr_debug_log_groups_filters_and_label_lifetime_are_observable() {
         label_output.as_mut_ptr(),
     );
     assert_eq!(label_length, label.len() as i32);
+    label_length = -1;
+    glGetObjectLabelKHR(
+        GL_BUFFER_OBJECT,
+        buffer,
+        0,
+        &mut label_length,
+        core::ptr::null_mut(),
+    );
+    assert_eq!(label_length, label.len() as i32);
 
     glObjectLabelKHR(
         GL_TEXTURE,
@@ -265,6 +274,131 @@ fn khr_debug_log_groups_filters_and_label_lifetime_are_observable() {
         label_output.as_mut_ptr(),
     );
     assert_eq!(glGetError(), GL_INVALID_VALUE);
+
+    let sync = 0x5151usize as *mut c_void;
+    GlobalState::context(|state| {
+        state.gl.syncs.insert(sync as usize, 1);
+    });
+    glObjectPtrLabelKHR(sync, label.len() as i32, label.as_ptr().cast());
+    label_length = 0;
+    glGetObjectPtrLabelKHR(
+        sync,
+        label_output.len() as i32,
+        &mut label_length,
+        label_output.as_mut_ptr(),
+    );
+    assert_eq!(label_length, label.len() as i32);
+    glDeleteSync(sync);
+    glGetObjectPtrLabelKHR(
+        sync,
+        label_output.len() as i32,
+        &mut label_length,
+        label_output.as_mut_ptr(),
+    );
+    assert_eq!(glGetError(), GL_INVALID_VALUE);
+
+    let shader = glCreateShader(GL_VERTEX_SHADER);
+    let program = glCreateProgram();
+    glAttachShader(program, shader);
+    glObjectLabelKHR(
+        GL_SHADER_OBJECT,
+        shader,
+        label.len() as i32,
+        label.as_ptr().cast(),
+    );
+    glDeleteShader(shader);
+    glGetObjectLabelKHR(
+        GL_SHADER_OBJECT,
+        shader,
+        label_output.len() as i32,
+        &mut label_length,
+        label_output.as_mut_ptr(),
+    );
+    assert_eq!(
+        glGetError(),
+        GL_NO_ERROR,
+        "delete-pending shader stays live"
+    );
+    glDetachShader(program, shader);
+    glGetObjectLabelKHR(
+        GL_SHADER_OBJECT,
+        shader,
+        label_output.len() as i32,
+        &mut label_length,
+        label_output.as_mut_ptr(),
+    );
+    assert_eq!(
+        glGetError(),
+        GL_INVALID_VALUE,
+        "actual destruction clears label"
+    );
+}
+
+#[test]
+fn khr_debug_local_and_share_group_label_namespaces_do_not_leak() {
+    let display = initialized_display();
+    let attributes = [EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE];
+    let first = eglCreateContext(
+        display,
+        CONFIG_TOKEN as *mut c_void,
+        core::ptr::null_mut(),
+        attributes.as_ptr(),
+    );
+    let second = eglCreateContext(
+        display,
+        CONFIG_TOKEN as *mut c_void,
+        first,
+        attributes.as_ptr(),
+    );
+    let surface = WindowSurface::create(core::ptr::null_mut());
+    assert_eq!(eglMakeCurrent(display, surface, surface, first), EGL_TRUE);
+
+    let mut framebuffer = 0;
+    let mut buffer = 0;
+    glGenFramebuffers(1, &mut framebuffer);
+    glGenBuffers(1, &mut buffer);
+    glObjectLabelKHR(GL_FRAMEBUFFER, framebuffer, 5, b"first".as_ptr().cast());
+    glObjectLabelKHR(GL_BUFFER_OBJECT, buffer, 6, b"shared".as_ptr().cast());
+
+    assert_eq!(eglMakeCurrent(display, surface, surface, second), EGL_TRUE);
+    let mut second_framebuffer = 0;
+    glGenFramebuffers(1, &mut second_framebuffer);
+    assert_eq!(second_framebuffer, framebuffer);
+    glObjectLabelKHR(
+        GL_FRAMEBUFFER,
+        second_framebuffer,
+        6,
+        b"second".as_ptr().cast(),
+    );
+
+    let mut output = [0u8; 16];
+    let mut length = 0;
+    glGetObjectLabelKHR(
+        GL_BUFFER_OBJECT,
+        buffer,
+        output.len() as i32,
+        &mut length,
+        output.as_mut_ptr(),
+    );
+    assert_eq!(&output[..length as usize], b"shared");
+    glGetObjectLabelKHR(
+        GL_FRAMEBUFFER,
+        second_framebuffer,
+        output.len() as i32,
+        &mut length,
+        output.as_mut_ptr(),
+    );
+    assert_eq!(&output[..length as usize], b"second");
+
+    assert_eq!(eglMakeCurrent(display, surface, surface, first), EGL_TRUE);
+    glGetObjectLabelKHR(
+        GL_FRAMEBUFFER,
+        framebuffer,
+        output.len() as i32,
+        &mut length,
+        output.as_mut_ptr(),
+    );
+    assert_eq!(&output[..length as usize], b"first");
 }
 
 #[test]
@@ -331,12 +465,11 @@ fn matrix_marshalling_leaves_std140_padding_to_the_uniform_model() {
     }
 }
 
-// `EGL_KHR_create_context` (advertised in the display extension string) carries the debug / robust-access
-// request as bits in `EGL_CONTEXT_FLAGS_KHR`, and its default value is 0. Refusing the attribute refuses
-// EVERY version, so a toolkit that passes it gets no GL context at all.
+// `EGL_KHR_create_context` defines only the debug flag for OpenGL ES. Robust access uses the separately
+// advertised EXT attribute; the KHR robust and forward-compatible flag bits are OpenGL-only.
 #[test]
-fn khr_create_context_flags_are_honoured_and_only_reject_the_opengl_only_bit() {
-    let display = DISPLAY_TOKEN as *mut c_void;
+fn khr_create_context_flags_accept_debug_and_reject_opengl_only_bits() {
+    let display = initialized_display();
     let config = CONFIG_TOKEN as *mut c_void;
     let with_flags = |flags: i32| {
         [
@@ -350,42 +483,26 @@ fn khr_create_context_flags_are_honoured_and_only_reject_the_opengl_only_bit() {
         ]
     };
 
-    for flags in [
-        0,
-        EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR,
-        EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR,
-        EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR | EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR,
-    ] {
+    for flags in [0, EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR] {
         let attributes = with_flags(flags);
         let context = eglCreateContext(display, config, core::ptr::null_mut(), attributes.as_ptr());
         assert!(
             !context.is_null(),
             "EGL_CONTEXT_FLAGS_KHR = {flags} accepted"
         );
-        let mut value = -1;
-        assert_eq!(
-            eglQueryContext(
-                display,
-                context,
-                EGL_CONTEXT_OPENGL_ROBUST_ACCESS_EXT,
-                &mut value
-            ),
-            EGL_TRUE
-        );
-        let robust = flags & EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR != 0;
-        assert_eq!(
-            value, robust as i32,
-            "the robust-access bit means what the EXT attribute means"
-        );
         assert_eq!(eglDestroyContext(display, context), EGL_TRUE);
     }
 
-    // The forward-compatible bit is defined for OpenGL only: EGL_BAD_ATTRIBUTE on an ES context.
-    let attributes = with_flags(EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE_BIT_KHR);
-    assert!(
-        eglCreateContext(display, config, core::ptr::null_mut(), attributes.as_ptr()).is_null()
-    );
-    assert_eq!(eglGetError(), EGL_BAD_ATTRIBUTE);
+    for bit in [
+        EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE_BIT_KHR,
+        EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR,
+    ] {
+        let attributes = with_flags(bit);
+        assert!(
+            eglCreateContext(display, config, core::ptr::null_mut(), attributes.as_ptr()).is_null()
+        );
+        assert_eq!(eglGetError(), EGL_BAD_ATTRIBUTE);
+    }
 
     // `EGL_KHR_create_context`'s own spelling of the reset-notification attribute is accepted too.
     let attributes = [

@@ -14,7 +14,7 @@ pub struct DebugMessage {
     pub type_: u32,
     pub id: u32,
     pub severity: u32,
-    pub text: String,
+    pub text: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -39,7 +39,7 @@ impl FilterRule {
 struct DebugGroup {
     source: u32,
     id: u32,
-    message: String,
+    message: Vec<u8>,
     filters: Vec<FilterRule>,
 }
 
@@ -60,7 +60,7 @@ impl DebugState {
             groups: vec![DebugGroup {
                 source: GL_DEBUG_SOURCE_APPLICATION,
                 id: 0,
-                message: String::new(),
+                message: Vec::new(),
                 filters: Vec::new(),
             }],
             context_flags: if debug_context {
@@ -210,7 +210,7 @@ impl GlContext {
         self.local.debug.log.pop_front()
     }
 
-    pub fn push_debug_group(&mut self, source: u32, id: u32, message: String) -> bool {
+    pub fn push_debug_group(&mut self, source: u32, id: u32, message: Vec<u8>) -> bool {
         if self.local.debug.groups.len() == MAX_DEBUG_GROUP_STACK_DEPTH_VALUE {
             self.set_gl_error(GL_STACK_OVERFLOW);
             return false;
@@ -240,32 +240,55 @@ impl GlContext {
         })
     }
 
-    pub fn set_object_label(&mut self, identifier: u32, name: u32, label: Option<String>) {
+    fn local_label_namespace(identifier: u32) -> bool {
+        matches!(
+            identifier,
+            GL_VERTEX_ARRAY_OBJECT
+                | GL_QUERY_OBJECT
+                | GL_PROGRAM_PIPELINE_OBJECT
+                | GL_TRANSFORM_FEEDBACK
+                | GL_FRAMEBUFFER
+        )
+    }
+
+    pub fn set_object_label(&mut self, identifier: u32, name: u32, label: Option<Vec<u8>>) {
+        let labels = if Self::local_label_namespace(identifier) {
+            &mut self.local.debug_labels
+        } else {
+            &mut self.debug_labels
+        };
         if let Some(label) = label {
-            self.debug_labels.insert((identifier, name), label);
+            labels.insert((identifier, name), label);
+        } else {
+            labels.remove(&(identifier, name));
+        }
+    }
+    pub fn clear_object_label(&mut self, identifier: u32, name: u32) {
+        if Self::local_label_namespace(identifier) {
+            self.local.debug_labels.remove(&(identifier, name));
         } else {
             self.debug_labels.remove(&(identifier, name));
         }
     }
-    pub fn clear_object_label(&mut self, identifier: u32, name: u32) {
-        self.debug_labels.remove(&(identifier, name));
+    pub fn object_label(&self, identifier: u32, name: u32) -> &[u8] {
+        let labels = if Self::local_label_namespace(identifier) {
+            &self.local.debug_labels
+        } else {
+            &self.debug_labels
+        };
+        labels.get(&(identifier, name)).map_or(&[], Vec::as_slice)
     }
-    pub fn object_label(&self, identifier: u32, name: u32) -> &str {
-        self.debug_labels
-            .get(&(identifier, name))
-            .map_or("", String::as_str)
-    }
-    pub fn set_pointer_label(&mut self, pointer: usize, label: Option<String>) {
+    pub fn set_pointer_label(&mut self, pointer: usize, label: Option<Vec<u8>>) {
         if let Some(label) = label {
             self.debug_pointer_labels.insert(pointer, label);
         } else {
             self.debug_pointer_labels.remove(&pointer);
         }
     }
-    pub fn pointer_label(&self, pointer: usize) -> &str {
+    pub fn pointer_label(&self, pointer: usize) -> &[u8] {
         self.debug_pointer_labels
             .get(&pointer)
-            .map_or("", String::as_str)
+            .map_or(&[], Vec::as_slice)
     }
 }
 
@@ -285,7 +308,7 @@ mod tests {
             type_: GL_DEBUG_TYPE_MARKER,
             id,
             severity,
-            text: format!("message-{id}"),
+            text: format!("message-{id}").into_bytes(),
         }
     }
 
@@ -312,7 +335,7 @@ mod tests {
             context.deliver_debug_message(message(1, GL_DEBUG_SEVERITY_HIGH)),
             DebugDelivery::Discarded
         ));
-        assert!(context.push_debug_group(GL_DEBUG_SOURCE_APPLICATION, 9, "group".into()));
+        assert!(context.push_debug_group(GL_DEBUG_SOURCE_APPLICATION, 9, b"group".to_vec()));
         context.debug_message_control(
             GL_DEBUG_SOURCE_APPLICATION,
             GL_DEBUG_TYPE_MARKER,
@@ -338,11 +361,32 @@ mod tests {
         assert!(context.pop_debug_group().is_none());
         assert_eq!(context.take_gl_error(), GL_STACK_UNDERFLOW);
         for id in 1..MAX_DEBUG_GROUP_STACK_DEPTH_VALUE {
-            assert!(context.push_debug_group(GL_DEBUG_SOURCE_APPLICATION, id as u32, "g".into()));
+            assert!(context.push_debug_group(
+                GL_DEBUG_SOURCE_APPLICATION,
+                id as u32,
+                b"g".to_vec()
+            ));
         }
-        assert!(!context.push_debug_group(GL_DEBUG_SOURCE_APPLICATION, 99, "overflow".into()));
+        assert!(!context.push_debug_group(GL_DEBUG_SOURCE_APPLICATION, 99, b"overflow".to_vec()));
         assert_eq!(context.take_gl_error(), GL_STACK_OVERFLOW);
-        context.set_object_label(GL_BUFFER_OBJECT, 7, Some("buffer-seven".into()));
-        assert_eq!(context.object_label(GL_BUFFER_OBJECT, 7), "buffer-seven");
+        context.set_object_label(GL_BUFFER_OBJECT, 7, Some(b"buffer-seven".to_vec()));
+        assert_eq!(context.object_label(GL_BUFFER_OBJECT, 7), b"buffer-seven");
+    }
+
+    #[test]
+    fn program_label_survives_delete_pending_and_clears_on_destruction() {
+        let mut context = GlContext::new();
+        let program = context.create_program();
+        context.local.cur_prog = program;
+        context.set_object_label(GL_PROGRAM_OBJECT, program, Some(b"pending".to_vec()));
+
+        context.delete_program(program);
+        assert!(context.programs.contains(program));
+        assert_eq!(context.object_label(GL_PROGRAM_OBJECT, program), b"pending");
+
+        context.local.cur_prog = 0;
+        context.destroy_program(program);
+        assert!(!context.programs.contains(program));
+        assert_eq!(context.object_label(GL_PROGRAM_OBJECT, program), b"");
     }
 }

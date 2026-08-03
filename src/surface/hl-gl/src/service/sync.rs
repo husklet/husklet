@@ -30,6 +30,8 @@ impl GlContext {
     pub fn delete_sync(&mut self, sync: usize) {
         if self.syncs.remove(&sync).is_none() {
             self.set_gl_error(GL_INVALID_VALUE);
+        } else {
+            self.set_pointer_label(sync, None);
         }
     }
 

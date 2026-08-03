@@ -158,8 +158,8 @@ pub struct GlContext {
     /// mutations resolve to a different descriptor, so an existing resident sampler never changes.
     sampler_ir_cache: Vec<(SamplerDesc, u32)>,
     /// KHR_debug labels belong to shared objects, not the binding context.
-    debug_labels: HashMap<(u32, u32), String>,
-    debug_pointer_labels: HashMap<usize, String>,
+    debug_labels: HashMap<(u32, u32), Vec<u8>>,
+    debug_pointer_labels: HashMap<usize, Vec<u8>>,
     /// The INTERNAL clear shaders — a `gl_VertexID` full-target triangle and a fragment stage emitting
     /// `vec4(1.0)` — created once per context and shared by every rect clear. `None` until first use.
     clear_shader_ir: HashMap<u32, (u32, u32)>,

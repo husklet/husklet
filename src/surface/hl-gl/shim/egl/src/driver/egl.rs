@@ -182,25 +182,19 @@ impl ContextAttributeList {
                 }
                 // `EGL_KHR_create_context`: the flags word, whose default is 0. A client passing it — GDK
                 // and every other libepoxy-based toolkit do — must not have the whole context refused. The
-                // debug bit is a hint this driver has no debug-output extension to honour, so it is
-                // recorded and ignored; the robust-access bit means what the EXT attribute means; the
-                // forward-compatible bit is defined for OpenGL only and is an error on an ES context.
-                EGL_CONTEXT_FLAGS_KHR
-                    if value
-                        & !(EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR
-                            | EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR)
-                        == 0 =>
-                {
+                // Only the debug bit is defined for an OpenGL ES context. Robust access is requested
+                // through EGL_CONTEXT_OPENGL_ROBUST_ACCESS_EXT; the KHR flag spelling is OpenGL-only.
+                EGL_CONTEXT_FLAGS_KHR if value & !EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR == 0 => {
                     attributes.debug |= value & EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR != 0;
-                    attributes.robust_access |=
-                        value & EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR != 0;
                 }
                 EGL_CONTEXT_FLAGS_KHR
-                    if value & EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE_BIT_KHR != 0 =>
+                    if value
+                        & (EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE_BIT_KHR
+                            | EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR)
+                        != 0 =>
                 {
                     return Err(ContextAttributeError::Malformed {
-                        reason: "EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE_BIT_KHR is OpenGL-only"
-                            .into(),
+                        reason: "EGL_CONTEXT_FLAGS_KHR contains an OpenGL-only bit".into(),
                         pairs,
                     });
                 }
