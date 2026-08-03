@@ -112,6 +112,35 @@ impl GpuExecutor for Executor {
             Self::Wgpu(executor) => GpuExecutor::read_buffer(executor, resources, id, offset, len),
         }
     }
+
+    fn export_buffer(
+        &self,
+        resources: &SessionResources,
+        id: BufferId,
+    ) -> hl_gpu::Result<(hl_gpu::runtime::model::sharing::Shared, u64)> {
+        match self {
+            Self::Cpu(executor) => GpuExecutor::export_buffer(executor, resources, id),
+            Self::Wgpu(executor) => GpuExecutor::export_buffer(executor, resources, id),
+        }
+    }
+
+    fn import_buffer(
+        &self,
+        resource: hl_gpu::runtime::model::sharing::Shared,
+        bytes: u64,
+    ) -> hl_gpu::Result<hl_gpu::runtime::model::resources::Native> {
+        match self {
+            Self::Cpu(executor) => GpuExecutor::import_buffer(executor, resource, bytes),
+            Self::Wgpu(executor) => GpuExecutor::import_buffer(executor, resource, bytes),
+        }
+    }
+
+    fn sharing_barrier(&mut self) -> hl_gpu::Result<()> {
+        match self {
+            Self::Cpu(executor) => GpuExecutor::sharing_barrier(executor),
+            Self::Wgpu(executor) => GpuExecutor::sharing_barrier(executor),
+        }
+    }
 }
 
 struct KernelCompiler;

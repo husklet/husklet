@@ -103,7 +103,10 @@ pub unsafe extern "C" fn hl_gl_export_buffer(name: u32, export_out: *mut u64) ->
     });
     match result {
         Ok(result) => match result.observations.last() {
-            Some(super::io::Observation::Export(export)) => { *export_out = export.0; 0 }
+            Some(super::io::Observation::Export(export)) => {
+                *export_out = export.0;
+                0
+            }
             _ => -1,
         },
         Err(_) => -1,

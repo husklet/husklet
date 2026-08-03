@@ -99,6 +99,7 @@ impl Connection {
     fn new(
         executor: Executor,
         exports: Exports,
+        global: GlobalLedger,
         trace: bool,
         capture: Option<capture::Capture>,
         #[cfg(target_os = "macos")] presentations: Option<Producer>,
@@ -106,7 +107,7 @@ impl Connection {
         let limits = Limits::from_capabilities(executor.capabilities());
         let session = Session::new(
             limits,
-            GlobalLedger::unbounded(),
+            global,
             Box::new(SystemClock::new()),
         )
         .with_exports(exports);
@@ -313,22 +314,40 @@ impl ConnectionHandler for Connection {
     }
 
     fn export_buffer(&mut self, request: &ReadbackRequest) -> Option<ExportId> {
-        hl_gpu::runtime::service::dispatch::export_buffer(
+        match hl_gpu::runtime::service::dispatch::export_buffer(
             &mut self.session,
             &self.executor,
             BufferId(request.id),
-        )
-        .ok()
+        ) {
+            Ok(export) => Some(export),
+            Err(error) => {
+                hl_log::hl_error!(
+                    hl_log::tag::GPU,
+                    "GPU buffer export refused buffer={} error={error}",
+                    request.id
+                );
+                None
+            }
+        }
     }
 
     fn import_buffer(&mut self, request: &ReadbackRequest) -> Option<u64> {
-        hl_gpu::runtime::service::dispatch::import_buffer(
+        match hl_gpu::runtime::service::dispatch::import_buffer(
             &mut self.session,
             &self.executor,
             BufferId(request.id),
             ExportId(request.offset),
-        )
-        .ok()
+        ) {
+            Ok(bytes) => Some(bytes),
+            Err(error) => {
+                hl_log::hl_error!(
+                    hl_log::tag::GPU,
+                    "GPU buffer import refused buffer={} export={} error={error}",
+                    request.id, request.offset
+                );
+                None
+            }
+        }
     }
 
     fn map_buffer(&mut self, request: &ReadbackRequest) -> Option<()> {
@@ -489,6 +508,7 @@ impl Endpoint {
         // connection must therefore see this one registry; constructing a registry per connection would
         // compile while making every CUDA/GL or CUDA/Vulkan import fail as an unknown export.
         let exports = Exports::new();
+        let global = GlobalLedger::unbounded();
         if trace {
             eprintln!("husklet gpu: listener ready");
         }
@@ -510,6 +530,7 @@ impl Endpoint {
                         stream,
                         executors.clone(),
                         exports.clone(),
+                        global.clone(),
                         trace,
                         capture.clone(),
                         lease,
@@ -532,6 +553,7 @@ impl Endpoint {
         stream: std::os::unix::net::UnixStream,
         executors: Executors,
         exports: Exports,
+        global: GlobalLedger,
         trace: bool,
         capture: Option<capture::Config>,
         lease: ConnectionLease,
@@ -574,6 +596,7 @@ impl Endpoint {
             let mut connection = Connection::new(
                 executor,
                 exports,
+                global,
                 trace,
                 capture,
                 #[cfg(target_os = "macos")]
