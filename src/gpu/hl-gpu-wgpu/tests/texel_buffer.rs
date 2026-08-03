@@ -165,6 +165,46 @@ fn run(commands: &[Cmd]) -> (WgpuExecutor, Session) {
     (executor, session)
 }
 
+fn uniform_texel_load(format: TextureFormat, bytes: Vec<u8>) -> Vec<u8> {
+    let commands = vec![
+        Cmd::CreateShader { id: 1, kind: ShaderPayloadKind::SpirV, spirv: UNIFORM.to_vec() },
+        Cmd::CreateComputePipelineLayout(1,
+            ComputePipelineDesc { compute: ShaderRef { module: 1, entry: "main".into() }, label: String::new() },
+            PipelineLayout { bindings: vec![
+                PipelineBinding { group: 0, binding: 0, count: 1, kind: PipelineBindingKind::UniformTexelBuffer },
+                PipelineBinding { group: 0, binding: 1, count: 1, kind: PipelineBindingKind::StorageBuffer },
+            ] },
+        ),
+        Cmd::CreateBuffer(1, buffer(bytes.len() as u64)),
+        Cmd::WriteBuffer { id: 1, offset: 0, data: bytes.clone() },
+        Cmd::CreateBuffer(2, buffer(16)),
+        Cmd::CreateBindGroup(1, BindGroupDesc { set: 0, entries: vec![
+            BindEntry { binding: 0, resource: BindResource::TexelBuffer {
+                id: 1, offset: 0, size: bytes.len() as u64, format, writable: false,
+            } },
+            BindEntry { binding: 1, resource: BindResource::Buffer { id: 2, offset: 0, size: 16 } },
+        ] }),
+        Cmd::Submit(CommandBuffer { encoder: vec![
+            Enc::BeginComputePass, Enc::SetPipeline(1), Enc::SetBindGroup { index: 0, group: 1 },
+            Enc::Dispatch { x: 1, y: 1, z: 1 }, Enc::EndComputePass,
+        ], signal: None }),
+    ];
+    let (executor, session) = run(&commands);
+    executor.read_buffer(&session.resources, BufferId(2), 0, 16).unwrap()
+}
+
+#[test]
+fn vulkan_native_formats_uniform_texel_load_exact_values() {
+    let f32s = |bytes: Vec<u8>| bytes.chunks_exact(4)
+        .map(|v| f32::from_le_bytes(v.try_into().unwrap())).collect::<Vec<_>>();
+    let rg8 = f32s(uniform_texel_load(TextureFormat::Rg8Snorm, vec![0x40, 0xc0]));
+    assert!((rg8[0] - 64.0 / 127.0).abs() < 1e-6 && (rg8[1] + 64.0 / 127.0).abs() < 1e-6 && rg8[2..] == [0.0, 1.0]);
+    let rgba8 = f32s(uniform_texel_load(TextureFormat::Rgba8Snorm, vec![0x20, 0x40, 0x60, 0x7f]));
+    assert!((rgba8[0] - 32.0 / 127.0).abs() < 1e-6 && rgba8[3] == 1.0);
+    let rg16f = f32s(uniform_texel_load(TextureFormat::Rg16Float, vec![0x00, 0x38, 0x00, 0xb4]));
+    assert_eq!(rg16f, [0.5, -0.25, 0.0, 1.0]);
+}
+
 fn pipeline(shader: &[u32], kind: PipelineBindingKind, extra_output: bool) -> Vec<Cmd> {
     let mut bindings = vec![PipelineBinding {
         group: 0,

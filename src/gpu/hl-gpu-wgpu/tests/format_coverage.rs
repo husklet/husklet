@@ -141,9 +141,11 @@ fn ct(fmt: TextureFormat) -> ColorTargetState {
 mod capability;
 #[path = "format_coverage/color.rs"]
 mod color;
-#[path = "format_coverage/integer.rs"]
-mod integer;
 #[path = "format_coverage/depth.rs"]
 mod depth;
+#[path = "format_coverage/integer.rs"]
+mod integer;
+#[path = "format_coverage/native.rs"]
+mod native;
 #[path = "format_coverage/sample.rs"]
 mod sample;

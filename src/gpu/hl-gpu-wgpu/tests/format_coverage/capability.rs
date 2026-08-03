@@ -14,6 +14,8 @@ fn executor_advertises_exactly_the_formats_this_suite_proves() {
         | TextureFormat::bits(&[TextureFormat::Depth24PlusStencil8])
         // Proven by `integer::every_integer_format_stores_exact_integer_texels`.
         | TextureFormat::bits(hl_gpu::protocol::model::capability::INTEGER_FORMATS)
+        // Proven by `native::native_formats_transfer_roundtrip_exact_bytes` plus the role tests there.
+        | TextureFormat::bits(hl_gpu::protocol::model::capability::NATIVE_FORMATS)
         | (advertised & TextureFormat::bits(BC_FORMATS));
 
     assert_eq!(advertised, proven,

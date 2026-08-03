@@ -154,7 +154,9 @@ impl Format {
             | T::Rgba8Srgb
             | T::Bgra8Srgb
             | T::R8Unorm
-            | T::Rg8Unorm => FormatClass::NormalizedColor,
+            | T::Rg8Unorm
+            | T::Rg8Snorm
+            | T::Rgba8Snorm => FormatClass::NormalizedColor,
             T::Rgba8Uint
             | T::Rgba8Sint
             | T::R8Uint
@@ -163,7 +165,7 @@ impl Format {
             | T::Rg8Sint
             | T::R32Uint
             | T::R32Sint => FormatClass::IntegerColor,
-            T::Rgba16Float => FormatClass::FloatColor,
+            T::Rg16Float | T::Rgba16Float => FormatClass::FloatColor,
             T::R32Float | T::Rgba32Float => FormatClass::UnfilterableFloatColor,
             T::Depth32Float | T::Depth24PlusStencil8 => FormatClass::DepthStencil,
             other if other.block_geometry().is_some() => FormatClass::Compressed,
@@ -211,6 +213,7 @@ impl Format {
             }
             Some(
                 T::Rgba8Unorm
+                | T::Rgba8Snorm
                 | T::Rgba8Uint
                 | T::Rgba8Sint
                 | T::Rgba16Float
@@ -344,6 +347,9 @@ impl Format {
                     | hl_gpu::protocol::model::enums::TextureFormat::Bgra8Unorm
                     | hl_gpu::protocol::model::enums::TextureFormat::R8Unorm
                     | hl_gpu::protocol::model::enums::TextureFormat::Rg8Unorm
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rg8Snorm
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rgba8Snorm
+                    | hl_gpu::protocol::model::enums::TextureFormat::Rg16Float
                     | hl_gpu::protocol::model::enums::TextureFormat::Rgba16Float
                     | hl_gpu::protocol::model::enums::TextureFormat::Rgba32Float
                     | hl_gpu::protocol::model::enums::TextureFormat::R32Float
@@ -369,6 +375,13 @@ impl Format {
             ) {
                 buffer |= f::STORAGE_TEXEL_BUFFER_ATOMIC;
             }
+        }
+        if matches!(
+            self.wire(),
+            Some(hl_gpu::protocol::model::enums::TextureFormat::Rg16Float)
+        ) {
+            buffer &= !f::STORAGE_TEXEL_BUFFER;
+            buffer |= f::UNIFORM_TEXEL_BUFFER;
         }
         FormatFeatures {
             // LINEAR tiling advertises NOTHING materializable. Vulkan's linear tiling exists so an app can
@@ -459,7 +472,7 @@ mod tests {
                         | T::Rgba16Float | T::Rgba32Float | T::R32Float
                         | T::Rgba8Uint | T::Rgba8Sint | T::R8Uint | T::R8Sint
                         | T::Rg8Uint | T::Rg8Sint | T::Rgba32Uint | T::Rgba32Sint
-                        | T::R32Uint | T::R32Sint
+                        | T::R32Uint | T::R32Sint | T::Rg8Snorm | T::Rgba8Snorm | T::Rg16Float
                 )
             );
             let bits = Format(format).features().buffer
@@ -467,7 +480,9 @@ mod tests {
             assert_eq!(bits != 0, supported, "VkFormat {format}, wire={wire:?}");
             assert_eq!(
                 bits,
-                if supported {
+                if matches!(wire, Some(T::Rg16Float)) {
+                    format_feature::UNIFORM_TEXEL_BUFFER
+                } else if supported {
                     format_feature::UNIFORM_TEXEL_BUFFER | format_feature::STORAGE_TEXEL_BUFFER
                 } else {
                     0

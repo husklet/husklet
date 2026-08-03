@@ -2,7 +2,7 @@ use super::*;
 
 /// Draw the constant-`C` fullscreen triangle into a fresh 2×2 `fmt` target and return its RAW tight readback
 /// (`width*height*bytes_per_texel(fmt)` bytes, no row padding).
-fn draw_const(exec: &mut WgpuExecutor, fmt: TextureFormat) -> Vec<u8> {
+pub(super) fn draw_const(exec: &mut WgpuExecutor, fmt: TextureFormat) -> Vec<u8> {
     const W: u32 = 2;
     const H: u32 = 2;
     let mut s = new_session(exec);

@@ -7,9 +7,10 @@ pub(super) fn format_shape(format: TextureFormat) -> Result<(naga::ScalarKind, u
     let shape = match format {
         TextureFormat::R8Unorm | TextureFormat::R8Uint | TextureFormat::R8Sint =>
             (if format == TextureFormat::R8Uint { Uint } else if format == TextureFormat::R8Sint { Sint } else { Float }, 1),
-        TextureFormat::Rg8Unorm | TextureFormat::Rg8Uint | TextureFormat::Rg8Sint =>
+        TextureFormat::Rg8Unorm | TextureFormat::Rg8Snorm | TextureFormat::Rg8Uint | TextureFormat::Rg8Sint =>
             (if format == TextureFormat::Rg8Uint { Uint } else if format == TextureFormat::Rg8Sint { Sint } else { Float }, 2),
-        TextureFormat::Rgba8Unorm | TextureFormat::Bgra8Unorm => (Float, 4),
+        TextureFormat::Rgba8Unorm | TextureFormat::Bgra8Unorm | TextureFormat::Rgba8Snorm => (Float, 4),
+        TextureFormat::Rg16Float => (Float, 4),
         TextureFormat::Rgba16Float => (Float, 8),
         TextureFormat::R32Float => (Float, 4),
         TextureFormat::Rgba32Float => (Float, 16),
@@ -34,9 +35,9 @@ pub(super) fn decode(
     words: &[Handle<Expression>],
 ) -> Result<Handle<Expression>> {
     let value = match format {
-        TextureFormat::Rgba8Unorm | TextureFormat::Bgra8Unorm => function.expressions.append(
+        TextureFormat::Rgba8Unorm | TextureFormat::Bgra8Unorm | TextureFormat::Rgba8Snorm => function.expressions.append(
             Expression::Math {
-                fun: naga::MathFunction::Unpack4x8unorm,
+                fun: if format == TextureFormat::Rgba8Snorm { naga::MathFunction::Unpack4x8snorm } else { naga::MathFunction::Unpack4x8unorm },
                 arg: words[0],
                 arg1: None,
                 arg2: None,
@@ -44,10 +45,10 @@ pub(super) fn decode(
             },
             Span::default(),
         ),
-        TextureFormat::R8Unorm | TextureFormat::Rg8Unorm => {
+        TextureFormat::R8Unorm | TextureFormat::Rg8Unorm | TextureFormat::Rg8Snorm => {
             let count = if format == TextureFormat::R8Unorm { 1 } else { 2 };
             let mut components = (0..count)
-                .map(|component| normalized_byte(function, words[0], index, count, component))
+                .map(|component| normalized_byte(function, words[0], index, count, component, format == TextureFormat::Rg8Snorm))
                 .collect::<Vec<_>>();
             components.push(scalar_literal(function, naga::ScalarKind::Float, 0));
             if count == 1 {
@@ -106,6 +107,16 @@ pub(super) fn decode(
                     ));
                 }
             }
+            function.expressions.append(Expression::Compose { ty: vec4, components }, Span::default())
+        }
+        TextureFormat::Rg16Float => {
+            let pair = unpack_half(function, words[0]);
+            let components = vec![
+                function.expressions.append(Expression::AccessIndex { base: pair, index: 0 }, Span::default()),
+                function.expressions.append(Expression::AccessIndex { base: pair, index: 1 }, Span::default()),
+                scalar_literal(function, naga::ScalarKind::Float, 0),
+                scalar_literal(function, naga::ScalarKind::Float, 1),
+            ];
             function.expressions.append(Expression::Compose { ty: vec4, components }, Span::default())
         }
         TextureFormat::Rgba32Float | TextureFormat::Rgba32Uint | TextureFormat::Rgba32Sint => {
@@ -229,11 +240,14 @@ fn shifted_byte(function: &mut naga::Function, word: Handle<Expression>, shift: 
     function.expressions.append(Expression::Binary { op: naga::BinaryOperator::ShiftRight, left: signed, right: shift_24 }, Span::default())
 }
 
-fn normalized_byte(function: &mut naga::Function, word: Handle<Expression>, index: Handle<Expression>, bytes: u32, component: u32) -> Handle<Expression> {
-    let byte = packed_byte_component(function, word, index, bytes, component, false);
+fn normalized_byte(function: &mut naga::Function, word: Handle<Expression>, index: Handle<Expression>, bytes: u32, component: u32, signed: bool) -> Handle<Expression> {
+    let byte = packed_byte_component(function, word, index, bytes, component, signed);
     let float = function.expressions.append(Expression::As { expr: byte, kind: naga::ScalarKind::Float, convert: Some(4) }, Span::default());
-    let max = function.expressions.append(Expression::Literal(naga::Literal::F32(255.0)), Span::default());
-    function.expressions.append(Expression::Binary { op: naga::BinaryOperator::Divide, left: float, right: max }, Span::default())
+    let max = function.expressions.append(Expression::Literal(naga::Literal::F32(if signed { 127.0 } else { 255.0 })), Span::default());
+    let value = function.expressions.append(Expression::Binary { op: naga::BinaryOperator::Divide, left: float, right: max }, Span::default());
+    if !signed { return value; }
+    let neg_one = function.expressions.append(Expression::Literal(naga::Literal::F32(-1.0)), Span::default());
+    function.expressions.append(Expression::Math { fun: naga::MathFunction::Max, arg: value, arg1: Some(neg_one), arg2: None, arg3: None }, Span::default())
 }
 
 fn scalar_literal(
@@ -258,11 +272,11 @@ pub(super) fn encode(
     current: &[Handle<Expression>],
 ) -> Result<Vec<Handle<Expression>>> {
     let packed = match format {
-        TextureFormat::R8Unorm | TextureFormat::Rg8Unorm | TextureFormat::R8Uint | TextureFormat::Rg8Uint | TextureFormat::R8Sint | TextureFormat::Rg8Sint => {
+        TextureFormat::R8Unorm | TextureFormat::Rg8Unorm | TextureFormat::Rg8Snorm | TextureFormat::R8Uint | TextureFormat::Rg8Uint | TextureFormat::R8Sint | TextureFormat::Rg8Sint => {
             let bytes = if matches!(format, TextureFormat::R8Unorm | TextureFormat::R8Uint | TextureFormat::R8Sint) { 1 } else { 2 };
             vec![encode_partial_bytes(function, format, index, value, current[0], bytes)]
         }
-        TextureFormat::Rgba8Unorm | TextureFormat::Bgra8Unorm => {
+        TextureFormat::Rgba8Unorm | TextureFormat::Bgra8Unorm | TextureFormat::Rgba8Snorm => {
             let source = if format == TextureFormat::Bgra8Unorm {
                 function.expressions.append(
                     Expression::Swizzle {
@@ -282,7 +296,7 @@ pub(super) fn encode(
             };
             vec![function.expressions.append(
                 Expression::Math {
-                    fun: naga::MathFunction::Pack4x8unorm,
+                    fun: if format == TextureFormat::Rgba8Snorm { naga::MathFunction::Pack4x8snorm } else { naga::MathFunction::Pack4x8unorm },
                     arg: source,
                     arg1: None,
                     arg2: None,
@@ -341,6 +355,15 @@ pub(super) fn encode(
             })
             .collect()
         }
+        TextureFormat::Rg16Float => {
+            let pair = function.expressions.append(Expression::Swizzle {
+                size: naga::VectorSize::Bi, vector: value,
+                pattern: [naga::SwizzleComponent::X, naga::SwizzleComponent::Y, naga::SwizzleComponent::X, naga::SwizzleComponent::X],
+            }, Span::default());
+            vec![function.expressions.append(Expression::Math {
+                fun: naga::MathFunction::Pack2x16float, arg: pair, arg1: None, arg2: None, arg3: None,
+            }, Span::default())]
+        }
         TextureFormat::Rgba32Float | TextureFormat::Rgba32Uint | TextureFormat::Rgba32Sint => (0..4)
             .map(|index| {
                 let component = function.expressions.append(Expression::AccessIndex { base: value, index }, Span::default());
@@ -360,10 +383,10 @@ pub(super) fn encode_partial_bytes(
     current: Handle<Expression>,
     bytes: u32,
 ) -> Handle<Expression> {
-    let mut packed = if matches!(format, TextureFormat::R8Unorm | TextureFormat::Rg8Unorm) {
+    let mut packed = if matches!(format, TextureFormat::R8Unorm | TextureFormat::Rg8Unorm | TextureFormat::Rg8Snorm) {
         function.expressions.append(
             Expression::Math {
-                fun: naga::MathFunction::Pack4x8unorm,
+                fun: if format == TextureFormat::Rg8Snorm { naga::MathFunction::Pack4x8snorm } else { naga::MathFunction::Pack4x8unorm },
                 arg: value,
                 arg1: None,
                 arg2: None,
@@ -374,7 +397,7 @@ pub(super) fn encode_partial_bytes(
     } else {
         function.expressions.append(Expression::Literal(naga::Literal::U32(0)), Span::default())
     };
-    if !matches!(format, TextureFormat::R8Unorm | TextureFormat::Rg8Unorm) {
+    if !matches!(format, TextureFormat::R8Unorm | TextureFormat::Rg8Unorm | TextureFormat::Rg8Snorm) {
         for component in 0..bytes {
             let part = function.expressions.append(Expression::AccessIndex { base: value, index: component }, Span::default());
             let part = function.expressions.append(Expression::As { expr: part, kind: naga::ScalarKind::Uint, convert: None }, Span::default());
@@ -400,4 +423,3 @@ pub(super) fn encode_partial_bytes(
     let packed = function.expressions.append(Expression::Binary { op: naga::BinaryOperator::ShiftLeft, left: packed, right: shift }, Span::default());
     function.expressions.append(Expression::Binary { op: naga::BinaryOperator::InclusiveOr, left: preserved, right: packed }, Span::default())
 }
-
