@@ -829,3 +829,131 @@ fn replacing_fbo_color_preserves_attached_depth_storage() {
         } if *src == redefined.texture && *dst == recreated_stencil.texture
     )));
 }
+
+fn recreate_attachment_before_swap(rebind: bool, recreate_depth: bool) {
+    let mut c = ctx_64();
+    let mut sink = RecordingSink::with_full_caps();
+    let fbo = c.gen_framebuffer();
+    record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
+
+    let color = c.textures.gen();
+    record::bind_texture(&mut c, GL_TEXTURE_2D, color);
+    record::tex_image_2d(&mut c, 64, 64, &[]);
+    record::framebuffer_texture_2d(
+        &mut c,
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D,
+        color,
+        0,
+    );
+    let depth = c.gen_renderbuffer();
+    record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, depth);
+    record::renderbuffer_storage(&mut c, GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, 64, 64);
+    record::framebuffer_renderbuffer(
+        &mut c,
+        GL_FRAMEBUFFER,
+        GL_DEPTH_ATTACHMENT,
+        GL_RENDERBUFFER,
+        depth,
+    );
+    let stencil = c.gen_renderbuffer();
+    record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, stencil);
+    record::renderbuffer_storage(&mut c, GL_RENDERBUFFER, GL_STENCIL_INDEX8, 64, 64);
+    record::framebuffer_renderbuffer(
+        &mut c,
+        GL_FRAMEBUFFER,
+        GL_STENCIL_ATTACHMENT,
+        GL_RENDERBUFFER,
+        stencil,
+    );
+
+    record::enable(&mut c, GL_DEPTH_TEST);
+    record::enable(&mut c, GL_STENCIL_TEST);
+    flat_program(&mut c);
+    tri_vbo(&mut c, 8);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+
+    let (attachment, format, point) = if recreate_depth {
+        (depth, GL_DEPTH_COMPONENT16, GL_DEPTH_ATTACHMENT)
+    } else {
+        (stencil, GL_STENCIL_INDEX8, GL_STENCIL_ATTACHMENT)
+    };
+    assert!(record::delete_renderbuffer(&mut c, attachment));
+    record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, attachment);
+    record::renderbuffer_storage(&mut c, GL_RENDERBUFFER, format, 64, 64);
+    if rebind {
+        record::framebuffer_renderbuffer(
+            &mut c,
+            GL_FRAMEBUFFER,
+            point,
+            GL_RENDERBUFFER,
+            attachment,
+        );
+    }
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+
+    let ops = sink.batches[0]
+        .iter()
+        .filter_map(|command| match command {
+            Cmd::Submit(buffer) => Some(buffer.encoder.as_slice()),
+            _ => None,
+        })
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+    let attachments = ops
+        .iter()
+        .filter_map(|op| match op {
+            Enc::BeginRenderPass { depth: Some(depth), .. } => Some(depth.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(attachments.len(), 2, "recreation splits the deferred run by storage generation");
+    assert_ne!(attachments[0].texture, attachments[1].texture);
+    let (preserved_aspect, depth_load, stencil_load) = if recreate_depth {
+        (TextureAspect::StencilOnly, LoadOp::Clear, LoadOp::Load)
+    } else {
+        (TextureAspect::DepthOnly, LoadOp::Load, LoadOp::Clear)
+    };
+    assert_eq!(attachments[1].depth_load, depth_load);
+    assert_eq!(attachments[1].stencil_load, stencil_load);
+    assert!(ops.iter().any(|op| matches!(
+        op,
+        Enc::CopyTextureToTexture {
+            src,
+            dst,
+            src_sub: TextureSubresource { aspect: src_aspect, .. },
+            dst_sub: TextureSubresource { aspect: dst_aspect, .. },
+            ..
+        } if *src == attachments[0].texture
+            && *dst == attachments[1].texture
+            && *src_aspect == preserved_aspect
+            && *dst_aspect == preserved_aspect
+    )));
+    assert!(sink.batches[0]
+        .iter()
+        .any(|command| matches!(command, Cmd::DestroyTexture(target) if *target == attachments[0].texture)));
+}
+
+#[test]
+fn recreated_depth_is_snapshotted_before_swap_without_rebind() {
+    recreate_attachment_before_swap(false, true);
+}
+
+#[test]
+fn recreated_depth_is_snapshotted_before_swap_with_rebind() {
+    recreate_attachment_before_swap(true, true);
+}
+
+#[test]
+fn recreated_stencil_is_snapshotted_before_swap_without_rebind() {
+    recreate_attachment_before_swap(false, false);
+}
+
+#[test]
+fn recreated_stencil_is_snapshotted_before_swap_with_rebind() {
+    recreate_attachment_before_swap(true, false);
+}
