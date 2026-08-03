@@ -1,4 +1,4 @@
-//! Exact integer blits of one-dimensional textures use the native copy path.
+//! Integer blits of one-dimensional textures use their one-row D2 backing.
 
 use hl_gpu::protocol::model::descriptor::{
     BufferDesc, Extent3d, Mirror, Origin3d, TextureDesc, TextureSubresource,
@@ -19,7 +19,7 @@ const FORMATS: &[TextureFormat] = &[
 ];
 
 #[test]
-fn exact_integer_blit_copies_a_one_dimensional_texture() {
+fn integer_blit_scales_a_one_dimensional_texture() {
     for &format in FORMATS {
         let mut executor = WgpuExecutor::new(DeviceConfig::default()).expect("Metal adapter");
         let mut limits = Limits::from_capabilities(executor.capabilities());
@@ -33,7 +33,7 @@ fn exact_integer_blit_copies_a_one_dimensional_texture() {
         let source: Vec<u8> = (0..4 * texel_bytes)
             .map(|index| 19u8.wrapping_add((index as u8).wrapping_mul(47)))
             .collect();
-        let texture = TextureDesc {
+        let source_texture = TextureDesc {
             width: 4,
             height: 1,
             depth: 1,
@@ -44,8 +44,16 @@ fn exact_integer_blit_copies_a_one_dimensional_texture() {
             usage: texture_usage::COPY_SRC | texture_usage::COPY_DST,
             label: String::new(),
         };
-        let extent = Extent3d {
+        let mut destination_texture = source_texture.clone();
+        destination_texture.width = 8;
+        destination_texture.usage |= texture_usage::RENDER_TARGET;
+        let source_extent = Extent3d {
             width: 4,
+            height: 1,
+            depth: 1,
+        };
+        let destination_extent = Extent3d {
+            width: 8,
             height: 1,
             depth: 1,
         };
@@ -55,8 +63,8 @@ fn exact_integer_blit_copies_a_one_dimensional_texture() {
             &mut executor,
             0,
             &[
-                Cmd::CreateTexture(1, texture.clone()),
-                Cmd::CreateTexture(2, texture),
+                Cmd::CreateTexture(1, source_texture),
+                Cmd::CreateTexture(2, destination_texture),
                 Cmd::CreateBuffer(
                     1,
                     BufferDesc {
@@ -80,17 +88,17 @@ fn exact_integer_blit_copies_a_one_dimensional_texture() {
                             dst: 1,
                             dst_sub: TextureSubresource::base(),
                             dst_origin: Origin3d::default(),
-                            extent,
+                            extent: source_extent,
                         },
                         Enc::BlitTexture {
                             src: 1,
                             src_sub: TextureSubresource::base(),
                             src_origin: Origin3d::default(),
-                            src_extent: extent,
+                            src_extent: source_extent,
                             dst: 2,
                             dst_sub: TextureSubresource::base(),
                             dst_origin: Origin3d::default(),
-                            dst_extent: extent,
+                            dst_extent: destination_extent,
                             filter: Filter::Nearest,
                             mirror: Mirror::NONE,
                         },
@@ -99,11 +107,16 @@ fn exact_integer_blit_copies_a_one_dimensional_texture() {
                 }),
             ],
         )
-        .unwrap_or_else(|error| panic!("{format:?}: exact D1 integer blit failed: {error:?}"));
+        .unwrap_or_else(|error| panic!("{format:?}: scaled D1 integer blit failed: {error:?}"));
 
         let actual = executor
             .read_texture(&session.resources, 2)
             .expect("read destination");
-        assert_eq!(actual, source, "{format:?}");
+        let source_texels: Vec<&[u8]> = source.chunks_exact(texel_bytes).collect();
+        let expected: Vec<u8> = [0, 0, 1, 1, 2, 2, 3, 3]
+            .into_iter()
+            .flat_map(|index| source_texels[index].iter().copied())
+            .collect();
+        assert_eq!(actual, expected, "{format:?}");
     }
 }
