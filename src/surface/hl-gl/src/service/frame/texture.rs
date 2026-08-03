@@ -592,7 +592,7 @@ pub(super) fn lower_textures(
                         data: (**data).clone(),
                     });
                     mip_stages.push((level_ir, index as u32, *lw as u32, *lh as u32, 0));
-                    if t.depth > 1 {
+                    if t.depth > 1 || texture_dim == TextureDim::Cube {
                         if let Some(level) = t.mip_chain().get(index - 1) {
                             for (layer, data) in level.layers.iter().enumerate() {
                                 let layer_ir = ctx.alloc_buffer_ir()?;

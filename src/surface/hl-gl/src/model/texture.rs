@@ -760,6 +760,44 @@ impl Textures {
         true
     }
 
+    /// Define one non-base mip level of one cube face while retaining every sibling face.
+    pub fn image_cube_level(
+        &mut self,
+        name: u32,
+        face: usize,
+        level: u32,
+        w: i32,
+        h: i32,
+        pixels: &[u8],
+    ) -> bool {
+        const MAX_LEVELS: usize = 16;
+        if face >= 6 || level == 0 || level as usize > MAX_LEVELS || w <= 0 || h <= 0 {
+            return false;
+        }
+        let generation = self.generation();
+        let Some(texture) = self.map.get_mut(&name) else {
+            return false;
+        };
+        let index = level as usize - 1;
+        if texture.mips.len() <= index {
+            texture.mips.resize(index + 1, MipLevel::default());
+        }
+        let mip = &mut texture.mips[index];
+        mip.w = w;
+        mip.h = h;
+        mip.depth = 6;
+        if mip.layers.len() < 5 {
+            mip.layers.resize_with(5, || Arc::new(Vec::new()));
+        }
+        if face == 0 {
+            mip.data = Arc::new(pixels.to_vec());
+        } else {
+            mip.layers[face - 1] = Arc::new(pixels.to_vec());
+        }
+        texture.gen = generation;
+        true
+    }
+
     pub fn image_3d_level(
         &mut self,
         name: u32,
