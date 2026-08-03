@@ -96,6 +96,7 @@ pub fn import_semaphore(
             return Err(error);
         }
     }
+    rec.generation = rec.generation.wrapping_add(1);
     Ok(())
 }
 
@@ -112,6 +113,7 @@ pub fn signal_shared_semaphore(
     if let Some(export) = rec.active_export() {
         sink.signal_sync(export, value)?;
         rec.counter = rec.counter.max(value);
+        rec.generation = rec.generation.wrapping_add(1);
         Ok(())
     } else {
         dev.signal_semaphore(semaphore, value)
@@ -290,7 +292,9 @@ impl Device {
     ) -> Result<()> {
         for &(semaphore, value) in waits {
             match self.semaphores.get(&semaphore).copied() {
-                Some(record) if record.timeline && record.shared.is_some() => {
+                Some(record)
+                    if record.timeline && record.shared.is_some() && record.counter < value =>
+                {
                     if wait_shared_semaphore(self, sink, semaphore, value, u64::MAX)?
                         != TimelineWait::Reached
                     {
@@ -310,6 +314,7 @@ impl Device {
             let record = self.semaphores.get_mut(&semaphore).unwrap();
             if !record.timeline {
                 record.signaled = false;
+                record.generation = record.generation.wrapping_add(1);
             }
         }
         Ok(())
@@ -348,9 +353,12 @@ impl Device {
                 } else {
                     let record = self.semaphores.get_mut(&semaphore).unwrap();
                     record.counter = record.counter.max(value);
+                    record.generation = record.generation.wrapping_add(1);
                 }
             } else {
-                self.semaphores.get_mut(&semaphore).unwrap().signaled = true;
+                let record = self.semaphores.get_mut(&semaphore).unwrap();
+                record.signaled = true;
+                record.generation = record.generation.wrapping_add(1);
             }
         }
         Ok(())

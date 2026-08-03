@@ -238,15 +238,25 @@ pub extern "C" fn vkDestroySwapchainKHR(
     _p_allocator: *const c_void,
 ) {
     StateStore::with(|s| {
+        let mut completed = false;
         if let Some((dev, sink)) = s.device_and_sink() {
             // Retire the swapchain AND its presentable images + presentation surface (dropping their
             // `dev.images`/`dev.surfaces` bookkeeping + freeing the host textures/surface). Removing only the
             // `SwapchainRec` would orphan the images in `dev.images` forever — a per-resize handle leak.
-            let _ = dev.destroy_swapchain(sink, swapchain);
+            completed = dev.destroy_swapchain(sink, swapchain).is_ok();
         }
-        // Tear down the app-surface presenter + its window binding (drops the private queue wrappers +
-        // the bound `wl_shm`, releasing the app's connection).
-        s.presenters.unbind(swapchain);
+        if completed {
+            s.presenters.unbind(swapchain);
+        } else {
+            hl_log::hl_error!(
+                hl_log::tag::PRESENT,
+                "swapchain destroy deferred sc={swapchain:#x}; cleanup ownership retained"
+            );
+            s.enqueue_swapchain_destroy(swapchain);
+            // Retry once in the void ABI call; persistent failures remain queued and are retried at the
+            // start of every later Vulkan entry point.
+            s.retry_swapchain_destroys();
+        }
     });
 }
 

@@ -28,6 +28,8 @@ pub struct SemaphoreRec {
     pub counter: u64,
     /// Binary payload state. A successful queue wait consumes it.
     pub signaled: bool,
+    /// Changes whenever the payload or imported identity changes; used to validate unlocked waits.
+    pub generation: u64,
     /// Payload exported by this semaphore or permanently imported into it.
     pub shared: Option<SyncExportId>,
 }
@@ -39,6 +41,7 @@ impl SemaphoreRec {
             timeline: false,
             counter: 0,
             signaled: false,
+            generation: 0,
             shared: None,
         }
     }
@@ -48,6 +51,7 @@ impl SemaphoreRec {
             timeline: true,
             counter: initial,
             signaled: false,
+            generation: 0,
             shared: None,
         }
     }

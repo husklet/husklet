@@ -241,6 +241,7 @@ pub fn create_swapchain_for_target(
     image_count: u32,
     old_swapchain: VkSwapchainKHR,
 ) -> Result<VkSwapchainKHR> {
+    retry_wsi_cleanup(dev, sink)?;
     let replacement_valid = if old_swapchain == 0 {
         !dev.swapchains.values().any(|swapchain| {
             !swapchain.retired && swapchain.presentation_target == presentation_target
@@ -331,6 +332,23 @@ pub fn create_swapchain_for_target(
                 GpuError::Transport(error) if !error.refusal() && !error.retryable_before_request()
             );
             if outcome_ambiguous {
+                dev.images.insert(
+                    handle,
+                    ImageRec {
+                        ir_id: ir_texture_id,
+                        width,
+                        height,
+                        depth: 1,
+                        dim: TextureDim::D2,
+                        layers: 1,
+                        mip_levels: 1,
+                        format,
+                        usage,
+                        sample_count: 1,
+                        is_render_target: crate::model::memory::ImageUsage(SURFACE_IMAGE_USAGE)
+                            .is_render_target(),
+                    },
+                );
                 images.push(SwapImage {
                     ir_texture_id,
                     handle,
@@ -391,16 +409,13 @@ fn rollback_swapchain_allocation(
     images: &[SwapImage],
 ) -> Result<()> {
     let mut cleanup_error = None;
-    if !images.is_empty() {
-        let destroys: Vec<_> = images
-            .iter()
-            .map(|image| Cmd::DestroyTexture(image.ir_texture_id))
-            .collect();
-        if let Err(error) = sink.submit(&destroys) {
+    for (index, image) in images.iter().enumerate() {
+        if let Err(error) = sink.submit(&[Cmd::DestroyTexture(image.ir_texture_id)]) {
+            dev.pending_wsi_textures
+                .extend_from_slice(&images[index..]);
             cleanup_error = Some(error);
+            break;
         }
-    }
-    for image in images {
         dev.images.remove(&image.handle);
         dev.image_layouts.remove(&image.handle);
     }
@@ -408,15 +423,38 @@ fn rollback_swapchain_allocation(
         if surface_record.token.is_some() {
             if let Err(error) = sink.submit(&[Cmd::DestroySurface(surface_record.ir_id)]) {
                 cleanup_error.get_or_insert(error);
+                dev.pending_wsi_surfaces.push(surface);
+            } else {
+                dev.surfaces.remove(&surface);
             }
+        } else {
+            dev.surfaces.remove(&surface);
         }
     }
-    dev.surfaces.remove(&surface);
     if let Some(error) = cleanup_error {
         Err(error)
     } else {
         Ok(())
     }
+}
+
+pub fn retry_wsi_cleanup(dev: &mut Device, sink: &mut dyn CommandSink) -> Result<()> {
+    while let Some(image) = dev.pending_wsi_textures.first().copied() {
+        sink.submit(&[Cmd::DestroyTexture(image.ir_texture_id)])?;
+        dev.pending_wsi_textures.remove(0);
+        dev.images.remove(&image.handle);
+        dev.image_layouts.remove(&image.handle);
+    }
+    while let Some(surface) = dev.pending_wsi_surfaces.first().copied() {
+        if let Some(record) = dev.surfaces.get(&surface) {
+            if record.token.is_some() {
+                sink.submit(&[Cmd::DestroySurface(record.ir_id)])?;
+            }
+        }
+        dev.pending_wsi_surfaces.remove(0);
+        dev.surfaces.remove(&surface);
+    }
+    Ok(())
 }
 
 /// Retire an old swapchain before replacement allocation. Vulkan retires it even if creation subsequently
@@ -557,6 +595,7 @@ impl Device {
         sink: &mut dyn CommandSink,
         swapchain: VkSwapchainKHR,
     ) -> Result<()> {
+        retry_wsi_cleanup(self, sink)?;
         let Some(sc) = self.swapchains.get(&swapchain) else {
             return Ok(()); // unknown / already retired — nothing to free (VK_NULL_HANDLE)
         };

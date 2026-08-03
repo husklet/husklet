@@ -13,6 +13,24 @@ use crate::*;
 use crate::service::create::refresh_mapped_buffer;
 use hl_gpu::{Cmd, CommandBuffer, CommandSink, FenceId, GpuError, Result};
 
+#[derive(Debug)]
+pub enum QueueSubmitError {
+    Uncommitted(GpuError),
+    Committed(GpuError),
+}
+
+impl QueueSubmitError {
+    pub fn error(&self) -> &GpuError {
+        match self {
+            Self::Uncommitted(error) | Self::Committed(error) => error,
+        }
+    }
+
+    pub fn committed(&self) -> bool {
+        matches!(self, Self::Committed(_))
+    }
+}
+
 /// `vkQueueSubmit` — flush mapped memory, then submit each command buffer's encoder as a `Cmd::Submit`;
 /// if `signal_fence` is given, the last submit signals it at a fresh timeline value. All command
 /// buffers move to `Pending`. Errors on an unknown command-buffer / fence handle.
@@ -22,6 +40,16 @@ pub fn queue_submit(
     command_buffers: &[VkCommandBuffer],
     signal_fence: Option<VkFence>,
 ) -> Result<()> {
+    queue_submit_outcome(dev, sink, command_buffers, signal_fence)
+        .map_err(|error| error.error().clone())
+}
+
+pub fn queue_submit_outcome(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    command_buffers: &[VkCommandBuffer],
+    signal_fence: Option<VkFence>,
+) -> std::result::Result<(), QueueSubmitError> {
     let _submit_span = hl_log::hl_span!(hl_log::tag::VULKAN, "submit");
     // Resolve the fence signal (ir id + a fresh monotonic timeline value) up front.
     let signal = match signal_fence {
@@ -29,7 +57,8 @@ pub fn queue_submit(
             let ir = dev
                 .fences
                 .get(&f)
-                .ok_or(GpuError::Invalid("vkQueueSubmit: unknown VkFence"))?
+                .ok_or(GpuError::Invalid("vkQueueSubmit: unknown VkFence"))
+                .map_err(QueueSubmitError::Uncommitted)?
                 .ir_id;
             let value = dev.next_fence_value();
             Some((f, ir, value))
@@ -47,16 +76,17 @@ pub fn queue_submit(
         let rec = dev
             .command_buffers
             .get(&cb)
-            .ok_or(GpuError::Invalid("vkQueueSubmit: unknown VkCommandBuffer"))?;
+            .ok_or(GpuError::Invalid("vkQueueSubmit: unknown VkCommandBuffer"))
+            .map_err(QueueSubmitError::Uncommitted)?;
         if rec.state != CommandBufferState::Executable {
             hl_log::hl_error!(
                 hl_log::tag::VULKAN,
                 "submit not-executable cb={cb:#x} state={:?}",
                 rec.state
             );
-            return Err(GpuError::Invalid(
+            return Err(QueueSubmitError::Uncommitted(GpuError::Invalid(
                 "vkQueueSubmit: command buffer is not executable",
-            ));
+            )));
         }
         encoders.push(rec.enc.clone());
         buffer_writes.extend(rec.buffer_writes.iter().cloned());
@@ -118,24 +148,11 @@ pub fn queue_submit(
     );
     hl_log::hl_count!(hl_log::tag::VULKAN, "submits");
     hl_log::hl_add!(hl_log::tag::VULKAN, "cmds", batch.len() as u64);
-    sink.submit(&batch)?;
+    sink.submit(&batch).map_err(QueueSubmitError::Uncommitted)?;
 
-    // HOST_COHERENT mappings remain valid across GPU execution. Refresh only buffers that the recorded
-    // encoder wrote, avoiding readbacks of persistently-mapped uniform/vertex inputs on every frame.
-    for buffer in gpu_written_buffers {
-        refresh_mapped_buffer(dev, sink, buffer)?;
-    }
-
-    // The captured pending host→device uploads (from vkUnmapMemory / vkFlushMappedMemoryRanges) have now
-    // reached the device in this frame — retire them so they are not re-flushed on the next submit.
+    // From this point the host work is committed. Publish completion state before fallible readback
+    // refreshes so callers can never roll queue synchronization back over work that already executed.
     dev.clear_pending_uploads();
-
-    // Advance model state. The host replay is SYNCHRONOUS — `sink.submit` above already ran every command
-    // buffer to completion — so each buffer's execution is done on return. Per Vulkan §6.4, a completed
-    // buffer recorded WITHOUT `ONE_TIME_SUBMIT` returns to `Executable` (re-submittable); a one-time buffer
-    // becomes non-resubmittable. Leaving a re-submittable buffer stuck in `Pending` would fail the NEXT
-    // `vkQueueSubmit` of that same buffer ("not executable") — exactly the vkcube per-image draw loop, which
-    // records each swapchain image's command buffer once and re-submits it every frame.
     for &cb in command_buffers {
         if let Some(rec) = dev.command_buffers.get_mut(&cb) {
             rec.state = if rec.one_time_submit {
@@ -148,10 +165,24 @@ pub fn queue_submit(
     if let Some((f, _, value)) = signal {
         if let Some(fence) = dev.fences.get_mut(&f) {
             fence.value = value;
-            // CommandSink::submit is synchronous: the host has completed the signalled submission.
             fence.signaled = true;
         }
     }
+
+    // HOST_COHERENT mappings remain valid across GPU execution. Refresh only buffers that the recorded
+    // encoder wrote, avoiding readbacks of persistently-mapped uniform/vertex inputs on every frame.
+    for buffer in gpu_written_buffers {
+        refresh_mapped_buffer(dev, sink, buffer).map_err(QueueSubmitError::Committed)?;
+    }
+
+    // The captured pending host→device uploads (from vkUnmapMemory / vkFlushMappedMemoryRanges) have now
+    // reached the device in this frame — retire them so they are not re-flushed on the next submit.
+    // Advance model state. The host replay is SYNCHRONOUS — `sink.submit` above already ran every command
+    // buffer to completion — so each buffer's execution is done on return. Per Vulkan §6.4, a completed
+    // buffer recorded WITHOUT `ONE_TIME_SUBMIT` returns to `Executable` (re-submittable); a one-time buffer
+    // becomes non-resubmittable. Leaving a re-submittable buffer stuck in `Pending` would fail the NEXT
+    // `vkQueueSubmit` of that same buffer ("not executable") — exactly the vkcube per-image draw loop, which
+    // records each swapchain image's command buffer once and re-submits it every frame.
     Ok(())
 }
 

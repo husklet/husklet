@@ -196,6 +196,7 @@ pub struct State {
     pub wayland_surfaces: HashMap<u64, WaylandWindow>,
     /// Surface-owned presenters plus swapchain leases. Overlapping recreation shares one identity.
     pub presenters: Presenters,
+    pending_swapchain_destroys: std::collections::HashSet<u64>,
 
     /// Live `VkPrivateDataSlot` handles (the `VK_EXT_private_data` / core-1.3 slot objects). A slot is a
     /// pure host object; the per-object data it stores lives in [`Self::private_data`].
@@ -259,6 +260,7 @@ impl State {
             next_surface: 0,
             wayland_surfaces: HashMap::new(),
             presenters: Presenters::new(),
+            pending_swapchain_destroys: std::collections::HashSet::new(),
             private_data_slots: std::collections::HashSet::new(),
             private_data: HashMap::new(),
             ycbcr_conversions: std::collections::HashSet::new(),
@@ -364,6 +366,23 @@ impl State {
         })
     }
 
+    pub fn enqueue_swapchain_destroy(&mut self, swapchain: u64) {
+        self.pending_swapchain_destroys.insert(swapchain);
+    }
+
+    pub fn retry_swapchain_destroys(&mut self) {
+        let pending: Vec<_> = self.pending_swapchain_destroys.iter().copied().collect();
+        for swapchain in pending {
+            let completed = self
+                .device_and_sink()
+                .is_some_and(|(device, sink)| device.destroy_swapchain(sink, swapchain).is_ok());
+            if completed {
+                self.pending_swapchain_destroys.remove(&swapchain);
+                self.presenters.unbind(swapchain);
+            }
+        }
+    }
+
     pub fn device_ref(&self) -> Option<&Device> {
         self.devices.get(&self.current_device)
     }
@@ -411,6 +430,7 @@ impl StateStore {
         static STATE: OnceLock<Mutex<State>> = OnceLock::new();
         let state = STATE.get_or_init(|| Mutex::new(State::new()));
         let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+        state.retry_swapchain_destroys();
         f(&mut state)
     }
 }

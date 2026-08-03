@@ -84,6 +84,14 @@ const REPORT_RETRIES: u8 = 1;
 const REPORT_TERMINAL: u8 = 2;
 
 impl RemoteCommandSink {
+    /// A separate connection to the same executor for blocking observation requests. It owns no
+    /// residency journal, so waiting on a process-global exported sync object cannot block the command
+    /// connection or a higher-layer device-state lock.
+    pub fn observer(&self) -> Self {
+        let mut observer = Self::with_config(self.path.clone(), self.config);
+        observer.trace = self.trace;
+        observer
+    }
     pub fn new(path: impl Into<String>) -> Self {
         RemoteCommandSink {
             path: path.into(),

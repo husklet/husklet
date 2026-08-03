@@ -18,7 +18,7 @@ use super::descriptor::{
 use super::instance::PhysicalDeviceDesc;
 use super::memory::{BufferRec, ImageRec, MemRec, SamplerRec};
 use super::pipeline::{PipelineCacheRec, PipelineLayoutRec, PipelineRec, ShaderRec};
-use super::queue::{FenceRec, Queue, SurfaceRec, SwapchainRec};
+use super::queue::{FenceRec, Queue, SurfaceRec, SwapImage, SwapchainRec};
 use super::sync::{EventRec, QueryPoolRec, SemaphoreRec};
 use crate::*;
 use hl_gpu::{GpuError, Result};
@@ -103,6 +103,8 @@ pub struct Device {
     pub query_pools: HashMap<VkQueryPool, QueryPoolRec>,
     pub surfaces: HashMap<VkSurfaceKHR, SurfaceRec>,
     pub swapchains: HashMap<VkSwapchainKHR, SwapchainRec>,
+    pub pending_wsi_textures: Vec<SwapImage>,
+    pub pending_wsi_surfaces: Vec<VkSurfaceKHR>,
 
     /// `VkImage` handle → its last-recorded `VkImageLayout` (raw). Layout is implicit in the hl-GPU IR
     /// (the executor needs no explicit transitions), so this is correctness bookkeeping only: a
@@ -153,6 +155,8 @@ impl Device {
             query_pools: HashMap::new(),
             surfaces: HashMap::new(),
             swapchains: HashMap::new(),
+            pending_wsi_textures: Vec::new(),
+            pending_wsi_surfaces: Vec::new(),
             image_layouts: HashMap::new(),
             ir_ids,
             next_handle: 0,
