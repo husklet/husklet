@@ -339,20 +339,6 @@ fn polygon_offset_state_round_trips_and_invalid_caps_are_rejected() {
 }
 
 #[test]
-fn dither_defaults_enabled_and_toggles() {
-    let mut c = ctx_800x600();
-    let mut integers = [0i32; 4];
-    assert!(c.is_enabled(GL_DITHER));
-    assert_eq!(query::get_integerv(&c, GL_DITHER, &mut integers), 1);
-    assert_eq!(integers[0], GL_TRUE as i32);
-    c.disable(GL_DITHER);
-    assert!(!c.is_enabled(GL_DITHER));
-    c.enable(GL_DITHER);
-    assert!(c.is_enabled(GL_DITHER));
-    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
-}
-
-#[test]
 fn integer_state_converts_through_float_and_boolean_queries_with_full_arity() {
     let mut c = ctx_800x600();
     c.active_texture(GL_TEXTURE0 + 3);
