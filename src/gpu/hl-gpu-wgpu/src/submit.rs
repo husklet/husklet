@@ -20,7 +20,7 @@ use hl_log::tag;
 
 use crate::convert::Format;
 use crate::pipeline::PipelineNative;
-use crate::{WgpuExecutor, buffer, fence, texture};
+use crate::{buffer, fence, texture, WgpuExecutor};
 
 mod vertex;
 
@@ -119,11 +119,7 @@ impl WgpuExecutor {
         self.with_validation_scope(|executor| executor.submit_cb_inner(res, cb))
     }
 
-    fn submit_cb_inner(
-        &mut self,
-        res: &mut SessionResources,
-        cb: &CommandBuffer,
-    ) -> Result<SubmitCommit> {
+    fn submit_cb_inner(&mut self, res: &mut SessionResources, cb: &CommandBuffer) -> Result<SubmitCommit> {
         let ops = &cb.encoder;
         let mut i = 0;
         let mut native = None;
@@ -537,8 +533,8 @@ impl WgpuExecutor {
                         };
                         if samples != 1 {
                             return Err(GpuError::Unsupported(
-                                "copy texture to buffer: multisampled texture must be resolved first",
-                            ));
+                            "copy texture to buffer: multisampled texture must be resolved first",
+                        ));
                         }
                         // Honor the `mip` field: the readback below reads THAT level (not silently the base).
                         // An out-of-range mip is a typed `OutOfBounds` (the runtime does not range-check this op).
@@ -679,8 +675,8 @@ impl WgpuExecutor {
                             }
                             if t.sample_count != 1 {
                                 return Err(GpuError::Unsupported(
-                                    "copy buffer to texture: multisampled texture cannot be uploaded",
-                                ));
+                                "copy buffer to texture: multisampled texture cannot be uploaded",
+                            ));
                             }
                             let (row, image_rows) =
                                 Format::from(t.format).copy_layout(*width, *height)?;
@@ -730,12 +726,7 @@ impl WgpuExecutor {
                                     .is_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64));
                         if native_compatible {
                             if sentinel {
-                                hl_log::hl_error!(
-                                    tag::PRESENT,
-                                    "sentinel_host phase=upload_branch executor={:p} texture={} branch=native",
-                                    self,
-                                    dst
-                                );
+                                hl_log::hl_error!(tag::PRESENT, "sentinel_host phase=upload_branch executor={:p} texture={} branch=native", self, dst);
                             }
                             native
                                 .get_or_insert_with(|| {
@@ -782,12 +773,7 @@ impl WgpuExecutor {
                             && u64::from(src_stride).is_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT);
                         if staging_compatible {
                             if sentinel {
-                                hl_log::hl_error!(
-                                    tag::PRESENT,
-                                    "sentinel_host phase=upload_branch executor={:p} texture={} branch=staging",
-                                    self,
-                                    dst
-                                );
+                                hl_log::hl_error!(tag::PRESENT, "sentinel_host phase=upload_branch executor={:p} texture={} branch=staging", self, dst);
                             }
                             let padded_row = row
                                 .checked_next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
@@ -844,12 +830,7 @@ impl WgpuExecutor {
                         }
 
                         if sentinel {
-                            hl_log::hl_error!(
-                                tag::PRESENT,
-                                "sentinel_host phase=upload_branch executor={:p} texture={} branch=host_fallback",
-                                self,
-                                dst
-                            );
+                            hl_log::hl_error!(tag::PRESENT, "sentinel_host phase=upload_branch executor={:p} texture={} branch=host_fallback", self, dst);
                         }
                         self.submit_encoded(&mut native);
                         // Map the source buffer once, then compact padded rows in host memory. Mapping every

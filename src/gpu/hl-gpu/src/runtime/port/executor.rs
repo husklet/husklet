@@ -64,28 +64,18 @@ impl CommittedDelta {
         let mut fence_signals = Vec::new();
         let mut replayable = true;
         let sources: Vec<usize> = indices.into_iter().collect();
-        assert!(
-            sources.windows(2).all(|pair| pair[0] < pair[1]),
-            "committed command indices must be strictly ordered and unique"
-        );
+        assert!(sources.windows(2).all(|pair| pair[0] < pair[1]), "committed command indices must be strictly ordered and unique");
         for &source in &sources {
-            let command = batch
-                .get(source)
-                .unwrap_or_else(|| panic!("committed command index is out of range"));
+            let command = batch.get(source).unwrap_or_else(|| panic!("committed command index is out of range"));
             match command {
                 Cmd::Submit(cb) => {
                     replayable = false;
                     if scheduled_signals.is_none() {
-                        if let Some(signal) = cb.signal {
-                            fence_signals.push(signal);
-                        }
+                        if let Some(signal) = cb.signal { fence_signals.push(signal); }
                     }
                 }
                 Cmd::Present { .. } | Cmd::WaitFence { .. } => {}
-                command => commands.push(CommittedCommand {
-                    source,
-                    command: command.clone(),
-                }),
+                command => commands.push(CommittedCommand { source, command: command.clone() }),
             }
         }
         for presentation in &presentations {
@@ -93,16 +83,8 @@ impl CommittedDelta {
                 if *surface == presentation.surface.0 && *texture == presentation.texture.0 && *serial == presentation.serial)),
                 "a committed presentation must correspond to a successful Present command");
         }
-        if let Some(signals) = scheduled_signals {
-            fence_signals = signals;
-        }
-        Self {
-            commands,
-            fence_signals,
-            presentations,
-            replayable,
-            sources,
-        }
+        if let Some(signals) = scheduled_signals { fence_signals = signals; }
+        Self { commands, fence_signals, presentations, replayable, sources }
     }
 
     pub fn replay_commands(&self) -> impl Iterator<Item = &Cmd> {
@@ -134,13 +116,7 @@ impl std::ops::Deref for Execution {
 impl Execution {
     pub fn accepted(presentations: Vec<Presentation>) -> Self {
         Self {
-            committed: CommittedDelta {
-                commands: Vec::new(),
-                fence_signals: Vec::new(),
-                presentations,
-                replayable: true,
-                sources: Vec::new(),
-            },
+            committed: CommittedDelta { commands: Vec::new(), fence_signals: Vec::new(), presentations, replayable: true, sources: Vec::new() },
             refusal: None,
             complete: true,
         }
@@ -158,12 +134,7 @@ impl Execution {
             "a partial execution cannot contain a fatal error"
         );
         Self {
-            committed: CommittedDelta::from_indices(
-                batch,
-                committed,
-                presentations,
-                Some(scheduled_signals),
-            ),
+            committed: CommittedDelta::from_indices(batch, committed, presentations, Some(scheduled_signals)),
             refusal: Some(refusal),
             complete: false,
         }
@@ -175,12 +146,7 @@ impl Execution {
 
     pub(crate) fn into_parts(mut self, batch: &[Cmd]) -> (CommittedDelta, Option<GpuError>) {
         if self.complete {
-            self.committed = CommittedDelta::from_indices(
-                batch,
-                0..batch.len(),
-                self.committed.presentations,
-                None,
-            );
+            self.committed = CommittedDelta::from_indices(batch, 0..batch.len(), self.committed.presentations, None);
         }
         (self.committed, self.refusal)
     }
@@ -205,7 +171,11 @@ pub trait GpuExecutor {
     /// encoder work on `Submit`, and returns one [`Presentation`] per `Present` command in order. Return
     /// [`Execution::partial`] after continuing past a nonfatal operation refusal. Reserve `Err` for an
     /// outcome whose resource and accounting state must be rolled back atomically.
-    fn execute(&mut self, resources: &mut SessionResources, batch: &[Cmd]) -> Result<Execution>;
+    fn execute(
+        &mut self,
+        resources: &mut SessionResources,
+        batch: &[Cmd],
+    ) -> Result<Execution>;
 
     /// Block until timeline fence `fence` reaches `value`. Serves the `CommandSink::wait` path (an
     /// out-of-band wait not carried inside a command batch); `resources` is passed so the executor can
