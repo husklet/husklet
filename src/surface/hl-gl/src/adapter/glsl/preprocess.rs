@@ -31,7 +31,7 @@ mod word;
 
 pub use error::PreprocessError;
 
-pub(super) use condition::{Expression, Unknown, Values};
+pub(super) use condition::{Expression, Values};
 pub(super) use word::Words;
 
 use define::Macros;
@@ -48,7 +48,10 @@ impl Source<'_> {
     /// the compile/link — forwarding partially preprocessed source produces an unknown-variable error from
     /// the host compiler with no attribution.
     pub fn preprocessed(self) -> Result<String, PreprocessError> {
-        Preprocessor::default().apply(&self.comments_removed())
+        if let Some(line) = self.unterminated_block_comment() {
+            return Err(PreprocessError::UnterminatedComment { line });
+        }
+        Preprocessor::default().apply(&self.comments_removed_for_preprocessing())
     }
 }
 
@@ -70,6 +73,9 @@ struct Preprocessor {
     macros: Macros,
     branches: Vec<Branch>,
     out: String,
+    saw_any_token: bool,
+    saw_non_preprocessing_token: bool,
+    saw_version: bool,
 }
 
 impl Preprocessor {
@@ -87,6 +93,10 @@ impl Preprocessor {
             } else if self.live() {
                 let expanded = self.macros.expand(&logical.text, first)?;
                 self.out.push_str(&expanded);
+                if !trimmed.is_empty() {
+                    self.saw_any_token = true;
+                    self.saw_non_preprocessing_token = true;
+                }
             }
             for _ in 0..=logical.continued {
                 self.out.push('\n');
@@ -108,7 +118,7 @@ impl Preprocessor {
             .find(|c: char| !(c == '_' || c.is_ascii_alphanumeric()))
             .unwrap_or(rest.len());
         let (name, tail) = rest.split_at(name_end);
-        match name {
+        let result = match name {
             // Conditional structure is tracked even inside a dead region, so nesting stays balanced.
             "if" | "ifdef" | "ifndef" => {
                 let enclosing = self.live();
@@ -170,8 +180,50 @@ impl Preprocessor {
                 line,
                 message: tail.trim().to_owned(),
             }),
+            "version" => {
+                let valid = !self.saw_any_token
+                    && !self.saw_version
+                    && matches!(
+                        tail.split_whitespace().collect::<Vec<_>>().as_slice(),
+                        ["100"] | ["300", "es"] | ["310", "es"] | ["320", "es"]
+                    );
+                if !valid {
+                    return Err(PreprocessError::InvalidDirective {
+                        line,
+                        name: name.to_owned(),
+                    });
+                }
+                self.saw_version = true;
+                self.out.push('#');
+                self.out.push_str(rest);
+                Ok(())
+            }
+            "extension" => {
+                let Some((extension, behavior)) = tail.split_once(':') else {
+                    return Err(PreprocessError::InvalidDirective {
+                        line,
+                        name: name.to_owned(),
+                    });
+                };
+                let extension = extension.trim();
+                let behavior = behavior.trim();
+                let valid_name = !extension.is_empty()
+                    && !extension.starts_with(|character: char| character.is_ascii_digit())
+                    && extension.bytes().all(Words::is_continuation);
+                let valid_behavior = matches!(behavior, "require" | "enable" | "warn" | "disable")
+                    && (extension != "all" || matches!(behavior, "warn" | "disable"));
+                if self.saw_non_preprocessing_token || !valid_name || !valid_behavior {
+                    return Err(PreprocessError::InvalidDirective {
+                        line,
+                        name: name.to_owned(),
+                    });
+                }
+                self.out.push('#');
+                self.out.push_str(rest);
+                Ok(())
+            }
             // Directives whose meaning belongs to the stage consumer, not to this pass.
-            "version" | "extension" | "pragma" | "line" => {
+            "pragma" | "line" => {
                 self.out.push('#');
                 self.out.push_str(rest);
                 Ok(())
@@ -182,7 +234,11 @@ impl Preprocessor {
                 line,
                 name: name.to_owned(),
             }),
+        };
+        if !name.is_empty() {
+            self.saw_any_token = true;
         }
+        result
     }
 
     /// Evaluate a `#if`/`#elif` controlling expression, or a `#ifdef`/`#ifndef` operand.
@@ -203,7 +259,7 @@ impl Preprocessor {
         // operands were resolved before expansion so their names were not substituted; resolve this second
         // generation afterwards as required by the rescan rules.
         let expanded = self.macros.resolve_defined(&expanded);
-        Expression::evaluate(&expanded, Unknown::Zero, &())
+        Expression::evaluate(&expanded, &())
             .map(|value| value != 0)
             .ok_or(PreprocessError::Condition {
                 line,

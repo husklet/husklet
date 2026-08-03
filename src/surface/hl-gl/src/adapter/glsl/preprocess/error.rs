@@ -5,10 +5,16 @@
 pub enum PreprocessError {
     /// A `#` directive this preprocessor does not implement (GLSL ES 1.00 §3.4 lists the whole set).
     UnknownDirective { line: usize, name: String },
+    /// A recognized directive has invalid syntax, value, or placement.
+    InvalidDirective { line: usize, name: String },
+    /// A block comment reaches the end of the compilation unit without `*/`.
+    UnterminatedComment { line: usize },
     /// A missing, reserved, or non-identifier macro name in `#define`/`#undef`.
     MacroName { line: usize, name: String },
     /// A malformed function-like `#define` parameter list.
     MacroParameters { line: usize, name: String },
+    /// A macro was redefined with a different parameter or replacement-token sequence.
+    MacroRedefinition { line: usize, name: String },
     /// A function-like macro invoked with the wrong number of arguments.
     MacroArguments {
         line: usize,
@@ -38,11 +44,20 @@ impl std::fmt::Display for PreprocessError {
             Self::UnknownDirective { line, name } => {
                 write!(f, "{line}: unsupported preprocessor directive `#{name}`")
             }
+            Self::InvalidDirective { line, name } => {
+                write!(f, "{line}: invalid `#{name}` directive")
+            }
+            Self::UnterminatedComment { line } => {
+                write!(f, "{line}: unterminated block comment")
+            }
             Self::MacroName { line, name } => {
                 write!(f, "{line}: invalid or reserved macro name `{name}`")
             }
             Self::MacroParameters { line, name } => {
                 write!(f, "{line}: malformed parameter list for macro `{name}`")
+            }
+            Self::MacroRedefinition { line, name } => {
+                write!(f, "{line}: incompatible redefinition of macro `{name}`")
             }
             Self::MacroArguments {
                 line,

@@ -104,6 +104,15 @@ impl Macros {
                 name: name.to_owned(),
             });
         }
+        if let Some(previous) = self.entries.get(name) {
+            if previous != &entry {
+                return Err(PreprocessError::MacroRedefinition {
+                    line,
+                    name: name.to_owned(),
+                });
+            }
+            return Ok(());
+        }
         self.entries.insert(name.to_owned(), entry);
         Ok(())
     }

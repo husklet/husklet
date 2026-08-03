@@ -62,7 +62,8 @@ void main(void)
 
 #[test]
 fn preprocessing_does_not_expand_identifiers_inside_number_tokens() {
-    let vs = "#define e +1\nattribute vec4 position; void main(){ int n=1e; gl_Position=position; }";
+    let vs =
+        "#define e +1\nattribute vec4 position; void main(){ int n=1e; gl_Position=position; }";
     let fs = "void main(){ gl_FragColor=vec4(1); }";
     let (translated, _) = glsl::StageSources::new(vs, fs).translate_render();
     assert!(translated.contains("int n=1e;"), "{translated}");
@@ -261,6 +262,127 @@ fn expanded_defined_and_unary_shift_conditions() {
             .unwrap_or_else(|error| panic!("condition rejected for {source:?}: {error}"));
         assert!(preprocessed.contains(selected), "{preprocessed}");
     }
+}
+
+/// GLSL ES 1.00 differs from C: an undefined identifier in an evaluated `#if` operand is an error,
+/// while an operand skipped by `&&`, `||`, or `?:` must not diagnose it.
+#[test]
+fn undefined_condition_identifiers_respect_expression_short_circuiting() {
+    for source in [
+        "#if MISSING\nint value;\n#endif\n",
+        "#if 0 || MISSING\nint value;\n#endif\n",
+        "#if 1 && MISSING\nint value;\n#endif\n",
+        "#if 1 ? MISSING : 0\nint value;\n#endif\n",
+    ] {
+        assert!(
+            glsl::Source::new(source).preprocessed().is_err(),
+            "{source}"
+        );
+    }
+    for source in [
+        "#if 1 || MISSING\nint value;\n#endif\n",
+        "#if 0 && MISSING\nint value;\n#endif\n",
+        "#if 0 ? MISSING : 1\nint value;\n#endif\n",
+    ] {
+        glsl::Source::new(source)
+            .preprocessed()
+            .unwrap_or_else(|error| {
+                panic!("short-circuited operand rejected in {source:?}: {error}")
+            });
+    }
+}
+
+/// Repeating a macro definition is legal only when its parameters and replacement spelling match.
+#[test]
+fn incompatible_macro_redefinitions_are_rejected() {
+    for source in [
+        "#define VALUE (A - 1.0)\n#define VALUE (B - 1.0)\n",
+        "#define VALUE (A - 1.0)\n#define VALUE (A- 1.0)\n",
+        "#define VALUE(a) (a)\n#define VALUE(b) (b)\n",
+    ] {
+        assert!(
+            glsl::Source::new(source).preprocessed().is_err(),
+            "{source}"
+        );
+    }
+    glsl::Source::new("#define VALUE (A - 1.0)\n#define VALUE (A - 1.0)\n")
+        .preprocessed()
+        .expect("identical macro redefinition");
+}
+
+#[test]
+fn version_directive_requires_a_supported_exact_value_and_first_position() {
+    for source in [
+        "#version\nvoid main(){}\n",
+        "#version 99\nvoid main(){}\n",
+        "#version 101\nvoid main(){}\n",
+        "#version 100.0\nvoid main(){}\n",
+        "#version 100 extra\nvoid main(){}\n",
+        "#define BEFORE 1\n#version 100\nvoid main(){}\n",
+        "void declaration;\n#version 100\n",
+    ] {
+        assert!(
+            glsl::Source::new(source).preprocessed().is_err(),
+            "{source}"
+        );
+    }
+    for source in [
+        "#version 100\nvoid main(){}\n",
+        "#version 300 es\nvoid main(){}\n",
+    ] {
+        glsl::Source::new(source)
+            .preprocessed()
+            .unwrap_or_else(|error| panic!("valid version rejected in {source:?}: {error}"));
+    }
+}
+
+#[test]
+fn extension_directive_validates_grammar_behavior_and_placement() {
+    for source in [
+        "#extension\nvoid main(){}\n",
+        "#extension 2 : warn\nvoid main(){}\n",
+        "#extension all\nvoid main(){}\n",
+        "#extension all ; warn\nvoid main(){}\n",
+        "#extension all :\nvoid main(){}\n",
+        "#extension all : WARN\nvoid main(){}\n",
+        "#extension all : require\nvoid main(){}\n",
+        "void declaration;\n#extension all : warn\n",
+    ] {
+        assert!(
+            glsl::Source::new(source).preprocessed().is_err(),
+            "{source}"
+        );
+    }
+    for source in [
+        "#extension all : warn\nvoid main(){}\n",
+        "#extension all : disable\nvoid main(){}\n",
+        "#extension GL_OES_standard_derivatives : require\nvoid main(){}\n",
+    ] {
+        glsl::Source::new(source)
+            .preprocessed()
+            .unwrap_or_else(|error| panic!("valid extension rejected in {source:?}: {error}"));
+    }
+}
+
+#[test]
+fn unterminated_block_comment_is_a_preprocessor_error() {
+    let error = glsl::Source::new("#extension all : warn /* open\nvoid main(){}")
+        .preprocessed()
+        .expect_err("unterminated comment");
+    assert_eq!(error.to_string(), "1: unterminated block comment");
+}
+
+#[test]
+fn multiline_comment_inside_macro_definition_is_one_logical_space() {
+    let source = "#define VALUE /* first\nsecond\nthird */ (2.0 + 1.0)\n#define VALUE (2.0 + 1.0)\nfloat result = VALUE;\n";
+    let preprocessed = glsl::Source::new(source)
+        .preprocessed()
+        .expect("compatible definition after multiline comment");
+    assert!(
+        preprocessed.contains("float result = (2.0 + 1.0);"),
+        "{preprocessed}"
+    );
+    assert_eq!(preprocessed.lines().count(), source.lines().count());
 }
 
 /// A rejected construct must produce an attributed diagnostic naming the line and the construct — never a

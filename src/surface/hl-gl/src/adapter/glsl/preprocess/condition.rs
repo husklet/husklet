@@ -2,18 +2,8 @@
 //!
 //! Two GLSL ES rules need the same evaluator: the controlling expression of `#if`/`#elif` (GLSL ES 1.00
 //! §3.4, which admits the full integer operator set including `defined`) and an array size, which must be an
-//! integral constant expression (GLSL ES 1.00 §4.1.9). The two differ only in what an unresolved identifier
-//! means, which [`Unknown`] selects.
-
-/// How an identifier with no known value is treated.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Unknown {
-    /// `#if` semantics: an undefined macro evaluates to `0` (C99 6.10.1, and what every GLSL
-    /// implementation real shaders are written against does).
-    Zero,
-    /// Array-size semantics: an unresolved name is not a constant, so the expression is rejected.
-    Reject,
-}
+//! integral constant expression (GLSL ES 1.00 §4.1.9). An unresolved identifier is rejected in both uses;
+//! an identifier in a short-circuited preprocessor operand is parsed but deliberately not evaluated.
 
 /// Named integer constants an expression may reference: `#define`d object-like macros already substituted by
 /// the caller, plus the stage's global `const int`/`const uint` declarations.
@@ -107,13 +97,12 @@ impl Token {
 pub(crate) struct Expression<'a, V: Values> {
     tokens: Vec<Token>,
     at: usize,
-    unknown: Unknown,
     values: &'a V,
 }
 
 impl<'a, V: Values> Expression<'a, V> {
-    /// `None` when `text` is not an integral constant expression under `unknown`.
-    pub(crate) fn evaluate(text: &str, unknown: Unknown, values: &'a V) -> Option<i64> {
+    /// `None` when `text` is not an integral constant expression.
+    pub(crate) fn evaluate(text: &str, values: &'a V) -> Option<i64> {
         let tokens = Token::lex(text)?;
         if tokens.is_empty() {
             return None;
@@ -121,10 +110,9 @@ impl<'a, V: Values> Expression<'a, V> {
         let mut expression = Self {
             tokens,
             at: 0,
-            unknown,
             values,
         };
-        let value = expression.ternary(0)?;
+        let value = expression.ternary(0, true)?;
         (expression.at == expression.tokens.len()).then_some(value)
     }
 
@@ -140,24 +128,28 @@ impl<'a, V: Values> Expression<'a, V> {
         false
     }
 
-    fn ternary(&mut self, depth: usize) -> Option<i64> {
+    fn ternary(&mut self, depth: usize, evaluate: bool) -> Option<i64> {
         if depth > MAX_DEPTH {
             return None;
         }
-        let condition = self.binary(0, depth)?;
+        let condition = self.binary(0, depth, evaluate)?;
         if !self.take("?") {
             return Some(condition);
         }
-        let taken = self.ternary(depth + 1)?;
+        let taken = self.ternary(depth + 1, evaluate && condition != 0)?;
         if !self.take(":") {
             return None;
         }
-        let other = self.ternary(depth + 1)?;
-        Some(if condition != 0 { taken } else { other })
+        let other = self.ternary(depth + 1, evaluate && condition == 0)?;
+        Some(if !evaluate || condition != 0 {
+            taken
+        } else {
+            other
+        })
     }
 
     /// Precedence climbing over the binary operators, lowest level first.
-    fn binary(&mut self, level: usize, depth: usize) -> Option<i64> {
+    fn binary(&mut self, level: usize, depth: usize, evaluate: bool) -> Option<i64> {
         const LEVELS: [&[&str]; 10] = [
             &["||"],
             &["&&"],
@@ -174,11 +166,11 @@ impl<'a, V: Values> Expression<'a, V> {
             return None;
         }
         let Some(operators) = LEVELS.get(level) else {
-            return self.unary(depth + 1);
+            return self.unary(depth + 1, evaluate);
         };
         // Walking the fixed precedence table is parser machinery, not nesting in the source. Counting every
         // level against MAX_DEPTH rejected ordinary parenthesized expressions before reaching their token.
-        let mut left = self.binary(level + 1, depth)?;
+        let mut left = self.binary(level + 1, depth, evaluate)?;
         loop {
             let Some(symbol) = operators
                 .iter()
@@ -188,29 +180,44 @@ impl<'a, V: Values> Expression<'a, V> {
                 return Some(left);
             };
             self.at += 1;
-            let right = self.binary(level + 1, depth)?;
-            left = apply(symbol, left, right)?;
+            let evaluate_right = evaluate
+                && match symbol {
+                    "||" => left == 0,
+                    "&&" => left != 0,
+                    _ => true,
+                };
+            let right = self.binary(level + 1, depth, evaluate_right)?;
+            if evaluate {
+                left = apply(symbol, left, right)?;
+            }
         }
     }
 
-    fn unary(&mut self, depth: usize) -> Option<i64> {
+    fn unary(&mut self, depth: usize, evaluate: bool) -> Option<i64> {
         if depth > MAX_DEPTH {
             return None;
         }
         if self.take("+") {
-            return self.unary(depth + 1);
+            return self.unary(depth + 1, evaluate);
         }
         if self.take("-") {
-            return self.unary(depth + 1)?.checked_neg();
+            let value = self.unary(depth + 1, evaluate)?;
+            return if evaluate {
+                value.checked_neg()
+            } else {
+                Some(0)
+            };
         }
         if self.take("~") {
-            return Some(!self.unary(depth + 1)?);
+            let value = self.unary(depth + 1, evaluate)?;
+            return Some(if evaluate { !value } else { 0 });
         }
         if self.take("!") {
-            return Some(i64::from(self.unary(depth + 1)? == 0));
+            let value = self.unary(depth + 1, evaluate)?;
+            return Some(if evaluate { i64::from(value == 0) } else { 0 });
         }
         if self.take("(") {
-            let value = self.ternary(depth + 1)?;
+            let value = self.ternary(depth + 1, evaluate)?;
             return self.take(")").then_some(value);
         }
         match self.tokens.get(self.at)?.clone() {
@@ -220,11 +227,10 @@ impl<'a, V: Values> Expression<'a, V> {
             }
             Token::Name(name) => {
                 self.at += 1;
-                match (self.values.value(&name), self.unknown) {
-                    (Some(value), _) => Some(value),
-                    (None, Unknown::Zero) => Some(0),
-                    (None, Unknown::Reject) => None,
+                if !evaluate {
+                    return Some(0);
                 }
+                self.values.value(&name)
             }
             Token::Operator(_) => None,
         }

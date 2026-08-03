@@ -4,7 +4,7 @@
 //! global `const int` initialised by such an expression exactly that. After preprocessing a `#define`d size
 //! is already a literal, so the remaining named sizes are the stage's `const int`/`const uint` globals.
 
-use super::preprocess::{Expression, Unknown, Values, Words};
+use super::preprocess::{Expression, Values, Words};
 use super::Source;
 use std::collections::BTreeMap;
 
@@ -32,7 +32,7 @@ impl Constants {
 
     /// The array size `dimension` denotes, or `None` when it is not an integral constant expression.
     pub(super) fn dimension(&self, dimension: &str) -> Option<u32> {
-        let value = Expression::evaluate(dimension, Unknown::Reject, self)?;
+        let value = Expression::evaluate(dimension, self)?;
         u32::try_from(value).ok().filter(|size| *size > 0)
     }
 
@@ -60,7 +60,7 @@ impl Constants {
         if words.next().is_some() {
             return;
         }
-        if let Some(value) = Expression::evaluate(expression.trim(), Unknown::Reject, self) {
+        if let Some(value) = Expression::evaluate(expression.trim(), self) {
             self.values.insert(name.to_owned(), value);
         }
     }
