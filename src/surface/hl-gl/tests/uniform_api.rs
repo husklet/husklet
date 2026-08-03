@@ -83,6 +83,51 @@ fn integer_and_sampler_setters_dispatch_by_location() {
 }
 
 #[test]
+fn sampler_vector_writes_stop_at_the_selected_uniform_array() {
+    let mut context = GlContext::new();
+    let program = program(
+        &mut context,
+        "void main(){gl_Position=vec4(0.0);}",
+        "uniform sampler2D single; uniform sampler2D pair[2]; uniform sampler2D tail;\n\
+         void main(){gl_FragColor=texture2D(single,vec2(0.0))+texture2D(pair[1],vec2(0.0))+texture2D(tail,vec2(0.0));}",
+    );
+    record::use_program(&mut context, program);
+    let single = query::uniform_location(&context, program, "single");
+    let pair = query::uniform_location(&context, program, "pair");
+    let pair_one = query::uniform_location(&context, program, "pair[1]");
+
+    record::set_uniform(
+        &mut context,
+        single,
+        record::UniformSetter::Int(1),
+        2,
+        &[7_i32.to_le_bytes(), 8_i32.to_le_bytes()].concat(),
+    );
+    assert_eq!(context.take_gl_error(), GL_INVALID_OPERATION);
+    assert_eq!(context.programs.program(program).unwrap().samp_units, [0, 0, 0, 0]);
+
+    record::set_uniform(
+        &mut context,
+        pair,
+        record::UniformSetter::Int(1),
+        3,
+        &[1_i32.to_le_bytes(), 2_i32.to_le_bytes(), 9_i32.to_le_bytes()].concat(),
+    );
+    assert_eq!(context.take_gl_error(), GL_NO_ERROR);
+    assert_eq!(context.programs.program(program).unwrap().samp_units, [0, 1, 2, 0]);
+
+    record::set_uniform(
+        &mut context,
+        pair_one,
+        record::UniformSetter::Int(1),
+        2,
+        &[5_i32.to_le_bytes(), 6_i32.to_le_bytes()].concat(),
+    );
+    assert_eq!(context.take_gl_error(), GL_NO_ERROR);
+    assert_eq!(context.programs.program(program).unwrap().samp_units, [0, 1, 5, 0]);
+}
+
+#[test]
 fn uniform_setters_validate_program_location_type_width_and_count() {
     let mut context = GlContext::new();
     let program = program(
