@@ -12,7 +12,7 @@ mod memory;
 mod store;
 
 use format::{decode, encode, format_shape};
-use memory::{raw_pointer, raw_words};
+use memory::{raw_pointer, raw_pointer_in, raw_words};
 use store::build_partial_store;
 
 #[derive(Clone, Copy)]
@@ -57,11 +57,16 @@ pub(super) fn lower(module: &mut naga::Module, specialization: &[Specialization]
     }
     for (global, spec) in globals {
         let helper = build_helpers(module, global, spec)?;
+        let atomic_kind = if spec.format == hl_gpu::protocol::model::enums::TextureFormat::R32Sint {
+            naga::ScalarKind::Sint
+        } else {
+            naga::ScalarKind::Uint
+        };
         let word = if spec.writable {
             module.types.insert(
                 Type {
                     name: None,
-                    inner: TypeInner::Atomic(naga::Scalar::U32),
+                    inner: TypeInner::Atomic(naga::Scalar { kind: atomic_kind, width: 4 }),
                 },
                 Span::default(),
             )
@@ -231,7 +236,12 @@ fn build_helpers(
     let index = load
         .expressions
         .append(Expression::FunctionArgument(0), Span::default());
-    let values = raw_words(&mut load, global, index, bytes, words, spec.prefix_words);
+    let atomic_kind = if spec.format == hl_gpu::protocol::model::enums::TextureFormat::R32Sint {
+        naga::ScalarKind::Sint
+    } else {
+        naga::ScalarKind::Uint
+    };
+    let values = raw_words(&mut load, global, index, bytes, words, spec.prefix_words, atomic_kind);
     let decoded = decode(&mut load, spec.format, vec4, index, &values)?;
     load.body.push(
         Statement::Emit(naga::Range::new_from_bounds(index, decoded)),
@@ -287,17 +297,24 @@ fn build_helpers(
                 tail_padding: u32::from(spec.tail_padding),
             });
         }
-        let current = raw_words(&mut store, global, index, bytes, words, spec.prefix_words);
+        let current = raw_words(&mut store, global, index, bytes, words, spec.prefix_words, atomic_kind);
         let packed = encode(&mut store, spec.format, index, value, &current)?;
         for (word, packed) in packed.into_iter().enumerate() {
             let pointer = raw_pointer(&mut store, global, index, bytes, word as u32, spec.prefix_words);
+            let packed = if atomic_kind == naga::ScalarKind::Sint {
+                store.expressions.append(Expression::As {
+                    expr: packed,
+                    kind: naga::ScalarKind::Sint,
+                    convert: None,
+                }, Span::default())
+            } else {
+                packed
+            };
             store.body.push(
-                Statement::Emit(naga::Range::new_from_bounds(index, pointer)),
+                Statement::Emit(naga::Range::new_from_bounds(index, packed)),
                 Span::default(),
             );
-            store
-                .body
-                .push(Statement::Store { pointer, value: packed }, Span::default());
+            store.body.push(Statement::Store { pointer, value: packed }, Span::default());
         }
         Some(module.functions.append(store, Span::default()))
     } else {
@@ -438,6 +455,43 @@ impl<'a> FunctionLowering<'a> {
                     let global = self.texel[image.index()].unwrap();
                     let helper = self.helpers[&global].store.ok_or(GpuError::Invalid("write through read-only texel buffer"))?;
                     rebuilt.push(Statement::Call { function: helper, arguments: vec![self.map[coordinate.index()], self.map[value.index()]], result: None }, span);
+                }
+                Statement::ImageAtomic { image, coordinate, array_index, fun, value, result }
+                    if self.texel[image.index()].is_some() =>
+                {
+                    if array_index.is_some() {
+                        return Err(GpuError::Unsupported("arrayed texel-buffer atomic"));
+                    }
+                    let global = self.texel[image.index()].unwrap();
+                    let helper = self.helpers[&global];
+                    if helper.bytes != 4 {
+                        return Err(GpuError::Unsupported("atomic operation on a packed texel-buffer format"));
+                    }
+                    let first = expressions.len();
+                    let pointer = raw_pointer_in(
+                        expressions,
+                        global,
+                        self.map[coordinate.index()],
+                        helper.bytes,
+                        0,
+                        helper.prefix_bytes / 4,
+                    );
+                    if expressions.len() > first {
+                        let first = expressions.iter().nth(first).unwrap().0;
+                        rebuilt.push(Statement::Emit(naga::Range::new_from_bounds(first, pointer)), span);
+                    }
+                    let fun = match *fun {
+                        naga::AtomicFunction::Exchange { compare } => naga::AtomicFunction::Exchange {
+                            compare: compare.map(|handle| self.map[handle.index()]),
+                        },
+                        other => other,
+                    };
+                    rebuilt.push(Statement::Atomic {
+                        pointer,
+                        fun,
+                        value: self.map[value.index()],
+                        result: result.map(|handle| self.map[handle.index()]),
+                    }, span);
                 }
                 Statement::Block(nested) => { self.block(nested, expressions)?; rebuilt.push(statement, span); }
                 Statement::If { condition, accept, reject } => {

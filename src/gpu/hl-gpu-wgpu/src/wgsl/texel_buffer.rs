@@ -42,14 +42,19 @@ impl TexelBuffers {
             if *arrayed {
                 return Err(GpuError::Unsupported("arrayed texel buffers"));
             }
+            let atomic = matches!(class, naga::ImageClass::Storage { access, .. } if access.contains(naga::StorageAccess::ATOMIC));
             let (kind, access) = image_class(*class)?;
             let scalar = naga::Scalar { kind, width: 4 };
             let element = module.types.insert(
                 Type {
                     name: None,
-                    inner: TypeInner::Vector {
-                        size: naga::VectorSize::Quad,
-                        scalar,
+                    inner: if atomic {
+                        TypeInner::Atomic(scalar)
+                    } else {
+                        TypeInner::Vector {
+                            size: naga::VectorSize::Quad,
+                            scalar,
+                        }
                     },
                 },
                 Span::default(),
@@ -127,7 +132,16 @@ fn image_class(class: naga::ImageClass) -> Result<(naga::ScalarKind, naga::Stora
             // WGSL has read-only and read_write storage buffers, but no write-only address space.
             // A Vulkan storage texel buffer declared write-only therefore still needs LOAD in the host
             // representation; the shader continues to contain no load unless SPIR-V requested one.
-            Ok((kind, access | StorageAccess::LOAD))
+            let atomic = access.contains(StorageAccess::ATOMIC);
+            let access = (access - StorageAccess::ATOMIC) | StorageAccess::LOAD;
+            Ok((
+                kind,
+                if atomic {
+                    access | StorageAccess::STORE
+                } else {
+                    access
+                },
+            ))
         }
         ImageClass::Sampled { multi: true, .. } => {
             Err(GpuError::Unsupported("multisampled texel buffers"))
@@ -285,6 +299,53 @@ impl<'a> FunctionLowering<'a> {
                         Statement::Store {
                             pointer,
                             value: self.map[value.index()],
+                        },
+                        span,
+                    );
+                }
+                Statement::ImageAtomic {
+                    image,
+                    coordinate,
+                    array_index,
+                    fun,
+                    value,
+                    result,
+                } if self.texel[image.index()] => {
+                    if array_index.is_some() {
+                        return Err(GpuError::Unsupported("arrayed texel-buffer atomic"));
+                    }
+                    let field = expressions.append(
+                        Expression::AccessIndex {
+                            base: self.map[image.index()],
+                            index: 0,
+                        },
+                        span,
+                    );
+                    let pointer = expressions.append(
+                        Expression::Access {
+                            base: field,
+                            index: self.map[coordinate.index()],
+                        },
+                        span,
+                    );
+                    rebuilt.push(
+                        Statement::Emit(naga::Range::new_from_bounds(field, pointer)),
+                        span,
+                    );
+                    let fun = match *fun {
+                        naga::AtomicFunction::Exchange { compare } => {
+                            naga::AtomicFunction::Exchange {
+                                compare: compare.map(|handle| self.map[handle.index()]),
+                            }
+                        }
+                        other => other,
+                    };
+                    rebuilt.push(
+                        Statement::Atomic {
+                            pointer,
+                            fun,
+                            value: self.map[value.index()],
+                            result: result.map(|handle| self.map[handle.index()]),
                         },
                         span,
                     );

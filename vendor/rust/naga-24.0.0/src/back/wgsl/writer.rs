@@ -791,7 +791,15 @@ impl<W: Write> Writer<W> {
                 }
                 write!(self.out, ", ")?;
                 self.write_expr(module, value, func_ctx)?;
-                writeln!(self.out, ");")?
+                write!(self.out, ")")?;
+                if let Some(result) = result {
+                    if matches!(fun, crate::AtomicFunction::Exchange { compare: Some(_) })
+                        && matches!(func_ctx.expressions[result], crate::Expression::AtomicResult { comparison: false, .. })
+                    {
+                        write!(self.out, ".old_value")?;
+                    }
+                }
+                writeln!(self.out, ";")?
             }
             Statement::ImageAtomic {
                 image,

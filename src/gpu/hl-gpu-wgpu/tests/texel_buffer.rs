@@ -200,6 +200,107 @@ fn pipeline(shader: &[u32], kind: PipelineBindingKind, extra_output: bool) -> Ve
     ]
 }
 
+fn atomic_texel_spirv(format: &str, signed: bool) -> Vec<u32> {
+    let suffix = if signed { "i" } else { "u" };
+    let minimum = if signed { "-3i" } else { "3u" };
+    let source = format!(
+        "@group(0) @binding(0) var image: texture_storage_2d<{format}, atomic>;
+         @compute @workgroup_size(1) fn main() {{
+             let a = textureAtomicAdd(image, vec2<i32>(0, 0), 7{suffix});
+             textureAtomicExchange(image, vec2<i32>(1, 0), a);
+             let b = textureAtomicMin(image, vec2<i32>(0, 0), {minimum});
+             textureAtomicExchange(image, vec2<i32>(2, 0), b);
+             let c = textureAtomicMax(image, vec2<i32>(0, 0), 11{suffix});
+             textureAtomicExchange(image, vec2<i32>(3, 0), c);
+             let d = textureAtomicCompareExchangeWeak(image, vec2<i32>(0, 0), 11{suffix}, 13{suffix});
+             textureAtomicExchange(image, vec2<i32>(4, 0), d);
+         }}"
+    );
+    let mut module = naga::front::wgsl::parse_str(&source).expect("atomic texel seed parses");
+    let info = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .expect("atomic texel seed validates");
+    let images = module.global_variables.iter().filter_map(|(handle, variable)| {
+        matches!(module.types[variable.ty].inner, naga::TypeInner::Image { .. })
+            .then_some((handle, variable.ty))
+    }).collect::<Vec<_>>();
+    for (global, old_ty) in images {
+        let mut ty = module.types[old_ty].clone();
+        let naga::TypeInner::Image { ref mut dim, .. } = ty.inner else { unreachable!() };
+        *dim = naga::ImageDimension::Buffer;
+        module.global_variables[global].ty = module.types.insert(ty, naga::Span::default());
+    }
+    let function = &mut module.entry_points[0].function;
+    let coordinates = function
+        .body
+        .iter()
+        .filter_map(|statement| match statement {
+            naga::Statement::ImageAtomic { coordinate, .. } => {
+                let naga::Expression::Compose { components, .. } = &function.expressions[*coordinate]
+                    else { return None };
+                Some((*coordinate, components[0]))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for statement in function.body.iter_mut() {
+        if let naga::Statement::ImageAtomic { coordinate, .. } = statement {
+            if let Some((_, scalar)) = coordinates.iter().find(|(vector, _)| vector == coordinate) {
+                *coordinate = *scalar;
+            }
+        }
+    }
+    naga::back::spv::write_vec(&module, &info, &naga::back::spv::Options::default(), None)
+        .expect("atomic texel seed emits SPIR-V")
+}
+
+fn atomic_texel_case(format: TextureFormat, signed: bool) -> Vec<u8> {
+    let shader = atomic_texel_spirv(
+        if signed { "r32sint" } else { "r32uint" },
+        signed,
+    );
+    let mut commands = pipeline(&shader, PipelineBindingKind::StorageTexelBuffer, false);
+    commands.extend([
+        Cmd::CreateBuffer(1, buffer(20)),
+        Cmd::WriteBuffer { id: 1, offset: 0, data: [5u32, 0, 0, 0, 0].into_iter().flat_map(u32::to_le_bytes).collect() },
+        Cmd::CreateBindGroup(1, BindGroupDesc {
+            set: 0,
+            entries: vec![
+                BindEntry { binding: 0, resource: BindResource::TexelBuffer {
+                    id: 1, offset: 0, size: 20, format, writable: true,
+                }},
+            ],
+        }),
+        Cmd::Submit(CommandBuffer { encoder: vec![
+            Enc::BeginComputePass,
+            Enc::SetPipeline(1),
+            Enc::SetBindGroup { index: 0, group: 1 },
+            Enc::Dispatch { x: 1, y: 1, z: 1 },
+            Enc::EndComputePass,
+        ], signal: None }),
+    ]);
+    let (executor, session) = run(&commands);
+    executor.read_buffer(&session.resources, BufferId(1), 0, 20).unwrap()
+}
+
+#[test]
+fn r32_storage_texel_atomics_return_old_values_with_signed_ordering() {
+    let uint = atomic_texel_case(TextureFormat::R32Uint, false);
+    assert_eq!(
+        uint,
+        [13u32, 5, 12, 3, 11].into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>()
+    );
+
+    let sint = atomic_texel_case(TextureFormat::R32Sint, true);
+    assert_eq!(
+        sint,
+        [13i32, 5, 12, -3, 11].into_iter().flat_map(i32::to_le_bytes).collect::<Vec<_>>()
+    );
+}
+
 #[test]
 fn uniform_texel_load_executes_and_writes_exact_vec4() {
     let mut commands = pipeline(UNIFORM, PipelineBindingKind::UniformTexelBuffer, true);
