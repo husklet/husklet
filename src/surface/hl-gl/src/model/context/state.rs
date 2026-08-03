@@ -69,6 +69,9 @@ impl ContextState {
     pub fn references_texture(&self, name: u32) -> bool {
         self.local.tex_unit.contains(&name)
             || self.local.cube_tex_unit.contains(&name)
+            || self.local.array_tex_unit.contains(&name)
+            || self.local.tex_3d_unit.contains(&name)
+            || self.local.multisample_tex_unit.contains(&name)
             || self.local.framebuffers.references_texture(name)
     }
 
@@ -105,6 +108,17 @@ impl GlContext {
         for texture in &mut self.local.cube_tex_unit {
             if *texture == name {
                 *texture = 0;
+            }
+        }
+        for bindings in [
+            &mut self.local.array_tex_unit,
+            &mut self.local.tex_3d_unit,
+            &mut self.local.multisample_tex_unit,
+        ] {
+            for texture in bindings {
+                if *texture == name {
+                    *texture = 0;
+                }
             }
         }
         self.local
@@ -261,6 +275,9 @@ impl GlContext {
     pub fn references_texture(&self, name: u32) -> bool {
         self.local.tex_unit.contains(&name)
             || self.local.cube_tex_unit.contains(&name)
+            || self.local.array_tex_unit.contains(&name)
+            || self.local.tex_3d_unit.contains(&name)
+            || self.local.multisample_tex_unit.contains(&name)
             || self.local.framebuffers.references_texture(name)
     }
 

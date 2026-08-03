@@ -182,6 +182,39 @@ fn gles31_texture_reset_accepts_every_core_target_and_parameter() {
             assert_eq!(context.take_gl_error(), GL_NO_ERROR);
         }
     }
+
+    let bindings = [
+        (GL_TEXTURE_2D, 11),
+        (GL_TEXTURE_CUBE_MAP, 12),
+        (GL_TEXTURE_2D_ARRAY, 13),
+        (GL_TEXTURE_3D, 14),
+        (GL_TEXTURE_2D_MULTISAMPLE, 15),
+    ];
+    for &(target, name) in &bindings {
+        record::bind_texture(&mut context, target, name);
+        assert_eq!(context.take_gl_error(), GL_NO_ERROR);
+    }
+    for &(target, name) in &bindings {
+        assert_eq!(context.bound_texture_for_target(target), name);
+    }
+
+    record::tex_parameter_target(&mut context, GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BASE_LEVEL, 7);
+    record::tex_parameter_target(&mut context, GL_TEXTURE_3D, GL_TEXTURE_BASE_LEVEL, 9);
+    assert_eq!(query::get_tex_parameteriv(&context, GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BASE_LEVEL), 7);
+    assert_eq!(query::get_tex_parameteriv(&context, GL_TEXTURE_3D, GL_TEXTURE_BASE_LEVEL), 9);
+
+    record::bind_texture(&mut context, GL_TEXTURE_3D, 11);
+    assert_eq!(context.take_gl_error(), GL_INVALID_OPERATION);
+    assert_eq!(context.bound_texture_for_target(GL_TEXTURE_2D), 11);
+    assert_eq!(context.bound_texture_for_target(GL_TEXTURE_3D), 14);
+
+    assert!(!record::validate_tex_parameter(
+        &mut context,
+        GL_TEXTURE_2D_MULTISAMPLE,
+        GL_TEXTURE_MIN_FILTER,
+        GL_LINEAR,
+    ));
+    assert_eq!(context.take_gl_error(), GL_INVALID_ENUM);
 }
 
 #[test]

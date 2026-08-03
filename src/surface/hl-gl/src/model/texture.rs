@@ -1661,7 +1661,11 @@ impl Textures {
 
     /// Set the four-component `GL_TEXTURE_SWIZZLE_RGBA` vector.
     pub fn set_swizzle(&mut self, name: u32, values: [u32; 4]) {
-        if let Some(texture) = self.map.get_mut(&name) {
+        self.set_swizzle_internal(u64::from(name), values);
+    }
+
+    pub(crate) fn set_swizzle_internal(&mut self, name: u64, values: [u32; 4]) {
+        if let Some(texture) = self.map.get_internal_mut(name) {
             texture.swizzle = values;
         }
     }

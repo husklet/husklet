@@ -48,11 +48,23 @@ pub fn bind_texture(ctx: &mut GlContext, target: u32, name: u32) {
     }
     let unit = ctx.local.active_texture;
     if unit < ctx.local.tex_unit.len() {
-        if target == GL_TEXTURE_CUBE_MAP {
-            ctx.local.cube_tex_unit[unit] = name;
-        } else {
-            ctx.local.tex_unit[unit] = name;
+        match target {
+            GL_TEXTURE_CUBE_MAP => ctx.local.cube_tex_unit[unit] = name,
+            GL_TEXTURE_2D_ARRAY => ctx.local.array_tex_unit[unit] = name,
+            GL_TEXTURE_3D => ctx.local.tex_3d_unit[unit] = name,
+            GL_TEXTURE_2D_MULTISAMPLE => ctx.local.multisample_tex_unit[unit] = name,
+            _ => ctx.local.tex_unit[unit] = name,
         }
+    }
+}
+
+fn default_texture_key(target: u32) -> u64 {
+    match target {
+        GL_TEXTURE_CUBE_MAP => crate::model::context::DEFAULT_TEXTURE_CUBE,
+        GL_TEXTURE_2D_ARRAY => crate::model::context::DEFAULT_TEXTURE_2D_ARRAY,
+        GL_TEXTURE_3D => crate::model::context::DEFAULT_TEXTURE_3D,
+        GL_TEXTURE_2D_MULTISAMPLE => crate::model::context::DEFAULT_TEXTURE_2D_MULTISAMPLE,
+        _ => crate::model::context::DEFAULT_TEXTURE_2D,
     }
 }
 
@@ -462,14 +474,32 @@ pub fn validate_tex_parameter(ctx: &mut GlContext, target: u32, pname: u32, valu
         | GL_TEXTURE_MAX_LOD
         | GL_TEXTURE_COMPARE_MODE
         | GL_TEXTURE_COMPARE_FUNC
-        | GL_DEPTH_STENCIL_TEXTURE_MODE
             if ctx.client_version().0 >= 3 =>
         {
             true
         }
+        GL_DEPTH_STENCIL_TEXTURE_MODE if ctx.client_version().0 >= 3 => {
+            matches!(value, GL_DEPTH_COMPONENT | GL_STENCIL_INDEX)
+        }
         _ => false,
     };
-    if !valid_target || !valid_value {
+    let target_parameter_compatible = if target == GL_TEXTURE_2D_MULTISAMPLE {
+        matches!(
+            pname,
+            GL_TEXTURE_SWIZZLE_R
+                | GL_TEXTURE_SWIZZLE_G
+                | GL_TEXTURE_SWIZZLE_B
+                | GL_TEXTURE_SWIZZLE_A
+                | GL_TEXTURE_SWIZZLE_RGBA
+                | GL_TEXTURE_BASE_LEVEL
+                | GL_TEXTURE_MAX_LEVEL
+        )
+    } else if pname == GL_TEXTURE_WRAP_R {
+        matches!(target, GL_TEXTURE_CUBE_MAP | GL_TEXTURE_2D_ARRAY | GL_TEXTURE_3D)
+    } else {
+        true
+    };
+    if !valid_target || !valid_value || !target_parameter_compatible {
         ctx.set_gl_error(GL_INVALID_ENUM);
         return false;
     }
@@ -484,9 +514,8 @@ pub fn tex_parameter(ctx: &mut GlContext, pname: u32, value: u32) {
 
 pub fn tex_parameter_target(ctx: &mut GlContext, target: u32, pname: u32, value: u32) {
     let name = ctx.bound_texture_for_target(target);
-    if target == GL_TEXTURE_CUBE_MAP && name == 0 {
-        ctx.textures
-            .set_param_internal(crate::model::context::DEFAULT_TEXTURE_CUBE, pname, value);
+    if name == 0 {
+        ctx.textures.set_param_internal(default_texture_key(target), pname, value);
     } else if name != 0 {
         ctx.textures.set_param(name, pname, value);
     }
@@ -504,17 +533,15 @@ pub fn tex_parameter_vector_target(
     values: &[u32],
 ) {
     let name = ctx.bound_texture_for_target(target);
-    if name == 0 {
-        return;
-    }
+    let key = if name == 0 { default_texture_key(target) } else { u64::from(name) };
     if pname == GL_TEXTURE_SWIZZLE_RGBA {
         if let Ok(swizzle) = <[u32; 4]>::try_from(values) {
-            ctx.textures.set_swizzle(name, swizzle);
+            ctx.textures.set_swizzle_internal(key, swizzle);
         } else {
             ctx.set_gl_error(GL_INVALID_VALUE);
         }
     } else if let Some(&value) = values.first() {
-        ctx.textures.set_param(name, pname, value);
+        ctx.textures.set_param_internal(key, pname, value);
     }
 }
 
