@@ -245,7 +245,8 @@ fn server_and_client_preserve_a_partial_refusal_on_the_wire() {
         serve_connection(&stream, &caps, |_header, _batch: &[Cmd]| {
             hl_gpu::transport::Verdict::Partial {
                 kind: RefusalKind::UnknownId,
-                commands: vec![Cmd::CreateFence(1)],
+                commands: vec![(0, Cmd::CreateFence(1))],
+                sources: vec![0],
                 replayable: true,
             }
         })
@@ -318,11 +319,11 @@ fn partial_refusal_is_reported_and_replayed_as_committed_residency() {
             .write_all(&[ACK_PARTIAL | RefusalKind::UnknownId.ack()])
             .unwrap();
         hl_gpu::transport::adapter::unix::Connection::new(&first)
-            .write_partial_delta(&[Cmd::CreateBuffer(4, BufferDesc {
+            .write_partial_delta(&[(0, Cmd::CreateBuffer(4, BufferDesc {
                 size: 4,
                 usage: buffer_usage::COPY_DST,
                 label: "partial-resident".into(),
-            })], true)
+            }))], &[0], true)
             .unwrap();
         drop(first);
         closed_tx.send(()).unwrap();
@@ -490,7 +491,7 @@ fn reconnect_retires_after_a_nonreplayable_partial_submit() {
         };
         first.write_all(&[ACK_PARTIAL | RefusalKind::UnknownId.ack()]).unwrap();
         hl_gpu::transport::adapter::unix::Connection::new(&first)
-            .write_partial_delta(&[Cmd::CreateBuffer(4, BufferDesc { size: 4, usage: buffer_usage::COPY_DST, label: String::new() })], false)
+            .write_partial_delta(&[(0, Cmd::CreateBuffer(4, BufferDesc { size: 4, usage: buffer_usage::COPY_DST, label: String::new() }))], &[0], false)
             .unwrap();
         drop(first);
 
@@ -503,7 +504,7 @@ fn reconnect_retires_after_a_nonreplayable_partial_submit() {
     let mut sink = RemoteCommandSink::new(sock.path());
     assert!(matches!(sink.submit(&[Cmd::CreateBuffer(4, BufferDesc { size: 4, usage: buffer_usage::COPY_DST, label: String::new() })]), Err(hl_gpu::GpuError::Partial(_))));
     let error = sink.submit(&[Cmd::DestroyBuffer(4)]).unwrap_err();
-    assert!(matches!(error, hl_gpu::GpuError::Transport(hl_gpu::TransportError::ApiLost { .. })));
+    assert!(matches!(error, hl_gpu::GpuError::Transport(hl_gpu::TransportError::ApiLost { .. })), "{error:?}");
     drop(sink);
     server.join().unwrap();
 }

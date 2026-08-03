@@ -7,10 +7,13 @@ struct QueueSubmission {
     signals: Vec<(u64, u64)>,
 }
 
+type ResolvedExternalWait = (usize, u64, hl_gpu::SyncExportId, u64, u64);
+
 fn resolve_external_waits(
     submissions: &[QueueSubmission],
-) -> std::result::Result<usize, VkResult> {
+) -> std::result::Result<(usize, Vec<ResolvedExternalWait>), VkResult> {
     let device_token = StateStore::with(|state| state.current_device_token());
+    let mut resolved = Vec::new();
     for submission in submissions {
         for &(semaphore, value) in &submission.waits {
             loop {
@@ -20,13 +23,15 @@ fn resolve_external_waits(
                     }
                     let record = state.device_ref()?.semaphores.get(&semaphore)?;
                     let export = record.shared?;
-                    (record.counter < value).then(|| {
-                        (export, record.generation, state.sink.observer())
-                    })
+                    Some((export, record.generation, record.counter < value, state.sink.observer()))
                 });
-                let Some((export, generation, mut observer)) = snapshot else {
+                let Some((export, generation, needs_wait, mut observer)) = snapshot else {
                     break;
                 };
+                if !needs_wait {
+                    resolved.push((device_token, semaphore, export, generation, value));
+                    break;
+                }
                 if let Err(error) = observer.import_sync(export) {
                     return Err(Status::from_error(&error));
                 }
@@ -40,30 +45,22 @@ fn resolve_external_waits(
                     Ok(TimelineWait::Timeout) => return Err(VK_TIMEOUT),
                     Err(error) => return Err(Status::from_error(&error)),
                 }
-                let committed = StateStore::with(|state| {
-                    if state.current_device_token() != device_token {
-                        return false;
-                    }
-                    let Some(record) = state
-                        .device_mut()
-                        .and_then(|device| device.semaphores.get_mut(&semaphore))
-                    else {
-                        return false;
-                    };
-                    if record.shared == Some(export) && record.generation == generation {
-                        record.counter = record.counter.max(value);
-                        true
-                    } else {
-                        false
-                    }
-                });
-                if committed {
-                    break;
-                }
+                resolved.push((device_token, semaphore, export, generation, value));
+                break;
             }
         }
     }
-    Ok(device_token)
+    Ok((device_token, resolved))
+}
+
+fn commit_resolved_waits(dev: &mut hl_vulkan::Device, device_token: usize, waits: &[ResolvedExternalWait]) -> bool {
+    for &(owner, semaphore, export, generation, value) in waits {
+        if owner != device_token { return false; }
+        let Some(record) = dev.semaphores.get_mut(&semaphore) else { return false; };
+        if record.shared != Some(export) || record.generation != generation { return false; }
+        record.counter = record.counter.max(value);
+    }
+    true
 }
 
 fn execute_submissions(
@@ -119,8 +116,8 @@ fn execute_in_queue_order(submissions: &[QueueSubmission], fence: Option<u64>) -
         .unwrap_or(VK_ERROR_INITIALIZATION_FAILED);
     }
     for (index, submission) in submissions.iter().enumerate() {
-        let device_token = match resolve_external_waits(std::slice::from_ref(submission)) {
-            Ok(token) => token,
+        let (device_token, resolved_waits) = match resolve_external_waits(std::slice::from_ref(submission)) {
+            Ok(resolved) => resolved,
             Err(status) => return status,
         };
         let signal_fence = (index + 1 == submissions.len()).then_some(fence).flatten();
@@ -131,6 +128,9 @@ fn execute_in_queue_order(submissions: &[QueueSubmission], fence: Option<u64>) -
             let Some((device, sink)) = state.device_and_sink() else {
                 return VK_ERROR_DEVICE_LOST;
             };
+            if !commit_resolved_waits(device, device_token, &resolved_waits) {
+                return VK_ERROR_DEVICE_LOST;
+            }
             execute_submissions(device, sink, std::slice::from_ref(submission), signal_fence)
         });
         if result != VK_SUCCESS {
@@ -365,5 +365,28 @@ mod tests {
         );
         assert!(!device.semaphores[&semaphore].signaled);
         assert_eq!(sink.batches.len(), 2);
+    }
+
+    #[test]
+    fn reimport_between_unlocked_wait_and_queue_lock_rejects_stale_resolution() {
+        let instance = hl_vulkan::Instance::new(hl_vulkan::result::HL_API_VERSION);
+        let mut device = instance.create_device();
+        let semaphore = hl_vulkan::service::sync::create_semaphore(&mut device, true, 0);
+        let first = hl_gpu::SyncExportId::from_parts(1, 11);
+        let second = hl_gpu::SyncExportId::from_parts(2, 22);
+        let generation = {
+            let record = device.semaphores.get_mut(&semaphore).unwrap();
+            record.shared = Some(first);
+            record.generation = 4;
+            record.generation
+        };
+        let resolved = [(7, semaphore, first, generation, 9)];
+        // Models a concurrent permanent import after the observer wait returned.
+        let record = device.semaphores.get_mut(&semaphore).unwrap();
+        record.shared = Some(second);
+        record.generation += 1;
+        record.counter = 0;
+        assert!(!commit_resolved_waits(&mut device, 7, &resolved));
+        assert_eq!(device.semaphores[&semaphore].counter, 0);
     }
 }

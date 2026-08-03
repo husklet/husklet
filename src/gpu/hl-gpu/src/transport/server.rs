@@ -29,7 +29,7 @@ pub enum Verdict {
     /// instead, because the reason is otherwise destroyed here and the guest can only guess.
     Refused(RefusalKind),
     /// The named operation was refused, but successful commands in the frame were committed.
-    Partial { kind: RefusalKind, commands: Vec<Cmd>, replayable: bool },
+    Partial { kind: RefusalKind, commands: Vec<(usize, Cmd)>, sources: Vec<usize>, replayable: bool },
 }
 
 #[allow(non_upper_case_globals)]
@@ -444,8 +444,8 @@ fn serve_loop<H: ConnectionHandler>(
         let ack = verdict.ack_byte();
         let ack_started = diagnostics.then(Instant::now);
         unix::Connection::new(stream).write_ack(ack)?;
-        if let Verdict::Partial { commands, replayable, .. } = &verdict {
-            unix::Connection::new(stream).write_partial_delta(commands, *replayable)?;
+        if let Verdict::Partial { commands, sources, replayable, .. } = &verdict {
+            unix::Connection::new(stream).write_partial_delta(commands, sources, *replayable)?;
         }
         let ack_write_us = ack_started
             .map(|started| started.elapsed().as_micros())

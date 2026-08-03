@@ -231,7 +231,8 @@ impl ConnectionHandler for Connection {
                 match outcome.refusal {
                     Some(error) => Verdict::Partial {
                         kind: hl_gpu::transport::model::header::RefusalKind::for_error(&error),
-                        commands: outcome.committed.replay_commands().cloned().collect(),
+                        commands: outcome.committed.replay_entries().map(|(source, command)| (source, command.clone())).collect(),
+                        sources: outcome.committed.committed_sources().to_vec(),
                         replayable: outcome.committed.replayable,
                     },
                     None => Verdict::Ack,

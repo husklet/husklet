@@ -22,7 +22,11 @@ pub enum FenceWait {
 
 #[derive(Debug)]
 pub struct SinkSubmitOutcome {
-    pub committed: Vec<Cmd>,
+    /// Exact source positions committed by the executor. This includes a Submit whose
+    /// inner encoder was only partially lowered and therefore cannot be replayed.
+    pub committed_sources: Vec<usize>,
+    /// Replay-safe committed commands, retaining their original source positions.
+    pub replay_commands: Vec<(usize, Cmd)>,
     pub error: Option<GpuError>,
 }
 
@@ -40,8 +44,12 @@ pub trait CommandSink {
 
     fn submit_outcome(&mut self, batch: &[Cmd]) -> SinkSubmitOutcome {
         match self.submit(batch) {
-            Ok(()) => SinkSubmitOutcome { committed: batch.to_vec(), error: None },
-            Err(error) => SinkSubmitOutcome { committed: Vec::new(), error: Some(error) },
+            Ok(()) => SinkSubmitOutcome {
+                committed_sources: (0..batch.len()).collect(),
+                replay_commands: batch.iter().cloned().enumerate().collect(),
+                error: None,
+            },
+            Err(error) => SinkSubmitOutcome { committed_sources: Vec::new(), replay_commands: Vec::new(), error: Some(error) },
         }
     }
 
@@ -219,7 +227,11 @@ impl CommandSink for RecordingSink {
 
     fn submit_outcome(&mut self, batch: &[Cmd]) -> SinkSubmitOutcome {
         self.batches.push(batch.to_vec());
-        SinkSubmitOutcome { committed: batch.to_vec(), error: None }
+        SinkSubmitOutcome {
+            committed_sources: (0..batch.len()).collect(),
+            replay_commands: batch.iter().cloned().enumerate().collect(),
+            error: None,
+        }
     }
 
     fn wait(&mut self, fence: FenceId, value: u64) -> Result<()> {

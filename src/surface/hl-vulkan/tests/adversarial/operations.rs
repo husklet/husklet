@@ -663,14 +663,12 @@ fn partial_submit_commits_only_the_reported_prefix() {
         }
         fn submit_outcome(&mut self, batch: &[Cmd]) -> hl_gpu::SinkSubmitOutcome {
             self.0.batches.push(batch.to_vec());
-            let committed = batch
-                .iter()
-                .find(|command| matches!(command, Cmd::Submit(_)))
-                .cloned()
-                .into_iter()
-                .collect();
+            let submits: Vec<_> = batch.iter().enumerate().filter(|(_, command)| matches!(command, Cmd::Submit(_))).collect();
+            let committed_sources = submits.iter().map(|(source, _)| *source).collect();
+            let replay_commands = submits.last().map(|(source, command)| (*source, (*command).clone())).into_iter().collect();
             hl_gpu::SinkSubmitOutcome {
-                committed,
+                committed_sources,
+                replay_commands,
                 error: Some(GpuError::Partial(Box::new(GpuError::Kernel(
                     "injected second submit refusal".into(),
                 )))),
@@ -693,6 +691,6 @@ fn partial_submit_commits_only_the_reported_prefix() {
     let outcome = submit::queue_submit_outcome(&mut d, &mut sink, &[first, second], Some(fence));
     assert!(matches!(outcome, Err(submit::QueueSubmitError::Committed(_))));
     assert_eq!(d.command_buffers[&first].state, CommandBufferState::Pending);
-    assert_eq!(d.command_buffers[&second].state, CommandBufferState::Executable);
-    assert!(!d.is_fence_signaled(fence).unwrap());
+    assert_eq!(d.command_buffers[&second].state, CommandBufferState::Pending);
+    assert!(d.is_fence_signaled(fence).unwrap());
 }

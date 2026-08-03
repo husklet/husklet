@@ -105,6 +105,14 @@ impl CommittedDelta {
         self.commands.iter().map(|entry| &entry.command)
     }
 
+    pub fn replay_entries(&self) -> impl Iterator<Item = (usize, &Cmd)> {
+        self.commands.iter().map(|entry| (entry.source, &entry.command))
+    }
+
+    pub fn committed_sources(&self) -> &[usize] {
+        &self.sources
+    }
+
     pub(crate) fn contains_source(&self, source: usize) -> bool {
         self.sources.contains(&source)
     }

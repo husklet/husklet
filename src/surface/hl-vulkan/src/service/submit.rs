@@ -108,6 +108,7 @@ pub fn queue_submit_outcome(
         batch.push(Cmd::WriteBuffer { id, offset, data });
     }
     let last = encoders.len().saturating_sub(1);
+    let mut command_buffer_sources = Vec::with_capacity(command_buffers.len());
     if encoders.is_empty() {
         // A fence-only submit (no command buffers) still signals the fence via an empty command buffer.
         if let Some((_, ir, value)) = signal {
@@ -123,6 +124,7 @@ pub fn queue_submit_outcome(
             } else {
                 None
             };
+            command_buffer_sources.push(batch.len());
             batch.push(Cmd::Submit(CommandBuffer {
                 encoder,
                 signal: sig,
@@ -152,23 +154,19 @@ pub fn queue_submit_outcome(
     let committed_error = match outcome.error {
         None => None,
         Some(error @ GpuError::Partial(_)) => Some(error),
-        Some(error) if outcome.committed.is_empty() => {
+        Some(error) if outcome.committed_sources.is_empty() => {
             return Err(QueueSubmitError::Uncommitted(error))
         }
         Some(error) => Some(error),
     };
-    let committed_submits = outcome
-        .committed
-        .iter()
-        .filter(|command| matches!(command, Cmd::Submit(_)))
-        .count();
 
     // From this point the host work is committed. Publish completion state before fallible readback
     // refreshes so callers can never roll queue synchronization back over work that already executed.
     if committed_error.is_none() {
         dev.clear_pending_uploads();
     }
-    for &cb in command_buffers.iter().take(committed_submits) {
+    for (&cb, &source) in command_buffers.iter().zip(&command_buffer_sources) {
+        if !outcome.committed_sources.contains(&source) { continue; }
         if let Some(rec) = dev.command_buffers.get_mut(&cb) {
             rec.state = if rec.one_time_submit {
                 CommandBufferState::Pending
@@ -178,7 +176,7 @@ pub fn queue_submit_outcome(
         }
     }
     let fence_committed = signal.is_some_and(|(_, ir, value)| {
-        outcome.committed.iter().any(|command| {
+        outcome.replay_commands.iter().any(|(_, command)| {
             matches!(command, Cmd::Submit(buffer) if buffer.signal == Some((ir, value)))
         })
     });

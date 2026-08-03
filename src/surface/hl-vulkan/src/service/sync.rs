@@ -97,6 +97,9 @@ pub fn import_semaphore(
         }
     }
     rec.generation = rec.generation.wrapping_add(1);
+    // The imported timeline has its own value domain. Never let the previous
+    // semaphore binding's cached counter satisfy waits on the replacement.
+    rec.counter = 0;
     Ok(())
 }
 
