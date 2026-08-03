@@ -183,32 +183,33 @@ fn es2_enforces_parameter_qualifier_grammar_order() {
 #[test]
 fn es2_vector_constructors_reject_an_undersized_component_count() {
     let mut context = GlContext::new();
-    for source_type in ["vec2", "ivec2", "bvec2"] {
-        for destination_type in ["vec3", "ivec3", "bvec3", "vec4", "ivec4", "bvec4"] {
-            let source = format!(
-                "void main(){{ {source_type} source_value; {destination_type} result={destination_type}(source_value); }}"
-            );
-            let (status, log) = compile(&mut context, GL_VERTEX_SHADER, &source);
-            assert_eq!(
-                status, GL_FALSE as i32,
-                "accepted undersized constructor: {source}"
-            );
-            assert!(
-                log.contains("components"),
-                "missing component diagnostic: {log}"
-            );
-        }
-    }
-    for source_type in ["vec3", "ivec3", "bvec3"] {
-        for destination_type in ["vec4", "ivec4", "bvec4"] {
-            let source = format!(
-                "void main(){{ {source_type} source_value; {destination_type} result={destination_type}(source_value); }}"
-            );
-            let (status, _) = compile(&mut context, GL_FRAGMENT_SHADER, &source);
-            assert_eq!(
-                status, GL_FALSE as i32,
-                "accepted undersized constructor: {source}"
-            );
+    for shader_kind in [GL_VERTEX_SHADER, GL_FRAGMENT_SHADER] {
+        for (source_types, destination_types) in [
+            (
+                &["vec2", "ivec2", "bvec2"][..],
+                &["vec3", "ivec3", "bvec3", "vec4", "ivec4", "bvec4"][..],
+            ),
+            (
+                &["vec3", "ivec3", "bvec3"][..],
+                &["vec4", "ivec4", "bvec4"][..],
+            ),
+        ] {
+            for source_type in source_types {
+                for destination_type in destination_types {
+                    let source = format!(
+                        "void main(){{ {source_type} source_value; {destination_type} result={destination_type}(source_value); }}"
+                    );
+                    let (status, log) = compile(&mut context, shader_kind, &source);
+                    assert_eq!(
+                        status, GL_FALSE as i32,
+                        "accepted undersized constructor: {source}"
+                    );
+                    assert!(
+                        log.contains("components"),
+                        "missing component diagnostic: {log}"
+                    );
+                }
+            }
         }
     }
     for source in [

@@ -620,11 +620,14 @@ fn scalar_conversion_selects_fold_in_constant_initializers() {
 
 #[test]
 fn deqp_scalar_to_matrix_bool_spelling_compiles() {
-    for matrix in ["mat2", "mat3", "mat4"] {
-        let source = format!("#version 460\nlayout(location=0) out vec4 color;\nvoid main(){{ bool input_value=true; {matrix} value={matrix}(input_value); color=vec4(value[0][0]); }}");
-        glsl_to_wgsl(&source, naga::ShaderStage::Fragment, "main").unwrap_or_else(|error| {
-            panic!("dEQP scalar-to-{matrix} bool conversion was refused: {error}")
-        });
+    for stage in [naga::ShaderStage::Vertex, naga::ShaderStage::Fragment] {
+        for matrix in ["mat2", "mat3", "mat4"] {
+            let position = if stage == naga::ShaderStage::Vertex { "gl_Position=vec4(0.0);" } else { "" };
+            let source = format!("#version 460\nlayout(location=0) out vec4 color;\nvoid main(){{ bool input_value=true; {matrix} value={matrix}(input_value); color=vec4(value[0][0]); {position} }}");
+            glsl_to_wgsl(&source, stage, "main").unwrap_or_else(|error| {
+                panic!("dEQP scalar-to-{matrix} bool conversion was refused in {stage:?}: {error}")
+            });
+        }
     }
 
     let original = "void main(){ mat2 a=mat2(true); mat3 b=mat3(bool(1)); mat4 c=mat4(1.0); }";
@@ -636,16 +639,17 @@ fn deqp_scalar_to_matrix_bool_spelling_compiles() {
 
 #[test]
 fn deqp_vector_to_scalar_constructor_uses_first_component() {
-    for (source_type, value, destination_type) in [
-        ("bvec2", "bvec2(true,false)", "float"),
-        ("bvec3", "bvec3(true,false,true)", "int"),
-        ("ivec4", "ivec4(1)", "bool"),
-        ("vec2", "vec2(1)", "float"),
-    ] {
-        let source = format!("#version 460\nlayout(location=0) out vec4 color;\nvoid main(){{ {source_type} input_value={value}; {destination_type} result={destination_type}(input_value); color=vec4(float(result)); }}");
-        glsl_to_wgsl(&source, naga::ShaderStage::Fragment, "main").unwrap_or_else(|error| {
-            panic!("dEQP {source_type}-to-{destination_type} conversion was refused: {error}")
-        });
+    for stage in [naga::ShaderStage::Vertex, naga::ShaderStage::Fragment] {
+        for width in 2..=4 {
+            for destination_type in ["float", "int"] {
+                let source_type = format!("bvec{width}");
+                let position = if stage == naga::ShaderStage::Vertex { "gl_Position=vec4(0.0);" } else { "" };
+                let source = format!("#version 460\nlayout(location=0) out vec4 color;\nvoid main(){{ {source_type} input_value={source_type}(true); {destination_type} result={destination_type}(input_value); color=vec4(float(result)); {position} }}");
+                glsl_to_wgsl(&source, stage, "main").unwrap_or_else(|error| {
+                    panic!("dEQP {source_type}-to-{destination_type} conversion was refused in {stage:?}: {error}")
+                });
+            }
+        }
     }
 
     let source = "void main(){ bvec2 input_value=bvec2(true); float result=float(input_value); }";
