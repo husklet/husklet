@@ -129,16 +129,76 @@ fn khr_debug_callback_pointer_and_application_message_are_exact() {
 
     glGetPointervKHR(GL_TEXTURE, &mut callback);
     assert_eq!(glGetError(), GL_INVALID_ENUM);
+}
 
-    glDebugMessageInsertKHR(
-        GL_DEBUG_SOURCE_APPLICATION,
-        GL_DEBUG_TYPE_PUSH_GROUP,
-        78,
-        GL_DEBUG_SEVERITY_HIGH,
-        message.len() as i32,
-        message.as_ptr().cast(),
+#[test]
+fn inserted_push_and_pop_types_are_messages_not_stack_operations() {
+    bind_debug_context();
+    let bytes = [0xff, 0, 0x80];
+    let mut initial_depth = 0;
+    glGetIntegerv(GL_DEBUG_GROUP_STACK_DEPTH, &mut initial_depth);
+
+    glDebugMessageCallbackKHR(record_debug_callback as *mut c_void, core::ptr::null());
+    for (id, type_) in [
+        (81, GL_DEBUG_TYPE_PUSH_GROUP),
+        (82, GL_DEBUG_TYPE_POP_GROUP),
+    ] {
+        glDebugMessageInsertKHR(
+            GL_DEBUG_SOURCE_APPLICATION,
+            type_,
+            id,
+            GL_DEBUG_SEVERITY_HIGH,
+            bytes.len() as i32,
+            bytes.as_ptr().cast(),
+        );
+        let record = DEBUG_CALLBACK_RECORD.lock().unwrap().take().unwrap();
+        assert_eq!(
+            (record.type_, record.id, record.message),
+            (type_, id, bytes.to_vec())
+        );
+    }
+
+    glDebugMessageCallbackKHR(core::ptr::null_mut(), core::ptr::null());
+    for (id, type_) in [
+        (83, GL_DEBUG_TYPE_PUSH_GROUP),
+        (84, GL_DEBUG_TYPE_POP_GROUP),
+    ] {
+        glDebugMessageInsertKHR(
+            GL_DEBUG_SOURCE_APPLICATION,
+            type_,
+            id,
+            GL_DEBUG_SEVERITY_HIGH,
+            bytes.len() as i32,
+            bytes.as_ptr().cast(),
+        );
+    }
+    let mut types = [0u32; 2];
+    let mut ids = [0u32; 2];
+    let mut lengths = [0i32; 2];
+    let mut log = [0u8; 16];
+    assert_eq!(
+        glGetDebugMessageLogKHR(
+            2,
+            log.len() as i32,
+            core::ptr::null_mut(),
+            types.as_mut_ptr(),
+            ids.as_mut_ptr(),
+            core::ptr::null_mut(),
+            lengths.as_mut_ptr(),
+            log.as_mut_ptr(),
+        ),
+        2
     );
-    assert_eq!(glGetError(), GL_INVALID_ENUM);
+    assert_eq!(types, [GL_DEBUG_TYPE_PUSH_GROUP, GL_DEBUG_TYPE_POP_GROUP]);
+    assert_eq!(ids, [83, 84]);
+    assert_eq!(lengths, [4, 4]);
+    assert_eq!(&log[..4], &[0xff, 0, 0x80, 0]);
+    assert_eq!(&log[4..8], &[0xff, 0, 0x80, 0]);
+
+    let mut final_depth = 0;
+    glGetIntegerv(GL_DEBUG_GROUP_STACK_DEPTH, &mut final_depth);
+    assert_eq!(final_depth, initial_depth);
+    assert_eq!(glGetError(), GL_NO_ERROR);
 }
 
 #[test]
