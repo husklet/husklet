@@ -344,6 +344,18 @@ fn pixel_store_round_trips_and_rejects_bad_values() {
     assert_eq!(b[0], 1);
 }
 
+#[test]
+fn three_dimensional_unpack_state_round_trips() {
+    let mut context = ctx_800x600();
+    let mut value = [0; 4];
+    for (pname, wanted) in [(GL_UNPACK_IMAGE_HEIGHT, 17), (GL_UNPACK_SKIP_IMAGES, 3)] {
+        record::pixel_store(&mut context, pname, wanted);
+        assert_eq!(context.take_gl_error(), GL_NO_ERROR);
+        assert_eq!(query::get_integerv(&context, pname, &mut value), 1);
+        assert_eq!(value[0], wanted);
+    }
+}
+
 // ---- glGetShaderiv / glGetProgramiv --------------------------------------------------------------
 
 #[test]
