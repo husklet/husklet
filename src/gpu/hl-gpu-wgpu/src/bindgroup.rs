@@ -20,6 +20,7 @@ fn encode_sampler_desc(desc: &hl_gpu::protocol::model::descriptor::SamplerDesc) 
         AddressMode::ClampToEdge => 0,
         AddressMode::Repeat => 1,
         AddressMode::MirrorRepeat => 2,
+        AddressMode::MirrorClampToEdge => 3,
     };
     let filter = |mode| match mode {
         Filter::Nearest => 0,

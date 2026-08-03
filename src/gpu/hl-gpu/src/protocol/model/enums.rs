@@ -524,8 +524,23 @@ u32_enum!(
 
 u32_enum!(
     /// Sampler address (wrap) mode.
-    AddressMode { ClampToEdge = 0, Repeat = 1, MirrorRepeat = 2 } "AddressMode"
+    AddressMode { ClampToEdge = 0, Repeat = 1, MirrorRepeat = 2, MirrorClampToEdge = 3 } "AddressMode"
 );
+
+#[cfg(test)]
+mod address_mode_tests {
+    use super::AddressMode;
+
+    #[test]
+    fn mirror_clamp_is_an_additive_wire_value() {
+        assert_eq!(AddressMode::ClampToEdge.to_u32(), 0);
+        assert_eq!(AddressMode::Repeat.to_u32(), 1);
+        assert_eq!(AddressMode::MirrorRepeat.to_u32(), 2);
+        assert_eq!(AddressMode::MirrorClampToEdge.to_u32(), 3);
+        assert_eq!(AddressMode::from_u32(3).unwrap(), AddressMode::MirrorClampToEdge);
+        assert!(AddressMode::from_u32(4).is_err());
+    }
+}
 
 /// Depth/stencil compare functions. `DepthState::depth_compare` and `StencilFaceState::compare` carry one
 /// of THESE codes on the wire — the protocol's own numbering, which follows Vulkan `VkCompareOp` ordering

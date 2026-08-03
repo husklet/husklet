@@ -35,12 +35,12 @@ fn wgsl_to_spirv(src:&str)->Vec<u32>{
     naga::back::spv::write_vec(&module,&info,&naga::back::spv::Options::default(),None).unwrap()
 }
 
-fn sampler(f: Filter) -> SamplerDesc {
+fn sampler(f: Filter, address_u: AddressMode) -> SamplerDesc {
     SamplerDesc {
         min_filter: f,
         mag_filter: f,
         mip_filter: Filter::Nearest,
-        address_u: AddressMode::ClampToEdge,
+        address_u,
         address_v: AddressMode::ClampToEdge,
         address_w: AddressMode::ClampToEdge,
         ..SamplerDesc::default()
@@ -48,7 +48,12 @@ fn sampler(f: Filter) -> SamplerDesc {
 }
 
 /// Sample the 2×1 texture at `u` (v = 0.5) with `filter`; return the single readback pixel.
-fn tap(exec: &mut WgpuExecutor, filter: Filter, u: f32) -> [u8; 4] {
+fn tap_address(
+    exec: &mut WgpuExecutor,
+    filter: Filter,
+    address_u: AddressMode,
+    u: f32,
+) -> [u8; 4] {
     let mut s = new_session(exec);
     let mut texels = A.to_vec();
     texels.extend_from_slice(&B);
@@ -102,7 +107,7 @@ fn tap(exec: &mut WgpuExecutor, filter: Filter, u: f32) -> [u8; 4] {
                 kind: ShaderPayloadKind::SpirV,
                 spirv: wgsl_to_spirv(FS_WGSL),
             },
-            Cmd::CreateSampler(1, sampler(filter)),
+            Cmd::CreateSampler(1, sampler(filter, address_u)),
             Cmd::CreateRenderPipeline(
                 1,
                 RenderPipelineDesc {
@@ -188,6 +193,10 @@ fn tap(exec: &mut WgpuExecutor, filter: Filter, u: f32) -> [u8; 4] {
     [img[0], img[1], img[2], img[3]]
 }
 
+fn tap(exec: &mut WgpuExecutor, filter: Filter, u: f32) -> [u8; 4] {
+    tap_address(exec, filter, AddressMode::ClampToEdge, u)
+}
+
 #[test]
 fn nearest_taps_exact_texels_and_linear_interpolates_midpoint() {
     let mut exec = WgpuExecutor::new(DeviceConfig::default())
@@ -229,4 +238,30 @@ fn nearest_taps_exact_texels_and_linear_interpolates_midpoint() {
         "LINEAR midpoint {lin_mid:?} must differ from both A {A:?} and B {B:?}"
     );
     eprintln!("demo `texture_filtering`: nearest={near_left:?}/{near_right:?} linear_mid={lin_mid:?} exact");
+}
+
+#[test]
+fn mirror_clamp_reflects_once_for_native_and_cubic_filters() {
+    let mut exec = WgpuExecutor::new(DeviceConfig::default())
+        .expect("a GPU adapter is required to prove mirror-clamp sampling");
+    let nearest = tap_address(
+        &mut exec,
+        Filter::Nearest,
+        AddressMode::MirrorClampToEdge,
+        -0.75,
+    );
+    let cubic_negative = tap_address(
+        &mut exec,
+        Filter::Cubic,
+        AddressMode::MirrorClampToEdge,
+        -0.375,
+    );
+    let cubic_positive = tap_address(
+        &mut exec,
+        Filter::Cubic,
+        AddressMode::MirrorClampToEdge,
+        0.375,
+    );
+    assert!(near(nearest, B), "mirror-clamp -0.75 must reflect to right texel: {nearest:?}");
+    assert_eq!(cubic_negative, cubic_positive, "cubic samples must be symmetric across the mirror edge");
 }

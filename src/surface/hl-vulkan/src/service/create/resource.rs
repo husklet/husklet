@@ -562,14 +562,14 @@ impl SamplerFilter {
     }
 }
 
-/// `VkSamplerAddressMode` → hl-GPU [`AddressMode`] (CLAMP_TO_BORDER / MIRROR_CLAMP fold to the nearest
-/// supported neighbour — a bounded translation, ported from `memory.rs::ir_address`).
+/// `VkSamplerAddressMode` → hl-GPU [`AddressMode`].
 struct SamplerAddress;
 impl SamplerAddress {
     fn from_vk(v: u32) -> AddressMode {
         match v {
             0 => AddressMode::Repeat,           // REPEAT
-            1 | 4 => AddressMode::MirrorRepeat, // MIRRORED_REPEAT / MIRROR_CLAMP
+            1 => AddressMode::MirrorRepeat,
+            4 => AddressMode::MirrorClampToEdge,
             _ => AddressMode::ClampToEdge,      // CLAMP_TO_EDGE / CLAMP_TO_BORDER
         }
     }

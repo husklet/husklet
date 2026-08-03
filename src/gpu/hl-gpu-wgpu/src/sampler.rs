@@ -79,16 +79,19 @@ impl WgpuExecutor {
                 AddressMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
                 AddressMode::Repeat => wgpu::AddressMode::Repeat,
                 AddressMode::MirrorRepeat => wgpu::AddressMode::MirrorRepeat,
+                AddressMode::MirrorClampToEdge => wgpu::AddressMode::ClampToEdge,
             },
             address_mode_v: match d.address_v {
                 AddressMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
                 AddressMode::Repeat => wgpu::AddressMode::Repeat,
                 AddressMode::MirrorRepeat => wgpu::AddressMode::MirrorRepeat,
+                AddressMode::MirrorClampToEdge => wgpu::AddressMode::ClampToEdge,
             },
             address_mode_w: match d.address_w {
                 AddressMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
                 AddressMode::Repeat => wgpu::AddressMode::Repeat,
                 AddressMode::MirrorRepeat => wgpu::AddressMode::MirrorRepeat,
+                AddressMode::MirrorClampToEdge => wgpu::AddressMode::ClampToEdge,
             },
             mag_filter: match d.mag_filter {
                 Filter::Nearest => wgpu::FilterMode::Nearest,

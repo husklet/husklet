@@ -2,19 +2,23 @@ use hl_gpu::{GpuError, Result};
 
 const HELPERS: &str = r#"
 fn _hl_cubic_address(i: i32, n: i32, mode: u32) -> i32 {
-    if mode == 0u { return clamp(i, 0, n - 1); }
+    if mode == 0u || mode == 3u { return clamp(i, 0, n - 1); }
     let p = ((i % n) + n) % n;
     if mode == 1u { return p; }
     let q = ((i % (2 * n)) + 2 * n) % (2 * n);
     return select(2 * n - 1 - q, q, q < n);
+}
+fn _hl_mirror_clamp_uv(uv: vec2<f32>, au: u32, av: u32) -> vec2<f32> {
+    return vec2(select(uv.x, abs(uv.x), au == 3u), select(uv.y, abs(uv.y), av == 3u));
 }
 fn _hl_cubic_weights(t: f32) -> vec4<f32> {
     let t2 = t * t; let t3 = t2 * t;
     return vec4(-0.5*t+t2-0.5*t3, 1.0-2.5*t2+1.5*t3, 0.5*t+2.0*t2-1.5*t3, -0.5*t2+0.5*t3);
 }
 fn _hl_cubic_level(t: texture_2d<f32>, uv: vec2<f32>, level: i32, au: u32, av: u32) -> vec4<f32> {
+    let muv = _hl_mirror_clamp_uv(uv, au, av);
     let size = vec2<i32>(textureDimensions(t, level));
-    let p = uv * vec2<f32>(size) - vec2(0.5);
+    let p = muv * vec2<f32>(size) - vec2(0.5);
     let base = vec2<i32>(floor(p)) - vec2(1);
     let w = mat2x4<f32>(_hl_cubic_weights(fract(p.x)), _hl_cubic_weights(fract(p.y)));
     var out = vec4(0.0);
@@ -29,7 +33,7 @@ fn _hl_sample_auto(t: texture_2d<f32>, s: sampler, uv: vec2<f32>, mn:u32, mg:u32
     let rho = max(length(dpdx(uv*size)), length(dpdy(uv*size)));
     let lod = clamp(log2(max(rho, 0.000001)), bitcast<f32>(lmin), bitcast<f32>(lmax));
     let filter_mode = select(mg, mn, lod > 0.0);
-    if filter_mode != 2u { return textureSample(t, s, uv); }
+    if filter_mode != 2u { return textureSample(t, s, _hl_mirror_clamp_uv(uv,au,av)); }
     let levels = i32(textureNumLevels(t));
     if mm == 1u {
         let lo = clamp(i32(floor(lod)), 0, levels-1); let hi = min(lo+1, levels-1);
@@ -39,14 +43,17 @@ fn _hl_sample_auto(t: texture_2d<f32>, s: sampler, uv: vec2<f32>, mn:u32, mg:u32
 }
 fn _hl_sample_level(t: texture_2d<f32>, s: sampler, uv: vec2<f32>, lod0:f32, mn:u32, mg:u32, mm:u32, au:u32, av:u32, aw:u32, lmin:u32, lmax:u32) -> vec4<f32> {
     let lod = clamp(lod0, bitcast<f32>(lmin), bitcast<f32>(lmax));
-    if select(mg,mn,lod > 0.0) != 2u { return textureSampleLevel(t,s,uv,lod); }
+    if select(mg,mn,lod > 0.0) != 2u { return textureSampleLevel(t,s,_hl_mirror_clamp_uv(uv,au,av),lod); }
     let levels=i32(textureNumLevels(t));
     if mm==1u { let lo=clamp(i32(floor(lod)),0,levels-1); let hi=min(lo+1,levels-1); return mix(_hl_cubic_level(t,uv,lo,au,av),_hl_cubic_level(t,uv,hi,au,av),fract(lod)); }
     return _hl_cubic_level(t,uv,clamp(i32(round(lod)),0,levels-1),au,av);
 }
 fn _hl_sample_grad(t:texture_2d<f32>,s:sampler,uv:vec2<f32>,gx:vec2<f32>,gy:vec2<f32>,mn:u32,mg:u32,mm:u32,au:u32,av:u32,aw:u32,lmin:u32,lmax:u32)->vec4<f32>{
     let size=vec2<f32>(textureDimensions(t,0)); let lod=clamp(log2(max(max(length(gx*size),length(gy*size)),0.000001)),bitcast<f32>(lmin),bitcast<f32>(lmax));
-    if select(mg,mn,lod>0.0)!=2u{return textureSampleGrad(t,s,uv,gx,gy);}
+    if select(mg,mn,lod>0.0)!=2u{
+        let sign=vec2(select(1.0,-1.0,uv.x<0.0 && au==3u),select(1.0,-1.0,uv.y<0.0 && av==3u));
+        return textureSampleGrad(t,s,_hl_mirror_clamp_uv(uv,au,av),gx*sign,gy*sign);
+    }
     let levels=i32(textureNumLevels(t)); if mm==1u{let lo=clamp(i32(floor(lod)),0,levels-1);let hi=min(lo+1,levels-1);return mix(_hl_cubic_level(t,uv,lo,au,av),_hl_cubic_level(t,uv,hi,au,av),fract(lod));}
     return _hl_cubic_level(t,uv,clamp(i32(round(lod)),0,levels-1),au,av);
 }

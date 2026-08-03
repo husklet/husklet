@@ -89,6 +89,10 @@ pub const DEVICE_EXTENSIONS: &[ExtensionProp] = &[
         name: "VK_EXT_filter_cubic",
         spec_version: 3,
     },
+    ExtensionProp {
+        name: "VK_KHR_sampler_mirror_clamp_to_edge",
+        spec_version: 3,
+    },
 ];
 
 /// `VkFormatFeatureFlagBits` (stable bit values from vk.xml) — the per-format capability bits reported
@@ -1009,6 +1013,18 @@ mod tests {
         assert_eq!(integer & format_feature::SAMPLED_IMAGE_FILTER_CUBIC, 0);
         let depth = Format(vk_format::D32_SFLOAT).features().optimal_tiling;
         assert_eq!(depth & format_feature::SAMPLED_IMAGE_FILTER_CUBIC, 0);
+    }
+
+    #[test]
+    fn mirror_clamp_extension_is_advertised_only_with_its_distinct_address_mode() {
+        assert!(DEVICE_EXTENSIONS.iter().any(|extension| {
+            extension.name == "VK_KHR_sampler_mirror_clamp_to_edge"
+                && extension.spec_version == 3
+        }));
+        assert_ne!(
+            hl_gpu::protocol::model::enums::AddressMode::MirrorClampToEdge,
+            hl_gpu::protocol::model::enums::AddressMode::MirrorRepeat
+        );
     }
 
     #[test]
