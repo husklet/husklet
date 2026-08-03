@@ -134,7 +134,14 @@ pub extern "C" fn glGetUniformLocation(program: u32, name: *const c_char) -> i32
         Some(s) => s,
         None => return -1,
     };
-    GlobalState::context(|s| query::uniform_location(&s.gl, program, &want))
+    GlobalState::context(|s| {
+        if let Some(error) = program_query_error(&s.gl, program, true) {
+            s.gl.set_gl_error(error);
+            -1
+        } else {
+            query::uniform_location(&s.gl, program, &want)
+        }
+    })
 }
 
 /// `glGetAttribLocation(program, name)` — the vertex attribute's declaration-order slot in the linked
@@ -145,7 +152,14 @@ pub extern "C" fn glGetAttribLocation(program: u32, name: *const c_char) -> i32 
         Some(s) => s,
         None => return -1,
     };
-    GlobalState::context(|s| query::attrib_location(&s.gl, program, &want))
+    GlobalState::context(|s| {
+        if let Some(error) = program_query_error(&s.gl, program, true) {
+            s.gl.set_gl_error(error);
+            -1
+        } else {
+            query::attrib_location(&s.gl, program, &want)
+        }
+    })
 }
 
 /// `glBindAttribLocation(program, index, name)` — record a name binding for the next link.
@@ -204,7 +218,18 @@ pub extern "C" fn glGetActiveUniform(
     type_: *mut u32,
     name: *mut c_char,
 ) {
-    let var = GlobalState::context(|s| query::active_uniform(&s.gl, program, index));
+    if buf_size < 0 {
+        GlobalState::context(|s| s.gl.set_gl_error(GL_INVALID_VALUE));
+        return;
+    }
+    let var = GlobalState::context(|s| {
+        if let Some(error) = program_query_error(&s.gl, program, true) {
+            s.gl.set_gl_error(error);
+            None
+        } else {
+            query::active_uniform(&s.gl, program, index)
+        }
+    });
     emit_active_var(var, buf_size, length, size, type_, name);
 }
 
@@ -221,8 +246,35 @@ pub extern "C" fn glGetActiveAttrib(
     type_: *mut u32,
     name: *mut c_char,
 ) {
-    let var = GlobalState::context(|s| query::active_attrib(&s.gl, program, index));
+    if buf_size < 0 {
+        GlobalState::context(|s| s.gl.set_gl_error(GL_INVALID_VALUE));
+        return;
+    }
+    let var = GlobalState::context(|s| {
+        if let Some(error) = program_query_error(&s.gl, program, true) {
+            s.gl.set_gl_error(error);
+            None
+        } else {
+            query::active_attrib(&s.gl, program, index)
+        }
+    });
     emit_active_var(var, buf_size, length, size, type_, name);
+}
+
+fn program_query_error(
+    context: &hl_gl::model::context::GlContext,
+    program: u32,
+    require_linked: bool,
+) -> Option<u32> {
+    if context.programs.has_shader(program) {
+        Some(GL_INVALID_OPERATION)
+    } else if !context.programs.contains(program) {
+        Some(GL_INVALID_VALUE)
+    } else if require_linked && !context.programs.program(program).is_some_and(|p| p.linked) {
+        Some(GL_INVALID_OPERATION)
+    } else {
+        None
+    }
 }
 
 /// Shared tail for `glGetActive{Uniform,Attrib}`: write the reflection, or (on an out-of-range index)
