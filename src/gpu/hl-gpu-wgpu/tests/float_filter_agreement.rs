@@ -173,3 +173,16 @@ fn the_executor_and_the_reference_refuse_a_linear_float_blit_together() {
         );
     }
 }
+
+#[test]
+fn metal_executes_every_linear_format_the_vulkan_surface_advertises() {
+    let mut exec = WgpuExecutor::new(DeviceConfig::default()).expect("Metal adapter");
+    for format in [
+        TextureFormat::Rgba8Snorm,
+        TextureFormat::Rg16Float,
+        TextureFormat::Rgb10a2Unorm,
+    ] {
+        on_executor(&mut exec, format, Filter::Linear)
+            .unwrap_or_else(|error| panic!("{format:?} is advertised filterable: {error}"));
+    }
+}

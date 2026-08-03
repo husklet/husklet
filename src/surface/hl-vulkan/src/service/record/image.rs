@@ -36,15 +36,16 @@ fn ir_aspect(format: TextureFormat, aspect_mask: u32, what: &'static str) -> Res
 
 /// The colour formats that support LINEAR filtering. The 32-bit float formats are absent: WebGPU makes
 /// them non-filterable without an optional feature, Vulkan requires the format to advertise linear
-/// filtering, and the host was measured refusing exactly these two.
+/// filtering, and the host was measured refusing exactly these three.
 ///
 /// This list is only ever consulted for a format that HAS a packed colour texel, because compressed and
 /// depth/stencil formats are refused before it on grounds that apply to every filter. That ordering is
 /// what lets this list mean "cannot be linearly filtered" rather than "is not on a list" — it is the
 /// difference between a membership rule and an obligation the entry must meet. Every member is a format
-/// the host was measured filtering; the two omissions are formats it was measured refusing.
+/// the host was measured filtering; the three omissions are formats it was measured refusing.
 ///
-/// This is one of THREE independent layers that decline a linear filter on `R32Float`/`Rgba32Float` —
+/// This is one of THREE independent layers that decline a linear filter on
+/// `R32Float`/`Rg32Float`/`Rgba32Float` —
 /// the others are the executor's blit (`hl-gpu-wgpu`'s `blit.rs::filterable`) and the software
 /// reference (`hl-gpu`'s `cpu/format.rs::FILTERABLE_REFUSED`). They agreed by coincidence rather than by
 /// construction until `hl-gpu-wgpu/tests/float_filter_agreement.rs` bound them; that test fails if any
@@ -58,7 +59,10 @@ const FILTERABLE: &[TextureFormat] = &[
     TextureFormat::R8Unorm,
     TextureFormat::R8Snorm,
     TextureFormat::Rg8Unorm,
+    TextureFormat::Rgba8Snorm,
+    TextureFormat::Rg16Float,
     TextureFormat::Rgba16Float,
+    TextureFormat::Rgb10a2Unorm,
     TextureFormat::Rgb9e5Ufloat,
     TextureFormat::Rg11b10Ufloat,
 ];
@@ -303,8 +307,8 @@ pub fn cmd_blit_image(
             .base_array_layer
             .checked_add(dst_sub.layer_count)
             .ok_or(GpuError::OutOfBounds)?;
-        let layers_overlap = src_sub.base_array_layer < dst_layer_end
-            && dst_sub.base_array_layer < src_layer_end;
+        let layers_overlap =
+            src_sub.base_array_layer < dst_layer_end && dst_sub.base_array_layer < src_layer_end;
         if src_sub.mip_level == dst_sub.mip_level && layers_overlap {
             return Err(GpuError::Invalid(
                 "vkCmdBlitImage: overlapping source and destination subresources of one image",
@@ -376,7 +380,9 @@ pub fn cmd_blit_image(
     ] {
         if dim != TextureDim::D3 && extent.depth > 1 {
             return Err(GpuError::Invalid(match side {
-                "source" => "vkCmdBlitImage: source is not a 3D image and has no depth axis to span",
+                "source" => {
+                    "vkCmdBlitImage: source is not a 3D image and has no depth axis to span"
+                }
                 _ => "vkCmdBlitImage: destination is not a 3D image and has no depth axis to span",
             }));
         }
