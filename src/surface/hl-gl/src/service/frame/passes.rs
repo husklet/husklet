@@ -958,16 +958,16 @@ mod tests {
         ctx.local.tex_unit[ctx.local.active_texture] = texture;
         for face in 0..6 {
             assert!(ctx.textures.image_cube_face(
-                texture, face, 8, 8, &[0; 8 * 8 * 4], TextureFormat::Rgba8Unorm, GL_RGBA,
+                u64::from(texture), face, 8, 8, &[0; 8 * 8 * 4], TextureFormat::Rgba8Unorm, GL_RGBA,
             ));
             assert!(ctx.textures.image_cube_level(
-                texture, face, 1, 4, 4, &[0; 4 * 4 * 4], GL_RGBA,
+                u64::from(texture), face, 1, 4, 4, &[0; 4 * 4 * 4], GL_RGBA,
             ));
             assert!(ctx.textures.image_cube_level(
-                texture, face, 2, 2, 2, &[0; 2 * 2 * 4], GL_RGBA,
+                u64::from(texture), face, 2, 2, 2, &[0; 2 * 2 * 4], GL_RGBA,
             ));
             assert!(ctx.textures.image_cube_level(
-                texture, face, 3, 1, 1, &[0; 4], GL_RGBA,
+                u64::from(texture), face, 3, 1, 1, &[0; 4], GL_RGBA,
             ));
         }
         ctx.record_draw(DrawCall {

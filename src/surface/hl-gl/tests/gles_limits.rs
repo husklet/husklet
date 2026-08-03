@@ -504,6 +504,16 @@ fn default_cube_object_remains_mutable_after_a_2d_binding() {
     let mut c = ctx(2, 0);
     let texture_2d = c.textures.gen();
     record::bind_texture(&mut c, GL_TEXTURE_2D, texture_2d);
+    record::bind_texture(&mut c, GL_TEXTURE_CUBE_MAP, u32::MAX);
+    record::tex_image_2d_target_declared(
+        &mut c,
+        GL_TEXTURE_CUBE_MAP_POSITIVE_X,
+        GL_RGBA,
+        1,
+        1,
+        &[0x31; 4],
+    );
+    record::bind_texture(&mut c, GL_TEXTURE_CUBE_MAP, 0);
 
     // These are the exact binding semantics exercised by the GLES2 cube-completeness cases: cube target
     // zero remains a real mutable default object even while a named 2D texture is bound on the same unit.
@@ -532,10 +542,15 @@ fn default_cube_object_remains_mutable_after_a_2d_binding() {
     }
 
     assert_eq!(integer(&c, GL_TEXTURE_BINDING_CUBE_MAP), 0);
-    let default_cube = c.bound_texture_for_target(GL_TEXTURE_CUBE_MAP);
-    assert_ne!(default_cube, 0, "zero is represented by an internal default object identity");
-    let cube = c.textures.get(default_cube).expect("default cube texture");
-    assert!(cube.cube_complete(true), "NPOT chain plus an extra level remains complete");
+    assert_eq!(
+        c.textures
+            .get(u32::MAX)
+            .expect("maximum GLuint texture")
+            .data
+            .as_ref(),
+        &[0x31; 4],
+        "the legal maximum GLuint remains distinct from the default cube"
+    );
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
 }
 

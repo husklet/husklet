@@ -239,7 +239,7 @@ pub(super) fn lower_textures(
                     )
                 } else {
                     (
-                        d.tex_units[unit],
+                        u64::from(d.tex_units[unit]),
                         d.tex_generations[unit],
                         d.tex_swizzles[unit],
                     )
@@ -256,7 +256,7 @@ pub(super) fn lower_textures(
                 .map(|snapshot| snapshot.texture.clone())
                 .or_else(|| {
                     ctx.textures
-                        .get(gl_tex)
+                        .get_internal(gl_tex)
                         .filter(|texture| texture.gen == texture_generation)
                         .cloned()
                 });
@@ -266,9 +266,9 @@ pub(super) fn lower_textures(
             // Cross-pass FBO sampling: if this sampled GL texture is the color attachment an earlier render pass
             // rendered into, bind THAT render-target texture (the rendered pixels) directly — no staging upload
             // (its CPU plane is the pre-render zero storage). `stage_ir == 0` marks the copy-free bind.
-            if let Some(&rt_ir) = (gl_tex != 0)
-                .then(|| fbo_tex_ir.get(&(gl_tex, texture_generation)))
-                .flatten()
+            if let Some(&rt_ir) = u32::try_from(gl_tex)
+                .ok()
+                .and_then(|gl_tex| fbo_tex_ir.get(&(gl_tex, texture_generation)))
             {
                 let (sampler, width, height) = match texture.as_ref() {
                     Some(texture) => (
@@ -324,7 +324,11 @@ pub(super) fn lower_textures(
                 if let Some(rt_ir) = snapshot
                     .as_ref()
                     .and_then(|snapshot| snapshot.fbo_ir)
-                    .or_else(|| ctx.resident_fbo_target_tex(gl_tex, texture_generation))
+                    .or_else(|| {
+                        u32::try_from(gl_tex).ok().and_then(|gl_tex| {
+                            ctx.resident_fbo_target_tex(gl_tex, texture_generation)
+                        })
+                    })
                 {
                     if let Some(t) = texture.clone() {
                         let sampler = Pipeline::sampler_desc(&t, &d.samp_objs[unit]);
@@ -456,7 +460,7 @@ pub(super) fn lower_textures(
             // without allowing a newer GPU-produced image to alias its old CPU upload.
             let live_generation = ctx
                 .textures
-                .get(gl_tex)
+                .get_internal(gl_tex)
                 .is_some_and(|texture| texture.gen == t.gen);
             let upload_format = sampled_format(t.ir_format);
             let sampler = Pipeline::sampler_desc(&t, &d.samp_objs[unit]);
@@ -501,10 +505,12 @@ pub(super) fn lower_textures(
                     )?;
                     (texture, upload, false, "shared-residency")
                 }
-                None if live_generation => {
+                None if live_generation && u32::try_from(gl_tex).is_ok() => {
                     let generation = t.sampled_generation();
-                    let (texture, upload) =
-                        ctx.sampled_texture_ir(gl_tex, (generation.0, generation.1, uses_mipmaps))?;
+                    let (texture, upload) = ctx.sampled_texture_ir(
+                        gl_tex as u32,
+                        (generation.0, generation.1, uses_mipmaps),
+                    )?;
                     (texture, upload, false, "live-generation")
                 }
                 None => match snapshot_key.and_then(|key| snapshots.get(&key).copied()) {

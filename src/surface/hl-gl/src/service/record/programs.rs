@@ -974,7 +974,7 @@ impl GlContext {
             current_attrs: ctx.local.current_attr,
             current_attr_kinds: ctx.local.current_attr_kind,
             tex_units: ctx.local.tex_unit,
-            cube_tex_units: ctx.local.cube_tex_unit,
+            cube_tex_units: ctx.local.cube_tex_unit.map(u64::from),
             samp_objs,
             viewport: ctx.local.pipeline.viewport,
             scissor_enabled: ctx.local.pipeline.scissor_enabled,
@@ -1066,7 +1066,7 @@ impl GlContext {
                 d.tex_generations[unit] = texture.gen;
                 d.tex_swizzles[unit] = texture.sampled_swizzle();
             }
-            if let Some(texture) = ctx.textures.get(d.cube_tex_units[unit]) {
+            if let Some(texture) = ctx.textures.get_internal(d.cube_tex_units[unit]) {
                 d.cube_tex_generations[unit] = texture.gen;
                 d.cube_tex_swizzles[unit] = texture.sampled_swizzle();
             }
@@ -1087,10 +1087,10 @@ impl GlContext {
             .filter(|unit| (0..d.tex_units.len() as i32).contains(unit))
             .flat_map(|unit| {
                 let unit = unit as usize;
-                [d.tex_units[unit], d.cube_tex_units[unit]]
+                [u64::from(d.tex_units[unit]), d.cube_tex_units[unit]]
             })
             .filter(|name| *name != 0)
-            .filter_map(|name| ctx.texture_snapshot(name))
+            .filter_map(|name| ctx.texture_snapshot_internal(name))
             .collect();
         d.textures
             .sort_unstable_by_key(|snapshot| (snapshot.name, snapshot.generation));

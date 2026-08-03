@@ -385,7 +385,8 @@ impl GlContext {
                     .iter_mut()
                     .flat_map(|draw| draw.textures.iter_mut())
                     .filter(|snapshot| {
-                        snapshot.name == target.name && snapshot.generation == target.generation
+                        snapshot.name == u64::from(target.name)
+                            && snapshot.generation == target.generation
                     })
                 {
                     snapshot.fbo_ir = Some(target.texture);

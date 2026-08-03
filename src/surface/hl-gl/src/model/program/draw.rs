@@ -134,7 +134,7 @@ pub struct DepthStencilSnapshot {
 /// copy an atlas per draw.
 #[derive(Clone, PartialEq, Debug)]
 pub struct TextureSnapshot {
-    pub name: u32,
+    pub name: u64,
     pub generation: u64,
     pub texture: GlTexture,
     pub sampled_ir: Option<u32>,
@@ -176,7 +176,7 @@ pub struct DrawCall {
     /// Bound texture (GL name) per texture unit, at draw time.
     pub tex_units: [u32; MAX_TEXTURE_UNITS],
     /// Bound cube-map texture (GL name) per texture unit, at draw time.
-    pub cube_tex_units: [u32; MAX_TEXTURE_UNITS],
+    pub cube_tex_units: [u64; MAX_TEXTURE_UNITS],
     /// Content generation for each snapshotted texture-unit name.
     pub tex_generations: [u64; MAX_TEXTURE_UNITS],
     pub cube_tex_generations: [u64; MAX_TEXTURE_UNITS],

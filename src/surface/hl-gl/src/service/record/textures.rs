@@ -329,15 +329,19 @@ pub fn tex_image_2d_target_declared(
         return;
     };
     let name = ctx.bound_texture_for_target(target);
+    let key = if name == 0 {
+        crate::model::context::DEFAULT_TEXTURE_CUBE
+    } else {
+        u64::from(name)
+    };
     let format = declared_plane(internalformat);
-    let stored = name != 0
-        && ctx
-            .textures
-            .image_cube_face(name, face, w, h, pixels, format, internalformat);
-    if let Some(texture) = ctx.textures.get_mut(name) {
+    let stored = ctx
+        .textures
+        .image_cube_face(key, face, w, h, pixels, format, internalformat);
+    if let Some(texture) = ctx.textures.get_internal_mut(key) {
         texture.internal_format = internalformat;
     }
-    if name != 0 && !stored {
+    if !stored {
         ctx.set_gl_error(GL_INVALID_VALUE);
     }
 }
@@ -403,10 +407,14 @@ pub fn tex_image_2d_target_level(
         return;
     }
     let name = ctx.bound_texture_for_target(target);
-    if name != 0
-        && !ctx
-            .textures
-            .image_cube_level(name, face, level, w, h, pixels, internalformat)
+    let key = if name == 0 {
+        crate::model::context::DEFAULT_TEXTURE_CUBE
+    } else {
+        u64::from(name)
+    };
+    if !ctx
+        .textures
+        .image_cube_level(key, face, level, w, h, pixels, internalformat)
     {
         ctx.set_gl_error(GL_INVALID_VALUE);
     }
@@ -461,7 +469,10 @@ pub fn tex_parameter(ctx: &mut GlContext, pname: u32, value: u32) {
 
 pub fn tex_parameter_target(ctx: &mut GlContext, target: u32, pname: u32, value: u32) {
     let name = ctx.bound_texture_for_target(target);
-    if name != 0 {
+    if target == GL_TEXTURE_CUBE_MAP && name == 0 {
+        ctx.textures
+            .set_param_internal(crate::model::context::DEFAULT_TEXTURE_CUBE, pname, value);
+    } else if name != 0 {
         ctx.textures.set_param(name, pname, value);
     }
 }
@@ -554,7 +565,7 @@ impl GlContext {
                 source = box_filter(&source, w, h, nw, nh);
                 if target == GL_TEXTURE_CUBE_MAP {
                     self.textures.image_cube_level(
-                        name,
+                        u64::from(name),
                         face,
                         level,
                         nw,
@@ -1173,7 +1184,7 @@ pub fn copy_tex_image_2d(
         tex_image_2d_target_declared(ctx, target, internalformat, width, height, &[]);
     } else if let Some(face) = face {
         if !ctx.textures.image_cube_level(
-            name, face, level as u32, width, height, &[], internalformat,
+            u64::from(name), face, level as u32, width, height, &[], internalformat,
         ) {
             ctx.set_gl_error(GL_INVALID_VALUE);
             return;
