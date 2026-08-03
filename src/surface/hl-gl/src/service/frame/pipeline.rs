@@ -332,6 +332,41 @@ mod tests {
     }
 
     #[test]
+    fn non_mipmapped_texture_filters_cannot_select_uploaded_mip_levels() {
+        for min_filter in [GL_NEAREST, GL_LINEAR] {
+            let texture = crate::model::texture::GlTexture {
+                min_filter,
+                ..Default::default()
+            };
+            assert_eq!(Pipeline::sampler_desc(&texture, &None).lod_max_clamp, 0.0);
+        }
+    }
+
+    #[test]
+    fn mipmapped_texture_filter_retains_the_level_range() {
+        let texture = crate::model::texture::GlTexture {
+            min_filter: GL_LINEAR_MIPMAP_LINEAR,
+            ..Default::default()
+        };
+        assert_eq!(Pipeline::sampler_desc(&texture, &None).lod_max_clamp, 32.0);
+    }
+
+    #[test]
+    fn non_mipmapped_sampler_object_overrides_its_lod_range_with_base_level() {
+        let sampler = crate::model::es3::SamplerObj {
+            min_filter: GL_LINEAR as i32,
+            min_lod: 4.0,
+            max_lod: 12.0,
+            ..Default::default()
+        };
+        let descriptor = Pipeline::sampler_desc(
+            &crate::model::texture::GlTexture::default(),
+            &Some(sampler),
+        );
+        assert_eq!((descriptor.lod_min_clamp, descriptor.lod_max_clamp), (0.0, 0.0));
+    }
+
+    #[test]
     fn pipeline_identity_includes_complete_vertex_layout() {
         let base = VertexLayout {
             stride: 16,
@@ -481,8 +516,16 @@ impl Pipeline {
                 // This backend currently exposes mip levels from base level zero. Negative GL clamps are
                 // therefore observationally identical to zero and are normalized before crossing into
                 // WebGPU, whose sampler contract rejects negative clamps.
-                lod_min_clamp: o.min_lod.max(0.0),
-                lod_max_clamp: o.max_lod.max(0.0),
+                lod_min_clamp: if matches!(o.min_filter as u32, GL_NEAREST | GL_LINEAR) {
+                    0.0
+                } else {
+                    o.min_lod.max(0.0)
+                },
+                lod_max_clamp: if matches!(o.min_filter as u32, GL_NEAREST | GL_LINEAR) {
+                    0.0
+                } else {
+                    o.max_lod.max(0.0)
+                },
                 compare: o.ir_compare(),
             },
             None => SamplerDesc {
@@ -493,7 +536,15 @@ impl Pipeline {
                 address_v: t.ir_wrap_t(),
                 address_w: AddressMode::Repeat,
                 lod_min_clamp: 0.0,
-                lod_max_clamp: 32.0,
+                // GL_NEAREST and GL_LINEAR are the two non-mipmapped minification modes. WebGPU has no
+                // separate non-mip sampler state: with an ordinary max LOD it still selects another
+                // level from the texture when derivatives demand minification. Clamp those two modes to
+                // level zero; mipmapped GL filters retain the complete level range.
+                lod_max_clamp: if matches!(t.min_filter, GL_NEAREST | GL_LINEAR) {
+                    0.0
+                } else {
+                    32.0
+                },
                 compare: None,
             },
         }
