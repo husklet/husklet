@@ -185,6 +185,15 @@ impl WgpuExecutor {
                     Enc::BeginRenderPass { color, depth } => {
                         let end = next - 1;
                         self.submit_encoded(&mut native);
+                        if self.has_shadow_color_attachment(res, color)? {
+                            self.run_shadow_render_pass(
+                                res,
+                                color,
+                                depth.as_ref(),
+                                &ops[i + 1..end],
+                            )?;
+                            return Ok(());
+                        }
                         let mut encoder = self.gpu.device.create_command_encoder(
                             &wgpu::CommandEncoderDescriptor {
                                 label: Some("hl-command-buffer-render-pass"),

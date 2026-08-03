@@ -19,6 +19,138 @@ fn bindable_as_attachment(t: &texture::WgpuTexture) -> bool {
 }
 
 impl WgpuExecutor {
+    pub(super) fn has_shadow_color_attachment(
+        &self,
+        res: &SessionResources,
+        color: &[ColorAttachment],
+    ) -> Result<bool> {
+        color.iter().try_fold(false, |found, attachment| {
+            Ok(found
+                || Format::from(texture::WgpuTexture::get(res, attachment.texture)?.format)
+                    .is_shadow())
+        })
+    }
+
+    /// Execute a pass containing an expanded physical representation without letting its extra precision
+    /// leak across logical draw boundaries. Vulkan blending consumes the value stored by the previous draw,
+    /// so R10X6 must be projected to ten bits after every ROP store, not merely at pass end. Splitting is
+    /// deliberately confined to shadow attachments; ordinary passes retain the one-native-pass fast path.
+    ///
+    /// State setters are replayed from the prefix before each draw. They are pure native pass state, so
+    /// replaying them is equivalent to retaining state across the split and avoids inventing a second state
+    /// model beside the protocol stream. The final projection also makes a later pass's texture sample see
+    /// the logical ten-bit value.
+    pub(super) fn run_shadow_render_pass(
+        &mut self,
+        res: &SessionResources,
+        color: &[ColorAttachment],
+        depth: Option<&DepthAttachment>,
+        ops: &[Enc],
+    ) -> Result<()> {
+        let draw_indices = ops
+            .iter()
+            .enumerate()
+            .filter_map(|(index, op)| {
+                matches!(op, Enc::Draw { .. } | Enc::DrawIndexed { .. }).then_some(index)
+            })
+            .collect::<Vec<_>>();
+
+        if draw_indices.is_empty() {
+            let mut encoder = self.gpu.device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor {
+                    label: Some("hl-shadow-clear-pass"),
+                },
+            );
+            self.run_render_pass(res, color, depth, ops, &mut encoder)?;
+            self.gpu.queue.submit(Some(encoder.finish()));
+            return self.quantize_shadow_attachments(res, color);
+        }
+
+        for (draw_number, draw_index) in draw_indices.into_iter().enumerate() {
+            let mut replay = ops[..draw_index]
+                .iter()
+                .filter(|op| !matches!(op, Enc::Draw { .. } | Enc::DrawIndexed { .. }))
+                .cloned()
+                .collect::<Vec<_>>();
+            replay.push(ops[draw_index].clone());
+
+            let mut split_color = color.to_vec();
+            let mut split_depth = depth.cloned();
+            if draw_number != 0 {
+                for attachment in &mut split_color {
+                    attachment.load = LoadOp::Load;
+                }
+                if let Some(attachment) = &mut split_depth {
+                    attachment.load = LoadOp::Load;
+                }
+            }
+            // Intermediate stores are load-bearing even when the guest discards the attachment at the end
+            // of the logical pass: the following draw's blend operation still consumes them.
+            for attachment in &mut split_color {
+                attachment.store = true;
+            }
+
+            let mut encoder = self.gpu.device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor {
+                    label: Some("hl-shadow-draw-pass"),
+                },
+            );
+            self.run_render_pass(
+                res,
+                &split_color,
+                split_depth.as_ref(),
+                &replay,
+                &mut encoder,
+            )?;
+            self.gpu.queue.submit(Some(encoder.finish()));
+            self.quantize_shadow_attachments(res, color)?;
+        }
+        Ok(())
+    }
+
+    fn quantize_shadow_attachments(
+        &mut self,
+        res: &SessionResources,
+        color: &[ColorAttachment],
+    ) -> Result<()> {
+        for attachment in color {
+            let (format, width, height, sample_count) = {
+                let texture = texture::WgpuTexture::get(res, attachment.texture)?;
+                (
+                    texture.format,
+                    texture.width,
+                    texture.height,
+                    texture.sample_count,
+                )
+            };
+            if !Format::from(format).is_shadow() {
+                continue;
+            }
+            if sample_count != 1 {
+                return Err(GpuError::Unsupported(
+                    "wgpu: multisampled shadow attachment quantization",
+                ));
+            }
+            // `read_texture` converts physical RGBA16Unorm to logical R10X6; `write_region` converts that
+            // exact logical plane back. This is intentionally the first, correctness-first lowering. A
+            // device-side quantizer may replace it once it has the same adversarial blend/sample proofs.
+            let logical = self.read_texture(res, attachment.texture)?;
+            self.write_region(
+                res,
+                attachment.texture,
+                0,
+                0,
+                0,
+                width,
+                height,
+                1,
+                0,
+                &logical,
+            )?;
+        }
+        Ok(())
+    }
+
     /// Execute one render pass: begin with the color attachments (clear/load), replay any pipeline/bind/
     /// draw ops into it, end, submit, and wait. A clear-only pass (no draws) realizes the clear.
     ///
