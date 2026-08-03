@@ -331,6 +331,32 @@ fn convert_attribute_to_integer_width(
     (out, vertices)
 }
 
+/// WebGPU exposes only per-vertex and per-instance stepping; GL additionally permits an instance
+/// divisor greater than one. Materialize the addressed instance stream so WebGPU's per-instance fetch
+/// observes source element `floor(instance / divisor)` exactly.
+fn expand_instance_divisor(
+    source: &[u8],
+    element_size: usize,
+    divisor: u32,
+    addressed_instances: u32,
+) -> Vec<u8> {
+    // Keep hostile instance counts from turning a small source VBO into an unbounded transient
+    // allocation. Fetches beyond this advertised draw-span ceiling remain robust out-of-range reads.
+    let addressed_instances =
+        addressed_instances.min(crate::service::query::MAX_ELEMENTS_VERTICES as u32);
+    let mut expanded = Vec::with_capacity(addressed_instances as usize * element_size);
+    for instance in 0..addressed_instances {
+        let element = (instance / divisor) as usize;
+        let start = element.saturating_mul(element_size);
+        if let Some(bytes) = source.get(start..start.saturating_add(element_size)) {
+            expanded.extend_from_slice(bytes);
+        } else {
+            expanded.resize(expanded.len() + element_size, 0);
+        }
+    }
+    expanded
+}
+
 fn attribute_element_size(attribute: &Attr) -> u32 {
     GlType(attribute.kind).vertex_element_size(attribute.size) as u32
 }
@@ -627,7 +653,8 @@ pub(super) fn lower_vertices(
             || attr_slot[location] < 0
             || !(needs_float_conversion(attribute)
                 || needs_float_width_conversion(program, location, attribute)
-                || needs_integer_conversion(program, location, attribute))
+                || needs_integer_conversion(program, location, attribute)
+                || attribute.divisor > 1)
         {
             continue;
         }
@@ -639,8 +666,8 @@ pub(super) fn lower_vertices(
             .vertex_attr_components(location)
             .unwrap_or(attribute.size)
             .clamp(1, 4);
-        let integer = needs_integer_conversion(program, location, attribute);
-        let (data, vertices) = if integer {
+        let integer = attribute.integer || needs_integer_conversion(program, location, attribute);
+        let (mut data, vertices) = if integer {
             convert_attribute_to_integer_width(attribute, &source, components as usize)
         } else {
             convert_attribute_to_f32_width(attribute, &source, components as usize)
@@ -649,13 +676,28 @@ pub(super) fn lower_vertices(
             continue;
         }
         let comps = components as u32;
+        if attribute.divisor > 1 {
+            let addressed_instances = d
+                .first_instance
+                .saturating_add(d.instance_count.max(1));
+            data = expand_instance_divisor(
+                &data,
+                comps as usize * size_of::<f32>(),
+                attribute.divisor,
+                addressed_instances,
+            );
+        }
         let ir = ctx.alloc_buffer_ir()?;
         cmds.push(Cmd::CreateBuffer(
             ir,
             BufferDesc {
                 size: data.len() as u64,
                 usage: buffer_usage::VERTEX,
-                label: format!("gl-converted-vertex:{:#x}", attribute.kind),
+                label: if attribute.divisor > 1 {
+                    format!("gl-divisor-vertex:{}", attribute.divisor)
+                } else {
+                    format!("gl-converted-vertex:{:#x}", attribute.kind)
+                },
             },
         ));
         let bytes = data.len();
@@ -698,7 +740,7 @@ pub(super) fn lower_vertices(
         let float_layout_conversion =
             needs_float_width_conversion(program, ca.location, &attribute);
         let integer_conversion = needs_integer_conversion(program, ca.location, &attribute);
-        let (data, kind, normalized, integer, components) = if needs_float_conversion(&attribute)
+        let (mut data, kind, normalized, integer, components) = if needs_float_conversion(&attribute)
             || float_layout_conversion
         {
             let (converted, _) =
@@ -719,6 +761,15 @@ pub(super) fn lower_vertices(
         } else {
             (ca.data.clone(), ca.kind, ca.normalized, ca.integer, ca.size)
         };
+        let elem = GlType(kind).vertex_element_size(components) as u32;
+        if ca.divisor > 1 {
+            data = expand_instance_divisor(
+                &data,
+                elem.max(1) as usize,
+                ca.divisor,
+                d.first_instance.saturating_add(d.instance_count.max(1)),
+            );
+        }
         let bytes = data.len();
         let ir = ctx.alloc_buffer_ir()?;
         cmds.push(Cmd::CreateBuffer(
@@ -726,7 +777,9 @@ pub(super) fn lower_vertices(
             BufferDesc {
                 size: data.len() as u64,
                 usage: buffer_usage::VERTEX,
-                label: if kind == GL_FLOAT && ca.kind != GL_FLOAT {
+                label: if ca.divisor > 1 {
+                    format!("gl-divisor-client-vertex:{}", ca.divisor)
+                } else if kind == GL_FLOAT && ca.kind != GL_FLOAT {
                     "gl-converted-client-vertex".to_owned()
                 } else {
                     "gl-client-vertex".to_owned()
@@ -738,7 +791,6 @@ pub(super) fn lower_vertices(
             offset: 0,
             data,
         });
-        let elem = GlType(kind).vertex_element_size(components) as u32;
         client_slots.push(ClientSlot {
             ir,
             bytes,
@@ -958,7 +1010,8 @@ pub(super) fn lower_vertices(
                 && attr_slot[location] == slot as i32
                 && !(needs_float_conversion(attribute)
                     || needs_float_width_conversion(program, location, attribute)
-                    || needs_integer_conversion(program, location, attribute))
+                    || needs_integer_conversion(program, location, attribute)
+                    || attribute.divisor > 1)
         });
         if feeds_direct_attribute {
             *mapped = Some(next_slot);
