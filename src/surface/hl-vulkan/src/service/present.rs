@@ -136,7 +136,9 @@ pub fn validate_swapchain(dev: &Device, config: SwapchainConfig) -> Result<()> {
         dev.swapchains
             .get(&config.old_swapchain)
             .is_some_and(|old| {
-                !old.retired && old.presentation_target == config.presentation_target
+                !old.retired
+                    && old.application_surface == config.application_surface
+                    && old.presentation_target == config.presentation_target
             })
     };
     if config.application_surface_live
@@ -246,7 +248,11 @@ pub fn create_swapchain_for_target(
     } else {
         dev.swapchains
             .get(&old_swapchain)
-            .is_some_and(|old| !old.retired && old.presentation_target == presentation_target)
+            .is_some_and(|old| {
+                !old.retired
+                    && old.application_surface == application_surface
+                    && old.presentation_target == presentation_target
+            })
     };
     if !replacement_valid {
         return Err(GpuError::Invalid(
@@ -302,10 +308,9 @@ pub fn create_swapchain_for_target(
     let usage =
         crate::model::memory::ImageUsage(SURFACE_IMAGE_USAGE).wire() | texture_usage::PRESENT;
     let mut images = Vec::with_capacity(image_count.max(1) as usize);
-    let mut creates = Vec::with_capacity(image_count.max(1) as usize);
     for _ in 0..image_count.max(1) {
         let ir_texture_id = dev.alloc_ir();
-        creates.push(Cmd::CreateTexture(
+        let create = Cmd::CreateTexture(
             ir_texture_id,
             TextureDesc {
                 width,
@@ -318,38 +323,34 @@ pub fn create_swapchain_for_target(
                 usage,
                 label: format!("swapimg{ir_texture_id}"),
             },
-        ));
+        );
         let handle = dev.alloc_handle();
+        if let Err(create_error) = sink.submit(&[create]) {
+            let outcome_ambiguous = matches!(
+                &create_error,
+                GpuError::Transport(error) if !error.refusal() && !error.retryable_before_request()
+            );
+            if outcome_ambiguous {
+                images.push(SwapImage {
+                    ir_texture_id,
+                    handle,
+                    state: ImageState::Available,
+                });
+            }
+            return match rollback_swapchain_allocation(dev, sink, surface, &images) {
+                Ok(()) => Err(create_error),
+                Err(cleanup_error) => Err(cleanup_error),
+            };
+        }
         images.push(SwapImage {
             ir_texture_id,
             handle,
             state: ImageState::Available,
         });
-    }
-    // One command batch is one authoritative runtime transaction: either every attempted texture id
-    // is committed, or an explicit refusal commits none. A transport failure with an ambiguous outcome
-    // poisons the sink, so cleanup is still attempted and its failure is surfaced rather than hidden.
-    if let Err(create_error) = sink.submit(&creates) {
-        let outcome_ambiguous = matches!(
-            &create_error,
-            GpuError::Transport(error) if !error.refusal() && !error.retryable_before_request()
-        );
-        return match rollback_swapchain_allocation(
-            dev,
-            sink,
-            surface,
-            &images,
-            outcome_ambiguous,
-        ) {
-            Ok(()) => Err(create_error),
-            Err(cleanup_error) => Err(cleanup_error),
-        };
-    }
-    for image in &images {
         dev.images.insert(
-            image.handle,
+            handle,
             ImageRec {
-                ir_id: image.ir_texture_id,
+                ir_id: ir_texture_id,
                 width,
                 height,
                 depth: 1,
@@ -388,10 +389,9 @@ fn rollback_swapchain_allocation(
     sink: &mut dyn CommandSink,
     surface: VkSurfaceKHR,
     images: &[SwapImage],
-    destroy_attempted_textures: bool,
 ) -> Result<()> {
     let mut cleanup_error = None;
-    if destroy_attempted_textures && !images.is_empty() {
+    if !images.is_empty() {
         let destroys: Vec<_> = images
             .iter()
             .map(|image| Cmd::DestroyTexture(image.ir_texture_id))
@@ -557,23 +557,33 @@ impl Device {
         sink: &mut dyn CommandSink,
         swapchain: VkSwapchainKHR,
     ) -> Result<()> {
-        let Some(sc) = self.swapchains.remove(&swapchain) else {
+        let Some(sc) = self.swapchains.get(&swapchain) else {
             return Ok(()); // unknown / already retired — nothing to free (VK_NULL_HANDLE)
         };
-        // Retire every presentable image: free its host texture, then drop its device-table bookkeeping so no
-        // stale `VkImage` handle survives the swapchain.
-        for img in &sc.images {
+        let surface_handle = sc.surface;
+        // Commit local retirement one resource at a time only after its destroy is acknowledged. A
+        // refusal leaves the remaining prefix in the swapchain, so retry resumes without destroying an
+        // already-retired id again.
+        while let Some(img) = self
+            .swapchains
+            .get(&swapchain)
+            .and_then(|record| record.images.first())
+            .copied()
+        {
             sink.submit(&[Cmd::DestroyTexture(img.ir_texture_id)])?;
+            self.swapchains.get_mut(&swapchain).unwrap().images.remove(0);
             self.images.remove(&img.handle);
             self.image_layouts.remove(&img.handle);
         }
         // Retire the swapchain's own presentation surface (minted per-swapchain at create time — the app's
         // instance-level `VkSurfaceKHR` is a different object, retired separately by `vkDestroySurfaceKHR`).
-        if let Some(surf) = self.surfaces.remove(&sc.surface) {
+        if let Some(surf) = self.surfaces.get(&surface_handle) {
             if surf.token.is_some() {
                 sink.submit(&[Cmd::DestroySurface(surf.ir_id)])?;
             }
+            self.surfaces.remove(&surface_handle);
         }
+        self.swapchains.remove(&swapchain);
         Ok(())
     }
 
