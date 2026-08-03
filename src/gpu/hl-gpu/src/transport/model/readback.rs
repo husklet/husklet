@@ -41,6 +41,10 @@ pub mod readback_kind {
     pub const EXPORT_BUFFER: u8 = 3;
     /// Import `offset` (`ExportId`) at caller-minted local buffer `id`. Response: authoritative bytes.
     pub const IMPORT_BUFFER: u8 = 4;
+    /// Exclusively map shared local buffer `id`; response is empty success.
+    pub const MAP_BUFFER: u8 = 5;
+    /// Complete holder work and release shared local buffer `id`; response is empty success.
+    pub const UNMAP_BUFFER: u8 = 6;
 }
 
 /// A device→host readback request: "return `len` bytes of resource `id` starting at `offset`". Serialized
@@ -115,6 +119,26 @@ impl ReadbackRequest {
         }
     }
 
+    pub fn map_buffer(id: u32) -> Self {
+        Self {
+            version: READBACK_VERSION,
+            kind: readback_kind::MAP_BUFFER,
+            id,
+            offset: 0,
+            len: 0,
+        }
+    }
+
+    pub fn unmap_buffer(id: u32) -> Self {
+        Self {
+            version: READBACK_VERSION,
+            kind: readback_kind::UNMAP_BUFFER,
+            id,
+            offset: 0,
+            len: 0,
+        }
+    }
+
     /// Serialize to the fixed little-endian request bytes.
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
         let mut b = [0u8; Self::SIZE];
@@ -173,6 +197,17 @@ mod tests {
             (import.id, import.offset, import.len),
             (11, 0x1234_5678_9abc_def0, 0)
         );
+
+        for request in [
+            ReadbackRequest::map_buffer(11),
+            ReadbackRequest::unmap_buffer(11),
+        ] {
+            assert_eq!(
+                ReadbackRequest::from_bytes(&request.to_bytes()),
+                Some(request)
+            );
+            assert_eq!((request.id, request.offset, request.len), (11, 0, 0));
+        }
     }
 
     #[test]

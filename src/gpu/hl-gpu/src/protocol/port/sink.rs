@@ -76,6 +76,16 @@ pub trait CommandSink {
         let _ = (id, export);
         Err(GpuError::Unsupported("command sink: import_buffer"))
     }
+
+    fn map_buffer(&mut self, id: BufferId) -> Result<()> {
+        let _ = id;
+        Err(GpuError::Unsupported("command sink: map_buffer"))
+    }
+
+    fn unmap_buffer(&mut self, id: BufferId) -> Result<()> {
+        let _ = id;
+        Err(GpuError::Unsupported("command sink: unmap_buffer"))
+    }
 }
 
 /// A recording [`CommandSink`] test double: it negotiates against a fixed [`Capabilities`] and records

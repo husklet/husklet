@@ -173,6 +173,12 @@ impl GpuExecutor for WgpuExecutor {
     ) -> Result<hl_gpu::runtime::model::resources::Native> {
         self.import_buffer_native(resource, bytes)
     }
+
+    fn sharing_barrier(&mut self) -> Result<()> {
+        self.flush_writes();
+        self.wait_for_completion();
+        Ok(())
+    }
 }
 
 impl WgpuExecutor {

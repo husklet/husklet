@@ -24,7 +24,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 #[cfg(all(debug_assertions, not(doc)))]
 use std::cell::Cell;
@@ -170,6 +170,7 @@ impl Entry {
 pub struct Exports {
     inner: Arc<Mutex<Registry>>,
     changed: Arc<Condvar>,
+    operation: Arc<Mutex<()>>,
 }
 
 /// One-shot transaction interruption points used to prove release failure atomicity.
@@ -260,7 +261,15 @@ impl Default for Exports {
         Self {
             inner: Arc::new(Mutex::new(Registry::default())),
             changed: Arc::new(Condvar::new()),
+            operation: Arc::new(Mutex::new(())),
         }
+    }
+}
+
+impl Exports {
+    /// Serialize command execution with map-state transitions across every session sharing this registry.
+    pub(crate) fn operation(&self) -> MutexGuard<'_, ()> {
+        self.operation.lock().unwrap_or_else(|error| error.into_inner())
     }
 }
 

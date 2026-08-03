@@ -47,6 +47,8 @@ pub fn submit(
     frame_bytes: usize,
     batch: &[Cmd],
 ) -> Result<Vec<Presentation>> {
+    let sharing_exports = session.exports.clone();
+    let _sharing_operation = sharing_exports.as_ref().map(Exports::operation);
     let account = session.account.clone();
     let account_operation = account.operation();
     service::validate::validate(&session.limits, frame_bytes, batch)?;

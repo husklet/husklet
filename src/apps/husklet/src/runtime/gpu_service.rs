@@ -330,6 +330,24 @@ impl ConnectionHandler for Connection {
         )
         .ok()
     }
+
+    fn map_buffer(&mut self, request: &ReadbackRequest) -> Option<()> {
+        hl_gpu::runtime::service::dispatch::map_buffer(
+            &mut self.session,
+            &mut self.executor,
+            BufferId(request.id),
+        )
+        .ok()
+    }
+
+    fn unmap_buffer(&mut self, request: &ReadbackRequest) -> Option<()> {
+        hl_gpu::runtime::service::dispatch::unmap_buffer(
+            &mut self.session,
+            &mut self.executor,
+            BufferId(request.id),
+        )
+        .ok()
+    }
 }
 
 /// A ready GPU protocol endpoint owned by the application composition root.

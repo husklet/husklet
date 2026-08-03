@@ -99,6 +99,16 @@ pub trait ConnectionHandler {
         let _ = req;
         None
     }
+
+    fn map_buffer(&mut self, req: &ReadbackRequest) -> Option<()> {
+        let _ = req;
+        None
+    }
+
+    fn unmap_buffer(&mut self, req: &ReadbackRequest) -> Option<()> {
+        let _ = req;
+        None
+    }
 }
 
 /// Adapts a bare submit closure into a [`ConnectionHandler`] whose readback half always fails — the
@@ -204,6 +214,9 @@ fn serve_loop<H: ConnectionHandler>(
                     readback_kind::FENCE_WAIT => true,
                     readback_kind::EXPORT_BUFFER => req.offset == 0 && req.len == 0,
                     readback_kind::IMPORT_BUFFER => req.len == 0,
+                    readback_kind::MAP_BUFFER | readback_kind::UNMAP_BUFFER => {
+                        req.offset == 0 && req.len == 0
+                    }
                     _ => false,
                 })
                 .and_then(|req| {
@@ -220,6 +233,8 @@ fn serve_loop<H: ConnectionHandler>(
                     readback_kind::IMPORT_BUFFER => handler
                         .import_buffer(&req)
                         .map(|bytes| bytes.to_le_bytes().to_vec()),
+                    readback_kind::MAP_BUFFER => handler.map_buffer(&req).map(|()| Vec::new()),
+                    readback_kind::UNMAP_BUFFER => handler.unmap_buffer(&req).map(|()| Vec::new()),
                     _ => None,
                 }) {
                     Ok(bytes) => bytes,

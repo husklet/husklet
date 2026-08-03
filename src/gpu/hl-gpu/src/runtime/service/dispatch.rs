@@ -258,6 +258,42 @@ pub fn import_buffer(
     }
 }
 
+fn buffer_export(session: &Session, id: BufferId) -> Result<ExportId> {
+    session
+        .buffer_sharing
+        .get(&id.0)
+        .map(|sharing| match sharing {
+            BufferSharing::Owner(export) | BufferSharing::Importer(export) => *export,
+        })
+        .ok_or(crate::GpuError::Invalid("buffer is not shared"))
+}
+
+pub fn map_buffer(session: &mut Session, exec: &mut dyn GpuExecutor, id: BufferId) -> Result<()> {
+    let exports = session
+        .exports
+        .clone()
+        .ok_or(crate::GpuError::Unsupported("sharing registry"))?;
+    let _operation = exports.operation();
+    let export = buffer_export(session, id)?;
+    exports.map(session.id, export)?;
+    if let Err(error) = exec.sharing_barrier() {
+        let _ = exports.unmap(session.id, export);
+        return Err(error);
+    }
+    Ok(())
+}
+
+pub fn unmap_buffer(session: &mut Session, exec: &mut dyn GpuExecutor, id: BufferId) -> Result<()> {
+    let exports = session
+        .exports
+        .clone()
+        .ok_or(crate::GpuError::Unsupported("sharing registry"))?;
+    let _operation = exports.operation();
+    let export = buffer_export(session, id)?;
+    exec.sharing_barrier()?;
+    exports.unmap(session.id, export)
+}
+
 /// Service the `CommandSink::wait` path: block on the executor until fence `fence` reaches `value`. Not
 /// part of a command batch — an out-of-band wait the transport layer forwards.
 pub fn wait(
@@ -280,6 +316,7 @@ mod sharing_atomicity_tests {
     struct LyingExporter;
     struct FailingImporter;
     struct PanickingImporter;
+    struct FailingBarrier;
 
     impl GpuExecutor for LyingExporter {
         fn capabilities(&self) -> Capabilities {
@@ -334,6 +371,58 @@ mod sharing_atomicity_tests {
         ) -> Result<crate::runtime::model::resources::Native> {
             panic!("injected native import panic")
         }
+    }
+
+    impl GpuExecutor for FailingBarrier {
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::permissive_fixture("failing barrier")
+        }
+        fn execute(&mut self, _: &mut SessionResources, _: &[Cmd]) -> Result<Vec<Presentation>> {
+            Ok(Vec::new())
+        }
+        fn wait(&mut self, _: &mut SessionResources, _: FenceId, _: u64) -> Result<()> {
+            Ok(())
+        }
+        fn sharing_barrier(&mut self) -> Result<()> {
+            Err(crate::GpuError::Unsupported(
+                "injected sharing barrier failure",
+            ))
+        }
+    }
+
+    #[test]
+    fn failed_map_barrier_rolls_back_the_exclusive_claim() {
+        let exports = Exports::new();
+        let global = GlobalLedger::unbounded();
+        let mut exec = FailingBarrier;
+        let mut session = Session::new(
+            Limits::from_capabilities(exec.capabilities()),
+            global.clone(),
+            Box::new(FakeClock::new(0)),
+        )
+        .with_exports(exports.clone());
+        let export = exports
+            .export_accounted(
+                crate::runtime::model::sharing::ResourceKey {
+                    session: session.id,
+                    kind: BufferId::KIND,
+                    id: 7,
+                },
+                Arc::new(17u32),
+                4,
+                session.account.clone(),
+                &global,
+            )
+            .unwrap();
+        session
+            .buffer_sharing
+            .insert(7, BufferSharing::Owner(export));
+
+        assert!(map_buffer(&mut session, &mut exec, BufferId(7)).is_err());
+        exports
+            .map(session.id, export)
+            .expect("failed completion barrier must restore the unmapped state");
+        exports.unmap(session.id, export).unwrap();
     }
 
     #[test]

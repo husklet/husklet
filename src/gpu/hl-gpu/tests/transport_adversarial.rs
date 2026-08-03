@@ -432,6 +432,11 @@ impl ConnectionHandler for SharingRequestHost {
         self.calls += 1;
         Some(hl_gpu::runtime::model::sharing::ExportId(77))
     }
+
+    fn map_buffer(&mut self, _: &ReadbackRequest) -> Option<()> {
+        self.calls += 1;
+        Some(())
+    }
 }
 
 #[test]
@@ -465,6 +470,9 @@ fn malformed_or_unknown_sharing_requests_never_reach_the_handler() {
     let mut unknown_kind = ReadbackRequest::export_buffer(1);
     unknown_kind.kind = 0xff;
     requests.push(unknown_kind);
+    let mut malformed_map = ReadbackRequest::map_buffer(1);
+    malformed_map.offset = 1;
+    requests.push(malformed_map);
 
     for request in requests {
         Connection::new(&client)
@@ -483,11 +491,18 @@ fn malformed_or_unknown_sharing_requests_never_reach_the_handler() {
         Connection::new(&client).read_readback_response(8).unwrap(),
         77u64.to_le_bytes()
     );
+    Connection::new(&client)
+        .write_readback_request(&ReadbackRequest::map_buffer(1))
+        .unwrap();
+    assert_eq!(
+        Connection::new(&client).read_readback_response(0).unwrap(),
+        Vec::<u8>::new()
+    );
     drop(client);
     assert_eq!(
         server.join().unwrap(),
-        1,
-        "only the valid request was dispatched"
+        2,
+        "only the two valid requests were dispatched"
     );
 }
 

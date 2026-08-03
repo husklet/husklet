@@ -120,6 +120,11 @@ pub trait GpuExecutor {
         let _ = (resource, bytes);
         Err(GpuError::Unsupported("executor: import_buffer"))
     }
+
+    /// Flush and complete all device work submitted before this call.
+    fn sharing_barrier(&mut self) -> Result<()> {
+        Err(GpuError::Unsupported("executor: sharing_barrier"))
+    }
 }
 
 #[cfg(test)]

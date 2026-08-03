@@ -89,6 +89,24 @@ impl ConnectionHandler for Host {
         )
         .ok()
     }
+
+    fn map_buffer(&mut self, request: &ReadbackRequest) -> Option<()> {
+        hl_gpu::runtime::service::dispatch::map_buffer(
+            &mut self.session,
+            &mut self.executor,
+            BufferId(request.id),
+        )
+        .ok()
+    }
+
+    fn unmap_buffer(&mut self, request: &ReadbackRequest) -> Option<()> {
+        hl_gpu::runtime::service::dispatch::unmap_buffer(
+            &mut self.session,
+            &mut self.executor,
+            BufferId(request.id),
+        )
+        .ok()
+    }
 }
 
 #[test]
@@ -169,6 +187,35 @@ fn two_real_connections_alias_one_buffer_and_refuse_bad_identities() {
         Err(GpuError::Transport(TransportError::Rejected { .. }))
     ));
 
+    owner
+        .submit(&[Cmd::WriteBuffer {
+            id: 1,
+            offset: 0,
+            data: b"before-mapped".to_vec(),
+        }])
+        .unwrap();
+    importer.map_buffer(BufferId(2)).unwrap();
+    assert_eq!(
+        importer.read_buffer(BufferId(2), 0, 13).unwrap(),
+        b"before-mapped"
+    );
+    assert!(matches!(
+        importer.map_buffer(BufferId(2)),
+        Err(GpuError::Transport(TransportError::Rejected { .. }))
+    ));
+    assert!(matches!(
+        owner.unmap_buffer(BufferId(1)),
+        Err(GpuError::Transport(TransportError::Rejected { .. }))
+    ));
+    assert!(matches!(
+        owner.submit(&[Cmd::WriteBuffer {
+            id: 1,
+            offset: 0,
+            data: b"must-refuse!".to_vec(),
+        }]),
+        Err(GpuError::Transport(TransportError::Rejected { .. }))
+    ));
+
     importer
         .submit(&[Cmd::WriteBuffer {
             id: 2,
@@ -176,6 +223,7 @@ fn two_real_connections_alias_one_buffer_and_refuse_bad_identities() {
             data: b"alias-visible".to_vec(),
         }])
         .unwrap();
+    importer.unmap_buffer(BufferId(2)).unwrap();
     assert_eq!(
         owner.read_buffer(BufferId(1), 0, 13).unwrap(),
         b"alias-visible"

@@ -590,4 +590,22 @@ impl CommandSink for RemoteCommandSink {
             )
         })?))
     }
+
+    fn map_buffer(&mut self, id: BufferId) -> Result<()> {
+        self.request(
+            &ReadbackRequest::map_buffer(id.raw()),
+            0,
+            self.config.response_timeout(),
+        )?;
+        Ok(())
+    }
+
+    fn unmap_buffer(&mut self, id: BufferId) -> Result<()> {
+        self.request(
+            &ReadbackRequest::unmap_buffer(id.raw()),
+            0,
+            self.config.response_timeout(),
+        )?;
+        Ok(())
+    }
 }

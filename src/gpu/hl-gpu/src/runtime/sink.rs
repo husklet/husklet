@@ -182,6 +182,16 @@ impl<E: GpuExecutor> CommandSink for InProcessCommandSink<E> {
         self.ensure_open()?;
         dispatch::import_buffer(&mut self.session, &self.exec, id, export)
     }
+
+    fn map_buffer(&mut self, id: BufferId) -> Result<()> {
+        self.ensure_open()?;
+        dispatch::map_buffer(&mut self.session, &mut self.exec, id)
+    }
+
+    fn unmap_buffer(&mut self, id: BufferId) -> Result<()> {
+        self.ensure_open()?;
+        dispatch::unmap_buffer(&mut self.session, &mut self.exec, id)
+    }
 }
 
 impl InProcessCommandSink<CpuExecutor> {
