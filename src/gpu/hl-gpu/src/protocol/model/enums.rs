@@ -524,7 +524,16 @@ u32_enum!(
 
 u32_enum!(
     /// Sampler address (wrap) mode.
-    AddressMode { ClampToEdge = 0, Repeat = 1, MirrorRepeat = 2, MirrorClampToEdge = 3 } "AddressMode"
+    AddressMode { ClampToEdge = 0, Repeat = 1, MirrorRepeat = 2, MirrorClampToEdge = 3, ClampToBorder = 4 } "AddressMode"
+);
+
+u32_enum!(
+    /// Vulkan's six core `VkBorderColor` values, preserving float-vs-integer interpretation.
+    BorderColor {
+        FloatTransparentBlack = 0, IntTransparentBlack = 1,
+        FloatOpaqueBlack = 2, IntOpaqueBlack = 3,
+        FloatOpaqueWhite = 4, IntOpaqueWhite = 5
+    } "BorderColor"
 );
 
 #[cfg(test)]
@@ -538,7 +547,7 @@ mod address_mode_tests {
         assert_eq!(AddressMode::MirrorRepeat.to_u32(), 2);
         assert_eq!(AddressMode::MirrorClampToEdge.to_u32(), 3);
         assert_eq!(AddressMode::from_u32(3).unwrap(), AddressMode::MirrorClampToEdge);
-        assert!(AddressMode::from_u32(4).is_err());
+        assert_eq!(AddressMode::from_u32(4).unwrap(), AddressMode::ClampToBorder);
     }
 }
 

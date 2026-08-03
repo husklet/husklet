@@ -123,7 +123,12 @@ fn every_sampler_enum_combination_round_trips() {
             AddressMode::ClampToEdge,
             AddressMode::Repeat,
             AddressMode::MirrorRepeat,
+            AddressMode::MirrorClampToEdge,
+            AddressMode::ClampToBorder,
         ] {
+            for border_color in [BorderColor::FloatTransparentBlack, BorderColor::IntTransparentBlack,
+                BorderColor::FloatOpaqueBlack, BorderColor::IntOpaqueBlack,
+                BorderColor::FloatOpaqueWhite, BorderColor::IntOpaqueWhite] {
             rt(vec![Cmd::CreateSampler(
                 1,
                 SamplerDesc {
@@ -133,9 +138,11 @@ fn every_sampler_enum_combination_round_trips() {
                     address_u: addr,
                     address_v: addr,
                     address_w: addr,
+                    border_color,
                     ..SamplerDesc::default()
                 },
             )]);
+            }
         }
     }
 }

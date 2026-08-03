@@ -532,6 +532,7 @@ impl Pipeline {
                 address_u: o.ir_wrap_s(),
                 address_v: o.ir_wrap_t(),
                 address_w: o.ir_wrap_r(),
+                border_color: hl_gpu::protocol::model::enums::BorderColor::FloatTransparentBlack,
                 // This backend currently exposes mip levels from base level zero. Negative GL clamps are
                 // therefore observationally identical to zero and are normalized before crossing into
                 // WebGPU, whose sampler contract rejects negative clamps.
@@ -546,6 +547,7 @@ impl Pipeline {
                 address_u: t.ir_wrap_s(),
                 address_v: t.ir_wrap_t(),
                 address_w: AddressMode::Repeat,
+                border_color: hl_gpu::protocol::model::enums::BorderColor::FloatTransparentBlack,
                 lod_min_clamp: 0.0,
                 lod_max_clamp: 32.0,
                 compare: None,

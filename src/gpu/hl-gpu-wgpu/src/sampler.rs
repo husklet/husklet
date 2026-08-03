@@ -49,11 +49,6 @@ impl WgpuExecutor {
         id: u32,
         d: &SamplerDesc,
     ) -> Result<()> {
-        if d.lod_min_clamp < 0.0 || d.lod_max_clamp < 0.0 {
-            return Err(GpuError::Invalid(
-                "wgpu: sampler LOD clamps must be non-negative",
-            ));
-        }
         if d.lod_min_clamp > d.lod_max_clamp {
             return Err(GpuError::Invalid(
                 "wgpu: sampler minimum LOD exceeds maximum LOD",
@@ -80,18 +75,21 @@ impl WgpuExecutor {
                 AddressMode::Repeat => wgpu::AddressMode::Repeat,
                 AddressMode::MirrorRepeat => wgpu::AddressMode::MirrorRepeat,
                 AddressMode::MirrorClampToEdge => wgpu::AddressMode::ClampToEdge,
+                AddressMode::ClampToBorder => wgpu::AddressMode::ClampToBorder,
             },
             address_mode_v: match d.address_v {
                 AddressMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
                 AddressMode::Repeat => wgpu::AddressMode::Repeat,
                 AddressMode::MirrorRepeat => wgpu::AddressMode::MirrorRepeat,
                 AddressMode::MirrorClampToEdge => wgpu::AddressMode::ClampToEdge,
+                AddressMode::ClampToBorder => wgpu::AddressMode::ClampToBorder,
             },
             address_mode_w: match d.address_w {
                 AddressMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
                 AddressMode::Repeat => wgpu::AddressMode::Repeat,
                 AddressMode::MirrorRepeat => wgpu::AddressMode::MirrorRepeat,
                 AddressMode::MirrorClampToEdge => wgpu::AddressMode::ClampToEdge,
+                AddressMode::ClampToBorder => wgpu::AddressMode::ClampToBorder,
             },
             mag_filter: match d.mag_filter {
                 Filter::Nearest => wgpu::FilterMode::Nearest,
@@ -108,9 +106,17 @@ impl WgpuExecutor {
                 Filter::Linear => wgpu::FilterMode::Linear,
                 Filter::Cubic => wgpu::FilterMode::Linear,
             },
-            lod_min_clamp: d.lod_min_clamp,
-            lod_max_clamp: d.lod_max_clamp,
+            lod_min_clamp: d.lod_min_clamp.max(0.0),
+            lod_max_clamp: d.lod_max_clamp.max(0.0),
             compare,
+            border_color: Some(match d.border_color {
+                hl_gpu::protocol::model::enums::BorderColor::FloatTransparentBlack
+                | hl_gpu::protocol::model::enums::BorderColor::IntTransparentBlack => wgpu::SamplerBorderColor::TransparentBlack,
+                hl_gpu::protocol::model::enums::BorderColor::FloatOpaqueBlack
+                | hl_gpu::protocol::model::enums::BorderColor::IntOpaqueBlack => wgpu::SamplerBorderColor::OpaqueBlack,
+                hl_gpu::protocol::model::enums::BorderColor::FloatOpaqueWhite
+                | hl_gpu::protocol::model::enums::BorderColor::IntOpaqueWhite => wgpu::SamplerBorderColor::OpaqueWhite,
+            }),
             ..Default::default()
         });
         res.samplers.insert(

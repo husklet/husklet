@@ -118,6 +118,8 @@ impl Gpu {
                 | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
                 | wgpu::Features::TEXTURE_COMPRESSION_BC
                 | wgpu::Features::TEXTURE_COMPRESSION_ETC2
+                | wgpu::Features::ADDRESS_MODE_CLAMP_TO_ZERO
+                | wgpu::Features::ADDRESS_MODE_CLAMP_TO_BORDER
                 | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING);
 
         let (device, queue) = pollster::block_on(adapter.request_device(

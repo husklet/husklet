@@ -43,6 +43,7 @@ impl Encoder {
         e.u32(s.address_u.to_u32());
         e.u32(s.address_v.to_u32());
         e.u32(s.address_w.to_u32());
+        e.u32(s.border_color.to_u32());
         e.f32(s.lod_min_clamp);
         e.f32(s.lod_max_clamp);
         match s.compare {

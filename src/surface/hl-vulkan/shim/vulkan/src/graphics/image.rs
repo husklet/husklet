@@ -386,7 +386,7 @@ pub extern "C" fn vkCreateSampler(
         return VK_ERROR_INITIALIZATION_FAILED;
     };
     let h = ShimState::with_sink(|dev, sink| {
-        create::create_sampler(
+        create::create_sampler_full(
             dev,
             sink,
             ci.min_filter as u32,
@@ -397,6 +397,8 @@ pub extern "C" fn vkCreateSampler(
                 ci.address_mode_v as u32,
                 ci.address_mode_w as u32,
             ],
+            [ci.min_lod, ci.max_lod],
+            ci.border_color as u32,
             (ci.compare_enable != 0).then_some(ci.compare_op as u32),
         )
     });

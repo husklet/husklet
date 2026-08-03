@@ -211,6 +211,7 @@ fn representative_stream() -> Vec<Cmd> {
                 address_u: AddressMode::Repeat,
                 address_v: AddressMode::ClampToEdge,
                 address_w: AddressMode::MirrorRepeat,
+                border_color: BorderColor::IntOpaqueWhite,
                 lod_min_clamp: 1.25,
                 lod_max_clamp: 9.5,
                 compare: Some(compare::GREATER_EQUAL),

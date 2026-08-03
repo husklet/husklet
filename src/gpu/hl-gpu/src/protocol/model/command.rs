@@ -360,7 +360,9 @@ pub enum Cmd {
 // v17 adds the UniformTexelBuffer and StorageTexelBuffer pipeline-binding kinds (stable tags 6/7) and
 // BindResource::TexelBuffer (stable tag 6 with its formatted byte-range payload). A v16 decoder would
 // reject or mis-frame those descriptors, so mixed v16/v17 peers must fail the exact-version handshake.
-pub const WIRE_VERSION: u32 = 17;
+// v18 appends the typed Vulkan border color to `SamplerDesc`; a v17 decoder would mis-frame the next
+// command, so peers must negotiate the new exact version.
+pub const WIRE_VERSION: u32 = 18;
 
 // tag constants (stable wire) --------------------------------------------------------------------
 /// Top-level [`Cmd`] tag numbers.

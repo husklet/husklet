@@ -173,6 +173,17 @@ fn create_sampler_preserves_vk_filter_cubic_ext() {
 }
 
 #[test]
+fn create_sampler_preserves_border_color_and_lod_clamps() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    create::create_sampler_full(&mut d, &mut sink, 1, 1, 1, [3, 3, 3], [-2.5, 7.25], 5, None);
+    let Cmd::CreateSampler(_, desc) = &sink.batches[0][0] else { panic!("expected sampler") };
+    assert_eq!(desc.address_u, hl_gpu::protocol::model::enums::AddressMode::ClampToBorder);
+    assert_eq!(desc.border_color, hl_gpu::protocol::model::enums::BorderColor::IntOpaqueWhite);
+    assert_eq!([desc.lod_min_clamp, desc.lod_max_clamp], [-2.5, 7.25]);
+}
+
+#[test]
 fn image_sampler_and_fence_destruction_release_ir_objects_once() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();

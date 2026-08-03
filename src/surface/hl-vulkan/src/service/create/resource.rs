@@ -509,13 +509,15 @@ pub fn destroy_image(dev: &mut Device, sink: &mut dyn CommandSink, image: VkImag
 
 /// `vkCreateSampler` — translate the filter/address state and submit [`Cmd::CreateSampler`]. The `vk_*`
 /// arguments are raw Vulkan enum values (`VkFilter`, `VkSamplerMipmapMode`, `VkSamplerAddressMode`).
-pub fn create_sampler(
+pub fn create_sampler_full(
     dev: &mut Device,
     sink: &mut dyn CommandSink,
     vk_min_filter: u32,
     vk_mag_filter: u32,
     vk_mipmap_mode: u32,
     vk_address_uvw: [u32; 3],
+    vk_lod: [f32; 2],
+    vk_border_color: u32,
     vk_compare: Option<u32>,
 ) -> VkSampler {
     let desc = SamplerDesc {
@@ -527,6 +529,10 @@ pub fn create_sampler(
         address_w: SamplerAddress::from_vk(vk_address_uvw[2]),
         // VkCompareOp deliberately uses the same stable 0..=7 numbering as the neutral vocabulary.
         // `None` creates an ordinary sampler; every enabled comparison creates a comparison sampler.
+        lod_min_clamp: vk_lod[0],
+        lod_max_clamp: vk_lod[1],
+        border_color: hl_gpu::protocol::model::enums::BorderColor::from_u32(vk_border_color)
+            .unwrap_or(hl_gpu::protocol::model::enums::BorderColor::FloatTransparentBlack),
         compare: vk_compare,
         ..SamplerDesc::default()
     };
@@ -536,6 +542,16 @@ pub fn create_sampler(
     let _ = sink.submit(&[Cmd::CreateSampler(ir_id, desc)]);
     dev.samplers.insert(handle, SamplerRec { ir_id });
     handle
+}
+
+pub fn create_sampler(
+    dev: &mut Device, sink: &mut dyn CommandSink, vk_min_filter: u32, vk_mag_filter: u32,
+    vk_mipmap_mode: u32, vk_address_uvw: [u32; 3], vk_compare: Option<u32>,
+) -> VkSampler {
+    create_sampler_full(
+        dev, sink, vk_min_filter, vk_mag_filter, vk_mipmap_mode, vk_address_uvw,
+        [0.0, 32.0], 0, vk_compare,
+    )
 }
 
 /// `vkDestroySampler` — release the backing hl-GPU sampler exactly once.
@@ -570,7 +586,8 @@ impl SamplerAddress {
             0 => AddressMode::Repeat,           // REPEAT
             1 => AddressMode::MirrorRepeat,
             4 => AddressMode::MirrorClampToEdge,
-            _ => AddressMode::ClampToEdge,      // CLAMP_TO_EDGE / CLAMP_TO_BORDER
+            3 => AddressMode::ClampToBorder,
+            _ => AddressMode::ClampToEdge,
         }
     }
 }

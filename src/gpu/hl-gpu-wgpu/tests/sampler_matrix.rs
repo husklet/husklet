@@ -145,6 +145,8 @@ fn nearest_texel(mode: AddressMode, u: f32, width: u32) -> usize {
                 t
             }
         }
+        AddressMode::MirrorClampToEdge => u.abs().clamp(0.0, 1.0),
+        AddressMode::ClampToBorder => u,
     };
     ((uu * width as f32).floor() as i64).clamp(0, width as i64 - 1) as usize
 }

@@ -68,6 +68,7 @@ pub struct SamplerDesc {
     pub address_u: AddressMode,
     pub address_v: AddressMode,
     pub address_w: AddressMode,
+    pub border_color: super::enums::BorderColor,
     pub lod_min_clamp: f32,
     pub lod_max_clamp: f32,
     /// Neutral [`super::enums::compare`] value. `None` creates a non-comparison sampler.
@@ -83,6 +84,7 @@ impl Default for SamplerDesc {
             address_u: AddressMode::ClampToEdge,
             address_v: AddressMode::ClampToEdge,
             address_w: AddressMode::ClampToEdge,
+            border_color: super::enums::BorderColor::FloatTransparentBlack,
             lod_min_clamp: 0.0,
             lod_max_clamp: 32.0,
             compare: None,

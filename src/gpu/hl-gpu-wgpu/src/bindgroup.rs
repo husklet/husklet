@@ -12,7 +12,7 @@ use hl_gpu::{GpuError, Result};
 use crate::{buffer, texture, WgpuExecutor};
 use wgpu::util::DeviceExt;
 
-const SAMPLER_METADATA_WORDS: usize = 8;
+const SAMPLER_METADATA_WORDS: usize = 9;
 
 fn encode_sampler_desc(desc: &hl_gpu::protocol::model::descriptor::SamplerDesc) -> [u32; SAMPLER_METADATA_WORDS] {
     use hl_gpu::protocol::model::enums::{AddressMode, Filter};
@@ -21,6 +21,7 @@ fn encode_sampler_desc(desc: &hl_gpu::protocol::model::descriptor::SamplerDesc) 
         AddressMode::Repeat => 1,
         AddressMode::MirrorRepeat => 2,
         AddressMode::MirrorClampToEdge => 3,
+        AddressMode::ClampToBorder => 4,
     };
     let filter = |mode| match mode {
         Filter::Nearest => 0,
@@ -30,7 +31,7 @@ fn encode_sampler_desc(desc: &hl_gpu::protocol::model::descriptor::SamplerDesc) 
     [
         filter(desc.min_filter), filter(desc.mag_filter), filter(desc.mip_filter),
         address(desc.address_u), address(desc.address_v), address(desc.address_w),
-        desc.lod_min_clamp.to_bits(), desc.lod_max_clamp.to_bits(),
+        desc.border_color.to_u32(), desc.lod_min_clamp.to_bits(), desc.lod_max_clamp.to_bits(),
     ]
 }
 
@@ -84,7 +85,7 @@ mod sampler_metadata_tests {
             lod_max_clamp: 7.5,
             ..SamplerDesc::default()
         };
-        assert_eq!(encode_sampler_desc(&desc), [2, 1, 0, 1, 2, 0, 1.25f32.to_bits(), 7.5f32.to_bits()]);
+        assert_eq!(encode_sampler_desc(&desc), [2, 1, 0, 1, 2, 0, 0, 1.25f32.to_bits(), 7.5f32.to_bits()]);
     }
 }
 

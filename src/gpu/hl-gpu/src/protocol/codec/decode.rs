@@ -53,6 +53,7 @@ impl<'a> Decoder<'a> {
             address_u: AddressMode::from_u32(d.u32()?)?,
             address_v: AddressMode::from_u32(d.u32()?)?,
             address_w: AddressMode::from_u32(d.u32()?)?,
+            border_color: BorderColor::from_u32(d.u32()?)?,
             lod_min_clamp: d.f32_finite("sampler lod_min_clamp")?,
             lod_max_clamp: d.f32_finite("sampler lod_max_clamp")?,
             compare: if d.bool()? { Some(d.u32()?) } else { None },

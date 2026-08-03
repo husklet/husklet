@@ -265,3 +265,14 @@ fn mirror_clamp_reflects_once_for_native_and_cubic_filters() {
     assert!(near(nearest, B), "mirror-clamp -0.75 must reflect to right texel: {nearest:?}");
     assert_eq!(cubic_negative, cubic_positive, "cubic samples must be symmetric across the mirror edge");
 }
+
+#[test]
+fn clamp_to_border_blends_native_edges_and_cubic_taps() {
+    let mut exec = WgpuExecutor::new(DeviceConfig::default()).unwrap();
+    assert_eq!(tap_address(&mut exec, Filter::Nearest, AddressMode::ClampToBorder, -1.0), [0; 4]);
+    let edge = tap_address(&mut exec, Filter::Linear, AddressMode::ClampToBorder, 0.0);
+    for (got, expected) in edge.into_iter().zip([100, 30, 20, 128]) {
+        assert!((got as i16 - expected).abs() <= 1, "edge={edge:?}");
+    }
+    assert_eq!(tap_address(&mut exec, Filter::Cubic, AddressMode::ClampToBorder, -0.25), [0; 4]);
+}
