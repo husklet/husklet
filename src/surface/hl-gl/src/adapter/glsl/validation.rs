@@ -1240,7 +1240,11 @@ pub fn invalid_scope_semantics(source: &str) -> Option<String> {
     for (at, token) in source_tokens.iter().enumerate() {
         if !declared_names.contains(token.as_str())
             || variables.iter().any(|variable| variable.declaration == at)
+            || variables
+                .iter()
+                .any(|variable| variable.declaration == at.saturating_add(1))
             || parameter_name_indices.contains(&at)
+            || structs.iter().any(|(_, declaration)| *declaration == at)
             || at > 0 && source_tokens[at - 1] == "."
             || source_tokens.get(at + 1).map(String::as_str) == Some("(")
             || struct_ranges

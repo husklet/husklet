@@ -590,3 +590,16 @@ fn legal_global_storage_and_invariance_declarations_remain_accepted() {
         );
     }
 }
+
+#[test]
+fn deqp_struct_type_shadowing_compiles() {
+    let mut context = GlContext::new();
+    for source in [
+        "precision mediump float; bool isOk(int a,int b){return a==b;} varying float v_in0; uniform int ref_out0; int out0; struct S{int val;}; void main(){int in0=int(v_in0*1.0025); int S=S(in0).val; out0=S; bool RES=isOk(out0,ref_out0); gl_FragColor=vec4(RES);}",
+        "precision mediump float; struct S{int val;}; void main(){S S=S(1); gl_FragColor=vec4(float(S.val));}",
+        "precision mediump float; struct S{int val;}; int func(int S){return S;} void main(){gl_FragColor=vec4(float(func(1)));}",
+    ] {
+        let (status, log) = compile(&mut context, GL_FRAGMENT_SHADER, source);
+        assert_eq!(status, GL_TRUE as i32, "false rejection: {log}\n{source}");
+    }
+}
