@@ -116,7 +116,7 @@ pub struct GlContext {
     /// generation) and re-referenced by its stable IR id on every later draw and frame. Without this a
     /// real toolkit frame (GskGL binds one glyph/mask atlas across hundreds of draws) re-uploads the whole
     /// atlas plane per draw — gigabytes of redundant `WriteBuffer` that blow the negotiated frame cap.
-    tex_ir_cache: HashMap<u32, (u32, (u64, u64))>,
+    tex_ir_cache: HashMap<u32, (u32, (u64, u64, bool))>,
     /// Resident CPU snapshots of imported linear-image storage, keyed by
     /// `(storage, revision, width, height, format)`.
     shared_tex_ir_cache: HashMap<(u64, u64, u32, u32, u32), SharedTextureResidency>,

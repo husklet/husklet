@@ -128,7 +128,12 @@ pub unsafe extern "C" fn hl_gl_export_texture(name: u32, export_out: *mut u64) -
         if texture.w <= 0 || texture.h <= 0 { return Err(hl_gpu::GpuError::Invalid("GL texture has no storage")); }
         let (texture_ir, upload) = match group.gl.resident_fbo_target_tex(name, texture.gen) {
             Some(texture_ir) => (texture_ir, false),
-            None => group.gl.sampled_texture_ir(name, texture.sampled_generation())?,
+            None => {
+                let generation = texture.sampled_generation();
+                group
+                    .gl
+                    .sampled_texture_ir(name, (generation.0, generation.1, false))?
+            }
         };
         if upload {
             let stage = group.gl.alloc_buffer_ir()?;

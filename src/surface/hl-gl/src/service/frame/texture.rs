@@ -339,6 +339,10 @@ pub(super) fn lower_textures(
                 .get(gl_tex)
                 .is_some_and(|texture| texture.gen == t.gen);
             let upload_format = sampled_format(t.ir_format);
+            let sampler = Pipeline::sampler_desc(&t, &d.samp_objs[unit]);
+            let uses_mipmaps = d.samp_objs[unit]
+                .as_ref()
+                .map_or_else(|| t.uses_mipmaps(), |sampler| sampler.uses_mipmaps());
             let snapshot_key = snapshot.as_ref().map(|_| {
                 let source = t.shared_identity().map_or_else(
                     || SnapshotSource::Pixels {
@@ -360,6 +364,7 @@ pub(super) fn lower_textures(
                 .as_ref()
                 .filter(|_| !shared_advanced)
                 .and_then(|snapshot| snapshot.sampled_ir)
+                .filter(|_| uses_mipmaps == t.uses_mipmaps())
             {
                 Some(texture) => (texture, false, false, "snapshot-sampled"),
                 None if t.shared_residency().is_some() => {
@@ -377,8 +382,11 @@ pub(super) fn lower_textures(
                     (texture, upload, false, "shared-residency")
                 }
                 None if live_generation => {
-                    let (texture, upload) =
-                        ctx.sampled_texture_ir(gl_tex, t.sampled_generation())?;
+                    let generation = t.sampled_generation();
+                    let (texture, upload) = ctx.sampled_texture_ir(
+                        gl_tex,
+                        (generation.0, generation.1, uses_mipmaps),
+                    )?;
                     (texture, upload, false, "live-generation")
                 }
                 None => match snapshot_key.and_then(|key| snapshots.get(&key).copied()) {
@@ -393,13 +401,12 @@ pub(super) fn lower_textures(
                 },
             };
             let _ = arm;
-            let sampler = Pipeline::sampler_desc(&t, &d.samp_objs[unit]);
             let (samp_ir, create_sampler) = ctx.sampler_ir(&sampler)?;
             // The levels the host texture receives, from the EFFECTIVE base downwards — GL's
             // `[BASE_LEVEL, MAX_LEVEL]` window, which re-indexes the pyramid so the base level becomes the
             // host's level 0. Every declared level must be uploaded, so the window and the level count are
             // taken from one place.
-            let levels = t.effective_levels();
+            let levels = t.sampled_levels(uses_mipmaps);
             let mip_levels = levels.len().max(1) as u32;
             let (base_w, base_h, base_data) =
                 levels

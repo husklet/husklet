@@ -268,6 +268,10 @@ impl GlTexture {
         }
     }
 
+    pub fn uses_mipmaps(&self) -> bool {
+        !matches!(self.min_filter, GL_NEAREST | GL_LINEAR)
+    }
+
     /// The neutral S wrap (`gl_shim.c`: ClampToEdge / MirrorRepeat / else Repeat).
     pub fn ir_wrap_s(&self) -> AddressMode {
         Self::address_mode(self.wrap_s)
@@ -351,6 +355,17 @@ impl GlTexture {
         }
         let end = (last + 1).min(all.len());
         all[base..end].to_vec()
+    }
+
+    /// Host levels materialized for the active sampler's minification mode. A non-mipmapped sampler still
+    /// needs its original LOD derivative so the GPU can choose between GL's min and mag filters; collapsing
+    /// the sampler LOD range to zero destroys that choice. Instead expose only the effective base image.
+    pub fn sampled_levels(&self, uses_mipmaps: bool) -> Vec<(i32, i32, Arc<Vec<u8>>)> {
+        let mut levels = self.effective_levels();
+        if !uses_mipmaps {
+            levels.truncate(1);
+        }
+        levels
     }
 
     /// Has this texture received a REAL pixel upload (`glTexImage2D`-with-pixels / `glTexSubImage2D` /
@@ -1244,5 +1259,52 @@ fn transform_rgba(
                 *channel = ((*channel as u32 * 255 + alpha / 2) / alpha).min(255) as u8;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod sampled_level_tests {
+    use super::*;
+
+    fn three_level_texture() -> GlTexture {
+        GlTexture {
+            w: 4,
+            h: 4,
+            data: Arc::new(vec![1; 4 * 4 * 4]),
+            mips: vec![
+                MipLevel {
+                    w: 2,
+                    h: 2,
+                    depth: 1,
+                    data: Arc::new(vec![2; 2 * 2 * 4]),
+                    layers: Vec::new(),
+                },
+                MipLevel {
+                    w: 1,
+                    h: 1,
+                    depth: 1,
+                    data: Arc::new(vec![3; 4]),
+                    layers: Vec::new(),
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn non_mipmapped_sampling_materializes_only_the_base_image() {
+        let levels = three_level_texture().sampled_levels(false);
+        assert_eq!(levels.len(), 1);
+        assert_eq!((levels[0].0, levels[0].1), (4, 4));
+    }
+
+    #[test]
+    fn mipmapped_sampling_keeps_the_complete_pyramid() {
+        let levels = three_level_texture().sampled_levels(true);
+        assert_eq!(levels.iter().map(|(w, h, _)| (*w, *h)).collect::<Vec<_>>(), [
+            (4, 4),
+            (2, 2),
+            (1, 1),
+        ]);
     }
 }

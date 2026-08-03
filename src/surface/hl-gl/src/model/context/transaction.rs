@@ -14,7 +14,7 @@ pub struct FrameState {
     default_placeholder_samp: u32,
     fbo_targets: HashMap<(u32, u64), (u32, u32)>,
     depth_targets: HashMap<DepthTargetKey, u32>,
-    tex_ir_cache: HashMap<u32, (u32, (u64, u64))>,
+    tex_ir_cache: HashMap<u32, (u32, (u64, u64, bool))>,
     shared_tex_ir_cache: HashMap<(u64, u64, u32, u32, u32), SharedTextureResidency>,
     shared_target_cache: HashMap<u64, SharedTargetResidency>,
     buf_ir_cache: HashMap<(u32, u32), (u32, u64)>,

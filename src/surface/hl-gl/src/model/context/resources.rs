@@ -71,7 +71,13 @@ impl GlContext {
             .tex_ir_cache
             .get(&gl_name)
             .and_then(|&(ir, resident_generation)| {
-                (resident_generation == sampled_generation).then_some(ir)
+                (resident_generation
+                    == (
+                        sampled_generation.0,
+                        sampled_generation.1,
+                        texture.uses_mipmaps(),
+                    ))
+                .then_some(ir)
             });
         let fbo_ir = self
             .fbo_targets
@@ -528,7 +534,7 @@ impl GlContext {
     pub fn sampled_texture_ir(
         &mut self,
         gl_name: u32,
-        generation: (u64, u64),
+        generation: (u64, u64, bool),
     ) -> hl_gpu::Result<(u32, bool)> {
         if let Some(&(ir, up_gen)) = self.tex_ir_cache.get(&gl_name) {
             if up_gen == generation {

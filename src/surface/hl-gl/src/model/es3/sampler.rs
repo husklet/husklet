@@ -94,6 +94,10 @@ impl SamplerObj {
         }
     }
 
+    pub fn uses_mipmaps(&self) -> bool {
+        !matches!(self.min_filter as u32, GL_NEAREST | GL_LINEAR)
+    }
+
     /// The neutral S wrap (ClampToEdge / MirrorRepeat / else Repeat).
     pub fn ir_wrap_s(&self) -> AddressMode {
         Self::address_mode(self.wrap_s as u32)
