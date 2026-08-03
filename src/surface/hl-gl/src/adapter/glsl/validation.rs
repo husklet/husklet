@@ -338,6 +338,22 @@ fn parameter(segment: &[String]) -> Option<Parameter> {
     })
 }
 
+fn parameter_qualifier_order_is_valid(segment: &[String]) -> bool {
+    let mut previous = 0u8;
+    for rank in segment.iter().filter_map(|token| match token.as_str() {
+        "const" => Some(1),
+        "in" | "out" | "inout" => Some(2),
+        "lowp" | "mediump" | "highp" => Some(3),
+        _ => None,
+    }) {
+        if rank < previous {
+            return false;
+        }
+        previous = rank;
+    }
+    true
+}
+
 fn parse_functions(source_tokens: &[String]) -> Result<Vec<Function>, String> {
     let mut functions = Vec::new();
     let mut brace_depth = 0usize;
@@ -431,6 +447,12 @@ fn parse_functions(source_tokens: &[String]) -> Result<Vec<Function>, String> {
         {
             let segment = &source_tokens[segment_start..split];
             if !segment.is_empty() && segment != ["void"] {
+                if !parameter_qualifier_order_is_valid(segment) {
+                    return Err(format!(
+                        "'{}' : function parameter qualifiers are out of order",
+                        source_tokens[at]
+                    ));
+                }
                 let parsed = parameter(segment).ok_or_else(|| {
                     format!(
                         "'{}' : every function parameter requires a type and name",

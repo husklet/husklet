@@ -141,6 +141,46 @@ fn valid_function_overloads_prototypes_calls_and_const_reads_remain_accepted() {
 }
 
 #[test]
+fn es2_enforces_parameter_qualifier_grammar_order() {
+    let invalid = [
+        "lowp const in float value",
+        "const lowp in float value",
+        "in const lowp float value",
+        "lowp in const float value",
+        "in lowp const float value",
+        "lowp const float value",
+        "lowp in float value",
+    ];
+    for parameter in invalid {
+        let source = format!("void func({parameter}){{}} void main(){{}}");
+        let mut context = GlContext::new();
+        let (status, log) = compile(&mut context, GL_VERTEX_SHADER, &source);
+        assert_eq!(
+            status, GL_FALSE as i32,
+            "accepted qualifier order: {parameter}"
+        );
+        assert!(log.contains("out of order"), "bad diagnostic: {log}");
+    }
+
+    for parameter in [
+        "const in lowp float value",
+        "out mediump float value",
+        "inout mediump float value",
+        "const lowp float value",
+        "mediump float value",
+        "in lowp float value",
+    ] {
+        let source = format!("void func({parameter}){{}} void main(){{}}");
+        let mut context = GlContext::new();
+        let (status, log) = compile(&mut context, GL_VERTEX_SHADER, &source);
+        assert_eq!(
+            status, GL_TRUE as i32,
+            "rejected valid qualifier order: {log}"
+        );
+    }
+}
+
+#[test]
 fn es2_vector_constructors_require_the_exact_component_count() {
     let mut context = GlContext::new();
     for source_type in ["vec2", "ivec2", "bvec2"] {
