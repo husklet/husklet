@@ -182,9 +182,12 @@ pub struct DrawCall {
     pub stencil_fail_back: u32,
     pub stencil_zfail_back: u32,
     pub stencil_zpass_back: u32,
-    pub stencil_ref: i32,
-    pub stencil_read_mask: u32,
-    pub stencil_write_mask: u32,
+    pub stencil_ref_front: i32,
+    pub stencil_ref_back: i32,
+    pub stencil_read_mask_front: u32,
+    pub stencil_read_mask_back: u32,
+    pub stencil_write_mask_front: u32,
+    pub stencil_write_mask_back: u32,
     /// Face culling: whether `GL_CULL_FACE` is enabled, the culled face, and the front-face winding.
     pub cull_enabled: bool,
     pub cull_face: u32,
@@ -285,7 +288,7 @@ impl DrawCall {
     pub fn stencil_clear_is_partial(&self) -> bool {
         self.is_clear
             && self.clear_mask & crate::model::glconst::GL_STENCIL_BUFFER_BIT != 0
-            && !matches!(self.stencil_write_mask & 0xff, 0 | 0xff)
+            && !matches!(self.stencil_write_mask_front & 0xff, 0 | 0xff)
     }
 
     /// This clear writes something, by any route — a whole plane through a load op, or a subset through
@@ -355,7 +358,7 @@ impl DrawCall {
         }
         let keep = crate::model::glconst::GL_KEEP;
         let stencil = self.stencil
-            && self.stencil_write_mask & 0xff != 0
+            && (self.stencil_write_mask_front | self.stencil_write_mask_back) & 0xff != 0
             && [
                 self.stencil_fail_front,
                 self.stencil_zfail_front,
@@ -373,7 +376,7 @@ impl DrawCall {
     pub fn clears_stencil(&self) -> bool {
         self.is_clear
             && self.clear_mask & crate::model::glconst::GL_STENCIL_BUFFER_BIT != 0
-            && self.stencil_write_mask & 0xff != 0
+            && (self.stencil_write_mask_front | self.stencil_write_mask_back) & 0xff != 0
     }
 }
 
@@ -433,9 +436,12 @@ impl Default for DrawCall {
             stencil_fail_back: crate::model::glconst::GL_KEEP,
             stencil_zfail_back: crate::model::glconst::GL_KEEP,
             stencil_zpass_back: crate::model::glconst::GL_KEEP,
-            stencil_ref: 0,
-            stencil_read_mask: 0xffff_ffff,
-            stencil_write_mask: 0xffff_ffff,
+            stencil_ref_front: 0,
+            stencil_ref_back: 0,
+            stencil_read_mask_front: 0xffff_ffff,
+            stencil_read_mask_back: 0xffff_ffff,
+            stencil_write_mask_front: 0xffff_ffff,
+            stencil_write_mask_back: 0xffff_ffff,
             cull_enabled: false,
             cull_face: crate::model::glconst::GL_BACK,
             front_face: crate::model::glconst::GL_CCW,

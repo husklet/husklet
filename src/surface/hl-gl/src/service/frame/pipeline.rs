@@ -561,6 +561,14 @@ impl Pipeline {
     /// alone governs; the stencil faces are `DISABLED` when the draw does not stencil-test, reproducing the
     /// pure-depth behavior on a `Depth24PlusStencil8` pass.
     pub(super) fn depth_state(format: TextureFormat, d: &DrawCall) -> DepthState {
+        Self::depth_state_for_face(format, d, false)
+    }
+
+    pub(super) fn depth_state_for_face(
+        format: TextureFormat,
+        d: &DrawCall,
+        back_face_masks: bool,
+    ) -> DepthState {
         let (stencil_front, stencil_back, read_mask, write_mask) = if d.stencil {
             (
                 StencilFaceState {
@@ -575,8 +583,16 @@ impl Pipeline {
                     depth_fail_op: Pipeline::stencil_op(d.stencil_zfail_back),
                     pass_op: Pipeline::stencil_op(d.stencil_zpass_back),
                 },
-                d.stencil_read_mask & 0xff,
-                d.stencil_write_mask & 0xff,
+                if back_face_masks {
+                    d.stencil_read_mask_back
+                } else {
+                    d.stencil_read_mask_front
+                } & 0xff,
+                if back_face_masks {
+                    d.stencil_write_mask_back
+                } else {
+                    d.stencil_write_mask_front
+                } & 0xff,
             )
         } else {
             (

@@ -260,22 +260,25 @@ impl GlContext {
 pub fn stencil_func(ctx: &mut GlContext, func: u32, reference: i32, mask: u32) {
     ctx.local.pipeline.stencil_func_front = func;
     ctx.local.pipeline.stencil_func_back = func;
-    ctx.local.pipeline.stencil_ref = reference;
-    ctx.local.pipeline.stencil_read_mask = mask;
+    ctx.local.pipeline.stencil_ref_front = reference;
+    ctx.local.pipeline.stencil_ref_back = reference;
+    ctx.local.pipeline.stencil_read_mask_front = mask;
+    ctx.local.pipeline.stencil_read_mask_back = mask;
 }
 
 /// `glStencilFuncSeparate(face, func, ref, mask)` — set the compare func + reference + value read mask for
-/// the selected face(s) (`GL_FRONT` / `GL_BACK` / `GL_FRONT_AND_BACK`). The reference/read-mask are single
-/// per-pass values on the wire, so setting them for either face updates the lowered value.
+/// the selected face(s) (`GL_FRONT` / `GL_BACK` / `GL_FRONT_AND_BACK`).
 pub fn stencil_func_separate(ctx: &mut GlContext, face: u32, func: u32, reference: i32, mask: u32) {
     if face == GL_FRONT || face == GL_FRONT_AND_BACK {
         ctx.local.pipeline.stencil_func_front = func;
+        ctx.local.pipeline.stencil_ref_front = reference;
+        ctx.local.pipeline.stencil_read_mask_front = mask;
     }
     if face == GL_BACK || face == GL_FRONT_AND_BACK {
         ctx.local.pipeline.stencil_func_back = func;
+        ctx.local.pipeline.stencil_ref_back = reference;
+        ctx.local.pipeline.stencil_read_mask_back = mask;
     }
-    ctx.local.pipeline.stencil_ref = reference;
-    ctx.local.pipeline.stencil_read_mask = mask;
 }
 
 /// `glStencilOp(sfail, dpfail, dppass)` — set the stencil-fail / depth-fail / depth-pass ops for BOTH faces.
@@ -305,14 +308,19 @@ pub fn stencil_op_separate(ctx: &mut GlContext, face: u32, sfail: u32, dpfail: u
 /// `glStencilMask(mask)` — set the stencil write mask for BOTH faces.
 impl GlContext {
     pub fn set_stencil_mask(&mut self, mask: u32) {
-        self.local.pipeline.stencil_write_mask = mask;
+        self.local.pipeline.stencil_write_mask_front = mask;
+        self.local.pipeline.stencil_write_mask_back = mask;
     }
 }
 
-/// `glStencilMaskSeparate(face, mask)` — set the stencil write mask for the selected face(s). The wire
-/// carries a single write mask for both faces, so setting either face updates the lowered value.
-pub fn stencil_mask_separate(ctx: &mut GlContext, _face: u32, mask: u32) {
-    ctx.local.pipeline.stencil_write_mask = mask;
+/// `glStencilMaskSeparate(face, mask)` — set the stencil write mask for the selected face(s).
+pub fn stencil_mask_separate(ctx: &mut GlContext, face: u32, mask: u32) {
+    if face == GL_FRONT || face == GL_FRONT_AND_BACK {
+        ctx.local.pipeline.stencil_write_mask_front = mask;
+    }
+    if face == GL_BACK || face == GL_FRONT_AND_BACK {
+        ctx.local.pipeline.stencil_write_mask_back = mask;
+    }
 }
 
 /// `glCullFace(mode)` — select the culled face (`GL_FRONT` / `GL_BACK` / `GL_FRONT_AND_BACK`).

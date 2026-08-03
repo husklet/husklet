@@ -414,22 +414,73 @@ pub(super) fn lower_draw_n(
     if bottom_up {
         front_face ^= 1;
     }
-    // Program-keyed pipeline residency: the render pipeline depends on the program's shaders PLUS this draw's
-    // fixed-function + vertex-layout state, so the cache key folds a signature of that state in. A program
-    // re-drawn with the SAME state reuses its resident pipeline (no `CreateRenderPipeline`); a genuinely new
-    // state variant creates one more. Reused across frames + invalidated on relink (see `program_pipeline_ir`).
-    let state_key = pipeline_state_key(
-        &vbs,
-        &color_targets,
-        &depth,
-        topology,
-        cull,
-        front_face,
-        sample_count,
-    ) ^ sample_variant.rotate_left(17);
-    let (pipeline_ir, pipe_new) = ctx
-        .program_pipeline_ir(prog_name, state_key, prog.link_gen)
-        .ok()?;
+    let distinct_face_state = d.stencil
+        && (d.stencil_read_mask_front != d.stencil_read_mask_back
+            || d.stencil_write_mask_front != d.stencil_write_mask_back
+            || d.stencil_ref_front != d.stencil_ref_back);
+    let triangle_faces = matches!(d.mode, GL_TRIANGLES | GL_TRIANGLE_STRIP | 0x0006);
+    let variants = if distinct_face_state && triangle_faces && !d.cull_enabled {
+        vec![
+            (
+                depth_fmt.map(|fmt| Pipeline::depth_state_for_face(fmt, &d, false)),
+                2,
+                d.stencil_ref_front,
+            ),
+            (
+                depth_fmt.map(|fmt| Pipeline::depth_state_for_face(fmt, &d, true)),
+                1,
+                d.stencil_ref_back,
+            ),
+        ]
+    } else if distinct_face_state && d.cull_enabled && d.cull_face == GL_FRONT {
+        vec![(
+            depth_fmt.map(|fmt| Pipeline::depth_state_for_face(fmt, &d, true)),
+            cull,
+            d.stencil_ref_back,
+        )]
+    } else {
+        vec![(depth.clone(), cull, d.stencil_ref_front)]
+    };
+    let mut pipeline_irs = Vec::with_capacity(variants.len());
+    for (variant_depth, variant_cull, stencil_ref) in variants {
+        let state_key = pipeline_state_key(
+            &vbs,
+            &color_targets,
+            &variant_depth,
+            topology,
+            variant_cull,
+            front_face,
+            sample_count,
+        ) ^ sample_variant.rotate_left(17);
+        let (pipeline_ir, pipe_new) = ctx
+            .program_pipeline_ir(prog_name, state_key, prog.link_gen)
+            .ok()?;
+        if pipe_new {
+            cmds.push(Cmd::CreateRenderPipeline(
+                pipeline_ir,
+                RenderPipelineDesc {
+                    vertex: ShaderRef {
+                        module: vs_id,
+                        entry: "vmain".into(),
+                    },
+                    fragment: Some(ShaderRef {
+                        module: fs_id,
+                        entry: "fmain".into(),
+                    }),
+                    vertex_buffers: vbs.clone(),
+                    color_targets: color_targets.clone(),
+                    depth: variant_depth,
+                    topology,
+                    cull: variant_cull,
+                    front_face,
+                    sample_count,
+                    label: String::new(),
+                },
+            ));
+        }
+        pipeline_irs.push((pipeline_ir, stencil_ref));
+    }
+    let pipeline_ir = pipeline_irs[0].0;
     let mut vertex_bindings = slot_ir
         .iter()
         .zip(&slot_bytes)
@@ -456,29 +507,6 @@ pub(super) fn lower_draw_n(
         instance_count: d.instance_count,
     }
     .trace();
-    if pipe_new {
-        cmds.push(Cmd::CreateRenderPipeline(
-            pipeline_ir,
-            RenderPipelineDesc {
-                vertex: ShaderRef {
-                    module: vs_id,
-                    entry: "vmain".into(),
-                },
-                fragment: Some(ShaderRef {
-                    module: fs_id,
-                    entry: "fmain".into(),
-                }),
-                vertex_buffers: vbs.clone(),
-                color_targets: color_targets.clone(),
-                depth,
-                topology,
-                cull,
-                front_face,
-                sample_count,
-                label: String::new(),
-            },
-        ));
-    }
 
     // ---- uniform buffer + bind group ----
     // The std140 bytes for the shader's binding-0 UBO. Two sources, mutually exclusive per draw:
@@ -628,18 +656,12 @@ pub(super) fn lower_draw_n(
     if d.discards_every_primitive() {
         return Some(DrawCommands { copies, ops });
     }
-    ops.push(Enc::SetPipeline(pipeline_ir));
     ops.push(emit_viewport(&d, tw, th, bottom_up));
     ops.push(emit_scissor(&d, tw, th, bottom_up));
     // Dynamic stencil reference — the value the pipeline's stencil compare tests against and a `GL_REPLACE`
     // op writes. Emitted per-draw inside the pass like viewport/scissor (the compare/ops/masks live
     // statically on the pipeline's `DepthState`), so two draws with different `glStencilFunc` references
     // lower correctly. Masked to the 8-bit stencil buffer, and only when this draw stencil-tests.
-    if d.stencil {
-        ops.push(Enc::SetStencilReference {
-            reference: (d.stencil_ref.max(0) as u32) & 0xff,
-        });
-    }
     if let Some(color) = blend_constant(&d) {
         ops.push(Enc::SetBlendConstant { color });
     }
@@ -694,13 +716,21 @@ pub(super) fn lower_draw_n(
         } else {
             d.base_vertex
         };
-        ops.push(Enc::DrawIndexed {
-            index_count,
-            instance_count: d.instance_count,
-            first_index: 0,
-            base_vertex,
-            first_instance: d.first_instance,
-        });
+        for &(pipeline, stencil_ref) in &pipeline_irs {
+            ops.push(Enc::SetPipeline(pipeline));
+            if d.stencil {
+                ops.push(Enc::SetStencilReference {
+                    reference: (stencil_ref.max(0) as u32) & 0xff,
+                });
+            }
+            ops.push(Enc::DrawIndexed {
+                index_count,
+                instance_count: d.instance_count,
+                first_index: 0,
+                base_vertex,
+                first_instance: d.first_instance,
+            });
+        }
     } else if d.indexed {
         hl_log::hl_warn!(
             hl_log::tag::GL,
@@ -713,12 +743,20 @@ pub(super) fn lower_draw_n(
         );
         return None;
     } else {
-        ops.push(Enc::Draw {
-            vertex_count: d.count as u32,
-            instance_count: d.instance_count,
-            first_vertex: d.first as u32,
-            first_instance: d.first_instance,
-        });
+        for &(pipeline, stencil_ref) in &pipeline_irs {
+            ops.push(Enc::SetPipeline(pipeline));
+            if d.stencil {
+                ops.push(Enc::SetStencilReference {
+                    reference: (stencil_ref.max(0) as u32) & 0xff,
+                });
+            }
+            ops.push(Enc::Draw {
+                vertex_count: d.count as u32,
+                instance_count: d.instance_count,
+                first_vertex: d.first as u32,
+                first_instance: d.first_instance,
+            });
+        }
     }
 
     Some(DrawCommands { copies, ops })

@@ -120,6 +120,52 @@ fn stencil_op_separate_lowers_distinct_front_and_back_faces() {
     );
 }
 
+#[test]
+fn distinct_face_masks_lower_to_face_culled_pipeline_draws() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    record::enable(&mut c, GL_STENCIL_TEST);
+    record::stencil_func_separate(&mut c, GL_FRONT, GL_ALWAYS, 7, 0xf0);
+    record::stencil_func_separate(&mut c, GL_BACK, GL_ALWAYS, 3, 0x0f);
+    record::stencil_mask_separate(&mut c, GL_FRONT, 0xcc);
+    record::stencil_mask_separate(&mut c, GL_BACK, 0x33);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+
+    swap::swap_buffers(&mut c, &mut sink).unwrap();
+    let pipelines = sink.batches[0]
+        .iter()
+        .filter_map(|command| match command {
+            Cmd::CreateRenderPipeline(_, descriptor) => Some(descriptor),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(pipelines.len(), 2, "one culling pipeline per stencil face");
+    let masks = pipelines
+        .iter()
+        .map(|pipeline| {
+            let depth = pipeline.depth.as_ref().unwrap();
+            (depth.stencil_read_mask, depth.stencil_write_mask)
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(masks, [(0x0f, 0x33), (0xf0, 0xcc)].into_iter().collect());
+    assert_eq!(
+        submit_ops(&sink.batches[0])
+            .iter()
+            .filter(|op| matches!(op, Enc::Draw { .. } | Enc::DrawIndexed { .. }))
+            .count(),
+        2
+    );
+    let references = submit_ops(&sink.batches[0])
+        .iter()
+        .filter_map(|op| match op {
+            Enc::SetStencilReference { reference } => Some(*reference),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(references, [7, 3]);
+}
+
 // ---------------------------------------------------------------------------------------------------
 // A colour clear must not discard draws that wrote the stencil or depth plane
 // ---------------------------------------------------------------------------------------------------

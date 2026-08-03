@@ -78,7 +78,7 @@ pub(super) fn lower_rect_clear(
     // `writes_colour` keeps it consistent with `ClearPipelineKey`, which carries the mask.
     let blends_colour = color_write_mask != 0;
     let stencil_write_mask = if writes_stencil {
-        d.stencil_write_mask & 0xff
+        d.stencil_write_mask_front & 0xff
     } else {
         0
     };
