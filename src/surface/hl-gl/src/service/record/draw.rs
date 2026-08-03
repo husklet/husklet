@@ -139,7 +139,20 @@ impl DrawCall {
             if !a.enabled || a.buffer != 0 || a.offset == 0 {
                 continue;
             }
-            let data = unsafe { read_client_attr(a.offset, a.size, a.kind, a.stride, vert_end) };
+            let attribute_end = if a.divisor == 0 {
+                vert_end
+            } else {
+                let instance_end = self
+                    .first_instance
+                    .saturating_add(self.instance_count.max(1));
+                instance_end.div_ceil(a.divisor) as usize
+            };
+            if attribute_end > MAX_CLIENT_VERTS {
+                return false;
+            }
+            let data = unsafe {
+                read_client_attr(a.offset, a.size, a.kind, a.stride, attribute_end)
+            };
             self.client_vbufs.push(crate::model::program::ClientArray {
                 location: i,
                 data,
