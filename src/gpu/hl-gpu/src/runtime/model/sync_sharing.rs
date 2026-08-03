@@ -14,7 +14,27 @@ use crate::runtime::model::sharing::SessionId;
 
 /// A process-global synchronization export identity. Values are monotonic and never reused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct SyncExportId(pub u64);
+pub struct SyncExportId {
+    serial: u64,
+    authenticity: u128,
+}
+
+impl SyncExportId {
+    pub fn from_parts(serial: u64, authenticity: u128) -> Self {
+        Self {
+            serial,
+            authenticity,
+        }
+    }
+
+    pub fn serial(self) -> u64 {
+        self.serial
+    }
+
+    pub fn authenticity(self) -> u128 {
+        self.authenticity
+    }
+}
 
 /// A type-erased synchronization object retained by every live owner/import reference.
 pub type SharedSync = Arc<dyn Any + Send + Sync>;
@@ -65,7 +85,12 @@ impl SyncExports {
             .inner
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let id = SyncExportId(registry.next);
+        let mut authenticity = [0u8; 16];
+        while authenticity == [0; 16] {
+            getrandom::fill(&mut authenticity)
+                .map_err(|_| GpuError::ResourceLimit("synchronization export authenticity"))?;
+        }
+        let id = SyncExportId::from_parts(registry.next, u128::from_le_bytes(authenticity));
         registry.next = registry
             .next
             .checked_add(1)

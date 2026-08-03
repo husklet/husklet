@@ -1455,6 +1455,7 @@ dependencies = [
 name = "hl-gpu"
 version = "0.0.0"
 dependencies = [
+ "getrandom 0.3.4",
  "hl-log",
  "libc",
  "socket2",

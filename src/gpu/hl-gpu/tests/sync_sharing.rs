@@ -104,7 +104,7 @@ fn foreign_release_and_stale_operations_are_refused_with_live_controls() {
         Err(GpuError::Invalid(_))
     ));
     assert!(matches!(
-        exports.owner_release(OWNER, SyncExportId(u64::MAX)),
+        exports.owner_release(OWNER, SyncExportId::from_parts(u64::MAX, 0)),
         Err(GpuError::Invalid(_))
     ));
 }
