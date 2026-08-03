@@ -357,6 +357,10 @@ impl Frame {
                 format: target_fmt,
                 width: tw,
                 height: th,
+                depth_stencil: draws
+                    .first()
+                    .map(|draw| draw.depth_stencil)
+                    .unwrap_or_default(),
                 bottom_up,
             },
             clear,
@@ -622,6 +626,62 @@ mod clone_tests {
         let mixed = vec![clear_draw(red, Some([0, 0, 32, 32])), geometry];
         assert_ne!(RenderPasses::effective_clear(&mixed).0, red);
     }
+
+    #[test]
+    fn empty_non_default_segment_keeps_shared_depth_stencil_identity() {
+        let mut ctx = window_ctx(128, 128);
+        let attachments = crate::model::program::DepthStencilSnapshot {
+            depth: Some((4, 1)),
+            stencil: Some((5, 1)),
+        };
+        let target = SegmentTarget {
+            fbo: 2,
+            texture: 7,
+            format: TextureFormat::Rgba8Unorm,
+            width: 128,
+            height: 128,
+            depth_stencil: attachments,
+            bottom_up: false,
+        };
+        let mut commands = Vec::new();
+        let mut operations = Vec::new();
+        let mut snapshots = SnapshotTextures::new();
+
+        lower_segments(
+            &mut ctx,
+            &[],
+            DepthClear {
+                load: LoadOp::Clear,
+                depth: 0.25,
+                stencil: 37,
+                stencil_armed: true,
+            },
+            target,
+            [0.0; 4],
+            LoadOp::Clear,
+            &mut commands,
+            &mut operations,
+            &std::collections::HashMap::new(),
+            &mut snapshots,
+        );
+
+        let depth = operations
+            .iter()
+            .find_map(|operation| match operation {
+                Enc::BeginRenderPass { depth, .. } => depth.as_ref(),
+                _ => None,
+            })
+            .expect("the empty segment must materialize its non-default FBO attachment");
+        assert_eq!(depth.depth_load, LoadOp::Clear);
+        assert_eq!(depth.stencil_load, LoadOp::Clear);
+        assert_eq!(depth.clear_depth, 0.25);
+        assert_eq!(depth.clear_stencil, 37);
+        assert!(commands.iter().any(|command| matches!(
+            command,
+            Cmd::CreateTexture(_, descriptor)
+                if descriptor.format == TextureFormat::Depth24PlusStencil8
+        )));
+    }
 }
 
 /// The one render target a run of draws lowers into.
@@ -632,6 +692,9 @@ pub(super) struct SegmentTarget {
     pub(super) format: TextureFormat,
     pub(super) width: i32,
     pub(super) height: i32,
+    /// The attachment storage identity shared by every draw in this framebuffer run. This remains
+    /// authoritative when a leading full-color clear folds away every draw in the first segment.
+    pub(super) depth_stencil: crate::model::program::DepthStencilSnapshot,
     /// Whether the target stores GL texel rows bottom-up (see [`RenderPasses::stores_bottom_up_rows`]).
     pub(super) bottom_up: bool,
 }
@@ -754,6 +817,7 @@ pub(super) fn lower_segments(
             target.format,
             target.width,
             target.height,
+            target.depth_stencil,
             clear,
             *load,
             *dload,
@@ -823,6 +887,7 @@ pub(super) fn emit_segment_pass(
     target_fmt: TextureFormat,
     tw: i32,
     th: i32,
+    attachments: crate::model::program::DepthStencilSnapshot,
     clear: [f64; 4],
     load: LoadOp,
     depth_load: DepthClear,
@@ -832,7 +897,6 @@ pub(super) fn emit_segment_pass(
     // The pass's depth format must account for the CLEAR that armed it as well as the draws in it: a
     // pipeline built without a depth state cannot run in a pass that has a depth attachment, and vice
     // versa, so both decisions read the same answer.
-    let attachments = seg.first().map(|draw| draw.depth_stencil).unwrap_or_default();
     let stencil_available = fbo == 0 || attachments.stencil.is_some();
     let depth_fmt = RenderPasses::depth_format_with(seg, depth_load, stencil_available);
     let mut copies: Vec<Enc> = Vec::new();
