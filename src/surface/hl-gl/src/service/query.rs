@@ -29,7 +29,7 @@ pub const IDENT_VERSION: &[u8] = b"OpenGL ES 3.1 hl-gl\0";
 pub const IDENT_GLSL_VERSION: &[u8] = b"OpenGL ES GLSL ES 3.10\0";
 /// The space-separated extension inventory returned by `glGetString(GL_EXTENSIONS)`.
 pub const IDENT_EXTENSIONS: &[u8] =
-    b"GL_KHR_debug GL_EXT_texture_format_BGRA8888 GL_EXT_read_format_bgra GL_ANGLE_robust_client_memory GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_copy_texture GL_ANGLE_client_arrays GL_ANGLE_webgl_compatibility GL_ANGLE_request_extension GL_OES_EGL_image GL_OES_EGL_sync GL_OES_rgb8_rgba8 GL_OES_depth24 GL_OES_mapbuffer GL_EXT_color_buffer_float GL_OES_texture_npot\0";
+    b"GL_KHR_debug GL_EXT_texture_format_BGRA8888 GL_EXT_read_format_bgra GL_EXT_draw_buffers_indexed GL_ANGLE_robust_client_memory GL_CHROMIUM_bind_generates_resource GL_CHROMIUM_copy_texture GL_ANGLE_client_arrays GL_ANGLE_webgl_compatibility GL_ANGLE_request_extension GL_OES_EGL_image GL_OES_EGL_sync GL_OES_rgb8_rgba8 GL_OES_depth24 GL_OES_mapbuffer GL_EXT_color_buffer_float GL_OES_texture_npot\0";
 
 /// The advertised extension inventory, each entry a NUL-terminated name — the single source of truth for
 /// `glGetStringi` (indexed enumeration) and `GL_NUM_EXTENSIONS` (the count).
@@ -37,6 +37,7 @@ pub const EXTENSIONS: &[&[u8]] = &[
     b"GL_KHR_debug\0",
     b"GL_EXT_texture_format_BGRA8888\0",
     b"GL_EXT_read_format_bgra\0",
+    b"GL_EXT_draw_buffers_indexed\0",
     b"GL_ANGLE_robust_client_memory\0",
     b"GL_CHROMIUM_bind_generates_resource\0",
     b"GL_CHROMIUM_copy_texture\0",

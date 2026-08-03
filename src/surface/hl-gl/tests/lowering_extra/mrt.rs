@@ -469,3 +469,115 @@ fn conflicting_constant_factors_replay_each_target_with_its_own_constant() {
     assert!(replay_masks.contains(&vec![0xf, 0]));
     assert!(replay_masks.contains(&vec![0, 0xf]));
 }
+
+#[test]
+fn ext_draw_buffers_indexed_cts_shaped_state_matrix_has_76_cases() {
+    let mut c = ctx();
+    let mut cases = 0;
+    for index in 0..4u32 {
+        for enabled in [false, true] {
+            record::set_cap_indexed(&mut c, GL_BLEND, index, enabled);
+            assert_eq!(
+                hl_gl::service::query::is_enabled_indexed(&c, GL_BLEND, index),
+                Some(enabled)
+            );
+            cases += 1;
+        }
+        for channel in 0..4 {
+            let mask = 1u32 << channel;
+            record::color_mask_indexed(
+                &mut c,
+                index,
+                mask & 1 != 0,
+                mask & 2 != 0,
+                mask & 4 != 0,
+                mask & 8 != 0,
+            );
+            let mut actual = [0; 4];
+            assert_eq!(
+                hl_gl::service::query::get_boolean_indexed(
+                    &c,
+                    GL_COLOR_WRITEMASK,
+                    index,
+                    &mut actual,
+                ),
+                4
+            );
+            assert_eq!(actual[channel], 1);
+            assert_eq!(actual.iter().map(|value| u32::from(*value)).sum::<u32>(), 1);
+            cases += 1;
+        }
+        record::blend_func_separate_indexed(
+            &mut c,
+            index,
+            GL_SRC_ALPHA,
+            GL_ONE_MINUS_SRC_ALPHA,
+            GL_DST_ALPHA,
+            GL_ONE_MINUS_DST_ALPHA,
+        );
+        for (pname, expected) in [
+            (GL_BLEND_SRC_RGB, GL_SRC_ALPHA),
+            (GL_BLEND_DST_RGB, GL_ONE_MINUS_SRC_ALPHA),
+            (GL_BLEND_SRC_ALPHA_STATE, GL_DST_ALPHA),
+            (GL_BLEND_DST_ALPHA, GL_ONE_MINUS_DST_ALPHA),
+            (GL_BLEND_EQUATION_RGB, GL_FUNC_ADD),
+            (GL_BLEND_EQUATION_ALPHA, GL_FUNC_ADD),
+        ] {
+            assert_eq!(
+                hl_gl::service::query::get_integer_indexed(&c, pname, index),
+                i64::from(expected)
+            );
+            cases += 1;
+        }
+        record::blend_equation_separate_indexed(
+            &mut c,
+            index,
+            GL_FUNC_SUBTRACT,
+            GL_FUNC_REVERSE_SUBTRACT,
+        );
+        for (pname, expected) in [
+            (GL_BLEND_EQUATION_RGB, GL_FUNC_SUBTRACT),
+            (GL_BLEND_EQUATION_ALPHA, GL_FUNC_REVERSE_SUBTRACT),
+        ] {
+            assert_eq!(
+                hl_gl::service::query::get_integer_indexed(&c, pname, index),
+                i64::from(expected)
+            );
+            cases += 1;
+        }
+    }
+
+    record::enable(&mut c, GL_BLEND);
+    record::color_mask(&mut c, true, false, true, false);
+    record::blend_func(&mut c, GL_ONE, GL_ZERO);
+    record::blend_equation_separate(&mut c, GL_MAX, GL_MIN);
+    for index in 0..4u32 {
+        assert_eq!(hl_gl::service::query::is_enabled_indexed(&c, GL_BLEND, index), Some(true));
+        cases += 1;
+        let mut mask = [0; 4];
+        hl_gl::service::query::get_boolean_indexed(&c, GL_COLOR_WRITEMASK, index, &mut mask);
+        assert_eq!(mask, [1, 0, 1, 0]);
+        cases += 1;
+        assert_eq!(hl_gl::service::query::get_integer_indexed(&c, GL_BLEND_SRC_RGB, index), 1);
+        cases += 1;
+        assert_eq!(hl_gl::service::query::get_integer_indexed(&c, GL_BLEND_DST_RGB, index), 0);
+        cases += 1;
+        assert_eq!(
+            (
+                hl_gl::service::query::get_integer_indexed(&c, GL_BLEND_EQUATION_RGB, index),
+                hl_gl::service::query::get_integer_indexed(&c, GL_BLEND_EQUATION_ALPHA, index),
+            ),
+            (i64::from(GL_MAX), i64::from(GL_MIN))
+        );
+        cases += 1;
+    }
+    assert_eq!(cases, 76);
+}
+
+#[test]
+fn indexed_draw_buffers_advertising_does_not_claim_advanced_blend_equations() {
+    let extensions = std::str::from_utf8(hl_gl::service::query::IDENT_EXTENSIONS).unwrap();
+    assert!(extensions.contains("GL_EXT_draw_buffers_indexed"));
+    assert!(!extensions.contains("GL_KHR_blend_equation_advanced"));
+    assert!(!extensions.contains("GL_NV_blend_equation_advanced"));
+}

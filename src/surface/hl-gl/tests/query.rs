@@ -68,6 +68,7 @@ const ADVERTISED: &[&str] = &[
     "GL_KHR_debug",
     "GL_EXT_texture_format_BGRA8888",
     "GL_EXT_read_format_bgra",
+    "GL_EXT_draw_buffers_indexed",
     "GL_ANGLE_robust_client_memory",
     "GL_CHROMIUM_bind_generates_resource",
     "GL_CHROMIUM_copy_texture",
