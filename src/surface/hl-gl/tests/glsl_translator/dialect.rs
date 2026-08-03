@@ -295,6 +295,33 @@ fn scoping_lowering_does_not_rewrite_types_constructors_or_expression_loops() {
     assert_naga_parses(&translated, naga::ShaderStage::Fragment);
 }
 
+#[test]
+fn an_unbraced_if_declaration_does_not_escape_its_statement_scope() {
+    let translated =
+        fragment_of("int a=1; void main(){ if(true) int a=42; gl_FragColor=vec4(float(a)); }");
+    assert!(translated.contains("if(true) {int a=42;}"), "{translated}");
+    let mut frontend = naga::front::glsl::Frontend::default();
+    let module = frontend
+        .parse(
+            &naga::front::glsl::Options::from(naga::ShaderStage::Fragment),
+            &translated,
+        )
+        .unwrap();
+    let info = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .unwrap();
+    let wgsl =
+        naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
+            .unwrap();
+    assert!(
+        wgsl.contains("let _e6 = a_1;"),
+        "the post-if read must select the global initializer, not the branch local:\n{wgsl}"
+    );
+}
+
 /// A guest may write `texelFetch`/`textureSize` on an integer sampler itself. Those uses want the bare
 /// texture global — handing them the recombining constructor would give a fetch instruction a sampled
 /// image, which the backend refuses.

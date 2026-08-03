@@ -207,6 +207,59 @@ fn lower_while_condition_declarations(source: &mut String) {
     }
 }
 
+/// Naga hoists an unbraced declaration controlled by `if` into the enclosing function scope, leaving an
+/// empty branch. Braces make the source-mandated single-statement lifetime explicit to the host parser.
+fn brace_unbraced_if_declarations(source: &mut String) {
+    loop {
+        let tokens = lexemes(source);
+        let structs = tokens
+            .windows(2)
+            .filter(|pair| pair[0].text == "struct")
+            .map(|pair| pair[1].text.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let Some((body_start, body_end)) = tokens.iter().enumerate().find_map(|(at, token)| {
+            if token.text != "if" || tokens.get(at + 1)?.text != "(" {
+                return None;
+            }
+            let close = matching_lexeme(&tokens, at + 1, "(", ")")?;
+            let body = close + 1;
+            let ty = tokens.get(body)?.text.as_str();
+            let declaration = structs.contains(ty)
+                || matches!(
+                    ty,
+                    "bool"
+                        | "int"
+                        | "uint"
+                        | "float"
+                        | "vec2"
+                        | "vec3"
+                        | "vec4"
+                        | "ivec2"
+                        | "ivec3"
+                        | "ivec4"
+                        | "uvec2"
+                        | "uvec3"
+                        | "uvec4"
+                        | "bvec2"
+                        | "bvec3"
+                        | "bvec4"
+                        | "mat2"
+                        | "mat3"
+                        | "mat4"
+                );
+            if !declaration || tokens.get(body + 1)?.text == "(" {
+                return None;
+            }
+            let end = tokens[body..].iter().position(|token| token.text == ";")? + body;
+            Some((body, end))
+        }) else {
+            break;
+        };
+        source.insert(tokens[body_end].end, '}');
+        source.insert(tokens[body_start].start, '{');
+    }
+}
+
 // ---------------------------------------------------------------------------------------------------
 
 /// GLSL-ES compute (`GL_COMPUTE_SHADER`) → desktop GLSL the host compiles. We FORWARD the source (the host
@@ -854,6 +907,8 @@ impl StageSources<'_> {
         disambiguate_struct_value_shadows(&mut fs);
         lower_while_condition_declarations(&mut vs);
         lower_while_condition_declarations(&mut fs);
+        brace_unbraced_if_declarations(&mut vs);
+        brace_unbraced_if_declarations(&mut fs);
         let invariant_position = Source::new(&vs).has_invariant_position();
         let declares_modern_es = |source: &str| {
             source.lines().any(|line| {
