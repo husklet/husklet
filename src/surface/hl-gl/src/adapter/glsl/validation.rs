@@ -1129,6 +1129,28 @@ pub fn invalid_scope_semantics(source: &str) -> Option<String> {
             visible_until,
             scope,
         });
+        let mut nested = 0usize;
+        for comma in declaration + 1..end {
+            match source_tokens[comma].as_str() {
+                "(" | "[" => nested += 1,
+                ")" | "]" => nested = nested.saturating_sub(1),
+                "," if nested == 0 => {
+                    let Some(name_at) =
+                        (comma + 1..end).find(|index| is_identifier_token(&source_tokens[*index]))
+                    else {
+                        continue;
+                    };
+                    variables.push(Variable {
+                        name: source_tokens[name_at].clone(),
+                        declaration: name_at,
+                        visible_from: end.saturating_add(1),
+                        visible_until,
+                        scope,
+                    });
+                }
+                _ => {}
+            }
+        }
     }
 
     // Function parameters live in the definition body, not in a preceding prototype and not globally.

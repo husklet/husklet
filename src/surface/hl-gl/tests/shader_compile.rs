@@ -278,6 +278,7 @@ fn legal_nested_shadowing_and_symbol_lifetimes_remain_accepted() {
         "int func(int func){return func;} void main(){int value=func(1);}",
         "int func(int input_value,int value){int value=5;return input_value+value;} void main(){}",
         "int outer_value; void main(){int outer_value=1;{int outer_value=outer_value+5;}}",
+        "precision mediump float; precision mediump int; bool isOk(float a,int b){float atemp=a+0.5;return float(b)<=atemp&&atemp<=float(b+1);} varying float v_in0; uniform int ref_out0; int out0; void main(){int in0=int(v_in0); int a=in0; {int a=a+5,b=a-5;out0=b;a=42;} out0=out0+a-in0; bool result=isOk(float(out0),ref_out0); gl_FragColor=vec4(result);}",
         "void main(){float result=0.0; for(int index=0;index<2;index++){result+=float(index);}}",
         "void main(){int count=0; while(bool active=(count<2)){if(active){count++;}}}",
     ];
