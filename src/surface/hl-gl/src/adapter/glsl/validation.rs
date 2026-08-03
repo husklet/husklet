@@ -228,6 +228,7 @@ fn tokens(source: &str) -> Vec<String> {
                     | b','
                     | b'('
                     | b')'
+                    | b'.'
             ) {
                 line_has_token = true;
                 out.push((bytes[at] as char).to_string());
@@ -377,6 +378,12 @@ pub fn invalid_implicit_arithmetic(source: &str) -> Option<String> {
         if !matches!(operation, "+" | "-" | "*" | "/") {
             continue;
         }
+        // A component selector is not an identifier lookup. The tokenizer used to discard `.`, so the
+        // `b` in `n.b + m` resolved to an unrelated global named `b`; if their scalar kinds differed, a
+        // valid expression was refused before it ever reached the real compiler.
+        if at > 0 && tokens[at - 1] == "." {
+            continue;
+        }
         let Some((left_type, left_kind)) = resolve(&scopes, tokens[at].as_str()) else {
             continue;
         };
@@ -393,4 +400,23 @@ pub fn invalid_implicit_arithmetic(source: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::invalid_implicit_arithmetic;
+
+    #[test]
+    fn component_names_do_not_alias_unrelated_variables() {
+        assert_eq!(
+            invalid_implicit_arithmetic(
+                "float r; int m; vec3 n; void main(){ int k = ivec2(1).r + m; float x = n.b + r; }"
+            ),
+            None
+        );
+        assert!(invalid_implicit_arithmetic(
+            "float r; int m; void main(){ float x = r + m; }"
+        )
+        .is_some());
+    }
 }
