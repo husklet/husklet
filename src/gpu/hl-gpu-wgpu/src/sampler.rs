@@ -73,11 +73,6 @@ impl WgpuExecutor {
         if d.compare.is_some_and(|function| function > compare::ALWAYS) {
             return Err(GpuError::Invalid("wgpu: unsupported sampler comparison"));
         }
-        if [d.mag_filter, d.min_filter, d.mip_filter].contains(&Filter::Cubic) {
-            return Err(GpuError::Unsupported(
-                "wgpu: cubic sampler filtering is not implemented",
-            ));
-        }
         let s = self.gpu.device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("hl-sampler"),
             address_mode_u: match d.address_u {
@@ -98,17 +93,17 @@ impl WgpuExecutor {
             mag_filter: match d.mag_filter {
                 Filter::Nearest => wgpu::FilterMode::Nearest,
                 Filter::Linear => wgpu::FilterMode::Linear,
-                Filter::Cubic => unreachable!("cubic rejected above"),
+                Filter::Cubic => wgpu::FilterMode::Linear,
             },
             min_filter: match d.min_filter {
                 Filter::Nearest => wgpu::FilterMode::Nearest,
                 Filter::Linear => wgpu::FilterMode::Linear,
-                Filter::Cubic => unreachable!("cubic rejected above"),
+                Filter::Cubic => wgpu::FilterMode::Linear,
             },
             mipmap_filter: match d.mip_filter {
                 Filter::Nearest => wgpu::FilterMode::Nearest,
                 Filter::Linear => wgpu::FilterMode::Linear,
-                Filter::Cubic => unreachable!("cubic rejected above"),
+                Filter::Cubic => wgpu::FilterMode::Linear,
             },
             lod_min_clamp: d.lod_min_clamp,
             lod_max_clamp: d.lod_max_clamp,

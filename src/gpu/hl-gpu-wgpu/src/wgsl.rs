@@ -27,6 +27,7 @@ use hl_gpu::protocol::model::kernel::{
 use hl_gpu::{GpuError, Result};
 
 mod descriptor;
+mod cubic;
 mod diagnostic;
 mod module;
 mod sampler_metadata;
@@ -258,7 +259,9 @@ impl Spirv {
         // lowering has to happen on the IR both front ends share.
         let mut shader = ShaderModule::new(&mut module);
         shader.lower_nonfinite_predicates();
-        Ok((shader.wgsl()?, reflected))
+        let source = shader.wgsl()?;
+        let source = if let Some(layouts) = sampler_metadata { cubic::rewrite(source, layouts)? } else { source };
+        Ok((source, reflected))
     }
 }
 
