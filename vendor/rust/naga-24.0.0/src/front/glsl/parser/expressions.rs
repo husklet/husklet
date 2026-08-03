@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use crate::{
     front::glsl::{
         ast::{FunctionCall, FunctionCallKind, HirExpr, HirExprKind},
-        context::{Context, StmtContext},
+        context::{Context, ExprPos, StmtContext},
         error::{ErrorKind, ExpectedToken},
         parser::ParsingContext,
         token::{Token, TokenValue},
@@ -520,6 +520,10 @@ impl ParsingContext<'_> {
 
         while let TokenValue::Comma = self.expect_peek(frontend)?.value {
             self.bump(frontend)?;
+            // A comma expression yields its final operand, but every preceding operand is still
+            // evaluated for side effects. Merely replacing `expr` left the earlier HIR roots
+            // unreachable, silently dropping assignments and calls.
+            ctx.lower_expect_inner(stmt, frontend, expr, ExprPos::Rhs)?;
             expr = self.parse_assignment(frontend, ctx, stmt)?;
         }
 

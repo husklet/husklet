@@ -115,7 +115,7 @@ fn graphics_spirv_triangle_shades_pixels() {
 }
 
 #[test]
-fn graphics_glsl_do_while_unconditional_continue_runs_three_iterations() {
+fn graphics_glsl_do_while_preserves_sequence_side_effects() {
     let vertex = GlslDescriptor {
         stage: glsl_stage::VERTEX,
         entry: "vmain".into(),
@@ -133,7 +133,7 @@ layout(location=0) out vec4 color;
 void main() {
     int i = 0;
     float res = 0.0;
-    do { res += 0.25; continue; } while (++i < 3);
+    do { res += 0.25, res += 0.25; continue; } while (++i < 2);
     color = vec4(res, 0.0, 0.0, 1.0);
 }"#.into(),
     };
@@ -161,5 +161,5 @@ void main() {
             Enc::EndRenderPass,
         ], signal: None }),
     ]);
-    assert_eq!(g.read_texture(&s.resources, 1).unwrap(), [191, 0, 0, 255]);
+    assert_eq!(g.read_texture(&s.resources, 1).unwrap(), [255, 0, 0, 255]);
 }
