@@ -147,6 +147,44 @@ fn gles3_vertex_array_reset_accepts_fixed_restart_capability() {
 }
 
 #[test]
+fn gles31_texture_reset_accepts_every_core_target_and_parameter() {
+    let mut context = ctx_800x600();
+
+    for (target, parameters) in [
+        (GL_TEXTURE_2D, &[(GL_DEPTH_STENCIL_TEXTURE_MODE, GL_DEPTH_COMPONENT)][..]),
+        (GL_TEXTURE_CUBE_MAP, &[(GL_DEPTH_STENCIL_TEXTURE_MODE, GL_DEPTH_COMPONENT)][..]),
+        (
+            GL_TEXTURE_2D_ARRAY,
+            &[
+                (GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR),
+                (GL_DEPTH_STENCIL_TEXTURE_MODE, GL_DEPTH_COMPONENT),
+            ][..],
+        ),
+        (
+            GL_TEXTURE_3D,
+            &[
+                (GL_TEXTURE_WRAP_R, GL_REPEAT),
+                (GL_DEPTH_STENCIL_TEXTURE_MODE, GL_DEPTH_COMPONENT),
+            ][..],
+        ),
+        (
+            GL_TEXTURE_2D_MULTISAMPLE,
+            &[(GL_TEXTURE_SWIZZLE_R, GL_RED), (GL_TEXTURE_BASE_LEVEL, 0)][..],
+        ),
+    ] {
+        record::bind_texture(&mut context, target, 0);
+        assert_eq!(context.take_gl_error(), GL_NO_ERROR, "bind target {target:#x}");
+        for &(pname, value) in parameters {
+            assert!(
+                record::validate_tex_parameter(&mut context, target, pname, value),
+                "target {target:#x} pname {pname:#x}"
+            );
+            assert_eq!(context.take_gl_error(), GL_NO_ERROR);
+        }
+    }
+}
+
+#[test]
 fn advertised_khr_debug_accepts_the_cts_reset_sequence() {
     assert!(ADVERTISED.contains(&"GL_KHR_debug"));
 

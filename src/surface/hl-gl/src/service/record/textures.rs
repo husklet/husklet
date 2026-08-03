@@ -16,7 +16,14 @@ impl GlContext {
 
 /// `glBindTexture(GL_TEXTURE_2D, name)` — binds to the active texture unit.
 pub fn bind_texture(ctx: &mut GlContext, target: u32, name: u32) {
-    if !matches!(target, GL_TEXTURE_2D | GL_TEXTURE_CUBE_MAP) {
+    if !matches!(
+        target,
+        GL_TEXTURE_2D
+            | GL_TEXTURE_CUBE_MAP
+            | GL_TEXTURE_2D_ARRAY
+            | GL_TEXTURE_3D
+            | GL_TEXTURE_2D_MULTISAMPLE
+    ) {
         ctx.set_gl_error(GL_INVALID_ENUM);
         return;
     }
@@ -422,7 +429,14 @@ pub fn tex_image_2d_target_level(
 
 /// `glTexParameteri(GL_TEXTURE_2D, pname, value)` on the active unit's texture.
 pub fn validate_tex_parameter(ctx: &mut GlContext, target: u32, pname: u32, value: u32) -> bool {
-    let valid_target = matches!(target, GL_TEXTURE_2D | GL_TEXTURE_CUBE_MAP);
+    let valid_target = matches!(
+        target,
+        GL_TEXTURE_2D
+            | GL_TEXTURE_CUBE_MAP
+            | GL_TEXTURE_2D_ARRAY
+            | GL_TEXTURE_3D
+            | GL_TEXTURE_2D_MULTISAMPLE
+    );
     let valid_value = match pname {
         GL_TEXTURE_MAG_FILTER => matches!(value, GL_NEAREST | GL_LINEAR),
         GL_TEXTURE_MIN_FILTER => matches!(
@@ -434,7 +448,7 @@ pub fn validate_tex_parameter(ctx: &mut GlContext, target: u32, pname: u32, valu
                 | GL_NEAREST_MIPMAP_LINEAR
                 | GL_LINEAR_MIPMAP_LINEAR
         ),
-        GL_TEXTURE_WRAP_S | GL_TEXTURE_WRAP_T => {
+        GL_TEXTURE_WRAP_S | GL_TEXTURE_WRAP_T | GL_TEXTURE_WRAP_R => {
             matches!(value, GL_CLAMP_TO_EDGE | GL_REPEAT | GL_MIRRORED_REPEAT)
         }
         GL_TEXTURE_SWIZZLE_R
@@ -448,6 +462,7 @@ pub fn validate_tex_parameter(ctx: &mut GlContext, target: u32, pname: u32, valu
         | GL_TEXTURE_MAX_LOD
         | GL_TEXTURE_COMPARE_MODE
         | GL_TEXTURE_COMPARE_FUNC
+        | GL_DEPTH_STENCIL_TEXTURE_MODE
             if ctx.client_version().0 >= 3 =>
         {
             true
