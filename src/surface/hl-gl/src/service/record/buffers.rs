@@ -1,6 +1,24 @@
 use super::*;
 
 pub fn bind_buffer(ctx: &mut GlContext, target: u32, name: u32) -> bool {
+    if !matches!(
+        target,
+        GL_ARRAY_BUFFER
+            | GL_ELEMENT_ARRAY_BUFFER
+            | GL_PIXEL_PACK_BUFFER
+            | GL_PIXEL_UNPACK_BUFFER
+            | GL_UNIFORM_BUFFER
+            | GL_SHADER_STORAGE_BUFFER
+            | GL_ATOMIC_COUNTER_BUFFER
+            | GL_TRANSFORM_FEEDBACK_BUFFER
+            | GL_DISPATCH_INDIRECT_BUFFER
+            | GL_COPY_READ_BUFFER
+            | GL_COPY_WRITE_BUFFER
+            | GL_DRAW_INDIRECT_BUFFER
+    ) {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return false;
+    }
     if ctx.buffer_is_deleted(name) {
         ctx.set_gl_error(GL_INVALID_OPERATION);
         return false;
