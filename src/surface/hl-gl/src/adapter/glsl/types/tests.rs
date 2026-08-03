@@ -130,7 +130,7 @@ fn declaration_visibility_starts_at_the_declaration_and_ends_with_its_scope() {
 
 #[test]
 fn expression_results_cover_scalar_vector_and_matrix_indexing_and_swizzles() {
-    let source = "vec4 color; ivec3 indices; mat3 basis;";
+    let source = "vec4 color; ivec3 indices; mat3 basis; mat2x3 tall; mat4x2 wide;";
     let types = Types::parse(source);
     assert_eq!(
         types.expression(source.len(), "color.rgba"),
@@ -142,6 +142,14 @@ fn expression_results_cover_scalar_vector_and_matrix_indexing_and_swizzles() {
     );
     assert_eq!(
         types.expression(source.len(), "basis[2].xy"),
+        Some(Type::named("vec2"))
+    );
+    assert_eq!(
+        types.expression(source.len(), "tall[1]"),
+        Some(Type::named("vec3"))
+    );
+    assert_eq!(
+        types.expression(source.len(), "wide[3]"),
         Some(Type::named("vec2"))
     );
     assert_eq!(types.expression(source.len(), "color.unknown"), None);

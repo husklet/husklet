@@ -57,9 +57,9 @@ impl Type {
             "mat2" => Some(Self::named("vec2")),
             "mat3" => Some(Self::named("vec3")),
             "mat4" => Some(Self::named("vec4")),
-            "mat2x3" | "mat2x4" => Some(Self::named("vec2")),
-            "mat3x2" | "mat3x4" => Some(Self::named("vec3")),
-            "mat4x2" | "mat4x3" => Some(Self::named("vec4")),
+            "mat3x2" | "mat4x2" => Some(Self::named("vec2")),
+            "mat2x3" | "mat4x3" => Some(Self::named("vec3")),
+            "mat2x4" | "mat3x4" => Some(Self::named("vec4")),
             _ => None,
         }
     }
@@ -477,6 +477,7 @@ impl Type {
                 | "usampler3D"
                 | "usamplerCube"
                 | "usampler2DArray"
+                | "samplerExternalOES"
         )
     }
 }

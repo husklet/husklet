@@ -57,15 +57,7 @@ struct TypeToken<'a>(&'a str);
 
 impl TypeToken<'_> {
     fn is_sampler(&self) -> bool {
-        matches!(
-            self.0,
-            "sampler2D"
-                | "samplerCube"
-                | "sampler3D"
-                | "sampler2DArray"
-                | "sampler2DShadow"
-                | "samplerExternalOES"
-        ) || self.is_integer_sampler()
+        sampler_split(self.0).is_some()
     }
 
     /// The INTEGER sampler types (`usampler2D` / `isampler2D` and their array forms), which read a texture
@@ -77,7 +69,14 @@ impl TypeToken<'_> {
     fn is_integer_sampler(&self) -> bool {
         matches!(
             self.0,
-            "usampler2D" | "isampler2D" | "usampler3D" | "isampler3D" | "usampler2DArray" | "isampler2DArray"
+            "usampler2D"
+                | "isampler2D"
+                | "usamplerCube"
+                | "isamplerCube"
+                | "usampler3D"
+                | "isampler3D"
+                | "usampler2DArray"
+                | "isampler2DArray"
         )
     }
 
@@ -118,6 +117,33 @@ impl TypeToken<'_> {
                 | "lowp"
         )
     }
+}
+
+/// The single sampler vocabulary shared by reflection and every source-to-source lowering. Returning
+/// `None` keeps an unknown type out of the sampler ABI instead of silently compiling it as `sampler2D`.
+fn sampler_split(ty: &str) -> Option<(&'static str, &'static str, &'static str)> {
+    Some(match ty {
+        "sampler2D" | "samplerExternalOES" => ("texture2D", "sampler", "sampler2D"),
+        "samplerCube" => ("textureCube", "sampler", "samplerCube"),
+        "sampler3D" => ("texture3D", "sampler", "sampler3D"),
+        "sampler2DArray" => ("texture2DArray", "sampler", "sampler2DArray"),
+        "sampler2DShadow" => ("texture2D", "samplerShadow", "sampler2DShadow"),
+        "samplerCubeShadow" => ("textureCube", "samplerShadow", "samplerCubeShadow"),
+        "sampler2DArrayShadow" => (
+            "texture2DArray",
+            "samplerShadow",
+            "sampler2DArrayShadow",
+        ),
+        "isampler2D" => ("itexture2D", "sampler", "isampler2D"),
+        "isamplerCube" => ("itextureCube", "sampler", "isamplerCube"),
+        "isampler3D" => ("itexture3D", "sampler", "isampler3D"),
+        "isampler2DArray" => ("itexture2DArray", "sampler", "isampler2DArray"),
+        "usampler2D" => ("utexture2D", "sampler", "usampler2D"),
+        "usamplerCube" => ("utextureCube", "sampler", "usamplerCube"),
+        "usampler3D" => ("utexture3D", "sampler", "usampler3D"),
+        "usampler2DArray" => ("utexture2DArray", "sampler", "usampler2DArray"),
+        _ => return None,
+    })
 }
 
 /// A uniform-block member's byte offset/size (gl_shim.c `struct uni`).

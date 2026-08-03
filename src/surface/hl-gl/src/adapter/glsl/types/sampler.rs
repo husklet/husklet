@@ -269,11 +269,8 @@ impl StructSamplers {
     }
 
     fn split(ty: &str) -> (&'static str, &'static str, &'static str) {
-        match ty {
-            "samplerCube" => ("textureCube", "sampler", "samplerCube"),
-            "sampler2DShadow" => ("texture2D", "samplerShadow", "sampler2DShadow"),
-            _ => ("texture2D", "sampler", "sampler2D"),
-        }
+        super::super::sampler_split(ty)
+            .expect("Types sampler fields use the shared sampler vocabulary")
     }
 
     fn uniforms_of(source: &str, structure: &str, elements: usize) -> Vec<String> {
@@ -339,5 +336,34 @@ mod tests {
         assert!(source.contains("struct hl_data_S"), "{source}");
         assert!(source.contains("vec2 data_offset"), "{source}");
         assert!(source.contains("value_hldata.data_offset"), "{source}");
+    }
+
+    #[test]
+    fn every_sampler_kind_preserves_its_texture_shape_and_scalar_kind() {
+        for (ty, texture, sampler, constructor) in [
+            ("sampler3D", "texture3D", "sampler", "sampler3D"),
+            ("sampler2DArray", "texture2DArray", "sampler", "sampler2DArray"),
+            ("samplerCubeShadow", "textureCube", "samplerShadow", "samplerCubeShadow"),
+            ("sampler2DArrayShadow", "texture2DArray", "samplerShadow", "sampler2DArrayShadow"),
+            ("isamplerCube", "itextureCube", "sampler", "isamplerCube"),
+            ("usampler3D", "utexture3D", "sampler", "usampler3D"),
+        ] {
+            let mut source = format!(
+                "struct S {{ {ty} source; }}; vec4 fun(S value) {{ value.source; return vec4(1.0); }} uniform S item; void main(){{ vec4 c=fun(item); }}"
+            );
+            StructSamplers::lower(&mut source);
+            assert!(
+                source.contains(&format!("{texture} value_source_hltex")),
+                "{ty}: {source}"
+            );
+            assert!(
+                source.contains(&format!("{sampler} value_source_hlsmp")),
+                "{ty}: {source}"
+            );
+            assert!(
+                source.contains(&format!("{constructor}(value_source_hltex, value_source_hlsmp)")),
+                "{ty}: {source}"
+            );
+        }
     }
 }
