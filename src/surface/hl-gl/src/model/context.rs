@@ -185,6 +185,8 @@ pub struct GlContext {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct DepthTargetKey {
+    width: i32,
+    height: i32,
     fallback_color: u32,
     depth: Option<(u32, u64)>,
     stencil: Option<(u32, u64)>,

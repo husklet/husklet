@@ -939,6 +939,70 @@ fn recreate_attachment_before_swap(rebind: bool, recreate_depth: bool) {
 }
 
 #[test]
+fn same_frame_fbo_resize_mints_matching_depth_stencil_target() {
+    let mut c = ctx_64();
+    let mut sink = RecordingSink::with_full_caps();
+    let fbo = c.gen_framebuffer();
+    record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
+
+    let color = c.textures.gen();
+    record::bind_texture(&mut c, GL_TEXTURE_2D, color);
+    record::tex_image_2d(&mut c, 64, 64, &[]);
+    record::framebuffer_texture_2d(
+        &mut c, GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color, 0,
+    );
+    let depth = record::gen_renderbuffer(&mut c);
+    record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, depth);
+    record::renderbuffer_storage(&mut c, GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, 64, 64);
+    record::framebuffer_renderbuffer(
+        &mut c, GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth,
+    );
+    let stencil = record::gen_renderbuffer(&mut c);
+    record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, stencil);
+    record::renderbuffer_storage(&mut c, GL_RENDERBUFFER, GL_STENCIL_INDEX8, 64, 64);
+    record::framebuffer_renderbuffer(
+        &mut c, GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, stencil,
+    );
+    flat_program(&mut c);
+    tri_vbo(&mut c, 8);
+    record::enable(&mut c, GL_DEPTH_TEST);
+    record::enable(&mut c, GL_STENCIL_TEST);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+
+    record::bind_texture(&mut c, GL_TEXTURE_2D, color);
+    record::tex_image_2d(&mut c, 32, 16, &[]);
+    record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, depth);
+    record::renderbuffer_storage(&mut c, GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, 32, 16);
+    record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, stencil);
+    record::renderbuffer_storage(&mut c, GL_RENDERBUFFER, GL_STENCIL_INDEX8, 32, 16);
+    record::viewport(&mut c, [0, 0, 32, 16]);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let batch = &sink.batches[0];
+    let depth_targets = batch
+        .iter()
+        .filter_map(|command| match command {
+            Cmd::CreateTexture(id, descriptor)
+                if descriptor.format == TextureFormat::Depth24PlusStencil8 =>
+            {
+                Some((*id, descriptor.width, descriptor.height))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(depth_targets.len(), 2, "old and resized depth/stencil targets");
+    assert_eq!((depth_targets[0].1, depth_targets[0].2), (64, 64));
+    assert_eq!((depth_targets[1].1, depth_targets[1].2), (32, 16));
+    let submit = batch.iter().position(|command| matches!(command, Cmd::Submit(_))).unwrap();
+    let destroy = batch
+        .iter()
+        .position(|command| matches!(command, Cmd::DestroyTexture(id) if *id == depth_targets[0].0))
+        .expect("old depth/stencil target retired");
+    assert!(destroy > submit, "old target remains alive through the pass that references it");
+}
+
+#[test]
 fn recreated_depth_is_snapshotted_before_swap_without_rebind() {
     recreate_attachment_before_swap(false, true);
 }

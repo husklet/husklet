@@ -323,6 +323,8 @@ impl GlContext {
         &mut self,
         fbo: u32,
         color_tex: u32,
+        width: i32,
+        height: i32,
         with_stencil: bool,
         attachments: crate::model::program::DepthStencilSnapshot,
     ) -> hl_gpu::Result<(
@@ -333,6 +335,8 @@ impl GlContext {
         let depth = (fbo != 0).then_some(attachments.depth).flatten();
         let stencil = (fbo != 0).then_some(attachments.stencil).flatten();
         let key = DepthTargetKey {
+            width,
+            height,
             fallback_color: if depth.is_none() && stencil.is_none() {
                 color_tex
             } else {
@@ -391,6 +395,7 @@ impl GlContext {
         let obsolete = preserve
             .iter()
             .map(|(source, _)| *source)
+            .chain(previous.map(|(_, target)| target))
             .filter(|source| {
                 !self.depth_aspect_current.values().any(|current| current == source)
                     && !self.stencil_aspect_current.values().any(|current| current == source)
@@ -428,6 +433,8 @@ mod depth_preservation_tests {
 
     fn key(depth_gen: u64, stencil_gen: u64) -> DepthTargetKey {
         DepthTargetKey {
+            width: 64,
+            height: 64,
             fallback_color: 0,
             depth: Some((10, depth_gen)),
             stencil: Some((20, stencil_gen)),
@@ -480,11 +487,11 @@ mod depth_preservation_tests {
             depth: Some((10, 1)),
             stencil: Some((21, 1)),
         };
-        let (target_a, _, first) = ctx.depth_target(a, 0, true, attachments_a).unwrap();
+        let (target_a, _, first) = ctx.depth_target(a, 0, 64, 64, true, attachments_a).unwrap();
         assert!(first.is_empty());
-        let (target_b, _, into_b) = ctx.depth_target(b, 0, true, attachments_b).unwrap();
+        let (target_b, _, into_b) = ctx.depth_target(b, 0, 64, 64, true, attachments_b).unwrap();
         assert_eq!(into_b, vec![(target_a, TextureAspect::DepthOnly)]);
-        let (target_a_again, _, back_into_a) = ctx.depth_target(a, 0, true, attachments_a).unwrap();
+        let (target_a_again, _, back_into_a) = ctx.depth_target(a, 0, 64, 64, true, attachments_a).unwrap();
         assert_eq!(target_a_again, target_a);
         assert_eq!(back_into_a, vec![(target_b, TextureAspect::DepthOnly)]);
     }
@@ -501,8 +508,8 @@ mod depth_preservation_tests {
             depth: Some((10, 2)),
             stencil: Some((20, 1)),
         };
-        let (old_target, _, _) = ctx.depth_target(1, 0, true, old).unwrap();
-        let (_, _, preserve) = ctx.depth_target(1, 0, true, new).unwrap();
+        let (old_target, _, _) = ctx.depth_target(1, 0, 64, 64, true, old).unwrap();
+        let (_, _, preserve) = ctx.depth_target(1, 0, 64, 64, true, new).unwrap();
         assert_eq!(preserve, vec![(old_target, TextureAspect::StencilOnly)]);
         assert!(ctx
             .pending_destroys()
@@ -515,5 +522,32 @@ mod depth_preservation_tests {
         assert!(ctx.depth_aspect_current.is_empty());
         assert!(ctx.stencil_aspect_current.is_empty());
         assert!(ctx.pending_destroys().is_empty());
+    }
+
+    #[test]
+    fn resized_attachments_mint_a_sized_target_and_retire_the_old_one() {
+        let mut ctx = GlContext::new();
+        let old = crate::model::program::DepthStencilSnapshot {
+            depth: Some((10, 1)),
+            stencil: Some((20, 1)),
+        };
+        let resized = crate::model::program::DepthStencilSnapshot {
+            depth: Some((10, 2)),
+            stencil: Some((20, 2)),
+        };
+        let (old_target, old_created, old_preserve) =
+            ctx.depth_target(1, 0, 64, 64, true, old).unwrap();
+        assert!(old_created);
+        assert!(old_preserve.is_empty());
+
+        let (new_target, new_created, new_preserve) =
+            ctx.depth_target(1, 0, 128, 96, true, resized).unwrap();
+        assert!(new_created);
+        assert_ne!(new_target, old_target);
+        assert!(new_preserve.is_empty());
+        assert!(ctx
+            .pending_destroys()
+            .iter()
+            .any(|command| matches!(command, Cmd::DestroyTexture(target) if *target == old_target)));
     }
 }

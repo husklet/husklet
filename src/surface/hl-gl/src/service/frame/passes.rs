@@ -1381,7 +1381,7 @@ pub(super) fn depth_attachment_for(
     // GL clears the stencil plane to `glClearStencil`'s value (default 0), masked to the 8-bit buffer.
     let clear_stencil = (clear.stencil as u32) & 0xff;
     let (depth_tex, needs_create, preserve) =
-        ctx.depth_target(fbo, color_tex, with_stencil, attachments).ok()?;
+        ctx.depth_target(fbo, color_tex, w, h, with_stencil, attachments).ok()?;
     // A depth texture minted this frame has no prior contents to preserve — and a zero-initialized depth
     // plane fails every `GL_LESS` test — so its first pass always clear-loads regardless of the caller's op.
     let load = if needs_create {
