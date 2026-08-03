@@ -203,6 +203,149 @@ fn client_instance_divisor_captures_the_instance_span_and_repeats_it() {
 }
 
 #[test]
+fn divisor_materialization_covers_cts_rates_edges_storage_and_draw_methods() {
+    fn edge_counts(divisor: u32) -> Vec<u32> {
+        let mut counts = vec![
+            0,
+            1,
+            divisor.saturating_sub(1),
+            divisor,
+            divisor.saturating_add(1),
+        ];
+        counts.sort_unstable();
+        counts.dedup();
+        counts
+    }
+
+    fn uploaded<'a>(batch: &'a [Cmd], label: &str) -> Option<&'a [u8]> {
+        batch.iter().find_map(|command| match command {
+            Cmd::CreateBuffer(id, descriptor) if descriptor.label == label => {
+                batch.iter().find_map(|write| match write {
+                    Cmd::WriteBuffer {
+                        id: write_id, data, ..
+                    } if write_id == id => Some(data.as_slice()),
+                    _ => None,
+                })
+            }
+            _ => None,
+        })
+    }
+
+    let values = (0..140)
+        .map(|index| [index as f32 + 1.0, -(index as f32 + 1.0)])
+        .collect::<Vec<_>>();
+    let value_bytes = values
+        .iter()
+        .flatten()
+        .flat_map(|component| component.to_le_bytes())
+        .collect::<Vec<_>>();
+
+    for divisor in [0u32, 1, 3, 129] {
+        for instances in edge_counts(divisor) {
+            for client in [false, true] {
+                for indexed in [false, true] {
+                    let case = format!(
+                        "divisor={divisor} instances={instances} client={client} indexed={indexed}"
+                    );
+                    let mut c = ctx_640x480();
+                    let mut sink = RecordingSink::with_full_caps();
+                    record_textured_quad(&mut c);
+                    c.clear_recording();
+
+                    if client {
+                        record::bind_buffer(&mut c, GL_ARRAY_BUFFER, 0);
+                        record::vertex_attrib_pointer(
+                            &mut c,
+                            0,
+                            2,
+                            GL_FLOAT,
+                            false,
+                            8,
+                            values.as_ptr() as usize,
+                        );
+                    } else {
+                        let vbo = c.buffers.gen();
+                        record::bind_buffer(&mut c, GL_ARRAY_BUFFER, vbo);
+                        record::buffer_data(&mut c, GL_ARRAY_BUFFER, &value_bytes, 0x88E4);
+                        record::vertex_attrib_pointer(&mut c, 0, 2, GL_FLOAT, false, 8, 0);
+                    }
+                    record::enable_vertex_attrib(&mut c, 0);
+                    record::vertex_attrib_divisor(&mut c, 0, divisor);
+
+                    if indexed {
+                        let ebo = c.buffers.gen();
+                        record::bind_buffer(&mut c, GL_ELEMENT_ARRAY_BUFFER, ebo);
+                        record::buffer_data(
+                            &mut c,
+                            GL_ELEMENT_ARRAY_BUFFER,
+                            &[0, 0, 1, 0, 2, 0],
+                            0x88E4,
+                        );
+                        record::draw_elements_instanced(
+                            &mut c,
+                            GL_TRIANGLES,
+                            3,
+                            GL_UNSIGNED_SHORT,
+                            0,
+                            instances as i32,
+                        );
+                    } else {
+                        record::draw_arrays_instanced(
+                            &mut c,
+                            GL_TRIANGLES,
+                            0,
+                            3,
+                            instances as i32,
+                        );
+                    }
+
+                    if instances == 0 {
+                        assert!(c.draws().is_empty(), "zero-instance draw recorded: {case}");
+                        continue;
+                    }
+                    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap(), "{case}");
+                    let batch = &sink.batches[0];
+                    let label = if client {
+                        format!("gl-divisor-client-vertex:{divisor}")
+                    } else {
+                        format!("gl-divisor-vertex:{divisor}")
+                    };
+                    if divisor <= 1 {
+                        assert!(
+                            uploaded(batch, &label).is_none(),
+                            "unexpected materialization: {case}"
+                        );
+                    } else {
+                        let actual = uploaded(batch, &label)
+                            .unwrap_or_else(|| panic!("missing materialization: {case}"));
+                        let expected = (0..instances)
+                            .flat_map(|instance| values[(instance / divisor) as usize])
+                            .flat_map(|component| component.to_le_bytes())
+                            .collect::<Vec<_>>();
+                        assert_eq!(actual, expected, "{case}");
+                    }
+
+                    let pipeline = batch
+                        .iter()
+                        .find_map(|command| match command {
+                            Cmd::CreateRenderPipeline(_, descriptor) => Some(descriptor),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| panic!("missing pipeline: {case}"));
+                    let step = pipeline
+                        .vertex_buffers
+                        .iter()
+                        .find(|slot| slot.attrs.iter().any(|attribute| attribute.location == 0))
+                        .unwrap_or_else(|| panic!("missing attribute layout: {case}"))
+                        .step_mode;
+                    assert_eq!(step, u32::from(divisor != 0), "{case}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn negative_instance_count_is_rejected_and_records_no_draw() {
     let mut c = ctx_640x480();
     record::draw_arrays_instanced(&mut c, GL_TRIANGLES, 0, 6, -1);
