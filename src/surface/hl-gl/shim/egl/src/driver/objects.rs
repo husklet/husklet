@@ -396,18 +396,24 @@ pub extern "C" fn glTexImage2D(
     internalformat: i32,
     width: i32,
     height: i32,
-    _border: i32,
+    border: i32,
     format: u32,
     type_: u32,
     pixels: *const c_void,
 ) {
     crate::stub::trace("glTexImage2D", "uploading a 2D texture");
     GlobalState::context(|s| {
-        if level < 0 {
-            s.gl.set_gl_error(GL_INVALID_VALUE);
-            return;
-        }
-        if !record::validate_tex_image_2d(&mut s.gl, internalformat.max(0) as u32, format, type_) {
+        if !record::validate_tex_image_2d_call(
+            &mut s.gl,
+            target,
+            level,
+            internalformat,
+            width,
+            height,
+            border,
+            format,
+            type_,
+        ) {
             return;
         }
         // The plane the declared internal format names IS the destination, so the conversion emits its

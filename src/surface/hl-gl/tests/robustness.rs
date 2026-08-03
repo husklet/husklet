@@ -407,6 +407,32 @@ fn negative_texture_parameter_matrix_rejects_without_mutation() {
 }
 
 #[test]
+fn negative_tex_image_2d_error_matrix_precedes_allocation() {
+    let mut c = ctx();
+    let valid = (GL_TEXTURE_2D, 0, GL_RGB as i32, 1, 1, 0, GL_RGB, GL_UNSIGNED_BYTE);
+    let cases = [
+        ((0, valid.1, valid.2, valid.3, valid.4, valid.5, valid.6, valid.7), GL_INVALID_ENUM),
+        ((valid.0, valid.1, 0, valid.3, valid.4, valid.5, valid.6, valid.7), GL_INVALID_VALUE),
+        ((valid.0, valid.1, valid.2, valid.3, valid.4, 1, valid.6, valid.7), GL_INVALID_VALUE),
+        ((valid.0, 31, valid.2, valid.3, valid.4, valid.5, valid.6, valid.7), GL_INVALID_VALUE),
+        ((GL_TEXTURE_CUBE_MAP_POSITIVE_X, 0, valid.2, 1, 2, 0, valid.6, valid.7), GL_INVALID_VALUE),
+        ((valid.0, valid.1, valid.2, valid.3, valid.4, valid.5, GL_RGBA, valid.7), GL_INVALID_OPERATION),
+        ((valid.0, valid.1, valid.2, valid.3, valid.4, valid.5, valid.6, GL_UNSIGNED_SHORT_4_4_4_4), GL_INVALID_OPERATION),
+        ((valid.0, valid.1, valid.2, valid.3, valid.4, valid.5, 0, valid.7), GL_INVALID_ENUM),
+    ];
+    for (args, expected) in cases {
+        assert!(!record::validate_tex_image_2d_call(
+            &mut c, args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7,
+        ));
+        assert_eq!(c.take_gl_error(), expected);
+        assert_eq!(c.bound_texture(), 0, "rejected image call materialized state");
+    }
+    assert!(record::validate_tex_image_2d_call(
+        &mut c, valid.0, valid.1, valid.2, valid.3, valid.4, valid.5, valid.6, valid.7,
+    ));
+}
+
+#[test]
 fn pack_alignment_pads_between_readback_rows_but_not_after_the_last() {
     let mut c = ctx();
     let store = c.pixel_store_state();

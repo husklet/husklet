@@ -55,6 +55,61 @@ pub fn validate_tex_image_2d(
     valid
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn validate_tex_image_2d_call(
+    ctx: &mut GlContext,
+    target: u32,
+    level: i32,
+    internalformat: i32,
+    width: i32,
+    height: i32,
+    border: i32,
+    format: u32,
+    type_: u32,
+) -> bool {
+    let cube_face = cube_face_index(target).is_some();
+    if target != GL_TEXTURE_2D && !cube_face {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return false;
+    }
+    let max_level = (crate::service::query::MAX_TEXTURE_SIZE as u32).ilog2() as i32;
+    if level < 0 || level > max_level || border != 0 || (cube_face && width != height) {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return false;
+    }
+    let internalformat = match u32::try_from(internalformat) {
+        Ok(value)
+            if matches!(value, GL_RGB | GL_RGBA | GL_BGRA_EXT | GL_BGRA8_EXT) => value,
+        _ => {
+            ctx.set_gl_error(GL_INVALID_VALUE);
+            return false;
+        }
+    };
+    if !matches!(format, GL_RGB | GL_RGBA | GL_BGRA_EXT)
+        || !matches!(
+            type_,
+            GL_UNSIGNED_BYTE
+                | GL_UNSIGNED_SHORT_5_6_5
+                | GL_UNSIGNED_SHORT_4_4_4_4
+                | GL_UNSIGNED_SHORT_5_5_5_1
+        )
+    {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return false;
+    }
+    let internal_matches = internalformat == format
+        || (internalformat == GL_BGRA8_EXT && format == GL_BGRA_EXT);
+    let type_matches = matches!((format, type_),
+        (GL_RGB, GL_UNSIGNED_BYTE | GL_UNSIGNED_SHORT_5_6_5)
+            | (GL_RGBA, GL_UNSIGNED_BYTE | GL_UNSIGNED_SHORT_4_4_4_4 | GL_UNSIGNED_SHORT_5_5_5_1)
+            | (GL_BGRA_EXT, GL_UNSIGNED_BYTE));
+    if !internal_matches || !type_matches {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return false;
+    }
+    true
+}
+
 /// ES 2.0 table 3.4 legal unsized `glTexImage2D` format/type triples.
 fn valid_tex_image_2d_es2(internalformat: u32, format: u32, type_: u32) -> bool {
     internalformat == format
