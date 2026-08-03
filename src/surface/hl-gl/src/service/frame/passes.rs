@@ -412,6 +412,10 @@ impl RenderPasses {
                     format: fmt,
                     width: tw,
                     height: th,
+                    depth_stencil: run
+                        .first()
+                        .map(|draw| draw.depth_stencil)
+                        .unwrap_or_default(),
                     bottom_up: RenderPasses::stores_bottom_up_rows(
                         ctx,
                         run.first().and_then(|d| d.target),
@@ -600,6 +604,7 @@ fn lower_ordered_run(
             format: target.4,
             width: target.2,
             height: target.3,
+            depth_stencil: first.depth_stencil,
             bottom_up,
         },
         clear,
