@@ -326,6 +326,42 @@ impl<'a> FunctionLowering<'a> {
                     );
                     rebuilt.push(statement, span);
                 }
+                Statement::ImageAtomic {
+                    image,
+                    coordinate,
+                    array_index,
+                    fun,
+                    value,
+                    result,
+                } if self.oned[image.index()] => {
+                    *image = self.map[image.index()];
+                    let second = expressions.append(Expression::Literal(Literal::I32(0)), span);
+                    *coordinate = expressions.append(
+                        Expression::Compose {
+                            ty: self.sint2,
+                            components: vec![self.map[coordinate.index()], second],
+                        },
+                        span,
+                    );
+                    if let Some(index) = array_index {
+                        *index = self.map[index.index()];
+                    }
+                    if let naga::AtomicFunction::Exchange {
+                        compare: Some(compare),
+                    } = fun
+                    {
+                        *compare = self.map[compare.index()];
+                    }
+                    *value = self.map[value.index()];
+                    if let Some(result) = result {
+                        *result = self.map[result.index()];
+                    }
+                    rebuilt.push(
+                        Statement::Emit(naga::Range::new_from_bounds(second, *coordinate)),
+                        span,
+                    );
+                    rebuilt.push(statement, span);
+                }
                 Statement::Block(nested) => {
                     self.block(nested, expressions);
                     rebuilt.push(statement, span);
