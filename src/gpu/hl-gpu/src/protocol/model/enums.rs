@@ -72,14 +72,20 @@ impl TextureFormat {
             | TextureFormat::R8Uint
             | TextureFormat::Rg8Uint
             | TextureFormat::R32Uint
-            | TextureFormat::R16Uint | TextureFormat::Rg16Uint | TextureFormat::Rgba16Uint | TextureFormat::Rg32Uint
+            | TextureFormat::R16Uint
+            | TextureFormat::Rg16Uint
+            | TextureFormat::Rgba16Uint
+            | TextureFormat::Rg32Uint
             | TextureFormat::Rgba32Uint => TextureNumericClass::Uint,
             TextureFormat::Rgb10a2Uint => TextureNumericClass::Uint,
             TextureFormat::Rgba8Sint
             | TextureFormat::R8Sint
             | TextureFormat::Rg8Sint
             | TextureFormat::R32Sint
-            | TextureFormat::R16Sint | TextureFormat::Rg16Sint | TextureFormat::Rgba16Sint | TextureFormat::Rg32Sint
+            | TextureFormat::R16Sint
+            | TextureFormat::Rg16Sint
+            | TextureFormat::Rgba16Sint
+            | TextureFormat::Rg32Sint
             | TextureFormat::Rgba32Sint => TextureNumericClass::Sint,
             _ => TextureNumericClass::Float,
         }
@@ -88,9 +94,15 @@ impl TextureFormat {
     /// Bytes per texel for the color formats the software backend can materialize.
     pub fn bytes_per_texel(self) -> Option<usize> {
         Some(match self {
-            TextureFormat::R8Unorm | TextureFormat::R8Snorm | TextureFormat::R8Uint | TextureFormat::R8Sint => 1,
-            TextureFormat::R16Float | TextureFormat::R16Uint | TextureFormat::R16Sint
-            | TextureFormat::R5g6b5Unorm | TextureFormat::A1r5g5b5Unorm
+            TextureFormat::R8Unorm
+            | TextureFormat::R8Snorm
+            | TextureFormat::R8Uint
+            | TextureFormat::R8Sint => 1,
+            TextureFormat::R16Float
+            | TextureFormat::R16Uint
+            | TextureFormat::R16Sint
+            | TextureFormat::R5g6b5Unorm
+            | TextureFormat::A1r5g5b5Unorm
             | TextureFormat::B4g4r4a4Unorm => 2,
             TextureFormat::Rg8Unorm
             | TextureFormat::Rg8Snorm
@@ -105,10 +117,20 @@ impl TextureFormat {
             | TextureFormat::R32Float
             | TextureFormat::R32Uint
             | TextureFormat::R32Sint => 4,
-            TextureFormat::Rgb9e5Ufloat | TextureFormat::Rgb10a2Unorm
-            | TextureFormat::Rgb10a2Uint | TextureFormat::Rg11b10Ufloat => 4,
-            TextureFormat::Rgba8Snorm | TextureFormat::Rg16Float | TextureFormat::Rg16Uint | TextureFormat::Rg16Sint => 4,
-            TextureFormat::Rgba16Float | TextureFormat::Rgba16Uint | TextureFormat::Rgba16Sint | TextureFormat::Rg32Float | TextureFormat::Rg32Uint | TextureFormat::Rg32Sint => 8,
+            TextureFormat::Rgb9e5Ufloat
+            | TextureFormat::Rgb10a2Unorm
+            | TextureFormat::Rgb10a2Uint
+            | TextureFormat::Rg11b10Ufloat => 4,
+            TextureFormat::Rgba8Snorm
+            | TextureFormat::Rg16Float
+            | TextureFormat::Rg16Uint
+            | TextureFormat::Rg16Sint => 4,
+            TextureFormat::Rgba16Float
+            | TextureFormat::Rgba16Uint
+            | TextureFormat::Rgba16Sint
+            | TextureFormat::Rg32Float
+            | TextureFormat::Rg32Uint
+            | TextureFormat::Rg32Sint => 8,
             TextureFormat::Rgba32Float | TextureFormat::Rgba32Uint | TextureFormat::Rgba32Sint => {
                 16
             }
@@ -128,11 +150,16 @@ impl TextureFormat {
             | TextureFormat::Bc6hRgbFloat
             | TextureFormat::Bc7RgbaUnorm
             | TextureFormat::Bc7RgbaSrgb
-            | TextureFormat::Etc2Rgb8Unorm | TextureFormat::Etc2Rgb8Srgb
-            | TextureFormat::Etc2Rgb8A1Unorm | TextureFormat::Etc2Rgb8A1Srgb
-            | TextureFormat::Etc2Rgba8Unorm | TextureFormat::Etc2Rgba8Srgb
-            | TextureFormat::EacR11Unorm | TextureFormat::EacR11Snorm
-            | TextureFormat::EacRg11Unorm | TextureFormat::EacRg11Snorm => return None,
+            | TextureFormat::Etc2Rgb8Unorm
+            | TextureFormat::Etc2Rgb8Srgb
+            | TextureFormat::Etc2Rgb8A1Unorm
+            | TextureFormat::Etc2Rgb8A1Srgb
+            | TextureFormat::Etc2Rgba8Unorm
+            | TextureFormat::Etc2Rgba8Srgb
+            | TextureFormat::EacR11Unorm
+            | TextureFormat::EacR11Snorm
+            | TextureFormat::EacRg11Unorm
+            | TextureFormat::EacRg11Snorm => return None,
         })
     }
 
@@ -208,9 +235,8 @@ impl TextureFormat {
             }
         };
         let half = |value: f64| crate::protocol::model::half::from_f32(value as f32).to_le_bytes();
-        let unorm_bits = |value: f64, max: u16| {
-            (value.clamp(0.0, 1.0) * f64::from(max) + 0.5) as u16
-        };
+        let unorm_bits =
+            |value: f64, max: u16| (value.clamp(0.0, 1.0) * f64::from(max) + 0.5) as u16;
         Some(match self {
             TextureFormat::Rgba8Unorm | TextureFormat::Rgba8Srgb => vec![
                 channel(color[0]),
@@ -227,6 +253,10 @@ impl TextureFormat {
             TextureFormat::R8Unorm => vec![unorm(color[0])],
             TextureFormat::Rg8Unorm => vec![unorm(color[0]), unorm(color[1])],
             TextureFormat::R32Float => (color[0] as f32).to_le_bytes().to_vec(),
+            TextureFormat::Rg32Float => color[..2]
+                .iter()
+                .flat_map(|v| (*v as f32).to_le_bytes())
+                .collect(),
             TextureFormat::Rgba16Float => color.iter().flat_map(|v| half(*v)).collect(),
             TextureFormat::Rgba32Float => color
                 .iter()
@@ -253,17 +283,20 @@ impl TextureFormat {
             TextureFormat::R5g6b5Unorm => (unorm_bits(color[2], 31)
                 | (unorm_bits(color[1], 63) << 5)
                 | (unorm_bits(color[0], 31) << 11))
-                .to_le_bytes().to_vec(),
+                .to_le_bytes()
+                .to_vec(),
             TextureFormat::A1r5g5b5Unorm => (unorm_bits(color[2], 31)
                 | (unorm_bits(color[1], 31) << 5)
                 | (unorm_bits(color[0], 31) << 10)
                 | (unorm_bits(color[3], 1) << 15))
-                .to_le_bytes().to_vec(),
+                .to_le_bytes()
+                .to_vec(),
             TextureFormat::B4g4r4a4Unorm => (unorm_bits(color[3], 15)
                 | (unorm_bits(color[0], 15) << 4)
                 | (unorm_bits(color[1], 15) << 8)
                 | (unorm_bits(color[2], 15) << 12))
-                .to_le_bytes().to_vec(),
+                .to_le_bytes()
+                .to_vec(),
             _ => return None,
         })
     }
@@ -316,6 +349,7 @@ impl TextureFormat {
             TextureFormat::R8Unorm => [unorm(0), 0.0, 0.0, 1.0],
             TextureFormat::Rg8Unorm => [unorm(0), unorm(1), 0.0, 1.0],
             TextureFormat::R32Float => [single(0), 0.0, 0.0, 1.0],
+            TextureFormat::Rg32Float => [single(0), single(1), 0.0, 1.0],
             TextureFormat::Rgba16Float => [half(0), half(1), half(2), half(3)],
             TextureFormat::Rgba32Float => [single(0), single(1), single(2), single(3)],
             // Raw integer values, matching the direction `clear_texel` packs them.
@@ -369,9 +403,12 @@ impl TextureFormat {
             | TextureFormat::Bc1RgbaSrgb
             | TextureFormat::Bc4RUnorm
             | TextureFormat::Bc4RSnorm => (4, 4, 8),
-            TextureFormat::Etc2Rgb8Unorm | TextureFormat::Etc2Rgb8Srgb
-            | TextureFormat::Etc2Rgb8A1Unorm | TextureFormat::Etc2Rgb8A1Srgb
-            | TextureFormat::EacR11Unorm | TextureFormat::EacR11Snorm => (4, 4, 8),
+            TextureFormat::Etc2Rgb8Unorm
+            | TextureFormat::Etc2Rgb8Srgb
+            | TextureFormat::Etc2Rgb8A1Unorm
+            | TextureFormat::Etc2Rgb8A1Srgb
+            | TextureFormat::EacR11Unorm
+            | TextureFormat::EacR11Snorm => (4, 4, 8),
             TextureFormat::Bc2RgbaUnorm
             | TextureFormat::Bc2RgbaSrgb
             | TextureFormat::Bc3RgbaUnorm
@@ -382,8 +419,10 @@ impl TextureFormat {
             | TextureFormat::Bc6hRgbFloat
             | TextureFormat::Bc7RgbaUnorm
             | TextureFormat::Bc7RgbaSrgb => (4, 4, 16),
-            TextureFormat::Etc2Rgba8Unorm | TextureFormat::Etc2Rgba8Srgb
-            | TextureFormat::EacRg11Unorm | TextureFormat::EacRg11Snorm => (4, 4, 16),
+            TextureFormat::Etc2Rgba8Unorm
+            | TextureFormat::Etc2Rgba8Srgb
+            | TextureFormat::EacRg11Unorm
+            | TextureFormat::EacRg11Snorm => (4, 4, 16),
             _ => return None,
         })
     }

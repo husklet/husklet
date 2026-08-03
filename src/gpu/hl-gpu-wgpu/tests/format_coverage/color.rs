@@ -177,6 +177,14 @@ fn every_color_format_roundtrips_exact_stored_bytes() {
                 let got = le_f32_at(&t0[0..4]);
                 assert_eq!(got, C[0], "R32Float: single f32 = R = {}, got {got}", C[0]);
             }
+            TextureFormat::Rg32Float => {
+                let got = [le_f32_at(&t0[0..4]), le_f32_at(&t0[4..8])];
+                assert_eq!(
+                    got,
+                    C[..2],
+                    "Rg32Float: f32 texel must store R and G exactly"
+                );
+            }
             other => panic!("unhandled color format in sweep: {other:?} — add an assertion for it"),
         }
 

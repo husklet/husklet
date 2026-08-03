@@ -1,7 +1,7 @@
 //! The 32-bit float formats are refused a LINEAR filter by three layers independently, and this binds
 //! that agreement so it cannot drift silently.
 //!
-//! WebGPU makes `R32Float` and `Rgba32Float` non-filterable unless the optional `FLOAT32_FILTERABLE`
+//! WebGPU makes `R32Float`, `Rg32Float`, and `Rgba32Float` non-filterable unless the optional `FLOAT32_FILTERABLE`
 //! feature is enabled. Three places currently decline them, each for its own stated reason and none
 //! naming the other two:
 //!
@@ -9,7 +9,7 @@
 //!   * the software reference (`cpu/format.rs::FILTERABLE_REFUSED`), deliberately mirroring the executor,
 //!     with a comment saying in as many words that it could interpolate them perfectly well and that
 //!     accepting what the subject refuses would be a false divergence;
-//!   * the Vulkan surface (`record/image.rs::FILTERABLE`), a compile-time list from which the two float
+//!   * the Vulkan surface (`record/image.rs::FILTERABLE`), a compile-time list from which the three float
 //!     formats are absent.
 //!
 //! Three constants that happen to agree, with nothing checking that they do. The differential does not
@@ -18,7 +18,7 @@
 //!
 //! WHY THE FEATURE IS NOT ENABLED, measured rather than assumed. The adapter this was written against
 //! (llvmpipe, Vulkan backend) DOES offer `FLOAT32_FILTERABLE`, and reports the `FILTERABLE` format flag
-//! for both float formats — so the refusal is a choice, not an absence, and "the host cannot do it" would
+//! for all three float formats — so the refusal is a choice, not an absence, and "the host cannot do it" would
 //! be the wrong reason to record. The reason it stays off is that the feature is ADAPTER-DEPENDENT while
 //! the other two layers are compile-time constants. `required_features` is masked by `adapter.features()`,
 //! so enabling it would make the executor accept a linear float blit on one host and refuse it on
@@ -48,8 +48,12 @@ use hl_gpu::{
 };
 use hl_gpu_wgpu::{DeviceConfig, WgpuExecutor};
 
-/// The two formats WebGPU makes non-filterable without the optional feature.
-const FLOAT32: [TextureFormat; 2] = [TextureFormat::R32Float, TextureFormat::Rgba32Float];
+/// The formats WebGPU makes non-filterable without the optional feature.
+const FLOAT32: [TextureFormat; 3] = [
+    TextureFormat::R32Float,
+    TextureFormat::Rg32Float,
+    TextureFormat::Rgba32Float,
+];
 
 fn tex(format: TextureFormat) -> TextureDesc {
     TextureDesc {
@@ -141,9 +145,10 @@ fn the_executor_and_the_reference_refuse_a_linear_float_blit_together() {
             on_executor(&mut exec, format, Filter::Nearest).is_ok(),
             "executor: a NEAREST blit from {format:?} needs no filtering and must run"
         );
+        let reference = on_reference(format, Filter::Nearest);
         assert!(
-            on_reference(format, Filter::Nearest).is_ok(),
-            "reference: a NEAREST blit from {format:?} needs no filtering and must run"
+            reference.is_ok(),
+            "reference: a NEAREST blit from {format:?} needs no filtering and must run, got {reference:?}"
         );
     }
 

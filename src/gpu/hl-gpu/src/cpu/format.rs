@@ -149,7 +149,11 @@ pub(crate) fn sample_bilinear(
 /// software — and doing so would be the wrong kind of better: a reference that ACCEPTS what the subject
 /// refuses is a false divergence, the same defect as refusing what the subject performs. Vulkan agrees
 /// independently, forbidding a linear filter unless the source format supports linear filtering.
-const FILTERABLE_REFUSED: &[TextureFormat] = &[TextureFormat::R32Float, TextureFormat::Rgba32Float];
+const FILTERABLE_REFUSED: &[TextureFormat] = &[
+    TextureFormat::R32Float,
+    TextureFormat::Rg32Float,
+    TextureFormat::Rgba32Float,
+];
 
 const INTEGER_FILTER_REFUSED: &[TextureFormat] = &[
     TextureFormat::R8Uint,

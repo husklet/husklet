@@ -160,7 +160,7 @@ pub(crate) struct BlitCache {
 /// regardless of the filter, although a nearest blit does no filtering and needs none of it.
 fn filterable(format: hl_gpu::protocol::model::enums::TextureFormat) -> bool {
     use hl_gpu::protocol::model::enums::TextureFormat as F;
-    !matches!(format, F::R32Float | F::Rgba32Float)
+    !matches!(format, F::R32Float | F::Rg32Float | F::Rgba32Float)
 }
 
 fn integer(format: hl_gpu::protocol::model::enums::TextureFormat) -> bool {
