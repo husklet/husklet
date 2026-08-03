@@ -80,15 +80,16 @@ pub struct GlContext {
     /// rolls its id tables back), so these return to the allocator and the retry reissues them in order.
     frame_ids: std::sync::Mutex<Vec<(allocator::Resource, u32)>>,
 
-    /// The shared 1x1 placeholder sampled-texture + default-sampler IR ids (0 = not yet created). A
+    /// The shared 1x1 placeholder sampled-texture IR ids, indexed by D2/D3/Cube, plus one
+    /// default-sampler IR id (0 = not yet created). A
     /// GskGpu fragment program DECLARES + samples every one of its texture slots, so the executor's auto
     /// bind-group layout carries an entry for each; but for a given draw only some of those samplers have a
     /// real GL texture with uploaded pixels bound. The frame builder binds THIS transparent-black 1x1
     /// placeholder (+ this default sampler) at every declared-but-unbound sampler so the bind group covers
     /// every used binding of the layout (the executor's used-binding filter then trims to the sampled set).
-    /// Created ONCE (its `CreateTexture` + staging upload + `CreateSampler`) and reused across every draw
-    /// and frame — one placeholder texture + one sampler serve every empty sampler slot everywhere.
-    default_placeholder_tex: u32,
+    /// Each view dimension needs a distinct native texture, while the dimension-independent sampler is
+    /// created once and reused across every placeholder, draw, and frame.
+    default_placeholder_tex: [u32; 3],
     default_placeholder_samp: u32,
 
     /// Per-FBO offscreen render-target IR ids, keyed by color-attachment `(GL name, generation)` →

@@ -39,7 +39,7 @@ impl GlContext {
             next_sync_token: 1,
             allocator,
             frame_ids: std::sync::Mutex::new(Vec::new()),
-            default_placeholder_tex: 0,
+            default_placeholder_tex: [0; 3],
             default_placeholder_samp: 0,
             fbo_targets: HashMap::new(),
             external_targets: HashMap::new(),
@@ -348,12 +348,15 @@ impl GlContext {
                     .push(Cmd::DestroySurface(target.surface));
             }
         }
-        if self.default_placeholder_tex != 0 {
-            self.pending_destroys
-                .push(Cmd::DestroyTexture(self.default_placeholder_tex));
+        for texture in self.default_placeholder_tex {
+            if texture != 0 {
+                self.pending_destroys.push(Cmd::DestroyTexture(texture));
+            }
+        }
+        self.default_placeholder_tex = [0; 3];
+        if self.default_placeholder_samp != 0 {
             self.pending_destroys
                 .push(Cmd::DestroySampler(self.default_placeholder_samp));
-            self.default_placeholder_tex = 0;
             self.default_placeholder_samp = 0;
         }
         if self.fence_ir != 0 {

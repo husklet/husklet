@@ -252,6 +252,120 @@ fn empty_cube_placeholder_initializes_all_six_faces_to_opaque_black() {
 }
 
 #[test]
+fn mixed_incomplete_samplers_use_dimension_specific_placeholders_in_both_orders() {
+    const VERTEX: &str = "attribute vec2 p;varying vec2 uv;varying vec3 xyz;\
+void main(){uv=p;xyz=vec3(p,1.0);gl_Position=vec4(p,0,1);}";
+    const FORWARD: &str = "precision mediump float;varying vec2 uv;varying vec3 xyz;\
+uniform sampler2D two;uniform samplerCube cube;uniform sampler3D three;\
+void main(){gl_FragColor=texture2D(two,uv)+textureCube(cube,xyz)+texture3D(three,xyz);}";
+    const REVERSE: &str = "precision mediump float;varying vec2 uv;varying vec3 xyz;\
+uniform sampler3D three;uniform samplerCube cube;uniform sampler2D two;\
+void main(){gl_FragColor=texture3D(three,xyz)+textureCube(cube,xyz)+texture2D(two,uv);}";
+
+    for (fragment_source, targets) in [
+        (FORWARD, [GL_TEXTURE_2D, GL_TEXTURE_CUBE_MAP, GL_TEXTURE_3D]),
+        (REVERSE, [GL_TEXTURE_3D, GL_TEXTURE_CUBE_MAP, GL_TEXTURE_2D]),
+    ] {
+        let mut context = ctx_640x480();
+        let mut sink = RecordingSink::with_full_caps();
+        let vertex = record::create_shader(&mut context, GL_VERTEX_SHADER);
+        record::shader_source(&mut context, vertex, VERTEX);
+        record::compile_shader(&mut context, vertex);
+        let fragment = record::create_shader(&mut context, GL_FRAGMENT_SHADER);
+        record::shader_source(&mut context, fragment, fragment_source);
+        record::compile_shader(&mut context, fragment);
+        let program = record::create_program(&mut context);
+        record::attach_shader(&mut context, program, vertex);
+        record::attach_shader(&mut context, program, fragment);
+        assert!(record::link_program(&mut context, program));
+        record::use_program(&mut context, program);
+
+        // Give every declaration a distinct unit and a correctly-targeted but storage-less object. Each
+        // binding is incomplete and therefore must lower through its dimensional placeholder.
+        for (location, target) in targets.into_iter().enumerate() {
+            record::uniform_sampler(&mut context, location, location as i32);
+            context.active_texture(GL_TEXTURE0 + location as u32);
+            let texture = context.textures.gen();
+            record::bind_texture(&mut context, target, texture);
+        }
+        let buffer = context.buffers.gen();
+        record::bind_buffer(&mut context, GL_ARRAY_BUFFER, buffer);
+        record::buffer_data(&mut context, GL_ARRAY_BUFFER, &[0; 24], 0x88E4);
+        record::vertex_attrib_pointer(&mut context, 0, 2, GL_FLOAT, false, 8, 0);
+        record::enable_vertex_attrib(&mut context, 0);
+        record::draw_arrays(&mut context, GL_TRIANGLES, 0, 3);
+        assert!(swap::swap_buffers(&mut context, &mut sink).unwrap());
+
+        let batch = &sink.batches[0];
+        let placeholders = batch
+            .iter()
+            .filter_map(|command| match command {
+                Cmd::CreateTexture(id, descriptor)
+                    if descriptor.width == 1 && descriptor.height == 1 =>
+                {
+                    Some((*id, descriptor.dim))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(placeholders.len(), 3);
+        for dim in [TextureDim::D2, TextureDim::Cube, TextureDim::D3] {
+            assert_eq!(
+                placeholders
+                    .iter()
+                    .filter(|(_, actual)| *actual == dim)
+                    .count(),
+                1,
+                "one placeholder for {dim:?}"
+            );
+        }
+        let mut texture_ids = placeholders.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        texture_ids.sort_unstable();
+        texture_ids.dedup();
+        assert_eq!(
+            texture_ids.len(),
+            3,
+            "different view dimensions cannot alias one texture"
+        );
+        assert_eq!(
+            batch
+                .iter()
+                .filter(|command| matches!(command, Cmd::CreateSampler(..)))
+                .count(),
+            1,
+            "all dimensional placeholders retain one shared sampler"
+        );
+        let bind_group = batch
+            .iter()
+            .find_map(|command| match command {
+                Cmd::CreateBindGroup(_, descriptor) => Some(descriptor),
+                _ => None,
+            })
+            .expect("placeholder bind group");
+        let bound_textures = bind_group
+            .entries
+            .iter()
+            .filter_map(|entry| match entry.resource {
+                BindResource::Texture { id } => Some(id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(bound_textures.len(), 3);
+        assert!(bound_textures.iter().all(|id| texture_ids.contains(id)));
+        let bound_samplers = bind_group
+            .entries
+            .iter()
+            .filter_map(|entry| match entry.resource {
+                BindResource::Sampler { id } => Some(id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(bound_samplers.len(), 3);
+        assert!(bound_samplers.iter().all(|id| *id == bound_samplers[0]));
+    }
+}
+
+#[test]
 fn lowered_texture_write_owns_the_exact_uploaded_bytes() {
     let mut context = ctx_640x480();
     let mut sink = RecordingSink::with_full_caps();

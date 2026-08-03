@@ -1,6 +1,6 @@
 use super::local::SurfaceTarget;
 use super::*;
-use hl_gpu::protocol::model::enums::TextureFormat;
+use hl_gpu::protocol::model::enums::{TextureDim, TextureFormat};
 
 impl GlContext {
     pub fn validate_external_target(
@@ -193,25 +193,36 @@ impl GlContext {
             .unwrap_or_default()
     }
 
-    /// The shared 1x1 placeholder sampled-texture + default-sampler IR ids used to fill a
+    /// The dimension-specific 1x1 placeholder sampled-texture and shared default-sampler IR ids used to fill a
     /// DECLARED-but-unbound sampler slot (see [`Self::default_placeholder_tex`]). Returns
-    /// `(texture_ir, sampler_ir, needs_create)`: `needs_create` is true exactly on the first call, so the
-    /// frame builder emits the `CreateTexture` + staging upload + `CreateSampler` once and reuses the ids
-    /// on every later empty sampler slot in this and subsequent frames.
-    pub fn default_placeholder(&mut self) -> hl_gpu::Result<(u32, u32, bool)> {
-        if self.default_placeholder_tex == 0 {
-            let texture = self.alloc_texture_ir()?;
-            let sampler = self.alloc_sampler_ir()?;
-            self.default_placeholder_tex = texture;
-            self.default_placeholder_samp = sampler;
-            Ok((texture, sampler, true))
-        } else {
-            Ok((
-                self.default_placeholder_tex,
-                self.default_placeholder_samp,
-                false,
-            ))
+    /// `(texture_ir, sampler_ir, create_texture, create_sampler)`. Textures are cached per view dimension;
+    /// the sampler remains dimension-independent and is created only once.
+    pub fn default_placeholder(
+        &mut self,
+        dim: TextureDim,
+    ) -> hl_gpu::Result<(u32, u32, bool, bool)> {
+        let index = match dim {
+            TextureDim::D2 => 0,
+            TextureDim::D3 => 1,
+            TextureDim::Cube => 2,
+            TextureDim::D1 => {
+                return Err(hl_gpu::GpuError::Unsupported("gl: D1 placeholder"));
+            }
+        };
+        let create_texture = self.default_placeholder_tex[index] == 0;
+        if create_texture {
+            self.default_placeholder_tex[index] = self.alloc_texture_ir()?;
         }
+        let create_sampler = self.default_placeholder_samp == 0;
+        if create_sampler {
+            self.default_placeholder_samp = self.alloc_sampler_ir()?;
+        }
+        Ok((
+            self.default_placeholder_tex[index],
+            self.default_placeholder_samp,
+            create_texture,
+            create_sampler,
+        ))
     }
 
     /// The offscreen render-target texture + presentable surface IR ids for the FBO whose color

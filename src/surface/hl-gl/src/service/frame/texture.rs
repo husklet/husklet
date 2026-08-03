@@ -266,8 +266,9 @@ pub(super) fn lower_textures(
                     // samples as — (0, 0, 0, 1) — and this placeholder is what an app hits after deleting a
                     // bound texture. A transparent (0,0,0,0) texel turned that geometry invisible instead of
                     // black, which is a much harder thing to notice than a black quad.
-                    let (tex_ir, samp_ir, needs_create) = ctx.default_placeholder()?;
-                    let stage_ir = if needs_create {
+                    let (tex_ir, samp_ir, create_texture, create_sampler) =
+                        ctx.default_placeholder(texture_dim)?;
+                    let stage_ir = if create_texture {
                         let stage_ir = ctx.alloc_buffer_ir()?;
                         cmds.push(Cmd::CreateTexture(
                             tex_ir,
@@ -300,6 +301,11 @@ pub(super) fn lower_textures(
                             offset: 0,
                             data: vec![0, 0, 0, 0xff],
                         });
+                        stage_ir
+                    } else {
+                        0
+                    };
+                    if create_sampler {
                         cmds.push(Cmd::CreateSampler(
                             samp_ir,
                             SamplerDesc {
@@ -312,10 +318,7 @@ pub(super) fn lower_textures(
                                 ..SamplerDesc::default()
                             },
                         ));
-                        stage_ir
-                    } else {
-                        0
-                    };
+                    }
                     texbinds.push(TexBind {
                         slot,
                         tex_ir,

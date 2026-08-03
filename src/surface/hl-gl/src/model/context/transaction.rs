@@ -10,7 +10,7 @@ use super::*;
 pub struct FrameState {
     default_targets: HashMap<u64, SurfaceTarget>,
     external_targets: HashMap<(u32, u64), hl_gpu::SurfaceToken>,
-    default_placeholder_tex: u32,
+    default_placeholder_tex: [u32; 3],
     default_placeholder_samp: u32,
     fbo_targets: HashMap<(u32, u64), (u32, u32)>,
     depth_targets: HashMap<DepthTargetKey, u32>,
