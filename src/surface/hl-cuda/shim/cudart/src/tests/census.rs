@@ -9,8 +9,8 @@ use super::support::*;
 #[test]
 fn surface_is_complete_and_matches_the_census() {
     assert_eq!(
-        CUDART_ENTRYPOINTS, 56,
-        "CUDA runtime surface drifted from the golden 56"
+        CUDART_ENTRYPOINTS, 58,
+        "CUDA runtime surface drifted from the golden 58"
     );
     assert_eq!(GENERATED_STUBS + IMPLEMENTED_ENTRYPOINTS, TOTAL_ENTRYPOINTS);
     // The whole surface has real hand-written bodies — no generated default stubs remain.
@@ -37,6 +37,23 @@ fn runtime_entry_points_roundtrip() {
         unsafe { cudaGraphicsResourceSetMapFlags(core::ptr::null_mut(), 0) },
         CUDART_ERR_INVALID_RESOURCE_HANDLE
     );
+    let mut graphics_resource = 1usize as *mut c_void;
+    assert_eq!(
+        unsafe { cudaGraphicsGLRegisterImage(&mut graphics_resource, 7, 0x8513, 0) },
+        CUDART_ERR_INVALID_VALUE
+    );
+    assert_eq!(graphics_resource, 1usize as *mut c_void);
+    assert_eq!(
+        unsafe { cudaGraphicsGLRegisterImage(&mut graphics_resource, 7, 0x0de1, 3) },
+        CUDART_ERR_INVALID_VALUE
+    );
+    assert_eq!(graphics_resource, 1usize as *mut c_void);
+    let mut mapped_array = 1usize as *mut c_void;
+    assert_eq!(
+        unsafe { cudaGraphicsSubResourceGetMappedArray(&mut mapped_array, core::ptr::null_mut(), 0, 0) },
+        CUDART_ERR_INVALID_VALUE
+    );
+    assert_eq!(mapped_array, 1usize as *mut c_void);
 
     // versions
     let mut ver = 0i32;

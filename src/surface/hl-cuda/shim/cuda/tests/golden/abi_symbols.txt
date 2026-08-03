@@ -57,9 +57,11 @@ cuGLGetDevices_v2
 cuGetErrorName
 cuGetErrorString
 cuGraphicsGLRegisterBuffer
+cuGraphicsGLRegisterImage
 cuGraphicsMapResources
 cuGraphicsResourceGetMappedPointer_v2
 cuGraphicsResourceSetMapFlags_v2
+cuGraphicsSubResourceGetMappedArray
 cuGraphicsUnmapResources
 cuGraphicsUnregisterResource
 cuGetProcAddress

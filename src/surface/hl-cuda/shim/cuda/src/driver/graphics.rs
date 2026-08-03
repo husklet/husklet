@@ -9,6 +9,9 @@ use hl_gpu::ExportId;
 use crate::state::ShimState;
 
 type GlExportBuffer = unsafe extern "C" fn(u32, *mut u64) -> i32;
+type GlExportTexture = unsafe extern "C" fn(u32, *mut u64) -> i32;
+
+const GL_TEXTURE_2D: u32 = 0x0de1;
 
 #[link(name = "dl")]
 extern "C" {
@@ -26,6 +29,21 @@ fn gl_export_buffer() -> Option<GlExportBuffer> {
         dlsym(handle, c"hl_gl_export_buffer".as_ptr()) as usize
     });
     (pointer != 0).then(|| unsafe { core::mem::transmute::<usize, GlExportBuffer>(pointer) })
+}
+
+fn gl_export_texture() -> Option<GlExportTexture> {
+    static FUNCTION: OnceLock<usize> = OnceLock::new();
+    // SAFETY: both names have process lifetime, and the returned function is called only with the exact
+    // two-argument C ABI exported by the Husklet EGL shim. The open handle is intentionally never closed.
+    let pointer = *FUNCTION.get_or_init(|| unsafe {
+        let handle = dlopen(c"libEGL.so.1".as_ptr(), 2 /* RTLD_NOW */);
+        if handle.is_null() { return 0; }
+        dlsym(handle, c"hl_gl_export_texture".as_ptr()) as usize
+    });
+    (pointer != 0).then(|| unsafe {
+        // SAFETY: the symbol is `hl_gl_export_texture`, whose defining signature is `GlExportTexture`.
+        core::mem::transmute::<usize, GlExportTexture>(pointer)
+    })
 }
 
 fn resources(ptr: *mut *mut c_void, count: u32) -> Option<Vec<GraphicsResource>> {
@@ -52,6 +70,30 @@ pub unsafe extern "C" fn cuGraphicsGLRegisterBuffer(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn cuGraphicsGLRegisterImage(
+    resource: *mut *mut c_void,
+    image: u32,
+    target: u32,
+    flags: u32,
+) -> i32 {
+    if resource.is_null() || image == 0 || target != GL_TEXTURE_2D || !matches!(flags, 0 | 1 | 2 | 4 | 8) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    let Some(export_texture) = gl_export_texture() else { return CUDA_ERROR_NOT_SUPPORTED; };
+    let mut export = 0;
+    if export_texture(image, &mut export) != 0 { return CUDA_ERROR_INVALID_HANDLE; }
+    ShimState::with_context(|state| match graphics::register_image(
+        &mut state.ctx,
+        &mut state.sink,
+        ExportId(export),
+        flags,
+    ) {
+        Ok(handle) => { *resource = handle.0 as *mut c_void; CUDA_SUCCESS }
+        Err(error) => DriverStatus::from(&error).code(),
+    })
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn cuGraphicsMapResources(count: u32, list: *mut *mut c_void, _stream: *mut c_void) -> i32 {
     let Some(resources) = resources(list, count) else { return CUDA_ERROR_INVALID_VALUE; };
     ShimState::with_context(|state| match graphics::map_resources(&mut state.ctx, &mut state.sink, &resources) {
@@ -69,6 +111,25 @@ pub unsafe extern "C" fn cuGraphicsResourceGetMappedPointer_v2(
     if pointer.is_null() || size.is_null() || resource.is_null() { return CUDA_ERROR_INVALID_VALUE; }
     ShimState::with_context(|state| match graphics::mapped_pointer(&state.ctx, GraphicsResource(resource as u64)) {
         Ok((mapped, bytes)) => { *pointer = mapped.0; *size = bytes as usize; CUDA_SUCCESS }
+        Err(error) => DriverStatus::from(&error).code(),
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn cuGraphicsSubResourceGetMappedArray(
+    array: *mut *mut c_void,
+    resource: *mut c_void,
+    array_index: u32,
+    mip_level: u32,
+) -> i32 {
+    if array.is_null() || resource.is_null() { return CUDA_ERROR_INVALID_VALUE; }
+    ShimState::with_context(|state| match graphics::mapped_array(
+        &mut state.ctx,
+        GraphicsResource(resource as u64),
+        array_index,
+        mip_level,
+    ) {
+        Ok(mapped) => { *array = mapped.0 as *mut c_void; CUDA_SUCCESS }
         Err(error) => DriverStatus::from(&error).code(),
     })
 }

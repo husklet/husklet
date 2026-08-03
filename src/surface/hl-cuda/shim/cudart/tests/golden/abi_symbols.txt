@@ -28,9 +28,11 @@ cudaGetErrorString
 cudaGetLastError
 cudaGLSetGLDevice
 cudaGraphicsGLRegisterBuffer
+cudaGraphicsGLRegisterImage
 cudaGraphicsMapResources
 cudaGraphicsResourceGetMappedPointer
 cudaGraphicsResourceSetMapFlags
+cudaGraphicsSubResourceGetMappedArray
 cudaGraphicsUnmapResources
 cudaGraphicsUnregisterResource
 cudaHostAlloc

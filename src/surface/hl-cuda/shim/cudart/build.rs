@@ -233,8 +233,10 @@ const IMPLEMENTED: &[&str] = &[
     // memory (device / managed / pinned)
     "cudaMalloc",
     "cudaGraphicsGLRegisterBuffer",
+    "cudaGraphicsGLRegisterImage",
     "cudaGraphicsMapResources",
     "cudaGraphicsResourceGetMappedPointer",
+    "cudaGraphicsSubResourceGetMappedArray",
     "cudaGraphicsUnmapResources",
     "cudaGraphicsUnregisterResource",
     "cudaGraphicsResourceSetMapFlags",

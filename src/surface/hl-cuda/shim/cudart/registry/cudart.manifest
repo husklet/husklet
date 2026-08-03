@@ -59,8 +59,10 @@ RT	cudaHostAlloc	cudaError_t	void**|ptr;size_t|size;unsigned int|flags
 RT	cudaFreeHost	cudaError_t	void*|ptr
 RT	cudaHostGetDevicePointer	cudaError_t	void**|pDevice;void*|pHost;unsigned int|flags
 RT	cudaGraphicsGLRegisterBuffer	cudaError_t	cudaGraphicsResource**|resource;unsigned int|buffer;unsigned int|flags
+RT	cudaGraphicsGLRegisterImage	cudaError_t	cudaGraphicsResource**|resource;unsigned int|image;unsigned int|target;unsigned int|flags
 RT	cudaGraphicsMapResources	cudaError_t	int|count;cudaGraphicsResource**|resources;cudaStream_t|stream
 RT	cudaGraphicsResourceGetMappedPointer	cudaError_t	void**|devPtr;size_t*|size;cudaGraphicsResource*|resource
+RT	cudaGraphicsSubResourceGetMappedArray	cudaError_t	cudaArray**|array;cudaGraphicsResource*|resource;unsigned int|arrayIndex;unsigned int|mipLevel
 RT	cudaGraphicsUnmapResources	cudaError_t	int|count;cudaGraphicsResource**|resources;cudaStream_t|stream
 RT	cudaGraphicsUnregisterResource	cudaError_t	cudaGraphicsResource*|resource
 RT	cudaGraphicsResourceSetMapFlags	cudaError_t	cudaGraphicsResource*|resource;unsigned int|flags

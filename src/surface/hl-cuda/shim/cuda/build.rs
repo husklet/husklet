@@ -276,8 +276,10 @@ const IMPLEMENTED: &[&str] = &[
     // IR-wired compute path
     "cuMemAlloc_v2",
     "cuGraphicsGLRegisterBuffer",
+    "cuGraphicsGLRegisterImage",
     "cuGraphicsMapResources",
     "cuGraphicsResourceGetMappedPointer_v2",
+    "cuGraphicsSubResourceGetMappedArray",
     "cuGraphicsUnmapResources",
     "cuGraphicsUnregisterResource",
     "cuGraphicsResourceSetMapFlags_v2",

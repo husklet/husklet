@@ -21,6 +21,7 @@ pub struct GraphicsImage {
     pub export: ExportId,
     pub mapped: bool,
     pub map_flags: u32,
+    pub registration_flags: u32,
     pub array: Option<ImportedArrayHandle>,
 }
 

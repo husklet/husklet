@@ -29,8 +29,10 @@ CU	cuDeviceGetByPCIBusId	CUresult	CUdevice*|dev;const char*|s
 CU	cuDeviceGetCount	CUresult	int*|c
 CU	cuDeviceGetLuid	CUresult	char*|luid;unsigned int*|mask;CUdevice|dev
 CU	cuGraphicsGLRegisterBuffer	CUresult	CUgraphicsResource*|resource;unsigned int|buffer;unsigned int|flags
+CU	cuGraphicsGLRegisterImage	CUresult	CUgraphicsResource*|resource;unsigned int|image;unsigned int|target;unsigned int|flags
 CU	cuGraphicsMapResources	CUresult	unsigned int|count;CUgraphicsResource*|resources;CUstream|stream
 CU	cuGraphicsResourceGetMappedPointer_v2	CUresult	CUdeviceptr*|devPtr;size_t*|size;CUgraphicsResource|resource
+CU	cuGraphicsSubResourceGetMappedArray	CUresult	CUarray*|array;CUgraphicsResource|resource;unsigned int|arrayIndex;unsigned int|mipLevel
 CU	cuGraphicsUnmapResources	CUresult	unsigned int|count;CUgraphicsResource*|resources;CUstream|stream
 CU	cuGraphicsUnregisterResource	CUresult	CUgraphicsResource|resource
 CU	cuGraphicsResourceSetMapFlags_v2	CUresult	CUgraphicsResource|resource;unsigned int|flags
