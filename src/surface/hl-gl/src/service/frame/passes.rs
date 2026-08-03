@@ -1402,7 +1402,10 @@ pub(super) fn depth_attachment_for(
                 format,
                 usage: texture_usage::RENDER_TARGET
                     | texture_usage::COPY_SRC
-                    | texture_usage::COPY_DST,
+                    | texture_usage::COPY_DST
+                    // Shared depth storage can move between combined depth/stencil targets. The portable
+                    // preservation path samples the old depth plane before writing the new target.
+                    | texture_usage::SAMPLED,
                 label: if with_stencil {
                     "gl-depth-stencil".into()
                 } else {

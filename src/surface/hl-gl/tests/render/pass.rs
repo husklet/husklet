@@ -986,7 +986,7 @@ fn same_frame_fbo_resize_mints_matching_depth_stencil_target() {
             Cmd::CreateTexture(id, descriptor)
                 if descriptor.format == TextureFormat::Depth24PlusStencil8 =>
             {
-                Some((*id, descriptor.width, descriptor.height))
+                Some((*id, descriptor.width, descriptor.height, descriptor.usage))
             }
             _ => None,
         })
@@ -994,6 +994,9 @@ fn same_frame_fbo_resize_mints_matching_depth_stencil_target() {
     assert_eq!(depth_targets.len(), 2, "old and resized depth/stencil targets");
     assert_eq!((depth_targets[0].1, depth_targets[0].2), (64, 64));
     assert_eq!((depth_targets[1].1, depth_targets[1].2), (32, 16));
+    assert!(depth_targets
+        .iter()
+        .all(|target| target.3 & texture_usage::SAMPLED != 0));
     let submit = batch.iter().position(|command| matches!(command, Cmd::Submit(_))).unwrap();
     let destroy = batch
         .iter()
