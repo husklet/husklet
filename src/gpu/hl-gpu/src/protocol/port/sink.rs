@@ -12,6 +12,7 @@ use crate::protocol::model::command::Cmd;
 use crate::protocol::model::error::{GpuError, Result};
 use crate::protocol::model::id::{BufferId, FenceId, TextureId};
 use crate::runtime::model::sharing::ExportId;
+use crate::protocol::model::sync::{SyncExportId, TimelineWait};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FenceWait {
@@ -105,6 +106,36 @@ pub trait CommandSink {
     fn unmap_buffer(&mut self, id: BufferId) -> Result<()> {
         let _ = id;
         Err(GpuError::Unsupported("command sink: unmap_buffer"))
+    }
+
+    fn export_sync(&mut self, initial: u64) -> Result<SyncExportId> {
+        let _ = initial;
+        Err(GpuError::Unsupported("command sink: export_sync"))
+    }
+
+    fn import_sync(&mut self, export: SyncExportId) -> Result<()> {
+        let _ = export;
+        Err(GpuError::Unsupported("command sink: import_sync"))
+    }
+
+    fn release_sync(&mut self, export: SyncExportId) -> Result<()> {
+        let _ = export;
+        Err(GpuError::Unsupported("command sink: release_sync"))
+    }
+
+    fn signal_sync(&mut self, export: SyncExportId, value: u64) -> Result<()> {
+        let _ = (export, value);
+        Err(GpuError::Unsupported("command sink: signal_sync"))
+    }
+
+    fn wait_sync(
+        &mut self,
+        export: SyncExportId,
+        value: u64,
+        timeout_ns: u64,
+    ) -> Result<TimelineWait> {
+        let _ = (export, value, timeout_ns);
+        Err(GpuError::Unsupported("command sink: wait_sync"))
     }
 }
 

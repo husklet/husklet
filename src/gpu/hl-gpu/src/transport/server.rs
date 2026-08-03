@@ -100,7 +100,10 @@ pub trait ConnectionHandler {
         None
     }
 
-    fn export_texture(&mut self, req: &ReadbackRequest) -> Option<crate::runtime::model::sharing::ExportId> {
+    fn export_texture(
+        &mut self,
+        req: &ReadbackRequest,
+    ) -> Option<crate::runtime::model::sharing::ExportId> {
         let _ = req;
         None
     }
@@ -110,8 +113,14 @@ pub trait ConnectionHandler {
         None
     }
 
-    fn map_texture(&mut self, req: &ReadbackRequest) -> Option<()> { let _ = req; None }
-    fn unmap_texture(&mut self, req: &ReadbackRequest) -> Option<()> { let _ = req; None }
+    fn map_texture(&mut self, req: &ReadbackRequest) -> Option<()> {
+        let _ = req;
+        None
+    }
+    fn unmap_texture(&mut self, req: &ReadbackRequest) -> Option<()> {
+        let _ = req;
+        None
+    }
 
     fn map_buffer(&mut self, req: &ReadbackRequest) -> Option<()> {
         let _ = req;
@@ -119,6 +128,27 @@ pub trait ConnectionHandler {
     }
 
     fn unmap_buffer(&mut self, req: &ReadbackRequest) -> Option<()> {
+        let _ = req;
+        None
+    }
+
+    fn export_sync(&mut self, req: &ReadbackRequest) -> Option<crate::SyncExportId> {
+        let _ = req;
+        None
+    }
+    fn import_sync(&mut self, req: &ReadbackRequest) -> Option<()> {
+        let _ = req;
+        None
+    }
+    fn release_sync(&mut self, req: &ReadbackRequest) -> Option<()> {
+        let _ = req;
+        None
+    }
+    fn signal_sync(&mut self, req: &ReadbackRequest) -> Option<()> {
+        let _ = req;
+        None
+    }
+    fn wait_sync(&mut self, req: &ReadbackRequest) -> Option<crate::TimelineWait> {
         let _ = req;
         None
     }
@@ -221,6 +251,7 @@ fn serve_loop<H: ConnectionHandler>(
             let started = std::time::Instant::now();
             let bytes = ReadbackRequest::from_bytes(&frame.payload)
                 .filter(|req| req.version == crate::transport::model::readback::READBACK_VERSION)
+                .filter(|req| req.kind >= readback_kind::EXPORT_SYNC || (req.authenticity == 0 && req.arg == 0))
                 .filter(|req| match req.kind {
                     readback_kind::BUFFER => true,
                     readback_kind::FENCE => req.len == 0,
@@ -233,6 +264,10 @@ fn serve_loop<H: ConnectionHandler>(
                     readback_kind::MAP_BUFFER | readback_kind::UNMAP_BUFFER => {
                         req.offset == 0 && req.len == 0
                     }
+                    readback_kind::EXPORT_SYNC => req.id == 0 && req.offset == 0 && req.authenticity == 0 && req.arg == 0,
+                    readback_kind::IMPORT_SYNC | readback_kind::RELEASE_SYNC => req.id == 0 && req.len == 0 && req.arg == 0,
+                    readback_kind::SIGNAL_SYNC => req.id == 0 && req.arg == 0,
+                    readback_kind::WAIT_SYNC => req.id == 0,
                     _ => false,
                 })
                 .and_then(|req| {
@@ -257,6 +292,16 @@ fn serve_loop<H: ConnectionHandler>(
                     readback_kind::UNMAP_TEXTURE => handler.unmap_texture(&req).map(|()| Vec::new()),
                     readback_kind::MAP_BUFFER => handler.map_buffer(&req).map(|()| Vec::new()),
                     readback_kind::UNMAP_BUFFER => handler.unmap_buffer(&req).map(|()| Vec::new()),
+                    readback_kind::EXPORT_SYNC => handler.export_sync(&req).map(|id| {
+                        let mut bytes = Vec::with_capacity(24);
+                        bytes.extend_from_slice(&id.serial().to_le_bytes());
+                        bytes.extend_from_slice(&id.authenticity().to_le_bytes());
+                        bytes
+                    }),
+                    readback_kind::IMPORT_SYNC => handler.import_sync(&req).map(|()| Vec::new()),
+                    readback_kind::RELEASE_SYNC => handler.release_sync(&req).map(|()| Vec::new()),
+                    readback_kind::SIGNAL_SYNC => handler.signal_sync(&req).map(|()| Vec::new()),
+                    readback_kind::WAIT_SYNC => handler.wait_sync(&req).map(|status| vec![matches!(status, crate::TimelineWait::Reached) as u8]),
                     _ => None,
                 }) {
                     Ok(bytes) => bytes,

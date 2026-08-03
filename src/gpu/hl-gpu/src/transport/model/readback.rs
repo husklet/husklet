@@ -21,7 +21,7 @@ pub const READBACK_MAGIC: u32 = 0xFFFF_FFFF;
 
 /// Version of the readback sub-protocol, carried in every [`ReadbackRequest`]. Independent of the handshake
 /// wire version so readback can evolve without a `WIRE_VERSION` bump (which would break submit interop).
-pub const READBACK_VERSION: u32 = 1;
+pub const READBACK_VERSION: u32 = 2;
 
 /// Response status byte: the readback succeeded and `len` bytes follow.
 pub const READBACK_OK: u8 = 1;
@@ -49,6 +49,11 @@ pub mod readback_kind {
     pub const IMPORT_TEXTURE: u8 = 8;
     pub const MAP_TEXTURE: u8 = 9;
     pub const UNMAP_TEXTURE: u8 = 10;
+    pub const EXPORT_SYNC: u8 = 11;
+    pub const IMPORT_SYNC: u8 = 12;
+    pub const RELEASE_SYNC: u8 = 13;
+    pub const SIGNAL_SYNC: u8 = 14;
+    pub const WAIT_SYNC: u8 = 15;
 }
 
 /// A device→host readback request: "return `len` bytes of resource `id` starting at `offset`". Serialized
@@ -65,11 +70,15 @@ pub struct ReadbackRequest {
     pub offset: u64,
     /// Number of bytes to return.
     pub len: u64,
+    /// Authenticated synchronization identity, zero for non-sync requests.
+    pub authenticity: u128,
+    /// Third synchronization argument (wait timeout), zero for other requests.
+    pub arg: u64,
 }
 
 impl ReadbackRequest {
     /// Fixed wire size: `version(4) + kind(1) + id(4) + offset(8) + len(8)`.
-    pub const SIZE: usize = 4 + 1 + 4 + 8 + 8;
+    pub const SIZE: usize = 4 + 1 + 4 + 8 + 8 + 16 + 8;
 
     /// A buffer-readback request for `len` bytes of buffer `id` at `offset`, stamped with the current
     /// [`READBACK_VERSION`].
@@ -80,6 +89,8 @@ impl ReadbackRequest {
             id,
             offset,
             len,
+            authenticity: 0,
+            arg: 0,
         }
     }
 
@@ -90,6 +101,8 @@ impl ReadbackRequest {
             id,
             offset: value,
             len: 0,
+            authenticity: 0,
+            arg: 0,
         }
     }
 
@@ -100,6 +113,8 @@ impl ReadbackRequest {
             id,
             offset: value,
             len: timeout_ns,
+            authenticity: 0,
+            arg: 0,
         }
     }
 
@@ -110,6 +125,8 @@ impl ReadbackRequest {
             id,
             offset: 0,
             len: 0,
+            authenticity: 0,
+            arg: 0,
         }
     }
 
@@ -120,23 +137,57 @@ impl ReadbackRequest {
             id,
             offset: export,
             len: 0,
+            authenticity: 0,
+            arg: 0,
         }
     }
 
     pub fn export_texture(id: u32) -> Self {
-        Self { version: READBACK_VERSION, kind: readback_kind::EXPORT_TEXTURE, id, offset: 0, len: 0 }
+        Self {
+            version: READBACK_VERSION,
+            kind: readback_kind::EXPORT_TEXTURE,
+            id,
+            offset: 0,
+            len: 0,
+            authenticity: 0,
+            arg: 0,
+        }
     }
 
     pub fn import_texture(id: u32, export: u64) -> Self {
-        Self { version: READBACK_VERSION, kind: readback_kind::IMPORT_TEXTURE, id, offset: export, len: 0 }
+        Self {
+            version: READBACK_VERSION,
+            kind: readback_kind::IMPORT_TEXTURE,
+            id,
+            offset: export,
+            len: 0,
+            authenticity: 0,
+            arg: 0,
+        }
     }
 
     pub fn map_texture(id: u32) -> Self {
-        Self { version: READBACK_VERSION, kind: readback_kind::MAP_TEXTURE, id, offset: 0, len: 0 }
+        Self {
+            version: READBACK_VERSION,
+            kind: readback_kind::MAP_TEXTURE,
+            id,
+            offset: 0,
+            len: 0,
+            authenticity: 0,
+            arg: 0,
+        }
     }
 
     pub fn unmap_texture(id: u32) -> Self {
-        Self { version: READBACK_VERSION, kind: readback_kind::UNMAP_TEXTURE, id, offset: 0, len: 0 }
+        Self {
+            version: READBACK_VERSION,
+            kind: readback_kind::UNMAP_TEXTURE,
+            id,
+            offset: 0,
+            len: 0,
+            authenticity: 0,
+            arg: 0,
+        }
     }
 
     pub fn map_buffer(id: u32) -> Self {
@@ -146,6 +197,8 @@ impl ReadbackRequest {
             id,
             offset: 0,
             len: 0,
+            authenticity: 0,
+            arg: 0,
         }
     }
 
@@ -156,7 +209,50 @@ impl ReadbackRequest {
             id,
             offset: 0,
             len: 0,
+            authenticity: 0,
+            arg: 0,
         }
+    }
+
+    pub fn export_sync(initial: u64) -> Self {
+        Self {
+            version: READBACK_VERSION,
+            kind: readback_kind::EXPORT_SYNC,
+            id: 0,
+            offset: 0,
+            len: initial,
+            authenticity: 0,
+            arg: 0,
+        }
+    }
+
+    fn sync(kind: u8, export: crate::SyncExportId, value: u64, arg: u64) -> Self {
+        Self {
+            version: READBACK_VERSION,
+            kind,
+            id: 0,
+            offset: export.serial(),
+            len: value,
+            authenticity: export.authenticity(),
+            arg,
+        }
+    }
+
+    pub fn import_sync(export: crate::SyncExportId) -> Self {
+        Self::sync(readback_kind::IMPORT_SYNC, export, 0, 0)
+    }
+    pub fn release_sync(export: crate::SyncExportId) -> Self {
+        Self::sync(readback_kind::RELEASE_SYNC, export, 0, 0)
+    }
+    pub fn signal_sync(export: crate::SyncExportId, value: u64) -> Self {
+        Self::sync(readback_kind::SIGNAL_SYNC, export, value, 0)
+    }
+    pub fn wait_sync(export: crate::SyncExportId, value: u64, timeout_ns: u64) -> Self {
+        Self::sync(readback_kind::WAIT_SYNC, export, value, timeout_ns)
+    }
+
+    pub fn sync_export(&self) -> crate::SyncExportId {
+        crate::SyncExportId::from_parts(self.offset, self.authenticity)
     }
 
     /// Serialize to the fixed little-endian request bytes.
@@ -167,6 +263,8 @@ impl ReadbackRequest {
         b[5..9].copy_from_slice(&self.id.to_le_bytes());
         b[9..17].copy_from_slice(&self.offset.to_le_bytes());
         b[17..25].copy_from_slice(&self.len.to_le_bytes());
+        b[25..41].copy_from_slice(&self.authenticity.to_le_bytes());
+        b[41..49].copy_from_slice(&self.arg.to_le_bytes());
         b
     }
 
@@ -181,6 +279,8 @@ impl ReadbackRequest {
             id: u32::from_le_bytes(b[5..9].try_into().unwrap()),
             offset: u64::from_le_bytes(b[9..17].try_into().unwrap()),
             len: u64::from_le_bytes(b[17..25].try_into().unwrap()),
+            authenticity: u128::from_le_bytes(b[25..41].try_into().unwrap()),
+            arg: u64::from_le_bytes(b[41..49].try_into().unwrap()),
         })
     }
 }
@@ -220,9 +320,18 @@ mod tests {
 
         let texture_export = ReadbackRequest::export_texture(13);
         let texture_import = ReadbackRequest::import_texture(17, 0xfeed_beef);
-        assert_eq!(ReadbackRequest::from_bytes(&texture_export.to_bytes()), Some(texture_export));
-        assert_eq!(ReadbackRequest::from_bytes(&texture_import.to_bytes()), Some(texture_import));
-        assert_eq!((texture_import.id, texture_import.offset, texture_import.len), (17, 0xfeed_beef, 0));
+        assert_eq!(
+            ReadbackRequest::from_bytes(&texture_export.to_bytes()),
+            Some(texture_export)
+        );
+        assert_eq!(
+            ReadbackRequest::from_bytes(&texture_import.to_bytes()),
+            Some(texture_import)
+        );
+        assert_eq!(
+            (texture_import.id, texture_import.offset, texture_import.len),
+            (17, 0xfeed_beef, 0)
+        );
 
         for request in [
             ReadbackRequest::map_buffer(11),
@@ -242,6 +351,26 @@ mod tests {
     fn readback_magic_is_not_a_plausible_surface_id() {
         // The sentinel must be a value the guest never assigns to a real surface.
         assert_eq!(READBACK_MAGIC, u32::MAX);
+    }
+
+    #[test]
+    fn synchronization_requests_roundtrip_authenticated_identity() {
+        let export = crate::SyncExportId::from_parts(17, 0x1234_5678_9abc_def0_1122_3344_5566_7788);
+        for request in [
+            ReadbackRequest::export_sync(3),
+            ReadbackRequest::import_sync(export),
+            ReadbackRequest::release_sync(export),
+            ReadbackRequest::signal_sync(export, 9),
+            ReadbackRequest::wait_sync(export, 10, 11),
+        ] {
+            assert_eq!(
+                ReadbackRequest::from_bytes(&request.to_bytes()),
+                Some(request)
+            );
+        }
+        let wait = ReadbackRequest::wait_sync(export, 10, 11);
+        assert_eq!(wait.sync_export(), export);
+        assert_eq!((wait.len, wait.arg), (10, 11));
     }
 
     #[test]

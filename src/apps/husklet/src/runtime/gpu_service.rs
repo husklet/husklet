@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use hl_gpu::transport::{SubmitHeader, Verdict};
 use hl_gpu::{
     BufferId, Cmd, ConnectionHandler, ExportId, Exports, FenceId, GlobalLedger, GpuExecutor,
-    Limits, ReadbackRequest, Session, SystemClock, TextureId,
+    Limits, ReadbackRequest, Session, SyncExports, SystemClock, TextureId,
 };
 
 use super::capture;
@@ -99,6 +99,7 @@ impl Connection {
     fn new(
         executor: Executor,
         exports: Exports,
+        sync_exports: SyncExports,
         global: GlobalLedger,
         trace: bool,
         capture: Option<capture::Capture>,
@@ -110,7 +111,8 @@ impl Connection {
             global,
             Box::new(SystemClock::new()),
         )
-        .with_exports(exports);
+        .with_exports(exports)
+        .with_sync_exports(sync_exports);
         Self {
             session,
             executor,
@@ -395,6 +397,52 @@ impl ConnectionHandler for Connection {
         )
         .ok()
     }
+
+    fn export_sync(&mut self, request: &ReadbackRequest) -> Option<hl_gpu::SyncExportId> {
+        self.session
+            .sync_exports
+            .as_ref()?
+            .export_timeline(self.session.id, request.len)
+            .ok()
+    }
+
+    fn import_sync(&mut self, request: &ReadbackRequest) -> Option<()> {
+        self.session
+            .sync_exports
+            .as_ref()?
+            .import(self.session.id, request.sync_export())
+            .ok()
+            .map(|_| ())
+    }
+
+    fn release_sync(&mut self, request: &ReadbackRequest) -> Option<()> {
+        self.session
+            .sync_exports
+            .as_ref()?
+            .release(self.session.id, request.sync_export())
+            .ok()
+    }
+
+    fn signal_sync(&mut self, request: &ReadbackRequest) -> Option<()> {
+        self.session
+            .sync_exports
+            .as_ref()?
+            .timeline(self.session.id, request.sync_export())
+            .ok()?
+            .signal(request.len)
+            .ok()
+    }
+
+    fn wait_sync(&mut self, request: &ReadbackRequest) -> Option<hl_gpu::TimelineWait> {
+        Some(
+            self.session
+                .sync_exports
+                .as_ref()?
+                .timeline(self.session.id, request.sync_export())
+                .ok()?
+                .wait(request.len, Duration::from_nanos(request.arg)),
+        )
+    }
 }
 
 /// A ready GPU protocol endpoint owned by the application composition root.
@@ -536,6 +584,7 @@ impl Endpoint {
         // connection must therefore see this one registry; constructing a registry per connection would
         // compile while making every CUDA/GL or CUDA/Vulkan import fail as an unknown export.
         let exports = Exports::new();
+        let sync_exports = SyncExports::new();
         let global = GlobalLedger::unbounded();
         if trace {
             eprintln!("husklet gpu: listener ready");
@@ -558,6 +607,7 @@ impl Endpoint {
                         stream,
                         executors.clone(),
                         exports.clone(),
+                        sync_exports.clone(),
                         global.clone(),
                         trace,
                         capture.clone(),
@@ -581,6 +631,7 @@ impl Endpoint {
         stream: std::os::unix::net::UnixStream,
         executors: Executors,
         exports: Exports,
+        sync_exports: SyncExports,
         global: GlobalLedger,
         trace: bool,
         capture: Option<capture::Config>,
@@ -624,6 +675,7 @@ impl Endpoint {
             let mut connection = Connection::new(
                 executor,
                 exports,
+                sync_exports,
                 global,
                 trace,
                 capture,

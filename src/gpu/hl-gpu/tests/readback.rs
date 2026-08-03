@@ -16,7 +16,7 @@ use hl_gpu::transport::{SubmitHeader, Verdict};
 use hl_gpu::{
     BufferId, Capabilities, Cmd, CommandBuffer, CommandSink, ConnectionHandler, CpuExecutor,
     FakeClock, FenceId, GlobalLedger, GpuExecutor, InProcessCommandSink, Limits, ReadbackRequest,
-    RemoteCommandSink, Session,
+    RemoteCommandSink, Session, SyncExports, TimelineWait,
 };
 
 /// A unique temp socket path for one test, removed on drop.
@@ -76,6 +76,12 @@ impl RuntimeHost {
         );
         Self { session, exec }
     }
+
+    fn new_sync(exports: SyncExports) -> Self {
+        let mut host = Self::new();
+        host.session.sync_exports = Some(exports);
+        host
+    }
 }
 
 impl ConnectionHandler for RuntimeHost {
@@ -118,6 +124,74 @@ impl ConnectionHandler for RuntimeHost {
         )
         .ok()
     }
+
+    fn export_sync(&mut self, req: &ReadbackRequest) -> Option<hl_gpu::SyncExportId> {
+        self.session
+            .sync_exports
+            .as_ref()?
+            .export_timeline(self.session.id, req.len)
+            .ok()
+    }
+
+    fn import_sync(&mut self, req: &ReadbackRequest) -> Option<()> {
+        self.session
+            .sync_exports
+            .as_ref()?
+            .import(self.session.id, req.sync_export())
+            .ok()
+            .map(|_| ())
+    }
+
+    fn release_sync(&mut self, req: &ReadbackRequest) -> Option<()> {
+        self.session
+            .sync_exports
+            .as_ref()?
+            .release(self.session.id, req.sync_export())
+            .ok()
+    }
+
+    fn signal_sync(&mut self, req: &ReadbackRequest) -> Option<()> {
+        self.session
+            .sync_exports
+            .as_ref()?
+            .timeline(self.session.id, req.sync_export())
+            .ok()?
+            .signal(req.len)
+            .ok()
+    }
+
+    fn wait_sync(&mut self, req: &ReadbackRequest) -> Option<TimelineWait> {
+        Some(
+            self.session
+                .sync_exports
+                .as_ref()?
+                .timeline(self.session.id, req.sync_export())
+                .ok()?
+                .wait(req.len, std::time::Duration::from_nanos(req.arg)),
+        )
+    }
+}
+
+#[test]
+fn remote_sync_requests_roundtrip_over_real_socket() {
+    let sock = TempSock::new("sync-roundtrip");
+    let listener = UnixListener::bind(&sock.0).unwrap();
+    let exports = SyncExports::new();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let caps = Capabilities::permissive_fixture("sync-host");
+        let mut host = RuntimeHost::new_sync(exports);
+        hl_gpu::serve_connection_with_handler(&stream, &caps, &mut host).unwrap();
+    });
+    let mut sink = RemoteCommandSink::new(sock.path());
+    let id = sink.export_sync(4).unwrap();
+    assert_eq!(sink.wait_sync(id, 5, 0).unwrap(), TimelineWait::Timeout);
+    sink.signal_sync(id, 5).unwrap();
+    assert_eq!(sink.wait_sync(id, 5, 0).unwrap(), TimelineWait::Reached);
+    sink.release_sync(id).unwrap();
+    assert!(sink.signal_sync(id, 6).is_err());
+    drop(sink);
+    server.join().unwrap();
 }
 
 /// Submit CreateBuffer + WriteBuffer for a 8-byte buffer id=1 holding `data`.

@@ -9,3 +9,4 @@ pub mod error;
 pub mod half;
 pub mod id;
 pub mod kernel;
+pub mod sync;

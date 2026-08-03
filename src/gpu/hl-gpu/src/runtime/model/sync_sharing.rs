@@ -11,41 +11,11 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use crate::protocol::model::error::{GpuError, Result};
+pub use crate::protocol::model::sync::{SyncExportId, TimelineWait};
 use crate::runtime::model::sharing::SessionId;
-
-/// A process-global synchronization export identity. Values are monotonic and never reused.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct SyncExportId {
-    serial: u64,
-    authenticity: u128,
-}
-
-impl SyncExportId {
-    pub fn from_parts(serial: u64, authenticity: u128) -> Self {
-        Self {
-            serial,
-            authenticity,
-        }
-    }
-
-    pub fn serial(self) -> u64 {
-        self.serial
-    }
-
-    pub fn authenticity(self) -> u128 {
-        self.authenticity
-    }
-}
 
 /// A type-erased synchronization object retained by every live owner/import reference.
 pub type SharedSync = Arc<dyn Any + Send + Sync>;
-
-/// Result of a bounded timeline wait.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TimelineWait {
-    Reached,
-    Timeout,
-}
 
 /// One host-authoritative, process-shared timeline value.
 pub struct TimelineSync {
@@ -166,6 +136,48 @@ impl SyncExports {
             },
         );
         Ok(id)
+    }
+
+    pub fn export_timeline(&self, owner: SessionId, initial: u64) -> Result<SyncExportId> {
+        self.export(owner, Arc::new(TimelineSync::new(initial)))
+    }
+
+    pub fn timeline(&self, session: SessionId, id: SyncExportId) -> Result<Arc<TimelineSync>> {
+        let registry = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let entry = registry
+            .entries
+            .get(&id)
+            .ok_or(GpuError::Invalid("stale synchronization export"))?;
+        if (entry.owner != session || entry.owner_released) && !entry.importers.contains(&session) {
+            return Err(GpuError::Invalid(
+                "synchronization export is not held by caller",
+            ));
+        }
+        Arc::clone(&entry.object)
+            .downcast::<TimelineSync>()
+            .map_err(|_| GpuError::Invalid("synchronization export is not a timeline"))
+    }
+
+    pub fn release(&self, session: SessionId, id: SyncExportId) -> Result<()> {
+        let owner = {
+            let registry = self
+                .inner
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            let entry = registry
+                .entries
+                .get(&id)
+                .ok_or(GpuError::Invalid("stale synchronization export"))?;
+            entry.owner == session && !entry.owner_released
+        };
+        if owner {
+            self.owner_release(session, id)
+        } else {
+            self.release_import(session, id)
+        }
     }
 
     /// Attach one importing session and return an alias to the authoritative object.

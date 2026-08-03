@@ -10,6 +10,7 @@
 use crate::protocol::model::capability::Capabilities;
 use crate::runtime::model::resources::{Account, GlobalLedger, Ledger, SessionResources};
 use crate::runtime::model::sharing::{ExportId, Exports, SessionId};
+use crate::runtime::model::sync_sharing::SyncExports;
 use std::collections::HashMap;
 
 #[derive(Clone, Copy)]
@@ -136,6 +137,8 @@ pub struct Session {
     ///
     /// [`GpuError::Unsupported`]: crate::protocol::model::error::GpuError::Unsupported
     pub exports: Option<Exports>,
+    /// Process-global synchronization registry. Separate from resource accounting and addressability.
+    pub sync_exports: Option<SyncExports>,
     pub(crate) buffer_sharing: HashMap<u32, ResourceSharing>,
     pub(crate) texture_sharing: HashMap<u32, ResourceSharing>,
     /// Validation + accounting ceilings (its `caps` refreshed by `negotiate`).
@@ -159,7 +162,12 @@ impl Session {
         let Some(exports) = self.exports.clone() else {
             return;
         };
-        let bindings: Vec<ResourceSharing> = self.buffer_sharing.values().chain(self.texture_sharing.values()).copied().collect();
+        let bindings: Vec<ResourceSharing> = self
+            .buffer_sharing
+            .values()
+            .chain(self.texture_sharing.values())
+            .copied()
+            .collect();
         for binding in bindings {
             loop {
                 let result = match binding {
@@ -205,6 +213,7 @@ impl Session {
         Self {
             id,
             exports: None,
+            sync_exports: None,
             buffer_sharing: HashMap::new(),
             texture_sharing: HashMap::new(),
             limits,
@@ -222,6 +231,11 @@ impl Session {
     /// than sharing with nobody.
     pub fn with_exports(mut self, exports: Exports) -> Self {
         self.exports = Some(exports);
+        self
+    }
+
+    pub fn with_sync_exports(mut self, exports: SyncExports) -> Self {
+        self.sync_exports = Some(exports);
         self
     }
 
@@ -245,6 +259,9 @@ impl Session {
     /// explicit `release_all` is safe. Leaves the `Session` a valid, empty connection.
     pub fn release_all(&mut self) {
         self.release_sharing();
+        if let Some(exports) = &self.sync_exports {
+            exports.forget_session(self.id);
+        }
         self.global.refund(self.account.ledger().totals);
         self.account.replace_ledger(Ledger::default());
         // Dropping the tables below frees this connection's natives, so anything it exported has been
@@ -263,6 +280,9 @@ impl Drop for Session {
     /// so a dropped connection cannot leak the shared budget.
     fn drop(&mut self) {
         self.release_sharing();
+        if let Some(exports) = &self.sync_exports {
+            exports.forget_session(self.id);
+        }
         self.global.refund(self.account.ledger().totals);
         // Drop every reference this connection held in BOTH directions: its claims are released, its
         // imports drop their refcount, and an export it owned is retained only while someone still

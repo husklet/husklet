@@ -3,7 +3,10 @@ use std::thread;
 use std::time::Duration;
 
 use hl_gpu::runtime::model::sharing::SessionId;
-use hl_gpu::{GpuError, SharedSync, SyncExportId, SyncExports, TimelineSync, TimelineWait};
+use hl_gpu::{
+    CommandSink, CpuExecutor, GpuError, InProcessCommandSink, SharedSync, SyncExportId,
+    SyncExports, TimelineSync, TimelineWait,
+};
 
 const OWNER: SessionId = SessionId(1);
 const IMPORTER: SessionId = SessionId(2);
@@ -170,5 +173,45 @@ fn timeline_survives_owner_destroy_under_import() {
     imported.signal(3).unwrap();
     assert_eq!(imported.wait(3, Duration::ZERO), TimelineWait::Reached);
     exports.release_import(IMPORTER, id).unwrap();
+    assert!(!exports.is_live(id));
+}
+
+#[test]
+fn two_sessions_share_signal_wait_timeout_and_release() {
+    let exports = SyncExports::new();
+    let mut owner =
+        InProcessCommandSink::new(CpuExecutor::new()).with_sync_exports(exports.clone());
+    let mut importer =
+        InProcessCommandSink::new(CpuExecutor::new()).with_sync_exports(exports.clone());
+    let id = owner.export_sync(3).unwrap();
+    assert!(owner.import_sync(id).is_err());
+    importer.import_sync(id).unwrap();
+    assert_eq!(importer.wait_sync(id, 4, 0).unwrap(), TimelineWait::Timeout);
+    owner.signal_sync(id, 4).unwrap();
+    assert_eq!(importer.wait_sync(id, 4, 0).unwrap(), TimelineWait::Reached);
+    owner.release_sync(id).unwrap();
+    assert!(owner.signal_sync(id, 5).is_err());
+    importer.signal_sync(id, 5).unwrap();
+    importer.release_sync(id).unwrap();
+    assert!(!exports.is_live(id));
+    assert!(importer.wait_sync(id, 5, 0).is_err());
+}
+
+#[test]
+fn session_teardown_releases_sync_owner_and_import_lifetimes() {
+    let exports = SyncExports::new();
+    let id = {
+        let mut owner =
+            InProcessCommandSink::new(CpuExecutor::new()).with_sync_exports(exports.clone());
+        let id = owner.export_sync(1).unwrap();
+        let mut importer =
+            InProcessCommandSink::new(CpuExecutor::new()).with_sync_exports(exports.clone());
+        importer.import_sync(id).unwrap();
+        owner.close();
+        assert!(exports.is_live(id));
+        importer.signal_sync(id, 2).unwrap();
+        importer.close();
+        id
+    };
     assert!(!exports.is_live(id));
 }

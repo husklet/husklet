@@ -66,6 +66,11 @@ impl<E: GpuExecutor> InProcessCommandSink<E> {
         self
     }
 
+    pub fn with_sync_exports(mut self, exports: crate::SyncExports) -> Self {
+        self.session.sync_exports = Some(exports);
+        self
+    }
+
     /// Build a sink over an explicit `session` + `exec`, for callers that need custom ceilings/clock.
     pub fn with_session(session: Session, exec: E) -> Self {
         Self {
@@ -191,6 +196,70 @@ impl<E: GpuExecutor> CommandSink for InProcessCommandSink<E> {
     fn unmap_buffer(&mut self, id: BufferId) -> Result<()> {
         self.ensure_open()?;
         dispatch::unmap_buffer(&mut self.session, &mut self.exec, id)
+    }
+
+    fn export_sync(&mut self, initial: u64) -> Result<crate::SyncExportId> {
+        self.ensure_open()?;
+        self.session
+            .sync_exports
+            .as_ref()
+            .ok_or(GpuError::Unsupported(
+                "synchronization sharing is not configured",
+            ))?
+            .export_timeline(self.session.id, initial)
+    }
+
+    fn import_sync(&mut self, export: crate::SyncExportId) -> Result<()> {
+        self.ensure_open()?;
+        self.session
+            .sync_exports
+            .as_ref()
+            .ok_or(GpuError::Unsupported(
+                "synchronization sharing is not configured",
+            ))?
+            .import(self.session.id, export)
+            .map(|_| ())
+    }
+
+    fn release_sync(&mut self, export: crate::SyncExportId) -> Result<()> {
+        self.ensure_open()?;
+        self.session
+            .sync_exports
+            .as_ref()
+            .ok_or(GpuError::Unsupported(
+                "synchronization sharing is not configured",
+            ))?
+            .release(self.session.id, export)
+    }
+
+    fn signal_sync(&mut self, export: crate::SyncExportId, value: u64) -> Result<()> {
+        self.ensure_open()?;
+        self.session
+            .sync_exports
+            .as_ref()
+            .ok_or(GpuError::Unsupported(
+                "synchronization sharing is not configured",
+            ))?
+            .timeline(self.session.id, export)?
+            .signal(value)
+    }
+
+    fn wait_sync(
+        &mut self,
+        export: crate::SyncExportId,
+        value: u64,
+        timeout_ns: u64,
+    ) -> Result<crate::TimelineWait> {
+        self.ensure_open()?;
+        Ok(self
+            .session
+            .sync_exports
+            .as_ref()
+            .ok_or(GpuError::Unsupported(
+                "synchronization sharing is not configured",
+            ))?
+            .timeline(self.session.id, export)?
+            .wait(value, std::time::Duration::from_nanos(timeout_ns)))
     }
 }
 

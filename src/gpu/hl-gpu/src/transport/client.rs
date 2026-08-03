@@ -591,23 +591,58 @@ impl CommandSink for RemoteCommandSink {
         })?))
     }
 
-    fn export_texture(&mut self, id: crate::TextureId) -> Result<crate::runtime::model::sharing::ExportId> {
-        let response = self.request(&ReadbackRequest::export_texture(id.raw()), 8, self.config.response_timeout())?;
-        Ok(crate::runtime::model::sharing::ExportId(u64::from_le_bytes(response.try_into().map_err(|_| self.protocol(TransportPhase::ResponseRead, "invalid export texture response"))?)))
+    fn export_texture(
+        &mut self,
+        id: crate::TextureId,
+    ) -> Result<crate::runtime::model::sharing::ExportId> {
+        let response = self.request(
+            &ReadbackRequest::export_texture(id.raw()),
+            8,
+            self.config.response_timeout(),
+        )?;
+        Ok(crate::runtime::model::sharing::ExportId(
+            u64::from_le_bytes(response.try_into().map_err(|_| {
+                self.protocol(
+                    TransportPhase::ResponseRead,
+                    "invalid export texture response",
+                )
+            })?),
+        ))
     }
 
-    fn import_texture(&mut self, id: crate::TextureId, export: crate::runtime::model::sharing::ExportId) -> Result<u64> {
-        let response = self.request(&ReadbackRequest::import_texture(id.raw(), export.0), 8, self.config.response_timeout())?;
-        Ok(u64::from_le_bytes(response.try_into().map_err(|_| self.protocol(TransportPhase::ResponseRead, "invalid import texture response"))?))
+    fn import_texture(
+        &mut self,
+        id: crate::TextureId,
+        export: crate::runtime::model::sharing::ExportId,
+    ) -> Result<u64> {
+        let response = self.request(
+            &ReadbackRequest::import_texture(id.raw(), export.0),
+            8,
+            self.config.response_timeout(),
+        )?;
+        Ok(u64::from_le_bytes(response.try_into().map_err(|_| {
+            self.protocol(
+                TransportPhase::ResponseRead,
+                "invalid import texture response",
+            )
+        })?))
     }
 
     fn map_texture(&mut self, id: crate::TextureId) -> Result<()> {
-        self.request(&ReadbackRequest::map_texture(id.raw()), 0, self.config.response_timeout())?;
+        self.request(
+            &ReadbackRequest::map_texture(id.raw()),
+            0,
+            self.config.response_timeout(),
+        )?;
         Ok(())
     }
 
     fn unmap_texture(&mut self, id: crate::TextureId) -> Result<()> {
-        self.request(&ReadbackRequest::unmap_texture(id.raw()), 0, self.config.response_timeout())?;
+        self.request(
+            &ReadbackRequest::unmap_texture(id.raw()),
+            0,
+            self.config.response_timeout(),
+        )?;
         Ok(())
     }
 
@@ -627,5 +662,63 @@ impl CommandSink for RemoteCommandSink {
             self.config.response_timeout(),
         )?;
         Ok(())
+    }
+
+    fn export_sync(&mut self, initial: u64) -> Result<crate::SyncExportId> {
+        let response = self.request(
+            &ReadbackRequest::export_sync(initial),
+            24,
+            self.config.response_timeout(),
+        )?;
+        let serial = u64::from_le_bytes(response[0..8].try_into().unwrap());
+        let authenticity = u128::from_le_bytes(response[8..24].try_into().unwrap());
+        Ok(crate::SyncExportId::from_parts(serial, authenticity))
+    }
+
+    fn import_sync(&mut self, export: crate::SyncExportId) -> Result<()> {
+        self.request(
+            &ReadbackRequest::import_sync(export),
+            0,
+            self.config.response_timeout(),
+        )
+        .map(|_| ())
+    }
+
+    fn release_sync(&mut self, export: crate::SyncExportId) -> Result<()> {
+        self.request(
+            &ReadbackRequest::release_sync(export),
+            0,
+            self.config.response_timeout(),
+        )
+        .map(|_| ())
+    }
+
+    fn signal_sync(&mut self, export: crate::SyncExportId, value: u64) -> Result<()> {
+        self.request(
+            &ReadbackRequest::signal_sync(export, value),
+            0,
+            self.config.response_timeout(),
+        )
+        .map(|_| ())
+    }
+
+    fn wait_sync(
+        &mut self,
+        export: crate::SyncExportId,
+        value: u64,
+        timeout_ns: u64,
+    ) -> Result<crate::TimelineWait> {
+        let wait_timeout = std::time::Duration::from_nanos(timeout_ns)
+            .saturating_add(std::time::Duration::from_secs(1));
+        let response = self.request(
+            &ReadbackRequest::wait_sync(export, value, timeout_ns),
+            1,
+            self.config.response_timeout().max(wait_timeout),
+        )?;
+        Ok(if response == [1] {
+            crate::TimelineWait::Reached
+        } else {
+            crate::TimelineWait::Timeout
+        })
     }
 }
