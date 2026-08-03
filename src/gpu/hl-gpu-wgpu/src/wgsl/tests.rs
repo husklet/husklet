@@ -540,6 +540,35 @@ fn larger_vector_constructor_is_explicitly_truncated_for_naga() {
 }
 
 #[test]
+fn deqp_scalar_bool_to_numeric_vector_family_lowers_offline() {
+    for stage in [naga::ShaderStage::Vertex, naga::ShaderStage::Fragment] {
+        for destination in ["ivec2", "ivec3", "ivec4", "vec2", "vec3", "vec4"] {
+            let position = if stage == naga::ShaderStage::Vertex {
+                "gl_Position=vec4(0.0);"
+            } else {
+                ""
+            };
+            let source = format!(
+                "#version 460\nlayout(location=0) out vec4 color;\nvoid main(){{ bool input_value=true; {destination} value={destination}(input_value); color=vec4(float(value[0])); {position} }}"
+            );
+            glsl_to_wgsl(&source, stage, "main").unwrap_or_else(|error| {
+                panic!("bool-to-{destination} conversion was refused in {stage:?}: {error}")
+            });
+        }
+
+    }
+}
+
+#[test]
+fn deqp_scalar_bool_splats_convert_to_numeric_vector_elements() {
+    let source = "void main(){ bool input_value=true; ivec2 a=ivec2(input_value); vec3 b=vec3(bool(1)); bvec4 c=bvec4(input_value); }";
+    let converted = crate::glsl_es::Source::new(source).convert_bool_scalar_vector_constructors();
+    assert!(converted.contains("ivec2(int(input_value))"), "{converted}");
+    assert!(converted.contains("vec3(float(bool(1)))"), "{converted}");
+    assert!(converted.contains("bvec4(input_value)"), "{converted}");
+}
+
+#[test]
 fn scalar_geometric_overloads_are_lifted_for_naga() {
     for expression in [
         "dot(a,b)",

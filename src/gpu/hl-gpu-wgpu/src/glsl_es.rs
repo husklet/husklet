@@ -410,6 +410,44 @@ impl Tokens {
             self.0.insert(index, token);
         }
     }
+
+    /// Naga preserves the boolean element type when a scalar boolean is splatted into a numeric vector.
+    /// GLSL converts the scalar to the destination element type first, so make that conversion explicit.
+    fn convert_bool_scalar_vector_constructors(&mut self) {
+        let mut bools = std::collections::BTreeSet::new();
+        for index in 0..self.len() {
+            if !matches!(&self[index], Tok::Word(ty) if ty == "bool") {
+                continue;
+            }
+            let Some(name) = self.next_significant(index + 1) else { continue };
+            if let Tok::Word(name) = &self[name] {
+                bools.insert(name.clone());
+            }
+        }
+
+        let mut inserts = Vec::new();
+        for index in 0..self.len() {
+            let conversion = match &self[index] {
+                Tok::Word(ty) if matches!(ty.as_str(), "ivec2" | "ivec3" | "ivec4") => "int",
+                Tok::Word(ty) if matches!(ty.as_str(), "vec2" | "vec3" | "vec4") => "float",
+                _ => continue,
+            };
+            let Some(open) = self.next_significant(index + 1) else { continue };
+            if self[open] != Tok::Punct('(') {
+                continue;
+            }
+            let close = match_close(self, open, '(', ')');
+            if close >= self.len() || !bool_scalar_argument(&self[open + 1..close], &bools) {
+                continue;
+            }
+            inserts.push((open + 1, Tok::Word(conversion.into())));
+            inserts.push((open + 1, Tok::Punct('(')));
+            inserts.push((close, Tok::Punct(')')));
+        }
+        for (index, token) in inserts.into_iter().rev() {
+            self.0.insert(index, token);
+        }
+    }
 }
 
 fn bool_scalar_argument(tokens: &[Tok], bools: &std::collections::BTreeSet<String>) -> bool {
@@ -747,6 +785,12 @@ impl<'a> Source<'a> {
     pub(crate) fn convert_bool_scalar_matrix_constructors(&self) -> String {
         let mut tokens = Tokens::from_source(self.text);
         tokens.convert_bool_scalar_matrix_constructors();
+        tokens.0.as_slice().source()
+    }
+
+    pub(crate) fn convert_bool_scalar_vector_constructors(&self) -> String {
+        let mut tokens = Tokens::from_source(self.text);
+        tokens.convert_bool_scalar_vector_constructors();
         tokens.0.as_slice().source()
     }
 
