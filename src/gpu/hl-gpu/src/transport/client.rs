@@ -272,18 +272,14 @@ impl RemoteCommandSink {
                 self.sock = None;
                 continue;
             }
-            let mut payload = if self.residency_reset {
+            let replaying = self.residency_reset;
+            let mut payload = if replaying {
                 match self.residency.replay_bytes() {
                     Ok(payload) => payload,
                     Err(error) => return Err(self.lose(error)),
                 }
             } else {
                 Vec::new()
-            };
-            let replay_commands = if payload.is_empty() {
-                0
-            } else {
-                crate::protocol::codec::Decoder::stream(&payload)?.len()
             };
             payload.extend_from_slice(ir);
             let peer_closed = {
@@ -341,11 +337,11 @@ impl RemoteCommandSink {
                     return Err(self.ambiguous(TransportPhase::Acknowledgement, error));
                 }
             };
-            let accepted = if crate::transport::model::header::is_partial_ack(ack) {
+            let committed_delta = if crate::transport::model::header::is_partial_ack(ack) {
                 let socket = self.sock.as_ref().expect("frame socket remains installed");
                 Some(
                     unix::Connection::new(socket)
-                        .read_partial_mask(replay_commands + current.len())
+                        .read_partial_delta()
                         .map_err(|error| self.ambiguous(TransportPhase::Acknowledgement, error))?,
                 )
             } else {
@@ -401,18 +397,28 @@ impl RemoteCommandSink {
             match ack {
                 ACK_OK => {
                     self.residency_reset = false;
-                    self.residency.append(current);
+                    let persistent: Vec<Cmd> = current.iter().filter(|command| !matches!(command, Cmd::Submit(_) | Cmd::Present { .. } | Cmd::WaitFence { .. })).cloned().collect();
+                    self.residency.append(&persistent);
+                    if current.iter().any(|command| matches!(command, Cmd::Submit(_))) {
+                        self.residency.mark_nonreplayable();
+                    }
                     return Ok(());
                 }
                 partial if crate::transport::model::header::is_partial_ack(partial) => {
                     self.residency_reset = false;
-                    let accepted = accepted.expect("partial acknowledgement carries a mask");
-                    let accepted_current: Vec<Cmd> = current
-                        .iter()
-                        .zip(accepted.into_iter().skip(replay_commands))
-                        .filter_map(|(command, accepted)| accepted.then_some(command.clone()))
-                        .collect();
-                    self.residency.append(&accepted_current);
+                    let (commands, replayable) = committed_delta.expect("partial acknowledgement carries a committed delta");
+                    if replaying {
+                        // The host executed `replay-prefix + current` as one batch, so this is the complete
+                        // authoritative post-frame state. Replacing avoids duplicating the replay prefix.
+                        self.residency.replace_committed(commands, replayable);
+                    } else {
+                        // On an uninterrupted connection the host saw only this frame; preserve residency
+                        // from older acknowledgements and append exactly this frame's committed mutation.
+                        self.residency.append(&commands);
+                        if !replayable {
+                            self.residency.mark_nonreplayable();
+                        }
+                    }
                     hl_log::hl_count!(hl_log::tag::TRANSPORT, "partial_refusals");
                     return Err(GpuError::Partial(Box::new(GpuError::Transport(
                         TransportError::Rejected {

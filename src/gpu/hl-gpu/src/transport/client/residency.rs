@@ -58,6 +58,17 @@ impl ResidencyJournal {
         self.replayable = self.bytes <= self.max_bytes;
     }
 
+    pub(super) fn replace_committed(&mut self, cmds: Vec<Cmd>, replayable: bool) {
+        self.cmds = cmds;
+        self.bytes = crate::protocol::codec::Encoder::stream(&self.cmds).len();
+        self.replayable = replayable && self.bytes <= self.max_bytes;
+        self.compact();
+    }
+
+    pub(super) fn mark_nonreplayable(&mut self) {
+        self.replayable = false;
+    }
+
     /// Drop every journal command that references ONLY resources which have been both created AND destroyed
     /// within the journal (a fully-retired working set), leaving the journal replaying exactly the LIVE
     /// residency. Correct by a fixpoint: a command that references any still-live id is retained in full, and

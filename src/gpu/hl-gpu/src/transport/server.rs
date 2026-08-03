@@ -20,7 +20,7 @@ use crate::transport::model::readback::{
 };
 
 /// A handler's verdict for one decoded frame, mapped straight to the wire ack.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum Verdict {
     /// The frame was accepted (replayed/committed) → [`ACK_OK`].
     Ack,
@@ -29,7 +29,7 @@ pub enum Verdict {
     /// instead, because the reason is otherwise destroyed here and the guest can only guess.
     Refused(RefusalKind),
     /// The named operation was refused, but successful commands in the frame were committed.
-    Partial { kind: RefusalKind, accepted: Vec<bool> },
+    Partial { kind: RefusalKind, commands: Vec<Cmd>, replayable: bool },
 }
 
 #[allow(non_upper_case_globals)]
@@ -41,7 +41,7 @@ impl Verdict {
     pub fn for_error(error: &crate::protocol::model::error::GpuError) -> Self {
         match error {
             crate::GpuError::Partial(error) if !error.is_fatal() => {
-                Verdict::Partial { kind: RefusalKind::for_error(error), accepted: Vec::new() }
+                Verdict::Partial { kind: RefusalKind::for_error(error), commands: Vec::new(), replayable: false }
             }
             error => Verdict::Refused(RefusalKind::for_error(error)),
         }
@@ -443,15 +443,8 @@ fn serve_loop<H: ConnectionHandler>(
         let ack = verdict.ack_byte();
         let ack_started = diagnostics.then(Instant::now);
         unix::Connection::new(stream).write_ack(ack)?;
-        if let Verdict::Partial { accepted, .. } = &verdict {
-            if accepted.len() != commands {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "partial mask command count mismatch"));
-            }
-            let mut bytes = vec![0u8; accepted.len().div_ceil(8)];
-            for (index, value) in accepted.iter().enumerate() {
-                if *value { bytes[index / 8] |= 1 << (index % 8); }
-            }
-            unix::Connection::new(stream).write_partial_mask(commands as u32, &bytes)?;
+        if let Verdict::Partial { commands, replayable, .. } = &verdict {
+            unix::Connection::new(stream).write_partial_delta(commands, *replayable)?;
         }
         let ack_write_us = ack_started
             .map(|started| started.elapsed().as_micros())

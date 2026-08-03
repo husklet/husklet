@@ -31,64 +31,115 @@ pub struct Presentation {
     pub serial: FrameSerial,
 }
 
+/// The durable state an executor actually committed from a batch.
+///
+/// `commands` contains only replay-safe persistent commands; observations (`WaitFence`), GPU work
+/// (`Submit`) and presentation are represented separately and are never smuggled into a reconnect
+/// journal. `source` preserves the original command position solely for runtime accounting and sharing
+/// release plans. A committed submit makes `replayable` false because its successful inner prefix cannot
+/// be represented as a top-level command without executing refused operations again.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommittedCommand {
+    pub source: usize,
+    pub command: Cmd,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommittedDelta {
+    pub commands: Vec<CommittedCommand>,
+    pub fence_signals: Vec<(u32, u64)>,
+    pub presentations: Vec<Presentation>,
+    pub replayable: bool,
+    pub(crate) sources: Vec<usize>,
+}
+
+impl CommittedDelta {
+    fn from_indices(batch: &[Cmd], indices: impl IntoIterator<Item = usize>, presentations: Vec<Presentation>) -> Self {
+        let mut commands = Vec::new();
+        let mut fence_signals = Vec::new();
+        let mut replayable = true;
+        let sources: Vec<usize> = indices.into_iter().collect();
+        assert!(sources.windows(2).all(|pair| pair[0] < pair[1]), "committed command indices must be strictly ordered and unique");
+        for &source in &sources {
+            let command = batch.get(source).unwrap_or_else(|| panic!("committed command index is out of range"));
+            match command {
+                Cmd::Submit(cb) => {
+                    replayable = false;
+                    if let Some(signal) = cb.signal { fence_signals.push(signal); }
+                }
+                Cmd::Present { .. } | Cmd::WaitFence { .. } => {}
+                command => commands.push(CommittedCommand { source, command: command.clone() }),
+            }
+        }
+        for presentation in &presentations {
+            assert!(sources.iter().any(|&source| matches!(batch.get(source), Some(Cmd::Present { surface, texture, serial })
+                if *surface == presentation.surface.0 && *texture == presentation.texture.0 && *serial == presentation.serial)),
+                "a committed presentation must correspond to a successful Present command");
+        }
+        Self { commands, fence_signals, presentations, replayable, sources }
+    }
+
+    pub fn replay_commands(&self) -> impl Iterator<Item = &Cmd> {
+        self.commands.iter().map(|entry| &entry.command)
+    }
+
+    pub(crate) fn contains_source(&self, source: usize) -> bool {
+        self.sources.contains(&source)
+    }
+}
+
 /// Work the executor completed from one batch. A nonfatal operation refusal is reported separately from
 /// fatal execution failure because the successful commands on either side are committed.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct Execution {
-    presentations: Vec<Presentation>,
+    committed: CommittedDelta,
     refusal: Option<GpuError>,
-    accepted: Option<Vec<usize>>,
+    complete: bool,
 }
 
 impl std::ops::Deref for Execution {
     type Target = [Presentation];
 
     fn deref(&self) -> &Self::Target {
-        &self.presentations
+        &self.committed.presentations
     }
 }
 
 impl Execution {
     pub fn accepted(presentations: Vec<Presentation>) -> Self {
         Self {
-            presentations,
+            committed: CommittedDelta { commands: Vec::new(), fence_signals: Vec::new(), presentations, replayable: true, sources: Vec::new() },
             refusal: None,
-            accepted: None,
+            complete: true,
         }
     }
 
     pub fn partial(
         presentations: Vec<Presentation>,
         refusal: GpuError,
-        accepted: Vec<usize>,
+        batch: &[Cmd],
+        committed: Vec<usize>,
     ) -> Self {
         assert!(
             !refusal.is_fatal(),
             "a partial execution cannot contain a fatal error"
         );
         Self {
-            presentations,
+            committed: CommittedDelta::from_indices(batch, committed, presentations),
             refusal: Some(refusal),
-            accepted: Some(accepted),
+            complete: false,
         }
     }
 
     pub fn presentations(&self) -> &[Presentation] {
-        &self.presentations
+        &self.committed.presentations
     }
 
-    pub(crate) fn into_parts(
-        self,
-        command_count: usize,
-    ) -> (Vec<Presentation>, Option<GpuError>, Vec<bool>) {
-        let mut accepted = vec![self.accepted.is_none(); command_count];
-        if let Some(indices) = self.accepted {
-            for index in indices {
-                assert!(index < command_count, "accepted command index is out of range");
-                accepted[index] = true;
-            }
+    pub(crate) fn into_parts(mut self, batch: &[Cmd]) -> (CommittedDelta, Option<GpuError>) {
+        if self.complete {
+            self.committed = CommittedDelta::from_indices(batch, 0..batch.len(), self.committed.presentations);
         }
-        (self.presentations, self.refusal, accepted)
+        (self.committed, self.refusal)
     }
 }
 

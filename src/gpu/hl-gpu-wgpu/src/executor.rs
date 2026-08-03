@@ -397,7 +397,7 @@ impl WgpuExecutor {
             }
         }
         Ok(match first_refusal {
-            Some(error) => Execution::partial(presents, error, accepted),
+            Some(error) => Execution::partial(presents, error, batch, accepted),
             None => Execution::accepted(presents),
         })
     }

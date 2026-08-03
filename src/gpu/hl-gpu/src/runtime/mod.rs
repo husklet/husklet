@@ -25,7 +25,7 @@ pub use model::sharing::{ExportId, Exports};
 pub use model::sync_sharing::{SharedSync, SyncExportId, SyncExports, TimelineSync, TimelineWait};
 pub use model::timeline::{FenceState, FenceTimeline};
 pub use port::clock::{Clock, FakeClock, SystemClock};
-pub use port::executor::{Execution, GpuExecutor, Presentation};
+pub use port::executor::{CommittedCommand, CommittedDelta, Execution, GpuExecutor, Presentation};
 pub use sink::InProcessCommandSink;
 
 use crate::protocol::model::command::Cmd;
@@ -42,11 +42,10 @@ use crate::protocol::model::error::Result;
 ///
 /// `negotiate` is a per-connection prelude (call it once at connect); `frame_bytes` is the encoded
 /// size of the frame the batch decoded from (checked against the negotiated frame ceiling).
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct SubmitOutcome {
-    pub presentations: Vec<Presentation>,
+    pub committed: CommittedDelta,
     pub refusal: Option<crate::GpuError>,
-    pub accepted: Vec<bool>,
 }
 
 pub fn submit_outcome(
@@ -166,36 +165,37 @@ pub fn submit_outcome(
     {
             // No fallible work may follow this point. The prepared dispatch still owns the open resource
             // transaction; committing it and installing the already-preflighted timeline cannot fail.
-            let (presents, timeline, refusal, accepted) = prepared.commit();
+            let (committed, timeline, refusal) = prepared.commit();
             if refusal.is_some() {
                 session.account.restore_ledger(ledger_before.clone(), &session.global);
+                let committed_sources: std::collections::HashSet<usize> = committed.sources.iter().copied().collect();
                 session
-                    .charge_frame_selected(batch, &retained, Some(&accepted))
-                    .expect("accepted subset was validated and precharged as part of the full batch");
+                    .charge_frame_selected(batch, &retained, Some(&committed_sources))
+                    .expect("committed delta was validated and precharged as part of the full batch");
             }
             drop(account_operation);
             for (index, id, release) in releases {
-                if !accepted[index] { continue; }
+                if !committed.contains_source(index) { continue; }
                 release.commit();
                 session.buffer_sharing.remove(&id);
             }
             for (index, id, release) in import_releases {
-                if !accepted[index] { continue; }
+                if !committed.contains_source(index) { continue; }
                 release.commit();
                 session.buffer_sharing.remove(&id);
             }
             for (index, id, release) in texture_releases {
-                if !accepted[index] { continue; }
+                if !committed.contains_source(index) { continue; }
                 release.commit();
                 session.texture_sharing.remove(&id);
             }
             for (index, id, release) in texture_import_releases {
-                if !accepted[index] { continue; }
+                if !committed.contains_source(index) { continue; }
                 release.commit();
                 session.texture_sharing.remove(&id);
             }
             session.timeline = timeline;
-            Ok(SubmitOutcome { presentations: presents, refusal, accepted })
+            Ok(SubmitOutcome { committed, refusal })
     }
 }
 
@@ -208,7 +208,7 @@ pub fn submit(
     let outcome = submit_outcome(session, exec, frame_bytes, batch)?;
     match outcome.refusal {
         Some(error) => Err(crate::GpuError::Partial(Box::new(error))),
-        None => Ok(outcome.presentations),
+        None => Ok(outcome.committed.presentations),
     }
 }
 
