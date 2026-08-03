@@ -603,6 +603,8 @@ pub(super) fn set_cap(ctx: &mut GlContext, cap: u32, on: bool) {
         GL_STENCIL_TEST => ctx.local.pipeline.stencil = on,
         GL_SCISSOR_TEST => ctx.local.pipeline.scissor_enabled = on,
         GL_RASTERIZER_DISCARD => ctx.local.pipeline.rasterizer_discard = on,
+        GL_DEBUG_OUTPUT => ctx.local.pipeline.debug_output = on,
+        GL_DEBUG_OUTPUT_SYNCHRONOUS => ctx.local.pipeline.debug_output_synchronous = on,
         GL_CULL_FACE => ctx.local.pipeline.cull_enabled = on,
         _ => ctx.set_gl_error(GL_INVALID_ENUM),
     }

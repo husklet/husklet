@@ -400,6 +400,8 @@ impl GlContext {
             GL_CULL_FACE => self.local.pipeline.cull_enabled,
             GL_SCISSOR_TEST => self.local.pipeline.scissor_enabled,
             GL_RASTERIZER_DISCARD => self.local.pipeline.rasterizer_discard,
+            GL_DEBUG_OUTPUT => self.local.pipeline.debug_output,
+            GL_DEBUG_OUTPUT_SYNCHRONOUS => self.local.pipeline.debug_output_synchronous,
             _ => {
                 self.set_gl_error(GL_INVALID_ENUM);
                 false

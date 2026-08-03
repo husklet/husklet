@@ -128,6 +128,25 @@ fn num_extensions_matches_the_extension_string() {
     );
 }
 
+#[test]
+fn advertised_khr_debug_accepts_the_cts_reset_sequence() {
+    assert!(ADVERTISED.contains(&"GL_KHR_debug"));
+
+    let mut context = ctx_800x600();
+    let mut value = [0; 4];
+    assert_eq!(
+        query::get_integerv(&context, GL_DEBUG_GROUP_STACK_DEPTH, &mut value),
+        1
+    );
+    assert_eq!(value[0], 1, "KHR_debug starts with its implicit default group");
+
+    record::disable(&mut context, GL_DEBUG_OUTPUT);
+    record::disable(&mut context, GL_DEBUG_OUTPUT_SYNCHRONOUS);
+    assert!(!context.is_enabled(GL_DEBUG_OUTPUT));
+    assert!(!context.is_enabled(GL_DEBUG_OUTPUT_SYNCHRONOUS));
+    assert_eq!(context.take_gl_error(), GL_NO_ERROR);
+}
+
 // ---- glGetIntegerv -------------------------------------------------------------------------------
 
 #[test]

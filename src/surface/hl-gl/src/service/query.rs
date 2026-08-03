@@ -244,6 +244,10 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         GL_CULL_FACE_MODE => one(ctx.local.pipeline.cull_face as i32),
         GL_FRONT_FACE => one(ctx.local.pipeline.front_face as i32),
         GL_SCISSOR_TEST => one(ctx.local.pipeline.scissor_enabled as i32),
+        GL_DEBUG_OUTPUT => one(ctx.local.pipeline.debug_output as i32),
+        GL_DEBUG_OUTPUT_SYNCHRONOUS => one(ctx.local.pipeline.debug_output_synchronous as i32),
+        // KHR_debug defines an implicit default group at the bottom of the stack.
+        GL_DEBUG_GROUP_STACK_DEPTH => one(1),
         GL_RASTERIZER_DISCARD => one(ctx.local.pipeline.rasterizer_discard as i32),
         // ES 3.0 §2.2.2: every state value must read back the same through each Get* variant.
         GL_DEPTH_WRITEMASK => one(ctx.local.pipeline.depth_write as i32),
@@ -502,6 +506,8 @@ pub fn get_booleanv(ctx: &GlContext, pname: u32, out: &mut [u8; 4]) -> usize {
         GL_CULL_FACE => Some(b(ctx.local.pipeline.cull_enabled)),
         GL_SCISSOR_TEST => Some(b(ctx.local.pipeline.scissor_enabled)),
         GL_RASTERIZER_DISCARD => Some(b(ctx.local.pipeline.rasterizer_discard)),
+        GL_DEBUG_OUTPUT => Some(b(ctx.local.pipeline.debug_output)),
+        GL_DEBUG_OUTPUT_SYNCHRONOUS => Some(b(ctx.local.pipeline.debug_output_synchronous)),
         GL_DEPTH_WRITEMASK => Some(b(ctx.local.pipeline.depth_write)),
         GL_SHADER_COMPILER => Some(b(true)),
         GL_POLYGON_OFFSET_FACTOR => Some(b(ctx.local.pipeline.polygon_offset_factor != 0.0)),
