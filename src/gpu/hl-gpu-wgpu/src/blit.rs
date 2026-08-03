@@ -559,28 +559,6 @@ impl WgpuExecutor {
                 return Err(GpuError::Unsupported(refusal));
             }
         }
-        // A 1D texture on either side cannot take part: this blit resamples by RENDERING through a
-        // single-layer 2D view of each side, and `create_view` rejects a `D2` view of a `D1` texture.
-        // Measured before this
-        // existed, a 1D source produced `InvalidTextureViewDimension { view: D2, texture: D1 }` from
-        // `Texture::create_view` — the graphics API answering for the driver, naming the view it was
-        // handed rather than the texture the caller passed.
-        //
-        // A CUBE is deliberately absent: it is a 2D texture with six layers underneath, so a single-layer
-        // 2D view of a face is exactly what this path builds, and it blits correctly today.
-        //
-        // D3 is served below as one D2 destination draw per slice. Float sources remain a true D3 view so
-        // the sampler performs required trilinear filtering; integer sources select the nearest source
-        // slice and use the existing exact integer path.
-        for (dim, side) in [(src_dim, "source"), (dst_dim, "destination")] {
-            if matches!(dim, hl_gpu::protocol::model::enums::TextureDim::D1) {
-                return Err(GpuError::Unsupported(match side {
-                    "source" => "wgpu: 1D blit source",
-                    _ => "wgpu: 1D blit destination",
-                }));
-            }
-        }
-
         // Source dims (for UV normalization) + destination wgpu format (the pipeline's color-target format).
         // A blit reads the source through a sampler and writes the destination as a color attachment, so both
         // must have a packed COLOR layout — the depth/stencil formats have none and are rejected honestly.
@@ -718,6 +696,22 @@ impl WgpuExecutor {
                 }
                 self.gpu.queue.submit(Some(encoder.finish()));
                 return Ok(());
+            }
+        }
+
+        // A scaled or converting 1D blit cannot use the render path below: it binds a D2 view, which
+        // wgpu rejects for a D1 texture. Keep that refusal after the exact integer copy above, because a
+        // same-format 1:1 blit needs no view or shader and is a legal native texture copy.
+        //
+        // A CUBE is deliberately absent: it is a 2D texture with six layers underneath, so a single-layer
+        // D2 view of a face is exactly what the render path builds. D3 is served as one destination draw
+        // per slice; float sources use a volume view while integer sources select the nearest slice.
+        for (dim, side) in [(src_dim, "source"), (dst_dim, "destination")] {
+            if matches!(dim, hl_gpu::protocol::model::enums::TextureDim::D1) {
+                return Err(GpuError::Unsupported(match side {
+                    "source" => "wgpu: scaled or converting 1D blit source",
+                    _ => "wgpu: scaled or converting 1D blit destination",
+                }));
             }
         }
 
