@@ -200,17 +200,18 @@ pub extern "C" fn vkGetPhysicalDeviceQueueFamilyProperties(
         return;
     }
     if p_queue_family_properties.is_null() {
-        unsafe { *p_queue_family_property_count = 1 };
+        unsafe { *p_queue_family_property_count = 2 };
         return;
     }
-    if unsafe { *p_queue_family_property_count } < 1 {
+    let capacity = unsafe { *p_queue_family_property_count } as usize;
+    if capacity == 0 {
         unsafe { *p_queue_family_property_count = 0 };
         return;
     }
     let qf = StateStore::with(|s| s.physical_device().queue_family);
     let out = p_queue_family_properties as *mut VkQueueFamilyProperties;
-    unsafe {
-        *out = VkQueueFamilyProperties {
+    let properties = [
+        VkQueueFamilyProperties {
             queue_flags: qf.queue_flags,
             queue_count: qf.queue_count,
             timestamp_valid_bits: qf.timestamp_valid_bits,
@@ -219,8 +220,25 @@ pub extern "C" fn vkGetPhysicalDeviceQueueFamilyProperties(
                 height: 1,
                 depth: 1,
             },
-        };
-        *p_queue_family_property_count = 1;
+        },
+        // A logical compute-only lane over the same ordered host queue. Vulkan queue-family flags name
+        // supported command classes, not distinct hardware engines; omitting this family made CTS's
+        // compute texture programs unexecutable even though the executor serves every command they use.
+        VkQueueFamilyProperties {
+            queue_flags: 0b110, // COMPUTE | TRANSFER, deliberately not GRAPHICS
+            queue_count: 1,
+            timestamp_valid_bits: qf.timestamp_valid_bits,
+            min_image_transfer_granularity: VkExtent3D {
+                width: 1,
+                height: 1,
+                depth: 1,
+            },
+        },
+    ];
+    let written = capacity.min(properties.len());
+    unsafe {
+        core::ptr::copy_nonoverlapping(properties.as_ptr(), out, written);
+        *p_queue_family_property_count = written as u32;
     }
 }
 

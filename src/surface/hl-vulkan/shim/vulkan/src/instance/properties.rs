@@ -156,7 +156,8 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
         } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES {
             // The 1.1 aggregate carries the same identity + subgroup members. A client at the
             // advertised 1.1+ reads them from HERE, not from the standalone structs above.
-            if let Some(v11) = unsafe { (node as *mut VkPhysicalDeviceVulkan11Properties).as_mut() } {
+            if let Some(v11) = unsafe { (node as *mut VkPhysicalDeviceVulkan11Properties).as_mut() }
+            {
                 let s_type = v11.s_type;
                 let p_next = v11.p_next;
                 *v11 = unsafe { core::mem::zeroed() };
@@ -183,7 +184,8 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
             // The 1.2 aggregate carries the driver identity. This — not
             // `VkPhysicalDeviceDriverProperties` — is where a client at the advertised 1.2+ reads the
             // driver name, which is why leaving it untouched reported a blank driver.
-            if let Some(v12) = unsafe { (node as *mut VkPhysicalDeviceVulkan12Properties).as_mut() } {
+            if let Some(v12) = unsafe { (node as *mut VkPhysicalDeviceVulkan12Properties).as_mut() }
+            {
                 let s_type = v12.s_type;
                 let p_next = v12.p_next;
                 *v12 = unsafe { core::mem::zeroed() };
@@ -278,19 +280,24 @@ pub extern "C" fn vkGetPhysicalDeviceQueueFamilyProperties2(
         );
         return;
     }
-    if unsafe { *p_queue_family_property_count } < 1 {
+    let capacity = unsafe { *p_queue_family_property_count } as usize;
+    if capacity == 0 {
         unsafe { *p_queue_family_property_count = 0 };
         return;
     }
     let out = p_queue_family_properties as *mut VkQueueFamilyProperties2;
-    if let Some(o) = unsafe { out.as_mut() } {
-        vkGetPhysicalDeviceQueueFamilyProperties(
-            physical_device,
-            p_queue_family_property_count,
-            &mut o.queue_family_properties as *mut _ as *mut c_void,
-        );
+    let mut raw: [VkQueueFamilyProperties; 2] = unsafe { core::mem::zeroed() };
+    let mut count = capacity.min(raw.len()) as u32;
+    vkGetPhysicalDeviceQueueFamilyProperties(
+        physical_device,
+        &mut count,
+        raw.as_mut_ptr() as *mut c_void,
+    );
+    for (index, properties) in raw.into_iter().take(count as usize).enumerate() {
+        // Preserve each caller-owned sType/pNext header and write only the embedded base properties.
+        unsafe { (*out.add(index)).queue_family_properties = properties };
     }
-    unsafe { *p_queue_family_property_count = 1 };
+    unsafe { *p_queue_family_property_count = count };
 }
 
 /// `vkGetPhysicalDeviceFormatProperties2` — delegates to the 1.0 per-format feature fill, then answers a
@@ -456,8 +463,7 @@ mod tests {
             );
             assert_ne!(p3.optimal_tiling_features & DEPTH_COMPARISON, 0);
             assert_eq!(
-                u64::from(properties.format_properties.optimal_tiling_features)
-                    & DEPTH_COMPARISON,
+                u64::from(properties.format_properties.optimal_tiling_features) & DEPTH_COMPARISON,
                 0,
                 "the legacy 32-bit query cannot expose a 64-bit feature"
             );
@@ -531,7 +537,10 @@ mod tests {
     fn vulkan_1_1_and_multiview_properties_share_required_limits() {
         // This value is externally defined by Vulkan, so do not let an internally consistent typo make
         // this test exercise a structure type that applications never send.
-        assert_eq!(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PROPERTIES, 1_000_053_002);
+        assert_eq!(
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PROPERTIES,
+            1_000_053_002
+        );
         let mut multiview: VkPhysicalDeviceMultiviewProperties = unsafe { core::mem::zeroed() };
         multiview.s_type = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PROPERTIES;
         let mut v11: VkPhysicalDeviceVulkan11Properties = unsafe { core::mem::zeroed() };
@@ -546,8 +555,14 @@ mod tests {
         );
 
         assert_eq!(v11.max_multiview_view_count, MAX_MULTIVIEW_VIEW_COUNT);
-        assert_eq!(v11.max_multiview_instance_index, MAX_MULTIVIEW_INSTANCE_INDEX);
-        assert_eq!(v11.max_multiview_view_count, multiview.max_multiview_view_count);
+        assert_eq!(
+            v11.max_multiview_instance_index,
+            MAX_MULTIVIEW_INSTANCE_INDEX
+        );
+        assert_eq!(
+            v11.max_multiview_view_count,
+            multiview.max_multiview_view_count
+        );
         assert_eq!(
             v11.max_multiview_instance_index,
             multiview.max_multiview_instance_index
@@ -657,17 +672,26 @@ mod tests {
             indexing.max_descriptor_set_update_after_bind_input_attachments,
             v12.max_descriptor_set_update_after_bind_input_attachments
         );
-        assert_eq!(float.denorm_behavior_independence, v12.denorm_behavior_independence);
+        assert_eq!(
+            float.denorm_behavior_independence,
+            v12.denorm_behavior_independence
+        );
         assert_eq!(
             float.shader_rounding_mode_rtz_float64,
             v12.shader_rounding_mode_rtz_float64
         );
-        assert_eq!(resolve.supported_depth_resolve_modes, v12.supported_depth_resolve_modes);
+        assert_eq!(
+            resolve.supported_depth_resolve_modes,
+            v12.supported_depth_resolve_modes
+        );
         assert_eq!(
             resolve.supported_stencil_resolve_modes,
             v12.supported_stencil_resolve_modes
         );
-        assert_eq!(resolve.independent_resolve_none, v12.independent_resolve_none);
+        assert_eq!(
+            resolve.independent_resolve_none,
+            v12.independent_resolve_none
+        );
         assert_eq!(resolve.independent_resolve, v12.independent_resolve);
         assert_eq!(
             minmax.filter_minmax_single_component_formats,

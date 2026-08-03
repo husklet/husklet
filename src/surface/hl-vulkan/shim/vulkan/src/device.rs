@@ -258,8 +258,8 @@ pub extern "C" fn vkGetDeviceQueue(
 }
 
 /// `vkGetDeviceQueue2` (Vulkan 1.1) — the `VkDeviceQueueInfo2`-parameterized retrieval. The device
-/// exposes exactly one queue (family 0, index 0), so this returns the same lone queue token as
-/// `vkGetDeviceQueue`; a request for any other `(family, index)` returns `VK_NULL_HANDLE`.
+/// exposes one queue in each of the graphics/general and compute-only logical families. Both serialize
+/// onto the same ordered host queue, so either valid family returns the same queue token.
 pub extern "C" fn vkGetDeviceQueue2(
     _device: *mut c_void,
     p_queue_info: *const c_void,
@@ -272,8 +272,8 @@ pub extern "C" fn vkGetDeviceQueue2(
     let Some(info) = (unsafe { (p_queue_info as *const VkDeviceQueueInfo2).as_ref() }) else {
         return;
     };
-    if info.queue_family_index != 0 || info.queue_index != 0 {
-        return; // only the single (family 0, index 0) queue exists.
+    if info.queue_family_index >= 2 || info.queue_index != 0 {
+        return;
     }
     let q = StateStore::with(|s| s.queue_token());
     unsafe { *p_queue = q };
