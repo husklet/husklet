@@ -98,7 +98,7 @@ impl Program {
         fs_src: String,
         cs_src: String,
     ) -> Result<(), glsl::UniformError> {
-        use hl_gpu::protocol::model::kernel::{glsl_stage, GlslDescriptor};
+        use hl_gpu::protocol::model::kernel::{GlslDescriptor, glsl_stage};
         // A (re)link produces fresh shader IR + reflection; bump the generation so the frame builder's
         // program-keyed shader/pipeline cache invalidates any IR it created for the previous link.
         self.link_gen += 1;
@@ -205,7 +205,7 @@ impl Program {
             // (`BindingCollision`) — so inject `layout(location = N)` across BOTH stages (name-matching a
             // vertex `out` to the fragment `in` varying). GskGpu's `IN()`/`PASS()` macro varyings already
             // carry a location, so its stages stay byte-identical.
-            let combined = glsl::StageSources::new(&vs_src, &fs_src).uniform_decls();
+            let combined = glsl::StageSources::new(&vs_src, &fs_src).storage_uniform_decls();
             glsl::prepare_verbatim_program_with(&vs_src, &fs_src, &combined, &attribute_bindings)
         } else {
             glsl::StageSources::new(&vs_src, &fs_src).translate_render_with(&attribute_bindings)

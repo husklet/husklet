@@ -111,6 +111,7 @@ impl Source<'_> {
 /// qualifier, so the regenerated declaration must re-add it or the stage fails to compile.
 /// Collect uniforms from vs+fs (dedup by name), split into DATA uniforms and SAMPLER uniforms
 /// (gl_shim.c `collect_uniforms`).
+#[derive(Clone, Copy)]
 pub(super) struct Declarations<'a> {
     vertex: &'a str,
     fragment: &'a str,
@@ -121,7 +122,7 @@ impl<'a> Declarations<'a> {
         Self { vertex, fragment }
     }
 
-    pub(super) fn uniforms(self) -> (Vec<Decl>, Vec<Decl>) {
+    fn raw_uniforms(self) -> Vec<Decl> {
         let mut all: Vec<Decl> = Vec::new();
         for d in Tokens(self.vertex)
             .collect("uniform")
@@ -139,16 +140,75 @@ impl<'a> Declarations<'a> {
                 all.push(d);
             }
         }
-        let (mut data, mut samps) = (Vec::new(), Vec::new());
-        for d in all {
-            if d.is_sampler() {
-                samps.push(d);
-            } else {
-                data.push(d);
+        all
+    }
+
+    fn struct_members(self) -> std::collections::HashMap<String, Vec<Decl>> {
+        let mut out = std::collections::HashMap::new();
+        for source in [self.vertex, self.fragment] {
+            for definition in Source::new(source).partition_globals().0 {
+                let mut words = definition
+                    .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+                    .filter(|word| !word.is_empty());
+                if words.next() != Some("struct") {
+                    continue;
+                }
+                let Some(name) = words.next() else {
+                    continue;
+                };
+                out.entry(name.to_string())
+                    .or_insert_with(|| Tokens(&definition).collect("struct"));
             }
         }
-        (data, samps)
+        out
     }
+
+    /// Source-level declarations used to regenerate the shader's uniform storage. Struct uniforms stay
+    /// aggregate here: their type definition is carried before `HlUniforms`, so preserving the aggregate
+    /// makes the host compiler calculate the same std140 structure layout the guest reflects leaf-by-leaf.
+    pub(super) fn storage_uniforms(self) -> (Vec<Decl>, Vec<Decl>) {
+        split_uniforms(self.raw_uniforms())
+    }
+
+    pub(super) fn uniforms(self) -> (Vec<Decl>, Vec<Decl>) {
+        let structs = self.struct_members();
+        let mut flattened = Vec::new();
+        for declaration in self.raw_uniforms() {
+            let Some(members) = structs.get(&declaration.ty) else {
+                flattened.push(declaration);
+                continue;
+            };
+            // Arrays of structures, nested structures, and structures containing opaque samplers need a
+            // richer location/storage model than one leaf declaration. Keep those aggregate so the link
+            // gate rejects them honestly instead of manufacturing a layout. The ordinary one-level data
+            // structures exercised by GLES2/3 uniform reflection are flattened exactly.
+            let modelable = declaration.arr == 0
+                && members
+                    .iter()
+                    .all(|member| TypeToken(&member.ty).layout().is_some() && !member.is_sampler());
+            if !modelable {
+                flattened.push(declaration);
+                continue;
+            }
+            flattened.extend(members.iter().cloned().map(|mut member| {
+                member.name = format!("{}.{}", declaration.name, member.name);
+                member
+            }));
+        }
+        split_uniforms(flattened)
+    }
+}
+
+fn split_uniforms(all: Vec<Decl>) -> (Vec<Decl>, Vec<Decl>) {
+    let (mut data, mut samps) = (Vec::new(), Vec::new());
+    for d in all {
+        if d.is_sampler() {
+            samps.push(d);
+        } else {
+            data.push(d);
+        }
+    }
+    (data, samps)
 }
 
 pub(super) fn append_decls_unique(dst: &mut Vec<Decl>, src: Vec<Decl>, max: usize) {

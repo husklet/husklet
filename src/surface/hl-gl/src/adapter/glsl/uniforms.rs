@@ -38,7 +38,21 @@ impl StageSources<'_> {
         }
         let mut cur = 0usize;
         let mut out = Vec::new();
+        let mut aggregate: Option<&str> = None;
         for d in &unis {
+            let group = d.name.split_once('.').map(|(name, _)| name);
+            if group != aggregate {
+                if aggregate.is_some() || group.is_some() {
+                    // A std140 structure's base alignment and occupied size are both rounded to vec4.
+                    // Flattened reflection leaves remain contiguous, but their enclosing aggregate must
+                    // not inherit a scalar/vector alignment from either neighboring declaration.
+                    cur = cur
+                        .checked_add(15)
+                        .ok_or(UniformError::ArithmeticOverflow)?
+                        & !15;
+                }
+                aggregate = group;
+            }
             if !d.array_literal {
                 return Err(UniformError::NonLiteralArray(d.name.clone()));
             }
@@ -75,6 +89,12 @@ impl StageSources<'_> {
             cur = cur
                 .checked_add(sz)
                 .ok_or(UniformError::ArithmeticOverflow)?;
+        }
+        if aggregate.is_some() {
+            cur = cur
+                .checked_add(15)
+                .ok_or(UniformError::ArithmeticOverflow)?
+                & !15;
         }
         let total = cur
             .checked_add(15)

@@ -72,11 +72,11 @@ pub fn uniform_index(ctx: &GlContext, program: u32, name: &str) -> u32 {
         return GL_INVALID_INDEX;
     }
     let data = glsl::StageSources::new(&p.vs_src, &p.fs_src).uniform_decls();
-    if let Some(i) = data.iter().position(|d| d.name == name) {
+    if let Some(i) = data.iter().position(|d| uniform_name_matches(d, name)) {
         return i as u32;
     }
     let samps = glsl::StageSources::new(&p.vs_src, &p.fs_src).sampler_decls();
-    if let Some(i) = samps.iter().position(|d| d.name == name) {
+    if let Some(i) = samps.iter().position(|d| uniform_name_matches(d, name)) {
         return (data.len() + i) as u32;
     }
     GL_INVALID_INDEX
@@ -97,8 +97,8 @@ pub fn active_uniformsiv(ctx: &GlContext, program: u32, index: u32, pname: u32) 
         let off = p.unis.get(i).map(|u| u.off).unwrap_or(0);
         return Some(match pname {
             GL_UNIFORM_TYPE => gl_type_enum(&d.ty) as i32,
-            GL_UNIFORM_SIZE => 1,
-            GL_UNIFORM_NAME_LENGTH => d.name.len() as i32 + 1,
+            GL_UNIFORM_SIZE => d.arr.max(1) as i32,
+            GL_UNIFORM_NAME_LENGTH => active_uniform_name_len(d),
             GL_UNIFORM_BLOCK_INDEX => 0,
             GL_UNIFORM_OFFSET => off,
             GL_UNIFORM_ARRAY_STRIDE => 0,
@@ -117,8 +117,8 @@ pub fn active_uniformsiv(ctx: &GlContext, program: u32, index: u32, pname: u32) 
     // A sampler uniform: not backed by a buffer block (offset/block-index are the "default block" -1).
     Some(match pname {
         GL_UNIFORM_TYPE => gl_type_enum(&d.ty) as i32,
-        GL_UNIFORM_SIZE => 1,
-        GL_UNIFORM_NAME_LENGTH => d.name.len() as i32 + 1,
+        GL_UNIFORM_SIZE => d.arr.max(1) as i32,
+        GL_UNIFORM_NAME_LENGTH => active_uniform_name_len(d),
         GL_UNIFORM_BLOCK_INDEX => -1,
         GL_UNIFORM_OFFSET => -1,
         GL_UNIFORM_ARRAY_STRIDE => -1,
@@ -126,6 +126,53 @@ pub fn active_uniformsiv(ctx: &GlContext, program: u32, index: u32, pname: u32) 
         GL_UNIFORM_IS_ROW_MAJOR => 0,
         _ => 0,
     })
+}
+
+fn uniform_name_matches(declaration: &glsl::Decl, requested: &str) -> bool {
+    declaration.name == requested
+        || (declaration.arr > 0
+            && requested
+                .strip_suffix("[0]")
+                .is_some_and(|base| base == declaration.name))
+}
+
+fn active_uniform_name_len(declaration: &glsl::Decl) -> i32 {
+    declaration.name.len() as i32 + if declaration.arr > 0 { 3 } else { 0 } + 1
+}
+
+#[cfg(test)]
+mod uniform_reflection_tests {
+    use super::*;
+
+    #[test]
+    fn array_leaf_accepts_only_base_and_zero_element_names() {
+        let declaration = glsl::Decl {
+            ty: "int".into(),
+            name: "u_var.m2".into(),
+            arr: 3,
+            array_literal: true,
+        };
+
+        assert!(uniform_name_matches(&declaration, "u_var.m2"));
+        assert!(uniform_name_matches(&declaration, "u_var.m2[0]"));
+        assert!(!uniform_name_matches(&declaration, "u_var.m2[1]"));
+        assert!(!uniform_name_matches(&declaration, "u_var.m20[0]"));
+        assert_eq!(active_uniform_name_len(&declaration), 12);
+    }
+
+    #[test]
+    fn scalar_leaf_does_not_accept_an_array_suffix() {
+        let declaration = glsl::Decl {
+            ty: "int".into(),
+            name: "u_var.m0".into(),
+            arr: 0,
+            array_literal: false,
+        };
+
+        assert!(uniform_name_matches(&declaration, "u_var.m0"));
+        assert!(!uniform_name_matches(&declaration, "u_var.m0[0]"));
+        assert_eq!(active_uniform_name_len(&declaration), 9);
+    }
 }
 
 // ==================================================================================================

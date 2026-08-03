@@ -39,15 +39,68 @@ fn std140_two_row_matrices_use_a_sixteen_byte_column_stride() {
 }
 
 #[test]
-fn unsupported_struct_uniform_is_rejected_instead_of_given_a_fake_scalar_layout() {
-    let fs = "struct Material { vec4 color; };\nuniform Material material;\nvoid main(){}\n";
-    let error = glsl::StageSources::new("void main(){}", fs)
+fn struct_uniform_reflects_leaf_names_and_std140_offsets() {
+    // Reduced from
+    // dEQP-GLES3.functional.uniform_api.info_query.indices_active_uniformsiv
+    //     .array_in_struct.int_ivec4_both.
+    // GLES reflects the basic leaves of a struct uniform, not one opaque `structType` entry. Arrays retain
+    // one active-uniform declaration (`[0]` is added by the query boundary) and a 16-byte std140 stride.
+    let fs = "#version 300 es\nprecision highp float;\n\
+              struct structType { int m0; ivec4 m1; int m2[3]; ivec4 m3[3]; };\n\
+              uniform structType u_var;\nout vec4 color;\n\
+              void main(){ color = vec4(float(u_var.m0 + u_var.m2[2])) + vec4(u_var.m1 + u_var.m3[1]); }\n";
+    let (uniforms, total) = glsl::StageSources::new("void main(){}", fs)
         .uniform_layout()
-        .expect_err("struct layout is not implemented");
-    assert!(matches!(
-        error,
-        glsl::UniformError::UnsupportedType(ref ty) if ty == "Material"
-    ));
+        .expect("a legal default-block struct uniform must link");
+
+    assert_eq!(
+        uniforms
+            .iter()
+            .map(|uniform| {
+                (
+                    uniform.name.as_str(),
+                    uniform.ty.as_str(),
+                    uniform.arr,
+                    uniform.off,
+                    uniform.sz,
+                )
+            })
+            .collect::<Vec<_>>(),
+        [
+            ("u_var.m0", "int", 0, 0, 4),
+            ("u_var.m1", "ivec4", 0, 16, 16),
+            ("u_var.m2", "int", 3, 32, 48),
+            ("u_var.m3", "ivec4", 3, 80, 48),
+        ]
+    );
+    assert_eq!(total, 128);
+    assert_eq!(
+        glsl::StageSources::new("void main(){}", fs)
+            .uniform_decls()
+            .iter()
+            .map(|uniform| uniform.name.as_str())
+            .collect::<Vec<_>>(),
+        ["u_var.m0", "u_var.m1", "u_var.m2", "u_var.m3"]
+    );
+
+    let (_, translated) = glsl::StageSources::new("void main(){}", fs).translate_render();
+    assert!(
+        translated.contains("struct structType") && translated.contains("structType u_var;"),
+        "storage retains the aggregate declaration:\n{translated}"
+    );
+    assert_naga_parses(&translated, naga::ShaderStage::Fragment);
+}
+
+#[test]
+fn array_of_struct_is_not_misreported_as_one_primitive_array() {
+    let fs = "#version 300 es\nstruct structType { int member; };\n\
+              uniform structType u_var[2];\nout vec4 color;\n\
+              void main(){ color = vec4(float(u_var[1].member)); }\n";
+
+    assert_eq!(
+        glsl::StageSources::new("void main(){}", fs).uniform_layout(),
+        Err(glsl::UniformError::UnsupportedType("structType".into()))
+    );
 }
 
 #[test]

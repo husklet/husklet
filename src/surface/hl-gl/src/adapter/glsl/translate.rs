@@ -495,7 +495,8 @@ impl StageSources<'_> {
         let mut vary = Tokens(&vs).collect("varying");
         vary.truncate(16);
         append_decls_unique(&mut vary, Tokens(&vs).collect("out"), 16);
-        let (unis, samps) = Declarations::from_stages(&vs, &fs).uniforms();
+        let unis = Declarations::from_stages(&vs, &fs).storage_uniforms().0;
+        let samps = Declarations::from_stages(&vs, &fs).uniforms().1;
         let mut fragouts = Tokens(&fs).collect("out");
         fragouts.truncate(4);
 

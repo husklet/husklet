@@ -105,6 +105,15 @@ impl StageSources<'_> {
 /// and the location convention of [`Program::uniform_location`](crate::model::program::Program::uniform_location)
 /// (data uniforms first, then samplers), so the two never disagree.
 impl StageSources<'_> {
+    /// Aggregate data declarations used when regenerating the shader's uniform block. Public reflection
+    /// exposes a structure uniform's basic leaves; shader storage must retain the declared structure so
+    /// the host compiler applies its std140 structure alignment and the shader body can keep member access.
+    pub fn storage_uniform_decls(self) -> Vec<Decl> {
+        let vs = Source::new(self.vertex).expanded();
+        let fs = Source::new(self.fragment).expanded();
+        Declarations::from_stages(&vs, &fs).storage_uniforms().0
+    }
+
     pub fn uniform_decls(self) -> Vec<Decl> {
         let vs = Source::new(self.vertex).expanded();
         let fs = Source::new(self.fragment).expanded();
