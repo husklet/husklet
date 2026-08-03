@@ -148,8 +148,29 @@ fn tokens(source: &str) -> Vec<String> {
     let mut out = Vec::new();
     let bytes = source.as_bytes();
     let mut at = 0;
+    let mut line_has_token = false;
     while at < bytes.len() {
-        if bytes[at..].starts_with(b"//") {
+        if bytes[at] == b'\n' {
+            line_has_token = false;
+            at += 1;
+        } else if bytes[at] == b'#' && !line_has_token {
+            // Preprocessor operators have their own GLSL ES 1.00 grammar. In particular `%` and the
+            // bitwise operators are legal in `#if` expressions even though they are reserved in shader
+            // expressions, so compile-time source validation must not tokenize directive bodies.
+            loop {
+                while at < bytes.len() && bytes[at] != b'\n' {
+                    at += 1;
+                }
+                let continued = source[..at].trim_end().ends_with('\\');
+                if at < bytes.len() {
+                    at += 1;
+                }
+                if !continued {
+                    break;
+                }
+            }
+            line_has_token = false;
+        } else if bytes[at..].starts_with(b"//") {
             at += 2;
             while at < bytes.len() && bytes[at] != b'\n' {
                 at += 1;
@@ -161,6 +182,7 @@ fn tokens(source: &str) -> Vec<String> {
             }
             at = (at + 2).min(bytes.len());
         } else if bytes[at] == b'_' || bytes[at].is_ascii_alphanumeric() {
+            line_has_token = true;
             let start = at;
             at += 1;
             while at < bytes.len() && (bytes[at] == b'_' || bytes[at].is_ascii_alphanumeric()) {
@@ -173,6 +195,7 @@ fn tokens(source: &str) -> Vec<String> {
                 .into_iter()
                 .find(|operator| remaining.starts_with(operator))
             {
+                line_has_token = true;
                 out.push(operator.to_string());
                 at += operator.len();
                 continue;
@@ -181,6 +204,7 @@ fn tokens(source: &str) -> Vec<String> {
                 .into_iter()
                 .find(|operator| remaining.starts_with(operator))
             {
+                line_has_token = true;
                 out.push(operator.to_string());
                 at += operator.len();
                 continue;
@@ -205,6 +229,7 @@ fn tokens(source: &str) -> Vec<String> {
                     | b'('
                     | b')'
             ) {
+                line_has_token = true;
                 out.push((bytes[at] as char).to_string());
             }
             at += 1;

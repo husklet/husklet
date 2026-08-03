@@ -246,6 +246,7 @@ fn legal_es2_operators_and_non_tokens_remain_accepted() {
     let controls = [
         "void main(){ int a=1; int b=2; bool c=a<b || a>=b; c=c && a<=b; }",
         "void main(){ int value=1; /* value %= 1; value << 2; */ value += 1; }",
+        "#if (8 + 3 % 2) == 9\n#define VALUE 1\n#endif\nvoid main(){ int value=VALUE; }",
         "#version 300 es\nvoid main(){ int value=1; value%=1; value<<=2; value=~value; }",
     ];
     for source in controls {
