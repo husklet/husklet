@@ -68,7 +68,7 @@ fn sampler_3d_lowers_uploaded_depth_slices() {
 }
 
 #[test]
-fn sampler_cube_lowers_to_six_initialized_cube_layers() {
+fn default_sampler_cube_lowers_to_six_initialized_cube_layers() {
     let mut context = ctx_640x480();
     let mut sink = RecordingSink::with_full_caps();
     let vertex = record::create_shader(&mut context, GL_VERTEX_SHADER);
@@ -91,8 +91,9 @@ fn sampler_cube_lowers_to_six_initialized_cube_layers() {
     assert!(record::link_program(&mut context, program));
     record::use_program(&mut context, program);
 
-    let texture = context.textures.gen();
-    record::bind_texture(&mut context, GL_TEXTURE_CUBE_MAP, texture);
+    let texture_2d = context.textures.gen();
+    record::bind_texture(&mut context, GL_TEXTURE_2D, texture_2d);
+    let texture = context.bound_texture_for_target(GL_TEXTURE_CUBE_MAP);
     let mut faces = (0..6)
         .map(|face| [0x11 + face, 0x22, 0x33, 0xff].repeat(4))
         .collect::<Vec<_>>();
@@ -108,9 +109,9 @@ fn sampler_cube_lowers_to_six_initialized_cube_layers() {
     }
     // GL keeps one binding per target on each texture unit. Binding a 2D texture after the cube must not
     // replace the cube selected by this program's samplerCube uniform.
-    let texture_2d = context.textures.gen();
-    assert_ne!(texture, texture_2d);
-    record::bind_texture(&mut context, GL_TEXTURE_2D, texture_2d);
+    let replacement_2d = context.textures.gen();
+    assert_ne!(texture, replacement_2d);
+    record::bind_texture(&mut context, GL_TEXTURE_2D, replacement_2d);
     record::tex_image_2d(&mut context, 2, 2, &[0xee; 16]);
     assert!(context
         .textures

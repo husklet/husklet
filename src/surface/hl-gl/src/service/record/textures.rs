@@ -30,8 +30,8 @@ pub fn bind_texture(ctx: &mut GlContext, target: u32, name: u32) {
         }
         ctx.textures.retire_name(name);
     }
-    ctx.textures.ensure(name);
     if name != 0 {
+        ctx.textures.ensure(name);
         let texture = ctx.textures.get_mut(name).expect("ensured texture");
         if texture.target != 0 && texture.target != target {
             ctx.set_gl_error(GL_INVALID_OPERATION);
@@ -328,7 +328,7 @@ pub fn tex_image_2d_target_declared(
         tex_image_2d_declared(ctx, internalformat, w, h, pixels);
         return;
     };
-    let name = ctx.local.cube_tex_unit[ctx.local.active_texture];
+    let name = ctx.bound_texture_for_target(target);
     let format = declared_plane(internalformat);
     let stored = name != 0
         && ctx
@@ -402,7 +402,7 @@ pub fn tex_image_2d_target_level(
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
-    let name = ctx.local.cube_tex_unit[ctx.local.active_texture];
+    let name = ctx.bound_texture_for_target(target);
     if name != 0
         && !ctx
             .textures

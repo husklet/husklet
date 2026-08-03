@@ -499,6 +499,46 @@ fn texture_units_keep_independent_2d_and_cube_bindings() {
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
 }
 
+#[test]
+fn default_cube_object_remains_mutable_after_a_2d_binding() {
+    let mut c = ctx(2, 0);
+    let texture_2d = c.textures.gen();
+    record::bind_texture(&mut c, GL_TEXTURE_2D, texture_2d);
+
+    // These are the exact binding semantics exercised by the GLES2 cube-completeness cases: cube target
+    // zero remains a real mutable default object even while a named 2D texture is bound on the same unit.
+    record::tex_parameter_target(&mut c, GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    record::tex_parameter_target(
+        &mut c,
+        GL_TEXTURE_CUBE_MAP,
+        GL_TEXTURE_MIN_FILTER,
+        GL_NEAREST_MIPMAP_NEAREST,
+    );
+    for level in 0..=7 {
+        let extent = if level <= 6 { (63 >> level).max(1) } else { 1 };
+        for face in 0..6 {
+            let target = GL_TEXTURE_CUBE_MAP_POSITIVE_X + face;
+            let pixels = vec![0x7f; (extent * extent * 4) as usize];
+            if level == 0 {
+                record::tex_image_2d_target_declared(
+                    &mut c, target, GL_RGBA, extent, extent, &pixels,
+                );
+            } else {
+                record::tex_image_2d_target_level(
+                    &mut c, target, level, extent, extent, &pixels, GL_RGBA,
+                );
+            }
+        }
+    }
+
+    assert_eq!(integer(&c, GL_TEXTURE_BINDING_CUBE_MAP), 0);
+    let default_cube = c.bound_texture_for_target(GL_TEXTURE_CUBE_MAP);
+    assert_ne!(default_cube, 0, "zero is represented by an internal default object identity");
+    let cube = c.textures.get(default_cube).expect("default cube texture");
+    assert!(cube.cube_complete(true), "NPOT chain plus an extra level remains complete");
+    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
+}
+
 /// A texture at the advertised `GL_MAX_TEXTURE_SIZE` must be accepted, and one edge past it rejected:
 /// the advertised ceiling is the same one the record path validates against.
 #[test]
