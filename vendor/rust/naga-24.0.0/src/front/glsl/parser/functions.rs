@@ -380,6 +380,34 @@ impl ParsingContext<'_> {
             TokenValue::Do => {
                 let mut meta = self.bump(frontend)?.meta;
 
+                // Materialize the exit decision instead of making `break_if` refer directly to the
+                // condition expression produced by the continuing block. Backends are permitted to
+                // schedule a loop's exit expression at the continuing edge; keeping the decision in a
+                // local makes its sequencing after the GLSL condition's side effects explicit.
+                let bool_ty = ctx.module.types.insert(
+                    crate::Type {
+                        name: None,
+                        inner: crate::TypeInner::Scalar(crate::Scalar::BOOL),
+                    },
+                    Span::default(),
+                );
+                let initial_exit = ctx.add_expression(
+                    Expression::Literal(Literal::Bool(false)),
+                    Span::default(),
+                )?;
+                let exit_local = ctx.locals.append(
+                    crate::LocalVariable {
+                        name: None,
+                        ty: bool_ty,
+                        init: Some(initial_exit),
+                    },
+                    Span::default(),
+                );
+                let exit_pointer = ctx.add_expression(
+                    Expression::LocalVariable(exit_local),
+                    Span::default(),
+                )?;
+
                 let loop_body = ctx.new_body(|ctx| {
                     if let Some(body_meta) = self.parse_statement(frontend, ctx, &mut None, true)? {
                         meta.subsume(body_meta);
@@ -413,7 +441,20 @@ impl ParsingContext<'_> {
 
                     ctx.emit_restart();
 
-                    break_if = Some(condition);
+                    ctx.body.push(
+                        Statement::Store {
+                            pointer: exit_pointer,
+                            value: condition,
+                        },
+                        expr_meta,
+                    );
+                    ctx.emit_restart();
+                    break_if = Some(ctx.add_expression(
+                        Expression::Load {
+                            pointer: exit_pointer,
+                        },
+                        expr_meta,
+                    )?);
 
                     Ok(())
                 })?;

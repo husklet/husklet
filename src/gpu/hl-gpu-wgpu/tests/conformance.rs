@@ -19,7 +19,8 @@ use hl_gpu::protocol::model::enums::{
     buffer_usage, texture_usage, LoadOp, TextureAspect, TextureDim, TextureFormat, Topology,
 };
 use hl_gpu::protocol::model::kernel::{
-    gty, Inst, KernelProgram, Op, Param, CMP_GE, KERNEL_MAGIC, SR_CTAID_X, SR_NTID_X, SR_TID_X,
+    glsl_stage, gty, GlslDescriptor, Inst, KernelProgram, Op, Param, CMP_GE, KERNEL_MAGIC,
+    SR_CTAID_X, SR_NTID_X, SR_TID_X,
 };
 use hl_gpu::{
     BufferId, Cmd, CommandBuffer, Enc, FakeClock, GlobalLedger, GpuError, GpuExecutor, Limits,

@@ -113,3 +113,53 @@ fn graphics_spirv_triangle_shades_pixels() {
         );
     }
 }
+
+#[test]
+fn graphics_glsl_do_while_unconditional_continue_runs_three_iterations() {
+    let vertex = GlslDescriptor {
+        stage: glsl_stage::VERTEX,
+        entry: "vmain".into(),
+        source: r#"#version 460
+void main() {
+    vec2 p[3] = vec2[3](vec2(-1.0,-1.0), vec2(3.0,-1.0), vec2(-1.0,3.0));
+    gl_Position = vec4(p[gl_VertexID], 0.0, 1.0);
+}"#.into(),
+    };
+    let fragment = GlslDescriptor {
+        stage: glsl_stage::FRAGMENT,
+        entry: "fmain".into(),
+        source: r#"#version 460
+layout(location=0) out vec4 color;
+void main() {
+    int i = 0;
+    float res = 0.0;
+    do { res += 0.25; continue; } while (++i < 3);
+    color = vec4(res, 0.0, 0.0, 1.0);
+}"#.into(),
+    };
+
+    let mut g = exec();
+    let s = run_batch(&mut g, &[
+        Cmd::CreateTexture(1, tex(1, 1, TextureFormat::Rgba8Unorm,
+            texture_usage::RENDER_TARGET | texture_usage::COPY_SRC)),
+        Cmd::CreateShader { id: 1, kind: ShaderPayloadKind::Glsl, spirv: vertex.to_words() },
+        Cmd::CreateShader { id: 2, kind: ShaderPayloadKind::Glsl, spirv: fragment.to_words() },
+        Cmd::CreateRenderPipeline(1, RenderPipelineDesc {
+            vertex: ShaderRef { module: 1, entry: "vmain".into() },
+            fragment: Some(ShaderRef { module: 2, entry: "fmain".into() }),
+            vertex_buffers: vec![],
+            color_targets: vec![ColorTargetState { format: TextureFormat::Rgba8Unorm,
+                blend: None, write_mask: 0xF }],
+            depth: None, topology: Topology::TriangleList, cull: 0, front_face: 0,
+            sample_count: 1, label: String::new(),
+        }),
+        Cmd::Submit(CommandBuffer { encoder: vec![
+            Enc::BeginRenderPass { color: vec![ColorAttachment { texture: 1,
+                load: LoadOp::Clear, clear: [0.0, 0.0, 0.0, 1.0], store: true }], depth: None },
+            Enc::SetPipeline(1),
+            Enc::Draw { vertex_count: 3, instance_count: 1, first_vertex: 0, first_instance: 0 },
+            Enc::EndRenderPass,
+        ], signal: None }),
+    ]);
+    assert_eq!(g.read_texture(&s.resources, 1).unwrap(), [191, 0, 0, 255]);
+}
