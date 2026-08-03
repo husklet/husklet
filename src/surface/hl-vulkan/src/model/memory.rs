@@ -289,6 +289,7 @@ pub mod vk_format {
     pub const EAC_R11_SNORM_BLOCK: u32 = 154;
     pub const EAC_R11G11_UNORM_BLOCK: u32 = 155;
     pub const EAC_R11G11_SNORM_BLOCK: u32 = 156;
+    pub const E5B9G9R9_UFLOAT_PACK32: u32 = 123;
 }
 
 /// `VkFormat` values that appear as VERTEX ATTRIBUTE formats. Distinct from the image formats above
@@ -602,6 +603,7 @@ impl Format {
             vk_format::EAC_R11_SNORM_BLOCK => T::EacR11Snorm,
             vk_format::EAC_R11G11_UNORM_BLOCK => T::EacRg11Unorm,
             vk_format::EAC_R11G11_SNORM_BLOCK => T::EacRg11Snorm,
+            vk_format::E5B9G9R9_UFLOAT_PACK32 => T::Rgb9e5Ufloat,
             _ => return None,
         })
     }

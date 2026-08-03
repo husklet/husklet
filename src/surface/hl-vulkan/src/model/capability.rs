@@ -138,6 +138,8 @@ pub enum FormatClass {
     /// 32-bit float color: renderable, but unfilterable without the host `float32-filterable` feature,
     /// which this driver does not request.
     UnfilterableFloatColor,
+    /// Filterable sampled color without a render-target representation.
+    SampledColor,
     /// Block-compressed color: sampled and copied only — never a render target.
     Compressed,
     /// Depth/stencil: a depth-stencil attachment, never a color one.
@@ -170,6 +172,7 @@ impl Format {
             | T::Rgba32Uint | T::Rgba32Sint => FormatClass::IntegerColor,
             T::R16Float | T::Rg16Float | T::Rgba16Float => FormatClass::FloatColor,
             T::R32Float | T::Rg32Float | T::Rgba32Float => FormatClass::UnfilterableFloatColor,
+            T::Rgb9e5Ufloat => FormatClass::SampledColor,
             T::Depth32Float | T::Depth24PlusStencil8 => FormatClass::DepthStencil,
             other if other.block_geometry().is_some() => FormatClass::Compressed,
             // Unreachable by construction: every variant above is enumerated. A new wire format reaches
@@ -187,6 +190,7 @@ impl Format {
                     | FormatClass::IntegerColor
                     | FormatClass::FloatColor
                     | FormatClass::UnfilterableFloatColor
+                    | FormatClass::SampledColor
             )
         )
     }
@@ -289,6 +293,10 @@ impl Format {
             // 32-bit float sampling needs the host `float32-filterable` feature, which this driver does not
             // request, and 32-bit float blending is not a core host capability either.
             Some(FormatClass::UnfilterableFloatColor) => COLOR_BASE | self.storage(),
+            Some(FormatClass::SampledColor) => {
+                f::SAMPLED_IMAGE | f::SAMPLED_IMAGE_FILTER_LINEAR | f::BLIT_SRC
+                    | f::TRANSFER_SRC | f::TRANSFER_DST
+            }
             // Block-compressed texels are decoded by the native sampler, including for the draw-based
             // blit source path. They cannot be written by a render pass or used as a blit destination.
             Some(FormatClass::Compressed) => {
