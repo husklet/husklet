@@ -285,6 +285,12 @@ fn metal_executes_rg11b10_float_as_a_blit_destination() {
 }
 
 #[test]
+fn metal_executes_rgb9e5_float_as_a_blit_destination() {
+    // Shared exponent 16 gives a scale of 2^-8; red 1.0 is mantissa 256, green/blue are zero.
+    assert_packed_red_blit(TextureFormat::Rgb9e5Ufloat, &[0x00, 0x01, 0x00, 0x80]);
+}
+
+#[test]
 fn metal_executes_rgba16_unorm_as_a_blit_destination() {
     assert_packed_red_blit(
         TextureFormat::Rgba16Unorm,
