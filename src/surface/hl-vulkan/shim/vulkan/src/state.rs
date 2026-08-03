@@ -196,7 +196,7 @@ pub struct State {
     pub wayland_surfaces: HashMap<u64, WaylandWindow>,
     /// Surface-owned presenters plus swapchain leases. Overlapping recreation shares one identity.
     pub presenters: Presenters,
-    pending_swapchain_destroys: std::collections::HashSet<u64>,
+    pending_swapchain_destroys: std::collections::HashSet<(usize, u64)>,
 
     /// Live `VkPrivateDataSlot` handles (the `VK_EXT_private_data` / core-1.3 slot objects). A slot is a
     /// pure host object; the per-object data it stores lives in [`Self::private_data`].
@@ -327,6 +327,16 @@ impl State {
         if self.devices.remove(&token).is_none() {
             return;
         }
+        let abandoned: Vec<_> = self
+            .pending_swapchain_destroys
+            .iter()
+            .filter_map(|(owner, swapchain)| (*owner == token).then_some(*swapchain))
+            .collect();
+        self.pending_swapchain_destroys
+            .retain(|(owner, _)| *owner != token);
+        for swapchain in abandoned {
+            self.presenters.unbind(swapchain);
+        }
         if self.current_device == token {
             self.current_device = self.devices.keys().copied().next().unwrap_or(0);
         }
@@ -367,17 +377,20 @@ impl State {
     }
 
     pub fn enqueue_swapchain_destroy(&mut self, swapchain: u64) {
-        self.pending_swapchain_destroys.insert(swapchain);
+        self.pending_swapchain_destroys
+            .insert((self.current_device, swapchain));
     }
 
     pub fn retry_swapchain_destroys(&mut self) {
         let pending: Vec<_> = self.pending_swapchain_destroys.iter().copied().collect();
-        for swapchain in pending {
+        for (device_token, swapchain) in pending {
             let completed = self
-                .device_and_sink()
-                .is_some_and(|(device, sink)| device.destroy_swapchain(sink, swapchain).is_ok());
+                .devices
+                .get_mut(&device_token)
+                .is_some_and(|device| device.destroy_swapchain(&mut self.sink, swapchain).is_ok());
             if completed {
-                self.pending_swapchain_destroys.remove(&swapchain);
+                self.pending_swapchain_destroys
+                    .remove(&(device_token, swapchain));
                 self.presenters.unbind(swapchain);
             }
         }
@@ -385,6 +398,10 @@ impl State {
 
     pub fn device_ref(&self) -> Option<&Device> {
         self.devices.get(&self.current_device)
+    }
+
+    pub fn current_device_token(&self) -> usize {
+        self.current_device
     }
 
     pub fn has_device(&self) -> bool {
