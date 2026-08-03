@@ -65,6 +65,9 @@ pub const GL_SAMPLE_COVERAGE: u32 = 0x80A0;
 pub const GL_CULL_FACE: u32 = 0x0B44;
 pub const GL_SCISSOR_TEST: u32 = 0x0C11;
 pub const GL_RASTERIZER_DISCARD: u32 = 0x8C89;
+pub const GL_DEBUG_OUTPUT_SYNCHRONOUS: u32 = 0x8242;
+pub const GL_DEBUG_OUTPUT: u32 = 0x92E0;
+pub const GL_DEBUG_GROUP_STACK_DEPTH: u32 = 0x826D;
 
 // stencil operations (glStencilOp / glStencilOpSeparate). GL_ZERO (0) doubles as the ZERO stencil op.
 pub const GL_KEEP: u32 = 0x1E00;
