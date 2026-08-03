@@ -264,18 +264,6 @@ pub extern "C" fn vkGetMemoryZirconHandlePropertiesFUCHSIA(
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
-pub extern "C" fn vkGetSemaphoreFdKHR(
-    device: *mut core::ffi::c_void,
-    pGetFdInfo: *const core::ffi::c_void,
-    pFd: *mut core::ffi::c_void,
-) -> i32 {
-    let _ = device;
-    let _ = pGetFdInfo;
-    let _ = pFd;
-    crate::stub::Call::unsupported("vkGetSemaphoreFdKHR", "extension not advertised");
-    VK_ERROR_EXTENSION_NOT_PRESENT
-}
-
 pub extern "C" fn vkGetSemaphoreSciSyncObjNV(
     device: *mut core::ffi::c_void,
     pGetSciSyncInfo: *const core::ffi::c_void,
@@ -352,16 +340,6 @@ pub extern "C" fn vkImportFenceWin32HandleKHR(
     let _ = device;
     let _ = pImportFenceWin32HandleInfo;
     crate::stub::Call::unsupported("vkImportFenceWin32HandleKHR", "extension not advertised");
-    VK_ERROR_EXTENSION_NOT_PRESENT
-}
-
-pub extern "C" fn vkImportSemaphoreFdKHR(
-    device: *mut core::ffi::c_void,
-    pImportSemaphoreFdInfo: *const core::ffi::c_void,
-) -> i32 {
-    let _ = device;
-    let _ = pImportSemaphoreFdInfo;
-    crate::stub::Call::unsupported("vkImportSemaphoreFdKHR", "extension not advertised");
     VK_ERROR_EXTENSION_NOT_PRESENT
 }
 

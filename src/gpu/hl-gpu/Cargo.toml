@@ -11,7 +11,6 @@ name = "hl_gpu"
 path = "src/lib.rs"
 
 [dependencies]
-getrandom.workspace = true
 # Unix-socket / SCM_RIGHTS fd transfer / ioctl / eventfd / futex for the `transport` adapter. The rest of
 # the crate (protocol) stays dependency-free; libc is confined to `transport::adapter::unix`.
 libc = "0.2"

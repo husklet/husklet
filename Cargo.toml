@@ -39,7 +39,6 @@ homepage = "https://github.com/husklet/husklet"
 rust-version = "1.85"
 
 [workspace.dependencies]
-getrandom = "0.3"
 async-trait = "0.1"
 base64 = "0.22"
 bytes = "1"

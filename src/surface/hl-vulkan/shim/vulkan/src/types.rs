@@ -38,6 +38,7 @@ pub const VK_ERROR_EXTENSION_NOT_PRESENT: VkResult = -7;
 pub const VK_ERROR_FEATURE_NOT_PRESENT: VkResult = -8;
 pub const VK_ERROR_INCOMPATIBLE_DRIVER: VkResult = -9;
 pub const VK_ERROR_UNKNOWN: VkResult = -13;
+pub const VK_ERROR_INVALID_EXTERNAL_HANDLE: VkResult = -1_000_072_003;
 /// `VK_ERROR_SURFACE_LOST_KHR` (`VK_KHR_surface`, stable ABI) — an unknown/destroyed surface.
 pub const VK_ERROR_SURFACE_LOST_KHR: VkResult = -1_000_000_000;
 /// `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR` — a second surface over a window already claimed by one.

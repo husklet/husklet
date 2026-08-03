@@ -152,6 +152,10 @@ pub trait ConnectionHandler {
         let _ = req;
         None
     }
+    fn query_sync(&mut self, req: &ReadbackRequest) -> Option<u64> {
+        let _ = req;
+        None
+    }
 }
 
 /// Adapts a bare submit closure into a [`ConnectionHandler`] whose readback half always fails — the
@@ -268,6 +272,7 @@ fn serve_loop<H: ConnectionHandler>(
                     readback_kind::IMPORT_SYNC | readback_kind::RELEASE_SYNC => req.id == 0 && req.len == 0 && req.arg == 0,
                     readback_kind::SIGNAL_SYNC => req.id == 0 && req.arg == 0,
                     readback_kind::WAIT_SYNC => req.id == 0,
+                    readback_kind::QUERY_SYNC => req.id == 0 && req.len == 0 && req.arg == 0,
                     _ => false,
                 })
                 .and_then(|req| {
@@ -302,6 +307,7 @@ fn serve_loop<H: ConnectionHandler>(
                     readback_kind::RELEASE_SYNC => handler.release_sync(&req).map(|()| Vec::new()),
                     readback_kind::SIGNAL_SYNC => handler.signal_sync(&req).map(|()| Vec::new()),
                     readback_kind::WAIT_SYNC => handler.wait_sync(&req).map(|status| vec![matches!(status, crate::TimelineWait::Reached) as u8]),
+                    readback_kind::QUERY_SYNC => handler.query_sync(&req).map(|value| value.to_le_bytes().to_vec()),
                     _ => None,
                 }) {
                     Ok(bytes) => bytes,

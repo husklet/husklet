@@ -721,4 +721,15 @@ impl CommandSink for RemoteCommandSink {
             crate::TimelineWait::Timeout
         })
     }
+
+    fn query_sync(&mut self, export: crate::SyncExportId) -> Result<u64> {
+        let response = self.request(
+            &ReadbackRequest::query_sync(export),
+            8,
+            self.config.response_timeout(),
+        )?;
+        Ok(u64::from_le_bytes(response.try_into().map_err(|_| {
+            GpuError::Invalid("query_sync response size")
+        })?))
+    }
 }

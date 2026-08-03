@@ -170,6 +170,17 @@ impl ConnectionHandler for RuntimeHost {
                 .wait(req.len, std::time::Duration::from_nanos(req.arg)),
         )
     }
+
+    fn query_sync(&mut self, req: &ReadbackRequest) -> Option<u64> {
+        Some(
+            self.session
+                .sync_exports
+                .as_ref()?
+                .timeline(self.session.id, req.sync_export())
+                .ok()?
+                .value(),
+        )
+    }
 }
 
 #[test]
@@ -188,6 +199,7 @@ fn remote_sync_requests_roundtrip_over_real_socket() {
     assert_eq!(sink.wait_sync(id, 5, 0).unwrap(), TimelineWait::Timeout);
     sink.signal_sync(id, 5).unwrap();
     assert_eq!(sink.wait_sync(id, 5, 0).unwrap(), TimelineWait::Reached);
+    assert_eq!(sink.query_sync(id).unwrap(), 5);
     sink.release_sync(id).unwrap();
     assert!(sink.signal_sync(id, 6).is_err());
     drop(sink);

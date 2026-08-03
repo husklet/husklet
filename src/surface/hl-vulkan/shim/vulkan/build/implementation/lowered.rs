@@ -5,6 +5,9 @@
 //! — the two must never be merged, or a census would report a refusal as an implementation.
 
 pub const NAMES: &[&str] = &[
+    // ---- external timeline semaphore opaque-fd transport (sync_semaphore.rs) ----
+    "vkGetSemaphoreFdKHR",
+    "vkImportSemaphoreFdKHR",
     // ---- extended dynamic state 1/2/3 (dynstate.rs) ----
     "vkCmdSetCullMode",
     "vkCmdSetCullModeEXT",

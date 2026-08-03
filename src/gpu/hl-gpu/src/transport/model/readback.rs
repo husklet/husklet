@@ -21,7 +21,7 @@ pub const READBACK_MAGIC: u32 = 0xFFFF_FFFF;
 
 /// Version of the readback sub-protocol, carried in every [`ReadbackRequest`]. Independent of the handshake
 /// wire version so readback can evolve without a `WIRE_VERSION` bump (which would break submit interop).
-pub const READBACK_VERSION: u32 = 2;
+pub const READBACK_VERSION: u32 = 3;
 
 /// Response status byte: the readback succeeded and `len` bytes follow.
 pub const READBACK_OK: u8 = 1;
@@ -54,6 +54,8 @@ pub mod readback_kind {
     pub const RELEASE_SYNC: u8 = 13;
     pub const SIGNAL_SYNC: u8 = 14;
     pub const WAIT_SYNC: u8 = 15;
+    /// Query a shared timeline's current value. Response: little-endian u64.
+    pub const QUERY_SYNC: u8 = 16;
 }
 
 /// A device→host readback request: "return `len` bytes of resource `id` starting at `offset`". Serialized
@@ -250,6 +252,9 @@ impl ReadbackRequest {
     pub fn wait_sync(export: crate::SyncExportId, value: u64, timeout_ns: u64) -> Self {
         Self::sync(readback_kind::WAIT_SYNC, export, value, timeout_ns)
     }
+    pub fn query_sync(export: crate::SyncExportId) -> Self {
+        Self::sync(readback_kind::QUERY_SYNC, export, 0, 0)
+    }
 
     pub fn sync_export(&self) -> crate::SyncExportId {
         crate::SyncExportId::from_parts(self.offset, self.authenticity)
@@ -362,6 +367,7 @@ mod tests {
             ReadbackRequest::release_sync(export),
             ReadbackRequest::signal_sync(export, 9),
             ReadbackRequest::wait_sync(export, 10, 11),
+            ReadbackRequest::query_sync(export),
         ] {
             assert_eq!(
                 ReadbackRequest::from_bytes(&request.to_bytes()),

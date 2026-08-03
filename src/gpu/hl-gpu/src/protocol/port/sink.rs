@@ -137,6 +137,11 @@ pub trait CommandSink {
         let _ = (export, value, timeout_ns);
         Err(GpuError::Unsupported("command sink: wait_sync"))
     }
+
+    fn query_sync(&mut self, export: SyncExportId) -> Result<u64> {
+        let _ = export;
+        Err(GpuError::Unsupported("command sink: query_sync"))
+    }
 }
 
 /// A recording [`CommandSink`] test double: it negotiates against a fixed [`Capabilities`] and records

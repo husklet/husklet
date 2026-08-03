@@ -12,6 +12,10 @@ pub const VK_QUERY_RESULT_WITH_AVAILABILITY_BIT: u32 = 0x4;
 pub const VK_QUERY_RESULT_PARTIAL_BIT: u32 = 0x8;
 /// `VK_SEMAPHORE_WAIT_ANY_BIT` (`VkSemaphoreWaitFlags`).
 pub const VK_SEMAPHORE_WAIT_ANY_BIT: u32 = 0x1;
+pub const VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT: u32 = 0x1;
+pub const VK_SEMAPHORE_IMPORT_TEMPORARY_BIT: u32 = 0x1;
+pub const VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_FD_INFO_KHR: i32 = 1_000_079_000;
+pub const VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR: i32 = 1_000_079_001;
 
 #[repr(C)]
 pub struct VkEventCreateInfo {
@@ -63,6 +67,24 @@ pub struct VkSemaphoreWaitInfo {
     pub semaphore_count: u32,
     pub p_semaphores: *const u64,
     pub p_values: *const u64,
+}
+
+#[repr(C)]
+pub struct VkSemaphoreGetFdInfoKHR {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub semaphore: u64,
+    pub handle_type: u32,
+}
+
+#[repr(C)]
+pub struct VkImportSemaphoreFdInfoKHR {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub semaphore: u64,
+    pub flags: VkFlags,
+    pub handle_type: u32,
+    pub fd: i32,
 }
 
 #[repr(C)]

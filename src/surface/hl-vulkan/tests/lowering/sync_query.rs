@@ -1,4 +1,5 @@
 use super::*;
+use hl_gpu::{CpuExecutor, InProcessCommandSink, SyncExports, TimelineWait};
 
 #[test]
 fn event_host_ops_and_device_set_resolves_at_submit() {
@@ -52,6 +53,78 @@ fn timeline_semaphore_signal_wait_roundtrips() {
     let bin = sync::create_semaphore(&mut d, false, 0);
     assert!(d.semaphore_counter(bin).is_err());
     assert!(d.signal_semaphore(bin, 1).is_err());
+}
+
+#[test]
+fn shared_timeline_permanent_import_and_temporary_refusal_cross_sessions() {
+    let exports = SyncExports::new();
+    let mut owner_sink =
+        InProcessCommandSink::new(CpuExecutor::new()).with_sync_exports(exports.clone());
+    let mut importer_sink =
+        InProcessCommandSink::new(CpuExecutor::new()).with_sync_exports(exports.clone());
+    let mut stale_sink =
+        InProcessCommandSink::new(CpuExecutor::new()).with_sync_exports(exports.clone());
+    let mut owner = dev();
+    let mut importer = dev();
+    let mut stale = dev();
+
+    let permanent = sync::create_semaphore(&mut owner, true, 2);
+    let permanent_id = sync::export_semaphore(&mut owner, &mut owner_sink, permanent).unwrap();
+    let imported = sync::create_semaphore(&mut importer, true, 0);
+    sync::import_semaphore(
+        &mut importer,
+        &mut importer_sink,
+        imported,
+        permanent_id,
+        false,
+    )
+    .unwrap();
+    sync::signal_shared_semaphore(&mut owner, &mut owner_sink, permanent, 5).unwrap();
+    assert_eq!(
+        sync::wait_shared_semaphore(&mut importer, &mut importer_sink, imported, 5, 0).unwrap(),
+        TimelineWait::Reached
+    );
+    assert_eq!(
+        sync::shared_semaphore_counter(&mut importer, &mut importer_sink, imported).unwrap(),
+        5
+    );
+
+    let temporary = sync::create_semaphore(&mut owner, true, 7);
+    let temporary_id = sync::export_semaphore(&mut owner, &mut owner_sink, temporary).unwrap();
+    assert!(sync::import_semaphore(
+        &mut importer,
+        &mut importer_sink,
+        imported,
+        temporary_id,
+        true,
+    )
+    .is_err());
+    assert_eq!(
+        sync::shared_semaphore_counter(&mut importer, &mut importer_sink, imported).unwrap(),
+        5,
+        "refused temporary timeline import preserves the permanent payload"
+    );
+
+    sync::destroy_shared_semaphore(&mut owner, &mut owner_sink, permanent);
+    let stale_semaphore = sync::create_semaphore(&mut stale, true, 0);
+    assert!(sync::import_semaphore(
+        &mut stale,
+        &mut stale_sink,
+        stale_semaphore,
+        permanent_id,
+        false,
+    )
+    .is_err());
+    assert_eq!(
+        sync::shared_semaphore_counter(&mut importer, &mut importer_sink, imported).unwrap(),
+        5,
+        "existing importer retains its payload after owner destruction"
+    );
+
+    sync::destroy_shared_semaphore(&mut importer, &mut importer_sink, imported);
+    sync::destroy_shared_semaphore(&mut owner, &mut owner_sink, temporary);
+    assert!(!exports.is_live(permanent_id));
+    assert!(!exports.is_live(temporary_id));
 }
 
 #[test]

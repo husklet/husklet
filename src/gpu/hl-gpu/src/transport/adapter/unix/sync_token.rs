@@ -6,7 +6,7 @@
 
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 
 use crate::SyncExportId;
 
@@ -93,6 +93,11 @@ impl OpaqueSyncFd {
 
     pub fn as_raw_fd(&self) -> libc::c_int {
         self.fd.as_raw_fd()
+    }
+
+    /// Transfer the descriptor to an external ABI without closing it.
+    pub fn into_raw_fd(self) -> libc::c_int {
+        self.fd.into_raw_fd()
     }
 }
 

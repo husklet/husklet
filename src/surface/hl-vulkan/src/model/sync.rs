@@ -8,6 +8,7 @@
 //! device-set event / ended query is observably resolved once the submit returns).
 
 use crate::{VkEvent, VkQueryPool};
+use hl_gpu::SyncExportId;
 
 /// A `VkEvent` — a guest-side boolean, created unsignaled. Host ops (`vkSetEvent`/`vkResetEvent`/
 /// `vkGetEventStatus`) mutate/poll it directly; device ops (`vkCmdSetEvent`/`vkCmdResetEvent`) resolve
@@ -25,6 +26,8 @@ pub struct SemaphoreRec {
     pub timeline: bool,
     /// The timeline counter (0 for a binary semaphore, or a timeline's initial value).
     pub counter: u64,
+    /// Payload exported by this semaphore or permanently imported into it.
+    pub shared: Option<SyncExportId>,
 }
 
 impl SemaphoreRec {
@@ -33,6 +36,7 @@ impl SemaphoreRec {
         Self {
             timeline: false,
             counter: 0,
+            shared: None,
         }
     }
     /// A timeline semaphore starting at `initial` (`VkSemaphoreTypeCreateInfo::initialValue`).
@@ -40,7 +44,12 @@ impl SemaphoreRec {
         Self {
             timeline: true,
             counter: initial,
+            shared: None,
         }
+    }
+
+    pub fn active_export(&self) -> Option<SyncExportId> {
+        self.shared
     }
 }
 

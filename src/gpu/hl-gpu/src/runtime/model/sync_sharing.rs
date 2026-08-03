@@ -7,6 +7,7 @@
 
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -118,7 +119,8 @@ impl SyncExports {
             .unwrap_or_else(|poison| poison.into_inner());
         let mut authenticity = [0u8; 16];
         while authenticity == [0; 16] {
-            getrandom::fill(&mut authenticity)
+            std::fs::File::open("/dev/urandom")
+                .and_then(|mut random| random.read_exact(&mut authenticity))
                 .map_err(|_| GpuError::ResourceLimit("synchronization export authenticity"))?;
         }
         let id = SyncExportId::from_parts(registry.next, u128::from_le_bytes(authenticity));

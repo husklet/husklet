@@ -443,6 +443,17 @@ impl ConnectionHandler for Connection {
                 .wait(request.len, Duration::from_nanos(request.arg)),
         )
     }
+
+    fn query_sync(&mut self, request: &ReadbackRequest) -> Option<u64> {
+        Some(
+            self.session
+                .sync_exports
+                .as_ref()?
+                .timeline(self.session.id, request.sync_export())
+                .ok()?
+                .value(),
+        )
+    }
 }
 
 /// A ready GPU protocol endpoint owned by the application composition root.

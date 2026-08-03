@@ -261,6 +261,19 @@ impl<E: GpuExecutor> CommandSink for InProcessCommandSink<E> {
             .timeline(self.session.id, export)?
             .wait(value, std::time::Duration::from_nanos(timeout_ns)))
     }
+
+    fn query_sync(&mut self, export: crate::SyncExportId) -> Result<u64> {
+        self.ensure_open()?;
+        Ok(self
+            .session
+            .sync_exports
+            .as_ref()
+            .ok_or(GpuError::Unsupported(
+                "synchronization sharing is not configured",
+            ))?
+            .timeline(self.session.id, export)?
+            .value())
+    }
 }
 
 impl InProcessCommandSink<CpuExecutor> {

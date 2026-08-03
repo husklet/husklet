@@ -32,6 +32,13 @@ impl ShimState {
     fn with_device_result(f: impl FnOnce(&mut Device) -> VkResult) -> VkResult {
         StateStore::with(|s| s.device_mut().map(f)).unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
     }
+
+    fn with_device_sink_result(
+        f: impl FnOnce(&mut Device, &mut dyn hl_gpu::CommandSink) -> VkResult,
+    ) -> VkResult {
+        StateStore::with(|s| s.device_and_sink().map(|(device, sink)| f(device, sink)))
+            .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
+    }
 }
 
 struct CommandBuffer;

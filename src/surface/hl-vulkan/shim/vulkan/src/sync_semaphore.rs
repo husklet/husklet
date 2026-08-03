@@ -1,7 +1,9 @@
 //! Binary and timeline semaphore entry points.
 
 use core::ffi::c_void;
+use std::os::fd::{BorrowedFd, FromRawFd, OwnedFd};
 
+use hl_gpu::transport::adapter::unix::OpaqueSyncFd;
 use hl_vulkan::result::Status;
 use hl_vulkan::service::sync;
 
@@ -77,8 +79,8 @@ pub extern "C" fn vkDestroySemaphore(
     _p_allocator: *const c_void,
 ) {
     StateStore::with(|state| {
-        if let Some(device) = state.device_mut() {
-            device.destroy_semaphore(semaphore);
+        if let Some((device, sink)) = state.device_and_sink() {
+            sync::destroy_shared_semaphore(device, sink, semaphore);
         }
     });
 }
@@ -90,8 +92,8 @@ pub extern "C" fn vkSignalSemaphore(
     let Some(info) = (unsafe { (p_signal_info as *const VkSemaphoreSignalInfo).as_ref() }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    ShimState::with_device_result(|device| {
-        match device.signal_semaphore(info.semaphore, info.value) {
+    ShimState::with_device_sink_result(|device, sink| {
+        match sync::signal_shared_semaphore(device, sink, info.semaphore, info.value) {
             Ok(()) => VK_SUCCESS,
             Err(error) => Status::from_error(&error),
         }
@@ -103,7 +105,7 @@ pub extern "C" fn vkGetSemaphoreCounterValue(
     semaphore: u64,
     p_value: *mut u64,
 ) -> VkResult {
-    ShimState::with_device_result(|device| match device.semaphore_counter(semaphore) {
+    ShimState::with_device_sink_result(|device, sink| match sync::shared_semaphore_counter(device, sink, semaphore) {
         Ok(value) => {
             if let Some(output) = unsafe { p_value.as_mut() } {
                 *output = value;
@@ -117,7 +119,7 @@ pub extern "C" fn vkGetSemaphoreCounterValue(
 pub extern "C" fn vkWaitSemaphores(
     _device: *mut c_void,
     p_wait_info: *const c_void,
-    _timeout: u64,
+    timeout: u64,
 ) -> VkResult {
     let Some(info) = (unsafe { (p_wait_info as *const VkSemaphoreWaitInfo).as_ref() }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
@@ -130,11 +132,11 @@ pub extern "C" fn vkWaitSemaphores(
     let values =
         unsafe { std::slice::from_raw_parts(info.p_values, info.semaphore_count as usize) };
     let any = info.flags & VK_SEMAPHORE_WAIT_ANY_BIT != 0;
-    ShimState::with_device_result(|device| {
-        if sync::wait_semaphores(device, semaphores, values, any) {
-            VK_SUCCESS
-        } else {
-            VK_TIMEOUT
+    ShimState::with_device_sink_result(|device, sink| {
+        match sync::wait_shared_semaphores(device, sink, semaphores, values, any, timeout) {
+            Ok(hl_gpu::TimelineWait::Reached) => VK_SUCCESS,
+            Ok(hl_gpu::TimelineWait::Timeout) => VK_TIMEOUT,
+            Err(error) => Status::from_error(&error),
         }
     })
 }
@@ -160,4 +162,69 @@ pub extern "C" fn vkWaitSemaphoresKHR(
     timeout: u64,
 ) -> VkResult {
     vkWaitSemaphores(device, p_wait_info, timeout)
+}
+
+pub extern "C" fn vkGetSemaphoreFdKHR(
+    _device: *mut c_void,
+    p_get_fd_info: *const VkSemaphoreGetFdInfoKHR,
+    p_fd: *mut i32,
+) -> VkResult {
+    let Some(info) = (unsafe { p_get_fd_info.as_ref() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    if info.handle_type != VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT || p_fd.is_null() {
+        return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+    }
+    ShimState::with_device_sink_result(|device, sink| {
+        let export = match sync::export_semaphore(device, sink, info.semaphore) {
+            Ok(export) => export,
+            Err(error) => return Status::from_error(&error),
+        };
+        match OpaqueSyncFd::create(export) {
+            Ok(token) => {
+                unsafe { *p_fd = token.into_raw_fd() };
+                VK_SUCCESS
+            }
+            Err(_) => VK_ERROR_OUT_OF_HOST_MEMORY,
+        }
+    })
+}
+
+pub extern "C" fn vkImportSemaphoreFdKHR(
+    _device: *mut c_void,
+    p_import_info: *const VkImportSemaphoreFdInfoKHR,
+) -> VkResult {
+    let Some(info) = (unsafe { p_import_info.as_ref() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    if info.handle_type != VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT || info.fd < 0 {
+        return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+    }
+    // Validate a duplicate first. Vulkan transfers the caller's descriptor only after a successful
+    // import; failures leave the original descriptor owned by the application.
+    let duplicate = match unsafe { BorrowedFd::borrow_raw(info.fd) }.try_clone_to_owned() {
+        Ok(fd) => fd,
+        Err(_) => return VK_ERROR_INVALID_EXTERNAL_HANDLE,
+    };
+    let export = match OpaqueSyncFd::from_owned(duplicate).and_then(OpaqueSyncFd::consume) {
+        Ok(export) => export,
+        Err(_) => return VK_ERROR_INVALID_EXTERNAL_HANDLE,
+    };
+    let result = ShimState::with_device_sink_result(|device, sink| {
+        match sync::import_semaphore(
+            device,
+            sink,
+            info.semaphore,
+            export,
+            info.flags & VK_SEMAPHORE_IMPORT_TEMPORARY_BIT != 0,
+        ) {
+            Ok(()) => VK_SUCCESS,
+            Err(error) => Status::from_error(&error),
+        }
+    });
+    if result == VK_SUCCESS {
+        // SAFETY: successful import transfers this live application-owned descriptor to the driver.
+        drop(unsafe { OwnedFd::from_raw_fd(info.fd) });
+    }
+    result
 }

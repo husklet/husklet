@@ -12,7 +12,7 @@
 
 use crate::model::sync::{EventRec, QueryPoolRec, QueryResult, SemaphoreRec};
 use crate::*;
-use hl_gpu::{GpuError, Result};
+use hl_gpu::{CommandSink, GpuError, Result, SyncExportId, TimelineWait};
 
 // ---- events --------------------------------------------------------------------------------------
 
@@ -45,6 +45,166 @@ impl Device {
             .get(&event)
             .ok_or(GpuError::Invalid("vkGetEventStatus: unknown VkEvent"))?
             .signaled)
+    }
+}
+
+pub fn export_semaphore(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    semaphore: VkSemaphore,
+) -> Result<SyncExportId> {
+    let rec = dev
+        .semaphores
+        .get_mut(&semaphore)
+        .ok_or(GpuError::Invalid("unknown VkSemaphore"))?;
+    if !rec.timeline {
+        return Err(GpuError::Invalid("external semaphore must be timeline"));
+    }
+    if let Some(id) = rec.active_export() {
+        return Ok(id);
+    }
+    let id = sink.export_sync(rec.counter)?;
+    rec.shared = Some(id);
+    Ok(id)
+}
+
+pub fn import_semaphore(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    semaphore: VkSemaphore,
+    export: SyncExportId,
+    temporary: bool,
+) -> Result<()> {
+    let rec = dev
+        .semaphores
+        .get_mut(&semaphore)
+        .ok_or(GpuError::Invalid("unknown VkSemaphore"))?;
+    if !rec.timeline {
+        return Err(GpuError::Invalid("external semaphore must be timeline"));
+    }
+    if temporary {
+        return Err(GpuError::Invalid(
+            "temporary import is invalid for timeline semaphores",
+        ));
+    }
+    sink.import_sync(export)?;
+    let slot = &mut rec.shared;
+    if let Some(previous) = slot.replace(export) {
+        if let Err(error) = sink.release_sync(previous) {
+            *slot = Some(previous);
+            let _ = sink.release_sync(export);
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
+pub fn signal_shared_semaphore(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    semaphore: VkSemaphore,
+    value: u64,
+) -> Result<()> {
+    let rec = dev
+        .semaphores
+        .get_mut(&semaphore)
+        .ok_or(GpuError::Invalid("unknown VkSemaphore"))?;
+    if let Some(export) = rec.active_export() {
+        sink.signal_sync(export, value)?;
+        rec.counter = rec.counter.max(value);
+        Ok(())
+    } else {
+        dev.signal_semaphore(semaphore, value)
+    }
+}
+
+pub fn wait_shared_semaphore(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    semaphore: VkSemaphore,
+    value: u64,
+    timeout_ns: u64,
+) -> Result<TimelineWait> {
+    let rec = dev
+        .semaphores
+        .get_mut(&semaphore)
+        .ok_or(GpuError::Invalid("unknown VkSemaphore"))?;
+    let Some(export) = rec.active_export() else {
+        return Ok(if rec.counter >= value {
+            TimelineWait::Reached
+        } else {
+            TimelineWait::Timeout
+        });
+    };
+    let status = sink.wait_sync(export, value, timeout_ns)?;
+    if status == TimelineWait::Reached {
+        rec.counter = rec.counter.max(value);
+    }
+    Ok(status)
+}
+
+pub fn shared_semaphore_counter(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    semaphore: VkSemaphore,
+) -> Result<u64> {
+    let rec = dev
+        .semaphores
+        .get_mut(&semaphore)
+        .ok_or(GpuError::Invalid("unknown VkSemaphore"))?;
+    if !rec.timeline {
+        return Err(GpuError::Invalid(
+            "semaphore counter requires timeline semaphore",
+        ));
+    }
+    if let Some(export) = rec.active_export() {
+        rec.counter = sink.query_sync(export)?;
+    }
+    Ok(rec.counter)
+}
+
+pub fn wait_shared_semaphores(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    semaphores: &[VkSemaphore],
+    values: &[u64],
+    any: bool,
+    timeout_ns: u64,
+) -> Result<TimelineWait> {
+    let count = semaphores.len().min(values.len());
+    if count == 0 {
+        return Ok(TimelineWait::Reached);
+    }
+    let deadline =
+        std::time::Instant::now().checked_add(std::time::Duration::from_nanos(timeout_ns));
+    loop {
+        let mut reached = 0usize;
+        for index in 0..count {
+            if wait_shared_semaphore(dev, sink, semaphores[index], values[index], 0)?
+                == TimelineWait::Reached
+            {
+                reached += 1;
+            }
+        }
+        if (any && reached != 0) || (!any && reached == count) {
+            return Ok(TimelineWait::Reached);
+        }
+        if timeout_ns == 0 || deadline.is_none_or(|at| std::time::Instant::now() >= at) {
+            return Ok(TimelineWait::Timeout);
+        }
+        std::thread::sleep(std::time::Duration::from_micros(100));
+    }
+}
+
+pub fn destroy_shared_semaphore(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    semaphore: VkSemaphore,
+) {
+    if let Some(rec) = dev.semaphores.remove(&semaphore) {
+        if let Some(id) = rec.shared {
+            let _ = sink.release_sync(id);
+        }
     }
 }
 
