@@ -1,11 +1,11 @@
 use super::*;
 
-struct FailTextureCreate {
+struct CommitThenLoseResponse {
     inner: RecordingSink,
-    remaining: usize,
+    fired: bool,
 }
 
-impl hl_gpu::CommandSink for FailTextureCreate {
+impl hl_gpu::CommandSink for CommitThenLoseResponse {
     fn negotiate(
         &mut self,
         request: &hl_gpu::FeatureRequest,
@@ -14,18 +14,20 @@ impl hl_gpu::CommandSink for FailTextureCreate {
     }
 
     fn submit(&mut self, batch: &[Cmd]) -> hl_gpu::Result<()> {
-        if batch
+        let texture_create = batch
             .iter()
-            .any(|command| matches!(command, Cmd::CreateTexture(..)))
-        {
-            self.remaining -= 1;
-            if self.remaining == 0 {
-                return Err(GpuError::Kernel(
-                    "injected texture allocation failure".into(),
-                ));
-            }
+            .any(|command| matches!(command, Cmd::CreateTexture(..)));
+        self.inner.submit(batch)?;
+        if texture_create && !self.fired {
+            self.fired = true;
+            return Err(GpuError::Transport(
+                hl_gpu::transport::TransportError::Ambiguous {
+                    phase: hl_gpu::transport::TransportPhase::Acknowledgement,
+                    detail: "injected response loss after commit".into(),
+                },
+            ));
         }
-        self.inner.submit(batch)
+        Ok(())
     }
 
     fn wait(&mut self, fence: hl_gpu::FenceId, value: u64) -> hl_gpu::Result<()> {
@@ -247,9 +249,9 @@ fn failed_replacement_still_retires_old_and_preserves_acquired_present() {
     let images_before = d.images.len();
     let replacement_surface =
         present::create_surface(&mut d, &mut s, 64, 64, vk_format::B8G8R8A8_UNORM, None).unwrap();
-    let mut failing = FailTextureCreate {
+    let mut failing = CommitThenLoseResponse {
         inner: sink(),
-        remaining: 2,
+        fired: false,
     };
     assert!(present::create_swapchain_for_target(
         &mut d,
@@ -263,6 +265,24 @@ fn failed_replacement_still_retires_old_and_preserves_acquired_present() {
     .is_err());
     assert_eq!(d.surfaces.len(), surfaces_before);
     assert_eq!(d.images.len(), images_before);
+    assert_eq!(
+        failing
+            .inner
+            .commands()
+            .filter(|command| matches!(command, Cmd::CreateTexture(..)))
+            .count(),
+        2,
+        "the response is lost only after the complete create transaction commits"
+    );
+    assert_eq!(
+        failing
+            .inner
+            .commands()
+            .filter(|command| matches!(command, Cmd::DestroyTexture(..)))
+            .count(),
+        2,
+        "reconciliation includes every attempted texture id"
+    );
     assert!(d.swapchains.get(&old).unwrap().retired);
     assert!(d.acquire_next_image(old).is_err());
     present::queue_present(&mut d, &mut s, old, acquired, None)
@@ -290,6 +310,27 @@ fn exhausted_swapchain_pool_never_reissues_an_owned_image() {
         .images
         .iter()
         .all(|image| image.state == hl_vulkan::model::queue::ImageState::Acquired));
+}
+
+#[test]
+fn acquire_signals_and_queue_wait_consumes_binary_payload() {
+    let mut d = dev();
+    let mut s = sink();
+    let surface =
+        present::create_surface(&mut d, &mut s, 64, 64, vk_format::B8G8R8A8_UNORM, None).unwrap();
+    let swapchain = present::create_swapchain(&mut d, &mut s, surface, 2).unwrap();
+    let semaphore = sync::create_semaphore(&mut d, false, 0);
+    let fence = create::create_fence(&mut d, &mut s, false).unwrap();
+
+    assert_eq!(
+        d.try_acquire_next_image(swapchain, semaphore, fence),
+        Ok(0)
+    );
+    assert!(d.semaphores[&semaphore].signaled);
+    assert!(d.is_fence_signaled(fence).unwrap());
+    d.consume_queue_waits(&[(semaphore, 0)]).unwrap();
+    assert!(!d.semaphores[&semaphore].signaled);
+    assert!(d.consume_queue_waits(&[(semaphore, 0)]).is_err());
 }
 
 fn valid_swapchain_config() -> present::SwapchainConfig {
