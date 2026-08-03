@@ -8,6 +8,7 @@
 use hl_gl::model::context::{GlContext, GlSurface};
 use hl_gl::model::glconst::*;
 use hl_gl::service::{query, record};
+use hl_gl::service::intro::tex_level_parameter;
 
 const VS: &str = "attribute vec2 aPos;\nattribute vec3 aColor;\nvarying vec3 vColor;\nvoid main(){ vColor = aColor; gl_Position = vec4(aPos, 0.0, 1.0); }\n";
 // A fragment shader with one data uniform (vec4) AND one sampler uniform (sampler2D).
@@ -202,6 +203,11 @@ fn gles31_texture_reset_accepts_every_core_target_and_parameter() {
     record::tex_parameter_target(&mut context, GL_TEXTURE_3D, GL_TEXTURE_BASE_LEVEL, 9);
     assert_eq!(query::get_tex_parameteriv(&context, GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BASE_LEVEL), 7);
     assert_eq!(query::get_tex_parameteriv(&context, GL_TEXTURE_3D, GL_TEXTURE_BASE_LEVEL), 9);
+
+    record::tex_image_3d(&mut context, GL_TEXTURE_2D_ARRAY, 0, 2, 1, 1, &[0; 8]);
+    record::tex_image_3d(&mut context, GL_TEXTURE_3D, 0, 3, 1, 1, &[0; 12]);
+    assert_eq!(tex_level_parameter(&context, GL_TEXTURE_2D_ARRAY, 0, GL_TEXTURE_WIDTH), 2);
+    assert_eq!(tex_level_parameter(&context, GL_TEXTURE_3D, 0, GL_TEXTURE_WIDTH), 3);
 
     record::bind_texture(&mut context, GL_TEXTURE_3D, 11);
     assert_eq!(context.take_gl_error(), GL_INVALID_OPERATION);
