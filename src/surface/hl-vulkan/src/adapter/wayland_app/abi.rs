@@ -108,6 +108,21 @@ struct RegistryListener {
     global_remove: extern "C" fn(*mut c_void, *mut c_void, u32),
 }
 
+extern "C" fn on_buffer_release(data: *mut c_void, _buffer: *mut c_void) {
+    if !data.is_null() {
+        unsafe { *(data as *mut bool) = true };
+    }
+}
+
+#[repr(C)]
+struct BufferListener {
+    release: extern "C" fn(*mut c_void, *mut c_void),
+}
+
+static BUFFER_LISTENER: BufferListener = BufferListener {
+    release: on_buffer_release,
+};
+
 static REGISTRY_LISTENER: RegistryListener = RegistryListener {
     global: on_global,
     global_remove: on_global_remove,
@@ -474,6 +489,31 @@ unsafe impl WlAbi for SysWlAbi {
                 WL_MARSHAL_FLAG_DESTROY,
             );
         }
+    }
+
+    fn wait_buffer_release(
+        &self,
+        buffer: *mut c_void,
+        display: *mut c_void,
+        queue: *mut c_void,
+    ) -> WlAppResult<()> {
+        let mut released = false;
+        if unsafe {
+            (self.add_listener)(
+                buffer,
+                &BUFFER_LISTENER as *const BufferListener as *const c_void,
+                &mut released as *mut bool as *mut c_void,
+            )
+        } < 0
+        {
+            return Err(WlAppError::Marshal);
+        }
+        while !released {
+            if unsafe { (self.roundtrip_queue)(display, queue) } < 0 {
+                return Err(WlAppError::Flush);
+            }
+        }
+        Ok(())
     }
 
     fn buffer_destroy(&self, buffer: *mut c_void, version: u32) {

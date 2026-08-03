@@ -79,6 +79,11 @@ impl WaylandAppPresenter {
         self.abi
             .surface_commit(self.surface_wrapper, self.surface_version);
         if self.abi.flush(self.display) < 0 {
+            hl_log::hl_error!(
+                hl_log::tag::PRESENT,
+                "wayland native-present flush failed error={}",
+                std::io::Error::last_os_error()
+            );
             return Err(WlAppError::Flush);
         }
         Ok(())
@@ -221,8 +226,13 @@ impl WaylandAppPresenter {
         }
         let shm = ShmBuffer::new(&xrgb[..size]).map_err(|_| WlAppError::ShmAlloc)?;
 
-        // Retire the previous frame's buffer (the compositor has since shown it) before superseding it.
+        // This presenter owns a private queue, so the application's event loop cannot dispatch the
+        // previous buffer's release for us. Wait for that release before destroying and replacing the
+        // buffer; otherwise a fast producer accumulates undispatched events and attached buffers until
+        // the compositor closes the connection.
         if !self.last_buffer.is_null() {
+            self.abi
+                .wait_buffer_release(self.last_buffer, self.display, self.queue)?;
             self.abi.buffer_destroy(self.last_buffer, 1);
             self.last_buffer = core::ptr::null_mut();
         }
@@ -258,6 +268,11 @@ impl WaylandAppPresenter {
         self.abi
             .surface_commit(self.surface_wrapper, self.surface_version);
         if self.abi.flush(self.display) < 0 {
+            hl_log::hl_error!(
+                hl_log::tag::PRESENT,
+                "wayland shm-present flush failed error={}",
+                std::io::Error::last_os_error()
+            );
             return Err(WlAppError::Flush);
         }
         self.last_buffer = buffer;

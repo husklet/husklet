@@ -97,6 +97,12 @@ pub(crate) unsafe trait WlAbi {
         format: u32,
     ) -> *mut c_void;
     fn pool_destroy(&self, pool: *mut c_void, version: u32);
+    fn wait_buffer_release(
+        &self,
+        buffer: *mut c_void,
+        display: *mut c_void,
+        queue: *mut c_void,
+    ) -> WlAppResult<()>;
     fn buffer_destroy(&self, buffer: *mut c_void, version: u32);
     fn surface_attach(&self, surface: *mut c_void, version: u32, buffer: *mut c_void);
     fn surface_damage(&self, surface: *mut c_void, version: u32, w: i32, h: i32);
@@ -169,6 +175,7 @@ mod tests {
             format: u32,
         },
         PoolDestroy(usize),
+        WaitBufferRelease(usize),
         BufferDestroy(usize),
         Attach {
             surface: usize,
@@ -367,6 +374,15 @@ mod tests {
         fn pool_destroy(&self, pool: *mut c_void, _version: u32) {
             self.push(Rec::PoolDestroy(pool as usize));
         }
+        fn wait_buffer_release(
+            &self,
+            buffer: *mut c_void,
+            _display: *mut c_void,
+            _queue: *mut c_void,
+        ) -> WlAppResult<()> {
+            self.push(Rec::WaitBufferRelease(buffer as usize));
+            Ok(())
+        }
         fn buffer_destroy(&self, buffer: *mut c_void, _version: u32) {
             self.push(Rec::BufferDestroy(buffer as usize));
         }
@@ -502,10 +518,15 @@ mod tests {
             .clear();
         p.present(&xrgb(2, 2), 2, 2).expect("frame 2");
         let log = unsafe { &*(std::ptr::addr_of!(*p.abi) as *const Recorder) }.log();
-        // The very first op of frame 2 destroys frame 1's buffer.
+        // The private queue must dispatch frame 1's release before its buffer is destroyed. Without
+        // this wait, a fast WSI producer fills the connection with undispatched release/delete events.
         assert!(
-            matches!(log.first(), Some(Rec::BufferDestroy(_))),
-            "frame 2 must retire the prior buffer first"
+            matches!(
+                log.as_slice(),
+                [Rec::WaitBufferRelease(waited), Rec::BufferDestroy(destroyed), ..]
+                    if waited == destroyed
+            ),
+            "frame 2 must wait for release before retiring the prior buffer: {log:?}"
         );
     }
 
