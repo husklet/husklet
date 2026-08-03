@@ -22,7 +22,7 @@ pub use model::resources::{
 };
 pub use model::session::{Limits, Session};
 pub use model::sharing::{ExportId, Exports};
-pub use model::sync_sharing::{SharedSync, SyncExportId, SyncExports};
+pub use model::sync_sharing::{SharedSync, SyncExportId, SyncExports, TimelineSync, TimelineWait};
 pub use model::timeline::{FenceState, FenceTimeline};
 pub use port::clock::{Clock, FakeClock, SystemClock};
 pub use port::executor::{GpuExecutor, Presentation};

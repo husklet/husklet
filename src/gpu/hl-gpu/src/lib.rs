@@ -33,7 +33,7 @@ pub use protocol::port::sink::{CommandSink, FenceWait, RecordingSink};
 pub use runtime::{
     Clock, ExportId, Exports, FakeClock, GlobalLedger, GpuExecutor, InProcessCommandSink, Ledger,
     Limits, Presentation, Session, SessionResources, SharedSync, SyncExportId, SyncExports,
-    SystemClock,
+    SystemClock, TimelineSync, TimelineWait,
 };
 pub use transport::{
     serve, serve_connection, serve_connection_with_handler, ConnectionHandler, GpuAlloc,

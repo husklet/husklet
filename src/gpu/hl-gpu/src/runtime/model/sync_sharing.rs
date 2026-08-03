@@ -7,7 +7,8 @@
 
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 use crate::protocol::model::error::{GpuError, Result};
 use crate::runtime::model::sharing::SessionId;
@@ -38,6 +39,66 @@ impl SyncExportId {
 
 /// A type-erased synchronization object retained by every live owner/import reference.
 pub type SharedSync = Arc<dyn Any + Send + Sync>;
+
+/// Result of a bounded timeline wait.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimelineWait {
+    Reached,
+    Timeout,
+}
+
+/// One host-authoritative, process-shared timeline value.
+pub struct TimelineSync {
+    value: Mutex<u64>,
+    advanced: Condvar,
+}
+
+impl TimelineSync {
+    pub fn new(initial: u64) -> Self {
+        Self {
+            value: Mutex::new(initial),
+            advanced: Condvar::new(),
+        }
+    }
+
+    pub fn value(&self) -> u64 {
+        *self
+            .value
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    /// Advance strictly. Equal or lower signals are refused rather than silently weakening ordering.
+    pub fn signal(&self, value: u64) -> Result<()> {
+        let mut current = self
+            .value
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if value <= *current {
+            return Err(GpuError::Invalid("synchronization timeline must advance"));
+        }
+        *current = value;
+        self.advanced.notify_all();
+        Ok(())
+    }
+
+    pub fn wait(&self, target: u64, timeout: Duration) -> TimelineWait {
+        let current = self
+            .value
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let (current, timed) = self
+            .advanced
+            .wait_timeout_while(current, timeout, |value| *value < target)
+            .unwrap_or_else(|poison| poison.into_inner());
+        if *current >= target {
+            TimelineWait::Reached
+        } else {
+            debug_assert!(timed.timed_out());
+            TimelineWait::Timeout
+        }
+    }
+}
 
 struct Entry {
     owner: SessionId,
