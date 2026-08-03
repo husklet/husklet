@@ -327,7 +327,15 @@ pub(super) fn lower_textures(
                         flip_y: false,
                         swizzle: d.tex_swizzles[unit],
                         mip_stages: Vec::new(),
-                        layer_stages: Vec::new(),
+                        // A cube placeholder is one opaque-black texel repeated across all six faces.
+                        // Reusing the same staging buffer is sufficient, but every destination layer
+                        // needs an explicit copy; initializing only +X leaves the other five faces
+                        // undefined and makes empty/incomplete cubes transparent or nondeterministic.
+                        layer_stages: if texture_dim == TextureDim::Cube && stage_ir != 0 {
+                            (1..6).map(|layer| (stage_ir, layer)).collect()
+                        } else {
+                            Vec::new()
+                        },
                         bytes_per_texel: 4,
                         layers: if texture_dim == TextureDim::Cube {
                             6
