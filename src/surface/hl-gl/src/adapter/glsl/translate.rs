@@ -1,5 +1,25 @@
 use super::*;
 
+fn replace_identifier(source: &mut String, from: &str, to: &str) {
+    let bytes = source.as_bytes();
+    let mut output = String::with_capacity(source.len());
+    let mut at = 0usize;
+    while at < bytes.len() {
+        if Tokens::is_word(bytes[at]) {
+            let start = at;
+            while at < bytes.len() && Tokens::is_word(bytes[at]) {
+                at += 1;
+            }
+            let word = &source[start..at];
+            output.push_str(if word == from { to } else { word });
+        } else {
+            output.push(char::from(bytes[at]));
+            at += 1;
+        }
+    }
+    *source = output;
+}
+
 // ---------------------------------------------------------------------------------------------------
 
 /// GLSL-ES compute (`GL_COMPUTE_SHADER`) → desktop GLSL the host compiles. We FORWARD the source (the host
@@ -650,6 +670,23 @@ impl StageSources<'_> {
         let strict_es100_calls = !declares_modern_es(&vs) && !declares_modern_es(&fs);
 
         let attrs = Source::new(&vs).vertex_attrs();
+        // GLES 2 permits multiple attribute names to alias one location when the shader does not execute
+        // paths which consume both. Naga cannot represent duplicate input locations. When the declarations
+        // have the same shape they are the same physical input, so retain one declaration and rewrite the
+        // other names to it. Differently shaped aliases still need distinct host locations from the linker.
+        let mut alias_canonical = std::collections::BTreeMap::<String, String>::new();
+        for (index, attribute) in attrs.iter().enumerate() {
+            let Some(location) = attribute_bindings.get(&attribute.name) else {
+                continue;
+            };
+            if let Some(canonical) = attrs[..index].iter().find(|candidate| {
+                candidate.ty == attribute.ty
+                    && candidate.arr == attribute.arr
+                    && attribute_bindings.get(&candidate.name) == Some(location)
+            }) {
+                alias_canonical.insert(attribute.name.clone(), canonical.name.clone());
+            }
+        }
         let mut vary = Tokens(&vs).collect("varying");
         vary.truncate(16);
         append_decls_unique(&mut vary, Tokens(&vs).collect("out"), 16);
@@ -733,6 +770,9 @@ impl StageSources<'_> {
             used.extend(*at..at.saturating_add(span));
         }
         for a in &attrs {
+            if alias_canonical.contains_key(&a.name) {
+                continue;
+            }
             let location = attribute_bindings
                 .get(&a.name)
                 .copied()
@@ -781,6 +821,9 @@ impl StageSources<'_> {
             );
             String::new()
         });
+        for (alias, canonical) in &alias_canonical {
+            replace_identifier(&mut vb, alias, canonical);
+        }
         NormalizedSource::new(&mut vb).strip_precision();
         Declarations::rewrite_data_refs(&mut vb, &unis);
         Declarations::rewrite_integer_sampler_fetches(&mut vb, &samps);

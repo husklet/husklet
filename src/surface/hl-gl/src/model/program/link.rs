@@ -13,6 +13,43 @@ use std::sync::{Mutex, OnceLock};
 const SHADER_DIAGNOSTIC_LIMIT: usize = 64;
 const SHADER_SOURCE_DIAGNOSTIC_BYTES: usize = 4096;
 
+fn without_static_false_blocks(source: &str) -> String {
+    let mut output = source.to_string();
+    for condition in ["if (0 != 0)", "if(0 != 0)", "if (0!=0)", "if(0!=0)"] {
+        while let Some(start) = output.find(condition) {
+            let Some(open) = output[start + condition.len()..].find('{').map(|at| start + condition.len() + at)
+            else {
+                break;
+            };
+            let mut depth = 0usize;
+            let mut end = None;
+            for (offset, byte) in output.as_bytes()[open..].iter().enumerate() {
+                match byte {
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            end = Some(open + offset + 1);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let Some(end) = end else { break };
+            output.replace_range(start..end, "");
+        }
+    }
+    output
+}
+
+fn identifier_occurrences(source: &str, name: &str) -> usize {
+    source
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .filter(|word| *word == name)
+        .count()
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct ShaderKey {
     vertex: u64,
@@ -190,7 +227,7 @@ impl Program {
                 return Err(glsl::UniformError::AttributeLocation(name.clone()));
             }
         }
-        let public_attributes = if verbatim {
+        let mut public_attributes = if verbatim {
             // Verbatim preparation performs the same span-aware allocation for unbound names.
             let combined = glsl::StageSources::new(&vs_src, &fs_src).storage_uniform_decls();
             let (vertex, _) = glsl::prepare_verbatim_program_with(
@@ -205,6 +242,13 @@ impl Program {
                 .translate_render_with(&attribute_bindings);
             glsl::Source::new(&vertex).vertex_locations()
         };
+        // Translation canonicalizes equivalent aliased inputs into one host declaration. Every active GL
+        // name still reflects the location explicitly assigned through glBindAttribLocation.
+        for declaration in &declarations {
+            if let Some(&location) = attribute_bindings.get(&declaration.name) {
+                public_attributes.insert(declaration.name.clone(), location);
+            }
+        }
         // GL permits names to alias one public attribute location. WebGPU does not permit duplicate
         // shader locations, so give every declaration a collision-free host-only range. Draw lowering
         // duplicates the public GL array into each host range that consumes it.
@@ -214,6 +258,17 @@ impl Program {
             let Some(&public) = public_attributes.get(&declaration.name) else {
                 continue;
             };
+            if let Some(canonical_host) = declarations.iter().find_map(|candidate| {
+                (candidate.name != declaration.name
+                    && candidate.ty == declaration.ty
+                    && candidate.arr == declaration.arr
+                    && public_attributes.get(&candidate.name) == Some(&public))
+                    .then(|| host_bindings.get(&candidate.name).copied())
+                    .flatten()
+            }) {
+                host_bindings.insert(declaration.name.clone(), canonical_host);
+                continue;
+            }
             let span = declaration.location_span() as usize;
             let preferred = public as usize;
             let host = (0..=super::MAX_ATTR.saturating_sub(span))
@@ -230,6 +285,11 @@ impl Program {
             host_occupied[host..host + span].fill(true);
             host_bindings.insert(declaration.name.clone(), host as u32);
         }
+        // Link reflection excludes inputs referenced only from a compile-time-false block. Keep their
+        // host alias while translating—the dead expression remains syntactically present—but do not expose
+        // them through GL_ACTIVE_ATTRIBUTES / glGetAttribLocation.
+        let live_vertex = without_static_false_blocks(&vs_src);
+        public_attributes.retain(|name, _| identifier_occurrences(&live_vertex, name) > 1);
         if !attribute_bindings.is_empty() {
             let sample = attribute_bindings.iter().take(8).collect::<Vec<_>>();
             hl_log::hl_debug!(

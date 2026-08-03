@@ -36,15 +36,15 @@ fn shader_without_main_yields_empty_body_not_a_crash() {
 }
 
 #[test]
-fn attribute_cap_is_enforced_without_truncating_uniforms() {
-    // 20 attributes declared, but the model caps the vertex-attribute count at 16.
+fn aliased_attribute_names_and_uniforms_are_not_truncated() {
+    // GL_MAX_VERTEX_ATTRIBS caps occupied locations, not names: aliasing can make all 20 active legally.
     let mut vs = String::new();
     for i in 0..20 {
         vs.push_str(&format!("attribute vec4 a{i};\n"));
     }
     vs.push_str("void main(){ gl_Position = a0; }\n");
     let attrs = glsl::Source::new(&vs).vertex_attrs();
-    assert_eq!(attrs.len(), 16, "attribute count is capped at 16");
+    assert_eq!(attrs.len(), 20, "all attribute names are reflected");
 
     // Uniform reflection must preserve every declaration. The verbatim wrapper removes the original
     // declarations and rebuilds them from this list, so truncation would leave later uses undeclared.

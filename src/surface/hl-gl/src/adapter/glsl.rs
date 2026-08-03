@@ -354,8 +354,9 @@ impl<'a> Source<'a> {
     pub fn vertex_attrs(self) -> Vec<Decl> {
         let text = self.expanded();
         let mut attrs = Tokens(&text).collect("attribute");
-        attrs.truncate(16);
-        append_decls_unique(&mut attrs, Tokens(&text).collect("in"), 16);
+        // GL_MAX_VERTEX_ATTRIBS limits occupied locations, not active names. Legal ES 1.00 shaders may
+        // expose more names by aliasing mutually exclusive inputs onto the same locations.
+        append_decls_unique(&mut attrs, Tokens(&text).collect("in"), usize::MAX);
         attrs
     }
 
