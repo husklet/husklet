@@ -120,7 +120,16 @@ impl WgpuExecutor {
         // Pass-local scopes attribute errors to the offending pass. This outer scope also covers the
         // deferred native submission, because wgpu performs some validation only when an encoder is
         // submitted.
-        self.with_validation_scope(|executor| executor.submit_cb_inner(res, cb))
+        let mut commit = self.with_validation_scope(|executor| executor.submit_cb_inner(res, cb))?;
+        let signal_scheduled = should_schedule_signal(&commit.refusal, cb.signal);
+        if let Some((f, v)) = cb.signal.filter(|_| signal_scheduled) {
+            let slot = fence::Fence::schedule(res, f, v)?;
+            self.gpu.queue.on_submitted_work_done(move || {
+                fence::Fence::signal(&slot, v);
+            });
+        }
+        commit.signal_scheduled = signal_scheduled;
+        Ok(commit)
     }
 
     fn submit_cb_inner(&mut self, res: &mut SessionResources, cb: &CommandBuffer) -> Result<SubmitCommit> {
@@ -1059,16 +1068,19 @@ impl WgpuExecutor {
             i = next;
         }
         self.submit_encoded(&mut native);
-        let signal_scheduled = should_schedule_signal(&first_refusal, cb.signal);
-        if let Some((f, v)) = cb.signal.filter(|_| signal_scheduled) {
-            let slot = fence::Fence::schedule(res, f, v)?;
-            self.gpu.queue.on_submitted_work_done(move || {
-                fence::Fence::signal(&slot, v);
+        #[cfg(test)]
+        if self.inject_submit_validation.replace(false) {
+            let buffer = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("submit-validation-injection"),
+                size: 4,
+                usage: wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
             });
+            self.gpu.queue.write_buffer(&buffer, 8, &[0; 4]);
         }
         Ok(SubmitCommit {
             refusal: first_refusal,
-            signal_scheduled,
+            signal_scheduled: false,
         })
     }
 

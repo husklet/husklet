@@ -281,6 +281,9 @@ pub struct WgpuExecutor {
     /// Test-only count of empty submissions used to flush a run of aligned buffer writes.
     #[cfg(test)]
     write_flushes: Cell<u64>,
+    /// Inject one validation failure after native submission, before the outer scope is popped.
+    #[cfg(test)]
+    inject_submit_validation: Cell<bool>,
     /// Test-only count of native command buffers submitted by logical command-buffer replay.
     command_submissions: Cell<u64>,
     /// Pre-compiled kernels keyed by the shader id a later `CreateShader { PtxKernel, .. }` uses. Stands
@@ -371,6 +374,8 @@ impl WgpuExecutor {
             direct_copy_submissions: Cell::new(0),
             #[cfg(test)]
             write_flushes: Cell::new(0),
+            #[cfg(test)]
+            inject_submit_validation: Cell::new(false),
             command_submissions: Cell::new(0),
             profile: RefCell::new(None),
             kernels: HashMap::new(),

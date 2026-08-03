@@ -9,6 +9,40 @@ fn refused_submit_never_schedules_its_fence_signal() {
     assert!(!should_schedule_signal(&None, None));
 }
 
+#[test]
+fn submit_validation_never_schedules_or_commits_its_fence_signal() {
+    use hl_gpu::{Cmd, CommandBuffer, FakeClock, GlobalLedger, GpuExecutor, Limits, Session};
+
+    let mut executor = crate::WgpuExecutor::new(crate::DeviceConfig::default())
+        .expect("a GPU adapter is required to capture submit-time validation");
+    let limits = Limits::from_capabilities(executor.capabilities());
+    let mut session = Session::new(
+        limits,
+        GlobalLedger::unbounded(),
+        Box::new(FakeClock::new(0)),
+    );
+    hl_gpu::runtime::submit(&mut session, &mut executor, 0, &[Cmd::CreateFence(9)])
+        .expect("create fence");
+
+    executor.inject_submit_validation.set(true);
+    let outcome = hl_gpu::runtime::submit_outcome(
+        &mut session,
+        &mut executor,
+        0,
+        &[Cmd::Submit(CommandBuffer {
+            encoder: Vec::new(),
+            signal: Some((9, 1)),
+        })],
+    )
+    .expect("submit-time validation is a reported partial outcome");
+    assert!(matches!(outcome.refusal, Some(GpuError::Kernel(_))));
+    assert!(!outcome.committed.replayable);
+    assert!(outcome.committed.fence_signals.is_empty());
+    assert!(outcome.committed.replay_commands().next().is_none());
+    assert_eq!(crate::fence::Fence::scheduled(&session.resources, 9).unwrap(), 0);
+    assert_eq!(session.timeline.get(9), Some(0));
+}
+
 mod native_texture_copy {
     use hl_gpu::protocol::model::descriptor::{BufferDesc, TextureDesc};
     use hl_gpu::protocol::model::enums::{buffer_usage, texture_usage, TextureDim, TextureFormat};
