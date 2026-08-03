@@ -66,6 +66,18 @@ fn runtime_entry_points_roundtrip() {
         CUDART_ERR_NOT_SUPPORTED
     );
     assert_eq!(graphics_resource, 1usize as *mut c_void);
+    for target in [0x84f5, 0x8d41] {
+        assert_eq!(
+            unsafe { cudaGraphicsGLRegisterImage(&mut graphics_resource, 7, target, 0) },
+            CUDART_ERR_NOT_SUPPORTED
+        );
+        assert_eq!(cudaPeekAtLastError(), CUDART_ERR_NOT_SUPPORTED);
+        assert_eq!(cudaGetLastError(), CUDART_ERR_NOT_SUPPORTED);
+    }
+    assert_eq!(
+        unsafe { cudaGraphicsGLRegisterImage(&mut graphics_resource, 7, 0xdead, 0) },
+        CUDART_ERR_INVALID_VALUE
+    );
     assert_eq!(
         unsafe { cudaGraphicsGLRegisterImage(&mut graphics_resource, 7, 0x0de1, 3) },
         CUDART_ERR_INVALID_VALUE

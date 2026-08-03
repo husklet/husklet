@@ -1,5 +1,10 @@
 # Cross-connection sharing — handoff to slice 3
 
+> Status, 2026-08-03: this is a historical handoff. Buffer export/import, map/unmap, wgpu aliasing, and
+> product `Exports` construction are implemented. A failed map barrier runs before the exclusive registry
+> transition, so the first failure cannot require ownership rollback. GL image interop remains unsupported;
+> see `src/surface/hl-cuda/INTEROP.md`.
+
 Written 2026-08-01 by the agent who built slices 1 and 2, for whoever builds slice 3. Slice 3 is the one
 that closes the path; everything below it is preconditions.
 

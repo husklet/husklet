@@ -105,6 +105,16 @@ fn bringup_device_and_context_queries() {
         CUDA_ERROR_NOT_SUPPORTED
     );
     assert_eq!(graphics_resource, 1usize as *mut c_void);
+    for target in [0x84f5, 0x8d41] {
+        assert_eq!(
+            unsafe { cuGraphicsGLRegisterImage(&mut graphics_resource, 7, target, 0) },
+            CUDA_ERROR_NOT_SUPPORTED
+        );
+    }
+    assert_eq!(
+        unsafe { cuGraphicsGLRegisterImage(&mut graphics_resource, 7, 0xdead, 0) },
+        CUDA_ERROR_INVALID_VALUE
+    );
     assert_eq!(
         unsafe { cuGraphicsGLRegisterImage(&mut graphics_resource, 7, 0x0de1, 3) },
         CUDA_ERROR_INVALID_VALUE
