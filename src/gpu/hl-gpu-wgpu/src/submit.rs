@@ -1035,6 +1035,13 @@ impl WgpuExecutor {
                 Ok(())
             })();
             if let Err(error) = outcome {
+                hl_log::hl_error!(
+                    tag::GPU,
+                    "submit operation refused: index={} operation={:?} error={}",
+                    i,
+                    &ops[i],
+                    error
+                );
                 if error.is_fatal() {
                     return Err(error);
                 }
