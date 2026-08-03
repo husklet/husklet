@@ -406,6 +406,7 @@ pub const GL_UNSIGNALED: u32 = 0x9118;
 pub const GL_UNIFORM_BUFFER_BINDING: u32 = 0x8A28;
 pub const GL_SHADER_STORAGE_BUFFER_BINDING: u32 = 0x90D3;
 pub const GL_TRANSFORM_FEEDBACK_BUFFER_BINDING: u32 = 0x8C8F;
+pub const GL_TRANSFORM_FEEDBACK_BINDING: u32 = 0x8E25;
 
 /// The texture-unit bank size — the units `glActiveTexture`/`glBindSampler` accept and the value
 /// `GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS` advertises (the GLES3 minimum is 32).

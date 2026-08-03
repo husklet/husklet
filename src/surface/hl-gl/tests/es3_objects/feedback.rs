@@ -32,6 +32,28 @@ fn transform_feedback_state_machine_and_varyings() {
 }
 
 #[test]
+fn transform_feedback_binding_query_tracks_the_bound_object() {
+    let mut c = ctx();
+    let tf = c.gen_transform_feedback();
+
+    assert_eq!(
+        query::get_integerv(&c, GL_TRANSFORM_FEEDBACK_BINDING, &mut [0; 4]),
+        1
+    );
+    let mut value = [0; 4];
+    query::get_integerv(&c, GL_TRANSFORM_FEEDBACK_BINDING, &mut value);
+    assert_eq!(value[0], 0);
+
+    es3::bind_transform_feedback(&mut c, GL_TRANSFORM_FEEDBACK, tf);
+    query::get_integerv(&c, GL_TRANSFORM_FEEDBACK_BINDING, &mut value);
+    assert_eq!(value[0], tf as i32);
+
+    es3::bind_transform_feedback(&mut c, GL_TRANSFORM_FEEDBACK, 0);
+    query::get_integerv(&c, GL_TRANSFORM_FEEDBACK_BINDING, &mut value);
+    assert_eq!(value[0], 0);
+}
+
+#[test]
 fn transform_feedback_varyings_round_trip() {
     let mut c = ctx();
     // A linked program is required for glTransformFeedbackVaryings.
