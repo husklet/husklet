@@ -71,6 +71,7 @@ pub fn submit_outcome(
     let mut texture_import_releases = Vec::new();
     if let Some(exports) = session.exports.clone() {
         let mut sharing = session.buffer_sharing.clone();
+        let mut texture_sharing = session.texture_sharing.clone();
         for (index, command) in batch.iter().enumerate() {
             if let Cmd::DestroyBuffer(id) = command {
                 match sharing.remove(id) {
@@ -90,7 +91,7 @@ pub fn submit_outcome(
                 }
             }
             if let Cmd::DestroyTexture(id) = command {
-                match session.texture_sharing.get(id).copied() {
+                match texture_sharing.remove(id) {
                     Some(model::session::ResourceSharing::Owner(export)) => {
                         let plan = exports.prepare_owner_release(session.id, export)?;
                         retained.insert(index);
