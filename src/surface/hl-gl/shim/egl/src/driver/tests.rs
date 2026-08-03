@@ -495,6 +495,20 @@ fn khr_debug_rejects_reserved_names_until_object_creation() {
         assert_eq!(glGetError(), GL_INVALID_VALUE, "get {identifier:#x}");
     }
 
+    glBindBuffer(0xdead, names[0]);
+    assert_eq!(glGetError(), GL_INVALID_ENUM);
+    glObjectLabelKHR(
+        GL_BUFFER_OBJECT,
+        names[0],
+        label.len() as i32,
+        label.as_ptr().cast(),
+    );
+    assert_eq!(
+        glGetError(),
+        GL_INVALID_VALUE,
+        "invalid-target bind must not create the buffer"
+    );
+
     glBindBuffer(GL_ARRAY_BUFFER, names[0]);
     glBindTexture(GL_TEXTURE_2D, names[1]);
     glBindFramebuffer(GL_FRAMEBUFFER, names[2]);
@@ -516,6 +530,44 @@ fn khr_debug_rejects_reserved_names_until_object_creation() {
         label.as_ptr().cast(),
     );
     assert_eq!(glGetError(), GL_NO_ERROR, "samplers are created by Gen");
+
+    let mut stage_pipeline = 0;
+    let mut active_pipeline = 0;
+    glGenProgramPipelines(1, &mut stage_pipeline);
+    glGenProgramPipelines(1, &mut active_pipeline);
+    for pipeline in [stage_pipeline, active_pipeline] {
+        glObjectLabelKHR(
+            GL_PROGRAM_PIPELINE_OBJECT,
+            pipeline,
+            label.len() as i32,
+            label.as_ptr().cast(),
+        );
+        assert_eq!(glGetError(), GL_INVALID_VALUE, "Gen reserves pipeline");
+    }
+    glUseProgramStages(stage_pipeline, GL_VERTEX_SHADER_BIT, 0);
+    glObjectLabelKHR(
+        GL_PROGRAM_PIPELINE_OBJECT,
+        stage_pipeline,
+        label.len() as i32,
+        label.as_ptr().cast(),
+    );
+    assert_eq!(
+        glGetError(),
+        GL_NO_ERROR,
+        "UseProgramStages creates pipeline"
+    );
+    glActiveShaderProgram(active_pipeline, 0);
+    glObjectLabelKHR(
+        GL_PROGRAM_PIPELINE_OBJECT,
+        active_pipeline,
+        label.len() as i32,
+        label.as_ptr().cast(),
+    );
+    assert_eq!(
+        glGetError(),
+        GL_NO_ERROR,
+        "ActiveShaderProgram creates pipeline"
+    );
 }
 
 #[test]

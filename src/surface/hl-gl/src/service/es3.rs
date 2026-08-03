@@ -366,6 +366,7 @@ pub fn use_program_stages(ctx: &mut GlContext, pipeline: u32, stages: u32, progr
     if stages & GL_COMPUTE_SHADER_BIT != 0 {
         obj.compute_program = program;
     }
+    ctx.mark_debug_object_materialized(GL_PROGRAM_PIPELINE_OBJECT, pipeline);
 }
 
 /// `glActiveShaderProgram(pipeline, program)` — set the active program (the `glProgramUniform*` target).
@@ -384,6 +385,7 @@ pub fn active_shader_program(ctx: &mut GlContext, pipeline: u32, program: u32) {
         .program_pipelines
         .instantiate(pipeline)
         .active_program = program;
+    ctx.mark_debug_object_materialized(GL_PROGRAM_PIPELINE_OBJECT, pipeline);
 }
 
 /// `glGetProgramPipelineiv(pipeline, pname)` — the program bound to a stage / the active program / the
