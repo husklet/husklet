@@ -869,9 +869,10 @@ pub fn invalid_function_semantics(source: &str) -> Option<String> {
     None
 }
 
-/// Diagnose vector constructors that do not supply exactly the destination component count.
-/// A single scalar is the specified splat form and a single equal-width vector is a conversion; a
-/// smaller vector alone is not implicitly padded by GLSL ES.
+/// Diagnose vector constructors that do not supply the destination component count.
+/// A single scalar is the specified splat form. Otherwise arguments are consumed from left to
+/// right until the vector is full. The final used argument may have unconsumed components, but a
+/// later wholly unused argument is an error. A smaller vector alone is not implicitly padded.
 pub fn invalid_vector_constructor(source: &str) -> Option<String> {
     let source_tokens = tokens(source);
     let declarations = source_tokens
@@ -913,7 +914,22 @@ pub fn invalid_vector_constructor(source: &str) -> Option<String> {
             .iter()
             .map(|argument| {
                 let first = argument.first()?;
+                if argument.len() >= 2 && argument[argument.len() - 2] == "." {
+                    let swizzle = argument.last()?;
+                    if swizzle
+                        .chars()
+                        .all(|component| "xyzwrgba".contains(component) || "stpq".contains(component))
+                    {
+                        return Some(swizzle.len());
+                    }
+                }
                 if let Some(width) = vector_width(first) {
+                    if argument.get(1).map(String::as_str) == Some("(") {
+                        let close = matching(argument, 1, "(", ")")?;
+                        if close + 1 < argument.len() {
+                            return None;
+                        }
+                    }
                     return Some(width);
                 }
                 if first.parse::<f64>().is_ok() || matches!(first.as_str(), "true" | "false") {
@@ -926,9 +942,11 @@ pub fn invalid_vector_constructor(source: &str) -> Option<String> {
             })
             .collect::<Option<Vec<_>>>();
         let Some(widths) = widths else { continue };
-        let valid = widths == [1]
-            || widths == [target_width]
-            || widths.iter().sum::<usize>() == target_width;
+        let total = widths.iter().sum::<usize>();
+        let before_last = widths[..widths.len().saturating_sub(1)]
+            .iter()
+            .sum::<usize>();
+        let valid = widths == [1] || (before_last < target_width && total >= target_width);
         if !valid {
             return Some(format!(
                 "'{}' : constructor supplies {} components but requires {target_width}",

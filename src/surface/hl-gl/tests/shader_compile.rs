@@ -181,7 +181,7 @@ fn es2_enforces_parameter_qualifier_grammar_order() {
 }
 
 #[test]
-fn es2_vector_constructors_require_the_exact_component_count() {
+fn es2_vector_constructors_reject_an_undersized_component_count() {
     let mut context = GlContext::new();
     for source_type in ["vec2", "ivec2", "bvec2"] {
         for destination_type in ["vec3", "ivec3", "bvec3", "vec4", "ivec4", "bvec4"] {
@@ -211,6 +211,14 @@ fn es2_vector_constructors_require_the_exact_component_count() {
             );
         }
     }
+    for source in [
+        "void main(){vec3 value=vec3(1.0,2.0,3.0,4.0);}",
+        "void main(){vec3 source_value; vec3 value=vec3(source_value,1.0);}",
+        "void main(){vec2 left; vec2 right; vec3 value=vec3(left,right,1.0);}",
+    ] {
+        let (status, log) = compile(&mut context, GL_VERTEX_SHADER, source);
+        assert_eq!(status, GL_FALSE as i32, "accepted unused argument: {log}");
+    }
 }
 
 #[test]
@@ -223,6 +231,10 @@ fn legal_vector_splats_conversions_and_component_composition_remain_accepted() {
         "void main(){vec2 left; vec2 right; vec4 value=vec4(left,right);}",
         "void main(){vec4 source_value; vec4 value=vec4(source_value.xyz,1.0);}",
         "vec3 helper(){return vec3(1.0);} void main(){vec4 value=vec4(helper(),1.0);}",
+        "void main(){vec2 left; vec3 right; vec4 value=vec4(left,right);}",
+        "void main(){vec2 left; vec4 right; vec4 value=vec4(left,right);}",
+        "void main(){vec4 value=vec4(0.0,vec3(1.0).r,2.0,3.0);}",
+        "void main(){bvec4 value=bvec4(vec4(1.0).w*asin(0.0),true,false,true);}",
     ] {
         let (status, log) = compile(&mut context, GL_VERTEX_SHADER, source);
         assert_eq!(
