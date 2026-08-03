@@ -1,37 +1,35 @@
 # Vulkan WSI semaphore handoff
 
-`vkQueuePresentKHR::pWaitSemaphores` cannot be propagated honestly by the current runtime.
+The advertised single-queue WSI synchronization path is now modeled end to end.
 
-## Missing state and ordering
+## Implemented contract
 
-- `SemaphoreRec` distinguishes binary from timeline semaphores but stores no binary signaled state.
-- `vkQueueSubmit` and `vkQueueSubmit2` discard binary wait and signal arrays.
-- `vkAcquireNextImageKHR` discards its semaphore and fence arguments.
-- `vkQueuePresentKHR` discards `pWaitSemaphores`.
-- The guest queue service is synchronous: `sink.submit()` completes before returning. It has no pending
-  queue operation that can wait for a semaphore another queue signals later.
+- `vkAcquireNextImageKHR` waits without holding the process-global state lock: zero timeout returns
+  `VK_NOT_READY`, finite timeout probes until its deadline, and `UINT64_MAX` waits until availability or
+  cancellation by swapchain retirement/device destruction.
+- A successful acquire atomically marks the image owned and signals its validated binary semaphore and/or
+  fence. Failed and timed-out acquires signal nothing.
+- Binary semaphore payloads are stored explicitly. `vkQueueSubmit{,2}` consumes satisfied waits only when
+  replay succeeds, rolls them back on refusal, and publishes binary/timeline signals after synchronous
+  completion.
+- `vkQueuePresentKHR` validates and consumes every binary wait before lowering the presents. An unknown,
+  timeline, or unsignaled wait is never treated as satisfied.
 
-Marking every binary semaphore satisfied would fake success. Rejecting every not-yet-signaled wait would
-also violate Vulkan, where queue submission may wait asynchronously. A complete implementation needs:
+Husklet exposes one queue from one queue family. Its host replay is synchronous, so the legal WSI sequence
+is already resolved when each next queue operation begins:
 
-1. Give each binary semaphore an owned payload state (`unsignaled`, `pending signal`, `signaled`) and
-   consume it exactly once at a successful wait.
-2. Preserve each `VkSubmitInfo` as an ordered queue operation instead of flattening all command buffers.
-3. Add queue-owned pending operations so a wait can be satisfied by a later submission on another queue.
-4. Signal acquire semaphores/fences only when the image becomes available.
-5. Carry present waits into the same queue scheduler; submit `Cmd::Present` only after all waits resolve.
-6. Retire or roll back semaphore transitions when GPU submission is refused, using the committed-prefix
-   outcome rather than the top-level return alone.
+1. acquire signals `imageAvailable`;
+2. render submission consumes it and signals `renderFinished` after replay;
+3. present consumes `renderFinished` before presenting.
 
 MoltenVK's reference is `reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.mm`:
 `acquireNextImage()` selects the shortest-availability image and calls
 `acquireAndSignalWhenAvailable(semaphore, fence)`. Its queue path retains present wait semaphores until
 the presentation operation executes.
 
-Fail-first coverage should be a two-submit sequence: acquire signals `imageAvailable`; render waits and
-consumes it, then signals `renderFinished`; present waits and consumes `renderFinished`. A second wait on
-either consumed payload must remain pending. A cross-queue test must signal after the wait was enqueued;
-that test prevents replacing the scheduler with immediate guest-side polling.
+If multiple queues are advertised later, queue-owned pending operations become required: a wait may then be
+satisfied by a signal submitted later on another queue. Immediate polling must not be extended to claim that
+future capability.
 
 ## Adjacent validation landed
 
@@ -41,13 +39,8 @@ or GPU-surface state. Unsupported create flags and stale `oldSwapchain` handles 
 sharing is also rejected truthfully: Vulkan requires more than one unique queue family, while Husklet
 currently exposes only queue family 0.
 
-This validation is deliberately not presented as semaphore support. The synchronization work above remains
-required before acquire, submit, or present wait/signal parameters can be honored.
-
-Pool exhaustion no longer reissues an acquired image: a zero timeout reports `VK_NOT_READY` and a finite
-non-zero timeout reports `VK_TIMEOUT`. This does not implement asynchronous availability or acquire
-semaphore/fence signaling. In particular, an infinite timeout still needs the pending-operation scheduler
-described above rather than blocking while holding the shim's global state lock.
+Pool exhaustion never reissues an acquired image. Waiting releases the shim lock between bounded probes,
+which lets presentation return an image and lets destruction cancel an infinite wait.
 
 Swapchains retain both the application `VkSurfaceKHR` and the underlying native presentation target
 separately from their internal GPU surface. Replacement follows the native target, so two Vulkan surface

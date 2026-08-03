@@ -180,7 +180,10 @@ pub extern "C" fn vkCreateSwapchainKHR(
                 }
                 VK_SUCCESS
             }
-            Err(e) => Status::from_error(&e),
+            Err(e) => {
+                s.presenters.discard_unbound(presenter_id);
+                Status::from_error(&e)
+            }
         }
     })
 }
@@ -287,16 +290,18 @@ pub extern "C" fn vkAcquireNextImageKHR(
     _device: *mut c_void,
     swapchain: u64,
     timeout: u64,
-    _semaphore: u64,
-    _fence: u64,
+    semaphore: u64,
+    fence: u64,
     p_image_index: *mut u32,
 ) -> VkResult {
-    ShimState::with_device(
-        |dev| match dev.acquire_next_image_with_timeout(swapchain, timeout) {
+    if p_image_index.is_null() || (semaphore == 0 && fence == 0) {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    wait_for_available(timeout, || {
+        ShimState::with_device(
+        |dev| match dev.try_acquire_next_image(swapchain, semaphore, fence) {
             Ok(idx) => {
-                if !p_image_index.is_null() {
-                    unsafe { *p_image_index = idx };
-                }
+                unsafe { *p_image_index = idx };
                 VK_SUCCESS
             }
             Err(
@@ -318,9 +323,38 @@ pub extern "C" fn vkAcquireNextImageKHR(
                 }
                 Status::from_error(&e)
             }
-        },
-    )
-    .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
+        })
+        .unwrap_or(VK_ERROR_DEVICE_LOST)
+    })
+}
+
+fn wait_for_available(timeout_ns: u64, mut probe: impl FnMut() -> VkResult) -> VkResult {
+    let started = std::time::Instant::now();
+    loop {
+        let result = probe();
+        if result != VK_NOT_READY {
+            return result;
+        }
+        if timeout_ns == 0 {
+            return VK_NOT_READY;
+        }
+        if timeout_ns != u64::MAX {
+            let timeout = std::time::Duration::from_nanos(timeout_ns);
+            let elapsed = started.elapsed();
+            if elapsed >= timeout {
+                return VK_TIMEOUT;
+            }
+            std::thread::sleep(
+                timeout
+                    .saturating_sub(elapsed)
+                    .min(std::time::Duration::from_millis(1)),
+            );
+        } else {
+            // Release the global state mutex between probes. Presentation, swapchain retirement, and
+            // device destruction can therefore make progress and also cancel this indefinite wait.
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
 }
 
 fn acquire_error_status(error: &present::AcquireImageError) -> VkResult {
@@ -380,10 +414,23 @@ pub extern "C" fn vkQueuePresentKHR(
     if pi.p_swapchains.is_null() || pi.p_image_indices.is_null() {
         return VK_ERROR_INITIALIZATION_FAILED;
     }
+    if pi.wait_semaphore_count != 0 && pi.p_wait_semaphores.is_null() {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
     let swapchains =
         unsafe { std::slice::from_raw_parts(pi.p_swapchains, pi.swapchain_count as usize) };
     let indices =
         unsafe { std::slice::from_raw_parts(pi.p_image_indices, pi.swapchain_count as usize) };
+    let waits = if pi.wait_semaphore_count == 0 {
+        &[][..]
+    } else {
+        unsafe {
+            std::slice::from_raw_parts(
+                pi.p_wait_semaphores,
+                pi.wait_semaphore_count as usize,
+            )
+        }
+    };
     let mut per_swapchain_results = (!pi.p_results.is_null()).then(|| unsafe {
         std::slice::from_raw_parts_mut(pi.p_results, pi.swapchain_count as usize)
     });
@@ -397,6 +444,12 @@ pub extern "C" fn vkQueuePresentKHR(
             presenters,
             native_present,
         } = parts;
+        // Queue presentation waits are binary semaphore waits. The executor completes queue submits
+        // synchronously, so their guest-side payload is authoritative here. Validate the whole set
+        // before consuming any payload; successful consumption is the queue wait operation.
+        if let Err(error) = dev.consume_binary_semaphores(waits) {
+            return Status::from_error(&error);
+        }
         let mut res = VK_SUCCESS;
         // A present that commits nothing must never be silent. Every failure exit below reports at
         // `error` — the one level a release build keeps — and each is latched per swapchain, because
@@ -630,6 +683,32 @@ mod tests {
         assert_eq!(
             acquire_error_status(&present::AcquireImageError::Timeout),
             VK_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn finite_acquire_waits_until_its_deadline() {
+        let started = std::time::Instant::now();
+        assert_eq!(wait_for_available(5_000_000, || VK_NOT_READY), VK_TIMEOUT);
+        assert!(started.elapsed() >= std::time::Duration::from_millis(5));
+    }
+
+    #[test]
+    fn indefinite_acquire_observes_availability_and_cancellation() {
+        let started = std::time::Instant::now();
+        assert_eq!(
+            wait_for_available(u64::MAX, || {
+                if started.elapsed() >= std::time::Duration::from_millis(3) {
+                    VK_SUCCESS
+                } else {
+                    VK_NOT_READY
+                }
+            }),
+            VK_SUCCESS
+        );
+        assert_eq!(
+            wait_for_available(u64::MAX, || VK_ERROR_DEVICE_LOST),
+            VK_ERROR_DEVICE_LOST
         );
     }
 

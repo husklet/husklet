@@ -26,6 +26,8 @@ pub struct SemaphoreRec {
     pub timeline: bool,
     /// The timeline counter (0 for a binary semaphore, or a timeline's initial value).
     pub counter: u64,
+    /// Binary payload state. A successful queue wait consumes it.
+    pub signaled: bool,
     /// Payload exported by this semaphore or permanently imported into it.
     pub shared: Option<SyncExportId>,
 }
@@ -36,6 +38,7 @@ impl SemaphoreRec {
         Self {
             timeline: false,
             counter: 0,
+            signaled: false,
             shared: None,
         }
     }
@@ -44,6 +47,7 @@ impl SemaphoreRec {
         Self {
             timeline: true,
             counter: initial,
+            signaled: false,
             shared: None,
         }
     }
