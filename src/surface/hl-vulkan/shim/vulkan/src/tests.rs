@@ -62,8 +62,17 @@ fn every_implemented_command_resolves() {
         "vkCreateSamplerYcbcrConversion",
         "vkCmdTraceRaysKHR",
         "vkCreateRenderPass2",
+        "vkGetPhysicalDeviceSurfaceCapabilities2KHR",
+        "vkGetPhysicalDeviceSurfaceFormats2KHR",
     ] {
         assert!(dispatch_addr(name).is_some(), "{name} does not resolve");
+    }
+    for name in [
+        "vkGetPhysicalDeviceSurfaceCapabilities2KHR",
+        "vkGetPhysicalDeviceSurfaceFormats2KHR",
+    ] {
+        assert!(LOWERED_NAMES.contains(&name), "{name} is not classified as lowered");
+        assert!(!REFUSED_NAMES.contains(&name), "{name} is classified as refused");
     }
 }
 

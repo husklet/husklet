@@ -260,8 +260,6 @@ pub const NAMES: &[&str] = &[
     "vkGetPhysicalDeviceScreenPresentationSupportQNX",
     "vkGetPhysicalDeviceSupportedFramebufferMixedSamplesCombinationsNV",
     "vkGetPhysicalDeviceSurfaceCapabilities2EXT",
-    "vkGetPhysicalDeviceSurfaceCapabilities2KHR",
-    "vkGetPhysicalDeviceSurfaceFormats2KHR",
     "vkGetPhysicalDeviceSurfacePresentModes2EXT",
     "vkGetPhysicalDeviceWin32PresentationSupportKHR",
     "vkGetPipelineExecutableInternalRepresentationsKHR",
