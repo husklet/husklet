@@ -714,13 +714,18 @@ impl RenderPasses {
     pub(super) fn depth_format_with(
         draws: &[DrawCall],
         clear: DepthClear,
+        stencil_available: bool,
     ) -> Option<TextureFormat> {
+        // Clearing or testing a missing stencil attachment has no storage to preserve. In particular, do
+        // not upgrade a depth-only FBO to a different host texture merely because GL_STENCIL_BUFFER_BIT
+        // was included in a combined clear.
         // A RECT clear writes the plane with a draw, so the pass must carry the attachment for it just as
         // much as a depth-tested draw or a load-op clear does.
-        let any_stencil = draws
-            .iter()
-            .any(|d| !d.is_clear && d.stencil || d.needs_rect_clear() && d.clears_stencil())
-            || clear.stencil_armed;
+        let any_stencil = stencil_available
+            && (draws
+                .iter()
+                .any(|d| !d.is_clear && d.stencil || d.needs_rect_clear() && d.clears_stencil())
+                || clear.stencil_armed);
         let any_depth = draws
             .iter()
             .any(|d| !d.is_clear && d.depth || d.needs_rect_clear() && d.clears_depth())
@@ -754,7 +759,8 @@ pub(super) fn depth_attachment_for(
     cmds: &mut Vec<Cmd>,
     clear: DepthClear,
 ) -> Option<DepthAttachment> {
-    let format = RenderPasses::depth_format_with(draws, clear)?;
+    let stencil_available = fbo == 0 || ctx.local.framebuffers.has_stencil(fbo);
+    let format = RenderPasses::depth_format_with(draws, clear, stencil_available)?;
     let with_stencil = matches!(format, TextureFormat::Depth24PlusStencil8);
     let clear_depth = clear.depth;
     // GL clears the stencil plane to `glClearStencil`'s value (default 0), masked to the 8-bit buffer.

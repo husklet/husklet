@@ -207,7 +207,12 @@ impl Frame {
             // built at this format to match the attachment (wgpu requirement). A depth/stencil CLEAR counts
             // as well as a depth/stencil-tested draw: the clear has to land even in a frame whose draws are
             // all untested, or the value it wrote is lost (see [`RenderPasses::depth_format_with`]).
-            let depth_fmt = RenderPasses::depth_format_with(survivors, depth_load(draws));
+            let stencil_available = fbo == 0 || ctx.local.framebuffers.has_stencil(fbo);
+            let depth_fmt = RenderPasses::depth_format_with(
+                survivors,
+                depth_load(draws),
+                stencil_available,
+            );
             let mut copies: Vec<Enc> = Vec::new();
             let mut draw_ops: Vec<Enc> = Vec::new();
             for d in survivors {
@@ -759,7 +764,8 @@ pub(super) fn emit_segment_pass(
     // The pass's depth format must account for the CLEAR that armed it as well as the draws in it: a
     // pipeline built without a depth state cannot run in a pass that has a depth attachment, and vice
     // versa, so both decisions read the same answer.
-    let depth_fmt = RenderPasses::depth_format_with(seg, depth_load);
+    let stencil_available = fbo == 0 || ctx.local.framebuffers.has_stencil(fbo);
+    let depth_fmt = RenderPasses::depth_format_with(seg, depth_load, stencil_available);
     let mut copies: Vec<Enc> = Vec::new();
     let mut draw_ops: Vec<Enc> = Vec::new();
     let bottom_up = RenderPasses::stores_bottom_up_rows(ctx, seg.first().and_then(|d| d.target));
