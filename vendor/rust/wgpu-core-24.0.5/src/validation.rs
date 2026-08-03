@@ -743,7 +743,12 @@ impl NumericType {
             Tf::Rgba8Sint | Tf::Rgba16Sint | Tf::Rgba32Sint => {
                 (NumericDimension::Vector(Vs::Quad), Scalar::I32)
             }
-            Tf::Rg11b10Ufloat => (NumericDimension::Vector(Vs::Tri), Scalar::F32),
+            Tf::Rg11b10Ufloat | Tf::R5g6b5Unorm => {
+                (NumericDimension::Vector(Vs::Tri), Scalar::F32)
+            }
+            Tf::A1r5g5b5Unorm | Tf::B4g4r4a4Unorm => {
+                (NumericDimension::Vector(Vs::Quad), Scalar::F32)
+            }
             Tf::Stencil8
             | Tf::Depth16Unorm
             | Tf::Depth32Float

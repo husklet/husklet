@@ -80,6 +80,9 @@ fn native_formats_transfer_roundtrip_exact_bytes() {
         (TextureFormat::Rgb10a2Unorm, &[0x01, 0x02, 0x03, 0x04]),
         (TextureFormat::Rgb10a2Uint, &[0x01, 0x02, 0x03, 0x04]),
         (TextureFormat::Rg11b10Ufloat, &[0x01, 0x02, 0x03, 0x04]),
+        (TextureFormat::R5g6b5Unorm, &[0x08, 0xbc]),
+        (TextureFormat::A1r5g5b5Unorm, &[0x08, 0xde]),
+        (TextureFormat::B4g4r4a4Unorm, &[0xbf, 0x48]),
     ];
     assert_eq!(
         cases.len(),
@@ -128,6 +131,18 @@ fn native_normalized_and_float_formats_sample_exact_values() {
         near_tol(rg16, [128, 64, 0, 255], 2),
         "RG16 float sample: {rg16:?}"
     );
+
+    for (format, bytes) in [
+        (TextureFormat::R5g6b5Unorm, &[0x00, 0xf8][..]),
+        (TextureFormat::A1r5g5b5Unorm, &[0x00, 0xfc][..]),
+        (TextureFormat::B4g4r4a4Unorm, &[0xff, 0x00][..]),
+    ] {
+        let sampled = super::sample::sample_stored(&mut exec, format, bytes);
+        assert!(
+            near_tol(sampled, [255, 0, 0, 255], 1),
+            "{format:?} must sample Vulkan red as red: {sampled:?}"
+        );
+    }
 }
 
 #[test]
@@ -154,6 +169,14 @@ fn native_formats_are_real_color_attachments() {
         &[0x00, 0x3a, 0x00, 0x38],
         "RG16 float attachment stores exact halves"
     );
+
+    for (format, expected) in [
+        (TextureFormat::R5g6b5Unorm, [0x08, 0xbc]),
+        (TextureFormat::A1r5g5b5Unorm, [0x08, 0xde]),
+    ] {
+        let bytes = super::color::draw_const(&mut exec, format);
+        assert_eq!(&bytes[..2], &expected, "{format:?} attachment packing");
+    }
 }
 
 #[test]

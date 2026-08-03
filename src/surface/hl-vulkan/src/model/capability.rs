@@ -175,6 +175,11 @@ impl Format {
             T::Rgb9e5Ufloat => FormatClass::SampledColor,
             T::Rg11b10Ufloat => FormatClass::SampledColor,
             T::Rgb10a2Unorm => FormatClass::NormalizedColor,
+            T::R5g6b5Unorm | T::A1r5g5b5Unorm => FormatClass::NormalizedColor,
+            // Metal exposes B4G4R4A4 through ABGR4 plus a sampled-view swizzle. Metal applies that
+            // swizzle to reads but not attachment writes, so advertising it as renderable would corrupt
+            // the packed red/blue nibbles. Vulkan requires its sampled/copy roles, which are exact.
+            T::B4g4r4a4Unorm => FormatClass::SampledColor,
             T::Rgb10a2Uint => FormatClass::IntegerColor,
             T::Depth32Float | T::Depth24PlusStencil8 => FormatClass::DepthStencil,
             other if other.block_geometry().is_some() => FormatClass::Compressed,

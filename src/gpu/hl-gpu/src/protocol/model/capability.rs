@@ -72,17 +72,17 @@ impl Capabilities {
 
 /// Build a supported-format bitset (bit = `TextureFormat::to_u32()`).
 ///
-/// 64 slots wide. A discriminant at or beyond that is dropped rather than aliasing onto another format's
+/// 128 slots wide. A discriminant at or beyond that is dropped rather than aliasing onto another format's
 /// bit — it would be a silent capability lie, so
 /// `every_declared_texture_format_is_representable_in_the_bitset` guards the invariant that no declared
 /// format is ever out of range.
 impl TextureFormat {
-    pub fn bits(formats: &[TextureFormat]) -> u64 {
-        let mut b = 0u64;
+    pub fn bits(formats: &[TextureFormat]) -> u128 {
+        let mut b = 0u128;
         for f in formats {
             let n = f.to_u32();
-            if n < 64 {
-                b |= 1u64 << n;
+            if n < 128 {
+                b |= 1u128 << n;
             }
         }
         b
@@ -154,6 +154,7 @@ pub const NATIVE_FORMATS: &[TextureFormat] = &[
     TextureFormat::Rg32Float, TextureFormat::Rg32Uint, TextureFormat::Rg32Sint,
     TextureFormat::Rgb9e5Ufloat,
     TextureFormat::Rgb10a2Unorm, TextureFormat::Rgb10a2Uint, TextureFormat::Rg11b10Ufloat,
+    TextureFormat::R5g6b5Unorm, TextureFormat::A1r5g5b5Unorm, TextureFormat::B4g4r4a4Unorm,
 ];
 
 /// The depth/stencil formats a backend can materialize as a real depth target (the software oracle
@@ -237,11 +238,10 @@ pub struct Capabilities {
     pub command_bits: u64,
     /// Bitset of accepted shader payload kinds ([`shader_payload`]).
     pub shader_payloads: u32,
-    /// Bitset of supported texture formats (bit = `TextureFormat::to_u32()`). 64 bits wide: 25 of the
-    /// slots are already used, and the format that overflowed a narrower bitset would have been silently
-    /// un-advertisable. Only the low 32 bits reach the wire unless a high bit is actually set — see
+    /// Bitset of supported texture formats (bit = `TextureFormat::to_u32()`). 128 bits wide so every
+    /// declared neutral format remains representable. Only occupied 32-bit words reach the wire — see
     /// [`Capabilities::encode`](crate::protocol::codec::encode).
-    pub texture_formats: u64,
+    pub texture_formats: u128,
     /// Largest single submitted frame (encoded IR byte-stream) the backend will accept.
     pub max_frame_bytes: u64,
     /// Largest single buffer/texture allocation the backend will accept.
@@ -269,7 +269,7 @@ pub struct FeatureRequest {
     /// Required encoder-command bits (use [`command_bits`]).
     pub command_bits: u64,
     /// Required texture-format bits (use [`TextureFormat::bits`]).
-    pub texture_formats: u64,
+    pub texture_formats: u128,
     pub binding_arrays: u32,
     pub non_uniform_binding_arrays: u32,
     pub gpu_features: u32,
@@ -298,7 +298,7 @@ impl Capabilities {
     /// True if the backend can materialize texture `format`.
     pub fn supports_format(&self, format: TextureFormat) -> bool {
         let n = format.to_u32();
-        n < 64 && self.texture_formats & (1u64 << n) != 0
+        n < 128 && self.texture_formats & (1u128 << n) != 0
     }
 
     /// Negotiate a guest's [`FeatureRequest`] against this descriptor. Returns a typed, clean error the

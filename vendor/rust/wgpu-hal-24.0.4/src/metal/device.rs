@@ -1,4 +1,5 @@
 use parking_lot::Mutex;
+use objc::{msg_send, sel, sel_impl};
 use std::{
     ptr::NonNull,
     sync::{atomic, Arc},
@@ -12,6 +13,23 @@ use crate::TlasInstance;
 use metal::foreign_types::ForeignType;
 
 type DeviceResult<T> = Result<T, crate::DeviceError>;
+
+/// ABI of Metal's `MTLTextureSwizzleChannels` (`MTLTextureSwizzle` is `uint8_t`).
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct TextureSwizzleChannels {
+    red: u8,
+    green: u8,
+    blue: u8,
+    alpha: u8,
+}
+
+unsafe impl objc::Encode for TextureSwizzleChannels {
+    fn encode() -> objc::Encoding {
+        // SAFETY: four `uint8_t` fields exactly match the public Metal ABI.
+        unsafe { objc::Encoding::from_str("{MTLTextureSwizzleChannels=CCCC}") }
+    }
+}
 
 struct CompiledShader {
     library: metal::Library,
@@ -485,7 +503,8 @@ impl crate::Device for super::Device {
             desc.range
                 .is_full_resource(desc.format, texture.mip_levels, texture.array_layers);
 
-        let raw = if format_equal && type_equal && range_full_resource {
+        let needs_b4g4r4a4_swizzle = desc.format == wgt::TextureFormat::B4g4r4a4Unorm;
+        let raw = if format_equal && type_equal && range_full_resource && !needs_b4g4r4a4_swizzle {
             // Some images are marked as framebuffer-only, and we can't create aliases of them.
             // Also helps working around Metal bugs with aliased array textures.
             texture.raw.to_owned()
@@ -500,18 +519,29 @@ impl crate::Device for super::Device {
                 .unwrap_or(texture.array_layers - desc.range.base_array_layer);
 
             objc::rc::autoreleasepool(|| {
-                let raw = texture.raw.new_texture_view_from_slice(
-                    raw_format,
-                    raw_type,
-                    metal::NSRange {
-                        location: desc.range.base_mip_level as _,
-                        length: mip_level_count as _,
-                    },
-                    metal::NSRange {
-                        location: desc.range.base_array_layer as _,
-                        length: array_layer_count as _,
-                    },
-                );
+                let levels = metal::NSRange {
+                    location: desc.range.base_mip_level as _,
+                    length: mip_level_count as _,
+                };
+                let slices = metal::NSRange {
+                    location: desc.range.base_array_layer as _,
+                    length: array_layer_count as _,
+                };
+                let raw = if needs_b4g4r4a4_swizzle {
+                    // Vulkan B4G4R4A4_PACK16 materializes as Metal ABGR4Unorm. MoltenVK applies this
+                    // exact B,G,R,A view swizzle; without it red and blue sample reversed.
+                    unsafe {
+                        msg_send![texture.raw.as_ptr(),
+                            newTextureViewWithPixelFormat: raw_format
+                            textureType: raw_type
+                            levels: levels
+                            slices: slices
+                            swizzle: TextureSwizzleChannels { red: 4, green: 3, blue: 2, alpha: 5 }
+                        ]
+                    }
+                } else {
+                    texture.raw.new_texture_view_from_slice(raw_format, raw_type, levels, slices)
+                };
                 if let Some(label) = desc.label {
                     raw.set_label(label);
                 }

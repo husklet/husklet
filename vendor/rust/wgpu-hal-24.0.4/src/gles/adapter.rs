@@ -1087,6 +1087,7 @@ impl crate::Adapter for super::Adapter {
         let image_64_atomic = feature_fn(wgt::Features::TEXTURE_INT64_ATOMIC, Tfc::STORAGE_ATOMIC);
 
         match format {
+            Tf::R5g6b5Unorm | Tf::A1r5g5b5Unorm | Tf::B4g4r4a4Unorm => empty,
             Tf::R8Unorm => filterable_renderable,
             Tf::R8Snorm => filterable,
             Tf::R8Uint => renderable,

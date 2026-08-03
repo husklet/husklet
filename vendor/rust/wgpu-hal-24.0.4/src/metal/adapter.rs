@@ -162,6 +162,7 @@ impl crate::Adapter for super::Adapter {
                     | msaa_resolve_desktop_if
             }
             Tf::Rg8Unorm | Tf::Rg16Float | Tf::Bgra8Unorm => all_caps,
+            Tf::R5g6b5Unorm | Tf::A1r5g5b5Unorm | Tf::B4g4r4a4Unorm => all_caps,
             Tf::Rg8Uint | Tf::Rg8Sint => {
                 Tfc::STORAGE_WRITE_ONLY | Tfc::COLOR_ATTACHMENT | msaa_count
             }
@@ -1086,6 +1087,9 @@ impl super::PrivateCapabilities {
             Tf::Rgb10a2Uint => RGB10A2Uint,
             Tf::Rgb10a2Unorm => RGB10A2Unorm,
             Tf::Rg11b10Ufloat => RG11B10Float,
+            Tf::R5g6b5Unorm => B5G6R5Unorm,
+            Tf::A1r5g5b5Unorm => BGR5A1Unorm,
+            Tf::B4g4r4a4Unorm => ABGR4Unorm,
             // Ruint64 textures are emulated on metal
             Tf::R64Uint => RG32Uint,
             Tf::Rg32Uint => RG32Uint,

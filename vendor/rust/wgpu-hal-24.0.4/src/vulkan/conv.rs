@@ -6,6 +6,9 @@ impl super::PrivateCapabilities {
         use wgt::TextureFormat as Tf;
         use wgt::{AstcBlock, AstcChannel};
         match format {
+            Tf::R5g6b5Unorm => F::R5G6B5_UNORM_PACK16,
+            Tf::A1r5g5b5Unorm => F::A1R5G5B5_UNORM_PACK16,
+            Tf::B4g4r4a4Unorm => F::B4G4R4A4_UNORM_PACK16,
             Tf::R8Unorm => F::R8_UNORM,
             Tf::R8Snorm => F::R8_SNORM,
             Tf::R8Uint => F::R8_UINT,

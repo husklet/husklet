@@ -22,12 +22,13 @@ impl Capabilities {
         let non_uniform_binding_arrays = d.u32()?;
         let gpu_features = if wire_version >= 11 { d.u32()? } else { 0 };
         let pbits = d.u32()?;
-        // Optional trailing high half of the 64-bit format bitset (see `Capabilities::encode` for why this
-        // is presence-gated rather than version-gated). Absent for every descriptor that advertises only
-        // the low 32 format slots, which is every descriptor today.
-        let texture_formats_high = if d.remaining() >= 4 { d.u32()? } else { 0 };
-        let texture_formats =
-            u64::from(texture_formats_low) | (u64::from(texture_formats_high) << 32);
+        // Optional trailing high words of the 128-bit format bitset (see `Capabilities::encode`).
+        let mut texture_formats = u128::from(texture_formats_low);
+        for shift in [32, 64, 96] {
+            if d.remaining() >= 4 {
+                texture_formats |= u128::from(d.u32()?) << shift;
+            }
+        }
         Ok(Capabilities {
             name,
             unified_memory,

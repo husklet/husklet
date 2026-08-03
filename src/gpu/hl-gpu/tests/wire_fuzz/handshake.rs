@@ -105,22 +105,22 @@ fn a_high_format_bit_survives_the_handshake_and_low_only_stays_byte_identical() 
         "a low-only descriptor must round-trip"
     );
 
-    // A format above bit 31 round-trips rather than being truncated away.
-    caps.texture_formats |= 1u64 << 40;
+    // A packed format above the old 64-bit ceiling round-trips rather than being truncated away.
+    caps.texture_formats |= 1u128 << 66;
     let wide = caps.to_handshake();
     let decoded = Capabilities::from_handshake(&wide).unwrap();
     assert_eq!(
         decoded.texture_formats, caps.texture_formats,
-        "the high half of the format bitset must survive the handshake"
+        "all high words of the format bitset must survive the handshake"
     );
     assert_eq!(decoded, caps);
 
-    // The wide form costs exactly one extra 4-byte word, and ONLY when a high bit is set — so the byte
+    // Bit 66 needs the zero 32..63 word plus the occupied 64..95 word. The tail exists ONLY when needed — so the byte
     // stream a guest that predates the widening sees is unchanged until a format it cannot name exists.
     assert_eq!(
         wide.len(),
-        low_len + 4,
-        "the high half is an optional tail, not a reshaped message"
+        low_len + 8,
+        "the high words are an optional tail, not a reshaped message"
     );
 }
 

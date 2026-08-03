@@ -7,6 +7,9 @@ impl super::AdapterShared {
         use wgt::{AstcBlock, AstcChannel};
 
         let (internal, external, data_type) = match texture_format {
+            Tf::R5g6b5Unorm => (glow::RGB565, glow::RGB, glow::UNSIGNED_SHORT_5_6_5),
+            Tf::A1r5g5b5Unorm => (glow::RGB5_A1, glow::RGBA, glow::UNSIGNED_SHORT_5_5_5_1),
+            Tf::B4g4r4a4Unorm => (glow::RGBA4, glow::RGBA, glow::UNSIGNED_SHORT_4_4_4_4_REV),
             Tf::R8Unorm => (glow::R8, glow::RED, glow::UNSIGNED_BYTE),
             Tf::R8Snorm => (glow::R8_SNORM, glow::RED, glow::BYTE),
             Tf::R8Uint => (glow::R8UI, glow::RED_INTEGER, glow::UNSIGNED_BYTE),

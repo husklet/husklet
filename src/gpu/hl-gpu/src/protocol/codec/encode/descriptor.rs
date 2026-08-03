@@ -21,8 +21,7 @@ impl Capabilities {
             e.u32(self.gpu_features);
         }
         e.u32(self.present_bits());
-        // `texture_formats` is 64 bits wide in the model; its HIGH half is an optional trailing word,
-        // emitted only when a format at or above bit 32 is actually advertised.
+        // `texture_formats` is 128 bits wide in the model; occupied high words are an optional tail.
         //
         // Deliberately gated on PRESENCE, not on `wire_version`. A version gate would need a
         // `WIRE_VERSION` bump, and because `Capabilities::negotiate` demands exact version equality, a bump
@@ -35,9 +34,15 @@ impl Capabilities {
         // The `frame` wrapper supplies the body length, which is what makes an optional tail decodable at
         // all. Any FUTURE optional tail must be appended after this one, and the next `WIRE_VERSION` bump
         // taken for another reason should fold this into the versioned shape.
-        let high = (self.texture_formats >> 32) as u32;
-        if high != 0 {
-            e.u32(high);
+        let words = [
+            (self.texture_formats >> 32) as u32,
+            (self.texture_formats >> 64) as u32,
+            (self.texture_formats >> 96) as u32,
+        ];
+        if let Some(last) = words.iter().rposition(|word| *word != 0) {
+            for word in &words[..=last] {
+                e.u32(*word);
+            }
         }
     }
 

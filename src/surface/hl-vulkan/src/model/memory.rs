@@ -222,6 +222,9 @@ pub mod vk_image_usage {
 
 /// `VkFormat` (stable enum values from vk.xml) for the color/depth subset the render path needs.
 pub mod vk_format {
+    pub const B4G4R4A4_UNORM_PACK16: u32 = 3;
+    pub const R5G6B5_UNORM_PACK16: u32 = 4;
+    pub const A1R5G5B5_UNORM_PACK16: u32 = 8;
     pub const R8G8B8A8_UNORM: u32 = 37;
     pub const R8G8B8A8_SRGB: u32 = 43;
     pub const B8G8R8A8_UNORM: u32 = 44;
@@ -612,6 +615,9 @@ impl Format {
             vk_format::A2B10G10R10_UNORM_PACK32 => T::Rgb10a2Unorm,
             vk_format::A2B10G10R10_UINT_PACK32 => T::Rgb10a2Uint,
             vk_format::B10G11R11_UFLOAT_PACK32 => T::Rg11b10Ufloat,
+            vk_format::R5G6B5_UNORM_PACK16 => T::R5g6b5Unorm,
+            vk_format::A1R5G5B5_UNORM_PACK16 => T::A1r5g5b5Unorm,
+            vk_format::B4G4R4A4_UNORM_PACK16 => T::B4g4r4a4Unorm,
             _ => return None,
         })
     }
