@@ -334,6 +334,14 @@ pub extern "C" fn glTexImage2D(
             s.gl.set_gl_error(GL_INVALID_VALUE);
             return;
         }
+        if !record::validate_tex_image_2d(
+            &mut s.gl,
+            internalformat.max(0) as u32,
+            format,
+            type_,
+        ) {
+            return;
+        }
         // The plane the declared internal format names IS the destination, so the conversion emits its
         // texels rather than eight-bit ones that a wider plane would then have to reinterpret.
         let declared = record::declared_plane(internalformat.max(0) as u32);

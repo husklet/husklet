@@ -31,6 +31,141 @@ fn surfaceless_default_framebuffer_is_incomplete_but_user_fbo_works() {
     );
 }
 
+#[test]
+fn depth_only_framebuffer_completeness_uses_its_attachment_format() {
+    let mut c = ctx();
+    let fbo = c.gen_framebuffer();
+    record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
+    let depth = record::gen_renderbuffer(&mut c);
+    record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, depth);
+    record::renderbuffer_storage(&mut c, GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, 64, 64);
+    record::framebuffer_renderbuffer(
+        &mut c,
+        GL_FRAMEBUFFER,
+        GL_DEPTH_ATTACHMENT,
+        GL_RENDERBUFFER,
+        depth,
+    );
+    assert_eq!(
+        record::check_framebuffer_status(&mut c, GL_FRAMEBUFFER),
+        GL_FRAMEBUFFER_COMPLETE
+    );
+
+    record::renderbuffer_storage(&mut c, GL_RENDERBUFFER, GL_RGBA4, 64, 64);
+    assert_eq!(
+        record::check_framebuffer_status(&mut c, GL_FRAMEBUFFER),
+        GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT
+    );
+}
+
+#[test]
+fn framebuffer_with_distinct_attachment_sizes_is_incomplete() {
+    let mut c = ctx();
+    let fbo = c.gen_framebuffer();
+    record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
+
+    let color = record::gen_renderbuffer(&mut c);
+    record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, color);
+    record::renderbuffer_storage(&mut c, GL_RENDERBUFFER, GL_RGBA4, 64, 64);
+    record::framebuffer_renderbuffer(
+        &mut c,
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_RENDERBUFFER,
+        color,
+    );
+
+    let depth = record::gen_renderbuffer(&mut c);
+    record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, depth);
+    record::renderbuffer_storage(&mut c, GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, 128, 128);
+    record::framebuffer_renderbuffer(
+        &mut c,
+        GL_FRAMEBUFFER,
+        GL_DEPTH_ATTACHMENT,
+        GL_RENDERBUFFER,
+        depth,
+    );
+    assert_eq!(
+        record::check_framebuffer_status(&mut c, GL_FRAMEBUFFER),
+        GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS
+    );
+}
+
+#[test]
+fn gles2_completeness_uses_only_gles2_attachment_formats() {
+    let mut c = ctx();
+    let mut es2 = hl_gl::model::context::ContextState::with_version(2, 0, false);
+    c.switch_state(&mut es2);
+    let fbo = c.gen_framebuffer();
+    record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
+
+    let texture = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
+    record::bind_texture(&mut c, GL_TEXTURE_2D, texture);
+    record::tex_image_2d_declared(&mut c, GL_R8, 64, 64, &[]);
+    record::framebuffer_texture_2d(
+        &mut c,
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D,
+        texture,
+        0,
+    );
+    assert_eq!(
+        record::check_framebuffer_status(&mut c, GL_FRAMEBUFFER),
+        GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT
+    );
+
+    record::framebuffer_texture_2d(
+        &mut c,
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D,
+        0,
+        0,
+    );
+    let packed = record::gen_renderbuffer(&mut c);
+    record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, packed);
+    record::renderbuffer_storage(&mut c, GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, 64, 64);
+    record::framebuffer_renderbuffer(
+        &mut c,
+        GL_FRAMEBUFFER,
+        GL_DEPTH_ATTACHMENT,
+        GL_RENDERBUFFER,
+        packed,
+    );
+    assert_eq!(
+        record::check_framebuffer_status(&mut c, GL_FRAMEBUFFER),
+        GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT
+    );
+}
+
+#[test]
+fn gles2_texture_images_reject_unadvertised_format_type_pairs() {
+    let mut c = ctx();
+    let mut es2 = hl_gl::model::context::ContextState::with_version(2, 0, false);
+    c.switch_state(&mut es2);
+    assert!(!record::validate_tex_image_2d(
+        &mut c,
+        GL_RGB,
+        GL_RGB,
+        GL_FLOAT
+    ));
+    assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
+    assert!(record::validate_tex_image_2d(
+        &mut c,
+        GL_RGB,
+        GL_RGB,
+        GL_UNSIGNED_BYTE
+    ));
+    assert!(record::validate_tex_image_2d(
+        &mut c,
+        GL_BGRA8_EXT,
+        GL_BGRA_EXT,
+        GL_UNSIGNED_BYTE
+    ));
+}
+
 // ===================================================================================================
 // draw with no program / incomplete framebuffer / mismatched attachment → GL error, no panic
 // ===================================================================================================

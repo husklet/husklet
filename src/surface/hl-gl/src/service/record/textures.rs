@@ -25,6 +25,35 @@ pub fn bind_texture(ctx: &mut GlContext, _target: u32, name: u32) {
     }
 }
 
+/// Validate the `internalformat`/`format`/`type` vocabulary of `glTexImage2D` for the active API.
+pub fn validate_tex_image_2d(
+    ctx: &mut GlContext,
+    internalformat: u32,
+    format: u32,
+    type_: u32,
+) -> bool {
+    if ctx.client_version().0 >= 3 {
+        return true;
+    }
+    let valid = (internalformat == format
+        && matches!(
+            (format, type_),
+            (GL_RGB, GL_UNSIGNED_BYTE | GL_UNSIGNED_SHORT_5_6_5)
+                | (
+                    GL_RGBA,
+                    GL_UNSIGNED_BYTE | GL_UNSIGNED_SHORT_4_4_4_4 | GL_UNSIGNED_SHORT_5_5_5_1
+                )
+                | (GL_BGRA_EXT, GL_UNSIGNED_BYTE)
+        ))
+        || (internalformat == GL_BGRA8_EXT
+            && format == GL_BGRA_EXT
+            && type_ == GL_UNSIGNED_BYTE);
+    if !valid {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+    }
+    valid
+}
+
 /// `glTexImage2D` — `pixels` is the already-RGBA8-converted image (`w*h*4`) bound to the active unit; the
 /// texture lowers to the default `Rgba8Unorm` neutral format.
 pub fn tex_image_2d(ctx: &mut GlContext, w: i32, h: i32, pixels: &[u8]) {

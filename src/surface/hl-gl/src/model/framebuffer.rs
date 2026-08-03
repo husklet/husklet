@@ -27,8 +27,8 @@ pub struct Framebuffers {
     /// storage: ES 3.0 §4.1.5/§4.1.6 make the depth test always pass and write nothing when the draw
     /// framebuffer has no depth attachment, and likewise for stencil. Without this an app that leaves
     /// `GL_DEPTH_TEST` enabled while rendering to a depth-less FBO loses every draw after the first.
-    depth: HashMap<u32, u32>,
-    stencil: HashMap<u32, u32>,
+    depth: HashMap<u32, (u32, bool)>,
+    stencil: HashMap<u32, (u32, bool)>,
     /// What the application actually attached at each colour slot: `(GL object name, is renderbuffer)`.
     ///
     /// A renderbuffer attachment RESOLVES to its backing texture for rendering, so the colour tables above
@@ -113,28 +113,36 @@ impl Framebuffers {
     }
 
     /// `glFramebufferRenderbuffer`/`glFramebufferTexture2D` at `GL_DEPTH_ATTACHMENT` — `name` `0` detaches.
-    pub fn attach_depth(&mut self, fbo: u32, name: u32) {
+    pub fn attach_depth(&mut self, fbo: u32, name: u32, renderbuffer: bool) {
         if fbo != 0 {
-            self.depth.insert(fbo, name);
+            self.depth.insert(fbo, (name, renderbuffer));
         }
     }
 
     /// `glFramebufferRenderbuffer`/`glFramebufferTexture2D` at `GL_STENCIL_ATTACHMENT` — `0` detaches.
-    pub fn attach_stencil(&mut self, fbo: u32, name: u32) {
+    pub fn attach_stencil(&mut self, fbo: u32, name: u32, renderbuffer: bool) {
         if fbo != 0 {
-            self.stencil.insert(fbo, name);
+            self.stencil.insert(fbo, (name, renderbuffer));
         }
+    }
+
+    pub fn depth_source(&self, fbo: u32) -> Option<(u32, bool)> {
+        self.depth.get(&fbo).copied().filter(|(name, _)| *name != 0)
+    }
+
+    pub fn stencil_source(&self, fbo: u32) -> Option<(u32, bool)> {
+        self.stencil.get(&fbo).copied().filter(|(name, _)| *name != 0)
     }
 
     /// Whether `fbo` carries a depth attachment. The default framebuffer's answer belongs to its
     /// `EGLConfig`, not to this table, so callers pass `fbo != 0` here only.
     pub fn has_depth(&self, fbo: u32) -> bool {
-        self.depth.get(&fbo).copied().unwrap_or(0) != 0
+        self.depth_source(fbo).is_some()
     }
 
     /// Whether `fbo` carries a stencil attachment (see [`Self::has_depth`]).
     pub fn has_stencil(&self, fbo: u32) -> bool {
-        self.stencil.get(&fbo).copied().unwrap_or(0) != 0
+        self.stencil_source(fbo).is_some()
     }
 
     /// The GL texture attached as `fbo`'s color target (`0` = default framebuffer or no attachment).

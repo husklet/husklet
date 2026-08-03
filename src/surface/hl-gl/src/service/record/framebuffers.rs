@@ -65,11 +65,11 @@ pub fn framebuffer_texture_2d(
     // A depth/stencil TEXTURE attachment records only its presence, exactly as the renderbuffer path does
     // (see [`framebuffer_renderbuffer`]): the plane itself is minted by the frame builder.
     match attachment {
-        GL_DEPTH_ATTACHMENT => ctx.local.framebuffers.attach_depth(fbo, tex),
-        GL_STENCIL_ATTACHMENT => ctx.local.framebuffers.attach_stencil(fbo, tex),
+        GL_DEPTH_ATTACHMENT => ctx.local.framebuffers.attach_depth(fbo, tex, false),
+        GL_STENCIL_ATTACHMENT => ctx.local.framebuffers.attach_stencil(fbo, tex, false),
         GL_DEPTH_STENCIL_ATTACHMENT => {
-            ctx.local.framebuffers.attach_depth(fbo, tex);
-            ctx.local.framebuffers.attach_stencil(fbo, tex);
+            ctx.local.framebuffers.attach_depth(fbo, tex, false);
+            ctx.local.framebuffers.attach_stencil(fbo, tex, false);
         }
         _ => ctx
             .local
@@ -126,47 +126,66 @@ impl GlContext {
             return GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
         }
         let color = self.local.framebuffers.color_attachment(fbo);
-        if color == 0 {
+        let color_source = self
+            .local
+            .framebuffers
+            .color_source(fbo, 0)
+            .or_else(|| (color != 0).then_some((color, false)));
+        let depth_source = self.local.framebuffers.depth_source(fbo);
+        let stencil_source = self.local.framebuffers.stencil_source(fbo);
+        if color_source.is_none() && depth_source.is_none() && stencil_source.is_none() {
             return GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
         }
-        match self.textures.get(color) {
-            // ES 3.0 §4.4.4: a colour attachment must have a COLOUR-RENDERABLE internal format. Reporting
-            // COMPLETE for a depth, snorm, shared-exponent, SRGB8 or three-component integer texture bound
-            // to `GL_COLOR_ATTACHMENT0` hands the application a framebuffer that cannot work and gives it
-            // no way to find out — the check it performs precisely to avoid that says yes.
-            Some(t) if t.w > 0 && t.h > 0 && !colour_renderable(t.internal_format) => {
-                // At error level, because this refusal is the whole of a caller's failure and it is the one
-                // fact the caller cannot recover: the status names no format, so an application told
-                // INCOMPLETE_ATTACHMENT has no way to learn which attachment or which format was refused.
-                // A browser hit this thousands of times per minute and no reading of its own log could
-                // identify the format, because the format is only known here.
+
+        let info = |(name, renderbuffer): (u32, bool)| {
+            if renderbuffer {
+                self.renderbuffers
+                    .get(name)
+                    .map(|r| (r.width, r.height, r.internal_format, r.samples))
+            } else {
+                self.textures
+                    .get(name)
+                    .map(|t| (t.w, t.h, t.internal_format, 0))
+            }
+        };
+        let mut extent = None;
+        let mut samples = None;
+        let es3 = self.client_version().0 >= 3;
+        for (point, source) in [
+            ("colour", color_source),
+            ("depth", depth_source),
+            ("stencil", stencil_source),
+        ] {
+            let Some(source) = source else { continue };
+            let Some((w, h, format, attachment_samples)) = info(source) else {
+                return GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT;
+            };
+            let renderable = match (es3, point) {
+                (true, "colour") => colour_renderable(format),
+                (true, "depth") => depth_renderable(format),
+                (true, _) => stencil_renderable(format),
+                (false, "colour") => colour_renderable_es2(format, source.1),
+                (false, "depth") => depth_renderable_es2(format, source.1),
+                (false, _) => stencil_renderable_es2(format, source.1),
+            };
+            if w <= 0 || h <= 0 || !renderable {
                 hl_log::hl_error!(
                     hl_log::tag::GL,
-                    "framebuffer {fbo} incomplete: colour attachment texture {color} declares format \
-                     {:#06x}, which is not colour-renderable here",
-                    t.internal_format
+                    "framebuffer {fbo} incomplete: {point} attachment format {format:#06x}, \
+                     extent {w}x{h} is not renderable"
                 );
-                GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT
+                return GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT;
             }
-            Some(t) if t.w > 0 && t.h > 0 => GL_FRAMEBUFFER_COMPLETE,
-            other => {
-                match other {
-                    Some(t) => hl_log::hl_error!(
-                        hl_log::tag::GL,
-                        "framebuffer {fbo} incomplete: colour attachment texture {color} has no storage \
-                         ({}x{}), so nothing was allocated for it to render into",
-                        t.w,
-                        t.h
-                    ),
-                    None => hl_log::hl_error!(
-                        hl_log::tag::GL,
-                        "framebuffer {fbo} incomplete: colour attachment names texture {color}, which this \
-                         context does not have"
-                    ),
-                }
-                GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT
+            if extent.is_some_and(|current| current != (w, h)) {
+                return GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS;
             }
+            if samples.is_some_and(|current| current != attachment_samples) {
+                return GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT;
+            }
+            extent = Some((w, h));
+            samples = Some(attachment_samples);
         }
+        GL_FRAMEBUFFER_COMPLETE
     }
 }
 
@@ -348,11 +367,11 @@ pub fn framebuffer_renderbuffer(
         // This model has no depth/stencil PLANE — the frame builder mints one for any depth/stencil-tested
         // pass — but WHETHER the framebuffer has such an attachment is load-bearing GL state: without an
         // attachment the depth (resp. stencil) test always passes and writes nothing (ES 3.0 §4.1.5/§4.1.6).
-        GL_DEPTH_ATTACHMENT => ctx.local.framebuffers.attach_depth(fbo, rbo),
-        GL_STENCIL_ATTACHMENT => ctx.local.framebuffers.attach_stencil(fbo, rbo),
+        GL_DEPTH_ATTACHMENT => ctx.local.framebuffers.attach_depth(fbo, rbo, true),
+        GL_STENCIL_ATTACHMENT => ctx.local.framebuffers.attach_stencil(fbo, rbo, true),
         GL_DEPTH_STENCIL_ATTACHMENT => {
-            ctx.local.framebuffers.attach_depth(fbo, rbo);
-            ctx.local.framebuffers.attach_stencil(fbo, rbo);
+            ctx.local.framebuffers.attach_depth(fbo, rbo, true);
+            ctx.local.framebuffers.attach_stencil(fbo, rbo, true);
         }
         _ => ctx.set_gl_error(GL_INVALID_ENUM),
     }
@@ -531,4 +550,52 @@ fn colour_renderable(internal_format: u32) -> bool {
             | GL_RGBA32F
             | GL_R11F_G11F_B10F
     )
+}
+
+fn depth_renderable(internal_format: u32) -> bool {
+    matches!(
+        internal_format,
+        GL_DEPTH_COMPONENT
+            | GL_DEPTH_COMPONENT16
+            | GL_DEPTH_COMPONENT24
+            | 0x81A7 // GL_DEPTH_COMPONENT32_OES
+            | GL_DEPTH_COMPONENT32F
+            | GL_DEPTH_STENCIL
+            | GL_DEPTH24_STENCIL8
+    )
+}
+
+fn stencil_renderable(internal_format: u32) -> bool {
+    matches!(
+        internal_format,
+        GL_STENCIL_INDEX8 | GL_DEPTH_STENCIL | GL_DEPTH24_STENCIL8
+    )
+}
+
+fn colour_renderable_es2(internal_format: u32, renderbuffer: bool) -> bool {
+    if renderbuffer {
+        matches!(
+            internal_format,
+            GL_RGB565
+                | GL_RGBA4
+                | GL_RGB5_A1
+                | GL_RGB8
+                | GL_RGBA8
+                | GL_BGRA_EXT
+                | GL_BGRA8_EXT
+        )
+    } else {
+        matches!(
+            internal_format,
+            GL_RGB | GL_RGBA | GL_BGRA_EXT | GL_BGRA8_EXT
+        )
+    }
+}
+
+fn depth_renderable_es2(internal_format: u32, renderbuffer: bool) -> bool {
+    renderbuffer && matches!(internal_format, GL_DEPTH_COMPONENT16 | GL_DEPTH_COMPONENT24)
+}
+
+fn stencil_renderable_es2(internal_format: u32, renderbuffer: bool) -> bool {
+    renderbuffer && internal_format == GL_STENCIL_INDEX8
 }

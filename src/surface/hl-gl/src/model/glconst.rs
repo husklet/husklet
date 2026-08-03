@@ -582,6 +582,7 @@ pub const GL_RENDERBUFFER_BINDING: u32 = 0x8CA7;
 pub const GL_FRAMEBUFFER_COMPLETE: u32 = 0x8CD5;
 pub const GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT: u32 = 0x8CD6;
 pub const GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT: u32 = 0x8CD7;
+pub const GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS: u32 = 0x8CD9;
 
 /// Byte size of one component of a GL vertex/index element type (`GL_FLOAT` → 4, `GL_UNSIGNED_BYTE` → 1,
 /// …). Used to compute the tightly-packed element size when capturing a client-side vertex array (0 stride)
