@@ -84,6 +84,8 @@ pub struct EntryUsage {
     /// Every resource this entry point READS — its `(group, binding)` slot AND declared type — the exact
     /// set (and types) a pipeline that binds this entry point exposes.
     pub bindings: Vec<Binding>,
+    /// Whether this entry point reads a module-scope `var<push_constant>`.
+    pub push_constant: bool,
 }
 
 /// A module's per-entry-point resource usage.
@@ -103,6 +105,14 @@ impl ModuleUsage {
             .unwrap_or(&[])
     }
 
+    /// Whether the selected entry point reads a push-constant block.
+    pub fn uses_push_constant(&self, entry: &str) -> bool {
+        self.entries
+            .iter()
+            .find(|e| e.entry == entry)
+            .is_some_and(|e| e.push_constant)
+    }
+
     /// Reflect each entry point's used resource bindings and declared types.
     pub fn from_module(module: &naga::Module) -> Self {
         let info = match naga::valid::Validator::new(
@@ -120,6 +130,10 @@ impl ModuleUsage {
             .enumerate()
             .map(|(index, entry)| {
                 let entry_info = info.get_entry_point(index);
+                let push_constant = module.global_variables.iter().any(|(handle, variable)| {
+                    variable.space == naga::AddressSpace::PushConstant
+                        && !entry_info[handle].is_empty()
+                });
                 let bindings = module
                     .global_variables
                     .iter()
@@ -140,6 +154,7 @@ impl ModuleUsage {
                 EntryUsage {
                     entry: entry.name.clone(),
                     bindings,
+                    push_constant,
                 }
             })
             .collect();

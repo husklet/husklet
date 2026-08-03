@@ -287,7 +287,8 @@ impl WgpuExecutor {
         // explicit layout's exact bindings for the draw-time bind-group filter (see `PipelineNative::Render`).
         // Also capture each stage module's CONTENT key so identical descriptors built from different shader
         // ids (but the same source) dedup to one compiled pipeline.
-        let (vs, vs_used, vs_key) = match shader::ShaderNative::get(res, desc.vertex.module)? {
+        let (vs, vs_used, vs_push_constant, vs_key) =
+            match shader::ShaderNative::get(res, desc.vertex.module)? {
             ShaderNative::Module {
                 module,
                 reflected,
@@ -295,6 +296,7 @@ impl WgpuExecutor {
             } => (
                 module.clone(),
                 reflected.used_for(&desc.vertex.entry).to_vec(),
+                reflected.uses_push_constant(&desc.vertex.entry),
                 key.clone(),
             ),
             ShaderNative::Kernel(_) => {
@@ -307,7 +309,7 @@ impl WgpuExecutor {
                 ));
             }
         };
-        let (mut fs, mut fs_used, fs_key) = match &desc.fragment {
+        let (mut fs, mut fs_used, mut fs_push_constant, fs_key) = match &desc.fragment {
             Some(f) => {
                 match shader::ShaderNative::get(res, f.module)? {
                     ShaderNative::Module {
@@ -317,6 +319,7 @@ impl WgpuExecutor {
                     } => (
                         Some((module.clone(), f.entry.clone())),
                         reflected.used_for(&f.entry).to_vec(),
+                        reflected.uses_push_constant(&f.entry),
                         Some(key.clone()),
                     ),
                     ShaderNative::Kernel(_) => {
@@ -327,7 +330,7 @@ impl WgpuExecutor {
                     }
                 }
             }
-            None => (None, Vec::new(), None),
+            None => (None, Vec::new(), false, None),
         };
         let render_texel = authoritative_layout
             .filter(|layout| {
@@ -397,6 +400,7 @@ impl WgpuExecutor {
                     entry.to_string(),
                 ));
                 fs_used = reflected.used_for(entry).to_vec();
+                fs_push_constant = reflected.uses_push_constant(entry);
             }
         }
 
@@ -558,13 +562,27 @@ impl WgpuExecutor {
         let layout_started = diagnostics.then(Instant::now);
         let group_layouts = self.build_render_bind_group_layouts(&merged)?;
         let layout_refs: Vec<&wgpu::BindGroupLayout> = group_layouts.iter().collect();
+        let mut push_constant_stages = wgpu::ShaderStages::empty();
+        if vs_push_constant {
+            push_constant_stages |= wgpu::ShaderStages::VERTEX;
+        }
+        if fs_push_constant {
+            push_constant_stages |= wgpu::ShaderStages::FRAGMENT;
+        }
+        let push_constant_ranges = (!push_constant_stages.is_empty())
+            .then(|| wgpu::PushConstantRange {
+                stages: push_constant_stages,
+                range: 0..self.gpu.device.limits().max_push_constant_size,
+            })
+            .into_iter()
+            .collect::<Vec<_>>();
         let pipeline_layout =
             self.gpu
                 .device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("hl-render-pl"),
                     bind_group_layouts: &layout_refs,
-                    push_constant_ranges: &[],
+                    push_constant_ranges: &push_constant_ranges,
                 });
         let layout_us = layout_started
             .map(|started| started.elapsed().as_micros())

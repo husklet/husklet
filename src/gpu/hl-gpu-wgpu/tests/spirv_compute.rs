@@ -1386,6 +1386,72 @@ fn spirv_compute_pipeline_with_push_constant_creates() {
     );
 }
 
+/// Vulkan WSI's basic render cases declare a push-constant block in the vertex shader. The executor
+/// builds an explicit render pipeline layout, so that layout must carry a matching vertex-stage range;
+/// otherwise wgpu rejects pipeline creation before the case can reach presentation.
+#[test]
+fn spirv_render_pipeline_with_vertex_push_constant_creates() {
+    let seed = r#"
+        var<push_constant> pc: vec4<f32>;
+
+        @vertex
+        fn vs_main(@builtin(vertex_index) vertex: u32) -> @builtin(position) vec4<f32> {
+            var positions = array<vec2<f32>, 3>(
+                vec2<f32>(-1.0, -1.0),
+                vec2<f32>(3.0, -1.0),
+                vec2<f32>(-1.0, 3.0));
+            return vec4<f32>(positions[vertex] + pc.xy, 0.0, 1.0);
+        }
+
+        @fragment
+        fn fs_main() -> @location(0) vec4<f32> {
+            return vec4<f32>(0.0, 1.0, 0.0, 1.0);
+        }
+    "#;
+    let spirv = wgsl_to_spirv(seed);
+    let mut g = exec();
+    let result = try_batch(
+        &mut g,
+        &[
+            Cmd::CreateShader {
+                id: 1,
+                kind: ShaderPayloadKind::SpirV,
+                spirv,
+            },
+            Cmd::CreateRenderPipeline(
+                1,
+                RenderPipelineDesc {
+                    vertex: ShaderRef {
+                        module: 1,
+                        entry: "vs_main".into(),
+                    },
+                    fragment: Some(ShaderRef {
+                        module: 1,
+                        entry: "fs_main".into(),
+                    }),
+                    vertex_buffers: vec![],
+                    color_targets: vec![ColorTargetState {
+                        format: TextureFormat::Rgba8Unorm,
+                        blend: None,
+                        write_mask: 0xf,
+                    }],
+                    depth: None,
+                    topology: Topology::TriangleList,
+                    cull: 0,
+                    front_face: 0,
+                    sample_count: 1,
+                    label: String::new(),
+                },
+            ),
+        ],
+    );
+    assert!(
+        result.is_ok(),
+        "a SPIR-V render pipeline with a vertex push constant must create: {:?}",
+        result.err()
+    );
+}
+
 #[test]
 fn external_spirv_confines_out_of_bounds_uniform_and_storage_access() {
     let seed = r#"
