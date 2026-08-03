@@ -148,7 +148,8 @@ pub fn queue_submit(
     if let Some((f, _, value)) = signal {
         if let Some(fence) = dev.fences.get_mut(&f) {
             fence.value = value;
-            fence.signaled = false;
+            // CommandSink::submit is synchronous: the host has completed the signalled submission.
+            fence.signaled = true;
         }
     }
     Ok(())

@@ -2,7 +2,7 @@ use super::*;
 
 struct CommitThenLoseResponse {
     inner: RecordingSink,
-    fired: bool,
+    texture_creates: usize,
 }
 
 impl hl_gpu::CommandSink for CommitThenLoseResponse {
@@ -18,8 +18,10 @@ impl hl_gpu::CommandSink for CommitThenLoseResponse {
             .iter()
             .any(|command| matches!(command, Cmd::CreateTexture(..)));
         self.inner.submit(batch)?;
-        if texture_create && !self.fired {
-            self.fired = true;
+        if texture_create {
+            self.texture_creates += 1;
+        }
+        if self.texture_creates == 2 && texture_create {
             return Err(GpuError::Transport(
                 hl_gpu::transport::TransportError::Ambiguous {
                     phase: hl_gpu::transport::TransportPhase::Acknowledgement,
@@ -32,6 +34,71 @@ impl hl_gpu::CommandSink for CommitThenLoseResponse {
 
     fn wait(&mut self, fence: hl_gpu::FenceId, value: u64) -> hl_gpu::Result<()> {
         self.inner.wait(fence, value)
+    }
+}
+
+struct ExternalTimelineSink {
+    inner: RecordingSink,
+    value: u64,
+    waits: Vec<(hl_gpu::SyncExportId, u64)>,
+    signals: Vec<(hl_gpu::SyncExportId, u64)>,
+}
+
+struct RefuseOneDestroy {
+    inner: RecordingSink,
+    destroys: usize,
+    refused: bool,
+}
+
+impl hl_gpu::CommandSink for RefuseOneDestroy {
+    fn negotiate(&mut self, request: &hl_gpu::FeatureRequest) -> hl_gpu::Result<hl_gpu::Capabilities> {
+        self.inner.negotiate(request)
+    }
+    fn submit(&mut self, batch: &[Cmd]) -> hl_gpu::Result<()> {
+        if batch.len() == 1 && matches!(batch[0], Cmd::DestroyTexture(_)) {
+            self.destroys += 1;
+            if self.destroys == 2 && !self.refused {
+                self.refused = true;
+                return Err(GpuError::Kernel("injected destroy refusal".into()));
+            }
+        }
+        self.inner.submit(batch)
+    }
+    fn wait(&mut self, fence: hl_gpu::FenceId, value: u64) -> hl_gpu::Result<()> {
+        self.inner.wait(fence, value)
+    }
+}
+
+impl hl_gpu::CommandSink for ExternalTimelineSink {
+    fn negotiate(&mut self, request: &hl_gpu::FeatureRequest) -> hl_gpu::Result<hl_gpu::Capabilities> {
+        self.inner.negotiate(request)
+    }
+    fn submit(&mut self, batch: &[Cmd]) -> hl_gpu::Result<()> {
+        self.inner.submit(batch)
+    }
+    fn wait(&mut self, fence: hl_gpu::FenceId, value: u64) -> hl_gpu::Result<()> {
+        self.inner.wait(fence, value)
+    }
+    fn wait_sync(
+        &mut self,
+        export: hl_gpu::SyncExportId,
+        value: u64,
+        _timeout_ns: u64,
+    ) -> hl_gpu::Result<hl_gpu::TimelineWait> {
+        self.waits.push((export, value));
+        Ok(if self.value >= value {
+            hl_gpu::TimelineWait::Reached
+        } else {
+            hl_gpu::TimelineWait::Timeout
+        })
+    }
+    fn signal_sync(&mut self, export: hl_gpu::SyncExportId, value: u64) -> hl_gpu::Result<()> {
+        self.signals.push((export, value));
+        self.value = self.value.max(value);
+        Ok(())
+    }
+    fn query_sync(&mut self, _export: hl_gpu::SyncExportId) -> hl_gpu::Result<u64> {
+        Ok(self.value)
     }
 }
 
@@ -190,6 +257,15 @@ fn replacement_retires_only_the_matching_native_window() {
         &d,
         present::SwapchainConfig {
             application_surface: app_surface + 1,
+            old_swapchain: old,
+            ..valid_swapchain_config()
+        }
+    )
+    .is_err());
+    assert!(present::validate_swapchain(
+        &d,
+        present::SwapchainConfig {
+            application_surface: app_surface + 1,
             presentation_target: hl_vulkan::model::queue::PresentationTarget::Window(0x778),
             old_swapchain: old,
             ..valid_swapchain_config()
@@ -219,7 +295,7 @@ fn replacement_retires_only_the_matching_native_window() {
         &mut d,
         &mut s,
         replacement_surface,
-        app_surface + 1,
+        app_surface,
         target,
         2,
         old,
@@ -251,13 +327,13 @@ fn failed_replacement_still_retires_old_and_preserves_acquired_present() {
         present::create_surface(&mut d, &mut s, 64, 64, vk_format::B8G8R8A8_UNORM, None).unwrap();
     let mut failing = CommitThenLoseResponse {
         inner: sink(),
-        fired: false,
+        texture_creates: 0,
     };
     assert!(present::create_swapchain_for_target(
         &mut d,
         &mut failing,
         replacement_surface,
-        0x5001,
+        0x5000,
         target,
         2,
         old,
@@ -272,7 +348,7 @@ fn failed_replacement_still_retires_old_and_preserves_acquired_present() {
             .filter(|command| matches!(command, Cmd::CreateTexture(..)))
             .count(),
         2,
-        "the response is lost only after the complete create transaction commits"
+        "the response is lost after the second texture commits"
     );
     assert_eq!(
         failing
@@ -328,9 +404,56 @@ fn acquire_signals_and_queue_wait_consumes_binary_payload() {
     );
     assert!(d.semaphores[&semaphore].signaled);
     assert!(d.is_fence_signaled(fence).unwrap());
-    d.consume_queue_waits(&[(semaphore, 0)]).unwrap();
+    d.consume_queue_waits(&mut s, &[(semaphore, 0)]).unwrap();
     assert!(!d.semaphores[&semaphore].signaled);
-    assert!(d.consume_queue_waits(&[(semaphore, 0)]).is_err());
+    assert!(d.consume_queue_waits(&mut s, &[(semaphore, 0)]).is_err());
+}
+
+#[test]
+fn queue_timeline_sync_uses_the_shared_host_object() {
+    let mut d = dev();
+    let semaphore = sync::create_semaphore(&mut d, true, 0);
+    let export = hl_gpu::SyncExportId::from_parts(7, 9);
+    d.semaphores.get_mut(&semaphore).unwrap().shared = Some(export);
+    let mut s = ExternalTimelineSink {
+        inner: sink(),
+        value: 4,
+        waits: Vec::new(),
+        signals: Vec::new(),
+    };
+
+    d.consume_queue_waits(&mut s, &[(semaphore, 4)]).unwrap();
+    d.signal_queue_semaphores(&mut s, &[(semaphore, 8)]).unwrap();
+    assert_eq!(s.waits, vec![(export, 4)]);
+    assert_eq!(s.signals, vec![(export, 8)]);
+    assert_eq!(sync::shared_semaphore_counter(&mut d, &mut s, semaphore).unwrap(), 8);
+}
+
+#[test]
+fn refused_swapchain_destroy_resumes_at_the_uncommitted_image() {
+    let mut d = dev();
+    let mut create_sink = sink();
+    let surface = present::create_surface(
+        &mut d,
+        &mut create_sink,
+        64,
+        64,
+        vk_format::B8G8R8A8_UNORM,
+        None,
+    )
+    .unwrap();
+    let swapchain = present::create_swapchain(&mut d, &mut create_sink, surface, 2).unwrap();
+    let mut destroy_sink = RefuseOneDestroy {
+        inner: sink(),
+        destroys: 0,
+        refused: false,
+    };
+
+    assert!(d.destroy_swapchain(&mut destroy_sink, swapchain).is_err());
+    assert_eq!(d.swapchains[&swapchain].images.len(), 1);
+    d.destroy_swapchain(&mut destroy_sink, swapchain).unwrap();
+    assert!(!d.swapchains.contains_key(&swapchain));
+    assert_eq!(destroy_sink.destroys, 3);
 }
 
 fn valid_swapchain_config() -> present::SwapchainConfig {
