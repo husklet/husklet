@@ -181,6 +181,7 @@ impl Plan {
                         true,
                         Some(&views),
                         (index == 0).then_some(viewport),
+                        None,
                     )?;
                     exec.profile_record(|p| &mut p.draw_bind_groups, started);
                     cache.insert(cache_key, built.clone());
@@ -213,6 +214,7 @@ impl Plan {
                         true,
                         None,
                         Some(viewport),
+                        None,
                     )?;
                     exec.profile_record(|p| &mut p.draw_bind_groups, started);
                     cache.insert(cache_key, built.clone());

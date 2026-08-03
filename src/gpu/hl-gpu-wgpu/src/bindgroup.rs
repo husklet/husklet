@@ -10,6 +10,78 @@ use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
 
 use crate::{buffer, texture, WgpuExecutor};
+use wgpu::util::DeviceExt;
+
+const SAMPLER_METADATA_WORDS: usize = 8;
+
+fn encode_sampler_desc(desc: &hl_gpu::protocol::model::descriptor::SamplerDesc) -> [u32; SAMPLER_METADATA_WORDS] {
+    use hl_gpu::protocol::model::enums::{AddressMode, Filter};
+    let address = |mode| match mode {
+        AddressMode::ClampToEdge => 0,
+        AddressMode::Repeat => 1,
+        AddressMode::MirrorRepeat => 2,
+    };
+    let filter = |mode| match mode {
+        Filter::Nearest => 0,
+        Filter::Linear => 1,
+        Filter::Cubic => 2,
+    };
+    [
+        filter(desc.min_filter), filter(desc.mag_filter), filter(desc.mip_filter),
+        address(desc.address_u), address(desc.address_v), address(desc.address_w),
+        desc.lod_min_clamp.to_bits(), desc.lod_max_clamp.to_bits(),
+    ]
+}
+
+fn sampler_metadata_words(
+    exec: &WgpuExecutor,
+    res: &SessionResources,
+    d: &BindGroupDesc,
+    layout: &crate::reflect::SamplerMetadataLayout,
+) -> Result<Vec<u32>> {
+    let mut words = vec![0; layout.samplers.iter().map(|slot| slot.base_ordinal + slot.count).max().unwrap_or(0) as usize * SAMPLER_METADATA_WORDS];
+    for slot in &layout.samplers {
+        let entry = d.entries.iter().find(|entry| entry.binding == slot.binding)
+            .ok_or(GpuError::Invalid("wgpu: sampler metadata binding is absent"))?;
+        let ids: Vec<u32> = match &entry.resource {
+            BindResource::Sampler { id } => vec![*id],
+            BindResource::SamplerArray { ids } => ids.clone(),
+            _ => return Err(GpuError::Invalid("wgpu: sampler metadata slot is not a sampler")),
+        };
+        if ids.len() != slot.count as usize {
+            return Err(GpuError::Invalid("wgpu: sampler metadata array count mismatch"));
+        }
+        for (index, id) in ids.into_iter().enumerate() {
+            let desc = exec.sampler_desc(res, id)?;
+            let base = (slot.base_ordinal as usize + index) * SAMPLER_METADATA_WORDS;
+            words[base..base + SAMPLER_METADATA_WORDS].copy_from_slice(&encode_sampler_desc(desc));
+        }
+    }
+    Ok(words)
+}
+
+#[cfg(test)]
+mod sampler_metadata_tests {
+    use super::*;
+    use hl_gpu::protocol::model::descriptor::SamplerDesc;
+    use hl_gpu::protocol::model::enums::{AddressMode, Filter};
+
+    #[test]
+    fn encoding_preserves_cubic_address_and_lod_state() {
+        let desc = SamplerDesc {
+            min_filter: Filter::Cubic,
+            mag_filter: Filter::Linear,
+            mip_filter: Filter::Nearest,
+            address_u: AddressMode::Repeat,
+            address_v: AddressMode::MirrorRepeat,
+            address_w: AddressMode::ClampToEdge,
+            lod_min_clamp: 1.25,
+            lod_max_clamp: 7.5,
+            ..SamplerDesc::default()
+        };
+        assert_eq!(encode_sampler_desc(&desc), [2, 1, 0, 1, 2, 0, 1.25f32.to_bits(), 7.5f32.to_bits()]);
+    }
+}
 
 impl WgpuExecutor {
     /// Downcast a live bind-group id to its stored descriptor.
@@ -84,6 +156,7 @@ impl WgpuExecutor {
         remap_group_zero: bool,
         texel_buffers: Option<&[crate::texel_buffer::View]>,
         internal: Option<&wgpu::Buffer>,
+        sampler_metadata: Option<&crate::reflect::SamplerMetadataLayout>,
     ) -> Result<wgpu::BindGroup> {
         let binding = |binding: u32| -> Result<u32> {
             if remap_group_zero && d.set == 0 {
@@ -153,7 +226,15 @@ impl WgpuExecutor {
         let mut vai = 0usize;
         let mut sai = 0usize;
         let mut bai = 0usize;
-        let mut entries = Vec::with_capacity(d.entries.len() + usize::from(internal.is_some()));
+        let metadata_buffer = sampler_metadata.map(|metadata| -> Result<wgpu::Buffer> {
+            let words = sampler_metadata_words(self, res, d, metadata)?;
+            Ok(self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("hl-sampler-metadata"),
+                contents: bytemuck::cast_slice(&words),
+                usage: wgpu::BufferUsages::STORAGE,
+            }))
+        }).transpose()?;
+        let mut entries = Vec::with_capacity(d.entries.len() + usize::from(internal.is_some()) + usize::from(metadata_buffer.is_some()));
         if let Some(buffer) = internal {
             entries.push(wgpu::BindGroupEntry {
                 binding: crate::wgsl::viewport::BINDING,
@@ -162,6 +243,12 @@ impl WgpuExecutor {
                     offset: 0,
                     size: NonZeroU64::new(16),
                 }),
+            });
+        }
+        if let (Some(metadata), Some(buffer)) = (sampler_metadata, metadata_buffer.as_ref()) {
+            entries.push(wgpu::BindGroupEntry {
+                binding: metadata.binding,
+                resource: buffer.as_entire_binding(),
             });
         }
         for (e, native) in kept {

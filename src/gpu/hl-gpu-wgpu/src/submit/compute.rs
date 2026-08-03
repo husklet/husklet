@@ -91,6 +91,7 @@ impl WgpuExecutor {
                                 remap_group_zero,
                                 Some(&views),
                                 None,
+                                None,
                             )?;
                             groups.push((idx as u32, bg));
                         }
