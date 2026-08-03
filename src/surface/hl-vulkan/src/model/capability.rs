@@ -74,7 +74,7 @@ pub const INSTANCE_EXTENSIONS: &[ExtensionProp] = &[
 /// Device-level extensions the ICD really backs: `VK_KHR_swapchain` (the present path in
 /// [`crate::service::present`]) + `VK_KHR_dynamic_rendering` (the render-pass-object-free rendering path
 /// in [`crate::service::record::cmd_begin_rendering`], really lowered to `Enc::BeginRenderPass`). Nothing
-/// else is advertised — a `vk.xml` extension without a real body here (timeline semaphores, buffer device
+/// else is advertised — a `vk.xml` extension without a real body here (external memory, buffer device
 /// address, …) would be a dishonest claim.
 pub const DEVICE_EXTENSIONS: &[ExtensionProp] = &[
     ExtensionProp {
@@ -95,6 +95,14 @@ pub const DEVICE_EXTENSIONS: &[ExtensionProp] = &[
     },
     ExtensionProp {
         name: "VK_EXT_rgba10x6_formats",
+        spec_version: 1,
+    },
+    ExtensionProp {
+        name: "VK_KHR_external_semaphore",
+        spec_version: 1,
+    },
+    ExtensionProp {
+        name: "VK_KHR_external_semaphore_fd",
         spec_version: 1,
     },
 ];
@@ -1039,6 +1047,15 @@ mod tests {
         let names: Vec<&str> = DEVICE_EXTENSIONS.iter().map(|e| e.name).collect();
         assert!(names.contains(&"VK_KHR_dynamic_rendering"));
         assert!(DEVICE_EXTENSIONS.iter().all(|e| e.spec_version >= 1));
+    }
+
+    #[test]
+    fn device_extensions_advertise_only_external_semaphores() {
+        let names: Vec<&str> = DEVICE_EXTENSIONS.iter().map(|e| e.name).collect();
+        assert!(names.contains(&"VK_KHR_external_semaphore"));
+        assert!(names.contains(&"VK_KHR_external_semaphore_fd"));
+        assert!(!names.iter().any(|name| name.contains("external_memory")));
+        assert!(!names.iter().any(|name| name.contains("external_fence")));
     }
 
     #[test]

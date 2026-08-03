@@ -88,6 +88,22 @@ pub struct VkImportSemaphoreFdInfoKHR {
 }
 
 #[repr(C)]
+pub struct VkPhysicalDeviceExternalSemaphoreInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub handle_type: u32,
+}
+
+#[repr(C)]
+pub struct VkExternalSemaphoreProperties {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub export_from_imported_handle_types: u32,
+    pub compatible_handle_types: u32,
+    pub external_semaphore_features: u32,
+}
+
+#[repr(C)]
 pub struct VkQueryPoolCreateInfo {
     pub s_type: i32,
     pub p_next: *const c_void,

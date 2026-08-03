@@ -225,6 +225,43 @@ fn external_buffer_properties_report_no_handle_types() {
     assert_eq!(properties[2], 0);
 }
 
+#[test]
+fn external_semaphore_properties_are_exactly_opaque_fd() {
+    let info = VkPhysicalDeviceExternalSemaphoreInfo {
+        s_type: 0,
+        p_next: core::ptr::null(),
+        handle_type: VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT,
+    };
+    let mut properties = VkExternalSemaphoreProperties {
+        s_type: 0,
+        p_next: core::ptr::null_mut(),
+        export_from_imported_handle_types: u32::MAX,
+        compatible_handle_types: u32::MAX,
+        external_semaphore_features: u32::MAX,
+    };
+    crate::devgroup::vkGetPhysicalDeviceExternalSemaphoreProperties(
+        core::ptr::null_mut(),
+        &info as *const _ as *const c_void,
+        &mut properties as *mut _ as *mut c_void,
+    );
+    assert_eq!(properties.export_from_imported_handle_types, 1);
+    assert_eq!(properties.compatible_handle_types, 1);
+    assert_eq!(properties.external_semaphore_features, 3);
+
+    let unsupported = VkPhysicalDeviceExternalSemaphoreInfo {
+        handle_type: 2,
+        ..info
+    };
+    crate::devgroup::vkGetPhysicalDeviceExternalSemaphorePropertiesKHR(
+        core::ptr::null_mut(),
+        &unsupported as *const _ as *const c_void,
+        &mut properties as *mut _ as *mut c_void,
+    );
+    assert_eq!(properties.export_from_imported_handle_types, 0);
+    assert_eq!(properties.compatible_handle_types, 0);
+    assert_eq!(properties.external_semaphore_features, 0);
+}
+
 /// `vkCmdPushDescriptorSet` (core Vulkan 1.4, promoted from `VK_KHR_push_descriptor`) must apply the write
 /// where the bind path reads it. It was a silent `void` no-op, so the descriptor vanished and the draw read
 /// whatever was bound before — with no error possible, because the command returns nothing.

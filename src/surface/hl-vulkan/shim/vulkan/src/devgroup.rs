@@ -15,7 +15,10 @@ use hl_vulkan::service::record;
 use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
 
 use crate::state::StateStore;
-use crate::types::{Dispatchable, VkResult, VK_SUCCESS};
+use crate::types::{
+    Dispatchable, VkExternalSemaphoreProperties, VkPhysicalDeviceExternalSemaphoreInfo, VkResult,
+    VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT, VK_SUCCESS,
+};
 
 struct CommandBuffer;
 impl CommandBuffer {
@@ -251,9 +254,9 @@ pub extern "C" fn vkEnumeratePhysicalDeviceGroupsKHR(
     )
 }
 
-// ---- external handle properties (report NO external handle types) ------------------------------
-// This ICD backs no external memory / fence / semaphore sharing, so every external-property query
-// reports zero compatible/exportable handle types + zero features — the truthful capability answer. The
+// ---- external handle properties ----------------------------------------------------------------
+// External memory and fences remain unsupported. Timeline semaphores support the guest-local sealed
+// OPAQUE_FD carrier, and no other handle type. The
 // three property structs share the shape "sType, pNext, then three u32 capability words", so one helper
 // zeroes the three words at byte offset 16 (after sType+pad+pNext on LP64).
 
@@ -310,10 +313,28 @@ pub extern "C" fn vkGetPhysicalDeviceExternalFencePropertiesKHR(
 
 pub extern "C" fn vkGetPhysicalDeviceExternalSemaphoreProperties(
     _physical_device: *mut c_void,
-    _p_external_semaphore_info: *const c_void,
+    p_external_semaphore_info: *const c_void,
     p_external_semaphore_properties: *mut c_void,
 ) {
-    unsafe { ExternalProperties::zero(p_external_semaphore_properties) };
+    let Some(properties) = (unsafe {
+        (p_external_semaphore_properties as *mut VkExternalSemaphoreProperties).as_mut()
+    }) else {
+        return;
+    };
+    properties.export_from_imported_handle_types = 0;
+    properties.compatible_handle_types = 0;
+    properties.external_semaphore_features = 0;
+    let Some(info) = (unsafe {
+        (p_external_semaphore_info as *const VkPhysicalDeviceExternalSemaphoreInfo).as_ref()
+    }) else {
+        return;
+    };
+    if info.handle_type == VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT {
+        properties.export_from_imported_handle_types =
+            VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
+        properties.compatible_handle_types = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
+        properties.external_semaphore_features = 0x1 | 0x2;
+    }
 }
 pub extern "C" fn vkGetPhysicalDeviceExternalSemaphorePropertiesKHR(
     physical_device: *mut c_void,

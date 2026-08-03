@@ -126,11 +126,12 @@ impl FeatureStruct {
             "VkPhysicalDeviceTextureCompressionASTCHDRFeatures",
             1,
         ),
-        feature(
-            1_000_207_000,
-            "VkPhysicalDeviceTimelineSemaphoreFeatures",
-            1,
-        ),
+        Self {
+            s_type: 1_000_207_000,
+            name: "VkPhysicalDeviceTimelineSemaphoreFeatures",
+            count: 1,
+            implemented: &[0],
+        },
         feature(
             1_000_253_000,
             "VkPhysicalDeviceUniformBufferStandardLayoutFeatures",
@@ -221,8 +222,31 @@ mod tests {
                 .iter()
                 .map(|feature| feature.implemented.len())
                 .sum::<usize>(),
-            2
+            3
         );
+    }
+
+    #[test]
+    fn timeline_semaphore_feature_query_is_true() {
+        let feature = FeatureStruct::matching(1_000_207_000).unwrap();
+        assert_eq!(feature.name, "VkPhysicalDeviceTimelineSemaphoreFeatures");
+        let mut node = HeaderWithBits::<1> {
+            s_type: feature.s_type,
+            p_next: core::ptr::null_mut(),
+            bits: [0xcdcd_cdcd],
+        };
+        let mut query = crate::types::VkPhysicalDeviceFeatures2 {
+            s_type: crate::types::VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+            p_next: &mut node as *mut _ as *mut c_void,
+            features: crate::types::VkPhysicalDeviceFeatures {
+                bits: [VK_FALSE; 55],
+            },
+        };
+        crate::instance::vkGetPhysicalDeviceFeatures2(
+            core::ptr::null_mut(),
+            &mut query as *mut _ as *mut c_void,
+        );
+        assert_eq!(node.bits, [crate::types::VK_TRUE]);
     }
 
     #[test]

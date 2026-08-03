@@ -27,6 +27,8 @@ pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES: i32 = 55;
 pub const VULKAN_1_3_DYNAMIC_RENDERING: usize = 12;
 /// `VkPhysicalDeviceVulkan12Features::samplerMirrorClampToEdge` — first member in `vk.xml` order.
 pub const VULKAN_1_2_SAMPLER_MIRROR_CLAMP_TO_EDGE: usize = 0;
+/// `VkPhysicalDeviceVulkan12Features::timelineSemaphore`.
+pub const VULKAN_1_2_TIMELINE_SEMAPHORE: usize = 37;
 
 /// One promoted-feature aggregate laid out as the C ABI declares it. `N` is the member count, so the
 /// trailing bool array is typed rather than reached by hand-computed offsets.
@@ -172,7 +174,10 @@ impl PromotedFeatures {
             s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
             struct_name: "VkPhysicalDeviceVulkan12Features",
             members: VULKAN_1_2,
-            implemented: &[VULKAN_1_2_SAMPLER_MIRROR_CLAMP_TO_EDGE],
+            implemented: &[
+                VULKAN_1_2_SAMPLER_MIRROR_CLAMP_TO_EDGE,
+                VULKAN_1_2_TIMELINE_SEMAPHORE,
+            ],
         },
         Self {
             s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
@@ -363,7 +368,7 @@ mod tests {
     /// CTS treats this promoted extension as supported only when the Vulkan 1.2 aggregate bit is true;
     /// enumerating the KHR name alone is deliberately insufficient in Vulkan 1.2+.
     #[test]
-    fn features2_reports_sampler_mirror_clamp_through_the_vulkan12_aggregate() {
+    fn features2_reports_served_features_through_the_vulkan12_aggregate() {
         let _guard = crate::tests::test_guard();
         let mut aggregate = Aggregate::<47> {
             s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
@@ -382,6 +387,7 @@ mod tests {
         );
 
         assert_eq!(aggregate.bits[VULKAN_1_2_SAMPLER_MIRROR_CLAMP_TO_EDGE], VK_TRUE);
+        assert_eq!(aggregate.bits[VULKAN_1_2_TIMELINE_SEMAPHORE], VK_TRUE);
         assert_eq!(aggregate.bits[1], VK_FALSE, "drawIndirectCount");
         assert_eq!(aggregate.bits[46], VK_FALSE, "subgroupBroadcastDynamicId");
     }
@@ -402,17 +408,21 @@ mod tests {
     }
 
     #[test]
-    fn implemented_members_match_the_two_served_promoted_features() {
+    fn implemented_members_match_the_three_served_promoted_features() {
         let total: usize = PromotedFeatures::ALL
             .iter()
             .map(|entry| entry.implemented.len())
             .sum();
-        assert_eq!(total, 2);
+        assert_eq!(total, 3);
         let v12 = PromotedFeatures::matching(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES)
             .expect("1.2 aggregate is recognized");
         assert_eq!(
             v12.members[VULKAN_1_2_SAMPLER_MIRROR_CLAMP_TO_EDGE],
             "samplerMirrorClampToEdge"
+        );
+        assert_eq!(
+            v12.members[VULKAN_1_2_TIMELINE_SEMAPHORE],
+            "timelineSemaphore"
         );
         let v13 = PromotedFeatures::matching(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES)
             .expect("1.3 aggregate is recognized");
