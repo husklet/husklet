@@ -6,7 +6,7 @@ use crate::cpu::format::{sample_bilinear, sample_cubic, texel_at};
 use crate::cpu::model::texture::Texture;
 use crate::cpu::model::{buffer, buffer_mut, texture, texture_mut};
 use crate::protocol::model::descriptor::{Extent3d, Mirror, Origin3d, TextureSubresource};
-use crate::protocol::model::enums::{Filter, TextureAspect, TextureDim};
+use crate::protocol::model::enums::{Filter, TextureAspect, TextureDim, TextureFormat};
 use crate::protocol::model::error::{GpuError, Result};
 use crate::runtime::model::resources::SessionResources;
 
@@ -69,10 +69,7 @@ pub(crate) fn texture_copy_layout(
     if width > lw || height > lh {
         return Err(GpuError::OutOfBounds);
     }
-    let bpt = t
-        .desc
-        .format
-        .bytes_per_texel()
+    let bpt = Texture::texel_bytes(&t.desc)
         .ok_or(GpuError::Unsupported("software: non-color texture format"))?;
     let row_bytes = bpt
         .checked_mul(width as usize)
@@ -148,7 +145,10 @@ pub(crate) fn check_blit_subresource(
     origin: &Origin3d,
     extent: &Extent3d,
 ) -> Result<()> {
-    if sub.aspect != TextureAspect::All {
+    if sub.aspect != TextureAspect::All
+        && !(sub.aspect == TextureAspect::DepthOnly
+            && texture.desc.format == TextureFormat::Depth32Float)
+    {
         return Err(GpuError::Unsupported(
             "software: non-color aspect texture blit",
         ));
@@ -400,7 +400,11 @@ pub(crate) fn blit_texture(
         let t = texture(res, src)?;
         (
             Texture::level_size(&t.desc, src_sub.mip).0 as usize,
-            t.desc.format.software_texel_bytes()?,
+            if t.desc.format == TextureFormat::Depth32Float {
+                4
+            } else {
+                t.desc.format.software_texel_bytes()?
+            },
             t.desc.format,
         )
     };
@@ -412,7 +416,11 @@ pub(crate) fn blit_texture(
         let t = texture(res, dst)?;
         (
             Texture::level_size(&t.desc, dst_sub.mip).0 as usize,
-            t.desc.format.software_texel_bytes()?,
+            if t.desc.format == TextureFormat::Depth32Float {
+                4
+            } else {
+                t.desc.format.software_texel_bytes()?
+            },
             t.desc.format,
         )
     };
@@ -472,6 +480,23 @@ pub(crate) fn blit_texture(
             let fy = soy as f32 + along(dy, deh, mirror.y) * seh as f32 / deh as f32;
             for dx in 0..dew {
                 let fx = sox as f32 + along(dx, dew, mirror.x) * sew as f32 / dew as f32;
+                let hlx = dst_origin.x as usize + dx;
+                let hly = dst_origin.y as usize + dy;
+                let off = dst_base + (hly * dw + hlx) * dst_bpt;
+                if src_fmt == TextureFormat::Depth32Float
+                    && dst_fmt == TextureFormat::Depth32Float
+                {
+                    if filter != Filter::Nearest {
+                        return Err(GpuError::Unsupported(
+                            "software: depth blits require nearest filtering",
+                        ));
+                    }
+                    let sx = (fx as usize).clamp(sox, sox + sew - 1);
+                    let sy = (fy as usize).clamp(soy, soy + seh - 1);
+                    let source = texel_at(src_plane, sw, sx, sy, src_bpt);
+                    t.pixels[off..off + dst_bpt].copy_from_slice(source);
+                    continue;
+                }
                 // Both filters produce the source colour as VALUES; only how the neighbourhood is reduced
                 // differs. Encoding into the destination is then one shared step, so the two filters cannot
                 // come to different conclusions about what a format means — which is exactly what happened
@@ -516,12 +541,9 @@ pub(crate) fn blit_texture(
                 let texel = dst_fmt.clear_texel(rgba).ok_or(GpuError::Unsupported(
                     "software: blit into this texel format",
                 ))?;
-                let hlx = dst_origin.x as usize + dx;
-                let hly = dst_origin.y as usize + dy;
                 // `dst_base` already carries the slice; only x and y are added here. Adding
                 // `dst_origin.z` again would spend the origin twice and land outside the plane for any
                 // non-zero z.
-                let off = dst_base + (hly * dw + hlx) * dst_bpt;
                 t.pixels[off..off + dst_bpt].copy_from_slice(&texel);
             }
         }
@@ -577,10 +599,7 @@ pub(crate) fn region_layout(
     bytes_per_row: u32,
     rows_per_image: u32,
 ) -> Result<(usize, usize, usize, usize)> {
-    let bpt = t
-        .desc
-        .format
-        .bytes_per_texel()
+    let bpt = Texture::texel_bytes(&t.desc)
         .ok_or(GpuError::Unsupported("software: non-color texture format"))?;
     // The named region must lie inside the LEVEL's own extent, checked without wrapping. Bounding
     // against the base extent would let a region on a small level overhang its plane and write into the

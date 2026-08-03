@@ -343,12 +343,15 @@ pub fn cmd_blit_image(
     // can therefore feed the draw-based blit. Destinations still require a writable color attachment.
     // A compressed source is sampled natively by the host and therefore is a legal blit source. A
     // compressed destination is still impossible because the executor writes through a color attachment.
-    if dst_fmt.bytes_per_texel().is_none() {
+    if dst_fmt.bytes_per_texel().is_none() && dst_fmt != TextureFormat::Depth32Float {
         return Err(GpuError::Unsupported(
             "vkCmdBlitImage: destination format has no packed colour texel (compressed or depth/stencil)",
         ));
     }
-    if src_fmt.bytes_per_texel().is_none() && src_fmt.block_geometry().is_none() {
+    if src_fmt.bytes_per_texel().is_none()
+        && src_fmt.block_geometry().is_none()
+        && src_fmt != TextureFormat::Depth32Float
+    {
         return Err(GpuError::Unsupported(
             "vkCmdBlitImage: source format is depth/stencil",
         ));

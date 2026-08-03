@@ -167,6 +167,23 @@ struct Out { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
 @fragment fn fs_sint(i:Out)->@location(0) vec4<i32> { let s=textureDimensions(itex); let p=clamp(vec2<i32>((x.uv_off+i.uv*x.uv_scale)*vec2<f32>(s)),vec2(0),vec2<i32>(s)-vec2(1)); return textureLoad(itex,p,0); }
 "#;
 
+const DEPTH_BLIT_WGSL: &str = r#"
+struct Xform { uv_off: vec2<f32>, uv_scale: vec2<f32> };
+struct Out { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
+@vertex fn vs_main(@builtin(vertex_index) i:u32)->Out {
+    var p=array<vec2<f32>,3>(vec2(-1.,-1.),vec2(3.,-1.),vec2(-1.,3.));
+    let n=p[i]; var o:Out; o.pos=vec4(n,0.,1.);
+    o.uv=vec2((n.x+1.)*.5,(1.-n.y)*.5); return o;
+}
+@group(0) @binding(0) var src:texture_depth_2d;
+@group(0) @binding(1) var<uniform> x:Xform;
+@fragment fn fs_main(i:Out)->@builtin(frag_depth) f32 {
+    let s=textureDimensions(src);
+    let p=clamp(vec2<i32>((x.uv_off+i.uv*x.uv_scale)*vec2<f32>(s)),vec2(0),vec2<i32>(s)-vec2(1));
+    return textureLoad(src,p,0);
+}
+"#;
+
 /// Cached, device-lifetime blit objects. The module + bind-group layout + samplers are built once; a render
 /// pipeline is memoized per destination `wgpu::TextureFormat` (a pipeline is bound to its color-target
 /// format). The FILTER keys the SAMPLER, not the pipeline — a single filtering sampler-binding-type serves
@@ -190,6 +207,8 @@ pub(crate) struct BlitCache {
     integer_layouts: [wgpu::BindGroupLayout; 2],
     integer_pipeline_layouts: [wgpu::PipelineLayout; 2],
     integer_pipelines: HashMap<(wgpu::TextureFormat, bool), wgpu::RenderPipeline>,
+    depth_layout: wgpu::BindGroupLayout,
+    depth_pipeline: wgpu::RenderPipeline,
 }
 
 /// Whether a source format can be SAMPLED with filtering on this device.
@@ -391,6 +410,57 @@ impl BlitCache {
                 push_constant_ranges: &[],
             })
         });
+        let depth_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("hl-depth-blit"),
+            source: wgpu::ShaderSource::Wgsl(DEPTH_BLIT_WGSL.into()),
+        });
+        let depth_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("hl-depth-blit-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let depth_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("hl-depth-blit-pl"),
+            bind_group_layouts: &[&depth_layout],
+            push_constant_ranges: &[],
+        });
+        let depth_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("hl-depth-blit-pipeline"),
+            layout: Some(&depth_pipeline_layout),
+            vertex: wgpu::VertexState { module: &depth_module, entry_point: Some("vs_main"), buffers: &[], compilation_options: Default::default() },
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState { module: &depth_module, entry_point: Some("fs_main"), targets: &[], compilation_options: Default::default() }),
+            multiview: None,
+            cache: None,
+        });
         Self {
             module,
             bind_group_layout,
@@ -407,6 +477,8 @@ impl BlitCache {
             integer_layouts,
             integer_pipeline_layouts,
             integer_pipelines: HashMap::new(),
+            depth_layout,
+            depth_pipeline,
         }
     }
 
@@ -550,6 +622,197 @@ impl BlitCache {
 }
 
 impl WgpuExecutor {
+    #[allow(clippy::too_many_arguments)]
+    fn blit_depth_2d(
+        &mut self,
+        res: &SessionResources,
+        src: u32,
+        src_sub: &TextureSubresource,
+        src_origin: &Origin3d,
+        src_extent: &Extent3d,
+        dst: u32,
+        dst_sub: &TextureSubresource,
+        dst_origin: &Origin3d,
+        dst_extent: &Extent3d,
+        mirror: Mirror,
+        sw: u32,
+        sh: u32,
+        dw: u32,
+        dh: u32,
+    ) -> Result<()> {
+        let source = texture::WgpuTexture::get(res, src)?;
+        let destination = texture::WgpuTexture::get(res, dst)?;
+        let device = &self.gpu.device;
+        let queue = &self.gpu.queue;
+        if self.blit.is_none() {
+            self.blit = Some(BlitCache::new(device));
+        }
+        let cache = self.blit.as_ref().expect("blit cache initialized above");
+
+        let source_view = source.texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("hl-depth-blit-source"),
+            format: Some(wgpu::TextureFormat::Depth32Float),
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            usage: Some(wgpu::TextureUsages::TEXTURE_BINDING),
+            aspect: wgpu::TextureAspect::DepthOnly,
+            base_mip_level: src_sub.mip,
+            mip_level_count: Some(1),
+            base_array_layer: src_sub.layer,
+            array_layer_count: Some(1),
+        });
+        let staged = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("hl-depth-blit-destination"),
+            size: wgpu::Extent3d {
+                width: dw,
+                height: dh,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let staged_view = staged.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("hl-depth-blit-destination-view"),
+            format: Some(wgpu::TextureFormat::Depth32Float),
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            usage: Some(wgpu::TextureUsages::RENDER_ATTACHMENT),
+            aspect: wgpu::TextureAspect::DepthOnly,
+            base_mip_level: 0,
+            mip_level_count: Some(1),
+            base_array_layer: 0,
+            array_layer_count: Some(1),
+        });
+        let axis = |origin: u32, extent: u32, dim: u32, flip: bool| {
+            let origin = origin as f32 / dim as f32;
+            let extent = extent as f32 / dim as f32;
+            if flip {
+                (origin + extent, -extent)
+            } else {
+                (origin, extent)
+            }
+        };
+        let (ox, sx) = axis(src_origin.x, src_extent.width, sw, mirror.x);
+        let (oy, sy) = axis(src_origin.y, src_extent.height, sh, mirror.y);
+        let xform = [ox, oy, sx, sy];
+        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("hl-depth-blit-xform"),
+            size: std::mem::size_of_val(&xform) as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        // SAFETY: `[f32; 4]` is contiguous and the byte view is read-only for the duration of this call.
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                xform.as_ptr().cast::<u8>(),
+                std::mem::size_of_val(&xform),
+            )
+        };
+        queue.write_buffer(&uniform, 0, bytes);
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("hl-depth-blit-bg"),
+            layout: &cache.depth_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&source_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: uniform.as_entire_binding(),
+                },
+            ],
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("hl-depth-blit"),
+        });
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &destination.texture,
+                mip_level: dst_sub.mip,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: 0,
+                    z: dst_sub.layer,
+                },
+                aspect: wgpu::TextureAspect::DepthOnly,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &staged,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::DepthOnly,
+            },
+            wgpu::Extent3d {
+                width: dw,
+                height: dh,
+                depth_or_array_layers: 1,
+            },
+        );
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("hl-depth-blit-pass"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &staged_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&cache.depth_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_viewport(
+                dst_origin.x as f32,
+                dst_origin.y as f32,
+                dst_extent.width as f32,
+                dst_extent.height as f32,
+                0.0,
+                1.0,
+            );
+            pass.set_scissor_rect(
+                dst_origin.x,
+                dst_origin.y,
+                dst_extent.width,
+                dst_extent.height,
+            );
+            pass.draw(0..3, 0..1);
+        }
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &staged,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::DepthOnly,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &destination.texture,
+                mip_level: dst_sub.mip,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: 0,
+                    z: dst_sub.layer,
+                },
+                aspect: wgpu::TextureAspect::DepthOnly,
+            },
+            wgpu::Extent3d {
+                width: dw,
+                height: dh,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(Some(encoder.finish()));
+        Ok(())
+    }
+
     /// Execute one `Enc::BlitTexture`: resample the `src_extent` region of `src` into the `dst_extent`
     /// region of `dst` with `filter`, by rendering a viewport-clipped textured triangle (see the module
     /// docs). Named mip levels are supported; array layers and non-color aspects remain typed refusals.
@@ -572,8 +835,10 @@ impl WgpuExecutor {
     ) -> Result<()> {
         let _sp = hl_log::hl_span!(hl_log::tag::WGPU, "blit");
         for sub in [src_sub, dst_sub] {
-            if sub.aspect != TextureAspect::All {
-                return Err(GpuError::Unsupported("wgpu: non-color aspect blit"));
+            if matches!(sub.aspect, TextureAspect::StencilOnly) {
+                return Err(GpuError::Unsupported(
+                    "wgpu: stencil blit has no per-fragment stencil output",
+                ));
             }
         }
         let source = texture::WgpuTexture::get(res, src)?;
@@ -631,7 +896,9 @@ impl WgpuExecutor {
         // must have a packed COLOR layout — the depth/stencil formats have none and are rejected honestly.
         let (sw, sh, sd, src_fmt, src_wfmt, can_filter) = {
             let t = texture::WgpuTexture::get(res, src)?;
-            if Format::from(t.format).texel_bytes().is_err() && t.format.block_geometry().is_none()
+            if Format::from(t.format).texel_bytes().is_err()
+                && t.format.block_geometry().is_none()
+                && t.format != hl_gpu::protocol::model::enums::TextureFormat::Depth32Float
             {
                 return Err(GpuError::Unsupported("wgpu: depth/stencil blit source"));
             }
@@ -650,7 +917,11 @@ impl WgpuExecutor {
         };
         let (dw, dh, dd, dst_fmt, dst_wfmt) = {
             let t = texture::WgpuTexture::get(res, dst)?;
-            let _ = Format::from(t.format).texel_bytes()?;
+            if Format::from(t.format).texel_bytes().is_err()
+                && t.format != hl_gpu::protocol::model::enums::TextureFormat::Depth32Float
+            {
+                return Err(GpuError::Unsupported("wgpu: depth/stencil blit destination"));
+            }
             // A blit WRITES its destination as a colour attachment, so the destination needs the same
             // usage a render pass target needs. Refused here, where the caller can be told what it named,
             // rather than as a device-validation failure inside the pass below.
@@ -711,6 +982,43 @@ impl WgpuExecutor {
                 .is_none_or(|e| e > dd)
         {
             return Err(GpuError::OutOfBounds);
+        }
+
+        let depth_blit = src_fmt
+            == hl_gpu::protocol::model::enums::TextureFormat::Depth32Float
+            && dst_fmt == hl_gpu::protocol::model::enums::TextureFormat::Depth32Float;
+        if depth_blit {
+            if filter != Filter::Nearest {
+                return Err(GpuError::Invalid(
+                    "wgpu: depth blits require nearest filtering",
+                ));
+            }
+            if src_dim != hl_gpu::protocol::model::enums::TextureDim::D2
+                || dst_dim != hl_gpu::protocol::model::enums::TextureDim::D2
+                || src_extent.depth != 1
+                || dst_extent.depth != 1
+            {
+                return Err(GpuError::Unsupported("wgpu: non-2D depth blit"));
+            }
+            return self.blit_depth_2d(
+                res,
+                src,
+                src_sub,
+                src_origin,
+                src_extent,
+                dst,
+                dst_sub,
+                dst_origin,
+                dst_extent,
+                mirror,
+                sw,
+                sh,
+                dw,
+                dh,
+            );
+        }
+        if src_sub.aspect != TextureAspect::All || dst_sub.aspect != TextureAspect::All {
+            return Err(GpuError::Unsupported("wgpu: non-color aspect blit"));
         }
 
         let integer_render = src_class != TextureNumericClass::Float;

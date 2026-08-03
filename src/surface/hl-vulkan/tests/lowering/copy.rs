@@ -1957,3 +1957,46 @@ fn a_region_aspect_reaches_the_ir_and_a_partial_depth_stencil_aspect_is_refused(
         );
     }
 }
+
+#[test]
+fn a_depth_only_blit_records_depth_aspect_and_nearest_scaling() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let src = create::create_image(&mut d, &mut sink, 4, 4, vk_format::D32_SFLOAT, vk_image_usage::TRANSFER_SRC, 1).unwrap();
+    let dst = create::create_image(&mut d, &mut sink, 2, 2, vk_format::D32_SFLOAT, vk_image_usage::TRANSFER_DST, 1).unwrap();
+    let (src_ir, dst_ir) = (img_ir(&d, src), img_ir(&d, dst));
+    let depth = SubresourceLayers {
+        mip_level: 0,
+        base_array_layer: 0,
+        layer_count: 1,
+        aspect_mask: SubresourceLayers::ASPECT_DEPTH,
+    };
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_blit_image(
+            d,
+            cb,
+            src,
+            dst,
+            depth,
+            depth,
+            Origin3d::default(),
+            Extent3d { width: 4, height: 4, depth: 1 },
+            Origin3d::default(),
+            Extent3d { width: 2, height: 2, depth: 1 },
+            false,
+            Mirror::NONE,
+        ).expect("D32 advertises BLIT_SRC and BLIT_DST");
+    });
+    assert_eq!(enc, vec![Enc::BlitTexture {
+        src: src_ir,
+        src_sub: TextureSubresource::base(),
+        src_origin: Origin3d::default(),
+        src_extent: Extent3d { width: 4, height: 4, depth: 1 },
+        dst: dst_ir,
+        dst_sub: TextureSubresource::base(),
+        dst_origin: Origin3d::default(),
+        dst_extent: Extent3d { width: 2, height: 2, depth: 1 },
+        filter: Filter::Nearest,
+        mirror: Mirror::NONE,
+    }]);
+}

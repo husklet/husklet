@@ -533,8 +533,10 @@ pub(super) fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderStat
             // divergence that belonged to the oracle rather than to either backend.
             let d_fmt = d.desc.format;
             let (_, _) = (
-                s_fmt.software_texel_bytes()?,
-                d_fmt.software_texel_bytes()?,
+                crate::cpu::model::texture::Texture::texel_bytes(&s.desc)
+                    .ok_or(GpuError::Unsupported("software: unsupported blit source format"))?,
+                crate::cpu::model::texture::Texture::texel_bytes(&d.desc)
+                    .ok_or(GpuError::Unsupported("software: unsupported blit destination format"))?,
             );
             if s_fmt.numeric_class() != d_fmt.numeric_class() {
                 return Err(GpuError::Invalid(

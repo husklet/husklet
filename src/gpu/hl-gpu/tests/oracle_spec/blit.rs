@@ -1,5 +1,6 @@
 use super::*;
 use hl_gpu::protocol::model::descriptor::Mirror;
+use hl_gpu::protocol::model::enums::TextureAspect;
 
 fn blit_downscale(filter: Filter) -> [u8; 4] {
     // src 2x1: texel(0,0)=red, texel(1,0)=blue (populated via CopyBufferToTexture). Blit 2x1 -> dst 1x1.
@@ -82,6 +83,46 @@ fn blit_nearest_selects_and_linear_averages() {
         [128, 0, 128, 255],
         "linear averages the two src texels (red+blue)"
     );
+}
+
+#[test]
+fn depth_blit_nearest_scales_values_and_preserves_outside_texels() {
+    let encode = |values: &[f32]| {
+        values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect::<Vec<_>>()
+    };
+    let source = encode(&[0.1, 0.2, 0.3, 0.4]);
+    let destination = encode(&[0.9; 4]);
+    let (exec, s) = run(&[
+        Cmd::CreateBuffer(1, buf(16, buffer_usage::COPY_SRC)),
+        Cmd::CreateBuffer(2, buf(16, buffer_usage::COPY_SRC)),
+        Cmd::WriteBuffer { id: 1, offset: 0, data: source },
+        Cmd::WriteBuffer { id: 2, offset: 0, data: destination },
+        Cmd::CreateTexture(1, tex(4, 1, TextureFormat::Depth32Float, texture_usage::COPY_SRC | texture_usage::COPY_DST)),
+        Cmd::CreateTexture(2, tex(4, 1, TextureFormat::Depth32Float, texture_usage::COPY_SRC | texture_usage::COPY_DST)),
+        Cmd::Submit(CommandBuffer {
+            encoder: vec![
+                Enc::CopyBufferToTexture { src: 1, src_offset: 0, bytes_per_row: 16, dst: 1, mip: 0, width: 4, height: 1 },
+                Enc::CopyBufferToTexture { src: 2, src_offset: 0, bytes_per_row: 16, dst: 2, mip: 0, width: 4, height: 1 },
+                Enc::BlitTexture {
+                    src: 1,
+                    src_sub: TextureSubresource { aspect: TextureAspect::DepthOnly, ..TextureSubresource::base() },
+                    src_origin: Origin3d::default(),
+                    src_extent: Extent3d { width: 4, height: 1, depth: 1 },
+                    dst: 2,
+                    dst_sub: TextureSubresource { aspect: TextureAspect::DepthOnly, ..TextureSubresource::base() },
+                    dst_origin: Origin3d { x: 1, y: 0, z: 0 },
+                    dst_extent: Extent3d { width: 2, height: 1, depth: 1 },
+                    filter: Filter::Nearest,
+                    mirror: Mirror::NONE,
+                },
+            ],
+            signal: None,
+        }),
+    ]);
+    assert_eq!(readback(&exec, &s, 2, 16), encode(&[0.9, 0.2, 0.4, 0.9]));
 }
 
 #[test]
