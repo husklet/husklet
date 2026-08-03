@@ -1022,6 +1022,7 @@ impl StageSources<'_> {
                 }
                 let mut t = it.clone();
                 NormalizedSource::new(&mut t).strip_precision();
+                NormalizedSource::new(&mut t).lower_const_parameters();
                 Declarations::rewrite_data_refs_except(&mut t, &unis, &roots);
                 Declarations::rewrite_integer_sampler_fetches(&mut t, samps);
                 Declarations::rewrite_sampler_refs(&mut t, samps);

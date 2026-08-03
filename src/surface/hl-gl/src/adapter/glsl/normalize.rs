@@ -24,6 +24,78 @@ impl<'a> NormalizedSource<'a> {
         wreplace(self.text, "highp", "");
     }
 
+    /// Remove ES `const` from function input parameters before desktop naga sees them.
+    ///
+    /// GLSL ES 1.00 permits `const in TYPE x` and `const TYPE x` parameter declarations.
+    /// Naga 24 models `const` and `in` as competing storage qualifiers and also parses a
+    /// bare `const` parameter as a global-style constant requiring an initializer. The
+    /// guest compiler has already enforced the ES parameter grammar and const assignment
+    /// rules. Dropping `const` here preserves the call ABI and value semantics: an input
+    /// parameter remains a private copy, while `out` and `inout` are left untouched.
+    pub(super) fn lower_const_parameters(&mut self) {
+        let source = self.text.clone();
+        let bytes = source.as_bytes();
+        let Some(body) = bytes.iter().position(|byte| *byte == b'{') else {
+            return;
+        };
+        let mut depth = 0usize;
+        let mut open = None;
+        for (at, byte) in bytes[..body].iter().enumerate() {
+            match byte {
+                b'(' => {
+                    if depth == 0 {
+                        open = Some(at);
+                    }
+                    depth += 1;
+                }
+                b')' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+        let Some(open) = open else {
+            return;
+        };
+        let mut depth = 1usize;
+        let mut close = None;
+        for (relative, byte) in bytes[open + 1..body].iter().enumerate() {
+            match byte {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(open + 1 + relative);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(close) = close else {
+            return;
+        };
+        let mut edits = Vec::new();
+        let mut at = open + 1;
+        while at < close {
+            let Some(relative) = source[at..close].find("const") else {
+                break;
+            };
+            let start = at + relative;
+            let end = start + "const".len();
+            let before = start
+                .checked_sub(1)
+                .map(|index| bytes[index])
+                .unwrap_or(b' ');
+            let after = bytes.get(end).copied().unwrap_or(b' ');
+            if !Tokens::is_word(before) && !Tokens::is_word(after) {
+                edits.push((start, end));
+            }
+            at = end;
+        }
+        for (start, end) in edits.into_iter().rev() {
+            self.text.replace_range(start..end, "");
+        }
+    }
+
     /// GLES2 exposes a single color attachment, but permits it to be addressed through
     /// `gl_FragData[index]`. Every defined index therefore resolves to attachment zero. Desktop GLSL and
     /// WGSL have no dynamically indexed fragment-output array, so redirect the whole indexed lvalue to the
