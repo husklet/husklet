@@ -706,13 +706,18 @@ mod tests {
     /// core. The two float classes must therefore differ in exactly that bit.
     #[test]
     fn float_classes_differ_by_filtering() {
-        assert_ne!(
-            Format(vk_format::R16G16B16A16_SFLOAT)
-                .features()
-                .optimal_tiling
-                & format_feature::SAMPLED_IMAGE_FILTER_LINEAR,
-            0
-        );
+        for format in [
+            vk_format::R16_SFLOAT,
+            vk_format::R16G16_SFLOAT,
+            vk_format::R16G16B16A16_SFLOAT,
+        ] {
+            assert_ne!(
+                Format(format).features().optimal_tiling
+                    & format_feature::SAMPLED_IMAGE_FILTER_LINEAR,
+                0,
+                "VkFormat {format} must claim linear filtering"
+            );
+        }
         for format in [vk_format::R32_SFLOAT, vk_format::R32G32B32A32_SFLOAT] {
             assert_eq!(
                 Format(format).features().optimal_tiling

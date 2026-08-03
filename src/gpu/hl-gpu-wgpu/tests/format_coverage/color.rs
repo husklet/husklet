@@ -149,6 +149,14 @@ fn every_color_format_roundtrips_exact_stored_bytes() {
                     &t0[..2]
                 );
             }
+            TextureFormat::R16Float => {
+                let got = half_to_f32(le_u16(&t0[0..2]));
+                assert!(
+                    (got - C[0]).abs() < 1e-3,
+                    "R16Float half-decoded {got} must equal C {}",
+                    C[0]
+                );
+            }
             TextureFormat::Rgba16Float => {
                 let got = [
                     half_to_f32(le_u16(&t0[0..2])),

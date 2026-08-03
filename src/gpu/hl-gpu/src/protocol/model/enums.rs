@@ -261,6 +261,7 @@ impl TextureFormat {
             TextureFormat::R8Unorm => vec![unorm(color[0])],
             TextureFormat::Rg8Unorm => vec![unorm(color[0]), unorm(color[1])],
             TextureFormat::R32Float => (color[0] as f32).to_le_bytes().to_vec(),
+            TextureFormat::R16Float => half(color[0]).to_vec(),
             TextureFormat::R16Unorm => unorm_bits(color[0], u16::MAX).to_le_bytes().to_vec(),
             TextureFormat::R16Snorm => snorm16(color[0]).to_le_bytes().to_vec(),
             TextureFormat::Rgba16Unorm => color
@@ -389,6 +390,7 @@ impl TextureFormat {
             TextureFormat::R8Unorm => [unorm(0), 0.0, 0.0, 1.0],
             TextureFormat::Rg8Unorm => [unorm(0), unorm(1), 0.0, 1.0],
             TextureFormat::R32Float => [single(0), 0.0, 0.0, 1.0],
+            TextureFormat::R16Float => [half(0), 0.0, 0.0, 1.0],
             TextureFormat::R16Unorm => [unorm16(0), 0.0, 0.0, 1.0],
             TextureFormat::R16Snorm => [snorm16(0), 0.0, 0.0, 1.0],
             TextureFormat::Rgba16Unorm => [unorm16(0), unorm16(1), unorm16(2), unorm16(3)],

@@ -311,3 +311,8 @@ fn metal_executes_rgba16_snorm_as_a_blit_destination() {
         &[0xff, 0x7f, 0, 0, 0, 0, 0xff, 0x7f],
     );
 }
+
+#[test]
+fn metal_executes_r16_float_as_a_blit_destination() {
+    assert_packed_red_blit(TextureFormat::R16Float, &[0x00, 0x3c]);
+}
