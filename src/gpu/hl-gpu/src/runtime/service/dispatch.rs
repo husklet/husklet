@@ -16,7 +16,7 @@ use crate::runtime::model::session::{ResourceSharing, Session};
 use crate::runtime::model::sharing::{ExportId, ResourceKey};
 use crate::runtime::model::timeline::FenceTimeline;
 use crate::runtime::port::clock::Clock;
-use crate::runtime::port::executor::{GpuExecutor, Presentation};
+use crate::runtime::port::executor::{CommittedDelta, GpuExecutor};
 
 /// Dispatch a validated, accounted batch. The executor performs the native work (creating/destroying
 /// resources behind `session.resources`, recording submits, presenting); afterwards the runtime records
@@ -53,22 +53,20 @@ impl Drop for ResourceTransaction<'_> {
 pub(crate) struct PreparedDispatch<'a> {
     transaction: ResourceTransaction<'a>,
     timeline: Option<FenceTimeline>,
-    presentations: Option<Vec<Presentation>>,
+    committed: Option<CommittedDelta>,
     refusal: Option<crate::GpuError>,
-    accepted: Option<Vec<bool>>,
 }
 
 impl PreparedDispatch<'_> {
     /// The accepted path's infallible tail: all validation and executor work completed before this call.
-    pub(crate) fn commit(mut self) -> (Vec<Presentation>, FenceTimeline, Option<crate::GpuError>, Vec<bool>) {
+    pub(crate) fn commit(mut self) -> (CommittedDelta, FenceTimeline, Option<crate::GpuError>) {
         self.transaction.commit();
         (
-            self.presentations.take().unwrap_or_default(),
+            self.committed.take().expect("prepared dispatch owns its committed delta"),
             self.timeline
                 .take()
                 .expect("prepared dispatch owns its timeline"),
             self.refusal.take(),
-            self.accepted.take().unwrap_or_default(),
         )
     }
 }
@@ -154,25 +152,25 @@ pub(crate) fn prepare<'a>(
             return Err(crate::GpuError::Panicked(message));
         }
     };
-    let (presentations, refusal, accepted) = execution.into_parts(batch.len());
+    let (committed, refusal) = execution.into_parts(batch);
     if refusal.is_some() {
         next_timeline = timeline.clone();
-        for (index, cmd) in batch.iter().enumerate() {
-            if !accepted[index] { continue; }
-            match cmd {
+        for entry in &committed.commands {
+            match &entry.command {
                 Cmd::CreateFence(id) => next_timeline.register(*id),
                 Cmd::DestroyFence(id) => next_timeline.retire(*id),
-                Cmd::Submit(cb) => if let Some((fence, value)) = cb.signal { next_timeline.signal(fence, value, now).expect("accepted signal was preflighted"); },
                 _ => {}
             }
+        }
+        for &(fence, value) in &committed.fence_signals {
+            next_timeline.signal(fence, value, now).expect("committed signal was preflighted");
         }
     }
     Ok(PreparedDispatch {
         transaction,
         timeline: Some(next_timeline),
-        presentations: Some(presentations),
+        committed: Some(committed),
         refusal,
-        accepted: Some(accepted),
     })
 }
 

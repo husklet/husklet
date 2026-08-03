@@ -3,7 +3,7 @@
 //! submitted (bytes + structure), that the socketed path agrees with protocol's in-memory [`RecordingSink`]
 //! at the command boundary, and that the ack (NACK) + reconnect/residency-replay paths behave.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -245,7 +245,8 @@ fn server_and_client_preserve_a_partial_refusal_on_the_wire() {
         serve_connection(&stream, &caps, |_header, _batch: &[Cmd]| {
             hl_gpu::transport::Verdict::Partial {
                 kind: RefusalKind::UnknownId,
-                accepted: vec![true],
+                commands: vec![Cmd::CreateFence(1)],
+                replayable: true,
             }
         })
         .unwrap();
@@ -294,8 +295,13 @@ fn partial_refusal_is_reported_and_replayed_as_committed_residency() {
         first
             .write_all(&[ACK_PARTIAL | RefusalKind::UnknownId.ack()])
             .unwrap();
-        first.write_all(&2u32.to_le_bytes()).unwrap();
-        first.write_all(&[1]).unwrap();
+        hl_gpu::transport::adapter::unix::Connection::new(&first)
+            .write_partial_delta(&[Cmd::CreateBuffer(4, BufferDesc {
+                size: 4,
+                usage: buffer_usage::COPY_DST,
+                label: "partial-resident".into(),
+            })], true)
+            .unwrap();
         drop(first);
         closed_tx.send(()).unwrap();
 
@@ -441,6 +447,42 @@ fn reconnect_replays_acknowledged_residency_once_before_new_work() {
         !sink.take_residency_reset(),
         "successful replay consumed the reset generation"
     );
+}
+
+#[test]
+fn reconnect_retires_after_a_nonreplayable_partial_submit() {
+    let sock = TempSock::new("partial-nonreplayable");
+    let listener = UnixListener::bind(&sock.0).unwrap();
+    let caps = Capabilities::permissive_fixture("host");
+    let server = thread::spawn(move || {
+        let (mut first, _) = listener.accept().unwrap();
+        let _ = {
+            hl_gpu::transport::adapter::unix::Connection::new(&first).write_handshake(&caps).unwrap();
+            let mut header = [0; 16];
+            first.read_exact(&mut header).unwrap();
+            let len = u32::from_le_bytes(header[12..16].try_into().unwrap()) as usize;
+            let mut body = vec![0; len];
+            first.read_exact(&mut body).unwrap();
+            body
+        };
+        first.write_all(&[ACK_PARTIAL | RefusalKind::UnknownId.ack()]).unwrap();
+        hl_gpu::transport::adapter::unix::Connection::new(&first)
+            .write_partial_delta(&[Cmd::CreateBuffer(4, BufferDesc { size: 4, usage: buffer_usage::COPY_DST, label: String::new() })], false)
+            .unwrap();
+        drop(first);
+
+        let (mut second, _) = listener.accept().unwrap();
+        hl_gpu::transport::adapter::unix::Connection::new(&second).write_handshake(&caps).unwrap();
+        let mut byte = [0];
+        assert_eq!(second.read(&mut byte).unwrap(), 0, "a nonreplayable journal must send no replay prefix");
+    });
+
+    let mut sink = RemoteCommandSink::new(sock.path());
+    assert!(matches!(sink.submit(&[Cmd::CreateBuffer(4, BufferDesc { size: 4, usage: buffer_usage::COPY_DST, label: String::new() })]), Err(hl_gpu::GpuError::Partial(_))));
+    let error = sink.submit(&[Cmd::DestroyBuffer(4)]).unwrap_err();
+    assert!(matches!(error, hl_gpu::GpuError::Transport(hl_gpu::TransportError::ApiLost { .. })));
+    drop(sink);
+    server.join().unwrap();
 }
 
 /// What the acknowledgement tells the guest, pinned — because a layer above this one now decides the

@@ -160,9 +160,17 @@ impl ConnectionHandler for Connection {
         let execute_started = Instant::now();
         match hl_gpu::runtime::submit_outcome(&mut self.session, &mut self.executor, bytes, batch) {
             Ok(outcome) => {
-                let presentations = outcome.presentations;
+                let presentations = outcome.committed.presentations.clone();
                 if let (Some(capture), Some(encoded)) = (&mut self.capture, encoded.as_deref()) {
-                    capture.record(batch, encoded);
+                    if outcome.refusal.is_none() {
+                        capture.record(batch, encoded);
+                    } else if outcome.committed.replayable {
+                        let commands: Vec<Cmd> = outcome.committed.replay_commands().cloned().collect();
+                        let encoded = hl_gpu::Encoder::stream(&commands);
+                        capture.record(&commands, &encoded);
+                    } else {
+                        capture.invalidate();
+                    }
                 }
                 hl_log::hl_add!(
                     hl_log::tag::PRESENT,
@@ -220,7 +228,11 @@ impl ConnectionHandler for Connection {
                     eprintln!("husklet gpu: submit ack");
                 }
                 match outcome.refusal {
-                    Some(error) => Verdict::Partial { kind: hl_gpu::transport::model::header::RefusalKind::for_error(&error), accepted: outcome.accepted },
+                    Some(error) => Verdict::Partial {
+                        kind: hl_gpu::transport::model::header::RefusalKind::for_error(&error),
+                        commands: outcome.committed.replay_commands().cloned().collect(),
+                        replayable: outcome.committed.replayable,
+                    },
                     None => Verdict::Ack,
                 }
             }

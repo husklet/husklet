@@ -143,6 +143,10 @@ impl Capture {
         }
     }
 
+    pub(super) fn invalidate(&mut self) {
+        self.finish(false);
+    }
+
     pub(super) fn active(&self) -> bool {
         self.file.is_some()
     }

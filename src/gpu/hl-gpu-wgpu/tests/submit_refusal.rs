@@ -74,7 +74,7 @@ fn refusal_preserves_encoded_work_and_continues_to_later_operations() {
         "persistent resources and poison clears must be established before the rejected submit",
     );
 
-    let result = hl_gpu::runtime::submit(
+    let outcome = hl_gpu::runtime::submit_outcome(
         &mut session,
         &mut exec,
         1,
@@ -127,13 +127,16 @@ fn refusal_preserves_encoded_work_and_continues_to_later_operations() {
         })],
     );
 
+    let outcome = outcome.expect("a nonfatal inner refusal returns its committed delta");
     assert_eq!(
-        result,
-        Err(GpuError::Partial(Box::new(GpuError::UnknownId {
+        outcome.refusal,
+        Some(GpuError::UnknownId {
             kind: "texture",
             id: 999,
-        })))
+        })
     );
+    assert!(!outcome.committed.replayable, "a partial Submit prefix cannot be reconstructed by replay");
+    assert!(outcome.committed.commands.is_empty(), "Submit must never enter persistent residency");
     assert_eq!(
         exec.read_texture(&session.resources, 1).unwrap(),
         [255, 0, 0, 255],

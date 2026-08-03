@@ -39,14 +39,14 @@ impl Session {
         &mut self,
         cmds: &[Cmd],
         retained: &HashSet<usize>,
-        accepted: Option<&[bool]>,
+        committed: Option<&HashSet<usize>>,
     ) -> Result<()> {
         let session = self;
         let current = session.account.ledger();
         let mut next_live = current.live.clone();
         let mut next = current.totals;
         for (index, cmd) in cmds.iter().enumerate() {
-            if accepted.is_some_and(|mask| !mask[index]) {
+            if committed.is_some_and(|sources| !sources.contains(&index)) {
                 continue;
             }
             if let Some((kind, id, bytes)) = cmd.create_charge()? {

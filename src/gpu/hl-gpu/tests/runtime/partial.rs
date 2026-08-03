@@ -23,6 +23,7 @@ impl GpuExecutor for PartialExecutor {
                             kind: "texture",
                             id: 999,
                         },
+                        batch,
                         vec![0],
                     ));
                 }
@@ -82,8 +83,8 @@ fn partial_refusal_commits_resource_for_the_next_command_buffer() {
 struct RefuseAll(Capabilities);
 impl GpuExecutor for RefuseAll {
     fn capabilities(&self) -> Capabilities { self.0.clone() }
-    fn execute(&mut self, _: &mut SessionResources, _: &[Cmd]) -> Result<hl_gpu::Execution> {
-        Ok(hl_gpu::Execution::partial(Vec::new(), GpuError::Invalid("refused"), Vec::new()))
+    fn execute(&mut self, _: &mut SessionResources, batch: &[Cmd]) -> Result<hl_gpu::Execution> {
+        Ok(hl_gpu::Execution::partial(Vec::new(), GpuError::Invalid("refused"), batch, Vec::new()))
     }
     fn wait(&mut self, _: &mut SessionResources, _: FenceId, _: u64) -> Result<()> { Ok(()) }
     fn export_buffer(&self, resources: &SessionResources, id: hl_gpu::BufferId) -> Result<(hl_gpu::runtime::model::sharing::Shared, u64)> {
@@ -103,7 +104,7 @@ fn refused_fence_lifecycle_is_not_committed() {
     let mut executor = RefuseAll(caps);
     let outcome = hl_gpu::runtime::submit_outcome(&mut session, &mut executor, 0, &[Cmd::CreateFence(9)])
         .expect("partial outcome");
-    assert_eq!(outcome.accepted, [false]);
+    assert!(outcome.committed.commands.is_empty());
     assert!(!session.resources.fences.contains(9));
     assert_eq!(session.object_count(), 0);
 }
@@ -113,12 +114,12 @@ fn successful_presentation_survives_a_later_refusal() {
     struct PresentPartial(Capabilities);
     impl GpuExecutor for PresentPartial {
         fn capabilities(&self) -> Capabilities { self.0.clone() }
-        fn execute(&mut self, _: &mut SessionResources, _: &[Cmd]) -> Result<hl_gpu::Execution> {
+        fn execute(&mut self, _: &mut SessionResources, batch: &[Cmd]) -> Result<hl_gpu::Execution> {
             Ok(hl_gpu::Execution::partial(vec![hl_gpu::Presentation {
                 surface: SurfaceId(1), texture: TextureId(2),
                 token: hl_gpu::SurfaceToken::new(3).unwrap(),
                 serial: hl_gpu::FrameSerial::new(4).unwrap(),
-            }], GpuError::Invalid("later refusal"), vec![0]))
+            }], GpuError::Invalid("later refusal"), batch, vec![0]))
         }
         fn wait(&mut self, _: &mut SessionResources, _: FenceId, _: u64) -> Result<()> { Ok(()) }
     }
@@ -127,8 +128,34 @@ fn successful_presentation_survives_a_later_refusal() {
     let mut executor = PresentPartial(caps);
     let batch = [Cmd::Present { surface: 1, texture: 2, serial: hl_gpu::FrameSerial::new(4).unwrap() }];
     let outcome = hl_gpu::runtime::submit_outcome(&mut session, &mut executor, 0, &batch).unwrap();
-    assert_eq!(outcome.presentations.len(), 1);
+    assert_eq!(outcome.committed.presentations.len(), 1);
     assert!(outcome.refusal.is_some());
+}
+
+#[test]
+fn partial_delta_carries_only_the_fence_signal_that_was_scheduled() {
+    struct FencePartial(Capabilities);
+    impl GpuExecutor for FencePartial {
+        fn capabilities(&self) -> Capabilities { self.0.clone() }
+        fn execute(&mut self, resources: &mut SessionResources, batch: &[Cmd]) -> Result<hl_gpu::Execution> {
+            resources.fences.insert(5, Box::new(()))?;
+            Ok(hl_gpu::Execution::partial(Vec::new(), GpuError::Invalid("later refusal"), batch, vec![0, 1]))
+        }
+        fn wait(&mut self, _: &mut SessionResources, _: FenceId, _: u64) -> Result<()> { Ok(()) }
+    }
+    let caps = Capabilities::permissive_fixture("partial fence signal");
+    let mut session = session(Limits::from_capabilities(caps.clone()), GlobalLedger::unbounded());
+    let mut executor = FencePartial(caps);
+    let batch = [
+        Cmd::CreateFence(5),
+        Cmd::Submit(CommandBuffer { encoder: Vec::new(), signal: Some((5, 9)) }),
+        Cmd::DestroyFence(5),
+    ];
+    let outcome = hl_gpu::runtime::submit_outcome(&mut session, &mut executor, 0, &batch).unwrap();
+    assert_eq!(outcome.committed.replay_commands().collect::<Vec<_>>(), [&Cmd::CreateFence(5)]);
+    assert_eq!(outcome.committed.fence_signals, [(5, 9)]);
+    assert!(!outcome.committed.replayable);
+    assert_eq!(session.timeline.get(5), Some(9));
 }
 
 #[test]
