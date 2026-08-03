@@ -9,7 +9,7 @@ use hl_gpu::protocol::model::command::Cmd;
 use hl_gpu::protocol::model::descriptor::SurfaceDesc;
 use hl_gpu::protocol::model::id::{BufferId, FenceId, TextureId};
 use hl_gpu::runtime::model::resources::SessionResources;
-use hl_gpu::runtime::port::executor::{GpuExecutor, Presentation};
+use hl_gpu::runtime::port::executor::{Execution, GpuExecutor};
 use hl_gpu::{GpuError, Result};
 
 use crate::{fence, present, WgpuExecutor};
@@ -19,9 +19,10 @@ impl GpuExecutor for WgpuExecutor {
         self.caps.clone()
     }
 
-    fn execute(&mut self, res: &mut SessionResources, batch: &[Cmd]) -> Result<Vec<Presentation>> {
+    fn execute(&mut self, res: &mut SessionResources, batch: &[Cmd]) -> Result<Execution> {
         // The runtime dispatches this batch inside an all-tables transaction (`begin_txn` → execute →
-        // `commit_txn`/`rollback_txn`): if we return `Err`, the id tables roll back to the pre-batch state.
+        // `commit_txn`/`rollback_txn`): a partial outcome commits successful operations, while `Err` rolls
+        // the id tables back to the pre-batch state.
         // The dedup caches live outside `SessionResources`, so mirror that lifecycle here — journal every
         // cache mutation during the batch and, on failure, replay the inverses so the caches (and their
         // residency counters) stay in exact lock-step with the rolled-back id tables. On success the journal
@@ -61,14 +62,14 @@ impl GpuExecutor for WgpuExecutor {
         // make their eventual submission timing depend on an unrelated later batch.
         self.flush_writes();
         match result {
-            Ok(presents) => {
+            Ok(execution) => {
                 self.dedup.commit_batch();
                 self.modules.apply(std::mem::take(&mut self.module_journal));
                 self.pipelines
                     .apply(std::mem::take(&mut self.pipeline_journal));
                 #[cfg(target_os = "macos")]
                 self.retire_abandoned_presentations();
-                Ok(presents)
+                Ok(execution)
             }
             Err(e) => {
                 self.dedup.rollback_batch();
@@ -212,7 +213,7 @@ impl WgpuExecutor {
         &mut self,
         res: &mut SessionResources,
         batch: &[Cmd],
-    ) -> Result<Vec<Presentation>> {
+    ) -> Result<Execution> {
         let mut presents = Vec::new();
         let mut first_refusal = None;
         for cmd in batch {
@@ -386,9 +387,9 @@ impl WgpuExecutor {
                 first_refusal.get_or_insert(error);
             }
         }
-        if let Some(error) = first_refusal {
-            return Err(error);
-        }
-        Ok(presents)
+        Ok(match first_refusal {
+            Some(error) => Execution::partial(presents, error),
+            None => Execution::accepted(presents),
+        })
     }
 }

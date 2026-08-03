@@ -87,6 +87,7 @@ pub struct Status;
 impl Status {
     pub fn from_error(e: &GpuError) -> i32 {
         match e {
+            GpuError::Partial(error) => Self::from_error(error.as_ref()),
             GpuError::Unsupported(_) => VK_ERROR_FEATURE_NOT_PRESENT,
             GpuError::UnknownId { .. } | GpuError::DuplicateId { .. } => VK_ERROR_UNKNOWN,
             GpuError::ResourceLimit(_) => VK_ERROR_OUT_OF_DEVICE_MEMORY,
@@ -210,6 +211,10 @@ mod tests {
         };
         assert_eq!(
             refused(ACK_UNSUPPORTED),
+            Status::from_error(&GpuError::Unsupported("x"))
+        );
+        assert_eq!(
+            Status::from_error(&GpuError::Partial(Box::new(GpuError::Unsupported("x")))),
             Status::from_error(&GpuError::Unsupported("x"))
         );
         assert_eq!(

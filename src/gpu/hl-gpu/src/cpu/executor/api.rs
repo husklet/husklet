@@ -87,7 +87,7 @@ impl GpuExecutor for CpuExecutor {
         }
     }
 
-    fn execute(&mut self, res: &mut SessionResources, batch: &[Cmd]) -> Result<Vec<Presentation>> {
+    fn execute(&mut self, res: &mut SessionResources, batch: &[Cmd]) -> Result<Execution> {
         let _span = hl_log::hl_span!(hl_log::tag::CPU, "dispatch");
         hl_log::hl_debug!(hl_log::tag::CPU, "execute cmds={}", batch.len());
         let mut presents = Vec::new();
@@ -195,7 +195,7 @@ impl GpuExecutor for CpuExecutor {
                 }
             }
         }
-        Ok(presents)
+        Ok(Execution::accepted(presents))
     }
 
     fn wait(

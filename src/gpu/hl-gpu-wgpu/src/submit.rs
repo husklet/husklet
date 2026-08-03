@@ -1050,14 +1050,14 @@ impl WgpuExecutor {
             i = next;
         }
         self.submit_encoded(&mut native);
-        if let Some(error) = first_refusal {
-            return Err(error);
-        }
         if let Some((f, v)) = cb.signal {
             let slot = fence::Fence::schedule(res, f, v)?;
             self.gpu.queue.on_submitted_work_done(move || {
                 fence::Fence::signal(&slot, v);
             });
+        }
+        if let Some(error) = first_refusal {
+            return Err(error);
         }
         Ok(())
     }

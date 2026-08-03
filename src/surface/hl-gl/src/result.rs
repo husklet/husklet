@@ -58,6 +58,7 @@ pub struct EglError(i32);
 impl From<&GpuError> for EglError {
     fn from(e: &GpuError) -> Self {
         Self(match e {
+            GpuError::Partial(error) => return Self::from(error.as_ref()),
             GpuError::UnknownId { .. } | GpuError::DuplicateId { .. } => EGL_BAD_SURFACE,
             GpuError::ResourceLimit(_) => EGL_BAD_ALLOC,
             GpuError::Unsupported(_) => EGL_BAD_MATCH,
@@ -126,6 +127,7 @@ pub struct GlError(u32);
 impl From<&GpuError> for GlError {
     fn from(e: &GpuError) -> Self {
         Self(match e {
+            GpuError::Partial(error) => return Self::from(error.as_ref()),
             GpuError::ResourceLimit(_) => GL_OUT_OF_MEMORY,
             // The host refused this request and the connection survived it, so the call — not the context
             // — failed, and the acknowledgement's class says which way. Each arm is the code this driver
@@ -219,6 +221,9 @@ mod tests {
             let error = refused_as(kind);
             assert_eq!(i32::from(EglError::from(&error)), egl, "{kind:?} EGL code");
             assert_eq!(u32::from(GlError::from(&error)), gl, "{kind:?} GL code");
+            let partial = GpuError::Partial(Box::new(error));
+            assert_eq!(i32::from(EglError::from(&partial)), egl, "{kind:?} partial EGL code");
+            assert_eq!(u32::from(GlError::from(&partial)), gl, "{kind:?} partial GL code");
         }
     }
 }

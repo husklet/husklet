@@ -31,12 +31,57 @@ pub struct Presentation {
     pub serial: FrameSerial,
 }
 
+/// Work the executor completed from one batch. A nonfatal operation refusal is reported separately from
+/// fatal execution failure because the successful commands on either side are committed.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Execution {
+    presentations: Vec<Presentation>,
+    refusal: Option<GpuError>,
+}
+
+impl std::ops::Deref for Execution {
+    type Target = [Presentation];
+
+    fn deref(&self) -> &Self::Target {
+        &self.presentations
+    }
+}
+
+impl Execution {
+    pub fn accepted(presentations: Vec<Presentation>) -> Self {
+        Self {
+            presentations,
+            refusal: None,
+        }
+    }
+
+    pub fn partial(presentations: Vec<Presentation>, refusal: GpuError) -> Self {
+        assert!(
+            !refusal.is_fatal(),
+            "a partial execution cannot contain a fatal error"
+        );
+        Self {
+            presentations,
+            refusal: Some(refusal),
+        }
+    }
+
+    pub fn presentations(&self) -> &[Presentation] {
+        &self.presentations
+    }
+
+    pub(crate) fn into_parts(self) -> (Vec<Presentation>, Option<GpuError>) {
+        (self.presentations, self.refusal)
+    }
+}
+
 /// The host executor a runtime `Session` drives. Object-safe so the runtime holds `&mut dyn GpuExecutor`
 /// and both a pure CPU reference executor and a wgpu executor implement the same contract.
 ///
 /// The runtime guarantees ordering: a batch reaches [`execute`](GpuExecutor::execute) only *after* it has
 /// been fully validated (shape/limits) and accounted (residency charged), so an executor never has to
-/// re-validate limits and a rejected frame never partially mutates native state.
+/// re-validate limits. [`Execution::partial`] commits every successfully executed command while reporting
+/// a nonfatal refusal; `Err` is a fatal batch failure and the runtime atomically rolls resources back.
 pub trait GpuExecutor {
     /// The capability descriptor this executor advertises; the runtime negotiates a guest's
     /// [`FeatureRequest`](crate::protocol::model::capability::FeatureRequest) against it before any
@@ -46,12 +91,14 @@ pub trait GpuExecutor {
     /// Execute a validated, accounted batch against the runtime-owned `resources`. The executor inserts
     /// its native object behind each created id and removes it on destroy (lifecycle errors surface as
     /// typed [`GpuError`](crate::protocol::model::error::GpuError)s from the resource tables), records
-    /// encoder work on `Submit`, and returns one [`Presentation`] per `Present` command in order.
+    /// encoder work on `Submit`, and returns one [`Presentation`] per `Present` command in order. Return
+    /// [`Execution::partial`] after continuing past a nonfatal operation refusal. Reserve `Err` for an
+    /// outcome whose resource and accounting state must be rolled back atomically.
     fn execute(
         &mut self,
         resources: &mut SessionResources,
         batch: &[Cmd],
-    ) -> Result<Vec<Presentation>>;
+    ) -> Result<Execution>;
 
     /// Block until timeline fence `fence` reaches `value`. Serves the `CommandSink::wait` path (an
     /// out-of-band wait not carried inside a command batch); `resources` is passed so the executor can

@@ -13,7 +13,7 @@ use hl_gpu::protocol::model::capability::{shader_payload, ALL_COMMANDS, COLOR_FO
 use hl_gpu::protocol::model::command::*;
 use hl_gpu::protocol::model::descriptor::*;
 use hl_gpu::protocol::model::enums::*;
-use hl_gpu::transport::model::header::ACK_OK;
+use hl_gpu::transport::model::header::{RefusalKind, ACK_OK, ACK_PARTIAL};
 use hl_gpu::{
     serve_connection, Capabilities, Cmd, CommandSink, FeatureRequest, RecordingSink,
     RemoteCommandSink, Surface, WIRE_VERSION,
@@ -233,6 +233,109 @@ fn a_failure_ack_makes_submit_return_err() {
     );
     drop(sink);
     server.join().unwrap();
+}
+
+#[test]
+fn server_and_client_preserve_a_partial_refusal_on_the_wire() {
+    let sock = TempSock::new("partial-verdict");
+    let listener = UnixListener::bind(&sock.0).unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let caps = Capabilities::permissive_fixture("host");
+        serve_connection(&stream, &caps, |_header, _batch: &[Cmd]| {
+            hl_gpu::transport::Verdict::for_error(&hl_gpu::GpuError::Partial(Box::new(
+                hl_gpu::GpuError::UnknownId {
+                    kind: "texture",
+                    id: 999,
+                },
+            )))
+        })
+        .unwrap();
+    });
+
+    let mut sink = RemoteCommandSink::new(sock.path());
+    let refused = sink
+        .submit(&[Cmd::CreateFence(1)])
+        .expect_err("a partial commit remains a reported refusal");
+    assert_eq!(
+        refused,
+        hl_gpu::GpuError::Partial(Box::new(hl_gpu::GpuError::Transport(
+            hl_gpu::TransportError::Rejected {
+                phase: hl_gpu::TransportPhase::Acknowledgement,
+                acknowledgement: ACK_PARTIAL | RefusalKind::UnknownId.ack(),
+            },
+        )))
+    );
+    drop(sink);
+    server.join().unwrap();
+}
+
+#[test]
+fn partial_refusal_is_reported_and_replayed_as_committed_residency() {
+    use std::io::Write;
+
+    fn handshake_then_frame(stream: &mut UnixStream, caps: &Capabilities) -> Vec<u8> {
+        hl_gpu::transport::adapter::unix::Connection::new(stream)
+            .write_handshake(caps)
+            .unwrap();
+        let mut header = [0u8; 16];
+        stream.read_exact(&mut header).unwrap();
+        let len = u32::from_le_bytes(header[12..16].try_into().unwrap()) as usize;
+        let mut body = vec![0u8; len];
+        stream.read_exact(&mut body).unwrap();
+        body
+    }
+
+    let sock = TempSock::new("partial");
+    let listener = UnixListener::bind(&sock.0).unwrap();
+    let caps = Capabilities::permissive_fixture("host");
+    let (closed_tx, closed_rx) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let (mut first, _) = listener.accept().unwrap();
+        let first_body = handshake_then_frame(&mut first, &caps);
+        first
+            .write_all(&[ACK_PARTIAL | RefusalKind::UnknownId.ack()])
+            .unwrap();
+        drop(first);
+        closed_tx.send(()).unwrap();
+
+        let (mut second, _) = listener.accept().unwrap();
+        let recovered = handshake_then_frame(&mut second, &caps);
+        second.write_all(&[ACK_OK]).unwrap();
+        (first_body, recovered)
+    });
+
+    let upload = vec![Cmd::CreateBuffer(
+        4,
+        BufferDesc {
+            size: 4,
+            usage: buffer_usage::COPY_DST,
+            label: "partial-resident".into(),
+        },
+    )];
+    let mut sink = RemoteCommandSink::new(sock.path());
+    let error = sink
+        .submit(&upload)
+        .expect_err("partial execution must still surface the refusal");
+    assert_eq!(
+        error,
+        hl_gpu::GpuError::Partial(Box::new(hl_gpu::GpuError::Transport(
+            hl_gpu::TransportError::Rejected {
+            phase: hl_gpu::TransportPhase::Acknowledgement,
+            acknowledgement: ACK_PARTIAL | RefusalKind::UnknownId.ack(),
+            },
+        )))
+    );
+    closed_rx.recv().unwrap();
+    sink.submit(&[Cmd::DestroyBuffer(4)])
+        .expect("the committed upload must replay before dependent work");
+
+    let (first_body, recovered) = server.join().unwrap();
+    assert_eq!(hl_gpu::Decoder::stream(&first_body).unwrap(), upload);
+    assert_eq!(
+        hl_gpu::Decoder::stream(&recovered).unwrap(),
+        [upload, vec![Cmd::DestroyBuffer(4)]].concat()
+    );
 }
 
 #[test]

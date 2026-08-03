@@ -31,7 +31,6 @@
 use hl_gpu::protocol::model::descriptor::BufferDesc;
 use hl_gpu::protocol::model::enums::buffer_usage;
 use hl_gpu::runtime::model::resources::SessionResources;
-use hl_gpu::runtime::port::executor::Presentation;
 use hl_gpu::{
     Capabilities, Cmd, CpuExecutor, FakeClock, FenceId, GlobalLedger, GpuError, GpuExecutor,
     Limits, Result, Session,
@@ -54,15 +53,21 @@ impl GpuExecutor for PanicMidBatch {
         &mut self,
         resources: &mut SessionResources,
         batch: &[Cmd],
-    ) -> Result<Vec<Presentation>> {
+    ) -> Result<hl_gpu::Execution> {
         let mut presentations = Vec::new();
         for command in batch {
             if matches!(command, Cmd::CreateBuffer(PANIC_ID, _)) {
                 panic!("executor panicked mid-batch (stand-in for a backend panic)");
             }
-            presentations.extend(self.0.execute(resources, std::slice::from_ref(command))?);
+            presentations.extend(
+                self.0
+                    .execute(resources, std::slice::from_ref(command))?
+                    .presentations()
+                    .iter()
+                    .copied(),
+            );
         }
-        Ok(presentations)
+        Ok(hl_gpu::Execution::accepted(presentations))
     }
 
     fn wait(&mut self, resources: &mut SessionResources, fence: FenceId, value: u64) -> Result<()> {

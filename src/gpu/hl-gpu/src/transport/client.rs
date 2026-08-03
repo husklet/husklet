@@ -389,6 +389,17 @@ impl RemoteCommandSink {
                     self.residency.append(current);
                     return Ok(());
                 }
+                partial if crate::transport::model::header::is_partial_ack(partial) => {
+                    self.residency_reset = false;
+                    self.residency.append(current);
+                    hl_log::hl_count!(hl_log::tag::TRANSPORT, "partial_refusals");
+                    return Err(GpuError::Partial(Box::new(GpuError::Transport(
+                        TransportError::Rejected {
+                            phase: TransportPhase::Acknowledgement,
+                            acknowledgement: partial,
+                        },
+                    ))));
+                }
                 // The executor NACKed this frame (replay failed / surface missing). Surface it as an error
                 // rather than letting the guest commit a stale or partly-rendered frame as if it presented.
                 nack => {

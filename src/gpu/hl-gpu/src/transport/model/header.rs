@@ -16,6 +16,14 @@ pub const ACK_OK: u8 = 1;
 /// Still the value an older host sends for every refusal, and still the value a newer host sends when it
 /// has no better classification, so it must keep meaning "refused, reason unstated" forever.
 pub const ACK_FAIL: u8 = 0;
+/// Bit marking a refusal whose successful commands were committed. The low seven bits retain the
+/// [`RefusalKind`] code. This changed residency semantics at wire version 20; exact-version negotiation
+/// prevents an older guest from discarding state that the host committed.
+pub const ACK_PARTIAL: u8 = 0x80;
+
+pub fn is_partial_ack(ack: u8) -> bool {
+    ack & ACK_PARTIAL != 0
+}
 
 // ---- classified refusals ------------------------------------------------------------------------
 //
@@ -84,7 +92,7 @@ impl RefusalKind {
     /// rather than an error: a future host may classify more finely than this guest understands, and the
     /// refusal is still a refusal.
     pub fn from_ack(ack: u8) -> Self {
-        match ack {
+        match ack & !ACK_PARTIAL {
             ACK_UNSUPPORTED => Self::Unsupported,
             ACK_RESOURCE_LIMIT => Self::ResourceLimit,
             ACK_INVALID => Self::Invalid,
@@ -131,6 +139,7 @@ impl RefusalKind {
             // A TIMING refusal, and now the only kind on this wire that a guest could recover from by
             // waiting rather than by sending something different.
             E::MappedElsewhere { .. } => Self::MappedElsewhere,
+            E::Partial(error) => Self::for_error(error),
             E::Decode(_) | E::Transport(_) | E::Panicked(_) => Self::Unstated,
         }
     }
@@ -210,6 +219,14 @@ mod refusal_tests {
             );
             assert_ne!(sent.ack(), ACK_OK, "a refusal must never encode as success");
         }
+    }
+
+    #[test]
+    fn a_partial_ack_preserves_both_commit_state_and_refusal_class() {
+        let ack = ACK_PARTIAL | RefusalKind::UnknownId.ack();
+        assert!(is_partial_ack(ack));
+        assert_eq!(RefusalKind::from_ack(ack), RefusalKind::UnknownId);
+        assert_ne!(ack, ACK_OK);
     }
 
     /// A failure that is NOT a refusal stays unstated, so a guest keeps treating it as terminal. Handing
