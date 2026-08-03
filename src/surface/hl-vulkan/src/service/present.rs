@@ -16,7 +16,6 @@ use crate::model::queue::{
     ImageState, SurfaceCapabilities, SurfaceFormat, SurfaceRec, SwapImage, SwapchainRec,
     COMPOSITE_ALPHA_OPAQUE_BIT, CURRENT_EXTENT_UNDEFINED, SURFACE_IMAGE_USAGE,
     SURFACE_TRANSFORM_IDENTITY_BIT, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, VK_PRESENT_MODE_FIFO_KHR,
-    VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_MAILBOX_KHR,
 };
 use crate::*;
 use hl_gpu::protocol::model::command::Enc;
@@ -75,16 +74,11 @@ pub fn surface_formats() -> Vec<SurfaceFormat> {
     .collect()
 }
 
-/// `vkGetPhysicalDeviceSurfacePresentModesKHR` — the supported present modes. Every present lowers to the
-/// same `Cmd::Present` (the compositor paces it), so FIFO/MAILBOX/IMMEDIATE differ only in the pacing the
-/// app may assume — all three are honestly satisfiable. Advertising FIFO alone made apps that default to
-/// MAILBOX (vkmark) abort before their first frame.
+/// `vkGetPhysicalDeviceSurfacePresentModesKHR` — FIFO is the only modeled pacing contract. MAILBOX and
+/// IMMEDIATE require distinct queueing/replacement behavior; accepting them while lowering every frame to
+/// the same compositor operation would let applications rely on semantics the implementation does not have.
 pub fn surface_present_modes() -> Vec<i32> {
-    vec![
-        VK_PRESENT_MODE_FIFO_KHR,
-        VK_PRESENT_MODE_MAILBOX_KHR,
-        VK_PRESENT_MODE_IMMEDIATE_KHR,
-    ]
+    vec![VK_PRESENT_MODE_FIFO_KHR]
 }
 
 /// The application-controlled part of `VkSwapchainCreateInfoKHR`. Keeping validation here makes the
@@ -92,6 +86,8 @@ pub fn surface_present_modes() -> Vec<i32> {
 /// policy in the C ABI shim.
 #[derive(Clone, Copy, Debug)]
 pub struct SwapchainConfig {
+    pub application_surface: VkSurfaceKHR,
+    pub application_surface_live: bool,
     pub flags: u32,
     pub min_image_count: u32,
     pub image_format: u32,
@@ -131,8 +127,15 @@ pub fn validate_swapchain(dev: &Device, config: SwapchainConfig) -> Result<()> {
         1 => config.queue_family_index_count > 1 && config.queue_family_indices_valid,
         _ => false,
     };
-    let old_valid = config.old_swapchain == 0 || dev.swapchains.contains_key(&config.old_swapchain);
-    if config.flags == 0
+    let old_valid = config.old_swapchain == 0
+        || dev
+            .swapchains
+            .get(&config.old_swapchain)
+            .is_some_and(|old| {
+                !old.retired && old.application_surface == config.application_surface
+            });
+    if config.application_surface_live
+        && config.flags == 0
         && count_valid
         && extent_valid
         && format_valid
@@ -202,6 +205,29 @@ pub fn create_swapchain(
     surface: VkSurfaceKHR,
     image_count: u32,
 ) -> Result<VkSwapchainKHR> {
+    create_swapchain_for_surface(dev, sink, surface, surface, image_count, 0)
+}
+
+/// Create a swapchain associated with the application-visible surface and optionally replace an active
+/// chain. The old chain is retired only after the replacement and all of its images are live.
+pub fn create_swapchain_for_surface(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    surface: VkSurfaceKHR,
+    application_surface: VkSurfaceKHR,
+    image_count: u32,
+    old_swapchain: VkSwapchainKHR,
+) -> Result<VkSwapchainKHR> {
+    if old_swapchain != 0
+        && !dev
+            .swapchains
+            .get(&old_swapchain)
+            .is_some_and(|old| !old.retired && old.application_surface == application_surface)
+    {
+        return Err(GpuError::Invalid(
+            "vkCreateSwapchainKHR: old swapchain is retired or belongs to another surface",
+        ));
+    }
     let (width, height, format) = {
         let s = dev.surfaces.get(&surface).ok_or(GpuError::Invalid(
             "vkCreateSwapchainKHR: unknown VkSurfaceKHR",
@@ -292,14 +318,24 @@ pub fn create_swapchain(
         });
     }
     let handle = dev.alloc_handle();
+    if old_swapchain != 0 {
+        // Validated before allocation and the swapchain table has not been mutated since. All fallible
+        // replacement work is complete, so retirement and insertion below form the infallible commit.
+        dev.swapchains
+            .get_mut(&old_swapchain)
+            .expect("validated old swapchain remains live until replacement commit")
+            .retired = true;
+    }
     dev.swapchains.insert(
         handle,
         SwapchainRec {
+            application_surface,
             surface,
             width,
             height,
             format,
             images,
+            retired: false,
             acquire_cursor: 0,
         },
     );
@@ -376,6 +412,11 @@ impl Device {
                 "vkAcquireNextImageKHR: unknown VkSwapchainKHR",
             ))?;
         let count = sc.images.len();
+        if sc.retired {
+            return Err(GpuError::Invalid(
+                "vkAcquireNextImageKHR: swapchain is retired",
+            ));
+        }
         if count == 0 {
             return Err(GpuError::Invalid(
                 "vkAcquireNextImageKHR: swapchain has no images",
@@ -417,6 +458,11 @@ pub fn queue_present(
             .ok_or(GpuError::Invalid(
                 "vkQueuePresentKHR: image index out of range",
             ))?;
+        if img.state != ImageState::Acquired {
+            return Err(GpuError::Invalid(
+                "vkQueuePresentKHR: image was not acquired",
+            ));
+        }
         (sc.surface, img.ir_texture_id)
     };
     let surface = dev

@@ -23,6 +23,14 @@ pub extern "C" fn vkCreateSwapchainKHR(
     // window (captured at `vkCreateWaylandSurfaceKHR` under `ci.surface`) onto the swapchain so a present
     // can marshal the readback onto the app's own `wl_surface`.
     StateStore::with(|s| {
+        let surface_status = application_surface_status(&s.surfaces, ci.surface);
+        if surface_status != VK_SUCCESS {
+            return surface_status;
+        }
+        let window = s.wayland_surfaces.get(&ci.surface).copied();
+        let presenter_id = window
+            .map(|window| PresenterId::Wayland(window.surface))
+            .unwrap_or(PresenterId::Surface(ci.surface));
         let queue_family_indices_valid = if ci.image_sharing_mode == 1 {
             if ci.queue_family_index_count <= 1 || ci.p_queue_family_indices.is_null() {
                 false
@@ -42,6 +50,8 @@ pub extern "C" fn vkCreateSwapchainKHR(
             true
         };
         let config = present::SwapchainConfig {
+            application_surface: ci.surface,
+            application_surface_live: s.surfaces.contains(&ci.surface),
             flags: ci.flags,
             min_image_count: ci.min_image_count,
             image_format: ci.image_format as u32,
@@ -65,10 +75,9 @@ pub extern "C" fn vkCreateSwapchainKHR(
                 return Status::from_error(&error);
             }
         }
-        let window = s.wayland_surfaces.get(&ci.surface).copied();
-        let presenter_id = window
-            .map(|window| PresenterId::Wayland(window.surface))
-            .unwrap_or(PresenterId::Surface(ci.surface));
+        if !old_presenter_matches(&s.presenters, ci.old_swapchain, presenter_id) {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
         let mut hard_error = None;
         s.presenters.ensure(presenter_id, || {
             let Some(window) = window else {
@@ -124,7 +133,14 @@ pub extern "C" fn vkCreateSwapchainKHR(
         };
         let r = (|| {
             let surface = Swapchain::create_surface(dev, sink, ci, token)?;
-            present::create_swapchain(dev, sink, surface, ci.min_image_count)
+            present::create_swapchain_for_surface(
+                dev,
+                sink,
+                surface,
+                ci.surface,
+                ci.min_image_count,
+                ci.old_swapchain,
+            )
         })();
         match r {
             Ok(h) => {
@@ -137,6 +153,22 @@ pub extern "C" fn vkCreateSwapchainKHR(
             Err(e) => Status::from_error(&e),
         }
     })
+}
+
+fn application_surface_status(live: &std::collections::HashSet<u64>, surface: u64) -> VkResult {
+    if live.contains(&surface) {
+        VK_SUCCESS
+    } else {
+        VK_ERROR_SURFACE_LOST_KHR
+    }
+}
+
+fn old_presenter_matches(
+    presenters: &crate::state::Presenters,
+    old_swapchain: u64,
+    target: PresenterId,
+) -> bool {
+    old_swapchain == 0 || presenters.surface(old_swapchain) == Some(target)
 }
 
 /// Create the GPU surface a swapchain presents through (extent/format from the swapchain create info).
@@ -495,6 +527,30 @@ mod tests {
 
     fn plane() -> (Vec<u8>, u32, u32) {
         (vec![0xFFu8; 16], 2, 2)
+    }
+
+    #[test]
+    fn swapchain_creation_rejects_a_dead_application_surface() {
+        let live = std::collections::HashSet::from([0x5000]);
+        assert_eq!(application_surface_status(&live, 0x5000), VK_SUCCESS);
+        assert_eq!(
+            application_surface_status(&live, 0x5001),
+            VK_ERROR_SURFACE_LOST_KHR
+        );
+    }
+
+    #[test]
+    fn replacement_requires_the_old_presenter_to_own_the_same_surface() {
+        let mut presenters = crate::state::Presenters::new();
+        let first = PresenterId::Surface(0x5000);
+        let foreign = PresenterId::Surface(0x5001);
+        presenters.ensure(first, || None);
+        presenters.bind(7, first);
+
+        assert!(old_presenter_matches(&presenters, 0, foreign));
+        assert!(old_presenter_matches(&presenters, 7, first));
+        assert!(!old_presenter_matches(&presenters, 7, foreign));
+        assert!(!old_presenter_matches(&presenters, 8, first));
     }
 
     #[test]
