@@ -33,6 +33,24 @@ fn unpack_row_length_alignment_and_skips_select_the_exact_rectangle() {
 }
 
 #[test]
+fn three_dimensional_unpack_layout_selects_each_requested_image() {
+    let store = PixelStore {
+        unpack_alignment: 1,
+        unpack_row_length: 2,
+        unpack_image_height: 2,
+        unpack_skip_images: 1,
+        ..PixelStore::default()
+    };
+    let upload = Upload::new_3d(GL_RED, GL_UNSIGNED_BYTE, 1, 1, 2, store).unwrap();
+    let source = [9, 9, 9, 9, 10, 0, 0, 0, 20];
+    assert_eq!(upload.source_len(), source.len());
+    assert_eq!(
+        upload.rgba8(&source).unwrap(),
+        [10, 0, 0, 255, 20, 0, 0, 255]
+    );
+}
+
+#[test]
 fn short_or_unsupported_uploads_fail_without_partial_pixels() {
     let upload = Upload::new(GL_RGBA, GL_UNSIGNED_BYTE, 2, 1, PixelStore::default()).unwrap();
     assert!(upload.rgba8(&[0; 7]).is_none());

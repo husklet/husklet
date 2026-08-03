@@ -16,8 +16,10 @@ pub struct Upload {
     channels: usize,
     width: usize,
     height: usize,
+    depth: usize,
     source_bpp: usize,
     stride: usize,
+    image_stride: usize,
     start: usize,
     source_len: usize,
 }
@@ -30,8 +32,23 @@ impl Upload {
         height: i32,
         store: PixelStore,
     ) -> Option<Self> {
-        let (width, height) = (usize::try_from(width).ok()?, usize::try_from(height).ok()?);
-        if width == 0 || height == 0 {
+        Self::new_3d(format, type_, width, height, 1, store)
+    }
+
+    pub fn new_3d(
+        format: u32,
+        type_: u32,
+        width: i32,
+        height: i32,
+        depth: i32,
+        store: PixelStore,
+    ) -> Option<Self> {
+        let (width, height, depth) = (
+            usize::try_from(width).ok()?,
+            usize::try_from(height).ok()?,
+            usize::try_from(depth).ok()?,
+        );
+        if width == 0 || height == 0 || depth == 0 {
             return None;
         }
         let channels: usize = match format {
@@ -68,11 +85,19 @@ impl Upload {
         let alignment = store.unpack_alignment.max(1) as usize;
         let raw_row = row_pixels.checked_mul(source_bpp)?;
         let stride = raw_row.checked_add(alignment - 1)? / alignment * alignment;
+        let image_rows = if store.unpack_image_height > 0 {
+            store.unpack_image_height as usize
+        } else {
+            height
+        };
+        let image_stride = image_rows.checked_mul(stride)?;
         let start = (store.unpack_skip_rows as usize)
             .checked_mul(stride)?
-            .checked_add((store.unpack_skip_pixels as usize).checked_mul(source_bpp)?)?;
-        let source_len = (height - 1)
-            .checked_mul(stride)?
+            .checked_add((store.unpack_skip_pixels as usize).checked_mul(source_bpp)?)?
+            .checked_add((store.unpack_skip_images as usize).checked_mul(image_stride)?)?;
+        let source_len = (depth - 1)
+            .checked_mul(image_stride)?
+            .checked_add((height - 1).checked_mul(stride)?)?
             .checked_add(width.checked_mul(source_bpp)?)?
             .checked_add(start)?;
         Some(Self {
@@ -81,8 +106,10 @@ impl Upload {
             channels,
             width,
             height,
+            depth,
             source_bpp,
             stride,
+            image_stride,
             start,
             source_len,
         })
@@ -149,14 +176,20 @@ impl Upload {
         if !self.reads_as_float() {
             return None;
         }
-        let mut out =
-            Vec::with_capacity(self.width.checked_mul(self.height)?.checked_mul(texel.bytes())?);
-        for y in 0..self.height {
-            let begin = self.start + y * self.stride;
-            let row = &source[begin..begin + self.width * self.source_bpp];
-            for pixel in row.chunks_exact(self.source_bpp) {
-                let rgba = self.rgba_f32(pixel)?;
-                texel.encode(rgba, &mut out);
+        let mut out = Vec::with_capacity(
+            self.width
+                .checked_mul(self.height)?
+                .checked_mul(self.depth)?
+                .checked_mul(texel.bytes())?,
+        );
+        for z in 0..self.depth {
+            for y in 0..self.height {
+                let begin = self.start + z * self.image_stride + y * self.stride;
+                let row = &source[begin..begin + self.width * self.source_bpp];
+                for pixel in row.chunks_exact(self.source_bpp) {
+                    let rgba = self.rgba_f32(pixel)?;
+                    texel.encode(rgba, &mut out);
+                }
             }
         }
         Some(out)
@@ -233,11 +266,17 @@ impl Upload {
             return None;
         }
         let bpt = self.destination_bpt();
-        let mut out = Vec::with_capacity(self.width.checked_mul(self.height)?.checked_mul(bpt)?);
-        for y in 0..self.height {
-            let begin = self.start + y * self.stride;
-            let row = &source[begin..begin + self.width * self.source_bpp];
-            for pixel in row.chunks_exact(self.source_bpp) {
+        let mut out = Vec::with_capacity(
+            self.width
+                .checked_mul(self.height)?
+                .checked_mul(self.depth)?
+                .checked_mul(bpt)?,
+        );
+        for z in 0..self.depth {
+            for y in 0..self.height {
+                let begin = self.start + z * self.image_stride + y * self.stride;
+                let row = &source[begin..begin + self.width * self.source_bpp];
+                for pixel in row.chunks_exact(self.source_bpp) {
                 // An INTEGER texel is stored RAW at its own channel count: the value is a number, not a
                 // colour, so it is neither normalized nor padded out to four channels. A three-channel
                 // integer format has no IR storage and still takes the RGBA8 path below.
@@ -260,7 +299,7 @@ impl Upload {
                     out.extend_from_slice(&narrowed);
                     continue;
                 }
-                match self.format {
+                    match self.format {
                     GL_RED | GL_RED_INTEGER | GL_DEPTH_COMPONENT => {
                         out.extend_from_slice(&[pixel[0], 0, 0, 0xff])
                     }
@@ -280,6 +319,7 @@ impl Upload {
                     GL_RGBA => out.extend_from_slice(pixel),
                     GL_BGRA_EXT => out.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]),
                     _ => unreachable!(),
+                    }
                 }
             }
         }
