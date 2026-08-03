@@ -253,6 +253,12 @@ pub struct VkBaseOutStructure {
     pub s_type: i32,
     pub p_next: *mut VkBaseOutStructure,
 }
+pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_VIEW_IMAGE_FORMAT_INFO_EXT:i32=1_000_170_000;
+pub const VK_STRUCTURE_TYPE_FILTER_CUBIC_IMAGE_VIEW_IMAGE_FORMAT_PROPERTIES_EXT:i32=1_000_170_001;
+#[repr(C)]
+pub struct VkPhysicalDeviceImageViewImageFormatInfoEXT { pub s_type:i32, pub p_next:*const c_void, pub image_view_type:i32 }
+#[repr(C)]
+pub struct VkFilterCubicImageViewImageFormatPropertiesEXT { pub s_type:i32, pub p_next:*mut c_void, pub filter_cubic:u32, pub filter_cubic_minmax:u32 }
 
 #[repr(C)]
 pub struct VkPhysicalDeviceProperties2 {

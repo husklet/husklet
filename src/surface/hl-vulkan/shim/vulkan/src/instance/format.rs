@@ -232,7 +232,7 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties2(
     else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    vkGetPhysicalDeviceImageFormatProperties(
+    let result=vkGetPhysicalDeviceImageFormatProperties(
         physical_device,
         info.format,
         info.image_type,
@@ -240,7 +240,27 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties2(
         info.usage,
         info.flags,
         &mut out.image_format_properties as *mut _ as *mut c_void,
-    )
+    );
+    if result != VK_SUCCESS { return result; }
+    let mut view_2d=false;
+    let mut input=info.p_next as *const VkBaseInStructure;
+    while let Some(node)=unsafe{input.as_ref()} {
+        if node.s_type==VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_VIEW_IMAGE_FORMAT_INFO_EXT {
+            let view=unsafe{&*(input as *const VkPhysicalDeviceImageViewImageFormatInfoEXT)};
+            view_2d=view.image_view_type==1;
+        }
+        input=node.p_next;
+    }
+    let cubic=view_2d && Format(info.format as u32).features().optimal_tiling & format_feature::SAMPLED_IMAGE_FILTER_CUBIC != 0;
+    let mut output=out.p_next as *mut VkBaseOutStructure;
+    while let Some(node)=unsafe{output.as_mut()} {
+        if node.s_type==VK_STRUCTURE_TYPE_FILTER_CUBIC_IMAGE_VIEW_IMAGE_FORMAT_PROPERTIES_EXT {
+            let props=unsafe{&mut *(output as *mut VkFilterCubicImageViewImageFormatPropertiesEXT)};
+            props.filter_cubic=u32::from(cubic); props.filter_cubic_minmax=0;
+        }
+        output=node.p_next;
+    }
+    result
 }
 
 /// `vkGetPhysicalDeviceImageFormatProperties2KHR` — the `VK_KHR_get_physical_device_properties2` alias.

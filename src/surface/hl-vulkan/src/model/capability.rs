@@ -85,6 +85,10 @@ pub const DEVICE_EXTENSIONS: &[ExtensionProp] = &[
         name: "VK_KHR_dynamic_rendering",
         spec_version: 1,
     },
+    ExtensionProp {
+        name: "VK_EXT_filter_cubic",
+        spec_version: 3,
+    },
 ];
 
 /// `VkFormatFeatureFlagBits` (stable bit values from vk.xml) — the per-format capability bits reported
@@ -103,6 +107,7 @@ pub mod format_feature {
     pub const BLIT_SRC: u32 = 0x0000_0400;
     pub const BLIT_DST: u32 = 0x0000_0800;
     pub const SAMPLED_IMAGE_FILTER_LINEAR: u32 = 0x0000_1000;
+    pub const SAMPLED_IMAGE_FILTER_CUBIC: u32 = 0x0000_2000;
     pub const TRANSFER_SRC: u32 = 0x0000_4000;
     pub const TRANSFER_DST: u32 = 0x0000_8000;
     /// `VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_DEPTH_COMPARISON_BIT`, available only in 64-bit flags2.
@@ -313,7 +318,7 @@ impl Format {
             | f::BLIT_DST
             | f::TRANSFER_SRC
             | f::TRANSFER_DST;
-        let optimal = match self.class() {
+        let mut optimal = match self.class() {
             Some(FormatClass::NormalizedColor) => {
                 COLOR_BASE
                     | f::COLOR_ATTACHMENT_BLEND
@@ -366,6 +371,9 @@ impl Format {
             }
             None => 0,
         };
+        if matches!(self.class(), Some(FormatClass::NormalizedColor | FormatClass::FloatColor | FormatClass::SampledColor | FormatClass::BlitColor)) {
+            optimal |= f::SAMPLED_IMAGE_FILTER_CUBIC;
+        }
         // Buffer features are INDEPENDENT bits, not alternatives. The previous `match` was exclusive, so
         // a format that advertised VERTEX_BUFFER could not also advertise texel-buffer use and vice
         // versa, which is not how VkFormatProperties::bufferFeatures works.
