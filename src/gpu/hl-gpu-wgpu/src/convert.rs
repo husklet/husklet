@@ -42,7 +42,12 @@ impl Format {
             | TextureFormat::A4r4g4b4Unorm
             | TextureFormat::A4b4g4r4Unorm => TextureFormat::B4g4r4a4Unorm,
             TextureFormat::R5g5b5a1Unorm => TextureFormat::A1r5g5b5Unorm,
-            _ => TextureFormat::Rgba16Float,
+            // R10X6 is normalized fixed point.  A normalized backing preserves its clamp, interpolation,
+            // and sampling domain; the previous half-float backing introduced a second, unrelated rounding
+            // system.  This still is not sufficient to advertise render-target support: fixed-function
+            // blending stores 16 bits between draws, while Vulkan requires ten (see the semantic proofs
+            // below).
+            _ => TextureFormat::Rgba16Unorm,
         }
     }
 
@@ -148,7 +153,7 @@ impl Format {
             | TextureFormat::A4r4g4b4Unorm
             | TextureFormat::A4b4g4r4Unorm => W::B4g4r4a4Unorm,
             TextureFormat::R5g5b5a1Unorm => W::A1r5g5b5Unorm,
-            TextureFormat::R10x6g10x6b10x6a10x6Unorm => W::Rgba16Float,
+            TextureFormat::R10x6g10x6b10x6a10x6Unorm => W::Rgba16Unorm,
             TextureFormat::Rgba16Float => W::Rgba16Float,
             TextureFormat::Rgba16Unorm => W::Rgba16Unorm,
             TextureFormat::Rgba32Float => W::Rgba32Float,
@@ -345,7 +350,7 @@ mod packed_format_tests {
             (
                 TextureFormat::R10x6g10x6b10x6a10x6Unorm,
                 &[0xc0, 0x55, 0x80, 0xaa, 0x40, 0x33, 0x00, 0xff],
-                wgpu::TextureFormat::Rgba16Float,
+                wgpu::TextureFormat::Rgba16Unorm,
                 8,
             ),
             (
@@ -382,6 +387,57 @@ mod packed_format_tests {
         assert!(!format.needs_transfer_conversion());
         assert_eq!(format.native().target_pixel_byte_cost(), Some(8));
         assert_eq!(format.native().target_component_alignment(), Some(4));
+    }
+
+    fn quantize(value: f64, levels: f64) -> f64 {
+        (value.clamp(0.0, 1.0) * levels).round() / levels
+    }
+
+    #[test]
+    fn r10x6_transfer_uses_normalized_storage_and_roundtrips_every_code() {
+        let format = Format::from(TextureFormat::R10x6g10x6b10x6a10x6Unorm);
+        assert_eq!(format.native(), wgpu::TextureFormat::Rgba16Unorm);
+        for code in 0_u16..=1023 {
+            let word = (code << 6).to_le_bytes();
+            let logical = [word, word, word, word].concat();
+            let native = format.logical_to_native(&logical).unwrap();
+            assert_eq!(native.len(), 8);
+            assert_eq!(format.native_to_logical(&native).unwrap(), logical, "code {code}");
+        }
+    }
+
+    #[test]
+    fn r10x6_clear_and_single_store_have_a_lossless_ten_bit_projection() {
+        // A clear or isolated fragment store may land in 16-bit UNORM and then be projected to ten bits:
+        // every value already representable by the logical attachment survives that projection exactly.
+        for code in 0_u16..=1023 {
+            let logical = f64::from(code) / 1023.0;
+            let native = quantize(logical, 65535.0);
+            assert_eq!(quantize(native, 1023.0), logical, "code {code}");
+        }
+    }
+
+    #[test]
+    fn r10x6_blend_requires_quantization_after_each_draw() {
+        // Draw one stores `destination`; draw two additively blends `source`.  A genuine R10X6 attachment
+        // quantizes the destination after draw one.  An RGBA16Unorm shadow retains six extra bits, and even
+        // quantizing at pass end cannot recover the required result.
+        let destination = 0.29552093575793315;
+        let source = 0.5116272819654833;
+        let required = quantize(quantize(destination, 1023.0) + source, 1023.0);
+        let shadow = quantize(quantize(quantize(destination, 65535.0) + source, 65535.0), 1023.0);
+        assert_eq!(required, 825.0 / 1023.0);
+        assert_eq!(shadow, 826.0 / 1023.0);
+        assert_ne!(shadow, required, "RGBA16Unorm alone must never justify attachment advertisement");
+    }
+
+    #[test]
+    fn r10x6_same_frame_sampling_requires_pass_end_quantization() {
+        let fragment = 0.29552093575793315;
+        let required_sample = quantize(fragment, 1023.0);
+        let shadow_sample = quantize(fragment, 65535.0);
+        assert_ne!(shadow_sample, required_sample);
+        assert_eq!(quantize(shadow_sample, 1023.0), required_sample);
     }
 
     #[test]
