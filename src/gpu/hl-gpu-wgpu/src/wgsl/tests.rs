@@ -553,3 +553,10 @@ fn scalar_geometric_overloads_are_lifted_for_naga() {
             .unwrap_or_else(|error| panic!("scalar {expression} was refused: {error}"));
     }
 }
+
+#[test]
+fn scalar_conversion_selects_fold_in_constant_initializers() {
+    let source = "#version 460\nlayout(location=0) out vec4 color;\nconst float a=float(true); const int b=int(true); const bool c=bool(1); const vec4 d=vec4(c,a,float(b),bool(0)); void main(){ color=d; }";
+    glsl_to_wgsl(source, naga::ShaderStage::Fragment, "main")
+        .unwrap_or_else(|error| panic!("constant scalar conversions were refused: {error}"));
+}

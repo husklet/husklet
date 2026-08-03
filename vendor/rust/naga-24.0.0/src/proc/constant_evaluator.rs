@@ -916,9 +916,22 @@ impl<'a> ConstantEvaluator<'a> {
                     )),
                 }
             }
-            Expression::Select { .. } => Err(ConstantEvaluatorError::NotImplemented(
-                "select built-in function".into(),
-            )),
+            Expression::Select {
+                condition,
+                accept,
+                reject,
+            } => {
+                let condition = self.check_and_get(condition)?;
+                let accept = self.check_and_get(accept)?;
+                let reject = self.check_and_get(reject)?;
+                match self.expressions[condition] {
+                    Expression::Literal(Literal::Bool(true)) => Ok(accept),
+                    Expression::Literal(Literal::Bool(false)) => Ok(reject),
+                    _ => Err(ConstantEvaluatorError::NotImplemented(
+                        "non-scalar select built-in function".into(),
+                    )),
+                }
+            }
             Expression::Relational { fun, .. } => Err(ConstantEvaluatorError::NotImplemented(
                 format!("{fun:?} built-in function"),
             )),
