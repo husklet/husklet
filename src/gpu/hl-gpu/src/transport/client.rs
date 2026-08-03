@@ -280,6 +280,11 @@ impl RemoteCommandSink {
             } else {
                 Vec::new()
             };
+            let replay_commands = if payload.is_empty() {
+                0
+            } else {
+                crate::protocol::codec::Decoder::stream(&payload)?.len()
+            };
             payload.extend_from_slice(ir);
             let peer_closed = {
                 let socket = self.sock.as_ref().expect("ensure installed socket");
@@ -336,6 +341,16 @@ impl RemoteCommandSink {
                     return Err(self.ambiguous(TransportPhase::Acknowledgement, error));
                 }
             };
+            let accepted = if crate::transport::model::header::is_partial_ack(ack) {
+                let socket = self.sock.as_ref().expect("frame socket remains installed");
+                Some(
+                    unix::Connection::new(socket)
+                        .read_partial_mask(replay_commands + current.len())
+                        .map_err(|error| self.ambiguous(TransportPhase::Acknowledgement, error))?,
+                )
+            } else {
+                None
+            };
             let ack_us = ack_started
                 .map(|started| started.elapsed().as_micros())
                 .unwrap_or_default();
@@ -391,7 +406,13 @@ impl RemoteCommandSink {
                 }
                 partial if crate::transport::model::header::is_partial_ack(partial) => {
                     self.residency_reset = false;
-                    self.residency.append(current);
+                    let accepted = accepted.expect("partial acknowledgement carries a mask");
+                    let accepted_current: Vec<Cmd> = current
+                        .iter()
+                        .zip(accepted.into_iter().skip(replay_commands))
+                        .filter_map(|(command, accepted)| accepted.then_some(command.clone()))
+                        .collect();
+                    self.residency.append(&accepted_current);
                     hl_log::hl_count!(hl_log::tag::TRANSPORT, "partial_refusals");
                     return Err(GpuError::Partial(Box::new(GpuError::Transport(
                         TransportError::Rejected {

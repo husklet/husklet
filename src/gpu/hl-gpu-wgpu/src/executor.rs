@@ -216,7 +216,8 @@ impl WgpuExecutor {
     ) -> Result<Execution> {
         let mut presents = Vec::new();
         let mut first_refusal = None;
-        for cmd in batch {
+        let mut accepted = Vec::with_capacity(batch.len());
+        for (index, cmd) in batch.iter().enumerate() {
             let outcome = (|| -> Result<()> {
                 match cmd {
                 Cmd::CreateBuffer(id, d) => {
@@ -384,11 +385,19 @@ impl WgpuExecutor {
                 if error.is_fatal() {
                     return Err(error);
                 }
+                // A partially lowered Submit flushes all successfully encoded work and schedules its
+                // completion fence before returning the refusal. It is therefore committed even though
+                // one inner operation was omitted. Other failed top-level commands made no commitment.
+                if matches!(cmd, Cmd::Submit(_)) {
+                    accepted.push(index);
+                }
                 first_refusal.get_or_insert(error);
+            } else {
+                accepted.push(index);
             }
         }
         Ok(match first_refusal {
-            Some(error) => Execution::partial(presents, error),
+            Some(error) => Execution::partial(presents, error, accepted),
             None => Execution::accepted(presents),
         })
     }

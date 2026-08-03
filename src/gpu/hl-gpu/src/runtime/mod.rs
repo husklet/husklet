@@ -42,12 +42,19 @@ use crate::protocol::model::error::Result;
 ///
 /// `negotiate` is a per-connection prelude (call it once at connect); `frame_bytes` is the encoded
 /// size of the frame the batch decoded from (checked against the negotiated frame ceiling).
-pub fn submit(
+#[derive(Debug, PartialEq, Eq)]
+pub struct SubmitOutcome {
+    pub presentations: Vec<Presentation>,
+    pub refusal: Option<crate::GpuError>,
+    pub accepted: Vec<bool>,
+}
+
+pub fn submit_outcome(
     session: &mut Session,
     exec: &mut dyn GpuExecutor,
     frame_bytes: usize,
     batch: &[Cmd],
-) -> Result<Vec<Presentation>> {
+) -> Result<SubmitOutcome> {
     // Unshared sessions cannot race a sharing transition. Keeping them out of the
     // process-wide operation lock preserves parallel submission across ordinary
     // GL/Vulkan connections while shared sessions retain ordered ownership.
@@ -77,7 +84,7 @@ pub fn submit(
                             plan = plan.preserve_owner_id();
                         }
                         retained.insert(index);
-                        releases.push((*id, plan));
+                        releases.push((index, *id, plan));
                     }
                     Some(model::session::ResourceSharing::Importer(export)) => {
                         let mut plan = exports.prepare_import_release(session.id, export)?;
@@ -87,7 +94,7 @@ pub fn submit(
                         if plan.retains_global_charge() {
                             retained.insert(index);
                         }
-                        import_releases.push((*id, plan));
+                        import_releases.push((index, *id, plan));
                     }
                     None => {}
                 }
@@ -99,13 +106,13 @@ pub fn submit(
                         let mut plan = exports.prepare_owner_release(session.id, export)?;
                         if replacement_survives { plan = plan.preserve_owner_id(); }
                         retained.insert(index);
-                        texture_releases.push((*id, plan));
+                        texture_releases.push((index, *id, plan));
                     }
                     Some(model::session::ResourceSharing::Importer(export)) => {
                         let mut plan = exports.prepare_import_release(session.id, export)?;
                         if replacement_survives { plan = plan.preserve_importer_id(); }
                         if plan.retains_global_charge() { retained.insert(index); }
-                        texture_import_releases.push((*id, plan));
+                        texture_import_releases.push((index, *id, plan));
                     }
                     None => {}
                 }
@@ -139,55 +146,69 @@ pub fn submit(
     //
     // Scope: this wraps `dispatch`, i.e. EXECUTOR work. Validation and accounting run before it and are
     // deliberately outside, so a panic in the runtime's own logic still surfaces as a panic.
-    let dispatched = service::dispatch::prepare(
+    let prepared = match service::dispatch::prepare(
         &mut session.resources,
         &session.timeline,
         session.clock.as_ref(),
         exec,
         batch,
-    );
-    // Once an abnormal abort is an ordinary `Err`, it takes the SAME rollback path as every other
-    // rejection — one place that restores the account, reached by both causes.
-    match dispatched {
-        Ok(prepared) => {
-            // No fallible work may follow this point. The prepared dispatch still owns the open resource
-            // transaction; committing it and installing the already-preflighted timeline cannot fail.
-            drop(account_operation);
-            for (id, release) in releases {
-                release.commit();
-                session.buffer_sharing.remove(&id);
-            }
-            for (id, release) in import_releases {
-                release.commit();
-                session.buffer_sharing.remove(&id);
-            }
-            for (id, release) in texture_releases {
-                release.commit();
-                session.texture_sharing.remove(&id);
-            }
-            for (id, release) in texture_import_releases {
-                release.commit();
-                session.texture_sharing.remove(&id);
-            }
-            let (presents, timeline, refusal) = prepared.commit();
-            session.timeline = timeline;
-            match refusal {
-                Some(error) => Err(crate::GpuError::Partial(Box::new(error))),
-                None => Ok(presents),
-            }
-        }
-        Err(e) => {
-            // Fatal executor failure: `dispatch` already rolled the id tables back to the pre-frame state;
-            // roll the account charge back to match so the whole submit is atomic — the connection is left
-            // exactly as before the frame (ledger + global + tables), ready for retry or later destroy.
-            // Nonfatal refusals arrive as prepared partial executions and commit in the branch above.
-            // The account operation lock excludes transfer plans, so this infallible restore swaps exactly
-            // the contribution installed above back to the previously committed snapshot.
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => {
             session
                 .account
                 .restore_ledger(ledger_before.clone(), &session.global);
-            Err(e)
+            return Err(error);
         }
+    };
+    // Once an abnormal abort is an ordinary `Err`, it takes the SAME rollback path as every other
+    // rejection — one place that restores the account, reached by both causes.
+    {
+            // No fallible work may follow this point. The prepared dispatch still owns the open resource
+            // transaction; committing it and installing the already-preflighted timeline cannot fail.
+            let (presents, timeline, refusal, accepted) = prepared.commit();
+            if refusal.is_some() {
+                session.account.restore_ledger(ledger_before.clone(), &session.global);
+                session
+                    .charge_frame_selected(batch, &retained, Some(&accepted))
+                    .expect("accepted subset was validated and precharged as part of the full batch");
+            }
+            drop(account_operation);
+            for (index, id, release) in releases {
+                if !accepted[index] { continue; }
+                release.commit();
+                session.buffer_sharing.remove(&id);
+            }
+            for (index, id, release) in import_releases {
+                if !accepted[index] { continue; }
+                release.commit();
+                session.buffer_sharing.remove(&id);
+            }
+            for (index, id, release) in texture_releases {
+                if !accepted[index] { continue; }
+                release.commit();
+                session.texture_sharing.remove(&id);
+            }
+            for (index, id, release) in texture_import_releases {
+                if !accepted[index] { continue; }
+                release.commit();
+                session.texture_sharing.remove(&id);
+            }
+            session.timeline = timeline;
+            Ok(SubmitOutcome { presentations: presents, refusal, accepted })
+    }
+}
+
+pub fn submit(
+    session: &mut Session,
+    exec: &mut dyn GpuExecutor,
+    frame_bytes: usize,
+    batch: &[Cmd],
+) -> Result<Vec<Presentation>> {
+    let outcome = submit_outcome(session, exec, frame_bytes, batch)?;
+    match outcome.refusal {
+        Some(error) => Err(crate::GpuError::Partial(Box::new(error))),
+        None => Ok(outcome.presentations),
     }
 }
 

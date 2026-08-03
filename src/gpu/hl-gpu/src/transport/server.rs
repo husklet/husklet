@@ -20,7 +20,7 @@ use crate::transport::model::readback::{
 };
 
 /// A handler's verdict for one decoded frame, mapped straight to the wire ack.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Verdict {
     /// The frame was accepted (replayed/committed) → [`ACK_OK`].
     Ack,
@@ -29,7 +29,7 @@ pub enum Verdict {
     /// instead, because the reason is otherwise destroyed here and the guest can only guess.
     Refused(RefusalKind),
     /// The named operation was refused, but successful commands in the frame were committed.
-    Partial(RefusalKind),
+    Partial { kind: RefusalKind, accepted: Vec<bool> },
 }
 
 #[allow(non_upper_case_globals)]
@@ -41,7 +41,7 @@ impl Verdict {
     pub fn for_error(error: &crate::protocol::model::error::GpuError) -> Self {
         match error {
             crate::GpuError::Partial(error) if !error.is_fatal() => {
-                Verdict::Partial(RefusalKind::for_error(error))
+                Verdict::Partial { kind: RefusalKind::for_error(error), accepted: Vec::new() }
             }
             error => Verdict::Refused(RefusalKind::for_error(error)),
         }
@@ -63,7 +63,7 @@ impl Verdict {
         match self {
             Verdict::Ack => ACK_OK,
             Verdict::Refused(kind) => kind.ack(),
-            Verdict::Partial(kind) => kind.ack() | ACK_PARTIAL,
+            Verdict::Partial { kind, .. } => kind.ack() | ACK_PARTIAL,
         }
     }
 }
@@ -421,9 +421,9 @@ fn serve_loop<H: ConnectionHandler>(
                     (Verdict::Nack, 0, decode_us, 0)
                 }
             };
-        if matches!(verdict, Verdict::Refused(_) | Verdict::Partial(_)) {
+        if matches!(verdict, Verdict::Refused(_) | Verdict::Partial { .. }) {
             hl_log::hl_count!(hl_log::tag::TRANSPORT, "nacks");
-            if matches!(verdict, Verdict::Partial(_)) {
+            if matches!(verdict, Verdict::Partial { .. }) {
                 hl_log::hl_count!(hl_log::tag::TRANSPORT, "partial_refusals");
             }
             // The guest turns this ack into DEVICE_LOST. It is the host's only chance to say a frame was
@@ -436,13 +436,23 @@ fn serve_loop<H: ConnectionHandler>(
                     frame.header.surface_id,
                     commands,
                     frame.payload.len(),
-                    matches!(verdict, Verdict::Partial(_))
+                    matches!(verdict, Verdict::Partial { .. })
                 );
             }
         }
         let ack = verdict.ack_byte();
         let ack_started = diagnostics.then(Instant::now);
         unix::Connection::new(stream).write_ack(ack)?;
+        if let Verdict::Partial { accepted, .. } = &verdict {
+            if accepted.len() != commands {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "partial mask command count mismatch"));
+            }
+            let mut bytes = vec![0u8; accepted.len().div_ceil(8)];
+            for (index, value) in accepted.iter().enumerate() {
+                if *value { bytes[index / 8] |= 1 << (index % 8); }
+            }
+            unix::Connection::new(stream).write_partial_mask(commands as u32, &bytes)?;
+        }
         let ack_write_us = ack_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();

@@ -243,12 +243,10 @@ fn server_and_client_preserve_a_partial_refusal_on_the_wire() {
         let (stream, _) = listener.accept().unwrap();
         let caps = Capabilities::permissive_fixture("host");
         serve_connection(&stream, &caps, |_header, _batch: &[Cmd]| {
-            hl_gpu::transport::Verdict::for_error(&hl_gpu::GpuError::Partial(Box::new(
-                hl_gpu::GpuError::UnknownId {
-                    kind: "texture",
-                    id: 999,
-                },
-            )))
+            hl_gpu::transport::Verdict::Partial {
+                kind: RefusalKind::UnknownId,
+                accepted: vec![true],
+            }
         })
         .unwrap();
     });
@@ -296,6 +294,8 @@ fn partial_refusal_is_reported_and_replayed_as_committed_residency() {
         first
             .write_all(&[ACK_PARTIAL | RefusalKind::UnknownId.ack()])
             .unwrap();
+        first.write_all(&2u32.to_le_bytes()).unwrap();
+        first.write_all(&[1]).unwrap();
         drop(first);
         closed_tx.send(()).unwrap();
 
@@ -305,14 +305,12 @@ fn partial_refusal_is_reported_and_replayed_as_committed_residency() {
         (first_body, recovered)
     });
 
-    let upload = vec![Cmd::CreateBuffer(
-        4,
-        BufferDesc {
+    let create = Cmd::CreateBuffer(4, BufferDesc {
             size: 4,
             usage: buffer_usage::COPY_DST,
             label: "partial-resident".into(),
-        },
-    )];
+        });
+    let upload = vec![create.clone(), Cmd::DestroyBuffer(999)];
     let mut sink = RemoteCommandSink::new(sock.path());
     let error = sink
         .submit(&upload)
@@ -334,7 +332,7 @@ fn partial_refusal_is_reported_and_replayed_as_committed_residency() {
     assert_eq!(hl_gpu::Decoder::stream(&first_body).unwrap(), upload);
     assert_eq!(
         hl_gpu::Decoder::stream(&recovered).unwrap(),
-        [upload, vec![Cmd::DestroyBuffer(4)]].concat()
+        [vec![create], vec![Cmd::DestroyBuffer(4)]].concat()
     );
 }
 

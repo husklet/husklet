@@ -32,11 +32,23 @@ impl Session {
         cmds: &[Cmd],
         retained: &HashSet<usize>,
     ) -> Result<()> {
+        self.charge_frame_selected(cmds, retained, None)
+    }
+
+    pub(crate) fn charge_frame_selected(
+        &mut self,
+        cmds: &[Cmd],
+        retained: &HashSet<usize>,
+        accepted: Option<&[bool]>,
+    ) -> Result<()> {
         let session = self;
         let current = session.account.ledger();
         let mut next_live = current.live.clone();
         let mut next = current.totals;
         for (index, cmd) in cmds.iter().enumerate() {
+            if accepted.is_some_and(|mask| !mask[index]) {
+                continue;
+            }
             if let Some((kind, id, bytes)) = cmd.create_charge()? {
                 if next_live.insert((kind, id), bytes).is_some() {
                     // The id is already live (from a prior frame, or an earlier create in this frame with no
