@@ -296,7 +296,9 @@ pub fn glsl_to_wgsl_reflect(
     let dual = crate::glsl_es::Source::new(&point_size).normalize_dual_source();
     let lowered = crate::glsl_es::Source::new(&dual).lower_switch();
     let geometric = crate::glsl_es::Source::new(&lowered).lift_scalar_geometric_builtins();
-    let truncated = crate::glsl_es::Source::new(&geometric).truncate_vector_constructors();
+    let matrix_converted =
+        crate::glsl_es::Source::new(&geometric).convert_bool_scalar_matrix_constructors();
+    let truncated = crate::glsl_es::Source::new(&matrix_converted).truncate_vector_constructors();
     let src = truncated.as_str();
     // A matrix cannot be a shader input or output in WGSL at all, so every matrix varying has to be split
     // into per-location vector slots. That pass lived only inside `normalize`, i.e. only on the ES route,

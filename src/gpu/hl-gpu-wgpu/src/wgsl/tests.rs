@@ -590,6 +590,22 @@ fn scalar_conversion_selects_fold_in_constant_initializers() {
 }
 
 #[test]
+fn deqp_scalar_to_matrix_bool_spelling_compiles() {
+    for matrix in ["mat2", "mat3", "mat4"] {
+        let source = format!("#version 460\nlayout(location=0) out vec4 color;\nvoid main(){{ bool input_value=true; {matrix} value={matrix}(input_value); color=vec4(value[0][0]); }}");
+        glsl_to_wgsl(&source, naga::ShaderStage::Fragment, "main").unwrap_or_else(|error| {
+            panic!("dEQP scalar-to-{matrix} bool conversion was refused: {error}")
+        });
+    }
+
+    let original = "void main(){ mat2 a=mat2(true); mat3 b=mat3(bool(1)); mat4 c=mat4(1.0); }";
+    let converted = crate::glsl_es::Source::new(original).convert_bool_scalar_matrix_constructors();
+    assert!(converted.contains("mat2(float(true))"), "{converted}");
+    assert!(converted.contains("mat3(float(bool(1)))"), "{converted}");
+    assert!(converted.contains("mat4(1.0)"), "{converted}");
+}
+
+#[test]
 fn constant_all_and_any_relations_fold() {
     let source = "#version 460\nlayout(location=0) out vec4 color;\nconst bool a=all(bvec3(true,true,true)); const bool b=any(bvec3(false,true,false)); void main(){ color=vec4(float(a),float(b),0,1); }";
     glsl_to_wgsl(source, naga::ShaderStage::Fragment, "main")
