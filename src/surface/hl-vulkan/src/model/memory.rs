@@ -387,6 +387,7 @@ impl VertexFormat {
             f::R16G16B16A16_SFLOAT => (Self::F16, 4, false, false),
             // 8-bit — x2/x4 only.
             f::R8_UNORM => (Self::U8, 1, true, false),
+            f::R8_SNORM => (Self::I8, 1, true, false),
             f::R8_UINT => (Self::U8, 1, false, true),
             f::R8_SINT => (Self::I8, 1, false, true),
             f::R8G8_UNORM => (Self::U8, 2, true, false),
@@ -401,6 +402,8 @@ impl VertexFormat {
             // 16-bit integer — x2/x4 only.
             f::R16_UINT => (Self::U16, 1, false, true),
             f::R16_SINT => (Self::I16, 1, false, true),
+            f::R16_UNORM => (Self::U16, 1, true, false),
+            f::R16_SNORM => (Self::I16, 1, true, false),
             f::R16G16_UNORM => (Self::U16, 2, true, false),
             f::R16G16B16A16_UNORM => (Self::U16, 4, true, false),
             f::R16G16_UINT => (Self::U16, 2, false, true),
@@ -623,6 +626,18 @@ mod vertex_format_tests {
             (2, VertexFormat::I16, true, false)
         );
         assert_eq!(
+            decode(VertexFormat(f::R8_SNORM).wire().unwrap()),
+            (1, VertexFormat::I8, true, false)
+        );
+        assert_eq!(
+            decode(VertexFormat(f::R16_UNORM).wire().unwrap()),
+            (1, VertexFormat::U16, true, false)
+        );
+        assert_eq!(
+            decode(VertexFormat(f::R16_SNORM).wire().unwrap()),
+            (1, VertexFormat::I16, true, false)
+        );
+        assert_eq!(
             decode(VertexFormat(f::R16G16B16A16_SFLOAT).wire().unwrap()),
             (4, VertexFormat::F16, false, false)
         );
@@ -632,13 +647,12 @@ mod vertex_format_tests {
         );
     }
 
-    /// A format the wire cannot express is refused, never widened or swizzled. WebGPU has no 1- or
+    /// A format the wire cannot express is refused, never widened or swizzled. WebGPU has no
     /// 3-component 8-/16-bit vertex format, and the wire has no BGRA component order, so honouring these
     /// would mean handing the executor an attribute that reads different bytes than the app declared.
     #[test]
     fn a_format_without_a_wire_encoding_is_refused_rather_than_approximated() {
         for format in [
-            f::R16_UNORM,
             f::B8G8R8A8_SINT,
             0,
             u32::MAX,
