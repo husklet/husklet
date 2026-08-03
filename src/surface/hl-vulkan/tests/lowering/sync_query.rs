@@ -1,4 +1,7 @@
 use super::*;
+use hl_cuda::model::stream::StreamTable;
+use hl_cuda::service::external_semaphore as cuda_external;
+use hl_cuda::{CudaContext, CudaDeviceDesc};
 use hl_gpu::{CpuExecutor, InProcessCommandSink, SyncExports, TimelineWait};
 
 #[test]
@@ -125,6 +128,56 @@ fn shared_timeline_permanent_import_and_temporary_refusal_cross_sessions() {
     sync::destroy_shared_semaphore(&mut owner, &mut owner_sink, temporary);
     assert!(!exports.is_live(permanent_id));
     assert!(!exports.is_live(temporary_id));
+}
+
+#[test]
+fn vulkan_and_cuda_timeline_semaphore_order_each_other_across_sessions() {
+    let exports = SyncExports::new();
+    let mut vulkan_sink =
+        InProcessCommandSink::new(CpuExecutor::new()).with_sync_exports(exports.clone());
+    let mut cuda_sink =
+        InProcessCommandSink::new(CpuExecutor::new()).with_sync_exports(exports.clone());
+    let mut vulkan = dev();
+    let mut cuda = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
+
+    let vk_semaphore = sync::create_semaphore(&mut vulkan, true, 1);
+    let export = sync::export_semaphore(&mut vulkan, &mut vulkan_sink, vk_semaphore).unwrap();
+    let cu_semaphore = cuda_external::import(&mut cuda, &mut cuda_sink, export).unwrap();
+
+    sync::signal_shared_semaphore(&mut vulkan, &mut vulkan_sink, vk_semaphore, 3).unwrap();
+    cuda_external::wait(&cuda, &mut cuda_sink, cu_semaphore, 3, StreamTable::DEFAULT).unwrap();
+
+    cuda_external::signal(&cuda, &mut cuda_sink, cu_semaphore, 5, StreamTable::DEFAULT).unwrap();
+    assert_eq!(
+        sync::wait_shared_semaphore(&mut vulkan, &mut vulkan_sink, vk_semaphore, 5, 0).unwrap(),
+        TimelineWait::Reached
+    );
+
+    assert!(cuda_external::signal(
+        &cuda,
+        &mut cuda_sink,
+        hl_cuda::model::external_semaphore::ExternalSemaphore(u64::MAX),
+        6,
+        StreamTable::DEFAULT,
+    )
+    .is_err());
+    assert!(cuda_external::signal(
+        &cuda,
+        &mut cuda_sink,
+        cu_semaphore,
+        6,
+        hl_cuda::model::stream::Stream(u32::MAX),
+    )
+    .is_err());
+    assert_eq!(
+        sync::shared_semaphore_counter(&mut vulkan, &mut vulkan_sink, vk_semaphore).unwrap(),
+        5,
+        "a refused CUDA stream does not signal the timeline"
+    );
+    cuda_external::destroy(&mut cuda, &mut cuda_sink, cu_semaphore).unwrap();
+    assert!(cuda_external::destroy(&mut cuda, &mut cuda_sink, cu_semaphore).is_err());
+    sync::destroy_shared_semaphore(&mut vulkan, &mut vulkan_sink, vk_semaphore);
+    assert!(!exports.is_live(export));
 }
 
 #[test]

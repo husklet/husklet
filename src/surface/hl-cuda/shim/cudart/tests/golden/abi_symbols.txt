@@ -8,6 +8,7 @@ __cudaUnregisterFatBinary
 cudaDeviceGetPCIBusId
 cudaDeviceReset
 cudaDeviceSynchronize
+cudaDestroyExternalSemaphore
 cudaDriverGetVersion
 cudaEventCreate
 cudaEventCreateWithFlags
@@ -37,6 +38,7 @@ cudaGraphicsUnmapResources
 cudaGraphicsUnregisterResource
 cudaHostAlloc
 cudaHostGetDevicePointer
+cudaImportExternalSemaphore
 cudaLaunchKernel
 cudaMalloc
 cudaMallocHost
@@ -49,6 +51,7 @@ cudaMemsetAsync
 cudaPeekAtLastError
 cudaRuntimeGetVersion
 cudaSetDevice
+cudaSignalExternalSemaphoresAsync
 cudaStreamCreate
 cudaStreamCreateWithFlags
 cudaStreamDestroy
@@ -56,3 +59,4 @@ cudaStreamQuery
 cudaStreamSynchronize
 cudaStreamWaitEvent
 cudaThreadSynchronize
+cudaWaitExternalSemaphoresAsync

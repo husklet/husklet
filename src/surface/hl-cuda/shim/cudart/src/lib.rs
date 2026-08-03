@@ -1,7 +1,7 @@
 //! Guest cdylib deployed as `libcudart.so.1` — the CUDA Runtime API drop-in.
 //!
 //! The exported `cuda*`/`__cuda*` surface is code-generated from `registry/cudart.manifest` (`build.rs`)
-//! so it can never drift from the golden 58-entry set. The memory + device + stream basics have real
+//! so it can never drift from the golden 62-entry set. The memory + device + stream basics have real
 //! hand-written bodies in [`runtime`] that call the `hl_cuda` lowering services through a process-global
 //! [`hl_gpu::RemoteCommandSink`] ([`state`]); the fatbin-registration launch tail are benign default
 //! stubs ([`stub`]). The soname `libcudart.so.1` is baked by `build.rs`.

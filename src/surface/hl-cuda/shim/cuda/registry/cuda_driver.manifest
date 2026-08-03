@@ -36,6 +36,10 @@ CU	cuGraphicsSubResourceGetMappedArray	CUresult	CUarray*|array;CUgraphicsResourc
 CU	cuGraphicsUnmapResources	CUresult	unsigned int|count;CUgraphicsResource*|resources;CUstream|stream
 CU	cuGraphicsUnregisterResource	CUresult	CUgraphicsResource|resource
 CU	cuGraphicsResourceSetMapFlags_v2	CUresult	CUgraphicsResource|resource;unsigned int|flags
+CU	cuImportExternalSemaphore	CUresult	void**|externalSemaphore_out;const void*|semHandleDesc
+CU	cuDestroyExternalSemaphore	CUresult	void*|extSem
+CU	cuSignalExternalSemaphoresAsync	CUresult	void*const*|extSemArray;const void*|paramsArray;unsigned int|numExtSems;CUstream|stream
+CU	cuWaitExternalSemaphoresAsync	CUresult	void*const*|extSemArray;const void*|paramsArray;unsigned int|numExtSems;CUstream|stream
 CU	cuGLGetDevices_v2	CUresult	unsigned int*|pCudaDeviceCount;CUdevice*|pCudaDevices;unsigned int|cudaDeviceCount;CUGLDeviceList|deviceList
 CU	cuDeviceGetName	CUresult	char*|name;int|len;CUdevice|dev
 CU	cuDeviceGetPCIBusId	CUresult	char*|s;int|len;CUdevice|dev

@@ -9,12 +9,35 @@ use super::support::*;
 #[test]
 fn surface_is_complete_and_matches_the_census() {
     assert_eq!(
-        CUDART_ENTRYPOINTS, 58,
-        "CUDA runtime surface drifted from the golden 58"
+        CUDART_ENTRYPOINTS, 62,
+        "CUDA runtime surface drifted from the golden 62"
     );
     assert_eq!(GENERATED_STUBS + IMPLEMENTED_ENTRYPOINTS, TOTAL_ENTRYPOINTS);
     // The whole surface has real hand-written bodies — no generated default stubs remain.
     assert_eq!(GENERATED_STUBS, 0, "cudart still has default stubs");
+    let mut semaphore = core::ptr::null_mut();
+    assert_eq!(
+        cudaImportExternalSemaphore(&mut semaphore, core::ptr::null()),
+        CUDART_ERR_INVALID_VALUE
+    );
+    assert_eq!(
+        cudaSignalExternalSemaphoresAsync(
+            core::ptr::null(),
+            core::ptr::null(),
+            1,
+            core::ptr::null_mut()
+        ),
+        CUDART_ERR_INVALID_VALUE
+    );
+    assert_eq!(
+        cudaWaitExternalSemaphoresAsync(
+            core::ptr::null(),
+            core::ptr::null(),
+            1,
+            core::ptr::null_mut()
+        ),
+        CUDART_ERR_INVALID_VALUE
+    );
 }
 
 #[test]
@@ -50,7 +73,9 @@ fn runtime_entry_points_roundtrip() {
     assert_eq!(graphics_resource, 1usize as *mut c_void);
     let mut mapped_array = 1usize as *mut c_void;
     assert_eq!(
-        unsafe { cudaGraphicsSubResourceGetMappedArray(&mut mapped_array, core::ptr::null_mut(), 0, 0) },
+        unsafe {
+            cudaGraphicsSubResourceGetMappedArray(&mut mapped_array, core::ptr::null_mut(), 0, 0)
+        },
         CUDART_ERR_INVALID_VALUE
     );
     assert_eq!(mapped_array, 1usize as *mut c_void);

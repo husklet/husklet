@@ -1531,6 +1531,7 @@ dependencies = [
 name = "hl-vulkan"
 version = "0.0.0"
 dependencies = [
+ "hl-cuda",
  "hl-design",
  "hl-fs",
  "hl-gpu",

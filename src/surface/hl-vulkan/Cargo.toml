@@ -34,3 +34,6 @@ hl-surface-protocol = { path = "../hl-surface-protocol", default-features = fals
 
 [features]
 default = []
+
+[dev-dependencies]
+hl-cuda = { path = "../hl-cuda" }

@@ -49,6 +49,15 @@ fn get_proc_address_aliases_and_error_paths() {
     assert_eq!(CudaSymbol::newest("cuCtxCreate"), "cuCtxCreate_v2");
     assert_eq!(CudaSymbol::newest("cuLaunchKernel"), "cuLaunchKernel"); // already the real symbol
 
+    for name in [
+        "cuImportExternalSemaphore",
+        "cuDestroyExternalSemaphore",
+        "cuSignalExternalSemaphoresAsync",
+        "cuWaitExternalSemaphoresAsync",
+    ] {
+        assert_eq!(CudaSymbol::newest(name), name);
+    }
+
     // Null args are rejected.
     let mut pfn: *mut c_void = core::ptr::null_mut();
     assert_eq!(

@@ -39,6 +39,7 @@ cuDevicePrimaryCtxReset_v2
 cuDevicePrimaryCtxRetain
 cuDevicePrimaryCtxSetFlags_v2
 cuDeviceTotalMem_v2
+cuDestroyExternalSemaphore
 cuDriverGetVersion
 cuEventCreate
 cuEventDestroy_v2
@@ -67,6 +68,7 @@ cuGraphicsUnregisterResource
 cuGetProcAddress
 cuGetProcAddress_v2
 cuInit
+cuImportExternalSemaphore
 cuLaunchCooperativeKernel
 cuLaunchHostFunc
 cuLaunchKernel
@@ -125,6 +127,7 @@ cuPointerSetAttribute
 cuProfilerInitialize
 cuProfilerStart
 cuProfilerStop
+cuSignalExternalSemaphoresAsync
 cuStreamAddCallback
 cuStreamAttachMemAsync
 cuStreamCreate
@@ -139,3 +142,4 @@ cuStreamQuery
 cuStreamSynchronize
 cuStreamWaitEvent
 cuThreadExchangeStreamCaptureMode
+cuWaitExternalSemaphoresAsync

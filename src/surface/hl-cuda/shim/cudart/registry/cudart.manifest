@@ -66,6 +66,10 @@ RT	cudaGraphicsSubResourceGetMappedArray	cudaError_t	cudaArray**|array;cudaGraph
 RT	cudaGraphicsUnmapResources	cudaError_t	int|count;cudaGraphicsResource**|resources;cudaStream_t|stream
 RT	cudaGraphicsUnregisterResource	cudaError_t	cudaGraphicsResource*|resource
 RT	cudaGraphicsResourceSetMapFlags	cudaError_t	cudaGraphicsResource*|resource;unsigned int|flags
+RT	cudaImportExternalSemaphore	cudaError_t	void**|externalSemaphore_out;const void*|semHandleDesc
+RT	cudaDestroyExternalSemaphore	cudaError_t	void*|extSem
+RT	cudaSignalExternalSemaphoresAsync	cudaError_t	void**|extSemArray;const void*|paramsArray;unsigned int|numExtSems;cudaStream_t|stream
+RT	cudaWaitExternalSemaphoresAsync	cudaError_t	void**|extSemArray;const void*|paramsArray;unsigned int|numExtSems;cudaStream_t|stream
 RT	cudaGLSetGLDevice	cudaError_t	int|device
 RT	cudaDeviceReset	cudaError_t
 RT	cudaThreadSynchronize	cudaError_t

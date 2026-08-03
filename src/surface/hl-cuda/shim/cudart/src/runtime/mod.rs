@@ -2,6 +2,7 @@
 
 mod device;
 mod event;
+mod external_semaphore;
 mod graphics;
 mod launch;
 #[cfg(test)]
@@ -11,6 +12,7 @@ mod stream;
 
 pub use device::*;
 pub use event::*;
+pub use external_semaphore::*;
 pub use graphics::*;
 pub use launch::*;
 pub use memory::*;
