@@ -80,6 +80,7 @@ const ADVERTISED: &[&str] = &[
     "GL_OES_depth24",
     "GL_OES_mapbuffer",
     "GL_EXT_color_buffer_float",
+    "GL_OES_texture_npot",
 ];
 
 /// The three ways an application can ask what is advertised must give the same answer.
@@ -120,6 +121,10 @@ fn num_extensions_matches_the_extension_string() {
     query::get_integerv(&c, GL_NUM_REQUESTABLE_EXTENSIONS_ANGLE, &mut buf);
     assert_eq!(buf[0], 0);
     assert!(query::string_i(GL_REQUESTABLE_EXTENSIONS_ANGLE, 0).is_none());
+    assert!(
+        ADVERTISED.contains(&"GL_OES_texture_npot"),
+        "full NPOT repeat/mipmap behavior is advertised so ES2 applications apply the matching rules"
+    );
 }
 
 // ---- glGetIntegerv -------------------------------------------------------------------------------
