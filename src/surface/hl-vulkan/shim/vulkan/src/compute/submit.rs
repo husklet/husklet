@@ -1,4 +1,55 @@
 use super::*;
+use hl_gpu::GpuError;
+
+struct QueueSubmission {
+    command_buffers: Vec<VkCbHandle>,
+    waits: Vec<(u64, u64)>,
+    signals: Vec<(u64, u64)>,
+}
+
+fn execute_submissions(
+    dev: &mut hl_vulkan::Device,
+    sink: &mut dyn hl_gpu::CommandSink,
+    submissions: &[QueueSubmission],
+    fence: Option<u64>,
+) -> VkResult {
+    if submissions.is_empty() {
+        return ResultStatus::from_gpu(submit_service::queue_submit(dev, sink, &[], fence));
+    }
+    for (index, submission) in submissions.iter().enumerate() {
+        let semaphore_snapshot = dev.semaphores.clone();
+        if let Err(error) = dev.consume_queue_waits(sink, &submission.waits) {
+            return Status::from_error(&error);
+        }
+        if let Err(error) = dev.validate_queue_signals(&submission.signals) {
+            dev.semaphores = semaphore_snapshot;
+            return Status::from_error(&error);
+        }
+        let signal_fence = (index + 1 == submissions.len()).then_some(fence).flatten();
+        let submit_result = submit_service::queue_submit(
+            dev,
+            sink,
+            &submission.command_buffers,
+            signal_fence,
+        );
+        if let Err(error) = submit_result {
+            let definitely_not_committed = match &error {
+                GpuError::Transport(transport) => {
+                    transport.refusal() || transport.retryable_before_request()
+                }
+                _ => true,
+            };
+            if definitely_not_committed {
+                dev.semaphores = semaphore_snapshot;
+            }
+            return Status::from_error(&error);
+        }
+        if let Err(error) = dev.signal_queue_semaphores(sink, &submission.signals) {
+            return Status::from_error(&error);
+        }
+    }
+    VK_SUCCESS
+}
 
 pub extern "C" fn vkQueueSubmit(
     _queue: *mut c_void,
@@ -15,10 +66,11 @@ pub extern "C" fn vkQueueSubmit(
     };
     // Gather every submitted command buffer (unwrapping each dispatchable to its u64 handle) plus every
     // queue-side timeline signal from each batch's VkTimelineSemaphoreSubmitInfo pNext.
-    let mut cbs: Vec<VkCbHandle> = Vec::new();
-    let mut waits: Vec<(u64, u64)> = Vec::new();
-    let mut signals: Vec<(u64, u64)> = Vec::new();
+    let mut lowered = Vec::with_capacity(submits.len());
     for si in submits {
+        let mut cbs = Vec::new();
+        let mut waits = Vec::new();
+        let mut signals = Vec::new();
         if !si.p_command_buffers.is_null() {
             let ptrs = unsafe {
                 std::slice::from_raw_parts(si.p_command_buffers, si.command_buffer_count as usize)
@@ -63,26 +115,15 @@ pub extern "C" fn vkQueueSubmit(
                 signals.push((semaphore, value));
             }
         }
+        lowered.push(QueueSubmission {
+            command_buffers: cbs,
+            waits,
+            signals,
+        });
     }
     let signal = if fence != 0 { Some(fence) } else { None };
-    let r = ShimState::with_sink(|dev, sink| {
-        if let Err(error) = dev.validate_queue_signals(&signals) {
-            return Status::from_error(&error);
-        }
-        let semaphore_snapshot = dev.semaphores.clone();
-        if let Err(error) = dev.consume_queue_waits(&waits) {
-            return Status::from_error(&error);
-        }
-        let r = ResultStatus::from_gpu(submit_service::queue_submit(dev, sink, &cbs, signal));
-        if r == VK_SUCCESS {
-            if let Err(error) = dev.signal_queue_semaphores(&signals) {
-                return Status::from_error(&error);
-            }
-        } else {
-            dev.semaphores = semaphore_snapshot;
-        }
-        r
-    })
+    let cb_count: usize = lowered.iter().map(|submission| submission.command_buffers.len()).sum();
+    let r = ShimState::with_sink(|dev, sink| execute_submissions(dev, sink, &lowered, signal))
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED);
     // Error: a refused submit means the recorded work never ran. Latched by result code — submit runs
     // per frame and a persistent failure repeats every frame, but the set of `VkResult`s is small and
@@ -92,7 +133,7 @@ pub extern "C" fn vkQueueSubmit(
         hl_log::hl_error!(
             hl_log::tag::SHIM,
             "vkQueueSubmit cbs={} -> {:?}",
-            cbs.len(),
+            cb_count,
             r
         );
     }
@@ -126,10 +167,11 @@ pub extern "C" fn vkQueueSubmit2(
             std::slice::from_raw_parts(p_submits as *const VkSubmitInfo2, submit_count as usize)
         }
     };
-    let mut cbs: Vec<VkCbHandle> = Vec::new();
-    let mut waits: Vec<(u64, u64)> = Vec::new();
-    let mut signals: Vec<(u64, u64)> = Vec::new();
+    let mut lowered = Vec::with_capacity(submits.len());
     for si in submits {
+        let mut cbs = Vec::new();
+        let mut waits = Vec::new();
+        let mut signals = Vec::new();
         if !si.p_command_buffer_infos.is_null() {
             let infos = unsafe {
                 std::slice::from_raw_parts(
@@ -164,26 +206,14 @@ pub extern "C" fn vkQueueSubmit2(
                 signals.push((info.semaphore, info.value));
             }
         }
+        lowered.push(QueueSubmission {
+            command_buffers: cbs,
+            waits,
+            signals,
+        });
     }
     let signal = if fence != 0 { Some(fence) } else { None };
-    ShimState::with_sink(|dev, sink| {
-        if let Err(error) = dev.validate_queue_signals(&signals) {
-            return Status::from_error(&error);
-        }
-        let semaphore_snapshot = dev.semaphores.clone();
-        if let Err(error) = dev.consume_queue_waits(&waits) {
-            return Status::from_error(&error);
-        }
-        let r = ResultStatus::from_gpu(submit_service::queue_submit(dev, sink, &cbs, signal));
-        if r == VK_SUCCESS {
-            if let Err(error) = dev.signal_queue_semaphores(&signals) {
-                return Status::from_error(&error);
-            }
-        } else {
-            dev.semaphores = semaphore_snapshot;
-        }
-        r
-    })
+    ShimState::with_sink(|dev, sink| execute_submissions(dev, sink, &lowered, signal))
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
 
@@ -217,4 +247,36 @@ pub extern "C" fn vkQueueBindSparse(
         ResultStatus::from_gpu(submit_service::queue_submit(dev, sink, &[], signal))
     })
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ordered_submissions_allow_signal_then_wait() {
+        let instance = hl_vulkan::Instance::new(hl_vulkan::result::HL_API_VERSION);
+        let mut device = instance.create_device();
+        let semaphore = hl_vulkan::service::sync::create_semaphore(&mut device, false, 0);
+        let mut sink = hl_gpu::RecordingSink::with_full_caps();
+        let submissions = [
+            QueueSubmission {
+                command_buffers: Vec::new(),
+                waits: Vec::new(),
+                signals: vec![(semaphore, 0)],
+            },
+            QueueSubmission {
+                command_buffers: Vec::new(),
+                waits: vec![(semaphore, 0)],
+                signals: Vec::new(),
+            },
+        ];
+
+        assert_eq!(
+            execute_submissions(&mut device, &mut sink, &submissions, None),
+            VK_SUCCESS
+        );
+        assert!(!device.semaphores[&semaphore].signaled);
+        assert_eq!(sink.batches.len(), 2);
+    }
 }

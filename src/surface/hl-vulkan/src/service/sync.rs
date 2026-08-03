@@ -283,9 +283,20 @@ impl Device {
         Ok(())
     }
 
-    pub fn consume_queue_waits(&mut self, waits: &[(VkSemaphore, u64)]) -> Result<()> {
+    pub fn consume_queue_waits(
+        &mut self,
+        sink: &mut dyn CommandSink,
+        waits: &[(VkSemaphore, u64)],
+    ) -> Result<()> {
         for &(semaphore, value) in waits {
-            match self.semaphores.get(&semaphore) {
+            match self.semaphores.get(&semaphore).copied() {
+                Some(record) if record.timeline && record.shared.is_some() => {
+                    if wait_shared_semaphore(self, sink, semaphore, value, u64::MAX)?
+                        != TimelineWait::Reached
+                    {
+                        return Err(GpuError::Invalid("timeline semaphore wait is unsatisfied"));
+                    }
+                }
                 Some(record) if record.timeline && record.counter >= value => {}
                 Some(record) if record.timeline => {
                     return Err(GpuError::Invalid("timeline semaphore wait is unsatisfied"))
@@ -319,14 +330,27 @@ impl Device {
         Ok(())
     }
 
-    pub fn signal_queue_semaphores(&mut self, signals: &[(VkSemaphore, u64)]) -> Result<()> {
+    pub fn signal_queue_semaphores(
+        &mut self,
+        sink: &mut dyn CommandSink,
+        signals: &[(VkSemaphore, u64)],
+    ) -> Result<()> {
         self.validate_queue_signals(signals)?;
         for &(semaphore, value) in signals {
-            let record = self.semaphores.get_mut(&semaphore).unwrap();
-            if record.timeline {
-                record.counter = record.counter.max(value);
+            let (timeline, shared) = self
+                .semaphores
+                .get(&semaphore)
+                .map(|record| (record.timeline, record.shared.is_some()))
+                .unwrap();
+            if timeline {
+                if shared {
+                    signal_shared_semaphore(self, sink, semaphore, value)?;
+                } else {
+                    let record = self.semaphores.get_mut(&semaphore).unwrap();
+                    record.counter = record.counter.max(value);
+                }
             } else {
-                record.signaled = true;
+                self.semaphores.get_mut(&semaphore).unwrap().signaled = true;
             }
         }
         Ok(())

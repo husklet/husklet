@@ -43,8 +43,9 @@ Pool exhaustion never reissues an acquired image. Waiting releases the shim lock
 which lets presentation return an image and lets destruction cancel an infinite wait.
 
 Swapchains retain both the application `VkSurfaceKHR` and the underlying native presentation target
-separately from their internal GPU surface. Replacement follows the native target, so two Vulkan surface
-wrappers around one window are compatible. Once a replacement request is validated, the old chain is
+separately from their internal GPU surface. `oldSwapchain` replacement requires the exact application
+surface, while native identity independently prevents two active chains from claiming one window. Once a
+replacement request is validated, the old chain is
 retired before any fallible allocation—even if creation later fails. Images acquired before retirement may
 still be presented, but no further acquire is accepted. A second active chain without `oldSwapchain` returns
 `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`. Only FIFO is advertised until MAILBOX and IMMEDIATE have distinct

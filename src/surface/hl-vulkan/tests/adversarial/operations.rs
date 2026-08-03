@@ -636,6 +636,7 @@ fn fence_status_reset_and_fence_only_submit_signals() {
     let fence = create::create_fence(&mut d, &mut s, false).unwrap();
     let fence_ir = d.fences.get(&fence).unwrap().ir_id;
     submit::queue_submit(&mut d, &mut s, &[], Some(fence)).unwrap();
+    assert!(d.is_fence_signaled(fence).unwrap());
     match s.batches.last().unwrap().as_slice() {
         [Cmd::Submit(cbuf)] => {
             assert!(cbuf.encoder.is_empty());

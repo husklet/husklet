@@ -543,7 +543,9 @@ pub extern "C" fn vkQueuePresentKHR(
                             Status::from_error(&e)
                         );
                     }
-                    res = Status::from_error(&e);
+                    let result = Status::from_error(&e);
+                    PresentResults::write(&mut per_swapchain_results, position, result);
+                    res = result;
                     continue;
                 }
             };
