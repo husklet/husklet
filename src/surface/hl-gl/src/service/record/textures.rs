@@ -800,7 +800,7 @@ pub fn tex_storage_3d(ctx: &mut GlContext, target: u32, levels: i32, w: i32, h: 
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
-    let name = ctx.local.tex_unit[ctx.local.active_texture];
+    let name = ctx.bound_texture_for_target(target);
     if name == 0 || ctx.textures.get(name).is_none() {
         ctx.set_gl_error(GL_INVALID_OPERATION);
         return;
@@ -830,7 +830,7 @@ pub fn tex_image_3d(
     if level < 0 || (target != GL_TEXTURE_2D_ARRAY && target != GL_TEXTURE_3D) {
         return;
     }
-    let name = ctx.local.tex_unit[ctx.local.active_texture];
+    let name = ctx.bound_texture_for_target(target);
     if name == 0 || ctx.textures.get(name).is_none() {
         return;
     }
@@ -1008,7 +1008,7 @@ pub fn tex_sub_image_3d(
     if level < 0 || depth <= 0 || (target != GL_TEXTURE_2D_ARRAY && target != GL_TEXTURE_3D) {
         return;
     }
-    let name = ctx.local.tex_unit[ctx.local.active_texture];
+    let name = ctx.bound_texture_for_target(target);
     if name == 0 {
         return;
     }
