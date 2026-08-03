@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 
 use hl_gpu::transport::{SubmitHeader, Verdict};
 use hl_gpu::{
-    BufferId, Cmd, ConnectionHandler, FenceId, GlobalLedger, GpuExecutor, Limits, ReadbackRequest,
-    Session, SystemClock,
+    BufferId, Cmd, ConnectionHandler, Exports, FenceId, GlobalLedger, GpuExecutor, Limits,
+    ReadbackRequest, Session, SystemClock,
 };
 
 use super::capture;
@@ -98,6 +98,7 @@ struct Connection {
 impl Connection {
     fn new(
         executor: Executor,
+        exports: Exports,
         trace: bool,
         capture: Option<capture::Capture>,
         #[cfg(target_os = "macos")] presentations: Option<Producer>,
@@ -107,7 +108,8 @@ impl Connection {
             limits,
             GlobalLedger::unbounded(),
             Box::new(SystemClock::new()),
-        );
+        )
+        .with_exports(exports);
         Self {
             session,
             executor,
@@ -446,6 +448,10 @@ impl Endpoint {
         >,
     ) {
         let connections = Connections::new(256);
+        // Cross-API resource handles have process-wide identity and lifetime. Every accepted GPU
+        // connection must therefore see this one registry; constructing a registry per connection would
+        // compile while making every CUDA/GL or CUDA/Vulkan import fail as an unknown export.
+        let exports = Exports::new();
         if trace {
             eprintln!("husklet gpu: listener ready");
         }
@@ -466,6 +472,7 @@ impl Endpoint {
                     Self::serve_connection(
                         stream,
                         executors.clone(),
+                        exports.clone(),
                         trace,
                         capture.clone(),
                         lease,
@@ -487,6 +494,7 @@ impl Endpoint {
     fn serve_connection(
         stream: std::os::unix::net::UnixStream,
         executors: Executors,
+        exports: Exports,
         trace: bool,
         capture: Option<capture::Config>,
         lease: ConnectionLease,
@@ -528,6 +536,7 @@ impl Endpoint {
             });
             let mut connection = Connection::new(
                 executor,
+                exports,
                 trace,
                 capture,
                 #[cfg(target_os = "macos")]
