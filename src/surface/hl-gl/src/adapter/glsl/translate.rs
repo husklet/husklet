@@ -113,6 +113,37 @@ pub(super) const GLSL_VERSION: &str = "#version 460\n";
 
 /// Strip a leading `#version …` directive line (ES or desktop) so we can pin our own desktop version.
 impl Source<'_> {
+    /// Premultiply every fragment output's RGB channels immediately before `main` returns.
+    ///
+    /// This is used when GL fixed-function blending names both `GL_CONSTANT_COLOR` and
+    /// `GL_CONSTANT_ALPHA` for the RGB source/destination pair. WebGPU has one constant spelling, so the
+    /// source factor is folded into the shader output and fixed-function blending keeps the destination
+    /// factor. Alpha is deliberately untouched.
+    pub(crate) fn scale_fragment_outputs(self, scale: [f32; 3]) -> String {
+        let source = self.text;
+        let outputs = Tokens(source).collect("out");
+        if outputs.is_empty() {
+            return source.to_string();
+        }
+        let Some(main) = source.find("void main") else {
+            return source.to_string();
+        };
+        let scale = format!("vec3({:.9}, {:.9}, {:.9})", scale[0], scale[1], scale[2]);
+        let mut wrapper = String::from("\nvoid main() {\n hl_blend_main();");
+        for output in outputs {
+            wrapper.push_str(&format!(
+                "\n {}.rgb = clamp({}.rgb, vec3(0.0), vec3(1.0)) * {scale};",
+                output.name, output.name
+            ));
+        }
+        wrapper.push_str("\n}\n");
+        let mut rewritten = source.to_string();
+        let name = main + "void ".len();
+        rewritten.replace_range(name..name + "main".len(), "hl_blend_main");
+        rewritten.push_str(&wrapper);
+        rewritten
+    }
+
     pub(super) fn without_version(self) -> String {
         let mut out = String::new();
         for line in self.text.lines() {

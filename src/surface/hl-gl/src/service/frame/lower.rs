@@ -165,6 +165,7 @@ pub(super) fn lower_draw_n(
     let texbinds = lower_textures(ctx, &d, &prog, cmds, fbo_tex_ir, snapshots).ok()?;
     let has_u = prog.has_uniforms();
     let has_bg = has_u || !texbinds.is_empty();
+    let blend_source_scale = mixed_constant_blend_source_scale(&d);
 
     // ---- shaders + pipeline ----
     // The vertex and fragment GLSL are forwarded as two separate `Glsl` shader modules (each carries one
@@ -231,6 +232,12 @@ pub(super) fn lower_draw_n(
         sample_variant ^= u64::from(pixel_center_integer);
     }
     sample_variant ^= u64::from(bottom_up) << 63;
+    if let Some(scale) = blend_source_scale {
+        for component in scale {
+            sample_variant ^= u64::from(component.to_bits());
+            sample_variant = sample_variant.wrapping_mul(0x100_0000_01b3);
+        }
+    }
     let (vs_id, fs_id, shaders_new) = ctx
         .program_shader_ir(prog_name, sample_variant, prog.link_gen)
         .ok()?;
@@ -256,7 +263,10 @@ pub(super) fn lower_draw_n(
             kind: ShaderPayloadKind::Glsl,
             spirv: vs_ir,
         });
-        let fs_ir = if sample_transforms.is_empty() && !correct_frag_coord {
+        let fs_ir = if sample_transforms.is_empty()
+            && !correct_frag_coord
+            && blend_source_scale.is_none()
+        {
             fs_ir
         } else {
             use hl_gpu::protocol::model::kernel::GlslDescriptor;
@@ -270,6 +280,10 @@ pub(super) fn lower_draw_n(
             if correct_frag_coord {
                 descriptor.source = crate::adapter::glsl::Source::new(&descriptor.source)
                     .fragment_coordinates(th, origin_upper_left, pixel_center_integer);
+            }
+            if let Some(scale) = blend_source_scale {
+                descriptor.source = crate::adapter::glsl::Source::new(&descriptor.source)
+                    .scale_fragment_outputs(scale);
             }
             descriptor.to_words()
         };
@@ -362,8 +376,13 @@ pub(super) fn lower_draw_n(
     // Fixed-function state → the pipeline's blend / depth / cull descriptor (the values a real app set via
     // glBlendFunc / glDepthFunc / glCullFace / glFrontFace, mapped to their opaque WebGPU wire enums).
     let blend = if d.blend {
+        let src_rgb = if blend_source_scale.is_some() {
+            GL_ONE
+        } else {
+            d.blend_src_rgb
+        };
         Some(BlendState {
-            src_color: Pipeline::blend_factor(d.blend_src_rgb),
+            src_color: Pipeline::blend_factor(src_rgb),
             dst_color: Pipeline::blend_factor(d.blend_dst_rgb),
             op_color: Pipeline::blend_op(d.blend_eq_rgb),
             src_alpha: Pipeline::blend_factor(d.blend_src_alpha),
@@ -782,6 +801,35 @@ pub(super) fn lower_draw_n(
 
 // Fixed pipeline state encoding continues in `pipeline`.
 
+/// RGB scale folded into the fragment output when GL's RGB source and destination factors require the
+/// two distinct constant spellings that WebGPU collapses into one. Keeping the destination factor in
+/// fixed-function blending preserves destination reads; replacing the source factor by `ONE` and applying
+/// its scalar/vector here is algebraically exact for add, subtract, and reverse-subtract equations.
+fn mixed_constant_blend_source_scale(d: &DrawCall) -> Option<[f32; 3]> {
+    const CONSTANT_COLOR: u32 = 0x8001;
+    const ONE_MINUS_CONSTANT_COLOR: u32 = 0x8002;
+    const CONSTANT_ALPHA: u32 = 0x8003;
+    const ONE_MINUS_CONSTANT_ALPHA: u32 = 0x8004;
+    if !d.blend {
+        return None;
+    }
+    let colour = |factor| matches!(factor, CONSTANT_COLOR | ONE_MINUS_CONSTANT_COLOR);
+    let alpha = |factor| matches!(factor, CONSTANT_ALPHA | ONE_MINUS_CONSTANT_ALPHA);
+    if !(colour(d.blend_src_rgb) && alpha(d.blend_dst_rgb)
+        || alpha(d.blend_src_rgb) && colour(d.blend_dst_rgb))
+    {
+        return None;
+    }
+    let [r, g, b, a] = d.blend_color;
+    Some(match d.blend_src_rgb {
+        CONSTANT_COLOR => [r, g, b],
+        ONE_MINUS_CONSTANT_COLOR => [1.0 - r, 1.0 - g, 1.0 - b],
+        CONSTANT_ALPHA => [a; 3],
+        ONE_MINUS_CONSTANT_ALPHA => [1.0 - a; 3],
+        _ => return None,
+    })
+}
+
 /// The blend constant a draw's `Enc::SetBlendConstant` must carry, or `None` when no factor references it.
 ///
 /// The IR (like WebGPU) has one `CONSTANT` factor, which multiplies each channel by the SAME-channel
@@ -800,8 +848,13 @@ fn blend_constant(d: &DrawCall) -> Option<[f32; 4]> {
     const ONE_MINUS_CONSTANT_COLOR: u32 = 0x8002;
     const CONSTANT_ALPHA: u32 = 0x8003;
     const ONE_MINUS_CONSTANT_ALPHA: u32 = 0x8004;
+    let effective_src_rgb = if mixed_constant_blend_source_scale(d).is_some() {
+        GL_ONE
+    } else {
+        d.blend_src_rgb
+    };
     let factors = [
-        d.blend_src_rgb,
+        effective_src_rgb,
         d.blend_dst_rgb,
         d.blend_src_alpha,
         d.blend_dst_alpha,
@@ -812,7 +865,7 @@ fn blend_constant(d: &DrawCall) -> Option<[f32; 4]> {
     {
         return None;
     }
-    let rgb_factors = [d.blend_src_rgb, d.blend_dst_rgb];
+    let rgb_factors = [effective_src_rgb, d.blend_dst_rgb];
     let colour_form = rgb_factors
         .iter()
         .any(|factor| matches!(*factor, CONSTANT_COLOR | ONE_MINUS_CONSTANT_COLOR));
@@ -832,6 +885,7 @@ mod blend_constant_tests {
     #[test]
     fn alpha_equation_constant_colour_does_not_hide_rgb_constant_alpha() {
         let mut draw = DrawCall::default();
+        draw.blend = true;
         draw.blend_color = [0.1, 0.2, 0.3, 0.75];
         draw.blend_src_rgb = 0x8003; // GL_CONSTANT_ALPHA
         draw.blend_dst_rgb = GL_ONE;
@@ -849,5 +903,42 @@ mod blend_constant_tests {
         draw.blend_src_alpha = 0x8003; // GL_CONSTANT_ALPHA
 
         assert_eq!(blend_constant(&draw), Some(draw.blend_color));
+    }
+
+    #[test]
+    fn mixed_rgb_constants_fold_only_the_source_factor() {
+        let mut draw = DrawCall::default();
+        draw.blend = true;
+        draw.blend_color = [0.1, 0.2, 0.3, 0.75];
+        draw.blend_src_rgb = 0x8004; // GL_ONE_MINUS_CONSTANT_ALPHA
+        draw.blend_dst_rgb = 0x8001; // GL_CONSTANT_COLOR
+
+        assert_eq!(mixed_constant_blend_source_scale(&draw), Some([0.25; 3]));
+        assert_eq!(blend_constant(&draw), Some(draw.blend_color));
+
+        draw.blend_src_rgb = 0x8002; // GL_ONE_MINUS_CONSTANT_COLOR
+        draw.blend_dst_rgb = 0x8003; // GL_CONSTANT_ALPHA
+        assert_eq!(
+            mixed_constant_blend_source_scale(&draw),
+            Some([0.9, 0.8, 0.7])
+        );
+        assert_eq!(blend_constant(&draw), Some([0.75; 4]));
+
+        draw.blend = false;
+        assert_eq!(mixed_constant_blend_source_scale(&draw), None);
+    }
+
+    #[test]
+    fn mixed_constant_source_scale_is_injected_before_fragment_return() {
+        let source = "#version 440\nlayout(location = 0) out vec4 color;\nvoid main() { color = vec4(0.5); }\n";
+        let rewritten = crate::adapter::glsl::Source::new(source)
+            .scale_fragment_outputs([0.25, 0.5, 0.75]);
+        assert!(rewritten.contains(
+            "color.rgb = clamp(color.rgb, vec3(0.0), vec3(1.0)) * vec3(0.250000000, 0.500000000, 0.750000000);"
+        ));
+        assert!(
+            rewritten.find("color = vec4(0.5)").unwrap()
+                < rewritten.find("color.rgb = clamp").unwrap()
+        );
     }
 }
