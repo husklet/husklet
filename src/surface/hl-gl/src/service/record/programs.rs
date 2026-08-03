@@ -999,7 +999,7 @@ impl GlContext {
         for unit in 0..d.tex_units.len() {
             if let Some(texture) = ctx.textures.get(d.tex_units[unit]) {
                 d.tex_generations[unit] = texture.gen;
-                d.tex_swizzles[unit] = texture.swizzle;
+                d.tex_swizzles[unit] = texture.sampled_swizzle();
             }
         }
         if let Some(p) = ctx.programs.program(ctx.local.cur_prog) {

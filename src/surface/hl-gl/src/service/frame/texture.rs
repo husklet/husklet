@@ -19,6 +19,95 @@ pub(super) struct SnapshotKey {
 
 pub(super) type SnapshotTextures = std::collections::HashMap<SnapshotKey, u32>;
 
+/// Materialize the destination image used by a deferred `glCopyTex*` operation. This deliberately uses
+/// the ordinary sampled-texture residency key: a later draw binds the exact object written by the GPU
+/// copy and therefore does not replace it with a stale CPU-shadow upload.
+pub(super) fn prepare_copy_destination(
+    ctx: &mut GlContext,
+    name: u32,
+    cube: bool,
+    cmds: &mut Vec<Cmd>,
+) -> Option<(u32, TextureFormat)> {
+    let texture = ctx.textures.get(name)?.clone();
+    let uses_mipmaps = texture.uses_mipmaps();
+    let generation = texture.sampled_generation();
+    let (texture_ir, upload) = ctx
+        .sampled_texture_ir(name, (generation.0, generation.1, uses_mipmaps))
+        .ok()?;
+    let format = sampled_format(texture.ir_format);
+    if !upload {
+        return Some((texture_ir, format));
+    }
+    let levels = texture.sampled_levels(uses_mipmaps);
+    let (base_w, base_h, _) = levels.first()?.clone();
+    let layers = if cube { 6 } else { 1 };
+    cmds.push(Cmd::CreateTexture(
+        texture_ir,
+        TextureDesc {
+            width: base_w as u32,
+            height: base_h as u32,
+            depth: layers,
+            mip_levels: levels.len() as u32,
+            sample_count: 1,
+            dim: if cube { TextureDim::Cube } else { TextureDim::D2 },
+            format,
+            // BlitTexture performs format conversion through a render pass, so its destination must be
+            // both copy-addressable and color-renderable. COPY_SRC keeps a copied image usable as a later
+            // framebuffer-copy source without allocating a second backing texture.
+            usage: texture_usage::SAMPLED
+                | texture_usage::COPY_DST
+                | texture_usage::COPY_SRC
+                | if cube { 0 } else { texture_usage::RENDER_TARGET },
+            label: "gl-copytex-destination".into(),
+        },
+    ));
+    let texel = format.bytes_per_texel().unwrap_or(4) as u32;
+    let mut copies = Vec::new();
+    for (mip, (width, height, level_base)) in levels.iter().enumerate() {
+        for layer in 0..layers {
+            let data = if cube {
+                if mip == 0 {
+                    texture.cube_faces()[layer as usize]
+                        .as_ref()
+                        .unwrap_or(level_base)
+                } else {
+                    texture
+                        .mip_chain()
+                        .get(mip - 1)
+                        .and_then(|level| {
+                            if layer == 0 { Some(&level.data) } else { level.layers.get(layer as usize - 1) }
+                        })
+                        .unwrap_or(level_base)
+                }
+            } else {
+                level_base
+            };
+            let stage = ctx.alloc_buffer_ir().ok()?;
+            cmds.push(Cmd::CreateBuffer(
+                stage,
+                BufferDesc {
+                    size: data.len() as u64,
+                    usage: buffer_usage::COPY_SRC,
+                    label: String::new(),
+                },
+            ));
+            cmds.push(Cmd::WriteBuffer { id: stage, offset: 0, data: data.as_ref().clone() });
+            copies.push(Enc::CopyBufferToTextureRegion {
+                src: stage,
+                src_offset: 0,
+                bytes_per_row: *width as u32 * texel,
+                rows_per_image: *height as u32,
+                dst: texture_ir,
+                dst_sub: TextureSubresource { mip: mip as u32, layer: 0, aspect: hl_gpu::protocol::model::enums::TextureAspect::All },
+                dst_origin: Origin3d { x: 0, y: 0, z: layer },
+                extent: Extent3d { width: *width as u32, height: *height as u32, depth: 1 },
+            });
+        }
+    }
+    cmds.push(Cmd::Submit(CommandBuffer { encoder: copies, signal: None }));
+    Some((texture_ir, format))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{SnapshotKey, SnapshotSource, TextureFormat};

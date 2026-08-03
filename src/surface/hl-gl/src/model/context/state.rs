@@ -441,6 +441,10 @@ impl GlContext {
         self.local.recording.push_blit(blit);
     }
 
+    pub(crate) fn record_copy_tex(&mut self, copy: CopyTexOp) {
+        self.local.recording.push_copy_tex(copy);
+    }
+
     // ---- error register (glGetError) -------------------------------------------------------------
 
     /// Record a GL error. GL keeps the FIRST error raised until `glGetError` clears it, so a later error

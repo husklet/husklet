@@ -248,6 +248,26 @@ impl GlTexture {
     pub(crate) fn cube_faces(&self) -> &[Option<Arc<Vec<u8>>>; 6] {
         &self.cube_faces
     }
+
+    /// Component mapping seen by a shader. Unsized ES2 formats have an implicit base mapping; explicit
+    /// `GL_TEXTURE_SWIZZLE_*` state composes on top without changing what the query API reports.
+    pub(crate) fn sampled_swizzle(&self) -> [u32; 4] {
+        let base = match self.internal_format {
+            GL_ALPHA => [GL_ZERO, GL_ZERO, GL_ZERO, GL_ALPHA],
+            GL_LUMINANCE => [GL_RED, GL_RED, GL_RED, GL_ONE],
+            GL_LUMINANCE_ALPHA => [GL_RED, GL_RED, GL_RED, GL_ALPHA],
+            GL_RGB => [GL_RED, GL_GREEN, GL_BLUE, GL_ONE],
+            _ => [GL_RED, GL_GREEN, GL_BLUE, GL_ALPHA],
+        };
+        self.swizzle.map(|component| match component {
+            GL_RED => base[0],
+            GL_GREEN => base[1],
+            GL_BLUE => base[2],
+            GL_ALPHA => base[3],
+            GL_ZERO | GL_ONE => component,
+            _ => component,
+        })
+    }
     pub(crate) fn layers(&self) -> &[Arc<Vec<u8>>] {
         &self.layers
     }
@@ -477,6 +497,34 @@ impl GlTexture {
         self.shared
             .as_ref()
             .map(|storage| (storage.id(), self.shared_version, Arc::downgrade(storage)))
+    }
+}
+
+#[cfg(test)]
+mod legacy_swizzle_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_format_mapping_composes_without_mutating_query_state() {
+        let texture = GlTexture {
+            internal_format: GL_LUMINANCE_ALPHA,
+            swizzle: [GL_ALPHA, GL_RED, GL_ONE, GL_ZERO],
+            ..GlTexture::default()
+        };
+        assert_eq!(texture.swizzle, [GL_ALPHA, GL_RED, GL_ONE, GL_ZERO]);
+        assert_eq!(
+            texture.sampled_swizzle(),
+            [GL_ALPHA, GL_RED, GL_ONE, GL_ZERO]
+        );
+
+        let alpha = GlTexture {
+            internal_format: GL_ALPHA,
+            ..GlTexture::default()
+        };
+        assert_eq!(
+            alpha.sampled_swizzle(),
+            [GL_ZERO, GL_ZERO, GL_ZERO, GL_ALPHA]
+        );
     }
 }
 

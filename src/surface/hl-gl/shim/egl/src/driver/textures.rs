@@ -465,26 +465,11 @@ pub extern "C" fn glCopyTexImage2D(
     height: i32,
     border: i32,
 ) {
-    let _ = (x, y);
-    if target != GL_TEXTURE_2D || level != 0 || border != 0 {
-        GlobalState::context(|group| group.gl.set_gl_error(GL_INVALID_VALUE));
-        return;
-    }
-    // Allocate the destination extent so a later sample/subimage has storage (RGBA8 neutral plane).
-    let ifmt = if matches!(internalformat, GL_RGB | GL_RGBA) {
-        internalformat
-    } else {
-        GL_RGBA
-    };
-    let _ = ifmt;
     GlobalState::context(|group| {
         group.redefine_texture(|ctx| {
-            let name = ctx.bound_texture();
-            if name != 0 && width >= 0 && height >= 0 {
-                ctx.textures.alloc_plane(name, width, height);
-            } else {
-                ctx.set_gl_error(GL_INVALID_VALUE);
-            }
+            record::copy_tex_image_2d(
+                ctx, target, level, internalformat, x, y, width, height, border,
+            );
         });
     });
 }

@@ -1,6 +1,6 @@
 use crate::model::program::DrawCall;
 
-use super::{BlitOp, FrameOp};
+use super::{BlitOp, CopyTexOp, FrameOp};
 
 /// Deferred commands recorded by one GL context.
 ///
@@ -10,6 +10,7 @@ use super::{BlitOp, FrameOp};
 pub(crate) struct Recording {
     pub(crate) draws: Vec<DrawCall>,
     pub(crate) blits: Vec<BlitOp>,
+    pub(crate) copy_tex: Vec<CopyTexOp>,
     pub(crate) operations: Vec<FrameOp>,
 }
 
@@ -17,6 +18,7 @@ impl Recording {
     pub(super) fn clear(&mut self) {
         self.draws.clear();
         self.blits.clear();
+        self.copy_tex.clear();
         self.operations.clear();
     }
 
@@ -28,6 +30,11 @@ impl Recording {
     pub(super) fn push_blit(&mut self, blit: BlitOp) {
         self.operations.push(FrameOp::Blit(blit));
         self.blits.push(blit);
+    }
+
+    pub(super) fn push_copy_tex(&mut self, copy: CopyTexOp) {
+        self.operations.push(FrameOp::CopyTex(copy));
+        self.copy_tex.push(copy);
     }
 
     pub(super) fn replace_last_draw_program(&mut self, program: u32) -> bool {

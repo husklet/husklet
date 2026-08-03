@@ -90,6 +90,13 @@ impl GlContext {
                     .iter()
                     .flat_map(|blit| [blit.read_ir, blit.draw_ir]),
             )
+            .chain(
+                self.local
+                    .recording
+                    .copy_tex
+                    .iter()
+                    .map(|copy| copy.read_ir),
+            )
             .flatten()
             .collect()
     }
@@ -107,7 +114,7 @@ impl GlContext {
         // ACKs first and the following frame NACKs with `unknown/freed texture id`.
         //
         // Textures are deliberately the only resource kind pinned here. `TextureSnapshot::{sampled_ir,
-        // fbo_ir}` and a transferred `BlitOp::{read_ir,draw_ir}` are the only host IR ids stored in deferred
+        // fbo_ir}`, transferred `BlitOp::{read_ir,draw_ir}`, and `CopyTexOp::read_ir` are the host IR ids stored in deferred
         // work. Buffer snapshots own immutable bytes and re-resolve a fresh cached IR buffer after deletion;
         // programs retain GL names and re-resolve shader/pipeline caches; sampler snapshots retain
         // descriptors and re-resolve the persistent descriptor cache, while bind groups are frame-local. Surfaces, depth
@@ -278,6 +285,7 @@ impl GlContext {
             let draws = ctx.local.recording.draws.len();
             let original_draws = ctx.local.recording.draws.clone();
             let original_blits = ctx.local.recording.blits.clone();
+            let original_copy_tex = ctx.local.recording.copy_tex.clone();
             let original_operations = ctx.local.recording.operations.clone();
             let (offscreen, window): (Vec<_>, Vec<_>) = original_draws
                 .iter()
@@ -289,7 +297,8 @@ impl GlContext {
             let offscreen_blits = original_blits
                 .iter()
                 .any(|blit| blit.read_fbo != 0 && blit.draw_fbo != 0);
-            if offscreen.is_empty() && !offscreen_blits {
+            let offscreen_copies = original_copy_tex.iter().any(|copy| copy.read_fbo != 0);
+            if offscreen.is_empty() && !offscreen_blits && !offscreen_copies {
                 return Ok(false);
             }
 
@@ -299,6 +308,7 @@ impl GlContext {
                 .filter(|operation| match operation {
                     FrameOp::Draw(draw) => draw.fbo != 0,
                     FrameOp::Blit(blit) => blit.read_fbo != 0 && blit.draw_fbo != 0,
+                    FrameOp::CopyTex(copy) => copy.read_fbo != 0,
                 })
                 .cloned()
                 .collect();
@@ -310,8 +320,13 @@ impl GlContext {
                 .filter_map(|operation| match operation {
                     FrameOp::Blit(blit) => Some(*blit),
                     FrameOp::Draw(_) => None,
+                    FrameOp::CopyTex(_) => None,
                 })
                 .collect();
+            ctx.local.recording.copy_tex = ctx.local.recording.operations.iter().filter_map(|operation| match operation {
+                FrameOp::CopyTex(copy) => Some(*copy),
+                _ => None,
+            }).collect();
             let frame_state = ctx.frame_state();
             let built = frame::Frame::build(ctx);
             ctx.local.recording.draws = window;
@@ -320,6 +335,7 @@ impl GlContext {
                 .filter(|operation| match operation {
                     FrameOp::Draw(draw) => draw.fbo == 0,
                     FrameOp::Blit(blit) => blit.read_fbo == 0 || blit.draw_fbo == 0,
+                    FrameOp::CopyTex(copy) => copy.read_fbo == 0,
                 })
                 .cloned()
                 .collect();
@@ -331,12 +347,18 @@ impl GlContext {
                 .filter_map(|operation| match operation {
                     FrameOp::Blit(blit) => Some(*blit),
                     FrameOp::Draw(_) => None,
+                    FrameOp::CopyTex(_) => None,
                 })
                 .collect();
+            ctx.local.recording.copy_tex = ctx.local.recording.operations.iter().filter_map(|operation| match operation {
+                FrameOp::CopyTex(copy) => Some(*copy),
+                _ => None,
+            }).collect();
             let Some(mut frame) = built else {
                 ctx.restore_frame_state(frame_state);
                 ctx.local.recording.draws = original_draws;
                 ctx.local.recording.blits = original_blits;
+                ctx.local.recording.copy_tex = original_copy_tex;
                 ctx.local.recording.operations = original_operations;
                 return Ok(false);
             };
@@ -372,24 +394,24 @@ impl GlContext {
                     }
                 }
                 for operation in &mut ctx.local.recording.operations {
-                    let FrameOp::Blit(blit) = operation else {
-                        continue;
-                    };
-                    if blit.read_target.is_some_and(|snapshot| {
-                        snapshot.texture == target.name && snapshot.generation == target.generation
-                    }) {
-                        blit.read_ir = Some(target.texture);
-                        if frame_owned.contains(&target.texture) {
-                            transferred.insert(target.texture);
+                    match operation {
+                        FrameOp::Blit(blit) => {
+                            if blit.read_target.is_some_and(|snapshot| snapshot.texture == target.name && snapshot.generation == target.generation) {
+                                blit.read_ir = Some(target.texture);
+                                if frame_owned.contains(&target.texture) { transferred.insert(target.texture); }
+                            }
+                            if blit.draw_target.is_some_and(|snapshot| snapshot.texture == target.name && snapshot.generation == target.generation) {
+                                blit.draw_ir = Some(target.texture);
+                                if frame_owned.contains(&target.texture) { transferred.insert(target.texture); }
+                            }
                         }
-                    }
-                    if blit.draw_target.is_some_and(|snapshot| {
-                        snapshot.texture == target.name && snapshot.generation == target.generation
-                    }) {
-                        blit.draw_ir = Some(target.texture);
-                        if frame_owned.contains(&target.texture) {
-                            transferred.insert(target.texture);
+                        FrameOp::CopyTex(copy) => {
+                            if copy.read_target.is_some_and(|snapshot| snapshot.texture == target.name && snapshot.generation == target.generation) {
+                                copy.read_ir = Some(target.texture);
+                                if frame_owned.contains(&target.texture) { transferred.insert(target.texture); }
+                            }
                         }
+                        FrameOp::Draw(_) => {}
                     }
                 }
             }
@@ -401,8 +423,13 @@ impl GlContext {
                 .filter_map(|operation| match operation {
                     FrameOp::Blit(blit) => Some(*blit),
                     FrameOp::Draw(_) => None,
+                    FrameOp::CopyTex(_) => None,
                 })
                 .collect();
+            ctx.local.recording.copy_tex = ctx.local.recording.operations.iter().filter_map(|operation| match operation {
+                FrameOp::CopyTex(copy) => Some(*copy),
+                _ => None,
+            }).collect();
             for storage in invalidated_shared {
                 ctx.invalidate_shared_texture(storage);
             }

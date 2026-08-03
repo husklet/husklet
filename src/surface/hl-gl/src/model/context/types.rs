@@ -27,11 +27,29 @@ pub struct BlitOp {
     pub filter: hl_gpu::protocol::model::enums::Filter,
 }
 
+/// A framebuffer-to-texture copy captured at its GL call site. The source framebuffer attachment is
+/// snapshotted because attachment state is mutable; the destination names a texture image subresource.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct CopyTexOp {
+    pub read_fbo: u32,
+    pub read_target: Option<crate::model::program::TargetSnapshot>,
+    pub read_ir: Option<u32>,
+    pub texture: u32,
+    pub generation: u64,
+    pub cube: bool,
+    pub face: u32,
+    pub level: u32,
+    pub src: [i32; 2],
+    pub dst: [i32; 2],
+    pub extent: [i32; 2],
+}
+
 /// One framebuffer-affecting GL operation in exact call order.
 #[derive(Clone, PartialEq, Debug)]
 pub enum FrameOp {
     Draw(Box<crate::model::program::DrawCall>),
     Blit(BlitOp),
+    CopyTex(CopyTexOp),
 }
 
 /// The presented window surface (the default framebuffer). Ported from `hl-shim-gl`'s `Surface`.

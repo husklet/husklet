@@ -583,7 +583,10 @@ impl Frame {
 
     /// The raw frame assembler (pre-residency-cleanup). See [`build_frame_ir`].
     fn build_raw(ctx: &mut GlContext) -> Option<Frame> {
-        if ctx.local.recording.draws.is_empty() && ctx.local.recording.blits.is_empty() {
+        if ctx.local.recording.draws.is_empty()
+            && ctx.local.recording.blits.is_empty()
+            && ctx.local.recording.copy_tex.is_empty()
+        {
             return None;
         }
         // A surfaceless EGL context has no default framebuffer, but user FBOs remain fully renderable.
@@ -608,6 +611,7 @@ impl Frame {
                     crate::model::context::FrameOp::Blit(blit) => {
                         blit.read_fbo != 0 && blit.draw_fbo != 0
                     }
+                    crate::model::context::FrameOp::CopyTex(copy) => copy.read_fbo != 0,
                 });
             ctx.local
                 .recording
@@ -632,13 +636,18 @@ impl Frame {
                     ctx.local.recording.blits.len()
                 );
             }
-            if ctx.local.recording.draws.is_empty() && ctx.local.recording.blits.is_empty() {
+            if ctx.local.recording.draws.is_empty()
+                && ctx.local.recording.blits.is_empty()
+                && ctx.local.recording.copy_tex.is_empty()
+            {
                 return None;
             }
         }
         let groups = RenderPasses::groups(&ctx.local.recording.draws);
         let ordered = !ctx.local.recording.operations.is_empty()
-            && (!ctx.local.recording.blits.is_empty() || groups.len() > 1);
+            && (!ctx.local.recording.blits.is_empty()
+                || !ctx.local.recording.copy_tex.is_empty()
+                || groups.len() > 1);
         if ordered {
             return RenderPasses::build_ordered(ctx);
         }

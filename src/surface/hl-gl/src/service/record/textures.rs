@@ -695,12 +695,13 @@ pub fn copy_tex_sub_image_2d(
     w: i32,
     h: i32,
 ) {
-    if target != GL_TEXTURE_2D {
+    let face = cube_face_index(target);
+    if target != GL_TEXTURE_2D && face.is_none() {
         ctx.set_gl_error(GL_INVALID_ENUM);
         return;
     }
     let dst = ctx.local.tex_unit[ctx.local.active_texture];
-    if level != 0 || w < 0 || h < 0 || xo < 0 || yo < 0 || x < 0 || y < 0 || dst == 0 {
+    if level < 0 || w < 0 || h < 0 || xo < 0 || yo < 0 || x < 0 || y < 0 || dst == 0 {
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
@@ -710,11 +711,16 @@ pub fn copy_tex_sub_image_2d(
     // Validate the destination rect fits the bound texture. The `+` are widened to i64 so a huge (or
     // adversarial) offset/extent can never overflow an i32 and panic — it just fails the fit and raises
     // GL_INVALID_VALUE.
-    match ctx.textures.get(dst) {
-        Some(t)
-            if !t.data.is_empty()
-                && xo as i64 + w as i64 <= t.w as i64
-                && yo as i64 + h as i64 <= t.h as i64 => {}
+    let image_extent = ctx.textures.get(dst).and_then(|texture| {
+        if level == 0 {
+            Some((texture.w, texture.h))
+        } else {
+            texture.mips.get(level as usize - 1).map(|mip| (mip.w, mip.h))
+        }
+    });
+    match image_extent {
+        Some((tw, th))
+            if xo as i64 + w as i64 <= tw as i64 && yo as i64 + h as i64 <= th as i64 => {}
         Some(_) => {
             ctx.set_gl_error(GL_INVALID_VALUE);
             return;
@@ -751,9 +757,83 @@ pub fn copy_tex_sub_image_2d(
             }
             Some(buf)
         });
-    if let Some(buf) = src_rows {
-        ctx.textures.sub_image_2d(dst, xo, yo, w, h, &buf);
+    if level == 0 && face.is_none() {
+        if let Some(buf) = src_rows {
+            ctx.textures.sub_image_2d(dst, xo, yo, w, h, &buf);
+        }
     }
+    let generation = ctx.textures.get(dst).map(|texture| texture.gen).unwrap_or(0);
+    let read_target = (ctx.local.read_fbo != 0)
+        .then(|| ctx.framebuffer_color_texture(ctx.local.read_fbo, 0))
+        .flatten()
+        .map(|(name, texture)| crate::model::program::TargetSnapshot {
+            texture: name,
+            generation: texture.gen,
+            shared_storage: texture.shared_storage(),
+            shared_revision: texture.shared_current_identity().map(|(_, revision)| revision),
+            width: texture.w,
+            height: texture.h,
+            format: texture.ir_format,
+        });
+    ctx.record_copy_tex(crate::model::context::CopyTexOp {
+        read_fbo: ctx.local.read_fbo,
+        read_target,
+        read_ir: None,
+        texture: dst,
+        generation,
+        cube: face.is_some(),
+        face: face.unwrap_or(0) as u32,
+        level: level as u32,
+        src: [x, y],
+        dst: [xo, yo],
+        extent: [w, h],
+    });
+}
+
+/// Define a texture image and defer its framebuffer pixel transfer until the ordered frame is lowered.
+#[allow(clippy::too_many_arguments)]
+pub fn copy_tex_image_2d(
+    ctx: &mut GlContext,
+    target: u32,
+    level: i32,
+    internalformat: u32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    border: i32,
+) {
+    let face = cube_face_index(target);
+    if target != GL_TEXTURE_2D && face.is_none() {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
+    if level < 0 || border != 0 || x < 0 || y < 0 || width < 0 || height < 0 {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    let name = ctx.local.tex_unit[ctx.local.active_texture];
+    if name == 0 {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if level == 0 {
+        tex_image_2d_target_declared(ctx, target, internalformat, width, height, &[]);
+    } else if let Some(face) = face {
+        if !ctx.textures.image_cube_level(
+            name, face, level as u32, width, height, &[], internalformat,
+        ) {
+            ctx.set_gl_error(GL_INVALID_VALUE);
+            return;
+        }
+    } else if !ctx
+        .textures
+        .image_2d_level(name, level as u32, width, height, &[])
+    {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    copy_tex_sub_image_2d(ctx, target, level, 0, 0, x, y, width, height);
 }
 
 /// `glDeleteTextures` (one name).

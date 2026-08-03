@@ -36,7 +36,7 @@ impl RenderPasses {
                         .iter()
                         .filter_map(|operation| match operation {
                             FrameOp::Draw(draw) => Some((**draw).clone()),
-                            FrameOp::Blit(_) => None,
+                            FrameOp::Blit(_) | FrameOp::CopyTex(_) => None,
                         })
                         .collect::<Vec<_>>();
                     let target = lower_ordered_run(
@@ -93,6 +93,50 @@ impl RenderPasses {
                     last = Some(dst);
                     if blit.draw_fbo == 0 {
                         present = Some(dst);
+                    }
+                    index += 1;
+                }
+                FrameOp::CopyTex(copy) => {
+                    let src = resolve_ordered_target(
+                        ctx, copy.read_fbo, copy.read_target, copy.read_ir, &mut cmds,
+                        &mut fbo_target, &mut targets,
+                    );
+                    let (dst, _) = prepare_copy_destination(
+                        ctx, copy.texture, copy.cube, &mut cmds,
+                    )?;
+                    let width = copy.extent[0].max(0) as u32;
+                    let height = copy.extent[1].max(0) as u32;
+                    let src_y = src.3.saturating_sub(copy.src[1]).saturating_sub(copy.extent[1]);
+                    cmds.push(Cmd::Submit(CommandBuffer {
+                        encoder: vec![Enc::BlitTexture {
+                            src: src.1,
+                            src_sub: TextureSubresource::base(),
+                            src_origin: Origin3d {
+                                x: copy.src[0].max(0) as u32,
+                                y: src_y.max(0) as u32,
+                                z: 0,
+                            },
+                            src_extent: Extent3d { width, height, depth: 1 },
+                            dst,
+                            dst_sub: TextureSubresource {
+                                mip: copy.level,
+                                layer: copy.face,
+                                aspect: hl_gpu::protocol::model::enums::TextureAspect::All,
+                            },
+                            dst_origin: Origin3d {
+                                x: copy.dst[0].max(0) as u32,
+                                y: copy.dst[1].max(0) as u32,
+                                z: 0,
+                            },
+                            dst_extent: Extent3d { width, height, depth: 1 },
+                            filter: Filter::Nearest,
+                            mirror: Mirror::NONE,
+                        }],
+                        signal: None,
+                    }));
+                    last = Some(src);
+                    if copy.read_fbo == 0 {
+                        present = Some(src);
                     }
                     index += 1;
                 }
@@ -638,6 +682,141 @@ mod tests {
         let target_ir = ctx.resident_fbo_target_tex(texture, generation).unwrap();
 
         assert_sampler_uses_fallback_target(&frame, target_ir);
+    }
+
+    #[test]
+    fn copy_tex_sub_image_lowers_after_source_render_with_mip_and_offsets() {
+        let mut ctx = GlContext::new();
+        ctx.local.surf.have = true;
+        ctx.local.surf.width = 64;
+        ctx.local.surf.height = 48;
+        let texture = ctx.textures.gen();
+        ctx.local.tex_unit[ctx.local.active_texture] = texture;
+        assert!(ctx.textures.image_2d(texture, 16, 8, &[0x31; 16 * 8 * 4], TextureFormat::Rgba8Unorm));
+        assert!(ctx.textures.image_2d_level(texture, 1, 8, 4, &[0x52; 8 * 4 * 4]));
+        ctx.record_draw(DrawCall {
+            fbo: 0,
+            is_clear: true,
+            clear_mask: crate::model::glconst::GL_COLOR_BUFFER_BIT,
+            clear: [0.2, 0.4, 0.6, 1.0],
+            ..DrawCall::default()
+        });
+
+        crate::service::record::copy_tex_sub_image_2d(
+            &mut ctx, GL_TEXTURE_2D, 1, 2, 1, 7, 9, 3, 2,
+        );
+        let frame = RenderPasses::build_ordered(&mut ctx).expect("ordered copy frame");
+        let submits = frame.cmds.iter().filter_map(|command| match command {
+            Cmd::Submit(buffer) => Some(buffer),
+            _ => None,
+        }).collect::<Vec<_>>();
+        let render = submits.iter().position(|buffer| buffer.encoder.iter().any(|op| matches!(op, Enc::BeginRenderPass { .. }))).unwrap();
+        let copy = submits.iter().position(|buffer| buffer.encoder.iter().any(|op| matches!(op,
+            Enc::BlitTexture {
+                src_origin: Origin3d { x: 7, y: 37, z: 0 },
+                dst_sub: TextureSubresource { mip: 1, .. },
+                dst_origin: Origin3d { x: 2, y: 1, z: 0 },
+                src_extent: Extent3d { width: 3, height: 2, depth: 1 },
+                ..
+            }
+        ))).unwrap();
+        assert!(render < copy, "the source draw must execute before its framebuffer copy");
+        assert!(frame.cmds.iter().any(|command| matches!(command,
+            Cmd::CreateTexture(_, TextureDesc { mip_levels: 2, usage, .. })
+                if usage & texture_usage::COPY_DST != 0
+        )));
+    }
+
+    #[test]
+    fn cube_copy_records_the_selected_face_and_level() {
+        let mut ctx = GlContext::new();
+        ctx.local.surf.have = true;
+        ctx.local.surf.width = 32;
+        ctx.local.surf.height = 32;
+        let texture = ctx.textures.gen();
+        ctx.local.tex_unit[ctx.local.active_texture] = texture;
+        for face in 0..6 {
+            assert!(ctx.textures.image_cube_face(
+                texture, face, 8, 8, &[0; 8 * 8 * 4], TextureFormat::Rgba8Unorm, GL_RGBA,
+            ));
+            assert!(ctx.textures.image_cube_level(
+                texture, face, 1, 4, 4, &[0; 4 * 4 * 4], GL_RGBA,
+            ));
+            assert!(ctx.textures.image_cube_level(
+                texture, face, 2, 2, 2, &[0; 2 * 2 * 4], GL_RGBA,
+            ));
+            assert!(ctx.textures.image_cube_level(
+                texture, face, 3, 1, 1, &[0; 4], GL_RGBA,
+            ));
+        }
+        ctx.record_draw(DrawCall {
+            fbo: 0,
+            is_clear: true,
+            clear_mask: crate::model::glconst::GL_COLOR_BUFFER_BIT,
+            ..DrawCall::default()
+        });
+        crate::service::record::copy_tex_sub_image_2d(
+            &mut ctx, crate::model::glconst::GL_TEXTURE_CUBE_MAP_NEGATIVE_Z,
+            1, 1, 2, 3, 4, 2, 1,
+        );
+        assert!(matches!(ctx.local.recording.operations.last(),
+            Some(FrameOp::CopyTex(copy)) if copy.cube && copy.face == 5 && copy.level == 1
+                && copy.dst == [1, 2] && copy.src == [3, 4]
+        ));
+        let frame = RenderPasses::build_ordered(&mut ctx).expect("cube copy frame");
+        assert!(frame.cmds.iter().any(|command| matches!(command,
+            Cmd::CreateTexture(_, TextureDesc { depth: 6, mip_levels: 4, dim: TextureDim::Cube, .. })
+        )));
+        assert!(frame.cmds.iter().any(|command| matches!(command,
+            Cmd::Submit(buffer) if buffer.encoder.iter().any(|op| matches!(op,
+                Enc::BlitTexture {
+                    dst_sub: TextureSubresource { mip: 1, layer: 5, .. },
+                    dst_origin: Origin3d { x: 1, y: 2, z: 0 },
+                    ..
+                }
+            ))
+        )));
+    }
+
+    #[test]
+    fn copy_tex_reads_the_rendered_fbo_target_not_its_cpu_shadow() {
+        let mut ctx = GlContext::new();
+        let source = ctx.textures.gen();
+        assert!(ctx.textures.image_2d(source, 8, 8, &[], TextureFormat::Rgba8Unorm));
+        let fbo = ctx.local.framebuffers.gen();
+        ctx.local.framebuffers.attach_color(fbo, source);
+        ctx.record_draw(DrawCall {
+            fbo,
+            is_clear: true,
+            clear_mask: crate::model::glconst::GL_COLOR_BUFFER_BIT,
+            target: Some(crate::model::program::TargetSnapshot {
+                texture: source,
+                generation: ctx.textures.get(source).unwrap().gen,
+                shared_storage: None,
+                shared_revision: None,
+                width: 8,
+                height: 8,
+                format: TextureFormat::Rgba8Unorm,
+            }),
+            ..DrawCall::default()
+        });
+        let destination = ctx.textures.gen();
+        assert!(ctx.textures.image_2d(destination, 4, 4, &[0; 4 * 4 * 4], TextureFormat::Rgba8Unorm));
+        ctx.local.tex_unit[ctx.local.active_texture] = destination;
+        ctx.local.read_fbo = fbo;
+        crate::service::record::copy_tex_sub_image_2d(
+            &mut ctx, GL_TEXTURE_2D, 0, 0, 0, 2, 1, 4, 4,
+        );
+
+        let frame = RenderPasses::build_ordered(&mut ctx).expect("FBO copy frame");
+        let source_ir = ctx
+            .resident_fbo_target_tex(source, ctx.textures.get(source).unwrap().gen)
+            .expect("render target residency");
+        assert!(frame.cmds.iter().any(|command| matches!(command,
+            Cmd::Submit(buffer) if buffer.encoder.iter().any(|op| matches!(op,
+                Enc::BlitTexture { src, .. } if *src == source_ir
+            ))
+        )));
     }
 
     #[test]
