@@ -1,5 +1,5 @@
 use super::*;
-use hl_gpu::protocol::model::capability::BC_FORMATS;
+use hl_gpu::protocol::model::capability::{BC_FORMATS, ETC2_FORMATS};
 
 #[test]
 fn executor_advertises_exactly_the_formats_this_suite_proves() {
@@ -16,7 +16,8 @@ fn executor_advertises_exactly_the_formats_this_suite_proves() {
         | TextureFormat::bits(hl_gpu::protocol::model::capability::INTEGER_FORMATS)
         // Proven by `native::native_formats_transfer_roundtrip_exact_bytes` plus the role tests there.
         | TextureFormat::bits(hl_gpu::protocol::model::capability::NATIVE_FORMATS)
-        | (advertised & TextureFormat::bits(BC_FORMATS));
+        | (advertised & TextureFormat::bits(BC_FORMATS))
+        | (advertised & TextureFormat::bits(ETC2_FORMATS));
 
     assert_eq!(advertised, proven,
         "the executor's advertised texture_formats bitset ({advertised:#b}) must equal EXACTLY the set this \

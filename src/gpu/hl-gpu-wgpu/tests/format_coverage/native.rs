@@ -7,6 +7,7 @@ use hl_gpu::protocol::model::descriptor::{
 };
 
 fn transfer_roundtrip(exec: &mut WgpuExecutor, format: TextureFormat, bytes: &[u8]) {
+    let (width, height) = format.block_geometry().map_or((1, 1), |(w, h, _)| (w, h));
     let mut session = new_session(exec);
     hl_gpu::runtime::submit(
         &mut session,
@@ -16,8 +17,8 @@ fn transfer_roundtrip(exec: &mut WgpuExecutor, format: TextureFormat, bytes: &[u
             Cmd::CreateTexture(
                 1,
                 tex(
-                    1,
-                    1,
+                    width,
+                    height,
                     format,
                     texture_usage::COPY_DST | texture_usage::COPY_SRC,
                 ),
@@ -42,8 +43,8 @@ fn transfer_roundtrip(exec: &mut WgpuExecutor, format: TextureFormat, bytes: &[u
                     bytes_per_row: bytes.len() as u32,
                     dst: 1,
                     mip: 0,
-                    width: 1,
-                    height: 1,
+                    width,
+                    height,
                 }],
                 signal: None,
             }),
@@ -84,6 +85,15 @@ fn native_formats_transfer_roundtrip_exact_bytes() {
     for (format, bytes) in cases {
         assert!(NATIVE_FORMATS.contains(format));
         transfer_roundtrip(&mut exec, *format, bytes);
+    }
+}
+
+#[test]
+fn native_etc2_family_upload_roundtrips_exact_blocks() {
+    let mut exec = WgpuExecutor::new(DeviceConfig::default()).expect("wgpu adapter");
+    for &format in hl_gpu::protocol::model::capability::ETC2_FORMATS {
+        let bytes = vec![0x5a; format.block_geometry().unwrap().2 as usize];
+        transfer_roundtrip(&mut exec, format, &bytes);
     }
 }
 

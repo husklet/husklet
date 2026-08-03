@@ -560,7 +560,10 @@ impl WgpuExecutor {
                     TextureFormat::bits(hl_gpu::protocol::model::capability::BC_FORMATS)
                 } else {
                     0
-                },
+                }
+                | if features.contains(wgpu::Features::TEXTURE_COMPRESSION_ETC2) {
+                    TextureFormat::bits(hl_gpu::protocol::model::capability::ETC2_FORMATS)
+                } else { 0 },
             max_frame_bytes: MAX_FRAME_BYTES,
             // DERIVED FROM THE DEVICE, then clamped to what the rest of the path can honour. A guest asking
             // for more than this is refused at validate before anything is allocated, so the ceiling stays a

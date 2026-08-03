@@ -48,6 +48,9 @@ u32_enum!(
         R16Float = 39, R16Uint = 40, R16Sint = 41, Rg16Uint = 42, Rg16Sint = 43,
         Rgba16Uint = 44, Rgba16Sint = 45, Rg32Float = 46, Rg32Uint = 47, Rg32Sint = 48,
         R8Snorm = 49,
+        Etc2Rgb8Unorm = 50, Etc2Rgb8Srgb = 51, Etc2Rgb8A1Unorm = 52, Etc2Rgb8A1Srgb = 53,
+        Etc2Rgba8Unorm = 54, Etc2Rgba8Srgb = 55, EacR11Unorm = 56, EacR11Snorm = 57,
+        EacRg11Unorm = 58, EacRg11Snorm = 59,
     } "TextureFormat"
 );
 
@@ -116,7 +119,12 @@ impl TextureFormat {
             | TextureFormat::Bc6hRgbUfloat
             | TextureFormat::Bc6hRgbFloat
             | TextureFormat::Bc7RgbaUnorm
-            | TextureFormat::Bc7RgbaSrgb => return None,
+            | TextureFormat::Bc7RgbaSrgb
+            | TextureFormat::Etc2Rgb8Unorm | TextureFormat::Etc2Rgb8Srgb
+            | TextureFormat::Etc2Rgb8A1Unorm | TextureFormat::Etc2Rgb8A1Srgb
+            | TextureFormat::Etc2Rgba8Unorm | TextureFormat::Etc2Rgba8Srgb
+            | TextureFormat::EacR11Unorm | TextureFormat::EacR11Snorm
+            | TextureFormat::EacRg11Unorm | TextureFormat::EacRg11Snorm => return None,
         })
     }
 
@@ -336,6 +344,9 @@ impl TextureFormat {
             | TextureFormat::Bc1RgbaSrgb
             | TextureFormat::Bc4RUnorm
             | TextureFormat::Bc4RSnorm => (4, 4, 8),
+            TextureFormat::Etc2Rgb8Unorm | TextureFormat::Etc2Rgb8Srgb
+            | TextureFormat::Etc2Rgb8A1Unorm | TextureFormat::Etc2Rgb8A1Srgb
+            | TextureFormat::EacR11Unorm | TextureFormat::EacR11Snorm => (4, 4, 8),
             TextureFormat::Bc2RgbaUnorm
             | TextureFormat::Bc2RgbaSrgb
             | TextureFormat::Bc3RgbaUnorm
@@ -346,6 +357,8 @@ impl TextureFormat {
             | TextureFormat::Bc6hRgbFloat
             | TextureFormat::Bc7RgbaUnorm
             | TextureFormat::Bc7RgbaSrgb => (4, 4, 16),
+            TextureFormat::Etc2Rgba8Unorm | TextureFormat::Etc2Rgba8Srgb
+            | TextureFormat::EacRg11Unorm | TextureFormat::EacRg11Snorm => (4, 4, 16),
             _ => return None,
         })
     }

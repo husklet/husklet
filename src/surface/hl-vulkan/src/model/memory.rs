@@ -274,6 +274,16 @@ pub mod vk_format {
     pub const BC6H_SFLOAT_BLOCK: u32 = 144;
     pub const BC7_UNORM_BLOCK: u32 = 145;
     pub const BC7_SRGB_BLOCK: u32 = 146;
+    pub const ETC2_R8G8B8_UNORM_BLOCK: u32 = 147;
+    pub const ETC2_R8G8B8_SRGB_BLOCK: u32 = 148;
+    pub const ETC2_R8G8B8A1_UNORM_BLOCK: u32 = 149;
+    pub const ETC2_R8G8B8A1_SRGB_BLOCK: u32 = 150;
+    pub const ETC2_R8G8B8A8_UNORM_BLOCK: u32 = 151;
+    pub const ETC2_R8G8B8A8_SRGB_BLOCK: u32 = 152;
+    pub const EAC_R11_UNORM_BLOCK: u32 = 153;
+    pub const EAC_R11_SNORM_BLOCK: u32 = 154;
+    pub const EAC_R11G11_UNORM_BLOCK: u32 = 155;
+    pub const EAC_R11G11_SNORM_BLOCK: u32 = 156;
 }
 
 /// `VkFormat` values that appear as VERTEX ATTRIBUTE formats. Distinct from the image formats above
@@ -563,6 +573,16 @@ impl Format {
             vk_format::BC6H_SFLOAT_BLOCK => T::Bc6hRgbFloat,
             vk_format::BC7_UNORM_BLOCK => T::Bc7RgbaUnorm,
             vk_format::BC7_SRGB_BLOCK => T::Bc7RgbaSrgb,
+            vk_format::ETC2_R8G8B8_UNORM_BLOCK => T::Etc2Rgb8Unorm,
+            vk_format::ETC2_R8G8B8_SRGB_BLOCK => T::Etc2Rgb8Srgb,
+            vk_format::ETC2_R8G8B8A1_UNORM_BLOCK => T::Etc2Rgb8A1Unorm,
+            vk_format::ETC2_R8G8B8A1_SRGB_BLOCK => T::Etc2Rgb8A1Srgb,
+            vk_format::ETC2_R8G8B8A8_UNORM_BLOCK => T::Etc2Rgba8Unorm,
+            vk_format::ETC2_R8G8B8A8_SRGB_BLOCK => T::Etc2Rgba8Srgb,
+            vk_format::EAC_R11_UNORM_BLOCK => T::EacR11Unorm,
+            vk_format::EAC_R11_SNORM_BLOCK => T::EacR11Snorm,
+            vk_format::EAC_R11G11_UNORM_BLOCK => T::EacRg11Unorm,
+            vk_format::EAC_R11G11_SNORM_BLOCK => T::EacRg11Snorm,
             _ => return None,
         })
     }

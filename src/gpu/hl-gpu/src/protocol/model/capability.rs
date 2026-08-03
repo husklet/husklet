@@ -175,6 +175,14 @@ pub const BC_FORMATS: &[TextureFormat] = &[
     TextureFormat::Bc7RgbaSrgb,
 ];
 
+pub const ETC2_FORMATS: &[TextureFormat] = &[
+    TextureFormat::Etc2Rgb8Unorm, TextureFormat::Etc2Rgb8Srgb,
+    TextureFormat::Etc2Rgb8A1Unorm, TextureFormat::Etc2Rgb8A1Srgb,
+    TextureFormat::Etc2Rgba8Unorm, TextureFormat::Etc2Rgba8Srgb,
+    TextureFormat::EacR11Unorm, TextureFormat::EacR11Snorm,
+    TextureFormat::EacRg11Unorm, TextureFormat::EacRg11Snorm,
+];
+
 /// Every encoder-op tag in the current IR (a backend that replays the whole set advertises this).
 pub const ALL_COMMANDS: &[u8] = &[
     etag::BEGIN_RENDER_PASS,

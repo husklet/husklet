@@ -126,7 +126,9 @@ fn every_advertised_texture_format_is_really_creatable() {
         | TextureFormat::bits(DEPTH_FORMATS)
         | TextureFormat::bits(&[TextureFormat::Depth24PlusStencil8])
         | (caps.texture_formats
-            & TextureFormat::bits(hl_gpu::protocol::model::capability::BC_FORMATS));
+            & TextureFormat::bits(hl_gpu::protocol::model::capability::BC_FORMATS))
+        | (caps.texture_formats
+            & TextureFormat::bits(hl_gpu::protocol::model::capability::ETC2_FORMATS));
     assert_eq!(
         caps.texture_formats, expect,
         "advertised texture formats must be exactly the backed union"
@@ -149,6 +151,7 @@ fn every_advertised_texture_format_is_really_creatable() {
     ];
     all.extend_from_slice(hl_gpu::protocol::model::capability::INTEGER_FORMATS);
     all.extend_from_slice(hl_gpu::protocol::model::capability::BC_FORMATS);
+    all.extend_from_slice(hl_gpu::protocol::model::capability::ETC2_FORMATS);
     for fmt in all {
         if !caps.supports_format(fmt) {
             continue;

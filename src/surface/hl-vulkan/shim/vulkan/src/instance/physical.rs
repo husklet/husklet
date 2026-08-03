@@ -105,6 +105,12 @@ impl VkPhysicalDeviceFeatures {
         // Metal materializes every protocol BC format, that is not enough to claim this Vulkan-wide
         // feature: BC1 RGB has different alpha semantics for the same compressed bits. Keep it false
         // until the missing spellings have exact executor representations.
+        let required_etc2 = hl_gpu::protocol::model::enums::TextureFormat::bits(
+            hl_gpu::protocol::model::capability::ETC2_FORMATS,
+        );
+        if caps.is_some_and(|caps| caps.texture_formats & required_etc2 == required_etc2) {
+            features.bits[20] = VK_TRUE;
+        }
         features
     }
 

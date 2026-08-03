@@ -63,6 +63,16 @@ impl Format {
             TextureFormat::Bc6hRgbFloat => W::Bc6hRgbFloat,
             TextureFormat::Bc7RgbaUnorm => W::Bc7RgbaUnorm,
             TextureFormat::Bc7RgbaSrgb => W::Bc7RgbaUnormSrgb,
+            TextureFormat::Etc2Rgb8Unorm => W::Etc2Rgb8Unorm,
+            TextureFormat::Etc2Rgb8Srgb => W::Etc2Rgb8UnormSrgb,
+            TextureFormat::Etc2Rgb8A1Unorm => W::Etc2Rgb8A1Unorm,
+            TextureFormat::Etc2Rgb8A1Srgb => W::Etc2Rgb8A1UnormSrgb,
+            TextureFormat::Etc2Rgba8Unorm => W::Etc2Rgba8Unorm,
+            TextureFormat::Etc2Rgba8Srgb => W::Etc2Rgba8UnormSrgb,
+            TextureFormat::EacR11Unorm => W::EacR11Unorm,
+            TextureFormat::EacR11Snorm => W::EacR11Snorm,
+            TextureFormat::EacRg11Unorm => W::EacRg11Unorm,
+            TextureFormat::EacRg11Snorm => W::EacRg11Snorm,
             // Integer color: the storage a `usampler2D`/`isampler2D` reads. wgpu's own integer formats are
             // exact one-to-one counterparts — unfilterable and unblendable on both sides, with raw integer
             // texels — so nothing is normalized or reinterpreted across this map.
