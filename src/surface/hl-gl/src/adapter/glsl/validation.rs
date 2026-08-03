@@ -941,7 +941,9 @@ pub fn invalid_vector_constructor(source: &str) -> Option<String> {
                 if argument.get(1).map(String::as_str) == Some(".") {
                     return argument.get(2).map(|swizzle| swizzle.len());
                 }
-                declarations.get(first.as_str()).copied()
+                (argument.len() == 1)
+                    .then(|| declarations.get(first.as_str()).copied())
+                    .flatten()
             })
             .collect::<Option<Vec<_>>>();
         let Some(widths) = widths else { continue };

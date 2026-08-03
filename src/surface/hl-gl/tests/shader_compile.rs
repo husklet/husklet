@@ -253,6 +253,14 @@ fn parenthesized_constructor_arguments_are_not_inferred_as_vector_declarations()
 }
 
 #[test]
+fn scalar_vector_equality_constructor_argument_is_not_the_operand_width() {
+    let source = "void main(){ ivec4 vector; float scalar; vec2 value=vec2(vector == vector, scalar); }";
+    let mut context = GlContext::new();
+    let (status, log) = compile(&mut context, GL_VERTEX_SHADER, source);
+    assert_eq!(status, GL_TRUE as i32, "{log}\n{source}");
+}
+
+#[test]
 fn es2_rejects_invalid_lexical_scope_and_symbol_namespace_uses() {
     let invalid = [
         "int value; float value; void main(){}",
