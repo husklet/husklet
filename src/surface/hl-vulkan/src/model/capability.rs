@@ -1001,6 +1001,17 @@ mod tests {
     }
 
     #[test]
+    fn cubic_extension_and_format_gate_are_exact() {
+        assert!(DEVICE_EXTENSIONS.iter().any(|e| e.name == "VK_EXT_filter_cubic" && e.spec_version == 3));
+        let rgba = Format(vk_format::R8G8B8A8_UNORM).features().optimal_tiling;
+        assert_ne!(rgba & format_feature::SAMPLED_IMAGE_FILTER_CUBIC, 0);
+        let integer = Format(vk_format::R8G8B8A8_UINT).features().optimal_tiling;
+        assert_eq!(integer & format_feature::SAMPLED_IMAGE_FILTER_CUBIC, 0);
+        let depth = Format(vk_format::D32_SFLOAT).features().optimal_tiling;
+        assert_eq!(depth & format_feature::SAMPLED_IMAGE_FILTER_CUBIC, 0);
+    }
+
+    #[test]
     fn rgba8_reports_color_attachment_and_sampled() {
         let ff = Format(vk_format::R8G8B8A8_UNORM).features();
         assert_ne!(ff.optimal_tiling & format_feature::COLOR_ATTACHMENT, 0);

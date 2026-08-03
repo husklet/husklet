@@ -113,6 +113,23 @@ fn vertex_only_formats_survive_texture_capability_gating() {
     );
 }
 
+#[test]
+fn cubic_image_view_properties_gate_2d_and_minmax() {
+    let _g = test_guard();
+    let mut dev: *mut c_void = core::ptr::null_mut();
+    assert_eq!(crate::device::vkCreateDevice(core::ptr::null_mut(), core::ptr::null(), core::ptr::null(), &mut dev), VK_SUCCESS);
+    let mut view = VkPhysicalDeviceImageViewImageFormatInfoEXT { s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_VIEW_IMAGE_FORMAT_INFO_EXT, p_next: core::ptr::null(), image_view_type: 1 };
+    let info = VkPhysicalDeviceImageFormatInfo2 { s_type: 0, p_next: &view as *const _ as *const c_void, format: 37, image_type: 1, tiling: 0, usage: 4, flags: 0 };
+    let mut cubic = VkFilterCubicImageViewImageFormatPropertiesEXT { s_type: VK_STRUCTURE_TYPE_FILTER_CUBIC_IMAGE_VIEW_IMAGE_FORMAT_PROPERTIES_EXT, p_next: core::ptr::null_mut(), filter_cubic: 99, filter_cubic_minmax: 99 };
+    let mut out = VkImageFormatProperties2 { s_type: 0, p_next: &mut cubic as *mut _ as *mut c_void, image_format_properties: VkImageFormatProperties::default() };
+    assert_eq!(crate::instance::vkGetPhysicalDeviceImageFormatProperties2(core::ptr::null_mut(), &info as *const _ as *const c_void, &mut out as *mut _ as *mut c_void), VK_SUCCESS);
+    assert_eq!((cubic.filter_cubic, cubic.filter_cubic_minmax), (1, 0));
+    view.image_view_type = 2;
+    cubic.filter_cubic = 99;
+    assert_eq!(crate::instance::vkGetPhysicalDeviceImageFormatProperties2(core::ptr::null_mut(), &info as *const _ as *const c_void, &mut out as *mut _ as *mut c_void), VK_SUCCESS);
+    assert_eq!((cubic.filter_cubic, cubic.filter_cubic_minmax), (0, 0));
+}
+
 /// Create a device, a command pool, one command buffer, and put it into the `Recording` state.
 /// Returns `(dispatchable VkCommandBuffer, its u64 handle)`. Caller must hold [`test_guard`].
 pub(super) fn recording_command_buffer() -> (*mut c_void, u64) {
