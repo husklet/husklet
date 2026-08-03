@@ -314,6 +314,24 @@ pub fn invalid_storage_declaration(source: &str, shader_kind: u32) -> Option<Str
                     "'{token}' : storage qualifier is not allowed in a local declaration"
                 ));
             }
+            "varying" => {
+                let mut type_at = at + 1;
+                while matches!(
+                    tokens.get(type_at).map(String::as_str),
+                    Some("lowp" | "mediump" | "highp")
+                ) {
+                    type_at += 1;
+                }
+                if !matches!(
+                    tokens.get(type_at).map(String::as_str),
+                    Some("float" | "vec2" | "vec3" | "vec4" | "mat2" | "mat3" | "mat4")
+                ) {
+                    return Some(format!(
+                        "'{}' : GLSL ES 1.00 varyings must have a floating-point type",
+                        tokens.get(type_at).map(String::as_str).unwrap_or("<missing>")
+                    ));
+                }
+            }
             "invariant"
                 if matches!(
                     tokens.get(at + 1).map(String::as_str),
@@ -405,6 +423,31 @@ pub fn invalid_implicit_arithmetic(source: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::invalid_implicit_arithmetic;
+
+    #[test]
+    fn es100_rejects_non_float_varying_types() {
+        for source in [
+            "varying bool value; void main(){}",
+            "varying mediump int value; void main(){}",
+            "varying bvec3 value; void main(){}",
+            "varying ivec2 value; void main(){}",
+            "struct Value { float x; }; varying Value value; void main(){}",
+        ] {
+            assert!(
+                super::invalid_storage_declaration(
+                    source,
+                    crate::model::glconst::GL_VERTEX_SHADER
+                )
+                .is_some(),
+                "invalid varying compiled: {source}"
+            );
+        }
+        assert!(super::invalid_storage_declaration(
+            "varying mediump vec3 value; void main(){}",
+            crate::model::glconst::GL_VERTEX_SHADER
+        )
+        .is_none());
+    }
 
     #[test]
     fn component_names_do_not_alias_unrelated_variables() {
