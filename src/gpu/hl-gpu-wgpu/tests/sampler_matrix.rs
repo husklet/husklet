@@ -484,6 +484,15 @@ fn sampler_lod_and_comparison_state_is_validated_before_native_creation() {
     )
     .expect("finite ordered LOD clamps and a known comparison function are supported");
 
+    let mut negative = session(&executor);
+    let descriptor = SamplerDesc {
+        lod_min_clamp: -1000.0,
+        lod_max_clamp: 1000.0,
+        ..SamplerDesc::default()
+    };
+    hl_gpu::runtime::submit(&mut negative, &mut executor, 0, &[Cmd::CreateSampler(2, descriptor)])
+        .expect("Vulkan permits a finite negative minimum LOD");
+
     let mut invalid = session(&executor);
     let descriptor = SamplerDesc {
         lod_min_clamp: 5.0,

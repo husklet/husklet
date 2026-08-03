@@ -66,7 +66,6 @@ pub fn validate(limits: &Limits, frame_bytes: usize, cmds: &[Cmd]) -> Result<()>
             Cmd::CreateSampler(_, descriptor) => {
                 if !descriptor.lod_min_clamp.is_finite()
                     || !descriptor.lod_max_clamp.is_finite()
-                    || descriptor.lod_min_clamp < 0.0
                     || descriptor.lod_max_clamp < descriptor.lod_min_clamp
                 {
                     return Err(GpuError::Invalid("sampler LOD clamp"));
