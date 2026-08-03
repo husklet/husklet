@@ -54,7 +54,7 @@ u32_enum!(
         Rgb9e5Ufloat = 60,
         Rgb10a2Unorm = 61, Rgb10a2Uint = 62, Rg11b10Ufloat = 63,
         R5g6b5Unorm = 64, A1r5g5b5Unorm = 65, B4g4r4a4Unorm = 66,
-        Rgba16Unorm = 67, Rg16Unorm = 68, R16Unorm = 69, R16Snorm = 70,
+        Rgba16Unorm = 67, Rg16Unorm = 68, R16Unorm = 69, R16Snorm = 70, Rg16Snorm = 71,
     } "TextureFormat"
 );
 
@@ -126,6 +126,7 @@ impl TextureFormat {
             TextureFormat::Rgba8Snorm
             | TextureFormat::Rg16Float
             | TextureFormat::Rg16Unorm
+            | TextureFormat::Rg16Snorm
             | TextureFormat::Rg16Uint
             | TextureFormat::Rg16Sint => 4,
             TextureFormat::Rgba16Float
@@ -268,6 +269,10 @@ impl TextureFormat {
                 .iter()
                 .flat_map(|v| unorm_bits(*v, u16::MAX).to_le_bytes())
                 .collect(),
+            TextureFormat::Rg16Snorm => color[..2]
+                .iter()
+                .flat_map(|v| snorm16(*v).to_le_bytes())
+                .collect(),
             TextureFormat::Rg32Float => color[..2]
                 .iter()
                 .flat_map(|v| (*v as f32).to_le_bytes())
@@ -382,6 +387,7 @@ impl TextureFormat {
             TextureFormat::R16Snorm => [snorm16(0), 0.0, 0.0, 1.0],
             TextureFormat::Rgba16Unorm => [unorm16(0), unorm16(1), unorm16(2), unorm16(3)],
             TextureFormat::Rg16Unorm => [unorm16(0), unorm16(1), 0.0, 1.0],
+            TextureFormat::Rg16Snorm => [snorm16(0), snorm16(1), 0.0, 1.0],
             TextureFormat::Rg32Float => [single(0), single(1), 0.0, 1.0],
             TextureFormat::Rgba16Float => [half(0), half(1), half(2), half(3)],
             TextureFormat::Rgba32Float => [single(0), single(1), single(2), single(3)],

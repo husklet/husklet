@@ -115,6 +115,7 @@ pub const COLOR_FORMATS: &[TextureFormat] = &[
     TextureFormat::Rg16Unorm,
     TextureFormat::R16Unorm,
     TextureFormat::R16Snorm,
+    TextureFormat::Rg16Snorm,
     TextureFormat::Rgba32Float,
     TextureFormat::R32Float,
     TextureFormat::Rg32Float,
