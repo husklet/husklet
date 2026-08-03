@@ -530,3 +530,11 @@ void main(){ int i=0; do { if(i==2) continue; color=vec4(1.0); } while(++i<3); }
     );
     assert!(wgsl[continuing..].contains("break if"), "{wgsl}");
 }
+#[test]
+fn larger_vector_constructor_is_explicitly_truncated_for_naga() {
+    let source = "#version 460\nlayout(location=0) out vec4 color;\nvoid main(){ bvec3 input_value=bvec3(true,false,true); ivec2 value=ivec2(input_value); color=vec4(value,0,1); }";
+    let normalized = crate::glsl_es::Source::new(source).truncate_vector_constructors();
+    assert!(normalized.contains("ivec2(input_value.xy)"), "{normalized}");
+    glsl_to_wgsl(source, naga::ShaderStage::Fragment, "main")
+        .unwrap_or_else(|error| panic!("truncated vector constructor was refused: {error}"));
+}

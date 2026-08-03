@@ -219,6 +219,49 @@ impl Tokens {
         }
         Self(tokens)
     }
+
+    /// Naga keeps the source vector's width for a single-argument vector constructor instead of applying
+    /// GLSL's truncation rule. Make that truncation explicit before parsing.
+    fn truncate_vector_constructors(&mut self) {
+        let mut variables = std::collections::BTreeMap::<String, usize>::new();
+        for index in 0..self.len() {
+            let Tok::Word(ty) = &self[index] else { continue };
+            let Some(width) = vector_width(ty) else { continue };
+            let Some(name) = self.next_significant(index + 1) else { continue };
+            if let Tok::Word(name) = &self[name] {
+                variables.insert(name.clone(), width);
+            }
+        }
+
+        let mut inserts = Vec::new();
+        for index in 0..self.len() {
+            let Tok::Word(destination) = &self[index] else { continue };
+            let Some(destination_width) = vector_width(destination) else { continue };
+            let Some(open) = self.next_significant(index + 1) else { continue };
+            let Some(argument_index) = self.next_significant(open + 1) else { continue };
+            let Some(close) = self.next_significant(argument_index + 1) else { continue };
+            if self[open] != Tok::Punct('(') || self[close] != Tok::Punct(')') {
+                continue;
+            }
+            let Tok::Word(argument) = &self[argument_index] else { continue };
+            if variables.get(argument).is_some_and(|width| *width > destination_width) {
+                inserts.push((close, ".xyzw"[..=destination_width].to_string()));
+            }
+        }
+        for (index, swizzle) in inserts.into_iter().rev() {
+            self.0.insert(index, Tok::Word(swizzle));
+        }
+    }
+}
+
+fn vector_width(ty: &str) -> Option<usize> {
+    let width = ty.as_bytes().last()?.checked_sub(b'0')? as usize;
+    matches!(
+        ty,
+        "vec2" | "vec3" | "vec4" | "ivec2" | "ivec3" | "ivec4" | "uvec2" | "uvec3"
+            | "uvec4" | "bvec2" | "bvec3" | "bvec4"
+    )
+    .then_some(width)
 }
 
 impl std::ops::Deref for Tokens {
@@ -484,6 +527,12 @@ impl<'a> Source<'a> {
         let toks = SwitchRewrite::lower_all(&toks);
 
         toks.as_slice().source()
+    }
+
+    pub(crate) fn truncate_vector_constructors(&self) -> String {
+        let mut tokens = Tokens::from_source(self.text);
+        tokens.truncate_vector_constructors();
+        tokens.0.as_slice().source()
     }
 
     fn without_comments(source: &str) -> String {
