@@ -68,6 +68,7 @@ impl GlContext {
             prog_pipeline_cache: HashMap::new(),
             sampler_ir_cache: Vec::new(),
             debug_labels: HashMap::new(),
+            debug_materialized: HashSet::new(),
             debug_pointer_labels: HashMap::new(),
             clear_shader_ir: HashMap::new(),
             clear_pipeline_cache: std::collections::HashMap::new(),

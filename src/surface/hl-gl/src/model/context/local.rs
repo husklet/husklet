@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::model::es3::{ProgramPipelines, Queries, TransformFeedbacks};
 use crate::model::framebuffer::Framebuffers;
@@ -76,6 +76,7 @@ pub(crate) struct LocalState {
     pub(crate) pipeline: PipelineState,
     pub(crate) debug: DebugState,
     pub(crate) debug_labels: HashMap<(u32, u32), Vec<u8>>,
+    pub(crate) debug_materialized: HashSet<(u32, u32)>,
     pub(crate) bound_fbo: u32,
     pub(crate) read_fbo: u32,
     pub(crate) bound_rbo: u32,
@@ -168,6 +169,7 @@ impl Default for LocalState {
             pipeline: PipelineState::default(),
             debug: DebugState::default(),
             debug_labels: HashMap::new(),
+            debug_materialized: HashSet::new(),
             bound_fbo: 0,
             read_fbo: 0,
             bound_rbo: 0,

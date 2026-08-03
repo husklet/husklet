@@ -115,6 +115,7 @@ pub fn begin_query(ctx: &mut GlContext, target: u32, id: u32) {
         }
     }
     ctx.local.queries.begin(target, id);
+    ctx.mark_debug_object_materialized(GL_QUERY_OBJECT, id);
 }
 
 /// `glEndQuery(target)`. A bad target → `GL_INVALID_ENUM`; no active query on the target →
@@ -189,6 +190,7 @@ pub fn bind_transform_feedback(ctx: &mut GlContext, target: u32, id: u32) {
         return;
     }
     ctx.local.transform_feedbacks.bind(id);
+    ctx.mark_debug_object_materialized(GL_TRANSFORM_FEEDBACK, id);
     ctx.local
         .indexed_buffers
         .retain(|(target, _), _| *target != GL_TRANSFORM_FEEDBACK_BUFFER);
@@ -331,6 +333,7 @@ impl GlContext {
             return;
         }
         self.local.program_pipelines.bind(id);
+        self.mark_debug_object_materialized(GL_PROGRAM_PIPELINE_OBJECT, id);
     }
 }
 
