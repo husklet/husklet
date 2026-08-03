@@ -2,8 +2,8 @@
 
 use crate::model::context::CudaContext;
 use crate::model::device::DevicePtr;
-use crate::model::graphics::{GraphicsBuffer, GraphicsResource};
-use hl_gpu::{BufferId, Cmd, CommandSink, ExportId, GpuError, Result};
+use crate::model::graphics::{GraphicsBuffer, GraphicsImage, GraphicsObject, GraphicsResource, ImportedArrayHandle};
+use hl_gpu::{BufferId, Cmd, CommandSink, ExportId, GpuError, Result, TextureId};
 
 pub fn register_buffer(
     ctx: &mut CudaContext,
@@ -16,12 +16,22 @@ pub fn register_buffer(
     Ok(ctx.graphics.insert(GraphicsBuffer { buffer, export, pointer, bytes, mapped: false, map_flags: 0 }))
 }
 
+/// Register the narrow image shape the GL bridge can truthfully export today: one `GL_TEXTURE_2D`
+/// image. Mip/layer selection is validated later by [`mapped_array`].
+pub fn register_image(ctx: &mut CudaContext, sink: &mut dyn CommandSink, export: ExportId) -> Result<GraphicsResource> {
+    let texture = TextureId(ctx.alloc_texture());
+    sink.import_texture(texture, export)?;
+    Ok(ctx.graphics.insert_image(GraphicsImage { texture, export, mapped: false, map_flags: 0, array: None }))
+}
+
 /// Set NONE, READ_ONLY, or WRITE_DISCARD for a registered, currently-unmapped resource.
 pub fn set_map_flags(ctx: &mut CudaContext, resource: GraphicsResource, flags: u32) -> Result<()> {
     if flags > 2 { return Err(GpuError::Invalid("CUDA graphics map flags")); }
-    let entry = ctx.graphics.get_mut(resource).ok_or(GpuError::Invalid("CUDA graphics resource"))?;
-    if entry.mapped { return Err(GpuError::Invalid("CUDA graphics resource still mapped")); }
-    entry.map_flags = flags;
+    let entry = ctx.graphics.object_mut(resource).ok_or(GpuError::Invalid("CUDA graphics resource"))?;
+    match entry {
+        GraphicsObject::Buffer(entry) => { if entry.mapped { return Err(GpuError::Invalid("CUDA graphics resource still mapped")); } entry.map_flags = flags; }
+        GraphicsObject::Image(entry) => { if entry.mapped { return Err(GpuError::Invalid("CUDA graphics resource still mapped")); } entry.map_flags = flags; }
+    }
     Ok(())
 }
 
@@ -32,20 +42,25 @@ pub fn map_resources(
 ) -> Result<()> {
     validate_distinct(resources)?;
     for resource in resources {
-        let entry = ctx.graphics.get(*resource).ok_or(GpuError::Invalid("CUDA graphics resource"))?;
-        if entry.mapped { return Err(GpuError::Invalid("CUDA graphics resource already mapped")); }
+        let entry = ctx.graphics.object(*resource).ok_or(GpuError::Invalid("CUDA graphics resource"))?;
+        if match entry { GraphicsObject::Buffer(entry) => entry.mapped, GraphicsObject::Image(entry) => entry.mapped } { return Err(GpuError::Invalid("CUDA graphics resource already mapped")); }
     }
     let mut mapped = Vec::new();
     for resource in resources {
-        let buffer = ctx.graphics.get(*resource).unwrap().buffer;
-        if let Err(error) = sink.map_buffer(buffer) {
-            for prior in mapped.into_iter().rev() { let _ = sink.unmap_buffer(prior); }
+        let object = *ctx.graphics.object(*resource).unwrap();
+        let result = match object { GraphicsObject::Buffer(entry) => sink.map_buffer(entry.buffer), GraphicsObject::Image(entry) => sink.map_texture(entry.texture) };
+        if let Err(error) = result {
+            for prior in mapped.into_iter().rev() { match prior { GraphicsObject::Buffer(entry) => { let _ = sink.unmap_buffer(entry.buffer); }, GraphicsObject::Image(entry) => { let _ = sink.unmap_texture(entry.texture); } } }
             return Err(error);
         }
-        mapped.push(buffer);
+        mapped.push(object);
     }
-    for resource in resources { ctx.graphics.get_mut(*resource).unwrap().mapped = true; }
+    for resource in resources { match ctx.graphics.object_mut(*resource).unwrap() { GraphicsObject::Buffer(entry) => entry.mapped = true, GraphicsObject::Image(entry) => entry.mapped = true } }
     Ok(())
+}
+
+pub fn mapped_array(ctx: &mut CudaContext, resource: GraphicsResource, array_index: u32, mip_level: u32) -> Result<ImportedArrayHandle> {
+    ctx.graphics.mapped_array(resource, mip_level, array_index).ok_or(GpuError::Invalid("CUDA mapped image subresource"))
 }
 
 pub fn mapped_pointer(ctx: &CudaContext, resource: GraphicsResource) -> Result<(DevicePtr, u64)> {
@@ -61,13 +76,23 @@ pub fn unmap_resources(
 ) -> Result<()> {
     validate_distinct(resources)?;
     for resource in resources {
-        let entry = ctx.graphics.get(*resource).ok_or(GpuError::Invalid("CUDA graphics resource"))?;
-        if !entry.mapped { return Err(GpuError::Invalid("CUDA graphics resource is not mapped")); }
+        let entry = ctx.graphics.object(*resource).ok_or(GpuError::Invalid("CUDA graphics resource"))?;
+        if !match entry { GraphicsObject::Buffer(entry) => entry.mapped, GraphicsObject::Image(entry) => entry.mapped } { return Err(GpuError::Invalid("CUDA graphics resource is not mapped")); }
     }
     for resource in resources {
-        sink.unmap_buffer(ctx.graphics.get(*resource).unwrap().buffer)?;
-        ctx.graphics.get_mut(*resource).unwrap().mapped = false;
+        let object = *ctx.graphics.object(*resource).unwrap();
+        match object { GraphicsObject::Buffer(entry) => sink.unmap_buffer(entry.buffer)?, GraphicsObject::Image(entry) => sink.unmap_texture(entry.texture)? }
+        ctx.graphics.invalidate_array(*resource);
+        match ctx.graphics.object_mut(*resource).unwrap() { GraphicsObject::Buffer(entry) => entry.mapped = false, GraphicsObject::Image(entry) => entry.mapped = false }
     }
+    Ok(())
+}
+
+pub fn unregister_image(ctx: &mut CudaContext, sink: &mut dyn CommandSink, resource: GraphicsResource) -> Result<()> {
+    let entry = match ctx.graphics.object(resource).copied() { Some(GraphicsObject::Image(entry)) => entry, _ => return Err(GpuError::Invalid("CUDA graphics image")) };
+    if entry.mapped { return Err(GpuError::Invalid("CUDA graphics resource still mapped")); }
+    sink.submit(&[Cmd::DestroyTexture(entry.texture.0)])?;
+    ctx.graphics.remove_object(resource);
     Ok(())
 }
 
@@ -100,14 +125,17 @@ mod tests {
     use hl_gpu::{Capabilities, FeatureRequest, FenceId};
 
     #[derive(Default)]
-    struct Sink { imports: Vec<(BufferId, ExportId)>, mapped: Vec<BufferId>, unmapped: Vec<BufferId>, batches: Vec<Vec<Cmd>>, fail_map: Option<BufferId> }
+    struct Sink { imports: Vec<(BufferId, ExportId)>, texture_imports: Vec<(TextureId, ExportId)>, mapped: Vec<BufferId>, unmapped: Vec<BufferId>, mapped_textures: Vec<TextureId>, unmapped_textures: Vec<TextureId>, batches: Vec<Vec<Cmd>>, fail_map: Option<BufferId> }
     impl CommandSink for Sink {
         fn negotiate(&mut self, _: &FeatureRequest) -> Result<Capabilities> { Ok(Capabilities::permissive_fixture("graphics-test")) }
         fn submit(&mut self, batch: &[Cmd]) -> Result<()> { self.batches.push(batch.to_vec()); Ok(()) }
         fn wait(&mut self, _: FenceId, _: u64) -> Result<()> { Ok(()) }
         fn import_buffer(&mut self, id: BufferId, export: ExportId) -> Result<u64> { self.imports.push((id, export)); Ok(4096) }
+        fn import_texture(&mut self, id: TextureId, export: ExportId) -> Result<u64> { self.texture_imports.push((id, export)); Ok(64) }
         fn map_buffer(&mut self, id: BufferId) -> Result<()> { if self.fail_map == Some(id) { return Err(GpuError::Invalid("injected map failure")); } self.mapped.push(id); Ok(()) }
         fn unmap_buffer(&mut self, id: BufferId) -> Result<()> { self.unmapped.push(id); Ok(()) }
+        fn map_texture(&mut self, id: TextureId) -> Result<()> { self.mapped_textures.push(id); Ok(()) }
+        fn unmap_texture(&mut self, id: TextureId) -> Result<()> { self.unmapped_textures.push(id); Ok(()) }
     }
     fn context() -> CudaContext { CudaContext::new(CudaDeviceDesc::apple_default(1 << 30)) }
 
@@ -160,5 +188,28 @@ mod tests {
         assert!(set_map_flags(&mut ctx, resource, 1).is_err());
         assert_eq!(ctx.graphics.get(resource).unwrap().map_flags, 2);
         assert!(set_map_flags(&mut ctx, GraphicsResource(u64::MAX), 0).is_err());
+    }
+
+    #[test]
+    fn imported_image_array_exists_only_for_the_mapped_base_subresource() {
+        let (mut ctx, mut sink) = (context(), Sink::default());
+        let resource = register_image(&mut ctx, &mut sink, ExportId(7)).unwrap();
+        assert_eq!(sink.texture_imports.len(), 1);
+        assert!(mapped_array(&mut ctx, resource, 0, 0).is_err());
+        map_resources(&mut ctx, &mut sink, &[resource]).unwrap();
+        let array = mapped_array(&mut ctx, resource, 0, 0).unwrap();
+        assert_eq!(mapped_array(&mut ctx, resource, 0, 0).unwrap(), array);
+        assert!(mapped_array(&mut ctx, resource, 1, 0).is_err());
+        assert!(mapped_array(&mut ctx, resource, 0, 1).is_err());
+        let imported = *ctx.graphics.array(array).unwrap();
+        assert_eq!((imported.resource, imported.mip, imported.layer), (resource, 0, 0));
+        assert_eq!(sink.mapped_textures, vec![imported.texture]);
+        assert!(unregister_image(&mut ctx, &mut sink, resource).is_err());
+        unmap_resources(&mut ctx, &mut sink, &[resource]).unwrap();
+        assert!(ctx.graphics.array(array).is_none());
+        assert!(mapped_array(&mut ctx, resource, 0, 0).is_err());
+        unregister_image(&mut ctx, &mut sink, resource).unwrap();
+        assert_eq!(sink.unmapped_textures, vec![imported.texture]);
+        assert!(matches!(sink.batches.last().unwrap().as_slice(), [Cmd::DestroyTexture(_)]));
     }
 }

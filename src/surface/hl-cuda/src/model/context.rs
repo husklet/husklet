@@ -46,6 +46,7 @@ pub struct CudaContext {
     // guest-assigned id counters (monotonic; one buffer counter shared by allocations + param buffers,
     // exactly as the ported source did).
     next_buffer: u32,
+    next_texture: u32,
     next_shader: u32,
     next_pipeline: u32,
     next_bind_group: u32,
@@ -66,6 +67,7 @@ impl CudaContext {
             pipelines: HashMap::new(),
             global_allocs: HashMap::new(),
             next_buffer: 1,
+            next_texture: 1,
             next_shader: 1,
             next_pipeline: 1,
             next_bind_group: 1,
@@ -79,6 +81,12 @@ impl CudaContext {
     pub fn alloc_buffer(&mut self) -> u32 {
         let id = self.next_buffer;
         self.next_buffer += 1;
+        id
+    }
+
+    pub fn alloc_texture(&mut self) -> u32 {
+        let id = self.next_texture;
+        self.next_texture += 1;
         id
     }
 
