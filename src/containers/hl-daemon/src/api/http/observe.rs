@@ -21,6 +21,10 @@ pub(super) async fn top(
 ) -> ApiResult<Json<Top>> {
     let columns = options.columns()?;
     let container = state.containers.inspect(&id).await.map_err(ApiError::container)?;
+    top_response(&container, &columns).map(Json)
+}
+
+fn top_response(container: &Container, columns: &[ProcessColumn]) -> ApiResult<Top> {
     if !matches!(
         container.state,
         ContainerState::Running { .. } | ContainerState::Paused { .. }
@@ -33,11 +37,17 @@ pub(super) async fn top(
             ),
         ));
     }
-    let process = ProcessRow::new(&container);
-    Ok(Json(Top {
+    if !columns.iter().any(|column| matches!(column, ProcessColumn::Pid)) {
+        return Err(ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Couldn't find PID field in ps output",
+        ));
+    }
+    let process = ProcessRow::new(container);
+    Ok(Top {
         titles: columns.iter().map(|column| column.title().into()).collect(),
         processes: vec![columns.iter().map(|column| process.value(*column)).collect()],
-    }))
+    })
 }
 
 #[derive(Default, Deserialize)]
@@ -80,12 +90,6 @@ impl TopOptions {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
                 "top column list cannot be empty",
-            ));
-        }
-        if !columns.iter().any(|column| matches!(column, ProcessColumn::Pid)) {
-            return Err(ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "top column list must include pid",
             ));
         }
         Ok(columns)

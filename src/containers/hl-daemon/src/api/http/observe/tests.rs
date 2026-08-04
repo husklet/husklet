@@ -1,6 +1,6 @@
 use super::{
     CpuTime, Options, ProcessColumn, ProcessMetrics, ProcessRow, StatsMode, TopOptions, docker_bool,
-    sample_with_metrics, stats, stats_stream_response, supports_one_shot,
+    sample_with_metrics, stats, stats_stream_response, supports_one_shot, top, top_response,
 };
 use axum::body::Body;
 use axum::extract::{OriginalUri, Path, Query, State};
@@ -184,25 +184,26 @@ fn top_options_select_columns_and_reject_unknown_values() {
     assert_eq!(ProcessColumn::DEFAULT[3].title(), "C");
 }
 
-#[test]
-fn top_custom_columns_require_pid_identity() {
-    let unscoped = TopOptions {
-        ps_args: Some("-eo user,args".into()),
+fn custom_top(fields: &str) -> TopOptions {
+    TopOptions {
+        ps_args: Some(format!("-eo {fields}")),
         unsupported: BTreeMap::new(),
-    };
-    let error = match unscoped.columns() {
-        Ok(_) => panic!("unscoped columns must fail"),
-        Err(error) => error,
-    };
-    assert_eq!(error.status, StatusCode::BAD_REQUEST);
-    assert!(format!("{error:?}").contains("must include pid"));
+    }
+}
 
-    let scoped = TopOptions {
-        ps_args: Some("-eo user,pid,args".into()),
-        unsupported: BTreeMap::new(),
-    };
+#[test]
+fn top_custom_columns_preserve_order_before_pid_validation() {
     assert_eq!(
-        scoped
+        custom_top("user,args")
+            .columns()
+            .unwrap()
+            .iter()
+            .map(|column| column.title())
+            .collect::<Vec<_>>(),
+        ["USER", "CMD"]
+    );
+    assert_eq!(
+        custom_top("user,pid,args")
             .columns()
             .unwrap()
             .iter()
@@ -210,6 +211,82 @@ fn top_custom_columns_require_pid_identity() {
             .collect::<Vec<_>>(),
         ["USER", "PID", "CMD"]
     );
+}
+
+#[tokio::test]
+async fn top_status_precedes_pid_header_validation() {
+    let root = tempfile::tempdir().unwrap();
+    let containers = hl_container::Containers::builder(
+        hl_container::Config::new(root.path()).persistence(hl_container::Persistence::Memory),
+    )
+    .build()
+    .await
+    .unwrap();
+    let stopped = containers
+        .create(ContainerSpec::from_directory(root.path(), Process::new("/bin/true")).name("stopped"))
+        .await
+        .unwrap();
+    let state = super::super::DockerState {
+        containers,
+        platform: hl_images::Platform::linux_arm64(),
+        source: Arc::new(hl_images::remote::Registry::new(hl_images::remote::Auth::Anonymous)),
+        events: crate::events::Events::new(),
+        builds: crate::builder::Builds::default(),
+        release: crate::daemon::Release::default(),
+        sampler: Arc::new(crate::process::UnavailableProcessSampler),
+    };
+
+    let missing = top(
+        State(state.clone()),
+        Path("missing".into()),
+        Query(custom_top("user,args")),
+    )
+    .await;
+    let missing = match missing {
+        Ok(_) => panic!("missing container must fail"),
+        Err(error) => error,
+    };
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+
+    let stopped = top(
+        State(state),
+        Path(stopped.id.to_string()),
+        Query(custom_top("user,args")),
+    )
+    .await;
+    let stopped = match stopped {
+        Ok(_) => panic!("stopped container must fail"),
+        Err(error) => error,
+    };
+    assert_eq!(stopped.status, StatusCode::CONFLICT);
+}
+
+#[test]
+fn top_active_pid_validation_and_lifecycle_contract() {
+    let without_pid = custom_top("user,args").columns().unwrap();
+    let error = match top_response(&running(), &without_pid) {
+        Ok(_) => panic!("active result without PID must fail"),
+        Err(error) => error,
+    };
+    assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(format!("{error:?}").contains("Couldn't find PID"));
+
+    let with_pid = custom_top("user,pid,args").columns().unwrap();
+    let response = top_response(&running(), &with_pid).unwrap();
+    assert_eq!(response.titles, ["USER", "PID", "CMD"]);
+    assert_eq!(response.processes[0][1], "1");
+
+    let mut restarting = running();
+    restarting.state = ContainerState::Restarting {
+        result: hl_container::ExitStatus::Code(1),
+        finished_at_ms: 2,
+        ready_at_ms: 3,
+    };
+    let error = match top_response(&restarting, &without_pid) {
+        Ok(_) => panic!("restarting container must fail"),
+        Err(error) => error,
+    };
+    assert_eq!(error.status, StatusCode::CONFLICT);
 }
 
 #[test]
