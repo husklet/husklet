@@ -10,7 +10,7 @@ cases:
     status: active
     targets: [arm64]
     compat: { class: compatibility }
-    build: { source: isa_regress_arm64.c, output: isa-regress-arm64, flags: [-O2, -static, -no-pie] }
+    build: { source: regress_arm64.c, output: isa-regress-arm64, flags: [-O2, -static, -no-pie] }
     artifact: { destination: /opt/husklet/isa-regress-arm64 }
     run: []
     timeout: 120
@@ -88,7 +88,7 @@ cases:
       evidence: "tests/runtime/isa/QEMU_EVIDENCE.md"
     targets: [amd64]
     compat: { class: compatibility }
-    build: { source: isa_regress_amd64.c, output: isa-regress-amd64, flags: [-O2, -static, -no-pie] }
+    build: { source: regress_amd64.c, output: isa-regress-amd64, flags: [-O2, -static, -no-pie] }
     artifact: { destination: /opt/husklet/isa-regress-amd64 }
     run: []
     timeout: 120
