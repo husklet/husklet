@@ -39,18 +39,18 @@ macro_rules! impl_exclusive_memory {
                 pair: bool,
                 order: MemoryOrder,
             ) -> Result<ExclusiveLoad, ()> {
-                let (value, reservation) = self.with_mappings(|mappings| {
-                    mappings
-                        .load_exclusive(GuestAddress::new(address), bytes, pair, ArenaMemory::order(order))
-                        .map_err(|_| ())
-                })?;
+                let lease = self.selected_lease();
+                let (value, reservation) = lease
+                    .mappings_ref()
+                    .load_exclusive(GuestAddress::new(address), bytes, pair, ArenaMemory::order(order))
+                    .map_err(|_| ())?;
                 Ok(ExclusiveLoad {
                     value: ArenaMemory::guest_value(value),
                     reservation: ExclusiveReservation::versioned(
                         address,
                         bytes,
                         pair,
-                        MappingGeneration::new(reservation.mapping_generation()),
+                        MappingGeneration::new(lease.generation()),
                         MappingGeneration::new(reservation.write_epoch()),
                     ),
                 })
@@ -62,21 +62,24 @@ macro_rules! impl_exclusive_memory {
                 value: AtomicValue,
                 order: MemoryOrder,
             ) -> Result<bool, ()> {
-                self.with_mappings(|mappings| {
-                    mappings
-                        .store_exclusive(
-                            MemoryReservation::new(
-                                reservation.address(),
-                                reservation.element_bytes(),
-                                reservation.pair(),
-                                reservation.generation().value(),
-                                reservation.write_epoch().value(),
-                            ),
-                            ArenaMemory::memory_value(value),
-                            ArenaMemory::order(order),
-                        )
-                        .map_err(|_| ())
-                })
+                let lease = self.selected_lease();
+                if reservation.generation().value() != lease.generation() {
+                    return Ok(false);
+                }
+                let mappings = lease.mappings_ref();
+                mappings
+                    .store_exclusive(
+                        MemoryReservation::new(
+                            reservation.address(),
+                            reservation.element_bytes(),
+                            reservation.pair(),
+                            mappings.ledger().generation(),
+                            reservation.write_epoch().value(),
+                        ),
+                        ArenaMemory::memory_value(value),
+                        ArenaMemory::order(order),
+                    )
+                    .map_err(|_| ())
             }
 
             fn compare_exchange(

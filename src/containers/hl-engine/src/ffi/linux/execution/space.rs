@@ -1082,6 +1082,7 @@ mod tests {
         let stale = space.lease();
         let mut operand = space.arena_memory();
         let exclusive = operand.load_exclusive(0, 1, false, MemoryOrder::Relaxed).unwrap();
+        let old_mapping_generation = stale.mappings_ref().ledger().generation();
         assert_eq!(stale.generation(), 1);
 
         let arena = Arc::new(
@@ -1106,6 +1107,14 @@ mod tests {
             ))
             .unwrap();
         arena.write(0, b"new").unwrap();
+        let (_, replacement_exclusive) = mappings
+            .load_exclusive(GuestAddress::new(0), 1, false, hl_memory::AtomicOrder::Relaxed)
+            .unwrap();
+        assert_eq!(mappings.ledger().generation(), old_mapping_generation);
+        assert_eq!(
+            replacement_exclusive.write_epoch(),
+            exclusive.reservation.write_epoch().value(),
+        );
 
         let retired = space.replace(1, arena, mappings).unwrap();
         assert_eq!(retired.generation(), 1);
