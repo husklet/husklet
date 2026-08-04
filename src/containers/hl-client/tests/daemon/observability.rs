@@ -26,7 +26,10 @@ async fn observability_client_exposes_stats_and_rejects_top_for_inactive_process
     assert_eq!(stats.memory_stats.usage, 0);
     let mut stream = client.containers().stats_stream(container.id.as_str()).await.unwrap();
     assert_eq!(stream.next().await.unwrap().unwrap().id, container.id.as_str());
-    assert!(stream.next().await.unwrap().is_none());
+    let next = stream.next().await.unwrap().unwrap();
+    assert_eq!(next.id, container.id.as_str());
+    assert_eq!(next.pids_stats.current, 0);
+    drop(stream);
     assert!(client.containers().top(container.id.as_str()).await.is_err());
     let error = client
         .containers()
