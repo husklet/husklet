@@ -1,0 +1,19 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+artifact: { destination: /opt/husklet/runtime-socket-stop }
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+build:
+  source: main.c
+  output: runtime-socket-stop
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: [-static, -O2, -std=gnu11]
+cases:
+  - id: runtime/socket-stop/blocking-read
+    status: !broken
+      reason: "fixture intentionally blocks awaiting external stop orchestration"
+      evidence: "tests/runtime/socket-stop/EVIDENCE.md"
+    targets: [arm64, amd64]
+    compat: { class: compatibility }
+    run: [blocking-read]
+    expect: { exit: 0, stdout: golden/empty.bin }

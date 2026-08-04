@@ -1,0 +1,29 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: [-nostdlib, -static, -fno-stack-protector, -fno-asynchronous-unwind-tables, "-Wl,--build-id=none"]
+cases:
+  - id: runtime/bootstrap/exit
+    status: active
+    compat: { class: smoke }
+    build: { source: source/exit.c, output: exit, flags: [-nostdlib, -static, -fno-stack-protector, -fno-asynchronous-unwind-tables, "-Wl,--build-id=none"] }
+    artifact: { destination: /opt/husklet/exit }
+    run: []
+    expect: { exit: 42, stdout: golden/empty.bin }
+  - id: runtime/bootstrap/write
+    status: active
+    compat: { class: smoke }
+    build: { source: source/write.c, output: write, flags: [-nostdlib, -static, -fno-stack-protector, -fno-asynchronous-unwind-tables, "-Wl,--build-id=none"] }
+    artifact: { destination: /opt/husklet/write }
+    run: []
+    expect: { exit: 0, stdout: golden/write.txt }
+  - id: runtime/bootstrap/syscall
+    status: active
+    compat: { class: smoke }
+    build: { source: source/syscall.c, output: syscall, flags: [-nostdlib, -static, -fno-stack-protector, -fno-asynchronous-unwind-tables, "-Wl,--build-id=none"] }
+    artifact: { destination: /opt/husklet/syscall }
+    run: []
+    expect: { exit: 0, stdout: golden/syscall.txt }

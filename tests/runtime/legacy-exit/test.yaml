@@ -1,0 +1,17 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+artifact: { destination: /opt/husklet/legacy-exit }
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+build:
+  source: main.c
+  output: legacy-exit
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: [-std=c11, -Os, -nostdlib, -static, -fno-pie, -no-pie, -fno-ident, -fno-stack-protector, -ffreestanding, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"]
+cases:
+  - id: runtime/legacy-exit/status-42
+    status: active
+    targets: [arm64, amd64]
+    compat: { class: smoke }
+    run: [status-42]
+    expect: { exit: 42, stdout: golden/empty.bin }
