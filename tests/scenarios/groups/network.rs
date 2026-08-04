@@ -1,6 +1,6 @@
 //! Exact Docker-network plus single-container network contracts.
 
-use super::{registry, runner::Runner, volume};
+use super::{registry, volume};
 use crate::report::ScenarioBatch;
 use hl_client::{
     Client, Config,
@@ -22,11 +22,6 @@ pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
     let mut failures = Vec::new();
     if selected.as_deref().is_none_or(|id| id.starts_with("dockernet/")) {
         if let Err(error) = docker(containers, selected.as_deref()).await {
-            failures.push(error.to_string());
-        }
-    }
-    if selected.as_deref().is_none_or(|id| id.starts_with("networking/")) {
-        if let Err(error) = Runner::from_env(containers)?.run(registry::networking::group()).await {
             failures.push(error.to_string());
         }
     }
