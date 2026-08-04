@@ -1,4 +1,5 @@
 use crate::suite::{Error, Execution, Target};
+use clap::ValueEnum;
 use serde::Deserialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -41,7 +42,7 @@ struct Case {
     expect: Expect,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Class {
     #[default]

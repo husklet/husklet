@@ -111,3 +111,33 @@ fn dotnet_folder_preserves_the_orphan_contract_ids() {
         ])
     );
 }
+
+#[test]
+fn every_repository_definition_loads_with_globally_unique_ids() {
+    let mut root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    while !root.join("tests/scenarios").is_dir() {
+        root = root.parent().expect("workspace root contains scenario definitions");
+    }
+    let scenario_root = root.join("tests/scenarios");
+    let mut directories = fs::read_dir(&scenario_root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_dir() && path.join("test.yaml").is_file())
+        .collect::<Vec<_>>();
+    directories.sort();
+    assert!(!directories.is_empty());
+
+    let mut ids = BTreeSet::new();
+    for directory in directories {
+        let definition = directory.join("test.yaml");
+        let scenario =
+            Scenario::load(&directory, &definition).unwrap_or_else(|error| panic!("{}: {error}", definition.display()));
+        for case in scenario.cases {
+            assert!(
+                ids.insert(case.id.clone()),
+                "duplicate repository scenario id {}",
+                case.id
+            );
+        }
+    }
+}

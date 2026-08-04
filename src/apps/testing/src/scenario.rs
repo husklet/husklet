@@ -5,12 +5,21 @@ mod scheduler;
 
 use crate::suite::{Error, Target};
 use clap::Args;
-use definition::Scenario;
+use definition::{Class, Scenario};
 use std::path::{Path, PathBuf};
 
 pub async fn run(options: Options) -> Result<(), Error> {
+    let scenarios = scenarios(&options)?;
+    if options.list {
+        let work = scheduler::inventory(scenarios, &options)?;
+        for key in &work {
+            println!("{}\t{}", key.id, key.target.name());
+        }
+        println!("scenarios: {} selected case/target pairs", work.len());
+        return Ok(());
+    }
     let report = workspace()?.join(&options.results);
-    let summary = scheduler::run(scenarios(&options)?, &options, &report).await?;
+    let summary = scheduler::run(scenarios, &options, &report).await?;
     println!(
         "scenarios: {} passed; {} expected failures; {} failed",
         summary.passed,
@@ -65,6 +74,12 @@ pub(crate) struct Options {
     /// Run only one guest ISA.
     #[arg(long = "isa", value_enum)]
     target: Option<Target>,
+    /// Run only quick or long cases.
+    #[arg(long, value_enum)]
+    class: Option<Class>,
+    /// Print selected case/target pairs without materializing images.
+    #[arg(long)]
+    list: bool,
     /// Maximum number of concurrently executing cases.
     #[arg(long, env = "HL_COMPAT_JOBS", default_value_t = logical_jobs(), value_parser = parse_jobs)]
     jobs: usize,
@@ -115,7 +130,14 @@ impl Options {
 
 #[cfg(test)]
 mod tests {
-    use super::{logical_jobs, parse_jobs};
+    use super::{Options, logical_jobs, parse_jobs};
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        options: Options,
+    }
 
     #[test]
     fn jobs_are_positive_and_bounded() {
@@ -125,5 +147,14 @@ mod tests {
             assert!(parse_jobs(invalid).is_err(), "accepted {invalid}");
         }
         assert!((1..=256).contains(&logical_jobs()));
+    }
+
+    #[test]
+    fn inventory_and_class_selection_are_typed() {
+        let cli = TestCli::try_parse_from(["scenarios", "languages", "--class", "quick", "--list"]).unwrap();
+        assert!(cli.options.list);
+        assert_eq!(cli.options.class, Some(super::Class::Quick));
+        assert_eq!(cli.options.scenario.as_deref(), Some("languages"));
+        assert!(TestCli::try_parse_from(["scenarios", "--class", "smoke"]).is_err());
     }
 }

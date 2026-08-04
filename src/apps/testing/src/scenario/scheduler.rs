@@ -18,6 +18,10 @@ pub(super) struct Summary {
     pub failed: Vec<String>,
 }
 
+pub(super) fn inventory(scenarios: Vec<Scenario>, options: &Options) -> Result<Vec<WorkKey>, Error> {
+    plan(scenarios, options).map(|work| work.into_iter().map(|item| item.key).collect())
+}
+
 pub(super) async fn run(scenarios: Vec<Scenario>, options: &Options, report: &Path) -> Result<Summary, Error> {
     let work = plan(scenarios, options)?;
     if work.is_empty() {
@@ -125,7 +129,7 @@ fn plan(scenarios: Vec<Scenario>, options: &Options) -> Result<Vec<Work>, Error>
         let scenario = Arc::new(scenario);
         for target in options.targets() {
             for (case_index, case) in scenario.cases.iter().enumerate() {
-                if case.supports(target) {
+                if case.supports(target) && selected_class(options.class, case.class) {
                     let key = WorkKey {
                         id: case.id.clone(),
                         target,
@@ -146,6 +150,10 @@ fn plan(scenarios: Vec<Scenario>, options: &Options) -> Result<Vec<Work>, Error>
     }
     work.sort_by(|left, right| left.key.cmp(&right.key));
     Ok(work)
+}
+
+fn selected_class(selected: Option<super::definition::Class>, case: super::definition::Class) -> bool {
+    selected.is_none_or(|class| class == case)
 }
 
 struct ResourcePool {
@@ -265,8 +273,8 @@ fn count(status: &str, key: &WorkKey, diagnostic: &str, summary: &mut Summary) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ResourcePool, enter};
-    use crate::scenario::definition::Resource;
+    use super::{ResourcePool, enter, selected_class};
+    use crate::scenario::definition::{Class, Resource};
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -350,5 +358,13 @@ mod tests {
         assert!(unrelated.is_ok());
         waiting.abort();
         drop(held);
+    }
+
+    #[test]
+    fn class_filter_preserves_the_fast_suite_boundary() {
+        assert!(selected_class(None, Class::Quick));
+        assert!(selected_class(Some(Class::Quick), Class::Quick));
+        assert!(!selected_class(Some(Class::Quick), Class::Long));
+        assert!(selected_class(Some(Class::Long), Class::Long));
     }
 }
