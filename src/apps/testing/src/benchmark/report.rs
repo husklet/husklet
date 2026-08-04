@@ -43,6 +43,13 @@ pub(crate) struct Report {
 }
 
 impl Report {
+    pub(crate) fn new(baseline: impl Into<String>, paths: Vec<PathBuf>) -> Self {
+        Self {
+            baseline: baseline.into(),
+            paths,
+        }
+    }
+
     fn rows(path: &Path) -> Result<Vec<Row>, String> {
         let file = File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
         let mut lines = BufReader::new(file).lines();
@@ -159,14 +166,9 @@ impl Output {
     }
 
     fn row(&mut self, row: Row) -> Result<(), String> {
-        let reference = self
-            .references
-            .get(&(row.arch.clone(), row.phase.clone()))
-            .copied();
-        let ratio =
-            reference.map_or_else(|| "-".into(), |value| Reference::ratio(row.time, value.time));
-        let wall_ratio =
-            reference.map_or_else(|| "-".into(), |value| Reference::ratio(row.wall, value.wall));
+        let reference = self.references.get(&(row.arch.clone(), row.phase.clone())).copied();
+        let ratio = reference.map_or_else(|| "-".into(), |value| Reference::ratio(row.time, value.time));
+        let wall_ratio = reference.map_or_else(|| "-".into(), |value| Reference::ratio(row.wall, value.wall));
         if row.phase != "syscall"
             && self
                 .checksums
@@ -177,15 +179,7 @@ impl Output {
         }
         println!(
             "{},{},{},{},{},{},{},{},{}",
-            row.provider,
-            row.arch,
-            row.phase,
-            row.execution,
-            row.time,
-            row.wall,
-            ratio,
-            wall_ratio,
-            row.checksum
+            row.provider, row.arch, row.phase, row.execution, row.time, row.wall, ratio, wall_ratio, row.checksum
         );
         Ok(())
     }

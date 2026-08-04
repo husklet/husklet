@@ -1,4 +1,5 @@
 use clap::{Args, Subcommand, ValueEnum};
+use sha2::Digest as _;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::File;
@@ -7,7 +8,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 mod adapter;
+mod matrix;
 pub(crate) mod report;
+
+use matrix::Matrix;
 
 const LIMIT: usize = 128;
 
@@ -104,6 +108,8 @@ struct Summary {
 pub(crate) enum Command {
     /// Execute a benchmark provider directly.
     Run(Run),
+    /// Run the same guest through native, retained-C, and Rust engines.
+    Matrix(Matrix),
     /// Report provider reachability.
     List(List),
     /// Compare benchmark CSV reports.
@@ -155,6 +161,7 @@ impl Application {
     pub fn execute(&self, command: Command) -> Result<(), String> {
         match command {
             Command::Run(run) => run.validate()?.execute(&self.process),
+            Command::Matrix(matrix) => matrix.validate()?.execute(&self.process),
             Command::Report(report) => report.write(),
             Command::List(options) => self.list(options),
         }
@@ -248,6 +255,18 @@ impl Run {
     }
 
     fn execute(self, process: &adapter::Process) -> Result<(), String> {
+        let affinity = host_affinity();
+        let guest_identity = file_identity(&self.binary)?;
+        let engine_identity = self
+            .engine
+            .as_deref()
+            .map(file_identity)
+            .transpose()?
+            .unwrap_or_else(|| "native".into());
+        let runner_identity = std::env::current_exe()
+            .map_err(|error| format!("runner executable: {error}"))
+            .and_then(|path| file_identity(&path))?;
+        let options_identity = self.options_identity();
         let mut phases: BTreeMap<String, Summary> = BTreeMap::new();
         let mut walls = Vec::with_capacity(self.repeats);
         for repetition in 0..self.repeats {
@@ -290,7 +309,7 @@ impl Run {
             }
             None => Box::new(io::stdout()),
         };
-        writeln!(writer, "env,arch,phase,us,ok,us_min,us_max,repeats,wall_us,execution")
+        writeln!(writer, "env,arch,phase,us,ok,us_min,us_max,repeats,wall_us,execution,guest_sha256,engine_sha256,runner_sha256,options_sha256,cpu_affinity")
             .map_err(|error| error.to_string())?;
         let wall = Summary::median(&mut walls);
         for (name, mut phase) in phases {
@@ -299,7 +318,7 @@ impl Run {
             let time = Summary::median(&mut phase.times);
             writeln!(
                 writer,
-                "{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 self.provider.name(),
                 self.isa.public(),
                 name,
@@ -310,11 +329,103 @@ impl Run {
                 self.repeats,
                 wall,
                 self.execution_mode(),
+                guest_identity,
+                engine_identity,
+                runner_identity,
+                options_identity,
+                affinity.replace(',', ";"),
             )
             .map_err(|error| error.to_string())?;
         }
         Ok(())
     }
+
+    fn options_identity(&self) -> String {
+        let mut digest = sha2::Sha256::default();
+        for value in [
+            self.provider.name(),
+            self.isa.public(),
+            self.execution_mode(),
+            &self.repeats.to_string(),
+            &self.timeout.as_nanos().to_string(),
+        ] {
+            identity_field(&mut digest, value.as_bytes());
+        }
+        for (name, value) in &self.environment {
+            identity_field(&mut digest, name.as_bytes());
+            identity_field(&mut digest, value.as_bytes());
+        }
+        for (name, value) in &self.engine_options {
+            identity_field(&mut digest, name.as_bytes());
+            identity_field(&mut digest, value.as_bytes());
+        }
+        for argument in &self.guest {
+            identity_field(&mut digest, argument.as_bytes());
+        }
+        identity_field(&mut digest, host_affinity().as_bytes());
+        hex_digest(digest.finalize())
+    }
+}
+
+fn identity_field(digest: &mut sha2::Sha256, value: &[u8]) {
+    digest.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_le_bytes());
+    digest.update(value);
+}
+
+fn file_identity(path: &std::path::Path) -> Result<String, String> {
+    let bytes = std::fs::read(path).map_err(|error| format!("hash {}: {error}", path.display()))?;
+    Ok(hex_digest(sha2::Sha256::digest(bytes)))
+}
+
+fn hex_digest(bytes: impl AsRef<[u8]>) -> String {
+    bytes.as_ref().iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(target_os = "linux")]
+fn host_affinity() -> String {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status
+                .lines()
+                .find_map(|line| line.strip_prefix("Cpus_allowed_list:\t"))
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "unknown".into())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn host_affinity() -> String {
+    "unspecified".into()
+}
+
+#[cfg(target_os = "linux")]
+fn host_snapshot() -> String {
+    let load = std::fs::read_to_string("/proc/loadavg")
+        .ok()
+        .map(|value| value.split_whitespace().take(3).collect::<Vec<_>>().join("/"))
+        .unwrap_or_else(|| "unknown".into());
+    let memory = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
+    let field = |name: &str| {
+        memory
+            .lines()
+            .find_map(|line| line.strip_prefix(name))
+            .map(str::trim)
+            .unwrap_or("unknown")
+    };
+    format!(
+        "arch={} cpu_affinity={} load_1_5_15={} mem_available={} swap_free={}",
+        std::env::consts::ARCH,
+        host_affinity(),
+        load,
+        field("MemAvailable:"),
+        field("SwapFree:"),
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn host_snapshot() -> String {
+    format!("arch={} cpu_affinity={}", std::env::consts::ARCH, host_affinity())
 }
 
 impl Phase {
