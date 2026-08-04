@@ -443,4 +443,4 @@ impl Networks {
 }
 
 #[cfg(test)]
-mod tests;
+mod test;
