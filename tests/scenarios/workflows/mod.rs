@@ -13,9 +13,8 @@ use hl_container::Containers;
 
 type Error = Box<dyn std::error::Error>;
 
-pub(crate) const NAMES: [&str; 9] = [
+pub(crate) const NAMES: [&str; 8] = [
     "docker-build",
-    "docker",
     "docker-net",
     "docker-full",
     "compose",
@@ -34,8 +33,7 @@ pub(crate) async fn run(name: &str, containers: &Containers) -> Result<(), Error
         "compose" => compose::run(containers).await,
         "compose-multinet" => compose::multinet(containers).await,
         "pty-conformance" => pty::run(containers).await,
-        "docker" => docker::run(containers, false).await,
-        "docker-full" => docker::run(containers, true).await,
+        "docker-full" => docker::run(containers).await,
         known if NAMES.contains(&known) => {
             Err(format!("workflow {known:?} is inventoried but its typed orchestration is not transferred").into())
         }
