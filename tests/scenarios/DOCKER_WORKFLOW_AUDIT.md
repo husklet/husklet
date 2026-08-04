@@ -1,8 +1,8 @@
 # Docker workflow ownership audit
 
-This audit records why the former `docker` workflow was removed and why one
-small `docker-full` remainder still exists. The future provider/cache pipeline
-in `tests/PIPELINE.md` is documentation only and was not implemented here.
+This audit records why the former `docker` and `docker-full` workflows were
+removed. The future provider/cache pipeline in `tests/PIPELINE.md` is
+documentation only and was not implemented here.
 
 ## Closed behavior
 
@@ -28,11 +28,11 @@ and report their exact failed contract instead of one aggregate workflow label.
 The detached `docker_container.rs` orchestration and the redundant `docker`
 workflow name therefore had no remaining ownership role.
 
-## Retained gap
+## Root-filesystem import closure
 
-No package test exercises the successful Docker-compatible root-filesystem
-import path (`POST /images/create?fromSrc=-`) through the typed client and then
-discovers the requested repository tag. `docker-full` is reduced to only that
-contract and its necessary image/container/export setup. Once an owning
-`hl-client`/`hl-daemon` public-contract test covers this route, the remaining
-workflow and its inventory name can be deleted together.
+`hl-client/tests/daemon/image.rs::rootfs_import_publishes_the_requested_repository_tag`
+now exercises the successful Docker-compatible root-filesystem import path
+(`POST /images/create?fromSrc=-`) through the typed client. It exports a real
+container root filesystem, imports it with an explicit repository and tag, and
+discovers that tag through image inspection. This closes the final
+`docker-full` remainder at the owning public API boundary.

@@ -146,6 +146,58 @@ async fn image_archive_tag_save_remove_and_prune_share_wire_contracts() {
 }
 
 #[tokio::test]
+async fn rootfs_import_publishes_the_requested_repository_tag() {
+    let root = TempDir::new().unwrap();
+    let containers = containers(&root).await;
+    let socket = root.path().join("run/docker.sock");
+    let daemon = TestDaemon::start(containers, &socket).await;
+    let client = &daemon.client;
+    client
+        .images()
+        .load(std::io::Cursor::new(docker_archive()))
+        .await
+        .unwrap();
+    let created = client
+        .containers()
+        .create(
+            &hl_client::model::CreateContainer {
+                image: "scenario/fixture:v1".into(),
+                ..Default::default()
+            },
+            Some("rootfs-import-source"),
+        )
+        .await
+        .unwrap();
+    let mut stream = client.containers().export(&created.id).await.unwrap();
+    let mut rootfs = Vec::new();
+    while let Some(chunk) = stream.next_chunk().await.unwrap() {
+        rootfs.extend_from_slice(&chunk);
+    }
+    let imported = client
+        .images()
+        .import(
+            std::io::Cursor::new(rootfs),
+            "scenario/rootfs-import",
+            Some("v1"),
+        )
+        .await
+        .unwrap();
+    assert!(imported.stream.contains("scenario/rootfs-import:v1"));
+    let image = client
+        .images()
+        .inspect("scenario/rootfs-import:v1")
+        .await
+        .unwrap();
+    assert_eq!(image.repo_tags, ["docker.io/scenario/rootfs-import:v1"]);
+    client
+        .containers()
+        .remove(&created.id, false, false)
+        .await
+        .unwrap();
+    daemon.stop().await;
+}
+
+#[tokio::test]
 async fn build_accepts_the_standard_bridge_network_mode() {
     let root = TempDir::new().unwrap();
     let containers = containers(&root).await;
