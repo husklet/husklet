@@ -1,0 +1,251 @@
+use super::WorkKey;
+use crate::suite::{Error, Target};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufWriter, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+const HEADER: &str = "id\ttarget\tstatus\telapsed_ms\tdiagnostic\n";
+const ROW_LIMIT: usize = 16 * 1024;
+const FILE_LIMIT: u64 = 64 * 1024 * 1024;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct Row {
+    pub key: WorkKey,
+    pub status: &'static str,
+    pub elapsed_ms: u64,
+    pub diagnostic: String,
+}
+
+pub(super) struct Ledger {
+    report: PathBuf,
+    partial: PathBuf,
+    file: Mutex<Option<BufWriter<File>>>,
+    rows: Mutex<BTreeMap<WorkKey, Row>>,
+    _lock: hl_engine::native::FileLock,
+}
+
+pub(super) struct Opened {
+    pub ledger: Ledger,
+    pub prior: BTreeMap<WorkKey, Row>,
+}
+
+impl Ledger {
+    pub fn open(report: &Path, stamp: &str, keys: &BTreeSet<WorkKey>, resume: bool) -> Result<Opened, Error> {
+        let partial = report.with_extension("partial.tsv");
+        if let Some(parent) = report.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let lock = hl_engine::native::FileLock::acquire(&report.with_extension("lock"))?;
+        let prior = if resume && partial.exists() {
+            load(&partial, stamp, keys)?
+        } else {
+            initialize(&partial, stamp)?;
+            BTreeMap::new()
+        };
+        let file = OpenOptions::new().append(true).open(&partial)?;
+        Ok(Opened {
+            ledger: Self {
+                report: report.to_path_buf(),
+                partial,
+                file: Mutex::new(Some(BufWriter::new(file))),
+                rows: Mutex::new(prior.clone()),
+                _lock: lock,
+            },
+            prior,
+        })
+    }
+
+    pub fn record(&self, row: Row) -> Result<(), Error> {
+        let text = format_row(&row)?;
+        let current = fs::metadata(&self.partial)?.len();
+        if current
+            .checked_add(text.len() as u64)
+            .ok_or("runtime result file size overflow")?
+            > FILE_LIMIT
+        {
+            return Err(format!("runtime result journal exceeded {FILE_LIMIT} bytes").into());
+        }
+        let mut guard = self.file.lock().map_err(|_| "runtime result journal lock poisoned")?;
+        let file = guard.as_mut().ok_or("runtime result journal is finalized")?;
+        file.write_all(text.as_bytes())?;
+        file.flush()?;
+        file.get_ref().sync_data()?;
+        self.rows
+            .lock()
+            .map_err(|_| "runtime result rows lock poisoned")?
+            .insert(row.key.clone(), row);
+        Ok(())
+    }
+
+    pub fn finish(&self) -> Result<(), Error> {
+        let mut journal = self.file.lock().map_err(|_| "runtime result journal lock poisoned")?;
+        if let Some(mut file) = journal.take() {
+            file.flush()?;
+            file.get_ref().sync_data()?;
+        }
+        let temporary = self.report.with_extension("tmp");
+        let rows = self.rows.lock().map_err(|_| "runtime result rows lock poisoned")?;
+        let mut file = BufWriter::new(File::create(&temporary)?);
+        file.write_all(HEADER.as_bytes())?;
+        for row in rows.values() {
+            file.write_all(format_row(row)?.as_bytes())?;
+        }
+        file.flush()?;
+        file.get_ref().sync_data()?;
+        drop(file);
+        fs::rename(&temporary, &self.report)?;
+        fs::remove_file(&self.partial)?;
+        Ok(())
+    }
+}
+
+fn initialize(path: &Path, stamp: &str) -> Result<(), Error> {
+    let mut file = BufWriter::new(File::create(path)?);
+    writeln!(file, "# runtime-run\t{stamp}")?;
+    file.write_all(HEADER.as_bytes())?;
+    file.flush()?;
+    file.get_ref().sync_data()?;
+    Ok(())
+}
+
+fn load(path: &Path, stamp: &str, keys: &BTreeSet<WorkKey>) -> Result<BTreeMap<WorkKey, Row>, Error> {
+    let mut bytes = fs::read(path)?;
+    if bytes.len() as u64 > FILE_LIMIT {
+        return Err("runtime result journal exceeds its byte bound".into());
+    }
+    if !bytes.ends_with(b"\n") {
+        let complete = bytes
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map_or(0, |index| index + 1);
+        bytes.truncate(complete);
+        let file = OpenOptions::new().write(true).open(path)?;
+        file.set_len(complete as u64)?;
+        file.sync_data()?;
+    }
+    let text = std::str::from_utf8(&bytes)?;
+    let mut lines = text.lines();
+    require(
+        lines.next() == Some(format!("# runtime-run\t{stamp}").as_str()),
+        "runtime resume input changed",
+    )?;
+    require(lines.next() == Some(HEADER.trim_end()), "runtime resume schema changed")?;
+    let mut rows = BTreeMap::new();
+    for line in lines.filter(|line| !line.is_empty()) {
+        require(line.len() <= ROW_LIMIT, "runtime resume row exceeds its byte bound")?;
+        let fields = line.split('\t').collect::<Vec<_>>();
+        require(fields.len() == 5, "invalid runtime resume row")?;
+        let target = match fields[1] {
+            "arm64" => Target::Arm64,
+            "amd64" => Target::Amd64,
+            _ => return Err("invalid runtime resume target".into()),
+        };
+        let key = WorkKey {
+            id: fields[0].to_owned(),
+            target,
+        };
+        require(keys.contains(&key), "stale runtime resume row")?;
+        require(!rows.contains_key(&key), "duplicate runtime resume row")?;
+        let status = match fields[2] {
+            "pass" => "pass",
+            "fail" => "fail",
+            _ => return Err("invalid runtime resume status".into()),
+        };
+        rows.insert(
+            key.clone(),
+            Row {
+                key,
+                status,
+                elapsed_ms: fields[3].parse()?,
+                diagnostic: fields[4].to_owned(),
+            },
+        );
+    }
+    Ok(rows)
+}
+
+fn format_row(row: &Row) -> Result<String, Error> {
+    require(
+        !row.key.id.contains(['\t', '\n']) && !row.diagnostic.contains(['\t', '\n']),
+        "runtime result contains an unsafe delimiter",
+    )?;
+    let text = format!(
+        "{}\t{}\t{}\t{}\t{}\n",
+        row.key.id,
+        row.key.target.name(),
+        row.status,
+        row.elapsed_ms,
+        row.diagnostic
+    );
+    require(text.len() <= ROW_LIMIT, "runtime result row exceeds its byte bound")?;
+    Ok(text)
+}
+
+fn require(condition: bool, message: &'static str) -> Result<(), Error> {
+    condition.then_some(()).ok_or_else(|| message.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Ledger, Row, WorkKey};
+    use crate::suite::Target;
+    use std::collections::BTreeSet;
+    use std::io::Write;
+
+    fn key(id: &str) -> WorkKey {
+        WorkKey {
+            id: id.to_owned(),
+            target: Target::Arm64,
+        }
+    }
+
+    #[test]
+    fn durable_rows_resume_and_finish_in_key_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let report = directory.path().join("results.tsv");
+        let keys = BTreeSet::from([key("runtime/a"), key("runtime/b")]);
+        let opened = Ledger::open(&report, "stamp", &keys, false).unwrap();
+        opened
+            .ledger
+            .record(Row {
+                key: key("runtime/b"),
+                status: "pass",
+                elapsed_ms: 2,
+                diagnostic: String::new(),
+            })
+            .unwrap();
+        drop(opened);
+        let resumed = Ledger::open(&report, "stamp", &keys, true).unwrap();
+        assert_eq!(resumed.prior.len(), 1);
+        resumed
+            .ledger
+            .record(Row {
+                key: key("runtime/a"),
+                status: "pass",
+                elapsed_ms: 1,
+                diagnostic: String::new(),
+            })
+            .unwrap();
+        resumed.ledger.finish().unwrap();
+        let text = std::fs::read_to_string(report).unwrap();
+        assert!(text.find("runtime/a").unwrap() < text.find("runtime/b").unwrap());
+    }
+
+    #[test]
+    fn torn_tail_is_dropped_and_stale_stamp_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        let report = directory.path().join("results.tsv");
+        let keys = BTreeSet::from([key("runtime/a")]);
+        let opened = Ledger::open(&report, "stamp", &keys, false).unwrap();
+        drop(opened);
+        let partial = report.with_extension("partial.tsv");
+        let mut file = std::fs::OpenOptions::new().append(true).open(&partial).unwrap();
+        file.write_all(b"runtime/a\tarm").unwrap();
+        file.sync_data().unwrap();
+        drop(file);
+        assert!(Ledger::open(&report, "stamp", &keys, true).is_ok());
+        assert!(Ledger::open(&report, "changed", &keys, true).is_err());
+    }
+}

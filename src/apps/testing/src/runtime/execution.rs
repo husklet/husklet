@@ -1,70 +1,207 @@
 use super::{Error, definition::App, image::TestImage};
 use crate::suite::Target;
-use hl_container::{Config, ContainerSpec, ExitStatus, Isolation, Process, Sandbox};
+use hl_container::{Config, ContainerSpec, Containers, ExitStatus, Isolation, Process, Sandbox};
+use std::sync::Arc;
 use std::{fs, os::unix::fs::PermissionsExt, time::Duration};
+use tokio::time::Instant;
+
+const CAPTURE_LIMIT: usize = 1024 * 1024;
 
 pub enum CaseResult {
-    Passed(String),
-    Failed(String, String),
+    Passed(String, Option<u16>),
+    Failed(String, Option<u16>, String),
 }
 
-pub async fn run(app: &App, target: Target) -> Result<Vec<CaseResult>, Error> {
-    let artifact = app.build(target)?;
+impl CaseResult {
+    pub(crate) const fn passed(&self) -> bool {
+        matches!(self, Self::Passed(_, _))
+    }
+
+    pub(crate) fn diagnostic(&self) -> Option<String> {
+        match self {
+            Self::Failed(_, attempt, error) => {
+                Some(attempt.map_or_else(|| error.clone(), |value| format!("attempt {value}: {error}")))
+            }
+            Self::Passed(_, _) => None,
+        }
+    }
+}
+
+pub async fn run_case(app: Arc<App>, case_index: usize, target: Target) -> Result<Vec<CaseResult>, Error> {
+    let execution = app.execution.container()?;
+    let building = Arc::clone(&app);
+    let artifact = tokio::task::spawn_blocking(move || {
+        building
+            .build(&building.cases[case_index], target)
+            .map_err(|error| error.to_string())
+    })
+    .await??;
+    let case = &app.cases[case_index];
     let fixture = TestImage::materialize(&app.image, &target.platform()).await?;
-    let destination = fixture.path().join(app.destination.trim_start_matches('/'));
+    let state = tempfile::tempdir()?;
+    let containers = hl_container::Containers::builder(Config::new(state.path()))
+        .build()
+        .await?;
+    let destination = fixture.path().join(case.destination.trim_start_matches('/'));
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;
     }
     fs::copy(&artifact, &destination)?;
     fs::set_permissions(&destination, fs::Permissions::from_mode(0o755))?;
+    let results = CaseExecution::new(&app, case, target, fixture.path(), &containers, execution)
+        .run()
+        .await;
+    fixture.release()?;
+    Ok(results)
+}
 
-    let state = tempfile::tempdir()?;
-    let containers = hl_container::Containers::builder(Config::new(state.path()))
-        .build()
-        .await?;
-    let mut results = Vec::new();
-    for case in &app.cases {
-        let name = format!("testing-{}-{}-{}", app.name, target.name(), case.id.replace('/', "-"));
-        let mut process = Process::new(&app.destination).args(case.arguments.iter().map(String::as_str));
-        for (name, value) in &case.environment {
+struct CaseExecution<'a> {
+    app: &'a App,
+    case: &'a super::definition::RuntimeCase,
+    target: Target,
+    fixture: &'a std::path::Path,
+    containers: &'a Containers,
+    execution: hl_container::Execution,
+}
+
+impl<'a> CaseExecution<'a> {
+    fn new(
+        app: &'a App,
+        case: &'a super::definition::RuntimeCase,
+        target: Target,
+        fixture: &'a std::path::Path,
+        containers: &'a Containers,
+        execution: hl_container::Execution,
+    ) -> Self {
+        if let Some(plan) = &case.soak {
+            let resources = plan.resources();
+            println!(
+                "SOAK {} {} attempts={} duration={}s resources=cpu:{},memory_mib:{},processes:{} (admission only)",
+                case.id,
+                target.name(),
+                plan.repetitions(),
+                plan.duration().as_secs(),
+                resources.cpu(),
+                resources.memory_mib(),
+                resources.processes()
+            );
+        }
+        Self {
+            app,
+            case,
+            target,
+            fixture,
+            containers,
+            execution,
+        }
+    }
+
+    async fn run(&self) -> Vec<CaseResult> {
+        let Some(plan) = &self.case.soak else {
+            return vec![self.attempt(1, 1, Duration::from_secs(self.case.timeout)).await];
+        };
+        let end = Instant::now() + plan.total_duration();
+        let mut results = Vec::with_capacity(plan.attempts().len());
+        for attempt in plan.attempts() {
+            let remaining = end.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                results.push(CaseResult::Failed(
+                    self.case.id.clone(),
+                    Some(attempt.ordinal()),
+                    "total soak deadline expired before launch".to_owned(),
+                ));
+                break;
+            }
+            results.push(
+                self.attempt(attempt.ordinal(), plan.repetitions(), plan.duration().min(remaining))
+                    .await,
+            );
+        }
+        results
+    }
+
+    async fn attempt(&self, ordinal: u16, repetitions: u16, timeout: Duration) -> CaseResult {
+        let attempt = (repetitions > 1).then_some(ordinal);
+        let name = format!(
+            "testing-{}-{}-{}-{ordinal}",
+            self.app.name,
+            self.target.name(),
+            self.case.id.replace('/', "-")
+        );
+        let mut process = Process::new(&self.case.destination).args(self.case.arguments.iter().map(String::as_str));
+        for (name, value) in &self.case.environment {
             process = process.env(name, value);
         }
-        let spec = ContainerSpec::from_directory(fixture.path(), process)
+        let spec = ContainerSpec::from_directory(self.fixture, process)
             .name(&name)
-            .guest(target.guest())
-            .execution(app.execution.container()?)
+            .guest(self.target.guest())
+            .execution(self.execution)
             .isolation(Isolation {
                 sandbox: Sandbox::Disabled,
                 ..Isolation::default()
             });
-        let outcome = async {
-            containers.create(spec).await?;
-            containers.start(&name).await?;
-            let status = tokio::time::timeout(Duration::from_secs(case.timeout), containers.wait(&name))
-                .await
-                .map_err(|_| format!("timed out after {} seconds", case.timeout))??;
-            let logs = containers.logs(&name).await?;
-            let expected = fs::read(&case.golden)?;
-            if status != ExitStatus::Code(case.exit) {
-                return Err(format!("exit {status:?}, expected {}", case.exit).into());
+        let outcome = self
+            .execute(spec, &name, timeout)
+            .await
+            .map_err(|error| error.to_string());
+        let cleanup = self.containers.remove_force(&name).await;
+        match (outcome, cleanup) {
+            (Ok(()), Ok(_)) => CaseResult::Passed(self.case.id.clone(), attempt),
+            (Err(error), _) => CaseResult::Failed(self.case.id.clone(), attempt, error),
+            (Ok(()), Err(error)) => {
+                CaseResult::Failed(self.case.id.clone(), attempt, format!("cleanup failed: {error}"))
             }
-            if logs.stdout != expected {
-                return Err(format!("stdout differs: got {:?}, expected {:?}", logs.stdout, expected).into());
-            }
-            if !logs.stderr.is_empty() {
-                return Err(format!("unexpected stderr: {:?}", logs.stderr).into());
-            }
-            Ok::<(), Error>(())
         }
-        .await;
-        let cleanup = containers.remove_force(&name).await;
-        let result = match (outcome, cleanup) {
-            (Ok(()), Ok(_)) => CaseResult::Passed(case.id.clone()),
-            (Err(error), _) => CaseResult::Failed(case.id.clone(), error.to_string()),
-            (Ok(()), Err(error)) => CaseResult::Failed(case.id.clone(), format!("cleanup failed: {error}")),
-        };
-        results.push(result);
     }
-    fixture.release()?;
-    Ok(results)
+
+    async fn execute(&self, spec: ContainerSpec, name: &str, timeout: Duration) -> Result<(), Error> {
+        self.containers.create(spec).await?;
+        self.containers.start(name).await?;
+        let status = self.wait(name, timeout).await?;
+        let logs = self.containers.logs(name).await?;
+        bounded(&logs)?;
+        let expected = fs::read(&self.case.golden)?;
+        if status != ExitStatus::Code(self.case.exit) {
+            return Err(format!("exit {status:?}, expected {}", self.case.exit).into());
+        }
+        if logs.stdout != expected {
+            return Err(format!("stdout differs: got {:?}, expected {:?}", logs.stdout, expected).into());
+        }
+        if !logs.stderr.is_empty() {
+            return Err(format!("unexpected stderr: {:?}", logs.stderr).into());
+        }
+        Ok(())
+    }
+}
+
+impl CaseExecution<'_> {
+    async fn wait(&self, name: &str, timeout: Duration) -> Result<ExitStatus, Error> {
+        let waiting = self.containers.wait(name);
+        tokio::pin!(waiting);
+        let deadline = Instant::now() + timeout;
+        loop {
+            tokio::select! {
+                result = &mut waiting => return Ok(result?),
+                () = tokio::time::sleep_until(deadline) => {
+                    return Err(format!("timed out after {} milliseconds", timeout.as_millis()).into());
+                }
+                () = tokio::time::sleep(Duration::from_millis(10)) => {
+                    bounded(&self.containers.logs(name).await?)?;
+                }
+            }
+        }
+    }
+}
+
+fn bounded(logs: &hl_container::Logs) -> Result<(), Error> {
+    let size = logs
+        .stdout
+        .len()
+        .checked_add(logs.stderr.len())
+        .ok_or("captured output size overflow")?;
+    if size > CAPTURE_LIMIT {
+        Err(format!("captured output exceeded {CAPTURE_LIMIT} bytes").into())
+    } else {
+        Ok(())
+    }
 }

@@ -48,12 +48,20 @@ impl Plan {
         Duration::from_secs(self.duration_seconds)
     }
 
+    pub(crate) fn total_duration(&self) -> Duration {
+        Duration::from_secs(self.duration_seconds * u64::from(self.repetitions))
+    }
+
     pub(crate) const fn resources(&self) -> Resources {
         self.resources
     }
 
     pub(crate) fn attempts(&self) -> impl ExactSizeIterator<Item = Attempt> {
         (1..=self.repetitions).map(|ordinal| Attempt { ordinal })
+    }
+
+    pub(crate) const fn repetitions(&self) -> u16 {
+        self.repetitions
     }
 }
 
@@ -113,6 +121,7 @@ mod tests {
             "duration_seconds: 240\nrepetitions: 10\nresources:\n  cpu: 4\n  memory_mib: 4096\n  processes: 256\n",
         );
         extended.validate().unwrap();
+        assert_eq!(extended.total_duration().as_secs(), 2_400);
         assert_eq!(
             extended.attempts().map(|attempt| attempt.ordinal()).collect::<Vec<_>>(),
             (1..=10).collect::<Vec<_>>()
