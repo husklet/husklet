@@ -1,0 +1,291 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: []
+cases:
+  - id: runtime/time/clockres
+    status: active
+    compat: { class: compatibility }
+    build: { source: clockres.c, output: clockres, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-clockres }
+    run: []
+    expect: { exit: 0, stdout: golden/clockres.out }
+  - id: runtime/time/dynamic-cpu-clock
+    status: active
+    compat: { class: compatibility }
+    build: { source: cpu_clock.c, output: dynamic-cpu-clock, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-dynamic-cpu-clock }
+    run: []
+    expect: { exit: 0, stdout: golden/cpu_clock.out }
+  - id: runtime/time/gettimeofday
+    status: active
+    compat: { class: compatibility }
+    build: { source: gettimeofday.c, output: gettimeofday, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-gettimeofday }
+    run: []
+    expect: { exit: 0, stdout: golden/gettimeofday.out }
+  - id: runtime/time/clocknanosleep
+    status: active
+    compat: { class: compatibility }
+    build: { source: clocknanosleep.c, output: clocknanosleep, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-clocknanosleep }
+    run: []
+    expect: { exit: 0, stdout: golden/clocknanosleep.out }
+  - id: runtime/time/clocknanosleep-edges
+    status: active
+    compat: { class: compatibility }
+    build: { source: clocknanosleep_edges.c, output: clocknanosleep-edges, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-clocknanosleep-edges }
+    run: []
+    expect: { exit: 0, stdout: golden/clocknanosleep_edges.out }
+  - id: runtime/time/clockids
+    status: active
+    compat: { class: compatibility }
+    build: { source: clockids.c, output: clockids, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-clockids }
+    run: []
+    expect: { exit: 0, stdout: golden/clockids.out }
+  - id: runtime/time/posixtimer
+    status: !broken
+      reason: "QEMU user mode exposes fewer than the fixture's required 64 simultaneous POSIX timers"
+      evidence: "tests/runtime/time/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: posixtimer.c, output: posixtimer, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-posixtimer }
+    run: []
+    expect: { exit: 0, stdout: golden/posixtimer.out }
+  - id: runtime/time/timerfdx
+    status: active
+    compat: { class: compatibility }
+    build: { source: timerfdx.c, output: timerfdx, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-timerfdx }
+    run: []
+    expect: { exit: 0, stdout: golden/timerfdx.out }
+  - id: runtime/time/clock-syscall-static
+    status: active
+    compat: { class: compatibility }
+    build: { source: clock_syscall.c, output: clock-syscall-static, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/time-clock-syscall-static }
+    run: []
+    expect: { exit: 0, stdout: golden/clock_syscall.out }
+  - id: runtime/time/clock-monotonic-order
+    status: active
+    compat: { class: compatibility }
+    build: { source: clock_order.c, output: clock-monotonic-order, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-clock-monotonic-order }
+    run: []
+    expect: { exit: 0, stdout: golden/clock_order.out }
+  - id: runtime/time/clock-getres-all
+    status: active
+    compat: { class: compatibility }
+    build: { source: clock_res.c, output: clock-getres-all, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-clock-getres-all }
+    run: []
+    expect: { exit: 0, stdout: golden/clock_res.out }
+  - id: runtime/time/cputime-advance
+    status: active
+    compat: { class: compatibility }
+    build: { source: cputime_advance.c, output: cputime-advance, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-cputime-advance }
+    run: []
+    expect: { exit: 0, stdout: golden/cputime_advance.out }
+  - id: runtime/time/nanosleep-eintr
+    status: active
+    compat: { class: compatibility }
+    build: { source: nanosleep_eintr.c, output: nanosleep-eintr, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-nanosleep-eintr }
+    run: []
+    expect: { exit: 0, stdout: golden/nanosleep_eintr.out }
+  - id: runtime/time/clocknanosleep-abs
+    status: active
+    compat: { class: compatibility }
+    build: { source: clocknanosleep_abs.c, output: clocknanosleep-abs, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-clocknanosleep-abs }
+    run: []
+    expect: { exit: 0, stdout: golden/clocknanosleep_abs.out }
+  - id: runtime/time/itimer-real
+    status: active
+    compat: { class: compatibility }
+    build: { source: itimer_real.c, output: itimer-real, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-itimer-real }
+    run: []
+    expect: { exit: 0, stdout: golden/itimer_real.out }
+  - id: runtime/time/itimer-virt-prof
+    status: active
+    compat: { class: compatibility }
+    build: { source: itimer_cpu.c, output: itimer-virt-prof, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-itimer-virt-prof }
+    run: []
+    expect: { exit: 0, stdout: golden/itimer_cpu.out }
+  - id: runtime/time/timer-thread
+    status: active
+    compat: { class: compatibility }
+    build: { source: timer_thread.c, output: timer-thread, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-timer-thread }
+    run: []
+    expect: { exit: 0, stdout: golden/timer_thread.out }
+  - id: runtime/time/alarm-prev
+    status: active
+    compat: { class: compatibility }
+    build: { source: alarm_prev.c, output: alarm-prev, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-alarm-prev }
+    run: []
+    expect: { exit: 0, stdout: golden/alarm_prev.out }
+  - id: runtime/time/times-clock
+    status: active
+    compat: { class: compatibility }
+    build: { source: times_clock.c, output: times-clock, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-times-clock }
+    run: []
+    expect: { exit: 0, stdout: golden/times_clock.out }
+  - id: runtime/time/wallclock-agree
+    status: active
+    compat: { class: compatibility }
+    build: { source: wallclock_agree.c, output: wallclock-agree, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-wallclock-agree }
+    run: []
+    expect: { exit: 0, stdout: golden/wallclock_agree.out }
+  - id: runtime/time/calendar-roundtrip
+    status: active
+    compat: { class: compatibility }
+    build: { source: calendar_roundtrip.c, output: calendar-roundtrip, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-calendar-roundtrip }
+    run: []
+    expect: { exit: 0, stdout: golden/calendar_roundtrip.out }
+  - id: runtime/time/clock-tai
+    status: active
+    compat: { class: compatibility }
+    build: { source: clock_tai.c, output: clock-tai, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-clock-tai }
+    run: []
+    expect: { exit: 0, stdout: golden/clock_tai.out }
+  - id: runtime/time/pselect-ppoll-timeout
+    status: active
+    compat: { class: compatibility }
+    build: { source: poll_timeout.c, output: pselect-ppoll-timeout, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-pselect-ppoll-timeout }
+    run: []
+    expect: { exit: 0, stdout: golden/poll_timeout.out }
+  - id: runtime/time/adjtimex-read
+    status: active
+    compat: { class: compatibility }
+    build: { source: adjtimex_read.c, output: adjtimex-read, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-adjtimex-read }
+    run: []
+    expect: { exit: 0, stdout: golden/adjtimex_read.out }
+  - id: runtime/time/monotonic-sleep-delta
+    status: active
+    compat: { class: compatibility }
+    build: { source: sleep_delta.c, output: monotonic-sleep-delta, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-monotonic-sleep-delta }
+    run: []
+    expect: { exit: 0, stdout: golden/sleep_delta.out }
+  - id: runtime/time/sleep-returns
+    status: active
+    compat: { class: compatibility }
+    build: { source: sleep_returns.c, output: sleep-returns, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-sleep-returns }
+    run: []
+    expect: { exit: 0, stdout: golden/sleep_returns.out }
+  - id: runtime/time/timespec-get
+    status: active
+    compat: { class: compatibility }
+    build: { source: timespec_get.c, output: timespec-get, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-timespec-get }
+    run: []
+    expect: { exit: 0, stdout: golden/timespec_get.out }
+  - id: runtime/time/posixtimer-abstime
+    status: active
+    compat: { class: compatibility }
+    build: { source: posixtimer_abstime.c, output: posixtimer-abstime, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-posixtimer-abstime }
+    run: []
+    expect: { exit: 0, stdout: golden/posixtimer_abstime.out }
+  - id: runtime/time/itimer-unarmed
+    status: active
+    compat: { class: compatibility }
+    build: { source: itimer_unarmed.c, output: itimer-unarmed, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-itimer-unarmed }
+    run: []
+    expect: { exit: 0, stdout: golden/itimer_unarmed.out }
+  - id: runtime/time/time-func
+    status: active
+    compat: { class: compatibility }
+    build: { source: time_func.c, output: time-func, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-time-func }
+    run: []
+    expect: { exit: 0, stdout: golden/time_func.out }
+  - id: runtime/time/clock-tai-offset
+    status: active
+    compat: { class: compatibility }
+    build: { source: tai_offset.c, output: clock-tai-offset, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-clock-tai-offset }
+    run: []
+    expect: { exit: 0, stdout: golden/tai_offset.out }
+  - id: runtime/time/clockid-validation
+    status: active
+    compat: { class: compatibility }
+    build: { source: clockid_check.c, output: clockid-validation, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-clockid-validation }
+    run: []
+    expect: { exit: 0, stdout: golden/clockid_check.out }
+  - id: runtime/time/clock-settime-errno
+    status: active
+    compat: { class: compatibility }
+    build: { source: clock_set.c, output: clock-settime-errno, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-clock-settime-errno }
+    run: []
+    expect: { exit: 0, stdout: golden/clock_set.out }
+  - id: runtime/time/timerfd-ext
+    status: active
+    compat: { class: compatibility }
+    build: { source: timerfd_ext.c, output: timerfd-ext, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-timerfd-ext }
+    run: []
+    expect: { exit: 0, stdout: golden/timerfd_ext.out }
+  - id: runtime/time/posixtimer-ext
+    status: active
+    compat: { class: compatibility }
+    build: { source: posixtimer_ext.c, output: posixtimer-ext, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-posixtimer-ext }
+    run: []
+    expect: { exit: 0, stdout: golden/posixtimer_ext.out }
+  - id: runtime/time/nonpie-signal-fold
+    status: active
+    targets: [amd64]
+    compat: { class: compatibility }
+    build: { source: nonpie_signal.c, output: nonpie-signal-fold, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-nonpie-signal-fold }
+    run: []
+    expect: { exit: 0, stdout: golden/nonpie_signal.out }
+  - id: runtime/time/timer-interact
+    status: active
+    compat: { class: compatibility }
+    build: { source: timer_interact.c, output: timer-interact, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-timer-interact }
+    run: []
+    expect: { exit: 0, stdout: golden/timer_interact.out }
+  - id: runtime/time/sleep-wait-edges
+    status: active
+    compat: { class: compatibility }
+    build: { source: wait_edges.c, output: sleep-wait-edges, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-sleep-wait-edges }
+    run: []
+    expect: { exit: 0, stdout: golden/wait_edges.out }
+  - id: runtime/time/timer-errsurf
+    status: active
+    compat: { class: compatibility }
+    build: { source: timer_errsurf.c, output: timer-errsurf, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-timer-errsurf }
+    run: []
+    expect: { exit: 0, stdout: golden/timer_errsurf.out }
+  - id: runtime/time/clocknanosleep-errsurf
+    status: active
+    compat: { class: compatibility }
+    build: { source: clocknanosleep_errsurf.c, output: clocknanosleep-errsurf, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/time-clocknanosleep-errsurf }
+    run: []
+    expect: { exit: 0, stdout: golden/clocknanosleep_errsurf.out }
