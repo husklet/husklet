@@ -11,6 +11,11 @@ typedef struct decode decode;
 uint32_t hl_x86_alu_words(const instruction *item);
 uint32_t hl_x86_bitscan_words(const instruction *item);
 void hl_x86_emit_bitscan(uint32_t *words, uint32_t *cursor, const instruction *item);
+int hl_x86_decode_bit(const hl_x86_a64_request *request, decode *block, instruction *item,
+                      uint8_t opcode, uint8_t rex, uint8_t operand_16, uint8_t address_32,
+                      size_t start, size_t *cursor);
+uint32_t hl_x86_bit_words(const instruction *item);
+void hl_x86_emit_bit(uint32_t *words, uint32_t *cursor, const instruction *item);
 uint32_t hl_x86_string_words(const instruction *item);
 void hl_x86_emit_string(uint32_t *words, uint32_t *cursor, const instruction *item);
 uint32_t hl_x86_bit(unsigned destination, unsigned source, unsigned lsb);

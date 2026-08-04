@@ -457,6 +457,13 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
             item->operation = OP_BSWAP;
             item->destination = (uint8_t)((extension & 7u) | ((rex & 1u) << 3));
             item->width = (rex & 8u) != 0 ? 8u : 4u;
+        } else if (semantic_prefix == 0u && opcode == 0x0fu && cursor < request->guest_size &&
+                   (request->guest_bytes[cursor] == 0xa3u || request->guest_bytes[cursor] == 0xabu ||
+                    request->guest_bytes[cursor] == 0xb3u || request->guest_bytes[cursor] == 0xbbu ||
+                    request->guest_bytes[cursor] == 0xbau)) {
+            uint8_t extension = request->guest_bytes[cursor++];
+            if (!hl_x86_decode_bit(request, block, item, extension, rex, operand_16,
+                                   address_32, start, &cursor)) break;
         } else if ((semantic_prefix == 0u || semantic_prefix == 0xf3u) &&
                    opcode == 0x0fu && cursor < request->guest_size && cursor - start < 15u &&
                    (request->guest_bytes[cursor] == 0xbcu || request->guest_bytes[cursor] == 0xbdu)) {
@@ -976,6 +983,11 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
         } else if (block.instructions[index].operation == OP_BITSCAN) {
             words += hl_x86_bitscan_words(&block.instructions[index]);
             dirty |= UINT32_C(1) << block.instructions[index].destination;
+        } else if (block.instructions[index].operation == OP_BIT) {
+            words += hl_x86_bit_words(&block.instructions[index]);
+            if (block.instructions[index].memory_operand == 0u &&
+                block.instructions[index].condition != 0u)
+                dirty |= UINT32_C(1) << block.instructions[index].destination;
         } else if (block.instructions[index].operation == OP_STRING) {
             words += hl_x86_string_words(&block.instructions[index]);
             dirty |= UINT32_C(1) << 7;
@@ -1118,6 +1130,10 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
         } else if (item->operation == OP_BITSCAN) {
             hl_x86_emit_bitscan(request->host_words, &words, item);
             dirty |= UINT32_C(1) << item->destination;
+        } else if (item->operation == OP_BIT) {
+            hl_x86_emit_bit(request->host_words, &words, item);
+            if (item->memory_operand == 0u && item->condition != 0u)
+                dirty |= UINT32_C(1) << item->destination;
         } else if (item->operation == OP_STRING) {
             hl_x86_emit_string(request->host_words, &words, item);
             dirty |= UINT32_C(1) << 7;

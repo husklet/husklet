@@ -14,6 +14,7 @@ enum operation {
     OP_EXTEND,
     OP_BSWAP,
     OP_BITSCAN,
+    OP_BIT,
     OP_STRING,
     OP_BYTE,
     OP_ALU,
@@ -107,6 +108,10 @@ typedef struct instruction {
     uint8_t vector_immediate;
     uint8_t vector_memory_width;
     uint8_t live_chain;
+    uint8_t bit_index;
+    uint8_t bit_memory_offset;
+    uint8_t bit_operand_width;
+    uint8_t bit_immediate;
 } instruction;
 
 typedef struct decode {

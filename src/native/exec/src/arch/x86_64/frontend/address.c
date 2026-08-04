@@ -77,6 +77,9 @@ uint32_t hl_x86_address_words(const instruction *item) {
 
     if (item->address_index != UINT8_MAX) ++words;
     if (item->immediate != 0u) words += constant_words(item->immediate) + 1u;
+    if (item->bit_memory_offset != 0u)
+        words += item->bit_immediate != 0u ? constant_words(item->operand_immediate >> 3) + 1u :
+                 (item->bit_operand_width == 8u ? 2u : 3u);
     return words + 1u + (item->segment != 0u ? 2u : 0u);
 }
 
@@ -100,6 +103,20 @@ void hl_x86_emit_address(uint32_t *words, uint32_t *cursor, const instruction *i
         words[(*cursor)++] = load_word(17, item->segment == 1u ?
                                       offsetof(hl_native_x86_64_cpu, fs) :
                                       offsetof(hl_native_x86_64_cpu, gs));
+        words[(*cursor)++] = UINT32_C(0x8b110210); /* add x16,x16,x17 */
+    }
+    if (item->bit_memory_offset != 0u) {
+        if (item->bit_immediate != 0u) {
+            emit_constant(words, cursor, 17u, item->operand_immediate >> 3);
+        } else {
+            if (item->bit_operand_width == 2u)
+                words[(*cursor)++] = UINT32_C(0x93403c00) | (uint32_t)item->bit_index << 5 | 17u; /* sxth */
+            else if (item->bit_operand_width == 4u)
+                words[(*cursor)++] = UINT32_C(0x93407c00) | (uint32_t)item->bit_index << 5 | 17u; /* sxtw */
+            else
+                words[(*cursor)++] = UINT32_C(0xaa0003e0) | (uint32_t)item->bit_index << 16 | 17u;
+            words[(*cursor)++] = UINT32_C(0x9343fc00) | 17u << 5 | 17u; /* asr x17,x17,#3 */
+        }
         words[(*cursor)++] = UINT32_C(0x8b110210); /* add x16,x16,x17 */
     }
     words[(*cursor)++] = move_register(item->destination, 16, item->width == 8u);
