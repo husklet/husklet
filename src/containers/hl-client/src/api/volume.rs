@@ -1,9 +1,9 @@
 use http::Method;
 
+use crate::Result;
 use crate::model::{Volume, VolumeCreate, VolumeList, VolumePrune};
 use crate::transport::Transport;
 use crate::uri::Component;
-use crate::Result;
 
 /// Typed local-volume operations.
 #[derive(Clone, Copy, Debug)]

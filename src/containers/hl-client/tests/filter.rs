@@ -1,4 +1,4 @@
-use hl_client::{model::List, Client};
+use hl_client::{Client, model::List};
 use hl_container::{Config, ContainerSpec, Containers, Process};
 use hl_daemon::Daemon;
 use std::{path::Path, time::Duration};
