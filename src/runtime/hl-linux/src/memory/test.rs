@@ -65,7 +65,12 @@ fn mmap_mmap2_isas() {
         let byte = abi.mmap(0x4000, 1, 3, 0x12, 7, 0x2000).unwrap();
         let pages = abi.mmap2(0x4000, 1, 3, 0x12, 7, 2).unwrap();
         assert_eq!(byte.offset, pages.offset);
+        assert_eq!(byte.requested_length, 1);
+        assert_eq!(pages.requested_length, 1);
         assert_eq!(byte.length, GuestPageSize::LINUX.bytes());
+        assert_eq!(pages.length, GuestPageSize::LINUX.bytes());
+        assert!(!byte.no_reserve);
+        assert!(!pages.no_reserve);
         assert_eq!(byte.placement, Placement::Fixed(0x4000_u64.into()));
         assert_eq!(
             byte.source,
@@ -75,6 +80,19 @@ fn mmap_mmap2_isas() {
             }
         );
         assert!(byte.protection.contains(Protection::READ.union(Protection::WRITE),));
+
+        let mmap_reserved = abi.mmap(0, 1, 3, 0x22, -1, 0).unwrap();
+        let mmap_no_reserve = abi.mmap(0, 1, 3, 0x4022, -1, 0).unwrap();
+        let mmap2_reserved = abi.mmap2(0, 1, 3, 0x22, -1, 0).unwrap();
+        let mmap2_no_reserve = abi.mmap2(0, 1, 3, 0x4022, -1, 0).unwrap();
+        for plan in [mmap_reserved, mmap_no_reserve, mmap2_reserved, mmap2_no_reserve] {
+            assert_eq!(plan.requested_length, 1);
+            assert_eq!(plan.length, GuestPageSize::LINUX.bytes());
+        }
+        assert!(!mmap_reserved.no_reserve);
+        assert!(mmap_no_reserve.no_reserve);
+        assert!(!mmap2_reserved.no_reserve);
+        assert!(mmap2_no_reserve.no_reserve);
     }
 }
 
@@ -146,7 +164,10 @@ fn lock_sync_access() {
         assert!(MemoryAbi::<Memory>::msync(0x1000, 1, flags).is_ok());
     }
     for flags in [5, 7, 8] {
-        assert_eq!(MemoryAbi::<Memory>::msync(0x1000, 1, flags), Err(MemoryMarshalError::Invalid));
+        assert_eq!(
+            MemoryAbi::<Memory>::msync(0x1000, 1, flags),
+            Err(MemoryMarshalError::Invalid)
+        );
     }
     assert!(MemoryAbi::<Memory>::madvise(0x1001, 4096, 0).is_err());
     assert_eq!(

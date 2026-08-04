@@ -10,6 +10,7 @@ const MAP_PRIVATE: u32 = 0x2;
 const MAP_FIXED: u32 = 0x10;
 const MAP_ANONYMOUS: u32 = 0x20;
 const MAP_DENYWRITE: u32 = 0x800;
+const MAP_NORESERVE: u32 = 0x4000;
 const MAP_FIXED_NOREPLACE: u32 = 0x10_0000;
 const MAP_ALLOWED: u32 = 0x1f_f7f3 | MAP_DENYWRITE;
 const MREMAP_MAYMOVE: u32 = 1;
@@ -38,12 +39,15 @@ pub enum MapSource {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MmapPlan {
     pub placement: Placement,
+    /// Byte-exact length requested by the guest before Linux page rounding.
+    pub requested_length: u64,
     pub length: u64,
     pub protection: Protection,
     pub source: MapSource,
     pub offset: u64,
     pub populate: bool,
     pub locked: bool,
+    pub no_reserve: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -189,12 +193,14 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
         };
         Ok(MmapPlan {
             placement,
+            requested_length: length,
             length: rounded,
             protection: Self::protection(protection),
             source,
             offset,
             populate: flags & 0x8000 != 0,
             locked: flags & 0x2000 != 0,
+            no_reserve: flags & MAP_NORESERVE != 0,
         })
     }
 
