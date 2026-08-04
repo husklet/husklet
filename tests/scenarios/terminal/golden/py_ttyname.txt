@@ -1,0 +1,1 @@
+TTYNAME /dev/pts/0

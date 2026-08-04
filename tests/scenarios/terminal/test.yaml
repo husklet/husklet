@@ -1,0 +1,422 @@
+cases:
+- id: terminal/ubuntu-isatty
+  image: ubuntu:latest
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: '[ -t 0 ] && [ -t 1 ] && [ -t 2 ] && echo TTY-ALL'
+  expect:
+    stdout_contains: golden/ubuntu_isatty.txt
+- id: terminal/ubuntu-notty
+  image: ubuntu:latest
+  timeout: 60
+  actions:
+  - shell:
+      script: '[ -t 1 ] && echo HAS || echo NO-TTY'
+  expect:
+    stdout_contains: golden/ubuntu_notty.txt
+- id: terminal/ubuntu-tty-dev
+  image: ubuntu:latest
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: tty
+  expect:
+    stdout_contains: golden/ubuntu_tty_dev.txt
+- id: terminal/ubuntu-notty-dev
+  image: ubuntu:latest
+  timeout: 60
+  actions:
+  - shell:
+      script: tty || true
+  expect:
+    stdout_contains: golden/ubuntu_notty_dev.txt
+- id: terminal/ubuntu-tty-name
+  image: ubuntu:latest
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: tty
+  expect:
+    stdout_contains: golden/ubuntu_tty_name.txt
+- id: terminal/ubuntu-fd0-link
+  image: ubuntu:latest
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: readlink /proc/self/fd/0
+  expect:
+    stdout_contains: golden/ubuntu_fd0_link.txt
+- id: terminal/ubuntu-pts-listing
+  image: ubuntu:latest
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: ls /dev/pts
+  expect:
+    stdout_contains: golden/ubuntu_pts_listing.txt
+- id: terminal/ubuntu-tput-cols
+  image: ubuntu:latest
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: tput cols
+  expect:
+    stdout_contains: golden/ubuntu_tput_cols.txt
+- id: terminal/ubuntu-stty-echo
+  image: ubuntu:latest
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: stty -echo; stty -a | grep -q -- '-echo' && echo ECHO-OFF
+  expect:
+    stdout_contains: golden/ubuntu_stty_echo.txt
+- id: terminal/ubuntu-stty-sane
+  image: ubuntu:latest
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: stty sane && echo SANE-OK
+  expect:
+    stdout_contains: golden/ubuntu_stty_sane.txt
+- id: terminal/alpine-tty-name
+  image: alpine
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: tty
+  expect:
+    stdout_contains: golden/alpine_tty_name.txt
+- id: terminal/alpine-isatty
+  image: alpine
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: '[ -t 1 ] && echo TTY-OK'
+  expect:
+    stdout_contains: golden/alpine_isatty.txt
+- id: terminal/alpine-stty-setsize
+  image: alpine
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: stty rows 24 cols 80; stty size
+  expect:
+    stdout_contains: golden/alpine_stty_setsize.txt
+- id: terminal/tty-term-xterm
+  image: alpine
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: echo TERM=[$TERM]
+  expect:
+    stdout_contains: golden/tty_term_xterm.txt
+- id: terminal/notty-term-unset
+  image: alpine
+  timeout: 60
+  actions:
+  - shell:
+      script: echo TERM=[$TERM]
+  expect:
+    stdout_contains: golden/notty_term_unset.txt
+- id: terminal/ubuntu-pts0-chardev
+  image: ubuntu:latest
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: '[ -c /dev/pts/0 ] && echo PTS0-CHARDEV'
+  expect:
+    stdout_contains: golden/ubuntu_pts0_chardev.txt
+- id: terminal/ubuntu-reopen-tty
+  image: ubuntu:latest
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: echo REOPEN-OK > "$(tty)"
+  expect:
+    stdout_contains: golden/ubuntu_reopen_tty.txt
+- id: terminal/py-ttyname
+  image: python:alpine
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: python3 -c 'import os; print("TTYNAME", os.ttyname(0))'
+  expect:
+    stdout_contains: golden/py_ttyname.txt
+- id: terminal/py-openpty-ttyname
+  image: python:alpine
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: python3 -c 'import pty,os; m,s=pty.openpty(); print("SLAVE", os.ttyname(s))'
+  expect:
+    stdout_contains: golden/py_openpty_ttyname.txt
+- id: terminal/py-openpty-fdlink
+  image: python:alpine
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: python3 -c 'import pty,os; m,s=pty.openpty(); print("LINK", os.readlink("/proc/self/fd/%d"%s))'
+  expect:
+    stdout_contains: golden/py_openpty_fdlink.txt
+- id: terminal/py-openpty-pts-listing
+  image: python:alpine
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: python3 -c 'import pty,os; m,s=pty.openpty(); print("LS", " ".join(sorted(os.listdir("/dev/pts"))))'
+  expect:
+    stdout_contains: golden/py_openpty_pts_listing.txt
+- id: terminal/debian-isatty
+  image: debian:bookworm
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: '[ -t 1 ] && echo TTY-OK'
+  expect:
+    stdout_contains: golden/debian_isatty.txt
+- id: terminal/bash52-isatty
+  image: bash:5.2
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - argv:
+      argv:
+      - bash
+      - -c
+      - '[ -t 1 ] && echo TTY-OK'
+  expect:
+    stdout_contains: golden/bash52_isatty.txt
+- id: terminal/tty-term-override
+  image: alpine
+  resources:
+  - pty
+  environment:
+    TERM: screen
+  timeout: 60
+  actions:
+  - shell:
+      script: echo TERM=[$TERM]
+  expect:
+    stdout_contains: golden/tty_term_override.txt
+- id: terminal/ubuntu-stty-setsize
+  image: ubuntu:latest
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: stty rows 40 cols 100; stty size
+  expect:
+    stdout_contains: golden/ubuntu_stty_setsize.txt
+- id: terminal/py-isatty
+  image: python:alpine
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: python3 -c 'import sys; print("PYTTY", sys.stdin.isatty(), sys.stdout.isatty())'
+  expect:
+    stdout_contains: golden/py_isatty.txt
+- id: terminal/py-termsize
+  image: python:alpine
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: stty rows 30 cols 90; python3 -c 'import os; s=os.get_terminal_size(); print("SIZE", s.columns, s.lines)'
+  expect:
+    stdout_contains: golden/py_termsize.txt
+- id: terminal/py-termios
+  image: python:alpine
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: python3 -c 'import sys,termios; a=termios.tcgetattr(sys.stdin.fileno()); print("TERMIOS", len(a))'
+  expect:
+    stdout_contains: golden/py_termios.txt
+- id: terminal/py-openpty
+  image: python:alpine
+  timeout: 60
+  actions:
+  - shell:
+      script: python3 -c 'import os,pty; m,s=pty.openpty(); os.write(s,b"hi\n"); print("OPENPTY", os.read(m,3).decode().strip())'
+  expect:
+    stdout_contains: golden/py_openpty.txt
+- id: terminal/bash-interactive
+  image: ubuntu:latest
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: printf 'echo hello-bash-i\nexit\n' | bash -i 2>&1 | grep hello
+  expect:
+    stdout_contains: golden/bash_interactive.txt
+- id: terminal/bash-dollar-flags
+  image: ubuntu:latest
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: bash -ic 'case $- in *i*) echo INTERACTIVE;; esac' 2>&1 | tail -1
+  expect:
+    stdout_contains: golden/bash_dollar_flags.txt
+- id: terminal/dash-interactive
+  image: ubuntu:latest
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: printf 'echo hello-dash\nexit\n' | dash -i 2>&1 | grep hello
+  expect:
+    stdout_contains: golden/dash_interactive.txt
+- id: terminal/busybox-interactive
+  image: alpine
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: printf 'echo hello-ash\nexit\n' | /bin/sh -i 2>&1 | grep hello
+  expect:
+    stdout_contains: golden/busybox_interactive.txt
+- id: terminal/zsh-interactive
+  image: zshusers/zsh:5.9
+  timeout: 60
+  actions:
+  - shell:
+      script: printf 'echo hello-zsh\nexit\n' | zsh -i 2>&1 | grep hello
+  expect:
+    stdout_contains: golden/zsh_interactive.txt
+- id: terminal/zsh-version
+  image: zshusers/zsh:5.9
+  timeout: 60
+  actions:
+  - shell:
+      script: zsh --version
+  expect:
+    stdout_contains: golden/zsh_version.txt
+- id: terminal/jobctl-jobs
+  image: ubuntu:latest
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: bash -c 'set -m; sleep 0.4 & jobs | grep -c Running'
+  expect:
+    stdout_contains: golden/jobctl_jobs.txt
+- id: terminal/jobctl-wait-rc
+  image: ubuntu:latest
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: set -m; (exit 7) & wait $!; echo rc=$?
+  expect:
+    stdout_contains: golden/jobctl_wait_rc.txt
+- id: terminal/jobctl-fgbg
+  image: ubuntu:latest
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: bash -c "set -m; sleep 0.5 & disown -h %1 2>/dev/null; jobs -p | grep -q '[0-9]' && echo JOB-PID-OK"
+  expect:
+    stdout_contains: golden/jobctl_fgbg.txt
+- id: terminal/jobctl-fg-pipeline
+  image: ubuntu:latest
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: bash -ic 'ls / | cat >/dev/null && echo PIPE-OK' 2>&1 | tail -1
+  expect:
+    stdout_contains: golden/jobctl_fg_pipeline.txt
+- id: terminal/setsid-newsession
+  image: ubuntu:latest
+  timeout: 60
+  actions:
+  - shell:
+      script: setsid sh -c 'echo SETSID-OK' 2>&1 | head -1
+  expect:
+    stdout_contains: golden/setsid_newsession.txt
+- id: terminal/tput-colors
+  image: ubuntu:latest
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: export TERM=xterm; tput colors
+  expect:
+    stdout_contains: golden/tput_colors.txt
+- id: terminal/tput-setaf-escape
+  image: ubuntu:latest
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: export TERM=xterm; tput setaf 1 | od -An -tx1 | tr -d ' \n'
+  expect:
+    stdout_contains: golden/tput_setaf_escape.txt
+- id: terminal/clear-escape
+  image: ubuntu:latest
+  resources:
+  - pty
+  timeout: 60
+  actions:
+  - shell:
+      script: export TERM=xterm; clear | od -An -tx1 | tr -d ' \n' | grep -q 1b5b && echo CLEAR-ESC
+  expect:
+    stdout_contains: golden/clear_escape.txt
