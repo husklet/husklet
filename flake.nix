@@ -206,12 +206,16 @@
           ]);
         };
 
-      alpineFor =
-        pkgs:
-        pkgs.fetchurl {
+      alpineArchivesFor = pkgs: {
+        arm64 = pkgs.fetchurl {
           url = "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/aarch64/alpine-minirootfs-3.24.1-aarch64.tar.gz";
           hash = "sha256-9VqQ9pBSxb1vkssJqPRwZZcIMLGUyRegBvuUAo5yElk=";
         };
+        amd64 = pkgs.fetchurl {
+          url = "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/x86_64/alpine-minirootfs-3.24.1-x86_64.tar.gz";
+          hash = "sha256-Qfc+PPX6kZuKpcprMNxI8NonIHdtdCPip3SCEUVv4IE=";
+        };
+      };
 
       packageFor =
         pkgs:
@@ -249,51 +253,61 @@
 
       verificationFor =
         pkgs:
-        (rustPlatformFor pkgs).buildRustPackage {
-          pname = "hl-engine-verification";
-          inherit version;
-          src = workspaceSource;
-          cargoLock.lockFile = ./Cargo.lock;
-          strictDeps = true;
-          nativeBuildInputs = commonNativeInputs pkgs ++ [
-            (rustFor pkgs)
-          ];
-          doCheck = false;
-          buildPhase = ''
-            runHook preBuild
+        let
+          alpine = alpineArchivesFor pkgs;
+        in
+        (rustPlatformFor pkgs).buildRustPackage (
+          {
+            pname = "hl-engine-verification";
+            inherit version;
+            src = workspaceSource;
+            cargoLock.lockFile = ./Cargo.lock;
+            strictDeps = true;
+            nativeBuildInputs = commonNativeInputs pkgs ++ [
+              (rustFor pkgs)
+            ];
+            doCheck = false;
+            buildPhase = ''
+              runHook preBuild
 
-            export CARGO_BUILD_JOBS="$NIX_BUILD_CORES"
-            if [ "$NIX_BUILD_CORES" -gt 256 ]; then
-              export HL_COMPAT_JOBS=256
-            else
-              export HL_COMPAT_JOBS="$NIX_BUILD_CORES"
-            fi
+              export CARGO_BUILD_JOBS="$NIX_BUILD_CORES"
+              if [ "$NIX_BUILD_CORES" -gt 256 ]; then
+                export HL_COMPAT_JOBS=256
+              else
+                export HL_COMPAT_JOBS="$NIX_BUILD_CORES"
+              fi
 
-            cargo fmt --all --check --message-format short
-            cargo run --locked --offline -q -p hl-design-lint -- src tests
-            cargo run --locked --offline -q -p hl-design-lint -- --cases lint src tests
-            cargo build -p engine -p testing --bins --locked --offline
-            export HL_TEST_ENGINE_APP_BIN_DIR="$PWD/target/debug"
-            cargo check --workspace --all-targets --locked --offline
-            cargo clippy --workspace --all-targets --locked --offline -- -D warnings
-            cargo test --workspace --all-targets --locked --offline --no-fail-fast
-            cargo test --workspace --doc --locked --offline
+              cargo fmt --all --check --message-format short
+              cargo run --locked --offline -q -p hl-design-lint -- src tests
+              cargo run --locked --offline -q -p hl-design-lint -- --cases lint src tests
+              cargo build -p engine -p testing --bins --locked --offline
+              export HL_TEST_ENGINE_APP_BIN_DIR="$PWD/target/debug"
+              cargo check --workspace --all-targets --locked --offline
+              cargo clippy --workspace --all-targets --locked --offline -- -D warnings
+              cargo test --workspace --all-targets --locked --offline --no-fail-fast
+              cargo test --workspace --doc --locked --offline
 
-            python3 tests/runtime/legacy/corpus.py verify
-            python3 tests/runtime/legacy/fixture_schema.py --check
-            python3 tests/runtime/legacy/priority.py --check
-            PYTHONPATH=tests/runtime/legacy python3 -m unittest \
-              tests/runtime/legacy/corpus_test.py \
-              tests/runtime/legacy/fixture_schema_test.py \
-              tests/runtime/legacy/priority_test.py
+              python3 tests/runtime/legacy/corpus.py verify
+              python3 tests/runtime/legacy/fixture_schema.py --check
+              python3 tests/runtime/legacy/priority.py --check
+              PYTHONPATH=tests/runtime/legacy python3 -m unittest \
+                tests/runtime/legacy/corpus_test.py \
+                tests/runtime/legacy/fixture_schema_test.py \
+                tests/runtime/legacy/priority_test.py
 
-            runHook postBuild
-          '';
-          installPhase = ''
-            mkdir -p "$out"
-            touch "$out/passed"
-          '';
-        };
+              runHook postBuild
+            '';
+            installPhase = ''
+              mkdir -p "$out"
+              touch "$out/passed"
+            '';
+          }
+          // lib.optionalAttrs pkgs.stdenv.isLinux {
+            HL_ALPINE_ARM64_ARCHIVE = alpine.arm64;
+            HL_ALPINE_AMD64_ARCHIVE = alpine.amd64;
+            HL_ALPINE_ARCHIVE = alpine.arm64;
+          }
+        );
     in
     {
       packages = forAllSystems (
@@ -330,6 +344,7 @@
         pkgs:
         let
           toolchain = toolchainFor pkgs;
+          alpine = alpineArchivesFor pkgs;
         in
         {
           default = pkgs.mkShell (
@@ -350,7 +365,19 @@
                 export NATIVE_CC="${toolchain.env.NATIVE_CC}"
                 export CARGO_BUILD_JOBS="''${CARGO_BUILD_JOBS:-1}"
                 export HL_COMPAT_JOBS="''${HL_COMPAT_JOBS:-1}"
+                if [ "${if pkgs.stdenv.isLinux then "1" else "0"}" = 1 ]; then
+                  case "''${HL_SCENARIO_TARGET:-arm64}" in
+                    arm64) export HL_ALPINE_ARCHIVE="$HL_ALPINE_ARM64_ARCHIVE" ;;
+                    amd64) export HL_ALPINE_ARCHIVE="$HL_ALPINE_AMD64_ARCHIVE" ;;
+                    *) echo "unsupported HL_SCENARIO_TARGET: $HL_SCENARIO_TARGET" >&2; return 1 ;;
+                  esac
+                fi
               '';
+            }
+            // lib.optionalAttrs pkgs.stdenv.isLinux {
+              HL_ALPINE_ARM64_ARCHIVE = alpine.arm64;
+              HL_ALPINE_AMD64_ARCHIVE = alpine.amd64;
+              HL_ALPINE_ARCHIVE = alpine.arm64;
             }
             // lib.optionalAttrs pkgs.stdenv.isDarwin {
               nativeBuildInputs = [
@@ -371,7 +398,7 @@
               HL_ADWAITA_ICONS = pkgs.adwaita-icon-theme;
               HL_HICOLOR_ICONS = pkgs.hicolor-icon-theme;
               HL_GSETTINGS_SCHEMAS = pkgs.gsettings-desktop-schemas;
-              HL_ALPINE_ARCHIVE = alpineFor pkgs;
+              HL_ALPINE_ARCHIVE = alpine.arm64;
             }
           );
         }
