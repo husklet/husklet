@@ -24,60 +24,68 @@ pub(in crate::ffi::linux::execution) fn host_group() -> u32 {
     unsafe { libc::getegid() }
 }
 
-pub(in crate::ffi::linux::execution) fn seccomp_baseline(
-    plan: &RuntimeLaunchPlan,
-) -> Result<hl_linux::SeccompBaseline, EngineError> {
-    match plan.options.get("HL_SECCOMP_BASELINE") {
-        None | Some("container") => Ok(hl_linux::SeccompBaseline::Container),
-        Some("disabled") => Ok(hl_linux::SeccompBaseline::Disabled),
-        Some(_) => Err(EngineError::LaunchFailed),
-    }
+struct LaunchPolicy<'a> {
+    plan: &'a RuntimeLaunchPlan,
 }
 
-fn limit_resource(name: &str) -> Option<Resource> {
-    match name {
-        "cpu" => Some(Resource::CpuTime),
-        "fsize" => Some(Resource::FileSize),
-        "data" => Some(Resource::Data),
-        "stack" => Some(Resource::Stack),
-        "core" => Some(Resource::Core),
-        "rss" => Some(Resource::ResidentSet),
-        "nproc" => Some(Resource::Processes),
-        "nofile" => Some(Resource::OpenFiles),
-        "memlock" => Some(Resource::LockedMemory),
-        "as" => Some(Resource::AddressSpace),
-        "locks" => Some(Resource::Locks),
-        "sigpending" => Some(Resource::PendingSignals),
-        "msgqueue" => Some(Resource::MessageQueue),
-        "nice" => Some(Resource::Nice),
-        "rtprio" => Some(Resource::RealtimePriority),
-        "rttime" => Some(Resource::RealtimeTime),
-        _ => None,
+impl<'a> LaunchPolicy<'a> {
+    fn new(plan: &'a RuntimeLaunchPlan) -> Self {
+        Self { plan }
     }
-}
 
-fn limit_value(value: &str) -> Result<u64, EngineError> {
-    match value {
-        "unlimited" | "-1" => Ok(u64::MAX),
-        _ => value.parse().map_err(|_| EngineError::LaunchFailed),
+    fn seccomp_baseline(&self) -> Result<hl_linux::SeccompBaseline, EngineError> {
+        match self.plan.options.get("HL_SECCOMP_BASELINE") {
+            None | Some("container") => Ok(hl_linux::SeccompBaseline::Container),
+            Some("disabled") => Ok(hl_linux::SeccompBaseline::Disabled),
+            Some(_) => Err(EngineError::LaunchFailed),
+        }
     }
-}
 
-fn launch_limits(plan: &RuntimeLaunchPlan) -> Result<(ProcessLimits, Vec<(Resource, Limit)>), EngineError> {
-    let mut limits = ProcessLimits::default();
-    let mut overrides = Vec::new();
-    let Some(specification) = plan.options.get("HL_ULIMITS").filter(|value| !value.is_empty()) else {
-        return Ok((limits, overrides));
-    };
-    for record in specification.split(',') {
-        let (name, values) = record.split_once('=').ok_or(EngineError::LaunchFailed)?;
-        let Some(resource) = limit_resource(name) else { continue };
-        let (soft, hard) = values.split_once(':').map_or((values, values), |pair| pair);
-        let limit = Limit::new(limit_value(soft)?, limit_value(hard)?).map_err(|_| EngineError::LaunchFailed)?;
-        limits.set(resource, limit);
-        overrides.push((resource, limit));
+    fn limits(&self) -> Result<(ProcessLimits, Vec<(Resource, Limit)>), EngineError> {
+        let mut limits = ProcessLimits::default();
+        let mut overrides = Vec::new();
+        let Some(specification) = self.plan.options.get("HL_ULIMITS").filter(|value| !value.is_empty()) else {
+            return Ok((limits, overrides));
+        };
+        for record in specification.split(',') {
+            let (name, values) = record.split_once('=').ok_or(EngineError::LaunchFailed)?;
+            let Some(resource) = Self::resource(name) else { continue };
+            let (soft, hard) = values.split_once(':').map_or((values, values), |pair| pair);
+            let limit = Limit::new(Self::value(soft)?, Self::value(hard)?).map_err(|_| EngineError::LaunchFailed)?;
+            limits.set(resource, limit);
+            overrides.push((resource, limit));
+        }
+        Ok((limits, overrides))
     }
-    Ok((limits, overrides))
+
+    fn resource(name: &str) -> Option<Resource> {
+        match name {
+            "cpu" => Some(Resource::CpuTime),
+            "fsize" => Some(Resource::FileSize),
+            "data" => Some(Resource::Data),
+            "stack" => Some(Resource::Stack),
+            "core" => Some(Resource::Core),
+            "rss" => Some(Resource::ResidentSet),
+            "nproc" => Some(Resource::Processes),
+            "nofile" => Some(Resource::OpenFiles),
+            "memlock" => Some(Resource::LockedMemory),
+            "as" => Some(Resource::AddressSpace),
+            "locks" => Some(Resource::Locks),
+            "sigpending" => Some(Resource::PendingSignals),
+            "msgqueue" => Some(Resource::MessageQueue),
+            "nice" => Some(Resource::Nice),
+            "rtprio" => Some(Resource::RealtimePriority),
+            "rttime" => Some(Resource::RealtimeTime),
+            _ => None,
+        }
+    }
+
+    fn value(value: &str) -> Result<u64, EngineError> {
+        match value {
+            "unlimited" | "-1" => Ok(u64::MAX),
+            _ => value.parse().map_err(|_| EngineError::LaunchFailed),
+        }
+    }
 }
 
 pub(in crate::ffi::linux::execution) fn create(
@@ -96,7 +104,8 @@ pub(in crate::ffi::linux::execution) fn create(
     // the host identity, matching Linux execution and the retained engine.
     let uid = launch_identity(plan, "HL_UID", host_user())?;
     let gid = launch_identity(plan, "HL_GID", host_group())?;
-    let seccomp_baseline = seccomp_baseline(plan)?;
+    let policy = LaunchPolicy::new(plan);
+    let seccomp_baseline = policy.seccomp_baseline()?;
     let table = assembly.descriptors().descriptor_table();
     let descriptors = Arc::new(
         descriptor_table::Set::with_table(Arc::clone(&table), streams).expect("valid standard descriptor table"),
@@ -135,7 +144,7 @@ pub(in crate::ffi::linux::execution) fn create(
         ambient: 0,
     };
     launch_credentials.capability_bounding = hl_task::CapabilitySets::CONTAINER;
-    let (launch_limits, limit_overrides) = launch_limits(plan)?;
+    let (launch_limits, limit_overrides) = policy.limits()?;
     let source = match tasks.snapshot().init {
         Some(init) => {
             tasks
@@ -433,7 +442,7 @@ mod tests {
     #[test]
     fn seccomp_baseline_is_typed_and_defaults_to_container() {
         assert_eq!(
-            seccomp_baseline(&plan(Options::default())),
+            LaunchPolicy::new(&plan(Options::default())).seccomp_baseline(),
             Ok(hl_linux::SeccompBaseline::Container),
         );
         for (value, expected) in [
@@ -442,11 +451,14 @@ mod tests {
         ] {
             let mut options = Options::default();
             options.set("HL_SECCOMP_BASELINE", value, true).unwrap();
-            assert_eq!(seccomp_baseline(&plan(options)), expected);
+            assert_eq!(LaunchPolicy::new(&plan(options)).seccomp_baseline(), expected);
         }
         let mut options = Options::default();
         options.set("HL_SECCOMP_BASELINE", "unknown", true).unwrap();
-        assert_eq!(seccomp_baseline(&plan(options)), Err(EngineError::LaunchFailed));
+        assert_eq!(
+            LaunchPolicy::new(&plan(options)).seccomp_baseline(),
+            Err(EngineError::LaunchFailed)
+        );
     }
 
     #[test]
@@ -455,7 +467,7 @@ mod tests {
         options
             .set("HL_ULIMITS", "nofile=1024:2048,core=unlimited,unknown=bad", true)
             .unwrap();
-        let (limits, overrides) = launch_limits(&plan(options)).unwrap();
+        let (limits, overrides) = LaunchPolicy::new(&plan(options)).limits().unwrap();
 
         assert_eq!(limits.get(Resource::OpenFiles), Some(Limit { soft: 1024, hard: 2048 }));
         assert_eq!(
@@ -473,7 +485,10 @@ mod tests {
         for specification in ["nofile=2048:1024", "nofile=bad", "nofile"] {
             let mut options = Options::default();
             options.set("HL_ULIMITS", specification, true).unwrap();
-            assert!(matches!(launch_limits(&plan(options)), Err(EngineError::LaunchFailed)));
+            assert!(matches!(
+                LaunchPolicy::new(&plan(options)).limits(),
+                Err(EngineError::LaunchFailed)
+            ));
         }
     }
 }
