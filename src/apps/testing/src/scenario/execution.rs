@@ -203,7 +203,10 @@ async fn execute(
     let mut stderr = Vec::new();
     let mut status = ExitStatus::Code(0);
     for action in &case.actions {
-        let outcome = run_exec(containers, case, runtime, rootfs, name, action).await?;
+        let outcome = match action {
+            super::definition::ScenarioAction::Api(operation) => run_api(containers, name, operation).await?,
+            _ => run_exec(containers, case, runtime, rootfs, name, action).await?,
+        };
         status = outcome.0;
         stdout.extend(outcome.1);
         stderr.extend(outcome.2);
@@ -213,6 +216,83 @@ async fn execute(
         }
     }
     verify(case, status, &stdout, &stderr)
+}
+
+async fn run_api(
+    containers: &hl_container::Containers,
+    name: &str,
+    operation: &super::definition::ScenarioApiAction,
+) -> Result<(ExitStatus, Vec<u8>, Vec<u8>), Error> {
+    use super::definition::ScenarioApiAction;
+    let filesystem = containers.filesystem(name).await?;
+    match operation {
+        ScenarioApiAction::CopyToContainer { source, destination } => {
+            let mut bytes = LimitedOutput::default();
+            {
+                let mut archive = tar::Builder::new(&mut bytes);
+                let entry = source.file_name().ok_or("copy source has no basename")?;
+                if source.is_dir() {
+                    archive.append_dir_all(entry, source)?;
+                } else {
+                    archive.append_path_with_name(source, entry)?;
+                }
+                archive.finish()?;
+            }
+            let bytes = bytes.0;
+            filesystem.extract(
+                destination,
+                bytes.as_slice(),
+                hl_container::Limits {
+                    entries: 1024,
+                    bytes: CAPTURE_LIMIT as u64,
+                },
+            )?;
+            Ok((ExitStatus::Code(0), Vec::new(), Vec::new()))
+        }
+        ScenarioApiAction::CopyFromContainer { source } => {
+            let mut archive = LimitedOutput::default();
+            filesystem.archive(source, &mut archive)?;
+            let mut output = Vec::new();
+            for entry in tar::Archive::new(archive.0.as_slice()).entries()? {
+                let entry = entry?;
+                if entry.header().entry_type().is_file() {
+                    use std::io::Read;
+                    entry
+                        .take((CAPTURE_LIMIT - output.len()) as u64 + 1)
+                        .read_to_end(&mut output)?;
+                    if output.len() > CAPTURE_LIMIT {
+                        return Err(format!("copied output exceeded {CAPTURE_LIMIT} bytes").into());
+                    }
+                }
+            }
+            Ok((ExitStatus::Code(0), output, Vec::new()))
+        }
+    }
+}
+
+#[derive(Default)]
+struct LimitedOutput(Vec<u8>);
+
+impl std::io::Write for LimitedOutput {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let next = self
+            .0
+            .len()
+            .checked_add(bytes.len())
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::FileTooLarge, "copy archive size overflow"))?;
+        if next > CAPTURE_LIMIT {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::FileTooLarge,
+                format!("copy archive exceeded {CAPTURE_LIMIT} bytes"),
+            ));
+        }
+        self.0.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 async fn run_exec(

@@ -103,7 +103,16 @@ struct ScriptAction {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ApiAction {
-    operation: String,
+    operation: ApiOperation,
+    source: PathBuf,
+    destination: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum ApiOperation {
+    CopyToContainer,
+    CopyFromContainer,
 }
 
 #[derive(Deserialize)]
@@ -210,12 +219,19 @@ pub struct ScenarioCase {
     pub stdout_exact: Option<PathBuf>,
 }
 
+#[derive(Debug)]
 pub enum ScenarioAction {
     Argv(Vec<String>),
     Shell(String),
     Entrypoint,
     Host(String),
-    Api(String),
+    Api(ScenarioApiAction),
+}
+
+#[derive(Debug)]
+pub enum ScenarioApiAction {
+    CopyToContainer { source: PathBuf, destination: String },
+    CopyFromContainer { source: String },
 }
 
 pub struct ScenarioFixture {
@@ -303,29 +319,7 @@ fn load_case(
         return Err(format!("{} marks an unsupported target xfail", case.id).into());
     }
     let resources = unique(case.resources, &case.id, "resource")?;
-    let mut working_directory = "/".to_owned();
-    let actions = if let Some(run) = case.run {
-        safe_absolute(&run.program)?;
-        safe_absolute(&run.working_directory)?;
-        working_directory = run.working_directory;
-        vec![validate_action(
-            &case.id,
-            Action {
-                argv: Some(ArgvAction {
-                    argv: std::iter::once(run.program).chain(run.arguments).collect(),
-                }),
-                shell: None,
-                entrypoint: None,
-                host: None,
-                api: None,
-            },
-        )?]
-    } else {
-        case.actions
-            .into_iter()
-            .map(|action| validate_action(&case.id, action))
-            .collect::<Result<Vec<_>, Error>>()?
-    };
+    let (working_directory, actions) = load_actions(directory, &case.id, case.run, case.actions)?;
     let entrypoints = actions
         .iter()
         .filter(|action| matches!(action, ScenarioAction::Entrypoint))
@@ -385,6 +379,33 @@ fn load_case(
     })
 }
 
+fn load_actions(
+    directory: &Path,
+    id: &str,
+    run: Option<Run>,
+    actions: Vec<Action>,
+) -> Result<(String, Vec<ScenarioAction>), Error> {
+    let Some(run) = run else {
+        let actions = actions
+            .into_iter()
+            .map(|action| validate_action(directory, id, action))
+            .collect::<Result<Vec<_>, Error>>()?;
+        return Ok(("/".to_owned(), actions));
+    };
+    safe_absolute(&run.program)?;
+    safe_absolute(&run.working_directory)?;
+    let action = Action {
+        argv: Some(ArgvAction {
+            argv: std::iter::once(run.program).chain(run.arguments).collect(),
+        }),
+        shell: None,
+        entrypoint: None,
+        host: None,
+        api: None,
+    };
+    Ok((run.working_directory, vec![validate_action(directory, id, action)?]))
+}
+
 fn platforms(values: Vec<Platform>, default_all: bool, id: &str) -> Result<Vec<Target>, Error> {
     let values = if values.is_empty() && default_all {
         vec![Platform::Arm64, Platform::Amd64]
@@ -403,7 +424,7 @@ fn unique<T: Ord + Copy>(values: Vec<T>, id: &str, noun: &str) -> Result<Vec<T>,
     }
 }
 
-fn validate_action(id: &str, action: Action) -> Result<ScenarioAction, Error> {
+fn validate_action(directory: &Path, id: &str, action: Action) -> Result<ScenarioAction, Error> {
     let count = usize::from(action.argv.is_some())
         + usize::from(action.shell.is_some())
         + usize::from(action.entrypoint.is_some())
@@ -430,8 +451,40 @@ fn validate_action(id: &str, action: Action) -> Result<ScenarioAction, Error> {
         (None, None, None, Some(ScriptAction { script }), None) if bounded_text(&script) => {
             Ok(ScenarioAction::Host(script))
         }
-        (None, None, None, None, Some(ApiAction { operation })) if bounded_text(&operation) => {
-            Ok(ScenarioAction::Api(operation))
+        (
+            None,
+            None,
+            None,
+            None,
+            Some(ApiAction {
+                operation: ApiOperation::CopyToContainer,
+                source,
+                destination: Some(destination),
+            }),
+        ) => {
+            safe_absolute(&destination)?;
+            Ok(ScenarioAction::Api(ScenarioApiAction::CopyToContainer {
+                source: local_path(directory, source, "copy source")?,
+                destination,
+            }))
+        }
+        (
+            None,
+            None,
+            None,
+            None,
+            Some(ApiAction {
+                operation: ApiOperation::CopyFromContainer,
+                source,
+                destination: None,
+            }),
+        ) => {
+            let source = source
+                .to_str()
+                .ok_or_else(|| format!("{id} copy source is not UTF-8"))?
+                .to_owned();
+            safe_absolute(&source)?;
+            Ok(ScenarioAction::Api(ScenarioApiAction::CopyFromContainer { source }))
         }
         _ => Err(format!("{id} has an empty or invalid action").into()),
     }
@@ -504,6 +557,16 @@ fn local_file(directory: &Path, path: PathBuf, noun: &str) -> Result<PathBuf, Er
     safe_relative(&path)?;
     let path = directory.join(path);
     if path.is_file() {
+        Ok(path)
+    } else {
+        Err(format!("missing {noun} {}", path.display()).into())
+    }
+}
+
+fn local_path(directory: &Path, path: PathBuf, noun: &str) -> Result<PathBuf, Error> {
+    safe_relative(&path)?;
+    let path = directory.join(path);
+    if path.exists() {
         Ok(path)
     } else {
         Err(format!("missing {noun} {}", path.display()).into())

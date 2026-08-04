@@ -1,0 +1,37 @@
+cases:
+- id: cpcmd/host-to-container-file
+  image: alpine:latest
+  targets: [arm64]
+  timeout: 30
+  resources: [disk_heavy]
+  actions:
+  - api: { operation: copy_to_container, source: input/f, destination: /tmp }
+  - argv: { argv: [/bin/cat, /tmp/f] }
+  expect: { stdout_exact: golden/host-to-container-file.txt }
+- id: cpcmd/container-to-host-file
+  image: alpine:latest
+  targets: [arm64]
+  timeout: 30
+  resources: [disk_heavy]
+  actions:
+  - shell: { script: "printf 'FROMCTR\n' > /tmp/g" }
+  - api: { operation: copy_from_container, source: /tmp/g }
+  expect: { stdout_exact: golden/container-to-host-file.txt }
+- id: cpcmd/host-to-container-dir
+  image: alpine:latest
+  targets: [arm64]
+  timeout: 30
+  resources: [disk_heavy]
+  actions:
+  - api: { operation: copy_to_container, source: input/d, destination: /tmp }
+  - shell: { script: "cat /tmp/d/a /tmp/d/b" }
+  expect: { stdout_contains: [golden/aaa.txt, golden/bbb.txt] }
+- id: cpcmd/container-to-host-dir
+  image: alpine:latest
+  targets: [arm64]
+  timeout: 30
+  resources: [disk_heavy]
+  actions:
+  - shell: { script: "mkdir -p /tmp/e; printf 'XXX\n' > /tmp/e/x; printf 'YYY\n' > /tmp/e/y" }
+  - api: { operation: copy_from_container, source: /tmp/e }
+  expect: { stdout_contains: [golden/xxx.txt, golden/yyy.txt] }

@@ -45,7 +45,7 @@ fn rich_contract_preserves_bounds_and_order() {
       - shell: { script: "echo marker" }
       - argv: { argv: [/bin/echo, exact] }
       - host: { script: "true" }
-      - api: { operation: inspect }
+      - api: { operation: copy_to_container, source: payload.txt, destination: /tmp }
     readiness: { startup: "daemon --fork", probe: "daemon ping", attempts: 3, delay_ms: 10, logs: [/tmp/daemon.log] }
     timeout: 7
     expect: { exit: 0, stdout_contains: [golden/contains.txt], stdout_exact: golden/exact.txt }
@@ -140,4 +140,22 @@ fn every_repository_definition_loads_with_globally_unique_ids() {
             );
         }
     }
+}
+
+#[test]
+fn copy_scenario_has_four_typed_api_cases() {
+    let mut root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    while !root.join("tests/scenarios/copy/test.yaml").is_file() {
+        root = root.parent().expect("workspace root contains copy scenario");
+    }
+    let directory = root.join("tests/scenarios/copy");
+    let scenario = Scenario::load(&directory, &directory.join("test.yaml")).unwrap();
+    assert_eq!(scenario.cases.len(), 4);
+    assert!(scenario.cases.iter().all(|case| {
+        case.id.starts_with("cpcmd/")
+            && case
+                .actions
+                .iter()
+                .any(|action| matches!(action, ScenarioAction::Api(_)))
+    }));
 }

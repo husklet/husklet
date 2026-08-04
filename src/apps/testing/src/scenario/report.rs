@@ -59,7 +59,7 @@ pub(super) fn provenance(scenarios: Vec<Scenario>, options: ProvenanceOptions) -
             if case
                 .actions
                 .iter()
-                .any(|action| matches!(action, ScenarioAction::Host(_) | ScenarioAction::Api(_)))
+                .any(|action| matches!(action, ScenarioAction::Host(_)))
             {
                 opaque.push(case.id.as_str());
             }

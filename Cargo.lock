@@ -2830,6 +2830,7 @@ dependencies = [
  "serde",
  "serde_yaml",
  "sha2",
+ "tar",
  "tempfile",
  "tokio",
 ]
