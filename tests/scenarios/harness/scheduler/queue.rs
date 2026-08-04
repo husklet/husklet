@@ -116,10 +116,6 @@ pub(super) const TASKS: &[Task] = &[
         command: "volume-contracts",
     },
     Task {
-        category: "web",
-        command: "web",
-    },
-    Task {
         category: "weird",
         command: "weird",
     },
@@ -154,7 +150,7 @@ fn fallback(category: &str) -> Option<Resource> {
         "buildcmd" | "distros" | "languages" | "toolchains" => Some(Resource::Registry),
         "weird" => Some(Resource::ProcessHeavy),
         "copy" | "volume" => Some(Resource::DiskHeavy),
-        "databases" | "netcontainer" | "network" | "runflags" | "web" => Some(Resource::HostPort),
+        "databases" | "netcontainer" | "network" | "runflags" => Some(Resource::HostPort),
         _ => None,
     }
 }

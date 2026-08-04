@@ -33,7 +33,7 @@ pub(crate) use harness::{analyze, contract, fixture, manifest, report, runner, s
 )]
 pub(crate) use groups::{
     coherence, copy, databases, distros, execcmd, languages, lifecycle, netcontainer, network,
-    permissions, process, runflags, terminal, utilities, volume, web, weird,
+    permissions, process, runflags, terminal, utilities, volume, weird,
 };
 
 use contract::Target;
@@ -112,7 +112,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         "toolchains" => scenario::toolchains().await?,
         "utilities" => scenario::utilities().await?,
         "volume-contracts" => volume::run().await?,
-        "web" => scenario::web().await?,
         "weird" => scenario::weird().await?,
         other => return Err(format!("unknown scenario {other:?}").into()),
     }

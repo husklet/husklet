@@ -23,7 +23,6 @@ pub(crate) fn build() -> crate::contract::Registry {
     registry.add(crate::distros::group());
     registry.add(crate::languages::group());
     registry.add(crate::terminal::group());
-    registry.add(crate::web::group());
     registry.add(crate::weird::group());
     registry.add(crate::coherence::group());
     registry.add(crate::execcmd::group());

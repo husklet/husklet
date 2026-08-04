@@ -1,9 +1,8 @@
 # Web scenario oracle
 
 These end-to-end cases preserve all 35 image, command, target, expected-failure,
-environment, timeout, and output contracts from
-`tests/scenarios/fixtures/web-core.yaml`. Expected output is now owned by this
-category under `golden/` instead of being embedded in a shared fixture.
+environment, timeout, and output contracts formerly held in the shared web
+fixture. The manifest and expected output are owned entirely by this category.
 
 The legacy scenario scheduler serialized this entire category through its
 `HostPort` fallback when cases declared no resources. Every migrated case
