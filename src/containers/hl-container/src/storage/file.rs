@@ -14,6 +14,7 @@ use std::{
 const VERSION: u32 = 1;
 const JOURNAL_HEADER: usize = 25;
 const RECORD_LIMIT: u64 = 16 * 1024 * 1024;
+const JOURNAL_STRIPES: usize = 64;
 
 use journal::initialize;
 
@@ -24,6 +25,7 @@ pub(crate) struct Disk {
     volumes: PathBuf,
     networks: PathBuf,
     transaction: Arc<Mutex<()>>,
+    journal_stripes: Arc<[Mutex<()>; JOURNAL_STRIPES]>,
     indexes: Arc<Mutex<std::collections::BTreeMap<JournalId, Vec<u64>>>>,
 }
 
@@ -47,6 +49,7 @@ impl Disk {
             volumes,
             networks,
             transaction: Arc::new(Mutex::new(())),
+            journal_stripes: Arc::new(std::array::from_fn(|_| Mutex::new(()))),
             indexes: Arc::new(Mutex::new(indexes)),
         })
     }
@@ -199,13 +202,9 @@ impl Logs for Disk {
         Ok(logs)
     }
     async fn cursor(&self, id: &JournalId) -> Result<u64> {
-        self.indexes
-            .lock()
-            .map_err(|_| Error::Corrupt("log cursor lock poisoned".into()))
-            .and_then(|indexes| {
-                u64::try_from(indexes.get(id).map_or(0, Vec::len))
-                    .map_err(|_| Error::Corrupt("log index exceeds u64".into()))
-            })
+        let repository = self.clone();
+        let id = id.clone();
+        Self::blocking(move || repository.cursor_sync(&id)).await
     }
     async fn after(&self, id: &JournalId, sequence: u64, limit: usize) -> Result<Vec<Entry>> {
         let repository = self.clone();
@@ -213,17 +212,9 @@ impl Logs for Disk {
         Self::blocking(move || repository.after_sync(&id, sequence, limit)).await
     }
     async fn remove(&self, id: &JournalId) -> Result<()> {
-        let path = self.log_path(id);
-        if let Err(error) = tokio::fs::remove_file(path).await {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                return Err(error.into());
-            }
-        }
-        self.indexes
-            .lock()
-            .map_err(|_| Error::Corrupt("log cursor lock poisoned".into()))?
-            .remove(id);
-        Ok(())
+        let repository = self.clone();
+        let id = id.clone();
+        Self::blocking(move || repository.remove_journal_sync(&id)).await
     }
 }
 

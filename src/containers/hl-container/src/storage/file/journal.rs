@@ -4,6 +4,26 @@ use super::{
 };
 
 impl Disk {
+    pub(super) fn journal_slot(id: &JournalId) -> usize {
+        let tag = match id {
+            JournalId::Container(_) => 0_u8,
+            JournalId::Exec(_) => 1_u8,
+        };
+        let mut value = 0xcbf2_9ce4_8422_2325_u64;
+        for byte in std::iter::once(tag).chain(id.as_str().bytes()) {
+            value ^= u64::from(byte);
+            value = value.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        usize::try_from(value % u64::try_from(super::JOURNAL_STRIPES).expect("stripe count fits u64"))
+            .expect("stripe index fits usize")
+    }
+
+    pub(super) fn journal_lock(&self, id: &JournalId) -> Result<std::sync::MutexGuard<'_, ()>> {
+        self.journal_stripes[Self::journal_slot(id)]
+            .lock()
+            .map_err(|_| Error::Corrupt("journal stripe lock poisoned".into()))
+    }
+
     pub(super) fn log_path(&self, id: &JournalId) -> PathBuf {
         let directory = match id {
             JournalId::Container(_) => &self.directory,
@@ -17,19 +37,17 @@ impl Disk {
         if length > RECORD_LIMIT {
             return Err(Error::Corrupt(format!("log record exceeds {RECORD_LIMIT} bytes")));
         }
-        let _guard = self
-            .transaction
-            .lock()
-            .map_err(|_| Error::Corrupt("repository lock poisoned".into()))?;
-        let mut indexes = self
-            .indexes
-            .lock()
-            .map_err(|_| Error::Corrupt("log cursor lock poisoned".into()))?;
-        let index = indexes.entry(id.clone()).or_default();
-        let sequence = u64::try_from(index.len())
-            .map_err(|_| Error::Corrupt("log index exceeds u64".into()))?
-            .checked_add(1)
-            .ok_or_else(|| Error::Corrupt("log sequence exhausted".into()))?;
+        let _stripe = self.journal_lock(id)?;
+        let sequence = {
+            let indexes = self
+                .indexes
+                .lock()
+                .map_err(|_| Error::Corrupt("log cursor lock poisoned".into()))?;
+            u64::try_from(indexes.get(id).map_or(0, Vec::len))
+                .map_err(|_| Error::Corrupt("log index exceeds u64".into()))?
+                .checked_add(1)
+                .ok_or_else(|| Error::Corrupt("log sequence exhausted".into()))?
+        };
         let mut file = OpenOptions::new().create(true).append(true).open(self.log_path(id))?;
         let offset = file.metadata()?.len();
         let timestamp_ms = now_ms();
@@ -43,7 +61,12 @@ impl Disk {
         header[17..].copy_from_slice(&length.to_le_bytes());
         file.write_all(&header)?;
         file.write_all(&bytes)?;
-        index.push(offset);
+        self.indexes
+            .lock()
+            .map_err(|_| Error::Corrupt("log cursor lock poisoned".into()))?
+            .entry(id.clone())
+            .or_default()
+            .push(offset);
         Ok(Entry {
             sequence,
             timestamp_ms,
@@ -53,10 +76,7 @@ impl Disk {
     }
 
     pub(super) fn entries_sync(&self, id: &JournalId) -> Result<Vec<Entry>> {
-        let _guard = self
-            .transaction
-            .lock()
-            .map_err(|_| Error::Corrupt("repository lock poisoned".into()))?;
+        let _stripe = self.journal_lock(id)?;
         Self::read_journal(&self.log_path(id))
     }
 
@@ -64,26 +84,26 @@ impl Disk {
         if limit == 0 {
             return Ok(Vec::new());
         }
-        let _guard = self
-            .transaction
-            .lock()
-            .map_err(|_| Error::Corrupt("repository lock poisoned".into()))?;
-        let indexes = self
-            .indexes
-            .lock()
-            .map_err(|_| Error::Corrupt("log cursor lock poisoned".into()))?;
-        let index = indexes.get(id).map(Vec::as_slice).unwrap_or_default();
-        let position = usize::try_from(sequence).map_err(|_| Error::Corrupt("log cursor exceeds host range".into()))?;
-        if position > index.len() {
-            return Err(Error::Corrupt(format!(
-                "log cursor {sequence} exceeds journal length {}",
-                index.len()
-            )));
-        }
-        let Some(offset) = index.get(position).copied() else {
-            return Ok(Vec::new());
+        let _stripe = self.journal_lock(id)?;
+        let offset = {
+            let indexes = self
+                .indexes
+                .lock()
+                .map_err(|_| Error::Corrupt("log cursor lock poisoned".into()))?;
+            let index = indexes.get(id).map(Vec::as_slice).unwrap_or_default();
+            let position =
+                usize::try_from(sequence).map_err(|_| Error::Corrupt("log cursor exceeds host range".into()))?;
+            if position > index.len() {
+                return Err(Error::Corrupt(format!(
+                    "log cursor {sequence} exceeds journal length {}",
+                    index.len()
+                )));
+            }
+            let Some(offset) = index.get(position).copied() else {
+                return Ok(Vec::new());
+            };
+            offset
         };
-        drop(indexes);
         Self::read_journal_at(
             &self.log_path(id),
             offset,
@@ -92,6 +112,29 @@ impl Disk {
                 .ok_or_else(|| Error::Corrupt("log sequence exhausted".into()))?,
             limit,
         )
+    }
+
+    pub(super) fn cursor_sync(&self, id: &JournalId) -> Result<u64> {
+        let _stripe = self.journal_lock(id)?;
+        let indexes = self
+            .indexes
+            .lock()
+            .map_err(|_| Error::Corrupt("log cursor lock poisoned".into()))?;
+        u64::try_from(indexes.get(id).map_or(0, Vec::len)).map_err(|_| Error::Corrupt("log index exceeds u64".into()))
+    }
+
+    pub(super) fn remove_journal_sync(&self, id: &JournalId) -> Result<()> {
+        let _stripe = self.journal_lock(id)?;
+        if let Err(error) = fs::remove_file(self.log_path(id)) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                return Err(error.into());
+            }
+        }
+        self.indexes
+            .lock()
+            .map_err(|_| Error::Corrupt("log cursor lock poisoned".into()))?
+            .remove(id);
+        Ok(())
     }
 
     pub(super) async fn blocking<T: Send + 'static>(
