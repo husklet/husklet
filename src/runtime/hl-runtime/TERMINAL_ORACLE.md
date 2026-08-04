@@ -10,7 +10,7 @@
 - `../engine/src/linux_abi/host_tty.h`: host-independent tty ioctl numbers and
   by-value `termios`/`winsize` ABI shapes.
 - `../engine/src/core/activation.c`: controlling-terminal setup and
-  `hl_machine_terminal_resize` window propagation.
+  `hl_terminal_resize` / `hl_activation_terminal_resize` window propagation.
 - `../engine/tests/compat/posix/tty_notty.c`, `tty_leaderhup.c`, `pty.c`, and
   `apt_pty.c`: differential acceptance contracts.
 
@@ -61,3 +61,32 @@ the separate session-to-pair binding and clears foreground state on session-wide
 detach. A stale tty foreground identity never blocks detachment: it produces an
 empty recipient set and cannot be redirected to a recycled or cross-session
 group.
+
+## Acceptance ownership
+
+This document belongs to `hl-runtime`, not to a standalone repository runtime
+case. Controlling-terminal lifecycle is a cross-domain operation joining
+`hl-terminal` pair/catalog state, `hl-task` session and signal state, and the
+filesystem ioctl adapter. The focused public contracts remain beside those
+owners:
+
+- `hl-terminal/src/pty.rs` covers changed-only window publication, foreground
+  identity, catalog acquisition/detachment, and foreground clearing;
+- `hl-task/src/registry/job/test.rs` covers sessions, same-session foreground
+  validation, leader/nonleader detach, signal ordering, stale generations, and
+  checkpointed associations;
+- `hl-runtime/src/filesystem/syscalls_test.rs` covers `TIOCNOTTY`, `TIOCSCTTY`,
+  mutation-before-signal ordering, stale foregrounds, and master-side window
+  routing;
+- `hl-engine/src/ffi/linux/execution/{exit.rs,path.rs,path/device.rs}` covers
+  launch/path integration, session-leader exit, reacquisition, and external
+  resize against the current generation-qualified foreground group.
+
+The retained executable acceptance cases are already self-contained in
+`tests/runtime/posix/test.yaml`: `ctty-session`, `tty-notty`, `tty-leaderhup`,
+`pty`, `apt-pty`, `pty-jobsig`, `pty-ctl`, and the explicitly classified
+`tty-bg-deviation` row. The application-facing PTY and job-control workflows live
+separately in `tests/scenarios/terminal/test.yaml` with their local golden
+files. Creating another `tests/runtime/terminal/test.yaml` would duplicate
+those contracts rather than add coverage, so removing the former ORACLE-only
+directory is the complete ownership correction.
