@@ -25,6 +25,7 @@ api_test!(http_errors, http_errors);
 api_test!(image_archive, image_archive);
 api_test!(image_prune, image_prune);
 api_test!(malformed_image_archive, malformed_archive);
+api_test!(network_list_filters, network_list);
 api_test!(persistence_restart, persistence_restart);
 api_test!(removal_wait_race, removal_race);
 api_test!(volume_raw_contract, volume);

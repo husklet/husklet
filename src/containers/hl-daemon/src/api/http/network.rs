@@ -7,7 +7,7 @@ use serde::Deserialize;
 mod filter;
 mod wire;
 
-use filter::Filters;
+use filter::{Filters, ListFilters};
 use wire::Fields;
 
 use super::{ApiError, ApiResult, DockerState};
@@ -34,7 +34,7 @@ pub(super) async fn list(
     State(state): State<DockerState>,
     Query(query): Query<ListQuery>,
 ) -> ApiResult<Json<Vec<Network>>> {
-    let filters = Filters::parse(query.filters)?;
+    let filters = ListFilters::parse(query.filters.as_deref())?;
     let networks = state
         .containers
         .networks()
@@ -45,7 +45,7 @@ pub(super) async fn list(
         networks
             .into_iter()
             .filter(|network| filters.matches(network))
-            .map(Network::from)
+            .map(Network::from_summary)
             .collect(),
     ))
 }
