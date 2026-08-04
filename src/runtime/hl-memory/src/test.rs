@@ -214,10 +214,15 @@ fn model_sequence_preserves() {
         let operation = range(0x10_000 + page * PAGE, PAGE);
         if page % 3 == 0 {
             ledger.unmap(operation).unwrap();
-        } else {
+        } else if page % 2 == 0 {
             ledger
                 .protect(operation, Protection::READ.union(Protection::WRITE))
                 .unwrap();
+        } else {
+            assert_eq!(
+                ledger.protect(operation, Protection::READ.union(Protection::WRITE)),
+                Err(MemoryError::Unmapped),
+            );
         }
         ledger.validate().unwrap();
     }
@@ -300,12 +305,16 @@ impl PageModel {
         affected: AddressRange,
         protection: Protection,
     ) {
-        ledger.protect(affected, protection).unwrap();
-        for page in first..first + count {
-            let Some(current) = self.pages.get_mut(&page) else {
-                continue;
-            };
-            *current = protection;
+        if (first..first + count).all(|page| self.pages.contains_key(&page)) {
+            ledger.protect(affected, protection).unwrap();
+            for page in first..first + count {
+                *self.pages.get_mut(&page).unwrap() = protection;
+            }
+        } else {
+            assert_eq!(
+                ledger.protect(affected, protection),
+                Err(MemoryError::Unmapped),
+            );
         }
     }
 
