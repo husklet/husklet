@@ -16,14 +16,8 @@ struct ReplacementFile {
 
 impl ReplacementFile {
     fn create(path: PathBuf) -> io::Result<Self> {
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)?;
-        Ok(Self {
-            path,
-            file: Some(file),
-        })
+        let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+        Ok(Self { path, file: Some(file) })
     }
 
     fn publish(
@@ -41,10 +35,7 @@ impl ReplacementFile {
     }
 
     fn prepare(&mut self, bytes: &[u8], permissions: Option<&std::fs::Permissions>) -> io::Result<()> {
-        let file = self
-            .file
-            .as_mut()
-            .expect("replacement handle exists until publication");
+        let file = self.file.as_mut().expect("replacement handle exists until publication");
         file.write_all(bytes)?;
         if let Some(permissions) = permissions {
             file.set_permissions(permissions.clone())?;
@@ -158,6 +149,55 @@ impl AnonymousFile {
     }
 }
 
+enum TreeKind {
+    Directory(std::fs::Permissions),
+    File,
+    Symlink,
+    Unsupported,
+}
+
+/// One inspected source entry paired with its exact destination path.
+struct TreeEntry {
+    source: PathBuf,
+    destination: PathBuf,
+    kind: TreeKind,
+}
+
+impl TreeEntry {
+    fn inspect(entry: std::fs::DirEntry, destination: &Path) -> io::Result<Self> {
+        let source = entry.path();
+        let metadata = std::fs::symlink_metadata(&source)?;
+        let file_type = metadata.file_type();
+        let kind = match (file_type.is_dir(), file_type.is_file(), file_type.is_symlink()) {
+            (true, _, _) => TreeKind::Directory(metadata.permissions()),
+            (_, true, _) => TreeKind::File,
+            (_, _, true) => TreeKind::Symlink,
+            _ => TreeKind::Unsupported,
+        };
+        Ok(Self {
+            source,
+            destination: destination.join(entry.file_name()),
+            kind,
+        })
+    }
+
+    fn copy(self) -> io::Result<()> {
+        match self.kind {
+            TreeKind::Directory(permissions) => {
+                std::fs::create_dir(&self.destination)?;
+                Directory::from(&self.source).copy_to(&Directory::from(&self.destination))?;
+                std::fs::set_permissions(self.destination, permissions)
+            }
+            TreeKind::File => std::fs::copy(self.source, self.destination).map(|_| ()),
+            TreeKind::Symlink => Directory::copy_symlink(&self.source, &self.destination),
+            TreeKind::Unsupported => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!("cannot copy special node {}", self.source.display()),
+            )),
+        }
+    }
+}
+
 /// A directory and operations whose meaning is independent of a product domain.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Directory(PathBuf);
@@ -225,23 +265,7 @@ impl Directory {
             ));
         }
         for entry in std::fs::read_dir(&self.0)? {
-            let entry = entry?;
-            let target = destination.0.join(entry.file_name());
-            let metadata = std::fs::symlink_metadata(entry.path())?;
-            if metadata.is_dir() {
-                std::fs::create_dir(&target)?;
-                Self::from(entry.path()).copy_to(&Self::from(target.clone()))?;
-                std::fs::set_permissions(target, metadata.permissions())?;
-            } else if metadata.is_file() {
-                std::fs::copy(entry.path(), target)?;
-            } else if metadata.file_type().is_symlink() {
-                Self::copy_symlink(&entry.path(), &target)?;
-            } else {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    format!("cannot copy special node {}", entry.path().display()),
-                ));
-            }
+            TreeEntry::inspect(entry?, &destination.0)?.copy()?;
         }
         Ok(())
     }
@@ -329,13 +353,11 @@ mod tests {
 
         assert!(File::from(target).replace(b"value").is_err());
         assert_eq!(std::fs::read_dir(temporary.path()).unwrap().count(), 1);
-        assert!(std::fs::read_dir(temporary.path()).unwrap().all(|entry| {
-            !entry
+        assert!(
+            std::fs::read_dir(temporary.path())
                 .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .contains(".replace-")
-        }));
+                .all(|entry| { !entry.unwrap().file_name().to_string_lossy().contains(".replace-") })
+        );
     }
 
     #[cfg(unix)]
@@ -367,11 +389,60 @@ mod tests {
         let destination = Directory::from(destination.clone());
         source.copy_to(&destination).unwrap();
         assert_eq!(destination.size().unwrap(), 7);
+        assert_eq!(std::fs::read(destination.0.join("one")).unwrap(), b"123");
+        assert_eq!(std::fs::read(destination.0.join("nested/two")).unwrap(), b"4567");
 
         destination.clear().await.unwrap();
         assert_eq!(std::fs::read_dir(&destination.0).unwrap().count(), 0);
         destination.remove().await.unwrap();
         destination.remove().await.unwrap();
         assert!(!destination.0.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tree_copy_contracts() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source");
+        let destination = temporary.path().join("destination");
+        std::fs::create_dir_all(source.join("nested")).unwrap();
+        std::fs::create_dir(&destination).unwrap();
+        std::fs::write(source.join("nested/value"), b"value").unwrap();
+        std::fs::set_permissions(source.join("nested"), std::fs::Permissions::from_mode(0o750)).unwrap();
+        symlink("nested/value", source.join("link")).unwrap();
+
+        Directory::from(source).copy_to(&Directory::from(&destination)).unwrap();
+
+        assert_eq!(
+            std::fs::read_link(destination.join("link")).unwrap(),
+            std::path::Path::new("nested/value")
+        );
+        assert_eq!(
+            std::fs::metadata(destination.join("nested"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o750
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn special_nodes_rejected() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source");
+        let destination = temporary.path().join("destination");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::create_dir(&destination).unwrap();
+        let socket = std::os::unix::net::UnixListener::bind(source.join("socket")).unwrap();
+
+        let error = Directory::from(source)
+            .copy_to(&Directory::from(destination))
+            .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+        drop(socket);
     }
 }
