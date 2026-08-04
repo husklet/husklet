@@ -45,3 +45,511 @@ cases:
     artifact: { destination: /opt/husklet/runtime-signals/fd_fork }
     run: [fork]
     expect: { exit: 0, stdout: golden/fd_fork.txt }
+  - id: runtime/signals/interval-timer
+    status: active
+    compat: { class: compatibility }
+    build: { source: itimer.c, output: interval-timer, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-interval-timer }
+    run: []
+    expect: { exit: 0, stdout: golden/itimer.out }
+  - id: runtime/signals/pause-signal
+    status: active
+    compat: { class: compatibility }
+    build: { source: pausesig.c, output: pause-signal, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-pause-signal }
+    run: []
+    expect: { exit: 0, stdout: golden/pausesig.out }
+  - id: runtime/signals/pause-wake-set
+    status: active
+    compat: { class: compatibility }
+    build: { source: pausewake.c, output: pause-wake-set, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-pause-wake-set }
+    run: []
+    expect: { exit: 0, stdout: golden/pausewake.out }
+  - id: runtime/signals/restart-interrupted-io
+    status: active
+    compat: { class: compatibility }
+    build: { source: sarestart.c, output: restart-interrupted-io, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-restart-interrupted-io }
+    run: []
+    expect: { exit: 0, stdout: golden/sarestart.out }
+  - id: runtime/signals/sigaction-edges
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigactedge.c, output: sigaction-edges, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sigaction-edges }
+    run: []
+    expect: { exit: 0, stdout: golden/sigactedge.out }
+  - id: runtime/signals/alternate-stack
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigaltstack.c, output: alternate-stack, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-alternate-stack }
+    run: []
+    expect: { exit: 0, stdout: golden/sigaltstack.out }
+  - id: runtime/signals/sender-information
+    status: active
+    compat: { class: compatibility }
+    build: { source: siginfo.c, output: sender-information, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sender-information }
+    run: []
+    expect: { exit: 0, stdout: golden/siginfo.out }
+  - id: runtime/signals/pending-set
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigpendingx.c, output: pending-set, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-pending-set }
+    run: []
+    expect: { exit: 0, stdout: golden/sigpendingx.out }
+  - id: runtime/signals/compute-preemption
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigspin.c, output: compute-preemption, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-compute-preemption }
+    run: []
+    expect: { exit: 0, stdout: golden/sigspin.out }
+  - id: runtime/signals/suspend-mask-restore
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigsuspendmask.c, output: suspend-mask-restore, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-suspend-mask-restore }
+    run: []
+    expect: { exit: 0, stdout: golden/sigsuspendmask.out }
+  - id: runtime/signals/synchronous-wait
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigwait.c, output: synchronous-wait, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-synchronous-wait }
+    run: []
+    expect: { exit: 0, stdout: golden/sigwait.out }
+  - id: runtime/signals/thread-directed-kill
+    status: active
+    compat: { class: compatibility }
+    build: { source: tgkill.c, output: thread-directed-kill, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-thread-directed-kill }
+    run: []
+    expect: { exit: 0, stdout: golden/tgkill.out }
+  - id: runtime/signals/signals-core
+    status: active
+    compat: { class: compatibility }
+    build: { source: signals_core.c, output: signals-core, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/signals-signals-core }
+    run: []
+    expect: { exit: 0, stdout: golden/signals_core.out }
+  - id: runtime/signals/sigurg-preempt
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64]
+    build: { source: sigurg_preempt.c, output: sigurg-preempt, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/signals-sigurg-preempt }
+    run: []
+    expect: { exit: 0, stdout: golden/sigurg_preempt.out }
+  - id: runtime/signals/sigill-probe
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64]
+    build: { source: sigill_probe.c, output: sigill-probe, flags: [-static-pie, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/signals-sigill-probe }
+    run: []
+    expect: { exit: 0, stdout: golden/sigill_probe.out }
+  - id: runtime/signals/implicit-null-pc
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64]
+    build: { source: null_pc.c, output: implicit-null-pc, flags: [-static-pie, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/signals-implicit-null-pc }
+    run: []
+    expect: { exit: 0, stdout: golden/null_pc.out }
+  - id: runtime/signals/restart-wait-preempt
+    status: active
+    compat: { class: compatibility }
+    build: { source: wait_preempt.c, output: restart-wait-preempt, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-restart-wait-preempt }
+    run: []
+    expect: { exit: 0, stdout: golden/wait_preempt.out }
+  - id: runtime/signals/fatal-raise-quiet
+    status: active
+    compat: { class: compatibility }
+    build: { source: fatal_quiet.c, output: fatal-raise-quiet, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-fatal-raise-quiet }
+    run: []
+    expect: { exit: 0, stdout: golden/fatal_quiet.out }
+  - id: runtime/signals/sigurg-go-preempt
+    status: !broken
+      reason: "legacy golden requires forbidden executable-identity signal suppression"
+      evidence: "tests/runtime/signals/ORACLE.md"
+    compat: { class: compatibility }
+    targets: [arm64]
+    build: { source: go_preempt.c, output: sigurg-go-preempt, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/signals-sigurg-go-preempt }
+    run: []
+    expect: { exit: 0, stdout: golden/go_preempt.out }
+  - id: runtime/signals/sa-nodefer
+    status: active
+    compat: { class: compatibility }
+    build: { source: sa_nodefer.c, output: sa-nodefer, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sa-nodefer }
+    run: []
+    expect: { exit: 0, stdout: golden/sa_nodefer.out }
+  - id: runtime/signals/sa-resethand
+    status: active
+    compat: { class: compatibility }
+    build: { source: sa_resethand.c, output: sa-resethand, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sa-resethand }
+    run: []
+    expect: { exit: 0, stdout: golden/sa_resethand.out }
+  - id: runtime/signals/sigtimedwait-timeout
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigtimedwait_timeout.c, output: sigtimedwait-timeout, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sigtimedwait-timeout }
+    run: []
+    expect: { exit: 0, stdout: golden/sigtimedwait_timeout.out }
+  - id: runtime/signals/eintr-no-restart
+    status: active
+    compat: { class: compatibility }
+    build: { source: no_restart.c, output: eintr-no-restart, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-eintr-no-restart }
+    run: []
+    expect: { exit: 0, stdout: golden/no_restart.out }
+  - id: runtime/signals/eintr-nanosleep
+    status: active
+    compat: { class: compatibility }
+    build: { source: eintr_nanosleep.c, output: eintr-nanosleep, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-eintr-nanosleep }
+    run: []
+    expect: { exit: 0, stdout: golden/eintr_nanosleep.out }
+  - id: runtime/signals/eintr-poll
+    status: active
+    compat: { class: compatibility }
+    build: { source: eintr_poll.c, output: eintr-poll, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-eintr-poll }
+    run: []
+    expect: { exit: 0, stdout: golden/eintr_poll.out }
+  - id: runtime/signals/eintr-sigsuspend
+    status: active
+    compat: { class: compatibility }
+    build: { source: eintr_sigsuspend.c, output: eintr-sigsuspend, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-eintr-sigsuspend }
+    run: []
+    expect: { exit: 0, stdout: golden/eintr_sigsuspend.out }
+  - id: runtime/signals/sigchld-multi
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigchld_multi.c, output: sigchld-multi, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sigchld-multi }
+    run: []
+    expect: { exit: 0, stdout: golden/sigchld_multi.out }
+  - id: runtime/signals/sa-nocldstop
+    status: active
+    compat: { class: compatibility }
+    build: { source: sa_nocldstop.c, output: sa-nocldstop, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sa-nocldstop }
+    run: []
+    expect: { exit: 0, stdout: golden/sa_nocldstop.out }
+  - id: runtime/signals/sigsegv-recover
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigsegv_recover.c, output: sigsegv-recover, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sigsegv-recover }
+    run: []
+    expect: { exit: 0, stdout: golden/sigsegv_recover.out }
+  - id: runtime/signals/sigpipe-pipe
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigpipe_pipe.c, output: sigpipe-pipe, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sigpipe-pipe }
+    run: []
+    expect: { exit: 0, stdout: golden/sigpipe_pipe.out }
+  - id: runtime/signals/sigpipe-nosignal
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigpipe_nosignal.c, output: sigpipe-nosignal, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sigpipe-nosignal }
+    run: []
+    expect: { exit: 0, stdout: golden/sigpipe_nosignal.out }
+  - id: runtime/signals/nested-handlers
+    status: active
+    compat: { class: compatibility }
+    build: { source: nested_handlers.c, output: nested-handlers, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-nested-handlers }
+    run: []
+    expect: { exit: 0, stdout: golden/nested_handlers.out }
+  - id: runtime/signals/default-exit-codes
+    status: active
+    compat: { class: compatibility }
+    build: { source: exit_codes.c, output: default-exit-codes, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-default-exit-codes }
+    run: []
+    expect: { exit: 0, stdout: golden/exit_codes.out }
+  - id: runtime/signals/abort-sigabrt
+    status: active
+    compat: { class: compatibility }
+    build: { source: abort_sigabrt.c, output: abort-sigabrt, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-abort-sigabrt }
+    run: []
+    expect: { exit: 0, stdout: golden/abort_sigabrt.out }
+  - id: runtime/signals/pidfd-send-signal
+    status: active
+    compat: { class: compatibility }
+    build: { source: pidfd_signal.c, output: pidfd-send-signal, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-pidfd-send-signal }
+    run: []
+    expect: { exit: 0, stdout: golden/pidfd_signal.out }
+  - id: runtime/signals/pthread-sigmask-route
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigmask_route.c, output: pthread-sigmask-route, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-pthread-sigmask-route }
+    run: []
+    expect: { exit: 0, stdout: golden/sigmask_route.out }
+  - id: runtime/signals/kill-errors
+    status: active
+    compat: { class: compatibility }
+    build: { source: kill_errors.c, output: kill-errors, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-kill-errors }
+    run: []
+    expect: { exit: 0, stdout: golden/kill_errors.out }
+  - id: runtime/signals/sigaction-query
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigaction_query.c, output: sigaction-query, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sigaction-query }
+    run: []
+    expect: { exit: 0, stdout: golden/sigaction_query.out }
+  - id: runtime/signals/sigprocmask-return
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigprocmask_return.c, output: sigprocmask-return, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sigprocmask-return }
+    run: []
+    expect: { exit: 0, stdout: golden/sigprocmask_return.out }
+  - id: runtime/signals/pause-eintr
+    status: active
+    compat: { class: compatibility }
+    build: { source: pause_eintr.c, output: pause-eintr, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-pause-eintr }
+    run: []
+    expect: { exit: 0, stdout: golden/pause_eintr.out }
+  - id: runtime/signals/signal-returns-prev
+    status: active
+    compat: { class: compatibility }
+    build: { source: signal_previous.c, output: signal-returns-prev, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-signal-returns-prev }
+    run: []
+    expect: { exit: 0, stdout: golden/signal_previous.out }
+  - id: runtime/signals/pthread-kill-self
+    status: active
+    compat: { class: compatibility }
+    build: { source: pthread_kill.c, output: pthread-kill-self, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-pthread-kill-self }
+    run: []
+    expect: { exit: 0, stdout: golden/pthread_kill.out }
+  - id: runtime/signals/sigsetjmp-savemask
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigsetjmp_savemask.c, output: sigsetjmp-savemask, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sigsetjmp-savemask }
+    run: []
+    expect: { exit: 0, stdout: golden/sigsetjmp_savemask.out }
+  - id: runtime/signals/multi-handler-counts
+    status: active
+    compat: { class: compatibility }
+    build: { source: handler_counts.c, output: multi-handler-counts, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-multi-handler-counts }
+    run: []
+    expect: { exit: 0, stdout: golden/handler_counts.out }
+  - id: runtime/signals/sigmask-inherit-fork
+    status: active
+    compat: { class: compatibility }
+    build: { source: mask_inherit.c, output: sigmask-inherit-fork, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sigmask-inherit-fork }
+    run: []
+    expect: { exit: 0, stdout: golden/mask_inherit.out }
+  - id: runtime/signals/waitpid-wnohang-empty
+    status: active
+    compat: { class: compatibility }
+    build: { source: wnohang_empty.c, output: waitpid-wnohang-empty, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-waitpid-wnohang-empty }
+    run: []
+    expect: { exit: 0, stdout: golden/wnohang_empty.out }
+  - id: runtime/signals/unblock-single-delivery
+    status: active
+    compat: { class: compatibility }
+    build: { source: unblock_delivery.c, output: unblock-single-delivery, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-unblock-single-delivery }
+    run: []
+    expect: { exit: 0, stdout: golden/unblock_delivery.out }
+  - id: runtime/signals/blocked-delivery-order
+    status: active
+    compat: { class: compatibility }
+    build: { source: delivery_order.c, output: blocked-delivery-order, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-blocked-delivery-order }
+    run: []
+    expect: { exit: 0, stdout: golden/delivery_order.out }
+  - id: runtime/signals/mask-in-handler
+    status: active
+    compat: { class: compatibility }
+    build: { source: handler_mask.c, output: mask-in-handler, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-mask-in-handler }
+    run: []
+    expect: { exit: 0, stdout: golden/handler_mask.out }
+  - id: runtime/signals/ignore-discards-pending
+    status: active
+    compat: { class: compatibility }
+    build: { source: ignore_pending.c, output: ignore-discards-pending, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-ignore-discards-pending }
+    run: []
+    expect: { exit: 0, stdout: golden/ignore_pending.out }
+  - id: runtime/signals/sigaltstack-onstack
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigaltstack_onstack.c, output: sigaltstack-onstack, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sigaltstack-onstack }
+    run: []
+    expect: { exit: 0, stdout: golden/sigaltstack_onstack.out }
+  - id: runtime/signals/sigqueue-value
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigqueue_value.c, output: sigqueue-value, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sigqueue-value }
+    run: []
+    expect: { exit: 0, stdout: golden/sigqueue_value.out }
+  - id: runtime/signals/sigchld-siginfo
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigchld_siginfo.c, output: sigchld-siginfo, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sigchld-siginfo }
+    run: []
+    expect: { exit: 0, stdout: golden/sigchld_siginfo.out }
+  - id: runtime/signals/sa-nocldwait
+    status: active
+    compat: { class: compatibility }
+    build: { source: sa_nocldwait.c, output: sa-nocldwait, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sa-nocldwait }
+    run: []
+    expect: { exit: 0, stdout: golden/sa_nocldwait.out }
+  - id: runtime/signals/rt-signal-order
+    status: !broken
+      reason: "x86_64 realtime signal delivery ordering diverges from the native Linux oracle"
+      evidence: "tests/runtime/signals/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: rt_order.c, output: rt-signal-order, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-rt-signal-order }
+    run: []
+    expect: { exit: 0, stdout: golden/rt_order.out }
+  - id: runtime/signals/rt-vs-standard-pending
+    status: active
+    compat: { class: compatibility }
+    build: { source: rt_pending.c, output: rt-vs-standard-pending, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-rt-vs-standard-pending }
+    run: []
+    expect: { exit: 0, stdout: golden/rt_pending.out }
+  - id: runtime/signals/sigwaitinfo-rt
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigwaitinfo_rt.c, output: sigwaitinfo-rt, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sigwaitinfo-rt }
+    run: []
+    expect: { exit: 0, stdout: golden/sigwaitinfo_rt.out }
+  - id: runtime/signals/signalfd-basic
+    status: active
+    compat: { class: compatibility }
+    build: { source: signalfd_basic.c, output: signalfd-basic, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-signalfd-basic }
+    run: []
+    expect: { exit: 0, stdout: golden/signalfd_basic.out }
+  - id: runtime/signals/signalfd-rt-queue
+    status: active
+    compat: { class: compatibility }
+    build: { source: signalfd_queue.c, output: signalfd-rt-queue, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-signalfd-rt-queue }
+    run: []
+    expect: { exit: 0, stdout: golden/signalfd_queue.out }
+  - id: runtime/signals/eintr-restart-read
+    status: active
+    compat: { class: compatibility }
+    build: { source: restart_read.c, output: eintr-restart-read, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-eintr-restart-read }
+    run: []
+    expect: { exit: 0, stdout: golden/restart_read.out }
+  - id: runtime/signals/eintr-wait-restart
+    status: active
+    compat: { class: compatibility }
+    build: { source: restart_wait.c, output: eintr-wait-restart, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-eintr-wait-restart }
+    run: []
+    expect: { exit: 0, stdout: golden/restart_wait.out }
+  - id: runtime/signals/sigbus-mmap-eof
+    status: active
+    compat: { class: compatibility }
+    build: { source: mmap_eof.c, output: sigbus-mmap-eof, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sigbus-mmap-eof }
+    run: []
+    expect: { exit: 0, stdout: golden/mmap_eof.out }
+  - id: runtime/signals/sigfpe-div-default
+    status: active
+    compat: { class: compatibility }
+    targets: [amd64]
+    build: { source: div_default.c, output: sigfpe-div-default, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sigfpe-div-default }
+    run: []
+    expect: { exit: 0, stdout: golden/div_default.out }
+  - id: runtime/signals/exact-fault-pc-x86
+    status: active
+    compat: { class: compatibility }
+    targets: [amd64]
+    build: { source: fault_pc.c, output: exact-fault-pc-x86, flags: [-static-pie, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/signals-exact-fault-pc-x86 }
+    run: []
+    expect: { exit: 0, stdout: golden/fault_pc.out }
+  - id: runtime/signals/signalfd-kill-uid
+    status: active
+    compat: { class: compatibility }
+    build: { source: kill_uid.c, output: signalfd-kill-uid, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-signalfd-kill-uid }
+    run: []
+    expect: { exit: 0, stdout: golden/kill_uid.out }
+  - id: runtime/signals/folded-fault-registers
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64]
+    build: { source: fault_registers.c, output: folded-fault-registers, flags: [-static, -no-pie, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/signals-folded-fault-registers }
+    run: []
+    expect: { exit: 0, stdout: golden/fault_registers.out }
+  - id: runtime/signals/signalfd-state
+    status: active
+    compat: { class: compatibility }
+    build: { source: signalfd_state.c, output: signalfd-state, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-signalfd-state }
+    run: []
+    expect: { exit: 0, stdout: golden/signalfd_state.out }
+  - id: runtime/signals/sigtimedwait-edges
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigtimedwait_edges.c, output: sigtimedwait-edges, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/signals-sigtimedwait-edges }
+    run: []
+    expect: { exit: 0, stdout: golden/sigtimedwait_edges.out }
+  - id: runtime/signals/sigaltstack-state
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigaltstack_state.c, output: sigaltstack-state, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sigaltstack-state }
+    run: []
+    expect: { exit: 0, stdout: golden/sigaltstack_state.out }
+  - id: runtime/signals/eintr-restart
+    status: active
+    compat: { class: compatibility }
+    build: { source: eintr_restart.c, output: eintr-restart, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-eintr-restart }
+    run: []
+    expect: { exit: 0, stdout: golden/eintr_restart.out }
+  - id: runtime/signals/sigaltstack-nonpie-bss
+    status: active
+    compat: { class: compatibility }
+    build: { source: nonpie_bss.c, output: sigaltstack-nonpie-bss, flags: [-static, -no-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/signals-sigaltstack-nonpie-bss }
+    run: []
+    expect: { exit: 0, stdout: golden/nonpie_bss.out }

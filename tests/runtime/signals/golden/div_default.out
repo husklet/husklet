@@ -1,0 +1,4 @@
+div0_default: is_sigfpe=1
+ovf_default: is_sigfpe=1
+div0_handler: is_intdiv=1
+ovf_handler: is_intdiv=1

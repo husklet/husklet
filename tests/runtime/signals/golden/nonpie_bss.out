@@ -1,0 +1,3 @@
+outer signo=1 sp_on_alt=1 si_on_alt=1 uc_on_alt=1 ss_sp=1 ss_size=1 onstack=1
+nested signo=1 sp_on_alt=1 below_outer=1 si_on_alt=1 uc_on_alt=1 ss_sp=1 onstack=1
+main outer=1 nested=1 resumed=1 sp_off_alt=1 ss_sp=1 onstack=1

@@ -15,3 +15,19 @@ Fresh integrated evidence from the current shared tree passed all eight rows:
 `target/debug/testing runtime signals --jobs 2` reported 8 passed and 0 failed
 across both guest ISAs. Every row used typed native execution with diagnostics;
 the emitted `hl-native` and `hl-native-detail` records prove native activation.
+
+On 2026-08-04, the expanded manifest parsed as 75 logical cases and 143
+case/ISA rows. All 143 rows cross-compiled in parallel with their declared
+compiler and exact case flags. Every one of the 75 golden files is referenced;
+all 76 C files are either a declared build source or one of the three
+`fd_main.c` leaves included for the separate signalfd entry points. The 71
+migrated libc sources and goldens compare byte-for-byte with their retained
+paths at the migration parent revision.
+
+An integrated 18-worker run selected typed native execution and emitted both
+`hl-native` diagnostic streams, then aborted with stack smashing before it
+could write a result ledger. This is runtime compatibility evidence, not a
+fixture parse or build failure. `rt-signal-order` remains typed broken for the
+known x86-64 ordering defect. `sigurg-go-preempt` is also typed broken: its
+retained golden requires executable-identity suppression that Husklet's engine
+policy explicitly forbids. The generic `sigurg-preempt` case remains active.

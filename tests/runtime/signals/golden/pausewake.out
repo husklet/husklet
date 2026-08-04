@@ -1,0 +1,17 @@
+wake_HUP=1
+wake_INT=1
+wake_QUIT=1
+wake_ILL=1
+wake_TRAP=1
+wake_ABRT=1
+wake_FPE=1
+wake_SEGV=1
+wake_BUS=1
+wake_PIPE=1
+wake_ALRM=1
+wake_TERM=1
+wake_USR1=1
+wake_USR2=1
+wake_alarm=1
+sigkill_kills=1
+all_caught_wake=1

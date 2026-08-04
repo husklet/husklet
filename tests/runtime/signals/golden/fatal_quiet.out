@@ -1,0 +1,1 @@
+fatal-raise sigterm=1 stderr_bytes=0

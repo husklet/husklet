@@ -2,9 +2,10 @@
 
 ## Workload boundary
 
-The migrated bootstrap workload is `tests/runtime/legacy/source/signal.c`. It is
-the freestanding signal seed, not the separate libc `tests/compat/signals`
-cohort. It proves a process-wide `SIGUSR1` action, a per-thread blocked mask,
+The canonical signals folder owns both the former bootstrap workload
+`tests/runtime/legacy/source/signal.c` and the complete former libc
+`tests/compat/signals` cohort. The freestanding seed proves a process-wide
+`SIGUSR1` action, a per-thread blocked mask,
 pending observation, alternate-stack selection, thread-directed `tkill` and
 `tgkill`, nested handler replacement, and architecture-specific rt-sigframe PC
 restoration. Successful completion now prints `signal-ok` so the self-contained
@@ -78,9 +79,57 @@ capability to reproduce; Rust must preserve the generic safe-boundary invariant.
 | C application-specific `SIGURG` suppression | No Rust owner | Intentionally omitted; generic delivery must be fixed instead |
 | Windows ordinary cross-process POSIX signal forwarding | No native host mechanism | Remaining host limitation; guest queue/frame semantics are host-neutral |
 
-This workload exercises the implemented rows through the public engine path on
-both guest ISAs. It does not claim the entire libc signal cohort or the Windows
-host limitation complete.
+These workloads exercise the implemented rows through the public engine path on
+both guest ISAs. The libc cohort adds 71 stable cases covering dispositions and
+flags, process- and thread-directed delivery, pending and realtime ordering,
+`SIGCHLD`, synchronous faults, alternate stacks, interruption and restart,
+synchronous waits, timers, pipes, and signalfd. Its original case IDs, target
+sets, compiler flags, exit values, and golden bytes are preserved in the one
+canonical `test.yaml`. Source and golden leaf renames are content-only
+relocations matched by the stable case IDs in the former `build-plan.tsv` and
+this manifest.
+
+The retained C study for this broader cohort followed the complete signal path,
+not individual failing fixtures. In addition to the entry points above, it
+covered `raise_guest_signal_info`, `sigq_push`, `host_sig_pend`, default-signal
+termination, and child notification in `../engine/src/linux_abi/signal.c`; the
+signal syscall admission, target lookup, restart decision, and wait interruption
+paths in `../engine/src/linux_abi/syscall/signal.c`; timer enqueue in
+`../engine/src/linux_abi/syscall/time.c`; descriptor reads and duplication in
+`../engine/src/linux_abi/syscall/io.c`; and signalfd creation/update plus epoll
+readiness in `../engine/src/linux_abi/syscall/event.c`. Process action and pending
+tables outlive individual CPUs, while masks, directed pending state, altstack,
+and nested frame state remain thread-owned. Queue mutation and wake publication
+are ordered under the signal lock, but descriptor locks are not held across host
+blocking, guest copies, or handler execution. Standard signals coalesce,
+realtime instances retain FIFO identity per signal, synchronous faults bypass
+ordinary blocking, and teardown removes task targeting before releasing host
+signal storage.
+
+Architecture-specific frame layout and fault-PC reconstruction remain in the
+AArch64 and x86-64 translator files listed above. POSIX host adapters translate
+host signal numbers and contexts; Windows VEH provides fault intake but cannot
+provide ordinary host POSIX process signalling. The retained Go-image `SIGURG`
+suppression is recorded as an oracle divergence, not mapped into Rust product
+policy.
+
+The broad migration evidence is intentionally domain-level. All 143 declared
+case/ISA combinations cross-compiled successfully with the exact retained flags
+(75 logical cases: 72 ARM64 and 71 AMD64 builds). A parallel ARM64 QEMU oracle
+run passed the canonical seed and first 19 libc cases, then reported the existing
+`sigurg-go-preempt` divergence. A parallel AMD64 QEMU oracle run passed the seed
+and first 28 libc cases, then reported the existing `sa-nocldstop` golden
+divergence. A parallel ARM64 production run emitted native diagnostics and then
+aborted with stack-smashing inside the wider active cohort. These provider and
+runtime observations are recorded without an application-specific workaround.
+The manifest represents `rt-signal-order` as typed broken for the known x86-64
+ordering defect. It also represents `sigurg-go-preempt` as broken because its
+legacy golden requires the prohibited executable-identity suppression described
+above; the generic `sigurg-preempt` case remains active. The focused Rust test
+build was attempted but the concurrent
+shared tree lacked unrelated `hl-task` set-id and terminal-transition APIs needed
+by `hl-runtime`; that compile blocker is outside this fixture-only migration.
+This audit does not claim the Windows host limitation complete.
 
 ## Signalfd retained-C audit and Rust mapping
 
