@@ -1,0 +1,288 @@
+cases:
+- id: toolchains/alpine-cc-fib
+  image: gcc:14
+  timeout: 180
+  resources: [process_heavy]
+  fixtures: [{ source: source/c_fib.c, destination: /m.c }]
+  actions: [{ shell: { script: "cc -O2 /m.c -o /m && /m" } }]
+  expect: { stdout_contains: golden/r_fib.txt }
+- id: toolchains/alpine-cc-sum
+  image: gcc:14
+  timeout: 180
+  resources: [process_heavy]
+  fixtures: [{ source: source/c_sum.c, destination: /m.c }]
+  actions: [{ shell: { script: "cc -O2 /m.c -o /m && /m" } }]
+  expect: { stdout_contains: golden/r_sum.txt }
+- id: toolchains/alpine-cmake-c
+  image: silkeh/clang:18
+  timeout: 180
+  resources: [process_heavy]
+  fixtures:
+  - { source: source/c_sum.c, destination: /p/m.c }
+  - { source: source/CMakeLists.txt, destination: /p/CMakeLists.txt }
+  actions: [{ shell: { script: "cd /p && cmake -S . -B b && cmake --build b && ./b/m" } }]
+  expect: { stdout_contains: golden/r_sum.txt }
+- id: toolchains/alpine-gxx-stl
+  image: gcc:14
+  timeout: 180
+  resources: [process_heavy]
+  fixtures: [{ source: source/cpp_sum.cpp, destination: /m.cpp }]
+  actions: [{ shell: { script: "g++ -O2 /m.cpp -o /m && /m" } }]
+  expect: { stdout_contains: golden/r_sum.txt }
+- id: toolchains/alpine-no-cc
+  image: alpine:latest
+  timeout: 120
+  actions: [{ shell: { script: "command -v gcc || echo NO-CC" } }]
+  expect: { stdout_contains: golden/no_cc.txt }
+- id: toolchains/clang-17-banner
+  image: silkeh/clang:17
+  timeout: 120
+  class: long
+  actions: [{ shell: { script: "clang --version | head -1" } }]
+  expect: { stdout_contains: golden/clang17.txt }
+- id: toolchains/clang-17-c-sum
+  image: silkeh/clang:17
+  timeout: 180
+  class: long
+  resources: [process_heavy]
+  fixtures: [{ source: source/c_sum.c, destination: /m.c }]
+  actions: [{ shell: { script: "clang -O2 /m.c -o /m && /m" } }]
+  expect: { stdout_contains: golden/r_sum.txt }
+- id: toolchains/clang-18-banner
+  image: silkeh/clang:18
+  timeout: 120
+  class: long
+  actions: [{ shell: { script: "clang --version | head -1" } }]
+  expect: { stdout_contains: golden/clang18.txt }
+- id: toolchains/clang-18-c-sum
+  image: silkeh/clang:18
+  timeout: 180
+  class: long
+  resources: [process_heavy]
+  fixtures: [{ source: source/c_sum.c, destination: /m.c }]
+  actions: [{ shell: { script: "clang -O2 /m.c -o /m && /m" } }]
+  expect: { stdout_contains: golden/r_sum.txt }
+- id: toolchains/clang-18-cpp-stl
+  image: silkeh/clang:18
+  timeout: 180
+  class: long
+  resources: [process_heavy]
+  fixtures: [{ source: source/cpp_sum.cpp, destination: /m.cpp }]
+  actions: [{ shell: { script: "clang++ -O2 /m.cpp -o /m && /m" } }]
+  expect: { stdout_contains: golden/r_sum.txt }
+- id: toolchains/clang-18-llvm-config
+  image: silkeh/clang:18
+  timeout: 120
+  class: long
+  actions: [{ shell: { script: "llvm-config --version" } }]
+  expect: { stdout_contains: golden/llvm18.txt }
+- id: toolchains/debian-no-cc
+  image: debian:bookworm
+  timeout: 120
+  actions: [{ shell: { script: "command -v cc || echo NO-CC" } }]
+  expect: { stdout_contains: golden/no_cc.txt }
+- id: toolchains/gcc-12-cpp-stl
+  image: gcc:12
+  timeout: 180
+  class: long
+  resources: [process_heavy]
+  fixtures: [{ source: source/cpp_sum.cpp, destination: /m.cpp }]
+  actions: [{ shell: { script: "g++ -O2 /m.cpp -o /m && /m" } }]
+  expect: { stdout_contains: golden/r_sum.txt }
+- id: toolchains/gcc-12-gpp-banner
+  image: gcc:12
+  timeout: 120
+  class: long
+  actions: [{ shell: { script: "g++ --version | head -1" } }]
+  expect: { stdout_contains: golden/gpp12.txt }
+- id: toolchains/gcc-13-banner
+  image: gcc:13
+  timeout: 120
+  class: long
+  actions: [{ shell: { script: "gcc --version | head -1" } }]
+  expect: { stdout_contains: golden/gcc13.txt }
+- id: toolchains/gcc-13-c-sum
+  image: gcc:13
+  timeout: 180
+  class: long
+  resources: [process_heavy]
+  fixtures: [{ source: source/c_sum.c, destination: /m.c }]
+  actions: [{ shell: { script: "cc -O2 /m.c -o /m && /m" } }]
+  expect: { stdout_contains: golden/r_sum.txt }
+- id: toolchains/gcc-13-cpp-stl
+  image: gcc:13
+  timeout: 180
+  class: long
+  resources: [process_heavy]
+  fixtures: [{ source: source/cpp_sum.cpp, destination: /m.cpp }]
+  actions: [{ shell: { script: "g++ -O2 /m.cpp -o /m && /m" } }]
+  expect: { stdout_contains: golden/r_sum.txt }
+- id: toolchains/gcc-14-banner
+  image: gcc:14
+  timeout: 120
+  class: long
+  actions: [{ shell: { script: "gcc --version | head -1" } }]
+  expect: { stdout_contains: golden/gcc14.txt }
+- id: toolchains/gcc-14-c-sum
+  image: gcc:14
+  timeout: 180
+  class: long
+  resources: [process_heavy]
+  fixtures: [{ source: source/c_sum.c, destination: /m.c }]
+  actions: [{ shell: { script: "cc -O2 /m.c -o /m && /m" } }]
+  expect: { stdout_contains: golden/r_sum.txt }
+- id: toolchains/gcc-14-cpp-stl
+  image: gcc:14
+  timeout: 180
+  class: long
+  resources: [process_heavy]
+  fixtures: [{ source: source/cpp_sum.cpp, destination: /m.cpp }]
+  actions: [{ shell: { script: "g++ -O2 /m.cpp -o /m && /m" } }]
+  expect: { stdout_contains: golden/r_sum.txt }
+- id: toolchains/gcc-latest-as-banner
+  image: gcc:latest
+  timeout: 120
+  class: long
+  actions: [{ shell: { script: "as --version | head -1" } }]
+  expect: { stdout_contains: golden/assembler.txt }
+- id: toolchains/gcc-latest-banner
+  image: gcc:latest
+  timeout: 120
+  class: long
+  actions: [{ shell: { script: "gcc --version | head -1" } }]
+  expect: { stdout_contains: golden/gcc.txt }
+- id: toolchains/gcc-latest-c-sum
+  image: gcc:latest
+  timeout: 180
+  class: long
+  resources: [process_heavy]
+  fixtures: [{ source: source/c_sum.c, destination: /m.c }]
+  actions: [{ shell: { script: "cc -O2 /m.c -o /m && /m" } }]
+  expect: { stdout_contains: golden/r_sum.txt }
+- id: toolchains/gcc-latest-fib
+  image: gcc:latest
+  timeout: 180
+  class: long
+  resources: [process_heavy]
+  fixtures: [{ source: source/c_fib.c, destination: /m.c }]
+  actions: [{ shell: { script: "cc -O2 /m.c -o /m && /m" } }]
+  expect: { stdout_contains: golden/r_fib.txt }
+- id: toolchains/gcc-latest-ld-banner
+  image: gcc:latest
+  timeout: 120
+  class: long
+  actions: [{ shell: { script: "ld --version | head -1" } }]
+  expect: { stdout_contains: golden/linker.txt }
+- id: toolchains/gcc-latest-make-banner
+  image: gcc:latest
+  timeout: 120
+  class: long
+  actions: [{ shell: { script: "make --version | head -1" } }]
+  expect: { stdout_contains: golden/make.txt }
+- id: toolchains/gcc-make
+  image: gcc:latest
+  timeout: 180
+  class: long
+  resources: [process_heavy]
+  fixtures:
+  - { source: source/make_sum.c, destination: /p/m.c }
+  - { source: source/Makefile, destination: /p/Makefile }
+  actions: [{ shell: { script: "cd /p && make -s run" } }]
+  expect: { stdout_contains: golden/make_sum.txt }
+- id: toolchains/go-121-alpine-banner
+  image: golang:1.21-alpine
+  timeout: 120
+  class: long
+  actions: [{ shell: { script: "go version" } }]
+  expect: { stdout_contains: golden/go121.txt }
+- id: toolchains/go-121-alpine-sum
+  image: golang:1.21-alpine
+  timeout: 180
+  class: long
+  resources: [process_heavy]
+  environment: { GOCACHE: /tmp/gocache, GOMAXPROCS: "1", GOFLAGS: "-mod=mod -p=1" }
+  fixtures: [{ source: source/sum.go, destination: /m.go }]
+  actions: [{ shell: { script: "go run /m.go" } }]
+  expect: { stdout_contains: golden/r_sum.txt }
+- id: toolchains/go-122-alpine-fib
+  image: golang:1.22-alpine
+  timeout: 180
+  class: long
+  resources: [process_heavy]
+  environment: { GOCACHE: /tmp/gocache, GOMAXPROCS: "1", GOFLAGS: "-mod=mod -p=1" }
+  fixtures: [{ source: source/fib.go, destination: /m.go }]
+  actions: [{ shell: { script: "go run /m.go" } }]
+  expect: { stdout_contains: golden/r_fib.txt }
+- id: toolchains/go-122-bookworm-build
+  image: golang:1.22-bookworm
+  timeout: 180
+  class: long
+  resources: [process_heavy]
+  environment: { GOCACHE: /tmp/gocache, GOMAXPROCS: "1", GOFLAGS: "-mod=mod -p=1" }
+  fixtures: [{ source: source/sum.go, destination: /m.go }]
+  actions: [{ shell: { script: "go build -o /m /m.go && /m" } }]
+  expect: { stdout_contains: golden/r_sum.txt }
+- id: toolchains/go-123-banner
+  image: golang:1.23
+  timeout: 120
+  class: long
+  actions: [{ shell: { script: "go version" } }]
+  expect: { stdout_contains: golden/go123.txt }
+- id: toolchains/go-123-run-sum
+  image: golang:1.23
+  timeout: 180
+  class: long
+  resources: [process_heavy]
+  environment: { GOCACHE: /tmp/gocache, GOMAXPROCS: "1", GOFLAGS: "-mod=mod -p=1" }
+  fixtures: [{ source: source/sum.go, destination: /m.go }]
+  actions: [{ shell: { script: "go run /m.go" } }]
+  expect: { stdout_contains: golden/r_sum.txt }
+- id: toolchains/rust-178-alpine-fib
+  image: rust:1.78-alpine
+  timeout: 180
+  class: long
+  resources: [process_heavy]
+  fixtures: [{ source: source/fib.rs, destination: /m.rs }]
+  actions: [{ shell: { script: "rustc -O /m.rs -o /m && /m" } }]
+  expect: { stdout_contains: golden/r_fib.txt }
+- id: toolchains/rust-178-slim-banner
+  image: rust:1.78-slim
+  timeout: 120
+  class: long
+  actions: [{ shell: { script: "rustc --version" } }]
+  expect: { stdout_contains: golden/rust178.txt }
+- id: toolchains/rust-178-slim-fib
+  image: rust:1.78-slim
+  timeout: 180
+  class: long
+  resources: [process_heavy]
+  fixtures: [{ source: source/fib.rs, destination: /m.rs }]
+  actions: [{ shell: { script: "rustc -O /m.rs -o /m && /m" } }]
+  expect: { stdout_contains: golden/r_fib.txt }
+- id: toolchains/rust-179-cargo-banner
+  image: rust:1.79
+  timeout: 120
+  class: long
+  actions: [{ shell: { script: "cargo --version" } }]
+  expect: { stdout_contains: golden/cargo179.txt }
+- id: toolchains/rust-179-slim-sum
+  image: rust:1.79-slim
+  timeout: 180
+  class: long
+  resources: [process_heavy]
+  fixtures: [{ source: source/sum.rs, destination: /m.rs }]
+  actions: [{ shell: { script: "rustc -O /m.rs -o /m && /m" } }]
+  expect: { stdout_contains: golden/r_sum.txt }
+- id: toolchains/rust-179-sum
+  image: rust:1.79
+  timeout: 180
+  class: long
+  resources: [process_heavy]
+  fixtures: [{ source: source/sum.rs, destination: /m.rs }]
+  actions: [{ shell: { script: "rustc -O /m.rs -o /m && /m" } }]
+  expect: { stdout_contains: golden/r_sum.txt }
+- id: toolchains/ubuntu-no-cc
+  image: ubuntu:24.04
+  timeout: 120
+  actions: [{ shell: { script: "command -v gcc || echo NO-CC" } }]
+  expect: { stdout_contains: golden/no_cc.txt }
