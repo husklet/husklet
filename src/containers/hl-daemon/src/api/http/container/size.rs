@@ -34,10 +34,10 @@ pub(in super::super) async fn summaries(
             Err(failure) if error.is_none() => error = Some(ApiError::container(failure)),
             Err(_) => {}
         }
-        if error.is_none() {
-            if let Some((index, value)) = values.next() {
-                pending.push(scan_summary(containers, index, value));
-            }
+        if error.is_none()
+            && let Some((index, value)) = values.next()
+        {
+            pending.push(scan_summary(containers, index, value));
         }
     }
     if let Some(error) = error {

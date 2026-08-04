@@ -1,7 +1,7 @@
 use crate::volumes::Volumes;
 use crate::{Error, Result, Volume, VolumeSource};
 use hl_fs::Directory;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::task::JoinSet;
@@ -37,67 +37,85 @@ impl Volumes {
     pub async fn sizes(&self, volumes: &[Volume]) -> Result<BTreeMap<String, u64>> {
         let mut sizes = BTreeMap::new();
         let mut pending = VecDeque::new();
-        for volume in volumes {
+        for (index, volume) in volumes.iter().enumerate() {
             if matches!(volume.source, VolumeSource::Bind { .. }) {
                 sizes.insert(volume.name.clone(), 0);
             } else {
-                pending.push_back((volume.name.clone(), volume.path.clone()));
+                pending.push_back((index, volume.name.clone(), volume.path.clone()));
             }
         }
-        sizes.extend(scan(pending, |path| Directory::from(path).size()).await?);
+        sizes.extend(Self::scan(pending, |path| Directory::from(path).size()).await?);
         Ok(sizes)
     }
-}
 
-async fn scan<F>(mut pending: VecDeque<(String, PathBuf)>, measure: F) -> Result<BTreeMap<String, u64>>
-where
-    F: Fn(PathBuf) -> std::io::Result<u64> + Send + Sync + 'static,
-{
-    let measure = Arc::new(measure);
-    let mut scans = JoinSet::new();
-    while scans.len() < SCAN_LIMIT {
-        let Some((name, path)) = pending.pop_front() else {
-            break;
-        };
-        let measure = Arc::clone(&measure);
-        scans.spawn_blocking(move || (name, measure(path)));
-    }
+    async fn scan<F>(mut pending: VecDeque<(usize, String, PathBuf)>, measure: F) -> Result<BTreeMap<String, u64>>
+    where
+        F: Fn(PathBuf) -> std::io::Result<u64> + Send + Sync + 'static,
+    {
+        let measure = Arc::new(measure);
+        let mut scans = JoinSet::new();
+        let mut indices = HashMap::new();
+        while scans.len() < SCAN_LIMIT {
+            let Some((index, name, path)) = pending.pop_front() else {
+                break;
+            };
+            Self::enqueue(&mut scans, &mut indices, Arc::clone(&measure), index, name, path);
+        }
 
-    let mut sizes = BTreeMap::new();
-    let mut failure = None;
-    while let Some(result) = scans.join_next().await {
-        match result {
-            Ok((name, Ok(size))) => {
-                sizes.insert(name, size);
-            }
-            Ok((_, Err(error))) => {
-                if failure.is_none() {
-                    failure = Some(Error::Io(error));
+        let mut sizes = BTreeMap::new();
+        let mut failure = None;
+        while let Some(result) = scans.join_next_with_id().await {
+            match result {
+                Ok((id, (_, name, Ok(size)))) => {
+                    indices.remove(&id);
+                    sizes.insert(name, size);
+                }
+                Ok((id, (index, _, Err(error)))) => {
+                    indices.remove(&id);
+                    Self::retain_failure(&mut failure, index, Error::Io(error));
+                }
+                Err(error) => {
+                    let index = indices.remove(&error.id()).unwrap_or(usize::MAX);
+                    Self::retain_failure(&mut failure, index, Error::Io(std::io::Error::other(error)));
                 }
             }
-            Err(error) => {
-                if failure.is_none() {
-                    failure = Some(Error::Io(std::io::Error::other(error)));
-                }
+            if failure.is_none()
+                && let Some((index, name, path)) = pending.pop_front()
+            {
+                Self::enqueue(&mut scans, &mut indices, Arc::clone(&measure), index, name, path);
             }
         }
-        if failure.is_none()
-            && let Some((name, path)) = pending.pop_front()
-        {
-            let measure = Arc::clone(&measure);
-            scans.spawn_blocking(move || (name, measure(path)));
+
+        match failure {
+            Some((_, error)) => Err(error),
+            None => Ok(sizes),
         }
     }
 
-    match failure {
-        Some(error) => Err(error),
-        None => Ok(sizes),
+    fn enqueue<F>(
+        scans: &mut JoinSet<(usize, String, std::io::Result<u64>)>,
+        indices: &mut HashMap<tokio::task::Id, usize>,
+        measure: Arc<F>,
+        index: usize,
+        name: String,
+        path: PathBuf,
+    ) where
+        F: Fn(PathBuf) -> std::io::Result<u64> + Send + Sync + 'static,
+    {
+        let task = scans.spawn_blocking(move || (index, name, measure(path)));
+        indices.insert(task.id(), index);
+    }
+
+    fn retain_failure(failure: &mut Option<(usize, Error)>, index: usize, error: Error) {
+        if failure.as_ref().is_none_or(|(earliest, _)| index < *earliest) {
+            *failure = Some((index, error));
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{SCAN_LIMIT, scan};
+    use super::{SCAN_LIMIT, Volumes};
     use crate::{Config, Containers, Error, VolumeSpec};
     use std::collections::{BTreeMap, VecDeque};
     use std::path::PathBuf;
@@ -121,7 +139,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bind_zero_and_failure() {
+    async fn bind_failure() {
         let root = tempfile::tempdir().unwrap();
         let bind = root.path().join("bind");
         std::fs::create_dir(&bind).unwrap();
@@ -159,10 +177,10 @@ mod tests {
         let started = Arc::new(Mutex::new(Some(started)));
         let task_active = Arc::clone(&active);
         let task_gate = Arc::clone(&gate);
-        let task = tokio::spawn(scan(
+        let task = tokio::spawn(Volumes::scan(
             VecDeque::from([
-                ("failure".into(), PathBuf::from("failure")),
-                ("blocked".into(), PathBuf::from("blocked")),
+                (0, "failure".into(), PathBuf::from("failure")),
+                (1, "blocked".into(), PathBuf::from("blocked")),
             ]),
             move |path| {
                 if path == PathBuf::from("failure") {
@@ -190,5 +208,49 @@ mod tests {
         }
         assert!(matches!(task.await.unwrap(), Err(Error::Io(_))));
         assert_eq!(active.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failure_order() {
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let (first_started, first_waiting) = tokio::sync::oneshot::channel();
+        let (second_finished, second_waiting) = tokio::sync::oneshot::channel();
+        let first_started = Arc::new(Mutex::new(Some(first_started)));
+        let second_finished = Arc::new(Mutex::new(Some(second_finished)));
+        let task_gate = Arc::clone(&gate);
+        let task = tokio::spawn(Volumes::scan(
+            VecDeque::from([
+                (0, "first".into(), PathBuf::from("first")),
+                (1, "second".into(), PathBuf::from("second")),
+            ]),
+            move |path| {
+                if path == PathBuf::from("second") {
+                    if let Some(finished) = second_finished.lock().unwrap().take() {
+                        let _ = finished.send(());
+                    }
+                    return Err(std::io::Error::other("second"));
+                }
+                if let Some(started) = first_started.lock().unwrap().take() {
+                    let _ = started.send(());
+                }
+                let (lock, wake) = &*task_gate;
+                let mut released = lock.lock().unwrap();
+                while !*released {
+                    released = wake.wait(released).unwrap();
+                }
+                Err(std::io::Error::other("first"))
+            },
+        ));
+        first_waiting.await.unwrap();
+        second_waiting.await.unwrap();
+        {
+            let (lock, wake) = &*gate;
+            *lock.lock().unwrap() = true;
+            wake.notify_all();
+        }
+        let Error::Io(error) = task.await.unwrap().unwrap_err() else {
+            panic!("expected filesystem failure");
+        };
+        assert_eq!(error.to_string(), "first");
     }
 }
