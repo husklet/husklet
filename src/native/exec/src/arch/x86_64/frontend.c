@@ -303,8 +303,10 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                       request->guest_bytes[cursor] == 0x6fu ||
                       (request->guest_bytes[cursor] >= 0x74u && request->guest_bytes[cursor] <= 0x76u) ||
                       request->guest_bytes[cursor] == 0x7fu || request->guest_bytes[cursor] == 0xd7u ||
+                      request->guest_bytes[cursor] == 0xd4u ||
                       request->guest_bytes[cursor] == 0xdbu || request->guest_bytes[cursor] == 0xdfu ||
-                      request->guest_bytes[cursor] == 0xebu || request->guest_bytes[cursor] == 0xefu)) ||
+                      request->guest_bytes[cursor] == 0xebu || request->guest_bytes[cursor] == 0xefu ||
+                      (request->guest_bytes[cursor] >= 0xf8u && request->guest_bytes[cursor] <= 0xfeu))) ||
                     (semantic_prefix == 0xf3u &&
                      (request->guest_bytes[cursor] == 0x6fu || request->guest_bytes[cursor] == 0x7fu)))) {
             uint8_t extension = request->guest_bytes[cursor++];
@@ -353,6 +355,13 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                 item->vector_kind = VECTOR_OR;
             } else if (extension == 0xefu) {
                 item->vector_kind = VECTOR_XOR;
+            } else if (extension == 0xd4u || extension >= 0xfcu) {
+                item->vector_kind = VECTOR_ADD;
+                item->vector_lane = extension == 0xfcu ? 1u : extension == 0xfdu ? 2u :
+                                    extension == 0xfeu ? 4u : 8u;
+            } else if (extension >= 0xf8u && extension <= 0xfbu) {
+                item->vector_kind = VECTOR_SUBTRACT;
+                item->vector_lane = (uint8_t)(1u << (extension - 0xf8u));
             } else {
                 item->vector_kind = (extension >= 0x68u && extension <= 0x6au) || extension == 0x6du
                                         ? VECTOR_UNPACK_HIGH : VECTOR_UNPACK_LOW;

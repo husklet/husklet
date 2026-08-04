@@ -798,6 +798,11 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
         words[(*cursor)++] = UINT32_C(0x4ea01c00) | source << 16 | destination << 5 | destination;
     } else if (item->vector_kind == VECTOR_AND_NOT) {
         words[(*cursor)++] = UINT32_C(0x4e601c00) | destination << 16 | source << 5 | destination;
+    } else if (item->vector_kind == VECTOR_ADD || item->vector_kind == VECTOR_SUBTRACT) {
+        uint32_t base = item->vector_kind == VECTOR_ADD ? UINT32_C(0x4e208400) : UINT32_C(0x6e208400);
+        base |= lane == 1u ? 0u : lane == 2u ? UINT32_C(0x00400000) :
+                lane == 4u ? UINT32_C(0x00800000) : UINT32_C(0x00c00000);
+        words[(*cursor)++] = base | source << 16 | destination << 5 | destination;
     } else if (item->vector_kind == VECTOR_BYTE_MASK) {
         words[(*cursor)++] = UINT32_C(0x6f090400) | source << 5 | 17u; /* ushr v17.16b,source,#7 */
         words[(*cursor)++] = UINT32_C(0x6f001400) | 25u << 16 | 17u << 5 | 17u;
