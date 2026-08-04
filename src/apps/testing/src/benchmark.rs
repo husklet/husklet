@@ -91,6 +91,7 @@ struct Sample {
     phases: BTreeMap<String, Phase>,
     wall: u64,
     diagnostics: Vec<String>,
+    x86_diagnostics: Option<adapter::X86Diagnostics>,
 }
 
 #[derive(Default)]
@@ -252,6 +253,19 @@ impl Run {
         for repetition in 0..self.repeats {
             let sample = process.sample(&self)?;
             walls.push(sample.wall);
+            if let Some(diagnostics) = sample.x86_diagnostics {
+                eprint!(
+                    "diagnostic repeat={} x86_public_exits={} x86_public_syscalls={} x86_syscall_vector_dirty={}",
+                    repetition + 1,
+                    diagnostics.public_exits,
+                    diagnostics.public_syscalls,
+                    diagnostics.syscall_vector_dirty,
+                );
+                if let Some(share) = diagnostics.dirty_share_ppm() {
+                    eprint!(" x86_syscall_vector_dirty_ppm={share}");
+                }
+                eprintln!();
+            }
             for line in sample.diagnostics {
                 eprintln!("diagnostic repeat={} {line}", repetition + 1);
             }

@@ -9,6 +9,23 @@ mod command;
 
 const CAPTURE_LIMIT: usize = 1024 * 1024;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct X86Diagnostics {
+    pub(super) public_exits: u64,
+    pub(super) public_syscalls: u64,
+    pub(super) syscall_vector_dirty: u64,
+}
+
+impl X86Diagnostics {
+    pub(super) fn dirty_share_ppm(self) -> Option<u64> {
+        (self.public_syscalls != 0)
+            .then(|| {
+                u64::try_from(u128::from(self.syscall_vector_dirty) * 1_000_000 / u128::from(self.public_syscalls)).ok()
+            })
+            .flatten()
+    }
+}
+
 /// Application-owned host process adapter for benchmark discovery and execution.
 pub(super) struct Process {
     search_path: Option<OsString>,
@@ -90,10 +107,12 @@ impl Process {
             .filter(|line| !line.trim().is_empty())
             .map(str::to_owned)
             .collect();
+        let x86_diagnostics = Self::x86_diagnostics(&diagnostics_text)?;
         Ok(Sample {
             phases,
             wall,
             diagnostics,
+            x86_diagnostics,
         })
     }
 
@@ -106,6 +125,54 @@ impl Process {
             .filter(|(name, _)| matches!(*name, "branch" | "syscall" | "fallback" | "yield" | "completed"))
             .filter_map(|(_, value)| value.parse::<u64>().ok())
             .reduce(u64::saturating_add)
+    }
+
+    fn x86_diagnostics(diagnostics: &str) -> Result<Option<X86Diagnostics>, String> {
+        let mut total = None::<X86Diagnostics>;
+        for line in diagnostics
+            .lines()
+            .filter_map(|line| line.strip_prefix("hl-native-detail: "))
+        {
+            let mut exits = None;
+            let mut syscalls = None;
+            let mut dirty = None;
+            for (name, value) in line.split_whitespace().filter_map(|field| field.split_once('=')) {
+                let destination = match name {
+                    "x86_public_exits" => &mut exits,
+                    "x86_public_syscalls" => &mut syscalls,
+                    "x86_syscall_vector_dirty" => &mut dirty,
+                    _ => continue,
+                };
+                *destination = value.parse::<u64>().ok();
+            }
+            let observed =
+                usize::from(exits.is_some()) + usize::from(syscalls.is_some()) + usize::from(dirty.is_some());
+            if observed == 0 {
+                continue;
+            }
+            let (Some(public_exits), Some(public_syscalls), Some(syscall_vector_dirty)) = (exits, syscalls, dirty)
+            else {
+                return Ok(None);
+            };
+            let current = total.get_or_insert(X86Diagnostics {
+                public_exits: 0,
+                public_syscalls: 0,
+                syscall_vector_dirty: 0,
+            });
+            current.public_exits = current
+                .public_exits
+                .checked_add(public_exits)
+                .ok_or_else(|| "native x86 public exit diagnostics overflow".to_owned())?;
+            current.public_syscalls = current
+                .public_syscalls
+                .checked_add(public_syscalls)
+                .ok_or_else(|| "native x86 public syscall diagnostics overflow".to_owned())?;
+            current.syscall_vector_dirty = current
+                .syscall_vector_dirty
+                .checked_add(syscall_vector_dirty)
+                .ok_or_else(|| "native x86 vector-dirty diagnostics overflow".to_owned())?;
+        }
+        Ok(total)
     }
 
     fn capture_output(mut reader: impl Read) -> Result<Vec<u8>, String> {
@@ -193,7 +260,7 @@ impl Process {
 
 #[cfg(test)]
 mod test {
-    use super::Process;
+    use super::{Process, X86Diagnostics};
 
     #[test]
     fn native_diagnostics() {
@@ -210,5 +277,73 @@ mod test {
             Some(0),
         );
         assert_eq!(Process::native_runs("unrelated diagnostic"), None);
+    }
+
+    #[test]
+    fn x86_diagnostics_are_optional_ordered_fields() {
+        assert_eq!(Process::x86_diagnostics("old detail without counters").unwrap(), None);
+        assert_eq!(
+            Process::x86_diagnostics(
+                "hl-native-detail: unknown=9 x86_public_syscalls=8 x86_syscall_vector_dirty=3 x86_public_exits=10"
+            )
+            .unwrap(),
+            Some(X86Diagnostics {
+                public_exits: 10,
+                public_syscalls: 8,
+                syscall_vector_dirty: 3,
+            }),
+        );
+    }
+
+    #[test]
+    fn x86_diagnostics_aggregate_complete_executors() {
+        let diagnostics = Process::x86_diagnostics(
+            "hl-native-detail: x86_public_exits=10 x86_public_syscalls=8 x86_syscall_vector_dirty=3\n\
+             hl-native-detail: x86_syscall_vector_dirty=1 x86_public_exits=5 x86_public_syscalls=2",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            diagnostics,
+            X86Diagnostics {
+                public_exits: 15,
+                public_syscalls: 10,
+                syscall_vector_dirty: 4,
+            }
+        );
+        assert_eq!(diagnostics.dirty_share_ppm(), Some(400_000));
+    }
+
+    #[test]
+    fn partial_or_zero_x86_diagnostics_have_no_share() {
+        assert_eq!(
+            Process::x86_diagnostics("hl-native-detail: x86_public_exits=10 x86_public_syscalls=8").unwrap(),
+            None,
+        );
+        assert_eq!(
+            X86Diagnostics {
+                public_exits: 0,
+                public_syscalls: 0,
+                syscall_vector_dirty: 0,
+            }
+            .dirty_share_ppm(),
+            None,
+        );
+        assert_eq!(
+            X86Diagnostics {
+                public_exits: u64::MAX,
+                public_syscalls: 1,
+                syscall_vector_dirty: u64::MAX,
+            }
+            .dirty_share_ppm(),
+            None,
+        );
+        assert!(
+            Process::x86_diagnostics(
+                "hl-native-detail: x86_public_exits=18446744073709551615 x86_public_syscalls=0 x86_syscall_vector_dirty=0\n\
+                 hl-native-detail: x86_public_exits=1 x86_public_syscalls=0 x86_syscall_vector_dirty=0"
+            )
+            .is_err()
+        );
     }
 }

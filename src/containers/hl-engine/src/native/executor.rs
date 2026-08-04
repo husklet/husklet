@@ -2437,7 +2437,7 @@ impl Drop for Executor {
             && let Ok(value) = self.diagnostics()
         {
             eprintln!(
-                "hl-native-detail: fills={} site_collisions={} shared_collisions={} branch={} syscall={} fallback={} yield={} completed={} operand_callbacks={} operand_cache_hits={}",
+                "hl-native-detail: fills={} site_collisions={} shared_collisions={} branch={} syscall={} fallback={} yield={} completed={} operand_callbacks={} operand_cache_hits={} x86_public_exits={} x86_public_syscalls={} x86_syscall_vector_dirty={}",
                 value.ibtc_fills,
                 value.ibtc_site_collisions,
                 value.ibtc_shared_collisions,
@@ -2448,6 +2448,9 @@ impl Drop for Executor {
                 value.completed,
                 value.operand_callbacks,
                 value.operand_cache_hits,
+                value.x86_public_exits,
+                value.x86_public_syscalls,
+                value.x86_syscall_vector_dirty,
             );
         }
         // SAFETY: construction transfers unique ownership of the live handle;
