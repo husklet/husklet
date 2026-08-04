@@ -3,7 +3,7 @@
 
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
 VERSION ?= $(or $(TAG),0.0.0-dev)
-NIX_DEV = nix develop . --command
+NIX_DEV = nix --extra-experimental-features 'nix-command flakes' develop . --command
 
 all: test-ci
 
@@ -13,12 +13,10 @@ design-lint:
 lint-cases:
 	cargo run -q -p hl-design-lint -- --cases lint src tests
 
-# `cargo clippy` and `cargo fmt` are toolchain COMPONENTS. Where they are missing — a Linux workspace, for
-# which the flake provides no devShell — cargo answers "no such command" and a caller grepping the output
-# for warnings sees none and calls it clean. `tools/rust-tool.sh` finds a component matching the active
-# rustc and REFUSES loudly when there is none, so a check that could not run cannot read as one that passed.
+# The flake pins Rust and provides Clippy for every supported development host. Keep dependency resolution
+# locked and offline so a missing tool or source is a hard failure rather than an unreviewed environment change.
 clippy:
-	bash tools/rust-tool.sh clippy --workspace --all-targets
+	$(NIX_DEV) cargo clippy --workspace --all-targets --locked --offline -- -D warnings
 
 fmt:
 	cargo fmt --all
