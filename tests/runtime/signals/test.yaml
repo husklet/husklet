@@ -1,0 +1,47 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+artifact:
+  destination: /opt/husklet/runtime-signals
+oracle:
+  provider: qemu
+  commands:
+    arm64: qemu-aarch64
+    amd64: qemu-x86_64
+build:
+  compiler:
+    arm64: aarch64-linux-gnu-gcc
+    amd64: x86_64-linux-gnu-gcc
+  flags: [-static, -O2, -std=gnu11]
+cases:
+  - id: runtime/signal/delivery-frame
+    status: active
+    compat: { class: compatibility }
+    build:
+      source: signal_frame.c
+      output: signal_frame
+      flags: [-nostdlib, -static, -fno-stack-protector, -fno-asynchronous-unwind-tables, "-Wl,--build-id=none"]
+    artifact: { destination: /opt/husklet/runtime-signal-frame }
+    run: [delivery-frame]
+    expect: { exit: 0, stdout: golden/signal_frame.txt }
+  - id: runtime/signalfd/edges
+    status: active
+    compat: { class: compatibility }
+    build: { source: fd_main.c, output: fd_edges, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/runtime-signals/fd_edges }
+    run: [edges]
+    expect: { exit: 0, stdout: golden/fd_edges.txt }
+  - id: runtime/signalfd/epoll
+    status: active
+    compat: { class: compatibility }
+    build: { source: fd_main.c, output: fd_epoll, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/runtime-signals/fd_epoll }
+    run: [epoll]
+    expect: { exit: 0, stdout: golden/fd_epoll.txt }
+  - id: runtime/signalfd/fork
+    status: active
+    compat: { class: compatibility }
+    build: { source: fd_main.c, output: fd_fork, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/runtime-signals/fd_fork }
+    run: [fork]
+    expect: { exit: 0, stdout: golden/fd_fork.txt }

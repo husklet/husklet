@@ -1,4 +1,4 @@
-# Signal oracle audit
+# Signals and signalfd oracle audit
 
 ## Workload boundary
 
@@ -81,3 +81,47 @@ capability to reproduce; Rust must preserve the generic safe-boundary invariant.
 This workload exercises the implemented rows through the public engine path on
 both guest ISAs. It does not claim the entire libc signal cohort or the Windows
 host limitation complete.
+
+## Signalfd retained-C audit and Rust mapping
+
+The retained signalfd domain was studied read-only in
+`../engine/src/linux_abi/signal.c` (`sigq_push`, `sfd_alloc`, `sfd_deliver`,
+`sfd_routed`, `host_sig_pend`, `raise_guest_signal_info`),
+`../engine/src/linux_abi/syscall/io.c` (signalfd `read`, descriptor duplication
+and relocation), `../engine/src/linux_abi/syscall/event.c` (`signalfd4` and
+epoll dispatch), and `../engine/src/linux_abi/syscall/dispatch.c` (descriptor
+publication). Architecture admission was checked in
+`../engine/src/translator/guest/x86_64/legacy.c` and
+`../engine/src/linux_abi/syscall/nonpie_args.h` for both guest ISAs.
+
+Each C signalfd is an independently masked, refcounted open-file-description
+with a private wake pipe. Standard signals coalesce and realtime instances queue
+FIFO with PID, UID, code, and value. Enqueue marks task state pending and wakes
+matching signalfds. Reads require at least one 128-byte record, preserve signal
+priority, return `EAGAIN` for an empty nonblocking queue, and do not consume a
+record when guest copy returns `EFAULT`. Aliased descriptors share the OFD;
+teardown occurs on last close. Epoll is level-ready until the queue drains. Fork
+shares descriptor/OFD state while the child's pending queue remains process
+local; exec closes only `CLOEXEC` descriptors. The signal queue lock protects
+selection/removal and wake publication; descriptor table locks are not retained
+across host reads, guest copies, or waits. A blocking read is interrupted with
+`EINTR` according to the same cancellation and restart ordering documented
+above. Host-specific signal-number translation remains behind the POSIX adapter;
+the 128-byte Linux record and guest mask semantics are identical on AArch64 and
+x86-64.
+
+| Retained C capability | Rust owner | Case/status |
+|---|---|---|
+| `signalfd4` mask and flag validation, descriptor publication | `hl-linux::event::abi`; `hl-runtime::event::syscalls`; `hl-descriptor` | `runtime/signalfd/edges`, active |
+| 128-byte records, metadata, ordinary/realtime and directed delivery | `hl-event::SignalFd`; `hl-runtime::signal::queue` | `runtime/signalfd/edges`, active |
+| Failed guest copy retains selected record | Linux copy boundary; `hl-event::PreparedSignalSelection` | `runtime/signalfd/edges`, active |
+| Level readiness and drain transition | `hl-event::SignalFd`; `hl-event::Epoll`; `hl-runtime::epoll` | `runtime/signalfd/epoll`, active |
+| Fork-shared OFD, process-local pending queue, last-close teardown | `hl-runtime::fork::event`; descriptor fork; task signal queue | `runtime/signalfd/fork`, active |
+
+The three signalfd cases cover ordinary and realtime delivery, one- and
+two-record reads, sender metadata, process- and thread-directed signals,
+empty/fault/success results, epoll ready/drained transitions, fork isolation,
+nonblocking and close-on-exec flags. Checkpoint restore, descriptor passing,
+mask replacement, duplicate-descriptor last-close, multiple signalfds, and
+blocking cancellation remain Rust unit-test capabilities outside this migrated
+three-case acceptance cohort and are not claimed complete here.
