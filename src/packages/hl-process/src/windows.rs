@@ -33,6 +33,12 @@ pub(super) fn run(
     timeout: Duration,
     cancelled: &AtomicBool,
 ) -> std::io::Result<Outcome> {
+    if command.environment().is_some() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "ordered byte-valued process environments are not implemented on Windows",
+        ));
+    }
     let stdin = File::open("NUL")?;
     let stdin_handle = stdin.as_raw_handle() as HANDLE;
     inherit(stdin_handle)?;

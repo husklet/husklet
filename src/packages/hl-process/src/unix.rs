@@ -1,15 +1,22 @@
 use super::{Capture, Command as OwnedCommand, Outcome};
-use std::fs;
+use std::ffi::CString;
+use std::fs::{self, File};
 use std::io::Read;
+use std::mem::MaybeUninit;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::path::PathBuf;
 use std::process::{Child, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const POLL: Duration = Duration::from_millis(10);
 const TERM_GRACE: Duration = Duration::from_millis(500);
+static SPAWN_LOCK: Mutex<()> = Mutex::new(());
 
 pub(super) fn run(
     command: &OwnedCommand,
@@ -17,29 +24,53 @@ pub(super) fn run(
     timeout: Duration,
     cancelled: &AtomicBool,
 ) -> std::io::Result<Outcome> {
+    let spawned = spawn(command)?;
+    let mut owned = OwnedChild::new(spawned.process);
+    let stdout = Drain::spawn(spawned.stdout, capture.stdout_limit);
+    let stderr = Drain::spawn(spawned.stderr, capture.stderr_limit);
+    supervise(&mut owned, stdout, stderr, capture, timeout, cancelled)
+}
+
+fn spawn(command: &OwnedCommand) -> std::io::Result<Spawned> {
+    if command.environment().is_some() {
+        spawn_exact(command)
+    } else {
+        spawn_standard(command)
+    }
+}
+
+fn spawn_standard(command: &OwnedCommand) -> std::io::Result<Spawned> {
+    let _spawn = spawn_lock()?;
     let mut command = command.standard();
     command
         .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut owned = OwnedChild::new(command.spawn()?);
-    let stdout = Drain::spawn(
-        owned
-            .child
-            .stdout
-            .take()
-            .ok_or_else(|| std::io::Error::other("stdout was not piped"))?,
-        capture.stdout_limit,
-    );
-    let stderr = Drain::spawn(
-        owned
-            .child
-            .stderr
-            .take()
-            .ok_or_else(|| std::io::Error::other("stderr was not piped"))?,
-        capture.stderr_limit,
-    );
+    let mut child = command.spawn()?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| std::io::Error::other("stdout was not piped"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| std::io::Error::other("stderr was not piped"))?;
+    Ok(Spawned {
+        process: Process::Standard(child),
+        stdout: OwnedFd::from(stdout).into(),
+        stderr: OwnedFd::from(stderr).into(),
+    })
+}
+
+fn supervise(
+    owned: &mut OwnedChild,
+    stdout: Drain,
+    stderr: Drain,
+    capture: &Capture,
+    timeout: Duration,
+    cancelled: &AtomicBool,
+) -> std::io::Result<Outcome> {
     let started = Instant::now();
     let outcome = loop {
         if stdout.exceeded() || stderr.exceeded() {
@@ -74,6 +105,248 @@ pub(super) fn run(
     fs::write(&capture.stdout, stdout.bytes)?;
     fs::write(&capture.stderr, stderr.bytes)?;
     Ok(if exceeded { Outcome::OutputLimit } else { outcome })
+}
+
+struct Spawned {
+    process: Process,
+    stdout: File,
+    stderr: File,
+}
+
+fn spawn_exact(command: &OwnedCommand) -> std::io::Result<Spawned> {
+    let _spawn = spawn_lock()?;
+    let stdout = pipe()?;
+    let stderr = pipe()?;
+    let null = CString::new("/dev/null").expect("static path has no NUL");
+    let program = resolve(command.program())?;
+    let program = cstring(program.as_os_str().as_bytes(), "program")?;
+    let mut arguments = Vec::with_capacity(command.arguments().count() + 1);
+    arguments.push(program.clone());
+    for argument in command.arguments() {
+        arguments.push(cstring(argument.as_bytes(), "argument")?);
+    }
+    let mut argument_pointers = arguments
+        .iter()
+        .map(|value| value.as_ptr().cast_mut())
+        .chain(std::iter::once(std::ptr::null_mut()))
+        .collect::<Vec<_>>();
+    let environment = command
+        .environment()
+        .expect("exact spawn requires an exact environment")
+        .iter()
+        .map(|entry| cstring(entry.record(), "environment record"))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let mut environment_pointers = environment
+        .iter()
+        .map(|value| value.as_ptr().cast_mut())
+        .chain(std::iter::once(std::ptr::null_mut()))
+        .collect::<Vec<_>>();
+
+    let mut actions = MaybeUninit::<libc::posix_spawn_file_actions_t>::uninit();
+    // SAFETY: `actions` is aligned uninitialized storage exclusively owned by
+    // this function. Successful initialization establishes the C object's
+    // lifetime; no Rust references alias it and the call cannot unwind.
+    check_spawn(unsafe { libc::posix_spawn_file_actions_init(actions.as_mut_ptr()) })?;
+    // SAFETY: initialization above succeeded, so the uniquely owned C object is
+    // valid until the matching destroy below. Moving the value does not expose
+    // internal storage to Rust and no concurrent access exists.
+    let mut actions = unsafe { actions.assume_init() };
+    let configured = (|| {
+        check_spawn(unsafe {
+            libc::posix_spawn_file_actions_addopen(&mut actions, libc::STDIN_FILENO, null.as_ptr(), libc::O_RDONLY, 0)
+        })?;
+        for (source, target) in [
+            (stdout.1.as_raw_fd(), libc::STDOUT_FILENO),
+            (stderr.1.as_raw_fd(), libc::STDERR_FILENO),
+        ] {
+            // SAFETY: `actions` is initialized and uniquely owned; source is a
+            // live pipe descriptor and target is a standard descriptor. The C
+            // object copies integers only, retains no Rust pointer, and cannot unwind.
+            check_spawn(unsafe { libc::posix_spawn_file_actions_adddup2(&mut actions, source, target) })?;
+        }
+        for descriptor in [
+            stdout.0.as_raw_fd(),
+            stdout.1.as_raw_fd(),
+            stderr.0.as_raw_fd(),
+            stderr.1.as_raw_fd(),
+        ] {
+            // SAFETY: the initialized action list is uniquely owned and stores
+            // only the descriptor value. Pipe owners remain live through spawn;
+            // no concurrent mutation or unwind crosses this call.
+            check_spawn(unsafe { libc::posix_spawn_file_actions_addclose(&mut actions, descriptor) })?;
+        }
+        Ok::<_, std::io::Error>(())
+    })();
+    if let Err(error) = configured {
+        // SAFETY: the initialized list is still uniquely owned and no spawn is
+        // active. Destroy retains no pointer and cannot unwind.
+        unsafe { libc::posix_spawn_file_actions_destroy(&mut actions) };
+        return Err(error);
+    }
+
+    let mut attributes = MaybeUninit::<libc::posix_spawnattr_t>::uninit();
+    // SAFETY: aligned storage is exclusively owned and becomes initialized only
+    // on success. The call retains no Rust pointer and cannot unwind.
+    let attribute_status = unsafe { libc::posix_spawnattr_init(attributes.as_mut_ptr()) };
+    if attribute_status != 0 {
+        // SAFETY: actions remains initialized and uniquely owned.
+        unsafe { libc::posix_spawn_file_actions_destroy(&mut actions) };
+        return Err(std::io::Error::from_raw_os_error(attribute_status));
+    }
+    // SAFETY: successful initialization established the C object's lifetime.
+    let mut attributes = unsafe { attributes.assume_init() };
+    let configured = (|| {
+        // SAFETY: initialized attributes are uniquely owned; both setters copy
+        // scalar values and retain no pointers. No concurrent access exists.
+        check_spawn(unsafe { libc::posix_spawnattr_setflags(&mut attributes, libc::POSIX_SPAWN_SETPGROUP as i16) })?;
+        // SAFETY: as above; group zero requests a new group led by the child.
+        check_spawn(unsafe { libc::posix_spawnattr_setpgroup(&mut attributes, 0) })
+    })();
+    let mut pid = 0;
+    let spawned = configured.and_then(|()| {
+        // SAFETY: all C strings and pointer arrays are NUL-terminated and remain
+        // alive for the call. Actions/attributes are initialized and unaliased;
+        // env order and duplicate pointers are deliberately preserved. The
+        // child receives independent kernel state and the FFI cannot unwind.
+        check_spawn(unsafe {
+            libc::posix_spawn(
+                &mut pid,
+                program.as_ptr(),
+                &actions,
+                &attributes,
+                argument_pointers.as_mut_ptr(),
+                environment_pointers.as_mut_ptr(),
+            )
+        })
+    });
+    // SAFETY: both initialized C objects are uniquely owned, no spawn call is
+    // active, destruction retains no pointer, and neither call can unwind.
+    unsafe {
+        libc::posix_spawnattr_destroy(&mut attributes);
+        libc::posix_spawn_file_actions_destroy(&mut actions);
+    }
+    spawned?;
+    drop(stdout.1);
+    drop(stderr.1);
+    Ok(Spawned {
+        process: Process::Exact(pid),
+        stdout: stdout.0.into(),
+        stderr: stderr.0.into(),
+    })
+}
+
+fn spawn_lock() -> std::io::Result<MutexGuard<'static, ()>> {
+    SPAWN_LOCK
+        .lock()
+        .map_err(|_| std::io::Error::other("host process spawn lock was poisoned"))
+}
+
+fn resolve(program: &std::ffi::OsStr) -> std::io::Result<PathBuf> {
+    if program.as_bytes().contains(&b'/') {
+        return Ok(PathBuf::from(program));
+    }
+    let path = std::env::var_os("PATH")
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "host PATH is unset"))?;
+    for directory in std::env::split_paths(&path) {
+        let candidate = directory.join(program);
+        let bytes = candidate.as_os_str().as_bytes();
+        let Ok(candidate_c) = CString::new(bytes) else {
+            continue;
+        };
+        // SAFETY: candidate_c is a live NUL-terminated path. access observes
+        // filesystem metadata, retains no pointer or Rust alias, and cannot unwind.
+        if unsafe { libc::access(candidate_c.as_ptr(), libc::X_OK) } == 0 {
+            return Ok(candidate);
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        format!("host executable {:?} was not found in PATH", program),
+    ))
+}
+
+fn cstring(bytes: &[u8], kind: &str) -> std::io::Result<CString> {
+    CString::new(bytes)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("process {kind} contains NUL")))
+}
+
+fn check_spawn(status: i32) -> std::io::Result<()> {
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::from_raw_os_error(status))
+    }
+}
+
+fn pipe() -> std::io::Result<(OwnedFd, OwnedFd)> {
+    let mut descriptors = [-1; 2];
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    // SAFETY: descriptors is aligned writable storage for exactly two integers.
+    // The kernel writes no aliases and retains no pointer; the call cannot unwind.
+    let result = unsafe { libc::pipe2(descriptors.as_mut_ptr(), libc::O_CLOEXEC) };
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    // SAFETY: as above. `SPAWN_LOCK` is held across creation, CLOEXEC mutation,
+    // and spawn, preventing another hl-process launch from observing the gap.
+    let result = unsafe { libc::pipe(descriptors.as_mut_ptr()) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    for descriptor in descriptors {
+        // SAFETY: descriptor is valid and live; F_SETFD copies the integer flag,
+        // retains no pointer, the package spawn lock excludes sibling launches,
+        // and the call cannot unwind.
+        if unsafe { libc::fcntl(descriptor, libc::F_SETFD, libc::FD_CLOEXEC) } != 0 {
+            // SAFETY: both raw descriptors are uniquely owned on this error path.
+            unsafe {
+                libc::close(descriptors[0]);
+                libc::close(descriptors[1]);
+            }
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    let read = match relocate(descriptors[0]) {
+        Ok(read) => read,
+        Err(error) => {
+            // SAFETY: the second descriptor remains uniquely owned because the
+            // first relocation failed before wrapping it.
+            unsafe { libc::close(descriptors[1]) };
+            return Err(error);
+        }
+    };
+    let write = match relocate(descriptors[1]) {
+        Ok(write) => write,
+        Err(error) => {
+            drop(read);
+            return Err(error);
+        }
+    };
+    Ok((read, write))
+}
+
+fn relocate(descriptor: i32) -> std::io::Result<OwnedFd> {
+    let descriptor = if descriptor <= libc::STDERR_FILENO {
+        // SAFETY: descriptor is a valid uniquely owned pipe end. F_DUPFD_CLOEXEC
+        // creates a second independently owned descriptor above stderr, retains
+        // no pointer, and cannot unwind.
+        let relocated = unsafe { libc::fcntl(descriptor, libc::F_DUPFD_CLOEXEC, libc::STDERR_FILENO + 1) };
+        if relocated < 0 {
+            let error = std::io::Error::last_os_error();
+            // SAFETY: relocation failed, so the original descriptor remains
+            // uniquely owned and must be closed on this error path.
+            unsafe { libc::close(descriptor) };
+            return Err(error);
+        }
+        // SAFETY: the original descriptor is uniquely owned and replaced by the
+        // relocated descriptor; no alias or concurrent package spawn exists.
+        unsafe { libc::close(descriptor) };
+        relocated
+    } else {
+        descriptor
+    };
+    // SAFETY: this function has unique ownership of the live descriptor and
+    // transfers it exactly once into OwnedFd.
+    Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
 }
 
 struct Drained {
@@ -124,23 +397,23 @@ impl Drain {
 }
 
 struct OwnedChild {
-    child: Child,
+    process: Process,
     group: u32,
     reaped: bool,
 }
 
 impl OwnedChild {
-    fn new(child: Child) -> Self {
-        let group = child.id();
+    fn new(process: Process) -> Self {
+        let group = process.id();
         Self {
-            child,
+            process,
             group,
             reaped: false,
         }
     }
 
     fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
-        let status = self.child.try_wait()?;
+        let status = self.process.try_wait()?;
         self.reaped |= status.is_some();
         Ok(status)
     }
@@ -155,9 +428,9 @@ impl OwnedChild {
             }
         }
         self.signal(libc::SIGKILL)?;
-        let _ = self.child.kill();
+        let _ = self.process.kill();
         if !self.reaped {
-            self.child.wait()?;
+            self.process.wait()?;
             self.reaped = true;
         }
         self.quiesce()
@@ -210,6 +483,77 @@ impl OwnedChild {
     }
 }
 
+enum Process {
+    Standard(Child),
+    Exact(libc::pid_t),
+}
+
+impl Process {
+    fn id(&self) -> u32 {
+        match self {
+            Self::Standard(child) => child.id(),
+            Self::Exact(pid) => u32::try_from(*pid).unwrap_or(u32::MAX),
+        }
+    }
+
+    fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        match self {
+            Self::Standard(child) => child.try_wait(),
+            Self::Exact(pid) => wait_pid(*pid, libc::WNOHANG),
+        }
+    }
+
+    fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        match self {
+            Self::Standard(child) => child.wait(),
+            Self::Exact(pid) => loop {
+                if let Some(status) = wait_pid(*pid, 0)? {
+                    break Ok(status);
+                }
+            },
+        }
+    }
+
+    fn kill(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Standard(child) => child.kill(),
+            Self::Exact(pid) => {
+                // SAFETY: pid is the positive identity returned by posix_spawn.
+                // The call touches no Rust memory, retains nothing, and cannot unwind.
+                if unsafe { libc::kill(*pid, libc::SIGKILL) } == 0 {
+                    Ok(())
+                } else {
+                    let error = std::io::Error::last_os_error();
+                    if error.raw_os_error() == Some(libc::ESRCH) {
+                        Ok(())
+                    } else {
+                        Err(error)
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn wait_pid(pid: libc::pid_t, flags: i32) -> std::io::Result<Option<std::process::ExitStatus>> {
+    loop {
+        let mut status = 0;
+        // SAFETY: status is aligned writable integer storage, pid is a child
+        // returned by posix_spawn, and waitpid retains no pointer or alias.
+        let waited = unsafe { libc::waitpid(pid, &mut status, flags) };
+        if waited == pid {
+            return Ok(Some(std::process::ExitStatus::from_raw(status)));
+        }
+        if waited == 0 {
+            return Ok(None);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::EINTR) {
+            return Err(error);
+        }
+    }
+}
+
 impl Drop for OwnedChild {
     fn drop(&mut self) {
         if !self.reaped || self.group_exists() {
@@ -221,6 +565,7 @@ impl Drop for OwnedChild {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::EnvironmentEntry;
     use std::sync::Arc;
 
     fn capture(directory: &tempfile::TempDir) -> Capture {
@@ -244,6 +589,142 @@ mod tests {
         .unwrap();
         assert_eq!(outcome, Outcome::Exited(Some(0)));
         assert_eq!(fs::read(directory.path().join("stdout")).unwrap(), b"owned");
+    }
+
+    #[test]
+    fn exact_environment_preserves_order_duplicates_and_non_utf8() {
+        let directory = tempfile::tempdir().unwrap();
+        let environment = [
+            EnvironmentEntry::new(b"HL_PROCESS_ENV_CHILD", b"1").unwrap(),
+            EnvironmentEntry::new(b"FIRST", b"one").unwrap(),
+            EnvironmentEntry::new(b"DUP", b"first").unwrap(),
+            EnvironmentEntry::new(b"RAW", b"\xff").unwrap(),
+            EnvironmentEntry::new(b"DUP", b"second").unwrap(),
+            EnvironmentEntry::new(b"EMPTY", b"").unwrap(),
+        ];
+        let mut command = OwnedCommand::new(std::env::current_exe().unwrap());
+        command.args(["--exact", "unix::tests::exact_environment_child", "--ignored"]);
+        command.exact_environment(environment).unwrap();
+        let outcome = run(
+            &command,
+            &capture(&directory),
+            Duration::from_secs(2),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(outcome, Outcome::Exited(Some(0)));
+    }
+
+    #[test]
+    fn exact_spawn_survives_closed_standard_descriptors() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut command = OwnedCommand::new(std::env::current_exe().unwrap());
+        command.args(["--exact", "unix::tests::closed_standard_descriptors_child", "--ignored"]);
+        command
+            .exact_environment([EnvironmentEntry::new(b"HL_PROCESS_CLOSED_CHILD", b"1").unwrap()])
+            .unwrap();
+        let outcome = run(
+            &command,
+            &capture(&directory),
+            Duration::from_secs(3),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(outcome, Outcome::Exited(Some(0)));
+    }
+
+    #[test]
+    #[ignore = "executed with standard descriptors closed"]
+    fn closed_standard_descriptors_child() {
+        let directory = tempfile::tempdir().unwrap();
+        let environment = [
+            EnvironmentEntry::new(b"HL_PROCESS_ENV_CHILD", b"1").unwrap(),
+            EnvironmentEntry::new(b"FIRST", b"one").unwrap(),
+            EnvironmentEntry::new(b"DUP", b"first").unwrap(),
+            EnvironmentEntry::new(b"RAW", b"\xff").unwrap(),
+            EnvironmentEntry::new(b"DUP", b"second").unwrap(),
+            EnvironmentEntry::new(b"EMPTY", b"").unwrap(),
+        ];
+        // SAFETY: this isolated subprocess deliberately relinquishes its three
+        // standard descriptors before exercising descriptor relocation. It
+        // performs no Rust I/O afterward, terminates with _exit, owns no shared
+        // process state, and no unwind crosses FFI.
+        unsafe {
+            libc::close(libc::STDIN_FILENO);
+            libc::close(libc::STDOUT_FILENO);
+            libc::close(libc::STDERR_FILENO);
+        }
+        let mut command = OwnedCommand::new(std::env::current_exe().unwrap());
+        command.args(["--exact", "unix::tests::exact_environment_child", "--ignored"]);
+        let success = command.exact_environment(environment).is_ok()
+            && matches!(
+                run(
+                    &command,
+                    &capture(&directory),
+                    Duration::from_secs(2),
+                    &AtomicBool::new(false),
+                ),
+                Ok(Outcome::Exited(Some(0)))
+            );
+        // SAFETY: this is the terminal action of the isolated child test. It
+        // runs no destructors, retains no pointer, and cannot unwind.
+        unsafe { libc::_exit(if success { 0 } else { 101 }) }
+    }
+
+    #[test]
+    #[ignore = "executed as the controlled exact-environment subprocess"]
+    fn exact_environment_child() {
+        assert_eq!(
+            raw_environment(),
+            [
+                &b"HL_PROCESS_ENV_CHILD=1"[..],
+                &b"FIRST=one"[..],
+                &b"DUP=first"[..],
+                &b"RAW=\xff"[..],
+                &b"DUP=second"[..],
+                &b"EMPTY="[..],
+            ]
+        );
+    }
+
+    fn raw_environment() -> Vec<Vec<u8>> {
+        let mut records = Vec::new();
+        // SAFETY: the process owns a conventional NUL-terminated `environ`
+        // pointer table for its entire lifetime. This test only observes each
+        // immutable C string before any thread mutates the environment; no
+        // pointer escapes and CStr validation cannot unwind across FFI.
+        let mut cursor = unsafe { environment_pointer() };
+        // SAFETY: the table is terminated by a null pointer and each non-null
+        // entry addresses one NUL-terminated environment record owned by libc.
+        while !unsafe { *cursor }.is_null() {
+            // SAFETY: established above; the record is observed and copied
+            // immediately, with no mutation or retained alias.
+            records.push(unsafe { std::ffi::CStr::from_ptr(*cursor) }.to_bytes().to_vec());
+            // SAFETY: the current entry is non-null, so advancing by one stays
+            // within the table or reaches its required null terminator.
+            cursor = unsafe { cursor.add(1) };
+        }
+        records
+    }
+
+    #[cfg(target_os = "macos")]
+    unsafe fn environment_pointer() -> *mut *mut libc::c_char {
+        unsafe extern "C" {
+            fn _NSGetEnviron() -> *mut *mut *mut libc::c_char;
+        }
+        // SAFETY: Darwin returns the address of its process-lifetime environ
+        // pointer. The caller observes the pointed-to table without mutation.
+        unsafe { *_NSGetEnviron() }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    unsafe fn environment_pointer() -> *mut *mut libc::c_char {
+        unsafe extern "C" {
+            static mut environ: *mut *mut libc::c_char;
+        }
+        // SAFETY: POSIX libc owns this process-lifetime pointer; the caller only
+        // observes its table before any environment mutation.
+        unsafe { environ }
     }
 
     #[test]
