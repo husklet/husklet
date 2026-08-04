@@ -113,23 +113,36 @@ fn fixture(
     (runtime, memory, catalog, descriptors, cancellation)
 }
 
+fn setup(runtime: &mut RuntimeAioSyscalls<Memory>, memory: &Memory) -> u64 {
+    assert_eq!(
+        runtime.handle(operation(0, "io_setup"), [4, 8, 0, 0, 0, 0]),
+        LinuxResult::Value(0)
+    );
+    u64::from_ne_bytes(memory.0.lock().unwrap()[8..16].try_into().unwrap())
+}
+
+fn control(memory: &Memory, address: u64, opcode: u16) {
+    let mut control = [0_u8; 64];
+    control[0..8].copy_from_slice(&77_u64.to_ne_bytes());
+    control[16..18].copy_from_slice(&opcode.to_ne_bytes());
+    control[20..24].copy_from_slice(&3_u32.to_ne_bytes());
+    control[24..32].copy_from_slice(&512_u64.to_ne_bytes());
+    control[32..40].copy_from_slice(&8_u64.to_ne_bytes());
+    memory.write(address, &control).unwrap();
+}
+
+fn pointers(memory: &Memory, address: u64, values: &[u64]) {
+    let bytes = values.iter().flat_map(|value| value.to_ne_bytes()).collect::<Vec<_>>();
+    memory.write(address, &bytes).unwrap();
+}
+
 #[test]
 fn pread_roundtrip_isas() {
     for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
         let (mut runtime, memory, _, _, _) = fixture(architecture);
-        assert_eq!(
-            runtime.handle(operation(0, "io_setup"), [4, 8, 0, 0, 0, 0]),
-            LinuxResult::Value(0)
-        );
-        let context = u64::from_ne_bytes(memory.0.lock().unwrap()[8..16].try_into().unwrap());
-        let mut control = [0_u8; 64];
-        control[0..8].copy_from_slice(&77_u64.to_ne_bytes());
-        control[16..18].copy_from_slice(&0_u16.to_ne_bytes());
-        control[20..24].copy_from_slice(&3_u32.to_ne_bytes());
-        control[24..32].copy_from_slice(&512_u64.to_ne_bytes());
-        control[32..40].copy_from_slice(&8_u64.to_ne_bytes());
-        memory.write(128, &control).unwrap();
-        memory.write(64, &128_u64.to_ne_bytes()).unwrap();
+        let context = setup(&mut runtime, &memory);
+        control(&memory, 128, 0);
+        pointers(&memory, 64, &[128]);
         assert_eq!(
             runtime.handle(operation(2, "io_submit"), [context, 1, 64, 0, 0, 0]),
             LinuxResult::Value(1)
@@ -142,6 +155,99 @@ fn pread_roundtrip_isas() {
         assert_eq!(
             i64::from_ne_bytes(memory.0.lock().unwrap()[272..280].try_into().unwrap()),
             8
+        );
+    }
+}
+
+#[test]
+fn null_control_preserves_submitted_prefix_isas() {
+    for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
+        let (mut runtime, memory, _, _, _) = fixture(architecture);
+        let context = setup(&mut runtime, &memory);
+        control(&memory, 128, 0);
+        pointers(&memory, 64, &[128, 0]);
+
+        assert_eq!(
+            runtime.handle(operation(2, "io_submit"), [context, 2, 64, 0, 0, 0]),
+            LinuxResult::Value(1)
+        );
+        assert_eq!(
+            runtime.handle(operation(4, "io_getevents"), [context, 0, 2, 256, 0, 0]),
+            LinuxResult::Value(1)
+        );
+        assert_eq!(
+            u64::from_ne_bytes(memory.0.lock().unwrap()[264..272].try_into().unwrap()),
+            128
+        );
+    }
+}
+
+#[test]
+fn sole_null_control_faults_without_completion_isas() {
+    for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
+        let (mut runtime, memory, _, _, _) = fixture(architecture);
+        let context = setup(&mut runtime, &memory);
+        pointers(&memory, 64, &[0]);
+
+        assert_eq!(
+            runtime.handle(operation(2, "io_submit"), [context, 1, 64, 0, 0, 0]),
+            LinuxResult::Error(hl_linux::Errno::EFAULT)
+        );
+        assert_eq!(
+            runtime.handle(operation(4, "io_getevents"), [context, 0, 1, 256, 0, 0]),
+            LinuxResult::Value(0)
+        );
+    }
+}
+
+#[test]
+fn unsupported_control_preserves_submitted_prefix_isas() {
+    for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
+        let (mut runtime, memory, _, _, _) = fixture(architecture);
+        let context = setup(&mut runtime, &memory);
+        control(&memory, 128, 0);
+        control(&memory, 192, 6);
+        pointers(&memory, 64, &[128, 192]);
+
+        assert_eq!(
+            runtime.handle(operation(2, "io_submit"), [context, 2, 64, 0, 0, 0]),
+            LinuxResult::Value(1)
+        );
+        assert_eq!(
+            runtime.handle(operation(4, "io_getevents"), [context, 0, 2, 256, 0, 0]),
+            LinuxResult::Value(1)
+        );
+
+        let (mut runtime, memory, _, _, _) = fixture(architecture);
+        let context = setup(&mut runtime, &memory);
+        control(&memory, 192, 6);
+        pointers(&memory, 64, &[192]);
+        assert_eq!(
+            runtime.handle(operation(2, "io_submit"), [context, 1, 64, 0, 0, 0]),
+            LinuxResult::Error(hl_linux::Errno::EINVAL)
+        );
+        assert_eq!(
+            runtime.handle(operation(4, "io_getevents"), [context, 0, 1, 256, 0, 0]),
+            LinuxResult::Value(0)
+        );
+    }
+}
+
+#[test]
+fn pointer_array_fault_precedes_submission_isas() {
+    for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
+        let (mut runtime, memory, _, _, _) = fixture(architecture);
+        let context = setup(&mut runtime, &memory);
+        control(&memory, 128, 0);
+        pointers(&memory, 1016, &[128]);
+
+        assert_eq!(
+            runtime.handle(operation(2, "io_submit"), [context, 2, 1016, 0, 0, 0]),
+            LinuxResult::Error(hl_linux::Errno::EFAULT)
+        );
+        assert_eq!(
+            runtime.handle(operation(4, "io_getevents"), [context, 0, 1, 256, 0, 0]),
+            LinuxResult::Value(0)
         );
     }
 }

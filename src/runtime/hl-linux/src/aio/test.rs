@@ -45,6 +45,12 @@ fn decodes_control_array() {
 }
 
 #[test]
+fn decoded_control_array_rejects_null_pointer() {
+    let memory = Memory(Mutex::new(vec![0; 256]));
+    assert_eq!(Abi::new(&memory).controls(16, 1), Err(MarshalError::Fault));
+}
+
+#[test]
 fn validates_timeout() {
     let memory = Memory(Mutex::new(vec![0; 64]));
     memory.write(8, &2_i64.to_ne_bytes()).unwrap();

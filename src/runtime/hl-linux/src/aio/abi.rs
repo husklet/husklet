@@ -73,7 +73,13 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
     pub fn controls(&self, address: u64, count: u64) -> Result<Vec<ControlBlock>, MarshalError> {
         self.pointers(address, count)?
             .into_iter()
-            .map(|location| self.control(location))
+            .map(|location| {
+                if location == 0 {
+                    Err(MarshalError::Fault)
+                } else {
+                    self.control(location)
+                }
+            })
             .collect()
     }
 
@@ -87,9 +93,6 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
         let mut controls = Vec::with_capacity(count);
         for pointer in pointers.chunks_exact(8) {
             let location = u64::from_ne_bytes(pointer.try_into().unwrap_or([0; 8]));
-            if location == 0 {
-                return Err(MarshalError::Fault);
-            }
             controls.push(location);
         }
         Ok(controls)

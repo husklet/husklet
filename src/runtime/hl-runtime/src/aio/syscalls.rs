@@ -92,6 +92,9 @@ impl<M: GuestMemory> RuntimeAioSyscalls<M> {
     }
 
     fn submit_one(&self, abi: &AioAbi<'_, M>, id: ContextId, address: u64) -> Result<(), Errno> {
+        if address == 0 {
+            return Err(Errno::EFAULT);
+        }
         let control = abi.control(address).map_err(Self::marshal)?;
         if control.flags & !IOCB_FLAG_RESFD != 0 {
             return Err(Errno::EINVAL);
