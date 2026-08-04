@@ -442,6 +442,10 @@ pub extern "C" fn vkQueuePresentKHR(
     if pi.wait_semaphore_count != 0 && pi.p_wait_semaphores.is_null() {
         return VK_ERROR_INITIALIZATION_FAILED;
     }
+    let present_ids = match PresentIds::read(pi) {
+        Ok(ids) => ids,
+        Err(result) => return result,
+    };
     let swapchains =
         unsafe { std::slice::from_raw_parts(pi.p_swapchains, pi.swapchain_count as usize) };
     let indices =
@@ -470,6 +474,14 @@ pub extern "C" fn vkQueuePresentKHR(
             presenters,
             native_present,
         } = parts;
+        let identified: Vec<_> = swapchains
+            .iter()
+            .copied()
+            .zip(present_ids.iter())
+            .collect();
+        if let Err(error) = present::validate_present_ids(dev, &identified) {
+            return Status::from_error(&error);
+        }
         // Queue presentation waits are binary semaphore waits. The executor completes queue submits
         // synchronously, so their guest-side payload is authoritative here. Validate the whole set
         // before consuming any payload; successful consumption is the queue wait operation.
@@ -508,6 +520,12 @@ pub extern "C" fn vkQueuePresentKHR(
                     );
                 }
                 let result = Status::from_error(&e);
+                PresentResults::write(&mut per_swapchain_results, position, result);
+                res = result;
+                continue;
+            }
+            if let Err(error) = present::record_present_id(dev, sc, present_ids.at(position)) {
+                let result = Status::from_error(&error);
                 PresentResults::write(&mut per_swapchain_results, position, result);
                 res = result;
                 continue;
@@ -593,6 +611,131 @@ pub extern "C" fn vkQueuePresentKHR(
         }
         res
     })
+}
+
+/// Owned copy of the optional `VkPresentIdKHR` array. A null array is equivalent to all zeroes.
+#[derive(Debug)]
+struct PresentIds(Vec<u64>);
+
+impl PresentIds {
+    fn read(info: &VkPresentInfoKHR) -> Result<Self, VkResult> {
+        let mut values = vec![0; info.swapchain_count as usize];
+        let mut found = false;
+        let mut node = info.p_next as *const VkBaseInStructure;
+        while let Some(header) = unsafe { node.as_ref() } {
+            if header.s_type == VK_STRUCTURE_TYPE_PRESENT_ID_KHR {
+                if found {
+                    return Err(VK_ERROR_INITIALIZATION_FAILED);
+                }
+                found = true;
+                let ids = unsafe { &*(node as *const VkPresentIdKHR) };
+                if ids.swapchain_count != info.swapchain_count {
+                    return Err(VK_ERROR_INITIALIZATION_FAILED);
+                }
+                if !ids.p_present_ids.is_null() {
+                    values.copy_from_slice(unsafe {
+                        std::slice::from_raw_parts(
+                            ids.p_present_ids,
+                            ids.swapchain_count as usize,
+                        )
+                    });
+                }
+            }
+            node = header.p_next;
+        }
+        Ok(Self(values))
+    }
+
+    fn iter(&self) -> impl Iterator<Item = u64> + '_ {
+        self.0.iter().copied()
+    }
+
+    fn at(&self, position: usize) -> u64 {
+        self.0[position]
+    }
+}
+
+#[cfg(test)]
+mod present_id_tests {
+    use super::*;
+
+    #[repr(C)]
+    struct UnknownNode {
+        s_type: i32,
+        p_next: *const c_void,
+        poison: u64,
+    }
+
+    fn info(count: u32, next: *const c_void) -> VkPresentInfoKHR {
+        VkPresentInfoKHR {
+            s_type: 0,
+            p_next: next,
+            wait_semaphore_count: 0,
+            p_wait_semaphores: core::ptr::null(),
+            swapchain_count: count,
+            p_swapchains: core::ptr::null(),
+            p_image_indices: core::ptr::null(),
+            p_results: core::ptr::null_mut(),
+        }
+    }
+
+    #[test]
+    fn present_id_abi_matches_vulkan_lp64() {
+        assert_eq!(core::mem::size_of::<VkPresentIdKHR>(), 32);
+        assert_eq!(core::mem::offset_of!(VkPresentIdKHR, p_next), 8);
+        assert_eq!(core::mem::offset_of!(VkPresentIdKHR, swapchain_count), 16);
+        assert_eq!(core::mem::offset_of!(VkPresentIdKHR, p_present_ids), 24);
+    }
+
+    #[test]
+    fn present_id_parser_walks_chain_and_copies_values() {
+        let source = [7, 0];
+        let ids = VkPresentIdKHR {
+            s_type: VK_STRUCTURE_TYPE_PRESENT_ID_KHR,
+            p_next: core::ptr::null(),
+            swapchain_count: 2,
+            p_present_ids: source.as_ptr(),
+        };
+        let unknown = UnknownNode {
+            s_type: 0x7fff_0001,
+            p_next: &ids as *const _ as *const c_void,
+            poison: u64::MAX,
+        };
+        assert_eq!(
+            PresentIds::read(&info(2, &unknown as *const _ as *const c_void))
+                .unwrap().0,
+            vec![7, 0]
+        );
+    }
+
+    #[test]
+    fn present_id_parser_rejects_bad_count_and_duplicate_node() {
+        let tail = VkPresentIdKHR {
+            s_type: VK_STRUCTURE_TYPE_PRESENT_ID_KHR,
+            p_next: core::ptr::null(),
+            swapchain_count: 2,
+            p_present_ids: core::ptr::null(),
+        };
+        let duplicate = VkPresentIdKHR {
+            s_type: VK_STRUCTURE_TYPE_PRESENT_ID_KHR,
+            p_next: &tail as *const _ as *const c_void,
+            swapchain_count: 2,
+            p_present_ids: core::ptr::null(),
+        };
+        assert_eq!(PresentIds::read(&info(1, &tail as *const _ as *const c_void)).unwrap_err(), VK_ERROR_INITIALIZATION_FAILED);
+        assert_eq!(PresentIds::read(&info(2, &duplicate as *const _ as *const c_void)).unwrap_err(), VK_ERROR_INITIALIZATION_FAILED);
+    }
+
+    #[test]
+    fn null_present_id_array_means_all_zero() {
+        let ids = VkPresentIdKHR {
+            s_type: VK_STRUCTURE_TYPE_PRESENT_ID_KHR,
+            p_next: core::ptr::null(),
+            swapchain_count: 2,
+            p_present_ids: core::ptr::null(),
+        };
+        assert_eq!(PresentIds::read(&info(2, &ids as *const _ as *const c_void)).unwrap().0, vec![0, 0]);
+    }
 }
 
 struct PresentResults;
