@@ -1,7 +1,7 @@
 targets: [arm64, amd64]
 image: alpine:3.20
 execution: { native: true, diagnostics: true }
-artifact: { destination: /opt/husklet/soak }
+artifact: { destination: /opt/husklet/soak/atomic_churn }
 oracle:
   provider: qemu
   commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 }
@@ -15,101 +15,136 @@ cases:
     status: active
     compat: { class: soak }
     soak: &bounded { duration_seconds: 240, repetitions: 1, resources: { cpu: 1, memory_mib: 1024, processes: 64 } }
+    run: []
     expect: { exit: 0, stdout: golden/atomic_churn.out }
   - id: runtime/bitchurn
     status: active
     compat: { class: soak }
-    build: { source: bit_churn.c, output: bit_churn }
+    build: { source: bit_churn.c, output: bit_churn, flags: [-static-pie, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/soak/bit_churn }
     soak: *bounded
+    run: []
     expect: { exit: 0, stdout: golden/bit_churn.out }
   - id: runtime/callgraph
     status: active
     compat: { class: soak }
-    build: { source: call_graph.c, output: call_graph }
+    build: { source: call_graph.c, output: call_graph, flags: [-static-pie, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/soak/call_graph }
     soak: *bounded
+    run: []
     expect: { exit: 0, stdout: golden/call_graph.out }
   - id: runtime/divchurn
     status: active
     compat: { class: soak }
-    build: { source: div_churn.c, output: div_churn }
+    build: { source: div_churn.c, output: div_churn, flags: [-static-pie, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/soak/div_churn }
     soak: *bounded
+    run: []
     expect: { exit: 0, stdout: golden/div_churn.out }
   - id: runtime/forkpipe
     status: active
     compat: { class: soak }
-    build: { source: fork_pipe.c, output: fork_pipe }
+    build: { source: fork_pipe.c, output: fork_pipe, flags: [-static-pie, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/soak/fork_pipe }
     soak: *bounded
+    run: []
     expect: { exit: 0, stdout: golden/fork_pipe.out }
   - id: runtime/fpaccum
     status: active
     compat: { class: soak }
-    build: { source: fp_accum.c, output: fp_accum }
+    build: { source: fp_accum.c, output: fp_accum, flags: [-static-pie, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/soak/fp_accum }
     soak: *bounded
+    run: []
     expect: { exit: 0, stdout: golden/fp_accum.out }
   - id: runtime/longjmp
     status: active
     compat: { class: soak }
-    build: { source: long_jump.c, output: long_jump }
+    build: { source: long_jump.c, output: long_jump, flags: [-static-pie, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/soak/long_jump }
     soak: *bounded
+    run: []
     expect: { exit: 0, stdout: golden/long_jump.out }
   - id: runtime/manyblocks
     status: active
     compat: { class: soak }
-    build: { source: many_blocks.c, output: many_blocks }
+    build: { source: many_blocks.c, output: many_blocks, flags: [-static-pie, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/soak/many_blocks }
     soak: *bounded
+    run: []
     expect: { exit: 0, stdout: golden/many_blocks.out }
   - id: runtime/mmapchurn
     status: active
     compat: { class: soak }
-    build: { source: mmap_churn.c, output: mmap_churn }
+    build: { source: mmap_churn.c, output: mmap_churn, flags: [-static-pie, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/soak/mmap_churn }
     soak: *bounded
+    run: []
     expect: { exit: 0, stdout: golden/mmap_churn.out }
   - id: runtime/pagefault
     status: active
     compat: { class: soak }
-    build: { source: page_fault.c, output: page_fault }
+    build: { source: page_fault.c, output: page_fault, flags: [-static-pie, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/soak/page_fault }
     soak: *bounded
+    run: []
     expect: { exit: 0, stdout: golden/page_fault.out }
   - id: runtime/reallocchurn
-    status: active
+    status: !unsupported
+      reason: "retained macOS process-group-cleanup exclusion"
+      evidence: "tests/runtime/soak/ORACLE.md"
     compat: { class: soak }
-    build: { source: realloc_churn.c, output: realloc_churn }
+    build: { source: realloc_churn.c, output: realloc_churn, flags: [-static-pie, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/soak/realloc_churn }
     soak: *bounded
+    run: []
     expect: { exit: 0, stdout: golden/realloc_churn.out }
   - id: runtime/recursion
     status: active
     compat: { class: soak }
-    build: { source: recursion.c, output: recursion }
+    build: { source: recursion.c, output: recursion, flags: [-static-pie, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/soak/recursion }
     soak: *bounded
+    run: []
     expect: { exit: 0, stdout: golden/recursion.out }
   - id: runtime/signalload
     status: active
     compat: { class: soak }
-    build: { source: signal_load.c, output: signal_load }
+    build: { source: signal_load.c, output: signal_load, flags: [-static-pie, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/soak/signal_load }
     soak: *bounded
+    run: []
     expect: { exit: 0, stdout: golden/signal_load.out }
   - id: runtime/smc2
     status: active
     targets: [arm64]
     compat: { class: soak }
-    build: { source: smc2.c, output: smc2 }
+    build: { source: smc2.c, output: smc2, flags: [-static-pie, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/soak/smc2 }
     soak: *bounded
+    run: []
     expect: { exit: 0, stdout: golden/smc2.out }
   - id: runtime/threadpool
     status: active
     compat: { class: soak }
-    build: { source: thread_pool.c, output: thread_pool }
+    build: { source: thread_pool.c, output: thread_pool, flags: [-static-pie, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/soak/thread_pool }
     soak: *bounded
+    run: []
     expect: { exit: 0, stdout: golden/thread_pool.out }
   - id: runtime/vtable
     status: active
     compat: { class: soak }
-    build: { source: vtable.c, output: vtable }
+    build: { source: vtable.c, output: vtable, flags: [-static-pie, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/soak/vtable }
     soak: *bounded
+    run: []
     expect: { exit: 0, stdout: golden/vtable.out }
   - id: runtime/workingset
     status: active
     compat: { class: soak }
-    build: { source: working_set.c, output: working_set }
+    build: { source: working_set.c, output: working_set, flags: [-static-pie, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/soak/working_set }
     soak: *bounded
+    run: []
     expect: { exit: 0, stdout: golden/working_set.out }
