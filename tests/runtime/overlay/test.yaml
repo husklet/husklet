@@ -1,0 +1,17 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: []
+cases:
+  - id: runtime/overlay/coherence
+    status: !unsupported
+      reason: "The YAML runtime runner cannot yet construct separate overlay lower, upper, and work trees"
+      evidence: "tests/runtime/overlay/EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: coherence.c, output: coherence, flags: [-static, -O2, -std=c11] }
+    artifact: { destination: /opt/husklet/overlay/coherence }
+    run: []
+    expect: { exit: 0, stdout: golden/coherence.out }
