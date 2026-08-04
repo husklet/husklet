@@ -37,6 +37,7 @@ mod lifecycle;
 mod list;
 mod logs;
 mod mount;
+mod size;
 
 use host::HostSettings;
 pub(super) use kill::DockerSignal;
@@ -51,8 +52,9 @@ pub(super) use create::create;
 pub(super) use inspect::{changes, inspect, update};
 pub(super) use kill::kill;
 pub(super) use lifecycle::{remove, wait};
-pub(super) use list::{PruneQuery, list, prune, summaries};
+pub(super) use list::{PruneQuery, list, prune};
 pub(super) use logs::logs;
+pub(super) use size::summaries;
 
 #[hl_design::adapter]
 pub(super) async fn export(state: State<DockerState>, id: Path<String>) -> ApiResult<Response> {

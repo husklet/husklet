@@ -1,7 +1,4 @@
 use super::*;
-use futures_util::{StreamExt as _, stream::FuturesUnordered};
-
-const SIZE_PARALLELISM_MAX: usize = 8;
 
 #[derive(Default, Deserialize)]
 pub(in super::super) struct ListQuery {
@@ -53,57 +50,6 @@ impl ListQuery {
     }
 }
 
-pub(in super::super) async fn summaries(
-    containers: &hl_container::Containers,
-    values: Vec<hl_container::Container>,
-    include_size: bool,
-) -> ApiResult<Vec<Container>> {
-    if !include_size {
-        return Ok(values.into_iter().map(Container::from).collect());
-    }
-    let parallelism = std::thread::available_parallelism()
-        .map_or(1, std::num::NonZeroUsize::get)
-        .min(SIZE_PARALLELISM_MAX);
-    let capacity = values.len();
-    let mut values = values.into_iter().enumerate();
-    let mut pending = FuturesUnordered::new();
-    for (index, value) in values.by_ref().take(parallelism) {
-        pending.push(scan_summary(containers, index, value));
-    }
-    let mut summaries = Vec::with_capacity(capacity);
-    let mut error = None;
-    while let Some((index, value, usage)) = pending.next().await {
-        match usage {
-            Ok(usage) => {
-                let mut summary = Container::from(value);
-                summary.size(usage);
-                summaries.push((index, summary));
-            }
-            Err(failure) if error.is_none() => error = Some(ApiError::container(failure)),
-            Err(_) => {}
-        }
-        if error.is_none() {
-            if let Some((index, value)) = values.next() {
-                pending.push(scan_summary(containers, index, value));
-            }
-        }
-    }
-    if let Some(error) = error {
-        return Err(error);
-    }
-    summaries.sort_unstable_by_key(|(index, _)| *index);
-    Ok(summaries.into_iter().map(|(_, summary)| summary).collect())
-}
-
-async fn scan_summary(
-    containers: &hl_container::Containers,
-    index: usize,
-    value: hl_container::Container,
-) -> (usize, hl_container::Container, hl_container::Result<hl_container::FilesystemUsage>) {
-    let usage = containers.filesystem_usage(value.id.as_str()).await;
-    (index, value, usage)
-}
-
 #[derive(Clone, Debug)]
 pub(super) struct NetworkAttachment {
     pub(super) name: String,
@@ -119,10 +65,7 @@ pub(super) struct NetworkPlan {
 }
 
 impl NetworkPlan {
-    pub(super) fn from_request(
-        host: Option<&HostConfig>,
-        config: Option<&NetworkingConfig>,
-    ) -> ApiResult<Self> {
+    pub(super) fn from_request(host: Option<&HostConfig>, config: Option<&NetworkingConfig>) -> ApiResult<Self> {
         let mode = host.map_or("", |host| host.network_mode.as_str());
         let endpoints = config
             .map(|config| config.endpoints_config.0.clone())
@@ -147,18 +90,13 @@ impl NetworkPlan {
                 mode: hl_container::NetworkMode::Host,
             });
         }
-        if mode == "none"
-            && !endpoints.is_empty()
-            && (endpoints.len() > 1 || !endpoints.contains_key("none"))
-        {
+        if mode == "none" && !endpoints.is_empty() && (endpoints.len() > 1 || !endpoints.contains_key("none")) {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
                 "none NetworkMode only accepts the none endpoint",
             ));
         }
-        if !matches!(mode, "" | "default" | "bridge" | "none")
-            && !endpoints.is_empty()
-            && !endpoints.contains_key(mode)
+        if !matches!(mode, "" | "default" | "bridge" | "none") && !endpoints.is_empty() && !endpoints.contains_key(mode)
         {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
@@ -182,20 +120,13 @@ impl NetworkPlan {
                 "none" => Some(NetworkDriver::None),
                 _ => None,
             };
-            (
-                BTreeMap::from([(name.to_owned(), EndpointConfig::default())]),
-                built_in,
-            )
+            (BTreeMap::from([(name.to_owned(), EndpointConfig::default())]), built_in)
         } else {
             (endpoints, None)
         };
         let attachments = endpoints
             .into_iter()
-            .map(|(name, endpoint)| {
-                endpoint
-                    .spec()
-                    .map(|endpoint| NetworkAttachment { name, endpoint })
-            })
+            .map(|(name, endpoint)| endpoint.spec().map(|endpoint| NetworkAttachment { name, endpoint }))
             .collect::<ApiResult<Vec<_>>>()?;
         Ok(Self {
             attachments,
@@ -213,10 +144,7 @@ impl NetworkPlan {
         self.mode
     }
 
-    pub(super) async fn prepare(
-        mut self,
-        containers: &hl_container::Containers,
-    ) -> ApiResult<Self> {
+    pub(super) async fn prepare(mut self, containers: &hl_container::Containers) -> ApiResult<Self> {
         if self.mode == hl_container::NetworkMode::Host {
             return Ok(self);
         }
@@ -248,11 +176,7 @@ impl NetworkPlan {
         Ok(self)
     }
 
-    pub(super) async fn attach_created(
-        self,
-        containers: &hl_container::Containers,
-        container: &str,
-    ) -> ApiResult<()> {
+    pub(super) async fn attach_created(self, containers: &hl_container::Containers, container: &str) -> ApiResult<()> {
         if self.attachments.is_empty() {
             return Ok(());
         }
@@ -260,20 +184,14 @@ impl NetworkPlan {
             .attachments
             .into_iter()
             .map(|attachment| (attachment.name, attachment.endpoint));
-        if let Err(error) = containers
-            .networks()
-            .connect_many(container, requests)
-            .await
-        {
+        if let Err(error) = containers.networks().connect_many(container, requests).await {
             let error = ApiError::container(error);
             let cleanup = containers.remove_volumes(container, false).await;
             return match cleanup {
                 Ok(_) => Err(error),
                 Err(cleanup) => Err(ApiError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    format!(
-                        "network attachment failed ({error:?}); container rollback also failed ({cleanup})"
-                    ),
+                    format!("network attachment failed ({error:?}); container rollback also failed ({cleanup})"),
                 )),
             };
         }
@@ -296,23 +214,22 @@ impl NetworkPlan {
                 return Err(ApiError::new(
                     StatusCode::CONFLICT,
                     "default bridge name belongs to another network driver",
-                ))
+                ));
             }
             Err(ContainerError::NetworkNotFound(_)) => {}
             Err(error) => return Err(ApiError::container(error)),
         }
         for second in [31_u8, 30, 29, 28] {
             for third in 0_u8..=255 {
-                let subnet = Subnet::new(std::net::Ipv4Addr::new(172, second, third, 0), 24)
-                    .map_err(ApiError::container)?;
+                let subnet =
+                    Subnet::new(std::net::Ipv4Addr::new(172, second, third, 0), 24).map_err(ApiError::container)?;
                 match containers
                     .networks()
                     .create(NetworkSpec::bridge(DEFAULT_NETWORK, subnet))
                     .await
                 {
                     Ok(_) => return Ok(()),
-                    Err(ContainerError::InvalidNetwork(message))
-                        if message.contains("overlaps") => {}
+                    Err(ContainerError::InvalidNetwork(message)) if message.contains("overlaps") => {}
                     Err(ContainerError::NetworkConflict(_)) => {
                         return containers
                             .networks()
@@ -326,7 +243,7 @@ impl NetworkPlan {
                                 }
                             })
                             .map(|_| ())
-                            .map_err(ApiError::container)
+                            .map_err(ApiError::container);
                     }
                     Err(error) => return Err(ApiError::container(error)),
                 }
@@ -347,7 +264,9 @@ pub(in super::super) async fn list(
     let values = state.containers.list().await.map_err(ApiError::container)?;
     let include_size = query.include_size()?;
     let selected = query.select(values)?;
-    Ok(Json(summaries(&state.containers, selected, include_size).await?))
+    Ok(Json(
+        super::size::summaries(&state.containers, selected, include_size).await?,
+    ))
 }
 
 #[cfg(test)]
@@ -502,10 +421,7 @@ pub(in super::super) async fn prune(
         .await
         .map_err(ApiError::container)?;
     Ok(Json(ContainerPrune {
-        containers_deleted: removed
-            .into_iter()
-            .map(|container| container.id.to_string())
-            .collect(),
+        containers_deleted: removed.into_iter().map(|container| container.id.to_string()).collect(),
         space_reclaimed: 0,
     }))
 }
