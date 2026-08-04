@@ -110,7 +110,10 @@ pub(super) fn prepare_copy_destination(
 
 #[cfg(test)]
 mod tests {
-    use super::{SnapshotKey, SnapshotSource, TextureFormat};
+    use super::{
+        SamplerTextureKind, SnapshotKey, SnapshotSource, TextureDim, TextureFormat,
+    };
+    use crate::model::program::DrawCall;
     use std::sync::Arc;
 
     #[test]
@@ -170,6 +173,53 @@ mod tests {
             "two snapshots of the same immutable plane should share one upload"
         );
     }
+
+    #[test]
+    fn sampler_kind_selects_the_independent_target_binding() {
+        let mut draw = DrawCall::default();
+        let unit = 3;
+        draw.tex_units[unit] = 11;
+        draw.tex_generations[unit] = 12;
+        draw.tex_swizzles[unit] = [1, 2, 3, 4];
+        draw.cube_tex_units[unit] = 21;
+        draw.cube_tex_generations[unit] = 22;
+        draw.cube_tex_swizzles[unit] = [5, 6, 7, 8];
+        draw.array_tex_units[unit] = 31;
+        draw.array_tex_generations[unit] = 32;
+        draw.array_tex_swizzles[unit] = [9, 10, 11, 12];
+        draw.tex_3d_units[unit] = 41;
+        draw.tex_3d_generations[unit] = 42;
+        draw.tex_3d_swizzles[unit] = [13, 14, 15, 16];
+
+        assert_eq!(
+            SamplerTextureKind::from_glsl(Some("sampler2DArray")).binding(&draw, unit),
+            (31, 32, [9, 10, 11, 12])
+        );
+        assert_eq!(
+            SamplerTextureKind::from_glsl(Some("isampler3D")).binding(&draw, unit),
+            (41, 42, [13, 14, 15, 16])
+        );
+        assert_eq!(
+            SamplerTextureKind::from_glsl(Some("usamplerCube")).binding(&draw, unit),
+            (21, 22, [5, 6, 7, 8])
+        );
+        assert_eq!(
+            SamplerTextureKind::from_glsl(Some("sampler2D")).binding(&draw, unit),
+            (11, 12, [1, 2, 3, 4])
+        );
+    }
+
+    #[test]
+    fn every_array_and_3d_sampler_variant_uses_the_correct_ir_dimension() {
+        for name in ["sampler2DArray", "isampler2DArray", "usampler2DArray"] {
+            assert_eq!(SamplerTextureKind::from_glsl(Some(name)), SamplerTextureKind::Array);
+            assert_eq!(SamplerTextureKind::from_glsl(Some(name)).texture_dim(), TextureDim::D2);
+        }
+        for name in ["sampler3D", "isampler3D", "usampler3D"] {
+            assert_eq!(SamplerTextureKind::from_glsl(Some(name)), SamplerTextureKind::D3);
+            assert_eq!(SamplerTextureKind::from_glsl(Some(name)).texture_dim(), TextureDim::D3);
+        }
+    }
 }
 
 pub(super) struct TexBind {
@@ -196,6 +246,59 @@ pub(super) struct TexBind {
     pub(super) swizzle: [u32; 4],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SamplerTextureKind {
+    D2,
+    Cube,
+    Array,
+    D3,
+}
+
+impl SamplerTextureKind {
+    fn from_glsl(name: Option<&str>) -> Self {
+        match name {
+            Some("samplerCube" | "isamplerCube" | "usamplerCube") => Self::Cube,
+            Some("sampler2DArray" | "isampler2DArray" | "usampler2DArray") => Self::Array,
+            Some("sampler3D" | "isampler3D" | "usampler3D") => Self::D3,
+            _ => Self::D2,
+        }
+    }
+
+    fn texture_dim(self) -> TextureDim {
+        match self {
+            Self::Cube => TextureDim::Cube,
+            Self::D3 => TextureDim::D3,
+            // Neutral IR represents a 2D array as D2 with depth > 1.
+            Self::D2 | Self::Array => TextureDim::D2,
+        }
+    }
+
+    fn binding(self, draw: &DrawCall, unit: usize) -> (u64, u64, [u32; 4]) {
+        match self {
+            Self::D2 => (
+                u64::from(draw.tex_units[unit]),
+                draw.tex_generations[unit],
+                draw.tex_swizzles[unit],
+            ),
+            Self::Cube => (
+                draw.cube_tex_units[unit],
+                draw.cube_tex_generations[unit],
+                draw.cube_tex_swizzles[unit],
+            ),
+            Self::Array => (
+                draw.array_tex_units[unit],
+                draw.array_tex_generations[unit],
+                draw.array_tex_swizzles[unit],
+            ),
+            Self::D3 => (
+                draw.tex_3d_units[unit],
+                draw.tex_3d_generations[unit],
+                draw.tex_3d_swizzles[unit],
+            ),
+        }
+    }
+}
+
 pub(super) fn lower_textures(
     ctx: &mut GlContext,
     d: &DrawCall,
@@ -208,11 +311,11 @@ pub(super) fn lower_textures(
     let mut texbinds: Vec<TexBind> = Vec::new();
     let mut sampler_base = 0usize;
     for (declaration, name) in prog.samp_names.iter().enumerate() {
-        let texture_dim = match prog.samp_types.get(declaration).map(String::as_str) {
-            Some("samplerCube" | "isamplerCube" | "usamplerCube") => TextureDim::Cube,
-            Some("sampler3D" | "isampler3D" | "usampler3D") => TextureDim::D3,
-            _ => TextureDim::D2,
-        };
+        let sampler_type = prog.samp_types.get(declaration).map(String::as_str);
+        let sampler_kind = SamplerTextureKind::from_glsl(sampler_type);
+        // The neutral IR spells a 2D array as D2 with depth > 1. The executor derives a D2Array view
+        // from that pair, while D3 remains a distinct physical texture dimension.
+        let texture_dim = sampler_kind.texture_dim();
         let elements = prog
             .samp_arrays
             .get(declaration)
@@ -230,20 +333,7 @@ pub(super) fn lower_textures(
                 .copied()
                 .filter(|unit| (0..MAX_TEXTURE_UNITS as i32).contains(unit))
                 .unwrap_or(0) as usize;
-            let (gl_tex, texture_generation, texture_swizzle) =
-                if texture_dim == TextureDim::Cube {
-                    (
-                        d.cube_tex_units[unit],
-                        d.cube_tex_generations[unit],
-                        d.cube_tex_swizzles[unit],
-                    )
-                } else {
-                    (
-                        u64::from(d.tex_units[unit]),
-                        d.tex_generations[unit],
-                        d.tex_swizzles[unit],
-                    )
-                };
+            let (gl_tex, texture_generation, texture_swizzle) = sampler_kind.binding(d, unit);
             let snapshot = d
                 .textures
                 .iter()
