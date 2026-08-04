@@ -286,7 +286,7 @@ mod tests {
         assert_eq!(credentials.capabilities.permitted, CapabilitySets::CONTAINER);
         assert!(!credentials.may_setid());
 
-        credentials.setid_permitted = true;
+        credentials.restore_setid_authority(hl_task::SetIdAuthority::Permitted);
         credentials.raise_setid();
         assert!(credentials.may_setid());
     }

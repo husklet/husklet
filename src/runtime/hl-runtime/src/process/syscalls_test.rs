@@ -345,8 +345,7 @@ fn credential_drop_isas() {
         );
         assert_eq!(credentials.capabilities.effective, hl_task::CapabilitySets::CONTAINER);
         assert_eq!(credentials.capabilities.permitted, hl_task::CapabilitySets::CONTAINER);
-        assert!(!credentials.setid_permitted);
-        assert!(!credentials.setid_effective);
+        assert_eq!(credentials.setid_authority(), hl_task::SetIdAuthority::None);
     }
 }
 
