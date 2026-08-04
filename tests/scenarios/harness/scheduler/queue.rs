@@ -92,10 +92,6 @@ pub(super) const TASKS: &[Task] = &[
         command: "network-contracts",
     },
     Task {
-        category: "observe",
-        command: "observe",
-    },
-    Task {
         category: "permissions",
         command: "permissions",
     },

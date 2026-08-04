@@ -33,7 +33,7 @@ pub(crate) use harness::{analyze, contract, fixture, manifest, report, runner, s
 )]
 pub(crate) use groups::{
     coherence, copy, databases, distros, execcmd, filesystem, languages, lifecycle,
-    netcontainer, network, observe, permissions, process, runflags, terminal, utilities, volume,
+    netcontainer, network, permissions, process, runflags, terminal, utilities, volume,
     web, weird,
 };
 
@@ -105,7 +105,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         "languages" => scenario::languages().await?,
         "netcontainer" => scenario::netcontainer().await?,
         "network-contracts" => scenario::network().await?,
-        "observe" => scenario::observe().await?,
         "filesystem" => scenario::filesystem().await?,
         "lifecycle" => scenario::lifecycle().await?,
         "permissions" => scenario::permissions().await?,

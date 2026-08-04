@@ -6,7 +6,6 @@ pub(crate) mod dockernet;
 pub(crate) mod dockervol;
 pub(crate) mod netinstall;
 pub(crate) mod networking;
-pub(crate) mod observe;
 pub(crate) mod toolchains;
 pub(crate) mod volume;
 
@@ -19,7 +18,6 @@ pub(crate) fn build() -> crate::contract::Registry {
     registry.add(dockernet::group());
     registry.add(networking::group());
     registry.add(netinstall::group());
-    registry.add(observe::group());
     registry.add(toolchains::group());
     registry.add(volume::group());
     registry.add(crate::distros::group());

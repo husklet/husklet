@@ -41,6 +41,7 @@ async fn alpine_runtime_contracts() -> Result<(), Error> {
     let containers = containers_for(work.path()).await?;
 
     api::named_volume::run(work.path(), &rootfs).await?;
+    api::observability::run(&containers, &rootfs, work.path()).await?;
     api::headless_runtime::run(&containers, &rootfs).await?;
     api::resources::run(&containers, &rootfs).await?;
     api::network_bridge::run(&containers, &rootfs).await?;
