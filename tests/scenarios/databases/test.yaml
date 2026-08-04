@@ -622,3 +622,93 @@ cases:
     stdout_contains:
     - golden/valkey_ping_1.txt
     - golden/valkey_ping_2.txt
+- id: databases/mongo-agg-7
+  image: mongo:7
+  class: long
+  timeout: 240
+  resources: [host_port]
+  readiness:
+    startup: mongod --bind_ip 127.0.0.1 --fork --logpath /tmp/mongo.log
+    probe: mongosh 'mongodb://%2Ftmp%2Fmongodb-27017.sock' --quiet --eval 'db.runCommand({ping:1}).ok'
+    attempts: 3
+    delay_ms: 1000
+    logs: [/tmp/mongo.log]
+  actions:
+  - shell:
+      script: mongosh 'mongodb://%2Ftmp%2Fmongodb-27017.sock' --quiet --eval 'for(let i=1;i<=1000;i++) db.t.insertOne({n:i}); print(db.t.aggregate([{$group:{_id:null,s:{$sum:"$n"}}}]).toArray()[0].s)'
+  expect: { stdout_contains: golden/mariadb_agg_11.txt }
+- id: databases/mongo-count-7
+  image: mongo:7
+  class: long
+  timeout: 240
+  resources: [host_port]
+  readiness:
+    startup: mongod --bind_ip 127.0.0.1 --fork --logpath /tmp/mongo.log
+    probe: mongosh 'mongodb://%2Ftmp%2Fmongodb-27017.sock' --quiet --eval 'db.runCommand({ping:1}).ok'
+    attempts: 3
+    delay_ms: 1000
+    logs: [/tmp/mongo.log]
+  actions:
+  - shell:
+      script: mongosh 'mongodb://%2Ftmp%2Fmongodb-27017.sock' --quiet --eval 'for(let i=1;i<=1000;i++) db.t.insertOne({n:i}); print(db.t.countDocuments({}))'
+  expect: { stdout_contains: golden/postgres_count_series.txt }
+- id: databases/mongo-filter-count-7
+  image: mongo:7
+  class: long
+  timeout: 240
+  resources: [host_port]
+  readiness:
+    startup: mongod --bind_ip 127.0.0.1 --fork --logpath /tmp/mongo.log
+    probe: mongosh 'mongodb://%2Ftmp%2Fmongodb-27017.sock' --quiet --eval 'db.runCommand({ping:1}).ok'
+    attempts: 3
+    delay_ms: 1000
+    logs: [/tmp/mongo.log]
+  actions:
+  - shell:
+      script: mongosh 'mongodb://%2Ftmp%2Fmongodb-27017.sock' --quiet --eval 'for(let i=1;i<=1000;i++) db.t.insertOne({n:i}); print(db.t.countDocuments({n:{$lte:500}}))'
+  expect: { stdout_contains: golden/mongo_filter_count_7.txt }
+- id: databases/mongo-parallel-readiness-7
+  image: mongo:7
+  class: long
+  timeout: 240
+  resources: [host_port]
+  readiness:
+    startup: mongod --bind_ip 127.0.0.1 --fork --logpath /tmp/mongo.log
+    probe: test -S /tmp/mongodb-27017.sock
+    attempts: 1
+    delay_ms: 0
+    logs: [/tmp/mongo.log]
+  actions:
+  - shell:
+      script: |
+        rm -f /tmp/mongo-ping.* /tmp/mongo-ready
+        for client in 1 2 3; do
+          (
+            mongosh 'mongodb://%2Ftmp%2Fmongodb-27017.sock' --quiet \
+              --eval 'print(db.runCommand({ping:1}).ok)' \
+              >"/tmp/mongo-ping.$client" 2>&1 &&
+            echo ready >> /tmp/mongo-ready
+          ) &
+        done
+        wait
+        test "$(wc -l < /tmp/mongo-ready)" -eq 3
+        grep -Fx 1 /tmp/mongo-ping.1
+        grep -Fx 1 /tmp/mongo-ping.2
+        grep -Fx 1 /tmp/mongo-ping.3
+        echo MONGO_PARALLEL_READY
+  expect: { stdout_contains: golden/mongo_parallel_readiness_7.txt }
+- id: databases/mongo-version-8
+  image: mongo:8
+  class: long
+  timeout: 240
+  resources: [host_port]
+  readiness:
+    startup: mongod --bind_ip 127.0.0.1 --fork --logpath /tmp/mongo.log
+    probe: mongosh 'mongodb://%2Ftmp%2Fmongodb-27017.sock' --quiet --eval 'db.runCommand({ping:1}).ok'
+    attempts: 3
+    delay_ms: 1000
+    logs: [/tmp/mongo.log]
+  actions:
+  - shell:
+      script: mongosh 'mongodb://%2Ftmp%2Fmongodb-27017.sock' --quiet --eval 'print(db.version())'
+  expect: { stdout_contains: golden/mongo_version_8.txt }

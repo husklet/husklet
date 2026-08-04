@@ -1,16 +1,15 @@
 # Database scenario oracle
 
-This directory owns the 39 database contracts from
+This directory owns all 44 database contracts formerly declared in
 `tests/scenarios/fixtures/databases-core.yaml` that the repository scenario
 executor can run directly. It preserves each stable ID, exact OCI image,
 quick/long class, both default target ISAs, timeout, expected exit, command,
-and output substring. The 34 server cases retain `host_port`; the five
-version or in-memory SQLite cases retain no explicit resource. Expected
-substring bytes are stored without a trailing line feed under `golden/`.
+and output substring. The 39 server cases retain `host_port`; the five version
+or in-memory SQLite cases retain no explicit resource. Existing expected
+substring files remain byte-identical; the final Mongo values include their
+ordinary line terminator because each command emits a complete output line.
 
-Exactly five of the 44 legacy cases are not copied into `test.yaml` because
-they require the typed readiness lifecycle already represented by the schema
-but still rejected by `validate_supported` in the executor:
+The final five Mongo cases use the typed readiness lifecycle:
 
 - `databases/mongo-agg-7`: startup `mongod --bind_ip 127.0.0.1 --fork --logpath /tmp/mongo.log`, probe `mongosh 'mongodb://%2Ftmp%2Fmongodb-27017.sock' --quiet --eval 'db.runCommand({ping:1}).ok'`, attempts 3, delay 1000 ms, logs `/tmp/mongo.log`.
 - `databases/mongo-count-7`: startup `mongod --bind_ip 127.0.0.1 --fork --logpath /tmp/mongo.log`, probe `mongosh 'mongodb://%2Ftmp%2Fmongodb-27017.sock' --quiet --eval 'db.runCommand({ping:1}).ok'`, attempts 3, delay 1000 ms, logs `/tmp/mongo.log`.
@@ -18,10 +17,10 @@ but still rejected by `validate_supported` in the executor:
 - `databases/mongo-filter-count-7`: startup `mongod --bind_ip 127.0.0.1 --fork --logpath /tmp/mongo.log`, probe `mongosh 'mongodb://%2Ftmp%2Fmongodb-27017.sock' --quiet --eval 'db.runCommand({ping:1}).ok'`, attempts 3, delay 1000 ms, logs `/tmp/mongo.log`.
 - `databases/mongo-version-8`: startup `mongod --bind_ip 127.0.0.1 --fork --logpath /tmp/mongo.log`, probe `mongosh 'mongodb://%2Ftmp%2Fmongodb-27017.sock' --quiet --eval 'db.runCommand({ping:1}).ok'`, attempts 3, delay 1000 ms, logs `/tmp/mongo.log`.
 
-Omitting these cases is an explicit executor-capability gap, not a passing or
-unsupported verdict. Their startup, probe, retry/delay, diagnostic-log, image,
-command, and output contracts remain authoritative in the legacy fixture until
-the ordered readiness adapter lands.
+The repository executor now runs startup once, probes in declared order with
+the exact retry delay, and includes the requested guest log if readiness never
+succeeds. Their stable IDs, images, commands, output values, and readiness
+metadata are therefore folder-owned rather than retained as a legacy gap.
 
 The two SQLite cases formerly embedded Python programs in shell heredocs.
 Those exact payload bytes now live in `source/sqlite_join.py` and
