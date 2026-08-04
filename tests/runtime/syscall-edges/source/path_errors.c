@@ -1,4 +1,4 @@
-// syscall-compat regression: pathname resolution errno contract. A single component > NAME_MAX -> 
+// syscall-compat regression: pathname resolution errno contract. A single component > NAME_MAX ->
 // ENAMETOOLONG; stat of a missing path -> ENOENT; readlink of a non-symlink ->
 // EINVAL; mkdir of an existing dir -> EEXIST; rmdir of a non-empty dir -> ENOTEMPTY. Arch-neutral.
 #define _GNU_SOURCE

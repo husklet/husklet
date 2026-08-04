@@ -29,7 +29,6 @@ ipc.rs	tests/compat/ipc/manifest.tsv	engine	covered	IPC cases are C guests with 
 isolation.rs	tests/compat/isolation/manifest.tsv	engine	covered	container isolation cases are C guests with goldens
 libc.rs	tests/compat/libc/manifest.tsv	engine	covered	libc behavior cases are C guests with goldens
 linuxsys.rs	tests/compat/syscall/manifest.tsv	engine	covered	Linux syscall behavior is registered as C guests with goldens
-ltpgaps.rs	tests/compat/syscall_edges/manifest.tsv	engine	covered	LTP-derived edge cases are C guests with checked expectations
 memory.rs	tests/compat/memory/manifest.tsv	engine	covered	memory behavior cases are C guests with goldens
 memx.rs	tests/compat/memory/manifest.tsv	engine	covered	extended mapping cases are C guests with goldens
 mod.rs	tests/compat/guest_inventory.tsv	engine	covered	registry-only module; every origin artifact is accounted for by the guest inventory
@@ -42,6 +41,5 @@ procfs.rs	tests/compat/procfs/manifest.tsv	engine	covered	procfs cases are C gue
 scratchx.rs	tests/compat/process/manifest.tsv	engine	covered	scratch and static-exec cases are registered as C guests
 signalx.rs	tests/compat/signals/manifest.tsv	engine	covered	extended signal cases are C guests with goldens
 soak.rs	tests/compat/core/workload/manifest.tsv	engine	covered	long-running translator and runtime cases are C guests with deterministic goldens
-syscallcompat.rs	tests/compat/syscall_edges/manifest.tsv	engine	covered	syscall validation and errno cases are C guests with goldens
 threads.rs	tests/compat/threads/manifest.tsv	engine	covered	thread lifecycle and synchronization cases are C guests with goldens
 timex.rs	tests/compat/time/manifest.tsv	engine	covered	time and clock cases are C guests with goldens

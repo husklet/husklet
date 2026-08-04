@@ -1,0 +1,395 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: []
+cases:
+  - id: runtime/syscall-edges/sc-flag-einval
+    status: !broken
+      reason: "Direct QEMU oracle output diverges from the preserved Linux contract on at least one production guest ISA"
+      evidence: "tests/runtime/syscall-edges/QEMU_EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/flag_einval.c, output: flag-einval, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-flag-einval }
+    run: []
+    expect: { exit: 0, stdout: golden/flag_einval.out }
+  - id: runtime/syscall-edges/sc-getresid-efault
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/getresid_efault.c, output: getresid-efault, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-getresid-efault }
+    run: []
+    expect: { exit: 0, stdout: golden/getresid_efault.out }
+  - id: runtime/syscall-edges/sc-mem-validate
+    status: !broken
+      reason: "Direct QEMU oracle output diverges from the preserved Linux contract on at least one production guest ISA"
+      evidence: "tests/runtime/syscall-edges/QEMU_EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/mem_validate.c, output: mem-validate, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-mem-validate }
+    run: []
+    expect: { exit: 0, stdout: golden/mem_validate.out }
+  - id: runtime/syscall-edges/sc-sched-rt
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sched_rt.c, output: sched-rt, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-sched-rt }
+    run: []
+    expect: { exit: 0, stdout: golden/sched_rt.out }
+  - id: runtime/syscall-edges/sc-mlock-rlimit
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/mlock_rlimit.c, output: mlock-rlimit, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-mlock-rlimit }
+    run: []
+    expect: { exit: 0, stdout: golden/mlock_rlimit.out }
+  - id: runtime/syscall-edges/sc-inotify-rm
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/inotify_rm.c, output: inotify-rm, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-inotify-rm }
+    run: []
+    expect: { exit: 0, stdout: golden/inotify_rm.out }
+  - id: runtime/syscall-edges/sc-sigkill-unmaskable
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sigkill_unmaskable.c, output: sigkill-unmaskable, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-sigkill-unmaskable }
+    run: []
+    expect: { exit: 0, stdout: golden/sigkill_unmaskable.out }
+  - id: runtime/syscall-edges/sc-eventfd-overflow
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/eventfd_overflow.c, output: eventfd-overflow, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-eventfd-overflow }
+    run: []
+    expect: { exit: 0, stdout: golden/eventfd_overflow.out }
+  - id: runtime/syscall-edges/sc-timerfd-first-interval
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/timerfd_interval.c, output: timerfd-first-interval, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-timerfd-first-interval }
+    run: []
+    expect: { exit: 0, stdout: golden/timerfd_interval.out }
+  - id: runtime/syscall-edges/sc-shortread-timerfd
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/shortread_timerfd.c, output: shortread-timerfd, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-shortread-timerfd }
+    run: []
+    expect: { exit: 0, stdout: golden/shortread_timerfd.out }
+  - id: runtime/syscall-edges/sc-shortread-signalfd
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/shortread_signalfd.c, output: shortread-signalfd, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-shortread-signalfd }
+    run: []
+    expect: { exit: 0, stdout: golden/shortread_signalfd.out }
+  - id: runtime/syscall-edges/sc-shortread-inotify
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/shortread_inotify.c, output: shortread-inotify, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-shortread-inotify }
+    run: []
+    expect: { exit: 0, stdout: golden/shortread_inotify.out }
+  - id: runtime/syscall-edges/sc-eventfd-nullread
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/eventfd_nullread.c, output: eventfd-nullread, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-eventfd-nullread }
+    run: []
+    expect: { exit: 0, stdout: golden/eventfd_nullread.out }
+  - id: runtime/syscall-edges/sc-badtimeout
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/badtimeout.c, output: badtimeout, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-badtimeout }
+    run: []
+    expect: { exit: 0, stdout: golden/badtimeout.out }
+  - id: runtime/syscall-edges/sc-prlimit-invalid
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/prlimit_invalid.c, output: prlimit-invalid, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-prlimit-invalid }
+    run: []
+    expect: { exit: 0, stdout: golden/prlimit_invalid.out }
+  - id: runtime/syscall-edges/sc-sigaltstack-validate
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sigaltstack_validate.c, output: sigaltstack-validate, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-sigaltstack-validate }
+    run: []
+    expect: { exit: 0, stdout: golden/sigaltstack_validate.out }
+  - id: runtime/syscall-edges/sc-sigprocmask-validate
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sigprocmask_validate.c, output: sigprocmask-validate, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-sigprocmask-validate }
+    run: []
+    expect: { exit: 0, stdout: golden/sigprocmask_validate.out }
+  - id: runtime/syscall-edges/sc-kill-zero-group
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/kill_group.c, output: kill-zero-group, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-kill-zero-group }
+    run: []
+    expect: { exit: 0, stdout: golden/kill_group.out }
+  - id: runtime/syscall-edges/sc-sentry-cloexec-exec
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sentry_exec.c, output: sentry-cloexec-exec, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-sentry-cloexec-exec }
+    run: []
+    environment: { HL_UNTRUSTED: "1" }
+    expect: { exit: 0, stdout: golden/sentry_exec.out }
+  - id: runtime/syscall-edges/sc-fcntl-flags
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fcntl_flags.c, output: fcntl-flags, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-fcntl-flags }
+    run: []
+    expect: { exit: 0, stdout: golden/fcntl_flags.out }
+  - id: runtime/syscall-edges/sc-fcntl-lock
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fcntl_lock.c, output: fcntl-lock, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-fcntl-lock }
+    run: []
+    expect: { exit: 0, stdout: golden/fcntl_lock.out }
+  - id: runtime/syscall-edges/sc-dup-edges
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dup_edges.c, output: dup-edges, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-dup-edges }
+    run: []
+    expect: { exit: 0, stdout: golden/dup_edges.out }
+  - id: runtime/syscall-edges/sc-open-flags
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/open_flags.c, output: open-flags, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-open-flags }
+    run: []
+    expect: { exit: 0, stdout: golden/open_flags.out }
+  - id: runtime/syscall-edges/sc-path-errors
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/path_errors.c, output: path-errors, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-path-errors }
+    run: []
+    expect: { exit: 0, stdout: golden/path_errors.out }
+  - id: runtime/syscall-edges/sc-getcwd-erange
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/getcwd_erange.c, output: getcwd-erange, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-getcwd-erange }
+    run: []
+    expect: { exit: 0, stdout: golden/getcwd_erange.out }
+  - id: runtime/syscall-edges/sc-pipe-eventfd
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/pipe_eventfd.c, output: pipe-eventfd, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-pipe-eventfd }
+    run: []
+    expect: { exit: 0, stdout: golden/pipe_eventfd.out }
+  - id: runtime/syscall-edges/sc-ioctl-edges
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/ioctl_edges.c, output: ioctl-edges, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-ioctl-edges }
+    run: []
+    expect: { exit: 0, stdout: golden/ioctl_edges.out }
+  - id: runtime/syscall-edges/sc-iov-edges
+    status: !broken
+      reason: "Direct QEMU oracle output diverges from the preserved Linux contract on at least one production guest ISA"
+      evidence: "tests/runtime/syscall-edges/QEMU_EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/iov_edges.c, output: iov-edges, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-iov-edges }
+    run: []
+    expect: { exit: 0, stdout: golden/iov_edges.out }
+  - id: runtime/syscall-edges/sc-rlimit-nofile
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/rlimit_nofile.c, output: rlimit-nofile, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-rlimit-nofile }
+    run: []
+    expect: { exit: 0, stdout: golden/rlimit_nofile.out }
+  - id: runtime/syscall-edges/sc-efault-syscalls
+    status: !unsupported
+      reason: "Legacy contract requires PROT_NONE page-straddle enforcement unavailable in the retained macOS oracle"
+      evidence: "tests/runtime/syscall-edges/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/efault_syscalls.c, output: efault-syscalls, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-efault-syscalls }
+    run: []
+    expect: { exit: 0, stdout: golden/efault_syscalls.out }
+  - id: runtime/syscall-edges/sc-seek-espipe
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/seek_espipe.c, output: seek-espipe, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-seek-espipe }
+    run: []
+    expect: { exit: 0, stdout: golden/seek_espipe.out }
+  - id: runtime/syscall-edges/sc-kill-errno
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/kill_errno.c, output: kill-errno, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-kill-errno }
+    run: []
+    expect: { exit: 0, stdout: golden/kill_errno.out }
+  - id: runtime/syscall-edges/sc-sigaction-einval
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sigaction_einval.c, output: sigaction-einval, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-sigaction-einval }
+    run: []
+    expect: { exit: 0, stdout: golden/sigaction_einval.out }
+  - id: runtime/syscall-edges/sc-procfd-exec
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sentry_exec.c, output: procfd-exec, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-procfd-exec }
+    run: []
+    expect: { exit: 0, stdout: golden/sentry_exec.out }
+  - id: runtime/syscall-edges/sc-sigsetsize-validate
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sigsetsize_validate.c, output: sigsetsize-validate, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-sigsetsize-validate }
+    run: []
+    expect: { exit: 0, stdout: golden/sigsetsize_validate.out }
+  - id: runtime/syscall-edges/sc-copyout-efault
+    status: !broken
+      reason: "Direct QEMU oracle output diverges from the preserved Linux contract on at least one production guest ISA"
+      evidence: "tests/runtime/syscall-edges/QEMU_EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/copyout_efault.c, output: copyout-efault, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-copyout-efault }
+    run: []
+    expect: { exit: 0, stdout: golden/copyout_efault.out }
+  - id: runtime/syscall-edges/sc-splice-edges
+    status: !broken
+      reason: "Direct QEMU oracle output diverges from the preserved Linux contract on at least one production guest ISA"
+      evidence: "tests/runtime/syscall-edges/QEMU_EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/splice_edges.c, output: splice-edges, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-splice-edges }
+    run: []
+    expect: { exit: 0, stdout: golden/splice_edges.out }
+  - id: runtime/syscall-edges/sc-append-pwrite
+    status: !broken
+      reason: "Direct QEMU oracle output diverges from the preserved Linux contract on at least one production guest ISA"
+      evidence: "tests/runtime/syscall-edges/QEMU_EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/append_pwrite.c, output: append-pwrite, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-append-pwrite }
+    run: []
+    expect: { exit: 0, stdout: golden/append_pwrite.out }
+  - id: runtime/syscall-edges/sc-dup3-edges
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dup3_edges.c, output: dup3-edges, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-dup3-edges }
+    run: []
+    expect: { exit: 0, stdout: golden/dup3_edges.out }
+  - id: runtime/syscall-edges/sc-iov-limits
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/iovmax_edges.c, output: iov-limits, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-iov-limits }
+    run: []
+    expect: { exit: 0, stdout: golden/iovmax_edges.out }
+  - id: runtime/syscall-edges/sc-epoll-semantics
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/epoll_semantics.c, output: epoll-semantics, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-epoll-semantics }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_semantics.out }
+  - id: runtime/syscall-edges/sc-eventfd-semaphore
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/eventfd_semaphore.c, output: eventfd-semaphore, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-eventfd-semaphore }
+    run: []
+    expect: { exit: 0, stdout: golden/eventfd_semaphore.out }
+  - id: runtime/syscall-edges/sc-inotify-state
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/inotify_state.c, output: inotify-state, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-inotify-state }
+    run: []
+    expect: { exit: 0, stdout: golden/inotify_state.out }
+  - id: runtime/syscall-edges/sc-timerfd-einval
+    status: !broken
+      reason: "Direct QEMU oracle output diverges from the preserved Linux contract on at least one production guest ISA"
+      evidence: "tests/runtime/syscall-edges/QEMU_EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/timerfd_einval.c, output: timerfd-einval, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-timerfd-einval }
+    run: []
+    expect: { exit: 0, stdout: golden/timerfd_einval.out }
+  - id: runtime/syscall-edges/se-sched-priority
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sched_priority.c, output: sched-priority, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-sched-priority }
+    run: []
+    expect: { exit: 0, stdout: golden/sched_priority.out }
+  - id: runtime/syscall-edges/se-memfd-validate
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/memfd_validate.c, output: memfd-validate, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-memfd-validate }
+    run: []
+    expect: { exit: 0, stdout: golden/memfd_validate.out }
+  - id: runtime/syscall-edges/se-clockid-validate
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/clockid_validate.c, output: clockid-validate, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-clockid-validate }
+    run: []
+    expect: { exit: 0, stdout: golden/clockid_validate.out }
+  - id: runtime/syscall-edges/se-waitid-validate
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/waitid_validate.c, output: waitid-validate, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-waitid-validate }
+    run: []
+    expect: { exit: 0, stdout: golden/waitid_validate.out }
+  - id: runtime/syscall-edges/se-priority-contract
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/priority_contract.c, output: priority-contract, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-priority-contract }
+    run: []
+    expect: { exit: 0, stdout: golden/priority_contract.out }
+  - id: runtime/syscall-edges/sc-read-badfd-order
+    status: !broken
+      reason: "Direct QEMU oracle output diverges from the preserved Linux contract on at least one production guest ISA"
+      evidence: "tests/runtime/syscall-edges/QEMU_EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/read_badfd.c, output: read-badfd-order, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-read-badfd-order }
+    run: []
+    expect: { exit: 0, stdout: golden/read_badfd.out }
+  - id: runtime/syscall-edges/sc-read-eof-badbuf
+    status: !broken
+      reason: "Direct QEMU oracle output diverges from the preserved Linux contract on at least one production guest ISA"
+      evidence: "tests/runtime/syscall-edges/QEMU_EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/read_eof.c, output: read-eof-badbuf, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-read-eof-badbuf }
+    run: []
+    expect: { exit: 0, stdout: golden/read_eof.out }
+  - id: runtime/syscall-edges/sc-bound-io-order
+    status: !broken
+      reason: "Direct QEMU oracle output diverges from the preserved Linux contract on at least one production guest ISA"
+      evidence: "tests/runtime/syscall-edges/QEMU_EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/bound_order.c, output: bound-io-order, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/syscall-edges-bound-io-order }
+    run: []
+    expect: { exit: 0, stdout: golden/bound_order.out }
