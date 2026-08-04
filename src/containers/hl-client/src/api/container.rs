@@ -176,7 +176,7 @@ impl<'a> Containers<'a> {
     pub async fn stats(&self, id: &str) -> Result<Stats> {
         self.transport
             .get_json(&format!(
-                "/containers/{}/stats?stream=false",
+                "/containers/{}/stats?stream=false&one-shot=true",
                 Component::opaque(id)
             ))
             .await
