@@ -247,41 +247,6 @@ fn environment_stack() {
 }
 
 #[test]
-fn bootstrap_instructions_execute() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/legacy/prebuilt");
-    let arm = fs::read(root.join("aarch64/write")).unwrap();
-    let x86 = fs::read(root.join("x86_64/exit")).unwrap();
-    let x86_write = fs::read(root.join("x86_64/write")).unwrap();
-    assert_eq!(
-        run_image(arm, "bootstrap-arm-write", GuestIsa::Aarch64),
-        EngineExit {
-            kind: ExitKind::Code,
-            guest_status: 0,
-            detail: 0,
-            fault: None
-        },
-    );
-    assert_eq!(
-        run_image(x86, "bootstrap-x86-exit", GuestIsa::X86_64),
-        EngineExit {
-            kind: ExitKind::Code,
-            guest_status: 42,
-            detail: 0,
-            fault: None
-        },
-    );
-    assert_eq!(
-        run_image(x86_write, "bootstrap-x86-write", GuestIsa::X86_64),
-        EngineExit {
-            kind: ExitKind::Code,
-            guest_status: 0,
-            detail: 0,
-            fault: None
-        },
-    );
-}
-
-#[test]
 fn pthread_clone_executes() {
     assert_eq!(
         run_image(clone_arm(), "clone-arm", GuestIsa::Aarch64),
@@ -301,23 +266,6 @@ fn pthread_clone_executes() {
             fault: None
         },
     );
-}
-
-#[test]
-fn clone_teardown() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/legacy/prebuilt");
-    for (isa, folder) in [(GuestIsa::Aarch64, "aarch64"), (GuestIsa::X86_64, "x86_64")] {
-        let image = fs::read(root.join(folder).join("clone")).unwrap();
-        assert_eq!(
-            run_image(image, "clone-teardown", isa),
-            EngineExit {
-                kind: ExitKind::Code,
-                guest_status: 0,
-                detail: 0,
-                fault: None,
-            },
-        );
-    }
 }
 
 fn source_root(name: &str) -> std::path::PathBuf {

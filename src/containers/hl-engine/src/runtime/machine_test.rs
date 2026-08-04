@@ -13,6 +13,9 @@ use crate::engine::{ExitKind, Workspace, WorkspaceId};
 use crate::options::Options;
 use std::sync::Mutex;
 
+#[path = "guest_image.rs"]
+mod guest_image;
+
 static STAGED_IMAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 struct StagedImage {
@@ -21,12 +24,12 @@ struct StagedImage {
 }
 
 impl StagedImage {
-    fn create(source: &std::path::Path) -> Self {
+    fn create(image: &[u8]) -> Self {
         let identity = STAGED_IMAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!("hl-machine-stage-{}-{identity}", std::process::id(),));
         std::fs::create_dir(&root).unwrap();
         let executable = root.join("guest");
-        std::fs::copy(source, &executable).unwrap();
+        std::fs::write(&executable, image).unwrap();
         Self { root, executable }
     }
 }
@@ -248,9 +251,7 @@ fn missing_checkpoint_and() {
 fn network_checkpoint_role() {
     use std::os::unix::ffi::OsStrExt;
 
-    let source =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/legacy/prebuilt/aarch64/exit");
-    let staged = StagedImage::create(&source);
+    let staged = StagedImage::create(&guest_image::aarch64_exit_image());
     let stage_root = staged.root.clone();
     let encoded = staged.executable.as_os_str().as_bytes().to_vec();
     let plan = RuntimeLaunchPlan {
@@ -283,7 +284,6 @@ fn network_checkpoint_role() {
     drop(machine);
     drop(staged);
     assert!(!stage_root.exists());
-    assert!(!source.parent().unwrap().join("dev").exists());
 }
 
 #[test]
