@@ -5,7 +5,7 @@ use hl_memory::{SharedLimits, SharedObjectStore};
 
 use crate::{
     Credentials, IPC_PRIVATE, IpcKey, MessageQueueId, SHM_RDONLY, SHM_REMAP, SHM_RND, SemaphoreId, SharedMemoryError,
-    SharedMemoryId, SharedMemoryLimits, SharedMemoryNamespace, ShmGetRequest,
+    SharedMemoryId, SharedMemoryLimits, SharedMemoryLockIntent, SharedMemoryNamespace, ShmGetRequest,
 };
 
 #[test]
@@ -80,6 +80,46 @@ fn keys_private_exclusive() {
     assert_ne!(
         namespace.shmget(Fixture::request(IPC_PRIVATE, 4096)).unwrap(),
         namespace.shmget(Fixture::request(IPC_PRIVATE, 4096)).unwrap()
+    );
+}
+
+#[test]
+fn lock_authorization_is_generation_safe_and_state_free() {
+    let namespace = Fixture::namespace(SharedMemoryLimits::default());
+    let id = namespace.shmget(Fixture::request(IpcKey(70), 4096)).unwrap();
+    let plan = namespace.shmat_plan(id, OWNER, 0).unwrap();
+    let attachment = namespace.commit_attach(plan, 100, 2).unwrap();
+    namespace
+        .set_permissions(id, OWNER, Credentials { uid: 12, gid: 22 }, 0o004, 101, 3)
+        .unwrap();
+    let before = namespace.snapshot();
+
+    for (actor, intent) in [
+        (Credentials { uid: 0, gid: 0 }, SharedMemoryLockIntent::Lock),
+        (Credentials { uid: 12, gid: 22 }, SharedMemoryLockIntent::Unlock),
+        (OWNER, SharedMemoryLockIntent::Lock),
+    ] {
+        assert_eq!(namespace.authorize_lock(id, actor, intent), Ok(()));
+        assert_eq!(namespace.snapshot(), before);
+    }
+    assert_eq!(
+        namespace.authorize_lock(id, OTHER, SharedMemoryLockIntent::Lock),
+        Err(SharedMemoryError::Permission)
+    );
+    assert_eq!(namespace.snapshot(), before);
+
+    namespace.remove(id, OWNER, 100, 4).unwrap();
+    assert_eq!(
+        namespace.authorize_lock(id, OWNER, SharedMemoryLockIntent::Unlock),
+        Err(SharedMemoryError::Removed)
+    );
+    namespace.shmdt(attachment, 100, 5).unwrap();
+    let replacement = namespace.shmget(Fixture::request(IpcKey(71), 4096)).unwrap();
+    assert_eq!(replacement.slot, id.slot);
+    assert_ne!(replacement.generation, id.generation);
+    assert_eq!(
+        namespace.authorize_lock(id, OWNER, SharedMemoryLockIntent::Lock),
+        Err(SharedMemoryError::NotFound)
     );
 }
 

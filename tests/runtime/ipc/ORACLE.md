@@ -63,3 +63,63 @@ while the retained checked Linux contract is
 its source, expected bytes and engine acceptance contract are unchanged.
 `scm-epoll` is also typed broken for the oracle provider: AArch64 QEMU exits 1
 after producing `n=0 data=0`, while the retained contract is `n=1 data=5151`.
+
+## `SHM_LOCK` / `SHM_UNLOCK` oracle audit
+
+The complete retained SysV implementation was read again at
+`../engine/src/linux_abi/syscall/sysv.c` before this family was ported. The
+entry points and helpers studied were `ipc_init`, `hl_ipc_ctrl`,
+`hl_ipc_lock`/`hl_ipc_unlock`, `hl_ipc_access`, `hl_ipc_owner`,
+`hl_perm_init`, `hl_ipc_id`, `shm_by_id`, `shm_idx_of`, `shm_free`,
+`shm_stat_to_guest`, `sem_by_id`, `sem_free`, `msg_by_id`, `msg_free`,
+`shm_count`, `sem_count`, `msg_count`, `sysv_after_fork`,
+`sysv_after_exec`, `sysv_on_exit`, and every `svc_sysv` case for shared
+memory, semaphores, and message queues (lines 1-1992 in the retained file).
+
+The retained control block is a namespace-scoped, shared mapping containing
+fixed slot tables. Each live object owns permission and lifecycle metadata;
+the slot's sequence is preserved across destruction and incremented before
+reuse, and a public identifier encodes sequence plus slot. `shm_by_id` rejects
+negative, vacant, removed, and sequence-stale identifiers. Shared-memory
+removal first hides the key and marks the entry removed; destruction and
+sequence advancement are deferred until the authoritative attachment count is
+zero. The control-block robust spinlock serializes lookup, permission checking,
+metadata mutation, waiter state, and destruction. Blocking semaphore and
+message operations release it before polling; segment mapping also releases it
+before `shm_open`/`mmap`. `shmctl` holds it continuously across identifier
+resolution and the `SHM_LOCK`/`SHM_UNLOCK` owner check.
+
+For both commands the retained implementation ignores the buffer argument,
+resolves the live generation first, then calls `hl_ipc_owner`: effective uid 0,
+the current owner uid, and the creator uid succeed; an unrelated effective uid
+gets `EPERM`. A missing, removed, or stale identifier gets `EINVAL` before the
+command switch. The two cases deliberately perform no wired-page operation and
+do not alter the key, owner, mode, creator, process ids, timestamps, attachment
+count, removal state, backing bytes, or sequence. There is no blocking,
+partial result, cancellation, signal, or host-call path for either command.
+The operation is identical for AArch64 and x86-64 guests and across hosts; only
+the surrounding `semid64_ds` wire layout has a guest-architecture branch, which
+is outside this family.
+
+Fork clones attachment identity and increments attachment counts under the
+shared lock, clears child `SEM_UNDO`, and does not transfer namespace-creator
+ownership. Exec detaches all inherited segment mappings and clears `SEM_UNDO`.
+Exit detaches remaining mappings, applies generation-qualified undo records,
+and performs namespace-creator cleanup. None of these transitions creates or
+persists lock/unlock state, confirming that the commands remain authorization-
+only no-ops across fork, exec, exit, and checkpoint.
+
+Rust maps slot/generation identity, ownership, removal, attachments, and the
+namespace mutex to `hl-ipc::SharedMemoryNamespace`. Its typed
+`SharedMemoryLockIntent` and `authorize_lock` operation own the live-generation
+and root/owner/creator authorization invariant without changing the pointer-free
+snapshot. `hl-linux::SysvAbi::shmctl` owns command decoding and preserves the
+ignored buffer and typed unlock flag. `hl-runtime` maps both intents to that IPC
+operation and projects absent, removed, and stale objects to `EINVAL`, unrelated
+actors to `EPERM`, and success to zero. The unit matrix covers root, current
+owner, creator, unrelated actor, both intents, removed and reused generations,
+and exact snapshot immutability. The public syscall matrix covers both guest
+ISAs, both commands, ignored invalid buffers, state immutability, invalid ids,
+and unrelated actors. `sysv_shm_lock.c` is the retained/native differential
+fixture for owner success, both intents, ignored buffers, unchanged metadata,
+removed/stale identifiers, and cleanup.

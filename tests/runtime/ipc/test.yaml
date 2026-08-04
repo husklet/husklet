@@ -230,6 +230,14 @@ cases:
     artifact: { destination: /opt/husklet/sysv-ctl }
     run: []
     expect: { exit: 0, stdout: golden/sysv_ctl.out }
+  - id: runtime/ipc/sysv-shm-lock
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/sysv_shm_lock.c, output: sysv-shm-lock, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/sysv-shm-lock }
+    run: []
+    expect: { exit: 0, stdout: golden/sysv_shm_lock.out }
   - id: runtime/ipc/sysv-owner
     status: active
     compat: { class: compatibility }

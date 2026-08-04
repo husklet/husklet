@@ -5,7 +5,8 @@ use hl_memory::SharedBackingRef;
 
 use super::model::{
     ATTACH_FLAGS, AttachPlan, Credentials, IPC_PRIVATE, IpcKey, SHM_RDONLY, SHM_REMAP, SHM_RND, SharedMemoryError,
-    SharedMemoryId, SharedMemoryLimits, SharedMemoryMetadata, SharedMemorySnapshot, ShmGetRequest,
+    SharedMemoryId, SharedMemoryLimits, SharedMemoryLockIntent, SharedMemoryMetadata, SharedMemorySnapshot,
+    ShmGetRequest,
 };
 use crate::SHM_EXEC;
 
@@ -196,6 +197,29 @@ impl SharedMemoryNamespace {
         segment.metadata.mode = mode;
         segment.metadata.last_pid = pid;
         segment.metadata.changed_at = now;
+        Ok(())
+    }
+
+    /// Authorizes a page-residency control operation for a live segment.
+    ///
+    /// Both intents deliberately leave the segment and its backing unchanged:
+    /// the engine has no host-wired-page state. Resolving and authorizing while
+    /// holding the namespace lock preserves the retained implementation's
+    /// generation, removal, and ownership ordering.
+    pub fn authorize_lock(
+        &self,
+        id: SharedMemoryId,
+        actor: Credentials,
+        _intent: SharedMemoryLockIntent,
+    ) -> Result<(), SharedMemoryError> {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let segment = Self::segment(&state, id)?;
+        if segment.metadata.marked_for_removal {
+            return Err(SharedMemoryError::Removed);
+        }
+        if actor.uid != 0 && actor.uid != segment.metadata.owner.uid && actor.uid != segment.metadata.creator_uid {
+            return Err(SharedMemoryError::Permission);
+        }
         Ok(())
     }
 

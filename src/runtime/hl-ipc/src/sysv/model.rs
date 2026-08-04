@@ -16,6 +16,17 @@ pub struct SharedMemoryId {
     pub generation: u32,
 }
 
+/// The page-residency control operation requested for a shared-memory segment.
+///
+/// Husklet does not currently wire guest pages for either operation, but keeps
+/// the intent typed so authorization cannot accidentally collapse unlock into
+/// a different control command.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SharedMemoryLockIntent {
+    Lock,
+    Unlock,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Credentials {
     pub uid: u32,

@@ -48,7 +48,8 @@ pub use sysv::memory::{
 };
 pub use sysv::model::{
     AttachPlan, Credentials, IPC_PRIVATE, InheritedAttachment, IpcKey, SHM_EXEC, SHM_RDONLY, SHM_REMAP, SHM_RND,
-    SharedMemoryError, SharedMemoryId, SharedMemoryLimits, SharedMemoryMetadata, SharedMemorySnapshot, ShmGetRequest,
+    SharedMemoryError, SharedMemoryId, SharedMemoryLimits, SharedMemoryLockIntent, SharedMemoryMetadata,
+    SharedMemorySnapshot, ShmGetRequest,
 };
 
 #[cfg(test)]

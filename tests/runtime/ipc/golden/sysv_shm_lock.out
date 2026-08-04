@@ -1,0 +1,1 @@
+sysv_shm_lock lock=1 unlock=1 ignored=1 unchanged=1 removed=1 removed_einval=1 stale_einval=1 invalid_einval=1

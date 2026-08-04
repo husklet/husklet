@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use hl_descriptor::DescriptorTable;
 use hl_ipc::{
-    Credentials, IpcCatalog, MessageLimits, MessageQueueId, MessageQueueNamespace, MqLimits, MqNamespace,
-    SemaphoreLimits, SemaphoreNamespace, SharedMemoryLimits, SharedMemoryNamespace,
+    Credentials, IpcCatalog, IpcKey, MessageLimits, MessageQueueId, MessageQueueNamespace, MqLimits, MqNamespace,
+    SemaphoreLimits, SemaphoreNamespace, SharedMemoryId, SharedMemoryLimits, SharedMemoryNamespace, ShmGetRequest,
 };
 use hl_isa::GuestArchitecture;
 use hl_linux::{
@@ -356,6 +356,95 @@ fn invalid_abi_honestly() {
         assert_eq!(
             fixture.call(architecture, "shmat", [0, 0, 0, 0, 0, 0]),
             LinuxResult::Error(Errno::EINVAL),
+        );
+    }
+}
+
+#[test]
+fn shm_lock_unlock_public_matrix() {
+    for architecture in architectures() {
+        let fixture = Fixture::new();
+        let LinuxResult::Value(identifier) =
+            fixture.call(architecture, "shmget", [0, 4096, u64::from(IPC_CREAT | 0o600), 0, 0, 0])
+        else {
+            panic!("shared-memory creation failed");
+        };
+        let before = fixture.runtime.0.with_shared_memory(|namespace| namespace.snapshot());
+        for (command, ignored_buffer) in [(11, u64::MAX), (12, 1)] {
+            assert_eq!(
+                fixture.call(architecture, "shmctl", [identifier, command, ignored_buffer, 0, 0, 0]),
+                LinuxResult::Value(0)
+            );
+            assert_eq!(
+                fixture.runtime.0.with_shared_memory(|namespace| namespace.snapshot()),
+                before
+            );
+        }
+        assert_eq!(
+            fixture.call(architecture, "shmctl", [u64::MAX, 11, u64::MAX, 0, 0, 0]),
+            LinuxResult::Error(Errno::EINVAL)
+        );
+
+        let id = SharedMemoryId::from_linux_id(identifier as i32).unwrap();
+        let attachment = fixture.runtime.0.with_shared_memory(|namespace| {
+            let plan = namespace
+                .shmat_plan(id, Credentials { uid: 1000, gid: 1000 }, 0)
+                .unwrap();
+            let attachment = namespace.commit_attach(plan, fixture.runtime.2.number(), 2).unwrap();
+            namespace
+                .remove(id, Credentials { uid: 1000, gid: 1000 }, fixture.runtime.2.number(), 3)
+                .unwrap();
+            attachment
+        });
+        assert_eq!(
+            fixture.call(architecture, "shmctl", [identifier, 12, 0, 0, 0, 0]),
+            LinuxResult::Error(Errno::EINVAL)
+        );
+        fixture
+            .runtime
+            .0
+            .with_shared_memory(|namespace| namespace.shmdt(attachment, fixture.runtime.2.number(), 4).unwrap());
+        let replacement = fixture.runtime.0.with_shared_memory(|namespace| {
+            namespace
+                .shmget(ShmGetRequest {
+                    key: IpcKey(90),
+                    size: 4096,
+                    create: true,
+                    exclusive: false,
+                    mode: 0o600,
+                    actor: Credentials { uid: 1000, gid: 1000 },
+                    pid: fixture.runtime.2.number(),
+                    now: 5,
+                })
+                .unwrap()
+        });
+        assert_ne!(replacement.generation, id.generation);
+        assert_eq!(
+            fixture.call(architecture, "shmctl", [identifier, 11, 0, 0, 0, 0]),
+            LinuxResult::Error(Errno::EINVAL)
+        );
+
+        let unrelated = fixture.runtime.0.with_shared_memory(|namespace| {
+            namespace
+                .shmget(ShmGetRequest {
+                    key: IpcKey(91),
+                    size: 4096,
+                    create: true,
+                    exclusive: false,
+                    mode: 0o777,
+                    actor: Credentials { uid: 2000, gid: 2000 },
+                    pid: 22,
+                    now: 1,
+                })
+                .unwrap()
+        });
+        assert_eq!(
+            fixture.call(
+                architecture,
+                "shmctl",
+                [unrelated.linux_id().unwrap() as u64, 12, 0, 0, 0, 0]
+            ),
+            LinuxResult::Error(Errno::EPERM)
         );
     }
 }

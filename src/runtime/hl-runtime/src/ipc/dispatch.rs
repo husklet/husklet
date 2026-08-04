@@ -1,5 +1,6 @@
 use hl_ipc::{
     Credentials, MessageError, MessageQueueId, SemaphoreError, SemaphoreId, SharedMemoryError, SharedMemoryId,
+    SharedMemoryLockIntent,
 };
 use hl_linux::{
     Errno, GuestMemory, LinuxResult, MessageControlPlan, SemaphoreControlPlan, SharedMemoryControlPlan, SysvAbi,
@@ -32,7 +33,15 @@ impl<M: GuestMemory> RuntimeIpcSyscalls<M> {
                 self.shared_index_stat(&abi, index, actor, any, output)
             }
             SharedMemoryControlPlan::Information { usage, output } => self.shared_info(&abi, usage, output),
-            SharedMemoryControlPlan::Lock { .. } => LinuxResult::Error(Errno::ENOSYS),
+            SharedMemoryControlPlan::Lock { identifier, unlock } => self.shared_lock(
+                identifier,
+                actor,
+                if unlock {
+                    SharedMemoryLockIntent::Unlock
+                } else {
+                    SharedMemoryLockIntent::Lock
+                },
+            ),
         }
     }
 
@@ -93,6 +102,26 @@ impl<M: GuestMemory> RuntimeIpcSyscalls<M> {
             Err(SharedMemoryError::Permission) => LinuxResult::Error(Errno::EPERM),
             Err(SharedMemoryError::NotFound | SharedMemoryError::Removed) => LinuxResult::Error(Errno::EINVAL),
             Err(error) => LinuxResult::Error(ErrorProjection::shared_get(error)),
+        }
+    }
+
+    fn shared_lock(
+        &self,
+        identifier: SysvIdentifier,
+        actor: Credentials,
+        intent: SharedMemoryLockIntent,
+    ) -> LinuxResult {
+        let Some(id) = SharedMemoryId::from_linux_id(identifier.0) else {
+            return LinuxResult::Error(Errno::EINVAL);
+        };
+        match self
+            .catalog
+            .with_shared_memory(|namespace| namespace.authorize_lock(id, actor, intent))
+        {
+            Ok(()) => LinuxResult::Value(0),
+            Err(SharedMemoryError::Permission) => LinuxResult::Error(Errno::EPERM),
+            Err(SharedMemoryError::NotFound | SharedMemoryError::Removed) => LinuxResult::Error(Errno::EINVAL),
+            Err(error) => LinuxResult::Error(ControlProjection::shared_errno(error)),
         }
     }
 
