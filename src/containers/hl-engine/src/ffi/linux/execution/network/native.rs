@@ -21,6 +21,9 @@ const SOCKET_LIMIT: usize = 4096;
 pub(super) struct Entry {
     pub(super) descriptor: i32,
     pub(super) kind: Option<i32>,
+    pub(super) original_family: Option<i32>,
+    pub(super) original_protocol: Option<i32>,
+    pub(super) options: BTreeMap<(i32, i32), hl_linux::GuestSocketOption>,
     pub(super) pending: Option<SocketAddress>,
     pub(super) wants_read: bool,
     pub(super) connecting: bool,
@@ -147,6 +150,9 @@ impl Native {
             Entry {
                 descriptor,
                 kind,
+                original_family: None,
+                original_protocol: None,
+                options: BTreeMap::new(),
                 pending: None,
                 wants_read: true,
                 connecting: false,
@@ -433,29 +439,7 @@ impl Native {
             return Err(RuntimeNetworkError::OperationNotSupported);
         }
         entry.kind = Some(kind);
-        // SAFETY: socket returns a newly owned descriptor or a negative errno result.
-        let replacement = unsafe { libc::socket(libc::AF_UNIX, expected, 0) };
-        if replacement < 0 {
-            return Err(Self::runtime_error());
-        }
-        // SAFETY: fcntl observes flags on live owned descriptors; dup2 atomically replaces entry.descriptor.
-        let flags = unsafe { libc::fcntl(entry.descriptor, libc::F_GETFL) };
-        let descriptor_flags = unsafe { libc::fcntl(entry.descriptor, libc::F_GETFD) };
-        let replaced = unsafe { libc::dup2(replacement, entry.descriptor) };
-        // SAFETY: replacement remains solely owned here regardless of dup2's result.
-        unsafe { libc::close(replacement) };
-        if replaced < 0 {
-            return Err(Self::runtime_error());
-        }
-        // SAFETY: entry.descriptor is the newly installed socket and remains table-owned.
-        unsafe {
-            if flags >= 0 {
-                libc::fcntl(entry.descriptor, libc::F_SETFL, flags);
-            }
-            if descriptor_flags >= 0 {
-                libc::fcntl(entry.descriptor, libc::F_SETFD, descriptor_flags);
-            }
-        }
+        Self::install_replacement(entry, libc::AF_UNIX, expected, 0, true)?;
         entry.switched = true;
         let descriptor = entry.descriptor;
         drop(sockets);
@@ -468,7 +452,23 @@ impl Native {
     }
 
     fn restore_inet_socket(&self, token: u64, expected: i32) -> Result<(), RuntimeNetworkError> {
-        self.replace_socket(token, expected, libc::AF_INET, false)
+        let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
+        if !entry.switched {
+            return Err(RuntimeNetworkError::Invalid);
+        }
+        let family = entry.original_family.unwrap_or(libc::AF_INET);
+        let protocol = entry.original_protocol.unwrap_or(0);
+        Self::install_replacement(entry, family, expected, protocol, false)?;
+        entry.guest_local = None;
+        entry.guest_peer = None;
+        entry.switch_path = None;
+        entry.switch_interface = None;
+        entry.datagram_peer = None;
+        entry.switched = false;
+        drop(sockets);
+        self.wake();
+        Ok(())
     }
 
     fn replace_socket(
@@ -483,29 +483,7 @@ impl Native {
         if !entry.switched {
             return Err(RuntimeNetworkError::Invalid);
         }
-        // SAFETY: socket returns a newly owned descriptor or a negative errno result.
-        let replacement = unsafe { libc::socket(family, expected, 0) };
-        if replacement < 0 {
-            return Err(Self::runtime_error());
-        }
-        // SAFETY: fcntl observes live descriptor flags and dup2 atomically replaces the table-owned socket.
-        let flags = unsafe { libc::fcntl(entry.descriptor, libc::F_GETFL) };
-        let descriptor_flags = unsafe { libc::fcntl(entry.descriptor, libc::F_GETFD) };
-        let replaced = unsafe { libc::dup2(replacement, entry.descriptor) };
-        // SAFETY: replacement is solely owned here after dup2 duplicates it when successful.
-        unsafe { libc::close(replacement) };
-        if replaced < 0 {
-            return Err(Self::runtime_error());
-        }
-        // SAFETY: entry.descriptor is the newly installed socket and remains table-owned.
-        unsafe {
-            if flags >= 0 {
-                libc::fcntl(entry.descriptor, libc::F_SETFL, flags);
-            }
-            if descriptor_flags >= 0 {
-                libc::fcntl(entry.descriptor, libc::F_SETFD, descriptor_flags);
-            }
-        }
+        Self::install_replacement(entry, family, expected, 0, switched)?;
         if !switched {
             entry.guest_local = None;
             entry.guest_peer = None;
@@ -516,6 +494,76 @@ impl Native {
         entry.switched = switched;
         drop(sockets);
         self.wake();
+        Ok(())
+    }
+
+    fn install_replacement(
+        entry: &mut Entry,
+        family: i32,
+        kind: i32,
+        protocol: i32,
+        switch_transport: bool,
+    ) -> Result<(), RuntimeNetworkError> {
+        // SAFETY: socket returns a newly owned descriptor or a negative errno result.
+        let replacement = unsafe { libc::socket(family, kind, protocol) };
+        if replacement < 0 {
+            return Err(Self::runtime_error());
+        }
+        // Snapshot table-owned state before replacement. Options are typed and
+        // bounded at the Linux ABI boundary; no unbounded host buffer is retained.
+        let flags = unsafe { libc::fcntl(entry.descriptor, libc::F_GETFL) };
+        let descriptor_flags = unsafe { libc::fcntl(entry.descriptor, libc::F_GETFD) };
+        // Configure the unshared replacement completely before dup2. Failure
+        // therefore leaves the original descriptor and projected state intact.
+        unsafe {
+            if flags >= 0 {
+                libc::fcntl(replacement, libc::F_SETFL, flags);
+            }
+            if descriptor_flags >= 0 {
+                libc::fcntl(replacement, libc::F_SETFD, descriptor_flags);
+            }
+        }
+        for ((level, option), value) in &entry.options {
+            if !switch_transport || Self::switch_option(*level, *option) {
+                if let Err(error) = super::socket_option::set(replacement, *level, *option, value.clone()) {
+                    if switch_transport {
+                        continue;
+                    }
+                    // SAFETY: replacement is still solely owned here.
+                    unsafe { libc::close(replacement) };
+                    return Err(error);
+                }
+            }
+        }
+        // SAFETY: dup2 atomically replaces the table descriptor. replacement
+        // remains solely owned here and is closed on both outcomes.
+        let replaced = unsafe { libc::dup2(replacement, entry.descriptor) };
+        unsafe { libc::close(replacement) };
+        if replaced < 0 {
+            return Err(Self::runtime_error());
+        }
+        Ok(())
+    }
+
+    const fn switch_option(level: i32, option: i32) -> bool {
+        level == 1 && matches!(option, 2 | 6 | 9 | 10 | 13 | 15 | 20 | 21)
+    }
+
+    fn set_socket_option(
+        &self,
+        token: u64,
+        level: i32,
+        option: i32,
+        value: hl_linux::GuestSocketOption,
+    ) -> Result<(), RuntimeNetworkError> {
+        let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
+        super::socket_option::set(entry.descriptor, level, option, value.clone())?;
+        if (level, option) == (1, 27) {
+            entry.options.remove(&(1, 26));
+        } else {
+            entry.options.insert((level, option), value);
+        }
         Ok(())
     }
 

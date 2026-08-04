@@ -556,6 +556,43 @@ fn switch_bind_failure_restores_the_original_inet_socket() {
     let socket = host
         .create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp)
         .unwrap();
+    let options = [
+        (1, 2, hl_linux::GuestSocketOption::Scalar(1)),
+        (1, 5, hl_linux::GuestSocketOption::Scalar(1)),
+        (1, 6, hl_linux::GuestSocketOption::Scalar(1)),
+        (1, 7, hl_linux::GuestSocketOption::Scalar(32_768)),
+        (1, 8, hl_linux::GuestSocketOption::Scalar(32_768)),
+        (1, 9, hl_linux::GuestSocketOption::Scalar(1)),
+        (1, 10, hl_linux::GuestSocketOption::Scalar(1)),
+        (1, 13, hl_linux::GuestSocketOption::Linger { enabled: 1, seconds: 7 }),
+        (1, 15, hl_linux::GuestSocketOption::Scalar(1)),
+        (
+            1,
+            20,
+            hl_linux::GuestSocketOption::Timeval {
+                seconds: 0,
+                microseconds: 25_000,
+            },
+        ),
+        (
+            1,
+            21,
+            hl_linux::GuestSocketOption::Timeval {
+                seconds: 0,
+                microseconds: 30_000,
+            },
+        ),
+        (0, 1, hl_linux::GuestSocketOption::Scalar(0x20)),
+        (0, 2, hl_linux::GuestSocketOption::Scalar(42)),
+        (6, 1, hl_linux::GuestSocketOption::Scalar(1)),
+    ];
+    for (level, option, value) in &options {
+        host.set_option(socket.token, *level, *option, value.clone()).unwrap();
+    }
+    let expected = options
+        .iter()
+        .map(|(level, option, _)| (*level, *option, host.get_option(socket.token, *level, *option).unwrap()))
+        .collect::<Vec<_>>();
 
     assert_eq!(
         host.bind_route(
@@ -578,6 +615,9 @@ fn switch_bind_failure_restores_the_original_inet_socket() {
             port: 0,
         })
     );
+    for (level, option, value) in expected {
+        assert_eq!(host.get_option(socket.token, level, option), Ok(value));
+    }
     assert!(
         host.bind(
             socket.token,

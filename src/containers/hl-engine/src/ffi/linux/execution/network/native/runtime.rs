@@ -75,6 +75,16 @@ impl RuntimeNetworkHost for Native {
             return Err(Self::runtime_error());
         }
         let token = self.insert(descriptor)?;
+        if let Some(entry) = self
+            .shared
+            .sockets
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get_mut(&token)
+        {
+            entry.original_family = Some(family);
+            entry.original_protocol = Some(protocol);
+        }
         if protocol == libc::IPPROTO_ICMP {
             if let Some(entry) = self
                 .shared
@@ -664,7 +674,7 @@ impl RuntimeNetworkHost for Native {
         option: i32,
         value: hl_linux::GuestSocketOption,
     ) -> Result<(), RuntimeNetworkError> {
-        super::super::socket_option::set(self.descriptor(token)?, level, option, value)
+        self.set_socket_option(token, level, option, value)
     }
 
     fn get_option(
