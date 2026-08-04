@@ -37,11 +37,11 @@ impl NetworkCreate {
         }
         let driver = if self.driver.is_empty() { "bridge" } else { &self.driver };
         let mut spec = match driver {
-            "none" => {
+            "null" => {
                 if !self.ipam.config.is_empty() {
                     return Err(ApiError::new(
                         StatusCode::BAD_REQUEST,
-                        "none networks cannot configure IPAM",
+                        "null networks cannot configure IPAM",
                     ));
                 }
                 NetworkSpec::none(self.name)
@@ -253,6 +253,16 @@ mod tests {
         }))
         .unwrap();
         harmless.spec().unwrap();
+
+        let built_in_name_is_not_a_driver: NetworkCreate = serde_json::from_value(serde_json::json!({
+            "Name": "isolated",
+            "Driver": "none"
+        }))
+        .unwrap();
+        assert_eq!(
+            built_in_name_is_not_a_driver.spec().unwrap_err().status,
+            StatusCode::NOT_IMPLEMENTED
+        );
 
         let meaningful: NetworkCreate = serde_json::from_value(serde_json::json!({
             "Name": "isolated",
