@@ -54,3 +54,28 @@ event/counter service boundary.
 This one workload does not prove blocking, cancellation, fork, checkpoint,
 cross-thread wakeups, nested epoll, or the complete errno surface. Those remain
 separate compatibility cohorts rather than inferred passes.
+
+## Syscall transaction boundary
+
+The 2026-08-04 boundary audit additionally followed the legacy syscall path in
+`../engine/src/linux_abi/syscall/event.c`: `svc_event` cases 20--22 and 441
+(`epoll_create1`, `epoll_ctl`, `epoll_pwait`, and `epoll_pwait2`) and
+`svc_epoll_wait_common`. The control path reads an ADD/MOD event before
+descriptor admission, then validates the epoll descriptor, self-registration,
+the target descriptor and pollability, the operation, and membership. DEL does
+not require a readable event pointer. The wait path recomputes a monotonic
+remaining timeout after internal wakeups, releases its event lock while
+blocking, restores a temporary signal mask, and copies exactly the events it
+delivered. In particular, lines 1023--1037 perform no guest output access when
+the delivered count is zero.
+
+The Rust event and descriptor objects already preserve watch identity,
+retirement, blocking, interruption, edge, and oneshot state. The audited gap was
+confined to `hl-linux/src/event/abi.rs` and
+`hl-runtime/src/event/epoll.rs`: wait planning eagerly required writable space
+for `maxevents`, and control decoded the operation before reproducing the Linux
+descriptor-error order. Boundary tests therefore cover both guest layouts,
+compound-invalid control calls, a zero-event wait with an invalid output
+address, and a one-event copy fault followed by successful redelivery. The last
+case is load-bearing: readiness is committed only after the delivered bytes are
+copied, so an `EFAULT` cannot consume an EPOLLONESHOT event.

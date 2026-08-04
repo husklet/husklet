@@ -187,46 +187,51 @@ fn epoll_event_bytes() {
 
 #[test]
 fn epoll_oneshot_readiness() {
-    let table = Arc::new(DescriptorTable::new(8).unwrap());
-    let (control, runtime_table) = Control::attach(table.clone(), 8, 32).unwrap();
-    let mut bytes = vec![0; 128];
-    bytes[0..4].copy_from_slice(&(1_u32 | EpollInterest::ONESHOT).to_le_bytes());
-    bytes[8..16].copy_from_slice(&77_u64.to_le_bytes());
-    let memory = FaultBuffer {
-        bytes: Buffer(Mutex::new(bytes)),
-        fault_write: AtomicBool::new(true),
-    };
-    let mut runtime = RuntimeEventSyscalls::new(
-        table.clone(),
-        Arc::new(EventCatalog::new(8).unwrap()),
-        memory,
-        GuestArchitecture::Aarch64,
-    )
-    .with_epoll_control(Arc::new(control), Arc::new(runtime_table));
-    let LinuxResult::Value(epoll) = runtime.handle(Memory::operation("epoll_create1"), [0; 6]) else {
-        panic!()
-    };
-    let LinuxResult::Value(eventfd) = runtime.handle(Memory::operation("eventfd2"), [0; 6]) else {
-        panic!()
-    };
-    assert_eq!(
-        runtime.handle(Memory::operation("epoll_ctl"), [epoll, 1, eventfd, 0, 0, 0]),
-        LinuxResult::Value(0),
-    );
-    table.pin(eventfd as i32).unwrap().write(&1_u64.to_le_bytes()).unwrap();
-    assert_eq!(
-        runtime.handle(Memory::operation("epoll_wait"), [epoll, 32, 1, 0, 0, 0]),
-        LinuxResult::Error(Errno::EFAULT),
-    );
-    runtime.memory.fault_write.store(false, Ordering::Release);
-    assert_eq!(
-        runtime.handle(Memory::operation("epoll_wait"), [epoll, 32, 1, 0, 0, 0]),
-        LinuxResult::Value(1),
-    );
-    assert_eq!(
-        runtime.handle(Memory::operation("epoll_wait"), [epoll, 32, 1, 0, 0, 0]),
-        LinuxResult::Value(0),
-    );
+    for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
+        let table = Arc::new(DescriptorTable::new(8).unwrap());
+        let (control, runtime_table) = Control::attach(table.clone(), 8, 32).unwrap();
+        let mut bytes = vec![0; 128];
+        bytes[0..4].copy_from_slice(&(1_u32 | EpollInterest::ONESHOT).to_le_bytes());
+        let memory = FaultBuffer {
+            bytes: Buffer(Mutex::new(bytes)),
+            fault_write: AtomicBool::new(true),
+        };
+        let mut runtime = RuntimeEventSyscalls::new(
+            table.clone(),
+            Arc::new(EventCatalog::new(8).unwrap()),
+            memory,
+            architecture,
+        )
+        .with_epoll_control(Arc::new(control), Arc::new(runtime_table));
+        let LinuxResult::Value(epoll) = runtime.handle(Memory::operation("epoll_create1"), [0; 6]) else {
+            panic!()
+        };
+        let LinuxResult::Value(eventfd) = runtime.handle(Memory::operation("eventfd2"), [0; 6]) else {
+            panic!()
+        };
+        assert_eq!(
+            runtime.handle(Memory::operation("epoll_ctl"), [epoll, 1, eventfd, 0, 0, 0]),
+            LinuxResult::Value(0),
+        );
+        assert_eq!(
+            runtime.handle(Memory::operation("epoll_wait"), [epoll, u64::MAX, 1, 0, 0, 0]),
+            LinuxResult::Value(0),
+        );
+        table.pin(eventfd as i32).unwrap().write(&1_u64.to_le_bytes()).unwrap();
+        assert_eq!(
+            runtime.handle(Memory::operation("epoll_wait"), [epoll, u64::MAX, 1, 0, 0, 0]),
+            LinuxResult::Error(Errno::EFAULT),
+        );
+        runtime.memory.fault_write.store(false, Ordering::Release);
+        assert_eq!(
+            runtime.handle(Memory::operation("epoll_wait"), [epoll, 32, 1, 0, 0, 0]),
+            LinuxResult::Value(1),
+        );
+        assert_eq!(
+            runtime.handle(Memory::operation("epoll_wait"), [epoll, 32, 1, 0, 0, 0]),
+            LinuxResult::Value(0),
+        );
+    }
 }
 
 #[test]
@@ -249,6 +254,30 @@ fn control_errno_isas() {
         let LinuxResult::Value(eventfd) = runtime.handle(Memory::operation("eventfd2"), [0; 6]) else {
             panic!()
         };
+        assert_eq!(
+            runtime.handle(Memory::operation("epoll_ctl"), [u64::MAX, 99, u64::MAX, u64::MAX, 0, 0]),
+            LinuxResult::Error(Errno::EFAULT),
+        );
+        assert_eq!(
+            runtime.handle(Memory::operation("epoll_ctl"), [u64::MAX, 99, u64::MAX, 0, 0, 0]),
+            LinuxResult::Error(Errno::EBADF),
+        );
+        assert_eq!(
+            runtime.handle(Memory::operation("epoll_ctl"), [epoll, 1, epoll, 0, 0, 0]),
+            LinuxResult::Error(Errno::EINVAL),
+        );
+        assert_eq!(
+            runtime.handle(Memory::operation("epoll_ctl"), [epoll, 1, u64::MAX, 0, 0, 0]),
+            LinuxResult::Error(Errno::EBADF),
+        );
+        assert_eq!(
+            runtime.handle(Memory::operation("epoll_ctl"), [epoll, 99, u64::MAX, 0, 0, 0]),
+            LinuxResult::Error(Errno::EBADF),
+        );
+        assert_eq!(
+            runtime.handle(Memory::operation("epoll_ctl"), [u64::MAX, 2, u64::MAX, u64::MAX, 0, 0]),
+            LinuxResult::Error(Errno::EBADF),
+        );
         let arguments = [epoll, 1, eventfd, 0, 0, 0];
         assert_eq!(
             runtime.handle(Memory::operation("epoll_ctl"), arguments),

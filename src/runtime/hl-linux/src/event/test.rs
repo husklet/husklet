@@ -78,7 +78,9 @@ fn epoll_event_isas() {
             .stage_epoll_events(
                 &wait,
                 &[EpollEvent {
-                    readiness: hl_descriptor::Readiness::from_bits(5),
+                    readiness: hl_descriptor::Readiness::from_bits(
+                        hl_descriptor::Readiness::READ | hl_descriptor::Readiness::WRITE,
+                    ),
                     data: 0xaabb_ccdd_eeff_0011,
                 }],
             )

@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use hl_descriptor::{
     DescriptionIdentity, DescriptorError, DescriptorFlags, DescriptorSnapshot, DescriptorTable, ExactDuplicate,
-    OpenFileDescription, OperationCancellation, StatusFlags,
+    ObjectKind, OpenFileDescription, OperationCancellation, StatusFlags,
 };
 use hl_event::{
     Epoll, EpollBatch, EpollError, EpollEvent, EpollInterest, EpollWatchKey, Inotify, InotifyError, InotifyLimits,
@@ -92,6 +92,25 @@ pub struct Control {
 }
 
 impl Control {
+    /// Performs the non-mutating descriptor admission for `epoll_ctl`.
+    pub fn admit_control(
+        &self,
+        table: &RuntimeDescriptorTable,
+        epoll_number: i32,
+        target_number: i32,
+    ) -> Result<(), ControlError> {
+        let descriptors = table.descriptor_table();
+        let _source = descriptors.pin(epoll_number)?;
+        if epoll_number == target_number {
+            return Err(ControlError::Epoll(EpollError::InvalidArgument));
+        }
+        let target = descriptors.pin(target_number)?;
+        if matches!(target.object().kind(), ObjectKind::File | ObjectKind::Directory) {
+            return Err(ControlError::Epoll(EpollError::TargetUnavailable));
+        }
+        Ok(())
+    }
+
     pub fn new(descriptor_limit: i32, graph_limit: usize) -> Result<(Self, RuntimeDescriptorTable), ControlError> {
         let table = Arc::new(DescriptorTable::new(descriptor_limit)?);
         let slot = Arc::new(crate::DescriptorImageSlot::from_shared(table));

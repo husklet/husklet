@@ -10,7 +10,16 @@ impl<M: GuestMemory> RuntimeEventSyscalls<M> {
             return LinuxResult::Error(Errno::ENOSYS);
         };
         let abi = EventAbi::new(&self.memory, self.architecture);
-        let plan = match abi.epoll_control(arguments[1] as i32, arguments[2] as i32, arguments[3]) {
+        let operation = arguments[1] as i32;
+        let target_number = arguments[2] as i32;
+        let event = match abi.epoll_control_event(operation, arguments[3]) {
+            Ok(event) => event,
+            Err(error) => return LinuxResult::Error(ErrorMap::marshal(error)),
+        };
+        if let Err(error) = control.admit_control(table, arguments[0] as i32, target_number) {
+            return LinuxResult::Error(Self::control_errno(error));
+        }
+        let plan = match EventAbi::<M>::epoll_control_plan(operation, target_number, event) {
             Ok(plan) => plan,
             Err(error) => return LinuxResult::Error(ErrorMap::marshal(error)),
         };

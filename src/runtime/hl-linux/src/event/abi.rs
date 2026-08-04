@@ -144,21 +144,15 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
         descriptor: i32,
         event_pointer: u64,
     ) -> Result<EpollControlPlan, Error> {
-        let operation = match operation {
-            1 => EpollOperation::Add,
-            2 => EpollOperation::Delete,
-            3 => EpollOperation::Modify,
-            _ => return Err(Error::Invalid),
-        };
-        if operation == EpollOperation::Delete {
-            return Ok(EpollControlPlan {
-                operation,
-                descriptor,
-                interests: None,
-                data: None,
-            });
+        let event = self.epoll_control_event(operation, event_pointer)?;
+        Self::epoll_control_plan(operation, descriptor, event)
+    }
+
+    pub fn epoll_control_event(&self, operation: i32, event_pointer: u64) -> Result<Option<(u32, u64)>, Error> {
+        if operation == 2 {
+            return Ok(None);
         }
-        let (interest_bits, data) = match self.marshaller.architecture() {
+        let event = match self.marshaller.architecture() {
             GuestArchitecture::Aarch64 => {
                 let bytes = self.marshaller.copy_struct_from::<EPOLL_AARCH_SIZE>(event_pointer)?;
                 (
@@ -174,6 +168,29 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
                 )
             }
         };
+        Ok(Some(event))
+    }
+
+    pub fn epoll_control_plan(
+        operation: i32,
+        descriptor: i32,
+        event: Option<(u32, u64)>,
+    ) -> Result<EpollControlPlan, Error> {
+        let operation = match operation {
+            1 => EpollOperation::Add,
+            2 => EpollOperation::Delete,
+            3 => EpollOperation::Modify,
+            _ => return Err(Error::Invalid),
+        };
+        if operation == EpollOperation::Delete {
+            return Ok(EpollControlPlan {
+                operation,
+                descriptor,
+                interests: None,
+                data: None,
+            });
+        }
+        let (interest_bits, data) = event.ok_or(Error::Invalid)?;
         if interest_bits & !0xd000_201f != 0 {
             return Err(Error::Invalid);
         }
@@ -198,7 +215,6 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
         }
         let maximum = (maximum as usize).min(EPOLL_MAXIMUM);
         let mask = self.optional_signal_mask(signal_mask, signal_set_size)?;
-        self.probe_event_output(output, maximum)?;
         let timeout_nanoseconds = if timeout_milliseconds < 0 {
             None
         } else {
@@ -230,7 +246,6 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
             Some(self.timespec(timeout_pointer)?.nanoseconds())
         };
         let mask = self.optional_signal_mask(signal_mask, signal_set_size)?;
-        self.probe_event_output(output, maximum)?;
         Ok(EpollWaitPlan {
             output,
             maximum,
@@ -250,15 +265,6 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
         Ok(Some(SignalMask::from_bits(u64::from_le_bytes(bytes))))
     }
 
-    fn probe_event_output(&self, output: u64, maximum: usize) -> Result<(), Error> {
-        let length = maximum.checked_mul(self.epoll_size()).ok_or(Error::Overflow)?;
-        let available = self.marshaller.probe(output, length, GuestAccess::Write)?;
-        if available != length {
-            return Err(Error::Invalid);
-        }
-        Ok(())
-    }
-
     pub fn stage_epoll_events(&self, plan: &EpollWaitPlan, events: &[EpollEvent]) -> Result<StagedEventCopyout, Error> {
         if events.len() > plan.maximum {
             return Err(Error::Invalid);
@@ -271,12 +277,15 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
             }
             bytes.extend_from_slice(&event.data.to_le_bytes());
         }
-        Ok(StagedEventCopyout {
-            writes: vec![CopyoutEntry {
+        let writes = if bytes.is_empty() {
+            Vec::new()
+        } else {
+            vec![CopyoutEntry {
                 address: plan.output,
                 bytes,
-            }],
-        })
+            }]
+        };
+        Ok(StagedEventCopyout { writes })
     }
 
     fn epoll_interests(linux: u32) -> u32 {
