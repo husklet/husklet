@@ -3,9 +3,15 @@
 These 43 end-to-end cases preserve the IDs, images, shell or argv commands,
 timeouts, class, targets, expected failures, resources, environments, exit
 status, and substring contracts from
-`tests/scenarios/fixtures/terminal-core.yaml`. The 36 cases that used the
+the retired legacy terminal fixture. The 36 cases that used the
 legacy terminal executor declare `pty`; the remaining seven retain ordinary
 pipe-backed execution. The existing Bash argv case remains an argv action.
+
+The directory-owned `test.yaml` is now the sole executable definition. Before
+removing the legacy fixture and unreachable runner, all 43 rows were compared
+mechanically for ordered ID, image, command shape and bytes, timeout, class,
+targets, expected failure, resources, environment, exit status, and literal
+golden output.
 
 Each expected substring is stored under `golden/` with no trailing line feed.
 That detail is load-bearing: terminal output commonly contains CRLF, while the
