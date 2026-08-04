@@ -41,13 +41,13 @@ pub use event::{
     EventCounter, EventInterest, EventMode, EventReady, EventSyscalls, GenerationToken, PollSet, PollSource, Timer,
     TimerSetting,
 };
-#[allow(unused_imports)]
-pub(crate) use executor::{
-    BorrowedSource as NativeSource, Executor as NativeExecutor, Exit as NativeExit,
-    HostFaultOwner, HostFaultView, InterruptToken, direct_literal_interval,
-};
 #[cfg(target_os = "linux")]
 pub(crate) use executor::NativeFaultOwner;
+#[allow(unused_imports)]
+pub(crate) use executor::{
+    BorrowedSource as NativeSource, Executor as NativeExecutor, Exit as NativeExit, HostFaultOwner, HostFaultView,
+    InstructionWord, InterruptToken,
+};
 pub use fixture::ChildFixture;
 pub use fork_wire::{AttachmentFrame, ChildChannel, ForkFrame, ForkWireError, ForkWireSyscalls, PeerCredentials};
 pub use lock::FileLock;

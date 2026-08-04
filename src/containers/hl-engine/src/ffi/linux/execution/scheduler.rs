@@ -1146,7 +1146,9 @@ impl GuestExecutor {
         mappings
             .read_spans(GuestAddress::new(pc), bytes, Protection::EXECUTE)
             .ok()?;
-        let projection = if let Some((first, last)) = crate::native::direct_literal_interval(pc, bytes) {
+        let projection = if let Some((first, last)) =
+            crate::native::InstructionWord::read(bytes).and_then(|instruction| instruction.literal_interval(pc))
+        {
             mappings
                 .project_contiguous(
                     GuestAddress::new(first),

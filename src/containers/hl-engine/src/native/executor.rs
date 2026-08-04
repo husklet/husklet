@@ -300,77 +300,59 @@ pub(crate) struct BorrowedSource<'a> {
     pub(crate) bytes: &'a [u8],
 }
 
-pub(crate) fn direct_literal_interval(pc: u64, bytes: &[u8]) -> Option<(u64, u64)> {
-    let word = u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?);
-    let top = word & 0xff00_0000;
-    let width = match top {
-        0x1800_0000 | 0x9800_0000 => 4_u64,
-        0x5800_0000 => 8_u64,
-        _ => return None,
-    };
-    let immediate = i64::from(((word >> 5) & 0x7ffff) as i32);
-    let displacement = (immediate << 45) >> 43;
-    let target = pc.checked_add_signed(displacement)?;
-    Some((target, target.checked_add(width)?))
+impl BorrowedSource<'_> {
+    fn instruction_at(&self, pc: u64) -> Option<InstructionWord> {
+        let offset = usize::try_from(pc.checked_sub(self.guest_first)?).ok()?;
+        InstructionWord::read(self.bytes.get(offset..offset.checked_add(4)?)?)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct InstructionWord(u32);
+
+impl InstructionWord {
+    pub(crate) fn read(bytes: &[u8]) -> Option<Self> {
+        Some(Self(u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?)))
+    }
+
+    pub(crate) fn literal_interval(self, pc: u64) -> Option<(u64, u64)> {
+        let top = self.0 & 0xff00_0000;
+        let width = match top {
+            0x1800_0000 | 0x9800_0000 => 4_u64,
+            0x5800_0000 => 8_u64,
+            _ => return None,
+        };
+        let immediate = i64::from(((self.0 >> 5) & 0x7ffff) as i32);
+        let displacement = (immediate << 45) >> 43;
+        let target = pc.checked_add_signed(displacement)?;
+        Some((target, target.checked_add(width)?))
+    }
+
+    fn scalar_access(self) -> Option<Protection> {
+        let word = self.0;
+        if word & 0x0400_0000 != 0 || (word >> 30) & 3 == 3 && (word >> 22) & 3 == 2 {
+            return None;
+        }
+        let eligible = word & 0x3b00_0000 == 0x3900_0000
+            || word & 0x3b20_0000 == 0x3800_0000 && (word >> 10) & 3 == 0
+            || word & 0x3b20_0c00 == 0x3820_0800 && matches!((word >> 13) & 7, 2 | 3 | 6 | 7);
+        eligible.then_some(if (word >> 22) & 3 == 0 {
+            Protection::WRITE
+        } else {
+            Protection::READ
+        })
+    }
 }
 
 fn direct_literal_target(pc: u64, sources: &[BorrowedSource<'_>], first: u64, last: u64) -> bool {
-    let Some(source) = sources.iter().find(|source| {
-        pc >= source.guest_first
-            && pc
-                .checked_sub(source.guest_first)
-                .is_some_and(|offset| offset <= source.bytes.len().saturating_sub(4) as u64)
-    }) else {
-        return false;
-    };
-    let offset = usize::try_from(pc - source.guest_first).ok();
-    let Some(bytes) = offset.and_then(|offset| source.bytes.get(offset..offset + 4)) else {
-        return false;
-    };
-    let Some((target, end)) = direct_literal_interval(pc, bytes) else {
+    let Some((target, end)) = sources
+        .iter()
+        .find_map(|source| source.instruction_at(pc))
+        .and_then(|instruction| instruction.literal_interval(pc))
+    else {
         return false;
     };
     target >= first && end <= last
-}
-
-fn source_word(pc: u64, sources: &[BorrowedSource<'_>]) -> Option<u32> {
-    let source = sources.iter().find(|source| {
-        pc >= source.guest_first
-            && pc
-                .checked_sub(source.guest_first)
-                .is_some_and(|offset| offset <= source.bytes.len().saturating_sub(4) as u64)
-    })?;
-    let offset = usize::try_from(pc.checked_sub(source.guest_first)?).ok()?;
-    u32::from_le_bytes(source.bytes.get(offset..offset.checked_add(4)?)?.try_into().ok()?).into()
-}
-
-fn direct_scalar_access(word: u32) -> Option<Protection> {
-    if word & 0x0400_0000 != 0 || (word >> 30) & 3 == 3 && (word >> 22) & 3 == 2 {
-        return None;
-    }
-    let eligible = word & 0x3b00_0000 == 0x3900_0000
-        || word & 0x3b20_0000 == 0x3800_0000 && (word >> 10) & 3 == 0
-        || word & 0x3b20_0c00 == 0x3820_0800 && matches!((word >> 13) & 7, 2 | 3 | 6 | 7);
-    eligible.then_some(if (word >> 22) & 3 == 0 {
-        Protection::WRITE
-    } else {
-        Protection::READ
-    })
-}
-
-fn direct_scalar_trace(pc: u64, sources: &[BorrowedSource<'_>]) -> Option<Protection> {
-    let mut protection = None;
-    for word in (0..64).filter_map(|index| {
-        pc.checked_add(index * 4)
-            .and_then(|instruction| source_word(instruction, sources))
-            .and_then(direct_scalar_access)
-    }) {
-        if word == Protection::WRITE {
-            return Some(word);
-        }
-        protection = Some(word);
-    }
-    protection
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1633,6 +1615,27 @@ impl BoundaryCaptureState {
 }
 
 impl Executor {
+    fn direct_scalar_trace(&self, pc: u64, sources: &[BorrowedSource<'_>]) -> Option<Protection> {
+        let mut protection = None;
+        for index in 0..64 {
+            let Some(instruction) = pc.checked_add(index * 4) else {
+                continue;
+            };
+            let Some(access) = sources
+                .iter()
+                .find_map(|source| source.instruction_at(instruction))
+                .and_then(InstructionWord::scalar_access)
+            else {
+                continue;
+            };
+            if access == Protection::WRITE {
+                return Some(access);
+            }
+            protection = Some(access);
+        }
+        protection
+    }
+
     pub(crate) fn create() -> Result<Self, ()> {
         Self::create_diagnostics(false)
     }
@@ -1932,7 +1935,8 @@ impl Executor {
         }
         views.sort_unstable_by_key(|view| view.guest_first);
         let direct_literal = direct_literal_target(state.pc, sources, primary_range.0, primary_range.1);
-        let direct_protection = direct_scalar_trace(state.pc, sources)
+        let direct_protection = self
+            .direct_scalar_trace(state.pc, sources)
             .or_else(|| direct_literal.then_some(Protection::READ))
             .filter(|required| lease.allows(*required));
         let active_range = if direct_protection.is_some() {
@@ -2525,18 +2529,18 @@ mod test {
     }
 
     #[test]
-    fn direct_scalar_access_accepts_only_safe_scalar_forms() {
+    fn scalar_access_forms() {
         for word in [0xf940_0020, 0xf840_0020, 0xf862_6820] {
-            assert_eq!(direct_scalar_access(word), Some(Protection::READ));
+            assert_eq!(InstructionWord(word).scalar_access(), Some(Protection::READ));
         }
         for word in [
             0xf840_8420, // post-index writeback
             0x3dc0_0020, // vector load
             0xf980_0020, // prefetch
         ] {
-            assert_eq!(direct_scalar_access(word), None);
+            assert_eq!(InstructionWord(word).scalar_access(), None);
         }
-        assert_eq!(direct_scalar_access(0xf900_0020), Some(Protection::WRITE));
+        assert_eq!(InstructionWord(0xf900_0020).scalar_access(), Some(Protection::WRITE));
     }
 
     #[derive(Default)]
