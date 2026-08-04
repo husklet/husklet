@@ -265,8 +265,8 @@
             runHook preBuild
 
             cargo fmt --all --check --message-format short
-            cargo run --locked --offline -q -p hl-design-lint -- src
-            cargo run --locked --offline -q -p hl-design-lint -- --cases lint src
+            cargo run --locked --offline -q -p hl-design-lint -- src tests
+            cargo run --locked --offline -q -p hl-design-lint -- --cases lint src tests
             cargo build -p engine -p testing --bins --locked --offline -j 1
             export HL_TEST_ENGINE_APP_BIN_DIR="$PWD/target/debug"
             cargo check --workspace --all-targets --locked --offline -j 1

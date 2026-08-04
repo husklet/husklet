@@ -125,6 +125,28 @@ fn c_source_diagnostic_names_source_and_extension() {
 }
 
 #[test]
+fn repository_test_sources_are_checked() {
+    let root = fixture("repository-test-sources");
+    let tests = root.join("tests/runtime");
+    fs::create_dir_all(&tests).unwrap();
+    fs::write(tests.join("invalid-c-source.c"), "").unwrap();
+    fs::write(tests.join("invalid-rust-source.rs"), "").unwrap();
+    let workspace = Workspace::load([root.join("tests")]).unwrap();
+    let findings = FileName.check(&workspace).unwrap();
+
+    assert_eq!(findings.len(), 2);
+    assert!(findings.iter().any(|finding| {
+        finding.location.path.ends_with("tests/runtime/invalid-c-source.c")
+            && finding.message.starts_with("C source filename stem")
+    }));
+    assert!(findings.iter().any(|finding| {
+        finding.location.path.ends_with("tests/runtime/invalid-rust-source.rs")
+            && finding.message.starts_with("Rust source filename stem")
+    }));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn numbered_fragments_fail() {
     let root = fixture("numbered-files");
     for name in ["part_1.rs", "chunk2.rs", "section_03.rs"] {

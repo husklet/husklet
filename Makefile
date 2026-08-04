@@ -8,10 +8,10 @@ NIX_DEV = nix develop . --command
 all: test-ci
 
 design-lint:
-	cargo run -q -p hl-design-lint -- src
+	cargo run -q -p hl-design-lint -- src tests
 
 lint-cases:
-	cargo run -q -p hl-design-lint -- --cases lint src
+	cargo run -q -p hl-design-lint -- --cases lint src tests
 
 # `cargo clippy` and `cargo fmt` are toolchain COMPONENTS. Where they are missing — a Linux workspace, for
 # which the flake provides no devShell — cargo answers "no such command" and a caller grepping the output

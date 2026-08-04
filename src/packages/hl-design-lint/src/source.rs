@@ -129,7 +129,7 @@ impl Workspace {
         &self.paths
     }
 
-    /// Returns repository-owned Rust, C, and C-header files below a `src` directory.
+    /// Returns repository-owned Rust, C, and C-header files below a source or test root.
     pub(crate) fn source_files(&self) -> Result<Vec<PathBuf>> {
         let mut files = Vec::new();
         for path in &self.paths {
@@ -282,7 +282,7 @@ fn source_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
     }
     if metadata.is_file() {
         let extension = path.extension().and_then(|value| value.to_str());
-        if matches!(extension, Some("rs" | "c" | "h")) && below_source(path) {
+        if matches!(extension, Some("rs" | "c" | "h")) && below_architecture_root(path) {
             files.push(path.to_owned());
         }
         return Ok(());
@@ -305,8 +305,9 @@ fn source_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-fn below_source(path: &Path) -> bool {
-    path.components().any(|component| component.as_os_str() == "src")
+fn below_architecture_root(path: &Path) -> bool {
+    path.components()
+        .any(|component| matches!(component.as_os_str().to_str(), Some("src" | "tests")))
 }
 
 fn directory_shapes(

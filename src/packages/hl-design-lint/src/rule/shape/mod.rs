@@ -17,7 +17,7 @@ use crate::{
 #[path = "test.rs"]
 mod tests;
 
-/// Enforces underscore-only, bounded, one- or two-concept Rust, C, and C-header filenames under `src/`.
+/// Enforces underscore-only, bounded, one- or two-concept Rust, C, and C-header source filenames.
 pub struct FileName;
 
 const MAXIMUM_FILE_STEM_LENGTH: usize = 32;
