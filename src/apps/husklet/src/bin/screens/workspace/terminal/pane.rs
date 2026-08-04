@@ -12,8 +12,10 @@ impl PaneWidget {
         let tw = session.window;
         match node {
             PaneNode::Leaf(pane) => {
-                let history = pane.history_file.as_ref().and_then(|file| {
-                    match HistorySnapshot::read(storage, file) {
+                let history = pane
+                    .history_file
+                    .as_ref()
+                    .and_then(|file| match HistorySnapshot::read(storage, file) {
                         Ok(history) => Some(history),
                         Err(error) => {
                             hl_log::hl_error!(
@@ -23,8 +25,7 @@ impl PaneWidget {
                             );
                             None
                         }
-                    }
-                });
+                    });
                 // Reuse the pane's saved layout slot (fresh one if the session predates slots).
                 let slot = Slots::new(tw).adopt(&pane.slot);
                 let (term, pid) = make_terminal_ex(tw, pane.cwd.clone(), history, slot);
@@ -207,7 +208,9 @@ impl<'a> Page<'a> {
             return;
         }
         for p in tw.pids.borrow_mut().remove(name).unwrap_or_default() {
-            ProcessGroup::new(p.get()).hangup();
+            if let Err(error) = ProcessGroup::new(p.get()).hangup() {
+                hl_log::hl_warn!(hl_log::tag::RUNTIME, "terminal process hangup ignored: {error}");
+            }
         }
         if let Some(child) = tw.stack.child_by_name(name) {
             // A user-closed tab must forget its pane registry entries.
@@ -295,11 +298,7 @@ impl<'a> TerminalPane<'a> {
             .and_then(|u| session::WorkingDirectory::from_osc7(&u).map(|path| path.into_string()));
         let (new, pid) = make_terminal_ex(tw, split_cwd, None, Slots::new(tw).allocate());
         if let Some(name) = &page {
-            tw.pids
-                .borrow_mut()
-                .entry(name.clone())
-                .or_default()
-                .push(pid);
+            tw.pids.borrow_mut().entry(name.clone()).or_default().push(pid);
         }
         let paned = gtk::Paned::new(orient);
         paned.set_resize_start_child(true);
