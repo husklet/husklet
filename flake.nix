@@ -222,11 +222,11 @@
           cargoLock.lockFile = ./Cargo.lock;
           strictDeps = true;
           nativeBuildInputs = commonNativeInputs pkgs;
-          CARGO_BUILD_JOBS = "1";
           doCheck = false;
           buildPhase = ''
             runHook preBuild
-            cargo build --release -p engine --bins --locked --offline -j 1
+            export CARGO_BUILD_JOBS="$NIX_BUILD_CORES"
+            cargo build --release -p engine --bins --locked --offline
             runHook postBuild
           '';
           installPhase = ''
@@ -258,21 +258,26 @@
           nativeBuildInputs = commonNativeInputs pkgs ++ [
             (rustFor pkgs)
           ];
-          CARGO_BUILD_JOBS = "1";
-          HL_COMPAT_JOBS = "1";
           doCheck = false;
           buildPhase = ''
             runHook preBuild
 
+            export CARGO_BUILD_JOBS="$NIX_BUILD_CORES"
+            if [ "$NIX_BUILD_CORES" -gt 256 ]; then
+              export HL_COMPAT_JOBS=256
+            else
+              export HL_COMPAT_JOBS="$NIX_BUILD_CORES"
+            fi
+
             cargo fmt --all --check --message-format short
             cargo run --locked --offline -q -p hl-design-lint -- src tests
             cargo run --locked --offline -q -p hl-design-lint -- --cases lint src tests
-            cargo build -p engine -p testing --bins --locked --offline -j 1
+            cargo build -p engine -p testing --bins --locked --offline
             export HL_TEST_ENGINE_APP_BIN_DIR="$PWD/target/debug"
-            cargo check --workspace --all-targets --locked --offline -j 1
-            cargo clippy --workspace --all-targets --locked --offline -j 1 -- -D warnings
-            cargo test --workspace --all-targets --locked --offline -j 1 --no-fail-fast
-            cargo test --workspace --doc --locked --offline -j 1
+            cargo check --workspace --all-targets --locked --offline
+            cargo clippy --workspace --all-targets --locked --offline -- -D warnings
+            cargo test --workspace --all-targets --locked --offline --no-fail-fast
+            cargo test --workspace --doc --locked --offline
 
             python3 tests/runtime/legacy/corpus.py verify
             python3 tests/runtime/legacy/fixture_schema.py --check
@@ -312,7 +317,7 @@
           verification = verificationFor pkgs;
         in
         {
-          package = self.packages.${pkgs.stdenv.hostPlatform.system}.engine;
+          package = verification;
           workspace = verification;
           test = verification;
           "design-lint" = verification;
