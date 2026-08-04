@@ -570,6 +570,34 @@ int main(void) {
     hl_a64_trace_result trace;
     CHECK(code != MAP_FAILED);
     {
+        const uint32_t simd_words[] = {
+            UINT32_C(0x4e201c20), /* and v0.16b,v1.16b,v0.16b */
+            UINT32_C(0x4ebc1f9f), /* mov v31.16b,v28.16b */
+            UINT32_C(0x4e3ecfbf), /* fmla v31.4s,v29.4s,v30.4s */
+            UINT32_C(0x4ee2cc20), /* fmls v0.2d,v1.2d,v2.2d */
+            UINT32_C(0x4e21dbf9), /* scvtf v25.4s,v31.4s */
+            UINT32_C(0x6e61d820), /* ucvtf v0.2d,v1.2d */
+            UINT32_C(0xd4000001), /* svc */
+        };
+        const hl_a64_source_span simd_span = {
+            0x1f00, (const uint8_t *)simd_words, sizeof(simd_words), 3, 4};
+        const hl_a64_source simd_source = {&simd_span, 1, 3, 4};
+        CHECK(hl_a64_trace_build(&simd_source, 0x1f00, 7, code, capacity, &trace));
+        CHECK(trace.instruction_count == 7 && trace.source_last == 0x1f1c &&
+              trace.terminal == HL_NATIVE_EXIT_SYSCALL);
+        const uint32_t invalid_words[] = {
+            UINT32_C(0x6e3ecfbf), /* unallocated U=1 FMLA neighbor */
+            UINT32_C(0x6ee2cc20), /* unallocated U=1 FMLS neighbor */
+            UINT32_C(0x0e62cc20), /* reserved one-lane double FMLA */
+        };
+        for (size_t index = 0; index < sizeof(invalid_words) / sizeof(invalid_words[0]); ++index) {
+            const hl_a64_source_span invalid_span = {
+                0x1e00, (const uint8_t *)&invalid_words[index], sizeof(invalid_words[index]), 3, 4};
+            const hl_a64_source invalid_source = {&invalid_span, 1, 3, 4};
+            CHECK(!hl_a64_trace_build(&invalid_source, 0x1e00, 1, code, capacity, &trace));
+        }
+    }
+    {
         const uint32_t literal_word = UINT32_C(0x58000800); /* ldr x0,0x2100 */
         const hl_a64_source_span literal_span = {
             0x2000, (const uint8_t *)&literal_word, sizeof(literal_word), 3, 4};

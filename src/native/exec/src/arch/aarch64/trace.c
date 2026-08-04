@@ -29,9 +29,11 @@
 #include "shift.h"
 #include "simd_compare.h"
 #include "simd_difference.h"
+#include "simd_float.h"
 #include "fp_reduce.h"
 #include "simd_immediate.h"
 #include "simd_integer.h"
+#include "simd_logic.h"
 #include "simd_narrow.h"
 #include "simd_pairwise.h"
 #include "simd_permute.h"
@@ -127,8 +129,10 @@ static int body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc) {
            hl_a64_shift_body(assembler, word) || hl_a64_reverse_body(assembler, word) ||
            hl_a64_simd_compare_body(assembler, word) || hl_a64_compare_body(assembler, word) ||
            hl_a64_simd_difference_body(assembler, word) ||
+           hl_a64_simd_float_body(assembler, word) ||
            hl_a64_simd_fp_reduce_body(assembler, word) ||
            hl_a64_simd_integer_body(assembler, word) ||
+           hl_a64_simd_logic_body(assembler, word) ||
            hl_a64_narrow_arithmetic_body(assembler, word) ||
            hl_a64_narrow_move_body(assembler, word) ||
            hl_a64_saturating_narrow_body(assembler, word) ||
