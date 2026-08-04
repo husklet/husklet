@@ -185,6 +185,34 @@ fn top_options_select_columns_and_reject_unknown_values() {
 }
 
 #[test]
+fn top_custom_columns_require_pid_identity() {
+    let unscoped = TopOptions {
+        ps_args: Some("-eo user,args".into()),
+        unsupported: BTreeMap::new(),
+    };
+    let error = match unscoped.columns() {
+        Ok(_) => panic!("unscoped columns must fail"),
+        Err(error) => error,
+    };
+    assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    assert!(format!("{error:?}").contains("must include pid"));
+
+    let scoped = TopOptions {
+        ps_args: Some("-eo user,pid,args".into()),
+        unsupported: BTreeMap::new(),
+    };
+    assert_eq!(
+        scoped
+            .columns()
+            .unwrap()
+            .iter()
+            .map(|column| column.title())
+            .collect::<Vec<_>>(),
+        ["USER", "PID", "CMD"]
+    );
+}
+
+#[test]
 fn top_does_not_fabricate_unmeasured_process_accounting() {
     let row = ProcessRow {
         user: "root".into(),

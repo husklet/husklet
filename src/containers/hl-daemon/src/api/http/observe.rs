@@ -82,6 +82,12 @@ impl TopOptions {
                 "top column list cannot be empty",
             ));
         }
+        if !columns.iter().any(|column| matches!(column, ProcessColumn::Pid)) {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "top column list must include pid",
+            ));
+        }
         Ok(columns)
     }
 }
