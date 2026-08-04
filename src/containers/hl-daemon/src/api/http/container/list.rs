@@ -5,6 +5,45 @@ pub(in super::super) struct ListQuery {
     #[serde(default)]
     all: bool,
     filters: Option<String>,
+    limit: Option<String>,
+}
+
+impl ListQuery {
+    fn limit(&self) -> ApiResult<Option<usize>> {
+        let Some(value) = self.limit.as_deref().filter(|value| !value.is_empty()) else {
+            return Ok(None);
+        };
+        let value = value
+            .parse::<i64>()
+            .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, format!("invalid container limit {value:?}")))?;
+        if value <= 0 {
+            return Ok(None);
+        }
+        usize::try_from(value)
+            .map(Some)
+            .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "container limit exceeds host range"))
+    }
+
+    fn select(&self, mut values: Vec<hl_container::Container>) -> ApiResult<Vec<Container>> {
+        let limit = self.limit()?;
+        let selection = crate::api::List::parse(self.all || limit.is_some(), self.filters.as_deref())
+            .map_err(|message| ApiError::new(StatusCode::BAD_REQUEST, message))?;
+        let selection = selection.prepare(&values);
+        values.sort_by(|left, right| {
+            right
+                .created_at_ms
+                .cmp(&left.created_at_ms)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        Ok(values
+            .iter()
+            .filter(|value| selection.includes_inactive() || value.state.is_active())
+            .filter(|value| selection.matches(value))
+            .take(limit.unwrap_or(usize::MAX))
+            .cloned()
+            .map(Container::from)
+            .collect())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -247,17 +286,125 @@ pub(in super::super) async fn list(
     State(state): State<DockerState>,
     Query(query): Query<ListQuery>,
 ) -> ApiResult<Json<Vec<Container>>> {
-    let selection = crate::api::List::parse(query.all, query.filters.as_deref())
-        .map_err(|message| ApiError::new(StatusCode::BAD_REQUEST, message))?;
     let values = state.containers.list().await.map_err(ApiError::container)?;
-    let values = values
-        .iter()
-        .filter(|value| selection.includes_inactive() || value.state.is_active())
-        .filter(|value| selection.matches_in(value, &values))
-        .cloned()
-        .map(Container::from)
-        .collect();
-    Ok(Json(values))
+    Ok(Json(query.select(values)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hl_container::{ContainerId, ContainerState, Process};
+
+    fn container(name: &str, created_at_ms: u64) -> hl_container::Container {
+        hl_container::Container {
+            id: format!("{created_at_ms:032x}").parse::<ContainerId>().unwrap(),
+            spec: ContainerSpec::from_directory("/rootfs", Process::new("/bin/true")).name(name),
+            state: ContainerState::Created,
+            created_at_ms,
+            generation: 0,
+            restart: hl_container::Restart::default(),
+            health: None,
+            checkpoint: None,
+        }
+    }
+
+    fn names(values: &[Container]) -> Vec<String> {
+        values.iter().map(Container::name).collect()
+    }
+
+    #[test]
+    fn newest_first() {
+        let query = ListQuery {
+            all: true,
+            filters: None,
+            limit: None,
+        };
+        let values = query
+            .select(vec![
+                container("old", 10),
+                container("new", 30),
+                container("middle", 20),
+            ])
+            .unwrap();
+        assert_eq!(names(&values), ["new", "middle", "old"]);
+    }
+
+    #[test]
+    fn limit_forms() {
+        for value in [None, Some(""), Some("0"), Some("-2")] {
+            let query = ListQuery {
+                all: true,
+                filters: None,
+                limit: value.map(str::to_owned),
+            };
+            assert_eq!(query.limit().unwrap(), None);
+            assert_eq!(
+                names(&query.select(vec![container("old", 1), container("new", 2)]).unwrap()),
+                ["new", "old"]
+            );
+        }
+        let query = ListQuery {
+            all: false,
+            filters: None,
+            limit: Some("2".into()),
+        };
+        assert_eq!(query.limit().unwrap(), Some(2));
+        for value in ["two", "9223372036854775808"] {
+            let query = ListQuery {
+                all: false,
+                filters: None,
+                limit: Some(value.into()),
+            };
+            assert_eq!(
+                query.select(vec![container("value", 1)]).unwrap_err().status,
+                StatusCode::BAD_REQUEST
+            );
+        }
+    }
+
+    #[test]
+    fn filtered_limit() {
+        let mut old = container("old-match", 10);
+        old.spec.labels.insert("role".into(), "keep".into());
+        let mut new = container("new-match", 20);
+        new.spec.labels.insert("role".into(), "keep".into());
+        let query = ListQuery {
+            all: false,
+            filters: Some(r#"{"label":["role=keep"]}"#.into()),
+            limit: Some("1".into()),
+        };
+        let values = query.select(vec![old, container("newest-other", 30), new]).unwrap();
+        assert_eq!(names(&values), ["new-match"]);
+    }
+
+    #[test]
+    fn temporal_prefix_resolution_preserves_inventory_order() {
+        let mut first_match = container("first-match", 20);
+        first_match.id = "89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567"
+            .parse()
+            .unwrap();
+        let mut newer_match = container("newer-match", 30);
+        newer_match.id = "89abcdef1123456789abcdef0123456789abcdef0123456789abcdef01234567"
+            .parse()
+            .unwrap();
+        let candidate = container("candidate", 25);
+        let query = ListQuery {
+            all: true,
+            filters: Some(r#"{"before":["89abcdef"]}"#.into()),
+            limit: None,
+        };
+
+        let values = query.select(vec![first_match, newer_match, candidate]).unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn size_omission() {
+        let query: ListQuery = serde_json::from_value(serde_json::json!({ "all": true, "size": true })).unwrap();
+        let value = serde_json::to_value(query.select(vec![container("sized", 1)]).unwrap().remove(0)).unwrap();
+        assert!(value.get("SizeRw").is_none());
+        assert!(value.get("SizeRootFs").is_none());
+    }
 }
 
 #[derive(Default, Deserialize)]

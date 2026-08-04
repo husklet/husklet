@@ -100,6 +100,12 @@ pub struct List {
     filters: BTreeMap<String, Vec<String>>,
 }
 
+#[cfg(feature = "runtime")]
+pub(crate) struct PreparedList {
+    selection: List,
+    temporal: BTreeMap<String, Vec<Option<(u64, hl_container::ContainerId)>>>,
+}
+
 impl List {
     /// Includes containers that are not currently active.
     #[must_use]
@@ -211,27 +217,44 @@ impl List {
         }
     }
 
-    pub(crate) fn matches_in(
-        &self,
-        container: &hl_container::Container,
-        containers: &[hl_container::Container],
-    ) -> bool {
-        self.filters.iter().all(|(key, values)| match key.as_str() {
-            "label!" => values
+    pub(crate) fn prepare(self, containers: &[hl_container::Container]) -> PreparedList {
+        let mut temporal = BTreeMap::new();
+        for key in ["before", "since"] {
+            let Some(values) = self.filters.get(key) else {
+                continue;
+            };
+            let ordering = values
                 .iter()
-                .all(|value| !Self::matches_label(container, value)),
-            _ => {
-                values.is_empty()
-                    || values
-                        .iter()
-                        .any(|value| Self::matches_one(container, containers, key, value))
-            }
+                .map(|value| Self::reference(containers, value).map(Self::ordering_key))
+                .collect();
+            temporal.insert(key.into(), ordering);
+        }
+        PreparedList {
+            selection: self,
+            temporal,
+        }
+    }
+
+    fn reference<'a>(
+        containers: &'a [hl_container::Container],
+        value: &str,
+    ) -> Option<&'a hl_container::Container> {
+        containers.iter().find(|container| {
+            container.id.as_str().starts_with(value)
+                || container
+                    .spec
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| name == value.trim_start_matches('/'))
         })
     }
 
-    fn matches_one(
+    fn ordering_key(container: &hl_container::Container) -> (u64, hl_container::ContainerId) {
+        (container.created_at_ms, container.id.clone())
+    }
+
+    fn matches_non_temporal(
         container: &hl_container::Container,
-        containers: &[hl_container::Container],
         key: &str,
         value: &str,
     ) -> bool {
@@ -281,26 +304,8 @@ impl List {
                 };
                 health == value
             }
-            "before" => Self::reference(containers, value)
-                .is_some_and(|reference| container.created_at_ms < reference.created_at_ms),
-            "since" => Self::reference(containers, value)
-                .is_some_and(|reference| container.created_at_ms > reference.created_at_ms),
             _ => false,
         }
-    }
-
-    fn reference<'a>(
-        containers: &'a [hl_container::Container],
-        value: &str,
-    ) -> Option<&'a hl_container::Container> {
-        containers.iter().find(|container| {
-            container.id.as_str().starts_with(value)
-                || container
-                    .spec
-                    .name
-                    .as_deref()
-                    .is_some_and(|name| name == value.trim_start_matches('/'))
-        })
     }
 
     fn matches_label(container: &hl_container::Container, value: &str) -> bool {
@@ -314,6 +319,39 @@ impl List {
                     .is_some_and(|current| current == value)
             },
         )
+    }
+}
+
+#[cfg(feature = "runtime")]
+impl PreparedList {
+    pub(crate) const fn includes_inactive(&self) -> bool {
+        self.selection.includes_inactive()
+    }
+
+    pub(crate) fn matches(&self, container: &hl_container::Container) -> bool {
+        self.selection.filters.iter().all(|(key, values)| match key.as_str() {
+            "before" => {
+                values.is_empty()
+                    || self.temporal[key]
+                        .iter()
+                        .flatten()
+                        .any(|reference| &List::ordering_key(container) < reference)
+            }
+            "since" => {
+                values.is_empty()
+                    || self.temporal[key]
+                        .iter()
+                        .flatten()
+                        .any(|reference| &List::ordering_key(container) > reference)
+            }
+            "label!" => values.iter().all(|value| !List::matches_label(container, value)),
+            _ => {
+                values.is_empty()
+                    || values
+                        .iter()
+                        .any(|value| List::matches_non_temporal(container, key, value))
+            }
+        })
     }
 }
 
@@ -340,6 +378,10 @@ mod tests {
             health: None,
             checkpoint: None,
         }
+    }
+
+    fn matches(selection: List, container: &Container, containers: &[Container]) -> bool {
+        selection.prepare(containers).matches(container)
     }
 
     #[test]
@@ -374,10 +416,12 @@ mod tests {
             .ancestor("registry.test/team/tool:7");
         let selected = selected.label("role", "build");
         let container = container();
-        assert!(selected.matches_in(&container, std::slice::from_ref(&container)));
-        assert!(!List::default()
-            .status("running")
-            .matches_in(&container, std::slice::from_ref(&container)));
+        assert!(matches(selected, &container, std::slice::from_ref(&container)));
+        assert!(!matches(
+            List::default().status("running"),
+            &container,
+            std::slice::from_ref(&container)
+        ));
     }
 
     #[test]
@@ -405,19 +449,113 @@ mod tests {
         newer.created_at_ms = 30;
         let containers = [older.clone(), newer.clone()];
 
+        assert!(matches(
+            List::parse(true, Some(r#"{"exited":["137"],"health":["starting"]}"#)).unwrap(),
+            &older,
+            &containers
+        ));
+        assert!(matches(
+            List::parse(true, Some(r#"{"before":["newer"]}"#)).unwrap(),
+            &older,
+            &containers
+        ));
+        assert!(matches(
+            List::parse(true, Some(r#"{"since":["67ea8f51"]}"#)).unwrap(),
+            &newer,
+            &containers
+        ));
+        assert!(!matches(
+            List::parse(true, Some(r#"{"health":["none"]}"#)).unwrap(),
+            &older,
+            &containers
+        ));
+    }
+
+    #[test]
+    fn temporal_references_resolve_exact_name_id_and_unique_prefix_once() {
+        let mut first = container();
+        first.created_at_ms = 10;
+        let mut second = container();
+        second.id = "89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567"
+            .parse()
+            .unwrap();
+        second.spec.name = Some("second".into());
+        second.created_at_ms = 20;
+        let mut similar = second.clone();
+        similar.id = "89abcdef1123456789abcdef0123456789abcdef0123456789abcdef01234567"
+            .parse()
+            .unwrap();
+        similar.spec.name = Some("similar".into());
+        similar.created_at_ms = 30;
+        let containers = [first.clone(), second.clone(), similar];
+
         assert!(
-            List::parse(true, Some(r#"{"exited":["137"],"health":["starting"]}"#))
+            List::parse(true, Some(r#"{"before":["/second"]}"#))
                 .unwrap()
-                .matches_in(&older, &containers)
+                .prepare(&containers)
+                .matches(&first)
         );
-        assert!(List::parse(true, Some(r#"{"before":["newer"]}"#))
+        assert!(
+            List::parse(
+                true,
+                Some(r#"{"since":["89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567"]}"#)
+            )
             .unwrap()
-            .matches_in(&older, &containers));
-        assert!(List::parse(true, Some(r#"{"since":["67ea8f51"]}"#))
+            .prepare(&containers)
+            .matches(&containers[2])
+        );
+        assert!(
+            List::parse(true, Some(r#"{"since":["67ea8f51"]}"#))
+                .unwrap()
+                .prepare(&containers)
+                .matches(&second)
+        );
+        let mut between = first.clone();
+        between.created_at_ms = 25;
+        assert!(
+            !List::parse(true, Some(r#"{"before":["89abcdef"]}"#))
+                .unwrap()
+                .prepare(&containers)
+                .matches(&between)
+        );
+        assert!(
+            !List::parse(true, Some(r#"{"before":["missing"]}"#))
+                .unwrap()
+                .prepare(&containers)
+                .matches(&first)
+        );
+    }
+
+    #[test]
+    fn temporal_boundaries_use_id_order_when_timestamps_match() {
+        let mut before = container();
+        before.id = "1111111111111111111111111111111111111111111111111111111111111111"
+            .parse()
+            .unwrap();
+        before.spec.name = Some("before".into());
+        before.created_at_ms = 20;
+        let mut boundary = before.clone();
+        boundary.id = "2222222222222222222222222222222222222222222222222222222222222222"
+            .parse()
+            .unwrap();
+        boundary.spec.name = Some("boundary".into());
+        let mut since = before.clone();
+        since.id = "3333333333333333333333333333333333333333333333333333333333333333"
+            .parse()
+            .unwrap();
+        since.spec.name = Some("since".into());
+        let containers = [before.clone(), boundary, since.clone()];
+
+        let before_selection = List::parse(true, Some(r#"{"before":["boundary"]}"#))
             .unwrap()
-            .matches_in(&newer, &containers));
-        assert!(!List::parse(true, Some(r#"{"health":["none"]}"#))
+            .prepare(&containers);
+        assert!(before_selection.matches(&before));
+        assert!(!before_selection.matches(&since));
+
+        let since_selection = List::parse(true, Some(r#"{"since":["boundary"]}"#))
             .unwrap()
-            .matches_in(&older, &containers));
+            .prepare(&containers);
+        assert!(since_selection.matches(&since));
+        assert!(!since_selection.matches(&before));
     }
 }
