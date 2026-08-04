@@ -143,6 +143,17 @@ pub struct VkPresentInfoKHR {
     pub p_results: *mut i32,
 }
 
+pub const VK_STRUCTURE_TYPE_PRESENT_ID_KHR: i32 = 1_000_294_000;
+pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR: i32 = 1_000_294_001;
+
+#[repr(C)]
+pub struct VkPresentIdKHR {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub swapchain_count: u32,
+    pub p_present_ids: *const u64,
+}
+
 // ==================================================================================================
 // transfer-path structs (buffer/image copies, blits, clears, pipeline barriers) — layout from vk.xml
 // ==================================================================================================

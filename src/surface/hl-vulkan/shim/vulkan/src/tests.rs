@@ -54,6 +54,8 @@ fn every_implemented_command_resolves() {
         "vkCreateShaderModule",
         "vkCreateComputePipelines",
         "vkQueueSubmit",
+        // VK_KHR_present_id adds no command; identifiers use this existing pNext-capable entry point.
+        "vkQueuePresentKHR",
         "vkWaitForFences",
         // newly hand-written families resolve through the same table:
         "vkTrimCommandPool",

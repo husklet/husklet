@@ -87,6 +87,10 @@ pub const DEVICE_EXTENSIONS: &[ExtensionProp] = &[
         spec_version: 70,
     },
     ExtensionProp {
+        name: "VK_KHR_present_id",
+        spec_version: 1,
+    },
+    ExtensionProp {
         name: "VK_KHR_dynamic_rendering",
         spec_version: 1,
     },
@@ -1051,6 +1055,8 @@ mod tests {
     fn device_extensions_advertise_swapchain() {
         let names: Vec<&str> = DEVICE_EXTENSIONS.iter().map(|e| e.name).collect();
         assert!(names.contains(&"VK_KHR_swapchain"));
+        assert!(names.contains(&"VK_KHR_present_id"));
+        assert!(!names.contains(&"VK_KHR_present_wait"));
     }
 
     #[test]

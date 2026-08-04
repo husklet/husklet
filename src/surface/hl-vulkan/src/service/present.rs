@@ -397,6 +397,7 @@ pub fn create_swapchain_for_target(
             images,
             retired: false,
             acquire_cursor: 0,
+            last_present_id: 0,
         },
     );
     Ok(handle)
@@ -656,6 +657,45 @@ pub enum AcquireImageError {
     NotReady,
     Timeout,
     Invalid(GpuError),
+}
+
+/// Validate one `VkPresentIdKHR` array before presentation mutates any swapchain or consumes any wait
+/// semaphore. Zero means no identifier; every non-zero identifier must strictly increase per swapchain.
+pub fn validate_present_ids(dev: &Device, presents: &[(VkSwapchainKHR, u64)]) -> Result<()> {
+    let mut seen = std::collections::HashSet::with_capacity(presents.len());
+    for &(swapchain, present_id) in presents {
+        if !seen.insert(swapchain) {
+            return Err(GpuError::Invalid(
+                "vkQueuePresentKHR: swapchains in one present must be unique",
+            ));
+        }
+        let record = dev.swapchains.get(&swapchain).ok_or(GpuError::Invalid(
+            "vkQueuePresentKHR: unknown VkSwapchainKHR",
+        ))?;
+        if present_id != 0 && present_id <= record.last_present_id {
+            return Err(GpuError::Invalid(
+                "VkPresentIdKHR: non-zero present id must increase per swapchain",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Associate an accepted presentation with its application identifier.
+pub fn record_present_id(dev: &mut Device, swapchain: VkSwapchainKHR, present_id: u64) -> Result<()> {
+    if present_id == 0 {
+        return Ok(());
+    }
+    let record = dev.swapchains.get_mut(&swapchain).ok_or(GpuError::Invalid(
+        "VkPresentIdKHR: swapchain disappeared before association",
+    ))?;
+    if present_id <= record.last_present_id {
+        return Err(GpuError::Invalid(
+            "VkPresentIdKHR: non-zero present id must increase per swapchain",
+        ));
+    }
+    record.last_present_id = present_id;
+    Ok(())
 }
 
 /// `vkQueuePresentKHR` (one swapchain) — submit [`Cmd::Present`] naming the swapchain's surface + the

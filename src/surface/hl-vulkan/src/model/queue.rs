@@ -124,6 +124,9 @@ pub struct SwapchainRec {
     pub retired: bool,
     /// The index the next round-robin acquire starts its scan at (mod `images.len()`).
     pub acquire_cursor: u32,
+    /// Greatest non-zero identifier accepted through `VkPresentIdKHR` for this swapchain. Zero means
+    /// "no identifier"; replacement swapchains start with independent identifier state.
+    pub last_present_id: u64,
 }
 
 // ---- WSI physical-device surface queries (modeled values) ----------------------------------------

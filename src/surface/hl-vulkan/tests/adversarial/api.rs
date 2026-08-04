@@ -223,6 +223,31 @@ fn present_unknown_swapchain_and_out_of_range_index() {
 }
 
 #[test]
+fn present_ids_are_atomic_strictly_increasing_and_swapchain_local() {
+    let mut d = dev();
+    let mut s = sink();
+    let surface_a =
+        present::create_surface(&mut d, &mut s, 64, 64, vk_format::B8G8R8A8_UNORM, None).unwrap();
+    let surface_b =
+        present::create_surface(&mut d, &mut s, 64, 64, vk_format::B8G8R8A8_UNORM, None).unwrap();
+    let a = present::create_swapchain(&mut d, &mut s, surface_a, 2).unwrap();
+    let b = present::create_swapchain(&mut d, &mut s, surface_b, 2).unwrap();
+
+    present::validate_present_ids(&d, &[(a, 7), (b, 7)]).unwrap();
+    present::record_present_id(&mut d, a, 7).unwrap();
+    present::record_present_id(&mut d, b, 7).unwrap();
+    present::validate_present_ids(&d, &[(a, 0)]).unwrap();
+    present::record_present_id(&mut d, a, 0).unwrap();
+    assert_eq!(d.swapchains[&a].last_present_id, 7);
+    assert!(present::validate_present_ids(&d, &[(a, 7)]).is_err());
+    assert!(present::validate_present_ids(&d, &[(a, 6)]).is_err());
+    assert!(present::validate_present_ids(&d, &[(a, 8), (b, 7)]).is_err());
+    assert_eq!(d.swapchains[&a].last_present_id, 7);
+    assert!(present::validate_present_ids(&d, &[(a, 8), (a, 9)]).is_err());
+    assert!(present::validate_present_ids(&d, &[(0xdead, 8)]).is_err());
+}
+
+#[test]
 fn surface_queries_report_modeled_values() {
     assert!(present::QueueFamily(0).supports_present());
     assert!(!present::QueueFamily(1).supports_present());

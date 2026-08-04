@@ -59,6 +59,12 @@ impl FeatureStruct {
         ),
         feature(1_000_295_000, "VkPhysicalDevicePrivateDataFeatures", 1),
         Self {
+            s_type: crate::types::VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR,
+            name: "VkPhysicalDevicePresentIdFeaturesKHR",
+            count: 1,
+            implemented: &[0],
+        },
+        Self {
             s_type: 1_000_344_000,
             name: "VkPhysicalDeviceRGBA10X6FormatsFeaturesEXT",
             count: 1,
@@ -222,8 +228,31 @@ mod tests {
                 .iter()
                 .map(|feature| feature.implemented.len())
                 .sum::<usize>(),
-            3
+            4
         );
+    }
+
+    #[test]
+    fn present_id_feature_query_is_true() {
+        let feature = FeatureStruct::matching(
+            crate::types::VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR,
+        )
+        .unwrap();
+        let mut node = HeaderWithBits::<1> {
+            s_type: feature.s_type,
+            p_next: core::ptr::null_mut(),
+            bits: [0xcdcd_cdcd],
+        };
+        let mut query = crate::types::VkPhysicalDeviceFeatures2 {
+            s_type: crate::types::VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+            p_next: &mut node as *mut _ as *mut c_void,
+            features: crate::types::VkPhysicalDeviceFeatures { bits: [VK_FALSE; 55] },
+        };
+        crate::instance::vkGetPhysicalDeviceFeatures2(
+            core::ptr::null_mut(),
+            &mut query as *mut _ as *mut c_void,
+        );
+        assert_eq!(node.bits, [VK_TRUE]);
     }
 
     #[test]
