@@ -257,7 +257,7 @@ pub(in crate::ffi::linux::execution) fn create(
     let trace_exchange = hl_runtime::TraceExchange::new(Arc::new(process_memory.clone()));
     ptrace.register(child.0, Arc::clone(&trace_exchange));
     let sigreturn_pc = image::SignalGateway::install(&mappings, &process_memory, architecture)?;
-    let brk = BrkRegion::new(
+    let mut brk = BrkRegion::new(
         Arc::clone(&mappings),
         BrkSnapshot {
             lower: GuestAddress::new(0x80_0000),
@@ -267,6 +267,12 @@ pub(in crate::ffi::linux::execution) fn create(
         },
     )
     .map_err(|_| EngineError::LaunchFailed)?;
+    if let Some(limit) = memory_limit {
+        brk = brk.with_account(Arc::new(super::super::memory_account::MemoryAccount::new(
+            limit,
+            Arc::clone(&system),
+        )));
+    }
     let (path_host, watches) = image::WorkspaceRoot::host(
         plan,
         authority,

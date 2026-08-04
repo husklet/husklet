@@ -15,10 +15,24 @@ pub struct BrkSnapshot {
     pub backing_identity: u64,
 }
 
+pub trait BrkAccount: std::fmt::Debug + Send + Sync {
+    fn reserve(&self, bytes: u64) -> bool;
+    fn refund(&self, bytes: u64);
+    fn current(&self) -> u64;
+}
+
+#[derive(Clone, Copy, Debug)]
+struct BrkState {
+    snapshot: BrkSnapshot,
+    uncharged_ceiling: GuestAddress,
+    charged: u64,
+}
+
 #[derive(Debug)]
 pub struct BrkRegion<H: MappingHost> {
     memory: Arc<MappingCoordinator<H>>,
-    state: Mutex<BrkSnapshot>,
+    state: Mutex<BrkState>,
+    account: Option<Arc<dyn BrkAccount>>,
 }
 
 impl<H: MappingHost> BrkRegion<H> {
@@ -37,7 +51,8 @@ impl<H: MappingHost> BrkRegion<H> {
         Self::validate(snapshot)?;
         let region = Self {
             memory,
-            state: Mutex::new(snapshot),
+            state: Mutex::new(BrkState { snapshot, uncharged_ceiling: snapshot.lower, charged: 0 }),
+            account: None,
         };
         let end = Self::mapped_end(snapshot.current)?;
         if end > snapshot.lower {
@@ -54,19 +69,37 @@ impl<H: MappingHost> BrkRegion<H> {
         Self::validate(snapshot)?;
         Ok(Self {
             memory,
-            state: Mutex::new(snapshot),
+            state: Mutex::new(BrkState { snapshot, uncharged_ceiling: snapshot.current, charged: 0 }),
+            account: None,
         })
+    }
+
+    #[must_use]
+    pub fn with_account(mut self, account: Arc<dyn BrkAccount>) -> Self {
+        self.account = Some(account);
+        self
+    }
+
+    pub fn fork(&self, memory: Arc<MappingCoordinator<H>>) -> Result<Self, hl_memory::MemoryError> {
+        let mut child = Self::restore(memory, self.snapshot())?;
+        child.account = self.account.clone();
+        Ok(child)
+    }
+
+    #[must_use]
+    pub fn account(&self) -> Option<Arc<dyn BrkAccount>> {
+        self.account.clone()
     }
 
     #[must_use]
     pub fn set(&self, requested: u64) -> u64 {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        let old = state.current;
+        let old = state.snapshot.current;
         if requested == 0 {
             return old.get();
         }
         let requested = GuestAddress::new(requested);
-        if requested < state.lower || requested > state.upper {
+        if requested < state.snapshot.lower || requested > state.snapshot.upper {
             return old.get();
         }
         let Ok(old_end) = Self::mapped_end(old) else {
@@ -75,9 +108,15 @@ impl<H: MappingHost> BrkRegion<H> {
         let Ok(new_end) = Self::mapped_end(requested) else {
             return old.get();
         };
+        let target_charge = requested.get().saturating_sub(state.uncharged_ceiling.get());
+        let reserve = target_charge.saturating_sub(state.charged);
+        let reserved = reserve == 0 || self.account.as_ref().is_none_or(|account| account.reserve(reserve));
+        if !reserved {
+            return old.get();
+        }
         let transition = if new_end > old_end {
             self.memory
-                .map(Self::request(old_end, new_end.get() - old_end.get(), *state))
+                .map(Self::request(old_end, new_end.get() - old_end.get(), state.snapshot))
                 .map(|_| ())
         } else if new_end < old_end {
             AddressRange::nonempty(new_end, old_end.get() - new_end.get())
@@ -87,14 +126,25 @@ impl<H: MappingHost> BrkRegion<H> {
             Ok(())
         };
         if transition.is_ok() {
-            state.current = requested;
+            if target_charge < state.charged {
+                let refund = state.charged - target_charge;
+                if let Some(account) = &self.account {
+                    account.refund(refund);
+                }
+            }
+            state.charged = target_charge;
+            state.snapshot.current = requested;
+        } else if reserve != 0 {
+            if let Some(account) = &self.account {
+                account.refund(reserve);
+            }
         }
-        state.current.get()
+        state.snapshot.current.get()
     }
 
     #[must_use]
     pub fn snapshot(&self) -> BrkSnapshot {
-        *self.state.lock().unwrap_or_else(|error| error.into_inner())
+        self.state.lock().unwrap_or_else(|error| error.into_inner()).snapshot
     }
 
     fn request(start: GuestAddress, length: u64, state: BrkSnapshot) -> MapRequest {
@@ -118,5 +168,16 @@ impl<H: MappingHost> BrkRegion<H> {
             .ok_or(hl_memory::MemoryError::AddressOverflow)?
             & !(PAGE - 1);
         Ok(GuestAddress::new(rounded))
+    }
+}
+
+impl<H: MappingHost> Drop for BrkRegion<H> {
+    fn drop(&mut self) {
+        let charged = self.state.lock().unwrap_or_else(|error| error.into_inner()).charged;
+        if charged != 0 {
+            if let Some(account) = &self.account {
+                account.refund(charged);
+            }
+        }
     }
 }

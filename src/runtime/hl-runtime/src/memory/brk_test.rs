@@ -1,5 +1,33 @@
 use super::*;
-use crate::BrkSnapshot;
+use crate::{BrkAccount, BrkSnapshot};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+#[derive(Debug)]
+struct Account {
+    limit: u64,
+    current: AtomicU64,
+}
+
+impl crate::BrkAccount for Account {
+    fn reserve(&self, bytes: u64) -> bool {
+        self.current
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current.checked_add(bytes).filter(|next| *next <= self.limit)
+            })
+            .is_ok()
+    }
+
+    fn refund(&self, bytes: u64) {
+        let result = self.current.fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            current.checked_sub(bytes)
+        });
+        assert!(result.is_ok());
+    }
+
+    fn current(&self) -> u64 {
+        self.current.load(Ordering::Acquire)
+    }
+}
 
 impl Fixture {
     fn runtime_with_brk(&self, architecture: GuestArchitecture) -> RuntimeMemorySyscalls<Mapping, Memory> {
@@ -87,4 +115,93 @@ fn brk_unchanged_break() {
         );
         assert!(fixture.coordinator.ledger().regions().is_empty());
     }
+}
+
+#[test]
+fn byte_exact_limit_refund_fork_and_drop() {
+    for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
+        let fixture = Fixture::new();
+        let account = Arc::new(Account { limit: 0x123, current: AtomicU64::new(0) });
+        let brk = BrkRegion::new(
+            fixture.coordinator.clone(),
+            BrkSnapshot {
+                lower: GuestAddress::new(0x10_000),
+                current: GuestAddress::new(0x10_000),
+                upper: GuestAddress::new(0x20_000),
+                backing_identity: 99,
+            },
+        )
+        .unwrap()
+        .with_account(account.clone());
+        let mut runtime = fixture.runtime(architecture).with_brk(brk);
+        assert_eq!(runtime.handle(Fixture::operation("brk"), [0x10_123, 0, 0, 0, 0, 0]), LinuxResult::Value(0x10_123));
+        assert_eq!(account.current(), 0x123);
+        assert_eq!(runtime.handle(Fixture::operation("brk"), [0x10_124, 0, 0, 0, 0, 0]), LinuxResult::Value(0x10_123));
+        assert_eq!(account.current(), 0x123);
+        assert_eq!(runtime.handle(Fixture::operation("brk"), [0x10_011, 0, 0, 0, 0, 0]), LinuxResult::Value(0x10_011));
+        assert_eq!(account.current(), 0x11);
+
+        let child_fixture = Fixture::new();
+        let mut child = runtime
+            .fork_clone(
+                child_fixture.coordinator.clone(),
+                child_fixture.descriptors.clone(),
+                child_fixture.memory.clone(),
+                2,
+            )
+            .unwrap();
+        assert_eq!(account.current(), 0x11, "fork must not double-charge inherited bytes");
+        assert_eq!(child.handle(Fixture::operation("brk"), [0x10_021, 0, 0, 0, 0, 0]), LinuxResult::Value(0x10_021));
+        assert_eq!(account.current(), 0x21, "only post-fork growth is newly charged");
+        assert_eq!(child.handle(Fixture::operation("brk"), [0x10_001, 0, 0, 0, 0, 0]), LinuxResult::Value(0x10_001));
+        assert_eq!(account.current(), 0x11, "child shrink refunds only child-owned growth");
+        drop(child);
+        assert_eq!(account.current(), 0x11, "dropping an unchanged child must not refund parent bytes");
+        drop(runtime);
+        assert_eq!(account.current(), 0, "address-space teardown refunds its exact owned growth");
+    }
+}
+
+#[test]
+fn failed_mapping_refunds_reservation() {
+    for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
+        let fixture = Fixture::new();
+        let account = Arc::new(Account { limit: 4096, current: AtomicU64::new(0) });
+        let brk = BrkRegion::new(
+            fixture.coordinator.clone(),
+            BrkSnapshot {
+                lower: GuestAddress::new(0x10_000), current: GuestAddress::new(0x10_000),
+                upper: GuestAddress::new(0x20_000), backing_identity: 99,
+            },
+        ).unwrap().with_account(account.clone());
+        let mut runtime = fixture.runtime(architecture).with_brk(brk);
+        fixture.mapping.0.lock().unwrap().fail_commit = true;
+        assert_eq!(runtime.handle(Fixture::operation("brk"), [0x10_101, 0, 0, 0, 0, 0]), LinuxResult::Value(0x10_000));
+        assert_eq!(account.current(), 0);
+    }
+}
+
+#[test]
+fn exec_replacement_refunds_old_address_space() {
+    let fixture = Fixture::new();
+    let account = Arc::new(Account { limit: 4096, current: AtomicU64::new(0) });
+    let snapshot = BrkSnapshot {
+        lower: GuestAddress::new(0x10_000), current: GuestAddress::new(0x10_000),
+        upper: GuestAddress::new(0x20_000), backing_identity: 99,
+    };
+    let old = BrkRegion::new(fixture.coordinator.clone(), snapshot)
+        .unwrap()
+        .with_account(account.clone());
+    assert_eq!(old.set(0x10_101), 0x10_101);
+    assert_eq!(account.current(), 0x101);
+    let replacement_fixture = Fixture::new();
+    let replacement = BrkRegion::new(replacement_fixture.coordinator.clone(), snapshot)
+        .unwrap()
+        .with_account(account.clone());
+    drop(old);
+    assert_eq!(account.current(), 0, "exec retirement refunds the old address-space owner");
+    assert_eq!(replacement.set(0x10_022), 0x10_022);
+    assert_eq!(account.current(), 0x22);
+    drop(replacement);
+    assert_eq!(account.current(), 0);
 }

@@ -321,12 +321,11 @@ impl ProcessContext {
         // descriptions. Keep the process memfd registry so descriptors that
         // survive the CLOEXEC sweep can still resolve their shared backing in
         // the new image.
-        let memfds = self
-            .memory
-            .lock()
-            .map_err(|_| EngineError::Synchronization)?
-            .memfd_registry();
-        let brk = BrkRegion::new(
+        let (memfds, brk_account) = {
+            let memory = self.memory.lock().map_err(|_| EngineError::Synchronization)?;
+            (memory.memfd_registry(), memory.brk_account())
+        };
+        let mut brk = BrkRegion::new(
             Arc::clone(&mappings),
             BrkSnapshot {
                 lower: GuestAddress::new(0x80_0000),
@@ -336,6 +335,9 @@ impl ProcessContext {
             },
         )
         .map_err(|_| EngineError::LaunchFailed)?;
+        if let Some(account) = brk_account {
+            brk = brk.with_account(account);
+        }
         let mut memory = RuntimeMemorySyscalls::new(
             Arc::clone(&mappings),
             Arc::clone(&table),

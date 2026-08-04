@@ -1,6 +1,6 @@
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Container-visible resource values shared by syscalls and virtual files.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -69,12 +69,22 @@ impl SystemAuthority {
     }
 
     pub fn observe_uptime(&self, seconds: u64) {
-        self.resources.write().unwrap_or_else(|error| error.into_inner()).uptime_seconds = seconds;
+        self.resources
+            .write()
+            .unwrap_or_else(|error| error.into_inner())
+            .uptime_seconds = seconds;
     }
 
     pub fn observe_fork(&self) {
         let mut snapshot = self.resources.write().unwrap_or_else(|error| error.into_inner());
         snapshot.process_creations = snapshot.process_creations.saturating_add(1);
+    }
+
+    pub fn observe_free_memory(&self, bytes: u64) {
+        self.resources
+            .write()
+            .unwrap_or_else(|error| error.into_inner())
+            .free_memory = bytes;
     }
 
     #[must_use]
@@ -119,6 +129,7 @@ impl Default for SystemAuthority {
 #[cfg(test)]
 mod tests {
     use super::{ResourceSnapshot, SystemAuthority};
+    use std::sync::{Arc, Barrier};
 
     #[test]
     fn visible_memory_distinguishes_absent_observation_from_limit() {
@@ -140,6 +151,40 @@ mod tests {
         system.observe_fork();
         system.observe_fork();
         assert_eq!(system.snapshot().process_creations, 2);
+    }
+
+    #[test]
+    fn concurrent_memory_observation_preserves_other_fields() {
+        let system = Arc::new(SystemAuthority::new(ResourceSnapshot {
+            total_memory: 4096,
+            free_memory: 4096,
+            ..ResourceSnapshot::default()
+        }));
+        let start = Arc::new(Barrier::new(3));
+        let resources = Arc::clone(&system);
+        let resource_start = Arc::clone(&start);
+        let memory = std::thread::spawn(move || {
+            resource_start.wait();
+            for free in 0..1000 {
+                resources.observe_free_memory(free);
+            }
+        });
+        let activity = Arc::clone(&system);
+        let activity_start = Arc::clone(&start);
+        let counters = std::thread::spawn(move || {
+            activity_start.wait();
+            for uptime in 0..1000 {
+                activity.observe_uptime(uptime);
+                activity.observe_fork();
+            }
+        });
+        start.wait();
+        memory.join().unwrap();
+        counters.join().unwrap();
+        let snapshot = system.snapshot();
+        assert_eq!(snapshot.free_memory, 999);
+        assert_eq!(snapshot.uptime_seconds, 999);
+        assert_eq!(snapshot.process_creations, 1000);
     }
 
     #[test]

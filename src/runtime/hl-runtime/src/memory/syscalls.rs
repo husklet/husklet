@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use hl_descriptor::{DescriptorFlags, DescriptorTable, StatusFlags};
 use hl_isa::{AddressRange, GuestAddress};
 use hl_linux::{
-    Errno, GuestArchitecture, GuestIovec, GuestMarshaller, GuestMemory, IOV_MAXIMUM, LinuxResult, MapSource,
-    MemoryAbi, MemorySyscalls, SyscallOperation,
+    Errno, GuestArchitecture, GuestIovec, GuestMarshaller, GuestMemory, IOV_MAXIMUM, LinuxResult, MapSource, MemoryAbi,
+    MemorySyscalls, SyscallOperation,
 };
 use hl_memory::{
     Backing, MapRequest, MappingCoordinator, MappingHost, Placement, Protection, SharedError, SharedObjectStore,
@@ -163,6 +163,11 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
     }
 
     #[must_use]
+    pub fn brk_account(&self) -> Option<Arc<dyn crate::BrkAccount>> {
+        self.brk.as_ref().and_then(BrkRegion::account)
+    }
+
+    #[must_use]
     pub fn with_address_limit(mut self, limit: u64) -> Self {
         self.address_limit = limit & !4095;
         self
@@ -190,7 +195,7 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
         let brk = self
             .brk
             .as_ref()
-            .map(|value| BrkRegion::restore(Arc::clone(&coordinator), value.snapshot()))
+            .map(|value| value.fork(Arc::clone(&coordinator)))
             .transpose()?;
         Ok(Self {
             coordinator,
@@ -213,9 +218,7 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
         if arguments[5] != 0 {
             return LinuxResult::Error(Errno::EINVAL);
         }
-        let (Ok(local_count), Ok(remote_count)) =
-            (usize::try_from(arguments[2]), usize::try_from(arguments[4]))
-        else {
+        let (Ok(local_count), Ok(remote_count)) = (usize::try_from(arguments[2]), usize::try_from(arguments[4])) else {
             return LinuxResult::Error(Errno::EINVAL);
         };
         if local_count > IOV_MAXIMUM || remote_count > IOV_MAXIMUM {
@@ -290,7 +293,11 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
     }
 
     fn copy_result(total: u64) -> LinuxResult {
-        if total == 0 { LinuxResult::Error(Errno::EFAULT) } else { LinuxResult::Value(total) }
+        if total == 0 {
+            LinuxResult::Error(Errno::EFAULT)
+        } else {
+            LinuxResult::Value(total)
+        }
     }
 
     #[must_use]
@@ -334,9 +341,7 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
             return LinuxResult::Error(Errno::ENOMEM);
         }
         let placement = match plan.placement {
-            Placement::Fixed(address) | Placement::FixedNoReplace(address)
-                if address.get() < self.minimum_address =>
-            {
+            Placement::Fixed(address) | Placement::FixedNoReplace(address) if address.get() < self.minimum_address => {
                 return LinuxResult::Error(Errno::EPERM);
             }
             Placement::Fixed(address) | Placement::FixedNoReplace(address)
@@ -468,14 +473,9 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
         };
         let result = match plan.protection {
             Some(protection) => self.coordinator.protect(plan.range, protection),
-            None if !self
-                .coordinator
-                .ledger()
-                .regions()
-                .iter()
-                .any(|region| {
-                    region.range().start() < plan.range.end() && plan.range.start() < region.range().end()
-                }) =>
+            None if !self.coordinator.ledger().regions().iter().any(|region| {
+                region.range().start() < plan.range.end() && plan.range.start() < region.range().end()
+            }) =>
             {
                 return LinuxResult::Value(0);
             }

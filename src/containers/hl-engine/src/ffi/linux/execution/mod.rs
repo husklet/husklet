@@ -28,6 +28,7 @@ mod exit;
 mod fork;
 mod image_data;
 mod itimer;
+mod memory_account;
 mod memory_limit;
 pub(crate) mod network;
 mod operand;
