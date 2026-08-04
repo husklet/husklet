@@ -247,7 +247,7 @@ fn missing_checkpoint_and() {
 fn network_checkpoint_role() {
     use std::os::unix::ffi::OsStrExt;
 
-    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/compat/prebuilt/aarch64/exit");
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/prebuilt/aarch64/exit");
     let staged = StagedImage::create(&source);
     let stage_root = staged.root.clone();
     let encoded = staged.executable.as_os_str().as_bytes().to_vec();

@@ -1,0 +1,142 @@
+cases:
+  - id: languages/go-version-122-alpine
+    image: golang:1.22-alpine
+    run:
+      shell: go version | grep -o 'go1.22'
+    expect:
+      stdout_contains: ["go1.22"]
+
+  - id: languages/java-version-temurin17
+    image: eclipse-temurin:17
+    run:
+      shell: java -version 2>&1 | grep -o 'openjdk version "17'
+    expect:
+      stdout_contains: ['openjdk version "17']
+
+  - id: languages/rust-version-1-slim
+    image: rust:1-slim
+    run:
+      shell: rustc --version | grep -o 'rustc 1.'
+    expect:
+      stdout_contains: ["rustc 1."]
+
+  - id: languages/go-sum-122-alpine
+    image: golang:1.22-alpine
+    class: long
+    resources: [process_heavy]
+    run:
+      shell: |-
+        export GOMAXPROCS=1 GOFLAGS=-p=1
+        cat > /m.go <<'EOF'
+        package main
+        import "fmt"
+        func main(){ s:=0; for i:=1;i<=1000;i++{ s+=i }; fmt.Println(s) }
+        EOF
+        go run /m.go
+    expect:
+      stdout_contains: ["500500"]
+
+  - id: languages/go-fib-123-alpine
+    image: golang:1.23-alpine
+    class: long
+    resources: [process_heavy]
+    run:
+      shell: |-
+        export GOMAXPROCS=1 GOFLAGS=-p=1
+        cat > /m.go <<'EOF'
+        package main
+        import "fmt"
+        func main(){ var a,b uint64 =0,1; for i:=0;i<50;i++{ a,b=b,a+b }; fmt.Println(a) }
+        EOF
+        go run /m.go
+    expect:
+      stdout_contains: ["12586269025"]
+
+  - id: languages/go-sum-122-bookworm
+    image: golang:1.22-bookworm
+    class: long
+    resources: [process_heavy]
+    run:
+      shell: |-
+        export GOMAXPROCS=1 GOFLAGS=-p=1
+        cat > /m.go <<'EOF'
+        package main
+        import "fmt"
+        func main(){ s:=0; for i:=1;i<=1000;i++{ s+=i }; fmt.Println(s) }
+        EOF
+        go run /m.go
+    expect:
+      stdout_contains: ["500500"]
+
+  - id: languages/java-sum-17
+    image: eclipse-temurin:17
+    class: long
+    run:
+      shell: |-
+        cat > /Main.java <<'EOF'
+        public class Main { public static void main(String[] a){ long s=0; for(int i=1;i<=1000;i++) s+=i; System.out.println(s);} }
+        EOF
+        javac /Main.java -d /out && java -cp /out Main
+    expect:
+      stdout_contains: ["500500"]
+
+  - id: languages/java-fib-21
+    image: eclipse-temurin:21
+    class: long
+    run:
+      shell: |-
+        cat > /Main.java <<'EOF'
+        public class Main { public static void main(String[] a){ long x=0,y=1; for(int i=0;i<50;i++){long t=x+y;x=y;y=t;} System.out.println(x);} }
+        EOF
+        javac /Main.java -d /out && java -cp /out Main
+    expect:
+      stdout_contains: ["12586269025"]
+
+  - id: languages/java-sum-temurin21
+    image: eclipse-temurin:21
+    class: long
+    run:
+      shell: |-
+        cat > /Main.java <<'EOF'
+        public class Main { public static void main(String[] a){ long s=0; for(int i=1;i<=1000;i++) s+=i; System.out.println(s);} }
+        EOF
+        javac /Main.java -d /out && java -cp /out Main
+    expect:
+      stdout_contains: ["500500"]
+
+  - id: languages/java-sum-temurin21-alpine
+    image: eclipse-temurin:21-alpine
+    class: long
+    run:
+      shell: |-
+        cat > /Main.java <<'EOF'
+        public class Main { public static void main(String[] a){ long s=0; for(int i=1;i<=1000;i++) s+=i; System.out.println(s);} }
+        EOF
+        javac /Main.java -d /out && java -cp /out Main
+    expect:
+      stdout_contains: ["500500"]
+
+  - id: languages/rust-sum-1-alpine
+    image: rust:1-alpine
+    class: long
+    resources: [process_heavy]
+    run:
+      shell: |-
+        cat > /m.rs <<'EOF'
+        fn main(){ let s:u64=(1..=1000).sum(); println!("{}",s); }
+        EOF
+        rustc /m.rs -o /m && /m
+    expect:
+      stdout_contains: ["500500"]
+
+  - id: languages/rust-fib-1-slim
+    image: rust:1-slim
+    class: long
+    run:
+      shell: |-
+        cat > /m.rs <<'EOF'
+        fn main(){ let (mut a,mut b):(u64,u64)=(0,1); for _ in 0..50 {let t=a+b;a=b;b=t;} println!("{}",a); }
+        EOF
+        rustc /m.rs -o /m && /m
+    expect:
+      stdout_contains: ["12586269025"]

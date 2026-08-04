@@ -16,7 +16,7 @@ required-features = ["runtime"]
 
 [[test]]
 name = "scenarios"
-path = "tests/scenarios/main.rs"
+path = "../../../tests/scenarios/main.rs"
 harness = false
 required-features = ["runtime"]
 

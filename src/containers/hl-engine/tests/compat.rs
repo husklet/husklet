@@ -691,7 +691,7 @@ fn run_guest(worker: &str, guest: PathBuf, case: &Case, rootfs: Option<&str>) {
 }
 
 fn corpus() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/compat")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime")
 }
 
 fn cases(root: &Path) -> Vec<Case> {

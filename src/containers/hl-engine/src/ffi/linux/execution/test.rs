@@ -225,7 +225,7 @@ fn run_environment(image: Vec<u8>, name: &str, isa: GuestIsa, environment: Vec<V
 
 #[test]
 fn environment_stack() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/compat/prebuilt");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/prebuilt");
     for (isa, folder) in [(GuestIsa::Aarch64, "aarch64"), (GuestIsa::X86_64, "x86_64")] {
         let image = fs::read(root.join(folder).join("environment")).unwrap();
         assert_eq!(
@@ -247,7 +247,7 @@ fn environment_stack() {
 
 #[test]
 fn bootstrap_instructions_execute() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/compat/prebuilt");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/prebuilt");
     let arm = fs::read(root.join("aarch64/write")).unwrap();
     let x86 = fs::read(root.join("x86_64/exit")).unwrap();
     let x86_write = fs::read(root.join("x86_64/write")).unwrap();
@@ -304,7 +304,7 @@ fn pthread_clone_executes() {
 
 #[test]
 fn clone_teardown() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/compat/prebuilt");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/prebuilt");
     for (isa, folder) in [(GuestIsa::Aarch64, "aarch64"), (GuestIsa::X86_64, "x86_64")] {
         let image = fs::read(root.join(folder).join("clone")).unwrap();
         assert_eq!(

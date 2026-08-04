@@ -947,7 +947,7 @@ fn stamped_input(path: &Path, required: bool) -> io::Result<Vec<u8>> {
 const DEFAULT_JOBS: usize = 1;
 fn corpus_path(root: Option<&str>) -> PathBuf {
     root.map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/compat"))
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime"))
 }
 
 fn corpus() -> PathBuf {

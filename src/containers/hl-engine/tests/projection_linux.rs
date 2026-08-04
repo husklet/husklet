@@ -103,7 +103,7 @@ fn confined_static_guest() {
     std::fs::create_dir(&root).unwrap();
     let path = root.join("guest");
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/compat/artifacts/full/process/x86_64/uname-boundary");
+        .join("../../../tests/runtime/artifacts/full/process/x86_64/uname-boundary");
     std::fs::copy(fixture, &path).unwrap();
     let authority = ProcessAuthority::projected(
         std::path::Path::new(env!("CARGO_BIN_EXE_hl-authority-child")),
@@ -150,7 +150,7 @@ fn confined_projected_file() {
     std::fs::create_dir(&root).unwrap();
     let guest = root.join("guest");
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/compat/artifacts/full/filesystem/x86_64/projected-read");
+        .join("../../../tests/runtime/artifacts/full/filesystem/x86_64/projected-read");
     std::fs::copy(fixture, &guest).unwrap();
     std::fs::write(root.join("data"), b"original").unwrap();
     let authority = ProcessAuthority::projected_root(
@@ -200,7 +200,7 @@ fn projected_directory(isa: &str, engine: &str) {
     std::os::unix::fs::symlink("/tree/base/child", root.join("tree/base/absolute")).unwrap();
     let guest = root.join("guest");
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
-        "../../tests/compat/artifacts/full/filesystem/{isa}/projected-directory"
+        "../../../tests/runtime/artifacts/full/filesystem/{isa}/projected-directory"
     ));
     std::fs::copy(fixture, &guest).unwrap();
     let authority = ProcessAuthority::projected_root(
@@ -249,7 +249,7 @@ fn projected_write(isa: &str, engine: &str) {
     std::fs::create_dir_all(&root).unwrap();
     let guest = root.join("guest");
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
-        "../../tests/compat/artifacts/full/filesystem/{isa}/projected-write"
+        "../../../tests/runtime/artifacts/full/filesystem/{isa}/projected-write"
     ));
     std::fs::copy(fixture, &guest).unwrap();
     let authority = ProcessAuthority::projected_root_writable(
@@ -317,7 +317,7 @@ fn confined_dynamic_guest() {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("lib64")).unwrap();
     std::fs::create_dir_all(root.join("lib/x86_64-linux-gnu")).unwrap();
-    let artifacts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/compat/artifacts");
+    let artifacts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/artifacts");
     let guest = root.join("guest");
     std::fs::copy(artifacts.join("full/process/x86_64/nonpie-dladdr"), &guest).unwrap();
     std::fs::copy(
@@ -372,7 +372,7 @@ fn confined_dynamic_arm() {
     let root = std::env::temp_dir().join(format!("hl-dynamic-arm-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("lib/aarch64-linux-gnu")).unwrap();
-    let artifacts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/compat/artifacts");
+    let artifacts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/artifacts");
     let guest = root.join("guest");
     std::fs::copy(artifacts.join("full/process/aarch64/nonpie-dladdr"), &guest).unwrap();
     std::fs::copy(

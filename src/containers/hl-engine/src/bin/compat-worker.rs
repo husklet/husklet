@@ -225,7 +225,7 @@ fn rootfs_input(
             }
         }
         "dynamic-rootfs" => {
-            let runtime = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/compat/artifacts/runtime");
+            let runtime = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/artifacts/runtime");
             let resources = match isa {
                 hl_engine::activation::GuestIsa::Aarch64 => [
                     ("aarch64/lib/ld-linux-aarch64.so.1", "lib/ld-linux-aarch64.so.1"),
