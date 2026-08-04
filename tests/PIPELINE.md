@@ -2,6 +2,7 @@
 
 This document specifies the target repository-test pipeline. It replaces the
 current coupling between compilation, checked-in output files, and execution.
+Its a proposal to be implemented
 
 ## Goals
 
@@ -53,6 +54,76 @@ independent kernel reference.
 Oracle authority is a separate YAML policy. Docker, QEMU, or another provider
 can be authoritative for a case, and multiple providers can be required to
 agree.
+
+### Provider composition boundary
+
+`testing` is an end-to-end composition application. It approaches Husklet from
+the same supported surfaces available to product clients; it must not reproduce
+image, container, engine, process, archive, or Docker protocol implementation.
+
+Each provider has one typed configuration containing all provider-specific
+settings required by every stage. Environment variables and CLI flags are
+parsed once at the application boundary and converted into this model:
+
+```text
+ProviderConfig
+  host: compiler/toolchain and native execution policy
+  docker: endpoint, API policy, platform, image and resource policy
+  qemu: mode, binary, machine/CPU, rootfs or VM, transport and resource policy
+  engine: engine configuration, image, execution backend and resource policy
+```
+
+Stage-specific code does not read ambient environment variables, reconstruct
+endpoints, or append provider-specific command fragments. CLI and CI profiles
+select or override a `ProviderConfig`; the exact resolved configuration is
+serialized into provenance after secrets have been removed.
+
+Providers expose the same typed action vocabulary:
+
+```text
+prepare_image
+prepare_session
+compile
+install_artifact
+spawn
+wait
+capture
+inspect
+reset
+stop
+```
+
+Actions use existing repository packages and their public APIs. In particular:
+
+- OCI acquisition, selection, verification, unpacking, leases, and garbage
+  collection use `hl-images`;
+- Husklet container creation and execution use the public container/engine
+  surfaces selected by the production composition root;
+- Docker-compatible execution uses the typed `hl-client` API rather than
+  constructing HTTP requests or invoking the Docker CLI;
+- archives, bounded process capture, logging, identities, and cache publication
+  use their existing owning packages; and
+- provider diagnostics use `hl-log` with case, stage, provider, ISA, artifact,
+  image, and run identities attached once at the boundary.
+
+The testing application owns orchestration, selection, comparison, timing, and
+reporting only. Reusable provider mechanics belong to the package that owns the
+corresponding public capability; test-only adapters remain inside `testing` and
+must not become production dependencies.
+
+Direct host process execution is not the default integration mechanism. It is
+permitted only in a narrow typed adapter when the dependency is genuinely an
+external executable with no repository API, initially a compiler/linker or
+QEMU. That adapter supplies an exact environment, bounded input/output,
+timeouts, process-group ownership, descendant teardown, executable identity,
+and structured diagnostics through `hl-process`. Shell scripts, shell command
+strings, Docker CLI calls, and scattered `std::process::Command` use are not
+provider implementations.
+
+Provider capabilities are discovered from the resolved typed configuration and
+surface handshake, not inferred from executable names. A stage asks the
+provider for a capability and receives a typed unavailable verdict when the
+surface cannot provide it.
 
 ## Cache
 
