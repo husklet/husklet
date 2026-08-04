@@ -13,6 +13,7 @@ members = [
     "src/workspaces/hl-ws",
     "src/packages/hl-log",
     "src/packages/hl-fs",
+    "src/packages/hl-process",
     "src/packages/hl-softfloat",
     "src/packages/hl-design",
     "src/packages/hl-design-lint",
@@ -54,6 +55,7 @@ oci-spec = "0.9"
 percent-encoding = "2"
 reflink-copy = "0.1.30"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
+regex = "1.13.0"
 serde = "1"
 serde_json = "1"
 serde_yaml = "0.9"

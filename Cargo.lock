@@ -1073,6 +1073,7 @@ name = "hl-container"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "flate2",
  "hl-engine",
  "hl-fs",
  "hl-images",
@@ -1108,6 +1109,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "nix",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
@@ -1294,6 +1296,15 @@ version = "0.1.0"
 dependencies = [
  "hl-descriptor",
  "hl-sync",
+]
+
+[[package]]
+name = "hl-process"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2811,6 +2822,7 @@ dependencies = [
  "hl-images",
  "hl-log",
  "hl-network",
+ "hl-process",
  "hl-provider",
  "hl-runtime",
  "libc",
