@@ -1,0 +1,27 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+artifact:
+  destination: /opt/husklet/forkpipe
+oracle:
+  provider: qemu
+  commands:
+    arm64: qemu-aarch64
+    amd64: qemu-x86_64
+build:
+  source: main.c
+  output: forkpipe
+  compiler:
+    arm64: aarch64-linux-gnu-gcc
+    amd64: x86_64-linux-gnu-gcc
+  flags: [-static-pie, -O2, -std=gnu11, -pthread, -lm]
+cases:
+  - id: runtime/forkpipe
+    run: []
+    status: active
+    compat: { class: soak }
+    soak:
+      duration_seconds: 240
+      repetitions: 1
+      resources: { cpu: 1, memory_mib: 1024, processes: 64 }
+    expect: { exit: 0, stdout: golden/stdout.txt }
