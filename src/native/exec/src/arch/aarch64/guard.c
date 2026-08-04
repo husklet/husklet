@@ -246,19 +246,13 @@ static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **h
     active[active_count++] = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
     hl_a64_ldr(assembler, 17, CPU, OFFSET_READ_COUNT);
+    hl_a64_emit32(assembler, 0xF100123Fu); /* cmp x17,#4 */
+    active[active_count++] = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
 
     for (unsigned index = 0; index < 4; ++index) {
         int base = OFFSET_READ_VIEWS + (int)(index * 4u * sizeof(uint64_t));
         starts[index] = assembler->cursor;
-        if (index == 1u) {
-            /* A release-published live token proves slot zero was validated by
-             * run_view_publish. Defer the global count bound until that hot
-             * slot misses; the bound still gates every later array slot. */
-            hl_a64_ldr(assembler, 17, CPU, OFFSET_READ_COUNT);
-            hl_a64_emit32(assembler, 0xF100123Fu); /* cmp count,#4 */
-            active[active_count++] = (uint32_t *)assembler->cursor;
-            hl_a64_emit32(assembler, 0);
-        }
         hl_a64_emit32(assembler, 0xF100023Fu | ((index + 1u) << 10)); /* cmp count,#index+1 */
         next[index][0] = (uint32_t *)assembler->cursor;
         hl_a64_emit32(assembler, 0);

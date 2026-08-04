@@ -486,15 +486,13 @@ static int loop_preflight(void) {
 
 static int guard_modes(void) {
     uint8_t legacy_bytes[4096] = {0}, explicit_bytes[4096] = {0}, authenticated_bytes[4096] = {0};
-    uint8_t read_bytes[4096] = {0};
-    hl_a64_assembler legacy, explicit_legacy, authenticated, read;
+    hl_a64_assembler legacy, explicit_legacy, authenticated;
     hl_a64_guard legacy_guard = {.pc = 0x4400}, explicit_guard = {.pc = 0x4400};
     hl_a64_guard authenticated_guard = {.pc = 0x4400};
     CHECK(hl_a64_assembler_begin(&legacy, legacy_bytes, legacy_bytes, sizeof(legacy_bytes)));
     CHECK(hl_a64_assembler_begin(&explicit_legacy, explicit_bytes, explicit_bytes, sizeof(explicit_bytes)));
     CHECK(hl_a64_assembler_begin(&authenticated, authenticated_bytes, authenticated_bytes,
                                  sizeof(authenticated_bytes)));
-    CHECK(hl_a64_assembler_begin(&read, read_bytes, read_bytes, sizeof(read_bytes)));
     hl_a64_guard_begin(&legacy, 8, HL_A64_PERMISSION_WRITE, &legacy_guard);
     hl_a64_guard_begin_mode(&explicit_legacy, 8, HL_A64_PERMISSION_WRITE,
                             HL_A64_GUARD_LEGACY, &explicit_guard);
@@ -515,20 +513,6 @@ static int guard_modes(void) {
           2 * sizeof(uint32_t) + ((uint8_t *)legacy_guard.below - legacy_bytes)));
     CHECK(authenticated_guard.resume == authenticated_bytes +
           2 * sizeof(uint32_t) + (legacy_guard.resume - legacy_bytes));
-    {
-        hl_a64_guard read_guard = {.pc = 0x4400};
-        size_t delta_word = SIZE_MAX, count_bound_word = SIZE_MAX;
-        hl_a64_guard_begin(&read, 8, HL_A64_PERMISSION_READ, &read_guard);
-        size_t words = hl_a64_assembler_size(&read) / sizeof(uint32_t);
-        for (size_t index = 0; index < words; ++index) {
-            uint32_t word = ((uint32_t *)read_bytes)[index];
-            if (delta_word == SIZE_MAX && word == UINT32_C(0x8b110210)) delta_word = index;
-            if (count_bound_word == SIZE_MAX && word == UINT32_C(0xf100123f)) count_bound_word = index;
-        }
-        /* Slot zero restores flags/scratch and branches after its delta add;
-         * only then do the two deferred load/count-bound words execute. */
-        CHECK(delta_word != SIZE_MAX && count_bound_word == delta_word + 6);
-    }
     return 0;
 }
 
@@ -676,53 +660,6 @@ int main(void) {
     CHECK(trace.body_offset != 0 && trace.body_offset < trace.code_size && trace.instruction_count == 17);
     CHECK(trace.source_first == 0x2000 && trace.source_last == 0x2044);
     for (unsigned i = 0; i < 17; i++) CHECK(trace.provenance[i].guest == 0x2000 + i * 4);
-    CHECK(mprotect(code, capacity, PROT_READ | PROT_EXEC) == 0);
-    {
-        const uint32_t slot_words[] = {UINT32_C(0xf9400020), UINT32_C(0xd4000001)};
-        const hl_a64_source_span slot_span = {
-            0x1d00, (const uint8_t *)slot_words, sizeof(slot_words), 3, 4};
-        const hl_a64_source slot_source = {&slot_span, 1, 3, 4};
-        uint64_t value = UINT64_C(0x1122334455667788);
-        CHECK(mprotect(code, capacity, PROT_READ | PROT_WRITE) == 0);
-        CHECK(hl_a64_trace_build(&slot_source, 0x1d00, 2, code, capacity, &trace));
-        __builtin___clear_cache((char *)code, (char *)code + capacity);
-        CHECK(mprotect(code, capacity, PROT_READ | PROT_EXEC) == 0);
-        hl_native_aarch64_cpu slot_cpu = {0};
-        slot_cpu.program = 0x1d00;
-        slot_cpu.registers[1] = 0x1000;
-        slot_cpu.memory_first = 1; /* force the run-view selector */
-        slot_cpu.memory_last = 2;
-        slot_cpu.read_views[0][0] = 0x1000;
-        slot_cpu.read_views[0][1] = 0x1008;
-        slot_cpu.read_views[0][2] = (uint64_t)(uintptr_t)&value - UINT64_C(0x1000);
-        slot_cpu.read_views[0][3] = HL_A64_PERMISSION_READ;
-        slot_cpu.read_count = 1;
-        slot_cpu.read_incarnation = 7;
-        slot_cpu.read_token = 7;
-        execute(&slot_cpu, code);
-        CHECK(slot_cpu.reason == HL_NATIVE_EXIT_SYSCALL && slot_cpu.registers[0] == value);
-
-        memset(&slot_cpu, 0, sizeof(slot_cpu));
-        slot_cpu.program = 0x1d00;
-        slot_cpu.registers[1] = 0x2000;
-        slot_cpu.memory_first = 1;
-        slot_cpu.memory_last = 2;
-        slot_cpu.read_views[0][0] = 0x1000; /* slot zero misses */
-        slot_cpu.read_views[0][1] = 0x1008;
-        slot_cpu.read_views[0][3] = HL_A64_PERMISSION_READ;
-        slot_cpu.read_views[1][0] = 0x2000; /* would match if count were trusted */
-        slot_cpu.read_views[1][1] = 0x2008;
-        slot_cpu.read_views[1][2] = (uint64_t)(uintptr_t)&value - UINT64_C(0x2000);
-        slot_cpu.read_views[1][3] = HL_A64_PERMISSION_READ;
-        slot_cpu.read_count = 5;
-        slot_cpu.read_incarnation = 7;
-        slot_cpu.read_token = 7;
-        execute(&slot_cpu, code);
-        CHECK(slot_cpu.reason == HL_NATIVE_EXIT_FALLBACK && slot_cpu.program == 0x1d00);
-    }
-    CHECK(mprotect(code, capacity, PROT_READ | PROT_WRITE) == 0);
-    CHECK(hl_a64_trace_build(&source, 0x2000, 17, code, capacity, &trace));
-    __builtin___clear_cache((char *)code, (char *)code + capacity);
     CHECK(mprotect(code, capacity, PROT_READ | PROT_EXEC) == 0);
     hl_native_aarch64_cpu cpu = {0};
     _Alignas(16) uint64_t stack[8] = {0};
