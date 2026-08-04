@@ -1,0 +1,501 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: []
+cases:
+  - id: runtime/threads/close-range-unshare
+    status: active
+    compat: { class: compatibility }
+    build: { source: close_rangeunshare.c, output: close-range-unshare, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-close-range-unshare }
+    environment: { HL_UNTRUSTED: "1" }
+    run: []
+    expect: { exit: 0, stdout: golden/close_rangeunshare.out }
+  - id: runtime/threads/close-range-unshare-inherit
+    status: active
+    compat: { class: compatibility }
+    build: { source: close_rangeunshareinherit.c, output: close-range-unshare-inherit, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-close-range-unshare-inherit }
+    environment: { HL_UNTRUSTED: "1" }
+    run: []
+    expect: { exit: 0, stdout: golden/close_rangeunshareinherit.out }
+  - id: runtime/threads/close-range-unshare-fork
+    status: active
+    compat: { class: compatibility }
+    build: { source: close_rangeunsharefork.c, output: close-range-unshare-fork, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-close-range-unshare-fork }
+    environment: { HL_UNTRUSTED: "1" }
+    run: []
+    expect: { exit: 0, stdout: golden/close_rangeunsharefork.out }
+  - id: runtime/threads/close-range-unshare-exec
+    status: !broken
+      reason: "AMD64 QEMU oracle exits 1 despite matching registered stdout bytes"
+      evidence: "18-job direct compile/QEMU sweep on 2026-08-03"
+    compat: { class: compatibility }
+    build: { source: close_rangeunshareexec.c, output: close-range-unshare-exec, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-close-range-unshare-exec }
+    environment: { HL_UNTRUSTED: "1" }
+    run: []
+    expect: { exit: 0, stdout: golden/close_rangeunshareexec.out }
+  - id: runtime/threads/exec-thread-binding
+    status: !broken
+      reason: "AMD64 QEMU oracle exits 1 despite matching registered stdout bytes"
+      evidence: "18-job direct compile/QEMU sweep on 2026-08-03"
+    compat: { class: compatibility }
+    build: { source: exec_threadbinding.c, output: exec-thread-binding, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-exec-thread-binding }
+    environment: { HL_UNTRUSTED: "1" }
+    run: []
+    expect: { exit: 0, stdout: golden/exec_threadbinding.out }
+  - id: runtime/threads/sentry-binding-overflow
+    status: active
+    compat: { class: compatibility }
+    build: { source: sentry_bindingoverflow.c, output: sentry-binding-overflow, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-sentry-binding-overflow }
+    environment: { HL_UNTRUSTED: "1" }
+    run: []
+    expect: { exit: 0, stdout: golden/sentry_bindingoverflow.out }
+  - id: runtime/threads/sentry-dup3-cleanup
+    status: active
+    compat: { class: compatibility }
+    build: { source: sentry_dup3cleanup.c, output: sentry-dup3-cleanup, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-sentry-dup3-cleanup }
+    environment: { HL_UNTRUSTED: "1" }
+    run: []
+    expect: { exit: 0, stdout: golden/sentry_dup3cleanup.out }
+  - id: runtime/threads/sentry-fd-emfile
+    status: !broken
+      reason: "QEMU oracle exits 1 instead of the registered exit 0"
+      evidence: "testing oracle threads arm64 on 2026-08-03"
+    compat: { class: compatibility }
+    build: { source: sentry_fdemfile.c, output: sentry-fd-emfile, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/threads-sentry-fd-emfile }
+    environment: { HL_UNTRUSTED: "1" }
+    run: []
+    expect: { exit: 0, stdout: golden/sentry_fdemfile.out }
+  - id: runtime/threads/sentry-table-exhaustion
+    status: !broken
+      reason: "QEMU oracle diverges from the registered exit or output contract"
+      evidence: "testing oracle threads on 2026-08-03"
+    compat: { class: compatibility }
+    build: { source: sentry_tableexhaustion.c, output: sentry-table-exhaustion, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/threads-sentry-table-exhaustion }
+    environment: { HL_UNTRUSTED: "1" }
+    run: []
+    expect: { exit: 0, stdout: golden/sentry_tableexhaustion.out }
+  - id: runtime/threads/sentry-fork-exhaustion
+    status: !broken
+      reason: "QEMU oracle diverges from the registered exit or output contract"
+      evidence: "testing oracle threads on 2026-08-03"
+    compat: { class: compatibility }
+    build: { source: sentry_forkexhaustion.c, output: sentry-fork-exhaustion, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-sentry-fork-exhaustion }
+    environment: { HL_UNTRUSTED: "1" }
+    run: []
+    expect: { exit: 0, stdout: golden/sentry_forkexhaustion.out }
+  - id: runtime/threads/futex-wake-n
+    status: active
+    compat: { class: compatibility }
+    build: { source: futex_waken.c, output: futex-wake-n, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-futex-wake-n }
+    run: []
+    expect: { exit: 0, stdout: golden/futex_waken.out }
+  - id: runtime/threads/atomic-cas-ptr
+    status: active
+    compat: { class: compatibility }
+    build: { source: atomic_casptr.c, output: atomic-cas-ptr, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-atomic-cas-ptr }
+    run: []
+    expect: { exit: 0, stdout: golden/atomic_casptr.out }
+  - id: runtime/threads/atomic-flag
+    status: active
+    compat: { class: compatibility }
+    build: { source: atomic_flag.c, output: atomic-flag, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-atomic-flag }
+    run: []
+    expect: { exit: 0, stdout: golden/atomic_flag.out }
+  - id: runtime/threads/atomics-ops
+    status: active
+    compat: { class: compatibility }
+    build: { source: atomics_ops.c, output: atomics-ops, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-atomics-ops }
+    run: []
+    expect: { exit: 0, stdout: golden/atomics_ops.out }
+  - id: runtime/threads/atomics-orders
+    status: active
+    compat: { class: compatibility }
+    build: { source: atomics_orders.c, output: atomics-orders, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-atomics-orders }
+    run: []
+    expect: { exit: 0, stdout: golden/atomics_orders.out }
+  - id: runtime/threads/attr-stack
+    status: active
+    compat: { class: compatibility }
+    build: { source: attr_stack.c, output: attr-stack, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-attr-stack }
+    run: []
+    expect: { exit: 0, stdout: golden/attr_stack.out }
+  - id: runtime/threads/barrier
+    status: active
+    compat: { class: compatibility }
+    build: { source: barrier.c, output: barrier, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-barrier }
+    run: []
+    expect: { exit: 0, stdout: golden/barrier.out }
+  - id: runtime/threads/cancel
+    status: active
+    compat: { class: compatibility }
+    build: { source: cancel.c, output: cancel, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-cancel }
+    run: []
+    expect: { exit: 0, stdout: golden/cancel.out }
+  - id: runtime/threads/cas-contention
+    status: active
+    compat: { class: compatibility }
+    build: { source: cas_contention.c, output: cas-contention, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-cas-contention }
+    run: []
+    expect: { exit: 0, stdout: golden/cas_contention.out }
+  - id: runtime/threads/cond-signal-wins
+    status: active
+    compat: { class: compatibility }
+    build: { source: cond_signalwins.c, output: cond-signal-wins, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-cond-signal-wins }
+    run: []
+    expect: { exit: 0, stdout: golden/cond_signalwins.out }
+  - id: runtime/threads/condvar-broadcast
+    status: active
+    compat: { class: compatibility }
+    build: { source: condvar_broadcast.c, output: condvar-broadcast, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-condvar-broadcast }
+    run: []
+    expect: { exit: 0, stdout: golden/condvar_broadcast.out }
+  - id: runtime/threads/condvar-timedwait
+    status: active
+    compat: { class: compatibility }
+    build: { source: condvar_timedwait.c, output: condvar-timedwait, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-condvar-timedwait }
+    run: []
+    expect: { exit: 0, stdout: golden/condvar_timedwait.out }
+  - id: runtime/threads/detach
+    status: active
+    compat: { class: compatibility }
+    build: { source: detach.c, output: detach, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-detach }
+    run: []
+    expect: { exit: 0, stdout: golden/detach.out }
+  - id: runtime/threads/join-retval
+    status: active
+    compat: { class: compatibility }
+    build: { source: join_retval.c, output: join-retval, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-join-retval }
+    run: []
+    expect: { exit: 0, stdout: golden/join_retval.out }
+  - id: runtime/threads/key
+    status: active
+    compat: { class: compatibility }
+    build: { source: key.c, output: key, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-key }
+    run: []
+    expect: { exit: 0, stdout: golden/key.out }
+  - id: runtime/threads/key-dtor
+    status: active
+    compat: { class: compatibility }
+    build: { source: key_dtor.c, output: key-dtor, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-key-dtor }
+    run: []
+    expect: { exit: 0, stdout: golden/key_dtor.out }
+  - id: runtime/threads/mutex-errorcheck
+    status: active
+    compat: { class: compatibility }
+    build: { source: mutex_errorcheck.c, output: mutex-errorcheck, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-mutex-errorcheck }
+    run: []
+    expect: { exit: 0, stdout: golden/mutex_errorcheck.out }
+  - id: runtime/threads/mutex-recursive
+    status: active
+    compat: { class: compatibility }
+    build: { source: mutex_recursive.c, output: mutex-recursive, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-mutex-recursive }
+    run: []
+    expect: { exit: 0, stdout: golden/mutex_recursive.out }
+  - id: runtime/threads/mutex-stress
+    status: active
+    compat: { class: compatibility }
+    build: { source: mutex_stress.c, output: mutex-stress, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-mutex-stress }
+    run: []
+    expect: { exit: 0, stdout: golden/mutex_stress.out }
+  - id: runtime/threads/mutex-trylock
+    status: active
+    compat: { class: compatibility }
+    build: { source: mutex_trylock.c, output: mutex-trylock, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-mutex-trylock }
+    run: []
+    expect: { exit: 0, stdout: golden/mutex_trylock.out }
+  - id: runtime/threads/once
+    status: active
+    compat: { class: compatibility }
+    build: { source: once.c, output: once, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-once }
+    run: []
+    expect: { exit: 0, stdout: golden/once.out }
+  - id: runtime/threads/rwlock
+    status: active
+    compat: { class: compatibility }
+    build: { source: rwlock.c, output: rwlock, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-rwlock }
+    run: []
+    expect: { exit: 0, stdout: golden/rwlock.out }
+  - id: runtime/threads/rwlock-try
+    status: active
+    compat: { class: compatibility }
+    build: { source: rwlock_try.c, output: rwlock-try, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-rwlock-try }
+    run: []
+    expect: { exit: 0, stdout: golden/rwlock_try.out }
+  - id: runtime/threads/sched
+    status: active
+    compat: { class: compatibility }
+    build: { source: sched.c, output: sched, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-sched }
+    run: []
+    expect: { exit: 0, stdout: golden/sched.out }
+  - id: runtime/threads/self
+    status: active
+    compat: { class: compatibility }
+    build: { source: self.c, output: self, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-self }
+    run: []
+    expect: { exit: 0, stdout: golden/self.out }
+  - id: runtime/threads/sem-named
+    status: active
+    compat: { class: compatibility }
+    build: { source: sem_named.c, output: sem-named, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-sem-named }
+    run: []
+    expect: { exit: 0, stdout: golden/sem_named.out }
+  - id: runtime/threads/sem-unnamed
+    status: active
+    compat: { class: compatibility }
+    build: { source: sem_unnamed.c, output: sem-unnamed, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-sem-unnamed }
+    run: []
+    expect: { exit: 0, stdout: golden/sem_unnamed.out }
+  - id: runtime/threads/spinlock
+    status: active
+    compat: { class: compatibility }
+    build: { source: spinlock.c, output: spinlock, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-spinlock }
+    run: []
+    expect: { exit: 0, stdout: golden/spinlock.out }
+  - id: runtime/threads/spin-release-store
+    status: active
+    compat: { class: compatibility }
+    build: { source: spin_releasestore.c, output: spin-release-store, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-spin-release-store }
+    run: []
+    expect: { exit: 0, stdout: golden/spin_releasestore.out }
+  - id: runtime/threads/threads-basic
+    status: active
+    compat: { class: compatibility }
+    build: { source: threads_basic.c, output: threads-basic, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/threads-threads-basic }
+    run: []
+    expect: { exit: 0, stdout: golden/threads_basic.out }
+  - id: runtime/threads/threads-many
+    status: active
+    compat: { class: compatibility }
+    build: { source: threads_many.c, output: threads-many, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/threads-threads-many }
+    run: []
+    expect: { exit: 0, stdout: golden/threads_many.out }
+  - id: runtime/threads/threads-mutex-queue
+    status: active
+    compat: { class: compatibility }
+    build: { source: threads_mutexqueue.c, output: threads-mutex-queue, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/threads-threads-mutex-queue }
+    run: []
+    expect: { exit: 0, stdout: golden/threads_mutexqueue.out }
+  - id: runtime/threads/threads-nopie-tls
+    status: active
+    compat: { class: compatibility }
+    build: { source: threads_nopietls.c, output: threads-nopie-tls, flags: [-static, -no-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/threads-threads-nopie-tls }
+    run: []
+    expect: { exit: 0, stdout: golden/threads_nopietls.out }
+  - id: runtime/threads/threads-nopie-variant
+    status: active
+    compat: { class: compatibility }
+    build: { source: threads_mutexqueue2.c, output: threads-nopie-variant, flags: [-static, -no-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/threads-threads-nopie-variant }
+    run: []
+    expect: { exit: 0, stdout: golden/threads_mutexqueue2.out }
+  - id: runtime/threads/tls-across-threads
+    status: active
+    compat: { class: compatibility }
+    build: { source: tls_acrossthreads.c, output: tls-across-threads, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-tls-across-threads }
+    run: []
+    expect: { exit: 0, stdout: golden/tls_acrossthreads.out }
+  - id: runtime/threads/errno-threadlocal
+    status: !broken
+      reason: "QEMU oracle diverges from the registered exit or output contract"
+      evidence: "testing oracle threads on 2026-08-03"
+    compat: { class: compatibility }
+    build: { source: errno_threadlocal.c, output: errno-threadlocal, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-errno-threadlocal }
+    run: []
+    expect: { exit: 0, stdout: golden/errno_threadlocal.out }
+  - id: runtime/threads/condvar-prodcons
+    status: active
+    compat: { class: compatibility }
+    build: { source: condvar_prodcons.c, output: condvar-prodcons, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-condvar-prodcons }
+    run: []
+    expect: { exit: 0, stdout: golden/condvar_prodcons.out }
+  - id: runtime/threads/sem-peak
+    status: active
+    compat: { class: compatibility }
+    build: { source: sem_peak.c, output: sem-peak, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-sem-peak }
+    run: []
+    expect: { exit: 0, stdout: golden/sem_peak.out }
+  - id: runtime/threads/futex-requeue
+    status: active
+    compat: { class: compatibility }
+    build: { source: futex_requeue.c, output: futex-requeue, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-futex-requeue }
+    run: []
+    expect: { exit: 0, stdout: golden/futex_requeue.out }
+  - id: runtime/threads/futex-wait-errors
+    status: active
+    compat: { class: compatibility }
+    build: { source: futex_waiterrors.c, output: futex-wait-errors, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-futex-wait-errors }
+    run: []
+    expect: { exit: 0, stdout: golden/futex_waiterrors.out }
+  - id: runtime/threads/robust-mutex
+    status: !broken
+      reason: "AArch64 QEMU oracle does not complete within the bounded category sweep"
+      evidence: "18-job testing oracle threads sweep on 2026-08-03"
+    compat: { class: compatibility }
+    build: { source: robust_mutex.c, output: robust-mutex, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-robust-mutex }
+    run: []
+    expect: { exit: 0, stdout: golden/robust_mutex.out }
+  - id: runtime/threads/mutex-pi
+    status: active
+    compat: { class: compatibility }
+    build: { source: mutex_pi.c, output: mutex-pi, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-mutex-pi }
+    run: []
+    expect: { exit: 0, stdout: golden/mutex_pi.out }
+  - id: runtime/threads/gettid-distinct
+    status: active
+    compat: { class: compatibility }
+    build: { source: gettid_distinct.c, output: gettid-distinct, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-gettid-distinct }
+    run: []
+    expect: { exit: 0, stdout: golden/gettid_distinct.out }
+  - id: runtime/threads/rwlock-invariant
+    status: active
+    compat: { class: compatibility }
+    build: { source: rwlock_invariant.c, output: rwlock-invariant, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-rwlock-invariant }
+    run: []
+    expect: { exit: 0, stdout: golden/rwlock_invariant.out }
+  - id: runtime/threads/mutex-timedlock
+    status: active
+    compat: { class: compatibility }
+    build: { source: mutex_timedlock.c, output: mutex-timedlock, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-mutex-timedlock }
+    run: []
+    expect: { exit: 0, stdout: golden/mutex_timedlock.out }
+  - id: runtime/threads/tss-iterations
+    status: active
+    compat: { class: compatibility }
+    build: { source: tss_iterations.c, output: tss-iterations, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-tss-iterations }
+    run: []
+    expect: { exit: 0, stdout: golden/tss_iterations.out }
+  - id: runtime/threads/once-value
+    status: active
+    compat: { class: compatibility }
+    build: { source: once_value.c, output: once-value, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-once-value }
+    run: []
+    expect: { exit: 0, stdout: golden/once_value.out }
+  - id: runtime/threads/thread-setname
+    status: active
+    compat: { class: compatibility }
+    build: { source: thread_setname.c, output: thread-setname, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-thread-setname }
+    run: []
+    expect: { exit: 0, stdout: golden/thread_setname.out }
+  - id: runtime/threads/thread-signal-direct
+    status: active
+    compat: { class: compatibility }
+    build: { source: thread_signaldirect.c, output: thread-signal-direct, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-thread-signal-direct }
+    run: []
+    expect: { exit: 0, stdout: golden/thread_signaldirect.out }
+  - id: runtime/threads/futex-wake-bitset
+    status: active
+    compat: { class: compatibility }
+    build: { source: futex_wakebitset.c, output: futex-wake-bitset, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-futex-wake-bitset }
+    run: []
+    expect: { exit: 0, stdout: golden/futex_wakebitset.out }
+  - id: runtime/threads/futex-fork-stale-waiter
+    status: active
+    compat: { class: compatibility }
+    build: { source: futex_forkstalewaiter.c, output: futex-fork-stale-waiter, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-futex-fork-stale-waiter }
+    run: []
+    expect: { exit: 0, stdout: golden/futex_forkstalewaiter.out }
+  - id: runtime/threads/futex-wake-fairness
+    status: active
+    compat: { class: compatibility }
+    build: { source: futex_wakefairness.c, output: futex-wake-fairness, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-futex-wake-fairness }
+    run: []
+    expect: { exit: 0, stdout: golden/futex_wakefairness.out }
+  - id: runtime/threads/uaccess-write-probe
+    status: active
+    compat: { class: compatibility }
+    build: { source: uaccess_writeprobe.c, output: uaccess-write-probe, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-uaccess-write-probe }
+    run: []
+    expect: { exit: 0, stdout: golden/uaccess_writeprobe.out }
+  - id: runtime/threads/futex-pi-owner-word
+    status: active
+    compat: { class: compatibility }
+    build: { source: futex_piownerword.c, output: futex-pi-owner-word, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-futex-pi-owner-word }
+    run: []
+    expect: { exit: 0, stdout: golden/futex_piownerword.out }
+  - id: runtime/threads/robust-pi-mutex
+    status: active
+    compat: { class: compatibility }
+    build: { source: robust_pimutex.c, output: robust-pi-mutex, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-robust-pi-mutex }
+    run: []
+    expect: { exit: 0, stdout: golden/robust_pimutex.out }
+  - id: runtime/threads/robust-pi-handoff
+    status: active
+    compat: { class: compatibility }
+    build: { source: robust_pihandoff.c, output: robust-pi-handoff, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/threads-robust-pi-handoff }
+    run: []
+    expect: { exit: 0, stdout: golden/robust_pihandoff.out }
+  - id: runtime/threads/atomics-outline-pie
+    status: active
+    compat: { class: compatibility }
+    build: { source: atomics_outlinepie.c, output: atomics-outline-pie, flags: [-static-pie, -O2, -pthread, -lm, -ldl] }
+    artifact: { destination: /opt/husklet/threads-atomics-outline-pie }
+    run: []
+    expect: { exit: 0, stdout: golden/atomics_outlinepie.out }

@@ -1,0 +1,165 @@
+cases:
+  - id: netinstall/debian-apt-update-clean
+    image: debian:bookworm-slim
+    class: long
+    timeout: 180
+    resources: [network, registry, disk_heavy]
+    actions:
+      - shell:
+          script: |
+            rm -rf /var/lib/apt/lists/*
+            apt-get update > /tmp/aptu.log 2>&1
+            status=$?
+            cat /tmp/aptu.log
+            if [ "$status" -ne 0 ] \
+                || grep -Eq '^(Ign|Err|W|E):|NO_PUBKEY|BADSIG|EXPKEYSIG' /tmp/aptu.log; then
+                echo APT_UPDATE_DIRTY
+            elif find /var/lib/apt/lists -type f -name '*InRelease' -print -quit | grep -q . \
+                && find /var/lib/apt/lists -type f -name '*_Packages*' -print -quit | grep -q .; then
+                echo APT_UPDATE_CLEAN
+            else
+                echo APT_UPDATE_NOLISTS
+            fi
+    expect: { stdout_contains: golden/apt.txt }
+
+  - id: netinstall/ubuntu-apt-install-htop
+    image: ubuntu:22.04
+    class: long
+    timeout: 240
+    resources: [network, registry, disk_heavy]
+    actions:
+      - shell:
+          script: |
+            set -eu
+            export DEBIAN_FRONTEND=noninteractive
+            rm -rf /var/lib/apt/lists/*
+            if ! apt-get update >/tmp/apt-update.log 2>&1; then
+                cat /tmp/apt-update.log
+                exit 1
+            fi
+            inrelease=$(find /var/lib/apt/lists -type f -name '*InRelease' -print -quit)
+            test -n "$inrelease"
+            gpgv --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg "$inrelease" \
+                >/tmp/apt-signature.log 2>&1
+            apt-get install -y --no-install-recommends htop >/tmp/apt-install.log 2>&1
+            command -v htop >/dev/null
+            dpkg -s htop | grep -q '^Status: install ok installed'
+            apt-cache policy htop | grep -q 'Installed: [0-9]'
+            htop --version | grep -Eq '^htop [0-9]'
+            if command -v ldd >/dev/null; then
+                ! ldd "$(command -v htop)" | grep -q 'not found'
+            fi
+            echo HTOP_INSTALLED_AND_RUNNABLE
+    expect: { stdout_contains: golden/htop.txt }
+
+  - id: netinstall/ubuntu-apt-update-clean
+    image: ubuntu:22.04
+    class: long
+    timeout: 180
+    resources: [network, registry, disk_heavy]
+    actions:
+      - shell:
+          script: |
+            rm -rf /var/lib/apt/lists/*
+            apt-get update > /tmp/aptu.log 2>&1
+            status=$?
+            cat /tmp/aptu.log
+            if [ "$status" -ne 0 ] \
+                || grep -Eq '^(Ign|Err|W|E):|NO_PUBKEY|BADSIG|EXPKEYSIG' /tmp/aptu.log; then
+                echo APT_UPDATE_DIRTY
+            elif find /var/lib/apt/lists -type f -name '*InRelease' -print -quit | grep -q . \
+                && find /var/lib/apt/lists -type f -name '*_Packages*' -print -quit | grep -q .; then
+                echo APT_UPDATE_CLEAN
+            else
+                echo APT_UPDATE_NOLISTS
+            fi
+    expect: { stdout_contains: golden/apt.txt }
+
+  - id: netinstall/ubuntu-htop-render
+    image: ubuntu:22.04
+    class: long
+    timeout: 240
+    resources: [network, registry, disk_heavy, process_heavy]
+    actions:
+      - shell:
+          script: |
+            export DEBIAN_FRONTEND=noninteractive TERM=xterm LINES=45 COLUMNS=200
+            apt-get update >/dev/null 2>&1
+            apt-get install -y htop >/dev/null 2>&1
+            # a couple of uniquely-named processes so a REAL process row is guaranteed in the table.
+            sleep 4242 & sleep 4243 &
+            echo q | htop -d 10 > /tmp/htop.frame 2>&1
+            rc=$?
+            f=$(tr -cd '[:print:]\n' < /tmp/htop.frame)   # drop control bytes, keep the on-screen glyphs
+            echo "$f" | grep -q 'Tasks' \
+              && echo "$f" | grep -q 'Load average' \
+              && echo "$f" | grep -q 'PID' && echo "$f" | grep -q 'USER' && echo "$f" | grep -q 'Command' \
+              && echo "$f" | grep -q 'Help' && echo "$f" | grep -q 'Quit' \
+              && echo "$f" | grep -q 'sleep 4242' \
+              && [ $rc -eq 0 ] && echo HTOP_RENDER_OK
+    expect: { stdout_contains: golden/render.txt }
+
+  - id: netinstall/ubuntu-python-cryptography
+    image: ubuntu:22.04
+    class: long
+    timeout: 240
+    resources: [network, registry, disk_heavy]
+    actions:
+      - shell:
+          script: |
+            set -eu
+            export DEBIAN_FRONTEND=noninteractive
+            rm -rf /var/lib/apt/lists/*
+            if ! apt-get update >/tmp/apt-update.log 2>&1; then
+                cat /tmp/apt-update.log
+                exit 1
+            fi
+            if ! apt-get install -y --no-install-recommends python3-cryptography openssl ca-certificates \
+                >/tmp/apt-install.log 2>&1; then
+                cat /tmp/apt-install.log
+                for attribute in mode timestamps ownership; do
+                    rm -f /etc/inputrc
+                    if cp "--preserve=$attribute" /usr/share/readline/inputrc /etc/inputrc; then
+                        echo "CP_PRESERVE_${attribute}_OK"
+                    else
+                        echo "CP_PRESERVE_${attribute}_FAILED"
+                    fi
+                done
+                exit 1
+            fi
+            python3 - <<'PY'
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+            key = bytes(range(32))
+            nonce = bytes(range(12))
+            plain = b"husklet-apt-cryptography"
+            cipher = AESGCM(key)
+            sealed = cipher.encrypt(nonce, plain, b"scenario")
+            assert cipher.decrypt(nonce, sealed, b"scenario") == plain
+            print("PYTHON_CRYPTOGRAPHY_OK")
+            PY
+            printf husklet | openssl dgst -sha256 | grep -Eq '[0-9a-f]{64}$'
+            echo OPENSSL_CRYPTOGRAPHY_OK
+    expect:
+      stdout_contains: [golden/python.txt, golden/openssl.txt]
+
+  - id: netinstall/ubuntu-top-render
+    image: ubuntu:22.04
+    class: long
+    timeout: 240
+    resources: [network, registry, disk_heavy, process_heavy]
+    actions:
+      - shell:
+          script: |
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update >/dev/null 2>&1
+            apt-get install -y procps >/dev/null 2>&1
+            sleep 5252 &
+            top -bn1 > /tmp/top.out 2>&1
+            rc=$?
+            grep -q 'Tasks:' /tmp/top.out \
+              && grep -Eq '%Cpu' /tmp/top.out \
+              && grep -q 'PID USER' /tmp/top.out \
+              && grep -q 'sleep' /tmp/top.out \
+              && [ $rc -eq 0 ] && echo TOP_RENDER_OK
+    expect: { stdout_contains: golden/top.txt }

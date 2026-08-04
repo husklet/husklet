@@ -1,0 +1,1 @@
+futex_errors eagain=1 etimedout=1 bitset_timeout=1 wake_zero=1

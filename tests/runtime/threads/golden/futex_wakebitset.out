@@ -1,0 +1,1 @@
+futex_wake_bitset first=1 a_after_one=1 b_after_one=0 rest_a=2 all_b=3 a=3 b=3

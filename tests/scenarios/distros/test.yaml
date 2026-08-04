@@ -1,0 +1,617 @@
+cases:
+- id: distros/alma-8-version
+  image: almalinux:8
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: . /etc/os-release; echo "VER=$VERSION_ID"
+  expect:
+    stdout_contains: golden/ver_8.txt
+- id: distros/alma-9-osrelease
+  image: almalinux:9
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: . /etc/os-release; echo "OS=$ID-$VERSION_ID"
+  expect:
+    stdout_contains: golden/os_almalinux.txt
+- id: distros/alma-rpm-rhel
+  image: almalinux:9
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: rpm -E %rhel
+  expect:
+    stdout_contains: golden/9.txt
+- id: distros/alpine-318-osrelease
+  image: alpine:3.18
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: . /etc/os-release; echo "OS=$ID-$VERSION_ID"
+  expect:
+    stdout_contains: golden/os_alpine.txt
+- id: distros/alpine-319-osrelease
+  image: alpine:3.19
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: . /etc/os-release; echo "OS=$ID-$VERSION_ID"
+  expect:
+    stdout_contains: golden/os_alpine2.txt
+- id: distros/alpine-320-osrelease
+  image: alpine:3.20
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: . /etc/os-release; echo "OS=$ID-$VERSION_ID"
+  expect:
+    stdout_contains: golden/os_alpine3.txt
+- id: distros/alpine-apk-version
+  image: alpine:3.20
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: apk --version
+  expect:
+    stdout_contains: golden/apk_tools.txt
+- id: distros/alpine-fork-loop
+  image: alpine:latest
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: s=0; i=1; while [ $i -le 1000 ]; do s=$(expr $s + $i); i=$(expr $i + 1); done; echo "SUM=$s"
+  expect:
+    stdout_contains: golden/sum_500500.txt
+- id: distros/alpine-getconf-longbit
+  image: alpine:latest
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: getconf LONG_BIT 2>/dev/null || echo 64
+  expect:
+    stdout_contains: golden/64.txt
+- id: distros/alpine-pipeline
+  image: alpine:latest
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: seq 1 1000 | awk '{s+=$1} END{print "SUM="s}'
+  expect:
+    stdout_contains: golden/sum_500500.txt
+- id: distros/alpine-release-file
+  image: alpine:latest
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: cat /etc/alpine-release | cut -d. -f1-2
+  expect:
+    stdout_contains: golden/3.txt
+- id: distros/alpine-sed
+  image: alpine:3.20
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: echo abcabc | sed 's/a/X/g'
+  expect:
+    stdout_contains: golden/xbcxbc.txt
+- id: distros/alpine-sort
+  image: alpine:latest
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: printf '3\n1\n2\n' | sort -n | paste -sd, -
+  expect:
+    stdout_contains: golden/1_2.txt
+- id: distros/alpine-subshell-churn
+  image: alpine:latest
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: t=0; n=1; while [ $n -le 500 ]; do v=$(sh -c "echo $((n*2))"); t=$(expr $t + $v); n=$(expr $n + 1); done; echo
+        "T=$t"
+  expect:
+    stdout_contains: golden/t_250500.txt
+- id: distros/amazon-2-version
+  image: amazonlinux:2
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: . /etc/os-release; echo "VER=$VERSION_ID"
+  expect:
+    stdout_contains: golden/ver_2.txt
+- id: distros/amazon-2-yum
+  image: amazonlinux:2
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: yum --version
+  expect:
+    stdout_contains: golden/3.txt
+- id: distros/amazon-2023-dnf
+  image: amazonlinux:2023
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: dnf --version
+  expect:
+    stdout_contains: golden/dnf_0.txt
+- id: distros/amazon-2023-osrelease
+  image: amazonlinux:2023
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: . /etc/os-release; echo "OS=$ID-$VERSION_ID"
+  expect:
+    stdout_contains: golden/os_amzn.txt
+- id: distros/arch-fork-loop
+  image: archlinux:latest
+  timeout: 120
+  targets:
+  - amd64
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: s=0; i=1; while [ $i -le 1000 ]; do s=$(expr $s + $i); i=$(expr $i + 1); done; echo "SUM=$s"
+  expect:
+    stdout_contains: golden/sum_500500.txt
+- id: distros/arch-osrelease
+  image: archlinux:latest
+  timeout: 120
+  targets:
+  - amd64
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: . /etc/os-release; echo "OS=$ID"
+  expect:
+    stdout_contains: golden/os_arch.txt
+- id: distros/arch-pacman-version
+  image: archlinux:latest
+  timeout: 120
+  targets:
+  - amd64
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: pacman --version | grep -o 'Pacman v[0-9]'
+  expect:
+    stdout_contains: golden/pacman_v.txt
+- id: distros/busybox-arith
+  image: busybox:latest
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - argv:
+      argv:
+      - sh
+      - -c
+      - echo $((333*3))
+  expect:
+    stdout_contains: golden/999.txt
+- id: distros/busybox-banner
+  image: busybox:latest
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: busybox | head -1
+  expect:
+    stdout_contains: golden/busybox_v1.txt
+- id: distros/busybox-fork-loop
+  image: busybox:latest
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: s=0; i=1; while [ $i -le 1000 ]; do s=$(expr $s + $i); i=$(expr $i + 1); done; echo "SUM=$s"
+  expect:
+    stdout_contains: golden/sum_500500.txt
+- id: distros/busybox-glibc
+  image: busybox:glibc
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - argv:
+      argv:
+      - sh
+      - -c
+      - echo GLIBC-OK
+  expect:
+    stdout_contains: golden/glibc_ok.txt
+- id: distros/busybox-musl
+  image: busybox:musl
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - argv:
+      argv:
+      - sh
+      - -c
+      - echo MUSL-OK
+  expect:
+    stdout_contains: golden/musl_ok.txt
+- id: distros/busybox-pipe
+  image: busybox:latest
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - argv:
+      argv:
+      - sh
+      - -c
+      - seq 1 1000 | awk '{s+=$1}END{print s}'
+  expect:
+    stdout_contains: golden/500500.txt
+- id: distros/debian-apt-update
+  image: debian:bookworm-slim
+  timeout: 120
+  class: long
+  resources:
+  - disk_heavy
+  - network
+  - registry
+  actions:
+  - shell:
+      script: |-
+        apt-get -o Acquire::Retries=3 update
+        find /var/lib/apt/lists -maxdepth 1 -type f -name '*Release' -print -quit | grep -q .
+        echo APT_UPDATE_OK
+  expect:
+    stdout_contains: golden/apt_update.txt
+- id: distros/debian-awk-squares
+  image: debian:bookworm
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: awk 'BEGIN{for(i=1;i<=100;i++)s+=i*i; print s}'
+  expect:
+    stdout_contains: golden/338350.txt
+- id: distros/debian-awk-sum
+  image: debian:bookworm
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: seq 1 1000 | awk '{s+=$1} END{print s}'
+  expect:
+    stdout_contains: golden/500500.txt
+- id: distros/debian-bookworm-osrelease
+  image: debian:bookworm
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: . /etc/os-release; echo "OS=$ID-$VERSION_ID"
+  expect:
+    stdout_contains: golden/os_debian.txt
+- id: distros/debian-bullseye-osrelease
+  image: debian:bullseye
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: . /etc/os-release; echo "OS=$ID-$VERSION_ID"
+  expect:
+    stdout_contains: golden/os_debian2.txt
+- id: distros/debian-dpkg-version
+  image: debian:bookworm
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: dpkg --version | head -1
+  expect:
+    stdout_contains: golden/package_management.txt
+- id: distros/debian-fork-loop
+  image: debian:bullseye
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: s=0; i=1; while [ $i -le 1000 ]; do s=$(expr $s + $i); i=$(expr $i + 1); done; echo "SUM=$s"
+  expect:
+    stdout_contains: golden/sum_500500.txt
+- id: distros/debian-grep-count
+  image: debian:bookworm
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: printf 'foo\nbar\nboo\n' | grep -c o
+  expect:
+    stdout_contains: golden/2.txt
+- id: distros/debian-trixie-osrelease
+  image: debian:trixie
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: . /etc/os-release; echo "OS=$ID-$VERSION_ID"
+  expect:
+    stdout_contains: golden/os_debian3.txt
+- id: distros/fedora-40-version
+  image: fedora:40
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: . /etc/os-release; echo "VER=$VERSION_ID"
+  expect:
+    stdout_contains: golden/ver_40.txt
+- id: distros/fedora-awk-pow
+  image: fedora:latest
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: awk 'BEGIN{print 2^10}'
+  expect:
+    stdout_contains: golden/1024.txt
+- id: distros/fedora-dnf-version
+  image: fedora:latest
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: dnf --version | head -1
+  expect:
+    stdout_contains: golden/dnf.txt
+- id: distros/fedora-fork-loop
+  image: fedora:latest
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: s=0; i=1; while [ $i -le 1000 ]; do s=$(expr $s + $i); i=$(expr $i + 1); done; echo "SUM=$s"
+  expect:
+    stdout_contains: golden/sum_500500.txt
+- id: distros/fedora-osrelease
+  image: fedora:latest
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: . /etc/os-release; echo "OS=$ID"
+  expect:
+    stdout_contains: golden/os_fedora.txt
+- id: distros/fedora-rpm-version
+  image: fedora:latest
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: rpm --version
+  expect:
+    stdout_contains: golden/rpm_version.txt
+- id: distros/rocky-9-osrelease
+  image: rockylinux:9
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: . /etc/os-release; echo "OS=$ID-$VERSION_ID"
+  expect:
+    stdout_contains: golden/os_rocky.txt
+- id: distros/rocky-awk-sum
+  image: rockylinux:9
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: seq 1 1000 | awk '{s+=$1} END{print s}'
+  expect:
+    stdout_contains: golden/500500.txt
+- id: distros/rocky-rpm-rhel
+  image: rockylinux:9
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: rpm -E %rhel
+  expect:
+    stdout_contains: golden/9.txt
+- id: distros/ubuntu-2004-osrelease
+  image: ubuntu:20.04
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: . /etc/os-release; echo "OS=$ID-$VERSION_ID"
+  expect:
+    stdout_contains: golden/os_ubuntu.txt
+- id: distros/ubuntu-2204-osrelease
+  image: ubuntu:22.04
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: . /etc/os-release; echo "OS=$ID-$VERSION_ID"
+  expect:
+    stdout_contains: golden/os_ubuntu2.txt
+- id: distros/ubuntu-2404-osrelease
+  image: ubuntu:24.04
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: . /etc/os-release; echo "OS=$ID-$VERSION_ID"
+  expect:
+    stdout_contains: golden/os_ubuntu3.txt
+- id: distros/ubuntu-apt-update
+  image: ubuntu:22.04
+  timeout: 120
+  class: long
+  resources:
+  - disk_heavy
+  - network
+  - registry
+  actions:
+  - shell:
+      script: |-
+        apt-get -o Acquire::Retries=3 update
+        find /var/lib/apt/lists -maxdepth 1 -type f -name '*Release' -print -quit | grep -q .
+        echo APT_UPDATE_OK
+  expect:
+    stdout_contains: golden/apt_update.txt
+- id: distros/ubuntu-apt-version
+  image: ubuntu:22.04
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: apt-get --version | head -1
+  expect:
+    stdout_contains: golden/apt_2.txt
+- id: distros/ubuntu-arch-amd
+  image: ubuntu:22.04
+  timeout: 120
+  targets:
+  - amd64
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: dpkg --print-architecture
+  expect:
+    stdout_contains: golden/amd64.txt
+- id: distros/ubuntu-arch-arm
+  image: ubuntu:22.04
+  timeout: 120
+  targets:
+  - arm64
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: dpkg --print-architecture
+  expect:
+    stdout_contains: golden/arm64.txt
+- id: distros/ubuntu-fork-loop
+  image: ubuntu:24.04
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: s=0; i=1; while [ $i -le 1000 ]; do s=$(expr $s + $i); i=$(expr $i + 1); done; echo "SUM=$s"
+  expect:
+    stdout_contains: golden/sum_500500.txt
+- id: distros/ubuntu-getconf-longbit
+  image: ubuntu:22.04
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: getconf LONG_BIT
+  expect:
+    stdout_contains: golden/64.txt
+- id: distros/ubuntu-pipeline
+  image: ubuntu:22.04
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: seq 1 1000 | awk '{s+=$1} END{print "SUM="s}'
+  expect:
+    stdout_contains: golden/sum_500500.txt
+- id: distros/ubuntu-sed-regex
+  image: ubuntu:22.04
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: printf '%s\n' abc | sed -n 's/^a\(.*\)c$/\1/p'
+  expect:
+    stdout_contains: golden/b.txt
+- id: distros/ubuntu-subshell-churn
+  image: ubuntu:22.04
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: t=0; n=1; while [ $n -le 500 ]; do v=$(sh -c "echo $((n*2))"); t=$(expr $t + $v); n=$(expr $n + 1); done; echo
+        "T=$t"
+  expect:
+    stdout_contains: golden/t_250500.txt
+- id: distros/ubuntu-tr-upper
+  image: ubuntu:24.04
+  timeout: 120
+  resources:
+  - registry
+  actions:
+  - shell:
+      script: echo "The quick brown" | tr a-z A-Z
+  expect:
+    stdout_contains: golden/the_quick.txt
