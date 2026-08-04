@@ -1,0 +1,330 @@
+cases:
+- id: web/nginx-serve
+  image: nginx:alpine
+  timeout: 60
+  resources: [host_port]
+  actions:
+  - shell:
+      script: nginx; sleep 1; wget -qO- http://127.0.0.1/ | head -1
+  expect:
+    stdout_contains: golden/doctype.txt
+- id: web/nginx-welcome
+  image: nginx:alpine
+  timeout: 60
+  resources: [host_port]
+  actions:
+  - shell:
+      script: nginx; sleep 1; wget -qO- http://127.0.0.1/
+  expect:
+    stdout_contains: golden/welcome.txt
+- id: web/nginx-custom-file
+  image: nginx:alpine
+  timeout: 60
+  resources: [host_port]
+  actions:
+  - shell:
+      script: echo hl-served-ok > /usr/share/nginx/html/hl.txt; nginx; sleep 1; wget -qO- http://127.0.0.1/hl.txt
+  expect:
+    stdout_contains: golden/served.txt
+- id: web/nginx-index-replace
+  image: nginx:alpine
+  timeout: 60
+  resources: [host_port]
+  actions:
+  - shell:
+      script: echo hl-index-ok > /usr/share/nginx/html/index.html; nginx; sleep 1; wget -qO- http://127.0.0.1/
+  expect:
+    stdout_contains: golden/index.txt
+- id: web/nginx-404
+  image: nginx:alpine
+  timeout: 60
+  resources: [host_port]
+  actions:
+  - shell:
+      script: nginx; sleep 1; wget -qO- http://127.0.0.1/nope-does-not-exist 2>&1; wget -S -qO /dev/null http://127.0.0.1/nope 2>&1 | grep -i 'HTTP/'
+  expect:
+    stdout_contains: golden/status_404.txt
+- id: web/nginx-headers
+  image: nginx:alpine
+  timeout: 60
+  resources: [host_port]
+  actions:
+  - shell:
+      script: nginx; sleep 1; wget -S -qO /dev/null http://127.0.0.1/ 2>&1 | grep -i 'Server:'
+  expect:
+    stdout_contains: golden/nginx.txt
+- id: web/nginx-config-test
+  image: nginx:alpine
+  timeout: 45
+  resources: [host_port]
+  actions:
+  - shell:
+      script: nginx -t 2>&1
+  expect:
+    stdout_contains: [golden/syntax_ok.txt, golden/test_ok.txt]
+- id: web/nginx-version
+  image: nginx:alpine
+  timeout: 45
+  resources: [host_port]
+  actions:
+  - shell:
+      script: nginx -v 2>&1
+  expect:
+    stdout_contains: golden/nginx_1.txt
+- id: web/nginx-version-127
+  image: nginx:1.27-alpine
+  timeout: 45
+  resources: [host_port]
+  actions:
+  - shell:
+      script: nginx -v 2>&1
+  expect:
+    stdout_contains: golden/nginx_127.txt
+- id: web/nginx-stable-serve
+  image: nginx:stable-alpine
+  timeout: 60
+  resources: [host_port]
+  actions:
+  - shell:
+      script: nginx; sleep 1; wget -qO- http://127.0.0.1/
+  expect:
+    stdout_contains: golden/welcome.txt
+- id: web/nginx-stable-custom
+  image: nginx:stable-alpine
+  timeout: 60
+  resources: [host_port]
+  actions:
+  - shell:
+      script: echo hl-served-ok > /usr/share/nginx/html/hl.txt; nginx; sleep 1; wget -qO- http://127.0.0.1/hl.txt
+  expect:
+    stdout_contains: golden/served.txt
+- id: web/nginx-stable-version
+  image: nginx:stable-alpine
+  timeout: 45
+  resources: [host_port]
+  actions:
+  - shell:
+      script: nginx -v 2>&1
+  expect:
+    stdout_contains: golden/nginx_1.txt
+- id: web/nginx-glibc-version
+  image: nginx:1.26
+  timeout: 45
+  resources: [host_port]
+  actions:
+  - shell:
+      script: nginx -v 2>&1
+  expect:
+    stdout_contains: golden/nginx_126.txt
+- id: web/nginx-glibc-config
+  image: nginx:1.26
+  timeout: 45
+  resources: [host_port]
+  actions:
+  - shell:
+      script: nginx -t 2>&1
+  expect:
+    stdout_contains: golden/syntax_ok.txt
+- id: web/caddy-version
+  image: caddy:2-alpine
+  timeout: 45
+  resources: [host_port]
+  actions:
+  - shell:
+      script: caddy version
+  expect:
+    stdout_contains: golden/caddy_v2.txt
+- id: web/caddy-version-run
+  image: caddy:2
+  timeout: 45
+  resources: [host_port]
+  actions:
+  - argv:
+      argv: [caddy, version]
+  expect:
+    stdout_contains: golden/caddy_v2.txt
+- id: web/caddy-respond
+  image: caddy:2-alpine
+  timeout: 60
+  resources: [host_port]
+  actions:
+  - shell:
+      script: printf ':80\n\nrespond "hl-served-ok"\n' > /tmp/Caddyfile; caddy start --config /tmp/Caddyfile --adapter caddyfile >/dev/null 2>&1; sleep 1; wget -qO- http://127.0.0.1/
+  expect:
+    stdout_contains: golden/served.txt
+- id: web/caddy-file-server
+  image: caddy:2-alpine
+  timeout: 60
+  resources: [host_port]
+  actions:
+  - shell:
+      script: mkdir -p /tmp/srv; echo hl-served-ok > /tmp/srv/hl.txt; caddy file-server --root /tmp/srv --listen :80 >/dev/null 2>&1 & sleep 1; wget -qO- http://127.0.0.1/hl.txt
+  expect:
+    stdout_contains: golden/served.txt
+- id: web/traefik-version
+  image: traefik:v3.1
+  timeout: 45
+  resources: [host_port]
+  actions:
+  - argv:
+      argv: [traefik, version]
+  expect:
+    stdout_contains: golden/traefik_31.txt
+- id: web/traefik-version-211
+  image: traefik:v2.11
+  timeout: 45
+  resources: [host_port]
+  actions:
+  - argv:
+      argv: [traefik, version]
+  expect:
+    stdout_contains: golden/traefik_211.txt
+- id: web/haproxy-version
+  image: haproxy:alpine
+  timeout: 45
+  resources: [host_port]
+  actions:
+  - shell:
+      script: haproxy -v 2>&1 | head -1
+  expect:
+    stdout_contains: golden/haproxy.txt
+- id: web/haproxy-version-lts
+  image: haproxy:lts-alpine
+  timeout: 45
+  resources: [host_port]
+  actions:
+  - shell:
+      script: haproxy -v 2>&1 | head -1
+  expect:
+    stdout_contains: golden/haproxy.txt
+- id: web/haproxy-glibc-version
+  image: haproxy:2.9
+  timeout: 45
+  resources: [host_port]
+  actions:
+  - shell:
+      script: haproxy -v 2>&1 | head -1
+  expect:
+    stdout_contains: golden/haproxy_29.txt
+- id: web/haproxy-config-check
+  image: haproxy:alpine
+  timeout: 45
+  resources: [host_port]
+  actions:
+  - shell:
+      script: printf 'defaults\n  mode http\n  timeout connect 1s\n  timeout client 1s\n  timeout server 1s\nfrontend f\n  bind :80\n  http-request return status 200 content-type "text/plain" string "ok"\n' > /tmp/h.cfg; haproxy -c -f /tmp/h.cfg && echo HAPROXY-CFG-VALID
+  expect:
+    stdout_contains: golden/haproxy_cfg.txt
+- id: web/haproxy-return
+  image: haproxy:alpine
+  timeout: 60
+  resources: [host_port]
+  actions:
+  - shell:
+      script: printf 'global\n  daemon\ndefaults\n  mode http\n  timeout connect 1s\n  timeout client 1s\n  timeout server 1s\nfrontend f\n  bind :80\n  http-request return status 200 content-type "text/plain" string "hl-haproxy-ok"\n' > /tmp/h.cfg; haproxy -f /tmp/h.cfg -D; sleep 1; wget -qO- http://127.0.0.1/
+  expect:
+    stdout_contains: golden/haproxy_ok.txt
+- id: web/varnish-version
+  image: varnish:7.5
+  timeout: 45
+  resources: [host_port]
+  actions:
+  - shell:
+      script: varnishd -V 2>&1 | head -1
+  expect:
+    stdout_contains: golden/varnish_75.txt
+- id: web/varnish-version-74
+  image: varnish:7.4
+  timeout: 45
+  resources: [host_port]
+  actions:
+  - shell:
+      script: varnishd -V 2>&1 | head -1
+  expect:
+    stdout_contains: golden/varnish_7.txt
+- id: web/varnish-vcl-compile
+  image: varnish:7.5
+  timeout: 180
+  resources: [host_port]
+  actions:
+  - shell:
+      script: |-
+        varnishd -C -f /etc/varnish/default.vcl >/dev/null 2>/tmp/vcl.c
+        status=$?
+        if [ "$status" -ne 0 ]; then
+          cat /tmp/vcl.c
+          exit "$status"
+        fi
+        grep -m1 -o VRT_ /tmp/vcl.c
+  expect:
+    stdout_contains: golden/vrt.txt
+- id: web/varnish-vcl-compile-stable
+  image: varnish:stable
+  timeout: 180
+  resources: [host_port]
+  actions:
+  - shell:
+      script: |-
+        varnishd -C -f /etc/varnish/default.vcl >/dev/null 2>/tmp/vcl.c
+        status=$?
+        if [ "$status" -ne 0 ]; then
+          cat /tmp/vcl.c
+          exit "$status"
+        fi
+        grep -m1 -o VRT_ /tmp/vcl.c
+  expect:
+    stdout_contains: golden/vrt.txt
+- id: web/httpd-serve
+  image: httpd:alpine
+  timeout: 60
+  resources: [host_port]
+  actions:
+  - shell:
+      script: httpd -k start 2>/dev/null; sleep 1; wget -qO- http://127.0.0.1/
+  expect:
+    stdout_contains: golden/works.txt
+- id: web/httpd-version
+  image: httpd:alpine
+  timeout: 45
+  resources: [host_port]
+  actions:
+  - shell:
+      script: httpd -v 2>&1
+  expect:
+    stdout_contains: golden/apache_24.txt
+- id: web/httpd-custom
+  image: httpd:alpine
+  timeout: 60
+  resources: [host_port]
+  actions:
+  - shell:
+      script: echo hl-served-ok > /usr/local/apache2/htdocs/hl.txt; httpd -k start 2>/dev/null; sleep 1; wget -qO- http://127.0.0.1/hl.txt
+  expect:
+    stdout_contains: golden/served.txt
+- id: web/httpd-config-test
+  image: httpd:alpine
+  timeout: 45
+  resources: [host_port]
+  actions:
+  - shell:
+      script: httpd -t 2>&1
+  expect:
+    stdout_contains: golden/syntax_caps.txt
+- id: web/httpd-glibc-version
+  image: httpd:2.4
+  timeout: 45
+  resources: [host_port]
+  actions:
+  - shell:
+      script: httpd -v 2>&1
+  expect:
+    stdout_contains: golden/apache_24.txt
+- id: web/httpd-glibc-config
+  image: httpd:2.4
+  timeout: 45
+  resources: [host_port]
+  actions:
+  - shell:
+      script: httpd -t 2>&1
+  expect:
+    stdout_contains: golden/syntax_caps.txt
