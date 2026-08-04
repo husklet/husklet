@@ -333,6 +333,7 @@ impl ThreadSet {
         selected
     }
 
+    #[cfg(test)]
     pub(super) fn claim(&self, thread: ThreadId, generation: u64) -> Result<ThreadRun, RuntimeThreadError> {
         let mut state = self.state.lock().map_err(|_| RuntimeThreadError::Invalid)?;
         let run = state.machines.get(&thread).ok_or(RuntimeThreadError::Missing)?;
@@ -563,6 +564,7 @@ impl ThreadSet {
             .is_empty()
     }
 
+    #[cfg(test)]
     pub(super) fn cancel_parked_process(&self, process: ProcessId) -> bool {
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         let selected = state.syscall_parked.iter().find_map(|thread| {
