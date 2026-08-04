@@ -1302,31 +1302,21 @@ fn depth_scaled_3d_blit_records() {
     );
 }
 
-/// A format with no packed colour texel is refused for the RIGHT reason, in every filter.
+/// Compressed sources record through the native sampler; unwritable destinations remain refused.
 ///
-/// Block-compressed and depth/stencil formats cannot take part in a blit at all: the host performs one by
-/// rendering through a sampled view into a colour attachment, and measured across BC1, BC3, BC7, BC6H and
-/// `Depth32Float` — as source and as destination, under both filters — it answers "no packed texel layout
-/// for this format" every time.
-///
-/// The refusal existed only by accident and named the wrong cause. A compressed source fell through to
-/// the linear-filter rule, was absent from `FILTERABLE`, and came back as "a source format that cannot be
-/// linearly filtered" — true of the format, wrong about the reason, and actively misleading, because a
-/// caller reading it switches to `VK_FILTER_NEAREST` and gets a different error for the same underlying
-/// cause. Worse, with NEAREST it was not refused here at all and reached the host.
-///
-/// So the assertion that matters is not that these are refused; it is that BOTH filters give the SAME
-/// answer and that the answer is about the texel layout. A test asserting only `is_err` would have passed
-/// against the old behaviour for the linear half.
+/// The host samples and decodes an ordinary 2D compressed source under both filters. A compressed
+/// destination still cannot be a colour attachment. Depth/stencil remains outside this colour blit path
+/// in either direction. Keeping all directions together prevents a symmetric packed-texel check from
+/// silently removing the supported compressed-source path.
 #[test]
-fn a_format_with_no_packed_texel_is_refused_for_the_right_reason() {
-    let unpackable = [
+fn compressed_sources_record_while_unwritable_formats_are_refused() {
+    let formats = [
         ("BC1", vk_format::BC1_RGBA_UNORM_BLOCK),
         ("BC3", vk_format::BC3_UNORM_BLOCK),
         ("BC7", vk_format::BC7_UNORM_BLOCK),
         ("depth", vk_format::D32_SFLOAT),
     ];
-    for (what, format) in unpackable {
+    for (what, format) in formats {
         for linear in [false, true] {
             for as_source in [true, false] {
                 let mut d = dev();
@@ -1357,7 +1347,7 @@ fn a_format_with_no_packed_texel_is_refused_for_the_right_reason() {
                     (plain, odd)
                 };
                 let cb = recording_cb(&mut d);
-                let err = record::cmd_blit_image(
+                let result = record::cmd_blit_image(
                     &mut d,
                     cb,
                     src,
@@ -1378,14 +1368,20 @@ fn a_format_with_no_packed_texel_is_refused_for_the_right_reason() {
                     },
                     linear,
                     Mirror::NONE,
-                )
-                .expect_err("a format with no packed colour texel cannot be blitted");
-                let side = if as_source { "source" } else { "destination" };
-                assert!(
-                    matches!(err, GpuError::Unsupported(m) if m.contains("no packed colour texel")),
-                    "{what} as {side} with linear={linear} must be refused for its TEXEL LAYOUT, not \
-                     for a filter rule that happens to exclude it: got {err:?}"
                 );
+                let side = if as_source { "source" } else { "destination" };
+                if as_source && what != "depth" {
+                    assert!(
+                        result.is_ok(),
+                        "{what} source with linear={linear} must reach the native sampler: {result:?}"
+                    );
+                } else {
+                    let err = result.expect_err("an unwritable colour-blit format must be refused");
+                    assert!(
+                        matches!(err, GpuError::Unsupported(_)),
+                        "{what} as {side} with linear={linear} must be refused at record time: {err:?}"
+                    );
+                }
             }
         }
     }

@@ -5,6 +5,12 @@ Written 2026-08-01 from the first scored Vulkan CTS baselines. Numbers here were
 what the bundle stages. Full results and method: `../../../e2e/husklet/apps/vk-cts/COPY_AND_BLIT.md` and
 `BASELINE.md` beside it.
 
+**Current correction, 2026-08-03:** ordinary 2D block-compressed sources are now supported end-to-end.
+The Vulkan recorder accepts them, and the host samples and decodes them into an uncompressed colour
+destination. Block-compressed destinations remain refused because they cannot be colour attachments. The
+2026-08-01 discussion below records the earlier un-advertising decision and must not be read as the current
+compressed-source capability.
+
 ## READ THIS FIRST: the two sides disagree ON PURPOSE
 
 **The CPU oracle serves 3D blits. The wgpu executor still refuses them.** Read cold, that looks like a bug
