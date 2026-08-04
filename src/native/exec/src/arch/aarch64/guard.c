@@ -29,6 +29,15 @@
 #define OFFSET_CERTIFICATE_VALID ((int)offsetof(hl_native_aarch64_cpu, certificate_valid))
 #define OFFSET_CERTIFICATE_DELTA ((int)offsetof(hl_native_aarch64_cpu, certificate_delta))
 
+/* Diagnostic translations keep their counters in the execution-local CPU
+ * record. x17 is stolen state and every call site has already preserved NZCV. */
+static void diagnostic_increment(hl_a64_assembler *assembler, int offset) {
+    if (!assembler->diagnostics) return;
+    hl_a64_ldr(assembler, 17, CPU, offset);
+    hl_a64_addi(assembler, 17, 17, 1);
+    hl_a64_str(assembler, 17, CPU, offset);
+}
+
 static int patch_offset(hl_a64_assembler *assembler, uint32_t *instruction,
                         const uint8_t *target, unsigned bits, int64_t *words) {
     uintptr_t writable;
@@ -103,6 +112,7 @@ void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint6
     condition(assembler, empty, safe_target, 0u);
     condition(assembler, contiguous, safe_target, 0u);
     branch(assembler, safe, safe_target);
+    diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_dirty_reserved));
     hl_a64_ldr(assembler, 17, CPU, OFFSET_DELTA);
     hl_a64_emit32(assembler, 0x8B110210u); /* restore projected EA */
     hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
@@ -113,6 +123,7 @@ void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint6
     uint8_t *overflow_target = assembler->cursor;
     if (!hl_a64_assembler_ok(assembler)) return;
     condition(assembler, overflow, overflow_target, 2u);
+    diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_dirty_overflow));
     /* The journal-capacity exit occurs before the guest store. Restore the
      * non-stolen scratch register and architectural flags exactly as every
      * other guard exit does before the common stub spills guest state. */
@@ -153,6 +164,8 @@ void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
     hl_a64_emit32(assembler, 0xEB09025Fu);
     hl_a64_emit32(assembler, 0x9A898251u);
     hl_a64_str(assembler, 17, CPU, OFFSET_DIRTY_LAST);
+    /* The completed store overlaps the live interval and merged in place. */
+    diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_dirty_merged));
     after_merge = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
     uint8_t *disjoint = assembler->cursor;
@@ -185,6 +198,8 @@ void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
     uint8_t *contiguous_target = assembler->cursor;
     if (!hl_a64_assembler_ok(assembler)) return;
     condition(assembler, contiguous, contiguous_target, 0u);
+    /* An adjacent completed store extends the same live interval. */
+    diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_dirty_merged));
     hl_a64_addi(assembler, 18, 16, (unsigned)bytes);
     hl_a64_str(assembler, 18, CPU, OFFSET_DIRTY_LAST);
     uint8_t *range_done = assembler->cursor;
@@ -200,6 +215,7 @@ void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
     hl_a64_ldr(assembler, 18, CPU, OFFSET_EXECUTABLE_WRITTEN);
     hl_a64_emit32(assembler, 0xAA120231u);
     hl_a64_str(assembler, 17, CPU, OFFSET_EXECUTABLE_WRITTEN);
+    diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_dirty_committed));
     hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
     hl_a64_emit32(assembler, 0xD51B4200u | 17u);
     hl_a64_ldr(assembler, 9, CPU, 9 * 8);
@@ -402,6 +418,7 @@ static void legacy_begin(hl_a64_assembler *assembler, uint64_t bytes, uint32_t r
         for (unsigned index = 0; index < 4; ++index)
             branch(assembler, cache_hits[index], assembler->cursor);
     guard->resume = assembler->cursor;
+    diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_guard_full));
     guard->required = required;
     guard->bytes = bytes;
 }
@@ -433,6 +450,7 @@ void hl_a64_guard_begin_mode(hl_a64_assembler *assembler, uint64_t bytes, uint32
     hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
     hl_a64_emit32(assembler, UINT32_C(0xd51b4211));
     hl_a64_ldr(assembler, 9, CPU, 9 * 8);
+    diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_guard_fast));
     if (!hl_a64_assembler_ok(assembler)) return;
     branch(assembler, done, assembler->cursor);
 }
@@ -468,6 +486,7 @@ void hl_a64_guard_direct_begin(hl_a64_assembler *assembler, uint64_t bytes, uint
     hl_a64_emit32(assembler, 0xD51B4200u | 17u);
     hl_a64_ldr(assembler, 9, CPU, 9 * 8);
     guard->resume = assembler->cursor;
+    diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_guard_full));
     guard->required = required;
     guard->bytes = bytes;
 }
@@ -510,5 +529,6 @@ void hl_a64_guard_finish(hl_a64_assembler *assembler, const hl_a64_guard *guard)
     hl_a64_str(assembler, 17, CPU, OFFSET_FAULT_ACCESS);
     hl_a64_movconst(assembler, 17, guard->bytes);
     hl_a64_str(assembler, 17, CPU, OFFSET_FAULT_SIZE);
+    diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_guard_fallback));
     hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_FALLBACK, guard->pc);
 }

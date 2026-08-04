@@ -55,6 +55,13 @@ pub struct Aarch64Cpu {
     pub loop_executable: u64,
     pub active_view_incarnation: u64,
     pub active_view_authority: u64,
+    pub diagnostic_guard_fast: u64,
+    pub diagnostic_guard_full: u64,
+    pub diagnostic_guard_fallback: u64,
+    pub diagnostic_dirty_reserved: u64,
+    pub diagnostic_dirty_overflow: u64,
+    pub diagnostic_dirty_committed: u64,
+    pub diagnostic_dirty_merged: u64,
 }
 
 #[repr(C)]
@@ -160,7 +167,14 @@ const _: () = {
     assert!(std::mem::offset_of!(Aarch64Cpu, loop_executable) == 2064);
     assert!(std::mem::offset_of!(Aarch64Cpu, active_view_incarnation) == 2072);
     assert!(std::mem::offset_of!(Aarch64Cpu, active_view_authority) == 2080);
-    assert!(std::mem::size_of::<Aarch64Cpu>() == 2088);
+    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_guard_fast) == 2088);
+    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_guard_full) == 2096);
+    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_guard_fallback) == 2104);
+    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_dirty_reserved) == 2112);
+    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_dirty_overflow) == 2120);
+    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_dirty_committed) == 2128);
+    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_dirty_merged) == 2136);
+    assert!(std::mem::size_of::<Aarch64Cpu>() == 2144);
 
     assert!(std::mem::align_of::<Aarch64Cpu>() == 8);
 

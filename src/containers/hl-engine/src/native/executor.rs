@@ -258,6 +258,13 @@ struct Diagnostics {
     x86_public_exits: u64,
     x86_public_syscalls: u64,
     x86_syscall_vector_dirty: u64,
+    a64_guard_fast: u64,
+    a64_guard_full: u64,
+    a64_guard_fallback: u64,
+    a64_dirty_reserved: u64,
+    a64_dirty_overflow: u64,
+    a64_dirty_committed: u64,
+    a64_dirty_merged: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -1151,6 +1158,13 @@ impl NativeAarch64 {
             loop_executable: 0,
             active_view_incarnation: 0,
             active_view_authority: 0,
+            diagnostic_guard_fast: 0,
+            diagnostic_guard_full: 0,
+            diagnostic_guard_fallback: 0,
+            diagnostic_dirty_reserved: 0,
+            diagnostic_dirty_overflow: 0,
+            diagnostic_dirty_committed: 0,
+            diagnostic_dirty_merged: 0,
         })
     }
 
@@ -1812,6 +1826,13 @@ impl Executor {
             x86_public_exits: 0,
             x86_public_syscalls: 0,
             x86_syscall_vector_dirty: 0,
+            a64_guard_fast: 0,
+            a64_guard_full: 0,
+            a64_guard_fallback: 0,
+            a64_dirty_reserved: 0,
+            a64_dirty_overflow: 0,
+            a64_dirty_committed: 0,
+            a64_dirty_merged: 0,
         };
         (unsafe { hl_native_diagnose(self.handle.as_ptr(), &raw mut output) } == 0)
             .then_some(output)
@@ -2395,7 +2416,7 @@ impl Drop for Executor {
             && let Ok(value) = self.diagnostics()
         {
             eprintln!(
-                "hl-native-detail: fills={} site_collisions={} shared_collisions={} branch={} syscall={} fallback={} yield={} completed={} operand_callbacks={} operand_cache_hits={} x86_public_exits={} x86_public_syscalls={} x86_syscall_vector_dirty={}",
+                "hl-native-detail: fills={} site_collisions={} shared_collisions={} branch={} syscall={} fallback={} yield={} completed={} operand_callbacks={} operand_cache_hits={} x86_public_exits={} x86_public_syscalls={} x86_syscall_vector_dirty={} a64_guard_fast={} a64_guard_full={} a64_guard_fallback={} a64_dirty_reserved={} a64_dirty_overflow={} a64_dirty_committed={} a64_dirty_merged={} a64_slim_exits=0",
                 value.ibtc_fills,
                 value.ibtc_site_collisions,
                 value.ibtc_shared_collisions,
@@ -2409,6 +2430,13 @@ impl Drop for Executor {
                 value.x86_public_exits,
                 value.x86_public_syscalls,
                 value.x86_syscall_vector_dirty,
+                value.a64_guard_fast,
+                value.a64_guard_full,
+                value.a64_guard_fallback,
+                value.a64_dirty_reserved,
+                value.a64_dirty_overflow,
+                value.a64_dirty_committed,
+                value.a64_dirty_merged,
             );
         }
         // SAFETY: construction transfers unique ownership of the live handle;
@@ -2459,7 +2487,7 @@ const _: () = {
     assert!(std::mem::size_of::<FaultScope>() == 32);
     assert!(std::mem::size_of::<RunExit>() == 48);
     assert!(std::mem::size_of::<Change>() == 40);
-    assert!(std::mem::size_of::<Diagnostics>() == 216);
+    assert!(std::mem::size_of::<Diagnostics>() == 272);
 };
 
 #[cfg(test)]

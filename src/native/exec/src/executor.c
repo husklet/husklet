@@ -402,6 +402,13 @@ hl_native_status hl_native_create(const hl_native_config *config, hl_native_exec
      * its first operation; zeroed storage alone is not a C11 initializer. */
     atomic_init(&executor->admission, ADMISSION(MUTATION_OPEN, 0));
     executor->diagnostics = (config->flags & HL_NATIVE_DIAGNOSTICS) != 0;
+    atomic_init(&executor->a64_guard_fast, 0);
+    atomic_init(&executor->a64_guard_full, 0);
+    atomic_init(&executor->a64_guard_fallback, 0);
+    atomic_init(&executor->a64_dirty_reserved, 0);
+    atomic_init(&executor->a64_dirty_overflow, 0);
+    atomic_init(&executor->a64_dirty_committed, 0);
+    atomic_init(&executor->a64_dirty_merged, 0);
     status = hl_native_arena_create(&executor->arena, config);
     if (status != HL_NATIVE_OK) {
         free(executor);
@@ -506,8 +513,17 @@ hl_native_status hl_native_diagnose(const hl_native_executor *executor, hl_nativ
     if (output->size >= offsetof(hl_native_diagnostics, x86_syscall_vector_dirty)) {
         output->x86_public_syscalls = executor->x86_public_syscalls;
     }
-    if (output->size >= sizeof(*output)) {
+    if (output->size >= offsetof(hl_native_diagnostics, a64_guard_fast)) {
         output->x86_syscall_vector_dirty = executor->x86_syscall_vector_dirty;
+    }
+    if (output->size >= sizeof(*output)) {
+        output->a64_guard_fast = atomic_load_explicit(&executor->a64_guard_fast, memory_order_relaxed);
+        output->a64_guard_full = atomic_load_explicit(&executor->a64_guard_full, memory_order_relaxed);
+        output->a64_guard_fallback = atomic_load_explicit(&executor->a64_guard_fallback, memory_order_relaxed);
+        output->a64_dirty_reserved = atomic_load_explicit(&executor->a64_dirty_reserved, memory_order_relaxed);
+        output->a64_dirty_overflow = atomic_load_explicit(&executor->a64_dirty_overflow, memory_order_relaxed);
+        output->a64_dirty_committed = atomic_load_explicit(&executor->a64_dirty_committed, memory_order_relaxed);
+        output->a64_dirty_merged = atomic_load_explicit(&executor->a64_dirty_merged, memory_order_relaxed);
     }
     return HL_NATIVE_OK;
 }
@@ -932,10 +948,25 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             status = hl_native_execution_leave(&execution);
             return status == HL_NATIVE_OK ? HL_NATIVE_STATE : status;
         }
+        cpu->diagnostic_guard_fast = cpu->diagnostic_guard_full = cpu->diagnostic_guard_fallback = 0;
+        cpu->diagnostic_dirty_reserved = cpu->diagnostic_dirty_overflow = cpu->diagnostic_dirty_committed = 0;
+        cpu->diagnostic_dirty_merged = 0;
         hl_native_aarch64_enter(cpu, code.entry);
         if (fault_unpublish != NULL) fault_unpublish(fault_context, &fault_scope);
         cpu->active_authority = 0;
         active_view_clear(cpu);
+        if (executor->diagnostics) {
+            atomic_fetch_add_explicit(&executor->a64_guard_fast, cpu->diagnostic_guard_fast, memory_order_relaxed);
+            atomic_fetch_add_explicit(&executor->a64_guard_full, cpu->diagnostic_guard_full, memory_order_relaxed);
+            atomic_fetch_add_explicit(&executor->a64_guard_fallback, cpu->diagnostic_guard_fallback, memory_order_relaxed);
+            atomic_fetch_add_explicit(&executor->a64_dirty_reserved, cpu->diagnostic_dirty_reserved, memory_order_relaxed);
+            atomic_fetch_add_explicit(&executor->a64_dirty_overflow, cpu->diagnostic_dirty_overflow, memory_order_relaxed);
+            atomic_fetch_add_explicit(&executor->a64_dirty_committed, cpu->diagnostic_dirty_committed, memory_order_relaxed);
+            atomic_fetch_add_explicit(&executor->a64_dirty_merged, cpu->diagnostic_dirty_merged, memory_order_relaxed);
+            cpu->diagnostic_guard_fast = cpu->diagnostic_guard_full = cpu->diagnostic_guard_fallback = 0;
+            cpu->diagnostic_dirty_reserved = cpu->diagnostic_dirty_overflow = cpu->diagnostic_dirty_committed = 0;
+            cpu->diagnostic_dirty_merged = 0;
+        }
         int executed_identity = 0;
         if ((cpu->indirect_site & 3u) == 1u) {
             if (!hl_native_cache_execution(executor->cache, cpu->indirect_site, &executed_code))

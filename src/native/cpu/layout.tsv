@@ -52,6 +52,13 @@ aarch64	loop_budget_iterations	2056	1	u64
 aarch64	loop_executable	2064	1	u64
 aarch64	active_view_incarnation	2072	1	u64
 aarch64	active_view_authority	2080	1	u64
+aarch64	diagnostic_guard_fast	2088	1	u64
+aarch64	diagnostic_guard_full	2096	1	u64
+aarch64	diagnostic_guard_fallback	2104	1	u64
+aarch64	diagnostic_dirty_reserved	2112	1	u64
+aarch64	diagnostic_dirty_overflow	2120	1	u64
+aarch64	diagnostic_dirty_committed	2128	1	u64
+aarch64	diagnostic_dirty_merged	2136	1	u64
 x86_64	registers	0	16	u64
 x86_64	program	128	1	u64
 x86_64	flags	136	1	u64

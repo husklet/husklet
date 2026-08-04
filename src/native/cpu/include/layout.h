@@ -59,6 +59,13 @@ typedef struct hl_native_aarch64_cpu {
     uint64_t loop_executable;
     uint64_t active_view_incarnation;
     uint64_t active_view_authority;
+    uint64_t diagnostic_guard_fast;
+    uint64_t diagnostic_guard_full;
+    uint64_t diagnostic_guard_fallback;
+    uint64_t diagnostic_dirty_reserved;
+    uint64_t diagnostic_dirty_overflow;
+    uint64_t diagnostic_dirty_committed;
+    uint64_t diagnostic_dirty_merged;
 } hl_native_aarch64_cpu;
 
 typedef struct hl_native_x86_64_cpu {
@@ -165,7 +172,14 @@ HL_CPU_ASSERT(hl_native_aarch64_cpu, loop_budget_iterations, 2056);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, loop_executable, 2064);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, active_view_incarnation, 2072);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, active_view_authority, 2080);
-_Static_assert(sizeof(hl_native_aarch64_cpu) == 2088, "aarch64 native CPU prefix size drifted");
+HL_CPU_ASSERT(hl_native_aarch64_cpu, diagnostic_guard_fast, 2088);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, diagnostic_guard_full, 2096);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, diagnostic_guard_fallback, 2104);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, diagnostic_dirty_reserved, 2112);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, diagnostic_dirty_overflow, 2120);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, diagnostic_dirty_committed, 2128);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, diagnostic_dirty_merged, 2136);
+_Static_assert(sizeof(hl_native_aarch64_cpu) == 2144, "aarch64 native CPU prefix size drifted");
 
 _Static_assert(_Alignof(hl_native_aarch64_cpu) == 8, "aarch64 native CPU prefix alignment drifted");
 

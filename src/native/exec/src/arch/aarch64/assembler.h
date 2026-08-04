@@ -10,6 +10,7 @@ typedef struct hl_a64_assembler {
     uint8_t *cursor;
     uint8_t *limit;
     uint32_t failed;
+    uint32_t diagnostics;
 } hl_a64_assembler;
 
 int hl_a64_assembler_begin(hl_a64_assembler *, void *, void *, size_t);
