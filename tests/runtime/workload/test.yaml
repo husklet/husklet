@@ -1,0 +1,188 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+oracle:
+  provider: qemu
+  commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: [-static-pie, -O2, -pthread, -lm]
+cases:
+  - id: runtime/workload/busyloop
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: busyloop.c, output: busyloop, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/workload/busyloop }
+    run: []
+    expect: { exit: 0, stdout: golden/busyloop.out }
+  - id: runtime/workload/luajit-trace
+    targets: [arm64]
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: luajit_trace.c, output: luajit_trace, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/workload/luajit_trace }
+    run: []
+    expect: { exit: 0, stdout: golden/luajit_trace.out }
+  - id: runtime/workload/ibtc-dispatch
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: ibtc_dispatch.c, output: ibtc_dispatch, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/workload/ibtc_dispatch }
+    run: []
+    expect: { exit: 0, stdout: golden/ibtc_dispatch.out }
+  - id: runtime/workload/bigmem
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: bigmem.c, output: bigmem, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/workload/bigmem }
+    run: []
+    expect: { exit: 0, stdout: golden/bigmem.out }
+  - id: runtime/workload/bigarr
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: bigarr.c, output: bigarr, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/workload/bigarr }
+    run: []
+    expect: { exit: 0, stdout: golden/bigarr.out }
+  - id: runtime/workload/dbserver
+    targets: [arm64]
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: dbserver.c, output: dbserver, flags: [-static-pie, -O2, -pthread, -lsqlite3, -lm, -ldl] }
+    artifact: { destination: /opt/husklet/workload/dbserver }
+    run: []
+    expect: { exit: 0, stdout: golden/dbserver.out }
+  - id: runtime/workload/codecache
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: codecache.c, output: codecache, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/workload/codecache }
+    run: []
+    expect: { exit: 0, stdout: golden/codecache.out }
+  - id: runtime/workload/indirect
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: indirect.c, output: indirect, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/workload/indirect }
+    run: []
+    expect: { exit: 0, stdout: golden/indirect.out }
+  - id: runtime/workload/threadchurn
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: threadchurn.c, output: threadchurn, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/workload/threadchurn }
+    run: []
+    expect: { exit: 0, stdout: golden/threadchurn.out }
+  - id: runtime/workload/forkchurn
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: forkchurn.c, output: forkchurn, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/workload/forkchurn }
+    run: []
+    expect: { exit: 0, stdout: golden/forkchurn.out }
+  - id: runtime/workload/allocchurn
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: allocchurn.c, output: allocchurn, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/workload/allocchurn }
+    run: []
+    expect: { exit: 0, stdout: golden/allocchurn.out }
+  - id: runtime/workload/smc
+    targets: [arm64]
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: smc.c, output: smc, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/workload/smc }
+    run: []
+    expect: { exit: 0, stdout: golden/smc.out }
+  - id: runtime/workload/smcthreads
+    targets: [arm64]
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: smc_threads.c, output: smc_threads, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/workload/smc_threads }
+    run: []
+    expect: { exit: 0, stdout: golden/smc_threads.out }
+  - id: runtime/workload/smcprecise
+    targets: [arm64]
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: smc_precise.c, output: smc_precise, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/workload/smc_precise }
+    run: []
+    expect: { exit: 0, stdout: golden/smc_precise.out }
+  - id: runtime/workload/smcselfflush
+    targets: [arm64]
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: smc_selfflush.c, output: smc_selfflush, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/workload/smc_selfflush }
+    run: []
+    expect: { exit: 0, stdout: golden/smc_selfflush.out }
+  - id: runtime/workload/smcmprotect
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: smc_mprotect.c, output: smc_mprotect, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/workload/smc_mprotect }
+    run: []
+    expect: { exit: 0, stdout: golden/smc_mprotect.out }
+  - id: runtime/workload/smcremapreuse
+    targets: [amd64]
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: smc_reuse.c, output: smc_reuse, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/workload/smc_reuse }
+    run: []
+    expect: { exit: 0, stdout: golden/smc_reuse.out }
+  - id: runtime/workload/smcmremap
+    targets: [amd64]
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: smc_mremap.c, output: smc_mremap, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/workload/smc_mremap }
+    run: []
+    expect: { exit: 0, stdout: golden/smc_mremap.out }
+  - id: runtime/workload/smctableoverflow
+    targets: [amd64]
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: smc_overflow.c, output: smc_overflow, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/workload/smc_overflow }
+    run: []
+    expect: { exit: 0, stdout: golden/smc_overflow.out }
+  - id: runtime/workload/sqlite
+    targets: [arm64]
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: sqlite.c, output: sqlite, flags: [-static-pie, -O2, -pthread, -lsqlite3, -lm, -ldl] }
+    artifact: { destination: /opt/husklet/workload/sqlite }
+    run: []
+    expect: { exit: 0, stdout: golden/sqlite.out }
+  - id: runtime/workload/stwfutexquiesce
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    build: { source: futex_quiesce.c, output: futex_quiesce, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/workload/futex_quiesce }
+    run: []
+    expect: { exit: 0, stdout: golden/futex_quiesce.out }
