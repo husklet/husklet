@@ -106,3 +106,40 @@ address/PC/state/accounting atomicity, F2/F3/LOCK/redundant-66 prefix decisions,
 invalid/truncated admission, and zero/one-unit executor budget boundaries.
 These are correctness and bounded-code-size claims only; performance requires
 a separately recorded exact-tree A/B run.
+
+## Packed integer multiply slice
+
+After packed shifts, missing coherent integer families ranked by legacy-XMM
+coverage and hot-path impact as: (1) packed multiply (`D5/E4/E5/F4`, four
+opcodes and eight register/memory paths), (2) saturating add/sub (eight
+opcodes), (3) compare/min/max/average (nine), and (4) immediate shuffles
+(four distinct merge rules). Multiply ranks first because PMULUDQ occurs in the
+compiler-vectorized `string` initializer and all four operations share one
+bounded widening-product mechanism; the larger groups do not occur there.
+
+The direct read-only C audit covered
+`../engine/src/translator/guest/x86_64/translate.c::translate_one` at the
+`D5/E4/E5/F4` arms and
+`../engine/src/translator/guest/x86_64/interp.c::interp_step_sse`, including
+`interp_simd_get`, `interp_simd_rm_get`, and `interp_simd_put`. PMULLW retains
+the low 16 bits of eight 16x16 products; PMULHW/PMULHUW select signed/unsigned
+high halves; PMULUDQ multiplies only dword lanes 0 and 2 into two qwords. The
+instruction borrows CPU-owned XMM state, allocates and locks nothing, and owns
+no independent identity, lifetime, or teardown. Register forms cannot fail or
+block. Memory forms validate and load the complete 16-byte source before
+destination publication. There are no partial results, flags, MXCSR, errno,
+cancellation, or signal-ordering effects. The fast branch is AArch64 NEON; the
+interpreter is portable. MMX and VEX forms remain separate branches.
+
+| Retained capability | Husklet owner | State after this lane |
+|---|---|---|
+| PMULLW low-word products | `frontend.c` + `frontend/memory.c` | implemented, register/memory |
+| PMULHW signed high-word products | same | implemented, register/memory |
+| PMULHUW unsigned high-word products | same | implemented, register/memory |
+| PMULUDQ even-dword widening products | same | implemented, register/memory |
+| Full memory validation before commit | generic vector guard | implemented |
+| MMX and VEX forms | native frontend | remaining separate gaps |
+
+`test/x86_translation.c::packed_integer_multiply` exercises every register and
+unaligned guarded-memory form, checks every lane against a software oracle,
+verifies source/EFLAGS/MXCSR preservation, and rejects the MMX spelling.

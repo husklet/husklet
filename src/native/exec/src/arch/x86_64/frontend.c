@@ -399,8 +399,11 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                       (request->guest_bytes[cursor] >= 0x74u && request->guest_bytes[cursor] <= 0x76u) ||
                       request->guest_bytes[cursor] == 0x7fu || request->guest_bytes[cursor] == 0xd7u ||
                       request->guest_bytes[cursor] == 0xd4u ||
+                      request->guest_bytes[cursor] == 0xd5u ||
                       request->guest_bytes[cursor] == 0xdbu || request->guest_bytes[cursor] == 0xdfu ||
+                      request->guest_bytes[cursor] == 0xe4u || request->guest_bytes[cursor] == 0xe5u ||
                       request->guest_bytes[cursor] == 0xebu || request->guest_bytes[cursor] == 0xefu ||
+                      request->guest_bytes[cursor] == 0xf4u ||
                       (request->guest_bytes[cursor] >= 0xf8u && request->guest_bytes[cursor] <= 0xfeu))) ||
                     (semantic_prefix == 0xf3u &&
                      (request->guest_bytes[cursor] == 0x6fu || request->guest_bytes[cursor] == 0x7fu)))) {
@@ -457,6 +460,13 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
             } else if (extension >= 0xf8u && extension <= 0xfbu) {
                 item->vector_kind = VECTOR_SUBTRACT;
                 item->vector_lane = (uint8_t)(1u << (extension - 0xf8u));
+            } else if (extension == 0xd5u) {
+                item->vector_kind = VECTOR_MULTIPLY_LOW_WORD;
+            } else if (extension == 0xe4u || extension == 0xe5u) {
+                item->vector_kind = VECTOR_MULTIPLY_HIGH_WORD;
+                item->condition = extension == 0xe5u;
+            } else if (extension == 0xf4u) {
+                item->vector_kind = VECTOR_MULTIPLY_EVEN_DWORD;
             } else {
                 item->vector_kind = (extension >= 0x68u && extension <= 0x6au) || extension == 0x6du
                                         ? VECTOR_UNPACK_HIGH : VECTOR_UNPACK_LOW;

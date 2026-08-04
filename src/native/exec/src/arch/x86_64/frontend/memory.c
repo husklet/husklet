@@ -890,6 +890,22 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
         base |= lane == 1u ? 0u : lane == 2u ? UINT32_C(0x00400000) :
                 lane == 4u ? UINT32_C(0x00800000) : UINT32_C(0x00c00000);
         words[(*cursor)++] = base | source << 16 | destination << 5 | destination;
+    } else if (item->vector_kind == VECTOR_MULTIPLY_LOW_WORD) {
+        words[(*cursor)++] = UINT32_C(0x4e609c00) | source << 16 |
+                             destination << 5 | destination; /* mul vd.8h,vd.8h,vs.8h */
+    } else if (item->vector_kind == VECTOR_MULTIPLY_HIGH_WORD) {
+        uint32_t low = item->condition != 0u ? UINT32_C(0x0e60c000) : UINT32_C(0x2e60c000);
+        uint32_t high = item->condition != 0u ? UINT32_C(0x4e60c000) : UINT32_C(0x6e60c000);
+        words[(*cursor)++] = low | source << 16 | destination << 5 | 17u;
+        words[(*cursor)++] = high | source << 16 | destination << 5 | 18u;
+        words[(*cursor)++] = UINT32_C(0x4e405800) | 18u << 16 | 17u << 5 | destination;
+        /* UZP2 selects bits 31:16 from each widened product in lane order. */
+    } else if (item->vector_kind == VECTOR_MULTIPLY_EVEN_DWORD) {
+        words[(*cursor)++] = UINT32_C(0x4e801800) | destination << 16 |
+                             destination << 5 | 17u; /* uzp1 even destination lanes */
+        words[(*cursor)++] = UINT32_C(0x4e801800) | source << 16 |
+                             source << 5 | 18u; /* uzp1 even source lanes */
+        words[(*cursor)++] = UINT32_C(0x2ea0c000) | 18u << 16 | 17u << 5 | destination;
     } else if (item->vector_kind == VECTOR_BYTE_MASK) {
         words[(*cursor)++] = UINT32_C(0x6f090400) | source << 5 | 17u; /* ushr v17.16b,source,#7 */
         words[(*cursor)++] = UINT32_C(0x6f001400) | 25u << 16 | 17u << 5 | 17u;

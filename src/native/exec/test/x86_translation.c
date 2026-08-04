@@ -227,6 +227,146 @@ static int packed_integer_arithmetic(void) {
     return 0;
 }
 
+static void packed_multiply_expected(uint8_t output[16], const uint8_t left[16],
+                                     const uint8_t right[16], uint8_t opcode) {
+    unsigned lane;
+    memset(output, 0, 16);
+    if (opcode == 0xf4u) {
+        for (lane = 0; lane < 2u; ++lane) {
+            uint32_t first;
+            uint32_t second;
+            uint64_t product;
+            memcpy(&first, left + lane * 8u, sizeof first);
+            memcpy(&second, right + lane * 8u, sizeof second);
+            product = (uint64_t)first * (uint64_t)second;
+            memcpy(output + lane * 8u, &product, sizeof product);
+        }
+        return;
+    }
+    for (lane = 0; lane < 8u; ++lane) {
+        uint16_t first;
+        uint16_t second;
+        uint32_t product;
+        uint16_t result;
+        memcpy(&first, left + lane * 2u, sizeof first);
+        memcpy(&second, right + lane * 2u, sizeof second);
+        if (opcode == 0xe5u)
+            product = (uint32_t)((int32_t)(int16_t)first * (int32_t)(int16_t)second);
+        else
+            product = (uint32_t)first * (uint32_t)second;
+        result = (uint16_t)(opcode == 0xd5u ? product : product >> 16);
+        memcpy(output + lane * 2u, &result, sizeof result);
+    }
+}
+
+static int packed_integer_multiply(void) {
+    static const uint8_t guest[] = {
+        0x66, 0x0f, 0xd5, 0xc1, /* pmullw xmm0,xmm1 */
+        0x66, 0x0f, 0xe4, 0xc2, /* pmulhuw xmm0,xmm2 */
+        0x66, 0x0f, 0xe5, 0xc3, /* pmulhw xmm0,xmm3 */
+        0x66, 0x0f, 0xf4, 0xc4, /* pmuludq xmm0,xmm4 */
+    };
+    uint32_t host[256] = {0};
+    hl_x86_a64_provenance provenance[8] = {0};
+    hl_x86_a64_request request = request_for(guest, sizeof guest, host, provenance);
+    hl_x86_a64_result result;
+    unsigned index;
+    CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+    CHECK(result.exit == HL_X86_A64_FALLTHROUGH && result.instruction_count == 4);
+    for (index = 0; index < 4u; ++index)
+        CHECK(provenance[index].guest_size == 4 && provenance[index].word_end > provenance[index].word_start);
+    for (index = 0; index < 4u; ++index) {
+        static const uint8_t opcodes[] = {0xd5, 0xe4, 0xe5, 0xf4};
+        uint8_t memory[] = {0x66, 0x0f, opcodes[index], 0x4b, 0x10};
+        uint32_t memory_host[256] = {0};
+        hl_x86_a64_provenance memory_provenance[8] = {0};
+        hl_x86_a64_request memory_request = request_for(memory, sizeof memory, memory_host, memory_provenance);
+        hl_x86_a64_result memory_result;
+        CHECK(hl_x86_a64_emit(&memory_request, &memory_result) == HL_X86_A64_OK);
+        CHECK(memory_result.instruction_count == 1 && memory_provenance[0].guest_size == 5);
+    }
+#if defined(__aarch64__)
+    {
+        static const uint8_t opcodes[] = {0xd5, 0xe4, 0xe5, 0xf4};
+        static const uint8_t left[16] = {
+            0xff, 0x7f, 0x00, 0x80, 0xff, 0xff, 0x01, 0x00,
+            0x34, 0x12, 0xcc, 0xed, 0x01, 0x80, 0xfe, 0x7f,
+        };
+        static const uint8_t right[16] = {
+            0x02, 0x00, 0x02, 0x00, 0xff, 0xff, 0xff, 0xff,
+            0x78, 0x56, 0x22, 0x11, 0x00, 0x80, 0x02, 0x00,
+        };
+        long page = sysconf(_SC_PAGESIZE);
+        uint8_t *code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        CHECK(code != MAP_FAILED);
+        for (index = 0; index < 4u; ++index) {
+            uint8_t one[] = {0x66, 0x0f, opcodes[index], 0xc1};
+            uint32_t one_host[256] = {0};
+            hl_x86_a64_provenance one_provenance[8] = {0};
+            hl_x86_a64_request one_request = request_for(one, sizeof one, one_host, one_provenance);
+            hl_x86_a64_result one_result;
+            hl_native_x86_64_cpu cpu = {0};
+            uint8_t expected[16];
+            CHECK(hl_x86_a64_emit(&one_request, &one_result) == HL_X86_A64_OK);
+            memcpy(code, one_host, one_result.word_count * sizeof(uint32_t));
+            ((uint32_t *)code)[one_result.word_count] = UINT32_C(0xd65f03c0);
+            __builtin___clear_cache((char *)code, (char *)code + (one_result.word_count + 1u) * 4u);
+            CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+            memcpy(&cpu.vectors[0], left, sizeof left);
+            memcpy(&cpu.vectors[2], right, sizeof right);
+            cpu.flags = UINT64_C(0xad7);
+            cpu.mxcsr = UINT32_C(0x5f80);
+            packed_multiply_expected(expected, left, right, opcodes[index]);
+            hl_native_x86_64_enter(&cpu, code);
+            CHECK(memcmp(&cpu.vectors[0], expected, sizeof expected) == 0);
+            CHECK(memcmp(&cpu.vectors[2], right, sizeof right) == 0);
+            CHECK(cpu.flags == UINT64_C(0xad7) && cpu.mxcsr == UINT32_C(0x5f80));
+            CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_WRITE) == 0);
+            { /* Every opcode also executes through the guarded unaligned-memory path. */
+                uint8_t memory[] = {0x66, 0x0f, opcodes[index], 0x03};
+                _Alignas(16) uint8_t storage[32] = {0};
+                uint32_t memory_host[256] = {0};
+                hl_x86_a64_provenance memory_provenance[8] = {0};
+                hl_x86_a64_request memory_request =
+                    request_for(memory, sizeof memory, memory_host, memory_provenance);
+                hl_x86_a64_result memory_result;
+                memset(&cpu, 0, sizeof cpu);
+                CHECK(hl_x86_a64_emit(&memory_request, &memory_result) == HL_X86_A64_OK);
+                memcpy(code, memory_host, memory_result.word_count * sizeof(uint32_t));
+                ((uint32_t *)code)[memory_result.word_count] = UINT32_C(0xd65f03c0);
+                __builtin___clear_cache((char *)code, (char *)code + (memory_result.word_count + 1u) * 4u);
+                CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+                memcpy(storage + 1, right, sizeof right);
+                memcpy(&cpu.vectors[0], left, sizeof left);
+                cpu.registers[3] = UINT64_C(0x2001);
+                cpu.memory_first = UINT64_C(0x2000);
+                cpu.memory_last = UINT64_C(0x2020);
+                cpu.memory_delta = (uint64_t)(uintptr_t)storage - UINT64_C(0x2000);
+                cpu.memory_permissions = 1u;
+                cpu.flags = UINT64_C(0xad7);
+                cpu.mxcsr = UINT32_C(0x5f80);
+                hl_native_x86_64_enter(&cpu, code);
+                CHECK(memcmp(&cpu.vectors[0], expected, sizeof expected) == 0);
+                CHECK(cpu.flags == UINT64_C(0xad7) && cpu.mxcsr == UINT32_C(0x5f80));
+                CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_WRITE) == 0);
+            }
+        }
+        CHECK(munmap(code, (size_t)page) == 0);
+    }
+#endif
+    { /* Unprefixed encodings are MMX and stay outside this XMM frontend. */
+        static const uint8_t mmx[] = {0x0f, 0xd5, 0xc1};
+        uint32_t mmx_host[256] = {0};
+        hl_x86_a64_provenance mmx_provenance[8] = {0};
+        hl_x86_a64_request mmx_request = request_for(mmx, sizeof mmx, mmx_host, mmx_provenance);
+        hl_x86_a64_result mmx_result;
+        CHECK(hl_x86_a64_emit(&mmx_request, &mmx_result) == HL_X86_A64_UNSUPPORTED);
+        CHECK(mmx_result.instruction_count == 0);
+    }
+    return 0;
+}
+
 static unsigned pcmp_length(const uint8_t value[16]) {
     unsigned index;
     for (index = 0; index < 16u; ++index)
@@ -4292,6 +4432,8 @@ int main(void) {
     status = floating_arithmetic();
     if (status != 0) return status;
     status = packed_integer_arithmetic();
+    if (status != 0) return status;
+    status = packed_integer_multiply();
     if (status != 0) return status;
     status = pcmpistri_equal_each();
     if (status != 0) return status;
