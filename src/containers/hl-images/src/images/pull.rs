@@ -195,6 +195,10 @@ impl Images {
         // immutable empty root, just as equal non-empty chains share a snapshot.
         let snapshot = parent.unwrap_or(Id::new("chain-empty")?);
 
+        // A publication record is written last. Any same-key tree left without it
+        // is an interrupted commit (or a legacy unaccounted chain), never a cache hit.
+        self.snapshots.discard_unpublished(&snapshot)?;
+
         // Older stores may contain a directory and metadata sidecars left behind
         // by the former unpack/GC race, but no filesystem entries.  A non-empty
         // OCI diff chain cannot use that as a cache hit.  Remove the unusable
@@ -211,11 +215,16 @@ impl Images {
                 .iter()
                 .rposition(|(_, id)| self.snapshots.contains(id));
             let first = cached.map_or(0, |index| index + 1);
+            let cached_records = cached
+                .map(|index| self.snapshots.layer_records(&chain[index].1))
+                .transpose()?
+                .flatten();
+            let mut records = cached_records.unwrap_or_default();
             let mut active = self.snapshots.prepare(
                 Id::new(format!("apply-{}", uuid::Uuid::new_v4()))?,
                 cached.map(|index| &chain[index].1),
             )?;
-            for (layer, (expected, _)) in document.layers[first..].iter().zip(&chain[first..]) {
+            for (layer, (expected, chain_id)) in document.layers[first..].iter().zip(&chain[first..]) {
                 let path = active.path().to_owned();
                 let (ownerships, names) = active.metadata_mut();
                 let applied = match self.content.apply_layer(layer, &path, ownerships, names) {
@@ -232,11 +241,15 @@ impl Images {
                         actual: applied.diff_id.to_string(),
                     });
                 }
-                // The typed value reaches the snapshot publication boundary here.
-                // Durable layer accounting will commit it with the snapshot bundle.
-                let _diff_size = applied.diff_size;
+                let parent_chain_id = records.last().map(|record: &crate::snapshot::LayerRecord| record.chain_id.clone());
+                records.push(crate::snapshot::LayerRecord::new(
+                    expected.clone(),
+                    parent_chain_id,
+                    chain_id.chain_digest()?,
+                    applied.diff_size,
+                )?);
             }
-            active.commit(snapshot.clone())?;
+            active.commit_layer(snapshot.clone(), records)?;
         }
         let lease = self.leases.create_with(
             BTreeMap::from([

@@ -10,10 +10,14 @@ use crate::{
     Error, Result,
 };
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct DiffSize(u64);
 
 impl DiffSize {
+    #[cfg(test)]
+    pub(crate) fn new(bytes: u64) -> Self {
+        Self(bytes)
+    }
     #[must_use]
     pub fn bytes(self) -> u64 {
         self.0

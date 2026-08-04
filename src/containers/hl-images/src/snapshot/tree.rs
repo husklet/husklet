@@ -17,6 +17,29 @@ impl<'a> From<&'a Path> for Tree<'a> {
 }
 
 impl Tree<'_> {
+    /// Make every regular file and directory in this tree durable, children first.
+    pub(super) fn sync(&self) -> Result<()> {
+        self.sync_with(&mut |path| fs::File::open(path)?.sync_all())
+    }
+
+    fn sync_with(&self, sync: &mut impl FnMut(&Path) -> std::io::Result<()>) -> Result<()> {
+        let metadata = fs::symlink_metadata(self.0)?;
+        if metadata.file_type().is_symlink() {
+            return Ok(());
+        }
+        if metadata.is_file() {
+            return sync(self.0).map_err(Into::into);
+        }
+        if metadata.is_dir() {
+            for entry in fs::read_dir(self.0)? {
+                let path = entry?.path();
+                Tree::from(path.as_path()).sync_with(sync)?;
+            }
+            sync(self.0)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn writable(&self) -> Result<()> {
         let metadata = match fs::symlink_metadata(self.0) {
             Ok(metadata) => metadata,
@@ -292,5 +315,24 @@ mod tests {
             fs::metadata(nested).unwrap().permissions().mode() & 0o200,
             0
         );
+    }
+
+    #[test]
+    fn syncs_files_before_their_containing_directories() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("nested")).unwrap();
+        fs::write(root.path().join("nested/value"), b"value").unwrap();
+        let mut order = Vec::new();
+
+        Tree::from(root.path())
+            .sync_with(&mut |path| {
+                order.push(path.strip_prefix(root.path()).unwrap().to_owned());
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(order[0], std::path::Path::new("nested/value"));
+        assert_eq!(order[1], std::path::Path::new("nested"));
+        assert_eq!(order[2], std::path::Path::new(""));
     }
 }
