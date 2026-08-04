@@ -55,7 +55,7 @@ pub struct InspectHostConfig {
     #[serde(default)]
     pub extra_hosts: Vec<String>,
     pub auto_remove: bool,
-    #[serde(rename = "ReadonlyRootfs")]
+    #[serde(default, rename = "ReadonlyRootfs")]
     pub readonly_rootfs: bool,
     pub restart_policy: crate::api::RestartPolicy,
 }
@@ -540,8 +540,11 @@ mod tests {
             health: None,
             checkpoint: None,
         };
-        let writable = serde_json::to_value(InspectContainer::from(durable.clone())).unwrap();
+        let mut writable = serde_json::to_value(InspectContainer::from(durable.clone())).unwrap();
         assert_eq!(writable["HostConfig"]["ReadonlyRootfs"], false);
+        writable["HostConfig"].as_object_mut().unwrap().remove("ReadonlyRootfs");
+        let legacy = serde_json::from_value::<InspectContainer>(writable).unwrap();
+        assert!(!legacy.host_config.readonly_rootfs);
 
         durable.spec.isolation.read_only_root = true;
         let readonly = serde_json::to_value(InspectContainer::from(durable)).unwrap();
