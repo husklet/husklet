@@ -85,8 +85,10 @@ struct Package {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Layer {
     Application,
+    Container,
     Package,
     Runtime,
+    Workspace,
     Other,
 }
 
@@ -100,9 +102,11 @@ impl Layer {
             return Self::Other;
         };
         match components.get(index + 1).copied() {
-            Some("app") => Self::Application,
+            Some("app" | "apps") => Self::Application,
+            Some("containers") => Self::Container,
             Some("packages") => Self::Package,
             Some("runtime") => Self::Runtime,
+            Some("workspaces") => Self::Workspace,
             None => Self::Other,
             Some(_) => Self::Other,
         }
@@ -111,8 +115,10 @@ impl Layer {
     fn label(&self) -> &str {
         match self {
             Self::Application => "application",
+            Self::Container => "containers",
             Self::Package => "packages",
             Self::Runtime => "runtime",
+            Self::Workspace => "workspaces",
             Self::Other => "other",
         }
     }
@@ -175,11 +181,19 @@ impl Graph {
                     continue;
                 };
                 let layer_violation = match (&package.layer, &target.layer) {
-                    (Layer::Package, Layer::Runtime | Layer::Application) => {
-                        Some("transferable packages must not depend on engine runtime or application code")
+                    (Layer::Package, Layer::Runtime | Layer::Container | Layer::Workspace | Layer::Application) => {
+                        Some(
+                            "transferable packages must not depend on runtime, container, workspace, or application code",
+                        )
                     }
-                    (Layer::Runtime, Layer::Application) => {
-                        Some("runtime packages must not depend on the application composition root")
+                    (Layer::Runtime, Layer::Container | Layer::Workspace | Layer::Application) => {
+                        Some("runtime packages must not depend on container, workspace, or application code")
+                    }
+                    (Layer::Container, Layer::Workspace | Layer::Application) => {
+                        Some("container packages must not depend on workspace or application code")
+                    }
+                    (Layer::Workspace, Layer::Container | Layer::Application) => {
+                        Some("workspace packages must not depend on container or application code")
                     }
                     (_, Layer::Application) => Some("the application composition root must never be a dependency"),
                     _ => None,
@@ -296,7 +310,7 @@ impl Graph {
     }
 }
 
-/// The reviewed production graph from `ARCHITECTURE.md`.
+/// The reviewed production graph from `AGENTS.md` and the integrated workspace.
 ///
 /// This is deliberately an edge list rather than a layer ordering. Runtime
 /// packages are peers by placement, but their domain contracts still have one
@@ -306,8 +320,40 @@ impl Graph {
 fn allowed_edge(source: &str, target: &str) -> bool {
     matches!(
         (source, target),
+        // Transferable foundations and repository tools.
+        ("hl-benchmark", "hl-design")
+            // Container services and Docker-compatible APIs.
+            | ("hl-client", "hl-container")
+            | ("hl-client", "hl-daemon")
+            | ("hl-client", "hl-images")
+            | ("hl-client", "hl-log")
+            | ("hl-container", "hl-engine")
+            | ("hl-container", "hl-fs")
+            | ("hl-container", "hl-images")
+            | ("hl-container", "hl-log")
+            | ("hl-daemon", "hl-client")
+            | ("hl-daemon", "hl-container")
+            | ("hl-daemon", "hl-design")
+            | ("hl-daemon", "hl-images")
+            | ("hl-daemon", "hl-log")
+            | ("hl-images", "hl-fs")
+            | ("hl-images", "hl-log")
+            // Workspace and terminal capabilities.
+            | ("hl-ws-term", "hl-fs")
+            | ("hl-ws-term", "hl-ws")
+            // Product composition root.
+            | ("husklet", "hl-client")
+            | ("husklet", "hl-container")
+            | ("husklet", "hl-daemon")
+            | ("husklet", "hl-design")
+            | ("husklet", "hl-fs")
+            | ("husklet", "hl-gui")
+            | ("husklet", "hl-images")
+            | ("husklet", "hl-log")
+            | ("husklet", "hl-ws")
+            | ("husklet", "hl-ws-term")
         // Runtime foundations and domains.
-        ("hl-vfs", "hl-descriptor")
+            | ("hl-vfs", "hl-descriptor")
             | ("hl-vfs", "hl-fs")
             | ("hl-terminal", "hl-descriptor")
             | ("hl-event", "hl-descriptor")
@@ -397,6 +443,7 @@ fn allowed_edge(source: &str, target: &str) -> bool {
             | ("hl-engine", "hl-time")
             | ("hl-engine", "hl-log")
             | ("hl-engine", "hl-provider")
+            | ("hl-engine", "hl-ipc")
     )
 }
 

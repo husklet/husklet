@@ -147,8 +147,11 @@ fn boundary(source: &Source) -> bool {
         .filter_map(|component| component.as_os_str().to_str())
         .collect::<Vec<_>>();
     components.windows(2).any(|components| components == ["src", "native"])
+        || (source.package == "hl-engine" && components.windows(2).any(|components| components == ["src", "ffi"]))
         || components.windows(4).any(|components| {
-            components[0] == "app" && components[2] == "src" && (components[3] == "ffi.rs" || components[3] == "ffi")
+            matches!(components[0], "app" | "apps")
+                && components[2] == "src"
+                && (components[3] == "ffi.rs" || components[3] == "ffi")
         })
 }
 
@@ -160,7 +163,7 @@ fn application(source: &Source) -> bool {
         .collect::<Vec<_>>();
     components
         .windows(2)
-        .any(|components| components[0] == "src" && components[1] == "app")
+        .any(|components| components[0] == "src" && matches!(components[1], "app" | "apps"))
 }
 
 fn rationale(source: &Source, span: Span) -> bool {

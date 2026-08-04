@@ -139,6 +139,74 @@ hl-runtime = { path = "../../runtime/hl-runtime" }
 }
 
 #[test]
+fn recognizes_integrated_layers() {
+    let root = fixture("integrated-layers");
+    package(&root, "packages", "hl-log", "");
+    package(&root, "runtime", "hl-runtime", "");
+    package(&root, "containers", "hl-container", "");
+    package(&root, "workspaces", "hl-ws", "");
+    package(
+        &root,
+        "apps",
+        "husklet",
+        r#"
+[dependencies]
+hl-log = { path = "../../packages/hl-log" }
+hl-container = { path = "../../containers/hl-container" }
+hl-ws = { path = "../../workspaces/hl-ws" }
+"#,
+    );
+
+    assert!(findings(&root).is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn rejects_cross_domain_layer_reversals() {
+    let root = fixture("integrated-reversals");
+    package(&root, "apps", "husklet", "");
+    package(&root, "containers", "hl-container", "");
+    package(&root, "workspaces", "hl-ws", "");
+    package(
+        &root,
+        "packages",
+        "foundation",
+        "[dependencies]\nhl-container = { path = \"../../containers/hl-container\" }\n",
+    );
+    package(
+        &root,
+        "runtime",
+        "engine-state",
+        "[dependencies]\nhusklet = { path = \"../../apps/husklet\" }\n",
+    );
+    package(
+        &root,
+        "containers",
+        "container-state",
+        "[dependencies]\nhl-ws = { path = \"../../workspaces/hl-ws\" }\n",
+    );
+
+    let values = findings(&root);
+    assert_eq!(values.len(), 3);
+    assert!(
+        values
+            .iter()
+            .any(|finding| finding.subject == "foundation -> hl-container")
+    );
+    assert!(
+        values
+            .iter()
+            .any(|finding| finding.subject == "engine-state -> husklet")
+    );
+    assert!(
+        values
+            .iter()
+            .any(|finding| finding.subject == "container-state -> hl-ws")
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn distinguishes_workspace_members() {
     let root = fixture("registry");
     package(&root, "runtime", "runtime", "");

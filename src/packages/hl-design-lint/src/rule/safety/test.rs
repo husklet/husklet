@@ -85,6 +85,8 @@ fn call() {
             "{relative} must be an approved FFI module"
         );
     }
+    assert!(findings("husklet", "apps", "src/ffi/export.rs", source).is_empty());
+    assert!(findings("hl-engine", "containers", "src/ffi/export.rs", source).is_empty());
     assert!(
         findings(
             "hl-engine",
