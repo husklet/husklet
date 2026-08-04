@@ -1,8 +1,8 @@
-use super::{Options, plan, require_work, validate_case_ids};
-use crate::runtime::definition::App;
+use super::{Options, WorkKey, apps, plan, plan_for_host, require_work, validate_case_ids, workspace};
+use crate::runtime::definition::{App, EngineHost};
 use crate::suite::Target;
 use clap::Parser;
-use std::fs;
+use std::{collections::BTreeSet, fs};
 
 #[derive(Parser)]
 struct RuntimeCli {
@@ -20,6 +20,7 @@ fn app() -> App {
     let directory = tempfile::tempdir().unwrap();
     let definition = directory.path().join("test.yaml");
     fs::write(directory.path().join("exact.c"), "exact").unwrap();
+    fs::write(directory.path().join("excluded.c"), "excluded").unwrap();
     fs::write(directory.path().join("inactive.c"), "inactive").unwrap();
     fs::write(
         &definition,
@@ -29,6 +30,17 @@ execution: {}
 build: { compiler: { arm64: arm-cc, amd64: amd-cc }, flags: [] }
 cases:
   - { id: runtime/exact, build: { source: exact.c, output: exact, flags: [] }, artifact: { destination: /opt/exact }, status: active, compat: { class: compatibility }, targets: [arm64], run: [], expect: { exit: 0, stdout: golden/exact.out } }
+  - id: runtime/host-excluded
+    build: { source: excluded.c, output: excluded, flags: [] }
+    artifact: { destination: /opt/excluded }
+    targets: [arm64]
+    status: !host-excluded
+      hosts: [macos]
+      reason: retained macOS exclusion
+      evidence: tests/runtime/example/EVIDENCE.md
+    compat: { class: compatibility }
+    run: []
+    expect: { exit: 0, stdout: golden/excluded.out }
   - id: runtime/inactive
     build: { source: inactive.c, output: inactive, flags: [] }
     artifact: { destination: /opt/inactive }
@@ -80,7 +92,75 @@ fn inactive_exact_match_is_distinct_from_no_match() {
 }
 
 #[test]
+fn host_exclusion_uses_the_injected_engine_host() {
+    let options = options(&["--case", "runtime/host-excluded", "--isa", "arm64"]);
+    for host in [EngineHost::Linux, EngineHost::Windows] {
+        let planned = plan_for_host(vec![app()], &options, host);
+        assert!(planned.matched_case);
+        assert_eq!(planned.work.len(), 1);
+        assert_eq!(planned.work[0].key.id, "runtime/host-excluded");
+    }
+
+    let excluded = plan_for_host(vec![app()], &options, EngineHost::Macos);
+    assert!(excluded.matched_case);
+    let Err(error) = require_work(excluded, options.case.as_deref()) else {
+        panic!("macOS-excluded case unexpectedly produced work");
+    };
+    assert_eq!(
+        error.to_string(),
+        "runtime case runtime/host-excluded matched but has no active work for the selected target(s)"
+    );
+}
+
+#[test]
 fn duplicate_full_ids_are_rejected_before_planning() {
     let error = validate_case_ids(&[app(), app()]).unwrap_err();
     assert_eq!(error.to_string(), "runtime case ID is duplicated: runtime/exact");
+}
+
+#[test]
+fn repository_yaml_inventory_is_fully_discovered_and_planned() {
+    // This is current-manifest integrity, not a parity claim for retired TSV rows;
+    // tests/runtime/LEGACY_PARITY.md remains the source audit for migration gaps.
+    let options = options(&[]);
+    let apps = apps(&options).unwrap();
+    validate_case_ids(&apps).unwrap();
+
+    let root = workspace().unwrap().join("tests/runtime");
+    let manifest_apps = fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.join("test.yaml").is_file())
+        .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect::<BTreeSet<_>>();
+    let loaded_apps = apps.iter().map(|app| app.name.clone()).collect::<BTreeSet<_>>();
+    assert_eq!(loaded_apps, manifest_apps);
+
+    let host = EngineHost::current();
+    let mut declared = BTreeSet::new();
+    let mut active = BTreeSet::new();
+    let mut inactive = BTreeSet::new();
+    for case in apps.iter().flat_map(|app| &app.cases) {
+        for target in &case.targets {
+            let key = WorkKey {
+                id: case.id.clone(),
+                target: *target,
+            };
+            assert!(declared.insert(key.clone()), "duplicate declared runtime work key");
+            if case.inactive(host).is_none() {
+                active.insert(key);
+            } else {
+                inactive.insert(key);
+            }
+        }
+    }
+    assert!(active.is_disjoint(&inactive));
+    assert_eq!(declared, active.union(&inactive).cloned().collect());
+
+    let planned = plan_for_host(apps, &options, host)
+        .work
+        .into_iter()
+        .map(|work| work.key)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(planned, active);
 }

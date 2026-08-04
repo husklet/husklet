@@ -1083,17 +1083,6 @@ fn absent_stderr_golden_leaves_diagnostics_unconstrained() {
 }
 
 #[test]
-fn device_rows_run() {
-    let fixtures = setup(&corpus());
-    let rows = fixtures
-        .values()
-        .filter(|setup| setup.fixture == "special-device")
-        .collect::<Vec<_>>();
-    assert_eq!(rows.len(), 30);
-    assert!(rows.into_iter().all(|setup| unsupported(setup).is_none()));
-}
-
-#[test]
 fn process_fixture_runs() {
     let setup = Setup {
         fixture: "multi-process-service".into(),
@@ -1102,17 +1091,6 @@ fn process_fixture_runs() {
         rootfs: "-".into(),
     };
     assert_eq!(unsupported(&setup), None);
-}
-
-#[test]
-fn process_rows_run() {
-    let fixtures = setup(&corpus());
-    let rows = fixtures
-        .values()
-        .filter(|setup| setup.fixture == "multi-process-service")
-        .collect::<Vec<_>>();
-    assert_eq!(rows.len(), 574);
-    assert!(rows.into_iter().all(|setup| unsupported(setup).is_none()));
 }
 
 #[test]

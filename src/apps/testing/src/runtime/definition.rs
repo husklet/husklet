@@ -1,6 +1,9 @@
 use super::{scheduler, workspace};
+mod host;
 pub(super) mod input;
 use crate::suite::{Commands, Error, Execution, Target};
+pub(crate) use host::EngineHost;
+use host::HostExclusion;
 use input::ManifestPath;
 use serde::Deserialize;
 use std::{
@@ -90,6 +93,7 @@ enum Status {
     Active,
     Broken(Evidence),
     Unsupported(Evidence),
+    HostExcluded(HostExclusion),
 }
 
 #[derive(Deserialize)]
@@ -156,8 +160,8 @@ pub struct App {
 }
 
 impl RuntimeCase {
-    pub(crate) fn inactive(&self) -> Option<(&'static str, &str, &str)> {
-        self.status.inactive()
+    pub(crate) fn inactive(&self, host: EngineHost) -> Option<(&'static str, &str, &str)> {
+        self.status.inactive(host)
     }
 }
 
@@ -294,7 +298,7 @@ impl App {
             .cases_for(target)
             .filter(|case| selected.is_none_or(|id| case.id == id))
         {
-            if let Some((kind, reason, evidence)) = case.status.inactive() {
+            if let Some((kind, reason, evidence)) = case.status.oracle_inactive() {
                 println!("{kind} {} {}: {reason} [{evidence}]", case.id, target.name());
                 continue;
             }
@@ -341,12 +345,24 @@ impl Status {
         {
             return Err("non-active status requires non-empty reason and evidence".into());
         }
+        if let Self::HostExcluded(exclusion) = self {
+            exclusion.validate()?;
+        }
         Ok(())
     }
 
-    pub fn inactive(&self) -> Option<(&'static str, &str, &str)> {
+    pub fn inactive(&self, host: EngineHost) -> Option<(&'static str, &str, &str)> {
         match self {
             Self::Active => None,
+            Self::Broken(evidence) => Some(("BROKEN", &evidence.reason, &evidence.evidence)),
+            Self::Unsupported(evidence) => Some(("UNSUPPORTED", &evidence.reason, &evidence.evidence)),
+            Self::HostExcluded(exclusion) => exclusion.inactive(host),
+        }
+    }
+
+    fn oracle_inactive(&self) -> Option<(&'static str, &str, &str)> {
+        match self {
+            Self::Active | Self::HostExcluded(_) => None,
             Self::Broken(evidence) => Some(("BROKEN", &evidence.reason, &evidence.evidence)),
             Self::Unsupported(evidence) => Some(("UNSUPPORTED", &evidence.reason, &evidence.evidence)),
         }

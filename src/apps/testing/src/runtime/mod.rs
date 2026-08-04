@@ -10,7 +10,7 @@ pub(crate) mod scheduler;
 
 use crate::suite::{Error, Target};
 use clap::Args;
-use definition::App;
+use definition::{App, EngineHost};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -183,6 +183,10 @@ struct Planned {
 }
 
 fn plan(apps: Vec<App>, options: &Options) -> Planned {
+    plan_for_host(apps, options, EngineHost::current())
+}
+
+fn plan_for_host(apps: Vec<App>, options: &Options, host: EngineHost) -> Planned {
     let mut work = Vec::new();
     let mut matched_case = options.case.is_none();
     for app in apps {
@@ -203,7 +207,7 @@ fn plan(apps: Vec<App>, options: &Options) -> Planned {
                 if !case.targets.contains(&target) {
                     continue;
                 }
-                if let Some((kind, reason, evidence)) = case.inactive() {
+                if let Some((kind, reason, evidence)) = case.inactive(host) {
                     println!("{kind} {} {}: {reason} [{evidence}]", case.id, target.name());
                     continue;
                 }
