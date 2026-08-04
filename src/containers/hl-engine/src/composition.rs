@@ -32,6 +32,19 @@ pub trait CheckpointSource: Send + Sync {
     fn read(&self, maximum: usize) -> Result<Vec<u8>, CompositionError>;
 }
 
+/// Host-facing byte transport for one terminal master.
+///
+/// The runtime owns this consumer port. Implementations merge terminal output
+/// into one stream and must make a blocked read or write return promptly after
+/// [`TerminalPort::close`]. Reads return zero after close, matching terminal
+/// master EOF; writes after close return `BrokenPipe`. Partial reads and writes
+/// are valid and callers must retain the unconsumed suffix.
+pub trait TerminalPort: Send + Sync {
+    fn read(&self, output: &mut [u8]) -> std::io::Result<usize>;
+    fn write(&self, input: &[u8]) -> std::io::Result<usize>;
+    fn close(&self);
+}
+
 type StandardInput = Arc<Mutex<Box<dyn Read + Send>>>;
 type StandardOutput = Arc<Mutex<Box<dyn Write + Send>>>;
 

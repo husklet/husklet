@@ -33,3 +33,92 @@ No case contains a C, Rust, or heredoc source payload, so this category needs no
 `source/` directory. This is a representation and ownership migration only. It
 changes no engine runtime behavior, so the retired C implementation was not used
 as an implementation oracle and `/Users/x/dd/engine` was not modified.
+
+## Integrated engine PTY audit
+
+The migrated scenarios exposed a separate production gap: the container adapter
+propagates `ProcessConfig.terminal`, but its integrated Rust engine ignores that
+field. This section records the required retained-engine audit before that runtime
+domain is changed. The retained tree was read only.
+
+Retained implementation studied:
+
+- `../engine/src/core/activation.c`: `activation_prepare`, POSIX
+  `activation_start`, `hl_activation_start_terminal`,
+  `hl_activation_start_with_channels`, `hl_terminal_resize`, process wait/kill,
+  and the Windows `activation_start` refusal. POSIX launch owns one `openpty`
+  pair, moves a master allocated as descriptor zero, applies the initial
+  `winsize`, forks, then makes the child a session leader with `setsid`, acquires
+  the slave with `TIOCSCTTY`, and duplicates that one open description onto
+  descriptors 0, 1, and 2. The parent closes the slave and returns the master.
+  Handshake failure and allocation failure close the master, kill the entire
+  child process group, and reap it. Dropping the last master closes the host
+  terminal; a resize is `TIOCSWINSZ` on that same master. Windows rejects the
+  terminal form before spawning because its activation layer has no equivalent
+  controlling-terminal object.
+- `../engine/src/host/linux/host.c` and
+  `../engine/src/host/macos/host.c`: `*_terminal_probe`, `*_terminal_get_mode`,
+  `*_terminal_set_mode`, `*_terminal_get_size`, `*_terminal_set_size`,
+  `*_terminal_read`, `*_terminal_write`, and
+  `*_terminal_size_change_event`. The host handle table lock protects lookup;
+  blocking terminal operations run after lookup without holding that table lock.
+  Modes map canonical input, echo, signal characters, flow control, and output
+  processing. Reads and writes preserve host partial-result and errno behavior.
+  Resize validates the complete dimensions and uses the live terminal object.
+  Linux and macOS deliberately expose no separate size-change event.
+- `../engine/src/linux_abi/syscall/fs.c`: `tty_ctl_block`, the terminal ioctl
+  cases in the filesystem syscall dispatcher, and PTY master/slave bookkeeping.
+  It preserves termios and window state, master/slave identity, devpts numbering,
+  `TIOCGPTPEER`, packet mode, controlling-terminal acquisition/detachment,
+  foreground process groups, and `SIGWINCH`. Terminal-control operations briefly
+  block host `SIGTTOU` so a shell cannot stop halfway through foreground-group
+  handoff. Closing the final slave drives master EOF/HUP behavior.
+- `../engine/src/linux_abi/syscall/signal.c`: `rt_sigprocmask` mirrors only
+  `SIGTSTP`, `SIGTTIN`, and `SIGTTOU` into the host mask, retaining the ordering
+  needed by job-control handoff. `../engine/src/linux_abi/syscall/rare.c` and
+  `syscall/proc.c` implement `setsid`, process-group changes, and init-ID
+  translation. `../engine/src/linux_abi/fork.c` forwards terminal-relevant
+  signals, including `SIGWINCH`, across its process boundary.
+- `../engine/src/linux_abi/host_tty.h`: the host split. Linux and macOS use real
+  termios/PTY operations. Windows defines ABI shape but explicitly refuses the
+  line-discipline, PTY, controlling-session, and foreground-group operations;
+  ConPTY is documented as non-equivalent.
+
+The retained implementation uses host-kernel PTY state, process groups, and
+locking; the Rust implementation instead has host-neutral state and therefore
+must preserve the same externally visible lifecycle through its own owners:
+
+| Capability | Rust owner | Status at container launch |
+|---|---|---|
+| bounded PTY identity and generation | `hl-terminal::Catalog` | implemented but not allocated |
+| canonical/raw discipline, echo, CR/LF processing, bounded queues | `hl-terminal::Pair` | implemented but unreachable |
+| master/slave OFD sharing, blocking, readiness, last-slave close | `hl-terminal::Description` | implemented but not installed on 0/1/2 |
+| devpts, `/dev/tty`, terminal ioctl and packet mode | `hl-engine` path adapter plus `hl-runtime` filesystem | implemented for guest-created PTYs |
+| sessions, process groups, foreground ownership, stop signals | `hl-task` plus `hl-runtime` terminal signal adapter | implemented for guest-created PTYs |
+| initial controlling terminal and foreground group | engine launch composition | missing |
+| cancelable merged host input/output transport | engine consumer port plus container adapter | implemented, not wired to a PTY master |
+| initial window and later resize through the same pair | engine/container adapter and `Running` | missing; `Running::resize` always returns `NoTerminal` |
+| deterministic bridge cancellation, close, and teardown | engine/container adapter | missing |
+| Windows host behavior | engine/container adapter | undecided; retained engine explicitly refuses |
+
+The missing mechanism crosses the engine construction API, initial descriptor
+table construction, task/session attachment, host input/output pumping, running
+process ownership, resize, and teardown. Installing a terminal-shaped flag on
+the existing `StandardIo` objects would make `isatty` pass while leaving line
+discipline, `/dev/tty`, job control, input, resize, and close semantics false.
+The implementation must instead allocate one `hl-terminal` pair, install the
+slave open description on descriptors 0/1/2, bind it into the process terminal
+namespace, attach it to init's session and foreground group, retain the master
+in the running-process owner, and expose bounded input/output pumps plus resize
+and cancellation. That is a coherent follow-up runtime lane, not a scenario
+runner exception.
+
+The first composition prerequisite is now explicit. `hl-engine::composition`
+owns the narrow `TerminalPort` contract because the engine consumes terminal
+input and produces the single merged terminal-output stream. `hl-container`
+implements that port over its bounded input and log channels. Closing the port
+wakes a blocked reader within a bounded polling interval even if a client keeps
+its input sender alive; a backpressured writer observes the same close as
+`BrokenPipe`. The adapter preserves partial reads, caps each accepted output
+write to the existing log chunk bound, and labels all terminal output as the
+merged stdout stream. This does not yet allocate or attach a PTY.

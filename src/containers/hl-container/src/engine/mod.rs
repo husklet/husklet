@@ -6,7 +6,8 @@ use async_trait::async_trait;
 use std::{
     collections::VecDeque,
     io::{Read, Write},
-    sync::{Arc, Mutex as StdMutex},
+    sync::{Arc, Condvar, Mutex as StdMutex},
+    time::Duration,
 };
 
 const CHECKPOINT_OBJECT: &str = "rust/image";
@@ -140,6 +141,130 @@ impl Write for LogOutput {
     }
 }
 
+#[allow(dead_code, reason = "constructed by the next initial-PTY composition slice")]
+struct TerminalState {
+    receiver: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
+    pending: VecDeque<u8>,
+    closed: bool,
+}
+
+/// Container-owned adapter for the engine's host-terminal port.
+///
+/// The condition variable provides bounded cancellation independently of the
+/// client input sender's lifetime. Tokio's bounded queues provide backpressure;
+/// timed waits avoid holding a lock across a channel operation or busy-spinning.
+#[allow(dead_code, reason = "constructed by the next initial-PTY composition slice")]
+struct TerminalChannel {
+    state: StdMutex<TerminalState>,
+    changed: Condvar,
+    output: crate::service::LogSender,
+}
+
+#[allow(dead_code, reason = "constructed by the next initial-PTY composition slice")]
+impl TerminalChannel {
+    const CANCELLATION_POLL: Duration = Duration::from_millis(10);
+
+    fn new(receiver: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>, output: crate::service::LogSender) -> Self {
+        Self {
+            state: StdMutex::new(TerminalState {
+                receiver,
+                pending: VecDeque::new(),
+                closed: false,
+            }),
+            changed: Condvar::new(),
+            output,
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, TerminalState> {
+        self.state.lock().unwrap_or_else(|error| error.into_inner())
+    }
+}
+
+impl hl_engine::composition::TerminalPort for TerminalChannel {
+    fn read(&self, output: &mut [u8]) -> std::io::Result<usize> {
+        if output.is_empty() {
+            return Ok(0);
+        }
+        let mut state = self.lock();
+        loop {
+            if state.closed {
+                return Ok(0);
+            }
+            if !state.pending.is_empty() {
+                let length = output.len().min(state.pending.len());
+                for destination in &mut output[..length] {
+                    *destination = state.pending.pop_front().expect("bounded by pending length");
+                }
+                return Ok(length);
+            }
+            let received = match state.receiver.as_mut() {
+                Some(receiver) => receiver.try_recv(),
+                None => return Ok(0),
+            };
+            match received {
+                Ok(bytes) => state.pending.extend(bytes),
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => state.receiver = None,
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                    state = self
+                        .changed
+                        .wait_timeout(state, Self::CANCELLATION_POLL)
+                        .unwrap_or_else(|error| error.into_inner())
+                        .0;
+                }
+            }
+        }
+    }
+
+    fn write(&self, input: &[u8]) -> std::io::Result<usize> {
+        if input.is_empty() {
+            return Ok(0);
+        }
+        let length = input.len().min(crate::service::LOG_CHUNK_BYTES);
+        let mut chunk = crate::LogChunk {
+            stream: crate::Stream::Stdout,
+            bytes: input[..length].to_vec(),
+        };
+        loop {
+            if self.lock().closed {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "terminal transport closed",
+                ));
+            }
+            match self.output.try_send(chunk) {
+                Ok(()) => return Ok(length),
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "container log receiver closed",
+                    ));
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Full(returned)) => {
+                    chunk = returned;
+                    let state = self.lock();
+                    if state.closed {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::BrokenPipe,
+                            "terminal transport closed",
+                        ));
+                    }
+                    drop(
+                        self.changed
+                            .wait_timeout(state, Self::CANCELLATION_POLL)
+                            .unwrap_or_else(|error| error.into_inner()),
+                    );
+                }
+            }
+        }
+    }
+
+    fn close(&self) {
+        self.lock().closed = true;
+        self.changed.notify_all();
+    }
+}
+
 #[async_trait]
 impl Runtime for Engine {
     fn validate_overlay(&self, overlay: &OverlayConfig) -> bool {
@@ -193,10 +318,10 @@ impl Runtime for Engine {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChannelInput, CheckpointTransport, LogOutput, Spec};
+    use super::{ChannelInput, CheckpointTransport, LogOutput, Spec, TerminalChannel};
     use crate::CheckpointImage as _;
     use crate::service::{NetworkConfig, ProcessConfig};
-    use hl_engine::composition::{CheckpointSink as _, CheckpointSource as _};
+    use hl_engine::composition::{CheckpointSink as _, CheckpointSource as _, TerminalPort as _};
     use std::collections::BTreeMap;
     use std::io::{Read, Write};
     use std::sync::{Arc, Mutex};
@@ -389,6 +514,92 @@ mod tests {
             }
         );
         assert!(receiver.blocking_recv().is_none());
+    }
+
+    #[test]
+    fn terminal_channel_preserves_partial_input_and_eof() {
+        let (input, receiver) = tokio::sync::mpsc::channel(1);
+        input.blocking_send(b"abcdef".to_vec()).unwrap();
+        drop(input);
+        let (output, _logs) = crate::service::log_channel();
+        let terminal = TerminalChannel::new(Some(receiver), output);
+        let mut bytes = [0_u8; 4];
+
+        assert_eq!(terminal.read(&mut bytes).unwrap(), 4);
+        assert_eq!(&bytes, b"abcd");
+        assert_eq!(terminal.read(&mut bytes).unwrap(), 2);
+        assert_eq!(&bytes[..2], b"ef");
+        assert_eq!(terminal.read(&mut bytes).unwrap(), 0);
+    }
+
+    #[test]
+    fn terminal_channel_merges_and_bounds_output() {
+        let (output, mut logs) = crate::service::log_channel();
+        let terminal = TerminalChannel::new(None, output);
+        let bytes = vec![b'x'; crate::service::LOG_CHUNK_BYTES + 7];
+
+        assert_eq!(terminal.write(&bytes).unwrap(), crate::service::LOG_CHUNK_BYTES);
+        assert_eq!(
+            logs.blocking_recv().unwrap(),
+            crate::LogChunk {
+                stream: crate::Stream::Stdout,
+                bytes: bytes[..crate::service::LOG_CHUNK_BYTES].to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn terminal_close_cancels_blocked_read() {
+        let (_input, receiver) = tokio::sync::mpsc::channel(1);
+        let (output, _logs) = crate::service::log_channel();
+        let terminal = Arc::new(TerminalChannel::new(Some(receiver), output));
+        let reader = Arc::clone(&terminal);
+        let (finished, result) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            finished.send(reader.read(&mut [0_u8; 1])).unwrap();
+        });
+
+        terminal.close();
+
+        assert_eq!(
+            result
+                .recv_timeout(std::time::Duration::from_millis(100))
+                .unwrap()
+                .unwrap(),
+            0
+        );
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn terminal_close_cancels_backpressured_write() {
+        let (output, _logs) = crate::service::log_channel();
+        for _ in 0..crate::service::LOG_QUEUE_DEPTH {
+            output
+                .blocking_send(crate::LogChunk {
+                    stream: crate::Stream::Stdout,
+                    bytes: vec![b'x'],
+                })
+                .unwrap();
+        }
+        let terminal = Arc::new(TerminalChannel::new(None, output));
+        let writer = Arc::clone(&terminal);
+        let (finished, result) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            finished.send(writer.write(b"blocked")).unwrap();
+        });
+
+        terminal.close();
+
+        assert_eq!(
+            result
+                .recv_timeout(std::time::Duration::from_millis(100))
+                .unwrap()
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::BrokenPipe
+        );
+        worker.join().unwrap();
     }
 
     #[test]
