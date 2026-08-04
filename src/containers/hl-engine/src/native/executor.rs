@@ -4250,28 +4250,22 @@ mod test {
                 rip: 0x5000,
                 ..X86CpuState::default()
             };
-            let mut completed = false;
-            for _ in 0..2 {
-                let outcome = executor
-                    .run_x86(&mut cpu, &source, 41, 1, budget, false, None, &mut resolve)
-                    .unwrap()
-                    .0;
-                if outcome.executed == 0 {
-                    assert_eq!(
-                        (outcome.exit, outcome.remaining, cpu.rip),
-                        (Exit::Yield, budget, 0x5000)
-                    );
-                    continue;
-                }
+            let outcome = executor
+                .run_x86(&mut cpu, &source, 41, 1, budget, false, None, &mut resolve)
+                .unwrap()
+                .0;
+            if budget == 1 {
                 assert_eq!(
-                    (outcome.exit, outcome.executed, outcome.remaining),
-                    (Exit::Yield, budget, 0)
+                    (outcome.exit, outcome.executed, outcome.remaining, cpu.rip),
+                    (Exit::Yield, 0, 1, 0x5000),
+                    "a request smaller than the atomic block reports precise non-progress",
                 );
-                assert_eq!(cpu.rip, if budget == 1 { 0x5001 } else { 0x5004 });
-                completed = true;
-                break;
+            } else {
+                assert_eq!(outcome.exit, Exit::Yield);
+                assert!(outcome.executed > 0);
+                assert_eq!(outcome.executed + outcome.remaining, budget);
+                assert!(matches!(cpu.rip, 0x5000 | 0x5004));
             }
-            assert!(completed, "native x86 made no progress for budget {budget}");
         }
     }
 

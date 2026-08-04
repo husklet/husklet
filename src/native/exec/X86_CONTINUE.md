@@ -44,3 +44,40 @@ invalidation. The fail-first state was `kind=YIELD`, `pc=0x8000`, `rax=44`,
 `executed=768`, `budget=232` for the finite 300-iteration control. After the
 change, warning-strict exact-source builds of `x86_continue`, `x86_translation`,
 and `x86_budget` pass.
+
+## Request budget smaller than a block
+
+The retained comparison was extended across the complete execution boundary:
+
+- `../engine/src/core/dispatch.c`: `run_guest`, including cache ownership,
+  translation publication, `run_block`, reason handling, signal polling, and
+  teardown from the thread and stop-the-world registries;
+- `../engine/src/translator/guest/x86_64/translate.c`: `translate_block`,
+  `run_block`, and `block_return`;
+- `../engine/src/translator/guest/x86_64/emit.c`: the typed exit and complete
+  register-spill emitters;
+- `../engine/src/translator/guest/x86_64/dispatch.h`: x86 dispatcher entry,
+  reason, cache, and interrupt hooks; and
+- `../engine/src/translator/guest/x86_64/cpu.h`: dispatcher-owned CPU state and
+  baked assembly offsets.
+
+The retained engine has no request-sized instruction slice: it enters a whole
+decoded block, whose terminal writes the next architectural RIP and reason,
+then `block_return` restores the host callee-saved state. The dispatcher owns
+the CPU for the guest thread's lifetime, holds the cache lock only for lookup
+or publication (never across execution or host service), polls signals at
+spilled block boundaries, and unregisters the CPU only after guest exit. There
+is no partial-result, errno, blocking, or cancellation path inside a translated
+block. AArch64 host assembly is the only working x86 translation backend; other
+hosts abort rather than enter AArch64 code.
+
+The Rust native backend adds a caller-owned instruction budget. A block is an
+atomic admission unit: when `budget < instruction_count`,
+`hl_native_x86_64_run` returns `YIELD` with unchanged RIP and budget and
+`executed == 0`. Retrying that same request cannot make progress. The engine
+scheduler now interprets one instruction at this precise non-progress boundary
+and records the site through the existing generic fallback mechanism. A yield
+after any completed instruction remains an ordinary scheduler yield. This
+preserves the native block's atomic state contract while guaranteeing that a
+supported instruction stream either consumes budget natively or advances via
+the interpreter; it does not manufacture partial native execution.

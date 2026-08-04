@@ -396,6 +396,10 @@ impl GuestExecutor {
         executed == 0
     }
 
+    const fn x86_yield_needs_interpreter(exit: crate::native::NativeExit, executed: u64) -> bool {
+        matches!(exit, crate::native::NativeExit::Yield) && executed == 0
+    }
+
     fn native_boundary(
         cpu: &mut hl_execution::Aarch64CpuState,
         original: hl_execution::Aarch64CpuState,
@@ -1444,6 +1448,10 @@ impl GuestExecutor {
                         next: result.next,
                     }
                 }
+                crate::native::NativeExit::Yield if Self::x86_yield_needs_interpreter(result.exit, result.executed) => {
+                    fallback = Some(result.instruction);
+                    StepOutcome::Continue
+                }
                 crate::native::NativeExit::Yield => StepOutcome::Yield,
                 crate::native::NativeExit::Fallback | crate::native::NativeExit::Fault => {
                     fallback = Some(result.instruction);
@@ -1655,6 +1663,22 @@ mod tests {
     fn native_budget_preserves_shared_fairness() {
         assert_eq!(GuestExecutor::native_budget(false), SLICE_BUDGET);
         assert_eq!(GuestExecutor::native_budget(true), NATIVE_SOLO_BUDGET);
+    }
+
+    #[test]
+    fn zero_progress_x86_yield_selects_interpreter() {
+        assert!(GuestExecutor::x86_yield_needs_interpreter(
+            crate::native::NativeExit::Yield,
+            0,
+        ));
+        assert!(!GuestExecutor::x86_yield_needs_interpreter(
+            crate::native::NativeExit::Yield,
+            1,
+        ));
+        assert!(!GuestExecutor::x86_yield_needs_interpreter(
+            crate::native::NativeExit::Interrupt,
+            0,
+        ));
     }
 
     #[test]
