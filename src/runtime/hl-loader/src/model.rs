@@ -314,6 +314,8 @@ pub struct RelroRegion {
 }
 
 impl RelroRegion {
+    const GUEST_PAGE_SIZE: u64 = 4096;
+
     pub(crate) const fn new(start: u64, size: u64) -> Self {
         Self { start, size }
     }
@@ -334,10 +336,16 @@ impl RelroRegion {
     }
 
     pub(crate) fn validate(self, segments: &[LoadSegment]) -> bool {
-        self.size != 0
-            && segments
-                .iter()
-                .any(|segment| self.start >= segment.guest_address() && self.end() <= segment.memory_end())
+        let Some(relro_end) = self.start.checked_add(self.size).filter(|_| self.size != 0) else {
+            return false;
+        };
+        segments.iter().any(|segment| {
+            let mapped_end = segment
+                .memory_end()
+                .checked_add(Self::GUEST_PAGE_SIZE - 1)
+                .map(|end| end & !(Self::GUEST_PAGE_SIZE - 1));
+            self.start >= segment.guest_address() && mapped_end.is_some_and(|end| relro_end <= end)
+        })
     }
 }
 

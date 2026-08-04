@@ -67,6 +67,43 @@ fn relro_initial_write() {
 }
 
 #[test]
+fn relro_may_include_the_final_mapped_page_padding() {
+    let mut bytes = RelroFixture::image(GuestArchitecture::Aarch64);
+    put_program_header(
+        &mut bytes,
+        1,
+        SegmentFixture {
+            kind: 1,
+            flags: 6,
+            offset: 0x0aa0,
+            address: LINK_BASE + 0x2aa0,
+            file_size: 0x0660,
+            memory_size: 0x0660,
+            alignment: 0x1000,
+        },
+    );
+    put_program_header(
+        &mut bytes,
+        2,
+        SegmentFixture {
+            kind: 0x6474_e552,
+            flags: 4,
+            offset: 0x0aa0,
+            address: LINK_BASE + 0x2aa0,
+            file_size: 0x0660,
+            memory_size: 0x1560,
+            alignment: 1,
+        },
+    );
+
+    let image = ElfInspector::new(GuestArchitecture::Aarch64, ImageLimits::default())
+        .inspect(&bytes)
+        .unwrap();
+
+    assert_eq!(image.relro(), Some(RelroRegion::new(LINK_BASE + 0x2aa0, 0x1560)));
+}
+
+#[test]
 fn malformed_relro_is() {
     let original = RelroFixture::image(GuestArchitecture::X86_64);
     for (address, size, expected) in [
