@@ -1,11 +1,11 @@
+use axum::Json;
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use hl_container::{
-    Console, ContainerSpec, Error as ContainerError, ExitStatus, Isolation, Mount, NetworkDriver,
-    NetworkSpec, Resources, Signal, Streams, Subnet,
+    Console, ContainerSpec, Error as ContainerError, ExitStatus, Isolation, Mount, NetworkDriver, NetworkSpec,
+    Resources, Signal, Streams, Subnet,
 };
 use hl_images::{Reference, RuntimeOverrides};
 use http_body_util::BodyExt as _;
@@ -15,42 +15,43 @@ use std::io::{Seek as _, SeekFrom};
 use std::str::FromStr;
 use tokio::io::{AsyncSeekExt as _, AsyncWriteExt as _};
 
+use super::DockerState;
 use super::console::{Connection, Resize};
 use super::error::{ApiError, ApiResult};
-use super::DockerState;
 use crate::api::{
-    Change, Container, ContainerCreation, ContainerPrune, CreateContainer, EndpointConfig, EnvVars,
-    HostConfig, InspectContainer, LogOptions, LogStreams, MountPoint, NetworkingConfig, PathStat,
-    Update, UpdateResult, Wait,
+    Change, Container, ContainerCreation, ContainerPrune, CreateContainer, EndpointConfig, EnvVars, HostConfig,
+    InspectContainer, LogOptions, LogStreams, MountPoint, NetworkingConfig, PathStat, Update, UpdateResult, Wait,
 };
 
 const ARCHIVE_LIMIT: u64 = 8 * 1024 * 1024 * 1024;
 const DEFAULT_NETWORK: &str = "bridge";
 
 mod archive;
+mod attach;
 mod control;
 mod create;
 mod host;
 mod inspect;
+mod kill;
 mod lifecycle;
 mod list;
 mod logs;
 mod mount;
 
-pub(super) use control::DockerSignal;
 use host::HostSettings;
+pub(super) use kill::DockerSignal;
 use list::NetworkPlan;
 use logs::Flag;
 use mount::{LegacyBind, Target};
 
 pub(super) use archive::{archive, export, extract, stat};
-pub(super) use control::{
-    attach, checkpoint, kill, pause, rename, resize, restart, start, stop, unpause,
-};
+pub(super) use attach::attach;
+pub(super) use control::{checkpoint, pause, rename, resize, restart, start, stop, unpause};
 pub(super) use create::create;
 pub(super) use inspect::{changes, inspect, update};
+pub(super) use kill::kill;
 pub(super) use lifecycle::{remove, wait};
-pub(super) use list::{list, prune, PruneQuery};
+pub(super) use list::{PruneQuery, list, prune};
 pub(super) use logs::logs;
 
 #[cfg(test)]

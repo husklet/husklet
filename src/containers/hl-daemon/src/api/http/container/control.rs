@@ -1,40 +1,5 @@
 use super::*;
 
-#[derive(Default, Deserialize)]
-pub(in super::super) struct AttachQuery {
-    stdin: Option<String>,
-    stdout: Option<String>,
-    stderr: Option<String>,
-}
-
-pub(in super::super) async fn attach(
-    State(state): State<DockerState>,
-    Path(id): Path<String>,
-    Query(query): Query<AttachQuery>,
-    request: Request,
-) -> ApiResult<Response> {
-    let stdin = bool::from(query.stdin.as_deref().unwrap_or_default().parse::<Flag>()?);
-    let stdout = bool::from(query.stdout.as_deref().unwrap_or_default().parse::<Flag>()?);
-    let stderr = bool::from(query.stderr.as_deref().unwrap_or_default().parse::<Flag>()?);
-    if !stdin && !stdout && !stderr {
-        return Err(ApiError::new(
-            StatusCode::BAD_REQUEST,
-            "attach requires at least one of stdin, stdout, or stderr",
-        ));
-    }
-
-    let container = state.containers.inspect(&id).await.map_err(ApiError::container)?;
-    let terminal = container.spec.process.console.terminal.is_some();
-    let session = state.containers.attach(&id).await.map_err(ApiError::container)?;
-    Ok(Connection::new(
-        hyper::upgrade::on(request),
-        session,
-        Streams { stdin, stdout, stderr },
-        terminal,
-    )
-    .spawn())
-}
-
 #[hl_design::adapter]
 pub(in super::super) async fn start(State(state): State<DockerState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
     let container = state.containers.inspect(&id).await.map_err(ApiError::container)?;
@@ -116,39 +81,6 @@ pub(in super::super) async fn restart(
 }
 
 #[derive(Deserialize)]
-pub(in super::super) struct KillQuery {
-    #[serde(default = "default_signal")]
-    signal: String,
-}
-
-fn default_signal() -> String {
-    "KILL".into()
-}
-
-pub(in super::super) async fn kill(
-    State(state): State<DockerState>,
-    Path(id): Path<String>,
-    Query(query): Query<KillQuery>,
-) -> ApiResult<StatusCode> {
-    let signal = query
-        .signal
-        .parse::<DockerSignal>()
-        .map_err(|_| {
-            ApiError::container(ContainerError::InvalidSpec(format!(
-                "unsupported signal {}",
-                query.signal
-            )))
-        })?
-        .into();
-    state
-        .containers
-        .signal(&id, signal)
-        .await
-        .map_err(ApiError::container)?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-#[derive(Deserialize)]
 pub(in super::super) struct RenameQuery {
     name: String,
 }
@@ -192,11 +124,11 @@ pub(in super::super) async fn unpause(
 
 #[derive(Deserialize)]
 pub(in super::super) struct CheckpointQuery {
-    #[serde(default = "default_checkpoint_timeout_ms")]
+    #[serde(default = "checkpoint_timeout")]
     timeout_ms: u64,
 }
 
-const fn default_checkpoint_timeout_ms() -> u64 {
+const fn checkpoint_timeout() -> u64 {
     30_000
 }
 
@@ -220,39 +152,12 @@ pub(in super::super) async fn checkpoint(
         .map_err(ApiError::container)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct DockerSignal(Signal);
-
-impl FromStr for DockerSignal {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let value = value.to_ascii_uppercase();
-        match value.strip_prefix("SIG").unwrap_or(&value) {
-            "1" | "HUP" => Ok(Self(Signal::Hangup)),
-            "2" | "INT" => Ok(Self(Signal::Interrupt)),
-            "3" | "QUIT" => Ok(Self(Signal::Quit)),
-            "9" | "KILL" => Ok(Self(Signal::Kill)),
-            "10" | "USR1" => Ok(Self(Signal::User1)),
-            "12" | "USR2" => Ok(Self(Signal::User2)),
-            "15" | "TERM" => Ok(Self(Signal::Terminate)),
-            _ => Err(value),
-        }
-    }
-}
-
-impl From<DockerSignal> for Signal {
-    fn from(value: DockerSignal) -> Self {
-        value.0
-    }
-}
-
 #[cfg(test)]
 mod stop_timeout_tests {
     use super::TimeoutQuery;
 
     #[test]
-    fn query_timeout_overrides_durable_default() {
+    fn timeout_contract() {
         assert_eq!(TimeoutQuery { seconds: None }.duration(23).unwrap().as_secs(), 23);
         assert_eq!(TimeoutQuery { seconds: Some(0) }.duration(23).unwrap().as_secs(), 0);
         assert_eq!(TimeoutQuery { seconds: Some(7) }.duration(23).unwrap().as_secs(), 7);
