@@ -5,9 +5,11 @@ use hl_container::NetworkDriver;
 use serde::Deserialize;
 
 mod filter;
+mod prune;
 mod wire;
 
-use filter::{Filters, ListFilters};
+use filter::ListFilters;
+use prune::Filters as PruneFilters;
 use wire::Fields;
 
 use super::{ApiError, ApiResult, DockerState};

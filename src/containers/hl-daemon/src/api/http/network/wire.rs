@@ -213,14 +213,6 @@ impl Network {
     }
 }
 
-impl Network {
-    /// Projects Docker's network-list summary without expanding endpoint details.
-    pub(super) fn from_summary(mut value: hl_container::Network) -> Self {
-        value.endpoints.clear();
-        Self::from(value)
-    }
-}
-
 impl IpamConfig {
     fn subnet(&self) -> ApiResult<Subnet> {
         let (address, prefix) = self
