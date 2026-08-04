@@ -89,7 +89,9 @@ cases:
     build: { source: aarch64/bf16.c, output: arm64-bf16, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/arm64-bf16 }
     run: []
-    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    status: !broken
+      reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target"
+      evidence: tests/runtime/completeness/ORACLE.md
     compat: { class: compatibility }
     timeout: 120
     expect: { exit: 0, stdout: golden/aarch64/bf16.out }
@@ -224,7 +226,9 @@ cases:
     build: { source: aarch64/dc_zva.c, output: arm64-dc-zva-model, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/arm64-dc-zva-model }
     run: []
-    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    status: !broken
+      reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target"
+      evidence: tests/runtime/completeness/ORACLE.md
     compat: { class: compatibility }
     timeout: 120
     expect: { exit: 0, stdout: golden/aarch64/dc_zva.out }
@@ -935,7 +939,9 @@ cases:
     build: { source: syscall/process_vm.c, output: process-vm, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/process-vm }
     run: []
-    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    status: !broken
+      reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target"
+      evidence: tests/runtime/completeness/ORACLE.md
     compat: { class: compatibility }
     timeout: 120
     expect: { exit: 0, stdout: golden/shared/process-vm.out }
@@ -971,7 +977,9 @@ cases:
     build: { source: syscall/cpu_discovery.c, output: cpu_discovery, flags: [-static, -O2, -std=gnu11] }
     artifact: { destination: /opt/husklet/completeness/cpu_discovery }
     run: []
-    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    status: !broken
+      reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target"
+      evidence: tests/runtime/completeness/ORACLE.md
     compat: { class: compatibility }
     timeout: 120
     expect: { exit: 0, stdout: golden/aarch64/cpu_features.out }
@@ -1025,7 +1033,9 @@ cases:
     build: { source: syscall/seccomp_filter.c, output: seccomp-filter, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/seccomp-filter }
     run: []
-    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    status: !broken
+      reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target"
+      evidence: tests/runtime/completeness/ORACLE.md
     compat: { class: compatibility }
     timeout: 120
     expect: { exit: 0, stdout: golden/shared/seccomp_filter.out }
@@ -1034,7 +1044,9 @@ cases:
     build: { source: syscall/clone3.c, output: clone3, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/clone3 }
     run: []
-    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    status: !broken
+      reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target"
+      evidence: tests/runtime/completeness/ORACLE.md
     compat: { class: compatibility }
     timeout: 120
     expect: { exit: 0, stdout: golden/shared/clone3.out }
@@ -1403,7 +1415,9 @@ cases:
     build: { source: syscall/uring_enter.c, output: io-uring-enter, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/io-uring-enter }
     run: []
-    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    status: !broken
+      reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target"
+      evidence: tests/runtime/completeness/ORACLE.md
     compat: { class: compatibility }
     timeout: 120
     expect: { exit: 0, stdout: golden/shared/uring_enter.out }
@@ -1466,7 +1480,9 @@ cases:
     build: { source: syscall/getdents64.c, output: getdents64, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/getdents64 }
     run: []
-    status: { unsupported: { reason: "excluded-macos: getdents64 enumeration over the synthetic /proc returns open_ok=0 on the macOS engine (procfs directory backend gap). Linux engine still runs+passes this.", evidence: tests/runtime/completeness/ORACLE.md } }
+    status: !unsupported
+      reason: "excluded-macos: getdents64 enumeration over the synthetic /proc returns open_ok=0 on the macOS engine (procfs directory backend gap). Linux engine still runs+passes this."
+      evidence: tests/runtime/completeness/ORACLE.md
     compat: { class: compatibility }
     timeout: 120
     expect: { exit: 0, stdout: golden/shared/getdents64.out }
@@ -1583,7 +1599,9 @@ cases:
     build: { source: x86_64/x87_faults.c, output: amd64-x87-stack-faults, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/amd64-x87-stack-faults }
     run: []
-    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    status: !broken
+      reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target"
+      evidence: tests/runtime/completeness/ORACLE.md
     compat: { class: compatibility }
     timeout: 120
     expect: { exit: 0, stdout: golden/x86_64/x87_faults.out }
@@ -1592,7 +1610,9 @@ cases:
     build: { source: x86_64/fprem_loop.c, output: amd64-x87-fprem-loop, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/amd64-x87-fprem-loop }
     run: []
-    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    status: !broken
+      reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target"
+      evidence: tests/runtime/completeness/ORACLE.md
     compat: { class: compatibility }
     timeout: 120
     expect: { exit: 0, stdout: golden/x86_64/fprem_loop.out }
@@ -1601,7 +1621,9 @@ cases:
     build: { source: x86_64/x87_rounding.c, output: amd64-x87-precision-rounding, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/amd64-x87-precision-rounding }
     run: []
-    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    status: !broken
+      reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target"
+      evidence: tests/runtime/completeness/ORACLE.md
     compat: { class: compatibility }
     timeout: 120
     expect: { exit: 0, stdout: golden/x86_64/x87_rounding.out }
@@ -1628,7 +1650,9 @@ cases:
     build: { source: x86_64/denorm_flags.c, output: amd64-denorm-flags, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/amd64-denorm-flags }
     run: []
-    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    status: !broken
+      reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target"
+      evidence: tests/runtime/completeness/ORACLE.md
     compat: { class: compatibility }
     timeout: 120
     expect: { exit: 0, stdout: golden/x86_64/denorm_flags.out }
