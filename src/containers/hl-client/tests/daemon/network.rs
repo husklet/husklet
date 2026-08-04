@@ -25,7 +25,7 @@ async fn network_client_and_server_share_headless_topology() {
         .networks()
         .create(&NetworkCreate {
             name: "isolated".into(),
-            driver: "none".into(),
+            driver: "null".into(),
             internal: true,
             ..Default::default()
         })
@@ -73,7 +73,7 @@ async fn network_client_and_server_share_headless_topology() {
         .networks()
         .create(&NetworkCreate {
             name: "none".into(),
-            driver: "none".into(),
+            driver: "null".into(),
             internal: true,
             ..Default::default()
         })
@@ -116,7 +116,7 @@ async fn forced_network_removal_uses_the_docker_delete_contract() {
         .networks()
         .create(&NetworkCreate {
             name: "force-candidate".into(),
-            driver: "none".into(),
+            driver: "null".into(),
             internal: true,
             ..Default::default()
         })
