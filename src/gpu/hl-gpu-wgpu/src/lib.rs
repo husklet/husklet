@@ -40,6 +40,7 @@ mod reflect;
 mod sampler;
 mod shader;
 mod spirv_split;
+mod stencil_blit;
 mod submit;
 mod texel_buffer;
 mod texture;
@@ -298,6 +299,9 @@ pub struct WgpuExecutor {
     /// native wgpu image blit, so it is implemented by rendering — see [`blit`]). Built on first blit and
     /// reused for the executor's lifetime; `None` until a blit is executed.
     blit: Option<blit::BlitCache>,
+    /// Lazily-built depth/stencil-only pipeline used to resample an 8-bit stencil aspect without a
+    /// fragment-stencil output (which WGSL deliberately has no representation for).
+    stencil_blit: Option<stencil_blit::StencilBlitCache>,
     /// GPU-only projection for expanded fixed-point attachment formats. Lazily built because ordinary
     /// workloads never need a shadow-target quantizer.
     quantizer: Option<quantize::QuantizeCache>,
@@ -381,6 +385,7 @@ impl WgpuExecutor {
             kernels: HashMap::new(),
             kernel_compiler: None,
             blit: None,
+            stencil_blit: None,
             quantizer: None,
             dedup: dedup::DedupCaches::default(),
         }

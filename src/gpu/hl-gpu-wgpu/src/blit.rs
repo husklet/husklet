@@ -27,6 +27,7 @@ use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
 
 use crate::convert::Format;
+use crate::stencil_blit::StencilBlitRegion;
 use crate::{texture, WgpuExecutor};
 
 /// The blit shader. A fullscreen triangle whose interpolated `uv` runs `0..1` across the VIEWPORT (which
@@ -571,6 +572,27 @@ impl WgpuExecutor {
         mirror: Mirror,
     ) -> Result<()> {
         let _sp = hl_log::hl_span!(hl_log::tag::WGPU, "blit");
+        if src_sub.aspect == TextureAspect::StencilOnly
+            && dst_sub.aspect == TextureAspect::StencilOnly
+        {
+            if filter != Filter::Nearest {
+                return Err(GpuError::Invalid("wgpu: stencil blit requires nearest filtering"));
+            }
+            return self.blit_stencil_nearest(
+                res,
+                src,
+                src_sub,
+                dst,
+                dst_sub,
+                StencilBlitRegion {
+                    src_origin: *src_origin,
+                    src_extent: *src_extent,
+                    dst_origin: *dst_origin,
+                    dst_extent: *dst_extent,
+                    mirror,
+                },
+            );
+        }
         for sub in [src_sub, dst_sub] {
             if sub.aspect != TextureAspect::All {
                 return Err(GpuError::Unsupported("wgpu: non-color aspect blit"));
