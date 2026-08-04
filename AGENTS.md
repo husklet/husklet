@@ -1,1346 +1,528 @@
 # Husklet instructions
 
-These rules define the durable product, architecture, design, coding, and style standards.
-Apply them to new code and improve nearby code when safe. Preserve behavior during refactors and prove
-changes through observable tests. Do not force abstractions without a domain concept or boundary.
+These rules define the durable architecture, safety, coding, testing, and delivery
+standards for Husklet and its integrated Rust engine. Apply them to every new package and improve
+nearby code when doing so preserves behavior and remains within scope.
+
+The retired C engine in `../engine` is a read-only behavioral and performance oracle
+during migration. Husklet is the active repository and owns the Rust engine, containers,
+workspaces, terminal, and desktop application. Do not add GPU, graphics translation,
+surface, compositor, CUDA, OpenGL, Vulkan, or Wayland implementation back into this
+repository. Never edit `../engine` while studying it.
+
+## Time-to-evidence and agent utilization
+
+Elapsed time to authoritative compatibility evidence is the primary operational
+optimization target. CPU is not a scarce resource for repository work: use every
+logical CPU when a test, corpus run, compilation, or independent analysis can
+benefit from it. Do not serialize work merely to keep CPU utilization low, and do
+not default compatibility runs to one worker when the host can safely run more.
+
+RAM, disk space, process-table health, and source/build ownership remain hard
+constraints. Before and during wide execution, monitor available memory, swap,
+free disk, output growth, and zombie or escaped descendants. Bound per-worker
+captures and timeouts, preserve resumable results, and reduce concurrency only
+when measured RAM, disk, thermal, or lifecycle evidence requires it. A slow run
+must report whether it is limited by CPU, memory, disk, fixture setup, process
+startup, locking, or guest timeouts; unexplained serialization is not acceptable.
+
+Keep all available Codex subscriptions and agent slots productively occupied.
+Managers must continuously delegate broad, independent, non-overlapping migration
+domains, require direct C-oracle and Rust-source study, and replace a completed
+assignment with the next highest-value compatibility gap immediately. Each Codex
+manager should use its own subagent capacity fully. Coordinate shared-tree edits
+and build ownership so maximum agent utilization does not create conflicting
+patches or invalidate evidence. Prefer parallel read-only audits while one owner
+performs a shared-tree build or authoritative run.
+
+Keep implementation sessions short-lived and outcome-bounded. A normal lane owns
+one coherent capability for at most 20 minutes; an external manager coordinating
+several independent subagents has a hard 30-minute lifetime. It must then deliver
+one audited commit with exact-tree evidence, or a concise source-backed blocker
+report, and exit. Repeated diagnosis, fixture-by-fixture iteration, or widening
+the lane after its original capability is exhausted is not progress: stop that
+session and give a fresh agent the next bounded domain. Preserve unfinished work
+on its branch or worktree; never manufacture a cosmetic commit merely to meet the
+deadline.
+
+Compatibility workers receive engine launch options only through the typed
+`HL_COMPAT_ENGINE_OPTIONS` setting (for example
+`HL_COMPAT_ENGINE_OPTIONS='HL_NATIVE_EXECUTION=1;HL_NATIVE_DIAGNOSTICS=1'`).
+Setting an engine option such as `HL_NATIVE_EXECUTION` directly in the inventory
+supervisor's ambient environment does not configure the guest engine and must
+never be cited as native-mode evidence. Before a long run, prove the selected
+mode with one fast row and require the corresponding native diagnostics.
+
+A commit may be called stable or buildable only after verification from that exact
+committed tree. A passing build in a dirty shared worktree is not evidence for
+`HEAD`: uncommitted companion schema, match, generated, test, or composition edits
+may be supplying the successful build. Before handing a revision to another lane
+or starting an authoritative corpus run, verify it in a clean detached worktree
+or equivalent clean checkout and record the tested commit. Do not continue shape-
+changing edits until the dependent verification has captured a coherent commit.
 
 ## Mission
 
-Husklet provides isolated, reproducible Linux workspaces. Opening one enters its configured image with a
-terminal and services such as networking and VPN.
+Provide isolated, reproducible Linux workspaces backed by a memory-safe,
+high-performance Rust execution engine. Opening a workspace enters its configured
+image with a terminal, filesystem, networking, VPN, and container services.
 
-Linux CLI, GUI, and GPU applications should run without guest-specific setup. Guest Wayland and
-GL/CUDA/Vulkan work crosses explicit host boundaries, executes on host hardware, and appears as responsive,
-native-quality windows.
+Preserve exact Linux behavior across AArch64 and x86-64 guests and Linux, macOS,
+and Windows hosts. The product composes replaceable engine, container, workspace,
+terminal, and GUI capabilities; reusable crates contain no Husklet product policy.
 
-The product composes replaceable engine, container, GPU, surface, workspace, and GUI capabilities. A
-capability is complete when ordinary applications use it correctly, reliably, and at native-feeling
-latency—without application workarounds, hidden stubs, or product policy in reusable packages.
+Ordinary CLI and terminal applications must run without application-specific engine
+workarounds. The final compatibility/performance gate includes container workflows,
+interactive terminal workloads, and nested engine execution such as `arm -> amd -> arm`.
 
-## Architecture
+Production engine behavior must never branch on an application, language, runtime,
+framework, executable name, build-information marker, or vendor identity.  In
+particular, Go, V8, JVM, and similar guest internals are not Linux ABI
+domains.  When retained C contains such a branch, preserve it as migration evidence
+and identify the violated generic invariant (for example non-PIE guest-address
+placement or signal semantics); repair that invariant rather than creating a
+runtime-specific Rust package.  Guest-visible addresses remain ELF/Linux addresses;
+host storage placement is an internal mapping detail and must not leak into guest
+pointers, symbols, signals, `/proc`, checkpoints, or runtime metadata.
 
-`apps/husklet` is the composition root. It owns product configuration, GUI/CLI behavior, backend selection,
-and cross-domain orchestration. No crate depends on it.
+## C oracle study before every migration lane
+
+Reading retained fixtures and expected output is necessary but insufficient.
+Before changing a runtime domain, the lane owner must inspect the corresponding
+read-only implementation in `../engine` and record:
+
+- the exact C and assembly files and entry functions studied;
+- state ownership, identity, lifetime, locking, and teardown behavior;
+- syscall ordering, partial-result, blocking, cancellation, signal, and errno
+  semantics relevant to the lane;
+- architecture-specific and host-specific branches;
+- the explicit mapping from each observed C capability to its Rust owner, or an
+  honest remaining gap.
+
+Record this oracle audit beside the relevant compatibility or performance report
+before the lane is accepted.
+An agent report that cites only tests, manifests, expected output, or summaries
+does not satisfy this requirement. Never edit `../engine` while performing the
+audit.
+
+### Port domains, not failing cases
+
+The retained C engine is the primary implementation oracle. Compatibility cases
+are acceptance evidence and prioritization signals; they are not a substitute
+for migrating the implementation that already works.
+
+Before fixing a corpus cluster, read the complete retained C domain and its call
+graph rather than only the function named by the first failure. Inventory every
+entry point, state object, ownership edge, lock, wakeup, error path, architecture
+branch, and teardown transition, then compare that inventory mechanically against
+the Rust owners. Record a dense capability matrix with each C capability marked
+implemented, divergent, or missing in Rust. Implement the largest coherent
+missing mechanism and all of its widths, flags, lifecycle paths, and error
+semantics before returning to the corpus.
+
+Walking one executable until it exposes the next unsupported instruction or
+patching one fixture-visible branch at a time is forbidden when the retained C
+tables or domain implementation can reveal the complete family in one audit.
+Likewise, a narrow passing case does not prove a domain port complete. Acceptance
+requires focused cohort evidence after the implementation comparison and later a
+full-corpus checkpoint from the exact committed tree.
+
+## Source layers
+
+The source tree separates reusable foundations, engine runtime domains, native
+execution, container capabilities, workspace capabilities, and the product root:
 
 ```text
 src/
-  apps/husklet/
-  packages/{hl-fs,hl-log}/
-  containers/{hl-container,hl-daemon,hl-client,hl-images}/
-  gpu/{hl-gpu,hl-gpu-wgpu}/
-  surface/{hl-compositor,hl-gl,hl-cuda,hl-vulkan}/
-  workspaces/{hl-gui,hl-ws,hl-ws-term}/
-../engine/pkgs/rust/ (`hl-engine`)
+  packages/   transferable libraries and repository tool packages
+  runtime/    engine-specific runtime domains
+  native/     CPU schema and native execution implementation
+  containers/ container services and the integrated hl-engine
+  workspaces/ workspace, terminal, and generic GUI capabilities
+  apps/husklet/ the product composition root
 ```
-
-- Reusable packages use `hl-`; the product is `husklet` and is never a dependency.
-- `packages` is general-purpose and depends on no domain.
-- Domains own their models and remain independently buildable and testable.
-- Cross-domain edges use small capability traits and owned domain values. Concrete wiring belongs in
-  `husklet`.
-- Protocol and wire types have one owner. Clients reuse them; backends implement them.
-- Traits mark substitution, platform, test, or stable domain boundaries—not every concrete type.
-- Platform code stays behind domain-owned adapters.
-
-Runtime ownership:
-
-```text
-husklet -> workspace/container -> Linux engine -> Wayland + GL/CUDA/Vulkan
-        -> GPU IR -> host GPU -> compositor -> host surface
-```
-
-### UI
-
-- `hl-gui` owns generic visual primitives, layout, validation display, and toolkit adapters.
-- `husklet` owns screens, settings schemas, domain view models, and feature composition.
-- Components receive state and emit typed intent. They do not persist, orchestrate, or invoke services.
-- Domain components compose generic components beside the product feature that owns them.
-- Native toolkit types do not cross the GUI boundary.
-
-#### Generic and feature components
-
-Apply the same ownership test to native UI that frontend projects apply to reusable components:
-
-- A generic component such as `Button`, `Input`, `Dialog`, `Modal`, `List`, or `Settings` understands
-  presentation, interaction state, accessibility, and typed events. It contains no workspace, image,
-  container, VPN, or product policy and belongs in `hl-gui`'s component namespace.
-- A feature component such as a workspace picker, image chooser, removal confirmation, or terminal settings
-  page composes generic components and carries domain meaning. It stays beside the Husklet page or feature
-  that owns it.
-- A domain-to-view model belongs with the feature or application adapter. Do not add toolkit methods to a
-  domain entity merely to turn a helper into a method.
-
-Use Rust modules to express the same shape as frontend `_components` and page-local components without
-copying TypeScript naming conventions mechanically:
-
-```text
-hl-gui/src/
-  component/
-    button.rs
-    input.rs
-    dialog.rs
-    dialog/
-      confirm.rs
-
-apps/husklet/src/
-  workspace/
-    page.rs
-    component/
-      picker.rs
-      removal.rs
-```
-
-Begin with `component/dialog.rs`. Convert it to `component/dialog/{mod.rs,dialog.rs,confirm.rs}` only when
-cohesive variants or implementations justify children. The root `Dialog` defines general state and behavior;
-`Confirm` may compose or construct a `Dialog` when confirmation adds reusable semantics. A product-specific
-`RemoveWorkspace` composes `Dialog` or `Confirm` in the workspace feature—it does not belong in `hl-gui`.
-
-Do not equate every visual variation with a new component. Add a component when it has a stable concept,
-state, interaction contract, accessibility behavior, or multiple cohesive operations. Keep one-off page
-layout beside the page. Generic components emit intent; feature components and Husklet decide effects.
-
-Cargo lists crates by grouped path. Shared dependency versions live at the workspace root; features and
-platform dependencies stay local. Portable headless crates remain the default build set.
-
-## Design
-
-Good architecture lets a capability be added, removed, or replaced without modifying unrelated code. This
-requires enough abstraction to isolate real boundaries, but no abstraction without a concrete reason.
-
-### Place logic by ownership
-
-Place code in the lowest layer that fully owns its meaning.
-
-```text
-application -> service -> api/model/lib -> packages
-                         -> ports <- adapters
-```
-
-Ask these questions in order:
-
-1. Is it independent of Husklet and its domains? Put it in `packages/`.
-2. Is it meaningful only inside one domain? Put it in that domain crate.
-3. Does it describe a domain value or its invariants? Put it in `model`.
-4. Is it the supported way callers use the crate? Put it in `api` or re-export it from the crate root.
-5. Does it combine models, libraries, and ports into a capability? Put it in `service`.
-6. Is it reusable implementation machinery within this kind of domain? Put it in the domain's `lib`.
-7. Does it cross an I/O, platform, process, or replaceable implementation boundary? Define a `port` and put
-   the concrete mechanism in an adapter.
-
-Do not classify code by convenience. `util`, `utils`, `core`, `common`, and `shared` hide ownership instead
-of defining it.
-
-### Packages
-
-`src/packages/` contains transferable foundations: filesystem primitives, HTTP I/O, logging, codecs, and
-other logic whose vocabulary does not belong to a product domain. A package must not import a domain crate.
-
-```rust
-// packages/hl-httpio
-pub trait ParseFromState<S>: Sized {
-    type Error;
-
-    fn parse(state: &S) -> Result<Self, Self::Error>;
-}
-```
-
-Parsing an integer from generic request state belongs to `hl-httpio::ParseFromState`; deciding that the
-integer is a valid workspace CPU limit belongs to the workspace model. Mechanism is general; policy stays
-with the domain.
-
-Do not move code to `packages/` merely because two callers exist. Move it only when its types, errors, and
-rules make sense without either caller.
-
-### Domain crate shape
-
-A domain crate may contain these roles when each is needed:
-
-```text
-domain/
-  src/
-    model/       domain entities and values
-    api/         public and protocol-facing surfaces
-      http/      HTTP wire models and endpoints
-    lib/         transferable domain-kind machinery
-    service/     use-case orchestration
-    ports/       capability contracts
-    adapters/    concrete port implementations
-    lib.rs       intentional re-exports
-```
-
-These names are roles, not mandatory empty folders. Start with a file. Create a directory only when it has
-cohesive children. A small crate can expose the same shape directly from `lib.rs`.
 
 Dependencies point inward:
 
 ```text
-adapters -> ports
-service  -> model + lib + ports
-api      -> model + service
-model    -> packages
-lib      -> packages
+husklet -> workspaces + containers -> runtime -> packages -> std
+                              -> native
 ```
 
-`model` does not depend on transport, adapters, or services. `service` does not depend on concrete adapters.
-The application selects adapters and constructs services.
+- Production libraries in `packages/` must make sense without an engine, guest,
+  syscall, emulator, or container.
+- `runtime/` packages each own one coherent engine domain.
+- `containers/hl-engine` selects concrete engine adapters and glues runtime domains together.
+- `apps/husklet` selects product adapters and composes containers, workspaces, terminal, and GUI.
+- No package depends on `apps/husklet`.
+- Repository tools live as packages under `src/packages/`, but remain build-time
+  machinery and never production dependencies. The generic `hl-design` annotation
+  package is the only explicitly reviewed exception when used by production crates.
 
-### Models: entities and values
+Changing a local Cargo dependency requires explaining the ownership reason and
+passing the dependency linter.
 
-Models express domain language, valid state, invariants, and behavior. Put behavior on the value it primarily
-uses.
+### UI ownership
 
-```rust
-pub struct Log {
-    id: LogId,
-}
+- `hl-gui` owns generic visual primitives, layout, validation display, accessibility,
+  and toolkit adapters.
+- Husklet owns screens, settings schemas, product view models, navigation, and feature
+  composition.
+- Generic components receive state and emit typed intent. They do not persist,
+  orchestrate, or invoke services.
+- Product components such as workspace pickers, image choosers, removal confirmations,
+  and terminal settings stay beside the feature that owns them.
+- Native toolkit types do not cross the GUI boundary.
+- Add a component only for a stable concept, state contract, interaction contract,
+  accessibility behavior, or cohesive reuse; keep one-off layout beside its page.
 
-impl Log {
-    pub fn id(&self) -> &LogId {
-        &self.id
-    }
-}
+## Package placement
 
-pub struct Logs<L> {
-    storage: L,
-}
+Ask these questions in order:
 
-impl<L: LogStorage> Logs<L> {
-    pub fn read(&self, id: &LogId) -> Result<Vec<Record>, L::Error> {
-        self.storage.read(id)
-    }
-}
-```
+1. Is it repository-only lint, differential, fixture, or benchmark machinery
+   that is forbidden as a production dependency? Put its package in `packages/`
+   and keep the tool boundary explicit. Audits that understand engine-owned
+   runtime domains, such as syscall admission, live in `runtime/` but remain
+   forbidden as production dependencies.
+2. Does the code extend ordinary logging, filesystem, byte I/O, encoding, or
+   another standard-library mechanism without engine vocabulary? Put it in
+   `packages/`.
+3. Does it own a Linux-engine entity, lifecycle, state machine, or invariant? Put
+   it in the corresponding package under `runtime/`.
+4. Does it connect two runtime domains or select a concrete platform adapter? Put
+   the integration in `runtime/hl-runtime`.
+5. Does it validate engine configuration, expose the engine API/CLI/C ABI, or
+   construct the complete engine? Put it in `containers/hl-engine`.
+6. Does it own product configuration, screens, commands, navigation, or cross-domain
+   composition? Put it in `apps/husklet`.
 
-`Log` owns one log's identity and invariants. `Logs` owns operations over the collection. Prefer these names
-to `LogData`, `LogManager`, `LogService`, `read_log`, or a raw `Vec<Log>` passed between helpers.
+Do not add catch-all packages or modules named `core`, `common`, `shared`, `types`,
+`utils`, `helpers`, or `misc`. Name code by the entity, capability, algorithm, or
+external mechanism it owns.
 
-Use associated constructors to make valid state and ownership explicit:
+Do not create an outer directory containing one crate. The three source layers are
+the meaningful grouping. Runtime concepts such as ISA, memory, networking, tasks,
+and execution are sibling packages under `src/runtime/`.
 
-```rust
-let reference = ImageReference::parse(input)?;
-let workspace = Workspace::from_config(config)?;
-let surface = Surface::new(id, size)?;
-```
+## Domain ownership
 
-Use `From`, `TryFrom`, and `FromStr` for policy-free conversions. Use named constructors when conversion
-applies domain policy.
+Each runtime package owns:
 
-Before adding or preserving a string, integer, or boolean that represents state, search its assignments and
-comparisons for a finite vocabulary. Model a closed set as an enum and keep serialization at the wire or
-storage boundary. For example, repeated `"Preparing"`, `"Pushing"`, and `"Pushed"` values should prompt a
-`PushStatus` enum review. Preserve unknown protocol values explicitly when forward compatibility requires it.
-Do not force open-ended messages, user text, identifiers, or extensible third-party values into closed enums;
-use a precise newtype when they need identity or validation without a finite variant set.
+- its entities and value types;
+- valid-state construction;
+- lifecycle and concurrency invariants;
+- domain operations and typed errors;
+- consumer-owned capability traits;
+- pointer-free, bounded snapshot values;
+- platform adapters only when the mechanism belongs solely to that domain.
 
-### Compose specialized entities from a shared base
+Each domain exposes a small public surface from its crate root. Other packages must
+not import private modules or reproduce its models.
 
-When multiple types repeat the same identity and state, extract that shared basis into one entity. A cluster
-of three or more identical fields is a strong review signal, not a mechanical threshold: shared invariants,
-lifecycle, and meaning decide whether the fields form a real entity. Do not let parallel structs drift by
-copying fields, validation, or behavior.
+Cross-domain operations live in `hl-runtime`:
 
-Keep the base and its specialized forms in one precise namespace. Rust has no struct inheritance; represent
-specialization through composition. The specialized type owns the base entity and adds only the state that
-distinguishes it:
+| Operation | Domains joined |
+|---|---|
+| file-backed mapping | descriptor + VFS + memory |
+| procfs | VFS + task |
+| signalfd | event + task + descriptor |
+| Unix pathname socket | VFS + network |
+| `SCM_RIGHTS` | network + descriptor |
+| fork | task + descriptor + memory + execution |
+| exec | task + loader + descriptor + memory |
+| provider-backed object | provider + receiving domain |
+| syscall trap | execution + Linux personality |
+| checkpoint | all snapshot-capable domains |
 
-```rust
-mod image {
-    pub struct Image {
-        reference: Reference,
-        rootfs: Rootfs,
-        arch: Arch,
-    }
+These adapters use public APIs and owned values. They never access private fields.
 
-    pub struct Discovered {
-        image: Image,
-        source: Source,
-    }
+## Ports and adapters
 
-    impl Discovered {
-        pub fn from_image(image: Image, source: Source) -> Self {
-            Self { image, source }
-        }
+A port is a narrow trait owned by the consumer that needs the capability. Add a
+port only for a real platform, substitution, testing, FFI, or stable domain
+boundary.
 
-        pub fn image(&self) -> &Image {
-            &self.image
-        }
+Examples:
 
-        pub fn into_image(self) -> Image {
-            self.image
-        }
-    }
-}
-```
+- task owns `GuestExecutor`; execution implements it;
+- execution owns `TrapHandler` and `InstructionMemory`; runtime implements them;
+- memory owns `Backing`; runtime adapts a pinned open-file description;
+- VFS owns `VfsHost`; the app supplies the selected host adapter;
+- network owns `SocketHost`; the app supplies the selected host adapter.
 
-Prefer `image::Image` and `image::Discovered` to unrelated `Image` and `DiscoveredImage` structs that both
-declare `reference`, `rootfs`, and `arch`. Put shared behavior on `Image`; put discovery-only behavior on
-`Discovered`. Expose deliberate accessors or conversions rather than `Deref`, field forwarding, or a trait
-that merely imitates inheritance.
+Never introduce a shared `host-api`, service locator, or omnibus platform trait.
+Keep traits small and capability-specific.
 
-Do not extract a base merely because fields share Rust types or names. Two values may use `name`, `path`, and
-`id` with different semantics. Extract only when callers treat the fields as the same domain object and the
-specialized value has an actual “is this entity plus more state” relationship. If specialized states are
-mutually exclusive lifecycle stages, also consider an enum containing the shared entity instead of several
-wrappers.
+## Native execution boundary
 
-### Classify emerging concepts
+The retained C/assembly kernel lives under `src/native/execution`. It is limited to:
 
-Do not create a type only to turn one small helper into a method. First decide whether the function is a
-complete low-level algorithm, belongs on an existing receiver, or is the first evidence of a missing concept.
+- CPU layouts whose offsets are embedded in machine code;
+- assembly entry, block-return, and trampoline code;
+- W^X code-cache mutation, publication, lookup, and chaining;
+- POSIX signal/ucontext and Windows VEH/CONTEXT entry;
+- fault-context reconstruction;
+- async-signal-safe and fork-critical repair.
 
-```rust
-fn clean(value: &str) -> String;
-```
+It must not own Linux syscall, filesystem, descriptor, networking, task, loader,
+checkpoint, or product policy.
 
-`Path::clean()` alone does not justify a new `Path` wrapper. If nearby behavior accumulates around the same
-value—such as cleaning, removing when present, and rejecting non-ASCII input—the cluster reveals a path
-entity and should move together into the filesystem package. Judge the cluster by shared invariants and
-ownership, not function count alone. Do not build a wrapper from unrelated operations that merely accept the
-same primitive type.
+Cross-language operations are coarse. FFI per instruction, guest memory access,
+block lookup, or chain transition is forbidden.
 
-This provisional workflow applies only to the free-function lint for standalone functions with one or two
-arguments. It does not suppress environment, single-use, nesting, or other lint rules. When the correct owner
-is visible but the concept is not mature enough to extract, mark that one- or two-argument function with a
-temporary classification:
+CPU layouts are generated from `src/schema/cpu` into C and Rust. Both sides compile
+size, alignment, and offset assertions. Hand-maintained duplicate layouts are
+forbidden.
 
-```rust
-#[hl_design::classify(root = fs)]
-fn clean_path(value: &str) -> String;
+## Unsafe code
 
-#[hl_design::classify(domain = gpu)]
-fn normalize_binding(value: u32) -> u32;
+Workspace code forbids unsafe by default.
 
-#[hl_design::classify(pkg)]
-fn output_scale(value: f64) -> i32;
+Unsafe is permitted only in reviewed modules that implement:
 
-#[hl_design::classify(struct = Path)]
-fn remove_non_ascii(value: &str) -> String;
-```
+- platform system calls;
+- the native execution ABI;
+- the external C ABI;
+- memory mapping and fault entry that cannot be expressed safely.
 
-Classifications are review queues, not permanent suppressions:
+Every unsafe block states:
 
-- `root` identifies general functionality that should eventually move to `packages/`. Use precise standard
-  domains such as `fs`, `io`, `encoding`, or `validation`.
-- `domain` identifies functionality accumulating inside a repository domain such as `gpu` or `surface`.
-- `pkg` identifies behavior owned by the package containing the function but not yet supported by a mature
-  entity. The linter derives the nearest Cargo package; never repeat its name in the annotation.
-- `struct` identifies behavior accumulating around a potential entity that does not yet justify extraction.
+1. the validity, lifetime, alignment, and aliasing assumptions;
+2. which owner keeps referenced storage alive;
+3. why concurrent access is valid;
+4. why failure cannot unwind across FFI.
 
-Unclassified findings are lint errors and belong in the flat `lint/errors/` queue. Classified findings belong
-in the flat `lint/check/` queue. Case names use
-`<unix_timestamp>_<domain>_<package>_<function>.md` with snake_case components. Agents periodically review
-`check`, combine related functions into entities or
-packages, and remove the annotation after refactoring. A finding disappears only when its design issue is
-resolved; classification merely moves it out of the untriaged queue.
+No allocation, lock acquisition, logging, panic, unwinding, or Rust destructor walk
+may occur in a signal, VEH, or fork-critical callback.
 
-#### Subagent protocol for design lint cases
+## Types and ownership
 
-Resolving `lint/errors/` starts by spawning subagents. Give each subagent a small, disjoint batch of related
-case files from one domain and preferably one package or cohesive source area. A batch should contain only a
-few cases that can be understood and tested together; do not assign repository-wide queues or mix unrelated
-GPU, surface, container, workspace, and application cases. Never let agents edit overlapping source files.
+- Make invalid states unrepresentable with constructors, enums, and meaningful
+  newtypes.
+- Do not wrap primitives or collections without an invariant, identity boundary, or
+  cohesive behavior.
+- Borrow for observation and transfer ownership for storage.
+- Clone only when the ownership model requires independent ownership.
+- Use checked arithmetic where overflow is invalid and saturating arithmetic only
+  where clamping is the contract.
+- Guest-provided lengths, counts, offsets, command batches, and resource requests
+  must be bounded before allocation or expensive host work.
+- A descriptor, OFD, mapping, task, subscription, provider handle, and translated
+  block each have one explicit owner and generation/lifetime model.
+- Do not use process-global mutable state for engine instances.
 
-Every assignment must explicitly require the subagent, before editing, to read all of `AGENTS.md`, all of
-`lint/examples/positive.md`, and all of `lint/examples/negative.md`. The subagent must then read each assigned
-case, current source function, reported uses, enclosing callers, sibling functions, relevant models, owning
-crate manifest, and nearby tests. A generated case is evidence, not source of truth and may be stale; verify
-every location against current Rust source.
+## Errors and Linux behavior
 
-Reading the examples is a mandatory gate, not a suggestion or a request to skim. The subagent must read both
-files from beginning to EOF, including every code block and rejection reason, and explicitly confirm in its
-report: `Read positive.md in full: yes` and `Read negative.md in full: yes`. A summary, search result, partial
-read, inherited conversation context, or another agent's interpretation does not satisfy this requirement.
-The manager must reject work lacking both confirmations, even when its tests pass.
+Libraries return typed domain errors. Linux errno conversion happens at the Linux
+personality boundary.
 
-Subagents are implementors, not suppression approvers. Their primary task is to refactor the assigned cases
-into the correct entities, collections, traits, standard conversions, modules, or intentional inline code,
-then run focused tests. If a safe final design cannot yet be justified, the subagent must leave production
-source unannotated and report the proposed classification, exact evidence, alternative owners considered,
-and what evidence is missing. A subagent must not add `#[hl_design::classify(...)]`,
-`#[hl_design::naming(...)]`, lint allowances, or dependencies whose only purpose is suppression unless the
-manager explicitly approved that exact use in advance.
+Preserve:
 
-The manager reviews every subagent diff against the source, both example documents, domain boundaries, and
-test evidence. Accept a refactor only when behavior and ownership are proven. When refactoring is genuinely
-premature, the manager validates the proposed scope and personally applies the narrow temporary macro. The
-manager never rubber-stamps classifications, mass-applies attributes, or uses macros to make the queue empty.
-Classification means “review later,” not “resolved.”
+- exact `EAGAIN`, `EWOULDBLOCK`, `EINTR`, and partial-I/O behavior;
+- shared OFD offsets and descriptor-local flags;
+- epoll edge, level, oneshot, timeout, cancellation, and wakeup ordering;
+- `SCM_RIGHTS` ownership;
+- shared mapping visibility and protection ordering;
+- futex deadlines and wakeups;
+- fork/exec descriptor, signal, task, and mapping transitions.
 
-Append a pattern to `positive.md` only after user approval; append a rejected proposal to `negative.md` only
-when the user classifies it as negative. Do not infer either decision from silence or “next.”
+Do not panic for guest input or recoverable host failures. No panic or unwind may
+cross a C boundary.
 
-For each `lint/errors/` case:
+## Concurrency and performance
 
-1. Identify what the function means, not merely what its name says. Record its input concept, invariants,
-   side effects, dependencies, and callers.
-2. Search the package and domain for functions operating on the same concept. A shared primitive argument is
-   evidence only; cohesive rules and invariants establish an entity.
-   Also search repeated primitive values for a closed state set that should become an enum.
-3. Prefer, in order: behavior on an existing receiver; an associated constructor or conversion; inlining a
-   single-use implementation; a free multi-entity operation or low-level algorithm; a provisional
-   classification when the owner is visible but extraction is premature.
-4. Do not create a wrapper for one helper. Propose a new type only when several cohesive operations or a
-   meaningful invariant justify it.
-5. If a final design cannot be justified, recommend the narrowest truthful classification: `root` for
-   project-independent foundations, `domain` for behavior shared within a repository domain, `pkg` for the
-   current Cargo package, or `struct` for an emerging entity. `pkg` never takes a name; Cargo ownership is
-   derived automatically. Do not apply the macro; return the recommendation to the manager.
-6. Refactor obvious cases instead of recommending annotation. Never add an exception merely because a
-   refactor crosses several files or requires tests.
-7. Report each case as `refactored`, `classification proposed`, or `blocked`, with its owner, API, reasoning,
-   files changed, and tests. Leave generated approval fields unchecked unless the user explicitly delegates
-   approval.
+- Avoid global locks across unrelated engines, processes, descriptors, mappings, or
+  translated blocks.
+- Do not hold table locks across host calls.
+- Unrelated OFDs must not serialize.
+- Define task ownership, cancellation, shutdown, and wakeup ordering.
+- Backpressure blocks or rejects predictably; it never busy-spins.
+- Do not log every syscall or translated instruction in normal operation.
+- Do not introduce synchronous full-frame, device-wide, or whole-engine waits in a
+  hot path.
+- Preserve explicit bounds for caches, commands, memory, threads, handles, logs, and
+  retained resources.
 
-For each `lint/check/` case:
+Every hot-path migration compares against a pinned C baseline. Nested engine
+benchmarks measure compounding overhead.
 
-1. Review cases as a group by classification; the purpose of `check` is to detect when enough behavior has
-   accumulated to reveal its final owner.
-2. For `root`, verify the API is independent of Husklet, then extract it into a precise package. For
-   `domain`, find the domain model or domain library that owns the cluster. For `pkg`, move behavior onto an
-   existing package entity or precise module. For `struct`, verify identity/invariants and extract a newtype
-   only when the cluster is cohesive.
-3. Reclassify when evidence points to a narrower or different owner. Keeping an old classification because it
-   already passes the lint is not acceptable.
-4. Remove the annotation when behavior is inlined, moved onto a receiver, or extracted behind its final API.
-   A classified free function is unfinished design.
-5. Leave the case in `check` when evidence remains insufficient; document what additional behavior would
-   justify extraction. Do not manufacture abstractions to empty the queue.
+## Module shape
 
-After each subagent batch, the manager inspects the diff and runs or verifies the narrow tests for affected
-crates. After accepted batches are integrated, run `cargo test -p hl-design-lint` and `make lint-cases`.
-Confirm resolved cases disappear, manager-approved classifications move to `lint/check/`, unclassified cases
-remain in `lint/errors/`, both queues stay flat, and no unrelated case is lost. Never mass-annotate, classify
-from a function name alone, edit generated code snippets instead of Rust source, or weaken the lint to make
-the build pass.
-
-### Library machinery inside a domain
-
-`lib` contains machinery reusable by another implementation of the same kind of domain, but not general
-enough for `packages/`. It must not contain product policy or become a dumping ground.
+A crate starts with `lib.rs` and files named for owned entities. Add role
+directories only when cohesive children exist:
 
 ```text
-workspaces/hl-gui/src/
-  model/
-  api/
-  lib/
-    currency/
-      amount.rs
-      format.rs
-  service/
+src/
+  model/      entities and invariant-bearing values
+  port/       consumer-owned capability traits
+  service/    multi-entity domain operations
+  snapshot/   bounded public checkpoint values
+  adapter/    concrete platform or integration mechanisms
 ```
 
-GUI currency input and formatting can transfer to another GUI library, so `gui::lib::currency` is reasonable.
-Workspace billing policy is not: it belongs to the product or workspace domain. If currency handling later
-becomes useful outside GUI systems and loses all GUI vocabulary, it can move to `packages/`.
+These roles are optional, not ceremonial. Production code stays at or below 500
+lines; `#[cfg(test)]` items and test-only files do not consume that budget. Prefer
+inline unit tests. If a companion file is necessary, use singular `_test.rs`, never
+`_tests.rs`.
 
-Prefer a precise namespace over a broad `lib` file. `lib/currency`, `lib/layout`, or `lib/text` communicates
-ownership; `lib/helpers.rs` does not.
-
-### API surfaces
-
-`api` is every supported way another party interacts with a crate. Rust methods, events, commands, and wire
-protocols are all API surfaces. The crate root re-exports the small, stable Rust surface; implementation
-details remain private.
-
-```rust
-// lib.rs
-pub use api::{CreateWorkspace, WorkspaceEvent};
-pub use model::{Workspace, WorkspaceId};
-pub use service::Workspaces;
-```
-
-Protocol APIs live below their protocol:
+Rust filenames contain at most two semantic words. When three or more sibling
+files share a first snake-case word, promote that word into a one-word noun module:
 
 ```text
-api/
-  http/
-    request.rs
-    response.rs
-    workspace.rs
-  rpc/
-    command.rs
-    event.rs
+launcher/
+  mod.rs
+  plan.rs
+  plan_test.rs
+  wire.rs
+  wire_test.rs
 ```
 
-Wire models have one owner. A client imports the server/domain-owned request and response types instead of
-copying them. Protocol handlers are thin adapters:
+Declarations inside a noun module do not repeat the module noun. Struct, enum,
+trait, free-function, inherent-method, and trait-method names contain at most three
+semantic words; acronym runs count as one word. These naming rules apply equally
+to production and test code. Methods implementing an external trait retain the
+trait's imposed spelling; they are not locally owned declarations. Longer owned
+names are evidence that ownership or the module boundary needs reconsideration.
+Split by cohesive ownership, never numbered fragments or `include!`.
 
-```rust
-pub async fn create(
-    State(workspaces): State<Arc<Workspaces>>,
-    Json(request): Json<CreateWorkspace>,
-) -> Result<Json<WorkspaceView>, HttpError> {
-    let workspace = workspaces.create(request.try_into()?).await?;
-    Ok(Json(WorkspaceView::from(workspace)))
-}
-```
+Do not use several `#[path = "noun/child.rs"]` declarations to inject independent
+child directories into one flat parent namespace. Declare each noun through its
+natural `noun.rs` or `noun/mod.rs` boundary, keep its implementation private, and
+re-export only its deliberate public contract. Explicit paths are reserved for
+narrow test or target-conditioned platform wiring. Likewise, three or more sibling
+files must not repeat an implementation-role suffix such as `_registry`, `_port`,
+or `_adapter`; organize them by the nouns that own their state and behavior.
 
-Extraction and response encoding belong to HTTP. Validation of workspace rules belongs to the model;
-orchestration belongs to `Workspaces`.
+## Application boundaries
 
-Framework handlers may remain free functions because the framework owns their extractor signature. For
-example, `info(State(state): State<DockerState>)` is an Axum adapter, not misplaced `DockerState` behavior.
-Do not move a handler onto state mechanically. Keep its body limited to extraction, thin response
-orchestration, error translation, and encoding; reusable domain behavior still belongs to models or services.
-Mark a reviewed handler with `#[hl_design::adapter]`. The marker is valid only with a recognized framework
-extractor signature and is not a general free-function suppression.
+`src/containers/hl-engine` is the engine composition root. It owns:
 
-### Services
+- public configuration and validation;
+- CLI and environment capture;
+- platform and execution-backend selection;
+- concrete adapter construction;
+- the supported Rust API;
+- the opaque C ABI;
+- packaging and target-specific linkage.
 
-A service implements a use case by composing models, domain libraries, and ports. It is the layer called by
-an endpoint or application. A service should speak in domain nouns and typed operations, not expose its
-dependencies as a generic state bag.
+The engine wires capabilities and delegates behavior. It must not become the owner of
+filesystem, descriptor, syscall, task, or execution algorithms.
 
-```rust
-pub struct Workspaces<I, E> {
-    images: I,
-    engine: E,
-}
+`src/apps/husklet` is the product composition root. It owns product configuration,
+GUI/CLI behavior, backend selection, and cross-domain orchestration. It must delegate
+container, workspace, terminal, filesystem, and engine behavior to their owners rather
+than becoming a service locator or god object.
 
-impl<I: Images, E: Engine> Workspaces<I, E> {
-    pub async fn open(&self, config: WorkspaceConfig) -> Result<Workspace, OpenError> {
-        let config = config.validate()?;
-        let image = self.images.resolve(config.image()).await?;
-        let process = self.engine.start(ProcessConfig::from_workspace(&config, image)).await?;
-        Ok(Workspace::opened(config, process))
-    }
-}
-```
+## Tests
 
-The service owns the workflow, not filesystem or HTTP mechanics. Keep an endpoint slim enough that the same
-service can be called from HTTP, CLI, GUI, or tests.
+- Unit tests live beside the owning source.
+- Crate `tests/` exercise only that crate's public contract.
+- Repository `tests/` contains multi-package, process, hardware, application, and
+  engine-in-engine tests.
+- Tests are deterministic, isolated, bounded, and responsible for their resources.
+- Fixes begin with a failing behavioral test when feasible.
+- Differential tests run the same operation against C and Rust and compare results,
+  errno, state, ownership, ordering, and serialized data.
 
-Not every entity needs a service. An endpoint may call a model directly when the operation is local and
-pure. Introduce a service when a use case coordinates multiple peers, I/O capabilities, or a transaction.
+A directory under `src/` must not exist only to aggregate detached test fragments.
+When two or more Rust files in a source directory are all test-only, move each test
+beside the production noun it exercises and prefer an inline `#[cfg(test)]` module.
+Test code must not import behavior or fixtures from a sibling test module. Put
+genuinely shared, behavior-free fixtures behind one explicitly declared
+`test_support` module owned by the production boundary instead.
 
-### Ports and adapters
+Required migration gates are:
 
-A port is a narrow domain-owned trait for a capability that may vary by platform, process, backend, or test.
-The domain names what it needs; an adapter translates a concrete mechanism into that contract.
+1. formatting, design lint, Clippy with warnings denied, unit and documentation
+   tests;
+2. C/Rust ABI and differential tests;
+3. both guest ISA compatibility and production tests;
+4. checkpoint and cross-checkpoint;
+5. native ARM64 macOS/Linux, AMD64 Linux, and AMD64 Windows target checks;
+6. nested engine and performance tests;
+7. ordinary container and interactive terminal workflows through Husklet.
 
-```rust
-pub trait Engine {
-    type Error;
+### Reproducible Nix driver
 
-    async fn start(&self, config: ProcessConfig) -> Result<Process, Self::Error>;
-    async fn stop(&self, id: &ProcessId) -> Result<(), Self::Error>;
-}
-
-pub trait Images {
-    type Error;
-
-    async fn resolve(&self, reference: &ImageReference) -> Result<Image, Self::Error>;
-}
-```
+`flake.lock` pins the development and verification toolchain. Use the flake as
+the repository-level entry point:
 
 ```text
-ports/engine.rs          domain requirement
-adapters/container.rs    `hl-container` implementation backed by `hl-engine`
-adapters/memory.rs       deterministic test implementation
+nix develop
+nix build -L --option cores 0 --max-jobs auto
+nix flake check -L --option cores 0 --max-jobs auto
 ```
 
-Do not create a trait solely to rename one concrete type. Add a port for substitution, platform separation,
-testing, or a stable architectural boundary. Keep traits small; split unrelated capabilities rather than
-building a repository or service locator for the whole application.
+The default shell exposes both Linux guest compilers and the retained
+`*_LINUX_CC`, `*_LINUX_STATIC_CC`, `*_DYNAMIC_LOADER`, and `*_DYNAMIC_LIBC`
+contracts. Interactive verification must override conservative environment
+defaults and size `CARGO_BUILD_JOBS` and `HL_COMPAT_JOBS` to the host's logical
+CPU count unless measured RAM, disk, thermal, or lifecycle pressure requires a
+lower bound. The named flake checks alias one comprehensive verification
+derivation deliberately; use its internal parallelism rather than launching
+duplicate full Cargo builds that contend for the same dependency graph.
+The derivation must remain offline, locked, warning-strict, and responsible for
+format, design lint, lint cases, workspace and documentation tests, and checked
+compatibility metadata. Do not reintroduce retained-tree CMake, Ninja, clang, or
+cppcheck dependencies unless Rust-owned build code actually requires them.
 
-The composition root supplies implementations:
+## Design lint
 
-```rust
-let engine = Containers::builder(container_config).build().await?;
-let images = Registry::open(registry_config)?;
-let workspaces = Workspaces::new(images, engine);
+`src/packages/hl-design-lint` is the repository architecture linter. Run:
+
+```text
+make design-lint
+make lint-cases
 ```
 
-Composition ownership does not make `Application` the owner of every workflow. Keep it thin: construct and
-expose cohesive domain services, then delegate behavior to them. Do not put `show_workspaces`,
-`handle_workspace`, `open_terminal`, `remove_workspace`, and every other feature transition on one
-application type merely because it can reach every dependency. That creates a service locator and a god
-object.
+It enforces dependency direction and cycles, source ownership, ambient environment
+access, platform-command boundaries, catch-all modules, oversized files, ceremonial
+structure, and other reviewed design rules.
 
-Prefer navigation through the owning capability:
+`lint/errors/` contains unclassified generated findings. `lint/check/` contains
+temporarily classified findings. Both are review queues, not suppressions.
 
-```rust
-application.workspaces().show();
-application.workspaces().get(id)?.show();
-application.workspaces().get(id)?.terminal().open();
-```
+`lint/examples/positive.md` contains approved transformations.
+`lint/examples/negative.md` contains rejected transformations and their failure
+modes. The corpus began from Husklet's reviewed examples; engine-specific decisions
+must be added as the rewrite exposes real cases.
 
-Here the application-level workspace facade may combine the workspace domain entity with its product view
-and navigation behavior. The lower-level workspace model remains independent of GUI types. `Application`
-wires the facade; `Workspaces` owns collection workflows; the selected application workspace owns
-single-workspace behavior.
+### Lint-case protocol
 
-`Application` may register handlers for workspace events because connecting capabilities is composition-root
-work. Keep registration declarative and handler bodies thin: translate a cross-capability event when needed,
-then delegate to the owner.
+Before resolving a generated lint case, read:
 
-```rust
-application.workspaces().on(Event::Open, {
-    let workspaces = application.workspaces();
-    move |id| workspaces.get(id)?.show()
-});
+- this entire `AGENTS.md`;
+- all of `lint/examples/positive.md`;
+- all of `lint/examples/negative.md`;
+- the current source, callers, sibling behavior, owning manifest, and nearby tests.
 
-application.workspaces().on(Event::Settings, {
-    let settings = application.settings();
-    move |_| settings.show()
-});
-```
+A generated case is evidence and may be stale. Refactor into the correct entity,
+package, port, adapter, or inline behavior when ownership is clear. Do not add a
+classification, allowance, dependency, wrapper, or empty abstraction merely to
+make the queue pass.
 
-Do not interpret permission to register events as permission to implement workspace state transitions,
-rendering, persistence, or terminal workflows on `Application`. Registration says who receives intent; the
-receiving capability still owns what that intent means.
-
-Replacing the container engine changes construction in `husklet`, not workspace use cases or endpoints.
-That is the practical test of the boundary.
-
-### Review a placement
-
-Before adding code, state its owner and reason:
-
-| Logic | Place | Reason |
-|---|---|---|
-| Read bytes atomically from a path | `packages/hl-fs` | Generic filesystem mechanism |
-| Parse a number from HTTP request state | `packages/hl-httpio` | Generic protocol extraction |
-| Validate workspace memory limits | workspace `model` | Domain invariant |
-| Render a generic currency input | GUI `lib/currency` | Transferable within GUI domains |
-| Open a workspace from image + engine | workspace `service` | Multi-capability use case |
-| Define what workspace execution requires | workspace `ports::Engine` | Stable replaceable boundary |
-| Translate `hl-container` calls into `Engine` | application adapter | Concrete integration |
-| Decode `POST /workspaces` | `api/http` | Transport adapter |
-
-A placement is wrong when moving or replacing one mechanism requires edits across unrelated models,
-services, and endpoints. A placement is over-abstracted when its interface has no plausible second
-implementation, test seam, platform boundary, or stable contract.
-## Coding
-
-### Types and ownership
-
-- Start with the smallest meaningful entity; compose entities into collections and services.
-- Put behavior on the value it primarily uses. Separate deterministic logic from I/O.
-- Make invalid states unrepresentable with constructors, newtypes, and enums—not strings or related booleans.
-- Borrow for observation; transfer ownership for storage or transformation. Clone only when ownership
-  requires it.
-- Accept slices and borrowed strings when ownership is unnecessary. Use the shortest useful lifetime.
-- Choose `Box`, `Rc`, `Arc`, locks, atomics, and channels for their ownership semantics—not by habit.
-- Match numeric representation to the domain. Use integers or fixed precision for exact quantities; floats
-  represent approximate values.
-- Use checked arithmetic where overflow is invalid and saturating arithmetic where clamping is the contract.
-- Reserve collection capacity when a meaningful bound is known; do not allocate or collect intermediates
-  without need.
-
-### Boundaries and errors
-
-- Give each trait one capability. Prefer standard traits and concrete code to ceremonial abstractions.
-- Keep contracts at the domain root and external mechanisms in adapters.
-- Cross boundaries with owned typed values. Do not copy models, expose globals, or branch on backends.
-- Return typed `Result` errors from libraries; add actionable context at application and transport
-  boundaries. Do not discard failures or panic for recoverable input.
-- Do not use `unwrap` or `expect` in library paths unless a local invariant proves failure impossible and the
-  invariant is evident or documented.
-- Use `?` for propagation. Handle intentionally ignored failures explicitly and explain why they are safe.
-- Validate untrusted input at its boundary. Parameterize external query/protocol values; never build commands
-  by interpolation.
-- Isolate `unsafe`; every block states the invariant that makes it sound.
-- Minimize unsafe scope. FFI and byte-layout types use an explicit representation; avoid `transmute` when a
-  typed conversion exists.
-- Use builders only when construction has many optional or order-independent choices; otherwise use a
-  constructor.
-
-### Concurrency
-
-- Introduce concurrency only for real parallelism or latency. Do not block an async executor; define task
-  ownership, cancellation, and shutdown. Prefer messages or atomics before shared locks.
-- Move blocking or CPU-heavy work off async executors. Bound spawned work and preserve result/error handling.
-- Avoid holding locks across `.await`; reuse long-lived clients and resource pools.
-
-### Delivery
-
-- Keep transport handlers thin: decode, call domain behavior, map errors, encode.
-- Reject unsupported meaningful input. Never accept configuration the runtime ignores.
-- Keep libraries free of product policy and demonstration binaries.
-- Until Husklet has a public release, internal persisted formats, unpublished Rust APIs, and unpublished
-  protocols have no compatibility contract. Change them directly, delete obsolete readers and migrations,
-  and fail clearly on stale data instead of carrying fallbacks. Do not retain permanent categories for
-  obsolete internal implementations. This does not permit dropping compatibility with external standards
-  Husklet implements, such as Docker, OCI, Wayland, CUDA, Vulkan, or host platform APIs; name those paths by
-  the exact protocol version, extension, or deprecated symbol they support.
-- Treat external executables, command-line flags, filesystem ownership, permission bits, and host utilities as
-  platform adapters. A well-shaped entity around `Command` improves ownership but does not make the mechanism
-  portable. Keep the domain contract platform-neutral, select the adapter at composition, and test capability
-  behavior on every supported host rather than assuming executable names or GNU/BSD flag compatibility.
-- Write a failing behavioral test when fixing a defect or adding testable behavior. Test exact outcomes, edge
-  cases, errors, public workflows, and invariants; use property tests when examples cannot cover the state
-  space.
-- Keep repository tests unit-scoped and beside their owning source. Tests that launch processes, compile guest
-  programs, require host applications or hardware, automate platform UI, or cross package/runtime boundaries
-  belong in `../e2e`, where they consume built artifacts and public APIs.
-- Keep tests deterministic, independent, and responsible for their resources. Expected panics name the
-  expected condition; production code does not panic merely to simplify a test.
-- Refactor incrementally; prove behavior, protocols, failures, and relevant performance.
+Append a positive or negative example only after user approval. Preserve the
+reasoning, not only the final code.
 
 ## Style
 
-- Every line and abstraction has maintenance cost; delete code that carries no behavior or contract.
-- Use precise nouns. Collections/services may be plural: `Container`, `Containers`, `Layer`, `Registry`.
-- Use `Config`, `Request`, `Event`, or `Result` only when they distinguish domain values.
-- Name event and state types as nouns, not verbs, commands, adjectives, or past participles. Prefer `Change`,
-  `Snapshot`, `Selection`, or `WorkspacesEvent` to `Changed`, `Selected`, or `Updated`. Variants may describe
-  occurrences such as `Event::Removed(id)` because the enum supplies the noun identity. Choose the noun from
-  what the value contains and guarantees; do not append `Event` merely to rescue an otherwise vague name.
-- Avoid `Manager`, `Helper`, `Util`, `Impl`, vague abbreviations, and repeated module prefixes.
-- A trait or type is already a namespace. Method names must not repeat the receiver name as a prefix or
-  suffix: prefer `Directory::create`, `Archive::extract`, and `Workspace::remove` to
-  `Directory::create_directory`, `Archive::archive_extract`, or `Workspace::remove_workspace`. Retain the
-  repeated word only when it names a genuinely different domain concept rather than the receiver itself.
-- Do not create catch-all modules or directories such as `core`, `common`, `shared`, `util(s)`, `helper(s)`,
-  or `misc`. Name code by its entity, capability, algorithm, or external mechanism. Reuse does not define
-  ownership.
-- Treat a long type name as a namespace or modeling smell before abbreviating it.
-- Prefer short single-word module and file names.
-- A file remains a file until cohesive child modules justify a directory.
-- Split modules by responsibility; mirror equivalent domain shapes where useful.
-- Keep every Rust production and test file at or below 500 lines. Split by cohesive entities, adapters, or
-  test behaviors; numbered fragments, `include!`, and oversized test monoliths do not create boundaries.
-- Prefer receiver methods and standard conversions to orphan helpers. Extract a one-use function only when it
-  names construction, isolates testable logic, or clarifies a real operation.
-- Do not write getters that merely return a field unchanged. Public data models may expose fields directly
-  when mutation cannot violate an invariant. Add a method when it validates, computes, normalizes, controls
-  mutation, hides representation that callers must not depend on, or fulfills a stable trait contract.
-  Hypothetical future encapsulation does not justify present boilerplate.
-- Prefer standard Rust traits when they express the complete contract: `Display` for canonical user-facing
-  text, `FromStr` for validated textual construction, `From`/`TryFrom` for conversions, and iterator traits
-  for collection behavior. Do not create `format_*`, `parse_*`, `to_*`, or collection traversal helpers that
-  duplicate a well-known trait. Implement a named method instead when multiple policies exist or the
-  operation needs arguments that the standard trait cannot express.
-- Keep the happy path shallow with early returns and small named operations.
-- Follow Rust naming conventions: types and traits use `UpperCamelCase`, values and modules `snake_case`,
-  constants `SCREAMING_SNAKE_CASE`.
-- Derive or implement `Debug` for inspectable domain values. Derive other traits only when their semantics
-  are correct.
-- Use type aliases for readability, not domain distinction; use newtypes when values must not mix.
-- Do not wrap a primitive or standard collection merely to make it look domain-driven. A newtype must enforce
-  an invariant, prevent meaningful value mixing, own cohesive behavior, or provide a stable boundary. Prefer
-  `Vec<String>` directly when a wrapper such as `Shell(Vec<String>)` would only forward vector operations.
-- Prefer exhaustive matches for domain state. A wildcard must mean all remaining variants by contract.
-- Comments explain contracts, safety, compatibility, or non-obvious reasons; names explain mechanics.
-- Keep public APIs minimal. Rustdoc public contracts, invariants, errors, panics, safety, and non-obvious use;
-  do not document the obvious to satisfy a quota.
-- Keep lint suppressions local and justified. Do not hide warnings at crate or workspace scope for convenience.
-- Search all callers before renaming. Do not shorten names when re-exports become ambiguous.
-
-# Comments
-
-Avoid excessive comments, short comments are fine, usually handy to tell what structure should do.
-Everytime you add new functionality ask if domain/folder is right what is correct approach to structure
-the api so its DX friendly.
-
-# Running a fleet
-
-Keep roughly six agents busy at all times. An idle agent is wasted capacity; a manager waiting on one agent
-while five sit finished is the common failure.
-
-## Keep agents alive; enqueue, do not respawn
-
-**Send follow-up work to an existing agent rather than spawning a new one.** A finished agent still holds
-everything it learned: the traces it captured, the theories it discarded and why, which files it already read,
-which measurements were provenance-clean. A fresh agent starts blind and rebuilds that context from scratch,
-which costs both tokens and wall-clock, and it rebuilds it *imperfectly* — it will re-chase leads the previous
-agent already eliminated.
-
-Six agents each holding half a million tokens of accumulated context is the desired state, not a problem to
-manage. Prefer a long-lived agent with a deep context window over a short-lived one with a clean slate.
-
-Spawn a new agent only when the work is genuinely a new area with no useful overlap, or when file ownership
-would collide with what a live agent is holding.
-
-A corollary: when an agent reports, reply to it. Even "nothing more for now, stand by" is better than letting
-it lapse, because the next question in that area should go to the agent that already has the answers.
-
-## Ownership and collisions
-
-Partition by file ownership and state it explicitly in every assignment: what the agent owns, and which paths
-other agents are live in. Two agents editing one file will silently clobber each other, and the manager will
-commit the wreckage. Assign separate workspaces too — two agents on one workspace will `pkill` each other's
-domain workers and invalidate each other's runs.
-
-Tell each agent what the others are doing in the same crate. An agent that knows a neighbour owns
-`service/frame/` will report a defect there instead of fixing it, which is the outcome you want.
-
-## What to tell every agent
-
-- The bundle hashes, and to **read them itself** rather than trusting the message. Bundles move.
-- Not to rebuild or hot-swap the app bundle; the manager sequences builds from committed source in an
-  isolated worktree, because a moving source tree makes the bundler refuse and mixed provenance makes every
-  number worthless.
-- To report a clean negative plainly. Killing a theory is a result. An agent that discards its own
-  well-developed hypothesis on provenance grounds has done the job correctly.
-- That a number without provenance is worse than no number.
-
-## Bind a measurement to its target
-
-Three wrong conclusions in one session came from measuring a real thing about the wrong target: the
-window server listed *after* the probe exited, the *worker* pid sampled instead of its `__compositor`
-child, and clicks aimed at a *different process's* windows. Each instrument was working; the binding was
-wrong.
-
-Bind every measurement to the process under test and to identifiers that process reported — a compositor
-pid you resolved, a window number its own log emitted, a bundle hash you read yourself. Never to a name
-like "Husklet", never to whatever happens to be on screen, never to a hash quoted in a message.
-
-Ask a process where its output goes rather than assuming the conventional path:
-`lsof -p $(pgrep -f 'worker domain <ws>$') | grep '\.log'`. Two workers racing at startup can leave the
-winner writing somewhere else entirely, and "the log was empty" is only evidence once you have confirmed
-you are reading the log that process writes.
-
-`strings` cannot verify a diagnostic whose level or values are runtime `{}` substitutions — the message
-never appears contiguously in the binary. Check a distinctive literal tail instead.
-
-Selecting a different GL inside a workspace is harder than it looks, for reasons that are easy to
-misdiagnose. Caller environment **is** passed through — that was measured — but the graphics device
-prepends its own driver directory to `LD_LIBRARY_PATH`, so the driver search finds Husklet first, and
-Mesa's selection variables (`GALLIUM_DRIVER`, `LIBGL_DRIVERS_PATH`, `LIBGL_ALWAYS_SOFTWARE`,
-`__EGL_VENDOR_LIBRARY_FILENAMES`) reach the process and do nothing, because Husklet's shim never
-implemented them. A harness that sets them and believes it selected another driver is comparing Husklet
-with itself. Prove which driver you got — `dladdr` on an entry point, plus `GL_RENDERER` — rather than
-assuming a variable took effect. Note `env -i` selects correctly and strips `HL_GPU_EXEC`, after which the
-driver links shaders and returns out-of-memory on everything, which reads as catastrophic regression.
-
-Design a case so the wrong answer names its own cause. Uploading each mipmap level as a distinct flat
-colour made the level actually sampled fall straight out of the pixels, which turned a vague "mipmapped
-draws go flat" into "always samples the smallest level, even under a non-mipmap filter" in a single run.
-
-Isolate at the finest granularity the work allows. Moving a differential from one process per family to
-one per expression turned two apparent defects into collateral from an earlier wedge — they agreed once
-isolated — and let three silent-failure triggers each name themselves.
-
-When a test's comment states a specification requirement, check the specification rather than the comment.
-Two tests were found asserting the opposite of the spec **in prose**, which makes them read as
-authoritative to anyone auditing them; one claimed that a successful call must not clear a pending error,
-and was green throughout a period when that bug blocked an entire conformance suite.
-
-Quote a hash, a pid or a measurement only in the same message as the command output that produced it,
-and quote a figure you were given verbatim rather than from memory. An agent once stated a bundle hash
-before reading it and happened to be right — which is worse than being wrong, because it launders a guess
-into a confirmation that nothing downstream can distinguish from a real one.
-
-The checks we build into a harness are usually the checks the report needs too. That same agent's
-harness refuses a run whose renderer is not the one it asked for, and it did not apply that standard to
-its own prose.
-
-Check that two hypotheses predict **different** observables before running the test meant to separate
-them. A discriminator was once run where both candidate explanations predicted the same image; it returned
-a confident-looking result that meant nothing, and the flaw surfaced only when the predictions were
-re-derived afterwards.
-
-A differential finds *where* something is wrong and is silent on *why*. Three times in one session a real
-disagreement had a root cause different from its obvious reading — once the driver under test was the more
-correct side, once forty differences were the harness's own rounding ties, and once a depth defect took two
-wrong framings before the third was right. Budget for that gap; a disagreement is a location, not a
-diagnosis.
-
-When several agents share a working tree, commit with `git commit --only -- <paths>`. Staging by path does
-not reserve the index: a later `git commit` takes whatever is staged, so one agent's careful staging plus
-another's careful message produced a commit whose diff and message describe different work. `--only` binds
-the paths to the commit itself and is immune to what else is staged.
-
-Never let a tool failure become a property of the subject. A probe for the default gateway reported "none"
-— which reads as no route at all and would have aimed the investigation at a routing fix — because it used
-an extension absent from the guest's awk, and a fallback laundered the error into a confident answer. A
-probe that could not run must say so, distinctly from a probe that ran and found nothing. Print the raw
-data beside the parsed answer and the difference is visible.
-
-Ask of every instrument: what would this print if it were measuring nothing at all? Four separate
-instruments in one session returned a plausible, stable, entirely empty measurement — a comparator that
-read zero items and called them clean, a process check whose pattern matched its own wrapper so "still
-running" could never be false, a set of differences produced by the harness's own arithmetic, and a case
-that reported a confident defect through a capture path blind to its subject. Every one looked like a
-result, and the answer to the question was usually "exactly what it just printed". Asking is cheaper than
-any diagnosis it prevents.
-
-An instrument written to avoid a fault is not immune to that fault. A harness built specifically to
-report a frame-time DISTRIBUTION rather than a mean — because a mean hides a bimodal shape — then
-summarised the memory series it collected as `last - first` and reported 45% growth. The process had
-ramped during startup and been flat for ninety seconds afterwards, so the number was a ramp read as a
-trend, and it pointed at a growing structure that was not there. Measure growth from a SETTLED baseline
-and report the ramp separately. More generally: the discipline you applied to the subject does not
-transfer itself to the instrument you wrote next, and the summary statistic is where it goes missing.
-
-A pass condition satisfied by the ABSENCE of the measurement is not a pass condition. A windowed case
-was specified to require zero offscreen frames, which a bundle emitting no presentation heartbeat at all
-reports — the identical zero a perfect run reports, from an instrument that never spoke. The fix is not a
-better threshold: it is to require the measurement to EXIST as a separate condition, fail when it does
-not, and never let "not measured" resolve to the good outcome. Ask of every green criterion which of
-"the subject behaved" and "the instrument said nothing" it is actually distinguishing.
-
-A case that cannot observe its own subject must not be readable as green. Mark it not-measured in the
-harness itself and make it fail, not merely say so in a report — and where an invariant holds but has no
-power against the symptom it appears to address, record that scope beside the result.
-
-An enrichment needs a base rate before it means anything. Two case families were checked for how often a
-failing name mentioned a layer or a mip level: one came back at a hundred percent and was worthless,
-because every name in that family contains the word. The other was an eight-fold enrichment over its own
-base rate and was real. Without the control both look like the same finding.
-
-A single case's log from inside a batched run is not evidence about that case. One trace showed an object
-generator returning a null name with no error — a clean, specific, specification-violating story that
-explained several failing groups at once and matched a known-defect note. Probing the driver directly
-showed the entry point working perfectly; the zeros came from a context wedged earlier in the same process.
-The story was coherent and it was about the neighbours.
-
-Returning a type's default on a failure path makes "could not reach the subject" indistinguishable from
-"the subject answered zero". A context that could not be acquired returned zero from every entry point,
-including an impossible value from a status query and an empty error queue — because the error register
-lived behind the very thing that could not be reached.
-
-An incoherent profile is evidence about the instrument. A driver scoring ninety-seven percent on blending
-and a hundred percent on the shader API while scoring zero on drawing is not a coherent picture of a
-driver, and it was reported as one for hours. When results are internally implausible, suspect the harness
-before the subject — three harness defects in a single session all produced plausible-looking output, and
-the worst of them made the driver look broken in exactly the places a real driver plausibly breaks.
-
-The same test applies to ONE defect's shape, not only to a profile across families, and it is easier to
-miss there because a single wrong value looks like an ordinary bug rather than an implausible picture.
-Seven arms of an eight-arm select chain came back byte-exact and the eighth was wrong in one byte. That
-was written up as a value-merge defect at the join, with a real structural asymmetry to point at — the
-eighth arm was the only one reaching the store by falling through rather than by a taken branch — and the
-story survived a reduction to a repository test before the constant itself was checked. A driver that
-implements seven arms of one mechanism perfectly and the eighth wrongly by one bit is not a coherent
-subject; the harness had a hand-converted decimal in it, `4286545791` where its own comment said
-`0xFF7F7FFF`, and the driver had been emitting exactly what it was asked for.
-
-Two things generalise. Rank the cheaper hypothesis first by what is easy to get wrong rather than by what
-is interesting to find: a hand-typed constant is cheaper to check than a lowering, and checking it costs
-one line. And note that this was harness DATA, not harness code — a literal in a fixture, which no amount
-of reviewing the harness's logic would have caught, and which the harness's own well-written assertion
-correctly flagged while being powerless to attribute. Where a value must agree in two places, write it in
-a form where the two are textually identical, so drift is visible on the line instead of discoverable
-only by arithmetic.
-
-Compare each guard against the guard of the thing it guards. A boundary that asked whether any draws had
-been recorded stood in front of a builder that also accepted copies, so a frame whose only work was a copy
-was discarded before the builder ever saw it — and the same disagreement appeared again three lines above a
-partition that routed exactly the work its guard ignored. This is cheaper to find than a defect inside the
-thing being guarded and it fails the same way: silently, with no error and stale pixels. Ask not only what
-a function refuses, but what its callers refuse to offer it.
-
-A test driven at a value both sides round to the same answer is testing nothing. Four rows compared a small
-integer written into a normalised sixteen-bit attribute, which is a fraction that rounds to zero
-everywhere, so three agreed on zero while measuring nothing and a fourth hid a real disagreement behind the
-same zero. Driving at the endpoints instead is both the honest test and the sharper one, since a conversion
-that divides by the wrong constant is invisible mid-range and visible at the top.
-
-Resume paths overstate completeness. Three separate measurement failures in one session were all in a
-resume: an isolation filter that considered only the cases remaining after a resume while claiming to have
-covered every failure, a checkpoint that wrote a zero change-count for work nobody had finished counting,
-and a counter carried across a resume that double-counted what the earlier invocation had already done.
-All three failed in the same direction, because a resume is written as an afterthought to a happy path that
-never had to describe partial work. Record what was done by name rather than by count, and make the summary
-state which of "not started", "complete" and "cut short at N of M" it is in.
-
-An output nobody produced is not the same defect as a wrong value, and it hides better. A structure chained
-by the caller was never written at all, and the neighbouring tests passed because they zeroed the structure
-before the call — the answer was right by the caller's own initialisation, not by anything the subject did.
-Poison an output buffer before every call that is supposed to fill it, or a subject that ignores it passes
-on your zeroes.
-
-A differential cannot find a divergence in behaviour neither side was known to exercise. One executor
-performed an operation inside a render pass and the other silently ignored it, and the comparison battery
-never caught it because the battery only compares programs both executors were already known to handle.
-That is a coverage shape, not an oversight: the instrument is blind to exactly the disagreements nobody
-anticipated, which are the ones worth finding.
-
-A diagnostic that cannot fire in the build that ships is closer to a missing one than to a useful one, and
-it is worse than missing because the source reads as well-instrumented. Warn, info and debug are compiled
-out of release here and the error level is masked by a default of no tags, so a whole layer's richest
-diagnostics — a refusal carrying its reason, its occurrence count and its rate — emit nothing on a shipped
-build. Several discard lines were added in one session specifically to make a failure attributable, and
-they make it attributable in a debug build only. Before claiming an instrument exists, check the level it
-emits at and whether anything enables it.
-
-The reader's half of that rule: a harness that keys its verdict on a diagnostic it did not enable is
-measuring its own configuration, and it reports the subject as SILENT. That is a false negative wearing
-the costume of a finding, and it is worse than a missing measurement because it arrives with a plausible
-story about the thing being tested. A windowed case reported that its bundle emitted no presentation
-heartbeat; the heartbeat is at error level, survives release, and beats on a surface's first frame — it
-was suppressed only because the harness set no `HL_LOG` and the tag mask starts empty. Three candidates
-were separable and worth separating: wrong level, never emitted on that path, or nobody enabled the tag.
-Enable the tag from inside the harness rather than from the invoking shell, so the measurement cannot
-depend on how someone happened to launch it.
-
-In this codebase a comment asserting a CAPABILITY is a hypothesis, and two found in one day had both
-hidden a real defect. `submit.rs:111` said a refused batch leaves both sides agreeing it did not happen,
-citing a residency mirror that is byte accounting and silent about the id caches that actually
-desynchronised — one refused pipeline then cost a whole Chrome session instead of one frame.
-`vertex.rs:83` said integer vertex attributes are excluded from float conversion, describing a rule the
-code cannot follow because the flag it keys on is hard-coded false on that entry point. Neither named a
-check, both foreclosed the exact question that mattered, and both sat next to code that had been
-carefully fixed for a neighbouring reason. When a comment explains why something is SAFE, find the test
-that would fail if it were not; if there is none, the comment is the defect's hiding place.
-
-Rank comments for audit by "claims a rule, cites no check". Six comments in one crate were found asserting
-rules the code did not implement — a rounding mode, a claim of matching another backend, a promise of
-refusals, and two sets described by a membership rule they did not follow. Every accurate comment in the
-same files named a specific cross-check: a test, a fuzzer, a divergence count. Every defective one named
-nothing checkable. That filter is far cheaper than re-deriving the arithmetic and it found all six.
-
-A set documented by a rule it does not follow is the dangerous direction, because the next person adds a
-member the rule admits and the code cannot serve. Document membership as an obligation the entry must meet,
-not as a category it falls into.
-
-A comment asserting an impossibility is load-bearing in a way an ordinary comment is not. It does not
-describe behaviour, it forecloses an option — so the next reader routes around it instead of evaluating it,
-and the routing becomes more code citing the comment. Re-derive an impossibility against the thing it
-claims about: one enumeration and one descriptor struct refuted a claim that had stood in five places.
-A shipped diagnostic explaining why something cannot be done deserves the same scrutiny as the code path,
-because it is the reason nobody investigates it — and unlike a comment it has an audience, so it goes on
-being believed after the code stops being true.
-
-The shared working directory is not versioned, and one documentation directory in the repository is
-ignored. A finding written to either exists only until that directory does. Land anything worth keeping in
-a tracked path — beside the tests it explains is the best place, because the person who needs it is already
-opening that file.
-
-A guard written against the symptom is not a guard against the condition. Two vertex attributes sharing a
-buffer are split into separate slots only when one would not fit inside the other's stride — which is a
-test for whether the host will reject the layout, not for whether the strides agree. An attribute whose
-stride differs but happens to fit is read at the wrong rate with no error at all. The comment above it
-names the host's rejection message as the thing being avoided, which is the tell.
-
-An assertion inside a conditional measures nothing when the condition never holds. A check was wrapped in
-"if the call succeeded" for a case that cannot succeed in an in-process test, so reverting the code it
-guarded did not fail the test. Assert instead that the unreachable case *is* unreachable, so the test fails
-loudly if that ever changes, and put the real assertion where the path is actually taken.
-
-A refusal proves nothing without a path that otherwise works. A test asserting that a bad input is rejected
-was measuring its own broken setup — every submission failed, so a null pointer and a valid one were
-refused identically and the assertions passed while establishing nothing. It surfaced only because a
-control expected to *succeed* also failed. Pair every refusal assertion with a positive control you expect
-to pass, and prove the normal path first.
-
-A generator that writes and reads through the same addressing function agrees with itself. Two controls
-passed against a deliberately broken reference: an off-by-one in the level offset was invisible because the
-program stored level one where it later looked for level one, and a dropped clamp was invisible because
-every base was square and a square base bottoms out at one by one without needing the clamp. Read back
-through a *different* path than you wrote, and choose case dimensions that do not satisfy the rule by
-accident.
-
-A crash agreeing with a refusal is not agreement. A differential comparing two sides through a success-or-
-failure predicate reported green when one side panicked, because a caught panic reads as a refusal. The
-control that should have caught a reverted bounds check passed. Once a panic and a device-validation error
-were made failures in their own right — independent of what the other side did — the same matrix
-immediately reported a second defect it had been hiding.
-
-An exhaustive test can be exhaustive over the wrong space. A round-trip across all sixty-five thousand
-representable half-float patterns could not catch a rounding rule that was wrong at ties, because every
-value it generates is exactly representable and no tie ever occurs — both rules agree on every one. The
-test its author was most confident in had no power over the defect at all. Ask what the generator can
-produce, not how many cases it runs.
-
-"Accepted without error" is not "produced the right bytes". A validation rule was relaxed on the evidence
-that the executor accepted the operation; the differential written to pin the relaxation immediately showed
-the two backends producing different pixels for that one command. The author had stated this exact
-principle about someone else's measurement two hours earlier. Acceptance is a claim about the check, not
-about the result.
-
-Show a new test failing before trusting it to pass. Two executor tests were run against a deliberately
-reverted executor and returned exactly the conformance suite's own failure signature, which is what makes
-them evidence rather than a claim. The same control caught three assertions passing for the wrong reason —
-the reference was refusing the case at creation time, so the test was re-asserting that refusal and
-learning nothing about the operation under test.
-
-Fail-first is not always available, and the honest substitute is mutation rather than a claim. A test
-written after the code it covers has never been observed failing, so nothing yet distinguishes it from a
-test that asserts something always true — and this fleet writes a great many tests after the fact. Break
-the rule the test guards, one rule at a time, and confirm that test and no other catches it. A registry
-landed this way had eight rules reverted individually and every one was caught by its own guard; the
-matrix went into the test file rather than into the report, because the next reader is opening the test.
-Say plainly which of the two you did. **A test whose reversion was never observed to fail is a claim, not
-evidence** — and where fail-first IS available, use it: the same session's next slice landed the plumbing
-with the check deliberately absent, watched the command succeed against a resource another session had
-mapped, then added the check.
-
-A safeguard is only as wide as the build you run it against. Adding a variant to a shared protocol enum
-in `hl-gpu` and running `cargo check -p hl-gpu` enumerates that crate's construction sites and no others —
-and then reads, in a commit message, exactly like exhaustive verification. Four crates consume `GpuError`;
-one was checked and three were invisible, so a variant landed with `hl-cuda`, `hl-gl` and `hl-vulkan`
-non-exhaustive and the shared tree unbuildable for every agent who needed them. Citing the property while
-having exercised it one step short of where it pays is worse than not citing it, because it reads as
-verification to whoever audits the commit later and stops them looking.
-
-So: **anything touching a shared type in `hl-gpu` gets `cargo check --workspace --all-targets` before it
-is committed**, not the single-crate check. More generally, when you name a mechanism as your evidence,
-check that you ran it over the whole domain it claims to cover — the compiler will enumerate every site
-you let it see, and silently none of the ones you did not.
-
-**And `--workspace` is not the whole tree.** It covers the root `members` list, and five crates in this
-repository are deliberately outside it — each declares its own `[workspace]`, each depends on `hl-gpu`,
-and every one of them holds live construction sites of shared wire types:
-
-```text
-src/surface/hl-vulkan/shim/vulkan
-src/surface/hl-gl/shim/egl
-src/surface/hl-cuda/shim/cuda
-src/surface/hl-cuda/shim/cudart
-src/surface/hl-cuda/shim/nvml
-```
-
-They are separate because they build as guest `cdylib`s for another target, driven by their parent's
-build script rather than by the root workspace. The consequence is that the WIDEST check command in the
-repository still misses them: adding a required field to `hl_gpu::Mirror` produced a clean
-`cargo check --workspace --all-targets` while `shim/vulkan/src/transfer.rs` had an unbuildable
-`Mirror` literal in production code, discoverable only by running `cargo check --all-targets` from inside
-that crate. That is the same enumeration argument coming up one radius short a second time, and the first
-time it cost a broken shared tree.
-
-So a shared-type change needs the workspace check **and** a per-shim check, and a commit message that
-cites the workspace check alone is describing a narrower verification than it sounds like. The general
-form of the rule: before citing a build as exhaustive, ask which crates it actually compiles — a
-workspace member list is a curated set, not the filesystem.
-
-When extending a wire format, prefer the form where the compiler enumerates every construction site over a
-catch-all that lets sites silently keep the old meaning. A field added as required failed the build at
-twenty call sites, and that enumeration was the evidence the change had been considered everywhere.
-
-A reference implementation must not reproduce the bug. An oracle asked to clear a subresource it cannot
-address should refuse, not write the one plane it has: the latter makes a differential agree by both sides
-being wrong, which is worse than no reference at all.
-
-A disagreement labelled deliberate or benign is the easiest place in this codebase to hide a defect. Two
-such labels were checked this session and neither survived: one covered a family where the latitude is real
-in some cases and absent in others, and had been applied to all of them; the other covered pairs where the
-reference side had aborted and written nothing at all, so there was no reference answer to be deliberate
-about. Those are unusable, not benign — the difference between a closed question and an unasked one.
-
-Name a failure by what you measured, not by the first plausible cause. A guest fetch failure was called
-"no egress" when the one hard datum available was a TLS certificate verification failure — packets reaching
-an endpoint and a handshake being rejected, which points at a stale certificate bundle rather than at
-routing or name resolution, and has an entirely different fix. Making that distinction is cheap and
-skipping it is expensive.
-
-A guest workspace is recreated per session, so nothing installed in it survives. Any rung that provisions
-packages and looks green may be green only because its container was provisioned while the fetch still
-worked. Treat provisioning as part of the measurement, not as setup that happened once.
-
-Scope a blocker to the layer you actually measured. A failed package fetch inside a guest was reported as
-"host egress is down"; the host had working egress the whole time and only the guest workspace did not.
-The observation was real and the name would have sent the next person to the wrong layer.
-
-An extension string is a promise to every application, not only to the one being traced. A capability was
-measured as safe for the specific consumer whose failure prompted it and unsafe for the general case, and
-the right answer was still to refuse — because the promise is read by callers nobody profiled.
-
-When you widen what the driver advertises, enumerate every path that must serve the widened set before
-shipping it. A format ungate moved seven hundred and eighty-three cases from honestly declined to running
-and failing, because image creation and the format query both learned a new image type and the view path
-did not — three of four paths agreed, and the fourth turned refusals into failures. A capability claimed
-and not honoured is worse than one never made.
-
-A code path reachable only from a running system should be assumed untested until it has been made
-testable. Reverting one such arm broke no test at all, which is precisely how the arm came to be missing in
-the first place. Extracting it far enough to test — with the pre-existing arms as the control proving the
-extraction moved the logic rather than rewriting it — is what makes a green suite mean something.
-
-A guest binds the payload staged into its workspace, not the bundle on the host. Hashing the bundle at run
-time is truthful about the bundle and blind to what the guest loaded: a workspace that failed to restart
-keeps what it was given. Of seventy-four runs in one session, twenty-nine loaded a driver up to twelve
-hours behind the bundle they reported, and one investigation straddled a driver change mid-flight — so a
-before-and-after delta inside it conflates the code change with a driver swap. The predictor was exact:
-every workspace whose log carried a settings-changed-while-running warning produced a stale driver. Compare
-the guest's hash against what the bundle stages, and refuse the run when they differ.
-
-Print the hash of the component whose behaviour you are measuring, not the container it ships in. Two
-agents ran one probe and reported mirror-image results; both read their own logs correctly and both
-harnesses printed an identical header naming the application binary — while their guest driver subtrees
-differed by eleven hours, one of them a stale copy inside an isolated work directory. The disagreement was
-resolvable only because each run also recorded the driver hashes in its own preamble. A header that names
-the coarse artifact will make two incompatible measurements look like one contradiction.
-
-A workspace can reuse a worker that predates the artifact you installed. Three conformance runs were
-measured against a host executor started twelve hours before the bundle under test, because other
-workspaces got fresh workers on install and that one reused its open process. A wire encoding had changed
-in between, so a new guest was talking to an old host and the failure counts nearly doubled — 857 against
-448 for the same group. Check process start times against the artifact's build time, not just the
-artifact's hash.
-
-Bind a number to the hash of the thing that actually determines the behaviour, not to the artifact name it
-was produced under. Four conformance findings were nearly discarded as unusable because they came from a
-differently-named bundle; they were rescued by noticing that the relevant driver subtree hashed identically
-across both, which the results file already recorded. The bundle name was the coarse instrument and the
-subtree hash was the real one.
-
-A test can be right about the thing it was written to defend and still nail down a defect beside it. Four
-repository tests this session asserted the broken behaviour they sat next to; the clearest pair correctly
-insisted that a depth-only clear must not repaint colour, and encoded that as "produces no frame at all" —
-right about its subject, wrong about the neighbour. Where a differential finds *where*, a unit test written
-against a broken driver records *what someone believed*. Check that belief against the spec, not against
-the code it guards.
-
-"Not in my crate" and "not mine to fix" are different questions. An investigation correctly established a
-defect was downstream and stopped there — downstream included a vendored dependency it could have read and
-edited, and the fault was two lines inside it.
-
-An instrument that exists and cannot speak is worse than a missing one, because the source then reads as
-well-instrumented and the next reader trusts its silence. Do not land a diagnostic until a run has shown
-it emitting; if it is added and proves mute, delete it rather than leaving it as decoration. Three traces
-were added to a guest driver in one session and all three printed nothing — read naively that said
-"textures are never uploaded", a dramatic and completely unsupported conclusion, and the only thing that
-stopped it being reported was counting lines by originating crate in the same log. The corollary bit
-immediately afterwards: a control that stays silent has not confirmed anything until you have shown the
-same channel carrying a message you know was sent, because "the subject said nothing" and "this channel
-drops messages" look identical. A raw `eprintln!` added to prove the point vanished too — from the crate
-whose logging was working nine lines later in the same run.
-
-A ratchet reports regression, not correctness, and a floor recorded as acceptable reads as a pass
-forever. `ci/glmark2-baseline.json` records `texture`, `build`, `bump`, `desktop`, `pulsar` and `shading`
-as `pixels-wrong`, and `glmark2_ratchet.py` fails only on a DROP below the recorded grade — so "glmark2 is
-green" means "no scene got worse than the wrongness we already accepted". An investigation into blank
-browser content nearly died on that sentence, written by the agent who had just found the defect: the
-textured scenes were cited as evidence the upload path worked, when every one of them was recorded broken.
-Before citing a green gate as evidence a thing WORKS, read what its baseline actually records; a graded
-floor and a pass look identical from the outside. `ci/rung.py` is the contrasting shape and worth copying
-— it requires `outcome == "pass"` as well as the numeric floor, and `rungs.json` carries an explicit
-`ungated` list naming every stage no floor compares, so the holes are printed rather than implied.
-
-Prefer an instrument that reports a positive count over one that reports absence, and when an
-instrument reports absence, verify it can detect presence at all. Four separate zeros in one session were
-artifacts rather than facts. **A positive count is only trustworthy with a denominator** — `count=100` is
-not a measurement, `count=100 over_ms=381159` is, and the difference between a hundred failures across a
-hundred frames and a hundred across six minutes demands opposite responses.
-
-An instrument that speaks only when the subject acts goes quiet exactly when the subject wedges. A
-deferral report driven solely from each incoming commit would have said nothing about the case it was
-built for, because the client stopped committing the moment its first commit parked — one commit
-deferred, never joined, and then silence indistinguishable from an idle system. Drive the report from a
-periodic tick as well as from the event, so "nothing is happening" and "something is stuck" are
-different lines. The same rule condemns a state with no diagnostic at all: `Defer::Waiting` was one enum
-variant covering a commit PARKED awaiting its frame and a commit REFUSED and discarded, and neither had
-a voice, so a commit parked forever read exactly like a commit never made. Count the fates separately
-and report them together with the window they accumulated over; the first line that instrument printed
-answered a question that had already cost a day.
-
-Establish a baseline from a known-good subject before concluding anything from a suspect one. A client
-that works showed the identical failure signature to the one under investigation, which is what proved the
-signature was normal.
-
-Two corollaries worth stating because both cost time here. A latched diagnostic cannot distinguish
-"happened once at startup" from "happening every frame" — carry an occurrence count. And an instrument
-that is self-consistent and produces plausible numbers is not thereby correct: a probe that sent
-`wl_surface.destroy` where it meant `attach` reported a stable, believable zero for hours. Check an
-instrument against something outside itself before trusting a negative from it.
-
-## Swept clean: defaults in hl-vulkan
-
-The "a failed lookup becomes a plausible empty value" family was swept through `hl-vulkan` and its shim.
-One defect was found and fixed (`create_buffer` accepting a zero or absurd size while its two sibling
-creation paths refused both). Recording what the sweep CLEARED matters as much, so the next reader does
-not re-audit twenty defaults that are already right:
-
-- **Device addresses** (`shim/vulkan/src/address.rs`). Unknown buffer or memory returns 0, but a live
-  object's address is derived from a high base, so 0 is not a value any real object can have. The
-  ambiguity the CUDA pointer-attribute defect had is impossible here by construction.
-- **Descriptor binding with an unknown set layout** (`service/record/binding.rs`). The layout lookup
-  falls back to an empty binding table, but every binding is then checked against it and a descriptor
-  the layout does not account for is refused as "not fully bound". It fails closed, not silently empty.
-- **Query results** (`service/submit.rs`). An out-of-range slot defaults to value 0 with its
-  availability bit `false`, so a caller asking for availability is told the truth; the value itself is
-  undefined by specification when unavailable.
-- **`vkGetPrivateData`** (`shim/vulkan/src/maintenance.rs`). Returning 0 when nothing was set is what
-  the specification requires, not a fallback.
-- **Missing colour blend state** (`shim/vulkan/src/graphics/pipeline.rs`) and **failed feature
-  negotiation** (`shim/vulkan/src/instance/physical.rs`). Both default to advertising or enabling
-  nothing, which is the safe direction: they under-promise rather than over-promise.
-- **Indirect argument reads** (`service/record/indirect.rs`). The out-of-range default is behind
-  `validate_indirect`, which bounds-checks the whole span first, so it is unreachable defence rather
-  than a silent zero.
-- **Current device after the last is destroyed** (`shim/vulkan/src/state.rs`). Falls back to 0, which
-  resolves to no device, and every entry point then reports a truthful failure.
-
-Two things stay open and are written down rather than fixed. `vkGetBufferMemoryRequirements` and
-`vkGetDeviceBufferMemoryRequirements` report 0 for a handle or create-info they cannot resolve; both are
-`void` in Vulkan with no error channel, and now that a zero-size buffer cannot be created, 0 is at least
-no longer ambiguous with a real buffer. And `bytes_per_texel().unwrap_or(4)` in the image-requirement
-paths over-reports a block-compressed image by up to eight times, which is the safe direction for a
-memory requirement but interacts with the 2 GiB ceiling, so it is a sizing question rather than a
-correctness one.
-
-## Swept clean: the Vulkan shim's marshalling surface
-
-The count-then-fill and `pNext` questions were swept through the shim. Three defects were found and
-fixed, all of one shape — an OUTPUT nobody produced, which is distinct from a default masking a failure
-because there is no wrong value computed, there is no value at all, and the caller cannot tell a field
-the driver set from one it skipped. What the sweep cleared:
-
-- **Every count-then-fill query agrees with itself.** Both `write_enumeration` helpers clamp to the
-  caller's capacity, write back the number actually written, and return `VK_INCOMPLETE` on truncation.
-  The hand-rolled ones — swapchain images, calibrateable time domains, physical devices, device groups,
-  queue families, sparse requirements — each do the same. No fill path can write more elements than its
-  own count path reported, so the overrun shape does not occur here.
-- **`vkGetPhysicalDeviceMemoryProperties2`, `vkGetImageSubresourceLayout2` and
-  `vkGetPhysicalDeviceQueueFamilyProperties2`** do not walk their chains, and that is currently safe:
-  every structure chainable onto them belongs to an extension this driver does not advertise, so a
-  conformant caller has nothing to chain. This is safe *by advertisement*, not by construction — it
-  becomes a defect the moment one of those extensions is advertised, which is the thing to remember.
-- **An unrecognised chain node** is skipped, left byte-identical, and the walk continues past it. A
-  driver that stopped at the first unknown would silently drop every output behind it.
-
-On the question of whether a caller can distinguish "recognised but unhandled" from "unrecognised": it
-cannot, and no implementation can make it. The specification requires unknown structures to be ignored
-silently, so the only half of the distinction a driver controls is writing every output it does
-recognise. That is precisely why skipping one is serious — it is indistinguishable from correct
-behaviour on a structure the driver was never required to handle.
-
-## Read the stream the subject writes, not the one the harness collected
-
-Twice in one night the answer was sitting in a log nobody was reading, while the report said the system
-was silent. A conformance run recorded 716 device losses with three collected `session-*.log` files of 72
-bytes each, containing a shell prompt — the driver's own stderr went somewhere else entirely. Separately,
-three agents concluded a presentation path emitted nothing while error-level diagnostics accumulated in
-the domain log the whole time.
-
-So when a harness reports no output, the first question is not what the subject failed to emit. It is
-whether the collector is attached to the stream the subject writes to. `lsof -p <pid> | grep log` answers
-it in one command and the answer is frequently a path nobody expected.
-
-Two corollaries, both paid for:
-
-- A diagnostic that exists in the source is not a diagnostic that exists in the artifact, and not one
-  that is switched on. Check a distinctive literal in the installed binary, and check the gate: a driver
-  loaded into someone else's process is often silent by default, correctly.
-- A pipeline can discard the line after the collector captures it. `2>&1 | tail -25` looks like capture
-  and is not, when the interesting line is written at the moment of failure and the subject's own abort
-  output then pushes it past the end.
-
-## Manager discipline
-
-Stage commits by file, never `git add -A` across a shared tree — you will sweep up another agent's
-uncommitted work and mis-attribute it. But staging by path is not sufficient protection, and assuming it
-is has already cost this repository a commit. **The index is shared, and `git commit` takes all of it.**
-Verify that what is staged is what your message describes, every time, whatever you believe you staged.
-
-`40220be39`, whose message is about an awk extension in a gateway probe, carries 294 lines of unrelated
-Vulkan copy, blit and resolve changes. Nobody ran `git add -A`. An agent had staged exactly sixteen files
-by explicit path, correctly; the manager then committed a documentation change without checking the
-staged set against the message, and the index handed over everything in it. Both parties followed the
-half of the rule they had internalised and the missing half was the check. `bda4e5c29` carries the
-displaced reasoning as an empty commit, which is the repair available after a push — rewriting published
-history under a live fleet costs more than it fixes.
-
-An agent working in an isolated worktree should commit and push FROM that worktree rather than copying
-files into the shared tree first. That would not have prevented the case above, whose collision was in
-the index rather than in the copy — it is stronger than that, because it removes the shared index from
-the path entirely.
-
-Do not install a bundle while an agent is mid-measurement. When you
-relay a finding between agents, mark clearly what was measured and what was inferred; a hypothesis passed on
-as fact wastes the next agent's whole session.
-
-# Work
-
-keep your work in ../hl-work folder, for each expriment keep one folder or share the folder but concentrate all 
-builds and tmp and other things in one directory. 
-
-Keep eye on disk usage, and system, and dangerous sys opperations.
-
-If you run in orb (ususally will do) or any other vm, check for `mac` command to execute on host.
-Do not spread files randomly across the system. /tmp folder this not shared between vm and host.
-Use ../hl-work to provide shared artifacts.
+- Use precise nouns and domain vocabulary.
+- Avoid `Manager`, `Helper`, `Util`, `Impl`, vague abbreviations, and repeated
+  module prefixes.
+- A trait or type is already a namespace; method names do not repeat it.
+- Prefer standard conversion, parsing, formatting, and iterator traits when they
+  express the complete contract.
+- Keep the happy path shallow.
+- Public APIs are minimal and document invariants, errors, safety, ownership, and
+  non-obvious performance contracts.
+- Comments explain contracts and reasons; names explain mechanics.
+- Lint allowances are local and justified.
+- Delete obsolete implementations after their migration and parity window passes.
+
+## Delivery
+
+Refactor incrementally. Every migration leaves an acyclic package graph and a
+working production path. Temporary dependency cycles, permanent compatibility
+shims, application-specific engine hacks, and parallel abandoned implementations
+are not accepted migration strategies.
