@@ -59,7 +59,6 @@ hl_native_x86_64_enter:
     stp q10,q11,[x28,#560]
     stp q12,q13,[x28,#592]
     stp q14,q15,[x28,#624]
-.Lx86_host_restore:
     ldp q8,q9,[x28,#272]
     ldp q10,q11,[x28,#304]
     ldp q12,q13,[x28,#336]
@@ -74,18 +73,4 @@ hl_native_x86_64_enter:
     add sp,sp,#112
     ret
 .size hl_native_x86_64_enter,.-hl_native_x86_64_enter
-
-.global hl_native_x86_64_return_clean
-.type hl_native_x86_64_return_clean,%function
-hl_native_x86_64_return_clean:
-    mrs x16,fpcr
-    str x16,[x28,#1528]
-    mrs x16,fpsr
-    str x16,[x28,#1536]
-    ldr x16,[x28,#1544]
-    msr fpcr,x16
-    ldr x16,[x28,#1552]
-    msr fpsr,x16
-    b .Lx86_host_restore
-.size hl_native_x86_64_return_clean,.-hl_native_x86_64_return_clean
 #endif

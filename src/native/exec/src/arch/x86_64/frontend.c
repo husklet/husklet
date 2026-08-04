@@ -961,7 +961,8 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
     decode_block(request, &block);
     if (block.count > request->provenance_capacity) return HL_X86_A64_CAPACITY;
     for (index = 0; index < block.count; ++index) {
-        if (!vector_marked && vector_register_write(&block.instructions[index])) {
+        if (!vector_marked && (request->flags & HL_X86_A64_DIAGNOSTICS) != 0u &&
+            vector_register_write(&block.instructions[index])) {
             words += 2u;
             vector_marked = 1;
         }
@@ -1100,7 +1101,8 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
         provenance->guest_size = item->length;
         provenance->word_start = words;
         provenance->reserved = 0;
-        if (!vector_marked && vector_register_write(item)) {
+        if (!vector_marked && (request->flags & HL_X86_A64_DIAGNOSTICS) != 0u &&
+            vector_register_write(item)) {
             request->host_words[words++] = UINT32_C(0xd2800031); /* mov x17,#1 */
             request->host_words[words++] =
                 store_word(17, offsetof(hl_native_x86_64_cpu, vector_dirty));

@@ -20,14 +20,9 @@
 
 #define X86_MAX_BYTES 1024u
 #define X86_MAX_WORDS 8192u
-#define X86_TAIL_WORDS 64u
 #define X86_ENTRY_WORDS 7u
 #define X86_RUN_VIEW_COUNT 4u
 #define X86_REP_CHUNK_BYTES (UINT64_C(1) << 20)
-
-/* Worst-case syscall suffix: boundary metadata (10), ordinary guard return
- * (12), and clean/dirty syscall tail (19). Keep expansion headroom explicit. */
-_Static_assert(X86_TAIL_WORDS >= 41u, "x86 emission tail reserve is too small");
 
 enum x86_fatal_code {
     X86_FATAL_EMPTY_BLOCK = 1,
@@ -391,7 +386,7 @@ static hl_native_status emit_block(hl_native_executor *executor, const hl_native
         .guest_size = size,
         .max_instructions = HL_X86_A64_MAX_INSTRUCTIONS,
         .host_words = words + X86_ENTRY_WORDS,
-        .host_capacity = X86_MAX_WORDS - X86_ENTRY_WORDS - X86_TAIL_WORDS,
+        .host_capacity = X86_MAX_WORDS - X86_ENTRY_WORDS - 32u,
         .provenance = frontend_map,
         .provenance_capacity = HL_X86_A64_MAX_INSTRUCTIONS,
         .flags = HL_X86_A64_CHECKPOINTS | HL_X86_A64_CONDITIONAL_SELF_LOOP | HL_X86_A64_LIVE_CHAIN |
@@ -405,14 +400,12 @@ static hl_native_status emit_block(hl_native_executor *executor, const hl_native
     uint32_t relocation_count = 0;
     uint32_t return_sites[3];
     uint32_t return_count = 0;
-    uint32_t syscall_return = UINT32_MAX;
     uint32_t executable_return = 0;
     uint32_t reason;
     hl_x86_a64_status frontend = hl_x86_a64_emit(&request, &result);
     *supported = 0;
     if (frontend != HL_X86_A64_OK || result.instruction_count == 0 ||
-        result.provenance_count != result.instruction_count ||
-        result.word_count > X86_MAX_WORDS - X86_ENTRY_WORDS - X86_TAIL_WORDS ||
+        result.provenance_count != result.instruction_count || result.word_count > X86_MAX_WORDS - 32u ||
         result.source_end <= pc)
         return HL_NATIVE_OK;
     reason = result.exit == HL_X86_A64_SYSCALL ? HL_NATIVE_EXIT_SYSCALL :
@@ -428,9 +421,6 @@ static hl_native_status emit_block(hl_native_executor *executor, const hl_native
     uint32_t entry_budget = prefix++;
     if (prefix != X86_ENTRY_WORDS) return HL_NATIVE_STATE;
     uint32_t cursor = result.word_count + X86_ENTRY_WORDS;
-    /* No suffix write is permitted until its complete worst-case budget is
-     * available. This is the runtime backstop if frontend accounting drifts. */
-    if (cursor > X86_MAX_WORDS - X86_TAIL_WORDS) return HL_NATIVE_CAPACITY;
     if (self_loop) {
         /* The frontend owns its ordinary taken/fallthrough returns. */
     } else {
@@ -488,11 +478,7 @@ static hl_native_status emit_block(hl_native_executor *executor, const hl_native
             };
             relocation_count = 2;
         } else {
-            uint32_t site = cursor++;
-            if (result.exit == HL_X86_A64_SYSCALL)
-                syscall_return = site;
-            else
-                return_sites[return_count++] = site;
+            return_sites[return_count++] = cursor++;
         }
         if (result.exit == HL_X86_A64_DIRECT_BRANCH) {
             relocations[0] = (hl_native_relocation){
@@ -533,23 +519,6 @@ static hl_native_status emit_block(hl_native_executor *executor, const hl_native
                        ((guard_return - entry_irq) & UINT32_C(0x7ffff)) << 5 | 16u;
     words[entry_budget] = UINT32_C(0x54000000) |
                           ((guard_return - entry_budget) & UINT32_C(0x7ffff)) << 5 | 3u;
-    if (syscall_return != UINT32_MAX) {
-        uint32_t clean_return;
-        uint32_t dirty_branch;
-        uint32_t syscall_tail = cursor;
-        finish_execution(words, &cursor);
-        spill_registers(words, &cursor);
-        words[cursor++] = load_word(16u, offsetof(hl_native_x86_64_cpu, vector_dirty));
-        dirty_branch = cursor++;
-        emit_constant(words, &cursor, 16u, (uint64_t)(uintptr_t)hl_native_x86_64_return_clean);
-        words[cursor++] = UINT32_C(0xd61f0200); /* br x16 */
-        clean_return = cursor;
-        words[cursor++] = UINT32_C(0xd65f03c0);
-        words[dirty_branch] = UINT32_C(0xb5000000) |
-                              ((clean_return - dirty_branch) & UINT32_C(0x7ffff)) << 5 | 16u;
-        words[syscall_return] = direct_branch(syscall_return, syscall_tail);
-    }
-    if (cursor > X86_MAX_WORDS) return HL_NATIVE_STATE;
     uint32_t provenance_count = 0;
     for (uint32_t index = 0; index < result.provenance_count; ++index) {
         if (frontend_map[index].word_end == frontend_map[index].word_start) continue;
