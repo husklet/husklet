@@ -144,6 +144,31 @@ fn compiled_language_stable_ids_are_folder_owned_once() {
 }
 
 #[test]
+fn weird_expected_failures_are_target_exact() {
+    let mut root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    while !root.join("tests/scenarios/weird/test.yaml").is_file() {
+        root = root.parent().expect("workspace root contains weird scenarios");
+    }
+    let directory = root.join("tests/scenarios/weird");
+    let scenario = Scenario::load(&directory, &directory.join("test.yaml")).unwrap();
+    let expected = scenario
+        .cases
+        .iter()
+        .filter(|case| !case.expected_failures.is_empty())
+        .map(|case| {
+            (
+                case.id.as_str(),
+                case.expected_failures
+                    .iter()
+                    .map(|target| target.name())
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(expected, [("weird/dotnet-ryujit", vec!["amd64"])]);
+}
+
+#[test]
 fn every_repository_definition_loads_with_globally_unique_ids() {
     let mut root = Path::new(env!("CARGO_MANIFEST_DIR"));
     while !root.join("tests/scenarios").is_dir() {

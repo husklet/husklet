@@ -1,6 +1,7 @@
 cases:
 - id: weird/auxval-hwcap
   image: gcc:latest
+  timeout: 120
   class: long
   fixtures:
   - source: source/auxval.c
@@ -14,6 +15,7 @@ cases:
   - process_heavy
 - id: weird/awk-compute
   image: alpine:latest
+  timeout: 120
   actions:
   - shell:
       script: awk 'BEGIN{for(i=1;i<=1000;i++)s+=i;print "AWK="s}'
@@ -21,6 +23,7 @@ cases:
     stdout_contains: golden/awk_compute.txt
 - id: weird/beam-jit
   image: erlang:27
+  timeout: 120
   class: long
   resources:
   - process_heavy
@@ -31,6 +34,7 @@ cases:
     stdout_contains: golden/beam_jit.txt
 - id: weird/bpf-map-create
   image: gcc:latest
+  timeout: 120
   class: long
   fixtures:
   - source: source/bpf_map.c
@@ -44,6 +48,7 @@ cases:
   - process_heavy
 - id: weird/bzip2-roundtrip
   image: alpine:latest
+  timeout: 120
   actions:
   - shell:
       script: seq 1 1000 | bzip2 -9 | bzip2 -d | awk '{s+=$1}END{print "BZIP="s}'
@@ -51,6 +56,7 @@ cases:
     stdout_contains: golden/bzip2_roundtrip.txt
 - id: weird/cc-canary
   image: gcc:latest
+  timeout: 120
   class: long
   resources:
   - process_heavy
@@ -82,6 +88,7 @@ cases:
     stdout_contains: golden/dotnet_ryujit.txt
 - id: weird/eventfd
   image: gcc:latest
+  timeout: 120
   class: long
   fixtures:
   - source: source/eventfd.c
@@ -95,6 +102,7 @@ cases:
   - process_heavy
 - id: weird/getrandom
   image: gcc:latest
+  timeout: 120
   class: long
   fixtures:
   - source: source/getrandom.c
@@ -108,6 +116,7 @@ cases:
   - process_heavy
 - id: weird/gforth
   image: debian:bookworm
+  timeout: 120
   class: long
   resources:
   - network
@@ -120,6 +129,7 @@ cases:
     stdout_contains: golden/gforth.txt
 - id: weird/gzip-roundtrip
   image: alpine:latest
+  timeout: 120
   actions:
   - shell:
       script: seq 1 1000 | gzip -9 | gzip -d | awk '{s+=$1}END{print "GZIP="s}'
@@ -127,6 +137,7 @@ cases:
     stdout_contains: golden/gzip_roundtrip.txt
 - id: weird/haskell-ghc
   image: haskell:9.8
+  timeout: 120
   class: long
   resources:
   - process_heavy
@@ -137,6 +148,7 @@ cases:
     stdout_contains: golden/haskell_ghc.txt
 - id: weird/inotify
   image: gcc:latest
+  timeout: 120
   class: long
   fixtures:
   - source: source/inotify.c
@@ -150,6 +162,7 @@ cases:
   - process_heavy
 - id: weird/io-uring
   image: gcc:latest
+  timeout: 120
   class: long
   fixtures:
   - source: source/io_uring.c
@@ -164,6 +177,7 @@ cases:
   - process_heavy
 - id: weird/julia-jit
   image: julia:1
+  timeout: 120
   class: long
   resources:
   - process_heavy
@@ -174,6 +188,7 @@ cases:
     stdout_contains: golden/julia_jit.txt
 - id: weird/jvm-c2-jit
   image: eclipse-temurin:21
+  timeout: 120
   resources:
   - process_heavy
   fixtures:
@@ -186,6 +201,7 @@ cases:
     stdout_contains: golden/jvm_c2_jit.txt
 - id: weird/jvm-fib
   image: eclipse-temurin:21
+  timeout: 120
   resources:
   - process_heavy
   fixtures:
@@ -198,6 +214,7 @@ cases:
     stdout_contains: golden/jvm_fib.txt
 - id: weird/lua
   image: nickblah/lua:5.4-alpine
+  timeout: 120
   class: long
   actions:
   - shell:
@@ -206,6 +223,7 @@ cases:
     stdout_contains: golden/lua.txt
 - id: weird/luajit-trace
   image: openresty/openresty:alpine
+  timeout: 120
   resources:
   - process_heavy
   actions:
@@ -215,6 +233,7 @@ cases:
     stdout_contains: golden/luajit_trace.txt
 - id: weird/memfd-create
   image: gcc:latest
+  timeout: 120
   class: long
   fixtures:
   - source: source/memfd.c
@@ -228,6 +247,7 @@ cases:
   - process_heavy
 - id: weird/mongo-cpu-topology
   image: mongo
+  timeout: 120
   actions:
   - argv:
       argv:
@@ -237,6 +257,7 @@ cases:
     stdout_contains: golden/mongo_cpu_topology.txt
 - id: weird/node-primes
   image: node:alpine
+  timeout: 120
   resources:
   - process_heavy
   actions:
@@ -246,6 +267,7 @@ cases:
     stdout_contains: golden/node_primes.txt
 - id: weird/nproc
   image: alpine:latest
+  timeout: 120
   actions:
   - shell:
       script: '[ "$(nproc)" -ge 1 ] && echo NPROC-OK || echo NPROC-BAD'
@@ -253,6 +275,7 @@ cases:
     stdout_contains: golden/nproc.txt
 - id: weird/openssl-sha256
   image: alpine/openssl:latest
+  timeout: 120
   class: long
   actions:
   - shell:
@@ -261,6 +284,7 @@ cases:
     stdout_contains: golden/openssl_sha256.txt
 - id: weird/openssl-sha512
   image: alpine/openssl:latest
+  timeout: 120
   class: long
   actions:
   - shell:
@@ -269,6 +293,7 @@ cases:
     stdout_contains: golden/openssl_sha512.txt
 - id: weird/openssl-speed
   image: alpine/openssl:latest
+  timeout: 120
   class: long
   resources:
   - process_heavy
@@ -281,6 +306,7 @@ cases:
     stdout_contains: golden/openssl_speed.txt
 - id: weird/perl-regex
   image: perl:5.40
+  timeout: 120
   actions:
   - shell:
       script: perl -e '$s="abc"x100000; $n=()=$s=~/abc/g; print "REGEX=$n\n"'
@@ -288,6 +314,7 @@ cases:
     stdout_contains: golden/perl_regex.txt
 - id: weird/prctl-name
   image: gcc:latest
+  timeout: 120
   class: long
   fixtures:
   - source: source/prctl.c
@@ -301,6 +328,7 @@ cases:
   - process_heavy
 - id: weird/proc-cpuinfo
   image: alpine:latest
+  timeout: 120
   actions:
   - shell:
       script: grep -qE '^(processor|Features|flags)' /proc/cpuinfo && echo CPUINFO-OK || echo CPUINFO-NO
@@ -308,6 +336,7 @@ cases:
     stdout_contains: golden/proc_cpuinfo.txt
 - id: weird/pthread-atomics
   image: gcc:latest
+  timeout: 120
   class: long
   resources:
   - process_heavy
@@ -321,6 +350,7 @@ cases:
     stdout_contains: golden/pthread_atomics.txt
 - id: weird/ptrace-traceme
   image: gcc:latest
+  timeout: 120
   class: long
   fixtures:
   - source: source/ptrace.c
@@ -334,6 +364,7 @@ cases:
   - process_heavy
 - id: weird/pypy-compute
   image: pypy:3
+  timeout: 120
   resources:
   - process_heavy
   actions:
@@ -343,6 +374,7 @@ cases:
     stdout_contains: golden/pypy_compute.txt
 - id: weird/python-ctypes
   image: python:3.12-slim
+  timeout: 120
   actions:
   - shell:
       script: python3 -c "import ctypes;libc=ctypes.CDLL(None);print('CTYPES='+str(libc.strlen(b'hello')))"
@@ -350,6 +382,7 @@ cases:
     stdout_contains: golden/python_ctypes.txt
 - id: weird/python-hashlib
   image: python:3.12-slim
+  timeout: 120
   actions:
   - shell:
       script: python3 -c "import hashlib;print('SHA='+hashlib.sha256(b'abc').hexdigest())"
@@ -357,6 +390,7 @@ cases:
     stdout_contains: golden/python_hashlib.txt
 - id: weird/python-zlib
   image: python:3.12-slim
+  timeout: 120
   actions:
   - shell:
       script: python3 -c "import zlib;d=bytes(range(256))*100;print('ZLIB='+str(len(zlib.decompress(zlib.compress(d,9)))))"
@@ -364,6 +398,7 @@ cases:
     stdout_contains: golden/python_zlib.txt
 - id: weird/r-compute
   image: r-base
+  timeout: 120
   class: long
   actions:
   - shell:
@@ -372,6 +407,7 @@ cases:
     stdout_contains: golden/r_compute.txt
 - id: weird/ruby-fib
   image: ruby:3.3
+  timeout: 120
   actions:
   - shell:
       script: ruby -e 'a,b=0,1;50.times{a,b=b,a+b};puts "RB=#{a}"'
@@ -379,6 +415,7 @@ cases:
     stdout_contains: golden/ruby_fib.txt
 - id: weird/ruby-yjit
   image: ruby:3.3
+  timeout: 120
   resources:
   - process_heavy
   actions:
@@ -388,6 +425,7 @@ cases:
     stdout_contains: golden/ruby_yjit.txt
 - id: weird/sched-affinity
   image: gcc:latest
+  timeout: 120
   class: long
   fixtures:
   - source: source/affinity.c
@@ -401,6 +439,7 @@ cases:
   - process_heavy
 - id: weird/seccomp-filter
   image: gcc:latest
+  timeout: 120
   class: long
   fixtures:
   - source: source/seccomp.c
@@ -414,6 +453,7 @@ cases:
   - process_heavy
 - id: weird/self-modifying-rwx
   image: gcc:latest
+  timeout: 120
   class: long
   fixtures:
   - source: source/rwx.c
@@ -427,6 +467,7 @@ cases:
   - process_heavy
 - id: weird/sigsegv-recover
   image: gcc:latest
+  timeout: 120
   class: long
   fixtures:
   - source: source/sigsegv.c
@@ -440,6 +481,7 @@ cases:
   - process_heavy
 - id: weird/simd-probe
   image: gcc:latest
+  timeout: 120
   class: long
   fixtures:
   - source: source/simd.c
@@ -453,6 +495,7 @@ cases:
   - process_heavy
 - id: weird/smc-rewrite
   image: gcc:latest
+  timeout: 120
   class: long
   fixtures:
   - source: source/smc.c
@@ -466,6 +509,7 @@ cases:
   - process_heavy
 - id: weird/tcl
   image: debian:bookworm
+  timeout: 120
   class: long
   resources:
   - network
@@ -478,6 +522,7 @@ cases:
     stdout_contains: golden/tcl.txt
 - id: weird/timerfd
   image: gcc:latest
+  timeout: 120
   class: long
   fixtures:
   - source: source/timerfd.c
@@ -491,6 +536,7 @@ cases:
   - process_heavy
 - id: weird/tsc-counter
   image: gcc:latest
+  timeout: 120
   class: long
   fixtures:
   - source: source/tsc.c
@@ -504,6 +550,7 @@ cases:
   - process_heavy
 - id: weird/userfaultfd
   image: gcc:latest
+  timeout: 120
   class: long
   fixtures:
   - source: source/userfaultfd.c
@@ -518,6 +565,7 @@ cases:
   - process_heavy
 - id: weird/v8-bigint
   image: node:alpine
+  timeout: 120
   actions:
   - shell:
       script: node -e 'let a=0n,b=1n;for(let i=0;i<90;i++){[a,b]=[b,a+b]};console.log("FIB="+a)'
@@ -525,6 +573,7 @@ cases:
     stdout_contains: golden/v8_bigint.txt
 - id: weird/v8-jit-in-jit
   image: node:alpine
+  timeout: 120
   resources:
   - process_heavy
   actions:
@@ -534,6 +583,7 @@ cases:
     stdout_contains: golden/v8_jit_in_jit.txt
 - id: weird/vdso-clock
   image: gcc:latest
+  timeout: 120
   class: long
   fixtures:
   - source: source/vdso.c
@@ -547,6 +597,7 @@ cases:
   - process_heavy
 - id: weird/xz-roundtrip
   image: debian:bookworm
+  timeout: 120
   class: long
   resources:
   - network
@@ -560,6 +611,7 @@ cases:
     stdout_contains: golden/xz_roundtrip.txt
 - id: weird/zstd-roundtrip
   image: debian:bookworm
+  timeout: 120
   class: long
   resources:
   - network
@@ -571,3 +623,9 @@ cases:
         "ZSTD="s}' /tmp/output
   expect:
     stdout_contains: golden/zstd_roundtrip.txt
+- id: weird/static-nonpie-helloworld
+  image: hello-world
+  timeout: 120
+  actions:
+  - entrypoint: {}
+  expect: { stdout_contains: golden/hello_world.txt }
