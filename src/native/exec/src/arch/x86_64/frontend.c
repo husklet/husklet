@@ -21,7 +21,9 @@ static int may_fallback(const instruction *item) {
 
 static int vector_register_write(const instruction *item) {
     return item->operation == OP_VECTOR && item->memory_write == 0u &&
-           item->vector_kind != VECTOR_TO_INTEGER && item->vector_kind != VECTOR_BYTE_MASK;
+           item->vector_kind != VECTOR_TO_INTEGER && item->vector_kind != VECTOR_BYTE_MASK &&
+           item->vector_kind != VECTOR_SCALAR_COMPARE_DOUBLE &&
+           item->vector_kind != VECTOR_TRUNC_DOUBLE_SIGNED;
 }
 
 void hl_x86_prepare_vector_immediate(instruction *item, uint8_t modrm, uint8_t rex,
@@ -120,7 +122,8 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                   ((request->guest_bytes[cursor + 1u] >> 3) & 7u) == 1u))))) &&
             !(semantic_prefix == 0xf2u && opcode == 0x0fu && cursor < request->guest_size &&
               (request->guest_bytes[cursor] == 0x51u || request->guest_bytes[cursor] == 0x58u ||
-               request->guest_bytes[cursor] == 0x59u || request->guest_bytes[cursor] == 0x5eu)) &&
+               request->guest_bytes[cursor] == 0x59u || request->guest_bytes[cursor] == 0x5cu ||
+               request->guest_bytes[cursor] == 0x5eu || request->guest_bytes[cursor] == 0x2cu)) &&
             !((semantic_prefix == 0xf2u || semantic_prefix == 0xf3u) && opcode == 0x0fu &&
               cursor < request->guest_size && request->guest_bytes[cursor] == 0xc3u)) {
             cursor = start;
@@ -185,7 +188,8 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
             cursor += immediate_size;
         } else if (semantic_prefix == 0xf2u && opcode == 0x0fu && cursor < request->guest_size &&
                    (request->guest_bytes[cursor] == 0x51u || request->guest_bytes[cursor] == 0x58u ||
-                    request->guest_bytes[cursor] == 0x59u || request->guest_bytes[cursor] == 0x5eu)) {
+                    request->guest_bytes[cursor] == 0x59u || request->guest_bytes[cursor] == 0x5cu ||
+                    request->guest_bytes[cursor] == 0x5eu)) {
             uint8_t extension = request->guest_bytes[cursor++];
             uint8_t modrm;
             if (cursor >= request->guest_size || cursor - start >= 15u) {
@@ -199,13 +203,62 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
             item->source = (uint8_t)((modrm & 7u) | ((rex & 1u) << 3));
             item->vector_kind = extension == 0x51u ? VECTOR_SCALAR_SQRT_DOUBLE :
                                 extension == 0x58u ? VECTOR_SCALAR_ADD_DOUBLE :
-                                extension == 0x59u ? VECTOR_SCALAR_MUL_DOUBLE : VECTOR_SCALAR_DIV_DOUBLE;
+                                extension == 0x59u ? VECTOR_SCALAR_MUL_DOUBLE :
+                                extension == 0x5cu ? VECTOR_SCALAR_SUB_DOUBLE : VECTOR_SCALAR_DIV_DOUBLE;
             if ((modrm >> 6) == 3u) {
                 ++cursor;
             } else {
                 if (!hl_x86_decode_address(request, block, item, rex, 0, address_32, start, &cursor)) break;
                 item->operation = OP_VECTOR;
                 item->width = 8u;
+                item->memory_operand = 1u;
+                item->source = 16u;
+            }
+        } else if (operand_16 != 0u && opcode == 0x0fu && cursor < request->guest_size &&
+                   (request->guest_bytes[cursor] == 0x2eu || request->guest_bytes[cursor] == 0x2fu)) {
+            uint8_t extension = request->guest_bytes[cursor++];
+            uint8_t modrm;
+            if (cursor >= request->guest_size || cursor - start >= 15u) {
+                cursor = start; block->status = HL_X86_A64_TRUNCATED;
+                block->exit = HL_X86_A64_INTERPRETER; break;
+            }
+            modrm = request->guest_bytes[cursor];
+            item->operation = OP_VECTOR;
+            item->width = 8u;
+            item->destination = (uint8_t)(((modrm >> 3) & 7u) | ((rex & 4u) << 1));
+            item->source = (uint8_t)((modrm & 7u) | ((rex & 1u) << 3));
+            item->vector_kind = VECTOR_SCALAR_COMPARE_DOUBLE;
+            item->condition = extension == 0x2fu;
+            if ((modrm >> 6) == 3u) {
+                ++cursor;
+            } else {
+                if (!hl_x86_decode_address(request, block, item, rex, 0, address_32, start, &cursor)) break;
+                item->operation = OP_VECTOR;
+                item->width = 8u;
+                item->memory_operand = 1u;
+                item->source = 16u;
+            }
+        } else if (semantic_prefix == 0xf2u && opcode == 0x0fu && cursor < request->guest_size &&
+                   request->guest_bytes[cursor] == 0x2cu) {
+            uint8_t modrm;
+            ++cursor;
+            if (cursor >= request->guest_size || cursor - start >= 15u) {
+                cursor = start; block->status = HL_X86_A64_TRUNCATED;
+                block->exit = HL_X86_A64_INTERPRETER; break;
+            }
+            modrm = request->guest_bytes[cursor];
+            item->operation = OP_VECTOR;
+            item->width = (rex & 8u) != 0u ? 8u : 4u;
+            item->destination = (uint8_t)(((modrm >> 3) & 7u) | ((rex & 4u) << 1));
+            item->source = (uint8_t)((modrm & 7u) | ((rex & 1u) << 3));
+            item->vector_kind = VECTOR_TRUNC_DOUBLE_SIGNED;
+            if ((modrm >> 6) == 3u) {
+                ++cursor;
+            } else {
+                if (!hl_x86_decode_address(request, block, item, rex, 0, address_32, start, &cursor)) break;
+                item->operation = OP_VECTOR;
+                item->width = (rex & 8u) != 0u ? 8u : 4u;
+                item->vector_memory_width = 8u;
                 item->memory_operand = 1u;
                 item->source = 16u;
             }
@@ -1080,7 +1133,9 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
             dirty |= UINT32_C(1) << 0;
         } else if (block.instructions[index].operation == OP_VECTOR) {
             words += hl_x86_vector_words(&block.instructions[index]);
-            if (block.instructions[index].memory_operand == 0u &&
+            if (block.instructions[index].vector_kind == VECTOR_TRUNC_DOUBLE_SIGNED)
+                dirty |= UINT32_C(1) << block.instructions[index].destination;
+            else if (block.instructions[index].memory_operand == 0u &&
                 (block.instructions[index].vector_kind == VECTOR_TO_INTEGER ||
                  block.instructions[index].vector_kind == VECTOR_BYTE_MASK))
                 dirty |= UINT32_C(1) << block.instructions[index].destination;
@@ -1260,7 +1315,9 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
             dirty |= UINT32_C(1) << 0;
         } else if (item->operation == OP_VECTOR) {
             hl_x86_emit_vector(request->host_words, &words, item);
-            if (item->memory_operand == 0u &&
+            if (item->vector_kind == VECTOR_TRUNC_DOUBLE_SIGNED)
+                dirty |= UINT32_C(1) << item->destination;
+            else if (item->memory_operand == 0u &&
                 (item->vector_kind == VECTOR_TO_INTEGER || item->vector_kind == VECTOR_BYTE_MASK))
                 dirty |= UINT32_C(1) << item->destination;
         } else if (item->operation == OP_ACCUMULATOR) {

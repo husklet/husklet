@@ -64,6 +64,118 @@ static int straight_line(void) {
     return 0;
 }
 
+static int scalar_double_family(void) {
+    const uint8_t guest[] = {
+        0xf2, 0x0f, 0x5c, 0xc1,       /* subsd xmm0,xmm1 */
+        0x66, 0x0f, 0x2f, 0xc1,       /* comisd xmm0,xmm1 */
+        0xf2, 0x48, 0x0f, 0x2c, 0xc0, /* cvttsd2si rax,xmm0 */
+    };
+    uint32_t host[256] = {0};
+    hl_x86_a64_provenance provenance[8] = {0};
+    hl_x86_a64_request request = request_for(guest, sizeof guest, host, provenance);
+    hl_x86_a64_result result;
+
+    CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+    CHECK(result.exit == HL_X86_A64_FALLTHROUGH && result.instruction_count == 3);
+    CHECK(provenance[0].guest_size == 4 && provenance[1].guest_size == 4);
+    CHECK(provenance[2].guest_size == 5);
+    CHECK(provenance[0].word_end > provenance[0].word_start);
+    CHECK(provenance[1].word_end > provenance[1].word_start);
+    CHECK(provenance[2].word_end > provenance[2].word_start);
+    return 0;
+}
+
+static int scalar_double_differential(void) {
+#if !defined(__aarch64__)
+    return 0;
+#else
+    static const uint8_t family[] = {
+        0xf2, 0x0f, 0x5c, 0xc1,       /* subsd xmm0,xmm1 */
+        0x66, 0x0f, 0x2f, 0xc1,       /* comisd xmm0,xmm1 */
+        0xf2, 0x48, 0x0f, 0x2c, 0xc0, /* cvttsd2si rax,xmm0 */
+    };
+    static const uint8_t compare[] = {0x66, 0x0f, 0x2f, 0xc1};
+    static const uint8_t convert[] = {0xf2, 0x48, 0x0f, 0x2c, 0xc0};
+    const uint64_t comparison = HL_X86_RFLAGS_CF | HL_X86_RFLAGS_PF | HL_X86_RFLAGS_AF |
+                                HL_X86_RFLAGS_ZF | HL_X86_RFLAGS_SF | HL_X86_RFLAGS_OF;
+    long page = sysconf(_SC_PAGESIZE);
+    uint8_t *code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE,
+                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    unsigned index;
+
+    CHECK(code != MAP_FAILED);
+    {
+        uint32_t host[256] = {0};
+        hl_x86_a64_provenance provenance[8] = {0};
+        hl_x86_a64_request request = request_for(family, sizeof family, host, provenance);
+        hl_x86_a64_result emitted;
+        hl_native_x86_64_cpu cpu = {0};
+        CHECK(hl_x86_a64_emit(&request, &emitted) == HL_X86_A64_OK);
+        memcpy(code, host, emitted.word_count * sizeof(uint32_t));
+        ((uint32_t *)code)[emitted.word_count] = UINT32_C(0xd65f03c0);
+        __builtin___clear_cache((char *)code, (char *)code + (emitted.word_count + 1u) * 4u);
+        CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+        cpu.vectors[0] = UINT64_C(0x4014000000000000); /* 5.0 */
+        cpu.vectors[1] = UINT64_C(0xfeedfacedeadbeef);
+        cpu.vectors[2] = UINT64_C(0x4000000000000000); /* 2.0 */
+        cpu.flags = comparison;
+        hl_native_x86_64_enter(&cpu, code);
+        CHECK(cpu.vectors[0] == UINT64_C(0x4008000000000000)); /* 3.0 */
+        CHECK(cpu.vectors[1] == UINT64_C(0xfeedfacedeadbeef));
+        CHECK(cpu.registers[0] == 3 && (cpu.flags & comparison) == 0);
+        CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_WRITE) == 0);
+    }
+    {
+        uint32_t host[256] = {0};
+        hl_x86_a64_provenance provenance[8] = {0};
+        hl_x86_a64_request request = request_for(compare, sizeof compare, host, provenance);
+        hl_x86_a64_result emitted;
+        hl_native_x86_64_cpu cpu = {0};
+        CHECK(hl_x86_a64_emit(&request, &emitted) == HL_X86_A64_OK);
+        memcpy(code, host, emitted.word_count * sizeof(uint32_t));
+        ((uint32_t *)code)[emitted.word_count] = UINT32_C(0xd65f03c0);
+        __builtin___clear_cache((char *)code, (char *)code + (emitted.word_count + 1u) * 4u);
+        CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+        cpu.vectors[0] = UINT64_C(0x7ff8000000000000); /* quiet NaN */
+        cpu.vectors[2] = UINT64_C(0x3ff0000000000000); /* 1.0 */
+        cpu.flags = comparison;
+        hl_native_x86_64_enter(&cpu, code);
+        CHECK((cpu.flags & (HL_X86_RFLAGS_CF | HL_X86_RFLAGS_PF | HL_X86_RFLAGS_ZF)) ==
+              (HL_X86_RFLAGS_CF | HL_X86_RFLAGS_PF | HL_X86_RFLAGS_ZF));
+        CHECK((cpu.flags & (HL_X86_RFLAGS_AF | HL_X86_RFLAGS_SF | HL_X86_RFLAGS_OF)) == 0);
+        CHECK((cpu.fpsr & 1u) != 0); /* COMISD signals invalid for a quiet NaN. */
+        CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_WRITE) == 0);
+    }
+    for (index = 0; index < 3u; ++index) {
+        static const uint64_t inputs[] = {
+            UINT64_C(0x400e000000000000), /* 3.75 */
+            UINT64_C(0x7ff0000000000000), /* +infinity */
+            UINT64_C(0x7ff8000000000000), /* quiet NaN */
+        };
+        static const uint64_t expected[] = {
+            UINT64_C(3), UINT64_C(0x8000000000000000), UINT64_C(0x8000000000000000),
+        };
+        uint32_t host[256] = {0};
+        hl_x86_a64_provenance provenance[8] = {0};
+        hl_x86_a64_request request = request_for(convert, sizeof convert, host, provenance);
+        hl_x86_a64_result emitted;
+        hl_native_x86_64_cpu cpu = {0};
+        CHECK(hl_x86_a64_emit(&request, &emitted) == HL_X86_A64_OK);
+        memcpy(code, host, emitted.word_count * sizeof(uint32_t));
+        ((uint32_t *)code)[emitted.word_count] = UINT32_C(0xd65f03c0);
+        __builtin___clear_cache((char *)code, (char *)code + (emitted.word_count + 1u) * 4u);
+        CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+        cpu.vectors[0] = inputs[index];
+        cpu.flags = UINT64_C(0xad7);
+        hl_native_x86_64_enter(&cpu, code);
+        CHECK(cpu.registers[0] == expected[index] && cpu.flags == UINT64_C(0xad7));
+        CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_WRITE) == 0);
+    }
+    CHECK(munmap(code, (size_t)page) == 0);
+    return 0;
+#endif
+}
+
 static int end_branch(void) {
     const uint8_t guest[] = {
         0xf3, 0x0f, 0x1e, 0xfa, /* endbr64 */
@@ -3568,6 +3680,10 @@ int main(void) {
     status = vector_opcode();
     if (status != 0) return status;
     status = straight_line();
+    if (status != 0) return status;
+    status = scalar_double_family();
+    if (status != 0) return status;
+    status = scalar_double_differential();
     if (status != 0) return status;
     status = end_branch();
     if (status != 0) return status;

@@ -637,8 +637,15 @@ static uint32_t vector_operation_words(const instruction *item) {
     case VECTOR_SCALAR_SQRT_DOUBLE:
     case VECTOR_SCALAR_ADD_DOUBLE:
     case VECTOR_SCALAR_MUL_DOUBLE:
+    case VECTOR_SCALAR_SUB_DOUBLE:
     case VECTOR_SCALAR_DIV_DOUBLE:
         return 28u + constant_words(item->pc) + (item->live_chain != 0u ? 18u : 0u);
+    case VECTOR_SCALAR_COMPARE_DOUBLE: return 13u;
+    case VECTOR_TRUNC_DOUBLE_SIGNED:
+        return 4u + constant_words(item->width == 8u ? UINT64_C(0x43e0000000000000) :
+                                                      UINT64_C(0x41e0000000000000)) +
+               constant_words(item->width == 8u ? UINT64_C(0x8000000000000000) :
+                                                  UINT64_C(0x80000000));
     case VECTOR_INSERT_WORD: return 1u;
     default: return 1u;
     }
@@ -661,10 +668,12 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
     uint32_t source = item->source;
     uint32_t lane = item->vector_lane;
 
-    if (item->vector_kind >= VECTOR_SCALAR_SQRT_DOUBLE) {
+    if (item->vector_kind >= VECTOR_SCALAR_SQRT_DOUBLE &&
+        item->vector_kind <= VECTOR_SCALAR_DIV_DOUBLE) {
         uint32_t base = item->vector_kind == VECTOR_SCALAR_SQRT_DOUBLE ? UINT32_C(0x1e61c000) :
                         item->vector_kind == VECTOR_SCALAR_ADD_DOUBLE ? UINT32_C(0x1e602800) :
                         item->vector_kind == VECTOR_SCALAR_MUL_DOUBLE ? UINT32_C(0x1e600800) :
+                        item->vector_kind == VECTOR_SCALAR_SUB_DOUBLE ? UINT32_C(0x1e603800) :
                                                                        UINT32_C(0x1e601800);
         if (item->vector_kind == VECTOR_SCALAR_SQRT_DOUBLE)
             words[(*cursor)++] = base | source << 5 | 18u;
@@ -684,6 +693,36 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
         words[ordered] = UINT32_C(0x54000000) |
                          (((*cursor - ordered) & UINT32_C(0x7ffff)) << 5) | 7u; /* b.vc */
         words[(*cursor)++] = UINT32_C(0x6e080400) | 18u << 5 | destination; /* ins vd.d[0],v18.d[0] */
+    } else if (item->vector_kind == VECTOR_SCALAR_COMPARE_DOUBLE) {
+        uint64_t clear = UINT64_C(1) | UINT64_C(1) << 2 | UINT64_C(1) << 4 |
+                         UINT64_C(1) << 6 | UINT64_C(1) << 7 | UINT64_C(1) << 11;
+        words[(*cursor)++] = UINT32_C(0x1e602000) | (item->condition != 0u ? UINT32_C(0x10) : 0u) |
+                             source << 16 | destination << 5; /* fcmp/fcmpe dd,ds */
+        words[(*cursor)++] = UINT32_C(0x9a9f07e0) | (4u ^ 1u) << 12 | 19u; /* cset x19,mi: less */
+        words[(*cursor)++] = UINT32_C(0x9a9f07e0) | (0u ^ 1u) << 12 | 20u; /* cset x20,eq */
+        words[(*cursor)++] = UINT32_C(0x9a9f07e0) | (6u ^ 1u) << 12 | 21u; /* cset x21,vs: unordered */
+        words[(*cursor)++] = load_word(22u, offsetof(hl_native_x86_64_cpu, flags));
+        emit_constant(words, cursor, 23u, clear);
+        words[(*cursor)++] = UINT32_C(0x8a200000) | 23u << 16 | 22u << 5 | 22u; /* bic flags,flags,mask */
+        words[(*cursor)++] = UINT32_C(0xaa000000) | 21u << 16 | 19u << 5 | 19u; /* less | unordered */
+        words[(*cursor)++] = UINT32_C(0xaa000000) | 19u << 16 | 22u << 5 | 22u; /* CF */
+        words[(*cursor)++] = UINT32_C(0xaa000000) | 21u << 16 | 20u << 5 | 20u; /* equal | unordered */
+        words[(*cursor)++] = UINT32_C(0xaa000000) | 20u << 16 | 6u << 10 | 22u << 5 | 22u; /* ZF */
+        words[(*cursor)++] = UINT32_C(0xaa000000) | 21u << 16 | 2u << 10 | 22u << 5 | 22u; /* PF */
+        words[(*cursor)++] = store_word(22u, offsetof(hl_native_x86_64_cpu, flags));
+    } else if (item->vector_kind == VECTOR_TRUNC_DOUBLE_SIGNED) {
+        uint64_t threshold = item->width == 8u ? UINT64_C(0x43e0000000000000) :
+                                                 UINT64_C(0x41e0000000000000);
+        uint64_t indefinite = item->width == 8u ? UINT64_C(0x8000000000000000) :
+                                                  UINT64_C(0x80000000);
+        words[(*cursor)++] = (item->width == 8u ? UINT32_C(0x9e780000) : UINT32_C(0x1e780000)) |
+                             source << 5 | destination; /* fcvtzs x/w destination,dsource */
+        emit_constant(words, cursor, 20u, threshold);
+        words[(*cursor)++] = UINT32_C(0x9e670000) | 20u << 5 | 19u; /* fmov d19,x20 */
+        words[(*cursor)++] = UINT32_C(0x1e602000) | 19u << 16 | source << 5; /* fcmp dsource,d19 */
+        emit_constant(words, cursor, 20u, indefinite);
+        words[(*cursor)++] = (item->width == 8u ? UINT32_C(0x9a800000) : UINT32_C(0x1a800000)) |
+                             destination << 16 | 2u << 12 | 20u << 5 | destination; /* csel result,indef,result,cs */
     } else if (item->vector_kind == VECTOR_FROM_INTEGER)
         words[(*cursor)++] = (item->width == 8u ? UINT32_C(0x9e670000) : UINT32_C(0x1e270000)) |
                                source << 5 | destination;
