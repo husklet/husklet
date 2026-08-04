@@ -27,6 +27,7 @@
 #include "simd_immediate.h"
 #include "simd_narrow.h"
 #include "simd_permute.h"
+#include "simd_reduce.h"
 #include "single.h"
 #include "structure.h"
 #include "system.h"
@@ -115,6 +116,7 @@ static int body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc) {
            hl_a64_simd_compare_body(assembler, word) || hl_a64_compare_body(assembler, word) ||
            hl_a64_simd_narrow_body(assembler, word) ||
            hl_a64_simd_permute_body(assembler, word) ||
+           hl_a64_simd_reduce_body(assembler, word) ||
            hl_a64_system_body(assembler, word);
 }
 
