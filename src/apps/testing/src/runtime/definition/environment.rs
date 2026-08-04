@@ -49,7 +49,7 @@ pub(super) fn environment<'de, D: serde::Deserializer<'de>>(
 
 impl Environment {
     fn into_entries(self) -> Result<Vec<EnvironmentEntry>, &'static str> {
-        let values = match self {
+        let values: Vec<EnvironmentEntry> = match self {
             Self::Text(values) => values
                 .into_iter()
                 .map(|(name, value)| EnvironmentEntry {

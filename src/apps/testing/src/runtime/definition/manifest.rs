@@ -92,7 +92,7 @@ pub(super) enum Status {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Evidence {
+pub(super) struct Evidence {
     reason: String,
     evidence: String,
 }
