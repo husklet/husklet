@@ -79,9 +79,14 @@ mod tests {
             draw_target: None,
             read_ir: None,
             draw_ir: None,
+            read_depth_stencil: Default::default(),
+            draw_depth_stencil: Default::default(),
+            read_extent: [1, 1],
+            draw_extent: [1, 1],
             src: [0; 4],
             dst: [0; 4],
             filter: hl_gpu::protocol::model::enums::Filter::Nearest,
+            mask: crate::model::glconst::GL_COLOR_BUFFER_BIT,
         };
         recording.push_blit(blit);
         assert_eq!(recording.blits, [blit]);

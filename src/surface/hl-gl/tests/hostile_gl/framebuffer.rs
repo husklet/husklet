@@ -223,6 +223,50 @@ fn incomplete_framebuffer_blit_and_draw_are_safe() {
     );
 }
 
+fn depth_framebuffer(c: &mut GlContext, format: u32, samples: i32) -> u32 {
+    let fbo = c.gen_framebuffer();
+    record::bind_framebuffer(c, GL_FRAMEBUFFER, fbo);
+    let storage = record::gen_renderbuffer(c);
+    record::bind_renderbuffer(c, GL_RENDERBUFFER, storage);
+    record::renderbuffer_storage_multisample(c, GL_RENDERBUFFER, samples, format, 8, 8);
+    let attachment = if format == GL_STENCIL_INDEX8 {
+        GL_STENCIL_ATTACHMENT
+    } else if format == GL_DEPTH24_STENCIL8 {
+        GL_DEPTH_STENCIL_ATTACHMENT
+    } else {
+        GL_DEPTH_ATTACHMENT
+    };
+    record::framebuffer_renderbuffer(c, GL_FRAMEBUFFER, attachment, GL_RENDERBUFFER, storage);
+    fbo
+}
+
+#[test]
+fn depth_stencil_blit_rejects_linear_incompatible_formats_and_multisample_scaling() {
+    let mut c = ctx();
+    let depth16 = depth_framebuffer(&mut c, GL_DEPTH_COMPONENT16, 0);
+    let depth24 = depth_framebuffer(&mut c, GL_DEPTH_COMPONENT24, 0);
+    record::bind_framebuffer(&mut c, GL_READ_FRAMEBUFFER, depth16);
+    record::bind_framebuffer(&mut c, GL_DRAW_FRAMEBUFFER, depth24);
+    record::blit_framebuffer(
+        &mut c, 0, 0, 8, 8, 0, 0, 8, 8, GL_DEPTH_BUFFER_BIT, GL_NEAREST,
+    );
+    assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
+
+    record::bind_framebuffer(&mut c, GL_DRAW_FRAMEBUFFER, depth16);
+    record::blit_framebuffer(
+        &mut c, 0, 0, 8, 8, 0, 0, 8, 8, GL_DEPTH_BUFFER_BIT, GL_LINEAR,
+    );
+    assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
+
+    let multisampled = depth_framebuffer(&mut c, GL_DEPTH_COMPONENT16, 4);
+    record::bind_framebuffer(&mut c, GL_READ_FRAMEBUFFER, multisampled);
+    record::bind_framebuffer(&mut c, GL_DRAW_FRAMEBUFFER, depth16);
+    record::blit_framebuffer(
+        &mut c, 0, 0, 8, 8, 0, 0, 4, 4, GL_DEPTH_BUFFER_BIT, GL_NEAREST,
+    );
+    assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
+}
+
 /// `glFramebufferTexture2D` with a bad `textarget` / unmodeled attachment is `GL_INVALID_VALUE`; with a
 /// dangling texture name it is `GL_INVALID_OPERATION`; a valid attach then succeeds.
 #[test]

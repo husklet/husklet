@@ -2,6 +2,75 @@ use super::*;
 
 pub(super) struct RenderPasses;
 
+fn resolve_blit_depth_target(
+    ctx: &mut GlContext,
+    fbo: u32,
+    fallback_color: u32,
+    extent: [i32; 2],
+    attachments: crate::model::program::DepthStencilSnapshot,
+    with_stencil: bool,
+    cmds: &mut Vec<Cmd>,
+) -> Option<u32> {
+    let (texture, needs_create, preserve) = ctx
+        .depth_target(
+            fbo,
+            fallback_color,
+            extent[0],
+            extent[1],
+            with_stencil,
+            attachments,
+        )
+        .ok()?;
+    if needs_create {
+        cmds.push(Cmd::CreateTexture(
+            texture,
+            TextureDesc {
+                width: extent[0].max(1) as u32,
+                height: extent[1].max(1) as u32,
+                depth: 1,
+                mip_levels: 1,
+                sample_count: 1,
+                dim: TextureDim::D2,
+                format: if with_stencil {
+                    TextureFormat::Depth24PlusStencil8
+                } else {
+                    TextureFormat::Depth32Float
+                },
+                usage: texture_usage::RENDER_TARGET
+                    | texture_usage::COPY_SRC
+                    | texture_usage::COPY_DST
+                    | texture_usage::SAMPLED,
+                label: "gl-blit-depth-stencil".into(),
+            },
+        ));
+    }
+    if !preserve.is_empty() {
+        cmds.push(Cmd::Submit(CommandBuffer {
+            encoder: preserve
+                .into_iter()
+                .map(|(source, aspect)| {
+                    let sub = TextureSubresource { mip: 0, layer: 0, aspect };
+                    Enc::CopyTextureToTexture {
+                        src: source,
+                        src_sub: sub,
+                        src_origin: Origin3d::default(),
+                        dst: texture,
+                        dst_sub: sub,
+                        dst_origin: Origin3d::default(),
+                        extent: Extent3d {
+                            width: extent[0].max(1) as u32,
+                            height: extent[1].max(1) as u32,
+                            depth: 1,
+                        },
+                    }
+                })
+                .collect(),
+            signal: None,
+        }));
+    }
+    Some(texture)
+}
+
 impl RenderPasses {
     pub(super) fn build_ordered(ctx: &mut GlContext) -> Option<Frame> {
         use crate::model::context::FrameOp;
@@ -77,7 +146,8 @@ impl RenderPasses {
                         &mut fbo_target,
                         &mut targets,
                     );
-                    if let Some(copy) = blit_copy_enc(
+                    if blit.mask & crate::model::glconst::GL_COLOR_BUFFER_BIT != 0 {
+                        if let Some(copy) = blit_copy_enc(
                         &blit.src,
                         &blit.dst,
                         src.1,
@@ -87,12 +157,57 @@ impl RenderPasses {
                         dst.3,
                         dst.4,
                         blit.filter,
+                        TextureAspect::All,
                     ) {
-                        cmds.push(Cmd::Submit(CommandBuffer {
-                            encoder: vec![copy],
-                            signal: None,
-                        }));
-                        initialized.insert(dst.1);
+                            cmds.push(Cmd::Submit(CommandBuffer { encoder: vec![copy], signal: None }));
+                            initialized.insert(dst.1);
+                        }
+                    }
+                    for (bit, aspect, with_stencil) in [
+                        (crate::model::glconst::GL_DEPTH_BUFFER_BIT, TextureAspect::DepthOnly, false),
+                        (crate::model::glconst::GL_STENCIL_BUFFER_BIT, TextureAspect::StencilOnly, true),
+                    ] {
+                        // Exact stencil copies use the backend's aspect copy. A scaled or mirrored
+                        // StencilOnly command is intentionally retained as a typed executor refusal:
+                        // WGSL has no fragment-stencil output. Partial-submit propagation commits the
+                        // preceding color/depth commands before declining this one, so the unsupported
+                        // stencil operation cannot roll back unrelated framebuffer work.
+                        if blit.mask & bit == 0 { continue; }
+                        let read_available = blit.read_fbo == 0 || match aspect {
+                            TextureAspect::DepthOnly => blit.read_depth_stencil.depth.is_some(),
+                            TextureAspect::StencilOnly => blit.read_depth_stencil.stencil.is_some(),
+                            TextureAspect::All => false,
+                        };
+                        let draw_available = blit.draw_fbo == 0 || match aspect {
+                            TextureAspect::DepthOnly => blit.draw_depth_stencil.depth.is_some(),
+                            TextureAspect::StencilOnly => blit.draw_depth_stencil.stencil.is_some(),
+                            TextureAspect::All => false,
+                        };
+                        if !read_available || !draw_available { continue; }
+                        let source = resolve_blit_depth_target(
+                            ctx, blit.read_fbo, src.1, blit.read_extent,
+                            blit.read_depth_stencil, with_stencil, &mut cmds,
+                        );
+                        let destination = resolve_blit_depth_target(
+                            ctx, blit.draw_fbo, dst.1, blit.draw_extent,
+                            blit.draw_depth_stencil, with_stencil, &mut cmds,
+                        );
+                        if let (Some(source), Some(destination)) = (source, destination) {
+                            if let Some(copy) = blit_copy_enc(
+                                &blit.src, &blit.dst,
+                                source, blit.read_extent[1],
+                                if with_stencil { TextureFormat::Depth24PlusStencil8 } else { TextureFormat::Depth32Float },
+                                destination, blit.draw_extent[1],
+                                if with_stencil { TextureFormat::Depth24PlusStencil8 } else { TextureFormat::Depth32Float },
+                                Filter::Nearest, aspect,
+                            ) {
+                                // Submit each aspect before resolving the next one. Switching a combined
+                                // depth/stencil storage between its depth-only and stencil-capable host
+                                // representations preserves the CURRENT aspect, so deferring this command
+                                // until after that switch would preserve stale pre-blit depth.
+                                cmds.push(Cmd::Submit(CommandBuffer { encoder: vec![copy], signal: None }));
+                            }
+                        }
                     }
                     last = Some(dst);
                     if blit.draw_fbo == 0 {
@@ -470,13 +585,47 @@ impl RenderPasses {
             {
                 push_final_target(&mut targets, target);
             }
-            if let Some(copy) = blit_copy_enc(
+            if b.mask & crate::model::glconst::GL_COLOR_BUFFER_BIT != 0 {
+                if let Some(copy) = blit_copy_enc(
                 &b.src, &b.dst, src.1, src.3, src.4, dstt.1, dstt.3, dstt.4, b.filter,
+                TextureAspect::All,
             ) {
-                cmds.push(Cmd::Submit(CommandBuffer {
-                    encoder: vec![copy],
-                    signal: None,
-                }));
+                    cmds.push(Cmd::Submit(CommandBuffer { encoder: vec![copy], signal: None }));
+                }
+            }
+            for (bit, aspect, with_stencil) in [
+                (crate::model::glconst::GL_DEPTH_BUFFER_BIT, TextureAspect::DepthOnly, false),
+                (crate::model::glconst::GL_STENCIL_BUFFER_BIT, TextureAspect::StencilOnly, true),
+            ] {
+                // See the ordered path above: scaled/mirrored stencil remains an explicit per-operation
+                // refusal, while exact compatible stencil is a native aspect copy.
+                if b.mask & bit == 0 { continue; }
+                let read_available = b.read_fbo == 0 || match aspect {
+                    TextureAspect::DepthOnly => b.read_depth_stencil.depth.is_some(),
+                    TextureAspect::StencilOnly => b.read_depth_stencil.stencil.is_some(),
+                    TextureAspect::All => false,
+                };
+                let draw_available = b.draw_fbo == 0 || match aspect {
+                    TextureAspect::DepthOnly => b.draw_depth_stencil.depth.is_some(),
+                    TextureAspect::StencilOnly => b.draw_depth_stencil.stencil.is_some(),
+                    TextureAspect::All => false,
+                };
+                if !read_available || !draw_available { continue; }
+                let source = resolve_blit_depth_target(
+                    ctx, b.read_fbo, src.1, b.read_extent, b.read_depth_stencil, with_stencil, &mut cmds,
+                );
+                let destination = resolve_blit_depth_target(
+                    ctx, b.draw_fbo, dstt.1, b.draw_extent, b.draw_depth_stencil, with_stencil, &mut cmds,
+                );
+                if let (Some(source), Some(destination)) = (source, destination) {
+                    let format = if with_stencil { TextureFormat::Depth24PlusStencil8 } else { TextureFormat::Depth32Float };
+                    if let Some(copy) = blit_copy_enc(
+                        &b.src, &b.dst, source, b.read_extent[1], format,
+                        destination, b.draw_extent[1], format, Filter::Nearest, aspect,
+                    ) {
+                        cmds.push(Cmd::Submit(CommandBuffer { encoder: vec![copy], signal: None }));
+                    }
+                }
             }
             if b.draw_fbo == 0 {
                 present = Some(dstt);
@@ -731,6 +880,71 @@ mod tests {
         GL_FRAGMENT_SHADER, GL_TEXTURE_2D, GL_TRIANGLES, GL_VERTEX_SHADER,
     };
     use crate::service::record::{attach_shader, bind_texture, shader_source};
+
+    #[test]
+    fn depth_blit_resolves_the_exact_attached_storage_generation() {
+        let mut ctx = GlContext::new();
+        let old = crate::model::program::DepthStencilSnapshot {
+            depth: Some((41, 7)),
+            stencil: None,
+        };
+        let replacement = crate::model::program::DepthStencilSnapshot {
+            depth: Some((41, 8)),
+            stencil: None,
+        };
+        let mut commands = Vec::new();
+        let first = resolve_blit_depth_target(&mut ctx, 3, 0, [32, 24], old, false, &mut commands)
+            .expect("old attached generation");
+        let same = resolve_blit_depth_target(&mut ctx, 3, 0, [32, 24], old, false, &mut commands)
+            .expect("same attached generation");
+        let next = resolve_blit_depth_target(
+            &mut ctx, 3, 0, [32, 24], replacement, false, &mut commands,
+        ).expect("replacement attached generation");
+
+        assert_eq!(first, same, "the same application storage generation stays resident");
+        assert_ne!(first, next, "redefining the attached object must not alias its old contents");
+        assert_eq!(commands.iter().filter(|command| matches!(command, Cmd::CreateTexture(..))).count(), 2);
+    }
+
+    #[test]
+    fn aspect_blit_preserves_rectangles_mirroring_and_untouched_planes() {
+        let command = blit_copy_enc(
+            &[9, 2, 1, 6], &[3, 8, 7, 0],
+            11, 10, TextureFormat::Depth32Float,
+            12, 10, TextureFormat::Depth32Float,
+            Filter::Nearest, TextureAspect::DepthOnly,
+        ).expect("non-empty depth blit");
+        assert!(matches!(command, Enc::BlitTexture {
+            src_sub: TextureSubresource { aspect: TextureAspect::DepthOnly, .. },
+            dst_sub: TextureSubresource { aspect: TextureAspect::DepthOnly, .. },
+            mirror: Mirror { x: true, y: true, z: false },
+            ..
+        }));
+
+        let exact_stencil = blit_copy_enc(
+            &[0, 0, 8, 8], &[2, 1, 10, 9],
+            21, 12, TextureFormat::Depth24PlusStencil8,
+            22, 12, TextureFormat::Depth24PlusStencil8,
+            Filter::Nearest, TextureAspect::StencilOnly,
+        ).expect("exact stencil blit");
+        assert!(matches!(exact_stencil, Enc::CopyTextureToTexture {
+            src_sub: TextureSubresource { aspect: TextureAspect::StencilOnly, .. },
+            dst_sub: TextureSubresource { aspect: TextureAspect::StencilOnly, .. },
+            ..
+        }));
+
+        let scaled_stencil = blit_copy_enc(
+            &[0, 0, 8, 8], &[0, 0, 4, 4],
+            21, 8, TextureFormat::Depth24PlusStencil8,
+            22, 4, TextureFormat::Depth24PlusStencil8,
+            Filter::Nearest, TextureAspect::StencilOnly,
+        ).expect("scaled stencil reaches the typed executor refusal");
+        assert!(matches!(scaled_stencil, Enc::BlitTexture {
+            src_sub: TextureSubresource { aspect: TextureAspect::StencilOnly, .. },
+            dst_sub: TextureSubresource { aspect: TextureAspect::StencilOnly, .. },
+            ..
+        }));
+    }
 
     fn fallback_then_sample() -> (GlContext, u32) {
         let mut ctx = GlContext::new();

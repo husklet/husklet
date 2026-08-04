@@ -94,6 +94,7 @@ pub(super) fn blit_copy_enc(
     dst_th: i32,
     dst_fmt: TextureFormat,
     filter: Filter,
+    aspect: TextureAspect,
 ) -> Option<Enc> {
     let (sx0, sx1) = (src[0].min(src[2]), src[0].max(src[2]));
     let (sy0, sy1) = (src[1].min(src[3]), src[1].max(src[3]));
@@ -130,7 +131,7 @@ pub(super) fn blit_copy_enc(
         // copy below cannot convert and must not be used when the formats disagree.
         return Some(Enc::BlitTexture {
             src: src_tex,
-            src_sub: TextureSubresource::base(),
+            src_sub: TextureSubresource { mip: 0, layer: 0, aspect },
             src_origin: Origin3d {
                 x: sx0.max(0) as u32,
                 y: src_oy,
@@ -142,7 +143,7 @@ pub(super) fn blit_copy_enc(
                 depth: 1,
             },
             dst: dst_tex,
-            dst_sub: TextureSubresource::base(),
+            dst_sub: TextureSubresource { mip: 0, layer: 0, aspect },
             dst_origin: Origin3d {
                 x: dx0.max(0) as u32,
                 y: dst_oy,
@@ -159,14 +160,14 @@ pub(super) fn blit_copy_enc(
     }
     Some(Enc::CopyTextureToTexture {
         src: src_tex,
-        src_sub: TextureSubresource::base(),
+        src_sub: TextureSubresource { mip: 0, layer: 0, aspect },
         src_origin: Origin3d {
             x: sx0.max(0) as u32,
             y: src_oy,
             z: 0,
         },
         dst: dst_tex,
-        dst_sub: TextureSubresource::base(),
+        dst_sub: TextureSubresource { mip: 0, layer: 0, aspect },
         dst_origin: Origin3d {
             x: dx0.max(0) as u32,
             y: dst_oy,

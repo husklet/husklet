@@ -19,12 +19,17 @@ pub struct BlitOp {
     /// attached to the exact producer generation even after its GL attachment was deleted.
     pub read_ir: Option<u32>,
     pub draw_ir: Option<u32>,
+    pub read_depth_stencil: crate::model::program::DepthStencilSnapshot,
+    pub draw_depth_stencil: crate::model::program::DepthStencilSnapshot,
+    pub read_extent: [i32; 2],
+    pub draw_extent: [i32; 2],
     /// Source rect `[x0, y0, x1, y1]` and destination rect, in GL bottom-left window coordinates.
     pub src: [i32; 4],
     pub dst: [i32; 4],
     /// The resampling filter for a SCALING blit (`glBlitFramebuffer`'s `filter` arg: `GL_LINEAR` →
     /// [`Filter::Linear`], `GL_NEAREST` → [`Filter::Nearest`]). Ignored for the equal-size copy path.
     pub filter: hl_gpu::protocol::model::enums::Filter,
+    pub mask: u32,
 }
 
 /// A framebuffer-to-texture copy captured at its GL call site. The source framebuffer attachment is

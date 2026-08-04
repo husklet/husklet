@@ -483,29 +483,76 @@ pub fn blit_framebuffer(
         ctx.set_gl_error(GL_INVALID_FRAMEBUFFER_OPERATION);
         return;
     }
-    // Only the COLOUR aspect is copied. A depth or stencil blit has no lowering here, and dropping it in
-    // silence is worse than not supporting it: nothing is recorded, so no later diagnostic can fire for
-    // it either — the copy simply never happened and the frame that needed it has no account of why.
-    // Say so once per context; a compositor blits every frame.
-    if mask & (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT) != 0
-        && !ctx.local.depth_stencil_blit_reported
-    {
-        ctx.local.depth_stencil_blit_reported = true;
-        hl_log::hl_warn!(
-            hl_log::tag::GL,
-            "glBlitFramebuffer: the depth/stencil aspects of mask {mask:#x} are NOT copied (only the \
-             colour aspect is lowered). Reported once per context."
-        );
-    }
-    if mask & GL_COLOR_BUFFER_BIT == 0 {
+    let valid_mask = GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT;
+    if mask & !valid_mask != 0 {
+        ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
-    // GL defines only GL_NEAREST and GL_LINEAR for a color blit; anything else falls back to Nearest.
-    let filter = if filter == crate::model::glconst::GL_LINEAR {
-        hl_gpu::protocol::model::enums::Filter::Linear
-    } else {
-        hl_gpu::protocol::model::enums::Filter::Nearest
+    let filter = match filter {
+        crate::model::glconst::GL_LINEAR => hl_gpu::protocol::model::enums::Filter::Linear,
+        crate::model::glconst::GL_NEAREST => hl_gpu::protocol::model::enums::Filter::Nearest,
+        _ => {
+            ctx.set_gl_error(GL_INVALID_ENUM);
+            return;
+        }
     };
+    if mask & (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT) != 0
+        && filter != hl_gpu::protocol::model::enums::Filter::Nearest
+    {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+    let attachment_format = |ctx: &GlContext, source: Option<(u32, bool)>| {
+        source.and_then(|(name, renderbuffer)| {
+            if renderbuffer {
+                ctx.renderbuffers.get(name).map(|object| object.internal_format)
+            } else {
+                ctx.textures.get(name).map(|object| object.internal_format)
+            }
+        })
+    };
+    for (bit, read, draw) in [
+        (
+            GL_DEPTH_BUFFER_BIT,
+            ctx.local.framebuffers.depth_source(ctx.local.read_fbo),
+            ctx.local.framebuffers.depth_source(ctx.local.bound_fbo),
+        ),
+        (
+            GL_STENCIL_BUFFER_BIT,
+            ctx.local.framebuffers.stencil_source(ctx.local.read_fbo),
+            ctx.local.framebuffers.stencil_source(ctx.local.bound_fbo),
+        ),
+    ] {
+        if mask & bit != 0
+            && ctx.local.read_fbo != 0
+            && ctx.local.bound_fbo != 0
+            && matches!((attachment_format(ctx, read), attachment_format(ctx, draw)),
+                (Some(read), Some(draw)) if read != draw)
+        {
+            ctx.set_gl_error(GL_INVALID_OPERATION);
+            return;
+        }
+    }
+    let framebuffer_samples = |ctx: &GlContext, fbo| {
+        if fbo == 0 { return 0; }
+        ctx.local.framebuffers.color_source(fbo, 0)
+            .or_else(|| ctx.local.framebuffers.depth_source(fbo))
+            .or_else(|| ctx.local.framebuffers.stencil_source(fbo))
+            .and_then(|(name, renderbuffer)| {
+                renderbuffer.then_some(name).and_then(|name| ctx.renderbuffers.get(name).map(|r| r.samples))
+            })
+            .unwrap_or(0)
+    };
+    let read_samples = framebuffer_samples(ctx, ctx.local.read_fbo);
+    let draw_samples = framebuffer_samples(ctx, ctx.local.bound_fbo);
+    let source_size = [(src_x1 - src_x0).unsigned_abs(), (src_y1 - src_y0).unsigned_abs()];
+    let destination_size = [(dst_x1 - dst_x0).unsigned_abs(), (dst_y1 - dst_y0).unsigned_abs()];
+    if (draw_samples > 0 && read_samples != draw_samples)
+        || (read_samples > 0 && source_size != destination_size)
+    {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
     let target = |ctx: &GlContext, fbo| {
         (fbo != 0).then(|| {
             ctx.framebuffer_color_texture(fbo, 0)
@@ -523,6 +570,32 @@ pub fn blit_framebuffer(
                 })
         })?
     };
+    let attachment = |ctx: &GlContext, source: Option<(u32, bool)>| {
+        source.and_then(|(name, renderbuffer)| {
+            let texture = if renderbuffer { ctx.renderbuffers.backing_tex(name) } else { name };
+            ctx.textures.get(texture).map(|object| (texture, object.gen))
+        })
+    };
+    let depth_stencil = |ctx: &GlContext, fbo| crate::model::program::DepthStencilSnapshot {
+        depth: attachment(ctx, ctx.local.framebuffers.depth_source(fbo)),
+        stencil: attachment(ctx, ctx.local.framebuffers.stencil_source(fbo)),
+    };
+    let extent = |ctx: &GlContext, fbo| {
+        if fbo == 0 {
+            [ctx.local.surf.width as i32, ctx.local.surf.height as i32]
+        } else {
+            let source = ctx.local.framebuffers.color_source(fbo, 0)
+                .or_else(|| ctx.local.framebuffers.depth_source(fbo))
+                .or_else(|| ctx.local.framebuffers.stencil_source(fbo));
+            source.and_then(|(name, renderbuffer)| {
+                if renderbuffer {
+                    ctx.renderbuffers.get(name).map(|r| [r.width, r.height])
+                } else {
+                    ctx.textures.get(name).map(|t| [t.w, t.h])
+                }
+            }).unwrap_or([0, 0])
+        }
+    };
     ctx.record_blit(crate::model::context::BlitOp {
         read_fbo: ctx.local.read_fbo,
         draw_fbo: ctx.local.bound_fbo,
@@ -530,9 +603,14 @@ pub fn blit_framebuffer(
         draw_target: target(ctx, ctx.local.bound_fbo),
         read_ir: None,
         draw_ir: None,
+        read_depth_stencil: depth_stencil(ctx, ctx.local.read_fbo),
+        draw_depth_stencil: depth_stencil(ctx, ctx.local.bound_fbo),
+        read_extent: extent(ctx, ctx.local.read_fbo),
+        draw_extent: extent(ctx, ctx.local.bound_fbo),
         src: [src_x0, src_y0, src_x1, src_y1],
         dst: [dst_x0, dst_y0, dst_x1, dst_y1],
         filter,
+        mask,
     });
 }
 
