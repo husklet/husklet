@@ -100,15 +100,44 @@ fn magic_link_follow() {
 
         let followed = fixture.host.resolve(&base, &Fixture::operand(path, false)).unwrap();
         assert_eq!(followed.metadata().unwrap().kind, hl_runtime::FileKind::Directory);
-        let opened = fixture
+        let mut opened = fixture
             .host
             .prepare_open(
                 &base,
                 &Fixture::plan(path, OpenIntent::READ | OpenIntent::DIRECTORY, false),
             )
             .unwrap();
+        opened.commit().unwrap();
         assert_eq!(opened.object().metadata().unwrap().kind, 4);
     }
+}
+
+#[test]
+fn followed_magic_link_open_survives_task_reap() {
+    let fixture = Fixture::new();
+    let base = fixture.host.root_base().unwrap();
+    let mut opened = fixture
+        .host
+        .prepare_open(
+            &base,
+            &Fixture::plan(
+                b"/proc/self/cwd",
+                OpenIntent::READ | OpenIntent::DIRECTORY,
+                false,
+            ),
+        )
+        .unwrap();
+    let object = opened.object();
+    opened.commit().unwrap();
+    drop(opened);
+
+    fixture
+        .tasks
+        .exit_process(fixture.child, hl_task::ExitStatus::Code(0))
+        .unwrap();
+    fixture.tasks.reap(fixture.parent, fixture.child).unwrap();
+
+    assert_eq!(object.metadata().unwrap().kind, 4);
 }
 
 #[test]

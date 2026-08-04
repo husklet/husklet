@@ -54,6 +54,47 @@ publication; retained renderers correspond to `Procfs::open`, `read_link`,
 `self-vm`, `nslinks`, and `peer-identity` are unsupported on the macOS backend
 but remain enforceable on Linux.
 
+### Magic-link open lifetime
+
+The `/proc/[self|pid]/{root,cwd}` open and lifetime path was audited directly in
+the read-only retained engine. `../engine/src/linux_abi/syscall/fs.c` handles
+`openat` in `svc_fs`; unlike its dedicated `exe` and `map_files` open branches,
+root/cwd reach the ordinary confined `open`/`openat` route after `proc_open`
+declines them. Their readlink and stat branches use `proc_self_leaf`, the live
+`g_cwd` or `/` target, and `xresolve_overlay`. A successful retained open has
+already produced a host descriptor before the guest descriptor is returned.
+The same file's close case calls `fd_reset_emul` before the host `close`, so the
+host descriptor owns the followed directory until final descriptor teardown.
+`chdir` and `fchdir` update process-local `g_cwd` only after a successful host
+directory change. The filesystem context is detached on fork unless `CLONE_FS`
+shares it; root/cwd link synthesis has no guest-ISA branch, while host path
+resolution is selected by the retained POSIX adapters. There is no partial
+result, blocking, cancellation, or wakeup path in this open; lookup errors are
+returned before descriptor publication. Rust's explicit typed root/cwd redirect
+therefore has no one-to-one retained helper; it replaces the retained route's
+dependence on the materialized proc tree while preserving its committed-host-fd
+lifetime.
+
+Rust maps live root/cwd state to `hl-runtime::WorkingDirectory` and
+`hl-runtime::TaskProcfs`, magic-link identification and metadata to
+`hl-vfs::Procfs`, and the cross-domain follow to `NativePath::procfs_plan` plus
+the ordinary resolver. `PendingOpen` pins the resolved parent during the
+transaction, installs the host file only in `PreparedPathOpen::commit`, and
+publishes that file through an `Arc<NativeFile>` open description. Consequently
+the prepared object is deliberately not an open file before commit, rollback
+has no leaked host file, and the committed open description remains valid after
+the procfs task is reaped. The focused engine tests cover both transaction
+ordering and post-reap open-description lifetime; they do not claim peer
+magic-link open support.
+
+| Retained C capability | Rust owner | Mapping |
+|---|---|---|
+| live root/cwd target selection | `WorkingDirectory` and `TaskProcfs` | process-scoped snapshot used by magic-link follow |
+| confined target resolution | `NativePath::procfs_plan`, `hl-vfs::Resolver`, `PendingOpen` | guest target resolved under the selected root with a pinned parent |
+| atomic open before fd publication | `PreparedPathOpen::commit`, then descriptor install publication | object becomes usable only after commit succeeds |
+| OFD lifetime independent of proc task | `Arc<NativeFile>` containing the committed host file | task reap removes proc visibility without retiring an open description |
+| final close teardown | `NativeFile` and descriptor-table last-reference teardown | host file and path leases are released by their owners |
+
 ## Canonical ownership
 
 The retained manifest contains 57 cases. The canonical inventory contains 112
