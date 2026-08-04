@@ -75,6 +75,7 @@ pub struct EndpointSettings {
     pub network_id: String,
     #[serde(rename = "EndpointID")]
     pub endpoint_id: String,
+    pub mac_address: String,
     pub gateway: String,
     #[serde(rename = "IPAddress")]
     pub ip_address: String,
@@ -98,6 +99,7 @@ impl From<(&hl_container::Network, &hl_container::Endpoint)> for EndpointSetting
             aliases,
             network_id: network.id.to_string(),
             endpoint_id: endpoint.container.to_string(),
+            mac_address: endpoint.mac_address().unwrap_or_default(),
             gateway: network.gateway.map_or_else(String::new, |value| value.to_string()),
             ip_address: endpoint.address.map_or_else(String::new, |value| value.to_string()),
             ip_prefix_len: network.subnet.map_or(0, |subnet| subnet.prefix),
@@ -423,12 +425,28 @@ mod tests {
         let settings = EndpointSettings::from((&network, &endpoint));
         assert_eq!(settings.endpoint_id, endpoint.container.to_string());
         assert_eq!(settings.aliases, ["renamed", "api"]);
+        assert_eq!(settings.mac_address, "02:42:ac:1e:00:02");
         assert_eq!(settings.ip_address, "172.30.0.2");
         assert_eq!(settings.ip_prefix_len, 24);
         let wire = serde_json::to_value(&settings).unwrap();
         assert_eq!(wire["Aliases"], serde_json::json!(["renamed", "api"]));
         assert_eq!(wire["EndpointID"], endpoint.container.to_string());
+        assert_eq!(wire["MacAddress"], "02:42:ac:1e:00:02");
         assert!(wire.get("aliases").is_none());
+        assert!(wire.get("mac_address").is_none());
+        assert!(wire.get("IPv6Gateway").is_none());
+        assert!(wire.get("GlobalIPv6Address").is_none());
+        assert!(wire.get("GlobalIPv6PrefixLen").is_none());
+
+        let mut network_projection_source = network;
+        network_projection_source
+            .endpoints
+            .insert(endpoint.container.clone(), endpoint.clone());
+        let network_projection = crate::api::Network::from(network_projection_source);
+        assert_eq!(
+            network_projection.containers[&endpoint.container.to_string()].mac_address,
+            settings.mac_address
+        );
     }
 
     #[test]
