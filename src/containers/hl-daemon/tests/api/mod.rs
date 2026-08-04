@@ -16,7 +16,6 @@ pub(crate) mod malformed_archive;
 pub(crate) mod named_volume;
 pub(crate) mod network_bridge;
 pub(crate) mod network_list;
-pub(crate) mod observability;
 pub(crate) mod persistence_restart;
 pub(crate) mod port_publishing;
 pub(crate) mod removal_race;
