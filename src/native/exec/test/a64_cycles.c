@@ -1,0 +1,252 @@
+#include "../include/executor.h"
+#include "../src/arch/aarch64/projection.h"
+#include "../src/translation.h"
+
+#include <stdio.h>
+#include <string.h>
+#include <sys/mman.h>
+
+#define CHECK(value) do { if (!(value)) { fprintf(stderr, "a64_cycles:%d: %s\n", __LINE__, #value); return 1; } } while (0)
+
+typedef struct executable_memory {
+    uint8_t *address;
+    uint64_t capacity;
+} executable_memory;
+
+static hl_native_status reserve(void *opaque, uint64_t capacity, uint64_t alignment,
+                                uint32_t dual, hl_native_mapping *output) {
+    executable_memory *memory = opaque;
+    (void)alignment;
+    if (dual != 0) return HL_NATIVE_PLATFORM;
+    void *address = mmap(NULL, (size_t)capacity, PROT_READ | PROT_WRITE,
+                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (address == MAP_FAILED) return HL_NATIVE_MEMORY;
+    memory->address = address;
+    memory->capacity = capacity;
+    *output = (hl_native_mapping){.abi = HL_NATIVE_ABI, .size = sizeof(*output), .handle = 1,
+        .writable = (uint64_t)(uintptr_t)address, .executable = (uint64_t)(uintptr_t)address,
+        .capacity = capacity};
+    return HL_NATIVE_OK;
+}
+
+static hl_native_status release(void *opaque, hl_native_handle handle) {
+    executable_memory *memory = opaque;
+    if (handle != 1 || memory->address == NULL) return HL_NATIVE_ARGUMENT;
+    if (munmap(memory->address, (size_t)memory->capacity) != 0) return HL_NATIVE_PLATFORM;
+    memory->address = NULL;
+    return HL_NATIVE_OK;
+}
+
+static hl_native_status publish(void *opaque, hl_native_handle handle, uint64_t offset, uint64_t size) {
+    executable_memory *memory = opaque;
+    return handle == 1 && offset <= memory->capacity && size <= memory->capacity - offset
+        ? HL_NATIVE_OK : HL_NATIVE_ARGUMENT;
+}
+
+static hl_native_status repair(void *opaque, hl_native_mapping *mapping, uint32_t preserve) {
+    executable_memory *memory = opaque;
+    (void)preserve;
+    return mapping->handle == 1 && mapping->writable == (uint64_t)(uintptr_t)memory->address
+        ? HL_NATIVE_OK : HL_NATIVE_ARGUMENT;
+}
+
+static hl_native_status write_begin(void *opaque) {
+    executable_memory *memory = opaque;
+    return mprotect(memory->address, (size_t)memory->capacity, PROT_READ | PROT_WRITE) == 0
+        ? HL_NATIVE_OK : HL_NATIVE_PLATFORM;
+}
+
+static hl_native_status write_end(void *opaque) {
+    executable_memory *memory = opaque;
+    __builtin___clear_cache((char *)memory->address, (char *)memory->address + memory->capacity);
+    return mprotect(memory->address, (size_t)memory->capacity, PROT_READ | PROT_EXEC) == 0
+        ? HL_NATIVE_OK : HL_NATIVE_PLATFORM;
+}
+
+static hl_native_executor *create(executable_memory *host) {
+    const hl_native_memory memory = {.abi = HL_NATIVE_ABI, .size = sizeof(memory), .context = host,
+        .reserve = reserve, .release = release, .publish = publish, .repair = repair,
+        .write_begin = write_begin, .write_end = write_end};
+    const hl_native_config config = {.abi = HL_NATIVE_ABI, .size = sizeof(config),
+        .capacity = 64u << 20, .alignment = 4096, .flags = HL_NATIVE_DIAGNOSTICS,
+        .memory = &memory};
+    hl_native_executor *executor = NULL;
+    return hl_native_create(&config, &executor) == HL_NATIVE_OK ? executor : NULL;
+}
+
+static int publication(void) {
+    executable_memory host = {0};
+    hl_native_executor *executor = create(&host);
+    CHECK(executor != NULL);
+    const hl_native_change replace = {.abi = HL_NATIVE_ABI, .size = sizeof(replace),
+        .kind = HL_NATIVE_REPLACE, .mapping_epoch = 7};
+    CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_OK);
+
+    const uint32_t exit_word = UINT32_C(0x14000000);
+    const hl_native_provenance left_map = {.code_offset = 0, .code_size = 4, .guest = 0x1000};
+    const hl_native_provenance right_map = {.code_offset = 0, .code_size = 4, .guest = 0x2000};
+    const hl_native_relocation left_link = {.code_offset = 0, .target_guest = 0x2000,
+        .target_instruction_epoch = 3, .target_epoch_known = 1, .expected = exit_word};
+    const hl_native_relocation right_link = {.code_offset = 0, .target_guest = 0x1000,
+        .target_instruction_epoch = 3, .target_epoch_known = 1, .expected = exit_word};
+    const hl_native_translation_key left = {0x1000, 7, 3, 0x1000, 0x1004, 0, 0};
+    const hl_native_translation_key right = {0x2000, 7, 3, 0x2000, 0x2004, 0, 0};
+    const hl_native_emission left_emission = {.bytes = (const uint8_t *)&exit_word,
+        .size = sizeof(exit_word), .provenance = &left_map, .provenance_count = 1,
+        .relocations = &left_link, .relocation_count = 1, .cycle_safe = 1};
+    const hl_native_emission right_emission = {.bytes = (const uint8_t *)&exit_word,
+        .size = sizeof(exit_word), .provenance = &right_map, .provenance_count = 1,
+        .relocations = &right_link, .relocation_count = 1, .cycle_safe = 1};
+    hl_native_code code;
+    CHECK(hl_native_translation_publish(executor, &left, &left_emission) == HL_NATIVE_OK);
+    CHECK(hl_native_translation_publish(executor, &right, &right_emission) == HL_NATIVE_OK);
+    CHECK(hl_native_translation_lookup(executor, &left, &code) == HL_NATIVE_HIT);
+    CHECK(*(const uint32_t *)code.entry != exit_word && code.cycle_safe == 1);
+    CHECK(hl_native_translation_lookup(executor, &right, &code) == HL_NATIVE_HIT);
+    CHECK(*(const uint32_t *)code.entry != exit_word && code.cycle_safe == 1);
+
+    const hl_native_change reset = {.abi = HL_NATIVE_ABI, .size = sizeof(reset),
+        .kind = HL_NATIVE_REPLACE, .mapping_epoch = 8};
+    CHECK(hl_native_changed(executor, &reset, 1) == HL_NATIVE_OK);
+    hl_native_translation_key mixed_left = left, mixed_right = right;
+    mixed_left.mapping_incarnation = mixed_right.mapping_incarnation = 8;
+    hl_native_emission unsafe_right = right_emission;
+    unsafe_right.cycle_safe = 0;
+    CHECK(hl_native_translation_publish(executor, &mixed_left, &left_emission) == HL_NATIVE_OK);
+    CHECK(hl_native_translation_publish(executor, &mixed_right, &unsafe_right) == HL_NATIVE_OK);
+    CHECK(hl_native_translation_lookup(executor, &mixed_left, &code) == HL_NATIVE_HIT);
+    const uint32_t *mixed_left_word = code.entry;
+    CHECK(hl_native_translation_lookup(executor, &mixed_right, &code) == HL_NATIVE_HIT);
+    const uint32_t *mixed_right_word = code.entry;
+    CHECK((*mixed_left_word == exit_word) != (*mixed_right_word == exit_word));
+
+    const hl_native_change branch_reset = {.abi = HL_NATIVE_ABI, .size = sizeof(branch_reset),
+        .kind = HL_NATIVE_REPLACE, .mapping_epoch = 9};
+    CHECK(hl_native_changed(executor, &branch_reset, 1) == HL_NATIVE_OK);
+    const hl_native_translation_key branch_source = {0x3000, 9, 4, 0x3000, 0x3004, 0, 0};
+    const hl_native_translation_key branch_target = {0x4000, 9, 4, 0x4000, 0x4004, 0, 0};
+    const hl_native_translation_key branch_unsafe = {0x5000, 9, 4, 0x5000, 0x5004, 0, 0};
+    const hl_native_provenance branch_source_map = {
+        .code_offset = 0, .code_size = 4, .guest = 0x3000};
+    const hl_native_provenance branch_target_map = {
+        .code_offset = 0, .code_size = 4, .guest = 0x4000};
+    const hl_native_provenance branch_unsafe_map = {
+        .code_offset = 0, .code_size = 4, .guest = 0x5000};
+    const hl_native_relocation source_target = {.code_offset = 0, .target_guest = 0x4000,
+        .target_instruction_epoch = 4, .target_epoch_known = 1, .expected = exit_word};
+    const hl_native_relocation unsafe_source = {.code_offset = 0, .target_guest = 0x3000,
+        .target_instruction_epoch = 4, .target_epoch_known = 1, .expected = exit_word};
+    const hl_native_relocation target_paths[] = {
+        {.code_offset = 0, .target_guest = 0x3000, .target_instruction_epoch = 4,
+         .target_epoch_known = 1, .expected = exit_word},
+        {.code_offset = 4, .target_guest = 0x5000, .target_instruction_epoch = 4,
+         .target_epoch_known = 1, .expected = exit_word},
+    };
+    const uint32_t target_words[] = {exit_word, exit_word};
+    const hl_native_emission branch_source_emission = {.bytes = (const uint8_t *)&exit_word,
+        .size = sizeof(exit_word), .provenance = &branch_source_map, .provenance_count = 1,
+        .relocations = &source_target, .relocation_count = 1, .cycle_safe = 1};
+    const hl_native_emission branch_unsafe_emission = {.bytes = (const uint8_t *)&exit_word,
+        .size = sizeof(exit_word), .provenance = &branch_unsafe_map, .provenance_count = 1,
+        .relocations = &unsafe_source, .relocation_count = 1};
+    const hl_native_emission branch_target_emission = {.bytes = (const uint8_t *)target_words,
+        .size = sizeof(target_words), .provenance = &branch_target_map, .provenance_count = 1,
+        .relocations = target_paths, .relocation_count = 2, .cycle_safe = 1};
+    CHECK(hl_native_translation_publish(executor, &branch_source, &branch_source_emission) == HL_NATIVE_OK);
+    CHECK(hl_native_translation_publish(executor, &branch_unsafe, &branch_unsafe_emission) == HL_NATIVE_OK);
+    CHECK(hl_native_translation_publish(executor, &branch_target, &branch_target_emission) == HL_NATIVE_OK);
+    CHECK(hl_native_translation_lookup(executor, &branch_source, &code) == HL_NATIVE_HIT);
+    CHECK(*(const uint32_t *)code.entry == exit_word);
+
+    CHECK(hl_native_destroy(executor) == HL_NATIVE_OK && host.address == NULL);
+    return 0;
+}
+
+static int execution(void) {
+#if !defined(__aarch64__)
+    return 0;
+#else
+    executable_memory host = {0};
+    hl_native_executor *executor = create(&host);
+    CHECK(executor != NULL);
+    const hl_native_change replace = {.abi = HL_NATIVE_ABI, .size = sizeof(replace),
+        .kind = HL_NATIVE_REPLACE, .mapping_epoch = 11};
+    CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_OK);
+    static _Alignas(16) uint8_t stack[4096];
+    uint64_t stack_first = (uint64_t)(uintptr_t)stack;
+    uint64_t stack_last = (uint64_t)(uintptr_t)(stack + sizeof(stack));
+    const hl_a64_view view = {stack_first, stack_last, stack_first, 11,
+        HL_A64_PERMISSION_READ | HL_A64_PERMISSION_WRITE, 0};
+    const hl_a64_projection projection = {&view, 1, 11, 0};
+    hl_native_aarch64_cpu state = {0};
+    hl_native_cpu cpu = {.abi = HL_NATIVE_ABI, .size = sizeof(cpu),
+        .architecture = HL_NATIVE_AARCH64, .state.aarch64 = &state};
+    hl_native_run_request request = {.abi = HL_NATIVE_ABI, .size = sizeof(request),
+        .architecture = HL_NATIVE_AARCH64, .mapping_epoch = 11, .projection = &projection};
+    hl_native_exit output = {.abi = HL_NATIVE_ABI, .size = sizeof(output)};
+
+    const uint32_t self_words[] = {UINT32_C(0xf1000400), UINT32_C(0x54ffffe1)};
+    const hl_native_source_span self_span = {
+        0x3000, (const uint8_t *)self_words, sizeof(self_words), 11, 5};
+    const hl_native_source self_source = {&self_span, 1, 11, 5};
+    request.source = &self_source;
+    request.budget = 10;
+    state.program = 0x3000;
+    state.stack = stack_last;
+    state.registers[0] = 100;
+    hl_native_diagnostics before = {.abi = HL_NATIVE_ABI, .size = sizeof(before)}, after = before;
+    CHECK(hl_native_diagnose(executor, &before) == HL_NATIVE_OK);
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 10 && state.registers[0] == 95);
+    CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
+    CHECK(after.boundary_branch == before.boundary_branch && after.boundary_yield == before.boundary_yield + 1);
+    request.budget = 10;
+    state.interrupt = 1;
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    CHECK(output.kind == HL_NATIVE_EXIT_INTERRUPT && state.executed == 0 && state.budget == 10);
+    state.interrupt = 0;
+
+    const uint32_t pair_words[] = {
+        UINT32_C(0x14000002), UINT32_C(0xd503201f), UINT32_C(0x17fffffe)};
+    const hl_native_source_span pair_span = {
+        0x4000, (const uint8_t *)pair_words, sizeof(pair_words), 11, 6};
+    const hl_native_source pair_source = {&pair_span, 1, 11, 6};
+    request.source = &pair_source;
+    request.budget = 6;
+    state.program = 0x4000;
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 6);
+    before = (hl_native_diagnostics){.abi = HL_NATIVE_ABI, .size = sizeof(before)};
+    after = before;
+    CHECK(hl_native_diagnose(executor, &before) == HL_NATIVE_OK);
+    request.budget = 6;
+    state.program = 0x4000;
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 6);
+    CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
+    CHECK(after.boundary_branch == before.boundary_branch);
+
+    const hl_native_change invalidate = {.abi = HL_NATIVE_ABI, .size = sizeof(invalidate),
+        .kind = HL_NATIVE_INVALIDATE, .first = 0x4008, .last = 0x400c, .mapping_epoch = 11};
+    before = (hl_native_diagnostics){.abi = HL_NATIVE_ABI, .size = sizeof(before)};
+    after = before;
+    CHECK(hl_native_diagnose(executor, &before) == HL_NATIVE_OK);
+    CHECK(hl_native_changed(executor, &invalidate, 1) == HL_NATIVE_OK);
+    CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
+    CHECK(after.invalidations == before.invalidations + 1);
+    before = after;
+    request.budget = 6;
+    state.program = 0x4000;
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 6);
+    CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
+    CHECK(after.boundary_branch == before.boundary_branch + 1);
+
+    CHECK(hl_native_destroy(executor) == HL_NATIVE_OK && host.address == NULL);
+    return 0;
+#endif
+}
+
+int main(void) {
+    return publication() != 0 || execution() != 0;
+}

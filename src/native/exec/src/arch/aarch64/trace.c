@@ -748,7 +748,8 @@ hl_native_status hl_a64_trace_cache_direct(hl_native_executor *executor, const h
                                     .body_offset = trace.body_offset, .provenance = trace.provenance,
                                     .provenance_count = trace.provenance_count,
                                     .relocations = trace.relocations,
-                                    .relocation_count = trace.relocation_count};
+                                    .relocation_count = trace.relocation_count,
+                                    .cycle_safe = 1};
     for (uint32_t index = 0; index < trace.relocation_count; index++) {
         trace.relocations[index].target_instruction_epoch = 0;
         trace.relocations[index].target_epoch_known = 0;

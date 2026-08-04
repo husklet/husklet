@@ -50,6 +50,7 @@ hl_native_status hl_native_translation_publish(hl_native_executor *executor, con
     if (status == HL_NATIVE_OK) {
         block.instruction_count = emission->instruction_count != 0 ? emission->instruction_count : 1u;
         block.conditional_self_loop = emission->conditional_self_loop;
+        block.cycle_safe = emission->cycle_safe;
         block.loop_pc = emission->loop_pc;
         status = hl_native_cache_publish_map(executor->cache, &block, emission->size, emission->body_offset,
                                              emission->provenance, emission->provenance_count);

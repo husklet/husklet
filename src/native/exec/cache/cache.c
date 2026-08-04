@@ -139,6 +139,7 @@ hl_native_lookup hl_native_cache_lookup_key(hl_native_cache *cache, uint64_t gue
     output->source_last = entry->source_last;
     output->instruction_count = entry->instruction_count;
     output->conditional_self_loop = entry->conditional_self_loop;
+    output->cycle_safe = entry->cycle_safe;
     output->loop_pc = entry->loop_pc;
     output->identity_token = entry->token;
     output->mapping_epoch = entry->mapping_epoch;
@@ -294,6 +295,7 @@ hl_native_status hl_native_cache_publish_map(hl_native_cache *cache, hl_native_b
     entry->body_offset = block->code_offset + body_offset;
     entry->instruction_count = block->instruction_count != 0 ? block->instruction_count : 1u;
     entry->conditional_self_loop = block->conditional_self_loop;
+    entry->cycle_safe = block->cycle_safe;
     entry->loop_pc = block->loop_pc;
     /* Publication makes bytes executable first. Provenance is then complete
      * before the live identity can be observed by a dispatcher lookup. */
@@ -369,6 +371,7 @@ int hl_native_cache_execution(const hl_native_cache *cache, uint64_t identity, h
         output->source_last = entry->source_last;
         output->instruction_count = entry->instruction_count;
         output->conditional_self_loop = entry->conditional_self_loop;
+        output->cycle_safe = entry->cycle_safe;
         output->loop_pc = entry->loop_pc;
         output->identity_token = entry->token;
         output->mapping_epoch = entry->mapping_epoch;

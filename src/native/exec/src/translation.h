@@ -23,6 +23,7 @@ typedef struct hl_native_emission {
     uint32_t relocation_count;
     uint32_t instruction_count;
     uint32_t conditional_self_loop;
+    uint32_t cycle_safe;
     uint64_t loop_pc;
 } hl_native_emission;
 

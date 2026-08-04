@@ -1,5 +1,46 @@
 #include "private.h"
 
+/* Unguarded cycles must retain one typed dispatcher exit. Publication cannot
+ * allocate, so admission uses a fixed nonrecursive frontier. A guarded cycle
+ * may close only when every examined entry has its own interrupt and budget
+ * checkpoint. Saturation conservatively retains the original exit. */
+enum { CYCLE_FRONTIER_CAPACITY = 64 };
+
+typedef struct cycle_node { uint64_t guest, epoch; } cycle_node;
+
+static int same_node(cycle_node left, cycle_node right) {
+    return left.guest == right.guest && left.epoch == right.epoch;
+}
+
+static int cycle_requires_exit(const hl_native_cache *cache, const cache_entry *source,
+                               const cache_entry *target) {
+    cycle_node frontier[CYCLE_FRONTIER_CAPACITY] = {{target->guest, target->instruction_epoch}};
+    cycle_node destination = {source->guest, source->instruction_epoch};
+    uint32_t consumed = 0, count = 1;
+    int safe = source->cycle_safe != 0 && target->cycle_safe != 0;
+    int closes = 0;
+    while (consumed < count) {
+        cycle_node current = frontier[consumed++];
+        int current_slot = hl_native_cache_find(cache, current.guest);
+        if (current_slot < 0 || cache->entries[current_slot].instruction_epoch != current.epoch ||
+            cache->entries[current_slot].cycle_safe == 0)
+            safe = 0;
+        if (same_node(current, destination)) closes = 1;
+        for (uint32_t index = 0; index < cache->resolved_count; ++index) {
+            const resolved_relocation *edge = &cache->resolved[index];
+            if (edge->generation != cache->generation || edge->source_guest != current.guest ||
+                edge->source_instruction_epoch != current.epoch) continue;
+            cycle_node next = {edge->relocation.target_guest, edge->relocation.target_instruction_epoch};
+            uint32_t node = 0;
+            while (node < count && !same_node(frontier[node], next)) node++;
+            if (node < count) continue;
+            if (count == CYCLE_FRONTIER_CAPACITY) return 1;
+            frontier[count++] = next;
+        }
+    }
+    return closes && !safe;
+}
+
 static hl_native_status patch(hl_native_cache *cache, const cache_entry *source,
                               const cache_entry *target, const hl_native_relocation *relocation,
                               uint32_t *patched) {
@@ -98,6 +139,7 @@ hl_native_status hl_native_cache_relocate_site(hl_native_cache *cache, const voi
         cache->entries[target_slot].token != target_identity)
         return HL_NATIVE_STATE;
     if (cache->entries[target_slot].conditional_self_loop != 0) return HL_NATIVE_OK;
+    if (cycle_requires_exit(cache, source, &cache->entries[target_slot])) return HL_NATIVE_OK;
     hl_native_relocation relocation = {
         .code_offset = branch_offset - source->code_offset,
         .target_guest = target_guest,
@@ -187,6 +229,8 @@ hl_native_status hl_native_cache_relocate(hl_native_cache *cache, uint64_t sourc
         int target_slot = hl_native_cache_find(cache, relocation->target_guest);
         if (target_slot >= 0 && cache->entries[target_slot].conditional_self_loop != 0)
             continue;
+        if (target_slot >= 0 && cycle_requires_exit(cache, source, &cache->entries[target_slot]))
+            continue;
         if (target_slot >= 0 &&
             (!relocation->target_epoch_known ||
              cache->entries[target_slot].instruction_epoch == relocation->target_instruction_epoch)) {
@@ -240,6 +284,8 @@ hl_native_status hl_native_cache_resolve(hl_native_cache *cache, uint64_t target
         int source_slot = hl_native_cache_find(cache, pending.source_guest);
         if (source_slot < 0 || cache->entries[source_slot].instruction_epoch != pending.source_instruction_epoch ||
             cache->entries[source_slot].code_offset != pending.source_code_offset)
+            continue;
+        if (cycle_requires_exit(cache, &cache->entries[source_slot], &cache->entries[target_slot]))
             continue;
         if (cache->resolved_count == cache->resolved_capacity) return HL_NATIVE_CAPACITY;
         hl_native_relocation bound = pending.relocation;

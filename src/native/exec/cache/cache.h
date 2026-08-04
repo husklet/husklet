@@ -25,6 +25,7 @@ typedef struct hl_native_block {
     uint64_t token;
     uint32_t instruction_count;
     uint32_t conditional_self_loop;
+    uint32_t cycle_safe;
     uint64_t loop_pc;
     uint64_t identity_token;
     uint32_t slot;
@@ -39,6 +40,7 @@ typedef struct hl_native_code {
     uint64_t source_last;
     uint32_t instruction_count;
     uint32_t conditional_self_loop;
+    uint32_t cycle_safe;
     uint64_t loop_pc;
     uint64_t identity_token;
     uint64_t mapping_epoch;
