@@ -314,20 +314,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exclusive_resources_serialize_and_pty_does_not() {
+    async fn process_heavy_serializes_while_light_and_pty_do_not() {
         let pool = Arc::new(ResourcePool::new());
+        let promptly = std::time::Duration::from_millis(10);
         let first = pool.acquire(&[Resource::ProcessHeavy]).await.unwrap();
         assert!(
-            tokio::time::timeout(
-                std::time::Duration::from_millis(10),
-                pool.acquire(&[Resource::ProcessHeavy])
-            )
-            .await
-            .is_err()
+            tokio::time::timeout(promptly, pool.acquire(&[Resource::ProcessHeavy]))
+                .await
+                .is_err()
         );
-        assert!(pool.acquire(&[Resource::Pty]).await.unwrap().is_empty());
+        let light = tokio::time::timeout(promptly, pool.acquire(&[]))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(light.is_empty());
+        let pty = tokio::time::timeout(promptly, pool.acquire(&[Resource::Pty]))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(pty.is_empty());
         drop(first);
-        assert!(pool.acquire(&[Resource::ProcessHeavy]).await.is_ok());
+        let released = tokio::time::timeout(promptly, pool.acquire(&[Resource::ProcessHeavy]))
+            .await
+            .unwrap();
+        assert!(released.is_ok());
     }
 
     #[tokio::test]
