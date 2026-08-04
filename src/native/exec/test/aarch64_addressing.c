@@ -1,6 +1,7 @@
 #include "../src/arch/aarch64/entry.h"
 #include "../src/arch/aarch64/pair.h"
 #include "../src/arch/aarch64/projection.h"
+#include "../src/arch/aarch64/single.h"
 #include "../include/executor.h"
 
 #include <stdio.h>
@@ -35,12 +36,23 @@ int main(void) {
         UINT32_C(0xa9bf4650), /* stp x16,x17,[x18,#-16]! */
         UINT32_C(0xa8c14e52), /* ldp x18,x19,[x18],#16; stolen overlap */
     };
+    const uint32_t register_words[] = {
+        UINT32_C(0xf86658a0), /* ldr x0,[x5,w6,uxtw #3] */
+        UINT32_C(0xf86678a1), /* ldr x1,[x5,x6,lsl #3] */
+        UINT32_C(0xf866d8a2), /* ldr x2,[x5,w6,sxtw #3] */
+        UINT32_C(0xf866f8a3), /* ldr x3,[x5,x6,sxtx #3] */
+    };
     size_t offsets[sizeof(words) / sizeof(words[0])];
+    size_t register_offsets[sizeof(register_words) / sizeof(register_words[0])];
     hl_a64_assembler assembler;
     CHECK(hl_a64_assembler_begin(&assembler, code, code, capacity));
     for (size_t index = 0; index < sizeof(words) / sizeof(words[0]); index++) {
         offsets[index] = hl_a64_assembler_size(&assembler);
         CHECK(hl_a64_pair_emit(&assembler, words[index], 0x6000 + index * 4));
+    }
+    for (size_t index = 0; index < sizeof(register_words) / sizeof(register_words[0]); index++) {
+        register_offsets[index] = hl_a64_assembler_size(&assembler);
+        CHECK(hl_a64_single_emit(&assembler, register_words[index], 0x6100 + index * 4));
     }
     CHECK(mprotect(code, capacity, PROT_READ | PROT_EXEC) == 0);
 
@@ -66,6 +78,23 @@ int main(void) {
     CHECK(cpu.dirty_view_first == first && cpu.dirty_view_last == last);
     CHECK(cpu.flags == UINT64_C(0xa0000000));
 
+    *(uint64_t *)(void *)(memory + 120) = UINT64_C(0x1201201201201201);
+    *(uint64_t *)(void *)(memory + 136) = UINT64_C(0x1361361361361361);
+    *(uint64_t *)(void *)(memory + 144) = UINT64_C(0x1441441441441441);
+    cpu.registers[5] = first + 128;
+    const uint64_t indexes[] = {1, 2, UINT32_MAX, UINT64_MAX - 1};
+    const uint64_t expected[] = {
+        UINT64_C(0x1361361361361361), UINT64_C(0x1441441441441441),
+        UINT64_C(0x1201201201201201), UINT64_C(0x1201201201201201),
+    };
+    for (size_t index = 0; index < 4; index++) {
+        cpu.registers[6] = indexes[index];
+        execute(&cpu, code + register_offsets[index]);
+        CHECK(cpu.reason == HL_NATIVE_EXIT_BRANCH && cpu.program == 0x6104 + index * 4);
+        CHECK(cpu.registers[index] == expected[index]);
+        CHECK(cpu.flags == UINT64_C(0xa0000000));
+    }
+
     *(uint64_t *)(void *)(memory + 80) = UINT64_C(0xdeadbeefdeadbeef);
     *(uint64_t *)(void *)(memory + 88) = UINT64_C(0x1020304050607080);
     cpu.registers[5] = first + 80;
@@ -75,6 +104,27 @@ int main(void) {
     CHECK(cpu.registers[5] == first + 96); /* retained last-writeback overlap */
     CHECK(cpu.registers[6] == UINT64_C(0x1020304050607080));
     CHECK(cpu.flags == UINT64_C(0xa0000000));
+
+    {
+        uint8_t rejected[4096] = {0};
+        const uint32_t base = UINT32_C(0xf86678a0);
+        const unsigned invalid_options[] = {0, 1, 4, 5};
+        hl_a64_assembler reject_assembler;
+        for (size_t index = 0; index < 4; index++) {
+            uint32_t invalid = (base & ~(UINT32_C(7) << 13)) |
+                               ((uint32_t)invalid_options[index] << 13);
+            CHECK(hl_a64_assembler_begin(&reject_assembler, rejected, rejected, sizeof(rejected)));
+            CHECK(!hl_a64_single_emit(&reject_assembler, invalid, 0x6200 + index * 4));
+            CHECK(hl_a64_assembler_size(&reject_assembler) == 0);
+        }
+        const uint32_t pointer_auth[] = {UINT32_C(0xf82004a4), UINT32_C(0xf8a004a4)};
+        for (size_t index = 0; index < 2; index++) {
+            CHECK(hl_a64_assembler_begin(&reject_assembler, rejected, rejected, sizeof(rejected)));
+            CHECK(!hl_a64_single_emit(&reject_assembler, pointer_auth[index], 0x6240 + index * 4));
+            CHECK(hl_a64_assembler_size(&reject_assembler) == 0);
+        }
+        for (size_t index = 0; index < sizeof(rejected); index++) CHECK(rejected[index] == 0);
+    }
 
     cpu.vectors[0] = UINT64_C(0x1111111111111111);
     cpu.vectors[1] = UINT64_C(0x2222222222222222);
