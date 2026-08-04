@@ -1,17 +1,19 @@
-use axum::body::{to_bytes, Body};
-use axum::extract::{Path, Query, Request, State};
-use axum::http::StatusCode;
-use axum::response::Response;
+mod inspect;
+mod start;
+
+pub(super) use inspect::inspect;
+pub(super) use start::start;
+
 use axum::Json;
-use hl_container::{ExecSpec, ExecState, ExitStatus, Streams};
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use hl_container::{ExecSpec, ExitStatus, Streams};
 use serde::Deserialize;
 
-use super::console::{Connection, DetachKeys, Resize};
-use super::error::{ApiError, ApiResult};
 use super::DockerState;
-use crate::api::{ExecConfig, ExecCreated, ExecInspect, ExecOpen, ExecProcess, ExecStart, Wait};
-
-const BODY_LIMIT: usize = 64 * 1024;
+use super::console::{DetachKeys, Resize};
+use super::error::{ApiError, ApiResult};
+use crate::api::{ExecConfig, ExecCreated, Wait};
 
 #[hl_design::adapter]
 pub(super) async fn create(
@@ -60,136 +62,7 @@ pub(super) async fn create(
 }
 
 #[hl_design::adapter]
-pub(super) async fn start(
-    State(state): State<DockerState>,
-    Path(id): Path<String>,
-    mut request: Request,
-) -> ApiResult<Response> {
-    let id = id
-        .parse()
-        .map_err(|_| ApiError::new(StatusCode::NOT_FOUND, format!("no such exec: {id}")))?;
-    let upgrade = hyper::upgrade::on(&mut request);
-    let bytes = to_bytes(request.into_body(), BODY_LIMIT)
-        .await
-        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?;
-    let start = if bytes.is_empty() {
-        ExecStart::default()
-    } else {
-        serde_json::from_slice(&bytes)
-            .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?
-    };
-    let size = start.size().map_err(|message| {
-        let status = if message.contains("not implemented") || message.starts_with("unsupported") {
-            StatusCode::NOT_IMPLEMENTED
-        } else {
-            StatusCode::BAD_REQUEST
-        };
-        ApiError::new(status, message)
-    })?;
-    let exec = state
-        .containers
-        .executions()
-        .inspect(&id)
-        .await
-        .map_err(ApiError::container)?;
-    if start.tty != exec.spec.process.console.terminal.is_some() {
-        return Err(ApiError::new(
-            StatusCode::BAD_REQUEST,
-            "exec start Tty must match exec create Tty",
-        ));
-    }
-    let executions = state.containers.executions();
-    let session = match size {
-        Some(size) => executions.start_at(&id, size).await,
-        None => executions.start(&id).await,
-    }
-    .map_err(ApiError::container)?;
-    if start.detach {
-        return Ok(Response::new(Body::empty()));
-    }
-    let streams = exec.spec.streams;
-    let mut connection = Connection::new(
-        upgrade,
-        session,
-        streams,
-        exec.spec.process.console.terminal.is_some(),
-    )
-    .detach_keys(&exec.spec.detach_keys)?;
-    if start.kill_on_disconnect {
-        connection = connection.kill_on_disconnect(executions, id);
-    }
-    Ok(connection.spawn())
-}
-
-#[hl_design::adapter]
-pub(super) async fn inspect(
-    State(state): State<DockerState>,
-    Path(id): Path<String>,
-) -> ApiResult<Json<ExecInspect>> {
-    let exec_id = id
-        .parse()
-        .map_err(|_| ApiError::new(StatusCode::NOT_FOUND, format!("no such exec: {id}")))?;
-    let exec = state
-        .containers
-        .executions()
-        .inspect(&exec_id)
-        .await
-        .map_err(ApiError::container)?;
-    let (running, exit_code, pid) = inspection_state(exec.state)?;
-    let process = exec.spec.process;
-    Ok(Json(ExecInspect {
-        id: exec.id.to_string(),
-        container_id: exec.container.to_string(),
-        running,
-        exit_code,
-        pid,
-        can_remove: !running,
-        detach_keys: exec.spec.detach_keys,
-        open: ExecOpen {
-            stdin: exec.spec.streams.stdin,
-            stdout: exec.spec.streams.stdout,
-            stderr: exec.spec.streams.stderr,
-        },
-        process: ExecProcess {
-            arguments: process.args,
-            entrypoint: process.program,
-            privileged: exec.spec.privileged,
-            tty: process.console.terminal.is_some(),
-            user: exec.spec.user,
-        },
-    }))
-}
-
-fn inspection_state(state: ExecState) -> ApiResult<(bool, i64, i64)> {
-    Ok(match state {
-        ExecState::Created => (false, 0, 0),
-        ExecState::Running { process_id, .. } => (
-            true,
-            0,
-            i64::try_from(process_id)
-                .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "exec PID exceeds i64"))?,
-        ),
-        ExecState::Exited { result, process_id, .. } => {
-            let code = match result {
-                ExitStatus::Code(code) => code,
-                ExitStatus::Signal(signal) => 128 + signal,
-                ExitStatus::Fault { status, .. } => status,
-            };
-            let pid = process_id
-                .map(i64::try_from)
-                .transpose()
-                .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "exec PID exceeds i64"))?
-                .unwrap_or_default();
-            (false, i64::from(code), pid)
-        }
-    })
-}
-
-#[hl_design::adapter]
-pub(super) async fn wait(
-    State(state): State<DockerState>,
-    Path(id): Path<String>,
-) -> ApiResult<Json<Wait>> {
+pub(super) async fn wait(State(state): State<DockerState>, Path(id): Path<String>) -> ApiResult<Json<Wait>> {
     let exec_id = id
         .parse()
         .map_err(|_| ApiError::new(StatusCode::NOT_FOUND, format!("no such exec: {id}")))?;
@@ -210,10 +83,7 @@ pub(super) async fn wait(
 }
 
 #[hl_design::adapter]
-pub(super) async fn remove(
-    State(state): State<DockerState>,
-    Path(id): Path<String>,
-) -> ApiResult<StatusCode> {
+pub(super) async fn remove(State(state): State<DockerState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
     let exec_id = id
         .parse()
         .map_err(|_| ApiError::new(StatusCode::NOT_FOUND, format!("no such exec: {id}")))?;
@@ -266,12 +136,7 @@ pub(super) async fn signal(
     let signal = query
         .signal
         .parse::<super::container::DockerSignal>()
-        .map_err(|_| {
-            ApiError::new(
-                StatusCode::BAD_REQUEST,
-                format!("unsupported signal {}", query.signal),
-            )
-        })?
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, format!("unsupported signal {}", query.signal)))?
         .into();
     state
         .containers
@@ -280,48 +145,4 @@ pub(super) async fn signal(
         .await
         .map_err(ApiError::container)?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::inspection_state;
-    use hl_container::{ExecState, ExitStatus};
-
-    #[test]
-    fn inspect_retains_the_terminal_process_identity_after_exit() {
-        assert_eq!(
-            inspection_state(ExecState::Exited {
-                result: ExitStatus::Code(7),
-                finished_at_ms: 20,
-                process_id: Some(42),
-            })
-            .unwrap(),
-            (false, 7, 42)
-        );
-    }
-
-    #[test]
-    fn inspect_maps_legacy_unknown_exited_pid_to_zero() {
-        assert_eq!(
-            inspection_state(ExecState::Exited {
-                result: ExitStatus::Code(0),
-                finished_at_ms: 20,
-                process_id: None,
-            })
-            .unwrap(),
-            (false, 0, 0)
-        );
-    }
-
-    #[test]
-    fn inspect_rejects_exited_pid_outside_docker_integer_range() {
-        let error = inspection_state(ExecState::Exited {
-            result: ExitStatus::Code(0),
-            finished_at_ms: 20,
-            process_id: Some(u64::MAX),
-        })
-        .unwrap_err();
-
-        assert_eq!(error.status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
-    }
 }
