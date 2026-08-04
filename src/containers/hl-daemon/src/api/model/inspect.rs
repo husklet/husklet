@@ -55,6 +55,8 @@ pub struct InspectHostConfig {
     #[serde(default)]
     pub extra_hosts: Vec<String>,
     pub auto_remove: bool,
+    #[serde(rename = "ReadonlyRootfs")]
+    pub readonly_rootfs: bool,
     pub restart_policy: crate::api::RestartPolicy,
 }
 
@@ -235,6 +237,7 @@ impl From<hl_container::Container> for InspectContainer {
                     .map(|(name, address)| format!("{name}:{address}"))
                     .collect(),
                 auto_remove: value.spec.removal == hl_container::RemovalPolicy::Automatic,
+                readonly_rootfs: value.spec.isolation.read_only_root,
                 restart_policy: value.spec.restart.into(),
             },
             network_settings: NetworkSettings {
@@ -521,5 +524,29 @@ mod tests {
         ] {
             assert!(inspect["State"].get(key).is_some(), "missing State.{key}: {inspect}");
         }
+    }
+
+    #[test]
+    fn host_config_projects_readonly_rootfs_with_docker_casing() {
+        let mut durable = hl_container::Container {
+            id: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .parse()
+                .unwrap(),
+            spec: hl_container::ContainerSpec::from_directory("/rootfs", hl_container::Process::new("/bin/true")),
+            state: hl_container::ContainerState::Created,
+            created_at_ms: 0,
+            generation: 0,
+            restart: hl_container::Restart::default(),
+            health: None,
+            checkpoint: None,
+        };
+        let writable = serde_json::to_value(InspectContainer::from(durable.clone())).unwrap();
+        assert_eq!(writable["HostConfig"]["ReadonlyRootfs"], false);
+
+        durable.spec.isolation.read_only_root = true;
+        let readonly = serde_json::to_value(InspectContainer::from(durable)).unwrap();
+        assert_eq!(readonly["HostConfig"]["ReadonlyRootfs"], true);
+        assert!(readonly["HostConfig"].get("ReadOnlyRootfs").is_none());
+        assert!(readonly["HostConfig"].get("readonly_rootfs").is_none());
     }
 }
