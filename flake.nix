@@ -91,8 +91,11 @@
           upper = guest: lib.toUpper guest.isa;
           compilerAliasFor =
             guest:
+            let
+              guestPkgs = pkgsFor guest;
+            in
             pkgs.writeShellScriptBin "${guest.isa}-linux-gnu-gcc" ''
-              exec ${lib.escapeShellArg (ccFor guest)} "$@"
+              exec ${lib.escapeShellArg (ccFor guest)} -L${lib.escapeShellArg "${guestPkgs.glibc.static}/lib"} "$@"
             '';
         in
         rec {
