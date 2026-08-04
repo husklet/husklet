@@ -7,6 +7,7 @@ pub struct Version {
     pub version: String,
     #[serde(rename = "ApiVersion")]
     pub api_version: String,
+    #[serde(rename = "MinAPIVersion")]
     pub min_api_version: String,
     pub os: String,
     pub arch: String,
@@ -78,4 +79,25 @@ pub struct UsageData {
 pub struct Plugin {
     pub name: String,
     pub enabled: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Version;
+
+    #[test]
+    fn version_keys() {
+        let value = serde_json::to_value(Version {
+            version: "0.1.0".into(),
+            api_version: "1.43".into(),
+            min_api_version: "1.24".into(),
+            os: "linux".into(),
+            arch: "amd64".into(),
+        })
+        .expect("version should serialize");
+
+        assert_eq!(value["ApiVersion"], "1.43");
+        assert_eq!(value["MinAPIVersion"], "1.24");
+        assert!(value.get("MinApiVersion").is_none());
+    }
 }
