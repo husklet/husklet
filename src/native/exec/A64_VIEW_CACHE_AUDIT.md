@@ -211,3 +211,74 @@ was faster, another was effectively equal, and candidate variance was high.
 The median direction suggests a possible regression, not a demonstrated
 improvement. The candidate was reverted; a future implementation requires a
 lower-noise measurement that demonstrates benefit before acceptance.
+
+## Rejected authenticated slot-zero fast path
+
+A second, independent experiment started from parent
+`66321702ad2278f1e13c2344e0f19ff4c8c7a398` and produced candidate
+`f7b3d3bd32b3846733047943abbbcf0a67a493b0`. The retained C oracle remained
+`7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc`. Typed instrumentation preceding
+the experiment observed 43,460,082 selector decisions in three memory-phase
+invocations: slot zero served 40,498,839 (93.186292%), the other three slots
+served 2,954,352 (6.797852%), and only 6,891 (0.015856%) were cold misses.
+
+The candidate appended an authenticated slot-zero projection to the CPU ABI.
+The executor published it from the entry-authenticated read token and
+incarnation only for a bounded, valid view-zero shape. Generated accesses
+still checked overflow, lower and upper bounds, and read permission before
+consuming the projected delta. Every rejected guard fell through to the
+existing four-view selector. This shortened the common guard from about 32 to
+20 executed words, but added 40 static words overall: the generated corpus
+grew from 923 to 963 words, and both pair-read and scalar-read bodies grew by
+20 words.
+
+The warning-strict `aarch64_trace`, `aarch64_single`, `aarch64_cycle`, CPU
+layout tests, and `git diff --check` passed on the candidate. The focused Rust
+executor suite reported 60 passed, two ignored, and one pre-existing x86
+strsearch differential failure (flags 5 versus 2053); no AArch64 candidate
+test failed.
+
+The exact A/B/C comparison used the same temporary memory-phase manifest in
+all three trees: divisor 20, five measured repetitions, and checksum `36526`.
+The harness also performed its normal cold invocation and one warmup. Runs
+were sequential parent, candidate, then null control, without explicit CPU
+affinity, using a development-profile `cargo run`:
+
+```text
+CARGO_BUILD_JOBS="$(nproc)" \
+  CARGO_TARGET_DIR=/tmp/husklet-a64-slot0-target \
+  cargo run -q -p testing --bin testing -- bench combined --isa arm64
+```
+
+The null control used the candidate's source and emitted fast-path code but
+forced `slot0_valid` to zero. Every invocation reported identical native
+diagnostics:
+
+```text
+hl-native: runs=900 builds=229 hits=4898 fallbacks=16 sites=7 services=22
+hl-native-detail: fills=16 site_collisions=0 shared_collisions=0 branch=140 syscall=0 fallback=3626 yield=884 completed=58122035 operand_callbacks=2780 operand_cache_hits=833
+```
+
+| Tree | Wall cold | Wall min/median/p90/max | Guest min/median/p90/max |
+|---|---:|---:|---:|
+| parent | 1837 ms | 1796/1800/1803/1803 ms | 1575846/1577503/1581363/1581363 us |
+| candidate | 1813 ms | 1789/1808/1892/1892 ms | 1566947/1583490/1658488/1658488 us |
+| null control | 1821 ms | 1816/1852/1906/1906 ms | 1593583/1621808/1678209/1678209 us |
+
+The candidate recovered most of the overhead exposed by disabling its
+projection, but it did not beat the parent: guest median regressed by 0.38%
+and wall median by 0.44%, while variance and static code size increased. The
+retained-C result recorded in `PERFORMANCE.md` for the named memory/divisor-20
+workload is 6839 us median, making these development-profile Rust medians about
+230.66x and 231.54x retained C respectively; the gap did not improve. The
+candidate was therefore rejected and its production branch and build artifacts
+were deleted.
+
+These approximately 1.58-second guest results must not be compared blindly
+with the earlier 179819-us parent result in the preceding section. The earlier
+experiment used release binaries, five alternating parent/candidate pairs,
+one measured repetition per invocation, and CPU-17 affinity under the
+performance governor. This experiment used development-profile binaries, five
+samples within one invocation, sequential A/B/C ordering, and no explicit
+affinity. Only the direction within each internally consistent experiment is
+evidence; their absolute times are not interchangeable.
