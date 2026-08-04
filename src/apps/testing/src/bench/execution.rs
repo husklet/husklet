@@ -251,12 +251,7 @@ impl<'a> Invocation<'a> {
         if expected_stdout.is_empty() && !logs.stdout.is_empty() {
             return Err(format!("expected empty stdout; stdout={}", output_excerpt(&logs.stdout)).into());
         }
-        if !expected_stdout.is_empty()
-            && !logs
-                .stdout
-                .windows(expected_stdout.len())
-                .any(|window| window == expected_stdout)
-        {
+        if !stdout_contains(&logs.stdout, expected_stdout) {
             return Err(format!(
                 "stdout missing marker from {}; stdout={}",
                 self.case.stdout_contains.display(),
@@ -269,6 +264,10 @@ impl<'a> Invocation<'a> {
         }
         Ok((elapsed, parse_phases(&logs.stdout)?))
     }
+}
+
+fn stdout_contains(stdout: &[u8], marker: &[u8]) -> bool {
+    marker.is_empty() || stdout.windows(marker.len()).any(|window| window == marker)
 }
 
 fn output_excerpt(bytes: &[u8]) -> String {
@@ -446,7 +445,8 @@ fn parse_phases(stdout: &[u8]) -> std::result::Result<Vec<(String, u128, u64)>, 
 #[cfg(test)]
 mod tests {
     use super::{
-        CAPTURE_LIMIT, DIAGNOSTIC_OUTPUT, bounded, capture_size, isolated_state, output_excerpt, parse_phases,
+        Benchmark, CAPTURE_LIMIT, DIAGNOSTIC_OUTPUT, bounded, capture_size, isolated_state, output_excerpt,
+        parse_phases, stdout_contains,
     };
     use hl_container::{Entry, Stream};
 
@@ -464,6 +464,18 @@ mod tests {
         let phases = parse_phases(b"noise\nPHASE compute us=42 ok=7\n").unwrap();
         assert_eq!(phases, vec![("compute".to_owned(), 42, 7)]);
         assert!(parse_phases(b"PHASE compute ms=42 ok=7\n").is_err());
+    }
+
+    #[test]
+    fn combined_definition_accepts_named_phase_rows() {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../tests/bench/combined");
+        let benchmark = Benchmark::load(&directory, &directory.join("test.yaml")).unwrap();
+        let marker = std::fs::read(&benchmark.cases[0].stdout_contains).unwrap();
+        let phase = b"PHASE compute us=42 ok=7\n";
+
+        assert!(stdout_contains(phase, &marker));
+        assert!(stdout_contains(&[b"noise\n".as_slice(), phase].concat(), &marker));
     }
 
     #[test]
