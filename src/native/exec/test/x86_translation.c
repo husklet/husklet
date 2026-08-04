@@ -16,7 +16,7 @@
 #define CHECK(expression)                                                                                              \
     do {                                                                                                               \
         if (!(expression)) {                                                                                           \
-            fprintf(stderr, "x86_aarch64_frontend:%d: %s\n", __LINE__, #expression);                                \
+            fprintf(stderr, "x86_translation:%d: %s\n", __LINE__, #expression);                                      \
             return __LINE__;                                                                                           \
         }                                                                                                              \
     } while (0)
