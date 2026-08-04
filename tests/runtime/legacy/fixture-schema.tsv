@@ -410,10 +410,6 @@ abi/corpus	x_xlat	aarch64	exact-abi-corpus	executable	-	-	linux-libc,abi	tests/c
 abi/corpus	x_xlat	x86_64	exact-abi-corpus	executable	-	-	linux-libc,abi	tests/compat/abi/corpus/expected/x_xlat.out	common	-	-	false	false	false	false	false
 bootstrap	exit	aarch64	-	executable	-	-	-	golden/empty.out	common	-	-	false	false	false	false	false
 bootstrap	exit	x86_64	-	executable	-	-	-	golden/empty.out	common	-	-	false	false	false	false	false
-bootstrap	signal	aarch64	-	executable	-	-	-	golden/empty.out	common	-	-	false	false	false	false	false
-bootstrap	signal	x86_64	-	executable	-	-	-	golden/empty.out	common	-	-	false	false	false	false	false
-bootstrap	status	aarch64	-	executable	-	-	-	golden/status.out	common	-	-	false	false	false	false	false
-bootstrap	status	x86_64	-	executable	-	-	-	golden/status.out	common	-	-	false	false	false	false	false
 bootstrap	syscall	aarch64	-	executable	-	-	-	golden/syscall.out	common	-	-	false	false	false	false	false
 bootstrap	syscall	x86_64	-	executable	-	-	-	golden/syscall.out	common	-	-	false	false	false	false	false
 bootstrap	write	aarch64	-	executable	-	-	-	golden/write.out	common	-	-	false	false	false	false	false

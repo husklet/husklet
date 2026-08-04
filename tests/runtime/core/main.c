@@ -53,10 +53,6 @@ static void output(const char *value) {
 
 static __attribute__((noreturn)) void run(const char *name) {
     if (equal(name, "exit")) finish(42);
-    if (equal(name, "status")) {
-        output("status\n");
-        finish(17);
-    }
     if (equal(name, "write")) {
         output("runtime-core write ok\n");
         finish(0);

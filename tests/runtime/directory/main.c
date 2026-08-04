@@ -4,7 +4,6 @@
 #define AT_REMOVEDIR 0x200L
 #define O_CREAT 0x40L
 #define O_WRONLY 1L
-#define O_DIRECTORY 0x10000L
 #define DT_DIR 4
 #define DT_REG 8
 #define DT_LNK 10
@@ -18,6 +17,7 @@
 #define SYS_MKDIRAT 258
 #define SYS_UNLINKAT 263
 #define SYS_SYMLINKAT 266
+#define O_DIRECTORY 0x10000L
 static long call6(long n, long a, long b, long c, long d, long e, long f) {
     register long r10 __asm__("r10") = d;
     register long r8 __asm__("r8") = e;
@@ -37,6 +37,7 @@ static long call6(long n, long a, long b, long c, long d, long e, long f) {
 #define SYS_MKDIRAT 34
 #define SYS_UNLINKAT 35
 #define SYS_SYMLINKAT 36
+#define O_DIRECTORY 0x4000L
 static long call6(long n, long a, long b, long c, long d, long e, long f) {
     register long x0 __asm__("x0") = a; register long x1 __asm__("x1") = b;
     register long x2 __asm__("x2") = c; register long x3 __asm__("x3") = d;
@@ -81,11 +82,11 @@ static int record(
 }
 
 void _start(void) {
-    static const char dir[] = "/enum";
-    static const char file[] = "/enum/a";
-    static const char removed[] = "/enum/deleted";
-    static const char sub[] = "/enum/sub";
-    static const char link[] = "/enum/l";
+    static const char dir[] = "enum";
+    static const char file[] = "enum/a";
+    static const char removed[] = "enum/deleted";
+    static const char sub[] = "enum/sub";
+    static const char link[] = "enum/l";
     static const char target[] = "a";
     unsigned char buffer[64];
     if (call6(SYS_MKDIRAT, AT_FDCWD, (long)dir, 0755, 0, 0, 0) != 0) finish(1);
@@ -96,13 +97,16 @@ void _start(void) {
         O_CREAT | O_WRONLY, 0644, 0, 0);
     if (created < 0 || call6(SYS_CLOSE, created, 0, 0, 0, 0, 0) != 0) finish(3);
     if (call6(SYS_UNLINKAT, AT_FDCWD, (long)removed, 0, 0, 0, 0) != 0) finish(4);
-    if (call6(SYS_MKDIRAT, AT_FDCWD, (long)sub, 0755, 0, 0, 0) != 0) finish(5);
-    if (call6(SYS_SYMLINKAT, (long)target, AT_FDCWD, (long)link, 0, 0, 0) != 0) finish(6);
-    long fd = call6(SYS_OPENAT, AT_FDCWD, (long)dir, O_DIRECTORY, 0, 0, 0);
-    if (fd < 0) finish(7);
-    if (call6(SYS_GETDENTS64, fd, (long)buffer, 1, 0, 0, 0) != -22) finish(8);
-    if (call6(SYS_GETDENTS64, fd, 1, 4096, 0, 0, 0) != -14) finish(9);
+    if (call6(SYS_SYMLINKAT, (long)target, AT_FDCWD, (long)link, 0, 0, 0) != 0) finish(5);
+    if (call6(SYS_MKDIRAT, AT_FDCWD, (long)sub, 0755, 0, 0, 0) != 0) finish(6);
+    long probe = call6(SYS_OPENAT, AT_FDCWD, (long)dir, O_DIRECTORY, 0, 0, 0);
+    if (probe < 0) finish(7);
+    if (call6(SYS_GETDENTS64, probe, (long)buffer, 1, 0, 0, 0) != -22) finish(8);
+    if (call6(SYS_GETDENTS64, probe, 1, 4096, 0, 0, 0) != -14) finish(9);
     if (call6(SYS_GETDENTS64, -1, 1, 4096, 0, 0, 0) != -9) finish(10);
+    if (call6(SYS_CLOSE, probe, 0, 0, 0, 0, 0) != 0) finish(11);
+    long fd = call6(SYS_OPENAT, AT_FDCWD, (long)dir, O_DIRECTORY, 0, 0, 0);
+    if (fd < 0) finish(11);
     long alias = call6(SYS_DUP, fd, 0, 0, 0, 0, 0);
     if (alias < 0) finish(11);
     int64_t cookie = -1;
@@ -112,10 +116,12 @@ void _start(void) {
             "..", DT_DIR, &cookie)) finish(13);
     if (!record(buffer, call6(SYS_GETDENTS64, fd, (long)buffer, 24, 0, 0, 0),
             "a", DT_REG, &cookie)) finish(14);
-    if (!record(buffer, call6(SYS_GETDENTS64, alias, (long)buffer, 24, 0, 0, 0),
-            "l", DT_LNK, &cookie)) finish(15);
-    if (!record(buffer, call6(SYS_GETDENTS64, fd, (long)buffer, 24, 0, 0, 0),
-            "sub", DT_DIR, &cookie)) finish(16);
+    long count = call6(SYS_GETDENTS64, alias, (long)buffer, 24, 0, 0, 0);
+    int link_first = record(buffer, count, "l", DT_LNK, &cookie);
+    if (!link_first && !record(buffer, count, "sub", DT_DIR, &cookie)) finish(15);
+    count = call6(SYS_GETDENTS64, fd, (long)buffer, 24, 0, 0, 0);
+    if (!(link_first ? record(buffer, count, "sub", DT_DIR, &cookie)
+                     : record(buffer, count, "l", DT_LNK, &cookie))) finish(16);
     if (call6(SYS_GETDENTS64, alias, (long)buffer, sizeof(buffer), 0, 0, 0) != 0) finish(17);
     if (call6(SYS_CLOSE, alias, 0, 0, 0, 0, 0) != 0) finish(18);
     if (call6(SYS_CLOSE, fd, 0, 0, 0, 0, 0) != 0) finish(19);

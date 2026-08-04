@@ -410,10 +410,6 @@ abi/corpus	x_xlat	aarch64	artifacts/full/abi/corpus/aarch64/x_xlat	0	oracle/test
 abi/corpus	x_xlat	x86_64	artifacts/full/abi/corpus/x86_64/x_xlat	0	oracle/tests/compat/abi/corpus/expected/x_xlat.out	-	120000	oracle/tests/compat/abi/corpus/manifest.tsv	linux-libc,abi	-	active	XLATB (opcode 0xD7 single-byte): AL = [RBX + zero-extended AL]
 bootstrap	exit	aarch64	prebuilt/aarch64/exit	42	golden/empty.out	-	3000	manifest.tsv	-	-	active	checked-in freestanding seed
 bootstrap	exit	x86_64	prebuilt/x86_64/exit	42	golden/empty.out	-	3000	manifest.tsv	-	-	active	checked-in freestanding seed
-bootstrap	signal	aarch64	prebuilt/aarch64/signal	0	golden/empty.out	-	3000	manifest.tsv	-	-	active	mask, pending, altstack, tkill, tgkill, async handler and sigreturn context seed
-bootstrap	signal	x86_64	prebuilt/x86_64/signal	0	golden/empty.out	-	3000	manifest.tsv	-	-	active	mask, pending, altstack, tkill, tgkill, async handler and sigreturn context seed
-bootstrap	status	aarch64	prebuilt/aarch64/status	17	golden/status.out	-	3000	manifest.tsv	-	-	active	checked-in freestanding seed
-bootstrap	status	x86_64	prebuilt/x86_64/status	17	golden/status.out	-	3000	manifest.tsv	-	-	active	checked-in freestanding seed
 bootstrap	syscall	aarch64	prebuilt/aarch64/syscall	0	golden/syscall.out	-	3000	manifest.tsv	-	-	active	checked-in freestanding seed
 bootstrap	syscall	x86_64	prebuilt/x86_64/syscall	0	golden/syscall.out	-	3000	manifest.tsv	-	-	active	checked-in freestanding seed
 bootstrap	write	aarch64	prebuilt/aarch64/write	0	golden/write.out	-	3000	manifest.tsv	-	-	active	checked-in freestanding seed

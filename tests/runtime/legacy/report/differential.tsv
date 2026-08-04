@@ -1,8 +1,6 @@
 suite	case	isa	classification	c_status	c_exit	rust_status	rust_exit	artifact	reason
 bootstrap	exit	aarch64	both-pass	pass	42	pass	42	prebuilt/aarch64/exit	matched
 bootstrap	exit	x86_64	both-pass	pass	42	pass	42	prebuilt/x86_64/exit	matched
-bootstrap	status	aarch64	both-pass	pass	17	pass	17	prebuilt/aarch64/status	matched
-bootstrap	status	x86_64	both-pass	pass	17	pass	17	prebuilt/x86_64/status	matched
 bootstrap	syscall	aarch64	both-pass	pass	0	pass	0	prebuilt/aarch64/syscall	matched
 bootstrap	syscall	x86_64	both-pass	pass	0	pass	0	prebuilt/x86_64/syscall	matched
 bootstrap	write	aarch64	both-pass	pass	0	pass	0	prebuilt/aarch64/write	matched

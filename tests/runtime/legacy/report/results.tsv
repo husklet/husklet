@@ -2278,8 +2278,6 @@ time	clocknanosleep-errsurf	aarch64	fail	125	0	false	true	11	artifacts/full/time
 time	clocknanosleep-errsurf	x86_64	fail	125	0	false	true	16	artifacts/full/time/x86_64/clocknanosleep-errsurf	engine-fault-before-output Fault 0 X86_64 0x41c0a9 0fb795f0feffff488b45f848890d3d Decode
 bootstrap	exit	aarch64	pass	42	42	true	true	5	prebuilt/aarch64/exit	matched
 bootstrap	exit	x86_64	pass	42	42	true	true	5	prebuilt/x86_64/exit	matched
-bootstrap	status	aarch64	pass	17	17	true	true	5	prebuilt/aarch64/status	matched
-bootstrap	status	x86_64	pass	17	17	true	true	5	prebuilt/x86_64/status	matched
 bootstrap	write	aarch64	pass	0	0	true	true	5	prebuilt/aarch64/write	matched
 bootstrap	write	x86_64	pass	0	0	true	true	5	prebuilt/x86_64/write	matched
 bootstrap	syscall	aarch64	pass	0	0	true	true	5	prebuilt/aarch64/syscall	matched

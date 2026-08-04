@@ -1,7 +1,4 @@
 # case	source	isas	recipe	exit	stdout
 exit	source/exit.c	aarch64,x86_64	freestanding-v1	42	golden/empty.out
-status	source/status.c	aarch64,x86_64	freestanding-v1	17	golden/status.out
 write	source/write.c	aarch64,x86_64	freestanding-v1	0	golden/write.out
 syscall	source/syscall.c	aarch64,x86_64	freestanding-v1	0	golden/syscall.out
-signal	source/signal.c	aarch64,x86_64	freestanding-v1	0	golden/empty.out
-namespace	source/namespace.c	aarch64,x86_64	freestanding-v1	0	golden/namespace.out

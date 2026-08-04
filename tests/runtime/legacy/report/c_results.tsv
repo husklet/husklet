@@ -1,8 +1,6 @@
 suite	case	isa	status	exit	expected_exit	stdout_match	stderr_match	duration_ms	artifact	reason
 bootstrap	exit	aarch64	pass	42	42	true	true	5	prebuilt/aarch64/exit	-
 bootstrap	exit	x86_64	pass	42	42	true	true	4	prebuilt/x86_64/exit	-
-bootstrap	status	aarch64	pass	17	17	true	true	5	prebuilt/aarch64/status	-
-bootstrap	status	x86_64	pass	17	17	true	true	6	prebuilt/x86_64/status	-
 bootstrap	syscall	aarch64	pass	0	0	true	true	5	prebuilt/aarch64/syscall	-
 bootstrap	syscall	x86_64	pass	0	0	true	true	5	prebuilt/x86_64/syscall	-
 bootstrap	write	aarch64	pass	0	0	true	true	5	prebuilt/aarch64/write	-

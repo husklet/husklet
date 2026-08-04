@@ -1,13 +1,13 @@
 image: alpine:3.20
 execution: { native: true, diagnostics: true }
 artifact:
-  destination: /opt/husklet/runtime-core
+  destination: /opt/husklet/runtime-directory
 oracle:
   arm64: qemu-aarch64
   amd64: qemu-x86_64
 build:
   source: main.c
-  output: runtime-core
+  output: runtime-directory
   compiler:
     arm64: aarch64-linux-gnu-gcc
     amd64: x86_64-linux-gnu-gcc
@@ -18,12 +18,6 @@ build:
     - -fno-asynchronous-unwind-tables
     - -Wl,--build-id=none
 cases:
-  - id: runtime/core/exit
-    run: [exit]
-    expect: { exit: 42, stdout: golden/exit.bin }
-  - id: runtime/core/write
-    run: [write]
-    expect: { exit: 0, stdout: golden/write.txt }
-  - id: runtime/core/getpid
-    run: [getpid]
-    expect: { exit: 0, stdout: golden/getpid.txt }
+  - id: runtime/directory/lifecycle
+    run: [lifecycle]
+    expect: { exit: 0, stdout: golden/empty.bin }
