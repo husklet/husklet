@@ -1,0 +1,136 @@
+cases:
+  - id: permissions/mode-0644
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "touch /f && chmod 0644 /f && ls -l /f | cut -c1-10" } }]
+    expect: { stdout_contains: golden/mode-0644.txt }
+  - id: permissions/mode-0755
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "touch /f && chmod 0755 /f && ls -l /f | cut -c1-10" } }]
+    expect: { stdout_contains: golden/mode-0755.txt }
+  - id: permissions/mode-0600
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "touch /f && chmod 0600 /f && ls -l /f | cut -c1-10" } }]
+    expect: { stdout_contains: golden/mode-0600.txt }
+  - id: permissions/mode-0777
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "touch /f && chmod 0777 /f && ls -l /f | cut -c1-10" } }]
+    expect: { stdout_contains: golden/mode-0777.txt }
+  - id: permissions/mode-0640
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "touch /f && chmod 0640 /f && ls -l /f | cut -c1-10" } }]
+    expect: { stdout_contains: golden/mode-0640.txt }
+  - id: permissions/mode-0444
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "touch /f && chmod 0444 /f && ls -l /f | cut -c1-10" } }]
+    expect: { stdout_contains: golden/mode-0444.txt }
+  - id: permissions/mode-suid-4755
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "touch /f && chmod 4755 /f && ls -l /f | cut -c1-10" } }]
+    expect: { stdout_contains: golden/mode-suid-4755.txt }
+  - id: permissions/mode-suid-noexec-4644
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "touch /f && chmod 4644 /f && ls -l /f | cut -c1-10" } }]
+    expect: { stdout_contains: golden/mode-suid-noexec-4644.txt }
+  - id: permissions/mode-sgid-2755
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "touch /f && chmod 2755 /f && ls -l /f | cut -c1-10" } }]
+    expect: { stdout_contains: golden/mode-sgid-2755.txt }
+  - id: permissions/mode-sgid-noexec-2644
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "touch /f && chmod 2644 /f && ls -l /f | cut -c1-10" } }]
+    expect: { stdout_contains: golden/mode-sgid-noexec-2644.txt }
+  - id: permissions/mode-sticky-1777
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "mkdir /d && chmod 1777 /d && ls -ld /d | cut -c1-10" } }]
+    expect: { stdout_contains: golden/mode-sticky-1777.txt }
+  - id: permissions/mode-sticky-noother-1776
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "mkdir /d && chmod 1776 /d && ls -ld /d | cut -c1-10" } }]
+    expect: { stdout_contains: golden/mode-sticky-noother-1776.txt }
+  - id: permissions/stat-mode-A-0644
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "touch /f && chmod 0644 /f && stat -c '%A' /f" } }]
+    expect: { stdout_contains: golden/mode-0644.txt }
+  - id: permissions/chown-root
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "touch /f && chown 0:0 /f && ls -l /f | awk '{print $3, $4}'" } }]
+    expect: { stdout_contains: golden/chown-root.txt }
+  - id: permissions/chown-named-daemon
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "touch /f && chown daemon:daemon /f && ls -l /f | awk '{print $3, $4}'" } }]
+    expect: { stdout_contains: golden/chown-named-daemon.txt }
+  - id: permissions/chown-numeric-unknown
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "touch /f && chown 12345:12345 /f && ls -l /f | awk '{print $3, $4}'" } }]
+    expect: { stdout_contains: golden/chown-numeric-unknown.txt }
+  - id: permissions/chown-stat-uid-gid
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "touch /f && chown 1:1 /f && stat -c '%u:%g' /f" } }]
+    expect: { stdout_contains: golden/chown-stat-uid-gid.txt }
+  - id: permissions/type-dir
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "mkdir /d && ls -ld /d | cut -c1" } }]
+    expect: { stdout_contains: golden/type-dir.txt }
+  - id: permissions/type-symlink
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "ln -s /etc/hostname /l && ls -l /l" } }]
+    expect: { stdout_contains: [golden/type-symlink-mode.txt, golden/type-symlink-target.txt] }
+  - id: permissions/type-fifo
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "mkfifo /p && ls -l /p | cut -c1" } }]
+    expect: { stdout_contains: golden/type-fifo.txt }
+  - id: permissions/dev-null-majmin
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "ls -l /dev/null | awk '{print $5, $6}'" } }]
+    expect: { stdout_contains: golden/dev-null-majmin.txt }
+  - id: permissions/dev-zero-majmin
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "ls -l /dev/zero | awk '{print $5, $6}'" } }]
+    expect: { stdout_contains: golden/dev-zero-majmin.txt }
+  - id: permissions/dev-full-majmin
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "ls -l /dev/full | awk '{print $5, $6}'" } }]
+    expect: { stdout_contains: golden/dev-full-majmin.txt }
+  - id: permissions/root-reads-0000
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "touch /f && chmod 000 /f && cat /f >/dev/null 2>&1 && echo ROOT_READ_OK" } }]
+    expect: { stdout_contains: golden/root-reads-0000.txt }
+  - id: permissions/nonexec-test-x
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "touch /f && chmod 644 /f && { test -x /f && echo X || echo NOX; }" } }]
+    expect: { stdout_contains: golden/nonexec-test-x.txt }
+  - id: permissions/copyup-chmod-lower
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "chmod 600 /etc/hostname && stat -c '%a' /etc/hostname" } }]
+    expect: { stdout_contains: golden/copyup-chmod-lower.txt }
+  - id: permissions/copyup-binary-perms
+    image: alpine:3.24.1
+    timeout: 120
+    actions: [{ shell: { script: "cp /bin/busybox /b2 && ls -l /b2 | cut -c1-10" } }]
+    expect: { stdout_contains: golden/mode-0755.txt }

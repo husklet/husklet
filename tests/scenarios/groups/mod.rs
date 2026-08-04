@@ -15,7 +15,6 @@ pub(crate) mod languages;
 pub(crate) mod lifecycle;
 pub(crate) mod netcontainer;
 pub(crate) mod network;
-pub(crate) mod permissions;
 pub(crate) mod process;
 pub(crate) mod runflags;
 pub(crate) mod terminal;
