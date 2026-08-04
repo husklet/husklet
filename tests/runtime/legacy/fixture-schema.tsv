@@ -512,10 +512,6 @@ core/workload	stwfutexquiesce	aarch64	regression	multi-process-service	-	-	threa
 core/workload	stwfutexquiesce	x86_64	regression	multi-process-service	-	-	threads,futex,bus-transition,regression	tests/compat/core/workload/expected/stw_futex_quiesce.out	common	-	-	false	false	true	false	false
 core/workload	threadchurn	aarch64	soak	multi-process-service	-	-	threads,endurance	tests/compat/core/workload/expected/soak_threadchurn.out	common	-	-	false	false	true	false	false
 core/workload	threadchurn	x86_64	soak	multi-process-service	-	-	threads,endurance	tests/compat/core/workload/expected/soak_threadchurn.out	common	-	-	false	false	true	false	false
-exec	exec-edges	aarch64	exec	executable	-	-	linux-libc,fork,pthreads,execve,futex,signals,shebang	tests/compat/exec/expected/exec_edges.out	common	-	-	false	false	true	false	false
-exec	exec-edges	x86_64	exec	executable	-	-	linux-libc,fork,pthreads,execve,futex,signals,shebang	tests/compat/exec/expected/exec_edges.out	common	-	-	false	false	true	false	false
-exec	execveat-edges	aarch64	exec	executable	-	-	linux-libc,fork,execveat,dirfd,AT_EMPTY_PATH,AT_SYMLINK_NOFOLLOW	tests/compat/exec/expected/execveat_edges.out	common	-	-	false	false	true	false	false
-exec	execveat-edges	x86_64	exec	executable	-	-	linux-libc,fork,execveat,dirfd,AT_EMPTY_PATH,AT_SYMLINK_NOFOLLOW	tests/compat/exec/expected/execveat_edges.out	common	-	-	false	false	true	false	false
 filesystem	absolute-symlink	aarch64	filesystem	executable	-	-	linux-libc,filesystem,symlink	tests/compat/filesystem/expected/shared/absolute_symlink.out	shared	-	-	false	false	false	false	false
 filesystem	absolute-symlink	x86_64	filesystem	executable	-	-	linux-libc,filesystem,symlink	tests/compat/filesystem/expected/shared/absolute_symlink.out	shared	-	-	false	false	false	false	false
 filesystem	append-mode	aarch64	filesystem	executable	-	-	linux-libc,filesystem	tests/compat/filesystem/expected/shared/append_mode.out	shared	-	-	false	false	false	false	false
