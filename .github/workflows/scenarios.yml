@@ -39,23 +39,23 @@ jobs:
           done
           HL_SCENARIO_IMAGE_CACHE="$HL_SCENARIO_CACHE_BASE/arm64" \
             nix develop . --command \
-            cargo test -p hl-daemon --test scenarios -- cache-preflight arm64
+            cargo run -p testing --bin testing -- scenario-cache-preflight arm64
           HL_SCENARIO_IMAGE_CACHE="$HL_SCENARIO_CACHE_BASE/amd64" \
             nix develop . --command \
-            cargo test -p hl-daemon --test scenarios -- cache-preflight amd64
+            cargo run -p testing --bin testing -- scenario-cache-preflight amd64
 
-      - name: Run every registered arm64 scenario and workflow offline
+      - name: Run every YAML arm64 scenario offline
         env:
           HL_SCENARIO_IMAGE_CACHE: /Users/Shared/husklet/oci-census/arm64
         run: >-
           nix develop . --command
-          cargo test -p hl-daemon --test scenarios --
-          all --offline --jobs 8 --target arm64
+          cargo run -p testing --bin testing --
+          scenarios --jobs 8 --target arm64
 
-      - name: Run every registered amd64 scenario and workflow offline
+      - name: Run every YAML amd64 scenario offline
         env:
           HL_SCENARIO_IMAGE_CACHE: /Users/Shared/husklet/oci-census/amd64
         run: >-
           nix develop . --command
-          cargo test -p hl-daemon --test scenarios --
-          all --offline --jobs 8 --target amd64
+          cargo run -p testing --bin testing --
+          scenarios --jobs 8 --target amd64

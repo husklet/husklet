@@ -62,8 +62,8 @@ jobs:
             oci-smoke-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{
             hashFiles(
               'Cargo.lock',
-              'tests/scenarios/fixtures/distros-full.yaml',
-              'tests/scenarios/harness/fixture.rs',
+              'tests/scenarios/distros/test.yaml',
+              'src/apps/testing/src/runtime/image.rs',
               'src/containers/hl-images/src/**'
             ) }}-${{ matrix.case }}
 
@@ -109,8 +109,8 @@ jobs:
           log_file="$(mktemp)"
           set +e
           nix develop . --command \
-            cargo test -p hl-daemon --test scenarios -- \
-            all --jobs 1 --category distros \
+            cargo run -p testing --bin testing -- \
+            scenarios distros --jobs 1 \
             --case "${{ matrix.case }}" \
             --target "${{ matrix.target }}" 2>&1 | tee "$log_file"
           status="${PIPESTATUS[0]}"

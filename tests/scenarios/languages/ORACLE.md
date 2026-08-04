@@ -7,8 +7,9 @@ every stable case ID independently.
 
 The migration sources studied were the former `languages-dotnet/test.yaml`, the
 legacy `fixtures/languages-{node,perl,php,python,ruby}.yaml` manifests, the
-language aggregation and uniqueness check in `groups/languages.rs`, and each
-matching row in `golden/scenario.contracts` and `golden/images.manifest`.
+former language aggregation and uniqueness check in `groups/languages.rs`, and
+the matching rows in the former generated contract and image snapshots. Those
+deleted artifacts remain available through repository history.
 Commands remain PATH-resolved by using `actions.argv`; output checks use local,
 bounded, path-safe golden files containing the exact legacy substring bytes.
 The .NET fixtures and native diagnostic settings remain unchanged.
@@ -21,8 +22,8 @@ host branch, or architecture branch is being ported.
 Focused acceptance uses the single category selector on each guest ISA:
 
 ```text
-cargo run -p testing -- scenarios languages --isa arm64
-cargo run -p testing -- scenarios languages --isa amd64
+cargo run -p testing --bin testing -- scenarios languages --isa arm64
+cargo run -p testing --bin testing -- scenarios languages --isa amd64
 ```
 
 Acceptance requires every selected stable ID to retain its source image,

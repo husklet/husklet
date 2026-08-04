@@ -30,6 +30,3 @@ reference/
 # pcachex libmap test generates these at runtime (O_CREAT); never commit them
 pclib_blob_*.bin
 .agents
-
-# Scenario runs write per-run logs and result streams here; they are run output, not sources.
-**/.cache/scenario-runs/
