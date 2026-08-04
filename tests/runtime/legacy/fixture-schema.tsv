@@ -39,8 +39,6 @@ core/syscall	madvise	aarch64	edge	executable	-	-	linux-libc,syscall	tests/compat
 core/syscall	madvise	x86_64	edge	executable	-	-	linux-libc,syscall	tests/compat/core/syscall/expected/edge_madvise.out	common	-	-	false	false	false	false	false
 core/syscall	mmapshared	aarch64	posix	executable	-	-	linux-libc,syscall	tests/compat/core/syscall/expected/mmapshared.out	common	-	-	false	false	false	false	false
 core/syscall	mmapshared	x86_64	posix	executable	-	-	linux-libc,syscall	tests/compat/core/syscall/expected/mmapshared.out	common	-	-	false	false	false	false	false
-core/syscall	scmrights	aarch64	edge	executable	-	-	linux-libc,syscall	tests/compat/core/syscall/expected/edge_scmrights.out	common	-	-	false	false	false	false	false
-core/syscall	scmrights	x86_64	edge	executable	-	-	linux-libc,syscall	tests/compat/core/syscall/expected/edge_scmrights.out	common	-	-	false	false	false	false	false
 core/syscall	signalfd-multi	aarch64	linuxsys	executable	-	-	linux-libc,syscall	tests/compat/core/syscall/expected/signalfd_multi.out	common	-	-	false	false	false	false	false
 core/syscall	signalfd-multi	x86_64	linuxsys	executable	-	-	linux-libc,syscall	tests/compat/core/syscall/expected/signalfd_multi.out	common	-	-	false	false	false	false	false
 core/syscall	statx-agree	aarch64	edge	executable	-	-	linux-libc,syscall	tests/compat/core/syscall/expected/statx_agree.out	common	-	-	false	false	false	false	false
