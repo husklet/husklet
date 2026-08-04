@@ -10,6 +10,5 @@ pub(crate) mod netcontainer;
 pub(crate) mod network;
 pub(crate) mod observe;
 pub(crate) mod runflags;
-pub(crate) mod utilities;
 pub(crate) mod volume;
 pub(crate) mod weird;

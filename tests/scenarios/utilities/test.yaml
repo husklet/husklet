@@ -2580,3 +2580,9 @@ cases:
       script: mkdir -p /www && echo hl-http-ok > /www/f.txt && httpd -p 127.0.0.1:8080 -h /www && sleep 0.3 && wget -qO- http://127.0.0.1:8080/f.txt
   expect:
     stdout_contains: golden/wget_loopback.txt
+- id: utilities/hello-world
+  image: hello-world:latest
+  timeout: 120
+  actions:
+  - entrypoint: {}
+  expect: { stdout_contains: golden/hello_world.txt }

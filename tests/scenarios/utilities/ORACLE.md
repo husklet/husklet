@@ -1,17 +1,16 @@
 # Utility scenario provenance
 
-This directory migrates 301 executable contracts from
+This directory owns all 302 executable contracts formerly declared in
 tests/scenarios/fixtures/utilities-core.yaml. The stable IDs, exact image
 references, quick class, both target ISAs, 120-second timeout, manifest
 environment, expected-failure state, exit status, command arguments, and
 output bytes are preserved. Expected output is owned under golden/.
 
-Exactly one legacy case is intentionally absent:
-utilities/hello-world. It requests run: { entrypoint: true } from
-hello-world:latest; the new scenario definition can represent that action,
-but its execution adapter currently rejects it because image ENTRYPOINT/CMD
-metadata is not carried into the process specification. Recasting it as a
-shell command would not test the same contract.
+`utilities/hello-world` remains an entrypoint action against
+`hello-world:latest`. The repository image materializer now retains OCI
+ENTRYPOINT/CMD metadata and the execution adapter uses that typed runtime
+configuration for the container's initial process, so no guessed shell command
+or executable path replaces the original contract.
 
 The seven utilities/compile-* heredoc payloads are byte-identical files in
 source/ and are installed at named /tmp/p.* paths. Their compiler flags and
@@ -32,12 +31,10 @@ rather than prepending image metadata. The 14 affected mappings are:
 - `utilities/socat-version`: prepend `socat`.
 
 This explicit executable bridge preserves the requested program arguments,
-but it is not byte-identical argv metadata. `TestImage` currently exposes only
-the materialized root filesystem, so the new runner also cannot inherit OCI
-environment, working-directory, or user metadata. In addition, the legacy
-runner searched concatenated stdout and stderr for its `stdout_contains`
-checks, while the new runner checks stdout only. The migration records these
-gaps rather than claiming end-to-end behavioral parity before execution.
+but it is not byte-identical argv metadata. The materialized image now carries
+OCI environment, working-directory, user, ENTRYPOINT, and CMD metadata into
+the process adapter. The runner also searches the same concatenated stdout and
+stderr byte stream as the legacy `stdout_contains` checker.
 
 The legacy utilities scheduler had no category fallback and no declared
 resources. The migrated cases add process_heavy to the seven compiler cases
@@ -45,6 +42,7 @@ and host_port to utilities/nc-loopback and utilities/wget-loopback, making the
 real parallel-execution constraints explicit. These are operational
 scheduling annotations, not guest-visible behavior changes.
 
-This is a scenario-definition migration. It does not claim that the Rust
-engine passes the cases, and it does not modify or rely upon retained C engine
-implementation.
+The directory-local YAML is now the only declarative owner; the pure legacy
+loader/runner wrapper was removed. This is a scenario-definition migration. It
+does not claim that the Rust engine passes the cases, and it does not modify or
+rely upon retained C engine implementation.

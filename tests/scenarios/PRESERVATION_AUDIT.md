@@ -10,10 +10,9 @@ an executable owner.
 
 | Category | Legacy | Folder YAML | Old-only IDs | Blocking ownership gap |
 |---|---:|---:|---|---|
-| `utilities` | 302 | 301 | `hello-world` | Execution requires the image-configured entrypoint. |
 | `weird` | 54 | 53 | `static-nonpie-helloworld` | Execution requires the image-configured entrypoint. |
 
-The suffixes in the table are joined to their category with `/`. There are 2
+The suffix in the table is joined to its category with `/`. There is 1
 old-only stable IDs in total. A larger but differently named workload is not a
 replacement: preservation requires the same ID, image, action semantics,
 targets, expected-failure metadata, timeout, and output oracle.
@@ -24,9 +23,7 @@ targets, expected-failure metadata, timeout, and output oracle.
 |---|---|---|
 | `groups/weird.rs` | `test_expected_failures` proves AMD64 alone expects `weird/dotnet-ryujit` to fail. | The folder YAML loader's target/xfail validation and a focused inventory assertion. |
 
-`groups/utilities.rs` adds no behavior beyond loading and running its manifest,
-but it cannot be removed while `utilities/hello-world` exists only in that
-manifest. No API-behavior module was deleted by the declarative closure batch.
+No API-behavior module was deleted by the declarative closure batches.
 
 The per-category `ORACLE.md` files retain the detailed commands, readiness
 contracts, entrypoint limitation, scheduler differences, and existing owner
