@@ -41,7 +41,7 @@ aborted the entire batch, and layer 2 only added one more way to reach it. Do no
 this work or as a reason to unwind any of it. It is scoped, measured and handed over unstarted in
 `../../gpu/hl-gpu-wgpu/SUBMIT_PROPAGATION.md`, which says to do it as its own commit BEFORE layer 3.
 
-## The state in one paragraph
+## The 2026-08-01 state in one paragraph (historical)
 
 `dEQP-VK.api.copy_and_blit.core.*` is scored exhaustively: 134,125 cases, 0 unrun. 1,172 of its failures
 were a capability **advertised at query time and refused at record time**, which is worse than never
@@ -51,7 +51,7 @@ counts.
 
 | cause | cases | status |
 | --- | --- | --- |
-| compressed / depth-stencil: no packed colour texel | 636 | **624 fixed** by un-advertising; 12 depth/stencil untouched |
+| compressed / depth-stencil: no packed colour texel | 636 | **624 were un-advertised then; superseded by the correction above**; 12 depth/stencil untouched |
 | `vkCmdBlitImage: 3D region` | 352 | open — **fund first** |
 | blit of an integer format | 100 | open — second |
 | mipmap / depth-stencil / `simple_tests` variants | 84 | follow the above |
