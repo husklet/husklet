@@ -1,0 +1,28 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+artifact:
+  destination: /opt/husklet/runtime-clone
+oracle:
+  provider: qemu
+  commands:
+    arm64: qemu-aarch64
+    amd64: env
+build:
+  source: main.c
+  output: runtime-clone
+  compiler:
+    arm64: aarch64-linux-gnu-gcc
+    amd64: x86_64-linux-gnu-gcc
+  flags:
+    - -nostdlib
+    - -static
+    - -fno-stack-protector
+    - -fno-asynchronous-unwind-tables
+    - -Wl,--build-id=none
+cases:
+  - id: runtime/clone/robust-clear-tid
+    status: active
+    compat: { class: compatibility }
+    run: [robust-clear-tid]
+    expect: { exit: 0, stdout: golden/empty.bin }

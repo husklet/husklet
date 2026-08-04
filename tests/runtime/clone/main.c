@@ -21,6 +21,7 @@ static volatile uint32_t child_tid __attribute__((aligned(65536))) = 1;
 static volatile uint32_t ready = 1;
 static volatile uint32_t gate = 1;
 static volatile uint32_t attempts = 1;
+static volatile uint32_t robust_available = 1;
 static struct robust_head head = {1, 1, 1};
 static struct robust_node node = {1, 1};
 static uint8_t child_stack[4096] __attribute__((aligned(16))) = {1};
@@ -40,7 +41,20 @@ static long call6(long number, long a, long b, long c, long d, long e, long f) {
 #define SYS_EXIT 60
 #define SYS_FUTEX 202
 #define SYS_ROBUST 273
-#define CLONE_CALL() call6(SYS_CLONE, CLONE_FLAGS, (long)(child_stack + sizeof(child_stack)), 0, (long)&child_tid, 0, 0)
+#define SYS_SCHED_YIELD 24
+static __attribute__((always_inline)) inline long clone_call(void) {
+    register long r10 __asm__("r10") = (long)&child_tid;
+    register long r8 __asm__("r8") = 0;
+    register long r9 __asm__("r9") = 0;
+    long result;
+    __asm__ volatile("syscall" : "=a"(result)
+        : "a"(SYS_CLONE), "D"(CLONE_FLAGS),
+          "S"((long)(child_stack + sizeof(child_stack))), "d"(0),
+          "r"(r10), "r"(r8), "r"(r9)
+        : "rcx", "r11", "memory");
+    return result;
+}
+#define CLONE_CALL() clone_call()
 #elif defined(__aarch64__)
 static long call6(long number, long a, long b, long c, long d, long e, long f) {
     register long x0 __asm__("x0") = a;
@@ -58,6 +72,7 @@ static long call6(long number, long a, long b, long c, long d, long e, long f) {
 #define SYS_EXIT 93
 #define SYS_FUTEX 98
 #define SYS_ROBUST 99
+#define SYS_SCHED_YIELD 124
 #define CLONE_CALL() call6(SYS_CLONE, CLONE_FLAGS, (long)(child_stack + sizeof(child_stack)), 0, 0, (long)&child_tid, 0)
 #else
 #error unsupported guest architecture
@@ -82,7 +97,9 @@ void _start(void) {
         head.next = (uint64_t)(uintptr_t)&node;
         head.offset = 8;
         head.pending = 0;
-        if (call6(SYS_ROBUST, (long)&head, 24, 0, 0, 0, 0) != 0) finish(11);
+        long robust = call6(SYS_ROBUST, (long)&head, 24, 0, 0, 0, 0);
+        if (robust == -38) robust_available = 0;
+        else if (robust != 0) finish(11);
         ready = 1;
         call6(SYS_FUTEX, (long)&ready, FUTEX_WAKE, 1, 0, 0, 0);
         while (gate == 0) call6(SYS_FUTEX, (long)&gate, FUTEX_WAIT, 0, 0, 0, 0);
@@ -91,6 +108,7 @@ void _start(void) {
     if ((uint32_t)cloned != child_tid) finish(20);
     while (ready == 0) call6(SYS_FUTEX, (long)&ready, FUTEX_WAIT, 0, 0, 0, 0);
     while (call6(SYS_FUTEX, (long)&gate, FUTEX_WAKE, 1, 0, 0, 0) != 1) {
+        call6(SYS_SCHED_YIELD, 0, 0, 0, 0, 0, 0);
         if (++attempts == 100) finish(23);
     }
     gate = 1;
@@ -99,6 +117,9 @@ void _start(void) {
         uint32_t observed = child_tid;
         call6(SYS_FUTEX, (long)&child_tid, FUTEX_WAIT, observed, 0, 0, 0);
     }
-    if (node.futex != (FUTEX_WAITERS | FUTEX_OWNER_DIED)) finish(22);
+    uint32_t expected = robust_available
+        ? (FUTEX_WAITERS | FUTEX_OWNER_DIED)
+        : (FUTEX_WAITERS | (uint32_t)cloned);
+    if (node.futex != expected) finish(22);
     finish(0);
 }
