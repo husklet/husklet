@@ -44,6 +44,42 @@ pub struct DiskUsage {
     pub images: Vec<ImageSummary>,
     pub containers: Vec<Container>,
     pub volumes: Vec<VolumeUsage>,
+    pub build_cache: Vec<BuildCache>,
+}
+
+/// Docker build-cache usage row returned by `GET /system/df`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct BuildCache {
+    #[serde(rename = "ID")]
+    pub id: String,
+    pub parents: Option<Vec<String>>,
+    #[serde(rename = "Type")]
+    pub kind: BuildCacheKind,
+    pub description: String,
+    pub in_use: bool,
+    pub shared: bool,
+    pub size: i64,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    pub usage_count: i64,
+}
+
+/// Docker's declared build-cache record kinds.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum BuildCacheKind {
+    #[serde(rename = "internal")]
+    Internal,
+    #[serde(rename = "frontend")]
+    Frontend,
+    #[serde(rename = "source.local")]
+    SourceLocal,
+    #[serde(rename = "source.git.checkout")]
+    SourceGitCheckout,
+    #[serde(rename = "exec.cachemount")]
+    ExecCachemount,
+    #[serde(rename = "regular")]
+    Regular,
 }
 
 /// Result of pruning every unused daemon-owned resource.
@@ -83,7 +119,30 @@ pub struct Plugin {
 
 #[cfg(test)]
 mod tests {
-    use super::Version;
+    use super::{BuildCache, BuildCacheKind, Version};
+
+    #[test]
+    fn build_cache_keys() {
+        let value = serde_json::to_value(BuildCache {
+            id: "cache-id".into(),
+            parents: None,
+            kind: BuildCacheKind::SourceLocal,
+            description: "local context".into(),
+            in_use: false,
+            shared: true,
+            size: 42,
+            created_at: "2026-08-04T00:00:00Z".into(),
+            last_used_at: None,
+            usage_count: 3,
+        })
+        .expect("build cache should serialize");
+
+        assert_eq!(value["ID"], "cache-id");
+        assert_eq!(value["Parents"], serde_json::Value::Null);
+        assert_eq!(value["Type"], "source.local");
+        assert_eq!(value["LastUsedAt"], serde_json::Value::Null);
+        assert!(value.get("Id").is_none());
+    }
 
     #[test]
     fn version_keys() {

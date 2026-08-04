@@ -1,15 +1,15 @@
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use hl_container::ContainerState;
 use hl_images::content::Store;
 
 use super::{ApiError, ApiResult, DockerState};
 use crate::api::{
-    Authentication, Credentials, DiskUsage, Plugin, SystemInfo, SystemPrune, UsageData, Version,
-    VolumeUsage,
+    Authentication, BuildCache, Container, Credentials, ImageSummary, Plugin, SystemInfo, SystemPrune, UsageData,
+    Version, VolumeUsage,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[hl_design::adapter]
@@ -58,13 +58,11 @@ pub(super) async fn info(State(state): State<DockerState>) -> ApiResult<Json<Sys
         containers: i64::try_from(containers.len()).unwrap_or(i64::MAX),
         containers_running: i64::try_from(running).unwrap_or(i64::MAX),
         containers_paused: i64::try_from(paused).unwrap_or(i64::MAX),
-        containers_stopped: i64::try_from(containers.len().saturating_sub(running + paused))
-            .unwrap_or(i64::MAX),
+        containers_stopped: i64::try_from(containers.len().saturating_sub(running + paused)).unwrap_or(i64::MAX),
         images: i64::try_from(images.len()).unwrap_or(i64::MAX),
         driver: "hl-engine".into(),
         memory_limit: false,
-        ncpu: std::thread::available_parallelism()
-            .map_or(1, |value| i64::try_from(value.get()).unwrap_or(i64::MAX)),
+        ncpu: std::thread::available_parallelism().map_or(1, |value| i64::try_from(value.get()).unwrap_or(i64::MAX)),
         os_type: state.platform.os.clone(),
         architecture: state.platform.architecture.clone(),
         operating_system: "Linux".into(),
@@ -73,11 +71,104 @@ pub(super) async fn info(State(state): State<DockerState>) -> ApiResult<Json<Sys
     }))
 }
 
+#[derive(Clone, Copy, Default)]
+struct DiskSelection {
+    containers: bool,
+    images: bool,
+    volumes: bool,
+    build_cache: bool,
+}
+
+impl DiskSelection {
+    fn from_pairs(parameters: Vec<(String, String)>) -> ApiResult<Self> {
+        let mut selection = Self::default();
+        let mut specified = false;
+        for (name, value) in parameters {
+            if name != "type" {
+                continue;
+            }
+            specified = true;
+            match value.as_str() {
+                "container" => selection.containers = true,
+                "image" => selection.images = true,
+                "volume" => selection.volumes = true,
+                "build-cache" => selection.build_cache = true,
+                _ => {
+                    return Err(ApiError::new(
+                        StatusCode::BAD_REQUEST,
+                        format!("unknown object type: {value}"),
+                    ));
+                }
+            }
+        }
+        if !specified {
+            return Ok(Self {
+                containers: true,
+                images: true,
+                volumes: true,
+                build_cache: true,
+            });
+        }
+        Ok(selection)
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub(super) struct DiskUsageResponse {
+    layers_size: i64,
+    images: Option<Vec<ImageSummary>>,
+    containers: Option<Vec<Container>>,
+    volumes: Option<Vec<VolumeUsage>>,
+    build_cache: Option<Vec<BuildCache>>,
+}
+
 #[hl_design::adapter]
-pub(super) async fn disk(State(state): State<DockerState>) -> ApiResult<Json<DiskUsage>> {
+pub(super) async fn disk(
+    State(state): State<DockerState>,
+    Query(parameters): Query<Vec<(String, String)>>,
+) -> ApiResult<Json<DiskUsageResponse>> {
+    let selection = DiskSelection::from_pairs(parameters)?;
+    let (containers, images, volumes) = tokio::join!(
+        selected_containers(state.clone(), selection.containers),
+        selected_images(state.clone(), selection.images),
+        selected_volumes(state, selection.volumes),
+    );
+    let containers = containers?;
+    let images = images?;
+    let volumes = volumes?;
+    let (layers_size, images) = images.map_or((0, None), |(size, images)| (size, Some(images)));
+    Ok(Json(DiskUsageResponse {
+        layers_size,
+        images,
+        containers,
+        volumes,
+        build_cache: selection.build_cache.then(Vec::new),
+    }))
+}
+
+async fn selected_containers(state: DockerState, selected: bool) -> ApiResult<Option<Vec<Container>>> {
+    if !selected {
+        return Ok(None);
+    }
     let listed_containers = state.containers.list().await.map_err(ApiError::container)?;
     let containers = super::container::summaries(&state.containers, listed_containers, true).await?;
-    let images = state.image_summaries().await?;
+    Ok(Some(containers))
+}
+
+async fn selected_images(state: DockerState, selected: bool) -> ApiResult<Option<(i64, Vec<ImageSummary>)>> {
+    if !selected {
+        return Ok(None);
+    }
+    let image_state = state.clone();
+    let (images, layers_size) = tokio::join!(state.image_summaries(), layers_size(image_state));
+    Ok(Some((layers_size?, images?)))
+}
+
+async fn selected_volumes(state: DockerState, selected: bool) -> ApiResult<Option<Vec<VolumeUsage>>> {
+    if !selected {
+        return Ok(None);
+    }
     let volume_service = state.containers.volumes();
     let listed_volumes = volume_service.list().await.map_err(ApiError::container)?;
     let reference_counts = volume_service
@@ -106,28 +197,24 @@ pub(super) async fn disk(State(state): State<DockerState>) -> ApiResult<Json<Dis
             },
         });
     }
+    Ok(Some(volumes))
+}
+
+async fn layers_size(state: DockerState) -> ApiResult<i64> {
     let image_service = state.containers.images().map_err(ApiError::container)?;
-    let layers_size = tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         image_service
             .content()
             .digests()?
             .into_iter()
             .try_fold(0_i64, |total, digest| {
                 let size = image_service.content().info(&digest)?.size;
-                Ok::<_, hl_images::Error>(
-                    total.saturating_add(i64::try_from(size).unwrap_or(i64::MAX)),
-                )
+                Ok::<_, hl_images::Error>(total.saturating_add(i64::try_from(size).unwrap_or(i64::MAX)))
             })
     })
     .await
     .map_err(ApiError::task)?
-    .map_err(ApiError::image)?;
-    Ok(Json(DiskUsage {
-        layers_size,
-        images,
-        containers,
-        volumes,
-    }))
+    .map_err(ApiError::image)
 }
 
 #[derive(Default, Deserialize)]
@@ -225,10 +312,7 @@ impl Filters {
         if !unsupported.is_empty() {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
-                format!(
-                    "unsupported system prune filters: {}",
-                    unsupported.join(", ")
-                ),
+                format!("unsupported system prune filters: {}", unsupported.join(", ")),
             ));
         }
         Ok(Self(values))

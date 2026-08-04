@@ -23,28 +23,27 @@ pub use auth::{Authentication, Credentials};
 pub use configuration::{CompatibilityFields, Healthcheck, RestartPolicy, Update, UpdateResult};
 pub use container::{Container, ContainerMetadata, ContainerPrune, Wait};
 pub use create::{
-    BindOptions, BindReadOnly, ContainerCreation, CreateContainer, DockerMount, DriverConfig,
-    EndpointsConfig, HostConfig, NetworkingConfig, VolumeOptions,
+    BindOptions, BindReadOnly, ContainerCreation, CreateContainer, DockerMount, DriverConfig, EndpointsConfig,
+    HostConfig, NetworkingConfig, VolumeOptions,
 };
-pub use exec::{
-    Attachment, Console, ExecConfig, ExecCreated, ExecInspect, ExecOpen, ExecProcess, ExecStart,
-};
+pub use exec::{Attachment, Console, ExecConfig, ExecCreated, ExecInspect, ExecOpen, ExecProcess, ExecStart};
 pub use filesystem::{Change, ChangeKind, PathStat};
 pub use image::{
-    BuildPrune, CommitOptions, Distribution, ImageCommit, ImageConfig, ImageDelete, ImageHistory,
-    ImageLoad, ImagePrune, ImageSummary, InspectImage, ProgressDetail, PullProgress, PushAux,
-    PushProgress, Search,
+    BuildPrune, CommitOptions, Distribution, ImageCommit, ImageConfig, ImageDelete, ImageHistory, ImageLoad,
+    ImagePrune, ImageSummary, InspectImage, ProgressDetail, PullProgress, PushAux, PushProgress, Search,
 };
 pub use inspect::{
-    ContainerConfig, ContainerState, EndpointSettings, HealthLog, HealthState, InspectContainer,
-    InspectHostConfig, MountPoint, NetworkSettings,
+    ContainerConfig, ContainerState, EndpointSettings, HealthLog, HealthState, InspectContainer, InspectHostConfig,
+    MountPoint, NetworkSettings,
 };
 #[cfg(feature = "runtime")]
 pub(crate) use log::LogEncoder;
 pub use log::{ContainerLogs, LogOptions, LogProtocolError, LogStreams};
 pub use process::{EnvError, EnvVar, EnvVars};
 pub use stats::{BlockIo, Cpu, CpuUsage, Memory, Pids, Stats, Throttling, Top};
-pub use system::{DiskUsage, Plugin, SystemInfo, SystemPrune, UsageData, Version, VolumeUsage};
+pub use system::{
+    BuildCache, BuildCacheKind, DiskUsage, Plugin, SystemInfo, SystemPrune, UsageData, Version, VolumeUsage,
+};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DockerError {
