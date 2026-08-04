@@ -39,7 +39,7 @@ relocated.
 | `src/containers/hl-engine/src/ffi/linux/execution/test.rs::environment_stack` | absent `legacy/prebuilt/{aarch64,x86_64}/environment` | `runtime/environment/initial-stack` covers ordered UTF-8 `EMPTY=` and `TZ=UTC`; the Rust test additionally injects non-UTF-8 `TZ=UTC\xff` | gap: the YAML environment model is UTF-8 and cannot express the old byte contract |
 | `src/containers/hl-engine/src/ffi/linux/execution/test.rs::bootstrap_instructions_execute` | deleted `exit` and `write` prebuilts | `runtime/bootstrap/{exit,write}` is an exact source and exit/stdout mapping for both ISAs | remove the detached package integration test after the manifest rows are part of the required gate |
 | `src/containers/hl-engine/src/ffi/linux/execution/test.rs::clone_teardown` | absent `legacy/prebuilt/{aarch64,x86_64}/clone` | `runtime/clone/robust-clear-tid` covers clone, `CLONE_CHILD_CLEARTID`, futex wake, and robust owner-death teardown on both ISAs | compare the unavailable binary's provenance before declaring exact equivalence; no prebuilt manifest row exists for it |
-| `src/apps/testing/src/bin/compat_worker.rs` | missing `legacy/artifacts/runtime` loader and libc files | no self-contained category owns dynamic-rootfs resources | gap: make image/rootfs resources an explicit category input or image dependency rather than a runner-global legacy path |
+| `src/apps/testing/src/bin/compat_worker.rs` | four absent loader/libc files declared by `legacy/artifacts/runtime/manifest.tsv` | `runtime/process/nonpie-dladdr` owns its source, golden, dynamic build, and Alpine image closure | migrated boundary: the retained inventory injects `dynamic-rootfs=<selected-corpus>/artifacts/runtime`; a generated corpus must still materialize the four declared files |
 | `src/apps/testing/tests/projection_linux.rs` | missing `legacy/artifacts/full/...` guests and missing dynamic loaders | `runtime/process/{uname-boundary,nonpie-dladdr}` overlaps guest behavior, but does not cover `ProcessAuthority` projected-root mechanics | migrate projected read, directory, write, uname, and dynamic-loader cases as explicit repository process categories before deleting these tests |
 | `src/apps/testing/tests/{inventory,compat}.rs` | entire centralized legacy inventory | the 36 YAML categories are the intended replacement | delete only after a mechanical case/ISA/disposition comparison reports no lost row |
 | `flake.nix` | `legacy/{corpus,fixture_schema,priority}.py` and their tests | no current YAML-native equivalent is called by the flake | replace with the typed manifest validation and full case-ID/ISA/disposition inventory gate before removing the Python tools |
@@ -80,6 +80,48 @@ the runtime manifests and should move with the image scenarios that consume
 them or be deleted after a source-backed parity check.
 
 ## Retained C oracle audit
+
+### Dynamic non-PIE and rootfs resources
+
+The dynamic-rootfs lane was audited against
+`../engine/tests/compat/process/nonpie_dladdr.c`,
+`../engine/cmake/Phase3Compat.cmake` (`hl_guest_named` for
+`nonpie_dladdr`), `../engine/cmake/GuestFixtures.cmake` (the dynamic guest
+compiler selection), `../engine/src/linux_abi/elf.c` (`elf_interp`,
+`load_elf`, and `build_stack`), and the corresponding loader path in
+`../engine/src/linux_abi/x86.c`. The retained engine reads `PT_INTERP`, maps
+the main image before its interpreter, owns both mappings through process
+teardown, applies per-segment W^X, and constructs the initial stack with the
+interpreter base. For a dynamic non-PIE main executable, guest-visible
+`AT_ENTRY` and `AT_PHDR` remain at their low Linux addresses even when host
+storage is biased high; glibc uses those values to build the `link_map` ranges
+used by `dladdr` and `dlsym(RTLD_NEXT)`.
+
+Rust maps those capabilities to `hl-loader`: image planning and interpreter
+loading own the two mappings, `DynamicLoaderHandoff` owns their entry/base
+handoff, and stack construction owns `AT_ENTRY`, `AT_PHDR`, and `AT_BASE`.
+The compatibility worker supplies only the filesystem closure. It no longer
+derives that closure from `CARGO_MANIFEST_DIR`: the inventory runner converts
+the `dynamic-rootfs` schema token to
+`dynamic-rootfs=<selected-corpus>/artifacts/runtime`, and its existing run
+fingerprint hashes that selected resource tree.
+
+The selected legacy corpus must contain these exact manifest-owned inputs:
+
+- `aarch64/lib/ld-linux-aarch64.so.1`;
+- `aarch64/lib/aarch64-linux-gnu/libc.so.6`;
+- `x86_64/lib64/ld-linux-x86-64.so.2`;
+- `x86_64/lib/x86_64-linux-gnu/libc.so.6`.
+
+All four are absent from the current checkout; `manifest.tsv`, `NOTICE.md`,
+and `COPYING.LIB` are provenance rather than executable resources. The durable
+replacement, `tests/runtime/process/test.yaml` case
+`runtime/process/nonpie-dladdr`, builds the same retained source for both ISAs
+and runs it inside its declared `alpine:3.20` image, which owns the loader and
+libc closure. This covers the non-PIE loader behavior, not the host projected
+root mechanism. `src/apps/testing/tests/projection_linux.rs` still needs typed
+projected-tree inputs, writable projection and post-run host-file assertions
+before its dynamic-loader case can leave the legacy corpus.
 
 The following retained implementation was studied directly:
 

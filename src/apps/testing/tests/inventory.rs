@@ -644,6 +644,7 @@ fn parse(root: &Path, timeout_profile: TimeoutProfile) -> Vec<Case> {
                     .into_owned()
             });
             let skip = fixture.and_then(unsupported);
+            let rootfs = fixture.map_or_else(|| "-".to_owned(), |value| rootfs_argument(root, &value.rootfs));
             Some(Case {
                 suite: value[0].into(),
                 name: value[1].into(),
@@ -659,7 +660,7 @@ fn parse(root: &Path, timeout_profile: TimeoutProfile) -> Vec<Case> {
                 fixture: fixture.map_or("executable", |value| &value.fixture).into(),
                 arguments: fixture.map_or("-", |value| &value.arguments).into(),
                 side_files: fixture.map_or("-", |value| &value.side_files).into(),
-                rootfs: fixture.map_or("-", |value| &value.rootfs).into(),
+                rootfs,
                 guest_executable,
             })
         })
@@ -736,6 +737,14 @@ fn setup(root: &Path) -> BTreeMap<(String, String, String), Setup> {
 
 fn path(root: &Path, value: &str) -> Option<PathBuf> {
     (value != "-").then(|| root.join(value))
+}
+
+fn rootfs_argument(root: &Path, category: &str) -> String {
+    if category == "dynamic-rootfs" {
+        format!("dynamic-rootfs={}", root.join("artifacts/runtime").display())
+    } else {
+        category.to_owned()
+    }
 }
 
 fn setting(name: &str) -> Option<String> {
@@ -971,6 +980,18 @@ fn corpus_override() {
     assert_eq!(
         corpus_path(Some("/persistent/corpus")),
         PathBuf::from("/persistent/corpus")
+    );
+}
+
+#[test]
+fn dynamic_rootfs_belongs_to_selected_corpus() {
+    assert_eq!(
+        rootfs_argument(Path::new("/corpus"), "dynamic-rootfs"),
+        "dynamic-rootfs=/corpus/artifacts/runtime"
+    );
+    assert_eq!(
+        rootfs_argument(Path::new("/corpus"), "scratch-rootfs"),
+        "scratch-rootfs"
     );
 }
 

@@ -196,6 +196,36 @@ fn rootfs_input(
         return Ok(builder);
     }
     let mut rootfs = Rootfs::scratch("guest");
+    if let Some(runtime) = category.strip_prefix("dynamic-rootfs=") {
+        if runtime.is_empty() {
+            return Err(());
+        }
+        let runtime = std::path::Path::new(runtime);
+        let resources = match isa {
+            hl_engine::activation::GuestIsa::Aarch64 => [
+                ("aarch64/lib/ld-linux-aarch64.so.1", "lib/ld-linux-aarch64.so.1"),
+                (
+                    "aarch64/lib/aarch64-linux-gnu/libc.so.6",
+                    "lib/aarch64-linux-gnu/libc.so.6",
+                ),
+            ],
+            hl_engine::activation::GuestIsa::X86_64 => [
+                ("x86_64/lib64/ld-linux-x86-64.so.2", "lib64/ld-linux-x86-64.so.2"),
+                (
+                    "x86_64/lib/x86_64-linux-gnu/libc.so.6",
+                    "lib/x86_64-linux-gnu/libc.so.6",
+                ),
+            ],
+        };
+        for (source, relative) in resources {
+            rootfs = rootfs.with_input(Input::File {
+                source: runtime.join(source),
+                relative: PathBuf::from(relative),
+                executable: true,
+            });
+        }
+        return Ok(builder.with_rootfs(rootfs));
+    }
     match category {
         "scratch-rootfs" => {}
         "mapping-data-rootfs" => {
@@ -221,33 +251,6 @@ fn rootfs_input(
                 rootfs = rootfs.with_input(Input::Directory {
                     source: None,
                     relative: PathBuf::from(relative),
-                });
-            }
-        }
-        "dynamic-rootfs" => {
-            let runtime =
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/legacy/artifacts/runtime");
-            let resources = match isa {
-                hl_engine::activation::GuestIsa::Aarch64 => [
-                    ("aarch64/lib/ld-linux-aarch64.so.1", "lib/ld-linux-aarch64.so.1"),
-                    (
-                        "aarch64/lib/aarch64-linux-gnu/libc.so.6",
-                        "lib/aarch64-linux-gnu/libc.so.6",
-                    ),
-                ],
-                hl_engine::activation::GuestIsa::X86_64 => [
-                    ("x86_64/lib64/ld-linux-x86-64.so.2", "lib64/ld-linux-x86-64.so.2"),
-                    (
-                        "x86_64/lib/x86_64-linux-gnu/libc.so.6",
-                        "lib/x86_64-linux-gnu/libc.so.6",
-                    ),
-                ],
-            };
-            for (source, relative) in resources {
-                rootfs = rootfs.with_input(Input::File {
-                    source: runtime.join(source),
-                    relative: PathBuf::from(relative),
-                    executable: true,
                 });
             }
         }
