@@ -1,0 +1,1 @@
+clockefault cg_bad=EFAULT cg_mono=EFAULT cg_null=EFAULT gtod_bad=EFAULT gtod_null=ok gtod_ok=ok survived=1

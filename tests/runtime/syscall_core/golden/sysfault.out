@@ -1,0 +1,1 @@
+sysfault ns_str=EFAULT ru_str=EFAULT fs_str=EFAULT ns_bad=EFAULT ns_ok=ok ru_bad=EFAULT ru_ok=ok mc_bad=EFAULT mc_ok=ok fs_bad=EFAULT fs_ok=ok at_bad=EFAULT at_ok=ok sa_bad=EFAULT sa_old=EFAULT sa_ok=ok rd_bad=EFAULT wr_bad=EFAULT rd_ok=ok

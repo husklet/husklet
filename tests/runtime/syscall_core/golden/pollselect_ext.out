@@ -1,0 +1,3 @@
+poll rd=1 wr=1 to0=1 to=1
+select rd=1 wr=1 count2=1 to=1
+pselect rd=1 to=1 nfds0=1

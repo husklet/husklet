@@ -1,0 +1,6 @@
+select r=0 capped=1
+poll r=0 capped=1
+pselect r=0 capped=1
+ppoll rd=1 to=1 capped=1
+eintr r=-1 eintr=1 gotsig=1
+edges efault=1 einval_nfds=1 einval_to=1

@@ -1,0 +1,2 @@
+devfd-parts=1111
+procfd resolves=1 enough_fds=1 devfd-metadata=1 devfd-pipe=1
