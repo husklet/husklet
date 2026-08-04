@@ -246,6 +246,40 @@ fn format_passed(mut passed: execution::Passed) -> String {
         passed.provenance.image,
         passed.provenance.execution,
     )];
+    let setup = passed
+        .setup
+        .iter()
+        .map(|(name, time)| format!("{name}_us={time}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    lines.push(format!(
+        "SETUP bench/{} {} {setup}",
+        passed.id, passed.provenance.target
+    ));
+    let cold_lifecycle = passed
+        .cold_lifecycle
+        .iter()
+        .map(|(name, time)| format!("{name}_us={time}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    lines.push(format!(
+        "COLD_LIFECYCLE bench/{} {} {cold_lifecycle}",
+        passed.id, passed.provenance.target
+    ));
+    for (phase, mut times) in passed.lifecycle {
+        let statistics = Statistics::from_samples(&mut times);
+        lines.push(format!(
+            "LIFECYCLE bench/{}/{phase} {} min_us={} median_us={} p90_us={} p99_us={} max_us={} samples={}",
+            passed.id,
+            passed.provenance.target,
+            statistics.minimum,
+            statistics.median,
+            statistics.p90,
+            statistics.p99,
+            statistics.maximum,
+            times.len(),
+        ));
+    }
     for (phase, mut times) in passed.phases {
         let statistics = Statistics::from_samples(&mut times);
         lines.push(format!(
@@ -367,13 +401,38 @@ impl Options {
 
 #[cfg(test)]
 mod tests {
-    use super::{DIAGNOSTIC_LIMIT, Options, Statistics, WorkPool, excerpt, parse_jobs, parse_results};
+    use super::{DIAGNOSTIC_LIMIT, Options, Statistics, WorkPool, excerpt, format_passed, parse_jobs, parse_results};
     use clap::Parser;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn benchmark_evidence_separates_row_setup_from_execution() {
+        let output = format_passed(super::execution::Passed {
+            id: "startup/tiny".into(),
+            cold: 12,
+            samples: vec![4],
+            phases: [("guest_compute".into(), vec![2])].into(),
+            lifecycle: [("wait_and_drain".into(), vec![3])].into(),
+            cold_lifecycle: [("start".into(), 5)].into(),
+            setup: [("provenance_build".into(), 9)].into(),
+            provenance: super::execution::Provenance {
+                image: "alpine:3.20".into(),
+                execution: "Native".into(),
+                target: "arm64",
+                warmups: 0,
+                identity: "identity".into(),
+            },
+        });
+
+        assert!(output.contains("SETUP bench/startup/tiny arm64 provenance_build_us=9"));
+        assert!(output.contains("COLD_LIFECYCLE bench/startup/tiny arm64 start_us=5"));
+        assert!(output.contains("LIFECYCLE bench/startup/tiny/wait_and_drain arm64 min_us=3"));
+        assert!(output.contains("PHASE bench/startup/tiny/guest_compute arm64 min_us=2"));
+    }
 
     #[derive(Parser)]
     struct BenchCli {

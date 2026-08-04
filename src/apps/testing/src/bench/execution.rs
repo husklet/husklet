@@ -4,6 +4,7 @@ use super::{
 };
 use crate::{runtime::image::TestImage, suite::Target};
 use hl_container::{Config, ContainerSpec, Entry, ExitStatus, Isolation, Process, Sandbox, Session};
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs,
@@ -11,7 +12,6 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use sha2::{Digest, Sha256};
 
 pub enum Result {
     Passed(Passed),
@@ -23,6 +23,9 @@ pub struct Passed {
     pub cold: u128,
     pub samples: Vec<u128>,
     pub phases: BTreeMap<String, Vec<u128>>,
+    pub lifecycle: BTreeMap<String, Vec<u128>>,
+    pub cold_lifecycle: BTreeMap<String, u128>,
+    pub setup: BTreeMap<String, u128>,
     pub provenance: Provenance,
 }
 
@@ -45,9 +48,17 @@ pub struct Prepared {
     artifact_identity: String,
     image_identity: String,
     pub identity: String,
+    setup: BTreeMap<String, u128>,
 }
 
-type MeasurementResult = (u128, Vec<u128>, BTreeMap<String, Vec<u128>>);
+pub struct Measurement {
+    pub cold: u128,
+    pub samples: Vec<u128>,
+    pub phases: BTreeMap<String, Vec<u128>>,
+    pub lifecycle: BTreeMap<String, Vec<u128>>,
+    pub cold_lifecycle: BTreeMap<String, u128>,
+    pub setup: BTreeMap<String, u128>,
+}
 
 const CAPTURE_LIMIT: usize = 1024 * 1024;
 const DIAGNOSTIC_CAPTURE: usize = 4096;
@@ -57,16 +68,32 @@ const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub async fn prepare(benchmark: &Benchmark, case_index: usize, target: Target) -> std::result::Result<Prepared, Error> {
     let case = &benchmark.cases[case_index];
+    let mut setup = BTreeMap::new();
+    let started = Instant::now();
     let artifact = benchmark.build(case, target).await?;
+    setup.insert("provenance_build".into(), elapsed_us(started));
+    let started = Instant::now();
     let artifact_identity = file_identity(&artifact)?;
+    setup.insert("provenance_artifact_identity".into(), elapsed_us(started));
     let compiler = benchmark.compiler_name(target);
-    let compiler_version = tokio::process::Command::new(compiler).arg("--version").kill_on_drop(true).output().await?;
+    let started = Instant::now();
+    let compiler_version = tokio::process::Command::new(compiler)
+        .arg("--version")
+        .kill_on_drop(true)
+        .output()
+        .await?;
     if !compiler_version.status.success() || compiler_version.stdout.len() > 64 * 1024 {
         return Err(format!("{compiler} did not provide bounded compiler provenance").into());
     }
+    setup.insert("provenance_compiler_identity".into(), elapsed_us(started));
+    let started = Instant::now();
     let image = TestImage::materialize(&benchmark.image, &target.platform()).await?;
+    setup.insert("provenance_image_materialize".into(), elapsed_us(started));
     let image_identity = image.identity().to_owned();
+    let started = Instant::now();
     image.release()?;
+    setup.insert("provenance_image_release".into(), elapsed_us(started));
+    let started = Instant::now();
     let runner = std::env::current_exe()?;
     let runner_identity = file_identity(&runner)?;
     let definition = fs::read(benchmark.directory.join("test.yaml"))?;
@@ -86,18 +113,24 @@ pub async fn prepare(benchmark: &Benchmark, case_index: usize, target: Target) -
         source.as_slice(),
         golden.as_slice(),
     ])?;
+    setup.insert("provenance_hash".into(), elapsed_us(started));
     Ok(Prepared {
         artifact,
         artifact_identity,
         image_identity,
         identity,
+        setup,
     })
 }
 
 fn provenance_identity(fields: &[&[u8]]) -> std::result::Result<String, Error> {
     let mut digest = Sha256::new();
     for field in fields {
-        digest.update(u64::try_from(field.len()).map_err(|_| "benchmark provenance field is too large")?.to_be_bytes());
+        digest.update(
+            u64::try_from(field.len())
+                .map_err(|_| "benchmark provenance field is too large")?
+                .to_be_bytes(),
+        );
         digest.update(field);
     }
     Ok(hex(&digest.finalize()))
@@ -107,11 +140,14 @@ pub async fn run(benchmark: Arc<Benchmark>, case_index: usize, target: Target, p
     let case = &benchmark.cases[case_index];
     let identity = prepared.identity.clone();
     match execute(Arc::clone(&benchmark), case_index, target, prepared).await {
-        Ok((cold, samples, phases)) => Result::Passed(Passed {
+        Ok(measurement) => Result::Passed(Passed {
             id: format!("{}/{}", benchmark.name, case.id),
-            cold,
-            samples,
-            phases,
+            cold: measurement.cold,
+            samples: measurement.samples,
+            phases: measurement.phases,
+            lifecycle: measurement.lifecycle,
+            cold_lifecycle: measurement.cold_lifecycle,
+            setup: measurement.setup,
             provenance: Provenance {
                 image: benchmark.image.clone(),
                 execution: format!("{:?}", benchmark.execution),
@@ -133,9 +169,10 @@ async fn execute(
     case_index: usize,
     target: Target,
     prepared: Prepared,
-) -> std::result::Result<MeasurementResult, Error> {
+) -> std::result::Result<Measurement, Error> {
     let case = &benchmark.cases[case_index];
     let deadline = tokio::time::Instant::now() + row_timeout(case)?;
+    let image_started = Instant::now();
     let image = tokio::time::timeout_at(deadline, TestImage::materialize(&benchmark.image, &target.platform()))
         .await
         .map_err(|_| "benchmark image materialization exceeded the total row deadline")??;
@@ -147,9 +184,18 @@ async fn execute(
         image.release()?;
         return Err("benchmark artifact identity changed after resume admission".into());
     }
-    let outcome = execute_with_image(Arc::clone(&benchmark), case_index, target, image.path(), &prepared.artifact, deadline)
-        .await
-        .map_err(|error| error.to_string());
+    let image_us = elapsed_us(image_started);
+    let outcome = execute_with_image(
+        Arc::clone(&benchmark),
+        case_index,
+        target,
+        image.path(),
+        &prepared.artifact,
+        deadline,
+    )
+    .await
+    .map_err(|error| error.to_string());
+    let cleanup_started = Instant::now();
     let release = tokio::time::timeout(
         CLEANUP_TIMEOUT,
         tokio::task::spawn_blocking(move || image.release().map_err(|error| error.to_string())),
@@ -157,8 +203,13 @@ async fn execute(
     .await
     .map_err(|_| "benchmark image cleanup timed out")??;
     match outcome {
-        Ok(result) => {
+        Ok(mut result) => {
             release?;
+            result.setup.extend(prepared.setup);
+            result.setup.insert("execution_image_materialize".into(), image_us);
+            result
+                .setup
+                .insert("execution_image_release".into(), elapsed_us(cleanup_started));
             Ok(result)
         }
         Err(error) => {
@@ -175,7 +226,8 @@ async fn execute_with_image(
     image: &std::path::Path,
     artifact: &std::path::Path,
     deadline: tokio::time::Instant,
-) -> std::result::Result<MeasurementResult, Error> {
+) -> std::result::Result<Measurement, Error> {
+    let service_started = Instant::now();
     let state = isolated_state()?;
     let containers = tokio::time::timeout_at(
         deadline,
@@ -183,11 +235,13 @@ async fn execute_with_image(
     )
     .await
     .map_err(|_| "benchmark container setup exceeded the total row deadline")??;
+    let service_us = elapsed_us(service_started);
     let case = &benchmark.cases[case_index];
     let guest_program = format!("/opt/husklet/bench-{}", case.id);
     let staging_artifact = artifact.to_path_buf();
     let staging_image = image.to_path_buf();
     let staging_program = guest_program.clone();
+    let stage_started = Instant::now();
     tokio::time::timeout_at(
         deadline,
         tokio::task::spawn_blocking(move || {
@@ -196,7 +250,15 @@ async fn execute_with_image(
     )
     .await
     .map_err(|_| "benchmark staging exceeded the total row deadline")???;
-    run_case(&containers, &benchmark, case, target, image, &guest_program, deadline).await
+    let stage_us = elapsed_us(stage_started);
+    let mut measurement = run_case(&containers, &benchmark, case, target, image, &guest_program, deadline).await?;
+    measurement.setup.insert("container_service".into(), service_us);
+    measurement.setup.insert("guest_stage".into(), stage_us);
+    Ok(measurement)
+}
+
+fn elapsed_us(started: Instant) -> u128 {
+    started.elapsed().as_micros()
 }
 
 fn file_identity(path: &std::path::Path) -> std::result::Result<String, Error> {
@@ -238,7 +300,7 @@ async fn run_case(
     image: &std::path::Path,
     program: &str,
     deadline: tokio::time::Instant,
-) -> std::result::Result<MeasurementResult, Error> {
+) -> std::result::Result<Measurement, Error> {
     let expected_stdout = fs::read(&case.stdout_contains)?;
     let total = 1_u32
         .checked_add(case.warmups)
@@ -256,9 +318,9 @@ async fn run_case(
             .map_err(|_| "benchmark container cleanup timed out".to_owned())
             .and_then(|result| result.map_err(|error| error.to_string()));
         match outcome {
-            Ok((elapsed, invocation_phases)) => {
+            Ok((elapsed, invocation_phases, lifecycle)) => {
                 cleanup.map_err(|error| -> Error { error.into() })?;
-                measurements.record(repetition, case.warmups, elapsed, invocation_phases)?;
+                measurements.record(repetition, case.warmups, elapsed, invocation_phases, lifecycle)?;
             }
             Err(error) => {
                 let _ = cleanup;
@@ -311,14 +373,27 @@ impl<'a> Invocation<'a> {
         })
     }
 
-    async fn execute(&self, expected_stdout: &[u8]) -> std::result::Result<(u128, Vec<(String, u128, u64)>), Error> {
+    async fn execute(
+        &self,
+        expected_stdout: &[u8],
+    ) -> std::result::Result<(u128, Vec<(String, u128, u64)>, Vec<(String, u128)>), Error> {
         let started = Instant::now();
+        let phase_started = Instant::now();
         self.containers.create(self.spec.clone()).await?;
+        let create_us = elapsed_us(phase_started);
+        let phase_started = Instant::now();
         let mut output = self.containers.attach(&self.name).await?;
+        let attach_us = elapsed_us(phase_started);
+        let phase_started = Instant::now();
         self.containers.start(&self.name).await?;
+        let start_us = elapsed_us(phase_started);
+        let phase_started = Instant::now();
         let status = self.wait(&mut output).await?;
+        let execution_us = elapsed_us(phase_started);
         let elapsed = started.elapsed().as_millis();
+        let phase_started = Instant::now();
         let logs = self.containers.logs(&self.name).await?;
+        let logs_us = elapsed_us(phase_started);
         bounded(&logs)?;
         if status != ExitStatus::Code(self.case.exit) {
             return Err(format!("exit {status:?}, expected {}", self.case.exit).into());
@@ -337,7 +412,14 @@ impl<'a> Invocation<'a> {
         if !logs.stderr.is_empty() {
             return Err(format!("unexpected stderr: {}", output_excerpt(&logs.stderr)).into());
         }
-        Ok((elapsed, parse_phases(&logs.stdout)?))
+        let lifecycle = vec![
+            ("create".into(), create_us),
+            ("attach".into(), attach_us),
+            ("start".into(), start_us),
+            ("wait_and_drain".into(), execution_us),
+            ("output_read".into(), logs_us),
+        ];
+        Ok((elapsed, parse_phases(&logs.stdout)?, lifecycle))
     }
 }
 
@@ -435,6 +517,8 @@ struct Measurements {
     cold: Option<u128>,
     samples: Vec<u128>,
     phases: BTreeMap<String, (u64, Vec<u128>)>,
+    lifecycle: BTreeMap<String, Vec<u128>>,
+    cold_lifecycle: BTreeMap<String, u128>,
 }
 
 impl Measurements {
@@ -443,6 +527,8 @@ impl Measurements {
             cold: None,
             samples: Vec::with_capacity(samples as usize),
             phases: BTreeMap::new(),
+            lifecycle: BTreeMap::new(),
+            cold_lifecycle: BTreeMap::new(),
         }
     }
 
@@ -452,9 +538,11 @@ impl Measurements {
         warmups: u32,
         elapsed: u128,
         phases: Vec<(String, u128, u64)>,
+        lifecycle: Vec<(String, u128)>,
     ) -> std::result::Result<(), Error> {
         if repetition == 0 {
             self.cold = Some(elapsed);
+            self.cold_lifecycle.extend(lifecycle);
             return Ok(());
         }
         if repetition <= warmups {
@@ -463,6 +551,9 @@ impl Measurements {
         self.samples.push(elapsed);
         for (name, time, checksum) in phases {
             self.record_phase(&name, time, checksum)?;
+        }
+        for (name, time) in lifecycle {
+            self.lifecycle.entry(name).or_default().push(time);
         }
         Ok(())
     }
@@ -479,18 +570,25 @@ impl Measurements {
         Ok(())
     }
 
-    fn finish(self, samples: u32) -> std::result::Result<MeasurementResult, Error> {
+    fn finish(self, samples: u32) -> std::result::Result<Measurement, Error> {
         if self.phases.values().any(|(_, times)| times.len() != samples as usize) {
             return Err("PHASE set changed across samples".into());
         }
-        Ok((
-            self.cold.ok_or("cold benchmark sample was not run")?,
-            self.samples,
-            self.phases
+        if self.lifecycle.values().any(|times| times.len() != samples as usize) {
+            return Err("LIFECYCLE set changed across samples".into());
+        }
+        Ok(Measurement {
+            cold: self.cold.ok_or("cold benchmark sample was not run")?,
+            samples: self.samples,
+            phases: self
+                .phases
                 .into_iter()
                 .map(|(name, (_, times))| (name, times))
                 .collect(),
-        ))
+            lifecycle: self.lifecycle,
+            cold_lifecycle: self.cold_lifecycle,
+            setup: BTreeMap::new(),
+        })
     }
 }
 
@@ -543,12 +641,23 @@ mod tests {
 
     #[test]
     fn provenance_is_typed_and_changes_with_every_identity_field() {
-        let baseline = [b"provider".as_slice(), b"arm64", b"artifact", b"image", b"runner", b"definition"];
+        let baseline = [
+            b"provider".as_slice(),
+            b"arm64",
+            b"artifact",
+            b"image",
+            b"runner",
+            b"definition",
+        ];
         let expected = provenance_identity(&baseline).unwrap();
         for index in 0..baseline.len() {
             let mut changed = baseline;
             changed[index] = b"changed";
-            assert_ne!(provenance_identity(&changed).unwrap(), expected, "field {index} did not bind provenance");
+            assert_ne!(
+                provenance_identity(&changed).unwrap(),
+                expected,
+                "field {index} did not bind provenance"
+            );
         }
         assert_ne!(
             provenance_identity(&[b"ab", b"c"]).unwrap(),
@@ -558,8 +667,7 @@ mod tests {
 
     #[test]
     fn combined_definition_accepts_named_phase_rows() {
-        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/bench/combined");
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/bench/combined");
         let benchmark = Benchmark::load(&directory, &directory.join("test.yaml")).unwrap();
         let marker = std::fs::read(&benchmark.cases[0].stdout_contains).unwrap();
         let phase = b"PHASE compute us=42 ok=7\n";
