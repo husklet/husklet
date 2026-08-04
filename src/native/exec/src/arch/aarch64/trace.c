@@ -24,6 +24,7 @@
 #include "select.h"
 #include "shift.h"
 #include "simd_compare.h"
+#include "fp_reduce.h"
 #include "simd_immediate.h"
 #include "simd_narrow.h"
 #include "simd_permute.h"
@@ -114,6 +115,7 @@ static int body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc) {
            hl_a64_multiply_body(assembler, word) || hl_a64_divide_body(assembler, word) ||
            hl_a64_shift_body(assembler, word) || hl_a64_reverse_body(assembler, word) ||
            hl_a64_simd_compare_body(assembler, word) || hl_a64_compare_body(assembler, word) ||
+           hl_a64_simd_fp_reduce_body(assembler, word) ||
            hl_a64_simd_narrow_body(assembler, word) ||
            hl_a64_simd_permute_body(assembler, word) ||
            hl_a64_simd_reduce_body(assembler, word) ||
