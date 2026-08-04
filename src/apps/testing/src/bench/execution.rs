@@ -69,6 +69,7 @@ async fn run_case(
         )
         .name(&name)
         .guest(target.guest())
+        .execution(benchmark.execution.container()?)
         .isolation(Isolation {
             sandbox: Sandbox::Disabled,
             ..Isolation::default()

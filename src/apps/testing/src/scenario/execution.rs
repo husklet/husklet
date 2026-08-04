@@ -65,6 +65,7 @@ async fn run_case(
     let spec = ContainerSpec::from_directory(image.path(), process)
         .name(&name)
         .guest(target.guest())
+        .execution(case.execution.container()?)
         .isolation(Isolation {
             sandbox: Sandbox::Disabled,
             ..Isolation::default()

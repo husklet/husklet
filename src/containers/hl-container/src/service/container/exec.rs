@@ -1,6 +1,6 @@
 use super::{
-    now_ms, Arc, Error, Exec, ExecId, ExecSpec, ExecState, ExitStatus, Io, JournalId,
-    ProcessConfig, Result, Service, Signal,
+    Arc, Error, Exec, ExecId, ExecSpec, ExecState, ExitStatus, Io, JournalId, ProcessConfig, Result, Service, Signal,
+    now_ms,
 };
 use crate::service::CheckpointConfig;
 
@@ -28,10 +28,7 @@ impl Service {
     }
 
     pub(crate) async fn inspect_exec(&self, id: &ExecId) -> Result<Exec> {
-        self.execs
-            .get(id)
-            .await?
-            .ok_or_else(|| Error::ExecNotFound(id.clone()))
+        self.execs.get(id).await?.ok_or_else(|| Error::ExecNotFound(id.clone()))
     }
 
     pub(crate) async fn wait_exec(&self, id: &ExecId) -> Result<ExitStatus> {
@@ -67,11 +64,7 @@ impl Service {
         self.execs.list().await
     }
 
-    pub(crate) async fn start_exec(
-        self: &Arc<Self>,
-        id: &ExecId,
-        size: Option<crate::Size>,
-    ) -> Result<crate::Session> {
+    pub(crate) async fn start_exec(self: &Arc<Self>, id: &ExecId, size: Option<crate::Size>) -> Result<crate::Session> {
         let _guard = self.operations.lock().await;
         let mut exec = self.inspect_exec(id).await?;
         if !matches!(exec.state, ExecState::Created) {
@@ -117,6 +110,7 @@ impl Service {
                     restore: exec.checkpoint.is_some(),
                 }),
                 guest: container.spec.guest,
+                execution: container.spec.execution,
                 process: process_spec,
                 hostname: Some(container.hostname()),
                 mounts,
@@ -165,13 +159,7 @@ impl Service {
         let _guard = self.operations.lock().await;
         let (result, mut failure) = match result {
             Ok(result) => (result, None),
-            Err(error) => (
-                ExitStatus::Fault {
-                    status: -1,
-                    detail: 0,
-                },
-                Some(error.to_string()),
-            ),
+            Err(error) => (ExitStatus::Fault { status: -1, detail: 0 }, Some(error.to_string())),
         };
         if let Ok(mut exec) = self.inspect_exec(&id).await {
             if exec.checkpoint.is_some() {
@@ -195,10 +183,7 @@ impl Service {
             }
         }
         if let Some(error) = failure {
-            self.failures
-                .lock()
-                .await
-                .insert(JournalId::exec(id.clone()), error);
+            self.failures.lock().await.insert(JournalId::exec(id.clone()), error);
         }
         self.exec_live.lock().await.remove(&id);
         if let Some(waiters) = self.exec_waiters.lock().await.get(&id) {
@@ -220,9 +205,7 @@ impl Service {
                 .await
                 .get(&id)
                 .cloned()
-                .ok_or_else(|| {
-                    Error::Runtime(format!("running exec {id} has no runtime process"))
-                })?;
+                .ok_or_else(|| Error::Runtime(format!("running exec {id} has no runtime process")))?;
             process.checkpoint(timeout).await?;
             let checkpoint = crate::Checkpoint {
                 namespace: format!("exec-{id}"),
@@ -258,9 +241,7 @@ impl Service {
                 .await
                 .get(id)
                 .cloned()
-                .ok_or_else(|| {
-                    Error::Runtime(format!("running exec {id} has no runtime process"))
-                })?;
+                .ok_or_else(|| Error::Runtime(format!("running exec {id} has no runtime process")))?;
             if !process.checkpointable() {
                 return Err(Error::Runtime(format!(
                     "running terminal {id} is not checkpointable by its runtime"

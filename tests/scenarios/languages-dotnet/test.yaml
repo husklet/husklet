@@ -1,6 +1,7 @@
 cases:
   - id: languages-dotnet/version-sdk8
     image: mcr.microsoft.com/dotnet/sdk:8.0
+    execution: { native: true, diagnostics: true }
     run:
       program: /bin/sh
       arguments: [-c, 'printf "SDK %s\n" "$(dotnet --version | cut -d. -f1)"']
@@ -9,6 +10,7 @@ cases:
 
   - id: languages-dotnet/sum-sdk8
     image: mcr.microsoft.com/dotnet/sdk:8.0
+    execution: { native: true, diagnostics: true }
     fixtures:
       - source: source/sum/Program.cs
         destination: /tests/sum/Program.cs
@@ -22,6 +24,7 @@ cases:
 
   - id: languages-dotnet/fib-sdk9
     image: mcr.microsoft.com/dotnet/sdk:9.0
+    execution: { native: true, diagnostics: true }
     fixtures:
       - source: source/fib/Program.cs
         destination: /tests/fib/Program.cs
@@ -35,6 +38,7 @@ cases:
 
   - id: languages-dotnet/runtime-info-sdk8
     image: mcr.microsoft.com/dotnet/runtime:8.0
+    execution: { native: true, diagnostics: true }
     run:
       program: /bin/sh
       arguments: [-c, "dotnet --info | grep -o 'Microsoft.NETCore.App 8'"]

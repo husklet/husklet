@@ -1,4 +1,5 @@
 image: alpine:3.20
+execution: { native: true, diagnostics: true }
 build:
   source: main.c
   compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }

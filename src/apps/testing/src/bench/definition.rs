@@ -1,5 +1,5 @@
 use super::Error;
-use crate::runtime::definition::Target;
+use crate::runtime::definition::{Execution, Target};
 use serde::Deserialize;
 use std::{
     collections::BTreeSet,
@@ -12,6 +12,8 @@ use std::{
 #[serde(deny_unknown_fields)]
 struct Document {
     image: String,
+    #[serde(default)]
+    execution: Execution,
     build: Build,
     cases: Vec<Case>,
 }
@@ -66,6 +68,7 @@ pub struct Benchmark {
     pub name: String,
     pub directory: PathBuf,
     pub image: String,
+    pub execution: Execution,
     build: Build,
     pub cases: Vec<BenchmarkCase>,
 }
@@ -125,6 +128,7 @@ impl Benchmark {
             name,
             directory: directory.to_path_buf(),
             image: document.image,
+            execution: document.execution,
             build: document.build,
             cases,
         })

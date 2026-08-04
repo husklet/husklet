@@ -25,7 +25,7 @@ pub(crate) use mount::ResolvedMount;
 pub use mount::{Access, BindPropagation, Mount, MountSource};
 pub use network::{Endpoint, EndpointSpec, Network, NetworkDriver, NetworkId, NetworkSpec, Subnet};
 pub use port::{Port, Protocol, Publication};
-pub use process::{Console, ContainerSpec, Guest, Process, Rootfs, Size};
+pub use process::{Console, ContainerSpec, Execution, Guest, Process, Rootfs, Size};
 pub use prune::Prune;
 pub use restart::{Restart, RestartPolicy};
 pub use update::Update;

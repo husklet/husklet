@@ -5,10 +5,8 @@ use std::{
     path::PathBuf,
 };
 
-use super::{Guest, Process, Rootfs};
-use crate::{
-    Error, Healthcheck, Isolation, Mount, MountSource, Resources, RestartPolicy, Result, VolumeSpec,
-};
+use super::{Execution, Guest, Process, Rootfs};
+use crate::{Error, Healthcheck, Isolation, Mount, MountSource, Resources, RestartPolicy, Result, VolumeSpec};
 
 /// Immutable launch definition persisted with a container.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -19,6 +17,9 @@ pub struct ContainerSpec {
     pub image: Option<hl_images::Reference>,
     pub rootfs: Rootfs,
     pub guest: Guest,
+    /// Execution backend requested for this container and its child processes.
+    #[serde(default)]
+    pub execution: Execution,
     pub process: Process,
     pub hostname: Option<String>,
     pub hosts: BTreeMap<String, IpAddr>,
@@ -47,6 +48,7 @@ impl ContainerSpec {
             image: None,
             rootfs: Rootfs::Image(rootfs),
             guest: Guest::default(),
+            execution: Execution::default(),
             process,
             hostname: None,
             hosts: BTreeMap::new(),
@@ -75,6 +77,7 @@ impl ContainerSpec {
             image: None,
             rootfs: Rootfs::Directory(rootfs.into()),
             guest: Guest::default(),
+            execution: Execution::default(),
             process,
             hostname: None,
             hosts: BTreeMap::new(),
@@ -112,6 +115,12 @@ impl ContainerSpec {
     #[must_use]
     pub const fn guest(mut self, value: Guest) -> Self {
         self.guest = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn execution(mut self, value: Execution) -> Self {
+        self.execution = value;
         self
     }
 
@@ -190,9 +199,7 @@ impl ContainerSpec {
 
     pub(crate) fn validate(&self) -> Result<()> {
         if self.labels.keys().any(String::is_empty) {
-            return Err(Error::InvalidSpec(
-                "container label name must not be empty".into(),
-            ));
+            return Err(Error::InvalidSpec("container label name must not be empty".into()));
         }
         if let Some(healthcheck) = &self.healthcheck {
             healthcheck.validate()?;
@@ -211,33 +218,22 @@ impl ContainerSpec {
                 ));
             }
             if !self.publish.is_empty() {
-                return Err(Error::InvalidSpec(
-                    "host network mode cannot publish ports".into(),
-                ));
+                return Err(Error::InvalidSpec("host network mode cannot publish ports".into()));
             }
         }
         if self.process.program.is_empty() {
-            return Err(Error::InvalidSpec(
-                "process program must not be empty".into(),
-            ));
+            return Err(Error::InvalidSpec("process program must not be empty".into()));
         }
         if matches!(&self.rootfs, Rootfs::Directory(path) if !path.is_absolute()) {
             return Err(Error::InvalidSpec("rootfs must be an absolute path".into()));
         }
         if !self.process.working_dir.is_absolute() {
-            return Err(Error::InvalidSpec(
-                "working directory must be absolute".into(),
-            ));
+            return Err(Error::InvalidSpec("working directory must be absolute".into()));
         }
         if self.name.as_deref().is_some_and(str::is_empty) {
             return Err(Error::InvalidSpec("name must not be empty".into()));
         }
-        if self
-            .process
-            .env
-            .keys()
-            .any(|key| key.is_empty() || key.contains('='))
-        {
+        if self.process.env.keys().any(|key| key.is_empty() || key.contains('=')) {
             return Err(Error::InvalidSpec(
                 "environment names must be non-empty and exclude '='".into(),
             ));
@@ -250,19 +246,16 @@ impl ContainerSpec {
                 .iter()
                 .any(|(key, value)| key.contains('\0') || value.contains('\0'))
         {
-            return Err(Error::InvalidSpec(
-                "process strings must not contain NUL".into(),
-            ));
+            return Err(Error::InvalidSpec("process strings must not contain NUL".into()));
         }
         if self.hostname.as_deref().is_some_and(str::is_empty) {
             return Err(Error::InvalidSpec("hostname must not be empty".into()));
         }
-        if self.hosts.keys().any(|name| {
-            name.is_empty()
-                || name
-                    .chars()
-                    .any(|value| value.is_whitespace() || value == '\0')
-        }) {
+        if self
+            .hosts
+            .keys()
+            .any(|name| name.is_empty() || name.chars().any(|value| value.is_whitespace() || value == '\0'))
+        {
             return Err(Error::InvalidSpec(
                 "extra host names must be non-empty and contain no whitespace or NUL".into(),
             ));
@@ -308,13 +301,9 @@ impl ContainerSpec {
             }
             match &mount.source {
                 MountSource::Bind(source) if !source.is_absolute() => {
-                    return Err(Error::InvalidSpec(
-                        "bind mount source must be absolute".into(),
-                    ));
+                    return Err(Error::InvalidSpec("bind mount source must be absolute".into()));
                 }
-                MountSource::Volume(name)
-                | MountSource::Anonymous(name)
-                | MountSource::Tmpfs(name) => {
+                MountSource::Volume(name) | MountSource::Anonymous(name) | MountSource::Tmpfs(name) => {
                     VolumeSpec::new(name).validate()?;
                 }
                 MountSource::Bind(_) => {}
@@ -371,38 +360,24 @@ mod tests {
     fn named_user_and_group_resolve_from_linux_databases() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join("etc")).unwrap();
-        std::fs::write(
-            root.path().join("etc/passwd"),
-            "worker:x:123:456::/tmp:/bin/sh\n",
-        )
-        .unwrap();
+        std::fs::write(root.path().join("etc/passwd"), "worker:x:123:456::/tmp:/bin/sh\n").unwrap();
         std::fs::write(root.path().join("etc/group"), "staff:x:789:\n").unwrap();
-        assert_eq!(
-            Process::resolve_user("worker:staff", root.path()).unwrap(),
-            (123, 789)
-        );
-        assert_eq!(
-            Process::resolve_user("worker", root.path()).unwrap(),
-            (123, 456)
-        );
-        assert_eq!(
-            Process::resolve_user("123:staff", root.path()).unwrap(),
-            (123, 789)
-        );
-        assert_eq!(
-            Process::resolve_user("worker:789", root.path()).unwrap(),
-            (123, 789)
-        );
+        assert_eq!(Process::resolve_user("worker:staff", root.path()).unwrap(), (123, 789));
+        assert_eq!(Process::resolve_user("worker", root.path()).unwrap(), (123, 456));
+        assert_eq!(Process::resolve_user("123:staff", root.path()).unwrap(), (123, 789));
+        assert_eq!(Process::resolve_user("worker:789", root.path()).unwrap(), (123, 789));
         assert!(Process::resolve_user("missing", root.path()).is_err());
         std::fs::write(
             root.path().join("etc/passwd"),
             "worker:x:123:456::/tmp:/bin/sh\nworker:x:124:457::/tmp:/bin/sh\n",
         )
         .unwrap();
-        assert!(Process::resolve_user("worker", root.path())
-            .unwrap_err()
-            .to_string()
-            .contains("ambiguous"));
+        assert!(
+            Process::resolve_user("worker", root.path())
+                .unwrap_err()
+                .to_string()
+                .contains("ambiguous")
+        );
     }
 
     #[test]
@@ -416,14 +391,11 @@ mod tests {
             .isolation(enabled)
             .network_mode(crate::NetworkMode::Host);
         assert!(spec.validate().is_ok());
-        assert!(spec
-            .clone()
-            .isolation(crate::Isolation::default())
-            .validate()
-            .is_err());
-        assert!(spec
-            .publish(crate::Publication::tcp(std::net::Ipv4Addr::LOCALHOST, 8080, 80).unwrap())
-            .validate()
-            .is_err());
+        assert!(spec.clone().isolation(crate::Isolation::default()).validate().is_err());
+        assert!(
+            spec.publish(crate::Publication::tcp(std::net::Ipv4Addr::LOCALHOST, 8080, 80).unwrap())
+                .validate()
+                .is_err()
+        );
     }
 }

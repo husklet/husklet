@@ -34,10 +34,9 @@ impl Size {
     /// # Errors
     /// Returns [`Error::InvalidSpec`] when either dimension is zero.
     pub fn new(rows: u16, columns: u16) -> Result<Self> {
-        let rows = NonZeroU16::new(rows)
-            .ok_or_else(|| Error::InvalidSpec("terminal rows must be nonzero".into()))?;
-        let columns = NonZeroU16::new(columns)
-            .ok_or_else(|| Error::InvalidSpec("terminal columns must be nonzero".into()))?;
+        let rows = NonZeroU16::new(rows).ok_or_else(|| Error::InvalidSpec("terminal rows must be nonzero".into()))?;
+        let columns =
+            NonZeroU16::new(columns).ok_or_else(|| Error::InvalidSpec("terminal columns must be nonzero".into()))?;
         Ok(Self { rows, columns })
     }
 
@@ -109,9 +108,7 @@ impl Process {
             // A missing account database is a bad request, not a missing resource: the daemon maps
             // a NotFound io error to HTTP 404, which misreports a scratch image asked for a name.
             let passwd = std::fs::read_to_string(rootfs.join("etc/passwd")).map_err(|error| {
-                Error::InvalidSpec(format!(
-                    "user {user:?} cannot be resolved: /etc/passwd {error}"
-                ))
+                Error::InvalidSpec(format!("user {user:?} cannot be resolved: /etc/passwd {error}"))
             })?;
             let matches = passwd
                 .lines()
@@ -130,9 +127,7 @@ impl Process {
                     )));
                 }
                 _ => {
-                    return Err(Error::InvalidSpec(format!(
-                        "user {user:?} is ambiguous in /etc/passwd"
-                    )));
+                    return Err(Error::InvalidSpec(format!("user {user:?} is ambiguous in /etc/passwd")));
                 }
             }
         };
@@ -142,12 +137,9 @@ impl Process {
                 if let Ok(gid) = group.parse::<i32>() {
                     gid
                 } else {
-                    let groups =
-                        std::fs::read_to_string(rootfs.join("etc/group")).map_err(|error| {
-                            Error::InvalidSpec(format!(
-                                "group {group:?} cannot be resolved: /etc/group {error}"
-                            ))
-                        })?;
+                    let groups = std::fs::read_to_string(rootfs.join("etc/group")).map_err(|error| {
+                        Error::InvalidSpec(format!("group {group:?} cannot be resolved: /etc/group {error}"))
+                    })?;
                     let matches = groups
                         .lines()
                         .filter_map(|line| {
@@ -174,9 +166,7 @@ impl Process {
             }
         };
         if uid < 0 || gid < 0 {
-            return Err(Error::InvalidSpec(
-                "uid and gid must be non-negative".into(),
-            ));
+            return Err(Error::InvalidSpec("uid and gid must be non-negative".into()));
         }
         Ok((uid, gid))
     }
@@ -245,3 +235,35 @@ impl Guest {
 #[path = "process_spec.rs"]
 mod spec;
 pub use spec::ContainerSpec;
+
+/// Engine execution selection carried with a container launch.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "backend", rename_all = "snake_case")]
+pub enum Execution {
+    #[default]
+    Interpreted,
+    Native {
+        diagnostics: bool,
+    },
+}
+
+impl Execution {
+    /// Selects the native execution backend, optionally recording native-boundary diagnostics.
+    #[must_use]
+    pub const fn native(diagnostics: bool) -> Self {
+        Self::Native { diagnostics }
+    }
+
+    #[must_use]
+    pub const fn is_native(self) -> bool {
+        matches!(self, Self::Native { .. })
+    }
+
+    #[must_use]
+    pub const fn diagnostics(self) -> bool {
+        match self {
+            Self::Interpreted => false,
+            Self::Native { diagnostics } => diagnostics,
+        }
+    }
+}

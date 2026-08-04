@@ -1,6 +1,6 @@
 use super::{
-    now_ms, Arc, Check, Container, ContainerId, ContainerState, Duration, ExitStatus, Healthcheck,
-    JournalId, Probe, ProcessConfig, Result, Running, Service, Signal,
+    Arc, Check, Container, ContainerId, ContainerState, Duration, ExitStatus, Healthcheck, JournalId, Probe,
+    ProcessConfig, Result, Running, Service, Signal, now_ms,
 };
 
 impl Service {
@@ -24,10 +24,7 @@ impl Service {
                     return Probe::new(
                         started_at_ms,
                         now_ms(),
-                        ExitStatus::Fault {
-                            status: -1,
-                            detail: 0,
-                        },
+                        ExitStatus::Fault { status: -1, detail: 0 },
                         "health generation is no longer running",
                     );
                 }
@@ -40,18 +37,10 @@ impl Service {
         Self::finish_probe(process, check, started_at_ms).await
     }
 
-    async fn launch_probe(
-        &self,
-        container: &Container,
-        check: &Healthcheck,
-    ) -> Result<Arc<dyn Running>> {
+    async fn launch_probe(&self, container: &Container, check: &Healthcheck) -> Result<Arc<dyn Running>> {
         let networks = self
             .networks
-            .launch(
-                &container.id,
-                container.spec.isolation,
-                container.spec.network_mode,
-            )
+            .launch(&container.id, container.spec.isolation, container.spec.network_mode)
             .await?;
         let process = Self::health_process(container, check);
         let requested_mounts = container.spec.mounts.clone();
@@ -71,6 +60,7 @@ impl Service {
                 translation_cache: self.translation_cache.clone(),
                 checkpoint: None,
                 guest: container.spec.guest,
+                execution: container.spec.execution,
                 process,
                 hostname: Some(container.hostname()),
                 mounts,
@@ -87,11 +77,7 @@ impl Service {
             .await
     }
 
-    async fn finish_probe(
-        process: Arc<dyn Running>,
-        check: &Healthcheck,
-        started_at_ms: u64,
-    ) -> Probe {
+    async fn finish_probe(process: Arc<dyn Running>, check: &Healthcheck, started_at_ms: u64) -> Probe {
         let mut logs = process.take_logs();
         let output = async move {
             let mut bytes = Vec::new();
@@ -127,9 +113,7 @@ impl Service {
         let Ok(mut container) = self.required(id).await else {
             return false;
         };
-        if container.generation != generation
-            || !matches!(container.state, ContainerState::Running { .. })
-        {
+        if container.generation != generation || !matches!(container.state, ContainerState::Running { .. }) {
             return false;
         }
         let previous = container.health.as_ref().map(|health| health.status);
@@ -176,10 +160,7 @@ impl Service {
         Probe::new(
             started_at_ms,
             now_ms(),
-            ExitStatus::Fault {
-                status: -1,
-                detail: 0,
-            },
+            ExitStatus::Fault { status: -1, detail: 0 },
             error.to_string(),
         )
     }

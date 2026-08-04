@@ -143,6 +143,7 @@ mod tests {
             translation_cache: None,
             checkpoint: None,
             guest: crate::Guest::Aarch64,
+            execution: crate::Execution::default(),
             process: crate::Process::new("/bin/true"),
             hostname: None,
             mounts: Vec::new(),
@@ -165,6 +166,24 @@ mod tests {
         assert_eq!(spec.plan.rootfs.as_deref(), Some(b"/rootfs".as_slice()));
         assert_eq!(spec.plan.arguments[0], b"/bin/true");
         assert_eq!(spec.plan.options.get("HL_NETNS"), Some("container-test"));
+    }
+
+    #[test]
+    fn native_execution_reaches_the_engine_launch_plan() {
+        let mut launch = launch();
+        launch.execution = crate::Execution::native(true);
+        let spec = Spec::try_from(&launch).unwrap();
+        assert_eq!(spec.plan.options.get("HL_NATIVE_EXECUTION"), Some("1"));
+        assert_eq!(spec.plan.options.get("HL_NATIVE_DIAGNOSTICS"), Some("1"));
+    }
+
+    #[test]
+    fn native_execution_without_diagnostics_omits_diagnostics_option() {
+        let mut launch = launch();
+        launch.execution = crate::Execution::native(false);
+        let spec = Spec::try_from(&launch).unwrap();
+        assert_eq!(spec.plan.options.get("HL_NATIVE_EXECUTION"), Some("1"));
+        assert_eq!(spec.plan.options.get("HL_NATIVE_DIAGNOSTICS"), None);
     }
 
     #[test]

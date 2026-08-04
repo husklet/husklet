@@ -1,4 +1,5 @@
 use super::Error;
+use crate::runtime::definition::Execution;
 use serde::Deserialize;
 use std::{
     collections::BTreeSet,
@@ -17,6 +18,8 @@ struct Document {
 struct Case {
     id: String,
     image: String,
+    #[serde(default)]
+    execution: Execution,
     run: Run,
     #[serde(default)]
     fixtures: Vec<Fixture>,
@@ -66,6 +69,7 @@ pub struct Scenario {
 pub struct ScenarioCase {
     pub id: String,
     pub image: String,
+    pub execution: Execution,
     pub program: String,
     pub arguments: Vec<String>,
     pub working_directory: String,
@@ -131,6 +135,7 @@ impl Scenario {
                 Ok(ScenarioCase {
                     id: case.id,
                     image: case.image,
+                    execution: case.execution,
                     program: case.run.program,
                     arguments: case.run.arguments,
                     working_directory: case.run.working_directory,

@@ -1,7 +1,4 @@
-use crate::{
-    model::ResolvedMount, ExitStatus, Guest, Isolation, LogChunk, Process, Resources, Result,
-    Signal, Size,
-};
+use crate::{ExitStatus, Guest, Isolation, LogChunk, Process, Resources, Result, Signal, Size, model::ResolvedMount};
 use async_trait::async_trait;
 use std::{path::PathBuf, sync::Arc};
 
@@ -20,12 +17,8 @@ impl NetworkConfig {
     pub(crate) fn from_network(network: &crate::Network, id: &crate::ContainerId) -> Self {
         Self {
             namespace: id.namespace(),
-            bridge: (network.driver == crate::NetworkDriver::Bridge)
-                .then(|| network.id.to_string()),
-            address: network
-                .endpoints
-                .get(id)
-                .and_then(|endpoint| endpoint.address),
+            bridge: (network.driver == crate::NetworkDriver::Bridge).then(|| network.id.to_string()),
+            address: network.endpoints.get(id).and_then(|endpoint| endpoint.address),
             prefix: network.subnet.map(|subnet| subnet.prefix),
             name: network.name.clone(),
             driver: network.driver,
@@ -53,6 +46,7 @@ pub(crate) struct ProcessConfig {
     pub(crate) translation_cache: Option<PathBuf>,
     pub(crate) checkpoint: Option<CheckpointConfig>,
     pub(crate) guest: Guest,
+    pub(crate) execution: crate::Execution,
     pub(crate) process: Process,
     pub(crate) hostname: Option<String>,
     pub(crate) mounts: Vec<ResolvedMount>,

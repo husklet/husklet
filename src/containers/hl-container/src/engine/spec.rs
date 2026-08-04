@@ -21,6 +21,8 @@ impl TryFrom<&ProcessConfig> for Spec {
         Self::filesystem(&mut options, launch)?;
         Self::resources(&mut options, launch)?;
         Self::network(&mut options, launch)?;
+        Self::flag(&mut options, "HL_NATIVE_EXECUTION", launch.execution.is_native())?;
+        Self::flag(&mut options, "HL_NATIVE_DIAGNOSTICS", launch.execution.diagnostics())?;
 
         let executable = launch.rootfs.join(launch.process.program.trim_start_matches('/'));
         let arguments = std::iter::once(launch.process.program.as_bytes().to_vec())

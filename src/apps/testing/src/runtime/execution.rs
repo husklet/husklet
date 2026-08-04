@@ -32,6 +32,7 @@ pub async fn run(app: &App, target: Target) -> Result<Vec<CaseResult>, Error> {
         let spec = ContainerSpec::from_directory(fixture.path(), process)
             .name(&name)
             .guest(target.guest())
+            .execution(app.execution.container()?)
             .isolation(Isolation {
                 sandbox: Sandbox::Disabled,
                 ..Isolation::default()

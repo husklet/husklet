@@ -1,24 +1,17 @@
 use super::{
-    now_ms, Arc, Container, ContainerState, Error, JournalId, NetworkConfig, Notify, ProcessConfig,
-    Result, Run, Running, Service, Signal,
+    Arc, Container, ContainerState, Error, JournalId, NetworkConfig, Notify, ProcessConfig, Result, Run, Running,
+    Service, Signal, now_ms,
 };
 use crate::service::CheckpointConfig;
 
 impl Service {
-    pub(super) async fn process_domain(
-        &self,
-        container: &crate::ContainerId,
-    ) -> Result<hl_engine::Domain> {
+    pub(super) async fn process_domain(&self, container: &crate::ContainerId) -> Result<hl_engine::Domain> {
         self.live
             .lock()
             .await
             .get(container)
             .map(|run| run.process.domain())
-            .ok_or_else(|| {
-                crate::Error::Corrupt(format!(
-                    "running container {container} has no live process domain"
-                ))
-            })
+            .ok_or_else(|| crate::Error::Corrupt(format!("running container {container} has no live process domain")))
     }
 
     pub(crate) async fn start(self: &Arc<Self>, reference: &str) -> Result<()> {
@@ -30,19 +23,10 @@ impl Service {
         self.launch_locked(container, true).await
     }
 
-    #[allow(
-        clippy::too_many_lines,
-        reason = "container launch transaction and rollback"
-    )]
-    pub(super) async fn launch_locked(
-        self: &Arc<Self>,
-        mut container: Container,
-        explicit: bool,
-    ) -> Result<()> {
+    #[allow(clippy::too_many_lines, reason = "container launch transaction and rollback")]
+    pub(super) async fn launch_locked(self: &Arc<Self>, mut container: Container, explicit: bool) -> Result<()> {
         self.ensure_ports_available(&container).await?;
-        self.networks
-            .attach_default_for_publication_locked(&container)
-            .await?;
+        self.networks.attach_default_for_publication_locked(&container).await?;
         let networks = self.launch_networks(&container).await?;
         let io = self.io(&container).await;
         let input = io.take_input().await?;
@@ -52,10 +36,10 @@ impl Service {
         let mut mounts = self.volumes.resolve(&requested_mounts).await?;
         mounts.extend(self.identity.prepare(&container, &networks)?);
         let filesystem_generation = self.identity.generation(&container)?.path().to_owned();
-        let checkpoint_namespace = container.checkpoint.as_ref().map_or_else(
-            || container.id.to_string(),
-            |checkpoint| checkpoint.namespace.clone(),
-        );
+        let checkpoint_namespace = container
+            .checkpoint
+            .as_ref()
+            .map_or_else(|| container.id.to_string(), |checkpoint| checkpoint.namespace.clone());
         let checkpoint = Some(CheckpointConfig {
             image: self
                 .checkpoints
@@ -74,6 +58,7 @@ impl Service {
                 translation_cache: self.translation_cache.clone(),
                 checkpoint,
                 guest: container.spec.guest,
+                execution: container.spec.execution,
                 process: process_spec,
                 hostname: Some(container.hostname()),
                 mounts,
@@ -91,10 +76,7 @@ impl Service {
         let process = match process {
             Ok(process) => process,
             Err(error) => {
-                self.io
-                    .lock()
-                    .await
-                    .remove(&JournalId::container(container.id.clone()));
+                self.io.lock().await.remove(&JournalId::container(container.id.clone()));
                 return Err(error);
             }
         };
@@ -108,11 +90,7 @@ impl Service {
             process_id: process.id(),
             started_at_ms: now_ms(),
         };
-        container.health = container
-            .spec
-            .healthcheck
-            .as_ref()
-            .map(|_| crate::Health::starting());
+        container.health = container.spec.healthcheck.as_ref().map(|_| crate::Health::starting());
         if let Err(error) = self.containers.replace(&container).await {
             if let Err(cleanup) = process.signal(Signal::Kill).await {
                 return Err(Error::Runtime(format!(
@@ -158,16 +136,9 @@ impl Service {
         Ok(())
     }
 
-    pub(super) async fn launch_networks(
-        &self,
-        container: &Container,
-    ) -> Result<Vec<NetworkConfig>> {
+    pub(super) async fn launch_networks(&self, container: &Container) -> Result<Vec<NetworkConfig>> {
         self.networks
-            .launch(
-                &container.id,
-                container.spec.isolation,
-                container.spec.network_mode,
-            )
+            .launch(&container.id, container.spec.isolation, container.spec.network_mode)
             .await
     }
 
@@ -196,11 +167,6 @@ impl Service {
             .await
             .get(&container.id)
             .map(|run| Arc::clone(&run.process))
-            .ok_or_else(|| {
-                Error::Corrupt(format!(
-                    "active container {} has no owned process",
-                    container.id
-                ))
-            })
+            .ok_or_else(|| Error::Corrupt(format!("active container {} has no owned process", container.id)))
     }
 }

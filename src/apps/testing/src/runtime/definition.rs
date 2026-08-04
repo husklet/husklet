@@ -45,10 +45,34 @@ impl Target {
 #[serde(deny_unknown_fields)]
 struct Document {
     image: String,
+    #[serde(default)]
+    execution: Execution,
     artifact: Artifact,
     build: Build,
     oracle: Option<Commands>,
     cases: Vec<Case>,
+}
+
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Execution {
+    #[serde(default)]
+    native: bool,
+    #[serde(default)]
+    diagnostics: bool,
+}
+
+impl Execution {
+    pub fn container(self) -> Result<hl_container::Execution, Error> {
+        if self.diagnostics && !self.native {
+            return Err("native diagnostics require native execution".into());
+        }
+        Ok(if self.native {
+            hl_container::Execution::native(self.diagnostics)
+        } else {
+            hl_container::Execution::default()
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -108,6 +132,7 @@ pub struct App {
     pub name: String,
     pub directory: PathBuf,
     pub image: String,
+    pub execution: Execution,
     pub destination: String,
     build: Build,
     oracle: Option<Commands>,
@@ -152,6 +177,7 @@ impl App {
                 .to_owned(),
             directory: directory.to_path_buf(),
             image: document.image,
+            execution: document.execution,
             destination: document.artifact.destination,
             build: document.build,
             oracle: document.oracle,
@@ -234,5 +260,27 @@ fn safe_absolute(path: &str) -> Result<(), Error> {
         Err(format!("unsafe guest path {}", path.display()).into())
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Execution;
+
+    #[test]
+    fn yaml_native_execution_maps_to_container_configuration() {
+        let execution: Execution = serde_yaml::from_str("native: true\ndiagnostics: true\n").unwrap();
+        let execution = execution.container().unwrap();
+        assert!(execution.is_native());
+        assert!(execution.diagnostics());
+    }
+
+    #[test]
+    fn yaml_diagnostics_require_native_execution() {
+        let execution: Execution = serde_yaml::from_str("diagnostics: true\n").unwrap();
+        assert_eq!(
+            execution.container().unwrap_err().to_string(),
+            "native diagnostics require native execution"
+        );
     }
 }

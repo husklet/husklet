@@ -1,4 +1,5 @@
 image: alpine:3.20
+execution: { native: true, diagnostics: true }
 artifact:
   destination: /opt/husklet/runtime-core
 oracle:
