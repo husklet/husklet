@@ -1,0 +1,5 @@
+movsb-bwd 1122334455667788
+stosb-bwd 0102abababab
+movsb-popfdeadbeef99
+movsb-ovl 00010001020304050607
+movsb-fwd a1a2a3a4

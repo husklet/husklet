@@ -1,0 +1,2 @@
+ld rax=1122334455667788 eax=0000000055667788 ax=aaaaaaaaaaaa7788 al=aaaaaaaaaaaaaa88
+st rax=cafef00ddeadbeef eax=ffffffff12345678 ax=ffffffffffffbeef al=ffffffffffffff42

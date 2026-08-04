@@ -1,0 +1,278 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: []
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+cases:
+  - id: runtime/abi-core/atexit
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: atexit.c, output: atexit, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-atexit }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/atexit.out }
+  - id: runtime/abi-core/bitops
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: bitops.c, output: bitops, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-bitops }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/bitops.out }
+  - id: runtime/abi-core/btwidth
+    targets: [amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: btwidth.c, output: btwidth, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-btwidth }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/btwidth.out }
+  - id: runtime/abi-core/environ
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: environ.c, output: environ, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-environ }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/environ.out }
+  - id: runtime/abi-core/files
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: files.c, output: files, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-files }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/files.out }
+  - id: runtime/abi-core/floatmath
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: floatmath.c, output: floatmath, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-floatmath }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/floatmath.out }
+  - id: runtime/abi-core/fnptr
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: fnptr.c, output: fnptr, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-fnptr }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/fnptr.out }
+  - id: runtime/abi-core/fpdnan
+    targets: [amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: fpdnan.c, output: fpdnan, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-fpdnan }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/fpdnan.out }
+  - id: runtime/abi-core/fpedge
+    targets: [amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: fpedge.c, output: fpedge, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-fpedge }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/fpedge.out }
+  - id: runtime/abi-core/glob
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: globmatch.c, output: globmatch, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-globmatch }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/globmatch.out }
+  - id: runtime/abi-core/heap
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: heap.c, output: heap, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-heap }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/heap.out }
+  - id: runtime/abi-core/ibtc-dispatch
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: ibtc_dispatch.c, output: ibtc_dispatch, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-ibtc_dispatch }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/ibtc_dispatch.out }
+  - id: runtime/abi-core/jumptable
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: jumptable.c, output: jumptable, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-jumptable }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/jumptable.out }
+  - id: runtime/abi-core/math
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: math.c, output: math, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-math }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/math.out }
+  - id: runtime/abi-core/mmapanon
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: mmapanon.c, output: mmapanon, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-mmapanon }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/mmapanon.out }
+  - id: runtime/abi-core/mov-moffs
+    targets: [amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: moffs.c, output: moffs, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-moffs }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/moffs.out }
+  - id: runtime/abi-core/munmap-partial
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: munmap_partial.c, output: munmap_partial, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-munmap_partial }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/munmap_partial.out }
+  - id: runtime/abi-core/qsort
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: qsort.c, output: qsort, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-qsort }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/qsort.out }
+  - id: runtime/abi-core/repmovsdf
+    targets: [amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: repmovsdf.c, output: repmovsdf, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-repmovsdf }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/repmovsdf.out }
+  - id: runtime/abi-core/shldflags
+    targets: [amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: shldflags.c, output: shldflags, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-shldflags }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shldflags.out }
+  - id: runtime/abi-core/sigaction
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigaction2.c, output: sigaction2, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-sigaction2 }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/sigaction2.out }
+  - id: runtime/abi-core/sigjmp
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigjmp.c, output: sigjmp, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-sigjmp }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/sigjmp.out }
+  - id: runtime/abi-core/sortbig
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: sortbig.c, output: sortbig, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-sortbig }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/sortbig.out }
+  - id: runtime/abi-core/statfile
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: statfile.c, output: statfile, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-statfile }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/statfile.out }
+  - id: runtime/abi-core/stolen-regs
+    targets: [arm64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: stolen_regs.c, output: stolen_regs, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-stolen_regs }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/stolen_regs.out }
+  - id: runtime/abi-core/strings
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: strings.c, output: strings, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-strings }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/strings.out }
+  - id: runtime/abi-core/strtod
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: strtod.c, output: strtod, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-strtod }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/strtod.out }
+  - id: runtime/abi-core/timefmt
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: timefmt.c, output: timefmt, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-timefmt }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/timefmt.out }
+  - id: runtime/abi-core/varargs
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: varargs.c, output: varargs, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-varargs }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/varargs.out }
+  - id: runtime/abi-core/x87m80
+    targets: [amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: x87m80.c, output: x87m80, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-x87m80 }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x87m80.out }

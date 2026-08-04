@@ -1,0 +1,25 @@
+divss 0/0    ffc00000
+divss inf/infffc00000
+mulss 0*inf  ffc00000
+subss inf-infffc00000
+addss inf+ninffc00000
+sqrtss -1    ffc00000
+divss qn+/2  7fc00000
+divss 2/qn+  7fc00000
+divss qn-/2  ffc00000
+mulss 2*qn+  7fc00000
+addss qn-+2  ffc00000
+divss 2/4    3f000000
+sqrtss 4     40000000
+divsd 0/0    fff8000000000000
+divsd inf/inffff8000000000000
+mulsd 0*inf  fff8000000000000
+subsd inf-inffff8000000000000
+sqrtsd -1    fff8000000000000
+divsd qn+/2  7ff8000000000000
+divsd qn-/2  fff8000000000000
+mulsd 2*qn+  7ff8000000000000
+divsd 2/4    3fe0000000000000
+divps        ffc00000 7fc00000 3f000000 ffc00000
+sqrtps       40400000 80000000 40000000 ffc00000
+divpd        fff8000000000000 7ff8000000000000

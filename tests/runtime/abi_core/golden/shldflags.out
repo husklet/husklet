@@ -1,0 +1,13 @@
+shld64 imm4  00
+shld64 imm31 84
+shrd64 imm4  84
+shrd64 imm1  45
+shld32 imm12 01
+shrd32 imm7  01
+shld64 cl1   45
+shld64 cl5   45
+shld64 cl63  84
+shrd32 cl3   45
+shrd32 cl31  00
+shld cl0 stc 1
+shld cl0 clc 0

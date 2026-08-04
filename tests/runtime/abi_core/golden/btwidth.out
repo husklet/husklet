@@ -1,0 +1,9 @@
+bts16 deadbeef12340008
+btr16 deadbeef1234fff7
+btc16 deadbeef12340008
+bts32 0000000012340008
+btr32 000000001234fff7
+bts64 dead000000000008
+btr64 deadfffffffffff7
+btsr  cafef00d00000008 cf=0
+btsr2 cafef00d0000ffff cf=1
