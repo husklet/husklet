@@ -35,8 +35,9 @@ impl hl_runtime::ProcfsDescriptorTarget for ProcfsTargets {
             return Ok(device.path.as_bytes().to_vec());
         }
         if metadata.kind == 2 {
-            if let Some(path) = devpts_path(metadata.special_device) {
-                return Ok(path);
+            let device = hl_runtime::DeviceId::from_linux_encoded(metadata.special_device);
+            if device.major == 136 {
+                return Ok(format!("/dev/pts/{}", device.minor).into_bytes());
             }
         }
         let identity = (metadata.device, metadata.inode);
@@ -53,11 +54,6 @@ impl hl_runtime::ProcfsDescriptorTarget for ProcfsTargets {
             .map(|entry| entry.guest.as_str().as_bytes().to_vec())
             .ok_or(hl_runtime::ProcfsError::NotFound)
     }
-}
-
-fn devpts_path(encoded: u64) -> Option<Vec<u8>> {
-    let device = hl_runtime::DeviceId::from_linux_encoded(encoded);
-    (device.major == 136).then(|| format!("/dev/pts/{}", device.minor).into_bytes())
 }
 
 pub(super) struct ProcfsLink {
@@ -365,15 +361,48 @@ mod test {
     use hl_runtime::{GuestPathBytes, OpenDirectory, OpenIntent, RuntimePathHost};
 
     use super::super::{NativePath, projected, watch};
-    use super::{ProcfsTargets, devpts_path};
+    use super::ProcfsTargets;
 
     static NEXT_ROOT: AtomicU64 = AtomicU64::new(1);
 
     #[test]
     fn canonicalizes_devpts_device() {
+        let targets = ProcfsTargets::new(
+            Arc::new(std::sync::Mutex::new(BTreeMap::new())),
+            projected::Registry::default(),
+        );
+        let metadata_for = |kind, special_device| {
+            let timestamp = hl_descriptor::OfdTimestamp {
+                seconds: 0,
+                nanoseconds: 0,
+            };
+            hl_descriptor::OfdMetadata {
+                device: 0,
+                inode: 0,
+                kind,
+                permissions: 0o666,
+                links: 1,
+                user: 0,
+                group: 0,
+                special_device,
+                size: 0,
+                blocks_512: 0,
+                accessed: timestamp,
+                modified: timestamp,
+                changed: timestamp,
+            }
+        };
         let encoded = hl_runtime::DeviceId::new(136, 513).linux_encoded();
-        assert_eq!(devpts_path(encoded), Some(b"/dev/pts/513".to_vec()));
-        assert_eq!(devpts_path(hl_runtime::DeviceId::new(1, 3).linux_encoded()), None);
+        let metadata = metadata_for(2, encoded);
+        assert_eq!(
+            hl_runtime::ProcfsDescriptorTarget::path(targets.as_ref(), &metadata),
+            Ok(b"/dev/pts/513".to_vec())
+        );
+        let metadata = metadata_for(2, hl_runtime::DeviceId::new(2, 3).linux_encoded());
+        assert_eq!(
+            hl_runtime::ProcfsDescriptorTarget::path(targets.as_ref(), &metadata),
+            Err(hl_runtime::ProcfsError::NotFound)
+        );
     }
 
     #[test]

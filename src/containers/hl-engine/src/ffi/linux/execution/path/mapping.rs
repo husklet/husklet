@@ -140,22 +140,18 @@ impl DescriptorMappingSource for MappingFiles {
     }
 }
 
-fn zero_mapping_device(metadata: &hl_descriptor::OfdMetadata) -> bool {
-    if metadata.kind != 2 {
-        return false;
-    }
-    matches!(
-        hl_runtime::DeviceId::from_linux_encoded(metadata.special_device),
-        hl_runtime::DeviceId { major: 1, minor: 5 } | hl_runtime::DeviceId { major: 1, minor: 7 }
-    )
-}
-
 fn zero_device_backing(
     metadata: &hl_descriptor::OfdMetadata,
     next: &AtomicU64,
     shared: bool,
 ) -> Option<hl_memory::Backing> {
-    if !zero_mapping_device(metadata) {
+    let device = hl_runtime::DeviceId::from_linux_encoded(metadata.special_device);
+    if metadata.kind != 2
+        || !matches!(
+            device,
+            hl_runtime::DeviceId { major: 1, minor: 5 } | hl_runtime::DeviceId { major: 1, minor: 7 }
+        )
+    {
         return None;
     }
     // Linux gives each /dev/zero-style mmap fresh zero storage. MAP_SHARED
@@ -171,7 +167,7 @@ fn zero_device_backing(
 mod tests {
     use std::sync::atomic::AtomicU64;
 
-    use super::{zero_device_backing, zero_mapping_device};
+    use super::zero_device_backing;
 
     fn metadata(kind: u8, device: hl_runtime::DeviceId) -> hl_descriptor::OfdMetadata {
         let timestamp = hl_descriptor::OfdTimestamp {
@@ -197,10 +193,11 @@ mod tests {
 
     #[test]
     fn only_zero_producing_character_devices_map_anonymously() {
-        assert!(zero_mapping_device(&metadata(2, hl_runtime::DeviceId::new(1, 5))));
-        assert!(zero_mapping_device(&metadata(2, hl_runtime::DeviceId::new(1, 7))));
-        assert!(!zero_mapping_device(&metadata(2, hl_runtime::DeviceId::new(1, 3))));
-        assert!(!zero_mapping_device(&metadata(1, hl_runtime::DeviceId::new(1, 5))));
+        let next = AtomicU64::new(1);
+        assert!(zero_device_backing(&metadata(2, hl_runtime::DeviceId::new(1, 5)), &next, false).is_some());
+        assert!(zero_device_backing(&metadata(2, hl_runtime::DeviceId::new(1, 7)), &next, false).is_some());
+        assert!(zero_device_backing(&metadata(2, hl_runtime::DeviceId::new(1, 3)), &next, false).is_none());
+        assert!(zero_device_backing(&metadata(1, hl_runtime::DeviceId::new(1, 5)), &next, false).is_none());
     }
 
     #[test]

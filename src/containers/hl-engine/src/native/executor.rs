@@ -56,13 +56,20 @@ unsafe extern "C" {
     fn hl_native_fault_scope_contains(scope: *const FaultScope, host_pc: u64) -> i32;
     fn hl_native_fault_scope_leave(scope: *mut FaultScope) -> u32;
     fn hl_native_fault_scope_prepare_return(
-        scope: *const FaultScope, host_pc: u64, host_address: u64, context: *mut c_void,
+        scope: *const FaultScope,
+        host_pc: u64,
+        host_address: u64,
+        context: *mut c_void,
     ) -> i32;
     fn hl_native_direct_register(
-        executor: *mut Handle, authority: *const DirectDescriptor, output: *mut *mut DirectToken,
+        executor: *mut Handle,
+        authority: *const DirectDescriptor,
+        output: *mut *mut DirectToken,
     ) -> u32;
     fn hl_native_direct_validate(
-        executor: *const Handle, token: *const DirectToken, output: *mut DirectDescriptor,
+        executor: *const Handle,
+        token: *const DirectToken,
+        output: *mut DirectDescriptor,
     ) -> i32;
     fn hl_native_direct_generation(executor: *const Handle, token: *const DirectToken) -> u64;
     fn hl_native_direct_identity(executor: *const Handle, token: *const DirectToken) -> u64;
@@ -96,9 +103,16 @@ impl<'memory, H: MemoryAccessHost> DirectAuthority<'_, 'memory, H> {
     #[cfg(test)]
     fn descriptor(&self) -> Option<DirectDescriptor> {
         let mut output = DirectDescriptor {
-            abi: ABI, size: std::mem::size_of::<DirectDescriptor>() as u32,
-            permissions: 0, reserved: 0, guest_first: 0, guest_last: 0, host_first: 0,
-            mapping_incarnation: 0, mapping_generation: 0, instruction_generation: 0,
+            abi: ABI,
+            size: std::mem::size_of::<DirectDescriptor>() as u32,
+            permissions: 0,
+            reserved: 0,
+            guest_first: 0,
+            guest_last: 0,
+            host_first: 0,
+            mapping_incarnation: 0,
+            mapping_generation: 0,
+            instruction_generation: 0,
         };
         let token = self.token?;
         (unsafe { hl_native_direct_validate(self.executor.handle.as_ptr(), token.as_ptr(), &raw mut output) } != 0)
@@ -125,7 +139,11 @@ impl<'memory, H: MemoryAccessHost> DirectAuthority<'_, 'memory, H> {
 
     pub(crate) fn publish_written_ranges(mut self, dirty: &[AddressRange]) -> Result<(), ()> {
         self.retire()?;
-        self.lease.take().ok_or(())?.publish_written_ranges(dirty).map_err(|_| ())
+        self.lease
+            .take()
+            .ok_or(())?
+            .publish_written_ranges(dirty)
+            .map_err(|_| ())
     }
 
     fn retire(&mut self) -> Result<(), ()> {
@@ -157,10 +175,12 @@ impl InterruptToken {
     pub(crate) fn create() -> Result<Self, ()> {
         let mut token = std::ptr::null_mut();
         (unsafe { hl_native_interrupt_create(&raw mut token) } == 0)
-            .then(|| NonNull::new(token).map(|handle| Self {
-                handle,
-                interrupted: std::sync::atomic::AtomicBool::new(false),
-            }))
+            .then(|| {
+                NonNull::new(token).map(|handle| Self {
+                    handle,
+                    interrupted: std::sync::atomic::AtomicBool::new(false),
+                })
+            })
             .flatten()
             .ok_or(())
     }
@@ -296,39 +316,58 @@ pub(crate) fn direct_literal_interval(pc: u64, bytes: &[u8]) -> Option<(u64, u64
 
 fn direct_literal_target(pc: u64, sources: &[BorrowedSource<'_>], first: u64, last: u64) -> bool {
     let Some(source) = sources.iter().find(|source| {
-        pc >= source.guest_first && pc.checked_sub(source.guest_first)
-            .is_some_and(|offset| offset <= source.bytes.len().saturating_sub(4) as u64)
-    }) else { return false };
+        pc >= source.guest_first
+            && pc
+                .checked_sub(source.guest_first)
+                .is_some_and(|offset| offset <= source.bytes.len().saturating_sub(4) as u64)
+    }) else {
+        return false;
+    };
     let offset = usize::try_from(pc - source.guest_first).ok();
-    let Some(bytes) = offset.and_then(|offset| source.bytes.get(offset..offset + 4)) else { return false };
-    let Some((target, end)) = direct_literal_interval(pc, bytes) else { return false };
+    let Some(bytes) = offset.and_then(|offset| source.bytes.get(offset..offset + 4)) else {
+        return false;
+    };
+    let Some((target, end)) = direct_literal_interval(pc, bytes) else {
+        return false;
+    };
     target >= first && end <= last
 }
 
 fn source_word(pc: u64, sources: &[BorrowedSource<'_>]) -> Option<u32> {
     let source = sources.iter().find(|source| {
-        pc >= source.guest_first && pc.checked_sub(source.guest_first)
-            .is_some_and(|offset| offset <= source.bytes.len().saturating_sub(4) as u64)
+        pc >= source.guest_first
+            && pc
+                .checked_sub(source.guest_first)
+                .is_some_and(|offset| offset <= source.bytes.len().saturating_sub(4) as u64)
     })?;
     let offset = usize::try_from(pc.checked_sub(source.guest_first)?).ok()?;
     u32::from_le_bytes(source.bytes.get(offset..offset.checked_add(4)?)?.try_into().ok()?).into()
 }
 
 fn direct_scalar_access(word: u32) -> Option<Protection> {
-    if word & 0x0400_0000 != 0 ||
-        (word >> 30) & 3 == 3 && (word >> 22) & 3 == 2 { return None; }
-    let eligible = word & 0x3b00_0000 == 0x3900_0000 ||
-        word & 0x3b20_0000 == 0x3800_0000 && (word >> 10) & 3 == 0 ||
-        word & 0x3b20_0c00 == 0x3820_0800 && matches!((word >> 13) & 7, 2 | 3 | 6 | 7);
-    eligible.then_some(if (word >> 22) & 3 == 0 { Protection::WRITE } else { Protection::READ })
+    if word & 0x0400_0000 != 0 || (word >> 30) & 3 == 3 && (word >> 22) & 3 == 2 {
+        return None;
+    }
+    let eligible = word & 0x3b00_0000 == 0x3900_0000
+        || word & 0x3b20_0000 == 0x3800_0000 && (word >> 10) & 3 == 0
+        || word & 0x3b20_0c00 == 0x3820_0800 && matches!((word >> 13) & 7, 2 | 3 | 6 | 7);
+    eligible.then_some(if (word >> 22) & 3 == 0 {
+        Protection::WRITE
+    } else {
+        Protection::READ
+    })
 }
 
 fn direct_scalar_trace(pc: u64, sources: &[BorrowedSource<'_>]) -> Option<Protection> {
     let mut protection = None;
-    for word in (0..64).filter_map(|index| pc.checked_add(index * 4)
-        .and_then(|instruction| source_word(instruction, sources))
-        .and_then(direct_scalar_access)) {
-        if word == Protection::WRITE { return Some(word); }
+    for word in (0..64).filter_map(|index| {
+        pc.checked_add(index * 4)
+            .and_then(|instruction| source_word(instruction, sources))
+            .and_then(direct_scalar_access)
+    }) {
+        if word == Protection::WRITE {
+            return Some(word);
+        }
         protection = Some(word);
     }
     protection
@@ -403,6 +442,48 @@ impl ExecutableMemory {
     fn dual(&self) -> bool {
         self.writable != self.executable
     }
+
+    #[cfg(target_os = "linux")]
+    unsafe fn allocate_dual(capacity: usize) -> Result<(*mut c_void, *mut c_void, i32), u32> {
+        let descriptor = unsafe { libc::memfd_create(c"hl-native-code".as_ptr(), libc::MFD_CLOEXEC as u32) };
+        if descriptor < 0 {
+            return Err(2);
+        }
+        if unsafe { libc::ftruncate(descriptor, capacity as libc::off_t) } != 0 {
+            let _ = unsafe { libc::close(descriptor) };
+            return Err(2);
+        }
+        let writable = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                capacity,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                descriptor,
+                0,
+            )
+        };
+        if writable == libc::MAP_FAILED {
+            let _ = unsafe { libc::close(descriptor) };
+            return Err(2);
+        }
+        let executable = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                capacity,
+                libc::PROT_READ | libc::PROT_EXEC,
+                libc::MAP_SHARED,
+                descriptor,
+                0,
+            )
+        };
+        if executable == libc::MAP_FAILED {
+            let _ = unsafe { libc::munmap(writable, capacity) };
+            let _ = unsafe { libc::close(descriptor) };
+            return Err(2);
+        }
+        Ok((writable, executable, descriptor))
+    }
 }
 
 impl Drop for ExecutableMemory {
@@ -422,48 +503,6 @@ impl Drop for ExecutableMemory {
     }
 }
 
-#[cfg(target_os = "linux")]
-unsafe fn dual_mapping(capacity: usize) -> Result<(*mut c_void, *mut c_void, i32), u32> {
-    let descriptor = unsafe { libc::memfd_create(c"hl-native-code".as_ptr(), libc::MFD_CLOEXEC as u32) };
-    if descriptor < 0 {
-        return Err(2);
-    }
-    if unsafe { libc::ftruncate(descriptor, capacity as libc::off_t) } != 0 {
-        let _ = unsafe { libc::close(descriptor) };
-        return Err(2);
-    }
-    let writable = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            capacity,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_SHARED,
-            descriptor,
-            0,
-        )
-    };
-    if writable == libc::MAP_FAILED {
-        let _ = unsafe { libc::close(descriptor) };
-        return Err(2);
-    }
-    let executable = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            capacity,
-            libc::PROT_READ | libc::PROT_EXEC,
-            libc::MAP_SHARED,
-            descriptor,
-            0,
-        )
-    };
-    if executable == libc::MAP_FAILED {
-        let _ = unsafe { libc::munmap(writable, capacity) };
-        let _ = unsafe { libc::close(descriptor) };
-        return Err(2);
-    }
-    Ok((writable, executable, descriptor))
-}
-
 unsafe extern "C" fn reserve(
     context: *mut c_void,
     capacity: u64,
@@ -481,7 +520,7 @@ unsafe extern "C" fn reserve(
     }
     #[cfg(target_os = "linux")]
     let (writable, executable, descriptor) = if dual != 0 {
-        match unsafe { dual_mapping(capacity as usize) } {
+        match unsafe { ExecutableMemory::allocate_dual(capacity as usize) } {
             Ok(mapping) => mapping,
             Err(status) => return status,
         }
@@ -607,8 +646,12 @@ unsafe extern "C" fn repair(context: *mut c_void, mapping: *mut Mapping, preserv
         }
         let replacement = unsafe {
             libc::mmap(
-                std::ptr::null_mut(), memory.capacity, libc::PROT_NONE,
-                libc::MAP_PRIVATE | libc::MAP_ANON, -1, 0,
+                std::ptr::null_mut(),
+                memory.capacity,
+                libc::PROT_NONE,
+                libc::MAP_PRIVATE | libc::MAP_ANON,
+                -1,
+                0,
             )
         };
         if replacement == libc::MAP_FAILED {
@@ -620,7 +663,11 @@ unsafe extern "C" fn repair(context: *mut c_void, mapping: *mut Mapping, preserv
         current.writable = replacement as usize as u64;
         current.executable = replacement as usize as u64;
         current.content = 0;
-        return if unsafe { libc::munmap(old, memory.capacity) } == 0 { 0 } else { 3 };
+        return if unsafe { libc::munmap(old, memory.capacity) } == 0 {
+            0
+        } else {
+            3
+        };
     }
     #[cfg(target_os = "linux")]
     {
@@ -628,7 +675,7 @@ unsafe extern "C" fn repair(context: *mut c_void, mapping: *mut Mapping, preserv
         let old_executable = memory.executable;
         let old_descriptor = memory.descriptor;
         let capacity = memory.capacity;
-        let (mut writable, mut executable, descriptor) = match unsafe { dual_mapping(capacity) } {
+        let (mut writable, mut executable, descriptor) = match unsafe { ExecutableMemory::allocate_dual(capacity) } {
             Ok(replacement) => replacement,
             Err(status) => return status,
         };
@@ -780,7 +827,8 @@ impl ViewHints {
     }
 
     fn observe(&mut self, address: u64, required: Protection) {
-        self.entries.retain(|existing| existing.0 != address || existing.1 != required);
+        self.entries
+            .retain(|existing| existing.0 != address || existing.1 != required);
         self.entries.insert(0, (address, required));
         self.entries.truncate(Self::LIMIT);
     }
@@ -814,13 +862,19 @@ unsafe extern "C" fn resolve_operand<H: MemoryAccessHost>(
         Ok(view) => {
             provider.observed.observe(address, required);
             let projected = ProjectionView {
-                guest_first: view.range.start().get(), guest_last: view.range.end().get(),
-                host_first: view.storage_address, mapping_incarnation,
-                permissions: u32::from(view.protection.bits()), reserved: 0,
+                guest_first: view.range.start().get(),
+                guest_last: view.range.end().get(),
+                host_first: view.storage_address,
+                mapping_incarnation,
+                permissions: u32::from(view.protection.bits()),
+                reserved: 0,
             };
             #[cfg(test)]
             if let Some(capture) = provider.boundary_capture {
-                capture.lock().unwrap_or_else(|error| error.into_inner()).append_view(&projected);
+                capture
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .append_view(&projected);
             }
             unsafe {
                 output.write(projected);
@@ -859,12 +913,20 @@ unsafe extern "C" fn resolve_source(
     #[cfg(test)]
     if let Some(capture) = provider.boundary_capture {
         capture.lock().unwrap_or_else(|error| error.into_inner()).append_source(
-            guest_pc, &provider.bytes[..size], token,
+            guest_pc,
+            &provider.bytes[..size],
+            token,
         );
     }
-    if let Some(existing) = provider.observed.iter().find(|(first, last, _)|
-        *first == observation.0 && *last == observation.1) {
-        if existing.2 != token { provider.complete = false; return 0; }
+    if let Some(existing) = provider
+        .observed
+        .iter()
+        .find(|(first, last, _)| *first == observation.0 && *last == observation.1)
+    {
+        if existing.2 != token {
+            provider.complete = false;
+            return 0;
+        }
     } else if provider.observed.len() == 1024 {
         provider.complete = false;
         return 0;
@@ -937,7 +999,10 @@ struct CpuHandle {
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct FaultScope {
-    abi: u32, size: u32, architecture: u32, reserved: u32,
+    abi: u32,
+    size: u32,
+    architecture: u32,
+    reserved: u32,
     executor: *mut Handle,
     cpu: *mut CpuHandle,
 }
@@ -975,7 +1040,9 @@ impl HostFaultView {
 /// retire every copy before `unpublish` returns, must never call it afterward,
 /// and must not unwind from either callback.
 pub(crate) unsafe trait HostFaultOwner: Send + Sync {
-    fn attach(&self) -> Result<(), ()> { Ok(()) }
+    fn attach(&self) -> Result<(), ()> {
+        Ok(())
+    }
     fn detach(&self) {}
     unsafe fn publish(&self, view: HostFaultView) -> Result<(), ()>;
     unsafe fn unpublish(&self, view: HostFaultView);
@@ -1046,15 +1113,20 @@ impl Drop for NativeFaultOwner {
 }
 
 unsafe extern "C" fn fault_publish(context: *mut c_void, scope: *const FaultScope) -> u32 {
-    if context.is_null() || scope.is_null() { return 1; }
+    if context.is_null() || scope.is_null() {
+        return 1;
+    }
     let owner = unsafe { &*context.cast::<std::sync::Arc<dyn HostFaultOwner>>() };
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        unsafe { owner.publish(HostFaultView(*scope)) }
-    })).map_or(4, |result| result.map_or(4, |()| 0))
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        owner.publish(HostFaultView(*scope))
+    }))
+    .map_or(4, |result| result.map_or(4, |()| 0))
 }
 
 unsafe extern "C" fn fault_unpublish(context: *mut c_void, scope: *const FaultScope) {
-    if context.is_null() || scope.is_null() { return; }
+    if context.is_null() || scope.is_null() {
+        return;
+    }
     let owner = unsafe { &*context.cast::<std::sync::Arc<dyn HostFaultOwner>>() };
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         unsafe { owner.unpublish(HostFaultView(*scope)) };
@@ -1169,7 +1241,12 @@ fn x86_writes(cpu: &schema::X86_64Cpu) -> NativeWrites {
     }
     let mut records = cpu.dirty_records[..cpu.dirty_count as usize].to_vec();
     if cpu.dirty_first != u64::MAX {
-        records.push([cpu.dirty_view_first, cpu.dirty_view_last, cpu.dirty_first, cpu.dirty_last]);
+        records.push([
+            cpu.dirty_view_first,
+            cpu.dirty_view_last,
+            cpu.dirty_first,
+            cpu.dirty_last,
+        ]);
     }
     let mut ranges = Vec::with_capacity(records.len());
     for [view_first, view_last, first, last] in records {
@@ -1181,7 +1258,11 @@ fn x86_writes(cpu: &schema::X86_64Cpu) -> NativeWrites {
         };
         ranges.push(range);
     }
-    if ranges.is_empty() { NativeWrites::Full } else { NativeWrites::Exact(ranges) }
+    if ranges.is_empty() {
+        NativeWrites::Full
+    } else {
+        NativeWrites::Exact(ranges)
+    }
 }
 
 fn aarch64_writes(cpu: &schema::Aarch64Cpu) -> NativeWrites {
@@ -1193,7 +1274,12 @@ fn aarch64_writes(cpu: &schema::Aarch64Cpu) -> NativeWrites {
     }
     let mut records = cpu.dirty_records[..cpu.dirty_count as usize].to_vec();
     if cpu.dirty_first != u64::MAX {
-        records.push([cpu.dirty_view_first, cpu.dirty_view_last, cpu.dirty_first, cpu.dirty_last]);
+        records.push([
+            cpu.dirty_view_first,
+            cpu.dirty_view_last,
+            cpu.dirty_first,
+            cpu.dirty_last,
+        ]);
     }
     let mut ranges = Vec::with_capacity(records.len());
     for [view_first, view_last, first, last] in records {
@@ -1205,7 +1291,11 @@ fn aarch64_writes(cpu: &schema::Aarch64Cpu) -> NativeWrites {
         };
         ranges.push(range);
     }
-    if ranges.is_empty() { NativeWrites::Full } else { NativeWrites::Exact(ranges) }
+    if ranges.is_empty() {
+        NativeWrites::Full
+    } else {
+        NativeWrites::Exact(ranges)
+    }
 }
 
 impl NativeX86 {
@@ -1221,7 +1311,9 @@ impl NativeX86 {
             _ => 3,
         };
         let mut fpcr = rounding << 22;
-        if mxcsr & ((1 << 15) | (1 << 6)) != 0 { fpcr |= 1 << 24; }
+        if mxcsr & ((1 << 15) | (1 << 6)) != 0 {
+            fpcr |= 1 << 24;
+        }
         fpcr
     }
 
@@ -1334,24 +1426,43 @@ pub(crate) struct Executor {
 
 #[cfg(test)]
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct BoundarySource { guest_first: u64, incarnation: u64, version: u64, bytes: Vec<u8> }
+struct BoundarySource {
+    guest_first: u64,
+    incarnation: u64,
+    version: u64,
+    bytes: Vec<u8>,
+}
 #[cfg(test)]
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct BoundaryView { guest_first: u64, guest_last: u64, permissions: u32, bytes: Vec<u8> }
+struct BoundaryView {
+    guest_first: u64,
+    guest_last: u64,
+    permissions: u32,
+    bytes: Vec<u8>,
+}
 #[cfg(test)]
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct BoundaryCapture { cpu: Aarch64CpuState, sources: Vec<BoundarySource>, views: Vec<BoundaryView> }
+struct BoundaryCapture {
+    cpu: Aarch64CpuState,
+    sources: Vec<BoundarySource>,
+    views: Vec<BoundaryView>,
+}
 #[cfg(test)]
 #[derive(Default)]
 struct BoundaryCaptureState {
-    ordinal: usize, maximum: usize, used: usize, calls: usize,
+    ordinal: usize,
+    maximum: usize,
+    used: usize,
+    calls: usize,
     result: Option<Result<BoundaryCapture, &'static str>>,
 }
 
 #[cfg(test)]
 #[derive(Default)]
 struct LiveCaptureState {
-    ordinal: usize, maximum: usize, calls: usize,
+    ordinal: usize,
+    maximum: usize,
+    calls: usize,
     result: Option<Result<BoundaryCapture, &'static str>>,
 }
 
@@ -1363,16 +1474,25 @@ fn live_capture() -> &'static std::sync::Mutex<LiveCaptureState> {
 
 #[cfg(test)]
 fn arm_live_capture(ordinal: usize, maximum: usize) -> Result<(), &'static str> {
-    if ordinal == 0 || maximum == 0 { return Err("invalid live capture configuration"); }
+    if ordinal == 0 || maximum == 0 {
+        return Err("invalid live capture configuration");
+    }
     *live_capture().lock().unwrap_or_else(|error| error.into_inner()) = LiveCaptureState {
-        ordinal, maximum, calls: 0, result: None,
+        ordinal,
+        maximum,
+        calls: 0,
+        result: None,
     };
     Ok(())
 }
 
 #[cfg(test)]
 fn take_live_capture() -> Option<Result<BoundaryCapture, &'static str>> {
-    live_capture().lock().unwrap_or_else(|error| error.into_inner()).result.take()
+    live_capture()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .result
+        .take()
 }
 
 #[cfg(test)]
@@ -1392,24 +1512,38 @@ fn finish_live_capture(result: Option<Result<BoundaryCapture, &'static str>>) {
 #[cfg(test)]
 impl BoundaryCaptureState {
     fn append_source(&mut self, guest_first: u64, bytes: &[u8], token: ExecutableToken) {
-        let Some(Ok(capture)) = self.result.as_mut() else { return; };
-        if capture.sources.iter().any(|source| source.guest_first == guest_first &&
-            source.incarnation == token.incarnation && source.version == token.version && source.bytes == bytes) {
+        let Some(Ok(capture)) = self.result.as_mut() else {
+            return;
+        };
+        if capture.sources.iter().any(|source| {
+            source.guest_first == guest_first
+                && source.incarnation == token.incarnation
+                && source.version == token.version
+                && source.bytes == bytes
+        }) {
             return;
         }
         let Some(guest_last) = guest_first.checked_add(bytes.len() as u64) else {
-            self.result = Some(Err("boundary capture source overflow")); return;
+            self.result = Some(Err("boundary capture source overflow"));
+            return;
         };
-        if let Some(existing) = capture.sources.iter_mut().find(|source| source.incarnation == token.incarnation &&
-            source.version == token.version && source.guest_first <= guest_last &&
-            guest_first <= source.guest_first + source.bytes.len() as u64) {
+        if let Some(existing) = capture.sources.iter_mut().find(|source| {
+            source.incarnation == token.incarnation
+                && source.version == token.version
+                && source.guest_first <= guest_last
+                && guest_first <= source.guest_first + source.bytes.len() as u64
+        }) {
             let first = existing.guest_first.min(guest_first);
             let last = (existing.guest_first + existing.bytes.len() as u64).max(guest_last);
             let length = usize::try_from(last - first).unwrap();
             let Some(used) = self.used.checked_add(length - existing.bytes.len()) else {
-                self.result = Some(Err("boundary capture size overflow")); return;
+                self.result = Some(Err("boundary capture size overflow"));
+                return;
             };
-            if used > self.maximum { self.result = Some(Err("boundary capture size limit")); return; }
+            if used > self.maximum {
+                self.result = Some(Err("boundary capture size limit"));
+                return;
+            }
             let mut merged = vec![0; length];
             let old = usize::try_from(existing.guest_first - first).unwrap();
             merged[old..old + existing.bytes.len()].copy_from_slice(&existing.bytes);
@@ -1421,7 +1555,8 @@ impl BoundaryCaptureState {
                 let new_offset = usize::try_from(overlap_first - guest_first).unwrap();
                 let overlap = usize::try_from(overlap_last - overlap_first).unwrap();
                 if existing.bytes[old_offset..old_offset + overlap] != bytes[new_offset..new_offset + overlap] {
-                    self.result = Some(Err("boundary capture source changed")); return;
+                    self.result = Some(Err("boundary capture source changed"));
+                    return;
                 }
             }
             merged[new..new + bytes.len()].copy_from_slice(bytes);
@@ -1431,40 +1566,66 @@ impl BoundaryCaptureState {
             return;
         }
         let Some(used) = self.used.checked_add(bytes.len()) else {
-            self.result = Some(Err("boundary capture size overflow")); return;
+            self.result = Some(Err("boundary capture size overflow"));
+            return;
         };
         if used > self.maximum || capture.sources.len() == 8 {
-            self.result = Some(Err("boundary capture size limit")); return;
+            self.result = Some(Err("boundary capture size limit"));
+            return;
         }
         self.used = used;
-        capture.sources.push(BoundarySource { guest_first, incarnation: token.incarnation,
-            version: token.version, bytes: bytes.to_vec() });
+        capture.sources.push(BoundarySource {
+            guest_first,
+            incarnation: token.incarnation,
+            version: token.version,
+            bytes: bytes.to_vec(),
+        });
     }
 
     fn append_view(&mut self, view: &ProjectionView) {
-        let Some(Ok(capture)) = self.result.as_mut() else { return; };
-        if let Some(existing) = capture.views.iter_mut().find(|existing| existing.guest_first == view.guest_first &&
-            existing.guest_last == view.guest_last) {
+        let Some(Ok(capture)) = self.result.as_mut() else {
+            return;
+        };
+        if let Some(existing) = capture
+            .views
+            .iter_mut()
+            .find(|existing| existing.guest_first == view.guest_first && existing.guest_last == view.guest_last)
+        {
             existing.permissions |= view.permissions;
             return;
         }
         let value = (|| {
-            let length = usize::try_from(view.guest_last.checked_sub(view.guest_first)
-                .ok_or("boundary capture invalid view")?).map_err(|_| "boundary capture view overflow")?;
+            let length = usize::try_from(
+                view.guest_last
+                    .checked_sub(view.guest_first)
+                    .ok_or("boundary capture invalid view")?,
+            )
+            .map_err(|_| "boundary capture view overflow")?;
             let used = self.used.checked_add(length).ok_or("boundary capture size overflow")?;
-            if used > self.maximum { return Err("boundary capture size limit"); }
+            if used > self.maximum {
+                return Err("boundary capture size limit");
+            }
             let address = usize::try_from(view.host_first).map_err(|_| "boundary capture host overflow")?;
             let pointer = NonNull::<u8>::new(address as *mut u8).ok_or("boundary capture null host view")?;
             // SAFETY: entry views and slow-miss views are both backed by the live projection lease;
             // the callback copy completes before native execution can resume and mutate the view.
             let bytes = unsafe { std::slice::from_raw_parts(pointer.as_ptr(), length) }.to_vec();
-            Ok((used, BoundaryView { guest_first: view.guest_first, guest_last: view.guest_last,
-                permissions: view.permissions, bytes }))
+            Ok((
+                used,
+                BoundaryView {
+                    guest_first: view.guest_first,
+                    guest_last: view.guest_last,
+                    permissions: view.permissions,
+                    bytes,
+                },
+            ))
         })();
         match value {
             Ok((used, view)) => {
                 self.used = used;
-                if let Some(Ok(capture)) = self.result.as_mut() { capture.views.push(view); }
+                if let Some(Ok(capture)) = self.result.as_mut() {
+                    capture.views.push(view);
+                }
             }
             Err(error) => self.result = Some(Err(error)),
         }
@@ -1501,8 +1662,7 @@ impl Executor {
             size: std::mem::size_of::<Config>() as u32,
             capacity: 64 << 20,
             alignment: 4096,
-            flags: (if cfg!(target_os = "linux") { 2 } else { 0 })
-                | if diagnostics_enabled { 4 } else { 0 },
+            flags: (if cfg!(target_os = "linux") { 2 } else { 0 }) | if diagnostics_enabled { 4 } else { 0 },
             reserved: 0,
             memory: &raw const services,
         };
@@ -1527,30 +1687,55 @@ impl Executor {
 
     #[cfg(test)]
     fn arm_boundary_capture(&self, ordinal: usize, maximum: usize) -> Result<(), &'static str> {
-        if ordinal == 0 || maximum == 0 { return Err("invalid boundary capture configuration"); }
+        if ordinal == 0 || maximum == 0 {
+            return Err("invalid boundary capture configuration");
+        }
         *self.boundary_capture.lock().unwrap_or_else(|error| error.into_inner()) = BoundaryCaptureState {
-            ordinal, maximum, used: 0, calls: 0, result: None,
+            ordinal,
+            maximum,
+            used: 0,
+            calls: 0,
+            result: None,
         };
         Ok(())
     }
 
     #[cfg(test)]
     fn take_boundary_capture(&self) -> Option<Result<BoundaryCapture, &'static str>> {
-        self.boundary_capture.lock().unwrap_or_else(|error| error.into_inner()).result.take()
+        self.boundary_capture
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .result
+            .take()
     }
 
     #[cfg(test)]
-    fn capture_boundary(&self, cpu: &Aarch64CpuState, sources: &[BorrowedSource<'_>], views: &[ProjectionView],
-        token: ExecutableToken) {
+    fn capture_boundary(
+        &self,
+        cpu: &Aarch64CpuState,
+        sources: &[BorrowedSource<'_>],
+        views: &[ProjectionView],
+        token: ExecutableToken,
+    ) {
         let mut state = self.boundary_capture.lock().unwrap_or_else(|error| error.into_inner());
         state.calls = state.calls.saturating_add(1);
-        if state.ordinal == 0 || state.calls != state.ordinal || state.result.is_some() { return; }
+        if state.ordinal == 0 || state.calls != state.ordinal || state.result.is_some() {
+            return;
+        }
         let captured = (|| {
-            Ok(BoundaryCapture { cpu: cpu.clone(), sources: Vec::new(), views: Vec::new() })
+            Ok(BoundaryCapture {
+                cpu: cpu.clone(),
+                sources: Vec::new(),
+                views: Vec::new(),
+            })
         })();
         state.result = Some(captured);
-        for source in sources { state.append_source(source.guest_first, source.bytes, token); }
-        for view in views { state.append_view(view); }
+        for source in sources {
+            state.append_source(source.guest_first, source.bytes, token);
+        }
+        for view in views {
+            state.append_view(view);
+        }
     }
 
     pub(crate) fn as_raw(&self) -> *mut c_void {
@@ -1610,15 +1795,18 @@ impl Executor {
         if ranges.is_empty() || ranges.len() > 1024 || ranges.iter().any(|(first, last)| last <= first) {
             return Err(());
         }
-        let changes: Vec<_> = ranges.iter().map(|&(first, last)| Change {
-            abi: ABI,
-            size: std::mem::size_of::<Change>() as u32,
-            kind: 1,
-            reserved: 0,
-            first,
-            last,
-            mapping_epoch: mapping_incarnation,
-        }).collect();
+        let changes: Vec<_> = ranges
+            .iter()
+            .map(|&(first, last)| Change {
+                abi: ABI,
+                size: std::mem::size_of::<Change>() as u32,
+                kind: 1,
+                reserved: 0,
+                first,
+                last,
+                mapping_epoch: mapping_incarnation,
+            })
+            .collect();
         (unsafe { hl_native_changed(self.handle.as_ptr(), changes.as_ptr(), changes.len()) } == 0)
             .then_some(())
             .ok_or(())
@@ -1678,7 +1866,9 @@ impl Executor {
             return Err(());
         }
         #[cfg(test)]
-        if let Some(maximum) = begin_live_capture() { self.arm_boundary_capture(1, maximum).map_err(|_| ())?; }
+        if let Some(maximum) = begin_live_capture() {
+            self.arm_boundary_capture(1, maximum).map_err(|_| ())?;
+        }
         let generation = lease.generation();
         let hint_epoch = [generation.incarnation, generation.mappings, token.version, 0];
         let before = self.statistics_snapshot()?;
@@ -1722,12 +1912,16 @@ impl Executor {
                 continue;
             };
             let candidate = ProjectionView {
-                guest_first: view.range.start().get(), guest_last: view.range.end().get(),
-                host_first: view.storage_address, mapping_incarnation: generation.incarnation,
-                permissions: u32::from(view.protection.bits()), reserved: 0,
+                guest_first: view.range.start().get(),
+                guest_last: view.range.end().get(),
+                host_first: view.storage_address,
+                mapping_incarnation: generation.incarnation,
+                permissions: u32::from(view.protection.bits()),
+                reserved: 0,
             };
-            if !views.iter().any(|existing| existing.guest_first < candidate.guest_last &&
-                candidate.guest_first < existing.guest_last) {
+            if !views.iter().any(|existing| {
+                existing.guest_first < candidate.guest_last && candidate.guest_first < existing.guest_last
+            }) {
                 let candidate_range = (candidate.guest_first, candidate.guest_last);
                 views.push(candidate);
                 if required.contains(Protection::WRITE) && warm_write.is_none() {
@@ -1741,8 +1935,15 @@ impl Executor {
         let direct_protection = direct_scalar_trace(state.pc, sources)
             .or_else(|| direct_literal.then_some(Protection::READ))
             .filter(|required| lease.allows(*required));
-        let active_range = if direct_protection.is_some() { primary_range } else { warm_write.unwrap_or(primary_range) };
-        let active = views.iter().position(|view| (view.guest_first, view.guest_last) == active_range).ok_or(())?;
+        let active_range = if direct_protection.is_some() {
+            primary_range
+        } else {
+            warm_write.unwrap_or(primary_range)
+        };
+        let active = views
+            .iter()
+            .position(|view| (view.guest_first, view.guest_last) == active_range)
+            .ok_or(())?;
         let projection = Projection {
             views: views.as_ptr(),
             count: views.len(),
@@ -1754,11 +1955,16 @@ impl Executor {
         let mut provider = SourceProvider {
             resolve,
             bytes: [0; 256],
-            observed: sources.iter().map(|source| (
-                source.guest_first,
-                source.guest_first + source.bytes.len() as u64,
-                token,
-            )).collect(),
+            observed: sources
+                .iter()
+                .map(|source| {
+                    (
+                        source.guest_first,
+                        source.guest_first + source.bytes.len() as u64,
+                        token,
+                    )
+                })
+                .collect(),
             complete: true,
             #[cfg(test)]
             boundary_capture: Some(&self.boundary_capture),
@@ -1768,18 +1974,35 @@ impl Executor {
             let authority = self.register_direct(lease.into_direct(required).map_err(|_| ())?)?;
             let identity = authority.request_identity().ok_or(())?;
             let result = self.run_aarch64_inner(
-                state, &source, Some(&projection), generation.incarnation, budget,
-                Some(((&raw mut provider).cast(), resolve_source)), None, Some(interrupt), Some(identity),
+                state,
+                &source,
+                Some(&projection),
+                generation.incarnation,
+                budget,
+                Some(((&raw mut provider).cast(), resolve_source)),
+                None,
+                Some(interrupt),
+                Some(identity),
             );
             lease = authority.into_lease()?.into_projection();
             result
         } else {
-            let mut operand = OperandProvider { lease: &mut lease, observed: &mut observed,
-                #[cfg(test)] boundary_capture: Some(&self.boundary_capture) };
+            let mut operand = OperandProvider {
+                lease: &mut lease,
+                observed: &mut observed,
+                #[cfg(test)]
+                boundary_capture: Some(&self.boundary_capture),
+            };
             self.run_aarch64_inner(
-                state, &source, Some(&projection), generation.incarnation, budget,
+                state,
+                &source,
+                Some(&projection),
+                generation.incarnation,
+                budget,
                 Some(((&raw mut provider).cast(), resolve_source)),
-                Some(((&raw mut operand).cast(), resolve_operand::<H>)), Some(interrupt), None,
+                Some(((&raw mut operand).cast(), resolve_operand::<H>)),
+                Some(interrupt),
+                None,
             )
         };
         let (exit, instruction, _, code, remaining, executed, writes) = result?;
@@ -1811,9 +2034,9 @@ impl Executor {
                 builds: after.zip(before).map_or(0, |(after, before)| {
                     after.publications.saturating_sub(before.publications)
                 }),
-                hits: after.zip(before).map_or(0, |(after, before)| {
-                    after.cache_hits.saturating_sub(before.cache_hits)
-                }),
+                hits: after
+                    .zip(before)
+                    .map_or(0, |(after, before)| after.cache_hits.saturating_sub(before.cache_hits)),
                 fallback: exit == Exit::Fallback,
                 sources: provider.observed,
                 sources_complete: provider.complete,
@@ -1832,7 +2055,17 @@ impl Executor {
         provider: Option<(*mut c_void, SourceResolve)>,
         operand: Option<(*mut c_void, OperandResolve)>,
     ) -> Result<(Exit, u64, u64, u64, u64, u64, NativeWrites), ()> {
-        self.run_aarch64_inner(state, source, projection, mapping_epoch, budget, provider, operand, None, None)
+        self.run_aarch64_inner(
+            state,
+            source,
+            projection,
+            mapping_epoch,
+            budget,
+            provider,
+            operand,
+            None,
+            None,
+        )
     }
 
     fn run_aarch64_inner(
@@ -1896,7 +2129,10 @@ impl Executor {
         let status = unsafe { hl_native_run(self.handle.as_ptr(), &raw mut cpu, &raw const request, &raw mut output) };
         if status != 0 {
             if self.diagnostics_enabled {
-                eprintln!("hl-native-error: isa=aarch64 status={status} pc={:#x}", native.0.program);
+                eprintln!(
+                    "hl-native-error: isa=aarch64 status={status} pc={:#x}",
+                    native.0.program
+                );
             }
             return Err(());
         }
@@ -1961,9 +2197,8 @@ impl Executor {
             projection,
             &mut tagged,
             None,
-        ).map(|(outcome, statistics, writes)| {
-            (outcome, statistics, !matches!(writes, NativeWrites::None))
-        })
+        )
+        .map(|(outcome, statistics, writes)| (outcome, statistics, !matches!(writes, NativeWrites::None)))
     }
 
     pub(crate) fn run_x86_lease<H: MemoryAccessHost>(
@@ -1996,12 +2231,7 @@ impl Executor {
         let mut views = vec![primary];
         const OPERAND_SPAN: u64 = 1 << 20;
         for (address, required) in hints {
-            let Ok(view) = lease.project_bounded(
-                hl_isa::GuestAddress::new(address),
-                1,
-                required,
-                OPERAND_SPAN,
-            ) else {
+            let Ok(view) = lease.project_bounded(hl_isa::GuestAddress::new(address), 1, required, OPERAND_SPAN) else {
                 continue;
             };
             let candidate = ProjectionView {
@@ -2019,7 +2249,10 @@ impl Executor {
             }
         }
         views.sort_unstable_by_key(|view| view.guest_first);
-        let active = views.iter().position(|view| (view.guest_first, view.guest_last) == primary_range).ok_or(())?;
+        let active = views
+            .iter()
+            .position(|view| (view.guest_first, view.guest_last) == primary_range)
+            .ok_or(())?;
         let projection = Projection {
             views: views.as_ptr(),
             count: views.len(),
@@ -2027,8 +2260,12 @@ impl Executor {
             active,
         };
         let mut observed = ViewHints::default();
-        let mut operand = OperandProvider { lease: &mut lease, observed: &mut observed,
-            #[cfg(test)] boundary_capture: None };
+        let mut operand = OperandProvider {
+            lease: &mut lease,
+            observed: &mut observed,
+            #[cfg(test)]
+            boundary_capture: None,
+        };
         let (outcome, statistics, written) = self.run_x86_inner(
             state,
             sources,
@@ -2088,15 +2325,23 @@ impl Executor {
             mapping_incarnation: mapping_epoch,
             instruction_epoch,
         };
-        let token = ExecutableToken { incarnation: mapping_epoch, version: instruction_epoch };
+        let token = ExecutableToken {
+            incarnation: mapping_epoch,
+            version: instruction_epoch,
+        };
         let mut provider = SourceProvider {
             resolve,
             bytes: [0; 256],
-            observed: sources.iter().map(|source| (
-                source.guest_first,
-                source.guest_first + source.bytes.len() as u64,
-                token,
-            )).collect(),
+            observed: sources
+                .iter()
+                .map(|source| {
+                    (
+                        source.guest_first,
+                        source.guest_first + source.bytes.len() as u64,
+                        token,
+                    )
+                })
+                .collect(),
             complete: true,
             #[cfg(test)]
             boundary_capture: None,
@@ -2161,9 +2406,9 @@ impl Executor {
                 builds: after.zip(before).map_or(0, |(after, before)| {
                     after.publications.saturating_sub(before.publications)
                 }),
-                hits: after.zip(before).map_or(0, |(after, before)| {
-                    after.cache_hits.saturating_sub(before.cache_hits)
-                }),
+                hits: after
+                    .zip(before)
+                    .map_or(0, |(after, before)| after.cache_hits.saturating_sub(before.cache_hits)),
                 fallback: exit == Exit::Fallback,
                 sources: provider.observed,
                 sources_complete: provider.complete,
@@ -2175,12 +2420,20 @@ impl Executor {
 
 impl Drop for Executor {
     fn drop(&mut self) {
-        if self.diagnostics_enabled && let Ok(value) = self.diagnostics() {
+        if self.diagnostics_enabled
+            && let Ok(value) = self.diagnostics()
+        {
             eprintln!(
                 "hl-native-detail: fills={} site_collisions={} shared_collisions={} branch={} syscall={} fallback={} yield={} completed={} operand_callbacks={} operand_cache_hits={}",
-                value.ibtc_fills, value.ibtc_site_collisions, value.ibtc_shared_collisions,
-                value.boundary_branch, value.boundary_syscall, value.boundary_fallback,
-                value.boundary_yield, value.completed, value.operand_callbacks,
+                value.ibtc_fills,
+                value.ibtc_site_collisions,
+                value.ibtc_shared_collisions,
+                value.boundary_branch,
+                value.boundary_syscall,
+                value.boundary_fallback,
+                value.boundary_yield,
+                value.completed,
+                value.operand_callbacks,
                 value.operand_cache_hits,
             );
         }
@@ -2242,17 +2495,32 @@ mod test {
     #[test]
     fn direct_literal_requires_complete_static_read_interval() {
         let ldr_x0 = u32::to_le_bytes(0x58000800);
-        let source = [BorrowedSource { guest_first: 0x2000, bytes: &ldr_x0 }];
+        let source = [BorrowedSource {
+            guest_first: 0x2000,
+            bytes: &ldr_x0,
+        }];
         assert!(direct_literal_target(0x2000, &source, 0x2100, 0x2108));
         assert!(!direct_literal_target(0x2000, &source, 0x2100, 0x2107));
         assert!(!direct_literal_target(0x2000, &source, 0x2101, 0x2200));
         let register_load = u32::to_le_bytes(0xf940_0000);
         assert!(!direct_literal_target(
-            0x2000, &[BorrowedSource { guest_first: 0x2000, bytes: &register_load }], 0, u64::MAX,
+            0x2000,
+            &[BorrowedSource {
+                guest_first: 0x2000,
+                bytes: &register_load
+            }],
+            0,
+            u64::MAX,
         ));
         let underflow = u32::to_le_bytes(0x58ff_ffe0);
         assert!(!direct_literal_target(
-            0, &[BorrowedSource { guest_first: 0, bytes: &underflow }], 0, u64::MAX,
+            0,
+            &[BorrowedSource {
+                guest_first: 0,
+                bytes: &underflow
+            }],
+            0,
+            u64::MAX,
         ));
     }
 
@@ -2283,7 +2551,8 @@ mod test {
             assert!(!unsafe { view.contains(0) });
             let cpu = unsafe { &*view.0.cpu };
             let state = unsafe { &*cpu.state.cast::<schema::Aarch64Cpu>() };
-            self.authority.store(state.active_authority, std::sync::atomic::Ordering::Relaxed);
+            self.authority
+                .store(state.active_authority, std::sync::atomic::Ordering::Relaxed);
             let mut stolen = view.0;
             self.borrowed_leave.store(
                 unsafe { hl_native_fault_scope_leave(&raw mut stolen) },
@@ -2305,47 +2574,96 @@ mod test {
     #[test]
     fn host_fault_owner_brackets_cold_and_warm_native_entries() {
         let words = [0xd4000001_u32];
-        let span = SourceSpan { guest_first: 0x4000, bytes: words.as_ptr().cast(), size: 4,
-                                mapping_incarnation: 1, instruction_epoch: 1 };
-        let source = Source { spans: &raw const span, span_count: 1,
-                              mapping_incarnation: 1, instruction_epoch: 1 };
+        let span = SourceSpan {
+            guest_first: 0x4000,
+            bytes: words.as_ptr().cast(),
+            size: 4,
+            mapping_incarnation: 1,
+            instruction_epoch: 1,
+        };
+        let source = Source {
+            spans: &raw const span,
+            span_count: 1,
+            mapping_incarnation: 1,
+            instruction_epoch: 1,
+        };
         let owner = std::sync::Arc::new(FakeFaultOwner::default());
         let executor = Executor::create_with_fault_owner(false, Some(owner.clone())).unwrap();
         executor.reset(1).unwrap();
         for _ in 0..2 {
-            let mut cpu = Aarch64CpuState { pc: 0x4000, ..Aarch64CpuState::default() };
-            assert_eq!(executor.run_aarch64(&mut cpu, &source, None, 1, 1, None, None).unwrap().0,
-                       Exit::Syscall);
+            let mut cpu = Aarch64CpuState {
+                pc: 0x4000,
+                ..Aarch64CpuState::default()
+            };
+            assert_eq!(
+                executor
+                    .run_aarch64(&mut cpu, &source, None, 1, 1, None, None)
+                    .unwrap()
+                    .0,
+                Exit::Syscall
+            );
         }
         assert_eq!(*owner.events.lock().unwrap(), ["enter", "leave", "enter", "leave"]);
         assert_eq!(owner.borrowed_leave.load(std::sync::atomic::Ordering::Relaxed), 1);
         assert_eq!(owner.authority.load(std::sync::atomic::Ordering::Relaxed), 1);
         owner.authority.store(0, std::sync::atomic::Ordering::Relaxed);
-        let stale_source = Source { spans: source.spans, span_count: source.span_count,
-                                    mapping_incarnation: 2, instruction_epoch: 1 };
-        let mut stale_cpu = Aarch64CpuState { pc: 0x4000, ..Aarch64CpuState::default() };
-        assert!(executor.run_aarch64(&mut stale_cpu, &stale_source, None, 1, 1, None, None).is_err());
+        let stale_source = Source {
+            spans: source.spans,
+            span_count: source.span_count,
+            mapping_incarnation: 2,
+            instruction_epoch: 1,
+        };
+        let mut stale_cpu = Aarch64CpuState {
+            pc: 0x4000,
+            ..Aarch64CpuState::default()
+        };
+        assert!(
+            executor
+                .run_aarch64(&mut stale_cpu, &stale_source, None, 1, 1, None, None)
+                .is_err()
+        );
         assert_eq!(owner.authority.load(std::sync::atomic::Ordering::Relaxed), 0);
 
         let branch_words = [0x14000001_u32, 0xd4000001_u32];
-        let branch_span = SourceSpan { guest_first: 0x5000, bytes: branch_words.as_ptr().cast(), size: 8,
-                                       mapping_incarnation: 1, instruction_epoch: 1 };
-        let branch_source = Source { spans: &raw const branch_span, span_count: 1,
-                                     mapping_incarnation: 1, instruction_epoch: 1 };
+        let branch_span = SourceSpan {
+            guest_first: 0x5000,
+            bytes: branch_words.as_ptr().cast(),
+            size: 8,
+            mapping_incarnation: 1,
+            instruction_epoch: 1,
+        };
+        let branch_source = Source {
+            spans: &raw const branch_span,
+            span_count: 1,
+            mapping_incarnation: 1,
+            instruction_epoch: 1,
+        };
         owner.events.lock().unwrap().clear();
-        let mut cpu = Aarch64CpuState { pc: 0x5000, ..Aarch64CpuState::default() };
-        assert_eq!(executor.run_aarch64(&mut cpu, &branch_source, None, 1, 2, None, None).unwrap().0,
-                   Exit::Syscall);
+        let mut cpu = Aarch64CpuState {
+            pc: 0x5000,
+            ..Aarch64CpuState::default()
+        };
+        assert_eq!(
+            executor
+                .run_aarch64(&mut cpu, &branch_source, None, 1, 2, None, None)
+                .unwrap()
+                .0,
+            Exit::Syscall
+        );
         assert_eq!(*owner.events.lock().unwrap(), ["enter", "leave", "enter", "leave"]);
 
         let rejecting = std::sync::Arc::new(FakeFaultOwner {
-            events: std::sync::Mutex::new(Vec::new()), reject: true,
+            events: std::sync::Mutex::new(Vec::new()),
+            reject: true,
             borrowed_leave: std::sync::atomic::AtomicU32::new(u32::MAX),
             authority: std::sync::atomic::AtomicU64::new(0),
         });
         let rejected = Executor::create_with_fault_owner(false, Some(rejecting.clone())).unwrap();
         rejected.reset(1).unwrap();
-        let mut cpu = Aarch64CpuState { pc: 0x4000, ..Aarch64CpuState::default() };
+        let mut cpu = Aarch64CpuState {
+            pc: 0x4000,
+            ..Aarch64CpuState::default()
+        };
         assert!(rejected.run_aarch64(&mut cpu, &source, None, 1, 1, None, None).is_err());
         assert_eq!(*rejecting.events.lock().unwrap(), ["enter"]);
         rejected.reset(2).expect("publish rejection left no execution lease");
@@ -2358,19 +2676,30 @@ mod test {
         owner.attach().expect("worker fault attachment");
         let words = [0xd4000001_u32];
         let span = SourceSpan {
-            guest_first: 0x6000, bytes: words.as_ptr().cast(), size: 4,
-            mapping_incarnation: 1, instruction_epoch: 1,
+            guest_first: 0x6000,
+            bytes: words.as_ptr().cast(),
+            size: 4,
+            mapping_incarnation: 1,
+            instruction_epoch: 1,
         };
         let source = Source {
-            spans: &raw const span, span_count: 1,
-            mapping_incarnation: 1, instruction_epoch: 1,
+            spans: &raw const span,
+            span_count: 1,
+            mapping_incarnation: 1,
+            instruction_epoch: 1,
         };
         {
             let executor = Executor::create_with_fault_owner(false, Some(owner.clone())).unwrap();
             executor.reset(1).unwrap();
-            let mut cpu = Aarch64CpuState { pc: 0x6000, ..Aarch64CpuState::default() };
+            let mut cpu = Aarch64CpuState {
+                pc: 0x6000,
+                ..Aarch64CpuState::default()
+            };
             assert_eq!(
-                executor.run_aarch64(&mut cpu, &source, None, 1, 1, None, None).unwrap().0,
+                executor
+                    .run_aarch64(&mut cpu, &source, None, 1, 1, None, None)
+                    .unwrap()
+                    .0,
                 Exit::Syscall,
             );
         }
@@ -2383,11 +2712,10 @@ mod test {
         for address in [1, 2, 3, 4, 2] {
             hints.observe(address, Protection::READ);
         }
-        assert_eq!(hints.entries, [
-            (2, Protection::READ),
-            (4, Protection::READ),
-            (3, Protection::READ),
-        ]);
+        assert_eq!(
+            hints.entries,
+            [(2, Protection::READ), (4, Protection::READ), (3, Protection::READ),]
+        );
     }
 
     #[test]
@@ -2398,7 +2726,9 @@ mod test {
         native.0.dirty_view_last = 0x2000;
         native.0.dirty_first = 0x1100;
         native.0.dirty_last = 0x1108;
-        let NativeWrites::Exact(ranges) = x86_writes(&native.0) else { panic!("not exact") };
+        let NativeWrites::Exact(ranges) = x86_writes(&native.0) else {
+            panic!("not exact")
+        };
         assert_eq!(ranges, [AddressRange::nonempty(GuestAddress::new(0x1100), 8).unwrap()]);
     }
 
@@ -2410,8 +2740,13 @@ mod test {
         native.0.dirty_view_last = 0x4000;
         native.0.dirty_first = 0x3100;
         native.0.dirty_last = 0x3120;
-        let NativeWrites::Exact(ranges) = aarch64_writes(&native.0) else { panic!("not exact") };
-        assert_eq!(ranges, [AddressRange::nonempty(GuestAddress::new(0x3100), 0x20).unwrap()]);
+        let NativeWrites::Exact(ranges) = aarch64_writes(&native.0) else {
+            panic!("not exact")
+        };
+        assert_eq!(
+            ranges,
+            [AddressRange::nonempty(GuestAddress::new(0x3100), 0x20).unwrap()]
+        );
     }
 
     #[test]
@@ -2422,7 +2757,9 @@ mod test {
         native.0.dirty_count = 2;
         native.0.dirty_records[0] = [0x1000, 0x2000, 0x1100, 0x1200];
         native.0.dirty_records[1] = [0x1000, 0x2000, 0x1180, 0x1300];
-        let NativeWrites::Exact(ranges) = aarch64_writes(&native.0) else { panic!("not exact") };
+        let NativeWrites::Exact(ranges) = aarch64_writes(&native.0) else {
+            panic!("not exact")
+        };
         assert_eq!(ranges.len(), 2);
         native.0.dirty_overflow = 1;
         assert!(matches!(aarch64_writes(&native.0), NativeWrites::Full));
@@ -2548,7 +2885,10 @@ mod test {
         assert_eq!(NativeX86::fpcr(0) & ((0x1f << 8) | (1 << 15)), 0);
         assert_eq!(NativeX86::exception_flags(NativeX86::fpsr(0x3f)), 0x3f);
 
-        let mut cpu = X86CpuState { mxcsr: 0xdfc0, ..X86CpuState::default() };
+        let mut cpu = X86CpuState {
+            mxcsr: 0xdfc0,
+            ..X86CpuState::default()
+        };
         let mut native = NativeX86::capture(&cpu, false);
         native.0.fpsr |= NativeX86::fpsr(0x2d);
         native.restore(&mut cpu);
@@ -2572,10 +2912,20 @@ mod test {
         let before = host_environment();
         let executor = Executor::create().expect("native executor");
         let bytes = [0x90, 0x0f, 0x05];
-        let source = [BorrowedSource { guest_first: 0x9000, bytes: &bytes }];
-        let mut cpu = X86CpuState { rip: 0x9000, mxcsr: 0xdfc0, ..X86CpuState::default() };
+        let source = [BorrowedSource {
+            guest_first: 0x9000,
+            bytes: &bytes,
+        }];
+        let mut cpu = X86CpuState {
+            rip: 0x9000,
+            mxcsr: 0xdfc0,
+            ..X86CpuState::default()
+        };
         let mut resolve = |_: u64, _: &mut [u8]| None;
-        let outcome = executor.run_x86(&mut cpu, &source, 1, 1, 2, false, None, &mut resolve).unwrap().0;
+        let outcome = executor
+            .run_x86(&mut cpu, &source, 1, 1, 2, false, None, &mut resolve)
+            .unwrap()
+            .0;
         assert_eq!(outcome.exit, Exit::Syscall);
         assert_eq!(cpu.mxcsr, 0xdfc0);
         assert_eq!(host_environment(), before);
@@ -2585,27 +2935,50 @@ mod test {
     #[test]
     fn x86_native_scalar_double_preserves_lanes_rounding_and_status() {
         let executor = Executor::create().expect("native executor");
-        let bytes = [0xf2, 0x0f, 0x59, 0xc1, 0xf2, 0x0f, 0x58, 0xc1,
-                     0xf2, 0x0f, 0x5e, 0xc1, 0xf2, 0x0f, 0x51, 0xc0, 0x0f, 0x05];
-        let source = [BorrowedSource { guest_first: 0xa000, bytes: &bytes }];
+        let bytes = [
+            0xf2, 0x0f, 0x59, 0xc1, 0xf2, 0x0f, 0x58, 0xc1, 0xf2, 0x0f, 0x5e, 0xc1, 0xf2, 0x0f, 0x51, 0xc0, 0x0f, 0x05,
+        ];
+        let source = [BorrowedSource {
+            guest_first: 0xa000,
+            bytes: &bytes,
+        }];
         let upper = 0xfeed_face_dead_beef_u128 << 64;
-        let mut cpu = X86CpuState { rip: 0xa000, ..X86CpuState::default() };
+        let mut cpu = X86CpuState {
+            rip: 0xa000,
+            ..X86CpuState::default()
+        };
         cpu.vectors[0] = upper | u128::from(4_f64.to_bits());
         cpu.vectors[1] = u128::from(2_f64.to_bits());
         let mut resolve = |_: u64, _: &mut [u8]| None;
-        let outcome = executor.run_x86(&mut cpu, &source, 1, 1, 5, false, None, &mut resolve).unwrap().0;
+        let outcome = executor
+            .run_x86(&mut cpu, &source, 1, 1, 5, false, None, &mut resolve)
+            .unwrap()
+            .0;
         assert_eq!(outcome.exit, Exit::Syscall);
         assert_eq!(cpu.vectors[0] >> 64, upper >> 64);
         assert_eq!(cpu.vectors[0] as u64, 5_f64.sqrt().to_bits());
         assert_ne!(cpu.mxcsr & (1 << 5), 0);
 
         let divide = [0xf2, 0x0f, 0x5e, 0xc1, 0x0f, 0x05];
-        let source = [BorrowedSource { guest_first: 0xa100, bytes: &divide }];
-        let mut up = X86CpuState { rip: 0xa100, mxcsr: 0x5f80, ..X86CpuState::default() };
+        let source = [BorrowedSource {
+            guest_first: 0xa100,
+            bytes: &divide,
+        }];
+        let mut up = X86CpuState {
+            rip: 0xa100,
+            mxcsr: 0x5f80,
+            ..X86CpuState::default()
+        };
         up.vectors[0] = u128::from(1_f64.to_bits());
         up.vectors[1] = u128::from(3_f64.to_bits());
-        assert_eq!(executor.run_x86(&mut up, &source, 1, 2, 2, false, None, &mut resolve).unwrap().0.exit,
-                   Exit::Syscall);
+        assert_eq!(
+            executor
+                .run_x86(&mut up, &source, 1, 2, 2, false, None, &mut resolve)
+                .unwrap()
+                .0
+                .exit,
+            Exit::Syscall
+        );
         assert_eq!(up.vectors[0] as u64, (1_f64 / 3.0).to_bits() + 1);
         assert_ne!(up.mxcsr & (1 << 5), 0);
     }
@@ -2615,13 +2988,22 @@ mod test {
     fn x86_native_scalar_double_nan_falls_back_before_commit() {
         let executor = Executor::create().expect("native executor");
         let bytes = [0xf2, 0x0f, 0x58, 0xc1, 0x0f, 0x0b];
-        let source = [BorrowedSource { guest_first: 0xa200, bytes: &bytes }];
-        let mut cpu = X86CpuState { rip: 0xa200, ..X86CpuState::default() };
+        let source = [BorrowedSource {
+            guest_first: 0xa200,
+            bytes: &bytes,
+        }];
+        let mut cpu = X86CpuState {
+            rip: 0xa200,
+            ..X86CpuState::default()
+        };
         cpu.vectors[0] = u128::from(f64::NAN.to_bits());
         cpu.vectors[1] = u128::from(1_f64.to_bits());
         let before = cpu.vectors;
         let mut resolve = |_: u64, _: &mut [u8]| None;
-        let outcome = executor.run_x86(&mut cpu, &source, 1, 3, 1, false, None, &mut resolve).unwrap().0;
+        let outcome = executor
+            .run_x86(&mut cpu, &source, 1, 3, 1, false, None, &mut resolve)
+            .unwrap()
+            .0;
         assert_eq!((outcome.exit, outcome.instruction), (Exit::Fallback, 0xa200));
         assert_eq!(cpu.vectors, before);
     }
@@ -2634,11 +3016,20 @@ mod test {
             (1, &[0xf3, 0x0f, 0x1e, 0xc8, 0x0f, 0x05][..]),
             (2, &[0xf3, 0x48, 0x0f, 0x1e, 0xc8, 0x0f, 0x05][..]),
         ] {
-            let source = [BorrowedSource { guest_first: 0xa300, bytes }];
-            let mut cpu = X86CpuState { rip: 0xa300, ..X86CpuState::default() };
+            let source = [BorrowedSource {
+                guest_first: 0xa300,
+                bytes,
+            }];
+            let mut cpu = X86CpuState {
+                rip: 0xa300,
+                ..X86CpuState::default()
+            };
             cpu.registers[0] = 0xdead_beef_cafe_babe;
             let mut resolve = |_: u64, _: &mut [u8]| None;
-            let outcome = executor.run_x86(&mut cpu, &source, 1, epoch, 2, false, None, &mut resolve).unwrap().0;
+            let outcome = executor
+                .run_x86(&mut cpu, &source, 1, epoch, 2, false, None, &mut resolve)
+                .unwrap()
+                .0;
             assert_eq!(outcome.exit, Exit::Syscall);
             assert_eq!(cpu.registers[0], 0xdead_beef_cafe_babe);
         }
@@ -2773,8 +3164,9 @@ mod test {
                 pc: 0x4000,
                 ..Aarch64CpuState::default()
             };
-            let (exit, instruction, _, _, remaining, executed, _) =
-                executor.run_aarch64(&mut cpu, &source, None, 1, 1, None, None).expect("native run");
+            let (exit, instruction, _, _, remaining, executed, _) = executor
+                .run_aarch64(&mut cpu, &source, None, 1, 1, None, None)
+                .expect("native run");
             assert_eq!(exit, Exit::Syscall);
             assert_eq!(instruction, 0x4000);
             assert_eq!((remaining, executed), (0, 1));
@@ -2799,7 +3191,10 @@ mod test {
         };
         executor.invalidate(0x4000, 0x4004, 1).expect("source invalidation");
         assert_eq!(
-            executor.run_aarch64(&mut changed_cpu, &changed_source, None, 1, 1, None, None).unwrap().0,
+            executor
+                .run_aarch64(&mut changed_cpu, &changed_source, None, 1, 1, None, None)
+                .unwrap()
+                .0,
             Exit::Syscall
         );
         let after_epoch = executor.diagnostics().unwrap();
@@ -2812,7 +3207,10 @@ mod test {
             ..Aarch64CpuState::default()
         };
         assert_eq!(
-            executor.run_aarch64(&mut cpu, &source, None, 1, 1, None, None).unwrap().0,
+            executor
+                .run_aarch64(&mut cpu, &source, None, 1, 1, None, None)
+                .unwrap()
+                .0,
             Exit::Syscall
         );
     }
@@ -2869,21 +3267,36 @@ mod test {
     #[test]
     fn x86_executor_is_exact_and_reuses_cache() {
         let bytes = [0xb8, 1, 0, 0, 0, 0x01, 0xc0, 0x0f, 0x05];
-        let source = [BorrowedSource { guest_first: 0x4000, bytes: &bytes }];
+        let source = [BorrowedSource {
+            guest_first: 0x4000,
+            bytes: &bytes,
+        }];
         let executor = Executor::create_diagnostics(true).expect("native executor");
         let mut resolve = |_: u64, _: &mut [u8]| None;
-        let mut stopped = X86CpuState { rip: 0x4000, ..X86CpuState::default() };
-        let zero = executor.run_x86(&mut stopped, &source, 1, 2, 0, false, None, &mut resolve).unwrap();
+        let mut stopped = X86CpuState {
+            rip: 0x4000,
+            ..X86CpuState::default()
+        };
+        let zero = executor
+            .run_x86(&mut stopped, &source, 1, 2, 0, false, None, &mut resolve)
+            .unwrap();
         assert_eq!(zero.0.exit, Exit::Yield);
         assert_eq!((zero.0.remaining, zero.0.executed), (0, 0));
         assert_eq!(stopped.rip, 0x4000);
-        let interrupted = executor.run_x86(&mut stopped, &source, 1, 2, 3, true, None, &mut resolve).unwrap();
+        let interrupted = executor
+            .run_x86(&mut stopped, &source, 1, 2, 3, true, None, &mut resolve)
+            .unwrap();
         assert_eq!(interrupted.0.exit, Exit::Interrupt);
         assert_eq!((interrupted.0.remaining, interrupted.0.executed), (3, 0));
         assert_eq!(stopped.rip, 0x4000);
 
-        let mut first = X86CpuState { rip: 0x4000, ..X86CpuState::default() };
-        let (result, cold, _) = executor.run_x86(&mut first, &source, 1, 2, 3, false, None, &mut resolve).unwrap();
+        let mut first = X86CpuState {
+            rip: 0x4000,
+            ..X86CpuState::default()
+        };
+        let (result, cold, _) = executor
+            .run_x86(&mut first, &source, 1, 2, 3, false, None, &mut resolve)
+            .unwrap();
         assert_eq!(
             result,
             X86RunOutcome {
@@ -2897,8 +3310,13 @@ mod test {
             }
         );
         assert_eq!(first.registers[0], 2);
-        let mut second = X86CpuState { rip: 0x4000, ..X86CpuState::default() };
-        let (_, warm, _) = executor.run_x86(&mut second, &source, 1, 2, 3, false, None, &mut resolve).unwrap();
+        let mut second = X86CpuState {
+            rip: 0x4000,
+            ..X86CpuState::default()
+        };
+        let (_, warm, _) = executor
+            .run_x86(&mut second, &source, 1, 2, 3, false, None, &mut resolve)
+            .unwrap();
         assert_eq!(warm.builds, 0);
         assert!(cold.builds == 1 && warm.hits >= 1);
 
@@ -2906,8 +3324,9 @@ mod test {
         for _ in 0..1000 {
             second.rip = 0x4000;
             second.registers[0] = 0;
-            let (outcome, statistics, _) =
-                executor.run_x86(&mut second, &source, 1, 2, 3, false, None, &mut resolve).unwrap();
+            let (outcome, statistics, _) = executor
+                .run_x86(&mut second, &source, 1, 2, 3, false, None, &mut resolve)
+                .unwrap();
             assert_eq!(outcome.exit, Exit::Syscall);
             assert_eq!(statistics.builds, 0);
         }
@@ -2926,22 +3345,36 @@ mod test {
             (&[0x48, 0xf7, 0xf1, 0x0f, 0x05], 1_000, 0, 10, 100),
         ];
         for (epoch, &(bytes, low, high, divisor, quotient)) in forms.iter().enumerate() {
-            let source = [BorrowedSource { guest_first: 0x6000, bytes }];
-            let mut cpu = X86CpuState { rip: 0x6000, ..X86CpuState::default() };
+            let source = [BorrowedSource {
+                guest_first: 0x6000,
+                bytes,
+            }];
+            let mut cpu = X86CpuState {
+                rip: 0x6000,
+                ..X86CpuState::default()
+            };
             cpu.registers[0] = low;
             cpu.registers[2] = high;
             cpu.registers[1] = divisor;
             let (outcome, statistics, _) = executor
                 .run_x86(&mut cpu, &source, 1, epoch as u64 + 10, 2, false, None, &mut resolve)
                 .unwrap();
-            assert_eq!(outcome.exit, Exit::Syscall, "epoch={epoch} outcome={outcome:?} stats={statistics:?}");
+            assert_eq!(
+                outcome.exit,
+                Exit::Syscall,
+                "epoch={epoch} outcome={outcome:?} stats={statistics:?}"
+            );
             let width = match bytes[0] {
                 0xf6 => 1,
                 0x66 => 2,
                 0xf7 => 4,
                 _ => 8,
             };
-            let mask = if width == 8 { u64::MAX } else { (1_u64 << (width * 8)) - 1 };
+            let mask = if width == 8 {
+                u64::MAX
+            } else {
+                (1_u64 << (width * 8)) - 1
+            };
             assert_eq!(cpu.registers[0] & mask, quotient);
             if width == 1 {
                 assert_eq!((cpu.registers[0] >> 8) & 0xff, 0);
@@ -2951,13 +3384,23 @@ mod test {
         }
 
         let signed = [0x48, 0xf7, 0xf9, 0x0f, 0x05];
-        let source = [BorrowedSource { guest_first: 0x7000, bytes: &signed }];
-        let mut cpu = X86CpuState { rip: 0x7000, ..X86CpuState::default() };
+        let source = [BorrowedSource {
+            guest_first: 0x7000,
+            bytes: &signed,
+        }];
+        let mut cpu = X86CpuState {
+            rip: 0x7000,
+            ..X86CpuState::default()
+        };
         cpu.registers[0] = (-1_000_i64) as u64;
         cpu.registers[2] = u64::MAX;
         cpu.registers[1] = 10;
         assert_eq!(
-            executor.run_x86(&mut cpu, &source, 1, 20, 2, false, None, &mut resolve).unwrap().0.exit,
+            executor
+                .run_x86(&mut cpu, &source, 1, 20, 2, false, None, &mut resolve)
+                .unwrap()
+                .0
+                .exit,
             Exit::Syscall
         );
         assert_eq!(cpu.registers[0] as i64, -100);
@@ -2969,8 +3412,14 @@ mod test {
             (&[0xf7, 0xf9, 0x0f, 0x05], 0xffff_fc18, 0xffff_ffff, 0xffff_ff9c),
         ];
         for (epoch, &(bytes, low, high, quotient)) in signed_forms.iter().enumerate() {
-            let source = [BorrowedSource { guest_first: 0x7800, bytes }];
-            let mut cpu = X86CpuState { rip: 0x7800, ..X86CpuState::default() };
+            let source = [BorrowedSource {
+                guest_first: 0x7800,
+                bytes,
+            }];
+            let mut cpu = X86CpuState {
+                rip: 0x7800,
+                ..X86CpuState::default()
+            };
             cpu.registers[0] = low;
             cpu.registers[2] = high;
             cpu.registers[1] = 10;
@@ -2979,7 +3428,13 @@ mod test {
                 .unwrap()
                 .0;
             assert_eq!(outcome.exit, Exit::Syscall);
-            let width = if bytes[0] == 0xf6 { 1 } else if bytes[0] == 0x66 { 2 } else { 4 };
+            let width = if bytes[0] == 0xf6 {
+                1
+            } else if bytes[0] == 0x66 {
+                2
+            } else {
+                4
+            };
             let mask = (1_u64 << (width * 8)) - 1;
             assert_eq!(cpu.registers[0] & mask, quotient & mask);
             if width == 1 {
@@ -2993,8 +3448,14 @@ mod test {
             (30, [0xf6, 0xf1, 0x0f, 0x0b], 100_u64, 0_u64),
             (31, [0xf6, 0xf1, 0x0f, 0x0b], 0x1ff_u64, 1_u64),
         ] {
-            let source = [BorrowedSource { guest_first: 0x8000, bytes: &bytes }];
-            let mut cpu = X86CpuState { rip: 0x8000, ..X86CpuState::default() };
+            let source = [BorrowedSource {
+                guest_first: 0x8000,
+                bytes: &bytes,
+            }];
+            let mut cpu = X86CpuState {
+                rip: 0x8000,
+                ..X86CpuState::default()
+            };
             cpu.registers[0] = low;
             cpu.registers[1] = divisor;
             let before = cpu.clone();
@@ -3011,7 +3472,10 @@ mod test {
     #[test]
     fn x86_fallback_preserves_interpreter_boundary() {
         let bytes = [0xb8, 1, 0, 0, 0, 0x48, 0x8b, 0x03];
-        let source = [BorrowedSource { guest_first: 0x5000, bytes: &bytes }];
+        let source = [BorrowedSource {
+            guest_first: 0x5000,
+            bytes: &bytes,
+        }];
         let executor = Executor::create().expect("native executor");
         let mut resolve = |_: u64, _: &mut [u8]| None;
         let mut cpu = X86CpuState {
@@ -3020,8 +3484,9 @@ mod test {
             flags: FlagState::from_bits(0x8d5),
             ..X86CpuState::default()
         };
-        let (outcome, statistics, _) =
-            executor.run_x86(&mut cpu, &source, 4, 5, 64, false, None, &mut resolve).unwrap();
+        let (outcome, statistics, _) = executor
+            .run_x86(&mut cpu, &source, 4, 5, 64, false, None, &mut resolve)
+            .unwrap();
         assert_eq!(
             outcome,
             X86RunOutcome {
@@ -3043,19 +3508,36 @@ mod test {
     #[test]
     fn x86_fallback_preserves_prior_projected_write() {
         let bytes = [0x48, 0x89, 0x03, 0x48, 0x8b, 0x03];
-        let source = [BorrowedSource { guest_first: 0x5000, bytes: &bytes }];
+        let source = [BorrowedSource {
+            guest_first: 0x5000,
+            bytes: &bytes,
+        }];
         let executor = Executor::create().expect("native executor");
         let mut resolve = |_: u64, _: &mut [u8]| None;
         let mut storage = [0_u8; 16];
-        let view = ProjectionView { guest_first: 0x7000, guest_last: 0x7010,
-            host_first: storage.as_mut_ptr() as usize as u64, mapping_incarnation: 4,
-            permissions: 3, reserved: 0 };
-        let projection = Projection { views: &raw const view, count: 1, mapping_incarnation: 4, active: 0 };
-        let mut cpu = X86CpuState { rip: 0x5000, ..X86CpuState::default() };
+        let view = ProjectionView {
+            guest_first: 0x7000,
+            guest_last: 0x7010,
+            host_first: storage.as_mut_ptr() as usize as u64,
+            mapping_incarnation: 4,
+            permissions: 3,
+            reserved: 0,
+        };
+        let projection = Projection {
+            views: &raw const view,
+            count: 1,
+            mapping_incarnation: 4,
+            active: 0,
+        };
+        let mut cpu = X86CpuState {
+            rip: 0x5000,
+            ..X86CpuState::default()
+        };
         cpu.registers[0] = 0x1122_3344_5566_7788;
         cpu.registers[3] = 0x7000;
         let (outcome, statistics, written) = executor
-            .run_x86(&mut cpu, &source, 4, 6, 64, false, Some(&projection), &mut resolve).unwrap();
+            .run_x86(&mut cpu, &source, 4, 6, 64, false, Some(&projection), &mut resolve)
+            .unwrap();
         assert_eq!(
             outcome,
             X86RunOutcome {
@@ -3077,14 +3559,17 @@ mod test {
     #[test]
     fn x86_repeated_byte_store_publishes_contiguous_range() {
         let bytes = [
-            0x88, 0x06,             // mov [rsi],al
+            0x88, 0x06, // mov [rsi],al
             0x48, 0x83, 0xc6, 0x01, // add rsi,1
-            0x83, 0xc0, 0x01,       // add eax,1
-            0x48, 0x39, 0xfe,       // cmp rsi,rdi
-            0x75, 0xf2,             // jne 0x5000
-            0x0f, 0x05,             // syscall
+            0x83, 0xc0, 0x01, // add eax,1
+            0x48, 0x39, 0xfe, // cmp rsi,rdi
+            0x75, 0xf2, // jne 0x5000
+            0x0f, 0x05, // syscall
         ];
-        let source = [BorrowedSource { guest_first: 0x5000, bytes: &bytes }];
+        let source = [BorrowedSource {
+            guest_first: 0x5000,
+            bytes: &bytes,
+        }];
         let executor = Executor::create().expect("native executor");
         let mut resolve = |_: u64, _: &mut [u8]| None;
         let mut storage = [0_u8; 4096];
@@ -3096,15 +3581,24 @@ mod test {
             permissions: 3,
             reserved: 0,
         };
-        let projection = Projection { views: &raw const view, count: 1, mapping_incarnation: 4, active: 0 };
-        let mut cpu = X86CpuState { rip: 0x5000, ..X86CpuState::default() };
+        let projection = Projection {
+            views: &raw const view,
+            count: 1,
+            mapping_incarnation: 4,
+            active: 0,
+        };
+        let mut cpu = X86CpuState {
+            rip: 0x5000,
+            ..X86CpuState::default()
+        };
         cpu.registers[0] = 1;
         cpu.registers[6] = 0x7000;
         cpu.registers[7] = 0x8000;
         let mut terminal = None;
         for _ in 0..32 {
             let (outcome, _, written) = executor
-                .run_x86(&mut cpu, &source, 4, 6, 4096, false, Some(&projection), &mut resolve).unwrap();
+                .run_x86(&mut cpu, &source, 4, 6, 4096, false, Some(&projection), &mut resolve)
+                .unwrap();
             assert!(written);
             let initialized = usize::try_from(cpu.registers[6] - 0x7000).unwrap();
             for (index, byte) in storage[..initialized].iter().copied().enumerate() {
@@ -3127,11 +3621,14 @@ mod test {
     fn x86_stack_registers_and_immediates_are_transactional() {
         let bytes = [
             0x50, 0x41, 0x50, 0x6a, 0x80, /* push rax; push r8; push -128 */
-            0x59, 0x41, 0x59, 0x5a,       /* pop rcx; pop r9; pop rdx */
-            0x66, 0x50, 0x66, 0x5b,       /* push ax; pop bx */
+            0x59, 0x41, 0x59, 0x5a, /* pop rcx; pop r9; pop rdx */
+            0x66, 0x50, 0x66, 0x5b, /* push ax; pop bx */
             0x0f, 0x05,
         ];
-        let source = [BorrowedSource { guest_first: 0x5000, bytes: &bytes }];
+        let source = [BorrowedSource {
+            guest_first: 0x5000,
+            bytes: &bytes,
+        }];
         let executor = Executor::create().expect("native executor");
         let mut resolve = |_: u64, _: &mut [u8]| None;
         let mut storage = [0_u8; 64];
@@ -3143,8 +3640,16 @@ mod test {
             permissions: 3,
             reserved: 0,
         };
-        let projection = Projection { views: &raw const view, count: 1, mapping_incarnation: 4, active: 0 };
-        let mut cpu = X86CpuState { rip: 0x5000, ..X86CpuState::default() };
+        let projection = Projection {
+            views: &raw const view,
+            count: 1,
+            mapping_incarnation: 4,
+            active: 0,
+        };
+        let mut cpu = X86CpuState {
+            rip: 0x5000,
+            ..X86CpuState::default()
+        };
         cpu.registers[0] = 0x1122_3344_5566_7788;
         cpu.registers[8] = 0x8877_6655_4433_2211;
         cpu.registers[3] = 0xaabb_ccdd_eeff_0000;
@@ -3163,7 +3668,10 @@ mod test {
         storage.fill(0xa5);
         let before = storage;
         let push = [0x50];
-        let source = [BorrowedSource { guest_first: 0x6000, bytes: &push }];
+        let source = [BorrowedSource {
+            guest_first: 0x6000,
+            bytes: &push,
+        }];
         cpu.rip = 0x6000;
         cpu.registers[4] = 0x7000;
         let (fault, _, written) = executor
@@ -3179,7 +3687,10 @@ mod test {
     #[test]
     fn x86_projection_is_validated_before_execution() {
         let bytes = [0x0f, 0x05];
-        let source = [BorrowedSource { guest_first: 0x6000, bytes: &bytes }];
+        let source = [BorrowedSource {
+            guest_first: 0x6000,
+            bytes: &bytes,
+        }];
         let view = ProjectionView {
             guest_first: 0x7000,
             guest_last: 0x8000,
@@ -3188,14 +3699,24 @@ mod test {
             permissions: 3,
             reserved: 0,
         };
-        let projection = Projection { views: &raw const view, count: 1, mapping_incarnation: 8, active: 0 };
+        let projection = Projection {
+            views: &raw const view,
+            count: 1,
+            mapping_incarnation: 8,
+            active: 0,
+        };
         let executor = Executor::create().unwrap();
-        let mut cpu = X86CpuState { rip: 0x6000, ..X86CpuState::default() };
+        let mut cpu = X86CpuState {
+            rip: 0x6000,
+            ..X86CpuState::default()
+        };
         let expected = cpu.clone();
         let mut resolve = |_: u64, _: &mut [u8]| None;
-        assert!(executor
-            .run_x86(&mut cpu, &source, 7, 1, 1, false, Some(&projection), &mut resolve)
-            .is_err());
+        assert!(
+            executor
+                .run_x86(&mut cpu, &source, 7, 1, 1, false, Some(&projection), &mut resolve)
+                .is_err()
+        );
         assert_eq!(cpu, expected);
     }
 
@@ -3203,15 +3724,24 @@ mod test {
     #[test]
     fn x86_native_entry_round_trips_all_vector_lanes() {
         let bytes = [0x90, 0x0f, 0x05];
-        let source = [BorrowedSource { guest_first: 0x5000, bytes: &bytes }];
+        let source = [BorrowedSource {
+            guest_first: 0x5000,
+            bytes: &bytes,
+        }];
         let executor = Executor::create().unwrap();
-        let mut cpu = X86CpuState { rip: 0x5000, ..X86CpuState::default() };
+        let mut cpu = X86CpuState {
+            rip: 0x5000,
+            ..X86CpuState::default()
+        };
         for (index, vector) in cpu.vectors.iter_mut().enumerate() {
             *vector = (index as u128) << 96 | 0x8877_6655_4433_2211_00ff_eedd_ccbb_aa99;
         }
         let expected = cpu.vectors;
         let mut resolve = |_: u64, _: &mut [u8]| None;
-        let outcome = executor.run_x86(&mut cpu, &source, 1, 1, 2, false, None, &mut resolve).unwrap().0;
+        let outcome = executor
+            .run_x86(&mut cpu, &source, 1, 1, 2, false, None, &mut resolve)
+            .unwrap()
+            .0;
         assert_eq!(outcome.exit, Exit::Syscall);
         assert_eq!(cpu.vectors, expected);
     }
@@ -3220,12 +3750,17 @@ mod test {
     #[test]
     fn x86_packed_bitwise() {
         let bytes = [
-            0x66, 0x0f, 0xef, 0xc1, 0x66, 0x0f, 0xdb, 0xd3,
-            0x66, 0x0f, 0xeb, 0xe5, 0x66, 0x0f, 0xdf, 0xf7, 0x0f, 0x05,
+            0x66, 0x0f, 0xef, 0xc1, 0x66, 0x0f, 0xdb, 0xd3, 0x66, 0x0f, 0xeb, 0xe5, 0x66, 0x0f, 0xdf, 0xf7, 0x0f, 0x05,
         ];
-        let source = [BorrowedSource { guest_first: 0x5000, bytes: &bytes }];
+        let source = [BorrowedSource {
+            guest_first: 0x5000,
+            bytes: &bytes,
+        }];
         let executor = Executor::create().unwrap();
-        let mut cpu = X86CpuState { rip: 0x5000, ..X86CpuState::default() };
+        let mut cpu = X86CpuState {
+            rip: 0x5000,
+            ..X86CpuState::default()
+        };
         cpu.vectors[..8].copy_from_slice(&[
             0x00ff_00ff_00ff_00ff_00ff_00ff_00ff_00ff,
             0x0f0f_0f0f_0f0f_0f0f_0f0f_0f0f_0f0f_0f0f,
@@ -3238,7 +3773,10 @@ mod test {
         ]);
         let original = cpu.vectors;
         let mut resolve = |_: u64, _: &mut [u8]| None;
-        let outcome = executor.run_x86(&mut cpu, &source, 1, 1, 5, false, None, &mut resolve).unwrap().0;
+        let outcome = executor
+            .run_x86(&mut cpu, &source, 1, 1, 5, false, None, &mut resolve)
+            .unwrap()
+            .0;
         assert_eq!(outcome.exit, Exit::Syscall);
         assert_eq!(cpu.vectors[0], original[0] ^ original[1]);
         assert_eq!(cpu.vectors[2], original[2] & original[3]);
@@ -3250,23 +3788,39 @@ mod test {
     #[test]
     fn x86_packed_memory() {
         let bytes = [0x66, 0x0f, 0xef, 0x03, 0x0f, 0x05];
-        let source = [BorrowedSource { guest_first: 0x5000, bytes: &bytes }];
+        let source = [BorrowedSource {
+            guest_first: 0x5000,
+            bytes: &bytes,
+        }];
         let executor = Executor::create().unwrap();
         let operand = 0xaaaa_5555_0123_4567_89ab_cdef_fedc_ba98_u128;
         let mut storage = operand.to_le_bytes();
         let view = ProjectionView {
-            guest_first: 0x7000, guest_last: 0x7010,
-            host_first: storage.as_mut_ptr() as usize as u64, mapping_incarnation: 3,
-            permissions: 1, reserved: 0,
+            guest_first: 0x7000,
+            guest_last: 0x7010,
+            host_first: storage.as_mut_ptr() as usize as u64,
+            mapping_incarnation: 3,
+            permissions: 1,
+            reserved: 0,
         };
-        let projection = Projection { views: &raw const view, count: 1, mapping_incarnation: 3, active: 0 };
+        let projection = Projection {
+            views: &raw const view,
+            count: 1,
+            mapping_incarnation: 3,
+            active: 0,
+        };
         let initial = 0x1111_2222_3333_4444_5555_6666_7777_8888_u128;
-        let mut cpu = X86CpuState { rip: 0x5000, ..X86CpuState::default() };
+        let mut cpu = X86CpuState {
+            rip: 0x5000,
+            ..X86CpuState::default()
+        };
         cpu.registers[3] = 0x7000;
         cpu.vectors[0] = initial;
         let mut resolve = |_: u64, _: &mut [u8]| None;
         let outcome = executor
-            .run_x86(&mut cpu, &source, 3, 1, 2, false, Some(&projection), &mut resolve).unwrap().0;
+            .run_x86(&mut cpu, &source, 3, 1, 2, false, Some(&projection), &mut resolve)
+            .unwrap()
+            .0;
         assert_eq!(outcome.exit, Exit::Syscall);
         assert_eq!(cpu.vectors[0], initial ^ operand);
     }
@@ -3275,26 +3829,40 @@ mod test {
     #[test]
     fn x86_set_conditions() {
         let bytes = [
-            0x39, 0xc0,
-            0x0f, 0x90, 0xc0, 0x0f, 0x91, 0xc1, 0x0f, 0x92, 0xc2, 0x0f, 0x93, 0xc3,
-            0x40, 0x0f, 0x94, 0xc4, 0x40, 0x0f, 0x95, 0xc5, 0x40, 0x0f, 0x96, 0xc6,
-            0x40, 0x0f, 0x97, 0xc7, 0x41, 0x0f, 0x98, 0xc0, 0x41, 0x0f, 0x99, 0xc1,
-            0x41, 0x0f, 0x9a, 0xc2, 0x41, 0x0f, 0x9b, 0xc3, 0x41, 0x0f, 0x9c, 0xc4,
-            0x41, 0x0f, 0x9d, 0xc5, 0x41, 0x0f, 0x9e, 0xc6, 0x41, 0x0f, 0x9f, 0xc7,
-            0x0f, 0x05,
+            0x39, 0xc0, 0x0f, 0x90, 0xc0, 0x0f, 0x91, 0xc1, 0x0f, 0x92, 0xc2, 0x0f, 0x93, 0xc3, 0x40, 0x0f, 0x94, 0xc4,
+            0x40, 0x0f, 0x95, 0xc5, 0x40, 0x0f, 0x96, 0xc6, 0x40, 0x0f, 0x97, 0xc7, 0x41, 0x0f, 0x98, 0xc0, 0x41, 0x0f,
+            0x99, 0xc1, 0x41, 0x0f, 0x9a, 0xc2, 0x41, 0x0f, 0x9b, 0xc3, 0x41, 0x0f, 0x9c, 0xc4, 0x41, 0x0f, 0x9d, 0xc5,
+            0x41, 0x0f, 0x9e, 0xc6, 0x41, 0x0f, 0x9f, 0xc7, 0x0f, 0x05,
         ];
-        let source = [BorrowedSource { guest_first: 0x5000, bytes: &bytes }];
+        let source = [BorrowedSource {
+            guest_first: 0x5000,
+            bytes: &bytes,
+        }];
         let executor = Executor::create().unwrap();
         let baseline_bytes = [0x39, 0xc0, 0x0f, 0x05];
-        let baseline_source = [BorrowedSource { guest_first: 0x6000, bytes: &baseline_bytes }];
-        let mut baseline = X86CpuState { rip: 0x6000, ..X86CpuState::default() };
+        let baseline_source = [BorrowedSource {
+            guest_first: 0x6000,
+            bytes: &baseline_bytes,
+        }];
+        let mut baseline = X86CpuState {
+            rip: 0x6000,
+            ..X86CpuState::default()
+        };
         let mut resolve = |_: u64, _: &mut [u8]| None;
-        executor.run_x86(&mut baseline, &baseline_source, 1, 1, 2, false, None, &mut resolve).unwrap();
-        let mut cpu = X86CpuState { rip: 0x5000, ..X86CpuState::default() };
+        executor
+            .run_x86(&mut baseline, &baseline_source, 1, 1, 2, false, None, &mut resolve)
+            .unwrap();
+        let mut cpu = X86CpuState {
+            rip: 0x5000,
+            ..X86CpuState::default()
+        };
         for (index, register) in cpu.registers.iter_mut().enumerate() {
             *register = 0x1234_5678_9abc_de00 | index as u64;
         }
-        let outcome = executor.run_x86(&mut cpu, &source, 1, 1, 18, false, None, &mut resolve).unwrap().0;
+        let outcome = executor
+            .run_x86(&mut cpu, &source, 1, 1, 18, false, None, &mut resolve)
+            .unwrap()
+            .0;
         assert_eq!(outcome.exit, Exit::Syscall);
         assert_eq!(cpu.flags, baseline.flags);
         let expected = [0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0];
@@ -3308,27 +3876,39 @@ mod test {
     #[test]
     fn x86_set_destinations() {
         let bytes = [
-            0x39, 0xc0,
-            0x0f, 0x95, 0xc4,
-            0x0f, 0x94, 0x03,
-            0x0f, 0x95, 0x43, 0x01,
-            0x0f, 0x05,
+            0x39, 0xc0, 0x0f, 0x95, 0xc4, 0x0f, 0x94, 0x03, 0x0f, 0x95, 0x43, 0x01, 0x0f, 0x05,
         ];
-        let source = [BorrowedSource { guest_first: 0x5000, bytes: &bytes }];
+        let source = [BorrowedSource {
+            guest_first: 0x5000,
+            bytes: &bytes,
+        }];
         let executor = Executor::create().unwrap();
         let mut storage = [0xaa_u8; 2];
         let view = ProjectionView {
-            guest_first: 0x7000, guest_last: 0x7002,
-            host_first: storage.as_mut_ptr() as usize as u64, mapping_incarnation: 7,
-            permissions: 3, reserved: 0,
+            guest_first: 0x7000,
+            guest_last: 0x7002,
+            host_first: storage.as_mut_ptr() as usize as u64,
+            mapping_incarnation: 7,
+            permissions: 3,
+            reserved: 0,
         };
-        let projection = Projection { views: &raw const view, count: 1, mapping_incarnation: 7, active: 0 };
-        let mut cpu = X86CpuState { rip: 0x5000, ..X86CpuState::default() };
+        let projection = Projection {
+            views: &raw const view,
+            count: 1,
+            mapping_incarnation: 7,
+            active: 0,
+        };
+        let mut cpu = X86CpuState {
+            rip: 0x5000,
+            ..X86CpuState::default()
+        };
         cpu.registers[0] = 0x1122_3344_5566_7788;
         cpu.registers[3] = 0x7000;
         let mut resolve = |_: u64, _: &mut [u8]| None;
         let outcome = executor
-            .run_x86(&mut cpu, &source, 7, 1, 5, false, Some(&projection), &mut resolve).unwrap().0;
+            .run_x86(&mut cpu, &source, 7, 1, 5, false, Some(&projection), &mut resolve)
+            .unwrap()
+            .0;
         assert_eq!(outcome.exit, Exit::Syscall);
         assert_eq!(cpu.registers[0], 0x1122_3344_5566_0088);
         assert_eq!(storage, [1, 0]);
@@ -3338,29 +3918,41 @@ mod test {
     #[test]
     fn x86_movzx_forms() {
         let bytes = [
-            0x0f, 0xb6, 0xc4,
-            0x40, 0x0f, 0xb6, 0xcc,
-            0x48, 0x0f, 0xb7, 0x13,
-            0x66, 0x0f, 0xb6, 0xf8,
-            0x0f, 0x05,
+            0x0f, 0xb6, 0xc4, 0x40, 0x0f, 0xb6, 0xcc, 0x48, 0x0f, 0xb7, 0x13, 0x66, 0x0f, 0xb6, 0xf8, 0x0f, 0x05,
         ];
-        let source = [BorrowedSource { guest_first: 0x5000, bytes: &bytes }];
+        let source = [BorrowedSource {
+            guest_first: 0x5000,
+            bytes: &bytes,
+        }];
         let executor = Executor::create().unwrap();
         let mut storage = 0x1234_u16.to_le_bytes();
         let view = ProjectionView {
-            guest_first: 0x7000, guest_last: 0x7002,
-            host_first: storage.as_mut_ptr() as usize as u64, mapping_incarnation: 9,
-            permissions: 1, reserved: 0,
+            guest_first: 0x7000,
+            guest_last: 0x7002,
+            host_first: storage.as_mut_ptr() as usize as u64,
+            mapping_incarnation: 9,
+            permissions: 1,
+            reserved: 0,
         };
-        let projection = Projection { views: &raw const view, count: 1, mapping_incarnation: 9, active: 0 };
-        let mut cpu = X86CpuState { rip: 0x5000, ..X86CpuState::default() };
+        let projection = Projection {
+            views: &raw const view,
+            count: 1,
+            mapping_incarnation: 9,
+            active: 0,
+        };
+        let mut cpu = X86CpuState {
+            rip: 0x5000,
+            ..X86CpuState::default()
+        };
         cpu.registers[0] = 0xffff_ffff_ffff_ab80;
         cpu.registers[3] = 0x7000;
         cpu.registers[4] = 0x8877_6655_4433_227d;
         cpu.registers[7] = 0x1122_3344_5566_7788;
         let mut resolve = |_: u64, _: &mut [u8]| None;
         let outcome = executor
-            .run_x86(&mut cpu, &source, 9, 1, 5, false, Some(&projection), &mut resolve).unwrap().0;
+            .run_x86(&mut cpu, &source, 9, 1, 5, false, Some(&projection), &mut resolve)
+            .unwrap()
+            .0;
         assert_eq!(outcome.exit, Exit::Syscall);
         assert_eq!(cpu.registers[0], 0xab);
         assert_eq!(cpu.registers[1], 0x7d);
@@ -3372,40 +3964,79 @@ mod test {
     #[test]
     fn x86_bitscan_forms() {
         let legacy_bytes = [0x0f, 0xbc, 0xc2, 0x0f, 0x94, 0xc1, 0x0f, 0x05];
-        let legacy_source = [BorrowedSource { guest_first: 0x5000, bytes: &legacy_bytes }];
+        let legacy_source = [BorrowedSource {
+            guest_first: 0x5000,
+            bytes: &legacy_bytes,
+        }];
         let executor = Executor::create().unwrap();
-        let mut legacy = X86CpuState { rip: 0x5000, ..X86CpuState::default() };
+        let mut legacy = X86CpuState {
+            rip: 0x5000,
+            ..X86CpuState::default()
+        };
         legacy.registers[0] = 0x1122_3344_5566_7788;
         let mut resolve = |_: u64, _: &mut [u8]| None;
-        executor.run_x86(&mut legacy, &legacy_source, 1, 1, 3, false, None, &mut resolve).unwrap();
+        executor
+            .run_x86(&mut legacy, &legacy_source, 1, 1, 3, false, None, &mut resolve)
+            .unwrap();
         assert_eq!(legacy.registers[0], 0x5566_7788);
         assert_eq!(legacy.registers[1] & 0xff, 1);
 
         let count_bytes = [
-            0xf3, 0x0f, 0xbc, 0xc2, 0x0f, 0x92, 0xc1, 0x0f, 0x94, 0xc3,
-            0x66, 0xf3, 0x0f, 0xbd, 0xc2, 0x0f, 0x05,
+            0xf3, 0x0f, 0xbc, 0xc2, 0x0f, 0x92, 0xc1, 0x0f, 0x94, 0xc3, 0x66, 0xf3, 0x0f, 0xbd, 0xc2, 0x0f, 0x05,
         ];
-        let count_source = [BorrowedSource { guest_first: 0x6000, bytes: &count_bytes }];
-        let mut count = X86CpuState { rip: 0x6000, ..X86CpuState::default() };
+        let count_source = [BorrowedSource {
+            guest_first: 0x6000,
+            bytes: &count_bytes,
+        }];
+        let mut count = X86CpuState {
+            rip: 0x6000,
+            ..X86CpuState::default()
+        };
         count.registers[0] = 0xaaaa_bbbb_cccc_dddd;
-        executor.run_x86(&mut count, &count_source, 1, 2, 5, false, None, &mut resolve).unwrap();
+        executor
+            .run_x86(&mut count, &count_source, 1, 2, 5, false, None, &mut resolve)
+            .unwrap();
         assert_eq!(count.registers[0] & 0xffff, 16);
         assert_eq!(count.registers[1] & 0xff, 1);
         assert_eq!(count.registers[3] & 0xff, 0);
 
         let memory_bytes = [0x48, 0x0f, 0xbd, 0x03, 0x0f, 0x05];
-        let memory_source = [BorrowedSource { guest_first: 0x7000, bytes: &memory_bytes }];
+        let memory_source = [BorrowedSource {
+            guest_first: 0x7000,
+            bytes: &memory_bytes,
+        }];
         let mut storage = 0x100_u64.to_le_bytes();
         let view = ProjectionView {
-            guest_first: 0x8000, guest_last: 0x8008,
-            host_first: storage.as_mut_ptr() as usize as u64, mapping_incarnation: 4,
-            permissions: 1, reserved: 0,
+            guest_first: 0x8000,
+            guest_last: 0x8008,
+            host_first: storage.as_mut_ptr() as usize as u64,
+            mapping_incarnation: 4,
+            permissions: 1,
+            reserved: 0,
         };
-        let projection = Projection { views: &raw const view, count: 1, mapping_incarnation: 4, active: 0 };
-        let mut memory = X86CpuState { rip: 0x7000, ..X86CpuState::default() };
+        let projection = Projection {
+            views: &raw const view,
+            count: 1,
+            mapping_incarnation: 4,
+            active: 0,
+        };
+        let mut memory = X86CpuState {
+            rip: 0x7000,
+            ..X86CpuState::default()
+        };
         memory.registers[3] = 0x8000;
         executor
-            .run_x86(&mut memory, &memory_source, 4, 1, 2, false, Some(&projection), &mut resolve).unwrap();
+            .run_x86(
+                &mut memory,
+                &memory_source,
+                4,
+                1,
+                2,
+                false,
+                Some(&projection),
+                &mut resolve,
+            )
+            .unwrap();
         assert_eq!(memory.registers[0], 8);
     }
 
@@ -3415,33 +4046,77 @@ mod test {
         let executor = Executor::create().unwrap();
         let mut storage = [0_u8; 64];
         storage[..16].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
-        let view = ProjectionView { guest_first: 0x8000, guest_last: 0x8040,
-            host_first: storage.as_mut_ptr() as usize as u64, mapping_incarnation: 12,
-            permissions: 3, reserved: 0 };
-        let projection = Projection { views: &raw const view, count: 1, mapping_incarnation: 12, active: 0 };
+        let view = ProjectionView {
+            guest_first: 0x8000,
+            guest_last: 0x8040,
+            host_first: storage.as_mut_ptr() as usize as u64,
+            mapping_incarnation: 12,
+            permissions: 3,
+            reserved: 0,
+        };
+        let projection = Projection {
+            views: &raw const view,
+            count: 1,
+            mapping_incarnation: 12,
+            active: 0,
+        };
         let mut resolve = |_: u64, _: &mut [u8]| None;
         let bytes = [0xf3, 0x48, 0xa5, 0x0f, 0x05];
-        let source = [BorrowedSource { guest_first: 0x5000, bytes: &bytes }];
-        let mut cpu = X86CpuState { rip: 0x5000, ..X86CpuState::default() };
+        let source = [BorrowedSource {
+            guest_first: 0x5000,
+            bytes: &bytes,
+        }];
+        let mut cpu = X86CpuState {
+            rip: 0x5000,
+            ..X86CpuState::default()
+        };
         cpu.flags = FlagState::from_bits(1 << 11);
-        cpu.registers[1] = 2; cpu.registers[6] = 0x8000; cpu.registers[7] = 0x8030;
-        let outcome = executor.run_x86(&mut cpu, &source, 12, 1, 100, false,
-            Some(&projection), &mut resolve).unwrap().0;
+        cpu.registers[1] = 2;
+        cpu.registers[6] = 0x8000;
+        cpu.registers[7] = 0x8030;
+        let outcome = executor
+            .run_x86(&mut cpu, &source, 12, 1, 100, false, Some(&projection), &mut resolve)
+            .unwrap()
+            .0;
         assert_eq!(outcome.exit, Exit::Syscall);
         assert_eq!(&storage[48..], &storage[..16]);
-        assert_eq!((cpu.registers[1], cpu.registers[6], cpu.registers[7]), (0, 0x8010, 0x8040));
+        assert_eq!(
+            (cpu.registers[1], cpu.registers[6], cpu.registers[7]),
+            (0, 0x8010, 0x8040)
+        );
 
         for (encoding, width) in [
-            (&[0xf3, 0xaa][..], 1usize), (&[0x66, 0xf3, 0xab][..], 2),
-            (&[0xf3, 0xab][..], 4), (&[0xf3, 0x48, 0xab][..], 8),
+            (&[0xf3, 0xaa][..], 1usize),
+            (&[0x66, 0xf3, 0xab][..], 2),
+            (&[0xf3, 0xab][..], 4),
+            (&[0xf3, 0x48, 0xab][..], 8),
         ] {
             storage[32..48].fill(0);
-            let mut code = encoding.to_vec(); code.extend_from_slice(&[0x0f, 0x05]);
-            let source = [BorrowedSource { guest_first: 0x6000, bytes: &code }];
-            let mut cpu = X86CpuState { rip: 0x6000, ..X86CpuState::default() };
-            cpu.registers[0] = 0x8877_6655_4433_2211; cpu.registers[1] = 2; cpu.registers[7] = 0x8020;
-            executor.run_x86(&mut cpu, &source, 12, 2 + width as u64, 100, false,
-                Some(&projection), &mut resolve).unwrap();
+            let mut code = encoding.to_vec();
+            code.extend_from_slice(&[0x0f, 0x05]);
+            let source = [BorrowedSource {
+                guest_first: 0x6000,
+                bytes: &code,
+            }];
+            let mut cpu = X86CpuState {
+                rip: 0x6000,
+                ..X86CpuState::default()
+            };
+            cpu.registers[0] = 0x8877_6655_4433_2211;
+            cpu.registers[1] = 2;
+            cpu.registers[7] = 0x8020;
+            executor
+                .run_x86(
+                    &mut cpu,
+                    &source,
+                    12,
+                    2 + width as u64,
+                    100,
+                    false,
+                    Some(&projection),
+                    &mut resolve,
+                )
+                .unwrap();
             let pattern = cpu.registers[0].to_le_bytes();
             assert_eq!(&storage[32..32 + width], &pattern[..width]);
             assert_eq!(&storage[32 + width..32 + width * 2], &pattern[..width]);
@@ -3449,21 +4124,37 @@ mod test {
         }
 
         let bytes = [0x48, 0xad, 0x0f, 0x05];
-        let source = [BorrowedSource { guest_first: 0x7000, bytes: &bytes }];
-        let mut cpu = X86CpuState { rip: 0x7000, ..X86CpuState::default() };
-        cpu.registers[6] = 0x8008; cpu.direction = true;
-        executor.run_x86(&mut cpu, &source, 12, 20, 4, false,
-            Some(&projection), &mut resolve).unwrap();
+        let source = [BorrowedSource {
+            guest_first: 0x7000,
+            bytes: &bytes,
+        }];
+        let mut cpu = X86CpuState {
+            rip: 0x7000,
+            ..X86CpuState::default()
+        };
+        cpu.registers[6] = 0x8008;
+        cpu.direction = true;
+        executor
+            .run_x86(&mut cpu, &source, 12, 20, 4, false, Some(&projection), &mut resolve)
+            .unwrap();
         assert_eq!(cpu.registers[0], 0x100f_0e0d_0c0b_0a09);
         assert_eq!(cpu.registers[6], 0x8000);
 
         let bytes = [0x67, 0xf3, 0xaa, 0x0f, 0x05];
-        let source = [BorrowedSource { guest_first: 0x7100, bytes: &bytes }];
-        let mut cpu = X86CpuState { rip: 0x7100, ..X86CpuState::default() };
-        cpu.registers[1] = 1 << 32; cpu.registers[7] = 0xffff_ffff_0000_8000;
+        let source = [BorrowedSource {
+            guest_first: 0x7100,
+            bytes: &bytes,
+        }];
+        let mut cpu = X86CpuState {
+            rip: 0x7100,
+            ..X86CpuState::default()
+        };
+        cpu.registers[1] = 1 << 32;
+        cpu.registers[7] = 0xffff_ffff_0000_8000;
         let before = storage;
-        executor.run_x86(&mut cpu, &source, 12, 21, 4, false,
-            Some(&projection), &mut resolve).unwrap();
+        executor
+            .run_x86(&mut cpu, &source, 12, 21, 4, false, Some(&projection), &mut resolve)
+            .unwrap();
         assert_eq!(storage, before);
         assert_eq!((cpu.registers[1], cpu.registers[7]), (1 << 32, 0xffff_ffff_0000_8000));
     }
@@ -3472,22 +4163,39 @@ mod test {
     #[test]
     fn x86_register_memory_alu_is_guarded() {
         let bytes = [0x4c, 0x01, 0x23, 0x48, 0x03, 0x03, 0x48, 0x3b, 0x0b, 0x0f, 0x05];
-        let source = [BorrowedSource { guest_first: 0x5000, bytes: &bytes }];
+        let source = [BorrowedSource {
+            guest_first: 0x5000,
+            bytes: &bytes,
+        }];
         let executor = Executor::create().unwrap();
         let mut storage = [0_u8; 16];
         storage[..8].copy_from_slice(&10_u64.to_le_bytes());
-        let view = ProjectionView { guest_first: 0x7000, guest_last: 0x7010,
-            host_first: storage.as_mut_ptr() as usize as u64, mapping_incarnation: 11,
-            permissions: 3, reserved: 0 };
-        let projection = Projection { views: &raw const view, count: 1, mapping_incarnation: 11, active: 0 };
-        let mut cpu = X86CpuState { rip: 0x5000, ..X86CpuState::default() };
+        let view = ProjectionView {
+            guest_first: 0x7000,
+            guest_last: 0x7010,
+            host_first: storage.as_mut_ptr() as usize as u64,
+            mapping_incarnation: 11,
+            permissions: 3,
+            reserved: 0,
+        };
+        let projection = Projection {
+            views: &raw const view,
+            count: 1,
+            mapping_incarnation: 11,
+            active: 0,
+        };
+        let mut cpu = X86CpuState {
+            rip: 0x5000,
+            ..X86CpuState::default()
+        };
         cpu.registers[0] = 2;
         cpu.registers[1] = 17;
         cpu.registers[3] = 0x7000;
         cpu.registers[12] = 5;
         let mut resolve = |_: u64, _: &mut [u8]| None;
         let (outcome, _, written) = executor
-            .run_x86(&mut cpu, &source, 11, 1, 8, false, Some(&projection), &mut resolve).unwrap();
+            .run_x86(&mut cpu, &source, 11, 1, 8, false, Some(&projection), &mut resolve)
+            .unwrap();
         assert_eq!(outcome.exit, Exit::Syscall);
         assert_eq!(u64::from_le_bytes(storage[..8].try_into().unwrap()), 15);
         assert_eq!(cpu.registers[0], 17);
@@ -3498,32 +4206,61 @@ mod test {
     #[test]
     fn x86_segment_bases_are_per_run_and_guarded() {
         let load = [0x64, 0x48, 0x8b, 0x04, 0x25, 0, 0, 0, 0, 0x0f, 0x05];
-        let source = [BorrowedSource { guest_first: 0x5000, bytes: &load }];
+        let source = [BorrowedSource {
+            guest_first: 0x5000,
+            bytes: &load,
+        }];
         let executor = Executor::create().unwrap();
         let mut storage = [0_u8; 32];
         storage[..8].copy_from_slice(&0x1122_3344_5566_7788_u64.to_le_bytes());
         storage[8..16].copy_from_slice(&0x8877_6655_4433_2211_u64.to_le_bytes());
-        let view = ProjectionView { guest_first: 0x7000, guest_last: 0x7020,
-            host_first: storage.as_mut_ptr() as usize as u64, mapping_incarnation: 10,
-            permissions: 3, reserved: 0 };
-        let projection = Projection { views: &raw const view, count: 1, mapping_incarnation: 10, active: 0 };
+        let view = ProjectionView {
+            guest_first: 0x7000,
+            guest_last: 0x7020,
+            host_first: storage.as_mut_ptr() as usize as u64,
+            mapping_incarnation: 10,
+            permissions: 3,
+            reserved: 0,
+        };
+        let projection = Projection {
+            views: &raw const view,
+            count: 1,
+            mapping_incarnation: 10,
+            active: 0,
+        };
         let mut resolve = |_: u64, _: &mut [u8]| None;
-        let mut first = X86CpuState { rip: 0x5000, fs_base: 0x7000, ..X86CpuState::default() };
-        executor.run_x86(&mut first, &source, 10, 1, 4, false, Some(&projection), &mut resolve).unwrap();
+        let mut first = X86CpuState {
+            rip: 0x5000,
+            fs_base: 0x7000,
+            ..X86CpuState::default()
+        };
+        executor
+            .run_x86(&mut first, &source, 10, 1, 4, false, Some(&projection), &mut resolve)
+            .unwrap();
         assert_eq!(first.registers[0], 0x1122_3344_5566_7788);
 
-        let mut second = X86CpuState { rip: 0x5000, fs_base: 0x7008, ..X86CpuState::default() };
-        executor.run_x86(&mut second, &source, 10, 1, 4, false, Some(&projection), &mut resolve).unwrap();
+        let mut second = X86CpuState {
+            rip: 0x5000,
+            fs_base: 0x7008,
+            ..X86CpuState::default()
+        };
+        executor
+            .run_x86(&mut second, &source, 10, 1, 4, false, Some(&projection), &mut resolve)
+            .unwrap();
         assert_eq!(second.registers[0], 0x8877_6655_4433_2211);
         assert_eq!(first.fs_base, 0x7000);
 
         let store = [0x65, 0x48, 0x89, 0x04, 0x25, 0, 0, 0, 0, 0x0f, 0x05];
-        let source = [BorrowedSource { guest_first: 0x6000, bytes: &store }];
+        let source = [BorrowedSource {
+            guest_first: 0x6000,
+            bytes: &store,
+        }];
         let before = storage;
         second.rip = 0x6000;
         second.gs_base = 0x7020;
         let (fault, _, written) = executor
-            .run_x86(&mut second, &source, 10, 2, 2, false, Some(&projection), &mut resolve).unwrap();
+            .run_x86(&mut second, &source, 10, 2, 2, false, Some(&projection), &mut resolve)
+            .unwrap();
         assert_eq!(fault.exit, Exit::Fallback);
         assert_eq!(storage, before);
         assert!(!written);
@@ -3534,18 +4271,35 @@ mod test {
     #[test]
     fn x86_immediate_memory_stores_are_guarded() {
         let bytes = [0x48, 0xc7, 0x44, 0x24, 0x08, 0x80, 0xff, 0xff, 0xff, 0x0f, 0x05];
-        let source = [BorrowedSource { guest_first: 0x5000, bytes: &bytes }];
+        let source = [BorrowedSource {
+            guest_first: 0x5000,
+            bytes: &bytes,
+        }];
         let executor = Executor::create().unwrap();
         let mut storage = [0_u8; 32];
-        let view = ProjectionView { guest_first: 0x7000, guest_last: 0x7020,
-            host_first: storage.as_mut_ptr() as usize as u64, mapping_incarnation: 9,
-            permissions: 3, reserved: 0 };
-        let projection = Projection { views: &raw const view, count: 1, mapping_incarnation: 9, active: 0 };
-        let mut cpu = X86CpuState { rip: 0x5000, ..X86CpuState::default() };
+        let view = ProjectionView {
+            guest_first: 0x7000,
+            guest_last: 0x7020,
+            host_first: storage.as_mut_ptr() as usize as u64,
+            mapping_incarnation: 9,
+            permissions: 3,
+            reserved: 0,
+        };
+        let projection = Projection {
+            views: &raw const view,
+            count: 1,
+            mapping_incarnation: 9,
+            active: 0,
+        };
+        let mut cpu = X86CpuState {
+            rip: 0x5000,
+            ..X86CpuState::default()
+        };
         cpu.registers[4] = 0x7000;
         let mut resolve = |_: u64, _: &mut [u8]| None;
         let (outcome, _, written) = executor
-            .run_x86(&mut cpu, &source, 9, 1, 8, false, Some(&projection), &mut resolve).unwrap();
+            .run_x86(&mut cpu, &source, 9, 1, 8, false, Some(&projection), &mut resolve)
+            .unwrap();
         assert_eq!(outcome.exit, Exit::Syscall);
         assert_eq!(&storage[8..16], &(u64::MAX - 127).to_le_bytes());
         assert!(written);
@@ -3554,7 +4308,8 @@ mod test {
         cpu.rip = 0x5000;
         cpu.registers[4] = 0x7019;
         let (fault, _, written) = executor
-            .run_x86(&mut cpu, &source, 9, 2, 2, false, Some(&projection), &mut resolve).unwrap();
+            .run_x86(&mut cpu, &source, 9, 2, 2, false, Some(&projection), &mut resolve)
+            .unwrap();
         assert_eq!(fault.exit, Exit::Fallback);
         assert_eq!(storage, [0xa5; 32]);
         assert!(!written);
@@ -3564,20 +4319,35 @@ mod test {
     #[test]
     fn x86_executable_store_forces_epoch_at_block_boundary() {
         let bytes = [0x48, 0xc7, 0x04, 0x24, 0x2a, 0, 0, 0, 0x0f, 0x05];
-        let source = [BorrowedSource { guest_first: 0x5000, bytes: &bytes }];
+        let source = [BorrowedSource {
+            guest_first: 0x5000,
+            bytes: &bytes,
+        }];
         let executor = Executor::create().unwrap();
         let mut storage = [0_u8; 16];
         let view = ProjectionView {
-            guest_first: 0x7000, guest_last: 0x7010,
-            host_first: storage.as_mut_ptr() as usize as u64, mapping_incarnation: 13,
-            permissions: 7, reserved: 0,
+            guest_first: 0x7000,
+            guest_last: 0x7010,
+            host_first: storage.as_mut_ptr() as usize as u64,
+            mapping_incarnation: 13,
+            permissions: 7,
+            reserved: 0,
         };
-        let projection = Projection { views: &raw const view, count: 1, mapping_incarnation: 13, active: 0 };
-        let mut cpu = X86CpuState { rip: 0x5000, ..X86CpuState::default() };
+        let projection = Projection {
+            views: &raw const view,
+            count: 1,
+            mapping_incarnation: 13,
+            active: 0,
+        };
+        let mut cpu = X86CpuState {
+            rip: 0x5000,
+            ..X86CpuState::default()
+        };
         cpu.registers[4] = 0x7000;
         let mut resolve = |_: u64, _: &mut [u8]| None;
         let (outcome, _, written) = executor
-            .run_x86(&mut cpu, &source, 13, 1, 2, false, Some(&projection), &mut resolve).unwrap();
+            .run_x86(&mut cpu, &source, 13, 1, 2, false, Some(&projection), &mut resolve)
+            .unwrap();
         assert_eq!(outcome.exit, Exit::Epoch);
         assert_eq!(cpu.rip, 0x500a);
         assert_eq!(u64::from_le_bytes(storage[..8].try_into().unwrap()), 42);
@@ -3591,7 +4361,13 @@ mod test {
             (&[0x88, 0x44, 0x24, 0x10, 0x0f, 0x05], 0, 0x1122, 1, &[0x22]),
             (&[0x88, 0x64, 0x24, 0x10, 0x0f, 0x05], 0, 0x1122, 1, &[0x11]),
             (&[0x66, 0x89, 0x44, 0x24, 0x10, 0x0f, 0x05], 0, 0x3344, 2, &[0x44, 0x33]),
-            (&[0x89, 0x44, 0x24, 0x10, 0x0f, 0x05], 0, 0x5566_7788, 4, &[0x88, 0x77, 0x66, 0x55]),
+            (
+                &[0x89, 0x44, 0x24, 0x10, 0x0f, 0x05],
+                0,
+                0x5566_7788,
+                4,
+                &[0x88, 0x77, 0x66, 0x55],
+            ),
             (
                 &[0x4c, 0x89, 0x44, 0x24, 0x10, 0x0f, 0x05],
                 8,
@@ -3604,7 +4380,10 @@ mod test {
         let mut resolve = |_: u64, _: &mut [u8]| None;
         for (epoch, &(bytes, register, value, width, expected)) in cases.iter().enumerate() {
             let mut storage = [0_u8; 64];
-            let source = [BorrowedSource { guest_first: 0x6000, bytes }];
+            let source = [BorrowedSource {
+                guest_first: 0x6000,
+                bytes,
+            }];
             let view = ProjectionView {
                 guest_first: 0x7000,
                 guest_last: 0x7040,
@@ -3613,19 +4392,39 @@ mod test {
                 permissions: 3,
                 reserved: 0,
             };
-            let projection = Projection { views: &raw const view, count: 1, mapping_incarnation: 1, active: 0 };
-            let mut cpu = X86CpuState { rip: 0x6000, ..X86CpuState::default() };
+            let projection = Projection {
+                views: &raw const view,
+                count: 1,
+                mapping_incarnation: 1,
+                active: 0,
+            };
+            let mut cpu = X86CpuState {
+                rip: 0x6000,
+                ..X86CpuState::default()
+            };
             cpu.registers[4] = 0x7000;
             cpu.registers[register] = value;
             let (outcome, _, written) = executor
-                .run_x86(&mut cpu, &source, 1, epoch as u64 + 10, 2, false, Some(&projection), &mut resolve)
+                .run_x86(
+                    &mut cpu,
+                    &source,
+                    1,
+                    epoch as u64 + 10,
+                    2,
+                    false,
+                    Some(&projection),
+                    &mut resolve,
+                )
                 .unwrap();
             assert_eq!(outcome.exit, Exit::Syscall);
             assert!(written);
             assert_eq!(&storage[16..16 + width], expected);
         }
         let bytes = [0x48, 0x89, 0x44, 0x24, 0x10];
-        let source = [BorrowedSource { guest_first: 0x6000, bytes: &bytes }];
+        let source = [BorrowedSource {
+            guest_first: 0x6000,
+            bytes: &bytes,
+        }];
         let storage = [0_u8; 64];
         let view = ProjectionView {
             guest_first: 0x7000,
@@ -3635,8 +4434,16 @@ mod test {
             permissions: 1,
             reserved: 0,
         };
-        let projection = Projection { views: &raw const view, count: 1, mapping_incarnation: 1, active: 0 };
-        let mut cpu = X86CpuState { rip: 0x6000, ..X86CpuState::default() };
+        let projection = Projection {
+            views: &raw const view,
+            count: 1,
+            mapping_incarnation: 1,
+            active: 0,
+        };
+        let mut cpu = X86CpuState {
+            rip: 0x6000,
+            ..X86CpuState::default()
+        };
         cpu.registers[0] = 0xdead_beef;
         cpu.registers[4] = 0x7000;
         let expected = cpu.clone();
@@ -3655,57 +4462,137 @@ mod test {
         let executor = Executor::create().unwrap();
         let mut resolve = |_: u64, _: &mut [u8]| None;
         let mut run = |entry: u64, bytes: &[(u64, &[u8])], registers: [u64; 16], storage: &mut [u8; 64], epoch| {
-            let sources: Vec<_> = bytes.iter().map(|&(guest_first, bytes)| BorrowedSource { guest_first, bytes }).collect();
-            let view = ProjectionView { guest_first: 0x7000, guest_last: 0x7040,
-                host_first: storage.as_mut_ptr() as usize as u64, mapping_incarnation: 1,
-                permissions: 3, reserved: 0 };
-            let projection = Projection { views: &raw const view, count: 1, mapping_incarnation: 1, active: 0 };
-            let mut cpu = X86CpuState { rip: entry, registers, ..X86CpuState::default() };
-            let outcome = executor.run_x86(&mut cpu, &sources, 1, epoch, 4, false,
-                                           Some(&projection), &mut resolve)
-                .unwrap_or_else(|()| panic!("native call failed at {entry:#x}")).0;
+            let sources: Vec<_> = bytes
+                .iter()
+                .map(|&(guest_first, bytes)| BorrowedSource { guest_first, bytes })
+                .collect();
+            let view = ProjectionView {
+                guest_first: 0x7000,
+                guest_last: 0x7040,
+                host_first: storage.as_mut_ptr() as usize as u64,
+                mapping_incarnation: 1,
+                permissions: 3,
+                reserved: 0,
+            };
+            let projection = Projection {
+                views: &raw const view,
+                count: 1,
+                mapping_incarnation: 1,
+                active: 0,
+            };
+            let mut cpu = X86CpuState {
+                rip: entry,
+                registers,
+                ..X86CpuState::default()
+            };
+            let outcome = executor
+                .run_x86(&mut cpu, &sources, 1, epoch, 4, false, Some(&projection), &mut resolve)
+                .unwrap_or_else(|()| panic!("native call failed at {entry:#x}"))
+                .0;
             (cpu, outcome)
         };
 
         let direct = [0xe8, 2, 0, 0, 0, 0x0f, 0x05, 0xc3];
         let mut storage = [0; 64];
-        let mut registers = [0; 16]; registers[4] = 0x7030;
+        let mut registers = [0; 16];
+        registers[4] = 0x7030;
         let (cpu, outcome) = run(0x6000, &[(0x6000, &direct)], registers, &mut storage, 201);
         assert_eq!(outcome.exit, Exit::Syscall);
         assert_eq!(cpu.registers[4], 0x7030);
         assert_eq!(u64::from_le_bytes(storage[40..48].try_into().unwrap()), 0x6005);
 
-        storage = [0; 64]; storage[..8].copy_from_slice(&0x6200_u64.to_le_bytes());
-        registers = [0; 16]; registers[4] = 0x7000;
-        let ret = [0xc2, 0x10, 0x00]; let syscall = [0x0f, 0x05];
-        let (cpu, outcome) = run(0x6100, &[(0x6100, &ret), (0x6200, &syscall)], registers, &mut storage, 202);
-        assert_eq!(outcome.exit, Exit::Syscall); assert_eq!(cpu.registers[4], 0x7018);
+        storage = [0; 64];
+        storage[..8].copy_from_slice(&0x6200_u64.to_le_bytes());
+        registers = [0; 16];
+        registers[4] = 0x7000;
+        let ret = [0xc2, 0x10, 0x00];
+        let syscall = [0x0f, 0x05];
+        let (cpu, outcome) = run(
+            0x6100,
+            &[(0x6100, &ret), (0x6200, &syscall)],
+            registers,
+            &mut storage,
+            202,
+        );
+        assert_eq!(outcome.exit, Exit::Syscall);
+        assert_eq!(cpu.registers[4], 0x7018);
 
-        let call_register = [0xff, 0xd0, 0x0f, 0x05]; let return_code = [0xc3];
-        storage = [0; 64]; registers = [0; 16]; registers[0] = 0x6400; registers[4] = 0x7030;
-        let (cpu, outcome) = run(0x6300, &[(0x6300, &call_register), (0x6400, &return_code)], registers,
-                                 &mut storage, 203);
-        assert_eq!(outcome.exit, Exit::Syscall); assert_eq!(cpu.registers[4], 0x7030);
+        let call_register = [0xff, 0xd0, 0x0f, 0x05];
+        let return_code = [0xc3];
+        storage = [0; 64];
+        registers = [0; 16];
+        registers[0] = 0x6400;
+        registers[4] = 0x7030;
+        let (cpu, outcome) = run(
+            0x6300,
+            &[(0x6300, &call_register), (0x6400, &return_code)],
+            registers,
+            &mut storage,
+            203,
+        );
+        assert_eq!(outcome.exit, Exit::Syscall);
+        assert_eq!(cpu.registers[4], 0x7030);
 
         let call_memory = [0xff, 0x13, 0x0f, 0x05];
-        storage = [0; 64]; storage[..8].copy_from_slice(&0x6400_u64.to_le_bytes());
-        registers = [0; 16]; registers[3] = 0x7000; registers[4] = 0x7030;
-        let (cpu, outcome) = run(0x6500, &[(0x6500, &call_memory), (0x6400, &return_code)], registers,
-                                 &mut storage, 204);
-        assert_eq!(outcome.exit, Exit::Syscall); assert_eq!(cpu.registers[4], 0x7030);
+        storage = [0; 64];
+        storage[..8].copy_from_slice(&0x6400_u64.to_le_bytes());
+        registers = [0; 16];
+        registers[3] = 0x7000;
+        registers[4] = 0x7030;
+        let (cpu, outcome) = run(
+            0x6500,
+            &[(0x6500, &call_memory), (0x6400, &return_code)],
+            registers,
+            &mut storage,
+            204,
+        );
+        assert_eq!(outcome.exit, Exit::Syscall);
+        assert_eq!(cpu.registers[4], 0x7030);
 
-        let source = [BorrowedSource { guest_first: 0x6000, bytes: &direct }];
-        storage = [0; 64]; registers = [0; 16]; registers[4] = 0x7030;
-        for (epoch, permissions, entry, bytes) in [(205, 1, 0x6000, source.as_slice()),
-            (206, 2, 0x6100, [BorrowedSource { guest_first: 0x6100, bytes: &ret }].as_slice())] {
-            let view = ProjectionView { guest_first: 0x7000, guest_last: 0x7040,
-                host_first: storage.as_mut_ptr() as usize as u64, mapping_incarnation: 1,
-                permissions, reserved: 0 };
-            let projection = Projection { views: &raw const view, count: 1, mapping_incarnation: 1, active: 0 };
+        let source = [BorrowedSource {
+            guest_first: 0x6000,
+            bytes: &direct,
+        }];
+        storage = [0; 64];
+        registers = [0; 16];
+        registers[4] = 0x7030;
+        for (epoch, permissions, entry, bytes) in [
+            (205, 1, 0x6000, source.as_slice()),
+            (
+                206,
+                2,
+                0x6100,
+                [BorrowedSource {
+                    guest_first: 0x6100,
+                    bytes: &ret,
+                }]
+                .as_slice(),
+            ),
+        ] {
+            let view = ProjectionView {
+                guest_first: 0x7000,
+                guest_last: 0x7040,
+                host_first: storage.as_mut_ptr() as usize as u64,
+                mapping_incarnation: 1,
+                permissions,
+                reserved: 0,
+            };
+            let projection = Projection {
+                views: &raw const view,
+                count: 1,
+                mapping_incarnation: 1,
+                active: 0,
+            };
             let before = storage;
-            let mut cpu = X86CpuState { rip: entry, registers, ..X86CpuState::default() };
-            let outcome = executor.run_x86(&mut cpu, bytes, 1, epoch, 1, false,
-                                           Some(&projection), &mut resolve).unwrap().0;
+            let mut cpu = X86CpuState {
+                rip: entry,
+                registers,
+                ..X86CpuState::default()
+            };
+            let outcome = executor
+                .run_x86(&mut cpu, bytes, 1, epoch, 1, false, Some(&projection), &mut resolve)
+                .unwrap()
+                .0;
             assert_eq!(outcome.exit, Exit::Fallback);
             assert_eq!(cpu.registers[4], 0x7030);
             assert_eq!(storage, before);
@@ -3720,9 +4607,7 @@ mod test {
             0x54ffffe1,     // b.ne 0x4000
             0xd4000001,     // svc
         ];
-        let bytes = unsafe {
-            std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), std::mem::size_of_val(&words))
-        };
+        let bytes = unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), std::mem::size_of_val(&words)) };
         let span = SourceSpan {
             guest_first: 0x4000,
             bytes: bytes.as_ptr(),
@@ -3761,9 +4646,7 @@ mod test {
             0xd61f0020,     // br x1
             0xd4000001,     // svc
         ];
-        let bytes = unsafe {
-            std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), std::mem::size_of_val(&words))
-        };
+        let bytes = unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), std::mem::size_of_val(&words)) };
         let span = SourceSpan {
             guest_first: 0x4000,
             bytes: bytes.as_ptr(),
@@ -3795,11 +4678,16 @@ mod test {
         assert_eq!((outcome.4, outcome.5), (0, 30_000_000));
         assert_eq!(cpu.registers[0], 0);
         assert_eq!(cpu.pc, 0x400c);
-        executor.invalidate(0x4000, 0x4004, 1).expect("invalidate patched source");
+        executor
+            .invalidate(0x4000, 0x4004, 1)
+            .expect("invalidate patched source");
         cpu.pc = 0x4000;
         cpu.registers[0] = 10;
         assert_eq!(
-            executor.run_aarch64(&mut cpu, &source, None, 1, 31, None, None).unwrap().0,
+            executor
+                .run_aarch64(&mut cpu, &source, None, 1, 31, None, None)
+                .unwrap()
+                .0,
             Exit::Syscall,
         );
         assert_eq!(cpu.registers[0], 0);
@@ -3811,32 +4699,62 @@ mod test {
         let branch = 0xd61f0020_u32; // br x1
         let service = 0xd4000001_u32; // svc
         let spans = [
-            SourceSpan { guest_first: 0x4000, bytes: (&raw const branch).cast(), size: 4,
-                         mapping_incarnation: 1, instruction_epoch: 2 },
-            SourceSpan { guest_first: 0x5000, bytes: (&raw const service).cast(), size: 4,
-                         mapping_incarnation: 1, instruction_epoch: 2 },
+            SourceSpan {
+                guest_first: 0x4000,
+                bytes: (&raw const branch).cast(),
+                size: 4,
+                mapping_incarnation: 1,
+                instruction_epoch: 2,
+            },
+            SourceSpan {
+                guest_first: 0x5000,
+                bytes: (&raw const service).cast(),
+                size: 4,
+                mapping_incarnation: 1,
+                instruction_epoch: 2,
+            },
             /* (target >> 2) & 0xffff is identical to 0x5000. */
-            SourceSpan { guest_first: 0x45000, bytes: (&raw const service).cast(), size: 4,
-                         mapping_incarnation: 1, instruction_epoch: 2 },
+            SourceSpan {
+                guest_first: 0x45000,
+                bytes: (&raw const service).cast(),
+                size: 4,
+                mapping_incarnation: 1,
+                instruction_epoch: 2,
+            },
         ];
-        let source = Source { spans: spans.as_ptr(), span_count: spans.len(),
-                              mapping_incarnation: 1, instruction_epoch: 2 };
+        let source = Source {
+            spans: spans.as_ptr(),
+            span_count: spans.len(),
+            mapping_incarnation: 1,
+            instruction_epoch: 2,
+        };
         let executor = Executor::create().expect("native executor");
         executor.reset(1).expect("initial epoch");
         for target in [0x5000, 0x5000, 0x45000, 0x5000, 0x45000] {
-            let mut cpu = Aarch64CpuState { pc: 0x4000,
+            let mut cpu = Aarch64CpuState {
+                pc: 0x4000,
                 registers: std::array::from_fn(|index| if index == 1 { target } else { 0 }),
-                ..Aarch64CpuState::default() };
+                ..Aarch64CpuState::default()
+            };
             let outcome = executor.run_aarch64(&mut cpu, &source, None, 1, 2, None, None).unwrap();
             assert_eq!(outcome.0, Exit::Syscall, "target={target:#x}");
             assert_eq!(outcome.1, target, "target={target:#x}");
         }
-        executor.invalidate(0x45000, 0x45004, 1).expect("invalidate collided target");
-        let mut cpu = Aarch64CpuState { pc: 0x4000,
+        executor
+            .invalidate(0x45000, 0x45004, 1)
+            .expect("invalidate collided target");
+        let mut cpu = Aarch64CpuState {
+            pc: 0x4000,
             registers: std::array::from_fn(|index| if index == 1 { 0x45000 } else { 0 }),
-            ..Aarch64CpuState::default() };
-        assert_eq!(executor.run_aarch64(&mut cpu, &source, None, 1, 2, None, None).unwrap().0,
-                   Exit::Syscall);
+            ..Aarch64CpuState::default()
+        };
+        assert_eq!(
+            executor
+                .run_aarch64(&mut cpu, &source, None, 1, 2, None, None)
+                .unwrap()
+                .0,
+            Exit::Syscall
+        );
     }
 
     #[cfg(target_arch = "aarch64")]
@@ -3855,9 +4773,7 @@ mod test {
             0xa8c17bfd,     // ldp x29,x30,[sp],#16
             0xd65f03c0,     // ret
         ];
-        let bytes = unsafe {
-            std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), std::mem::size_of_val(&words))
-        };
+        let bytes = unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), std::mem::size_of_val(&words)) };
         let span = SourceSpan {
             guest_first: 0x4000,
             bytes: bytes.as_ptr(),
@@ -3906,7 +4822,10 @@ mod test {
             ..Aarch64CpuState::default()
         };
         assert_eq!(
-            executor.run_aarch64(&mut cpu, &source, Some(&projection), 1, 512, None, None).unwrap().0,
+            executor
+                .run_aarch64(&mut cpu, &source, Some(&projection), 1, 512, None, None)
+                .unwrap()
+                .0,
             Exit::Syscall
         );
         assert_eq!(cpu.registers[0], 32);
@@ -3919,7 +4838,10 @@ mod test {
             cpu.pc = 0x4000;
             cpu.sp = 0x1fff0;
             assert_eq!(
-                executor.run_aarch64(&mut cpu, &source, Some(&projection), 1, 512, None, None).unwrap().0,
+                executor
+                    .run_aarch64(&mut cpu, &source, Some(&projection), 1, 512, None, None)
+                    .unwrap()
+                    .0,
                 Exit::Syscall
             );
         }
@@ -3936,7 +4858,9 @@ mod test {
             sp: 0x1fff0,
             ..Aarch64CpuState::default()
         };
-        let one = executor.run_aarch64(&mut cpu, &source, Some(&projection), 1, 1, None, None).unwrap();
+        let one = executor
+            .run_aarch64(&mut cpu, &source, Some(&projection), 1, 1, None, None)
+            .unwrap();
         assert_eq!(one.0, Exit::Yield);
         assert_eq!((one.4, one.5), (0, 1));
         assert_eq!(cpu.pc, 0x4004);
@@ -3947,7 +4871,9 @@ mod test {
             sp: 0x1fff0,
             ..Aarch64CpuState::default()
         };
-        let two = executor.run_aarch64(&mut cpu, &source, Some(&projection), 1, 2, None, None).unwrap();
+        let two = executor
+            .run_aarch64(&mut cpu, &source, Some(&projection), 1, 2, None, None)
+            .unwrap();
         assert_eq!(two.0, Exit::Yield);
         assert_eq!((two.4, two.5), (0, 2));
         assert_eq!(cpu.pc, 0x400c);
@@ -3962,9 +4888,7 @@ mod test {
             0xf900_0820_u32, // str x0,[x1,#16]
             0xd400_0001,     // svc
         ];
-        let bytes = unsafe {
-            std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), std::mem::size_of_val(&words))
-        };
+        let bytes = unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), std::mem::size_of_val(&words)) };
         let span = SourceSpan {
             guest_first: 0x4000,
             bytes: bytes.as_ptr(),
@@ -4007,21 +4931,35 @@ mod test {
         let executor = Executor::create().expect("native executor");
         executor.reset(7).expect("mapping epoch");
         let value = 0x1122_3344_5566_7788_u64;
-        let mut cpu = Aarch64CpuState { pc: 0x4000, ..Aarch64CpuState::default() };
+        let mut cpu = Aarch64CpuState {
+            pc: 0x4000,
+            ..Aarch64CpuState::default()
+        };
         cpu.registers[0] = value;
         cpu.registers[1] = 0x8000;
-        let outcome = executor.run_aarch64(&mut cpu, &source, Some(&projection), 7, 3, None, None).unwrap();
+        let outcome = executor
+            .run_aarch64(&mut cpu, &source, Some(&projection), 7, 3, None, None)
+            .unwrap();
         assert_eq!(outcome.0, Exit::Syscall);
         assert_eq!(u64::from_le_bytes(writable[..8].try_into().unwrap()), value);
         assert_eq!(low, [0; 16]);
-        let NativeWrites::Exact(ranges) = outcome.6 else { panic!("expected exact dirty publication") };
+        let NativeWrites::Exact(ranges) = outcome.6 else {
+            panic!("expected exact dirty publication")
+        };
         assert_eq!(u64::from_le_bytes(writable[16..24].try_into().unwrap()), value);
         assert_eq!(ranges.len(), 2);
         assert_eq!((ranges[0].start().get(), ranges[0].end().get()), (0x8000, 0x8008));
         assert_eq!((ranges[1].start().get(), ranges[1].end().get()), (0x8010, 0x8018));
 
-        let invalid_active = Projection { active: 2, ..projection };
-        assert!(executor.run_aarch64(&mut cpu, &source, Some(&invalid_active), 7, 1, None, None).is_err());
+        let invalid_active = Projection {
+            active: 2,
+            ..projection
+        };
+        assert!(
+            executor
+                .run_aarch64(&mut cpu, &source, Some(&invalid_active), 7, 1, None, None)
+                .is_err()
+        );
         let overlapping = [
             ProjectionView {
                 guest_first: 0x1000,
@@ -4040,8 +4978,16 @@ mod test {
                 reserved: 0,
             },
         ];
-        let invalid_overlap = Projection { views: overlapping.as_ptr(), active: 0, ..projection };
-        assert!(executor.run_aarch64(&mut cpu, &source, Some(&invalid_overlap), 7, 1, None, None).is_err());
+        let invalid_overlap = Projection {
+            views: overlapping.as_ptr(),
+            active: 0,
+            ..projection
+        };
+        assert!(
+            executor
+                .run_aarch64(&mut cpu, &source, Some(&invalid_overlap), 7, 1, None, None)
+                .is_err()
+        );
     }
 
     #[test]
@@ -4051,9 +4997,7 @@ mod test {
             0xf900_0040_u32, // str x0,[x2]
             0xd400_0001,     // svc
         ];
-        let bytes = unsafe {
-            std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), std::mem::size_of_val(&words))
-        };
+        let bytes = unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), std::mem::size_of_val(&words)) };
         let span = SourceSpan {
             guest_first: 0x5000,
             bytes: bytes.as_ptr(),
@@ -4097,22 +5041,35 @@ mod test {
         let executor = Executor::create().expect("native executor");
         executor.reset(8).expect("mapping epoch");
         let value = 0xaabb_ccdd_1122_3344_u64;
-        let mut cpu = Aarch64CpuState { pc: 0x5000, ..Aarch64CpuState::default() };
+        let mut cpu = Aarch64CpuState {
+            pc: 0x5000,
+            ..Aarch64CpuState::default()
+        };
         cpu.registers[0] = value;
         cpu.registers[1] = 0x1000;
         cpu.registers[2] = 0x8000;
-        let outcome = executor.run_aarch64(&mut cpu, &source, Some(&projection), 8, 3, None, None).unwrap();
+        let outcome = executor
+            .run_aarch64(&mut cpu, &source, Some(&projection), 8, 3, None, None)
+            .unwrap();
         assert_eq!(outcome.0, Exit::Syscall);
         assert_eq!(u64::from_le_bytes(low[..8].try_into().unwrap()), value);
         assert_eq!(u64::from_le_bytes(high[..8].try_into().unwrap()), value);
-        let NativeWrites::Exact(ranges) = outcome.6 else { panic!("expected exact dirty publication") };
+        let NativeWrites::Exact(ranges) = outcome.6 else {
+            panic!("expected exact dirty publication")
+        };
         assert_eq!(ranges.len(), 2);
         assert_eq!((ranges[0].start().get(), ranges[0].end().get()), (0x1000, 0x1008));
         assert_eq!((ranges[1].start().get(), ranges[1].end().get()), (0x8000, 0x8008));
 
         views[0].permissions = u32::from(Protection::READ.bits());
-        let denied_projection = Projection { views: views.as_ptr(), ..projection };
-        let mut denied = Aarch64CpuState { pc: 0x5000, ..Aarch64CpuState::default() };
+        let denied_projection = Projection {
+            views: views.as_ptr(),
+            ..projection
+        };
+        let mut denied = Aarch64CpuState {
+            pc: 0x5000,
+            ..Aarch64CpuState::default()
+        };
         denied.registers[0] = 0xffff_ffff_ffff_ffff;
         denied.registers[1] = 0x1000;
         let denied_outcome = executor
@@ -4131,10 +5088,18 @@ mod test {
         assert!(!token.is_set());
         let word = 0x1400_0000_u32; // b .
         let span = SourceSpan {
-            guest_first: 0x4000, bytes: (&raw const word).cast(), size: std::mem::size_of_val(&word),
-            mapping_incarnation: 1, instruction_epoch: 1,
+            guest_first: 0x4000,
+            bytes: (&raw const word).cast(),
+            size: std::mem::size_of_val(&word),
+            mapping_incarnation: 1,
+            instruction_epoch: 1,
         };
-        let source = Source { spans: &raw const span, span_count: 1, mapping_incarnation: 1, instruction_epoch: 1 };
+        let source = Source {
+            spans: &raw const span,
+            span_count: 1,
+            mapping_incarnation: 1,
+            instruction_epoch: 1,
+        };
         let setter = {
             let token = token.clone();
             std::thread::spawn(move || {
@@ -4142,7 +5107,10 @@ mod test {
                 token.set(true).unwrap();
             })
         };
-        let mut cpu = Aarch64CpuState { pc: 0x4000, ..Aarch64CpuState::default() };
+        let mut cpu = Aarch64CpuState {
+            pc: 0x4000,
+            ..Aarch64CpuState::default()
+        };
         let outcome = executor
             .run_aarch64_inner(&mut cpu, &source, None, 1, u64::MAX / 2, None, None, Some(&token), None)
             .expect("interruptible run");
