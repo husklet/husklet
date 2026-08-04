@@ -3,7 +3,8 @@
 mod exec;
 
 pub use exec::{
-    ExecLoadContext, ExecutionImageBuilder, Image, Participant, PreparedLoaderExec, SourceFactory, SpaceFactory,
+    ExecLoadContext, ExecutionImageBuilder, Image, LoadFailureReporter, Participant, PreparedLoaderExec, SourceFactory,
+    SpaceFactory,
 };
 
 #[cfg(test)]

@@ -114,8 +114,8 @@ pub use hl_vfs::{
 pub use hl_vfs::{ProcfsInternetSocketView, ProcfsNetworkInterfaceView, ProcfsNetworkView, ProcfsUnixSocketView};
 pub use ipc::ExitHandler as IpcExitHandler;
 pub use loader::{
-    ExecLoadContext, ExecutionImageBuilder, Image as LoaderExecImage, Participant as LoaderExecParticipant,
-    PreparedLoaderExec, SourceFactory, SpaceFactory,
+    ExecLoadContext, ExecutionImageBuilder, Image as LoaderExecImage, LoadFailureReporter,
+    Participant as LoaderExecParticipant, PreparedLoaderExec, SourceFactory, SpaceFactory,
 };
 pub use lock_exit::VfsLockExit;
 pub use memory::Exit as MemoryExit;

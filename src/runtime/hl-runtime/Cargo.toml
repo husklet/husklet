@@ -15,6 +15,7 @@ hl-checkpoint = { path = "../hl-checkpoint" }
 hl-descriptor = { path = "../hl-descriptor" }
 hl-event = { path = "../hl-event" }
 hl-linux = { path = "../hl-linux" }
+hl-log = { path = "../../packages/hl-log" }
 hl-loader = { path = "../hl-loader" }
 hl-task = { path = "../hl-task" }
 hl-memory = { path = "../hl-memory" }

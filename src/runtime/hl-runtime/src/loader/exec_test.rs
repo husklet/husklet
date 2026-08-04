@@ -1,6 +1,6 @@
 use crate::{
-    ExecLoadContext, ExecutionImageBuilder, LoaderExecImage, LoaderExecParticipant, PreparedExecParticipant,
-    RuntimeExecError, RuntimeExecParticipant, SourceFactory, SpaceFactory,
+    ExecLoadContext, ExecutionImageBuilder, LoadFailureReporter, LoaderExecImage, LoaderExecParticipant,
+    PreparedExecParticipant, RuntimeExecError, RuntimeExecParticipant, SourceFactory, SpaceFactory,
 };
 use hl_isa::GuestArchitecture;
 use hl_loader::{
@@ -10,7 +10,7 @@ use hl_loader::{
 };
 use hl_task::{ProcessCredentials, ProcessLimits, RegistryConfig, TaskRegistry};
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 const LINK_BASE: u64 = 0x40_0000;
 const HEADER_SIZE: usize = 64;
 const PROGRAM_HEADER_SIZE: usize = 56;
@@ -112,6 +112,8 @@ struct Sources {
     architecture: GuestArchitecture,
     dynamic: bool,
     malformed: bool,
+    malformed_interpreter: bool,
+    nested_interpreter: bool,
 }
 
 impl SourceFactory for Sources {
@@ -122,10 +124,11 @@ impl SourceFactory for Sources {
         if self.malformed {
             main[0] = 0;
         }
-        Ok(Source {
-            main,
-            interpreter: elf(self.architecture, false, true),
-        })
+        let mut interpreter = elf(self.architecture, self.nested_interpreter, true);
+        if self.malformed_interpreter {
+            interpreter[0] = 0;
+        }
+        Ok(Source { main, interpreter })
     }
 }
 
@@ -361,6 +364,8 @@ impl Fixture {
                 architecture: GuestArchitecture::Aarch64,
                 dynamic: true,
                 malformed: true,
+                malformed_interpreter: false,
+                nested_interpreter: false,
             },
             Spaces(None),
             Arc::new(Context),
@@ -383,6 +388,8 @@ impl Fixture {
                     architecture: GuestArchitecture::Aarch64,
                     dynamic: true,
                     malformed: false,
+                    malformed_interpreter: false,
+                    nested_interpreter: false,
                 },
                 Spaces(Some(failure)),
                 Arc::new(Context),
@@ -412,6 +419,8 @@ fn isas_out_place() {
                     architecture,
                     dynamic,
                     malformed: false,
+                    malformed_interpreter: false,
+                    nested_interpreter: false,
                 },
                 Spaces(None),
                 Arc::new(Context),
@@ -439,6 +448,56 @@ fn isas_out_place() {
 fn malformed_old_image() {
     Fixture::assert_old_image();
     Fixture::assert_address_image();
+}
+
+#[derive(Default)]
+struct Failures(Mutex<Vec<(hl_task::ProcessId, hl_loader::LoadError)>>);
+
+impl LoadFailureReporter for Failures {
+    fn report(&self, process: hl_task::ProcessId, error: hl_loader::LoadError) {
+        self.0.lock().unwrap().push((process, error));
+    }
+}
+
+#[test]
+fn reports_precise_loader_failure_before_errno_projection() {
+    for (malformed_interpreter, nested_interpreter, expected) in [
+        (
+            true,
+            false,
+            hl_loader::LoadError::Inspect {
+                role: ImageRole::Interpreter,
+                error: hl_loader::InspectError::InvalidMagic,
+            },
+        ),
+        (false, true, hl_loader::LoadError::InvalidInterpreter),
+    ] {
+        let failures = Arc::new(Failures::default());
+        let participant = LoaderExecParticipant::new(
+            GuestArchitecture::Aarch64,
+            Fixture::limits(),
+            Sources {
+                architecture: GuestArchitecture::Aarch64,
+                dynamic: true,
+                malformed: false,
+                malformed_interpreter,
+                nested_interpreter,
+            },
+            Spaces(None),
+            Arc::new(Context),
+            Tls,
+            Execution,
+            Fixture::initial(GuestArchitecture::Aarch64),
+        )
+        .with_failure_reporter(failures.clone());
+        let (process, _) = Fixture::identity();
+
+        assert_eq!(
+            participant.prepare_current(process, &Fixture::plan()).err(),
+            Some(RuntimeExecError::Format)
+        );
+        assert_eq!(*failures.0.lock().unwrap(), vec![(process, expected)]);
+    }
 }
 
 #[path = "../exec/integration_test.rs"]

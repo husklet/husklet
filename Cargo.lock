@@ -1204,6 +1204,7 @@ dependencies = [
  "hl-isa",
  "hl-linux",
  "hl-loader",
+ "hl-log",
  "hl-memory",
  "hl-network",
  "hl-provider",

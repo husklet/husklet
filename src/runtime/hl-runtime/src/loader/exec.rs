@@ -10,6 +10,22 @@ use hl_task::{ProcessId, ThreadId};
 
 use crate::{PreparedExecParticipant, ProcessImage, RuntimeExecError, RuntimeExecParticipant};
 
+/// Receives the precise loader failure before it is projected to Linux's exec errno.
+pub trait LoadFailureReporter: Send + Sync {
+    fn report(&self, process: ProcessId, error: LoadError);
+}
+
+struct LogLoadFailure;
+
+impl LoadFailureReporter for LogLoadFailure {
+    fn report(&self, process: ProcessId, error: LoadError) {
+        hl_log::hl_error!(
+            hl_log::tag::EXEC,
+            "exec image load failed: process={process:?} error={error}"
+        );
+    }
+}
+
 pub trait SourceFactory: Send + Sync {
     type Source: ImageSource;
 
@@ -61,6 +77,7 @@ where
     context: Arc<dyn ExecLoadContext>,
     tls: Mutex<T>,
     execution: E,
+    failures: Arc<dyn LoadFailureReporter>,
     images: ProcessImage<Image<A::AddressSpace, T::Prepared, E::Image>>,
 }
 
@@ -121,8 +138,15 @@ where
             context,
             tls: Mutex::new(tls),
             execution,
+            failures: Arc::new(LogLoadFailure),
             images: ProcessImage::new(initial),
         }
+    }
+
+    /// Replaces the default release-safe log reporter, primarily for embedding and tests.
+    pub fn with_failure_reporter(mut self, failures: Arc<dyn LoadFailureReporter>) -> Self {
+        self.failures = failures;
+        self
     }
 
     #[must_use]
@@ -173,7 +197,10 @@ where
                 credentials: self.context.credentials(process)?,
                 features: self.context.features(),
             })
-            .map_err(Self::project_load)?;
+            .map_err(|error| {
+                self.failures.report(process, error);
+                Self::project_load(error)
+            })?;
         let (_, address_space) = loader.into_parts();
         let tls = self
             .tls
