@@ -19,6 +19,11 @@ cross-compiled with their declared flags, exited with the declared status, and
 matched stdout byte-for-byte: 32/32 oracle rows passed. The two SQLite-linked
 AArch64 sources produced only the retained static-linker warnings.
 
+The authoritative rerun used clean detached commit
+`578bec40e197884c8d2cd7a78278e0fa9d1e06ac`. `testing oracle workload
+--check --isa arm64 --jobs 18` passed 18/18 rows, and the equivalent `amd64`
+command passed 14/14 rows. The detached worktree remained clean afterward.
+
 A fixture oracle pass is not a production-runtime pass. Engine results must
 separately prove typed native selection through `HL_COMPAT_ENGINE_OPTIONS`
 diagnostics.
