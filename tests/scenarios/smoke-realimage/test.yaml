@@ -1,0 +1,46 @@
+cases:
+- id: smoke-realimage/ubuntu-arm64
+  image: ubuntu:latest
+  targets:
+  - arm64
+  timeout: 120
+  resources:
+  - registry
+  - host_port
+  actions:
+  - argv:
+      argv:
+      - /bin/echo
+      - SMOKE-UBUNTU-ARM64
+  expect:
+    stdout_exact: golden/ubuntu-arm64.txt
+- id: smoke-realimage/debian-arm64
+  image: debian:latest
+  targets:
+  - arm64
+  timeout: 120
+  resources:
+  - registry
+  - host_port
+  actions:
+  - argv:
+      argv:
+      - /bin/echo
+      - SMOKE-DEBIAN-ARM64
+  expect:
+    stdout_exact: golden/debian-arm64.txt
+- id: smoke-realimage/debian-amd64
+  image: debian:latest
+  targets:
+  - amd64
+  timeout: 120
+  resources:
+  - registry
+  - host_port
+  actions:
+  - argv:
+      argv:
+      - /bin/echo
+      - SMOKE-DEBIAN-AMD64
+  expect:
+    stdout_exact: golden/debian-amd64.txt
