@@ -3,24 +3,10 @@
 resolver = "2"
 members = [
     "src/runtime/*",
-    "src/containers/hl-engine",
-    "src/containers/hl-client",
-    "src/containers/hl-container",
-    "src/containers/hl-daemon",
-    "src/containers/hl-images",
-    "src/workspaces/hl-gui",
-    "src/workspaces/hl-ws-term",
-    "src/workspaces/hl-ws",
-    "src/packages/hl-log",
-    "src/packages/hl-fs",
-    "src/packages/hl-process",
-    "src/packages/hl-softfloat",
-    "src/packages/hl-design",
-    "src/packages/hl-design-lint",
-    "src/apps/husklet",
-    "src/apps/engine",
-    "src/apps/daemon",
-    "src/apps/testing",
+    "src/packages/*",
+    "src/containers/*",
+    "src/workspaces/*",
+    "src/apps/*",
 ]
 default-members = [
     "src/workspaces/hl-ws-term",
