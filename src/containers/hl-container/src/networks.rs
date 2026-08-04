@@ -1,8 +1,7 @@
 use crate::model::now_ms;
 use crate::storage::{Containers as ContainerStore, NetworkStore};
 use crate::{
-    Container, ContainerId, Endpoint, EndpointSpec, Error, Isolation, Network, NetworkDriver,
-    NetworkSpec, Result,
+    Container, ContainerId, Endpoint, EndpointSpec, Error, Isolation, Network, NetworkDriver, NetworkSpec, Result,
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -73,10 +72,7 @@ impl Networks {
         for network in self.storage.list().await? {
             network.validate()?;
             if !ids.insert(network.id.clone()) {
-                return Err(Error::Corrupt(format!(
-                    "duplicate network ID {}",
-                    network.id
-                )));
+                return Err(Error::Corrupt(format!("duplicate network ID {}", network.id)));
             }
             if network
                 .endpoints
@@ -114,15 +110,8 @@ impl Networks {
     ///
     /// # Errors
     /// Returns lookup, validation, conflict, topology, or persistence failures.
-    pub async fn connect(
-        &self,
-        network: &str,
-        container: &str,
-        spec: EndpointSpec,
-    ) -> Result<Endpoint> {
-        let mut endpoints = self
-            .connect_many(container, [(network.to_owned(), spec)])
-            .await?;
+    pub async fn connect(&self, network: &str, container: &str, spec: EndpointSpec) -> Result<Endpoint> {
+        let mut endpoints = self.connect_many(container, [(network.to_owned(), spec)]).await?;
         endpoints
             .pop()
             .ok_or_else(|| Error::Corrupt("network attachment produced no endpoint".into()))
@@ -132,10 +121,7 @@ impl Networks {
     ///
     /// # Errors
     /// Returns lookup, endpoint, duplicate-network, or address-allocation failures.
-    pub async fn validate_connections(
-        &self,
-        requests: &[(String, EndpointSpec)],
-    ) -> Result<Vec<NetworkDriver>> {
+    pub async fn validate_connections(&self, requests: &[(String, EndpointSpec)]) -> Result<Vec<NetworkDriver>> {
         if requests.is_empty() {
             return Err(Error::InvalidNetwork(
                 "at least one network attachment is required".into(),
@@ -211,6 +197,7 @@ impl Networks {
                 });
             }
             let address = network.allocate(spec.address)?;
+            let generated_name = spec.name.is_none();
             let endpoint = Endpoint {
                 container: container.id.clone(),
                 address,
@@ -218,11 +205,10 @@ impl Networks {
                     .name
                     .or_else(|| container.spec.name.clone())
                     .unwrap_or_else(|| container.id.to_string()),
+                generated_name,
                 aliases: spec.aliases,
             };
-            network
-                .endpoints
-                .insert(container.id.clone(), endpoint.clone());
+            network.endpoints.insert(container.id.clone(), endpoint.clone());
             planned.push((network, endpoint));
         }
         let mut committed: Vec<Network> = Vec::new();
@@ -250,6 +236,33 @@ impl Networks {
         Ok(planned.into_iter().map(|(_, endpoint)| endpoint).collect())
     }
 
+    pub(crate) async fn rename_generated_endpoint(&self, container: &ContainerId, old: &str, new: &str) -> Result<()> {
+        let originals = self.storage.list().await?;
+        let mut committed = Vec::new();
+        for original in originals {
+            let Some(endpoint) = original.endpoints.get(container) else {
+                continue;
+            };
+            if !endpoint.generated_name || endpoint.name != old {
+                continue;
+            }
+            let mut candidate = original.clone();
+            let endpoint = candidate
+                .endpoints
+                .get_mut(container)
+                .expect("candidate cloned a present endpoint");
+            endpoint.name = new.to_owned();
+            if let Err(error) = self.storage.replace(&candidate).await {
+                for rollback in committed.into_iter().rev() {
+                    self.storage.replace(&rollback).await?;
+                }
+                return Err(error);
+            }
+            committed.push(original);
+        }
+        Ok(())
+    }
+
     /// Detaches a stopped container from a network.
     ///
     /// # Errors
@@ -266,14 +279,13 @@ impl Networks {
         }
         let mut network = self.resolve_network(network).await?;
         self.require_mutable(&network).await?;
-        let endpoint =
-            network
-                .endpoints
-                .remove(&container.id)
-                .ok_or_else(|| Error::NotConnected {
-                    network: network.name.clone(),
-                    container: container.id,
-                })?;
+        let endpoint = network
+            .endpoints
+            .remove(&container.id)
+            .ok_or_else(|| Error::NotConnected {
+                network: network.name.clone(),
+                container: container.id,
+            })?;
         self.storage.replace(&network).await?;
         Ok(endpoint)
     }
@@ -311,10 +323,7 @@ impl Networks {
         Ok(configs)
     }
 
-    pub(crate) async fn attach_default_for_publication_locked(
-        &self,
-        container: &Container,
-    ) -> Result<()> {
+    pub(crate) async fn attach_default_for_publication_locked(&self, container: &Container) -> Result<()> {
         if container.spec.network_mode != crate::NetworkMode::Automatic
             || container.spec.isolation.network_isolated
             || container.spec.publish.is_empty()
@@ -328,16 +337,15 @@ impl Networks {
         {
             return Ok(());
         }
-        let bridge =
-            if let Some(index) = networks.iter().position(|network| network.name == "bridge") {
-                networks.swap_remove(index)
-            } else {
-                let mut spec = NetworkSpec::bridge_auto("bridge");
-                spec.subnet = Some(Pool::from(networks.as_slice()).allocate()?);
-                let network = Network::from_spec(spec, now_ms());
-                self.storage.insert(&network).await?;
-                network
-            };
+        let bridge = if let Some(index) = networks.iter().position(|network| network.name == "bridge") {
+            networks.swap_remove(index)
+        } else {
+            let mut spec = NetworkSpec::bridge_auto("bridge");
+            spec.subnet = Some(Pool::from(networks.as_slice()).allocate()?);
+            let network = Network::from_spec(spec, now_ms());
+            self.storage.insert(&network).await?;
+            network
+        };
         if bridge.driver != NetworkDriver::Bridge {
             return Err(Error::InvalidNetwork(
                 "predefined bridge name is owned by a non-bridge network".into(),
@@ -347,11 +355,8 @@ impl Networks {
         let endpoint = Endpoint {
             container: container.id.clone(),
             address: bridge.allocate(None)?,
-            name: container
-                .spec
-                .name
-                .clone()
-                .unwrap_or_else(|| container.id.to_string()),
+            name: container.spec.name.clone().unwrap_or_else(|| container.id.to_string()),
+            generated_name: true,
             aliases: Vec::new(),
         };
         bridge.endpoints.insert(container.id.clone(), endpoint);
@@ -399,9 +404,13 @@ impl Networks {
     }
 
     async fn require_mutable(&self, network: &Network) -> Result<()> {
-        if let Some(container) = self.containers.list().await?.into_iter().find(|container| {
-            network.endpoints.contains_key(&container.id) && container.state.is_active()
-        }) {
+        if let Some(container) = self
+            .containers
+            .list()
+            .await?
+            .into_iter()
+            .find(|container| network.endpoints.contains_key(&container.id) && container.state.is_active())
+        {
             return Err(Error::InvalidState {
                 id: container.id,
                 actual: container.state,

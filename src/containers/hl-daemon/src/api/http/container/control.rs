@@ -158,12 +158,13 @@ pub(in super::super) async fn rename(
     Path(id): Path<String>,
     Query(query): Query<RenameQuery>,
 ) -> ApiResult<StatusCode> {
-    state
+    let container = state
         .containers
         .rename(&id, query.name)
         .await
-        .map(|_| StatusCode::NO_CONTENT)
-        .map_err(ApiError::container)
+        .map_err(ApiError::container)?;
+    state.events.container("rename", &container);
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[hl_design::adapter]

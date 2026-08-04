@@ -51,9 +51,7 @@ impl Subnet {
     /// Returns an error when the prefix is invalid or the address contains host bits.
     pub fn new(address: Ipv4Addr, prefix: u8) -> crate::Result<Self> {
         if prefix > 32 {
-            return Err(crate::Error::InvalidNetwork(
-                "IPv4 prefix exceeds 32".into(),
-            ));
+            return Err(crate::Error::InvalidNetwork("IPv4 prefix exceeds 32".into()));
         }
         let subnet = Self { address, prefix };
         if u32::from(address) & subnet.mask() != u32::from(address) {
@@ -148,15 +146,11 @@ impl NetworkSpec {
             && self.name.len() <= 255
             && self.name != "."
             && self.name != ".."
-            && self
-                .name
-                .bytes()
-                .enumerate()
-                .all(|(index, byte)| match byte {
-                    b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' => true,
-                    b'_' | b'.' | b'-' => index != 0,
-                    _ => false,
-                });
+            && self.name.bytes().enumerate().all(|(index, byte)| match byte {
+                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' => true,
+                b'_' | b'.' | b'-' => index != 0,
+                _ => false,
+            });
         if !valid {
             return Err(crate::Error::InvalidNetwork(format!(
                 "unsafe network name {:?}",
@@ -183,9 +177,7 @@ impl NetworkSpec {
                     ));
                 }
                 if gateway.is_some_and(|value| {
-                    !subnet.contains(value)
-                        || value == subnet.address
-                        || value == subnet.broadcast()
+                    !subnet.contains(value) || value == subnet.address || value == subnet.broadcast()
                 }) {
                     return Err(crate::Error::InvalidNetwork(
                         "gateway must be a usable subnet address".into(),
@@ -240,9 +232,7 @@ impl EndpointSpec {
         }
         let unique = values.iter().collect::<std::collections::BTreeSet<_>>();
         if unique.len() != values.len() {
-            return Err(crate::Error::InvalidNetwork(
-                "endpoint aliases must be unique".into(),
-            ));
+            return Err(crate::Error::InvalidNetwork("endpoint aliases must be unique".into()));
         }
         Ok(())
     }
@@ -253,6 +243,9 @@ pub struct Endpoint {
     pub container: ContainerId,
     pub address: Option<Ipv4Addr>,
     pub name: String,
+    /// True when `name` was copied from the container name rather than explicitly configured.
+    #[serde(default)]
+    pub generated_name: bool,
     pub aliases: Vec<String>,
 }
 
@@ -288,10 +281,9 @@ impl Network {
     }
 
     pub(crate) fn from_spec(spec: NetworkSpec, created_at_ms: u64) -> Self {
-        let gateway = spec.gateway.or_else(|| {
-            spec.subnet
-                .map(|subnet| Ipv4Addr::from(u32::from(subnet.address) + 1))
-        });
+        let gateway = spec
+            .gateway
+            .or_else(|| spec.subnet.map(|subnet| Ipv4Addr::from(u32::from(subnet.address) + 1)));
         Self {
             id: NetworkId::new(),
             name: spec.name,
@@ -349,9 +341,7 @@ impl Network {
                 return Ok(Some(address));
             }
         }
-        Err(crate::Error::InvalidNetwork(
-            "network address pool is exhausted".into(),
-        ))
+        Err(crate::Error::InvalidNetwork("network address pool is exhausted".into()))
     }
 
     pub(crate) fn validate(&self) -> crate::Result<()> {
@@ -391,7 +381,7 @@ impl Network {
                 _ => {
                     return Err(crate::Error::Corrupt(
                         "network endpoint has invalid address ownership".into(),
-                    ))
+                    ));
                 }
             }
         }
@@ -409,8 +399,24 @@ mod tests {
             container: ContainerId::new(),
             address: Some(Ipv4Addr::new(172, 18, 0, 2)),
             name: "web".into(),
+            generated_name: false,
             aliases: Vec::new(),
         };
         assert_eq!(endpoint.mac_address().as_deref(), Some("02:42:ac:12:00:02"));
+    }
+
+    #[test]
+    fn legacy_endpoint_names_decode_as_explicit() {
+        let endpoint = Endpoint {
+            container: ContainerId::new(),
+            address: None,
+            name: "legacy".into(),
+            generated_name: true,
+            aliases: Vec::new(),
+        };
+        let mut value = serde_json::to_value(endpoint).unwrap();
+        value.as_object_mut().unwrap().remove("generated_name");
+        let decoded: Endpoint = serde_json::from_value(value).unwrap();
+        assert!(!decoded.generated_name);
     }
 }

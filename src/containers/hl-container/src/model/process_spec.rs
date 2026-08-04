@@ -241,8 +241,16 @@ impl ContainerSpec {
         if !self.process.working_dir.is_absolute() {
             return Err(Error::InvalidSpec("working directory must be absolute".into()));
         }
-        if self.name.as_deref().is_some_and(str::is_empty) {
-            return Err(Error::InvalidSpec("name must not be empty".into()));
+        if let Some(name) = self.name.as_deref() {
+            let mut characters = name.chars();
+            if !characters.next().is_some_and(|value| value.is_ascii_alphanumeric())
+                || !characters.all(|value| value.is_ascii_alphanumeric() || matches!(value, '_' | '.' | '-'))
+            {
+                return Err(Error::InvalidSpec(
+                    "name must start with an ASCII letter or digit and contain only letters, digits, '_', '.', or '-'"
+                        .into(),
+                ));
+            }
         }
         if self.process.env.keys().any(|key| key.is_empty() || key.contains('=')) {
             return Err(Error::InvalidSpec(

@@ -1,6 +1,4 @@
-use super::{
-    now_ms, Container, ContainerId, ContainerSpec, ContainerState, Error, Ordering, Result, Service,
-};
+use super::{Container, ContainerId, ContainerSpec, ContainerState, Error, Ordering, Result, Service, now_ms};
 
 impl Service {
     pub(crate) async fn create(&self, mut spec: ContainerSpec) -> Result<Container> {
@@ -42,12 +40,7 @@ impl Service {
             .flat_map(|container| container.spec.publish)
             .filter(|publish| publish.host != 0)
             .collect::<Vec<_>>();
-        used.extend(
-            spec.publish
-                .iter()
-                .copied()
-                .filter(|publish| publish.host != 0),
-        );
+        used.extend(spec.publish.iter().copied().filter(|publish| publish.host != 0));
         for publish in &mut spec.publish {
             if publish.host != 0 {
                 continue;
@@ -56,9 +49,7 @@ impl Service {
                 let candidate = Self::publication(*publish, *host);
                 !used.iter().any(|existing| existing.conflicts(candidate))
             }) else {
-                return Err(Error::InvalidSpec(
-                    "no automatic host TCP ports are available".into(),
-                ));
+                return Err(Error::InvalidSpec("no automatic host TCP ports are available".into()));
             };
             publish.host = host;
             used.push(*publish);
@@ -80,12 +71,7 @@ impl Service {
         self.resolve(reference).await
     }
 
-    pub(crate) async fn set_label(
-        &self,
-        reference: &str,
-        name: String,
-        value: String,
-    ) -> Result<Container> {
+    pub(crate) async fn set_label(&self, reference: &str, name: String, value: String) -> Result<Container> {
         if name.is_empty() {
             return Err(Error::InvalidSpec("label name must not be empty".into()));
         }
@@ -107,10 +93,33 @@ impl Service {
         }
         let _guard = self.operations.lock().await;
         let mut container = self.resolve(reference).await?;
-        self.ensure_name_available(&name, Some(&container.id))
-            .await?;
+        let old = container.spec.name.clone();
         container.spec.name = Some(name);
-        self.containers.replace(&container).await?;
+        container.spec.validate()?;
+        self.ensure_name_available(
+            container.spec.name.as_deref().expect("rename assigned a name"),
+            Some(&container.id),
+        )
+        .await?;
+        if let Some(old) = old.as_deref() {
+            self.networks
+                .rename_generated_endpoint(&container.id, old, container.spec.name.as_deref().expect("assigned"))
+                .await?;
+        }
+        if let Err(error) = self.containers.replace(&container).await {
+            if let Some(old) = old.as_deref() {
+                if let Err(rollback) = self
+                    .networks
+                    .rename_generated_endpoint(&container.id, container.spec.name.as_deref().expect("assigned"), old)
+                    .await
+                {
+                    return Err(Error::Corrupt(format!(
+                        "rename failed ({error}); network-name rollback also failed ({rollback})"
+                    )));
+                }
+            }
+            return Err(error);
+        }
         Ok(container)
     }
 
@@ -122,14 +131,9 @@ impl Service {
         container.spec.validate()?;
         let cancel_restart = match container.state {
             ContainerState::Restarting {
-                result,
-                finished_at_ms,
-                ..
+                result, finished_at_ms, ..
             } if !container.spec.restart.allows(result, &container.restart) => {
-                container.state = ContainerState::Exited {
-                    result,
-                    finished_at_ms,
-                };
+                container.state = ContainerState::Exited { result, finished_at_ms };
                 true
             }
             _ => false,
@@ -185,18 +189,14 @@ impl Service {
     pub(super) async fn resolve(&self, reference: &str) -> Result<Container> {
         let reference = reference.trim_start_matches('/');
         if reference.is_empty() {
-            return Err(Error::InvalidSpec(
-                "container reference must not be empty".into(),
-            ));
+            return Err(Error::InvalidSpec("container reference must not be empty".into()));
         }
         let mut matches = self.containers.list().await?.into_iter().filter(|item| {
             item.id.as_str() == reference
                 || item.spec.name.as_deref() == Some(reference)
                 || item.id.as_str().starts_with(reference)
         });
-        let first = matches
-            .next()
-            .ok_or_else(|| Error::NotFound(reference.into()))?;
+        let first = matches.next().ok_or_else(|| Error::NotFound(reference.into()))?;
         if matches.next().is_some() {
             return Err(Error::InvalidSpec(format!(
                 "container reference {reference:?} is ambiguous"
