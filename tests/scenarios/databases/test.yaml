@@ -1,0 +1,624 @@
+cases:
+- id: databases/couchdb-create-db
+  image: couchdb:3
+  timeout: 240
+  class: long
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: "export COUCHDB_USER=admin COUCHDB_PASSWORD=pw\n/docker-entrypoint.sh /opt/couchdb/bin/couchdb >/tmp/couch.log 2>&1 &\nready=false\nfor i in $(seq 1 150); do\n  if curl --max-time 2 -fsS http://admin:pw@127.0.0.1:5984/ | grep -q Welcome; then\n    ready=true\n    break\n  fi\n  sleep 1\ndone\nif [ \"$ready\" != true ]; then\n  cat /tmp/couch.log >&2\n  exit 1\nfi\ncurl --max-time 5 -fsS -X PUT http://admin:pw@127.0.0.1:5984/hlb\n"
+  expect:
+    stdout_contains: golden/couchdb_create_db.txt
+- id: databases/couchdb-welcome
+  image: couchdb:3
+  timeout: 240
+  class: long
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: "export COUCHDB_USER=admin COUCHDB_PASSWORD=pw\n/docker-entrypoint.sh /opt/couchdb/bin/couchdb >/tmp/couch.log 2>&1 &\nready=false\nfor i in $(seq 1 150); do\n  if curl --max-time 2 -fsS http://admin:pw@127.0.0.1:5984/ | grep -q Welcome; then\n    ready=true\n    break\n  fi\n  sleep 1\ndone\nif [ \"$ready\" != true ]; then\n  cat /tmp/couch.log >&2\n  exit 1\nfi\ncurl --max-time 5 -fsS http://admin:pw@127.0.0.1:5984/\n"
+  expect:
+    stdout_contains: golden/couchdb_welcome.txt
+- id: databases/etcd-version-35
+  image: quay.io/coreos/etcd:v3.5.13
+  timeout: 60
+  actions:
+  - argv:
+      argv:
+      - etcd
+      - --version
+  expect:
+    stdout_contains: golden/etcd_version_35.txt
+- id: databases/influxdb-version-18
+  image: influxdb:1.8
+  timeout: 60
+  class: long
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: influxd version 2>&1 | grep -o '1\.8'
+  expect:
+    stdout_contains: golden/influxdb_version_18.txt
+- id: databases/influxdb-version-27
+  image: influxdb:2.7
+  timeout: 60
+  class: long
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: influxd version 2>&1 | grep -o 'InfluxDB v2.7'
+  expect:
+    stdout_contains: golden/influxdb_version_27.txt
+- id: databases/mariadb-agg-1011
+  image: mariadb:10.11
+  timeout: 120
+  class: long
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'export MARIADB_ROOT_PASSWORD=pw
+
+        docker-entrypoint.sh mariadbd >/tmp/maria.log 2>&1 &
+
+        for i in $(seq 1 150); do grep -q ''port: 3306'' /tmp/maria.log 2>/dev/null && break; sleep 1; done
+
+        for i in $(seq 1 30); do mariadb -uroot -ppw -N -e ''SELECT 1'' >/dev/null 2>&1 && break; sleep 1; done
+
+        mariadb -uroot -ppw -N -e "CREATE DATABASE d; USE d; CREATE TABLE t(n INT); INSERT INTO t (n) WITH RECURSIVE s(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM s WHERE x<1000) SELECT x FROM s; SELECT SUM(n) FROM t;"'
+  expect:
+    stdout_contains: golden/mariadb_agg_1011.txt
+- id: databases/mariadb-agg-11
+  image: mariadb:11
+  timeout: 120
+  class: long
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'export MARIADB_ROOT_PASSWORD=pw
+
+        docker-entrypoint.sh mariadbd >/tmp/maria.log 2>&1 &
+
+        for i in $(seq 1 150); do grep -q ''port: 3306'' /tmp/maria.log 2>/dev/null && break; sleep 1; done
+
+        for i in $(seq 1 30); do mariadb -uroot -ppw -N -e ''SELECT 1'' >/dev/null 2>&1 && break; sleep 1; done
+
+        mariadb -uroot -ppw -N -e "CREATE DATABASE d; USE d; CREATE TABLE t(n INT); INSERT INTO t (n) WITH RECURSIVE s(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM s WHERE x<1000) SELECT x FROM s; SELECT SUM(n) FROM t;"'
+  expect:
+    stdout_contains: golden/mariadb_agg_11.txt
+- id: databases/mariadb-client-banner
+  image: mariadb:11.4
+  timeout: 120
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: mariadb --version 2>&1 | grep -o '11\.4' | head -1
+  expect:
+    stdout_contains: golden/mariadb_client_banner.txt
+- id: databases/mariadb-version-114
+  image: mariadb:11.4
+  timeout: 120
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'export MARIADB_ROOT_PASSWORD=pw
+
+        docker-entrypoint.sh mariadbd >/tmp/maria.log 2>&1 &
+
+        for i in $(seq 1 150); do grep -q ''port: 3306'' /tmp/maria.log 2>/dev/null && break; sleep 1; done
+
+        for i in $(seq 1 30); do mariadb -uroot -ppw -N -e ''SELECT 1'' >/dev/null 2>&1 && break; sleep 1; done
+
+        mariadb -uroot -ppw -N -e "SELECT version();"'
+  expect:
+    stdout_contains: golden/mariadb_version_114.txt
+- id: databases/memcached-roundtrip
+  image: memcached:1.6-alpine
+  timeout: 60
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'memcached -d -u root -l 127.0.0.1 -p 11211
+
+        sleep 1
+
+        ( printf ''set dd 0 0 5\r\nhello\r\nget dd\r\nquit\r\n''; sleep 0.3 ) | nc 127.0.0.1 11211'
+  expect:
+    stdout_contains:
+    - golden/memcached_roundtrip_1.txt
+    - golden/memcached_roundtrip_2.txt
+- id: databases/memcached-version
+  image: memcached:1.6
+  timeout: 60
+  class: long
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: memcached --version | grep -o '1\.6'
+  expect:
+    stdout_contains: golden/memcached_version.txt
+- id: databases/mysql-agg-80
+  image: mysql:8.0
+  timeout: 120
+  class: long
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'export MYSQL_ROOT_PASSWORD=pw
+
+        /usr/bin/env bash -c true
+
+        probe=$?
+
+        if [ $probe -ne 0 ]; then echo mysql-bash-probe=$probe; exit $probe; fi
+
+        docker-entrypoint.sh mysqld >/tmp/my.log 2>&1 & server=$!
+
+        for i in $(seq 1 150); do if ! kill -0 $server 2>/dev/null; then wait $server; status=$?; echo mysql-entrypoint-exited=$status; cat /tmp/my.log; exit $status; fi; grep -q ''port: 3306'' /tmp/my.log 2>/dev/null && break; sleep 1; done
+
+        for i in $(seq 1 30); do mysql -uroot -ppw -N -e ''SELECT 1'' >/dev/null 2>&1 && break; sleep 1; done
+
+        mysql -uroot -ppw -N -e "CREATE DATABASE d; USE d; CREATE TABLE t(n INT); INSERT INTO t (n) WITH RECURSIVE s(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM s WHERE x<1000) SELECT x FROM s; SELECT SUM(n) FROM t;" || { status=$?; cat /tmp/my.log; ps -o pid,ppid,stat,comm,args; exit $status; }'
+  expect:
+    stdout_contains: golden/mysql_agg_80.txt
+- id: databases/mysql-agg-84
+  image: mysql:8.4
+  timeout: 120
+  class: long
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'export MYSQL_ROOT_PASSWORD=pw
+
+        /usr/bin/env bash -c true
+
+        probe=$?
+
+        if [ $probe -ne 0 ]; then echo mysql-bash-probe=$probe; exit $probe; fi
+
+        docker-entrypoint.sh mysqld >/tmp/my.log 2>&1 & server=$!
+
+        for i in $(seq 1 150); do if ! kill -0 $server 2>/dev/null; then wait $server; status=$?; echo mysql-entrypoint-exited=$status; cat /tmp/my.log; exit $status; fi; grep -q ''port: 3306'' /tmp/my.log 2>/dev/null && break; sleep 1; done
+
+        for i in $(seq 1 30); do mysql -uroot -ppw -N -e ''SELECT 1'' >/dev/null 2>&1 && break; sleep 1; done
+
+        mysql -uroot -ppw -N -e "CREATE DATABASE d; USE d; CREATE TABLE t(n INT); INSERT INTO t (n) WITH RECURSIVE s(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM s WHERE x<1000) SELECT x FROM s; SELECT SUM(n) FROM t;" || { status=$?; cat /tmp/my.log; ps -o pid,ppid,stat,comm,args; exit $status; }'
+  expect:
+    stdout_contains: golden/mysql_agg_84.txt
+- id: databases/mysql-version-80
+  image: mysql:8.0
+  timeout: 120
+  class: long
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'export MYSQL_ROOT_PASSWORD=pw
+
+        /usr/bin/env bash -c true
+
+        probe=$?
+
+        if [ $probe -ne 0 ]; then echo mysql-bash-probe=$probe; exit $probe; fi
+
+        docker-entrypoint.sh mysqld >/tmp/my.log 2>&1 & server=$!
+
+        for i in $(seq 1 150); do if ! kill -0 $server 2>/dev/null; then wait $server; status=$?; echo mysql-entrypoint-exited=$status; cat /tmp/my.log; exit $status; fi; grep -q ''port: 3306'' /tmp/my.log 2>/dev/null && break; sleep 1; done
+
+        for i in $(seq 1 30); do mysql -uroot -ppw -N -e ''SELECT 1'' >/dev/null 2>&1 && break; sleep 1; done
+
+        mysql -uroot -ppw -N -e "SELECT version();" || { status=$?; cat /tmp/my.log; ps -o pid,ppid,stat,comm,args; exit $status; }'
+  expect:
+    stdout_contains: golden/mysql_version_80.txt
+- id: databases/mysql-version-84
+  image: mysql:8.4
+  timeout: 240
+  class: long
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'export MYSQL_ROOT_PASSWORD=pw
+
+        /usr/bin/env bash -c true
+
+        probe=$?
+
+        if [ $probe -ne 0 ]; then echo mysql-bash-probe=$probe; exit $probe; fi
+
+        docker-entrypoint.sh mysqld >/tmp/my.log 2>&1 & server=$!
+
+        for i in $(seq 1 150); do if ! kill -0 $server 2>/dev/null; then wait $server; status=$?; echo mysql-entrypoint-exited=$status; cat /tmp/my.log; exit $status; fi; grep -q ''port: 3306'' /tmp/my.log 2>/dev/null && break; sleep 1; done
+
+        for i in $(seq 1 30); do mysql -uroot -ppw -N -e ''SELECT 1'' >/dev/null 2>&1 && break; sleep 1; done
+
+        mysql -uroot -ppw -N -e "SELECT version();" || { status=$?; cat /tmp/my.log; ps -o pid,ppid,stat,comm,args; exit $status; }'
+  expect:
+    stdout_contains: golden/mysql_version_84.txt
+- id: databases/nats-version
+  image: nats:latest
+  timeout: 60
+  actions:
+  - argv:
+      argv:
+      - /nats-server
+      - --version
+  expect:
+    stdout_contains: golden/nats_version.txt
+- id: databases/nats-version-alpine
+  image: nats:2.10-alpine
+  timeout: 60
+  class: long
+  actions:
+  - argv:
+      argv:
+      - /nats-server
+      - --version
+  expect:
+    stdout_contains: golden/nats_version_alpine.txt
+- id: databases/postgres-agg-15
+  image: postgres:15
+  timeout: 120
+  class: long
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'export POSTGRES_PASSWORD=pw POSTGRES_HOST_AUTH_METHOD=trust
+
+        docker-entrypoint.sh postgres >/tmp/pg.log 2>&1 &
+
+        for i in $(seq 1 90); do grep -q ''init process complete'' /tmp/pg.log 2>/dev/null && grep -q ''ready to accept connections'' /tmp/pg.log 2>/dev/null && break; sleep 1; done
+
+        sleep 1
+
+        psql -U postgres -tAc "CREATE TABLE t(n int); INSERT INTO t SELECT generate_series(1,1000); SELECT sum(n) FROM t;" || { status=$?; cat /tmp/pg.log >&2; exit $status; }'
+  expect:
+    stdout_contains: golden/postgres_agg_15.txt
+- id: databases/postgres-agg-15-alpine
+  image: postgres:15-alpine
+  timeout: 120
+  class: long
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'export POSTGRES_PASSWORD=pw POSTGRES_HOST_AUTH_METHOD=trust
+
+        docker-entrypoint.sh postgres >/tmp/pg.log 2>&1 &
+
+        for i in $(seq 1 90); do grep -q ''init process complete'' /tmp/pg.log 2>/dev/null && grep -q ''ready to accept connections'' /tmp/pg.log 2>/dev/null && break; sleep 1; done
+
+        sleep 1
+
+        psql -U postgres -tAc "CREATE TABLE t(n int); INSERT INTO t SELECT generate_series(1,1000); SELECT sum(n) FROM t;" || { status=$?; cat /tmp/pg.log >&2; exit $status; }'
+  expect:
+    stdout_contains: golden/postgres_agg_15_alpine.txt
+- id: databases/postgres-agg-16
+  image: postgres:16
+  timeout: 120
+  class: long
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'export POSTGRES_PASSWORD=pw POSTGRES_HOST_AUTH_METHOD=trust
+
+        docker-entrypoint.sh postgres >/tmp/pg.log 2>&1 &
+
+        for i in $(seq 1 90); do grep -q ''init process complete'' /tmp/pg.log 2>/dev/null && grep -q ''ready to accept connections'' /tmp/pg.log 2>/dev/null && break; sleep 1; done
+
+        sleep 1
+
+        psql -U postgres -tAc "CREATE TABLE t(n int); INSERT INTO t SELECT generate_series(1,1000); SELECT sum(n) FROM t;" || { status=$?; cat /tmp/pg.log >&2; exit $status; }'
+  expect:
+    stdout_contains: golden/postgres_agg_16.txt
+- id: databases/postgres-agg-16-alpine
+  image: postgres:16-alpine
+  timeout: 120
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'export POSTGRES_PASSWORD=pw POSTGRES_HOST_AUTH_METHOD=trust
+
+        docker-entrypoint.sh postgres >/tmp/pg.log 2>&1 &
+
+        for i in $(seq 1 90); do grep -q ''init process complete'' /tmp/pg.log 2>/dev/null && grep -q ''ready to accept connections'' /tmp/pg.log 2>/dev/null && break; sleep 1; done
+
+        sleep 1
+
+        psql -U postgres -tAc "CREATE TABLE t(n int); INSERT INTO t SELECT generate_series(1,1000); SELECT sum(n) FROM t;" || { status=$?; cat /tmp/pg.log >&2; exit $status; }'
+  expect:
+    stdout_contains: golden/postgres_agg_16_alpine.txt
+- id: databases/postgres-count-series
+  image: postgres:16-alpine
+  timeout: 120
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'export POSTGRES_PASSWORD=pw POSTGRES_HOST_AUTH_METHOD=trust
+
+        docker-entrypoint.sh postgres >/tmp/pg.log 2>&1 &
+
+        for i in $(seq 1 90); do grep -q ''init process complete'' /tmp/pg.log 2>/dev/null && grep -q ''ready to accept connections'' /tmp/pg.log 2>/dev/null && break; sleep 1; done
+
+        sleep 1
+
+        psql -U postgres -tAc "SELECT count(*) FROM generate_series(1,1000);" || { status=$?; cat /tmp/pg.log >&2; exit $status; }'
+  expect:
+    stdout_contains: golden/postgres_count_series.txt
+- id: databases/postgres-join-16-alpine
+  image: postgres:16-alpine
+  timeout: 120
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'export POSTGRES_PASSWORD=pw POSTGRES_HOST_AUTH_METHOD=trust
+
+        docker-entrypoint.sh postgres >/tmp/pg.log 2>&1 &
+
+        for i in $(seq 1 90); do grep -q ''init process complete'' /tmp/pg.log 2>/dev/null && grep -q ''ready to accept connections'' /tmp/pg.log 2>/dev/null && break; sleep 1; done
+
+        sleep 1
+
+        psql -U postgres -tAc "SELECT count(DISTINCT n%30) FROM generate_series(1,900) n;" || { status=$?; cat /tmp/pg.log >&2; exit $status; }'
+  expect:
+    stdout_contains: golden/postgres_join_16_alpine.txt
+- id: databases/postgres-version-15
+  image: postgres:15
+  timeout: 120
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'export POSTGRES_PASSWORD=pw POSTGRES_HOST_AUTH_METHOD=trust
+
+        docker-entrypoint.sh postgres >/tmp/pg.log 2>&1 &
+
+        for i in $(seq 1 90); do grep -q ''init process complete'' /tmp/pg.log 2>/dev/null && grep -q ''ready to accept connections'' /tmp/pg.log 2>/dev/null && break; sleep 1; done
+
+        sleep 1
+
+        psql -U postgres -tAc "SELECT version();" || { status=$?; cat /tmp/pg.log >&2; exit $status; }'
+  expect:
+    stdout_contains: golden/postgres_version_15.txt
+- id: databases/postgres-version-16-alpine
+  image: postgres:16-alpine
+  timeout: 120
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'export POSTGRES_PASSWORD=pw POSTGRES_HOST_AUTH_METHOD=trust
+
+        docker-entrypoint.sh postgres >/tmp/pg.log 2>&1 &
+
+        for i in $(seq 1 90); do grep -q ''init process complete'' /tmp/pg.log 2>/dev/null && grep -q ''ready to accept connections'' /tmp/pg.log 2>/dev/null && break; sleep 1; done
+
+        sleep 1
+
+        psql -U postgres -tAc "SELECT version();" || { status=$?; cat /tmp/pg.log >&2; exit $status; }'
+  expect:
+    stdout_contains: golden/postgres_version_16_alpine.txt
+- id: databases/redis-agg-7-alpine
+  image: redis:7-alpine
+  timeout: 90
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'redis-server --save '''' --appendonly no --daemonize yes >/dev/null 2>&1
+
+        for i in $(seq 1 50); do redis-cli ping 2>/dev/null | grep -q PONG && break; sleep 0.2; done
+
+        for i in $(seq 1 1000); do redis-cli rpush L $i >/dev/null; done
+
+        redis-cli eval "local s=0 for _,v in ipairs(redis.call(''lrange'',''L'',0,-1)) do s=s+v end return s" 0'
+  expect:
+    stdout_contains: golden/redis_agg_7_alpine.txt
+- id: databases/redis-dbsize
+  image: redis:7-alpine
+  timeout: 60
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'redis-server --save '''' --appendonly no --daemonize yes >/dev/null 2>&1
+
+        for i in $(seq 1 50); do redis-cli ping 2>/dev/null | grep -q PONG && break; sleep 0.2; done
+
+        redis-cli mset a 1 b 2 c 3 >/dev/null; redis-cli dbsize'
+  expect:
+    stdout_contains: golden/redis_dbsize.txt
+- id: databases/redis-hash-hlen
+  image: redis:7-alpine
+  timeout: 60
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'redis-server --save '''' --appendonly no --daemonize yes >/dev/null 2>&1
+
+        for i in $(seq 1 50); do redis-cli ping 2>/dev/null | grep -q PONG && break; sleep 0.2; done
+
+        redis-cli hset h a 1 b 2 c 3 >/dev/null; redis-cli hlen h'
+  expect:
+    stdout_contains: golden/redis_hash_hlen.txt
+- id: databases/redis-incr-1000
+  image: redis:alpine
+  timeout: 90
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'redis-server --save '''' --appendonly no --daemonize yes >/dev/null 2>&1
+
+        for i in $(seq 1 50); do redis-cli ping 2>/dev/null | grep -q PONG && break; sleep 0.2; done
+
+        for i in $(seq 1 1000); do redis-cli incr c >/dev/null; done
+
+        redis-cli get c'
+  expect:
+    stdout_contains: golden/redis_incr_1000.txt
+- id: databases/redis-lua-sum
+  image: redis:7-alpine
+  timeout: 60
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'redis-server --save '''' --appendonly no --daemonize yes >/dev/null 2>&1
+
+        for i in $(seq 1 50); do redis-cli ping 2>/dev/null | grep -q PONG && break; sleep 0.2; done
+
+        redis-cli eval "local s=0 for i=1,1000 do s=s+i end return s" 0'
+  expect:
+    stdout_contains: golden/redis_lua_sum.txt
+- id: databases/redis-ping-glibc
+  image: redis:7
+  timeout: 60
+  class: long
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'redis-server --save '''' --appendonly no --daemonize yes >/dev/null 2>&1
+
+        for i in $(seq 1 50); do redis-cli ping 2>/dev/null | grep -q PONG && break; sleep 0.2; done
+
+        redis-cli ping'
+  expect:
+    stdout_contains: golden/redis_ping_glibc.txt
+- id: databases/redis-roundtrip
+  image: redis:alpine
+  timeout: 60
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'redis-server --save '''' --appendonly no --daemonize yes >/dev/null 2>&1
+
+        for i in $(seq 1 50); do redis-cli ping 2>/dev/null | grep -q PONG && break; sleep 0.2; done
+
+        redis-cli ping; redis-cli set k hello-redis >/dev/null; redis-cli get k'
+  expect:
+    stdout_contains:
+    - golden/redis_roundtrip_1.txt
+    - golden/redis_roundtrip_2.txt
+- id: databases/redis-setget-74
+  image: redis:7.4-alpine
+  timeout: 60
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'redis-server --save '''' --appendonly no --daemonize yes >/dev/null 2>&1
+
+        for i in $(seq 1 50); do redis-cli ping 2>/dev/null | grep -q PONG && break; sleep 0.2; done
+
+        redis-cli set k dd-value-42 >/dev/null; redis-cli get k'
+  expect:
+    stdout_contains: golden/redis_setget_74.txt
+- id: databases/redis-strlen
+  image: redis:7-alpine
+  timeout: 60
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'redis-server --save '''' --appendonly no --daemonize yes >/dev/null 2>&1
+
+        for i in $(seq 1 50); do redis-cli ping 2>/dev/null | grep -q PONG && break; sleep 0.2; done
+
+        redis-cli set k 0123456789 >/dev/null; redis-cli strlen k'
+  expect:
+    stdout_contains: golden/redis_strlen.txt
+- id: databases/sqlite-join
+  image: python:alpine
+  timeout: 60
+  fixtures:
+  - source: source/sqlite_join.py
+    destination: /tmp/sqlite_join.py
+  actions:
+  - argv:
+      argv:
+      - python3
+      - /tmp/sqlite_join.py
+  expect:
+    stdout_contains: golden/sqlite_join.txt
+- id: databases/sqlite-query
+  image: python:alpine
+  timeout: 60
+  fixtures:
+  - source: source/sqlite_query.py
+    destination: /tmp/sqlite_query.py
+  actions:
+  - argv:
+      argv:
+      - python3
+      - /tmp/sqlite_query.py
+  expect:
+    stdout_contains: golden/sqlite_query.txt
+- id: databases/valkey-agg-8
+  image: valkey/valkey:8-alpine
+  timeout: 90
+  class: long
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'valkey-server --save '''' --appendonly no --daemonize yes >/dev/null 2>&1
+
+        for i in $(seq 1 50); do valkey-cli ping 2>/dev/null | grep -q PONG && break; sleep 0.2; done
+
+        for i in $(seq 1 1000); do valkey-cli rpush L $i >/dev/null; done
+
+        valkey-cli eval "local s=0 for _,v in ipairs(redis.call(''lrange'',''L'',0,-1)) do s=s+v end return s" 0'
+  expect:
+    stdout_contains: golden/valkey_agg_8.txt
+- id: databases/valkey-incr
+  image: valkey/valkey:8-alpine
+  timeout: 90
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'valkey-server --save '''' --appendonly no --daemonize yes >/dev/null 2>&1
+
+        for i in $(seq 1 50); do valkey-cli ping 2>/dev/null | grep -q PONG && break; sleep 0.2; done
+
+        for i in $(seq 1 1000); do valkey-cli incr c >/dev/null; done
+
+        valkey-cli get c'
+  expect:
+    stdout_contains: golden/valkey_incr.txt
+- id: databases/valkey-ping
+  image: valkey/valkey:8-alpine
+  timeout: 60
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: 'valkey-server --save '''' --appendonly no --daemonize yes >/dev/null 2>&1
+
+        for i in $(seq 1 50); do valkey-cli ping 2>/dev/null | grep -q PONG && break; sleep 0.2; done
+
+        valkey-cli ping; valkey-cli set k dd-value-42 >/dev/null; valkey-cli get k'
+  expect:
+    stdout_contains:
+    - golden/valkey_ping_1.txt
+    - golden/valkey_ping_2.txt
