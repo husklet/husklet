@@ -33,9 +33,11 @@ async fn volume_crud_is_shared_with_headless_ownership_and_protects_references()
     std::fs::write(std::path::Path::new(&volume.mountpoint).join("value"), b"durable").unwrap();
     assert_eq!(client.volumes().inspect("shared-data").await.unwrap(), volume);
 
+    let rootfs = root.path().join("volume-owner-rootfs");
+    std::fs::create_dir(&rootfs).unwrap();
     containers
         .create(
-            ContainerSpec::from_directory("/rootfs", Process::new("/bin/true"))
+            ContainerSpec::from_directory(rootfs, Process::new("/bin/true"))
                 .name("volume-owner")
                 .mount(Mount::volume(&volume.name, "/data", hl_container::Access::ReadWrite)),
         )
